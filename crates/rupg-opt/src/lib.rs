@@ -386,6 +386,7 @@ impl<'q> Builder<'q> {
             let others = level.init_cost == 0.0 && node.init_plans.is_empty();
             let sorted = setop::sorted(query, op, &level.stats, &node, finals, others);
             let groups = setop::groups(query, &level.stats, node.cost.rows);
+            let complete = setop::complete(query, op, &level.stats);
             let wrapper = self.wrapper(scope);
             if let Some(s) = &mut self.setop {
                 // The groups of a `SELECT` with casts are the groups of the subquery of the `SELECT`, which comes first.
@@ -393,6 +394,8 @@ impl<'q> Builder<'q> {
                     s.groups = groups;
                 }
                 s.sorted = sorted;
+                // `generate_setop_child_grouplist`: a `SELECT` with a column of another type than the operation has no `setop_pathkeys`.
+                s.complete = complete && !wrapper;
             }
         } else if let Some(p) = parent
             && self.wrapper(p)

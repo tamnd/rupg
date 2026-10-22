@@ -705,24 +705,28 @@ impl<'q> Builder<'q> {
         level: &mut Level<'q>,
         op: &'q SetOp,
     ) -> Vec<(Node<'q>, Vec<OrderKey>)> {
-        let (plans, scope) = if op.work.is_none() && op.kind != SetKind::Union {
-            // The `SetOp` with the sorted strategy gives the rows in the order of the columns. Its outer side, which `INTERSECT` can swap, gives the names.
-            let order = setop::order(level.query, op);
-            let plans: Vec<_> = self
-                .nonunion(level, op, true)
-                .into_iter()
-                .map(|(node, sorted)| (node, if sorted { order.clone() } else { Vec::new() }))
-                .collect();
+        let (plans, scope) = if op.work.is_none() && op.kind == SetKind::Union && !op.all {
+            (self.union_paths(level, op, true), self.leftmost_scope(level, op))
+        } else if op.work.is_none() && op.kind != SetKind::Union {
+            // Its outer side, which `INTERSECT` can swap, gives the names.
+            let plans = self.nonunion(level, op, true);
             let scope = plans.first().map(|(node, _)| node.scope);
             (plans, scope)
         } else {
-            (vec![(self.set_node(level, op), Vec::new())], self.leftmost_scope(level, op))
+            (vec![(self.set_node(level, op), false)], self.leftmost_scope(level, op))
         };
+        let mut query = level.query;
         if let Some(scope) = scope {
             level.display = scope;
             level.display_query = self.scopes[scope].query;
+            query = level.display_query;
         }
+        // The `Unique` of a sort or of a `Merge Append` of a `UNION`, and the `SetOp` with the sorted strategy, give the rows in the order of the columns, in the expressions of the `SELECT` that gives the names, as the keys of `ORDER BY` of the set operation.
+        let order = setop::order(query, op);
         plans
+            .into_iter()
+            .map(|(node, sorted)| (node, if sorted { order.clone() } else { Vec::new() }))
+            .collect()
     }
 
     /// The plan of a part of the tree of a set operation.
@@ -765,6 +769,7 @@ impl<'q> Builder<'q> {
         top: &'q SetOp,
         tree: &'q SetTree,
         out: &mut Vec<Node<'q>>,
+        ordered: &mut Option<Vec<Node<'q>>>,
     ) {
         if let SetTree::Op(op) = tree
             && op.kind == SetKind::Union
@@ -772,11 +777,22 @@ impl<'q> Builder<'q> {
             && (op.all == top.all || op.all)
             && op.columns == top.columns
         {
-            self.union_members(level, top, &op.left, out);
-            self.union_members(level, top, &op.right, out);
+            self.union_members(level, top, &op.left, out, ordered);
+            self.union_members(level, top, &op.right, out, ordered);
             return;
         }
-        out.push(self.set_tree(level, tree));
+        // `build_setop_child_paths` adds the plans in the order of the columns only for a `SELECT` of `UNION` without `ALL`.
+        if top.all || !matches!(tree, SetTree::Leaf(_)) {
+            *ordered = None;
+            out.push(self.set_tree(level, tree));
+            return;
+        }
+        let (node, sorted) = self.union_leaf(level, top, tree);
+        match (ordered.as_mut(), sorted) {
+            (Some(list), Some(sorted)) => list.push(sorted),
+            _ => *ordered = None,
+        }
+        out.push(node);
     }
 
     pub(crate) fn set_node(&mut self, level: &Level<'q>, op: &'q SetOp) -> Node<'q> {
@@ -797,75 +813,11 @@ impl<'q> Builder<'q> {
             };
             return node;
         }
-        let columns = op.columns.len();
         match op.kind {
-            SetKind::Union => {
-                let mut members = Vec::new();
-                self.union_members(level, op, &op.left, &mut members);
-                self.union_members(level, op, &op.right, &mut members);
-                let startup = members.first().map_or(0.0, |m| m.cost.startup);
-                let rows: f64 = members.iter().map(|m| m.cost.rows).sum();
-                // `create_setop_pathtarget`: the average width of the members, with the width of the rows of a member below the `Result` that casts its columns.
-                let size: f64 = members
-                    .iter()
-                    .map(|m| {
-                        let below = match (&m.kind, m.children.as_slice()) {
-                            (Kind::Result { .. }, [child]) if !m.output.is_empty() => child,
-                            _ => m,
-                        };
-                        f64::from(below.cost.width) * m.cost.rows
-                    })
-                    .sum();
-                let width = if rows > 0.0 { (size / rows).round_ties_even() as i32 } else { 0 };
-                let total: f64 = members.iter().map(|m| m.cost.total).sum::<f64>()
-                    + 0.5 * cost::CPU_TUPLE * rows;
-                let mut append = Node::new(Kind::Append, scope, members);
-                append.cost = Cost { startup, total, rows, width };
-                if op.all {
-                    return append;
-                }
-                let c = append.cost;
-                let hashable = op.groups.iter().all(|g| g.hashable);
-                let hash_startup = c.total + cost::CPU_OPERATOR * c.rows * columns as f64;
-                let hash_total = hash_startup + cost::CPU_TUPLE * rows;
-                let (sort_startup, sort_total) =
-                    cost::sort((c.startup, c.total), c.rows, c.width, None);
-                let unique_total = sort_total + cost::CPU_OPERATOR * c.rows * columns as f64;
-                let keys = self.leaf_items(level, op);
-                // The keys show with the names of the leftmost `SELECT`.
-                let scope = self.leftmost_scope(level, op).unwrap_or(scope);
-                // `add_path`: with total costs within the fuzz factor, the sorted rows win, as they have the order of the keys, unless the hash table starts sooner by more than the fuzz factor and costs less.
-                let hashed = hash_total * 1.01 < unique_total
-                    || hash_total <= unique_total * 1.01
-                        && hash_startup * 1.01 < sort_startup
-                        && hash_total < unique_total;
-                if hashable && hashed {
-                    let mut node = Node::new(
-                        Kind::Aggregate { strategy: Strategy::Hashed, keys, sets: Vec::new() },
-                        scope,
-                        vec![append],
-                    );
-                    node.cost = Cost { startup: hash_startup, total: hash_total, rows, width };
-                    node
-                } else {
-                    let sort_keys = keys
-                        .into_iter()
-                        .zip(&op.groups)
-                        .map(|(item, g)| SortKey {
-                            item,
-                            desc: false,
-                            using: None,
-                            nulls_first: g.nulls_first,
-                        })
-                        .collect();
-                    let mut sorted = Node::new(Kind::Sort(sort_keys), scope, vec![append]);
-                    sorted.cost = Cost { startup: sort_startup, total: sort_total, ..c };
-                    sorted.disabled = !crate::enable().sort;
-                    let mut node = Node::new(Kind::Unique, scope, vec![sorted]);
-                    node.cost = Cost { startup: sort_startup, total: unique_total, rows, width };
-                    node
-                }
-            }
+            SetKind::Union => match self.union_paths(level, op, false).into_iter().next() {
+                Some((node, _)) => node,
+                None => unreachable!("a set operation has a plan"),
+            },
             SetKind::Intersect | SetKind::Except => {
                 match self.nonunion(level, op, false).into_iter().next() {
                     Some((node, _)) => node,
@@ -873,6 +825,131 @@ impl<'q> Builder<'q> {
                 }
             }
         }
+    }
+
+    /// `generate_union_paths`: the plans of a `UNION` that `add_path` keeps, the cheapest first. `UNION ALL` is an `Append` of the plans of its members. `UNION` hashes the rows of the `Append`, or sorts them for a `Unique`, or, with true, reads the plans of its members in the order of the columns with a `Merge Append` below the `Unique`. The two plans with the `Unique` give the rows in the order of the columns.
+    fn union_paths(
+        &mut self,
+        level: &Level<'q>,
+        op: &'q SetOp,
+        top: bool,
+    ) -> Vec<(Node<'q>, bool)> {
+        let scope = level.scope;
+        let columns = op.columns.len();
+        let mut members = Vec::new();
+        let mut ordered = Some(Vec::new());
+        self.union_members(level, op, &op.left, &mut members, &mut ordered);
+        self.union_members(level, op, &op.right, &mut members, &mut ordered);
+        let startup = members.first().map_or(0.0, |m| m.cost.startup);
+        let rows: f64 = members.iter().map(|m| m.cost.rows).sum();
+        // `create_setop_pathtarget`: the average width of the members, with the width of the rows of a member below the `Result` that casts its columns.
+        let size: f64 = members
+            .iter()
+            .map(|m| {
+                let below = match (&m.kind, m.children.as_slice()) {
+                    (Kind::Result { .. }, [child]) if !m.output.is_empty() => child,
+                    _ => m,
+                };
+                f64::from(below.cost.width) * m.cost.rows
+            })
+            .sum();
+        let width = if rows > 0.0 { (size / rows).round_ties_even() as i32 } else { 0 };
+        let total: f64 =
+            members.iter().map(|m| m.cost.total).sum::<f64>() + 0.5 * cost::CPU_TUPLE * rows;
+        let mut append = Node::new(Kind::Append, scope, members);
+        append.cost = Cost { startup, total, rows, width };
+        if op.all {
+            return vec![(append, false)];
+        }
+        let c = append.cost;
+        let hashable = op.groups.iter().all(|g| g.hashable);
+        let sortable = op.groups.iter().all(|g| g.operator != 0);
+        let per_row = cost::CPU_OPERATOR * columns as f64;
+        let hash_startup = c.total + per_row * c.rows;
+        let hash_total = hash_startup + cost::CPU_TUPLE * rows;
+        let (sort_startup, sort_total) = cost::sort((c.startup, c.total), c.rows, c.width, None);
+        let unique_total = sort_total + per_row * c.rows;
+        let keys = self.leaf_items(level, op);
+        // The keys show with the names of the leftmost `SELECT`.
+        let scope = self.leftmost_scope(level, op).unwrap_or(scope);
+        let sort_keys: Vec<SortKey<'q>> = keys
+            .iter()
+            .zip(&op.groups)
+            .map(|(item, g)| SortKey {
+                item: item.clone(),
+                desc: false,
+                using: None,
+                nulls_first: g.nulls_first,
+            })
+            .collect();
+        let enable = crate::enable();
+        let below = append.disabled_nodes();
+        let order = setop::order(level.query, op);
+        let mut paths = Paths::new(top && level.fraction > 0.0);
+        if hashable {
+            paths.add(
+                (below + u32::from(!enable.hashagg), hash_startup, hash_total),
+                Vec::new(),
+                0,
+            );
+        }
+        if sortable || !hashable {
+            paths.add(
+                (below + u32::from(!enable.sort), sort_startup, unique_total),
+                order.clone(),
+                1,
+            );
+        }
+        // `create_merge_append_path` of the plans of the members in the order of the columns, and `create_unique_path` above it.
+        let merged = ordered.filter(|list| sortable && !list.is_empty()).map(|list| {
+            let n = list.len().max(2) as f64;
+            let log_n = n.log2();
+            let comparison = 2.0 * cost::CPU_OPERATOR;
+            let tuples: f64 = list.iter().map(|m| m.cost.rows).sum();
+            let first = comparison * n * log_n;
+            let run = tuples * comparison * log_n + cost::CPU_TUPLE * cost::APPEND_CPU * tuples;
+            let input_startup: f64 = list.iter().map(|m| m.cost.startup).sum();
+            let input_total: f64 = list.iter().map(|m| m.cost.total).sum();
+            let mut merge = Node::new(Kind::MergeAppend(sort_keys.clone()), scope, list);
+            merge.cost = Cost {
+                startup: first + input_startup,
+                total: first + run + input_total,
+                rows: tuples,
+                width,
+            };
+            let m = merge.cost;
+            let mut node = Node::new(Kind::Unique, scope, vec![merge]);
+            node.cost = Cost { startup: m.startup, total: m.total + per_row * tuples, rows, width };
+            node
+        });
+        if let Some(node) = &merged {
+            paths.add(costs(node), order, 2);
+        }
+        let mut out = Vec::new();
+        let mut merged = merged;
+        for kept in paths.kept() {
+            match kept {
+                0 => {
+                    let strategy = Strategy::Hashed;
+                    let kind = Kind::Aggregate { strategy, keys: keys.clone(), sets: Vec::new() };
+                    let mut node = Node::new(kind, scope, vec![append.clone()]);
+                    node.cost = Cost { startup: hash_startup, total: hash_total, rows, width };
+                    node.disabled = !enable.hashagg;
+                    out.push((node, false));
+                }
+                1 => {
+                    let mut sorted =
+                        Node::new(Kind::Sort(sort_keys.clone()), scope, vec![append.clone()]);
+                    sorted.cost = Cost { startup: sort_startup, total: sort_total, ..c };
+                    sorted.disabled = !enable.sort;
+                    let mut node = Node::new(Kind::Unique, scope, vec![sorted]);
+                    node.cost = Cost { startup: sort_startup, total: unique_total, rows, width };
+                    out.push((node, true));
+                }
+                _ => out.extend(merged.take().map(|node| (node, true))),
+            }
+        }
+        out
     }
 
     /// The scope of the leftmost `SELECT` of a set operation.
