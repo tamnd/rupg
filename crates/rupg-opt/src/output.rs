@@ -372,6 +372,11 @@ fn join<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, parts: 
                 }
             }
         }
+        for column in level.stats.class_columns(rels) {
+            if !below.iter().any(|b| b.expr.same(column)) {
+                below.push(item(column.clone()));
+            }
+        }
         for (j, other) in sides.iter().enumerate() {
             if j == i {
                 continue;

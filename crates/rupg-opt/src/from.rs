@@ -36,7 +36,7 @@ pub(crate) struct Stats {
     query: Vec<(Expr, bool, bool)>,
     /// The two sides of each `=` condition of a join that a merge join can test, each with its relations.
     joins: Vec<[(Expr, BTreeSet<usize>); 2]>,
-    /// `consider_startup`: true when the query has `LIMIT`, so that a plan with a lower start cost is a different plan.
+    /// `consider_startup`: true when the caller of the query or its `LIMIT` reads only a part of its rows, so that a plan with a lower start cost is a different plan.
     startup: bool,
     /// `isunique`: the relation and the column number of each column that has a unique index of one key column and no predicate, as `has_unique_index`.
     unique: BTreeSet<(usize, i16)>,
@@ -46,11 +46,27 @@ pub(crate) struct Stats {
     functional: BTreeMap<usize, Vec<Vec<i16>>>,
     /// The members of each equivalence class of the query level, each class with true when it has a constant.
     equal: Vec<(Vec<Expr>, bool)>,
+    /// The columns of the members of each equivalence class whose conditions the joins make, each with the relations of the class. `generate_base_implied_equalities_no_const` adds the relations to the `attr_needed` of the columns.
+    spans: Vec<(Expr, BTreeSet<usize>)>,
     /// The costs of the subqueries of the expressions of the level that run as a `SubPlan` for each row.
     subplans: Vec<cost::SubCost>,
 }
 
 impl Stats {
+    /// The columns of the members of the equivalence classes that a node of the join of `rels` gives: each column of the relations whose class has a relation that is not in `rels`.
+    pub(crate) fn class_columns<'a>(
+        &'a self,
+        rels: &'a BTreeSet<usize>,
+    ) -> impl Iterator<Item = &'a Expr> {
+        self.spans
+            .iter()
+            .filter(|(column, span)| {
+                matches!(column.kind, ExprKind::Var(v) if rels.contains(&v.relation))
+                    && !span.is_subset(rels)
+            })
+            .map(|(column, _)| column)
+    }
+
     /// `cost_qual_eval` of the conditions with the costs of the subplans of the level: the start cost and the cost for each row.
     pub(crate) fn qual_costs<'a>(&self, quals: impl IntoIterator<Item = &'a Expr>) -> (f64, f64) {
         cost::qual_costs(quals, &self.subplans)
@@ -411,6 +427,16 @@ impl<'q> Builder<'q> {
             .collect();
         let mut stats = Stats { equal, subplans: level.subplans.clone(), ..Stats::default() };
         needed(level, &mut stats);
+        // `generate_base_implied_equalities_no_const`: each join of the relations of a class gives the members of the class, because a join above can test any two of them.
+        for class in &found.classes {
+            let span = class.members().iter().map(|&(_, r)| r).collect();
+            for &(member, _) in class.members() {
+                stats.need(member, 0, &span, &level.query.relations);
+                let mut columns = Vec::new();
+                exprs::columns_at(member, 0, &mut columns);
+                stats.spans.extend(columns.into_iter().map(|c| (c, span.clone())));
+            }
+        }
         let rels = self.build(level, tree, &found, &mut stats);
         // `cost_qual_eval` of a condition that is `pseudoconstant`: it runs once, when the node of all the relations starts.
         let (startup, per_row) = stats.qual_costs(gating.iter().map(|i| &*i.expr));
@@ -784,7 +810,7 @@ fn needed(level: &Level<'_>, stats: &mut Stats) {
         .unwrap_or_default();
     stats.sort = sort;
     stats.groups = vec![group, distinct];
-    stats.startup = upper::limit_estimates(query).0 != 0.0;
+    stats.startup = level.fraction > 0.0;
     for (r, relation) in relations.iter().enumerate() {
         for (expr, depth) in lateral_exprs(relation) {
             let mut at = exprs::relations_at(expr, depth);

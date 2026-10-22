@@ -200,6 +200,37 @@ pub(crate) fn limit_estimates(query: &Query) -> (f64, f64) {
     (count, offset)
 }
 
+/// `preprocess_limit`: the `tuple_fraction` of a query, the fraction of its rows that the planner plans for, from the `fraction` that the caller reads and from `LIMIT` and `OFFSET`. A fraction of 1 or more is a number of rows, and 0 is all the rows.
+pub(crate) fn tuple_fraction(query: &Query, fraction: f64) -> f64 {
+    if query.limit.is_none() && query.offset.is_none() {
+        return fraction;
+    }
+    let (count, offset) = limit_estimates(query);
+    if count != 0.0 {
+        let limit = if count < 0.0 || offset < 0.0 { 0.10 } else { count + offset };
+        if fraction >= 1.0 {
+            if limit >= 1.0 { fraction.min(limit) } else { fraction }
+        } else if fraction > 0.0 {
+            if limit >= 1.0 { limit } else { fraction.min(limit) }
+        } else {
+            limit
+        }
+    } else if offset != 0.0 && fraction > 0.0 {
+        let limit = if offset < 0.0 { 0.10 } else { offset };
+        if fraction >= 1.0 {
+            if limit >= 1.0 { fraction + limit } else { limit }
+        } else if limit >= 1.0 {
+            fraction
+        } else if fraction + limit >= 1.0 {
+            0.0
+        } else {
+            fraction + limit
+        }
+    } else {
+        fraction
+    }
+}
+
 /// `limit_needed`: false when `LIMIT` is a null constant or absent and `OFFSET` is absent, null or 0.
 fn limit_needed(query: &Query) -> bool {
     let limit = query.limit.as_ref().is_some_and(|l| const_count(l) != Some(None));
@@ -243,19 +274,22 @@ fn set_rows(expr: &Expr) -> f64 {
 }
 
 impl<'q> Builder<'q> {
-    /// `grouping_planner`: the nodes above the join of `FROM`, over each plan of `FROM` that `add_path` keeps, with the cheapest plan first. The cheapest plan gets a sort where a step needs one, and each other plan is used only when its rows are in the order of each step, as `create_ordered_paths` and the other functions of `planner.c` do it. Of the results, the plan with the lowest total cost wins, as `get_cheapest_fractional_path`.
+    /// `grouping_planner`: the nodes above the join of `FROM`, over each plan of `FROM` that `add_path` keeps, with the cheapest plan first. The cheapest plan gets a sort where a step needs one, and each other plan is used only when its rows are in the order of each step, as `create_ordered_paths` and the other functions of `planner.c` do it. Of the results, the plan that costs the least to give the `fraction` of its rows that the caller reads wins, as `get_cheapest_fractional_path`.
     pub(crate) fn upper(
         &mut self,
         level: &Level<'q>,
         plans: Vec<(Node<'q>, Vec<OrderKey>)>,
+        fraction: f64,
     ) -> Node<'q> {
-        let mut paths = Paths::new(limit_estimates(level.query).0 != 0.0);
+        let mut paths = Paths::new(level.fraction > 0.0);
         for (i, (node, order)) in plans.into_iter().enumerate() {
             if let Some(node) = self.upper_one(level, node, order, i > 0) {
                 paths.add(node.cost.startup, node.cost.total, Vec::new(), node);
             }
         }
-        let Some(node) = paths.cheapest() else { unreachable!("the cheapest plan gets a result") };
+        let Some(node) = paths.fractional(fraction, |n| n.cost.rows) else {
+            unreachable!("the cheapest plan gets a result")
+        };
         node
     }
 
