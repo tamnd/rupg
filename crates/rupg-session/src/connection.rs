@@ -5453,6 +5453,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_sort_late.test")));
     }
 
+    /// `EXPLAIN` of `LIKE`, `ILIKE`, regular expressions and `^@` with a fixed prefix on a column of a btree index, as `match_pattern_prefix` makes the conditions of the index from the prefix. `connection/plan_like_prefix.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_like_prefix() {
+        big_stack(|| script(include_str!("connection/plan_like_prefix.test")));
+    }
+
     /// `EXPLAIN` of the bitmap heap scans of a table by its btree indexes, as `create_index_paths` makes them with `choose_bitmap_and` and the costs of `cost_bitmap_heap_scan`. `connection/plan_bitmap_scan.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_bitmap_scan() {

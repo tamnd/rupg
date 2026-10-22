@@ -3,9 +3,10 @@
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 
-use rupg_analyze::{Expr, ExprKind, Var};
+use rupg_analyze::{Expr, ExprKind, FuncForm, Var};
 use rupg_pgcatalog::builtin;
 use rupg_plan::{Cost, Item, Kind, Node};
+use rupg_types::{Value, oid};
 
 use super::{OrderKey, Qual, Rel, Stats, plain_var};
 use crate::{Index, Level, cost, exprs};
@@ -14,6 +15,12 @@ use crate::{Index, Level, cost, exprs};
 const BTREE_AM: u32 = 403;
 /// `BTEqualStrategyNumber`.
 const EQUAL: i16 = 3;
+/// `TEXT_PATTERN_BTREE_FAM_OID`, the operator family `text_pattern_ops` of btree.
+const TEXT_PATTERN_FAMILY: u32 = 2095;
+/// `BPCHAR_PATTERN_BTREE_FAM_OID`, the operator family `bpchar_pattern_ops` of btree.
+const BPCHAR_PATTERN_FAMILY: u32 = 2097;
+/// `C_COLLATION_OID`, the collation of the type `name`.
+const C_COLLATION: u32 = 950;
 /// `INDOPTION_DESC`.
 const DESC: i16 = 1;
 /// `INDOPTION_NULLS_FIRST`.
@@ -43,13 +50,14 @@ const BITMAP_ROW_CPU: f64 = 0.1;
 /// The cost of a `BitmapAnd` for each bitmap after the first, in units of `cpu_operator_cost`, as `cost_bitmap_and_node` charges it.
 const BITMAP_AND_CPU: f64 = 100.0;
 
-/// A condition that a column of an index can test, as an `IndexClause`: the condition with the column on the left, the key column of the index, and the place of the condition in the conditions of the scan.
+/// A condition that a column of an index can test, as an item of `indexquals` of an `IndexClause`: the condition with the column on the left, the key column of the index, and the place of the condition in the conditions of the scan. A lossy clause comes from a condition that the index cannot test exactly, so the condition stays in the filter.
 #[derive(Clone)]
 struct Clause<'q> {
     expr: Cow<'q, Expr>,
     column: usize,
     at: usize,
     kind: ClauseKind,
+    lossy: bool,
 }
 
 impl Clause<'_> {
@@ -154,33 +162,51 @@ fn read_columns(table: &Table<'_, '_>, stats: &Stats) -> BTreeSet<i16> {
 fn match_clauses<'q>(table: &Table<'_, 'q>, index: &Index) -> Vec<Clause<'q>> {
     let mut out: Vec<Clause<'q>> = Vec::new();
     for (at, qual) in table.quals.iter().enumerate() {
-        let found =
-            (0..index.keys.len()).find_map(|column| match_clause(table.r, index, column, qual, at));
-        out.extend(found);
+        let found = (0..index.keys.len())
+            .map(|column| match_clause(table.r, index, column, qual, at))
+            .find(|c| !c.is_empty());
+        out.extend(found.into_iter().flatten());
     }
     out.sort_by_key(|c| c.column);
     out
 }
 
-/// `match_clause_to_indexcol`: the condition as a clause of the key column of the index, when the column can test it. An operator of the operator family of the column must have the column on one side and on the other side a value that reads no column of the table and calls no volatile function. With the column on the right, the commutator of the operator must be in the family, and the clause is the condition with the commutator, as `commute_op_clause`. `x op ANY (array)` and `IS NULL` and `IS NOT NULL` of the column are clauses too.
+/// `match_clause_to_indexcol`: the condition as clauses of the key column of the index, when the column can test it. An operator of the operator family of the column must have the column on one side and on the other side a value that reads no column of the table and calls no volatile function. With the column on the right, the commutator of the operator must be in the family, and the clause is the condition with the commutator, as `commute_op_clause`. `x op ANY (array)` and `IS NULL` and `IS NOT NULL` of the column are clauses too. A pattern operator with the column on the left gives the lossy clauses of the fixed prefix of the pattern, as `match_pattern_prefix`.
 fn match_clause<'q>(
     r: usize,
     index: &Index,
     column: usize,
     qual: &Qual<'q>,
     at: usize,
-) -> Option<Clause<'q>> {
+) -> Vec<Clause<'q>> {
+    match_one(r, index, column, qual, at).unwrap_or_default()
+}
+
+/// The clauses of [`match_clause`], or `None` when the column cannot test the condition.
+fn match_one<'q>(
+    r: usize,
+    index: &Index,
+    column: usize,
+    qual: &Qual<'q>,
+    at: usize,
+) -> Option<Vec<Clause<'q>>> {
     let expr = &*qual.expr;
     let attnum = *index.keys.get(column)?;
     let family = *index.families.get(column)?;
-    if attnum <= 0 || family == 0 || !matches!(index.collations.get(column), Some(0 | 100) | None) {
+    // The collation `C` of a column of `name` is the collation of each condition of the column.
+    let name_collation = index.collations.get(column) == Some(&C_COLLATION);
+    if attnum <= 0
+        || family == 0
+        || !(name_collation || matches!(index.collations.get(column), Some(0 | 100) | None))
+    {
         return None;
     }
     let is_column = |e: &Expr| {
         plain_var(e).is_some_and(|v| v.relation == r && v.attnum == attnum && v.levels_up == 0)
+            && (!name_collation || e.ty == oid::NAME)
     };
     let other_ok = |e: &Expr| !exprs::relations(e).contains(&r) && !exprs::volatile(e);
-    let clause = |expr: Cow<'q, Expr>, kind| Clause { expr, column, at, kind };
+    let clause = |expr: Cow<'q, Expr>, kind| vec![Clause { expr, column, at, kind, lossy: false }];
     match &expr.kind {
         ExprKind::ScalarArrayOp { func, any: true, args } => {
             let [left, array] = args.as_slice() else { return None };
@@ -199,7 +225,17 @@ fn match_clause<'q>(
         _ => {
             let (op, left, right) = exprs::binary(expr)?;
             if is_column(left) && other_ok(right) {
-                let s = strategy(op, family)?;
+                let Some(s) = strategy(op, family) else {
+                    let derived = prefix_clauses(expr, family)?;
+                    let lossy = |(expr, s)| Clause {
+                        expr: Cow::Owned(expr),
+                        column,
+                        at,
+                        kind: ClauseKind::Op(s),
+                        lossy: true,
+                    };
+                    return Some(derived.into_iter().map(lossy).collect());
+                };
                 return Some(clause(qual.expr.clone(), ClauseKind::Op(s)));
             }
             if is_column(right) && other_ok(left) {
@@ -211,6 +247,100 @@ fn match_clause<'q>(
             None
         }
     }
+}
+
+/// `match_pattern_prefix`: the clauses that the fixed prefix of a positive `LIKE`, `ILIKE`, regular expression or `^@` gives, with their strategies, when the column is on the left and the pattern is a constant. A pattern that is all prefix gives `=` of the prefix. Another prefix gives `>=` of the prefix and `<` of the next string after the prefix, when one exists. The default collation is C, so the bounds hold for each operator family. Each operator must be in the family of the column.
+fn prefix_clauses(expr: &Expr, family: u32) -> Option<Vec<(Expr, i16)>> {
+    let (op, left, right) = exprs::binary(expr)?;
+    let (prefix, exact) = cost::operator_prefix(op, right)?;
+    let pattern = family == TEXT_PATTERN_FAMILY || family == BPCHAR_PATTERN_FAMILY;
+    let (less, greater_equal) = if pattern { ("~<~", "~>=~") } else { ("<", ">=") };
+    let (left_ty, right_ty) = match left.ty {
+        oid::TEXT if family != BPCHAR_PATTERN_FAMILY => (oid::TEXT, oid::TEXT),
+        oid::NAME if !pattern => (oid::NAME, oid::TEXT),
+        oid::BPCHAR if family != TEXT_PATTERN_FAMILY => (oid::BPCHAR, oid::BPCHAR),
+        oid::BYTEA if !pattern => (oid::BYTEA, oid::BYTEA),
+        _ => return None,
+    };
+    let make = |name: &str, value: &[u8]| {
+        let row =
+            builtin::operators_named(name).find(|o| o.left == left_ty && o.right == right_ty)?;
+        let s = strategy(row.oid, family)?;
+        let ExprKind::Func(f) = &expr.kind else { return None };
+        let mut func = f.clone();
+        func.oid = row.code;
+        func.form = FuncForm::Operator(row.oid);
+        let value = if right_ty == oid::BYTEA {
+            Value::Bytea(value.to_vec())
+        } else {
+            Value::Text(String::from_utf8_lossy(value).into_owned())
+        };
+        func.args = vec![left.clone(), Expr::new(ExprKind::Const(value), right_ty)];
+        Some((Expr::new(ExprKind::Func(func), oid::BOOL), s))
+    };
+    if exact {
+        return Some(vec![make("=", &prefix)?]);
+    }
+    let mut out = vec![make(greater_equal, &prefix)?];
+    if let Some(greater) = greater_string(&prefix, right_ty == oid::BYTEA)
+        && let Some(clause) = make(less, &greater)
+    {
+        out.push(clause);
+    }
+    Some(out)
+}
+
+/// `make_greater_string` in the C collation: the prefix with its last character made the next character, as `pg_utf8_increment` makes it, or for `bytea` with its last byte made one more. A character with no next character goes, and the character before it is made the next one. The result is `None` when no character has a next one.
+fn greater_string(prefix: &[u8], bytes: bool) -> Option<Vec<u8>> {
+    let mut work = prefix.to_vec();
+    while !work.is_empty() {
+        let mut start = work.len() - 1;
+        if bytes {
+            if work[start] < 0xFF {
+                work[start] += 1;
+                return Some(work);
+            }
+        } else {
+            while start > 0 && work[start] & 0xC0 == 0x80 {
+                start -= 1;
+            }
+            if utf8_increment(&mut work[start..]) {
+                return Some(work);
+            }
+        }
+        work.truncate(start);
+    }
+    None
+}
+
+/// `pg_utf8_increment`: makes the character of UTF-8 the next character with the same length, and gives false when there is none.
+fn utf8_increment(c: &mut [u8]) -> bool {
+    let len = c.len();
+    if len > 4 {
+        return false;
+    }
+    for i in (2..len).rev() {
+        if c[i] < 0xBF {
+            c[i] += 1;
+            return true;
+        }
+    }
+    if len >= 2 {
+        let limit = match c[0] {
+            0xED => 0x9F,
+            0xF4 => 0x8F,
+            _ => 0xBF,
+        };
+        if c[1] < limit {
+            c[1] += 1;
+            return true;
+        }
+    }
+    if matches!(c[0], 0x7F | 0xDF | 0xEF | 0xF4) {
+        return false;
+    }
+    c[0] += 1;
+    true
 }
 
 /// `get_op_opfamily_strategy`: the strategy of a search operator in the operator family, or `None` when the family has not the operator.
@@ -273,7 +403,7 @@ fn scan<'q>(
         .quals
         .iter()
         .enumerate()
-        .filter(|(at, _)| !clauses.iter().any(|c| c.at == *at))
+        .filter(|(at, _)| !clauses.iter().any(|c| c.at == *at && !c.lossy))
         .map(|(_, q)| q.clone())
         .collect();
     stats.sort_quals(&mut filter);
@@ -415,9 +545,10 @@ fn bitmap_heap_scan<'q>(
     scans: &[BitmapIndex<'q>],
     stats: &Stats,
 ) -> Rel<'q> {
-    let used: BTreeSet<usize> = scans.iter().flat_map(|b| b.clauses.iter().map(|c| c.at)).collect();
+    let exact = scans.iter().flat_map(|b| b.clauses.iter().filter(|c| !c.lossy).map(|c| c.at));
+    let used: BTreeSet<usize> = exact.clone().collect();
     let mut recheck: Vec<usize> = Vec::new();
-    for at in scans.iter().flat_map(|b| b.clauses.iter().map(|c| c.at)) {
+    for at in exact {
         if !recheck.contains(&at) {
             recheck.push(at);
         }
