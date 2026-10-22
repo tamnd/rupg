@@ -2,7 +2,7 @@
 
 use rupg_analyze::{BoolOp, Expr, ExprKind, Relation, SubLink, SubLinkKind};
 use rupg_pgcatalog::builtin;
-use rupg_types::oid;
+use rupg_types::{Value, oid};
 
 use crate::{Member, exprs};
 
@@ -153,6 +153,7 @@ pub(crate) fn selectivity_by(expr: &Expr, eq: &dyn Fn(&Expr, &Expr) -> Option<f6
         | ExprKind::Case(_)
         | ExprKind::Coalesce(_) => 0.5,
         ExprKind::Relabel(arg, _) | ExprKind::CoerceToDomain(arg, _) => each(arg),
+        ExprKind::ScalarArrayOp { func, any, args } => array_selectivity(*func, *any, args, eq),
         _ => match exprs::binary(expr) {
             Some((op, left, right)) => {
                 let name = builtin::operator_by_oid(op).map(|o| o.name);
@@ -165,6 +166,79 @@ pub(crate) fn selectivity_by(expr: &Expr, eq: &dyn Fn(&Expr, &Expr) -> Option<f6
             None => INEQ_SEL,
         },
     }
+}
+
+/// `scalararraysel` with no statistics: the selectivity of the operator for each item of the array, with the chance that one item passes for `ANY` or that each item passes for `ALL`. For `= ANY` and for `<> ALL` the chances of the items are disjoint, so that they add, when the sum is a probability. An array that is not a constant or a list of `ARRAY[...]` has 10 items that the condition knows nothing about.
+fn array_selectivity(
+    func: u32,
+    any: bool,
+    args: &[Expr],
+    eq: &dyn Fn(&Expr, &Expr) -> Option<f64>,
+) -> f64 {
+    let [left, array] = args else { return 0.5 };
+    let element = builtin::type_by_oid(array.ty).map_or(0, |t| t.elem);
+    let Some(op) = array_operator(func, left.ty, element) else { return 0.5 };
+    let (equality, inequality) = (op.name == "=", op.name == "<>");
+    let one_relation = exprs::relations(left).len() == 1;
+    // The estimator of the operator for the value of one item, which is 0 for a null value of a strict operator when the condition reads one relation, as `get_restriction_variable` finds it.
+    let item = |value: &Expr| {
+        if one_relation && matches!(value.kind, ExprKind::Const(Value::Null)) {
+            return 0.0;
+        }
+        match (op.name, eq(left, value)) {
+            ("=", Some(sel)) => sel,
+            ("<>", Some(sel)) => 1.0 - sel,
+            _ => operator_selectivity(op.oid),
+        }
+    };
+    let array = strip_array_coercion(array);
+    let items: Vec<Expr> = match &array.kind {
+        ExprKind::Const(Value::Null) => return 0.0,
+        ExprKind::Const(Value::Array(a)) => {
+            if !any && a.values.iter().any(Option::is_none) {
+                return 0.0;
+            }
+            let value = |v: &Option<Value>| v.clone().unwrap_or(Value::Null);
+            a.values.iter().map(|v| Expr::new(ExprKind::Const(value(v)), element)).collect()
+        }
+        ExprKind::Array { multidims: false, elements, .. } => {
+            if !any && elements.iter().any(|e| matches!(e.kind, ExprKind::Const(Value::Null))) {
+                return 0.0;
+            }
+            elements.clone()
+        }
+        _ => {
+            let s2 = item(&Expr::new(ExprKind::CaseTest, element));
+            let start = if any { 0.0 } else { 1.0 };
+            let s1 = (0..10).fold(start, |s1, _| if any { s1 + s2 - s1 * s2 } else { s1 * s2 });
+            return s1.clamp(0.0, 1.0);
+        }
+    };
+    let (mut s1, mut disjoint) = if any { (0.0, 0.0) } else { (1.0, 1.0) };
+    for value in &items {
+        let s2 = item(value);
+        if any {
+            s1 = s1 + s2 - s1 * s2;
+            if equality {
+                disjoint += s2;
+            }
+        } else {
+            s1 *= s2;
+            if inequality {
+                disjoint += s2 - 1.0;
+            }
+        }
+    }
+    if (if any { equality } else { inequality }) && (0.0..=1.0).contains(&disjoint) {
+        s1 = disjoint;
+    }
+    s1.clamp(0.0, 1.0)
+}
+
+/// The operator of `x op ANY (array)` or `x op ALL (array)` whose function is `func`, for the type of `x` and the type of the items of the array.
+fn array_operator(func: u32, left: u32, element: u32) -> Option<&'static builtin::OperatorRow> {
+    let mut ops = builtin::operators().iter().filter(|o| o.code == func);
+    ops.clone().find(|o| o.left == left && o.right == element).or_else(|| ops.next())
 }
 
 /// `clauselist_selectivity` with no statistics: the fraction of the rows that pass all the conditions.
@@ -247,7 +321,7 @@ fn operator_selectivity(op: u32) -> f64 {
 
 /// The cost of the conditions for each row, as `cost_qual_eval`.
 pub(crate) fn qual_cost<'a>(quals: impl IntoIterator<Item = &'a Expr>) -> f64 {
-    quals.into_iter().map(|q| CPU_OPERATOR * exprs::calls(q) as f64).sum()
+    qual_costs(quals, &[]).1
 }
 
 /// A subquery of an expression that runs as a `SubPlan` for each row, with the costs of `cost_subplan`: the start cost, and the cost of each call with its test.
@@ -271,7 +345,13 @@ pub(crate) fn qual_costs<'a>(
             out.1 += sub.per_call;
             return;
         }
-        *calls += exprs::own_calls(expr);
+        if let ExprKind::ScalarArrayOp { func, any, args } = &expr.kind {
+            let (startup, per_row) = array_op_cost(*func, *any, args);
+            out.0 += startup;
+            out.1 += per_row;
+        } else {
+            *calls += exprs::own_calls(expr);
+        }
         for child in expr.children() {
             walk(child, subplans, calls, out);
         }
@@ -285,6 +365,66 @@ pub(crate) fn qual_costs<'a>(
     }
     (startup, per_row)
 }
+
+/// The cost of `x op ANY (array)` or `x op ALL (array)`, as `cost_qual_eval_walker` finds it: the start cost and the cost for each row. The operator runs for half of the items of the array. A hash table of the items costs one hash for each item when it starts, then one hash and one comparison for each row.
+fn array_op_cost(func: u32, any: bool, args: &[Expr]) -> (f64, f64) {
+    let Some(array) = args.get(1) else { return (0.0, CPU_OPERATOR) };
+    let array = strip_array_coercion(array);
+    let items = array_length(array);
+    if hashed_array_op(func, any, args.first().map_or(0, |a| a.ty), array) {
+        return (items * CPU_OPERATOR, CPU_OPERATOR + CPU_OPERATOR);
+    }
+    (0.0, CPU_OPERATOR * items * 0.5)
+}
+
+/// `strip_array_coercion`: the array below a relabel and below a coercion of an array whose items only relabel.
+fn strip_array_coercion(mut expr: &Expr) -> &Expr {
+    loop {
+        expr = match &expr.kind {
+            ExprKind::Relabel(arg, _) => arg,
+            ExprKind::ArrayCoerce { arg, element, .. } if matches!(&element.kind, ExprKind::Relabel(e, _) if matches!(e.kind, ExprKind::CaseTest)) => {
+                arg
+            }
+            _ => return expr,
+        };
+    }
+}
+
+/// `estimate_array_length`: the items of a constant array or of a list of `ARRAY[...]` with one dimension, 0 for a null array, or 10 with no statistics.
+fn array_length(array: &Expr) -> f64 {
+    match &array.kind {
+        ExprKind::Const(Value::Null) => 0.0,
+        ExprKind::Const(Value::Array(a)) => a.values.len() as f64,
+        ExprKind::Array { multidims: false, elements, .. } => elements.len() as f64,
+        _ => 10.0,
+    }
+}
+
+/// `convert_saop_to_hashed_saop`: true when the executor tests the condition with a hash table of the items. The array is a constant with 9 items or more that is not null, and the operator of `ANY`, or the negator of the operator of `ALL`, hashes its two inputs with the same function, as `get_op_hash_functions` finds it.
+fn hashed_array_op(func: u32, any: bool, left: u32, array: &Expr) -> bool {
+    let ExprKind::Const(Value::Array(a)) = &array.kind else { return false };
+    if a.values.len() < 9 {
+        return false;
+    }
+    let element = builtin::type_by_oid(array.ty).map_or(0, |t| t.elem);
+    let Some(op) = array_operator(func, left, element) else { return false };
+    let op = if any { op.oid } else { op.negator };
+    builtin::amops_of_operator(op).any(|amop| {
+        let hash = |ty: u32| {
+            builtin::amprocs(amop.family, ty)
+                .iter()
+                .find(|p| p.right == ty && p.number == 1)
+                .map(|p| p.proc)
+        };
+        amop.method == HASH_AM
+            && amop.strategy == 1
+            && hash(amop.left).is_some()
+            && hash(amop.left) == hash(amop.right)
+    })
+}
+
+/// `HASH_AM_OID`, the OID of the access method `hash`.
+const HASH_AM: u32 = 405;
 
 /// `relation_byte_size`: the bytes of rows of a width, with the header of each row.
 pub(crate) fn byte_size(rows: f64, width: i32) -> f64 {

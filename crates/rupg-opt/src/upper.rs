@@ -583,6 +583,7 @@ fn aggregate<'q>(
             vec![input],
         );
         node.filter = filter;
+        let startup = startup + having_startup;
         node.cost = Cost { startup, total, rows: cost::clamp_rows(selectivity), width: 0 };
         order.clear();
         return Some(node);
@@ -631,7 +632,8 @@ fn aggregate<'q>(
     };
     // `add_path` keeps the hash table only when its total cost or its start cost is lower by more than the fuzz factor, as the sorted groups have the order of their keys.
     let kept = hash_total * 1.01 < sorted_total
-        || hash_total <= sorted_total * 1.01 && hash_startup * 1.01 < sorted_input.startup;
+        || hash_total <= sorted_total * 1.01
+            && (hash_startup + having_startup) * 1.01 < sorted_input.startup + having_startup;
     if !only && hashable && kept && hash_after < sorted_total {
         let mut node = Node::new(
             Kind::Aggregate { strategy: Strategy::Hashed, keys, sets: Vec::new() },
@@ -639,7 +641,8 @@ fn aggregate<'q>(
             vec![input],
         );
         node.filter = filter;
-        node.cost = Cost { startup: hash_startup, total: hash_total, rows, width: 0 };
+        let startup = hash_startup + having_startup;
+        node.cost = Cost { startup, total: hash_total, rows, width: 0 };
         order.clear();
         return Some(node);
     }
@@ -654,7 +657,8 @@ fn aggregate<'q>(
         vec![input],
     );
     node.filter = filter;
-    node.cost = Cost { startup: sorted_input.startup, total: sorted_total, rows, width: 0 };
+    let startup = sorted_input.startup + having_startup;
+    node.cost = Cost { startup, total: sorted_total, rows, width: 0 };
     Some(node)
 }
 
