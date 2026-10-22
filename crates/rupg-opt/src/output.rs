@@ -123,6 +123,18 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             }
             node.cost.width = width(level, node.scope, &want);
         }
+        // `create_gating_plan`: the `Result` of the conditions that run once computes the targets, and the node below gives the columns that they read, as the target of its path.
+        Kind::Result { replaces: None, .. } if !node.children.is_empty() => {
+            let mut below = Vec::new();
+            for w in &want {
+                add_columns(&w.expr, 0, &mut below);
+            }
+            if let Some(child) = node.children.first_mut() {
+                set(level, child, below, false);
+            }
+            node.cost.width = width(level, node.scope, &want);
+            node.output = want;
+        }
         Kind::Sort(_)
         | Kind::IncrementalSort { .. }
         | Kind::Limit
@@ -130,7 +142,6 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
         | Kind::LockRows
         | Kind::Materialize
         | Kind::Hash
-        | Kind::Result { replaces: None, .. }
             if !node.children.is_empty() =>
         {
             let mut below = want.clone();
