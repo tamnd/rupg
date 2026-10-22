@@ -58,6 +58,7 @@ impl rupg_opt::Members for Members<'_, '_> {
                     oid: rel.oid,
                     keys: info.keys.iter().take(count).copied().collect(),
                     unique: info.unique,
+                    nulls_not_distinct: info.nulls_not_distinct,
                     immediate: info.immediate,
                     partial: info.predicate.is_some(),
                 })

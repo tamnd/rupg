@@ -297,6 +297,7 @@ impl<'q> Builder<'q> {
         if !query.sort.is_empty() {
             let keys: Vec<SortKey<'q>> =
                 query.sort.iter().map(|s| sort_key(level.target(s.target), s)).collect();
+            let keys = level.stats.canonical(keys, |k| &*k.item.expr);
             let bound = (count > 0.0 && offset >= 0.0).then_some(count + offset);
             node = sort_if(level, node, keys, &mut order, bound, only)?;
         }
@@ -570,6 +571,7 @@ fn aggregate<'q>(
         return Some(grouping_sets(level, input, order, units, filter, selectivity));
     }
     if query.group.is_empty() {
+        let ordered = level.stats.canonical(ordered, |k| &*k.item.expr);
         let input = sort_if(level, input, ordered, order, None, only)?;
         let c = input.cost;
         let startup = c.total + cost::CPU_OPERATOR * n * units + finals;
@@ -584,16 +586,17 @@ fn aggregate<'q>(
         order.clear();
         return Some(node);
     }
-    let group = group_keys(level);
+    let (group, hashable) = group_keys(level);
     let nkeys = group.len() as f64;
     let group_exprs: Vec<&Expr> = group.iter().map(|k| &*k.item.expr).collect();
     let groups = level.stats.groups(&group_exprs, n);
     let keys: Vec<Item<'q>> = group.iter().map(|k| k.item.clone()).collect();
     let rows = cost::clamp_rows(groups * selectivity);
-    let hashable = query.group.iter().all(|g| g.hashable) && ordered.is_empty();
-    // The sorted strategy: a `Sort` on the keys of the groups, and on the keys of an ordered call after them.
+    let hashable = hashable && !group.is_empty() && ordered.is_empty();
+    // The sorted strategy: a `Sort` on the keys of the groups, and on the keys of an ordered call after them, as `adjust_group_pathkeys_for_groupagg`.
     let mut sort_keys = group.clone();
     sort_keys.extend(ordered);
+    let sort_keys = level.stats.canonical(sort_keys, |k| &*k.item.expr);
     let (is_sorted, count) = presorted(order, &sort_keys);
     if only && !is_sorted && count == 0 {
         return None;
@@ -638,8 +641,8 @@ fn aggregate<'q>(
     Some(node)
 }
 
-/// The keys of `GROUP BY` as the keys of a sort, in the order of `ORDER BY` when its items are items of `GROUP BY`, as `preprocess_groupclause`.
-fn group_keys<'q>(level: &Level<'q>) -> Vec<SortKey<'q>> {
+/// The keys of `GROUP BY` as the keys of a sort, in the order of `ORDER BY` when its items are items of `GROUP BY`, as `preprocess_groupclause`, and true when a hash table can hold the groups. A column that the other columns of its relation give, as `remove_useless_groupby_columns` finds it, and a key that is redundant, as `make_pathkeys_for_sortclauses_extended` finds it, are not keys.
+fn group_keys<'q>(level: &Level<'q>) -> (Vec<SortKey<'q>>, bool) {
     let query = level.query;
     let mut items: Vec<&SortGroup> = Vec::new();
     let in_group = |s: &SortGroup| query.group.iter().find(|g| g.target == s.target);
@@ -651,7 +654,13 @@ fn group_keys<'q>(level: &Level<'q>) -> Vec<SortKey<'q>> {
             items.push(g);
         }
     }
-    items.into_iter().map(|s| sort_key(level.target(s.target), s)).collect()
+    let exprs: Vec<&Expr> = items.iter().map(|s| level.target(s.target)).collect();
+    let surplus = level.stats.surplus(&exprs);
+    let items: Vec<&SortGroup> =
+        items.into_iter().zip(surplus).filter(|(_, surplus)| !surplus).map(|(s, _)| s).collect();
+    let items = level.stats.canonical(items, |s| level.target(s.target));
+    let hashable = items.iter().all(|s| in_group(s).is_some_and(|g| g.hashable));
+    (items.into_iter().map(|s| sort_key(level.target(s.target), s)).collect(), hashable)
 }
 
 /// The `Agg` of a query with grouping sets: `HashAggregate` when each set can use a hash table, `MixedAggregate` when one of them is `()`, or else `GroupAggregate` on the sorted rows.
@@ -923,9 +932,11 @@ fn distinct<'q>(
     let query = level.query;
     let scope = level.scope;
     let c = input.cost;
-    let ncols = query.distinct.len();
-    let distinct_exprs: Vec<&Expr> =
-        query.distinct.iter().map(|d| level.target(d.target)).collect();
+    // `processed_distinctClause`: the items whose keys are not redundant.
+    let processed =
+        level.stats.canonical(query.distinct.iter().collect(), |d| level.target(d.target));
+    let ncols = processed.len();
+    let distinct_exprs: Vec<&Expr> = processed.iter().map(|d| level.target(d.target)).collect();
     let groups = level.stats.groups(&distinct_exprs, c.rows);
     // The sort puts the items of `ORDER BY` first, so that the sort of `ORDER BY` after it has no work.
     let mut keys: Vec<SortKey<'q>> = Vec::new();
@@ -939,15 +950,23 @@ fn distinct<'q>(
             keys.push(key);
         }
     }
-    // `DISTINCT ON` sorts on all the items of `ORDER BY` when it has more items, as `create_final_distinct_paths`.
-    if query.distinct_on && query.sort.len() > keys.len() {
-        keys.clear();
-        for s in &query.sort {
-            let key = sort_key(level.target(s.target), s);
-            if !keys.iter().any(|k| k.item.expr.same(&key.item.expr)) {
-                keys.push(key);
-            }
+    let mut keys = level.stats.canonical(keys, |k| &*k.item.expr);
+    // `DISTINCT ON` sorts on all the items of `ORDER BY` when it has more keys, as `create_final_distinct_paths`.
+    if query.distinct_on {
+        let sort: Vec<SortKey<'q>> =
+            query.sort.iter().map(|s| sort_key(level.target(s.target), s)).collect();
+        let sort = level.stats.canonical(sort, |k| &*k.item.expr);
+        if sort.len() > keys.len() {
+            keys = sort;
         }
+    }
+    // With no keys that are not redundant, each row has the values of the other rows, so the first row is the result, as the `LIMIT 1` of `create_final_distinct_paths`.
+    if processed.is_empty() {
+        let input = sort_if(level, input, keys, order, Some(1.0), only)?;
+        let c = input.cost;
+        let mut node = Node::new(Kind::Limit, scope, vec![input]);
+        node.cost = limit_cost(c, 1.0, 0.0);
+        return Some(node);
     }
     let (is_sorted, count) = presorted(order, &keys);
     if only && !is_sorted && count == 0 {
@@ -956,7 +975,7 @@ fn distinct<'q>(
     let (sort_startup, sort_total) =
         if is_sorted { (c.startup, c.total) } else { sort_cost(level, c, &keys, count, None) };
     let unique_total = sort_total + cost::CPU_OPERATOR * c.rows * ncols as f64;
-    let hashable = !query.distinct_on && query.distinct.iter().all(|d| d.hashable);
+    let hashable = !query.distinct_on && processed.iter().all(|d| d.hashable);
     let hash_startup = c.total + cost::CPU_OPERATOR * c.rows * ncols as f64;
     let hash_total = hash_startup + cost::CPU_TUPLE * groups;
     // The hash table loses its order, so the sort of `ORDER BY` counts for it.
@@ -965,8 +984,11 @@ fn distinct<'q>(
     } else {
         cost::sort((hash_startup, hash_total), groups, c.width, None).1
     };
-    if !only && hashable && hash_after < unique_total {
-        let items = query.distinct.iter().map(|d| Item::below(level.target(d.target))).collect();
+    // `add_path` keeps the hash table only when its total cost or its start cost is lower by more than the fuzz factor, as the `Unique` has the order of its keys.
+    let kept = hash_total * 1.01 < unique_total
+        || hash_total <= unique_total * 1.01 && hash_startup * 1.01 < sort_startup;
+    if !only && hashable && kept && hash_after < unique_total {
+        let items = processed.iter().map(|d| Item::below(level.target(d.target))).collect();
         let mut node = Node::new(
             Kind::Aggregate { strategy: Strategy::Hashed, keys: items, sets: Vec::new() },
             scope,

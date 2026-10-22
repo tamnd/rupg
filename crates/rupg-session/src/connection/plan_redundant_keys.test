@@ -1,0 +1,263 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE b (x int, y int);
+CREATE TABLE
+> CREATE TABLE c (x int);
+CREATE TABLE
+> CREATE TABLE p (x int PRIMARY KEY, y int, z text);
+CREATE TABLE
+> CREATE TABLE u (x int NOT NULL, y int NOT NULL, z int, UNIQUE (x, y));
+CREATE TABLE
+> CREATE TABLE n (x int UNIQUE, y int);
+CREATE TABLE
+> EXPLAIN SELECT b.x, c.x, count(*) FROM b, c WHERE b.x = c.x GROUP BY b.x, c.x;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=338.29..927.89 rows=200 width=16)
+row   Group Key: b.x
+row   ->  Merge Join  (cost=338.29..781.81 rows=28815 width=8)
+row         Merge Cond: (b.x = c.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=4)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+row         ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT x, y, count(*) FROM b WHERE y = 1 GROUP BY x, y;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=38.44..38.63 rows=11 width=16)
+row   Group Key: x
+row   ->  Sort  (cost=38.44..38.47 rows=11 width=8)
+row         Sort Key: x
+row         ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
+row               Filter: (y = 1)
+EXPLAIN
+> EXPLAIN SELECT y, count(*) FROM b WHERE y = 1 GROUP BY y;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=0.00..38.29 rows=1 width=12)
+row   ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=4)
+row         Filter: (y = 1)
+EXPLAIN
+> EXPLAIN SELECT x, y, count(*) FROM b WHERE x = y GROUP BY x, y;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=38.44..38.63 rows=11 width=16)
+row   Group Key: x
+row   ->  Sort  (cost=38.44..38.47 rows=11 width=8)
+row         Sort Key: x
+row         ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
+row               Filter: (x = y)
+EXPLAIN
+> EXPLAIN SELECT x, y, count(*) FROM p GROUP BY x, y;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=28.00..40.00 rows=1200 width=16)
+row   Group Key: x
+row   ->  Seq Scan on p  (cost=0.00..22.00 rows=1200 width=8)
+EXPLAIN
+> EXPLAIN SELECT x, y, z, count(*) FROM p GROUP BY y, z, x;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=28.00..40.00 rows=1200 width=48)
+row   Group Key: x
+row   ->  Seq Scan on p  (cost=0.00..22.00 rows=1200 width=40)
+EXPLAIN
+> EXPLAIN SELECT x, y, z, count(*) FROM u GROUP BY x, y, z;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=45.70..47.74 rows=204 width=20)
+row   Group Key: x, y
+row   ->  Seq Scan on u  (cost=0.00..30.40 rows=2040 width=12)
+EXPLAIN
+> EXPLAIN SELECT x, z, count(*) FROM u GROUP BY x, z;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=45.70..47.74 rows=204 width=16)
+row   Group Key: x, z
+row   ->  Seq Scan on u  (cost=0.00..30.40 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN SELECT x, y, count(*) FROM n GROUP BY x, y;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=49.55..72.15 rows=2260 width=16)
+row   Group Key: x, y
+row   ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT DISTINCT x, y FROM b WHERE y = 1;
+fields QUERY PLAN:25:-1:-1
+row Unique  (cost=38.44..38.50 rows=11 width=8)
+row   ->  Sort  (cost=38.44..38.47 rows=11 width=8)
+row         Sort Key: x
+row         ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
+row               Filter: (y = 1)
+EXPLAIN
+> EXPLAIN SELECT DISTINCT b.x, c.x FROM b, c WHERE b.x = c.x;
+fields QUERY PLAN:25:-1:-1
+row Unique  (cost=338.29..853.85 rows=200 width=8)
+row   ->  Merge Join  (cost=338.29..781.81 rows=28815 width=8)
+row         Merge Cond: (b.x = c.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=4)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+row         ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT DISTINCT x, y FROM p;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=28.00..40.00 rows=1200 width=8)
+row   Group Key: x, y
+row   ->  Seq Scan on p  (cost=0.00..22.00 rows=1200 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE y = 1 ORDER BY x, y;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=38.44..38.47 rows=11 width=8)
+row   Sort Key: x
+row   ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
+row         Filter: (y = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE y = 1 ORDER BY y, x;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=38.44..38.47 rows=11 width=8)
+row   Sort Key: x
+row   ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
+row         Filter: (y = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM b, c WHERE b.x = c.x ORDER BY b.x, c.x, b.y;
+fields QUERY PLAN:25:-1:-1
+row Incremental Sort  (cost=345.67..2179.12 rows=28815 width=12)
+row   Sort Key: b.x, b.y
+row   Presorted Key: b.x
+row   ->  Merge Join  (cost=338.29..781.81 rows=28815 width=12)
+row         Merge Cond: (b.x = c.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE x = y ORDER BY x, y;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=38.44..38.47 rows=11 width=8)
+row   Sort Key: x
+row   ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
+row         Filter: (x = y)
+EXPLAIN
+> EXPLAIN SELECT * FROM b ORDER BY x, x DESC;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=158.51..164.16 rows=2260 width=8)
+row   Sort Key: x
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT x, count(*) FROM b WHERE x = 1 GROUP BY x ORDER BY x;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=0.00..38.29 rows=1 width=12)
+row   ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=4)
+row         Filter: (x = 1)
+EXPLAIN
+> EXPLAIN SELECT x, y, count(*) FROM b WHERE y = 1 GROUP BY x, y ORDER BY y, x;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=38.44..38.63 rows=11 width=16)
+row   Group Key: x
+row   ->  Sort  (cost=38.44..38.47 rows=11 width=8)
+row         Sort Key: x
+row         ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
+row               Filter: (y = 1)
+EXPLAIN
+> EXPLAIN SELECT b.y, count(*) FROM b LEFT JOIN c ON b.x = c.x WHERE b.y = 1 GROUP BY b.y, c.x;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=85.55..86.95 rows=140 width=16)
+row   Group Key: c.x
+row   ->  Hash Right Join  (cost=38.39..84.85 rows=140 width=8)
+row         Hash Cond: (c.x = b.x)
+row         ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+row         ->  Hash  (cost=38.25..38.25 rows=11 width=8)
+row               ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
+row                     Filter: (y = 1)
+EXPLAIN
+> EXPLAIN SELECT DISTINCT ON (x, y) x, y FROM b WHERE y = 1 ORDER BY x, y;
+fields QUERY PLAN:25:-1:-1
+row Unique  (cost=38.44..38.50 rows=11 width=8)
+row   ->  Sort  (cost=38.44..38.47 rows=11 width=8)
+row         Sort Key: x
+row         ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
+row               Filter: (y = 1)
+EXPLAIN
+> EXPLAIN (VERBOSE) SELECT x, y, count(*) FROM b WHERE y = 1 GROUP BY x, y;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=38.44..38.63 rows=11 width=16)
+row   Output: x, y, count(*)
+row   Group Key: b.x
+row   ->  Sort  (cost=38.44..38.47 rows=11 width=8)
+row         Output: x, y
+row         Sort Key: b.x
+row         ->  Seq Scan on public.b  (cost=0.00..38.25 rows=11 width=8)
+row               Output: x, y
+row               Filter: (b.y = 1)
+EXPLAIN
+> EXPLAIN SELECT DISTINCT y FROM b WHERE y = 1;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.00..3.48 rows=1 width=4)
+row   ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=4)
+row         Filter: (y = 1)
+EXPLAIN
+> EXPLAIN SELECT DISTINCT y, 1 FROM b WHERE y = 1;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.00..3.48 rows=1 width=8)
+row   ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
+row         Filter: (y = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM b ORDER BY x, 2 + 2;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=158.51..164.16 rows=2260 width=12)
+row   Sort Key: x
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=12)
+EXPLAIN
+> EXPLAIN SELECT x, array_agg(x ORDER BY y) FROM b WHERE y = 1 GROUP BY x;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=38.44..38.66 rows=11 width=36)
+row   Group Key: x
+row   ->  Sort  (cost=38.44..38.47 rows=11 width=8)
+row         Sort Key: x
+row         ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
+row               Filter: (y = 1)
+EXPLAIN
+> EXPLAIN SELECT array_agg(x ORDER BY y, x) FROM b WHERE y = 1;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=38.50..38.51 rows=1 width=32)
+row   ->  Sort  (cost=38.44..38.47 rows=11 width=8)
+row         Sort Key: x
+row         ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
+row               Filter: (y = 1)
+EXPLAIN
+> EXPLAIN SELECT x, y, count(*) FROM b WHERE y = 1 GROUP BY x, y HAVING count(*) > 1;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=38.44..38.66 rows=4 width=16)
+row   Group Key: x
+row   Filter: (count(*) > 1)
+row   ->  Sort  (cost=38.44..38.47 rows=11 width=8)
+row         Sort Key: x
+row         ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
+row               Filter: (y = 1)
+EXPLAIN
+> EXPLAIN SELECT y, sum(x) FROM b WHERE y = 1 GROUP BY y ORDER BY y;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=0.00..38.29 rows=1 width=12)
+row   ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
+row         Filter: (y = 1)
+EXPLAIN
+> EXPLAIN SELECT x, y, z FROM u GROUP BY x, y, z ORDER BY z;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=50.47..50.98 rows=204 width=12)
+row   Sort Key: z
+row   ->  HashAggregate  (cost=40.60..42.64 rows=204 width=12)
+row         Group Key: x, y
+row         ->  Seq Scan on u  (cost=0.00..30.40 rows=2040 width=12)
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE y = 1 ORDER BY y;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
+row   Filter: (y = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE y = 1 ORDER BY y LIMIT 5;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.00..17.39 rows=5 width=8)
+row   ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
+row         Filter: (y = 1)
+EXPLAIN

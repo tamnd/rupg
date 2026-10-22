@@ -41,8 +41,10 @@ pub(crate) struct Stats {
     unique: BTreeSet<(usize, i16)>,
     /// The key columns of each unique index of each relation that is immediate and has no predicate, which `relation_has_unique_index_for` reads.
     distinct: BTreeMap<usize, Vec<Vec<i16>>>,
-    /// The members of each equivalence class of the query level.
-    equal: Vec<Vec<Expr>>,
+    /// The key columns of each unique index of each relation that shows that the other columns of a row are a function of the key columns, as `remove_useless_groupby_columns` chooses them: the index is immediate and has no predicate and no expression, and each key column is `NOT NULL` or the index has `NULLS NOT DISTINCT`.
+    functional: BTreeMap<usize, Vec<Vec<i16>>>,
+    /// The members of each equivalence class of the query level, each class with true when it has a constant.
+    equal: Vec<(Vec<Expr>, bool)>,
 }
 
 impl Stats {
@@ -125,7 +127,71 @@ impl Stats {
 
     /// `exprs_known_equal`: true when an equivalence class has the two expressions.
     fn known_equal(&self, a: &Expr, b: &Expr) -> bool {
-        self.equal.iter().any(|c| c.iter().any(|m| m.same(a)) && c.iter().any(|m| m.same(b)))
+        self.equal.iter().any(|(c, _)| c.iter().any(|m| m.same(a)) && c.iter().any(|m| m.same(b)))
+    }
+
+    /// `pathkey_is_redundant`: true when a key of a sort on the expression adds nothing after the keys on the expressions `before`. The expression is a constant, an equivalence class with a constant has it, or an earlier key is the expression or is in its class. A volatile expression has a class of its own.
+    fn redundant(&self, expr: &Expr, before: &[&Expr]) -> bool {
+        if exprs::volatile(expr) {
+            return false;
+        }
+        if exprs::pseudo_constant(expr) {
+            return true;
+        }
+        match self.equal.iter().find(|(members, _)| members.iter().any(|m| m.same(expr))) {
+            Some((members, constant)) => {
+                *constant || before.iter().any(|b| members.iter().any(|m| m.same(b)))
+            }
+            None => before.iter().any(|b| b.same(expr)),
+        }
+    }
+
+    /// `make_pathkeys_for_sortclauses_extended` with `remove_redundant`: the items of a list of keys without the items whose keys are redundant, as `pathkey_is_redundant` finds them.
+    pub(crate) fn canonical<T>(&self, items: Vec<T>, expr: impl Fn(&T) -> &Expr) -> Vec<T> {
+        let mut out: Vec<T> = Vec::new();
+        for item in items {
+            let before: Vec<&Expr> = out.iter().map(&expr).collect();
+            if !self.redundant(expr(&item), &before) {
+                out.push(item);
+            }
+        }
+        out
+    }
+
+    /// `remove_useless_groupby_columns`: for each expression of `GROUP BY`, true when the groups need it not, because the other columns of its relation in `GROUP BY` have all the key columns of a unique index of `functional`. The key columns must be fewer than the columns of the relation in `GROUP BY`, and the index with the fewest key columns wins. Only a column of the query level can go, and `GROUP BY` must have two items or more.
+    pub(crate) fn surplus(&self, exprs: &[&Expr]) -> Vec<bool> {
+        let column = |e: &Expr| match e.kind {
+            ExprKind::Var(var) if var.levels_up == 0 => Some(var),
+            _ => None,
+        };
+        let mut out = vec![false; exprs.len()];
+        if exprs.len() < 2 {
+            return out;
+        }
+        let mut columns: BTreeMap<usize, BTreeSet<i16>> = BTreeMap::new();
+        for var in exprs.iter().filter_map(|e| column(e)) {
+            columns.entry(var.relation).or_default().insert(var.attnum);
+        }
+        for (r, attnums) in &columns {
+            let Some(indexes) = self.functional.get(r) else { continue };
+            let best = indexes
+                .iter()
+                .filter(|keys| {
+                    let keys: BTreeSet<i16> = keys.iter().copied().collect();
+                    keys.is_subset(attnums) && keys.len() < attnums.len()
+                })
+                .min_by_key(|keys| keys.len());
+            let Some(best) = best else { continue };
+            for (i, e) in exprs.iter().enumerate() {
+                if let Some(var) = column(e)
+                    && var.relation == *r
+                    && !best.contains(&var.attnum)
+                {
+                    out[i] = true;
+                }
+            }
+        }
+        out
     }
 
     /// Adds the columns of an expression that a place with these relations reads.
@@ -320,7 +386,11 @@ impl<'q> Builder<'q> {
         if !classes::domain(&mut tree, true, &mut found) {
             return (vec![(dummy(level.scope, &all), Vec::new())], Vec::new(), Stats::default());
         }
-        let equal = found.equal.iter().map(|c| c.iter().map(|&m| m.clone()).collect()).collect();
+        let equal = found
+            .equal
+            .iter()
+            .map(|(c, constant)| (c.iter().map(|&m| m.clone()).collect(), *constant))
+            .collect();
         let mut stats = Stats { equal, ..Stats::default() };
         needed(level, &mut stats);
         let rels = self.build(level, tree, &found, &mut stats);
@@ -434,6 +504,15 @@ impl<'q> Builder<'q> {
                             stats.unique.insert((r, *key));
                         }
                         if index.unique && index.immediate && !index.partial {
+                            let not_null = |k: &i16| {
+                                usize::try_from(*k - 1)
+                                    .ok()
+                                    .and_then(|c| relation.columns.get(c))
+                                    .is_some_and(|c| c.not_null)
+                            };
+                            if index.nulls_not_distinct || index.keys.iter().all(not_null) {
+                                stats.functional.entry(r).or_default().push(index.keys.clone());
+                            }
                             stats.distinct.entry(r).or_default().push(index.keys);
                         }
                     }
@@ -566,12 +645,15 @@ fn needed(level: &Level<'_>, stats: &mut Stats) {
             })
             .collect()
     };
-    stats.sort = keys(&query.sort);
-    stats.groups = vec![keys(&query.group), keys(&query.distinct)];
-    stats.query = [&query.group, &query.distinct, &query.sort]
+    let [group, distinct, sort] = [&query.group, &query.distinct, &query.sort]
+        .map(|items| stats.canonical(keys(items), |k| &k.0));
+    stats.query = [&group, &distinct, &sort]
         .into_iter()
-        .find(|items| !items.is_empty())
-        .map_or_else(Vec::new, |items| keys(items));
+        .find(|keys| !keys.is_empty())
+        .cloned()
+        .unwrap_or_default();
+    stats.sort = sort;
+    stats.groups = vec![group, distinct];
     stats.startup = upper::limit_estimates(query).0 != 0.0;
     for (r, relation) in relations.iter().enumerate() {
         for (expr, depth) in lateral_exprs(relation) {

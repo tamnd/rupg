@@ -59,6 +59,21 @@ pub(crate) fn volatile(expr: &Expr) -> bool {
     .is_some()
 }
 
+/// True for an expression that a sort takes as a constant, as `add_eq_member` and `get_eclass_for_sort_expr` set `ec_has_const`: it reads no relation of the query and has no volatile call, no call that returns a set, no aggregate call and no window call.
+pub(crate) fn pseudo_constant(expr: &Expr) -> bool {
+    relations(expr).is_empty()
+        && !volatile(expr)
+        && expr
+            .find(0, &mut |e, depth| match &e.kind {
+                ExprKind::Func(f) if f.retset => Some(()),
+                ExprKind::Agg(_) | ExprKind::Grouping(_) | ExprKind::Window(_) if depth == 0 => {
+                    Some(())
+                }
+                _ => None,
+            })
+            .is_none()
+}
+
 /// True when a query calls a volatile function in an expression of it or of its subqueries.
 pub(crate) fn query_volatile(query: &Query) -> bool {
     query.all_exprs(0).into_iter().any(|(e, _)| volatile(e))
