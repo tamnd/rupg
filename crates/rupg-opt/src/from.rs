@@ -292,17 +292,19 @@ struct Qual<'q> {
     outer: bool,
     /// The place of the condition in the order of `deconstruct_jointree`, or `None` for a condition that the planner makes from an equivalence class.
     order: Option<usize>,
+    /// The selectivities of the conditions that `extract_restriction_or_clauses` made from the parts of this `OR` for one relation each. A join that tests the condition with `JOIN_INNER` divides the selectivity of the condition by each of them, as `consider_new_or_clause` changes `norm_selec`.
+    divisors: Vec<f64>,
 }
 
 impl<'q> Qual<'q> {
     /// A condition of the query.
     fn of(expr: &'q Expr, rels: BTreeSet<usize>, outer: bool) -> Qual<'q> {
-        Qual { expr: Cow::Borrowed(expr), rels, outer, order: None }
+        Qual { expr: Cow::Borrowed(expr), rels, outer, order: None, divisors: Vec::new() }
     }
 
     /// A condition that the planner makes from an equivalence class.
     fn implied(expr: Expr, rels: BTreeSet<usize>) -> Qual<'q> {
-        Qual { expr: Cow::Owned(expr), rels, outer: false, order: None }
+        Qual { expr: Cow::Owned(expr), rels, outer: false, order: None, divisors: Vec::new() }
     }
 
     /// The condition as an expression that the node computes.
@@ -465,6 +467,7 @@ impl<'q> Builder<'q> {
                 Stats::default(),
             );
         }
+        extract_or_clauses(&mut tree);
         let equal = found
             .equal
             .iter()
@@ -1339,6 +1342,139 @@ fn join_selectivity(qual: &Qual<'_>, stats: &Stats) -> f64 {
     cost::selectivity_by(&qual.expr, &eq)
 }
 
+/// The selectivity of a condition of a join for `JOIN_INNER`, which `consider_new_or_clause` divides by the selectivity of each condition that it made from the condition for one relation, at most 1 after each division.
+fn norm_selectivity(qual: &Qual<'_>, stats: &Stats) -> f64 {
+    divide(join_selectivity(qual, stats), &qual.divisors)
+}
+
+fn divide(selectivity: f64, divisors: &[f64]) -> f64 {
+    divisors.iter().fold(selectivity, |s, d| (s / d).min(1.0))
+}
+
+/// `extract_restriction_or_clauses`: for each relation, in the order of the relations, and each `OR` of a join that can move to the relation, in the order of the conditions, a condition of the relation alone from the parts of each arm of the `OR` that read the relation alone. The relation tests the condition when it passes 0.9 of its rows at most, and the selectivity of the `OR` for the join is divided by the selectivity of the condition.
+fn extract_or_clauses(tree: &mut Tree<'_>) {
+    let mut found = Vec::new();
+    movable_ors(tree, &mut found);
+    found.sort_by_key(|(order, ..)| *order);
+    let all: BTreeSet<usize> = found.iter().flat_map(|(_, _, rels)| rels.iter().copied()).collect();
+    let (mut adds, mut divisors) = (Vec::new(), Vec::new());
+    for r in all {
+        for (order, expr, rels) in &found {
+            if !rels.contains(&r) {
+                continue;
+            }
+            let Some(clause) = extract_or_clause(expr, r) else { continue };
+            let selectivity = cost::selectivity(&clause);
+            if selectivity > 0.9 {
+                continue;
+            }
+            adds.push((r, clause));
+            if selectivity > 0.0 {
+                divisors.push((*order, selectivity));
+            }
+        }
+    }
+    add_extracted(tree, &mut adds, &divisors);
+}
+
+/// The `OR` conditions of the joins of the tree, with their places in the order of the conditions and the relations that each can move to, as `join_clause_is_movable_to`: a relation that the condition reads, that is not on the outer side of the outer join of the condition, and that no outer join below the condition can make null.
+fn movable_ors(tree: &Tree<'_>, out: &mut Vec<(Option<usize>, Expr, BTreeSet<usize>)>) {
+    let Tree::Join(join) = tree else { return };
+    movable_ors(&join.left, out);
+    movable_ors(&join.right, out);
+    let below: BTreeSet<usize> =
+        nullable(&join.left).union(&nullable(&join.right)).copied().collect();
+    let mut add = |qual: &Qual<'_>, allowed: &dyn Fn(usize) -> bool| {
+        if matches!(qual.expr.kind, ExprKind::Bool(BoolOp::Or, _)) {
+            let rels =
+                qual.rels.iter().copied().filter(|&r| !below.contains(&r) && allowed(r)).collect();
+            out.push((qual.order, (*qual.expr).clone(), rels));
+        }
+    };
+    let right = join.right.rels();
+    match join.kind {
+        JoinKind::Inner | JoinKind::Semi => join.quals.iter().for_each(|q| add(q, &|_| true)),
+        JoinKind::Left | JoinKind::Anti => {
+            join.quals.iter().for_each(|q| add(q, &|r| right.contains(&r)));
+            join.filter.iter().for_each(|q| add(q, &|r| !right.contains(&r)));
+        }
+        _ => {}
+    }
+}
+
+/// The relations of the tree that an outer join in the tree can make null.
+fn nullable(tree: &Tree<'_>) -> BTreeSet<usize> {
+    let Tree::Join(join) = tree else { return BTreeSet::new() };
+    let mut out: BTreeSet<usize> =
+        nullable(&join.left).union(&nullable(&join.right)).copied().collect();
+    match join.kind {
+        JoinKind::Left | JoinKind::Anti => out.extend(join.right.rels()),
+        JoinKind::Full => out.extend(join.rels.iter().copied()),
+        _ => {}
+    }
+    out
+}
+
+/// `extract_or_clause`: an `OR` of the parts of each arm of the condition that read the relation `r` alone, with an `AND` of the parts of an arm when it has two or more, or `None` when an arm has no such part.
+fn extract_or_clause(expr: &Expr, r: usize) -> Option<Expr> {
+    let ExprKind::Bool(BoolOp::Or, arms) = &expr.kind else { return None };
+    let safe =
+        |part: &Expr| exprs::relations(part) == BTreeSet::from([r]) && !exprs::volatile(part);
+    let mut out = Vec::new();
+    for arm in arms {
+        let mut parts = Vec::new();
+        match &arm.kind {
+            ExprKind::Bool(BoolOp::And, args) => {
+                for part in args {
+                    if matches!(part.kind, ExprKind::Bool(BoolOp::Or, _)) {
+                        parts.extend(extract_or_clause(part, r));
+                    } else if safe(part) {
+                        parts.push(part.clone());
+                    }
+                }
+            }
+            _ if safe(arm) => parts.push(arm.clone()),
+            _ => {}
+        }
+        let part = match parts.len() {
+            0 => return None,
+            1 => parts.remove(0),
+            _ => Expr::new(ExprKind::Bool(BoolOp::And, parts), oid::BOOL),
+        };
+        match part.kind {
+            ExprKind::Bool(BoolOp::Or, args) => out.extend(args),
+            _ => out.push(part),
+        }
+    }
+    Some(Expr::new(ExprKind::Bool(BoolOp::Or, out), oid::BOOL))
+}
+
+/// Adds the conditions that `extract_or_clauses` made to the scans of their relations, and the selectivities that divide the selectivity of each `OR` of a join.
+fn add_extracted(
+    tree: &mut Tree<'_>,
+    adds: &mut Vec<(usize, Expr)>,
+    divisors: &[(Option<usize>, f64)],
+) {
+    match tree {
+        Tree::Base { relation, quals } => {
+            let (mine, rest) = std::mem::take(adds).into_iter().partition(|(r, _)| r == relation);
+            *adds = rest;
+            let mine: Vec<(usize, Expr)> = mine;
+            quals.extend(mine.into_iter().map(|(r, e)| Qual::implied(e, BTreeSet::from([r]))));
+        }
+        Tree::Join(join) => {
+            add_extracted(&mut join.left, adds, divisors);
+            add_extracted(&mut join.right, adds, divisors);
+            for qual in join.quals.iter_mut().chain(join.filter.iter_mut()) {
+                if qual.order.is_some() {
+                    let mine = divisors.iter().filter(|(o, _)| *o == qual.order).map(|&(_, d)| d);
+                    qual.divisors.extend(mine);
+                }
+            }
+        }
+    }
+}
+
 /// The kinds of node that read the rows of the node below once and keep them, so that a scan again costs little, as `cost_rescan`.
 fn keeps_rows(kind: &Kind<'_>) -> bool {
     matches!(
@@ -1681,7 +1817,7 @@ fn semi_selectivity(quals: &[Qual<'_>], inner: &Rel<'_>, stats: &Stats) -> f64 {
 
 /// `compute_semi_anti_join_factors` for a join of a semi join or an anti join: the fraction of the outer rows that have a match, which is the selectivity of the semi join, and the number of inner rows that each of them matches, which comes from the selectivity of the conditions for an inner join. Each outer row with a match matches one inner row at least.
 fn semi_factors(fraction: f64, inner: &Rel<'_>, quals: &[Qual<'_>], stats: &Stats) -> (f64, f64) {
-    let selectivity: f64 = quals.iter().map(|q| join_selectivity(q, stats)).product();
+    let selectivity: f64 = quals.iter().map(|q| norm_selectivity(q, stats)).product();
     if fraction <= 0.0 {
         return (fraction, 1.0);
     }
@@ -1708,13 +1844,21 @@ fn join_rows(
     filter: &[Qual<'_>],
     stats: &Stats,
 ) -> f64 {
-    let selectivity: f64 = quals.iter().map(|q| join_selectivity(q, stats)).product();
+    let one = |q: &Qual<'_>| {
+        if kind == JoinKind::Inner {
+            norm_selectivity(q, stats)
+        } else {
+            join_selectivity(q, stats)
+        }
+    };
+    let selectivity: f64 = quals.iter().map(one).product();
     let mut rows = left.node.cost.rows * right.node.cost.rows * selectivity;
     match kind {
         JoinKind::Left => rows = rows.max(left.node.cost.rows),
         JoinKind::Full => rows = rows.max(left.node.cost.rows).max(right.node.cost.rows),
         _ => {}
     }
+    // `calc_joinrel_size_estimate` takes the selectivity of the conditions above an outer join for the kind of the join, which `consider_new_or_clause` does not change.
     let filter_selectivity = cost::list_selectivity(filter.iter().map(|q| &*q.expr));
     cost::clamp_rows(rows * filter_selectivity)
 }

@@ -1,0 +1,264 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (x int, y int);
+CREATE TABLE
+> CREATE TABLE b (x int, y int, z int);
+CREATE TABLE
+> CREATE TABLE c (x int, y int, z int);
+CREATE TABLE
+> EXPLAIN SELECT * FROM a, b WHERE (a.x = 42 AND b.y = 43) OR (a.x = 44 AND b.z = 45);
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..94.90 rows=231 width=20)
+row   Join Filter: (((a.x = 42) AND (b.y = 43)) OR ((a.x = 44) AND (b.z = 45)))
+row   ->  Seq Scan on a  (cost=0.00..43.90 rows=23 width=8)
+row         Filter: ((x = 42) OR (x = 44))
+row   ->  Materialize  (cost=0.00..40.70 rows=20 width=12)
+row         ->  Seq Scan on b  (cost=0.00..40.60 rows=20 width=12)
+row               Filter: ((y = 43) OR (z = 45))
+EXPLAIN
+> EXPLAIN SELECT * FROM a JOIN b ON a.y = b.y WHERE (a.x = 42 AND b.y = 43) OR (a.x = 44 AND b.z = 45);
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=40.85..84.90 rows=1 width=20)
+row   Hash Cond: (a.y = b.y)
+row   Join Filter: (((a.x = 42) AND (b.y = 43)) OR ((a.x = 44) AND (b.z = 45)))
+row   ->  Seq Scan on a  (cost=0.00..43.90 rows=23 width=8)
+row         Filter: ((x = 42) OR (x = 44))
+row   ->  Hash  (cost=40.60..40.60 rows=20 width=12)
+row         ->  Seq Scan on b  (cost=0.00..40.60 rows=20 width=12)
+row               Filter: ((y = 43) OR (z = 45))
+EXPLAIN
+> EXPLAIN SELECT * FROM a JOIN b ON a.x = b.x WHERE (a.y = 1 AND b.y < 5) OR (a.y = 2 AND b.y > 10);
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=44.19..93.05 rows=78 width=20)
+row   Hash Cond: (b.x = a.x)
+row   Join Filter: (((a.y = 1) AND (b.y < 5)) OR ((a.y = 2) AND (b.y > 10)))
+row   ->  Seq Scan on b  (cost=0.00..40.60 rows=1133 width=12)
+row         Filter: ((y < 5) OR (y > 10))
+row   ->  Hash  (cost=43.90..43.90 rows=23 width=8)
+row         ->  Seq Scan on a  (cost=0.00..43.90 rows=23 width=8)
+row               Filter: ((y = 1) OR (y = 2))
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b WHERE (a.x = 1 AND b.y = 2) OR b.z = 3;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..977.25 rows=22769 width=20)
+row   Join Filter: (((a.x = 1) AND (b.y = 2)) OR (b.z = 3))
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Materialize  (cost=0.00..40.70 rows=20 width=12)
+row         ->  Seq Scan on b  (cost=0.00..40.60 rows=20 width=12)
+row               Filter: ((y = 2) OR (z = 3))
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b WHERE (a.x <> 1 AND b.y = 2) OR (a.x <> 2 AND b.y = 3);
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..1090.25 rows=44975 width=20)
+row   Join Filter: (((a.x <> 1) AND (b.y = 2)) OR ((a.x <> 2) AND (b.y = 3)))
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Materialize  (cost=0.00..40.70 rows=20 width=12)
+row         ->  Seq Scan on b  (cost=0.00..40.60 rows=20 width=12)
+row               Filter: ((y = 2) OR (y = 3))
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b WHERE (a.x = 1 AND (b.y = 1 OR b.y = 2)) OR (a.x = 2 AND b.y = 3);
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..106.91 rows=347 width=20)
+row   Join Filter: (((a.x = 1) AND ((b.y = 1) OR (b.y = 2))) OR ((a.x = 2) AND (b.y = 3)))
+row   ->  Seq Scan on b  (cost=0.00..45.70 rows=30 width=12)
+row         Filter: ((y = 1) OR (y = 2) OR (y = 3))
+row   ->  Materialize  (cost=0.00..44.02 rows=23 width=8)
+row         ->  Seq Scan on a  (cost=0.00..43.90 rows=23 width=8)
+row               Filter: ((x = 1) OR (x = 2))
+EXPLAIN
+> EXPLAIN SELECT * FROM a LEFT JOIN b ON (a.x = 1 AND b.y = 2) OR (a.x = 2 AND b.y = 3);
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join  (cost=0.00..1090.25 rows=2260 width=20)
+row   Join Filter: (((a.x = 1) AND (b.y = 2)) OR ((a.x = 2) AND (b.y = 3)))
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Materialize  (cost=0.00..40.70 rows=20 width=12)
+row         ->  Seq Scan on b  (cost=0.00..40.60 rows=20 width=12)
+row               Filter: ((y = 2) OR (y = 3))
+EXPLAIN
+> EXPLAIN SELECT * FROM a LEFT JOIN b ON a.x = b.x WHERE (a.y = 1 AND b.y IS NULL) OR (a.y = 2 AND b.z IS NULL);
+fields QUERY PLAN:25:-1:-1
+row Hash Right Join  (cost=44.19..88.31 rows=1 width=20)
+row   Hash Cond: (b.x = a.x)
+row   Filter: (((a.y = 1) AND (b.y IS NULL)) OR ((a.y = 2) AND (b.z IS NULL)))
+row   ->  Seq Scan on b  (cost=0.00..30.40 rows=2040 width=12)
+row   ->  Hash  (cost=43.90..43.90 rows=23 width=8)
+row         ->  Seq Scan on a  (cost=0.00..43.90 rows=23 width=8)
+row               Filter: ((y = 1) OR (y = 2))
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b, c WHERE a.x = b.x AND b.y = c.y AND ((a.y = 1 AND c.z = 2) OR (a.y = 3 AND c.z = 4));
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=85.04..129.16 rows=12 width=32)
+row   Hash Cond: (b.x = a.x)
+row   Join Filter: (((a.y = 1) AND (c.z = 2)) OR ((a.y = 3) AND (c.z = 4)))
+row   ->  Hash Join  (cost=40.85..83.49 rows=204 width=24)
+row         Hash Cond: (b.y = c.y)
+row         ->  Seq Scan on b  (cost=0.00..30.40 rows=2040 width=12)
+row         ->  Hash  (cost=40.60..40.60 rows=20 width=12)
+row               ->  Seq Scan on c  (cost=0.00..40.60 rows=20 width=12)
+row                     Filter: ((z = 2) OR (z = 4))
+row   ->  Hash  (cost=43.90..43.90 rows=23 width=8)
+row         ->  Seq Scan on a  (cost=0.00..43.90 rows=23 width=8)
+row               Filter: ((y = 1) OR (y = 3))
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b WHERE (a.x = 1 AND random() < 0.5 AND b.y = 1) OR (a.x = 2 AND b.y = 2);
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..97.20 rows=154 width=20)
+row   Join Filter: (((a.x = 1) AND (random() < '0.5'::double precision) AND (b.y = 1)) OR ((a.x = 2) AND (b.y = 2)))
+row   ->  Seq Scan on a  (cost=0.00..43.90 rows=23 width=8)
+row         Filter: ((x = 1) OR (x = 2))
+row   ->  Materialize  (cost=0.00..40.70 rows=20 width=12)
+row         ->  Seq Scan on b  (cost=0.00..40.60 rows=20 width=12)
+row               Filter: ((y = 1) OR (y = 2))
+EXPLAIN
+> EXPLAIN SELECT count(*) FROM a JOIN b ON a.x = b.x WHERE (a.y = 1 AND b.y = 2) OR (a.y = 3 AND b.y = 4);
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=84.91..84.92 rows=1 width=8)
+row   ->  Hash Join  (cost=40.85..84.90 rows=1 width=0)
+row         Hash Cond: (a.x = b.x)
+row         Join Filter: (((a.y = 1) AND (b.y = 2)) OR ((a.y = 3) AND (b.y = 4)))
+row         ->  Seq Scan on a  (cost=0.00..43.90 rows=23 width=8)
+row               Filter: ((y = 1) OR (y = 3))
+row         ->  Hash  (cost=40.60..40.60 rows=20 width=8)
+row               ->  Seq Scan on b  (cost=0.00..40.60 rows=20 width=8)
+row                     Filter: ((y = 2) OR (y = 4))
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b WHERE (a.x = 1 AND a.y = 2 AND b.y = 1) OR (a.x = 2 AND b.y = 2) OR (a.y = 5 AND b.z = 3);
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..121.66 rows=232 width=20)
+row   Join Filter: (((a.x = 1) AND (a.y = 2) AND (b.y = 1)) OR ((a.x = 2) AND (b.y = 2)) OR ((a.y = 5) AND (b.z = 3)))
+row   ->  Seq Scan on b  (cost=0.00..45.70 rows=30 width=12)
+row         Filter: ((y = 1) OR (y = 2) OR (z = 3))
+row   ->  Materialize  (cost=0.00..55.32 rows=23 width=8)
+row         ->  Seq Scan on a  (cost=0.00..55.20 rows=23 width=8)
+row               Filter: (((x = 1) AND (y = 2)) OR (x = 2) OR (y = 5))
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b WHERE (a.x = 1 OR b.y = 2) AND (a.y = 1 OR b.z = 2);
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..103802.10 rows=459 width=20)
+row   Join Filter: (((a.x = 1) OR (b.y = 2)) AND ((a.y = 1) OR (b.z = 2)))
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Materialize  (cost=0.00..40.60 rows=2040 width=12)
+row         ->  Seq Scan on b  (cost=0.00..30.40 rows=2040 width=12)
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b WHERE a.x = 1 OR (a.x = 2 AND b.y = 3);
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..1012.76 rows=23636 width=20)
+row   Join Filter: ((a.x = 1) OR ((a.x = 2) AND (b.y = 3)))
+row   ->  Seq Scan on b  (cost=0.00..30.40 rows=2040 width=12)
+row   ->  Materialize  (cost=0.00..44.02 rows=23 width=8)
+row         ->  Seq Scan on a  (cost=0.00..43.90 rows=23 width=8)
+row               Filter: ((x = 1) OR (x = 2))
+EXPLAIN
+> EXPLAIN SELECT * FROM a JOIN b ON a.x = b.x LEFT JOIN c ON c.x = b.x WHERE (b.y = 1 AND c.y IS NULL) OR (b.y = 2 AND c.z IS NULL);
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=84.52..125.71 rows=1 width=32)
+row   Hash Cond: (a.x = b.x)
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=84.51..84.51 rows=1 width=24)
+row         ->  Hash Right Join  (cost=40.85..84.51 rows=1 width=24)
+row               Hash Cond: (c.x = b.x)
+row               Filter: (((b.y = 1) AND (c.y IS NULL)) OR ((b.y = 2) AND (c.z IS NULL)))
+row               ->  Seq Scan on c  (cost=0.00..30.40 rows=2040 width=12)
+row               ->  Hash  (cost=40.60..40.60 rows=20 width=12)
+row                     ->  Seq Scan on b  (cost=0.00..40.60 rows=20 width=12)
+row                           Filter: ((y = 1) OR (y = 2))
+EXPLAIN
+> EXPLAIN SELECT * FROM a LEFT JOIN (b JOIN c ON b.x = c.x) ON a.x = b.x AND ((b.y = 1 AND c.y = 2) OR (b.y = 3 AND c.y = 4));
+fields QUERY PLAN:25:-1:-1
+row Hash Left Join  (cost=81.60..122.79 rows=2260 width=32)
+row   Hash Cond: (a.x = b.x)
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=81.59..81.59 rows=1 width=24)
+row         ->  Hash Join  (cost=40.85..81.59 rows=1 width=24)
+row               Hash Cond: (b.x = c.x)
+row               Join Filter: (((b.y = 1) AND (c.y = 2)) OR ((b.y = 3) AND (c.y = 4)))
+row               ->  Seq Scan on b  (cost=0.00..40.60 rows=20 width=12)
+row                     Filter: ((y = 1) OR (y = 3))
+row               ->  Hash  (cost=40.60..40.60 rows=20 width=12)
+row                     ->  Seq Scan on c  (cost=0.00..40.60 rows=20 width=12)
+row                           Filter: ((y = 2) OR (y = 4))
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE EXISTS (SELECT 1 FROM b WHERE (a.x = 1 AND b.y = 2) OR (a.x = 3 AND b.y = 4));
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Semi Join  (cost=0.00..94.90 rows=1 width=8)
+row   Join Filter: (((a.x = 1) AND (b.y = 2)) OR ((a.x = 3) AND (b.y = 4)))
+row   ->  Seq Scan on a  (cost=0.00..43.90 rows=23 width=8)
+row         Filter: ((x = 1) OR (x = 3))
+row   ->  Materialize  (cost=0.00..40.70 rows=20 width=4)
+row         ->  Seq Scan on b  (cost=0.00..40.60 rows=20 width=4)
+row               Filter: ((y = 2) OR (y = 4))
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b, c WHERE (a.x = 1 AND b.y = 1 AND c.z = 1) OR (a.x = 2 AND b.y = 2 AND c.z = 2);
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..383.21 rows=2317 width=32)
+row   Join Filter: (((a.x = 1) AND (b.y = 1) AND (c.z = 1)) OR ((a.x = 2) AND (b.y = 2) AND (c.z = 2)))
+row   ->  Nested Loop  (cost=0.00..86.25 rows=400 width=24)
+row         ->  Seq Scan on b  (cost=0.00..40.60 rows=20 width=12)
+row               Filter: ((y = 1) OR (y = 2))
+row         ->  Materialize  (cost=0.00..40.70 rows=20 width=12)
+row               ->  Seq Scan on c  (cost=0.00..40.60 rows=20 width=12)
+row                     Filter: ((z = 1) OR (z = 2))
+row   ->  Materialize  (cost=0.00..44.02 rows=23 width=8)
+row         ->  Seq Scan on a  (cost=0.00..43.90 rows=23 width=8)
+row               Filter: ((x = 1) OR (x = 2))
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE NOT EXISTS (SELECT 1 FROM b WHERE (a.x = 1 AND b.y = 2) OR (a.x = 3 AND b.y = 4));
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Anti Join  (cost=0.00..1090.25 rows=2260 width=8)
+row   Join Filter: (((a.x = 1) AND (b.y = 2)) OR ((a.x = 3) AND (b.y = 4)))
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Materialize  (cost=0.00..40.70 rows=20 width=4)
+row         ->  Seq Scan on b  (cost=0.00..40.60 rows=20 width=4)
+row               Filter: ((y = 2) OR (y = 4))
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b WHERE (a.x = 1 AND b.y = 2) OR (a.x = 3 AND b.y = 4) OR (a.x = 5 AND b.y = 6) OR (a.x = 7 AND b.y = 8);
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..164.60 rows=457 width=20)
+row   Join Filter: (((a.x = 1) AND (b.y = 2)) OR ((a.x = 3) AND (b.y = 4)) OR ((a.x = 5) AND (b.y = 6)) OR ((a.x = 7) AND (b.y = 8)))
+row   ->  Seq Scan on a  (cost=0.00..55.20 rows=45 width=8)
+row         Filter: ((x = 1) OR (x = 3) OR (x = 5) OR (x = 7))
+row   ->  Materialize  (cost=0.00..51.00 rows=40 width=12)
+row         ->  Seq Scan on b  (cost=0.00..50.80 rows=40 width=12)
+row               Filter: ((y = 2) OR (y = 4) OR (y = 6) OR (y = 8))
+EXPLAIN
+> EXPLAIN SELECT * FROM a JOIN b ON a.x = b.x AND ((a.y = 1 AND b.y = 2) OR (a.y = 3 AND b.y = 4)) JOIN c ON c.x = a.x;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=84.92..123.07 rows=10 width=32)
+row   Hash Cond: (c.x = a.x)
+row   ->  Seq Scan on c  (cost=0.00..30.40 rows=2040 width=12)
+row   ->  Hash  (cost=84.90..84.90 rows=1 width=20)
+row         ->  Hash Join  (cost=40.85..84.90 rows=1 width=20)
+row               Hash Cond: (a.x = b.x)
+row               Join Filter: (((a.y = 1) AND (b.y = 2)) OR ((a.y = 3) AND (b.y = 4)))
+row               ->  Seq Scan on a  (cost=0.00..43.90 rows=23 width=8)
+row                     Filter: ((y = 1) OR (y = 3))
+row               ->  Hash  (cost=40.60..40.60 rows=20 width=12)
+row                     ->  Seq Scan on b  (cost=0.00..40.60 rows=20 width=12)
+row                           Filter: ((y = 2) OR (y = 4))
+EXPLAIN
+> EXPLAIN SELECT a.x FROM a, b WHERE (a.x > 1 AND b.y = 1) OR (a.x < 0 AND b.y = 2);
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..649.75 rows=15097 width=4)
+row   Join Filter: (((a.x > 1) AND (b.y = 1)) OR ((a.x < 0) AND (b.y = 2)))
+row   ->  Seq Scan on a  (cost=0.00..43.90 rows=1256 width=4)
+row         Filter: ((x > 1) OR (x < 0))
+row   ->  Materialize  (cost=0.00..40.70 rows=20 width=4)
+row         ->  Seq Scan on b  (cost=0.00..40.60 rows=20 width=4)
+row               Filter: ((y = 1) OR (y = 2))
+EXPLAIN
+> INSERT INTO a VALUES (42, 1), (44, 2), (1, 3);
+INSERT 0 3
+> INSERT INTO b VALUES (42, 43, 0), (44, 1, 45), (1, 2, 3);
+INSERT 0 3
+> SELECT * FROM a, b WHERE (a.x = 42 AND b.y = 43) OR (a.x = 44 AND b.z = 45) ORDER BY 1, 2, 3, 4, 5;
+fields x@a.1:23:4:-1,y@a.2:23:4:-1,x@b.1:23:4:-1,y@b.2:23:4:-1,z@b.3:23:4:-1
+row 42,1,42,43,0
+row 44,2,44,1,45
+SELECT 2
+> SELECT * FROM a LEFT JOIN b ON (a.x = 42 AND b.y = 43) OR (a.x = 44 AND b.z = 45) ORDER BY 1, 2, 3, 4, 5;
+fields x@a.1:23:4:-1,y@a.2:23:4:-1,x@b.1:23:4:-1,y@b.2:23:4:-1,z@b.3:23:4:-1
+row 1,3,NULL,NULL,NULL
+row 42,1,42,43,0
+row 44,2,44,1,45
+SELECT 3
