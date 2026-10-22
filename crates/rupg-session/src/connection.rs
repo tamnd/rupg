@@ -5333,6 +5333,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_row_marks.test")));
     }
 
+    /// `EXPLAIN` of the subqueries of `FROM` that the planner merges into the query above them, as `pull_up_subqueries`: a subquery that is not grouped, sorted or limited becomes the relations of its `FROM`, in a list of `FROM` and in a side of a join. Its `WHERE` joins the `WHERE` of the query or the `ON` of its join. A merged subquery keeps its place in the range table, so that `VERBOSE` names the columns with their relations, and the relations of the subquery get their names after the relations of the query. `connection/plan_subquery_pullup.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_subquery_pullup() {
+        big_stack(|| script(include_str!("connection/plan_subquery_pullup.test")));
+    }
+
     /// `EXPLAIN` of an `Incremental Sort`: the planner sorts rows whose first keys are in order already, as `make_ordered_path` and `create_ordered_paths` choose it, with the costs of `cost_incremental_sort`. `connection/plan_incremental_sort.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_incremental_sort() {

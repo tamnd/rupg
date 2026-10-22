@@ -4,8 +4,13 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- The subqueries of `FROM` that the planner merges into the query above them in `EXPLAIN`, as `pull_up_subqueries` of PostgreSQL does it. A subquery with no aggregate, window, `ORDER BY`, `DISTINCT`, `LIMIT` or row lock becomes the relations of its `FROM`, in the list of `FROM` and in a side of a join, and its `WHERE` joins the `WHERE` of the query or the `ON` of the join. `SELECT * FROM (SELECT x FROM b) s` is a `Seq Scan on b` with no `Subquery Scan`, and `EXPLAIN VERBOSE` names its columns as `b.x` (#547).
+
 ### Fixed
 
+- The rows of a join on `=` in `EXPLAIN` when a side has conditions of its own. `eqjoinsel` of PostgreSQL does not make the number of distinct values of a column smaller than the rows of its table after the conditions (#547).
 - The junk columns of the row marks in `EXPLAIN`, as `preprocess_rowmarks` and `preprocess_targetlist` of PostgreSQL add them. `FOR UPDATE` and `FOR SHARE` carry the `ctid` of each table of `FROM`, the `tableoid` of a table with an inheritance tree and the whole row of a function, and an `UPDATE` or a `DELETE` carries the `ctid` of each table other than its target. The widths and the `Output` lines of `EXPLAIN VERBOSE` show these columns (#546).
 - The width of a whole-row column in `EXPLAIN`, such as `SELECT b FROM b`. PostgreSQL adds the header of the row to the width of its columns (#546).
 

@@ -30,7 +30,7 @@ pub struct Plan<'q> {
 }
 
 impl Plan<'_> {
-    /// The number of entries of the range table of PostgreSQL for the plan, as `list_length(es->rtable)`: the relations and the joins of each query, and the target of an `INSERT`. A query with no relation has one entry of the kind `RTE_RESULT`.
+    /// The number of entries of the range table of PostgreSQL for the plan, as `list_length(es->rtable)`: the relations, the joins and the merged subqueries of each query, and the target of an `INSERT`. A query with no relation has one entry of the kind `RTE_RESULT`.
     pub fn rtable_size(&self) -> usize {
         self.scopes
             .iter()
@@ -40,7 +40,7 @@ impl Plan<'_> {
                 }
                 let query = scope.query;
                 let joins: usize = query.from.iter().map(join_count).sum();
-                (query.relations.len() + joins).max(1) + usize::from(scope.target)
+                (query.relations.len() + joins + query.pulled).max(1) + usize::from(scope.target)
             })
             .sum()
     }

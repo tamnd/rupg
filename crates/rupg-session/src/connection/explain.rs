@@ -214,7 +214,8 @@ impl Connection {
         notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         let plan = plan?;
         let members = Members { reader: &reader, error: RefCell::new(None) };
-        let tree = rupg_opt::plan(plan.query(), &members);
+        let query = rupg_opt::pull_up(plan.query());
+        let tree = rupg_opt::plan(&query, &members);
         if let Some(error) = members.error.take() {
             return Err(error);
         }

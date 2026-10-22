@@ -969,6 +969,19 @@ impl Expr {
         }
     }
 
+    /// `expression_tree_mutator`: calls `f` for the expression and for each expression in it, also in its subqueries, with the number of subqueries between the expression and this expression. `f` sees an expression before the expressions in it, and when `f` gives true, the walk does not go into the expression, as for an expression that `f` put in its place.
+    pub fn each_mut(&mut self, depth: usize, f: &mut impl FnMut(&mut Expr, usize) -> bool) {
+        if f(self, depth) {
+            return;
+        }
+        for child in self.children_mut() {
+            child.each_mut(depth, f);
+        }
+        if let ExprKind::SubLink(sub) = &mut self.kind {
+            sub.query.each_expr_mut(depth + 1, &mut |e, depth| e.each_mut(depth, f));
+        }
+    }
+
     /// `map_variable_attnos` for an expression on one relation, such as a check constraint or an index expression: each column gets the number that `map` gives for it, the number in a partition for each column of its parent table. A system column and a whole-row column keep their numbers.
     pub fn map_attnos(&mut self, map: &[i16]) {
         if let ExprKind::Var(var) = &mut self.kind
