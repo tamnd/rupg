@@ -183,6 +183,7 @@ impl Analyzer<'_> {
             write: None,
             out_args: Vec::new(),
             pulled: 0,
+            pushed: false,
             minmax: None,
         })
     }

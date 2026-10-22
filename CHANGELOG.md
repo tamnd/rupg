@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `EXPLAIN` of a `UNION ALL` with `ORDER BY` now plans a `Merge Append` of the plans of its `SELECT`s when that costs less than a sort, as PostgreSQL makes the query an append relation. So `SELECT id FROM a UNION ALL SELECT id FROM b ORDER BY 1 LIMIT 3` reads the primary keys in order. A `SELECT` of a `UNION ALL` with its own `WHERE` gets a sort below the `Merge Append`, as PostgreSQL plans it as a subquery. (#583)
+
 ## 0.1.68 (2026-10-23)
 
 A patch release on the way to M3. `EXPLAIN` now plans a `Merge Append` for a `UNION ALL` in `FROM` that the query reads in order, plans `INTERSECT` and `EXCEPT` with the hashed and the sorted `SetOp`, and shows the `Subquery Scan` and the `Result` that add the casts of the columns of a set operation.

@@ -66,6 +66,8 @@ pub struct Query {
     pub out_args: Vec<crate::OutArg>,
     /// The number of subqueries of `FROM` that the planner merged into the query, which stay in the range table of PostgreSQL with no plan.
     pub pulled: usize,
+    /// True when each condition of `WHERE` is a condition of the query above that the planner moved into the query, which had no `WHERE`. A `SELECT` of a `UNION ALL` with no `WHERE` is a member of the append relation, as `is_safe_append_member` lets it.
+    pub pushed: bool,
     /// The queries of `preprocess_minmax_aggregates` for a query whose aggregate calls are each `min` or `max` of one table, which the planner can run as an `InitPlan` that reads the first row of an index.
     pub minmax: Option<Box<MinMax>>,
 }
@@ -382,6 +384,7 @@ impl Analyzer<'_> {
             write: None,
             out_args: Vec::new(),
             pulled: 0,
+            pushed: false,
             minmax: None,
         };
         for clause in s.lockingClause.iter().flatten() {

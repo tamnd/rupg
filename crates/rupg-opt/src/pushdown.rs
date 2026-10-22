@@ -237,10 +237,7 @@ fn pushable(sub: &Query, part: &Expr, r: usize) -> bool {
             all = false;
             return;
         };
-        let member = pullup::simple(leaf)
-            && leaf.filter.is_none()
-            && matches!(leaf.from.as_slice(), [FromItem::Relation(_)]);
-        all &= if member {
+        all &= if pullup::member(leaf) {
             safe(part, r, &vec![false; leaf.targets.len()], false)
         } else {
             fits(leaf)
@@ -372,6 +369,9 @@ fn push_qual(sub: &mut Query, r: usize, mut qual: Expr) {
     let place = if sub.grouped || !sub.grouping_sets.is_empty() {
         &mut sub.having
     } else {
+        if sub.filter.is_none() {
+            sub.pushed = true;
+        }
         &mut sub.filter
     };
     *place = Some(match place.take() {
