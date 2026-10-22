@@ -86,10 +86,10 @@ pub use plpgsql::{
 pub use prepare::{execute_params, param_types};
 pub use record::{out_columns, record_fields};
 pub use searchcycle::{CycleClause, SearchClause};
-pub use select::{Query, Target};
+pub use select::{MinMax, Query, Target};
 pub use setop::{SetKind, SetOp, SetTree, strength_name};
 pub use sort::{GroupingSet, SortGroup, expand_grouping_sets};
-pub use typcache::{default_opclass, sort_operators};
+pub use typcache::{default_opclass, equality_for_ordering, sort_operators};
 pub use typename::parse_type;
 pub use window::{
     FRAMEOPTION_END_OFFSET, FRAMEOPTION_END_OFFSET_FOLLOWING, FRAMEOPTION_END_UNBOUNDED_FOLLOWING,

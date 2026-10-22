@@ -8,6 +8,7 @@ mod cost;
 mod exists;
 mod exprs;
 mod from;
+mod minmax;
 mod output;
 mod pullup;
 mod pushdown;
@@ -103,8 +104,8 @@ pub fn plan<'q>(query: &'q Query, members: &'q dyn Members) -> Plan<'q> {
 struct Builder<'q> {
     scopes: Vec<Scope<'q>>,
     labels: Vec<Label<'q>>,
-    /// The number of subplans of each kind of subquery so far, for their names, as `choose_plan_name`. The last one counts the subplans of [`SubLink::alternative`].
-    counts: [usize; 7],
+    /// The number of subplans of each kind of subquery so far, for their names, as `choose_plan_name`. The last two count the subplans of [`SubLink::alternative`] and of [`Query::minmax`].
+    counts: [usize; 8],
     /// The scopes of the subplan that the planner makes now, in the order of the range table.
     current: Vec<usize>,
     /// The scopes of each subplan that is done, in the order that the subplans end.
@@ -119,6 +120,10 @@ struct Builder<'q> {
     exists: bool,
     /// The fraction of the rows of the next query that its caller reads, as the `tuple_fraction` of `subquery_planner`. A fraction of 1 or more is a number of rows, and 0 is all the rows.
     fraction: f64,
+    /// True when the next query is a subquery of [`Query::minmax`], whose plan must give its rows in the order of `ORDER BY` with no sort, as `get_cheapest_fractional_path_for_pathkeys` finds it.
+    presorted: bool,
+    /// True when the plan of the last query with `presorted` found no plan with the order of its rows.
+    failed: bool,
     members: Option<&'q dyn Members>,
     /// The tables of the scans of each scope, by the scope and the place of the table, for the parameterized scans of the tables.
     bases: BTreeMap<(usize, usize), from::Base<'q>>,
@@ -181,6 +186,8 @@ pub(crate) struct Level<'q> {
     pub(crate) stats: from::Stats,
     /// The junk columns of the row marks, which the rows of the query carry after its targets.
     pub(crate) marks: Vec<Expr>,
+    /// True for a subquery of [`Query::minmax`]: only a plan of `FROM` whose rows are in the order of `ORDER BY` is a plan of the query.
+    pub(crate) presorted: bool,
 }
 
 impl<'q> Level<'q> {
@@ -225,6 +232,7 @@ impl<'q> Builder<'q> {
         let scope = self.push_scope(query, parent, target);
         let no_targets = std::mem::take(&mut self.exists) && simple_exists(query);
         let caller = std::mem::take(&mut self.fraction);
+        let presorted = std::mem::take(&mut self.presorted);
         let marks = self.marks(query, write);
         let mut level = Level {
             scope,
@@ -239,6 +247,7 @@ impl<'q> Builder<'q> {
             joined: Vec::new(),
             stats: from::Stats::default(),
             marks,
+            presorted,
         };
         let depth = self.ctes.len();
         if !std::ptr::eq(outer, query) {
@@ -259,6 +268,9 @@ impl<'q> Builder<'q> {
         level.joined = joined;
         level.stats = stats;
         let mut node = self.upper(&level, plans, caller);
+        if let Some(minmax) = &query.minmax {
+            node = self.minmax(&level, minmax, node);
+        }
         if let Some(write) = write {
             node = self.modify(&level, write, node);
         }

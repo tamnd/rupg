@@ -284,6 +284,8 @@ pub enum Replaced {
     Scan(usize, bool),
     /// A join of the relations of the scope with a condition that is never true.
     Join(Vec<usize>),
+    /// `RESULT_TYPE_MINMAX`: the `Agg` node of a query whose aggregate calls are each `min` or `max`, which reads their values from its `InitPlan` subplans.
+    MinMax,
 }
 
 /// The strategy of an `Agg`, as `AggStrategy`.

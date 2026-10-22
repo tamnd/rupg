@@ -130,7 +130,7 @@ pub(crate) fn ordering_properties(operator: u32) -> Option<(u32, u32, bool)> {
 }
 
 /// `get_equality_op_for_ordering_op`: the `=` operator of the btree family of an ordering operator, and true when the operator sorts in descending order. `None` when the operator is not the `<` or the `>` of a btree family.
-pub(crate) fn equality_for_ordering(operator: u32) -> Option<(u32, bool)> {
+pub fn equality_for_ordering(operator: u32) -> Option<(u32, bool)> {
     let amop = builtin::amops_of_operator(operator).find(|a| {
         a.method == BTREE && (a.strategy == LESS || a.strategy == GREATER) && a.left == a.right
     })?;

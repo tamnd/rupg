@@ -5477,6 +5477,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_param_nestloop.test")));
     }
 
+    /// `EXPLAIN` of queries whose aggregate calls are each `min` or `max` of one table: a `Result` that replaces the `Agg` node reads each value from an `InitPlan` with a `Limit` over an index scan in the order of the aggregate, as `preprocess_minmax_aggregates` plans it, and the `Agg` node stays when a call has no index. `connection/plan_minmax.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_minmax() {
+        big_stack(|| script(include_str!("connection/plan_minmax.test")));
+    }
+
     /// `EXPLAIN` of the bitmap heap scans of a table by its btree indexes, as `create_index_paths` makes them with `choose_bitmap_and` and the costs of `cost_bitmap_heap_scan`. `connection/plan_bitmap_scan.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_bitmap_scan() {

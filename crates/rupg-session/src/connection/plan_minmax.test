@@ -1,0 +1,318 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (id int PRIMARY KEY, x int);
+CREATE TABLE
+> CREATE TABLE b (id int PRIMARY KEY, y int);
+CREATE TABLE
+> CREATE INDEX b_y ON b (y);
+CREATE INDEX
+> CREATE TABLE c (id int PRIMARY KEY, z int);
+CREATE TABLE
+> CREATE TABLE t (s text PRIMARY KEY, n numeric);
+CREATE TABLE
+> CREATE INDEX t_n ON t (n DESC NULLS LAST);
+CREATE INDEX
+> EXPLAIN SELECT max(id) FROM a;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.19..0.20 rows=1 width=4)
+row   Replaces: MinMaxAggregate
+row   InitPlan minmax_1
+row     ->  Limit  (cost=0.15..0.19 rows=1 width=4)
+row           ->  Index Only Scan Backward using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT min(id), max(id) FROM a;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.38..0.39 rows=1 width=8)
+row   Replaces: MinMaxAggregate
+row   InitPlan minmax_1
+row     ->  Limit  (cost=0.15..0.19 rows=1 width=4)
+row           ->  Index Only Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+row   InitPlan minmax_2
+row     ->  Limit  (cost=0.15..0.19 rows=1 width=4)
+row           ->  Index Only Scan Backward using a_pkey on a a_1  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT max(y) FROM b;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.19..0.20 rows=1 width=4)
+row   Replaces: MinMaxAggregate
+row   InitPlan minmax_1
+row     ->  Limit  (cost=0.15..0.19 rows=1 width=4)
+row           ->  Index Only Scan Backward using b_y on b  (cost=0.15..83.51 rows=2249 width=4)
+row                 Index Cond: (y IS NOT NULL)
+EXPLAIN
+> EXPLAIN SELECT min(y) FROM b WHERE id > 5;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.27..0.28 rows=1 width=4)
+row   Replaces: MinMaxAggregate
+row   InitPlan minmax_1
+row     ->  Limit  (cost=0.15..0.27 rows=1 width=4)
+row           ->  Index Scan using b_y on b  (cost=0.15..89.14 rows=750 width=4)
+row                 Index Cond: (y IS NOT NULL)
+row                 Filter: (id > 5)
+EXPLAIN
+> EXPLAIN SELECT max(id) + 1 FROM a;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.19..0.20 rows=1 width=4)
+row   Replaces: MinMaxAggregate
+row   InitPlan minmax_1
+row     ->  Limit  (cost=0.15..0.19 rows=1 width=4)
+row           ->  Index Only Scan Backward using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT max(id), max(id) + 1 FROM a;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.19..0.20 rows=1 width=8)
+row   Replaces: MinMaxAggregate
+row   InitPlan minmax_1
+row     ->  Limit  (cost=0.15..0.19 rows=1 width=4)
+row           ->  Index Only Scan Backward using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT max(id) FROM a HAVING max(id) > 3;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.19..0.20 rows=1 width=4)
+row   Replaces: MinMaxAggregate
+row   One-Time Filter: ((InitPlan minmax_1).col1 > 3)
+row   InitPlan minmax_1
+row     ->  Limit  (cost=0.15..0.19 rows=1 width=4)
+row           ->  Index Only Scan Backward using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT max(x) FROM a;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=38.25..38.26 rows=1 width=4)
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT max(id), max(x) FROM a;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=43.90..43.91 rows=1 width=8)
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT max(id), count(*) FROM a;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=43.90..43.91 rows=1 width=12)
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE id IS NOT NULL;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE y IS NOT NULL;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on b  (cost=0.00..32.60 rows=2249 width=8)
+row   Filter: (y IS NOT NULL)
+EXPLAIN
+> EXPLAIN VERBOSE SELECT min(id), max(y) FROM b;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.38..0.39 rows=1 width=8)
+row   Output: (InitPlan minmax_1).col1, (InitPlan minmax_2).col1
+row   Replaces: MinMaxAggregate
+row   InitPlan minmax_1
+row     ->  Limit  (cost=0.15..0.19 rows=1 width=4)
+row           Output: b.id
+row           ->  Index Only Scan using b_pkey on public.b  (cost=0.15..78.06 rows=2260 width=4)
+row                 Output: b.id
+row   InitPlan minmax_2
+row     ->  Limit  (cost=0.15..0.19 rows=1 width=4)
+row           Output: b_1.y
+row           ->  Index Only Scan Backward using b_y on public.b b_1  (cost=0.15..83.51 rows=2249 width=4)
+row                 Output: b_1.y
+row                 Index Cond: (b_1.y IS NOT NULL)
+EXPLAIN
+> EXPLAIN SELECT max(id) FROM a WHERE x = 3;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=7.75..7.76 rows=1 width=4)
+row   Replaces: MinMaxAggregate
+row   InitPlan minmax_1
+row     ->  Limit  (cost=0.15..7.75 rows=1 width=4)
+row           ->  Index Scan Backward using a_pkey on a  (cost=0.15..83.70 rows=11 width=4)
+row                 Filter: (x = 3)
+EXPLAIN
+> EXPLAIN SELECT a.id, (SELECT max(b.id) FROM b WHERE b.id < a.x) FROM a;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..577.11 rows=2260 width=8)
+row   SubPlan expr_1
+row     ->  Result  (cost=0.23..0.24 rows=1 width=4)
+row           Replaces: MinMaxAggregate
+row           InitPlan minmax_1
+row             ->  Limit  (cost=0.15..0.23 rows=1 width=4)
+row                   ->  Index Only Scan Backward using b_pkey on b  (cost=0.15..57.33 rows=753 width=4)
+row                         Index Cond: (id < a.x)
+EXPLAIN
+> EXPLAIN SELECT (SELECT max(id) FROM b), max(id) FROM a;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.39..0.40 rows=1 width=8)
+row   Replaces: MinMaxAggregate
+row   InitPlan expr_1
+row     ->  Result  (cost=0.19..0.20 rows=1 width=4)
+row           Replaces: MinMaxAggregate
+row           InitPlan minmax_1
+row             ->  Limit  (cost=0.15..0.19 rows=1 width=4)
+row                   ->  Index Only Scan Backward using b_pkey on b  (cost=0.15..78.06 rows=2260 width=4)
+row   InitPlan minmax_2
+row     ->  Limit  (cost=0.15..0.19 rows=1 width=4)
+row           ->  Index Only Scan Backward using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT max(id) FROM a GROUP BY x;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=43.90..45.90 rows=200 width=8)
+row   Group Key: x
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT max(id) FROM a WHERE id IS NOT NULL;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.19..0.20 rows=1 width=4)
+row   Replaces: MinMaxAggregate
+row   InitPlan minmax_1
+row     ->  Limit  (cost=0.15..0.19 rows=1 width=4)
+row           ->  Index Only Scan Backward using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT max(id) FROM a WHERE false;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=0.00..0.01 rows=1 width=4)
+row   ->  Result  (cost=0.00..0.00 rows=0 width=0)
+row         Replaces: Scan on a
+row         One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT max(s), min(s) FROM t;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.43..0.44 rows=1 width=64)
+row   Replaces: MinMaxAggregate
+row   InitPlan minmax_1
+row     ->  Limit  (cost=0.15..0.21 rows=1 width=32)
+row           ->  Index Only Scan Backward using t_pkey on t  (cost=0.15..57.35 rows=880 width=32)
+row   InitPlan minmax_2
+row     ->  Limit  (cost=0.15..0.21 rows=1 width=32)
+row           ->  Index Only Scan using t_pkey on t t_1  (cost=0.15..57.35 rows=880 width=32)
+EXPLAIN
+> EXPLAIN SELECT max(n) FROM t;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.22..0.23 rows=1 width=32)
+row   Replaces: MinMaxAggregate
+row   InitPlan minmax_2
+row     ->  Limit  (cost=0.15..0.22 rows=1 width=32)
+row           ->  Index Only Scan using t_n on t  (cost=0.15..59.48 rows=876 width=32)
+row                 Index Cond: (n IS NOT NULL)
+EXPLAIN
+> EXPLAIN SELECT min(n) FROM t;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.22..0.23 rows=1 width=32)
+row   Replaces: MinMaxAggregate
+row   InitPlan minmax_2
+row     ->  Limit  (cost=0.15..0.22 rows=1 width=32)
+row           ->  Index Only Scan Backward using t_n on t  (cost=0.15..59.48 rows=876 width=32)
+row                 Index Cond: (n IS NOT NULL)
+EXPLAIN
+> EXPLAIN SELECT max(DISTINCT id) FROM a;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.19..0.20 rows=1 width=4)
+row   Replaces: MinMaxAggregate
+row   InitPlan minmax_1
+row     ->  Limit  (cost=0.15..0.19 rows=1 width=4)
+row           ->  Index Only Scan Backward using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT 1 FROM a HAVING max(id) > 0;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.19..0.20 rows=1 width=4)
+row   Replaces: MinMaxAggregate
+row   One-Time Filter: ((InitPlan minmax_1).col1 > 0)
+row   InitPlan minmax_1
+row     ->  Limit  (cost=0.15..0.19 rows=1 width=4)
+row           ->  Index Only Scan Backward using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT count(*) FROM a;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=38.25..38.26 rows=1 width=8)
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=0)
+EXPLAIN
+> EXPLAIN SELECT max(id + 1) FROM a;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=43.90..43.91 rows=1 width=4)
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT max(id) FILTER (WHERE x > 1) FROM a;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=43.90..43.91 rows=1 width=4)
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT max(id) FROM a WHERE id < 100 AND x IS NOT NULL;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.23..0.24 rows=1 width=4)
+row   Replaces: MinMaxAggregate
+row   InitPlan minmax_1
+row     ->  Limit  (cost=0.15..0.23 rows=1 width=4)
+row           ->  Index Scan Backward using a_pkey on a  (cost=0.15..57.33 rows=750 width=4)
+row                 Index Cond: (id < 100)
+row                 Filter: (x IS NOT NULL)
+EXPLAIN
+> EXPLAIN SELECT max(y) FROM b WHERE y IS NOT NULL;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.19..0.20 rows=1 width=4)
+row   Replaces: MinMaxAggregate
+row   InitPlan minmax_1
+row     ->  Limit  (cost=0.15..0.19 rows=1 width=4)
+row           ->  Index Only Scan Backward using b_y on b  (cost=0.15..83.51 rows=2249 width=4)
+row                 Index Cond: (y IS NOT NULL)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE a.x = (SELECT max(b.y) FROM b);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.20..38.45 rows=11 width=8)
+row   Filter: (x = (InitPlan expr_1).col1)
+row   InitPlan expr_1
+row     ->  Result  (cost=0.19..0.20 rows=1 width=4)
+row           Replaces: MinMaxAggregate
+row           InitPlan minmax_1
+row             ->  Limit  (cost=0.15..0.19 rows=1 width=4)
+row                   ->  Index Only Scan Backward using b_y on b  (cost=0.15..83.51 rows=2249 width=4)
+row                         Index Cond: (y IS NOT NULL)
+EXPLAIN
+> EXPLAIN SELECT max(id), min(y) FROM b WHERE id > 10;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.50..0.51 rows=1 width=8)
+row   Replaces: MinMaxAggregate
+row   InitPlan minmax_1
+row     ->  Limit  (cost=0.15..0.23 rows=1 width=4)
+row           ->  Index Only Scan Backward using b_pkey on b  (cost=0.15..57.33 rows=753 width=4)
+row                 Index Cond: (id > 10)
+row   InitPlan minmax_2
+row     ->  Limit  (cost=0.15..0.27 rows=1 width=4)
+row           ->  Index Scan using b_y on b b_1  (cost=0.15..89.14 rows=750 width=4)
+row                 Index Cond: (y IS NOT NULL)
+row                 Filter: (id > 10)
+EXPLAIN
+> EXPLAIN SELECT max(id) FROM a HAVING max(id) > 3 AND min(id) < 9;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.38..0.39 rows=1 width=4)
+row   Replaces: MinMaxAggregate
+row   One-Time Filter: (((InitPlan minmax_1).col1 > 3) AND ((InitPlan minmax_2).col1 < 9))
+row   InitPlan minmax_1
+row     ->  Limit  (cost=0.15..0.19 rows=1 width=4)
+row           ->  Index Only Scan Backward using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+row   InitPlan minmax_2
+row     ->  Limit  (cost=0.15..0.19 rows=1 width=4)
+row           ->  Index Only Scan using a_pkey on a a_1  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT max(id) FROM ONLY a;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.19..0.20 rows=1 width=4)
+row   Replaces: MinMaxAggregate
+row   InitPlan minmax_1
+row     ->  Limit  (cost=0.15..0.19 rows=1 width=4)
+row           ->  Index Only Scan Backward using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT max(id) FROM a GROUP BY ();
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.19..0.20 rows=1 width=4)
+row   Replaces: MinMaxAggregate
+row   InitPlan minmax_1
+row     ->  Limit  (cost=0.15..0.19 rows=1 width=4)
+row           ->  Index Only Scan Backward using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> INSERT INTO a SELECT g, g % 7 FROM generate_series(1, 50) g;
+INSERT 0 50
+> SELECT max(id), min(id), max(id) + 1 FROM a;
+fields max:23:4:-1,min:23:4:-1,?column?:23:4:-1
+row 50,1,51
+SELECT 1
+> SELECT max(id) FROM a WHERE x = 3;
+fields max:23:4:-1
+row 45
+SELECT 1

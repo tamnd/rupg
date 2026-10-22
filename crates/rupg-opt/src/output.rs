@@ -12,8 +12,13 @@ pub(crate) fn level<'q>(level: &Level<'q>, node: &mut Node<'q>) {
     let want = if level.no_targets {
         Vec::new()
     } else {
-        let targets = level.display_query.targets.iter().map(|t| Item::of(&t.expr));
-        targets.chain(level.marks.iter().map(|m| item(m.clone()))).collect()
+        let targets: Vec<Item<'q>> = match (&node.kind, &level.query.minmax) {
+            (Kind::Result { replaces: Some(Replaced::MinMax), .. }, Some(minmax)) => {
+                minmax.targets.iter().map(Item::of).collect()
+            }
+            _ => level.display_query.targets.iter().map(|t| Item::of(&t.expr)).collect(),
+        };
+        targets.into_iter().chain(level.marks.iter().map(|m| item(m.clone()))).collect()
     };
     set(level, node, want, false);
 }
