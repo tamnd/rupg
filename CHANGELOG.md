@@ -6,7 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- `EXPLAIN` plans a `Merge Append` for a `UNION ALL` in `FROM` when the query reads its rows in an order and that costs less than a sort of the `Append`, as `generate_orderedappend_paths` does. The planner keeps the plans of each `SELECT` in the orders that the query can use, a `SELECT` with no plan in the order gets a sort, and each `SELECT` reads only the columns that the query reads, so that an index only scan can give them (#NNN).
+- `EXPLAIN` plans a `Merge Append` for a `UNION ALL` in `FROM` when the query reads its rows in an order and that costs less than a sort of the `Append`, as `generate_orderedappend_paths` does. The planner keeps the plans of each `SELECT` in the orders that the query can use, a `SELECT` with no plan in the order gets a sort, and each `SELECT` reads only the columns that the query reads, so that an index only scan can give them (#579).
 
 ## 0.1.67 (2026-10-23)
 
