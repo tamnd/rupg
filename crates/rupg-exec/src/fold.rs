@@ -176,9 +176,9 @@ fn mark(item: &FromItem, nullable: bool, nulled: &mut [bool]) {
         }
         FromItem::Join(join) => {
             let (left, right) = match join.kind {
-                JoinKind::Inner => (false, false),
-                JoinKind::Left => (false, true),
-                JoinKind::Right => (true, false),
+                JoinKind::Inner | JoinKind::Semi | JoinKind::RightSemi => (false, false),
+                JoinKind::Left | JoinKind::Anti => (false, true),
+                JoinKind::Right | JoinKind::RightAnti => (true, false),
                 JoinKind::Full => (true, true),
             };
             mark(&join.left, nullable || left, nulled);

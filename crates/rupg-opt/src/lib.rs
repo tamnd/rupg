@@ -250,6 +250,14 @@ impl<'q> Builder<'q> {
         // `SS_charge_for_initplans`: the top node runs the subplans of `init` when it starts.
         node.cost.startup += level.init_cost;
         node.cost.total += level.init_cost;
+        // The path of a gating `Result` at the top is the path of the node below it, so that the node below has the same costs.
+        if let Kind::Result { replaces: None, one_time } = &node.kind
+            && !one_time.is_empty()
+            && let [child] = &mut node.children[..]
+        {
+            child.cost.startup += level.init_cost;
+            child.cost.total += level.init_cost;
+        }
         let mut init = std::mem::take(&mut level.init);
         init.append(&mut node.init_plans);
         node.init_plans = init;

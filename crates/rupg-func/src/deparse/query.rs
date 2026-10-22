@@ -995,6 +995,7 @@ impl Deparser<'_> {
             JoinKind::Left => " LEFT JOIN ",
             JoinKind::Full => " FULL JOIN ",
             JoinKind::Right => " RIGHT JOIN ",
+            JoinKind::Semi | JoinKind::Anti | JoinKind::RightSemi | JoinKind::RightAnti => " JOIN ",
         };
         self.keyword(word, -INDENT_STD, INDENT_STD, INDENT_JOIN);
         if paren_right {
