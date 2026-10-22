@@ -404,7 +404,9 @@ impl Explainer<'_, '_> {
             Kind::Result { replaces, one_time } => {
                 if let Some(replaced) = replaces {
                     let text = match replaced {
-                        Replaced::Scan(r) => format!("Scan on {}", self.texts.refname(scope, *r)),
+                        Replaced::Scan(r, _) => {
+                            format!("Scan on {}", self.texts.refname(scope, *r))
+                        }
                         Replaced::Join(rs) => {
                             let names: Vec<String> =
                                 rs.iter().map(|r| self.texts.refname(scope, *r)).collect();

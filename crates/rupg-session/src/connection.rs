@@ -5435,6 +5435,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_dummy.test")));
     }
 
+    /// `EXPLAIN` of joins with a condition that is never true, as `populate_joinrel_with_paths` marks them dummy: a part of `ON` of an inner join with no column is a condition of the join of all the relations, a left join or an anti join with such a condition has an inner side with no rows that keeps its width, and a join below an outer join with such a condition is a `Result` with no rows. A nested loop counts an inner side with no rows as one row. `connection/plan_dummy_join.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_dummy_join() {
+        big_stack(|| script(include_str!("connection/plan_dummy_join.test")));
+    }
+
     /// `EXPLAIN` of an `Incremental Sort`: the planner sorts rows whose first keys are in order already, as `make_ordered_path` and `create_ordered_paths` choose it, with the costs of `cost_incremental_sort`. `connection/plan_incremental_sort.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_incremental_sort() {

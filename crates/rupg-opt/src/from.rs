@@ -418,7 +418,7 @@ impl<'q> Builder<'q> {
             if rels.is_empty() && !volatile {
                 if exprs::is_false(part) {
                     return (
-                        vec![(dummy(level.scope, &all), Vec::new())],
+                        vec![(dummy(level.scope, &all, false), Vec::new())],
                         Vec::new(),
                         Stats::default(),
                     );
@@ -437,6 +437,18 @@ impl<'q> Builder<'q> {
             nonnullable.extend(nonnullable_rels(&qual.expr, true));
         }
         reduce(&mut tree, &nonnullable);
+        // `distribute_qual_to_rels`: a part of `ON` of the top join domain with no column is a condition of the join of all the relations, as a part of `WHERE` is. It comes before the parts of `WHERE`.
+        let mut constants = Vec::new();
+        top_constants(&mut tree, &mut constants);
+        if constants.iter().any(|part| exprs::is_false(part)) {
+            return (
+                vec![(dummy(level.scope, &all, false), Vec::new())],
+                Vec::new(),
+                Stats::default(),
+            );
+        }
+        let constants = constants.into_iter().filter(|part| !exprs::is_true(part)).map(Item::of);
+        gating.splice(0..0, constants);
         let mut next = 0;
         place_below_sublinks(&mut tree, &mut next);
         for mut qual in quals {
@@ -447,7 +459,11 @@ impl<'q> Builder<'q> {
         place_on(&mut tree, &mut next);
         let mut found = classes::Found::default();
         if !classes::domain(&mut tree, true, &mut found) {
-            return (vec![(dummy(level.scope, &all), Vec::new())], Vec::new(), Stats::default());
+            return (
+                vec![(dummy(level.scope, &all, false), Vec::new())],
+                Vec::new(),
+                Stats::default(),
+            );
         }
         let equal = found
             .equal
@@ -466,17 +482,27 @@ impl<'q> Builder<'q> {
                 stats.spans.extend(columns.into_iter().map(|c| (c, span.clone())));
             }
         }
-        let rels = self.build(level, tree, &found, &mut stats);
         // `cost_qual_eval` of a condition that is `pseudoconstant`: it runs once, when the node of all the relations starts.
         let (startup, per_row) = stats.qual_costs(gating.iter().map(|i| &*i.expr));
         let once = startup + per_row;
+        // The scan of the only relation counts the conditions with its own.
+        let (rels, counted) = match tree {
+            Tree::Base { relation, quals } => {
+                (vec![self.scan(level, relation, quals, once, &mut stats)], true)
+            }
+            tree => (self.build(level, tree, &found, &mut stats), false),
+        };
         let plans = rels
             .into_iter()
             .map(|rel| {
                 let mut node = rel.node;
                 if !gating.is_empty() {
-                    node.cost.startup += once;
-                    node.cost.total += once;
+                    // The node counts the conditions in its start cost, before it adds its run cost.
+                    if !counted {
+                        let run = node.cost.total - node.cost.startup;
+                        node.cost.startup += once;
+                        node.cost.total = node.cost.startup + run;
+                    }
                     // `create_gating_plan`: the `Result` has the costs of the node below.
                     let cost = node.cost;
                     node = Node::new(
@@ -501,7 +527,7 @@ impl<'q> Builder<'q> {
         stats: &mut Stats,
     ) -> Vec<Rel<'q>> {
         match tree {
-            Tree::Base { relation, quals } => vec![self.scan(level, relation, quals, stats)],
+            Tree::Base { relation, quals } => vec![self.scan(level, relation, quals, 0.0, stats)],
             Tree::Join(join)
                 if matches!(
                     join.kind,
@@ -511,7 +537,11 @@ impl<'q> Builder<'q> {
                 let (mut items, mut pool, mut specials) = (Vec::new(), Vec::new(), Vec::new());
                 flatten(Tree::Join(join), &mut items, &mut pool, &mut specials);
                 pool.sort_by_key(|q| q.order.unwrap_or(usize::MAX));
-                let rels = items.into_iter().map(|t| self.build(level, t, found, stats)).collect();
+                let mut rels: Vec<Vec<Rel<'q>>> =
+                    items.into_iter().map(|t| self.build(level, t, found, stats)).collect();
+                if let Some(rel) = dummy_domain(level, &mut rels, &pool, &specials, stats) {
+                    return vec![rel];
+                }
                 search::search(level, rels, &pool, specials, found, stats)
             }
             Tree::Join(join) => {
@@ -523,18 +553,20 @@ impl<'q> Builder<'q> {
         }
     }
 
-    /// The scan of a relation with its conditions, as `create_scan_plan`, with the costs of `cost_seqscan` and the other functions of `costsize.c` for each kind of scan.
+    /// The scan of a relation with its conditions, as `create_scan_plan`, with the costs of `cost_seqscan` and the other functions of `costsize.c` for each kind of scan. `once` is the cost of the conditions that read no relation, which the scan of the only relation of `FROM` has.
     fn scan(
         &mut self,
         level: &Level<'q>,
         r: usize,
         quals: Vec<Qual<'q>>,
+        once: f64,
         stats: &mut Stats,
     ) -> Rel<'q> {
         let relation = &level.query.relations[r];
         let quals = order_quals(quals, stats);
         // `cost_seqscan` and the other scans: the start cost of the conditions, and their cost for each row.
         let (qual_startup, qual_cost) = stats.qual_costs(quals.iter().map(|q| &*q.expr));
+        let qual_startup = qual_startup + once;
         let mut per_row = cost::CPU_TUPLE + qual_cost;
         let mut children = Vec::new();
         // `cost_subqueryscan`: the cost of the subquery as it is, to which the scan adds its own cost.
@@ -772,7 +804,7 @@ fn members_scan<'q>(
         child.cost.width = width;
     }
     let node = match children.len() {
-        0 => dummy(level.scope, &rels),
+        0 => dummy(level.scope, &rels, false),
         1 => children.remove(0),
         _ => {
             // `cost_append`: the start of the first member, and the costs of all the members with half of `cpu_tuple_cost` for each row.
@@ -936,10 +968,10 @@ fn result<'q>(scope: usize, parts: Vec<&'q Expr>) -> Node<'q> {
     node
 }
 
-/// The `Result` with no rows that takes the place of the relations when a condition of `WHERE` is never true, as `mark_dummy_rel`.
-fn dummy<'q>(scope: usize, rels: &BTreeSet<usize>) -> Node<'q> {
+/// The `Result` with no rows that takes the place of the relations when a condition of `WHERE` is never true, as `mark_dummy_rel`. `kept` is true when the `Result` of one relation keeps the width of its columns.
+fn dummy<'q>(scope: usize, rels: &BTreeSet<usize>, kept: bool) -> Node<'q> {
     let replaces = match rels.iter().collect::<Vec<_>>().as_slice() {
-        [r] => Replaced::Scan(**r),
+        [r] => Replaced::Scan(**r, kept),
         _ => Replaced::Join(rels.iter().copied().collect()),
     };
     Node::new(
@@ -947,6 +979,37 @@ fn dummy<'q>(scope: usize, rels: &BTreeSet<usize>) -> Node<'q> {
         scope,
         Vec::new(),
     )
+}
+
+/// `populate_joinrel_with_paths` for the joins of a join domain with no rows, as `mark_dummy_rel`. A condition that is never true makes the join of its relations dummy, and so does an item that is dummy, unless it is the inner side of a left join or an anti join. The joins above a dummy join are dummy, so the result is the dummy join of all the relations of the domain. A part of `ON` of a left join or an anti join that is never true makes its inner side dummy, with the width of its columns.
+fn dummy_domain<'q>(
+    level: &Level<'q>,
+    items: &mut [Vec<Rel<'q>>],
+    pool: &[Qual<'q>],
+    specials: &[Special<'q>],
+    stats: &Stats,
+) -> Option<Rel<'q>> {
+    let outer = |sp: &&Special<'_>| matches!(sp.kind, JoinKind::Left | JoinKind::Anti);
+    for sp in specials.iter().filter(outer) {
+        if sp.quals.iter().any(|q| exprs::is_false(&q.expr))
+            && let Some(item) = items.iter_mut().find(|i| i[0].rels == sp.right)
+        {
+            let mut node = dummy(level.scope, &sp.right, true);
+            node.cost.width = stats.width(&sp.right);
+            *item = vec![Rel { node, rels: sp.right.clone(), order: Vec::new() }];
+        }
+    }
+    let inner = |rels: &BTreeSet<usize>| specials.iter().filter(outer).any(|sp| sp.right == *rels);
+    let is_dummy = |rel: &Rel<'_>| matches!(rel.node.kind, Kind::Result { replaces: Some(_), .. });
+    if !pool.iter().any(|q| exprs::is_false(&q.expr))
+        && !items.iter().any(|i| is_dummy(&i[0]) && !inner(&i[0].rels))
+    {
+        return None;
+    }
+    let rels: BTreeSet<usize> = items.iter().flat_map(|i| i[0].rels.iter().copied()).collect();
+    let mut node = dummy(level.scope, &rels, true);
+    node.cost.width = stats.width(&rels);
+    Some(Rel { node, rels, order: Vec::new() })
 }
 
 /// The constant `false`.
@@ -1070,6 +1133,24 @@ fn reduce(tree: &mut Tree<'_>, above: &BTreeSet<usize>) {
     };
     reduce(&mut join.left, &left);
     reduce(&mut join.right, &right);
+}
+
+/// The parts of `ON` of the inner joins and the semi joins of the top join domain that read no relation and call no volatile function, which the joins no longer have. The top join domain has the inner side of an inner join or a semi join, and the outer side of a left join or an anti join, as `deconstruct_recurse` finds it.
+fn top_constants<'q>(tree: &mut Tree<'q>, out: &mut Vec<&'q Expr>) {
+    let Tree::Join(join) = tree else { return };
+    match join.kind {
+        JoinKind::Inner | JoinKind::Semi => {
+            top_constants(&mut join.left, out);
+            top_constants(&mut join.right, out);
+            let (constants, rest) = std::mem::take(&mut join.on)
+                .into_iter()
+                .partition(|part| exprs::relations(part).is_empty() && !exprs::volatile(part));
+            join.on = rest;
+            out.extend(constants);
+        }
+        JoinKind::Left | JoinKind::Anti => top_constants(&mut join.left, out),
+        _ => {}
+    }
 }
 
 /// `pull_up_sublinks`: the semi joins and the anti joins of the parts of `WHERE` are a chain of left sides at the top of the tree, and each one has the items of `FROM` with the conditions of `WHERE` as its left side. So `deconstruct_jointree` reads the conditions of `ON` of the items, then the conditions of `WHERE`, and then the inner side and the condition of each join of the chain. This gives the conditions of `ON` below the chain their places. `place_on` then gives the places of the rest.
@@ -1342,7 +1423,7 @@ pub(crate) fn node_rels(node: &Node<'_>) -> BTreeSet<usize> {
             out.insert(*r);
             return out;
         }
-        Kind::Result { replaces: Some(Replaced::Scan(r)), .. } => {
+        Kind::Result { replaces: Some(Replaced::Scan(r, _)), .. } => {
             out.insert(*r);
         }
         Kind::Result { replaces: Some(Replaced::Join(rels)), .. } => {
@@ -1992,13 +2073,15 @@ fn nested_cost(input: &Input<'_, '_>, materialize: bool) -> (f64, f64) {
         run += (o.rows - 1.0) * rescan.0;
     }
     let (inner_run, rescan_run) = (inner.total - inner.startup, rescan.1 - rescan.0);
+    // `final_cost_nestloop` counts a side with no rows, which is dummy, as one row.
+    let (outer_rows, inner_rows) = (nonzero(o.rows), nonzero(inner.rows));
     let tuples = match input.unique {
         // The scan of the inner side stops at the first match. An outer row with no match scans all the inner rows, and the first scan costs all of its run cost once.
         Some((fraction, matches)) => {
-            let mut matched = (o.rows * fraction).round_ties_even();
-            let mut unmatched = o.rows - matched;
+            let mut matched = (outer_rows * fraction).round_ties_even();
+            let mut unmatched = outer_rows - matched;
             let scan_fraction = 2.0 / (matches + 1.0);
-            let tuples = matched * inner.rows * scan_fraction + unmatched * inner.rows;
+            let tuples = matched * inner_rows * scan_fraction + unmatched * inner_rows;
             run += inner_run;
             if unmatched >= 1.0 {
                 unmatched -= 1.0;
@@ -2018,7 +2101,7 @@ fn nested_cost(input: &Input<'_, '_>, materialize: bool) -> (f64, f64) {
             if o.rows > 1.0 {
                 run += (o.rows - 1.0) * rescan_run;
             }
-            o.rows * inner.rows
+            outer_rows * inner_rows
         }
     };
     // `final_cost_nestloop`: the start cost of the conditions counts in the start cost of the join.
@@ -2027,6 +2110,11 @@ fn nested_cost(input: &Input<'_, '_>, materialize: bool) -> (f64, f64) {
     let per_tuple = cost::CPU_TUPLE + qual_cost + input.filter_cost;
     run += per_tuple * tuples;
     (startup, startup + run)
+}
+
+/// A number of rows, or 1 for no rows.
+fn nonzero(rows: f64) -> f64 {
+    if rows <= 0.0 { 1.0 } else { rows }
 }
 
 /// The costs of a hash join with a hash table of the inner side, as `initial_cost_hashjoin` and `final_cost_hashjoin`.
@@ -2274,7 +2362,8 @@ fn merge_join<'q>(
         }
     };
     let (o, i) = (side(input.outer, sort_outer), side(input.inner, sort_inner));
-    let (outer_rows, inner_rows) = (input.outer.node.cost.rows, input.inner.node.cost.rows);
+    let (outer_rows, inner_rows) =
+        (nonzero(input.outer.node.cost.rows), nonzero(input.inner.node.cost.rows));
     let tuples = tuple_count(input, &clauses);
     // `skip_mark_restore`: when the inner side is unique and the join has no other condition, the join never goes back to an inner row. With the unique rows of a semi join as the outer side, no outer row has the value of the row before it.
     let skip_mark_restore = input.unique.is_some() && other.is_empty() && !input.filtered;

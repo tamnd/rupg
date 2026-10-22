@@ -1,0 +1,250 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (x int, y int, b bool, r int[], z text);
+CREATE TABLE
+> CREATE TABLE s (x int PRIMARY KEY, y int);
+CREATE TABLE
+> CREATE TABLE c (x int, y int);
+CREATE TABLE
+> EXPLAIN SELECT * FROM t JOIN s ON false;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.00 rows=0 width=81)
+row   Replaces: Join on t, s
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT * FROM t JOIN s ON s.x = t.x AND NULL;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.00 rows=0 width=81)
+row   Replaces: Join on t, s
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT * FROM t LEFT JOIN s ON false;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join  (cost=0.00..26.00 rows=800 width=81)
+row   Join Filter: false
+row   ->  Seq Scan on t  (cost=0.00..18.00 rows=800 width=73)
+row   ->  Result  (cost=0.00..0.00 rows=0 width=8)
+row         Replaces: Scan on s
+row         One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT * FROM t LEFT JOIN s ON s.x = t.x AND false;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join  (cost=0.00..26.00 rows=800 width=81)
+row   Join Filter: false
+row   ->  Seq Scan on t  (cost=0.00..18.00 rows=800 width=73)
+row   ->  Result  (cost=0.00..0.00 rows=0 width=8)
+row         Replaces: Scan on s
+row         One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT * FROM t JOIN (SELECT * FROM s WHERE false) q ON q.x = t.x;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.00 rows=0 width=81)
+row   Replaces: Join on t, s
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT * FROM t LEFT JOIN (SELECT * FROM s WHERE false) q ON q.x = t.x;
+fields QUERY PLAN:25:-1:-1
+row Hash Left Join  (cost=0.00..20.10 rows=800 width=81)
+row   Hash Cond: (t.x = s.x)
+row   Join Filter: false
+row   ->  Seq Scan on t  (cost=0.00..18.00 rows=800 width=73)
+row   ->  Hash  (cost=0.00..0.00 rows=0 width=8)
+row         ->  Result  (cost=0.00..0.00 rows=0 width=8)
+row               Replaces: Scan on s
+row               One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT * FROM t LEFT JOIN s ON s.x = t.x JOIN c ON false;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.00 rows=0 width=89)
+row   Replaces: Join on t, s, c
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT * FROM t LEFT JOIN (s JOIN c ON false) ON s.x = t.x;
+fields QUERY PLAN:25:-1:-1
+row Hash Left Join  (cost=0.00..21.01 rows=800 width=89)
+row   Hash Cond: (t.x = s.x)
+row   ->  Seq Scan on t  (cost=0.00..18.00 rows=800 width=73)
+row   ->  Hash  (cost=0.00..0.00 rows=0 width=16)
+row         ->  Result  (cost=0.00..0.00 rows=0 width=16)
+row               Replaces: Join on s, c
+row               One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT * FROM t JOIN s ON s.x = t.x JOIN c ON c.x = s.y AND false;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.00 rows=0 width=89)
+row   Replaces: Join on t, s, c
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT count(*) FROM t JOIN s ON false;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=0.00..0.01 rows=1 width=8)
+row   ->  Result  (cost=0.00..0.00 rows=0 width=0)
+row         Replaces: Join on t, s
+row         One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE EXISTS (SELECT 1 FROM s WHERE false);
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..18.00 rows=800 width=73)
+row   One-Time Filter: (InitPlan exists_1).col1
+row   InitPlan exists_1
+row     ->  Result  (cost=0.00..0.00 rows=0 width=0)
+row           Replaces: Scan on s
+row           One-Time Filter: false
+row   ->  Seq Scan on t  (cost=0.00..18.00 rows=800 width=73)
+EXPLAIN
+> EXPLAIN SELECT * FROM t RIGHT JOIN s ON false;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join  (cost=0.00..55.20 rows=2260 width=81)
+row   Join Filter: false
+row   ->  Seq Scan on s  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Result  (cost=0.00..0.00 rows=0 width=73)
+row         Replaces: Scan on t
+row         One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT t.x FROM t JOIN s ON s.x = t.x WHERE 1 = 0;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.00 rows=0 width=4)
+row   Replaces: Join on t, s
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT * FROM t JOIN s ON s.x = t.x AND now() > '2000-01-01';
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=60.86..80.96 rows=800 width=81)
+row   One-Time Filter: (now() > '2000-01-01 00:00:00+00'::timestamp with time zone)
+row   ->  Hash Join  (cost=60.86..80.96 rows=800 width=81)
+row         Hash Cond: (t.x = s.x)
+row         ->  Seq Scan on t  (cost=0.00..18.00 rows=800 width=73)
+row         ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row               ->  Seq Scan on s  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM t LEFT JOIN s ON s.x = t.x AND now() > '2000-01-01';
+fields QUERY PLAN:25:-1:-1
+row Hash Left Join  (cost=60.85..80.95 rows=800 width=81)
+row   Hash Cond: (t.x = s.x)
+row   Join Filter: (now() > '2000-01-01 00:00:00+00'::timestamp with time zone)
+row   ->  Seq Scan on t  (cost=0.00..18.00 rows=800 width=73)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on s  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE NOT EXISTS (SELECT 1 FROM s WHERE s.x = t.x AND now() < '2000-01-01');
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=60.85..91.10 rows=667 width=73)
+row   Hash Cond: (t.x = s.x)
+row   Join Filter: (now() < '2000-01-01 00:00:00+00'::timestamp with time zone)
+row   ->  Seq Scan on t  (cost=0.00..18.00 rows=800 width=73)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=4)
+row         ->  Seq Scan on s  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM t JOIN (s LEFT JOIN c ON false) ON s.x = t.x;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join  (cost=60.85..88.95 rows=800 width=89)
+row   Join Filter: false
+row   ->  Hash Join  (cost=60.85..80.95 rows=800 width=81)
+row         Hash Cond: (t.x = s.x)
+row         ->  Seq Scan on t  (cost=0.00..18.00 rows=800 width=73)
+row         ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row               ->  Seq Scan on s  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Result  (cost=0.00..0.00 rows=0 width=8)
+row         Replaces: Scan on c
+row         One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT * FROM t LEFT JOIN s ON false WHERE t.y = 1;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join  (cost=0.00..20.04 rows=4 width=81)
+row   Join Filter: false
+row   ->  Seq Scan on t  (cost=0.00..20.00 rows=4 width=73)
+row         Filter: (y = 1)
+row   ->  Result  (cost=0.00..0.00 rows=0 width=8)
+row         Replaces: Scan on s
+row         One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT * FROM t LEFT JOIN (s LEFT JOIN c ON c.x = s.y) ON s.x = t.x AND false;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join  (cost=0.00..26.00 rows=800 width=89)
+row   Join Filter: false
+row   ->  Seq Scan on t  (cost=0.00..18.00 rows=800 width=73)
+row   ->  Result  (cost=0.00..0.00 rows=0 width=16)
+row         Replaces: Join on s, c
+row         One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT t.x, count(*) FROM t LEFT JOIN s ON false GROUP BY t.x;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=30.00..32.00 rows=200 width=12)
+row   Group Key: t.x
+row   ->  Nested Loop Left Join  (cost=0.00..26.00 rows=800 width=4)
+row         Join Filter: false
+row         ->  Seq Scan on t  (cost=0.00..18.00 rows=800 width=4)
+row         ->  Result  (cost=0.00..0.00 rows=0 width=0)
+row               Replaces: Scan on s
+row               One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE now() > '2000-01-01';
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.01..18.01 rows=800 width=73)
+row   One-Time Filter: (now() > '2000-01-01 00:00:00+00'::timestamp with time zone)
+row   ->  Seq Scan on t  (cost=0.01..18.01 rows=800 width=73)
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE t.y = 1 AND now() > '2000-01-01';
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.01..20.01 rows=4 width=73)
+row   One-Time Filter: (now() > '2000-01-01 00:00:00+00'::timestamp with time zone)
+row   ->  Seq Scan on t  (cost=0.01..20.01 rows=4 width=73)
+row         Filter: (y = 1)
+EXPLAIN
+> INSERT INTO t VALUES (1, 1, true, '{1}', 'a'), (2, 2, false, NULL, 'b');
+INSERT 0 2
+> INSERT INTO s VALUES (1, 10), (2, 20);
+INSERT 0 2
+> INSERT INTO c VALUES (10, 1);
+INSERT 0 1
+> SELECT * FROM t JOIN s ON false;
+fields x@t.1:23:4:-1,y@t.2:23:4:-1,b@t.3:16:1:-1,r@t.4:1007:-1:-1,z@t.5:25:-1:-1,x@s.1:23:4:-1,y@s.2:23:4:-1
+SELECT 0
+> SELECT * FROM t LEFT JOIN s ON false ORDER BY t.x;
+fields x@t.1:23:4:-1,y@t.2:23:4:-1,b@t.3:16:1:-1,r@t.4:1007:-1:-1,z@t.5:25:-1:-1,x@s.1:23:4:-1,y@s.2:23:4:-1
+row 1,1,t,{1},a,NULL,NULL
+row 2,2,f,NULL,b,NULL,NULL
+SELECT 2
+> SELECT * FROM t LEFT JOIN s ON s.x = t.x AND false ORDER BY t.x;
+fields x@t.1:23:4:-1,y@t.2:23:4:-1,b@t.3:16:1:-1,r@t.4:1007:-1:-1,z@t.5:25:-1:-1,x@s.1:23:4:-1,y@s.2:23:4:-1
+row 1,1,t,{1},a,NULL,NULL
+row 2,2,f,NULL,b,NULL,NULL
+SELECT 2
+> SELECT * FROM t LEFT JOIN (s JOIN c ON false) ON s.x = t.x ORDER BY t.x;
+fields x@t.1:23:4:-1,y@t.2:23:4:-1,b@t.3:16:1:-1,r@t.4:1007:-1:-1,z@t.5:25:-1:-1,x@s.1:23:4:-1,y@s.2:23:4:-1,x@c.1:23:4:-1,y@c.2:23:4:-1
+row 1,1,t,{1},a,NULL,NULL,NULL,NULL
+row 2,2,f,NULL,b,NULL,NULL,NULL,NULL
+SELECT 2
+> SELECT * FROM t LEFT JOIN (SELECT * FROM s WHERE false) q ON q.x = t.x ORDER BY t.x;
+fields x@t.1:23:4:-1,y@t.2:23:4:-1,b@t.3:16:1:-1,r@t.4:1007:-1:-1,z@t.5:25:-1:-1,x@s.1:23:4:-1,y@s.2:23:4:-1
+row 1,1,t,{1},a,NULL,NULL
+row 2,2,f,NULL,b,NULL,NULL
+SELECT 2
+> SELECT * FROM t RIGHT JOIN s ON false ORDER BY s.x;
+fields x@t.1:23:4:-1,y@t.2:23:4:-1,b@t.3:16:1:-1,r@t.4:1007:-1:-1,z@t.5:25:-1:-1,x@s.1:23:4:-1,y@s.2:23:4:-1
+row NULL,NULL,NULL,NULL,NULL,1,10
+row NULL,NULL,NULL,NULL,NULL,2,20
+SELECT 2
+> SELECT count(*) FROM t JOIN s ON false;
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT * FROM t JOIN s ON s.x = t.x AND now() > '2000-01-01' ORDER BY t.x;
+fields x@t.1:23:4:-1,y@t.2:23:4:-1,b@t.3:16:1:-1,r@t.4:1007:-1:-1,z@t.5:25:-1:-1,x@s.1:23:4:-1,y@s.2:23:4:-1
+row 1,1,t,{1},a,1,10
+row 2,2,f,NULL,b,2,20
+SELECT 2
+> SELECT * FROM t JOIN s ON s.x = t.x AND now() < '2000-01-01';
+fields x@t.1:23:4:-1,y@t.2:23:4:-1,b@t.3:16:1:-1,r@t.4:1007:-1:-1,z@t.5:25:-1:-1,x@s.1:23:4:-1,y@s.2:23:4:-1
+SELECT 0
+> SELECT * FROM t JOIN (s LEFT JOIN c ON false) ON s.x = t.x ORDER BY t.x;
+fields x@t.1:23:4:-1,y@t.2:23:4:-1,b@t.3:16:1:-1,r@t.4:1007:-1:-1,z@t.5:25:-1:-1,x@s.1:23:4:-1,y@s.2:23:4:-1,x@c.1:23:4:-1,y@c.2:23:4:-1
+row 1,1,t,{1},a,1,10,NULL,NULL
+row 2,2,f,NULL,b,2,20,NULL,NULL
+SELECT 2
+> SELECT t.x, count(s.x) FROM t LEFT JOIN s ON false GROUP BY t.x ORDER BY t.x;
+fields x@t.1:23:4:-1,count:20:8:-1
+row 1,0
+row 2,0
+SELECT 2
