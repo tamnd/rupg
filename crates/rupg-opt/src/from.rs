@@ -1011,6 +1011,18 @@ fn needed(level: &Level<'_>, stats: &mut Stats, used: Option<&[bool]>) {
     };
     let [group, distinct, sort] = [&query.group, &query.distinct, &query.sort]
         .map(|items| stats.canonical(keys(items), |k| &k.0));
+    // `make_pathkeys_for_groupagg`: with no groups, the keys of an ordered aggregate call are the keys of the groups.
+    let group = if group.is_empty()
+        && query.grouping_sets.is_empty()
+        && crate::enable().presorted_aggregate
+    {
+        let ordered = upper::aggregate_order(query);
+        let ordered =
+            ordered.into_iter().map(|k| (k.item.expr.into_owned(), k.desc, k.nulls_first));
+        stats.canonical(ordered.collect(), |k| &k.0)
+    } else {
+        group
+    };
     stats.query = [&group, &distinct, &sort]
         .into_iter()
         .find(|keys| !keys.is_empty())
@@ -2371,11 +2383,11 @@ fn tuple_count(input: &Input<'_, '_>, clauses: &[Clause<'_>]) -> f64 {
     cost::clamp_rows(input.outer.node.cost.rows * input.inner.node.cost.rows * selectivity)
 }
 
-/// The nested loops of a join, with their costs as `initial_cost_nestloop` and `final_cost_nestloop`: with the plain inner side, and then with a `Material` node over the inner side, as `match_unsorted_outer` makes them. The inner side gets no `Material` node when it keeps its rows already or reads the outer side.
+/// The nested loops of a join, with their costs as `initial_cost_nestloop` and `final_cost_nestloop`: with the plain inner side, and then with a `Material` node over the inner side, as `match_unsorted_outer` makes them. The inner side gets no `Material` node when it keeps its rows already, reads the outer side or `enable_material` is off.
 fn nested_loops<'q>(input: &Input<'_, 'q>, join: JoinKind, lateral: bool) -> Vec<Candidate<'q>> {
     let mut out = Vec::new();
     let mut materialize = vec![false];
-    if !lateral && !keeps_rows(&input.inner.node.kind) {
+    if !lateral && !keeps_rows(&input.inner.node.kind) && crate::enable().material {
         materialize.push(true);
     }
     for materialize in materialize {
@@ -2779,14 +2791,18 @@ fn merge_join<'q>(
     let bare = inner_run * ratio;
     // The inner side needs a `Material` node when it is cheaper, when its node cannot go back to a row that it gave, as `ExecSupportsMarkRestore`, or when its sort does not fit in `work_mem`.
     let inner_cost = input.inner.node.cost;
+    // `enable_material` and `enable_mergejoin` allow a `Material` node that is not needed, as `PGS_MERGEJOIN_MATERIALIZE`.
+    let enable = crate::enable();
+    let allowed = enable.material && enable.mergejoin;
+    let spills = cost::byte_size(inner_cost.rows, inner_cost.width) > cost::WORK_MEM;
     let materialize = !skip_mark_restore
-        && (material < bare
+        && (allowed && material < bare
             || !sort_inner
                 && !matches!(
                     input.inner.node.kind,
                     Kind::Sort(_) | Kind::Materialize | Kind::Result { .. }
                 )
-            || sort_inner && cost::byte_size(inner_cost.rows, inner_cost.width) > cost::WORK_MEM);
+            || allowed && sort_inner && spills);
     run += if materialize { material } else { bare };
     run +=
         cost::qual_cost(clauses.iter().map(|c| &*c.item.expr)) * (outer_rows + inner_rows * ratio);

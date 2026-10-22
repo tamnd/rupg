@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `EXPLAIN` now follows `enable_material` and `enable_presorted_aggregate`. An aggregate call with `ORDER BY` in a query with no `GROUP BY` now reads an index in the order of the call when that costs less than a sort, as PostgreSQL plans it. (#585)
 - `EXPLAIN` now follows the planner settings `enable_seqscan`, `enable_indexscan`, `enable_indexonlyscan`, `enable_bitmapscan`, `enable_sort`, `enable_incremental_sort`, `enable_hashagg`, `enable_nestloop`, `enable_mergejoin` and `enable_hashjoin`. A node of a kind that a setting turns off is a disabled node, and the planner takes the plan with the fewest disabled nodes, as PostgreSQL does. `EXPLAIN` shows `Disabled: true` for a disabled node. (#584)
 - `EXPLAIN` of a `UNION ALL` with `ORDER BY` now plans a `Merge Append` of the plans of its `SELECT`s when that costs less than a sort, as PostgreSQL makes the query an append relation. So `SELECT id FROM a UNION ALL SELECT id FROM b ORDER BY 1 LIMIT 3` reads the primary keys in order. A `SELECT` of a `UNION ALL` with its own `WHERE` gets a sort below the `Merge Append`, as PostgreSQL plans it as a subquery. (#583)
 

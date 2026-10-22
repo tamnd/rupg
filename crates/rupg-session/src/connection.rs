@@ -5519,6 +5519,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_enable.test")));
     }
 
+    /// `enable_material` off takes away the `Material` node of a nested loop, of a merge join that does not need it and of a subplan, as `match_unsorted_outer`, `final_cost_mergejoin` and `make_subplan`. `enable_presorted_aggregate` off gives the input of an ordered aggregate call no sort, as `make_pathkeys_for_groupagg`, and with it on the keys of the call of a query with no groups are the keys of its groups, so an index in their order is useful. `connection/plan_enable_material.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_enable_material() {
+        big_stack(|| script(include_str!("connection/plan_enable_material.test")));
+    }
+
     /// A query that is a `UNION ALL` of `SELECT`s with the types of its columns and has `ORDER BY` becomes an append relation, as `flatten_simple_union_all` makes it, so the planner can plan a `Merge Append` of the plans of the `SELECT`s in the order. A `SELECT` with its own `WHERE` is not a member of the append relation, as `is_safe_append_member`, and its plan gets a sort. `connection/plan_union_all_order.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_union_all_order() {

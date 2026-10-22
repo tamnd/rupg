@@ -902,6 +902,16 @@ fn ordered_keys<'q>(aggs: &[&'q Aggref]) -> Vec<SortKey<'q>> {
     items.iter().filter_map(|s| agg.args.get(s.target).map(|e| sort_key(e, s))).collect()
 }
 
+/// The keys of the ordered aggregate call of the targets and of `HAVING` of a query, as [`ordered_keys`] finds them.
+pub(crate) fn aggregate_order(query: &Query) -> Vec<SortKey<'_>> {
+    let mut exprs_of: Vec<&Expr> = query.targets.iter().map(|t| &t.expr).collect();
+    let (_, having) = having_split(query);
+    exprs_of.extend(having.iter().copied());
+    let mut aggs = Vec::new();
+    exprs::aggregates(&exprs_of, &mut aggs);
+    ordered_keys(&aggs)
+}
+
 /// The `Agg` node of a query with groups, with a `Sort` below it when the strategy needs one, as `add_paths_to_grouping_rel`. With `only`, the input is not the cheapest plan, so it gets only the sorted strategy, and only when its rows are in the order of the groups.
 fn aggregate<'q>(
     level: &Level<'q>,
@@ -918,7 +928,10 @@ fn aggregate<'q>(
     exprs::aggregates(&exprs_of, &mut aggs);
     let units = agg_units(&aggs);
     let finals = cost::CPU_OPERATOR * final_units(&aggs);
+    // `make_pathkeys_for_groupagg`: with `enable_presorted_aggregate` off, the input of the `Agg` gets no sort for an ordered call, and the call sorts its own rows.
     let ordered = ordered_keys(&aggs);
+    let has_ordered = !ordered.is_empty();
+    let ordered = if crate::enable().presorted_aggregate { ordered } else { Vec::new() };
     let selectivity = cost::list_selectivity(having.iter().copied());
     let (having_startup, having_cost) = level.stats.qual_costs(having.iter().copied());
     let filter: Vec<Item<'q>> = having.iter().map(|h| Item::of(h)).collect();
@@ -954,7 +967,7 @@ fn aggregate<'q>(
     let groups = level.stats.groups(&group_exprs, n);
     let keys: Vec<Item<'q>> = group.iter().map(|k| k.item.clone()).collect();
     let rows = cost::clamp_rows(groups * selectivity);
-    let hashable = hashable && !group.is_empty() && ordered.is_empty();
+    let hashable = hashable && !group.is_empty() && !has_ordered;
     // The sorted strategy: a `Sort` on the keys of the groups, and on the keys of an ordered call after them, as `adjust_group_pathkeys_for_groupagg`.
     let mut sort_keys = group.clone();
     sort_keys.extend(ordered);

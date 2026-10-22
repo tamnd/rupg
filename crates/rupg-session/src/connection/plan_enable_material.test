@@ -1,0 +1,228 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (id int PRIMARY KEY, x int);
+CREATE TABLE
+> CREATE TABLE b (id int PRIMARY KEY, y int);
+CREATE TABLE
+> CREATE TABLE c (z int);
+CREATE TABLE
+> CREATE INDEX a_x ON a (x);
+CREATE INDEX
+> EXPLAIN SELECT * FROM c c1, c c2 WHERE c1.z < c2.z;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..97614.88 rows=2167500 width=8)
+row   Join Filter: (c1.z < c2.z)
+row   ->  Seq Scan on c c1  (cost=0.00..35.50 rows=2550 width=4)
+row   ->  Materialize  (cost=0.00..48.25 rows=2550 width=4)
+row         ->  Seq Scan on c c2  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x NOT IN (SELECT z FROM c);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=41.88..80.12 rows=1130 width=8)
+row   Filter: (NOT (ANY (x = (hashed SubPlan any_1).col1)))
+row   SubPlan any_1
+row     ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x > ALL (SELECT z FROM c);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..61764.50 rows=1130 width=8)
+row   Filter: (ALL (x > (SubPlan all_1).col1))
+row   SubPlan all_1
+row     ->  Materialize  (cost=0.00..48.25 rows=2550 width=4)
+row           ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c c1 JOIN c c2 ON c1.z = c2.z;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=359.57..860.00 rows=32512 width=8)
+row   Merge Cond: (c1.z = c2.z)
+row   ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row         Sort Key: c1.z
+row         ->  Seq Scan on c c1  (cost=0.00..35.50 rows=2550 width=4)
+row   ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row         Sort Key: c2.z
+row         ->  Seq Scan on c c2  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> SET enable_material = off;
+SET
+> EXPLAIN SELECT * FROM c c1, c c2 WHERE c1.z < c2.z;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..171841.75 rows=2167500 width=8)
+row   Join Filter: (c1.z < c2.z)
+row   ->  Seq Scan on c c1  (cost=0.00..35.50 rows=2550 width=4)
+row   ->  Seq Scan on c c2  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x > ALL (SELECT z FROM c);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..47357.00 rows=1130 width=8)
+row   Filter: (ALL (x > (SubPlan all_1).col1))
+row   SubPlan all_1
+row     ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> SET enable_hashjoin = off;
+SET
+> EXPLAIN SELECT * FROM c c1 JOIN c c2 ON c1.z = c2.z;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=359.57..860.00 rows=32512 width=8)
+row   Merge Cond: (c1.z = c2.z)
+row   ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row         Sort Key: c1.z
+row         ->  Seq Scan on c c1  (cost=0.00..35.50 rows=2550 width=4)
+row   ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row         Sort Key: c2.z
+row         ->  Seq Scan on c c2  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a JOIN b ON a.x = b.y;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=158.66..625.28 rows=25538 width=16)
+row   Merge Cond: (a.x = b.y)
+row   ->  Index Scan using a_x on a  (cost=0.15..78.06 rows=2260 width=8)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: b.y
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> RESET enable_hashjoin;
+RESET
+> RESET enable_material;
+RESET
+> SET enable_nestloop = off;
+SET
+> EXPLAIN SELECT * FROM c c1, c c2 WHERE c1.z < c2.z;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..171841.75 rows=2167500 width=8)
+row   Disabled: true
+row   Join Filter: (c1.z < c2.z)
+row   ->  Seq Scan on c c1  (cost=0.00..35.50 rows=2550 width=4)
+row   ->  Seq Scan on c c2  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> SET enable_hashjoin = off;
+SET
+> EXPLAIN SELECT * FROM c c1 JOIN c c2 ON c1.z = c2.z;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=359.57..860.00 rows=32512 width=8)
+row   Merge Cond: (c1.z = c2.z)
+row   ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row         Sort Key: c1.z
+row         ->  Seq Scan on c c1  (cost=0.00..35.50 rows=2550 width=4)
+row   ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row         Sort Key: c2.z
+row         ->  Seq Scan on c c2  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> SET enable_mergejoin = off;
+SET
+> EXPLAIN SELECT * FROM c c1 FULL JOIN c c2 ON c1.z = c2.z;
+fields QUERY PLAN:25:-1:-1
+row Merge Full Join  (cost=359.57..860.00 rows=32512 width=8)
+row   Disabled: true
+row   Merge Cond: (c1.z = c2.z)
+row   ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row         Sort Key: c1.z
+row         ->  Seq Scan on c c1  (cost=0.00..35.50 rows=2550 width=4)
+row   ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row         Sort Key: c2.z
+row         ->  Seq Scan on c c2  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a LEFT JOIN b ON a.x = b.y AND b.id < 10;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join  (cost=9.99..87756.19 rows=8509 width=16)
+row   Disabled: true
+row   Join Filter: (a.x = b.y)
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Bitmap Heap Scan on b  (cost=9.99..29.40 rows=753 width=8)
+row         Recheck Cond: (id < 10)
+row         ->  Bitmap Index Scan on b_pkey  (cost=0.00..9.80 rows=753 width=0)
+row               Index Cond: (id < 10)
+EXPLAIN
+> RESET enable_nestloop;
+RESET
+> RESET enable_hashjoin;
+RESET
+> RESET enable_mergejoin;
+RESET
+> SET enable_seqscan = off;
+SET
+> EXPLAIN SELECT * FROM a WHERE EXISTS (SELECT 1 FROM b WHERE b.y = a.x) ORDER BY id;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=196.61..199.44 rows=1130 width=8)
+row   Sort Key: a.id
+row   ->  Hash Join  (cost=42.91..139.31 rows=1130 width=8)
+row         Hash Cond: (a.x = b.y)
+row         ->  Index Scan using a_x on a  (cost=0.15..78.06 rows=2260 width=8)
+row         ->  Hash  (cost=40.25..40.25 rows=200 width=4)
+row               ->  HashAggregate  (cost=38.25..40.25 rows=200 width=4)
+row                     Group Key: b.y
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+row                           Disabled: true
+EXPLAIN
+> RESET enable_seqscan;
+RESET
+> SET enable_partitionwise_join = off;
+SET
+> SET enable_presorted_aggregate = off;
+SET
+> EXPLAIN SELECT x, string_agg(id::text, ',' ORDER BY id) FROM a GROUP BY x;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=0.15..103.16 rows=200 width=36)
+row   Group Key: x
+row   ->  Index Scan using a_x on a  (cost=0.15..78.06 rows=2260 width=8)
+EXPLAIN
+> RESET enable_presorted_aggregate;
+RESET
+> EXPLAIN SELECT x, string_agg(id::text, ',' ORDER BY id) FROM a GROUP BY x;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=0.74..174.94 rows=200 width=36)
+row   Group Key: x
+row   ->  Incremental Sort  (cost=0.74..149.84 rows=2260 width=8)
+row         Sort Key: x, id
+row         Presorted Key: x
+row         ->  Index Scan using a_x on a  (cost=0.15..78.06 rows=2260 width=8)
+EXPLAIN
+> SET enable_presorted_aggregate = off;
+SET
+> EXPLAIN SELECT x, count(DISTINCT id) FROM a GROUP BY x;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=0.15..91.36 rows=200 width=12)
+row   Group Key: x
+row   ->  Index Scan using a_x on a  (cost=0.15..78.06 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT string_agg(id::text, ',' ORDER BY id) FROM a;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=49.55..49.56 rows=1 width=32)
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> RESET enable_presorted_aggregate;
+RESET
+> EXPLAIN SELECT string_agg(id::text, ',' ORDER BY id) FROM a;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=95.01..95.02 rows=1 width=32)
+row   ->  Index Only Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> SET enable_material = off;
+SET
+> SET enable_hashjoin = off;
+SET
+> SET enable_seqscan = off;
+SET
+> EXPLAIN SELECT * FROM a JOIN b ON a.x = b.y;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=158.66..625.28 rows=25538 width=16)
+row   Merge Cond: (a.x = b.y)
+row   ->  Index Scan using a_x on a  (cost=0.15..78.06 rows=2260 width=8)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: b.y
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row               Disabled: true
+EXPLAIN
+> EXPLAIN SELECT * FROM c c1 JOIN c c2 ON c1.z = c2.z;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=359.57..860.00 rows=32512 width=8)
+row   Merge Cond: (c1.z = c2.z)
+row   ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row         Sort Key: c1.z
+row         ->  Seq Scan on c c1  (cost=0.00..35.50 rows=2550 width=4)
+row               Disabled: true
+row   ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row         Sort Key: c2.z
+row         ->  Seq Scan on c c2  (cost=0.00..35.50 rows=2550 width=4)
+row               Disabled: true
+EXPLAIN
