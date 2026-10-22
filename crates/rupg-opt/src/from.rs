@@ -608,6 +608,9 @@ fn needed(level: &Level<'_>, stats: &mut Stats) {
     for target in &query.targets {
         stats.need(&target.expr, 0, &top, relations);
     }
+    for mark in &level.marks {
+        stats.need(mark, 0, &top, relations);
+    }
     let (to_where, keep) = upper::having_split(query);
     for part in keep {
         stats.need(part, 0, &top, relations);
