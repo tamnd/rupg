@@ -1,0 +1,509 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE b (x int, y int);
+CREATE TABLE
+> CREATE TABLE c (x int);
+CREATE TABLE
+> CREATE TABLE d (x int, y int, z text);
+CREATE TABLE
+> EXPLAIN SELECT * FROM b, c WHERE b.x = c.x ORDER BY b.x, b.y;
+fields QUERY PLAN:25:-1:-1
+row Incremental Sort  (cost=345.67..2179.12 rows=28815 width=12)
+row   Sort Key: b.x, b.y
+row   Presorted Key: b.x
+row   ->  Merge Join  (cost=338.29..781.81 rows=28815 width=12)
+row         Merge Cond: (b.x = c.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM b, c WHERE b.x = c.x ORDER BY b.x, b.y LIMIT 10;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=343.62..344.11 rows=10 width=12)
+row   ->  Incremental Sort  (cost=343.62..1768.68 rows=28815 width=12)
+row         Sort Key: b.x, b.y
+row         Presorted Key: b.x
+row         ->  Merge Join  (cost=338.29..781.81 rows=28815 width=12)
+row               Merge Cond: (b.x = c.x)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: b.x
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row                     Sort Key: c.x
+row                     ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM b, c WHERE b.x = c.x ORDER BY b.x, b.y DESC;
+fields QUERY PLAN:25:-1:-1
+row Incremental Sort  (cost=345.67..2179.12 rows=28815 width=12)
+row   Sort Key: b.x, b.y DESC
+row   Presorted Key: b.x
+row   ->  Merge Join  (cost=338.29..781.81 rows=28815 width=12)
+row         Merge Cond: (b.x = c.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM b, c WHERE b.x = c.x ORDER BY b.x, b.y NULLS FIRST;
+fields QUERY PLAN:25:-1:-1
+row Incremental Sort  (cost=345.67..2179.12 rows=28815 width=12)
+row   Sort Key: b.x, b.y NULLS FIRST
+row   Presorted Key: b.x
+row   ->  Merge Join  (cost=338.29..781.81 rows=28815 width=12)
+row         Merge Cond: (b.x = c.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT DISTINCT ON (b.x) b.x, b.y FROM b, c WHERE b.x = c.x ORDER BY b.x, b.y;
+fields QUERY PLAN:25:-1:-1
+row Unique  (cost=345.67..2251.15 rows=200 width=8)
+row   ->  Incremental Sort  (cost=345.67..2179.12 rows=28815 width=8)
+row         Sort Key: b.x, b.y
+row         Presorted Key: b.x
+row         ->  Merge Join  (cost=338.29..781.81 rows=28815 width=8)
+row               Merge Cond: (b.x = c.x)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: b.x
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row                     Sort Key: c.x
+row                     ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT b.x, string_agg(d.z, ',' ORDER BY d.y) FROM b, d WHERE b.x = d.x GROUP BY b.x;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=244.99..1107.52 rows=200 width=36)
+row   Group Key: b.x
+row   ->  Incremental Sort  (cost=244.99..1037.22 rows=13560 width=40)
+row         Sort Key: b.x, d.y
+row         Presorted Key: b.x
+row         ->  Merge Join  (cost=241.88..451.28 rows=13560 width=40)
+row               Merge Cond: (d.x = b.x)
+row               ->  Sort  (cost=83.37..86.37 rows=1200 width=40)
+row                     Sort Key: d.x
+row                     ->  Seq Scan on d  (cost=0.00..22.00 rows=1200 width=40)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=4)
+row                     Sort Key: b.x
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT b.x, row_number() OVER (ORDER BY b.x, b.y) FROM b, c WHERE b.x = c.x;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=345.75..2683.38 rows=28815 width=16)
+row   Window: w1 AS (ORDER BY b.x, b.y ROWS UNBOUNDED PRECEDING)
+row   ->  Incremental Sort  (cost=345.67..2179.12 rows=28815 width=8)
+row         Sort Key: b.x, b.y
+row         Presorted Key: b.x
+row         ->  Merge Join  (cost=338.29..781.81 rows=28815 width=8)
+row               Merge Cond: (b.x = c.x)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: b.x
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row                     Sort Key: c.x
+row                     ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT b.x, rank() OVER (PARTITION BY b.x ORDER BY b.y) FROM b, c WHERE b.x = c.x;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=345.75..2683.38 rows=28815 width=16)
+row   Window: w1 AS (PARTITION BY b.x ORDER BY b.y ROWS UNBOUNDED PRECEDING)
+row   ->  Incremental Sort  (cost=345.67..2179.12 rows=28815 width=8)
+row         Sort Key: b.x, b.y
+row         Presorted Key: b.x
+row         ->  Merge Join  (cost=338.29..781.81 rows=28815 width=8)
+row               Merge Cond: (b.x = c.x)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: b.x
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row                     Sort Key: c.x
+row                     ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT * FROM b, c WHERE b.x = c.x ORDER BY b.x, b.y) s;
+fields QUERY PLAN:25:-1:-1
+row Incremental Sort  (cost=345.67..2179.12 rows=28815 width=12)
+row   Sort Key: b.x, b.y
+row   Presorted Key: b.x
+row   ->  Merge Join  (cost=338.29..781.81 rows=28815 width=12)
+row         Merge Cond: (b.x = c.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM b, d WHERE b.x = d.x ORDER BY b.x, d.y, d.z;
+fields QUERY PLAN:25:-1:-1
+row Incremental Sort  (cost=244.99..1037.22 rows=13560 width=48)
+row   Sort Key: b.x, d.y, d.z
+row   Presorted Key: b.x
+row   ->  Merge Join  (cost=241.88..451.28 rows=13560 width=48)
+row         Merge Cond: (d.x = b.x)
+row         ->  Sort  (cost=83.37..86.37 rows=1200 width=40)
+row               Sort Key: d.x
+row               ->  Seq Scan on d  (cost=0.00..22.00 rows=1200 width=40)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM b, d WHERE b.x = d.x ORDER BY b.x, d.z LIMIT 5;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=244.05..244.28 rows=5 width=48)
+row   ->  Incremental Sort  (cost=244.05..850.01 rows=13560 width=48)
+row         Sort Key: b.x, d.z
+row         Presorted Key: b.x
+row         ->  Merge Join  (cost=241.88..451.28 rows=13560 width=48)
+row               Merge Cond: (d.x = b.x)
+row               ->  Sort  (cost=83.37..86.37 rows=1200 width=40)
+row                     Sort Key: d.x
+row                     ->  Seq Scan on d  (cost=0.00..22.00 rows=1200 width=40)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: b.x
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM b, c, d WHERE b.x = c.x AND c.x = d.x ORDER BY b.x, d.y;
+fields QUERY PLAN:25:-1:-1
+row Incremental Sort  (cost=477.91..13835.55 rows=172890 width=52)
+row   Sort Key: b.x, d.y
+row   Presorted Key: b.x
+row   ->  Merge Join  (cost=421.66..3237.16 rows=172890 width=52)
+row         Merge Cond: (c.x = b.x)
+row         ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+row         ->  Materialize  (cost=241.88..485.18 rows=13560 width=48)
+row               ->  Merge Join  (cost=241.88..451.28 rows=13560 width=48)
+row                     Merge Cond: (d.x = b.x)
+row                     ->  Sort  (cost=83.37..86.37 rows=1200 width=40)
+row                           Sort Key: d.x
+row                           ->  Seq Scan on d  (cost=0.00..22.00 rows=1200 width=40)
+row                     ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                           Sort Key: b.x
+row                           ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN (FORMAT JSON) SELECT * FROM b, c WHERE b.x = c.x ORDER BY b.x, b.y;
+fields QUERY PLAN:114:-1:-1
+row [
+  {
+    "Plan": {
+      "Node Type": "Incremental Sort",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Startup Cost": 345.67,
+      "Total Cost": 2179.12,
+      "Plan Rows": 28815,
+      "Plan Width": 12,
+      "Disabled": false,
+      "Sort Key": ["b.x", "b.y"],
+      "Presorted Key": ["b.x"],
+      "Plans": [
+        {
+          "Node Type": "Merge Join",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Join Type": "Inner",
+          "Startup Cost": 338.29,
+          "Total Cost": 781.81,
+          "Plan Rows": 28815,
+          "Plan Width": 12,
+          "Disabled": false,
+          "Inner Unique": false,
+          "Merge Cond": "(b.x = c.x)",
+          "Plans": [
+            {
+              "Node Type": "Sort",
+              "Parent Relationship": "Outer",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Startup Cost": 158.51,
+              "Total Cost": 164.16,
+              "Plan Rows": 2260,
+              "Plan Width": 8,
+              "Disabled": false,
+              "Sort Key": ["b.x"],
+              "Plans": [
+                {
+                  "Node Type": "Seq Scan",
+                  "Parent Relationship": "Outer",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Relation Name": "b",
+                  "Alias": "b",
+                  "Startup Cost": 0.00,
+                  "Total Cost": 32.60,
+                  "Plan Rows": 2260,
+                  "Plan Width": 8,
+                  "Disabled": false
+                }
+              ]
+            },
+            {
+              "Node Type": "Sort",
+              "Parent Relationship": "Inner",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Startup Cost": 179.78,
+              "Total Cost": 186.16,
+              "Plan Rows": 2550,
+              "Plan Width": 4,
+              "Disabled": false,
+              "Sort Key": ["c.x"],
+              "Plans": [
+                {
+                  "Node Type": "Seq Scan",
+                  "Parent Relationship": "Outer",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Relation Name": "c",
+                  "Alias": "c",
+                  "Startup Cost": 0.00,
+                  "Total Cost": 35.50,
+                  "Plan Rows": 2550,
+                  "Plan Width": 4,
+                  "Disabled": false
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
+EXPLAIN
+> EXPLAIN (FORMAT YAML) SELECT * FROM b, c WHERE b.x = c.x ORDER BY b.x, b.y;
+fields QUERY PLAN:25:-1:-1
+row - Plan: 
+    Node Type: "Incremental Sort"
+    Parallel Aware: false
+    Async Capable: false
+    Startup Cost: 345.67
+    Total Cost: 2179.12
+    Plan Rows: 28815
+    Plan Width: 12
+    Disabled: false
+    Sort Key: 
+      - "b.x"
+      - "b.y"
+    Presorted Key: 
+      - "b.x"
+    Plans: 
+      - Node Type: "Merge Join"
+        Parent Relationship: "Outer"
+        Parallel Aware: false
+        Async Capable: false
+        Join Type: "Inner"
+        Startup Cost: 338.29
+        Total Cost: 781.81
+        Plan Rows: 28815
+        Plan Width: 12
+        Disabled: false
+        Inner Unique: false
+        Merge Cond: "(b.x = c.x)"
+        Plans: 
+          - Node Type: "Sort"
+            Parent Relationship: "Outer"
+            Parallel Aware: false
+            Async Capable: false
+            Startup Cost: 158.51
+            Total Cost: 164.16
+            Plan Rows: 2260
+            Plan Width: 8
+            Disabled: false
+            Sort Key: 
+              - "b.x"
+            Plans: 
+              - Node Type: "Seq Scan"
+                Parent Relationship: "Outer"
+                Parallel Aware: false
+                Async Capable: false
+                Relation Name: "b"
+                Alias: "b"
+                Startup Cost: 0.00
+                Total Cost: 32.60
+                Plan Rows: 2260
+                Plan Width: 8
+                Disabled: false
+          - Node Type: "Sort"
+            Parent Relationship: "Inner"
+            Parallel Aware: false
+            Async Capable: false
+            Startup Cost: 179.78
+            Total Cost: 186.16
+            Plan Rows: 2550
+            Plan Width: 4
+            Disabled: false
+            Sort Key: 
+              - "c.x"
+            Plans: 
+              - Node Type: "Seq Scan"
+                Parent Relationship: "Outer"
+                Parallel Aware: false
+                Async Capable: false
+                Relation Name: "c"
+                Alias: "c"
+                Startup Cost: 0.00
+                Total Cost: 35.50
+                Plan Rows: 2550
+                Plan Width: 4
+                Disabled: false
+EXPLAIN
+> EXPLAIN (FORMAT XML) SELECT * FROM b, c WHERE b.x = c.x ORDER BY b.x, b.y;
+fields QUERY PLAN:142:-1:-1
+row <explain xmlns="http://www.postgresql.org/2009/explain">
+  <Query>
+    <Plan>
+      <Node-Type>Incremental Sort</Node-Type>
+      <Parallel-Aware>false</Parallel-Aware>
+      <Async-Capable>false</Async-Capable>
+      <Startup-Cost>345.67</Startup-Cost>
+      <Total-Cost>2179.12</Total-Cost>
+      <Plan-Rows>28815</Plan-Rows>
+      <Plan-Width>12</Plan-Width>
+      <Disabled>false</Disabled>
+      <Sort-Key>
+        <Item>b.x</Item>
+        <Item>b.y</Item>
+      </Sort-Key>
+      <Presorted-Key>
+        <Item>b.x</Item>
+      </Presorted-Key>
+      <Plans>
+        <Plan>
+          <Node-Type>Merge Join</Node-Type>
+          <Parent-Relationship>Outer</Parent-Relationship>
+          <Parallel-Aware>false</Parallel-Aware>
+          <Async-Capable>false</Async-Capable>
+          <Join-Type>Inner</Join-Type>
+          <Startup-Cost>338.29</Startup-Cost>
+          <Total-Cost>781.81</Total-Cost>
+          <Plan-Rows>28815</Plan-Rows>
+          <Plan-Width>12</Plan-Width>
+          <Disabled>false</Disabled>
+          <Inner-Unique>false</Inner-Unique>
+          <Merge-Cond>(b.x = c.x)</Merge-Cond>
+          <Plans>
+            <Plan>
+              <Node-Type>Sort</Node-Type>
+              <Parent-Relationship>Outer</Parent-Relationship>
+              <Parallel-Aware>false</Parallel-Aware>
+              <Async-Capable>false</Async-Capable>
+              <Startup-Cost>158.51</Startup-Cost>
+              <Total-Cost>164.16</Total-Cost>
+              <Plan-Rows>2260</Plan-Rows>
+              <Plan-Width>8</Plan-Width>
+              <Disabled>false</Disabled>
+              <Sort-Key>
+                <Item>b.x</Item>
+              </Sort-Key>
+              <Plans>
+                <Plan>
+                  <Node-Type>Seq Scan</Node-Type>
+                  <Parent-Relationship>Outer</Parent-Relationship>
+                  <Parallel-Aware>false</Parallel-Aware>
+                  <Async-Capable>false</Async-Capable>
+                  <Relation-Name>b</Relation-Name>
+                  <Alias>b</Alias>
+                  <Startup-Cost>0.00</Startup-Cost>
+                  <Total-Cost>32.60</Total-Cost>
+                  <Plan-Rows>2260</Plan-Rows>
+                  <Plan-Width>8</Plan-Width>
+                  <Disabled>false</Disabled>
+                </Plan>
+              </Plans>
+            </Plan>
+            <Plan>
+              <Node-Type>Sort</Node-Type>
+              <Parent-Relationship>Inner</Parent-Relationship>
+              <Parallel-Aware>false</Parallel-Aware>
+              <Async-Capable>false</Async-Capable>
+              <Startup-Cost>179.78</Startup-Cost>
+              <Total-Cost>186.16</Total-Cost>
+              <Plan-Rows>2550</Plan-Rows>
+              <Plan-Width>4</Plan-Width>
+              <Disabled>false</Disabled>
+              <Sort-Key>
+                <Item>c.x</Item>
+              </Sort-Key>
+              <Plans>
+                <Plan>
+                  <Node-Type>Seq Scan</Node-Type>
+                  <Parent-Relationship>Outer</Parent-Relationship>
+                  <Parallel-Aware>false</Parallel-Aware>
+                  <Async-Capable>false</Async-Capable>
+                  <Relation-Name>c</Relation-Name>
+                  <Alias>c</Alias>
+                  <Startup-Cost>0.00</Startup-Cost>
+                  <Total-Cost>35.50</Total-Cost>
+                  <Plan-Rows>2550</Plan-Rows>
+                  <Plan-Width>4</Plan-Width>
+                  <Disabled>false</Disabled>
+                </Plan>
+              </Plans>
+            </Plan>
+          </Plans>
+        </Plan>
+      </Plans>
+    </Plan>
+  </Query>
+</explain>
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM b, c WHERE b.x = c.x ORDER BY b.x, b.y;
+fields QUERY PLAN:25:-1:-1
+row Incremental Sort
+row   Sort Key: b.x, b.y
+row   Presorted Key: b.x
+row   ->  Merge Join
+row         Merge Cond: (b.x = c.x)
+row         ->  Sort
+row               Sort Key: b.x
+row               ->  Seq Scan on b
+row         ->  Sort
+row               Sort Key: c.x
+row               ->  Seq Scan on c
+EXPLAIN
+> EXPLAIN (VERBOSE) SELECT * FROM b, c WHERE b.x = c.x ORDER BY b.x, b.y;
+fields QUERY PLAN:25:-1:-1
+row Incremental Sort  (cost=345.67..2179.12 rows=28815 width=12)
+row   Output: b.x, b.y, c.x
+row   Sort Key: b.x, b.y
+row   Presorted Key: b.x
+row   ->  Merge Join  (cost=338.29..781.81 rows=28815 width=12)
+row         Output: b.x, b.y, c.x
+row         Merge Cond: (b.x = c.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Output: b.x, b.y
+row               Sort Key: b.x
+row               ->  Seq Scan on public.b  (cost=0.00..32.60 rows=2260 width=8)
+row                     Output: b.x, b.y
+row         ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row               Output: c.x
+row               Sort Key: c.x
+row               ->  Seq Scan on public.c  (cost=0.00..35.50 rows=2550 width=4)
+row                     Output: c.x
+EXPLAIN
+> EXPLAIN SELECT * FROM b, c WHERE b.x = c.x ORDER BY b.x, b.y FETCH FIRST 3 ROWS WITH TIES;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=342.37..342.49 rows=3 width=12)
+row   ->  Incremental Sort  (cost=342.37..1518.43 rows=28815 width=12)
+row         Sort Key: b.x, b.y
+row         Presorted Key: b.x
+row         ->  Merge Join  (cost=338.29..781.81 rows=28815 width=12)
+row               Merge Cond: (b.x = c.x)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: b.x
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row                     Sort Key: c.x
+row                     ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN

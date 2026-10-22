@@ -94,23 +94,35 @@ fn sorted_order(keys: &[SortKey<'_>]) -> Vec<OrderKey> {
         .collect()
 }
 
-/// True when the rows are in the order of the keys, `pathkeys_contained_in`. A key whose value is a value of an earlier key of the order adds nothing, as `pathkey_is_redundant`.
-fn satisfies(order: &[OrderKey], keys: &[SortKey<'_>]) -> bool {
+/// `pathkeys_count_contained_in`: true when the rows are in the order of the keys, and the number of the first keys that the rows are in the order of. A key whose value is a value of an earlier key of the order adds nothing, as `pathkey_is_redundant`.
+fn presorted(order: &[OrderKey], keys: &[SortKey<'_>]) -> (bool, usize) {
     let mut at = 0;
-    keys.iter().all(|k| {
+    for (i, k) in keys.iter().enumerate() {
         if k.using.is_some() {
-            return false;
+            return (false, i);
         }
         if order[..at].iter().any(|o| o.exprs.iter().any(|e| e.same(&k.item.expr))) {
-            return true;
+            continue;
         }
-        let ok = order.get(at).is_some_and(|o| o.sorts(&k.item.expr, k.desc, k.nulls_first));
+        if !order.get(at).is_some_and(|o| o.sorts(&k.item.expr, k.desc, k.nulls_first)) {
+            return (false, i);
+        }
         at += 1;
-        ok
-    })
+    }
+    (true, keys.len())
 }
 
-/// A sort of the node on the keys unless its rows are in that order already. With `only`, the node is a plan that is not the cheapest, which the planner uses only when its rows are in the order, so the result is `None` when it needs a sort.
+/// The costs of a sort of rows with these costs whose first `presorted` keys are in order already: a `Sort` when no key is in order, or else an `Incremental Sort`, as `make_ordered_path` chooses.
+fn sort_cost(c: Cost, presorted: usize, bound: Option<f64>) -> (f64, f64) {
+    if presorted == 0 {
+        cost::sort((c.startup, c.total), c.rows, c.width, bound)
+    } else {
+        let groups = cost::groups(c.rows.max(2.0), presorted);
+        cost::incremental_sort((c.startup, c.total), c.rows, c.width, groups, bound)
+    }
+}
+
+/// `make_ordered_path`: the node in the order of the keys. A node whose rows are in the order already stays as it is. A node whose rows are in the order of the first keys gets an `Incremental Sort`, and another node gets a `Sort`. With `only`, the node is a plan that is not the cheapest, which the planner uses only when its rows are in the order of one key or more, so the result is `None` when it needs a `Sort`.
 fn sort_if<'q>(
     node: Node<'q>,
     keys: Vec<SortKey<'q>>,
@@ -118,14 +130,23 @@ fn sort_if<'q>(
     bound: Option<f64>,
     only: bool,
 ) -> Option<Node<'q>> {
-    if keys.is_empty() || satisfies(order, &keys) {
+    let (sorted, count) = presorted(order, &keys);
+    if keys.is_empty() || sorted {
         return Some(node);
     }
-    if only {
+    if only && count == 0 {
         return None;
     }
     *order = sorted_order(&keys);
-    Some(sort(node, keys, bound))
+    if count == 0 {
+        return Some(sort(node, keys, bound));
+    }
+    let c = node.cost;
+    let (startup, total) = sort_cost(c, count, bound);
+    let scope = node.scope;
+    let mut out = Node::new(Kind::IncrementalSort { keys, presorted: count }, scope, vec![node]);
+    out.cost = Cost { startup, total, ..c };
+    Some(out)
 }
 
 /// The cost of the transition of the aggregate calls for each row, in units of `cpu_operator_cost`, as `get_agg_clause_costs`: a call of the transition function and the cost of the arguments and of `FILTER`.
@@ -137,6 +158,11 @@ fn agg_units(aggs: &[&Aggref]) -> f64 {
             (1 + args + filter) as f64
         })
         .sum()
+}
+
+/// The cost of the final functions of the aggregate calls for each group, in units of `cpu_operator_cost`, as the `finalCost` of `get_agg_clause_costs`: a call of the final function of each call that has one.
+fn final_units(aggs: &[&Aggref]) -> f64 {
+    aggs.iter().filter(|a| builtin::aggregate(a.oid).is_some_and(|g| g.finalfn != 0)).count() as f64
 }
 
 /// The value of a constant `bigint` of `LIMIT` or `OFFSET`, `Some(None)` for a null constant, or `None` for an expression that is not a constant.
@@ -263,8 +289,7 @@ impl<'q> Builder<'q> {
         if !query.sort.is_empty() {
             let keys: Vec<SortKey<'q>> =
                 query.sort.iter().map(|s| sort_key(level.target(s.target), s)).collect();
-            let bound =
-                (count > 0.0 && offset >= 0.0 && !query.with_ties).then_some(count + offset);
+            let bound = (count > 0.0 && offset >= 0.0).then_some(count + offset);
             node = sort_if(node, keys, &mut order, bound, only)?;
         }
         if !query.row_marks.is_empty() {
@@ -523,6 +548,7 @@ fn aggregate<'q>(
     let mut aggs = Vec::new();
     exprs::aggregates(&exprs_of, &mut aggs);
     let units = agg_units(&aggs);
+    let finals = cost::CPU_OPERATOR * final_units(&aggs);
     let ordered = ordered_keys(&aggs);
     let selectivity: f64 = having.iter().map(|h| cost::selectivity(h)).product();
     let having_cost = cost::qual_cost(having.iter().copied());
@@ -538,7 +564,7 @@ fn aggregate<'q>(
     if query.group.is_empty() {
         let input = sort_if(input, ordered, order, None, only)?;
         let c = input.cost;
-        let startup = c.total + cost::CPU_OPERATOR * n * units;
+        let startup = c.total + cost::CPU_OPERATOR * n * units + finals;
         let total = startup + cost::CPU_TUPLE + having_cost;
         let mut node = Node::new(
             Kind::Aggregate { strategy: Strategy::Plain, keys: Vec::new(), sets: Vec::new() },
@@ -559,22 +585,24 @@ fn aggregate<'q>(
     // The sorted strategy: a `Sort` on the keys of the groups, and on the keys of an ordered call after them.
     let mut sort_keys = group.clone();
     sort_keys.extend(ordered);
-    let presorted = satisfies(order, &sort_keys);
-    if only && !presorted {
+    let (is_sorted, count) = presorted(order, &sort_keys);
+    if only && !is_sorted && count == 0 {
         return None;
     }
-    let (sorted_input, sorted_order) = if presorted {
+    let (sorted_input, sorted_order) = if is_sorted {
         (c, order.clone())
     } else {
-        let (startup, total) = cost::sort((c.startup, c.total), n, c.width, None);
+        let (startup, total) = sort_cost(c, count, None);
         (Cost { startup, total, ..c }, sorted_order(&sort_keys))
     };
     let sorted_total = sorted_input.total
         + cost::CPU_OPERATOR * n * (nkeys + units)
+        + finals * groups
         + cost::CPU_TUPLE * groups
         + having_cost * groups;
     let hash_startup = c.total + cost::CPU_OPERATOR * n * (nkeys + units);
-    let hash_total = hash_startup + cost::CPU_TUPLE * groups + having_cost * groups;
+    let hash_total =
+        hash_startup + finals * groups + cost::CPU_TUPLE * groups + having_cost * groups;
     if !only && hashable && hash_total * 1.01 < sorted_total {
         let mut node = Node::new(
             Kind::Aggregate { strategy: Strategy::Hashed, keys, sets: Vec::new() },
@@ -586,7 +614,9 @@ fn aggregate<'q>(
         order.clear();
         return Some(node);
     }
-    let input = if presorted { input } else { sort(input, sort_keys, None) };
+    let Some(input) = sort_if(input, sort_keys, order, None, false) else {
+        unreachable!("a sort has a result")
+    };
     *order = sorted_order;
     order.truncate(group.len());
     let mut node = Node::new(
@@ -904,15 +934,12 @@ fn distinct<'q>(
             }
         }
     }
-    let presorted = satisfies(order, &keys);
-    if only && !presorted {
+    let (is_sorted, count) = presorted(order, &keys);
+    if only && !is_sorted && count == 0 {
         return None;
     }
-    let (sort_startup, sort_total) = if presorted {
-        (c.startup, c.total)
-    } else {
-        cost::sort((c.startup, c.total), c.rows, c.width, None)
-    };
+    let (sort_startup, sort_total) =
+        if is_sorted { (c.startup, c.total) } else { sort_cost(c, count, None) };
     let unique_total = sort_total + cost::CPU_OPERATOR * c.rows * ncols as f64;
     let hashable = !query.distinct_on && query.distinct.iter().all(|d| d.hashable);
     let hash_startup = c.total + cost::CPU_OPERATOR * c.rows * ncols as f64;

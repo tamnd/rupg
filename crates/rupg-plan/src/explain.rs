@@ -119,6 +119,7 @@ fn names(kind: &Kind<'_>) -> Names {
             }
         }
         Kind::Sort(_) => simple("Sort"),
+        Kind::IncrementalSort { .. } => simple("Incremental Sort"),
         Kind::Limit => simple("Limit"),
         Kind::Unique => simple("Unique"),
         Kind::Append => simple("Append"),
@@ -476,6 +477,14 @@ impl Explainer<'_, '_> {
             Kind::Sort(keys) => {
                 let keys = self.sort_keys(scope, keys, upper)?;
                 self.w.list("Sort Key", &keys);
+            }
+            Kind::IncrementalSort { keys, presorted } => {
+                let texts = self.sort_keys(scope, keys, upper)?;
+                self.w.list("Sort Key", &texts);
+                let items: Vec<Item<'_>> =
+                    keys[..*presorted].iter().map(|k| k.item.clone()).collect();
+                let presorted = self.items(scope, &items, upper)?;
+                self.w.list("Presorted Key", &presorted);
             }
             Kind::Append => {
                 if self.w.format != Format::Text {

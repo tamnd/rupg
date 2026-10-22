@@ -186,8 +186,35 @@ pub(crate) fn spill(rows: f64, width: i32) -> f64 {
     if byte_size(rows, width) > WORK_MEM { SEQ_PAGE * page_count(rows, width) } else { 0.0 }
 }
 
-/// `cost_sort` and `cost_tuplesort`: the costs of a sort of `rows` rows of a width that has the input costs `input`, with the number of rows of `LIMIT` when it has one. A sort that does not fit in `work_mem` is a merge sort on disk.
+/// `cost_sort`: the costs of a sort of `rows` rows of a width that has the input costs `input`, with the number of rows of `LIMIT` when it has one.
 pub(crate) fn sort(input: (f64, f64), rows: f64, width: i32, bound: Option<f64>) -> (f64, f64) {
+    let (startup, run) = tuplesort(rows, width, bound);
+    let startup = input.1 + startup;
+    (startup, startup + run)
+}
+
+/// `cost_incremental_sort`: the costs of a sort of `rows` rows whose first keys are in order already, with `groups` groups of rows with equal first keys. Each group is a sort of its own, which starts when the input has given the rows of the group.
+pub(crate) fn incremental_sort(
+    input: (f64, f64),
+    rows: f64,
+    width: i32,
+    groups: f64,
+    bound: Option<f64>,
+) -> (f64, f64) {
+    let tuples = rows.max(2.0);
+    let group_rows = tuples / groups;
+    let group_input = (input.1 - input.0) / groups;
+    let (group_startup, group_run) = tuplesort(group_rows, width, bound);
+    let startup = group_startup + input.0 + group_input;
+    let mut run =
+        group_run + (group_run + group_startup) * (groups - 1.0) + group_input * (groups - 1.0);
+    // Each row is compared with the first keys of its group, and each group starts and ends a sort.
+    run += CPU_TUPLE * tuples + 2.0 * CPU_TUPLE * groups;
+    (startup, startup + run)
+}
+
+/// `cost_tuplesort`: the start cost and the run cost of a sort of `rows` rows of a width, with the number of rows of `LIMIT` when it has one. A sort that does not fit in `work_mem` is a merge sort on disk.
+fn tuplesort(rows: f64, width: i32, bound: Option<f64>) -> (f64, f64) {
     let input_bytes = byte_size(rows, width);
     let tuples = rows.max(2.0);
     let comparison = 2.0 * CPU_OPERATOR;
@@ -207,8 +234,7 @@ pub(crate) fn sort(input: (f64, f64), rows: f64, width: i32, bound: Option<f64>)
     } else {
         comparison * tuples * tuples.log2()
     };
-    let startup = input.1 + startup;
-    (startup, startup + CPU_OPERATOR * tuples)
+    (startup, CPU_OPERATOR * tuples)
 }
 
 /// `ExecChooseHashTableSize`: the number of buckets and of batches of the hash table of a hash join on rows of a width, with the space for the buckets of the most common values.
