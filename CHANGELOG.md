@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.67 (2026-10-23)
+
+A patch release on the way to M3. `EXPLAIN` now plans semi joins and anti joins for `EXISTS`, `IN` and `NOT IN`, merges the simple subqueries of `FROM` and moves the conditions of `WHERE` into them, plans index scans, index only scans and bitmap scans with parameterized index scans in nested loops, plans `min` and `max` of an indexed column with an index, and plans a `UNION ALL` in `FROM` as an `Append` of its `SELECT`s.
+
 ### Added
 
 - `EXPLAIN` now plans a `UNION ALL` in `FROM` as an `Append` of its `SELECT`s with no `Subquery Scan` above it, as PostgreSQL makes it an append relation. The conditions of `WHERE` go into each `SELECT`, so `WHERE id = 1` gives an index scan of each table. A `UNION` and an `INTERSECT` in `FROM` also take the conditions into each `SELECT`. The width of the `Append` counts only the columns that the query reads, and a `Result` above it computes the targets that are not columns. The keys of a node above the `Append` show with the names of the first `SELECT`, and a `UNION` uses the sorted rows when the hash table does not cost less by more than the fuzz factor of `add_path` (#577).
