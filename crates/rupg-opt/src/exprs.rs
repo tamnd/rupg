@@ -134,7 +134,12 @@ pub(crate) fn can_merge(op: u32) -> bool {
 
 /// The number of calls of functions and operators in an expression, outside its subqueries, which is the cost of the expression for each row in units of `cpu_operator_cost`, as `cost_qual_eval`. A row comparison costs the operators of its columns, which are its children.
 pub(crate) fn calls(expr: &Expr) -> usize {
-    let own = match expr.kind {
+    own_calls(expr) + expr.children().into_iter().map(calls).sum::<usize>()
+}
+
+/// The calls of [`calls`] in the node of an expression, without its children.
+pub(crate) fn own_calls(expr: &Expr) -> usize {
+    match expr.kind {
         ExprKind::Func(_)
         | ExprKind::NullIf { .. }
         | ExprKind::Distinct { .. }
@@ -143,8 +148,7 @@ pub(crate) fn calls(expr: &Expr) -> usize {
         // The input function of the new type and the output function of the old type.
         ExprKind::CoerceViaIo(..) => 2,
         _ => 0,
-    };
-    own + expr.children().into_iter().map(calls).sum::<usize>()
+    }
 }
 
 /// The aggregate calls of the query in the expressions, outside the arguments of other aggregate calls, as `get_agg_clause_costs` finds them. A call in a subquery that reads only the query is a call of the query. Two calls that are the same and call no volatile function are one call, as `find_compatible_agg` shares them.
