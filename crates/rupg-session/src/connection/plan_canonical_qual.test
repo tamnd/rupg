@@ -1,0 +1,142 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (p int, q int, r int);
+CREATE TABLE
+> CREATE INDEX t_p ON t (p);
+CREATE INDEX
+> CREATE TABLE u (x int, y int);
+CREATE TABLE
+> CREATE TABLE v (a int, b int);
+CREATE TABLE
+> EXPLAIN SELECT * FROM t WHERE p = 1 OR p = NULL::int;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on t  (cost=4.23..14.79 rows=10 width=12)
+row   Recheck Cond: (p = 1)
+row   ->  Bitmap Index Scan on t_p  (cost=0.00..4.23 rows=10 width=0)
+row         Index Cond: (p = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE q = 1 OR NULL;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..35.50 rows=10 width=12)
+row   Filter: (q = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE q = 1 AND NULL;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.00 rows=0 width=0)
+row   Replaces: Scan on t
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE q = 1 OR q = NULL::int OR r = 2;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..40.60 rows=20 width=12)
+row   Filter: ((q = 1) OR (r = 2))
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE (q = 1 AND r = 2) OR (q = 1 AND r = 3);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..45.70 rows=1 width=12)
+row   Filter: ((q = 1) AND ((r = 2) OR (r = 3)))
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE (q = 1 AND r = 2) OR q = 1;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..35.50 rows=10 width=12)
+row   Filter: (q = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE (q = 1 AND r = 2) OR (r = 2 AND q = 1);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..40.60 rows=1 width=12)
+row   Filter: ((q = 1) AND (r = 2))
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE (p = 1 AND q = 2) OR (p = 1 AND r = 3);
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on t  (cost=4.23..14.83 rows=1 width=12)
+row   Recheck Cond: (p = 1)
+row   Filter: ((q = 2) OR (r = 3))
+row   ->  Bitmap Index Scan on t_p  (cost=0.00..4.23 rows=10 width=0)
+row         Index Cond: (p = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE (q = 1 AND r = 2 AND p = 3) OR (r = 2 AND q = 4) OR (r = 2 AND q = 5);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..55.90 rows=1 width=12)
+row   Filter: ((r = 2) AND (((q = 1) AND (p = 3)) OR (q = 4) OR (q = 5)))
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE q = 1 OR (r = 2 OR p = 3);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..45.70 rows=30 width=12)
+row   Filter: ((q = 1) OR (r = 2) OR (p = 3))
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE (q = 1 OR r = 2) AND (q = 1 OR r = 2);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..50.80 rows=1 width=12)
+row   Filter: (((q = 1) OR (r = 2)) AND ((q = 1) OR (r = 2)))
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE ((q = 1 AND r = 2) OR (q = 1 AND r = 3)) AND p > 0;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on t  (cost=9.25..32.85 rows=1 width=12)
+row   Recheck Cond: (p > 0)
+row   Filter: ((q = 1) AND ((r = 2) OR (r = 3)))
+row   ->  Bitmap Index Scan on t_p  (cost=0.00..9.25 rows=680 width=0)
+row         Index Cond: (p > 0)
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE NOT ((q = 1 AND r = 2) OR (q = 1 AND r = 3));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..50.80 rows=2040 width=12)
+row   Filter: (((q <> 1) OR (r <> 2)) AND ((q <> 1) OR (r <> 3)))
+EXPLAIN
+> EXPLAIN SELECT * FROM u JOIN v ON (u.x = v.a AND u.y = 1) OR (u.x = v.a AND v.b = 2);
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=317.01..839.07 rows=255 width=16)
+row   Merge Cond: (u.x = v.a)
+row   Join Filter: ((u.y = 1) OR (v.b = 2))
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: u.x
+row         ->  Seq Scan on u  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: v.a
+row         ->  Seq Scan on v  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM u, v WHERE (u.x = v.a AND u.y = 1) OR (v.a = u.x AND v.b = 2);
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..114991.85 rows=255 width=16)
+row   Join Filter: (((u.x = v.a) AND (u.y = 1)) OR ((v.a = u.x) AND (v.b = 2)))
+row   ->  Seq Scan on u  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Materialize  (cost=0.00..43.90 rows=2260 width=8)
+row         ->  Seq Scan on v  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM u LEFT JOIN v ON (u.x = v.a AND u.y = 1) OR (u.x = v.a AND u.y = 2);
+fields QUERY PLAN:25:-1:-1
+row Merge Left Join  (cost=317.01..839.07 rows=2260 width=16)
+row   Merge Cond: (u.x = v.a)
+row   Join Filter: ((u.y = 1) OR (u.y = 2))
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: u.x
+row         ->  Seq Scan on u  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: v.a
+row         ->  Seq Scan on v  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT q, count(*) FROM t GROUP BY q HAVING (q = 1 AND count(*) > 1) OR (q = 1 AND count(*) < 0);
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=0.00..35.54 rows=1 width=12)
+row   Filter: ((count(*) > 1) OR (count(*) < 0))
+row   ->  Seq Scan on t  (cost=0.00..35.50 rows=10 width=4)
+row         Filter: (q = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE (q = 1 AND r = 2) OR (q = 1 AND r = 2 AND p = 5);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..40.60 rows=1 width=12)
+row   Filter: ((q = 1) AND (r = 2))
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE (q = 1 AND q = 1) OR (q = 1 AND r = 3);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..35.50 rows=10 width=12)
+row   Filter: (q = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE (q = 1 AND r = 2) OR (q = 1 AND p = NULL::int);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..40.60 rows=1 width=12)
+row   Filter: ((q = 1) AND (r = 2))
+EXPLAIN
+> SELECT * FROM t WHERE (q = 1 AND r = 2) OR (q = 1 AND r = 3);
+fields p@t.1:23:4:-1,q@t.2:23:4:-1,r@t.3:23:4:-1
+SELECT 0

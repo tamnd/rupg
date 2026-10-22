@@ -12,6 +12,8 @@ use rupg_types::{Array, Value, oid};
 
 use super::{agg, evaluate, null_test, relabel, volatile};
 
+mod prepqual;
+
 /// `subquery_planner`: folds the expressions of a query in the order of `preprocess_expression`, which is the target list, the conditions of the joins and `WHERE`, `HAVING`, `OFFSET` and `LIMIT`. The subqueries of each clause come after the clause, as `SS_process_sublinks` plans them. `params` has the values of the parameters of `Bind`, which a custom plan takes as constants.
 pub(crate) fn query(
     query: &Query,
@@ -65,8 +67,9 @@ fn plan(
         }
     }
     out.from = query.from.iter().map(|item| fold.join(item)).collect::<Result<_>>()?;
-    out.filter = fold.one(query.filter.as_ref())?;
-    out.having = fold.one(query.having.as_ref())?;
+    // `preprocess_expression` makes each condition canonical after it folds, as `canonicalize_qual`.
+    out.filter = fold.one(query.filter.as_ref())?.map(prepqual::canonicalize);
+    out.having = fold.one(query.having.as_ref())?.map(prepqual::canonicalize);
     out.offset = fold.one(query.offset.as_ref())?;
     if !simple {
         out.limit = fold.one(query.limit.as_ref())?;
@@ -511,7 +514,7 @@ impl<'a> Fold<'a> {
             let outer = std::mem::replace(&mut self.nulled, nulled);
             let result = self.one(Some(condition));
             self.nulled = outer;
-            on = result?;
+            on = result?.map(prepqual::canonicalize);
         }
         Ok(FromItem::Join(Box::new(Join {
             kind: join.kind,

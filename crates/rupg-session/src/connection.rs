@@ -5465,6 +5465,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_bitmap_or.test")));
     }
 
+    /// `EXPLAIN` of conditions of `WHERE`, `ON` and `HAVING` that `canonicalize_qual` changes: an `OR` drops an arm that is null, an `AND` with an arm that is null is false, and the conditions that each arm of an `OR` has go out of the `OR`, so that `(a = 1 AND b = 2) OR (a = 1 AND b = 3)` is `(a = 1) AND ((b = 2) OR (b = 3))`. `connection/plan_canonical_qual.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_canonical_qual() {
+        big_stack(|| script(include_str!("connection/plan_canonical_qual.test")));
+    }
+
     /// `EXPLAIN` of the bitmap heap scans of a table by its btree indexes, as `create_index_paths` makes them with `choose_bitmap_and` and the costs of `cost_bitmap_heap_scan`. `connection/plan_bitmap_scan.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_bitmap_scan() {
