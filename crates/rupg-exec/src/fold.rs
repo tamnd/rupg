@@ -8,7 +8,7 @@ use rupg_analyze::{
 use rupg_common::{Error, Result};
 use rupg_func::Session;
 use rupg_pgcatalog::builtin;
-use rupg_types::{Value, oid};
+use rupg_types::{Array, Value, oid};
 
 use super::{agg, evaluate, null_test, relabel, volatile};
 
@@ -28,6 +28,8 @@ fn plan(
     session: &dyn Session,
     exists: bool,
 ) -> Result<Query> {
+    let converted = values_to_any(query, params, session)?;
+    let query = converted.as_ref().unwrap_or(query);
     let mut fold = Fold::new(query, params, session);
     let mut out = query.clone();
     let mut simple = false;
@@ -104,6 +106,135 @@ fn plan(
         }
     }
     Ok(out)
+}
+
+/// `convert_VALUES_to_ANY` in `pull_up_sublinks`: the query with each part of `WHERE`, and of the `ON` of an inner, a left or a right join, that is `ANY` on a list of `VALUES` as `op ANY` of a constant array, as [`values_any`] makes it. `None` when no part is `ANY` on a subquery. The planner of PostgreSQL does this before it folds the query.
+fn values_to_any(
+    query: &Query,
+    params: Option<&[Value]>,
+    session: &dyn Session,
+) -> Result<Option<Query>> {
+    if query.from.is_empty() {
+        return Ok(None);
+    }
+    let mut ons = Vec::new();
+    for item in &query.from {
+        inner_ons(item, &mut ons);
+    }
+    let any = |e: &Expr, _| {
+        matches!(&e.kind, ExprKind::SubLink(link) if link.kind == SubLinkKind::Any).then_some(())
+    };
+    if !query.filter.iter().chain(ons).any(|e| e.find(0, &mut { any }).is_some()) {
+        return Ok(None);
+    }
+    let mut fold = Fold::new(query, params, session);
+    let mut out = query.clone();
+    if let Some(filter) = &mut out.filter {
+        parts_to_any(filter, &mut fold)?;
+    }
+    for item in &mut out.from {
+        on_to_any(item, &mut fold)?;
+    }
+    Ok(Some(out))
+}
+
+/// The conditions of `ON` of the inner, the left and the right joins of `item`, which [`values_to_any`] changes.
+fn inner_ons<'q>(item: &'q FromItem, out: &mut Vec<&'q Expr>) {
+    let FromItem::Join(join) = item else { return };
+    inner_ons(&join.left, out);
+    inner_ons(&join.right, out);
+    if matches!(join.kind, JoinKind::Inner | JoinKind::Left | JoinKind::Right) {
+        out.extend(&join.on);
+    }
+}
+
+/// [`values_to_any`] for the `ON` of each join of `item`.
+fn on_to_any(item: &mut FromItem, fold: &mut Fold<'_>) -> Result<()> {
+    let FromItem::Join(join) = item else { return Ok(()) };
+    on_to_any(&mut join.left, fold)?;
+    on_to_any(&mut join.right, fold)?;
+    match &mut join.on {
+        Some(on) if matches!(join.kind, JoinKind::Inner | JoinKind::Left | JoinKind::Right) => {
+            parts_to_any(on, fold)
+        }
+        _ => Ok(()),
+    }
+}
+
+/// [`values_any`] for each part of the `AND` of `expr`.
+fn parts_to_any(expr: &mut Expr, fold: &mut Fold<'_>) -> Result<()> {
+    match &mut expr.kind {
+        ExprKind::Bool(BoolOp::And, args) => {
+            for arg in args {
+                parts_to_any(arg, fold)?;
+            }
+        }
+        ExprKind::SubLink(link) if link.kind == SubLinkKind::Any => {
+            if let Some(new) = values_any(link, fold)? {
+                *expr = new;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// `convert_VALUES_to_ANY`: `x op ANY (VALUES (a), (b))` is `x op ANY ('{a,b}')` when the test is one operator, the subquery is a list of `VALUES` with one column and two rows at least and no `LIMIT`, `OFFSET` or `ORDER BY`, and the right side of the operator with the value of each row folds to a constant. The list calls no volatile function and reads no column.
+fn values_any(link: &SubLink, fold: &mut Fold<'_>) -> Result<Option<Expr>> {
+    let Some(test) = &link.test else { return Ok(None) };
+    let ExprKind::Func(Func { oid: func, form: FuncForm::Operator(_), args, .. }) = &test.kind
+    else {
+        return Ok(None);
+    };
+    let [left, right] = args.as_slice() else { return Ok(None) };
+    let sub = &link.query;
+    let ([target], [relation]) = (sub.targets.as_slice(), sub.relations.as_slice()) else {
+        return Ok(None);
+    };
+    let Some(rows) = relation.values.as_ref().filter(|rows| rows.len() > 1) else {
+        return Ok(None);
+    };
+    let array = rupg_analyze::types::array_of(right.ty);
+    let column = match target.expr.kind {
+        ExprKind::Var(Var { relation: 0, attnum, levels_up: 0 }) => {
+            usize::try_from(attnum - 1).ok()
+        }
+        _ => None,
+    };
+    let other = |e: &Expr, _| {
+        matches!(e.kind, ExprKind::Var(_) | ExprKind::SubLink(_) | ExprKind::SubColumn(_))
+            .then_some(())
+    };
+    if sub.limit.is_some()
+        || sub.offset.is_some()
+        || !sub.sort.is_empty()
+        || sub.set_op.is_some()
+        || array == 0
+        || rows.iter().flatten().any(|e| volatile(e) || e.find(0, &mut { other }).is_some())
+    {
+        return Ok(None);
+    }
+    let Some(column) = column else { return Ok(None) };
+    let mut values = Vec::with_capacity(rows.len());
+    for row in rows {
+        let Some(value) = row.get(column) else { return Ok(None) };
+        let mut expr = right.clone();
+        expr.each_mut(0, &mut |e, depth| {
+            if depth == 0 && matches!(e.kind, ExprKind::SubColumn(0)) {
+                *e = value.clone();
+                return true;
+            }
+            false
+        });
+        match fold.expr(&expr)?.kind {
+            ExprKind::Const(Value::Null) => values.push(None),
+            ExprKind::Const(value) => values.push(Some(value)),
+            _ => return Ok(None),
+        }
+    }
+    let array = Expr::new(ExprKind::Const(Value::Array(Box::new(Array::one(values)))), array);
+    let args = vec![left.clone(), array];
+    Ok(Some(Expr::new(ExprKind::ScalarArrayOp { func: *func, any: true, args }, oid::BOOL)))
 }
 
 /// `is_simple_subquery` of `prepjointree.c`: true when the planner pulls the subquery in `FROM` up into the query, so that its expressions fold where the query reads them. Such a subquery has no aggregate, `GROUP BY`, `HAVING`, `ORDER BY`, `DISTINCT`, `OFFSET` or `LIMIT`, and no volatile function and no function that gives a set in its target list.

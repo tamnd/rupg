@@ -1,0 +1,264 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (x int, y int, z text);
+CREATE TABLE
+> EXPLAIN SELECT * FROM a WHERE x IN (VALUES (1), (2));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..25.00 rows=12 width=40)
+row   Filter: (x = ANY ('{1,2}'::integer[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x IN (VALUES (1), (2), (3));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..26.50 rows=18 width=40)
+row   Filter: (x = ANY ('{1,2,3}'::integer[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x IN (VALUES (1), (NULL));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..25.00 rows=6 width=40)
+row   Filter: (x = ANY ('{1,NULL}'::integer[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x IN (VALUES (1), (2 + 3));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..25.00 rows=12 width=40)
+row   Filter: (x = ANY ('{1,5}'::integer[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x IN (VALUES (1), (random()::int));
+fields QUERY PLAN:25:-1:-1
+row Hash Semi Join  (cost=0.05..25.33 rows=12 width=40)
+row   Hash Cond: (a.x = "*VALUES*".column1)
+row   ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=40)
+row   ->  Hash  (cost=0.03..0.03 rows=2 width=4)
+row         ->  Values Scan on "*VALUES*"  (cost=0.00..0.03 rows=2 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x IN (VALUES (1::bigint), (2));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..25.00 rows=12 width=40)
+row   Filter: (x = ANY ('{1,2}'::bigint[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x IN (VALUES (1.5), (2));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..28.00 rows=12 width=40)
+row   Filter: ((x)::numeric = ANY ('{1.5,2}'::numeric[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE z IN (VALUES ('a'), ('b'));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..25.00 rows=12 width=40)
+row   Filter: (z = ANY ('{a,b}'::text[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE z IN (VALUES ('a'::varchar), ('b'));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..25.00 rows=12 width=40)
+row   Filter: (z = ANY ('{a,b}'::text[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x NOT IN (VALUES (1), (2));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.03..25.03 rows=600 width=40)
+row   Filter: (NOT (ANY (x = (hashed SubPlan any_1).col1)))
+row   SubPlan any_1
+row     ->  Values Scan on "*VALUES*"  (cost=0.00..0.03 rows=2 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE NOT x IN (VALUES (1), (2));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.03..25.03 rows=600 width=40)
+row   Filter: (NOT (ANY (x = (hashed SubPlan any_1).col1)))
+row   SubPlan any_1
+row     ->  Values Scan on "*VALUES*"  (cost=0.00..0.03 rows=2 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x = ANY (VALUES (1), (2));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..25.00 rows=12 width=40)
+row   Filter: (x = ANY ('{1,2}'::integer[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x < ANY (VALUES (1), (2));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..25.00 rows=667 width=40)
+row   Filter: (x < ANY ('{1,2}'::integer[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE (x, y) IN (VALUES (1, 2), (3, 4));
+fields QUERY PLAN:25:-1:-1
+row Hash Semi Join  (cost=0.06..28.36 rows=1 width=40)
+row   Hash Cond: ((a.x = "*VALUES*".column1) AND (a.y = "*VALUES*".column2))
+row   ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=40)
+row   ->  Hash  (cost=0.03..0.03 rows=2 width=8)
+row         ->  Values Scan on "*VALUES*"  (cost=0.00..0.03 rows=2 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x IN (VALUES (1), (2) LIMIT 1);
+fields QUERY PLAN:25:-1:-1
+row Hash Semi Join  (cost=0.03..25.24 rows=6 width=40)
+row   Hash Cond: (a.x = "*VALUES*".column1)
+row   ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=40)
+row   ->  Hash  (cost=0.01..0.01 rows=1 width=4)
+row         ->  Limit  (cost=0.00..0.01 rows=1 width=4)
+row               ->  Values Scan on "*VALUES*"  (cost=0.00..0.03 rows=2 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x IN (VALUES (1), (2) ORDER BY 1);
+fields QUERY PLAN:25:-1:-1
+row Hash Semi Join  (cost=0.07..25.35 rows=12 width=40)
+row   Hash Cond: (a.x = "*VALUES*".column1)
+row   ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=40)
+row   ->  Hash  (cost=0.04..0.04 rows=2 width=4)
+row         ->  Sort  (cost=0.04..0.04 rows=2 width=4)
+row               Sort Key: "*VALUES*".column1
+row               ->  Values Scan on "*VALUES*"  (cost=0.00..0.03 rows=2 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x IN (SELECT * FROM (VALUES (1), (2)) v);
+fields QUERY PLAN:25:-1:-1
+row Hash Semi Join  (cost=0.05..25.33 rows=12 width=40)
+row   Hash Cond: (a.x = "*VALUES*".column1)
+row   ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=40)
+row   ->  Hash  (cost=0.03..0.03 rows=2 width=4)
+row         ->  Values Scan on "*VALUES*"  (cost=0.00..0.03 rows=2 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x IN (SELECT v.c FROM (VALUES (1), (2)) v(c));
+fields QUERY PLAN:25:-1:-1
+row Hash Semi Join  (cost=0.05..25.33 rows=12 width=40)
+row   Hash Cond: (a.x = "*VALUES*".column1)
+row   ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=40)
+row   ->  Hash  (cost=0.03..0.03 rows=2 width=4)
+row         ->  Values Scan on "*VALUES*"  (cost=0.00..0.03 rows=2 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x IN (SELECT v.c + 1 FROM (VALUES (1), (2)) v(c));
+fields QUERY PLAN:25:-1:-1
+row Hash Semi Join  (cost=0.05..25.50 rows=12 width=40)
+row   Hash Cond: (a.x = ("*VALUES*".column1 + 1))
+row   ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=40)
+row   ->  Hash  (cost=0.03..0.03 rows=2 width=4)
+row         ->  Values Scan on "*VALUES*"  (cost=0.00..0.03 rows=2 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x + 1 IN (VALUES (1), (2));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..28.00 rows=12 width=40)
+row   Filter: ((x + 1) = ANY ('{1,2}'::integer[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE y > 0 AND x IN (VALUES (1), (2));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..28.00 rows=4 width=40)
+row   Filter: ((y > 0) AND (x = ANY ('{1,2}'::integer[])))
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x IN (VALUES (1), (2)) OR y = 3;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.03..28.03 rows=603 width=40)
+row   Filter: ((ANY (x = (hashed SubPlan any_1).col1)) OR (y = 3))
+row   SubPlan any_1
+row     ->  Values Scan on "*VALUES*"  (cost=0.00..0.03 rows=2 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x IN (VALUES (1), (2)) AND y IN (VALUES (5), (6));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..28.00 rows=1 width=40)
+row   Filter: ((x = ANY ('{1,2}'::integer[])) AND (y = ANY ('{5,6}'::integer[])))
+EXPLAIN
+> EXPLAIN SELECT * FROM a a1 JOIN a a2 ON a1.x = a2.x WHERE a1.y IN (VALUES (1), (2));
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=25.15..52.37 rows=72 width=80)
+row   Hash Cond: (a2.x = a1.x)
+row   ->  Seq Scan on a a2  (cost=0.00..22.00 rows=1200 width=40)
+row   ->  Hash  (cost=25.00..25.00 rows=12 width=40)
+row         ->  Seq Scan on a a1  (cost=0.00..25.00 rows=12 width=40)
+row               Filter: (y = ANY ('{1,2}'::integer[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM a a1 LEFT JOIN a a2 ON a1.x = a2.x AND a2.y IN (VALUES (1), (2));
+fields QUERY PLAN:25:-1:-1
+row Hash Left Join  (cost=25.15..52.37 rows=1200 width=80)
+row   Hash Cond: (a1.x = a2.x)
+row   ->  Seq Scan on a a1  (cost=0.00..22.00 rows=1200 width=40)
+row   ->  Hash  (cost=25.00..25.00 rows=12 width=40)
+row         ->  Seq Scan on a a2  (cost=0.00..25.00 rows=12 width=40)
+row               Filter: (y = ANY ('{1,2}'::integer[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x IN (VALUES (1), ('2'));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..25.00 rows=12 width=40)
+row   Filter: (x = ANY ('{1,2}'::integer[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE z IN (VALUES ('a' || 'b'), ('c'));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..25.00 rows=12 width=40)
+row   Filter: (z = ANY ('{ab,c}'::text[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x IN (VALUES ($$1$$::int), (2));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..25.00 rows=12 width=40)
+row   Filter: (x = ANY ('{1,2}'::integer[]))
+EXPLAIN
+> CREATE TABLE n (x numeric, v varchar);
+CREATE TABLE
+> EXPLAIN SELECT * FROM n WHERE x IN (VALUES (1), (2));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on n  (cost=0.00..21.00 rows=9 width=64)
+row   Filter: (x = ANY ('{1,2}'::numeric[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM n WHERE v IN (VALUES ('a'), ('b'));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on n  (cost=0.00..21.00 rows=9 width=64)
+row   Filter: ((v)::text = ANY ('{a,b}'::text[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM n WHERE v IN (VALUES ('a'::text), ('b'));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on n  (cost=0.00..21.00 rows=9 width=64)
+row   Filter: ((v)::text = ANY ('{a,b}'::text[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM a a1 RIGHT JOIN a a2 ON a1.x = a2.x AND a1.y IN (VALUES (1), (2));
+fields QUERY PLAN:25:-1:-1
+row Hash Left Join  (cost=25.15..52.37 rows=1200 width=80)
+row   Hash Cond: (a2.x = a1.x)
+row   ->  Seq Scan on a a2  (cost=0.00..22.00 rows=1200 width=40)
+row   ->  Hash  (cost=25.00..25.00 rows=12 width=40)
+row         ->  Seq Scan on a a1  (cost=0.00..25.00 rows=12 width=40)
+row               Filter: (y = ANY ('{1,2}'::integer[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM a a1 FULL JOIN a a2 ON a1.x = a2.x AND a1.y IN (VALUES (1), (2));
+fields QUERY PLAN:25:-1:-1
+row Hash Full Join  (cost=37.03..332.03 rows=3600 width=80)
+row   Hash Cond: (a1.x = a2.x)
+row   Join Filter: (ANY (a1.y = (hashed SubPlan any_1).col1))
+row   ->  Seq Scan on a a1  (cost=0.00..22.00 rows=1200 width=40)
+row   ->  Hash  (cost=22.00..22.00 rows=1200 width=40)
+row         ->  Seq Scan on a a2  (cost=0.00..22.00 rows=1200 width=40)
+row   SubPlan any_1
+row     ->  Values Scan on "*VALUES*"  (cost=0.00..0.03 rows=2 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a a1 JOIN a a2 ON a1.x = a2.x AND a1.y IN (VALUES (1), (2));
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=25.15..52.37 rows=72 width=80)
+row   Hash Cond: (a2.x = a1.x)
+row   ->  Seq Scan on a a2  (cost=0.00..22.00 rows=1200 width=40)
+row   ->  Hash  (cost=25.00..25.00 rows=12 width=40)
+row         ->  Seq Scan on a a1  (cost=0.00..25.00 rows=12 width=40)
+row               Filter: (y = ANY ('{1,2}'::integer[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE EXISTS (SELECT 1 FROM a b WHERE b.x = a.x AND b.y IN (VALUES (1), (2)));
+fields QUERY PLAN:25:-1:-1
+row Hash Semi Join  (cost=25.15..51.10 rows=72 width=40)
+row   Hash Cond: (a.x = b.x)
+row   ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=40)
+row   ->  Hash  (cost=25.00..25.00 rows=12 width=4)
+row         ->  Seq Scan on a b  (cost=0.00..25.00 rows=12 width=4)
+row               Filter: (y = ANY ('{1,2}'::integer[]))
+EXPLAIN
+> EXPLAIN UPDATE a SET y = 0 WHERE x IN (VALUES (1), (2));
+fields QUERY PLAN:25:-1:-1
+row Update on a  (cost=0.00..25.00 rows=0 width=0)
+row   ->  Seq Scan on a  (cost=0.00..25.00 rows=12 width=10)
+row         Filter: (x = ANY ('{1,2}'::integer[]))
+EXPLAIN
+> EXPLAIN DELETE FROM a WHERE x IN (VALUES (1), (2));
+fields QUERY PLAN:25:-1:-1
+row Delete on a  (cost=0.00..25.00 rows=0 width=0)
+row   ->  Seq Scan on a  (cost=0.00..25.00 rows=12 width=6)
+row         Filter: (x = ANY ('{1,2}'::integer[]))
+EXPLAIN
+> INSERT INTO a SELECT g % 10, g % 7, g::text FROM generate_series(1, 100) g;
+INSERT 0 100
+> SELECT count(*) FROM a WHERE x IN (VALUES (1), (2));
+fields count:20:8:-1
+row 20
+SELECT 1
+> SELECT count(*) FROM a WHERE x IN (VALUES (1), (NULL));
+fields count:20:8:-1
+row 10
+SELECT 1
+> SELECT count(*) FROM a WHERE x NOT IN (VALUES (1), (2));
+fields count:20:8:-1
+row 80
+SELECT 1
