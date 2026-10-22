@@ -330,7 +330,23 @@ struct JoinTree<'q> {
     /// The conditions above an outer join, which the join tests on its rows with the nulls.
     filter: Vec<Qual<'q>>,
     rels: BTreeSet<usize>,
+    /// The relations that the condition of `ON` reads, as `pull_varnos` of the condition in `make_outerjoininfo`.
+    clause: BTreeSet<usize>,
     /// For a semi join, the values of the inner side that make its rows unique, as `compute_semijoin_info` finds them.
+    semi: Option<Semi<'q>>,
+}
+
+/// A semi join or an anti join of a join domain, as a `SpecialJoinInfo`. The inner side is one item of the domain, and the order of the joins of the domain can join the other items in any order that `join_is_legal` accepts.
+#[derive(Debug)]
+struct Special<'q> {
+    kind: JoinKind,
+    /// `min_lefthand`: the relations of the outer side that the condition reads, or each relation of the outer side when it reads none.
+    left: BTreeSet<usize>,
+    /// `min_righthand` and `syn_righthand`: the relations of the inner side.
+    right: BTreeSet<usize>,
+    /// The conditions of an anti join, which only the join tests. The conditions of a semi join are conditions of the domain.
+    quals: Vec<Qual<'q>>,
+    filter: Vec<Qual<'q>>,
     semi: Option<Semi<'q>>,
 }
 
@@ -420,12 +436,13 @@ impl<'q> Builder<'q> {
         }
         reduce(&mut tree, &nonnullable);
         let mut next = 0;
-        place_on(&mut tree, &mut next);
+        place_below_sublinks(&mut tree, &mut next);
         for mut qual in quals {
             qual.order = Some(next);
             next += 1;
             place(&mut tree, qual);
         }
+        place_on(&mut tree, &mut next);
         let mut found = classes::Found::default();
         if !classes::domain(&mut tree, true, &mut found) {
             return (vec![(dummy(level.scope, &all), Vec::new())], Vec::new(), Stats::default());
@@ -483,41 +500,20 @@ impl<'q> Builder<'q> {
     ) -> Vec<Rel<'q>> {
         match tree {
             Tree::Base { relation, quals } => vec![self.scan(level, relation, quals, stats)],
-            Tree::Join(join) if join.kind == JoinKind::Inner => {
-                let (mut items, mut pool) = (Vec::new(), Vec::new());
-                flatten(Tree::Join(join), &mut items, &mut pool);
+            Tree::Join(join)
+                if matches!(join.kind, JoinKind::Inner | JoinKind::Semi | JoinKind::Anti) =>
+            {
+                let (mut items, mut pool, mut specials) = (Vec::new(), Vec::new(), Vec::new());
+                flatten(Tree::Join(join), &mut items, &mut pool, &mut specials);
                 pool.sort_by_key(|q| q.order.unwrap_or(usize::MAX));
                 let rels = items.into_iter().map(|t| self.build(level, t, found, stats)).collect();
-                search::search(level, rels, &pool, found, stats)
+                search::search(level, rels, &pool, specials, found, stats)
             }
             Tree::Join(join) => {
-                let JoinTree { kind, left, right, mut quals, filter, semi, .. } = *join;
+                let JoinTree { kind, left, right, quals, filter, .. } = *join;
                 let left = self.build(level, left, found, stats);
                 let right = self.build(level, right, found, stats);
-                match kind {
-                    JoinKind::Semi | JoinKind::Anti => {
-                        // A semi join is in the join domain of its parent, so its conditions of the classes come back as the conditions of an inner join do.
-                        if kind == JoinKind::Semi {
-                            let (l, r) = (&left[0].rels, &right[0].rels);
-                            quals.extend(found.classes.iter().filter_map(|c| c.condition(l, r)));
-                            // `reduce_unique_semijoins`: a semi join whose inner side is one table that the conditions make unique is an inner join.
-                            if semifactors(&left[0], &right[0], &quals, stats).is_some() {
-                                return join_rels(
-                                    level,
-                                    JoinKind::Inner,
-                                    left,
-                                    right,
-                                    quals,
-                                    filter,
-                                    stats,
-                                );
-                            }
-                        }
-                        let semi = semi.as_ref();
-                        semi_rels(level, kind, semi, left, right, quals, filter, stats)
-                    }
-                    _ => join_rels(level, kind, left, right, quals, filter, stats),
-                }
+                join_rels(level, kind, left, right, quals, filter, stats)
             }
         }
     }
@@ -877,6 +873,7 @@ fn join_tree<'q>(kind: JoinKind, left: Tree<'q>, right: Tree<'q>, on: Vec<&'q Ex
     let mut rels = left.rels();
     rels.extend(right.rels());
     let semi = if kind == JoinKind::Semi { semi_info(&on, &right.rels()) } else { None };
+    let clause = on.iter().flat_map(|part| exprs::relations(part)).collect();
     Tree::Join(Box::new(JoinTree {
         kind,
         left,
@@ -885,6 +882,7 @@ fn join_tree<'q>(kind: JoinKind, left: Tree<'q>, right: Tree<'q>, on: Vec<&'q Ex
         quals: Vec::new(),
         filter: Vec::new(),
         rels,
+        clause,
         semi,
     }))
 }
@@ -1076,6 +1074,16 @@ fn reduce(tree: &mut Tree<'_>, above: &BTreeSet<usize>) {
     };
     reduce(&mut join.left, &left);
     reduce(&mut join.right, &right);
+}
+
+/// `pull_up_sublinks`: the semi joins and the anti joins of the parts of `WHERE` are a chain of left sides at the top of the tree, and each one has the items of `FROM` with the conditions of `WHERE` as its left side. So `deconstruct_jointree` reads the conditions of `ON` of the items, then the conditions of `WHERE`, and then the inner side and the condition of each join of the chain. This gives the conditions of `ON` below the chain their places. `place_on` then gives the places of the rest.
+fn place_below_sublinks<'q>(tree: &mut Tree<'q>, next: &mut usize) {
+    match tree {
+        Tree::Join(join) if matches!(join.kind, JoinKind::Semi | JoinKind::Anti) => {
+            place_below_sublinks(&mut join.left, next);
+        }
+        _ => place_on(tree, next),
+    }
 }
 
 /// Gives each part of the condition of `ON` of each join its place. A part of a left join that reads only the nullable side goes to that side. `next` is the place of the next condition in the order of `deconstruct_jointree`.
@@ -1434,7 +1442,7 @@ fn semi_rels<'q>(
         paths.add(candidate.startup, candidate.total, keys, (candidate, false));
     }
     if let Some(unique) = &unique {
-        let part = Part::Unique(fraction);
+        let part = Part::Unique(fraction, true);
         let inner = JoinKind::Inner;
         for (candidate, keys) in choose(level, inner, &left, unique, &quals, &filter, stats, part) {
             paths.add(candidate.startup, candidate.total, keys, (candidate, true));
@@ -1603,8 +1611,8 @@ enum Part {
     Plain,
     /// The semi join or the anti join itself, with the fraction of the outer rows that have a match.
     Semi(f64),
-    /// An inner join with the unique rows of the inner side of a semi join, as `JOIN_UNIQUE_INNER` and `JOIN_UNIQUE_OUTER`, with the fraction of the semi join.
-    Unique(f64),
+    /// An inner join with the unique rows of the inner side of a semi join, as `JOIN_UNIQUE_INNER` and `JOIN_UNIQUE_OUTER`, with the fraction of the semi join, and true when the outer side has all the outer relations of the semi join, so that the unique rows are unique for it.
+    Unique(f64, bool),
 }
 
 /// The rows of a join of two sides, as `calc_joinrel_size_estimate`.
@@ -1658,14 +1666,14 @@ fn choose<'q>(
             (JoinKind::Anti, true) => JoinKind::RightAnti,
             (k, _) => k,
         };
-        let index = semifactors(&outers[0], &inners[0], quals, stats);
+        let index = semifactors(&outers[0].rels, &inners[0], quals, stats);
         // `inner_unique`: a semi join does not prove it, and the unique rows of the inner side of a semi join have it. The factors are for a semi join, an anti join and a join whose inner side is unique.
         let (inner_unique, unique) = match part {
             Part::Plain => (index.is_some(), index),
-            Part::Semi(fraction) | Part::Unique(fraction) => {
-                let inner_unique = match join {
-                    JoinKind::Semi => false,
-                    JoinKind::Inner if !swapped => true,
+            Part::Semi(fraction) | Part::Unique(fraction, _) => {
+                let inner_unique = match (join, part) {
+                    (JoinKind::Semi, _) => false,
+                    (JoinKind::Inner, Part::Unique(_, whole)) if !swapped => whole,
                     _ => index.is_some(),
                 };
                 let semi = matches!(join, JoinKind::Semi | JoinKind::Anti);
@@ -1674,7 +1682,7 @@ fn choose<'q>(
             }
         };
         let made = match part {
-            Part::Unique(_) => (swapped, !swapped),
+            Part::Unique(..) => (swapped, !swapped),
             _ => (false, false),
         };
         let input = Input {
@@ -1736,19 +1744,57 @@ fn finish<'q>(
     out
 }
 
-/// The items of the problem of the order of the joins of a join domain, as the list of `deconstruct_jointree`, and the conditions of its inner joins. A condition with no column has the relations of its join.
-fn flatten<'q>(tree: Tree<'q>, items: &mut Vec<Tree<'q>>, pool: &mut Vec<Qual<'q>>) {
-    match tree {
-        Tree::Join(join) if join.kind == JoinKind::Inner => {
-            let JoinTree { left, right, quals, filter, rels, .. } = *join;
-            flatten(left, items, pool);
-            flatten(right, items, pool);
-            for qual in quals.into_iter().chain(filter) {
-                let rels = if qual.rels.is_empty() { rels.clone() } else { qual.rels.clone() };
-                pool.push(Qual { rels, ..qual });
-            }
+/// The items of the problem of the order of the joins of a join domain, as the list of `deconstruct_jointree`, the conditions of its inner joins and its semi joins, and its semi joins and anti joins, as `make_outerjoininfo` makes them. The inner side of a semi join or an anti join is one item. A condition with no column has the relations of its join.
+fn flatten<'q>(
+    tree: Tree<'q>,
+    items: &mut Vec<Tree<'q>>,
+    pool: &mut Vec<Qual<'q>>,
+    specials: &mut Vec<Special<'q>>,
+) {
+    let Tree::Join(join) = tree else {
+        items.push(tree);
+        return;
+    };
+    let JoinTree { kind, left, right, quals, filter, rels, clause, semi, .. } = *join;
+    let add = |quals: Vec<Qual<'q>>, pool: &mut Vec<Qual<'q>>| {
+        for qual in quals {
+            let rels = if qual.rels.is_empty() { rels.clone() } else { qual.rels.clone() };
+            pool.push(Qual { rels, ..qual });
         }
-        other => items.push(other),
+    };
+    match kind {
+        JoinKind::Inner => {
+            flatten(left, items, pool, specials);
+            flatten(right, items, pool, specials);
+            add(quals.into_iter().chain(filter).collect(), pool);
+        }
+        JoinKind::Semi | JoinKind::Anti => {
+            let (outer, right_rels) = (left.rels(), right.rels());
+            flatten(left, items, pool, specials);
+            items.push(right);
+            let mut min_left: BTreeSet<usize> = clause.intersection(&outer).copied().collect();
+            if min_left.is_empty() {
+                min_left = outer;
+            }
+            let quals = if kind == JoinKind::Semi {
+                add(quals, pool);
+                Vec::new()
+            } else {
+                quals
+            };
+            specials.push(Special { kind, left: min_left, right: right_rels, quals, filter, semi });
+        }
+        _ => items.push(Tree::Join(Box::new(JoinTree {
+            kind,
+            left,
+            right,
+            on: Vec::new(),
+            quals,
+            filter,
+            rels,
+            clause,
+            semi,
+        }))),
     }
 }
 
@@ -1797,7 +1843,7 @@ struct Input<'a, 'q> {
 
 /// `innerrel_is_unique` and `compute_semi_anti_join_factors`: when the inner side is one table with a unique index that is immediate, has no predicate and has each of its key columns in an `=` condition of the join with a value of the outer side, the fraction of the outer rows that have a match and the number of inner rows that each of them matches. A join with no other condition is a join of the inner rows with no condition, so that the fraction is the selectivity of the conditions of the join.
 fn semifactors(
-    outer: &Rel<'_>,
+    outer: &BTreeSet<usize>,
     inner: &Rel<'_>,
     quals: &[Qual<'_>],
     stats: &Stats,
@@ -1807,7 +1853,7 @@ fn semifactors(
         return None;
     }
     let indexes = stats.distinct.get(&r)?;
-    let (clauses, _) = split(quals, &outer.rels, &inner.rels, exprs::can_merge);
+    let (clauses, _) = split(quals, outer, &inner.rels, exprs::can_merge);
     let columns: BTreeSet<i16> = clauses
         .iter()
         .filter_map(|c| plain_var(&c.inner))

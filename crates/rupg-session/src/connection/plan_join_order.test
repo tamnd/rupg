@@ -1,0 +1,223 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE b (x int, y int);
+CREATE TABLE
+> CREATE TABLE c (x int, z text);
+CREATE TABLE
+> CREATE TABLE d (x int PRIMARY KEY, y int);
+CREATE TABLE
+> CREATE TABLE n (x int NOT NULL, y int NOT NULL);
+CREATE TABLE
+> EXPLAIN SELECT * FROM c LEFT JOIN b ON b.x = c.x LEFT JOIN d ON d.x = c.x WHERE b.x IS NULL AND d.x IS NULL;
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=121.70..167.15 rows=318 width=52)
+row   Hash Cond: (c.x = b.x)
+row   ->  Hash Anti Join  (cost=60.85..93.95 rows=635 width=44)
+row         Hash Cond: (c.x = d.x)
+row         ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row         ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row               ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE EXISTS (SELECT 1 FROM b WHERE b.x = c.x) AND EXISTS (SELECT 1 FROM n WHERE n.x = c.x);
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=85.50..123.80 rows=318 width=36)
+row   Hash Cond: (b.x = n.x)
+row   ->  Hash Join  (cost=42.75..75.85 rows=635 width=40)
+row         Hash Cond: (c.x = b.x)
+row         ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row         ->  Hash  (cost=40.25..40.25 rows=200 width=4)
+row               ->  HashAggregate  (cost=38.25..40.25 rows=200 width=4)
+row                     Group Key: b.x
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Hash  (cost=40.25..40.25 rows=200 width=4)
+row         ->  HashAggregate  (cost=38.25..40.25 rows=200 width=4)
+row               Group Key: n.x
+row               ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE NOT EXISTS (SELECT 1 FROM b WHERE b.x = c.x) AND NOT EXISTS (SELECT 1 FROM n WHERE n.x = c.x);
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=121.70..181.44 rows=318 width=36)
+row   Hash Cond: (c.x = n.x)
+row   ->  Hash Anti Join  (cost=60.85..108.24 rows=635 width=36)
+row         Hash Cond: (c.x = b.x)
+row         ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row         ->  Hash  (cost=32.60..32.60 rows=2260 width=4)
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=4)
+row         ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE EXISTS (SELECT 1 FROM b WHERE b.x = c.x) AND NOT EXISTS (SELECT 1 FROM n WHERE n.y = c.x);
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=103.60..149.05 rows=318 width=36)
+row   Hash Cond: (c.x = n.y)
+row   ->  Hash Join  (cost=42.75..75.85 rows=635 width=36)
+row         Hash Cond: (c.x = b.x)
+row         ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row         ->  Hash  (cost=40.25..40.25 rows=200 width=4)
+row               ->  HashAggregate  (cost=38.25..40.25 rows=200 width=4)
+row                     Group Key: b.x
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=4)
+row         ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c, b WHERE b.y = c.x AND EXISTS (SELECT 1 FROM n WHERE n.x = b.x);
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=239.33..352.62 rows=7176 width=44)
+row   Merge Cond: (b.y = c.x)
+row   ->  Sort  (cost=151.16..153.98 rows=1130 width=8)
+row         Sort Key: b.y
+row         ->  Hash Join  (cost=42.75..93.85 rows=1130 width=8)
+row               Hash Cond: (b.x = n.x)
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Hash  (cost=40.25..40.25 rows=200 width=4)
+row                     ->  HashAggregate  (cost=38.25..40.25 rows=200 width=4)
+row                           Group Key: n.x
+row                           ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Sort  (cost=88.17..91.35 rows=1270 width=36)
+row         Sort Key: c.x
+row         ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+EXPLAIN
+> EXPLAIN SELECT * FROM c, b WHERE b.y = c.x AND NOT EXISTS (SELECT 1 FROM n WHERE n.x = b.x);
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=282.85..396.14 rows=7176 width=44)
+row   Merge Cond: (b.y = c.x)
+row   ->  Sort  (cost=194.68..197.51 rows=1130 width=8)
+row         Sort Key: b.y
+row         ->  Hash Anti Join  (cost=60.85..137.38 rows=1130 width=8)
+row               Hash Cond: (b.x = n.x)
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Hash  (cost=32.60..32.60 rows=2260 width=4)
+row                     ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Sort  (cost=88.17..91.35 rows=1270 width=36)
+row         Sort Key: c.x
+row         ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+EXPLAIN
+> EXPLAIN SELECT * FROM c, b WHERE b.y = c.x AND b.x IN (SELECT n.x FROM n);
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=239.33..352.62 rows=7176 width=44)
+row   Merge Cond: (b.y = c.x)
+row   ->  Sort  (cost=151.16..153.98 rows=1130 width=8)
+row         Sort Key: b.y
+row         ->  Hash Join  (cost=42.75..93.85 rows=1130 width=8)
+row               Hash Cond: (b.x = n.x)
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Hash  (cost=40.25..40.25 rows=200 width=4)
+row                     ->  HashAggregate  (cost=38.25..40.25 rows=200 width=4)
+row                           Group Key: n.x
+row                           ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Sort  (cost=88.17..91.35 rows=1270 width=36)
+row         Sort Key: c.x
+row         ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+EXPLAIN
+> EXPLAIN SELECT * FROM c, b WHERE (c.x, b.y) IN (SELECT n.x, n.y FROM n);
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=261.08..374.37 rows=7176 width=44)
+row   Merge Cond: (n.x = c.x)
+row   ->  Sort  (cost=172.90..175.73 rows=1130 width=12)
+row         Sort Key: n.x
+row         ->  Hash Join  (cost=48.99..115.60 rows=1130 width=12)
+row               Hash Cond: (b.y = n.y)
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Hash  (cost=46.16..46.16 rows=226 width=8)
+row                     ->  HashAggregate  (cost=43.90..46.16 rows=226 width=8)
+row                           Group Key: n.x, n.y
+row                           ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Sort  (cost=88.17..91.35 rows=1270 width=36)
+row         Sort Key: c.x
+row         ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+EXPLAIN
+> EXPLAIN SELECT * FROM c, b WHERE b.x = c.x AND c.x IN (SELECT d.y FROM d);
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=251.90..365.19 rows=7176 width=44)
+row   Merge Cond: (b.x = c.x)
+row   ->  Sort  (cost=163.73..166.55 rows=1130 width=12)
+row         Sort Key: b.x
+row         ->  Hash Join  (cost=42.75..106.43 rows=1130 width=12)
+row               Hash Cond: (b.x = d.y)
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Hash  (cost=40.25..40.25 rows=200 width=4)
+row                     ->  HashAggregate  (cost=38.25..40.25 rows=200 width=4)
+row                           Group Key: d.y
+row                           ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Sort  (cost=88.17..91.35 rows=1270 width=36)
+row         Sort Key: c.x
+row         ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE c.x IN (SELECT b.y FROM b) AND c.x IN (SELECT n.y FROM n);
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=85.50..123.80 rows=318 width=36)
+row   Hash Cond: (c.x = n.y)
+row   ->  Hash Join  (cost=42.75..75.85 rows=635 width=40)
+row         Hash Cond: (c.x = b.y)
+row         ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row         ->  Hash  (cost=40.25..40.25 rows=200 width=4)
+row               ->  HashAggregate  (cost=38.25..40.25 rows=200 width=4)
+row                     Group Key: b.y
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Hash  (cost=40.25..40.25 rows=200 width=4)
+row         ->  HashAggregate  (cost=38.25..40.25 rows=200 width=4)
+row               Group Key: n.y
+row               ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c JOIN b ON b.x = c.x WHERE NOT EXISTS (SELECT 1 FROM n WHERE n.x = c.x) AND NOT EXISTS (SELECT 1 FROM d WHERE d.x = b.y);
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=177.02..357.23 rows=3588 width=44)
+row   Hash Cond: (b.x = c.x)
+row   ->  Hash Anti Join  (cost=60.85..111.95 rows=1130 width=8)
+row         Hash Cond: (b.y = d.x)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Hash  (cost=32.60..32.60 rows=2260 width=4)
+row               ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Hash  (cost=108.24..108.24 rows=635 width=36)
+row         ->  Hash Anti Join  (cost=60.85..108.24 rows=635 width=36)
+row               Hash Cond: (c.x = n.x)
+row               ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row               ->  Hash  (cost=32.60..32.60 rows=2260 width=4)
+row                     ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT count(*) FROM c, b, n WHERE b.x = c.x AND n.y = b.y AND EXISTS (SELECT 1 FROM d WHERE d.y = n.x);
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=2891.19..2891.20 rows=1 width=8)
+row   ->  Merge Join  (cost=1465.89..2688.48 rows=81083 width=0)
+row         Merge Cond: (c.x = b.x)
+row         ->  Sort  (cost=88.17..91.35 rows=1270 width=4)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=4)
+row         ->  Sort  (cost=1377.72..1409.64 rows=12769 width=4)
+row               Sort Key: b.x
+row               ->  Merge Join  (cost=309.66..506.85 rows=12769 width=4)
+row                     Merge Cond: (n.y = b.y)
+row                     ->  Sort  (cost=151.16..153.98 rows=1130 width=4)
+row                           Sort Key: n.y
+row                           ->  Hash Join  (cost=42.75..93.85 rows=1130 width=4)
+row                                 Hash Cond: (n.x = d.y)
+row                                 ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=8)
+row                                 ->  Hash  (cost=40.25..40.25 rows=200 width=4)
+row                                       ->  HashAggregate  (cost=38.25..40.25 rows=200 width=4)
+row                                             Group Key: d.y
+row                                             ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=4)
+row                     ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                           Sort Key: b.y
+row                           ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE c.x IN (SELECT d.x FROM d);
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=60.85..86.89 rows=1270 width=36)
+row   Hash Cond: (c.x = d.x)
+row   ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=4)
+row         ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE NOT EXISTS (SELECT 1 FROM b WHERE b.x = c.x AND b.y > 1) AND c.z = 'a';
+fields QUERY PLAN:25:-1:-1
+row Hash Right Anti Join  (cost=25.95..67.25 rows=3 width=36)
+row   Hash Cond: (b.x = c.x)
+row   ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=4)
+row         Filter: (y > 1)
+row   ->  Hash  (cost=25.88..25.88 rows=6 width=36)
+row         ->  Seq Scan on c  (cost=0.00..25.88 rows=6 width=36)
+row               Filter: (z = 'a'::text)
+EXPLAIN
