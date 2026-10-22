@@ -4,6 +4,14 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- The plans of the join of `FROM` in the nodes above it in `EXPLAIN`, as `grouping_planner` reads the `pathlist` of PostgreSQL. `ORDER BY`, `GROUP BY`, `DISTINCT`, the windows and `LIMIT` go on each plan of the join that the planner keeps, and the result with the lowest total cost wins. So a merge join whose rows are in the order of `ORDER BY` has no sort above it when that costs less than the cheapest join with a sort. A plan that is not the cheapest is used only when its rows are in the order of each node above it, as `create_ordered_paths` does it. (#540)
+
+### Fixed
+
+- The start cost of a `WindowAgg` in `EXPLAIN`, as `get_windowclause_startup_tuples` and `cost_windowagg` of PostgreSQL 19 find it. The window reads one more row than its frame before its first row, and `row_number`, `rank` and the other functions of the rank of a row use the frame `ROWS UNBOUNDED PRECEDING`, as `optimize_window_clauses` gives it. (#540)
+
 ## 0.1.65 (2026-10-22)
 
 ### Added

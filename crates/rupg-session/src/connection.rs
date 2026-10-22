@@ -5315,6 +5315,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_unique.test")));
     }
 
+    /// `EXPLAIN` of `ORDER BY`, `GROUP BY`, `DISTINCT`, windows and `LIMIT` over a join. The planner reads each plan of the join that `add_path` keeps, so a merge join whose rows are in the order of the query can cost less in total than the cheapest join with a sort above it, as `create_ordered_paths` finds it. `connection/plan_upper_order.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_upper_order() {
+        big_stack(|| script(include_str!("connection/plan_upper_order.test")));
+    }
+
     /// `EXPLAIN` of joins whose conditions an equivalence class with no constant makes, as `generate_join_implied_equalities`: one condition for each class at each join, of the first members of the two sides, also for two tables that the query does not compare. `connection/plan_join_classes.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_join_classes() {

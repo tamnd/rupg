@@ -25,19 +25,19 @@ struct Path<T> {
 
 /// The plans of a relation that `add_path` keeps, in the order of their total cost. All the plans of a relation have the same rows.
 #[derive(Debug)]
-pub(super) struct Paths<T> {
+pub(crate) struct Paths<T> {
     list: Vec<Path<T>>,
     /// `consider_startup`: true when a plan with a lower start cost is a different plan, which is so for a query with `LIMIT`.
     startup: bool,
 }
 
 impl<T> Paths<T> {
-    pub(super) fn new(startup: bool) -> Self {
+    pub(crate) fn new(startup: bool) -> Self {
         Paths { list: Vec::new(), startup }
     }
 
     /// `add_path`: adds a plan unless a plan of the list is as good, and takes away each plan of the list that the new plan is as good as. A plan is as good as another when it costs less or about the same and its order is as useful.
-    pub(super) fn add(&mut self, startup: f64, total: f64, keys: Vec<OrderKey>, plan: T) {
+    pub(crate) fn add(&mut self, startup: f64, total: f64, keys: Vec<OrderKey>, plan: T) {
         let new = (startup, total);
         let mut accept = true;
         let mut insert_at = 0;
@@ -86,7 +86,7 @@ impl<T> Paths<T> {
     }
 
     /// `set_cheapest`: the plan with the lowest total cost, then with the lowest start cost, then with the most useful order.
-    pub(super) fn cheapest(self) -> Option<T> {
+    pub(crate) fn cheapest(self) -> Option<T> {
         self.kept().into_iter().next()
     }
 

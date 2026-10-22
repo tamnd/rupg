@@ -1,0 +1,399 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE b (x int, y int);
+CREATE TABLE
+> CREATE TABLE c (x int);
+CREATE TABLE
+> CREATE TABLE d (x int, y int, z text);
+CREATE TABLE
+> EXPLAIN SELECT * FROM b, c WHERE b.x = c.x ORDER BY b.x;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=338.29..781.81 rows=28815 width=12)
+row   Merge Cond: (b.x = c.x)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: b.x
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row         Sort Key: c.x
+row         ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM b, c WHERE b.x = c.x ORDER BY c.x;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=338.29..781.81 rows=28815 width=12)
+row   Merge Cond: (b.x = c.x)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: b.x
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row         Sort Key: c.x
+row         ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM b, c WHERE b.x = c.x ORDER BY b.x DESC;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=338.29..781.81 rows=28815 width=12)
+row   Merge Cond: (b.x = c.x)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: b.x DESC
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row         Sort Key: c.x DESC
+row         ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM b, c WHERE b.x = c.x ORDER BY b.y;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=2916.22..2988.25 rows=28815 width=12)
+row   Sort Key: b.y
+row   ->  Merge Join  (cost=338.29..781.81 rows=28815 width=12)
+row         Merge Cond: (b.x = c.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM b, c WHERE b.x = c.x ORDER BY b.x LIMIT 10;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=338.29..338.44 rows=10 width=12)
+row   ->  Merge Join  (cost=338.29..781.81 rows=28815 width=12)
+row         Merge Cond: (b.x = c.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM b, c WHERE b.x = c.x LIMIT 10;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.00..30.03 rows=10 width=12)
+row   ->  Nested Loop  (cost=0.00..86518.75 rows=28815 width=12)
+row         Join Filter: (b.x = c.x)
+row         ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+row         ->  Materialize  (cost=0.00..43.90 rows=2260 width=8)
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM b, c WHERE b.x = c.x ORDER BY b.x OFFSET 5;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=338.37..781.81 rows=28810 width=12)
+row   ->  Merge Join  (cost=338.29..781.81 rows=28815 width=12)
+row         Merge Cond: (b.x = c.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM b LEFT JOIN c ON b.x = c.x ORDER BY b.x;
+fields QUERY PLAN:25:-1:-1
+row Merge Left Join  (cost=338.29..781.81 rows=28815 width=12)
+row   Merge Cond: (b.x = c.x)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: b.x
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row         Sort Key: c.x
+row         ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM b FULL JOIN c ON b.x = c.x ORDER BY b.x;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=2916.22..2988.25 rows=28815 width=12)
+row   Sort Key: b.x
+row   ->  Merge Full Join  (cost=338.29..781.81 rows=28815 width=12)
+row         Merge Cond: (b.x = c.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM b, c, d WHERE b.x = c.x AND c.x = d.x ORDER BY b.x;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=421.66..3237.16 rows=172890 width=52)
+row   Merge Cond: (c.x = b.x)
+row   ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row         Sort Key: c.x
+row         ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+row   ->  Materialize  (cost=241.88..485.18 rows=13560 width=48)
+row         ->  Merge Join  (cost=241.88..451.28 rows=13560 width=48)
+row               Merge Cond: (d.x = b.x)
+row               ->  Sort  (cost=83.37..86.37 rows=1200 width=40)
+row                     Sort Key: d.x
+row                     ->  Seq Scan on d  (cost=0.00..22.00 rows=1200 width=40)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: b.x
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM b, c, d WHERE b.x = c.x AND b.y = d.y ORDER BY b.x;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=1561.76..4167.86 rows=172890 width=52)
+row   Merge Cond: (c.x = b.x)
+row   ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row         Sort Key: c.x
+row         ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+row   ->  Sort  (cost=1381.97..1415.87 rows=13560 width=48)
+row         Sort Key: b.x
+row         ->  Merge Join  (cost=241.88..451.28 rows=13560 width=48)
+row               Merge Cond: (d.y = b.y)
+row               ->  Sort  (cost=83.37..86.37 rows=1200 width=40)
+row                     Sort Key: d.y
+row                     ->  Seq Scan on d  (cost=0.00..22.00 rows=1200 width=40)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: b.y
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT b.x, count(*) FROM b, c WHERE b.x = c.x GROUP BY b.x;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=338.29..927.89 rows=200 width=12)
+row   Group Key: b.x
+row   ->  Merge Join  (cost=338.29..781.81 rows=28815 width=4)
+row         Merge Cond: (b.x = c.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=4)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+row         ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT b.x, count(*) FROM b, c WHERE b.x = c.x GROUP BY b.x ORDER BY b.x;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=338.29..927.89 rows=200 width=12)
+row   Group Key: b.x
+row   ->  Merge Join  (cost=338.29..781.81 rows=28815 width=4)
+row         Merge Cond: (b.x = c.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=4)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+row         ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT b.y, count(*) FROM b, c WHERE b.x = c.x GROUP BY b.y ORDER BY b.y;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=935.53..936.03 rows=200 width=12)
+row   Sort Key: b.y
+row   ->  HashAggregate  (cost=925.89..927.89 rows=200 width=12)
+row         Group Key: b.y
+row         ->  Merge Join  (cost=338.29..781.81 rows=28815 width=4)
+row               Merge Cond: (b.x = c.x)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: b.x
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row                     Sort Key: c.x
+row                     ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT DISTINCT b.x FROM b, c WHERE b.x = c.x;
+fields QUERY PLAN:25:-1:-1
+row Unique  (cost=338.29..853.85 rows=200 width=4)
+row   ->  Merge Join  (cost=338.29..781.81 rows=28815 width=4)
+row         Merge Cond: (b.x = c.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=4)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+row         ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT DISTINCT b.x FROM b, c WHERE b.x = c.x ORDER BY b.x;
+fields QUERY PLAN:25:-1:-1
+row Unique  (cost=338.29..853.85 rows=200 width=4)
+row   ->  Merge Join  (cost=338.29..781.81 rows=28815 width=4)
+row         Merge Cond: (b.x = c.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=4)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+row         ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT b.x, row_number() OVER (ORDER BY b.x) FROM b, c WHERE b.x = c.x;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=338.32..1214.04 rows=28815 width=12)
+row   Window: w1 AS (ORDER BY b.x ROWS UNBOUNDED PRECEDING)
+row   ->  Merge Join  (cost=338.29..781.81 rows=28815 width=4)
+row         Merge Cond: (b.x = c.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=4)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+row         ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT b.x, sum(b.y) OVER (PARTITION BY b.x) FROM b, c WHERE b.x = c.x;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=342.63..1214.04 rows=28815 width=12)
+row   Window: w1 AS (PARTITION BY b.x)
+row   ->  Merge Join  (cost=338.29..781.81 rows=28815 width=8)
+row         Merge Cond: (b.x = c.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT count(*) FROM b, c WHERE b.x = c.x;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=853.85..853.86 rows=1 width=8)
+row   ->  Merge Join  (cost=338.29..781.81 rows=28815 width=0)
+row         Merge Cond: (b.x = c.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=4)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+row         ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT string_agg(d.z, ',' ORDER BY d.x) FROM b, d WHERE b.x = d.x;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=485.18..485.19 rows=1 width=32)
+row   ->  Merge Join  (cost=241.88..451.28 rows=13560 width=36)
+row         Merge Cond: (d.x = b.x)
+row         ->  Sort  (cost=83.37..86.37 rows=1200 width=36)
+row               Sort Key: d.x
+row               ->  Seq Scan on d  (cost=0.00..22.00 rows=1200 width=36)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=4)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM b, d WHERE b.x = d.x AND b.y = d.y ORDER BY b.x, b.y;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=241.88..268.51 rows=68 width=48)
+row   Merge Cond: ((b.x = d.x) AND (b.y = d.y))
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: b.x, b.y
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Sort  (cost=83.37..86.37 rows=1200 width=40)
+row         Sort Key: d.x, d.y
+row         ->  Seq Scan on d  (cost=0.00..22.00 rows=1200 width=40)
+EXPLAIN
+> EXPLAIN SELECT * FROM b, d WHERE b.x = d.x AND b.y = d.y ORDER BY b.y;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=241.88..268.51 rows=68 width=48)
+row   Merge Cond: ((b.y = d.y) AND (b.x = d.x))
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: b.y, b.x
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Sort  (cost=83.37..86.37 rows=1200 width=40)
+row         Sort Key: d.y, d.x
+row         ->  Seq Scan on d  (cost=0.00..22.00 rows=1200 width=40)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT * FROM b, c WHERE b.x = c.x ORDER BY b.x) s;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=338.29..781.81 rows=28815 width=12)
+row   Merge Cond: (b.x = c.x)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: b.x
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row         Sort Key: c.x
+row         ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM b, c WHERE b.x = c.x ORDER BY b.x LIMIT 1000;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=338.29..353.68 rows=1000 width=12)
+row   ->  Merge Join  (cost=338.29..781.81 rows=28815 width=12)
+row         Merge Cond: (b.x = c.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM b, c WHERE b.x = c.x ORDER BY b.x LIMIT 100000;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=338.29..781.81 rows=28815 width=12)
+row   ->  Merge Join  (cost=338.29..781.81 rows=28815 width=12)
+row         Merge Cond: (b.x = c.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT sum(y) OVER () FROM d;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=36.97..37.00 rows=1200 width=8)
+row   Window: w1 AS ()
+row   ->  Seq Scan on d  (cost=0.00..22.00 rows=1200 width=4)
+EXPLAIN
+> EXPLAIN SELECT sum(y) OVER (ORDER BY x) FROM d;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=83.48..104.37 rows=1200 width=12)
+row   Window: w1 AS (ORDER BY x)
+row   ->  Sort  (cost=83.37..86.37 rows=1200 width=8)
+row         Sort Key: x
+row         ->  Seq Scan on d  (cost=0.00..22.00 rows=1200 width=8)
+EXPLAIN
+> EXPLAIN SELECT sum(y) OVER (PARTITION BY x ORDER BY y) FROM d;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=83.39..107.37 rows=1200 width=16)
+row   Window: w1 AS (PARTITION BY x ORDER BY y)
+row   ->  Sort  (cost=83.37..86.37 rows=1200 width=8)
+row         Sort Key: x, y
+row         ->  Seq Scan on d  (cost=0.00..22.00 rows=1200 width=8)
+EXPLAIN
+> EXPLAIN SELECT sum(y) OVER (ORDER BY x ROWS BETWEEN UNBOUNDED PRECEDING AND 3 FOLLOWING) FROM d;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=83.44..104.37 rows=1200 width=12)
+row   Window: w1 AS (ORDER BY x ROWS BETWEEN UNBOUNDED PRECEDING AND '3'::bigint FOLLOWING)
+row   ->  Sort  (cost=83.37..86.37 rows=1200 width=8)
+row         Sort Key: x
+row         ->  Seq Scan on d  (cost=0.00..22.00 rows=1200 width=8)
+EXPLAIN
+> EXPLAIN SELECT sum(y) OVER (ORDER BY x ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING) FROM d;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=83.39..104.37 rows=1200 width=12)
+row   Window: w1 AS (ORDER BY x ROWS BETWEEN '2'::bigint PRECEDING AND '1'::bigint PRECEDING)
+row   ->  Sort  (cost=83.37..86.37 rows=1200 width=8)
+row         Sort Key: x
+row         ->  Seq Scan on d  (cost=0.00..22.00 rows=1200 width=8)
+EXPLAIN
+> EXPLAIN SELECT sum(y) OVER (ORDER BY x RANGE BETWEEN UNBOUNDED PRECEDING AND 5 FOLLOWING) FROM d;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=84.00..104.37 rows=1200 width=12)
+row   Window: w1 AS (ORDER BY x RANGE BETWEEN UNBOUNDED PRECEDING AND 5 FOLLOWING)
+row   ->  Sort  (cost=83.37..86.37 rows=1200 width=8)
+row         Sort Key: x
+row         ->  Seq Scan on d  (cost=0.00..22.00 rows=1200 width=8)
+EXPLAIN
+> EXPLAIN SELECT sum(y) OVER (ORDER BY x GROUPS BETWEEN CURRENT ROW AND 2 FOLLOWING) FROM d;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=83.69..104.37 rows=1200 width=12)
+row   Window: w1 AS (ORDER BY x GROUPS BETWEEN CURRENT ROW AND '2'::bigint FOLLOWING)
+row   ->  Sort  (cost=83.37..86.37 rows=1200 width=8)
+row         Sort Key: x
+row         ->  Seq Scan on d  (cost=0.00..22.00 rows=1200 width=8)
+EXPLAIN
+> EXPLAIN SELECT sum(y) OVER (ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) FROM d;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=104.36..104.37 rows=1200 width=12)
+row   Window: w1 AS (ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+row   ->  Sort  (cost=83.37..86.37 rows=1200 width=8)
+row         Sort Key: x
+row         ->  Seq Scan on d  (cost=0.00..22.00 rows=1200 width=8)
+EXPLAIN
+> EXPLAIN SELECT sum(y) OVER (PARTITION BY x ROWS BETWEEN CURRENT ROW AND y FOLLOWING) FROM d;
+ERROR 42P10 argument of ROWS must not contain variables at 73
+> EXPLAIN SELECT rank() OVER (PARTITION BY y ORDER BY x) FROM d;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=83.39..107.37 rows=1200 width=16)
+row   Window: w1 AS (PARTITION BY y ORDER BY x ROWS UNBOUNDED PRECEDING)
+row   ->  Sort  (cost=83.37..86.37 rows=1200 width=8)
+row         Sort Key: y, x
+row         ->  Seq Scan on d  (cost=0.00..22.00 rows=1200 width=8)
+EXPLAIN
+> EXPLAIN SELECT ntile(3) OVER (ORDER BY x), sum(y) OVER (ORDER BY x) FROM d;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=83.49..107.37 rows=1200 width=16)
+row   Window: w1 AS (ORDER BY x)
+row   ->  Sort  (cost=83.37..86.37 rows=1200 width=8)
+row         Sort Key: x
+row         ->  Seq Scan on d  (cost=0.00..22.00 rows=1200 width=8)
+EXPLAIN

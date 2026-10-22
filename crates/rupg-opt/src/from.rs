@@ -1,7 +1,7 @@
 //! The plan of `FROM` and `WHERE`: the scan of each relation, the joins and the place of each condition, as `query_planner`, `make_one_rel` and `create_scan_plan` make them.
 
 mod classes;
-mod paths;
+pub(crate) mod paths;
 mod search;
 
 use std::borrow::Cow;
@@ -181,7 +181,10 @@ struct Rel<'q> {
 
 impl<'q> Builder<'q> {
     /// `query_planner`: the plan of the rows of `FROM` that pass `WHERE`, with the order of the rows and the conditions of joins that the equivalence classes took the place of.
-    pub(crate) fn from(&mut self, level: &Level<'q>) -> (Node<'q>, Vec<OrderKey>, Vec<&'q Expr>) {
+    pub(crate) fn from(
+        &mut self,
+        level: &Level<'q>,
+    ) -> (Vec<(Node<'q>, Vec<OrderKey>)>, Vec<&'q Expr>) {
         let query = level.query;
         let mut parts = Vec::new();
         if let Some(filter) = &query.filter {
@@ -192,7 +195,7 @@ impl<'q> Builder<'q> {
         let Some(mut tree) =
             trees.reduce(|left, right| join_tree(JoinKind::Inner, left, right, Vec::new()))
         else {
-            return (result(level.scope, parts), Vec::new(), Vec::new());
+            return (vec![(result(level.scope, parts), Vec::new())], Vec::new());
         };
         let all = tree.rels();
         let mut gating = Vec::new();
@@ -202,7 +205,7 @@ impl<'q> Builder<'q> {
             let volatile = exprs::volatile(part);
             if rels.is_empty() && !volatile {
                 if exprs::is_false(part) {
-                    return (dummy(level.scope, &all), Vec::new(), Vec::new());
+                    return (vec![(dummy(level.scope, &all), Vec::new())], Vec::new());
                 }
                 if !exprs::is_true(part) {
                     gating.push(Item::of(part));
@@ -227,35 +230,41 @@ impl<'q> Builder<'q> {
         }
         let mut found = classes::Found::default();
         if !classes::domain(&mut tree, true, &mut found) {
-            return (dummy(level.scope, &all), Vec::new(), Vec::new());
+            return (vec![(dummy(level.scope, &all), Vec::new())], Vec::new());
         }
         let mut stats = Stats::default();
         needed(level, &mut stats);
-        let rel = self.build(level, tree, &found, &mut stats);
-        let mut node = rel.node;
-        if !gating.is_empty() {
-            // `create_gating_plan`: the `Result` has the costs of the node below.
-            let cost = node.cost;
-            node = Node::new(
-                Kind::Result { replaces: None, one_time: gating },
-                level.scope,
-                vec![node],
-            );
-            node.cost = cost;
-        }
-        (node, rel.order, found.joined)
+        let rels = self.build(level, tree, &found, &mut stats);
+        let plans = rels
+            .into_iter()
+            .map(|rel| {
+                let mut node = rel.node;
+                if !gating.is_empty() {
+                    // `create_gating_plan`: the `Result` has the costs of the node below.
+                    let cost = node.cost;
+                    node = Node::new(
+                        Kind::Result { replaces: None, one_time: gating.clone() },
+                        level.scope,
+                        vec![node],
+                    );
+                    node.cost = cost;
+                }
+                (node, rel.order)
+            })
+            .collect();
+        (plans, found.joined)
     }
 
-    /// The plan of a part of the tree of the joins. The inner joins of a join domain are one problem of the order of the joins, with the outer joins as items of the problem. `found` has the equivalence classes.
+    /// The plans of a part of the tree of the joins that `add_path` keeps, with the plan with the lowest total cost first. The inner joins of a join domain are one problem of the order of the joins, with the outer joins as items of the problem. `found` has the equivalence classes.
     fn build(
         &mut self,
         level: &Level<'q>,
         tree: Tree<'q>,
         found: &classes::Found<'q>,
         stats: &mut Stats,
-    ) -> Rel<'q> {
+    ) -> Vec<Rel<'q>> {
         match tree {
-            Tree::Base { relation, quals } => self.scan(level, relation, quals, stats),
+            Tree::Base { relation, quals } => vec![self.scan(level, relation, quals, stats)],
             Tree::Join(join) if join.kind == JoinKind::Inner => {
                 let (mut items, mut pool) = (Vec::new(), Vec::new());
                 flatten(Tree::Join(join), &mut items, &mut pool);
@@ -951,33 +960,41 @@ pub(crate) fn lateral_exprs(relation: &Relation) -> Vec<(&Expr, usize)> {
     out
 }
 
-/// A join of two plans, with the costs of each kind of join for each order of the sides, as `add_paths_to_joinrel`. Of the plans that `add_path` keeps, the plan with the lowest total cost wins.
+/// A join of the plans of two sides, with the costs of each kind of join for each order of the sides, as `add_paths_to_joinrel`. The result is the plans that `add_path` keeps, with the plan with the lowest total cost first. Each side has its plans in the same order.
 fn join_rels<'q>(
     level: &Level<'q>,
     kind: JoinKind,
-    left: Rel<'q>,
-    right: Rel<'q>,
+    left: Vec<Rel<'q>>,
+    right: Vec<Rel<'q>>,
     quals: Vec<Qual<'q>>,
     filter: Vec<Qual<'q>>,
     stats: &Stats,
-) -> Rel<'q> {
-    let rows = join_rows(kind, &left, &right, &quals, &filter, stats);
+) -> Vec<Rel<'q>> {
+    let rows = join_rows(kind, &left[0], &right[0], &quals, &filter, stats);
     let mut quals = quals;
     quals.sort_by_key(|q| exprs::calls(&q.expr));
     let mut paths = Paths::new(stats.startup);
-    let sides = (std::slice::from_ref(&left), std::slice::from_ref(&right));
-    for (candidate, keys) in choose(level, kind, sides.0, sides.1, &quals, &filter, stats) {
+    for (candidate, keys) in choose(level, kind, &left, &right, &quals, &filter, stats) {
         paths.add(candidate.startup, candidate.total, keys, candidate);
     }
-    let mut out = match paths.cheapest() {
-        Some(best) => finish(level, &best, left, right, &quals, &filter, rows),
-        None => {
-            let mut rels = left.rels.clone();
-            rels.extend(right.rels.iter().copied());
-            nested_join(level, kind, left, right, quals, filter, rows, rels)
-        }
+    let kept = paths.kept();
+    let mut out: Vec<Rel<'q>> = if kept.is_empty() {
+        let (left, right) = (left.into_iter().next(), right.into_iter().next());
+        let (Some(left), Some(right)) = (left, right) else { unreachable!("each side has a plan") };
+        let mut rels = left.rels.clone();
+        rels.extend(right.rels.iter().copied());
+        vec![nested_join(level, kind, left, right, quals, filter, rows, rels)]
+    } else {
+        kept.iter()
+            .map(|best| {
+                let (l, r) = if best.swapped { (best.paths.1, best.paths.0) } else { best.paths };
+                finish(level, best, left[l].clone(), right[r].clone(), &quals, &filter, rows)
+            })
+            .collect()
     };
-    out.node.cost.width = stats.width(&out.rels);
+    for rel in &mut out {
+        rel.node.cost.width = stats.width(&rel.rels);
+    }
     out
 }
 
