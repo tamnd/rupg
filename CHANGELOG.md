@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.66 (2026-10-22)
+
+A patch release on the way to M3. `EXPLAIN` now uses each plan of the join for the nodes above it, shows `Incremental Sort`, estimates the groups as PostgreSQL does with no statistics, and leaves out the keys of `GROUP BY`, `DISTINCT`, `ORDER BY` and `PARTITION BY` that add nothing.
+
 ### Added
 
 - The plans of the join of `FROM` in the nodes above it in `EXPLAIN`, as `grouping_planner` reads the `pathlist` of PostgreSQL. `ORDER BY`, `GROUP BY`, `DISTINCT`, the windows and `LIMIT` go on each plan of the join that the planner keeps, and the result with the lowest total cost wins. So a merge join whose rows are in the order of `ORDER BY` has no sort above it when that costs less than the cheapest join with a sort. A plan that is not the cheapest is used only when its rows are in the order of each node above it, as `create_ordered_paths` does it. (#540)
