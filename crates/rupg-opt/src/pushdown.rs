@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use rupg_analyze::{BoolOp, Expr, ExprKind, FromItem, JoinKind, Query};
+use rupg_analyze::{BoolOp, BoolTest, Expr, ExprKind, FromItem, JoinKind, Query, Relation};
 use rupg_types::oid;
 
 use crate::{exprs, from, pullup, upper};
@@ -29,14 +29,21 @@ pub(crate) fn push_all(query: &mut Query) {
     }
 }
 
-/// Reduces the outer joins of `FROM`, then moves each part of `WHERE` that reads one subquery of `FROM` into the subquery, when `qual_is_pushdown_safe` lets it. The subquery is not on the side of an outer join that can give nulls, where the condition tests the rows of the join. The planner does not move a condition into a view, a query of `WITH` or a set operation yet.
+/// Reduces the outer joins of `FROM` and removes the tests of `IS NULL` that an anti join makes redundant, then moves each part of `WHERE` that reads one subquery of `FROM` into the subquery, when `qual_is_pushdown_safe` lets it. The subquery is not on the side of an outer join that can give nulls, where the condition tests the rows of the join. The planner does not move a condition into a view, a query of `WITH` or a set operation yet.
 fn push(query: &mut Query) {
     let mut above = BTreeSet::new();
     for part in query.filter.iter().chain(upper::having_split(query).0) {
         above.extend(from::nonnullable_rels(part, true));
     }
-    for item in &mut query.from {
-        reduce(item, &above);
+    let forced = query.filter.as_ref().map(forced_null_vars).unwrap_or_default();
+    let Query { from, relations, filter, .. } = query;
+    let mut anti = BTreeSet::new();
+    for item in from.iter_mut() {
+        reduce(item, &above, &forced, relations);
+        anti.extend(strip(item));
+    }
+    if !anti.is_empty() {
+        *filter = filter.take().and_then(|f| without_null_tests(f, &anti));
     }
     let Some(filter) = query.filter.take() else { return };
     let mut nullable = Vec::new();
@@ -70,15 +77,69 @@ fn push(query: &mut Query) {
             None => keep.push(part),
         }
     }
-    query.filter = match keep.len() {
+    query.filter = and_all(keep);
+}
+
+/// The `AND` of the conditions, or `None` when there is no condition.
+fn and_all(mut parts: Vec<Expr>) -> Option<Expr> {
+    match parts.len() {
         0 => None,
-        1 => keep.pop(),
-        _ => Some(Expr::new(ExprKind::Bool(BoolOp::And, keep), oid::BOOL)),
+        1 => parts.pop(),
+        _ => Some(Expr::new(ExprKind::Bool(BoolOp::And, parts), oid::BOOL)),
+    }
+}
+
+/// `find_forced_null_vars`: the columns that each row that passes the condition has as null, from the parts of `AND` that are `x IS NULL` or `x IS UNKNOWN`.
+fn forced_null_vars(expr: &Expr) -> BTreeSet<(usize, i16)> {
+    let mut parts = Vec::new();
+    exprs::and_parts(expr, &mut parts);
+    parts.into_iter().filter_map(forced_null_var).collect()
+}
+
+/// `find_forced_null_var`: the column of a condition that is `x IS NULL` or `x IS UNKNOWN`, with no other test. A whole row does not count, because `IS NULL` of a row tests each field.
+fn forced_null_var(expr: &Expr) -> Option<(usize, i16)> {
+    let (ExprKind::NullTest(arg, true) | ExprKind::BooleanTest(arg, BoolTest::IsUnknown)) =
+        &expr.kind
+    else {
+        return None;
     };
+    let ExprKind::Var(var) = &arg.kind else { return None };
+    (var.levels_up == 0 && var.attnum != 0).then_some((var.relation, var.attnum))
+}
+
+/// `remove_redundant_nullability_quals`: removes each test of `IS NULL` of a column of the inner side of an anti join from the conditions of `ON` above the join, and gives the relations of the inner sides of the anti joins of the item, for the tests of `WHERE`. The inner side of an anti join gives no row, so the test was true for each row that the join keeps.
+fn strip(item: &mut FromItem) -> BTreeSet<usize> {
+    let FromItem::Join(join) = item else { return BTreeSet::new() };
+    let mut below = strip(&mut join.left);
+    below.extend(strip(&mut join.right));
+    if !below.is_empty() {
+        join.on = join.on.take().and_then(|on| without_null_tests(on, &below));
+    }
+    if join.kind == JoinKind::Anti {
+        let mut out = Vec::new();
+        rels(&join.right, &mut out);
+        below.extend(out);
+    }
+    below
+}
+
+/// `strip_redundant_nullability_quals`: the condition without the parts that test `IS NULL` of a column of the relations `anti`.
+fn without_null_tests(expr: Expr, anti: &BTreeSet<usize>) -> Option<Expr> {
+    let mut parts = Vec::new();
+    owned_parts(expr, &mut parts);
+    parts.retain(|p| forced_null_var(p).is_none_or(|(r, _)| !anti.contains(&r)));
+    and_all(parts)
 }
 
 /// `reduce_outer_joins`: an outer join is an inner join, and a full join is a left join or a right join, when a condition above it is false or null for each row with nulls for the relations of a side that can give nulls, as `from::reduce` finds it. The planner reduces the joins before it moves the conditions of `WHERE`, so that a condition that moves still makes the join an inner join.
-fn reduce(item: &mut FromItem, above: &BTreeSet<usize>) {
+///
+/// A left join is an anti join when a condition above it tests `IS NULL` of a column of the nullable side, `forced`, that cannot be null in a row that the join matches. The condition of `ON` is false or null when the column is null, or the column is a column of a table with `NOT NULL` and no outer join below gives nulls for it. Then only the rows with no match pass the test. A right join that becomes an anti join has its sides in the other order.
+fn reduce(
+    item: &mut FromItem,
+    above: &BTreeSet<usize>,
+    forced: &BTreeSet<(usize, i16)>,
+    relations: &[Relation],
+) {
     let FromItem::Join(join) = item else { return };
     let join = &mut **join;
     let overlaps = |side: &FromItem| {
@@ -95,23 +156,47 @@ fn reduce(item: &mut FromItem, above: &BTreeSet<usize>) {
         JoinKind::Full if right => JoinKind::Right,
         kind => kind,
     };
+    if matches!(join.kind, JoinKind::Left | JoinKind::Right) && !forced.is_empty() {
+        let inner = if join.kind == JoinKind::Left { &join.right } else { &join.left };
+        let mut inside = Vec::new();
+        rels(inner, &mut inside);
+        let mut nullable = Vec::new();
+        pullup::nullable_places(inner, false, &mut nullable);
+        let strict = join.on.as_ref().map(|on| pullup::nonnullable_vars(on, true));
+        let anti = forced.iter().any(|&(r, attnum)| {
+            inside.contains(&r)
+                && (strict.as_ref().is_some_and(|s| s.contains(&(r, attnum)))
+                    || !nullable.contains(&r) && pullup::column_not_null(relations, r, attnum))
+        });
+        if anti {
+            if join.kind == JoinKind::Right {
+                std::mem::swap(&mut join.left, &mut join.right);
+            }
+            join.kind = JoinKind::Anti;
+        }
+    }
     let mut local = BTreeSet::new();
+    let mut local_forced = BTreeSet::new();
     if join.kind != JoinKind::Full
         && let Some(on) = &join.on
     {
         local = from::nonnullable_rels(on, true);
+        local_forced = forced_null_vars(on);
     }
     let (left, right) = match join.kind {
         JoinKind::Inner | JoinKind::Semi | JoinKind::RightSemi => {
             local.extend(above.iter().copied());
-            (local.clone(), local)
+            local_forced.extend(forced.iter().copied());
+            ((local.clone(), local_forced.clone()), (local, local_forced))
         }
-        JoinKind::Left | JoinKind::Anti => (above.clone(), local),
-        JoinKind::Right | JoinKind::RightAnti => (local, above.clone()),
-        JoinKind::Full => (BTreeSet::new(), BTreeSet::new()),
+        JoinKind::Left | JoinKind::Anti => ((above.clone(), forced.clone()), (local, local_forced)),
+        JoinKind::Right | JoinKind::RightAnti => {
+            ((local, local_forced), (above.clone(), forced.clone()))
+        }
+        JoinKind::Full => Default::default(),
     };
-    reduce(&mut join.left, &left);
-    reduce(&mut join.right, &right);
+    reduce(&mut join.left, &left.0, &left.1, relations);
+    reduce(&mut join.right, &right.0, &right.1, relations);
 }
 
 /// The relations of an item of `FROM`.

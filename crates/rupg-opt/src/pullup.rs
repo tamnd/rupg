@@ -271,18 +271,10 @@ fn safe_quals<'q>(item: &'q FromItem, out: &mut Vec<&'q Expr>) {
 fn not_null(query: &Query, nullable: &[usize], expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Var(var) => {
-            if var.levels_up != 0 || nullable.contains(&var.relation) || var.attnum == 0 {
-                return false;
-            }
-            let Some(relation) = query.relations.get(var.relation) else { return false };
-            let table = relation.oid != 0
-                && relation.subquery.is_none()
-                && relation.function.is_none()
-                && relation.values.is_none()
-                && relation.cte.is_none();
-            let column =
-                usize::try_from(var.attnum - 1).ok().and_then(|at| relation.columns.get(at));
-            table && (var.attnum < 0 || column.is_some_and(|c| c.not_null))
+            var.levels_up == 0
+                && !nullable.contains(&var.relation)
+                && var.attnum != 0
+                && column_not_null(&query.relations, var.relation, var.attnum)
         }
         ExprKind::Const(value) => !matches!(value, Value::Null),
         ExprKind::Coalesce(args) | ExprKind::MinMax { args, .. } => {
@@ -301,8 +293,20 @@ fn not_null(query: &Query, nullable: &[usize], expr: &Expr) -> bool {
     }
 }
 
+/// True for a column of a table with `NOT NULL` or a primary key, or a system column of a table, as `find_relation_notnullatts` finds them.
+pub(crate) fn column_not_null(relations: &[Relation], r: usize, attnum: i16) -> bool {
+    let Some(relation) = relations.get(r) else { return false };
+    let table = relation.oid != 0
+        && relation.subquery.is_none()
+        && relation.function.is_none()
+        && relation.values.is_none()
+        && relation.cte.is_none();
+    let column = usize::try_from(attnum - 1).ok().and_then(|at| relation.columns.get(at));
+    table && (attnum < 0 || column.is_some_and(|c| c.not_null))
+}
+
 /// `find_nonnullable_vars`: the columns that cannot be null in a row that passes the condition. At the top of the condition, `IS NOT NULL` and the other tests that are false for a null count too, and each part of an `AND` counts. Below the top, an `AND` and an `OR` give the columns of each of their parts.
-fn nonnullable_vars(expr: &Expr, top: bool) -> BTreeSet<(usize, i16)> {
+pub(crate) fn nonnullable_vars(expr: &Expr, top: bool) -> BTreeSet<(usize, i16)> {
     let strict = |func: u32| builtin::proc_by_oid(func).is_some_and(|p| p.strict);
     let union = |args: &[Expr], top: bool| {
         args.iter().flat_map(|a| nonnullable_vars(a, top)).collect::<BTreeSet<_>>()

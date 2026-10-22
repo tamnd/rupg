@@ -5399,6 +5399,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_not_in.test")));
     }
 
+    /// `EXPLAIN` of a left join with a test of `IS NULL` above it, which the planner makes an anti join when the column cannot be null in a row that the join matches, as `reduce_outer_joins` makes it. The condition of `ON` is false or null when the column is null, or the column has `NOT NULL` in its table, and the test of `IS NULL` goes away. A right join becomes an anti join with its sides in the other order. `connection/plan_left_anti.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_left_anti() {
+        big_stack(|| script(include_str!("connection/plan_left_anti.test")));
+    }
+
     /// `EXPLAIN` of an `Incremental Sort`: the planner sorts rows whose first keys are in order already, as `make_ordered_path` and `create_ordered_paths` choose it, with the costs of `cost_incremental_sort`. `connection/plan_incremental_sort.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_incremental_sort() {
