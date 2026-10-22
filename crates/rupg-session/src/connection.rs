@@ -5441,6 +5441,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_dummy_join.test")));
     }
 
+    /// `EXPLAIN` of an `OR` of a join whose arms each have a part for one relation, as `extract_restriction_or_clauses` makes an `OR` of those parts a condition of the scan of the relation when it passes 0.9 of the rows at most. The `OR` stays a condition of the join, and its selectivity for an inner join is divided by the selectivity of the new condition, so that the rows of the join stay the same. `connection/plan_or_extract.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_or_extract() {
+        big_stack(|| script(include_str!("connection/plan_or_extract.test")));
+    }
+
     /// `EXPLAIN` of `LIKE`, `ILIKE`, regular expressions and `^@` of a column and a constant pattern, as `patternsel` estimates them with no statistics: a pattern that is its fixed prefix is `=` of the prefix, and the other patterns take `DEFAULT_MATCH_SEL` for a fixed prefix times the selectivity of the rest of the pattern. `connection/plan_pattern.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_pattern() {
