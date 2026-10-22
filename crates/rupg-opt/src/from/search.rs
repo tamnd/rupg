@@ -1,6 +1,6 @@
 //! `standard_join_search`: the order of the joins of a join domain, by dynamic programming over the sets of its items, as `join_search_one_level` does it. Each set of items keeps the plans that `add_path` keeps. When the sets of each number of items are made, each of them makes these plans, with the plan with the lowest total cost first, as `set_cheapest`. A join of two sets reads the cheapest plan of each side, and a merge join can also read another plan of a side that is in the order of the merge.
 //!
-//! The inner side of each semi join and anti join of the domain is one item. `join_is_legal` gives the joins of two sets that the order of these joins lets the planner make: the semi join or the anti join itself, when one set has its outer relations and the other set is its inner side, or an inner join with the unique rows of the inner side of a semi join with any other set.
+//! The inner side of each left join, semi join and anti join of the domain is one item. `join_is_legal` gives the joins of two sets that the order of these joins lets the planner make: the special join itself, when one set has its outer relations and the other set is its inner side, or an inner join with the unique rows of the inner side of a semi join with any other set. So an inner join can come before or after a left join, as identity 1 of `optimizer/README`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -55,13 +55,13 @@ struct Match {
 #[derive(Debug)]
 struct Problem<'a, 'q> {
     level: &'a Level<'q>,
-    /// The conditions of the inner joins and the semi joins of the domain.
-    pool: &'a [Qual<'q>],
-    /// The semi joins and the anti joins of the domain.
+    /// The conditions of the domain that the joins of the sets test.
+    pool: &'a Pool<'a, 'q>,
+    /// The left joins, the semi joins and the anti joins of the domain.
     specials: &'a [Special<'q>],
     /// For each special join, the plans of the unique rows of its inner side, or none.
     uniques: Vec<Vec<Rel<'q>>>,
-    /// For each anti join with a condition, the relations of its two sides, which the condition needs, as the `required_relids` of a condition of an outer join.
+    /// For each left join and anti join with a condition, the relations of its two sides, which the condition needs, as the `required_relids` of a condition of an outer join.
     scopes: Vec<BTreeSet<usize>>,
     /// The relations of each equivalence class.
     spans: &'a [BTreeSet<usize>],
@@ -89,6 +89,7 @@ pub(super) fn search<'q>(
     let n = items.len();
     let classes = &found.classes;
     let item = |rels: &BTreeSet<usize>| items.iter().find(|i| i[0].rels == *rels);
+    let pool = &Pool::new(pool, &specials);
     specials.retain(|sp| {
         let Some(inner) = item(&sp.right).filter(|_| sp.kind == JoinKind::Semi) else {
             return true;
@@ -159,11 +160,11 @@ pub(super) fn search<'q>(
     problem.sets.swap_remove(best).plans
 }
 
-/// The joins of the items in their order, each with the conditions that its two sides have. An item that is the inner side of a special join joins with its semi join or its anti join.
+/// The joins of the items in their order, each with the conditions that its two sides have. An item that is the inner side of a special join joins with its special join.
 fn in_order<'q>(
     level: &Level<'q>,
     items: Vec<Vec<Rel<'q>>>,
-    pool: &[Qual<'q>],
+    pool: &Pool<'_, 'q>,
     specials: &[Special<'q>],
     classes: &[Joined<'q>],
     stats: &Stats,
@@ -173,6 +174,10 @@ fn in_order<'q>(
     for next in items {
         let mut quals = between(pool, classes, &out[0].rels, &next[0].rels);
         out = match specials.iter().find(|sp| sp.right == next[0].rels) {
+            Some(sp) if sp.kind == JoinKind::Left => {
+                let on = sp.quals.clone();
+                join_rels(level, JoinKind::Left, out, next, on, quals, stats)
+            }
             Some(sp) => {
                 quals.extend(sp.quals.iter().cloned());
                 let (semi, filter) = (sp.semi.as_ref(), sp.filter.clone());
@@ -184,21 +189,47 @@ fn in_order<'q>(
     out
 }
 
+/// The conditions of the inner joins and the semi joins of a join domain, and of `WHERE` above its left joins, each with the relations that a join needs to test it, as `required_relids`. A condition that reads the inner side of a left join needs the relations of the two sides of the left join, as the left join is in its `varnullingrels`, so that a join tests it at the left join or above it.
+#[derive(Debug)]
+struct Pool<'a, 'q> {
+    quals: &'a [Qual<'q>],
+    needs: Vec<BTreeSet<usize>>,
+}
+
+impl<'a, 'q> Pool<'a, 'q> {
+    fn new(quals: &'a [Qual<'q>], specials: &[Special<'q>]) -> Pool<'a, 'q> {
+        let need = |qual: &Qual<'q>| {
+            let mut rels = qual.rels.clone();
+            while let Some(sp) = specials.iter().find(|sp| {
+                sp.kind == JoinKind::Left
+                    && !sp.right.is_disjoint(&rels)
+                    && !(sp.left.is_subset(&rels) && sp.right.is_subset(&rels))
+            }) {
+                rels.extend(sp.left.iter().chain(&sp.right).copied());
+            }
+            rels
+        };
+        Pool { quals, needs: quals.iter().map(need).collect() }
+    }
+}
+
 /// The conditions that a join of two sides tests: the conditions that need the relations of both sides, and then the condition of each class with a member on each side, as `build_joinrel_restrictlist`.
 fn between<'q>(
-    pool: &[Qual<'q>],
+    pool: &Pool<'_, 'q>,
     classes: &[Joined<'q>],
     left: &BTreeSet<usize>,
     right: &BTreeSet<usize>,
 ) -> Vec<Qual<'q>> {
     let mut quals: Vec<Qual<'q>> = pool
+        .quals
         .iter()
-        .filter(|q| {
-            q.rels.iter().all(|r| left.contains(r) || right.contains(r))
-                && !q.rels.is_subset(left)
-                && !q.rels.is_subset(right)
+        .zip(&pool.needs)
+        .filter(|(_, needs)| {
+            needs.iter().all(|r| left.contains(r) || right.contains(r))
+                && !needs.is_subset(left)
+                && !needs.is_subset(right)
         })
-        .cloned()
+        .map(|(q, _)| q.clone())
         .collect();
     quals.extend(classes.iter().filter_map(|c| c.condition(left, right)));
     quals.sort_by_key(|q| exprs::calls(&q.expr));
@@ -285,7 +316,7 @@ impl<'q> Problem<'_, 'q> {
         let set = &self.sets[s];
         let rels = &set.rels;
         let crosses = |r: &BTreeSet<usize>| !r.is_disjoint(rels) && !r.is_subset(rels);
-        self.pool.iter().any(|q| crosses(&q.rels))
+        self.pool.quals.iter().any(|q| crosses(&q.rels))
             || self.scopes.iter().any(crosses)
             || self.spans.iter().any(crosses)
             || !set.lateral.is_empty()
@@ -302,7 +333,7 @@ impl<'q> Problem<'_, 'q> {
     fn clause(&self, a: usize, b: usize) -> bool {
         let (sa, sb) = (&self.sets[a], &self.sets[b]);
         let both = |r: &BTreeSet<usize>| !r.is_disjoint(&sa.rels) && !r.is_disjoint(&sb.rels);
-        self.pool.iter().any(|q| both(&q.rels))
+        self.pool.quals.iter().any(|q| both(&q.rels))
             || self.scopes.iter().any(both)
             || self.spans.iter().any(both)
     }
@@ -382,6 +413,12 @@ impl<'q> Problem<'_, 'q> {
         let mut quals = between(self.pool, self.classes, l, r);
         match how {
             How::Plain => (quals, Vec::new()),
+            // The conditions above a left join that it tests are the conditions of the rows that it makes, as `is_pushed_down`.
+            How::Special(i) if self.specials[i].kind == JoinKind::Left => {
+                let mut on = self.specials[i].quals.clone();
+                self.stats.sort_quals(&mut on);
+                (on, quals)
+            }
             How::Special(i) | How::Unique(i) => {
                 let sp = &self.specials[i];
                 quals.extend(sp.quals.iter().cloned());
@@ -441,6 +478,9 @@ impl<'q> Problem<'_, 'q> {
             let fraction = || semi_selectivity(&quals, &r[0], self.stats);
             let (kind, part, inners) = match how {
                 How::Plain => (JoinKind::Inner, Part::Plain, r),
+                How::Special(i) if self.specials[i].kind == JoinKind::Left => {
+                    (JoinKind::Left, Part::Plain, r)
+                }
                 How::Special(i) => (self.specials[i].kind, Part::Semi(fraction()), r),
                 How::Unique(i) => {
                     let whole = self.specials[i].left.is_subset(&self.sets[outer].rels);
@@ -449,7 +489,7 @@ impl<'q> Problem<'_, 'q> {
             };
             let outer_rows = l[0].node.cost.rows;
             rows.get_or_insert_with(|| match (how, part) {
-                (How::Plain, _) => join_rows(kind, &l[0], &r[0], &quals, &[], self.stats),
+                (_, Part::Plain) => join_rows(kind, &l[0], &r[0], &quals, &filter, self.stats),
                 (_, Part::Semi(fraction)) if kind == JoinKind::Anti => {
                     let pushed = cost::list_selectivity(filter.iter().map(|q| &*q.expr));
                     cost::clamp_rows(outer_rows * (1.0 - fraction) * pushed)
@@ -457,7 +497,6 @@ impl<'q> Problem<'_, 'q> {
                 (_, Part::Semi(fraction) | Part::Unique(fraction, _)) => {
                     cost::clamp_rows(outer_rows * fraction)
                 }
-                (_, Part::Plain) => unreachable!("a special join has its fraction"),
             });
             let found = choose(self.level, kind, l, inners, &quals, &filter, self.stats, part);
             made.extend(found.into_iter().map(|(candidate, keys)| (candidate, keys, how)));
