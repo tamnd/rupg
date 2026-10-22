@@ -5471,6 +5471,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_canonical_qual.test")));
     }
 
+    /// `EXPLAIN` of joins where the inner side is a parameterized index or bitmap scan in a nested loop: the join condition is an `Index Cond` or a `Recheck Cond` that reads the outer row, as `create_index_paths` and `final_cost_nestloop` choose it, and a hash join wins when the outer side has many rows. `connection/plan_param_nestloop.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_param_nestloop() {
+        big_stack(|| script(include_str!("connection/plan_param_nestloop.test")));
+    }
+
     /// `EXPLAIN` of the bitmap heap scans of a table by its btree indexes, as `create_index_paths` makes them with `choose_bitmap_and` and the costs of `cost_bitmap_heap_scan`. `connection/plan_bitmap_scan.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_bitmap_scan() {

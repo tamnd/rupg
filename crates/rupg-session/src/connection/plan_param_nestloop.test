@@ -1,0 +1,123 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (id int PRIMARY KEY, x int);
+CREATE TABLE
+> CREATE TABLE b (id int PRIMARY KEY, y int);
+CREATE TABLE
+> CREATE INDEX b_y ON b (y);
+CREATE INDEX
+> CREATE TABLE c (id int PRIMARY KEY, z int);
+CREATE TABLE
+> EXPLAIN SELECT * FROM a JOIN b ON a.x = b.id WHERE a.id = 1;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.31..16.35 rows=1 width=16)
+row   ->  Index Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=8)
+row         Index Cond: (id = 1)
+row   ->  Index Scan using b_pkey on b  (cost=0.15..8.17 rows=1 width=8)
+row         Index Cond: (id = a.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM a JOIN b ON a.x = b.y WHERE a.id = 1;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=4.40..23.19 rows=11 width=16)
+row   ->  Index Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=8)
+row         Index Cond: (id = 1)
+row   ->  Bitmap Heap Scan on b  (cost=4.24..14.91 rows=11 width=8)
+row         Recheck Cond: (y = a.x)
+row         ->  Bitmap Index Scan on b_y  (cost=0.00..4.24 rows=11 width=0)
+row               Index Cond: (y = a.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM a JOIN b ON a.x = b.id;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=60.85..99.39 rows=2260 width=16)
+row   Hash Cond: (a.x = b.id)
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM a JOIN b ON a.x = b.id WHERE a.x < 10;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=60.85..101.08 rows=753 width=16)
+row   Hash Cond: (a.x = b.id)
+row   ->  Seq Scan on a  (cost=0.00..38.25 rows=753 width=8)
+row         Filter: (x < 10)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM a LEFT JOIN b ON a.x = b.id WHERE a.id = 1;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join  (cost=0.31..16.35 rows=1 width=16)
+row   ->  Index Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=8)
+row         Index Cond: (id = 1)
+row   ->  Index Scan using b_pkey on b  (cost=0.15..8.17 rows=1 width=8)
+row         Index Cond: (id = a.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE EXISTS (SELECT 1 FROM b WHERE b.y = a.x) AND a.id = 1;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Semi Join  (cost=4.40..14.29 rows=1 width=8)
+row   ->  Index Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=8)
+row         Index Cond: (id = 1)
+row   ->  Bitmap Heap Scan on b  (cost=4.24..14.91 rows=11 width=4)
+row         Recheck Cond: (a.x = y)
+row         ->  Bitmap Index Scan on b_y  (cost=0.00..4.24 rows=11 width=0)
+row               Index Cond: (y = a.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM a JOIN b ON a.x = b.id JOIN c ON c.id = b.y WHERE a.id = 1;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.46..16.54 rows=1 width=24)
+row   ->  Nested Loop  (cost=0.31..16.35 rows=1 width=16)
+row         ->  Index Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=8)
+row               Index Cond: (id = 1)
+row         ->  Index Scan using b_pkey on b  (cost=0.15..8.17 rows=1 width=8)
+row               Index Cond: (id = a.x)
+row   ->  Index Scan using c_pkey on c  (cost=0.15..0.19 rows=1 width=8)
+row         Index Cond: (id = b.y)
+EXPLAIN
+> EXPLAIN SELECT * FROM a JOIN b ON a.x = b.id AND b.y > 5 WHERE a.id = 1;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.31..16.37 rows=1 width=16)
+row   ->  Index Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=8)
+row         Index Cond: (id = 1)
+row   ->  Index Scan using b_pkey on b  (cost=0.15..8.17 rows=1 width=8)
+row         Index Cond: (id = a.x)
+row         Filter: (y > 5)
+EXPLAIN
+> EXPLAIN SELECT * FROM a JOIN b ON a.x = b.id WHERE a.id < 3;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=70.84..92.23 rows=753 width=16)
+row   Hash Cond: (a.x = b.id)
+row   ->  Bitmap Heap Scan on a  (cost=9.99..29.40 rows=753 width=8)
+row         Recheck Cond: (id < 3)
+row         ->  Bitmap Index Scan on a_pkey  (cost=0.00..9.80 rows=753 width=0)
+row               Index Cond: (id < 3)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM a JOIN b ON a.x + 1 = b.id WHERE a.id = 1;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.31..16.35 rows=1 width=16)
+row   ->  Index Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=8)
+row         Index Cond: (id = 1)
+row   ->  Index Scan using b_pkey on b  (cost=0.16..8.18 rows=1 width=8)
+row         Index Cond: (id = (a.x + 1))
+EXPLAIN
+> EXPLAIN SELECT * FROM a JOIN b ON a.x = b.id JOIN c ON c.id = a.x WHERE a.id = 1;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.46..16.56 rows=1 width=24)
+row   Join Filter: (c.id = a.x)
+row   ->  Nested Loop  (cost=0.31..16.35 rows=1 width=16)
+row         ->  Index Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=8)
+row               Index Cond: (id = 1)
+row         ->  Index Scan using b_pkey on b  (cost=0.15..8.17 rows=1 width=8)
+row               Index Cond: (id = a.x)
+row   ->  Index Scan using c_pkey on c  (cost=0.15..0.19 rows=1 width=8)
+row         Index Cond: (id = b.id)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a JOIN b ON a.x = b.id WHERE a.id = 1;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.31..16.35 rows=1 width=4)
+row   ->  Index Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=8)
+row         Index Cond: (id = 1)
+row   ->  Index Only Scan using b_pkey on b  (cost=0.15..8.17 rows=1 width=4)
+row         Index Cond: (id = a.x)
+EXPLAIN

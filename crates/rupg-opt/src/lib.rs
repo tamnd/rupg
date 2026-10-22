@@ -13,6 +13,7 @@ mod pullup;
 mod pushdown;
 mod upper;
 
+use std::collections::BTreeMap;
 use std::ops::Range;
 
 use rupg_analyze::{
@@ -119,6 +120,8 @@ struct Builder<'q> {
     /// The fraction of the rows of the next query that its caller reads, as the `tuple_fraction` of `subquery_planner`. A fraction of 1 or more is a number of rows, and 0 is all the rows.
     fraction: f64,
     members: Option<&'q dyn Members>,
+    /// The tables of the scans of each scope, by the scope and the place of the table, for the parameterized scans of the tables.
+    bases: BTreeMap<(usize, usize), from::Base<'q>>,
 }
 
 /// A subplan that runs for each row, which waits for the node that holds its subquery.

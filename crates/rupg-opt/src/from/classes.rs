@@ -1,6 +1,7 @@
 //! The equivalence classes of the `=` conditions, as `process_equivalence`, `reconsider_outer_join_clauses` and `generate_base_implied_equalities_const` make them. A class with a constant gives each of its expressions a condition of its own with the constant, and its conditions of joins go. A class with no constant gives each join one condition, as `generate_join_implied_equalities` makes it.
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 
 use rupg_analyze::{Expr, ExprKind, Func, FuncForm, JoinKind};
@@ -59,6 +60,10 @@ pub(super) struct Joined<'q> {
     /// The members, each with its relation.
     members: Vec<(&'q Expr, usize)>,
     families: Vec<u32>,
+    /// The place of the class in [`Found::classes`], which each condition of the class has as its `parent_ec`.
+    id: usize,
+    /// `ec_derives`: the conditions that the class made, each with the places of its two members. The class makes the condition of two members once, with the members in the order of the first request, so that a join and a scan of an index test the same condition.
+    derived: RefCell<Vec<(usize, usize, Expr)>>,
 }
 
 impl<'q> Joined<'q> {
@@ -73,27 +78,63 @@ impl<'q> Joined<'q> {
         outer: &BTreeSet<usize>,
         inner: &BTreeSet<usize>,
     ) -> Option<Qual<'q>> {
-        let side = |rels: &BTreeSet<usize>| -> Vec<(&'q Expr, usize)> {
-            self.members.iter().filter(|(_, r)| rels.contains(r)).copied().collect()
+        let side = |rels: &BTreeSet<usize>| -> Vec<(usize, &'q Expr)> {
+            let members = self.members.iter().enumerate();
+            members.filter(|(_, (_, r))| rels.contains(r)).map(|(at, (m, _))| (at, *m)).collect()
         };
         let (outers, inners) = (side(outer), side(inner));
-        let mut best: Option<(usize, Expr, usize, usize)> = None;
-        'outer: for &(o, ro) in &outers {
-            for &(i, ri) in &inners {
+        let mut best: Option<(usize, usize, usize)> = None;
+        'outer: for &(oa, o) in &outers {
+            for &(ia, i) in &inners {
                 let Some(expr) = equality(&self.families, o, i) else { continue };
                 let hash = exprs::binary(&expr).is_some_and(|(op, _, _)| exprs::can_hash(op));
                 let score =
                     usize::from(is_column(o)) + usize::from(is_column(i)) + usize::from(hash);
-                if best.as_ref().is_none_or(|b| score > b.0) {
-                    best = Some((score, expr, ro, ri));
+                if best.is_none_or(|b| score > b.0) {
+                    best = Some((score, oa, ia));
                     if score == 3 {
                         break 'outer;
                     }
                 }
             }
         }
-        let (_, expr, ro, ri) = best?;
-        Some(Qual::implied(expr, BTreeSet::from([ro, ri])))
+        let (_, oa, ia) = best?;
+        self.derive(oa, ia)
+    }
+
+    /// `generate_implied_equalities_for_column` for the class: when a member reads the relation `r` alone and `matches` accepts it with the families of the class, the condition of that member with each member of another relation, but not of the relations of `prohibited`, in the order of the members.
+    pub(super) fn column(
+        &self,
+        r: usize,
+        matches: impl Fn(&Expr, &[u32]) -> bool,
+        prohibited: &BTreeSet<usize>,
+    ) -> Vec<Qual<'q>> {
+        let mut found = self.members.iter().enumerate();
+        let Some((at, _)) = found.find(|(_, (m, o))| *o == r && matches(m, &self.families)) else {
+            return Vec::new();
+        };
+        let others = self.members.iter().enumerate();
+        others
+            .filter(|(_, (_, o))| *o != r && !prohibited.contains(o))
+            .filter_map(|(other, _)| self.derive(at, other))
+            .collect()
+    }
+
+    /// `create_join_clause`: the condition `left = right` of two members, from `ec_derives` when the class made it before with the members in either order.
+    fn derive(&self, left: usize, right: usize) -> Option<Qual<'q>> {
+        let mut derived = self.derived.borrow_mut();
+        let made =
+            derived.iter().find(|(a, b, _)| (*a, *b) == (left, right) || (*a, *b) == (right, left));
+        let expr = match made {
+            Some((_, _, expr)) => expr.clone(),
+            None => {
+                let expr = equality(&self.families, self.members[left].0, self.members[right].0)?;
+                derived.push((left, right, expr.clone()));
+                expr
+            }
+        };
+        let rels = BTreeSet::from([self.members[left].1, self.members[right].1]);
+        Some(Qual { class: Some(self.id), ..Qual::implied(expr, rels) })
     }
 }
 
@@ -126,7 +167,8 @@ fn join_class<'q>(class: &Class<'q>, own: &BTreeSet<usize>) -> Option<(Joined<'q
         }
         members.push((member, r));
     }
-    Some((Joined { members, families: class.families.clone() }, quals))
+    let derived = RefCell::new(Vec::new());
+    Some((Joined { members, families: class.families.clone(), id: 0, derived }, quals))
 }
 
 /// Makes the conditions of the equivalence classes with a constant of the join domain of the tree, and then of the domains below it. `top` is true for the domain of the whole query. The result is false when two constants of a class of the top domain are not equal, so that no row passes.
@@ -155,11 +197,12 @@ pub(super) fn domain<'q>(tree: &mut Tree<'q>, top: bool, out: &mut Found<'q>) ->
                 }
             }
             None => {
-                if let Some((joins, quals)) = join_class(class, &own) {
+                if let Some((mut joins, quals)) = join_class(class, &own) {
                     remove(tree, &class.sources, &mut out.joined);
                     for qual in quals {
                         place(tree, qual);
                     }
+                    joins.id = out.classes.len();
                     out.classes.push(joins);
                 }
             }

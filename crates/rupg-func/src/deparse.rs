@@ -126,6 +126,8 @@ struct Deparser<'a> {
     window_names: Vec<Option<String>>,
     /// For `EXPLAIN`, a column of a query outside the query always shows the name of its relation, as `get_parameter` shows the value of a parameter.
     outer_prefix: bool,
+    /// For `EXPLAIN` of a condition of a scan, the relation of the scan. A column of another relation is the value of a parameter of a nested loop, which shows the name of its relation, as `get_parameter`.
+    pub(crate) own: Option<usize>,
     buf: String,
 }
 
@@ -178,6 +180,7 @@ impl<'a> Deparser<'a> {
             subplan: None,
             window_names: Vec::new(),
             outer_prefix: false,
+            own: None,
             buf: String::new(),
         }
     }
@@ -231,7 +234,9 @@ impl<'a> Deparser<'a> {
             done?;
             return Ok(attname);
         }
-        let mut prefix = self.prefix || (self.outer_prefix && var.levels_up > 0);
+        let mut prefix = self.prefix
+            || (self.outer_prefix && var.levels_up > 0)
+            || self.own.is_some_and(|o| var.levels_up == 0 && var.relation != o);
         if in_order_by && !self.in_group_by && !prefix {
             prefix = self.outputs.iter().any(|(name, v)| *name == attname && *v != Some(*var));
         }

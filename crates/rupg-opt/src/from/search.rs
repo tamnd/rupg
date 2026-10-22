@@ -4,13 +4,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use rupg_analyze::JoinKind;
+use rupg_analyze::{Expr, JoinKind};
 
 use super::classes::{Found, Joined};
+use super::index::{self, Param};
 use super::paths::Paths;
 use super::{
-    Candidate, Part, Qual, Rel, Special, Stats, choose, finish, join_rels, join_rows, lateral_rels,
-    semi_rels, semi_selectivity, semifactors, unique_rels,
+    Base, Candidate, Part, Qual, Rel, Special, Stats, choose, eq_unique, finish, join_rels,
+    join_rows, lateral_rels, semi_rels, semi_selectivity, semifactors, unique_rels,
 };
 use crate::{Level, cost, exprs};
 
@@ -30,6 +31,8 @@ struct Set<'q> {
     rows: f64,
     /// `lateral_relids`: the relations of the other items that the set reads with a lateral reference.
     lateral: BTreeSet<usize>,
+    /// The parameterized scans of an item that is one table, as `cheapest_parameterized_paths`.
+    params: Vec<Param<'q>>,
 }
 
 /// What a join of two sets does.
@@ -84,14 +87,22 @@ pub(super) fn search<'q>(
     pool: &[Qual<'q>],
     mut specials: Vec<Special<'q>>,
     found: &Found<'q>,
+    bases: &[Option<&Base<'q>>],
     stats: &Stats,
 ) -> Vec<Rel<'q>> {
     let n = items.len();
     let classes = &found.classes;
     let item = |rels: &BTreeSet<usize>| items.iter().find(|i| i[0].rels == *rels);
     let pool = &Pool::new(pool, &specials);
+    // `rel_supports_distinctness`: only an inner side that is one relation with a unique key can be unique.
+    let distinct = |rels: &BTreeSet<usize>| {
+        let mut one = rels.iter();
+        one.next().is_some_and(|r| stats.distinct.contains_key(r)) && one.next().is_none()
+    };
     specials.retain(|sp| {
-        let Some(inner) = item(&sp.right).filter(|_| sp.kind == JoinKind::Semi) else {
+        let Some(inner) =
+            item(&sp.right).filter(|_| sp.kind == JoinKind::Semi && distinct(&sp.right))
+        else {
             return true;
         };
         let quals = between(pool, classes, &sp.left, &sp.right);
@@ -114,7 +125,54 @@ pub(super) fn search<'q>(
         .filter(|sp| !sp.quals.is_empty())
         .map(|sp| sp.left.union(&sp.right).copied().collect())
         .collect();
+    // `adjust_rowcount_for_semijoins`: the outer side of each semi join, its inner side, and the groups of the values of the inner side in the rows of each table of it, as `approximate_joinrel_size`.
+    let semis: Vec<Semis> = specials
+        .iter()
+        .filter(|sp| sp.kind == JoinKind::Semi)
+        .map(|sp| {
+            let raw = sp.right.iter().filter_map(|o| stats.rows.get(o)).map(|(_, rows)| *rows);
+            let values: Vec<&Expr> =
+                sp.semi.iter().flat_map(|semi| semi.values.iter().map(|(v, _)| *v)).collect();
+            let left = sp.syn.difference(&sp.right).copied().collect();
+            (left, sp.right.clone(), stats.groups(&values, raw.product()))
+        })
+        .collect();
     let domain: BTreeSet<usize> = items.iter().flat_map(|r| r[0].rels.iter().copied()).collect();
+    let mut params: Vec<Vec<Param<'q>>> = Vec::new();
+    for (plans, base) in items.iter().zip(bases) {
+        let rels = &plans[0].rels;
+        let one = rels.iter().next().copied().filter(|_| rels.len() == 1);
+        let found = match (base, one) {
+            (Some(base), Some(r)) if lateral_rels(level, r).is_disjoint(&domain) => {
+                // `join_clause_is_movable_to`: a condition of a join of the table that is not a condition of an outer join below it.
+                let mut joins: Vec<Qual<'q>> = pool
+                    .quals
+                    .iter()
+                    .zip(&pool.needs)
+                    .filter(|(q, needs)| {
+                        q.rels.contains(&r) && q.rels.len() > 1 && **needs == q.rels && !q.outer
+                    })
+                    .map(|(q, _)| q.clone())
+                    .collect();
+                for sp in specials.iter().filter(|sp| sp.right == *rels) {
+                    joins.extend(sp.quals.iter().filter(|q| q.rels.len() > 1).cloned());
+                }
+                let prohibited: BTreeSet<usize> = domain
+                    .iter()
+                    .filter(|o| lateral_rels(level, **o).contains(&r))
+                    .copied()
+                    .collect();
+                let semi = specials.iter().any(|sp| {
+                    sp.right == *rels && matches!(sp.kind, JoinKind::Semi | JoinKind::Anti)
+                });
+                let found = (r, *base, plans.as_slice(), semi);
+                param_scans(level, found, (&joins, &semis), classes, &prohibited, stats)
+            }
+            _ => Vec::new(),
+        };
+        params.push(found);
+    }
+    let mut params = params.into_iter();
     let mut problem = Problem {
         level,
         pool,
@@ -144,6 +202,7 @@ pub(super) fn search<'q>(
             paths: Paths::new(stats.startup),
             rows: rel.node.cost.rows,
             lateral,
+            params: params.next().unwrap_or_default(),
         });
     }
     // With a special join, a number of items can have no set, as the inner side of a join must be whole.
@@ -158,6 +217,62 @@ pub(super) fn search<'q>(
         return in_order(level, items, pool, &specials, classes, stats);
     };
     problem.sets.swap_remove(best).plans
+}
+
+/// The outer side of a semi join, its inner side, and the groups of the values of the inner side.
+type Semis = (BTreeSet<usize>, BTreeSet<usize>, f64);
+
+/// The parameterized scans of an item that is the table `r`, for the inner side of a nested loop, as `cheapest_parameterized_paths`. `joins` has the conditions of the joins that a scan of the table can test, and `prohibited` has the relations that read the table with a lateral reference. For each set of outer relations the scan has the conditions of `get_baserel_parampathinfo`: the conditions of the table, the conditions of `joins` that the table and the set read, and the condition of each class with a member in the table and a member in the set. Its rows are the rows of the table that pass them, and a nested loop scans it once for each row of the smallest outer relation, as `get_loop_count`. When the table is on the outer side of a semi join in `semis` and the outer relation is on its inner side, the rows of the outer relation are at most the groups of the values of the semi join, as `adjust_rowcount_for_semijoins`. The scans that `add_path` keeps with the plans of the item are the parameterized scans of the item. The inner side of a semi join or an anti join keeps a scan with a lower start cost, as `consider_param_startup`.
+fn param_scans<'q>(
+    level: &Level<'q>,
+    (r, base, plans, semi): (usize, &Base<'q>, &[Rel<'q>], bool),
+    (joins, semis): (&[Qual<'q>], &[Semis]),
+    classes: &[Joined<'q>],
+    prohibited: &BTreeSet<usize>,
+    stats: &Stats,
+) -> Vec<Param<'q>> {
+    let eq = eq_unique(r, base.tuples, &stats.unique);
+    let table = |quals: Vec<Qual<'q>>, rows: f64, outer: BTreeSet<usize>, loops: f64| {
+        let (pages, tuples) = (base.pages, base.tuples);
+        index::Table { r, pages, tuples, rows, quals, eq: &eq, outer, loops }
+    };
+    let ppi = |outer: &BTreeSet<usize>| {
+        let mut joined = outer.clone();
+        joined.insert(r);
+        let mut quals = base.quals.clone();
+        let n = quals.len();
+        quals.extend(joins.iter().filter(|q| q.rels.is_subset(&joined)).cloned());
+        let inner = BTreeSet::from([r]);
+        quals.extend(classes.iter().filter_map(|c| c.condition(outer, &inner)));
+        // `get_parameterized_baserel_size`: the conditions of the joins, then the conditions of the table.
+        let all = quals[n..].iter().chain(&quals[..n]).map(|q| &*q.expr);
+        let rows = cost::clamp_rows(base.tuples * cost::list_selectivity_by(all, &eq));
+        let rows = rows.min(base.rows);
+        let fewest =
+            outer.iter().filter_map(|o| Some((o, stats.rows.get(o)?.1))).map(|(o, rows)| {
+                let semi =
+                    semis.iter().filter(|(left, right, _)| left.contains(&r) && right.contains(o));
+                semi.fold(rows, |rows, (_, _, unique)| rows.min(*unique))
+            });
+        let loops = fewest.fold(0.0, |m: f64, x| if m == 0.0 || m > x { x } else { m });
+        table(quals, rows, outer.clone(), if loops > 0.0 { loops } else { 1.0 })
+    };
+    let plain = table(base.quals.clone(), base.rows, BTreeSet::new(), 1.0);
+    let found =
+        index::param_paths(level, &plain, &base.indexes, joins, classes, prohibited, &ppi, stats);
+    if found.is_empty() {
+        return Vec::new();
+    }
+    let mut paths = Paths::with_params(stats.startup, semi);
+    for rel in plans {
+        let (c, keys) = (rel.node.cost, rel.order.clone());
+        paths.add_param(c.startup, c.total, keys, BTreeSet::new(), c.rows, None);
+    }
+    for p in found {
+        let (c, keys, outer) = (p.rel.node.cost, p.rel.order.clone(), p.outer.clone());
+        paths.add_param(c.startup, c.total, keys, outer, c.rows, Some(p));
+    }
+    paths.params().into_iter().flatten().collect()
 }
 
 /// The joins of the items in their order, each with the conditions that its two sides have. An item that is the inner side of a special join joins with its special join.
@@ -248,8 +363,22 @@ impl<'q> Problem<'_, 'q> {
                     How::Unique(i) => &self.uniques[i],
                     _ => &self.sets[inner].plans,
                 };
-                let (l, r) = (self.sets[outer].plans[l].clone(), inners[r].clone());
-                let (quals, filter) = self.conditions(outer, inner, how);
+                let (mut l, mut r) = (self.sets[outer].plans[l].clone(), inners[r].clone());
+                let (mut quals, mut filter) = self.conditions(outer, inner, how);
+                if let Some(i) = best.param {
+                    let param = match best.swapped {
+                        true => &self.sets[outer].params[i],
+                        false => &self.sets[inner].params[i],
+                    };
+                    match best.swapped {
+                        true => l = param.rel.clone(),
+                        false => r = param.rel.clone(),
+                    }
+                    let enforced =
+                        |q: &Qual<'q>| param.enforced.iter().any(|e| e.expr.same(&q.expr));
+                    quals.retain(|q| !enforced(q));
+                    filter.retain(|q| !enforced(q));
+                }
                 let mut rel = finish(self.level, &best, l, r, &quals, &filter, self.sets[s].rows);
                 rel.node.cost.width = self.stats.width(&rel.rels);
                 plans.push(rel);
@@ -470,6 +599,10 @@ impl<'q> Problem<'_, 'q> {
                 }
             }
         }
+        // `build_joinrel_restrictlist`: the classes make the conditions of the join with the first set as the outer side.
+        if (outer, inner) != (a, b) {
+            between(self.pool, self.classes, &self.sets[a].rels, &self.sets[b].rels);
+        }
         let mut made = Vec::new();
         let mut rows = None;
         for how in hows {
@@ -498,7 +631,9 @@ impl<'q> Problem<'_, 'q> {
                     cost::clamp_rows(outer_rows * fraction)
                 }
             });
-            let found = choose(self.level, kind, l, inners, &quals, &filter, self.stats, part);
+            let params = (&self.sets[outer].params[..], &self.sets[inner].params[..]);
+            let found =
+                choose(self.level, kind, l, inners, &quals, &filter, self.stats, part, params);
             made.extend(found.into_iter().map(|(candidate, keys)| (candidate, keys, how)));
         }
         let Some(rows) = rows.filter(|_| !made.is_empty()) else { return };
@@ -509,7 +644,16 @@ impl<'q> Problem<'_, 'q> {
                 self.index.insert(items, at);
                 self.levels[items.count_ones() as usize].push(at);
                 let paths = Paths::new(self.stats.startup);
-                self.sets.push(Set { items, rels, plans: Vec::new(), paths, rows, lateral });
+                let params = Vec::new();
+                self.sets.push(Set {
+                    items,
+                    rels,
+                    plans: Vec::new(),
+                    paths,
+                    rows,
+                    lateral,
+                    params,
+                });
                 at
             }
         };

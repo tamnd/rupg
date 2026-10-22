@@ -460,16 +460,18 @@ impl Explainer<'_, '_> {
             | Kind::TableFunctionScan(_) => {
                 self.qual("Filter", scope, &node.filter, self.options.verbose)?;
             }
-            Kind::IndexScan { cond, .. } => {
-                self.qual("Index Cond", scope, cond, self.options.verbose)?;
-                self.qual("Filter", scope, &node.filter, self.options.verbose)?;
+            Kind::IndexScan { cond, relation, .. } => {
+                let own = Some(*relation);
+                self.scan_qual("Index Cond", scope, cond, self.options.verbose, own)?;
+                self.scan_qual("Filter", scope, &node.filter, self.options.verbose, own)?;
             }
-            Kind::BitmapIndexScan { cond, .. } => {
-                self.qual("Index Cond", scope, cond, self.options.verbose)?;
+            Kind::BitmapIndexScan { cond, relation, .. } => {
+                self.scan_qual("Index Cond", scope, cond, self.options.verbose, Some(*relation))?;
             }
-            Kind::BitmapHeapScan { recheck, .. } => {
-                self.qual("Recheck Cond", scope, recheck, self.options.verbose)?;
-                self.qual("Filter", scope, &node.filter, self.options.verbose)?;
+            Kind::BitmapHeapScan { recheck, relation } => {
+                let own = Some(*relation);
+                self.scan_qual("Recheck Cond", scope, recheck, self.options.verbose, own)?;
+                self.scan_qual("Filter", scope, &node.filter, self.options.verbose, own)?;
             }
             Kind::SampleScan(r) => {
                 self.sampling(scope, *r, upper)?;
@@ -605,10 +607,22 @@ impl Explainer<'_, '_> {
 
     /// `show_qual`: the conditions of a node, with `AND` between them, or nothing for no condition.
     fn qual(&mut self, label: &str, scope: usize, items: &[Item<'_>], prefix: bool) -> Result<()> {
+        self.scan_qual(label, scope, items, prefix, None)
+    }
+
+    /// [`Self::qual`] of a scan of the relation `own`. A column of another relation is the value of a parameter of a nested loop, which shows the name of its relation, as `get_parameter`.
+    fn scan_qual(
+        &mut self,
+        label: &str,
+        scope: usize,
+        items: &[Item<'_>],
+        prefix: bool,
+        own: Option<usize>,
+    ) -> Result<()> {
         if items.is_empty() {
             return Ok(());
         }
-        let texts = self.items(scope, items, prefix)?;
+        let texts = self.scan_items(scope, items, prefix, own)?;
         let text = if texts.len() == 1 {
             texts.into_iter().next().unwrap_or_default()
         } else {
@@ -620,10 +634,24 @@ impl Explainer<'_, '_> {
 
     /// The texts of the expressions of a node. An expression that the node reads from the node below and that is not a column is in parentheses, as `get_special_variable` writes it.
     fn items(&mut self, scope: usize, items: &[Item<'_>], prefix: bool) -> Result<Vec<String>> {
+        self.scan_items(scope, items, prefix, None)
+    }
+
+    /// [`Self::items`] of a scan of the relation `own`, as [`Self::scan_qual`].
+    fn scan_items(
+        &mut self,
+        scope: usize,
+        items: &[Item<'_>],
+        prefix: bool,
+        own: Option<usize>,
+    ) -> Result<Vec<String>> {
         items
             .iter()
             .map(|item| {
-                let text = self.texts.expr(scope, &item.expr, prefix)?;
+                let text = match own {
+                    Some(own) => self.texts.scan_expr(scope, &item.expr, prefix, own)?,
+                    None => self.texts.expr(scope, &item.expr, prefix)?,
+                };
                 Ok(if item.below && !matches!(item.expr.kind, ExprKind::Var(_)) {
                     format!("({text})")
                 } else {
