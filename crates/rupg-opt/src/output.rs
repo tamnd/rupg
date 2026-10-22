@@ -12,7 +12,8 @@ pub(crate) fn level<'q>(level: &Level<'q>, node: &mut Node<'q>) {
     let want = if level.no_targets {
         Vec::new()
     } else {
-        level.display_query.targets.iter().map(|t| Item::of(&t.expr)).collect()
+        let targets = level.display_query.targets.iter().map(|t| Item::of(&t.expr));
+        targets.chain(level.marks.iter().map(|m| item(m.clone()))).collect()
     };
     set(level, node, want, false);
 }
@@ -197,9 +198,14 @@ fn modify_targets<'q>(level: &Level<'q>, operation: Operation) -> Vec<Item<'q>> 
                 .map(|(_, t)| Item::of(&t.expr))
                 .collect();
             out.push(Item::of(&tid.expr));
+            out.extend(level.marks.iter().map(|m| item(m.clone())));
             out
         }
-        Operation::Delete => vec![Item::of(&tid.expr)],
+        Operation::Delete => {
+            let mut out = vec![Item::of(&tid.expr)];
+            out.extend(level.marks.iter().map(|m| item(m.clone())));
+            out
+        }
         _ => all(),
     }
 }

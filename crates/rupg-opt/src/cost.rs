@@ -20,6 +20,8 @@ const DEFAULT_PAGES: f64 = 10.0;
 const PAGE_SPACE: i32 = 8168;
 /// `MAXALIGN(SizeofHeapTupleHeader) + sizeof(ItemIdData)`.
 const TUPLE_OVERHEAD: i32 = 28;
+/// `MAXALIGN(SizeofHeapTupleHeader)`: the header of the row of a whole-row column, which `set_rel_width` adds to the width of its columns.
+const WHOLE_ROW_HEADER: i32 = 24;
 /// `DEFAULT_EQ_SEL`.
 pub(crate) const EQ_SEL: f64 = 0.005;
 /// `DEFAULT_INEQ_SEL`.
@@ -71,7 +73,7 @@ pub(crate) fn type_width(ty: u32, typmod: i32) -> i32 {
 /// The width of a column of a relation, as `get_attavgwidth` with no statistics. A system column has the width of its type.
 pub(crate) fn column_width(relation: &Relation, attnum: i16) -> i32 {
     match attnum {
-        0 => row_width(relation),
+        0 => WHOLE_ROW_HEADER + row_width(relation),
         -1 => 6,
         a if a < 0 => 4,
         a => relation

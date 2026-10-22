@@ -10,8 +10,12 @@ mod from;
 mod output;
 mod upper;
 
-use rupg_analyze::{Cte, Expr, ExprKind, FromItem, Query, SubLink, SubLinkKind, WriteKind};
+use rupg_analyze::{
+    Cte, Expr, ExprKind, FromItem, Query, SubLink, SubLinkKind, TABLE_OID_ATTNUM, Var, Write,
+    WriteKind,
+};
 use rupg_plan::{Item, Kind, Label, Leaf, Node, Operation, Plan, Scope, SubPlan};
+use rupg_types::oid;
 
 /// The tables of the inheritance trees of the relations of the queries, which the planner has no catalog for.
 pub trait Members: std::fmt::Debug {
@@ -111,6 +115,8 @@ pub(crate) struct Level<'q> {
     pub(crate) joined: Vec<&'q Expr>,
     /// The estimates of the relations of `FROM`, which `estimate_num_groups` reads.
     pub(crate) stats: from::Stats,
+    /// The junk columns of the row marks, which the rows of the query carry after its targets.
+    pub(crate) marks: Vec<Expr>,
 }
 
 impl<'q> Level<'q> {
@@ -154,6 +160,7 @@ impl<'q> Builder<'q> {
         let target = write.is_some_and(|w| w.kind == WriteKind::Insert);
         let scope = self.push_scope(query, parent, target);
         let no_targets = std::mem::take(&mut self.exists) && simple_exists(query);
+        let marks = self.marks(query, write);
         let mut level = Level {
             scope,
             query,
@@ -163,6 +170,7 @@ impl<'q> Builder<'q> {
             no_targets,
             joined: Vec::new(),
             stats: from::Stats::default(),
+            marks,
         };
         let depth = self.ctes.len();
         if !std::ptr::eq(outer, query) {
@@ -193,6 +201,61 @@ impl<'q> Builder<'q> {
         node.init_plans = init;
         self.ctes.truncate(depth);
         node
+    }
+
+    /// `preprocess_rowmarks` and `preprocess_targetlist`: the junk columns that the rows of a query carry for its row marks. `FOR UPDATE` and `FOR SHARE` mark each relation of `FROM`, the locked tables first, and an `UPDATE` or a `DELETE` marks each relation other than its target. A table gives `ctid`, and a function, a `VALUES` list or a query of `WITH` gives the whole row, as `ROW_MARK_COPY`. A table with an inheritance tree also gives `tableoid`, which `expand_inherited_rtentry` adds after the other columns. A subquery gives no column yet.
+    fn marks(&self, query: &'q Query, write: Option<&Write>) -> Vec<Expr> {
+        let target = match write.map(|w| &w.kind) {
+            Some(WriteKind::Update | WriteKind::Delete) => Some(0),
+            _ if !query.row_marks.is_empty() && write.is_none() => None,
+            _ => return Vec::new(),
+        };
+        let mut items: Vec<&FromItem> = query.from.iter().collect();
+        let mut base = Vec::new();
+        while let Some(item) = items.pop() {
+            match item {
+                FromItem::Relation(r) => base.push(*r),
+                FromItem::Join(join) => items.extend([&join.left, &join.right]),
+            }
+        }
+        base.sort_unstable();
+        base.retain(|&r| Some(r) != target);
+        let table = |r: usize| {
+            let relation = &query.relations[r];
+            relation.oid != 0
+                && relation.subquery.is_none()
+                && relation.function.is_none()
+                && relation.values.is_none()
+                && relation.cte.is_none()
+        };
+        let mut order: Vec<usize> = query
+            .row_marks
+            .iter()
+            .map(|mark| mark.relation)
+            .filter(|&r| table(r) && base.contains(&r))
+            .collect();
+        for r in base {
+            if !order.contains(&r) {
+                order.push(r);
+            }
+        }
+        let var = |r: usize, attnum: i16, ty: u32| {
+            Expr::new(ExprKind::Var(Var { relation: r, attnum, levels_up: 0 }), ty)
+        };
+        let mut out = Vec::new();
+        let mut parents = Vec::new();
+        for r in order {
+            if table(r) {
+                out.push(var(r, -1, oid::TID));
+                if self.members.and_then(|m| m.members(query, r, &[])).is_some() {
+                    parents.push(var(r, TABLE_OID_ATTNUM, oid::OID));
+                }
+            } else if query.relations[r].subquery.is_none() {
+                out.push(var(r, 0, oid::RECORD));
+            }
+        }
+        out.extend(parents);
+        out
     }
 
     /// A new scope in the current subplan.

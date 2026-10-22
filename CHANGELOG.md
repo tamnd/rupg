@@ -4,6 +4,11 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Fixed
+
+- The junk columns of the row marks in `EXPLAIN`, as `preprocess_rowmarks` and `preprocess_targetlist` of PostgreSQL add them. `FOR UPDATE` and `FOR SHARE` carry the `ctid` of each table of `FROM`, the `tableoid` of a table with an inheritance tree and the whole row of a function, and an `UPDATE` or a `DELETE` carries the `ctid` of each table other than its target. The widths and the `Output` lines of `EXPLAIN VERBOSE` show these columns (#546).
+- The width of a whole-row column in `EXPLAIN`, such as `SELECT b FROM b`. PostgreSQL adds the header of the row to the width of its columns (#546).
+
 ## 0.1.66 (2026-10-22)
 
 A patch release on the way to M3. `EXPLAIN` now uses each plan of the join for the nodes above it, shows `Incremental Sort`, estimates the groups as PostgreSQL does with no statistics, and leaves out the keys of `GROUP BY`, `DISTINCT`, `ORDER BY` and `PARTITION BY` that add nothing.
