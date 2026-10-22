@@ -5459,6 +5459,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_like_prefix.test")));
     }
 
+    /// `EXPLAIN` of conditions that are an `OR`, as `generate_bitmap_or_paths` makes a `BitmapOr` of the bitmaps of the arms, and `match_orclause_to_indexcol` makes `x = ANY (array)` of the arms that test one column. `connection/plan_bitmap_or.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_bitmap_or() {
+        big_stack(|| script(include_str!("connection/plan_bitmap_or.test")));
+    }
+
     /// `EXPLAIN` of the bitmap heap scans of a table by its btree indexes, as `create_index_paths` makes them with `choose_bitmap_and` and the costs of `cost_bitmap_heap_scan`. `connection/plan_bitmap_scan.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_bitmap_scan() {
