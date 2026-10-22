@@ -5447,6 +5447,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_values_any.test")));
     }
 
+    /// `EXPLAIN` of targets that call functions, as `set_pathtarget_cost_width` finds their costs. The plan of `FROM` computes the targets before the sort, or the keys of `GROUP BY` with groups, or the keys of the windows with windows, and each scan of a partitioned table computes them. The `Agg` node, the last `WindowAgg` node and the `HashAggregate` of `DISTINCT` add the cost of their targets, in which an aggregate call costs nothing. `connection/plan_target_cost.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_target_cost() {
+        big_stack(|| script(include_str!("connection/plan_target_cost.test")));
+    }
+
     /// `EXPLAIN` of an `OR` of a join whose arms each have a part for one relation, as `extract_restriction_or_clauses` makes an `OR` of those parts a condition of the scan of the relation when it passes 0.9 of the rows at most. The `OR` stays a condition of the join, and its selectivity for an inner join is divided by the selectivity of the new condition, so that the rows of the join stay the same. `connection/plan_or_extract.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_or_extract() {
