@@ -1,4 +1,4 @@
-//! The equivalence classes of the `=` conditions, as `process_equivalence`, `reconsider_outer_join_clauses` and `generate_base_implied_equalities_const` make them. A class with a constant gives each of its expressions a condition of its own with the constant, and its conditions of joins go. A class with no constant and more than one condition gives each join one condition, as `generate_join_implied_equalities` makes it.
+//! The equivalence classes of the `=` conditions, as `process_equivalence`, `reconsider_outer_join_clauses` and `generate_base_implied_equalities_const` make them. A class with a constant gives each of its expressions a condition of its own with the constant, and its conditions of joins go. A class with no constant gives each join one condition, as `generate_join_implied_equalities` makes it.
 
 use std::borrow::Cow;
 use std::collections::BTreeSet;
@@ -62,6 +62,11 @@ pub(super) struct Joined<'q> {
 }
 
 impl<'q> Joined<'q> {
+    /// The members of the class, each with its relation.
+    pub(super) fn members(&self) -> &[(&'q Expr, usize)] {
+        &self.members
+    }
+
     /// `generate_join_implied_equalities_normal`: the condition `outer = inner` of a join when each side has a member of the class. The members are the first pair with the best score: one point for each member that is a column, and one for an operator that a hash join can use.
     pub(super) fn condition(
         &self,
@@ -101,9 +106,9 @@ fn is_column(expr: &Expr) -> bool {
     }
 }
 
-/// The class as a class whose conditions of joins the joins make again: a class with no constant and more than one condition, where each member reads one relation of the domain that no other member reads. A class of one condition keeps its condition.
+/// The class as a class whose conditions of joins the joins make again: a class with no constant, where each member reads one relation of the domain that no other member reads. The joins also make the condition of a class of one condition, with the sides in the order of the join.
 fn join_class<'q>(class: &Class<'q>, own: &BTreeSet<usize>) -> Option<Joined<'q>> {
-    if class.constant().is_some() || class.sources.len() < 2 {
+    if class.constant().is_some() || class.sources.is_empty() {
         return None;
     }
     let mut members: Vec<(&'q Expr, usize)> = Vec::new();

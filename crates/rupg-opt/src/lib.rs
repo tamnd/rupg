@@ -102,6 +102,8 @@ struct Builder<'q> {
     work: Vec<(usize, f64)>,
     /// True when the next query is the subquery of `EXISTS`.
     exists: bool,
+    /// The fraction of the rows of the next query that its caller reads, as the `tuple_fraction` of `subquery_planner`. A fraction of 1 or more is a number of rows, and 0 is all the rows.
+    fraction: f64,
     members: Option<&'q dyn Members>,
 }
 
@@ -154,6 +156,8 @@ pub(crate) struct Level<'q> {
     pub(crate) subplans: Vec<cost::SubCost>,
     /// True when the query gives no targets, as `simplify_EXISTS_query` makes the subquery of `EXISTS`.
     pub(crate) no_targets: bool,
+    /// The `tuple_fraction` of the query, with the effect of its `LIMIT`, as `preprocess_limit` makes it. When it is not 0, a plan with a lower start cost is a different plan.
+    pub(crate) fraction: f64,
     /// The conditions of joins that the equivalence classes took the place of. The scans below a join still give their columns, as `attr_needed` keeps them.
     pub(crate) joined: Vec<&'q Expr>,
     /// The estimates of the relations of `FROM`, which `estimate_num_groups` reads.
@@ -203,6 +207,7 @@ impl<'q> Builder<'q> {
         let target = write.is_some_and(|w| w.kind == WriteKind::Insert);
         let scope = self.push_scope(query, parent, target);
         let no_targets = std::mem::take(&mut self.exists) && simple_exists(query);
+        let caller = std::mem::take(&mut self.fraction);
         let marks = self.marks(query, write);
         let mut level = Level {
             scope,
@@ -213,6 +218,7 @@ impl<'q> Builder<'q> {
             init_cost: 0.0,
             subplans: Vec::new(),
             no_targets,
+            fraction: upper::tuple_fraction(query, caller),
             joined: Vec::new(),
             stats: from::Stats::default(),
             marks,
@@ -235,7 +241,7 @@ impl<'q> Builder<'q> {
         };
         level.joined = joined;
         level.stats = stats;
-        let mut node = self.upper(&level, plans);
+        let mut node = self.upper(&level, plans, caller);
         if let Some(write) = write {
             node = self.modify(&level, write, node);
         }
@@ -415,6 +421,12 @@ impl<'q> Builder<'q> {
         let correlated = exprs::correlated(&link.query, 1);
         let scope = level.scope;
         self.exists = link.kind == SubLinkKind::Exists;
+        // `make_subplan`: `EXISTS` reads one row, as with `LIMIT 1`, and `ANY` and `ALL` read half the rows.
+        self.fraction = match link.kind {
+            SubLinkKind::Exists => 1.0,
+            SubLinkKind::Any | SubLinkKind::All => 0.5,
+            _ => 0.0,
+        };
         let first = self.groups.len();
         let mut plan = self.subplan(|b| b.query(&link.query, Some(scope)));
         let groups = first..self.groups.len();

@@ -1,0 +1,228 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE b (x int, y int);
+CREATE TABLE
+> CREATE TABLE c (x int, z text);
+CREATE TABLE
+> EXPLAIN SELECT * FROM c WHERE z = 'a' OR EXISTS (SELECT 1 FROM b JOIN c c4 ON c4.x = b.y WHERE b.x > c.x);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..3852.20 rows=638 width=36)
+row   Filter: ((z = 'a'::text) OR EXISTS(SubPlan exists_1))
+row   SubPlan exists_1
+row     ->  Nested Loop  (cost=0.00..14407.48 rows=4782 width=0)
+row           Join Filter: (b.y = c4.x)
+row           ->  Seq Scan on c c4  (cost=0.00..22.70 rows=1270 width=4)
+row           ->  Materialize  (cost=0.00..42.02 rows=753 width=4)
+row                 ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=4)
+row                       Filter: (x > c.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE z = 'a' OR EXISTS (SELECT 1 FROM b JOIN c c4 ON c4.x = b.y);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=3.00..28.88 rows=638 width=36)
+row   Filter: ((z = 'a'::text) OR (InitPlan exists_1).col1)
+row   InitPlan exists_1
+row     ->  Nested Loop  (cost=0.00..43111.47 rows=14351 width=0)
+row           Join Filter: (b.y = c4.x)
+row           ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+row           ->  Materialize  (cost=0.00..29.05 rows=1270 width=4)
+row                 ->  Seq Scan on c c4  (cost=0.00..22.70 rows=1270 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE z = 'a' OR NOT EXISTS (SELECT 1 FROM b JOIN c c4 ON c4.x = b.y WHERE b.x > c.x);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..3852.20 rows=638 width=36)
+row   Filter: ((z = 'a'::text) OR (NOT EXISTS(SubPlan exists_1)))
+row   SubPlan exists_1
+row     ->  Nested Loop  (cost=0.00..14407.48 rows=4782 width=0)
+row           Join Filter: (b.y = c4.x)
+row           ->  Seq Scan on c c4  (cost=0.00..22.70 rows=1270 width=4)
+row           ->  Materialize  (cost=0.00..42.02 rows=753 width=4)
+row                 ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=4)
+row                       Filter: (x > c.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE z = 'a' OR x IN (SELECT b.x FROM b JOIN c c4 ON c4.x = b.y WHERE b.y > c.x);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..188367.67 rows=638 width=36)
+row   Filter: ((z = 'a'::text) OR (ANY (x = (SubPlan any_1).col1)))
+row   SubPlan any_1
+row     ->  Hash Join  (cost=38.58..246.07 rows=4782 width=4)
+row           Hash Cond: (b.y = c4.x)
+row           ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=8)
+row                 Filter: (y > c.x)
+row           ->  Hash  (cost=22.70..22.70 rows=1270 width=4)
+row                 ->  Seq Scan on c c4  (cost=0.00..22.70 rows=1270 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE z = 'a' OR x > ALL (SELECT b.x FROM b JOIN c c4 ON c4.x = b.y WHERE b.y > c.x);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..188367.67 rows=638 width=36)
+row   Filter: ((z = 'a'::text) OR (ALL (x > (SubPlan all_1).col1)))
+row   SubPlan all_1
+row     ->  Hash Join  (cost=38.58..246.07 rows=4782 width=4)
+row           Hash Cond: (b.y = c4.x)
+row           ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=8)
+row                 Filter: (y > c.x)
+row           ->  Hash  (cost=22.70..22.70 rows=1270 width=4)
+row                 ->  Seq Scan on c c4  (cost=0.00..22.70 rows=1270 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE z = 'a' OR x = ANY (SELECT b.x FROM b JOIN c c4 ON c4.x = b.y LIMIT 5);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=15.03..44.08 rows=638 width=36)
+row   Filter: ((z = 'a'::text) OR (ANY (x = (hashed SubPlan any_1).col1)))
+row   SubPlan any_1
+row     ->  Limit  (cost=0.00..15.02 rows=5 width=4)
+row           ->  Nested Loop  (cost=0.00..43111.47 rows=14351 width=4)
+row                 Join Filter: (b.y = c4.x)
+row                 ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row                 ->  Materialize  (cost=0.00..29.05 rows=1270 width=4)
+row                       ->  Seq Scan on c c4  (cost=0.00..22.70 rows=1270 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE z = 'a' OR x IN (SELECT b.x FROM b JOIN c c4 ON c4.x = b.y WHERE b.y > c.x LIMIT 5);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..9602.81 rows=638 width=36)
+row   Filter: ((z = 'a'::text) OR (ANY (x = (SubPlan any_1).col1)))
+row   SubPlan any_1
+row     ->  Limit  (cost=0.00..15.06 rows=5 width=4)
+row           ->  Nested Loop  (cost=0.00..14407.48 rows=4782 width=4)
+row                 Join Filter: (b.y = c4.x)
+row                 ->  Seq Scan on c c4  (cost=0.00..22.70 rows=1270 width=4)
+row                 ->  Materialize  (cost=0.00..42.02 rows=753 width=8)
+row                       ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=8)
+row                             Filter: (y > c.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE z = 'a' OR EXISTS (SELECT 1 FROM b JOIN c c4 ON c4.x = b.y JOIN b b5 ON b5.y = c4.x WHERE b.x < c.x);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..4175.36 rows=638 width=36)
+row   Filter: ((z = 'a'::text) OR EXISTS(SubPlan exists_1))
+row   SubPlan exists_1
+row     ->  Nested Loop  (cost=0.00..176555.53 rows=54037 width=0)
+row           Join Filter: (c4.x = b5.y)
+row           ->  Nested Loop  (cost=0.00..14407.48 rows=4782 width=8)
+row                 Join Filter: (b.y = c4.x)
+row                 ->  Seq Scan on c c4  (cost=0.00..22.70 rows=1270 width=4)
+row                 ->  Materialize  (cost=0.00..42.02 rows=753 width=4)
+row                       ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=4)
+row                             Filter: (x < c.x)
+row           ->  Materialize  (cost=0.00..43.90 rows=2260 width=4)
+row                 ->  Seq Scan on b b5  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE z = 'a' OR EXISTS (SELECT 1 FROM b JOIN c c4 ON c4.x = b.y WHERE b.x > c.x ORDER BY b.y);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..3852.20 rows=638 width=36)
+row   Filter: ((z = 'a'::text) OR EXISTS(SubPlan exists_1))
+row   SubPlan exists_1
+row     ->  Nested Loop  (cost=0.00..14407.48 rows=4782 width=0)
+row           Join Filter: (b.y = c4.x)
+row           ->  Seq Scan on c c4  (cost=0.00..22.70 rows=1270 width=4)
+row           ->  Materialize  (cost=0.00..42.02 rows=753 width=4)
+row                 ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=4)
+row                       Filter: (x > c.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE z = 'a' OR EXISTS (SELECT 1 FROM (SELECT b.y FROM b JOIN c c4 ON c4.x = b.y) s WHERE s.y < c.x);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..3852.20 rows=638 width=36)
+row   Filter: ((z = 'a'::text) OR EXISTS(SubPlan exists_1))
+row   SubPlan exists_1
+row     ->  Nested Loop  (cost=0.00..14407.48 rows=4782 width=0)
+row           Join Filter: (b.y = c4.x)
+row           ->  Seq Scan on c c4  (cost=0.00..22.70 rows=1270 width=4)
+row           ->  Materialize  (cost=0.00..42.02 rows=753 width=4)
+row                 ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=4)
+row                       Filter: (y < c.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE z = 'a' OR EXISTS (SELECT 1 FROM b, c c4 WHERE b.x > c.x);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..41.83 rows=638 width=36)
+row   Filter: ((z = 'a'::text) OR EXISTS(SubPlan exists_1))
+row   SubPlan exists_1
+row     ->  Nested Loop  (cost=0.00..12016.71 rows=956310 width=0)
+row           ->  Seq Scan on c c4  (cost=0.00..22.70 rows=1270 width=0)
+row           ->  Materialize  (cost=0.00..42.02 rows=753 width=0)
+row                 ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=0)
+row                       Filter: (x > c.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE z = 'a' OR EXISTS (SELECT 1 FROM b LEFT JOIN c c4 ON c4.x = b.y WHERE b.x > c.x);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..3852.55 rows=638 width=36)
+row   Filter: ((z = 'a'::text) OR EXISTS(SubPlan exists_1))
+row   SubPlan exists_1
+row     ->  Nested Loop Left Join  (cost=0.00..14408.78 rows=4782 width=0)
+row           Join Filter: (c4.x = b.y)
+row           ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=4)
+row                 Filter: (x > c.x)
+row           ->  Materialize  (cost=0.00..29.05 rows=1270 width=4)
+row                 ->  Seq Scan on c c4  (cost=0.00..22.70 rows=1270 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE z = 'a' OR EXISTS (SELECT 1 FROM b JOIN c c4 ON c4.x = b.y WHERE b.x > c.x LIMIT 1);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..3852.20 rows=638 width=36)
+row   Filter: ((z = 'a'::text) OR EXISTS(SubPlan exists_1))
+row   SubPlan exists_1
+row     ->  Nested Loop  (cost=0.00..14407.48 rows=4782 width=0)
+row           Join Filter: (b.y = c4.x)
+row           ->  Seq Scan on c c4  (cost=0.00..22.70 rows=1270 width=4)
+row           ->  Materialize  (cost=0.00..42.02 rows=753 width=4)
+row                 ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=4)
+row                       Filter: (x > c.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE z = 'a' OR EXISTS (SELECT 1 FROM b JOIN c c4 ON c4.z = 'q' WHERE b.x > c.x);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..59.78 rows=638 width=36)
+row   Filter: ((z = 'a'::text) OR EXISTS(SubPlan exists_1))
+row   SubPlan exists_1
+row     ->  Nested Loop  (cost=0.00..120.62 rows=4518 width=0)
+row           ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=0)
+row                 Filter: (x > c.x)
+row           ->  Materialize  (cost=0.00..25.91 rows=6 width=0)
+row                 ->  Seq Scan on c c4  (cost=0.00..25.88 rows=6 width=0)
+row                       Filter: (z = 'q'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE z = 'a' OR x < ALL (SELECT b.x FROM b JOIN c c4 ON c4.x = b.y);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=38.58..411653.99 rows=638 width=36)
+row   Filter: ((z = 'a'::text) OR (ALL (x < (SubPlan all_1).col1)))
+row   SubPlan all_1
+row     ->  Materialize  (cost=38.58..650.87 rows=14351 width=4)
+row           ->  Hash Join  (cost=38.58..579.11 rows=14351 width=4)
+row                 Hash Cond: (b.y = c4.x)
+row                 ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row                 ->  Hash  (cost=22.70..22.70 rows=1270 width=4)
+row                       ->  Seq Scan on c c4  (cost=0.00..22.70 rows=1270 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE z = 'a' OR EXISTS (SELECT 1 FROM b JOIN c c4 ON c4.x + 1 = b.y WHERE b.x > c.x);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..4487.14 rows=638 width=36)
+row   Filter: ((z = 'a'::text) OR EXISTS(SubPlan exists_1))
+row   SubPlan exists_1
+row     ->  Nested Loop  (cost=0.00..16798.26 rows=4782 width=0)
+row           Join Filter: (b.y = (c4.x + 1))
+row           ->  Seq Scan on c c4  (cost=0.00..22.70 rows=1270 width=4)
+row           ->  Materialize  (cost=0.00..42.02 rows=753 width=4)
+row                 ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=4)
+row                       Filter: (x > c.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE EXISTS (SELECT 1 FROM b JOIN c c4 ON c4.x = b.y WHERE b.x = c.x) OR z = 'a';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..4934.02 rows=638 width=36)
+row   Filter: ((ANY (x = (hashed SubPlan exists_to_any_1).col1)) OR (z = 'a'::text))
+row   SubPlan exists_to_any_1
+row     ->  Merge Join  (cost=246.68..468.29 rows=14351 width=4)
+row           Merge Cond: (c4.x = b.y)
+row           ->  Sort  (cost=88.17..91.35 rows=1270 width=4)
+row                 Sort Key: c4.x
+row                 ->  Seq Scan on c c4  (cost=0.00..22.70 rows=1270 width=4)
+row           ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                 Sort Key: b.y
+row                 ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE x = 1 AND (EXISTS (SELECT 1 FROM b JOIN c c4 ON c4.x = b.y WHERE b.x = c.x) OR z = 'a');
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..4937.19 rows=3 width=36)
+row   Filter: ((x = 1) AND (EXISTS(SubPlan exists_1) OR (z = 'a'::text)))
+row   SubPlan exists_1
+row     ->  Nested Loop  (cost=0.00..270.53 rows=70 width=0)
+row           Join Filter: (b.y = c4.x)
+row           ->  Seq Scan on c c4  (cost=0.00..22.70 rows=1270 width=4)
+row           ->  Materialize  (cost=0.00..38.30 rows=11 width=4)
+row                 ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=4)
+row                       Filter: (x = c.x)
+EXPLAIN
