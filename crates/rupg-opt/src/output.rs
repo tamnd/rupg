@@ -83,7 +83,7 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             }
             node.cost.width = node.children.first().map_or(0, |c| c.cost.width);
         }
-        Kind::Append | Kind::SetOp { .. } | Kind::RecursiveUnion => {}
+        Kind::Append | Kind::MergeAppend(_) | Kind::SetOp { .. } | Kind::RecursiveUnion => {}
         Kind::Aggregate { .. } if set_op => {
             node.output = want.iter().map(Item::passed).collect();
             node.cost.width = node.children.first().map_or(0, |c| c.cost.width);
@@ -380,12 +380,20 @@ fn append_rel<'q>(level: &Level<'q>, node: &mut Node<'q>, r: usize, want: &[Item
         op.left.each_leaf(&mut |at| leaves.push(at));
         op.right.each_leaf(&mut |at| leaves.push(at));
     }
-    if matches!(child.kind, Kind::Append) && child.children.len() == leaves.len() {
+    if matches!(child.kind, Kind::Append | Kind::MergeAppend(_))
+        && child.children.len() == leaves.len()
+    {
         let (mut size, mut rows) = (0.0, 0.0);
         for (member, at) in child.children.iter_mut().zip(leaves) {
             let Some(leaf) = sub.relations[at].subquery.as_deref() else { continue };
             let targets = attnums.iter().filter_map(|&a| leaf.targets.get(a));
             member.cost.width = targets.map(|t| cost::expr_width(&t.expr, &leaf.relations)).sum();
+            // The sort of a member of a `Merge Append` gives the rows of the plan below it.
+            if matches!(member.kind, Kind::Sort(_)) {
+                for below in &mut member.children {
+                    below.cost.width = member.cost.width;
+                }
+            }
             size += f64::from(member.cost.width) * member.cost.rows;
             rows += member.cost.rows;
         }

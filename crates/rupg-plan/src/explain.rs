@@ -129,6 +129,7 @@ fn names(kind: &Kind<'_>) -> Names {
         Kind::Limit => simple("Limit"),
         Kind::Unique => simple("Unique"),
         Kind::Append => simple("Append"),
+        Kind::MergeAppend(_) => simple("Merge Append"),
         Kind::SetOp { .. } => {
             Names { pname: "HashSetOp".to_string(), strategy: Some("Hashed"), ..simple("SetOp") }
         }
@@ -309,7 +310,7 @@ impl Explainer<'_, '_> {
         }
         for (i, child) in node.children.iter().enumerate() {
             let relationship = match node.kind {
-                Kind::Append | Kind::BitmapAnd | Kind::BitmapOr => "Member",
+                Kind::Append | Kind::MergeAppend(_) | Kind::BitmapAnd | Kind::BitmapOr => "Member",
                 Kind::SubqueryScan(_) => "Subquery",
                 _ if i == 0 => "Outer",
                 _ => "Inner",
@@ -540,6 +541,13 @@ impl Explainer<'_, '_> {
                     keys[..*presorted].iter().map(|k| k.item.clone()).collect();
                 let presorted = self.items(scope, &items, upper)?;
                 self.w.list("Presorted Key", &presorted);
+            }
+            Kind::MergeAppend(keys) => {
+                let keys = self.sort_keys(scope, keys, upper)?;
+                self.w.list("Sort Key", &keys);
+                if self.w.format != Format::Text {
+                    self.w.integer("Subplans Removed", None, 0);
+                }
             }
             Kind::Append => {
                 if self.w.format != Format::Text {

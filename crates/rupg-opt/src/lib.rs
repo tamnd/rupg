@@ -127,6 +127,8 @@ struct Builder<'q> {
     members: Option<&'q dyn Members>,
     /// The tables of the scans of each scope, by the scope and the place of the table, for the parameterized scans of the tables.
     bases: BTreeMap<(usize, usize), from::Base<'q>>,
+    /// The append relation of the `UNION ALL` that the planner plans now, which keeps the plans of its members.
+    append: Option<from::append::AppendRel<'q>>,
 }
 
 /// A subplan that runs for each row, which waits for the node that holds its subquery.
@@ -267,6 +269,21 @@ impl<'q> Builder<'q> {
         };
         level.joined = joined;
         level.stats = stats;
+        // `generate_orderedappend_paths` reads each plan of a member of an append relation that `add_path` keeps.
+        let member = query.set_op.is_none()
+            && self.append.as_ref().is_some_and(|a| self.scopes[scope].parent == Some(a.scope));
+        if member {
+            let mut kept = Vec::new();
+            for (i, (node, order)) in plans.iter().enumerate() {
+                if let Some(mut node) = self.upper_one(&level, node.clone(), order.clone(), i > 0) {
+                    output::level(&level, &mut node);
+                    kept.push((node, order.clone()));
+                }
+            }
+            if let Some(append) = &mut self.append {
+                append.plans.push(kept);
+            }
+        }
         let mut node = self.upper(&level, plans, caller);
         if let Some(minmax) = &query.minmax {
             node = self.minmax(&level, minmax, node);

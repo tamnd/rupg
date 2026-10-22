@@ -1,0 +1,131 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (id int PRIMARY KEY, x int);
+CREATE TABLE
+> CREATE TABLE b (id int PRIMARY KEY, y int);
+CREATE TABLE
+> CREATE TABLE n (id int, z int);
+CREATE TABLE
+> CREATE INDEX a_x ON a (x);
+CREATE INDEX
+> EXPLAIN SELECT u.id FROM (SELECT id, x FROM a UNION ALL SELECT id, y FROM b) u ORDER BY id;
+fields QUERY PLAN:25:-1:-1
+row Merge Append  (cost=0.32..201.32 rows=4520 width=4)
+row   Sort Key: a.id
+row   ->  Index Only Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+row   ->  Index Only Scan using b_pkey on b  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id, x FROM a UNION ALL SELECT id, y FROM b) u ORDER BY id;
+fields QUERY PLAN:25:-1:-1
+row Merge Append  (cost=0.32..201.32 rows=4520 width=8)
+row   Sort Key: a.id
+row   ->  Index Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=8)
+row   ->  Index Scan using b_pkey on b  (cost=0.15..78.06 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id, x FROM a UNION ALL SELECT id, y FROM b) u ORDER BY id DESC;
+fields QUERY PLAN:25:-1:-1
+row Merge Append  (cost=0.32..201.32 rows=4520 width=8)
+row   Sort Key: a.id DESC
+row   ->  Index Scan Backward using a_pkey on a  (cost=0.15..78.06 rows=2260 width=8)
+row   ->  Index Scan Backward using b_pkey on b  (cost=0.15..78.06 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id, x FROM a UNION ALL SELECT id, y FROM b) u ORDER BY id LIMIT 10;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.32..0.76 rows=10 width=8)
+row   ->  Merge Append  (cost=0.32..201.32 rows=4520 width=8)
+row         Sort Key: a.id
+row         ->  Index Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=8)
+row         ->  Index Scan using b_pkey on b  (cost=0.15..78.06 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id, x FROM a UNION ALL SELECT id, z FROM n) u ORDER BY id;
+fields QUERY PLAN:25:-1:-1
+row Merge Append  (cost=158.67..287.42 rows=4520 width=8)
+row   Sort Key: a.id
+row   ->  Index Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=8)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: n.id
+row         ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id, x FROM a UNION ALL SELECT id, z FROM n) u ORDER BY id LIMIT 5;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=70.30..70.45 rows=5 width=8)
+row   ->  Merge Append  (cost=70.30..199.05 rows=4520 width=8)
+row         Sort Key: a.id
+row         ->  Index Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=8)
+row         ->  Sort  (cost=70.14..75.79 rows=2260 width=8)
+row               Sort Key: n.id
+row               ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id, x FROM a UNION ALL SELECT id, y FROM b) u ORDER BY x;
+fields QUERY PLAN:25:-1:-1
+row Merge Append  (cost=158.67..287.42 rows=4520 width=8)
+row   Sort Key: a.x
+row   ->  Index Scan using a_x on a  (cost=0.15..78.06 rows=2260 width=8)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: b.y
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id, x FROM a UNION ALL SELECT id, y FROM b) u ORDER BY x LIMIT 3;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=61.98..62.06 rows=3 width=8)
+row   ->  Merge Append  (cost=61.98..190.73 rows=4520 width=8)
+row         Sort Key: a.x
+row         ->  Index Scan using a_x on a  (cost=0.15..78.06 rows=2260 width=8)
+row         ->  Sort  (cost=61.81..67.46 rows=2260 width=8)
+row               Sort Key: b.y
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id, x FROM a UNION ALL SELECT id, y FROM b) u WHERE id > 10 ORDER BY id;
+fields QUERY PLAN:25:-1:-1
+row Merge Append  (cost=0.32..129.74 rows=1506 width=8)
+row   Sort Key: a.id
+row   ->  Index Scan using a_pkey on a  (cost=0.15..57.33 rows=753 width=8)
+row         Index Cond: (id > 10)
+row   ->  Index Scan using b_pkey on b  (cost=0.15..57.33 rows=753 width=8)
+row         Index Cond: (id > 10)
+EXPLAIN
+> EXPLAIN SELECT id, count(*) FROM (SELECT id FROM a UNION ALL SELECT id FROM b) u GROUP BY id;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=110.40..112.40 rows=200 width=12)
+row   Group Key: a.id
+row   ->  Append  (cost=0.00..87.80 rows=4520 width=4)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM b JOIN (SELECT id, x FROM a UNION ALL SELECT id, y FROM b) u ON u.id = b.id;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=60.85..160.54 rows=4520 width=16)
+row   Hash Cond: (a.id = b.id)
+row   ->  Append  (cost=0.00..87.80 rows=4520 width=8)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Seq Scan on b b_1  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT id FROM (SELECT id, x FROM a UNION ALL SELECT id, y FROM b) u WHERE id = 1;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.15..16.36 rows=2 width=4)
+row   ->  Index Only Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=4)
+row         Index Cond: (id = 1)
+row   ->  Index Only Scan using b_pkey on b  (cost=0.15..8.17 rows=1 width=4)
+row         Index Cond: (id = 1)
+EXPLAIN
+> EXPLAIN SELECT id + 1 FROM (SELECT id, x FROM a UNION ALL SELECT id, y FROM b) u ORDER BY id;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.32..257.82 rows=4520 width=8)
+row   ->  Merge Append  (cost=0.32..201.32 rows=4520 width=4)
+row         Sort Key: a.id
+row         ->  Index Only Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+row         ->  Index Only Scan using b_pkey on b  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id, x FROM a UNION ALL SELECT id, y FROM b UNION ALL SELECT id, z FROM n) u ORDER BY id;
+fields QUERY PLAN:25:-1:-1
+row Merge Append  (cost=158.84..407.92 rows=6780 width=8)
+row   Sort Key: a.id
+row   ->  Index Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=8)
+row   ->  Index Scan using b_pkey on b  (cost=0.15..78.06 rows=2260 width=8)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: n.id
+row         ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN

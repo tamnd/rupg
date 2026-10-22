@@ -257,6 +257,8 @@ pub enum Kind<'q> {
     Unique,
     /// `Append`: the rows of each member.
     Append,
+    /// `MergeAppend`: the rows of the members, which are each in the order of the keys, merged in that order.
+    MergeAppend(Vec<SortKey<'q>>),
     /// `SetOp` with a hash table: `INTERSECT` or `EXCEPT`.
     SetOp { except: bool, all: bool },
     /// `RecursiveUnion`.

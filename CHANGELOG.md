@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `EXPLAIN` plans a `Merge Append` for a `UNION ALL` in `FROM` when the query reads its rows in an order and that costs less than a sort of the `Append`, as `generate_orderedappend_paths` does. The planner keeps the plans of each `SELECT` in the orders that the query can use, a `SELECT` with no plan in the order gets a sort, and each `SELECT` reads only the columns that the query reads, so that an index only scan can give them (#579).
+
 ## 0.1.67 (2026-10-23)
 
 A patch release on the way to M3. `EXPLAIN` now plans semi joins and anti joins for `EXISTS`, `IN` and `NOT IN`, merges the simple subqueries of `FROM` and moves the conditions of `WHERE` into them, plans index scans, index only scans and bitmap scans with parameterized index scans in nested loops, plans `min` and `max` of an indexed column with an index, and plans a `UNION ALL` in `FROM` as an `Append` of its `SELECT`s.
