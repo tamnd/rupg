@@ -10,6 +10,11 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Fixed
 
+- The cost of the subplans that run once in `EXPLAIN`, as `SS_charge_for_initplans` of PostgreSQL adds it to the start cost and the total cost of the top node of the query. Each `InitPlan` and each `CTE` costs its plan, and an `InitPlan` of `EXISTS` costs its first row (#549).
+- The cost of a `CTE Scan` and of a `WorkTable Scan` in `EXPLAIN`. `cost_ctescan` of PostgreSQL charges two `cpu_tuple_cost` for each row (#549).
+- The selectivity of a condition that is a column, a parameter or a subplan in `EXPLAIN`, such as `(InitPlan exists_1).col1`. `boolvarsel` of PostgreSQL gives half of the rows with no statistics. A row comparison with `=` and a subquery that runs once is the comparisons of its columns (#549).
+- The cost of a row comparison such as `ROW(x, y) < ROW(1, 2)` in `EXPLAIN`, which is one operator for each column, as `cost_qual_eval` of PostgreSQL finds it (#549).
+- A `Subquery Scan` in `EXPLAIN` stays when its subquery gives a junk column, such as a key of `ORDER BY` that is not a target, as `trivial_subqueryscan` of PostgreSQL finds it (#549).
 - The rows of a low bound and a high bound of the same value in `EXPLAIN`, such as `x > 1 AND x < 5` and `x BETWEEN 1 AND 5`. `clauselist_selectivity` of PostgreSQL estimates the two conditions as one range with the selectivity `DEFAULT_RANGE_INEQ_SEL`, so that the scan of a table of 2260 rows gives 11 rows and not 251 (#548).
 - The rows of a join on `=` in `EXPLAIN` when a side has conditions of its own. `eqjoinsel` of PostgreSQL does not make the number of distinct values of a column smaller than the rows of its table after the conditions (#547).
 - The junk columns of the row marks in `EXPLAIN`, as `preprocess_rowmarks` and `preprocess_targetlist` of PostgreSQL add them. `FOR UPDATE` and `FOR SHARE` carry the `ctid` of each table of `FROM`, the `tableoid` of a table with an inheritance tree and the whole row of a function, and an `UPDATE` or a `DELETE` carries the `ctid` of each table other than its target. The widths and the `Output` lines of `EXPLAIN VERBOSE` show these columns (#546).

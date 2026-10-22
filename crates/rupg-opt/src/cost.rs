@@ -1,6 +1,6 @@
 //! The estimates of `costsize.c` and `selfuncs.c` with no statistics: the number of rows of a table, the widths of the values, the selectivity of the conditions and the costs of the nodes.
 
-use rupg_analyze::{BoolOp, Expr, ExprKind, Relation};
+use rupg_analyze::{BoolOp, Expr, ExprKind, Relation, SubLinkKind};
 use rupg_pgcatalog::builtin;
 use rupg_types::oid;
 
@@ -139,6 +139,20 @@ pub(crate) fn selectivity_by(expr: &Expr, eq: &dyn Fn(&Expr, &Expr) -> Option<f6
         ExprKind::NullTest(_, false) => 1.0 - EQ_SEL,
         ExprKind::Const(_) if exprs::is_true(expr) => 1.0,
         ExprKind::Const(_) => 0.0,
+        // A row comparison with a subquery that runs once is the comparisons of its columns with the columns of the subquery, as `convert_testexpr` makes them.
+        ExprKind::SubLink(link)
+            if link.kind == SubLinkKind::RowCompare && !exprs::correlated(&link.query, 1) =>
+        {
+            link.test.as_ref().map_or(0.5, each)
+        }
+        // `boolvarsel` with no statistics: a column, a parameter or a subplan.
+        ExprKind::Var(_)
+        | ExprKind::Param(_)
+        | ExprKind::SubLink(_)
+        | ExprKind::FieldSelect(..)
+        | ExprKind::Case(_)
+        | ExprKind::Coalesce(_) => 0.5,
+        ExprKind::Relabel(arg, _) | ExprKind::CoerceToDomain(arg, _) => each(arg),
         _ => match exprs::binary(expr) {
             Some((op, left, right)) => {
                 let name = builtin::operator_by_oid(op).map(|o| o.name);

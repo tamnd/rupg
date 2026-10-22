@@ -112,6 +112,8 @@ pub(crate) struct Level<'q> {
     pub(crate) display_query: &'q Query,
     /// The subplans that run once before the top node: the queries of `WITH` and the subqueries with no reference to the query.
     pub(crate) init: Vec<SubPlan<'q>>,
+    /// The cost of the subplans of `init`, which each run once when the top node starts, as `SS_compute_initplan_cost` adds them.
+    pub(crate) init_cost: f64,
     /// True when the query gives no targets, as `simplify_EXISTS_query` makes the subquery of `EXISTS`.
     pub(crate) no_targets: bool,
     /// The conditions of joins that the equivalence classes took the place of. The scans below a join still give their columns, as `attr_needed` keeps them.
@@ -170,6 +172,7 @@ impl<'q> Builder<'q> {
             display: scope,
             display_query: query,
             init: Vec::new(),
+            init_cost: 0.0,
             no_targets,
             joined: Vec::new(),
             stats: from::Stats::default(),
@@ -199,6 +202,9 @@ impl<'q> Builder<'q> {
         }
         output::level(&level, &mut node);
         self.leaves(&level, &mut node, false);
+        // `SS_charge_for_initplans`: the top node runs the subplans of `init` when it starts.
+        node.cost.startup += level.init_cost;
+        node.cost.total += level.init_cost;
         let mut init = std::mem::take(&mut level.init);
         init.append(&mut node.init_plans);
         node.init_plans = init;
@@ -333,6 +339,7 @@ impl<'q> Builder<'q> {
                 let scope = level.scope;
                 let plan = self.subplan(|b| b.query(&cte.query, Some(scope)));
                 rows = plan.cost.rows;
+                level.init_cost += plan.cost.total;
                 level.init.push(SubPlan { name: format!("CTE {}", cte.name), plan });
             }
             self.ctes.push(CteUse { cte, inline, rows });
@@ -377,10 +384,20 @@ impl<'q> Builder<'q> {
         }
         self.labels.push(Label { link, name: name.clone(), init, hashed });
         if init {
+            level.init_cost += init_cost(link, &plan);
             level.init.push(SubPlan { name: format!("InitPlan {name}"), plan });
         } else {
             self.pending.push((link, SubPlan { name: format!("SubPlan {name}"), plan }));
         }
+    }
+}
+
+/// `cost_subplan` of a subplan that runs once: the start cost and the cost of each call of the subplan. It is the cost of the plan, and for `EXISTS` the cost of its first row. A subplan that runs once has no test, because the test goes into the expression of the query.
+fn init_cost(link: &SubLink, plan: &Node<'_>) -> f64 {
+    let c = plan.cost;
+    match link.kind {
+        SubLinkKind::Exists => c.startup + (c.total - c.startup) / cost::clamp_rows(c.rows),
+        _ => c.total,
     }
 }
 

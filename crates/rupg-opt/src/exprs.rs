@@ -132,15 +132,14 @@ pub(crate) fn can_merge(op: u32) -> bool {
     builtin::operator_by_oid(op).is_some_and(|row| row.can_merge)
 }
 
-/// The number of calls of functions and operators in an expression, outside its subqueries, which is the cost of the expression for each row in units of `cpu_operator_cost`, as `cost_qual_eval`.
+/// The number of calls of functions and operators in an expression, outside its subqueries, which is the cost of the expression for each row in units of `cpu_operator_cost`, as `cost_qual_eval`. A row comparison costs the operators of its columns, which are its children.
 pub(crate) fn calls(expr: &Expr) -> usize {
     let own = match expr.kind {
         ExprKind::Func(_)
         | ExprKind::NullIf { .. }
         | ExprKind::Distinct { .. }
         | ExprKind::ScalarArrayOp { .. }
-        | ExprKind::MinMax { .. }
-        | ExprKind::RowCompare(_) => 1,
+        | ExprKind::MinMax { .. } => 1,
         // The input function of the new type and the output function of the old type.
         ExprKind::CoerceViaIo(..) => 2,
         _ => 0,
