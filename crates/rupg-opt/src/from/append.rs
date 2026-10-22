@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 use rupg_analyze::{Expr, ExprKind, FromItem, Query, Var};
 use rupg_plan::{Cost, Item, Kind, Node, SortKey};
 
+use super::paths::costs;
 use super::{OrderKey, Paths, Plans, Rel, Stats, simple_union_all};
 use crate::{Builder, Level, cost, pullup, upper};
 
@@ -186,7 +187,7 @@ impl<'q> AppendRel<'q> {
             .collect();
         let bound = limit_tuples(level.query, r);
         let mut paths = Paths::new(stats.startup);
-        paths.add(seq.node.cost.startup, seq.node.cost.total, Vec::new(), seq.clone());
+        paths.add(costs(&seq.node), Vec::new(), seq.clone());
         for keys in all {
             // `pathkeys_count_contained_in`: a member whose plans have only the first keys needs an incremental sort, which the planner does not cost yet.
             let partial = orders.iter().flatten().any(|o| {
@@ -221,7 +222,7 @@ impl<'q> AppendRel<'q> {
                 let mut rel =
                     self.merge(level, r, &seq, &leaves, keys, &choice, &widths, bound, stats);
                 rel.order = stats.useful(&rel.rels, &rel.order);
-                paths.add(rel.node.cost.startup, rel.node.cost.total, rel.order.clone(), rel);
+                paths.add(costs(&rel.node), rel.order.clone(), rel);
             }
         }
         paths.kept()

@@ -296,7 +296,8 @@ fn index_paths<'q>(
         }
         let clauses = match_clauses(table.r, index, &all);
         let costs = btree_cost(table, index, &clauses, stats);
-        let only = read.iter().all(|a| *a > 0 && index.columns.contains(a));
+        let only = crate::enable().indexonlyscan
+            && read.iter().all(|a| *a > 0 && index.columns.contains(a));
         let forward = order(level, table.r, index, false, stats);
         let useful = stats.useful(&BTreeSet::from([table.r]), &forward);
         if !clauses.is_empty() || !useful.is_empty() || only {
@@ -446,7 +447,8 @@ pub(super) fn param_paths<'q>(
             }
         }
         let read = read_columns(table, stats);
-        let only = read.iter().all(|a| *a > 0 && index.columns.contains(a));
+        let only = crate::enable().indexonlyscan
+            && read.iter().all(|a| *a > 0 && index.columns.contains(a));
         let forward = order(level, r, index, false, stats);
         let useful = stats.useful(&BTreeSet::from([r]), &forward);
         let backward = order(level, r, index, true, stats);
@@ -1020,6 +1022,7 @@ fn scan<'q>(
     node.filter = filter.iter().map(|q| q.item()).collect();
     let width = stats.width(&BTreeSet::from([table.r]));
     node.cost = Cost { startup, total, rows: table.rows, width };
+    node.disabled = !crate::enable().indexscan;
     Rel { node, rels: BTreeSet::from([table.r]), order }
 }
 
@@ -1350,6 +1353,7 @@ fn bitmap_heap_scan<'q>(
     node.filter = filter.iter().map(|q| q.item()).collect();
     let width = stats.width(&BTreeSet::from([table.r]));
     node.cost = Cost { startup, total, rows: table.rows, width };
+    node.disabled = !crate::enable().bitmapscan;
     Rel { node, rels: BTreeSet::from([table.r]), order: Vec::new() }
 }
 

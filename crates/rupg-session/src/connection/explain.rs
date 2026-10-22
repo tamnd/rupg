@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use rupg_analyze::{Expr, Params, Query};
 use rupg_common::{Error, SqlState};
 use rupg_func::Session;
-use rupg_opt::{Index, Member};
+use rupg_opt::{Enable, Index, Member};
 use rupg_pgcatalog::builtin;
 use rupg_plan::{Format, Options};
 use rupg_sql::nodes::{DefElem, ExplainStmt, Node};
@@ -83,6 +83,23 @@ impl rupg_opt::Members for Members<'_, '_> {
             .collect();
         out.sort_by_key(|i| i.oid);
         out
+    }
+
+    fn enable(&self) -> Enable {
+        let settings = self.reader.settings();
+        let on = |name: &str| settings.get(name).is_none_or(|v| v != "off");
+        Enable {
+            seqscan: on("enable_seqscan"),
+            indexscan: on("enable_indexscan"),
+            indexonlyscan: on("enable_indexonlyscan"),
+            bitmapscan: on("enable_bitmapscan"),
+            sort: on("enable_sort"),
+            incremental_sort: on("enable_incremental_sort"),
+            hashagg: on("enable_hashagg"),
+            nestloop: on("enable_nestloop"),
+            mergejoin: on("enable_mergejoin"),
+            hashjoin: on("enable_hashjoin"),
+        }
     }
 }
 

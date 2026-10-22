@@ -16,6 +16,7 @@ mod setcast;
 mod setop;
 mod upper;
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::ops::Range;
 
@@ -28,13 +29,60 @@ use rupg_types::oid;
 
 pub use pullup::pull_up;
 
-/// The tables of the inheritance trees of the relations of the queries, which the planner has no catalog for.
+/// The tables of the inheritance trees of the relations of the queries, their indexes and the settings of the session, which the planner has no catalog for.
 pub trait Members: std::fmt::Debug {
     /// The tables that a scan of the relation `relation` of the query reads, as `expand_inherited_rtentry` and `prune_append_rel_partitions` choose them with the conditions `conds` of the scan, or `None` for a relation that is one table.
     fn members(&self, query: &Query, relation: usize, conds: &[&Expr]) -> Option<Vec<Member>>;
 
     /// The valid indexes of the table with the OID `table`, in the order of their OIDs, as `get_relation_info` reads them from `RelationGetIndexList`.
     fn indexes(&self, table: u32) -> Vec<Index>;
+
+    /// The `enable_*` settings of the session.
+    fn enable(&self) -> Enable {
+        Enable::default()
+    }
+}
+
+/// The `enable_*` settings of the planner, as the variables of `costsize.c` keep them. A node of a kind that a setting turns off is a disabled node, and the planner takes a plan with more disabled nodes only when no plan has fewer, as `compare_path_costs` compares `disabled_nodes` first.
+#[derive(Clone, Copy, Debug)]
+pub struct Enable {
+    pub seqscan: bool,
+    pub indexscan: bool,
+    pub indexonlyscan: bool,
+    pub bitmapscan: bool,
+    pub sort: bool,
+    pub incremental_sort: bool,
+    pub hashagg: bool,
+    pub nestloop: bool,
+    pub mergejoin: bool,
+    pub hashjoin: bool,
+}
+
+impl Default for Enable {
+    fn default() -> Self {
+        Enable {
+            seqscan: true,
+            indexscan: true,
+            indexonlyscan: true,
+            bitmapscan: true,
+            sort: true,
+            incremental_sort: true,
+            hashagg: true,
+            nestloop: true,
+            mergejoin: true,
+            hashjoin: true,
+        }
+    }
+}
+
+thread_local! {
+    /// The settings of the plan that the planner makes now, which are global variables in PostgreSQL.
+    static ENABLE: Cell<Enable> = Cell::new(Enable::default());
+}
+
+/// The `enable_*` settings of the plan that the planner makes now.
+pub(crate) fn enable() -> Enable {
+    ENABLE.with(Cell::get)
 }
 
 /// An index of a table, with the facts of `IndexOptInfo` that the planner uses.
@@ -79,6 +127,14 @@ pub struct Member {
 
 /// The plan of a query, with the members of the relations that `members` gives.
 pub fn plan<'q>(query: &'q Query, members: &'q dyn Members) -> Plan<'q> {
+    let saved = ENABLE.with(|e| e.replace(members.enable()));
+    let plan = plan_with(query, members);
+    ENABLE.with(|e| e.set(saved));
+    plan
+}
+
+/// [`plan`] with the settings of `members` in place.
+fn plan_with<'q>(query: &'q Query, members: &'q dyn Members) -> Plan<'q> {
     let mut b = Builder { members: Some(members), ..Builder::default() };
     let mut root = b.query(query, None);
     let mut pending = std::mem::take(&mut b.pending);

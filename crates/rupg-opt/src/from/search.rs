@@ -8,7 +8,7 @@ use rupg_analyze::{Expr, JoinKind};
 
 use super::classes::{Found, Joined};
 use super::index::{self, Param};
-use super::paths::Paths;
+use super::paths::{Paths, costs};
 use super::{
     Base, Candidate, Part, Qual, Rel, Special, Stats, choose, eq_unique, finish, join_rels,
     join_rows, lateral_rels, semi_rels, semi_selectivity, semifactors, unique_rels,
@@ -265,12 +265,12 @@ fn param_scans<'q>(
     }
     let mut paths = Paths::with_params(stats.startup, semi);
     for rel in plans {
-        let (c, keys) = (rel.node.cost, rel.order.clone());
-        paths.add_param(c.startup, c.total, keys, BTreeSet::new(), c.rows, None);
+        let keys = rel.order.clone();
+        paths.add_param(costs(&rel.node), keys, BTreeSet::new(), rel.node.cost.rows, None);
     }
     for p in found {
-        let (c, keys, outer) = (p.rel.node.cost, p.rel.order.clone(), p.outer.clone());
-        paths.add_param(c.startup, c.total, keys, outer, c.rows, Some(p));
+        let (keys, outer) = (p.rel.order.clone(), p.outer.clone());
+        paths.add_param(costs(&p.rel.node), keys, outer, p.rel.node.cost.rows, Some(p));
     }
     paths.params().into_iter().flatten().collect()
 }
@@ -659,8 +659,7 @@ impl<'q> Problem<'_, 'q> {
         };
         for (candidate, keys, how) in made {
             self.sets[at].paths.add(
-                candidate.startup,
-                candidate.total,
+                (candidate.disabled, candidate.startup, candidate.total),
                 keys,
                 (outer, inner, candidate, how),
             );

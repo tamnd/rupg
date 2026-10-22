@@ -1,5 +1,7 @@
 //! The nodes above the join of `FROM`, as `grouping_planner` makes them: the aggregates, the windows, the functions that give sets, `DISTINCT`, `ORDER BY`, the locks of rows and `LIMIT`. Also the plan of a set operation and the node of a statement that writes a table.
 
+use std::cmp::Ordering;
+
 use rupg_analyze::{
     Aggref, Expr, ExprKind, MinMax, Query, SetKind, SetOp, SetTree, SortGroup, SubLink, WindowFunc,
     Write, WriteKind, expand_grouping_sets,
@@ -10,7 +12,7 @@ use rupg_plan::{
     TARGET,
 };
 
-use crate::from::paths::Paths;
+use crate::from::paths::{Paths, costs};
 use crate::from::{self, OrderKey, sort};
 use crate::{Builder, Level, cost, exprs, setop};
 
@@ -115,7 +117,7 @@ fn presorted(order: &[OrderKey], keys: &[SortKey<'_>]) -> (bool, usize) {
     (true, keys.len())
 }
 
-/// The costs of a sort of rows with these costs whose first `presorted` keys are in order already: a `Sort` when no key is in order, or else an `Incremental Sort`, as `make_ordered_path` chooses.
+/// The costs of a sort of rows with these costs whose first `presorted` keys are in order already: a `Sort` when no key is in order or `enable_incremental_sort` is off, or else an `Incremental Sort`, as `make_ordered_path` chooses.
 fn sort_cost(
     level: &Level<'_>,
     c: Cost,
@@ -123,7 +125,7 @@ fn sort_cost(
     presorted: usize,
     bound: Option<f64>,
 ) -> (f64, f64) {
-    if presorted == 0 {
+    if presorted == 0 || !crate::enable().incremental_sort {
         cost::sort((c.startup, c.total), c.rows, c.width, bound)
     } else {
         let exprs: Vec<&Expr> = keys[..presorted].iter().map(|k| &*k.item.expr).collect();
@@ -148,6 +150,12 @@ fn sublinks<'q>(exprs: impl IntoIterator<Item = &'q Expr>) -> Vec<&'q SubLink> {
     out
 }
 
+/// True when the sort that a node needs to have its rows in the order of the keys is a disabled node: a `Sort` with `enable_sort` off. A node whose rows are in the order of `count` keys gets an `Incremental Sort`, which is not a disabled node.
+fn sort_disabled(is_sorted: bool, count: usize) -> bool {
+    let enable = crate::enable();
+    !is_sorted && (count == 0 || !enable.incremental_sort) && !enable.sort
+}
+
 /// `make_ordered_path`: the node in the order of the keys. A node whose rows are in the order already stays as it is. A node whose rows are in the order of the first keys gets an `Incremental Sort`, and another node gets a `Sort`. With `only`, the node is a plan that is not the cheapest, which the planner uses only when its rows are in the order of one key or more, so the result is `None` when it needs a `Sort`.
 fn sort_if<'q>(
     level: &Level<'q>,
@@ -167,7 +175,7 @@ fn sort_if<'q>(
     *order = sorted_order(&keys);
     // The keys of a set operation show with the names of its leftmost `SELECT`.
     let scope = if level.query.set_op.is_some() { level.display } else { node.scope };
-    if count == 0 {
+    if count == 0 || !crate::enable().incremental_sort {
         let mut out = sort(node, keys, bound);
         out.scope = scope;
         return Some(out);
@@ -458,7 +466,7 @@ impl<'q> Builder<'q> {
         let mut paths = Paths::new(level.fraction > 0.0);
         for (i, (node, order)) in plans.into_iter().enumerate() {
             if let Some(node) = self.upper_one(level, node, order, i > 0 || level.presorted) {
-                paths.add(node.cost.startup, node.cost.total, Vec::new(), node);
+                paths.add(costs(&node), Vec::new(), node);
             }
         }
         match paths.fractional(fraction, |n| n.cost.rows) {
@@ -852,6 +860,7 @@ impl<'q> Builder<'q> {
                         .collect();
                     let mut sorted = Node::new(Kind::Sort(sort_keys), scope, vec![append]);
                     sorted.cost = Cost { startup: sort_startup, total: sort_total, ..c };
+                    sorted.disabled = !crate::enable().sort;
                     let mut node = Node::new(Kind::Unique, scope, vec![sorted]);
                     node.cost = Cost { startup: sort_startup, total: unique_total, rows, width };
                     node
@@ -985,13 +994,23 @@ fn aggregate<'q>(
     let kept = hash_total * 1.01 < sorted_total
         || hash_total <= sorted_total * 1.01
             && (hash_startup + having_startup) * 1.01 < sorted_input.startup + having_startup;
-    if !only && hashable && kept && hash_after < sorted_total {
+    // `cost_agg` and `cost_sort`: a setting that turns off the hash table or the sort makes a disabled node, and the plan with fewer disabled nodes wins.
+    let enable = crate::enable();
+    let hash_disabled = u32::from(!enable.hashagg);
+    let sort_disabled = u32::from(sort_disabled(is_sorted, count));
+    let hash_wins = match hash_disabled.cmp(&sort_disabled) {
+        Ordering::Less => true,
+        Ordering::Greater => false,
+        Ordering::Equal => kept && hash_after < sorted_total,
+    };
+    if !only && hashable && hash_wins {
         let mut node = Node::new(
             Kind::Aggregate { strategy: Strategy::Hashed, keys, sets: Vec::new() },
             scope,
             vec![input],
         );
         node.filter = filter;
+        node.disabled = !enable.hashagg;
         let startup = hash_startup + having_startup;
         node.cost = Cost { startup, total: hash_total, rows, width: 0 };
         order.clear();
@@ -1365,7 +1384,9 @@ fn distinct<'q>(
     let (sort_startup, sort_total) =
         if is_sorted { (c.startup, c.total) } else { sort_cost(level, c, &keys, count, None) };
     let unique_total = sort_total + cost::CPU_OPERATOR * c.rows * ncols as f64;
-    let hashable = !query.distinct_on && processed.iter().all(|d| d.hashable);
+    // `create_final_distinct_paths`: with `enable_hashagg` off, there is no hash table.
+    let hashable =
+        !query.distinct_on && processed.iter().all(|d| d.hashable) && crate::enable().hashagg;
     // `create_agg_path` adds the cost of the targets to the hash table.
     let hash_startup = c.total + cost::CPU_OPERATOR * c.rows * ncols as f64;
     let hash_total = hash_startup + cost::CPU_TUPLE * groups + target.0 + target.1 * groups;
@@ -1379,7 +1400,8 @@ fn distinct<'q>(
     // `add_path` keeps the hash table only when its total cost or its start cost is lower by more than the fuzz factor, as the `Unique` has the order of its keys.
     let kept = hash_total * 1.01 < unique_total
         || hash_total <= unique_total * 1.01 && hash_startup * 1.01 < sort_startup;
-    if !only && hashable && kept && hash_after < unique_total {
+    let hash_wins = sort_disabled(is_sorted, count) || kept && hash_after < unique_total;
+    if !only && hashable && hash_wins {
         let items = processed.iter().map(|d| Item::below(level.target(d.target))).collect();
         let mut node = Node::new(
             Kind::Aggregate { strategy: Strategy::Hashed, keys: items, sets: Vec::new() },

@@ -1,0 +1,403 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (id int PRIMARY KEY, x int);
+CREATE TABLE
+> CREATE TABLE b (id int PRIMARY KEY, y int);
+CREATE TABLE
+> CREATE INDEX a_x ON a (x);
+CREATE INDEX
+> SET enable_seqscan = off;
+SET
+> EXPLAIN SELECT * FROM a;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row   Disabled: true
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x = 1;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on a  (cost=4.24..14.91 rows=11 width=8)
+row   Recheck Cond: (x = 1)
+row   ->  Bitmap Index Scan on a_x  (cost=0.00..4.24 rows=11 width=0)
+row         Index Cond: (x = 1)
+EXPLAIN
+> EXPLAIN SELECT id FROM a WHERE id > 5;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on a  (cost=9.99..29.40 rows=753 width=4)
+row   Recheck Cond: (id > 5)
+row   ->  Bitmap Index Scan on a_pkey  (cost=0.00..9.80 rows=753 width=0)
+row         Index Cond: (id > 5)
+EXPLAIN
+> EXPLAIN SELECT * FROM a JOIN b ON a.id = b.id;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=0.31..190.01 rows=2260 width=16)
+row   Merge Cond: (a.id = b.id)
+row   ->  Index Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=8)
+row   ->  Index Scan using b_pkey on b  (cost=0.15..78.06 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x + 1 = 2;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..43.90 rows=11 width=8)
+row   Disabled: true
+row   Filter: ((x + 1) = 2)
+EXPLAIN
+> RESET enable_seqscan;
+RESET
+> SET enable_indexscan = off;
+SET
+> EXPLAIN SELECT * FROM a WHERE id = 1;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on a  (cost=4.16..8.18 rows=1 width=8)
+row   Recheck Cond: (id = 1)
+row   ->  Bitmap Index Scan on a_pkey  (cost=0.00..4.16 rows=1 width=0)
+row         Index Cond: (id = 1)
+EXPLAIN
+> EXPLAIN SELECT id FROM a WHERE id = 1;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on a  (cost=4.16..8.18 rows=1 width=4)
+row   Recheck Cond: (id = 1)
+row   ->  Bitmap Index Scan on a_pkey  (cost=0.00..4.16 rows=1 width=0)
+row         Index Cond: (id = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM a ORDER BY id LIMIT 1;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=43.90..43.90 rows=1 width=8)
+row   ->  Sort  (cost=43.90..49.55 rows=2260 width=8)
+row         Sort Key: id
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> RESET enable_indexscan;
+RESET
+> SET enable_bitmapscan = off;
+SET
+> EXPLAIN SELECT * FROM a WHERE x = 1;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using a_x on a  (cost=0.15..36.35 rows=11 width=8)
+row   Index Cond: (x = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x < 10;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..38.25 rows=753 width=8)
+row   Filter: (x < 10)
+EXPLAIN
+> RESET enable_bitmapscan;
+RESET
+> SET enable_indexonlyscan = off;
+SET
+> EXPLAIN SELECT id FROM a WHERE id < 10;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on a  (cost=9.99..29.40 rows=753 width=4)
+row   Recheck Cond: (id < 10)
+row   ->  Bitmap Index Scan on a_pkey  (cost=0.00..9.80 rows=753 width=0)
+row         Index Cond: (id < 10)
+EXPLAIN
+> EXPLAIN SELECT id FROM a ORDER BY id;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> RESET enable_indexonlyscan;
+RESET
+> SET enable_sort = off;
+SET
+> EXPLAIN SELECT * FROM a ORDER BY x;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using a_x on a  (cost=0.15..78.06 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM a ORDER BY x + 1;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=164.16..169.81 rows=2260 width=12)
+row   Disabled: true
+row   Sort Key: ((x + 1))
+row   ->  Seq Scan on a  (cost=0.00..38.25 rows=2260 width=12)
+EXPLAIN
+> EXPLAIN SELECT DISTINCT x FROM a;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=38.25..40.25 rows=200 width=4)
+row   Group Key: x
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a ORDER BY x + 1 LIMIT 5;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=75.79..75.80 rows=5 width=12)
+row   ->  Sort  (cost=75.79..81.44 rows=2260 width=12)
+row         Disabled: true
+row         Sort Key: ((x + 1))
+row         ->  Seq Scan on a  (cost=0.00..38.25 rows=2260 width=12)
+EXPLAIN
+> RESET enable_sort;
+RESET
+> SET enable_hashjoin = off;
+SET
+> EXPLAIN SELECT * FROM a JOIN b ON a.id = b.id;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=0.31..190.01 rows=2260 width=16)
+row   Merge Cond: (a.id = b.id)
+row   ->  Index Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=8)
+row   ->  Index Scan using b_pkey on b  (cost=0.15..78.06 rows=2260 width=8)
+EXPLAIN
+> SET enable_mergejoin = off;
+SET
+> EXPLAIN SELECT * FROM a JOIN b ON a.id = b.id;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.15..466.41 rows=2260 width=16)
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Index Scan using b_pkey on b  (cost=0.15..0.19 rows=1 width=8)
+row         Index Cond: (id = a.id)
+EXPLAIN
+> SET enable_nestloop = off;
+SET
+> EXPLAIN SELECT * FROM a JOIN b ON a.id = b.id;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.15..466.41 rows=2260 width=16)
+row   Disabled: true
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Index Scan using b_pkey on b  (cost=0.15..0.19 rows=1 width=8)
+row         Index Cond: (id = a.id)
+EXPLAIN
+> RESET enable_hashjoin;
+RESET
+> RESET enable_mergejoin;
+RESET
+> RESET enable_nestloop;
+RESET
+> SET enable_hashagg = off;
+SET
+> EXPLAIN SELECT x, count(*) FROM a GROUP BY x;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=0.15..91.36 rows=200 width=12)
+row   Group Key: x
+row   ->  Index Only Scan using a_x on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> RESET enable_hashagg;
+RESET
+> SET enable_seqscan = off;
+SET
+> SET enable_indexscan = off;
+SET
+> SET enable_bitmapscan = off;
+SET
+> EXPLAIN SELECT * FROM a WHERE x = 1;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on a  (cost=4.24..14.91 rows=11 width=8)
+row   Disabled: true
+row   Recheck Cond: (x = 1)
+row   ->  Bitmap Index Scan on a_x  (cost=0.00..4.24 rows=11 width=0)
+row         Index Cond: (x = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM a;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row   Disabled: true
+EXPLAIN
+> EXPLAIN SELECT * FROM a JOIN b ON a.id = b.id;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=60.85..99.39 rows=2260 width=16)
+row   Hash Cond: (a.id = b.id)
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row         Disabled: true
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row               Disabled: true
+EXPLAIN
+> RESET enable_seqscan;
+RESET
+> RESET enable_indexscan;
+RESET
+> RESET enable_bitmapscan;
+RESET
+> SET enable_material = off;
+SET
+> EXPLAIN SELECT * FROM a, b WHERE a.x < b.y;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.15..47225.85 rows=1702533 width=16)
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Index Scan using a_x on a  (cost=0.15..13.35 rows=753 width=8)
+row         Index Cond: (x < b.y)
+EXPLAIN
+> RESET enable_material;
+RESET
+> SET enable_memoize = off;
+SET
+> EXPLAIN SELECT * FROM a, b WHERE a.x < b.y;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.15..47225.85 rows=1702533 width=16)
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Index Scan using a_x on a  (cost=0.15..13.35 rows=753 width=8)
+row         Index Cond: (x < b.y)
+EXPLAIN
+> RESET enable_memoize;
+RESET
+> SET enable_sort = off;
+SET
+> EXPLAIN SELECT x, count(*) FROM a GROUP BY x;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=43.90..45.90 rows=200 width=12)
+row   Group Key: x
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT DISTINCT y FROM b;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=38.25..40.25 rows=200 width=4)
+row   Group Key: y
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a JOIN b ON a.x = b.y;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=60.85..992.93 rows=25538 width=16)
+row   Hash Cond: (a.x = b.y)
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM a FULL JOIN b ON a.x = b.y;
+fields QUERY PLAN:25:-1:-1
+row Hash Full Join  (cost=60.85..992.93 rows=25538 width=16)
+row   Hash Cond: (a.x = b.y)
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> RESET enable_sort;
+RESET
+> SET enable_hashjoin = off;
+SET
+> EXPLAIN SELECT * FROM a FULL JOIN b ON a.x = b.y;
+fields QUERY PLAN:25:-1:-1
+row Merge Full Join  (cost=158.66..625.28 rows=25538 width=16)
+row   Merge Cond: (a.x = b.y)
+row   ->  Index Scan using a_x on a  (cost=0.15..78.06 rows=2260 width=8)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: b.y
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> SET enable_mergejoin = off;
+SET
+> EXPLAIN SELECT * FROM a FULL JOIN b ON a.x = b.y;
+fields QUERY PLAN:25:-1:-1
+row Merge Full Join  (cost=158.66..625.28 rows=25538 width=16)
+row   Disabled: true
+row   Merge Cond: (a.x = b.y)
+row   ->  Index Scan using a_x on a  (cost=0.15..78.06 rows=2260 width=8)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: b.y
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM a LEFT JOIN b ON a.x = b.y;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join  (cost=0.00..76684.85 rows=25538 width=16)
+row   Join Filter: (a.x = b.y)
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Materialize  (cost=0.00..43.90 rows=2260 width=8)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> RESET enable_hashjoin;
+RESET
+> RESET enable_mergejoin;
+RESET
+> SET enable_hashagg = off;
+SET
+> EXPLAIN SELECT DISTINCT y FROM b;
+fields QUERY PLAN:25:-1:-1
+row Unique  (cost=158.51..169.81 rows=200 width=4)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=4)
+row         Sort Key: y
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT y, count(*) FROM b GROUP BY y;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=158.51..177.46 rows=200 width=12)
+row   Group Key: y
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=4)
+row         Sort Key: y
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> SET enable_sort = off;
+SET
+> EXPLAIN SELECT y, count(*) FROM b GROUP BY y;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=43.90..45.90 rows=200 width=12)
+row   Disabled: true
+row   Group Key: y
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> RESET enable_sort;
+RESET
+> RESET enable_hashagg;
+RESET
+> SET enable_incremental_sort = off;
+SET
+> EXPLAIN SELECT * FROM a ORDER BY x, id + 1;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=164.16..169.81 rows=2260 width=12)
+row   Sort Key: x, ((id + 1))
+row   ->  Seq Scan on a  (cost=0.00..38.25 rows=2260 width=12)
+EXPLAIN
+> RESET enable_incremental_sort;
+RESET
+> EXPLAIN SELECT * FROM a ORDER BY x, id + 1;
+fields QUERY PLAN:25:-1:-1
+row Incremental Sort  (cost=0.77..155.49 rows=2260 width=12)
+row   Sort Key: x, ((id + 1))
+row   Presorted Key: x
+row   ->  Index Scan using a_x on a  (cost=0.15..83.71 rows=2260 width=12)
+EXPLAIN
+> SET enable_seqscan = off;
+SET
+> EXPLAIN (FORMAT JSON) SELECT * FROM a WHERE x + 1 = 2;
+fields QUERY PLAN:114:-1:-1
+row [
+  {
+    "Plan": {
+      "Node Type": "Seq Scan",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Relation Name": "a",
+      "Alias": "a",
+      "Startup Cost": 0.00,
+      "Total Cost": 43.90,
+      "Plan Rows": 11,
+      "Plan Width": 8,
+      "Disabled": true,
+      "Filter": "((x + 1) = 2)"
+    }
+  }
+]
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x = 1 UNION ALL SELECT * FROM b WHERE y + 1 = 3;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=4.24..58.92 rows=22 width=8)
+row   ->  Bitmap Heap Scan on a  (cost=4.24..14.91 rows=11 width=8)
+row         Recheck Cond: (x = 1)
+row         ->  Bitmap Index Scan on a_x  (cost=0.00..4.24 rows=11 width=0)
+row               Index Cond: (x = 1)
+row   ->  Seq Scan on b  (cost=0.00..43.90 rows=11 width=8)
+row         Disabled: true
+row         Filter: ((y + 1) = 3)
+EXPLAIN
+> EXPLAIN SELECT count(*) FROM a;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=54.27..54.28 rows=1 width=8)
+row   ->  Bitmap Heap Scan on a  (cost=16.02..48.62 rows=2260 width=0)
+row         ->  Bitmap Index Scan on a_x  (cost=0.00..15.46 rows=2260 width=0)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE id IN (SELECT y FROM b);
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=38.41..111.50 rows=1130 width=8)
+row   ->  HashAggregate  (cost=38.25..40.25 rows=200 width=4)
+row         Group Key: b.y
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+row               Disabled: true
+row   ->  Index Scan using a_pkey on a  (cost=0.15..0.39 rows=1 width=8)
+row         Index Cond: (id = b.y)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE NOT EXISTS (SELECT 1 FROM b WHERE b.y = a.x);
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=61.01..182.83 rows=1130 width=8)
+row   Hash Cond: (a.x = b.y)
+row   ->  Index Scan using a_x on a  (cost=0.15..78.06 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=4)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+row               Disabled: true
+EXPLAIN
+> RESET enable_seqscan;
+RESET

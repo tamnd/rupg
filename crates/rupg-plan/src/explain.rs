@@ -285,8 +285,9 @@ impl Explainer<'_, '_> {
         }
         if text {
             self.w.buf.push('\n');
-        } else {
-            self.w.boolean("Disabled", false);
+        }
+        if !text || node.disabled {
+            self.w.boolean("Disabled", node.disabled);
         }
         if self.options.verbose && !node.output.is_empty() {
             let output = self.items(node.scope, &node.output, self.many)?;
