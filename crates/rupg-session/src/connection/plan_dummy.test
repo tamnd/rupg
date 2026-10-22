@@ -1,0 +1,58 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (x int, y int, b bool, r int[], z text);
+CREATE TABLE
+> CREATE TABLE s (x int PRIMARY KEY, y int);
+CREATE TABLE
+> EXPLAIN SELECT * FROM t WHERE false;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.00 rows=0 width=0)
+row   Replaces: Scan on t
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT x FROM t WHERE NULL;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.00 rows=0 width=0)
+row   Replaces: Scan on t
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE x = 1 AND false;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.00 rows=0 width=0)
+row   Replaces: Scan on t
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT * FROM t, s WHERE false;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.00 rows=0 width=81)
+row   Replaces: Join on t, s
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT 1 WHERE false;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.01 rows=1 width=4)
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT count(*) FROM t WHERE false;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=0.00..0.01 rows=1 width=8)
+row   ->  Result  (cost=0.00..0.00 rows=0 width=0)
+row         Replaces: Scan on t
+row         One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT 1 WHERE NULL;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.01 rows=1 width=4)
+row   One-Time Filter: NULL::boolean
+EXPLAIN
+> EXPLAIN SELECT 1 WHERE false AND random() > 0.5;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.01 rows=1 width=4)
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT 1 WHERE 1 = 2;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.01 rows=1 width=4)
+row   One-Time Filter: false
+EXPLAIN

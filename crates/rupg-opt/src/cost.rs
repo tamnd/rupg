@@ -1,6 +1,6 @@
 //! The estimates of `costsize.c` and `selfuncs.c` with no statistics: the number of rows of a table, the widths of the values, the selectivity of the conditions and the costs of the nodes.
 
-use rupg_analyze::{BoolOp, Expr, ExprKind, Relation, SubLink, SubLinkKind};
+use rupg_analyze::{BoolOp, BoolTest, Expr, ExprKind, Relation, SubLink, SubLinkKind};
 use rupg_pgcatalog::builtin;
 use rupg_types::{Value, oid};
 
@@ -137,6 +137,11 @@ pub(crate) fn selectivity_by(expr: &Expr, eq: &dyn Fn(&Expr, &Expr) -> Option<f6
         ExprKind::Bool(BoolOp::Not, args) => 1.0 - args.first().map_or(0.5, each),
         ExprKind::NullTest(_, true) => EQ_SEL,
         ExprKind::NullTest(_, false) => 1.0 - EQ_SEL,
+        // `booltestsel` with no statistics: `IS UNKNOWN` has `DEFAULT_UNK_SEL`, and the other tests take the selectivity of the argument, or the rest of the rows, as if the argument is not null.
+        ExprKind::BooleanTest(_, BoolTest::IsUnknown) => EQ_SEL,
+        ExprKind::BooleanTest(_, BoolTest::IsNotUnknown) => 1.0 - EQ_SEL,
+        ExprKind::BooleanTest(arg, BoolTest::IsTrue | BoolTest::IsNotFalse) => each(arg),
+        ExprKind::BooleanTest(arg, BoolTest::IsFalse | BoolTest::IsNotTrue) => 1.0 - each(arg),
         ExprKind::Const(_) if exprs::is_true(expr) => 1.0,
         ExprKind::Const(_) => 0.0,
         // A row comparison with a subquery that runs once is the comparisons of its columns with the columns of the subquery, as `convert_testexpr` makes them.
@@ -153,6 +158,14 @@ pub(crate) fn selectivity_by(expr: &Expr, eq: &dyn Fn(&Expr, &Expr) -> Option<f6
         | ExprKind::Case(_)
         | ExprKind::Coalesce(_) => 0.5,
         ExprKind::Relabel(arg, _) | ExprKind::CoerceToDomain(arg, _) => each(arg),
+        // `clause_selectivity_ext` estimates `IS DISTINCT FROM` as the rest of the rows of its `=` operator, and `IS NOT DISTINCT FROM` as the operator.
+        ExprKind::Distinct { not, args, .. } => {
+            let sel = match args.as_slice() {
+                [left, right] => eq(left, right).unwrap_or(EQ_SEL),
+                _ => EQ_SEL,
+            };
+            if *not { sel } else { 1.0 - sel }
+        }
         ExprKind::ScalarArrayOp { func, any, args } => array_selectivity(*func, *any, args, eq),
         _ => match exprs::binary(expr) {
             Some((op, left, right)) => {

@@ -5423,6 +5423,18 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_or_join.test")));
     }
 
+    /// `EXPLAIN` of `NOT`: the planner moves a `NOT` into its argument, as `negate_clause` of `eval_const_expressions`. An operator becomes its negator, `AND` and `OR` change places, and `IS NULL` and `IS TRUE` take the opposite test. `connection/plan_negate.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_negate() {
+        big_stack(|| script(include_str!("connection/plan_negate.test")));
+    }
+
+    /// `EXPLAIN` of relations with a condition that is never true: a relation becomes a `Result` with no rows and a width of 0, as `set_dummy_rel_pathlist`, and a join of such relations keeps the width of its columns. `connection/plan_dummy.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_dummy() {
+        big_stack(|| script(include_str!("connection/plan_dummy.test")));
+    }
+
     /// `EXPLAIN` of an `Incremental Sort`: the planner sorts rows whose first keys are in order already, as `make_ordered_path` and `create_ordered_paths` choose it, with the costs of `cost_incremental_sort`. `connection/plan_incremental_sort.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_incremental_sort() {

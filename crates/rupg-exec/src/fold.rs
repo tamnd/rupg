@@ -1,9 +1,9 @@
 //! `eval_const_expressions` of `clauses.c`: the planner computes each part of an expression whose arguments are constants and whose function is immutable. An error of such a part, such as a division by zero, comes when the query is planned, before the server sends the description of the rows. The plan then runs the folded expressions, so a part that the fold drops does not run.
 
 use rupg_analyze::{
-    BoolOp, BoolTest, Case, Expr, ExprKind, FieldStore, FromItem, Func, IsJson, Join, JoinKind,
-    JoinRow, JsonCtor, JsonCtorKind, JsonValue, NamedArg, Query, Relation, RowCompare, SubLink,
-    SubLinkKind, Subscript, Var, XmlOp,
+    BoolOp, BoolTest, Case, Expr, ExprKind, FieldStore, FromItem, Func, FuncForm, IsJson, Join,
+    JoinKind, JoinRow, JsonCtor, JsonCtorKind, JsonValue, NamedArg, Query, Relation, RowCompare,
+    SubLink, SubLinkKind, Subscript, Var, XmlOp,
 };
 use rupg_common::{Error, Result};
 use rupg_func::Session;
@@ -205,6 +205,69 @@ struct Fold<'a> {
 /// An expression with the type, the typmod and the place of another.
 fn with(expr: &Expr, kind: ExprKind) -> Expr {
     Expr { kind, ty: expr.ty, typmod: expr.typmod, location: expr.location }
+}
+
+/// `negate_clause` of `prepqual.c`: the expression that is true when `arg` is false, which is the `NOT` of `not`. An operator with a negator, also of `ANY` or `ALL`, becomes the call of its negator, `AND` and `OR` change places with the negation of each argument, as the laws of De Morgan, `NOT` drops, and `IS NULL` and the tests of `IS TRUE` and the others take the opposite test. A test of `IS NULL` of a row does not change, because a row with some null fields is not null and not `IS NOT NULL`. The other expressions keep the `NOT`.
+fn negate(not: &Expr, arg: &Expr) -> Expr {
+    let keep = || with(not, ExprKind::Bool(BoolOp::Not, vec![arg.clone()]));
+    match &arg.kind {
+        ExprKind::Const(v) => {
+            with(arg, ExprKind::Const(v.as_bool().map_or(Value::Null, |b| Value::Bool(!b))))
+        }
+        ExprKind::Func(f) => {
+            let FuncForm::Operator(op) = f.form else { return keep() };
+            let Some(row) =
+                builtin::operator_by_oid(op).and_then(|o| builtin::operator_by_oid(o.negator))
+            else {
+                return keep();
+            };
+            let mut func = f.clone();
+            func.oid = row.code;
+            func.form = FuncForm::Operator(row.oid);
+            with(arg, ExprKind::Func(func))
+        }
+        ExprKind::ScalarArrayOp { func, any, args } => {
+            let [left, array] = args.as_slice() else { return keep() };
+            let element = builtin::type_by_oid(array.ty).map_or(0, |t| t.elem);
+            let mut ops = builtin::operators().iter().filter(|o| o.code == *func);
+            let op = ops
+                .clone()
+                .find(|o| o.left == left.ty && o.right == element)
+                .or_else(|| ops.next());
+            match op.and_then(|o| builtin::operator_by_oid(o.negator)) {
+                Some(row) => with(
+                    arg,
+                    ExprKind::ScalarArrayOp { func: row.code, any: !any, args: args.clone() },
+                ),
+                None => keep(),
+            }
+        }
+        ExprKind::Bool(op @ (BoolOp::And | BoolOp::Or), args) => {
+            let op = if *op == BoolOp::And { BoolOp::Or } else { BoolOp::And };
+            let not = |a: &Expr| with(a, ExprKind::Bool(BoolOp::Not, vec![a.clone()]));
+            let args = args.iter().map(|a| negate(&not(a), a)).collect();
+            with(arg, ExprKind::Bool(op, args))
+        }
+        ExprKind::Bool(BoolOp::Not, args) => match args.as_slice() {
+            [inner] => inner.clone(),
+            _ => keep(),
+        },
+        ExprKind::NullTest(inner, is_null) if !rupg_func::is_row_type(inner.ty) => {
+            with(arg, ExprKind::NullTest(inner.clone(), !is_null))
+        }
+        ExprKind::BooleanTest(inner, test) => {
+            let test = match test {
+                BoolTest::IsTrue => BoolTest::IsNotTrue,
+                BoolTest::IsNotTrue => BoolTest::IsTrue,
+                BoolTest::IsFalse => BoolTest::IsNotFalse,
+                BoolTest::IsNotFalse => BoolTest::IsFalse,
+                BoolTest::IsUnknown => BoolTest::IsNotUnknown,
+                BoolTest::IsNotUnknown => BoolTest::IsUnknown,
+            };
+            with(arg, ExprKind::BooleanTest(inner.clone(), test))
+        }
+        _ => keep(),
+    }
 }
 
 /// The value of a constant expression.
@@ -568,12 +631,40 @@ impl<'a> Fold<'a> {
                         let not = v.as_bool().map_or(Value::Null, |b| Value::Bool(!b));
                         with(expr, ExprKind::Const(not))
                     }
-                    None => with(expr, ExprKind::Bool(BoolOp::Not, args)),
+                    None => match args.as_slice() {
+                        [arg] => negate(expr, arg),
+                        _ => with(expr, ExprKind::Bool(BoolOp::Not, args)),
+                    },
                 })
             }
             ExprKind::Bool(op, args) => self.and_or(expr, *op, args),
             ExprKind::NullTest(arg, is_null) => {
                 let arg = self.expr(arg)?;
+                // A test of a `ROW` expression is the test of each field that can be null, with `AND`. A constant field, or a field that is not null, decides the test or drops.
+                if let ExprKind::Row(fields, _) = &arg.kind {
+                    let mut tests = Vec::new();
+                    for field in fields {
+                        let null = match value(field) {
+                            Some(v) => v.is_null(),
+                            None if self.nonnullable(field) => false,
+                            None => {
+                                tests.push(with(
+                                    expr,
+                                    ExprKind::NullTest(Box::new(field.clone()), *is_null),
+                                ));
+                                continue;
+                            }
+                        };
+                        if null != *is_null {
+                            return Ok(with(expr, ExprKind::Const(Value::Bool(false))));
+                        }
+                    }
+                    return Ok(match tests.len() {
+                        0 => with(expr, ExprKind::Const(Value::Bool(true))),
+                        1 => tests.remove(0),
+                        _ => with(expr, ExprKind::Bool(BoolOp::And, tests)),
+                    });
+                }
                 if let Some(v) = value(&arg) {
                     return Ok(with(expr, ExprKind::Const(Value::Bool(null_test(v, *is_null)))));
                 }

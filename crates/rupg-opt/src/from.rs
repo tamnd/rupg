@@ -926,18 +926,9 @@ fn semi_info<'q>(on: &[&'q Expr], inner: &BTreeSet<usize>) -> Option<Semi<'q>> {
     Some(semi)
 }
 
-/// The `Result` of a query with no `FROM`, with the conditions of `WHERE` as its `One-Time Filter`.
+/// The `Result` of a query with no `FROM`, with the conditions of `WHERE` as its `One-Time Filter`. A condition that is never true does not make the relation dummy, so the `Result` has the cost and the row of `create_gating_plan`.
 fn result<'q>(scope: usize, parts: Vec<&'q Expr>) -> Node<'q> {
     let parts: Vec<&Expr> = parts.into_iter().filter(|p| !exprs::is_true(p)).collect();
-    if parts.iter().any(|p| exprs::is_false(p)) {
-        let mut node = Node::new(
-            Kind::Result { replaces: None, one_time: vec![false_item()] },
-            scope,
-            Vec::new(),
-        );
-        node.cost = Cost::default();
-        return node;
-    }
     let cost = cost::qual_cost(parts.iter().copied());
     let one_time = parts.into_iter().map(Item::of).collect();
     let mut node = Node::new(Kind::Result { replaces: None, one_time }, scope, Vec::new());

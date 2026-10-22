@@ -3,7 +3,7 @@
 //! The width of a node is the width of the values that the nodes above it read, as the width of the `PathTarget` of its path. A scan below a join or an `Agg` gives all the columns of its relation, as a physical target list, but its width counts only the columns that the nodes above read.
 
 use rupg_analyze::{Expr, ExprKind, Var};
-use rupg_plan::{Item, Kind, Node, Operation};
+use rupg_plan::{Item, Kind, Node, Operation, Replaced};
 
 use crate::{Level, cost, exprs, from};
 
@@ -146,6 +146,11 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             let parts: Vec<Expr> =
                 cond.iter().chain(join_filter).map(|i| i.expr.as_ref().clone()).collect();
             join(level, node, want, &parts);
+        }
+        // `set_rel_size` marks a relation with a condition that is never true as dummy before `set_rel_width`, so its `Result` has a width of 0. A join with no rows keeps the width of its columns.
+        Kind::Result { replaces: Some(Replaced::Scan(_)), .. } => {
+            node.cost.width = 0;
+            node.output = want;
         }
         Kind::Result { .. } => {
             node.cost.width = width(level, node.scope, &want);
