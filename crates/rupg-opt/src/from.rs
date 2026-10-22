@@ -9,8 +9,8 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use rupg_analyze::{
-    BoolOp, BoolTest, Expr, ExprKind, FromItem, JoinKind, Query, Relation, SortGroup, Var,
-    expand_grouping_sets,
+    BoolOp, BoolTest, Expr, ExprKind, FromItem, JoinKind, Query, Relation, SetKind, SetOp, SetTree,
+    SortGroup, Var, expand_grouping_sets,
 };
 use rupg_pgcatalog::builtin;
 use rupg_plan::{Cost, Item, Kind, Node, Replaced, SortKey, Strategy};
@@ -616,7 +616,9 @@ impl<'q> Builder<'q> {
                     let c = child.cost;
                     children.push(child);
                     // `cost_subqueryscan`: a scan with no condition that gives the columns of its subquery as they are costs its subquery, because `setrefs.c` takes it out of the plan.
-                    if quals.is_empty() && trivial_target(level.query, r, sub) {
+                    if quals.is_empty()
+                        && (simple_union_all(sub) || trivial_target(level.query, r, sub))
+                    {
                         per_row = 0.0;
                     }
                     let keys = distinct_keys(sub);
@@ -786,6 +788,44 @@ fn trivial_target(query: &Query, r: usize, sub: &Query) -> bool {
         })
         .collect();
     attnums.len() == sub.targets.len() && attnums.iter().zip(1..).all(|(a, at)| *a == at)
+}
+
+/// `is_simple_union_all`: the subquery is a `UNION ALL` of `SELECT`s with the types of its columns, with no `ORDER BY`, no `LIMIT`, no `OFFSET`, no lock and no `WITH`. `pull_up_simple_union_all` makes it an append relation, whose `Append` the plan has in place of the scan of the subquery.
+pub(crate) fn simple_union_all(sub: &Query) -> bool {
+    fn union_all(op: &SetOp, sub: &Query, columns: &[(u32, i32)]) -> bool {
+        op.kind == SetKind::Union
+            && op.all
+            && [&op.left, &op.right].into_iter().all(|tree| match tree {
+                SetTree::Leaf(at) => {
+                    sub.relations.get(*at).and_then(|r| r.subquery.as_deref()).is_some_and(|leaf| {
+                        let mut types = leaf
+                            .targets
+                            .iter()
+                            .filter(|t| !t.junk)
+                            .map(|t| t.expr.strip_implicit().ty);
+                        columns.iter().all(|(ty, _)| types.next() == Some(*ty))
+                            && types.next().is_none()
+                    })
+                }
+                SetTree::Op(op) => union_all(op, sub, columns),
+            })
+    }
+    sub.set_op.as_ref().is_some_and(|op| {
+        sub.sort.is_empty()
+            && sub.limit.is_none()
+            && sub.offset.is_none()
+            && sub.row_marks.is_empty()
+            && sub.ctes.is_empty()
+            && op.work.is_none()
+            && union_all(op, sub, &op.columns)
+    })
+}
+
+/// True when the node is the scan of a `UNION ALL` that tests no condition, whose `Append` takes the place of the scan, as [`simple_union_all`].
+pub(crate) fn append_rel(query: &Query, node: &Node<'_>) -> bool {
+    let Kind::SubqueryScan(r) = node.kind else { return false };
+    let sub = query.relations.get(r).and_then(|rel| rel.subquery.as_deref());
+    node.filter.is_empty() && sub.is_some_and(simple_union_all)
 }
 
 /// The parts of the conditions of the joins of an item of `FROM`, the joins below first.

@@ -567,7 +567,23 @@ impl<'q> Builder<'q> {
         let query = level.query;
         let scope = level.display;
         let costs = target_costs(level).unwrap_or_default();
-        project(&mut node, costs.scan.0, costs.scan.1);
+        // `apply_scanjoin_target_to_paths`: an `Append` does not compute targets, so a `Result` above it computes the targets that are not its columns, as `create_projection_path`.
+        let computed = !query.grouped
+            && query.windows.is_empty()
+            && query.targets.iter().any(|t| !matches!(t.expr.kind, ExprKind::Var(_)));
+        if computed && from::append_rel(query, &node) {
+            let c = node.cost;
+            let (startup, per_row) = costs.scan;
+            node =
+                Node::new(Kind::Result { replaces: None, one_time: Vec::new() }, scope, vec![node]);
+            node.cost = Cost {
+                startup: c.startup + startup,
+                total: c.total + startup + (cost::CPU_TUPLE + per_row) * c.rows,
+                ..c
+            };
+        } else {
+            project(&mut node, costs.scan.0, costs.scan.1);
+        }
         if query.set_op.is_none() {
             if query.grouped {
                 node = aggregate(level, node, &mut order, only)?;
@@ -763,7 +779,12 @@ impl<'q> Builder<'q> {
                 let keys = self.leaf_items(level, op);
                 // The keys show with the names of the leftmost `SELECT`.
                 let scope = self.leftmost_scope(level, op).unwrap_or(scope);
-                if hashable && hash_total <= unique_total {
+                // `add_path`: with total costs within the fuzz factor, the sorted rows win, as they have the order of the keys, unless the hash table starts sooner by more than the fuzz factor and costs less.
+                let hashed = hash_total * 1.01 < unique_total
+                    || hash_total <= unique_total * 1.01
+                        && hash_startup * 1.01 < sort_startup
+                        && hash_total < unique_total;
+                if hashable && hashed {
                     let mut node = Node::new(
                         Kind::Aggregate { strategy: Strategy::Hashed, keys, sets: Vec::new() },
                         scope,

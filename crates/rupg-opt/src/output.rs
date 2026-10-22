@@ -98,7 +98,8 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
         }
         // `make_sort_input_target`: a `Result` above the sort computes the targets that come after the sort from the other targets and from the columns, the aggregate calls and the window calls of those targets, which the sort gives.
         Kind::Result { replaces: None, one_time }
-            if one_time.is_empty() && !node.children.is_empty() =>
+            if one_time.is_empty()
+                && node.children.first().is_some_and(|c| !from::append_rel(level.query, c)) =>
         {
             let late = upper::postponed(level);
             let is_late = |at: usize| late.get(at).copied().unwrap_or(false);
@@ -123,7 +124,7 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             }
             node.cost.width = width(level, node.scope, &want);
         }
-        // `create_gating_plan`: the `Result` of the conditions that run once computes the targets, and the node below gives the columns that they read, as the target of its path.
+        // `create_gating_plan`: the `Result` of the conditions that run once computes the targets, and the node below gives the columns that they read, as the target of its path. The `Result` above an `Append` of a `UNION ALL` does the same, as `create_projection_path`.
         Kind::Result { replaces: None, .. } if !node.children.is_empty() => {
             let mut below = Vec::new();
             for w in &want {
@@ -241,6 +242,9 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
                 node.output = output;
                 return;
             }
+            if matches!(node.kind, Kind::SubqueryScan(_)) && append_rel(level, node, r, &want) {
+                return;
+            }
             let plain =
                 want.iter().all(|w| matches!(w.expr.kind, ExprKind::Var(v) if v.attnum > 0));
             let physical = physical && node.member.is_none();
@@ -352,6 +356,47 @@ fn index_columns<'q>(level: &Level<'q>, r: usize, columns: &[i16]) -> Option<Vec
             Some(item(expr))
         })
         .collect()
+}
+
+/// `pull_up_simple_union_all` and `set_append_rel_size`: the `Append` of a `UNION ALL` takes the place of the `SubqueryScan` of the relation `r` that tests no condition, and gives only the columns `want`, which each member gives in place of the columns of the relation. The width of the `Append` is the mean width of the rows of its members. False when the scan stays.
+fn append_rel<'q>(level: &Level<'q>, node: &mut Node<'q>, r: usize, want: &[Item<'q>]) -> bool {
+    let Some(sub) = level.query.relations[r].subquery.as_deref() else { return false };
+    let attnums: Option<Vec<usize>> = want
+        .iter()
+        .map(|w| match w.expr.kind {
+            ExprKind::Var(v) if v.relation == r && v.levels_up == 0 => {
+                usize::try_from(v.attnum).ok()?.checked_sub(1)
+            }
+            _ => None,
+        })
+        .collect();
+    let Some(attnums) = attnums.filter(|_| node.filter.is_empty() && from::simple_union_all(sub))
+    else {
+        return false;
+    };
+    let Some(mut child) = node.children.pop() else { return false };
+    let mut leaves = Vec::new();
+    if let Some(op) = &sub.set_op {
+        op.left.each_leaf(&mut |at| leaves.push(at));
+        op.right.each_leaf(&mut |at| leaves.push(at));
+    }
+    if matches!(child.kind, Kind::Append) && child.children.len() == leaves.len() {
+        let (mut size, mut rows) = (0.0, 0.0);
+        for (member, at) in child.children.iter_mut().zip(leaves) {
+            let Some(leaf) = sub.relations[at].subquery.as_deref() else { continue };
+            let targets = attnums.iter().filter_map(|&a| leaf.targets.get(a));
+            member.cost.width = targets.map(|t| cost::expr_width(&t.expr, &leaf.relations)).sum();
+            size += f64::from(member.cost.width) * member.cost.rows;
+            rows += member.cost.rows;
+        }
+        if rows > 0.0 {
+            child.cost.width = (size / rows).round() as i32;
+        }
+    } else {
+        child.cost.width = node.cost.width;
+    }
+    *node = child;
+    true
 }
 
 /// True when a `SubqueryScan` gives the rows of its subquery as they are, so that `trivial_subqueryscan` takes it out of the plan. The subquery gives only the columns of the scan.

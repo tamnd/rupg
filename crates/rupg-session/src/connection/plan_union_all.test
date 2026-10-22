@@ -1,0 +1,167 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (id int PRIMARY KEY, x int);
+CREATE TABLE
+> CREATE TABLE b (id int PRIMARY KEY, y int);
+CREATE TABLE
+> EXPLAIN SELECT * FROM (SELECT id, x FROM a UNION ALL SELECT id, y FROM b) u;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..87.80 rows=4520 width=8)
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id, x FROM a UNION ALL SELECT id, y FROM b) u WHERE id = 1;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.15..16.36 rows=2 width=8)
+row   ->  Index Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=8)
+row         Index Cond: (id = 1)
+row   ->  Index Scan using b_pkey on b  (cost=0.15..8.17 rows=1 width=8)
+row         Index Cond: (id = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id, x FROM a UNION ALL SELECT id, y FROM b) u WHERE x > 5;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..84.03 rows=1506 width=8)
+row   ->  Seq Scan on a  (cost=0.00..38.25 rows=753 width=8)
+row         Filter: (x > 5)
+row   ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=8)
+row         Filter: (y > 5)
+EXPLAIN
+> EXPLAIN SELECT count(*) FROM (SELECT id FROM a UNION ALL SELECT id FROM b) u;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=99.10..99.11 rows=1 width=8)
+row   ->  Append  (cost=0.00..87.80 rows=4520 width=0)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=0)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=0)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id FROM a UNION ALL SELECT id FROM b UNION ALL SELECT 3) u;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..87.82 rows=4521 width=4)
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Result  (cost=0.00..0.01 rows=1 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id, x + 1 AS v FROM a UNION ALL SELECT id, y FROM b) u WHERE v = 2;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..82.29 rows=22 width=8)
+row   ->  Seq Scan on a  (cost=0.00..43.93 rows=11 width=8)
+row         Filter: ((x + 1) = 2)
+row   ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
+row         Filter: (y = 2)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id FROM a UNION ALL SELECT id FROM b) u LIMIT 5;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.00..0.10 rows=5 width=4)
+row   ->  Append  (cost=0.00..87.80 rows=4520 width=4)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id FROM a UNION SELECT id FROM b) u WHERE id = 1;
+fields QUERY PLAN:25:-1:-1
+row Unique  (cost=16.37..16.38 rows=2 width=4)
+row   ->  Sort  (cost=16.37..16.37 rows=2 width=4)
+row         Sort Key: a.id
+row         ->  Append  (cost=0.15..16.36 rows=2 width=4)
+row               ->  Index Only Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=4)
+row                     Index Cond: (id = 1)
+row               ->  Index Only Scan using b_pkey on b  (cost=0.15..8.17 rows=1 width=4)
+row                     Index Cond: (id = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id FROM a WHERE x = 1 UNION ALL SELECT id FROM b WHERE y = 2) u WHERE id > 0;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=9.80..62.24 rows=8 width=4)
+row   ->  Bitmap Heap Scan on a  (cost=9.80..31.10 rows=4 width=4)
+row         Recheck Cond: (id > 0)
+row         Filter: (x = 1)
+row         ->  Bitmap Index Scan on a_pkey  (cost=0.00..9.80 rows=753 width=0)
+row               Index Cond: (id > 0)
+row   ->  Bitmap Heap Scan on b  (cost=9.80..31.10 rows=4 width=4)
+row         Recheck Cond: (id > 0)
+row         Filter: (y = 2)
+row         ->  Bitmap Index Scan on b_pkey  (cost=0.00..9.80 rows=753 width=0)
+row               Index Cond: (id > 0)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id, x FROM a UNION ALL SELECT id, y FROM b) u ORDER BY x;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=362.21..373.51 rows=4520 width=8)
+row   Sort Key: a.x
+row   ->  Append  (cost=0.00..87.80 rows=4520 width=8)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id, x FROM a UNION ALL SELECT id, y FROM b) u WHERE random() > 0.5;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..95.33 rows=1506 width=8)
+row   ->  Seq Scan on a  (cost=0.00..43.90 rows=753 width=8)
+row         Filter: (random() > '0.5'::double precision)
+row   ->  Seq Scan on b  (cost=0.00..43.90 rows=753 width=8)
+row         Filter: (random() > '0.5'::double precision)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id, x FROM a UNION ALL SELECT id, y FROM b) u WHERE x > random();
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..106.63 rows=1506 width=8)
+row   ->  Seq Scan on a  (cost=0.00..49.55 rows=753 width=8)
+row         Filter: ((x)::double precision > random())
+row   ->  Seq Scan on b  (cost=0.00..49.55 rows=753 width=8)
+row         Filter: ((y)::double precision > random())
+EXPLAIN
+> EXPLAIN SELECT * FROM b JOIN (SELECT id, x FROM a UNION ALL SELECT id, y FROM b) u ON u.x = b.y;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=520.72..1298.16 rows=51076 width=16)
+row   Merge Cond: (b.y = a.x)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: b.y
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Sort  (cost=362.21..373.51 rows=4520 width=8)
+row         Sort Key: a.x
+row         ->  Append  (cost=0.00..87.80 rows=4520 width=8)
+row               ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Seq Scan on b b_1  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT id + 1 FROM (SELECT id FROM a UNION ALL SELECT id FROM b) u;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..144.30 rows=4520 width=4)
+row   ->  Append  (cost=0.00..87.80 rows=4520 width=4)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id FROM a UNION ALL SELECT id FROM b UNION SELECT id FROM a) u WHERE id = 2;
+fields QUERY PLAN:25:-1:-1
+row Unique  (cost=24.56..24.57 rows=3 width=4)
+row   ->  Sort  (cost=24.56..24.56 rows=3 width=4)
+row         Sort Key: a.id
+row         ->  Append  (cost=0.15..24.53 rows=3 width=4)
+row               ->  Index Only Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=4)
+row                     Index Cond: (id = 2)
+row               ->  Index Only Scan using b_pkey on b  (cost=0.15..8.17 rows=1 width=4)
+row                     Index Cond: (id = 2)
+row               ->  Index Only Scan using a_pkey on a a_1  (cost=0.15..8.17 rows=1 width=4)
+row                     Index Cond: (id = 2)
+EXPLAIN
+> EXPLAIN SELECT x, count(*) FROM (SELECT id, x FROM a UNION ALL SELECT id, y FROM b) u GROUP BY x;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=110.40..112.40 rows=200 width=12)
+row   Group Key: a.x
+row   ->  Append  (cost=0.00..87.80 rows=4520 width=4)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id, x FROM a UNION ALL SELECT id, y FROM b) u WHERE id = 1 AND x = 2;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.15..16.36 rows=2 width=8)
+row   ->  Index Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=8)
+row         Index Cond: (id = 1)
+row         Filter: (x = 2)
+row   ->  Index Scan using b_pkey on b  (cost=0.15..8.17 rows=1 width=8)
+row         Index Cond: (id = 1)
+row         Filter: (y = 2)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT DISTINCT x FROM a UNION ALL SELECT y FROM b) u WHERE x = 3;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..41.79 rows=12 width=4)
+row   ->  Limit  (cost=0.00..3.48 rows=1 width=4)
+row         ->  Seq Scan on a  (cost=0.00..38.25 rows=11 width=4)
+row               Filter: (x = 3)
+row   ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=4)
+row         Filter: (y = 3)
+EXPLAIN
