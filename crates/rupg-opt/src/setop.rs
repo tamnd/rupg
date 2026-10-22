@@ -28,11 +28,13 @@ pub(crate) struct Leaf<'q> {
     /// The number of groups of the rows of the `SELECT`, as `build_setop_child_paths` gives it in `pNumGroups`.
     pub(crate) groups: f64,
     pub(crate) sorted: Sorted<'q>,
+    /// True when the keys of the order of the `SELECT` are all its columns, as [`complete`].
+    pub(crate) complete: bool,
 }
 
 impl<'q> Leaf<'q> {
     pub(crate) fn new(scope: usize, op: &'q SetOp) -> Leaf<'q> {
-        Leaf { scope, op, groups: 0.0, sorted: Sorted::Sort(None) }
+        Leaf { scope, op, groups: 0.0, sorted: Sorted::Sort(None), complete: false }
     }
 }
 
@@ -48,6 +50,14 @@ pub(crate) fn all_keys(query: &Query, op: &SetOp) -> Vec<(Expr, bool, bool)> {
 /// `setop_pathkeys`: the keys of [`all_keys`] with no key that the equivalence classes of the `SELECT` make redundant, such as a column that a condition makes equal to a constant.
 pub(crate) fn keys(query: &Query, op: &SetOp, stats: &Stats) -> Vec<(Expr, bool, bool)> {
     stats.canonical(all_keys(query, op), |k| &k.0)
+}
+
+/// True when `setop_pathkeys` of a `SELECT` has a key for each column: no column is a constant, and the equivalence classes of the `SELECT` make no key redundant. Only then a plan of the `SELECT` in its order has the keys of all the columns of a `UNION`, which `get_cheapest_path_for_pathkeys` of `generate_union_paths` looks for.
+pub(crate) fn complete(query: &Query, op: &SetOp, stats: &Stats) -> bool {
+    let all = all_keys(query, op);
+    !all.is_empty()
+        && !all.iter().any(|k| is_const(&k.0))
+        && keys(query, op, stats).len() == all.len()
 }
 
 /// True when the plans of `FROM` of a `SELECT` are the plans of the `SELECT`, with only the targets above them.
@@ -178,6 +188,7 @@ struct Side<'q> {
     sorted: Sorted<'q>,
     keys: Vec<SortKey<'q>>,
     scope: usize,
+    complete: bool,
 }
 
 impl<'q> Side<'q> {
@@ -285,6 +296,18 @@ impl<'q> Builder<'q> {
             .collect()
     }
 
+    /// A `SELECT` of a `UNION` without `ALL`, which `recurse_set_operations` plans with the operation as `parentOp`: its cheapest plan, and its plan in the order of all the columns of the operation, which `get_cheapest_path_for_pathkeys` of `generate_union_paths` finds among the plans that `build_setop_child_paths` adds. A `SELECT` that is not [`complete`] has no such plan.
+    pub(crate) fn union_leaf(
+        &mut self,
+        level: &Level<'q>,
+        op: &'q SetOp,
+        tree: &'q SetTree,
+    ) -> (Node<'q>, Option<Node<'q>>) {
+        let side = self.side(level, op, tree);
+        let ordered = side.complete.then(|| side.sorted_plan());
+        (side.node, ordered)
+    }
+
     /// The plan of a side of `INTERSECT` or `EXCEPT`. The planner plans a `SELECT` with the set operation as its `setops`.
     fn side(&mut self, level: &Level<'q>, op: &'q SetOp, tree: &'q SetTree) -> Side<'q> {
         let keys = |items: Vec<Item<'q>>| -> Vec<SortKey<'q>> {
@@ -311,19 +334,22 @@ impl<'q> Builder<'q> {
                         sorted: Sorted::Sort(None),
                         keys: Vec::new(),
                         scope,
+                        complete: false,
                     };
                 };
                 let outer = self.setop.replace(Leaf::new(level.scope, op));
                 let node = self.query(sub, Some(level.scope));
                 let leaf = std::mem::replace(&mut self.setop, outer);
-                let (groups, sorted) =
-                    leaf.map_or((node.cost.rows, Sorted::Sort(None)), |l| (l.groups, l.sorted));
+                let (groups, sorted, complete) = leaf
+                    .map_or((node.cost.rows, Sorted::Sort(None), false), |l| {
+                        (l.groups, l.sorted, l.complete)
+                    });
                 let items =
                     sub.targets.iter().filter(|t| !t.junk).map(|t| Item::below(&t.expr)).collect();
                 let mut keys = keys(items);
                 keys.retain(|k| !is_const(&k.item.expr));
                 let scope = node.scope;
-                Side { node, groups, sorted, keys, scope }
+                Side { node, groups, sorted, keys, scope, complete }
             }
             SetTree::Op(inner) => {
                 let (node, sorted) = if inner.kind == SetKind::Union || inner.work.is_some() {
@@ -353,7 +379,14 @@ impl<'q> Builder<'q> {
                     _ => self.leftmost_scope(level, inner).unwrap_or(level.scope),
                 };
                 let items = self.leaf_items(level, inner);
-                Side { groups: node.cost.rows, node, sorted, keys: keys(items), scope }
+                Side {
+                    groups: node.cost.rows,
+                    node,
+                    sorted,
+                    keys: keys(items),
+                    scope,
+                    complete: false,
+                }
             }
         }
     }
