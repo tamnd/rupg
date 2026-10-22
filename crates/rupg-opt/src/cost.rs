@@ -14,6 +14,8 @@ pub(crate) const CPU_TUPLE: f64 = 0.01;
 pub(crate) const APPEND_CPU: f64 = 0.5;
 /// `cpu_operator_cost`.
 pub(crate) const CPU_OPERATOR: f64 = 0.0025;
+/// `cpu_index_tuple_cost`.
+pub(crate) const CPU_INDEX_TUPLE: f64 = 0.005;
 /// The number of pages that the planner takes for a table that `VACUUM` and `ANALYZE` have not seen, as `estimate_rel_size`.
 const DEFAULT_PAGES: f64 = 10.0;
 /// `BLCKSZ - SizeOfPageHeaderData`.
@@ -33,7 +35,7 @@ pub(crate) const NUM_DISTINCT: f64 = 200.0;
 /// `disable_cost`: the cost that a plan gets when the planner should use it only when it has no other plan.
 pub(crate) const DISABLE: f64 = 1.0e10;
 /// `random_page_cost`.
-const RANDOM_PAGE: f64 = 4.0;
+pub(crate) const RANDOM_PAGE: f64 = 4.0;
 /// `work_mem`, in bytes.
 pub(crate) const WORK_MEM: f64 = 4.0 * 1024.0 * 1024.0;
 /// `get_hash_memory_limit`: `work_mem` times `hash_mem_multiplier`, in bytes.
@@ -251,7 +253,11 @@ fn array_selectivity(
 }
 
 /// The operator of `x op ANY (array)` or `x op ALL (array)` whose function is `func`, for the type of `x` and the type of the items of the array.
-fn array_operator(func: u32, left: u32, element: u32) -> Option<&'static builtin::OperatorRow> {
+pub(crate) fn array_operator(
+    func: u32,
+    left: u32,
+    element: u32,
+) -> Option<&'static builtin::OperatorRow> {
     let mut ops = builtin::operators().iter().filter(|o| o.code == func);
     ops.clone().find(|o| o.left == left && o.right == element).or_else(|| ops.next())
 }
@@ -800,7 +806,7 @@ fn strip_array_coercion(mut expr: &Expr) -> &Expr {
 }
 
 /// `estimate_array_length`: the items of a constant array or of a list of `ARRAY[...]` with one dimension, 0 for a null array, or 10 with no statistics.
-fn array_length(array: &Expr) -> f64 {
+pub(crate) fn array_length(array: &Expr) -> f64 {
     match &array.kind {
         ExprKind::Const(Value::Null) => 0.0,
         ExprKind::Const(Value::Array(a)) => a.values.len() as f64,

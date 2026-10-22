@@ -91,6 +91,8 @@ fn names(kind: &Kind<'_>) -> Names {
     match kind {
         Kind::Result { .. } => simple("Result"),
         Kind::SeqScan(_) => simple("Seq Scan"),
+        Kind::IndexScan { only: false, .. } => simple("Index Scan"),
+        Kind::IndexScan { only: true, .. } => simple("Index Only Scan"),
         Kind::SampleScan(_) => simple("Sample Scan"),
         Kind::FunctionScan(_) => simple("Function Scan"),
         Kind::TableFunctionScan(_) => simple("Table Function Scan"),
@@ -218,6 +220,9 @@ impl Explainer<'_, '_> {
             self.w.boolean("Parallel Aware", false);
             self.w.boolean("Async Capable", false);
         }
+        if let Kind::IndexScan { index, backward, .. } = node.kind {
+            self.index_details(index, backward);
+        }
         if let Some(target) = self.target(node) {
             self.write_target(&target);
         }
@@ -311,6 +316,20 @@ impl Explainer<'_, '_> {
         Ok(())
     }
 
+    /// `ExplainIndexScanDetails`: the direction of an index scan and the name of its index.
+    fn index_details(&mut self, index: u32, backward: bool) {
+        let name = self.texts.object(index, false).0;
+        if self.w.format == Format::Text {
+            if backward {
+                self.w.buf.push_str(" Backward");
+            }
+            self.w.buf.push_str(&format!(" using {}", self.texts.quote(&name)));
+        } else {
+            self.w.text("Scan Direction", if backward { "Backward" } else { "Forward" });
+            self.w.text("Index Name", &name);
+        }
+    }
+
     /// The target of a scan or of a `ModifyTable`.
     fn target(&mut self, node: &Node<'_>) -> Option<Target> {
         let scope = node.scope;
@@ -319,7 +338,7 @@ impl Explainer<'_, '_> {
         let (index, tag, object): (usize, Option<&'static str>, Option<(u32, bool)>) = match node
             .kind
         {
-            Kind::SeqScan(r) | Kind::SampleScan(r) => {
+            Kind::SeqScan(r) | Kind::SampleScan(r) | Kind::IndexScan { relation: r, .. } => {
                 let table = node.member.unwrap_or(relation_of(r).oid);
                 (r, Some("Relation Name"), Some((table, false)))
             }
@@ -423,6 +442,10 @@ impl Explainer<'_, '_> {
             | Kind::CteScan(_)
             | Kind::WorkTableScan(_)
             | Kind::TableFunctionScan(_) => {
+                self.qual("Filter", scope, &node.filter, self.options.verbose)?;
+            }
+            Kind::IndexScan { cond, .. } => {
+                self.qual("Index Cond", scope, cond, self.options.verbose)?;
                 self.qual("Filter", scope, &node.filter, self.options.verbose)?;
             }
             Kind::SampleScan(r) => {

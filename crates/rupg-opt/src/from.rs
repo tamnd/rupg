@@ -1,6 +1,7 @@
 //! The plan of `FROM` and `WHERE`: the scan of each relation, the joins and the place of each condition, as `query_planner`, `make_one_rel` and `create_scan_plan` make them.
 
 mod classes;
+mod index;
 pub(crate) mod paths;
 mod search;
 
@@ -491,7 +492,7 @@ impl<'q> Builder<'q> {
         // The scan of the only relation counts the conditions with its own.
         let (rels, counted) = match tree {
             Tree::Base { relation, quals } => {
-                (vec![self.scan(level, relation, quals, once, &mut stats)], true)
+                (self.scan(level, relation, quals, once, &mut stats), true)
             }
             tree => (self.build(level, tree, &found, &mut stats), false),
         };
@@ -530,7 +531,7 @@ impl<'q> Builder<'q> {
         stats: &mut Stats,
     ) -> Vec<Rel<'q>> {
         match tree {
-            Tree::Base { relation, quals } => vec![self.scan(level, relation, quals, 0.0, stats)],
+            Tree::Base { relation, quals } => self.scan(level, relation, quals, 0.0, stats),
             Tree::Join(join)
                 if matches!(
                     join.kind,
@@ -556,7 +557,7 @@ impl<'q> Builder<'q> {
         }
     }
 
-    /// The scan of a relation with its conditions, as `create_scan_plan`, with the costs of `cost_seqscan` and the other functions of `costsize.c` for each kind of scan. `once` is the cost of the conditions that read no relation, which the scan of the only relation of `FROM` has.
+    /// The scans of a relation with its conditions that `add_path` keeps, as `set_rel_pathlist` and `create_scan_plan` make them, with the costs of `cost_seqscan` and the other functions of `costsize.c` for each kind of scan. A table has a scan by each of its indexes too. `once` is the cost of the conditions that read no relation, which the sequential scan of the only relation of `FROM` has.
     fn scan(
         &mut self,
         level: &Level<'q>,
@@ -564,9 +565,12 @@ impl<'q> Builder<'q> {
         quals: Vec<Qual<'q>>,
         once: f64,
         stats: &mut Stats,
-    ) -> Rel<'q> {
+    ) -> Vec<Rel<'q>> {
         let relation = &level.query.relations[r];
-        let quals = order_quals(quals, stats);
+        let base = restrictions(quals);
+        let mut quals = base.clone();
+        stats.sort_quals(&mut quals);
+        let mut indexes = Vec::new();
         // `cost_seqscan` and the other scans: the start cost of the conditions, and their cost for each row.
         let (qual_startup, qual_cost) = stats.qual_costs(quals.iter().map(|q| &*q.expr));
         let qual_startup = qual_startup + once;
@@ -637,9 +641,10 @@ impl<'q> Builder<'q> {
                         }),
                     };
                     if let Some(members) = members {
-                        return members_scan(level, r, &quals, members, stats);
+                        return vec![members_scan(level, r, &quals, members, stats)];
                     }
-                    for index in self.members.map(|m| m.indexes(relation.oid)).unwrap_or_default() {
+                    indexes = self.members.map(|m| m.indexes(relation.oid)).unwrap_or_default();
+                    for index in &indexes {
                         if let ([key], true, false) =
                             (index.keys.as_slice(), index.unique, index.partial)
                             && *key > 0
@@ -656,7 +661,7 @@ impl<'q> Builder<'q> {
                             if index.nulls_not_distinct || index.keys.iter().all(not_null) {
                                 stats.functional.entry(r).or_default().push(index.keys.clone());
                             }
-                            stats.distinct.entry(r).or_default().push(index.keys);
+                            stats.distinct.entry(r).or_default().push(index.keys.clone());
                         }
                     }
                     let (pages, tuples) = cost::table_size(relation);
@@ -700,7 +705,18 @@ impl<'q> Builder<'q> {
             None => startup + (run + tuples * per_row),
         };
         node.cost = Cost { startup, total, rows, width };
-        Rel { node, rels: BTreeSet::from([r]), order: Vec::new() }
+        let seq = Rel { node, rels: BTreeSet::from([r]), order: Vec::new() };
+        if indexes.is_empty() || !matches!(seq.node.kind, Kind::SeqScan(_)) {
+            return vec![seq];
+        }
+        let (pages, _) = cost::table_size(relation);
+        let table = index::Table { r, pages, tuples, rows, quals: &base, eq: &eq };
+        let mut paths = Paths::new(stats.startup);
+        paths.add(startup, total, Vec::new(), seq);
+        for rel in index::paths(level, &table, &indexes, stats) {
+            paths.add(rel.node.cost.startup, rel.node.cost.total, rel.order.clone(), rel);
+        }
+        paths.kept()
     }
 }
 
@@ -1227,11 +1243,10 @@ fn equivalence(qual: &Qual<'_>) -> bool {
         && exprs::binary(&qual.expr).is_some_and(|(op, _, _)| exprs::can_merge(op))
 }
 
-/// The conditions of a scan in the order of `order_qual_clauses`: the conditions that are not equivalences, then the equivalences, which the planner makes again, then by their cost for each row.
-fn order_quals<'q>(quals: Vec<Qual<'q>>, stats: &Stats) -> Vec<Qual<'q>> {
+/// The conditions of a scan in the order of `baserestrictinfo`: the conditions that are not equivalences, then the equivalences, which the planner makes again. `order_qual_clauses` then sorts them by their cost for each row.
+fn restrictions(quals: Vec<Qual<'_>>) -> Vec<Qual<'_>> {
     let (mut out, classes): (Vec<_>, Vec<_>) = quals.into_iter().partition(|q| !equivalence(q));
     out.extend(classes);
-    stats.sort_quals(&mut out);
     out
 }
 
@@ -1549,6 +1564,7 @@ pub(crate) fn node_rels(node: &Node<'_>) -> BTreeSet<usize> {
     let mut out = BTreeSet::new();
     match &node.kind {
         Kind::SeqScan(r)
+        | Kind::IndexScan { relation: r, .. }
         | Kind::SampleScan(r)
         | Kind::FunctionScan(r)
         | Kind::TableFunctionScan(r)
