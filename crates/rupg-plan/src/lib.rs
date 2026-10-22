@@ -263,8 +263,8 @@ pub enum Kind<'q> {
 /// The relation or the node that a `Result` takes the place of, as `result_type`.
 #[derive(Clone, Debug)]
 pub enum Replaced {
-    /// A scan of a relation of the scope with a condition that is never true.
-    Scan(usize),
+    /// A scan of a relation of the scope with a condition that is never true, and true when the `Result` keeps the width of the columns of the relation. A relation that `set_rel_size` finds dummy has a width of 0, and an inner side that a join finds dummy keeps its width.
+    Scan(usize, bool),
     /// A join of the relations of the scope with a condition that is never true.
     Join(Vec<usize>),
 }

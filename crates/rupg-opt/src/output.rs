@@ -147,8 +147,8 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
                 cond.iter().chain(join_filter).map(|i| i.expr.as_ref().clone()).collect();
             join(level, node, want, &parts);
         }
-        // `set_rel_size` marks a relation with a condition that is never true as dummy before `set_rel_width`, so its `Result` has a width of 0. A join with no rows keeps the width of its columns.
-        Kind::Result { replaces: Some(Replaced::Scan(_)), .. } => {
+        // `set_rel_size` marks a relation with a condition that is never true as dummy before `set_rel_width`, so its `Result` has a width of 0. A join with no rows and an inner side that a join marks dummy keep the width of their columns.
+        Kind::Result { replaces: Some(Replaced::Scan(_, false)), .. } => {
             node.cost.width = 0;
             node.output = want;
         }
