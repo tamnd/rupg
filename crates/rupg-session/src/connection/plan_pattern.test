@@ -1,0 +1,362 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE p (z text);
+CREATE TABLE
+> CREATE TABLE pu (u text UNIQUE);
+CREATE TABLE
+> CREATE TABLE pv (v varchar(20));
+CREATE TABLE
+> CREATE TABLE pc (c char(8));
+CREATE TABLE
+> CREATE TABLE pb (b bytea);
+CREATE TABLE
+> CREATE TABLE pa (a int, z text);
+CREATE TABLE
+> EXPLAIN SELECT * FROM p WHERE z LIKE 'abc%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=7 width=32)
+row   Filter: (z ~~ 'abc%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z LIKE '%google%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=1 width=32)
+row   Filter: (z ~~ '%google%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z LIKE 'abc';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=7 width=32)
+row   Filter: (z ~~ 'abc'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z LIKE 'a_c%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=7 width=32)
+row   Filter: (z ~~ 'a_c%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z LIKE '%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=1360 width=32)
+row   Filter: (z ~~ '%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z LIKE '';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=7 width=32)
+row   Filter: (z ~~ ''::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z LIKE 'ab\%c';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=7 width=32)
+row   Filter: (z ~~ 'ab\%c'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z LIKE '%a%b%c%d%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=1360 width=32)
+row   Filter: (z ~~ '%a%b%c%d%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z LIKE '_____';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=1360 width=32)
+row   Filter: (z ~~ '_____'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z NOT LIKE '%google%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=1360 width=32)
+row   Filter: (z !~~ '%google%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z NOT LIKE 'abc';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=1353 width=32)
+row   Filter: (z !~~ 'abc'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z LIKE NULL;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.00 rows=0 width=0)
+row   Replaces: Scan on p
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE 'abc' LIKE z;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=7 width=32)
+row   Filter: ('abc'::text ~~ z)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z LIKE z;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=7 width=32)
+row   Filter: (z ~~ z)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z ILIKE 'abc%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=54 width=32)
+row   Filter: (z ~~* 'abc%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z ILIKE '123%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=7 width=32)
+row   Filter: (z ~~* '123%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z ILIKE '12a%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=7 width=32)
+row   Filter: (z ~~* '12a%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z ILIKE '123';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=7 width=32)
+row   Filter: (z ~~* '123'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z NOT ILIKE '%x%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=1 width=32)
+row   Filter: (z !~~* '%x%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z ~ '^abc';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=7 width=32)
+row   Filter: (z ~ '^abc'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z ~ '^abc$';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=7 width=32)
+row   Filter: (z ~ '^abc$'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z ~ 'abc';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=54 width=32)
+row   Filter: (z ~ 'abc'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z ~ '(a|b)c';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=544 width=32)
+row   Filter: (z ~ '(a|b)c'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z ~ 'a|b';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=1360 width=32)
+row   Filter: (z ~ 'a|b'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z ~ '^ab+c';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=3 width=32)
+row   Filter: (z ~ '^ab+c'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z ~ '^ab*c';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=1 width=32)
+row   Filter: (z ~ '^ab*c'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z ~ '^a.c$';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=1 width=32)
+row   Filter: (z ~ '^a.c$'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z ~ '[0-9]+x';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=680 width=32)
+row   Filter: (z ~ '[0-9]+x'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z ~ '[^a]{2,3}';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=1360 width=32)
+row   Filter: (z ~ '[^a]{2,3}'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z ~ '^\.ab';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=7 width=32)
+row   Filter: (z ~ '^\.ab'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z ~ 'x$';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=272 width=32)
+row   Filter: (z ~ 'x$'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z ~ '^$';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=7 width=32)
+row   Filter: (z ~ '^$'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z !~ 'abc';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=1306 width=32)
+row   Filter: (z !~ 'abc'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z ~* '^abc';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=11 width=32)
+row   Filter: (z ~* '^abc'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z ~* '^12a';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=1 width=32)
+row   Filter: (z ~* '^12a'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z !~* 'q';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=1 width=32)
+row   Filter: (z !~* 'q'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z ^@ 'ab';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=7 width=32)
+row   Filter: (z ^@ 'ab'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM pu WHERE u NOT LIKE 'abc';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pu  (cost=0.00..27.00 rows=1359 width=32)
+row   Filter: (u !~~ 'abc'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM pv WHERE v LIKE 'abc%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pv  (cost=0.00..21.75 rows=5 width=58)
+row   Filter: ((v)::text ~~ 'abc%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM pv WHERE v LIKE '%abc%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pv  (cost=0.00..21.75 rows=38 width=58)
+row   Filter: ((v)::text ~~ '%abc%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM pc WHERE c LIKE 'abc%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pc  (cost=0.00..25.88 rows=6 width=36)
+row   Filter: (c ~~ 'abc%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM pc WHERE c LIKE '%abc';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pc  (cost=0.00..25.88 rows=10 width=36)
+row   Filter: (c ~~ '%abc'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM pb WHERE b LIKE '\x6162'::bytea;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pb  (cost=0.00..27.00 rows=7 width=32)
+row   Filter: (b ~~ '\x6162'::bytea)
+EXPLAIN
+> EXPLAIN SELECT * FROM pb WHERE b LIKE '%a%'::bytea;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pb  (cost=0.00..27.00 rows=1360 width=32)
+row   Filter: (b ~~ '\x256125'::bytea)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE lower(z) LIKE '%abc%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..30.40 rows=54 width=32)
+row   Filter: (lower(z) ~~ '%abc%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM pa WHERE z LIKE '%abc%' AND a = 1;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pa  (cost=0.00..29.05 rows=1 width=36)
+row   Filter: ((z ~~ '%abc%'::text) AND (a = 1))
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z LIKE '%abc%' OR z LIKE '%def%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..30.40 rows=107 width=32)
+row   Filter: ((z ~~ '%abc%'::text) OR (z ~~ '%def%'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z LIKE ANY (ARRAY['%abc%', '%def%']);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=107 width=32)
+row   Filter: (z ~~ ANY ('{%abc%,%def%}'::text[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z LIKE 'é%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=7 width=32)
+row   Filter: (z ~~ 'é%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z LIKE '%é%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=272 width=32)
+row   Filter: (z ~~ '%é%'::text)
+EXPLAIN
+> EXPLAIN SELECT count(*) FROM p WHERE z LIKE '%google%';
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=27.00..27.01 rows=1 width=8)
+row   ->  Seq Scan on p  (cost=0.00..27.00 rows=1 width=0)
+row         Filter: (z ~~ '%google%'::text)
+EXPLAIN
+> EXPLAIN SELECT a, count(*) FROM pa WHERE z <> '' AND z LIKE '%google%' GROUP BY a;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=29.06..29.08 rows=1 width=12)
+row   Group Key: a
+row   ->  Sort  (cost=29.06..29.07 rows=1 width=4)
+row         Sort Key: a
+row         ->  Seq Scan on pa  (cost=0.00..29.05 rows=1 width=4)
+row               Filter: ((z <> ''::text) AND (z ~~ '%google%'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z LIKE '%Google%' AND z NOT LIKE '%.google.%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..30.40 rows=1 width=32)
+row   Filter: ((z ~~ '%Google%'::text) AND (z !~~ '%.google.%'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z LIKE 'a#%b%' ESCAPE '#';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=7 width=32)
+row   Filter: (z ~~ 'a\%b%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z SIMILAR TO 'abc%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=1 width=32)
+row   Filter: (z ~ '^(?:abc.*)$'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z LIKE 'ab' || 'c%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=7 width=32)
+row   Filter: (z ~~ 'abc%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z ~ '^ab(cd|ce)';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=3 width=32)
+row   Filter: (z ~ '^ab(cd|ce)'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z ~ '^ab\d';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=1 width=32)
+row   Filter: (z ~ '^ab\d'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z ~ '^ab?c';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=1 width=32)
+row   Filter: (z ~ '^ab?c'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE z ~ '^(ab)';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..27.00 rows=7 width=32)
+row   Filter: (z ~ '^(ab)'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p p1 JOIN p p2 ON p1.z LIKE p2.z;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..27794.60 rows=9248 width=64)
+row   Join Filter: (p1.z ~~ p2.z)
+row   ->  Seq Scan on p p1  (cost=0.00..23.60 rows=1360 width=32)
+row   ->  Materialize  (cost=0.00..30.40 rows=1360 width=32)
+row         ->  Seq Scan on p p2  (cost=0.00..23.60 rows=1360 width=32)
+EXPLAIN
+> EXPLAIN SELECT * FROM pa WHERE z LIKE '%x%' AND z ILIKE '%y%' AND a > 3;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pa  (cost=0.00..32.23 rows=423 width=36)
+row   Filter: ((z ~~ '%x%'::text) AND (z ~~* '%y%'::text) AND (a > 3))
+EXPLAIN
+> INSERT INTO pa VALUES (1, 'abcdef'), (2, 'xgooglex'), (3, 'ABCx');
+INSERT 0 3
+> INSERT INTO pc VALUES ('abc'), ('zzabc');
+INSERT 0 2
+> SELECT a FROM pa WHERE z LIKE 'abc%' ORDER BY a;
+fields a@pa.1:23:4:-1
+row 1
+SELECT 1
+> SELECT a FROM pa WHERE z LIKE '%google%' ORDER BY a;
+fields a@pa.1:23:4:-1
+row 2
+SELECT 1
+> SELECT a FROM pa WHERE z ~ '^abc' ORDER BY a;
+fields a@pa.1:23:4:-1
+row 1
+SELECT 1
+> SELECT a FROM pa WHERE z ILIKE 'ABC%' ORDER BY a;
+fields a@pa.1:23:4:-1
+row 1
+row 3
+SELECT 2
+> SELECT a FROM pa WHERE z ^@ 'xg' ORDER BY a;
+fields a@pa.1:23:4:-1
+row 2
+SELECT 1
+> SELECT c FROM pc WHERE c LIKE '%abc' ORDER BY c;
+fields c@pc.1:1042:-1:12
+SELECT 0

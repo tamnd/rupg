@@ -173,7 +173,8 @@ pub(crate) fn selectivity_by(expr: &Expr, eq: &dyn Fn(&Expr, &Expr) -> Option<f6
                 match (name, eq(left, right)) {
                     (Some("="), Some(sel)) => sel,
                     (Some("<>"), Some(sel)) => 1.0 - sel,
-                    _ => operator_selectivity(op),
+                    _ => pattern_selectivity(op, left, right, eq)
+                        .unwrap_or_else(|| operator_selectivity(op)),
                 }
             }
             None => INEQ_SEL,
@@ -201,7 +202,8 @@ fn array_selectivity(
         match (op.name, eq(left, value)) {
             ("=", Some(sel)) => sel,
             ("<>", Some(sel)) => 1.0 - sel,
-            _ => operator_selectivity(op.oid),
+            _ => pattern_selectivity(op.oid, left, value, eq)
+                .unwrap_or_else(|| operator_selectivity(op.oid)),
         }
     };
     let array = strip_array_coercion(array);
@@ -328,8 +330,398 @@ fn operator_selectivity(op: u32) -> f64 {
         "<>" => 1.0 - EQ_SEL,
         "~~" | "~~*" | "~" | "~*" => EQ_SEL,
         "!~~" | "!~~*" | "!~" | "!~*" => 1.0 - EQ_SEL,
+        "^@" => EQ_SEL,
         _ => INEQ_SEL,
     }
+}
+
+/// The kinds of pattern of `pattern_fixed_prefix`.
+#[derive(Clone, Copy, PartialEq)]
+enum Pattern {
+    Like,
+    LikeIc,
+    Regex,
+    RegexIc,
+    Prefix,
+}
+
+/// `patternsel_common` with no statistics: the selectivity of `LIKE`, `ILIKE`, a regular expression or `^@` of a column and a constant pattern. A pattern that has all of the value is `=` of the value, as `var_eq_const`. Otherwise the selectivity is `DEFAULT_MATCH_SEL` for the fixed prefix of the pattern, times the selectivity of the rest of the pattern, between 0.0001 and 0.9999. The result is `None` when the estimator uses its default.
+fn pattern_selectivity(
+    op: u32,
+    left: &Expr,
+    right: &Expr,
+    eq: &dyn Fn(&Expr, &Expr) -> Option<f64>,
+) -> Option<f64> {
+    let row = builtin::operator_by_oid(op)?;
+    let (kind, negate) = match row.name {
+        "~~" => (Pattern::Like, false),
+        "!~~" => (Pattern::Like, true),
+        "~~*" => (Pattern::LikeIc, false),
+        "!~~*" => (Pattern::LikeIc, true),
+        "~" => (Pattern::Regex, false),
+        "!~" => (Pattern::Regex, true),
+        "~*" => (Pattern::RegexIc, false),
+        "!~*" => (Pattern::RegexIc, true),
+        "^@" => (Pattern::Prefix, false),
+        _ => return None,
+    };
+    if !matches!(row.right, oid::TEXT | oid::BYTEA) || exprs::relations(left).len() != 1 {
+        return None;
+    }
+    let mut pattern = right;
+    while let ExprKind::Relabel(arg, _) = &pattern.kind {
+        pattern = arg;
+    }
+    let text = match &pattern.kind {
+        ExprKind::Const(Value::Null) => return Some(0.0),
+        ExprKind::Const(Value::Text(t)) => t.as_bytes(),
+        ExprKind::Const(Value::Bytea(b)) => b.as_slice(),
+        _ => return None,
+    };
+    if !matches!(left.ty, oid::TEXT | oid::VARCHAR | oid::NAME | oid::BPCHAR | oid::BYTEA) {
+        return None;
+    }
+    let (prefix, status, rest) = fixed_prefix(text, kind);
+    let sel = if status == Prefix::Exact {
+        let value = match &pattern.kind {
+            ExprKind::Const(Value::Bytea(_)) => Value::Bytea(prefix),
+            _ => Value::Text(String::from_utf8_lossy(&prefix).into_owned()),
+        };
+        eq(left, &Expr::new(ExprKind::Const(value), right.ty)).unwrap_or(EQ_SEL)
+    } else {
+        let prefix_sel = if status == Prefix::Partial { EQ_SEL } else { 1.0 };
+        (prefix_sel * rest).clamp(0.0001, 0.9999)
+    };
+    Some(if negate { 1.0 - sel } else { sel }.clamp(0.0, 1.0))
+}
+
+/// `Pattern_Prefix_Status`: whether a pattern has no fixed prefix, a fixed prefix and more, or a fixed prefix only.
+#[derive(Clone, Copy, PartialEq)]
+enum Prefix {
+    None,
+    Partial,
+    Exact,
+}
+
+/// `pattern_fixed_prefix`: the fixed prefix of a pattern, how much of the pattern it is, and the selectivity of the rest of the pattern.
+fn fixed_prefix(patt: &[u8], kind: Pattern) -> (Vec<u8>, Prefix, f64) {
+    match kind {
+        Pattern::Like | Pattern::LikeIc => like_fixed_prefix(patt, kind == Pattern::LikeIc),
+        Pattern::Regex | Pattern::RegexIc => {
+            match regex_fixed_prefix(patt, kind == Pattern::RegexIc) {
+                Some((prefix, true)) => (prefix, Prefix::Exact, 1.0),
+                Some((prefix, false)) => {
+                    let rest = regex_selectivity(patt, prefix.len());
+                    (prefix, Prefix::Partial, rest)
+                }
+                None => (Vec::new(), Prefix::None, regex_selectivity(patt, 0)),
+            }
+        }
+        Pattern::Prefix => (patt.to_vec(), Prefix::Partial, 1.0),
+    }
+}
+
+/// `like_fixed_prefix` and `like_fixed_prefix_ci`: the characters of a `LIKE` pattern before its first wildcard, where a backslash quotes the next character. For `ILIKE` a character that has a case also ends the prefix.
+fn like_fixed_prefix(patt: &[u8], ci: bool) -> (Vec<u8>, Prefix, f64) {
+    let mut prefix = Vec::new();
+    let mut pos = 0;
+    while pos < patt.len() {
+        if patt[pos] == b'%' || patt[pos] == b'_' {
+            break;
+        }
+        if patt[pos] == b'\\' {
+            pos += 1;
+            if pos >= patt.len() {
+                break;
+            }
+        }
+        let width = match char_at(patt, pos) {
+            Some(c) if ci && cased(c) => break,
+            Some(c) if ci => c.len_utf8(),
+            _ => 1,
+        };
+        prefix.extend_from_slice(&patt[pos..pos + width]);
+        pos += width;
+    }
+    let rest = like_selectivity(&patt[pos.min(patt.len())..]);
+    let status = if pos >= patt.len() {
+        Prefix::Exact
+    } else if prefix.is_empty() {
+        Prefix::None
+    } else {
+        Prefix::Partial
+    };
+    (prefix, status, rest)
+}
+
+/// The character of UTF-8 text that starts at a byte.
+fn char_at(text: &[u8], pos: usize) -> Option<char> {
+    let end = (pos + 4).min(text.len());
+    let valid = match std::str::from_utf8(&text[pos..end]) {
+        Ok(s) => s,
+        Err(e) => std::str::from_utf8(&text[pos..pos + e.valid_up_to()]).ok()?,
+    };
+    valid.chars().next()
+}
+
+/// Whether a character has an upper case and a lower case form, as `pg_iswcased`.
+fn cased(c: char) -> bool {
+    c.is_lowercase() || c.is_uppercase()
+}
+
+/// `regexp_fixed_prefix`: the literal characters after a leading `^` of a regular expression, and whether a `$` ends the pattern after them, so that the pattern matches the prefix only. A pattern with an alternative at the top level has no prefix, and a character that a quantifier can repeat or skip ends the prefix. Parentheses do not end the prefix, and alternatives in parentheses add the first character that they all start with, as `findprefix` follows the states of the automaton. In a pattern that ignores case, a character that has a case ends the prefix.
+fn regex_fixed_prefix(patt: &[u8], ci: bool) -> Option<(Vec<u8>, bool)> {
+    let text = std::str::from_utf8(patt).ok()?;
+    let chars: Vec<char> = text.chars().collect();
+    if chars.first() != Some(&'^') || alternatives(&chars).len() > 1 {
+        return None;
+    }
+    let mut prefix = String::new();
+    let mut pos = 1;
+    let mut exact = false;
+    while pos < chars.len() {
+        if chars[pos] == '(' {
+            let inner = match (chars.get(pos + 1), chars.get(pos + 2)) {
+                (Some('?'), Some(':')) => pos + 3,
+                (Some('?'), _) => break,
+                _ => pos + 1,
+            };
+            let Some(close) = group_end(&chars, pos) else { break };
+            if matches!(chars.get(close + 1), Some('*' | '?' | '{')) {
+                break;
+            }
+            let alts = alternatives(&chars[inner..close]);
+            if alts.len() > 1 {
+                let firsts: Vec<Option<char>> = alts.iter().map(|alt| literal(alt, ci)).collect();
+                if let Some(Some(c)) = firsts.first()
+                    && firsts.iter().all(|f| *f == Some(*c))
+                {
+                    prefix.push(*c);
+                }
+                break;
+            }
+            pos = inner;
+            continue;
+        }
+        if chars[pos] == ')' {
+            if chars.get(pos + 1) == Some(&'+') {
+                break;
+            }
+            pos += 1;
+            continue;
+        }
+        if chars[pos] == '$' {
+            exact = pos + 1 == chars.len();
+            break;
+        }
+        let Some(c) = literal(&chars[pos..], ci) else { break };
+        prefix.push(c);
+        pos += if chars[pos] == '\\' { 2 } else { 1 };
+        if chars.get(pos) == Some(&'+') {
+            break;
+        }
+    }
+    (exact || !prefix.is_empty()).then(|| (prefix.into_bytes(), exact))
+}
+
+/// The literal character that a part of a regular expression starts with, which is not a character that a quantifier after it can skip, nor a character that has a case in a pattern that ignores case.
+fn literal(chars: &[char], ci: bool) -> Option<char> {
+    let (c, next) = match chars.first()? {
+        '\\' => match chars.get(1) {
+            Some(&q) if !q.is_alphanumeric() => (q, 2),
+            _ => return None,
+        },
+        c if ".[()|*+?{}^$".contains(*c) => return None,
+        &c => (c, 1),
+    };
+    let skipped = matches!(chars.get(next), Some('*' | '?' | '{'));
+    (!skipped && !(ci && cased(c))).then_some(c)
+}
+
+/// The position of the `)` that closes the `(` at `open`.
+fn group_end(chars: &[char], open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut pos = open;
+    while pos < chars.len() {
+        match chars[pos] {
+            '\\' => pos += 1,
+            '[' => pos = class_end(chars, pos),
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(pos);
+                }
+            }
+            _ => {}
+        }
+        pos += 1;
+    }
+    None
+}
+
+/// The parts of a regular expression between the `|` that are outside of parentheses and brackets.
+fn alternatives(chars: &[char]) -> Vec<&[char]> {
+    let mut out = Vec::new();
+    let (mut depth, mut start, mut pos) = (0usize, 0, 0);
+    while pos < chars.len() {
+        match chars[pos] {
+            '\\' => pos += 1,
+            '[' => pos = class_end(chars, pos),
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            '|' if depth == 0 => {
+                out.push(&chars[start..pos]);
+                start = pos + 1;
+            }
+            _ => {}
+        }
+        pos += 1;
+    }
+    out.push(&chars[start.min(chars.len())..]);
+    out
+}
+
+/// The position of the `]` that closes the class of characters at `open`, where a `]` first in the class is a member.
+fn class_end(chars: &[char], open: usize) -> usize {
+    let mut pos = open + 1;
+    if chars.get(pos) == Some(&'^') {
+        pos += 1;
+    }
+    if chars.get(pos) == Some(&']') {
+        pos += 1;
+    }
+    while pos < chars.len() && chars[pos] != ']' {
+        pos += 1;
+    }
+    pos
+}
+
+/// `FIXED_CHAR_SEL`: the selectivity of a fixed character of a pattern.
+const FIXED_CHAR_SEL: f64 = 0.20;
+/// `CHAR_RANGE_SEL`: the selectivity of a class of characters of a regular expression.
+const CHAR_RANGE_SEL: f64 = 0.25;
+/// `ANY_CHAR_SEL`: the selectivity of a wildcard for one character, which is not 1 since it does not match the end of the string.
+const ANY_CHAR_SEL: f64 = 0.9;
+/// `FULL_WILDCARD_SEL`: the selectivity of a wildcard for any characters.
+const FULL_WILDCARD_SEL: f64 = 5.0;
+/// `PARTIAL_WILDCARD_SEL`: the selectivity of a quantifier.
+const PARTIAL_WILDCARD_SEL: f64 = 2.0;
+
+/// `like_selectivity`: the selectivity of the rest of a `LIKE` pattern after its leading wildcards, where each byte that is not a wildcard is a fixed character.
+fn like_selectivity(patt: &[u8]) -> f64 {
+    let mut pos = patt.iter().take_while(|&&b| b == b'%' || b == b'_').count();
+    let mut sel: f64 = 1.0;
+    while pos < patt.len() {
+        match patt[pos] {
+            b'%' => sel *= FULL_WILDCARD_SEL,
+            b'_' => sel *= ANY_CHAR_SEL,
+            b'\\' => {
+                pos += 1;
+                if pos >= patt.len() {
+                    break;
+                }
+                sel *= FIXED_CHAR_SEL;
+            }
+            _ => sel *= FIXED_CHAR_SEL,
+        }
+        pos += 1;
+    }
+    sel.min(1.0)
+}
+
+/// `regex_selectivity_sub`: the selectivity of a part of a regular expression, where the alternatives at the top level add and a part in parentheses multiplies its selectivity.
+fn regex_selectivity_sub(patt: &[u8]) -> f64 {
+    let mut sel: f64 = 1.0;
+    let (mut depth, mut start) = (0usize, 0);
+    let mut pos = 0;
+    while pos < patt.len() {
+        match patt[pos] {
+            b'(' => {
+                if depth == 0 {
+                    start = pos;
+                }
+                depth += 1;
+            }
+            b')' if depth > 0 => {
+                depth -= 1;
+                if depth == 0 {
+                    sel *= regex_selectivity_sub(&patt[start + 1..pos]);
+                }
+            }
+            b'|' if depth == 0 => {
+                sel += regex_selectivity_sub(&patt[pos + 1..]);
+                break;
+            }
+            b'[' => {
+                pos += 1;
+                let negated = patt.get(pos) == Some(&b'^');
+                if negated {
+                    pos += 1;
+                }
+                if patt.get(pos) == Some(&b']') {
+                    pos += 1;
+                }
+                while pos < patt.len() && patt[pos] != b']' {
+                    pos += 1;
+                }
+                if depth == 0 {
+                    sel *= if negated { 1.0 - CHAR_RANGE_SEL } else { CHAR_RANGE_SEL };
+                }
+            }
+            b'.' => {
+                if depth == 0 {
+                    sel *= ANY_CHAR_SEL;
+                }
+            }
+            b'*' | b'?' | b'+' => {
+                if depth == 0 {
+                    sel *= PARTIAL_WILDCARD_SEL;
+                }
+            }
+            b'{' => {
+                while pos < patt.len() && patt[pos] != b'}' {
+                    pos += 1;
+                }
+                if depth == 0 {
+                    sel *= PARTIAL_WILDCARD_SEL;
+                }
+            }
+            b'\\' => {
+                pos += 1;
+                if pos >= patt.len() {
+                    break;
+                }
+                if depth == 0 {
+                    sel *= FIXED_CHAR_SEL;
+                }
+            }
+            _ => {
+                if depth == 0 {
+                    sel *= FIXED_CHAR_SEL;
+                }
+            }
+        }
+        pos += 1;
+    }
+    sel.min(1.0)
+}
+
+/// `regex_selectivity`: the selectivity of a regular expression, which has a wildcard at the end unless a `$` ends it, without the selectivity of its fixed prefix of `prefix` bytes.
+fn regex_selectivity(patt: &[u8], prefix: usize) -> f64 {
+    let n = patt.len();
+    let mut sel = if n > 0 && patt[n - 1] == b'$' && (n == 1 || patt[n - 2] != b'\\') {
+        regex_selectivity_sub(&patt[..n - 1])
+    } else {
+        regex_selectivity_sub(patt) * FULL_WILDCARD_SEL
+    };
+    if prefix > 0 {
+        let prefix_sel = FIXED_CHAR_SEL.powi(i32::try_from(prefix).unwrap_or(i32::MAX));
+        if prefix_sel > 0.0 {
+            sel /= prefix_sel;
+        }
+    }
+    sel.clamp(0.0, 1.0)
 }
 
 /// The cost of the conditions for each row, as `cost_qual_eval`.
