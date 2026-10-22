@@ -492,6 +492,16 @@ impl<'q> Builder<'q> {
         if let Some(keys) = &keys {
             keys.apply(level, &mut stats);
         }
+        // `standard_qp_callback`: a `SELECT` of a side of `INTERSECT` or `EXCEPT` with no other order to ask for asks for its rows in the order of its columns, as `setop_pathkeys`.
+        if let Some(leaf) =
+            self.setop.as_ref().filter(|s| self.scopes[level.scope].parent == Some(s.scope))
+            && stats.query.is_empty()
+            && level.query.windows.is_empty()
+        {
+            let keys = crate::setop::keys(level.query, leaf.op, &stats);
+            stats.query.clone_from(&keys);
+            stats.sort = keys;
+        }
         // `generate_base_implied_equalities_no_const`: each join of the relations of a class gives the members of the class, because a join above can test any two of them.
         for class in &found.classes {
             let span = class.members().iter().map(|&(_, r)| r).collect();

@@ -12,7 +12,7 @@ use rupg_plan::{
 
 use crate::from::paths::Paths;
 use crate::from::{self, OrderKey, sort};
-use crate::{Builder, Level, cost, exprs};
+use crate::{Builder, Level, cost, exprs, setop};
 
 /// `FRAMEOPTION_DEFAULTS`: `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`.
 const FRAME_DEFAULTS: i32 = 0x422;
@@ -689,17 +689,33 @@ impl<'q> Builder<'q> {
     }
 
     /// The plan of a set operation, as `plan_set_operations`. The nodes above it show the expressions of the leftmost `SELECT`.
-    pub(crate) fn set_op(&mut self, level: &mut Level<'q>, op: &'q SetOp) -> Node<'q> {
-        let node = self.set_node(level, op);
-        if let Some(scope) = self.leftmost_scope(level, op) {
+    pub(crate) fn set_op(
+        &mut self,
+        level: &mut Level<'q>,
+        op: &'q SetOp,
+    ) -> Vec<(Node<'q>, Vec<OrderKey>)> {
+        let (plans, scope) = if op.work.is_none() && op.kind != SetKind::Union {
+            // The `SetOp` with the sorted strategy gives the rows in the order of the columns. Its outer side, which `INTERSECT` can swap, gives the names.
+            let order = setop::order(level.query, op);
+            let plans: Vec<_> = self
+                .nonunion(level, op, true)
+                .into_iter()
+                .map(|(node, sorted)| (node, if sorted { order.clone() } else { Vec::new() }))
+                .collect();
+            let scope = plans.first().map(|(node, _)| node.scope);
+            (plans, scope)
+        } else {
+            (vec![(self.set_node(level, op), Vec::new())], self.leftmost_scope(level, op))
+        };
+        if let Some(scope) = scope {
             level.display = scope;
             level.display_query = self.scopes[scope].query;
         }
-        node
+        plans
     }
 
     /// The plan of a part of the tree of a set operation.
-    fn set_tree(&mut self, level: &Level<'q>, tree: &'q SetTree) -> Node<'q> {
+    pub(crate) fn set_tree(&mut self, level: &Level<'q>, tree: &'q SetTree) -> Node<'q> {
         match tree {
             SetTree::Leaf(i) => {
                 match level.query.relations.get(*i).and_then(|r| r.subquery.as_deref()) {
@@ -736,7 +752,7 @@ impl<'q> Builder<'q> {
         out.push(self.set_tree(level, tree));
     }
 
-    fn set_node(&mut self, level: &Level<'q>, op: &'q SetOp) -> Node<'q> {
+    pub(crate) fn set_node(&mut self, level: &Level<'q>, op: &'q SetOp) -> Node<'q> {
         let scope = level.scope;
         if let Some(work) = op.work {
             let left = self.set_tree(level, &op.left);
@@ -812,42 +828,22 @@ impl<'q> Builder<'q> {
                 }
             }
             SetKind::Intersect | SetKind::Except => {
-                let left = self.set_tree(level, &op.left);
-                let right = self.set_tree(level, &op.right);
-                let (l, r) = (left.cost, right.cost);
-                let left_groups = cost::groups(l.rows, columns);
-                let right_groups = cost::groups(r.rows, columns);
-                let rows = if op.kind == SetKind::Intersect {
-                    left_groups.min(right_groups)
-                } else {
-                    left_groups
-                };
-                let startup =
-                    l.total + r.total + cost::CPU_OPERATOR * (l.rows + r.rows) * columns as f64;
-                let mut node = Node::new(
-                    Kind::SetOp { except: op.kind == SetKind::Except, all: op.all },
-                    scope,
-                    vec![left, right],
-                );
-                node.cost = Cost {
-                    startup,
-                    total: startup + cost::CPU_TUPLE * left_groups,
-                    rows,
-                    width: l.width,
-                };
-                node
+                match self.nonunion(level, op, false).into_iter().next() {
+                    Some((node, _)) => node,
+                    None => unreachable!("a set operation has a plan"),
+                }
             }
         }
     }
 
     /// The scope of the leftmost `SELECT` of a set operation.
-    fn leftmost_scope(&self, level: &Level<'q>, op: &'q SetOp) -> Option<usize> {
+    pub(crate) fn leftmost_scope(&self, level: &Level<'q>, op: &'q SetOp) -> Option<usize> {
         let sub = level.query.relations.get(op.left.leftmost())?.subquery.as_deref()?;
         self.scopes.iter().position(|s| std::ptr::eq(s.query, sub))
     }
 
     /// The columns of the leftmost `SELECT` of a set operation, as the keys of the node that finds the equal rows.
-    fn leaf_items(&self, level: &Level<'q>, op: &'q SetOp) -> Vec<Item<'q>> {
+    pub(crate) fn leaf_items(&self, level: &Level<'q>, op: &'q SetOp) -> Vec<Item<'q>> {
         let leftmost = op.left.leftmost();
         match level.query.relations.get(leftmost).and_then(|r| r.subquery.as_deref()) {
             Some(sub) => {
