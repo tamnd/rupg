@@ -394,6 +394,7 @@ fn project_late<'q>(level: &Level<'q>, mut node: Node<'q>, targets: TargetCosts)
             | Kind::Materialize
             | Kind::Hash
             | Kind::Append
+            | Kind::MergeAppend(_)
             | Kind::SetOp { .. }
             | Kind::RecursiveUnion
             | Kind::ProjectSet
@@ -557,7 +558,7 @@ impl<'q> Builder<'q> {
     }
 
     /// The nodes above one plan of `FROM`. With `only`, the plan is not the cheapest, and the result is `None` when a step needs a sort of it or a step has no plan for it.
-    fn upper_one(
+    pub(crate) fn upper_one(
         &mut self,
         level: &Level<'q>,
         mut node: Node<'q>,

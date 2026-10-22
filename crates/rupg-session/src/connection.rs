@@ -5495,6 +5495,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_union_all.test")));
     }
 
+    /// A `UNION ALL` in `FROM` is a `Merge Append` of the plans of its `SELECT`s in the order that the query reads when that costs less than a sort of its `Append`, as `generate_orderedappend_paths` makes it. A `SELECT` with no plan in the order gets a sort, and each `SELECT` reads only the columns that the query reads, so that an index only scan can give them. `connection/plan_merge_append.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_merge_append() {
+        big_stack(|| script(include_str!("connection/plan_merge_append.test")));
+    }
+
     /// `EXPLAIN` of the bitmap heap scans of a table by its btree indexes, as `create_index_paths` makes them with `choose_bitmap_and` and the costs of `cost_bitmap_heap_scan`. `connection/plan_bitmap_scan.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_bitmap_scan() {

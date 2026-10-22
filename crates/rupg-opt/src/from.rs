@@ -1,5 +1,6 @@
 //! The plan of `FROM` and `WHERE`: the scan of each relation, the joins and the place of each condition, as `query_planner`, `make_one_rel` and `create_scan_plan` make them.
 
+pub(crate) mod append;
 mod classes;
 mod index;
 pub(crate) mod paths;
@@ -484,7 +485,13 @@ impl<'q> Builder<'q> {
         let gated = if gating.is_empty() { BTreeSet::new() } else { all.clone() };
         let mut stats =
             Stats { equal, subplans: level.subplans.clone(), gated, ..Stats::default() };
-        needed(level, &mut stats);
+        let member =
+            self.append.as_ref().filter(|a| self.scopes[level.scope].parent == Some(a.scope));
+        let keys = member.map(|a| a.keys.clone());
+        needed(level, &mut stats, keys.as_ref().map(append::ChildKeys::used));
+        if let Some(keys) = &keys {
+            keys.apply(level, &mut stats);
+        }
         // `generate_base_implied_equalities_no_const`: each join of the relations of a class gives the members of the class, because a join above can test any two of them.
         for class in &found.classes {
             let span = class.members().iter().map(|&(_, r)| r).collect();
@@ -594,6 +601,7 @@ impl<'q> Builder<'q> {
         let mut children = Vec::new();
         // `cost_subqueryscan`: the cost of the subquery as it is, to which the scan adds its own cost.
         let mut sub_total = None;
+        let mut appended = None;
         let (kind, startup, run, tuples) = match &relation.cte {
             Some(cte) if cte.work.is_some() => {
                 // `cost_ctescan`: one more `cpu_tuple_cost` for each row of the tuplestore.
@@ -612,7 +620,20 @@ impl<'q> Builder<'q> {
             }
             _ => match (&relation.subquery, &relation.function, &relation.values) {
                 (Some(sub), _, _) => {
+                    // The planner keeps the plans of the members of a `UNION ALL` for its `Merge Append`.
+                    let keys = if quals.is_empty() {
+                        append::ChildKeys::new(self, level, r, sub, stats)
+                    } else {
+                        None
+                    };
+                    let rel = keys.map(|keys| append::AppendRel {
+                        scope: self.scopes.len(),
+                        keys,
+                        plans: Vec::new(),
+                    });
+                    let outer = std::mem::replace(&mut self.append, rel);
                     let child = self.query(sub, Some(level.scope));
+                    appended = std::mem::replace(&mut self.append, outer);
                     let c = child.cost;
                     children.push(child);
                     // `cost_subqueryscan`: a scan with no condition that gives the columns of its subquery as they are costs its subquery, because `setrefs.c` takes it out of the plan.
@@ -713,6 +734,9 @@ impl<'q> Builder<'q> {
         };
         node.cost = Cost { startup, total, rows, width };
         let seq = Rel { node, rels: BTreeSet::from([r]), order: Vec::new() };
+        if let Some(append) = appended {
+            return append.plans(level, r, seq, stats);
+        }
         if indexes.is_empty() || !matches!(seq.node.kind, Kind::SeqScan(_)) {
             return vec![seq];
         }
@@ -917,12 +941,15 @@ fn members_scan<'q>(
     Rel { node, rels, order: Vec::new() }
 }
 
-/// The columns that each place of a query level reads, as `build_base_rel_tlists`, `distribute_qual_to_rels` and `find_lateral_references` set `attr_needed`: the target list, the conditions of `WHERE` and of `ON`, and the lateral references.
-fn needed(level: &Level<'_>, stats: &mut Stats) {
+/// The columns that each place of a query level reads, as `build_base_rel_tlists`, `distribute_qual_to_rels` and `find_lateral_references` set `attr_needed`: the target list, the conditions of `WHERE` and of `ON`, and the lateral references. With `used`, the query is a member of an append relation, and only the targets that the query above reads count.
+fn needed(level: &Level<'_>, stats: &mut Stats, used: Option<&[bool]>) {
     let query = level.query;
     let relations = &query.relations;
     let top = BTreeSet::from([usize::MAX]);
-    for target in &query.targets {
+    for (at, target) in query.targets.iter().enumerate() {
+        if used.is_some_and(|u| !u.get(at).copied().unwrap_or(true)) {
+            continue;
+        }
         stats.need(&target.expr, 0, &top, relations);
     }
     for mark in &level.marks {
