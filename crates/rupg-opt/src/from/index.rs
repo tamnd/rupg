@@ -3,10 +3,10 @@
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 
-use rupg_analyze::{Expr, ExprKind, FuncForm, Var};
+use rupg_analyze::{BoolOp, Expr, ExprKind, FuncForm, Var, types};
 use rupg_pgcatalog::builtin;
 use rupg_plan::{Cost, Item, Kind, Node};
-use rupg_types::{Value, oid};
+use rupg_types::{Array, Value, oid};
 
 use super::{OrderKey, Qual, Rel, Stats, plain_var};
 use crate::{Index, Level, cost, exprs};
@@ -47,17 +47,45 @@ pub(super) struct Table<'a, 'q> {
 
 /// The cost of an item of a bitmap in units of `cpu_operator_cost`, which `cost_bitmap_tree_node` charges for each row of an index scan.
 const BITMAP_ROW_CPU: f64 = 0.1;
-/// The cost of a `BitmapAnd` for each bitmap after the first, in units of `cpu_operator_cost`, as `cost_bitmap_and_node` charges it.
-const BITMAP_AND_CPU: f64 = 100.0;
+/// The cost of a `BitmapAnd` for each bitmap after the first, in units of `cpu_operator_cost`, as `cost_bitmap_and_node` charges it. `cost_bitmap_or_node` charges it for each bitmap after the first that is not the bitmap of one index.
+const BITMAP_LIST_CPU: f64 = 100.0;
 
-/// A condition that a column of an index can test, as an item of `indexquals` of an `IndexClause`: the condition with the column on the left, the key column of the index, and the place of the condition in the conditions of the scan. A lossy clause comes from a condition that the index cannot test exactly, so the condition stays in the filter.
+/// A condition that a column of an index can test, as an item of `indexquals` of an `IndexClause`: the condition with the column on the left, the key column of the index, the condition as the query has it, and the place of the condition in the conditions of the scan. A condition in an `OR` has no place. A lossy clause comes from a condition that the index cannot test exactly, so the condition stays in the filter.
 #[derive(Clone)]
 struct Clause<'q> {
     expr: Cow<'q, Expr>,
     column: usize,
-    at: usize,
+    orig: Cow<'q, Expr>,
+    at: Option<usize>,
     kind: ClauseKind,
     lossy: bool,
+}
+
+/// A condition that an index can test, as a `RestrictInfo`: a condition of the scan with its place, or a condition in an `OR` of the conditions of the scan with no place.
+struct Source<'q> {
+    expr: Cow<'q, Expr>,
+    at: Option<usize>,
+}
+
+impl<'q> Source<'q> {
+    /// The arguments of the `AND` or the `OR` of the condition, or `None` when the condition is not one.
+    fn args(&self, op: BoolOp) -> Option<Vec<Source<'q>>> {
+        let source = |expr| Source { expr, at: None };
+        match &self.expr {
+            Cow::Borrowed(e) => match &e.kind {
+                ExprKind::Bool(o, args) if *o == op => {
+                    Some(args.iter().map(|a| source(Cow::Borrowed(a))).collect())
+                }
+                _ => None,
+            },
+            Cow::Owned(e) => match &e.kind {
+                ExprKind::Bool(o, args) if *o == op => {
+                    Some(args.iter().map(|a| source(Cow::Owned(a.clone()))).collect())
+                }
+                _ => None,
+            },
+        }
+    }
 }
 
 impl Clause<'_> {
@@ -81,16 +109,107 @@ enum ClauseKind {
     Null(bool),
 }
 
-/// A scan of an index that a bitmap can use, as an `IndexPath` that `get_index_paths` puts in `bitindexpaths`: the index, its clauses, the total cost of the scan of the index, `indextotalcost`, and the selectivity of the clauses, `indexselectivity`.
+/// A scan of an index that a bitmap can use, as an `IndexPath` that `get_index_paths` puts in `bitindexpaths`: the index, its clauses, the total cost of the scan of the index, `indextotalcost`, the selectivity of the clauses, `indexselectivity`, and the total cost of the scan of the table by the index, `total_cost` of the path.
 #[derive(Clone)]
 struct BitmapIndex<'q> {
     index: u32,
     clauses: Vec<Clause<'q>>,
     total: f64,
     selectivity: f64,
+    path: f64,
 }
 
-/// `build_index_paths` for each btree index of the table with no predicate, the newest index first: a scan in the order of the index, and a scan in the other order when its order is useful. A scan is an index only scan when the index has each column of the table that the query reads, as `check_index_only`. Each scan has the order of its rows that a node above can use, as `truncate_useless_pathkeys` finds it. The forward scans that test a condition or that give no useful order are the scans that a bitmap can use, and the end of `create_index_paths` makes the bitmap heap scan of the best of them.
+impl<'q> BitmapIndex<'q> {
+    /// The scan of the index with the clauses, with the costs of `cost_index`.
+    fn new(
+        table: &Table<'_, 'q>,
+        index: &Index,
+        clauses: Vec<Clause<'q>>,
+        costs: (f64, f64, f64),
+        stats: &Stats,
+    ) -> BitmapIndex<'q> {
+        let (_, path, _) = index_scan_cost(table, index, &clauses, costs, stats);
+        let (_, total, selectivity) = costs;
+        BitmapIndex { index: index.oid, clauses, total, selectivity, path }
+    }
+}
+
+/// A bitmap of the places of the rows of the table: the scan of an index, the `BitmapAnd` of bitmaps, as a `BitmapAndPath`, or the `BitmapOr` of bitmaps, as a `BitmapOrPath`.
+#[derive(Clone)]
+enum Bitmap<'q> {
+    Index(BitmapIndex<'q>),
+    And(Vec<Bitmap<'q>>),
+    Or(Vec<Bitmap<'q>>),
+}
+
+impl<'q> Bitmap<'q> {
+    /// `total_cost` of the path of the bitmap: the cost of the scan of the table by the index for the scan of one index, and the cost of the bitmap for a `BitmapAnd` and a `BitmapOr`.
+    fn total(&self, table: &Table<'_, '_>) -> f64 {
+        match self {
+            Bitmap::Index(b) => b.path,
+            _ => self.tree(table).0,
+        }
+    }
+
+    /// `cost_bitmap_tree_node`: the cost of the bitmap and the selectivity of its conditions. A scan of an index costs its index and a little for each row. A `BitmapAnd` and a `BitmapOr` cost their bitmaps, as `cost_bitmap_and_node` and `cost_bitmap_or_node`.
+    fn tree(&self, table: &Table<'_, '_>) -> (f64, f64) {
+        match self {
+            Bitmap::Index(b) => {
+                (b.total + BITMAP_ROW_CPU * cost::CPU_OPERATOR * table.rows, b.selectivity)
+            }
+            Bitmap::And(list) => and_tree(table, list),
+            Bitmap::Or(list) => {
+                let mut total = 0.0;
+                let mut selectivity = 0.0;
+                for (i, b) in list.iter().enumerate() {
+                    let (cost, s) = b.tree(table);
+                    selectivity += s;
+                    total += cost;
+                    if i > 0 && !matches!(b, Bitmap::Index(_)) {
+                        total += BITMAP_LIST_CPU * cost::CPU_OPERATOR;
+                    }
+                }
+                (total, f64::min(selectivity, 1.0))
+            }
+        }
+    }
+
+    /// `find_indexpath_quals`: the conditions as the query has them of each scan of an index in the bitmap.
+    fn quals<'a>(&'a self, out: &mut Vec<&'a Expr>) {
+        match self {
+            Bitmap::Index(b) => out.extend(b.clauses.iter().map(|c| &*c.orig)),
+            Bitmap::And(list) | Bitmap::Or(list) => list.iter().for_each(|b| b.quals(out)),
+        }
+    }
+
+    /// The places of the conditions of the scan that the scans of the indexes at the top of the bitmap, or below a `BitmapAnd` at the top, test exactly.
+    fn exact(&self, out: &mut BTreeSet<usize>) {
+        match self {
+            Bitmap::Index(b) => {
+                out.extend(b.clauses.iter().filter(|c| !c.lossy).filter_map(|c| c.at))
+            }
+            Bitmap::And(list) => list.iter().for_each(|b| b.exact(out)),
+            Bitmap::Or(_) => {}
+        }
+    }
+}
+
+/// `cost_bitmap_and_node`: the cost of the `BitmapAnd` of the bitmaps and the product of their selectivities. One bitmap costs itself.
+fn and_tree(table: &Table<'_, '_>, list: &[Bitmap<'_>]) -> (f64, f64) {
+    let mut total = 0.0;
+    let mut selectivity = 1.0;
+    for (i, b) in list.iter().enumerate() {
+        let (cost, s) = b.tree(table);
+        selectivity *= s;
+        total += cost;
+        if i > 0 {
+            total += BITMAP_LIST_CPU * cost::CPU_OPERATOR;
+        }
+    }
+    (total, selectivity)
+}
+
+/// `build_index_paths` for each btree index of the table with no predicate, the newest index first: a scan in the order of the index, and a scan in the other order when its order is useful. A scan is an index only scan when the index has each column of the table that the query reads, as `check_index_only`. Each scan has the order of its rows that a node above can use, as `truncate_useless_pathkeys` finds it. The forward scans that test a condition or that give no useful order are the scans that a bitmap can use. With the `BitmapOr` bitmaps of the conditions that are an `OR`, the end of `create_index_paths` makes the bitmap heap scan of the best of them.
 pub(super) fn paths<'q>(
     level: &Level<'q>,
     table: &Table<'_, 'q>,
@@ -100,12 +219,19 @@ pub(super) fn paths<'q>(
     let mut out = Vec::new();
     let mut bitmaps = Vec::new();
     let read = read_columns(table, stats);
+    let sources: Vec<Source<'q>> = table
+        .quals
+        .iter()
+        .enumerate()
+        .map(|(at, q)| Source { expr: q.expr.clone(), at: Some(at) })
+        .collect();
+    let all: Vec<&Source<'q>> = sources.iter().collect();
     // `get_relation_info` puts each index first in `indexlist`, so the newest index comes first.
     for index in indexes.iter().rev() {
         if index.method != BTREE_AM || index.partial {
             continue;
         }
-        let clauses = match_clauses(table, index);
+        let clauses = match_clauses(table.r, index, &all);
         let costs = btree_cost(table, index, &clauses, stats);
         let only = read.iter().all(|a| *a > 0 && index.columns.contains(a));
         let forward = order(level, table.r, index, false, stats);
@@ -113,13 +239,8 @@ pub(super) fn paths<'q>(
         if !clauses.is_empty() || !useful.is_empty() || only {
             // A backward scan has the clauses and the costs of the forward scan, so `choose_bitmap_and` keeps the forward scan.
             if useful.is_empty() || costs.2 < 1.0 {
-                let (_, total, selectivity) = costs;
-                bitmaps.push(BitmapIndex {
-                    index: index.oid,
-                    clauses: clauses.clone(),
-                    total,
-                    selectivity,
-                });
+                let path = BitmapIndex::new(table, index, clauses.clone(), costs, stats);
+                bitmaps.push(Bitmap::Index(path));
             }
             out.push(scan(level, table, index, &clauses, costs, only, false, useful, stats));
         }
@@ -129,9 +250,176 @@ pub(super) fn paths<'q>(
             out.push(scan(level, table, index, &clauses, costs, only, true, useful, stats));
         }
     }
+    bitmaps.extend(or_paths(table, indexes, &sources, &[], stats));
     if !bitmaps.is_empty() {
         let chosen = choose_bitmap_and(table, bitmaps, stats);
         out.push(bitmap_heap_scan(level, table, &chosen, stats));
+    }
+    out
+}
+
+/// `generate_bitmap_or_paths`: a `BitmapOr` for each condition that is an `OR` whose arms each have a bitmap. The bitmap of an arm is the best of the scans of the indexes that can test the arm, with the other conditions too, as `build_paths_for_OR`. An arm that is an `AND` can use a `BitmapOr` of an `OR` in it. The arms that compare one column of an index with one operator are one group, as `group_similar_or_args`, and a group gives the bitmaps of [`group_paths`].
+fn or_paths<'q>(
+    table: &Table<'_, 'q>,
+    indexes: &[Index],
+    clauses: &[Source<'q>],
+    other: &[&Source<'q>],
+    stats: &Stats,
+) -> Vec<Bitmap<'q>> {
+    let all: Vec<&Source<'q>> = clauses.iter().chain(other.iter().copied()).collect();
+    let mut out = Vec::new();
+    for clause in clauses {
+        let Some(arms) = clause.args(BoolOp::Or) else { continue };
+        let (arms, grouped) = group_arms(table.r, indexes, arms);
+        // `list_delete`: the conditions other than the first that is equal to the `OR`.
+        let mut inner: Vec<&Source<'q>> = Vec::new();
+        if grouped {
+            inner = all.clone();
+            if let Some(at) = inner.iter().position(|s| s.expr.same(&clause.expr)) {
+                inner.remove(at);
+            }
+        }
+        let mut list = Vec::new();
+        for (arm, group) in arms {
+            if group {
+                let found = group_paths(table, indexes, &arm, &inner, stats);
+                if found.is_empty() {
+                    list.clear();
+                    break;
+                }
+                list.extend(found);
+                continue;
+            }
+            let found = match arm.args(BoolOp::And) {
+                Some(parts) => {
+                    let mut found = arm_paths(table, indexes, &parts, &all, stats);
+                    found.extend(or_paths(table, indexes, &parts, &all, stats));
+                    found
+                }
+                None => arm_paths(table, indexes, std::slice::from_ref(&arm), &all, stats),
+            };
+            if found.is_empty() {
+                list.clear();
+                break;
+            }
+            list.push(choose_bitmap_and(table, found, stats));
+        }
+        if !list.is_empty() {
+            out.push(Bitmap::Or(list));
+        }
+    }
+    out
+}
+
+/// The index of the arm of an `OR` as `OrArgIndexMatch`: the place of the index in the btree indexes, the newest first, the key column and the operator.
+type ArmIndex = Option<(usize, usize, u32)>;
+
+/// `group_similar_or_args`: the arms of an `OR`, with the arms that compare a column of an index with one operator and one value that reads no column of the table as one `OR` in the place of the first of them. The index is the first btree index, the newest first, that has the column. The arm is true for a group. The result is true when an arm has an index.
+fn group_arms<'q>(
+    r: usize,
+    indexes: &[Index],
+    arms: Vec<Source<'q>>,
+) -> (Vec<(Source<'q>, bool)>, bool) {
+    let key = |arm: &Source<'q>| -> ArmIndex {
+        let (op, left, right) = exprs::binary(&arm.expr)?;
+        let reads = |e: &Expr| exprs::relations(e).contains(&r);
+        let (op, column) = if reads(right) && !reads(left) && !exprs::volatile(left) {
+            (builtin::operator_by_oid(op)?.commutator, right)
+        } else if reads(left) && !reads(right) && !exprs::volatile(right) {
+            (op, left)
+        } else {
+            return None;
+        };
+        let var = plain_var(column).filter(|v| v.relation == r && v.levels_up == 0)?;
+        if op == 0 {
+            return None;
+        }
+        let btrees = indexes.iter().rev().filter(|i| i.method == BTREE_AM);
+        btrees.enumerate().find_map(|(n, index)| {
+            index.keys.iter().position(|k| *k == var.attnum).map(|column| (n, column, op))
+        })
+    };
+    let keys: Vec<ArmIndex> = arms.iter().map(key).collect();
+    if keys.iter().all(Option::is_none) {
+        return (arms.into_iter().map(|a| (a, false)).collect(), false);
+    }
+    let mut groups: Vec<(ArmIndex, Vec<usize>)> = Vec::new();
+    for (i, k) in keys.iter().enumerate() {
+        match groups.iter().position(|(g, _)| k.is_some() && g == k) {
+            Some(g) => groups[g].1.push(i),
+            None => groups.push((*k, vec![i])),
+        }
+    }
+    let mut arms: Vec<Option<Source<'q>>> = arms.into_iter().map(Some).collect();
+    let mut out = Vec::new();
+    for (_, members) in groups {
+        let mut list: Vec<Source<'q>> = members.iter().filter_map(|i| arms[*i].take()).collect();
+        if list.len() == 1 {
+            out.extend(list.pop().map(|a| (a, false)));
+            continue;
+        }
+        let args = list.into_iter().map(|a| a.expr.into_owned()).collect();
+        let expr = Expr::new(ExprKind::Bool(BoolOp::Or, args), oid::BOOL);
+        out.push((Source { expr: Cow::Owned(expr), at: None }, true));
+    }
+    (out, true)
+}
+
+/// `make_bitmap_paths_for_or_group`: the bitmaps of a group of arms of an `OR`. The joint bitmap tests the group as `x op ANY (array)`, and the split bitmaps test each arm of the group. With no other conditions the joint bitmap wins when there is one. Otherwise the cheaper of the joint bitmap and the split bitmaps wins.
+fn group_paths<'q>(
+    table: &Table<'_, 'q>,
+    indexes: &[Index],
+    group: &Source<'q>,
+    other: &[&Source<'q>],
+    stats: &Stats,
+) -> Vec<Bitmap<'q>> {
+    let found = arm_paths(table, indexes, std::slice::from_ref(group), other, stats);
+    let joint = (!found.is_empty()).then(|| choose_bitmap_and(table, found, stats));
+    if other.is_empty()
+        && let Some(joint) = joint
+    {
+        return vec![joint];
+    }
+    let mut split = Vec::new();
+    for arm in group.args(BoolOp::Or).unwrap_or_default() {
+        let found = arm_paths(table, indexes, std::slice::from_ref(&arm), other, stats);
+        if found.is_empty() {
+            split.clear();
+            break;
+        }
+        split.push(choose_bitmap_and(table, found, stats));
+    }
+    match joint {
+        None => split,
+        Some(joint) if split.is_empty() => vec![joint],
+        Some(joint) => {
+            let split_cost: f64 = split.iter().map(|b| b.total(table)).sum();
+            if joint.total(table) < split_cost { vec![joint] } else { split }
+        }
+    }
+}
+
+/// `build_paths_for_OR`: the scans for a bitmap of the btree indexes with no predicate that can test one of the conditions, the newest index first. The scan of an index tests the conditions and each other condition that the index can test.
+fn arm_paths<'q>(
+    table: &Table<'_, 'q>,
+    indexes: &[Index],
+    clauses: &[Source<'q>],
+    other: &[&Source<'q>],
+    stats: &Stats,
+) -> Vec<Bitmap<'q>> {
+    let mine: Vec<&Source<'q>> = clauses.iter().collect();
+    let all: Vec<&Source<'q>> = clauses.iter().chain(other.iter().copied()).collect();
+    let mut out = Vec::new();
+    for index in indexes.iter().rev() {
+        if index.method != BTREE_AM
+            || index.partial
+            || match_clauses(table.r, index, &mine).is_empty()
+        {
+            continue;
+        }
+        let clauses = match_clauses(table.r, index, &all);
+        let costs = btree_cost(table, index, &clauses, stats);
+        out.push(Bitmap::Index(BitmapIndex::new(table, index, clauses, costs, stats)));
     }
     out
 }
@@ -158,12 +446,12 @@ fn read_columns(table: &Table<'_, '_>, stats: &Stats) -> BTreeSet<i16> {
     out
 }
 
-/// `match_restriction_clauses_to_index`: the conditions of the scan that a key column of the index can test, each with the first column that can, as `match_clause_to_index`. The list is in the order of the columns, then in the order of the conditions, as `build_index_paths` makes `indexclauses`.
-fn match_clauses<'q>(table: &Table<'_, 'q>, index: &Index) -> Vec<Clause<'q>> {
+/// `match_clauses_to_index`: the conditions that a key column of the index can test, each with the first column that can, as `match_clause_to_index`. The list is in the order of the columns, then in the order of the conditions, as `build_index_paths` makes `indexclauses`.
+fn match_clauses<'q>(r: usize, index: &Index, sources: &[&Source<'q>]) -> Vec<Clause<'q>> {
     let mut out: Vec<Clause<'q>> = Vec::new();
-    for (at, qual) in table.quals.iter().enumerate() {
+    for source in sources {
         let found = (0..index.keys.len())
-            .map(|column| match_clause(table.r, index, column, qual, at))
+            .map(|column| match_clause(r, index, column, source))
             .find(|c| !c.is_empty());
         out.extend(found.into_iter().flatten());
     }
@@ -176,10 +464,9 @@ fn match_clause<'q>(
     r: usize,
     index: &Index,
     column: usize,
-    qual: &Qual<'q>,
-    at: usize,
+    source: &Source<'q>,
 ) -> Vec<Clause<'q>> {
-    match_one(r, index, column, qual, at).unwrap_or_default()
+    match_one(r, index, column, source).unwrap_or_default()
 }
 
 /// The clauses of [`match_clause`], or `None` when the column cannot test the condition.
@@ -187,10 +474,10 @@ fn match_one<'q>(
     r: usize,
     index: &Index,
     column: usize,
-    qual: &Qual<'q>,
-    at: usize,
+    source: &Source<'q>,
 ) -> Option<Vec<Clause<'q>>> {
-    let expr = &*qual.expr;
+    let expr = &*source.expr;
+    let (orig, at) = (&source.expr, source.at);
     let attnum = *index.keys.get(column)?;
     let family = *index.families.get(column)?;
     // The collation `C` of a column of `name` is the collation of each condition of the column.
@@ -206,7 +493,9 @@ fn match_one<'q>(
             && (!name_collation || e.ty == oid::NAME)
     };
     let other_ok = |e: &Expr| !exprs::relations(e).contains(&r) && !exprs::volatile(e);
-    let clause = |expr: Cow<'q, Expr>, kind| vec![Clause { expr, column, at, kind, lossy: false }];
+    let clause = |expr: Cow<'q, Expr>, kind| {
+        vec![Clause { expr, column, orig: orig.clone(), at, kind, lossy: false }]
+    };
     match &expr.kind {
         ExprKind::ScalarArrayOp { func, any: true, args } => {
             let [left, array] = args.as_slice() else { return None };
@@ -217,10 +506,50 @@ fn match_one<'q>(
             }
             let s = strategy(op.oid, family)?;
             let kind = ClauseKind::Array(s, cost::array_length(array));
-            Some(clause(qual.expr.clone(), kind))
+            Some(clause(orig.clone(), kind))
         }
         ExprKind::NullTest(arg, is_null) => {
-            is_column(arg).then(|| clause(qual.expr.clone(), ClauseKind::Null(*is_null)))
+            is_column(arg).then(|| clause(orig.clone(), ClauseKind::Null(*is_null)))
+        }
+        // `match_orclause_to_indexcol`: each arm compares the column with one operator of the family and a value of one type.
+        ExprKind::Bool(BoolOp::Or, arms) => {
+            let mut first: Option<(u32, u32)> = None;
+            let mut index_expr = None;
+            let mut values = Vec::new();
+            for arm in arms {
+                let (op, left, right) = exprs::binary(arm)?;
+                let (op, column_expr, value) = if is_column(left) && other_ok(right) {
+                    (op, left, right)
+                } else if is_column(right) && other_ok(left) {
+                    (builtin::operator_by_oid(op)?.commutator, right, left)
+                } else {
+                    return None;
+                };
+                match first {
+                    None => {
+                        strategy(op, family)?;
+                        if types::array_of(value.ty) == 0
+                            || value.ty == oid::RECORD
+                            || column_expr.ty == oid::RECORD
+                        {
+                            return None;
+                        }
+                        first = Some((op, value.ty));
+                    }
+                    Some(f) if f != (op, value.ty) => return None,
+                    Some(_) => {}
+                }
+                index_expr = Some(column_expr);
+                values.push(value);
+            }
+            let ((op, element), index_expr) = (first?, index_expr?);
+            let array = array_of_values(element, values);
+            let s = strategy(op, family)?;
+            let kind = ClauseKind::Array(s, cost::array_length(&array));
+            let func = builtin::operator_by_oid(op)?.code;
+            let args = vec![index_expr.clone(), array];
+            let expr = Expr::new(ExprKind::ScalarArrayOp { func, any: true, args }, oid::BOOL);
+            Some(clause(Cow::Owned(expr), kind))
         }
         _ => {
             let (op, left, right) = exprs::binary(expr)?;
@@ -230,13 +559,14 @@ fn match_one<'q>(
                     let lossy = |(expr, s)| Clause {
                         expr: Cow::Owned(expr),
                         column,
+                        orig: orig.clone(),
                         at,
                         kind: ClauseKind::Op(s),
                         lossy: true,
                     };
                     return Some(derived.into_iter().map(lossy).collect());
                 };
-                return Some(clause(qual.expr.clone(), ClauseKind::Op(s)));
+                return Some(clause(orig.clone(), ClauseKind::Op(s)));
             }
             if is_column(right) && other_ok(left) {
                 let commutator = builtin::operator_by_oid(op)?.commutator;
@@ -247,6 +577,27 @@ fn match_one<'q>(
             None
         }
     }
+}
+
+/// `make_SAOP_expr`: the array of the values of the type. The array is a constant when each value is one, and an `ARRAY` of the values otherwise.
+fn array_of_values(element: u32, values: Vec<&Expr>) -> Expr {
+    let array = types::array_of(element);
+    let constants: Option<Vec<Option<Value>>> = values
+        .iter()
+        .map(|v| match &v.kind {
+            ExprKind::Const(Value::Null) => Some(None),
+            ExprKind::Const(value) => Some(Some(value.clone())),
+            _ => None,
+        })
+        .collect();
+    let kind = match constants {
+        Some(items) => ExprKind::Const(Value::Array(Box::new(Array::one(items)))),
+        None => {
+            let elements = values.into_iter().cloned().collect();
+            ExprKind::Array { element, multidims: false, elements }
+        }
+    };
+    Expr::new(kind, array)
 }
 
 /// `match_pattern_prefix`: the clauses that the fixed prefix of a positive `LIKE`, `ILIKE`, regular expression or `^@` gives, with their strategies, when the column is on the left and the pattern is a constant. A pattern that is all prefix gives `=` of the prefix. Another prefix gives `>=` of the prefix and `<` of the next string after the prefix, when one exists. The default collation is C, so the bounds hold for each operator family. Each operator must be in the family of the column.
@@ -399,24 +750,7 @@ fn scan<'q>(
     order: Vec<OrderKey>,
     stats: &Stats,
 ) -> Rel<'q> {
-    let mut filter: Vec<Qual<'q>> = table
-        .quals
-        .iter()
-        .enumerate()
-        .filter(|(at, _)| !clauses.iter().any(|c| c.at == *at && !c.lossy))
-        .map(|(_, q)| q.clone())
-        .collect();
-    stats.sort_quals(&mut filter);
-    let (index_startup, index_total, selectivity) = costs;
-    // `cost_index`: with no correlation, each row costs a random page of the table, as `index_pages_fetched` finds the pages.
-    let mut startup = index_startup;
-    let mut run = index_total - index_startup;
-    let fetched = cost::clamp_rows(selectivity * table.tuples);
-    let pages = pages_fetched(fetched, table.pages, index.pages, table.pages);
-    run += pages * cost::RANDOM_PAGE;
-    let (qual_startup, qual_cost) = stats.qual_costs(filter.iter().map(|q| &*q.expr));
-    startup += qual_startup;
-    run += (cost::CPU_TUPLE + qual_cost) * fetched;
+    let (startup, total, filter) = index_scan_cost(table, index, clauses, costs, stats);
     let cond = clauses.iter().map(|c| Item { expr: c.expr.clone(), below: false }).collect();
     let kind = Kind::IndexScan {
         relation: table.r,
@@ -429,77 +763,101 @@ fn scan<'q>(
     let mut node = Node::new(kind, level.scope, Vec::new());
     node.filter = filter.iter().map(|q| q.item()).collect();
     let width = stats.width(&BTreeSet::from([table.r]));
-    node.cost = Cost { startup, total: startup + run, rows: table.rows, width };
+    node.cost = Cost { startup, total, rows: table.rows, width };
     Rel { node, rels: BTreeSet::from([table.r]), order }
 }
 
-/// `cost_bitmap_tree_node`: the cost of the bitmap of the scans and the selectivity of their conditions. One scan costs its index and a little for each row. More scans make a `BitmapAnd`, as `cost_bitmap_and_node`.
-fn bitmap_tree_cost(table: &Table<'_, '_>, scans: &[BitmapIndex<'_>]) -> (f64, f64) {
-    let one = |b: &BitmapIndex<'_>| b.total + BITMAP_ROW_CPU * cost::CPU_OPERATOR * table.rows;
-    match scans {
-        [b] => (one(b), b.selectivity),
-        _ => {
-            let mut total = 0.0;
-            let mut selectivity = 1.0;
-            for (i, b) in scans.iter().enumerate() {
-                selectivity *= b.selectivity;
-                total += one(b);
-                if i > 0 {
-                    total += BITMAP_AND_CPU * cost::CPU_OPERATOR;
-                }
-            }
-            (total, selectivity)
-        }
-    }
+/// `cost_index` with no correlation: the start cost and the total cost of the scan of the table by the index with the clauses, and the conditions of the scan that are not clauses of the index, in the order of `order_qual_clauses`. Each row costs a random page of the table, as `index_pages_fetched` finds the pages, and the conditions that are not clauses.
+fn index_scan_cost<'q>(
+    table: &Table<'_, 'q>,
+    index: &Index,
+    clauses: &[Clause<'q>],
+    costs: (f64, f64, f64),
+    stats: &Stats,
+) -> (f64, f64, Vec<Qual<'q>>) {
+    let mut filter: Vec<Qual<'q>> = table
+        .quals
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| !clauses.iter().any(|c| c.at == Some(*at) && !c.lossy))
+        .map(|(_, q)| q.clone())
+        .collect();
+    stats.sort_quals(&mut filter);
+    let (index_startup, index_total, selectivity) = costs;
+    let mut startup = index_startup;
+    let mut run = index_total - index_startup;
+    let fetched = cost::clamp_rows(selectivity * table.tuples);
+    let pages = pages_fetched(fetched, table.pages, index.pages, table.pages);
+    run += pages * cost::RANDOM_PAGE;
+    let (qual_startup, qual_cost) = stats.qual_costs(filter.iter().map(|q| &*q.expr));
+    startup += qual_startup;
+    run += (cost::CPU_TUPLE + qual_cost) * fetched;
+    (startup, startup + run, filter)
 }
 
-/// `choose_bitmap_and`: the scans of the best bitmap. Of the scans with the same conditions, the cheapest stays. In the order of the cost of their bitmaps, each scan starts a list, and each scan after it whose conditions are new goes in the list when the `BitmapAnd` makes the heap scan cheaper. The cheapest list wins.
+/// `choose_bitmap_and`: the best bitmap of the bitmaps. Of the bitmaps with the same conditions, the cheapest stays. In the order of their costs, each bitmap starts a list, and each bitmap after it whose conditions are new goes in the list when the `BitmapAnd` makes the heap scan cheaper. The cheapest list wins.
 fn choose_bitmap_and<'q>(
     table: &Table<'_, 'q>,
-    scans: Vec<BitmapIndex<'q>>,
+    mut paths: Vec<Bitmap<'q>>,
     stats: &Stats,
-) -> Vec<BitmapIndex<'q>> {
-    if scans.len() == 1 {
-        return scans;
+) -> Bitmap<'q> {
+    if paths.len() == 1
+        && let Some(path) = paths.pop()
+    {
+        return path;
     }
-    let ids = |b: &BitmapIndex<'_>| b.clauses.iter().map(|c| c.at).collect::<BTreeSet<usize>>();
-    let tree = |b: &BitmapIndex<'q>| bitmap_tree_cost(table, std::slice::from_ref(b));
-    let mut kept: Vec<(BitmapIndex<'q>, BTreeSet<usize>)> = Vec::new();
-    for scan in scans {
-        let these = ids(&scan);
+    // `classify_index_clause_usage`: each condition is the place of the first equal condition in the list of the conditions of the bitmaps.
+    let mut known: Vec<Expr> = Vec::new();
+    let mut kept: Vec<(Bitmap<'q>, BTreeSet<usize>)> = Vec::new();
+    for path in paths {
+        let mut quals = Vec::new();
+        path.quals(&mut quals);
+        let mut these = BTreeSet::new();
+        for qual in quals {
+            let at = match known.iter().position(|k| k.same(qual)) {
+                Some(at) => at,
+                None => {
+                    known.push(qual.clone());
+                    known.len() - 1
+                }
+            };
+            these.insert(at);
+        }
         match kept.iter().position(|(_, k)| *k == these) {
             Some(i) => {
-                if tree(&scan).0 < tree(&kept[i].0).0 {
-                    kept[i] = (scan, these);
+                if path.tree(table).0 < kept[i].0.tree(table).0 {
+                    kept[i] = (path, these);
                 }
             }
-            None => kept.push((scan, these)),
+            None => kept.push((path, these)),
         }
     }
-    if kept.len() == 1 {
-        return kept.into_iter().map(|(b, _)| b).collect();
+    if kept.len() == 1
+        && let Some((path, _)) = kept.pop()
+    {
+        return path;
     }
-    // `path_usage_comparator`: by cost, then by selectivity. The sort keeps the order of equal scans, as the insertion sort of `qsort` does for a short list.
+    // `path_usage_comparator`: by cost, then by selectivity. The sort keeps the order of equal bitmaps, as the insertion sort of `qsort` does for a short list.
     kept.sort_by(|(a, _), (b, _)| {
-        let (a, b) = (tree(a), tree(b));
+        let (a, b) = (a.tree(table), b.tree(table));
         a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1))
     });
     let (startup, per_row) = stats.qual_costs(table.quals.iter().map(|q| &*q.expr));
-    let heap = |list: &[BitmapIndex<'q>]| {
-        let (tree, selectivity) = bitmap_tree_cost(table, list);
+    let heap = |list: &[Bitmap<'q>]| {
+        let (tree, selectivity) = and_tree(table, list);
         heap_cost(table, tree, selectivity, startup, per_row).1
     };
-    let mut best: Vec<BitmapIndex<'q>> = Vec::new();
+    let mut best: Vec<Bitmap<'q>> = Vec::new();
     let mut best_cost = 0.0;
     for (i, (first, first_ids)) in kept.iter().enumerate() {
         let mut list = vec![first.clone()];
         let mut so_far = heap(&list);
         let mut ids_so_far = first_ids.clone();
-        for (scan, these) in &kept[i + 1..] {
+        for (path, these) in &kept[i + 1..] {
             if !these.is_disjoint(&ids_so_far) {
                 continue;
             }
-            list.push(scan.clone());
+            list.push(path.clone());
             let cost = heap(&list);
             if cost < so_far {
                 so_far = cost;
@@ -513,7 +871,10 @@ fn choose_bitmap_and<'q>(
             best_cost = so_far;
         }
     }
-    best
+    match best.len() {
+        1 => best.remove(0),
+        _ => Bitmap::And(best),
+    }
 }
 
 /// `cost_bitmap_heap_scan` with the pages of `compute_bitmap_pages`: the start cost and the total cost of the heap scan of a bitmap that costs `tree` and passes the rows of `selectivity`, when the conditions of the table cost `startup` to start and `per_row` for each row. The pages cost a random page each when the scan reads few of them and less when it reads more. A bitmap of the 4 MB of `work_mem` holds the places of the pages of each table that the planner sees, so no page is lossy.
@@ -538,51 +899,177 @@ fn heap_cost(
     (startup, startup + run)
 }
 
-/// `create_bitmap_heap_path` and `create_bitmap_scan_plan`: the heap scan of the bitmap of the scans. Its recheck conditions are the conditions of the scans as the query has them, and its filter is each other condition of the table, in the order of `order_qual_clauses`. The bitmap of one scan is a `BitmapIndexScan`, and the bitmap of more scans is a `BitmapAnd` of them.
+/// A condition of a bitmap as the query has it: the condition with its place in the conditions of the scan, or a condition that the bitmap makes, such as the `OR` of the conditions of a `BitmapOr`, with no place.
+struct Orig<'q> {
+    expr: Cow<'q, Expr>,
+    at: Option<usize>,
+}
+
+/// `make_ands_explicit` or `make_orclause` of the conditions: the condition when there is one, or the `AND` or the `OR` of them.
+fn combine<'q>(mut list: Vec<Orig<'q>>, op: BoolOp) -> Orig<'q> {
+    if list.len() == 1
+        && let Some(one) = list.pop()
+    {
+        return one;
+    }
+    let args = list.into_iter().map(|o| o.expr.into_owned()).collect();
+    Orig { expr: Cow::Owned(Expr::new(ExprKind::Bool(op, args), oid::BOOL)), at: None }
+}
+
+/// `list_concat_unique`: the conditions of `more` that are not equal to a condition in `list` go at the end of it.
+fn concat_unique<'q>(list: &mut Vec<Orig<'q>>, more: Vec<Orig<'q>>) {
+    for o in more {
+        if !list.iter().any(|l| l.expr.same(&o.expr)) {
+            list.push(o);
+        }
+    }
+}
+
+/// `create_bitmap_subplan`: the plan of the bitmap, with its conditions as the query has them, `bitmapqualorig`, and the conditions that its indexes test, `indexquals`. The conditions of a `BitmapAnd` are those of its bitmaps, and a `BitmapOr` has the `OR` of the conditions of its bitmaps. A `BitmapOr` of one bitmap is that bitmap.
+fn subplan<'q>(
+    level: &Level<'q>,
+    table: &Table<'_, 'q>,
+    bitmap: &Bitmap<'q>,
+) -> (Node<'q>, Vec<Orig<'q>>, Vec<Orig<'q>>) {
+    let (tree, selectivity) = bitmap.tree(table);
+    let rows = cost::clamp_rows(selectivity * table.tuples);
+    match bitmap {
+        Bitmap::Index(b) => {
+            let cond =
+                b.clauses.iter().map(|c| Item { expr: c.expr.clone(), below: false }).collect();
+            let kind = Kind::BitmapIndexScan { relation: table.r, index: b.index, cond };
+            let mut node = Node::new(kind, level.scope, Vec::new());
+            node.cost = Cost { startup: 0.0, total: b.total, rows, width: 0 };
+            let mut quals: Vec<Orig<'q>> = Vec::new();
+            for (i, c) in b.clauses.iter().enumerate() {
+                // The lossy clauses of one condition are one `IndexClause`.
+                let same = i > 0
+                    && c.lossy
+                    && b.clauses[i - 1].lossy
+                    && b.clauses[i - 1].orig.same(&c.orig);
+                if !same {
+                    quals.push(Orig { expr: c.orig.clone(), at: c.at });
+                }
+            }
+            let tested =
+                b.clauses.iter().map(|c| Orig { expr: c.expr.clone(), at: None }).collect();
+            (node, quals, tested)
+        }
+        Bitmap::And(list) => {
+            let mut children = Vec::new();
+            let mut quals = Vec::new();
+            let mut tested = Vec::new();
+            for b in list {
+                let (child, q, t) = subplan(level, table, b);
+                children.push(child);
+                concat_unique(&mut quals, q);
+                concat_unique(&mut tested, t);
+            }
+            let mut node = Node::new(Kind::BitmapAnd, level.scope, children);
+            node.cost = Cost { startup: tree, total: tree, rows, width: 0 };
+            (node, quals, tested)
+        }
+        Bitmap::Or(list) => {
+            let mut children = Vec::new();
+            let mut quals = Some(Vec::new());
+            let mut tested = Some(Vec::new());
+            for b in list {
+                let (child, q, t) = subplan(level, table, b);
+                children.push(child);
+                // A bitmap with no condition makes the `OR` true.
+                for (all, part) in [(&mut quals, q), (&mut tested, t)] {
+                    if part.is_empty() {
+                        *all = None;
+                    } else if let Some(all) = all {
+                        all.push(combine(part, BoolOp::And));
+                    }
+                }
+            }
+            let node = match children.len() {
+                1 => children.remove(0),
+                _ => {
+                    let mut node = Node::new(Kind::BitmapOr, level.scope, children);
+                    node.cost = Cost { startup: tree, total: tree, rows, width: 0 };
+                    node
+                }
+            };
+            let or = |list: Option<Vec<Orig<'q>>>| match list {
+                Some(list) if list.len() > 1 => vec![combine(list, BoolOp::Or)],
+                Some(list) => list,
+                None => Vec::new(),
+            };
+            (node, or(quals), or(tested))
+        }
+    }
+}
+
+/// The items of an `AND` or an `OR`, as `predicate_classify`, or `None` for another condition.
+fn bool_items(expr: &Expr) -> Option<(BoolOp, &[Expr])> {
+    match &expr.kind {
+        ExprKind::Bool(op @ (BoolOp::And | BoolOp::Or), args) => Some((*op, args)),
+        _ => None,
+    }
+}
+
+/// `predicate_implied_by_recurse` with no proofs of operators and no items of `ANY`: true when the condition `clause` makes the condition `pred` true by the form of the `AND` and the `OR` in them. A condition that is not an `AND` or an `OR` proves an equal condition.
+fn implied_by(clause: &Expr, pred: &Expr) -> bool {
+    match (bool_items(clause), bool_items(pred)) {
+        (Some((BoolOp::And, _)), Some((BoolOp::And, p))) | (None, Some((BoolOp::And, p))) => {
+            p.iter().all(|p| implied_by(clause, p))
+        }
+        (Some((BoolOp::And, c)), Some((_, p))) => {
+            p.iter().any(|p| implied_by(clause, p)) || c.iter().any(|c| implied_by(c, pred))
+        }
+        (Some((BoolOp::And, c)), None) => c.iter().any(|c| implied_by(c, pred)),
+        (Some((_, c)), Some((BoolOp::Or, p))) => {
+            c.iter().all(|c| p.iter().any(|p| implied_by(c, p)))
+        }
+        (Some((_, c)), _) => c.iter().all(|c| implied_by(c, pred)),
+        (None, Some((_, p))) => p.iter().any(|p| implied_by(clause, p)),
+        (None, None) => clause.same(pred),
+    }
+}
+
+/// `create_bitmap_heap_path` and `create_bitmap_scan_plan`: the heap scan of the bitmap. Its filter is each condition of the table that the bitmap does not test exactly, in the order of `order_qual_clauses`. A condition that the conditions of the indexes imply, such as an `OR` that a `BitmapOr` tests, is not in the filter. The recheck conditions are the conditions of the bitmap as the query has them, but not those in the filter.
 fn bitmap_heap_scan<'q>(
     level: &Level<'q>,
     table: &Table<'_, 'q>,
-    scans: &[BitmapIndex<'q>],
+    bitmap: &Bitmap<'q>,
     stats: &Stats,
 ) -> Rel<'q> {
-    let exact = scans.iter().flat_map(|b| b.clauses.iter().filter(|c| !c.lossy).map(|c| c.at));
-    let used: BTreeSet<usize> = exact.clone().collect();
-    let mut recheck: Vec<usize> = Vec::new();
-    for at in exact {
-        if !recheck.contains(&at) {
-            recheck.push(at);
-        }
-    }
-    let mut filter: Vec<Qual<'q>> = table
-        .quals
-        .iter()
-        .enumerate()
-        .filter(|(at, _)| !used.contains(at))
-        .map(|(_, q)| q.clone())
-        .collect();
-    stats.sort_quals(&mut filter);
-    let index_scan = |b: &BitmapIndex<'q>| {
-        let cond = b.clauses.iter().map(|c| Item { expr: c.expr.clone(), below: false }).collect();
-        let kind = Kind::BitmapIndexScan { relation: table.r, index: b.index, cond };
-        let mut node = Node::new(kind, level.scope, Vec::new());
-        let rows = cost::clamp_rows(b.selectivity * table.tuples);
-        node.cost = Cost { startup: 0.0, total: b.total, rows, width: 0 };
-        node
-    };
-    let (tree, selectivity) = bitmap_tree_cost(table, scans);
-    let child = match scans {
-        [b] => index_scan(b),
+    let (child, quals, tested) = subplan(level, table, bitmap);
+    let mut exact = BTreeSet::new();
+    bitmap.exact(&mut exact);
+    let tested: Vec<&Expr> = tested.iter().map(|o| &*o.expr).collect();
+    // `predicate_implied_by`: a list of more than one condition is their `AND`.
+    let given = match tested.as_slice() {
+        [] => None,
+        [one] => Some(Cow::Borrowed(*one)),
         _ => {
-            let mut node =
-                Node::new(Kind::BitmapAnd, level.scope, scans.iter().map(index_scan).collect());
-            let rows = cost::clamp_rows(selectivity * table.tuples);
-            node.cost = Cost { startup: tree, total: tree, rows, width: 0 };
-            node
+            let all = tested.iter().map(|e| (*e).clone()).collect();
+            Some(Cow::Owned(Expr::new(ExprKind::Bool(BoolOp::And, all), oid::BOOL)))
         }
     };
+    let in_filter: BTreeSet<usize> = (0..table.quals.len())
+        .filter(|at| {
+            let expr = &*table.quals[*at].expr;
+            !exact.contains(at)
+                && !tested.iter().any(|t| t.same(expr))
+                && (exprs::volatile(expr) || !given.as_ref().is_some_and(|g| implied_by(g, expr)))
+        })
+        .collect();
+    let mut filter: Vec<Qual<'q>> = in_filter.iter().map(|at| table.quals[*at].clone()).collect();
+    stats.sort_quals(&mut filter);
+    let (tree, selectivity) = bitmap.tree(table);
     let (qual_startup, per_row) = stats.qual_costs(table.quals.iter().map(|q| &*q.expr));
     let (startup, total) = heap_cost(table, tree, selectivity, qual_startup, per_row);
-    let recheck = recheck.into_iter().map(|at| table.quals[at].item()).collect();
+    let recheck = quals
+        .into_iter()
+        .filter_map(|o| match o.at {
+            Some(at) => (!in_filter.contains(&at)).then(|| table.quals[at].item()),
+            None => Some(Item { expr: o.expr, below: false }),
+        })
+        .collect();
     let kind = Kind::BitmapHeapScan { relation: table.r, recheck };
     let mut node = Node::new(kind, level.scope, vec![child]);
     node.filter = filter.iter().map(|q| q.item()).collect();

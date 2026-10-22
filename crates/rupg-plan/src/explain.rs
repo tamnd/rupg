@@ -96,6 +96,7 @@ fn names(kind: &Kind<'_>) -> Names {
         Kind::BitmapHeapScan { .. } => simple("Bitmap Heap Scan"),
         Kind::BitmapIndexScan { .. } => simple("Bitmap Index Scan"),
         Kind::BitmapAnd => simple("BitmapAnd"),
+        Kind::BitmapOr => simple("BitmapOr"),
         Kind::SampleScan(_) => simple("Sample Scan"),
         Kind::FunctionScan(_) => simple("Function Scan"),
         Kind::TableFunctionScan(_) => simple("Table Function Scan"),
@@ -308,7 +309,7 @@ impl Explainer<'_, '_> {
         }
         for (i, child) in node.children.iter().enumerate() {
             let relationship = match node.kind {
-                Kind::Append | Kind::BitmapAnd => "Member",
+                Kind::Append | Kind::BitmapAnd | Kind::BitmapOr => "Member",
                 Kind::SubqueryScan(_) => "Subquery",
                 _ if i == 0 => "Outer",
                 _ => "Inner",

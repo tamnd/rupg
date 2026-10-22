@@ -219,6 +219,8 @@ pub enum Kind<'q> {
     BitmapIndexScan { relation: usize, index: u32, cond: Vec<Item<'q>> },
     /// `BitmapAnd`: the places that are in each bitmap of the children.
     BitmapAnd,
+    /// `BitmapOr`: the places that are in a bitmap of a child.
+    BitmapOr,
     /// `SampleScan`: a table with `TABLESAMPLE`.
     SampleScan(usize),
     /// `FunctionScan`: a function in `FROM`.

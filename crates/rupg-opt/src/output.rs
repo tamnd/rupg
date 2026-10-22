@@ -153,7 +153,8 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
         | Kind::Materialize
         | Kind::Hash
         | Kind::BitmapIndexScan { .. }
-        | Kind::BitmapAnd => {}
+        | Kind::BitmapAnd
+        | Kind::BitmapOr => {}
         Kind::Aggregate { keys, .. } => {
             let keys: Vec<Expr> = keys.iter().map(|k| k.expr.as_ref().clone()).collect();
             let vars = keys.iter().all(is_var)
