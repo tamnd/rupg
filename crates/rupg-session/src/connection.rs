@@ -5339,6 +5339,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_subplan_cost.test")));
     }
 
+    /// `EXPLAIN` of the conditions `x op ANY (array)` and `x op ALL (array)`, as `cost_qual_eval` finds their cost. The operator runs for half of the items of the array for each row, and for 10 items of an array that is not a constant or a list, as `estimate_array_length`. A constant array of 9 items or more with an operator that can hash is a hash table, as `convert_saop_to_hashed_saop`: the scan hashes each item of the array when it starts, then does one hash and one comparison for each row. `connection/plan_array_cost.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_array_cost() {
+        big_stack(|| script(include_str!("connection/plan_array_cost.test")));
+    }
+
     /// `EXPLAIN` of the conditions of `WHERE` on a subquery of `FROM` that the planner moves into the subquery, as `set_subquery_pathlist` and `subquery_push_qual`: a condition joins the `WHERE` of the subquery, or its `HAVING` when the subquery makes groups. A condition stays outside a subquery with `LIMIT`, a condition on a column of a window function, on a column that is not an item of `DISTINCT ON` or of `PARTITION BY`, on a column that calls a volatile function or a function that gives a set, and a condition with a volatile function on a subquery with `DISTINCT`. An outer join that a condition makes an inner join is an inner join before the condition moves, as `reduce_outer_joins`, and a `Subquery Scan` with no condition that gives each column of its subquery costs its subquery, as `cost_subqueryscan`. `connection/plan_subquery_pushdown.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_subquery_pushdown() {

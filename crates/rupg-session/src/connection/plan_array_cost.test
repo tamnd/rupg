@@ -1,0 +1,105 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> SET TimeZone = 'UTC';
+SET
+> CREATE TABLE b (x int, y int);
+CREATE TABLE
+> CREATE TABLE c (x int, z text);
+CREATE TABLE
+> EXPLAIN SELECT * FROM c WHERE x IN (1, 2, 3);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..27.46 rows=19 width=36)
+row   Filter: (x = ANY ('{1,2,3}'::integer[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE x IN (1, 2, 3, 4, 5, 6, 7, 8);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..35.40 rows=51 width=36)
+row   Filter: (x = ANY ('{1,2,3,4,5,6,7,8}'::integer[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE x IN (1, 2, 3, 4, 5, 6, 7, 8, 9);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.02..29.07 rows=57 width=36)
+row   Filter: (x = ANY ('{1,2,3,4,5,6,7,8,9}'::integer[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE x = ANY ('{1,2}'::int[]);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..25.88 rows=13 width=36)
+row   Filter: (x = ANY ('{1,2}'::integer[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE x <> ALL (ARRAY[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.03..29.07 rows=1206 width=36)
+row   Filter: (x <> ALL ('{1,2,3,4,5,6,7,8,9,10}'::integer[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE x NOT IN (1, 2, 3);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..27.46 rows=1251 width=36)
+row   Filter: (x <> ALL ('{1,2,3}'::integer[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE x = ANY (ARRAY[y, 1]);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on b  (cost=0.00..38.25 rows=23 width=8)
+row   Filter: (x = ANY (ARRAY[y, 1]))
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE x = ANY (ARRAY[y, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on b  (cost=0.00..60.85 rows=113 width=8)
+row   Filter: (x = ANY (ARRAY[y, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE x IN (1::bigint, 2, 3, 4, 5, 6, 7, 8, 9);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..36.99 rows=57 width=36)
+row   Filter: (x = ANY ('{1,2,3,4,5,6,7,8,9}'::bigint[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE z IN ('a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i');
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.02..29.07 rows=57 width=36)
+row   Filter: (z = ANY ('{a,b,c,d,e,f,g,h,i}'::text[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE x IN (1, 2, 3, 4, 5, 6, 7, 8, 9) AND z = 'a';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.02..32.25 rows=1 width=36)
+row   Filter: ((z = 'a'::text) AND (x = ANY ('{1,2,3,4,5,6,7,8,9}'::integer[])))
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE x IN (1, 2, 3, 4) AND z = 'a';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..32.23 rows=1 width=36)
+row   Filter: ((z = 'a'::text) AND (x = ANY ('{1,2,3,4}'::integer[])))
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE x::text = ANY (ARRAY(SELECT z FROM c c2 WHERE c2.x = c.x));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..32906.18 rows=62 width=36)
+row   Filter: ((x)::text = ANY (ARRAY(SubPlan array_1)))
+row   SubPlan array_1
+row     ->  Seq Scan on c c2  (cost=0.00..25.88 rows=6 width=32)
+row           Filter: (x = c.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE x = ANY ((SELECT array_agg(y) FROM b b2));
+ERROR 42883 operator does not exist: integer = integer[] at 33
+DETAIL No operator of that name accepts the given argument types.
+HINT You might need to add explicit type casts.
+> EXPLAIN SELECT * FROM c JOIN b ON c.x = b.x WHERE c.x + b.y IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=246.70..575.95 rows=718 width=44)
+row   Merge Cond: (c.x = b.x)
+row   Join Filter: ((c.x + b.y) = ANY ('{1,2,3,4,5,6,7,8,9,10}'::integer[]))
+row   ->  Sort  (cost=88.17..91.35 rows=1270 width=36)
+row         Sort Key: c.x
+row         ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: b.x
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT x, count(*) FROM c GROUP BY x HAVING count(*) IN (1, 2, 3, 4, 5, 6, 7, 8, 9);
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=29.07..32.07 rows=9 width=12)
+row   Group Key: x
+row   Filter: (count(*) = ANY ('{1,2,3,4,5,6,7,8,9}'::bigint[]))
+row   ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE x = 1 OR x IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.03..32.26 rows=82 width=36)
+row   Filter: ((x = 1) OR (x = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
+EXPLAIN

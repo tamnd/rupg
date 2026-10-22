@@ -593,7 +593,12 @@ impl<'q> Builder<'q> {
         node.filter = quals.iter().map(|q| q.item()).collect();
         let width = stats.width(&BTreeSet::from([r]));
         let startup = startup + qual_startup;
-        let total = sub_total.map_or(startup + run, |t| t + qual_startup) + tuples * per_row;
+        // `cost_seqscan` adds the cost of the pages after the cost of the rows, and the other scans add the two costs before the start cost, which the rounding of the sums follows.
+        let total = match sub_total {
+            Some(t) => t + qual_startup + tuples * per_row,
+            None if matches!(node.kind, Kind::SeqScan(_)) => startup + tuples * per_row + run,
+            None => startup + (run + tuples * per_row),
+        };
         node.cost = Cost { startup, total, rows, width };
         Rel { node, rels: BTreeSet::from([r]), order: Vec::new() }
     }
@@ -1319,7 +1324,7 @@ fn choose<'q>(
     filter: &[Qual<'q>],
     stats: &Stats,
 ) -> Vec<(Candidate<'q>, Vec<OrderKey>)> {
-    let filter_cost = stats.qual_cost(filter.iter().map(|q| &*q.expr));
+    let (filter_startup, filter_cost) = stats.qual_costs(filter.iter().map(|q| &*q.expr));
     let (left_rels, right_rels) = (&left[0].rels, &right[0].rels);
     let lateral_right = lateral(level, right_rels, left_rels);
     // The orders of the sides: the left side first, and the right side first when the join can have the sides in the other order.
@@ -1341,6 +1346,7 @@ fn choose<'q>(
             outer: &outers[0],
             inner: &inners[0],
             quals,
+            filter_startup,
             filter_cost,
             filtered: !filter.is_empty(),
             unique,
@@ -1434,6 +1440,8 @@ struct Input<'a, 'q> {
     outer: &'a Rel<'q>,
     inner: &'a Rel<'q>,
     quals: &'a [Qual<'q>],
+    /// The start cost and the cost for each row of the conditions that the join tests after it joins the rows.
+    filter_startup: f64,
     filter_cost: f64,
     /// True when the join has conditions that are not conditions of the join itself, which the join tests after it joins the rows.
     filtered: bool,
@@ -1600,9 +1608,10 @@ fn nested_cost(input: &Input<'_, '_>, materialize: bool) -> (f64, f64) {
             o.rows * inner.rows
         }
     };
-    let per_tuple = cost::CPU_TUPLE
-        + input.stats.qual_cost(input.quals.iter().map(|q| &*q.expr))
-        + input.filter_cost;
+    // `final_cost_nestloop`: the start cost of the conditions counts in the start cost of the join.
+    let (qual_startup, qual_cost) = input.stats.qual_costs(input.quals.iter().map(|q| &*q.expr));
+    let startup = startup + qual_startup + input.filter_startup;
+    let per_tuple = cost::CPU_TUPLE + qual_cost + input.filter_cost;
     run += per_tuple * tuples;
     (startup, startup + run)
 }
@@ -1663,8 +1672,10 @@ fn hash_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>>
             tuple_count(input, &clauses)
         }
     };
-    let per_tuple =
-        cost::CPU_TUPLE + input.stats.qual_cost(other.iter().map(|q| &*q.expr)) + input.filter_cost;
+    // The start cost of the conditions that are not the clauses of the join counts in the start cost of the join.
+    let (qual_startup, qual_cost) = input.stats.qual_costs(other.iter().map(|q| &*q.expr));
+    let startup = startup + qual_startup + input.filter_startup;
+    let per_tuple = cost::CPU_TUPLE + qual_cost + input.filter_cost;
     run += per_tuple * tuples;
     Some(Candidate {
         method: Method::Hash,
@@ -1866,8 +1877,10 @@ fn merge_join<'q>(
     run += if materialize { material } else { bare };
     run +=
         cost::qual_cost(clauses.iter().map(|c| &*c.item.expr)) * (outer_rows + inner_rows * ratio);
-    let per_tuple =
-        cost::CPU_TUPLE + input.stats.qual_cost(other.iter().map(|q| &*q.expr)) + input.filter_cost;
+    // The start cost of the conditions that are not the clauses of the join counts in the start cost of the join.
+    let (qual_startup, qual_cost) = input.stats.qual_costs(other.iter().map(|q| &*q.expr));
+    let startup = startup + qual_startup + input.filter_startup;
+    let per_tuple = cost::CPU_TUPLE + qual_cost + input.filter_cost;
     run += per_tuple * tuples;
     Some(Candidate {
         method: Method::Merge,
