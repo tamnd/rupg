@@ -1,0 +1,253 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (id int PRIMARY KEY, x int);
+CREATE TABLE
+> CREATE TABLE b (id int PRIMARY KEY, y int);
+CREATE TABLE
+> CREATE INDEX a_x ON a (x);
+CREATE INDEX
+> INSERT INTO a SELECT g, g % 7 FROM generate_series(1, 50) g;
+INSERT 0 50
+> INSERT INTO b SELECT g, g % 5 FROM generate_series(1, 40) g;
+INSERT 0 40
+> EXPLAIN SELECT * FROM (SELECT id FROM a ORDER BY id LIMIT 10) s ORDER BY id;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.15..0.50 rows=10 width=4)
+row   ->  Index Only Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id, x FROM a ORDER BY x LIMIT 10) s ORDER BY x, id;
+fields QUERY PLAN:25:-1:-1
+row Incremental Sort  (cost=0.20..0.95 rows=10 width=8)
+row   Sort Key: a.x, a.id
+row   Presorted Key: a.x
+row   ->  Limit  (cost=0.15..0.50 rows=10 width=8)
+row         ->  Index Scan using a_x on a  (cost=0.15..78.06 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id FROM a UNION SELECT id FROM b) u ORDER BY id;
+fields QUERY PLAN:25:-1:-1
+row Unique  (cost=0.32..212.62 rows=4520 width=4)
+row   ->  Merge Append  (cost=0.32..201.32 rows=4520 width=4)
+row         Sort Key: a.id
+row         ->  Index Only Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+row         ->  Index Only Scan using b_pkey on b  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id FROM a UNION SELECT id FROM b) u ORDER BY id LIMIT 5;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.32..0.55 rows=5 width=4)
+row   ->  Unique  (cost=0.32..212.62 rows=4520 width=4)
+row         ->  Merge Append  (cost=0.32..201.32 rows=4520 width=4)
+row               Sort Key: a.id
+row               ->  Index Only Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+row               ->  Index Only Scan using b_pkey on b  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id FROM a ORDER BY id LIMIT 20) s JOIN (SELECT id FROM b ORDER BY id LIMIT 20) t USING (id);
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=0.31..2.04 rows=20 width=4)
+row   Merge Cond: (a.id = b.id)
+row   ->  Limit  (cost=0.15..0.84 rows=20 width=4)
+row         ->  Index Only Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+row   ->  Materialize  (cost=0.15..0.89 rows=20 width=4)
+row         ->  Limit  (cost=0.15..0.84 rows=20 width=4)
+row               ->  Index Only Scan using b_pkey on b  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id FROM a ORDER BY id LIMIT 20) s JOIN b USING (id) ORDER BY id;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=42.80..42.85 rows=20 width=8)
+row   Sort Key: a.id
+row   ->  Hash Join  (cost=1.09..42.37 rows=20 width=8)
+row         Hash Cond: (b.id = a.id)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Hash  (cost=0.84..0.84 rows=20 width=4)
+row               ->  Limit  (cost=0.15..0.84 rows=20 width=4)
+row                     ->  Index Only Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT DISTINCT x FROM a) s ORDER BY x;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=47.89..48.39 rows=200 width=4)
+row   Sort Key: a.x
+row   ->  HashAggregate  (cost=38.25..40.25 rows=200 width=4)
+row         Group Key: a.x
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT x, count(*) FROM a GROUP BY x) s ORDER BY x;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=53.54..54.04 rows=200 width=12)
+row   Sort Key: a.x
+row   ->  HashAggregate  (cost=43.90..45.90 rows=200 width=12)
+row         Group Key: a.x
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT s.id + 1 FROM (SELECT id FROM a ORDER BY id LIMIT 10) s ORDER BY s.id;
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on s  (cost=0.15..0.52 rows=10 width=8)
+row   ->  Limit  (cost=0.15..0.50 rows=10 width=4)
+row         ->  Index Only Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id FROM a ORDER BY id DESC LIMIT 10) s ORDER BY id DESC;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.15..0.50 rows=10 width=4)
+row   ->  Index Only Scan Backward using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id FROM a ORDER BY id LIMIT 10) s WHERE id > 3 ORDER BY id;
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on s  (cost=0.15..0.62 rows=3 width=4)
+row   Filter: (s.id > 3)
+row   ->  Limit  (cost=0.15..0.50 rows=10 width=4)
+row         ->  Index Only Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id * 2 AS d FROM a ORDER BY 1 LIMIT 10) s ORDER BY d;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=87.09..87.11 rows=10 width=4)
+row   ->  Sort  (cost=87.09..92.74 rows=2260 width=4)
+row         Sort Key: ((a.id * 2))
+row         ->  Seq Scan on a  (cost=0.00..38.25 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id FROM a ORDER BY id OFFSET 5) s ORDER BY id;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.33..78.06 rows=2255 width=4)
+row   ->  Index Only Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> SELECT * FROM (SELECT id FROM a UNION SELECT id FROM b) u ORDER BY id LIMIT 5;
+fields id:23:4:-1
+row 1
+row 2
+row 3
+row 4
+row 5
+SELECT 5
+> EXPLAIN SELECT * FROM (SELECT id FROM a ORDER BY id LIMIT 10 FOR UPDATE) s ORDER BY id;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=0.87..0.89 rows=10 width=4)
+row   Sort Key: s.id
+row   ->  Subquery Scan on s  (cost=0.15..0.70 rows=10 width=4)
+row         ->  Limit  (cost=0.15..0.60 rows=10 width=10)
+row               ->  LockRows  (cost=0.15..100.66 rows=2260 width=10)
+row                     ->  Index Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=10)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT DISTINCT ON (x) x, id FROM a ORDER BY x, id) s ORDER BY x;
+fields QUERY PLAN:25:-1:-1
+row Unique  (cost=0.74..155.49 rows=200 width=8)
+row   ->  Incremental Sort  (cost=0.74..149.84 rows=2260 width=8)
+row         Sort Key: a.x, a.id
+row         Presorted Key: a.x
+row         ->  Index Scan using a_x on a  (cost=0.15..78.06 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN WITH w AS (SELECT id FROM a ORDER BY id LIMIT 10) SELECT * FROM w ORDER BY id;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.15..0.50 rows=10 width=4)
+row   ->  Index Only Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN WITH w AS MATERIALIZED (SELECT id FROM a ORDER BY id LIMIT 10) SELECT * FROM w ORDER BY id;
+fields QUERY PLAN:25:-1:-1
+row CTE Scan on w  (cost=0.50..0.70 rows=10 width=4)
+row   CTE w
+row     ->  Limit  (cost=0.15..0.50 rows=10 width=4)
+row           ->  Index Only Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM b, LATERAL (SELECT id FROM a WHERE a.x = b.y ORDER BY id LIMIT 2) s ORDER BY b.id, s.id;
+fields QUERY PLAN:25:-1:-1
+row Incremental Sort  (cost=30.26..34207.44 rows=4520 width=12)
+row   Sort Key: b.id, a.id
+row   Presorted Key: b.id
+row   ->  Nested Loop  (cost=15.18..34083.14 rows=4520 width=12)
+row         ->  Index Scan using b_pkey on b  (cost=0.15..78.06 rows=2260 width=8)
+row         ->  Limit  (cost=15.02..15.03 rows=2 width=4)
+row               ->  Sort  (cost=15.02..15.05 rows=11 width=4)
+row                     Sort Key: a.id
+row                     ->  Bitmap Heap Scan on a  (cost=4.24..14.91 rows=11 width=4)
+row                           Recheck Cond: (x = b.y)
+row                           ->  Bitmap Index Scan on a_x  (cost=0.00..4.24 rows=11 width=0)
+row                                 Index Cond: (x = b.y)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT * FROM (SELECT id FROM a ORDER BY id LIMIT 10) s1 ORDER BY id LIMIT 5) s2 ORDER BY id;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.15..0.33 rows=5 width=4)
+row   ->  Limit  (cost=0.15..0.50 rows=10 width=4)
+row         ->  Index Only Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id, (SELECT max(y) FROM b WHERE b.id = a.id) m FROM a ORDER BY id LIMIT 10) s ORDER BY id;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.15..82.35 rows=10 width=8)
+row   ->  Index Only Scan using a_pkey on a  (cost=0.15..18576.15 rows=2260 width=8)
+row         SubPlan expr_1
+row           ->  Aggregate  (cost=8.17..8.18 rows=1 width=4)
+row                 ->  Index Scan using b_pkey on b  (cost=0.15..8.17 rows=1 width=4)
+row                       Index Cond: (id = a.id)
+EXPLAIN
+> EXPLAIN VERBOSE SELECT * FROM (SELECT id FROM a UNION SELECT id FROM b) u ORDER BY id;
+fields QUERY PLAN:25:-1:-1
+row Unique  (cost=0.32..212.62 rows=4520 width=4)
+row   Output: a.id
+row   ->  Merge Append  (cost=0.32..201.32 rows=4520 width=4)
+row         Sort Key: a.id
+row         ->  Index Only Scan using a_pkey on public.a  (cost=0.15..78.06 rows=2260 width=4)
+row               Output: a.id
+row         ->  Index Only Scan using b_pkey on public.b  (cost=0.15..78.06 rows=2260 width=4)
+row               Output: b.id
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id FROM a UNION SELECT id FROM b) u JOIN b USING (id);
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=159.95..217.04 rows=4520 width=8)
+row   Hash Cond: (a.id = b.id)
+row   ->  HashAggregate  (cost=99.10..144.30 rows=4520 width=4)
+row         Group Key: a.id
+row         ->  Append  (cost=0.00..87.80 rows=4520 width=4)
+row               ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row               ->  Seq Scan on b b_1  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT u.id, count(*) FROM (SELECT id FROM a UNION SELECT id FROM b) u GROUP BY u.id;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=166.90..168.90 rows=200 width=12)
+row   Group Key: a.id
+row   ->  HashAggregate  (cost=99.10..144.30 rows=4520 width=4)
+row         Group Key: a.id
+row         ->  Append  (cost=0.00..87.80 rows=4520 width=4)
+row               ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT DISTINCT id FROM (SELECT id FROM a ORDER BY id LIMIT 10) s;
+fields QUERY PLAN:25:-1:-1
+row Unique  (cost=0.15..0.52 rows=10 width=4)
+row   ->  Limit  (cost=0.15..0.50 rows=10 width=4)
+row         ->  Index Only Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id, x FROM a ORDER BY id, x LIMIT 10) s ORDER BY id, x;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.20..0.99 rows=10 width=8)
+row   ->  Incremental Sort  (cost=0.20..179.76 rows=2260 width=8)
+row         Sort Key: a.id, a.x
+row         Presorted Key: a.id
+row         ->  Index Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id FROM a ORDER BY id LIMIT 10) s ORDER BY id DESC;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=0.67..0.69 rows=10 width=4)
+row   Sort Key: a.id DESC
+row   ->  Limit  (cost=0.15..0.50 rows=10 width=4)
+row         ->  Index Only Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id FROM a UNION SELECT id FROM b) u, (SELECT id FROM a UNION SELECT id FROM b) v WHERE u.id = v.id;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=299.90..357.22 rows=102152 width=8)
+row   Hash Cond: (a.id = a_1.id)
+row   ->  HashAggregate  (cost=99.10..144.30 rows=4520 width=4)
+row         Group Key: a.id
+row         ->  Append  (cost=0.00..87.80 rows=4520 width=4)
+row               ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Hash  (cost=144.30..144.30 rows=4520 width=4)
+row         ->  HashAggregate  (cost=99.10..144.30 rows=4520 width=4)
+row               Group Key: a_1.id
+row               ->  Append  (cost=0.00..87.80 rows=4520 width=4)
+row                     ->  Seq Scan on a a_1  (cost=0.00..32.60 rows=2260 width=4)
+row                     ->  Seq Scan on b b_1  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> SELECT * FROM (SELECT id FROM a UNION SELECT id FROM b) u JOIN b USING (id) ORDER BY 1 LIMIT 3;
+fields id:23:4:-1,y@b.2:23:4:-1
+row 1,1
+row 2,2
+row 3,3
+SELECT 3
