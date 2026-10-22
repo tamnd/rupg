@@ -336,7 +336,7 @@ struct JoinTree<'q> {
     semi: Option<Semi<'q>>,
 }
 
-/// A semi join or an anti join of a join domain, as a `SpecialJoinInfo`. The inner side is one item of the domain, and the order of the joins of the domain can join the other items in any order that `join_is_legal` accepts.
+/// A left join, a semi join or an anti join of a join domain, as a `SpecialJoinInfo`. The inner side is one item of the domain, and the order of the joins of the domain can join the other items in any order that `join_is_legal` accepts.
 #[derive(Debug)]
 struct Special<'q> {
     kind: JoinKind,
@@ -344,7 +344,9 @@ struct Special<'q> {
     left: BTreeSet<usize>,
     /// `min_righthand` and `syn_righthand`: the relations of the inner side.
     right: BTreeSet<usize>,
-    /// The conditions of an anti join, which only the join tests. The conditions of a semi join are conditions of the domain.
+    /// `syn_lefthand` and `syn_righthand`: the relations of the two sides of the join in the query.
+    syn: BTreeSet<usize>,
+    /// The conditions of `ON` of a left join or an anti join, which only the join tests. The conditions of a semi join are conditions of the domain.
     quals: Vec<Qual<'q>>,
     filter: Vec<Qual<'q>>,
     semi: Option<Semi<'q>>,
@@ -501,7 +503,10 @@ impl<'q> Builder<'q> {
         match tree {
             Tree::Base { relation, quals } => vec![self.scan(level, relation, quals, stats)],
             Tree::Join(join)
-                if matches!(join.kind, JoinKind::Inner | JoinKind::Semi | JoinKind::Anti) =>
+                if matches!(
+                    join.kind,
+                    JoinKind::Inner | JoinKind::Left | JoinKind::Semi | JoinKind::Anti
+                ) =>
             {
                 let (mut items, mut pool, mut specials) = (Vec::new(), Vec::new(), Vec::new());
                 flatten(Tree::Join(join), &mut items, &mut pool, &mut specials);
@@ -1744,7 +1749,7 @@ fn finish<'q>(
     out
 }
 
-/// The items of the problem of the order of the joins of a join domain, as the list of `deconstruct_jointree`, the conditions of its inner joins and its semi joins, and its semi joins and anti joins, as `make_outerjoininfo` makes them. The inner side of a semi join or an anti join is one item. A condition with no column has the relations of its join.
+/// The items of the problem of the order of the joins of a join domain, as the list of `deconstruct_jointree`, the conditions of its inner joins and its semi joins, and its left joins, semi joins and anti joins, as `make_outerjoininfo` makes them. The inner side of a left join, a semi join or an anti join is one item. A condition above a left join that reads its inner side is a condition of the domain, and the search tests it at the left join or above it. A condition with no column has the relations of its join.
 fn flatten<'q>(
     tree: Tree<'q>,
     items: &mut Vec<Tree<'q>>,
@@ -1768,21 +1773,25 @@ fn flatten<'q>(
             flatten(right, items, pool, specials);
             add(quals.into_iter().chain(filter).collect(), pool);
         }
-        JoinKind::Semi | JoinKind::Anti => {
+        JoinKind::Left | JoinKind::Semi | JoinKind::Anti => {
             let (outer, right_rels) = (left.rels(), right.rels());
+            let lower = specials.len();
             flatten(left, items, pool, specials);
             items.push(right);
-            let mut min_left: BTreeSet<usize> = clause.intersection(&outer).copied().collect();
-            if min_left.is_empty() {
-                min_left = outer;
-            }
-            let quals = if kind == JoinKind::Semi {
-                add(quals, pool);
-                Vec::new()
-            } else {
-                quals
+            let min_left = min_lefthand(&clause, &outer, &specials[lower..]);
+            let (quals, filter) = match kind {
+                JoinKind::Semi => {
+                    add(quals, pool);
+                    (Vec::new(), filter)
+                }
+                JoinKind::Left => {
+                    add(filter, pool);
+                    (quals, Vec::new())
+                }
+                _ => (quals, filter),
             };
-            specials.push(Special { kind, left: min_left, right: right_rels, quals, filter, semi });
+            let (left, right) = (min_left, right_rels);
+            specials.push(Special { kind, left, right, syn: rels, quals, filter, semi });
         }
         _ => items.push(Tree::Join(Box::new(JoinTree {
             kind,
@@ -1796,6 +1805,21 @@ fn flatten<'q>(
             semi,
         }))),
     }
+}
+
+/// `make_outerjoininfo`: the relations of the outer side of a special join that the order of the joins must join before it. These are the relations of the outer side that the condition reads, or each relation of the outer side when it reads none. When the condition reads the inner side of a lower special join of the outer side, they also have each relation of that join, so that the two joins keep their order. PostgreSQL can let two left joins change their order when the condition is strict, as identity 3 of `optimizer/README`, which the planner does not do yet.
+fn min_lefthand(
+    clause: &BTreeSet<usize>,
+    outer: &BTreeSet<usize>,
+    lower: &[Special<'_>],
+) -> BTreeSet<usize> {
+    let mut min: BTreeSet<usize> = clause.intersection(outer).copied().collect();
+    for sp in lower {
+        if !sp.right.is_disjoint(clause) {
+            min.extend(sp.syn.iter().copied());
+        }
+    }
+    if min.is_empty() { outer.clone() } else { min }
 }
 
 /// A full join with no condition that a merge join or a hash join can use, which PostgreSQL cannot plan. The plan is a nested loop.

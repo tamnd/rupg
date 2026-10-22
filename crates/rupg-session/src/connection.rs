@@ -5411,6 +5411,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_join_order.test")));
     }
 
+    /// `EXPLAIN` of left joins in the order of the joins of a join domain: an inner join can come before or after a left join, as identity 1 of `optimizer/README`, and a condition above a left join that reads its inner side waits for the left join. `connection/plan_left_order.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_left_order() {
+        big_stack(|| script(include_str!("connection/plan_left_order.test")));
+    }
+
     /// `EXPLAIN` of an `Incremental Sort`: the planner sorts rows whose first keys are in order already, as `make_ordered_path` and `create_ordered_paths` choose it, with the costs of `cost_incremental_sort`. `connection/plan_incremental_sort.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_incremental_sort() {
