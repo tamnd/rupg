@@ -5417,6 +5417,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_left_order.test")));
     }
 
+    /// `EXPLAIN` of joins with an `OR` in a condition: the selectivity of each part of the `OR` comes from `eqjoinsel` for an `=` of a column of each side, and from `var_eq_const` for an `=` of a unique column and a constant, as `clause_selectivity` finds it. `connection/plan_or_join.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_or_join() {
+        big_stack(|| script(include_str!("connection/plan_or_join.test")));
+    }
+
     /// `EXPLAIN` of an `Incremental Sort`: the planner sorts rows whose first keys are in order already, as `make_ordered_path` and `create_ordered_paths` choose it, with the costs of `cost_incremental_sort`. `connection/plan_incremental_sort.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_incremental_sort() {

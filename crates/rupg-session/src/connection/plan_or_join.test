@@ -1,0 +1,74 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE b (x int, y int);
+CREATE TABLE
+> CREATE TABLE c (x int, z text);
+CREATE TABLE
+> CREATE TABLE s (x int PRIMARY KEY, y int);
+CREATE TABLE
+> CREATE TABLE d (x int PRIMARY KEY, y int);
+CREATE TABLE
+> EXPLAIN SELECT * FROM c LEFT JOIN b ON b.x = c.x JOIN s ON s.y = b.y OR s.x = 1;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=246.68..568088.59 rows=176446 width=52)
+row   Join Filter: ((s.y = b.y) OR (s.x = 1))
+row   ->  Merge Left Join  (cost=246.68..468.29 rows=14351 width=44)
+row         Merge Cond: (c.x = b.x)
+row         ->  Sort  (cost=88.17..91.35 rows=1270 width=36)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Materialize  (cost=0.00..43.90 rows=2260 width=8)
+row         ->  Seq Scan on s  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM b JOIN s ON s.y = b.y OR s.x = 1;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..89453.85 rows=27787 width=16)
+row   Join Filter: ((s.y = b.y) OR (s.x = 1))
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Materialize  (cost=0.00..43.90 rows=2260 width=8)
+row         ->  Seq Scan on s  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM b JOIN s ON s.x = b.x OR s.y = 2;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..89453.85 rows=27787 width=16)
+row   Join Filter: ((s.x = b.x) OR (s.y = 2))
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Materialize  (cost=0.00..43.90 rows=2260 width=8)
+row         ->  Seq Scan on s  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM b JOIN s ON s.x = b.x OR b.x = 7;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..89453.85 rows=27787 width=16)
+row   Join Filter: ((s.x = b.x) OR (b.x = 7))
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Materialize  (cost=0.00..43.90 rows=2260 width=8)
+row         ->  Seq Scan on s  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM s JOIN d ON d.x = 3 OR s.x = 4;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..89453.85 rows=4519 width=16)
+row   Join Filter: ((d.x = 3) OR (s.x = 4))
+row   ->  Seq Scan on s  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Materialize  (cost=0.00..43.90 rows=2260 width=8)
+row         ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM b JOIN c ON c.x = b.x OR c.x = b.y;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..50286.97 rows=28630 width=44)
+row   Join Filter: ((c.x = b.x) OR (c.x = b.y))
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Materialize  (cost=0.00..29.05 rows=1270 width=36)
+row         ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+EXPLAIN
+> EXPLAIN SELECT * FROM s JOIN d ON d.x <> s.x;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..76684.85 rows=5105340 width=16)
+row   Join Filter: (d.x <> s.x)
+row   ->  Seq Scan on s  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Materialize  (cost=0.00..43.90 rows=2260 width=8)
+row         ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
