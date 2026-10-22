@@ -133,26 +133,33 @@ pub(crate) fn calls(expr: &Expr) -> usize {
     own + expr.children().into_iter().map(calls).sum::<usize>()
 }
 
-/// The aggregate calls of the query in the expressions, outside the arguments of other aggregate calls, as `get_agg_clause_costs` finds them. A call in a subquery that reads only the query is a call of the query.
+/// The aggregate calls of the query in the expressions, outside the arguments of other aggregate calls, as `get_agg_clause_costs` finds them. A call in a subquery that reads only the query is a call of the query. Two calls that are the same and call no volatile function are one call, as `find_compatible_agg` shares them.
 pub(crate) fn aggregates<'q>(exprs: &[&'q Expr], out: &mut Vec<&'q Aggref>) {
-    fn walk<'q>(expr: &'q Expr, depth: usize, out: &mut Vec<&'q Aggref>) {
+    fn walk<'q>(expr: &'q Expr, depth: usize, seen: &mut Vec<&'q Expr>, out: &mut Vec<&'q Aggref>) {
         if let ExprKind::Agg(agg) = &expr.kind
             && agg.levels_up == depth
         {
+            if depth == 0 && !volatile(expr) {
+                if seen.iter().any(|s| s.same(expr)) {
+                    return;
+                }
+                seen.push(expr);
+            }
             out.push(agg);
             return;
         }
         for child in expr.children() {
-            walk(child, depth, out);
+            walk(child, depth, seen, out);
         }
         if let ExprKind::SubLink(sub) = &expr.kind {
             for (e, d) in sub.query.all_exprs(depth + 1) {
-                walk(e, d, out);
+                walk(e, d, seen, out);
             }
         }
     }
+    let mut seen = Vec::new();
     for expr in exprs {
-        walk(expr, 0, out);
+        walk(expr, 0, &mut seen, out);
     }
 }
 

@@ -113,17 +113,25 @@ fn presorted(order: &[OrderKey], keys: &[SortKey<'_>]) -> (bool, usize) {
 }
 
 /// The costs of a sort of rows with these costs whose first `presorted` keys are in order already: a `Sort` when no key is in order, or else an `Incremental Sort`, as `make_ordered_path` chooses.
-fn sort_cost(c: Cost, presorted: usize, bound: Option<f64>) -> (f64, f64) {
+fn sort_cost(
+    level: &Level<'_>,
+    c: Cost,
+    keys: &[SortKey<'_>],
+    presorted: usize,
+    bound: Option<f64>,
+) -> (f64, f64) {
     if presorted == 0 {
         cost::sort((c.startup, c.total), c.rows, c.width, bound)
     } else {
-        let groups = cost::groups(c.rows.max(2.0), presorted);
+        let exprs: Vec<&Expr> = keys[..presorted].iter().map(|k| &*k.item.expr).collect();
+        let groups = level.stats.groups(&exprs, c.rows.max(2.0));
         cost::incremental_sort((c.startup, c.total), c.rows, c.width, groups, bound)
     }
 }
 
 /// `make_ordered_path`: the node in the order of the keys. A node whose rows are in the order already stays as it is. A node whose rows are in the order of the first keys gets an `Incremental Sort`, and another node gets a `Sort`. With `only`, the node is a plan that is not the cheapest, which the planner uses only when its rows are in the order of one key or more, so the result is `None` when it needs a `Sort`.
 fn sort_if<'q>(
+    level: &Level<'q>,
     node: Node<'q>,
     keys: Vec<SortKey<'q>>,
     order: &mut Vec<OrderKey>,
@@ -142,7 +150,7 @@ fn sort_if<'q>(
         return Some(sort(node, keys, bound));
     }
     let c = node.cost;
-    let (startup, total) = sort_cost(c, count, bound);
+    let (startup, total) = sort_cost(level, c, &keys, count, bound);
     let scope = node.scope;
     let mut out = Node::new(Kind::IncrementalSort { keys, presorted: count }, scope, vec![node]);
     out.cost = Cost { startup, total, ..c };
@@ -290,7 +298,7 @@ impl<'q> Builder<'q> {
             let keys: Vec<SortKey<'q>> =
                 query.sort.iter().map(|s| sort_key(level.target(s.target), s)).collect();
             let bound = (count > 0.0 && offset >= 0.0).then_some(count + offset);
-            node = sort_if(node, keys, &mut order, bound, only)?;
+            node = sort_if(level, node, keys, &mut order, bound, only)?;
         }
         if !query.row_marks.is_empty() {
             let c = node.cost;
@@ -562,7 +570,7 @@ fn aggregate<'q>(
         return Some(grouping_sets(level, input, order, units, filter, selectivity));
     }
     if query.group.is_empty() {
-        let input = sort_if(input, ordered, order, None, only)?;
+        let input = sort_if(level, input, ordered, order, None, only)?;
         let c = input.cost;
         let startup = c.total + cost::CPU_OPERATOR * n * units + finals;
         let total = startup + cost::CPU_TUPLE + having_cost;
@@ -578,7 +586,8 @@ fn aggregate<'q>(
     }
     let group = group_keys(level);
     let nkeys = group.len() as f64;
-    let groups = cost::groups(n, group.len());
+    let group_exprs: Vec<&Expr> = group.iter().map(|k| &*k.item.expr).collect();
+    let groups = level.stats.groups(&group_exprs, n);
     let keys: Vec<Item<'q>> = group.iter().map(|k| k.item.clone()).collect();
     let rows = cost::clamp_rows(groups * selectivity);
     let hashable = query.group.iter().all(|g| g.hashable) && ordered.is_empty();
@@ -592,7 +601,7 @@ fn aggregate<'q>(
     let (sorted_input, sorted_order) = if is_sorted {
         (c, order.clone())
     } else {
-        let (startup, total) = sort_cost(c, count, None);
+        let (startup, total) = sort_cost(level, c, &sort_keys, count, None);
         (Cost { startup, total, ..c }, sorted_order(&sort_keys))
     };
     let sorted_total = sorted_input.total
@@ -614,7 +623,7 @@ fn aggregate<'q>(
         order.clear();
         return Some(node);
     }
-    let Some(input) = sort_if(input, sort_keys, order, None, false) else {
+    let Some(input) = sort_if(level, input, sort_keys, order, None, false) else {
         unreachable!("a sort has a result")
     };
     *order = sorted_order;
@@ -679,7 +688,8 @@ fn grouping_sets<'q>(
     let mut out_sets = Vec::new();
     let mut keys: Vec<Item<'q>> = Vec::new();
     for set in &ordered {
-        groups += if set.is_empty() { 1.0 } else { cost::groups(n, set.len()) };
+        let set_exprs: Vec<&Expr> = set.iter().map(|t| level.target(*t)).collect();
+        groups += level.stats.groups(&set_exprs, n);
         units_all += set.len() as f64 + units;
         let items: Vec<Item<'q>> = set.iter().map(|t| Item::below(level.target(*t))).collect();
         for item in &items {
@@ -697,7 +707,7 @@ fn grouping_sets<'q>(
             .iter()
             .filter_map(|t| group_of(*t).map(|g| sort_key(level.target(*t), g)))
             .collect();
-        if let Some(sorted) = sort_if(input, sort_keys, order, None, false) {
+        if let Some(sorted) = sort_if(level, input, sort_keys, order, None, false) {
             input = sorted;
         } else {
             unreachable!("a sort of the cheapest plan has a result")
@@ -754,15 +764,18 @@ fn window_keys<'q>(level: &Level<'q>, window: usize) -> Vec<SortKey<'q>> {
 /// `get_windowclause_startup_tuples`: the rows that a window reads before its first row, for the options of its frame after `optimize_window_clauses`.
 fn startup_tuples(level: &Level<'_>, window: usize, rows: f64, options: i32) -> f64 {
     let clause = &level.query.windows[window];
+    let exprs = |items: &[SortGroup]| -> Vec<&Expr> {
+        items.iter().map(|i| level.target(i.target)).collect()
+    };
     let partition_rows = if clause.partition.is_empty() {
         rows
     } else {
-        rows / cost::groups(rows, clause.partition.len())
+        rows / level.stats.groups(&exprs(&clause.partition), rows)
     };
     let peer_rows = if clause.order.is_empty() {
         1.0
     } else {
-        partition_rows / cost::groups(partition_rows, clause.order.len())
+        partition_rows / level.stats.groups(&exprs(&clause.order), partition_rows)
     };
     let out = if options & FRAME_END_UNBOUNDED_FOLLOWING != 0 {
         partition_rows
@@ -854,7 +867,7 @@ fn windows<'q>(
     let mut number = 0;
     for window in active {
         let clause = &level.query.windows[window];
-        node = sort_if(node, window_keys(level, window), order, None, only)?;
+        node = sort_if(level, node, window_keys(level, window), order, None, only)?;
         let c = node.cost;
         let mut total = c.total;
         for call in &calls[window] {
@@ -911,7 +924,9 @@ fn distinct<'q>(
     let scope = level.scope;
     let c = input.cost;
     let ncols = query.distinct.len();
-    let groups = cost::groups(c.rows, ncols);
+    let distinct_exprs: Vec<&Expr> =
+        query.distinct.iter().map(|d| level.target(d.target)).collect();
+    let groups = level.stats.groups(&distinct_exprs, c.rows);
     // The sort puts the items of `ORDER BY` first, so that the sort of `ORDER BY` after it has no work.
     let mut keys: Vec<SortKey<'q>> = Vec::new();
     let distinct_target = |t: usize| query.distinct.iter().any(|d| d.target == t);
@@ -939,7 +954,7 @@ fn distinct<'q>(
         return None;
     }
     let (sort_startup, sort_total) =
-        if is_sorted { (c.startup, c.total) } else { sort_cost(c, count, None) };
+        if is_sorted { (c.startup, c.total) } else { sort_cost(level, c, &keys, count, None) };
     let unique_total = sort_total + cost::CPU_OPERATOR * c.rows * ncols as f64;
     let hashable = !query.distinct_on && query.distinct.iter().all(|d| d.hashable);
     let hash_startup = c.total + cost::CPU_OPERATOR * c.rows * ncols as f64;
@@ -961,7 +976,7 @@ fn distinct<'q>(
         order.clear();
         return Some(node);
     }
-    let input = sort_if(input, keys, order, None, only)?;
+    let input = sort_if(level, input, keys, order, None, only)?;
     let mut node = Node::new(Kind::Unique, scope, vec![input]);
     node.cost = Cost { startup: sort_startup, total: unique_total, rows: groups, ..c };
     Some(node)
