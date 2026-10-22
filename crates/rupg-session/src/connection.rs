@@ -5393,6 +5393,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_semi_join.test")));
     }
 
+    /// `EXPLAIN` of `NOT IN` on a subquery, which the planner makes an anti join when no value of the test can be null, as `convert_ANY_sublink_to_join` proves it with `sublink_testexpr_is_not_nullable` and `query_outputs_are_not_nullable`. A column of a table with `NOT NULL`, a primary key and a condition of the subquery such as `x IS NOT NULL` or `x > 0` prove it, and a column on the nullable side of an outer join does not. `connection/plan_not_in.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_not_in() {
+        big_stack(|| script(include_str!("connection/plan_not_in.test")));
+    }
+
     /// `EXPLAIN` of an `Incremental Sort`: the planner sorts rows whose first keys are in order already, as `make_ordered_path` and `create_ordered_paths` choose it, with the costs of `cost_incremental_sort`. `connection/plan_incremental_sort.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_incremental_sort() {
