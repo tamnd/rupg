@@ -1,0 +1,88 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE b (x int, y int);
+CREATE TABLE
+> CREATE TABLE c (x int, z text);
+CREATE TABLE
+> EXPLAIN SELECT * FROM b WHERE x > 1 AND x < 5;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on b  (cost=0.00..43.90 rows=11 width=8)
+row   Filter: ((x > 1) AND (x < 5))
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE x >= 1 AND x <= 5 AND y = 3;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on b  (cost=0.00..49.55 rows=1 width=8)
+row   Filter: ((x >= 1) AND (x <= 5) AND (y = 3))
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE 1 < x AND 5 > x;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on b  (cost=0.00..43.90 rows=11 width=8)
+row   Filter: ((1 < x) AND (5 > x))
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE x > 1 AND x > 2 AND x < 5;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on b  (cost=0.00..49.55 rows=11 width=8)
+row   Filter: ((x > 1) AND (x > 2) AND (x < 5))
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE x > 1 AND y < 5;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on b  (cost=0.00..43.90 rows=251 width=8)
+row   Filter: ((x > 1) AND (y < 5))
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE x BETWEEN 1 AND 5;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on b  (cost=0.00..43.90 rows=11 width=8)
+row   Filter: ((x >= 1) AND (x <= 5))
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE x + 1 > 1 AND x + 1 < 5;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on b  (cost=0.00..55.20 rows=11 width=8)
+row   Filter: (((x + 1) > 1) AND ((x + 1) < 5))
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE x > y AND x < 5;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on b  (cost=0.00..43.90 rows=251 width=8)
+row   Filter: ((x > y) AND (x < 5))
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE (x > 1 AND x < 5) OR y = 1;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on b  (cost=0.00..49.55 rows=23 width=8)
+row   Filter: (((x > 1) AND (x < 5)) OR (y = 1))
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE x > 1 AND x < 5 AND y > 1 AND y < 5;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on b  (cost=0.00..55.20 rows=1 width=8)
+row   Filter: ((x > 1) AND (x < 5) AND (y > 1) AND (y < 5))
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT x FROM b WHERE x > 1) s WHERE s.x < 5;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on b  (cost=0.00..43.90 rows=11 width=4)
+row   Filter: ((x > 1) AND (x < 5))
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE x > random() AND x < 5;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on b  (cost=0.00..55.20 rows=251 width=8)
+row   Filter: ((x < 5) AND ((x)::double precision > random()))
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE z > 'a' AND z < 'b';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..29.05 rows=6 width=36)
+row   Filter: ((z > 'a'::text) AND (z < 'b'::text))
+EXPLAIN
+> EXPLAIN SELECT x FROM b GROUP BY x HAVING max(y) > 1 AND max(y) < 5;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=43.90..46.90 rows=1 width=4)
+row   Group Key: x
+row   Filter: ((max(y) > 1) AND (max(y) < 5))
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM b JOIN c ON b.x = c.x WHERE c.x > 1 AND c.x < 5;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=29.12..70.88 rows=68 width=44)
+row   Hash Cond: (b.x = c.x)
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=29.05..29.05 rows=6 width=36)
+row         ->  Seq Scan on c  (cost=0.00..29.05 rows=6 width=36)
+row               Filter: ((x > 1) AND (x < 5))
+EXPLAIN

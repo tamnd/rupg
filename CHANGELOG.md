@@ -10,6 +10,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Fixed
 
+- The rows of a low bound and a high bound of the same value in `EXPLAIN`, such as `x > 1 AND x < 5` and `x BETWEEN 1 AND 5`. `clauselist_selectivity` of PostgreSQL estimates the two conditions as one range with the selectivity `DEFAULT_RANGE_INEQ_SEL`, so that the scan of a table of 2260 rows gives 11 rows and not 251 (#548).
 - The rows of a join on `=` in `EXPLAIN` when a side has conditions of its own. `eqjoinsel` of PostgreSQL does not make the number of distinct values of a column smaller than the rows of its table after the conditions (#547).
 - The junk columns of the row marks in `EXPLAIN`, as `preprocess_rowmarks` and `preprocess_targetlist` of PostgreSQL add them. `FOR UPDATE` and `FOR SHARE` carry the `ctid` of each table of `FROM`, the `tableoid` of a table with an inheritance tree and the whole row of a function, and an `UPDATE` or a `DELETE` carries the `ctid` of each table other than its target. The widths and the `Output` lines of `EXPLAIN VERBOSE` show these columns (#546).
 - The width of a whole-row column in `EXPLAIN`, such as `SELECT b FROM b`. PostgreSQL adds the header of the row to the width of its columns (#546).

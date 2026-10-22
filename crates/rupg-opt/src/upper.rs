@@ -559,7 +559,7 @@ fn aggregate<'q>(
     let units = agg_units(&aggs);
     let finals = cost::CPU_OPERATOR * final_units(&aggs);
     let ordered = ordered_keys(&aggs);
-    let selectivity: f64 = having.iter().map(|h| cost::selectivity(h)).product();
+    let selectivity = cost::list_selectivity(having.iter().copied());
     let having_cost = cost::qual_cost(having.iter().copied());
     let filter: Vec<Item<'q>> = having.iter().map(|h| Item::of(h)).collect();
     let c = input.cost;

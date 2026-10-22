@@ -26,6 +26,8 @@ const WHOLE_ROW_HEADER: i32 = 24;
 pub(crate) const EQ_SEL: f64 = 0.005;
 /// `DEFAULT_INEQ_SEL`.
 pub(crate) const INEQ_SEL: f64 = 1.0 / 3.0;
+/// `DEFAULT_RANGE_INEQ_SEL`.
+const RANGE_INEQ_SEL: f64 = 0.005;
 /// `DEFAULT_NUM_DISTINCT`.
 pub(crate) const NUM_DISTINCT: f64 = 200.0;
 /// `disable_cost`: the cost that a plan gets when the planner should use it only when it has no other plan.
@@ -128,7 +130,7 @@ pub(crate) fn selectivity(expr: &Expr) -> f64 {
 pub(crate) fn selectivity_by(expr: &Expr, eq: &dyn Fn(&Expr, &Expr) -> Option<f64>) -> f64 {
     let each = |e: &Expr| selectivity_by(e, eq);
     match &expr.kind {
-        ExprKind::Bool(BoolOp::And, args) => args.iter().map(each).product(),
+        ExprKind::Bool(BoolOp::And, args) => list_selectivity_by(args, eq),
         ExprKind::Bool(BoolOp::Or, args) => {
             args.iter().map(each).fold(0.0, |s1, s2| s1 + s2 - s1 * s2)
         }
@@ -148,6 +150,72 @@ pub(crate) fn selectivity_by(expr: &Expr, eq: &dyn Fn(&Expr, &Expr) -> Option<f6
             }
             None => INEQ_SEL,
         },
+    }
+}
+
+/// `clauselist_selectivity` with no statistics: the fraction of the rows that pass all the conditions.
+pub(crate) fn list_selectivity<'a>(quals: impl IntoIterator<Item = &'a Expr>) -> f64 {
+    list_selectivity_by(quals, &|_, _| None)
+}
+
+/// `clauselist_selectivity` with no statistics, with `eq` as [`selectivity_by`] reads it. The product of the selectivities of the conditions, but a low bound and a high bound of the same value, such as `x > 1 AND x < 5`, are a range, as `addRangeClause` finds them. Of two low bounds or two high bounds of a value, the smaller selectivity counts. With no statistics each bound has the default selectivity, so that a range has `DEFAULT_RANGE_INEQ_SEL`.
+pub(crate) fn list_selectivity_by<'a>(
+    quals: impl IntoIterator<Item = &'a Expr>,
+    eq: &dyn Fn(&Expr, &Expr) -> Option<f64>,
+) -> f64 {
+    let mut s1 = 1.0;
+    // The value of each range, with the selectivity of its low bound and of its high bound.
+    let mut ranges: Vec<(&Expr, Option<f64>, Option<f64>)> = Vec::new();
+    for expr in quals {
+        let s2 = selectivity_by(expr, eq);
+        let Some((value, low)) = range_bound(expr) else {
+            s1 *= s2;
+            continue;
+        };
+        let at = match ranges.iter().position(|(v, _, _)| v.same(value)) {
+            Some(at) => at,
+            None => {
+                ranges.push((value, None, None));
+                ranges.len() - 1
+            }
+        };
+        let (_, lo, hi) = &mut ranges[at];
+        let bound = if low { lo } else { hi };
+        *bound = Some(bound.map_or(s2, |b| b.min(s2)));
+    }
+    // `clauselist_selectivity` puts each new range first in its list.
+    for (_, lo, hi) in ranges.into_iter().rev() {
+        s1 *= match (lo, hi) {
+            (Some(_), Some(_)) => RANGE_INEQ_SEL,
+            (Some(s2), None) | (None, Some(s2)) => s2,
+            (None, None) => 1.0,
+        };
+    }
+    s1
+}
+
+/// The value of a condition that `clauselist_selectivity` puts in a range, with true when the condition is a low bound of the value: an operator `<`, `<=`, `>` or `>=` with the estimator `scalarltsel`, `scalarlesel`, `scalargtsel` or `scalargesel`, a value of one relation on one side and a value that reads no relation and calls no volatile function on the other side.
+fn range_bound(expr: &Expr) -> Option<(&Expr, bool)> {
+    // The geometric types, the ranges and the multiranges have other estimators for these operators.
+    const OTHER: [u32; 6] =
+        [oid::LSEG, oid::PATH, oid::BOX, oid::CIRCLE, oid::ANYRANGE, oid::ANYMULTIRANGE];
+    let (op, left, right) = exprs::binary(expr)?;
+    let row = builtin::operator_by_oid(op).filter(|row| !OTHER.contains(&row.left))?;
+    let less = match row.name {
+        "<" | "<=" => true,
+        ">" | ">=" => false,
+        _ => return None,
+    };
+    if exprs::relations(expr).len() != 1 {
+        return None;
+    }
+    let constant = |e: &Expr| exprs::relations(e).is_empty() && !exprs::volatile(e);
+    if constant(right) {
+        Some((left, !less))
+    } else if constant(left) {
+        Some((right, less))
+    } else {
+        None
     }
 }
 

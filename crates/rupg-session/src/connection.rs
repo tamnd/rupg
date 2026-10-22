@@ -5328,6 +5328,12 @@ mod tests {
     }
 
     /// `EXPLAIN` of the junk columns of the row marks: `FOR UPDATE` and `FOR SHARE` carry the `ctid` of each table of `FROM`, the `tableoid` of a table with an inheritance tree and the whole row of a function, and an `UPDATE` or a `DELETE` carries the `ctid` of each table other than its target. A whole-row column counts the header of its row in the width. `connection/plan_row_marks.test` is the output of PostgreSQL 19 for the same script in a new database.
+    /// `EXPLAIN` of a low bound and a high bound of the same value, such as `x > 1 AND x < 5` and `BETWEEN`, which `clauselist_selectivity` estimates as one range with the selectivity `DEFAULT_RANGE_INEQ_SEL`. The two sides of each bound are a value of one relation and a value that reads no relation and calls no volatile function. `connection/plan_range_pair.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_range_pair() {
+        big_stack(|| script(include_str!("connection/plan_range_pair.test")));
+    }
+
     #[test]
     fn plan_row_marks() {
         big_stack(|| script(include_str!("connection/plan_row_marks.test")));

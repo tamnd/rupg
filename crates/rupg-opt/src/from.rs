@@ -543,7 +543,7 @@ impl<'q> Builder<'q> {
                     .then(|| 1.0 / tuples)
             })
         };
-        let selectivity: f64 = quals.iter().map(|q| cost::selectivity_by(&q.expr, &eq)).product();
+        let selectivity = cost::list_selectivity_by(quals.iter().map(|q| &*q.expr), &eq);
         let rows = cost::clamp_rows(tuples * selectivity);
         stats.rows.insert(r, (tuples, rows));
         let mut node = Node::new(kind, level.scope, children);
@@ -562,7 +562,7 @@ fn members_scan<'q>(
     members: Vec<Member>,
     stats: &mut Stats,
 ) -> Rel<'q> {
-    let selectivity: f64 = quals.iter().map(|q| cost::selectivity(&q.expr)).product();
+    let selectivity = cost::list_selectivity(quals.iter().map(|q| &*q.expr));
     let per_row = cost::CPU_TUPLE + cost::qual_cost(quals.iter().map(|q| &*q.expr));
     let (mut tuples, mut rows) = (0.0, 0.0);
     let mut children = Vec::with_capacity(members.len());
@@ -1188,7 +1188,7 @@ fn join_rows(
         JoinKind::Full => rows = rows.max(left.node.cost.rows).max(right.node.cost.rows),
         _ => {}
     }
-    let filter_selectivity: f64 = filter.iter().map(|q| cost::selectivity(&q.expr)).product();
+    let filter_selectivity = cost::list_selectivity(filter.iter().map(|q| &*q.expr));
     cost::clamp_rows(rows * filter_selectivity)
 }
 
