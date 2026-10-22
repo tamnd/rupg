@@ -2,13 +2,15 @@
 
 use std::collections::HashMap;
 use std::ptr;
+use std::rc::Rc;
 
 use rupg_analyze::{Expr, SortGroup, SubLink, SubLinkKind};
 use rupg_plan::{Kind, Node, Plan, TARGET, Texts};
 use rupg_sql::nodes::FRAMEOPTION_NONDEFAULT;
 
 use super::{
-    Deparser, Error, Namespace, Result, SubName, builtin, quote_identifier, reg, sort_operators,
+    Deparser, Error, Namespace, Removed, Result, SubName, builtin, quote_identifier, reg,
+    sort_operators,
 };
 use crate::Session;
 
@@ -75,7 +77,7 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
             }
             spaces[s] = Some(d.namespace_in(scope.query, &mut used, true));
         }
-        let spaces = spaces
+        let mut spaces: Vec<Namespace> = spaces
             .into_iter()
             .enumerate()
             .map(|(s, space)| {
@@ -84,6 +86,7 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
                 })
             })
             .collect();
+        removed_scans(plan, &mut spaces);
         let mut windows: Vec<Vec<Option<String>>> =
             plan.scopes.iter().map(|s| vec![None; s.query.windows.len()]).collect();
         window_names(&plan.root, &mut windows);
@@ -121,6 +124,55 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
         d.window_names.clone_from(&self.windows[scope]);
         d.subplans.clone_from(&self.subplans);
         Ok(d)
+    }
+}
+
+/// The subqueries of `FROM` whose `Subquery Scan` the plan does not keep, as `trivial_subqueryscan` takes the scan out of the plan. A column of such a subquery shows the target of the subquery with the names of the subquery, so the inner subqueries come first. A subquery of a set operation does not count.
+fn removed_scans(plan: &Plan<'_>, spaces: &mut [Namespace]) {
+    let mut kept = Vec::new();
+    subquery_scans(&plan.root, &mut kept);
+    let chain = |s: usize| {
+        let mut out = vec![s];
+        while let Some(parent) =
+            out.last().and_then(|&at| plan.scopes.get(at)).and_then(|at| at.parent)
+        {
+            out.push(parent);
+        }
+        out.reverse();
+        out
+    };
+    let mut order: Vec<usize> = (0..plan.scopes.len()).collect();
+    order.sort_by_key(|&s| std::cmp::Reverse(chain(s).len()));
+    for s in order {
+        let scope = &plan.scopes[s];
+        let Some(parent) = scope.parent.filter(|_| scope.leaf.is_none()) else { continue };
+        let outer = plan.scopes[parent].query;
+        if outer.set_op.is_some() {
+            continue;
+        }
+        let of = |rel: &rupg_analyze::Relation| {
+            rel.subquery.as_deref().is_some_and(|q| ptr::eq(q, scope.query))
+        };
+        let Some(r) = outer.relations.iter().position(of) else { continue };
+        if kept.contains(&(parent, r)) {
+            continue;
+        }
+        let namespaces = chain(s).into_iter().map(|at| spaces[at].clone()).collect();
+        let targets = scope.query.targets.iter().map(|t| t.expr.clone()).collect();
+        spaces[parent].removed.push((r, Rc::new(Removed { namespaces, targets })));
+    }
+}
+
+/// The scope and the relation of each `Subquery Scan` of the plan.
+fn subquery_scans(node: &Node<'_>, out: &mut Vec<(usize, usize)>) {
+    if let Kind::SubqueryScan(r) = node.kind {
+        out.push((node.scope, r));
+    }
+    for child in &node.children {
+        subquery_scans(child, out);
+    }
+    for sub in node.init_plans.iter().chain(&node.sub_plans) {
+        subquery_scans(&sub.plan, out);
     }
 }
 

@@ -9,12 +9,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rupg_analyze::{
     BoolOp, BoolTest, Expr, ExprKind, FromItem, JoinKind, Query, Relation, SortGroup, Var,
+    expand_grouping_sets,
 };
 use rupg_pgcatalog::builtin;
 use rupg_plan::{Cost, Item, Kind, Node, Replaced, SortKey};
 use rupg_types::{Value, oid};
 
-use crate::{Builder, Level, Member, cost, exprs, pullup, upper};
+use crate::{Builder, Level, Member, cost, exprs, upper};
 use paths::Paths;
 
 /// The plans of the rows of `FROM` that `add_path` keeps, each with the order of its rows.
@@ -452,6 +453,8 @@ impl<'q> Builder<'q> {
         let quals = order_quals(quals);
         let mut per_row = cost::CPU_TUPLE + cost::qual_cost(quals.iter().map(|q| &*q.expr));
         let mut children = Vec::new();
+        // `cost_subqueryscan`: the cost of the subquery as it is, to which the scan adds its own cost.
+        let mut sub_total = None;
         let (kind, startup, run, tuples) = match &relation.cte {
             Some(cte) if cte.work.is_some() => {
                 // `cost_ctescan`: one more `cpu_tuple_cost` for each row of the tuplestore.
@@ -477,6 +480,20 @@ impl<'q> Builder<'q> {
                     if quals.is_empty() && trivial_target(level.query, r, sub) {
                         per_row = 0.0;
                     }
+                    let keys = distinct_keys(sub);
+                    if !keys.is_empty() {
+                        stats.distinct.entry(r).or_default().extend(keys);
+                    }
+                    // `examine_simple_variable`: the one item of `DISTINCT`, or with no `DISTINCT` the one item of `GROUP BY`, is unique.
+                    let items = if sub.distinct.is_empty() { &sub.group } else { &sub.distinct };
+                    if let [item] = items.as_slice()
+                        && sub.set_op.is_none()
+                        && sub.grouping_sets.is_empty()
+                        && let Ok(at) = i16::try_from(item.target + 1)
+                    {
+                        stats.unique.insert((r, at));
+                    }
+                    sub_total = Some(c.total);
                     (Kind::SubqueryScan(r), c.startup, c.total - c.startup, c.rows)
                 }
                 (None, Some(function), _) => {
@@ -556,18 +573,82 @@ impl<'q> Builder<'q> {
         let mut node = Node::new(kind, level.scope, children);
         node.filter = quals.iter().map(|q| q.item()).collect();
         let width = stats.width(&BTreeSet::from([r]));
-        node.cost = Cost { startup, total: startup + run + tuples * per_row, rows, width };
+        let total = sub_total.unwrap_or(startup + run) + tuples * per_row;
+        node.cost = Cost { startup, total, rows, width };
         Rel { node, rels: BTreeSet::from([r]), order: Vec::new() }
     }
 }
 
-/// `trivial_pathtarget` of `set_subquery_pathlist`: the query reads each column of the subquery of the relation `r` and not its whole row, and the subquery has no junk column.
+/// `trivial_pathtarget` of `set_subquery_pathlist`: the columns of the relation `r` that the plan reads above the scan are each column of the subquery in order. The plan reads them in the order that they first come in the targets and in `HAVING`, as `build_base_rel_tlists` adds them, then in the conditions of the joins.
 fn trivial_target(query: &Query, r: usize, sub: &Query) -> bool {
-    let used = pullup::used(query, r);
-    let columns = query.relations[r].columns.len();
-    sub.targets.len() == columns
-        && !used.contains(&0)
-        && (1..=columns).all(|at| used.iter().any(|u| usize::try_from(*u).ok() == Some(at)))
+    let mut columns = Vec::new();
+    for target in &query.targets {
+        exprs::columns_at(&target.expr, 0, &mut columns);
+    }
+    if let Some(having) = &query.having {
+        exprs::columns_at(having, 0, &mut columns);
+    }
+    let mut quals = Vec::new();
+    for item in &query.from {
+        join_conditions(item, &mut quals);
+    }
+    if let Some(filter) = &query.filter {
+        exprs::and_parts(filter, &mut quals);
+    }
+    for qual in quals.into_iter().filter(|q| exprs::relations(q).len() > 1) {
+        exprs::columns_at(qual, 0, &mut columns);
+    }
+    let attnums: Vec<i16> = columns
+        .iter()
+        .filter_map(|c| match c.kind {
+            ExprKind::Var(v) if v.relation == r => Some(v.attnum),
+            _ => None,
+        })
+        .collect();
+    attnums.len() == sub.targets.len() && attnums.iter().zip(1..).all(|(a, at)| *a == at)
+}
+
+/// The parts of the conditions of the joins of an item of `FROM`, the joins below first.
+fn join_conditions<'q>(item: &'q FromItem, out: &mut Vec<&'q Expr>) {
+    let FromItem::Join(join) = item else { return };
+    join_conditions(&join.left, out);
+    join_conditions(&join.right, out);
+    if let Some(on) = &join.on {
+        exprs::and_parts(on, out);
+    }
+}
+
+/// `query_is_distinct_for`: the sets of the columns of a subquery that it gives once each, as column numbers. The query gives each row once on the items of `DISTINCT`, or of `DISTINCT ON` with no function that gives a set. With no function that gives a set, it also gives each row once on the items of `GROUP BY`, or on no column when it makes one group with no `GROUP BY` or with one grouping set or `GROUP BY DISTINCT` of empty sets, and a set operation with no `ALL` gives each row once on all its columns.
+fn distinct_keys(sub: &Query) -> Vec<Vec<i16>> {
+    let attnum = |at: usize| i16::try_from(at + 1).unwrap_or(i16::MAX);
+    let mut out = Vec::new();
+    let srfs = sub.has_target_srfs();
+    if !sub.distinct.is_empty() && !(srfs && sub.distinct_on) {
+        out.push(sub.distinct.iter().map(|d| attnum(d.target)).collect());
+    }
+    if srfs {
+        return out;
+    }
+    if sub.grouping_sets.is_empty() {
+        if !sub.group.is_empty() {
+            out.push(sub.group.iter().map(|g| attnum(g.target)).collect());
+        } else if sub.grouped {
+            out.push(Vec::new());
+        }
+    } else if sub.group.is_empty()
+        && (sub.group_distinct
+            || expand_grouping_sets(&sub.grouping_sets, false, usize::MAX)
+                .is_some_and(|sets| sets.len() == 1))
+    {
+        out.push(Vec::new());
+    }
+    if let Some(op) = &sub.set_op
+        && !op.all
+    {
+        let columns = sub.targets.iter().enumerate().filter(|(_, t)| !t.junk);
+        out.push(columns.map(|(at, _)| attnum(at)).collect());
+    }
+    out
 }
 
 /// `set_append_rel_size` and `create_append_plan`: the scans of the members of the inheritance tree of the relation `r`, under an `Append` when there are two or more, each with the conditions of the relation. With no member the relation is a `Result` with no rows, as `set_dummy_rel_pathlist`.
@@ -1261,7 +1342,7 @@ fn choose<'q>(
         for candidate in candidates {
             let (outer, inner) = (&outers[candidate.paths.0], &inners[candidate.paths.1]);
             let keys = stats.useful(&rels, &candidate.order(outer, inner, quals));
-            out.push((Candidate { swapped, ..candidate }, keys));
+            out.push((Candidate { swapped, unique: unique.is_some(), ..candidate }, keys));
         }
     }
     out
@@ -1349,6 +1430,9 @@ fn semifactors(
     stats: &Stats,
 ) -> Option<(f64, f64)> {
     let [r] = inner.rels.iter().copied().collect::<Vec<_>>()[..] else { return None };
+    if quals.is_empty() {
+        return None;
+    }
     let indexes = stats.distinct.get(&r)?;
     let (clauses, _) = split(quals, &outer.rels, &inner.rels, exprs::can_merge);
     let columns: BTreeSet<i16> = clauses
@@ -1357,7 +1441,7 @@ fn semifactors(
         .filter(|v| v.levels_up == 0 && v.relation == r)
         .map(|v| v.attnum)
         .collect();
-    if !indexes.iter().any(|keys| !keys.is_empty() && keys.iter().all(|k| columns.contains(k))) {
+    if !indexes.iter().any(|keys| keys.iter().all(|k| columns.contains(k))) {
         return None;
     }
     let selectivity: f64 = quals.iter().map(|q| join_selectivity(q, stats)).product();
@@ -1383,6 +1467,8 @@ struct Candidate<'q> {
     keys: Vec<MergeKey>,
     /// The plans of the outer side and of the inner side that the join reads, as indexes into the plans of each side, where the plan with the lowest total cost is 0.
     paths: (usize, usize),
+    /// `inner_unique`: each outer row matches one inner row at most.
+    unique: bool,
     _marker: std::marker::PhantomData<&'q ()>,
 }
 
@@ -1441,6 +1527,7 @@ fn nested_loops<'q>(input: &Input<'_, 'q>, join: JoinKind, lateral: bool) -> Vec
             sort: (false, false),
             keys: Vec::new(),
             paths: (0, 0),
+            unique: false,
             _marker: std::marker::PhantomData,
         });
     }
@@ -1568,6 +1655,7 @@ fn hash_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>>
         sort: (false, false),
         keys: Vec::new(),
         paths: (0, 0),
+        unique: false,
         _marker: std::marker::PhantomData,
     })
 }
@@ -1770,6 +1858,7 @@ fn merge_join<'q>(
         sort: (sort_outer, sort_inner),
         keys,
         paths: (0, 0),
+        unique: false,
         _marker: std::marker::PhantomData,
     })
 }
@@ -1880,6 +1969,7 @@ impl<'q> Candidate<'q> {
         };
         let mut node = node;
         node.cost = Cost { startup: self.startup, total: self.total, rows, width: 0 };
+        node.inner_unique = self.unique;
         Rel { node, rels: BTreeSet::new(), order }
     }
 }

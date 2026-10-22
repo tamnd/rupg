@@ -112,6 +112,8 @@ pub struct Node<'q> {
     pub sub_plans: Vec<SubPlan<'q>>,
     /// The OID of the table of a scan of a member of an inheritance tree, which the scan reads in place of the table of its relation.
     pub member: Option<u32>,
+    /// `inner_unique`: for a join, true when each row of the outer side matches one row of the inner side at most.
+    pub inner_unique: bool,
 }
 
 impl<'q> Node<'q> {
@@ -127,6 +129,7 @@ impl<'q> Node<'q> {
             init_plans: Vec::new(),
             sub_plans: Vec::new(),
             member: None,
+            inner_unique: false,
         }
     }
 }

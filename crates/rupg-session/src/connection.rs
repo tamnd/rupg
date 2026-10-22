@@ -5327,6 +5327,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_redundant_keys.test")));
     }
 
+    /// `EXPLAIN` of the columns of a subquery of `FROM` whose `Subquery Scan` the plan does not keep, as `trivial_subqueryscan` takes it out. A node above it reads the target list of the plan of the subquery, so a column shows the target of the subquery with the names of the subquery, as `get_variable` finds it for `OUTER_VAR`, and a target that is not a column gets parentheses. `connection/plan_removed_scan.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_removed_scan() {
+        big_stack(|| script(include_str!("connection/plan_removed_scan.test")));
+    }
+
     /// `EXPLAIN` of the conditions of `WHERE` on a subquery of `FROM` that the planner moves into the subquery, as `set_subquery_pathlist` and `subquery_push_qual`: a condition joins the `WHERE` of the subquery, or its `HAVING` when the subquery makes groups. A condition stays outside a subquery with `LIMIT`, a condition on a column of a window function, on a column that is not an item of `DISTINCT ON` or of `PARTITION BY`, on a column that calls a volatile function or a function that gives a set, and a condition with a volatile function on a subquery with `DISTINCT`. An outer join that a condition makes an inner join is an inner join before the condition moves, as `reduce_outer_joins`, and a `Subquery Scan` with no condition that gives each column of its subquery costs its subquery, as `cost_subqueryscan`. `connection/plan_subquery_pushdown.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_subquery_pushdown() {

@@ -574,7 +574,8 @@ fn aggregate<'q>(
         let ordered = level.stats.canonical(ordered, |k| &*k.item.expr);
         let input = sort_if(level, input, ordered, order, None, only)?;
         let c = input.cost;
-        let startup = c.total + cost::CPU_OPERATOR * n * units + finals;
+        // `cost_agg` adds the costs in this order, which the rounding of the sums follows.
+        let startup = c.total + cost::CPU_OPERATOR * units * n + finals;
         let total = startup + cost::CPU_TUPLE + having_cost;
         let mut node = Node::new(
             Kind::Aggregate { strategy: Strategy::Plain, keys: Vec::new(), sets: Vec::new() },
@@ -607,12 +608,14 @@ fn aggregate<'q>(
         let (startup, total) = sort_cost(level, c, &sort_keys, count, None);
         (Cost { startup, total, ..c }, sorted_order(&sort_keys))
     };
+    // `cost_agg`: the transition cost, then the cost of the keys, which the rounding of the sums follows.
     let sorted_total = sorted_input.total
-        + cost::CPU_OPERATOR * n * (nkeys + units)
+        + cost::CPU_OPERATOR * units * n
+        + cost::CPU_OPERATOR * nkeys * n
         + finals * groups
         + cost::CPU_TUPLE * groups
         + having_cost * groups;
-    let hash_startup = c.total + cost::CPU_OPERATOR * n * (nkeys + units);
+    let hash_startup = c.total + cost::CPU_OPERATOR * units * n + cost::CPU_OPERATOR * nkeys * n;
     let hash_total =
         hash_startup + finals * groups + cost::CPU_TUPLE * groups + having_cost * groups;
     if !only && hashable && hash_total * 1.01 < sorted_total {
