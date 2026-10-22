@@ -11,6 +11,9 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Fixed
 
+- The names of the columns of a `Subquery Scan` that the plan does not keep in `EXPLAIN`. A node above the scan shows the expression of the subquery, such as `b.x` or `(count(*))`, in place of `s.x`, as `get_variable` of PostgreSQL finds it through the target list of the node below (#551).
+- `Inner Unique: true` in `EXPLAIN VERBOSE`, and the cost of a join whose inner side is a subquery that gives each row once on the columns of the join, as `innerrel_is_unique` and `query_is_distinct_for` of PostgreSQL find it. The subquery has `DISTINCT`, `GROUP BY`, an aggregate call with no `GROUP BY`, or a set operation with no `ALL` (#551).
+- The cost of a `Subquery Scan` whose columns the query reads in a different order from the subquery, such as `SELECT n, x FROM (SELECT x, count(*) AS n ...) s`. `set_subquery_pathlist` of PostgreSQL finds the target of the scan trivial only when it gives each column of the subquery in order (#551).
 - The cost of a `Subquery Scan` that has no condition and gives each column of its subquery in `EXPLAIN`. `cost_subqueryscan` of PostgreSQL gives it the cost of its subquery, because the plan does not keep the node (#550).
 - The cost of the subplans that run once in `EXPLAIN`, as `SS_charge_for_initplans` of PostgreSQL adds it to the start cost and the total cost of the top node of the query. Each `InitPlan` and each `CTE` costs its plan, and an `InitPlan` of `EXISTS` costs its first row (#549).
 - The cost of a `CTE Scan` and of a `WorkTable Scan` in `EXPLAIN`. `cost_ctescan` of PostgreSQL charges two `cpu_tuple_cost` for each row (#549).

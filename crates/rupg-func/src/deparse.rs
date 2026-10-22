@@ -11,6 +11,7 @@ pub use explain::explain;
 pub use query::view_statement;
 
 use std::ptr;
+use std::rc::Rc;
 
 use rupg_analyze::node::{StoredBound, StoredDatum};
 use rupg_analyze::{
@@ -64,6 +65,17 @@ struct Namespace {
     joins: Vec<JoinNames>,
     /// The joins, by their index in `joins`, that the deparse shows now. A column of a relation of such a join shows the name of its relation, not the name of the join.
     inside: Vec<usize>,
+    /// The subqueries of `FROM`, by the index of the relation, whose `Subquery Scan` the plan does not keep. A node above reads the target list of the plan of the subquery.
+    removed: Vec<(usize, Rc<Removed>)>,
+}
+
+/// The target list of the plan of a subquery whose `Subquery Scan` the plan does not keep, as `trivial_subqueryscan` takes the scan out of the plan.
+#[derive(Debug)]
+struct Removed {
+    /// The names of the subquery and of the queries outside it, the query outside first.
+    namespaces: Vec<Namespace>,
+    /// The targets of the subquery.
+    targets: Vec<Expr>,
 }
 
 /// The names of a join and of its columns, as `deparse_columns` for an entry of a join.
@@ -141,6 +153,7 @@ impl<'a> Deparser<'a> {
             relations: Vec::new(),
             joins: Vec::new(),
             inside: Vec::new(),
+            removed: Vec::new(),
         });
         d
     }
@@ -197,6 +210,25 @@ impl<'a> Deparser<'a> {
         };
         let attname =
             attname.ok_or_else(|| Error::internal(format!("invalid attnum {}", var.attnum)))?;
+        // A column of a `Subquery Scan` that the plan does not keep is the target of the plan of the subquery, as `get_variable` finds it for `OUTER_VAR`. A target that is not a column gets parentheses.
+        let removed = space.removed.iter().find(|(r, _)| *r == var.relation);
+        if let Some(removed) = removed.map(|(_, removed)| Rc::clone(removed))
+            && let Ok(at @ 1..) = usize::try_from(var.attnum)
+            && let Some(target) = removed.targets.get(at - 1)
+        {
+            let outer = std::mem::replace(&mut self.namespaces, removed.namespaces.clone());
+            let parens = !matches!(target.kind, ExprKind::Var(_));
+            if parens {
+                self.buf.push('(');
+            }
+            let done = self.expr(target, true);
+            if parens {
+                self.buf.push(')');
+            }
+            self.namespaces = outer;
+            done?;
+            return Ok(attname);
+        }
         let mut prefix = self.prefix || (self.outer_prefix && var.levels_up > 0);
         if in_order_by && !self.in_group_by && !prefix {
             prefix = self.outputs.iter().any(|(name, v)| *name == attname && *v != Some(*var));

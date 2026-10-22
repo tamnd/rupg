@@ -1,0 +1,183 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE b (x int, y int);
+CREATE TABLE
+> CREATE TABLE c (x int, z text);
+CREATE TABLE
+> EXPLAIN SELECT * FROM c LEFT JOIN (SELECT DISTINCT x FROM b) s ON c.x = s.x WHERE s.x > 1;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=44.59..70.69 rows=1257 width=40)
+row   Hash Cond: (c.x = b.x)
+row   ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Hash  (cost=42.11..42.11 rows=198 width=4)
+row         ->  HashAggregate  (cost=40.13..42.11 rows=198 width=4)
+row               Group Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=4)
+row                     Filter: (x > 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM c FULL JOIN (SELECT DISTINCT x FROM b) s ON c.x = s.x WHERE s.x > 1;
+fields QUERY PLAN:25:-1:-1
+row Hash Right Join  (cost=44.59..70.69 rows=1257 width=40)
+row   Hash Cond: (c.x = b.x)
+row   ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Hash  (cost=42.11..42.11 rows=198 width=4)
+row         ->  HashAggregate  (cost=40.13..42.11 rows=198 width=4)
+row               Group Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=4)
+row                     Filter: (x > 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM c, (SELECT x, count(*) AS n FROM b GROUP BY x) s WHERE c.x = s.x AND s.x > 1;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=46.47..72.57 rows=1257 width=48)
+row   Hash Cond: (c.x = b.x)
+row   ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Hash  (cost=43.99..43.99 rows=198 width=12)
+row         ->  HashAggregate  (cost=42.02..43.99 rows=198 width=12)
+row               Group Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=4)
+row                     Filter: (x > 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM c, (SELECT DISTINCT x FROM b) s WHERE s.x > c.x;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=38.25..3873.45 rows=84667 width=40)
+row   Join Filter: (b.x > c.x)
+row   ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Materialize  (cost=38.25..41.25 rows=200 width=4)
+row         ->  HashAggregate  (cost=38.25..40.25 rows=200 width=4)
+row               Group Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c LEFT JOIN (SELECT DISTINCT x FROM b) s ON true WHERE s.x IS NULL;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join  (cost=38.25..3238.45 rows=1270 width=40)
+row   Filter: (b.x IS NULL)
+row   ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Materialize  (cost=38.25..41.25 rows=200 width=4)
+row         ->  HashAggregate  (cost=38.25..40.25 rows=200 width=4)
+row               Group Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c, (SELECT x, count(*) AS n FROM b GROUP BY x) s WHERE c.x = s.n;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=48.40..118.72 rows=1270 width=48)
+row   Hash Cond: (c.x = (count(*)))
+row   ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Hash  (cost=45.90..45.90 rows=200 width=12)
+row         ->  HashAggregate  (cost=43.90..45.90 rows=200 width=12)
+row               Group Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT * FROM (SELECT DISTINCT x, y FROM b) t ORDER BY y) s WHERE x > 1;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=52.89..53.44 rows=222 width=8)
+row   Sort Key: b.y
+row   ->  HashAggregate  (cost=42.02..44.23 rows=222 width=8)
+row         Group Key: b.x, b.y
+row         ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=8)
+row               Filter: (x > 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT DISTINCT x FROM b) s ORDER BY x;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=47.89..48.39 rows=200 width=4)
+row   Sort Key: b.x
+row   ->  HashAggregate  (cost=38.25..40.25 rows=200 width=4)
+row         Group Key: b.x
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT x, count(*) AS n FROM b GROUP BY x) s ORDER BY n;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=53.54..54.04 rows=200 width=12)
+row   Sort Key: (count(*))
+row   ->  HashAggregate  (cost=43.90..45.90 rows=200 width=12)
+row         Group Key: b.x
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN VERBOSE SELECT * FROM c, (SELECT x, count(*) AS n FROM b GROUP BY x) s WHERE c.x = s.x;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=48.40..74.50 rows=1270 width=48)
+row   Output: c.x, c.z, b.x, (count(*))
+row   Inner Unique: true
+row   Hash Cond: (c.x = b.x)
+row   ->  Seq Scan on public.c  (cost=0.00..22.70 rows=1270 width=36)
+row         Output: c.x, c.z
+row   ->  Hash  (cost=45.90..45.90 rows=200 width=12)
+row         Output: b.x, (count(*))
+row         ->  HashAggregate  (cost=43.90..45.90 rows=200 width=12)
+row               Output: b.x, count(*)
+row               Group Key: b.x
+row               ->  Seq Scan on public.b  (cost=0.00..32.60 rows=2260 width=4)
+row                     Output: b.x, b.y
+EXPLAIN
+> EXPLAIN SELECT x, count(*) FROM (SELECT DISTINCT x, y FROM b) s GROUP BY x;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=49.55..51.55 rows=200 width=12)
+row   Group Key: b.x
+row   ->  HashAggregate  (cost=43.90..46.16 rows=226 width=8)
+row         Group Key: b.x, b.y
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM c JOIN (SELECT x, sum(y) AS t FROM b GROUP BY x) s ON c.x = s.x JOIN (SELECT DISTINCT y FROM b) u ON u.y = s.t;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=91.15..120.65 rows=1270 width=52)
+row   Hash Cond: ((sum(b.y)) = b_1.y)
+row   ->  Hash Join  (cost=48.40..74.50 rows=1270 width=48)
+row         Hash Cond: (c.x = b.x)
+row         ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row         ->  Hash  (cost=45.90..45.90 rows=200 width=12)
+row               ->  HashAggregate  (cost=43.90..45.90 rows=200 width=12)
+row                     Group Key: b.x
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=40.25..40.25 rows=200 width=4)
+row         ->  HashAggregate  (cost=38.25..40.25 rows=200 width=4)
+row               Group Key: b_1.y
+row               ->  Seq Scan on b b_1  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN VERBOSE SELECT n, x FROM (SELECT x, count(*) AS n FROM b GROUP BY x) s ORDER BY x;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=55.54..56.04 rows=200 width=12)
+row   Output: s.n, s.x
+row   Sort Key: s.x
+row   ->  Subquery Scan on s  (cost=43.90..47.90 rows=200 width=12)
+row         Output: s.n, s.x
+row         ->  HashAggregate  (cost=43.90..45.90 rows=200 width=12)
+row               Output: b.x, count(*)
+row               Group Key: b.x
+row               ->  Seq Scan on public.b  (cost=0.00..32.60 rows=2260 width=4)
+row                     Output: b.x, b.y
+EXPLAIN
+> EXPLAIN VERBOSE SELECT * FROM c LEFT JOIN (SELECT DISTINCT x FROM b) s ON c.x = s.x;
+fields QUERY PLAN:25:-1:-1
+row Hash Left Join  (cost=42.75..68.85 rows=1270 width=40)
+row   Output: c.x, c.z, b.x
+row   Inner Unique: true
+row   Hash Cond: (c.x = b.x)
+row   ->  Seq Scan on public.c  (cost=0.00..22.70 rows=1270 width=36)
+row         Output: c.x, c.z
+row   ->  Hash  (cost=40.25..40.25 rows=200 width=4)
+row         Output: b.x
+row         ->  HashAggregate  (cost=38.25..40.25 rows=200 width=4)
+row               Output: b.x
+row               Group Key: b.x
+row               ->  Seq Scan on public.b  (cost=0.00..32.60 rows=2260 width=4)
+row                     Output: b.x, b.y
+EXPLAIN
+> EXPLAIN SELECT * FROM c JOIN (SELECT count(*) AS n FROM b) s ON c.x = s.n;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=38.27..64.37 rows=6 width=44)
+row   Hash Cond: (c.x = (count(*)))
+row   ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Hash  (cost=38.26..38.26 rows=1 width=8)
+row         ->  Aggregate  (cost=38.25..38.26 rows=1 width=8)
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=0)
+EXPLAIN
+> EXPLAIN SELECT * FROM c JOIN (SELECT x, y FROM b GROUP BY x, y) s ON c.x = s.x;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=48.99..125.72 rows=1435 width=44)
+row   Hash Cond: (c.x = b.x)
+row   ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Hash  (cost=46.16..46.16 rows=226 width=8)
+row         ->  HashAggregate  (cost=43.90..46.16 rows=226 width=8)
+row               Group Key: b.x, b.y
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
