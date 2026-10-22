@@ -116,6 +116,8 @@ pub struct Node<'q> {
     pub member: Option<u32>,
     /// `inner_unique`: for a join, true when each row of the outer side matches one row of the inner side at most.
     pub inner_unique: bool,
+    /// True when a setting `enable_*` turns off the kind of the node, so that the `disabled_nodes` of the node is more than the sum of its children, as `plan_is_disabled` finds it.
+    pub disabled: bool,
 }
 
 impl<'q> Node<'q> {
@@ -132,7 +134,13 @@ impl<'q> Node<'q> {
             sub_plans: Vec::new(),
             member: None,
             inner_unique: false,
+            disabled: false,
         }
+    }
+
+    /// `disabled_nodes`: the disabled nodes of the node and of the nodes below it.
+    pub fn disabled_nodes(&self) -> u32 {
+        self.children.iter().map(Node::disabled_nodes).sum::<u32>() + u32::from(self.disabled)
     }
 }
 

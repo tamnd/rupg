@@ -4,7 +4,7 @@ use rupg_analyze::{Expr, ExprKind, Query, SetKind, SetOp, SetTree};
 use rupg_pgcatalog::builtin;
 use rupg_plan::{Cost, Item, Kind, Node, SortKey};
 
-use crate::from::paths::Paths;
+use crate::from::paths::{Paths, costs};
 use crate::from::{self, OrderKey, Stats};
 use crate::{Builder, Level, cost, pullup, upper};
 
@@ -123,7 +123,7 @@ pub(crate) fn sorted<'q>(
     }
     let mut paths = Paths::new(false);
     for (i, (node, _)) in finals.iter().enumerate() {
-        paths.add(node.cost.startup, node.cost.total, Vec::new(), i);
+        paths.add(costs(node), Vec::new(), i);
     }
     if paths.fractional(0.0, |&i| finals[i].0.cost.rows).is_some_and(|i| finals[i].1) {
         return Sorted::Cheapest;
@@ -259,10 +259,10 @@ impl<'q> Builder<'q> {
         let order = order(level.query, op);
         let mut paths = Paths::new(top && level.fraction > 0.0);
         if hashable && (fits || !sortable) {
-            paths.add(hashed.startup, hashed.total, Vec::new(), false);
+            paths.add((0, hashed.startup, hashed.total), Vec::new(), false);
         }
         if sortable || !hashable {
-            paths.add(sorted.startup, sorted.total, order, true);
+            paths.add((0, sorted.startup, sorted.total), order, true);
         }
         let scope = left.scope;
         let make = |sorted_strategy: bool, children: Vec<Node<'q>>, c: Cost| {

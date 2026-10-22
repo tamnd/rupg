@@ -19,7 +19,7 @@ use rupg_types::{Value, oid};
 
 use crate::{Builder, Index, Level, Member, cost, exprs, pullup, upper};
 use index::Param;
-use paths::Paths;
+use paths::{Paths, costs};
 
 /// The plans of the rows of `FROM` that `add_path` keeps, each with the order of its rows.
 pub(crate) type Plans<'q> = Vec<(Node<'q>, Vec<OrderKey>)>;
@@ -748,6 +748,7 @@ impl<'q> Builder<'q> {
             None => startup + (run + tuples * per_row),
         };
         node.cost = Cost { startup, total, rows, width };
+        node.disabled = matches!(node.kind, Kind::SeqScan(_)) && !crate::enable().seqscan;
         let seq = Rel { node, rels: BTreeSet::from([r]), order: Vec::new() };
         if let Some(append) = appended {
             return append.plans(level, r, seq, stats);
@@ -762,9 +763,9 @@ impl<'q> Builder<'q> {
         let stored = Base { pages, tuples, rows, quals: base, indexes: indexes.clone() };
         self.bases.insert((level.scope, r), stored);
         let mut paths = Paths::new(stats.startup);
-        paths.add(startup, total, Vec::new(), seq);
+        paths.add(costs(&seq.node), Vec::new(), seq);
         for rel in index::paths(level, &table, &indexes, stats) {
-            paths.add(rel.node.cost.startup, rel.node.cost.total, rel.order.clone(), rel);
+            paths.add(costs(&rel.node), rel.order.clone(), rel);
         }
         paths.kept()
     }
@@ -930,6 +931,7 @@ fn members_scan<'q>(
         let n = cost::clamp_rows(count * selectivity);
         let total = pages * cost::SEQ_PAGE + count * per_row;
         node.cost = Cost { startup: 0.0, total, rows: n, width: 0 };
+        node.disabled = !crate::enable().seqscan;
         tuples += count;
         rows += n;
         children.push(node);
@@ -1662,6 +1664,7 @@ pub(crate) fn sort<'q>(child: Node<'q>, keys: Vec<SortKey<'q>>, bound: Option<f6
     let (startup, total) = cost::sort((c.startup, c.total), c.rows, c.width, bound);
     let mut node = Node::new(Kind::Sort(keys), child.scope, vec![child]);
     node.cost = Cost { startup, total, ..c };
+    node.disabled = !crate::enable().sort;
     node
 }
 
@@ -1746,7 +1749,7 @@ fn join_rels<'q>(
     let mut paths = Paths::new(stats.startup);
     let found = choose(level, kind, &left, &right, &quals, &filter, stats, Part::Plain, (&[], &[]));
     for (candidate, keys) in found {
-        paths.add(candidate.startup, candidate.total, keys, candidate);
+        paths.add((candidate.disabled, candidate.startup, candidate.total), keys, candidate);
     }
     let kept = paths.kept();
     let mut out: Vec<Rel<'q>> = if kept.is_empty() {
@@ -1798,14 +1801,16 @@ fn semi_rels<'q>(
     let part = Part::Semi(fraction);
     let found = choose(level, kind, &left, &right, &quals, &filter, stats, part, (&[], &[]));
     for (candidate, keys) in found {
-        paths.add(candidate.startup, candidate.total, keys, (candidate, false));
+        let cost = (candidate.disabled, candidate.startup, candidate.total);
+        paths.add(cost, keys, (candidate, false));
     }
     if let Some(unique) = &unique {
         let part = Part::Unique(fraction, true);
         let inner = JoinKind::Inner;
         let found = choose(level, inner, &left, unique, &quals, &filter, stats, part, (&[], &[]));
         for (candidate, keys) in found {
-            paths.add(candidate.startup, candidate.total, keys, (candidate, true));
+            let cost = (candidate.disabled, candidate.startup, candidate.total);
+            paths.add(cost, keys, (candidate, true));
         }
     }
     let kept = paths.kept();
@@ -1895,7 +1900,7 @@ fn unique_rels<'q>(semi: &Semi<'q>, side: &[Rel<'q>], stats: &Stats) -> Option<V
             let total = c.total + cost::CPU_OPERATOR * c.rows * n;
             node.cost = Cost { startup: c.startup, total, rows: groups, width: c.width };
             let rel = Rel { node, rels: rel.rels.clone(), order: order.clone() };
-            paths.add(c.startup, total, order.clone(), rel);
+            paths.add(costs(&rel.node), order.clone(), rel);
         }
     }
     if semi.hash {
@@ -1910,7 +1915,7 @@ fn unique_rels<'q>(semi: &Semi<'q>, side: &[Rel<'q>], stats: &Stats) -> Option<V
         let mut node = Node::new(kind, input.scope, vec![input]);
         node.cost = Cost { startup, total, rows: groups, width };
         let rel = Rel { node, rels: cheapest.rels.clone(), order: Vec::new() };
-        paths.add(startup, total, Vec::new(), rel);
+        paths.add(costs(&rel.node), Vec::new(), rel);
     }
     Some(paths.kept())
 }
@@ -2073,7 +2078,10 @@ fn choose<'q>(
             true => params.0,
             false => params.1,
         };
-        let merge = join != JoinKind::RightSemi;
+        // `add_paths_to_joinrel`: a setting that turns off merge joins or hash joins takes them away, but a full join keeps them, as it may have no other plan. A nested loop with a `Material` node needs nested loops.
+        let enable = crate::enable();
+        let full = join == JoinKind::Full;
+        let merge = join != JoinKind::RightSemi && (enable.mergejoin || full);
         let mut candidates: Vec<Candidate<'q>> = Vec::new();
         if merge {
             candidates.extend(sorted_merge(&input, join));
@@ -2084,7 +2092,8 @@ fn choose<'q>(
             let mut each = Vec::new();
             if nested {
                 let mut loops = nested_loops(&input, join, lateral_right);
-                let material = (loops.len() > 1).then(|| loops.remove(1));
+                let material =
+                    (loops.len() > 1).then(|| loops.remove(1)).filter(|_| enable.nestloop);
                 each.extend(loops);
                 for (i, param) in inner_params.iter().enumerate() {
                     if param.outer.is_subset(&outer.rels) {
@@ -2098,11 +2107,20 @@ fn choose<'q>(
             }
             candidates.extend(each.into_iter().map(|c| Candidate { paths: (p, c.paths.1), ..c }));
         }
-        candidates.extend(hash_join(&input, join));
+        if enable.hashjoin || full {
+            candidates.extend(hash_join(&input, join));
+        }
         for candidate in candidates {
             let (outer, inner) = (&outers[candidate.paths.0], &inners[candidate.paths.1]);
             let keys = stats.useful(&rels, &candidate.order(outer, inner, quals));
-            out.push((Candidate { swapped, unique: inner_unique, ..candidate }, keys));
+            let inner_node = match candidate.param {
+                Some(i) => &inner_params[i].rel.node,
+                None => &inner.node,
+            };
+            let disabled = candidate.own_disabled()
+                + outer.node.disabled_nodes()
+                + inner_node.disabled_nodes();
+            out.push((Candidate { swapped, unique: inner_unique, disabled, ..candidate }, keys));
         }
     }
     out
@@ -2294,7 +2312,27 @@ struct Candidate<'q> {
     unique: bool,
     /// For a nested loop with a parameterized scan as its inner side, the place of the scan in the parameterized scans of the inner side.
     param: Option<usize>,
+    /// `disabled_nodes`: the disabled nodes of the join and of its two sides.
+    disabled: u32,
     _marker: std::marker::PhantomData<&'q ()>,
+}
+
+impl Candidate<'_> {
+    /// True when a setting turns off the method of the join, as `initial_cost_nestloop`, `initial_cost_mergejoin` and `initial_cost_hashjoin` read the strategies of the join.
+    fn method_disabled(&self) -> bool {
+        let enable = crate::enable();
+        match self.method {
+            Method::Nested => !enable.nestloop,
+            Method::Merge => !enable.mergejoin,
+            Method::Hash => !enable.hashjoin,
+        }
+    }
+
+    /// The disabled nodes of the join and of the sorts of its sides, without the nodes of the sides.
+    fn own_disabled(&self) -> u32 {
+        let sorts = u32::from(self.sort.0) + u32::from(self.sort.1);
+        u32::from(self.method_disabled()) + if crate::enable().sort { 0 } else { sorts }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2354,6 +2392,7 @@ fn nested_loops<'q>(input: &Input<'_, 'q>, join: JoinKind, lateral: bool) -> Vec
             paths: (0, 0),
             unique: false,
             param: None,
+            disabled: 0,
             _marker: std::marker::PhantomData,
         });
     }
@@ -2400,6 +2439,7 @@ fn param_loop<'q>(
         paths: (0, 0),
         unique: false,
         param: Some(i),
+        disabled: 0,
         _marker: std::marker::PhantomData,
     }
 }
@@ -2557,6 +2597,7 @@ fn hash_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>>
         paths: (0, 0),
         unique: false,
         param: None,
+        disabled: 0,
         _marker: std::marker::PhantomData,
     })
 }
@@ -2766,6 +2807,7 @@ fn merge_join<'q>(
         paths: (0, 0),
         unique: false,
         param: None,
+        disabled: 0,
         _marker: std::marker::PhantomData,
     })
 }
@@ -2879,6 +2921,7 @@ impl<'q> Candidate<'q> {
         let mut node = node;
         node.cost = Cost { startup: self.startup, total: self.total, rows, width: 0 };
         node.inner_unique = self.unique;
+        node.disabled = self.method_disabled();
         Rel { node, rels: BTreeSet::new(), order }
     }
 }

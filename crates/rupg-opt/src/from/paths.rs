@@ -3,6 +3,8 @@
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
+use rupg_plan::Node;
+
 use super::OrderKey;
 
 /// `STD_FUZZ_FACTOR`.
@@ -20,6 +22,8 @@ enum Compare {
 /// A plan of a relation with its costs and the part of the order of its rows that the planner can use above it, as `truncate_useless_pathkeys` finds it. A parameterized plan reads the values of the relations of `outer`, `required_outer`, and gives the rows of its parameterization.
 #[derive(Debug)]
 struct Path<T> {
+    /// `disabled_nodes`: the nodes of the plan that a setting `enable_*` turns off.
+    disabled: u32,
     startup: f64,
     total: f64,
     keys: Vec<OrderKey>,
@@ -36,6 +40,11 @@ pub(crate) struct Paths<T> {
     startup: bool,
     /// `consider_param_startup`: the same for a parameterized plan, which is so for the inner side of a semi join or an anti join that is one table.
     param_startup: bool,
+}
+
+/// The disabled nodes, the start cost and the total cost of a plan, for [`Paths::add`].
+pub(crate) fn costs(node: &Node<'_>) -> (u32, f64, f64) {
+    (node.disabled_nodes(), node.cost.startup, node.cost.total)
 }
 
 /// `bms_subset_compare` of the `required_outer` of two plans.
@@ -58,16 +67,15 @@ impl<T> Paths<T> {
         Paths { list: Vec::new(), startup, param_startup }
     }
 
-    /// `add_path` for a plan that is not parameterized.
-    pub(crate) fn add(&mut self, startup: f64, total: f64, keys: Vec<OrderKey>, plan: T) {
-        self.add_param(startup, total, keys, BTreeSet::new(), 0.0, plan);
+    /// `add_path` for a plan that is not parameterized, with the disabled nodes, the start cost and the total cost `cost`.
+    pub(crate) fn add(&mut self, cost: (u32, f64, f64), keys: Vec<OrderKey>, plan: T) {
+        self.add_param(cost, keys, BTreeSet::new(), 0.0, plan);
     }
 
-    /// `add_path`: adds a plan unless a plan of the list is as good, and takes away each plan of the list that the new plan is as good as. A plan is as good as another when it costs less or about the same, its order is as useful, it reads the values of fewer relations or the same relations and it gives no more rows.
+    /// `add_path`: adds a plan with the disabled nodes, the start cost and the total cost `cost` unless a plan of the list is as good, and takes away each plan of the list that the new plan is as good as. A plan is as good as another when it has fewer disabled nodes, or the same and it costs less or about the same, its order is as useful, it reads the values of fewer relations or the same relations and it gives no more rows.
     pub(super) fn add_param(
         &mut self,
-        startup: f64,
-        total: f64,
+        (disabled, startup, total): (u32, f64, f64),
         keys: Vec<OrderKey>,
         outer: BTreeSet<usize>,
         rows: f64,
@@ -82,7 +90,11 @@ impl<T> Paths<T> {
             let old = &self.list[i];
             let old_flag = if old.outer.is_empty() { self.startup } else { self.param_startup };
             let flags = (new_flag, old_flag);
-            let costs = compare_costs(new, (old.startup, old.total), FUZZ, flags);
+            let costs = match disabled.cmp(&old.disabled) {
+                Ordering::Less => Compare::Better1,
+                Ordering::Greater => Compare::Better2,
+                Ordering::Equal => compare_costs(new, (old.startup, old.total), FUZZ, flags),
+            };
             let mut remove = false;
             if costs != Compare::Different {
                 let order = compare_keys(&keys, &old.keys);
@@ -123,7 +135,7 @@ impl<T> Paths<T> {
             if remove {
                 self.list.remove(i);
             } else {
-                if total >= old.total {
+                if disabled > old.disabled || disabled == old.disabled && total >= old.total {
                     insert_at = i + 1;
                 }
                 i += 1;
@@ -132,7 +144,7 @@ impl<T> Paths<T> {
                 return;
             }
         }
-        self.list.insert(insert_at, Path { startup, total, keys, outer, rows, plan });
+        self.list.insert(insert_at, Path { disabled, startup, total, keys, outer, rows, plan });
     }
 
     /// The parameterized plans that the list keeps, in the order of their total cost.
@@ -156,13 +168,15 @@ impl<T> Paths<T> {
         self.list.into_iter().nth(best).map(|p| p.plan)
     }
 
-    /// `set_cheapest`: the plan with the lowest total cost, then with the lowest start cost, then with the most useful order.
+    /// `set_cheapest`: the plan with the fewest disabled nodes, then with the lowest total cost, then with the lowest start cost, then with the most useful order.
     fn best(&self) -> Option<usize> {
         let mut best: Option<usize> = None;
         for (i, path) in self.list.iter().enumerate() {
             let better = best.map(|b| &self.list[b]).is_none_or(|b| {
-                path.total < b.total
-                    || path.total == b.total
+                path.disabled < b.disabled
+                    || path.disabled == b.disabled && path.total < b.total
+                    || path.disabled == b.disabled
+                        && path.total == b.total
                         && (path.startup < b.startup
                             || path.startup == b.startup
                                 && compare_keys(&b.keys, &path.keys) == Compare::Better2)
@@ -186,13 +200,14 @@ impl<T> Paths<T> {
     }
 }
 
-/// `compare_fractional_path_costs`: the costs of two plans to give a fraction of their rows. With a fraction of 0 or of 1 or more, the total costs and then the start costs, as `compare_path_costs`.
+/// `compare_fractional_path_costs`: the disabled nodes and then the costs of two plans to give a fraction of their rows. With a fraction of 0 or of 1 or more, the total costs and then the start costs, as `compare_path_costs`.
 fn compare_fractional<T>(a: &Path<T>, b: &Path<T>, fraction: f64) -> Ordering {
+    let disabled = a.disabled.cmp(&b.disabled);
     if fraction <= 0.0 || fraction >= 1.0 {
-        return a.total.total_cmp(&b.total).then(a.startup.total_cmp(&b.startup));
+        return disabled.then(a.total.total_cmp(&b.total)).then(a.startup.total_cmp(&b.startup));
     }
     let cost = |p: &Path<T>| p.startup + fraction * (p.total - p.startup);
-    cost(a).total_cmp(&cost(b))
+    disabled.then(cost(a).total_cmp(&cost(b)))
 }
 
 /// `compare_path_costs_fuzzily`: the total costs, and then the start costs, of two plans with a fuzz factor. When the plan that costs more in total has the flag of `consider_startup`, it is a different plan if it costs less to start.
