@@ -1,0 +1,185 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (x int, y int, z text);
+CREATE TABLE
+> CREATE TABLE b (x int, y int);
+CREATE TABLE
+> EXPLAIN SELECT x + 1 FROM a;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..25.00 rows=1200 width=4)
+EXPLAIN
+> EXPLAIN SELECT x + 1, y * 2 FROM a;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..28.00 rows=1200 width=8)
+EXPLAIN
+> EXPLAIN SELECT x IN (VALUES (1), (2)) FROM a;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.03..25.03 rows=1200 width=1)
+row   SubPlan any_1
+row     ->  Values Scan on "*VALUES*"  (cost=0.00..0.03 rows=2 width=4)
+EXPLAIN
+> EXPLAIN SELECT x IN (SELECT x FROM b) FROM a;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=38.25..63.25 rows=1200 width=1)
+row   SubPlan any_1
+row     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT (SELECT max(b.x) FROM b WHERE b.y = a.y) FROM a;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..45967.00 rows=1200 width=4)
+row   SubPlan expr_1
+row     ->  Aggregate  (cost=38.28..38.29 rows=1 width=4)
+row           ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=4)
+row                 Filter: (y = a.y)
+EXPLAIN
+> EXPLAIN SELECT EXISTS (SELECT 1 FROM b WHERE b.y = a.y) FROM a;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..4194.73 rows=1200 width=1)
+row   SubPlan exists_to_any_1
+row     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT x + 1 FROM a WHERE y > 0;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..26.00 rows=400 width=4)
+row   Filter: (y > 0)
+EXPLAIN
+> EXPLAIN SELECT a.x + b.x FROM a JOIN b ON a.y = b.y;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=241.88..485.18 rows=13560 width=4)
+row   Merge Cond: (a.y = b.y)
+row   ->  Sort  (cost=83.37..86.37 rows=1200 width=8)
+row         Sort Key: a.y
+row         ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=8)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: b.y
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT x + 1 FROM a ORDER BY y;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=86.37..89.37 rows=1200 width=8)
+row   Sort Key: y
+row   ->  Seq Scan on a  (cost=0.00..25.00 rows=1200 width=8)
+EXPLAIN
+> EXPLAIN SELECT x + 1 FROM a LIMIT 5;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.00..0.10 rows=5 width=4)
+row   ->  Seq Scan on a  (cost=0.00..25.00 rows=1200 width=4)
+EXPLAIN
+> EXPLAIN SELECT upper(z) FROM a;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..25.00 rows=1200 width=32)
+EXPLAIN
+> EXPLAIN SELECT x IN (SELECT x FROM b) FROM a WHERE y > 0;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=38.25..64.25 rows=400 width=1)
+row   Filter: (y > 0)
+row   SubPlan any_1
+row     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> CREATE TABLE p (x int, y int) PARTITION BY RANGE (x);
+CREATE TABLE
+> CREATE TABLE p1 PARTITION OF p FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> CREATE TABLE p2 PARTITION OF p FOR VALUES FROM (10) TO (20);
+CREATE TABLE
+> EXPLAIN SELECT x + 1 FROM p;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..99.10 rows=4520 width=4)
+row   ->  Seq Scan on p1 p_1  (cost=0.00..38.25 rows=2260 width=4)
+row   ->  Seq Scan on p2 p_2  (cost=0.00..38.25 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT x + 1 FROM a WHERE now() IS NOT NULL;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..25.00 rows=1200 width=4)
+row   One-Time Filter: (now() IS NOT NULL)
+row   ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=4)
+EXPLAIN
+> EXPLAIN UPDATE a SET y = y + 1;
+fields QUERY PLAN:25:-1:-1
+row Update on a  (cost=0.00..25.00 rows=0 width=0)
+row   ->  Seq Scan on a  (cost=0.00..25.00 rows=1200 width=10)
+EXPLAIN
+> EXPLAIN UPDATE a SET y = y + 1 WHERE x > 0;
+fields QUERY PLAN:25:-1:-1
+row Update on a  (cost=0.00..26.00 rows=0 width=0)
+row   ->  Seq Scan on a  (cost=0.00..26.00 rows=400 width=10)
+row         Filter: (x > 0)
+EXPLAIN
+> EXPLAIN DELETE FROM a WHERE x > 0;
+fields QUERY PLAN:25:-1:-1
+row Delete on a  (cost=0.00..25.00 rows=0 width=0)
+row   ->  Seq Scan on a  (cost=0.00..25.00 rows=400 width=6)
+row         Filter: (x > 0)
+EXPLAIN
+> EXPLAIN SELECT x + 1 FROM a ORDER BY x + 1;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=86.37..89.37 rows=1200 width=4)
+row   Sort Key: ((x + 1))
+row   ->  Seq Scan on a  (cost=0.00..25.00 rows=1200 width=4)
+EXPLAIN
+> EXPLAIN SELECT DISTINCT x + 1 FROM a;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=28.00..30.50 rows=200 width=4)
+row   Group Key: (x + 1)
+row   ->  Seq Scan on a  (cost=0.00..25.00 rows=1200 width=4)
+EXPLAIN
+> EXPLAIN SELECT x + 1, count(*) FROM a GROUP BY x + 1;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=31.00..33.50 rows=200 width=12)
+row   Group Key: (x + 1)
+row   ->  Seq Scan on a  (cost=0.00..25.00 rows=1200 width=4)
+EXPLAIN
+> EXPLAIN SELECT x, count(*) + 1 FROM a GROUP BY x;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=28.00..30.50 rows=200 width=12)
+row   Group Key: x
+row   ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=4)
+EXPLAIN
+> EXPLAIN SELECT x, sum(y * 2) FROM a GROUP BY x;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=31.00..33.00 rows=200 width=12)
+row   Group Key: x
+row   ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=8)
+EXPLAIN
+> EXPLAIN SELECT count(*) FROM a;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=25.00..25.01 rows=1 width=8)
+row   ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=0)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT x + 1 AS c FROM a LIMIT 5) s;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.00..0.10 rows=5 width=4)
+row   ->  Seq Scan on a  (cost=0.00..25.00 rows=1200 width=4)
+EXPLAIN
+> EXPLAIN SELECT x + 1, row_number() OVER () FROM a;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=0.00..40.00 rows=1200 width=12)
+row   Window: w1 AS (ROWS UNBOUNDED PRECEDING)
+row   ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=4)
+EXPLAIN
+> EXPLAIN SELECT x::text FROM a;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..28.00 rows=1200 width=32)
+EXPLAIN
+> EXPLAIN SELECT z::int FROM a;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..28.00 rows=1200 width=4)
+EXPLAIN
+> EXPLAIN SELECT x, generate_series(1, 2) FROM a;
+fields QUERY PLAN:25:-1:-1
+row ProjectSet  (cost=0.00..43.00 rows=2400 width=8)
+row   ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=4)
+EXPLAIN
+> EXPLAIN SELECT 1 FROM a;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..22.00 rows=1200 width=4)
+EXPLAIN
+> EXPLAIN SELECT x + y FROM (VALUES (1, 2), (3, 4)) v(x, y);
+fields QUERY PLAN:25:-1:-1
+row Values Scan on "*VALUES*"  (cost=0.00..0.03 rows=2 width=4)
+EXPLAIN
+> EXPLAIN SELECT g + 1 FROM generate_series(1, 10) g;
+fields QUERY PLAN:25:-1:-1
+row Function Scan on generate_series g  (cost=0.00..0.13 rows=10 width=4)
+EXPLAIN

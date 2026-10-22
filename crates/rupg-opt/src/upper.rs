@@ -264,6 +264,99 @@ fn limit_cost(input: Cost, count: f64, offset: f64) -> Cost {
     out
 }
 
+/// The start cost and the cost for each row of the targets at each step above the plan of `FROM`, as `grouping_planner` makes them and `set_pathtarget_cost_width` finds their costs.
+#[derive(Clone, Copy, Default)]
+struct TargetCosts {
+    /// The targets that the plan of `FROM` computes, as `apply_scanjoin_target_to_paths`: the keys of `GROUP BY` with groups, the keys of the windows with windows, and else the targets before the sort.
+    scan: (f64, f64),
+    /// The targets of the `Agg` node, as `create_agg_path` adds them.
+    group: (f64, f64),
+    /// The targets of a `WindowAgg` node below the last one, which are the targets of the input of the windows.
+    window: (f64, f64),
+    /// The targets before the sort, which the last `WindowAgg` node and a `HashAggregate` of `DISTINCT` compute.
+    last: (f64, f64),
+}
+
+/// The costs of the targets of [`TargetCosts`], or `None` for a query with a function that gives a set in the targets. With `ORDER BY`, a target that is not a key of the query and calls a volatile function, or costs more than 10 times `cpu_operator_cost` with `LIMIT`, comes after the sort, as `make_sort_input_target` postpones it. A write computes only the columns of the table.
+fn target_costs(level: &Level<'_>) -> Option<TargetCosts> {
+    let query = level.query;
+    if level.no_targets || query.set_op.is_some() || query.has_target_srfs() {
+        return None;
+    }
+    let targets = match &query.write {
+        Some(write) if write.kind == WriteKind::Merge => return None,
+        Some(write) => &query.targets[..write.width.min(query.targets.len())],
+        None => &query.targets[..],
+    };
+    let calls = window_calls(query);
+    let windows: Vec<usize> = (0..calls.len()).filter(|&w| !calls[w].is_empty()).collect();
+    let window_keys: Vec<usize> = windows
+        .iter()
+        .flat_map(|&w| query.windows[w].partition.iter().chain(&query.windows[w].order))
+        .map(|s| s.target)
+        .collect();
+    let group_keys: Vec<usize> = query.group.iter().map(|s| s.target).collect();
+    let keys: Vec<usize> = query
+        .sort
+        .iter()
+        .chain(&query.distinct)
+        .map(|s| s.target)
+        .chain(group_keys.iter().copied())
+        .chain(window_keys.iter().copied())
+        .collect();
+    let costs: Vec<(f64, f64)> =
+        targets.iter().map(|t| level.stats.qual_costs([&t.expr])).collect();
+    // A target that is not a key and is volatile or costs more than 10 times `cpu_operator_cost` can come after the sort. They all do when one of them is volatile, or when the query has `LIMIT` or reads a part of its rows.
+    let late: Vec<(bool, bool)> = targets
+        .iter()
+        .zip(&costs)
+        .enumerate()
+        .map(|(at, (t, cost))| {
+            let can = !query.sort.is_empty() && !keys.contains(&at);
+            (can && exprs::volatile(&t.expr), can && cost.1 > 10.0 * cost::CPU_OPERATOR)
+        })
+        .collect();
+    let postpone = late.iter().any(|l| l.0)
+        || late.iter().any(|l| l.1) && (query.limit.is_some() || level.fraction > 0.0);
+    let sum = |keep: &dyn Fn(usize) -> bool| {
+        costs
+            .iter()
+            .enumerate()
+            .filter(|&(at, _)| keep(at))
+            .fold((0.0, 0.0), |out, (_, c)| (out.0 + c.0, out.1 + c.1))
+    };
+    let last = sum(&|at| !(postpone && (late[at].0 || late[at].1)));
+    let window = sum(&|at| window_keys.contains(&at));
+    let group = if windows.is_empty() { last } else { window };
+    let scan = if query.grouped {
+        sum(&|at| group_keys.contains(&at))
+    } else if windows.is_empty() {
+        last
+    } else {
+        window
+    };
+    Some(TargetCosts { scan, group, window, last })
+}
+
+/// The node computes the targets, with their costs, as `create_projection_path` on the plan of `FROM` and as `create_agg_path` and `create_windowagg_path` add them. The scans of the members of a table with children each compute them, as `apply_scanjoin_target_to_paths` gives the target to each child of a partitioned table.
+fn project(node: &mut Node<'_>, startup: f64, per_row: f64) {
+    if startup == 0.0 && per_row == 0.0 {
+        return;
+    }
+    if matches!(node.kind, Kind::Append) && node.children.iter().all(|c| c.member.is_some()) {
+        for child in &mut node.children {
+            let added = startup + per_row * child.cost.rows;
+            child.cost.startup += startup;
+            child.cost.total += added;
+            node.cost.total += added;
+        }
+        node.cost.startup = node.children.first().map_or(0.0, |c| c.cost.startup);
+        return;
+    }
+    node.cost.startup += startup;
+    node.cost.total += startup + per_row * node.cost.rows;
+}
+
 /// The number of rows of a function that gives a set in the targets, as `expression_returns_set_rows`.
 fn set_rows(expr: &Expr) -> f64 {
     let own = match &expr.kind {
@@ -303,11 +396,14 @@ impl<'q> Builder<'q> {
     ) -> Option<Node<'q>> {
         let query = level.query;
         let scope = level.display;
+        let costs = target_costs(level).unwrap_or_default();
+        project(&mut node, costs.scan.0, costs.scan.1);
         if query.set_op.is_none() {
             if query.grouped {
                 node = aggregate(level, node, &mut order, only)?;
+                project(&mut node, costs.group.0, costs.group.1);
             }
-            node = windows(level, node, &mut order, only)?;
+            node = windows(level, node, &mut order, only, costs)?;
             if query.has_target_srfs() {
                 let c = node.cost;
                 let rows = query.targets.iter().map(|t| set_rows(&t.expr)).fold(1.0, f64::max);
@@ -324,7 +420,7 @@ impl<'q> Builder<'q> {
                 };
             }
             if !query.distinct.is_empty() {
-                node = distinct(level, node, &mut order, only)?;
+                node = distinct(level, node, &mut order, only, costs.last)?;
             }
         }
         let (count, offset) = limit_estimates(query);
@@ -935,11 +1031,13 @@ fn windows<'q>(
     mut node: Node<'q>,
     order: &mut Vec<OrderKey>,
     only: bool,
+    targets: TargetCosts,
 ) -> Option<Node<'q>> {
     let calls = window_calls(level.query);
     let active = active_windows(level, &calls);
     let mut number = 0;
-    for window in active {
+    let count = active.len();
+    for (at, window) in active.into_iter().enumerate() {
         let clause = &level.query.windows[window];
         let partition = window_partition(level, window);
         node = sort_if(level, node, window_keys(level, window, &partition), order, None, only)?;
@@ -985,6 +1083,9 @@ fn windows<'q>(
         let kind = Kind::WindowAgg { name, window, rows_frame, partition };
         node = Node::new(kind, level.scope, vec![node]);
         node.cost = Cost { startup, total, ..c };
+        // `create_windowagg_path` adds the cost of the targets, which are the targets before the sort at the last window.
+        let (target_startup, per_row) = if at + 1 == count { targets.last } else { targets.window };
+        project(&mut node, target_startup, per_row);
     }
     Some(node)
 }
@@ -995,6 +1096,7 @@ fn distinct<'q>(
     input: Node<'q>,
     order: &mut Vec<OrderKey>,
     only: bool,
+    target: (f64, f64),
 ) -> Option<Node<'q>> {
     let query = level.query;
     let scope = level.scope;
@@ -1043,8 +1145,10 @@ fn distinct<'q>(
         if is_sorted { (c.startup, c.total) } else { sort_cost(level, c, &keys, count, None) };
     let unique_total = sort_total + cost::CPU_OPERATOR * c.rows * ncols as f64;
     let hashable = !query.distinct_on && processed.iter().all(|d| d.hashable);
+    // `create_agg_path` adds the cost of the targets to the hash table.
     let hash_startup = c.total + cost::CPU_OPERATOR * c.rows * ncols as f64;
-    let hash_total = hash_startup + cost::CPU_TUPLE * groups;
+    let hash_total = hash_startup + cost::CPU_TUPLE * groups + target.0 + target.1 * groups;
+    let hash_startup = hash_startup + target.0;
     // The hash table loses its order, so the sort of `ORDER BY` counts for it.
     let hash_after = if query.sort.is_empty() {
         hash_total

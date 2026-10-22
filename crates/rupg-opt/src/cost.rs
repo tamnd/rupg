@@ -743,6 +743,10 @@ pub(crate) fn qual_costs<'a>(
     subplans: &[SubCost],
 ) -> (f64, f64) {
     fn walk(expr: &Expr, subplans: &[SubCost], calls: &mut usize, out: &mut (f64, f64)) {
+        // An aggregate call and a window call cost nothing, as a column, with their arguments.
+        if matches!(expr.kind, ExprKind::Agg(_) | ExprKind::Window(_)) {
+            return;
+        }
         if let ExprKind::SubLink(link) = &expr.kind
             && let Some(sub) = subplans.iter().find(|s| std::ptr::eq(s.link, &**link))
         {
