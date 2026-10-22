@@ -161,9 +161,9 @@ pub(crate) fn hash_space(groups: f64, width: i32) -> f64 {
     16.0 * buckets + groups * (16.0 + f64::from(cost::maxalign(width)) + 16.0)
 }
 
-/// True when the expression is a constant.
+/// True when the expression is a constant, also with the casts that `generate_setop_tlist` puts on a constant of a `SELECT` of a set operation.
 pub(crate) fn is_const(expr: &Expr) -> bool {
-    matches!(expr.kind, ExprKind::Const(_))
+    matches!(expr.strip_implicit().kind, ExprKind::Const(_))
 }
 
 /// True when a node or a node below it scans a member of an inheritance tree, which takes a name of its own in the plan.

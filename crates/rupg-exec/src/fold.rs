@@ -1,9 +1,9 @@
 //! `eval_const_expressions` of `clauses.c`: the planner computes each part of an expression whose arguments are constants and whose function is immutable. An error of such a part, such as a division by zero, comes when the query is planned, before the server sends the description of the rows. The plan then runs the folded expressions, so a part that the fold drops does not run.
 
 use rupg_analyze::{
-    BoolOp, BoolTest, Case, Expr, ExprKind, FieldStore, FromItem, Func, FuncForm, IsJson, Join,
-    JoinKind, JoinRow, JsonCtor, JsonCtorKind, JsonValue, NamedArg, Query, Relation, RowCompare,
-    SubLink, SubLinkKind, Subscript, Var, XmlOp,
+    BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, FieldStore, FromItem, Func, FuncForm, IsJson,
+    Join, JoinKind, JoinRow, JsonCtor, JsonCtorKind, JsonValue, NamedArg, Query, Relation,
+    RowCompare, SubLink, SubLinkKind, Subscript, Var, XmlOp,
 };
 use rupg_common::{Error, Result};
 use rupg_func::Session;
@@ -105,10 +105,59 @@ fn plan(
             if out.set_op.is_none() {
                 prune(sub, used);
             }
-            **sub = plan(sub, params, session, false)?;
+            **sub = if out.set_op.is_some() {
+                set_leaf(sub, params, session)?
+            } else {
+                plan(sub, params, session, false)?
+            };
         }
     }
     Ok(out)
+}
+
+/// Folds a `SELECT` of a set operation. `transformSetOperationTree` does not cast the columns of a `SELECT` to the types of the operation: `generate_setop_tlist` adds the casts above the `SELECT` after `subquery_planner` folds it. So the fold here folds the argument of the cast of each column and keeps the casts, also for a constant.
+fn set_leaf(sub: &Query, params: Option<&[Value]>, session: &dyn Session) -> Result<Query> {
+    let mut bare = sub.clone();
+    let mut casts = Vec::with_capacity(bare.targets.len());
+    for target in &mut bare.targets {
+        let mut cast = target.expr.clone();
+        let Some(arg) = leaf_cast_arg(&mut cast).filter(|_| !target.junk) else {
+            casts.push(None);
+            continue;
+        };
+        target.expr = std::mem::replace(arg, Expr::new(ExprKind::CaseTest, 0));
+        casts.push(Some(cast));
+    }
+    let mut out = plan(&bare, params, session, false)?;
+    for (target, cast) in out.targets.iter_mut().zip(casts) {
+        let Some(mut cast) = cast else { continue };
+        if let Some(arg) = leaf_cast_arg(&mut cast) {
+            *arg = std::mem::replace(&mut target.expr, Expr::new(ExprKind::CaseTest, 0));
+        }
+        target.expr = cast;
+    }
+    Ok(out)
+}
+
+/// The argument of the implicit casts at the top of a column of a `SELECT` of a set operation: the cast to the type of the operation, and the casts to the types of the operations above it.
+fn leaf_cast_arg(expr: &mut Expr) -> Option<&mut Expr> {
+    let mut arg = cast_arg_mut(expr)?;
+    while cast_arg_mut(arg).is_some() {
+        arg = cast_arg_mut(arg)?;
+    }
+    Some(arg)
+}
+
+/// The argument of the implicit cast at the top of `expr`.
+fn cast_arg_mut(expr: &mut Expr) -> Option<&mut Expr> {
+    match &mut expr.kind {
+        ExprKind::Func(Func { form: FuncForm::ImplicitCast, args, .. }) => args.first_mut(),
+        ExprKind::Relabel(arg, CastForm::Implicit)
+        | ExprKind::CoerceViaIo(arg, CastForm::Implicit)
+        | ExprKind::CoerceToDomain(arg, CastForm::Implicit)
+        | ExprKind::ArrayCoerce { arg, form: CastForm::Implicit, .. } => Some(arg),
+        _ => None,
+    }
 }
 
 /// `convert_VALUES_to_ANY` in `pull_up_sublinks`: the query with each part of `WHERE`, and of the `ON` of an inner, a left or a right join, that is `ANY` on a list of `VALUES` as `op ANY` of a constant array, as [`values_any`] makes it. `None` when no part is `ANY` on a subquery. The planner of PostgreSQL does this before it folds the query.

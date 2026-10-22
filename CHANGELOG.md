@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- A constant of a `SELECT` of a set operation with another type than the operation keeps its cast above the `SELECT`, so the plan has the `Subquery Scan` of PostgreSQL, and a sorted `SetOp` does not sort the constant (#NNN).
+
 ## 0.1.69 (2026-10-23)
 
 This release plans a Merge Append for a UNION ALL with ORDER BY, and follows the enable_* planner settings of PostgreSQL 19 with disabled nodes, as EXPLAIN shows them.
