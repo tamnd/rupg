@@ -12,6 +12,7 @@ mod minmax;
 mod output;
 mod pullup;
 mod pushdown;
+mod setop;
 mod upper;
 
 use std::collections::BTreeMap;
@@ -129,6 +130,8 @@ struct Builder<'q> {
     bases: BTreeMap<(usize, usize), from::Base<'q>>,
     /// The append relation of the `UNION ALL` that the planner plans now, which keeps the plans of its members.
     append: Option<from::append::AppendRel<'q>>,
+    /// The `SELECT` of a side of `INTERSECT` or `EXCEPT` that the planner plans now, which keeps the facts of its plans that the set operation reads.
+    setop: Option<setop::Leaf<'q>>,
 }
 
 /// A subplan that runs for each row, which waits for the node that holds its subquery.
@@ -236,6 +239,7 @@ impl<'q> Builder<'q> {
         let caller = std::mem::take(&mut self.fraction);
         let presorted = std::mem::take(&mut self.presorted);
         let marks = self.marks(query, write);
+        let leaf = self.setop.as_ref().filter(|s| parent == Some(s.scope)).map(|s| s.op);
         let mut level = Level {
             scope,
             query,
@@ -260,11 +264,7 @@ impl<'q> Builder<'q> {
             self.sublinks_in(expr, &mut level);
         }
         let (plans, joined, stats) = match &query.set_op {
-            Some(op) => (
-                vec![(self.set_op(&mut level, op), Vec::new())],
-                Vec::new(),
-                from::Stats::default(),
-            ),
+            Some(op) => (self.set_op(&mut level, op), Vec::new(), from::Stats::default()),
             None => self.from(&level),
         };
         level.joined = joined;
@@ -272,6 +272,19 @@ impl<'q> Builder<'q> {
         // `generate_orderedappend_paths` reads each plan of a member of an append relation that `add_path` keeps.
         let member = query.set_op.is_none()
             && self.append.as_ref().is_some_and(|a| self.scopes[scope].parent == Some(a.scope));
+        // `build_setop_child_paths` reads each plan of a side of `INTERSECT` or `EXCEPT` that `add_path` keeps.
+        let mut finals = Vec::new();
+        if let Some(op) = leaf
+            && setop::simple(query)
+        {
+            let keys = setop::keys(query, op, &level.stats);
+            for (i, (node, order)) in plans.iter().enumerate() {
+                if let Some(mut node) = self.upper_one(&level, node.clone(), order.clone(), i > 0) {
+                    output::level(&level, &mut node);
+                    finals.push((node, setop::ordered(order, &keys)));
+                }
+            }
+        }
         if member {
             let mut kept = Vec::new();
             for (i, (node, order)) in plans.iter().enumerate() {
@@ -307,6 +320,16 @@ impl<'q> Builder<'q> {
         let mut init = std::mem::take(&mut level.init);
         init.append(&mut node.init_plans);
         node.init_plans = init;
+        if let Some(op) = leaf {
+            // A plan that is not the cheapest can take its place only with no subplans, which the planner gives the cheapest plan.
+            let others = level.init_cost == 0.0 && node.init_plans.is_empty();
+            let sorted = setop::sorted(query, op, &level.stats, &node, finals, others);
+            let groups = setop::groups(query, &level.stats, node.cost.rows);
+            if let Some(s) = &mut self.setop {
+                s.groups = groups;
+                s.sorted = sorted;
+            }
+        }
         self.ctes.truncate(depth);
         node
     }

@@ -130,6 +130,7 @@ fn names(kind: &Kind<'_>) -> Names {
         Kind::Unique => simple("Unique"),
         Kind::Append => simple("Append"),
         Kind::MergeAppend(_) => simple("Merge Append"),
+        Kind::SetOp { sorted: true, .. } => Names { strategy: Some("Sorted"), ..simple("SetOp") },
         Kind::SetOp { .. } => {
             Names { pname: "HashSetOp".to_string(), strategy: Some("Hashed"), ..simple("SetOp") }
         }
@@ -252,7 +253,7 @@ impl Explainer<'_, '_> {
                     self.w.buf.push_str(" Join");
                 }
             }
-            Kind::SetOp { except, all } => {
+            Kind::SetOp { except, all, .. } => {
                 let command = match (except, all) {
                     (false, false) => "Intersect",
                     (false, true) => "Intersect All",

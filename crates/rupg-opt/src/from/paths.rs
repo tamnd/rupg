@@ -175,7 +175,7 @@ impl<T> Paths<T> {
     }
 
     /// The `pathlist` after `set_cheapest`: the plan that [`Self::best`] chooses first, then the other plans in the order of their total cost.
-    pub(super) fn kept(self) -> Vec<T> {
+    pub(crate) fn kept(self) -> Vec<T> {
         let best = self.best();
         let mut out: Vec<T> = self.list.into_iter().map(|p| p.plan).collect();
         if let Some(b) = best {

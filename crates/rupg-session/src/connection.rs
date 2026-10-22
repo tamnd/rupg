@@ -5501,6 +5501,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_merge_append.test")));
     }
 
+    /// `INTERSECT` and `EXCEPT` are a `HashSetOp`, or a `SetOp` that reads its sides in the order of their columns when that costs less, as `generate_nonunion_paths` makes them. The planner plans each `SELECT` of a side in that order, `INTERSECT` reads first the side with fewer groups, and the rows of the `SetOp` with the sorted strategy take the place of a sort for `ORDER BY`. `connection/plan_setop.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_setop() {
+        big_stack(|| script(include_str!("connection/plan_setop.test")));
+    }
+
     /// `EXPLAIN` of the bitmap heap scans of a table by its btree indexes, as `create_index_paths` makes them with `choose_bitmap_and` and the costs of `cost_bitmap_heap_scan`. `connection/plan_bitmap_scan.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_bitmap_scan() {

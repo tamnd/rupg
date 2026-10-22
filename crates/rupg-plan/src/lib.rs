@@ -259,8 +259,8 @@ pub enum Kind<'q> {
     Append,
     /// `MergeAppend`: the rows of the members, which are each in the order of the keys, merged in that order.
     MergeAppend(Vec<SortKey<'q>>),
-    /// `SetOp` with a hash table: `INTERSECT` or `EXCEPT`.
-    SetOp { except: bool, all: bool },
+    /// `SetOp`: `INTERSECT` or `EXCEPT`, with a hash table or, with `sorted`, with the rows of both sides in the order of their columns.
+    SetOp { except: bool, all: bool, sorted: bool },
     /// `RecursiveUnion`.
     RecursiveUnion,
     /// `WindowAgg`, with the name of the window, its index in the windows of the query, and the places of the items of its `PARTITION BY` that are not redundant, as `make_pathkeys_for_window` keeps them.

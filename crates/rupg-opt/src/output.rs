@@ -83,7 +83,8 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             }
             node.cost.width = node.children.first().map_or(0, |c| c.cost.width);
         }
-        Kind::Append | Kind::MergeAppend(_) | Kind::SetOp { .. } | Kind::RecursiveUnion => {}
+        Kind::Append | Kind::MergeAppend(_) | Kind::RecursiveUnion => {}
+        Kind::SetOp { .. } => node.output = want.iter().map(Item::passed).collect(),
         Kind::Aggregate { .. } if set_op => {
             node.output = want.iter().map(Item::passed).collect();
             node.cost.width = node.children.first().map_or(0, |c| c.cost.width);
