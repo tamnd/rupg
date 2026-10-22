@@ -5315,6 +5315,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_unique.test")));
     }
 
+    /// `EXPLAIN` of `GROUP BY`, `DISTINCT` and windows with the number of groups of `estimate_num_groups`: the columns of one table have at most a tenth of its rows as groups, the conditions of a table make fewer groups, and two columns that an equivalence class makes equal count once. `connection/plan_groups.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_groups() {
+        big_stack(|| script(include_str!("connection/plan_groups.test")));
+    }
+
     /// `EXPLAIN` of an `Incremental Sort`: the planner sorts rows whose first keys are in order already, as `make_ordered_path` and `create_ordered_paths` choose it, with the costs of `cost_incremental_sort`. `connection/plan_incremental_sort.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_incremental_sort() {

@@ -270,7 +270,7 @@ fn prev_power2(n: f64) -> f64 {
     2f64.powf(n.log2().floor())
 }
 
-/// `estimate_num_groups` with no statistics: the number of groups of the rows for a number of keys.
+/// `estimate_num_groups` with no statistics for a number of keys whose relations the planner does not know, as the columns of a set operation: 200 groups for each key, at most the rows.
 pub(crate) fn groups(rows: f64, keys: usize) -> f64 {
     let mut groups: f64 = 1.0;
     for _ in 0..keys {

@@ -17,9 +17,12 @@ use rupg_types::{Value, oid};
 use crate::{Builder, Level, Member, cost, exprs, upper};
 use paths::Paths;
 
-/// The estimates of the relations of a query level for the costs of the joins.
+/// The plans of the rows of `FROM` that `add_path` keeps, each with the order of its rows.
+pub(crate) type Plans<'q> = Vec<(Node<'q>, Vec<OrderKey>)>;
+
+/// The estimates of the relations of a query level for the costs of the joins and of the nodes above them.
 #[derive(Debug, Default)]
-struct Stats {
+pub(crate) struct Stats {
     /// The rows of each relation before and after its conditions, as `tuples` and `rows` of its `RelOptInfo`.
     rows: BTreeMap<usize, (f64, f64)>,
     /// Each column that the query reads, with its width and the relations of the places that read it, as `attr_needed`. The target list of the query is `usize::MAX`.
@@ -38,9 +41,93 @@ struct Stats {
     unique: BTreeSet<(usize, i16)>,
     /// The key columns of each unique index of each relation that is immediate and has no predicate, which `relation_has_unique_index_for` reads.
     distinct: BTreeMap<usize, Vec<Vec<i16>>>,
+    /// The members of each equivalence class of the query level.
+    equal: Vec<Vec<Expr>>,
 }
 
 impl Stats {
+    /// `estimate_num_groups` with no statistics: the number of groups of rows by the values of the expressions. A `boolean` expression has 2 values, and each other expression has the values of its columns. Two columns that are equal or that an equivalence class makes equal count once. The columns of each relation have the product of their numbers of distinct values, at most a tenth of the tuples of the relation, or the largest number of one column when it is more. A relation with fewer rows after its conditions than its tuples has fewer values, as the formula of Yao. A column of a relation that the level does not know has 200 values.
+    pub(crate) fn groups(&self, exprs: &[&Expr], input_rows: f64) -> f64 {
+        let input_rows = cost::clamp_rows(input_rows);
+        if exprs.is_empty() {
+            return 1.0;
+        }
+        let mut numdistinct = 1.0;
+        // Each column with its relation and its number of distinct values, as a `GroupVarInfo`.
+        let mut infos: Vec<(Expr, usize, f64)> = Vec::new();
+        for &expr in exprs {
+            if expr.ty == oid::BOOL {
+                numdistinct *= 2.0;
+                continue;
+            }
+            let mut columns = Vec::new();
+            exprs::columns_at(expr, 0, &mut columns);
+            if columns.is_empty() && exprs::volatile(expr) {
+                return input_rows;
+            }
+            for column in columns {
+                self.add_group_var(&mut infos, column);
+            }
+        }
+        while let Some((_, rel, _)) = infos.first() {
+            let rel = *rel;
+            let (mut reldistinct, mut relmax) = (1.0f64, 1.0f64);
+            let mut count = 0;
+            for (_, _, nd) in infos.iter().filter(|i| i.1 == rel) {
+                reldistinct *= nd;
+                relmax = relmax.max(*nd);
+                count += 1;
+            }
+            infos.retain(|i| i.1 != rel);
+            match self.rows.get(&rel) {
+                Some(&(tuples, rows)) if tuples > 0.0 => {
+                    let mut clamp = tuples;
+                    if count > 1 {
+                        clamp *= 0.1;
+                        if clamp < relmax {
+                            clamp = relmax.min(tuples);
+                        }
+                    }
+                    reldistinct = reldistinct.min(clamp);
+                    if reldistinct > 0.0 && rows < tuples {
+                        reldistinct *= 1.0 - ((tuples - rows) / tuples).powf(tuples / reldistinct);
+                    }
+                    numdistinct *= cost::clamp_rows(reldistinct);
+                }
+                Some(_) => {}
+                None => numdistinct *= reldistinct,
+            }
+        }
+        numdistinct.ceil().min(input_rows).max(1.0)
+    }
+
+    /// `add_unique_group_var`: adds a column to the columns of the groups, when it is not there. Of two columns of different relations that an equivalence class makes equal, the column with fewer distinct values stays.
+    fn add_group_var(&self, infos: &mut Vec<(Expr, usize, f64)>, column: Expr) {
+        let ExprKind::Var(var) = column.kind else { return };
+        let (nd, _, _) = numdistinct(&column, self);
+        let mut i = 0;
+        while i < infos.len() {
+            let (other, rel, other_nd) = &infos[i];
+            if other.same(&column) {
+                return;
+            }
+            if *rel != var.relation && self.known_equal(other, &column) {
+                if *other_nd <= nd {
+                    return;
+                }
+                infos.remove(i);
+                continue;
+            }
+            i += 1;
+        }
+        infos.push((column, var.relation, nd));
+    }
+
+    /// `exprs_known_equal`: true when an equivalence class has the two expressions.
+    fn known_equal(&self, a: &Expr, b: &Expr) -> bool {
+        self.equal.iter().any(|c| c.iter().any(|m| m.same(a)) && c.iter().any(|m| m.same(b)))
+    }
+
     /// Adds the columns of an expression that a place with these relations reads.
     fn need(&mut self, expr: &Expr, depth: usize, at: &BTreeSet<usize>, relations: &[Relation]) {
         let mut columns = Vec::new();
@@ -180,11 +267,8 @@ struct Rel<'q> {
 }
 
 impl<'q> Builder<'q> {
-    /// `query_planner`: the plan of the rows of `FROM` that pass `WHERE`, with the order of the rows and the conditions of joins that the equivalence classes took the place of.
-    pub(crate) fn from(
-        &mut self,
-        level: &Level<'q>,
-    ) -> (Vec<(Node<'q>, Vec<OrderKey>)>, Vec<&'q Expr>) {
+    /// `query_planner`: the plan of the rows of `FROM` that pass `WHERE`, with the order of the rows, the conditions of joins that the equivalence classes took the place of and the estimates of the relations.
+    pub(crate) fn from(&mut self, level: &Level<'q>) -> (Plans<'q>, Vec<&'q Expr>, Stats) {
         let query = level.query;
         let mut parts = Vec::new();
         if let Some(filter) = &query.filter {
@@ -195,7 +279,7 @@ impl<'q> Builder<'q> {
         let Some(mut tree) =
             trees.reduce(|left, right| join_tree(JoinKind::Inner, left, right, Vec::new()))
         else {
-            return (vec![(result(level.scope, parts), Vec::new())], Vec::new());
+            return (vec![(result(level.scope, parts), Vec::new())], Vec::new(), Stats::default());
         };
         let all = tree.rels();
         let mut gating = Vec::new();
@@ -205,7 +289,11 @@ impl<'q> Builder<'q> {
             let volatile = exprs::volatile(part);
             if rels.is_empty() && !volatile {
                 if exprs::is_false(part) {
-                    return (vec![(dummy(level.scope, &all), Vec::new())], Vec::new());
+                    return (
+                        vec![(dummy(level.scope, &all), Vec::new())],
+                        Vec::new(),
+                        Stats::default(),
+                    );
                 }
                 if !exprs::is_true(part) {
                     gating.push(Item::of(part));
@@ -230,9 +318,10 @@ impl<'q> Builder<'q> {
         }
         let mut found = classes::Found::default();
         if !classes::domain(&mut tree, true, &mut found) {
-            return (vec![(dummy(level.scope, &all), Vec::new())], Vec::new());
+            return (vec![(dummy(level.scope, &all), Vec::new())], Vec::new(), Stats::default());
         }
-        let mut stats = Stats::default();
+        let equal = found.equal.iter().map(|c| c.iter().map(|&m| m.clone()).collect()).collect();
+        let mut stats = Stats { equal, ..Stats::default() };
         needed(level, &mut stats);
         let rels = self.build(level, tree, &found, &mut stats);
         let plans = rels
@@ -252,7 +341,7 @@ impl<'q> Builder<'q> {
                 (node, rel.order)
             })
             .collect();
-        (plans, found.joined)
+        (plans, found.joined, stats)
     }
 
     /// The plans of a part of the tree of the joins that `add_path` keeps, with the plan with the lowest total cost first. The inner joins of a join domain are one problem of the order of the joins, with the outer joins as items of the problem. `found` has the equivalence classes.

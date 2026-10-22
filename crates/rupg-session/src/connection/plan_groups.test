@@ -1,0 +1,202 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE b (x int, y int);
+CREATE TABLE
+> CREATE TABLE c (x int);
+CREATE TABLE
+> CREATE TABLE d (x int, y int, z text, f bool);
+CREATE TABLE
+> CREATE TABLE p (x int PRIMARY KEY, y int);
+CREATE TABLE
+> EXPLAIN SELECT x, y, count(*) FROM b GROUP BY x, y;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=49.55..51.81 rows=226 width=16)
+row   Group Key: x, y
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT x, y, count(*) FROM b GROUP BY x, y ORDER BY x, y;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=60.65..61.21 rows=226 width=16)
+row   Sort Key: x, y
+row   ->  HashAggregate  (cost=49.55..51.81 rows=226 width=16)
+row         Group Key: x, y
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT f, count(*) FROM d GROUP BY f;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=27.70..27.72 rows=2 width=9)
+row   Group Key: f
+row   ->  Seq Scan on d  (cost=0.00..21.80 rows=1180 width=1)
+EXPLAIN
+> EXPLAIN SELECT f, x, count(*) FROM d GROUP BY f, x;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=30.65..34.65 rows=400 width=13)
+row   Group Key: f, x
+row   ->  Seq Scan on d  (cost=0.00..21.80 rows=1180 width=5)
+EXPLAIN
+> EXPLAIN SELECT x, count(*) FROM b WHERE y > 0 GROUP BY x;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=42.02..43.99 rows=198 width=12)
+row   Group Key: x
+row   ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=4)
+row         Filter: (y > 0)
+EXPLAIN
+> EXPLAIN SELECT y, count(*) FROM b WHERE x = 5 GROUP BY y;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=38.44..38.63 rows=11 width=12)
+row   Group Key: y
+row   ->  Sort  (cost=38.44..38.47 rows=11 width=4)
+row         Sort Key: y
+row         ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=4)
+row               Filter: (x = 5)
+EXPLAIN
+> EXPLAIN SELECT x, y, count(*) FROM b WHERE x > 0 AND y > 0 GROUP BY x, y;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=45.78..47.34 rows=156 width=16)
+row   Group Key: x, y
+row   ->  Seq Scan on b  (cost=0.00..43.90 rows=251 width=8)
+row         Filter: ((x > 0) AND (y > 0))
+EXPLAIN
+> EXPLAIN SELECT b.x, b.y, count(*) FROM b, c WHERE b.x = c.x GROUP BY b.x, b.y;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=997.93..1000.19 rows=226 width=16)
+row   Group Key: b.x, b.y
+row   ->  Merge Join  (cost=338.29..781.81 rows=28815 width=8)
+row         Merge Cond: (b.x = c.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT b.x, b.y, count(*) FROM b, c WHERE b.x = c.x GROUP BY b.x, b.y ORDER BY b.x, b.y;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=1009.02..1009.59 rows=226 width=16)
+row   Sort Key: b.x, b.y
+row   ->  HashAggregate  (cost=997.93..1000.19 rows=226 width=16)
+row         Group Key: b.x, b.y
+row         ->  Merge Join  (cost=338.29..781.81 rows=28815 width=8)
+row               Merge Cond: (b.x = c.x)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: b.x
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row                     Sort Key: c.x
+row                     ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT b.y, c.x, count(*) FROM b, c WHERE b.x = c.x GROUP BY b.y, c.x;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=997.93..1286.08 rows=28815 width=16)
+row   Group Key: b.y, c.x
+row   ->  Merge Join  (cost=338.29..781.81 rows=28815 width=8)
+row         Merge Cond: (b.x = c.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT DISTINCT b.x, b.y FROM b, c WHERE b.x = c.x;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=925.89..928.15 rows=226 width=8)
+row   Group Key: b.x, b.y
+row   ->  Merge Join  (cost=338.29..781.81 rows=28815 width=8)
+row         Merge Cond: (b.x = c.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT DISTINCT b.x, b.y FROM b, c WHERE b.x = c.x ORDER BY b.x, b.y;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=936.99..937.55 rows=226 width=8)
+row   Sort Key: b.x, b.y
+row   ->  HashAggregate  (cost=925.89..928.15 rows=226 width=8)
+row         Group Key: b.x, b.y
+row         ->  Merge Join  (cost=338.29..781.81 rows=28815 width=8)
+row               Merge Cond: (b.x = c.x)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: b.x
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row                     Sort Key: c.x
+row                     ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT DISTINCT x, y FROM b;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=43.90..46.16 rows=226 width=8)
+row   Group Key: x, y
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT DISTINCT x, y, z FROM d;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=30.65..32.65 rows=200 width=40)
+row   Group Key: x, y, z
+row   ->  Seq Scan on d  (cost=0.00..21.80 rows=1180 width=40)
+EXPLAIN
+> EXPLAIN SELECT y, count(*) FROM p GROUP BY y;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=43.90..45.90 rows=200 width=12)
+row   Group Key: y
+row   ->  Seq Scan on p  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT x, row_number() OVER (PARTITION BY x, y ORDER BY z) FROM d;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=82.03..108.56 rows=1180 width=48)
+row   Window: w1 AS (PARTITION BY x, y ORDER BY z ROWS UNBOUNDED PRECEDING)
+row   ->  Sort  (cost=82.01..84.96 rows=1180 width=40)
+row         Sort Key: x, y, z
+row         ->  Seq Scan on d  (cost=0.00..21.80 rows=1180 width=40)
+EXPLAIN
+> EXPLAIN SELECT x, rank() OVER (PARTITION BY x ORDER BY y, z) FROM d;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=82.03..108.56 rows=1180 width=48)
+row   Window: w1 AS (PARTITION BY x ORDER BY y, z ROWS UNBOUNDED PRECEDING)
+row   ->  Sort  (cost=82.01..84.96 rows=1180 width=40)
+row         Sort Key: x, y, z
+row         ->  Seq Scan on d  (cost=0.00..21.80 rows=1180 width=40)
+EXPLAIN
+> EXPLAIN SELECT x, sum(y) OVER (PARTITION BY x, y) FROM d;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=82.11..105.61 rows=1180 width=16)
+row   Window: w1 AS (PARTITION BY x, y)
+row   ->  Sort  (cost=82.01..84.96 rows=1180 width=8)
+row         Sort Key: x, y
+row         ->  Seq Scan on d  (cost=0.00..21.80 rows=1180 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM b, d WHERE b.x = d.x ORDER BY b.x, d.y LIMIT 10;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=242.98..243.48 rows=10 width=49)
+row   ->  Incremental Sort  (cost=242.98..905.24 rows=13334 width=49)
+row         Sort Key: b.x, d.y
+row         Presorted Key: b.x
+row         ->  Merge Join  (cost=240.51..446.42 rows=13334 width=49)
+row               Merge Cond: (d.x = b.x)
+row               ->  Sort  (cost=82.01..84.96 rows=1180 width=41)
+row                     Sort Key: d.x
+row                     ->  Seq Scan on d  (cost=0.00..21.80 rows=1180 width=41)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: b.x
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT x, count(*) FROM b WHERE y = 1 GROUP BY x;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=38.44..38.63 rows=11 width=12)
+row   Group Key: x
+row   ->  Sort  (cost=38.44..38.47 rows=11 width=4)
+row         Sort Key: x
+row         ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=4)
+row               Filter: (y = 1)
+EXPLAIN
+> EXPLAIN SELECT x, count(*) FROM b GROUP BY x HAVING count(*) > 1;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=43.90..46.40 rows=67 width=12)
+row   Group Key: x
+row   Filter: (count(*) > 1)
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN

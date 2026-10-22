@@ -107,6 +107,8 @@ pub(crate) struct Level<'q> {
     pub(crate) no_targets: bool,
     /// The conditions of joins that the equivalence classes took the place of. The scans below a join still give their columns, as `attr_needed` keeps them.
     pub(crate) joined: Vec<&'q Expr>,
+    /// The estimates of the relations of `FROM`, which `estimate_num_groups` reads.
+    pub(crate) stats: from::Stats,
 }
 
 impl<'q> Level<'q> {
@@ -158,6 +160,7 @@ impl<'q> Builder<'q> {
             init: Vec::new(),
             no_targets,
             joined: Vec::new(),
+            stats: from::Stats::default(),
         };
         let depth = self.ctes.len();
         if !std::ptr::eq(outer, query) {
@@ -167,11 +170,16 @@ impl<'q> Builder<'q> {
         for expr in preprocess_order(query) {
             self.sublinks_in(expr, &mut level);
         }
-        let (plans, joined) = match &query.set_op {
-            Some(op) => (vec![(self.set_op(&mut level, op), Vec::new())], Vec::new()),
+        let (plans, joined, stats) = match &query.set_op {
+            Some(op) => (
+                vec![(self.set_op(&mut level, op), Vec::new())],
+                Vec::new(),
+                from::Stats::default(),
+            ),
             None => self.from(&level),
         };
         level.joined = joined;
+        level.stats = stats;
         let mut node = self.upper(&level, plans);
         if let Some(write) = write {
             node = self.modify(&level, write, node);
