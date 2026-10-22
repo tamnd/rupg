@@ -1,0 +1,190 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE b (x int, y int);
+CREATE TABLE
+> CREATE TABLE c (x int, z text);
+CREATE TABLE
+> CREATE TABLE d (x int PRIMARY KEY, y int);
+CREATE TABLE
+> CREATE TABLE n (x int NOT NULL, y int NOT NULL);
+CREATE TABLE
+> EXPLAIN SELECT * FROM c LEFT JOIN b ON b.x = c.x WHERE b.x IS NULL;
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=60.85..108.24 rows=635 width=44)
+row   Hash Cond: (c.x = b.x)
+row   ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT c.* FROM c LEFT JOIN d ON d.x = c.x WHERE d.x IS NULL;
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=60.85..93.95 rows=635 width=36)
+row   Hash Cond: (c.x = d.x)
+row   ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=4)
+row         ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c LEFT JOIN n ON n.x = c.x WHERE n.y IS NULL;
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=60.85..108.24 rows=635 width=44)
+row   Hash Cond: (c.x = n.x)
+row   ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM c LEFT JOIN b ON b.x = c.x WHERE b.y IS NULL;
+fields QUERY PLAN:25:-1:-1
+row Merge Left Join  (cost=246.68..468.29 rows=72 width=44)
+row   Merge Cond: (c.x = b.x)
+row   Filter: (b.y IS NULL)
+row   ->  Sort  (cost=88.17..91.35 rows=1270 width=36)
+row         Sort Key: c.x
+row         ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: b.x
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM c RIGHT JOIN b ON b.x = c.x WHERE c.x IS NULL;
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=38.58..115.10 rows=1130 width=44)
+row   Hash Cond: (b.x = c.x)
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=22.70..22.70 rows=1270 width=36)
+row         ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+EXPLAIN
+> EXPLAIN SELECT * FROM c LEFT JOIN b ON b.x = c.x WHERE b.x IS NULL AND c.z = 'a';
+fields QUERY PLAN:25:-1:-1
+row Hash Right Anti Join  (cost=25.95..67.70 rows=3 width=44)
+row   Hash Cond: (b.x = c.x)
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=25.88..25.88 rows=6 width=36)
+row         ->  Seq Scan on c  (cost=0.00..25.88 rows=6 width=36)
+row               Filter: (z = 'a'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM c LEFT JOIN (b LEFT JOIN n ON n.x = b.x) ON b.x = c.x WHERE n.y IS NULL;
+fields QUERY PLAN:25:-1:-1
+row Merge Left Join  (cost=405.18..3238.39 rows=811 width=52)
+row   Merge Cond: (c.x = b.x)
+row   Filter: (n.y IS NULL)
+row   ->  Sort  (cost=88.17..91.35 rows=1270 width=36)
+row         Sort Key: c.x
+row         ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Materialize  (cost=317.01..775.23 rows=25538 width=16)
+row         ->  Merge Left Join  (cost=317.01..711.38 rows=25538 width=16)
+row               Merge Cond: (b.x = n.x)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: b.x
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: n.x
+row                     ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM c LEFT JOIN b ON b.x = c.x LEFT JOIN d ON d.x = b.y WHERE d.x IS NULL;
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=307.53..646.64 rows=7176 width=52)
+row   Hash Cond: (b.y = d.x)
+row   ->  Merge Left Join  (cost=246.68..468.29 rows=14351 width=44)
+row         Merge Cond: (c.x = b.x)
+row         ->  Sort  (cost=88.17..91.35 rows=1270 width=36)
+row               Sort Key: c.x
+row               ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT count(*) FROM c LEFT JOIN b ON b.x = c.x WHERE b.x IS NULL;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=109.82..109.83 rows=1 width=8)
+row   ->  Hash Anti Join  (cost=60.85..108.24 rows=635 width=0)
+row         Hash Cond: (c.x = b.x)
+row         ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=4)
+row         ->  Hash  (cost=32.60..32.60 rows=2260 width=4)
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c LEFT JOIN b ON c.x = b.x AND b.y > 0 WHERE b.y IS NULL;
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=47.66..94.25 rows=635 width=44)
+row   Hash Cond: (c.x = b.x)
+row   ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Hash  (cost=38.25..38.25 rows=753 width=8)
+row         ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=8)
+row               Filter: (y > 0)
+EXPLAIN
+> EXPLAIN SELECT * FROM c LEFT JOIN b ON b.x = c.x WHERE b.x IS NULL OR c.x = 1;
+fields QUERY PLAN:25:-1:-1
+row Merge Left Join  (cost=246.68..504.17 rows=143 width=44)
+row   Merge Cond: (c.x = b.x)
+row   Filter: ((b.x IS NULL) OR (c.x = 1))
+row   ->  Sort  (cost=88.17..91.35 rows=1270 width=36)
+row         Sort Key: c.x
+row         ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: b.x
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM c LEFT JOIN b ON true WHERE b.x IS NULL;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join  (cost=0.00..35938.45 rows=14351 width=44)
+row   Filter: (b.x IS NULL)
+row   ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Materialize  (cost=0.00..43.90 rows=2260 width=8)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM c LEFT JOIN d ON true WHERE d.x IS NULL;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Anti Join  (cost=0.00..98.33 rows=1 width=44)
+row   ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Materialize  (cost=0.00..43.90 rows=2260 width=8)
+row         ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM c FULL JOIN b ON b.x = c.x WHERE b.x IS NULL;
+fields QUERY PLAN:25:-1:-1
+row Merge Full Join  (cost=246.68..468.29 rows=72 width=44)
+row   Merge Cond: (c.x = b.x)
+row   Filter: (b.x IS NULL)
+row   ->  Sort  (cost=88.17..91.35 rows=1270 width=36)
+row         Sort Key: c.x
+row         ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: b.x
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT c.x FROM c LEFT JOIN b ON b.x = c.x WHERE b.x IS NULL) s WHERE s.x > 1;
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=60.85..94.95 rows=212 width=4)
+row   Hash Cond: (c.x = b.x)
+row   ->  Seq Scan on c  (cost=0.00..25.88 rows=423 width=4)
+row         Filter: (x > 1)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=4)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT c.x FROM c LEFT JOIN b ON b.x = c.x WHERE b.x IS NULL ORDER BY c.x LIMIT 3;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=116.44..116.45 rows=3 width=4)
+row   ->  Sort  (cost=116.44..118.03 rows=635 width=4)
+row         Sort Key: c.x
+row         ->  Hash Anti Join  (cost=60.85..108.24 rows=635 width=4)
+row               Hash Cond: (c.x = b.x)
+row               ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=4)
+row               ->  Hash  (cost=32.60..32.60 rows=2260 width=4)
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c LEFT JOIN b ON b.x = c.x WHERE b.x IS NULL AND b.y IS NULL;
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=60.85..108.24 rows=635 width=44)
+row   Hash Cond: (c.x = b.x)
+row   ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM n LEFT JOIN d ON d.x = n.x WHERE d.x IS NULL;
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=60.85..111.95 rows=1130 width=16)
+row   Hash Cond: (n.x = d.x)
+row   ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
