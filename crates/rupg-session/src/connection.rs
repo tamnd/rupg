@@ -5489,6 +5489,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_result_pullup.test")));
     }
 
+    /// A `UNION ALL` in `FROM` is an `Append` of its `SELECT`s with no `Subquery Scan` above it, as `pull_up_simple_union_all` makes it an append relation, and each `SELECT` takes the conditions of `WHERE`. A `UNION` takes them too, as `subquery_push_qual` moves them into each `SELECT` of a set operation. `connection/plan_union_all.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_union_all() {
+        big_stack(|| script(include_str!("connection/plan_union_all.test")));
+    }
+
     /// `EXPLAIN` of the bitmap heap scans of a table by its btree indexes, as `create_index_paths` makes them with `choose_bitmap_and` and the costs of `cost_bitmap_heap_scan`. `connection/plan_bitmap_scan.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_bitmap_scan() {

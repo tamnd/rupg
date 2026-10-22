@@ -158,8 +158,15 @@ fn removed_scans(plan: &Plan<'_>, spaces: &mut [Namespace]) {
         if kept.contains(&(parent, r)) {
             continue;
         }
+        // `set_deparse_plan`: the columns of a set operation show as the targets of its leftmost `SELECT`, which is the first member of its `Append`.
+        let leftmost = scope.query.set_op.as_ref().and_then(|op| {
+            let leaf = scope.query.relations.get(op.left.leftmost())?.subquery.as_deref()?;
+            let at = plan.scopes.iter().position(|q| ptr::eq(q.query, leaf))?;
+            Some((at, leaf))
+        });
+        let (s, query) = leftmost.unwrap_or((s, scope.query));
         let namespaces = chain(s).into_iter().map(|at| spaces[at].clone()).collect();
-        let targets = scope.query.targets.iter().map(|t| t.expr.clone()).collect();
+        let targets = query.targets.iter().map(|t| t.expr.clone()).collect();
         spaces[parent].removed.push((r, Rc::new(Removed { namespaces, targets })));
     }
 }

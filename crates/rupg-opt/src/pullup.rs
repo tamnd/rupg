@@ -375,7 +375,7 @@ fn move_up(sub: &mut Query, base: usize) {
 }
 
 /// `is_simple_subquery`: a subquery that the planner can merge into the query above it. It has no set operation, no aggregate, no window, no function that gives a set in its targets, no `ORDER BY`, no `DISTINCT`, no `LIMIT`, no `OFFSET`, no row lock, no `WITH` and no volatile function in its targets. A subquery with no `FROM` is an `RTE_RESULT` that [`merge`] drops, as `remove_useless_result_rtes` drops it.
-fn simple(sub: &Query) -> bool {
+pub(crate) fn simple(sub: &Query) -> bool {
     sub.set_op.is_none()
         && sub.write.is_none()
         && !sub.grouped
