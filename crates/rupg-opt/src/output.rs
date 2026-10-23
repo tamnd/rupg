@@ -481,10 +481,14 @@ fn keys_below(node: &mut Node<'_>) {
         child.output.iter().find(|o| o.expr.same(&item.expr)).map_or(item.below, |o| o.below)
     };
     let Kind::Aggregate { keys, sets, .. } = &node.kind else { return };
-    let flags: Vec<bool> = keys.iter().chain(sets.iter().flat_map(|(_, s)| s)).map(below).collect();
+    let set_items =
+        sets.iter().flat_map(|r| r.sort.iter().map(|k| &k.item).chain(r.sets.iter().flatten()));
+    let flags: Vec<bool> = keys.iter().chain(set_items).map(below).collect();
     if let Kind::Aggregate { keys, sets, .. } = &mut node.kind {
-        let items = keys.iter_mut().chain(sets.iter_mut().flat_map(|(_, s)| s));
-        for (item, flag) in items.zip(flags) {
+        let set_items = sets.iter_mut().flat_map(|r| {
+            r.sort.iter_mut().map(|k| &mut k.item).chain(r.sets.iter_mut().flatten())
+        });
+        for (item, flag) in keys.iter_mut().chain(set_items).zip(flags) {
             item.below = flag;
         }
     }

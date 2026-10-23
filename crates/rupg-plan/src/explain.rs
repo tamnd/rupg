@@ -4,7 +4,7 @@ use rupg_analyze::{ExprKind, JoinKind, Relation};
 use rupg_common::Result;
 
 use crate::format::Writer;
-use crate::{Item, Kind, Node, Plan, Replaced, SortKey, Strategy, Texts};
+use crate::{Item, Kind, Node, Plan, Replaced, Rollup, SortKey, Strategy, Texts};
 
 /// The form of the output, the option `FORMAT`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -704,22 +704,38 @@ impl Explainer<'_, '_> {
         Ok(out)
     }
 
-    /// `show_grouping_sets` in text: a `Hash Key` for each set in a hash table and a `Group Key` for each set of a sorted input, with `()` for a set with no keys.
-    fn grouping_sets(
-        &mut self,
-        scope: usize,
-        sets: &[(bool, Vec<Item<'_>>)],
-        prefix: bool,
-    ) -> Result<()> {
-        for (hashed, keys) in sets {
-            let label = if *hashed { "Hash Key" } else { "Group Key" };
-            let texts = self.items(scope, keys, prefix)?;
-            if texts.is_empty() {
-                self.w.list(label, &["()".to_string()]);
-            } else {
-                self.w.list(label, &texts);
+    /// `show_grouping_sets` and `show_grouping_set_keys`: for each rollup, the `Sort Key` of its own sort, then a `Hash Key` for each set in a hash table or a `Group Key` for each set of sorted rows. Text shows `()` for a set with no keys, and the keys of a rollup with a sort one level in.
+    fn grouping_sets(&mut self, scope: usize, rollups: &[Rollup<'_>], prefix: bool) -> Result<()> {
+        let text = self.w.format == Format::Text;
+        self.w.open_group("Grouping Sets", Some("Grouping Sets"), false);
+        for rollup in rollups {
+            let (label, labels) =
+                if rollup.hashed { ("Hash Key", "Hash Keys") } else { ("Group Key", "Group Keys") };
+            self.w.open_group("Grouping Set", None, true);
+            let sorted = !rollup.sort.is_empty();
+            if sorted {
+                let keys = self.sort_keys(scope, &rollup.sort, prefix)?;
+                self.w.list("Sort Key", &keys);
+                if text {
+                    self.w.indent += 1;
+                }
             }
+            self.w.open_group(labels, Some(labels), false);
+            for keys in &rollup.sets {
+                let texts = self.items(scope, keys, prefix)?;
+                if texts.is_empty() && text {
+                    self.w.text(label, "()");
+                } else {
+                    self.w.list_nested(label, &texts);
+                }
+            }
+            self.w.close_group(labels, false);
+            if sorted && text {
+                self.w.indent -= 1;
+            }
+            self.w.close_group("Grouping Set", true);
         }
+        self.w.close_group("Grouping Sets", false);
         Ok(())
     }
 
