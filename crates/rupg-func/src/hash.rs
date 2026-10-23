@@ -150,17 +150,31 @@ impl Seed {
 ///
 /// `42883` for a type with no hash function.
 pub fn partition_hash(values: &[(u32, Value)]) -> Result<u64> {
-    const HASH_PARTITION_SEED: u64 = 0x7A5B_2236_7996_DCFD;
     let mut row = 0u64;
     for (ty, value) in values {
         if value.is_null() {
             continue;
         }
-        let one = hash(crate::io::base_type(*ty), value, Seed::Extended(HASH_PARTITION_SEED))?;
-        row ^=
-            one.wrapping_add(0x49a0_f4dd_15e5_a8e3).wrapping_add(row << 54).wrapping_add(row >> 7);
+        row = hash_combine64(row, extended_hash(*ty, value, HASH_PARTITION_SEED)?);
     }
     Ok(row)
+}
+
+/// `HASH_PARTITION_SEED`: the seed of the hashes of the keys of `PARTITION BY HASH`.
+pub const HASH_PARTITION_SEED: u64 = 0x7A5B_2236_7996_DCFD;
+
+/// `hash_combine64`: the hash `row` with the hash `one` added to it.
+pub fn hash_combine64(row: u64, one: u64) -> u64 {
+    row ^ one.wrapping_add(0x49a0_f4dd_15e5_a8e3).wrapping_add(row << 54).wrapping_add(row >> 7)
+}
+
+/// The extended hash of a value of the type `ty` with the seed, as the support function 2 of the default hash operator class of the type gives it.
+///
+/// # Errors
+///
+/// `42883` for a type with no hash function.
+pub fn extended_hash(ty: u32, value: &Value, seed: u64) -> Result<u64> {
+    hash(crate::io::base_type(ty), value, Seed::Extended(seed))
 }
 
 /// The hash of a value of the type `ty`. A plain hash has only the low 32 bits.

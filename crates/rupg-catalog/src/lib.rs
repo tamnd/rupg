@@ -3342,6 +3342,13 @@ impl Catalog {
         let oid = self.new_oid();
         let keys: Vec<i16> = new.columns.iter().map(|c| c.key).collect();
         let key_columns = &new.columns[..new.key_count.min(new.columns.len())];
+        // `index_create`: the index depends on the collation of each key column that is not the default and on the operator class of each key column.
+        let column_refs: Vec<ObjRef> = key_columns
+            .iter()
+            .filter(|c| c.collation != 0)
+            .map(|c| ObjRef::new(PG_COLLATION, c.collation))
+            .chain(key_columns.iter().map(|c| ObjRef::new(PG_OPCLASS, c.class)))
+            .collect();
         let info = IndexInfo {
             table: new.table,
             keys: keys.clone(),
@@ -3448,6 +3455,9 @@ impl Catalog {
             for key in simple {
                 self.depend(me, ObjRef::column(new.table, key), DepKind::Auto);
             }
+        }
+        for referenced in column_refs {
+            self.depend(me, referenced, DepKind::Normal);
         }
         self.depend_on_expr(me, &new.refs, new.table, DepKind::Auto);
         self.relation_mut(new.table)?.has_index = true;

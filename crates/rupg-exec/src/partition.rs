@@ -2,15 +2,18 @@
 
 use std::cmp::Ordering;
 
-use rupg_analyze::{Expr, ExprKind, node};
+use rupg_analyze::{Expr, ExprKind, Func, FuncForm, node};
 use rupg_catalog::{PartStrategy, PartitionBound, RangeDatum, RelKind, Relation};
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::Session;
-use rupg_types::Value;
+use rupg_types::{Value, oid};
 
 mod prune;
 
 pub(crate) use prune::pruned_leaves;
+
+/// `HASHEXTENDED_PROC`: the number of the support function of a hash operator family that gives the hash of a value with a seed.
+const HASH_EXTENDED_PROC: i16 = 2;
 
 /// The most bytes of a value in the detail of an error, as `ExecBuildSlotPartitionKeyDescription` cuts it.
 const MAX_FIELD_LEN: usize = 64;
@@ -54,8 +57,12 @@ struct Dispatch {
     types: Vec<u32>,
     /// The types of the columns of the table.
     columns: Vec<u32>,
-    /// The operator family of each key column, from its operator class, or 0 for a class that is not built in.
+    /// The operator family of each key column, from its operator class.
     families: Vec<u32>,
+    /// For each key column of `PARTITION BY HASH` with an operator class of the catalog, the support function 2 of the class and the type that the class takes, as `partsupfunc` has them. A built-in class has `None`, and [`rupg_func::extended_hash`] gives its hash.
+    hashers: Vec<Option<(u32, u32)>>,
+    /// The operators of the operator families of the catalog of the key columns, as the family, the operator and its strategy, for the rows of `pg_amop` that are not built in.
+    amops: Vec<(u32, u32, i16)>,
     /// True for each key column with a collation.
     collated: Vec<bool>,
     parts: Vec<Part>,
@@ -89,7 +96,7 @@ impl Router {
             let at = self.dispatch(oid, session)?;
             let d = &self.dispatch[at];
             let values = d.values(&row, session)?;
-            let Some(part) = d.find(&values)? else {
+            let Some(part) = d.find(&values, session)? else {
                 return Err(no_partition(d, relation(catalog, oid)?, &values, session)?);
             };
             row = part
@@ -124,7 +131,7 @@ impl Router {
                 }
             }
             let values = d.values(&up, session)?;
-            if d.find(&values)?.map(|p| p.oid) != Some(child) {
+            if d.find(&values, session)?.map(|p| p.oid) != Some(child) {
                 return Ok(false);
             }
             (child, row) = (of.parent, up);
@@ -198,6 +205,32 @@ impl Dispatch {
                 .collect();
             parts.push(Part { oid: child.oid, bound: bound(&of.bound)?, map });
         }
+        let (mut families, mut hashers) = (Vec::new(), Vec::new());
+        for &class in &key.classes {
+            let Some(c) = catalog.opclass(class) else {
+                let classes = rupg_pgcatalog::builtin::opclasses();
+                families.push(classes.iter().find(|c| c.oid == class).map_or(0, |c| c.family));
+                hashers.push(None);
+                continue;
+            };
+            families.push(c.family);
+            hashers.push(
+                catalog
+                    .amprocs()
+                    .find(|p| {
+                        p.family == c.family
+                            && p.left == c.intype
+                            && p.right == c.intype
+                            && p.number == HASH_EXTENDED_PROC
+                    })
+                    .map(|p| (p.function, c.intype)),
+            );
+        }
+        let amops = catalog
+            .amops()
+            .filter(|a| a.purpose == b's' && families.contains(&a.family))
+            .map(|a| (a.family, a.operator, a.strategy))
+            .collect();
         let mut d = Dispatch {
             oid: rel.oid,
             name: rel.name.clone(),
@@ -206,14 +239,9 @@ impl Dispatch {
             exprs: key_exprs,
             types,
             columns: rel.columns.iter().map(|c| c.ty).collect(),
-            families: key
-                .classes
-                .iter()
-                .map(|&class| {
-                    let classes = rupg_pgcatalog::builtin::opclasses();
-                    classes.iter().find(|c| c.oid == class).map_or(0, |c| c.family)
-                })
-                .collect(),
+            families,
+            hashers,
+            amops,
             collated: key.collations.iter().map(|&c| c != 0).collect(),
             parts,
         };
@@ -239,14 +267,40 @@ impl Dispatch {
         Ok(values)
     }
 
+    /// `compute_partition_hash_value`: the hash of the values of the key. A support function of the catalog gets the value and the seed, as `FunctionCall2Coll` gives them.
+    fn hash(&self, values: &[Value], session: &dyn Session) -> Result<u64> {
+        let mut row = 0;
+        for ((value, &ty), hasher) in values.iter().zip(&self.types).zip(&self.hashers) {
+            if value.is_null() {
+                continue;
+            }
+            let seed = rupg_func::HASH_PARTITION_SEED;
+            let Some((function, intype)) = *hasher else {
+                row = rupg_func::hash_combine64(row, rupg_func::extended_hash(ty, value, seed)?);
+                continue;
+            };
+            let args = vec![
+                Expr::constant(value.clone(), intype, -1, None),
+                Expr::constant(Value::Int8(seed.cast_signed()), oid::INT8, -1, None),
+            ];
+            let call =
+                Func { oid: function, args, form: FuncForm::Call, variadic: false, retset: false };
+            let call = Expr::new(ExprKind::Func(call), oid::INT8);
+            let one = crate::evaluate_row(&[call], self.oid, &[], &[], session)?;
+            let Some(Value::Int8(one)) = one.first() else {
+                return Err(Error::internal(format!("function {function} returned NULL")));
+            };
+            row = rupg_func::hash_combine64(row, one.cast_unsigned());
+        }
+        Ok(row)
+    }
+
     /// `get_partition_for_tuple`: the partition whose bound takes the values of the key, or else the default partition.
-    fn find(&self, values: &[Value]) -> Result<Option<&Part>> {
+    fn find(&self, values: &[Value], session: &dyn Session) -> Result<Option<&Part>> {
         let mut found = None;
         match self.strategy {
             PartStrategy::Hash => {
-                let typed: Vec<(u32, Value)> =
-                    self.types.iter().copied().zip(values.iter().cloned()).collect();
-                let hash = rupg_func::partition_hash(&typed)?;
+                let hash = self.hash(values, session)?;
                 found = self.parts.iter().find(|p| {
                     matches!(p.bound, Bound::Hash { modulus, remainder } if hash % modulus == remainder)
                 });

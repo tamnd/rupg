@@ -327,6 +327,19 @@ impl Definer<'_, '_> {
         Ok(found)
     }
 
+    /// `OpclassnameGetOpcid` and `get_opclass_oid` of `ResolveOpClass`: the class of the access method that the name gives, of the catalog or built in, and the type that it indexes.
+    pub(super) fn opclass_by_name(&self, method: u32, list: &[&str]) -> Result<(u32, u32)> {
+        let Some(method) = METHODS.iter().find(|m| m.oid == method) else {
+            return Err(Error::internal(format!("cache lookup failed for access method {method}")));
+        };
+        let class = self.opcf_lookup(false, method, list, false)?.unwrap_or_default();
+        let intype = match self.catalog.opclass(class) {
+            Some(c) => c.intype,
+            None => builtin::opclasses().iter().find(|c| c.oid == class).map_or(0, |c| c.intype),
+        };
+        Ok((class, intype))
+    }
+
     /// `get_opfamily_oid` with `missing_ok` false.
     fn opfamily_oid(&self, method: &Method, list: &List) -> Result<u32> {
         Ok(self.opcf_lookup(true, method, &names(list), false)?.unwrap_or_default())

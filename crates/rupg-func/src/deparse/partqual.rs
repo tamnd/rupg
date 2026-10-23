@@ -63,7 +63,7 @@ fn order(a: &Expr, b: &Expr) -> Result<Ordering> {
 }
 
 /// The columns of the partition key of `parent`.
-fn key_columns(parent: &Relation, key: &PartitionKey) -> Result<Vec<KeyColumn>> {
+fn key_columns(catalog: &Catalog, parent: &Relation, key: &PartitionKey) -> Result<Vec<KeyColumn>> {
     let exprs = match &key.exprs {
         Some(text) => node::read_list(text)?,
         None => Vec::new(),
@@ -85,16 +85,22 @@ fn key_columns(parent: &Relation, key: &PartitionKey) -> Result<Vec<KeyColumn>> 
             (expr, collation)
         };
         let class = key.classes.get(keyno).copied().unwrap_or(0);
-        let row = builtin::opclasses()
-            .iter()
-            .find(|c| c.oid == class)
-            .ok_or_else(|| Error::internal(format!("cache lookup failed for opclass {class}")))?;
+        let (family, intype) = match catalog.opclass(class) {
+            Some(c) => (c.family, c.intype),
+            None => builtin::opclasses()
+                .iter()
+                .find(|c| c.oid == class)
+                .map(|c| (c.family, c.intype))
+                .ok_or_else(|| {
+                    Error::internal(format!("cache lookup failed for opclass {class}"))
+                })?,
+        };
         columns.push(KeyColumn {
             expr,
             collation,
             key_collation: key.collations.get(keyno).copied().unwrap_or(0),
-            family: row.family,
-            intype: row.intype,
+            family,
+            intype,
         });
     }
     Ok(columns)
@@ -388,7 +394,7 @@ fn bound_qual(catalog: &Catalog, parent: &Relation, bound: &PartitionBound) -> R
         .partition_key
         .as_ref()
         .ok_or_else(|| Error::internal(format!("relation {} is not partitioned", parent.oid)))?;
-    let columns = key_columns(parent, key)?;
+    let columns = key_columns(catalog, parent, key)?;
     let first = columns.first().ok_or_else(|| Error::internal("a partition key with no column"))?;
     match (key.strategy, bound) {
         (PartStrategy::Hash, PartitionBound::Hash { modulus, remainder }) => {
