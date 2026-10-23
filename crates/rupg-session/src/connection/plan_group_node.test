@@ -1,0 +1,193 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (id int PRIMARY KEY, x int);
+CREATE TABLE
+> CREATE INDEX a_x ON a (x);
+CREATE INDEX
+> INSERT INTO a SELECT g, g % 7 FROM generate_series(1, 50) g;
+INSERT 0 50
+> EXPLAIN SELECT x FROM a GROUP BY x ORDER BY x LIMIT 3;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.15..1.41 rows=3 width=4)
+row   ->  Group  (cost=0.15..83.71 rows=200 width=4)
+row         Group Key: x
+row         ->  Index Only Scan using a_x on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT x FROM a GROUP BY x;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=38.25..40.25 rows=200 width=4)
+row   Group Key: x
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT x FROM a GROUP BY x ORDER BY x;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=47.89..48.39 rows=200 width=4)
+row   Sort Key: x
+row   ->  HashAggregate  (cost=38.25..40.25 rows=200 width=4)
+row         Group Key: x
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT x FROM a GROUP BY x HAVING x > 2 ORDER BY x LIMIT 2;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.15..0.75 rows=2 width=4)
+row   ->  Group  (cost=0.15..59.22 rows=198 width=4)
+row         Group Key: x
+row         ->  Index Only Scan using a_x on a  (cost=0.15..57.33 rows=753 width=4)
+row               Index Cond: (x > 2)
+EXPLAIN
+> EXPLAIN SELECT x FROM a GROUP BY x HAVING random() > 0.5 ORDER BY x LIMIT 2;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.15..2.68 rows=2 width=4)
+row   ->  Group  (cost=0.15..84.71 rows=67 width=4)
+row         Group Key: x
+row         Filter: (random() > '0.5'::double precision)
+row         ->  Index Only Scan using a_x on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT x + 1 FROM a GROUP BY x + 1 ORDER BY 1 LIMIT 2;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=48.40..48.41 rows=2 width=4)
+row   ->  Sort  (cost=48.40..48.90 rows=200 width=4)
+row         Sort Key: ((x + 1))
+row         ->  HashAggregate  (cost=43.90..46.40 rows=200 width=4)
+row               Group Key: (x + 1)
+row               ->  Seq Scan on a  (cost=0.00..38.25 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT x FROM a GROUP BY x) s ORDER BY x LIMIT 3;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.15..1.41 rows=3 width=4)
+row   ->  Group  (cost=0.15..83.71 rows=200 width=4)
+row         Group Key: a.x
+row         ->  Index Only Scan using a_x on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN VERBOSE SELECT x FROM a GROUP BY x ORDER BY x LIMIT 3;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.15..1.41 rows=3 width=4)
+row   Output: x
+row   ->  Group  (cost=0.15..83.71 rows=200 width=4)
+row         Output: x
+row         Group Key: a.x
+row         ->  Index Only Scan using a_x on public.a  (cost=0.15..78.06 rows=2260 width=4)
+row               Output: x
+EXPLAIN
+> EXPLAIN (FORMAT JSON) SELECT x FROM a GROUP BY x ORDER BY x LIMIT 3;
+fields QUERY PLAN:114:-1:-1
+row [
+  {
+    "Plan": {
+      "Node Type": "Limit",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Startup Cost": 0.15,
+      "Total Cost": 1.41,
+      "Plan Rows": 3,
+      "Plan Width": 4,
+      "Disabled": false,
+      "Plans": [
+        {
+          "Node Type": "Group",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Startup Cost": 0.15,
+          "Total Cost": 83.71,
+          "Plan Rows": 200,
+          "Plan Width": 4,
+          "Disabled": false,
+          "Group Key": ["x"],
+          "Plans": [
+            {
+              "Node Type": "Index Only Scan",
+              "Parent Relationship": "Outer",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Scan Direction": "Forward",
+              "Index Name": "a_x",
+              "Relation Name": "a",
+              "Alias": "a",
+              "Startup Cost": 0.15,
+              "Total Cost": 78.06,
+              "Plan Rows": 2260,
+              "Plan Width": 4,
+              "Disabled": false
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
+EXPLAIN
+> EXPLAIN (FORMAT YAML, COSTS OFF) SELECT x FROM a GROUP BY x ORDER BY x LIMIT 3;
+fields QUERY PLAN:25:-1:-1
+row - Plan: 
+    Node Type: "Limit"
+    Parallel Aware: false
+    Async Capable: false
+    Disabled: false
+    Plans: 
+      - Node Type: "Group"
+        Parent Relationship: "Outer"
+        Parallel Aware: false
+        Async Capable: false
+        Disabled: false
+        Group Key: 
+          - "x"
+        Plans: 
+          - Node Type: "Index Only Scan"
+            Parent Relationship: "Outer"
+            Parallel Aware: false
+            Async Capable: false
+            Scan Direction: "Forward"
+            Index Name: "a_x"
+            Relation Name: "a"
+            Alias: "a"
+            Disabled: false
+EXPLAIN
+> SET enable_hashagg = off;
+SET
+> EXPLAIN SELECT x FROM a GROUP BY x;
+fields QUERY PLAN:25:-1:-1
+row Group  (cost=0.15..83.71 rows=200 width=4)
+row   Group Key: x
+row   ->  Index Only Scan using a_x on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT x, id FROM a GROUP BY x, id;
+fields QUERY PLAN:25:-1:-1
+row Group  (cost=0.15..83.71 rows=2260 width=8)
+row   Group Key: id
+row   ->  Index Scan using a_pkey on a  (cost=0.15..78.06 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT x, count(*) FROM a GROUP BY x;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=0.15..91.36 rows=200 width=12)
+row   Group Key: x
+row   ->  Index Only Scan using a_x on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT x FROM a GROUP BY x HAVING max(id) > 3;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=0.15..91.86 rows=67 width=4)
+row   Group Key: x
+row   Filter: (max(id) > 3)
+row   ->  Index Scan using a_x on a  (cost=0.15..78.06 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT DISTINCT x FROM a;
+fields QUERY PLAN:25:-1:-1
+row Unique  (cost=0.15..83.71 rows=200 width=4)
+row   ->  Index Only Scan using a_x on a  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> SELECT x FROM a GROUP BY x ORDER BY x;
+fields x@a.2:23:4:-1
+row 0
+row 1
+row 2
+row 3
+row 4
+row 5
+row 6
+SELECT 7
+> SELECT x FROM a GROUP BY x HAVING random() >= 0 ORDER BY x LIMIT 2;
+fields x@a.2:23:4:-1
+row 0
+row 1
+SELECT 2
