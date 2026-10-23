@@ -5,8 +5,8 @@
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 
-use rupg_analyze::{Expr, ExprKind, Var};
-use rupg_plan::{Item, Kind, Node, Operation, Replaced};
+use rupg_analyze::{Expr, ExprKind, Query, TABLE_OID_ATTNUM, Target, Var};
+use rupg_plan::{Item, Kind, Node, Operation, Replaced, TARGET};
 
 use crate::{Level, cost, exprs, from, upper};
 
@@ -98,7 +98,7 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             if let Some(child) = node.children.first_mut() {
                 set(level, child, want, false);
             }
-            node.output.clear();
+            node.output = returning_output(level, *operation).unwrap_or_default();
             // `create_modifytable_path`: with `RETURNING`, the node has the width of the rows below it.
             let returning = level.query.write.as_ref().is_some_and(|w| w.returning.is_some());
             node.cost.width = match node.children.first() {
@@ -293,16 +293,103 @@ fn modify_targets<'q>(level: &Level<'q>, operation: Operation) -> Vec<Item<'q>> 
                 .collect();
             out.push(Item::of(&tid.expr));
             out.extend(level.marks.iter().map(|m| item(m.clone())));
+            out.extend(returning_carried(query));
             out
         }
         Operation::Delete => {
             let mut out = vec![Item::of(&tid.expr)];
             out.extend(level.marks.iter().map(|m| item(m.clone())));
+            out.extend(returning_carried(query));
             out
         }
         Operation::Merge => merge_targets(level).unwrap_or_else(all),
         _ => all(),
     }
+}
+
+/// The columns of the other relations that `RETURNING` of an `UPDATE` or a `DELETE` reads, which `preprocess_targetlist` adds after the row marks. The query carries them after the row and before the ID of the version.
+fn returning_carried(query: &Query) -> impl Iterator<Item = Item<'_>> {
+    let width = query
+        .write
+        .as_ref()
+        .and_then(|w| w.returning.as_deref())
+        .and_then(|r| r.relations.first())
+        .map(|r| r.columns.len());
+    let end = query.targets.len().saturating_sub(1);
+    let carried = width.and_then(|w| query.targets.get(w..end)).unwrap_or_default();
+    carried
+        .iter()
+        .filter(|t| matches!(t.expr.kind, ExprKind::Var(v) if v.relation != 0 && v.levels_up == 0))
+        .map(|t| Item::of(&t.expr))
+}
+
+/// The list of `RETURNING` of a write, as the target list of its `ModifyTable`. A column of the row that the statement writes is a column of the target table, which is the relation 0 of the query or [`TARGET`] for an `INSERT`, and a carried value is the column of the other relation that the query carries. None for a list that reads the old or the new row by name, `merge_action()`, the OID of a partition or a subquery.
+fn returning_output<'q>(level: &Level<'q>, operation: Operation) -> Option<Vec<Item<'q>>> {
+    let query = level.query;
+    let write = query.write.as_ref()?;
+    let returning = write.returning.as_deref()?;
+    let partition = query.targets.iter().any(
+        |t| matches!(t.expr.kind, ExprKind::Var(v) if v.relation == 0 && v.attnum == TABLE_OID_ATTNUM),
+    );
+    if write.instead || partition {
+        return None;
+    }
+    let width = returning.relations.first()?.columns.len();
+    let (base, carried): (usize, &[Target]) = match operation {
+        Operation::Insert => (width, &[]),
+        Operation::Update | Operation::Delete => {
+            (width, query.targets.get(width..query.targets.len().checked_sub(1)?)?)
+        }
+        Operation::Merge => {
+            let count = write.merge.as_ref()?.carried;
+            (3 * width + 1, &query.targets[query.targets.len().checked_sub(count)?..])
+        }
+    };
+    let relation = if operation == Operation::Insert { TARGET } else { 0 };
+    let map = |attnum: i16| -> Option<Expr> {
+        let at = usize::try_from(attnum).ok()?;
+        if (1..=width).contains(&at) {
+            return Some(Expr::new(ExprKind::Var(Var { relation, attnum, levels_up: 0 }), 0));
+        }
+        let value = &carried.get(at.checked_sub(base + 1)?)?.expr;
+        // A carried column of the target table is a column of the old row of an `UPDATE`.
+        match value.kind {
+            ExprKind::Var(v) if v.relation != 0 && v.levels_up == 0 => Some(value.clone()),
+            _ => None,
+        }
+    };
+    returning
+        .targets
+        .iter()
+        .map(|t| {
+            let mut expr = t.expr.clone();
+            map_row(&mut expr, &map).then(|| Item::owned(expr))
+        })
+        .collect()
+}
+
+/// Puts in the place of each column of the relation 0 the expression of `map` for its number, with the type of the column. False when `map` gives no expression, or the expression has a subquery or a column of a query outside it.
+fn map_row(expr: &mut Expr, map: &dyn Fn(i16) -> Option<Expr>) -> bool {
+    let mut ok = true;
+    expr.each_mut(0, &mut |e: &mut Expr, _| match &e.kind {
+        ExprKind::Var(v) if v.relation == 0 && v.levels_up == 0 => {
+            match map(v.attnum) {
+                Some(mut value) => {
+                    value.ty = e.ty;
+                    value.typmod = e.typmod;
+                    *e = value;
+                }
+                None => ok = false,
+            }
+            true
+        }
+        ExprKind::Var(_) | ExprKind::SubLink(_) => {
+            ok = false;
+            true
+        }
+        _ => false,
+    });
+    ok
 }
 
 /// `preprocess_targetlist` for a `MERGE`: the ID of the version of the row of the target table, then the columns of the other relations that the condition and the row of each `WHEN` clause read, then the row marks, then the columns that only `RETURNING` reads. The columns of the target table do not come, as the executor reads them from the row of the table.
