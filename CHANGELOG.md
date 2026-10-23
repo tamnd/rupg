@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.74 (2026-10-23)
+
+The tag `v0.1.73` has no release, because the check of the release failed on the format of one line. 0.1.74 has all the changes that 0.1.73 was to have.
+
 ### Added
 
 - `GRANT` and `REVOKE` of privileges on tables, views, sequences, columns, schemas, functions, procedures, types, domains and languages, with `ON ALL ... IN SCHEMA`, grant options, `CASCADE` and the grantor selection of PostgreSQL. The ACL goes to `relacl`, `attacl`, `nspacl`, `proacl`, `typacl` and `lanacl`, also for a built-in object, and the `has_*_privilege` functions read it. `DROP ROLE` lists the privileges that a role still has, and a dependency list names a procedure as a function, as PostgreSQL does (#614).
@@ -13,7 +17,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Changed
 
-- The 42 crates of `crates/` can be published to crates.io. Before, each crate had `publish = false`. `rupg-types` now reads `tzdata.zi` and the `Default` time zone abbreviations from copies in its own directory, which `cargo xtask tzdata` makes, because a published crate cannot read `vendor/`.
+- The 42 crates of `crates/` can be published to crates.io. Before, each crate had `publish = false`. `rupg-types` now reads `tzdata.zi` and the `Default` time zone abbreviations from copies in its own directory, which `cargo xtask tzdata` makes, because a published crate cannot read `vendor/` (#612, #615).
 
 ## 0.1.72 (2026-10-23)
 
