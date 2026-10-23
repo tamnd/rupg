@@ -55,7 +55,7 @@ use rupg_types::{Value, oid};
 use crate::coerce::AtOpt;
 
 pub use call::OutArg;
-pub use coerce::{Context, Path, can_coerce, find_path};
+pub use coerce::{Context, Path, can_coerce, explicit_cast, find_path};
 pub use colname::figure_colname;
 pub use constraints_set::set_constraints;
 pub use cte::{Cte, CteRef};

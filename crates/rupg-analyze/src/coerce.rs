@@ -79,6 +79,38 @@ pub fn find_path(target: u32, source: u32, context: Context) -> Path {
     }
 }
 
+/// `coerce_to_target_type` with `COERCION_EXPLICIT` and `COERCE_EXPLICIT_CAST` for an expression whose type is known, to a type that is not a domain, as the cast `$1::text` in the body of a SQL function that `inline_function` puts in a query. `None` when the type has no such cast.
+pub fn explicit_cast(expr: Expr, target: u32) -> Option<Expr> {
+    if expr.ty == target {
+        return Some(expr);
+    }
+    let location = expr.location;
+    match find_path(target, expr.ty, Context::Explicit) {
+        Path::None | Path::ArrayCoerce => None,
+        Path::Relabel => Some(Expr {
+            kind: ExprKind::Relabel(Box::new(expr), CastForm::Explicit),
+            ty: target,
+            typmod: -1,
+            location,
+        }),
+        Path::ViaIo => Some(Expr {
+            kind: ExprKind::CoerceViaIo(Box::new(expr), CastForm::Explicit),
+            ty: target,
+            typmod: -1,
+            location,
+        }),
+        Path::Func(func) => Some(build_cast(
+            expr,
+            func,
+            target,
+            -1,
+            Context::Explicit,
+            FuncForm::ExplicitCast,
+            location,
+        )),
+    }
+}
+
 /// `can_coerce_type`: true if each input type has a cast to its target type in the context.
 pub fn can_coerce(inputs: &[u32], targets: &[u32], context: Context) -> bool {
     let mut generic = false;
