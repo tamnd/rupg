@@ -6,7 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- A `btree` index of a table with rows has two pages for the planner, the metapage and the root, as in PostgreSQL, so the cost of a nested loop over a scan of the index is the cost of PostgreSQL. (#NNN)
+- A `btree` index of a table with rows has two pages for the planner, the metapage and the root, as in PostgreSQL, so the cost of a nested loop over a scan of the index is the cost of PostgreSQL. (#594)
 
 ## 0.1.70 (2026-10-23)
 
