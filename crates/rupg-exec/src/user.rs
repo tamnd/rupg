@@ -216,6 +216,7 @@ pub(crate) fn rows(
         "pg_enum" => enum_labels(table, catalog),
         "pg_range" => ranges(table, catalog),
         "pg_cast" => casts(table, catalog),
+        "pg_operator" => operators(table, catalog),
         "pg_partitioned_table" => partitioned_tables(table, catalog),
         "pg_inherits" => inherits(table, catalog),
         _ => Vec::new(),
@@ -1213,6 +1214,31 @@ fn casts<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("castfunc", oid(c.func))
                 .set("castcontext", Value::Char(c.context))
                 .set("castmethod", Value::Char(c.method));
+            row
+        })
+        .collect()
+}
+
+fn operators<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .operators()
+        .map(|o| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(o.oid))
+                .set("oprname", Value::text(o.name.clone()))
+                .set("oprnamespace", oid(o.namespace))
+                .set("oprowner", oid(o.owner))
+                .set("oprkind", Value::Char(o.kind))
+                .set("oprcanmerge", Value::Bool(o.can_merge))
+                .set("oprcanhash", Value::Bool(o.can_hash))
+                .set("oprleft", oid(o.left))
+                .set("oprright", oid(o.right))
+                .set("oprresult", oid(o.result))
+                .set("oprcom", oid(o.commutator))
+                .set("oprnegate", oid(o.negator))
+                .set("oprcode", oid(o.code))
+                .set("oprrest", oid(o.restrict))
+                .set("oprjoin", oid(o.join));
             row
         })
         .collect()

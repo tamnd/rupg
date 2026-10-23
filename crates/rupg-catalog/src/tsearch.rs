@@ -208,7 +208,7 @@ impl Catalog {
     }
 
     /// `record_object_address_dependencies`: the normal dependencies on the objects without duplicates, in the order of `object_address_comparator`. The OIDs go down, then the OIDs of the catalogs go up.
-    fn depend_all(&mut self, me: ObjRef, mut refs: Vec<ObjRef>) {
+    pub(crate) fn depend_all(&mut self, me: ObjRef, mut refs: Vec<ObjRef>) {
         refs.sort_unstable_by(|a, b| {
             b.oid.cmp(&a.oid).then(a.class.cmp(&b.class)).then(a.sub.cmp(&b.sub))
         });

@@ -1122,6 +1122,7 @@ impl Connection {
                         ObjectType::OBJECT_FUNCTION => CommandTag::DropFunction,
                         ObjectType::OBJECT_PROCEDURE => CommandTag::DropProcedure,
                         ObjectType::OBJECT_ROUTINE => CommandTag::DropRoutine,
+                        ObjectType::OBJECT_OPERATOR => CommandTag::DropOperator,
                         ObjectType::OBJECT_TSPARSER => CommandTag::DropTextSearchParser,
                         ObjectType::OBJECT_TSDICTIONARY => CommandTag::DropTextSearchDictionary,
                         ObjectType::OBJECT_TSTEMPLATE => CommandTag::DropTextSearchTemplate,
@@ -1146,6 +1147,7 @@ impl Connection {
                     Node::CreateSeqStmt(_) => CommandTag::CreateSequence,
                     Node::AlterSeqStmt(_) => CommandTag::AlterSequence,
                     Node::DefineStmt(stmt) => match stmt.kind {
+                        ObjectType::OBJECT_OPERATOR => CommandTag::CreateOperator,
                         ObjectType::OBJECT_TSPARSER => CommandTag::CreateTextSearchParser,
                         ObjectType::OBJECT_TSDICTIONARY => CommandTag::CreateTextSearchDictionary,
                         ObjectType::OBJECT_TSTEMPLATE => CommandTag::CreateTextSearchTemplate,
@@ -5729,6 +5731,12 @@ mod tests {
     #[test]
     fn functions_in_c_and_internal() {
         big_stack(|| script(include_str!("connection/cfunc.test")));
+    }
+
+    /// `CREATE OPERATOR` and `DROP OPERATOR`: an operator of a built-in function or of a function in SQL, the shells that a commutator or a negator makes and a later `CREATE OPERATOR` fills, the links of `oprcom` and `oprnegate`, the errors of `DefineOperator` and `OperatorCreate`, `COMMENT ON OPERATOR`, the description of an operator in a list of dependencies, and the notices of `IF EXISTS`. `connection/oper.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn create_and_drop_operators() {
+        big_stack(|| script(include_str!("connection/oper.test")));
     }
 
     /// A query that is a `UNION ALL` of `SELECT`s with the types of its columns and has `ORDER BY` becomes an append relation, as `flatten_simple_union_all` makes it, so the planner can plan a `Merge Append` of the plans of the `SELECT`s in the order. A `SELECT` with its own `WHERE` is not a member of the append relation, as `is_safe_append_member`, and its plan gets a sort. `connection/plan_union_all_order.test` is the output of PostgreSQL 19 for the same script in a new database.

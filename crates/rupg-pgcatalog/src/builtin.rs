@@ -1170,7 +1170,26 @@ pub struct SessionFunction {
     pub src: String,
 }
 
-/// An object of the catalog of a session that has rows in the overlay of the thread: a type, or a function in SQL.
+/// An operator of the catalog of a session, for [`use_session_types`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionOperator {
+    pub oid: u32,
+    pub name: String,
+    pub namespace: u32,
+    /// `oprkind`: `b` for an infix operator or `l` for a prefix operator.
+    pub kind: u8,
+    pub can_merge: bool,
+    pub can_hash: bool,
+    pub left: u32,
+    pub right: u32,
+    pub result: u32,
+    pub commutator: u32,
+    pub negator: u32,
+    /// `oprcode`, or 0 for a shell.
+    pub code: u32,
+}
+
+/// An object of the catalog of a session that has rows in the overlay of the thread: a type, a function, or an operator.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionType {
     Domain(SessionDomain),
@@ -1178,6 +1197,7 @@ pub enum SessionType {
     Enum(SessionEnum),
     Range(SessionRange),
     Function(SessionFunction),
+    Operator(SessionOperator),
 }
 
 /// The types of the catalog that the session of the thread uses now.
@@ -1191,6 +1211,7 @@ struct Session {
     ranges: Vec<&'static RangeRow>,
     procs: Vec<&'static ProcRow>,
     casts: Vec<&'static CastRow>,
+    operators: Vec<&'static OperatorRow>,
 }
 
 thread_local! {
@@ -1207,6 +1228,7 @@ struct Interned {
     range: Option<&'static RangeRow>,
     procs: Vec<&'static ProcRow>,
     casts: Vec<&'static CastRow>,
+    operator: Option<&'static OperatorRow>,
 }
 
 /// The rows of each type that a session used, with the facts that made them. A type gets its rows once in the process, also when many sessions use it, so the rows live as long as the process, as the built-in rows do.
@@ -1249,6 +1271,23 @@ fn session_rows(ty: &SessionType) -> Option<Interned> {
         SessionType::Range(new) => range_rows(new)?,
         SessionType::Function(new) => {
             Interned { procs: vec![Box::leak(Box::new(function_row(new)))], ..Interned::default() }
+        }
+        SessionType::Operator(new) => {
+            let row = OperatorRow {
+                oid: new.oid,
+                name: new.name.clone().leak(),
+                namespace: new.namespace,
+                kind: new.kind,
+                can_merge: new.can_merge,
+                can_hash: new.can_hash,
+                left: new.left,
+                right: new.right,
+                result: new.result,
+                commutator: new.commutator,
+                negator: new.negator,
+                code: new.code,
+            };
+            Interned { operator: Some(Box::leak(Box::new(row))), ..Interned::default() }
         }
     })
 }
@@ -1312,6 +1351,7 @@ pub fn use_session_types(types: Vec<SessionType>) {
                 s.ranges.extend(rows.range);
                 s.procs.extend(rows.procs);
                 s.casts.extend(rows.casts);
+                s.operators.extend(rows.operator);
             }
             s.given.push(ty);
         });
@@ -1563,15 +1603,21 @@ pub fn operators() -> &'static [OperatorRow] {
     &BUILTIN.operators
 }
 
-/// The built-in operator with this OID.
+/// The built-in operator with this OID, or an operator that [`use_session_types`] gave to the thread.
 pub fn operator_by_oid(oid: u32) -> Option<&'static OperatorRow> {
-    BUILTIN.operator_oid.get(&oid).map(|&i| &BUILTIN.operators[i])
+    BUILTIN
+        .operator_oid
+        .get(&oid)
+        .map(|&i| &BUILTIN.operators[i])
+        .or_else(|| SESSION.with_borrow(|s| s.operators.iter().copied().find(|o| o.oid == oid)))
 }
 
-/// The built-in operators with this name.
+/// The built-in operators with this name, then the operators with this name that [`use_session_types`] gave to the thread.
 pub fn operators_named(name: &str) -> impl Iterator<Item = &'static OperatorRow> {
     let b = &*BUILTIN;
-    b.operator_name.get(name).into_iter().flatten().map(|&i| &b.operators[i])
+    let added: Vec<&'static OperatorRow> =
+        SESSION.with_borrow(|s| s.operators.iter().copied().filter(|o| o.name == name).collect());
+    b.operator_name.get(name).into_iter().flatten().map(|&i| &b.operators[i]).chain(added)
 }
 
 /// Every built-in cast.
