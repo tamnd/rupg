@@ -6,7 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- Deferrable unique constraints and primary keys. A new row with the key of another row is checked again at the end of the statement, or at the commit when the constraint is deferred, as `unique_key_recheck` does it. The constraint gets its internal trigger, `ON CONFLICT` with a deferrable arbiter gives the error of PostgreSQL, and a rollback to a savepoint removes the checks of the subtransaction (#NNN).
+- Deferrable unique constraints and primary keys. A new row with the key of another row is checked again at the end of the statement, or at the commit when the constraint is deferred, as `unique_key_recheck` does it. The constraint gets its internal trigger, `ON CONFLICT` with a deferrable arbiter gives the error of PostgreSQL, and a rollback to a savepoint removes the checks of the subtransaction (#609).
 
 ## 0.1.72 (2026-10-23)
 
