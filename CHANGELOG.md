@@ -18,6 +18,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Fixed
 
+- `jsonb_hash` and `jsonb_hash_extended` give the values of PostgreSQL, so a hash index, a hash join and `PARTITION BY HASH` work on `jsonb`. `hash_aclitem_extended` takes a seed that is not 0, and the extended hash of an array or a record of a type without that function names it in the error (#NNN).
 - `CREATE OPERATOR` checks `USAGE` on the argument types and the result type, and `EXECUTE` on the function and the estimators, in the order of `DefineOperator` (#638).
 - `ALTER TABLE ... NO INHERIT` on a typed table or on a partition gives the error of `ATPrepChangeInherit` (`42809`) before it looks up the parent, as `ALTER TABLE ... INHERIT` does (#637).
 - A function in SQL with a body in a string can call itself, as `ProcedureCreate` adds the function before `fmgr_sql_validator` reads the body. A call of a function in SQL that calls itself with no end gives "stack depth limit exceeded" (`54001`) after 100 levels and does not use all the stack (#636).

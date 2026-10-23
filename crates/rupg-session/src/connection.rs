@@ -5824,6 +5824,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/opperm.test")));
     }
 
+    /// `jsonb_hash` and `jsonb_hash_extended` hash the keys, the values and the elements in the order of `JsonbIteratorNext`, so a `jsonb` column can be the key of `PARTITION BY HASH`. `hash_aclitem_extended` takes a seed that is not 0, and `hash_array_extended` and `hash_record_extended` name the extended hash function in their error. `connection/hashjsonb.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn hashjsonb() {
+        big_stack(|| script(include_str!("connection/hashjsonb.test")));
+    }
+
     /// A query that is a `UNION ALL` of `SELECT`s with the types of its columns and has `ORDER BY` becomes an append relation, as `flatten_simple_union_all` makes it, so the planner can plan a `Merge Append` of the plans of the `SELECT`s in the order. A `SELECT` with its own `WHERE` is not a member of the append relation, as `is_safe_append_member`, and its plan gets a sort. `connection/plan_union_all_order.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_union_all_order() {

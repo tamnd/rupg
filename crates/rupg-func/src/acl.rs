@@ -11,7 +11,7 @@ use rupg_pgcatalog::builtin::{self, Owned};
 use rupg_types::{RegKind, Value, qualified_name_list};
 
 use crate::reg;
-use crate::{Call, Kernel, Session, bad_value, not_yet, type_error};
+use crate::{Call, Kernel, Session, bad_value, type_error};
 
 const ACL_INSERT: u32 = 1 << 0;
 const ACL_SELECT: u32 = 1 << 1;
@@ -1398,13 +1398,14 @@ fn hash_aclitem(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Int4(aclitem_sum(stored_item(item, call.session)?).cast_signed()))
 }
 
-/// `hash_aclitem_extended`: the sum of `hash_aclitem` for the seed 0. The engine does not have the hash of another seed yet.
+/// `hash_aclitem_extended`: the sum of `hash_aclitem` for the seed 0, and else the sum with `hash_uint32_extended`.
 fn hash_aclitem_extended(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let [item, Value::Int8(seed)] = args else { return Err(bad_value()) };
-    if *seed != 0 {
-        return Err(not_yet("hash_aclitem_extended with a seed that is not 0"));
+    let sum = aclitem_sum(stored_item(item, call.session)?);
+    if *seed == 0 {
+        return Ok(Value::Int8(i64::from(sum)));
     }
-    Ok(Value::Int8(i64::from(aclitem_sum(stored_item(item, call.session)?))))
+    Ok(Value::Int8(crate::hash::uint32_extended(sum, seed.cast_unsigned()).cast_signed()))
 }
 
 /// `aclinsert`, which PostgreSQL no longer has.
