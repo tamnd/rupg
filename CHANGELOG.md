@@ -18,6 +18,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Fixed
 
+- `CREATE OPERATOR` checks `USAGE` on the argument types and the result type, and `EXECUTE` on the function and the estimators, in the order of `DefineOperator` (#NNN).
 - `ALTER TABLE ... NO INHERIT` on a typed table or on a partition gives the error of `ATPrepChangeInherit` (`42809`) before it looks up the parent, as `ALTER TABLE ... INHERIT` does (#637).
 - A function in SQL with a body in a string can call itself, as `ProcedureCreate` adds the function before `fmgr_sql_validator` reads the body. A call of a function in SQL that calls itself with no end gives "stack depth limit exceeded" (`54001`) after 100 levels and does not use all the stack (#636).
 - A function that gives a set in the target list stops after the rows that `LIMIT` reads. `SELECT generate_series('2022-01-01'::timestamp, 'infinity', '1 month') LIMIT 10` gave "timestamp out of range", and `SELECT generate_series(1, 2000000000) LIMIT 3` made all the rows before `LIMIT` (#635).

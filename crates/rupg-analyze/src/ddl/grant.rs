@@ -930,6 +930,34 @@ impl Definer<'_, '_> {
         self.pg_aclmask(&roles, Object::new(Kind::Schema, namespace), role, CREATE) != 0
     }
 
+    /// `object_aclcheck` of `USAGE` on a type, with `pg_type_aclmask` and `aclcheck_error_type`. An array type has the privileges of its element type, and a multirange type has the privileges of its range type.
+    pub(super) fn check_type_usage(&self, ty: u32) -> Result<()> {
+        let element = crate::types::element(ty);
+        let shown = if element != 0 { element } else { ty };
+        let range = crate::types::multirange_range(shown);
+        let owner = if range != 0 { range } else { shown };
+        let roles = rupg_pgcatalog::roles::current();
+        if self.pg_aclmask(&roles, Object::new(Kind::Type, owner), self.user, USAGE) != 0 {
+            return Ok(());
+        }
+        Err(Error::new(
+            SqlState::INSUFFICIENT_PRIVILEGE,
+            format!("permission denied for type {}", self.type_text(shown)),
+        ))
+    }
+
+    /// `object_aclcheck` of `EXECUTE` on a function, with `aclcheck_error`. `name` is the name of the function as the statement gives it.
+    pub(super) fn check_function_execute(&self, function: u32, name: &str) -> Result<()> {
+        let roles = rupg_pgcatalog::roles::current();
+        if self.pg_aclmask(&roles, Object::new(Kind::Function, function), self.user, EXECUTE) != 0 {
+            return Ok(());
+        }
+        Err(Error::new(
+            SqlState::INSUFFICIENT_PRIVILEGE,
+            format!("permission denied for function {name}"),
+        ))
+    }
+
     /// The `relkind` of a relation of the catalog or built in.
     fn relation_kind(&self, oid: u32) -> u8 {
         match self.catalog.relation(oid) {

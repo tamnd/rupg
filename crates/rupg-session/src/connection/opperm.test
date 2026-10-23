@@ -1,0 +1,90 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE ROLE regress_opp;
+CREATE ROLE
+> CREATE TYPE opp_t AS ENUM ('a', 'b');
+CREATE TYPE
+> CREATE TYPE opp_r AS RANGE (subtype = int4);
+CREATE TYPE
+> CREATE FUNCTION opp_f1(opp_t, int8) RETURNS boolean AS $$ SELECT true $$ LANGUAGE sql IMMUTABLE;
+CREATE FUNCTION
+> CREATE FUNCTION opp_f2(int8, opp_t[]) RETURNS boolean AS $$ SELECT true $$ LANGUAGE sql IMMUTABLE;
+CREATE FUNCTION
+> CREATE FUNCTION opp_f3(int8, int8) RETURNS boolean AS $$ SELECT true $$ LANGUAGE sql IMMUTABLE;
+CREATE FUNCTION
+> CREATE FUNCTION opp_f4(int8, int8) RETURNS opp_t AS $$ SELECT NULL::opp_t $$ LANGUAGE sql IMMUTABLE;
+CREATE FUNCTION
+> CREATE FUNCTION opp_f5(opp_r_multirange, int8) RETURNS boolean AS $$ SELECT true $$ LANGUAGE sql IMMUTABLE;
+CREATE FUNCTION
+> CREATE FUNCTION opp_f6(int4, int4) RETURNS boolean AS $$ SELECT true $$ LANGUAGE sql IMMUTABLE;
+CREATE FUNCTION
+> REVOKE USAGE ON TYPE opp_t FROM PUBLIC;
+REVOKE
+> REVOKE USAGE ON TYPE opp_r FROM PUBLIC;
+REVOKE
+> REVOKE EXECUTE ON FUNCTION opp_f3(int8, int8) FROM PUBLIC;
+REVOKE
+> REVOKE EXECUTE ON FUNCTION eqsel(internal, oid, internal, integer) FROM PUBLIC;
+REVOKE
+> GRANT CREATE ON SCHEMA public TO regress_opp;
+GRANT
+> SET ROLE regress_opp;
+SET
+is_superuser=off
+> CREATE OPERATOR #*# (leftarg = opp_t, rightarg = int8, procedure = opp_f1);
+ERROR 42501 permission denied for type opp_t
+> CREATE OPERATOR #*# (leftarg = int8, rightarg = opp_t[], procedure = opp_f2);
+ERROR 42501 permission denied for type opp_t
+> CREATE OPERATOR #*# (leftarg = int8, rightarg = int8, procedure = opp_f3);
+ERROR 42501 permission denied for function opp_f3
+> CREATE OPERATOR #*# (leftarg = int8, rightarg = int8, procedure = opp_f4);
+ERROR 42501 permission denied for type opp_t
+> CREATE OPERATOR #*# (leftarg = opp_r_multirange, rightarg = int8, procedure = opp_f5);
+ERROR 42501 permission denied for type opp_r_multirange
+> CREATE OPERATOR #*# (leftarg = int4, rightarg = int4, procedure = opp_f6, restrict = eqsel);
+ERROR 42501 permission denied for function eqsel
+> CREATE OPERATOR #*# (leftarg = int4, rightarg = int4, procedure = opp_f6, join = eqjoinsel);
+CREATE OPERATOR
+> CREATE OPERATOR #*# (leftarg = int4, rightarg = int4, procedure = opp_f9);
+ERROR 42883 function opp_f9(integer, integer) does not exist
+> CREATE OPERATOR #*# (leftarg = opp_t, procedure = opp_f9);
+ERROR 42P13 operator right argument type must be specified
+DETAIL Postfix operators are not supported.
+> RESET ROLE;
+RESET
+is_superuser=on
+> GRANT USAGE ON TYPE opp_t TO regress_opp;
+GRANT
+> SET ROLE regress_opp;
+SET
+is_superuser=off
+> CREATE OPERATOR #*# (leftarg = opp_t, rightarg = int8, procedure = opp_f1);
+CREATE OPERATOR
+> CREATE OPERATOR #*# (leftarg = int8, rightarg = opp_t[], procedure = opp_f2);
+CREATE OPERATOR
+> SELECT oprname, oprleft::regtype, oprright::regtype FROM pg_operator WHERE oprname = '#*#' ORDER BY 2, 3;
+fields oprname@pg_operator.2:19:64:-1,oprleft:2206:4:-1,oprright:2206:4:-1
+row #*#,bigint,opp_t[]
+row #*#,integer,integer
+row #*#,opp_t,bigint
+SELECT 3
+> RESET ROLE;
+RESET
+is_superuser=on
+> GRANT EXECUTE ON FUNCTION eqsel(internal, oid, internal, integer) TO PUBLIC;
+GRANT
+> DROP OPERATOR #*# (opp_t, int8);
+DROP OPERATOR
+> DROP OPERATOR #*# (int8, opp_t[]);
+DROP OPERATOR
+> DROP OPERATOR #*# (int4, int4);
+DROP OPERATOR
+> REVOKE CREATE ON SCHEMA public FROM regress_opp;
+REVOKE
+> DROP FUNCTION opp_f1, opp_f2, opp_f3, opp_f4, opp_f5, opp_f6;
+DROP FUNCTION
+> DROP TYPE opp_t, opp_r;
+DROP TYPE
+> DROP ROLE regress_opp;
+DROP ROLE
