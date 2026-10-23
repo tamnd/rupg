@@ -11,6 +11,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - `LEAKPROOF` and `NOT LEAKPROOF` in `CREATE FUNCTION` and `ALTER FUNCTION`, with `proleakproof` in `pg_proc` and the error of PostgreSQL for a role that is not a superuser. The `fipshash` functions of the setup of the regression tests use it (#610).
 - Deferrable unique constraints and primary keys. A new row with the key of another row is checked again at the end of the statement, or at the commit when the constraint is deferred, as `unique_key_recheck` does it. The constraint gets its internal trigger, `ON CONFLICT` with a deferrable arbiter gives the error of PostgreSQL, and a rollback to a savepoint removes the checks of the subtransaction (#609).
 
+### Changed
+
+- The 42 crates of `crates/` can be published to crates.io. Before, each crate had `publish = false`. `rupg-types` now reads `tzdata.zi` and the `Default` time zone abbreviations from copies in its own directory, which `cargo xtask tzdata` makes, because a published crate cannot read `vendor/`.
+
 ## 0.1.72 (2026-10-23)
 
 This release checks unique indexes on expressions and partial unique indexes in the writes, uses indexes on expressions and partial indexes in `EXPLAIN`, plans the join of `MERGE` with the target table on the left side, takes out left joins that read no column of the inner side, turns `IN` on a correlated subquery into a semi join, and shows the `Output` of `RETURNING` and `MERGE` as PostgreSQL does.

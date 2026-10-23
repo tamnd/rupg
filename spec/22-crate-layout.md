@@ -307,6 +307,10 @@ On 7 October 2026, `gh repo view` returned "Could not resolve to a Repository" f
 
 On 7 October 2026 the crates.io API returned 404 for all 41 names of section 22.4: `rupg` and the 40 `rupg-*` names. All 41 are free. The crates.io policy does not allow name squatting, so rupg publishes the crates when the first milestone with a public API ships (M1 for `rupg`, document 23) and not before. The names can be taken before then. If one is taken, the crate gets a new name, and the change is one line in each of this document, `Cargo.toml` and `layers.toml`. On 16 October 2026 the API also returned 404 for `rupg-snowball`, the 42nd crate.
 
+M1 shipped, so the 42 crates of `crates/` are published. On 23 October 2026 the API returned 404 for all 42 names, so no crate needed a new name. `rupg-crash` in `tests/crash` and `xtask` are not published. crates.io lets an account publish 5 new crates at a time and then 1 new crate each 10 minutes, so the first publish of the 42 crates takes about 7 hours. Each crate is published after the crates that it depends on.
+
+A published crate has only the files of its own directory. So a crate does not read a file of `vendor/` when it builds. `rupg-types` reads `tzdata.zi` and the `Default` set of the time zone abbreviations with `include_str!`, so `cargo xtask tzdata` copies the two files into `crates/rupg-types/src/generated/`, and `cargo xtask tzdata --check` fails when a copy is not equal to the vendored file. A test can still read `vendor/` when it runs.
+
 ## 22.14 Line budgets
 
 The budgets of section 22.4 add up to 943,000 lines. rudb has 421,288 lines in `crates/*/src` at `cd9f9676`, counted with `find crates -name '*.rs' -path '*/src/*' | xargs cat | wc -l`. That count includes comments and blank lines, and the rupg budgets use the same count. The generated tables of section 22.8 are not in the budgets.

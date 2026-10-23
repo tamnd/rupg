@@ -9,6 +9,10 @@ tests/**/*.plan -text
 # The vendored PostgreSQL, tzdata and Unicode files keep their bytes. Their hashes are in each PIN file.
 vendor/** -text linguist-vendored
 
+# The copies of vendored files that a crate reads with include_str! keep their bytes too. `cargo xtask tzdata --check` compares them with vendor/.
+crates/rupg-types/src/generated/tzdata.zi -text linguist-generated
+crates/rupg-types/src/generated/tznames_default.txt -text linguist-generated
+
 *.rupg binary
 *.bin binary
 *.parquet binary
