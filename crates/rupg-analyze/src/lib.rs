@@ -156,6 +156,10 @@ pub trait Env {
     fn temp_number(&self) -> Option<i32> {
         None
     }
+    /// `CommandCounterIncrement`: the lookups of the types and the functions by name and by OID see the objects of `catalog`, which the statement changed. A session with no catalog of its own does nothing.
+    fn command_counter_increment(&self, catalog: &rupg_catalog::Catalog) {
+        let _ = catalog;
+    }
     /// The validator of the language of a new function in a procedural language, such as `plpgsql_validator`, which compiles the body. A session with no language passes the function.
     ///
     /// # Errors

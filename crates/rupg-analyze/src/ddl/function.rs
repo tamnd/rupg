@@ -861,21 +861,32 @@ impl Definer<'_, '_> {
         let stmts = statements(stmt, options.src.as_deref()).map_err(transpose)?;
         // `fmgr_sql_validator` reads a body in a string only when no argument is polymorphic, and a body in SQL always.
         let polymorphic = function.argtypes.iter().any(|&ty| types::is_polymorphic(ty));
-        let mut refs = Vec::new();
-        if !(polymorphic && matches!(stmts, Statements::String(_))) {
-            let params = Params { types: function.argtypes.clone(), variable: false };
-            let mut an = Analyzer::new(self.an.env, &params);
-            an.set_path(&self.an.path);
-            an.sql_function = Some((function.name.clone(), input_names(&function)));
-            let body = an.body(&function, &stmts, &function.argtypes).map_err(transpose)?;
-            self.an.notices.append(&mut an.notices);
-            refs = match (&body, &stmts) {
-                (_, Statements::String(_)) => Vec::new(),
-                (Body::Value(expr), _) => body_references(self.catalog, expr)?,
-                (Body::Query(query), _) => super::view::function_references(self.catalog, query),
-            };
+        if let Statements::String(_) = &stmts {
+            // `ProcedureCreate` adds the function before `fmgr_sql_validator` reads a body in a string, so the body can call the function.
+            let oid = self.store_function(old, function.clone(), &defaults, support, Vec::new())?;
+            if !polymorphic {
+                self.an.env.command_counter_increment(self.catalog);
+                self.sql_body(&function, &stmts).map_err(transpose)?;
+            }
+            return Ok(oid);
         }
+        let body = self.sql_body(&function, &stmts).map_err(transpose)?;
+        let refs = match &body {
+            Body::Value(expr) => body_references(self.catalog, expr)?,
+            Body::Query(query) => super::view::function_references(self.catalog, query),
+        };
         self.store_function(old, function, &defaults, support, refs)
+    }
+
+    /// `fmgr_sql_validator`: the body of a new function in SQL, for a call with arguments of the types of its parameters.
+    fn sql_body(&mut self, function: &Function, stmts: &Statements<'_>) -> Result<Body> {
+        let params = Params { types: function.argtypes.clone(), variable: false };
+        let mut an = Analyzer::new(self.an.env, &params);
+        an.set_path(&self.an.path);
+        an.sql_function = Some((function.name.clone(), input_names(function)));
+        let body = an.body(function, stmts, &function.argtypes)?;
+        self.an.notices.append(&mut an.notices);
+        Ok(body)
     }
 
     /// `ProcedureCreate`: adds the function to the catalog, or replaces `old`, with the dependencies `refs` of its body and the dependencies of its support function, its defaults and its types.

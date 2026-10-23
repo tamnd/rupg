@@ -68,6 +68,9 @@ const SQL_LANGUAGE: u32 = 14;
 /// The OID of the language `plpgsql`.
 const PLPGSQL_LANGUAGE: u32 = 13708;
 
+/// The depth of the calls of functions in SQL in the bodies of functions in SQL that a run takes before it stops with the error of `check_stack_depth`, as a function that calls itself with no end does.
+const MAX_SQL_DEPTH: usize = 100;
+
 /// True for a function in SQL that a user makes, for a built-in function with a body in SQL that has no kernel, and for a function in PL/pgSQL. The engine runs its body.
 fn runs_body(func: u32) -> bool {
     let user = |p: &builtin::ProcRow| p.oid >= FIRST_NORMAL_OID && p.lang == SQL_LANGUAGE;
@@ -625,6 +628,8 @@ struct Cache {
     json_flags: RefCell<Vec<(*const rupg_analyze::JsonExpr, jsonexpr::Flags)>>,
     /// The number of rows that the next run of a recursive query of `WITH` must give, when the query that reads it needs no more, as the `ExecProcNode` calls of a `Limit` above a `CteScan` read them. The run takes it.
     want: Cell<Option<usize>>,
+    /// The number of bodies of functions in SQL that run around this run.
+    depth: usize,
     /// The query whose rows go to the client as the run makes them, as `PortalRunSelect` sends them, from [`Plan::run_select`].
     top: Cell<Option<*const Query>>,
     /// The rows of the query `top` that the run made before an error.
@@ -632,6 +637,15 @@ struct Cache {
 }
 
 impl Cache {
+    /// The state of a run of the body of a function in SQL, which shares the bodies of this run. The body gets a cache of its own, so that a subquery of the body that reads an argument runs again for each call.
+    fn nested(&self) -> Result<Cache> {
+        if self.depth >= MAX_SQL_DEPTH {
+            return Err(Error::new(SqlState::STATEMENT_TOO_COMPLEX, "stack depth limit exceeded")
+                .with_hint("Increase the configuration parameter \"max_stack_depth\" (currently 2048kB), after ensuring the platform's stack depth limit is adequate."));
+        }
+        Ok(Cache { bodies: Rc::clone(&self.bodies), depth: self.depth + 1, ..Cache::default() })
+    }
+
     /// `load_domaintype_info`: the constraints of a domain and of the domains below it. The checks of a domain below come first, and the checks of one domain come in the order of their names.
     fn domain_checks(&self, domain: u32) -> Result<Checks> {
         if let Some((_, checks)) = self.domains.borrow().iter().find(|(d, _)| *d == domain) {
@@ -1815,7 +1829,7 @@ impl<'a> Eval<'a> {
             let Body::Query(query) = &*body else {
                 return Err(Error::internal("a function that returns a set with no query"));
             };
-            let cache = Cache { bodies: Rc::clone(&self.cache.bodies), ..Cache::default() };
+            let cache = self.cache.nested()?;
             return run_query(query, &args, self.session, &cache, &[], false);
         }
         if row_function(f.oid) {
@@ -2316,7 +2330,7 @@ impl<'a> Eval<'a> {
         }
         if let Some(body) = self.cache.body(func, types, self.session)? {
             // The body runs with a cache of its own, so that a subquery of the body that reads an argument runs again for each call.
-            let cache = Cache { bodies: Rc::clone(&self.cache.bodies), ..Cache::default() };
+            let cache = self.cache.nested()?;
             return match &*body {
                 Body::Value(expr) => {
                     let tables = scan::Tables::default();
