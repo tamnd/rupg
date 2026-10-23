@@ -6,10 +6,11 @@ use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use rupg_analyze::{
-    Expr, ExprKind, MERGE_ACTION, Query, RETURNING_NEW, RETURNING_OLD, TABLE_OID_ATTNUM, Target,
-    Var, Write,
+    Expr, ExprKind, FromItem, MERGE_ACTION, MatchKind, Query, RETURNING_NEW, RETURNING_OLD,
+    TABLE_OID_ATTNUM, Target, Var, Write,
 };
 use rupg_plan::{Item, Kind, Node, Operation, Replaced, TARGET};
+use rupg_types::oid;
 
 use crate::{Level, cost, exprs, from, upper};
 
@@ -460,6 +461,24 @@ fn merge_targets<'q>(level: &Level<'q>) -> Option<Vec<Item<'q>>> {
     }
     let mut out = vec![Item::of(&tid.expr)];
     out.extend(read.iter().map(|&at| Item::of(&carried[at].expr)));
+    // `transform_MERGE_to_join`: with `NOT MATCHED BY SOURCE`, the executor tests the join condition and that the whole row of the source is not null, so the rows carry the columns of both.
+    let by_source = merge.clauses.iter().any(|c| c.kind == MatchKind::NotMatchedBySource);
+    if by_source && let [FromItem::Join(join)] = query.from.as_slice() {
+        let mut columns = Vec::new();
+        if let FromItem::Relation(r) = join.right {
+            let whole = Var { relation: r, attnum: 0, levels_up: 0 };
+            columns.push(Expr::new(ExprKind::Var(whole), oid::RECORD));
+        }
+        if let Some(on) = &join.on {
+            exprs::vars_of(on, &mut columns);
+        }
+        for column in columns {
+            let target = matches!(column.kind, ExprKind::Var(v) if v.relation == 0);
+            if !target && !out.iter().any(|o| o.expr.same(&column)) {
+                out.push(Item::owned(column));
+            }
+        }
+    }
     out.extend(level.marks.iter().map(|m| item(m.clone())));
     out.extend(
         (0..carried.len()).filter(|at| !read.contains(at)).map(|at| Item::of(&carried[at].expr)),

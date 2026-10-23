@@ -5621,6 +5621,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_returning_old_new.test")));
     }
 
+    /// The plan of a `MERGE` joins the target table and the source with the target table on the left side, as `transform_MERGE_to_join` makes it. With `NOT MATCHED BY SOURCE`, the rows carry the whole row of the source and the columns of the join condition, and the plan has no scan of the marker of the source rows. `connection/plan_merge_join.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_merge_join() {
+        big_stack(|| script(include_str!("connection/plan_merge_join.test")));
+    }
+
     /// A query that is a `UNION ALL` of `SELECT`s with the types of its columns and has `ORDER BY` becomes an append relation, as `flatten_simple_union_all` makes it, so the planner can plan a `Merge Append` of the plans of the `SELECT`s in the order. A `SELECT` with its own `WHERE` is not a member of the append relation, as `is_safe_append_member`, and its plan gets a sort. `connection/plan_union_all_order.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_union_all_order() {

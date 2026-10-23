@@ -21,6 +21,7 @@ use crate::{exists, exprs, minmax, pushdown, setcast};
 /// The query with each simple subquery in `FROM` merged into the query above it, also in the subqueries of the query, and with the conditions of `WHERE` that the planner moves into the other subqueries of `FROM`.
 pub fn pull_up(query: &Query) -> Query {
     let mut query = query.clone();
+    merge_join(&mut query);
     flatten(&mut query);
     pull_all(&mut query);
     pushdown::push_all(&mut query);
@@ -28,6 +29,48 @@ pub fn pull_up(query: &Query) -> Query {
     exists::fill_all(&mut query);
     minmax::fill_all(&mut query);
     query
+}
+
+/// `transform_MERGE_to_join`: the join of a `MERGE` has the target table on its left side and the source on its right side. With `NOT MATCHED BY SOURCE`, the executor of PostgreSQL tests the whole row of the source, so the plan does not read the one-row `VALUES` that marks the source rows here. A `MERGE` in `WITH` changes too.
+fn merge_join(query: &mut Query) {
+    for cte in &mut query.ctes {
+        merge_join(&mut cte.query);
+    }
+    if query.write.as_ref().is_none_or(|w| w.kind != WriteKind::Merge) {
+        return;
+    }
+    let [FromItem::Join(join)] = query.from.as_mut_slice() else { return };
+    if !matches!(join.right, FromItem::Relation(0)) {
+        return;
+    }
+    std::mem::swap(&mut join.left, &mut join.right);
+    join.kind = match join.kind {
+        JoinKind::Left => JoinKind::Right,
+        JoinKind::Right => JoinKind::Left,
+        kind => kind,
+    };
+    let marker = query.relations.len().checked_sub(1);
+    let FromItem::Join(source) = &join.right else { return };
+    let (Some(marker), FromItem::Relation(r)) = (marker, &source.right) else { return };
+    let relation = &query.relations[marker];
+    let is_marker = *r == marker
+        && source.kind == JoinKind::Inner
+        && source.on.is_none()
+        && relation.name == "*VALUES*"
+        && relation.columns.len() == 1
+        && relation.columns[0].name == "marker"
+        && relation.values.as_ref().is_some_and(|v| v.len() == 1);
+    if !is_marker {
+        return;
+    }
+    join.right = source.left.clone();
+    query.relations.pop();
+    for target in &mut query.targets {
+        if matches!(target.expr.kind, ExprKind::Var(v) if v.relation == marker && v.levels_up == 0)
+        {
+            target.expr.kind = ExprKind::Const(Value::Bool(true));
+        }
+    }
 }
 
 /// `flatten_simple_union_all`: a query that is a `UNION ALL` of `SELECT`s with the types of its columns becomes a query that reads the `UNION ALL` as its one relation, so that the planner plans an append relation. Only a query with `ORDER BY` changes, as the plan of the append relation is the same as the plan of the set operation when no order is necessary. With `ORDER BY`, the planner can then use a `Merge Append` of the plans of the `SELECT`s in the order.
