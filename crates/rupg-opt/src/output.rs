@@ -219,8 +219,17 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             join(level, node, want, &parts);
         }
         Kind::MergeJoin { cond, join_filter, .. } | Kind::HashJoin { cond, join_filter, .. } => {
-            let parts: Vec<Expr> =
+            let mut parts: Vec<Expr> =
                 cond.iter().chain(join_filter).map(|i| i.expr.as_ref().clone()).collect();
+            // `deconstruct_distribute` adds the columns of the conditions to the relations in the order of the join tree, the conditions of each join after the joins below it.
+            let mut order = Vec::new();
+            for item in &level.query.from {
+                from::join_conditions(item, &mut order);
+            }
+            let place = |p: &Expr| order.iter().position(|q| q.same(p));
+            if parts.iter().all(|p| place(p).is_some()) {
+                parts.sort_by_key(|p| place(p));
+            }
             join(level, node, want, &parts);
         }
         // `set_rel_size` marks a relation with a condition that is never true as dummy before `set_rel_width`, so its `Result` has a width of 0. A join with no rows and an inner side that a join marks dummy keep the width of their columns. A target that is not a column makes `apply_scanjoin_target_to_paths` give the node a new target, whose width `set_pathtarget_cost_width` finds.

@@ -987,7 +987,7 @@ pub(crate) fn append_rel(query: &Query, node: &Node<'_>) -> bool {
 }
 
 /// The parts of the conditions of the joins of an item of `FROM`, the joins below first.
-fn join_conditions<'q>(item: &'q FromItem, out: &mut Vec<&'q Expr>) {
+pub(crate) fn join_conditions<'q>(item: &'q FromItem, out: &mut Vec<&'q Expr>) {
     let FromItem::Join(join) = item else { return };
     join_conditions(&join.left, out);
     join_conditions(&join.right, out);

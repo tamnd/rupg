@@ -1,0 +1,163 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (id int PRIMARY KEY, x int, y int, t text);
+CREATE TABLE
+> CREATE TABLE b (id int PRIMARY KEY, aid int, z int);
+CREATE TABLE
+> CREATE TABLE d (id int PRIMARY KEY, w int);
+CREATE TABLE
+> INSERT INTO a SELECT g, g % 7, g % 3, 'v' || g FROM generate_series(1, 50) g;
+INSERT 0 50
+> INSERT INTO b SELECT g, g % 9, g % 5 FROM generate_series(1, 60) g;
+INSERT 0 60
+> EXPLAIN SELECT * FROM a WHERE x IN (SELECT z FROM b WHERE b.aid > a.id);
+fields QUERY PLAN:25:-1:-1
+row Hash Semi Join  (cost=55.90..86.96 rows=188 width=44)
+row   Hash Cond: (a.x = b.z)
+row   Join Filter: (b.aid > a.id)
+row   ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=44)
+row   ->  Hash  (cost=30.40..30.40 rows=2040 width=8)
+row         ->  Seq Scan on b  (cost=0.00..30.40 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x IN (SELECT z FROM b WHERE b.aid = a.y);
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=45.70..76.39 rows=282 width=44)
+row   Hash Cond: ((a.y = b.aid) AND (a.x = b.z))
+row   ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=44)
+row   ->  Hash  (cost=42.64..42.64 rows=204 width=8)
+row         ->  HashAggregate  (cost=40.60..42.64 rows=204 width=8)
+row               Group Key: b.aid, b.z
+row               ->  Seq Scan on b  (cost=0.00..30.40 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x IN (SELECT b.z + a.y FROM b);
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Semi Join  (cost=0.00..22112.39 rows=565 width=44)
+row   Join Filter: (a.x = (b.z + a.y))
+row   ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=44)
+row   ->  Materialize  (cost=0.00..40.60 rows=2040 width=4)
+row         ->  Seq Scan on b  (cost=0.00..30.40 rows=2040 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x IN (SELECT z FROM b WHERE b.aid = a.y AND b.id > 3);
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=36.32..67.01 rows=282 width=44)
+row   Hash Cond: ((a.y = b.aid) AND (a.x = b.z))
+row   ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=44)
+row   ->  Hash  (cost=33.32..33.32 rows=200 width=8)
+row         ->  HashAggregate  (cost=31.32..33.32 rows=200 width=8)
+row               Group Key: b.aid, b.z
+row               ->  Bitmap Heap Scan on b  (cost=9.42..27.92 rows=680 width=8)
+row                     Recheck Cond: (id > 3)
+row                     ->  Bitmap Index Scan on b_pkey  (cost=0.00..9.25 rows=680 width=0)
+row                           Index Cond: (id > 3)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a JOIN d ON d.id = a.id WHERE x IN (SELECT z FROM b WHERE b.aid = d.w);
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=81.12..129.06 rows=282 width=4)
+row   Hash Cond: ((d.w = b.aid) AND (a.x = b.z))
+row   ->  Hash Join  (cost=35.42..73.97 rows=1130 width=12)
+row         Hash Cond: (d.id = a.id)
+row         ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Hash  (cost=21.30..21.30 rows=1130 width=8)
+row               ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=8)
+row   ->  Hash  (cost=42.64..42.64 rows=204 width=8)
+row         ->  HashAggregate  (cost=40.60..42.64 rows=204 width=8)
+row               Group Key: b.aid, b.z
+row               ->  Seq Scan on b  (cost=0.00..30.40 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x NOT IN (SELECT z FROM b WHERE b.aid = a.y);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..20095.75 rows=565 width=44)
+row   Filter: (NOT (ANY (x = (SubPlan any_1).col1)))
+row   SubPlan any_1
+row     ->  Seq Scan on b  (cost=0.00..35.50 rows=10 width=4)
+row           Filter: (aid = a.y)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x IN (SELECT z FROM b JOIN d ON d.id = b.id WHERE d.w = a.y);
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=155.64..186.33 rows=282 width=44)
+row   Hash Cond: ((a.y = d.w) AND (a.x = b.z))
+row   ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=44)
+row   ->  Hash  (cost=125.04..125.04 rows=2040 width=8)
+row         ->  HashAggregate  (cost=104.64..125.04 rows=2040 width=8)
+row               Group Key: d.w, b.z
+row               ->  Hash Join  (cost=55.90..94.44 rows=2040 width=8)
+row                     Hash Cond: (d.id = b.id)
+row                     ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=8)
+row                     ->  Hash  (cost=30.40..30.40 rows=2040 width=8)
+row                           ->  Seq Scan on b  (cost=0.00..30.40 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE x IN (SELECT z FROM b WHERE b.aid = a.y) AND y = 1;
+fields QUERY PLAN:25:-1:-1
+row Hash Right Semi Join  (cost=24.20..59.75 rows=1 width=44)
+row   Hash Cond: (b.z = a.x)
+row   ->  Seq Scan on b  (cost=0.00..35.50 rows=10 width=8)
+row         Filter: (aid = 1)
+row   ->  Hash  (cost=24.12..24.12 rows=6 width=44)
+row         ->  Seq Scan on a  (cost=0.00..24.12 rows=6 width=44)
+row               Filter: (y = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM a WHERE (x, y) IN (SELECT z, aid FROM b WHERE b.id < a.id);
+fields QUERY PLAN:25:-1:-1
+row Hash Semi Join  (cost=61.00..137.32 rows=94 width=44)
+row   Hash Cond: ((a.x = b.z) AND (a.y = b.aid))
+row   Join Filter: (b.id < a.id)
+row   ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=44)
+row   ->  Hash  (cost=30.40..30.40 rows=2040 width=12)
+row         ->  Seq Scan on b  (cost=0.00..30.40 rows=2040 width=12)
+EXPLAIN
+> EXPLAIN VERBOSE SELECT * FROM a WHERE x IN (SELECT z FROM b WHERE b.aid > a.id);
+fields QUERY PLAN:25:-1:-1
+row Hash Semi Join  (cost=55.90..86.96 rows=188 width=44)
+row   Output: a.id, a.x, a.y, a.t
+row   Hash Cond: (a.x = b.z)
+row   Join Filter: (b.aid > a.id)
+row   ->  Seq Scan on public.a  (cost=0.00..21.30 rows=1130 width=44)
+row         Output: a.id, a.x, a.y, a.t
+row   ->  Hash  (cost=30.40..30.40 rows=2040 width=8)
+row         Output: b.aid, b.z
+row         ->  Seq Scan on public.b  (cost=0.00..30.40 rows=2040 width=8)
+row               Output: b.aid, b.z
+EXPLAIN
+> SELECT count(*) FROM a WHERE x IN (SELECT z FROM b WHERE b.aid > a.id);
+fields count:20:8:-1
+row 5
+SELECT 1
+> SELECT count(*) FROM a WHERE x IN (SELECT z FROM b WHERE b.aid = a.y AND b.id > 3);
+fields count:20:8:-1
+row 36
+SELECT 1
+> SELECT a.id FROM a WHERE x IN (SELECT b.z + a.y FROM b) ORDER BY 1 LIMIT 5;
+fields id@a.1:23:4:-1
+row 1
+row 2
+row 3
+row 4
+row 5
+SELECT 5
+> EXPLAIN SELECT * FROM a, LATERAL (SELECT z FROM b WHERE b.aid = a.y) s;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=221.15..399.69 rows=11526 width=48)
+row   Merge Cond: (a.y = b.aid)
+row   ->  Sort  (cost=78.60..81.43 rows=1130 width=44)
+row         Sort Key: a.y
+row         ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=44)
+row   ->  Sort  (cost=142.54..147.64 rows=2040 width=8)
+row         Sort Key: b.aid
+row         ->  Seq Scan on b  (cost=0.00..30.40 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM a LEFT JOIN LATERAL (SELECT z FROM b WHERE b.aid = a.y) s ON true;
+fields QUERY PLAN:25:-1:-1
+row Merge Left Join  (cost=221.15..399.69 rows=11526 width=48)
+row   Merge Cond: (a.y = b.aid)
+row   ->  Sort  (cost=78.60..81.43 rows=1130 width=44)
+row         Sort Key: a.y
+row         ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=44)
+row   ->  Sort  (cost=142.54..147.64 rows=2040 width=8)
+row         Sort Key: b.aid
+row         ->  Seq Scan on b  (cost=0.00..30.40 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM a, LATERAL (SELECT a.x + 1 AS q) s;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..24.12 rows=1130 width=48)
+EXPLAIN
