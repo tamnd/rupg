@@ -11,7 +11,7 @@ use std::ptr;
 
 use rupg_analyze::{
     BoolOp, BoolTest, Column, Expr, ExprKind, FromItem, Func, FuncForm, Join, JoinKind,
-    PlaceHolder, Query, Relation, SubLink, SubLinkKind, Var,
+    PlaceHolder, Query, Relation, SubLink, SubLinkKind, Var, WriteKind,
 };
 use rupg_pgcatalog::builtin;
 use rupg_types::{Value, oid};
@@ -120,7 +120,7 @@ fn pull_all(query: &mut Query) {
 /// `pull_up_sublinks`: each part of `WHERE` that is `EXISTS`, `NOT EXISTS` or `ANY` on a subquery becomes a semi join or an anti join of the items of `FROM` with the relations of the subquery. The joins come in the order of the parts, and each join has the join before it as its left side. True when a part became a join. `NOT IN` is an anti join only when no value of the test can be null. The planner does not convert a part of `ON` or an `ANY` on a correlated subquery yet.
 fn pull_sublinks(query: &mut Query) -> bool {
     if query.set_op.is_some()
-        || query.write.is_some()
+        || checks_wrapper(query)
         || !query.row_marks.is_empty()
         || query.from.is_empty()
     {
@@ -488,7 +488,7 @@ fn places(item: &FromItem, top: bool, on: bool, out: &mut Vec<(usize, bool, bool
 /// The first subquery of `FROM` that the planner merges, with true when it is an item of the list of `FROM`. The planner does not merge a `LATERAL` subquery, a view or a query of `WITH` yet. Below the side of an outer join that can give nulls, a target of the subquery that is not a column becomes a `PlaceHolderVar`, which the planner makes here only for a subquery with a `FROM`, for a reference of the query itself and for a target with no subquery. In a join, the subquery has one item in `FROM`, and its `WHERE` joins the `ON` of the join, so that the subquery is not the side of an outer join that keeps its rows or a side of a full join when it has a `WHERE`. The query does not read the whole row of the subquery, which `pullup_replace_vars` makes a `ROW` of the targets.
 fn candidate(query: &Query) -> Option<(usize, bool)> {
     if query.set_op.is_some()
-        || query.write.is_some()
+        || checks_wrapper(query)
         || !query.row_marks.is_empty()
         || !query.grouping_sets.is_empty()
     {
@@ -502,7 +502,12 @@ fn candidate(query: &Query) -> Option<(usize, bool)> {
     for item in &query.from {
         nullable_places(item, false, &mut nullable);
     }
+    // The target table of an `UPDATE`, a `DELETE` or a `MERGE` is the relation 0, which stays.
+    let target = query.write.as_ref().is_some_and(|w| w.kind != WriteKind::Insert);
     found.into_iter().find_map(|(r, top, on)| {
+        if target && r == 0 {
+            return None;
+        }
         let relation = query.relations.get(r)?;
         let sub = pullable(relation)?;
         let used = used(query, r);
@@ -527,6 +532,11 @@ fn candidate(query: &Query) -> Option<(usize, bool)> {
             || sub.from.is_empty() && query.from.iter().any(|item| removable(item, r));
         (simple(sub) && columns && fits && !used.contains(&0)).then_some((r, top))
     })
+}
+
+/// True for the query of a write with check constraints, whose one relation is the query of the rows, as [`crate::unwrap_checks`] finds it. The planner plans the query of the rows.
+fn checks_wrapper(query: &Query) -> bool {
+    !ptr::eq(crate::unwrap_checks(query), query)
 }
 
 /// The relations of `FROM` that an outer join can give nulls for.

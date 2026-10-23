@@ -1,0 +1,169 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (id int PRIMARY KEY, x int, y int, t text);
+CREATE TABLE
+> CREATE TABLE b (id int PRIMARY KEY, aid int, z int);
+CREATE TABLE
+> CREATE TABLE c (id int PRIMARY KEY, z int CHECK (z > 0));
+CREATE TABLE
+> INSERT INTO a SELECT g, g % 7, g % 3, 'v' || g FROM generate_series(1, 50) g;
+INSERT 0 50
+> EXPLAIN VERBOSE MERGE INTO b USING (SELECT id, x FROM a WHERE y = 1) s ON s.id = b.aid WHEN MATCHED AND b.z > 1 THEN UPDATE SET z = s.x;
+fields QUERY PLAN:25:-1:-1
+row Merge on public.b  (cost=24.20..59.98 rows=0 width=0)
+row   ->  Hash Join  (cost=24.20..59.98 rows=11 width=16)
+row         Output: b.ctid, a.x, a.ctid
+row         Inner Unique: true
+row         Hash Cond: (b.aid = a.id)
+row         ->  Seq Scan on public.b  (cost=0.00..30.40 rows=2040 width=10)
+row               Output: b.ctid, b.aid
+row         ->  Hash  (cost=24.12..24.12 rows=6 width=14)
+row               Output: a.x, a.ctid, a.id
+row               ->  Seq Scan on public.a  (cost=0.00..24.12 rows=6 width=14)
+row                     Output: a.x, a.ctid, a.id
+row                     Filter: (a.y = 1)
+EXPLAIN
+> EXPLAIN MERGE INTO b USING (SELECT id, x + 1 AS w FROM a) s ON s.id = b.aid WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.w, 0);
+fields QUERY PLAN:25:-1:-1
+row Merge on b  (cost=35.42..71.20 rows=0 width=0)
+row   ->  Hash Right Join  (cost=35.42..71.20 rows=2040 width=20)
+row         Hash Cond: (b.aid = a.id)
+row         ->  Seq Scan on b  (cost=0.00..30.40 rows=2040 width=10)
+row         ->  Hash  (cost=21.30..21.30 rows=1130 width=14)
+row               ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=14)
+EXPLAIN
+> EXPLAIN VERBOSE UPDATE b SET z = s.x FROM (SELECT id, x FROM a WHERE y = 1) s WHERE s.id = b.aid;
+fields QUERY PLAN:25:-1:-1
+row Update on public.b  (cost=24.20..59.98 rows=0 width=0)
+row   ->  Hash Join  (cost=24.20..59.98 rows=11 width=16)
+row         Output: a.x, b.ctid, a.ctid
+row         Inner Unique: true
+row         Hash Cond: (b.aid = a.id)
+row         ->  Seq Scan on public.b  (cost=0.00..30.40 rows=2040 width=10)
+row               Output: b.ctid, b.aid
+row         ->  Hash  (cost=24.12..24.12 rows=6 width=14)
+row               Output: a.x, a.ctid, a.id
+row               ->  Seq Scan on public.a  (cost=0.00..24.12 rows=6 width=14)
+row                     Output: a.x, a.ctid, a.id
+row                     Filter: (a.y = 1)
+EXPLAIN
+> EXPLAIN DELETE FROM b USING (SELECT id FROM a WHERE x > 3) s WHERE s.id = b.aid;
+fields QUERY PLAN:25:-1:-1
+row Delete on b  (cost=28.84..64.61 rows=0 width=0)
+row   ->  Hash Join  (cost=28.84..64.61 rows=681 width=12)
+row         Hash Cond: (b.aid = a.id)
+row         ->  Seq Scan on b  (cost=0.00..30.40 rows=2040 width=10)
+row         ->  Hash  (cost=24.12..24.12 rows=377 width=10)
+row               ->  Seq Scan on a  (cost=0.00..24.12 rows=377 width=10)
+row                     Filter: (x > 3)
+EXPLAIN
+> EXPLAIN INSERT INTO b SELECT * FROM (SELECT id, x, y FROM a WHERE y = 1) s;
+fields QUERY PLAN:25:-1:-1
+row Insert on b  (cost=0.00..24.12 rows=0 width=0)
+row   ->  Seq Scan on a  (cost=0.00..24.12 rows=6 width=12)
+row         Filter: (y = 1)
+EXPLAIN
+> EXPLAIN VERBOSE INSERT INTO b SELECT s.id, s.x, s.y FROM (SELECT id, x, y FROM a) s JOIN a ON a.id = s.x;
+fields QUERY PLAN:25:-1:-1
+row Insert on public.b  (cost=35.42..59.70 rows=0 width=0)
+row   ->  Hash Join  (cost=35.42..59.70 rows=1130 width=12)
+row         Output: a_1.id, a_1.x, a_1.y
+row         Inner Unique: true
+row         Hash Cond: (a_1.x = a.id)
+row         ->  Seq Scan on public.a a_1  (cost=0.00..21.30 rows=1130 width=12)
+row               Output: a_1.id, a_1.x, a_1.y, a_1.t
+row         ->  Hash  (cost=21.30..21.30 rows=1130 width=4)
+row               Output: a.id
+row               ->  Seq Scan on public.a  (cost=0.00..21.30 rows=1130 width=4)
+row                     Output: a.id
+EXPLAIN
+> EXPLAIN INSERT INTO c SELECT * FROM (SELECT id, x FROM a WHERE y = 2) s;
+fields QUERY PLAN:25:-1:-1
+row Insert on c  (cost=0.00..24.12 rows=0 width=0)
+row   ->  Seq Scan on a  (cost=0.00..24.12 rows=6 width=8)
+row         Filter: (y = 2)
+EXPLAIN
+> EXPLAIN UPDATE c SET z = s.x FROM (SELECT id, x FROM a WHERE y = 1) s WHERE s.id = c.id;
+fields QUERY PLAN:25:-1:-1
+row Update on c  (cost=0.15..49.16 rows=0 width=0)
+row   ->  Nested Loop  (cost=0.15..49.16 rows=6 width=16)
+row         ->  Seq Scan on a  (cost=0.00..24.12 rows=6 width=14)
+row               Filter: (y = 1)
+row         ->  Index Scan using c_pkey on c  (cost=0.15..4.17 rows=1 width=10)
+row               Index Cond: (id = a.id)
+EXPLAIN
+> EXPLAIN UPDATE b SET z = 1 WHERE EXISTS (SELECT 1 FROM a WHERE a.id = b.aid);
+fields QUERY PLAN:25:-1:-1
+row Update on b  (cost=35.42..71.20 rows=0 width=0)
+row   ->  Hash Join  (cost=35.42..71.20 rows=2040 width=16)
+row         Hash Cond: (b.aid = a.id)
+row         ->  Seq Scan on b  (cost=0.00..30.40 rows=2040 width=10)
+row         ->  Hash  (cost=21.30..21.30 rows=1130 width=10)
+row               ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=10)
+EXPLAIN
+> EXPLAIN VERBOSE DELETE FROM b WHERE aid IN (SELECT id FROM a WHERE x = 1);
+fields QUERY PLAN:25:-1:-1
+row Delete on public.b  (cost=24.20..59.98 rows=0 width=0)
+row   ->  Hash Join  (cost=24.20..59.98 rows=11 width=12)
+row         Output: b.ctid, a.ctid
+row         Inner Unique: true
+row         Hash Cond: (b.aid = a.id)
+row         ->  Seq Scan on public.b  (cost=0.00..30.40 rows=2040 width=10)
+row               Output: b.ctid, b.aid
+row         ->  Hash  (cost=24.12..24.12 rows=6 width=10)
+row               Output: a.ctid, a.id
+row               ->  Seq Scan on public.a  (cost=0.00..24.12 rows=6 width=10)
+row                     Output: a.ctid, a.id
+row                     Filter: (a.x = 1)
+EXPLAIN
+> EXPLAIN DELETE FROM b WHERE NOT EXISTS (SELECT 1 FROM a WHERE a.id = b.aid);
+fields QUERY PLAN:25:-1:-1
+row Delete on b  (cost=35.42..82.53 rows=0 width=0)
+row   ->  Hash Anti Join  (cost=35.42..82.53 rows=1020 width=12)
+row         Hash Cond: (b.aid = a.id)
+row         ->  Seq Scan on b  (cost=0.00..30.40 rows=2040 width=10)
+row         ->  Hash  (cost=21.30..21.30 rows=1130 width=10)
+row               ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=10)
+EXPLAIN
+> EXPLAIN INSERT INTO b SELECT id, x, y FROM a WHERE id IN (SELECT aid FROM b);
+fields QUERY PLAN:25:-1:-1
+row Insert on b  (cost=40.00..70.55 rows=0 width=0)
+row   ->  Hash Join  (cost=40.00..70.55 rows=565 width=12)
+row         Hash Cond: (a.id = b_1.aid)
+row         ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=12)
+row         ->  Hash  (cost=37.50..37.50 rows=200 width=4)
+row               ->  HashAggregate  (cost=35.50..37.50 rows=200 width=4)
+row                     Group Key: b_1.aid
+row                     ->  Seq Scan on b b_1  (cost=0.00..30.40 rows=2040 width=4)
+EXPLAIN
+> EXPLAIN VERBOSE UPDATE c SET z = a.x FROM a WHERE a.id = c.id RETURNING c.id, a.t;
+fields QUERY PLAN:25:-1:-1
+row Update on public.c  (cost=35.42..73.97 rows=1130 width=48)
+row   Output: c.id, a.t
+row   ->  Hash Join  (cost=35.42..73.97 rows=1130 width=48)
+row         Output: a.x, c.ctid, a.ctid, a.t
+row         Inner Unique: true
+row         Hash Cond: (c.id = a.id)
+row         ->  Seq Scan on public.c  (cost=0.00..32.60 rows=2260 width=10)
+row               Output: c.ctid, c.id
+row         ->  Hash  (cost=21.30..21.30 rows=1130 width=46)
+row               Output: a.x, a.ctid, a.t, a.id
+row               ->  Seq Scan on public.a  (cost=0.00..21.30 rows=1130 width=46)
+row                     Output: a.x, a.ctid, a.t, a.id
+EXPLAIN
+> EXPLAIN VERBOSE INSERT INTO c VALUES (1, 2) RETURNING *;
+fields QUERY PLAN:25:-1:-1
+row Insert on public.c  (cost=0.00..0.01 rows=1 width=8)
+row   Output: c.id, c.z
+row   ->  Result  (cost=0.00..0.01 rows=1 width=8)
+row         Output: 1, 2
+EXPLAIN
+> EXPLAIN VERBOSE DELETE FROM c WHERE z = 3 RETURNING id;
+fields QUERY PLAN:25:-1:-1
+row Delete on public.c  (cost=0.00..38.25 rows=11 width=6)
+row   Output: id
+row   ->  Seq Scan on public.c  (cost=0.00..38.25 rows=11 width=6)
+row         Output: ctid
+row         Filter: (c.z = 3)
+EXPLAIN

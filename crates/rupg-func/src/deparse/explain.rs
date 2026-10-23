@@ -65,9 +65,7 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
                 spaces[s] = Some(space);
                 continue;
             }
-            if scope.target
-                && let Some(write) = &scope.query.write
-            {
+            if let Some(write) = scope.target {
                 let base = reg::class_name(write.table, session)
                     .map_or_else(|| write.name.clone(), |(name, _)| name.to_string());
                 targets[s] = Some(super::query::unique_name(base, &mut used));
@@ -86,8 +84,7 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
         removed_scans(plan, &mut spaces);
         // The `Output` of the `ModifyTable` of an `INSERT` with `RETURNING` reads the columns of the target table.
         for (s, space) in spaces.iter_mut().enumerate() {
-            let returning =
-                plan.scopes[s].query.write.as_ref().and_then(|w| w.returning.as_deref());
+            let returning = plan.scopes[s].target.and_then(|w| w.returning.as_deref());
             if let (Some(name), Some(returning)) = (&targets[s], returning)
                 && let Some(table) = returning.relations.first()
             {
