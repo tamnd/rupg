@@ -6,7 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- `ALTER OPERATOR CLASS` and `ALTER OPERATOR FAMILY` with `RENAME TO`, `OWNER TO` and `SET SCHEMA`, with the checks of `AlterObjectRename_internal`, `AlterObjectOwner_internal` and `AlterObjectNamespace_internal`. A new name or a new schema must not hold a class or a family of the same name for the access method. The moved object depends on its new schema (#NNN).
+- `ALTER OPERATOR CLASS` and `ALTER OPERATOR FAMILY` with `RENAME TO`, `OWNER TO` and `SET SCHEMA`, with the checks of `AlterObjectRename_internal`, `AlterObjectOwner_internal` and `AlterObjectNamespace_internal`. A new name or a new schema must not hold a class or a family of the same name for the access method. The moved object depends on its new schema (#631).
 - `PARTITION BY` and `CREATE INDEX` take an operator class of the catalog, by its name in the search path or with its schema. A table that `PARTITION BY HASH` partitions with such a class routes and prunes its rows by the support function 2 of the class, as PostgreSQL does. An index depends on the operator classes and the collations of its columns, so `DROP OPERATOR CLASS` and `DROP COLLATION` see it (#630).
 - `CREATE OPERATOR FAMILY`, `CREATE OPERATOR CLASS`, `ALTER OPERATOR FAMILY ... ADD` and `... DROP`, and `DROP OPERATOR CLASS` and `DROP OPERATOR FAMILY`, with the checks of `DefineOpClass`, `AlterOpFamily` and the access methods `btree`, `hash`, `gist`, `gin`, `spgist` and `brin`. The new families, classes, operators and support functions are rows of `pg_opfamily`, `pg_opclass`, `pg_amop` and `pg_amproc`, with the same dependencies as in PostgreSQL, so `DROP FUNCTION`, `DROP SCHEMA` and `DROP ROLE` see them. A class in a built-in family gives `0A000` (#629).
 - `ALTER OPERATOR ... SET`, `ALTER OPERATOR ... OWNER TO` and `ALTER OPERATOR ... SET SCHEMA`, with the checks of `AlterOperator`, `AlterObjectOwner_internal` and `AlterObjectNamespace_internal`. `SET` can change the estimators, and it can set the commutator, the negator, `MERGES` and `HASHES` when they are not set yet. The operators that a role owns stop `DROP ROLE` (#628).
@@ -16,7 +16,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Fixed
 
-- The check of `CREATE` on a schema reads `nspacl`, so a role that `GRANT CREATE ON SCHEMA` names, or that has the privileges of such a role, can create objects in the schema (#NNN).
+- The check of `CREATE` on a schema reads `nspacl`, so a role that `GRANT CREATE ON SCHEMA` names, or that has the privileges of such a role, can create objects in the schema (#631).
 - A query with `HAVING` and no aggregate and no `GROUP BY` does not read `FROM` and does not test `WHERE`, as in PostgreSQL. `make_interval` gives the overflow error of `float8_mul` for a very large `secs`, and a default or a check constraint with a `regrole` or `regdatabase` constant is an error. (#621)
 - A column of the target table by a name with the schema in `RETURNING`, such as `RETURNING public.t.id`, now works in `INSERT`, `UPDATE`, `DELETE` and `MERGE`. Before, it gave `42P09` "table reference ... is ambiguous", because the names `old` and `new` of `RETURNING` also matched the table. Prisma sends this form.
 
