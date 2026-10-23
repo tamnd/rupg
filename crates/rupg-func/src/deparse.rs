@@ -2272,6 +2272,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_get_function_result" => function::get_function_result,
         "pg_get_function_arg_default" => function::get_function_arg_default,
         "pg_get_function_sqlbody" => function::get_function_sqlbody,
+        "pg_get_functiondef" => function::get_functiondef,
         "pg_get_viewdef" | "pg_get_viewdef_ext" | "pg_get_viewdef_wrap" => query::get_viewdef,
         "pg_get_viewdef_name" | "pg_get_viewdef_name_ext" => query::get_viewdef_name,
         "pg_get_ruledef" | "pg_get_ruledef_ext" => query::get_ruledef,

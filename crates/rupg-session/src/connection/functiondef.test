@@ -1,0 +1,191 @@
+> SELECT string_to_table(pg_get_functiondef('int4pl'::regproc), E'\n') AS line
+fields line:25:-1:-1
+row CREATE OR REPLACE FUNCTION pg_catalog.int4pl(integer, integer)
+row  RETURNS integer
+row  LANGUAGE internal
+row  IMMUTABLE PARALLEL SAFE STRICT
+row AS $function$int4pl$function$
+row 
+SELECT 6
+> SELECT string_to_table(pg_get_functiondef('now'::regproc), E'\n') AS line
+fields line:25:-1:-1
+row CREATE OR REPLACE FUNCTION pg_catalog.now()
+row  RETURNS timestamp with time zone
+row  LANGUAGE internal
+row  STABLE PARALLEL SAFE STRICT
+row AS $function$now$function$
+row 
+SELECT 6
+> SELECT string_to_table(pg_get_functiondef('generate_series(int4,int4)'::regprocedure), E'\n') AS line
+fields line:25:-1:-1
+row CREATE OR REPLACE FUNCTION pg_catalog.generate_series(integer, integer)
+row  RETURNS SETOF integer
+row  LANGUAGE internal
+row  IMMUTABLE PARALLEL SAFE STRICT SUPPORT generate_series_int4_support
+row AS $function$generate_series_int4$function$
+row 
+SELECT 6
+> SELECT string_to_table(pg_get_functiondef('generate_series(numeric,numeric)'::regprocedure), E'\n') AS line
+fields line:25:-1:-1
+row CREATE OR REPLACE FUNCTION pg_catalog.generate_series(numeric, numeric)
+row  RETURNS SETOF numeric
+row  LANGUAGE internal
+row  IMMUTABLE PARALLEL SAFE STRICT SUPPORT generate_series_numeric_support
+row AS $function$generate_series_numeric$function$
+row 
+SELECT 6
+> SELECT string_to_table(pg_get_functiondef('pg_backup_stop'::regproc), E'\n') AS line
+fields line:25:-1:-1
+row CREATE OR REPLACE FUNCTION pg_catalog.pg_backup_stop(wait_for_archive boolean DEFAULT true, OUT lsn pg_lsn, OUT labelfile text, OUT spcmapfile text)
+row  RETURNS record
+row  LANGUAGE internal
+row  PARALLEL RESTRICTED STRICT
+row AS $function$pg_backup_stop$function$
+row 
+SELECT 6
+> SELECT string_to_table(pg_get_functiondef('row_number'::regproc), E'\n') AS line
+fields line:25:-1:-1
+row CREATE OR REPLACE FUNCTION pg_catalog.row_number()
+row  RETURNS bigint
+row  LANGUAGE internal
+row  WINDOW IMMUTABLE PARALLEL SAFE SUPPORT window_row_number_support
+row AS $function$window_row_number$function$
+row 
+SELECT 6
+> SELECT string_to_table(pg_get_functiondef('textlike'::regproc), E'\n') AS line
+fields line:25:-1:-1
+row CREATE OR REPLACE FUNCTION pg_catalog.textlike(text, text)
+row  RETURNS boolean
+row  LANGUAGE internal
+row  IMMUTABLE PARALLEL SAFE STRICT SUPPORT textlike_support
+row AS $function$textlike$function$
+row 
+SELECT 6
+> SELECT string_to_table(pg_get_functiondef('pg_get_keywords'::regproc), E'\n') AS line
+fields line:25:-1:-1
+row CREATE OR REPLACE FUNCTION pg_catalog.pg_get_keywords(OUT word text, OUT catcode "char", OUT barelabel boolean, OUT catdesc text, OUT baredesc text)
+row  RETURNS SETOF record
+row  LANGUAGE internal
+row  STABLE PARALLEL SAFE STRICT COST 10 ROWS 500
+row AS $function$pg_get_keywords$function$
+row 
+SELECT 6
+> SELECT string_to_table(pg_get_functiondef('json_populate_record'::regproc), E'\n') AS line
+fields line:25:-1:-1
+row CREATE OR REPLACE FUNCTION pg_catalog.json_populate_record(base anyelement, from_json json, use_json_as_text boolean DEFAULT false)
+row  RETURNS anyelement
+row  LANGUAGE internal
+row  STABLE PARALLEL SAFE
+row AS $function$json_populate_record$function$
+row 
+SELECT 6
+> SELECT pg_get_functiondef('sum(int4)'::regprocedure)
+fields pg_get_functiondef:25:-1:-1
+ERROR 42809 "sum" is an aggregate function
+> SELECT pg_get_functiondef(0)
+fields pg_get_functiondef:25:-1:-1
+row NULL
+SELECT 1
+> SELECT pg_get_functiondef(1)
+fields pg_get_functiondef:25:-1:-1
+row NULL
+SELECT 1
+> SELECT pg_get_functiondef(NULL)
+fields pg_get_functiondef:25:-1:-1
+row NULL
+SELECT 1
+> SELECT count(*), md5(string_agg(pg_get_functiondef(oid), '' ORDER BY oid)) FROM pg_proc WHERE oid < 10000 AND prokind <> 'a' AND prosqlbody IS NULL
+fields count:20:8:-1,md5:25:-1:-1
+row 3206,2b7ea9f9900535de8b66a5444014ca3b
+SELECT 1
+> CREATE FUNCTION f1(a int, b text DEFAULT 'x') RETURNS int LANGUAGE sql IMMUTABLE STRICT AS 'SELECT a'
+CREATE FUNCTION
+> SELECT string_to_table(pg_get_functiondef('f1'::regproc), E'\n') AS line
+fields line:25:-1:-1
+row CREATE OR REPLACE FUNCTION public.f1(a integer, b text DEFAULT 'x'::text)
+row  RETURNS integer
+row  LANGUAGE sql
+row  IMMUTABLE STRICT
+row AS $function$SELECT a$function$
+row 
+SELECT 6
+> CREATE FUNCTION f2(a int, OUT b int, OUT c text) LANGUAGE sql STABLE PARALLEL SAFE LEAKPROOF COST 7 AS 'SELECT a, ''$function$x'''
+CREATE FUNCTION
+> SELECT string_to_table(pg_get_functiondef('f2'::regproc), E'\n') AS line
+fields line:25:-1:-1
+row CREATE OR REPLACE FUNCTION public.f2(a integer, OUT b integer, OUT c text)
+row  RETURNS record
+row  LANGUAGE sql
+row  STABLE PARALLEL SAFE LEAKPROOF COST 7
+row AS $functionx$SELECT a, '$function$x'$functionx$
+row 
+SELECT 6
+> CREATE FUNCTION f3(n int) RETURNS TABLE(x int, y text) LANGUAGE plpgsql ROWS 12 PARALLEL RESTRICTED AS $$ BEGIN RETURN QUERY SELECT n, 'a'; END $$
+CREATE FUNCTION
+> SELECT string_to_table(pg_get_functiondef('f3'::regproc), E'\n') AS line
+fields line:25:-1:-1
+row CREATE OR REPLACE FUNCTION public.f3(n integer)
+row  RETURNS TABLE(x integer, y text)
+row  LANGUAGE plpgsql
+row  PARALLEL RESTRICTED ROWS 12
+row AS $function$ BEGIN RETURN QUERY SELECT n, 'a'; END $function$
+row 
+SELECT 6
+> CREATE FUNCTION f4() RETURNS SETOF int LANGUAGE sql ROWS 1000 COST 100 AS 'SELECT 1'
+CREATE FUNCTION
+> SELECT string_to_table(pg_get_functiondef('f4'::regproc), E'\n') AS line
+fields line:25:-1:-1
+row CREATE OR REPLACE FUNCTION public.f4()
+row  RETURNS SETOF integer
+row  LANGUAGE sql
+row AS $function$SELECT 1$function$
+row 
+SELECT 5
+> CREATE PROCEDURE p1(a int, INOUT b int) LANGUAGE plpgsql AS $$ BEGIN b := a; END $$
+CREATE PROCEDURE
+> SELECT string_to_table(pg_get_functiondef('p1'::regproc), E'\n') AS line
+fields line:25:-1:-1
+row CREATE OR REPLACE PROCEDURE public.p1(IN a integer, INOUT b integer)
+row  LANGUAGE plpgsql
+row AS $procedure$ BEGIN b := a; END $procedure$
+row 
+SELECT 4
+> CREATE SCHEMA "Odd s"
+CREATE SCHEMA
+> CREATE FUNCTION "Odd s"."F 5"(VARIADIC x int[]) RETURNS int LANGUAGE sql SUPPORT textlike_support AS 'SELECT 1'
+CREATE FUNCTION
+> SELECT string_to_table(pg_get_functiondef('"Odd s"."F 5"'::regproc), E'\n') AS line
+fields line:25:-1:-1
+row CREATE OR REPLACE FUNCTION "Odd s"."F 5"(VARIADIC x integer[])
+row  RETURNS integer
+row  LANGUAGE sql
+row  SUPPORT textlike_support
+row AS $function$SELECT 1$function$
+row 
+SELECT 6
+> CREATE TEMP TABLE tt(a int)
+CREATE TABLE
+> CREATE FUNCTION pg_temp.t1() RETURNS int LANGUAGE sql AS 'SELECT 1'
+CREATE FUNCTION
+> SELECT string_to_table(pg_get_functiondef('pg_temp.t1'::regproc), E'\n') AS line
+fields line:25:-1:-1
+row CREATE OR REPLACE FUNCTION pg_temp.t1()
+row  RETURNS integer
+row  LANGUAGE sql
+row AS $function$SELECT 1$function$
+row 
+SELECT 5
+> SET search_path = "Odd s"
+SET
+search_path="Odd s"
+> SELECT pg_get_functiondef('f3'::regproc::oid)
+ERROR 42883 function "f3" does not exist at 27
+> SELECT string_to_table(pg_get_functiondef('public.f3'::regproc), E'\n') AS line
+fields line:25:-1:-1
+row CREATE OR REPLACE FUNCTION public.f3(n integer)
+row  RETURNS TABLE(x integer, y text)
+row  LANGUAGE plpgsql
+row  PARALLEL RESTRICTED ROWS 12
+row AS $function$ BEGIN RETURN QUERY SELECT n, 'a'; END $function$
+row 
+SELECT 6
