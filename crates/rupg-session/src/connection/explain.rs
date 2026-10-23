@@ -15,6 +15,7 @@ use rupg_wire::CommandTag;
 use super::copy::{def_boolean, def_string};
 use super::extended::protocol_error;
 use super::{Connection, Done};
+use crate::heap::Heap;
 use crate::query::{self, Column, Reader};
 use crate::utility::Notice;
 
@@ -23,6 +24,20 @@ use crate::utility::Notice;
 struct Members<'r, 'a> {
     reader: &'r Reader<'a>,
     error: RefCell<Option<Error>>,
+    /// The rows of the tables of the database `database`, which tell if an index has more pages than a new index.
+    heap: &'r Heap,
+    database: u32,
+}
+
+impl Members<'_, '_> {
+    /// `RelationGetNumberOfBlocks` of an index of the table `table` with the pages `pages` of a new index: the first row of a `btree` adds its root page after the metapage, as `_bt_getroot` makes it.
+    fn index_pages(&self, table: u32, method: u32, pages: i32) -> i32 {
+        if method == rupg_catalog::BTREE && self.heap.has_rows(self.database, table) {
+            pages.max(2)
+        } else {
+            pages.max(1)
+        }
+    }
 }
 
 impl rupg_opt::Members for Members<'_, '_> {
@@ -77,7 +92,7 @@ impl rupg_opt::Members for Members<'_, '_> {
                         .collect(),
                     options: info.options.clone(),
                     collations: info.collations.clone(),
-                    pages: f64::from(info.pages.max(1)),
+                    pages: f64::from(self.index_pages(table, info.method, info.pages)),
                 })
             })
             .collect();
@@ -249,7 +264,12 @@ impl Connection {
         let plan = plan.fold(None, &reader);
         notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         let plan = plan?;
-        let members = Members { reader: &reader, error: RefCell::new(None) };
+        let members = Members {
+            reader: &reader,
+            error: RefCell::new(None),
+            heap: self.store.heap(),
+            database: self.database_oid,
+        };
         let query = rupg_opt::pull_up(plan.query());
         let tree = rupg_opt::plan(&query, &members);
         if let Some(error) = members.error.take() {
