@@ -1,6 +1,8 @@
 //! The names of the time zones.
 //!
-//! `cargo xtask tzdata` makes `crates/rupg-types/src/generated/tznames.rs` from `vendor/tzdata/src/timezone/data/tzdata.zi`, the compact form of the IANA data that the PostgreSQL pin carries. Each `Z` line names a zone and each `L` line names a link, and PostgreSQL takes both names in `TimeZone`. `cargo xtask tzdata --check` writes nothing and fails if the file is not up to date. See `spec/07-sql-types-and-catalog.md`.
+//! `cargo xtask tzdata` makes `crates/rupg-types/src/generated/tznames.rs` from `vendor/tzdata/src/timezone/data/tzdata.zi`, the compact form of the IANA data that the PostgreSQL pin carries. Each `Z` line names a zone and each `L` line names a link, and PostgreSQL takes both names in `TimeZone`. `cargo xtask tzdata --check` writes nothing and fails if a file is not up to date. See `spec/07-sql-types-and-catalog.md`.
+//!
+//! It also copies `tzdata.zi` and the `Default` set of the time zone abbreviations into `crates/rupg-types/src/generated/`, because `rupg-types` reads them with `include_str!`. A published crate has only the files of its own directory, so it cannot read them in `vendor/`.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -10,22 +12,36 @@ use crate::read;
 const INPUT: &str = "vendor/tzdata/src/timezone/data/tzdata.zi";
 const OUTPUT: &str = "crates/rupg-types/src/generated/tznames.rs";
 
+/// The vendored files that `rupg-types` reads with `include_str!`, and the path of the copy of each.
+const COPIES: [(&str, &str); 2] = [
+    (INPUT, "crates/rupg-types/src/generated/tzdata.zi"),
+    (
+        "vendor/postgres-19/src/timezone/tznames/Default",
+        "crates/rupg-types/src/generated/tznames_default.txt",
+    ),
+];
+
 pub(crate) fn run(root: &Path, args: &[String]) -> Result<(), String> {
     let check = args.iter().any(|a| a == "--check");
     if let Some(other) = args.iter().find(|a| *a != "--check") {
         return Err(format!("tzdata: unknown argument {other:?}"));
     }
-    let text = names(&read(&root.join(INPUT))?)?;
-    let file = root.join(OUTPUT);
-    if std::fs::read_to_string(&file).unwrap_or_default() == text {
-        println!("tzdata: {OUTPUT} matches {INPUT}");
-        return Ok(());
+    let mut files = vec![(OUTPUT, names(&read(&root.join(INPUT))?)?)];
+    for (from, to) in COPIES {
+        files.push((to, read(&root.join(from))?));
     }
-    if check {
-        return Err(format!("tzdata: {OUTPUT} is not up to date, run `cargo xtask tzdata`"));
+    for (path, text) in files {
+        let file = root.join(path);
+        if std::fs::read_to_string(&file).unwrap_or_default() == text {
+            println!("tzdata: {path} is up to date");
+            continue;
+        }
+        if check {
+            return Err(format!("tzdata: {path} is not up to date, run `cargo xtask tzdata`"));
+        }
+        std::fs::write(&file, text).map_err(|e| format!("could not write {path}: {e}"))?;
+        println!("tzdata: wrote {path}");
     }
-    std::fs::write(&file, text).map_err(|e| format!("could not write {OUTPUT}: {e}"))?;
-    println!("tzdata: wrote {OUTPUT}");
     Ok(())
 }
 

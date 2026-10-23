@@ -2,7 +2,7 @@
 #
 # It runs on a tag v0.M.patch. The tag must match the workspace version and CHANGELOG.md must have a section for it.
 #
-# The crates are publish = false until M1 ships the first public API (spec/22-crate-layout.md section 22.13). Then a publish job uses crates.io trusted publishing through OIDC, with no long-lived token.
+# M1 shipped the first public API, so the 42 crates of crates/ are published to crates.io (spec/22-crate-layout.md section 22.13). crates.io trusted publishing works only for a crate that exists, so the first version of each crate is published by hand with a token. Then a publish job uses trusted publishing through OIDC, with no long-lived token.
 
 name: release
 
