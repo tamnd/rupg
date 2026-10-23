@@ -270,7 +270,8 @@ impl Connection {
             heap: self.store.heap(),
             database: self.database_oid,
         };
-        let query = rupg_opt::pull_up(plan.query());
+        let mut query = rupg_opt::pull_up(plan.query());
+        rupg_opt::remove_joins(&mut query, &members);
         let tree = rupg_opt::plan(&query, &members);
         if let Some(error) = members.error.take() {
             return Err(error);

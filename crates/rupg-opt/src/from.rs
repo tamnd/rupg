@@ -997,7 +997,7 @@ pub(crate) fn join_conditions<'q>(item: &'q FromItem, out: &mut Vec<&'q Expr>) {
 }
 
 /// `query_is_distinct_for`: the sets of the columns of a subquery that it gives once each, as column numbers. The query gives each row once on the items of `DISTINCT`, or of `DISTINCT ON` with no function that gives a set. With no function that gives a set, it also gives each row once on the items of `GROUP BY`, or on no column when it makes one group with no `GROUP BY` or with one grouping set or `GROUP BY DISTINCT` of empty sets, and a set operation with no `ALL` gives each row once on all its columns.
-fn distinct_keys(sub: &Query) -> Vec<Vec<i16>> {
+pub(crate) fn distinct_keys(sub: &Query) -> Vec<Vec<i16>> {
     let attnum = |at: usize| i16::try_from(at + 1).unwrap_or(i16::MAX);
     let mut out = Vec::new();
     let srfs = sub.has_target_srfs();
@@ -1556,7 +1556,7 @@ fn clause<'q>(
 }
 
 /// A column, or a column under a `RelabelType`, as `examine_variable` finds a `Var`.
-fn plain_var(expr: &Expr) -> Option<Var> {
+pub(crate) fn plain_var(expr: &Expr) -> Option<Var> {
     match &expr.kind {
         ExprKind::Var(var) => Some(*var),
         ExprKind::Relabel(arg, _) => match arg.kind {

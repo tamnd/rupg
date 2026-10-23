@@ -215,7 +215,22 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             node.output = want;
         }
         Kind::NestedLoop { join_filter, .. } => {
-            let parts: Vec<Expr> = join_filter.iter().map(|i| i.expr.as_ref().clone()).collect();
+            let mut parts: Vec<Expr> =
+                join_filter.iter().map(|i| i.expr.as_ref().clone()).collect();
+            // `distribute_qual_to_rels` marks the columns of a join clause as needed at the join, also when a parameterized scan of the inner side tests the clause.
+            if let Some(inner) = node.children.get(1) {
+                let rels = from::node_rels(inner);
+                let conds = match &inner.kind {
+                    Kind::IndexScan { cond, .. } => cond.as_slice(),
+                    Kind::BitmapHeapScan { recheck, .. } => recheck.as_slice(),
+                    _ => &[],
+                };
+                for c in conds.iter().chain(&inner.filter) {
+                    if !exprs::relations(&c.expr).is_subset(&rels) {
+                        parts.push(c.expr.as_ref().clone());
+                    }
+                }
+            }
             join(level, node, want, &parts);
         }
         Kind::MergeJoin { cond, join_filter, .. } | Kind::HashJoin { cond, join_filter, .. } => {

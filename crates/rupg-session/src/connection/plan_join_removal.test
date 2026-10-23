@@ -1,0 +1,245 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (id int PRIMARY KEY, x int, y int, t text);
+CREATE TABLE
+> CREATE TABLE d (id int PRIMARY KEY, w int);
+CREATE TABLE
+> CREATE TABLE e (k1 int, k2 int, v int, UNIQUE (k1, k2));
+CREATE TABLE
+> CREATE TABLE f (id int, w int);
+CREATE TABLE
+> CREATE TABLE g (id int, w int);
+CREATE TABLE
+> CREATE UNIQUE INDEX g_part ON g (id) WHERE w > 0;
+CREATE INDEX
+> INSERT INTO a SELECT g, g % 7, g % 3, 'v' || g FROM generate_series(1, 50) g;
+INSERT 0 50
+> EXPLAIN SELECT a.id FROM a LEFT JOIN d ON d.id = a.id;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..21.30 rows=1130 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.* FROM a LEFT JOIN d ON a.x = d.id;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..21.30 rows=1130 width=44)
+EXPLAIN
+> EXPLAIN SELECT a.id, d.w FROM a LEFT JOIN d ON d.id = a.id;
+fields QUERY PLAN:25:-1:-1
+row Hash Right Join  (cost=35.42..73.97 rows=1130 width=8)
+row   Hash Cond: (d.id = a.id)
+row   ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=21.30..21.30 rows=1130 width=4)
+row         ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a LEFT JOIN d ON d.w = a.id;
+fields QUERY PLAN:25:-1:-1
+row Hash Right Join  (cost=35.42..73.98 rows=2260 width=4)
+row   Hash Cond: (d.w = a.id)
+row   ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Hash  (cost=21.30..21.30 rows=1130 width=4)
+row         ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a LEFT JOIN d ON d.id = a.id AND d.w > 3;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..21.30 rows=1130 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a LEFT JOIN d ON d.id = a.id WHERE d.w IS NULL;
+fields QUERY PLAN:25:-1:-1
+row Hash Right Join  (cost=35.42..73.97 rows=6 width=4)
+row   Hash Cond: (d.id = a.id)
+row   Filter: (d.w IS NULL)
+row   ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=21.30..21.30 rows=1130 width=4)
+row         ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a LEFT JOIN d ON d.id > a.id;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join  (cost=0.15..23639.92 rows=851267 width=4)
+row   ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=4)
+row   ->  Index Only Scan using d_pkey on d  (cost=0.15..13.37 rows=753 width=4)
+row         Index Cond: (id > a.id)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a LEFT JOIN d ON d.id = 5;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..21.30 rows=1130 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a LEFT JOIN e ON e.k1 = a.x AND e.k2 = a.y;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..21.30 rows=1130 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a LEFT JOIN e ON e.k1 = a.x;
+fields QUERY PLAN:25:-1:-1
+row Merge Right Join  (cost=78.76..331.35 rows=11526 width=4)
+row   Merge Cond: (e.k1 = a.x)
+row   ->  Index Only Scan using e_k1_k2_key on e  (cost=0.15..74.75 rows=2040 width=4)
+row   ->  Sort  (cost=78.60..81.43 rows=1130 width=8)
+row         Sort Key: a.x
+row         ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=8)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a LEFT JOIN e ON e.k1 = a.x AND e.k2 = 1;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..21.30 rows=1130 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a LEFT JOIN f ON f.id = a.id;
+fields QUERY PLAN:25:-1:-1
+row Hash Right Join  (cost=35.42..73.98 rows=2260 width=4)
+row   Hash Cond: (f.id = a.id)
+row   ->  Seq Scan on f  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Hash  (cost=21.30..21.30 rows=1130 width=4)
+row         ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a LEFT JOIN g ON g.id = a.id;
+fields QUERY PLAN:25:-1:-1
+row Hash Right Join  (cost=35.42..73.98 rows=2260 width=4)
+row   Hash Cond: (g.id = a.id)
+row   ->  Seq Scan on g  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Hash  (cost=21.30..21.30 rows=1130 width=4)
+row         ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a LEFT JOIN (SELECT DISTINCT w FROM f) s ON s.w = a.x;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..21.30 rows=1130 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a LEFT JOIN (SELECT w, count(*) FROM f GROUP BY w) s ON s.w = a.x;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..21.30 rows=1130 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a LEFT JOIN (SELECT id, w FROM f) s ON s.w = a.x;
+fields QUERY PLAN:25:-1:-1
+row Merge Left Join  (cost=237.11..434.29 rows=12769 width=4)
+row   Merge Cond: (a.x = f.w)
+row   ->  Sort  (cost=78.60..81.43 rows=1130 width=8)
+row         Sort Key: a.x
+row         ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=8)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=4)
+row         Sort Key: f.w
+row         ->  Seq Scan on f  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a LEFT JOIN d ON d.id = a.id LEFT JOIN d d2 ON d2.id = d.w;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..21.30 rows=1130 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a LEFT JOIN (d JOIN f ON f.id = d.id) ON d.id = a.id;
+fields QUERY PLAN:25:-1:-1
+row Hash Right Join  (cost=96.28..140.76 rows=1130 width=4)
+row   Hash Cond: (d.id = a.id)
+row   ->  Hash Join  (cost=60.85..99.39 rows=2260 width=4)
+row         Hash Cond: (f.id = d.id)
+row         ->  Seq Scan on f  (cost=0.00..32.60 rows=2260 width=4)
+row         ->  Hash  (cost=32.60..32.60 rows=2260 width=4)
+row               ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Hash  (cost=21.30..21.30 rows=1130 width=4)
+row         ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM d RIGHT JOIN a ON d.id = a.id;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..21.30 rows=1130 width=4)
+EXPLAIN
+> EXPLAIN SELECT count(*) FROM a LEFT JOIN d ON d.id = a.id;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=24.12..24.14 rows=1 width=8)
+row   ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=0)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a LEFT JOIN d ON d.id = a.id ORDER BY a.id;
+fields QUERY PLAN:25:-1:-1
+row Index Only Scan using a_pkey on a  (cost=0.15..61.10 rows=1130 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a LEFT JOIN d USING (id);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..21.30 rows=1130 width=4)
+EXPLAIN
+> EXPLAIN SELECT id FROM a LEFT JOIN d USING (id);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..21.30 rows=1130 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a LEFT JOIN d ON d.id = a.id WHERE a.x IN (SELECT w FROM f WHERE f.id = a.y);
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=49.55..80.24 rows=282 width=4)
+row   Hash Cond: ((a.y = f.id) AND (a.x = f.w))
+row   ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=12)
+row   ->  Hash  (cost=46.16..46.16 rows=226 width=8)
+row         ->  HashAggregate  (cost=43.90..46.16 rows=226 width=8)
+row               Group Key: f.id, f.w
+row               ->  Seq Scan on f  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a LEFT JOIN d ON d.id = a.id + 1;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..21.30 rows=1130 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a LEFT JOIN d ON d.id::bigint = a.id;
+fields QUERY PLAN:25:-1:-1
+row Hash Right Join  (cost=35.42..74.26 rows=2260 width=4)
+row   Hash Cond: ((d.id)::bigint = a.id)
+row   ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Hash  (cost=21.30..21.30 rows=1130 width=4)
+row         ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a LEFT JOIN d ON d.id = a.id FOR UPDATE OF a;
+fields QUERY PLAN:25:-1:-1
+row LockRows  (cost=35.42..85.27 rows=1130 width=16)
+row   ->  Hash Right Join  (cost=35.42..73.97 rows=1130 width=16)
+row         Hash Cond: (d.id = a.id)
+row         ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=10)
+row         ->  Hash  (cost=21.30..21.30 rows=1130 width=10)
+row               ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=10)
+EXPLAIN
+> EXPLAIN SELECT (SELECT a.id FROM a LEFT JOIN d ON d.id = a.id LIMIT 1);
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.02..0.03 rows=1 width=4)
+row   InitPlan expr_1
+row     ->  Limit  (cost=0.00..0.02 rows=1 width=4)
+row           ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.id, (SELECT d.w) FROM a LEFT JOIN d ON d.id = a.id;
+fields QUERY PLAN:25:-1:-1
+row Hash Right Join  (cost=35.42..85.27 rows=1130 width=8)
+row   Hash Cond: (d.id = a.id)
+row   ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=21.30..21.30 rows=1130 width=4)
+row         ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=4)
+row   SubPlan expr_1
+row     ->  Result  (cost=0.00..0.01 rows=1 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a LEFT JOIN d ON d.id = a.id AND a.x > 1;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..21.30 rows=1130 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a LEFT JOIN d ON d.id = a.id OR d.id = a.x;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join  (cost=0.15..302.60 rows=2260 width=4)
+row   ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=8)
+row   ->  Index Only Scan using d_pkey on d  (cost=0.15..0.23 rows=2 width=4)
+row         Index Cond: (id = ANY (ARRAY[a.id, a.x]))
+EXPLAIN
+> EXPLAIN VERBOSE SELECT a.id FROM a LEFT JOIN d ON d.id = a.id;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.a  (cost=0.00..21.30 rows=1130 width=4)
+row   Output: a.id
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a LEFT JOIN d ON d.id = a.id JOIN f ON f.id = a.id;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=35.42..73.98 rows=2260 width=4)
+row   Hash Cond: (f.id = a.id)
+row   ->  Seq Scan on f  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Hash  (cost=21.30..21.30 rows=1130 width=4)
+row         ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.id FROM a LEFT JOIN d ON a.id = d.id LEFT JOIN f ON f.id = d.w;
+fields QUERY PLAN:25:-1:-1
+row Merge Left Join  (cost=289.78..486.96 rows=12769 width=4)
+row   Merge Cond: (d.w = f.id)
+row   ->  Sort  (cost=131.27..134.10 rows=1130 width=8)
+row         Sort Key: d.w
+row         ->  Hash Right Join  (cost=35.42..73.97 rows=1130 width=8)
+row               Hash Cond: (d.id = a.id)
+row               ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Hash  (cost=21.30..21.30 rows=1130 width=4)
+row                     ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=4)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=4)
+row         Sort Key: f.id
+row         ->  Seq Scan on f  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> SELECT count(*) FROM a LEFT JOIN d ON d.id = a.id;
+fields count:20:8:-1
+row 50
+SELECT 1
