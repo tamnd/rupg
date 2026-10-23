@@ -1,0 +1,91 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE FUNCTION infinite_recurse() RETURNS int AS 'select infinite_recurse()' LANGUAGE sql;
+CREATE FUNCTION
+> DO $$ BEGIN PERFORM infinite_recurse(); EXCEPTION WHEN statement_too_complex THEN RAISE NOTICE 'caught %: %', SQLSTATE, SQLERRM; END $$;
+NOTICE 00000 caught 54001: stack depth limit exceeded (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> SELECT proname, prorettype::regtype FROM pg_proc WHERE proname = 'infinite_recurse';
+fields proname@pg_proc.2:19:64:-1,prorettype:2206:4:-1
+row infinite_recurse,integer
+SELECT 1
+> CREATE FUNCTION fact(n int) RETURNS numeric LANGUAGE sql AS 'SELECT CASE WHEN n <= 1 THEN 1 ELSE n * fact(n - 1) END';
+CREATE FUNCTION
+> SELECT fact(5), fact(20), fact(40);
+fields fact:1700:-1:-1,fact:1700:-1:-1,fact:1700:-1:-1
+row 120,2432902008176640000,815915283247897734345611269596115894272000000000
+SELECT 1
+> CREATE OR REPLACE FUNCTION fact(n int) RETURNS numeric LANGUAGE sql AS 'SELECT CASE WHEN n <= 1 THEN 1::numeric ELSE fact(n - 1) + n END';
+CREATE FUNCTION
+> SELECT fact(30);
+fields fact:1700:-1:-1
+row 465
+SELECT 1
+> CREATE FUNCTION fib(int) RETURNS int LANGUAGE sql AS $$ SELECT CASE WHEN $1 < 2 THEN $1 ELSE fib($1 - 1) + fib($1 - 2) END $$;
+CREATE FUNCTION
+> SELECT fib(10);
+fields fib:23:4:-1
+row 55
+SELECT 1
+> CREATE FUNCTION srf_recurse(n int) RETURNS SETOF int LANGUAGE sql AS 'SELECT n UNION ALL SELECT srf_recurse(n - 1) WHERE n > 1';
+CREATE FUNCTION
+> SELECT srf_recurse(4);
+fields srf_recurse:23:4:-1
+row 4
+row 3
+row 2
+row 1
+SELECT 4
+> SELECT * FROM srf_recurse(3);
+fields srf_recurse:23:4:-1
+row 3
+row 2
+row 1
+SELECT 3
+> CREATE FUNCTION srf_forever(n int) RETURNS SETOF int LANGUAGE sql AS 'SELECT * FROM srf_forever(n + 1)';
+CREATE FUNCTION
+> DO $$ BEGIN PERFORM * FROM srf_forever(1); EXCEPTION WHEN statement_too_complex THEN RAISE NOTICE 'caught %: %', SQLSTATE, SQLERRM; END $$;
+NOTICE 00000 caught 54001: stack depth limit exceeded (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> CREATE FUNCTION mutual_a(int) RETURNS int LANGUAGE sql AS 'SELECT mutual_b($1)';
+ERROR 42883 function mutual_b(integer) does not exist at 67
+DETAIL There is no function of that name.
+> CREATE FUNCTION atomic_self() RETURNS int BEGIN ATOMIC SELECT atomic_self(); END;
+ERROR 42883 function atomic_self() does not exist at 63
+DETAIL There is no function of that name.
+> CREATE FUNCTION return_self(int) RETURNS int RETURN return_self($1);
+ERROR 42883 function return_self(integer) does not exist at 53
+DETAIL There is no function of that name.
+> SELECT count(*) FROM pg_proc WHERE proname IN ('mutual_a', 'atomic_self', 'return_self');
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE FUNCTION body_error() RETURNS int LANGUAGE sql AS 'SELECT no_such_function()';
+ERROR 42883 function no_such_function() does not exist at 66
+DETAIL There is no function of that name.
+> SELECT body_error();
+ERROR 42883 function body_error() does not exist at 8
+DETAIL There is no function of that name.
+> BEGIN;
+BEGIN
+> CREATE FUNCTION body_error2() RETURNS int LANGUAGE sql AS 'SELECT body_error2() + no_such_column';
+ERROR 42703 column "no_such_column" does not exist at 83
+> ROLLBACK;
+ROLLBACK
+> SELECT count(*) FROM pg_proc WHERE proname IN ('body_error', 'body_error2');
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE FUNCTION poly_recurse(anyelement) RETURNS anyelement LANGUAGE sql AS 'SELECT poly_recurse($1)';
+CREATE FUNCTION
+> DO $$ BEGIN PERFORM poly_recurse(1); EXCEPTION WHEN statement_too_complex THEN RAISE NOTICE 'caught %: %', SQLSTATE, SQLERRM; END $$;
+NOTICE 00000 caught 54001: stack depth limit exceeded (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> CREATE FUNCTION wrong_args() RETURNS int LANGUAGE sql AS 'SELECT wrong_args(1)';
+ERROR 42883 function wrong_args(integer) does not exist at 66
+DETAIL No function of that name accepts the given number of arguments.
+> CREATE FUNCTION self_text() RETURNS text LANGUAGE sql AS 'SELECT self_text()::int';
+CREATE FUNCTION
+> DROP FUNCTION infinite_recurse(), fact(int), fib(int), srf_recurse(int), srf_forever(int), poly_recurse(anyelement), self_text();
+DROP FUNCTION

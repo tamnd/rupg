@@ -393,6 +393,10 @@ impl Env for SchemaEnv<'_> {
         self.env.check_function(function)
     }
 
+    fn command_counter_increment(&self, catalog: &Catalog) {
+        self.env.command_counter_increment(catalog);
+    }
+
     fn evaluate(&self, expr: &Expr) -> Result<Value> {
         self.env.evaluate(expr)
     }

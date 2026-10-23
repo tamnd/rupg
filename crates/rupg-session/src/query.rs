@@ -1108,6 +1108,10 @@ impl Env for Reader<'_> {
         rupg_plpgsql::validate(self, function)
     }
 
+    fn command_counter_increment(&self, catalog: &Catalog) {
+        use_types(catalog);
+    }
+
     fn search_path(&self) -> Vec<u32> {
         self.path().into_iter().map(|(_, oid)| oid).collect()
     }

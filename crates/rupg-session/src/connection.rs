@@ -5806,6 +5806,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/srflimit.test")));
     }
 
+    /// A function in SQL with a body in a string can call itself, because `ProcedureCreate` adds the function before `fmgr_sql_validator` reads the body. A body of `BEGIN ATOMIC` or `RETURN` cannot, and a body with an error leaves no function. A function that calls itself with no end gives the error of `check_stack_depth`, which the scripts catch in PL/pgSQL. `connection/sqlrecurse.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn sqlrecurse() {
+        big_stack(|| script(include_str!("connection/sqlrecurse.test")));
+    }
+
     /// A query that is a `UNION ALL` of `SELECT`s with the types of its columns and has `ORDER BY` becomes an append relation, as `flatten_simple_union_all` makes it, so the planner can plan a `Merge Append` of the plans of the `SELECT`s in the order. A `SELECT` with its own `WHERE` is not a member of the append relation, as `is_safe_append_member`, and its plan gets a sort. `connection/plan_union_all_order.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_union_all_order() {
