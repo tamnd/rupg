@@ -6,7 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- `EXPLAIN VERBOSE` of an `INSERT`, an `UPDATE`, a `DELETE` and a `MERGE` with `RETURNING` now shows the list of `RETURNING` as the `Output` of the `ModifyTable`, as PostgreSQL does. The node below now gives the columns of the other relations that `RETURNING` reads, after the row marks. (#NNN)
+- `EXPLAIN VERBOSE` of an `INSERT`, an `UPDATE`, a `DELETE` and a `MERGE` with `RETURNING` now shows the list of `RETURNING` as the `Output` of the `ModifyTable`, as PostgreSQL does. The node below now gives the columns of the other relations that `RETURNING` reads, after the row marks. (#600)
 - `EXPLAIN VERBOSE` of a `MERGE` now shows the targets that PostgreSQL gives the node below the `Merge`: the ID of the version of the row of the target table, the columns of the source that the `WHEN` clauses read, and the ID of the version of the row of the source. The columns of the target table and the marker of the source row do not show. (#599)
 
 ## 0.1.71 (2026-10-23)
