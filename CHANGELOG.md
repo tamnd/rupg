@@ -6,7 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- `INSERT`, `UPDATE`, `COPY FROM`, `MERGE` and `CREATE UNIQUE INDEX` check unique indexes on expressions and partial unique indexes. `ON CONFLICT` infers these indexes from an expression and a `WHERE` clause, and the detail of a duplicate key shows the expressions of the index. (#NNN)
+- `INSERT`, `UPDATE`, `COPY FROM`, `MERGE` and `CREATE UNIQUE INDEX` check unique indexes on expressions and partial unique indexes. `ON CONFLICT` infers these indexes from an expression and a `WHERE` clause, and the detail of a duplicate key shows the expressions of the index. (#607)
 - `EXPLAIN` uses indexes on expressions and partial indexes. An index on an expression matches a condition, an order and a join condition of the same expression. A partial index is used when the conditions imply its predicate, and its estimates use the rows of the index. `=` of the expression of a unique index passes one row. (#606)
 - The plan of a `MERGE` has the target table on the left side of the join, as PostgreSQL makes it. With `NOT MATCHED BY SOURCE`, the plan no longer shows a `Values Scan` of the marker of the source rows, and the rows carry the whole row of the source, as in PostgreSQL. (#605)
 - `EXPLAIN VERBOSE` shows `old`, `new` and `MERGE_ACTION()` of `RETURNING` in the `Output` of the `ModifyTable`, as PostgreSQL does. Before, the `Output` line was missing. (#604)
