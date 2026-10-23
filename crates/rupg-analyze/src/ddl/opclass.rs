@@ -9,15 +9,15 @@ use rupg_catalog::{
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_sql::nodes::{
-    AlterOpFamilyStmt, CreateOpClassItem, CreateOpClassStmt, CreateOpFamilyStmt, DropStmt, List,
-    Node, OPCLASS_ITEM_FUNCTION, OPCLASS_ITEM_OPERATOR, OPCLASS_ITEM_STORAGETYPE, ObjectType,
-    ObjectWithArgs, TypeName,
+    AlterObjectSchemaStmt, AlterOpFamilyStmt, AlterOwnerStmt, CreateOpClassItem, CreateOpClassStmt,
+    CreateOpFamilyStmt, DropStmt, List, Node, OPCLASS_ITEM_FUNCTION, OPCLASS_ITEM_OPERATOR,
+    OPCLASS_ITEM_STORAGETYPE, ObjectType, ObjectWithArgs, RenameStmt, TypeName,
 };
 use rupg_types::oid::{self, INTERNAL};
 
 use super::comment::{name_list, not_owner};
 use super::drop::{builtin_object, quote_identifier};
-use super::{Definer, not_yet};
+use super::{Definer, PG_TOAST_NAMESPACE, not_yet};
 use crate::typename::{names, type_name_text};
 
 /// `BOOTSTRAP_SUPERUSERID`: the owner of the built-in families and classes.
@@ -144,6 +144,11 @@ fn index_method(name: &str) -> Result<&'static Method> {
 /// The name of an access method for `get_am_name`.
 fn method_name(oid: u32) -> &'static str {
     METHODS.iter().find(|m| m.oid == oid).map_or("", |m| m.name)
+}
+
+/// The word of a family or a class in a message.
+fn opcf_word(family: bool) -> &'static str {
+    if family { "operator family" } else { "operator class" }
 }
 
 /// An error with `ERRCODE_INVALID_OBJECT_DEFINITION`.
@@ -1087,6 +1092,140 @@ impl Definer<'_, '_> {
             objects.push(object);
         }
         Ok(objects)
+    }
+
+    /// `get_object_address_opcf` for `ALTER OPERATOR FAMILY` and `ALTER OPERATOR CLASS`: the family or the class of a name list that starts with the name of the access method, with the name, the schema, the access method and the owner of the object.
+    fn altered_opcf(
+        &self,
+        family: bool,
+        object: Option<&Node>,
+    ) -> Result<(u32, String, u32, &'static Method, u32)> {
+        let list = name_list(object);
+        let Some((amname, name)) = list.split_first() else {
+            return Err(Error::internal("an access method and a name"));
+        };
+        let method = index_method(amname)?;
+        let oid = self.opcf_lookup(family, method, name, false)?.unwrap_or_default();
+        let (namespace, name, _, owner) = self.opcf_row(family, oid).unwrap_or_default();
+        Ok((oid, name, namespace, method, owner))
+    }
+
+    /// `IsThereOpFamilyInNamespace` and `IsThereOpClassInNamespace`: an error when the schema has a family or a class of the access method with the name.
+    fn check_opcf_free(
+        &self,
+        family: bool,
+        name: &str,
+        method: &Method,
+        namespace: u32,
+    ) -> Result<()> {
+        let taken = if family {
+            self.opfamily_in(method.oid, namespace, name).is_some()
+        } else {
+            self.opclass_in(method.oid, namespace, name).is_some()
+        };
+        if !taken {
+            return Ok(());
+        }
+        let word = if family { "operator family" } else { "operator class" };
+        Err(Error::new(
+            SqlState::DUPLICATE_OBJECT,
+            format!(
+                "{word} \"{name}\" for access method \"{}\" already exists in schema \"{}\"",
+                method.name,
+                self.schema_name(namespace)
+            ),
+        ))
+    }
+
+    /// `AlterObjectRename_internal` for `ALTER OPERATOR FAMILY ... RENAME TO` and `ALTER OPERATOR CLASS ... RENAME TO`. A user who is not a superuser must own the object and be able to create in its schema.
+    pub(super) fn rename_opcf(&mut self, stmt: &RenameStmt) -> Result<()> {
+        let family = stmt.renameType == ObjectType::OBJECT_OPFAMILY;
+        let newname = stmt.newname.as_deref().unwrap_or_default();
+        let (oid, name, namespace, method, owner) =
+            self.altered_opcf(family, stmt.object.as_ref())?;
+        if !self.is_superuser() {
+            if !self.owns(owner) {
+                return Err(not_owner(opcf_word(family), &name));
+            }
+            self.check_create_in(namespace, None)?;
+        }
+        self.check_opcf_free(family, newname, method, namespace)?;
+        if oid < FIRST_NORMAL_OID {
+            return Err(not_yet("ALTER of a built-in operator class or operator family", None));
+        }
+        if family {
+            self.catalog.alter_opfamily(oid, |f| f.name = newname.to_string());
+        } else {
+            self.catalog.alter_opclass(oid, |c| c.name = newname.to_string());
+        }
+        Ok(())
+    }
+
+    /// `AlterObjectOwner_internal` for `ALTER OPERATOR FAMILY ... OWNER TO` and `ALTER OPERATOR CLASS ... OWNER TO`. A user who is not a superuser must own the object and be able to become the new owner, and the new owner must be able to create in the schema of the object.
+    pub(super) fn alter_opcf_owner(&mut self, stmt: &AlterOwnerStmt) -> Result<()> {
+        let family = stmt.objectType == ObjectType::OBJECT_OPFAMILY;
+        let role = stmt.newowner.as_deref().cloned().unwrap_or_default();
+        let new = self.role_oid(&role)?;
+        let (oid, name, namespace, _, owner) = self.altered_opcf(family, stmt.object.as_ref())?;
+        if owner == new {
+            return Ok(());
+        }
+        if !self.is_superuser() {
+            if !self.owns(owner) {
+                return Err(not_owner(opcf_word(family), &name));
+            }
+            self.check_can_set_role(new)?;
+            if !self.may_create_in(namespace, new) {
+                return Err(Error::new(
+                    SqlState::INSUFFICIENT_PRIVILEGE,
+                    format!("permission denied for schema {}", self.schema_name(namespace)),
+                ));
+            }
+        }
+        if oid < FIRST_NORMAL_OID {
+            return Err(not_yet("ALTER of a built-in operator class or operator family", None));
+        }
+        if family {
+            self.catalog.alter_opfamily(oid, |f| f.owner = new);
+        } else {
+            self.catalog.alter_opclass(oid, |c| c.owner = new);
+        }
+        Ok(())
+    }
+
+    /// `ExecAlterObjectSchemaStmt` and `AlterObjectNamespace_internal` for `ALTER OPERATOR FAMILY ... SET SCHEMA` and `ALTER OPERATOR CLASS ... SET SCHEMA`: `LookupCreationNamespace` and `CheckSetNamespace` for the new schema, the checks of the owner and of the name, and then the move. An object that is in the schema already needs no change.
+    pub(super) fn alter_opcf_schema(&mut self, stmt: &AlterObjectSchemaStmt) -> Result<()> {
+        let family = stmt.objectType == ObjectType::OBJECT_OPFAMILY;
+        let (oid, name, old, method, owner) = self.altered_opcf(family, stmt.object.as_ref())?;
+        let schema = stmt.newschema.as_deref().unwrap_or_default();
+        if schema == "pg_temp" {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "cannot move objects into or out of temporary schemas",
+            ));
+        }
+        let namespace = self.an.schema(schema).ok_or_else(|| {
+            Error::new(SqlState::UNDEFINED_SCHEMA, format!("schema \"{schema}\" does not exist"))
+        })?;
+        self.check_create_in(namespace, None)?;
+        if old == namespace {
+            return Ok(());
+        }
+        if namespace == PG_TOAST_NAMESPACE || old == PG_TOAST_NAMESPACE {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "cannot move objects into or out of TOAST schema",
+            ));
+        }
+        if !self.is_superuser() && !self.owns(owner) {
+            return Err(not_owner(opcf_word(family), &name));
+        }
+        self.check_opcf_free(family, &name, method, namespace)?;
+        if oid < FIRST_NORMAL_OID {
+            return Err(not_yet("ALTER of a built-in operator class or operator family", None));
+        }
+        self.catalog.set_opcf_namespace(family, oid, namespace);
+        Ok(())
     }
 
     /// `getObjectDescription` for a family, a class, or a member of a family.
