@@ -924,6 +924,12 @@ impl Definer<'_, '_> {
         }
     }
 
+    /// `object_aclcheck` of `CREATE` on a schema: true when the role may create objects in it.
+    pub(super) fn schema_create_allowed(&self, namespace: u32, role: u32) -> bool {
+        let roles = rupg_pgcatalog::roles::current();
+        self.pg_aclmask(&roles, Object::new(Kind::Schema, namespace), role, CREATE) != 0
+    }
+
     /// The `relkind` of a relation of the catalog or built in.
     fn relation_kind(&self, oid: u32) -> u8 {
         match self.catalog.relation(oid) {

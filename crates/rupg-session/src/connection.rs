@@ -2000,7 +2000,7 @@ impl Connection {
     }
 }
 
-/// `AlterObjectTypeCommandTag` for the kinds of relations, of types, of functions and of operators: the tag of `ALTER TABLE` and of `ALTER ... RENAME` for the kind of the object.
+/// `AlterObjectTypeCommandTag` for the kinds of relations, of types, of functions, of operators, and of operator classes and families: the tag of `ALTER TABLE` and of `ALTER ... RENAME` for the kind of the object.
 fn alter_tag(kind: ObjectType) -> CommandTag {
     match kind {
         ObjectType::OBJECT_INDEX => CommandTag::AlterIndex,
@@ -2015,6 +2015,8 @@ fn alter_tag(kind: ObjectType) -> CommandTag {
         ObjectType::OBJECT_PROCEDURE => CommandTag::AlterProcedure,
         ObjectType::OBJECT_TRIGGER => CommandTag::AlterTrigger,
         ObjectType::OBJECT_OPERATOR => CommandTag::AlterOperator,
+        ObjectType::OBJECT_OPCLASS => CommandTag::AlterOperatorClass,
+        ObjectType::OBJECT_OPFAMILY => CommandTag::AlterOperatorFamily,
         _ => CommandTag::AlterTable,
     }
 }
@@ -5762,6 +5764,12 @@ mod tests {
     #[test]
     fn opclass_partition() {
         big_stack(|| script(include_str!("connection/opclass_partition.test")));
+    }
+
+    /// `ALTER OPERATOR CLASS` and `ALTER OPERATOR FAMILY` with `RENAME TO`, `OWNER TO` and `SET SCHEMA`: the checks of the owner, of the role, of `CREATE` on the schema and of the name, and the dependency on the schema. `connection/opclass_alter.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn opclass_alter() {
+        big_stack(|| script(include_str!("connection/opclass_alter.test")));
     }
 
     /// A query that is a `UNION ALL` of `SELECT`s with the types of its columns and has `ORDER BY` becomes an append relation, as `flatten_simple_union_all` makes it, so the planner can plan a `Merge Append` of the plans of the `SELECT`s in the order. A `SELECT` with its own `WHERE` is not a member of the append relation, as `is_safe_append_member`, and its plan gets a sort. `connection/plan_union_all_order.test` is the output of PostgreSQL 19 for the same script in a new database.

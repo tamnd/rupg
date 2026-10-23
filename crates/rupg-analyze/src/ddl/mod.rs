@@ -175,11 +175,16 @@ pub fn is_definition(stmt: &Node) -> bool {
     ) || matches!(stmt, Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) || define.kind == ObjectType::OBJECT_OPERATOR)
         || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
         || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype) || alter.objtype == ObjectType::OBJECT_TYPE)
-        || matches!(stmt, Node::AlterOwnerStmt(alter) if matches!(alter.objectType, ObjectType::OBJECT_SCHEMA | ObjectType::OBJECT_OPERATOR) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
+        || matches!(stmt, Node::AlterOwnerStmt(alter) if matches!(alter.objectType, ObjectType::OBJECT_SCHEMA | ObjectType::OBJECT_OPERATOR) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
         || matches!(stmt, Node::RenameStmt(rename) if rename::is_rename_kind(rename.renameType))
-        || matches!(stmt, Node::AlterObjectSchemaStmt(alter) if is_alter_kind(alter.objectType) || alter.objectType == ObjectType::OBJECT_OPERATOR || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
+        || matches!(stmt, Node::AlterObjectSchemaStmt(alter) if is_alter_kind(alter.objectType) || alter.objectType == ObjectType::OBJECT_OPERATOR || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
         || matches!(stmt, Node::SelectStmt(select) if select.intoClause.is_some())
         || matches!(stmt, Node::GrantStmt(grant) if grant.targtype != GrantTargetType::ACL_TARGET_DEFAULTS)
+}
+
+/// True for an operator class and an operator family.
+fn is_opcf_kind(kind: ObjectType) -> bool {
+    matches!(kind, ObjectType::OBJECT_OPCLASS | ObjectType::OBJECT_OPFAMILY)
 }
 
 /// True for the kinds of relations of `ALTER TABLE` and of the other statements that change a relation. `ALTER TYPE` of the attributes of a composite type is an `AlterTableStmt` too.
@@ -275,6 +280,9 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         }
         Node::AlterObjectSchemaStmt(alter) if alter.objectType == ObjectType::OBJECT_OPERATOR => {
             definer.alter_operator_schema(alter)
+        }
+        Node::AlterObjectSchemaStmt(alter) if is_opcf_kind(alter.objectType) => {
+            definer.alter_opcf_schema(alter)
         }
         Node::AlterObjectSchemaStmt(alter) => definer.alter_relation_schema(alter),
         Node::CreateSeqStmt(create) => definer.create_sequence(create),
@@ -583,10 +591,11 @@ impl Definer<'_, '_> {
         }
     }
 
-    /// `object_aclcheck` of `CREATE` on a schema for a role: a superuser or the owner of the schema can create objects in it.
+    /// `object_aclcheck` of `CREATE` on a schema for a role: a superuser, the owner of the schema and a role that `nspacl` grants `CREATE` can create objects in it.
     fn may_create_in(&self, namespace: u32, role: u32) -> bool {
         rupg_pgcatalog::roles::current().superuser(role)
             || self.schema_owner(namespace) == Some(role)
+            || self.schema_create_allowed(namespace, role)
     }
 
     /// The check of `CREATE` on a schema for the role of the statement.

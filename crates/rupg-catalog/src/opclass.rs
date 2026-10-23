@@ -202,6 +202,20 @@ impl Catalog {
         }
     }
 
+    /// `AlterObjectNamespace_internal` for an operator family, or for an operator class when `family` is false: the move to the schema, with `changeDependencyFor` for the dependency on the schema.
+    pub fn set_opcf_namespace(&mut self, family: bool, oid: u32, namespace: u32) {
+        let (class, old) = if family {
+            let row = self.opfamilies.get_mut(&oid);
+            (PG_OPFAMILY, row.map(|f| std::mem::replace(&mut f.namespace, namespace)))
+        } else {
+            let row = self.opclasses.get_mut(&oid);
+            (PG_OPCLASS, row.map(|c| std::mem::replace(&mut c.namespace, namespace)))
+        };
+        if let Some(old) = old {
+            self.change_namespace_dependency(ObjRef::new(class, oid), old, namespace);
+        }
+    }
+
     /// The operator families, in the order of their OIDs.
     pub fn opfamilies(&self) -> impl Iterator<Item = &OpFamily> {
         self.opfamilies.values()
