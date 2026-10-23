@@ -474,7 +474,7 @@ impl<'q> Builder<'q> {
     /// `preprocess_rowmarks` and `preprocess_targetlist`: the junk columns that the rows of a query carry for its row marks. `FOR UPDATE` and `FOR SHARE` mark each relation of `FROM`, the locked tables first, and an `UPDATE` or a `DELETE` marks each relation other than its target. A table gives `ctid`, and a function, a `VALUES` list or a query of `WITH` gives the whole row, as `ROW_MARK_COPY`. A table with an inheritance tree also gives `tableoid`, which `expand_inherited_rtentry` adds after the other columns. A subquery gives no column yet.
     fn marks(&self, query: &'q Query, write: Option<&Write>) -> Vec<Expr> {
         let target = match write.map(|w| &w.kind) {
-            Some(WriteKind::Update | WriteKind::Delete) => Some(0),
+            Some(WriteKind::Update | WriteKind::Delete | WriteKind::Merge) => Some(0),
             _ if !query.row_marks.is_empty() && write.is_none() => None,
             _ => return Vec::new(),
         };

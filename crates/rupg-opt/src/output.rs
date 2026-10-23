@@ -300,8 +300,50 @@ fn modify_targets<'q>(level: &Level<'q>, operation: Operation) -> Vec<Item<'q>> 
             out.extend(level.marks.iter().map(|m| item(m.clone())));
             out
         }
+        Operation::Merge => merge_targets(level).unwrap_or_else(all),
         _ => all(),
     }
+}
+
+/// `preprocess_targetlist` for a `MERGE`: the ID of the version of the row of the target table, then the columns of the other relations that the condition and the row of each `WHEN` clause read, then the row marks, then the columns that only `RETURNING` reads. The columns of the target table do not come, as the executor reads them from the row of the table.
+fn merge_targets<'q>(level: &Level<'q>) -> Option<Vec<Item<'q>>> {
+    let query = level.query;
+    let merge = query.write.as_ref()?.merge.as_ref()?;
+    let tid = query.targets.iter().find(|t| {
+        matches!(t.expr.kind, ExprKind::Var(v) if v.relation == 0 && v.levels_up == 0 && v.attnum == -1)
+    })?;
+    let carried = &query.targets[query.targets.len().checked_sub(merge.carried)?..];
+    let mut read = Vec::new();
+    for clause in &merge.clauses {
+        // The query of a clause with check constraints reads the query of its row as its only relation.
+        let rows = match clause.query.relations.as_slice() {
+            [relation] if relation.oid == 0 => {
+                relation.subquery.as_deref().unwrap_or(&clause.query)
+            }
+            _ => &clause.query,
+        };
+        let mut columns = Vec::new();
+        for expr in rows.filter.iter().chain(rows.targets.iter().map(|t| &t.expr)) {
+            exprs::vars_of(expr, &mut columns);
+        }
+        for column in columns {
+            if let ExprKind::Var(v) = column.kind
+                && v.relation == 1
+                && let Some(at) = usize::try_from(v.attnum).ok().and_then(|a| a.checked_sub(1))
+                && at < carried.len()
+                && !read.contains(&at)
+            {
+                read.push(at);
+            }
+        }
+    }
+    let mut out = vec![Item::of(&tid.expr)];
+    out.extend(read.iter().map(|&at| Item::of(&carried[at].expr)));
+    out.extend(level.marks.iter().map(|m| item(m.clone())));
+    out.extend(
+        (0..carried.len()).filter(|at| !read.contains(at)).map(|at| Item::of(&carried[at].expr)),
+    );
+    Some(out)
 }
 
 /// `pull_up_simple_values`: the expressions of the row of a `VALUES` with one row that is the only relation of a query, which a `Result` gives in place of the `Values Scan`. The items must be columns of the row.

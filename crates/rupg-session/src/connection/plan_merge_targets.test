@@ -1,0 +1,122 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (id int PRIMARY KEY, x int, y int, t text);
+CREATE TABLE
+> CREATE TABLE b (id int PRIMARY KEY, aid int, z int);
+CREATE TABLE
+> INSERT INTO a SELECT g, g % 7, g % 3, 'v' || g FROM generate_series(1, 50) g;
+INSERT 0 50
+> EXPLAIN VERBOSE MERGE INTO b USING a ON a.id = b.aid WHEN MATCHED THEN UPDATE SET z = a.x WHEN NOT MATCHED THEN INSERT VALUES (a.id, a.id, a.x);
+fields QUERY PLAN:25:-1:-1
+row Merge on public.b  (cost=35.42..71.20 rows=0 width=0)
+row   ->  Hash Right Join  (cost=35.42..71.20 rows=2040 width=20)
+row         Output: b.ctid, a.x, a.id, a.ctid
+row         Inner Unique: true
+row         Hash Cond: (b.aid = a.id)
+row         ->  Seq Scan on public.b  (cost=0.00..30.40 rows=2040 width=10)
+row               Output: b.ctid, b.aid
+row         ->  Hash  (cost=21.30..21.30 rows=1130 width=14)
+row               Output: a.x, a.id, a.ctid
+row               ->  Seq Scan on public.a  (cost=0.00..21.30 rows=1130 width=14)
+row                     Output: a.x, a.id, a.ctid
+EXPLAIN
+> EXPLAIN VERBOSE MERGE INTO b USING a ON a.id = b.aid WHEN MATCHED THEN DELETE;
+fields QUERY PLAN:25:-1:-1
+row Merge on public.b  (cost=35.42..71.20 rows=0 width=0)
+row   ->  Hash Join  (cost=35.42..71.20 rows=2040 width=12)
+row         Output: b.ctid, a.ctid
+row         Inner Unique: true
+row         Hash Cond: (b.aid = a.id)
+row         ->  Seq Scan on public.b  (cost=0.00..30.40 rows=2040 width=10)
+row               Output: b.ctid, b.aid
+row         ->  Hash  (cost=21.30..21.30 rows=1130 width=10)
+row               Output: a.ctid, a.id
+row               ->  Seq Scan on public.a  (cost=0.00..21.30 rows=1130 width=10)
+row                     Output: a.ctid, a.id
+EXPLAIN
+> EXPLAIN VERBOSE MERGE INTO b USING a ON a.id = b.aid WHEN NOT MATCHED THEN INSERT VALUES (a.id, a.x, a.y);
+fields QUERY PLAN:25:-1:-1
+row Merge on public.b  (cost=35.42..71.20 rows=0 width=0)
+row   ->  Hash Right Join  (cost=35.42..71.20 rows=2040 width=24)
+row         Output: b.ctid, a.id, a.x, a.y, a.ctid
+row         Inner Unique: true
+row         Hash Cond: (b.aid = a.id)
+row         ->  Seq Scan on public.b  (cost=0.00..30.40 rows=2040 width=10)
+row               Output: b.ctid, b.aid
+row         ->  Hash  (cost=21.30..21.30 rows=1130 width=18)
+row               Output: a.id, a.x, a.y, a.ctid
+row               ->  Seq Scan on public.a  (cost=0.00..21.30 rows=1130 width=18)
+row                     Output: a.id, a.x, a.y, a.ctid
+EXPLAIN
+> EXPLAIN VERBOSE MERGE INTO b USING a ON a.id = b.aid WHEN MATCHED AND a.y > 1 THEN UPDATE SET z = b.z + a.x WHEN MATCHED THEN DO NOTHING;
+fields QUERY PLAN:25:-1:-1
+row Merge on public.b  (cost=35.42..71.20 rows=0 width=0)
+row   ->  Hash Join  (cost=35.42..71.20 rows=2040 width=20)
+row         Output: b.ctid, a.y, a.x, a.ctid
+row         Inner Unique: true
+row         Hash Cond: (b.aid = a.id)
+row         ->  Seq Scan on public.b  (cost=0.00..30.40 rows=2040 width=10)
+row               Output: b.ctid, b.aid
+row         ->  Hash  (cost=21.30..21.30 rows=1130 width=18)
+row               Output: a.y, a.x, a.ctid, a.id
+row               ->  Seq Scan on public.a  (cost=0.00..21.30 rows=1130 width=18)
+row                     Output: a.y, a.x, a.ctid, a.id
+EXPLAIN
+> EXPLAIN VERBOSE MERGE INTO b USING a ON a.id = b.aid WHEN NOT MATCHED AND a.t <> 'q' THEN INSERT (id, z) VALUES (a.y, a.x);
+fields QUERY PLAN:25:-1:-1
+row Merge on public.b  (cost=35.42..71.20 rows=0 width=0)
+row   ->  Hash Right Join  (cost=35.42..71.20 rows=2040 width=52)
+row         Output: b.ctid, a.t, a.y, a.x, a.ctid
+row         Inner Unique: true
+row         Hash Cond: (b.aid = a.id)
+row         ->  Seq Scan on public.b  (cost=0.00..30.40 rows=2040 width=10)
+row               Output: b.ctid, b.aid
+row         ->  Hash  (cost=21.30..21.30 rows=1130 width=50)
+row               Output: a.t, a.y, a.x, a.ctid, a.id
+row               ->  Seq Scan on public.a  (cost=0.00..21.30 rows=1130 width=50)
+row                     Output: a.t, a.y, a.x, a.ctid, a.id
+EXPLAIN
+> EXPLAIN MERGE INTO b USING a ON a.id = b.aid WHEN MATCHED THEN UPDATE SET z = a.x WHEN NOT MATCHED THEN INSERT VALUES (a.id, a.id, a.x);
+fields QUERY PLAN:25:-1:-1
+row Merge on b  (cost=35.42..71.20 rows=0 width=0)
+row   ->  Hash Right Join  (cost=35.42..71.20 rows=2040 width=20)
+row         Hash Cond: (b.aid = a.id)
+row         ->  Seq Scan on b  (cost=0.00..30.40 rows=2040 width=10)
+row         ->  Hash  (cost=21.30..21.30 rows=1130 width=14)
+row               ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=14)
+EXPLAIN
+> EXPLAIN MERGE INTO b USING a ON a.id = b.aid WHEN MATCHED THEN DELETE;
+fields QUERY PLAN:25:-1:-1
+row Merge on b  (cost=35.42..71.20 rows=0 width=0)
+row   ->  Hash Join  (cost=35.42..71.20 rows=2040 width=12)
+row         Hash Cond: (b.aid = a.id)
+row         ->  Seq Scan on b  (cost=0.00..30.40 rows=2040 width=10)
+row         ->  Hash  (cost=21.30..21.30 rows=1130 width=10)
+row               ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=10)
+EXPLAIN
+> EXPLAIN MERGE INTO b USING a ON a.id = b.aid AND a.x > 2 WHEN MATCHED THEN UPDATE SET z = 0;
+fields QUERY PLAN:25:-1:-1
+row Merge on b  (cost=28.84..64.61 rows=0 width=0)
+row   ->  Hash Join  (cost=28.84..64.61 rows=681 width=12)
+row         Hash Cond: (b.aid = a.id)
+row         ->  Seq Scan on b  (cost=0.00..30.40 rows=2040 width=10)
+row         ->  Hash  (cost=24.12..24.12 rows=377 width=10)
+row               ->  Seq Scan on a  (cost=0.00..24.12 rows=377 width=10)
+row                     Filter: (x > 2)
+EXPLAIN
+> EXPLAIN VERBOSE MERGE INTO b USING a ON a.id = b.aid AND a.x > 2 WHEN MATCHED THEN UPDATE SET z = 0;
+fields QUERY PLAN:25:-1:-1
+row Merge on public.b  (cost=28.84..64.61 rows=0 width=0)
+row   ->  Hash Join  (cost=28.84..64.61 rows=681 width=12)
+row         Output: b.ctid, a.ctid
+row         Inner Unique: true
+row         Hash Cond: (b.aid = a.id)
+row         ->  Seq Scan on public.b  (cost=0.00..30.40 rows=2040 width=10)
+row               Output: b.ctid, b.aid
+row         ->  Hash  (cost=24.12..24.12 rows=377 width=10)
+row               Output: a.ctid, a.id
+row               ->  Seq Scan on public.a  (cost=0.00..24.12 rows=377 width=10)
+row                     Output: a.ctid, a.id
+row                     Filter: (a.x > 2)
+EXPLAIN
