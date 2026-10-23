@@ -203,12 +203,13 @@ fn exists_join(
     Some((kind, right, filter))
 }
 
-/// `convert_ANY_sublink_to_join`: the subquery of `ANY` is a relation of the query, and the test of `ANY` on the columns of the relation is the condition of the join. The subquery reads no column of the query. The test reads a column of the query, calls no volatile function and has no subquery.
+/// `convert_ANY_sublink_to_join`: the subquery of `ANY` is a relation of the query, and the test of `ANY` on the columns of the relation is the condition of the join. A subquery that reads a column of the query is a `LATERAL` relation, which the planner converts only when [`candidate`] then merges it. The test reads a column of the query, calls no volatile function and has no subquery.
 fn any_join(query: &mut Query, link: &SubLink) -> Option<(JoinKind, FromItem, Expr)> {
     let test = link.test.as_ref()?;
     let sub = &link.query;
     let sublink = test.find(0, &mut |e, _| matches!(e.kind, ExprKind::SubLink(_)).then_some(()));
-    if exprs::correlated(sub, 1)
+    let lateral = exprs::correlated(sub, 1);
+    if lateral && !(simple(sub) && sub.from.len() == 1 && lateral_fits(sub, None))
         || exprs::relations(test).is_empty()
         || exprs::volatile(test)
         || sublink.is_some()
@@ -245,7 +246,7 @@ fn any_join(query: &mut Query, link: &SubLink) -> Option<(JoinKind, FromItem, Ex
         values: None,
         name: "unnamed_subquery".to_string(),
         alias: None,
-        lateral: false,
+        lateral,
         cte: None,
         tablesample: None,
         only: false,
@@ -485,7 +486,7 @@ fn places(item: &FromItem, top: bool, on: bool, out: &mut Vec<(usize, bool, bool
     }
 }
 
-/// The first subquery of `FROM` that the planner merges, with true when it is an item of the list of `FROM`. The planner does not merge a `LATERAL` subquery, a view or a query of `WITH` yet. Below the side of an outer join that can give nulls, a target of the subquery that is not a column becomes a `PlaceHolderVar`, which the planner makes here only for a subquery with a `FROM`, for a reference of the query itself and for a target with no subquery. In a join, the subquery has one item in `FROM`, and its `WHERE` joins the `ON` of the join, so that the subquery is not the side of an outer join that keeps its rows or a side of a full join when it has a `WHERE`. The query does not read the whole row of the subquery, which `pullup_replace_vars` makes a `ROW` of the targets.
+/// The first subquery of `FROM` that the planner merges, with true when it is an item of the list of `FROM`. The planner does not merge a view or a query of `WITH` yet, and it merges a `LATERAL` subquery when [`lateral_fits`] lets it and the query does not read a target of the subquery that reads the query below an outer join that gives nulls for the subquery. Below the side of an outer join that can give nulls, a target of the subquery that is not a column becomes a `PlaceHolderVar`, which the planner makes here only for a subquery with a `FROM`, for a reference of the query itself and for a target with no subquery. In a join, the subquery has one item in `FROM`, and its `WHERE` joins the `ON` of the join, so that the subquery is not the side of an outer join that keeps its rows or a side of a full join when it has a `WHERE`. The query does not read the whole row of the subquery, which `pullup_replace_vars` makes a `ROW` of the targets.
 fn candidate(query: &Query) -> Option<(usize, bool)> {
     if query.set_op.is_some()
         || checks_wrapper(query)
@@ -511,6 +512,18 @@ fn candidate(query: &Query) -> Option<(usize, bool)> {
         let relation = query.relations.get(r)?;
         let sub = pullable(relation)?;
         let used = used(query, r);
+        if relation.lateral {
+            let safe = query.from.iter().find_map(|item| lowest_outer(item, r))?;
+            let reads = |attnum: &i16| {
+                let at = usize::try_from(attnum - 1).ok();
+                at.and_then(|at| sub.targets.get(at))
+                    .is_some_and(|t| !exprs::relations_at(&t.expr, 1).is_empty())
+            };
+            if !lateral_fits(sub, safe.as_ref()) || nullable.contains(&r) && used.iter().any(reads)
+            {
+                return None;
+            }
+        }
         let target =
             |attnum: i16| usize::try_from(attnum - 1).ok().and_then(|at| sub.targets.get(at));
         let column = |attnum: &i16| {
@@ -553,10 +566,46 @@ pub(crate) fn nullable_places(item: &FromItem, nullable: bool, out: &mut Vec<usi
     }
 }
 
-/// The subquery of a relation that is a subquery in `FROM`, not a view, a query of `WITH` or a `LATERAL` subquery.
+/// The subquery of a relation that is a subquery in `FROM`, not a view or a query of `WITH`. A `LATERAL` subquery has no function in `FROM`, as the planner does not mark the functions `LATERAL` when it merges the subquery.
 fn pullable(relation: &Relation) -> Option<&Query> {
-    let plain = relation.oid == 0 && relation.cte.is_none() && !relation.lateral;
-    relation.subquery.as_deref().filter(|_| plain)
+    let plain = relation.oid == 0 && relation.cte.is_none();
+    relation.subquery.as_deref().filter(|sub| {
+        plain && !(relation.lateral && sub.relations.iter().any(|r| r.function.is_some()))
+    })
+}
+
+/// The relations of the lowest outer join above the relation `r`, as `lowest_outer_join` of `pull_up_subqueries_recurse` finds it, with `Some(None)` when no outer join is above the relation and `None` when the item does not have it. A semi join and an anti join are outer joins here.
+fn lowest_outer(item: &FromItem, r: usize) -> Option<Option<BTreeSet<usize>>> {
+    match item {
+        FromItem::Relation(k) => (*k == r).then_some(None),
+        FromItem::Join(join) => {
+            let below = lowest_outer(&join.left, r).or_else(|| lowest_outer(&join.right, r))?;
+            if below.is_some() || join.kind == JoinKind::Inner {
+                return Some(below);
+            }
+            let mut all = Vec::new();
+            pushdown::rels(item, &mut all);
+            Some(Some(all.into_iter().collect()))
+        }
+    }
+}
+
+/// `jointree_contains_lateral_outer_refs` and the check of the targets of a `LATERAL` subquery in `is_simple_subquery`: true when the `WHERE`, the conditions of the joins and the targets of the subquery read only the relations of the query in `safe`, which are the relations of the lowest outer join above the subquery. With no outer join above it, `safe` is `None` and they can read any relation of the query. The conditions of an outer join of the subquery, and the conditions below it, read no relation of the query.
+fn lateral_fits(sub: &Query, safe: Option<&BTreeSet<usize>>) -> bool {
+    fn within(expr: &Expr, safe: Option<&BTreeSet<usize>>) -> bool {
+        safe.is_none_or(|safe| exprs::relations_at(expr, 1).is_subset(safe))
+    }
+    fn items(item: &FromItem, safe: Option<&BTreeSet<usize>>) -> bool {
+        let FromItem::Join(join) = item else { return true };
+        let none = BTreeSet::new();
+        let safe = if join.kind == JoinKind::Inner { safe } else { Some(&none) };
+        items(&join.left, safe)
+            && items(&join.right, safe)
+            && join.on.as_ref().is_none_or(|on| within(on, safe))
+    }
+    sub.from.iter().all(|item| items(item, safe))
+        && sub.filter.as_ref().is_none_or(|filter| within(filter, safe))
+        && sub.targets.iter().all(|t| within(&t.expr, safe))
 }
 
 /// The numbers of the columns of the relation `r` that the query reads, with 0 for the whole row. The columns of a join do not count, because the expressions of the query read the columns of the relations.
@@ -639,8 +688,25 @@ fn merge(query: &mut Query, r: usize, top: bool) {
     for item in &query.from {
         plain_on(item, r, &mut plain);
     }
-    let Some(sub) = query.relations.remove(r).subquery else { return };
+    let relation = query.relations.remove(r);
+    let lateral = relation.lateral;
+    let Some(sub) = relation.subquery else { return };
     let mut sub = *sub;
+    if lateral {
+        // A column of a relation of the query after the subquery moves down one place.
+        let mut shift = |e: &mut Expr, depth: usize| {
+            match &mut e.kind {
+                ExprKind::Var(v) if v.levels_up == depth + 1 && v.relation > r => v.relation -= 1,
+                ExprKind::PlaceHolder(p) if p.levels_up == depth + 1 => {
+                    p.relations.iter_mut().filter(|k| **k > r).for_each(|k| *k -= 1);
+                }
+                _ => {}
+            }
+            false
+        };
+        sub.each_expr_mut(0, &mut |e, depth| e.each_mut(depth, &mut shift));
+        join_columns(&mut sub.from, &mut |e| e.each_mut(0, &mut shift));
+    }
     // `replace_empty_jointree`: a subquery with no `FROM` has an `RTE_RESULT` in its range table.
     let result = usize::from(sub.from.is_empty() && sub.pulled == 0);
     move_up(&mut sub, query.relations.len());

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `EXPLAIN` turns `IN` on a correlated subquery into a semi join and merges the subquery, as PostgreSQL 19 does, and it merges a simple `LATERAL` subquery of `FROM`. The scans below a hash join or a merge join give the columns in the order of the conditions in the join tree. (#NNN)
 - `EXPLAIN` of an `UPDATE`, a `DELETE`, a `MERGE` or an `INSERT` merges the simple subqueries and turns `EXISTS`, `NOT EXISTS` and `IN` into joins, as PostgreSQL does, also for a table with check constraints. The one-row `VALUES` of an `INSERT` into such a table shows its values in place of nulls. (#601)
 - `EXPLAIN VERBOSE` of an `INSERT`, an `UPDATE`, a `DELETE` and a `MERGE` with `RETURNING` now shows the list of `RETURNING` as the `Output` of the `ModifyTable`, as PostgreSQL does. The node below now gives the columns of the other relations that `RETURNING` reads, after the row marks. (#600)
 - `EXPLAIN VERBOSE` of a `MERGE` now shows the targets that PostgreSQL gives the node below the `Merge`: the ID of the version of the row of the target table, the columns of the source that the `WHEN` clauses read, and the ID of the version of the row of the source. The columns of the target table and the marker of the source row do not show. (#599)

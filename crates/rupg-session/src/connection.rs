@@ -5603,6 +5603,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_write_pullup.test")));
     }
 
+    /// `convert_ANY_sublink_to_join` on a correlated subquery: the subquery of `IN` is a `LATERAL` relation of the semi join, which `pull_up_subqueries` then merges, so that its `WHERE` joins the conditions of the semi join. A `LATERAL` subquery of `FROM` merges too. The columns that a join reads come in the order of its conditions in the join tree. `connection/plan_correlated_in.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_correlated_in() {
+        big_stack(|| script(include_str!("connection/plan_correlated_in.test")));
+    }
+
     /// A query that is a `UNION ALL` of `SELECT`s with the types of its columns and has `ORDER BY` becomes an append relation, as `flatten_simple_union_all` makes it, so the planner can plan a `Merge Append` of the plans of the `SELECT`s in the order. A `SELECT` with its own `WHERE` is not a member of the append relation, as `is_safe_append_member`, and its plan gets a sort. `connection/plan_union_all_order.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_union_all_order() {
