@@ -32,7 +32,7 @@ pub(crate) struct Operators {
 }
 
 /// `IsBinaryCoercible`: true if a value of `source` is a value of `target` with no change.
-pub(crate) fn is_binary_coercible(source: u32, target: u32) -> bool {
+pub fn is_binary_coercible(source: u32, target: u32) -> bool {
     if source == target
         || target == oid::ANY
         || target == oid::ANYELEMENT

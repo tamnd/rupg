@@ -20,8 +20,73 @@ use crate::{Analyzer, Env, Params, node, poly, types};
 const SQL_LANGUAGE: u32 = 14;
 /// The OID of the language `plpgsql`, which the extension `plpgsql` of a new cluster makes.
 const PLPGSQL_LANGUAGE: u32 = 13708;
+/// The OID of the language `internal`, the built-in functions.
+const INTERNAL_LANGUAGE: u32 = 12;
+/// The OID of the language `c`, the functions of a library.
+const C_LANGUAGE: u32 = 13;
 /// The default `procost` of a function in a language other than C and `internal`.
 const DEFAULT_COST: u32 = 100;
+/// The suffix of the file of a library, `DLSUFFIX` on Linux.
+const DLSUFFIX: &str = ".so";
+/// The name of the library of the regression tests of PostgreSQL, `regress.so`.
+const REGRESS_LIBRARY: &str = "regress";
+
+/// The functions of `regress.c` that have `PG_FUNCTION_INFO_V1`. A function in C can link to them in the library of the regression tests, and `rupg-func` runs some of them.
+pub const REGRESS_SYMBOLS: &[&str] = &[
+    "interpt_pp",
+    "overpaid",
+    "widget_in",
+    "widget_out",
+    "pt_in_widget",
+    "reverse_name",
+    "trigger_return_old",
+    "int44in",
+    "int44out",
+    "test_canonicalize_path",
+    "make_tuple_indirect",
+    "get_environ",
+    "regress_setenv",
+    "wait_pid",
+    "test_atomic_ops",
+    "test_fdw_handler",
+    "test_fdw_connection",
+    "is_catalog_text_unique_index_oid",
+    "test_support_func",
+    "test_inline_in_from_support_func",
+    "test_opclass_options_func",
+    "test_enc_setup",
+    "test_enc_conversion",
+    "test_bytea_to_text",
+    "test_text_to_bytea",
+    "test_mblen_func",
+    "test_text_to_wchars",
+    "test_wchars_to_text",
+    "test_valid_server_encoding",
+    "binary_coercible",
+    "test_relpath",
+    "test_translation",
+    "test_instr_time",
+    "test_pglz_compress",
+    "test_pglz_decompress",
+    "test_pg_locale_apis",
+];
+
+/// `expand_dynamic_library_name` and the `stat` of `internal_load_library`: the full name of the library `name`. The only library that rupg has is the library of the regression tests, by a path that ends in `regress` or `regress.so`. A name without a directory is in `$libdir`, which does not have that library.
+///
+/// # Errors
+///
+/// `58P01` for a library that rupg does not have.
+pub fn find_library(name: &str) -> Result<String> {
+    let file = name.rsplit_once('/').map(|(_, file)| file);
+    let stem = file.map(|file| file.strip_suffix(DLSUFFIX).unwrap_or(file));
+    if stem != Some(REGRESS_LIBRARY) {
+        return Err(Error::new(
+            SqlState::UNDEFINED_FILE,
+            format!("could not access file \"{name}\": No such file or directory"),
+        ));
+    }
+    Ok(if name.ends_with(DLSUFFIX) { name.to_string() } else { format!("{name}{DLSUFFIX}") })
+}
 /// The default `prorows` of a function that returns a set.
 const DEFAULT_ROWS: u32 = 1000;
 
@@ -38,15 +103,19 @@ pub enum Body {
 struct Options {
     /// The OID of the language.
     language: u32,
+    /// The name of the language, `lanname`.
+    language_name: String,
     strict: bool,
     leakproof: bool,
     volatile: u8,
     parallel: u8,
-    cost: u32,
+    cost: Option<u32>,
     rows: Option<u32>,
     support: Option<Vec<String>>,
-    /// The body in a string, from `AS`.
+    /// The body in a string, from `AS`. For a function in C it is the file of the library.
     src: Option<String>,
+    /// The second item of `AS`, the link symbol of a function in C.
+    link: Option<String>,
     /// The place of `AS` in the query text.
     src_at: Option<usize>,
 }
@@ -82,14 +151,16 @@ fn option_list(def: &DefElem) -> Option<Vec<String>> {
 fn options(stmt: &CreateFunctionStmt) -> Result<Options> {
     let mut out = Options {
         language: SQL_LANGUAGE,
+        language_name: "sql".to_string(),
         strict: false,
         leakproof: false,
         volatile: b'v',
         parallel: b'u',
-        cost: DEFAULT_COST,
+        cost: None,
         rows: None,
         support: None,
         src: None,
+        link: None,
         src_at: None,
     };
     for def in stmt.options.iter().flatten() {
@@ -116,10 +187,17 @@ fn options(stmt: &CreateFunctionStmt) -> Result<Options> {
             .at_opt(at));
         }
         match (name, option_text(def)) {
-            ("language", Some("sql")) => out.language = SQL_LANGUAGE,
-            ("language", Some("plpgsql")) => out.language = PLPGSQL_LANGUAGE,
             ("language", Some(language)) => {
-                return Err(not_yet(&format!("a function in the language {language}"), at));
+                out.language = match language {
+                    "sql" => SQL_LANGUAGE,
+                    "plpgsql" => PLPGSQL_LANGUAGE,
+                    "internal" => INTERNAL_LANGUAGE,
+                    "c" => C_LANGUAGE,
+                    _ => {
+                        return Err(not_yet(&format!("a function in the language {language}"), at));
+                    }
+                };
+                out.language_name = language.to_string();
             }
             ("strict", _) => out.strict = matches!(def.arg, Some(Node::Boolean(true))),
             ("leakproof", _) => out.leakproof = matches!(def.arg, Some(Node::Boolean(true))),
@@ -130,7 +208,7 @@ fn options(stmt: &CreateFunctionStmt) -> Result<Options> {
             ("parallel", Some("restricted")) => out.parallel = b'r',
             ("parallel", Some("unsafe")) => out.parallel = b'u',
             ("cost", _) => match def.arg {
-                Some(Node::Integer(cost)) if cost > 0 => out.cost = cost.unsigned_abs(),
+                Some(Node::Integer(cost)) if cost > 0 => out.cost = Some(cost.unsigned_abs()),
                 _ => return Err(bad()),
             },
             ("rows", _) => match def.arg {
@@ -139,8 +217,10 @@ fn options(stmt: &CreateFunctionStmt) -> Result<Options> {
             },
             ("support", _) => out.support = Some(option_list(def).ok_or_else(bad)?),
             ("as", _) => match option_list(def).as_deref() {
-                Some([src]) => {
+                // The grammar gives one item, or two for a function in C.
+                Some([src, rest @ ..]) if rest.len() < 2 => {
                     out.src = Some(src.clone());
+                    out.link = rest.first().cloned();
                     out.src_at = at;
                 }
                 _ => return Err(bad()),
@@ -149,6 +229,60 @@ fn options(stmt: &CreateFunctionStmt) -> Result<Options> {
         }
     }
     Ok(out)
+}
+
+/// `interpret_AS_clause`: `prosrc` and `probin` of the function `name` from `AS`. A function in C has the file of the library in `probin` and the link symbol in `prosrc`, which is the name of the function when `AS` has no symbol or the symbol `-`. A function in `internal` with an empty `AS` has its own name in `prosrc`. The other languages have the body in `prosrc`.
+fn interpret_as(
+    stmt: &CreateFunctionStmt,
+    options: &Options,
+    name: &str,
+) -> Result<(String, String)> {
+    let bad = |message: String| Err(Error::new(SqlState::INVALID_FUNCTION_DEFINITION, message));
+    if matches!(options.language, INTERNAL_LANGUAGE | C_LANGUAGE) {
+        match (&options.src, &stmt.sql_body) {
+            (None, None) => return bad("no function body specified".into()),
+            (Some(_), Some(_)) => return bad("duplicate function body specified".into()),
+            (None, Some(_)) => {
+                return bad("inline SQL function body only valid for language SQL".into());
+            }
+            (Some(_), None) => {}
+        }
+    }
+    let src = options.src.clone().unwrap_or_default();
+    if options.language == C_LANGUAGE {
+        let link = options.link.as_deref().filter(|link| *link != "-").unwrap_or(name);
+        return Ok((link.to_string(), src));
+    }
+    if options.link.is_some() {
+        return bad(format!("only one AS item needed for language \"{}\"", options.language_name));
+    }
+    if options.language == INTERNAL_LANGUAGE && src.is_empty() {
+        return Ok((name.to_string(), String::new()));
+    }
+    Ok((src, String::new()))
+}
+
+/// `fmgr_internal_validator` and `fmgr_c_validator`: a function in `internal` names a built-in function, and a function in C names a function of a library that rupg has.
+fn check_untrusted(function: &Function) -> Result<()> {
+    if function.lang == INTERNAL_LANGUAGE {
+        let found =
+            builtin::procs().iter().any(|p| p.lang == INTERNAL_LANGUAGE && p.src == function.src);
+        if !found {
+            return Err(Error::new(
+                SqlState::UNDEFINED_FUNCTION,
+                format!("there is no built-in function named \"{}\"", function.src),
+            ));
+        }
+        return Ok(());
+    }
+    let file = find_library(&function.bin)?;
+    if !REGRESS_SYMBOLS.contains(&function.src.as_str()) {
+        return Err(Error::new(
+            SqlState::UNDEFINED_FUNCTION,
+            format!("could not find function \"{}\" in file \"{file}\"", function.src),
+        ));
+    }
+    Ok(())
 }
 
 /// The statements of a body in SQL, from the statement that made the function: the `RETURN` expression, the statements of `BEGIN ATOMIC`, or the statements of the string of `AS`.
@@ -504,6 +638,14 @@ impl Definer<'_, '_> {
         };
         self.check_create_in(namespace, None)?;
         let options = options(stmt)?;
+        // A function in C or in `internal` runs code that the database does not check, so these languages are not trusted.
+        let untrusted = matches!(options.language, INTERNAL_LANGUAGE | C_LANGUAGE);
+        if untrusted && !self.is_superuser() {
+            return Err(Error::new(
+                SqlState::INSUFFICIENT_PRIVILEGE,
+                format!("permission denied for language {}", options.language_name),
+            ));
+        }
         if options.leakproof && !self.is_superuser() {
             return Err(only_superuser_leakproof());
         }
@@ -638,13 +780,14 @@ impl Definer<'_, '_> {
             Some(names) => self.an.support_function(names)?,
             None => 0,
         };
+        let (src, bin) = interpret_as(stmt, &options, name)?;
         let function = Function {
             oid: 0,
             name: name.to_string(),
             namespace,
             owner: self.user,
             lang: options.language,
-            cost: options.cost,
+            cost: options.cost.unwrap_or(if untrusted { 1 } else { DEFAULT_COST }),
             rows: if retset { options.rows.unwrap_or(DEFAULT_ROWS) } else { 0 },
             support,
             kind: if stmt.is_procedure { b'p' } else { b'f' },
@@ -664,9 +807,10 @@ impl Definer<'_, '_> {
                 Some(node::write_list(&defaults)?)
             },
             nargdefaults: i16::try_from(defaults.len()).unwrap_or(i16::MAX),
-            src: options.src.clone().unwrap_or_default(),
-            bin: String::new(),
-            body: Some(FunctionBody { text: text.to_string(), path: self.an.path.clone() }),
+            src,
+            bin,
+            body: (!untrusted)
+                .then(|| FunctionBody { text: text.to_string(), path: self.an.path.clone() }),
         };
         // `function_parse_error_transpose`: an error in a body in a string has its place in the query text.
         let transpose = |error: Error| match (&options.src, error.position()) {
@@ -693,6 +837,10 @@ impl Definer<'_, '_> {
         let pseudo = |ty: u32| {
             builtin::type_by_oid(ty).is_some_and(|t| t.kind == b'p') && !types::is_polymorphic(ty)
         };
+        if untrusted {
+            check_untrusted(&function)?;
+            return self.store_function(old, function, &defaults, support, Vec::new());
+        }
         if function.lang == PLPGSQL_LANGUAGE {
             self.check_plpgsql(stmt, &function).map_err(transpose)?;
             return self.store_function(old, function, &defaults, support, Vec::new());

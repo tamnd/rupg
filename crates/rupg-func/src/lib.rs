@@ -47,6 +47,7 @@ mod random;
 mod range;
 mod reg;
 mod regex;
+mod regress;
 mod replication;
 mod sequence;
 mod shared;
@@ -165,6 +166,8 @@ pub fn with_domain_constraint(
 
 /// The OID of `internal`, the language of the functions in C.
 const INTERNAL_LANGUAGE: u32 = 12;
+/// The OID of the language `c`, the language of the functions of a library.
+const C_LANGUAGE: u32 = 13;
 
 /// The key of an advisory lock, the fields 2 to 4 of its tag: the two halves of a `bigint` key with `kind` 1, or two `integer` keys with `kind` 2. The database of the session is the field 1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -516,8 +519,18 @@ pub fn function_body(
 /// The kernel of the function with this `pg_proc` OID, or `None` if the engine does not have it.
 pub fn kernel(func: u32) -> Option<Kernel> {
     let proc = builtin::proc_by_oid(func)?;
+    let user = proc.oid >= rupg_catalog::FIRST_NORMAL_OID;
+    if proc.lang == C_LANGUAGE && user {
+        return regress::by_symbol(proc.src);
+    }
     if proc.lang != INTERNAL_LANGUAGE {
         return misc::sql_function(func);
+    }
+    // A function in `internal` that a user makes runs the built-in function with the same `prosrc`.
+    if user {
+        let found =
+            builtin::procs().iter().find(|p| p.lang == INTERNAL_LANGUAGE && p.src == proc.src)?;
+        return kernel(found.oid);
     }
     if let Some(kernel) = by_src(proc.src).or_else(|| compare::by_src(proc.src, proc)) {
         return Some(kernel);

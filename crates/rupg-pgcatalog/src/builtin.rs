@@ -1166,6 +1166,8 @@ pub struct SessionFunction {
     /// `proargdefaults` in the stored form of `rupg-analyze`, or `None` if no argument has a default.
     pub argdefaults: Option<String>,
     pub nargdefaults: i16,
+    /// `prosrc` of a function in C or in `internal`, the symbol that runs it, or empty for another language.
+    pub src: String,
 }
 
 /// An object of the catalog of a session that has rows in the overlay of the thread: a type, or a function in SQL.
@@ -1251,7 +1253,7 @@ fn session_rows(ty: &SessionType) -> Option<Interned> {
     })
 }
 
-/// The row of `pg_proc` of a function in SQL of a session. The analyzer reads the body from the catalog of the session, so the row has no `prosrc` and no `prosqlbody`.
+/// The row of `pg_proc` of a function of a session. The analyzer reads the body of a function in SQL from the catalog of the session, so the row has no `prosqlbody`, and `prosrc` only for a function in C or in `internal`.
 fn function_row(new: &SessionFunction) -> ProcRow {
     ProcRow {
         oid: new.oid,
@@ -1275,7 +1277,7 @@ fn function_row(new: &SessionFunction) -> ProcRow {
             &*names.leak()
         }),
         argdefaults: new.argdefaults.clone().map(|text| &*text.leak()),
-        src: "",
+        src: new.src.clone().leak(),
         sqlbody: None,
     }
 }

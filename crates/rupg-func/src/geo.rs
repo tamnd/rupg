@@ -1134,6 +1134,11 @@ fn path(args: &[Value], n: usize) -> Result<Path> {
     Ok(Path { closed: closed != 0, p: point_list(rest)? })
 }
 
+/// The points of the `path` of argument `n`.
+pub(crate) fn path_points(args: &[Value], n: usize) -> Result<Vec<Point>> {
+    Ok(path(args, n)?.p)
+}
+
 /// The points of the `polygon` of argument `n`.
 fn polygon(args: &[Value], n: usize) -> Result<Vec<Point>> {
     let Some(Value::Bytea(bytes)) = args.get(n) else { return Err(bad_value()) };
