@@ -6,7 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- A statement checks the privileges that it needs on the tables and the columns that it reads and writes before it runs, as `ExecCheckPermissions` does. A column grant is enough for the columns that the statement uses, the relations of a view count as the owner of the view unless the view has `security_invoker`, and `FOR UPDATE` needs `UPDATE`. (#NNN)
+- A statement checks the privileges that it needs on the tables and the columns that it reads and writes before it runs, as `ExecCheckPermissions` does. A column grant is enough for the columns that the statement uses, the relations of a view count as the owner of the view unless the view has `security_invoker`, and `FOR UPDATE` needs `UPDATE`. (#619)
 
 ### Fixed
 
