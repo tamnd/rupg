@@ -4,7 +4,8 @@
 
 use rupg_analyze::node;
 use rupg_catalog::{
-    Catalog, ConKind, Constraint, Function, PartitionBound, RangePart, RelKind, Relation, Type,
+    Catalog, ConKind, Constraint, Function, ObjRef, PG_CLASS, PG_LANGUAGE, PG_NAMESPACE, PG_PROC,
+    PG_TYPE, PartitionBound, RangePart, RelKind, Relation, Type,
 };
 use rupg_common::{Error, Result};
 use rupg_func::Session;
@@ -99,6 +100,60 @@ fn text_array(values: &[String]) -> Value {
     Value::Array(Box::new(Array::one(
         values.iter().map(|v| Some(Value::text(v.clone()))).collect(),
     )))
+}
+
+/// The ACL that `GRANT` gave to an object, or null. An empty ACL is null, as it is for a column.
+fn granted(catalog: &Catalog, object: ObjRef) -> Value {
+    match catalog.object_acl(object) {
+        Some(acl) if !acl.is_empty() => text_array(acl),
+        _ => Value::Null,
+    }
+}
+
+/// Puts the ACLs that `GRANT` gave to the built-in objects into the static rows of `pg_namespace`, `pg_class`, `pg_attribute`, `pg_type`, `pg_proc` and `pg_language`.
+///
+/// # Errors
+///
+/// An internal error when a column of the table is not there.
+pub(crate) fn grant_static(
+    table: &Table,
+    rows: &mut [Vec<Value>],
+    catalog: &Catalog,
+    session: &dyn Session,
+) -> Result<()> {
+    let (class, column) = match table.name {
+        "pg_namespace" => (PG_NAMESPACE, "nspacl"),
+        "pg_class" => (PG_CLASS, "relacl"),
+        "pg_attribute" => (PG_CLASS, "attacl"),
+        "pg_type" => (PG_TYPE, "typacl"),
+        "pg_proc" => (PG_PROC, "proacl"),
+        "pg_language" => (PG_LANGUAGE, "lanacl"),
+        _ => return Ok(()),
+    };
+    let attribute = table.name == "pg_attribute";
+    let changed: std::collections::BTreeMap<(u32, i32), &[String]> = catalog
+        .object_acls()
+        .filter(|(object, _)| object.class == class && (object.sub != 0) == attribute)
+        .map(|(object, acl)| ((object.oid, object.sub), acl))
+        .collect();
+    let Some(at) = table.columns.iter().position(|c| c.name == column) else { return Ok(()) };
+    if changed.is_empty() {
+        return Ok(());
+    }
+    for (row, values) in rows.iter_mut().enumerate().take(table.len) {
+        let (owner, sub) = if attribute {
+            let sub = cell(table, row, "attnum", session)?.as_i64().unwrap_or_default();
+            (cell(table, row, "attrelid", session)?, i32::try_from(sub).unwrap_or_default())
+        } else {
+            (cell(table, row, "oid", session)?, 0)
+        };
+        if let Value::Oid(owner) = owner
+            && let Some(acl) = changed.get(&(owner, sub))
+        {
+            values[at] = if acl.is_empty() { Value::Null } else { text_array(acl) };
+        }
+    }
+    Ok(())
 }
 
 /// An `int2vector`.
@@ -606,7 +661,8 @@ fn types<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) -> Resu
             .set("typowner", oid(ty.owner))
             .set("typrelid", oid(ty.relation))
             .set("typelem", oid(ty.element))
-            .set("typarray", oid(ty.array));
+            .set("typarray", oid(ty.array))
+            .set("typacl", granted(catalog, ObjRef::new(PG_TYPE, ty.oid)));
         rows.push(row);
     }
     Ok(rows)
@@ -638,12 +694,17 @@ fn attributes<'a>(
         ) {
             for &template in &system {
                 let mut row = Row::copy(table, template, session)?;
-                row.set("attrelid", oid(rel.oid));
+                let number = cell(table, template, "attnum", session)?.as_i64().unwrap_or_default();
+                let number = i16::try_from(number).unwrap_or_default();
+                row.set("attrelid", oid(rel.oid))
+                    .set("attacl", granted(catalog, ObjRef::column(rel.oid, number)));
                 rows.push(row);
             }
         }
         for (i, column) in rel.columns.iter().enumerate() {
-            rows.push(attribute(table, rel, i, column));
+            let mut row = attribute(table, rel, i, column);
+            row.set("attacl", granted(catalog, ObjRef::column(rel.oid, number(i))));
+            rows.push(row);
         }
     }
     Ok(rows)
@@ -980,7 +1041,8 @@ fn functions<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set(
                     "prosqlbody",
                     tree(f.body.as_ref().filter(|_| f.src.is_empty()).map(|b| &b.text)),
-                );
+                )
+                .set("proacl", granted(catalog, ObjRef::new(PG_PROC, f.oid)));
             row
         })
         .collect()
@@ -998,7 +1060,8 @@ fn languages<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("lanpltrusted", Value::Bool(l.trusted))
                 .set("lanplcallfoid", oid(l.handler))
                 .set("laninline", oid(l.inline))
-                .set("lanvalidator", oid(l.validator));
+                .set("lanvalidator", oid(l.validator))
+                .set("lanacl", granted(catalog, ObjRef::new(PG_LANGUAGE, l.oid)));
             row
         })
         .collect()

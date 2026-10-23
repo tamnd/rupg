@@ -2,7 +2,7 @@
 //!
 //! A port of the functions of `src/backend/utils/adt/acl.c` and of the checks of `aclchk.c` that they call. The privileges are the `aclitem[]` values of the static rows, which have the privileges that `initdb` gives. Each function has forms with a role name or OID first, or no role for the current user, and with the object as text or as an OID. The form of a call is clear from its values: a name is text and an OID is an OID. A form with the OID of an object that does not exist gives null.
 
-use rupg_catalog::RelKind;
+use rupg_catalog::{ObjRef, PG_CLASS, PG_LANGUAGE, PG_NAMESPACE, PG_PROC, PG_TYPE, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Owned};
 use rupg_types::{RegKind, Value, qualified_name_list};
@@ -403,6 +403,25 @@ struct Class<'a> {
     acl: Option<Vec<&'a str>>,
 }
 
+/// The ACL that `GRANT` or `REVOKE` gave to an object of the catalog of the session or a built-in object, or `None` when the object keeps the ACL that it was made with. The ACL of a column is empty when it is null.
+fn granted(object: ObjRef, session: &dyn Session) -> Option<Vec<&str>> {
+    let acl = session.catalog()?.object_acl(object)?;
+    Some(acl.iter().map(String::as_str).collect())
+}
+
+/// The ACL of a column: the ACL that `GRANT` gave it, or else the ACL that it was made with.
+fn column_acl<'a>(
+    relid: u32,
+    num: i16,
+    acl: Option<&'a [&'a str]>,
+    session: &'a dyn Session,
+) -> Option<Vec<&'a str>> {
+    match granted(ObjRef::column(relid, num), session) {
+        Some(acl) => Some(acl).filter(|acl| !acl.is_empty()),
+        None => acl.map(<[&str]>::to_vec),
+    }
+}
+
 /// The relation with this OID, from the built-in catalogs or from the catalog of the session. The system views and the relations that the user makes are in the catalog of the session.
 fn class_of(relid: u32, session: &dyn Session) -> Option<Class<'_>> {
     if let Some(class) = builtin::class_by_oid(relid) {
@@ -413,7 +432,8 @@ fn class_of(relid: u32, session: &dyn Session) -> Option<Class<'_>> {
             kind: char::from(class.kind),
             natts: class.natts,
             owner: class.owner,
-            acl: class.acl.map(<[&str]>::to_vec),
+            acl: granted(ObjRef::new(PG_CLASS, relid), session)
+                .or_else(|| class.acl.map(<[&str]>::to_vec)),
         });
     }
     let rel = session.catalog()?.relation(relid)?;
@@ -434,19 +454,24 @@ struct Attribute<'a> {
     num: i16,
     dropped: bool,
     /// `attacl`, or `None` for a column with no privileges of its own.
-    acl: Option<&'a [&'a str]>,
+    acl: Option<Vec<&'a str>>,
 }
 
 /// The system columns of a relation with storage, with their numbers.
 const SYSTEM_COLUMNS: [(&str, i16); 6] =
     [("ctid", -1), ("xmin", -2), ("cmin", -3), ("xmax", -4), ("cmax", -5), ("tableoid", -6)];
 
-/// The columns of a relation, with the system columns. A relation of the catalog of the session has no dropped columns and no privileges on its columns, and a view or an index of it has no system columns.
+/// The columns of a relation, with the system columns. A view or an index of the catalog of the session has no system columns.
 fn attributes_of(relid: u32, session: &dyn Session) -> Vec<Attribute<'_>> {
     if builtin::class_by_oid(relid).is_some() {
         return builtin::attributes(relid)
             .iter()
-            .map(|a| Attribute { name: a.name, num: a.num, dropped: a.dropped, acl: a.acl })
+            .map(|a| Attribute {
+                name: a.name,
+                num: a.num,
+                dropped: a.dropped,
+                acl: column_acl(relid, a.num, a.acl, session),
+            })
             .collect();
     }
     let Some(rel) = session.catalog().and_then(|c| c.relation(relid)) else { return Vec::new() };
@@ -458,13 +483,17 @@ fn attributes_of(relid: u32, session: &dyn Session) -> Vec<Attribute<'_>> {
         | RelKind::MatView => &SYSTEM_COLUMNS,
         RelKind::Index | RelKind::PartitionedIndex | RelKind::View | RelKind::Composite => &[],
     };
-    let system =
-        system.iter().map(|&(name, num)| Attribute { name, num, dropped: false, acl: None });
+    let system = system.iter().map(|&(name, num)| Attribute {
+        name,
+        num,
+        dropped: false,
+        acl: column_acl(relid, num, None, session),
+    });
     let user = rel.columns.iter().zip(1..).map(|(column, num)| Attribute {
         name: &column.name,
         num,
         dropped: column.dropped,
-        acl: None,
+        acl: column_acl(relid, num, None, session),
     });
     system.chain(user).collect()
 }
@@ -514,7 +543,7 @@ fn attribute_check(relid: u32, attnum: i16, role: u32, mask: u32, session: &dyn 
     let (Some(attribute), Some(class)) = (found, class_of(relid, session)) else {
         return Ok(None);
     };
-    let Some(acl) = attribute.acl else { return Ok(Some(false)) };
+    let Some(acl) = &attribute.acl else { return Ok(Some(false)) };
     Ok(Some(aclmask(&parse_acl(acl)?, role, class.owner, mask) != 0))
 }
 
@@ -525,7 +554,7 @@ fn all_attributes_check(relid: u32, role: u32, mask: u32, session: &dyn Session)
         if attribute.num < 1 || attribute.num > class.natts || attribute.dropped {
             continue;
         }
-        let Some(acl) = attribute.acl else { continue };
+        let Some(acl) = &attribute.acl else { continue };
         if aclmask(&parse_acl(acl)?, role, class.owner, mask) != 0 {
             return Ok(Some(true));
         }
@@ -577,7 +606,23 @@ fn owned_kind(kind: Owned) -> AclKind {
 /// The items of a parsed `aclitem[]` value with the owner of the object.
 type Privileges = (Vec<(u32, u32)>, u32);
 
-/// The privileges and the owner of a schema, a type or a function of the catalog of the session, or `None` when the catalog has no such object. A type and a function there have the default privileges of their owner.
+/// The OID of the catalog that holds the objects of a kind that `GRANT` can give an ACL to.
+fn owned_class(kind: Owned) -> Option<u32> {
+    match kind {
+        Owned::Namespace => Some(PG_NAMESPACE),
+        Owned::Type => Some(PG_TYPE),
+        Owned::Function => Some(PG_PROC),
+        Owned::Language => Some(PG_LANGUAGE),
+        _ => None,
+    }
+}
+
+/// The ACL that `GRANT` gave to an object of a kind, or `None` when the object keeps the ACL that it was made with.
+fn granted_object(kind: Owned, oid: u32, session: &dyn Session) -> Option<Vec<&str>> {
+    granted(ObjRef::new(owned_class(kind)?, oid), session)
+}
+
+/// The privileges and the owner of a schema, a type, a function or a language of the catalog of the session, or `None` when the catalog has no such object.
 fn session_object(kind: Owned, oid: u32, session: &dyn Session) -> Result<Option<Privileges>> {
     let Some(catalog) = session.catalog() else { return Ok(None) };
     let (acl, owner) = match kind {
@@ -593,9 +638,14 @@ fn session_object(kind: Owned, oid: u32, session: &dyn Session) -> Result<Option
             Some(function) => (None, function.owner),
             None => return Ok(None),
         },
+        Owned::Language => match catalog.languages().find(|l| l.oid == oid) {
+            Some(language) => (None, language.owner),
+            None => return Ok(None),
+        },
         _ => return Ok(None),
     };
-    let acl: Option<Vec<&str>> = acl.map(|acl| acl.iter().map(String::as_str).collect());
+    let acl: Option<Vec<&str>> = granted_object(kind, oid, session)
+        .or_else(|| acl.map(|acl| acl.iter().map(String::as_str).collect()));
     Ok(Some((acl_of(acl.as_deref(), owned_kind(kind), owner)?, owner)))
 }
 
@@ -626,7 +676,8 @@ fn object_check(kind: Owned, oid: u32, role: u32, mask: u32, session: &dyn Sessi
         let Some(found) = database_acl(oid, session)? else { return Ok(None) };
         found
     } else if let Some(row) = builtin::owned_by_oid(kind, oid) {
-        (acl_of(row.acl, owned_kind(kind), row.owner)?, row.owner)
+        let acl = granted_object(kind, oid, session).or_else(|| row.acl.map(<[&str]>::to_vec));
+        (acl_of(acl.as_deref(), owned_kind(kind), row.owner)?, row.owner)
     } else {
         let Some(object) = session_object(kind, oid, session)? else { return Ok(None) };
         object

@@ -60,7 +60,7 @@ pub use constraints_set::set_constraints;
 pub use cte::{Cte, CteRef};
 pub use ddl::{
     Allowed, Body, CopyRelation, CopyTarget, Defined, Fill, Message, PartitionCheck, RuleTree,
-    Transform, attnums, copy_filter, copy_insert, copy_relation, copy_target, define,
+    Transform, acl_roles, attnums, copy_filter, copy_insert, copy_relation, copy_target, define,
     function_body, is_definition, lock_table, rewrite_insert, rule_tree, trigger_when,
     vacuum_relations,
 };

@@ -67,8 +67,8 @@ pub const PG_OPCLASS: u32 = 2616;
 const TEXT: u32 = 25;
 /// The OID of the language `internal`.
 const INTERNAL_LANGUAGE: u32 = 12;
-/// `BOOTSTRAP_SUPERUSERID`, the owner of the constructors of a range type.
-const BOOTSTRAP_SUPERUSER: u32 = 10;
+/// `BOOTSTRAP_SUPERUSERID`, the owner of the built-in objects and of the constructors of a range type.
+pub const BOOTSTRAP_SUPERUSER: u32 = 10;
 /// The OID of the type `oid`.
 const OID: u32 = 26;
 /// The OID of the type `int4`.
@@ -1127,6 +1127,8 @@ pub struct Catalog {
     ts_mappings: Vec<TsMapping>,
     depends: Vec<Depend>,
     descriptions: Arc<BTreeMap<ObjRef, String>>,
+    /// The ACLs that `GRANT` and `REVOKE` gave to the functions, the types, the languages and the columns, and to the objects of `initdb`. The relations and the schemas of the session keep their ACL in their own rows.
+    acls: Arc<BTreeMap<ObjRef, Vec<String>>>,
     /// `uncommitted_enum_types`: the enum types that the open transaction made. [`Catalog::commit_enums`] clears them at the commit.
     uncommitted_types: Vec<u32>,
     /// `uncommitted_enum_values`: the labels that `ALTER TYPE ... ADD VALUE` of the open transaction gave to an enum type that an earlier transaction made. A statement cannot use such a label until the commit.
@@ -1202,6 +1204,7 @@ impl Catalog {
             ts_mappings: Vec::new(),
             depends: Vec::new(),
             descriptions: Arc::default(),
+            acls: Arc::default(),
             uncommitted_types: Vec::new(),
             uncommitted_labels: Vec::new(),
         }
@@ -1625,6 +1628,27 @@ impl Catalog {
             Some(text) => Arc::make_mut(&mut self.descriptions).insert(object, text),
             None if self.descriptions.contains_key(&object) => {
                 Arc::make_mut(&mut self.descriptions).remove(&object)
+            }
+            None => None,
+        };
+    }
+
+    /// The ACLs that [`Catalog::set_object_acl`] gave.
+    pub fn object_acls(&self) -> impl Iterator<Item = (ObjRef, &[String])> {
+        self.acls.iter().map(|(object, acl)| (*object, acl.as_slice()))
+    }
+
+    /// The ACL that `GRANT` or `REVOKE` gave to an object, or `None` when the object keeps the ACL that it was made with. The ACL of a column is empty when it is null.
+    pub fn object_acl(&self, object: ObjRef) -> Option<&[String]> {
+        self.acls.get(&object).map(Vec::as_slice)
+    }
+
+    /// Sets the ACL of an object, or drops the ACL for `None`.
+    pub fn set_object_acl(&mut self, object: ObjRef, acl: Option<Vec<String>>) {
+        match acl {
+            Some(acl) => Arc::make_mut(&mut self.acls).insert(object, acl),
+            None if self.acls.contains_key(&object) => {
+                Arc::make_mut(&mut self.acls).remove(&object)
             }
             None => None,
         };

@@ -448,6 +448,7 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
             }
         }
         if let Some(user) = session.catalog() {
+            crate::user::grant_static(catalog, &mut table, user, session)?;
             table.extend(crate::user::rows(catalog, user, session)?);
         }
         rows.push(Rc::new(table));

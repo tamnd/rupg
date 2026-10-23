@@ -229,6 +229,9 @@ impl Catalog {
             if self.descriptions.keys().any(|found| covers(object, *found)) {
                 Arc::make_mut(&mut self.descriptions).retain(|found, _| !covers(object, *found));
             }
+            if self.acls.keys().any(|found| covers(object, *found)) {
+                Arc::make_mut(&mut self.acls).retain(|found, _| !covers(object, *found));
+            }
         }
         Ok(())
     }

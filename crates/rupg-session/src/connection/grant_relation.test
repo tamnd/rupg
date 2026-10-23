@@ -1,0 +1,197 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE ROLE regress_g1;
+CREATE ROLE
+> CREATE ROLE regress_g2;
+CREATE ROLE
+> CREATE ROLE regress_g3;
+CREATE ROLE
+> CREATE TABLE gt (a int, b text);
+CREATE TABLE
+> CREATE SEQUENCE gs;
+CREATE SEQUENCE
+> CREATE VIEW gv AS SELECT * FROM gt;
+CREATE VIEW
+> GRANT SELECT ON gt TO regress_g1;
+GRANT
+> SELECT relacl FROM pg_class WHERE relname = 'gt';
+fields relacl@pg_class.32:1034:-1:-1
+row {postgres=arwdDxtm/postgres,regress_g1=r/postgres}
+SELECT 1
+> GRANT ALL ON gt TO regress_g2 WITH GRANT OPTION;
+GRANT
+> GRANT INSERT, UPDATE ON TABLE gt, gv TO regress_g1, PUBLIC;
+GRANT
+> SELECT relname, relacl FROM pg_class WHERE relname IN ('gt', 'gv') ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,relacl@pg_class.32:1034:-1:-1
+row gt,{postgres=arwdDxtm/postgres,regress_g1=arw/postgres,regress_g2=a*r*w*d*D*x*t*m*/postgres,=aw/postgres}
+row gv,{postgres=arwdDxtm/postgres,regress_g1=aw/postgres,=aw/postgres}
+SELECT 2
+> GRANT USAGE ON gt TO regress_g1;
+ERROR 0LP01 invalid privilege type USAGE for table
+> GRANT EXECUTE ON gt TO regress_g1;
+ERROR 0LP01 invalid privilege type EXECUTE for relation
+> GRANT ALL ON gs TO regress_g1;
+GRANT
+> GRANT INSERT, SELECT ON gs TO regress_g3;
+WARNING 0LP01 sequence "gs" only supports USAGE, SELECT, and UPDATE privileges
+GRANT
+> GRANT ALL ON SEQUENCE gt TO regress_g1;
+ERROR 42809 "gt" is not a sequence
+> GRANT DELETE ON SEQUENCE gs TO regress_g1;
+ERROR 0LP01 invalid privilege type DELETE for sequence
+> SELECT relacl FROM pg_class WHERE relname = 'gs';
+fields relacl@pg_class.32:1034:-1:-1
+row {postgres=rwU/postgres,regress_g1=rwU/postgres,regress_g3=r/postgres}
+SELECT 1
+> GRANT SELECT ON gt TO PUBLIC WITH GRANT OPTION;
+ERROR 0LP01 grant options can only be granted to roles
+> SET ROLE regress_g2;
+SET
+is_superuser=off
+> GRANT SELECT ON gt TO regress_g3 WITH GRANT OPTION;
+GRANT
+> SET ROLE regress_g3;
+SET
+> GRANT SELECT ON gt TO regress_g2 WITH GRANT OPTION;
+ERROR 0LP01 grant options cannot be granted back to your own grantor
+> GRANT SELECT ON gt TO regress_g1;
+GRANT
+> GRANT DELETE ON gt TO regress_g1;
+WARNING 01007 no privileges were granted for "gt"
+GRANT
+> GRANT SELECT, DELETE ON gt TO regress_g1;
+WARNING 01007 not all privileges were granted for "gt"
+GRANT
+> REVOKE DELETE ON gt FROM regress_g1;
+WARNING 01006 no privileges could be revoked for "gt"
+REVOKE
+> REVOKE ALL ON gt FROM regress_g1;
+REVOKE
+> RESET ROLE;
+RESET
+is_superuser=on
+> SET ROLE regress_g1;
+SET
+is_superuser=off
+> GRANT SELECT ON gs TO regress_g3;
+WARNING 01007 no privileges were granted for "gs"
+GRANT
+> GRANT SELECT ON gv TO regress_g3;
+WARNING 01007 no privileges were granted for "gv"
+GRANT
+> REVOKE SELECT ON gv FROM regress_g3;
+WARNING 01006 no privileges could be revoked for "gv"
+WARNING 01006 no privileges could be revoked for column "a" of relation "gv"
+WARNING 01006 no privileges could be revoked for column "b" of relation "gv"
+REVOKE
+> RESET ROLE;
+RESET
+is_superuser=on
+> SELECT relacl FROM pg_class WHERE relname = 'gt';
+fields relacl@pg_class.32:1034:-1:-1
+row {postgres=arwdDxtm/postgres,regress_g1=arw/postgres,regress_g2=a*r*w*d*D*x*t*m*/postgres,=aw/postgres,regress_g3=r*/regress_g2}
+SELECT 1
+> REVOKE GRANT OPTION FOR SELECT ON gt FROM regress_g2;
+ERROR 2BP01 dependent privileges exist
+HINT Use CASCADE to revoke them too.
+> REVOKE GRANT OPTION FOR SELECT ON gt FROM regress_g2 CASCADE;
+REVOKE
+> SELECT relacl FROM pg_class WHERE relname = 'gt';
+fields relacl@pg_class.32:1034:-1:-1
+row {postgres=arwdDxtm/postgres,regress_g1=arw/postgres,regress_g2=a*rw*d*D*x*t*m*/postgres,=aw/postgres}
+SELECT 1
+> REVOKE ALL ON gt FROM regress_g2 CASCADE;
+REVOKE
+> REVOKE ALL ON gt FROM PUBLIC;
+REVOKE
+> SELECT relacl FROM pg_class WHERE relname = 'gt';
+fields relacl@pg_class.32:1034:-1:-1
+row {postgres=arwdDxtm/postgres,regress_g1=arw/postgres}
+SELECT 1
+> GRANT SELECT (a), UPDATE (a, b) ON gt TO regress_g1;
+GRANT
+> GRANT INSERT (b) ON gt TO regress_g2 WITH GRANT OPTION;
+GRANT
+> SELECT attname, attacl FROM pg_attribute WHERE attrelid = 'gt'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,attacl@pg_attribute.22:1034:-1:-1
+row a,{regress_g1=rw/postgres}
+row b,{regress_g1=w/postgres,regress_g2=a*/postgres}
+SELECT 2
+> GRANT ALL (a) ON gt TO regress_g3;
+GRANT
+> GRANT DELETE (a) ON gt TO regress_g3;
+ERROR 0LP01 invalid privilege type DELETE for column
+> GRANT SELECT (c) ON gt TO regress_g3;
+ERROR 42703 column "c" of relation "gt" does not exist
+> GRANT SELECT (a) ON SEQUENCE gs TO regress_g3;
+ERROR 0LP01 column privileges are only valid for relations
+> GRANT SELECT (last_value), UPDATE (last_value) ON gs TO regress_g3;
+WARNING 0LP01 sequence "gs" only supports SELECT column privileges
+GRANT
+> SELECT attname, attacl FROM pg_attribute WHERE attrelid = 'gt'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,attacl@pg_attribute.22:1034:-1:-1
+row a,{regress_g1=rw/postgres,regress_g3=arwx/postgres}
+row b,{regress_g1=w/postgres,regress_g2=a*/postgres}
+SELECT 2
+> SELECT attname, attacl FROM pg_attribute WHERE attrelid = 'gs'::regclass AND attacl IS NOT NULL;
+fields attname@pg_attribute.2:19:64:-1,attacl@pg_attribute.22:1034:-1:-1
+row last_value,{regress_g3=r/postgres}
+SELECT 1
+> REVOKE SELECT, UPDATE ON gt FROM regress_g1;
+REVOKE
+> REVOKE ALL (a) ON gt FROM regress_g3;
+REVOKE
+> SELECT attname, attacl FROM pg_attribute WHERE attrelid = 'gt'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,attacl@pg_attribute.22:1034:-1:-1
+row a,NULL
+row b,{regress_g2=a*/postgres}
+SELECT 2
+> SELECT has_table_privilege('regress_g1', 'gt', 'INSERT'), has_column_privilege('regress_g2', 'gt', 'b', 'INSERT WITH GRANT OPTION'), has_sequence_privilege('regress_g1', 'gs', 'USAGE');
+fields has_table_privilege:16:1:-1,has_column_privilege:16:1:-1,has_sequence_privilege:16:1:-1
+row t,t,t
+SELECT 1
+> GRANT SELECT ON nosuch TO regress_g1;
+ERROR 42P01 relation "nosuch" does not exist
+> GRANT SELECT ON gt TO nosuchrole;
+ERROR 42704 role "nosuchrole" does not exist
+> CREATE INDEX gtx ON gt (a);
+CREATE INDEX
+> GRANT SELECT ON gtx TO regress_g1;
+ERROR 42809 "gtx" is an index
+> CREATE TYPE gty AS (x int);
+CREATE TYPE
+> GRANT SELECT ON gty TO regress_g1;
+ERROR 42809 "gty" is a composite type
+> GRANT SELECT ON gt TO regress_g1 GRANTED BY regress_g2;
+ERROR 42501 permission denied for table gt
+> GRANT SELECT ON gt TO regress_g1 GRANTED BY regress_g3;
+ERROR 42501 permission denied for table gt
+> GRANT SELECT ON ALL TABLES IN SCHEMA public TO regress_g3;
+GRANT
+> GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO regress_g3;
+GRANT
+> SELECT relname, relacl FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relkind IN ('r', 'v', 'S') ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,relacl@pg_class.32:1034:-1:-1
+row gs,{postgres=rwU/postgres,regress_g1=rwU/postgres,regress_g3=rwU/postgres}
+row gt,{postgres=arwdDxtm/postgres,regress_g1=a/postgres,regress_g3=r/postgres}
+row gv,{postgres=arwdDxtm/postgres,regress_g1=aw/postgres,=aw/postgres,regress_g3=r/postgres}
+SELECT 3
+> DROP ROLE regress_g3;
+ERROR 2BP01 role "regress_g3" cannot be dropped because some objects depend on it
+DETAIL privileges for table gt
+privileges for sequence gs
+privileges for column last_value of sequence gs
+privileges for view gv
+> REVOKE ALL ON gt, gv, gs FROM regress_g1, regress_g2, regress_g3 CASCADE;
+REVOKE
+> DROP TABLE gt CASCADE;
+NOTICE 00000 drop cascades to view gv
+DROP TABLE
+> DROP SEQUENCE gs;
+DROP SEQUENCE
+> DROP TYPE gty;
+DROP TYPE
+> DROP ROLE regress_g1, regress_g2, regress_g3;
+DROP ROLE

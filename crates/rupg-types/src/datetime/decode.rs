@@ -120,7 +120,9 @@ impl ZoneAbbrevs {
     pub fn postgres_default() -> &'static ZoneAbbrevs {
         static DEFAULT: OnceLock<ZoneAbbrevs> = OnceLock::new();
         DEFAULT.get_or_init(|| {
-            ZoneAbbrevs::parse(include_str!("../generated/tznames_default.txt"))
+            ZoneAbbrevs::parse(include_str!(
+                "../../../../vendor/postgres-19/src/timezone/tznames/Default"
+            ))
             .expect("the vendored tznames file is valid")
         })
     }

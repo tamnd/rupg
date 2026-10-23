@@ -355,6 +355,48 @@ fn password_type(secret: &str) -> PasswordType {
 
 /// The objects of a catalog that have a dependency of `pg_shdepend` on their owner `role`, as `recordDependencyOnOwner` makes them. An index, a TOAST table, a composite type as a relation, the row type of a table, an array type and a multirange type have none.
 fn owned(catalog: &Catalog, role: u32) -> Vec<ObjRef> {
+    let mut objects = owned_only(catalog, role);
+    objects.extend(acl_dependents(catalog, role));
+    objects
+}
+
+/// The owner of an object that `GRANT` gave an ACL to. A built-in object has the bootstrap superuser as its owner.
+fn acl_owner(catalog: &Catalog, object: ObjRef) -> u32 {
+    let owner = match object.class {
+        PG_NAMESPACE => catalog.schema(object.oid).map(|s| s.owner),
+        PG_CLASS => catalog.relation(object.oid).map(|r| r.owner),
+        PG_TYPE => catalog.type_by_oid(object.oid).map(|t| t.owner),
+        PG_PROC => catalog.function(object.oid).map(|f| f.owner),
+        PG_LANGUAGE => catalog.languages().find(|l| l.oid == object.oid).map(|l| l.owner),
+        _ => None,
+    };
+    owner.unwrap_or(rupg_catalog::BOOTSTRAP_SUPERUSER)
+}
+
+/// The objects with an ACL that names the role other than as their owner, as `updateAclDependencies` records them in `pg_shdepend`.
+fn acl_dependents(catalog: &Catalog, role: u32) -> Vec<ObjRef> {
+    let names = |acl: &[String]| rupg_analyze::acl_roles(acl).contains(&role);
+    let mut objects = Vec::new();
+    for s in catalog.schemas() {
+        if s.owner != role && s.acl.as_deref().is_some_and(names) {
+            objects.push(ObjRef::new(PG_NAMESPACE, s.oid));
+        }
+    }
+    for r in catalog.relations() {
+        if r.owner != role && r.acl.as_deref().is_some_and(names) {
+            objects.push(ObjRef::new(PG_CLASS, r.oid));
+        }
+    }
+    for (object, acl) in catalog.object_acls() {
+        if acl_owner(catalog, object) != role && names(acl) {
+            objects.push(object);
+        }
+    }
+    objects
+}
+
+/// The objects that the role owns.
+fn owned_only(catalog: &Catalog, role: u32) -> Vec<ObjRef> {
     let mut objects = Vec::new();
     let mut add = |class: u32, oid: u32, owner: u32| {
         if owner == role {
@@ -994,13 +1036,13 @@ impl Connection {
 
     /// `checkSharedDependencies` for a role: the detail of the error, or `None` when no object depends on the role. The objects of the current database and the shared objects come first, in the order of their OIDs, then a count for each other database.
     fn shared_dependencies(&self, work: &Roles, roleid: u32) -> Result<Option<String>, Error> {
-        // (OID, class, deptype, description) of each local or shared object.
-        let mut objects: Vec<(u32, u32, u8, String)> = Vec::new();
+        // (OID, class, column, deptype, description) of each local or shared object.
+        let mut objects: Vec<(u32, u32, i32, u8, String)> = Vec::new();
         let mut remote = Vec::new();
         let local = self.catalog();
         for (row, catalog) in self.store.catalogs() {
             if row.owner == roleid {
-                objects.push((row.oid, PG_DATABASE, b'o', format!("database {}", row.name)));
+                objects.push((row.oid, PG_DATABASE, 0, b'o', format!("database {}", row.name)));
             }
             if row.oid == self.database_oid {
                 continue;
@@ -1011,9 +1053,13 @@ impl Connection {
             }
         }
         let reader = self.reader();
-        for object in owned(&local, roleid) {
+        for object in owned_only(&local, roleid) {
             let text = rupg_func::describe(object, &reader)?.unwrap_or_default();
-            objects.push((object.oid, object.class, b'o', text));
+            objects.push((object.oid, object.class, object.sub, b'o', text));
+        }
+        for object in acl_dependents(&local, roleid) {
+            let text = rupg_func::describe(object, &reader)?.unwrap_or_default();
+            objects.push((object.oid, object.class, object.sub, b'a', text));
         }
         for m in work.members.iter().filter(|m| m.grantor == roleid) {
             let text = format!(
@@ -1021,12 +1067,12 @@ impl Connection {
                 role_name(work, m.member),
                 role_name(work, m.role)
             );
-            objects.push((m.oid, PG_AUTH_MEMBERS, b'a', text));
+            objects.push((m.oid, PG_AUTH_MEMBERS, 0, b'a', text));
         }
-        objects.sort_by_key(|o| (o.0, o.1, o.2));
+        objects.sort_by_key(|o| (o.0, o.1, o.2, o.3));
         let mut lines: Vec<String> = Vec::new();
         let mut hidden = 0;
-        for (_, _, deptype, text) in objects {
+        for (_, _, _, deptype, text) in objects {
             if lines.len() >= MAX_REPORTED_DEPS {
                 hidden += 1;
                 continue;

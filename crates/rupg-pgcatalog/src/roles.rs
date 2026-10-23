@@ -162,6 +162,29 @@ impl Roles {
         reached.contains(&role)
     }
 
+    /// `roles_is_member_of` with `ROLERECURSE_PRIVS`: `role` and the roles that it reaches through memberships with `inherit_option`, in the order of the walk. The bootstrap superuser owns each database, so it reaches `pg_database_owner`.
+    pub fn privs_of(&self, role: u32) -> Vec<u32> {
+        let mut reached = vec![role];
+        let mut at = 0;
+        while let Some(&next) = reached.get(at) {
+            at += 1;
+            for edge in self.edges().filter(|m| m.member == next && m.inherit) {
+                if !reached.contains(&edge.role) {
+                    reached.push(edge.role);
+                }
+            }
+            if next == BOOTSTRAP_SUPERUSER && !reached.contains(&PG_DATABASE_OWNER) {
+                reached.push(PG_DATABASE_OWNER);
+            }
+        }
+        reached
+    }
+
+    /// `has_privs_of_role`: true when `member` is `role`, is a superuser, or reaches `role` through memberships with `inherit_option`.
+    pub fn has_privs_of_role(&self, member: u32, role: u32) -> bool {
+        member == role || self.superuser(member) || self.privs_of(member).contains(&role)
+    }
+
     /// The names and the OIDs of all the roles, those of `initdb` first.
     pub fn all(&self) -> impl Iterator<Item = (&str, u32)> + '_ {
         let created = self.roles.iter().map(|r| (r.name.as_str(), r.oid));

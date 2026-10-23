@@ -1,0 +1,199 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE ROLE regress_o1;
+CREATE ROLE
+> CREATE ROLE regress_o2;
+CREATE ROLE
+> CREATE SCHEMA gsch;
+CREATE SCHEMA
+> CREATE FUNCTION gsch.gf(int) RETURNS int LANGUAGE sql AS 'SELECT $1';
+CREATE FUNCTION
+> CREATE PROCEDURE gsch.gp() LANGUAGE sql AS 'SELECT 1';
+CREATE PROCEDURE
+> CREATE TYPE gsch.gty AS (x int);
+CREATE TYPE
+> CREATE DOMAIN gsch.gdom AS int;
+CREATE DOMAIN
+> GRANT USAGE, CREATE ON SCHEMA gsch TO regress_o1;
+GRANT
+> GRANT ALL ON SCHEMA gsch TO PUBLIC;
+GRANT
+> SELECT nspacl FROM pg_namespace WHERE nspname = 'gsch';
+fields nspacl@pg_namespace.4:1034:-1:-1
+row {postgres=UC/postgres,regress_o1=UC/postgres,=UC/postgres}
+SELECT 1
+> GRANT SELECT ON SCHEMA gsch TO regress_o1;
+ERROR 0LP01 invalid privilege type SELECT for schema
+> GRANT USAGE ON SCHEMA nosuch TO regress_o1;
+ERROR 3F000 schema "nosuch" does not exist
+> GRANT ALL ON SCHEMA public TO public;
+GRANT
+> SELECT nspacl FROM pg_namespace WHERE nspname = 'public';
+fields nspacl@pg_namespace.4:1034:-1:-1
+row {pg_database_owner=UC/pg_database_owner,=UC/pg_database_owner}
+SELECT 1
+> REVOKE CREATE ON SCHEMA public FROM public;
+REVOKE
+> SELECT nspacl FROM pg_namespace WHERE nspname = 'public';
+fields nspacl@pg_namespace.4:1034:-1:-1
+row {pg_database_owner=UC/pg_database_owner,=U/pg_database_owner}
+SELECT 1
+> GRANT EXECUTE ON FUNCTION gsch.gf(int) TO regress_o1;
+GRANT
+> REVOKE ALL ON FUNCTION gsch.gf(int) FROM PUBLIC;
+REVOKE
+> SELECT proacl FROM pg_proc WHERE proname = 'gf';
+fields proacl@pg_proc.30:1034:-1:-1
+row {postgres=X/postgres,regress_o1=X/postgres}
+SELECT 1
+> GRANT ALL ON FUNCTION gsch.gf TO regress_o2 WITH GRANT OPTION;
+GRANT
+> GRANT EXECUTE ON FUNCTION gsch.gp() TO regress_o1;
+ERROR 42809 gsch.gp() is not a function
+> GRANT EXECUTE ON PROCEDURE gsch.gp TO regress_o2;
+GRANT
+> GRANT EXECUTE ON PROCEDURE gsch.gf TO regress_o2;
+ERROR 42883 could not find a procedure named "gsch.gf"
+> GRANT EXECUTE ON ROUTINE gsch.gf(int), gsch.gp() TO regress_o2;
+GRANT
+> GRANT USAGE ON FUNCTION gsch.gf(int) TO regress_o2;
+ERROR 0LP01 invalid privilege type USAGE for function
+> SELECT proname, proacl FROM pg_proc WHERE pronamespace = 'gsch'::regnamespace ORDER BY 1;
+fields proname@pg_proc.2:19:64:-1,proacl@pg_proc.30:1034:-1:-1
+row gf,{postgres=X/postgres,regress_o1=X/postgres,regress_o2=X*/postgres}
+row gp,{=X/postgres,postgres=X/postgres,regress_o2=X/postgres}
+SELECT 2
+> REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA gsch FROM PUBLIC;
+REVOKE
+> GRANT EXECUTE ON ALL PROCEDURES IN SCHEMA gsch TO regress_o1;
+GRANT
+> GRANT ALL ON ALL ROUTINES IN SCHEMA gsch TO regress_o2;
+GRANT
+> SELECT proname, proacl FROM pg_proc WHERE pronamespace = 'gsch'::regnamespace ORDER BY 1;
+fields proname@pg_proc.2:19:64:-1,proacl@pg_proc.30:1034:-1:-1
+row gf,{postgres=X/postgres,regress_o1=X/postgres,regress_o2=X*/postgres}
+row gp,{=X/postgres,postgres=X/postgres,regress_o2=X/postgres,regress_o1=X/postgres}
+SELECT 2
+> GRANT USAGE ON TYPE gsch.gty TO regress_o1;
+GRANT
+> GRANT USAGE ON DOMAIN gsch.gdom TO regress_o1;
+GRANT
+> GRANT ALL ON TYPE gsch.gdom TO regress_o2;
+GRANT
+> GRANT USAGE ON DOMAIN gsch.gty TO regress_o1;
+ERROR 42809 "gsch.gty" is not a domain
+> GRANT USAGE ON TYPE gsch._gty TO regress_o1;
+ERROR 0LP01 cannot set privileges of array types
+HINT Set the privileges of the element type instead.
+> GRANT SELECT ON TYPE gsch.gty TO regress_o1;
+ERROR 0LP01 invalid privilege type SELECT for type
+> REVOKE USAGE ON TYPE gsch.gty FROM PUBLIC;
+REVOKE
+> SELECT typname, typacl FROM pg_type WHERE typnamespace = 'gsch'::regnamespace ORDER BY 1;
+fields typname@pg_type.2:19:64:-1,typacl@pg_type.32:1034:-1:-1
+row _gdom,NULL
+row _gty,NULL
+row gdom,{=U/postgres,postgres=U/postgres,regress_o1=U/postgres,regress_o2=U/postgres}
+row gty,{postgres=U/postgres,regress_o1=U/postgres}
+SELECT 4
+> GRANT USAGE ON LANGUAGE sql TO regress_o1;
+GRANT
+> GRANT USAGE ON LANGUAGE c TO regress_o1;
+ERROR 42809 language "c" is not trusted
+DETAIL GRANT and REVOKE are not allowed on untrusted languages, because only superusers can use untrusted languages.
+> GRANT USAGE ON LANGUAGE nosuch TO regress_o1;
+ERROR 42704 language "nosuch" does not exist
+> SELECT lanname, lanacl FROM pg_language WHERE lanname = 'sql';
+fields lanname@pg_language.2:19:64:-1,lanacl@pg_language.9:1034:-1:-1
+row sql,{=U/postgres,postgres=U/postgres,regress_o1=U/postgres}
+SELECT 1
+> REVOKE USAGE ON LANGUAGE sql FROM regress_o1;
+REVOKE
+> SELECT lanname, lanacl FROM pg_language WHERE lanname = 'sql';
+fields lanname@pg_language.2:19:64:-1,lanacl@pg_language.9:1034:-1:-1
+row sql,{=U/postgres,postgres=U/postgres}
+SELECT 1
+> GRANT EXECUTE ON FUNCTION abs(int) TO regress_o1;
+GRANT
+> SELECT proacl FROM pg_proc WHERE oid = 'abs(int)'::regprocedure;
+fields proacl@pg_proc.30:1034:-1:-1
+row {=X/postgres,postgres=X/postgres,regress_o1=X/postgres}
+SELECT 1
+> REVOKE EXECUTE ON FUNCTION abs(int) FROM regress_o1;
+REVOKE
+> SELECT proacl FROM pg_proc WHERE oid = 'abs(int)'::regprocedure;
+fields proacl@pg_proc.30:1034:-1:-1
+row {=X/postgres,postgres=X/postgres}
+SELECT 1
+> GRANT SELECT ON pg_class TO regress_o1;
+GRANT
+> SELECT relacl FROM pg_class WHERE relname = 'pg_class';
+fields relacl@pg_class.32:1034:-1:-1
+row {postgres=arwdDxtm/postgres,=r/postgres,regress_o1=r/postgres}
+SELECT 1
+> REVOKE SELECT ON pg_class FROM regress_o1;
+REVOKE
+> SELECT relacl FROM pg_class WHERE relname = 'pg_class';
+fields relacl@pg_class.32:1034:-1:-1
+row {postgres=arwdDxtm/postgres,=r/postgres}
+SELECT 1
+> GRANT USAGE ON TYPE int4 TO regress_o1;
+GRANT
+> SELECT typacl FROM pg_type WHERE typname = 'int4';
+fields typacl@pg_type.32:1034:-1:-1
+row {=U/postgres,postgres=U/postgres,regress_o1=U/postgres}
+SELECT 1
+> REVOKE USAGE ON TYPE int4 FROM regress_o1;
+REVOKE
+> SET ROLE regress_o2;
+SET
+is_superuser=off
+> GRANT EXECUTE ON FUNCTION gsch.gf(int) TO regress_o1;
+GRANT
+> GRANT USAGE ON SCHEMA gsch TO regress_o1;
+WARNING 01007 no privileges were granted for "gsch"
+GRANT
+> GRANT USAGE ON TYPE gsch.gty TO regress_o1;
+ERROR 42501 permission denied for type gty
+> RESET ROLE;
+RESET
+is_superuser=on
+> SELECT proacl FROM pg_proc WHERE proname = 'gf';
+fields proacl@pg_proc.30:1034:-1:-1
+row {postgres=X/postgres,regress_o1=X/postgres,regress_o2=X*/postgres,regress_o1=X/regress_o2}
+SELECT 1
+> SELECT has_schema_privilege('regress_o1', 'gsch', 'CREATE'), has_function_privilege('regress_o1', 'gsch.gf(int)', 'EXECUTE'), has_type_privilege('regress_o2', 'gsch.gdom', 'USAGE'), has_language_privilege('regress_o1', 'sql', 'USAGE');
+fields has_schema_privilege:16:1:-1,has_function_privilege:16:1:-1,has_type_privilege:16:1:-1,has_language_privilege:16:1:-1
+row t,t,t,t
+SELECT 1
+> DROP ROLE regress_o1;
+ERROR 2BP01 role "regress_o1" cannot be dropped because some objects depend on it
+DETAIL privileges for schema gsch
+privileges for function gsch.gf(integer)
+privileges for function gsch.gp()
+privileges for type gsch.gty
+privileges for type gsch.gdom
+> REVOKE ALL ON SCHEMA gsch FROM regress_o1, regress_o2, PUBLIC CASCADE;
+REVOKE
+> REVOKE ALL ON ALL ROUTINES IN SCHEMA gsch FROM regress_o1, regress_o2 CASCADE;
+REVOKE
+> REVOKE ALL ON TYPE gsch.gty, gsch.gdom FROM regress_o1, regress_o2;
+REVOKE
+> GRANT ALL ON SCHEMA public TO public;
+GRANT
+> GRANT USAGE ON LANGUAGE sql TO public;
+GRANT
+> DROP SCHEMA gsch CASCADE;
+NOTICE 00000 drop cascades to 4 other objects
+DETAIL drop cascades to function gsch.gf(integer)
+drop cascades to function gsch.gp()
+drop cascades to type gsch.gty
+drop cascades to type gsch.gdom
+DROP SCHEMA
+> DROP ROLE regress_o1, regress_o2;
+DROP ROLE
+> SELECT nspacl FROM pg_namespace WHERE nspname = 'public';
+fields nspacl@pg_namespace.4:1034:-1:-1
+row {pg_database_owner=UC/pg_database_owner,=UC/pg_database_owner}
+SELECT 1
