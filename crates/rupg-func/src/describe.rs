@@ -255,11 +255,9 @@ pub(crate) fn column_name(oid: u32, number: i32, session: &dyn Session) -> Optio
     Some(name)
 }
 
-/// `format_procedure` with the kind of the function.
+/// `format_procedure` after the word `function`, as `getObjectDescription` gives it for each kind of routine.
 fn function_text(oid: u32, session: &dyn Session) -> Option<String> {
-    let kind = builtin::proc_by_oid(oid).map_or(b'f', |p| p.kind);
-    let word = if kind == b'p' { "procedure" } else { "function" };
-    Some(format!("{word} {}", procedure_text(oid, session)?))
+    Some(format!("function {}", procedure_text(oid, session)?))
 }
 
 /// `format_procedure`: the name of a built-in function or a function of the catalog, with its schema when it is not visible, and the types of its arguments.

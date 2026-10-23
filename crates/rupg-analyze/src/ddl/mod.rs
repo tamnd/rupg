@@ -19,6 +19,7 @@ mod enumtype;
 mod fkey;
 mod fkey_partition;
 mod function;
+mod grant;
 mod identity;
 mod index;
 mod lock;
@@ -51,6 +52,7 @@ pub use copy::{
 };
 pub(crate) use drop::quote_identifier;
 pub use function::{Body, function_body};
+pub use grant::acl_roles;
 pub(crate) use lock::relkind;
 pub use lock::{Allowed, lock_table};
 pub use rule::{RuleTree, rule_tree};
@@ -61,7 +63,7 @@ pub use vacuum::vacuum_relations;
 use rupg_catalog::{Catalog, ObjRef, PG_CLASS, PG_TYPE, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, ClassRow, Named, Owned};
-use rupg_sql::nodes::{CreateSchemaStmt, Node, ObjectType, RangeVar};
+use rupg_sql::nodes::{CreateSchemaStmt, GrantTargetType, Node, ObjectType, RangeVar};
 use rupg_types::{Value, oid};
 
 use crate::coerce::AtOpt;
@@ -171,6 +173,7 @@ pub fn is_definition(stmt: &Node) -> bool {
         || matches!(stmt, Node::RenameStmt(rename) if rename::is_rename_kind(rename.renameType))
         || matches!(stmt, Node::AlterObjectSchemaStmt(alter) if is_alter_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
         || matches!(stmt, Node::SelectStmt(select) if select.intoClause.is_some())
+        || matches!(stmt, Node::GrantStmt(grant) if grant.targtype != GrantTargetType::ACL_TARGET_DEFAULTS)
 }
 
 /// True for the kinds of relations of `ALTER TABLE` and of the other statements that change a relation. `ALTER TYPE` of the attributes of a composite type is an `AlterTableStmt` too.
@@ -267,6 +270,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) => definer.define_ts(define),
         Node::AlterTSConfigurationStmt(alter) => definer.alter_ts_config(alter),
         Node::TruncateStmt(truncate) => definer.truncate(truncate),
+        Node::GrantStmt(grant) => definer.grant(grant),
         _ => {
             Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "this statement is not supported yet"))
         }

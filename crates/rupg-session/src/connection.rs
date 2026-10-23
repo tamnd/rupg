@@ -1107,6 +1107,8 @@ impl Connection {
                     Node::RuleStmt(_) => CommandTag::CreateRule,
                     Node::CreateTrigStmt(_) => CommandTag::CreateTrigger,
                     Node::CommentStmt(_) => CommandTag::Comment,
+                    Node::GrantStmt(stmt) if stmt.is_grant => CommandTag::Grant,
+                    Node::GrantStmt(_) => CommandTag::Revoke,
                     Node::DropStmt(stmt) => match stmt.removeType {
                         ObjectType::OBJECT_SCHEMA => CommandTag::DropSchema,
                         ObjectType::OBJECT_VIEW => CommandTag::DropView,
@@ -5697,6 +5699,18 @@ mod tests {
     #[test]
     fn join_order() {
         big_stack(|| script(include_str!("connection/join_order.test")));
+    }
+
+    /// `GRANT` and `REVOKE` on tables, sequences, views and their columns: the `relacl` and `attacl` values, the grant options with `CASCADE`, the grantor that a role with the privileges of the owner gets, `GRANT ... ON ALL TABLES IN SCHEMA`, the errors for a bad privilege or object, and the privileges that `DROP ROLE` lists. `connection/grant_relation.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn grant_relation() {
+        big_stack(|| script(include_str!("connection/grant_relation.test")));
+    }
+
+    /// `GRANT` and `REVOKE` on schemas, functions, procedures, types, domains and languages: the `nspacl`, `proacl`, `typacl` and `lanacl` values, `ON ALL ROUTINES IN SCHEMA`, the checks of the `has_*_privilege` functions, the errors for an array type and an untrusted language, and the privileges that `DROP ROLE` lists. `connection/grant_object.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn grant_object() {
+        big_stack(|| script(include_str!("connection/grant_object.test")));
     }
 
     /// A query that is a `UNION ALL` of `SELECT`s with the types of its columns and has `ORDER BY` becomes an append relation, as `flatten_simple_union_all` makes it, so the planner can plan a `Merge Append` of the plans of the `SELECT`s in the order. A `SELECT` with its own `WHERE` is not a member of the append relation, as `is_safe_append_member`, and its plan gets a sort. `connection/plan_union_all_order.test` is the output of PostgreSQL 19 for the same script in a new database.
