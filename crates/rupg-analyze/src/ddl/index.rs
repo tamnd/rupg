@@ -3,7 +3,6 @@
 use rupg_catalog::size::{empty_index_pages, new_table_tuples, typavgwidth};
 use rupg_catalog::{ConKind, NewIndex, NewIndexColumn, RelKind};
 use rupg_common::{Error, Result, SqlState};
-use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{IndexElem, IndexStmt, Node, SortByDir, SortByNulls};
 use rupg_types::oid;
 
@@ -532,7 +531,6 @@ impl Definer<'_, '_> {
         ty: u32,
         method: u32,
     ) -> Result<u32> {
-        let method_name = if method == HASH { "hash" } else { "btree" };
         let parts = names(opclass);
         let legacy = parts.len() == 1 && LEGACY_OPCLASSES.contains(&parts[0]);
         if parts.is_empty() || legacy {
@@ -541,46 +539,14 @@ impl Definer<'_, '_> {
                 .ok_or_else(|| no_default_opclass(ty, method));
         }
         let shown = parts.join(".");
-        let (schema, name) = match parts.as_slice() {
-            [name] => (None, *name),
-            [schema, name] => (Some(*schema), *name),
-            _ => {
-                return Err(Error::new(
-                    SqlState::SYNTAX_ERROR,
-                    format!("improper qualified name (too many dotted names): {shown}"),
-                ));
-            }
-        };
-        let in_catalog = match schema {
-            None => true,
-            Some(schema) => {
-                let ns = self.an.schema(schema).ok_or_else(|| {
-                    Error::new(
-                        SqlState::UNDEFINED_SCHEMA,
-                        format!("schema \"{schema}\" does not exist"),
-                    )
-                })?;
-                ns == crate::PG_CATALOG_NAMESPACE
-            }
-        };
-        let class = builtin::opclasses()
-            .iter()
-            .find(|c| in_catalog && c.method == method && c.name == name)
-            .ok_or_else(|| {
-                Error::new(
-                    SqlState::UNDEFINED_OBJECT,
-                    format!(
-                        "operator class \"{shown}\" does not exist for access method \"{method_name}\""
-                    ),
-                )
-            })?;
-        if !is_binary_coercible(ty, class.intype) {
+        let (class, intype) = self.opclass_by_name(method, &parts)?;
+        if !is_binary_coercible(ty, intype) {
             return Err(Error::new(
                 SqlState::DATATYPE_MISMATCH,
                 format!("operator class \"{shown}\" does not accept data type {}", types::name(ty)),
             ));
         }
-        Ok(class.oid)
+        Ok(class)
     }
 }
 

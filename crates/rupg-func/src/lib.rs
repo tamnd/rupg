@@ -93,7 +93,7 @@ pub use deparse::{
 };
 pub use describe::describe;
 pub use encoding::{char_to_encoding, encoding, encoding_to_char};
-pub use hash::partition_hash;
+pub use hash::{HASH_PARTITION_SEED, extended_hash, hash_combine64, partition_hash};
 pub use io::{
     base_type, input, input_soft, input_supported, is_row_type, output, output_supported, receive,
     send, to_text,

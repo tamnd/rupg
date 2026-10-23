@@ -1,0 +1,292 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> create function part_hashint4_noop(value int4, seed int8) returns int8 as $$ select value + seed; $$ language sql strict immutable parallel safe;
+CREATE FUNCTION
+> create operator class part_test_int4_ops for type int4 using hash as operator 1 =, function 2 part_hashint4_noop(int4, int8);
+CREATE OPERATOR CLASS
+> create function part_hashtext_length(value text, seed int8) returns int8 as $$ select length(coalesce(value, ''))::int8 $$ language sql strict immutable parallel safe;
+CREATE FUNCTION
+> create operator class part_test_text_ops for type text using hash as operator 1 =, function 2 part_hashtext_length(text, int8);
+CREATE OPERATOR CLASS
+> create table hp (a int, b text, c int) partition by hash (a part_test_int4_ops, b part_test_text_ops);
+CREATE TABLE
+> create table hp0 partition of hp for values with (modulus 4, remainder 0);
+CREATE TABLE
+> create table hp3 partition of hp for values with (modulus 4, remainder 3);
+CREATE TABLE
+> create table hp1 partition of hp for values with (modulus 4, remainder 1);
+CREATE TABLE
+> create table hp2 partition of hp for values with (modulus 4, remainder 2);
+CREATE TABLE
+> insert into hp values (null, null, 0);
+INSERT 0 1
+> insert into hp values (1, null, 1);
+INSERT 0 1
+> insert into hp values (1, 'xxx', 2);
+INSERT 0 1
+> insert into hp values (null, 'xxx', 3);
+INSERT 0 1
+> insert into hp values (2, 'xxx', 4);
+INSERT 0 1
+> insert into hp values (1, 'abcde', 5);
+INSERT 0 1
+> select tableoid::regclass, * from hp order by c;
+fields tableoid:2205:4:-1,a@hp.1:23:4:-1,b@hp.2:25:-1:-1,c@hp.3:23:4:-1
+row hp0,NULL,NULL,0
+row hp1,1,NULL,1
+row hp0,1,xxx,2
+row hp2,NULL,xxx,3
+row hp3,2,xxx,4
+row hp2,1,abcde,5
+SELECT 6
+> select pg_get_partkeydef('hp'::regclass);
+fields pg_get_partkeydef:25:-1:-1
+row HASH (a part_test_int4_ops, b part_test_text_ops)
+SELECT 1
+> select regexp_replace(pg_get_partition_constraintdef('hp1'::regclass), '[0-9]{4,}', 'N');
+fields regexp_replace:25:-1:-1
+row satisfies_hash_partition('N'::oid, 4, 1, a, b)
+SELECT 1
+> explain (costs off) select * from hp where a = 1;
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on hp0 hp_1
+row         Filter: (a = 1)
+row   ->  Seq Scan on hp1 hp_2
+row         Filter: (a = 1)
+row   ->  Seq Scan on hp2 hp_3
+row         Filter: (a = 1)
+row   ->  Seq Scan on hp3 hp_4
+row         Filter: (a = 1)
+EXPLAIN
+> explain (costs off) select * from hp where b = 'xxx';
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on hp0 hp_1
+row         Filter: (b = 'xxx'::text)
+row   ->  Seq Scan on hp1 hp_2
+row         Filter: (b = 'xxx'::text)
+row   ->  Seq Scan on hp2 hp_3
+row         Filter: (b = 'xxx'::text)
+row   ->  Seq Scan on hp3 hp_4
+row         Filter: (b = 'xxx'::text)
+EXPLAIN
+> explain (costs off) select * from hp where a is null;
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on hp0 hp_1
+row         Filter: (a IS NULL)
+row   ->  Seq Scan on hp1 hp_2
+row         Filter: (a IS NULL)
+row   ->  Seq Scan on hp2 hp_3
+row         Filter: (a IS NULL)
+row   ->  Seq Scan on hp3 hp_4
+row         Filter: (a IS NULL)
+EXPLAIN
+> explain (costs off) select * from hp where a < 1 and b = 'xxx';
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on hp0 hp_1
+row         Filter: ((a < 1) AND (b = 'xxx'::text))
+row   ->  Seq Scan on hp1 hp_2
+row         Filter: ((a < 1) AND (b = 'xxx'::text))
+row   ->  Seq Scan on hp2 hp_3
+row         Filter: ((a < 1) AND (b = 'xxx'::text))
+row   ->  Seq Scan on hp3 hp_4
+row         Filter: ((a < 1) AND (b = 'xxx'::text))
+EXPLAIN
+> explain (costs off) select * from hp where a <> 1 and b <> 'xxx';
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on hp0 hp_1
+row         Filter: ((a <> 1) AND (b <> 'xxx'::text))
+row   ->  Seq Scan on hp1 hp_2
+row         Filter: ((a <> 1) AND (b <> 'xxx'::text))
+row   ->  Seq Scan on hp2 hp_3
+row         Filter: ((a <> 1) AND (b <> 'xxx'::text))
+row   ->  Seq Scan on hp3 hp_4
+row         Filter: ((a <> 1) AND (b <> 'xxx'::text))
+EXPLAIN
+> explain (costs off) select * from hp where a is null and b is null;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on hp0 hp
+row   Filter: ((a IS NULL) AND (b IS NULL))
+EXPLAIN
+> explain (costs off) select * from hp where a = 1 and b is null;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on hp1 hp
+row   Filter: ((b IS NULL) AND (a = 1))
+EXPLAIN
+> explain (costs off) select * from hp where a = 1 and b = 'xxx';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on hp0 hp
+row   Filter: ((a = 1) AND (b = 'xxx'::text))
+EXPLAIN
+> explain (costs off) select * from hp where a is null and b = 'xxx';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on hp2 hp
+row   Filter: ((a IS NULL) AND (b = 'xxx'::text))
+EXPLAIN
+> explain (costs off) select * from hp where a = 2 and b = 'xxx';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on hp3 hp
+row   Filter: ((a = 2) AND (b = 'xxx'::text))
+EXPLAIN
+> explain (costs off) select * from hp where a = 1 and b = 'abcde';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on hp2 hp
+row   Filter: ((a = 1) AND (b = 'abcde'::text))
+EXPLAIN
+> explain (costs off) select * from hp where (a = 1 and b = 'abcde') or (a = 2 and b = 'xxx') or (a is null and b is null);
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on hp0 hp_1
+row         Filter: (((a = 1) AND (b = 'abcde'::text)) OR ((a = 2) AND (b = 'xxx'::text)) OR ((a IS NULL) AND (b IS NULL)))
+row   ->  Seq Scan on hp2 hp_2
+row         Filter: (((a = 1) AND (b = 'abcde'::text)) OR ((a = 2) AND (b = 'xxx'::text)) OR ((a IS NULL) AND (b IS NULL)))
+row   ->  Seq Scan on hp3 hp_3
+row         Filter: (((a = 1) AND (b = 'abcde'::text)) OR ((a = 2) AND (b = 'xxx'::text)) OR ((a IS NULL) AND (b IS NULL)))
+EXPLAIN
+> update hp set a = 2 where c = 2;
+UPDATE 1
+> select tableoid::regclass, * from hp order by c;
+fields tableoid:2205:4:-1,a@hp.1:23:4:-1,b@hp.2:25:-1:-1,c@hp.3:23:4:-1
+row hp0,NULL,NULL,0
+row hp1,1,NULL,1
+row hp3,2,xxx,2
+row hp2,NULL,xxx,3
+row hp3,2,xxx,4
+row hp2,1,abcde,5
+SELECT 6
+> insert into hp1 values (1, 'xxx', 9);
+ERROR 23514 new row for relation "hp1" violates partition constraint
+DETAIL Failing row contains (1, xxx, 9).
+> drop table hp1;
+DROP TABLE
+> drop table hp3;
+DROP TABLE
+> explain (costs off) select * from hp where a = 1 and b = 'abcde';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on hp2 hp
+row   Filter: ((a = 1) AND (b = 'abcde'::text))
+EXPLAIN
+> explain (costs off) select * from hp where a = 1 and b = 'abcde' and (c = 2 or c = 3);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on hp2 hp
+row   Filter: ((a = 1) AND (b = 'abcde'::text) AND ((c = 2) OR (c = 3)))
+EXPLAIN
+> insert into hp values (7, 'x', 10);
+INSERT 0 1
+> create table hpi (a int) partition by hash (a part_test_int4_ops);
+CREATE TABLE
+> create table hpi0 partition of hpi for values with (modulus 3, remainder 0);
+CREATE TABLE
+> create table hpi1 partition of hpi for values with (modulus 3, remainder 1);
+CREATE TABLE
+> create table hpi2 partition of hpi for values with (modulus 3, remainder 2);
+CREATE TABLE
+> insert into hpi select generate_series(1, 9);
+INSERT 0 9
+> select tableoid::regclass, a from hpi order by a;
+fields tableoid:2205:4:-1,a@hpi.1:23:4:-1
+row hpi1,1
+row hpi2,2
+row hpi0,3
+row hpi1,4
+row hpi2,5
+row hpi0,6
+row hpi1,7
+row hpi2,8
+row hpi0,9
+SELECT 9
+> select tableoid::regclass, a from hpi where a = 5;
+fields tableoid:2205:4:-1,a@hpi.1:23:4:-1
+row hpi2,5
+SELECT 1
+> explain (costs off) select * from hpi where a = 5;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on hpi2 hpi
+row   Filter: (a = 5)
+EXPLAIN
+> explain (costs off) select * from hpi where a in (4, 5);
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on hpi1 hpi_1
+row         Filter: (a = ANY ('{4,5}'::integer[]))
+row   ->  Seq Scan on hpi2 hpi_2
+row         Filter: (a = ANY ('{4,5}'::integer[]))
+EXPLAIN
+> create table bad1 (a text) partition by hash (a part_test_int4_ops);
+ERROR 42804 operator class "part_test_int4_ops" does not accept data type text
+> create table bad2 (a int) partition by range (a part_test_int4_ops);
+ERROR 42704 operator class "part_test_int4_ops" does not exist for access method "btree"
+> create table bad3 (a int) partition by hash (a public.part_test_int4_ops);
+CREATE TABLE
+> create table bad4 (a int) partition by hash (a nosuch.part_test_int4_ops);
+ERROR 3F000 schema "nosuch" does not exist
+> create table bad5 (a int) partition by hash (a pg_catalog.part_test_int4_ops);
+ERROR 42704 operator class "pg_catalog.part_test_int4_ops" does not exist for access method "hash"
+> create table hti (a int, b text);
+CREATE TABLE
+> create index hti_a on hti using hash (a part_test_int4_ops);
+CREATE INDEX
+> create index hti_b on hti using hash (b public.part_test_text_ops);
+CREATE INDEX
+> create index hti_c on hti using hash (b part_test_int4_ops);
+ERROR 42804 operator class "part_test_int4_ops" does not accept data type text
+> create index hti_d on hti (a part_test_int4_ops);
+ERROR 42704 operator class "part_test_int4_ops" does not exist for access method "btree"
+> select pg_get_indexdef('hti_a'::regclass);
+fields pg_get_indexdef:25:-1:-1
+row CREATE INDEX hti_a ON public.hti USING hash (a part_test_int4_ops)
+SELECT 1
+> select pg_get_indexdef('hti_b'::regclass);
+fields pg_get_indexdef:25:-1:-1
+row CREATE INDEX hti_b ON public.hti USING hash (b part_test_text_ops)
+SELECT 1
+> create schema s1;
+CREATE SCHEMA
+> create operator class s1.int4_alt for type int4 using hash as operator 1 =, function 2 part_hashint4_noop(int4, int8);
+CREATE OPERATOR CLASS
+> create table hps (a int) partition by hash (a s1.int4_alt);
+CREATE TABLE
+> select pg_get_partkeydef('hps'::regclass);
+fields pg_get_partkeydef:25:-1:-1
+row HASH (a s1.int4_alt)
+SELECT 1
+> set search_path = s1, public;
+SET
+search_path=s1, public
+> select pg_get_partkeydef('hps'::regclass);
+fields pg_get_partkeydef:25:-1:-1
+row HASH (a int4_alt)
+SELECT 1
+> create table hps2 (a int) partition by hash (a int4_alt);
+CREATE TABLE
+> reset search_path;
+RESET
+search_path="$user", public
+> select pg_get_partkeydef('s1.hps2'::regclass);
+fields pg_get_partkeydef:25:-1:-1
+row HASH (a s1.int4_alt)
+SELECT 1
+> drop operator class part_test_int4_ops using hash;
+ERROR 2BP01 cannot drop operator class part_test_int4_ops for access method hash because other objects depend on it
+DETAIL table hp depends on operator class part_test_int4_ops for access method hash
+table hpi depends on operator class part_test_int4_ops for access method hash
+table bad3 depends on operator class part_test_int4_ops for access method hash
+index hti_a depends on operator class part_test_int4_ops for access method hash
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> drop operator class part_test_int4_ops using hash cascade;
+NOTICE 00000 drop cascades to 4 other objects
+DETAIL drop cascades to table hp
+drop cascades to table hpi
+drop cascades to table bad3
+drop cascades to index hti_a
+DROP OPERATOR CLASS
+> select c.relname, p.partstrat, (select string_agg(opcname, ' ') from pg_opclass o where o.oid = any (p.partclass)) from pg_partitioned_table p join pg_class c on c.oid = p.partrelid order by 1;
+fields relname@pg_class.2:19:64:-1,partstrat@pg_partitioned_table.2:18:1:-1,string_agg:25:-1:-1
+row hps,h,int4_alt
+row hps2,h,int4_alt
+SELECT 2

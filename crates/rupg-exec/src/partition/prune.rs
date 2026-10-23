@@ -116,7 +116,7 @@ fn prune(
     let catalog = catalog(session)?;
     let d = Dispatch::new(rel, session)?;
     let allowed = d.allowed(rel, root, clauses);
-    for (part, keep) in d.parts.iter().zip(d.kept(&allowed)) {
+    for (part, keep) in d.parts.iter().zip(d.kept(&allowed, session)) {
         if !keep {
             continue;
         }
@@ -293,15 +293,20 @@ impl Dispatch {
     /// The strategy of the operator of a condition in the operator family of the key column `i`, as the column is on its left side. A hash family gives only `=`.
     fn strategy_of(&self, i: usize, clause: &Clause) -> Option<i16> {
         let family = self.families[i];
-        let amop = builtin::amops_of_operator(clause.operator)
-            .find(|a| a.family == family && a.purpose == b's')?;
+        let strategy = builtin::amops_of_operator(clause.operator)
+            .find(|a| a.family == family && a.purpose == b's')
+            .map(|a| a.strategy)
+            .or_else(|| {
+                let mut amops = self.amops.iter();
+                amops.find(|a| a.0 == family && a.1 == clause.operator).map(|a| a.2)
+            })?;
         if self.strategy == PartStrategy::Hash {
-            return (amop.strategy == HASH_EQUAL).then_some(EQUAL);
+            return (strategy == HASH_EQUAL).then_some(EQUAL);
         }
         if !clause.commuted {
-            return Some(amop.strategy);
+            return Some(strategy);
         }
-        Some(match amop.strategy {
+        Some(match strategy {
             LESS => GREATER,
             LESS_EQUAL => GREATER_EQUAL,
             GREATER_EQUAL => LESS_EQUAL,
@@ -311,14 +316,14 @@ impl Dispatch {
     }
 
     /// For each partition, true when it can have rows that pass the conditions.
-    fn kept(&self, allowed: &[Allowed]) -> Vec<bool> {
+    fn kept(&self, allowed: &[Allowed], session: &dyn Session) -> Vec<bool> {
         let all = vec![true; self.parts.len()];
         // Conditions that no value passes, as `k = 1 AND k = 2`, leave no partition.
         if allowed.iter().any(|a| a.equal.as_ref().is_some_and(Vec::is_empty)) {
             return vec![false; self.parts.len()];
         }
         if !allowed.is_empty() && allowed.iter().all(|a| a.equal.is_some()) {
-            return self.kept_equal(allowed).unwrap_or(all);
+            return self.kept_equal(allowed, session).unwrap_or(all);
         }
         let Some(first) = allowed.first() else { return all };
         if allowed.iter().all(|a| a.equal.is_none() && a.lower.is_none() && a.upper.is_none()) {
@@ -363,7 +368,7 @@ impl Dispatch {
     }
 
     /// `get_matching_hash_bounds`, `get_matching_list_bounds` and `get_matching_range_bounds` when each key column has an `=`: the partitions that `get_partition_for_tuple` gives for each combination of the values. `None` for too many combinations or the error of a compare.
-    fn kept_equal(&self, allowed: &[Allowed]) -> Option<Vec<bool>> {
+    fn kept_equal(&self, allowed: &[Allowed], session: &dyn Session) -> Option<Vec<bool>> {
         let sets: Vec<&Vec<Value>> = allowed.iter().filter_map(|a| a.equal.as_ref()).collect();
         let mut count: usize = 1;
         for set in &sets {
@@ -383,7 +388,7 @@ impl Dispatch {
                     value
                 })
                 .collect();
-            if let Some(part) = self.find(&values).ok()? {
+            if let Some(part) = self.find(&values, session).ok()? {
                 let at = self.parts.iter().position(|p| p.oid == part.oid)?;
                 keep[at] = true;
             }

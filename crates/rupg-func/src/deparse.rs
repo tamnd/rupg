@@ -1849,15 +1849,15 @@ fn collation_name(collation: u32, session: &dyn Session) -> Result<String> {
 
 /// `get_opclass_name`: ` name` of the operator class, or nothing for the default class of the type.
 fn opclass_name(class: u32, ty: u32, session: &dyn Session) -> Result<String> {
-    let row = builtin::named_by_oid(Named::Opclass, class)
+    let (name, namespace, method) = reg::method_row(Named::Opclass, class, session)
         .ok_or_else(|| Error::internal(format!("cache lookup failed for opclass {class}")))?;
-    if default_opclass(ty, row.method).is_some_and(|d| d.oid == class) {
+    if default_opclass(ty, method).is_some_and(|d| d.oid == class) {
         return Ok(String::new());
     }
-    if reg::visible(Named::Opclass, row, session) {
-        Ok(format!(" {}", quote_identifier(row.name)))
+    if reg::method_visible(Named::Opclass, class, session) {
+        Ok(format!(" {}", quote_identifier(&name)))
     } else {
-        Ok(format!(" {}", reg::qualified(reg::namespace_name(row.namespace, session), row.name)))
+        Ok(format!(" {}", reg::qualified(reg::namespace_name(namespace, session), &name)))
     }
 }
 
