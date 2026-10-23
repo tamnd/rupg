@@ -36,6 +36,42 @@ struct State {
     tables: HashMap<(u32, u32), Table>,
     /// The transaction that each waiting transaction waits for, the edges of the wait graph of `DeadLockCheck`.
     waits: HashMap<u32, u32>,
+    /// The new versions of the transactions in progress whose keys a deferrable unique index must check again.
+    rechecks: Vec<Recheck>,
+}
+
+/// A new version with the key of a live version, or of a version of a transaction in progress, in a deferrable unique index, as `UNIQUE_CHECK_PARTIAL` finds it. The key is checked again after the statement or at the commit, as the event of `unique_key_recheck` does it.
+#[derive(Clone, Debug)]
+pub(crate) struct Recheck {
+    xid: u32,
+    /// The command that made the version.
+    command: u32,
+    database: u32,
+    /// The OID of the table.
+    pub(crate) table: u32,
+    /// The index whose key the version has.
+    pub(crate) unique: Unique,
+    /// The ID of the version.
+    pub(crate) tid: u64,
+}
+
+/// The rechecks of the new versions `partial` of the command of `view` in the table `relation`, by the place of the index in `unique` and the ID of the version.
+fn rechecks<'a>(
+    view: &'a View,
+    relation: u32,
+    unique: &'a [Unique],
+    partial: Vec<(usize, u64)>,
+) -> impl Iterator<Item = Recheck> + 'a {
+    partial.into_iter().filter_map(move |(index, tid)| {
+        Some(Recheck {
+            xid: view.xid,
+            command: view.command,
+            database: view.database,
+            table: relation,
+            unique: unique.get(index)?.clone(),
+            tid,
+        })
+    })
 }
 
 /// An edge of a cycle of waits: the process that waits, the transaction that it waits for, and the process of that transaction.
@@ -246,13 +282,14 @@ impl Table {
         Ok(places)
     }
 
-    /// `_bt_check_unique` of the new version `tid` for each unique key, in the order of the indexes. The result is the first conflict: a live version with the same key, or a transaction in progress that the write must wait for. `used` has the IDs of the new versions of the write up to `tid`.
+    /// `_bt_check_unique` of the new version `tid` for each unique key, in the order of the indexes. The result is the first conflict: a live version with the same key, or a transaction in progress that the write must wait for. `used` has the IDs of the new versions of the write up to `tid`. A conflict in a deferrable index is no error: the place of the index and `tid` go to `partial`, for the check after the statement.
     fn check_keys(
         &self,
-        places: &[usize],
+        (places, unique): (&[usize], &[Unique]),
         used: &[u64],
         (xid, running): (u32, &BTreeSet<u32>),
         derive: Derive<'_>,
+        partial: &mut Vec<(usize, u64)>,
     ) -> Result<Option<Changed>> {
         let Some(&tid) = used.last() else {
             return Ok(None);
@@ -284,6 +321,10 @@ impl Table {
                 match map.key(&version.values, derive)? {
                     Some(other) if map.same(&values, &other)? => {}
                     _ => continue,
+                }
+                if unique.get(index).is_some_and(|key| key.deferrable.is_some()) {
+                    partial.push((index, tid));
+                    break;
                 }
                 return Ok(Some(match seen {
                     Seen::Wait(holder) => Changed::WaitKey { holder, index, used: used.to_vec() },
@@ -471,7 +512,7 @@ impl Heap {
         kept: &[u64],
     ) -> Result<Changed> {
         let mut state = self.state();
-        let State { tables, running, .. } = &mut *state;
+        let State { tables, running, rechecks: pending, .. } = &mut *state;
         let table = tables.entry((view.database, relation)).or_default();
         let count = rows.len() as u64;
         let made = (view.xid, view.command);
@@ -484,6 +525,7 @@ impl Heap {
         let places = table.key_maps(unique, derive)?;
         let mut kept = kept.iter().copied();
         let mut used = Vec::with_capacity(rows.len());
+        let mut partial = Vec::new();
         for values in rows {
             match table.add(kept.next(), made, values, derive) {
                 Ok(tid) => used.push(tid),
@@ -492,7 +534,8 @@ impl Heap {
                     return Err(error);
                 }
             }
-            match table.check_keys(&places, &used, (view.xid, running), derive) {
+            let checked = (view.xid, &*running);
+            match table.check_keys((&places, unique), &used, checked, derive, &mut partial) {
                 Ok(None) => {}
                 result => {
                     table.undo(&used, &[]);
@@ -500,6 +543,7 @@ impl Heap {
                 }
             }
         }
+        pending.extend(rechecks(view, relation, unique, partial));
         Ok(Changed::Done(count))
     }
 
@@ -518,7 +562,7 @@ impl Heap {
         kept: Option<u64>,
     ) -> Result<Speculative> {
         let mut state = self.state();
-        let State { tables, running, .. } = &mut *state;
+        let State { tables, running, rechecks: pending, .. } = &mut *state;
         let table = tables.entry((view.database, relation)).or_default();
         let places = table.key_maps(unique, derive)?;
         for &arbiter in arbiters {
@@ -557,8 +601,13 @@ impl Heap {
             }
         }
         let used = [table.add(kept, (view.xid, view.command), values, derive)?];
-        match table.check_keys(&places, &used, (view.xid, running), derive) {
-            Ok(None) => Ok(Speculative::Inserted),
+        let mut partial = Vec::new();
+        let checked = (view.xid, &*running);
+        match table.check_keys((&places, unique), &used, checked, derive, &mut partial) {
+            Ok(None) => {
+                pending.extend(rechecks(view, relation, unique, partial));
+                Ok(Speculative::Inserted)
+            }
             result => {
                 table.undo(&used, &[]);
                 Ok(Speculative::Key(result?.unwrap_or(Changed::Done(0))))
@@ -582,7 +631,7 @@ impl Heap {
     ) -> Result<Changed> {
         applied.clear();
         let mut state = self.state();
-        let State { tables, running, .. } = &mut *state;
+        let State { tables, running, rechecks: pending, .. } = &mut *state;
         let Some(table) = tables.get_mut(&(view.database, relation)) else {
             return Ok(Changed::Done(0));
         };
@@ -619,6 +668,7 @@ impl Heap {
         let mut kept = kept.iter().copied();
         let mut used = Vec::new();
         let mut deleted = Vec::with_capacity(found.len());
+        let mut partial = Vec::new();
         for (old, values) in found {
             let next =
                 match values.map(|v| table.add(kept.next(), (view.xid, view.command), v, derive)) {
@@ -640,7 +690,8 @@ impl Heap {
                 continue;
             }
             used.push(next);
-            match table.check_keys(&places, &used, (view.xid, running), derive) {
+            let checked = (view.xid, &*running);
+            match table.check_keys((&places, unique), &used, checked, derive, &mut partial) {
                 Ok(None) => {}
                 result => {
                     table.undo(&used, &deleted);
@@ -648,6 +699,7 @@ impl Heap {
                 }
             }
         }
+        pending.extend(rechecks(view, relation, unique, partial));
         *applied = indexes;
         Ok(Changed::Done(count))
     }
@@ -716,6 +768,7 @@ impl Heap {
         state.running.remove(&xid);
         state.owners.remove(&xid);
         state.waits.remove(&xid);
+        state.rechecks.retain(|recheck| recheck.xid != xid);
     }
 
     /// `RecordTransactionAbort`: the rows that the transaction inserted go, and the rows that it deleted stay.
@@ -732,11 +785,13 @@ impl Heap {
         state.running.remove(&xid);
         state.owners.remove(&xid);
         state.waits.remove(&xid);
+        state.rechecks.retain(|recheck| recheck.xid != xid);
     }
 
     /// `AbortSubTransaction` for the rows: the versions that the commands of `xid` from `command` on inserted go, and the versions that they deleted stay. A transaction has no transaction IDs for its subtransactions, so the command of each change tells the changes of the subtransaction from the changes before it.
     pub(crate) fn rollback_to(&self, xid: u32, command: u32) {
         let mut state = self.state();
+        state.rechecks.retain(|recheck| recheck.xid != xid || recheck.command < command);
         for table in state.tables.values_mut() {
             table.versions.retain(|version| version.xmin != xid || version.cmin < command);
             let deleted = |version: &&mut Version| version.xmax == xid && version.cmax >= command;
@@ -746,6 +801,42 @@ impl Heap {
                 version.next = 0;
             }
         }
+    }
+
+    /// The rechecks of the transaction `xid` from the command `command` on, in the order of the writes, which leave the heap.
+    pub(crate) fn take_rechecks(&self, xid: u32, command: u32) -> Vec<Recheck> {
+        let mut state = self.state();
+        let (taken, kept) = std::mem::take(&mut state.rechecks)
+            .into_iter()
+            .partition(|recheck| recheck.xid == xid && recheck.command >= command);
+        state.rechecks = kept;
+        taken
+    }
+
+    /// `unique_key_recheck` for the transaction `xid`: the key of the version of `recheck` in its index, checked again with `UNIQUE_CHECK_EXISTING`. A version that went needs no check. The result is the first conflict, as [`Heap::insert`] gives it: a live version with the same key, or a transaction in progress to wait for.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the equality of a key.
+    pub(crate) fn recheck(
+        &self,
+        xid: u32,
+        recheck: &Recheck,
+        derive: Derive<'_>,
+    ) -> Result<Option<Changed>> {
+        let mut state = self.state();
+        let State { tables, running, .. } = &mut *state;
+        let Some(table) = tables.get_mut(&(recheck.database, recheck.table)) else {
+            return Ok(None);
+        };
+        let unique = [Unique { deferrable: None, ..recheck.unique.clone() }];
+        let places = table.key_maps(&unique, derive)?;
+        let live = table.find(recheck.tid).map(|at| dirty(&table.versions[at], xid, running));
+        if live.is_none_or(|seen| seen == Seen::Dead) {
+            return Ok(None);
+        }
+        let checked = (xid, &*running);
+        table.check_keys((&places, &unique), &[recheck.tid], checked, derive, &mut Vec::new())
     }
 
     /// Removes the rows of the tables of a database that `keep` does not keep, after a commit drops the tables.
@@ -943,6 +1034,7 @@ mod tests {
             shown: "a".to_string(),
             nulls_not_distinct: false,
             derived: None,
+            deferrable: None,
         };
         let unique = std::slice::from_ref(&key);
         let row = |a: i32| vec![Value::Int4(a)];

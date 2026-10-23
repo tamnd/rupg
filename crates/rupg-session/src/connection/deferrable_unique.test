@@ -1,0 +1,280 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE d (a int UNIQUE DEFERRABLE, b text);
+CREATE TABLE
+> INSERT INTO d VALUES (1, 'x'), (2, 'y'), (3, 'z');
+INSERT 0 3
+> UPDATE d SET a = a + 1;
+UPDATE 3
+> SELECT * FROM d ORDER BY a;
+fields a@d.1:23:4:-1,b@d.2:25:-1:-1
+row 2,x
+row 3,y
+row 4,z
+SELECT 3
+> INSERT INTO d VALUES (2, 'dup');
+ERROR 23505 duplicate key value violates unique constraint "d_a_key"
+DETAIL Key (a)=(2) already exists.
+> UPDATE d SET a = 3 WHERE a = 4;
+ERROR 23505 duplicate key value violates unique constraint "d_a_key"
+DETAIL Key (a)=(3) already exists.
+> BEGIN;
+BEGIN
+> SET CONSTRAINTS d_a_key DEFERRED;
+SET CONSTRAINTS
+> INSERT INTO d VALUES (2, 'dup');
+INSERT 0 1
+> SELECT count(*) FROM d WHERE a = 2;
+fields count:20:8:-1
+row 2
+SELECT 1
+> DELETE FROM d WHERE b = 'x';
+DELETE 1
+> COMMIT;
+COMMIT
+> SELECT * FROM d ORDER BY a;
+fields a@d.1:23:4:-1,b@d.2:25:-1:-1
+row 2,dup
+row 3,y
+row 4,z
+SELECT 3
+> BEGIN;
+BEGIN
+> SET CONSTRAINTS ALL DEFERRED;
+SET CONSTRAINTS
+> INSERT INTO d VALUES (3, 'dup');
+INSERT 0 1
+> SELECT count(*) FROM d WHERE a = 3;
+fields count:20:8:-1
+row 2
+SELECT 1
+> COMMIT;
+ERROR 23505 duplicate key value violates unique constraint "d_a_key"
+DETAIL Key (a)=(3) already exists.
+> SELECT * FROM d ORDER BY a;
+fields a@d.1:23:4:-1,b@d.2:25:-1:-1
+row 2,dup
+row 3,y
+row 4,z
+SELECT 3
+> INSERT INTO d VALUES (NULL, 'n'), (NULL, 'n2');
+INSERT 0 2
+> CREATE TABLE e (id int PRIMARY KEY DEFERRABLE INITIALLY DEFERRED, v int);
+CREATE TABLE
+> BEGIN;
+BEGIN
+> INSERT INTO e VALUES (1, 1), (1, 2);
+INSERT 0 2
+> SELECT * FROM e ORDER BY v;
+fields id@e.1:23:4:-1,v@e.2:23:4:-1
+row 1,1
+row 1,2
+SELECT 2
+> UPDATE e SET id = 2 WHERE v = 2;
+UPDATE 1
+> COMMIT;
+COMMIT
+> SELECT * FROM e ORDER BY id;
+fields id@e.1:23:4:-1,v@e.2:23:4:-1
+row 1,1
+row 2,2
+SELECT 2
+> BEGIN;
+BEGIN
+> INSERT INTO e VALUES (1, 3);
+INSERT 0 1
+> SET CONSTRAINTS e_pkey IMMEDIATE;
+ERROR 23505 duplicate key value violates unique constraint "e_pkey"
+DETAIL Key (id)=(1) already exists.
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> INSERT INTO e VALUES (3, 4);
+INSERT 0 1
+> SAVEPOINT s;
+SAVEPOINT
+> INSERT INTO e VALUES (5, 5), (5, 6);
+INSERT 0 2
+> ROLLBACK TO s;
+ROLLBACK
+> UPDATE e SET id = 4 WHERE v = 4;
+UPDATE 1
+> COMMIT;
+COMMIT
+> SELECT * FROM e ORDER BY id;
+fields id@e.1:23:4:-1,v@e.2:23:4:-1
+row 1,1
+row 2,2
+row 4,4
+SELECT 3
+> BEGIN;
+BEGIN
+> INSERT INTO e VALUES (1, 7);
+INSERT 0 1
+> COMMIT;
+ERROR 23505 duplicate key value violates unique constraint "e_pkey"
+DETAIL Key (id)=(1) already exists.
+> INSERT INTO e VALUES (9, 9) ON CONFLICT DO NOTHING;
+ERROR 55000 ON CONFLICT does not support deferrable unique constraints/exclusion constraints as arbiters
+> INSERT INTO e VALUES (9, 9) ON CONFLICT (id) DO NOTHING;
+ERROR 55000 ON CONFLICT does not support deferrable unique constraints/exclusion constraints as arbiters
+> INSERT INTO e SELECT 9, 9 WHERE false ON CONFLICT (id) DO NOTHING;
+INSERT 0 0
+> CREATE TABLE f (a int, b int, UNIQUE (a) DEFERRABLE, UNIQUE (b));
+CREATE TABLE
+> INSERT INTO f VALUES (1, 1), (2, 2);
+INSERT 0 2
+> INSERT INTO f VALUES (1, 3) ON CONFLICT (b) DO NOTHING;
+ERROR 23505 duplicate key value violates unique constraint "f_a_key"
+DETAIL Key (a)=(1) already exists.
+> INSERT INTO f VALUES (3, 2) ON CONFLICT (b) DO UPDATE SET a = 1;
+ERROR 23505 duplicate key value violates unique constraint "f_a_key"
+DETAIL Key (a)=(1) already exists.
+> INSERT INTO f VALUES (3, 2) ON CONFLICT (b) DO UPDATE SET a = 5;
+INSERT 0 1
+> SELECT * FROM f ORDER BY a;
+fields a@f.1:23:4:-1,b@f.2:23:4:-1
+row 1,1
+row 5,2
+SELECT 2
+> SELECT tgname ~ '^Unique_ConstraintTrigger_[0-9]+$' AS name, tgfoid::regproc, tgtype, tgenabled, tgisinternal, tgconstrrelid, tgconstrindid::regclass, tgconstraint = (SELECT oid FROM pg_constraint WHERE conname = 'd_a_key') AS con, tgdeferrable, tginitdeferred, tgnargs FROM pg_trigger WHERE tgrelid = 'd'::regclass;
+fields name:16:1:-1,tgfoid:24:4:-1,tgtype@pg_trigger.6:21:2:-1,tgenabled@pg_trigger.7:18:1:-1,tgisinternal@pg_trigger.8:16:1:-1,tgconstrrelid@pg_trigger.9:26:4:-1,tgconstrindid:2205:4:-1,con:16:1:-1,tgdeferrable@pg_trigger.12:16:1:-1,tginitdeferred@pg_trigger.13:16:1:-1,tgnargs@pg_trigger.14:21:2:-1
+row t,unique_key_recheck,21,O,t,0,d_a_key,t,t,f,0
+SELECT 1
+> SELECT tgname ~ '^PK_ConstraintTrigger_[0-9]+$' AS name, tginitdeferred FROM pg_trigger WHERE tgrelid = 'e'::regclass;
+fields name:16:1:-1,tginitdeferred@pg_trigger.13:16:1:-1
+row t,t
+SELECT 1
+> SELECT relname, relhastriggers FROM pg_class WHERE relname IN ('d', 'e', 'f') ORDER BY relname;
+fields relname@pg_class.2:19:64:-1,relhastriggers@pg_class.22:16:1:-1
+row d,t
+row e,t
+row f,t
+SELECT 3
+> SELECT classid::regclass, refclassid::regclass, deptype FROM pg_depend WHERE objid = (SELECT oid FROM pg_trigger WHERE tgrelid = 'd'::regclass);
+fields classid:2205:4:-1,refclassid:2205:4:-1,deptype@pg_depend.7:18:1:-1
+row pg_trigger,pg_constraint,i
+SELECT 1
+> CREATE TABLE g (a int, b int);
+CREATE TABLE
+> INSERT INTO g VALUES (1, 1), (1, 2);
+INSERT 0 2
+> ALTER TABLE g ADD CONSTRAINT g_a UNIQUE (a) DEFERRABLE INITIALLY DEFERRED;
+ERROR 23505 could not create unique index "g_a"
+DETAIL Key (a)=(1) is duplicated.
+> DELETE FROM g WHERE b = 2;
+DELETE 1
+> ALTER TABLE g ADD CONSTRAINT g_a UNIQUE (a) DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE
+> BEGIN;
+BEGIN
+> INSERT INTO g VALUES (1, 3);
+INSERT 0 1
+> COMMIT;
+ERROR 23505 duplicate key value violates unique constraint "g_a"
+DETAIL Key (a)=(1) already exists.
+> SELECT count(*) FROM pg_trigger WHERE tgrelid = 'g'::regclass;
+fields count:20:8:-1
+row 1
+SELECT 1
+> ALTER TABLE g DROP CONSTRAINT g_a;
+ALTER TABLE
+> SELECT count(*) FROM pg_trigger WHERE tgrelid = 'g'::regclass;
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE TABLE h (a int UNIQUE DEFERRABLE INITIALLY DEFERRED, b int);
+CREATE TABLE
+> BEGIN;
+BEGIN
+> INSERT INTO h VALUES (1, 1), (2, 2), (2, 3), (1, 4);
+INSERT 0 4
+> COMMIT;
+ERROR 23505 duplicate key value violates unique constraint "h_a_key"
+DETAIL Key (a)=(2) already exists.
+> BEGIN;
+BEGIN
+> INSERT INTO h VALUES (1, 1), (2, 2);
+INSERT 0 2
+> UPDATE h SET a = 3 - a;
+UPDATE 2
+> SET CONSTRAINTS ALL IMMEDIATE;
+SET CONSTRAINTS
+> UPDATE h SET a = 1;
+ERROR 23505 duplicate key value violates unique constraint "h_a_key"
+DETAIL Key (a)=(1) already exists.
+> COMMIT;
+ROLLBACK
+> SELECT * FROM h ORDER BY a;
+fields a@h.1:23:4:-1,b@h.2:23:4:-1
+SELECT 0
+> CREATE TABLE k (a int, CONSTRAINT k_a UNIQUE (a) DEFERRABLE);
+CREATE TABLE
+> CREATE UNIQUE INDEX k_plain ON k (a);
+CREATE INDEX
+> INSERT INTO k VALUES (1);
+INSERT 0 1
+> INSERT INTO k VALUES (1);
+ERROR 23505 duplicate key value violates unique constraint "k_plain"
+DETAIL Key (a)=(1) already exists.
+> CREATE TABLE p (a int, b int, UNIQUE (a) DEFERRABLE) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE p1 PARTITION OF p FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> CREATE TABLE p2 (a int, b int);
+CREATE TABLE
+> ALTER TABLE p ATTACH PARTITION p2 FOR VALUES FROM (10) TO (20);
+ALTER TABLE
+> SELECT c.relname, t.tgname ~ '^Unique_ConstraintTrigger_[0-9]+$' AS name, t.tgparentid <> 0 AS child, t.tgconstrindid::regclass, t.tginitdeferred FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE c.relname LIKE 'p%' ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,name:16:1:-1,child:16:1:-1,tgconstrindid:2205:4:-1,tginitdeferred@pg_trigger.13:16:1:-1
+row p,t,f,p_a_key,f
+row p1,t,f,p1_a_key,f
+row p2,t,f,p2_a_key,f
+SELECT 3
+> SELECT conname, conrelid::regclass, conparentid <> 0 AS child, condeferrable FROM pg_constraint WHERE conrelid IN ('p'::regclass, 'p1'::regclass, 'p2'::regclass) ORDER BY 2;
+fields conname@pg_constraint.2:19:64:-1,conrelid:2205:4:-1,child:16:1:-1,condeferrable@pg_constraint.5:16:1:-1
+row p_a_key,p,f,t
+row p1_a_key,p1,t,t
+row p2_a_key,p2,t,t
+SELECT 3
+> INSERT INTO p VALUES (1, 1), (11, 1);
+INSERT 0 2
+> INSERT INTO p VALUES (1, 2);
+ERROR 23505 duplicate key value violates unique constraint "p1_a_key"
+DETAIL Key (a)=(1) already exists.
+> BEGIN;
+BEGIN
+> SET CONSTRAINTS ALL DEFERRED;
+SET CONSTRAINTS
+> INSERT INTO p VALUES (11, 2);
+INSERT 0 1
+> COMMIT;
+ERROR 23505 duplicate key value violates unique constraint "p2_a_key"
+DETAIL Key (a)=(11) already exists.
+> UPDATE p SET a = a + 1;
+UPDATE 2
+> SELECT * FROM p ORDER BY a;
+fields a@p.1:23:4:-1,b@p.2:23:4:-1
+row 2,1
+row 12,1
+SELECT 2
+> CREATE TABLE q (a int);
+CREATE TABLE
+> INSERT INTO q VALUES (1), (2);
+INSERT 0 2
+> ALTER TABLE q ADD PRIMARY KEY (a) DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE
+> SELECT tgname ~ '^PK_ConstraintTrigger_[0-9]+$', tgconstraint = (SELECT oid FROM pg_constraint WHERE conname = 'q_pkey') FROM pg_trigger WHERE tgrelid = 'q'::regclass;
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,t
+SELECT 1
+> SELECT (SELECT oid::int8 FROM pg_trigger WHERE tgrelid = 'q'::regclass) - (SELECT oid::int8 FROM pg_constraint WHERE conname = 'q_pkey') AS gap;
+fields gap:20:8:-1
+row 1
+SELECT 1
+> SELECT (SELECT oid::int8 FROM pg_constraint WHERE conname = 'q_pkey') - 'q_pkey'::regclass::oid::int8 AS gap2;
+fields gap2:20:8:-1
+row 1
+SELECT 1

@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- Deferrable unique constraints and primary keys. A new row with the key of another row is checked again at the end of the statement, or at the commit when the constraint is deferred, as `unique_key_recheck` does it. The constraint gets its internal trigger, `ON CONFLICT` with a deferrable arbiter gives the error of PostgreSQL, and a rollback to a savepoint removes the checks of the subtransaction (#609).
+
 ## 0.1.72 (2026-10-23)
 
 This release checks unique indexes on expressions and partial unique indexes in the writes, uses indexes on expressions and partial indexes in `EXPLAIN`, plans the join of `MERGE` with the target table on the left side, takes out left joins that read no column of the inner side, turns `IN` on a correlated subquery into a semi join, and shows the `Output` of `RETURNING` and `MERGE` as PostgreSQL does.

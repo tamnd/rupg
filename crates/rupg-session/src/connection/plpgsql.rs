@@ -144,6 +144,7 @@ impl<'a> PlSpi<'a> {
         let applied = self.conn.apply_write(plan, params, &view, rows);
         self.forward_triggers(said);
         let Applied { count, written, view, batches, .. } = applied?;
+        let command = view.command;
         let rows = if info.returning.is_some() {
             // A subquery of `RETURNING` reads with the snapshot of the statement.
             let reader = self.conn.reader().with_view(view);
@@ -154,6 +155,7 @@ impl<'a> PlSpi<'a> {
             Vec::new()
         };
         let fired = if batches.is_empty() { Ok(()) } else { self.conn.fire(batches) };
+        let fired = fired.and_then(|()| self.conn.recheck_unique(command));
         let fired = fired.and_then(|()| self.conn.fire_events(mark));
         self.forward_triggers(said);
         fired?;

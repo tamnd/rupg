@@ -161,6 +161,17 @@ pub struct Unique {
     pub nulls_not_distinct: bool,
     /// The expressions and the predicate of an index with an expression or a predicate, or `None` for an index whose key is columns of the table.
     pub derived: Option<Box<Derived>>,
+    /// The constraint of an index that is not `indimmediate`, or `None` for an index that checks each key at once.
+    pub deferrable: Option<Deferrable>,
+}
+
+/// A `DEFERRABLE` unique constraint. A write does not fail on a duplicate key of its index: `unique_key_recheck` checks the key again after the statement, or at the commit when the constraint is deferred.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Deferrable {
+    /// The OID of the constraint, for the modes of `SET CONSTRAINTS`.
+    pub constraint: u32,
+    /// `condeferred`: the constraint is `INITIALLY DEFERRED`.
+    pub deferred: bool,
 }
 
 /// The key of a unique index with an expression or a predicate, which `FormIndexDatum` computes for each row. A row that does not pass the predicate is not in the index, as `ExecInsertIndexTuples` checks it with `ExecQual`. [`Unique::columns`] has the places of the key columns in the values of the expressions.
@@ -785,7 +796,7 @@ impl Analyzer<'_> {
         Ok(list)
     }
 
-    /// The unique indexes of a table in the order of their OIDs. A deferrable unique constraint is not supported yet. The index of a partitioned table has no storage: the indexes of the partitions check the rows, and it is an arbiter of `ON CONFLICT`.
+    /// The unique indexes of a table in the order of their OIDs. The index of a partitioned table has no storage: the indexes of the partitions check the rows, and it is an arbiter of `ON CONFLICT`.
     pub(crate) fn unique_keys(&self, table: u32, columns: &[Column]) -> Result<Vec<Unique>> {
         let Some(catalog) = self.env.catalog() else {
             return Ok(Vec::new());
@@ -803,9 +814,12 @@ impl Analyzer<'_> {
         indexes.sort_by_key(|(rel, _)| rel.oid);
         let mut list = Vec::with_capacity(indexes.len());
         for (rel, info) in indexes {
-            if !info.immediate {
-                return Err(not_yet("a write to a table with a deferrable unique constraint"));
-            }
+            let deferrable = if info.immediate {
+                None
+            } else {
+                let constraint = catalog.constraints_of(table).find(|c| c.index == rel.oid);
+                constraint.map(|c| Deferrable { constraint: c.oid, deferred: c.deferred })
+            };
             let count = usize::try_from(info.key_count).unwrap_or_default();
             let mut key = Unique {
                 oid: rel.oid,
@@ -815,6 +829,7 @@ impl Analyzer<'_> {
                 shown: String::new(),
                 nulls_not_distinct: info.nulls_not_distinct,
                 derived: None,
+                deferrable,
             };
             if info.exprs.is_some() || info.predicate.is_some() {
                 let mut exprs = match &info.exprs {

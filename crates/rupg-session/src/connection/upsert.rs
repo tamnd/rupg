@@ -2,7 +2,7 @@
 //!
 //! The query of the statement gives all the new rows before the first row goes in, so the checks of the constraints of the new rows come before the writes, and a function of the query does not see the rows that the statement wrote. The triggers `BEFORE ... FOR EACH ROW` fire for each row in turn, as `ExecInsert` fires them: the triggers `INSERT` before the row goes in, and the triggers `UPDATE` before `DO UPDATE` changes the row of the table.
 
-use rupg_analyze::{Derived, OnConflict, Write};
+use rupg_analyze::{Derived, OnConflict, Unique, Write};
 use rupg_catalog::{Catalog, TRIGGER_INSERT, TRIGGER_UPDATE};
 use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
@@ -48,6 +48,25 @@ impl Upsert {
 }
 
 impl Connection {
+    /// `ExecCheckIndexConstraints`: an arbiter of the table `table` must not be a deferrable unique constraint. `arbiters` has the places of the arbiters in the unique keys `unique`.
+    fn deferrable_arbiter(
+        &self,
+        table: u32,
+        unique: &[Unique],
+        arbiters: &[usize],
+    ) -> Result<(), Error> {
+        let Some(key) =
+            arbiters.iter().filter_map(|&at| unique.get(at)).find(|key| key.deferrable.is_some())
+        else {
+            return Ok(());
+        };
+        let error = Error::new(
+            SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
+            "ON CONFLICT does not support deferrable unique constraints/exclusion constraints as arbiters",
+        );
+        Err(rupg_func::with_table_constraint(error, table, &key.name, &self.reader()))
+    }
+
     /// Writes the rows of `INSERT ... ON CONFLICT` one by one, in the command of the view. A row that meets a version that a transaction in progress made or deleted waits for the end of that transaction, and then the row tries again.
     ///
     /// # Errors
@@ -75,6 +94,7 @@ impl Connection {
             } else {
                 row
             };
+            self.deferrable_arbiter(info.table, &info.unique, &conflict.arbiters)?;
             let mut kept = None;
             loop {
                 let result = heap.speculative(
@@ -175,6 +195,7 @@ impl Connection {
                 arbiters.push(leaf_arbiters(&catalog, (info, conflict), routing.write(at)?)?);
             }
             let oid = routing.oid(at);
+            self.deferrable_arbiter(oid, &routing.write(at)?.unique, &arbiters[at])?;
             let mut kept = None;
             loop {
                 let leaf = routing.write(at)?;

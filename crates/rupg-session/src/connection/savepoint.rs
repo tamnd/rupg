@@ -15,6 +15,7 @@ use super::trigger::Event;
 use super::{Connection, Done, Pending};
 use crate::advisory::Tag;
 use crate::guc::Savepoint;
+use crate::heap::Recheck;
 use crate::utility;
 
 /// The state of the transaction at a savepoint.
@@ -27,6 +28,7 @@ pub(super) struct Mark {
     settings: Savepoint,
     deferred: Vec<Batch>,
     deferred_events: Vec<Event>,
+    deferred_unique: Vec<Recheck>,
     modes: Modes,
     /// The counts of the advisory locks of the transaction level.
     locks: Vec<(Tag, bool, u32)>,
@@ -79,6 +81,7 @@ impl Connection {
             settings: self.settings.borrow().savepoint(),
             deferred: self.deferred.borrow().clone(),
             deferred_events: self.deferred_events.borrow().clone(),
+            deferred_unique: self.deferred_unique.borrow().clone(),
             modes: self.modes.borrow().clone(),
             locks: self.store.locks().xact_holds(self.pid),
             writes: self.activity.writes(),
@@ -120,6 +123,7 @@ impl Connection {
         self.settings.borrow_mut().rollback_to(&mark.settings);
         self.deferred.borrow_mut().clone_from(&mark.deferred);
         self.deferred_events.borrow_mut().clone_from(&mark.deferred_events);
+        self.deferred_unique.borrow_mut().clone_from(&mark.deferred_unique);
         self.modes.borrow_mut().clone_from(&mark.modes);
         self.store.locks().release_since(self.pid, &mark.locks);
         self.activity.roll_back_writes(&mark.writes);

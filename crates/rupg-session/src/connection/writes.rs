@@ -79,6 +79,7 @@ impl Connection {
         if !batches.is_empty() {
             self.fire(batches)?;
         }
+        self.recheck_unique(view.command)?;
         self.fire_events(0)
     }
 
