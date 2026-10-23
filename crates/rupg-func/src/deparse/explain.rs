@@ -82,9 +82,18 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
             })
             .collect();
         removed_scans(plan, &mut spaces);
-        // The `Output` of the `ModifyTable` of an `INSERT` with `RETURNING` reads the columns of the target table.
+        // The `Output` of the `ModifyTable` of an `INSERT` with `RETURNING` reads the columns of the target table, and a column of `old` or `new` reads the columns of the table with the name of the row.
         for (s, space) in spaces.iter_mut().enumerate() {
-            let returning = plan.scopes[s].target.and_then(|w| w.returning.as_deref());
+            let scope = &plan.scopes[s];
+            let write = scope.target.or(scope.query.write.as_ref());
+            let returning = scope.target.and_then(|w| w.returning.as_deref());
+            if let Some(returning) = write.and_then(|w| w.returning.as_deref())
+                && let (Some(shown), Some(table)) =
+                    (returning.shown.as_deref(), returning.relations.first())
+            {
+                let columns = table.columns.iter().map(|c| c.name.clone()).collect();
+                space.returning = Some((shown.old.clone(), shown.new.clone(), columns));
+            }
             if let (Some(name), Some(returning)) = (&targets[s], returning)
                 && let Some(table) = returning.relations.first()
             {

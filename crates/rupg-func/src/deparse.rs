@@ -20,7 +20,9 @@ use rupg_analyze::{
     JsonFormatKind, JsonItemType, JsonTable, JsonTablePlan, JsonTableScan, JsonWrapper, RowCompare,
     SortGroup, SqlValue, SubLink, SubLinkKind, Var, WindowClause, WindowFunc, XmlExpr, XmlOp,
 };
-use rupg_analyze::{default_opclass, node, sort_operators};
+use rupg_analyze::{
+    MERGE_ACTION, RETURNING_NEW, RETURNING_OLD, default_opclass, node, sort_operators,
+};
 use rupg_catalog::{ConKind, Constraint, IndexInfo, PartStrategy, PartitionKey, RelKind, Relation};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
@@ -70,6 +72,8 @@ struct Namespace {
     removed: Vec<(usize, Rc<Removed>)>,
     /// The name of the target table of an `INSERT` and the names of its columns, which a `Var` of [`TARGET`] reads, as the entry of the target table in the range table.
     target: Option<(String, Vec<String>)>,
+    /// The names of `old` and `new` of `RETURNING` and the names of the columns of the table, which a `Var` of [`RETURNING_OLD`] or [`RETURNING_NEW`] reads.
+    returning: Option<(String, String, Vec<String>)>,
 }
 
 /// The target list of the plan of a subquery whose `Subquery Scan` the plan does not keep, as `trivial_subqueryscan` takes the scan out of the plan.
@@ -164,6 +168,7 @@ impl<'a> Deparser<'a> {
             inside: Vec::new(),
             removed: Vec::new(),
             target: None,
+            returning: None,
         });
         d
     }
@@ -225,8 +230,17 @@ impl<'a> Deparser<'a> {
     fn variable(&mut self, var: &Var, in_order_by: bool) -> Result<String> {
         let bogus = || Error::internal(format!("bogus varlevelsup: {}", var.levels_up));
         let depth = self.namespaces.len().checked_sub(var.levels_up + 1).ok_or_else(bogus)?;
+        if var.relation == MERGE_ACTION {
+            self.buf.push_str("MERGE_ACTION()");
+            return Ok("merge_action".to_string());
+        }
         let space = &self.namespaces[depth];
-        let target = space.target.as_ref().filter(|_| var.relation == TARGET);
+        let target = match (&space.target, &space.returning, var.relation) {
+            (Some((name, columns)), _, TARGET) => Some((name, columns)),
+            (_, Some((old, _, columns)), RETURNING_OLD) => Some((old, columns)),
+            (_, Some((_, new, columns)), RETURNING_NEW) => Some((new, columns)),
+            _ => None,
+        };
         let refname = match target {
             Some((name, _)) => name.clone(),
             None => space.names.get(var.relation).cloned().unwrap_or_default(),
@@ -260,7 +274,8 @@ impl<'a> Deparser<'a> {
         }
         let mut prefix = self.prefix
             || (self.outer_prefix && var.levels_up > 0)
-            || self.own.is_some_and(|o| var.levels_up == 0 && var.relation != o);
+            || self.own.is_some_and(|o| var.levels_up == 0 && var.relation != o)
+            || [RETURNING_OLD, RETURNING_NEW].contains(&var.relation);
         if in_order_by && !self.in_group_by && !prefix {
             prefix = self.outputs.iter().any(|(name, v)| *name == attname && *v != Some(*var));
         }
@@ -276,7 +291,12 @@ impl<'a> Deparser<'a> {
     fn whole_row(&mut self, var: &Var, e: &Expr, top: bool) -> Result<()> {
         let bogus = || Error::internal(format!("bogus varlevelsup: {}", var.levels_up));
         let depth = self.namespaces.len().checked_sub(var.levels_up + 1).ok_or_else(bogus)?;
-        let refname = self.namespaces[depth].names.get(var.relation).cloned().unwrap_or_default();
+        let space = &self.namespaces[depth];
+        let refname = match (&space.returning, var.relation) {
+            (Some((old, ..)), RETURNING_OLD) => old.clone(),
+            (Some((_, new, _)), RETURNING_NEW) => new.clone(),
+            _ => space.names.get(var.relation).cloned().unwrap_or_default(),
+        };
         if !refname.is_empty() {
             self.buf.push_str(&quote_identifier(&refname));
             self.buf.push('.');
