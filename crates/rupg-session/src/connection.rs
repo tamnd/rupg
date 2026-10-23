@@ -5561,6 +5561,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_grouping_sets.test")));
     }
 
+    /// A `btree` index of a table with rows has its root page after the metapage, so a nested loop over a scan of the index costs the pages that `index_pages_fetched` reads from the two pages, as `genericcostestimate` costs them for the scans of the loop. The index of an empty table has only the metapage. `connection/plan_nested_loop_index_pages.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_nested_loop_index_pages() {
+        big_stack(|| script(include_str!("connection/plan_nested_loop_index_pages.test")));
+    }
+
     /// A query that is a `UNION ALL` of `SELECT`s with the types of its columns and has `ORDER BY` becomes an append relation, as `flatten_simple_union_all` makes it, so the planner can plan a `Merge Append` of the plans of the `SELECT`s in the order. A `SELECT` with its own `WHERE` is not a member of the append relation, as `is_safe_append_member`, and its plan gets a sort. `connection/plan_union_all_order.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_union_all_order() {
