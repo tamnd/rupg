@@ -6,7 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- `EXPLAIN` takes out a left join that gives one row at most for each outer row when the query reads no column of the inner side, as `remove_useless_joins` of PostgreSQL 19 does. A nested loop gives the columns of a join clause that its parameterized inner scan tests, so the widths and the `Output` of the two sides match PostgreSQL. (#NNN)
+- `EXPLAIN` takes out a left join that gives one row at most for each outer row when the query reads no column of the inner side, as `remove_useless_joins` of PostgreSQL 19 does. A nested loop gives the columns of a join clause that its parameterized inner scan tests, so the widths and the `Output` of the two sides match PostgreSQL. (#603)
 - `EXPLAIN` turns `IN` on a correlated subquery into a semi join and merges the subquery, as PostgreSQL 19 does, and it merges a simple `LATERAL` subquery of `FROM`. The scans below a hash join or a merge join give the columns in the order of the conditions in the join tree. (#602)
 - `EXPLAIN` of an `UPDATE`, a `DELETE`, a `MERGE` or an `INSERT` merges the simple subqueries and turns `EXISTS`, `NOT EXISTS` and `IN` into joins, as PostgreSQL does, also for a table with check constraints. The one-row `VALUES` of an `INSERT` into such a table shows its values in place of nulls. (#601)
 - `EXPLAIN VERBOSE` of an `INSERT`, an `UPDATE`, a `DELETE` and a `MERGE` with `RETURNING` now shows the list of `RETURNING` as the `Output` of the `ModifyTable`, as PostgreSQL does. The node below now gives the columns of the other relations that `RETURNING` reads, after the row marks. (#600)
