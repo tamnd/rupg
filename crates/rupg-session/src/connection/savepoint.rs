@@ -13,7 +13,7 @@ use super::deferred::Modes;
 use super::foreign::Batch;
 use super::trigger::Event;
 use super::{Connection, Done, Pending};
-use crate::advisory::Tag;
+use crate::advisory::{Mode, Tag};
 use crate::guc::Savepoint;
 use crate::heap::Recheck;
 use crate::utility;
@@ -30,8 +30,8 @@ pub(super) struct Mark {
     deferred_events: Vec<Event>,
     deferred_unique: Vec<Recheck>,
     modes: Modes,
-    /// The counts of the advisory locks of the transaction level.
-    locks: Vec<(Tag, bool, u32)>,
+    /// The counts of the locks of the transaction level.
+    locks: Vec<(Tag, Mode, u32)>,
     /// The rows that the transaction wrote in each relation, for the statistics.
     writes: BTreeMap<u32, Pending>,
 }

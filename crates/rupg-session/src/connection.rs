@@ -1322,13 +1322,15 @@ impl Connection {
         Ok(())
     }
 
-    /// `LOCK TABLE`: `RequireTransactionBlock`, then the checks of [`rupg_analyze::lock_table`] with the privileges of `LockTableAclCheck`. The statement takes no lock.
+    /// `LOCK TABLE`: `RequireTransactionBlock`, then the checks of [`rupg_analyze::lock_table`] with the privileges of `LockTableAclCheck`, and the locks of the relations in the mode of the statement. The transaction holds the locks until it ends.
     fn lock(&self, stmt: &LockStmt) -> Result<Done, Error> {
         utility::require_block(&self.transaction, "LOCK TABLE")?;
         let reader = self.reader();
+        let mode = u8::try_from(stmt.mode).unwrap_or(8);
         let mut allowed =
             |relid, role| rupg_func::lock_table_allowed(relid, role, stmt.mode, &reader);
-        rupg_analyze::lock_table(stmt, &reader, self.role, &mut allowed)?;
+        let mut take = |relid| reader.lock_relation(relid, mode, !stmt.nowait);
+        rupg_analyze::lock_table(stmt, &reader, self.role, &mut allowed, &mut take)?;
         Ok(Done::Tag(CommandTag::LockTable))
     }
 
@@ -4926,26 +4928,78 @@ mod tests {
         });
     }
 
-    /// A lock mode stronger than `ROW EXCLUSIVE` gives `0A000`, because rupg takes no lock on a relation. The check comes after the check of the transaction block and before the names.
+    /// `LOCK TABLE` in two sessions with `NOWAIT`: the modes that conflict and the modes that do not, the name with its schema in the error, the children of a table with and without `ONLY`, the tables that a view reads, and the release at the end of the transaction and at the rollback to a savepoint. `connection/lock_conflicts.test` is the output of PostgreSQL 19 for the same script on two connections to a new database.
     #[test]
-    fn lock_table_strong_modes() {
-        big_stack(|| {
-            let (mut c, _) = connect();
-            assert_eq!(
-                script_lines(&mut c, "> LOCK pg_class"),
-                ["ERROR 25P01 LOCK TABLE can only be used in transaction blocks"]
-            );
-            assert_eq!(script_lines(&mut c, "> BEGIN"), ["BEGIN"]);
-            for mode in ["SHARE UPDATE EXCLUSIVE", "SHARE", "SHARE ROW EXCLUSIVE", "EXCLUSIVE"] {
-                let sql = format!("> LOCK pg_class IN {mode} MODE");
-                let want = format!("ERROR 0A000 LOCK TABLE in {mode} mode is not supported yet");
-                assert_eq!(script_lines(&mut c, &sql), [want]);
-                assert_eq!(script_lines(&mut c, "> ROLLBACK"), ["ROLLBACK"]);
-                assert_eq!(script_lines(&mut c, "> BEGIN"), ["BEGIN"]);
+    fn lock_conflicts() {
+        big_stack(|| two_sessions(include_str!("connection/lock_conflicts.test")));
+    }
+
+    /// `LOCK TABLE` in two sessions that wait: a wait with the wait event `relation` that ends at the commit of the other session, a deadlock that the session with the shorter `deadlock_timeout` finds, and the end of `lock_timeout` with the lock in the context.
+    #[test]
+    fn lock_wait() {
+        big_stack(lock_wait_cases);
+    }
+
+    #[allow(clippy::disallowed_methods)] // Test threads, not tasks of the engine.
+    fn lock_wait_cases() {
+        let store = Arc::new(Store::new());
+        let (cmds, cmd) = std::sync::mpsc::channel::<String>();
+        let (outs, out) = std::sync::mpsc::channel();
+        let waiter = Arc::clone(&store);
+        let b = std::thread::Builder::new()
+            .stack_size(8 << 20)
+            .spawn(move || {
+                let (mut b, _) = connect_to(&waiter, 1235);
+                while let Ok(text) = cmd.recv() {
+                    outs.send(send(&mut b, &query(&text))).unwrap();
+                }
+            })
+            .unwrap();
+        let (mut a, _) = connect_to(&store, 1234);
+        let look = query(
+            "SELECT state, wait_event_type, wait_event, query FROM pg_stat_activity WHERE pid = 1235",
+        );
+        let wait_for_b = |a: &mut Connection| {
+            let mut lines = Vec::new();
+            for _ in 0..2000 {
+                lines = send(a, &look);
+                if lines.iter().any(|l| l.contains(",Lock,relation,")) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
             }
-            let want = "ERROR 0A000 LOCK TABLE in ACCESS EXCLUSIVE mode is not supported yet";
-            assert_eq!(script_lines(&mut c, "> LOCK missing"), [want]);
-        });
+            lines.swap_remove(1)
+        };
+        send(&mut a, &query("CREATE TABLE t (a int); CREATE TABLE u (a int)"));
+        send(&mut a, &query("BEGIN; LOCK t IN SHARE UPDATE EXCLUSIVE MODE"));
+        cmds.send("BEGIN; LOCK t IN SHARE UPDATE EXCLUSIVE MODE".into()).unwrap();
+        let want = "row active,Lock,relation,BEGIN; LOCK t IN SHARE UPDATE EXCLUSIVE MODE";
+        assert_eq!(wait_for_b(&mut a), want);
+        send(&mut a, &query("COMMIT"));
+        let lines = out.recv().unwrap();
+        assert_eq!(lines, ["BEGIN", "LOCK TABLE", "ready T"]);
+
+        send(&mut a, &query("BEGIN; LOCK u"));
+        cmds.send("LOCK u IN ACCESS SHARE MODE".into()).unwrap();
+        assert_eq!(wait_for_b(&mut a), "row active,Lock,relation,LOCK u IN ACCESS SHARE MODE");
+        send(&mut a, &query("SET deadlock_timeout = 10"));
+        let lines = send(&mut a, &query("LOCK t IN SHARE MODE"));
+        assert!(lines.iter().any(|l| l == "ERROR 40P01 deadlock detected"), "{lines:?}");
+        assert_eq!(out.recv().unwrap(), ["LOCK TABLE", "ready T"]);
+        send(&mut a, &query("ROLLBACK"));
+        let lines = send(&mut a, &query("SELECT 't'::regclass::oid"));
+        let oid = lines[1].strip_prefix("row ").unwrap().to_owned();
+        send(&mut a, &query("BEGIN; SET LOCAL lock_timeout = 10"));
+        let lines = send(&mut a, &query("LOCK t IN SHARE MODE"));
+        let want = format!(
+            "ERROR 55P03 canceling statement due to lock timeout (waiting for ShareLock on relation {oid} of database "
+        );
+        assert!(lines.iter().any(|l| l.starts_with(&want)), "{lines:?}");
+        send(&mut a, &query("ROLLBACK"));
+        cmds.send("COMMIT".into()).unwrap();
+        assert_eq!(out.recv().unwrap(), ["COMMIT", "ready I"]);
+        drop(cmds);
+        b.join().unwrap();
     }
 
     /// Correlated subqueries that find their rows through an `=` of a column and a column of the outer query: in `EXISTS` and `NOT EXISTS`, in the target list, in `LATERAL`, in a join in the subquery, in a subquery in a subquery, with a null outer value, and with an outer value of another type of the same form. The first statement is the query of `pg_dump` that finds the functions to dump. `connection/correlated_lookups.test` is the output of PostgreSQL 19 for the same script in a new database.

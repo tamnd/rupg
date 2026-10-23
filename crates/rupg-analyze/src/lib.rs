@@ -66,8 +66,8 @@ pub use constraints_set::set_constraints;
 pub use cte::{Cte, CteRef};
 pub use ddl::{
     Allowed, Body, CopyRelation, CopyTarget, Defined, Fill, Message, PartitionCheck,
-    REGRESS_SYMBOLS, RuleTree, SqlBody, Transform, acl_roles, attnums, copy_filter, copy_insert,
-    copy_relation, copy_target, define, find_library, function_body, function_sqlbody,
+    REGRESS_SYMBOLS, RuleTree, SqlBody, Take, Transform, acl_roles, attnums, copy_filter,
+    copy_insert, copy_relation, copy_target, define, find_library, function_body, function_sqlbody,
     is_definition, lock_table, rewrite_insert, rule_tree, trigger_when, vacuum_relations,
 };
 pub use expr::{
