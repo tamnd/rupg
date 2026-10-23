@@ -885,8 +885,23 @@ impl Definer<'_, '_> {
         function: Function,
         defaults: &[Expr],
         support: u32,
-        mut refs: Vec<ObjRef>,
+        refs: Vec<ObjRef>,
     ) -> Result<u32> {
+        let refs = self.function_refs(&function, defaults, support, refs)?;
+        match old {
+            Some(old) => self.catalog.replace_function(old.oid, function, &refs).map(|()| old.oid),
+            None => self.catalog.create_function(function, &refs),
+        }
+    }
+
+    /// The dependencies of `ProcedureCreate` for a function: `refs`, then its support function, its defaults and its types.
+    pub(super) fn function_refs(
+        &self,
+        function: &Function,
+        defaults: &[Expr],
+        support: u32,
+        mut refs: Vec<ObjRef>,
+    ) -> Result<Vec<ObjRef>> {
         if support != 0 {
             refs.push(ObjRef::new(PG_PROC, support));
         }
@@ -909,10 +924,7 @@ impl Definer<'_, '_> {
                 refs.push(found);
             }
         }
-        match old {
-            Some(old) => self.catalog.replace_function(old.oid, function, &refs).map(|()| old.oid),
-            None => self.catalog.create_function(function, &refs),
-        }
+        Ok(refs)
     }
 
     /// `plpgsql_validator`: a function in PL/pgSQL has a body in a string, and the only pseudo-types that it can take are the polymorphic types and `record`. It can also return `void`, `trigger` and `event_trigger`. Then the session compiles the body.
@@ -963,18 +975,27 @@ impl Definer<'_, '_> {
     }
 
     /// The checks of `ProcedureCreate` for `CREATE OR REPLACE FUNCTION` of the function `old`: the owner, the kind, the result type, the row type of the `OUT` parameters, the names of the input arguments and the defaults do not change. New defaults can be added before the old ones.
-    fn check_replace(&self, old: &Function, new: &Function) -> Result<()> {
+    pub(super) fn check_replace(&self, old: &Function, new: &Function) -> Result<()> {
         if !self.is_superuser() && old.owner != self.user {
             return Err(super::comment::not_owner("function", &old.name));
         }
         if old.kind != new.kind {
-            let what = if old.kind == b'p' { "a procedure" } else { "a function" };
+            let what = match old.kind {
+                b'a' => "an aggregate function",
+                b'p' => "a procedure",
+                b'w' => "a window function",
+                _ => "a function",
+            };
             return Err(Error::new(SqlState::WRONG_OBJECT_TYPE, "cannot change routine kind")
                 .with_detail(format!("\"{}\" is {what}.", old.name)));
         }
         let signature = self.describe(ObjRef::new(PG_PROC, old.oid));
         let signature = signature.split_once(' ').map_or(&*signature, |(_, rest)| rest);
-        let drop = if new.kind == b'p' { "DROP PROCEDURE" } else { "DROP FUNCTION" };
+        let drop = match new.kind {
+            b'p' => "DROP PROCEDURE",
+            b'a' => "DROP AGGREGATE",
+            _ => "DROP FUNCTION",
+        };
         let error = |message: String| {
             Error::new(SqlState::INVALID_FUNCTION_DEFINITION, message)
                 .with_hint(format!("Use {drop} {signature} first."))

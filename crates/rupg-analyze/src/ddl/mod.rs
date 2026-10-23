@@ -1,5 +1,6 @@
 //! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE RULE`, `CREATE TRIGGER`, `CREATE DOMAIN`, `CREATE FUNCTION`, `COMMENT`, `DROP`, `ALTER TABLE`, `ALTER SCHEMA ... OWNER TO`, `CREATE TEXT SEARCH`, `ALTER TEXT SEARCH CONFIGURATION`, `CREATE OPERATOR` and `TRUNCATE`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineRule`, `CreateTrigger`, `DefineDomain`, `CreateFunction`, `CommentObject`, `ExecDropStmt`, `AlterTable`, `AlterSchemaOwner`, the functions of `tsearchcmds.c`, `DefineOperator` and `ExecuteTruncate` run them, and they change a [`Catalog`]. `CREATE FUNCTION` makes a function in SQL. [`lock_table`] runs the checks of `LOCK TABLE`, which finds its relations by name as these statements do.
 
+mod aggregate;
 mod alter;
 mod alter_column;
 mod alter_function;
@@ -172,7 +173,7 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::AlterOpFamilyStmt(_)
             | Node::TruncateStmt(_)
             | Node::RefreshMatViewStmt(_)
-    ) || matches!(stmt, Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) || define.kind == ObjectType::OBJECT_OPERATOR)
+    ) || matches!(stmt, Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) || matches!(define.kind, ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_AGGREGATE))
         || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
         || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype) || alter.objtype == ObjectType::OBJECT_TYPE)
         || matches!(stmt, Node::AlterOwnerStmt(alter) if matches!(alter.objectType, ObjectType::OBJECT_SCHEMA | ObjectType::OBJECT_OPERATOR) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
@@ -217,6 +218,7 @@ fn is_drop_kind(kind: ObjectType) -> bool {
             | ObjectType::OBJECT_FUNCTION
             | ObjectType::OBJECT_PROCEDURE
             | ObjectType::OBJECT_ROUTINE
+            | ObjectType::OBJECT_AGGREGATE
             | ObjectType::OBJECT_TSPARSER
             | ObjectType::OBJECT_TSDICTIONARY
             | ObjectType::OBJECT_TSTEMPLATE
@@ -290,6 +292,9 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) => definer.define_ts(define),
         Node::DefineStmt(define) if define.kind == ObjectType::OBJECT_OPERATOR => {
             definer.create_operator(define)
+        }
+        Node::DefineStmt(define) if define.kind == ObjectType::OBJECT_AGGREGATE => {
+            definer.create_aggregate(define)
         }
         Node::AlterOperatorStmt(alter) => definer.alter_operator(alter),
         Node::CreateOpFamilyStmt(create) => definer.create_opfamily(create),

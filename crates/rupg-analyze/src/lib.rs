@@ -85,6 +85,7 @@ pub use plpgsql::{
     Variable, Variables, analyze_assign, analyze_assign_part, analyze_with, column_type,
     plpgsql_cast, relation_by_names, relation_row_type, row_type_fields,
 };
+pub use poly::resolve as resolve_polymorphic;
 pub use prepare::{execute_params, param_types};
 pub use record::{out_columns, record_fields};
 pub use returning::{MERGE_ACTION, RETURNING_NEW, RETURNING_OLD, Shown};

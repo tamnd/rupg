@@ -217,6 +217,7 @@ pub(crate) fn rows(
         "pg_range" => ranges(table, catalog),
         "pg_cast" => casts(table, catalog),
         "pg_operator" => operators(table, catalog),
+        "pg_aggregate" => aggregates(table, catalog),
         "pg_opfamily" => opfamilies(table, catalog),
         "pg_opclass" => opclasses(table, catalog),
         "pg_amop" => amops(table, catalog),
@@ -1243,6 +1244,39 @@ fn operators<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("oprcode", oid(o.code))
                 .set("oprrest", oid(o.restrict))
                 .set("oprjoin", oid(o.join));
+            row
+        })
+        .collect()
+}
+
+fn aggregates<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    let text = |value: &Option<String>| value.clone().map_or(Value::Null, Value::text);
+    catalog
+        .aggregates()
+        .map(|a| {
+            let mut row = Row::new(table);
+            row.set("aggfnoid", oid(a.function))
+                .set("aggkind", Value::Char(a.kind))
+                .set("aggnumdirectargs", Value::Int2(a.ndirect))
+                .set("aggtransfn", oid(a.transfn))
+                .set("aggfinalfn", oid(a.finalfn))
+                .set("aggcombinefn", oid(a.combinefn))
+                .set("aggserialfn", oid(a.serialfn))
+                .set("aggdeserialfn", oid(a.deserialfn))
+                .set("aggmtransfn", oid(a.mtransfn))
+                .set("aggminvtransfn", oid(a.minvtransfn))
+                .set("aggmfinalfn", oid(a.mfinalfn))
+                .set("aggfinalextra", Value::Bool(a.finalextra))
+                .set("aggmfinalextra", Value::Bool(a.mfinalextra))
+                .set("aggfinalmodify", Value::Char(a.finalmodify))
+                .set("aggmfinalmodify", Value::Char(a.mfinalmodify))
+                .set("aggsortop", oid(a.sortop))
+                .set("aggtranstype", oid(a.transtype))
+                .set("aggtransspace", Value::Int4(a.transspace))
+                .set("aggmtranstype", oid(a.mtranstype))
+                .set("aggmtransspace", Value::Int4(a.mtransspace))
+                .set("agginitval", text(&a.initval))
+                .set("aggminitval", text(&a.minitval));
             row
         })
         .collect()

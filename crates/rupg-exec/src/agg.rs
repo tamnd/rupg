@@ -25,6 +25,15 @@ pub(crate) enum Method {
         /// The final function and true when it is strict.
         last: Option<(Kernel, bool)>,
     },
+    /// The transition function or the final function is not a kernel, as a function in SQL of `CREATE AGGREGATE` is not, and the run calls the functions by their OIDs. The state is a value of SQL.
+    Function {
+        trans: u32,
+        trans_strict: bool,
+        state: u32,
+        init: Option<&'static str>,
+        /// The final function, true when it is strict, and `aggfinalextra`: true when it gets a null for each argument of the aggregate after the state.
+        last: Option<(u32, bool, bool)>,
+    },
     /// `int8_avg_accum`: the sum of `bigint` values as a 128-bit integer, for `sum` or for `avg`.
     Int128 { avg: bool },
     /// `numeric_avg_accum`: the sum of `numeric` values, for `sum` or for `avg`.
@@ -104,6 +113,17 @@ fn polymorphic(ty: u32) -> bool {
     )
 }
 
+/// `resolve_aggregate_transtype`: the actual type of a polymorphic state, from the types of the arguments of the call, or `None` when they do not give it.
+fn transtype(agg: &Aggref, declared: u32) -> Option<u32> {
+    let proc = builtin::proc_by_oid(agg.oid)?;
+    let inputs: Vec<u32> = agg.direct.iter().chain(&agg.args[..agg.nargs]).map(|a| a.ty).collect();
+    let mut args = proc.argtypes.to_vec();
+    if args.len() != inputs.len() {
+        return None;
+    }
+    rupg_analyze::resolve_polymorphic(&inputs, &mut args, declared).ok()
+}
+
 /// The method of an aggregate call whose result has the type `ty`, or the error `0A000` for an aggregate that the engine does not have yet.
 pub(crate) fn method(agg: &Aggref, ty: u32, location: Option<usize>) -> Result<Method> {
     let unsupported = || {
@@ -164,13 +184,34 @@ pub(crate) fn method(agg: &Aggref, ty: u32, location: Option<usize>) -> Result<M
             }
         }
         _ => {
-            let state =
-                if polymorphic(row.transtype) && row.finalfn == 0 { ty } else { row.transtype };
-            if state == oid::INTERNAL || polymorphic(state) {
+            let state = if !polymorphic(row.transtype) {
+                row.transtype
+            } else if row.finalfn == 0 {
+                ty
+            } else {
+                transtype(agg, row.transtype).ok_or_else(unsupported)?
+            };
+            if state == oid::INTERNAL || polymorphic(state) || row.kind != b'n' {
                 return Err(unsupported());
             }
             if row.initval.is_some() && !rupg_func::input_supported(state) {
                 return Err(unsupported());
+            }
+            // A function of the catalog, as `CREATE AGGREGATE` gives, runs by its OID.
+            let user = |f: u32| f >= rupg_catalog::FIRST_NORMAL_OID;
+            if user(row.transfn) || user(row.finalfn) || row.finalextra {
+                let callable = |f: u32| user(f) || rupg_func::kernel(f).is_some();
+                if !callable(row.transfn) || (row.finalfn != 0 && !callable(row.finalfn)) {
+                    return Err(unsupported());
+                }
+                return Ok(Method::Function {
+                    trans: row.transfn,
+                    trans_strict: strict(row.transfn),
+                    state,
+                    init: row.initval,
+                    last: (row.finalfn != 0)
+                        .then(|| (row.finalfn, strict(row.finalfn), row.finalextra)),
+                });
             }
             let trans = rupg_func::kernel(row.transfn).ok_or_else(unsupported)?;
             let last = match row.finalfn {
@@ -325,7 +366,8 @@ struct Agg<'q> {
 impl Agg<'_> {
     fn start(&self, eval: &Eval<'_>) -> Result<State> {
         Ok(match &self.method {
-            Method::Kernel { state, init, .. } => match init {
+            Method::Kernel { state, init, .. } | Method::Function { state, init, .. } => match init
+            {
                 Some(text) => State::Value {
                     value: rupg_func::input(*state, text, -1, eval.session)?,
                     empty: false,
@@ -353,6 +395,32 @@ impl Agg<'_> {
     fn advance(&self, state: &mut State, args: &[Value], eval: &Eval<'_>) -> Result<()> {
         let args = &args[..self.agg.nargs];
         match (&self.method, state) {
+            (
+                Method::Function { trans, trans_strict, state: ty, .. },
+                State::Value { value, empty },
+            ) => {
+                if *trans_strict {
+                    if args.iter().any(Value::is_null) {
+                        return Ok(());
+                    }
+                    if *empty && let Some(first) = args.first() {
+                        *value = first.clone();
+                        *empty = false;
+                        return Ok(());
+                    }
+                    if value.is_null() {
+                        return Ok(());
+                    }
+                }
+                let mut types = Vec::with_capacity(args.len() + 1);
+                types.push(*ty);
+                types.extend(&self.types);
+                let mut values = Vec::with_capacity(args.len() + 1);
+                values.push(std::mem::replace(value, Value::Null));
+                values.extend_from_slice(args);
+                *value = eval.call(*trans, &types, *ty, false, &values)?;
+                *empty = false;
+            }
             (
                 Method::Kernel { trans, trans_strict, state: ty, .. },
                 State::Value { value, empty },
@@ -627,6 +695,19 @@ impl Agg<'_> {
             sum.div(&numeric(i128::from(count))).map(Value::Numeric).map_err(rupg_func::type_error)
         };
         match (&self.method, state) {
+            (Method::Function { last, state: ty, .. }, State::Value { value, .. }) => match last {
+                None => Ok(value),
+                Some((_, true, _)) if value.is_null() => Ok(Value::Null),
+                Some((f, _, extra)) => {
+                    let mut types = vec![*ty];
+                    let mut values = vec![value];
+                    if *extra {
+                        types.extend(&self.types);
+                        values.resize(types.len(), Value::Null);
+                    }
+                    eval.call(*f, &types, self.ty, false, &values)
+                }
+            },
             (Method::Kernel { last, state: ty, .. }, State::Value { value, .. }) => match last {
                 None => Ok(value),
                 Some((_, true)) if value.is_null() => Ok(Value::Null),

@@ -319,7 +319,7 @@ fn array_of(element: u32) -> Result<u32> {
 }
 
 /// `enforce_generic_type_consistency`: replaces the polymorphic types in `declared` with the actual types, and gives the actual result type for `result`.
-pub(crate) fn resolve(inputs: &[u32], declared: &mut [u32], result: u32) -> Result<u32> {
+pub fn resolve(inputs: &[u32], declared: &mut [u32], result: u32) -> Result<u32> {
     let f = collect(inputs, declared, result)?;
     if f.any_element_args == 0 && !f.has_compatible {
         return Ok(result);

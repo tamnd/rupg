@@ -83,7 +83,8 @@ impl Definer<'_, '_> {
             ObjectType::OBJECT_OPERATOR => self.comment_operator(object)?,
             ObjectType::OBJECT_FUNCTION
             | ObjectType::OBJECT_PROCEDURE
-            | ObjectType::OBJECT_ROUTINE => self.comment_function(stmt.objtype, object)?,
+            | ObjectType::OBJECT_ROUTINE
+            | ObjectType::OBJECT_AGGREGATE => self.comment_function(stmt.objtype, object)?,
             _ => return Err(not_yet("COMMENT on this kind of object", None)),
         };
         let text = stmt.comment.as_deref().filter(|c| !c.is_empty()).map(str::to_string);

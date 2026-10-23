@@ -146,7 +146,8 @@ impl Definer<'_, '_> {
             ObjectType::OBJECT_OPCLASS | ObjectType::OBJECT_OPFAMILY => self.find_opcf(stmt)?,
             ObjectType::OBJECT_FUNCTION
             | ObjectType::OBJECT_PROCEDURE
-            | ObjectType::OBJECT_ROUTINE => self.find_functions(stmt)?,
+            | ObjectType::OBJECT_ROUTINE
+            | ObjectType::OBJECT_AGGREGATE => self.find_functions(stmt)?,
             ObjectType::OBJECT_RULE => return self.drop_rule(stmt),
             ObjectType::OBJECT_TRIGGER => return self.drop_trigger(stmt),
             _ => return Err(not_yet("DROP of this kind of object", None)),
