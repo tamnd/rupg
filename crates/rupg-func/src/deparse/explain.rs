@@ -8,10 +8,7 @@ use rupg_analyze::{Expr, SortGroup, SubLink, SubLinkKind};
 use rupg_plan::{Kind, Node, Plan, TARGET, Texts};
 use rupg_sql::nodes::FRAMEOPTION_NONDEFAULT;
 
-use super::{
-    Deparser, Error, Namespace, Removed, Result, SubName, builtin, quote_identifier, reg,
-    sort_operators,
-};
+use super::{Deparser, Error, Namespace, Removed, Result, SubName, builtin, quote_identifier, reg};
 use crate::Session;
 
 /// The output of `EXPLAIN` for a plan, with the names and the expressions that the session shows.
@@ -289,23 +286,8 @@ impl Texts for PlanTexts<'_, '_> {
                 if i > 0 {
                     d.buf.push_str(", ");
                 }
-                let e = target(item.target)?;
-                d.expr(e, false)?;
-                // `show_sortorder_options`.
-                let (lt, gt) = sort_operators(e.ty);
-                if item.operator == lt {
-                    if item.nulls_first {
-                        d.buf.push_str(" NULLS FIRST");
-                    }
-                } else if item.operator == gt {
-                    d.buf.push_str(" DESC");
-                    if !item.nulls_first {
-                        d.buf.push_str(" NULLS LAST");
-                    }
-                } else if let Some(op) = builtin::operator_by_oid(item.operator) {
-                    d.buf.push_str(&format!(" USING {}", op.name));
-                    d.buf.push_str(if item.nulls_first { " NULLS FIRST" } else { " NULLS LAST" });
-                }
+                // `show_window_keys` shows only the expression of each key, with no direction.
+                d.expr(target(item.target)?, false)?;
             }
         }
         let space = !items.is_empty() || !clause.order.is_empty();

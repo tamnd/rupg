@@ -5573,6 +5573,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_placeholder_vars.test")));
     }
 
+    /// The keys of the sort of the first window are `window_pathkeys`, which `standard_qp_callback` makes `query_pathkeys` when the query has no `GROUP BY`, so an index scan whose order is the first keys of the window is a useful path, as `truncate_useless_pathkeys` keeps it. Under a `LIMIT`, the `WindowAgg` over that scan with an `Incremental Sort` costs less to start. The `Window` of a node shows only the expressions of the keys, with no direction, as `show_window_keys`. `connection/plan_window_order.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_window_order() {
+        big_stack(|| script(include_str!("connection/plan_window_order.test")));
+    }
+
     /// A query that is a `UNION ALL` of `SELECT`s with the types of its columns and has `ORDER BY` becomes an append relation, as `flatten_simple_union_all` makes it, so the planner can plan a `Merge Append` of the plans of the `SELECT`s in the order. A `SELECT` with its own `WHERE` is not a member of the append relation, as `is_safe_append_member`, and its plan gets a sort. `connection/plan_union_all_order.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_union_all_order() {

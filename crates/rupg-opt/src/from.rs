@@ -35,9 +35,11 @@ pub(crate) struct Stats {
     placeholders: Vec<(Expr, i32, BTreeSet<usize>, BTreeSet<usize>)>,
     /// `sort_pathkeys`: the keys of `ORDER BY`, each with its directions.
     sort: Vec<(Expr, bool, bool)>,
+    /// `window_pathkeys`: the keys of the sort of the first window, which the bottom `WindowAgg` reads.
+    window: Vec<(Expr, bool, bool)>,
     /// `group_pathkeys` and `distinct_pathkeys`: the keys of `GROUP BY` and of `DISTINCT`, in any order.
     groups: Vec<Vec<(Expr, bool, bool)>>,
-    /// `query_pathkeys`: the keys of `GROUP BY`, or else of `DISTINCT`, or else of `ORDER BY`.
+    /// `query_pathkeys`: the keys of `GROUP BY`, or else of the first window, or else of `DISTINCT`, or else of `ORDER BY`.
     query: Vec<(Expr, bool, bool)>,
     /// The two sides of each `=` condition of a join that a merge join can test, each with its relations.
     joins: Vec<[(Expr, BTreeSet<usize>); 2]>,
@@ -290,16 +292,19 @@ impl Stats {
         columns + placeholders
     }
 
-    /// `truncate_useless_pathkeys`: the first keys of the order of the rows of a join of relations that a node above can use. These are the first keys of `ORDER BY`, the first keys that are keys of `GROUP BY` or of `DISTINCT`, or the first keys that a merge join with another relation can use.
+    /// `truncate_useless_pathkeys`: the first keys of the order of the rows of a join of relations that a node above can use. These are the first keys of `ORDER BY` or of the first window, the first keys that are keys of `GROUP BY` or of `DISTINCT`, or the first keys that a merge join with another relation can use.
     fn useful(&self, rels: &BTreeSet<usize>, order: &[OrderKey]) -> Vec<OrderKey> {
         let has = |list: &[(Expr, bool, bool)], k: &OrderKey| {
             list.iter().any(|(e, desc, nulls_first)| k.sorts(e, *desc, *nulls_first))
         };
-        let ordered = order
-            .iter()
-            .zip(&self.sort)
-            .take_while(|(k, (e, desc, nulls_first))| k.sorts(e, *desc, *nulls_first))
-            .count();
+        let leading = |list: &[(Expr, bool, bool)]| {
+            order
+                .iter()
+                .zip(list)
+                .take_while(|(k, (e, desc, nulls_first))| k.sorts(e, *desc, *nulls_first))
+                .count()
+        };
+        let ordered = leading(&self.sort).max(leading(&self.window));
         let grouped =
             self.groups.iter().map(|g| order.iter().take_while(|k| has(g, k)).count()).max();
         // `pathkeys_useful_for_merging`: a merge join sorts its sides in ascending order.
@@ -1124,12 +1129,20 @@ fn needed(level: &Level<'_>, stats: &mut Stats, used: Option<&[bool]>) {
     } else {
         group
     };
-    stats.query = [&group, &distinct, &sort]
+    // `standard_qp_callback`: only the first window, at the bottom, counts.
+    let window = upper::first_window(level).map_or_else(Vec::new, |w| {
+        let clause = &query.windows[w];
+        let mut all = stats.canonical(keys(&clause.partition), |k| &k.0);
+        all.extend(keys(&clause.order));
+        stats.canonical(all, |k| &k.0)
+    });
+    stats.query = [&group, &window, &distinct, &sort]
         .into_iter()
         .find(|keys| !keys.is_empty())
         .cloned()
         .unwrap_or_default();
     stats.sort = sort;
+    stats.window = window;
     stats.groups = vec![group, distinct];
     stats.startup = level.fraction > 0.0;
     for (r, relation) in relations.iter().enumerate() {
