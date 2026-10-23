@@ -4369,6 +4369,12 @@ mod tests {
         a.join().unwrap();
     }
 
+    /// The properties of the access methods, of the btree and hash indexes and of their columns: the key columns and the `INCLUDE` column, the options `DESC` and `NULLS FIRST`, a built-in index, the names in upper case, and the null of an unknown name, of column 0, of a column out of range and of a relation that is not an index. `connection/am_properties.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn am_properties() {
+        big_stack(|| script(include_str!("connection/am_properties.test")));
+    }
+
     /// The advisory lock functions in one session: the counts of each mode and level, the warning of an unlock of a lock that the session does not hold, and the release of the locks of the transaction level at the end of the transaction and at an error. `connection/advisory.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn advisory() {
