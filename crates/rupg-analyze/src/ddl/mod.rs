@@ -1,4 +1,4 @@
-//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE RULE`, `CREATE TRIGGER`, `CREATE DOMAIN`, `CREATE FUNCTION`, `COMMENT`, `DROP`, `ALTER TABLE`, `ALTER SCHEMA ... OWNER TO`, `CREATE TEXT SEARCH`, `ALTER TEXT SEARCH CONFIGURATION` and `TRUNCATE`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineRule`, `CreateTrigger`, `DefineDomain`, `CreateFunction`, `CommentObject`, `ExecDropStmt`, `AlterTable`, `AlterSchemaOwner`, the functions of `tsearchcmds.c` and `ExecuteTruncate` run them, and they change a [`Catalog`]. `CREATE FUNCTION` makes a function in SQL. [`lock_table`] runs the checks of `LOCK TABLE`, which finds its relations by name as these statements do.
+//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE RULE`, `CREATE TRIGGER`, `CREATE DOMAIN`, `CREATE FUNCTION`, `COMMENT`, `DROP`, `ALTER TABLE`, `ALTER SCHEMA ... OWNER TO`, `CREATE TEXT SEARCH`, `ALTER TEXT SEARCH CONFIGURATION`, `CREATE OPERATOR` and `TRUNCATE`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineRule`, `CreateTrigger`, `DefineDomain`, `CreateFunction`, `CommentObject`, `ExecDropStmt`, `AlterTable`, `AlterSchemaOwner`, the functions of `tsearchcmds.c`, `DefineOperator` and `ExecuteTruncate` run them, and they change a [`Catalog`]. `CREATE FUNCTION` makes a function in SQL. [`lock_table`] runs the checks of `LOCK TABLE`, which finds its relations by name as these statements do.
 
 mod alter;
 mod alter_column;
@@ -24,6 +24,7 @@ mod identity;
 mod index;
 mod lock;
 mod matview;
+mod operator;
 mod partition;
 mod partition_alter;
 mod partition_attach;
@@ -166,7 +167,7 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::AlterTSConfigurationStmt(_)
             | Node::TruncateStmt(_)
             | Node::RefreshMatViewStmt(_)
-    ) || matches!(stmt, Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind))
+    ) || matches!(stmt, Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) || define.kind == ObjectType::OBJECT_OPERATOR)
         || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
         || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype) || alter.objtype == ObjectType::OBJECT_TYPE)
         || matches!(stmt, Node::AlterOwnerStmt(alter) if alter.objectType == ObjectType::OBJECT_SCHEMA || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
@@ -210,6 +211,7 @@ fn is_drop_kind(kind: ObjectType) -> bool {
             | ObjectType::OBJECT_TSDICTIONARY
             | ObjectType::OBJECT_TSTEMPLATE
             | ObjectType::OBJECT_TSCONFIGURATION
+            | ObjectType::OBJECT_OPERATOR
     )
 }
 
@@ -268,6 +270,9 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::CreateSeqStmt(create) => definer.create_sequence(create),
         Node::AlterSeqStmt(alter) => definer.alter_sequence(alter),
         Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) => definer.define_ts(define),
+        Node::DefineStmt(define) if define.kind == ObjectType::OBJECT_OPERATOR => {
+            definer.create_operator(define)
+        }
         Node::AlterTSConfigurationStmt(alter) => definer.alter_ts_config(alter),
         Node::TruncateStmt(truncate) => definer.truncate(truncate),
         Node::GrantStmt(grant) => definer.grant(grant),

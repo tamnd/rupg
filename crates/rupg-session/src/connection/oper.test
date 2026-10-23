@@ -1,0 +1,256 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE OPERATOR ## (    leftarg = path,    rightarg = path,    function = path_inter,    commutator = ## );
+CREATE OPERATOR
+> CREATE OPERATOR @#@ (    rightarg = int8,    procedure = factorial );
+CREATE OPERATOR
+> CREATE OPERATOR #%# (    leftarg = int8,    procedure = factorial );
+ERROR 42P13 operator right argument type must be specified
+DETAIL Postfix operators are not supported.
+> SELECT @#@ 24;
+fields ?column?:1700:-1:-1
+row 620448401733239439360000
+SELECT 1
+> select @@##@@ 24;
+ERROR 42883 operator does not exist: @@##@@ integer at 8
+DETAIL There is no operator of that name.
+> set search_path = pg_catalog;
+SET
+search_path=pg_catalog
+> select @#@ 24;
+ERROR 42883 operator does not exist: @#@ integer at 8
+DETAIL An operator of that name exists, but it is not in the search_path.
+> reset search_path;
+RESET
+search_path="$user", public
+> select @#@ 24.0;
+ERROR 42883 operator does not exist: @#@ numeric at 8
+DETAIL No operator of that name accepts the given argument type.
+HINT You might need to add an explicit type cast.
+> COMMENT ON OPERATOR ###### (NONE, int4) IS 'bad prefix';
+ERROR 42883 operator does not exist: ###### integer
+> COMMENT ON OPERATOR ###### (int4, NONE) IS 'bad postfix';
+ERROR 42601 postfix operators are not supported
+> COMMENT ON OPERATOR ###### (int4, int8) IS 'bad infix';
+ERROR 42883 operator does not exist: integer ###### bigint
+> DROP OPERATOR ###### (NONE, int4);
+ERROR 42883 operator does not exist: ###### integer
+> DROP OPERATOR ###### (int4, NONE);
+ERROR 42601 postfix operators are not supported
+> DROP OPERATOR ###### (int4, int8);
+ERROR 42883 operator does not exist: integer ###### bigint
+> CREATE OPERATOR => (    rightarg = int8,    procedure = factorial );
+ERROR 42601 syntax error at or near "=>" at 17
+> CREATE OPERATOR !=- (    rightarg = int8,    procedure = factorial );
+CREATE OPERATOR
+> SELECT !=- 10;
+fields ?column?:1700:-1:-1
+row 3628800
+SELECT 1
+> SELECT 2 !=/**/ 1, 2 !=/**/ 2;
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,f
+SELECT 1
+> BEGIN TRANSACTION;
+BEGIN
+> CREATE OPERATOR #*# (    leftarg = SETOF int8,    procedure = factorial );
+ERROR 42P13 SETOF type not allowed for operator argument
+> ROLLBACK;
+ROLLBACK
+> BEGIN TRANSACTION;
+BEGIN
+> CREATE OPERATOR #*# (    rightarg = SETOF int8,    procedure = factorial );
+ERROR 42P13 SETOF type not allowed for operator argument
+> ROLLBACK;
+ROLLBACK
+> BEGIN TRANSACTION;
+BEGIN
+> CREATE OR REPLACE FUNCTION fn_op2(boolean, boolean) RETURNS boolean AS $$     SELECT NULL::BOOLEAN; $$ LANGUAGE sql IMMUTABLE;
+CREATE FUNCTION
+> CREATE OPERATOR === (     LEFTARG = boolean,     RIGHTARG = boolean,     PROCEDURE = fn_op2,     COMMUTATOR = ===,     NEGATOR = !==,     RESTRICT = contsel,     JOIN = contjoinsel,     SORT1, SORT2, LTCMP, GTCMP, HASHES, MERGES );
+CREATE OPERATOR
+> SELECT oprname, oprkind, oprcanmerge, oprcanhash, oprleft::regtype, oprright::regtype, oprresult::regtype, oprcom = oid AS selfcom, oprcode, oprrest, oprjoin FROM pg_operator WHERE oprname IN ('===', '!==') ORDER BY oprname;
+fields oprname@pg_operator.2:19:64:-1,oprkind@pg_operator.5:18:1:-1,oprcanmerge@pg_operator.6:16:1:-1,oprcanhash@pg_operator.7:16:1:-1,oprleft:2206:4:-1,oprright:2206:4:-1,oprresult:2206:4:-1,selfcom:16:1:-1,oprcode@pg_operator.13:24:4:-1,oprrest@pg_operator.14:24:4:-1,oprjoin@pg_operator.15:24:4:-1
+row !==,b,f,f,boolean,boolean,-,f,-,-,-
+row ===,b,t,t,boolean,boolean,boolean,t,fn_op2,contsel,contjoinsel
+SELECT 2
+> SELECT n.oprname, n.oprnegate = e.oid AS neg, n.oprcode FROM pg_operator n, pg_operator e WHERE n.oprname = '!==' AND e.oprname = '===';
+fields oprname@pg_operator.2:19:64:-1,neg:16:1:-1,oprcode@pg_operator.13:24:4:-1
+row !==,t,-
+SELECT 1
+> SELECT true === false;
+fields ?column?:16:1:-1
+row NULL
+SELECT 1
+> SELECT true !== false;
+ERROR 42883 operator is only a shell: boolean !== boolean at 13
+> ROLLBACK;
+ROLLBACK
+> CREATE OPERATOR #@%# (    rightarg = int8,    procedure = factorial,    invalid_att = int8 );
+WARNING 42601 operator attribute "invalid_att" not recognized
+CREATE OPERATOR
+> CREATE OPERATOR #@%# (    procedure = factorial );
+ERROR 42P13 operator argument types must be specified
+> CREATE OPERATOR #@%# (    rightarg = int8 );
+ERROR 42P13 operator function must be specified
+> BEGIN TRANSACTION;
+BEGIN
+> CREATE OPERATOR === (     leftarg = integer,     rightarg = integer,     procedure = int4eq,     negator = === );
+ERROR 42P13 operator cannot be its own negator
+> ROLLBACK;
+ROLLBACK
+> BEGIN TRANSACTION;
+BEGIN
+> CREATE OPERATOR === (     leftarg = integer,     rightarg = integer,     procedure = int4eq,     commutator = ===!!! );
+CREATE OPERATOR
+> CREATE OPERATOR ===!!! (     leftarg = integer,     rightarg = integer,     procedure = int4ne,     negator = ===!!! );
+ERROR 42P13 operator cannot be its own negator
+> ROLLBACK;
+ROLLBACK
+> CREATE OPERATOR === (     leftarg = integer,     rightarg = integer,     procedure = int4eq,     commutator = = );
+ERROR 42P13 commutator operator = is already the commutator of operator =
+> CREATE OPERATOR === (     leftarg = integer,     rightarg = integer,     procedure = int4eq,     negator = <> );
+ERROR 42P13 negator operator <> is already the negator of operator =
+> CREATE OPERATOR === ( 	"Leftarg" = box, 	"Rightarg" = box, 	"Procedure" = area_equal_function, 	"Commutator" = ===, 	"Negator" = !==, 	"Restrict" = area_restriction_function, 	"Join" = area_join_function, 	"Hashes", 	"Merges" );
+WARNING 42601 operator attribute "Leftarg" not recognized
+WARNING 42601 operator attribute "Rightarg" not recognized
+WARNING 42601 operator attribute "Procedure" not recognized
+WARNING 42601 operator attribute "Commutator" not recognized
+WARNING 42601 operator attribute "Negator" not recognized
+WARNING 42601 operator attribute "Restrict" not recognized
+WARNING 42601 operator attribute "Join" not recognized
+WARNING 42601 operator attribute "Hashes" not recognized
+WARNING 42601 operator attribute "Merges" not recognized
+ERROR 42P13 operator function must be specified
+> CREATE OPERATOR === (         PROCEDURE = int8eq,         LEFTARG = bigint,         RIGHTARG = bigint,         COMMUTATOR = === );
+CREATE OPERATOR
+> CREATE OPERATOR !== (         PROCEDURE = int8ne,         LEFTARG = bigint,         RIGHTARG = bigint,         NEGATOR = ===,         COMMUTATOR = !== );
+CREATE OPERATOR
+> DROP OPERATOR !==(bigint, bigint);
+DROP OPERATOR
+> SELECT  oid, oprcom FROM    pg_catalog.pg_operator fk WHERE   oprcom != 0 AND         NOT EXISTS(SELECT 1 FROM pg_catalog.pg_operator pk WHERE pk.oid = fk.oprcom);
+fields oid@pg_operator.1:26:4:-1,oprcom@pg_operator.11:26:4:-1
+SELECT 0
+> SELECT  oid, oprnegate FROM    pg_catalog.pg_operator fk WHERE   oprnegate != 0 AND         NOT EXISTS(SELECT 1 FROM pg_catalog.pg_operator pk WHERE pk.oid = fk.oprnegate);
+fields oid@pg_operator.1:26:4:-1,oprnegate@pg_operator.12:26:4:-1
+SELECT 0
+> DROP OPERATOR ===(bigint, bigint);
+DROP OPERATOR
+> CREATE OPERATOR <| (         PROCEDURE = int8lt,         LEFTARG = bigint,         RIGHTARG = bigint );
+CREATE OPERATOR
+> CREATE OPERATOR |> (         PROCEDURE = int8gt,         LEFTARG = bigint,         RIGHTARG = bigint,         NEGATOR = <|,         COMMUTATOR = <| );
+CREATE OPERATOR
+> DROP OPERATOR |>(bigint, bigint);
+DROP OPERATOR
+> SELECT  oid, oprcom FROM    pg_catalog.pg_operator fk WHERE   oprcom != 0 AND         NOT EXISTS(SELECT 1 FROM pg_catalog.pg_operator pk WHERE pk.oid = fk.oprcom);
+fields oid@pg_operator.1:26:4:-1,oprcom@pg_operator.11:26:4:-1
+SELECT 0
+> SELECT  oid, oprnegate FROM    pg_catalog.pg_operator fk WHERE   oprnegate != 0 AND         NOT EXISTS(SELECT 1 FROM pg_catalog.pg_operator pk WHERE pk.oid = fk.oprnegate);
+fields oid@pg_operator.1:26:4:-1,oprnegate@pg_operator.12:26:4:-1
+SELECT 0
+> DROP OPERATOR <|(bigint, bigint);
+DROP OPERATOR
+> CREATE FUNCTION op_add(int, int) RETURNS int LANGUAGE sql IMMUTABLE AS 'SELECT $1 + $2 * 10';
+CREATE FUNCTION
+> CREATE OPERATOR #+# (leftarg = int, rightarg = int, function = op_add);
+CREATE OPERATOR
+> SELECT 1 #+# 2, 3 #+# 4 #+# 5;
+fields ?column?:23:4:-1,?column?:23:4:-1
+row 21,93
+SELECT 1
+> CREATE OPERATOR ~~~ (leftarg = int, rightarg = int, function = op_add, commutator = <~>);
+CREATE OPERATOR
+> SELECT 1 <~> 2;
+ERROR 42883 operator is only a shell: integer <~> integer at 10
+> SELECT oprname, oprcode, oprresult FROM pg_operator WHERE oprname = '<~>';
+fields oprname@pg_operator.2:19:64:-1,oprcode@pg_operator.13:24:4:-1,oprresult@pg_operator.10:26:4:-1
+row <~>,-,0
+SELECT 1
+> CREATE OPERATOR <~> (leftarg = int, rightarg = int, function = op_add);
+CREATE OPERATOR
+> SELECT 1 <~> 2;
+fields ?column?:23:4:-1
+row 21
+SELECT 1
+> CREATE OPERATOR #+# (leftarg = int, rightarg = int, function = op_add);
+ERROR 42723 operator #+# already exists
+> COMMENT ON OPERATOR #+# (int, int) IS 'add ten times';
+COMMENT
+> SELECT obj_description(oid, 'pg_operator') FROM pg_operator WHERE oprname = '#+#';
+fields obj_description:25:-1:-1
+row add ten times
+SELECT 1
+> CREATE SCHEMA opschema;
+CREATE SCHEMA
+> CREATE OPERATOR opschema.%% (leftarg = int, rightarg = int, function = op_add);
+CREATE OPERATOR
+> SELECT 1 OPERATOR(opschema.%%) 2;
+fields ?column?:23:4:-1
+row 21
+SELECT 1
+> SELECT 1 %% 2;
+ERROR 42883 operator does not exist: integer %% integer at 10
+DETAIL An operator of that name exists, but it is not in the search_path.
+> DROP FUNCTION op_add(int, int);
+ERROR 2BP01 cannot drop function op_add(integer,integer) because other objects depend on it
+DETAIL operator #+#(integer,integer) depends on function op_add(integer,integer)
+operator <~>(integer,integer) depends on function op_add(integer,integer)
+operator ~~~(integer,integer) depends on function op_add(integer,integer)
+operator opschema.%%(integer,integer) depends on function op_add(integer,integer)
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP FUNCTION op_add(int, int) CASCADE;
+NOTICE 00000 drop cascades to 4 other objects
+DETAIL drop cascades to operator #+#(integer,integer)
+drop cascades to operator <~>(integer,integer)
+drop cascades to operator ~~~(integer,integer)
+drop cascades to operator opschema.%%(integer,integer)
+DROP FUNCTION
+> DROP OPERATOR IF EXISTS #+# (int, int);
+NOTICE 00000 operator #+# does not exist, skipping
+DROP OPERATOR
+> DROP OPERATOR IF EXISTS nosuch.#+# (int, int);
+NOTICE 00000 schema "nosuch" does not exist, skipping
+DROP OPERATOR
+> DROP OPERATOR IF EXISTS #+# (nosuchtype, int);
+NOTICE 00000 type "nosuchtype" does not exist, skipping
+DROP OPERATOR
+> DROP OPERATOR #+# (nosuchtype, int);
+ERROR 42704 type "nosuchtype" does not exist
+> DROP OPERATOR + (int, int);
+ERROR 2BP01 cannot drop operator +(integer,integer) because it is required by the database system
+> CREATE OPERATOR + (leftarg = int, rightarg = int, function = int4pl);
+CREATE OPERATOR
+> CREATE OPERATOR public.+ (leftarg = int, rightarg = int, function = int4pl);
+ERROR 42723 operator + already exists
+> SELECT 2 + 3;
+fields ?column?:23:4:-1
+row 5
+SELECT 1
+> DROP OPERATOR public.+ (int, int);
+DROP OPERATOR
+> CREATE OPERATOR @@@ (leftarg = int, rightarg = int, function = nosuchfunc);
+ERROR 42883 function nosuchfunc(integer, integer) does not exist
+> CREATE OPERATOR @@@ (leftarg = int, rightarg = int, function = int4pl, negator = !@@);
+ERROR 42P13 only boolean operators can have negators
+> CREATE OPERATOR @@@ (leftarg = int, rightarg = int, function = int4pl, restrict = int4pl);
+ERROR 42883 function int4pl(internal, oid, internal, integer) does not exist
+> CREATE OPERATOR @@@ (leftarg = int, rightarg = int, function = int4eq, restrict = int4pl);
+ERROR 42883 function int4pl(internal, oid, internal, integer) does not exist
+> CREATE OPERATOR @@@ (leftarg = int, rightarg = int, function = int4eq, join = int4pl);
+ERROR 42883 function int4pl(internal, oid, internal, smallint, internal) does not exist
+> CREATE OPERATOR @@@ (leftarg = nosuchtype, rightarg = int, function = int4eq);
+ERROR 42704 type "nosuchtype" does not exist
+> CREATE OPERATOR @@@ (rightarg = int, function = int4um, hashes);
+ERROR 42P13 only binary operators can hash
+> CREATE OPERATOR a+ (leftarg = int, rightarg = int, function = int4pl);
+ERROR 42601 syntax error at or near "+" at 18
+> CREATE OPERATOR <<- (leftarg = int, rightarg = int, function = int4pl);
+ERROR 42601 syntax error at or near "-" at 19
+> SELECT oprname FROM pg_operator WHERE oid >= 16384 ORDER BY 1;
+fields oprname@pg_operator.2:19:64:-1
+row !=-
+row ##
+row #@%#
+row @#@
+SELECT 4

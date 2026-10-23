@@ -303,6 +303,22 @@ fn use_types(catalog: &Catalog) {
                 })
             }),
     );
+    types.extend(catalog.operators().map(|o| {
+        builtin::SessionType::Operator(builtin::SessionOperator {
+            oid: o.oid,
+            name: o.name.clone(),
+            namespace: o.namespace,
+            kind: o.kind,
+            can_merge: o.can_merge,
+            can_hash: o.can_hash,
+            left: o.left,
+            right: o.right,
+            result: o.result,
+            commutator: o.commutator,
+            negator: o.negator,
+            code: o.code,
+        })
+    }));
     builtin::use_session_types(types);
 }
 

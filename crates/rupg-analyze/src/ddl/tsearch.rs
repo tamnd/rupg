@@ -85,12 +85,12 @@ pub(super) fn is_ts_kind(objtype: ObjectType) -> bool {
 }
 
 /// The name of an option.
-fn def_name(def: &DefElem) -> &str {
+pub(super) fn def_name(def: &DefElem) -> &str {
     def.defname.as_deref().unwrap_or_default()
 }
 
 /// The error of `defGetString` and `defGetQualifiedName` for an option without a value.
-fn no_parameter(def: &DefElem) -> Error {
+pub(super) fn no_parameter(def: &DefElem) -> Error {
     Error::new(SqlState::SYNTAX_ERROR, format!("{} requires a parameter", def_name(def)))
 }
 
@@ -196,7 +196,7 @@ impl Definer<'_, '_> {
     }
 
     /// `QualifiedNameGetCreationNamespace`: the schema and the name of a new object.
-    fn ts_creation<'n>(&self, list: &[&'n str]) -> Result<(u32, &'n str)> {
+    pub(super) fn ts_creation<'n>(&self, list: &[&'n str]) -> Result<(u32, &'n str)> {
         let (schema, name) = self.an.split_name(list, None)?;
         let namespace = match schema {
             Some(namespace) => namespace,

@@ -192,7 +192,7 @@ fn transform_with(
 }
 
 /// `defGetBoolean`: no value is true, and the words `true`, `false`, `on` and `off` and the numbers 0 and 1 are the others.
-fn def_boolean(name: &str, arg: Option<&Node>) -> Result<bool> {
+pub(super) fn def_boolean(name: &str, arg: Option<&Node>) -> Result<bool> {
     let value = match arg {
         None => return Ok(true),
         Some(Node::Integer(0)) => Some(false),

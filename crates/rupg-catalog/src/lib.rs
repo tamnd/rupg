@@ -16,12 +16,14 @@ pub mod toast;
 mod alter_type;
 mod drop;
 mod enum_label;
+mod operator;
 mod owner;
 mod sequence;
 mod set_schema;
 mod tsearch;
 
 pub use drop::{Refusal, Target, flag};
+pub use operator::{Operator, PG_OPERATOR};
 pub use owner::acl_new_owner;
 pub use sequence::SequenceData;
 pub use tsearch::{
@@ -1115,6 +1117,7 @@ pub struct Catalog {
     constraints: BTreeMap<u32, Constraint>,
     functions: BTreeMap<u32, Function>,
     casts: BTreeMap<u32, Cast>,
+    operators: BTreeMap<u32, Operator>,
     languages: BTreeMap<u32, Language>,
     extensions: BTreeMap<u32, Extension>,
     triggers: BTreeMap<u32, Trigger>,
@@ -1192,6 +1195,7 @@ impl Catalog {
             constraints: BTreeMap::new(),
             functions: BTreeMap::new(),
             casts: BTreeMap::new(),
+            operators: BTreeMap::new(),
             languages: BTreeMap::new(),
             extensions: BTreeMap::new(),
             triggers: BTreeMap::new(),
