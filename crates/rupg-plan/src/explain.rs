@@ -109,12 +109,14 @@ fn names(kind: &Kind<'_>) -> Names {
         Kind::HashJoin { .. } => Names { pname: "Hash".to_string(), ..simple("Hash Join") },
         Kind::Hash => simple("Hash"),
         Kind::Materialize => simple("Materialize"),
+        Kind::Aggregate { strategy: Strategy::Group, .. } => simple("Group"),
         Kind::Aggregate { strategy, .. } => {
             let (pname, strategy) = match strategy {
                 Strategy::Plain => ("Aggregate", "Plain"),
                 Strategy::Sorted => ("GroupAggregate", "Sorted"),
                 Strategy::Hashed => ("HashAggregate", "Hashed"),
                 Strategy::Mixed => ("MixedAggregate", "Mixed"),
+                Strategy::Group => ("Group", "Group"),
             };
             Names {
                 pname: pname.to_string(),

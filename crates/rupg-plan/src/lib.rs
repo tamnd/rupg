@@ -309,6 +309,8 @@ pub enum Strategy {
     Hashed,
     /// `AGG_MIXED`: grouping sets, some in hash tables and some of a sorted input.
     Mixed,
+    /// `Group`: groups of a sorted input for `GROUP BY` with no aggregate, a node of its own, as `create_group_path` makes it.
+    Group,
 }
 
 /// The command of a `ModifyTable`.

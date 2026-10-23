@@ -1088,12 +1088,13 @@ fn aggregate<'q>(
         let (startup, total) = sort_cost(level, c, &sort_keys, count, None);
         (Cost { startup, total, ..c }, sorted_order(&sort_keys))
     };
-    // `cost_agg`: the transition cost, then the cost of the keys, which the rounding of the sums follows.
+    // `cost_agg`: the transition cost, then the cost of the keys, which the rounding of the sums follows. `GROUP BY` with no aggregate is a `Group` node, which `cost_group` gives no cost for each group.
+    let group_node = aggs.is_empty();
     let sorted_total = sorted_input.total
         + cost::CPU_OPERATOR * units * n
         + cost::CPU_OPERATOR * nkeys * n
         + finals * groups
-        + cost::CPU_TUPLE * groups
+        + if group_node { 0.0 } else { cost::CPU_TUPLE * groups }
         + having_startup
         + having_cost * groups;
     let hash_startup = c.total + cost::CPU_OPERATOR * units * n + cost::CPU_OPERATOR * nkeys * n;
@@ -1140,11 +1141,9 @@ fn aggregate<'q>(
     };
     *order = sorted_order;
     order.truncate(group.len());
-    let mut node = Node::new(
-        Kind::Aggregate { strategy: Strategy::Sorted, keys, sets: Vec::new() },
-        scope,
-        vec![input],
-    );
+    let strategy = if group_node { Strategy::Group } else { Strategy::Sorted };
+    let mut node =
+        Node::new(Kind::Aggregate { strategy, keys, sets: Vec::new() }, scope, vec![input]);
     node.filter = filter;
     let startup = sorted_input.startup + having_startup;
     node.cost = Cost { startup, total: sorted_total, rows, width: 0 };
