@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.71 (2026-10-23)
+
+This release adds PlaceHolderVar for the targets of a subquery below the nullable side of an outer join, counts the keys of the first window as the order that the query asks for, costs only the sampled pages of `TABLESAMPLE SYSTEM`, and shows the rows and the width of writes with `RETURNING`.
+
 ### Added
 
 - `EXPLAIN` of `TABLESAMPLE SYSTEM` now costs only the sampled pages, at the cost of a random page, as PostgreSQL does, and `REPEATABLE` shows on the `Sampling` line in the text form. `INSERT`, `UPDATE` and `DELETE` with `RETURNING` now show the rows and the width of the node below them. (#597)
