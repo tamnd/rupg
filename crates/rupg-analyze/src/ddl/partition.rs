@@ -360,7 +360,7 @@ impl Definer<'_, '_> {
         }
         for (name, text, keys, count) in merged {
             let expr = node::read(&text)?;
-            let refs = references(self.catalog, table, &[&expr]);
+            let refs = references(self.catalog, table, &[&expr])?;
             let oid = self.catalog.add_check(table, Some(&name), text, keys, &refs, false)?;
             self.catalog.set_constraint_inherited(oid, false, count)?;
         }

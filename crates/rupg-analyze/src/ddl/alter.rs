@@ -948,7 +948,7 @@ impl Definer<'_, '_> {
         if matches!(expr.kind, ExprKind::Const(Value::Null)) {
             return Ok(());
         }
-        let refs = references(self.catalog, target.oid, &[&expr]);
+        let refs = references(self.catalog, target.oid, &[&expr])?;
         self.catalog.add_default(target.oid, number, crate::node::write(&expr)?, &refs)?;
         Ok(())
     }

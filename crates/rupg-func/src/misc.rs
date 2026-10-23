@@ -310,7 +310,15 @@ fn make_interval(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     // `FLOAT8_FITS_IN_INT64`: the range of `i64` as a `float8`, with the upper end out.
     #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
     let usecs = {
-        let usecs = (secs * USECS_PER_SEC as f64).round_ties_even();
+        // `float8_mul`: a finite product that is not finite is an overflow.
+        let product = secs * USECS_PER_SEC as f64;
+        if product.is_infinite() {
+            return Err(Error::new(
+                SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
+                "value out of range: overflow",
+            ));
+        }
+        let usecs = product.round_ties_even();
         if !(usecs >= i64::MIN as f64 && usecs < -(i64::MIN as f64)) {
             return Err(out_of_range());
         }

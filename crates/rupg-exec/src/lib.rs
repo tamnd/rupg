@@ -1016,7 +1016,14 @@ fn run_query(
     if count == Some(0) {
         return Ok(Vec::new());
     }
-    let open = gate(query, &mut eval)?;
+    // `is_degenerate_grouping`: with `HAVING` and no aggregate and no `GROUP BY`, the query gives one row or no row, and the plan does not read `FROM`.
+    let degenerate = query.grouped
+        && query.having.is_some()
+        && query.group.is_empty()
+        && query.grouping_sets.is_empty()
+        && query.set_op.is_none()
+        && agg::calls(query).is_empty();
+    let open = !degenerate && gate(query, &mut eval)?;
     let mut tables = if open {
         let want = count.filter(|_| reads_all(query)).map(|count| count.saturating_add(offset));
         with_subqueries(query, &base, params, session, cache, outer, want)?

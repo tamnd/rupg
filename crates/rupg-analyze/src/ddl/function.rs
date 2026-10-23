@@ -260,7 +260,7 @@ fn mismatch(rettype: u32, name: &str, detail: String) -> Error {
 }
 
 /// The objects that the body refers to, as `recordDependencyOnExpr` records them: the functions that it calls, and the objects that [`references`] finds. The catalog drops the references to pinned objects.
-fn body_references(catalog: &Catalog, body: &Expr) -> Vec<ObjRef> {
+fn body_references(catalog: &Catalog, body: &Expr) -> Result<Vec<ObjRef>> {
     let mut refs = Vec::new();
     body.find(0, &mut |e, _| {
         if let ExprKind::Func(f) = &e.kind {
@@ -271,12 +271,12 @@ fn body_references(catalog: &Catalog, body: &Expr) -> Vec<ObjRef> {
         }
         None::<()>
     });
-    for found in references(catalog, 0, &[body]) {
+    for found in references(catalog, 0, &[body])? {
         if !refs.contains(&found) {
             refs.push(found);
         }
     }
-    refs
+    Ok(refs)
 }
 
 impl Analyzer<'_> {
@@ -723,7 +723,7 @@ impl Definer<'_, '_> {
             self.an.notices.append(&mut an.notices);
             refs = match (&body, &stmts) {
                 (_, Statements::String(_)) => Vec::new(),
-                (Body::Value(expr), _) => body_references(self.catalog, expr),
+                (Body::Value(expr), _) => body_references(self.catalog, expr)?,
                 (Body::Query(query), _) => super::view::function_references(self.catalog, query),
             };
         }
@@ -743,7 +743,7 @@ impl Definer<'_, '_> {
             refs.push(ObjRef::new(PG_PROC, support));
         }
         for default in defaults {
-            for found in body_references(self.catalog, default) {
+            for found in body_references(self.catalog, default)? {
                 if !refs.contains(&found) {
                     refs.push(found);
                 }

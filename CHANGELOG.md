@@ -10,6 +10,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Fixed
 
+- A query with `HAVING` and no aggregate and no `GROUP BY` does not read `FROM` and does not test `WHERE`, as in PostgreSQL. `make_interval` gives the overflow error of `float8_mul` for a very large `secs`, and a default or a check constraint with a `regrole` or `regdatabase` constant is an error. (#NNN)
 - A column of the target table by a name with the schema in `RETURNING`, such as `RETURNING public.t.id`, now works in `INSERT`, `UPDATE`, `DELETE` and `MERGE`. Before, it gave `42P09` "table reference ... is ambiguous", because the names `old` and `new` of `RETURNING` also matched the table. Prisma sends this form.
 
 ## 0.1.74 (2026-10-23)

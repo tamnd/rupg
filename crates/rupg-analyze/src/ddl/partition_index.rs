@@ -191,7 +191,7 @@ impl Definer<'_, '_> {
         let refs = if exprs.is_empty() {
             Vec::new()
         } else {
-            references(self.catalog, child, &exprs.iter().collect::<Vec<_>>())
+            references(self.catalog, child, &exprs.iter().collect::<Vec<_>>())?
         };
         let new = NewIndex {
             table: child,

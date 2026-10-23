@@ -83,7 +83,7 @@ impl Definer<'_, '_> {
                     }
                     saw_default = true;
                     if let Some(expr) = self.domain_default(con, base, typmod, name)? {
-                        default_refs = references(self.catalog, 0, &[&expr]);
+                        default_refs = references(self.catalog, 0, &[&expr])?;
                         default = Some(crate::node::write(&expr)?);
                     }
                 }
@@ -241,7 +241,7 @@ impl Definer<'_, '_> {
             .an
             .coerce_to_boolean(expr.map_err(|e| e.with_position(None))?, "CHECK")
             .map_err(|e| e.with_position(None))?;
-        let refs = references(self.catalog, 0, &[&expr]);
+        let refs = references(self.catalog, 0, &[&expr])?;
         let text = crate::node::write(&expr)?;
         self.catalog.add_domain_check(domain, con.conname.as_deref(), text, &refs)?;
         Ok(())

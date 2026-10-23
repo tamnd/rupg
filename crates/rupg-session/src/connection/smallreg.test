@@ -1,0 +1,48 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE th (a int);
+CREATE TABLE
+> INSERT INTO th VALUES (0), (1), (2);
+INSERT 0 3
+> SELECT 1 AS one FROM th WHERE 1/a = 1 HAVING 1 < 2;
+fields one:23:4:-1
+row 1
+SELECT 1
+> SELECT 1 AS one FROM th WHERE 1/a = 1 HAVING 1 > 2;
+fields one:23:4:-1
+SELECT 0
+> SELECT 1 AS one FROM th HAVING 1 < 2;
+fields one:23:4:-1
+row 1
+SELECT 1
+> SELECT count(*) FROM th WHERE a > 0 HAVING 1 < 2;
+fields count:20:8:-1
+row 2
+SELECT 1
+> SELECT 2 AS two FROM th WHERE a > 5 HAVING true;
+fields two:23:4:-1
+row 2
+SELECT 1
+> SELECT min(a) FROM th HAVING min(a) < 1;
+fields min:23:4:-1
+row 0
+SELECT 1
+> SELECT make_interval(secs := 1e308);
+ERROR 22003 value out of range: overflow
+> SELECT make_interval(secs := 1e18);
+ERROR 22008 interval out of range
+> SELECT make_interval(secs := 'infinity');
+ERROR 22008 interval out of range
+> SELECT make_interval(years := 2147483647, secs := 1e308);
+ERROR 22008 interval out of range
+> CREATE TABLE rr (rolid oid DEFAULT 'pg_monitor'::regrole);
+ERROR 0A000 constant of the type regrole cannot be used here
+> CREATE TABLE rd (datid oid DEFAULT 'template1'::regdatabase);
+ERROR 0A000 constant of the type regdatabase cannot be used here
+> CREATE TABLE rc (c oid CHECK (c <> 'pg_monitor'::regrole));
+ERROR 0A000 constant of the type regrole cannot be used here
+> CREATE TABLE rk (relid oid DEFAULT 'th'::regclass);
+CREATE TABLE
+> DROP TABLE th, rk;
+DROP TABLE
