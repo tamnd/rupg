@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The executor joins first the parts of a `FROM` list that have an `=` between them, and does not make a cross join when a later part has a join condition. The rows keep the order of the written joins (#NNN).
 - `LEAKPROOF` and `NOT LEAKPROOF` in `CREATE FUNCTION` and `ALTER FUNCTION`, with `proleakproof` in `pg_proc` and the error of PostgreSQL for a role that is not a superuser. The `fipshash` functions of the setup of the regression tests use it (#610).
 - Deferrable unique constraints and primary keys. A new row with the key of another row is checked again at the end of the statement, or at the commit when the constraint is deferred, as `unique_key_recheck` does it. The constraint gets its internal trigger, `ON CONFLICT` with a deferrable arbiter gives the error of PostgreSQL, and a rollback to a savepoint removes the checks of the subtransaction (#609).
 

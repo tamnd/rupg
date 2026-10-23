@@ -1,0 +1,31 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE ja AS SELECT g AS a FROM generate_series(1, 400) g;
+SELECT 400
+> CREATE TABLE jb AS SELECT g AS b FROM generate_series(1, 400) g;
+SELECT 400
+> CREATE TABLE jc AS SELECT g AS a, 401 - g AS b FROM generate_series(1, 400) g;
+SELECT 400
+> SELECT count(*) FROM ja, jb, jc WHERE ja.a = jc.a AND jb.b = jc.b;
+fields count:20:8:-1
+row 400
+SELECT 1
+> SELECT ja.a, jb.b FROM ja, jb, jc WHERE ja.a = jc.a AND jb.b = jc.b AND ja.a < 4 ORDER BY 1;
+fields a@ja.1:23:4:-1,b@jb.1:23:4:-1
+row 1,400
+row 2,399
+row 3,398
+SELECT 3
+> SELECT count(*) FROM ja, jb, jc, ja AS jd WHERE jd.a = jb.b AND ja.a = jc.a AND jb.b = jc.b AND jd.a % 2 = 0;
+fields count:20:8:-1
+row 200
+SELECT 1
+> SELECT ja.a, jd.a FROM ja, jb, jc LEFT JOIN ja AS jd ON jd.a = jc.b + 1 WHERE ja.a = jc.a AND jb.b = jc.b AND ja.a > 397 ORDER BY 1;
+fields a@ja.1:23:4:-1,a@ja.1:23:4:-1
+row 398,4
+row 399,3
+row 400,2
+SELECT 3
+> DROP TABLE ja, jb, jc;
+DROP TABLE
