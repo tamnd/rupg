@@ -5,8 +5,8 @@
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
-/// The `tzdata.zi` of the vendored PostgreSQL source.
-const DATA: &str = include_str!("../../../../vendor/tzdata/src/timezone/data/tzdata.zi");
+/// The `tzdata.zi` of the vendored PostgreSQL source, copied by `cargo xtask tzdata`.
+const DATA: &str = include_str!("../generated/tzdata.zi");
 
 const MIN_TIME: i64 = i64::MIN;
 const MAX_TIME: i64 = i64::MAX;
