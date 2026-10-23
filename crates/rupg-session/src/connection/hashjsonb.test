@@ -1,0 +1,78 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> SELECT v, jsonb_hash(v), jsonb_hash_extended(v, 0), jsonb_hash_extended(v, 1), jsonb_hash_extended(v, -7) FROM (VALUES ('null'::jsonb), ('true'), ('false'), ('1'), ('1.0'), ('-2.50'), ('"abc"'), ('""'), ('[]'), ('{}'), ('[1, 2, 3]'), ('[[]]'), ('[{}]'), ('{"a": 1}'), ('{"b": [true, null], "aa": {"c": "d"}}'), ('[1, "x", false, null, 1e10]'), ('{"été": "\n"}')) x(v);
+fields v:3802:-1:-1,jsonb_hash:23:4:-1,jsonb_hash_extended:20:8:-1,jsonb_hash_extended:20:8:-1,jsonb_hash_extended:20:8:-1
+row null,-2147483647,-9223372034707292159,-9223372034707292158,9223372034707292154
+row true,-2147483646,-9223372034707292158,1602693740767042337,1749118124258313308
+row false,-2147483644,-9223372034707292156,-8789025156036401351,-3152736451581089768
+row 1,-822615224,1715863786393953096,-9133102785766968338,-1326161431165193586
+row 1.0,-822615224,1715863786393953096,-9133102785766968338,-1326161431165193586
+row -2.50,1169184629,2518746343131862901,646846582487744666,5466820828248267385
+row "abc",1362094999,2475615564478802839,-7097696108434400675,8911471289076845484
+row "",669664877,2283808131142796909,9073300265981798109,-1325676366175042519
+row [],0,0,1,-7
+row {},0,0,1,-7
+row [1, 2, 3],-559968547,7757513094173003485,-1164288482328358188,-8915212576314481711
+row [[]],0,0,0,0
+row [{}],1610612736,6917529029251694592,6917529029251694592,6917529029251694592
+row {"a": 1},1322320426,8393972797727113770,-2518643985389794455,3815119373542723457
+row {"b": [true, null], "aa": {"c": "d"}},642207309,-3416519803265397171,5919768675218648772,9095859715247271953
+row [1, "x", false, null, 10000000000],-1454030555,-6077370886978715355,-8590301741258436257,6988091837586389222
+row {"été": "\n"},1409313876,-2022087626797847468,8781902624305116572,-8607614890206096064
+SELECT 17
+> SELECT jsonb_hash(NULL), jsonb_hash_extended('{"a": 1}', NULL);
+fields jsonb_hash:23:4:-1,jsonb_hash_extended:20:8:-1
+row NULL,NULL
+SELECT 1
+> SELECT jsonb_hash('{"a": 1, "b": 2}') = jsonb_hash('{"b": 2, "a": 1}'), jsonb_hash('1') = jsonb_hash('1.000');
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,t
+SELECT 1
+> SELECT v, hash_aclitem(v), hash_aclitem_extended(v, 0), hash_aclitem_extended(v, 1), hash_aclitem_extended(v, 42) FROM (VALUES ('postgres=r/postgres'::aclitem), ('=/postgres'), ('postgres=a*r*w*d*D*x*t*X*U*C*T*c*s*A*m*/postgres')) x(v);
+fields v:1033:16:-1,hash_aclitem:23:4:-1,hash_aclitem_extended:20:8:-1,hash_aclitem_extended:20:8:-1,hash_aclitem_extended:20:8:-1
+row postgres=r/postgres,22,22,543350022633929058,134459434817702722
+row =/postgres,10,10,-4065156913959970434,7184104451954364203
+row postgres=a*r*w*d*D*x*t*X*U*C*T*c*s*A*m*/postgres,32787,32787,-4109076583196033445,767007103233179194
+SELECT 3
+> SELECT hash_array_extended('{101}'::varbit[], 0);
+ERROR 42883 could not identify an extended hash function for type bit varying
+> SELECT hash_array('{101}'::varbit[]);
+ERROR 42883 could not identify a hash function for type bit varying
+> CREATE TYPE hj_t AS (f1 varbit, f2 text);
+CREATE TYPE
+> SELECT hash_record_extended(row('11'::varbit, 'aaa')::hj_t, 0);
+ERROR 42883 could not identify an extended hash function for type bit varying
+> SELECT hash_record(row('11'::varbit, 'aaa')::hj_t);
+ERROR 42883 could not identify a hash function for type bit varying
+> DROP TYPE hj_t;
+DROP TYPE
+> CREATE TABLE hj (j jsonb);
+CREATE TABLE
+> INSERT INTO hj VALUES ('{"a": 1}'), ('{"a": 1}'), ('[1, 2]'), ('"x"'), ('null');
+INSERT 0 5
+> SELECT j, count(*) FROM hj GROUP BY j ORDER BY j;
+fields j@hj.1:3802:-1:-1,count:20:8:-1
+row null,1
+row "x",1
+row [1, 2],1
+row {"a": 1},2
+SELECT 4
+> CREATE TABLE hjp (j jsonb) PARTITION BY HASH (j);
+CREATE TABLE
+> CREATE TABLE hjp0 PARTITION OF hjp FOR VALUES WITH (MODULUS 2, REMAINDER 0);
+CREATE TABLE
+> CREATE TABLE hjp1 PARTITION OF hjp FOR VALUES WITH (MODULUS 2, REMAINDER 1);
+CREATE TABLE
+> INSERT INTO hjp SELECT j FROM hj;
+INSERT 0 5
+> SELECT tableoid::regclass, j FROM hjp ORDER BY 1, 2;
+fields tableoid:2205:4:-1,j@hjp.1:3802:-1:-1
+row hjp0,{"a": 1}
+row hjp0,{"a": 1}
+row hjp1,null
+row hjp1,"x"
+row hjp1,[1, 2]
+SELECT 5
+> DROP TABLE hj, hjp;
+DROP TABLE

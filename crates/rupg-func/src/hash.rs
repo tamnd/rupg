@@ -3,11 +3,11 @@
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_types::{
-    Array, NetFamily, Numeric, NumericSign, RANGE_EMPTY, RANGE_LB_INF, RANGE_UB_INF, Range,
-    TypeInfo, Value, format_type, oid,
+    Array, JsonItem, JsonToken as Token, JsonTree, NetFamily, Numeric, NumericSign, RANGE_EMPTY,
+    RANGE_LB_INF, RANGE_UB_INF, Range, TypeInfo, Value, format_type, numeric_in, oid,
 };
 
-use crate::{Kernel, bad_value, not_yet};
+use crate::{Kernel, bad_value, not_yet, type_error};
 
 /// The hash functions of the types with one fixed type of argument: the `prosrc` of the plain function, the `prosrc` of the extended function and the type.
 macro_rules! fixed {
@@ -70,6 +70,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "hashmacaddr8", "hashmacaddr8extended" => oid::MACADDR8;
         "hashinet", "hashinetextended" => oid::INET;
         "pg_lsn_hash", "pg_lsn_hash_extended" => oid::PG_LSN;
+        "jsonb_hash", "jsonb_hash_extended" => oid::JSONB;
     })
 }
 
@@ -254,12 +255,23 @@ fn hash(ty: u32, value: &Value, seed: Seed) -> Result<u64> {
         (_, Value::Record(record)) => {
             let mut result = 0;
             for (&ty, value) in record.types.iter().zip(&record.values) {
-                let element = if value.is_null() { 0 } else { hash(ty, value, seed)? };
+                let element = if value.is_null() {
+                    0
+                } else {
+                    // `hash_record_extended` names the extended hash function in the error.
+                    hash(ty, value, seed).map_err(|err| {
+                        if err.message() == no_hash(ty).message() {
+                            no_hash_for(ty, seed)
+                        } else {
+                            err
+                        }
+                    })?
+                };
                 result = seed.combine(result, element);
             }
             result
         }
-        (oid::JSONB, _) => return Err(not_yet("the hash of jsonb")),
+        (oid::JSONB, _) => jsonb(value.as_str().ok_or_else(bad_value)?, seed)?,
         (oid::ACLITEM, _) => return Err(not_yet("the hash of aclitem")),
         _ if has_hash(ty) => return Err(bad_value()),
         _ => return Err(no_hash(ty)),
@@ -334,6 +346,85 @@ fn no_hash(ty: u32) -> Error {
     )
 }
 
+/// The error of a type with no hash function for the kind of the hash, as `hash_array_extended` and `hash_record_extended` give it.
+fn no_hash_for(ty: u32, seed: Seed) -> Error {
+    match seed {
+        Seed::Plain => no_hash(ty),
+        Seed::Extended(_) => Error::new(
+            SqlState::UNDEFINED_FUNCTION,
+            format!("could not identify an extended hash function for type {}", format_type(ty)),
+        ),
+    }
+}
+
+/// `hash_uint32_extended`, which `hash_aclitem_extended` uses for a seed that is not 0.
+pub(crate) fn uint32_extended(word: u32, seed: u64) -> u64 {
+    Seed::Extended(seed).word(word)
+}
+
+/// `JB_FARRAY` and `JB_FOBJECT`, the flags of the header of an array and of an object of `jsonb`.
+const JB_FARRAY: u32 = 0x4000_0000;
+const JB_FOBJECT: u32 = 0x2000_0000;
+
+/// `jsonb_hash` and `jsonb_hash_extended` with `JsonbHashScalarValue` and `JsonbHashScalarValueExtended`: the tokens in the order of `JsonbIteratorNext`. The start of an array or of an object adds its flag, and each key, value and element rotates the hash and adds its own hash. An empty array or object at the root has the hash of [`Seed::zero`].
+fn jsonb(text: &str, seed: Seed) -> Result<u64> {
+    let tree = JsonTree::parse(text).map_err(type_error)?;
+    if matches!(tree.item(0), JsonItem::Array(v) if v.is_empty())
+        || matches!(tree.item(0), JsonItem::Object(v) if v.is_empty())
+    {
+        return Ok(seed.zero());
+    }
+    let mut result = 0;
+    for token in tree.tokens() {
+        let element = match token {
+            Token::Begin { node, raw, .. } => {
+                let flag = if raw || matches!(tree.item(node), JsonItem::Array(_)) {
+                    JB_FARRAY
+                } else {
+                    JB_FOBJECT
+                };
+                result ^= match seed {
+                    Seed::Plain => u64::from(flag),
+                    Seed::Extended(_) => u64::from(flag) << 32 | u64::from(flag),
+                };
+                continue;
+            }
+            Token::End { .. } => continue,
+            Token::Key(key, _) => seed.bytes(key.as_bytes()),
+            Token::Scalar { node, .. } => match tree.item(node) {
+                JsonItem::Null => seed.zero().wrapping_add(1),
+                JsonItem::Bool(v) => match seed {
+                    // `hashcharextended` of the boolean.
+                    Seed::Extended(value) if value != 0 => seed.word(u32::from(*v)),
+                    _ => {
+                        if *v {
+                            2
+                        } else {
+                            4
+                        }
+                    }
+                },
+                JsonItem::String(v) => seed.bytes(v.as_bytes()),
+                JsonItem::Number => {
+                    numeric(&numeric_in(tree.text(node), -1).map_err(type_error)?, seed)
+                }
+                JsonItem::Array(_) | JsonItem::Object(_) => return Err(bad_value()),
+            },
+        };
+        result = match seed {
+            Seed::Plain =>
+            {
+                #[allow(clippy::cast_possible_truncation)]
+                u64::from((result as u32).rotate_left(1))
+            }
+            Seed::Extended(_) => {
+                (result << 1) & 0xffff_fffe_ffff_fffe | (result >> 31) & 0x0000_0001_0000_0001
+            }
+        } ^ element;
+    }
+    Ok(result)
+}
+
 /// `hashfloat8` and `hashfloat4`, which widens the value to `double precision` first: a zero of each sign has the hash of [`Seed::zero`], and each `NaN` has the hash of the standard `NaN`.
 fn float(value: f64, seed: Seed) -> u64 {
     if value == 0.0 {
@@ -388,7 +479,7 @@ fn numeric(value: &Numeric, seed: Seed) -> u64 {
 fn array(ty: u32, array: &Array<Value>, seed: Seed) -> Result<u64> {
     let element = TypeInfo::get(ty).filter(|info| info.is_array()).ok_or_else(|| no_hash(ty))?.elem;
     if element != oid::RECORD && !has_hash(element) && !is_container(element) {
-        return Err(no_hash(element));
+        return Err(no_hash_for(element, seed));
     }
     let mut result = 1;
     for value in &array.values {
