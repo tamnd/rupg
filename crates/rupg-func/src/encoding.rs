@@ -152,6 +152,12 @@ pub fn encoding(name: &str) -> Option<&'static str> {
     ALIASES.iter().find(|(alias, _)| *alias == key).map(|(_, name)| *name)
 }
 
+/// `pg_valid_server_encoding`: true for the name or alias of an encoding that a database can have. The encodings after `KOI8U` are only for a client.
+pub(crate) fn valid_server_encoding(name: &str) -> bool {
+    let last = NAMES.iter().position(|n| *n == "KOI8U").unwrap_or_default();
+    usize::try_from(char_to_encoding(name)).is_ok_and(|n| n <= last)
+}
+
 /// `pg_char_to_encoding`: the number of an encoding name or alias, or -1.
 #[must_use]
 pub fn char_to_encoding(name: &str) -> i32 {
@@ -238,7 +244,7 @@ fn char_length(encoding: &str, rest: &[u8]) -> usize {
 }
 
 /// `report_invalid_encoding`: the error of the bad character at the start of `rest`.
-fn invalid(encoding: &str, rest: &[u8]) -> Error {
+pub(crate) fn invalid(encoding: &str, rest: &[u8]) -> Error {
     let bytes = &rest[..char_length(encoding, rest)];
     Error::new(
         SqlState::CHARACTER_NOT_IN_REPERTOIRE,

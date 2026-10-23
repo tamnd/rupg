@@ -60,10 +60,10 @@ pub use colname::figure_colname;
 pub use constraints_set::set_constraints;
 pub use cte::{Cte, CteRef};
 pub use ddl::{
-    Allowed, Body, CopyRelation, CopyTarget, Defined, Fill, Message, PartitionCheck, RuleTree,
-    Transform, acl_roles, attnums, copy_filter, copy_insert, copy_relation, copy_target, define,
-    function_body, is_definition, lock_table, rewrite_insert, rule_tree, trigger_when,
-    vacuum_relations,
+    Allowed, Body, CopyRelation, CopyTarget, Defined, Fill, Message, PartitionCheck,
+    REGRESS_SYMBOLS, RuleTree, Transform, acl_roles, attnums, copy_filter, copy_insert,
+    copy_relation, copy_target, define, find_library, function_body, is_definition, lock_table,
+    rewrite_insert, rule_tree, trigger_when, vacuum_relations,
 };
 pub use expr::{
     Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, FieldStore, Func, FuncForm,
@@ -92,7 +92,7 @@ pub use searchcycle::{CycleClause, SearchClause};
 pub use select::{MinMax, Query, Target};
 pub use setop::{SetKind, SetOp, SetTree, strength_name};
 pub use sort::{GroupingSet, SortGroup, expand_grouping_sets};
-pub use typcache::{default_opclass, equality_for_ordering, sort_operators};
+pub use typcache::{default_opclass, equality_for_ordering, is_binary_coercible, sort_operators};
 pub use typename::parse_type;
 pub use window::{
     FRAMEOPTION_END_OFFSET, FRAMEOPTION_END_OFFSET_FOLLOWING, FRAMEOPTION_END_UNBOUNDED_FOLLOWING,

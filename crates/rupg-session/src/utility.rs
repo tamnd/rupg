@@ -97,6 +97,7 @@ pub fn check(node: &Node, text: &str) -> Result<(), Error> {
         | Node::VariableShowStmt(_)
         | Node::TransactionStmt(_)
         | Node::DiscardStmt(_)
+        | Node::LoadStmt(_)
         | Node::LockStmt(_)
         | Node::CopyStmt(_)
         | Node::PrepareStmt(_)
@@ -137,6 +138,10 @@ pub fn run(node: &Node, text: &str, cx: &mut Context<'_>) -> Result<Outcome, Err
         Node::VariableShowStmt(stmt) => show(stmt.name.as_deref().unwrap_or(""), cx.settings),
         Node::TransactionStmt(stmt) => transaction(stmt, cx).map(Outcome::Tag),
         Node::DiscardStmt(stmt) => discard(stmt, cx).map(Outcome::Tag),
+        Node::LoadStmt(stmt) => {
+            rupg_analyze::find_library(stmt.filename.as_deref().unwrap_or_default())?;
+            Ok(Outcome::Tag(CommandTag::Load))
+        }
         _ => Err(not_supported(text)),
     }
 }

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `CREATE FUNCTION` in the languages `internal` and `c`, which only a superuser can use. A function in `internal` runs the built-in function that its `AS` names, and the name must be a built-in function, as `fmgr_internal_validator` checks. A function in C can link to the functions of `regress.so`, the library of the regression tests of PostgreSQL, by its path, and rupg runs `binary_coercible`, `is_catalog_text_unique_index_oid`, `interpt_pp`, `reverse_name`, `test_canonicalize_path`, `test_atomic_ops` and some other functions of that library. Another library or a function that the library does not have gives the error of `fmgr_c_validator`. `LOAD` of that library works. The default `procost` of a function in these languages is 1 (#NNN).
 - A statement checks the privileges that it needs on the tables and the columns that it reads and writes before it runs, as `ExecCheckPermissions` does. A column grant is enough for the columns that the statement uses, the relations of a view count as the owner of the view unless the view has `security_invoker`, and `FOR UPDATE` needs `UPDATE`. (#619)
 
 ### Fixed

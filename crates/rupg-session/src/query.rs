@@ -3,13 +3,14 @@
 //! [`Reader`] gives the analyzer and the functions the settings, the user, the database, the time zone, the times of the transaction and the statement, and the process ID. The time zone is the zone of [`rupg_types::tz`] for the canonical name in the setting.
 
 use std::cell::{Ref, RefCell};
+use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use rupg_analyze::{Env, Params};
-use rupg_catalog::{Catalog, ConKind, FIRST_NORMAL_OID, RangePart, SequenceData};
+use rupg_catalog::{Catalog, ConKind, DepKind, FIRST_NORMAL_OID, RangePart, SequenceData};
 use rupg_common::{Error, Result, SqlState};
 use rupg_exec::Plan;
 use rupg_func::{AdvisoryLock, Backend, Client, Randomness, Sequences};
@@ -38,6 +39,10 @@ const SCHEMAS: [(&str, u32); 3] = [("pg_catalog", 11), ("pg_toast", 99), ("publi
 const SQL_LANGUAGE: u32 = 14;
 /// The OID of the language `plpgsql`.
 const PLPGSQL_LANGUAGE: u32 = 13708;
+/// The OID of the language `internal`.
+const INTERNAL_LANGUAGE: u32 = 12;
+/// The OID of the language `c`.
+const C_LANGUAGE: u32 = 13;
 /// The microseconds from 1970-01-01 to 2000-01-01, the epoch of the timestamps of PostgreSQL.
 const EPOCH_SHIFT_US: i64 = 946_684_800_000_000;
 /// The wait event of `pg_sleep`.
@@ -254,11 +259,23 @@ fn use_types(catalog: &Catalog) {
             }))
         })
         .collect();
+    // The constructors of a range type are part of the range type, which adds them itself.
+    let constructors: BTreeSet<u32> = catalog
+        .depends()
+        .iter()
+        .filter(|d| d.object.class == rupg_catalog::PG_PROC && d.kind == DepKind::Internal)
+        .map(|d| d.object.oid)
+        .collect();
     types.extend(
         catalog
             .functions()
             .filter(|f| {
-                f.oid >= FIRST_NORMAL_OID && matches!(f.lang, SQL_LANGUAGE | PLPGSQL_LANGUAGE)
+                f.oid >= FIRST_NORMAL_OID
+                    && !constructors.contains(&f.oid)
+                    && matches!(
+                        f.lang,
+                        SQL_LANGUAGE | PLPGSQL_LANGUAGE | INTERNAL_LANGUAGE | C_LANGUAGE
+                    )
             })
             .map(|f| {
                 builtin::SessionType::Function(builtin::SessionFunction {
@@ -278,6 +295,11 @@ fn use_types(catalog: &Catalog) {
                     variadic: rupg_exec::variadic_type(catalog, f),
                     argdefaults: f.argdefaults.clone(),
                     nargdefaults: f.nargdefaults,
+                    src: if matches!(f.lang, INTERNAL_LANGUAGE | C_LANGUAGE) {
+                        f.src.clone()
+                    } else {
+                        String::new()
+                    },
                 })
             }),
     );

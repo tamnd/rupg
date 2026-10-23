@@ -1,0 +1,125 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> LOAD '/home/tam/work/rupg-compat-work/oracle/19/src/src/test/regress/regress.so';
+LOAD
+> LOAD '/home/tam/nosuchdir/nosuchlib.so';
+ERROR 58P01 could not access file "/home/tam/nosuchdir/nosuchlib.so": No such file or directory
+> CREATE FUNCTION binary_coercible(oid, oid) RETURNS bool AS '/home/tam/work/rupg-compat-work/oracle/19/src/src/test/regress/regress.so', 'binary_coercible' LANGUAGE C STRICT STABLE PARALLEL SAFE;
+CREATE FUNCTION
+> SELECT binary_coercible('int4'::regtype, 'int8'::regtype), binary_coercible('text'::regtype, 'varchar'::regtype), binary_coercible('varchar'::regtype, 'text'::regtype), binary_coercible('int4[]'::regtype, 'anyarray'::regtype), binary_coercible('int4'::regtype, 'anyelement'::regtype);
+fields binary_coercible:16:1:-1,binary_coercible:16:1:-1,binary_coercible:16:1:-1,binary_coercible:16:1:-1,binary_coercible:16:1:-1
+row f,t,t,t,t
+SELECT 1
+> CREATE FUNCTION is_catalog_text_unique_index_oid(oid) RETURNS bool AS '/home/tam/work/rupg-compat-work/oracle/19/src/src/test/regress/regress.so', 'is_catalog_text_unique_index_oid' LANGUAGE C STRICT;
+CREATE FUNCTION
+> SELECT is_catalog_text_unique_index_oid(6246), is_catalog_text_unique_index_oid(3593), is_catalog_text_unique_index_oid(2662);
+fields is_catalog_text_unique_index_oid:16:1:-1,is_catalog_text_unique_index_oid:16:1:-1,is_catalog_text_unique_index_oid:16:1:-1
+row t,t,f
+SELECT 1
+> CREATE FUNCTION test_atomic_ops() RETURNS bool AS '/home/tam/work/rupg-compat-work/oracle/19/src/src/test/regress/regress.so' LANGUAGE C;
+CREATE FUNCTION
+> SELECT test_atomic_ops();
+fields test_atomic_ops:16:1:-1
+row t
+SELECT 1
+> CREATE FUNCTION reverse_name(name) RETURNS name AS '/home/tam/work/rupg-compat-work/oracle/19/src/src/test/regress/regress.so' LANGUAGE C STRICT;
+CREATE FUNCTION
+> SELECT reverse_name('abcdef'), reverse_name(''), reverse_name(NULL);
+fields reverse_name:19:64:-1,reverse_name:19:64:-1,reverse_name:19:64:-1
+row fedcba,,NULL
+SELECT 1
+> CREATE FUNCTION interpt_pp(path, path) RETURNS point AS '/home/tam/work/rupg-compat-work/oracle/19/src/src/test/regress/regress.so' LANGUAGE C STRICT;
+CREATE FUNCTION
+> SELECT interpt_pp('[(0,0),(2,2)]', '[(0,2),(2,0)]'), interpt_pp('[(0,0),(1,0)]', '[(0,1),(1,1)]');
+fields interpt_pp:600:16:-1,interpt_pp:600:16:-1
+row (1,1),NULL
+SELECT 1
+> CREATE FUNCTION test_canonicalize_path(text) RETURNS text AS '/home/tam/work/rupg-compat-work/oracle/19/src/src/test/regress/regress.so' LANGUAGE C STRICT;
+CREATE FUNCTION
+> SELECT test_canonicalize_path('/./../abc/def/'), test_canonicalize_path('../abc/../../def/ghi'), test_canonicalize_path('./abc/..');
+fields test_canonicalize_path:25:-1:-1,test_canonicalize_path:25:-1:-1,test_canonicalize_path:25:-1:-1
+row /abc/def,../../def/ghi,.
+SELECT 1
+> CREATE FUNCTION test_bytea_to_text(bytea) RETURNS text AS '/home/tam/work/rupg-compat-work/oracle/19/src/src/test/regress/regress.so' LANGUAGE C STRICT;
+CREATE FUNCTION
+> CREATE FUNCTION test_text_to_bytea(text) RETURNS bytea AS '/home/tam/work/rupg-compat-work/oracle/19/src/src/test/regress/regress.so' LANGUAGE C STRICT;
+CREATE FUNCTION
+> CREATE FUNCTION test_valid_server_encoding(text) RETURNS boolean AS '/home/tam/work/rupg-compat-work/oracle/19/src/src/test/regress/regress.so' LANGUAGE C STRICT;
+CREATE FUNCTION
+> SELECT test_bytea_to_text('\x616263'), test_text_to_bytea('abc'), test_valid_server_encoding('utf8'), test_valid_server_encoding('sjis'), test_valid_server_encoding('nosuch');
+fields test_bytea_to_text:25:-1:-1,test_text_to_bytea:17:-1:-1,test_valid_server_encoding:16:1:-1,test_valid_server_encoding:16:1:-1,test_valid_server_encoding:16:1:-1
+row abc,\x616263,t,f,f
+SELECT 1
+> CREATE FUNCTION test_fdw_handler() RETURNS fdw_handler AS '/home/tam/work/rupg-compat-work/oracle/19/src/src/test/regress/regress.so', 'test_fdw_handler' LANGUAGE C;
+CREATE FUNCTION
+> CREATE FUNCTION test_opclass_options_func(internal) RETURNS void AS '/home/tam/work/rupg-compat-work/oracle/19/src/src/test/regress/regress.so', 'test_opclass_options_func' LANGUAGE C;
+CREATE FUNCTION
+> CREATE FUNCTION test1 (int) RETURNS int LANGUAGE C AS 'nosuchfile';
+ERROR 58P01 could not access file "nosuchfile": No such file or directory
+> CREATE FUNCTION test1 (int) RETURNS int LANGUAGE C AS '/home/tam/work/rupg-compat-work/oracle/19/src/src/test/regress/regress.so', 'nosuchsymbol';
+ERROR 42883 could not find function "nosuchsymbol" in file "/home/tam/work/rupg-compat-work/oracle/19/src/src/test/regress/regress.so"
+> CREATE FUNCTION test1 (int) RETURNS int LANGUAGE internal AS 'nosuch';
+ERROR 42883 there is no built-in function named "nosuch"
+> CREATE FUNCTION test1 (int) RETURNS int LANGUAGE internal AS 'int4', 'x';
+ERROR 42P13 only one AS item needed for language "internal"
+> CREATE FUNCTION test1 (int) RETURNS int LANGUAGE sql AS 'SELECT 1', 'x';
+ERROR 42P13 only one AS item needed for language "sql"
+> CREATE FUNCTION test1 (int) RETURNS int LANGUAGE internal;
+ERROR 42P13 no function body specified
+> CREATE FUNCTION test1 (int) RETURNS int LANGUAGE internal RETURN 1;
+ERROR 42P13 inline SQL function body only valid for language SQL
+> CREATE FUNCTION int4abs (int) RETURNS int LANGUAGE internal STRICT IMMUTABLE AS '';
+CREATE FUNCTION
+> CREATE FUNCTION myabs (int) RETURNS int LANGUAGE internal STRICT IMMUTABLE AS 'int4abs';
+CREATE FUNCTION
+> CREATE FUNCTION myeq (int8, int8) RETURNS bool LANGUAGE internal STRICT IMMUTABLE AS 'int8eq';
+CREATE FUNCTION
+> CREATE FUNCTION customcontsel(internal, oid, internal, integer) RETURNS float8 AS 'contsel' LANGUAGE internal STABLE STRICT;
+CREATE FUNCTION
+> SELECT int4abs(-3), myabs(-4), myeq(1, 1), myeq(1, 2);
+fields int4abs:23:4:-1,myabs:23:4:-1,myeq:16:1:-1,myeq:16:1:-1
+row 3,4,t,f
+SELECT 1
+> SELECT p.proname, l.lanname, p.prosrc, p.probin IS NULL AS nobin, p.procost, p.provolatile, p.proparallel, p.proisstrict FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid >= 16384 ORDER BY 1;
+fields proname@pg_proc.2:19:64:-1,lanname@pg_language.2:19:64:-1,prosrc@pg_proc.26:25:-1:-1,nobin:16:1:-1,procost@pg_proc.6:700:4:-1,provolatile@pg_proc.15:18:1:-1,proparallel@pg_proc.16:18:1:-1,proisstrict@pg_proc.13:16:1:-1
+row binary_coercible,c,binary_coercible,f,1,s,s,t
+row customcontsel,internal,contsel,t,1,s,u,t
+row int4abs,internal,int4abs,t,1,i,u,t
+row interpt_pp,c,interpt_pp,f,1,v,u,t
+row is_catalog_text_unique_index_oid,c,is_catalog_text_unique_index_oid,f,1,v,u,t
+row myabs,internal,int4abs,t,1,i,u,t
+row myeq,internal,int8eq,t,1,i,u,t
+row reverse_name,c,reverse_name,f,1,v,u,t
+row test_atomic_ops,c,test_atomic_ops,f,1,v,u,f
+row test_bytea_to_text,c,test_bytea_to_text,f,1,v,u,t
+row test_canonicalize_path,c,test_canonicalize_path,f,1,v,u,t
+row test_fdw_handler,c,test_fdw_handler,f,1,v,u,f
+row test_opclass_options_func,c,test_opclass_options_func,f,1,v,u,f
+row test_text_to_bytea,c,test_text_to_bytea,f,1,v,u,t
+row test_valid_server_encoding,c,test_valid_server_encoding,f,1,v,u,t
+SELECT 15
+> SELECT probin FROM pg_proc WHERE proname = 'reverse_name';
+fields probin@pg_proc.27:25:-1:-1
+row /home/tam/work/rupg-compat-work/oracle/19/src/src/test/regress/regress.so
+SELECT 1
+> CREATE ROLE regress_cfunc;
+CREATE ROLE
+> CREATE SCHEMA regress_cfunc_s AUTHORIZATION regress_cfunc;
+CREATE SCHEMA
+> SET ROLE regress_cfunc;
+SET
+is_superuser=off
+> CREATE FUNCTION regress_cfunc_s.test2 (int) RETURNS int LANGUAGE C AS '/home/tam/work/rupg-compat-work/oracle/19/src/src/test/regress/regress.so', 'binary_coercible';
+ERROR 42501 permission denied for language c
+> CREATE FUNCTION regress_cfunc_s.test2 (int) RETURNS int LANGUAGE internal AS 'int4abs';
+ERROR 42501 permission denied for language internal
+> RESET ROLE;
+RESET
+is_superuser=on
+> DROP SCHEMA regress_cfunc_s;
+DROP SCHEMA
+> DROP ROLE regress_cfunc;
+DROP ROLE
+> DROP FUNCTION binary_coercible(oid, oid), myabs(int);
+DROP FUNCTION

@@ -5725,6 +5725,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/smallreg.test")));
     }
 
+    /// `CREATE FUNCTION` in the languages `internal` and `c`: the functions of `regress.so` that rupg runs, a function in `internal` that runs a built-in function, the errors of `fmgr_c_validator` and `fmgr_internal_validator`, the errors of `AS`, the rows of `pg_proc`, `LOAD`, and the error for a role that is not a superuser. `connection/cfunc.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn functions_in_c_and_internal() {
+        big_stack(|| script(include_str!("connection/cfunc.test")));
+    }
+
     /// A query that is a `UNION ALL` of `SELECT`s with the types of its columns and has `ORDER BY` becomes an append relation, as `flatten_simple_union_all` makes it, so the planner can plan a `Merge Append` of the plans of the `SELECT`s in the order. A `SELECT` with its own `WHERE` is not a member of the append relation, as `is_safe_append_member`, and its plan gets a sort. `connection/plan_union_all_order.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_union_all_order() {
