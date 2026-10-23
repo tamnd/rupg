@@ -18,7 +18,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Fixed
 
-- A function that gives a set in the target list stops after the rows that `LIMIT` reads. `SELECT generate_series('2022-01-01'::timestamp, 'infinity', '1 month') LIMIT 10` gave "timestamp out of range", and `SELECT generate_series(1, 2000000000) LIMIT 3` made all the rows before `LIMIT` (#NNN).
+- A function that gives a set in the target list stops after the rows that `LIMIT` reads. `SELECT generate_series('2022-01-01'::timestamp, 'infinity', '1 month') LIMIT 10` gave "timestamp out of range", and `SELECT generate_series(1, 2000000000) LIMIT 3` made all the rows before `LIMIT` (#635).
 - The plan puts the bodies of the SQL functions `textanycat`, `anytextcat`, `quote_literal(anyelement)` and `quote_nullable(anyelement)` in place of their calls, as `inline_function` does. `EXPLAIN` now shows `((i)::text || 'x'::text)` for `i || 'x'` with an `integer` column, as PostgreSQL does (#634).
 - A rename of a function, a procedure or an aggregate by a role that is not its owner gives "must be owner of function", as PostgreSQL does. The rename also checks `CREATE` on the schema for a role that is not a superuser. A view that calls a renamed aggregate shows the new name (#633).
 - The check of `CREATE` on a schema reads `nspacl`, so a role that `GRANT CREATE ON SCHEMA` names, or that has the privileges of such a role, can create objects in the schema (#631).
