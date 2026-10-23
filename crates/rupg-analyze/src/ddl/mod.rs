@@ -464,11 +464,22 @@ fn column_numbers(exprs: &[&Expr]) -> Vec<i16> {
     numbers
 }
 
-/// `recordDependencyOnSingleRelExpr`: the objects that the expressions refer to. These are the columns of the relation, the relations and types of `regclass` and `regtype` constants, and the fields of composite types that the expressions select. The catalog drops the references to pinned objects.
-fn references(catalog: &Catalog, relation: u32, exprs: &[&Expr]) -> Vec<ObjRef> {
+/// `recordDependencyOnSingleRelExpr`: the objects that the expressions refer to. These are the columns of the relation, the relations and types of `regclass` and `regtype` constants, and the fields of composite types that the expressions select. The catalog drops the references to pinned objects. A `regrole` or `regdatabase` constant is an error, because a role and a database are shared objects.
+fn references(catalog: &Catalog, relation: u32, exprs: &[&Expr]) -> Result<Vec<ObjRef>> {
     let mut refs: Vec<ObjRef> =
         column_numbers(exprs).into_iter().map(|n| ObjRef::column(relation, n)).collect();
     for expr in exprs {
+        let shared = expr.find(0, &mut |e, _| match (&e.kind, e.ty) {
+            (ExprKind::Const(Value::Oid(_)), oid::REGROLE) => Some("regrole"),
+            (ExprKind::Const(Value::Oid(_)), oid::REGDATABASE) => Some("regdatabase"),
+            _ => None,
+        });
+        if let Some(name) = shared {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                format!("constant of the type {name} cannot be used here"),
+            ));
+        }
         expr.find(0, &mut |e, _| {
             let found = match (&e.kind, e.ty) {
                 (ExprKind::Const(Value::Oid(oid)), oid::REGCLASS) => {
@@ -487,7 +498,7 @@ fn references(catalog: &Catalog, relation: u32, exprs: &[&Expr]) -> Vec<ObjRef> 
             None::<()>
         });
     }
-    refs
+    Ok(refs)
 }
 
 /// The column that `find_expr_references_walker` records for a `FieldSelect` of a composite type of the catalog, also through a domain: the column of the relation of the type that has the field.

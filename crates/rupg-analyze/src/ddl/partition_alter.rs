@@ -78,7 +78,7 @@ impl Definer<'_, '_> {
             let own = self.catalog.add_column(child.oid, new)?;
             if let Some(text) = &default {
                 let expr = crate::node::read(text)?;
-                let refs = references(self.catalog, child.oid, &[&expr]);
+                let refs = references(self.catalog, child.oid, &[&expr])?;
                 self.catalog.add_default(child.oid, own, text.clone(), &refs)?;
             }
             self.added.push(Fill { table: child.oid, column: own, default: default.clone() });
@@ -213,7 +213,7 @@ impl Definer<'_, '_> {
                 continue;
             }
             let expr = crate::node::read(&text)?;
-            let refs = references(self.catalog, child.oid, &[&expr]);
+            let refs = references(self.catalog, child.oid, &[&expr])?;
             let new = self.catalog.add_check(
                 child.oid,
                 Some(&con.name),

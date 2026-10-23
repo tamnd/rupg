@@ -5719,6 +5719,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/privdml.test")));
     }
 
+    /// A query with `HAVING` and no aggregate and no `GROUP BY`, which does not read `FROM`, the overflow of `make_interval`, and the `regrole` and `regdatabase` constants that a stored expression cannot hold. `connection/smallreg.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn degenerate_grouping_and_shared_constants() {
+        big_stack(|| script(include_str!("connection/smallreg.test")));
+    }
+
     /// A query that is a `UNION ALL` of `SELECT`s with the types of its columns and has `ORDER BY` becomes an append relation, as `flatten_simple_union_all` makes it, so the planner can plan a `Merge Append` of the plans of the `SELECT`s in the order. A `SELECT` with its own `WHERE` is not a member of the append relation, as `is_safe_append_member`, and its plan gets a sort. `connection/plan_union_all_order.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_union_all_order() {

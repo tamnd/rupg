@@ -1083,7 +1083,7 @@ impl Definer<'_, '_> {
             }
             Some(RawDefault::Serial(k)) => {
                 let expr = nextval(plan.serials[*k].oid)?;
-                let refs = references(self.catalog, table, &[&expr]);
+                let refs = references(self.catalog, table, &[&expr])?;
                 self.catalog.add_default(table, number, crate::node::write(&expr)?, &refs)?;
             }
             Some(RawDefault::Cooked(_)) | None => {}
@@ -1193,7 +1193,7 @@ impl Definer<'_, '_> {
             if matches!(expr.kind, ExprKind::Const(Value::Null)) {
                 continue;
             }
-            let refs = references(self.catalog, table, &[&expr]);
+            let refs = references(self.catalog, table, &[&expr])?;
             let attnum = i16::try_from(i + 1).unwrap_or(i16::MAX);
             self.catalog.add_default(table, attnum, crate::node::write(&expr)?, &refs)?;
         }
@@ -1241,7 +1241,7 @@ impl Definer<'_, '_> {
                 ));
             }
             let keys = super::column_numbers(&[&expr]);
-            let refs = references(self.catalog, table, &[&expr]);
+            let refs = references(self.catalog, table, &[&expr])?;
             let text = crate::node::write(&expr)?;
             if let Some(name) = con.conname.as_deref()
                 && let Some(oid) = self.merge_check(table, name, &text, con.is_no_inherit)?

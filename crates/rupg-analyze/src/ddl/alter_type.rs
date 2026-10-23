@@ -348,7 +348,7 @@ impl Definer<'_, '_> {
         self.catalog.alter_column_type(table, number, &cmd.new)?;
         if let Some(expr) = default {
             self.catalog.remove_default(table, number);
-            let refs = references(self.catalog, table, &[&expr]);
+            let refs = references(self.catalog, table, &[&expr])?;
             self.catalog.add_default(table, number, crate::node::write(&expr)?, &refs)?;
         }
         Ok(())
