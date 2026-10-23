@@ -196,3 +196,49 @@ row 1,60,1
 row 7,15,1
 row 9,9,1
 SELECT 3
+> CREATE TABLE q (id serial, name text)
+CREATE TABLE
+> INSERT INTO public.q (name) VALUES ('a') RETURNING public.q.id, public.q.name
+fields id@q.1:23:4:-1,name@q.2:25:-1:-1
+row 1,a
+INSERT 0 1
+> INSERT INTO public.q (name) VALUES ('b') RETURNING public.q.*
+fields id@q.1:23:4:-1,name@q.2:25:-1:-1
+row 2,b
+INSERT 0 1
+> UPDATE public.q SET name = 'c' WHERE id = 1 RETURNING public.q.id, public.q.name, old.name, new.name
+fields id@q.1:23:4:-1,name@q.2:25:-1:-1,name@q.2:25:-1:-1,name@q.2:25:-1:-1
+row 1,c,a,c
+UPDATE 1
+> UPDATE public.q AS x SET name = 'd' WHERE id = 1 RETURNING public.q.id
+ERROR 42P01 invalid reference to FROM-clause entry for table "q" at 60
+> DELETE FROM public.q WHERE id = 2 RETURNING public.q.*
+fields id@q.1:23:4:-1,name@q.2:25:-1:-1
+row 2,b
+DELETE 1
+> INSERT INTO public.q (id, name) VALUES (1, 'e') ON CONFLICT DO NOTHING RETURNING public.q.id
+fields id@q.1:23:4:-1
+row 1
+INSERT 0 1
+> MERGE INTO public.q USING (VALUES (1, 'f'), (5, 'g')) AS v(id, name) ON public.q.id = v.id WHEN MATCHED THEN UPDATE SET name = v.name WHEN NOT MATCHED THEN INSERT VALUES (v.id, v.name) RETURNING merge_action(), public.q.id, public.q.name
+fields merge_action:25:-1:-1,id@q.1:23:4:-1,name@q.2:25:-1:-1
+row UPDATE,1,f
+row UPDATE,1,f
+row INSERT,5,g
+MERGE 3
+> UPDATE public.q SET name = 'h' FROM public.q AS y WHERE public.q.id = y.id AND y.id = 1 RETURNING public.q.name
+fields name@q.2:25:-1:-1
+row h
+row h
+UPDATE 2
+> INSERT INTO public.q (name) VALUES ('i') RETURNING WITH (OLD AS o, NEW AS n) public.q.name, o.name, n.name
+fields name@q.2:25:-1:-1,name@q.2:25:-1:-1,name@q.2:25:-1:-1
+row i,NULL,i
+INSERT 0 1
+> SELECT * FROM q ORDER BY id
+fields id@q.1:23:4:-1,name@q.2:25:-1:-1
+row 1,h
+row 1,h
+row 3,i
+row 5,g
+SELECT 4

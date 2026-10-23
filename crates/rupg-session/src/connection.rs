@@ -3827,7 +3827,7 @@ mod tests {
         big_stack(|| script(include_str!("connection/unique.test")));
     }
 
-    /// `RETURNING` of `INSERT`, `UPDATE` and `DELETE`: `*` and expressions, the names `old` and `new` and the options that rename them, the columns of `FROM` and `USING`, subqueries, the errors of `transformReturningClause`, the check constraints, a rollback, `PREPARE` and the extended protocol. `connection/returning.test` is the output of PostgreSQL 19 for the same script in a new database.
+    /// `RETURNING` of `INSERT`, `UPDATE` and `DELETE`: `*` and expressions, the names `old` and `new` and the options that rename them, the columns of `FROM` and `USING`, subqueries, the errors of `transformReturningClause`, the check constraints, a rollback, `PREPARE` and the extended protocol, and the columns of the target table by a name with the schema, which do not find `old` and `new`. `connection/returning.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn returning() {
         big_stack(|| script(include_str!("connection/returning.test")));

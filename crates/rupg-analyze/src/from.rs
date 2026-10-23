@@ -240,6 +240,8 @@ pub(crate) struct Item {
     cols_visible: bool,
     /// The number of the last columns that `*` does not give, as `p_dontexpand`: the columns of `SEARCH` and `CYCLE` in a reference from inside the query of `WITH`.
     hidden: usize,
+    /// True for the items `old` and `new` of `RETURNING`, whose `p_returning_type` is not `VAR_RETURNING_DEFAULT`. A name with a schema does not find them.
+    returning: bool,
 }
 
 impl Item {
@@ -1030,6 +1032,7 @@ impl Analyzer<'_> {
             rel_visible: true,
             cols_visible: true,
             hidden: 0,
+            returning: false,
         })
     }
 
@@ -1064,6 +1067,7 @@ impl Analyzer<'_> {
             rel_visible: false,
             cols_visible: true,
             hidden: 0,
+            returning: false,
         });
         before
     }
@@ -1085,6 +1089,7 @@ impl Analyzer<'_> {
         let index = self.scope.relations.len();
         let mut item = self.add_relation(relation, name.to_string(), None)?;
         item.cols_visible = false;
+        item.returning = true;
         self.scope.namespace.push(item);
         Ok(index)
     }
@@ -1228,6 +1233,7 @@ impl Analyzer<'_> {
             rel_visible: true,
             cols_visible: true,
             hidden: 0,
+            returning: false,
         });
     }
 
@@ -1505,6 +1511,7 @@ impl Analyzer<'_> {
                 rel_visible: true,
                 cols_visible: true,
                 hidden: 0,
+                returning: false,
             };
             self.check_conflicts(std::slice::from_ref(&item), &namespace)?;
             namespace.push(item);
@@ -1523,6 +1530,7 @@ impl Analyzer<'_> {
             rel_visible: alias.is_some(),
             cols_visible: true,
             hidden: 0,
+            returning: false,
         };
         namespace.push(item.clone());
         let join = Join {
@@ -1938,7 +1946,7 @@ impl Analyzer<'_> {
             };
             let Some(oid) = self.lookup_relation(&rv)? else { return Ok(None) };
             let mut result = None;
-            for (item, ok) in scope.visible().filter(|(i, _)| i.rel_visible) {
+            for (item, ok) in scope.visible().filter(|(i, _)| i.rel_visible && !i.returning) {
                 let entry = &scope.entries[item.entry];
                 if entry.relation.is_some() && !entry.aliased && entry.oid == oid {
                     if result.is_some() {
