@@ -270,7 +270,7 @@ fn step_arg(v: Option<&Value>) -> Result<Interval> {
     Ok(*step)
 }
 
-/// The timestamps from the start to the finish with the step. With a zone, the step is added to the local time of the zone.
+/// The timestamps from the start to the finish with the step, or the rows that the caller reads. With a zone, the step is added to the local time of the zone.
 fn timestamp_series(
     call: &Call<'_>,
     args: &[Value],
@@ -287,8 +287,9 @@ fn timestamp_series(
     let step = step_arg(args.get(2))?;
     let up = span(&step) > 0;
     let (mut current, finish) = (*start, *finish);
+    let most = call.want.unwrap_or(usize::MAX);
     let mut rows = Vec::new();
-    while if up { current <= finish } else { current >= finish } {
+    while rows.len() < most && if up { current <= finish } else { current >= finish } {
         if rows.len() % CHECK_EVERY == CHECK_EVERY - 1 {
             call.session.interrupted()?;
         }
@@ -329,7 +330,7 @@ fn special(what: &str, n: &Numeric) -> Result<()> {
     Err(Error::new(SqlState::INVALID_PARAMETER_VALUE, format!("{what} cannot be {name}")))
 }
 
-/// `generate_series_numeric` and `generate_series_step_numeric`: the numbers from the start to the stop, with the step or 1.
+/// `generate_series_numeric` and `generate_series_step_numeric`: the numbers from the start to the stop, with the step or 1, or the rows that the caller reads.
 fn series_numeric(call: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
     let (start, stop) = (numeric_arg(args, 0)?, numeric_arg(args, 1)?);
     special("start value", start)?;
@@ -350,8 +351,9 @@ fn series_numeric(call: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
     };
     let up = step.sign() == NumericSign::Positive;
     let mut current = start.clone();
+    let most = call.want.unwrap_or(usize::MAX);
     let mut rows = Vec::new();
-    loop {
+    while rows.len() < most {
         let order = current.compare(stop);
         if (up && order.is_gt()) || (!up && order.is_lt()) {
             break;

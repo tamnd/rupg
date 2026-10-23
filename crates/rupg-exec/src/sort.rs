@@ -53,7 +53,13 @@ impl<'a> Keys<'a> {
 
     fn test(&self, kernel: Kernel, ty: u32, a: &Value, b: &Value) -> Result<bool> {
         let types = [ty, ty];
-        let call = Call { session: self.session, args: &types, ret: oid::BOOL, variadic: false };
+        let call = Call {
+            session: self.session,
+            args: &types,
+            ret: oid::BOOL,
+            variadic: false,
+            want: None,
+        };
         Ok(kernel(&call, &[a.clone(), b.clone()])? == Value::Bool(true))
     }
 

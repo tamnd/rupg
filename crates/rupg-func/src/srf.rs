@@ -102,15 +102,23 @@ fn int(args: &[Value], at: usize) -> Result<i64> {
     args.get(at).and_then(Value::as_i64).ok_or_else(bad_value)
 }
 
-/// `generate_series_step_int8`: the numbers from the start to the stop, with the step or 1. The series stops before a number that overflows `kind`.
-fn series(args: &[Value], min: i64, max: i64, kind: fn(i64) -> Value) -> Result<Vec<Vec<Value>>> {
+/// `generate_series_step_int8`: the numbers from the start to the stop, with the step or 1. The series stops before a number that overflows `kind`, or after the rows that the caller reads.
+fn series(
+    call: &Call<'_>,
+    args: &[Value],
+    min: i64,
+    max: i64,
+    kind: fn(i64) -> Value,
+) -> Result<Vec<Vec<Value>>> {
     let (mut current, finish) = (int(args, 0)?, int(args, 1)?);
     let step = if args.len() > 2 { int(args, 2)? } else { 1 };
     if step == 0 {
         return Err(Error::new(SqlState::INVALID_PARAMETER_VALUE, "step size cannot equal zero"));
     }
+    let most = call.want.unwrap_or(usize::MAX);
     let mut rows = Vec::new();
-    while (step > 0 && current <= finish) || (step < 0 && current >= finish) {
+    while rows.len() < most && ((step > 0 && current <= finish) || (step < 0 && current >= finish))
+    {
         rows.push(vec![kind(current)]);
         match current.checked_add(step).filter(|n| (min..=max).contains(n)) {
             Some(next) => current = next,
@@ -121,15 +129,15 @@ fn series(args: &[Value], min: i64, max: i64, kind: fn(i64) -> Value) -> Result<
 }
 
 /// `generate_series_int4` and `generate_series_step_int4`.
-fn series_int4(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
-    series(args, i64::from(i32::MIN), i64::from(i32::MAX), |n| {
+fn series_int4(call: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
+    series(call, args, i64::from(i32::MIN), i64::from(i32::MAX), |n| {
         Value::Int4(i32::try_from(n).unwrap_or_default())
     })
 }
 
 /// `generate_series_int8` and `generate_series_step_int8`.
-fn series_int8(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
-    series(args, i64::MIN, i64::MAX, Value::Int8)
+fn series_int8(call: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
+    series(call, args, i64::MIN, i64::MAX, Value::Int8)
 }
 
 /// `array_unnest`: the elements of the array in the order of storage, for all the dimensions.

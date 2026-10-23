@@ -1,0 +1,131 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> SET TimeZone = 'UTC';
+SET
+> SELECT generate_series('2022-01-01 00:00'::timestamp, 'infinity'::timestamp, '1 month'::interval) LIMIT 10;
+fields generate_series:1114:8:-1
+row 2022-01-01 00:00:00
+row 2022-02-01 00:00:00
+row 2022-03-01 00:00:00
+row 2022-04-01 00:00:00
+row 2022-05-01 00:00:00
+row 2022-06-01 00:00:00
+row 2022-07-01 00:00:00
+row 2022-08-01 00:00:00
+row 2022-09-01 00:00:00
+row 2022-10-01 00:00:00
+SELECT 10
+> SELECT generate_series('2022-01-01 00:00'::timestamptz, 'infinity'::timestamptz, '1 month'::interval) LIMIT 4;
+fields generate_series:1184:8:-1
+row 2022-01-01 00:00:00+00
+row 2022-02-01 00:00:00+00
+row 2022-03-01 00:00:00+00
+row 2022-04-01 00:00:00+00
+SELECT 4
+> SELECT generate_series('2022-01-01 00:00'::timestamptz, 'infinity'::timestamptz, '1 day'::interval, 'Asia/Tokyo') LIMIT 3;
+fields generate_series:1184:8:-1
+row 2022-01-01 00:00:00+00
+row 2022-01-02 00:00:00+00
+row 2022-01-03 00:00:00+00
+SELECT 3
+> SELECT generate_series('2022-01-01'::timestamp, '-infinity'::timestamp, '-1 day'::interval) LIMIT 3;
+fields generate_series:1114:8:-1
+row 2022-01-01 00:00:00
+row 2021-12-31 00:00:00
+row 2021-12-30 00:00:00
+SELECT 3
+> SELECT generate_series(1, 2000000000) LIMIT 3;
+fields generate_series:23:4:-1
+row 1
+row 2
+row 3
+SELECT 3
+> SELECT generate_series(1::bigint, 9000000000000000000::bigint) LIMIT 3 OFFSET 2;
+fields generate_series:20:8:-1
+row 3
+row 4
+row 5
+SELECT 3
+> SELECT generate_series(1.5, 100000000000, 0.5) LIMIT 3;
+fields generate_series:1700:-1:-1
+row 1.5
+row 2.0
+row 2.5
+SELECT 3
+> SELECT generate_series(1, 10) OFFSET 2 LIMIT 3;
+fields generate_series:23:4:-1
+row 3
+row 4
+row 5
+SELECT 3
+> SELECT generate_series(1, 3) AS a, generate_series(1, 5) AS b LIMIT 4;
+fields a:23:4:-1,b:23:4:-1
+row 1,1
+row 2,2
+row 3,3
+row NULL,4
+SELECT 4
+> SELECT generate_series(1, 2) AS a, generate_series(1, 1000000000) AS b LIMIT 3;
+fields a:23:4:-1,b:23:4:-1
+row 1,1
+row 2,2
+row NULL,3
+SELECT 3
+> SELECT generate_series(1, generate_series(1, 3)) LIMIT 4;
+fields generate_series:23:4:-1
+row 1
+row 1
+row 2
+row 1
+SELECT 4
+> SELECT generate_series(1, 5) AS x ORDER BY x DESC LIMIT 2;
+fields x:23:4:-1
+row 5
+row 4
+SELECT 2
+> SELECT 1 / (3 - generate_series(1, 5)) LIMIT 2;
+fields ?column?:23:4:-1
+row 0
+row 1
+SELECT 2
+> SELECT 1 / (3 - generate_series(1, 5)) LIMIT 3;
+fields ?column?:23:4:-1
+row 0
+row 1
+ERROR 22012 division by zero
+> SELECT g, generate_series(1, 1000000000) FROM (VALUES (1), (2)) v(g) LIMIT 3;
+fields g:23:4:-1,generate_series:23:4:-1
+row 1,1
+row 1,2
+row 1,3
+SELECT 3
+> SELECT * FROM generate_series(1, 5) LIMIT 2;
+fields generate_series:23:4:-1
+row 1
+row 2
+SELECT 2
+> SELECT generate_series(1, 0) LIMIT 2;
+fields generate_series:23:4:-1
+SELECT 0
+> SELECT generate_series(1, 4) LIMIT 0;
+fields generate_series:23:4:-1
+SELECT 0
+> SELECT generate_series(1, 4) LIMIT NULL;
+fields generate_series:23:4:-1
+row 1
+row 2
+row 3
+row 4
+SELECT 4
+> SELECT generate_series(1.0, 'infinity'::numeric) LIMIT 2;
+fields generate_series:1700:-1:-1
+ERROR 22023 stop value cannot be infinity
+> SELECT DISTINCT generate_series(1, 3) % 2 AS m ORDER BY m LIMIT 1;
+fields m:23:4:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM (SELECT generate_series(1, 5) LIMIT 3) s;
+fields count:20:8:-1
+row 3
+SELECT 1

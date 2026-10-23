@@ -636,7 +636,13 @@ impl<'s> Ranged<'s> {
         let (func, ty) =
             func.ok_or_else(|| Error::internal("a frame with no in_range function"))?;
         let types = [self.ty, self.ty, ty, oid::BOOL, oid::BOOL];
-        let call = Call { session: self.session, args: &types, ret: oid::BOOL, variadic: false };
+        let call = Call {
+            session: self.session,
+            args: &types,
+            ret: oid::BOOL,
+            variadic: false,
+            want: None,
+        };
         let args = [val.clone(), base.clone(), offset.clone(), Value::Bool(sub), Value::Bool(less)];
         Ok(func(&call, &args)? == Value::Bool(true))
     }

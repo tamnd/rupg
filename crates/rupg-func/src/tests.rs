@@ -85,7 +85,8 @@ fn call_declared(name: &str, declared: &[u32], types: &[u32], args: &[Value]) ->
         .unwrap_or_else(|| panic!("no function {name}{declared:?}"));
     let kernel = kernel(proc.oid).unwrap_or_else(|| panic!("no kernel for {name}{types:?}"));
     let session = TestSession::new();
-    let call = Call { session: &session, args: types, ret: proc.rettype, variadic: false };
+    let call =
+        Call { session: &session, args: types, ret: proc.rettype, variadic: false, want: None };
     kernel(&call, args)
 }
 

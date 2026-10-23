@@ -1117,7 +1117,7 @@ fn run_query(
             if let Some(values) = values.get_mut(i) {
                 eval.windows = std::mem::take(values);
             }
-            if let Err(error) = eval.project(&query.targets, &levels, &mut rows) {
+            if let Err(error) = eval.project(&query.targets, &levels, &mut rows, needed) {
                 // With no sort, each row went to the client before the target of the next row failed.
                 if !ordered && cache.top.get() == Some(&raw const *query) {
                     let width = query.targets.iter().take_while(|t| !t.junk).count();
@@ -1761,7 +1761,7 @@ impl<'a> Eval<'a> {
     fn function_rows(&mut self, function: &FromFunction) -> Result<Rows> {
         let mut sets = Vec::with_capacity(function.calls.len());
         for (call, width) in &function.calls {
-            sets.push(self.function_set(call, *width)?);
+            sets.push(self.function_set(call, *width, None)?);
         }
         let count = sets.iter().map(Vec::len).max().unwrap_or(0);
         let mut rows = Vec::with_capacity(count);
@@ -1781,8 +1781,8 @@ impl<'a> Eval<'a> {
         Ok(rows)
     }
 
-    /// `ExecMakeTableFunctionResult`: the rows of one call of a function in `FROM`. A strict function with a null argument gives no rows when it gives a set, and else one row of nulls. Another expression gives one row with its value.
-    fn function_set(&mut self, call: &Expr, width: usize) -> Result<Rows> {
+    /// `ExecMakeTableFunctionResult`: the rows of one call of a function in `FROM`. A strict function with a null argument gives no rows when it gives a set, and else one row of nulls. Another expression gives one row with its value. `want` is the number of rows that the caller reads, which a set kernel can stop after.
+    fn function_set(&mut self, call: &Expr, width: usize, want: Option<usize>) -> Result<Rows> {
         if let ExprKind::JsonTable(table) = &call.kind {
             return self.json_table(table);
         }
@@ -1827,7 +1827,8 @@ impl<'a> Eval<'a> {
             };
         }
         let kernel = set_kernel(f.oid, call.location)?;
-        let c = Call { session: self.session, args: &types, ret: call.ty, variadic: f.variadic };
+        let c =
+            Call { session: self.session, args: &types, ret: call.ty, variadic: f.variadic, want };
         kernel(&c, &args)
     }
 
@@ -1844,18 +1845,22 @@ impl<'a> Eval<'a> {
         }
     }
 
-    /// `ExecProjectSet`: the rows of the targets for the row of the query. The calls of functions that give a set run level by level, and the calls of a level read the values of the levels below. The calls of one level go side by side, and a call with fewer values gives nulls, as `ExecProjectSRF` does. When no call of a level gives a value, the row gives no rows.
+    /// `ExecProjectSet`: the rows of the targets for the row of the query. The calls of functions that give a set run level by level, and the calls of a level read the values of the levels below. The calls of one level go side by side, and a call with fewer values gives nulls, as `ExecProjectSRF` does. When no call of a level gives a value, the row gives no rows. `needed` is the number of rows that `out` must have at most, or `usize::MAX`: each value of the top level gives one row, so the calls of the top level stop after the rows that `out` does not have yet, as `Limit` stops to read from `ProjectSet`.
     fn project(
         &mut self,
         targets: &[Target],
         levels: &[Vec<&Expr>],
         out: &mut Vec<Vec<Value>>,
+        needed: usize,
     ) -> Result<()> {
         let Some((calls, above)) = levels.split_first() else {
             out.push(targets.iter().map(|t| self.eval(&t.expr)).collect::<Result<_>>()?);
             return Ok(());
         };
-        let sets = calls.iter().map(|call| self.set_values(call)).collect::<Result<Vec<_>>>()?;
+        let want =
+            (above.is_empty() && needed != usize::MAX).then(|| needed.saturating_sub(out.len()));
+        let sets =
+            calls.iter().map(|call| self.set_values(call, want)).collect::<Result<Vec<_>>>()?;
         let count = sets.iter().map(Vec::len).max().unwrap_or(0);
         let base = self.sets.len();
         for i in 0..count {
@@ -1863,7 +1868,7 @@ impl<'a> Eval<'a> {
                 let value = set.get(i).cloned().unwrap_or(Value::Null);
                 self.sets.push((std::ptr::from_ref(*call), value));
             }
-            let result = self.project(targets, above, out);
+            let result = self.project(targets, above, out, needed);
             self.sets.truncate(base);
             result?;
         }
@@ -1871,14 +1876,14 @@ impl<'a> Eval<'a> {
     }
 
     /// `ExecMakeFunctionResultSet`: the values of a call of a function that gives a set. A function that gives rows of more than one column, or of type `record`, gives a row value for each row.
-    fn set_values(&mut self, call: &Expr) -> Result<Vec<Value>> {
+    fn set_values(&mut self, call: &Expr, want: Option<usize>) -> Result<Vec<Value>> {
         let ExprKind::Func(f) = &call.kind else {
             return Err(Error::internal("a set that is not a function call"));
         };
         if procedural(f.oid) {
             return self.procedural_set(f, call.ty);
         }
-        let rows = self.function_set(call, 1)?;
+        let rows = self.function_set(call, 1, want)?;
         // The types of the `OUT` parameters, with the actual types of the call for a polymorphic type.
         let columns = rupg_analyze::out_columns(f)?.unwrap_or_default();
         let mut types: Vec<u32> = columns.iter().map(|c| c.ty).collect();
@@ -2341,7 +2346,7 @@ impl<'a> Eval<'a> {
             };
         }
         let kernel = kernel(func, None)?;
-        let call = Call { session: self.session, args: types, ret, variadic };
+        let call = Call { session: self.session, args: types, ret, variadic, want: None };
         kernel(&call, args)
     }
 
