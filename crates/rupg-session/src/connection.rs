@@ -1255,17 +1255,24 @@ impl Connection {
         if views.is_empty() {
             return Ok(());
         }
+        // The old catalog reads the stored queries before the reader of the new catalog gives its functions to the thread.
         let old = self.reader();
+        let mut queries = Vec::with_capacity(views.len());
+        for &oid in views {
+            if let Some(query) = rupg_analyze::view_query(&old, oid)? {
+                queries.push((oid, query));
+            }
+        }
+        drop(old);
         let reader = self.reader_on(Arc::clone(work));
         // The analyzer looks in `pg_catalog` first when `search_path` does not name it, as `recomputeNamespacePath` does.
         let mut path = rupg_analyze::Env::search_path(&reader);
         if !path.contains(&rupg_analyze::PG_CATALOG_NAMESPACE) {
             path.insert(0, rupg_analyze::PG_CATALOG_NAMESPACE);
         }
-        let mut texts = Vec::with_capacity(views.len());
-        for &oid in views {
+        let mut texts = Vec::with_capacity(queries.len());
+        for (oid, query) in queries {
             let Some(rel) = work.relation(oid) else { continue };
-            let Some(query) = rupg_analyze::view_query(&old, oid)? else { continue };
             let columns: Vec<String> = rel.columns.iter().map(|c| c.name.clone()).collect();
             texts.push((oid, rupg_func::view_statement(&query, &rel.name, &columns, &reader)?));
         }
@@ -2015,6 +2022,7 @@ fn alter_tag(kind: ObjectType) -> CommandTag {
         ObjectType::OBJECT_FUNCTION => CommandTag::AlterFunction,
         ObjectType::OBJECT_ROUTINE => CommandTag::AlterRoutine,
         ObjectType::OBJECT_PROCEDURE => CommandTag::AlterProcedure,
+        ObjectType::OBJECT_AGGREGATE => CommandTag::AlterAggregate,
         ObjectType::OBJECT_TRIGGER => CommandTag::AlterTrigger,
         ObjectType::OBJECT_OPERATOR => CommandTag::AlterOperator,
         ObjectType::OBJECT_OPCLASS => CommandTag::AlterOperatorClass,
@@ -5778,6 +5786,12 @@ mod tests {
     #[test]
     fn aggcreate() {
         big_stack(|| script(include_str!("connection/aggcreate.test")));
+    }
+
+    /// `ALTER AGGREGATE` with `RENAME TO`, `OWNER TO` and `SET SCHEMA`, and `ALTER FUNCTION` and `ALTER ROUTINE` on an aggregate and on its support functions, with the errors of the lookup, of the owner and of a name that the schema has. A view that calls a renamed aggregate shows the new name. `connection/aggalter.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn aggalter() {
+        big_stack(|| script(include_str!("connection/aggalter.test")));
     }
 
     /// A query that is a `UNION ALL` of `SELECT`s with the types of its columns and has `ORDER BY` becomes an append relation, as `flatten_simple_union_all` makes it, so the planner can plan a `Merge Append` of the plans of the `SELECT`s in the order. A `SELECT` with its own `WHERE` is not a member of the append relation, as `is_safe_append_member`, and its plan gets a sort. `connection/plan_union_all_order.test` is the output of PostgreSQL 19 for the same script in a new database.

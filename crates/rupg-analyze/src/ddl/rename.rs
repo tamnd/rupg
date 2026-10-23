@@ -31,6 +31,7 @@ pub(super) fn is_rename_kind(kind: ObjectType) -> bool {
             | ObjectType::OBJECT_FUNCTION
             | ObjectType::OBJECT_PROCEDURE
             | ObjectType::OBJECT_ROUTINE
+            | ObjectType::OBJECT_AGGREGATE
             | ObjectType::OBJECT_TRIGGER
             | ObjectType::OBJECT_OPCLASS
             | ObjectType::OBJECT_OPFAMILY
@@ -54,7 +55,8 @@ impl Definer<'_, '_> {
             ObjectType::OBJECT_OPCLASS | ObjectType::OBJECT_OPFAMILY => self.rename_opcf(stmt),
             ObjectType::OBJECT_FUNCTION
             | ObjectType::OBJECT_PROCEDURE
-            | ObjectType::OBJECT_ROUTINE => {
+            | ObjectType::OBJECT_ROUTINE
+            | ObjectType::OBJECT_AGGREGATE => {
                 self.rename_function(stmt.renameType, stmt.object.as_ref(), newname)
             }
             _ => self.rename_relation(stmt, newname),
