@@ -16,6 +16,7 @@ pub mod toast;
 mod alter_type;
 mod drop;
 mod enum_label;
+mod opclass;
 mod operator;
 mod owner;
 mod sequence;
@@ -23,6 +24,9 @@ mod set_schema;
 mod tsearch;
 
 pub use drop::{Refusal, Target, flag};
+pub use opclass::{
+    AmOp, AmProc, MemberLink, OpClass, OpFamily, PG_AM, PG_AMOP, PG_AMPROC, PG_OPFAMILY,
+};
 pub use operator::{Operator, PG_OPERATOR};
 pub use owner::acl_new_owner;
 pub use sequence::SequenceData;
@@ -1118,6 +1122,10 @@ pub struct Catalog {
     functions: BTreeMap<u32, Function>,
     casts: BTreeMap<u32, Cast>,
     operators: BTreeMap<u32, Operator>,
+    opfamilies: BTreeMap<u32, OpFamily>,
+    opclasses: BTreeMap<u32, OpClass>,
+    amops: BTreeMap<u32, AmOp>,
+    amprocs: BTreeMap<u32, AmProc>,
     languages: BTreeMap<u32, Language>,
     extensions: BTreeMap<u32, Extension>,
     triggers: BTreeMap<u32, Trigger>,
@@ -1196,6 +1204,10 @@ impl Catalog {
             functions: BTreeMap::new(),
             casts: BTreeMap::new(),
             operators: BTreeMap::new(),
+            opfamilies: BTreeMap::new(),
+            opclasses: BTreeMap::new(),
+            amops: BTreeMap::new(),
+            amprocs: BTreeMap::new(),
             languages: BTreeMap::new(),
             extensions: BTreeMap::new(),
             triggers: BTreeMap::new(),

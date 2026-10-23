@@ -530,7 +530,7 @@ impl Definer<'_, '_> {
     }
 
     /// The row of an operator, of the catalog or built in. A built-in operator has no estimators here.
-    fn operator_row(&self, oid: u32) -> Option<Operator> {
+    pub(super) fn operator_row(&self, oid: u32) -> Option<Operator> {
         if let Some(o) = self.catalog.operator(oid) {
             return Some(o.clone());
         }

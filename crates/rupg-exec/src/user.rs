@@ -217,6 +217,10 @@ pub(crate) fn rows(
         "pg_range" => ranges(table, catalog),
         "pg_cast" => casts(table, catalog),
         "pg_operator" => operators(table, catalog),
+        "pg_opfamily" => opfamilies(table, catalog),
+        "pg_opclass" => opclasses(table, catalog),
+        "pg_amop" => amops(table, catalog),
+        "pg_amproc" => amprocs(table, catalog),
         "pg_partitioned_table" => partitioned_tables(table, catalog),
         "pg_inherits" => inherits(table, catalog),
         _ => Vec::new(),
@@ -1239,6 +1243,75 @@ fn operators<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("oprcode", oid(o.code))
                 .set("oprrest", oid(o.restrict))
                 .set("oprjoin", oid(o.join));
+            row
+        })
+        .collect()
+}
+
+fn opfamilies<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .opfamilies()
+        .map(|f| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(f.oid))
+                .set("opfmethod", oid(f.method))
+                .set("opfname", Value::text(f.name.clone()))
+                .set("opfnamespace", oid(f.namespace))
+                .set("opfowner", oid(f.owner));
+            row
+        })
+        .collect()
+}
+
+fn opclasses<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .opclasses()
+        .map(|c| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(c.oid))
+                .set("opcmethod", oid(c.method))
+                .set("opcname", Value::text(c.name.clone()))
+                .set("opcnamespace", oid(c.namespace))
+                .set("opcowner", oid(c.owner))
+                .set("opcfamily", oid(c.family))
+                .set("opcintype", oid(c.intype))
+                .set("opcdefault", Value::Bool(c.default))
+                .set("opckeytype", oid(c.keytype));
+            row
+        })
+        .collect()
+}
+
+fn amops<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .amops()
+        .map(|a| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(a.oid))
+                .set("amopfamily", oid(a.family))
+                .set("amoplefttype", oid(a.left))
+                .set("amoprighttype", oid(a.right))
+                .set("amopstrategy", Value::Int2(a.strategy))
+                .set("amoppurpose", Value::Char(a.purpose))
+                .set("amopopr", oid(a.operator))
+                .set("amopmethod", oid(a.method))
+                .set("amopsortfamily", oid(a.sortfamily));
+            row
+        })
+        .collect()
+}
+
+fn amprocs<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .amprocs()
+        .map(|a| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(a.oid))
+                .set("amprocfamily", oid(a.family))
+                .set("amproclefttype", oid(a.left))
+                .set("amprocrighttype", oid(a.right))
+                .set("amprocnum", Value::Int2(a.number))
+                .set("amproc", oid(a.function));
             row
         })
         .collect()

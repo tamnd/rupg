@@ -1,0 +1,343 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> create function part_hashint4_noop(value int4, seed int8) returns int8 as $$ select value + seed; $$ language sql strict immutable parallel safe;
+CREATE FUNCTION
+> create operator class part_test_int4_ops for type int4 using hash as operator 1 =, function 2 part_hashint4_noop(int4, int8);
+CREATE OPERATOR CLASS
+> create function part_hashtext_length(value text, seed int8) returns int8 as $$ select length(coalesce(value, ''))::int8 $$ language sql strict immutable parallel safe;
+CREATE FUNCTION
+> create operator class part_test_text_ops for type text using hash as operator 1 =, function 2 part_hashtext_length(text, int8);
+CREATE OPERATOR CLASS
+> create operator class part_test_text_ops for type text using hash as operator 1 =, function 2 part_hashtext_length(text, int8);
+ERROR 42710 operator class "part_test_text_ops" for access method "hash" already exists
+> select opcname, amname, opfname, opcintype::regtype, opcdefault, opckeytype from pg_opclass c join pg_am m on m.oid = c.opcmethod join pg_opfamily f on f.oid = c.opcfamily where opcname like 'part_test%' order by 1;
+fields opcname@pg_opclass.3:19:64:-1,amname@pg_am.2:19:64:-1,opfname@pg_opfamily.3:19:64:-1,opcintype:2206:4:-1,opcdefault@pg_opclass.8:16:1:-1,opckeytype@pg_opclass.9:26:4:-1
+row part_test_int4_ops,hash,part_test_int4_ops,integer,f,0
+row part_test_text_ops,hash,part_test_text_ops,text,f,0
+SELECT 2
+> select opfname, amname, opfnamespace::regnamespace, opfowner::regrole from pg_opfamily f join pg_am m on m.oid = f.opfmethod where opfname like 'part_test%' order by 1;
+fields opfname@pg_opfamily.3:19:64:-1,amname@pg_am.2:19:64:-1,opfnamespace:4089:4:-1,opfowner:4096:4:-1
+row part_test_int4_ops,hash,public,postgres
+row part_test_text_ops,hash,public,postgres
+SELECT 2
+> select f.opfname, amopstrategy, amoplefttype::regtype, amoprighttype::regtype, amoppurpose, amopopr::regoperator, amopsortfamily from pg_amop a join pg_opfamily f on f.oid = a.amopfamily where f.opfname like 'part_test%' order by 1, 2;
+fields opfname@pg_opfamily.3:19:64:-1,amopstrategy@pg_amop.5:21:2:-1,amoplefttype:2206:4:-1,amoprighttype:2206:4:-1,amoppurpose@pg_amop.6:18:1:-1,amopopr:2204:4:-1,amopsortfamily@pg_amop.9:26:4:-1
+row part_test_int4_ops,1,integer,integer,s,=(integer,integer),0
+row part_test_text_ops,1,text,text,s,=(text,text),0
+SELECT 2
+> select f.opfname, amprocnum, amproclefttype::regtype, amprocrighttype::regtype, amproc::regprocedure from pg_amproc a join pg_opfamily f on f.oid = a.amprocfamily where f.opfname like 'part_test%' order by 1, 2;
+fields opfname@pg_opfamily.3:19:64:-1,amprocnum@pg_amproc.5:21:2:-1,amproclefttype:2206:4:-1,amprocrighttype:2206:4:-1,amproc:2202:4:-1
+row part_test_int4_ops,2,integer,integer,part_hashint4_noop(integer,bigint)
+row part_test_text_ops,2,text,text,part_hashtext_length(text,bigint)
+SELECT 2
+> select pg_describe_object(classid, objid, objsubid) as obj, pg_describe_object(refclassid, refobjid, refobjsubid) as ref, deptype from pg_depend where classid in ('pg_opclass'::regclass, 'pg_opfamily'::regclass, 'pg_amop'::regclass, 'pg_amproc'::regclass) and objid >= 16384 order by 1, 2;
+fields obj:25:-1:-1,ref:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row function 2 (integer, integer) of operator family part_test_int4_ops for access method hash: part_hashint4_noop(integer,bigint),function part_hashint4_noop(integer,bigint),a
+row function 2 (integer, integer) of operator family part_test_int4_ops for access method hash: part_hashint4_noop(integer,bigint),operator family part_test_int4_ops for access method hash,a
+row function 2 (text, text) of operator family part_test_text_ops for access method hash: part_hashtext_length(text,bigint),function part_hashtext_length(text,bigint),a
+row function 2 (text, text) of operator family part_test_text_ops for access method hash: part_hashtext_length(text,bigint),operator family part_test_text_ops for access method hash,a
+row operator 1 (integer, integer) of operator family part_test_int4_ops for access method hash: =(integer,integer),operator class part_test_int4_ops for access method hash,i
+row operator 1 (text, text) of operator family part_test_text_ops for access method hash: =(text,text),operator class part_test_text_ops for access method hash,i
+row operator class part_test_int4_ops for access method hash,operator family part_test_int4_ops for access method hash,a
+row operator class part_test_int4_ops for access method hash,schema public,n
+row operator class part_test_text_ops for access method hash,operator family part_test_text_ops for access method hash,a
+row operator class part_test_text_ops for access method hash,schema public,n
+row operator family part_test_int4_ops for access method hash,schema public,n
+row operator family part_test_text_ops for access method hash,schema public,n
+SELECT 12
+> drop function part_hashint4_noop(int4, int8);
+DROP FUNCTION
+> drop operator class part_test_int4_ops using hash;
+DROP OPERATOR CLASS
+> drop operator class part_test_int4_ops using hash;
+ERROR 42704 operator class "part_test_int4_ops" does not exist for access method "hash"
+> drop operator class if exists part_test_int4_ops using hash;
+NOTICE 00000 operator class "part_test_int4_ops" does not exist for access method "hash", skipping
+DROP OPERATOR CLASS
+> drop operator class if exists nosuch.part_test_int4_ops using hash;
+NOTICE 00000 schema "nosuch" does not exist, skipping
+DROP OPERATOR CLASS
+> drop operator family if exists part_test_int4_ops using btree;
+NOTICE 00000 operator family "part_test_int4_ops" does not exist for access method "btree", skipping
+DROP OPERATOR FAMILY
+> drop operator family part_test_int4_ops using nosuch;
+ERROR 42704 access method "nosuch" does not exist
+> drop operator family part_test_int4_ops using heap;
+ERROR 55000 access method "heap" is not of type INDEX
+> drop operator family part_test_int4_ops using hash;
+DROP OPERATOR FAMILY
+> drop function part_hashint4_noop(int4, int8);
+ERROR 42883 function part_hashint4_noop(integer, bigint) does not exist
+> create operator class btree_noop_ops for type int4 using btree as operator 1 <, operator 3 =, function 1 btint4cmp(int4, int4);
+CREATE OPERATOR CLASS
+> create operator class bad_ops for type int4 using btree as operator 6 <;
+ERROR 42P17 invalid operator number 6, must be between 1 and 5
+> create operator class bad_ops for type int4 using nosuch as operator 1 <;
+ERROR 42704 access method "nosuch" does not exist
+> create operator class bad_ops for type int4 using heap as operator 1 <;
+ERROR 55000 access method "heap" is not of type INDEX
+> create operator class bad_ops for type int4 using btree as storage int8;
+ERROR 42P17 storage type cannot be different from data type for access method "btree"
+> create operator class bad_ops for type int4 using btree as function 1 btint4cmp(int4, int4), function 1 btint4cmp(int4, int4);
+ERROR 42P17 function number 1 for (integer,integer) appears more than once
+> create operator class bad_ops default for type int4 using btree as operator 1 <;
+ERROR 42710 could not make operator class "bad_ops" be default for type int4
+DETAIL Operator class "int4_ops" already is the default.
+> create operator class bad_ops for type int4 using btree as operator 1 <(int4, int4) for order by integer_ops;
+ERROR 42P17 access method "btree" does not support ordering operators
+> create operator class bad_ops for type int4 using btree as operator 1 ~~~;
+ERROR 42883 operator does not exist: integer ~~~ integer
+> create operator class bad_ops for type int4 using btree family nosuch as operator 1 <;
+ERROR 42704 operator family "nosuch" does not exist for access method "btree"
+> create operator class gist_test_ops for type int4 using gist as storage int8, function 1 btint4cmp(int4, int4);
+CREATE OPERATOR CLASS
+> select opcname, opckeytype::regtype from pg_opclass where opcname = 'gist_test_ops';
+fields opcname@pg_opclass.3:19:64:-1,opckeytype:2206:4:-1
+row gist_test_ops,bigint
+SELECT 1
+> drop operator family gist_test_ops using gist cascade;
+DROP OPERATOR FAMILY
+> CREATE OPERATOR FAMILY alt_opf4 USING btree;
+CREATE OPERATOR FAMILY
+> ALTER OPERATOR FAMILY alt_opf4 USING btree ADD OPERATOR 1 < (int4, int2) , OPERATOR 2 <= (int4, int2) , OPERATOR 3 = (int4, int2) , OPERATOR 4 >= (int4, int2) , OPERATOR 5 > (int4, int2) , FUNCTION 1 btint42cmp(int4, int2);
+ALTER OPERATOR FAMILY
+> select pg_describe_object(classid, objid, objsubid) as obj, pg_describe_object(refclassid, refobjid, refobjsubid) as ref, deptype from pg_depend where classid in ('pg_opclass'::regclass, 'pg_opfamily'::regclass, 'pg_amop'::regclass, 'pg_amproc'::regclass) and objid >= 16384 order by 1, 2;
+fields obj:25:-1:-1,ref:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row function 1 (integer, integer) of operator family btree_noop_ops for access method btree: btint4cmp(integer,integer),operator class btree_noop_ops for access method btree,i
+row function 1 (integer, smallint) of operator family alt_opf4 for access method btree: btint42cmp(integer,smallint),operator family alt_opf4 for access method btree,a
+row function 2 (text, text) of operator family part_test_text_ops for access method hash: part_hashtext_length(text,bigint),function part_hashtext_length(text,bigint),a
+row function 2 (text, text) of operator family part_test_text_ops for access method hash: part_hashtext_length(text,bigint),operator family part_test_text_ops for access method hash,a
+row operator 1 (integer, integer) of operator family btree_noop_ops for access method btree: <(integer,integer),operator class btree_noop_ops for access method btree,i
+row operator 1 (integer, smallint) of operator family alt_opf4 for access method btree: <(integer,smallint),operator family alt_opf4 for access method btree,a
+row operator 1 (text, text) of operator family part_test_text_ops for access method hash: =(text,text),operator class part_test_text_ops for access method hash,i
+row operator 2 (integer, smallint) of operator family alt_opf4 for access method btree: <=(integer,smallint),operator family alt_opf4 for access method btree,a
+row operator 3 (integer, integer) of operator family btree_noop_ops for access method btree: =(integer,integer),operator class btree_noop_ops for access method btree,i
+row operator 3 (integer, smallint) of operator family alt_opf4 for access method btree: =(integer,smallint),operator family alt_opf4 for access method btree,a
+row operator 4 (integer, smallint) of operator family alt_opf4 for access method btree: >=(integer,smallint),operator family alt_opf4 for access method btree,a
+row operator 5 (integer, smallint) of operator family alt_opf4 for access method btree: >(integer,smallint),operator family alt_opf4 for access method btree,a
+row operator class btree_noop_ops for access method btree,operator family btree_noop_ops for access method btree,a
+row operator class btree_noop_ops for access method btree,schema public,n
+row operator class part_test_text_ops for access method hash,operator family part_test_text_ops for access method hash,a
+row operator class part_test_text_ops for access method hash,schema public,n
+row operator family alt_opf4 for access method btree,schema public,n
+row operator family btree_noop_ops for access method btree,schema public,n
+row operator family part_test_text_ops for access method hash,schema public,n
+SELECT 19
+> ALTER OPERATOR FAMILY alt_opf4 USING btree DROP OPERATOR 1 (int4, int2) , OPERATOR 2 (int4, int2) , OPERATOR 3 (int4, int2) , OPERATOR 4 (int4, int2) , OPERATOR 5 (int4, int2) , FUNCTION 1 (int4, int2) ;
+ALTER OPERATOR FAMILY
+> select count(*) from pg_amop a join pg_opfamily f on f.oid = a.amopfamily where f.opfname = 'alt_opf4';
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE OPERATOR FAMILY alt_opf4 USING btree;
+ERROR 42710 operator family "alt_opf4" for access method "btree" already exists
+> ALTER OPERATOR FAMILY alt_opf4 USING invalid_index_method ADD  OPERATOR 1 < (int4, int2);
+ERROR 42704 access method "invalid_index_method" does not exist
+> ALTER OPERATOR FAMILY alt_opf4 USING btree ADD OPERATOR 6 < (int4, int2);
+ERROR 42P17 invalid operator number 6, must be between 1 and 5
+> ALTER OPERATOR FAMILY alt_opf4 USING btree ADD OPERATOR 0 < (int4, int2);
+ERROR 42P17 invalid operator number 0, must be between 1 and 5
+> ALTER OPERATOR FAMILY alt_opf4 USING btree ADD OPERATOR 1 < ;
+ERROR 42601 operator argument types must be specified in ALTER OPERATOR FAMILY
+> ALTER OPERATOR FAMILY alt_opf4 USING btree ADD FUNCTION 0 btint42cmp(int4, int2);
+ERROR 42P17 invalid function number 0, must be between 1 and 6
+> ALTER OPERATOR FAMILY alt_opf4 USING btree ADD FUNCTION 7 btint42cmp(int4, int2);
+ERROR 42P17 invalid function number 7, must be between 1 and 6
+> ALTER OPERATOR FAMILY alt_opf4 USING btree ADD STORAGE invalid_storage;
+ERROR 42601 STORAGE cannot be specified in ALTER OPERATOR FAMILY
+> ALTER OPERATOR FAMILY nosuch USING btree ADD OPERATOR 1 < (int4, int2);
+ERROR 42704 operator family "nosuch" does not exist for access method "btree"
+> DROP OPERATOR FAMILY alt_opf4 USING btree;
+DROP OPERATOR FAMILY
+> CREATE ROLE regress_opc_user5 NOSUPERUSER;
+CREATE ROLE
+> CREATE OPERATOR FAMILY alt_opf5 USING btree;
+CREATE OPERATOR FAMILY
+> SET ROLE regress_opc_user5;
+SET
+is_superuser=off
+> ALTER OPERATOR FAMILY alt_opf5 USING btree ADD OPERATOR 1 < (int4, int2), FUNCTION 1 btint42cmp(int4, int2);
+ERROR 42501 must be superuser to alter an operator family
+> CREATE OPERATOR FAMILY alt_opf5b USING btree;
+ERROR 42501 permission denied for schema public
+> CREATE OPERATOR CLASS alt_opc5b FOR TYPE int4 USING btree AS OPERATOR 1 <;
+ERROR 42501 permission denied for schema public
+> DROP OPERATOR FAMILY alt_opf5 USING btree;
+ERROR 42501 must be owner of operator family btree.alt_opf5
+> RESET ROLE;
+RESET
+is_superuser=on
+> DROP OPERATOR FAMILY alt_opf5 USING btree;
+DROP OPERATOR FAMILY
+> DROP ROLE regress_opc_user5;
+DROP ROLE
+> CREATE OPERATOR FAMILY alt_opf7 USING btree;
+CREATE OPERATOR FAMILY
+> ALTER OPERATOR FAMILY alt_opf7 USING btree ADD OPERATOR 1 < (int4, int2);
+ALTER OPERATOR FAMILY
+> ALTER OPERATOR FAMILY alt_opf7 USING btree DROP OPERATOR 1 (int4, int2, int8);
+ERROR 42601 one or two argument types must be specified
+> DROP OPERATOR FAMILY alt_opf7 USING btree;
+DROP OPERATOR FAMILY
+> CREATE OPERATOR FAMILY alt_opf8 USING btree;
+CREATE OPERATOR FAMILY
+> ALTER OPERATOR FAMILY alt_opf8 USING btree ADD OPERATOR 1 < (int4, int4);
+ALTER OPERATOR FAMILY
+> ALTER OPERATOR FAMILY alt_opf8 USING btree DROP OPERATOR 1 (int4);
+ALTER OPERATOR FAMILY
+> DROP OPERATOR FAMILY alt_opf8 USING btree;
+DROP OPERATOR FAMILY
+> CREATE OPERATOR FAMILY alt_opf9 USING gist;
+CREATE OPERATOR FAMILY
+> ALTER OPERATOR FAMILY alt_opf9 USING gist ADD OPERATOR 1 < (int4, int4) FOR ORDER BY float_ops;
+ALTER OPERATOR FAMILY
+> select amopstrategy, amoppurpose, amopsortfamily = (select oid from pg_opfamily where opfname = 'float_ops' and opfmethod = 403) from pg_amop a join pg_opfamily f on f.oid = a.amopfamily where f.opfname = 'alt_opf9';
+fields amopstrategy@pg_amop.5:21:2:-1,amoppurpose@pg_amop.6:18:1:-1,?column?:16:1:-1
+row 1,o,t
+SELECT 1
+> DROP OPERATOR FAMILY alt_opf9 USING gist;
+DROP OPERATOR FAMILY
+> CREATE OPERATOR FAMILY alt_opf10 USING btree;
+CREATE OPERATOR FAMILY
+> ALTER OPERATOR FAMILY alt_opf10 USING btree ADD OPERATOR 1 < (int4, int4) FOR ORDER BY float_ops;
+ERROR 42P17 access method "btree" does not support ordering operators
+> DROP OPERATOR FAMILY alt_opf10 USING btree;
+DROP OPERATOR FAMILY
+> CREATE OPERATOR FAMILY alt_opf11 USING gist;
+CREATE OPERATOR FAMILY
+> ALTER OPERATOR FAMILY alt_opf11 USING gist ADD OPERATOR 1 < (int4, int4) FOR ORDER BY float_ops;
+ALTER OPERATOR FAMILY
+> ALTER OPERATOR FAMILY alt_opf11 USING gist DROP OPERATOR 1 (int4, int4);
+ALTER OPERATOR FAMILY
+> DROP OPERATOR FAMILY alt_opf11 USING gist;
+DROP OPERATOR FAMILY
+> BEGIN TRANSACTION;
+BEGIN
+> CREATE OPERATOR FAMILY alt_opf12 USING btree;
+CREATE OPERATOR FAMILY
+> CREATE FUNCTION fn_opf12  (int4, int2) RETURNS BIGINT AS 'SELECT NULL::BIGINT;' LANGUAGE SQL;
+CREATE FUNCTION
+> ALTER OPERATOR FAMILY alt_opf12 USING btree ADD FUNCTION 1 fn_opf12(int4, int2);
+ERROR 42P17 ordering comparison functions must return integer
+> ROLLBACK;
+ROLLBACK
+> BEGIN TRANSACTION;
+BEGIN
+> CREATE OPERATOR FAMILY alt_opf13 USING hash;
+CREATE OPERATOR FAMILY
+> CREATE FUNCTION fn_opf13  (int4) RETURNS BIGINT AS 'SELECT NULL::BIGINT;' LANGUAGE SQL;
+CREATE FUNCTION
+> ALTER OPERATOR FAMILY alt_opf13 USING hash ADD FUNCTION 1 fn_opf13(int4);
+ERROR 42P17 hash function 1 must return integer
+> ROLLBACK;
+ROLLBACK
+> BEGIN TRANSACTION;
+BEGIN
+> CREATE OPERATOR FAMILY alt_opf14 USING btree;
+CREATE OPERATOR FAMILY
+> CREATE FUNCTION fn_opf14 (int4) RETURNS BIGINT AS 'SELECT NULL::BIGINT;' LANGUAGE SQL;
+CREATE FUNCTION
+> ALTER OPERATOR FAMILY alt_opf14 USING btree ADD FUNCTION 1 fn_opf14(int4);
+ERROR 42P17 ordering comparison functions must have two arguments
+> ROLLBACK;
+ROLLBACK
+> BEGIN TRANSACTION;
+BEGIN
+> CREATE OPERATOR FAMILY alt_opf15 USING hash;
+CREATE OPERATOR FAMILY
+> CREATE FUNCTION fn_opf15 (int4, int2) RETURNS BIGINT AS 'SELECT NULL::BIGINT;' LANGUAGE SQL;
+CREATE FUNCTION
+> ALTER OPERATOR FAMILY alt_opf15 USING hash ADD FUNCTION 1 fn_opf15(int4, int2);
+ERROR 42P17 hash function 1 must have one argument
+> ROLLBACK;
+ROLLBACK
+> CREATE OPERATOR FAMILY alt_opf16 USING gist;
+CREATE OPERATOR FAMILY
+> ALTER OPERATOR FAMILY alt_opf16 USING gist ADD FUNCTION 1 btint42cmp(int4, int2);
+ERROR 42P17 associated data types must be specified for index support function
+> DROP OPERATOR FAMILY alt_opf16 USING gist;
+DROP OPERATOR FAMILY
+> CREATE OPERATOR FAMILY alt_opf17 USING btree;
+CREATE OPERATOR FAMILY
+> ALTER OPERATOR FAMILY alt_opf17 USING btree ADD OPERATOR 1 < (int4, int4), OPERATOR 1 < (int4, int4);
+ERROR 42P17 operator number 1 for (integer,integer) appears more than once
+> ALTER OPERATOR FAMILY alt_opf17 USING btree ADD OPERATOR 1 < (int4, int4);
+ALTER OPERATOR FAMILY
+> ALTER OPERATOR FAMILY alt_opf17 USING btree ADD OPERATOR 1 < (int4, int4);
+ERROR 42710 operator 1(integer,integer) already exists in operator family "alt_opf17"
+> ALTER OPERATOR FAMILY alt_opf17 USING btree ADD OPERATOR 1 < (int4, int2) , OPERATOR 2 <= (int4, int2) , OPERATOR 3 = (int4, int2) , OPERATOR 4 >= (int4, int2) , OPERATOR 5 > (int4, int2) , FUNCTION 1 btint42cmp(int4, int2) , FUNCTION 1 btint42cmp(int4, int2);
+ERROR 42P17 function number 1 for (integer,smallint) appears more than once
+> ALTER OPERATOR FAMILY alt_opf17 USING btree ADD OPERATOR 1 < (int4, int2) , OPERATOR 2 <= (int4, int2) , OPERATOR 3 = (int4, int2) , OPERATOR 4 >= (int4, int2) , OPERATOR 5 > (int4, int2) , FUNCTION 1 btint42cmp(int4, int2);
+ALTER OPERATOR FAMILY
+> ALTER OPERATOR FAMILY alt_opf17 USING btree ADD OPERATOR 1 < (int4, int2) , OPERATOR 2 <= (int4, int2) , OPERATOR 3 = (int4, int2) , OPERATOR 4 >= (int4, int2) , OPERATOR 5 > (int4, int2) , FUNCTION 1 btint42cmp(int4, int2);
+ERROR 42710 operator 1(integer,smallint) already exists in operator family "alt_opf17"
+> DROP OPERATOR FAMILY alt_opf17 USING btree;
+DROP OPERATOR FAMILY
+> CREATE OPERATOR FAMILY alt_opf18 USING btree;
+CREATE OPERATOR FAMILY
+> ALTER OPERATOR FAMILY alt_opf18 USING btree DROP OPERATOR 1 (int4, int4);
+ERROR 42704 operator 1(integer,integer) does not exist in operator family "alt_opf18"
+> ALTER OPERATOR FAMILY alt_opf18 USING btree ADD OPERATOR 1 < (int4, int2) , OPERATOR 2 <= (int4, int2) , OPERATOR 3 = (int4, int2) , OPERATOR 4 >= (int4, int2) , OPERATOR 5 > (int4, int2) , FUNCTION 1 btint42cmp(int4, int2);
+ALTER OPERATOR FAMILY
+> ALTER OPERATOR FAMILY alt_opf18 USING btree ADD FUNCTION 4 (int4, int2) btequalimage(oid);
+ERROR 42P17 ordering equal image functions must not be cross-type
+> ALTER OPERATOR FAMILY alt_opf18 USING btree ADD FUNCTION 6 (int4, int2) btint4skipsupport(internal);
+ERROR 42P17 btree skip support functions must not be cross-type
+> ALTER OPERATOR FAMILY alt_opf18 USING btree DROP FUNCTION 2 (int4, int4);
+ERROR 42704 function 2(integer,integer) does not exist in operator family "alt_opf18"
+> DROP OPERATOR FAMILY alt_opf18 USING btree;
+DROP OPERATOR FAMILY
+> CREATE OPERATOR FAMILY alt_opf19 USING btree;
+CREATE OPERATOR FAMILY
+> ALTER OPERATOR FAMILY alt_opf19 USING btree ADD FUNCTION 5 (int4) btint42cmp(int4, int2);
+ERROR 42P17 invalid operator class options parsing function
+HINT Valid signature of operator class options parsing function is (internal) RETURNS void.
+> ALTER OPERATOR FAMILY alt_opf19 USING btree ADD FUNCTION 5 (int4, int2) btint42cmp(int4, int2);
+ERROR 42P17 left and right associated data types for operator class options parsing functions must match
+> DROP OPERATOR FAMILY alt_opf19 USING btree;
+DROP OPERATOR FAMILY
+> CREATE SCHEMA opc_nsp;
+CREATE SCHEMA
+> CREATE OPERATOR CLASS opc_nsp.int4_test_ops FOR TYPE int4 USING btree AS OPERATOR 1 <, OPERATOR 3 =, FUNCTION 1 btint4cmp(int4, int4);
+CREATE OPERATOR CLASS
+> select pg_describe_object('pg_opclass'::regclass, oid, 0), pg_identify_object('pg_opclass'::regclass, oid, 0) from pg_opclass where opcname = 'int4_test_ops';
+fields pg_describe_object:25:-1:-1,pg_identify_object:2249:-1:-1
+row operator class opc_nsp.int4_test_ops for access method btree,("operator class",opc_nsp,int4_test_ops,"opc_nsp.int4_test_ops USING btree")
+SELECT 1
+> select pg_describe_object(classid, objid, objsubid) as obj, pg_describe_object(refclassid, refobjid, refobjsubid) as ref, deptype from pg_depend where classid in ('pg_opclass'::regclass, 'pg_opfamily'::regclass, 'pg_amop'::regclass, 'pg_amproc'::regclass) and objid >= 16384 order by 1, 2;
+fields obj:25:-1:-1,ref:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row function 1 (integer, integer) of operator family btree_noop_ops for access method btree: btint4cmp(integer,integer),operator class btree_noop_ops for access method btree,i
+row function 1 (integer, integer) of operator family opc_nsp.int4_test_ops for access method btree: btint4cmp(integer,integer),operator class opc_nsp.int4_test_ops for access method btree,i
+row function 2 (text, text) of operator family part_test_text_ops for access method hash: part_hashtext_length(text,bigint),function part_hashtext_length(text,bigint),a
+row function 2 (text, text) of operator family part_test_text_ops for access method hash: part_hashtext_length(text,bigint),operator family part_test_text_ops for access method hash,a
+row operator 1 (integer, integer) of operator family btree_noop_ops for access method btree: <(integer,integer),operator class btree_noop_ops for access method btree,i
+row operator 1 (integer, integer) of operator family opc_nsp.int4_test_ops for access method btree: <(integer,integer),operator class opc_nsp.int4_test_ops for access method btree,i
+row operator 1 (text, text) of operator family part_test_text_ops for access method hash: =(text,text),operator class part_test_text_ops for access method hash,i
+row operator 3 (integer, integer) of operator family btree_noop_ops for access method btree: =(integer,integer),operator class btree_noop_ops for access method btree,i
+row operator 3 (integer, integer) of operator family opc_nsp.int4_test_ops for access method btree: =(integer,integer),operator class opc_nsp.int4_test_ops for access method btree,i
+row operator class btree_noop_ops for access method btree,operator family btree_noop_ops for access method btree,a
+row operator class btree_noop_ops for access method btree,schema public,n
+row operator class opc_nsp.int4_test_ops for access method btree,operator family opc_nsp.int4_test_ops for access method btree,a
+row operator class opc_nsp.int4_test_ops for access method btree,schema opc_nsp,n
+row operator class part_test_text_ops for access method hash,operator family part_test_text_ops for access method hash,a
+row operator class part_test_text_ops for access method hash,schema public,n
+row operator family btree_noop_ops for access method btree,schema public,n
+row operator family opc_nsp.int4_test_ops for access method btree,schema opc_nsp,n
+row operator family part_test_text_ops for access method hash,schema public,n
+SELECT 18
+> DROP SCHEMA opc_nsp;
+ERROR 2BP01 cannot drop schema opc_nsp because other objects depend on it
+DETAIL operator family opc_nsp.int4_test_ops for access method btree depends on schema opc_nsp
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP SCHEMA opc_nsp CASCADE;
+NOTICE 00000 drop cascades to operator family opc_nsp.int4_test_ops for access method btree
+DROP SCHEMA
+> select count(*) from pg_opclass where oid >= 16384;
+fields count:20:8:-1
+row 2
+SELECT 1
+> select count(*) from pg_amop where oid >= 16384;
+fields count:20:8:-1
+row 3
+SELECT 1
