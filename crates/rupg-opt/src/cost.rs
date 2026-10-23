@@ -772,6 +772,10 @@ pub(crate) fn qual_costs<'a>(
         if matches!(expr.kind, ExprKind::Agg(_) | ExprKind::Window(_)) {
             return;
         }
+        // A `PlaceHolderVar` costs nothing above the node that computes it, which counts the cost of its expression.
+        if matches!(expr.kind, ExprKind::PlaceHolder(_)) {
+            return;
+        }
         // A call of `GROUPING` costs one operator, with its arguments.
         if matches!(expr.kind, ExprKind::Grouping(_)) {
             *calls += 1;

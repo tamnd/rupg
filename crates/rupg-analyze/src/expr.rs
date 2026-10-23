@@ -81,6 +81,8 @@ pub enum ExprKind {
     Window(Box<WindowFunc>),
     /// `GroupingFunc`: a call of `GROUPING`, of type `integer`.
     Grouping(Box<GroupingFunc>),
+    /// `PlaceHolderVar`: an expression of a subquery that the planner merged below the side of an outer join that can give nulls. Only the planner makes it.
+    PlaceHolder(Box<PlaceHolder>),
     /// `SubLink`: a subquery in an expression.
     SubLink(Box<SubLink>),
     /// `Param` of the kind `PARAM_SUBLINK`: the value of the column with this index, from 0, of a row of the subquery, in the test of `ANY` or `ALL`.
@@ -302,6 +304,16 @@ pub struct GroupingFunc {
     /// `refs`: the target of the item of `GROUP BY` of each argument. `parseCheckAggregates` sets them.
     pub refs: Vec<usize>,
     /// `agglevelsup`: 0 for a call of the query that has the call, 1 for a call of the query outside it, and so on.
+    pub levels_up: usize,
+}
+
+/// A `PlaceHolderVar`: the value of `expr` at the scan or the join of the relations of the subquery, which is null in a row where an outer join above them gives nulls for them, as a column of those relations is.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlaceHolder {
+    pub expr: Expr,
+    /// `phrels`: the relations of the subquery in the query.
+    pub relations: Vec<usize>,
+    /// `phlevelsup`: 0 for the query of the expression, 1 for the query outside it, and so on.
     pub levels_up: usize,
 }
 
@@ -794,6 +806,7 @@ impl Expr {
             }
             ExprKind::Window(w) => w.args.iter().chain(w.filter.as_deref()).collect(),
             ExprKind::Grouping(g) => g.args.iter().collect(),
+            ExprKind::PlaceHolder(p) => vec![&p.expr],
             ExprKind::Relabel(arg, _)
             | ExprKind::CoerceViaIo(arg, _)
             | ExprKind::CoerceToDomain(arg, _)
@@ -856,6 +869,7 @@ impl Expr {
                 args.iter_mut().chain(filter.as_deref_mut()).collect()
             }
             ExprKind::Grouping(g) => g.args.iter_mut().collect(),
+            ExprKind::PlaceHolder(p) => vec![&mut p.expr],
             ExprKind::Relabel(arg, _)
             | ExprKind::CoerceViaIo(arg, _)
             | ExprKind::CoerceToDomain(arg, _)
@@ -958,10 +972,10 @@ impl Expr {
 
     /// `IncrementVarSublevelsUp` with `min_sublevels_up`: as [`Expr::raise`], but only the columns that are `depth` or more levels up change.
     pub(crate) fn raise_from(&mut self, levels: usize, depth: usize) {
-        if let ExprKind::Var(var) = &mut self.kind
-            && var.levels_up >= depth
-        {
-            var.levels_up += levels;
+        match &mut self.kind {
+            ExprKind::Var(var) if var.levels_up >= depth => var.levels_up += levels,
+            ExprKind::PlaceHolder(p) if p.levels_up >= depth => p.levels_up += levels,
+            _ => {}
         }
         for child in self.children_mut() {
             child.raise_from(levels, depth);
@@ -1004,10 +1018,10 @@ impl Expr {
     }
 
     fn lower_from(&mut self, levels: usize, depth: usize) {
-        if let ExprKind::Var(var) = &mut self.kind
-            && var.levels_up >= depth + levels
-        {
-            var.levels_up -= levels;
+        match &mut self.kind {
+            ExprKind::Var(var) if var.levels_up >= depth + levels => var.levels_up -= levels,
+            ExprKind::PlaceHolder(p) if p.levels_up >= depth + levels => p.levels_up -= levels,
+            _ => {}
         }
         for child in self.children_mut() {
             child.lower_from(levels, depth);

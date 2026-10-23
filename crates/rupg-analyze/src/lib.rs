@@ -69,8 +69,8 @@ pub use expr::{
     GroupingFunc, IsJson, JoinRow, JsonBehavior, JsonBehaviorKind, JsonCtor, JsonCtorKind,
     JsonEncoding, JsonExpr, JsonExprOp, JsonFormat, JsonFormatKind, JsonItemType, JsonReturning,
     JsonTable, JsonTableColumn, JsonTablePlan, JsonTableScan, JsonValue, JsonWrapper, NamedArg,
-    NullTreatment, RowCompare, RowCompareKind, SqlValue, SubLink, SubLinkKind, Subscript, Var,
-    WindowFunc, XmlExpr, XmlOp,
+    NullTreatment, PlaceHolder, RowCompare, RowCompareKind, SqlValue, SubLink, SubLinkKind,
+    Subscript, Var, WindowFunc, XmlExpr, XmlOp,
 };
 pub use from::{
     Column, FromFunction, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM, TableSample,

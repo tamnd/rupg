@@ -206,7 +206,7 @@ fn reduce(
 }
 
 /// The relations of an item of `FROM`.
-fn rels(item: &FromItem, out: &mut Vec<usize>) {
+pub(crate) fn rels(item: &FromItem, out: &mut Vec<usize>) {
     match item {
         FromItem::Relation(r) => out.push(*r),
         FromItem::Join(join) => {

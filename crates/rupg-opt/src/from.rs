@@ -31,6 +31,8 @@ pub(crate) struct Stats {
     rows: BTreeMap<usize, (f64, f64)>,
     /// Each column that the query reads, with its width and the relations of the places that read it, as `attr_needed`. The target list of the query is `usize::MAX`.
     needed: Vec<(Var, i32, BTreeSet<usize>)>,
+    /// Each `PlaceHolderVar` that the query reads, with its width, the relations of the node that computes it and the relations of the places that read it, as `ph_eval_at` and `ph_needed`.
+    placeholders: Vec<(Expr, i32, BTreeSet<usize>, BTreeSet<usize>)>,
     /// `sort_pathkeys`: the keys of `ORDER BY`, each with its directions.
     sort: Vec<(Expr, bool, bool)>,
     /// `group_pathkeys` and `distinct_pathkeys`: the keys of `GROUP BY` and of `DISTINCT`, in any order.
@@ -77,6 +79,17 @@ impl Stats {
         cost::qual_costs(quals, &self.subplans)
     }
 
+    /// `set_rel_width`: the start cost and the cost for each row of the `PlaceHolderVar`s that the scan of the relation `r` computes for the nodes above it.
+    fn placeholder_costs(&self, r: usize) -> (f64, f64) {
+        let computed = self.placeholders.iter().filter(|(_, _, eval, places)| {
+            eval.len() == 1 && eval.contains(&r) && !places.is_subset(eval)
+        });
+        self.qual_costs(computed.filter_map(|(e, ..)| match &e.kind {
+            ExprKind::PlaceHolder(p) => Some(&p.expr),
+            _ => None,
+        }))
+    }
+
     /// The cost for each row of [`Stats::qual_costs`].
     pub(crate) fn qual_cost<'a>(&self, quals: impl IntoIterator<Item = &'a Expr>) -> f64 {
         self.qual_costs(quals).1
@@ -102,7 +115,7 @@ impl Stats {
                 continue;
             }
             let mut columns = Vec::new();
-            exprs::columns_at(expr, 0, &mut columns);
+            exprs::vars_of(expr, &mut columns);
             if columns.is_empty() && exprs::volatile(expr) {
                 return input_rows;
             }
@@ -238,6 +251,17 @@ impl Stats {
         let mut columns = Vec::new();
         exprs::columns_at(expr, depth, &mut columns);
         for column in columns {
+            if let ExprKind::PlaceHolder(p) = &column.kind {
+                match self.placeholders.iter_mut().find(|(e, ..)| e.same(&column)) {
+                    Some((.., places)) => places.extend(at.iter().copied()),
+                    None => {
+                        let (width, eval) =
+                            (cost::expr_width(&column, relations), exprs::eval_at(p));
+                        self.placeholders.push((column, width, eval, at.clone()));
+                    }
+                }
+                continue;
+            }
             let ExprKind::Var(var) = column.kind else { continue };
             match self.needed.iter_mut().find(|(v, _, _)| *v == var) {
                 Some((_, _, places)) => places.extend(at.iter().copied()),
@@ -251,11 +275,19 @@ impl Stats {
 
     /// The width of the rows of a join of relations, as `build_joinrel_tlist` and `set_rel_width` find it: the columns of the relations that a place outside the join reads.
     fn width(&self, rels: &BTreeSet<usize>) -> i32 {
-        self.needed
+        let columns: i32 = self
+            .needed
             .iter()
             .filter(|(v, _, places)| rels.contains(&v.relation) && !places.is_subset(rels))
             .map(|(_, width, _)| width)
-            .sum()
+            .sum();
+        let placeholders: i32 = self
+            .placeholders
+            .iter()
+            .filter(|(_, _, eval, places)| eval.is_subset(rels) && !places.is_subset(rels))
+            .map(|(_, width, ..)| width)
+            .sum();
+        columns + placeholders
     }
 
     /// `truncate_useless_pathkeys`: the first keys of the order of the rows of a join of relations that a node above can use. These are the first keys of `ORDER BY`, the first keys that are keys of `GROUP BY` or of `DISTINCT`, or the first keys that a merge join with another relation can use.
@@ -753,6 +785,13 @@ impl<'q> Builder<'q> {
             None => startup + (run + tuples * per_row),
         };
         node.cost = Cost { startup, total, rows, width };
+        // `cost_seqscan` and the other scans: the targets cost their start cost, and their cost for each row that the scan gives.
+        let targets = stats.placeholder_costs(r);
+        let add_targets = |node: &mut Node<'_>| {
+            node.cost.startup += targets.0;
+            node.cost.total += targets.0 + targets.1 * node.cost.rows;
+        };
+        add_targets(&mut node);
         node.disabled = matches!(node.kind, Kind::SeqScan(_)) && !crate::enable().seqscan;
         let mut seq = Rel { node, rels: BTreeSet::from([r]), order: Vec::new() };
         if let Some(append) = appended {
@@ -801,7 +840,8 @@ impl<'q> Builder<'q> {
         self.bases.insert((level.scope, r), stored);
         let mut paths = Paths::new(stats.startup);
         paths.add(costs(&seq.node), Vec::new(), seq);
-        for rel in index::paths(level, &table, &indexes, stats) {
+        for mut rel in index::paths(level, &table, &indexes, stats) {
+            add_targets(&mut rel.node);
             paths.add(costs(&rel.node), rel.order.clone(), rel);
         }
         paths.kept()
@@ -1306,6 +1346,14 @@ pub(crate) fn nonnullable_rels(expr: &Expr, top: bool) -> BTreeSet<usize> {
         ExprKind::Func(f) if strict(f.oid) => union(&f.args, false),
         ExprKind::ScalarArrayOp { func, args, .. } if strict(*func) => union(args, false),
         ExprKind::Relabel(arg, _) | ExprKind::CoerceViaIo(arg, _) => nonnullable_rels(arg, top),
+        // A `PlaceHolderVar` of one relation is null when the relation gives nulls, as its column is.
+        ExprKind::PlaceHolder(p) if p.levels_up == 0 => {
+            let mut out = nonnullable_rels(&p.expr, top);
+            if let [r] = p.relations[..] {
+                out.insert(r);
+            }
+            out
+        }
         ExprKind::NullTest(arg, false) if top => nonnullable_rels(arg, false),
         ExprKind::BooleanTest(
             arg,

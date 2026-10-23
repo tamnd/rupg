@@ -5567,6 +5567,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_nested_loop_index_pages.test")));
     }
 
+    /// A subquery in `FROM` on the side of an outer join that can give nulls merges into the query, and each of its columns that the query reads above the join becomes a `PlaceHolderVar`, as `pullup_replace_vars_callback` makes it, unless the expression of the column reads a column of the subquery and is null when its inputs are null. The scan or the join of the relations of the subquery computes the value, as `add_placeholders_to_base_rels` and `add_placeholders_to_joinrel` place it, and each node above reads it as a column, which shows in parentheses. In the `ON` of that join, the column is the expression of the subquery, which can fold to a constant. A `CASE` in `EXPLAIN` takes one line. `connection/plan_placeholder_vars.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_placeholder_vars() {
+        big_stack(|| script(include_str!("connection/plan_placeholder_vars.test")));
+    }
+
     /// A query that is a `UNION ALL` of `SELECT`s with the types of its columns and has `ORDER BY` becomes an append relation, as `flatten_simple_union_all` makes it, so the planner can plan a `Merge Append` of the plans of the `SELECT`s in the order. A `SELECT` with its own `WHERE` is not a member of the append relation, as `is_safe_append_member`, and its plan gets a sort. `connection/plan_union_all_order.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_union_all_order() {

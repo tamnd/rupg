@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use rupg_analyze::{Aggref, BoolOp, Expr, ExprKind, FuncForm, Query, Var, WindowFunc};
+use rupg_analyze::{Aggref, BoolOp, Expr, ExprKind, FuncForm, PlaceHolder, Query, Var, WindowFunc};
 use rupg_pgcatalog::builtin;
 use rupg_types::Value;
 
@@ -11,35 +11,129 @@ pub(crate) fn relations(expr: &Expr) -> BTreeSet<usize> {
     relations_at(expr, 0)
 }
 
-/// The relations of the query that an expression reads, for an expression `levels` subqueries below the query.
+/// The relations of the query that an expression reads, for an expression `levels` subqueries below the query. A `PlaceHolderVar` reads the relations of the node that computes it.
 pub(crate) fn relations_at(expr: &Expr, levels: usize) -> BTreeSet<usize> {
     let mut out = BTreeSet::new();
     expr.find(0, &mut |e, depth| {
-        if let ExprKind::Var(var) = e.kind
-            && var.levels_up == depth + levels
-        {
-            out.insert(var.relation);
+        match &e.kind {
+            ExprKind::Var(var) if var.levels_up == depth + levels => {
+                out.insert(var.relation);
+            }
+            ExprKind::PlaceHolder(p) if p.levels_up == depth + levels => out.extend(eval_at(p)),
+            _ => {}
         }
         None::<()>
     });
     out
 }
 
-/// The columns of the query that an expression `levels` subqueries below the query reads, also in its subqueries, in the order that they first come, as `pull_var_clause`. Each column is a `Var` of the query.
-pub(crate) fn columns_at(expr: &Expr, levels: usize, out: &mut Vec<Expr>) {
-    expr.find(0, &mut |e, depth| {
+/// `ph_eval_at`: the relations of the scan or the join that computes a `PlaceHolderVar`. They are the relations of the subquery that its expression reads, or all the relations of the subquery when it reads none.
+pub(crate) fn eval_at(p: &PlaceHolder) -> BTreeSet<usize> {
+    let mut read = BTreeSet::new();
+    p.expr.find(0, &mut |e, depth| {
         if let ExprKind::Var(var) = e.kind
-            && var.levels_up == depth + levels
+            && var.levels_up == depth + p.levels_up
+            && p.relations.contains(&var.relation)
         {
-            let var = Var { levels_up: 0, ..var };
-            if !out.iter().any(|o| matches!(o.kind, ExprKind::Var(v) if v == var)) {
-                let mut column = Expr::new(ExprKind::Var(var), e.ty);
-                column.typmod = e.typmod;
-                out.push(column);
-            }
+            read.insert(var.relation);
         }
         None::<()>
     });
+    if read.is_empty() { p.relations.iter().copied().collect() } else { read }
+}
+
+/// The columns of the query that an expression `levels` subqueries below the query reads, also in its subqueries, in the order that they first come, as `pull_var_clause`. Each column is a `Var` of the query. A `PlaceHolderVar` of the query is one value, which a node below gives as a column.
+pub(crate) fn columns_at(expr: &Expr, levels: usize, out: &mut Vec<Expr>) {
+    columns_from(expr, 0, levels, out);
+}
+
+/// The columns of the query that an expression reads, as `pull_var_clause` with `PVC_RECURSE_PLACEHOLDERS`: the columns of a `PlaceHolderVar` take its place.
+pub(crate) fn vars_of(expr: &Expr, out: &mut Vec<Expr>) {
+    let mut columns = Vec::new();
+    columns_at(expr, 0, &mut columns);
+    for column in columns {
+        match &column.kind {
+            ExprKind::PlaceHolder(p) => vars_of(&p.expr, out),
+            _ if out.iter().any(|o| o.same(&column)) => {}
+            _ => out.push(column),
+        }
+    }
+}
+
+/// [`columns_at`] for an expression `depth` subqueries below the expression of the call.
+fn columns_from(expr: &Expr, depth: usize, levels: usize, out: &mut Vec<Expr>) {
+    match &expr.kind {
+        ExprKind::Var(var) if var.levels_up == depth + levels => {
+            let var = Var { levels_up: 0, ..*var };
+            if !out.iter().any(|o| matches!(o.kind, ExprKind::Var(v) if v == var)) {
+                let mut column = Expr::new(ExprKind::Var(var), expr.ty);
+                column.typmod = expr.typmod;
+                out.push(column);
+            }
+            return;
+        }
+        ExprKind::PlaceHolder(p) if p.levels_up == depth + levels => {
+            let mut value = expr.clone();
+            value.lower(p.levels_up);
+            if !out.iter().any(|o| o.same(&value)) {
+                out.push(value);
+            }
+            return;
+        }
+        _ => {}
+    }
+    for child in expr.children() {
+        columns_from(child, depth, levels, out);
+    }
+    if let ExprKind::SubLink(link) = &expr.kind {
+        for (e, d) in link.query.all_exprs(depth + 1) {
+            columns_from(e, d, levels, out);
+        }
+    }
+}
+
+/// True when a node of the query gives a `PlaceHolderVar` from below, as a column.
+pub(crate) fn is_placeholder(expr: &Expr) -> bool {
+    matches!(&expr.kind, ExprKind::PlaceHolder(p) if p.levels_up == 0)
+}
+
+/// `contain_nonstrict_functions`: true when the expression can give a value that is not null for a null input. A call of a function that is not strict, an aggregate call, a window call, `AND`, `OR`, a subquery, `CASE`, `COALESCE`, a row, an array and the tests of nulls can.
+pub(crate) fn nonstrict(expr: &Expr) -> bool {
+    let strict = |func: u32| builtin::proc_by_oid(func).is_some_and(|p| p.strict);
+    match &expr.kind {
+        ExprKind::Agg(_)
+        | ExprKind::Grouping(_)
+        | ExprKind::Window(_)
+        | ExprKind::Distinct { .. }
+        | ExprKind::NullIf { .. }
+        | ExprKind::Bool(BoolOp::And | BoolOp::Or, _)
+        | ExprKind::SubLink(_)
+        | ExprKind::FieldStore(_)
+        | ExprKind::Case(_)
+        | ExprKind::Array { .. }
+        | ExprKind::Row(..)
+        | ExprKind::JoinRow(_)
+        | ExprKind::RowCompare(_)
+        | ExprKind::Coalesce(_)
+        | ExprKind::MinMax { .. }
+        | ExprKind::Xml(_)
+        | ExprKind::NullTest(..)
+        | ExprKind::BooleanTest(..)
+        | ExprKind::JsonCtor(_) => true,
+        ExprKind::Subscript(sub) if sub.assign.is_some() => true,
+        ExprKind::Func(f) if !strict(f.oid) => true,
+        // `is_strict_saop`: the array must have elements.
+        ExprKind::ScalarArrayOp { func, args, .. } => {
+            let elements = match args.get(1).map(|a| &a.kind) {
+                Some(ExprKind::Const(value)) => !value.is_null(),
+                Some(ExprKind::Array { elements, .. }) => !elements.is_empty(),
+                _ => false,
+            };
+            !(strict(*func) && elements) || args.iter().any(nonstrict)
+        }
+        ExprKind::ArrayCoerce { arg, .. } => nonstrict(arg),
+        _ => expr.children().into_iter().any(nonstrict),
+    }
 }
 
 /// `contain_volatile_functions`: true when the expression calls a volatile function, also in a subquery.
