@@ -16,7 +16,10 @@ use crate::typename::{names, place};
 pub(super) fn is_function_kind(kind: ObjectType) -> bool {
     matches!(
         kind,
-        ObjectType::OBJECT_FUNCTION | ObjectType::OBJECT_PROCEDURE | ObjectType::OBJECT_ROUTINE
+        ObjectType::OBJECT_FUNCTION
+            | ObjectType::OBJECT_PROCEDURE
+            | ObjectType::OBJECT_ROUTINE
+            | ObjectType::OBJECT_AGGREGATE
     )
 }
 
@@ -173,15 +176,20 @@ impl Definer<'_, '_> {
         self.catalog.alter_function(found.oid, |f| *f = new)
     }
 
-    /// `AlterObjectRename_internal` for a function: the check of `IsThereFunctionInNamespace`, then the new name. The views that call the function get a new text.
+    /// `AlterObjectRename_internal` for a function: the checks of the owner and of `CREATE` on the schema, the check of `IsThereFunctionInNamespace`, then the new name. The message of the owner check names a function for all the kinds, as `get_object_type` gives `OBJECT_FUNCTION` for `pg_proc`. The views that call the function get a new text.
     pub(super) fn rename_function(
         &mut self,
         kind: ObjectType,
         object: Option<&Node>,
         newname: &str,
     ) -> Result<()> {
-        let found = self.altered_function(kind, function_name(object)?)?;
+        let item = function_name(object)?;
+        let found = self.lookup_function(kind, item)?;
+        self.check_function_owner(ObjectType::OBJECT_FUNCTION, item, &found)?;
         let function = self.user_function(&found)?;
+        if !self.is_superuser() {
+            self.check_create_in(function.namespace, None)?;
+        }
         self.check_function_in(function.namespace, newname, &function.argtypes)?;
         self.check_not_called(found.oid, "RENAME")?;
         self.catalog.alter_function(found.oid, |f| f.name = newname.to_string())?;
@@ -201,7 +209,7 @@ impl Definer<'_, '_> {
         if function.namespace == namespace {
             return Ok(());
         }
-        self.check_function_owner(stmt.objectType, item, &found)?;
+        self.check_function_owner(ObjectType::OBJECT_FUNCTION, item, &found)?;
         self.check_function_in(namespace, &function.name, &function.argtypes)?;
         self.check_not_called(found.oid, "SET SCHEMA")?;
         self.catalog.alter_function(found.oid, |f| f.namespace = namespace)?;
@@ -218,7 +226,7 @@ impl Definer<'_, '_> {
             return Ok(());
         }
         if !self.is_superuser() {
-            self.check_function_owner(stmt.objectType, item, &found)?;
+            self.check_function_owner(ObjectType::OBJECT_FUNCTION, item, &found)?;
             self.check_can_set_role(new)?;
             let namespace = self.catalog.function(found.oid).map_or(0, |f| f.namespace);
             if !self.may_create_in(namespace, new) {
@@ -256,10 +264,14 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
-    /// The error for a function that the body of another function calls. The catalog keeps the text of a body, so a new name of the function would break the other function.
+    /// The error for a function that the body of another function calls. The catalog keeps the text of a body, so a new name of the function would break the other function. An aggregate keeps the OIDs of its support functions, so it does not count.
     fn check_not_called(&self, oid: u32, what: &str) -> Result<()> {
         let me = ObjRef::new(PG_PROC, oid);
-        if self.catalog.depends().iter().any(|d| d.referenced == me && d.object.class == PG_PROC) {
+        if self.catalog.depends().iter().any(|d| {
+            d.referenced == me
+                && d.object.class == PG_PROC
+                && self.catalog.function(d.object.oid).is_none_or(|f| f.kind != b'a')
+        }) {
             return Err(not_yet(
                 &format!("ALTER FUNCTION ... {what} of a function that another function calls"),
                 None,

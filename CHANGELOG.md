@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `ALTER AGGREGATE` with `RENAME TO`, `OWNER TO` and `SET SCHEMA`, with the checks of `AlterObjectRename_internal`, `AlterObjectOwner_internal` and `AlterObjectNamespace_internal`. A support function of an aggregate can get a new name (#NNN).
 - `CREATE AGGREGATE` and `CREATE OR REPLACE AGGREGATE`, in the old and the new syntax, with the checks of PostgreSQL, the rows of `pg_aggregate` and the dependencies. An aggregate can use user transition and final functions (#632).
 - `ALTER OPERATOR CLASS` and `ALTER OPERATOR FAMILY` with `RENAME TO`, `OWNER TO` and `SET SCHEMA`, with the checks of `AlterObjectRename_internal`, `AlterObjectOwner_internal` and `AlterObjectNamespace_internal`. A new name or a new schema must not hold a class or a family of the same name for the access method. The moved object depends on its new schema (#631).
 - `PARTITION BY` and `CREATE INDEX` take an operator class of the catalog, by its name in the search path or with its schema. A table that `PARTITION BY HASH` partitions with such a class routes and prunes its rows by the support function 2 of the class, as PostgreSQL does. An index depends on the operator classes and the collations of its columns, so `DROP OPERATOR CLASS` and `DROP COLLATION` see it (#630).
@@ -17,6 +18,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Fixed
 
+- A rename of a function, a procedure or an aggregate by a role that is not its owner gives "must be owner of function", as PostgreSQL does. The rename also checks `CREATE` on the schema for a role that is not a superuser. A view that calls a renamed aggregate shows the new name (#NNN).
 - The check of `CREATE` on a schema reads `nspacl`, so a role that `GRANT CREATE ON SCHEMA` names, or that has the privileges of such a role, can create objects in the schema (#631).
 - A query with `HAVING` and no aggregate and no `GROUP BY` does not read `FROM` and does not test `WHERE`, as in PostgreSQL. `make_interval` gives the overflow error of `float8_mul` for a very large `secs`, and a default or a check constraint with a `regrole` or `regdatabase` constant is an error. (#621)
 - A column of the target table by a name with the schema in `RETURNING`, such as `RETURNING public.t.id`, now works in `INSERT`, `UPDATE`, `DELETE` and `MERGE`. Before, it gave `42P09` "table reference ... is ambiguous", because the names `old` and `new` of `RETURNING` also matched the table. Prisma sends this form.
