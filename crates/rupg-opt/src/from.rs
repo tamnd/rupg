@@ -762,13 +762,25 @@ impl<'q> Builder<'q> {
                     }
                     let (pages, tuples) = cost::table_size(relation);
                     match &relation.tablesample {
+                        // `set_tablesample_rel_size` and `cost_samplescan`: `SYSTEM` reads the fraction of the pages, each at the cost of a random page, and `BERNOULLI` reads each page in order. The fraction is a `real`, and a percent out of range is a tenth.
                         Some(sample) => {
                             let fraction = sample
                                 .args
                                 .first()
                                 .and_then(number)
-                                .map_or(0.1, |p| (p / 100.0).clamp(0.0, 1.0));
-                            (Kind::SampleScan(r), 0.0, pages * cost::SEQ_PAGE, tuples * fraction)
+                                .map(|p| p as f32)
+                                .filter(|p| (0.0..=100.0).contains(p))
+                                .map_or(0.1f32, |p| p / 100.0);
+                            let fraction = f64::from(fraction);
+                            let tuples = cost::clamp_rows(tuples * fraction);
+                            let system = builtin::proc_by_oid(sample.handler)
+                                .is_some_and(|p| p.name == "system");
+                            let run = if system {
+                                cost::clamp_rows(pages * fraction) * cost::RANDOM_PAGE
+                            } else {
+                                pages * cost::SEQ_PAGE
+                            };
+                            (Kind::SampleScan(r), 0.0, run, tuples)
                         }
                         None => (Kind::SeqScan(r), 0.0, pages * cost::SEQ_PAGE, tuples),
                     }

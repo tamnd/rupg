@@ -726,7 +726,9 @@ impl<'q> Builder<'q> {
             level.scope,
             vec![node],
         );
-        out.cost = Cost { rows: 0.0, width: 0, ..c };
+        // `create_modifytable_path`: with `RETURNING`, the node gives the rows of the node below it.
+        let rows = if write.returning.is_some() { c.rows } else { 0.0 };
+        out.cost = Cost { rows, width: 0, ..c };
         out
     }
 
