@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.72 (2026-10-23)
+
+This release checks unique indexes on expressions and partial unique indexes in the writes, uses indexes on expressions and partial indexes in `EXPLAIN`, plans the join of `MERGE` with the target table on the left side, takes out left joins that read no column of the inner side, turns `IN` on a correlated subquery into a semi join, and shows the `Output` of `RETURNING` and `MERGE` as PostgreSQL does.
+
 ### Added
 
 - `INSERT`, `UPDATE`, `COPY FROM`, `MERGE` and `CREATE UNIQUE INDEX` check unique indexes on expressions and partial unique indexes. `ON CONFLICT` infers these indexes from an expression and a `WHERE` clause, and the detail of a duplicate key shows the expressions of the index. (#607)
