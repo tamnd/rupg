@@ -50,7 +50,7 @@ const POINTER: f64 = 8.0;
 const MERGE_ORDER: f64 = 15.0;
 
 /// `get_typavgwidth`: the average width of a value of a type with a typmod.
-pub(crate) fn type_width(ty: u32, typmod: i32) -> i32 {
+pub fn type_width(ty: u32, typmod: i32) -> i32 {
     if let Some(row) = builtin::type_by_oid(ty)
         && row.len > 0
     {

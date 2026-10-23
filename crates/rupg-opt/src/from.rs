@@ -24,6 +24,29 @@ use paths::{Paths, costs};
 /// The plans of the rows of `FROM` that `add_path` keeps, each with the order of its rows.
 pub(crate) type Plans<'q> = Vec<(Node<'q>, Vec<OrderKey>)>;
 
+/// The columns and the expressions of the relations of a query level that have a unique index of one key column and no predicate, which `examine_variable` marks as `isunique`.
+#[derive(Clone, Debug, Default)]
+struct Unique {
+    /// The relation and the column number of each column, as `has_unique_index`.
+    columns: BTreeSet<(usize, i16)>,
+    /// Each expression of the key column of an index, with the columns of its relation.
+    exprs: Vec<Expr>,
+}
+
+impl Unique {
+    /// True when the expression is a unique column, or an expression of a unique index with or without a `RelabelType` above it, as `examine_variable` finds it.
+    fn has(&self, expr: &Expr) -> bool {
+        if let Some(var) = plain_var(expr) {
+            return var.levels_up == 0 && self.columns.contains(&(var.relation, var.attnum));
+        }
+        let base = match &expr.kind {
+            ExprKind::Relabel(arg, _) => &**arg,
+            _ => expr,
+        };
+        self.exprs.iter().any(|e| e.same(base))
+    }
+}
+
 /// The estimates of the relations of a query level for the costs of the joins and of the nodes above them.
 #[derive(Debug, Default)]
 pub(crate) struct Stats {
@@ -45,8 +68,8 @@ pub(crate) struct Stats {
     joins: Vec<[(Expr, BTreeSet<usize>); 2]>,
     /// `consider_startup`: true when the caller of the query or its `LIMIT` reads only a part of its rows, so that a plan with a lower start cost is a different plan.
     startup: bool,
-    /// `isunique`: the relation and the column number of each column that has a unique index of one key column and no predicate, as `has_unique_index`.
-    unique: BTreeSet<(usize, i16)>,
+    /// `isunique`: the columns and the expressions that have a unique index of one key column and no predicate.
+    unique: Unique,
     /// The key columns of each unique index of each relation that is immediate and has no predicate, which `relation_has_unique_index_for` reads.
     distinct: BTreeMap<usize, Vec<Vec<i16>>>,
     /// The key columns of each unique index of each relation that shows that the other columns of a row are a function of the key columns, as `remove_useless_groupby_columns` chooses them: the index is immediate and has no predicate and no expression, and each key column is `NOT NULL` or the index has `NULLS NOT DISTINCT`.
@@ -710,7 +733,7 @@ impl<'q> Builder<'q> {
                         && sub.grouping_sets.is_empty()
                         && let Ok(at) = i16::try_from(item.target + 1)
                     {
-                        stats.unique.insert((r, at));
+                        stats.unique.columns.insert((r, at));
                     }
                     sub_total = Some(c.total);
                     (Kind::SubqueryScan(r), c.startup, c.total - c.startup, c.rows)
@@ -743,9 +766,12 @@ impl<'q> Builder<'q> {
                     for index in &indexes {
                         if let ([key], true, false) =
                             (index.keys.as_slice(), index.unique, index.partial)
-                            && *key > 0
                         {
-                            stats.unique.insert((r, *key));
+                            if *key > 0 {
+                                stats.unique.columns.insert((r, *key));
+                            } else if let Some(expr) = index::key_expr(index, r, 0) {
+                                stats.unique.exprs.push(expr);
+                            }
                         }
                         if index.unique && index.immediate && !index.partial {
                             let not_null = |k: &i16| {
@@ -787,7 +813,7 @@ impl<'q> Builder<'q> {
                 }
             },
         };
-        let eq = eq_unique(r, tuples, &stats.unique);
+        let eq = eq_unique(r, tuples, stats.unique.clone());
         let selectivity = cost::list_selectivity_by(quals.iter().map(|q| &*q.expr), &eq);
         let rows = cost::clamp_rows(tuples * selectivity);
         stats.rows.insert(r, (tuples, rows));
@@ -885,18 +911,12 @@ fn sub_order(
     stats.useful(&BTreeSet::from([r]), &keys)
 }
 
-/// `var_eq_const` and `var_eq_non_const`: `=` of a unique column of the table `r` of `tuples` rows and a value that reads no column of the table passes one row.
-fn eq_unique(
-    r: usize,
-    tuples: f64,
-    unique: &BTreeSet<(usize, i16)>,
-) -> impl Fn(&Expr, &Expr) -> Option<f64> + '_ {
+/// `var_eq_const` and `var_eq_non_const`: `=` of a unique column or a unique expression of the table `r` of `tuples` rows and a value that reads no column of the table passes one row.
+fn eq_unique(r: usize, tuples: f64, unique: Unique) -> impl Fn(&Expr, &Expr) -> Option<f64> {
     move |a, b| {
         [(a, b), (b, a)].into_iter().find_map(|(column, value)| {
-            let var = plain_var(column)?;
-            (var.levels_up == 0
-                && var.relation == r
-                && unique.contains(&(r, var.attnum))
+            (unique.has(column)
+                && exprs::relations(column) == BTreeSet::from([r])
                 && !exprs::relations(value).contains(&r)
                 && tuples >= 1.0)
                 .then(|| 1.0 / tuples)
@@ -1574,8 +1594,7 @@ fn numdistinct(expr: &Expr, stats: &Stats) -> (f64, bool, Option<(f64, f64)>) {
         (1, Some(r)) => stats.rows.get(r).copied(),
         _ => None,
     };
-    let unique = plain_var(expr)
-        .is_some_and(|v| v.levels_up == 0 && stats.unique.contains(&(v.relation, v.attnum)));
+    let unique = stats.unique.has(expr);
     let known = if unique {
         // A unique column has as many values as the relation has tuples, whatever its type.
         rel.map(|(tuples, _)| tuples)
@@ -1614,12 +1633,12 @@ fn join_selectivity(qual: &Qual<'_>, stats: &Stats) -> f64 {
             return Some(1.0 / l.max(r));
         }
         [(left, right), (right, left)].into_iter().find_map(|(column, value)| {
-            let var = plain_var(column)?;
-            let (tuples, _) = *stats.rows.get(&var.relation)?;
-            (var.levels_up == 0
-                && stats.unique.contains(&(var.relation, var.attnum))
-                && exprs::relations(value).is_empty()
-                && tuples >= 1.0)
+            let rels = exprs::relations(column);
+            let (tuples, _) = match rels.first() {
+                Some(r) if rels.len() == 1 => *stats.rows.get(r)?,
+                _ => return None,
+            };
+            (stats.unique.has(column) && exprs::relations(value).is_empty() && tuples >= 1.0)
                 .then(|| 1.0 / tuples)
         })
     };

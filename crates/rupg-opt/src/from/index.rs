@@ -140,6 +140,8 @@ struct BitmapIndex<'q> {
     /// `pages` of the index.
     pages: f64,
     outer: BTreeSet<usize>,
+    /// The parts of the predicate of a partial index.
+    predicate: Vec<Expr>,
 }
 
 impl<'q> BitmapIndex<'q> {
@@ -154,7 +156,9 @@ impl<'q> BitmapIndex<'q> {
         let (_, path, _) = index_scan_cost(table, index, &clauses, costs, stats);
         let (_, total, selectivity) = costs;
         let (rows, pages, outer) = (table.rows, index.pages, table.outer.clone());
-        BitmapIndex { index: index.oid, clauses, total, selectivity, path, rows, pages, outer }
+        let predicate = predicate(index, table.r);
+        let index = index.oid;
+        BitmapIndex { index, clauses, total, selectivity, path, rows, pages, outer, predicate }
     }
 }
 
@@ -289,12 +293,13 @@ fn index_paths<'q>(
         .map(|(at, q)| Source { expr: q.expr.clone(), at: Some(at), class: q.class })
         .collect();
     let all: Vec<&Source<'q>> = sources.iter().collect();
+    let quals: Vec<&Expr> = table.quals.iter().map(|q| &*q.expr).collect();
     // `get_relation_info` puts each index first in `indexlist`, so the newest index comes first.
     for index in indexes.iter().rev() {
-        if index.method != BTREE_AM || index.partial {
+        if index.method != BTREE_AM || !predicate_ok(index, table.r, &quals) {
             continue;
         }
-        let clauses = match_clauses(table.r, index, &all);
+        let clauses = match_clauses(table.r, index, &restrict(index, table.r, &all));
         let costs = btree_cost(table, index, &clauses, stats);
         let only = crate::enable().indexonlyscan
             && read.iter().all(|a| *a > 0 && index.columns.contains(a));
@@ -380,19 +385,26 @@ pub(super) fn param_paths<'q>(
     let join_sources: Vec<Source<'q>> =
         joins.iter().map(|q| Source { expr: q.expr.clone(), at: None, class: q.class }).collect();
     let all_joins: Vec<&Source<'q>> = join_sources.iter().collect();
+    let quals: Vec<&Expr> = table.quals.iter().map(|q| &*q.expr).collect();
     for index in indexes.iter().rev() {
-        if index.method != BTREE_AM || index.partial {
+        if index.method != BTREE_AM || !predicate_ok(index, r, &quals) {
             continue;
         }
-        let rclauses = match_clauses(r, index, &all);
+        let rclauses = match_clauses(r, index, &restrict(index, r, &all));
         let jclauses = match_clauses(r, index, &all_joins);
         // `generate_implied_equalities_for_column`: the conditions of the first class with a member that is the column.
         let mut implied = Vec::new();
-        for (&attnum, &family) in index.keys.iter().zip(&index.families) {
+        for (column, (&attnum, &family)) in index.keys.iter().zip(&index.families).enumerate() {
+            // `ec_member_matches_indexcol`: a key column that is an expression matches the same expression.
+            let indexed = if attnum == 0 { key_expr(index, r, column) } else { None };
             let matches = |m: &Expr, families: &[u32]| {
                 families.contains(&family)
-                    && plain_var(m)
-                        .is_some_and(|v| v.relation == r && v.attnum == attnum && v.levels_up == 0)
+                    && match &indexed {
+                        Some(indexed) => m.same(indexed),
+                        None => plain_var(m).is_some_and(|v| {
+                            v.relation == r && v.attnum == attnum && v.levels_up == 0
+                        }),
+                    }
             };
             let found = classes.iter().map(|c| c.column(r, matches, prohibited));
             if let Some(quals) = found.into_iter().find(|q| !q.is_empty()) {
@@ -667,14 +679,15 @@ fn arm_paths<'q>(
     let mine: Vec<&Source<'q>> = clauses.iter().collect();
     let all: Vec<&Source<'q>> = clauses.iter().chain(other.iter().copied()).collect();
     let mut out = Vec::new();
+    let given: Vec<&Expr> = all.iter().map(|s| &*s.expr).collect();
     for index in indexes.iter().rev() {
         if index.method != BTREE_AM
-            || index.partial
+            || !predicate_ok(index, table.r, &given)
             || match_clauses(table.r, index, &mine).is_empty()
         {
             continue;
         }
-        let clauses = match_clauses(table.r, index, &all);
+        let clauses = match_clauses(table.r, index, &restrict(index, table.r, &all));
         let costs = btree_cost(table, index, &clauses, stats);
         out.push(Bitmap::Index(BitmapIndex::new(table, index, clauses, costs, stats)));
     }
@@ -701,6 +714,58 @@ fn read_columns(table: &Table<'_, '_>, stats: &Stats) -> BTreeSet<i16> {
         }
     }
     out
+}
+
+/// The expression of the key column `column` of the index, which is an expression, with the columns of the table as columns of the relation `r`.
+pub(super) fn key_expr(index: &Index, r: usize, column: usize) -> Option<Expr> {
+    let at = index.keys.iter().take(column).filter(|k| **k == 0).count();
+    let mut expr = index.exprs.get(at)?.clone();
+    of_relation(&mut expr, r);
+    Some(expr)
+}
+
+/// The parts of the predicate of the index, with the columns of the table as columns of the relation `r`.
+fn predicate(index: &Index, r: usize) -> Vec<Expr> {
+    let mut parts = index.predicate.clone();
+    for part in &mut parts {
+        of_relation(part, r);
+    }
+    parts
+}
+
+/// The expression with each column of the relation 0 as a column of the relation `r`.
+fn of_relation(expr: &mut Expr, r: usize) {
+    expr.each_mut(0, &mut |e: &mut Expr, depth| {
+        if let ExprKind::Var(v) = &mut e.kind
+            && v.relation == 0
+            && v.levels_up == depth
+        {
+            v.relation = r;
+        }
+        false
+    });
+}
+
+/// The `AND` of the conditions, as `predicate_implied_by` reads a list.
+fn and_of(given: &[&Expr]) -> Expr {
+    Expr::new(ExprKind::Bool(BoolOp::And, given.iter().map(|e| (*e).clone()).collect()), oid::BOOL)
+}
+
+/// `check_index_predicates`: true when the conditions imply each part of the predicate of the index, so that the planner can use the index. An index with no predicate is always usable.
+fn predicate_ok(index: &Index, r: usize, given: &[&Expr]) -> bool {
+    let given = and_of(given);
+    predicate(index, r).iter().all(|p| implied_by(&given, p))
+}
+
+/// `indrestrictinfo`: the conditions of the table that the predicate of the index does not imply. A condition that the predicate implies is true for each row of the index, so the scan does not test it.
+fn restrict<'s, 'q>(index: &Index, r: usize, sources: &[&'s Source<'q>]) -> Vec<&'s Source<'q>> {
+    let parts = predicate(index, r);
+    if parts.is_empty() {
+        return sources.to_vec();
+    }
+    let refs: Vec<&Expr> = parts.iter().collect();
+    let pred = and_of(&refs);
+    sources.iter().copied().filter(|s| !implied_by(&pred, &s.expr)).collect()
 }
 
 /// `match_clauses_to_index`: the conditions that a key column of the index can test, each with the first column that can, as `match_clause_to_index`. The list is in the order of the columns, then in the order of the conditions, as `build_index_paths` makes `indexclauses`.
@@ -739,15 +804,21 @@ fn match_one<'q>(
     let family = *index.families.get(column)?;
     // The collation `C` of a column of `name` is the collation of each condition of the column.
     let name_collation = index.collations.get(column) == Some(&C_COLLATION);
-    if attnum <= 0
+    if attnum < 0
         || family == 0
         || !(name_collation || matches!(index.collations.get(column), Some(0 | 100) | None))
     {
         return None;
     }
+    // `match_index_to_operand`: a key column that is an expression matches the same expression.
+    let indexed = if attnum == 0 { Some(key_expr(index, r, column)?) } else { None };
     let is_column = |e: &Expr| {
-        plain_var(e).is_some_and(|v| v.relation == r && v.attnum == attnum && v.levels_up == 0)
-            && (!name_collation || e.ty == oid::NAME)
+        let found = match &indexed {
+            Some(indexed) => e.same(indexed),
+            None => plain_var(e)
+                .is_some_and(|v| v.relation == r && v.attnum == attnum && v.levels_up == 0),
+        };
+        found && (!name_collation || e.ty == oid::NAME)
     };
     let other_ok = |e: &Expr| !exprs::relations(e).contains(&r) && !exprs::volatile(e);
     let clause = |expr: Cow<'q, Expr>, kind| {
@@ -959,7 +1030,7 @@ fn strategy(op: u32, family: u32) -> Option<i16> {
         .map(|a| a.strategy)
 }
 
-/// `build_index_pathkeys`: the order of the rows of a scan of the index, forward or backward. A key that adds nothing after the keys before it, such as a column that a condition makes a constant, does not count, as `pathkey_is_redundant`. The order stops at a column that is an expression or whose operator class is not the default class of its type.
+/// `build_index_pathkeys`: the order of the rows of a scan of the index, forward or backward. A key that adds nothing after the keys before it, such as a column that a condition makes a constant, does not count, as `pathkey_is_redundant`. A column that is an expression gives the expression. The order stops at a column whose operator class is not the default class of its type.
 fn order(
     level: &Level<'_>,
     r: usize,
@@ -970,13 +1041,20 @@ fn order(
     let relation = &level.query.relations[r];
     let mut out: Vec<OrderKey> = Vec::new();
     for (i, &attnum) in index.keys.iter().enumerate() {
-        let column = usize::try_from(attnum - 1).ok().and_then(|c| relation.columns.get(c));
-        let (Some(column), Some(true)) = (column, index.default_class.get(i).copied()) else {
+        let expr = if attnum == 0 {
+            key_expr(index, r, i)
+        } else {
+            let column = usize::try_from(attnum - 1).ok().and_then(|c| relation.columns.get(c));
+            column.map(|column| {
+                let var = Var { relation: r, attnum, levels_up: 0 };
+                let mut expr = Expr::new(ExprKind::Var(var), column.ty);
+                expr.typmod = column.typmod;
+                expr
+            })
+        };
+        let (Some(expr), Some(true)) = (expr, index.default_class.get(i).copied()) else {
             break;
         };
-        let mut expr =
-            Expr::new(ExprKind::Var(Var { relation: r, attnum, levels_up: 0 }), column.ty);
-        expr.typmod = column.typmod;
         let before: Vec<&Expr> = out.iter().map(|k| &k.exprs[0]).collect();
         if stats.redundant(&expr, &before) {
             continue;
@@ -1034,11 +1112,18 @@ fn index_scan_cost<'q>(
     costs: (f64, f64, f64),
     stats: &Stats,
 ) -> (f64, f64, Vec<Qual<'q>>) {
+    // `extract_nonindex_conditions` of `indrestrictinfo`: a condition that the predicate of the index implies is not in the filter.
+    let parts = predicate(index, table.r);
+    let refs: Vec<&Expr> = parts.iter().collect();
+    let pred = (!parts.is_empty()).then(|| and_of(&refs));
     let mut filter: Vec<Qual<'q>> = table
         .quals
         .iter()
         .enumerate()
-        .filter(|(at, q)| !Clause::enforces(clauses, *at, q))
+        .filter(|(at, q)| {
+            !Clause::enforces(clauses, *at, q)
+                && !pred.as_ref().is_some_and(|p| implied_by(p, &q.expr))
+        })
         .map(|(_, q)| q.clone())
         .collect();
     stats.sort_quals(&mut filter);
@@ -1227,8 +1312,15 @@ fn subplan<'q>(
                     quals.push(Orig { expr: c.orig.clone(), at: c.at });
                 }
             }
-            let tested =
+            let mut tested: Vec<Orig<'q>> =
                 b.clauses.iter().map(|c| Orig { expr: c.expr.clone(), at: None }).collect();
+            // `create_bitmap_subplan`: the parts of the predicate of a partial index that the clauses do not imply are conditions of the bitmap too.
+            let given: Vec<&Expr> = b.clauses.iter().map(|c| &*c.orig).collect();
+            let given = and_of(&given);
+            for part in b.predicate.iter().filter(|p| !implied_by(&given, p)) {
+                quals.push(Orig { expr: Cow::Owned(part.clone()), at: None });
+                tested.push(Orig { expr: Cow::Owned(part.clone()), at: None });
+            }
             (node, quals, tested)
         }
         Bitmap::And(list) => {
@@ -1400,6 +1492,20 @@ fn btree_cost(
         bound.push(&*clause.expr);
     }
     let tuples = table.tuples;
+    // `get_relation_info` and `estimate_rel_size`: a partial index has the rows that fill its pages after the metapage, at most the rows of the table. Each row has the header of a heap row and its line pointer.
+    let rows = if index.predicate.is_empty() {
+        tuples
+    } else {
+        let density = f64::from((8192 - 24) / (index.width + 24 + 4).max(1));
+        (density * (index.pages - 1.0).max(0.0)).round_ties_even().min(tuples)
+    };
+    // `add_predicate_to_index_quals`: the parts of the predicate that the clauses do not imply come first.
+    let parts = predicate(index, table.r);
+    let with_predicate = |quals: Vec<&Expr>| -> Vec<Expr> {
+        let given = and_of(&quals);
+        let extra = parts.iter().filter(|p| !implied_by(&given, p)).cloned();
+        extra.chain(quals.into_iter().cloned()).collect()
+    };
     let index_tuples = if index.unique
         && column + 1 == index.keys.len()
         && equal_here
@@ -1408,20 +1514,21 @@ fn btree_cost(
     {
         1.0
     } else {
-        let selectivity = cost::list_selectivity_by(bound, table.eq);
+        let selectivity = cost::list_selectivity_by(&with_predicate(bound), table.eq);
         scans = scans.min((index.pages * 0.3333333).ceil()).max(1.0);
         (selectivity * tuples / scans).round_ties_even()
     };
     // `genericcostestimate`.
-    let selectivity = cost::list_selectivity_by(clauses.iter().map(|c| &*c.expr), table.eq);
+    let all = with_predicate(clauses.iter().map(|c| &*c.expr).collect());
+    let selectivity = cost::list_selectivity_by(&all, table.eq);
     let index_tuples = if index_tuples <= 0.0 {
         (selectivity * tuples / scans).round_ties_even()
     } else {
         index_tuples
     };
-    let index_tuples = index_tuples.min(tuples).max(1.0);
-    let index_pages = if index.pages > 1.0 && tuples > 1.0 {
-        (index_tuples * (index.pages - 1.0) / tuples).ceil()
+    let index_tuples = index_tuples.min(rows).max(1.0);
+    let index_pages = if index.pages > 1.0 && rows > 1.0 {
+        (index_tuples * (index.pages - 1.0) / rows).ceil()
     } else {
         1.0
     };
@@ -1439,8 +1546,8 @@ fn btree_cost(
     let mut startup = qual_arg;
     total += qual_arg;
     total += index_tuples * scans * (cost::CPU_INDEX_TUPLE + qual_op);
-    if tuples > 1.0 {
-        let descent = (tuples.ln() / 2.0_f64.ln()).ceil() * cost::CPU_OPERATOR;
+    if rows > 1.0 {
+        let descent = (rows.ln() / 2.0_f64.ln()).ceil() * cost::CPU_OPERATOR;
         startup += descent;
         total += scans * descent;
     }

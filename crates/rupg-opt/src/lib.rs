@@ -28,6 +28,7 @@ use rupg_analyze::{
 use rupg_plan::{Item, Kind, Label, Leaf, Node, Operation, Plan, Scope, SubPlan};
 use rupg_types::oid;
 
+pub use cost::type_width;
 pub use joinrm::remove_joins;
 pub use pullup::pull_up;
 
@@ -119,6 +120,12 @@ pub struct Index {
     pub collations: Vec<u32>,
     /// `pages`: the pages of the index.
     pub pages: f64,
+    /// `indexprs`: the expression of each key column with the number 0, in the order of the columns. A column of the table is a column of the relation 0.
+    pub exprs: Vec<Expr>,
+    /// `indpred`: the parts of the `AND` of the predicate of a partial index. A column of the table is a column of the relation 0.
+    pub predicate: Vec<Expr>,
+    /// `get_rel_data_width` of the index: the sum of the average widths of the types of its columns.
+    pub width: i32,
 }
 
 /// A table of an inheritance tree that a scan reads.

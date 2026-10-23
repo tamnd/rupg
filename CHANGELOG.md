@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `EXPLAIN` uses indexes on expressions and partial indexes. An index on an expression matches a condition, an order and a join condition of the same expression. A partial index is used when the conditions imply its predicate, and its estimates use the rows of the index. `=` of the expression of a unique index passes one row. (#NNN)
 - The plan of a `MERGE` has the target table on the left side of the join, as PostgreSQL makes it. With `NOT MATCHED BY SOURCE`, the plan no longer shows a `Values Scan` of the marker of the source rows, and the rows carry the whole row of the source, as in PostgreSQL. (#605)
 - `EXPLAIN VERBOSE` shows `old`, `new` and `MERGE_ACTION()` of `RETURNING` in the `Output` of the `ModifyTable`, as PostgreSQL does. Before, the `Output` line was missing. (#604)
 - `EXPLAIN` takes out a left join that gives one row at most for each outer row when the query reads no column of the inner side, as `remove_useless_joins` of PostgreSQL 19 does. A nested loop gives the columns of a join clause that its parameterized inner scan tests, so the widths and the `Output` of the two sides match PostgreSQL. (#603)
