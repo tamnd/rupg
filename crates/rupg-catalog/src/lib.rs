@@ -13,6 +13,7 @@ pub mod names;
 pub mod size;
 pub mod toast;
 
+mod aggregate;
 mod alter_type;
 mod drop;
 mod enum_label;
@@ -23,6 +24,7 @@ mod sequence;
 mod set_schema;
 mod tsearch;
 
+pub use aggregate::{Aggregate, PG_AGGREGATE};
 pub use drop::{Refusal, Target, flag};
 pub use opclass::{
     AmOp, AmProc, MemberLink, OpClass, OpFamily, PG_AM, PG_AMOP, PG_AMPROC, PG_OPFAMILY,
@@ -576,7 +578,7 @@ pub struct Function {
     pub rows: u32,
     /// `prosupport`: the OID of the support function, or 0.
     pub support: u32,
-    /// `prokind`: `f` for a function or `p` for a procedure.
+    /// `prokind`: `f` for a function, `p` for a procedure or `a` for an aggregate.
     pub kind: u8,
     /// `proisstrict`: true when a null argument gives null without a call.
     pub strict: bool,
@@ -1120,6 +1122,7 @@ pub struct Catalog {
     defaults: BTreeMap<u32, AttrDefault>,
     constraints: BTreeMap<u32, Constraint>,
     functions: BTreeMap<u32, Function>,
+    aggregates: BTreeMap<u32, Aggregate>,
     casts: BTreeMap<u32, Cast>,
     operators: BTreeMap<u32, Operator>,
     opfamilies: BTreeMap<u32, OpFamily>,
@@ -1202,6 +1205,7 @@ impl Catalog {
             defaults: BTreeMap::new(),
             constraints: BTreeMap::new(),
             functions: BTreeMap::new(),
+            aggregates: BTreeMap::new(),
             casts: BTreeMap::new(),
             operators: BTreeMap::new(),
             opfamilies: BTreeMap::new(),

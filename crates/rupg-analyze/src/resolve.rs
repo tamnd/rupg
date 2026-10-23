@@ -541,6 +541,74 @@ impl Analyzer<'_> {
         })
     }
 
+    /// `lookup_agg_function` of `pg_aggregate.c`: the support function of an aggregate that the name gives for the argument types `inputs`, as `func_get_detail` finds it without the expansion of a variadic argument, and its result type. `variadic` is the variadic type of the aggregate, or 0. The function must be a plain function that does not return a set, and the inputs must be binary coercible to its arguments, as `nodeAgg.c` does no coercion.
+    pub(crate) fn agg_support_function(
+        &self,
+        names: &[&str],
+        inputs: &[u32],
+        variadic: u32,
+    ) -> Result<(u32, u32)> {
+        let qualified = names.join(".");
+        let (detail, _) = self.func_detail(names, &[], inputs, &[], false, false, None)?;
+        let found = match detail {
+            Detail::Normal(c) => {
+                builtin::proc_by_oid(c.oid).filter(|p| p.kind == b'f').map(|p| (c, p))
+            }
+            _ => None,
+        };
+        let Some((candidate, proc)) = found else {
+            return Err(Error::new(
+                SqlState::UNDEFINED_FUNCTION,
+                format!("function {} does not exist", signature(&qualified, inputs, &[])),
+            ));
+        };
+        if proc.retset {
+            return Err(Error::new(
+                SqlState::DATATYPE_MISMATCH,
+                format!("function {} returns a set", signature(&qualified, inputs, &[])),
+            ));
+        }
+        if variadic == oid::ANY && proc.variadic != oid::ANY {
+            return Err(Error::new(
+                SqlState::DATATYPE_MISMATCH,
+                format!(
+                    "function {} must accept VARIADIC ANY to be used in this aggregate",
+                    signature(&qualified, inputs, &[])
+                ),
+            ));
+        }
+        // `enforce_generic_type_consistency` with `allow_poly`: an input of the same polymorphic type as its argument tells nothing, and the result can stay polymorphic.
+        let mut declared = candidate.args.clone();
+        let known: Vec<usize> = (0..inputs.len())
+            .filter(|&i| !(types::is_polymorphic(inputs[i]) && inputs[i] == declared[i]))
+            .collect();
+        let rettype = if known.iter().any(|&i| types::is_polymorphic(declared[i])) {
+            let given: Vec<u32> = known.iter().map(|&i| inputs[i]).collect();
+            let mut args: Vec<u32> = known.iter().map(|&i| declared[i]).collect();
+            let rettype = poly::resolve(&given, &mut args, proc.rettype)?;
+            for (&i, ty) in known.iter().zip(args) {
+                declared[i] = ty;
+            }
+            rettype
+        } else {
+            proc.rettype
+        };
+        if inputs
+            .iter()
+            .zip(&declared)
+            .any(|(&from, &to)| !crate::typcache::is_binary_coercible(from, to))
+        {
+            return Err(Error::new(
+                SqlState::DATATYPE_MISMATCH,
+                format!(
+                    "function {} requires run-time type coercion",
+                    signature(&qualified, &declared, &[])
+                ),
+            ));
+        }
+        Ok((proc.oid, rettype))
+    }
+
     /// `unify_hypothetical_args`: each hypothetical direct argument of type `"any"` and its item of `WITHIN GROUP` get their common type. The type of the item wins when both are good, so that the aggregate casts one value and not all the rows.
     fn unify_hypothetical_args(
         &mut self,

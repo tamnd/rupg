@@ -1,4 +1,4 @@
-//! `DROP FUNCTION`, `DROP PROCEDURE` and `DROP ROUTINE`: the functions of `RemoveObjects`, which `LookupFuncWithArgs` finds by name and by the types of the input arguments, or for a procedure also by the types of all the arguments.
+//! `DROP FUNCTION`, `DROP PROCEDURE`, `DROP ROUTINE` and `DROP AGGREGATE`: the functions of `RemoveObjects`, which `LookupFuncWithArgs` finds by name and by the types of the input arguments, or for a procedure also by the types of all the arguments.
 
 use rupg_catalog::{FIRST_NORMAL_OID, ObjRef, PG_PROC, is_pinned};
 use rupg_common::{Error, Result, SqlState};
@@ -28,21 +28,22 @@ pub(super) fn routine_word(objtype: ObjectType) -> &'static str {
     match objtype {
         ObjectType::OBJECT_PROCEDURE => "procedure",
         ObjectType::OBJECT_ROUTINE => "routine",
+        ObjectType::OBJECT_AGGREGATE => "aggregate",
         _ => "function",
     }
 }
 
-/// The objtype check of `LookupFuncNameInternal`: `FUNCTION` skips a procedure, and `PROCEDURE` skips all that is not a procedure.
+/// The objtype check of `LookupFuncNameInternal`: `FUNCTION` and `AGGREGATE` skip a procedure, and `PROCEDURE` skips all that is not a procedure.
 fn kind_matches(objtype: ObjectType, kind: u8) -> bool {
     match objtype {
-        ObjectType::OBJECT_FUNCTION => kind != b'p',
+        ObjectType::OBJECT_FUNCTION | ObjectType::OBJECT_AGGREGATE => kind != b'p',
         ObjectType::OBJECT_PROCEDURE => kind == b'p',
         _ => true,
     }
 }
 
 impl Definer<'_, '_> {
-    /// The functions of `RemoveObjects` for `DROP FUNCTION`, `DROP PROCEDURE` and `DROP ROUTINE`, with the checks of `LookupFuncWithArgs` and `check_object_ownership`.
+    /// The functions of `RemoveObjects` for `DROP FUNCTION`, `DROP PROCEDURE`, `DROP ROUTINE` and `DROP AGGREGATE`, with the checks of `LookupFuncWithArgs` and `check_object_ownership`.
     pub(super) fn find_functions(&mut self, stmt: &DropStmt) -> Result<Vec<ObjRef>> {
         let mut objects = Vec::new();
         for item in stmt.objects.iter().flatten() {
@@ -53,7 +54,7 @@ impl Definer<'_, '_> {
                 continue;
             };
             let name = names(&item.objname).join(".");
-            if found.kind == b'a' {
+            if found.kind == b'a' && stmt.removeType != ObjectType::OBJECT_AGGREGATE {
                 return Err(Error::new(
                     SqlState::WRONG_OBJECT_TYPE,
                     format!("\"{name}\" is an aggregate function"),
@@ -169,17 +170,33 @@ impl Definer<'_, '_> {
                     format!("{} is not a procedure", signature()),
                 ));
             }
+            if objtype == ObjectType::OBJECT_AGGREGATE && found.kind != b'a' {
+                return Err(Error::new(
+                    SqlState::WRONG_OBJECT_TYPE,
+                    format!("function {} is not an aggregate", signature()),
+                ));
+            }
             return Ok(Some(found));
         }
         if missing_ok {
             return self.skip(format!("{word} {parts}({}) does not exist", written.join(",")));
         }
         // `ROUTINE` gives the messages of `FUNCTION`.
-        let word = if objtype == ObjectType::OBJECT_PROCEDURE { "procedure" } else { "function" };
+        let (word, article) = match objtype {
+            ObjectType::OBJECT_PROCEDURE => ("procedure", "a"),
+            ObjectType::OBJECT_AGGREGATE => ("aggregate", "an"),
+            _ => ("function", "a"),
+        };
         if item.args_unspecified {
             return Err(Error::new(
                 SqlState::UNDEFINED_FUNCTION,
-                format!("could not find a {word} named \"{parts}\""),
+                format!("could not find {article} {word} named \"{parts}\""),
+            ));
+        }
+        if objtype == ObjectType::OBJECT_AGGREGATE && argtypes.is_empty() {
+            return Err(Error::new(
+                SqlState::UNDEFINED_FUNCTION,
+                format!("aggregate {parts}(*) does not exist"),
             ));
         }
         let args: Vec<String> = argtypes.iter().map(|&ty| self.type_text(ty)).collect();

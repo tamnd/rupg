@@ -1,0 +1,407 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE AGGREGATE newavg (sfunc = int4_avg_accum, basetype = int4, stype = _int8, finalfunc = int8_avg, initcond1 = '{0,0}');
+CREATE AGGREGATE
+> COMMENT ON AGGREGATE newavg_wrong (int4) IS 'an agg comment';
+ERROR 42883 aggregate newavg_wrong(integer) does not exist
+> COMMENT ON AGGREGATE newavg (int4) IS 'an agg comment';
+COMMENT
+> SELECT obj_description('newavg'::regproc, 'pg_proc');
+fields obj_description:25:-1:-1
+row an agg comment
+SELECT 1
+> COMMENT ON AGGREGATE newavg (int4) IS NULL;
+COMMENT
+> CREATE AGGREGATE newsum (sfunc1 = int4pl, basetype = int4, stype1 = int4, initcond1 = '0');
+CREATE AGGREGATE
+> CREATE AGGREGATE newcnt (*) (sfunc = int8inc, stype = int8, initcond = '0', parallel = safe);
+CREATE AGGREGATE
+> CREATE AGGREGATE oldcnt (sfunc = int8inc, basetype = 'ANY', stype = int8, initcond = '0');
+CREATE AGGREGATE
+> CREATE AGGREGATE newcnt ("any") (sfunc = int8inc_any, stype = int8, support = int8inc_support, initcond = '0');
+CREATE AGGREGATE
+> COMMENT ON AGGREGATE nosuchagg (*) IS 'should fail';
+ERROR 42883 aggregate nosuchagg(*) does not exist
+> COMMENT ON AGGREGATE newcnt (*) IS 'an agg(*) comment';
+COMMENT
+> COMMENT ON AGGREGATE newcnt ("any") IS 'an agg(any) comment';
+COMMENT
+> SELECT newavg(x), newsum(x), newcnt(*), oldcnt(*), newcnt(x) FROM (VALUES (1), (2), (NULL), (4)) v(x);
+fields newavg:1700:-1:-1,newsum:23:4:-1,newcnt:20:8:-1,oldcnt:20:8:-1,newcnt:20:8:-1
+row 2.3333333333333333,7,4,4,3
+SELECT 1
+> SELECT newavg(x), newsum(x), newcnt(*), newcnt(x) FROM (VALUES (1), (2), (NULL), (4)) v(x) WHERE x > 10;
+fields newavg:1700:-1:-1,newsum:23:4:-1,newcnt:20:8:-1,newcnt:20:8:-1
+row NULL,0,0,0
+SELECT 1
+> SELECT g, newsum(x), newcnt(*) FROM (VALUES (1, 10), (1, 20), (2, 5)) v(g, x) GROUP BY g ORDER BY g;
+fields g:23:4:-1,newsum:23:4:-1,newcnt:20:8:-1
+row 1,30,2
+row 2,5,1
+SELECT 2
+> create function sum3(int8,int8,int8) returns int8 as 'select $1 + $2 + $3' language sql strict immutable;
+CREATE FUNCTION
+> create aggregate sum2(int8,int8) (sfunc = sum3, stype = int8, initcond = '0');
+CREATE AGGREGATE
+> SELECT sum2(a, b) FROM (VALUES (1::int8, 2::int8), (3, 4), (NULL, 5), (6, 7)) v(a, b);
+fields sum2:20:8:-1
+row 23
+SELECT 1
+> create type aggtype as (a integer, b integer, c text);
+CREATE TYPE
+> create function aggf_trans(aggtype[],integer,integer,text) returns aggtype[] as 'select array_append($1,ROW($2,$3,$4)::aggtype)' language sql strict immutable;
+CREATE FUNCTION
+> create function aggfns_trans(aggtype[],integer,integer,text) returns aggtype[] as 'select array_append($1,ROW($2,$3,$4)::aggtype)' language sql immutable;
+CREATE FUNCTION
+> create aggregate aggfstr(integer,integer,text) (sfunc = aggf_trans, stype = aggtype[], initcond = '{}');
+CREATE AGGREGATE
+> create aggregate aggfns(integer,integer,text) (sfunc = aggfns_trans, stype = aggtype[], sspace = 10000, initcond = '{}');
+CREATE AGGREGATE
+> select aggfstr(a,b,c)::text from (values (1,3,'foo'),(0,null,null),(2,2,'bar'),(3,1,'baz')) v(a,b,c);
+fields aggfstr:25:-1:-1
+row {"(1,3,foo)","(2,2,bar)","(3,1,baz)"}
+SELECT 1
+> select aggfns(a,b,c)::text from (values (1,3,'foo'),(0,null,null),(2,2,'bar'),(3,1,'baz')) v(a,b,c);
+fields aggfns:25:-1:-1
+row {"(1,3,foo)","(0,,)","(2,2,bar)","(3,1,baz)"}
+SELECT 1
+> select aggfstr(distinct a,b,c)::text from (values (1,3,'foo'),(0,null,null),(2,2,'bar'),(3,1,'baz'),(1,3,'foo')) v(a,b,c);
+fields aggfstr:25:-1:-1
+row {"(1,3,foo)","(2,2,bar)","(3,1,baz)"}
+SELECT 1
+> select aggfns(a,b,c order by b)::text from (values (1,3,'foo'),(0,null,null),(2,2,'bar'),(3,1,'baz')) v(a,b,c);
+fields aggfns:25:-1:-1
+row {"(3,1,baz)","(2,2,bar)","(1,3,foo)","(0,,)"}
+SELECT 1
+> create function least_accum(int8, int8) returns int8 language sql as 'select least($1, $2)';
+CREATE FUNCTION
+> create aggregate least_agg(int4) (stype = int8, sfunc = least_accum);
+ERROR 42804 function least_accum(bigint, bigint) requires run-time type coercion
+> drop function least_accum(int8, int8);
+DROP FUNCTION
+> create function least_accum(anycompatible, anycompatible) returns anycompatible language sql as 'select least($1, $2)';
+CREATE FUNCTION
+> create aggregate least_agg(int4) (stype = int8, sfunc = least_accum);
+ERROR 42804 function least_accum(bigint, bigint) requires run-time type coercion
+> create aggregate least_agg(int8) (stype = int8, sfunc = least_accum);
+CREATE AGGREGATE
+> select least_agg(x) from (values (5::int8), (3), (9)) v(x);
+fields least_agg:20:8:-1
+row 3
+SELECT 1
+> drop function least_accum(anycompatible, anycompatible) cascade;
+NOTICE 00000 drop cascades to function least_agg(bigint)
+DROP FUNCTION
+> create function least_accum(anyelement, variadic anyarray) returns anyelement language sql as 'select least($1, min($2[i])) from generate_subscripts($2,1) g(i)';
+CREATE FUNCTION
+> create aggregate least_agg(variadic items anyarray) (stype = anyelement, sfunc = least_accum);
+CREATE AGGREGATE
+> create function cleast_accum(anycompatible, variadic anycompatiblearray) returns anycompatible language sql as 'select least($1, min($2[i])) from generate_subscripts($2,1) g(i)';
+CREATE FUNCTION
+> create aggregate cleast_agg(variadic items anycompatiblearray) (stype = anycompatible, sfunc = cleast_accum);
+CREATE AGGREGATE
+> select least_agg(a, b) from (values (5, 7), (3, 8), (9, 4)) v(a, b);
+fields least_agg:23:4:-1
+row 3
+SELECT 1
+> select cleast_agg(a, b) from (values (5, 7.5), (3, 8), (9, 4)) v(a, b);
+fields cleast_agg:1700:-1:-1
+row 3
+SELECT 1
+> create aggregate my_percentile_disc(float8 ORDER BY anyelement) (stype = internal, sfunc = ordered_set_transition, finalfunc = percentile_disc_final, finalfunc_extra = true, finalfunc_modify = read_write);
+CREATE AGGREGATE
+> create aggregate my_rank(VARIADIC "any" ORDER BY VARIADIC "any") (stype = internal, sfunc = ordered_set_transition_multi, finalfunc = rank_final, finalfunc_extra = true, hypothetical);
+CREATE AGGREGATE
+> select aggfnoid, aggkind, aggnumdirectargs, aggtransfn, aggfinalfn, aggfinalextra, aggfinalmodify, aggtranstype::regtype from pg_aggregate where aggfnoid in ('my_percentile_disc'::regproc, 'my_rank'::regproc) order by 1::text;
+fields aggfnoid@pg_aggregate.1:24:4:-1,aggkind@pg_aggregate.2:18:1:-1,aggnumdirectargs@pg_aggregate.3:21:2:-1,aggtransfn@pg_aggregate.4:24:4:-1,aggfinalfn@pg_aggregate.5:24:4:-1,aggfinalextra@pg_aggregate.12:16:1:-1,aggfinalmodify@pg_aggregate.14:18:1:-1,aggtranstype:2206:4:-1
+row my_percentile_disc,o,1,ordered_set_transition,percentile_disc_final,t,w,internal
+row my_rank,h,1,ordered_set_transition_multi,rank_final,t,w,internal
+SELECT 2
+> CREATE AGGREGATE sumdouble (float8) (stype = float8, sfunc = float8pl, mstype = float8, msfunc = float8pl, minvfunc = float8mi);
+CREATE AGGREGATE
+> SELECT sumdouble(x) FROM (VALUES (1.5::float8), (2.5), (NULL)) v(x);
+fields sumdouble:701:8:-1
+row 4
+SELECT 1
+> SELECT i, sumdouble(x) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM (VALUES (1, 1.5::float8), (2, 2.5), (3, 4)) v(i, x) ORDER BY i;
+fields i:23:4:-1,sumdouble:701:8:-1
+row 1,1.5
+row 2,4
+row 3,6.5
+SELECT 3
+> SELECT aggfnoid, aggtransfn, aggmtransfn, aggminvtransfn, aggmtranstype::regtype, aggfinalmodify, aggmfinalmodify FROM pg_aggregate WHERE aggfnoid = 'sumdouble'::regproc;
+fields aggfnoid@pg_aggregate.1:24:4:-1,aggtransfn@pg_aggregate.4:24:4:-1,aggmtransfn@pg_aggregate.9:24:4:-1,aggminvtransfn@pg_aggregate.10:24:4:-1,aggmtranstype:2206:4:-1,aggfinalmodify@pg_aggregate.14:18:1:-1,aggmfinalmodify@pg_aggregate.15:18:1:-1
+row sumdouble,float8pl,float8pl,float8mi,double precision,r,r
+SELECT 1
+> CREATE AGGREGATE myavg (numeric) (stype = internal, sfunc = numeric_avg_accum, serialfunc = numeric_avg_serialize);
+ERROR 42P13 must specify both or neither of serialization and deserialization functions
+> CREATE AGGREGATE myavg (numeric) (stype = internal, sfunc = numeric_avg_accum, serialfunc = numeric_avg_deserialize, deserialfunc = numeric_avg_deserialize);
+ERROR 42883 function numeric_avg_deserialize(internal) does not exist
+> CREATE AGGREGATE myavg (numeric) (stype = internal, sfunc = numeric_avg_accum, serialfunc = numeric_avg_serialize, deserialfunc = numeric_avg_serialize);
+ERROR 42883 function numeric_avg_serialize(bytea, internal) does not exist
+> CREATE AGGREGATE myavg (numeric) (stype = internal, sfunc = numeric_avg_accum, serialfunc = numeric_avg_serialize, deserialfunc = numeric_avg_deserialize, combinefunc = int4larger);
+ERROR 42883 function int4larger(internal, internal) does not exist
+> CREATE AGGREGATE myavg (numeric) (stype = internal, sfunc = numeric_avg_accum, finalfunc = numeric_avg, serialfunc = numeric_avg_serialize, deserialfunc = numeric_avg_deserialize, combinefunc = numeric_avg_combine, finalfunc_modify = shareable);
+CREATE AGGREGATE
+> SELECT aggfnoid, aggtransfn, aggcombinefn, aggtranstype::regtype, aggserialfn, aggdeserialfn, aggfinalmodify FROM pg_aggregate WHERE aggfnoid = 'myavg'::REGPROC;
+fields aggfnoid@pg_aggregate.1:24:4:-1,aggtransfn@pg_aggregate.4:24:4:-1,aggcombinefn@pg_aggregate.6:24:4:-1,aggtranstype:2206:4:-1,aggserialfn@pg_aggregate.7:24:4:-1,aggdeserialfn@pg_aggregate.8:24:4:-1,aggfinalmodify@pg_aggregate.14:18:1:-1
+row myavg,numeric_avg_accum,numeric_avg_combine,internal,numeric_avg_serialize,numeric_avg_deserialize,s
+SELECT 1
+> SELECT myavg(x) FROM (VALUES (1.5), (2.5), (5)) v(x);
+fields myavg:1700:-1:-1
+row 3.0000000000000000
+SELECT 1
+> DROP AGGREGATE myavg (numeric);
+DROP AGGREGATE
+> CREATE AGGREGATE myavg (numeric) (stype = internal, sfunc = numeric_avg_accum, finalfunc = numeric_avg);
+CREATE AGGREGATE
+> CREATE OR REPLACE AGGREGATE myavg (numeric) (stype = internal, sfunc = numeric_avg_accum, finalfunc = numeric_avg, serialfunc = numeric_avg_serialize, deserialfunc = numeric_avg_deserialize, combinefunc = numeric_avg_combine, finalfunc_modify = shareable);
+CREATE AGGREGATE
+> SELECT aggfnoid, aggtransfn, aggcombinefn, aggtranstype::regtype, aggserialfn, aggdeserialfn, aggfinalmodify FROM pg_aggregate WHERE aggfnoid = 'myavg'::REGPROC;
+fields aggfnoid@pg_aggregate.1:24:4:-1,aggtransfn@pg_aggregate.4:24:4:-1,aggcombinefn@pg_aggregate.6:24:4:-1,aggtranstype:2206:4:-1,aggserialfn@pg_aggregate.7:24:4:-1,aggdeserialfn@pg_aggregate.8:24:4:-1,aggfinalmodify@pg_aggregate.14:18:1:-1
+row myavg,numeric_avg_accum,numeric_avg_combine,internal,numeric_avg_serialize,numeric_avg_deserialize,s
+SELECT 1
+> CREATE OR REPLACE AGGREGATE myavg (numeric) (stype = numeric, sfunc = numeric_add);
+CREATE AGGREGATE
+> SELECT aggfnoid, aggtransfn, aggcombinefn, aggtranstype::regtype, aggserialfn, aggdeserialfn, aggfinalmodify FROM pg_aggregate WHERE aggfnoid = 'myavg'::REGPROC;
+fields aggfnoid@pg_aggregate.1:24:4:-1,aggtransfn@pg_aggregate.4:24:4:-1,aggcombinefn@pg_aggregate.6:24:4:-1,aggtranstype:2206:4:-1,aggserialfn@pg_aggregate.7:24:4:-1,aggdeserialfn@pg_aggregate.8:24:4:-1,aggfinalmodify@pg_aggregate.14:18:1:-1
+row myavg,numeric_add,-,numeric,-,-,r
+SELECT 1
+> SELECT myavg(x) FROM (VALUES (1.5), (2.5), (5)) v(x);
+fields myavg:1700:-1:-1
+row 9.0
+SELECT 1
+> CREATE OR REPLACE AGGREGATE myavg (numeric) (stype = numeric, sfunc = numeric_add, finalfunc = numeric_out);
+ERROR 42P13 cannot change return type of existing function
+HINT Use DROP AGGREGATE myavg(numeric) first.
+> CREATE OR REPLACE AGGREGATE myavg (order by numeric) (stype = numeric, sfunc = numeric_add);
+ERROR 42809 cannot change routine kind
+DETAIL "myavg" is an ordinary aggregate function.
+> create function sum4(int8,int8,int8,int8) returns int8 as 'select $1 + $2 + $3 + $4' language sql strict immutable;
+CREATE FUNCTION
+> CREATE OR REPLACE AGGREGATE sum3 (int8,int8,int8) (stype = int8, sfunc = sum4);
+ERROR 42809 cannot change routine kind
+DETAIL "sum3" is a function.
+> CREATE AGGREGATE sum3 (int8,int8,int8) (stype = int8, sfunc = sum4);
+ERROR 42723 function "sum3" already exists with same argument types
+> drop function sum4(int8,int8,int8,int8);
+DROP FUNCTION
+> DROP AGGREGATE myavg (numeric);
+DROP AGGREGATE
+> CREATE AGGREGATE mysum (int) (stype = int, sfunc = int4pl, parallel = pear);
+ERROR 42601 parameter "parallel" must be SAFE, RESTRICTED, or UNSAFE
+> CREATE FUNCTION float8mi_n(float8, float8) RETURNS float8 AS $$ SELECT $1 - $2; $$ LANGUAGE SQL;
+CREATE FUNCTION
+> CREATE AGGREGATE invalidsumdouble (float8) (stype = float8, sfunc = float8pl, mstype = float8, msfunc = float8pl, minvfunc = float8mi_n);
+ERROR 42P13 strictness of aggregate's forward and inverse transition functions must match
+> CREATE FUNCTION float8mi_int(float8, float8) RETURNS int AS $$ SELECT CAST($1 - $2 AS INT); $$ LANGUAGE SQL;
+CREATE FUNCTION
+> CREATE AGGREGATE wrongreturntype (float8) (stype = float8, sfunc = float8pl, mstype = float8, msfunc = float8pl, minvfunc = float8mi_int);
+ERROR 42804 return type of inverse transition function float8mi_int is not double precision
+> CREATE AGGREGATE case_agg ("Sfunc1" = int4pl, "Basetype" = int4, "Stype1" = int4, "Initcond1" = '0', "Parallel" = safe);
+WARNING 42601 aggregate attribute "Sfunc1" not recognized
+WARNING 42601 aggregate attribute "Basetype" not recognized
+WARNING 42601 aggregate attribute "Stype1" not recognized
+WARNING 42601 aggregate attribute "Initcond1" not recognized
+WARNING 42601 aggregate attribute "Parallel" not recognized
+ERROR 42P13 aggregate stype must be specified
+> CREATE AGGREGATE case_agg(float8) ("Stype" = internal, "Sfunc" = ordered_set_transition, "Finalfunc" = percentile_disc_final, "Finalfunc_extra" = true, "Finalfunc_modify" = read_write, "Parallel" = safe);
+WARNING 42601 aggregate attribute "Stype" not recognized
+WARNING 42601 aggregate attribute "Sfunc" not recognized
+WARNING 42601 aggregate attribute "Finalfunc" not recognized
+WARNING 42601 aggregate attribute "Finalfunc_extra" not recognized
+WARNING 42601 aggregate attribute "Finalfunc_modify" not recognized
+WARNING 42601 aggregate attribute "Parallel" not recognized
+ERROR 42P13 aggregate stype must be specified
+> CREATE AGGREGATE noinit (int4) (sfunc = int4pl, stype = int8);
+ERROR 42883 function int4pl(bigint, integer) does not exist
+> CREATE AGGREGATE noinit (text) (sfunc = int4pl, stype = int4);
+ERROR 42883 function int4pl(integer, text) does not exist
+> CREATE AGGREGATE badinit (int4) (sfunc = int4pl, stype = int4, initcond = 'abc');
+ERROR 22P02 invalid input syntax for type integer: "abc"
+> CREATE AGGREGATE nostype (int4) (sfunc = int4pl);
+ERROR 42P13 aggregate stype must be specified
+> CREATE AGGREGATE nosfunc (int4) (stype = int4);
+ERROR 42P13 aggregate sfunc must be specified
+> CREATE AGGREGATE nobase (sfunc = int4pl, stype = int4);
+ERROR 42P13 aggregate input type must be specified
+> CREATE AGGREGATE twobase (int4) (sfunc = int4pl, stype = int4, basetype = int4);
+ERROR 42P13 basetype is redundant with aggregate input type specification
+> CREATE AGGREGATE nomstype (int4) (sfunc = int4pl, stype = int4, msfunc = int4pl);
+ERROR 42P13 aggregate msfunc must not be specified without mstype
+> CREATE AGGREGATE nominv (int4) (sfunc = int4pl, stype = int4, mstype = int4, msfunc = int4pl);
+ERROR 42P13 aggregate minvfunc must be specified when mstype is specified
+> CREATE AGGREGATE nohypo (int4) (sfunc = int4pl, stype = int4, hypothetical);
+ERROR 42P13 only ordered-set aggregates can be hypothetical
+> CREATE AGGREGATE badmodify (int4) (sfunc = int4pl, stype = int4, finalfunc_modify = sometimes);
+ERROR 42601 parameter "finalfunc_modify" must be READ_ONLY, SHAREABLE, or READ_WRITE
+> CREATE AGGREGATE polyst (int4) (sfunc = array_append, stype = anyarray);
+ERROR 42P13 cannot determine transition data type
+DETAIL A result of type anyarray requires at least one input of type anyelement, anyarray, anynonarray, anyenum, anyrange, or anymultirange.
+> CREATE AGGREGATE polyarr (anyelement) (sfunc = array_append, stype = anyarray, initcond = '{}');
+ERROR 42883 function array_append(anyarray, anyelement) does not exist
+> SELECT polyarr(x) FROM (VALUES (3), (1), (2)) v(x);
+ERROR 42883 function polyarr(integer) does not exist at 8
+DETAIL There is no function of that name.
+> SELECT polyarr(x) FROM (VALUES ('b'::text), ('a')) v(x);
+ERROR 42883 function polyarr(text) does not exist at 8
+DETAIL There is no function of that name.
+> CREATE AGGREGATE badsortop (int4, int4) (sfunc = int4pl, stype = int4, sortop = <);
+ERROR 42883 function int4pl(integer, integer, integer) does not exist
+> CREATE AGGREGATE mymax (int4) (sfunc = int4larger, stype = int4, sortop = >);
+CREATE AGGREGATE
+> CREATE AGGREGATE nosortop (int4) (sfunc = int4larger, stype = int4, sortop = <<<);
+ERROR 42883 operator does not exist: integer <<< integer
+> SELECT mymax(x) FROM (VALUES (3), (7), (NULL), (1)) v(x);
+fields mymax:23:4:-1
+row 7
+SELECT 1
+> SELECT aggfnoid, aggsortop::regoperator, aggkind, aggnumdirectargs, agginitval, aggminitval, aggtransspace FROM pg_aggregate WHERE aggfnoid IN ('mymax'::regproc, 'aggfns'::regproc, 'newsum'::regproc, 'newavg'::regproc) ORDER BY 1::text;
+fields aggfnoid@pg_aggregate.1:24:4:-1,aggsortop:2204:4:-1,aggkind@pg_aggregate.2:18:1:-1,aggnumdirectargs@pg_aggregate.3:21:2:-1,agginitval@pg_aggregate.21:25:-1:-1,aggminitval@pg_aggregate.22:25:-1:-1,aggtransspace@pg_aggregate.18:23:4:-1
+row newavg,0,n,0,{0,0},NULL,0
+row newsum,0,n,0,0,NULL,0
+row aggfns,0,n,0,{},NULL,10000
+row mymax,>(integer,integer),n,0,NULL,NULL,0
+SELECT 4
+> CREATE AGGREGATE badfinal (int4) (sfunc = int4pl, stype = int4, finalfunc = int4pl);
+ERROR 42883 function int4pl(integer) does not exist
+> CREATE AGGREGATE badfinalx (int4) (sfunc = int4pl, stype = int4, finalfunc = int4pl, finalfunc_extra);
+ERROR 42P13 final function with extra arguments must not be declared STRICT
+> CREATE AGGREGATE badtrans (int4) (sfunc = int8pl, stype = int4);
+ERROR 42804 function int8pl(bigint, bigint) requires run-time type coercion
+> CREATE AGGREGATE badtransret (int4) (sfunc = int4eq, stype = int4);
+ERROR 42804 return type of transition function int4eq is not integer
+> CREATE AGGREGATE badcombine (int4) (sfunc = int4pl, stype = int4, combinefunc = int4eq);
+ERROR 42804 return type of combine function int4eq is not integer
+> CREATE AGGREGATE mycombine (int4) (sfunc = int4pl, stype = int4, combinefunc = int4pl);
+CREATE AGGREGATE
+> CREATE AGGREGATE badmfinal (float8) (stype = float8, sfunc = float8pl, mstype = float8, msfunc = float8pl, minvfunc = float8mi, mfinalfunc = float8_numeric);
+ERROR 42883 function float8_numeric(double precision) does not exist
+> CREATE AGGREGATE setarg (setof int4) (sfunc = int4pl, stype = int4);
+ERROR 42P13 aggregates cannot accept set arguments at 26
+> CREATE AGGREGATE dupname (a int4, a int4) (sfunc = int4pl, stype = int4);
+ERROR 42P13 parameter name "a" used more than once at 35
+> CREATE AGGREGATE vnotlast (variadic a int4[], b int4) (sfunc = int4pl, stype = int4);
+ERROR 42P13 VARIADIC parameter must be the last input parameter at 47
+> CREATE AGGREGATE vnotarray (variadic a int4) (sfunc = int4pl, stype = int4);
+ERROR 42P13 VARIADIC parameter must be an array at 29
+> CREATE AGGREGATE pseudost (int4) (sfunc = int4pl, stype = cstring);
+ERROR 42P13 aggregate transition data type cannot be cstring
+> CREATE AGGREGATE notype (int4) (sfunc = int4pl, stype = nosuchtype);
+ERROR 42704 type "nosuchtype" does not exist
+> CREATE AGGREGATE notype2 (nosuchtype) (sfunc = int4pl, stype = int4);
+ERROR 42704 type nosuchtype does not exist at 27
+> CREATE AGGREGATE nosuchfn (int4) (sfunc = nosuchfunc, stype = int4);
+ERROR 42883 function nosuchfunc(integer, integer) does not exist
+> CREATE AGGREGATE nosuchschema.agg (int4) (sfunc = int4pl, stype = int4);
+ERROR 3F000 schema "nosuchschema" does not exist
+> CREATE AGGREGATE vosa (VARIADIC int4[] ORDER BY int4) (sfunc = int4pl, stype = int4);
+ERROR 0A000 an ordered-set aggregate with a VARIADIC direct argument must have one VARIADIC aggregated argument of the same data type at 49
+> CREATE AGGREGATE badhypo (int4 ORDER BY text) (sfunc = ordered_set_transition, stype = internal, hypothetical);
+ERROR 42P13 a hypothetical-set aggregate must have direct arguments matching its aggregated arguments
+> CREATE AGGREGATE "Weird Name" (int4) (sfunc = int4pl, stype = int4, initcond = '100', bogus = 1, other);
+WARNING 42601 aggregate attribute "bogus" not recognized
+WARNING 42601 aggregate attribute "other" not recognized
+CREATE AGGREGATE
+> SELECT "Weird Name"(x) FROM (VALUES (1), (2)) v(x);
+fields Weird Name:23:4:-1
+row 103
+SELECT 1
+> SELECT proname, prokind, prorettype::regtype, proargtypes::regtype[], proisstrict, provolatile, proparallel, prosrc, procost, prorows, pronargs, provariadic::regtype, proargmodes, proargnames FROM pg_proc WHERE proname IN ('newavg', 'newcnt', 'oldcnt', 'sum2', 'least_agg', 'cleast_agg', 'my_rank', 'my_percentile_disc', 'Weird Name', 'mymax') ORDER BY 1, 4::text;
+fields proname@pg_proc.2:19:64:-1,prokind@pg_proc.10:18:1:-1,prorettype:2206:4:-1,proargtypes:2211:-1:-1,proisstrict@pg_proc.13:16:1:-1,provolatile@pg_proc.15:18:1:-1,proparallel@pg_proc.16:18:1:-1,prosrc@pg_proc.26:25:-1:-1,procost@pg_proc.6:700:4:-1,prorows@pg_proc.7:700:4:-1,pronargs@pg_proc.17:21:2:-1,provariadic:2206:4:-1,proargmodes@pg_proc.22:1002:-1:-1,proargnames@pg_proc.23:1009:-1:-1
+row Weird Name,a,integer,[0:0]={integer},f,i,u,aggregate_dummy,1,0,1,-,NULL,NULL
+row cleast_agg,a,anycompatible,[0:0]={anycompatiblearray},f,i,u,aggregate_dummy,1,0,1,anycompatible,{v},{items}
+row least_agg,a,anyelement,[0:0]={anyarray},f,i,u,aggregate_dummy,1,0,1,anyelement,{v},{items}
+row my_percentile_disc,a,anyelement,[0:1]={"double precision",anyelement},f,i,u,aggregate_dummy,1,0,2,-,NULL,NULL
+row my_rank,a,bigint,[0:0]={"\"any\""},f,i,u,aggregate_dummy,1,0,1,"any",{v},NULL
+row mymax,a,integer,[0:0]={integer},f,i,u,aggregate_dummy,1,0,1,-,NULL,NULL
+row newavg,a,numeric,[0:0]={integer},f,i,u,aggregate_dummy,1,0,1,-,NULL,NULL
+row newcnt,a,bigint,{},f,i,s,aggregate_dummy,1,0,0,-,NULL,NULL
+row newcnt,a,bigint,[0:0]={"\"any\""},f,i,u,aggregate_dummy,1,0,1,-,NULL,NULL
+row oldcnt,a,bigint,{},f,i,u,aggregate_dummy,1,0,0,-,NULL,NULL
+row sum2,a,bigint,[0:1]={bigint,bigint},f,i,u,aggregate_dummy,1,0,2,-,NULL,NULL
+SELECT 11
+> SELECT pg_describe_object(refclassid, refobjid, refobjsubid), deptype FROM pg_depend WHERE classid = 'pg_proc'::regclass AND objid = 'mymax'::regproc ORDER BY 1;
+fields pg_describe_object:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row schema public,n
+SELECT 1
+> SELECT pg_describe_object(refclassid, refobjid, refobjsubid), deptype FROM pg_depend WHERE classid = 'pg_proc'::regclass AND objid = 'sum2'::regproc ORDER BY 1;
+fields pg_describe_object:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row function sum3(bigint,bigint,bigint),n
+row schema public,n
+SELECT 2
+> SELECT pg_describe_object(refclassid, refobjid, refobjsubid), deptype FROM pg_depend WHERE classid = 'pg_proc'::regclass AND objid = 'newcnt(any)'::regprocedure ORDER BY 1;
+ERROR 42601 syntax error at or near "any" at 134 (invalid type name "any")
+> SELECT pg_get_function_arguments('my_rank'::regproc), pg_get_function_arguments('least_agg'::regproc), pg_get_function_identity_arguments('my_percentile_disc'::regproc);
+fields pg_get_function_arguments:25:-1:-1,pg_get_function_arguments:25:-1:-1,pg_get_function_identity_arguments:25:-1:-1
+row VARIADIC "any" ORDER BY VARIADIC "any",VARIADIC items anyarray,double precision ORDER BY anyelement
+SELECT 1
+> drop function sum3(int8,int8,int8);
+ERROR 2BP01 cannot drop function sum3(bigint,bigint,bigint) because other objects depend on it
+DETAIL function sum2(bigint,bigint) depends on function sum3(bigint,bigint,bigint)
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP FUNCTION newsum(int4);
+ERROR 42809 "newsum" is an aggregate function
+HINT Use DROP AGGREGATE to drop aggregate functions.
+> DROP AGGREGATE sum3(int8,int8,int8);
+ERROR 42809 function sum3(bigint, bigint, bigint) is not an aggregate
+> DROP AGGREGATE IF EXISTS nosuch(int4);
+NOTICE 00000 aggregate nosuch(int4) does not exist, skipping
+DROP AGGREGATE
+> DROP AGGREGATE nosuch(int4);
+ERROR 42883 aggregate nosuch(integer) does not exist
+> DROP AGGREGATE nosuch(*);
+ERROR 42883 aggregate nosuch(*) does not exist
+> DROP AGGREGATE newcnt(*);
+DROP AGGREGATE
+> DROP AGGREGATE newcnt;
+ERROR 42601 syntax error at or near ";" at 22
+> DROP AGGREGATE newcnt("any"), oldcnt(*);
+DROP AGGREGATE
+> drop function sum3(int8,int8,int8) cascade;
+NOTICE 00000 drop cascades to function sum2(bigint,bigint)
+DROP FUNCTION
+> CREATE ROLE regress_agg_user;
+CREATE ROLE
+> CREATE SCHEMA agg_s AUTHORIZATION regress_agg_user;
+CREATE SCHEMA
+> SET ROLE regress_agg_user;
+SET
+is_superuser=off
+> CREATE AGGREGATE agg_s.intagg (int4) (sfunc = ordered_set_transition, stype = internal);
+ERROR 42P13 aggregate transition data type cannot be internal
+> CREATE AGGREGATE agg_s.supagg ("any") (sfunc = int8inc_any, stype = int8, support = int8inc_support, initcond = '0');
+ERROR 42501 must be superuser to specify a support function
+> CREATE AGGREGATE agg_s.oksum (int4) (sfunc = int4pl, stype = int4);
+CREATE AGGREGATE
+> CREATE AGGREGATE public.nopriv (int4) (sfunc = int4pl, stype = int4);
+ERROR 42501 permission denied for schema public
+> DROP AGGREGATE newsum(int4);
+ERROR 42501 must be owner of aggregate newsum
+> CREATE OR REPLACE AGGREGATE newsum (int4) (sfunc = int4pl, stype = int4);
+ERROR 42501 permission denied for schema public
+> RESET ROLE;
+RESET
+is_superuser=on
+> SELECT agg_s.oksum(x) FROM (VALUES (1), (2)) v(x);
+fields oksum:23:4:-1
+row 3
+SELECT 1
+> DROP SCHEMA agg_s CASCADE;
+NOTICE 00000 drop cascades to function agg_s.oksum(integer)
+DROP SCHEMA
+> DROP ROLE regress_agg_user;
+DROP ROLE
+> DROP AGGREGATE newavg(int4), newsum(int4), sum2(int8,int8), aggfstr(int4,int4,text), aggfns(int4,int4,text);
+ERROR 42883 aggregate sum2(bigint, bigint) does not exist
+> DROP AGGREGATE least_agg(int8), least_agg(variadic anyarray), cleast_agg(variadic anycompatiblearray);
+ERROR 42883 aggregate least_agg(bigint) does not exist
+> DROP AGGREGATE my_percentile_disc(float8 ORDER BY anyelement), my_rank(VARIADIC "any" ORDER BY VARIADIC "any");
+DROP AGGREGATE
+> DROP AGGREGATE sumdouble(float8), polyarr(anyelement), mymax(int4), mycombine(int4), "Weird Name"(int4);
+ERROR 42883 aggregate polyarr(anyelement) does not exist
+> SELECT count(*) FROM pg_aggregate WHERE aggfnoid >= 16384;
+fields count:20:8:-1
+row 10
+SELECT 1

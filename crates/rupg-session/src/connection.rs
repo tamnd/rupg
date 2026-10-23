@@ -1122,6 +1122,7 @@ impl Connection {
                         ObjectType::OBJECT_FUNCTION => CommandTag::DropFunction,
                         ObjectType::OBJECT_PROCEDURE => CommandTag::DropProcedure,
                         ObjectType::OBJECT_ROUTINE => CommandTag::DropRoutine,
+                        ObjectType::OBJECT_AGGREGATE => CommandTag::DropAggregate,
                         ObjectType::OBJECT_OPERATOR => CommandTag::DropOperator,
                         ObjectType::OBJECT_OPCLASS => CommandTag::DropOperatorClass,
                         ObjectType::OBJECT_OPFAMILY => CommandTag::DropOperatorFamily,
@@ -1150,6 +1151,7 @@ impl Connection {
                     Node::AlterSeqStmt(_) => CommandTag::AlterSequence,
                     Node::DefineStmt(stmt) => match stmt.kind {
                         ObjectType::OBJECT_OPERATOR => CommandTag::CreateOperator,
+                        ObjectType::OBJECT_AGGREGATE => CommandTag::CreateAggregate,
                         ObjectType::OBJECT_TSPARSER => CommandTag::CreateTextSearchParser,
                         ObjectType::OBJECT_TSDICTIONARY => CommandTag::CreateTextSearchDictionary,
                         ObjectType::OBJECT_TSTEMPLATE => CommandTag::CreateTextSearchTemplate,
@@ -5770,6 +5772,12 @@ mod tests {
     #[test]
     fn opclass_alter() {
         big_stack(|| script(include_str!("connection/opclass_alter.test")));
+    }
+
+    /// `CREATE AGGREGATE` in the old and the new syntax: the checks of `DefineAggregate` and `AggregateCreate`, the rows of `pg_aggregate`, `pg_proc` and `pg_depend`, aggregates with user transition and final functions, `CREATE OR REPLACE AGGREGATE` and `DROP AGGREGATE`. `connection/aggcreate.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn aggcreate() {
+        big_stack(|| script(include_str!("connection/aggcreate.test")));
     }
 
     /// A query that is a `UNION ALL` of `SELECT`s with the types of its columns and has `ORDER BY` becomes an append relation, as `flatten_simple_union_all` makes it, so the planner can plan a `Merge Append` of the plans of the `SELECT`s in the order. A `SELECT` with its own `WHERE` is not a member of the append relation, as `is_safe_append_member`, and its plan gets a sort. `connection/plan_union_all_order.test` is the output of PostgreSQL 19 for the same script in a new database.

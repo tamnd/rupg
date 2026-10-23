@@ -291,6 +291,7 @@ impl Catalog {
             }
             PG_PROC => {
                 self.functions.remove(&object.oid);
+                self.aggregates.remove(&object.oid);
             }
             PG_TRIGGER => {
                 self.triggers.remove(&object.oid);

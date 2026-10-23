@@ -1151,7 +1151,7 @@ pub struct SessionFunction {
     pub strict: bool,
     pub retset: bool,
     pub volatile: u8,
-    /// `prokind`: `f` for a function or `p` for a procedure.
+    /// `prokind`: `f` for a function, `p` for a procedure or `a` for an aggregate.
     pub kind: u8,
     pub rettype: u32,
     pub argtypes: Vec<u32>,
@@ -1189,7 +1189,21 @@ pub struct SessionOperator {
     pub code: u32,
 }
 
-/// An object of the catalog of a session that has rows in the overlay of the thread: a type, a function, or an operator.
+/// An aggregate of the catalog of a session, for [`use_session_types`]: the facts of its row of `pg_aggregate` that a query reads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionAggregate {
+    pub fnoid: u32,
+    pub kind: u8,
+    pub ndirect: i16,
+    pub transfn: u32,
+    pub finalfn: u32,
+    pub finalextra: bool,
+    pub sortop: u32,
+    pub transtype: u32,
+    pub initval: Option<String>,
+}
+
+/// An object of the catalog of a session that has rows in the overlay of the thread: a type, a function, an aggregate or an operator.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionType {
     Domain(SessionDomain),
@@ -1197,6 +1211,7 @@ pub enum SessionType {
     Enum(SessionEnum),
     Range(SessionRange),
     Function(SessionFunction),
+    Aggregate(SessionAggregate),
     Operator(SessionOperator),
 }
 
@@ -1212,6 +1227,7 @@ struct Session {
     procs: Vec<&'static ProcRow>,
     casts: Vec<&'static CastRow>,
     operators: Vec<&'static OperatorRow>,
+    aggregates: Vec<&'static AggregateRow>,
 }
 
 thread_local! {
@@ -1229,6 +1245,7 @@ struct Interned {
     procs: Vec<&'static ProcRow>,
     casts: Vec<&'static CastRow>,
     operator: Option<&'static OperatorRow>,
+    aggregate: Option<&'static AggregateRow>,
 }
 
 /// The rows of each type that a session used, with the facts that made them. A type gets its rows once in the process, also when many sessions use it, so the rows live as long as the process, as the built-in rows do.
@@ -1271,6 +1288,20 @@ fn session_rows(ty: &SessionType) -> Option<Interned> {
         SessionType::Range(new) => range_rows(new)?,
         SessionType::Function(new) => {
             Interned { procs: vec![Box::leak(Box::new(function_row(new)))], ..Interned::default() }
+        }
+        SessionType::Aggregate(new) => {
+            let row = AggregateRow {
+                fnoid: new.fnoid,
+                kind: new.kind,
+                ndirect: new.ndirect,
+                transfn: new.transfn,
+                finalfn: new.finalfn,
+                finalextra: new.finalextra,
+                sortop: new.sortop,
+                transtype: new.transtype,
+                initval: new.initval.clone().map(|text| &*text.leak()),
+            };
+            Interned { aggregate: Some(Box::leak(Box::new(row))), ..Interned::default() }
         }
         SessionType::Operator(new) => {
             let row = OperatorRow {
@@ -1352,6 +1383,7 @@ pub fn use_session_types(types: Vec<SessionType>) {
                 s.procs.extend(rows.procs);
                 s.casts.extend(rows.casts);
                 s.operators.extend(rows.operator);
+                s.aggregates.extend(rows.aggregate);
             }
             s.given.push(ty);
         });
@@ -1675,7 +1707,9 @@ pub fn access_method_name(oid: u32) -> Option<&'static str> {
 
 /// The row of `pg_aggregate` of the aggregate function with this OID.
 pub fn aggregate(fnoid: u32) -> Option<&'static AggregateRow> {
-    BUILTIN.aggregate_fn.get(&fnoid).map(|&i| &BUILTIN.aggregates[i])
+    BUILTIN.aggregate_fn.get(&fnoid).map(|&i| &BUILTIN.aggregates[i]).or_else(|| {
+        SESSION.with_borrow(|s| s.aggregates.iter().copied().find(|a| a.fnoid == fnoid))
+    })
 }
 
 /// The built-in objects of a kind, in the order of the `.dat` file.

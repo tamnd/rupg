@@ -95,7 +95,7 @@ pub(super) fn no_parameter(def: &DefElem) -> Error {
 }
 
 /// `defGetString`.
-fn def_string(def: &DefElem) -> Result<String> {
+pub(super) fn def_string(def: &DefElem) -> Result<String> {
     Ok(match &def.arg {
         None => return Err(no_parameter(def)),
         Some(Node::Integer(n)) => n.to_string(),

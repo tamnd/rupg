@@ -319,6 +319,19 @@ fn use_types(catalog: &Catalog) {
             code: o.code,
         })
     }));
+    types.extend(catalog.aggregates().map(|a| {
+        builtin::SessionType::Aggregate(builtin::SessionAggregate {
+            fnoid: a.function,
+            kind: a.kind,
+            ndirect: a.ndirect,
+            transfn: a.transfn,
+            finalfn: a.finalfn,
+            finalextra: a.finalextra,
+            sortop: a.sortop,
+            transtype: a.transtype,
+            initval: a.initval.clone(),
+        })
+    }));
     builtin::use_session_types(types);
 }
 
