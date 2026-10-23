@@ -698,7 +698,7 @@ impl<'q> Builder<'q> {
                 self.scopes.push(rupg_plan::Scope {
                     query: update,
                     parent: Some(level.scope),
-                    target: false,
+                    target: None,
                     leaf: None,
                 });
                 let mut parts = Vec::new();

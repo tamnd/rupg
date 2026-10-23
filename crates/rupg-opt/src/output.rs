@@ -5,7 +5,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 
-use rupg_analyze::{Expr, ExprKind, Query, TABLE_OID_ATTNUM, Target, Var};
+use rupg_analyze::{Expr, ExprKind, Query, TABLE_OID_ATTNUM, Target, Var, Write};
 use rupg_plan::{Item, Kind, Node, Operation, Replaced, TARGET};
 
 use crate::{Level, cost, exprs, from, upper};
@@ -100,7 +100,7 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             }
             node.output = returning_output(level, *operation).unwrap_or_default();
             // `create_modifytable_path`: with `RETURNING`, the node has the width of the rows below it.
-            let returning = level.query.write.as_ref().is_some_and(|w| w.returning.is_some());
+            let returning = level.write.is_some_and(|w| w.returning.is_some());
             node.cost.width = match node.children.first() {
                 Some(child) if returning => child.cost.width,
                 _ => 0,
@@ -280,7 +280,7 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
 fn modify_targets<'q>(level: &Level<'q>, operation: Operation) -> Vec<Item<'q>> {
     let query = level.query;
     let all = || query.targets.iter().map(|t| Item::of(&t.expr)).collect();
-    let (Some(write), Some(tid)) = (&query.write, query.targets.last()) else { return all() };
+    let (Some(write), Some(tid)) = (level.write, query.targets.last()) else { return all() };
     match operation {
         Operation::Update if write.width < query.targets.len() => {
             let mut out: Vec<Item<'q>> = query.targets[..write.width]
@@ -293,13 +293,13 @@ fn modify_targets<'q>(level: &Level<'q>, operation: Operation) -> Vec<Item<'q>> 
                 .collect();
             out.push(Item::of(&tid.expr));
             out.extend(level.marks.iter().map(|m| item(m.clone())));
-            out.extend(returning_carried(query));
+            out.extend(returning_carried(query, write));
             out
         }
         Operation::Delete => {
             let mut out = vec![Item::of(&tid.expr)];
             out.extend(level.marks.iter().map(|m| item(m.clone())));
-            out.extend(returning_carried(query));
+            out.extend(returning_carried(query, write));
             out
         }
         Operation::Merge => merge_targets(level).unwrap_or_else(all),
@@ -308,13 +308,9 @@ fn modify_targets<'q>(level: &Level<'q>, operation: Operation) -> Vec<Item<'q>> 
 }
 
 /// The columns of the other relations that `RETURNING` of an `UPDATE` or a `DELETE` reads, which `preprocess_targetlist` adds after the row marks. The query carries them after the row and before the ID of the version.
-fn returning_carried(query: &Query) -> impl Iterator<Item = Item<'_>> {
-    let width = query
-        .write
-        .as_ref()
-        .and_then(|w| w.returning.as_deref())
-        .and_then(|r| r.relations.first())
-        .map(|r| r.columns.len());
+fn returning_carried<'q>(query: &'q Query, write: &Write) -> impl Iterator<Item = Item<'q>> {
+    let width =
+        write.returning.as_deref().and_then(|r| r.relations.first()).map(|r| r.columns.len());
     let end = query.targets.len().saturating_sub(1);
     let carried = width.and_then(|w| query.targets.get(w..end)).unwrap_or_default();
     carried
@@ -326,7 +322,7 @@ fn returning_carried(query: &Query) -> impl Iterator<Item = Item<'_>> {
 /// The list of `RETURNING` of a write, as the target list of its `ModifyTable`. A column of the row that the statement writes is a column of the target table, which is the relation 0 of the query or [`TARGET`] for an `INSERT`, and a carried value is the column of the other relation that the query carries. None for a list that reads the old or the new row by name, `merge_action()`, the OID of a partition or a subquery.
 fn returning_output<'q>(level: &Level<'q>, operation: Operation) -> Option<Vec<Item<'q>>> {
     let query = level.query;
-    let write = query.write.as_ref()?;
+    let write = level.write?;
     let returning = write.returning.as_deref()?;
     let partition = query.targets.iter().any(
         |t| matches!(t.expr.kind, ExprKind::Var(v) if v.relation == 0 && v.attnum == TABLE_OID_ATTNUM),
@@ -395,7 +391,7 @@ fn map_row(expr: &mut Expr, map: &dyn Fn(i16) -> Option<Expr>) -> bool {
 /// `preprocess_targetlist` for a `MERGE`: the ID of the version of the row of the target table, then the columns of the other relations that the condition and the row of each `WHEN` clause read, then the row marks, then the columns that only `RETURNING` reads. The columns of the target table do not come, as the executor reads them from the row of the table.
 fn merge_targets<'q>(level: &Level<'q>) -> Option<Vec<Item<'q>>> {
     let query = level.query;
-    let merge = query.write.as_ref()?.merge.as_ref()?;
+    let merge = level.write?.merge.as_ref()?;
     let tid = query.targets.iter().find(|t| {
         matches!(t.expr.kind, ExprKind::Var(v) if v.relation == 0 && v.levels_up == 0 && v.attnum == -1)
     })?;

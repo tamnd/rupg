@@ -96,13 +96,15 @@ fn plan(
     let dummy = matches!(out.from.as_slice(), [FromItem::Relation(_)])
         && out.filter.as_ref().and_then(value).is_some_and(|v| *v != Value::Bool(true));
     let used = used(&out);
+    let rows = out.write.as_ref().is_some_and(|w| !w.checks.is_empty())
+        && matches!(out.relations.as_slice(), [r] if r.oid == 0);
     for (relation, used) in out.relations.iter_mut().zip(&used) {
         if let Some(sub) = &mut relation.subquery {
             if dummy && !simple_subquery(sub) {
                 continue;
             }
-            // Each `SELECT` of a set operation gives all its columns.
-            if out.set_op.is_none() {
+            // Each `SELECT` of a set operation gives all its columns, and the rows of a write with check constraints are the rows that it writes.
+            if out.set_op.is_none() && !rows {
                 prune(sub, used);
             }
             **sub = if out.set_op.is_some() {

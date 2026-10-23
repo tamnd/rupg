@@ -9,7 +9,7 @@ mod format;
 
 use std::borrow::Cow;
 
-use rupg_analyze::{Expr, ExprKind, JoinKind, Query, SubLink};
+use rupg_analyze::{Expr, ExprKind, JoinKind, Query, SubLink, Write};
 use rupg_common::Result;
 
 pub use explain::{Format, Options, explain};
@@ -40,7 +40,8 @@ impl Plan<'_> {
                 }
                 let query = scope.query;
                 let joins: usize = query.from.iter().map(join_count).sum();
-                (query.relations.len() + joins + query.pulled).max(1) + usize::from(scope.target)
+                (query.relations.len() + joins + query.pulled).max(1)
+                    + usize::from(scope.target.is_some())
             })
             .sum()
     }
@@ -65,8 +66,8 @@ pub struct Scope<'q> {
     pub query: &'q Query,
     /// The scope of the query outside it, where a `Var` with a `levels_up` of 1 finds its relation.
     pub parent: Option<usize>,
-    /// True when the query gives the rows of an `INSERT`, whose target table is one more entry of the range table, [`TARGET`].
-    pub target: bool,
+    /// The write of an `INSERT` when the query gives its rows. The target table is one more entry of the range table, [`TARGET`].
+    pub target: Option<&'q Write>,
     /// For the scope of the scan of a member of an inheritance tree, the relation of the query that the member takes the place of. The member is one more entry of the range table, as the child relation of `expand_inherited_rtentry`.
     pub leaf: Option<Leaf>,
 }

@@ -270,6 +270,8 @@ pub(crate) struct Level<'q> {
     pub(crate) stats: from::Stats,
     /// The junk columns of the row marks, which the rows of the query carry after its targets.
     pub(crate) marks: Vec<Expr>,
+    /// The write of the statement of the query. A write with check constraints has it on the query outside [`Level::query`].
+    pub(crate) write: Option<&'q Write>,
     /// True for a subquery of [`Query::minmax`]: only a plan of `FROM` whose rows are in the order of `ORDER BY` is a plan of the query.
     pub(crate) presorted: bool,
 }
@@ -330,7 +332,7 @@ impl<'q> Builder<'q> {
     fn query(&mut self, outer: &'q Query, parent: Option<usize>) -> Node<'q> {
         let write = outer.write.as_ref();
         let query = unwrap_checks(outer);
-        let target = write.is_some_and(|w| w.kind == WriteKind::Insert);
+        let target = write.filter(|w| w.kind == WriteKind::Insert);
         let scope = self.push_scope(query, parent, target);
         let no_targets = std::mem::take(&mut self.exists) && simple_exists(query);
         let caller = std::mem::take(&mut self.fraction);
@@ -351,6 +353,7 @@ impl<'q> Builder<'q> {
             joined: Vec::new(),
             stats: from::Stats::default(),
             marks,
+            write,
             presorted,
         };
         let depth = self.ctes.len();
@@ -534,7 +537,12 @@ impl<'q> Builder<'q> {
             && found.parent.is_some_and(|p| self.scopes[p].query.set_op.is_some())
     }
 
-    fn push_scope(&mut self, query: &'q Query, parent: Option<usize>, target: bool) -> usize {
+    fn push_scope(
+        &mut self,
+        query: &'q Query,
+        parent: Option<usize>,
+        target: Option<&'q Write>,
+    ) -> usize {
         self.scopes.push(Scope { query, parent, target, leaf: None });
         let index = self.scopes.len() - 1;
         self.current.push(index);
@@ -547,12 +555,12 @@ impl<'q> Builder<'q> {
             return;
         }
         if let (Some(_), Kind::SeqScan(r)) = (node.member, &node.kind) {
-            let write = level.query.write.as_ref();
+            let write = level.write;
             let target = *r == 0
                 && write.is_some_and(|w| matches!(w.kind, WriteKind::Update | WriteKind::Delete));
             let leaf = Leaf { of: level.scope, relation: *r, renamed: append || target };
             let parent = self.scopes[level.scope].parent;
-            self.scopes.push(Scope { query: level.query, parent, target: false, leaf: Some(leaf) });
+            self.scopes.push(Scope { query: level.query, parent, target: None, leaf: Some(leaf) });
             node.scope = self.scopes.len() - 1;
             self.current.push(node.scope);
             return;
