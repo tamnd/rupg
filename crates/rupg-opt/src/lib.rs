@@ -8,6 +8,7 @@ mod cost;
 mod exists;
 mod exprs;
 mod from;
+mod joinrm;
 mod minmax;
 mod output;
 mod pullup;
@@ -27,6 +28,7 @@ use rupg_analyze::{
 use rupg_plan::{Item, Kind, Label, Leaf, Node, Operation, Plan, Scope, SubPlan};
 use rupg_types::oid;
 
+pub use joinrm::remove_joins;
 pub use pullup::pull_up;
 
 /// The tables of the inheritance trees of the relations of the queries, their indexes and the settings of the session, which the planner has no catalog for.
