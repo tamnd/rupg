@@ -1712,6 +1712,11 @@ fn sort_refs(query: &Query) -> Vec<u32> {
     refs
 }
 
+/// The first window of [`active_windows`], whose `WindowAgg` is at the bottom, or `None` when no call uses a window.
+pub(crate) fn first_window(level: &Level<'_>) -> Option<usize> {
+    active_windows(level, &window_calls(level.query)).first().copied()
+}
+
 /// `select_active_windows`: the windows that a call uses, in the order of their `WindowAgg` nodes from the bottom up. `common_prefix_cmp` puts the items with the higher numbers first, so that the windows that share a prefix of their keys come next to each other, and a window with more keys comes before a window with a prefix of its keys.
 fn active_windows(level: &Level<'_>, calls: &[Vec<&WindowFunc>]) -> Vec<usize> {
     let query = level.query;

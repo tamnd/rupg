@@ -1,0 +1,134 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (id int PRIMARY KEY, x int, y int);
+CREATE TABLE
+> CREATE INDEX a_x ON a (x);
+CREATE INDEX
+> CREATE INDEX a_xy ON a (x, y);
+CREATE INDEX
+> CREATE TABLE b (id int PRIMARY KEY, x int);
+CREATE TABLE
+> INSERT INTO a SELECT g, g % 7, g % 3 FROM generate_series(1, 50) g;
+INSERT 0 50
+> INSERT INTO b SELECT g, g % 5 FROM generate_series(1, 50) g;
+INSERT 0 50
+> EXPLAIN SELECT id, rank() OVER (PARTITION BY x ORDER BY id) FROM a LIMIT 5;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.78..1.21 rows=5 width=16)
+row   ->  WindowAgg  (cost=0.78..174.13 rows=2040 width=16)
+row         Window: w1 AS (PARTITION BY x ORDER BY id ROWS UNBOUNDED PRECEDING)
+row         ->  Incremental Sort  (cost=0.70..138.43 rows=2040 width=8)
+row               Sort Key: x, id
+row               Presorted Key: x
+row               ->  Index Scan using a_xy on a  (cost=0.15..74.75 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN SELECT id, rank() OVER (PARTITION BY x ORDER BY y) FROM a LIMIT 5;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.21..0.48 rows=5 width=20)
+row   ->  WindowAgg  (cost=0.21..110.45 rows=2040 width=20)
+row         Window: w1 AS (PARTITION BY x ORDER BY y ROWS UNBOUNDED PRECEDING)
+row         ->  Index Scan using a_xy on a  (cost=0.15..74.75 rows=2040 width=12)
+EXPLAIN
+> EXPLAIN SELECT id, rank() OVER (PARTITION BY x ORDER BY y, id) FROM a LIMIT 5;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.77..1.21 rows=5 width=20)
+row   ->  WindowAgg  (cost=0.77..179.02 rows=2040 width=20)
+row         Window: w1 AS (PARTITION BY x ORDER BY y, id ROWS UNBOUNDED PRECEDING)
+row         ->  Incremental Sort  (cost=0.68..138.22 rows=2040 width=12)
+row               Sort Key: x, y, id
+row               Presorted Key: x, y
+row               ->  Index Scan using a_xy on a  (cost=0.15..74.75 rows=2040 width=12)
+EXPLAIN
+> EXPLAIN SELECT id, row_number() OVER (ORDER BY id) FROM a LIMIT 5;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.20..0.46 rows=5 width=12)
+row   ->  WindowAgg  (cost=0.20..105.35 rows=2040 width=12)
+row         Window: w1 AS (ORDER BY id ROWS UNBOUNDED PRECEDING)
+row         ->  Index Only Scan using a_pkey on a  (cost=0.15..74.75 rows=2040 width=4)
+EXPLAIN
+> EXPLAIN SELECT id, row_number() OVER (ORDER BY id DESC) FROM a LIMIT 5;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.20..0.46 rows=5 width=12)
+row   ->  WindowAgg  (cost=0.20..105.35 rows=2040 width=12)
+row         Window: w1 AS (ORDER BY id ROWS UNBOUNDED PRECEDING)
+row         ->  Index Only Scan Backward using a_pkey on a  (cost=0.15..74.75 rows=2040 width=4)
+EXPLAIN
+> EXPLAIN SELECT id, sum(x) OVER (PARTITION BY x) FROM a LIMIT 5;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.62..0.87 rows=5 width=16)
+row   ->  WindowAgg  (cost=0.62..105.35 rows=2040 width=16)
+row         Window: w1 AS (PARTITION BY x)
+row         ->  Index Scan using a_xy on a  (cost=0.15..74.75 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN SELECT id, rank() OVER (PARTITION BY x ORDER BY id) FROM a;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=0.78..174.13 rows=2040 width=16)
+row   Window: w1 AS (PARTITION BY x ORDER BY id ROWS UNBOUNDED PRECEDING)
+row   ->  Incremental Sort  (cost=0.70..138.43 rows=2040 width=8)
+row         Sort Key: x, id
+row         Presorted Key: x
+row         ->  Index Scan using a_xy on a  (cost=0.15..74.75 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN SELECT id, rank() OVER (PARTITION BY x ORDER BY id), count(*) OVER (PARTITION BY y) FROM a LIMIT 5;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=290.40..290.50 rows=5 width=28)
+row   ->  WindowAgg  (cost=290.40..331.18 rows=2040 width=28)
+row         Window: w2 AS (PARTITION BY x ORDER BY id ROWS UNBOUNDED PRECEDING)
+row         ->  Sort  (cost=290.38..295.48 rows=2040 width=20)
+row               Sort Key: x, id
+row               ->  WindowAgg  (cost=142.70..178.24 rows=2040 width=20)
+row                     Window: w1 AS (PARTITION BY y)
+row                     ->  Sort  (cost=142.54..147.64 rows=2040 width=12)
+row                           Sort Key: y
+row                           ->  Seq Scan on a  (cost=0.00..30.40 rows=2040 width=12)
+EXPLAIN
+> EXPLAIN SELECT a.id, row_number() OVER (ORDER BY a.id) FROM a JOIN b ON a.id = b.id LIMIT 5;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.41..0.94 rows=5 width=12)
+row   ->  WindowAgg  (cost=0.41..214.56 rows=2040 width=12)
+row         Window: w1 AS (ORDER BY a.id ROWS UNBOUNDED PRECEDING)
+row         ->  Merge Join  (cost=0.31..183.96 rows=2040 width=4)
+row               Merge Cond: (a.id = b.id)
+row               ->  Index Only Scan using a_pkey on a  (cost=0.15..74.75 rows=2040 width=4)
+row               ->  Index Only Scan using b_pkey on b  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.id, row_number() OVER (ORDER BY a.id) FROM a JOIN b ON a.id = b.id;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=0.41..214.56 rows=2040 width=12)
+row   Window: w1 AS (ORDER BY a.id ROWS UNBOUNDED PRECEDING)
+row   ->  Merge Join  (cost=0.31..183.96 rows=2040 width=4)
+row         Merge Cond: (a.id = b.id)
+row         ->  Index Only Scan using a_pkey on a  (cost=0.15..74.75 rows=2040 width=4)
+row         ->  Index Only Scan using b_pkey on b  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT x, rank() OVER (PARTITION BY x ORDER BY y) FROM a ORDER BY x, y LIMIT 3;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.21..0.37 rows=3 width=16)
+row   ->  WindowAgg  (cost=0.21..110.45 rows=2040 width=16)
+row         Window: w1 AS (PARTITION BY x ORDER BY y ROWS UNBOUNDED PRECEDING)
+row         ->  Index Only Scan using a_xy on a  (cost=0.15..74.75 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN SELECT x, count(*) OVER (PARTITION BY x) FROM a ORDER BY x LIMIT 3;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.62..0.77 rows=3 width=12)
+row   ->  WindowAgg  (cost=0.62..105.35 rows=2040 width=12)
+row         Window: w1 AS (PARTITION BY x)
+row         ->  Index Only Scan using a_xy on a  (cost=0.15..74.75 rows=2040 width=4)
+EXPLAIN
+> SELECT id, rank() OVER (PARTITION BY x ORDER BY id) FROM a ORDER BY x, id LIMIT 5;
+fields id@a.1:23:4:-1,rank:20:8:-1
+row 7,1
+row 14,2
+row 21,3
+row 28,4
+row 35,5
+SELECT 5
+> SELECT id, rank() OVER (PARTITION BY x ORDER BY y) FROM a ORDER BY x, y, id LIMIT 5;
+fields id@a.1:23:4:-1,rank:20:8:-1
+row 21,1
+row 42,1
+row 7,3
+row 28,3
+row 49,3
+SELECT 5
