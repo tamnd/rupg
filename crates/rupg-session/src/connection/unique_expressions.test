@@ -1,0 +1,100 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE u (id int, email text, deleted bool, a int);
+CREATE TABLE
+> CREATE UNIQUE INDEX u_email ON u (lower(email));
+CREATE INDEX
+> INSERT INTO u VALUES (1, 'A@x.org', false, 1), (2, NULL, false, 2), (3, NULL, false, 3);
+INSERT 0 3
+> INSERT INTO u VALUES (4, 'a@X.ORG', false, 4);
+ERROR 23505 duplicate key value violates unique constraint "u_email"
+DETAIL Key (lower(email))=(a@x.org) already exists.
+> INSERT INTO u VALUES (5, 'b@x.org', false, 5), (6, 'B@x.org', false, 6);
+ERROR 23505 duplicate key value violates unique constraint "u_email"
+DETAIL Key (lower(email))=(b@x.org) already exists.
+> SELECT * FROM u ORDER BY id;
+fields id@u.1:23:4:-1,email@u.2:25:-1:-1,deleted@u.3:16:1:-1,a@u.4:23:4:-1
+row 1,A@x.org,f,1
+row 2,NULL,f,2
+row 3,NULL,f,3
+SELECT 3
+> UPDATE u SET email = 'a@x.org' WHERE id = 2;
+ERROR 23505 duplicate key value violates unique constraint "u_email"
+DETAIL Key (lower(email))=(a@x.org) already exists.
+> UPDATE u SET email = 'A@X.org' WHERE id = 1;
+UPDATE 1
+> INSERT INTO u VALUES (7, 'a@x.ORG', false, 7) ON CONFLICT (lower(email)) DO NOTHING;
+INSERT 0 0
+> INSERT INTO u VALUES (8, 'a@x.ORG', false, 8) ON CONFLICT (lower(email)) DO UPDATE SET a = excluded.a RETURNING *;
+fields id@u.1:23:4:-1,email@u.2:25:-1:-1,deleted@u.3:16:1:-1,a@u.4:23:4:-1
+row 1,A@X.org,f,8
+INSERT 0 1
+> INSERT INTO u VALUES (9, 'c@x.org', false, 9) ON CONFLICT (email) DO NOTHING;
+ERROR 42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification
+> INSERT INTO u VALUES (10, 'C@x.org', false, 10) ON CONFLICT DO NOTHING;
+INSERT 0 1
+> INSERT INTO u VALUES (11, 'c@X.org', false, 11) ON CONFLICT DO NOTHING;
+INSERT 0 0
+> CREATE UNIQUE INDEX u_live ON u (a) WHERE NOT deleted;
+CREATE INDEX
+> INSERT INTO u VALUES (12, 'd@x.org', true, 1), (13, 'e@x.org', true, 1);
+INSERT 0 2
+> INSERT INTO u VALUES (14, 'f@x.org', false, 1);
+INSERT 0 1
+> INSERT INTO u VALUES (15, 'g@x.org', false, 8) ON CONFLICT (a) DO NOTHING;
+ERROR 42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification
+> INSERT INTO u VALUES (15, 'g@x.org', false, 8) ON CONFLICT (a) WHERE NOT deleted DO UPDATE SET email = excluded.email RETURNING id, email, a;
+fields id@u.1:23:4:-1,email@u.2:25:-1:-1,a@u.4:23:4:-1
+row 1,g@x.org,8
+INSERT 0 1
+> UPDATE u SET deleted = false WHERE id = 12;
+ERROR 23505 duplicate key value violates unique constraint "u_live"
+DETAIL Key (a)=(1) already exists.
+> UPDATE u SET deleted = true WHERE id = 1;
+UPDATE 1
+> UPDATE u SET deleted = false WHERE id = 12;
+ERROR 23505 duplicate key value violates unique constraint "u_live"
+DETAIL Key (a)=(1) already exists.
+> SELECT * FROM u ORDER BY id;
+fields id@u.1:23:4:-1,email@u.2:25:-1:-1,deleted@u.3:16:1:-1,a@u.4:23:4:-1
+row 1,g@x.org,t,8
+row 2,NULL,f,2
+row 3,NULL,f,3
+row 10,C@x.org,f,10
+row 12,d@x.org,t,1
+row 13,e@x.org,t,1
+row 14,f@x.org,f,1
+SELECT 7
+> CREATE UNIQUE INDEX u_dup ON u (a % 2);
+ERROR 42601 syntax error at or near "%" at 35
+> CREATE UNIQUE INDEX u_mix ON u (id, (a % 10));
+CREATE INDEX
+> INSERT INTO u VALUES (13, 'h@x.org', true, 21);
+ERROR 23505 duplicate key value violates unique constraint "u_mix"
+DETAIL Key (id, (a % 10))=(13, 1) already exists.
+> INSERT INTO u VALUES (13, 'h@x.org', true, 23);
+INSERT 0 1
+> CREATE TABLE v (k text, n int);
+CREATE TABLE
+> INSERT INTO v VALUES ('x', 1), ('X', 2);
+INSERT 0 2
+> CREATE UNIQUE INDEX v_k ON v (upper(k));
+ERROR 23505 could not create unique index "v_k"
+DETAIL Key (upper(k))=(X) is duplicated.
+> CREATE UNIQUE INDEX v_k2 ON v (upper(k)) WHERE n > 1;
+CREATE INDEX
+> INSERT INTO v VALUES ('x', 3);
+ERROR 23505 duplicate key value violates unique constraint "v_k2"
+DETAIL Key (upper(k))=(X) already exists.
+> INSERT INTO v VALUES ('x', 0);
+INSERT 0 1
+> MERGE INTO v USING (VALUES ('Y', 5), ('y', 6)) s(k, n) ON upper(v.k) = upper(s.k) WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.n);
+ERROR 23505 duplicate key value violates unique constraint "v_k2"
+DETAIL Key (upper(k))=(Y) already exists.
+> SELECT * FROM v ORDER BY n;
+fields k@v.1:25:-1:-1,n@v.2:23:4:-1
+row x,0
+row x,1
+row X,2
+SELECT 3

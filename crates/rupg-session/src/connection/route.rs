@@ -1,6 +1,6 @@
 //! `INSERT` into a partitioned table: `ExecFindPartition` routes each row to the leaf partition that takes it, and the leaf checks and writes the row.
 
-use rupg_analyze::{CopyTarget, Foreign, Params, Write, WriteKind};
+use rupg_analyze::{CopyTarget, Derived, Foreign, Params, Write, WriteKind};
 use rupg_catalog::{Catalog, ConKind, TRIGGER_DELETE, TRIGGER_INSERT, TRIGGER_UPDATE};
 use rupg_common::{Error, SqlState};
 use rupg_exec::{Plan, Router};
@@ -300,11 +300,23 @@ impl Connection {
             let checked = if leaf_info.foreign.is_empty() { Vec::new() } else { rows.clone() };
             let mut kept = Vec::new();
             loop {
-                match heap.insert(leaf.oid, view, rows.clone(), &leaf_info.unique, &kept)? {
+                match heap.insert(
+                    leaf.oid,
+                    view,
+                    rows.clone(),
+                    (&leaf_info.unique, &|d: &Derived, r: &[Value]| self.index_key(d, r)),
+                    &kept,
+                )? {
                     Changed::Done(_) => break,
                     Changed::Duplicate { index, key } if copy.is_some() => {
-                        let line =
-                            super::copy_from::duplicate_line(leaf_info, index, &key, &rows, &lines);
+                        let derive = |d: &Derived, r: &[Value]| self.index_key(d, r);
+                        let line = super::copy_from::duplicate_line(
+                            (leaf_info, index),
+                            &key,
+                            &rows,
+                            &lines,
+                            &derive,
+                        );
                         let conflict = Changed::Duplicate { index, key };
                         let error = match self.key_conflict(leaf_info, view, conflict) {
                             Ok(_) => Error::internal("a duplicate key with no error"),
@@ -620,7 +632,7 @@ impl Connection {
                     leaf.oid,
                     view,
                     changes.clone(),
-                    &leaf_info.unique,
+                    (&leaf_info.unique, &|d: &Derived, r: &[Value]| self.index_key(d, r)),
                     &kept,
                     &mut made,
                 )?;

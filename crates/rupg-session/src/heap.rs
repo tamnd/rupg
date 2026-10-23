@@ -1,12 +1,16 @@
 //! The rows of the tables in memory, with the transaction IDs of `heapam_visibility.c`. Each version of a row has the transaction and the command that made it, and the transaction and the command that deleted it. A snapshot tells which versions a statement sees.
 
+use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use rupg_analyze::Unique;
+use rupg_analyze::{Derived, Unique};
 use rupg_common::{Error, Result, SqlState};
 use rupg_types::{Value, oid};
+
+/// The key of a row in a unique index with an expression or a predicate, or `None` for a row that is not in the index, as [`rupg_exec::index_key`] gives it.
+pub(crate) type Derive<'a> = &'a dyn Fn(&Derived, &[Value]) -> Result<Option<Vec<Value>>>;
 
 /// `FirstNormalTransactionId`: the first transaction ID that a transaction gets.
 const FIRST_NORMAL_XID: u32 = 3;
@@ -58,6 +62,8 @@ struct KeyMap {
     columns: Vec<usize>,
     types: Vec<u32>,
     nulls_not_distinct: bool,
+    /// The expressions and the predicate of the index. `columns` are then the places in the values of the expressions.
+    derived: Option<Box<Derived>>,
     hashes: HashMap<u64, Vec<u64>>,
 }
 
@@ -67,6 +73,7 @@ impl KeyMap {
             columns: key.columns.clone(),
             types: key.types.clone(),
             nulls_not_distinct: key.nulls_not_distinct,
+            derived: key.derived.clone(),
             hashes: HashMap::new(),
         }
     }
@@ -75,6 +82,20 @@ impl KeyMap {
         self.columns == key.columns
             && self.types == key.types
             && self.nulls_not_distinct == key.nulls_not_distinct
+            && self.derived == key.derived
+    }
+
+    /// The values that the key columns are places in: the row itself, or the values of the expressions of the index. `None` is a row that is not in the index.
+    fn key<'v>(&self, values: &'v [Value], derive: Derive<'_>) -> Result<Option<Cow<'v, [Value]>>> {
+        match &self.derived {
+            None => Ok(Some(Cow::Borrowed(values))),
+            Some(derived) => Ok(derive(derived, values)?.map(Cow::Owned)),
+        }
+    }
+
+    /// The hash of the key of a row, as [`KeyMap::hash`] gives it, or `None` when the row is not in the index.
+    fn row_hash(&self, values: &[Value], derive: Derive<'_>) -> Result<Option<u64>> {
+        Ok(self.key(values, derive)?.and_then(|places| self.hash(&places)))
     }
 
     /// The hash of the key of a row, or `None` when the key has a null and two nulls are not equal, so the key cannot conflict. Two keys that are equal have the same hash.
@@ -166,19 +187,24 @@ fn dirty(version: &Version, xid: u32, running: &BTreeSet<u32>) -> Seen {
 }
 
 impl Table {
-    /// Adds a version and gives its ID.
-    fn push(&mut self, xmin: u32, cmin: u32, values: Vec<Value>) -> u64 {
-        self.add(None, xmin, cmin, values)
-    }
-
-    /// Adds a version with the ID `kept` that an earlier try of the write had, or with a new ID, at its place in the order of the IDs.
-    fn add(&mut self, kept: Option<u64>, xmin: u32, cmin: u32, values: Vec<Value>) -> u64 {
+    /// Adds a version with the ID `kept` that an earlier try of the write had, or with a new ID, at its place in the order of the IDs. The version goes in the map of each unique key.
+    fn add(
+        &mut self,
+        kept: Option<u64>,
+        (xmin, cmin): (u32, u32),
+        values: Vec<Value>,
+        derive: Derive<'_>,
+    ) -> Result<u64> {
+        let mut hashes = Vec::with_capacity(self.keys.len());
+        for map in &self.keys {
+            hashes.push(map.row_hash(&values, derive)?);
+        }
         let tid = kept.unwrap_or_else(|| {
             self.last_tid += 1;
             self.last_tid
         });
-        for map in &mut self.keys {
-            if let Some(hash) = map.hash(&values) {
+        for (map, hash) in self.keys.iter_mut().zip(hashes) {
+            if let Some(hash) = hash {
                 map.hashes.entry(hash).or_default().push(tid);
             }
         }
@@ -190,7 +216,7 @@ impl Table {
             let at = self.versions.partition_point(|other| other.tid < tid);
             self.versions.insert(at, version);
         }
-        tid
+        Ok(tid)
     }
 
     /// The place of the version `tid`.
@@ -199,7 +225,7 @@ impl Table {
     }
 
     /// The place in `keys` of the map of each unique key. The first write that checks a key makes its map from all the versions.
-    fn key_maps(&mut self, unique: &[Unique]) -> Vec<usize> {
+    fn key_maps(&mut self, unique: &[Unique], derive: Derive<'_>) -> Result<Vec<usize>> {
         let mut places = Vec::with_capacity(unique.len());
         for key in unique {
             let place = match self.keys.iter().position(|map| map.is(key)) {
@@ -207,7 +233,7 @@ impl Table {
                 None => {
                     let mut map = KeyMap::of(key);
                     for version in &self.versions {
-                        if let Some(hash) = map.hash(&version.values) {
+                        if let Some(hash) = map.row_hash(&version.values, derive)? {
                             map.hashes.entry(hash).or_default().push(version.tid);
                         }
                     }
@@ -217,7 +243,7 @@ impl Table {
             };
             places.push(place);
         }
-        places
+        Ok(places)
     }
 
     /// `_bt_check_unique` of the new version `tid` for each unique key, in the order of the indexes. The result is the first conflict: a live version with the same key, or a transaction in progress that the write must wait for. `used` has the IDs of the new versions of the write up to `tid`.
@@ -225,8 +251,8 @@ impl Table {
         &self,
         places: &[usize],
         used: &[u64],
-        xid: u32,
-        running: &BTreeSet<u32>,
+        (xid, running): (u32, &BTreeSet<u32>),
+        derive: Derive<'_>,
     ) -> Result<Option<Changed>> {
         let Some(&tid) = used.last() else {
             return Ok(None);
@@ -234,10 +260,13 @@ impl Table {
         let Some(at) = self.find(tid) else {
             return Ok(None);
         };
-        let values = &self.versions[at].values;
+        let row = &self.versions[at].values;
         for (index, &place) in places.iter().enumerate() {
             let map = &self.keys[place];
-            let Some(hash) = map.hash(values) else {
+            let Some(values) = map.key(row, derive)? else {
+                continue;
+            };
+            let Some(hash) = map.hash(&values) else {
                 continue;
             };
             for &other in map.hashes.get(&hash).into_iter().flatten() {
@@ -249,8 +278,12 @@ impl Table {
                 };
                 let version = &self.versions[found];
                 let seen = dirty(version, xid, running);
-                if seen == Seen::Dead || !map.same(values, &version.values)? {
+                if seen == Seen::Dead {
                     continue;
+                }
+                match map.key(&version.values, derive)? {
+                    Some(other) if map.same(&values, &other)? => {}
+                    _ => continue,
                 }
                 return Ok(Some(match seen {
                     Seen::Wait(holder) => Changed::WaitKey { holder, index, used: used.to_vec() },
@@ -434,25 +467,32 @@ impl Heap {
         relation: u32,
         view: &View,
         rows: Vec<Vec<Value>>,
-        unique: &[Unique],
+        (unique, derive): (&[Unique], Derive<'_>),
         kept: &[u64],
     ) -> Result<Changed> {
         let mut state = self.state();
         let State { tables, running, .. } = &mut *state;
         let table = tables.entry((view.database, relation)).or_default();
         let count = rows.len() as u64;
+        let made = (view.xid, view.command);
         if unique.is_empty() {
             for values in rows {
-                table.push(view.xid, view.command, values);
+                table.add(None, made, values, derive)?;
             }
             return Ok(Changed::Done(count));
         }
-        let places = table.key_maps(unique);
+        let places = table.key_maps(unique, derive)?;
         let mut kept = kept.iter().copied();
         let mut used = Vec::with_capacity(rows.len());
         for values in rows {
-            used.push(table.add(kept.next(), view.xid, view.command, values));
-            match table.check_keys(&places, &used, view.xid, running) {
+            match table.add(kept.next(), made, values, derive) {
+                Ok(tid) => used.push(tid),
+                Err(error) => {
+                    table.undo(&used, &[]);
+                    return Err(error);
+                }
+            }
+            match table.check_keys(&places, &used, (view.xid, running), derive) {
                 Ok(None) => {}
                 result => {
                     table.undo(&used, &[]);
@@ -473,18 +513,21 @@ impl Heap {
         relation: u32,
         view: &View,
         values: Vec<Value>,
-        unique: &[Unique],
+        (unique, derive): (&[Unique], Derive<'_>),
         arbiters: &[usize],
         kept: Option<u64>,
     ) -> Result<Speculative> {
         let mut state = self.state();
         let State { tables, running, .. } = &mut *state;
         let table = tables.entry((view.database, relation)).or_default();
-        let places = table.key_maps(unique);
+        let places = table.key_maps(unique, derive)?;
         for &arbiter in arbiters {
             let Some(&place) = places.get(arbiter) else { continue };
             let map = &table.keys[place];
-            let Some(hash) = map.hash(&values) else {
+            let Some(places) = map.key(&values, derive)? else {
+                continue;
+            };
+            let Some(hash) = map.hash(&places) else {
                 continue;
             };
             for &other in map.hashes.get(&hash).into_iter().flatten() {
@@ -493,8 +536,12 @@ impl Heap {
                 };
                 let version = &table.versions[found];
                 let seen = dirty(version, view.xid, running);
-                if seen == Seen::Dead || !map.same(&values, &version.values)? {
+                if seen == Seen::Dead {
                     continue;
+                }
+                match map.key(&version.values, derive)? {
+                    Some(found) if map.same(&places, &found)? => {}
+                    _ => continue,
                 }
                 if let Seen::Wait(holder) = seen {
                     return Ok(Speculative::Wait { holder, tid: other });
@@ -509,8 +556,8 @@ impl Heap {
                 });
             }
         }
-        let used = [table.add(kept, view.xid, view.command, values)];
-        match table.check_keys(&places, &used, view.xid, running) {
+        let used = [table.add(kept, (view.xid, view.command), values, derive)?];
+        match table.check_keys(&places, &used, (view.xid, running), derive) {
             Ok(None) => Ok(Speculative::Inserted),
             result => {
                 table.undo(&used, &[]);
@@ -529,7 +576,7 @@ impl Heap {
         relation: u32,
         view: &View,
         changes: Vec<Change>,
-        unique: &[Unique],
+        (unique, derive): (&[Unique], Derive<'_>),
         kept: &[u64],
         applied: &mut Vec<usize>,
     ) -> Result<Changed> {
@@ -568,15 +615,20 @@ impl Heap {
             indexes.push(index);
         }
         let count = found.len() as u64;
-        let places = table.key_maps(unique);
+        let places = table.key_maps(unique, derive)?;
         let mut kept = kept.iter().copied();
         let mut used = Vec::new();
         let mut deleted = Vec::with_capacity(found.len());
         for (old, values) in found {
-            let next = match values {
-                Some(values) => table.add(kept.next(), view.xid, view.command, values),
-                None => 0,
-            };
+            let next =
+                match values.map(|v| table.add(kept.next(), (view.xid, view.command), v, derive)) {
+                    Some(Ok(tid)) => tid,
+                    Some(Err(error)) => {
+                        table.undo(&used, &deleted);
+                        return Err(error);
+                    }
+                    None => 0,
+                };
             if let Some(at) = table.find(old) {
                 let version = &mut table.versions[at];
                 version.xmax = view.xid;
@@ -588,7 +640,7 @@ impl Heap {
                 continue;
             }
             used.push(next);
-            match table.check_keys(&places, &used, view.xid, running) {
+            match table.check_keys(&places, &used, (view.xid, running), derive) {
                 Ok(None) => {}
                 result => {
                     table.undo(&used, &deleted);
@@ -728,6 +780,11 @@ fn visible(version: &Version, view: &View) -> bool {
 mod tests {
     use super::*;
 
+    /// The key of a row in an index with an expression, which the tests do not have.
+    fn none(_: &Derived, _: &[Value]) -> Result<Option<Vec<Value>>> {
+        Ok(None)
+    }
+
     fn view(snapshot: Snapshot, xid: u32, command: u32) -> View {
         View { database: 1, snapshot, xid, command, serializable: false }
     }
@@ -743,8 +800,14 @@ mod tests {
     fn a_snapshot_sees_only_the_committed_rows() {
         let heap = Heap::default();
         let xid = heap.begin(1);
-        heap.insert(7, &view(heap.snapshot(), xid, 0), vec![vec![Value::Int4(1)]], &[], &[])
-            .unwrap();
+        heap.insert(
+            7,
+            &view(heap.snapshot(), xid, 0),
+            vec![vec![Value::Int4(1)]],
+            (&[], &none),
+            &[],
+        )
+        .unwrap();
         assert_eq!(heap.rows(7, &view(heap.snapshot(), 0, 0)).len(), 0);
         assert_eq!(heap.rows(7, &view(heap.snapshot(), xid, 0)).len(), 0);
         assert_eq!(heap.rows(7, &view(heap.snapshot(), xid, 1)).len(), 1);
@@ -758,14 +821,26 @@ mod tests {
     fn an_abort_removes_the_rows() {
         let heap = Heap::default();
         let xid = heap.begin(1);
-        heap.insert(7, &view(heap.snapshot(), xid, 0), vec![vec![Value::Int4(1)]], &[], &[])
-            .unwrap();
+        heap.insert(
+            7,
+            &view(heap.snapshot(), xid, 0),
+            vec![vec![Value::Int4(1)]],
+            (&[], &none),
+            &[],
+        )
+        .unwrap();
         heap.abort(xid);
         assert!(!heap.has_rows(1, 7));
         assert_eq!(heap.rows(7, &view(heap.snapshot(), 0, 0)).len(), 0);
         let xid = heap.begin(1);
-        heap.insert(7, &view(heap.snapshot(), xid, 0), vec![vec![Value::Int4(1)]], &[], &[])
-            .unwrap();
+        heap.insert(
+            7,
+            &view(heap.snapshot(), xid, 0),
+            vec![vec![Value::Int4(1)]],
+            (&[], &none),
+            &[],
+        )
+        .unwrap();
         assert_eq!(first_tid(&heap, &view(heap.snapshot(), xid, 1)), 2);
     }
 
@@ -773,8 +848,14 @@ mod tests {
     fn a_truncate_waits_and_a_rollback_brings_the_rows_back() {
         let heap = Heap::default();
         let first = heap.begin(1);
-        heap.insert(7, &view(heap.snapshot(), first, 0), vec![vec![Value::Int4(1)]], &[], &[])
-            .unwrap();
+        heap.insert(
+            7,
+            &view(heap.snapshot(), first, 0),
+            vec![vec![Value::Int4(1)]],
+            (&[], &none),
+            &[],
+        )
+        .unwrap();
         let a = heap.begin(2);
         assert_eq!(heap.truncate(7, &view(heap.snapshot(), a, 0)), Some(first));
         heap.commit(first);
@@ -790,8 +871,8 @@ mod tests {
         let heap = Heap::default();
         let a = heap.begin(1);
         let row = |n| vec![vec![Value::Int4(n)]];
-        heap.insert(7, &view(heap.snapshot(), a, 0), row(1), &[], &[]).unwrap();
-        heap.insert(7, &view(heap.snapshot(), a, 1), row(2), &[], &[]).unwrap();
+        heap.insert(7, &view(heap.snapshot(), a, 0), row(1), (&[], &none), &[]).unwrap();
+        heap.insert(7, &view(heap.snapshot(), a, 1), row(2), (&[], &none), &[]).unwrap();
         assert_eq!(heap.truncate(7, &view(heap.snapshot(), a, 2)), None);
         assert_eq!(heap.rows(7, &view(heap.snapshot(), a, 3)).len(), 0);
         heap.rollback_to(a, 1);
@@ -804,21 +885,34 @@ mod tests {
     fn an_update_waits_for_the_other_transaction() {
         let heap = Heap::default();
         let first = heap.begin(1);
-        heap.insert(7, &view(heap.snapshot(), first, 0), vec![vec![Value::Int4(1)]], &[], &[])
-            .unwrap();
+        heap.insert(
+            7,
+            &view(heap.snapshot(), first, 0),
+            vec![vec![Value::Int4(1)]],
+            (&[], &none),
+            &[],
+        )
+        .unwrap();
         heap.commit(first);
         let a = heap.begin(1);
         let b = heap.begin(2);
         let tid = first_tid(&heap, &view(heap.snapshot(), a, 0));
         let change = || vec![(tid, Some(vec![Value::Int4(2)]))];
         let done = heap
-            .change(7, &view(heap.snapshot(), a, 0), change(), &[], &[], &mut Vec::new())
+            .change(7, &view(heap.snapshot(), a, 0), change(), (&[], &none), &[], &mut Vec::new())
             .unwrap();
         assert_eq!(done, Changed::Done(1));
         let wait = Changed::Wait { holder: a, tid };
         assert_eq!(
-            heap.change(7, &view(heap.snapshot(), b, 0), change(), &[], &[], &mut Vec::new())
-                .unwrap(),
+            heap.change(
+                7,
+                &view(heap.snapshot(), b, 0),
+                change(),
+                (&[], &none),
+                &[],
+                &mut Vec::new()
+            )
+            .unwrap(),
             wait
         );
         heap.wait(b, a);
@@ -829,7 +923,7 @@ mod tests {
         heap.waited(a);
         heap.abort(a);
         let done = heap
-            .change(7, &view(heap.snapshot(), b, 0), change(), &[], &[], &mut Vec::new())
+            .change(7, &view(heap.snapshot(), b, 0), change(), (&[], &none), &[], &mut Vec::new())
             .unwrap();
         assert_eq!(done, Changed::Done(1));
         heap.commit(b);
@@ -848,24 +942,38 @@ mod tests {
             types: vec![oid::INT4],
             shown: "a".to_string(),
             nulls_not_distinct: false,
+            derived: None,
         };
         let unique = std::slice::from_ref(&key);
         let row = |a: i32| vec![Value::Int4(a)];
         let first = heap.begin(1);
         let rows = vec![row(1), Vec::from([Value::Null]), Vec::from([Value::Null])];
-        let done = heap.insert(7, &view(heap.snapshot(), first, 0), rows, unique, &[]).unwrap();
+        let done =
+            heap.insert(7, &view(heap.snapshot(), first, 0), rows, (unique, &none), &[]).unwrap();
         assert_eq!(done, Changed::Done(3));
-        let again = heap.insert(7, &view(heap.snapshot(), first, 1), vec![row(1)], unique, &[]);
+        let again =
+            heap.insert(7, &view(heap.snapshot(), first, 1), vec![row(1)], (unique, &none), &[]);
         assert_eq!(again.unwrap(), Changed::Duplicate { index: 0, key: row(1) });
         heap.commit(first);
         let a = heap.begin(1);
         let b = heap.begin(2);
-        heap.insert(7, &view(heap.snapshot(), a, 0), vec![row(2)], unique, &[]).unwrap();
-        let wait = heap.insert(7, &view(heap.snapshot(), b, 0), vec![row(3), row(2)], unique, &[]);
+        heap.insert(7, &view(heap.snapshot(), a, 0), vec![row(2)], (unique, &none), &[]).unwrap();
+        let wait = heap.insert(
+            7,
+            &view(heap.snapshot(), b, 0),
+            vec![row(3), row(2)],
+            (unique, &none),
+            &[],
+        );
         assert_eq!(wait.unwrap(), Changed::WaitKey { holder: a, index: 0, used: vec![6, 7] });
         heap.abort(a);
-        let done =
-            heap.insert(7, &view(heap.snapshot(), b, 0), vec![row(3), row(2)], unique, &[6, 7]);
+        let done = heap.insert(
+            7,
+            &view(heap.snapshot(), b, 0),
+            vec![row(3), row(2)],
+            (unique, &none),
+            &[6, 7],
+        );
         assert_eq!(done.unwrap(), Changed::Done(2));
         heap.commit(b);
         // The keys of the rows that the transaction deleted are free for the transaction.
@@ -882,12 +990,12 @@ mod tests {
             .collect();
         let changes = tids.iter().map(|&tid| (tid, None)).collect();
         assert_eq!(
-            heap.change(7, &view_c, changes, unique, &[], &mut Vec::new()).unwrap(),
+            heap.change(7, &view_c, changes, (unique, &none), &[], &mut Vec::new()).unwrap(),
             Changed::Done(2)
         );
         let view_c = view(heap.snapshot(), c, 1);
         assert_eq!(
-            heap.insert(7, &view_c, vec![row(2), row(3)], unique, &[]).unwrap(),
+            heap.insert(7, &view_c, vec![row(2), row(3)], (unique, &none), &[]).unwrap(),
             Changed::Done(2)
         );
     }
@@ -896,24 +1004,45 @@ mod tests {
     fn a_committed_change_runs_the_statement_again() {
         let heap = Heap::default();
         let first = heap.begin(1);
-        heap.insert(7, &view(heap.snapshot(), first, 0), vec![vec![Value::Int4(1)]], &[], &[])
-            .unwrap();
+        heap.insert(
+            7,
+            &view(heap.snapshot(), first, 0),
+            vec![vec![Value::Int4(1)]],
+            (&[], &none),
+            &[],
+        )
+        .unwrap();
         heap.commit(first);
         let old = heap.snapshot();
         let tid = first_tid(&heap, &view(old.clone(), 0, 0));
         let a = heap.begin(1);
-        heap.change(7, &view(heap.snapshot(), a, 0), vec![(tid, None)], &[], &[], &mut Vec::new())
-            .unwrap();
+        heap.change(
+            7,
+            &view(heap.snapshot(), a, 0),
+            vec![(tid, None)],
+            (&[], &none),
+            &[],
+            &mut Vec::new(),
+        )
+        .unwrap();
         heap.commit(a);
         let b = heap.begin(2);
         let change = vec![(tid, Some(vec![Value::Int4(3)]))];
         assert_eq!(
-            heap.change(7, &view(old.clone(), b, 0), change.clone(), &[], &[], &mut Vec::new())
-                .unwrap(),
+            heap.change(
+                7,
+                &view(old.clone(), b, 0),
+                change.clone(),
+                (&[], &none),
+                &[],
+                &mut Vec::new()
+            )
+            .unwrap(),
             Changed::Again
         );
         let serializable = View { serializable: true, ..view(old, b, 0) };
-        let error = heap.change(7, &serializable, change, &[], &[], &mut Vec::new()).unwrap_err();
+        let error =
+            heap.change(7, &serializable, change, (&[], &none), &[], &mut Vec::new()).unwrap_err();
         assert_eq!(error.state(), SqlState::T_R_SERIALIZATION_FAILURE);
         assert_eq!(error.message(), "could not serialize access due to concurrent delete");
         assert_eq!(tid_text(1), "(0,1)");

@@ -2884,6 +2884,26 @@ pub fn evaluate(expr: &Expr, session: &dyn Session) -> Result<Value> {
     eval.eval(expr)
 }
 
+/// `FormIndexDatum` for a unique index with an expression or a predicate: the values of the key columns of a row of the table, or `None` when the row does not pass the predicate and is not in the index, as `ExecInsertIndexTuples` checks it.
+///
+/// # Errors
+///
+/// The error of a function of an expression or of the predicate.
+pub fn index_key(
+    derived: &rupg_analyze::Derived,
+    row: &[Value],
+    session: &dyn Session,
+) -> Result<Option<Vec<Value>>> {
+    let (table, types) = (derived.table, derived.types.as_slice());
+    if !derived.predicate.is_empty() {
+        let passed = evaluate_row(&derived.predicate, table, types, row, session)?;
+        if !passed.iter().all(|v| matches!(v, Value::Bool(true))) {
+            return Ok(None);
+        }
+    }
+    evaluate_row(&derived.exprs, table, types, row, session).map(Some)
+}
+
 /// The values of expressions for one row of the relation `oid`, whose columns have the types `types`, such as the expressions of a partition key. A variable of an expression reads the column of the row.
 pub(crate) fn evaluate_row(
     exprs: &[Expr],

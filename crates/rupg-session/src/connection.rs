@@ -6,7 +6,7 @@ use std::cell::{Cell, Ref, RefCell};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use rupg_analyze::{Message, Params, Write, WriteKind};
+use rupg_analyze::{Derived, Message, Params, Write, WriteKind};
 use rupg_catalog::{Catalog, database};
 use rupg_common::{Error, Level as ErrorLevel, Object, SqlState};
 use rupg_exec::Plan;
@@ -563,6 +563,11 @@ impl Connection {
 
     /// What a statement reads of the session, with the catalog `catalog`.
     fn reader_on(&self, catalog: Arc<Catalog>) -> Reader<'_> {
+        self.reader_without_view(catalog).with_view(self.view())
+    }
+
+    /// A reader that does not see the rows of the tables, for the expressions of an index: they are `IMMUTABLE` and run while the heap is locked, so they must not take a snapshot.
+    fn reader_without_view(&self, catalog: Arc<Catalog>) -> Reader<'_> {
         rupg_pgcatalog::roles::use_roles(self.roles());
         Reader::new(
             &self.settings,
@@ -580,7 +585,6 @@ impl Connection {
         .with_statements(&self.statements)
         .with_portals(&self.portals)
         .with_cancel(&self.cancel)
-        .with_view(self.view())
         .with_connection(self)
         .with_transition(self.transition.borrow().clone())
     }
@@ -775,11 +779,23 @@ impl Connection {
                 }
                 let inserted = rows.len();
                 if info.unique.is_empty() {
-                    heap.insert(info.table, &view, rows, &[], &[])?;
+                    heap.insert(
+                        info.table,
+                        &view,
+                        rows,
+                        (&[], &|d: &Derived, r: &[Value]| self.index_key(d, r)),
+                        &[],
+                    )?;
                 } else {
                     let mut kept = Vec::new();
                     loop {
-                        match heap.insert(info.table, &view, rows.clone(), &info.unique, &kept)? {
+                        match heap.insert(
+                            info.table,
+                            &view,
+                            rows.clone(),
+                            (&info.unique, &|d: &Derived, r: &[Value]| self.index_key(d, r)),
+                            &kept,
+                        )? {
                             Changed::Done(_) => break,
                             conflict => kept = self.key_conflict(info, &view, conflict)?,
                         }
@@ -798,7 +814,7 @@ impl Connection {
                         info.table,
                         &view,
                         changes.clone(),
-                        &info.unique,
+                        (&info.unique, &|d: &Derived, r: &[Value]| self.index_key(d, r)),
                         &kept,
                         &mut applied,
                     )?;
@@ -889,7 +905,10 @@ impl Connection {
                     SqlState::UNIQUE_VIOLATION,
                     format!("duplicate key value violates unique constraint \"{}\"", unique.name),
                 )
-                .with_detail(format!("Key ({})=({values}) already exists.", unique.shown));
+                .with_detail(format!(
+                    "Key ({})=({values}) already exists.",
+                    self.key_shown(unique, self.catalog())?
+                ));
                 Err(rupg_func::with_table_constraint(
                     error,
                     info.table,
@@ -899,6 +918,23 @@ impl Connection {
             }
             _ => Err(Error::internal("a write result that is not a conflict of a key")),
         }
+    }
+
+    /// The key columns of a unique index for the detail of an error, as `pg_get_indexdef_columns` gives them in the catalog `catalog`.
+    fn key_shown(
+        &self,
+        unique: &rupg_analyze::Unique,
+        catalog: Arc<Catalog>,
+    ) -> Result<String, Error> {
+        match unique.derived {
+            None => Ok(unique.shown.clone()),
+            Some(_) => rupg_func::index_key_columns(unique.oid, &self.reader_on(catalog)),
+        }
+    }
+
+    /// The key of a row in a unique index with an expression or a predicate, [`rupg_exec::index_key`].
+    fn index_key(&self, derived: &Derived, row: &[Value]) -> Result<Option<Vec<Value>>, Error> {
+        rupg_exec::index_key(derived, row, &self.reader_without_view(self.catalog()))
     }
 
     /// The values of a key for the detail of an error, `BuildIndexValueDescription`: the output of each value, or `null`.
@@ -5631,6 +5667,12 @@ mod tests {
     #[test]
     fn plan_index_expressions() {
         big_stack(|| script(include_str!("connection/plan_index_expressions.test")));
+    }
+
+    /// Unique indexes on expressions and partial unique indexes in the writes: a duplicate of `lower(email)` in `INSERT` and `UPDATE`, `ON CONFLICT` with an expression and with the predicate of a partial index, the error of an inference that no index matches, a key of a column and an expression, `CREATE UNIQUE INDEX` on rows with a duplicate, and an insert of `MERGE`. `connection/unique_expressions.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn unique_expressions() {
+        big_stack(|| script(include_str!("connection/unique_expressions.test")));
     }
 
     /// A query that is a `UNION ALL` of `SELECT`s with the types of its columns and has `ORDER BY` becomes an append relation, as `flatten_simple_union_all` makes it, so the planner can plan a `Merge Append` of the plans of the `SELECT`s in the order. A `SELECT` with its own `WHERE` is not a member of the append relation, as `is_safe_append_member`, and its plan gets a sort. `connection/plan_union_all_order.test` is the output of PostgreSQL 19 for the same script in a new database.

@@ -2,7 +2,7 @@
 //!
 //! The query of the statement gives all the new rows before the first row goes in, so the checks of the constraints of the new rows come before the writes, and a function of the query does not see the rows that the statement wrote. The triggers `BEFORE ... FOR EACH ROW` fire for each row in turn, as `ExecInsert` fires them: the triggers `INSERT` before the row goes in, and the triggers `UPDATE` before `DO UPDATE` changes the row of the table.
 
-use rupg_analyze::{OnConflict, Write};
+use rupg_analyze::{Derived, OnConflict, Write};
 use rupg_catalog::{Catalog, TRIGGER_INSERT, TRIGGER_UPDATE};
 use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
@@ -81,7 +81,7 @@ impl Connection {
                     info.table,
                     view,
                     row.clone(),
-                    &info.unique,
+                    (&info.unique, &|d: &Derived, r: &[Value]| self.index_key(d, r)),
                     &conflict.arbiters,
                     kept,
                 )?;
@@ -182,7 +182,7 @@ impl Connection {
                     oid,
                     view,
                     checked.clone(),
-                    &leaf.unique,
+                    (&leaf.unique, &|d: &Derived, r: &[Value]| self.index_key(d, r)),
                     &arbiters[at],
                     kept,
                 )?;
@@ -287,7 +287,14 @@ impl Connection {
         let (mut kept, mut applied) = (Vec::new(), Vec::new());
         loop {
             let change = vec![(tid, Some(checked.clone()))];
-            match heap.change(oid, view, change, &leaf.unique, &kept, &mut applied)? {
+            match heap.change(
+                oid,
+                view,
+                change,
+                (&leaf.unique, &|d: &Derived, r: &[Value]| self.index_key(d, r)),
+                &kept,
+                &mut applied,
+            )? {
                 Changed::Done(0) | Changed::Again => return Ok(false),
                 Changed::Done(_) => {
                     self.count_writes(oid, Writes { updated: 1, ..Writes::default() });
@@ -358,7 +365,14 @@ impl Connection {
         let mut applied = Vec::new();
         loop {
             let change = vec![(tid, Some(new.clone()))];
-            match heap.change(info.table, view, change, &info.unique, &kept, &mut applied)? {
+            match heap.change(
+                info.table,
+                view,
+                change,
+                (&info.unique, &|d: &Derived, r: &[Value]| self.index_key(d, r)),
+                &kept,
+                &mut applied,
+            )? {
                 Changed::Done(0) | Changed::Again => return Ok(false),
                 Changed::Done(_) => {
                     self.count_writes(info.table, Writes { updated: 1, ..Writes::default() });
