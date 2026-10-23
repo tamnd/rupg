@@ -76,7 +76,7 @@ pub use from::{
     Column, FromFunction, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM, TableSample,
 };
 pub use funcargs::{arg_defaults, expand_arguments};
-pub use insert::{Action, Foreign, OnConflict, Unique, Write, WriteKind};
+pub use insert::{Action, Derived, Foreign, OnConflict, Unique, Write, WriteKind};
 pub use locking::{RowMark, check_outer_joins, first_row_mark, locked_tables};
 pub use merge::{MatchKind, Merge, MergeClause, MergeCommand};
 pub use plpgsql::{

@@ -14,7 +14,7 @@ use rupg_types::{Value, oid};
 use crate::Analyzer;
 use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
-use crate::expr::{Expr, ExprKind, FieldStore, Func, FuncForm, Var};
+use crate::expr::{BoolOp, Expr, ExprKind, FieldStore, Func, FuncForm, Var};
 use crate::from::{Column, FromItem, Relation};
 use crate::merge::Merge;
 use crate::modify::{carried_targets, set_columns};
@@ -159,6 +159,21 @@ pub struct Unique {
     pub shown: String,
     /// `indnullsnotdistinct`: a null is equal to a null, so two keys with nulls can conflict.
     pub nulls_not_distinct: bool,
+    /// The expressions and the predicate of an index with an expression or a predicate, or `None` for an index whose key is columns of the table.
+    pub derived: Option<Box<Derived>>,
+}
+
+/// The key of a unique index with an expression or a predicate, which `FormIndexDatum` computes for each row. A row that does not pass the predicate is not in the index, as `ExecInsertIndexTuples` checks it with `ExecQual`. [`Unique::columns`] has the places of the key columns in the values of the expressions.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Derived {
+    /// The OID of the table.
+    pub table: u32,
+    /// The type of each column of the table.
+    pub types: Vec<u32>,
+    /// The expression of each key column, with the columns of the table as columns of the relation 0. A key column that is a column of the table is a variable.
+    pub exprs: Vec<Expr>,
+    /// The parts of the predicate, `indpred`, or none for an index with no predicate.
+    pub predicate: Vec<Expr>,
 }
 
 /// `quoteOneName` of `ri_triggers.c`: a name in double quotes, with each double quote doubled.
@@ -487,20 +502,30 @@ impl Analyzer<'_> {
             return Ok(Inference::Constraint(constraint.index));
         }
         let mut set = Vec::with_capacity(infer.indexElems.len());
+        let mut exprs = Vec::new();
         for node in &infer.indexElems {
             let Some(Node::IndexElem(elem)) = node else {
                 return Err(Error::internal("an inference element that is not IndexElem"));
             };
             let at = place(elem.location);
-            let Some(column) = elem.name.as_deref() else {
-                return Err(not_yet("an expression in the inference of ON CONFLICT").at_opt(at));
-            };
             if !elem.collation.is_empty() || !elem.opclass.is_empty() {
                 return Err(not_yet(
                     "a collation or an operator class in the inference of ON CONFLICT",
                 )
                 .at_opt(at));
             }
+            let Some(column) = elem.name.as_deref() else {
+                // `resolve_unique_index_expr`: an expression that is a column counts as the column.
+                let expr =
+                    self.with_kind(Kind::IndexExpression, |a| a.transform(elem.expr.as_ref()))?;
+                match expr.kind {
+                    ExprKind::Var(var) if var.levels_up == 0 && var.attnum > 0 => {
+                        set.extend(usize::try_from(var.attnum - 1).ok());
+                    }
+                    _ => exprs.push(expr),
+                }
+                continue;
+            };
             let Some(index) = columns.iter().position(|c| c.name == column) else {
                 return Err(Error::new(
                     SqlState::UNDEFINED_COLUMN,
@@ -513,12 +538,16 @@ impl Analyzer<'_> {
         }
         set.sort_unstable();
         set.dedup();
-        if let Some(predicate) = infer.whereClause.as_ref() {
-            // The unique indexes that a write takes have no predicate, so the predicate of the inference does not change the match.
-            let expr = self.with_kind(Kind::IndexPredicate, |a| a.transform(Some(predicate)))?;
-            self.coerce_to_boolean(expr, "WHERE")?;
+        let mut predicate = Vec::new();
+        if let Some(clause) = infer.whereClause.as_ref() {
+            let expr = self.with_kind(Kind::IndexPredicate, |a| a.transform(Some(clause)))?;
+            let expr = self.coerce_to_boolean(expr, "WHERE")?;
+            match expr.kind {
+                ExprKind::Bool(BoolOp::And, parts) => predicate = parts,
+                _ => predicate.push(expr),
+            }
         }
-        Ok(Inference::Columns(set))
+        Ok(Inference::Columns { columns: set, exprs, predicate })
     }
 
     /// `setTargetTable`: the OID, the name and the columns of the table that the statement writes. A table with a constraint or an object that the executor does not check yet gives `0A000`.
@@ -756,7 +785,7 @@ impl Analyzer<'_> {
         Ok(list)
     }
 
-    /// The unique indexes of a table in the order of their OIDs. A unique index with an expression, a predicate or a deferrable constraint is not supported yet. The index of a partitioned table has no storage: the indexes of the partitions check the rows, and it is an arbiter of `ON CONFLICT`.
+    /// The unique indexes of a table in the order of their OIDs. A deferrable unique constraint is not supported yet. The index of a partitioned table has no storage: the indexes of the partitions check the rows, and it is an arbiter of `ON CONFLICT`.
     pub(crate) fn unique_keys(&self, table: u32, columns: &[Column]) -> Result<Vec<Unique>> {
         let Some(catalog) = self.env.catalog() else {
             return Ok(Vec::new());
@@ -774,10 +803,8 @@ impl Analyzer<'_> {
         indexes.sort_by_key(|(rel, _)| rel.oid);
         let mut list = Vec::with_capacity(indexes.len());
         for (rel, info) in indexes {
-            if info.exprs.is_some() || info.predicate.is_some() || !info.immediate {
-                return Err(not_yet(
-                    "a write to a table with a unique index on an expression, a partial unique index or a deferrable unique constraint",
-                ));
+            if !info.immediate {
+                return Err(not_yet("a write to a table with a deferrable unique constraint"));
             }
             let count = usize::try_from(info.key_count).unwrap_or_default();
             let mut key = Unique {
@@ -787,7 +814,49 @@ impl Analyzer<'_> {
                 types: Vec::with_capacity(count),
                 shown: String::new(),
                 nulls_not_distinct: info.nulls_not_distinct,
+                derived: None,
             };
+            if info.exprs.is_some() || info.predicate.is_some() {
+                let mut exprs = match &info.exprs {
+                    Some(text) => crate::node::read_list(text)?,
+                    None => Vec::new(),
+                }
+                .into_iter();
+                let mut derived = Derived {
+                    table,
+                    types: columns.iter().map(|c| c.ty).collect(),
+                    exprs: Vec::with_capacity(count),
+                    predicate: match &info.predicate {
+                        Some(text) => match crate::node::read(text)? {
+                            Expr { kind: ExprKind::Bool(BoolOp::And, parts), .. } => parts,
+                            part => vec![part],
+                        },
+                        None => Vec::new(),
+                    },
+                };
+                for (at, &attnum) in info.keys.iter().take(count).enumerate() {
+                    let expr = if attnum == 0 {
+                        exprs
+                            .next()
+                            .ok_or_else(|| Error::internal("too few entries in indexprs"))?
+                    } else {
+                        let column = usize::try_from(attnum - 1).ok().and_then(|c| columns.get(c));
+                        let Some(column) = column else {
+                            return Err(Error::internal(
+                                "a unique index with a key that is not a column",
+                            ));
+                        };
+                        let var = Var { relation: 0, attnum, levels_up: 0 };
+                        Expr { typmod: column.typmod, ..Expr::new(ExprKind::Var(var), column.ty) }
+                    };
+                    key.columns.push(at);
+                    key.types.push(expr.ty);
+                    derived.exprs.push(expr);
+                }
+                key.derived = Some(Box::new(derived));
+                list.push(key);
+                continue;
+            }
             for &attnum in info.keys.iter().take(count) {
                 let column = usize::try_from(attnum - 1)
                     .ok()
@@ -1255,8 +1324,8 @@ fn row_query(columns: &[Column], row: Vec<Expr>) -> Query {
 enum Inference {
     /// No inference: all the unique indexes.
     All,
-    /// The set of the columns of an inference, from 0, in order.
-    Columns(Vec<usize>),
+    /// The set of the columns of an inference, from 0, in order, the expressions of the inference, and the parts of its predicate.
+    Columns { columns: Vec<usize>, exprs: Vec<Expr>, predicate: Vec<Expr> },
     /// The OID of the index of the constraint that `ON CONSTRAINT` names, or 0 for a constraint with no index.
     Constraint(u32),
 }
@@ -1283,14 +1352,32 @@ fn arbiters(inference: Inference, unique: &[Unique]) -> Result<Vec<usize>> {
             }
             return Ok(places);
         }
-        Inference::Columns(set) => unique
+        Inference::Columns { columns: set, exprs, predicate } => unique
             .iter()
             .enumerate()
             .filter(|(_, key)| {
-                let mut key = key.columns.clone();
-                key.sort_unstable();
-                key.dedup();
-                key == set
+                let Some(derived) = &key.derived else {
+                    let mut key = key.columns.clone();
+                    key.sort_unstable();
+                    key.dedup();
+                    return key == set && exprs.is_empty();
+                };
+                // The columns of the key must be the columns of the inference, and each expression of the key must be an expression of the inference and the other way around.
+                let mut columns = Vec::new();
+                let mut indexed = Vec::new();
+                for expr in &derived.exprs {
+                    match expr.kind {
+                        ExprKind::Var(var) => columns.extend(usize::try_from(var.attnum - 1).ok()),
+                        _ => indexed.push(expr),
+                    }
+                }
+                columns.sort_unstable();
+                columns.dedup();
+                // `predicate_implied_by`: each part of the predicate of the index is a part of the predicate of the inference.
+                columns == set
+                    && exprs.iter().all(|e| indexed.iter().any(|i| i.same(e)))
+                    && indexed.iter().all(|i| exprs.iter().any(|e| e.same(i)))
+                    && derived.predicate.iter().all(|p| predicate.iter().any(|e| e.same(p)))
             })
             .map(|(at, _)| at)
             .collect(),

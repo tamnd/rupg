@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::rc::Rc;
 
-use rupg_analyze::{CopyTarget, Params};
+use rupg_analyze::{CopyTarget, Derived, Params};
 use rupg_catalog::TRIGGER_INSERT;
 use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
@@ -636,14 +636,27 @@ impl Connection {
             load.inserted.extend(rows.iter().cloned());
         }
         if info.unique.is_empty() {
-            heap.insert(info.table, &view, rows, &[], &[])?;
+            heap.insert(
+                info.table,
+                &view,
+                rows,
+                (&[], &|d: &Derived, r: &[Value]| self.index_key(d, r)),
+                &[],
+            )?;
         } else {
             let mut kept = Vec::new();
             loop {
-                match heap.insert(info.table, &view, rows.clone(), &info.unique, &kept)? {
+                match heap.insert(
+                    info.table,
+                    &view,
+                    rows.clone(),
+                    (&info.unique, &|d: &Derived, r: &[Value]| self.index_key(d, r)),
+                    &kept,
+                )? {
                     Changed::Done(_) => break,
                     Changed::Duplicate { index, key } => {
-                        let line = duplicate_line(info, index, &key, &rows, &lines);
+                        let derive = |d: &Derived, r: &[Value]| self.index_key(d, r);
+                        let line = duplicate_line((info, index), &key, &rows, &lines, &derive);
                         let conflict = Changed::Duplicate { index, key };
                         let error = match self.key_conflict(info, &view, conflict) {
                             Ok(_) => Error::internal("a duplicate key with no error"),
@@ -699,17 +712,25 @@ impl Load {
     }
 }
 
-/// The line of the row whose key is a duplicate. The first row with the key can conflict only with a row that was in the table, and a later row with the key conflicts with the first row.
+/// The line of the row whose key is a duplicate. The first row with the key can conflict only with a row that was in the table, and a later row with the key conflicts with the first row. `derive` gives the key of a row in an index with an expression or a predicate.
 pub(super) fn duplicate_line(
-    info: &rupg_analyze::Write,
-    index: usize,
+    (info, index): (&rupg_analyze::Write, usize),
     key: &[Value],
     rows: &[Vec<Value>],
     lines: &[u64],
+    derive: crate::heap::Derive<'_>,
 ) -> u64 {
     let Some(unique) = info.unique.get(index) else { return lines.last().copied().unwrap_or(0) };
     let mut matches = rows.iter().enumerate().filter(|(_, row)| {
-        unique.columns.iter().zip(key).all(|(&at, value)| row.get(at) == Some(value))
+        let derived = match &unique.derived {
+            Some(derived) => match derive(derived, row) {
+                Ok(Some(values)) => Some(values),
+                _ => return false,
+            },
+            None => None,
+        };
+        let values = derived.as_deref().unwrap_or(row.as_slice());
+        unique.columns.iter().zip(key).all(|(&at, value)| values.get(at) == Some(value))
     });
     let first = matches.next().map(|(at, _)| at);
     let at = matches.next().map(|(at, _)| at).or(first);

@@ -87,7 +87,7 @@ pub use cast::local_time;
 pub use compare::{compare, equal};
 pub use datetime::{IntervalSum, interval_lerp};
 pub use deparse::{
-    deparse_constant, deparse_expression, deparse_relation_expression, explain,
+    deparse_constant, deparse_expression, deparse_relation_expression, explain, index_key_columns,
     partition_key_columns, view_statement,
 };
 pub use describe::describe;

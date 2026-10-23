@@ -2056,6 +2056,27 @@ pub fn partition_key_columns(rel: &Relation, session: &dyn Session) -> Result<St
     }
 }
 
+/// `pg_get_indexdef_columns(oid, true)`: the key columns and the expressions of the key of an index, as the detail of an error of a duplicate key shows them.
+///
+/// # Errors
+///
+/// The error of the deparse of an expression of the key.
+pub fn index_key_columns(index: u32, session: &dyn Session) -> Result<String> {
+    let catalog = session.catalog().ok_or_else(|| Error::internal("no catalog"))?;
+    let found = catalog.relation(index).and_then(|r| Some((r, r.index.as_ref()?)));
+    let Some((rel, info)) = found else {
+        return Err(Error::internal(format!("cache lookup failed for index {index}")));
+    };
+    let mut out = String::new();
+    for colno in 1..=info.key_count {
+        if colno > 1 {
+            out.push_str(", ");
+        }
+        out.push_str(&index_def(rel, info, i32::from(colno), true, session)?);
+    }
+    Ok(out)
+}
+
 /// `pg_get_partkeydef(oid)`: the partition key of a partitioned table, or null for another relation.
 fn get_partkeydef(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let oid = args.first().and_then(Value::as_oid).ok_or_else(bad_value)?;

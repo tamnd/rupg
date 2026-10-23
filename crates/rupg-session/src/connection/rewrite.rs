@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use rupg_analyze::{CopyTarget, Fill, Params, PartitionCheck, Transform};
+use rupg_analyze::{CopyTarget, Derived, Fill, Params, PartitionCheck, Transform};
 use rupg_catalog::{Catalog, ConKind, FIRST_NORMAL_OID, RelKind, Relation};
 use rupg_common::{Error, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
@@ -335,7 +335,15 @@ impl Connection {
         let checked = if foreign.is_empty() { Vec::new() } else { new_rows.clone() };
         let mut kept = Vec::new();
         loop {
-            match heap.insert(rel.oid, view, new_rows.clone(), &info.unique, &kept)? {
+            match heap.insert(
+                rel.oid,
+                view,
+                new_rows.clone(),
+                (&info.unique, &|d: &Derived, r: &[Value]| {
+                    rupg_exec::index_key(d, r, &self.reader_without_view(Arc::clone(work)))
+                }),
+                &kept,
+            )? {
                 Changed::Done(_) => break,
                 Changed::Duplicate { index, key } => {
                     let Some(unique) = info.unique.get(index) else {
@@ -348,7 +356,10 @@ impl Connection {
                         SqlState::UNIQUE_VIOLATION,
                         format!("could not create unique index \"{}\"", unique.name),
                     )
-                    .with_detail(format!("Key ({})=({values}) is duplicated.", unique.shown));
+                    .with_detail(format!(
+                        "Key ({})=({values}) is duplicated.",
+                        self.key_shown(unique, Arc::clone(work))?
+                    ));
                     return Err(rupg_func::with_table_constraint(
                         error,
                         rel.oid,

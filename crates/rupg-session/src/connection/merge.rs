@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 
-use rupg_analyze::{MatchKind, Merge, MergeCommand, Write};
+use rupg_analyze::{Derived, MatchKind, Merge, MergeCommand, Write};
 use rupg_catalog::{RelKind, TRIGGER_INSERT};
 use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
@@ -82,7 +82,7 @@ impl Connection {
                         info.table,
                         &view,
                         changes.clone(),
-                        &info.unique,
+                        (&info.unique, &|d: &Derived, r: &[Value]| self.index_key(d, r)),
                         &kept,
                         &mut applied,
                     )?;
@@ -119,11 +119,23 @@ impl Connection {
             .collect();
         if !inserts.is_empty() {
             if info.unique.is_empty() {
-                heap.insert(info.table, &view, inserts.clone(), &[], &[])?;
+                heap.insert(
+                    info.table,
+                    &view,
+                    inserts.clone(),
+                    (&[], &|d: &Derived, r: &[Value]| self.index_key(d, r)),
+                    &[],
+                )?;
             } else {
                 let mut kept = Vec::new();
                 loop {
-                    match heap.insert(info.table, &view, inserts.clone(), &info.unique, &kept)? {
+                    match heap.insert(
+                        info.table,
+                        &view,
+                        inserts.clone(),
+                        (&info.unique, &|d: &Derived, r: &[Value]| self.index_key(d, r)),
+                        &kept,
+                    )? {
                         Changed::Done(_) => break,
                         conflict => kept = self.key_conflict(info, &view, conflict)?,
                     }
