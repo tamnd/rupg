@@ -333,13 +333,19 @@ impl Connection {
             .map(|f| rupg_analyze::Foreign { deferrable: false, deferred: false, ..f.clone() })
             .collect();
         let checked = if foreign.is_empty() { Vec::new() } else { new_rows.clone() };
+        // The rows of a new index are checked at once, also when the index is deferrable.
+        let unique: Vec<_> = info
+            .unique
+            .iter()
+            .map(|u| rupg_analyze::Unique { deferrable: None, ..u.clone() })
+            .collect();
         let mut kept = Vec::new();
         loop {
             match heap.insert(
                 rel.oid,
                 view,
                 new_rows.clone(),
-                (&info.unique, &|d: &Derived, r: &[Value]| {
+                (&unique, &|d: &Derived, r: &[Value]| {
                     rupg_exec::index_key(d, r, &self.reader_without_view(Arc::clone(work)))
                 }),
                 &kept,

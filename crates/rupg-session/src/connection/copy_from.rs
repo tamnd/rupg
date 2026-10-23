@@ -466,6 +466,7 @@ impl Connection {
         if !batches.is_empty() {
             self.fire(batches)?;
         }
+        self.recheck_unique(0)?;
         self.fire_events(0)?;
         copy.notices.extend(self.trigger_notices());
         let errors = copy.load.errors;

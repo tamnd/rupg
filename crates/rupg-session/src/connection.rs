@@ -29,7 +29,7 @@ use rupg_wire::{
 
 use crate::block::{Block, Ending, Transaction};
 use crate::guc::{Action, Origin, Settings};
-use crate::heap::{Change, Changed, Snapshot, View, tid_text};
+use crate::heap::{Change, Changed, Recheck, Snapshot, View, tid_text};
 use crate::query::{self, Column, Reader, Row, Transition};
 use crate::store::{Lease, Store};
 use crate::utility::{self, Context, Notice, Outcome};
@@ -420,6 +420,8 @@ pub struct Connection {
     deferred: RefCell<Vec<Batch>>,
     /// The events of the deferred constraint triggers, in the order of the writes.
     deferred_events: RefCell<Vec<trigger::Event>>,
+    /// The new versions whose keys a deferred unique constraint checks at the commit, in the order of the writes.
+    deferred_unique: RefCell<Vec<Recheck>>,
     /// The modes that `SET CONSTRAINTS` gave in the transaction.
     modes: RefCell<deferred::Modes>,
     /// The state of the transaction at each savepoint, the outermost first, as the names of the savepoints in [`Transaction`].
@@ -502,6 +504,7 @@ impl Connection {
             snapshot: RefCell::new(None),
             deferred: RefCell::new(Vec::new()),
             deferred_events: RefCell::new(Vec::new()),
+            deferred_unique: RefCell::new(Vec::new()),
             modes: RefCell::new(deferred::Modes::default()),
             marks: Vec::new(),
             plpgsql: rupg_plpgsql::Cache::default(),
@@ -900,24 +903,27 @@ impl Connection {
                         "a duplicate key of an index that is not in the list",
                     ));
                 };
-                let values = self.index_key_text(&unique.types, &key)?;
-                let error = Error::new(
-                    SqlState::UNIQUE_VIOLATION,
-                    format!("duplicate key value violates unique constraint \"{}\"", unique.name),
-                )
-                .with_detail(format!(
-                    "Key ({})=({values}) already exists.",
-                    self.key_shown(unique, self.catalog())?
-                ));
-                Err(rupg_func::with_table_constraint(
-                    error,
-                    info.table,
-                    &unique.name,
-                    &self.reader(),
-                ))
+                Err(self.duplicate_key(info.table, unique, &key))
             }
             _ => Err(Error::internal("a write result that is not a conflict of a key")),
         }
+    }
+
+    /// The error of the key `key` of a new version of the table `table` that a live version of the unique index `unique` has, with the value of the key as `BuildIndexValueDescription` gives it.
+    fn duplicate_key(&self, table: u32, unique: &rupg_analyze::Unique, key: &[Value]) -> Error {
+        let shown = self
+            .index_key_text(&unique.types, key)
+            .and_then(|values| Ok((self.key_shown(unique, self.catalog())?, values)));
+        let (columns, values) = match shown {
+            Ok(shown) => shown,
+            Err(error) => return error,
+        };
+        let error = Error::new(
+            SqlState::UNIQUE_VIOLATION,
+            format!("duplicate key value violates unique constraint \"{}\"", unique.name),
+        )
+        .with_detail(format!("Key ({columns})=({values}) already exists."));
+        rupg_func::with_table_constraint(error, table, &unique.name, &self.reader())
     }
 
     /// The key columns of a unique index for the detail of an error, as `pg_get_indexdef_columns` gives them in the catalog `catalog`.
@@ -5673,6 +5679,12 @@ mod tests {
     #[test]
     fn unique_expressions() {
         big_stack(|| script(include_str!("connection/unique_expressions.test")));
+    }
+
+    /// The deferrable unique constraints and primary keys: the check at the end of the statement, an update that moves the keys, `INITIALLY DEFERRED` and `SET CONSTRAINTS` with the check at the commit, nulls, a rollback to a savepoint, the error of `ON CONFLICT` with a deferrable arbiter, a deferrable index that is not an arbiter, the internal trigger in `pg_trigger` and `pg_depend`, a new constraint on duplicate rows, `DROP CONSTRAINT`, and the partitions of a partitioned table. `connection/deferrable_unique.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn deferrable_unique() {
+        big_stack(|| script(include_str!("connection/deferrable_unique.test")));
     }
 
     /// A query that is a `UNION ALL` of `SELECT`s with the types of its columns and has `ORDER BY` becomes an append relation, as `flatten_simple_union_all` makes it, so the planner can plan a `Merge Append` of the plans of the `SELECT`s in the order. A `SELECT` with its own `WHERE` is not a member of the append relation, as `is_safe_append_member`, and its plan gets a sort. `connection/plan_union_all_order.test` is the output of PostgreSQL 19 for the same script in a new database.

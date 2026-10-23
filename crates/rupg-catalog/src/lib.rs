@@ -97,6 +97,8 @@ pub const BTREE: u32 = 403;
 pub const PG_TRIGGER: u32 = 2620;
 /// The OID of `RI_FKey_check_ins`. The other functions of the foreign keys follow it in the order of `ri_triggers.c`.
 const RI_FKEY_CHECK_INS: u32 = 1644;
+/// The OID of `unique_key_recheck`, the function of the trigger of a deferrable unique constraint.
+const UNIQUE_KEY_RECHECK: u32 = 1250;
 /// `TRIGGER_TYPE_ROW`.
 pub const TRIGGER_ROW: i16 = 1;
 /// `TRIGGER_TYPE_BEFORE`. A trigger with neither this bit nor [`TRIGGER_INSTEAD`] fires after the event.
@@ -3373,6 +3375,28 @@ impl Catalog {
             constraint_oid = Some(constraint.oid);
             self.insert_constraint(constraint);
             self.depend(me, referenced, DepKind::Internal);
+            // `index_constraint_create`: a deferrable constraint gets the trigger that checks its keys again after the statement or at the commit.
+            if new.deferrable {
+                let mut trigger = Trigger {
+                    relation: new.table,
+                    constraint_index: oid,
+                    constraint: referenced.oid,
+                    function: UNIQUE_KEY_RECHECK,
+                    kind: TRIGGER_ROW | TRIGGER_INSERT | TRIGGER_UPDATE,
+                    deferrable: true,
+                    deferred: new.deferred,
+                    enabled: b'O',
+                    internal: true,
+                    ..Trigger::default()
+                };
+                let prefix = if kind == ConKind::Primary {
+                    "PK_ConstraintTrigger"
+                } else {
+                    "Unique_ConstraintTrigger"
+                };
+                self.add_trigger(&mut trigger, prefix);
+                self.relation_mut(new.table)?.has_triggers = true;
+            }
         } else {
             let simple: Vec<i16> = keys.iter().copied().filter(|&k| k != 0).collect();
             if simple.is_empty() {
