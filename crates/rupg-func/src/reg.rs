@@ -183,6 +183,42 @@ pub(crate) fn visible(kind: Named, row: &NamedRow, session: &dyn Session) -> boo
     find(kind, &path(session), row.name, row.method).is_some_and(|found| found.oid == row.oid)
 }
 
+/// The name, the schema and the access method of an operator class or an operator family, built in or of the catalog.
+pub(crate) fn method_row(
+    kind: Named,
+    oid: u32,
+    session: &dyn Session,
+) -> Option<(String, u32, u32)> {
+    if let Some(row) = builtin::named_by_oid(kind, oid) {
+        return Some((row.name.to_string(), row.namespace, row.method));
+    }
+    let catalog = session.catalog()?;
+    match kind {
+        Named::Opclass => catalog.opclass(oid).map(|c| (c.name.clone(), c.namespace, c.method)),
+        Named::Opfamily => catalog.opfamily(oid).map(|f| (f.name.clone(), f.namespace, f.method)),
+        _ => None,
+    }
+}
+
+/// `OpclassIsVisible` and `OpfamilyIsVisible` for an operator class or an operator family, built in or of the catalog: true when the first schema of the search path with an object of the name and the access method has this one.
+pub(crate) fn method_visible(kind: Named, oid: u32, session: &dyn Session) -> bool {
+    let Some((name, _, method)) = method_row(kind, oid, session) else { return false };
+    let catalog = session.catalog();
+    let first = path(session).into_iter().find_map(|ns| {
+        find(kind, &[ns], &name, method).map(|row| row.oid).or_else(|| match kind {
+            Named::Opclass => catalog?
+                .opclasses()
+                .find(|c| c.namespace == ns && c.name == name && c.method == method)
+                .map(|c| c.oid),
+            _ => catalog?
+                .opfamilies()
+                .find(|f| f.namespace == ns && f.name == name && f.method == method)
+                .map(|f| f.oid),
+        })
+    });
+    first == Some(oid)
+}
+
 /// The name and the schema of a collation or an object of text search, built in or of the catalog.
 pub(crate) fn catalog_name(kind: Named, oid: u32, session: &dyn Session) -> Option<(String, u32)> {
     if let Some(row) = builtin::named_by_oid(kind, oid) {

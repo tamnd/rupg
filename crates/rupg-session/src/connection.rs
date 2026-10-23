@@ -1123,6 +1123,8 @@ impl Connection {
                         ObjectType::OBJECT_PROCEDURE => CommandTag::DropProcedure,
                         ObjectType::OBJECT_ROUTINE => CommandTag::DropRoutine,
                         ObjectType::OBJECT_OPERATOR => CommandTag::DropOperator,
+                        ObjectType::OBJECT_OPCLASS => CommandTag::DropOperatorClass,
+                        ObjectType::OBJECT_OPFAMILY => CommandTag::DropOperatorFamily,
                         ObjectType::OBJECT_TSPARSER => CommandTag::DropTextSearchParser,
                         ObjectType::OBJECT_TSDICTIONARY => CommandTag::DropTextSearchDictionary,
                         ObjectType::OBJECT_TSTEMPLATE => CommandTag::DropTextSearchTemplate,
@@ -1158,6 +1160,9 @@ impl Connection {
                     },
                     Node::AlterTSConfigurationStmt(_) => CommandTag::AlterTextSearchConfiguration,
                     Node::AlterOperatorStmt(_) => CommandTag::AlterOperator,
+                    Node::CreateOpClassStmt(_) => CommandTag::CreateOperatorClass,
+                    Node::CreateOpFamilyStmt(_) => CommandTag::CreateOperatorFamily,
+                    Node::AlterOpFamilyStmt(_) => CommandTag::AlterOperatorFamily,
                     Node::TruncateStmt(_) => CommandTag::TruncateTable,
                     _ => CommandTag::CreateTable,
                 }))
@@ -5745,6 +5750,12 @@ mod tests {
     #[test]
     fn alter_operators() {
         big_stack(|| script(include_str!("connection/alteroper.test")));
+    }
+
+    /// `CREATE OPERATOR FAMILY`, `CREATE OPERATOR CLASS`, `ALTER OPERATOR FAMILY ... ADD` and `... DROP`, and `DROP OPERATOR CLASS` and `DROP OPERATOR FAMILY`, with the rows of `pg_opfamily`, `pg_opclass`, `pg_amop`, `pg_amproc` and `pg_depend`, and the errors of the checks of `DefineOpClass` and `AlterOpFamily`. `connection/opclass.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn opclass_commands() {
+        big_stack(|| script(include_str!("connection/opclass.test")));
     }
 
     /// A query that is a `UNION ALL` of `SELECT`s with the types of its columns and has `ORDER BY` becomes an append relation, as `flatten_simple_union_all` makes it, so the planner can plan a `Merge Append` of the plans of the `SELECT`s in the order. A `SELECT` with its own `WHERE` is not a member of the append relation, as `is_safe_append_member`, and its plan gets a sort. `connection/plan_union_all_order.test` is the output of PostgreSQL 19 for the same script in a new database.

@@ -1,9 +1,10 @@
 //! `DROP TABLE`, `DROP VIEW`, `DROP INDEX`, `DROP SEQUENCE`, `DROP SCHEMA`, `DROP TYPE`, `DROP DOMAIN`, `DROP FUNCTION`, `DROP TEXT SEARCH` and `DROP OPERATOR`, as `RemoveRelations` and `RemoveObjects` run them. The statement finds all its objects first, then [`Catalog::deletions`] finds the objects that depend on them, and the report of `reportDependentObjects` names these objects as `getObjectDescription` does. A built-in object that is not pinned, such as the schema `public` or a view of `information_schema`, gives `0A000`.
 
 use rupg_catalog::{
-    FIRST_NORMAL_OID, ObjRef, PG_ATTRDEF, PG_CLASS, PG_CONSTRAINT, PG_NAMESPACE, PG_OPERATOR,
-    PG_PROC, PG_REWRITE, PG_TRIGGER, PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE,
-    PG_TYPE, Refusal, RelKind, Target, flag, is_pinned,
+    FIRST_NORMAL_OID, ObjRef, PG_AMOP, PG_AMPROC, PG_ATTRDEF, PG_CLASS, PG_CONSTRAINT,
+    PG_NAMESPACE, PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_PROC, PG_REWRITE, PG_TRIGGER,
+    PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, PG_TYPE, Refusal, RelKind, Target,
+    flag, is_pinned,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
@@ -142,6 +143,7 @@ impl Definer<'_, '_> {
             | ObjectType::OBJECT_TSTEMPLATE
             | ObjectType::OBJECT_TSCONFIGURATION => self.find_ts(stmt)?,
             ObjectType::OBJECT_OPERATOR => self.find_operators(stmt)?,
+            ObjectType::OBJECT_OPCLASS | ObjectType::OBJECT_OPFAMILY => self.find_opcf(stmt)?,
             ObjectType::OBJECT_FUNCTION
             | ObjectType::OBJECT_PROCEDURE
             | ObjectType::OBJECT_ROUTINE => self.find_functions(stmt)?,
@@ -488,6 +490,7 @@ impl Definer<'_, '_> {
             PG_NAMESPACE => format!("schema {}", self.schema_name(object.oid)),
             PG_TS_PARSER | PG_TS_DICT | PG_TS_TEMPLATE | PG_TS_CONFIG => self.describe_ts(object),
             PG_OPERATOR => self.describe_operator(object.oid),
+            PG_OPCLASS | PG_OPFAMILY | PG_AMOP | PG_AMPROC => self.describe_opcf(object),
             PG_PROC => match self.catalog.function(object.oid) {
                 Some(function) => {
                     let args: Vec<String> =

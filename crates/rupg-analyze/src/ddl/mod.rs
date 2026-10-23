@@ -24,6 +24,7 @@ mod identity;
 mod index;
 mod lock;
 mod matview;
+mod opclass;
 mod operator;
 mod partition;
 mod partition_alter;
@@ -166,6 +167,9 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::AlterSeqStmt(_)
             | Node::AlterTSConfigurationStmt(_)
             | Node::AlterOperatorStmt(_)
+            | Node::CreateOpFamilyStmt(_)
+            | Node::CreateOpClassStmt(_)
+            | Node::AlterOpFamilyStmt(_)
             | Node::TruncateStmt(_)
             | Node::RefreshMatViewStmt(_)
     ) || matches!(stmt, Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) || define.kind == ObjectType::OBJECT_OPERATOR)
@@ -213,6 +217,8 @@ fn is_drop_kind(kind: ObjectType) -> bool {
             | ObjectType::OBJECT_TSTEMPLATE
             | ObjectType::OBJECT_TSCONFIGURATION
             | ObjectType::OBJECT_OPERATOR
+            | ObjectType::OBJECT_OPCLASS
+            | ObjectType::OBJECT_OPFAMILY
     )
 }
 
@@ -278,6 +284,9 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
             definer.create_operator(define)
         }
         Node::AlterOperatorStmt(alter) => definer.alter_operator(alter),
+        Node::CreateOpFamilyStmt(create) => definer.create_opfamily(create),
+        Node::CreateOpClassStmt(create) => definer.create_opclass(create),
+        Node::AlterOpFamilyStmt(alter) => definer.alter_opfamily(alter),
         Node::AlterTSConfigurationStmt(alter) => definer.alter_ts_config(alter),
         Node::TruncateStmt(truncate) => definer.truncate(truncate),
         Node::GrantStmt(grant) => definer.grant(grant),

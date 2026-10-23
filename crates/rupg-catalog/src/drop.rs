@@ -6,9 +6,9 @@ use std::sync::Arc;
 use rupg_common::{Error, Result};
 
 use super::{
-    Catalog, Column, ConKind, DepKind, ObjRef, PG_ATTRDEF, PG_CAST, PG_CLASS, PG_CONSTRAINT,
-    PG_NAMESPACE, PG_OPERATOR, PG_PROC, PG_REWRITE, PG_TRIGGER, PG_TS_CONFIG, PG_TS_DICT,
-    PG_TS_PARSER, PG_TS_TEMPLATE, PG_TYPE, is_pinned,
+    Catalog, Column, ConKind, DepKind, ObjRef, PG_AMOP, PG_AMPROC, PG_ATTRDEF, PG_CAST, PG_CLASS,
+    PG_CONSTRAINT, PG_NAMESPACE, PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_PROC, PG_REWRITE,
+    PG_TRIGGER, PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, PG_TYPE, is_pinned,
 };
 
 /// The reasons that the walk reached an object, the bits `DEPFLAG_*` of `dependency.c`.
@@ -299,6 +299,18 @@ impl Catalog {
                 self.casts.remove(&object.oid);
             }
             PG_OPERATOR => self.remove_operator(object.oid),
+            PG_OPFAMILY => {
+                self.opfamilies.remove(&object.oid);
+            }
+            PG_OPCLASS => {
+                self.opclasses.remove(&object.oid);
+            }
+            PG_AMOP => {
+                self.amops.remove(&object.oid);
+            }
+            PG_AMPROC => {
+                self.amprocs.remove(&object.oid);
+            }
             PG_TS_TEMPLATE => {
                 self.ts_templates.remove(&object.oid);
             }

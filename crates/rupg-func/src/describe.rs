@@ -135,24 +135,24 @@ pub fn describe(object: ObjRef, session: &dyn Session) -> Result<Option<String>>
         }
         PG_OPFAMILY => opfamily_text(oid, session),
         PG_AM => builtin::access_method_name(oid).map(|name| format!("access method {name}")),
-        PG_AMOP => builtin::amop_by_oid(oid).and_then(|a| {
+        PG_AMOP => {
+            amop_parts(oid, session).and_then(|(family, left, right, strategy, operator)| {
+                Some(format!(
+                    "operator {strategy} ({}, {}) of {}: {}",
+                    reg::type_text(left, None, session).ok()?,
+                    reg::type_text(right, None, session).ok()?,
+                    opfamily_text(family, session)?,
+                    reg::name_of(RegKind::Operator, operator, session)?
+                ))
+            })
+        }
+        PG_AMPROC => amproc_parts(oid, session).and_then(|(family, left, right, number, proc)| {
             Some(format!(
-                "operator {} ({}, {}) of {}: {}",
-                a.strategy,
-                reg::type_text(a.left, None, session).ok()?,
-                reg::type_text(a.right, None, session).ok()?,
-                opfamily_text(a.family, session)?,
-                reg::name_of(RegKind::Operator, a.operator, session)?
-            ))
-        }),
-        PG_AMPROC => builtin::amproc_by_oid(oid).and_then(|a| {
-            Some(format!(
-                "function {} ({}, {}) of {}: {}",
-                a.number,
-                reg::type_text(a.left, None, session).ok()?,
-                reg::type_text(a.right, None, session).ok()?,
-                opfamily_text(a.family, session)?,
-                procedure_text(a.proc, session)?
+                "function {number} ({}, {}) of {}: {}",
+                reg::type_text(left, None, session).ok()?,
+                reg::type_text(right, None, session).ok()?,
+                opfamily_text(family, session)?,
+                procedure_text(proc, session)?
             ))
         }),
         PG_REWRITE => catalog.and_then(|c| match c.view_of_rule(oid) {
@@ -316,12 +316,35 @@ fn named_text(kind: Named, oid: u32, session: &dyn Session) -> Option<String> {
 
 /// The name of an operator class or an operator family and its access method.
 fn method_text(kind: Named, oid: u32, session: &dyn Session) -> Option<String> {
-    let method = builtin::named_by_oid(kind, oid)?.method;
+    let (name, namespace, method) = reg::method_row(kind, oid, session)?;
+    let schema = if reg::method_visible(kind, oid, session) {
+        None
+    } else {
+        reg::namespace_name(namespace, session)
+    };
     Some(format!(
         "{} for access method {}",
-        named_text(kind, oid, session)?,
+        reg::qualified(schema, &name),
         builtin::access_method_name(method)?
     ))
+}
+
+/// The family, the left type, the right type, the number and the operator of a row of `pg_amop`, built in or of the catalog.
+pub(crate) fn amop_parts(oid: u32, session: &dyn Session) -> Option<(u32, u32, u32, i16, u32)> {
+    if let Some(a) = builtin::amop_by_oid(oid) {
+        return Some((a.family, a.left, a.right, a.strategy, a.operator));
+    }
+    let a = session.catalog()?.amop(oid)?;
+    Some((a.family, a.left, a.right, a.strategy, a.operator))
+}
+
+/// The family, the left type, the right type, the number and the function of a row of `pg_amproc`, built in or of the catalog.
+pub(crate) fn amproc_parts(oid: u32, session: &dyn Session) -> Option<(u32, u32, u32, i16, u32)> {
+    if let Some(a) = builtin::amproc_by_oid(oid) {
+        return Some((a.family, a.left, a.right, a.number, a.proc));
+    }
+    let a = session.catalog()?.amproc(oid)?;
+    Some((a.family, a.left, a.right, a.number, a.function))
 }
 
 /// `getOpFamilyDescription`.

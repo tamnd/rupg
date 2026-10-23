@@ -11,8 +11,8 @@ use crate::describe::{
     NO_OBJECTS, PG_AM, PG_AMOP, PG_AMPROC, PG_ATTRDEF, PG_AUTHID, PG_CAST, PG_CLASS, PG_COLLATION,
     PG_CONSTRAINT, PG_CONVERSION, PG_DATABASE, PG_EXTENSION, PG_LANGUAGE, PG_LARGEOBJECT,
     PG_NAMESPACE, PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_PROC, PG_REWRITE, PG_TABLESPACE,
-    PG_TRIGGER, PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, PG_TYPE, column_name,
-    oid_arg,
+    PG_TRIGGER, PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, PG_TYPE, amop_parts,
+    amproc_parts, column_name, oid_arg,
 };
 use crate::text::quote_identifier;
 use crate::{Call, Kernel, Session, bad_value, reg};
@@ -274,22 +274,20 @@ fn parts(object: ObjRef, session: &dyn Session) -> Option<Parts> {
         PG_OPCLASS => method_parts(Named::Opclass, oid, session),
         PG_OPFAMILY => method_parts(Named::Opfamily, oid, session),
         PG_AM => builtin::access_method_name(oid).map(Parts::named),
-        PG_AMOP => builtin::amop_by_oid(oid).and_then(|a| {
+        PG_AMOP => amop_parts(oid, session).and_then(|(family, left, right, n, _)| {
             Some(Parts::identity(format!(
-                "operator {} ({}, {}) of {}",
-                a.strategy,
-                reg::type_text_qualified(a.left, session)?,
-                reg::type_text_qualified(a.right, session)?,
-                method_parts(Named::Opfamily, a.family, session)?.identity
+                "operator {n} ({}, {}) of {}",
+                reg::type_text_qualified(left, session)?,
+                reg::type_text_qualified(right, session)?,
+                method_parts(Named::Opfamily, family, session)?.identity
             )))
         }),
-        PG_AMPROC => builtin::amproc_by_oid(oid).and_then(|a| {
+        PG_AMPROC => amproc_parts(oid, session).and_then(|(family, left, right, n, _)| {
             Some(Parts::identity(format!(
-                "function {} ({}, {}) of {}",
-                a.number,
-                reg::type_text_qualified(a.left, session)?,
-                reg::type_text_qualified(a.right, session)?,
-                method_parts(Named::Opfamily, a.family, session)?.identity
+                "function {n} ({}, {}) of {}",
+                reg::type_text_qualified(left, session)?,
+                reg::type_text_qualified(right, session)?,
+                method_parts(Named::Opfamily, family, session)?.identity
             )))
         }),
         PG_REWRITE => {
@@ -364,9 +362,9 @@ fn in_catalog(kind: Named, oid: u32, session: &dyn Session) -> Option<Parts> {
 
 /// The parts of an operator class or an operator family: the identity has `USING` and the access method.
 fn method_parts(kind: Named, oid: u32, session: &dyn Session) -> Option<Parts> {
-    let row = builtin::named_by_oid(kind, oid)?;
-    let mut parts = Parts::in_schema(row.namespace, row.name, session)?;
-    let method = builtin::access_method_name(row.method)?;
+    let (name, namespace, method) = reg::method_row(kind, oid, session)?;
+    let mut parts = Parts::in_schema(namespace, &name, session)?;
+    let method = builtin::access_method_name(method)?;
     parts.identity = format!("{} USING {}", parts.identity, quote_identifier(method));
     Some(parts)
 }
