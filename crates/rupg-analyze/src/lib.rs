@@ -85,6 +85,7 @@ pub use plpgsql::{
 };
 pub use prepare::{execute_params, param_types};
 pub use record::{out_columns, record_fields};
+pub use returning::{MERGE_ACTION, RETURNING_NEW, RETURNING_OLD, Shown};
 pub use searchcycle::{CycleClause, SearchClause};
 pub use select::{MinMax, Query, Target};
 pub use setop::{SetKind, SetOp, SetTree, strength_name};

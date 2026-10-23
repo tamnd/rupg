@@ -16,6 +16,22 @@ use crate::merge::carry;
 use crate::select::Query;
 use crate::typename::place;
 
+/// The relation of a column of the old row in [`Shown::targets`], as a `Var` with `varreturningtype` `VAR_RETURNING_OLD`.
+pub const RETURNING_OLD: usize = usize::MAX - 1;
+/// The relation of a column of the new row in [`Shown::targets`], as a `Var` with `varreturningtype` `VAR_RETURNING_NEW`.
+pub const RETURNING_NEW: usize = usize::MAX - 2;
+/// The relation of `merge_action()` in [`Shown::targets`], as a `MergeSupportFunc`.
+pub const MERGE_ACTION: usize = usize::MAX - 3;
+
+/// The list of `RETURNING` as `EXPLAIN` shows it in the `Output` of a `ModifyTable`. A column of `old` or `new` reads [`RETURNING_OLD`] or [`RETURNING_NEW`] with the number of the column in the table, and `merge_action()` reads [`MERGE_ACTION`]. The other columns are as in the targets of the query.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Shown {
+    pub targets: Vec<Expr>,
+    /// `returningOldAlias` and `returningNewAlias`: the names of the old and the new row.
+    pub old: String,
+    pub new: String,
+}
+
 /// The place where a column of `RETURNING` takes its value.
 enum Source {
     /// The row that the statement writes, which is the relation of the query of `RETURNING`.
@@ -122,6 +138,7 @@ impl Analyzer<'_> {
             }
         }
         let [old, new] = relations;
+        let mut shown: Vec<Expr> = targets.iter().map(|t| t.expr.clone()).collect();
         let table = self
             .scope
             .relations
@@ -234,10 +251,29 @@ impl Analyzer<'_> {
         for target in &mut targets {
             rewrite(&mut target.expr, 0, &mut change);
         }
+        for expr in &mut shown {
+            rewrite(expr, 0, &mut |e: &mut Expr, depth| {
+                if let ExprKind::Var(var) = e.kind
+                    && var.levels_up == depth
+                {
+                    let named =
+                        [(old, RETURNING_OLD), (new, RETURNING_NEW), (action, MERGE_ACTION)];
+                    if let Some((_, relation)) =
+                        named.iter().find(|(r, _)| *r == Some(var.relation))
+                    {
+                        e.kind = ExprKind::Var(Var { relation: *relation, ..var });
+                        return;
+                    }
+                }
+                change(e, depth);
+            });
+        }
+        let [old, new] = names.map(|n| n.map(|(name, _)| name).unwrap_or_default());
         let query = Query {
             relations: vec![relation],
             from: vec![FromItem::Relation(0)],
             targets,
+            shown: Some(Box::new(Shown { targets: shown, old, new })),
             ..Query::default()
         };
         Ok((query, carried))

@@ -5,7 +5,10 @@
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 
-use rupg_analyze::{Expr, ExprKind, Query, TABLE_OID_ATTNUM, Target, Var, Write};
+use rupg_analyze::{
+    Expr, ExprKind, MERGE_ACTION, Query, RETURNING_NEW, RETURNING_OLD, TABLE_OID_ATTNUM, Target,
+    Var, Write,
+};
 use rupg_plan::{Item, Kind, Node, Operation, Replaced, TARGET};
 
 use crate::{Level, cost, exprs, from, upper};
@@ -343,7 +346,7 @@ fn returning_carried<'q>(query: &'q Query, write: &Write) -> impl Iterator<Item 
         .map(|t| Item::of(&t.expr))
 }
 
-/// The list of `RETURNING` of a write, as the target list of its `ModifyTable`. A column of the row that the statement writes is a column of the target table, which is the relation 0 of the query or [`TARGET`] for an `INSERT`, and a carried value is the column of the other relation that the query carries. None for a list that reads the old or the new row by name, `merge_action()`, the OID of a partition or a subquery.
+/// The list of `RETURNING` of a write, as the target list of its `ModifyTable`. A column of the row that the statement writes is a column of the target table, which is the relation 0 of the query or [`TARGET`] for an `INSERT`, and a carried value is the column of the other relation that the query carries. The list is [`rupg_analyze::Shown::targets`], in which a column of `old` or `new` and `merge_action()` show as PostgreSQL shows them. None for a list that reads the OID of a partition or a subquery.
 fn returning_output<'q>(level: &Level<'q>, operation: Operation) -> Option<Vec<Item<'q>>> {
     let query = level.query;
     let write = level.write?;
@@ -378,11 +381,15 @@ fn returning_output<'q>(level: &Level<'q>, operation: Operation) -> Option<Vec<I
             _ => None,
         }
     };
-    returning
-        .targets
-        .iter()
-        .map(|t| {
-            let mut expr = t.expr.clone();
+    let shown = returning.shown.as_deref().map(|s| &s.targets);
+    let exprs: Vec<&Expr> = match shown {
+        Some(shown) => shown.iter().collect(),
+        None => returning.targets.iter().map(|t| &t.expr).collect(),
+    };
+    exprs
+        .into_iter()
+        .map(|expr| {
+            let mut expr = expr.clone();
             map_row(&mut expr, &map).then(|| Item::owned(expr))
         })
         .collect()
@@ -401,6 +408,13 @@ fn map_row(expr: &mut Expr, map: &dyn Fn(i16) -> Option<Expr>) -> bool {
                 }
                 None => ok = false,
             }
+            true
+        }
+        // A column of `old` or `new` and `merge_action()` show as they are.
+        ExprKind::Var(v)
+            if v.levels_up == 0
+                && [RETURNING_OLD, RETURNING_NEW, MERGE_ACTION].contains(&v.relation) =>
+        {
             true
         }
         ExprKind::Var(_) | ExprKind::SubLink(_) => {

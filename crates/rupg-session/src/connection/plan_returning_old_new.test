@@ -1,0 +1,99 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (id int PRIMARY KEY, v int, s text);
+CREATE TABLE
+> INSERT INTO t VALUES (1, 10, 'a'), (2, 20, 'b'), (3, 30, 'c');
+INSERT 0 3
+> CREATE TABLE src (id int, v int);
+CREATE TABLE
+> INSERT INTO src VALUES (1, 11), (4, 40), (3, NULL);
+INSERT 0 3
+> UPDATE t SET v = v + 1 WHERE id = 1 RETURNING old.v, new.v;
+fields v@t.2:23:4:-1,v@t.2:23:4:-1
+row 10,11
+UPDATE 1
+> UPDATE t SET v = v * 2 WHERE id > 1 RETURNING old.*, new.*;
+fields id@t.1:23:4:-1,v@t.2:23:4:-1,s@t.3:25:-1:-1,id@t.1:23:4:-1,v@t.2:23:4:-1,s@t.3:25:-1:-1
+row 2,20,b,2,40,b
+row 3,30,c,3,60,c
+UPDATE 2
+> DELETE FROM t WHERE id = 2 RETURNING old.id, new.id, old.v;
+fields id@t.1:23:4:-1,id@t.1:23:4:-1,v@t.2:23:4:-1
+row 2,NULL,40
+DELETE 1
+> INSERT INTO t VALUES (5, 50, 'e') RETURNING old.id, new.id, new.s;
+fields id@t.1:23:4:-1,id@t.1:23:4:-1,s@t.3:25:-1:-1
+row NULL,5,e
+INSERT 0 1
+> INSERT INTO t VALUES (5, 55, 'f') ON CONFLICT (id) DO UPDATE SET v = excluded.v RETURNING old.v, new.v, old.s;
+fields v@t.2:23:4:-1,v@t.2:23:4:-1,s@t.3:25:-1:-1
+row 50,55,e
+INSERT 0 1
+> UPDATE t SET v = 0 WHERE id = 1 RETURNING WITH (OLD AS o, NEW AS n) o.v, n.v;
+fields v@t.2:23:4:-1,v@t.2:23:4:-1
+row 11,0
+UPDATE 1
+> UPDATE t SET v = v + 1 WHERE id = 3 RETURNING old.v + new.v AS total, t.v;
+fields total:23:4:-1,v@t.2:23:4:-1
+row 121,61
+UPDATE 1
+> MERGE INTO t USING src ON t.id = src.id WHEN MATCHED AND src.v IS NULL THEN DELETE WHEN MATCHED THEN UPDATE SET v = src.v WHEN NOT MATCHED THEN INSERT VALUES (src.id, src.v, 'new') RETURNING merge_action(), old.id, new.id, old.v, new.v;
+fields merge_action:25:-1:-1,id@t.1:23:4:-1,id@t.1:23:4:-1,v@t.2:23:4:-1,v@t.2:23:4:-1
+row UPDATE,1,1,0,11
+row INSERT,NULL,4,NULL,40
+row DELETE,3,NULL,61,NULL
+MERGE 3
+> SELECT * FROM t ORDER BY id;
+fields id@t.1:23:4:-1,v@t.2:23:4:-1,s@t.3:25:-1:-1
+row 1,11,a
+row 4,40,new
+row 5,55,e
+SELECT 3
+> MERGE INTO t USING (VALUES (1, 100), (9, 90)) AS x(id, v) ON t.id = x.id WHEN MATCHED THEN UPDATE SET v = x.v WHEN NOT MATCHED THEN INSERT VALUES (x.id, x.v, 'x') RETURNING merge_action(), t.*;
+fields merge_action:25:-1:-1,id@t.1:23:4:-1,v@t.2:23:4:-1,s@t.3:25:-1:-1
+row UPDATE,1,100,a
+row INSERT,9,90,x
+MERGE 2
+> MERGE INTO t USING src ON t.id = src.id WHEN NOT MATCHED BY SOURCE THEN UPDATE SET s = 'gone' RETURNING merge_action(), old.s, new.s;
+fields merge_action:25:-1:-1,s@t.3:25:-1:-1,s@t.3:25:-1:-1
+row UPDATE,e,gone
+row UPDATE,x,gone
+MERGE 2
+> SELECT * FROM t ORDER BY id;
+fields id@t.1:23:4:-1,v@t.2:23:4:-1,s@t.3:25:-1:-1
+row 1,100,a
+row 4,40,new
+row 5,55,gone
+row 9,90,gone
+SELECT 4
+> WITH m AS (MERGE INTO t USING src ON t.id = src.id WHEN MATCHED THEN UPDATE SET v = -1 RETURNING merge_action() AS a, new.v) SELECT * FROM m;
+fields a:25:-1:-1,v@t.2:23:4:-1
+row UPDATE,-1
+row UPDATE,-1
+SELECT 2
+> SELECT merge_action();
+ERROR 42601 MERGE_ACTION() can only be used in the RETURNING list of a MERGE command at 8
+> EXPLAIN VERBOSE UPDATE t SET v = v + 1 WHERE id = 1 RETURNING old.v, new.v;
+fields QUERY PLAN:25:-1:-1
+row Update on public.t  (cost=0.15..8.17 rows=1 width=10)
+row   Output: old.v, new.v
+row   ->  Index Scan using t_pkey on public.t  (cost=0.15..8.17 rows=1 width=10)
+row         Output: (v + 1), ctid
+row         Index Cond: (t.id = 1)
+EXPLAIN
+> EXPLAIN VERBOSE MERGE INTO t USING src ON t.id = src.id WHEN MATCHED THEN UPDATE SET v = src.v RETURNING merge_action(), old.v;
+fields QUERY PLAN:25:-1:-1
+row Merge on public.t  (cost=37.00..75.55 rows=2260 width=16)
+row   Output: MERGE_ACTION(), old.v
+row   ->  Hash Join  (cost=37.00..75.55 rows=2260 width=16)
+row         Output: t.ctid, src.v, src.ctid
+row         Inner Unique: true
+row         Hash Cond: (src.id = t.id)
+row         ->  Seq Scan on public.src  (cost=0.00..32.60 rows=2260 width=14)
+row               Output: src.v, src.ctid, src.id
+row         ->  Hash  (cost=22.00..22.00 rows=1200 width=10)
+row               Output: t.ctid, t.id
+row               ->  Seq Scan on public.t  (cost=0.00..22.00 rows=1200 width=10)
+row                     Output: t.ctid, t.id
+EXPLAIN

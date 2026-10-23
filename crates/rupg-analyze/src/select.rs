@@ -72,6 +72,8 @@ pub struct Query {
     pub minmax: Option<Box<MinMax>>,
     /// `constraintDeps`: the OIDs of the primary keys that make columns of `GROUP BY` queries valid, which a view depends on.
     pub constraint_deps: Vec<u32>,
+    /// For the query of `RETURNING`, the list as `EXPLAIN` shows it.
+    pub shown: Option<Box<crate::Shown>>,
 }
 
 /// `MinMaxAggInfo`: the form of a query whose aggregate calls are each `min` or `max`, with a subquery for each aggregate call that reads the first value in the order of its sort operator.
@@ -390,6 +392,7 @@ impl Analyzer<'_> {
             pushed: false,
             minmax: None,
             constraint_deps,
+            shown: None,
         };
         for clause in s.lockingClause.iter().flatten() {
             if let Node::LockingClause(clause) = clause {
