@@ -218,6 +218,7 @@ impl Definer<'_, '_> {
                 format!("must be superuser to specify a non-built-in {word} estimator function"),
             ));
         }
+        self.check_function_execute(function, &list.join("."))?;
         Ok(function)
     }
 
@@ -297,9 +298,16 @@ impl Definer<'_, '_> {
             return Err(invalid("operator right argument type must be specified")
                 .with_detail("Postfix operators are not supported."));
         }
+        for ty in [new.left, new.right] {
+            if ty != 0 {
+                self.check_type_usage(ty)?;
+            }
+        }
         new.kind = if new.left == 0 { b'l' } else { b'b' };
         let args: Vec<u32> = [new.left, new.right].into_iter().filter(|&ty| ty != 0).collect();
         (new.code, new.result) = self.func_oid(&function, &args)?;
+        self.check_function_execute(new.code, &function.join("."))?;
+        self.check_type_usage(new.result)?;
         if let Some(list) = &restrict {
             new.restrict = self.restriction_estimator(list)?;
         }
