@@ -325,7 +325,7 @@ impl Connection {
                 let params =
                     Params { types: types.iter().map(|&(ty, _)| ty).collect(), variable: false };
                 let plan = query::plan(&node, &reader, &params)?.fold(None, &reader)?;
-                Some(plan)
+                Some(plan.unchecked())
             }
             _ => None,
         };
@@ -691,7 +691,8 @@ fn insert_plan(
     let count =
         (0..target.selected.len()).filter(|&k| !defaults.get(k).copied().unwrap_or(false)).count();
     let params = Params { types: vec![0; count], variable: true };
-    query::plan(&node, reader, &params)?.fold(None, reader)
+    // `DoCopy` checked the privileges of the copy.
+    Ok(query::plan(&node, reader, &params)?.fold(None, reader)?.unchecked())
 }
 
 impl Load {

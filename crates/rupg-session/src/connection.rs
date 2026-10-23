@@ -5713,6 +5713,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/grant_object.test")));
     }
 
+    /// The privileges that a statement needs on the tables and the columns that it reads and writes: `SELECT`, `INSERT`, `UPDATE` and `DELETE` with grants on columns, `RETURNING`, `ON CONFLICT`, `MERGE`, `FOR UPDATE`, a view as its owner and with `security_invoker`, and the system catalogs. `connection/privdml.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn dml_privileges() {
+        big_stack(|| script(include_str!("connection/privdml.test")));
+    }
+
     /// A query that is a `UNION ALL` of `SELECT`s with the types of its columns and has `ORDER BY` becomes an append relation, as `flatten_simple_union_all` makes it, so the planner can plan a `Merge Append` of the plans of the `SELECT`s in the order. A `SELECT` with its own `WHERE` is not a member of the append relation, as `is_safe_append_member`, and its plan gets a sort. `connection/plan_union_all_order.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_union_all_order() {

@@ -18,6 +18,7 @@ use crate::expr::{BoolOp, Expr, ExprKind, FieldStore, Func, FuncForm, Var};
 use crate::from::{Column, FromItem, Relation};
 use crate::merge::Merge;
 use crate::modify::{carried_targets, set_columns};
+use crate::perm::{ACL_DELETE, ACL_INSERT, ACL_SELECT, ACL_UPDATE};
 use crate::select::{Query, Target};
 use crate::typename::place;
 use crate::types;
@@ -306,6 +307,10 @@ impl Analyzer<'_> {
             Some(Node::SelectStmt(select)) => Some(&**select),
             Some(_) => return Err(Error::internal("an INSERT source that is not SELECT")),
         };
+        // `DEFAULT VALUES` gives no column a value.
+        if select.is_some() {
+            self.mark_inserted(&given);
+        }
         let mut query = match select {
             None => {
                 let row = self.full_row(table, &columns, &given, Vec::new())?;
@@ -342,6 +347,9 @@ impl Analyzer<'_> {
             recheck = self.recheck(table, WriteKind::Update, &name, &columns, &checks);
         }
         let updated = conflict_set.map_or_else(Vec::new, |list| set_columns(list, &columns));
+        if conflict_set.is_some() {
+            self.mark_updated(&updated);
+        }
         if !checks.is_empty() {
             query = with_checks(&name, &columns, query, checks, &[]);
         }
@@ -510,7 +518,14 @@ impl Analyzer<'_> {
                     format!("constraint \"{conname}\" for table \"{name}\" does not exist"),
                 ));
             };
-            return Ok(Inference::Constraint(constraint.index));
+            // The columns of the constraint need `SELECT`.
+            let keys = constraint.keys.clone();
+            let index = constraint.index;
+            if let Some(perm) = self.target_perm_mut() {
+                perm.required |= ACL_SELECT;
+                perm.selected.extend(keys);
+            }
+            return Ok(Inference::Constraint(index));
         }
         let mut set = Vec::with_capacity(infer.indexElems.len());
         let mut exprs = Vec::new();
@@ -545,6 +560,11 @@ impl Analyzer<'_> {
                 // `resolve_unique_index_expr` puts the column reference at the inference clause.
                 .at_opt(place(infer.location)));
             };
+            // The column is a reference to the column, which needs `SELECT`.
+            if let Some(perm) = self.target_perm_mut() {
+                perm.required |= ACL_SELECT;
+                perm.selected.insert(i16::try_from(index + 1).unwrap_or(i16::MAX));
+            }
             set.push(index);
         }
         set.sort_unstable();
@@ -561,9 +581,9 @@ impl Analyzer<'_> {
         Ok(Inference::Columns { columns: set, exprs, predicate })
     }
 
-    /// `setTargetTable`: the OID, the name and the columns of the table that the statement writes. A table with a constraint or an object that the executor does not check yet gives `0A000`.
+    /// `setTargetTable`: the OID, the name and the columns of the table that the statement writes. A table with a constraint or an object that the executor does not check yet gives `0A000`. The table gets the privileges that the write needs, which a `MERGE` gives later from its clauses.
     pub(crate) fn target_table(
-        &self,
+        &mut self,
         rv: &RangeVar,
         kind: WriteKind,
     ) -> Result<(u32, String, Vec<Column>)> {
@@ -635,7 +655,15 @@ impl Analyzer<'_> {
                 not_null: c.not_null,
             })
             .collect();
-        Ok((oid, rel.name.clone(), columns))
+        let name = rel.name.clone();
+        let required = match kind {
+            WriteKind::Insert => ACL_INSERT,
+            WriteKind::Update => ACL_UPDATE,
+            WriteKind::Delete => ACL_DELETE,
+            WriteKind::Merge => 0,
+        };
+        self.target_perm = Some(self.add_perm(oid, required));
+        Ok((oid, name, columns))
     }
 
     /// True when the table has a trigger of the user that fires in the default mode and whose type has all the bits `bits`, such as `TRIGGER_ROW | TRIGGER_BEFORE | TRIGGER_INSERT`. With no bits, any such trigger counts.

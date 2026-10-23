@@ -1,0 +1,190 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE ROLE regress_pd1;
+CREATE ROLE
+> CREATE ROLE regress_pd2;
+CREATE ROLE
+> CREATE TABLE pt (a int PRIMARY KEY, b text, c int);
+CREATE TABLE
+> INSERT INTO pt VALUES (1, 'one', 10), (2, 'two', 20);
+INSERT 0 2
+> CREATE TABLE pq (x int);
+CREATE TABLE
+> INSERT INTO pq VALUES (1);
+INSERT 0 1
+> GRANT SELECT (a, b) ON pt TO regress_pd1;
+GRANT
+> GRANT INSERT (a, b) ON pt TO regress_pd1;
+GRANT
+> GRANT UPDATE (b) ON pt TO regress_pd1;
+GRANT
+> GRANT SELECT ON pq TO regress_pd2;
+GRANT
+> CREATE VIEW pv AS SELECT a, b FROM pt;
+CREATE VIEW
+> CREATE VIEW pvi WITH (security_invoker = true) AS SELECT a, b FROM pt;
+CREATE VIEW
+> GRANT SELECT ON pv, pvi TO regress_pd2;
+GRANT
+> SET ROLE regress_pd1;
+SET
+is_superuser=off
+> SELECT a, b FROM pt ORDER BY a;
+fields a@pt.1:23:4:-1,b@pt.2:25:-1:-1
+row 1,one
+row 2,two
+SELECT 2
+> SELECT c FROM pt;
+ERROR 42501 permission denied for table pt
+> SELECT * FROM pt;
+ERROR 42501 permission denied for table pt
+> SELECT count(*) FROM pt;
+fields count:20:8:-1
+row 2
+SELECT 1
+> SELECT pt FROM pt;
+ERROR 42501 permission denied for table pt
+> SELECT a FROM pt WHERE c = 10;
+ERROR 42501 permission denied for table pt
+> SELECT a FROM pt ORDER BY c;
+ERROR 42501 permission denied for table pt
+> SELECT x FROM pq;
+ERROR 42501 permission denied for table pq
+> SELECT a FROM pt JOIN pq ON true;
+ERROR 42501 permission denied for table pq
+> SELECT (SELECT max(a) FROM pt);
+fields max:23:4:-1
+row 2
+SELECT 1
+> SELECT a FROM pt FOR UPDATE;
+fields a@pt.1:23:4:-1
+row 1
+row 2
+SELECT 2
+> INSERT INTO pt (a, b) VALUES (3, 'three');
+INSERT 0 1
+> INSERT INTO pt VALUES (4, 'four', 40);
+ERROR 42501 permission denied for table pt
+> INSERT INTO pt (a, c) VALUES (5, 50);
+ERROR 42501 permission denied for table pt
+> INSERT INTO pt (a, b) VALUES (3, 'x') ON CONFLICT (a) DO NOTHING;
+INSERT 0 0
+> INSERT INTO pt (a, b) VALUES (3, 'x') ON CONFLICT (a) DO UPDATE SET b = excluded.b;
+INSERT 0 1
+> INSERT INTO pt (a, b) VALUES (3, 'x') ON CONFLICT (a) DO UPDATE SET c = 1;
+ERROR 42501 permission denied for table pt
+> INSERT INTO pt (a, b) VALUES (6, 'six') RETURNING a, b;
+fields a@pt.1:23:4:-1,b@pt.2:25:-1:-1
+row 6,six
+INSERT 0 1
+> INSERT INTO pt (a, b) VALUES (7, 'seven') RETURNING c;
+ERROR 42501 permission denied for table pt
+> UPDATE pt SET b = 'uno' WHERE a = 1;
+UPDATE 1
+> UPDATE pt SET b = 'uno';
+UPDATE 4
+> UPDATE pt SET c = 0 WHERE a = 1;
+ERROR 42501 permission denied for table pt
+> UPDATE pt SET b = 'dos' WHERE c = 20;
+ERROR 42501 permission denied for table pt
+> UPDATE pt SET b = b || '!' WHERE a = 2 RETURNING a, b;
+fields a@pt.1:23:4:-1,b@pt.2:25:-1:-1
+row 2,uno!
+UPDATE 1
+> DELETE FROM pt WHERE a = 1;
+ERROR 42501 permission denied for table pt
+> DELETE FROM pt;
+ERROR 42501 permission denied for table pt
+> MERGE INTO pt USING (VALUES (2, 'm')) AS s (k, v) ON pt.a = s.k WHEN MATCHED THEN UPDATE SET b = s.v;
+MERGE 1
+> MERGE INTO pt USING (VALUES (2, 'm')) AS s (k, v) ON pt.a = s.k WHEN MATCHED THEN DELETE;
+ERROR 42501 permission denied for table pt
+> SELECT * FROM pv;
+ERROR 42501 permission denied for view pv
+> SELECT relname FROM pg_class WHERE relname = 'pt';
+fields relname@pg_class.2:19:64:-1
+row pt
+SELECT 1
+> SELECT tablename FROM pg_tables WHERE tablename = 'pt';
+fields tablename@pg_tables.2:19:64:-1
+row pt
+SELECT 1
+> SELECT table_name FROM information_schema.tables WHERE table_name = 'pt';
+fields table_name@information_schema.tables.3:19:64:-1
+row pt
+SELECT 1
+> SELECT count(*) > 0 FROM pg_authid;
+ERROR 42501 permission denied for table pg_authid
+> RESET ROLE;
+RESET
+is_superuser=on
+> CREATE VIEW pvo AS SELECT a, c FROM pt;
+CREATE VIEW
+> CREATE VIEW pvp AS SELECT a, b FROM pt;
+CREATE VIEW
+> ALTER VIEW pvo OWNER TO regress_pd1;
+ALTER VIEW
+> ALTER VIEW pvp OWNER TO regress_pd1;
+ALTER VIEW
+> GRANT SELECT ON pvo, pvp TO regress_pd2;
+GRANT
+> SET ROLE regress_pd2;
+SET
+is_superuser=off
+> SELECT * FROM pv ORDER BY a;
+fields a@pv.1:23:4:-1,b@pv.2:25:-1:-1
+row 1,uno
+row 2,m
+row 3,uno
+row 6,uno
+SELECT 4
+> SELECT * FROM pvi;
+ERROR 42501 permission denied for table pt
+> SELECT * FROM pvo;
+ERROR 42501 permission denied for table pt
+> SELECT * FROM pvp ORDER BY a;
+fields a@pvp.1:23:4:-1,b@pvp.2:25:-1:-1
+row 1,uno
+row 2,m
+row 3,uno
+row 6,uno
+SELECT 4
+> SELECT * FROM pt;
+ERROR 42501 permission denied for table pt
+> SELECT x FROM pq;
+fields x@pq.1:23:4:-1
+row 1
+SELECT 1
+> UPDATE pq SET x = 2;
+ERROR 42501 permission denied for table pq
+> DELETE FROM pq;
+ERROR 42501 permission denied for table pq
+> INSERT INTO pq VALUES (2);
+ERROR 42501 permission denied for table pq
+> WITH w AS (SELECT x FROM pq) SELECT * FROM w;
+fields x@pq.1:23:4:-1
+row 1
+SELECT 1
+> WITH w AS (DELETE FROM pq RETURNING x) SELECT * FROM w;
+ERROR 42501 permission denied for table pq
+> RESET ROLE;
+RESET
+is_superuser=on
+> SELECT * FROM pt ORDER BY a;
+fields a@pt.1:23:4:-1,b@pt.2:25:-1:-1,c@pt.3:23:4:-1
+row 1,uno,10
+row 2,m,20
+row 3,uno,NULL
+row 6,uno,NULL
+SELECT 4
+> REVOKE ALL ON pt, pq, pv, pvi FROM regress_pd1, regress_pd2;
+REVOKE
+> DROP VIEW pv, pvi, pvo, pvp;
+DROP VIEW
+> DROP TABLE pt, pq;
+DROP TABLE
+> DROP ROLE regress_pd1;
+DROP ROLE
+> DROP ROLE regress_pd2;
+DROP ROLE

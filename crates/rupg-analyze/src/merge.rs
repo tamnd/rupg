@@ -17,6 +17,7 @@ use crate::expr::{Expr, ExprKind, Var};
 use crate::from::{Column, FromItem, Join, JoinKind, Relation};
 use crate::insert::{Foreign, Write, WriteKind, targets, with_checks};
 use crate::modify::{carried_targets, old_row, set_columns, table_oid_target, tid_target};
+use crate::perm::{ACL_DELETE, ACL_INSERT, ACL_SELECT, ACL_UPDATE};
 use crate::returning::rewrite;
 use crate::select::{Query, Target};
 use crate::typename::place;
@@ -123,6 +124,18 @@ impl Analyzer<'_> {
         }
         let rv = s.relation.as_deref().ok_or_else(|| Error::internal("a MERGE with no table"))?;
         let (table, name, columns) = self.target_table(rv, WriteKind::Merge)?;
+        // `DO NOTHING` needs `SELECT`, so that the target table needs some privilege.
+        let required = clauses.iter().fold(0, |bits, clause| {
+            bits | match clause.commandType {
+                CmdType::CMD_INSERT => ACL_INSERT,
+                CmdType::CMD_UPDATE => ACL_UPDATE,
+                CmdType::CMD_DELETE => ACL_DELETE,
+                _ => ACL_SELECT,
+            }
+        });
+        if let Some(perm) = self.target_perm_mut() {
+            perm.required |= required;
+        }
         let source =
             s.sourceRelation.as_ref().ok_or_else(|| Error::internal("a MERGE with no source"))?;
         let source = self.merge_from(rv, source)?;
@@ -254,6 +267,9 @@ impl Analyzer<'_> {
         let count = carried.len();
         query_targets.extend(carried_targets(carried));
         let uses = |command: MergeCommand| merge_clauses.iter().any(|c| c.command == command);
+        if !updated.is_empty() {
+            self.mark_updated(&updated);
+        }
         let foreign = |a: &Self, command: MergeCommand, kind: WriteKind| {
             if uses(command) { a.foreign_keys(table, kind, &columns) } else { Ok(Vec::new()) }
         };
@@ -323,6 +339,7 @@ impl Analyzer<'_> {
                     // `INSERT DEFAULT VALUES`.
                     Vec::new()
                 } else {
+                    self.mark_inserted(&given);
                     let items = self.value_items(&clause.values, Kind::ValuesSingle)?;
                     let explicit = !clause.targetList.is_empty();
                     self.insert_row(items, table, columns, &given, explicit, clause.r#override)?

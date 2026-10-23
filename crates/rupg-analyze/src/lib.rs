@@ -24,6 +24,7 @@ mod locking;
 mod merge;
 mod modify;
 pub mod node;
+mod perm;
 mod plpgsql;
 mod poly;
 mod prepare;
@@ -79,6 +80,7 @@ pub use funcargs::{arg_defaults, expand_arguments};
 pub use insert::{Action, Deferrable, Derived, Foreign, OnConflict, Unique, Write, WriteKind};
 pub use locking::{RowMark, check_outer_joins, first_row_mark, locked_tables};
 pub use merge::{MatchKind, Merge, MergeClause, MergeCommand};
+pub use perm::PermInfo;
 pub use plpgsql::{
     Variable, Variables, analyze_assign, analyze_assign_part, analyze_with, column_type,
     plpgsql_cast, relation_by_names, relation_row_type, row_type_fields,
@@ -259,6 +261,10 @@ pub(crate) struct Analyzer<'a> {
     variables: Option<&'a dyn Variables>,
     /// The target of an assignment of PL/pgSQL, for the coercion of the value in the analysis.
     assign: Option<plpgsql::Assign>,
+    /// `p_rteperminfos`: the privileges that the statement needs on its relations, for all the levels of the statement.
+    perms: Vec<PermInfo>,
+    /// The index in [`Analyzer::perms`] of the privileges of the target table of the write that the analyzer reads now, or `None`.
+    target_perm: Option<usize>,
 }
 
 impl<'a> Analyzer<'a> {
@@ -311,6 +317,8 @@ impl<'a> Analyzer<'a> {
             writes: 0,
             variables: None,
             assign: None,
+            perms: Vec::new(),
+            target_perm: None,
         }
     }
 
@@ -423,6 +431,7 @@ fn analyze_in<'a>(
     }
     query.params = analyzer.params;
     query.notices = analyzer.notices;
+    query.perms = analyzer.perms;
     Ok(query)
 }
 

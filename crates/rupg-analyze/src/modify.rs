@@ -44,6 +44,7 @@ impl Analyzer<'_> {
         self.write_with(s.withClause.as_deref())?;
         let rv = s.relation.as_deref().ok_or_else(|| Error::internal("an UPDATE with no table"))?;
         let (table, name, columns) = self.target_table(rv, WriteKind::Update)?;
+        self.mark_updated(&set_columns(&s.targetList, &columns));
         let from = self.target_from(rv, &s.fromClause)?;
         let filter = self.target_where(s.whereClause.as_ref())?;
         let row = self.update_row(rv, table, &name, &columns, &s.targetList)?;

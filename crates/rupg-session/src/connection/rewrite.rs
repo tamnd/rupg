@@ -248,7 +248,7 @@ impl Connection {
         }
         let plan = query::plan(&node, &reader, &params).and_then(|plan| plan.fold(None, &reader));
         self.filling.set(0);
-        let plan = plan?;
+        let plan = plan?.unchecked();
         let Some(info) = plan.write() else {
             return Err(Error::internal("the rewrite of a table with no plan of its rows"));
         };

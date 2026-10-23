@@ -918,7 +918,8 @@ fn leaf(
     let node = rupg_analyze::copy_insert(&target, &rv, &[]);
     let params =
         Params { types: live.iter().map(|&i| rel.columns[i].ty).collect(), variable: true };
-    let plan = query::plan(&node, reader, &params)?.fold(None, reader)?;
+    // `ExecCheckPermissions` checks the parent table, not the partition.
+    let plan = query::plan(&node, reader, &params)?.fold(None, reader)?.unchecked();
     let qualified = format!("{schemaname}.{}", rel.name);
     Ok(Leaf {
         oid,
