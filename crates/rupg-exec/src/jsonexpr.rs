@@ -268,7 +268,13 @@ impl Eval<'_> {
         for (name, arg) in &e.passing {
             vars.push(PathVar { name: name.clone(), ty: arg.ty, value: self.eval(arg)? });
         }
-        let call = Call { session: self.session, args: &[], ret: e.returning.ty, variadic: false };
+        let call = Call {
+            session: self.session,
+            args: &[],
+            ret: e.returning.ty,
+            variadic: false,
+            want: None,
+        };
         let want = e.op != JsonExprOp::Exists;
         let Some((found, mut items)) =
             rupg_func::sql_json_path(&call, &formatted, &path, &vars, throw, want)?

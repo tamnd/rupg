@@ -463,6 +463,8 @@ pub struct Call<'a> {
     pub ret: u32,
     /// True when the last argument is the array of a `VARIADIC` call.
     pub variadic: bool,
+    /// The number of rows that the caller reads from a set kernel, or `None` for all the rows. A function of the target list stops after them, as a function in the value-per-call mode of PostgreSQL gives no more rows when the node above it stops.
+    pub want: Option<usize>,
 }
 
 impl std::fmt::Debug for Call<'_> {
@@ -471,6 +473,7 @@ impl std::fmt::Debug for Call<'_> {
             .field("args", &self.args)
             .field("ret", &self.ret)
             .field("variadic", &self.variadic)
+            .field("want", &self.want)
             .finish_non_exhaustive()
     }
 }

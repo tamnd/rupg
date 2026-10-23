@@ -5800,6 +5800,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/inlinecat.test")));
     }
 
+    /// A function that gives a set in the target list stops after the rows that `LIMIT` reads, as a function in the value-per-call mode does: `generate_series` of the timestamps to infinity, of the integers and of `numeric`, with `OFFSET`, with more than one call, with nested calls and with an error after the last row that `LIMIT` reads. `connection/srflimit.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn srflimit() {
+        big_stack(|| script(include_str!("connection/srflimit.test")));
+    }
+
     /// A query that is a `UNION ALL` of `SELECT`s with the types of its columns and has `ORDER BY` becomes an append relation, as `flatten_simple_union_all` makes it, so the planner can plan a `Merge Append` of the plans of the `SELECT`s in the order. A `SELECT` with its own `WHERE` is not a member of the append relation, as `is_safe_append_member`, and its plan gets a sort. `connection/plan_union_all_order.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_union_all_order() {

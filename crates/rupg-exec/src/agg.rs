@@ -444,7 +444,13 @@ impl Agg<'_> {
                 let mut values = Vec::with_capacity(args.len() + 1);
                 values.push(std::mem::replace(value, Value::Null));
                 values.extend_from_slice(args);
-                let call = Call { session: eval.session, args: &types, ret: *ty, variadic: false };
+                let call = Call {
+                    session: eval.session,
+                    args: &types,
+                    ret: *ty,
+                    variadic: false,
+                    want: None,
+                };
                 *value = trans(&call, &values)?;
                 *empty = false;
             }
@@ -713,8 +719,13 @@ impl Agg<'_> {
                 Some((_, true)) if value.is_null() => Ok(Value::Null),
                 Some((f, _)) => {
                     let types = [*ty];
-                    let call =
-                        Call { session: eval.session, args: &types, ret: self.ty, variadic: false };
+                    let call = Call {
+                        session: eval.session,
+                        args: &types,
+                        ret: self.ty,
+                        variadic: false,
+                        want: None,
+                    };
                     f(&call, &[value])
                 }
             },
@@ -1253,7 +1264,7 @@ pub(crate) fn rows<'a>(
             eval.tuple = firsts[i];
             eval.group = std::mem::take(&mut groups[i]);
             eval.windows = std::mem::take(&mut values[i]);
-            eval.project(&query.targets, &levels, &mut rows)?;
+            eval.project(&query.targets, &levels, &mut rows, usize::MAX)?;
         }
         eval.windows.clear();
     }
@@ -1337,7 +1348,7 @@ fn rows_of_group<'a>(
             return Ok(());
         }
         if !windowed {
-            eval.project(&query.targets, levels, rows)?;
+            eval.project(&query.targets, levels, rows, usize::MAX)?;
         } else {
             kept.push((eval.tuple, std::mem::take(&mut eval.group)));
         }
