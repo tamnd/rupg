@@ -223,6 +223,7 @@ fn check(expr: &Expr) -> Result<()> {
             }
         }
         ExprKind::Grouping(g) => g.args.iter().try_for_each(check)?,
+        ExprKind::PlaceHolder(p) => check(&p.expr)?,
         ExprKind::JsonValue(_) | ExprKind::JsonCtor(_) | ExprKind::IsJson(_) => {
             expr.children().into_iter().try_for_each(check)?;
         }
@@ -2129,6 +2130,7 @@ impl<'a> Eval<'a> {
                 Ok(Value::Int4(bits))
             }
             ExprKind::JsonValue(v) => self.eval(&v.formatted),
+            ExprKind::PlaceHolder(p) => self.eval(&p.expr),
             ExprKind::JsonCtor(c) => self.json_ctor(c),
             ExprKind::IsJson(p) => self.is_json(p),
             ExprKind::JsonExpr(e) => self.json_expr(e),

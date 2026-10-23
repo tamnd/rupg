@@ -116,6 +116,7 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
             at = found.parent;
         }
         let mut d = Deparser::new(self.session, false, 0);
+        d.flat = true;
         d.namespaces = chain.iter().rev().map(|s| self.spaces[*s].clone()).collect();
         d.prefix = prefix;
         d.outer_prefix = true;

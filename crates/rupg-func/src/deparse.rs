@@ -95,7 +95,7 @@ struct JoinNames {
     print_aliases: bool,
 }
 
-/// A deparse of an expression or of a query, as `deparse_context`. Each form of the functions sets `PRETTYFLAG_INDENT`, so a `CASE` always takes more than one line.
+/// A deparse of an expression or of a query, as `deparse_context`. Each form of the functions sets `PRETTYFLAG_INDENT`, so a `CASE` always takes more than one line. `EXPLAIN` does not set it.
 struct Deparser<'a> {
     session: &'a dyn Session,
     /// The names of the queries that have the expression, the outermost query first. A `Var` finds its relation in the namespace of its level.
@@ -104,6 +104,8 @@ struct Deparser<'a> {
     paren: bool,
     /// `indentLevel`.
     indent: i32,
+    /// For `EXPLAIN`, `PRETTYFLAG_INDENT` is not set, as `deparse_expression` makes the context: a keyword does not start a new line.
+    pub(crate) flat: bool,
     /// `wrapColumn`: the length of a line after which the target list and `FROM` start a new line for the next item, or -1 to keep the items on one line.
     wrap: i32,
     /// `varprefix`: show the name of the relation before the name of each column.
@@ -169,6 +171,7 @@ impl<'a> Deparser<'a> {
             namespaces: Vec::new(),
             paren,
             indent: 0,
+            flat: false,
             wrap,
             prefix: false,
             names_visible: true,
@@ -187,6 +190,10 @@ impl<'a> Deparser<'a> {
 
     /// `appendContextKeyword`: a new line with the indent and `plus` more spaces, then the keyword.
     fn keyword(&mut self, word: &str, before: i32, after: i32, plus: i32) {
+        if self.flat {
+            self.buf.push_str(word);
+            return;
+        }
         self.indent += before;
         let kept = self.buf.trim_end_matches(' ').len();
         self.buf.truncate(kept);
@@ -201,6 +208,13 @@ impl<'a> Deparser<'a> {
         }
         self.buf.push_str(word);
         self.indent = (self.indent + after).max(0);
+    }
+
+    /// The space that `get_rule_expr` adds before a keyword when the keyword does not start a new line.
+    fn space(&mut self) {
+        if self.flat {
+            self.buf.push(' ');
+        }
     }
 
     /// `get_variable`: the column with the name of its relation when the query needs it, and the name of the column. A column of `ORDER BY` also shows the name of its relation when a column of the result has the same name and shows another value.
@@ -517,6 +531,12 @@ impl<'a> Deparser<'a> {
             ExprKind::Grouping(g) => {
                 self.buf.push_str("GROUPING(");
                 self.list(&g.args, true)?;
+                self.buf.push(')');
+            }
+            // A `PlaceHolderVar` above the node that computes it reads it from below, as `get_variable` shows a target of the node below that is not a column.
+            ExprKind::PlaceHolder(p) => {
+                self.buf.push('(');
+                self.expr(&p.expr, true)?;
                 self.buf.push(')');
             }
             ExprKind::Window(w) => self.window_func(w)?,
@@ -1122,13 +1142,16 @@ impl<'a> Deparser<'a> {
             {
                 shown = right;
             }
+            self.space();
             self.keyword("WHEN ", 0, 0, 0);
             self.expr(shown, false)?;
             self.buf.push_str(" THEN ");
             self.expr(result, true)?;
         }
+        self.space();
         self.keyword("ELSE ", 0, 0, 0);
         self.expr(&case.default, true)?;
+        self.space();
         self.keyword("END", -INDENT_VAR, 0, 0);
         Ok(())
     }
@@ -1195,6 +1218,7 @@ fn own_syntax(parent: &Expr) -> bool {
         | ExprKind::NullIf { .. }
         | ExprKind::Agg(_)
         | ExprKind::Grouping(_)
+        | ExprKind::PlaceHolder(_)
         | ExprKind::Window(_)
         | ExprKind::Xml(_)
         | ExprKind::Case(_) => true,
@@ -1249,6 +1273,7 @@ fn is_simple(e: &Expr, parent: &Expr, paren: bool) -> bool {
         | ExprKind::NullIf { .. }
         | ExprKind::Agg(_)
         | ExprKind::Grouping(_)
+        | ExprKind::PlaceHolder(_)
         | ExprKind::Window(_)
         | ExprKind::JsonCtor(_)
         | ExprKind::JsonExpr(_)

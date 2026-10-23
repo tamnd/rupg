@@ -377,8 +377,6 @@ struct Fold<'a> {
     relations: &'a [Relation],
     /// For each relation, true when an outer join can make its columns null where the expression is.
     nulled: Vec<bool>,
-    /// For each relation, true when an outer join of the query can make its columns null.
-    wrapped: Vec<bool>,
     /// For each relation, true for a subquery that the planner pulls up into the query.
     pulled: Vec<bool>,
     /// `case_val`: the argument of each open `CASE` when it is a constant.
@@ -490,15 +488,7 @@ impl<'a> Fold<'a> {
             .iter()
             .map(|r| query.set_op.is_none() && r.subquery.as_deref().is_some_and(simple_subquery))
             .collect();
-        Fold {
-            params,
-            session,
-            relations: &query.relations,
-            wrapped: nulled.clone(),
-            nulled,
-            pulled,
-            case: Vec::new(),
-        }
+        Fold { params, session, relations: &query.relations, nulled, pulled, case: Vec::new() }
     }
 
     /// The subquery in `FROM` that the planner pulls up for a relation.
@@ -518,7 +508,7 @@ impl<'a> Fold<'a> {
         let (Some(sub), Some(target)) = (sub, target) else { return Ok(expr.clone()) };
         let folded = Fold::new(sub, self.params, self.session).expr(&target.expr)?;
         Ok(match folded.kind {
-            ExprKind::Const(v) if !self.wrapped[var.relation] => with(expr, ExprKind::Const(v)),
+            ExprKind::Const(v) if !self.nulled[var.relation] => with(expr, ExprKind::Const(v)),
             _ => expr.clone(),
         })
     }
@@ -647,6 +637,7 @@ impl<'a> Fold<'a> {
                 }
             }
             ExprKind::Grouping(g) => self.all(&mut g.args),
+            ExprKind::PlaceHolder(p) => self.subqueries(&mut p.expr),
             ExprKind::JsonValue(v) => {
                 self.subqueries(&mut v.raw)?;
                 self.subqueries(&mut v.formatted)
@@ -965,6 +956,8 @@ impl<'a> Fold<'a> {
             }
             // The value of `GROUPING` depends on the grouping set of the row.
             ExprKind::Grouping(_) => Ok(expr.clone()),
+            // The value of a `PlaceHolderVar` depends on the outer join above it.
+            ExprKind::PlaceHolder(_) => Ok(expr.clone()),
             // A `JsonValueExpr` with a constant value is the constant.
             ExprKind::JsonValue(v) => {
                 let formatted = self.expr(&v.formatted)?;

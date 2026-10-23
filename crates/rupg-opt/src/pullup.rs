@@ -4,11 +4,14 @@
 //!
 //! Before that, each part of `WHERE` that is `EXISTS`, `NOT EXISTS` or `ANY` on a subquery that can be a join becomes a semi join or an anti join, as `pull_up_sublinks` makes it.
 
+use std::cell::Cell;
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
+use std::ptr;
 
 use rupg_analyze::{
-    BoolOp, BoolTest, Column, Expr, ExprKind, FromItem, Func, FuncForm, Join, JoinKind, Query,
-    Relation, SubLink, SubLinkKind, Var,
+    BoolOp, BoolTest, Column, Expr, ExprKind, FromItem, Func, FuncForm, Join, JoinKind,
+    PlaceHolder, Query, Relation, SubLink, SubLinkKind, Var,
 };
 use rupg_pgcatalog::builtin;
 use rupg_types::{Value, oid};
@@ -386,6 +389,7 @@ pub(crate) fn nonnullable_vars(expr: &Expr, top: bool) -> BTreeSet<(usize, i16)>
         ExprKind::ScalarArrayOp { func, args, .. } if strict(*func) => union(args, false),
         ExprKind::Relabel(arg, _) | ExprKind::ArrayCoerce { arg, .. } => nonnullable_vars(arg, top),
         ExprKind::CoerceViaIo(arg, _) => nonnullable_vars(arg, false),
+        ExprKind::PlaceHolder(p) if p.levels_up == 0 => nonnullable_vars(&p.expr, top),
         ExprKind::NullTest(arg, false) if top => nonnullable_vars(arg, false),
         ExprKind::BooleanTest(
             arg,
@@ -421,6 +425,10 @@ fn moved(base: usize) -> impl FnMut(&mut Expr, usize) -> bool {
             ExprKind::Var(v) if v.levels_up > depth => v.levels_up -= 1,
             ExprKind::Agg(agg) if agg.levels_up > depth => agg.levels_up -= 1,
             ExprKind::Grouping(g) if g.levels_up > depth => g.levels_up -= 1,
+            ExprKind::PlaceHolder(p) if p.levels_up == depth => {
+                p.relations.iter_mut().for_each(|k| *k += base);
+            }
+            ExprKind::PlaceHolder(p) if p.levels_up > depth => p.levels_up -= 1,
             _ => {}
         }
         false
@@ -477,7 +485,7 @@ fn places(item: &FromItem, top: bool, on: bool, out: &mut Vec<(usize, bool, bool
     }
 }
 
-/// The first subquery of `FROM` that the planner merges, with true when it is an item of the list of `FROM`. The planner does not merge a `LATERAL` subquery, a view or a query of `WITH` yet. Below the side of an outer join that can give nulls, each target of the subquery that the query reads must be a column, because a `PlaceHolderVar` would keep the other expressions. In a join, the subquery has one item in `FROM`, and its `WHERE` joins the `ON` of the join, so that the subquery is not the side of an outer join that keeps its rows or a side of a full join when it has a `WHERE`. The query does not read the whole row of the subquery, which `pullup_replace_vars` makes a `ROW` of the targets.
+/// The first subquery of `FROM` that the planner merges, with true when it is an item of the list of `FROM`. The planner does not merge a `LATERAL` subquery, a view or a query of `WITH` yet. Below the side of an outer join that can give nulls, a target of the subquery that is not a column becomes a `PlaceHolderVar`, which the planner makes here only for a subquery with a `FROM`, for a reference of the query itself and for a target with no subquery. In a join, the subquery has one item in `FROM`, and its `WHERE` joins the `ON` of the join, so that the subquery is not the side of an outer join that keeps its rows or a side of a full join when it has a `WHERE`. The query does not read the whole row of the subquery, which `pullup_replace_vars` makes a `ROW` of the targets.
 fn candidate(query: &Query) -> Option<(usize, bool)> {
     if query.set_op.is_some()
         || query.write.is_some()
@@ -498,11 +506,22 @@ fn candidate(query: &Query) -> Option<(usize, bool)> {
         let relation = query.relations.get(r)?;
         let sub = pullable(relation)?;
         let used = used(query, r);
+        let target =
+            |attnum: i16| usize::try_from(attnum - 1).ok().and_then(|at| sub.targets.get(at));
         let column = |attnum: &i16| {
-            let target = usize::try_from(*attnum - 1).ok().and_then(|at| sub.targets.get(at));
-            target.is_some_and(|t| matches!(t.expr.kind, ExprKind::Var(v) if v.levels_up == 0))
+            target(*attnum)
+                .is_some_and(|t| matches!(t.expr.kind, ExprKind::Var(v) if v.levels_up == 0))
         };
-        let columns = !nullable.contains(&r) || used.iter().all(column);
+        let wrappable = |attnum: &i16| {
+            target(*attnum).is_some_and(|t| {
+                t.expr
+                    .find(0, &mut |e, _| matches!(e.kind, ExprKind::SubLink(_)).then_some(()))
+                    .is_none()
+            })
+        };
+        let columns = !nullable.contains(&r)
+            || used_from(query, r, 1).iter().all(column)
+                && (!sub.from.is_empty() && used.iter().all(wrappable) || used.iter().all(column));
         let fits = top
             || sub.from.len() == 1 && (sub.filter.is_none() || on)
             || sub.from.is_empty() && query.from.iter().any(|item| removable(item, r));
@@ -532,10 +551,16 @@ fn pullable(relation: &Relation) -> Option<&Query> {
 
 /// The numbers of the columns of the relation `r` that the query reads, with 0 for the whole row. The columns of a join do not count, because the expressions of the query read the columns of the relations.
 pub(crate) fn used(query: &Query, r: usize) -> Vec<i16> {
+    used_from(query, r, 0)
+}
+
+/// [`used`] for the expressions that are `below` or more subqueries below the query.
+fn used_from(query: &Query, r: usize, below: usize) -> Vec<i16> {
     let mut out = Vec::new();
     let mut add = |e: &Expr, depth: usize| {
         if let ExprKind::Var(v) = e.kind
             && v.levels_up == depth
+            && depth >= below
             && v.relation == r
         {
             out.push(v.attnum);
@@ -595,14 +620,45 @@ fn take_place(items: &mut [FromItem], r: usize, with: &mut Option<FromItem>) {
 
 /// `pull_up_simple_subquery`: merges the subquery of the relation `r` into the query.
 fn merge(query: &mut Query, r: usize, top: bool) {
+    let mut nullable = Vec::new();
+    for item in &query.from {
+        nullable_places(item, false, &mut nullable);
+    }
+    let nulled = nullable.contains(&r);
+    let mut plain = Vec::new();
+    for item in &query.from {
+        plain_on(item, r, &mut plain);
+    }
     let Some(sub) = query.relations.remove(r).subquery else { return };
     let mut sub = *sub;
     // `replace_empty_jointree`: a subquery with no `FROM` has an `RTE_RESULT` in its range table.
     let result = usize::from(sub.from.is_empty() && sub.pulled == 0);
     move_up(&mut sub, query.relations.len());
-    // `pullup_replace_vars`: a column of the subquery becomes the expression of its target, and the relations after the subquery move down one place.
+    let mut inside = Vec::new();
+    for item in &sub.from {
+        pushdown::rels(item, &mut inside);
+    }
+    // `pullup_replace_vars`: a column of the subquery becomes the expression of its target, and the relations after the subquery move down one place. Above an outer join that gives nulls for the subquery, a target that can be not null for a null row is a `PlaceHolderVar`, and `substitute_phv_relids` gives a `PlaceHolderVar` of the relation the relations of the subquery.
     let targets: Vec<Expr> = sub.targets.iter().map(|t| t.expr.clone()).collect();
+    let wrap = Cell::new(false);
     let mut outer = |e: &mut Expr, depth: usize| {
+        if let ExprKind::PlaceHolder(p) = &mut e.kind
+            && p.levels_up == depth
+        {
+            let mut relations: Vec<usize> = p
+                .relations
+                .iter()
+                .flat_map(|&k| match k.cmp(&r) {
+                    Ordering::Less => vec![k],
+                    Ordering::Equal => inside.clone(),
+                    Ordering::Greater => vec![k - 1],
+                })
+                .collect();
+            relations.sort_unstable();
+            relations.dedup();
+            p.relations = relations;
+            return false;
+        }
         let ExprKind::Var(v) = &mut e.kind else { return false };
         if v.levels_up != depth {
             return false;
@@ -611,6 +667,12 @@ fn merge(query: &mut Query, r: usize, top: bool) {
             let at = usize::try_from(v.attnum - 1).ok();
             if let Some(target) = at.and_then(|at| targets.get(at)) {
                 let mut new = target.clone();
+                if wrap.get() && needs_placeholder(&new) {
+                    let (ty, typmod) = (new.ty, new.typmod);
+                    let p = PlaceHolder { expr: new, relations: inside.clone(), levels_up: 0 };
+                    new = Expr::new(ExprKind::PlaceHolder(Box::new(p)), ty);
+                    new.typmod = typmod;
+                }
                 new.raise(depth);
                 *e = new;
                 return true;
@@ -620,7 +682,11 @@ fn merge(query: &mut Query, r: usize, top: bool) {
         }
         false
     };
-    query.each_expr_mut(0, &mut |e, depth| e.each_mut(depth, &mut outer));
+    query.each_expr_mut(0, &mut |e, depth| {
+        wrap.set(nulled && !plain.contains(&ptr::from_ref(&*e)));
+        e.each_mut(depth, &mut outer);
+    });
+    wrap.set(nulled);
     join_columns(&mut query.from, &mut |e| e.each_mut(0, &mut outer));
     // The subquery takes the place of its relation in `FROM`: its items in the list of `FROM`, or its one item in a join.
     let gone = usize::MAX;
@@ -648,6 +714,47 @@ fn merge(query: &mut Query, r: usize, top: bool) {
     query.pulled += 1 + sub.pulled + result;
     if let Some(filter) = sub.filter {
         query.filter = Some(and(filter, query.filter.take()));
+    }
+}
+
+/// The conditions of `ON` that read the values of the relation `r` with no outer join between them that gives nulls for it: the `ON` of each join of `r` with no outer join below it that gives nulls for `r`, as the `varnullingrels` of the columns of `r` in the condition are empty. Gives true when an outer join in the item gives nulls for `r`, or `None` when the item does not have `r`.
+fn plain_on(item: &FromItem, r: usize, out: &mut Vec<*const Expr>) -> Option<bool> {
+    match item {
+        FromItem::Relation(k) => (*k == r).then_some(false),
+        FromItem::Join(join) => {
+            let (nulled, left) = match (plain_on(&join.left, r, out), plain_on(&join.right, r, out))
+            {
+                (Some(nulled), _) => (nulled, true),
+                (None, Some(nulled)) => (nulled, false),
+                (None, None) => return None,
+            };
+            if !nulled && let Some(on) = &join.on {
+                out.push(ptr::from_ref(on));
+            }
+            let nulls = match join.kind {
+                JoinKind::Full => true,
+                JoinKind::Left => !left,
+                JoinKind::Right => left,
+                _ => false,
+            };
+            Some(nulled || nulls)
+        }
+    }
+}
+
+/// True when a target of a subquery needs a `PlaceHolderVar` above an outer join that gives nulls for the subquery, as `pullup_replace_vars_callback` finds it. A column and a `PlaceHolderVar` of the query do not, and neither does an expression that reads one of them with no construct that can give a value for a null.
+fn needs_placeholder(target: &Expr) -> bool {
+    match &target.kind {
+        ExprKind::Var(v) => v.levels_up != 0,
+        ExprKind::PlaceHolder(p) => p.levels_up != 0,
+        _ => {
+            let reads = target.find(0, &mut |e, depth| match &e.kind {
+                ExprKind::Var(v) if v.levels_up == depth => Some(()),
+                ExprKind::PlaceHolder(p) if p.levels_up == depth => Some(()),
+                _ => None,
+            });
+            reads.is_none() || exprs::nonstrict(target)
+        }
     }
 }
 

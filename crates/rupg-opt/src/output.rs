@@ -2,6 +2,9 @@
 //!
 //! The width of a node is the width of the values that the nodes above it read, as the width of the `PathTarget` of its path. A scan below a join or an `Agg` gives all the columns of its relation, as a physical target list, but its width counts only the columns that the nodes above read.
 
+use std::borrow::Cow;
+use std::collections::BTreeSet;
+
 use rupg_analyze::{Expr, ExprKind, Var};
 use rupg_plan::{Item, Kind, Node, Operation, Replaced};
 
@@ -21,6 +24,7 @@ pub(crate) fn level<'q>(level: &Level<'q>, node: &mut Node<'q>) {
         targets.into_iter().chain(level.marks.iter().map(|m| item(m.clone()))).collect()
     };
     set(level, node, want, false);
+    placeholders(level, node);
 }
 
 /// The item of an expression that the planner made.
@@ -507,13 +511,24 @@ fn join<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, parts: 
     }
     let sides: Vec<_> = node.children.iter().map(from::node_rels).collect();
     let all = from::node_rels(node);
+    // `add_placeholders_to_joinrel`: the join computes a `PlaceHolderVar` that no side gives, from the columns of the sides.
+    let mut computed = Vec::new();
+    for n in &needed {
+        if let ExprKind::PlaceHolder(p) = &n.expr.kind
+            && !sides.iter().any(|rels| from_rels(&n.expr, rels))
+        {
+            add_columns(&p.expr, 0, &mut computed);
+        }
+    }
+    for c in computed {
+        if !needed.iter().any(|n| n.expr.same(&c.expr)) {
+            needed.push(c);
+        }
+    }
     for (i, child) in node.children.iter_mut().enumerate() {
         let rels = &sides[i];
-        let mut below: Vec<Item<'q>> = needed
-            .iter()
-            .filter(|n| matches!(n.expr.kind, ExprKind::Var(v) if rels.contains(&v.relation)))
-            .cloned()
-            .collect();
+        let mut below: Vec<Item<'q>> =
+            needed.iter().filter(|n| from_rels(&n.expr, rels)).cloned().collect();
         // A condition of this join that an equivalence class took the place of still needs the columns of each side.
         for clause in &level.joined {
             let used = exprs::relations(clause);
@@ -523,9 +538,7 @@ fn join<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, parts: 
             let mut columns = Vec::new();
             add_columns(clause, 0, &mut columns);
             for col in columns {
-                if matches!(col.expr.kind, ExprKind::Var(v) if rels.contains(&v.relation))
-                    && !below.iter().any(|b| b.expr.same(&col.expr))
-                {
+                if from_rels(&col.expr, rels) && !below.iter().any(|b| b.expr.same(&col.expr)) {
                     below.push(col);
                 }
             }
@@ -544,7 +557,7 @@ fn join<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, parts: 
                     let mut refs = Vec::new();
                     add_columns(expr, depth, &mut refs);
                     for col in refs {
-                        if matches!(col.expr.kind, ExprKind::Var(v) if rels.contains(&v.relation))
+                        if from_rels(&col.expr, rels)
                             && !below.iter().any(|b| b.expr.same(&col.expr))
                         {
                             below.push(col);
@@ -553,8 +566,84 @@ fn join<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, parts: 
                 }
             }
         }
+        // `add_placeholders_to_base_rels` and `add_placeholders_to_joinrel` add the `PlaceHolderVar`s after the columns.
+        below.sort_by_key(|b| matches!(b.expr.kind, ExprKind::PlaceHolder(_)));
         set(level, child, below, true);
     }
     node.cost.width = width(level, node.scope, &want);
     node.output = want;
+}
+
+/// True when a column or a `PlaceHolderVar` comes from the relations `rels`. A `PlaceHolderVar` comes from the scan or the join that computes it.
+fn from_rels(expr: &Expr, rels: &BTreeSet<usize>) -> bool {
+    match &expr.kind {
+        ExprKind::Var(v) => rels.contains(&v.relation),
+        ExprKind::PlaceHolder(p) => exprs::eval_at(p).is_subset(rels),
+        _ => false,
+    }
+}
+
+/// `fix_scan_expr` and `fix_join_expr` for each `PlaceHolderVar` of the plan of a query level: the node that computes it shows its expression, and a node above that node reads it from below. A scan computes each `PlaceHolderVar` of its relation, and a join each one of its relations that no side gives.
+fn placeholders(level: &Level<'_>, node: &mut Node<'_>) {
+    if node.scope != level.scope && node.scope != level.display {
+        return;
+    }
+    let mut given: Vec<Expr> = Vec::new();
+    for child in &node.children {
+        let outputs = child.output.iter().filter(|o| exprs::is_placeholder(&o.expr));
+        given.extend(outputs.map(|o| o.expr.as_ref().clone()));
+    }
+    for child in &mut node.children {
+        placeholders(level, child);
+    }
+    let rels = from::node_rels(node);
+    for item in items_mut(node) {
+        let mut has = false;
+        item.expr.find(0, &mut |e, _| {
+            has |= exprs::is_placeholder(e);
+            None::<()>
+        });
+        if has {
+            let mut expr = item.expr.as_ref().clone();
+            expr.each_mut(0, &mut |e, depth| {
+                if depth == 0
+                    && let ExprKind::PlaceHolder(p) = &e.kind
+                    && p.levels_up == 0
+                    && exprs::eval_at(p).is_subset(&rels)
+                    && !given.iter().any(|g| g.same(e))
+                {
+                    *e = p.expr.clone();
+                }
+                false
+            });
+            item.expr = Cow::Owned(expr);
+        }
+    }
+}
+
+/// The expressions of a node.
+fn items_mut<'n, 'q>(node: &'n mut Node<'q>) -> Vec<&'n mut Item<'q>> {
+    let mut out: Vec<&mut Item<'q>> = node.output.iter_mut().chain(&mut node.filter).collect();
+    match &mut node.kind {
+        Kind::Result { one_time: items, .. }
+        | Kind::IndexScan { cond: items, .. }
+        | Kind::BitmapHeapScan { recheck: items, .. }
+        | Kind::BitmapIndexScan { cond: items, .. }
+        | Kind::NestedLoop { join_filter: items, .. } => out.extend(items),
+        Kind::MergeJoin { cond, join_filter, .. } | Kind::HashJoin { cond, join_filter, .. } => {
+            out.extend(cond.iter_mut().chain(join_filter));
+        }
+        Kind::Aggregate { keys, sets, .. } => {
+            out.extend(keys);
+            for rollup in sets {
+                out.extend(rollup.sort.iter_mut().map(|k| &mut k.item));
+                out.extend(rollup.sets.iter_mut().flatten());
+            }
+        }
+        Kind::Sort(keys) | Kind::IncrementalSort { keys, .. } | Kind::MergeAppend(keys) => {
+            out.extend(keys.iter_mut().map(|k| &mut k.item));
+        }
+        _ => {}
+    }
+    out
 }

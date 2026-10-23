@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `EXPLAIN` of a query that merges a subquery on the side of an outer join that can give nulls now shows the columns of the subquery that are not plain columns as `PlaceHolderVar`s, as PostgreSQL does: the scan or the join below computes the value, the nodes above read it in parentheses, and the costs, the widths and the number of groups match. A constant column in the `ON` of that join now folds, and a `CASE` in `EXPLAIN` now takes one line. (#NNN)
 - A `btree` index of a table with rows has two pages for the planner, the metapage and the root, as in PostgreSQL, so the cost of a nested loop over a scan of the index is the cost of PostgreSQL. (#594)
 
 ## 0.1.70 (2026-10-23)
