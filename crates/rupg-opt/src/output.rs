@@ -99,7 +99,12 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
                 set(level, child, want, false);
             }
             node.output.clear();
-            node.cost.width = 0;
+            // `create_modifytable_path`: with `RETURNING`, the node has the width of the rows below it.
+            let returning = level.query.write.as_ref().is_some_and(|w| w.returning.is_some());
+            node.cost.width = match node.children.first() {
+                Some(child) if returning => child.cost.width,
+                _ => 0,
+            };
         }
         // `make_sort_input_target`: a `Result` above the sort computes the targets that come after the sort from the other targets and from the columns, the aggregate calls and the window calls of those targets, which the sort gives.
         Kind::Result { replaces: None, one_time }

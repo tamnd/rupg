@@ -5579,6 +5579,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_window_order.test")));
     }
 
+    /// The cost of a `Sample Scan`, as `set_tablesample_rel_size` and `cost_samplescan` find it: `SYSTEM` reads the fraction of the pages of the table, each at the cost of a random page, and `BERNOULLI` reads each page in order. `Sampling` shows `REPEATABLE` on the same line in the text form, and the other forms have a property for each part. A `ModifyTable` with `RETURNING` has the rows and the width of the node below it, as `create_modifytable_path`. `connection/plan_sample_returning.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_sample_returning() {
+        big_stack(|| script(include_str!("connection/plan_sample_returning.test")));
+    }
+
     /// A query that is a `UNION ALL` of `SELECT`s with the types of its columns and has `ORDER BY` becomes an append relation, as `flatten_simple_union_all` makes it, so the planner can plan a `Merge Append` of the plans of the `SELECT`s in the order. A `SELECT` with its own `WHERE` is not a member of the append relation, as `is_safe_append_member`, and its plan gets a sort. `connection/plan_union_all_order.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_union_all_order() {

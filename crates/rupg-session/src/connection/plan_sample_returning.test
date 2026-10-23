@@ -1,0 +1,134 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (id int PRIMARY KEY, x int, y int, t text);
+CREATE TABLE
+> CREATE TABLE b (id int PRIMARY KEY, aid int, z int);
+CREATE TABLE
+> INSERT INTO a SELECT g, g % 7, g % 3, 'v' || g FROM generate_series(1, 50) g;
+INSERT 0 50
+> EXPLAIN SELECT * FROM a TABLESAMPLE SYSTEM (10);
+fields QUERY PLAN:25:-1:-1
+row Sample Scan on a  (cost=0.00..5.13 rows=113 width=44)
+row   Sampling: system ('10'::real)
+EXPLAIN
+> EXPLAIN SELECT * FROM a TABLESAMPLE BERNOULLI (10);
+fields QUERY PLAN:25:-1:-1
+row Sample Scan on a  (cost=0.00..11.13 rows=113 width=44)
+row   Sampling: bernoulli ('10'::real)
+EXPLAIN
+> EXPLAIN SELECT * FROM a TABLESAMPLE SYSTEM (33.3) WHERE x = 1;
+fields QUERY PLAN:25:-1:-1
+row Sample Scan on a  (cost=0.00..16.70 rows=2 width=44)
+row   Sampling: system ('33.3'::real)
+row   Filter: (x = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM a TABLESAMPLE SYSTEM (0.5);
+fields QUERY PLAN:25:-1:-1
+row Sample Scan on a  (cost=0.00..4.06 rows=6 width=44)
+row   Sampling: system ('0.5'::real)
+EXPLAIN
+> EXPLAIN SELECT * FROM a TABLESAMPLE SYSTEM (100);
+fields QUERY PLAN:25:-1:-1
+row Sample Scan on a  (cost=0.00..51.30 rows=1130 width=44)
+row   Sampling: system ('100'::real)
+EXPLAIN
+> EXPLAIN SELECT * FROM a TABLESAMPLE BERNOULLI (100) REPEATABLE (1);
+fields QUERY PLAN:25:-1:-1
+row Sample Scan on a  (cost=0.00..21.30 rows=1130 width=44)
+row   Sampling: bernoulli ('100'::real) REPEATABLE ('1'::double precision)
+EXPLAIN
+> EXPLAIN SELECT * FROM a TABLESAMPLE SYSTEM (20) REPEATABLE (7) JOIN b ON a.id = b.aid;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=13.09..48.94 rows=2040 width=56)
+row   Hash Cond: (b.aid = a.id)
+row   ->  Seq Scan on b  (cost=0.00..30.40 rows=2040 width=12)
+row   ->  Hash  (cost=10.26..10.26 rows=226 width=44)
+row         ->  Sample Scan on a  (cost=0.00..10.26 rows=226 width=44)
+row               Sampling: system ('20'::real) REPEATABLE ('7'::double precision)
+EXPLAIN
+> EXPLAIN (FORMAT JSON) SELECT * FROM a TABLESAMPLE SYSTEM (10) REPEATABLE (3);
+fields QUERY PLAN:114:-1:-1
+row [
+  {
+    "Plan": {
+      "Node Type": "Sample Scan",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Relation Name": "a",
+      "Alias": "a",
+      "Startup Cost": 0.00,
+      "Total Cost": 5.13,
+      "Plan Rows": 113,
+      "Plan Width": 44,
+      "Disabled": false,
+      "Sampling Method": "system",
+      "Sampling Parameters": ["'10'::real"],
+      "Repeatable Seed": "'3'::double precision"
+    }
+  }
+]
+EXPLAIN
+> EXPLAIN (FORMAT YAML) SELECT * FROM a TABLESAMPLE BERNOULLI (50);
+fields QUERY PLAN:25:-1:-1
+row - Plan: 
+    Node Type: "Sample Scan"
+    Parallel Aware: false
+    Async Capable: false
+    Relation Name: "a"
+    Alias: "a"
+    Startup Cost: 0.00
+    Total Cost: 15.65
+    Plan Rows: 565
+    Plan Width: 44
+    Disabled: false
+    Sampling Method: "bernoulli"
+    Sampling Parameters: 
+      - "'50'::real"
+EXPLAIN
+> EXPLAIN INSERT INTO b SELECT id, x, y FROM a RETURNING *;
+fields QUERY PLAN:25:-1:-1
+row Insert on b  (cost=0.00..21.30 rows=1130 width=12)
+row   ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=12)
+EXPLAIN
+> EXPLAIN INSERT INTO b SELECT id, x, y FROM a RETURNING id;
+fields QUERY PLAN:25:-1:-1
+row Insert on b  (cost=0.00..21.30 rows=1130 width=12)
+row   ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=12)
+EXPLAIN
+> EXPLAIN UPDATE b SET z = z + 1 RETURNING id, z;
+fields QUERY PLAN:25:-1:-1
+row Update on b  (cost=0.00..35.50 rows=2040 width=10)
+row   ->  Seq Scan on b  (cost=0.00..35.50 rows=2040 width=10)
+EXPLAIN
+> EXPLAIN DELETE FROM b WHERE z = 1 RETURNING *;
+fields QUERY PLAN:25:-1:-1
+row Delete on b  (cost=0.00..35.50 rows=10 width=6)
+row   ->  Seq Scan on b  (cost=0.00..35.50 rows=10 width=6)
+row         Filter: (z = 1)
+EXPLAIN
+> EXPLAIN DELETE FROM b WHERE z = 1;
+fields QUERY PLAN:25:-1:-1
+row Delete on b  (cost=0.00..35.50 rows=0 width=0)
+row   ->  Seq Scan on b  (cost=0.00..35.50 rows=10 width=6)
+row         Filter: (z = 1)
+EXPLAIN
+> EXPLAIN WITH w AS (INSERT INTO b SELECT id, x, y FROM a RETURNING *) SELECT count(*) FROM w;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=46.73..46.73 rows=1 width=8)
+row   CTE w
+row     ->  Insert on b  (cost=0.00..21.30 rows=1130 width=12)
+row           ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=12)
+row   ->  CTE Scan on w  (cost=0.00..22.60 rows=1130 width=0)
+EXPLAIN
+> EXPLAIN WITH w AS (DELETE FROM b RETURNING id) SELECT * FROM a JOIN w ON a.id = w.id;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=65.83..112.00 rows=2040 width=48)
+row   Hash Cond: (w.id = a.id)
+row   CTE w
+row     ->  Delete on b  (cost=0.00..30.40 rows=2040 width=6)
+row           ->  Seq Scan on b  (cost=0.00..30.40 rows=2040 width=6)
+row   ->  CTE Scan on w  (cost=0.00..40.80 rows=2040 width=4)
+row   ->  Hash  (cost=21.30..21.30 rows=1130 width=44)
+row         ->  Seq Scan on a  (cost=0.00..21.30 rows=1130 width=44)
+EXPLAIN

@@ -751,10 +751,21 @@ impl Explainer<'_, '_> {
             .iter()
             .map(|arg| self.texts.expr(scope, arg, prefix))
             .collect::<Result<_>>()?;
-        self.w.text("Sampling", &format!("{method} ({})", args.join(", ")));
-        if let Some(repeatable) = &sample.repeatable {
-            let text = self.texts.expr(scope, repeatable, prefix)?;
-            self.w.text("Repeatable Seed", &text);
+        let repeatable =
+            sample.repeatable.as_ref().map(|r| self.texts.expr(scope, r, prefix)).transpose()?;
+        // `show_tablesample`: the text form has one line, and the other forms have a property for each part.
+        if self.w.format == Format::Text {
+            let mut text = format!("{method} ({})", args.join(", "));
+            if let Some(repeatable) = &repeatable {
+                text.push_str(&format!(" REPEATABLE ({repeatable})"));
+            }
+            self.w.text("Sampling", &text);
+        } else {
+            self.w.text("Sampling Method", &method);
+            self.w.list("Sampling Parameters", &args);
+            if let Some(repeatable) = &repeatable {
+                self.w.text("Repeatable Seed", repeatable);
+            }
         }
         Ok(())
     }

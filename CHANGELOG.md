@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `EXPLAIN` of `TABLESAMPLE SYSTEM` now costs only the sampled pages, at the cost of a random page, as PostgreSQL does, and `REPEATABLE` shows on the `Sampling` line in the text form. `INSERT`, `UPDATE` and `DELETE` with `RETURNING` now show the rows and the width of the node below them. (#597)
 - The keys of the first window of a query now count as the order that the query asks for, as `window_pathkeys` in PostgreSQL, so a window under a `LIMIT` can read an index in the order of its first keys, with an `Incremental Sort` for the rest. The `Window` of a `WindowAgg` in `EXPLAIN` now shows no direction for its keys, as PostgreSQL shows it. (#596)
 - `EXPLAIN` of a query that merges a subquery on the side of an outer join that can give nulls now shows the columns of the subquery that are not plain columns as `PlaceHolderVar`s, as PostgreSQL does: the scan or the join below computes the value, the nodes above read it in parentheses, and the costs, the widths and the number of groups match. A constant column in the `ON` of that join now folds, and a `CASE` in `EXPLAIN` now takes one line. (#595)
 - A `btree` index of a table with rows has two pages for the planner, the metapage and the root, as in PostgreSQL, so the cost of a nested loop over a scan of the index is the cost of PostgreSQL. (#594)
