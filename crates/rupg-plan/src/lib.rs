@@ -164,6 +164,17 @@ pub struct Cost {
     pub width: i32,
 }
 
+/// A rollup of an `Agg` with grouping sets, as `create_groupingsets_plan` makes the `Agg` of each rollup after the first one a part of the chain of the first one: a hash table for its sets, or one pass over sorted rows that gives each set.
+#[derive(Clone, Debug)]
+pub struct Rollup<'q> {
+    /// True for a hash table.
+    pub hashed: bool,
+    /// The keys of the `Sort` of the pass, empty when the rows come in the order of the pass.
+    pub sort: Vec<SortKey<'q>>,
+    /// The grouping sets, the largest first, each with its keys.
+    pub sets: Vec<Vec<Item<'q>>>,
+}
+
 /// An expression of a node.
 #[derive(Clone, Debug)]
 pub struct Item<'q> {
@@ -253,8 +264,8 @@ pub enum Kind<'q> {
     Hash,
     /// `Material`: the rows of the node below, which the node keeps for the next scans.
     Materialize,
-    /// `Agg`, with the keys of the groups. Each grouping set has its keys, and a set with no keys makes one group.
-    Aggregate { strategy: Strategy, keys: Vec<Item<'q>>, sets: Vec<(bool, Vec<Item<'q>>)> },
+    /// `Agg`, with the keys of the groups. With grouping sets, each rollup has its sets, each set has its keys, and a set with no keys makes one group.
+    Aggregate { strategy: Strategy, keys: Vec<Item<'q>>, sets: Vec<Rollup<'q>> },
     /// `Sort`.
     Sort(Vec<SortKey<'q>>),
     /// `IncrementalSort`: a sort of rows whose first `presorted` keys are in order already.

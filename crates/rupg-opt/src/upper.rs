@@ -8,8 +8,8 @@ use rupg_analyze::{
 };
 use rupg_pgcatalog::builtin;
 use rupg_plan::{
-    Conflict, Cost, Item, Kind, Label, Node, Operation, Replaced, SortKey, Strategy, SubPlan,
-    TARGET,
+    Conflict, Cost, Item, Kind, Label, Node, Operation, Replaced, Rollup, SortKey, Strategy,
+    SubPlan, TARGET,
 };
 
 use crate::from::paths::{Paths, costs};
@@ -601,7 +601,7 @@ impl<'q> Builder<'q> {
         level: &Level<'q>,
         mut node: Node<'q>,
         mut order: Vec<OrderKey>,
-        only: bool,
+        mut only: bool,
     ) -> Option<(Node<'q>, Vec<OrderKey>)> {
         let query = level.query;
         let scope = level.display;
@@ -627,6 +627,8 @@ impl<'q> Builder<'q> {
             if query.grouped {
                 node = aggregate(level, node, &mut order, only)?;
                 project(&mut node, costs.group.0, costs.group.1);
+                // The rows of grouping sets have no order, so the steps above take the cheapest plan of the groups, as each plan has the same rows.
+                only &= query.grouping_sets.is_empty();
             }
             node = windows(level, node, &mut order, only, costs)?;
             if query.has_target_srfs() {
@@ -1044,10 +1046,8 @@ fn aggregate<'q>(
     let c = input.cost;
     let n = c.rows;
     if !query.grouping_sets.is_empty() {
-        if only {
-            return None;
-        }
-        return Some(grouping_sets(level, input, order, units, filter, selectivity));
+        let costs = AggCosts { units, finals, having: (having_startup, having_cost), selectivity };
+        return grouping_sets(level, input, order, costs, filter, has_ordered, only);
     }
     if query.group.is_empty() {
         let ordered = level.stats.canonical(ordered, |k| &*k.item.expr);
@@ -1172,83 +1172,445 @@ fn group_keys<'q>(level: &Level<'q>) -> (Vec<SortKey<'q>>, bool) {
     (items.into_iter().map(|s| sort_key(level.target(s.target), s)).collect(), hashable)
 }
 
-/// The `Agg` of a query with grouping sets: `HashAggregate` when each set can use a hash table, `MixedAggregate` when one of them is `()`, or else `GroupAggregate` on the sorted rows.
+/// The costs of the aggregate calls and of `HAVING` of a query with grouping sets, as `cost_agg` reads them.
+#[derive(Clone, Copy)]
+struct AggCosts {
+    /// The cost of the transition of the calls for each row, in units of `cpu_operator_cost`.
+    units: f64,
+    /// The cost of the final functions for each group.
+    finals: f64,
+    /// The start cost and the cost for each group of `HAVING`.
+    having: (f64, f64),
+    /// The selectivity of `HAVING`.
+    selectivity: f64,
+}
+
+/// `cost_agg`: the start cost, the total cost and the rows of an `Agg` of `strategy` with `cols` keys and `groups` groups, which reads `rows` rows with the start cost and the total cost `input`. `Mixed` has the costs of `Sorted`.
+fn cost_agg(
+    strategy: Strategy,
+    costs: AggCosts,
+    cols: usize,
+    groups: f64,
+    input: (f64, f64),
+    rows: f64,
+) -> (f64, f64, f64) {
+    let trans = cost::CPU_OPERATOR * costs.units * rows;
+    let keys = cost::CPU_OPERATOR * cols as f64 * rows;
+    let (mut startup, mut total, out) = match strategy {
+        Strategy::Plain => {
+            let startup = input.1 + trans + costs.finals;
+            (startup, startup + cost::CPU_TUPLE, 1.0)
+        }
+        Strategy::Hashed => {
+            let startup = input.1 + trans + keys;
+            (startup, startup + costs.finals * groups + cost::CPU_TUPLE * groups, groups)
+        }
+        _ => {
+            let total = input.1 + trans + keys + costs.finals * groups + cost::CPU_TUPLE * groups;
+            (input.0, total, groups)
+        }
+    };
+    let (having_startup, having_cost) = costs.having;
+    startup += having_startup;
+    total += having_startup + out * having_cost;
+    (startup, total, cost::clamp_rows(out * costs.selectivity))
+}
+
+/// A rollup of `preprocess_grouping_sets`: the grouping sets that one pass over the rows in the order of the items of the first set gives, as each set is the first items of the set before it. A rollup of a hash table has one set, or the sets with no items.
+#[derive(Clone, Debug)]
+struct RollupSets {
+    /// The sets, the largest first, each with the places of its targets in the order of the sort.
+    sets: Vec<Vec<usize>>,
+    /// The groups of each set, as `get_number_of_groups` estimates them.
+    groups: Vec<f64>,
+    /// `hashable`: the first set has items, and a hash table can hold its groups.
+    hashable: bool,
+    /// `is_hashed`.
+    hashed: bool,
+}
+
+impl RollupSets {
+    /// `numGroups`: the groups of all the sets.
+    fn groups(&self) -> f64 {
+        self.groups.iter().sum()
+    }
+
+    /// The rollup of a hash table for one set.
+    fn hash(set: &[usize], groups: f64) -> RollupSets {
+        RollupSets { sets: vec![set.to_vec()], groups: vec![groups], hashable: true, hashed: true }
+    }
+}
+
+/// `preprocess_grouping_sets`: the rollups of the grouping sets that a sort can give, and a rollup of a hash table for each set with an item that has no sort operator.
+fn rollups(level: &Level<'_>, rows: f64) -> (Vec<RollupSets>, Vec<RollupSets>) {
+    let query = level.query;
+    let sets = expand_grouping_sets(&query.grouping_sets, query.group_distinct, MAX_SETS)
+        .unwrap_or_default();
+    let group_of = |t: usize| query.group.iter().find(|g| g.target == t);
+    let unsortable = |t: &usize| group_of(*t).is_none_or(|g| g.operator == 0);
+    let unhashable = |t: &usize| group_of(*t).is_none_or(|g| !g.hashable);
+    let groups = |set: &[usize]| {
+        let exprs: Vec<&Expr> = set.iter().map(|t| level.target(*t)).collect();
+        level.stats.groups(&exprs, rows)
+    };
+    let (unsortable_sets, sortable): (Vec<Vec<usize>>, Vec<Vec<usize>>) =
+        sets.into_iter().partition(|s| s.iter().any(unsortable));
+    let chains = if sortable.is_empty() { Vec::new() } else { extract_rollup_sets(&sortable) };
+    // With one rollup, the sets take the order of `ORDER BY`.
+    let sort: Vec<usize> =
+        if chains.len() == 1 { query.sort.iter().map(|s| s.target).collect() } else { Vec::new() };
+    let rollups = chains
+        .iter()
+        .map(|chain| {
+            let sets = reorder_grouping_sets(chain, &sort);
+            let hashable = !sets[0].is_empty() && !sets[0].iter().any(unhashable);
+            let groups = sets.iter().map(|s| groups(s)).collect();
+            RollupSets { sets, groups, hashable, hashed: false }
+        })
+        .collect();
+    let hash_sets = unsortable_sets.iter().map(|s| RollupSets::hash(s, groups(s))).collect();
+    (rollups, hash_sets)
+}
+
+/// `extract_rollup_sets`: the fewest chains of the grouping sets, the smallest set first, where each set has all the items of the set before it. Equal sets go in the same chain, and the sets with no items go in the first chain. The sets come with the smallest first.
+fn extract_rollup_sets(sets: &[Vec<usize>]) -> Vec<Vec<Vec<usize>>> {
+    let empty = sets.iter().take_while(|s| s.is_empty()).count();
+    if empty == sets.len() {
+        return vec![sets.to_vec()];
+    }
+    // The lists start at 1, as the sets of `BipartiteMatch` do.
+    let mut orig: Vec<Vec<Vec<usize>>> = vec![Vec::new()];
+    let mut masks: Vec<Vec<usize>> = vec![Vec::new()];
+    let mut adjacency: Vec<Vec<usize>> = vec![Vec::new()];
+    let (mut j_size, mut j) = (0, 0);
+    for candidate in &sets[empty..] {
+        let mut mask = candidate.clone();
+        mask.sort_unstable();
+        mask.dedup();
+        let i = orig.len();
+        let mut dup_of = 0;
+        if j_size == candidate.len() {
+            dup_of = (j..i).find(|&k| masks[k] == mask).unwrap_or(0);
+        } else if j_size < candidate.len() {
+            j_size = candidate.len();
+            j = i;
+        }
+        if dup_of > 0 {
+            orig[dup_of].push(candidate.clone());
+            continue;
+        }
+        orig.push(vec![candidate.clone()]);
+        // The smaller sets that the candidate has all the items of, the last set first.
+        adjacency
+            .push((1..j).rev().filter(|&k| masks[k].iter().all(|m| mask.contains(m))).collect());
+        masks.push(mask);
+    }
+    let count = orig.len() - 1;
+    let (pair_uv, pair_vu) = bipartite_match(&adjacency);
+    let mut chains = vec![0; count + 1];
+    let mut num_chains = 0;
+    for i in 1..=count {
+        let (u, v) = (pair_vu[i], pair_uv[i]);
+        chains[i] = if u > 0 && u < i {
+            chains[u]
+        } else if v > 0 && v < i {
+            chains[v]
+        } else {
+            num_chains += 1;
+            num_chains
+        };
+    }
+    let mut results = vec![Vec::new(); num_chains + 1];
+    results[1] = vec![Vec::new(); empty];
+    for i in 1..=count {
+        results[chains[i]].append(&mut orig[i]);
+    }
+    results.remove(0);
+    results
+}
+
+/// `BipartiteMatch`: the largest matching of the Hopcroft-Karp algorithm in the graph of `adjacency`, whose nodes start at 1. The result has the node of the other side for each node of each side, or 0.
+fn bipartite_match(adjacency: &[Vec<usize>]) -> (Vec<usize>, Vec<usize>) {
+    /// `hk_depth_search`.
+    fn depth(
+        u: usize,
+        adjacency: &[Vec<usize>],
+        distance: &mut [usize],
+        pair_uv: &mut [usize],
+        pair_vu: &mut [usize],
+    ) -> bool {
+        if u == 0 {
+            return true;
+        }
+        if distance[u] == usize::MAX {
+            return false;
+        }
+        let next = distance[u] + 1;
+        for &v in adjacency[u].iter().rev() {
+            if distance[pair_vu[v]] == next
+                && depth(pair_vu[v], adjacency, distance, pair_uv, pair_vu)
+            {
+                pair_vu[v] = u;
+                pair_uv[u] = v;
+                return true;
+            }
+        }
+        distance[u] = usize::MAX;
+        false
+    }
+    let size = adjacency.len();
+    let mut pair_uv = vec![0; size];
+    let mut pair_vu = vec![0; size];
+    let mut distance = vec![0; size];
+    loop {
+        // `hk_breadth_search`.
+        distance[0] = usize::MAX;
+        let mut queue = Vec::new();
+        for u in 1..size {
+            if pair_uv[u] == 0 {
+                distance[u] = 0;
+                queue.push(u);
+            } else {
+                distance[u] = usize::MAX;
+            }
+        }
+        let mut at = 0;
+        while at < queue.len() {
+            let u = queue[at];
+            at += 1;
+            if distance[u] < distance[0] {
+                for &v in adjacency[u].iter().rev() {
+                    let next = pair_vu[v];
+                    if distance[next] == usize::MAX {
+                        distance[next] = distance[u] + 1;
+                        queue.push(next);
+                    }
+                }
+            }
+        }
+        if distance[0] == usize::MAX {
+            break;
+        }
+        for u in 1..size {
+            if pair_uv[u] == 0 {
+                depth(u, adjacency, &mut distance, &mut pair_uv, &mut pair_vu);
+            }
+        }
+    }
+    (pair_uv, pair_vu)
+}
+
+/// `reorder_grouping_sets`: the sets of a chain, the largest first, each with the items of the set after it first. The items take the order of `sort` as long as they can.
+fn reorder_grouping_sets(sets: &[Vec<usize>], sort: &[usize]) -> Vec<Vec<usize>> {
+    let mut sort = sort;
+    let mut previous: Vec<usize> = Vec::new();
+    let mut result = Vec::new();
+    for candidate in sets {
+        let mut new_elems: Vec<usize> =
+            candidate.iter().filter(|c| !previous.contains(c)).copied().collect();
+        while sort.len() > previous.len() && !new_elems.is_empty() {
+            let item = sort[previous.len()];
+            if let Some(at) = new_elems.iter().position(|&e| e == item) {
+                previous.push(item);
+                new_elems.remove(at);
+            } else {
+                sort = &[];
+                break;
+            }
+        }
+        previous.extend(new_elems);
+        result.insert(0, previous.clone());
+    }
+    result
+}
+
+/// `create_groupingsets_path`: the strategy, the disabled nodes and the costs of an `Agg` of the rollups over rows with the costs `input`. A rollup after the first one that is not a hash table needs a sort of its own, except the first such rollup after a hash table.
+fn groupingsets_cost(
+    strategy: Strategy,
+    rollups: &[RollupSets],
+    input: Cost,
+    costs: AggCosts,
+) -> (Strategy, u32, Cost) {
+    let enable = crate::enable();
+    let strategy = match strategy {
+        Strategy::Sorted if rollups.len() == 1 && rollups[0].sets[0].is_empty() => Strategy::Plain,
+        Strategy::Mixed if rollups.len() == 1 => Strategy::Hashed,
+        _ => strategy,
+    };
+    let n = input.rows;
+    let mut disabled =
+        u32::from(matches!(strategy, Strategy::Hashed | Strategy::Mixed) && !enable.hashagg);
+    let first = &rollups[0];
+    let (startup, mut total, mut rows) = cost_agg(
+        strategy,
+        costs,
+        first.sets[0].len(),
+        first.groups(),
+        (input.startup, input.total),
+        n,
+    );
+    let mut first_sort = first.hashed;
+    for rollup in &rollups[1..] {
+        let cols = rollup.sets[0].len();
+        let (_, t, r) = if rollup.hashed || first_sort {
+            first_sort &= rollup.hashed;
+            disabled += u32::from(rollup.hashed && !enable.hashagg);
+            let strategy = if rollup.hashed { Strategy::Hashed } else { Strategy::Sorted };
+            cost_agg(strategy, costs, cols, rollup.groups(), (0.0, 0.0), n)
+        } else {
+            disabled += u32::from(!enable.sort);
+            let sort = cost::sort((0.0, 0.0), n, input.width, None);
+            cost_agg(Strategy::Sorted, costs, cols, rollup.groups(), sort, n)
+        };
+        total += t;
+        rows += r;
+    }
+    (strategy, disabled, Cost { startup, total, rows, width: 0 })
+}
+
+/// The `Agg` of a query with grouping sets, as `consider_groupingsets_paths` plans it: a hash table for each set, with the sets with no items or the first rollup in the order of the rows in the same pass; the rollups over sorted rows, with a hash table for each set of the rollups after the first one; or the rollups over sorted rows. The plan with the fewest disabled nodes and then the lowest cost wins. With `only`, the input is not the cheapest plan, so it gets only the strategies of sorted rows, and only when its rows are in the order of one key or more.
 fn grouping_sets<'q>(
     level: &Level<'q>,
     input: Node<'q>,
     order: &mut Vec<OrderKey>,
-    units: f64,
+    costs: AggCosts,
     filter: Vec<Item<'q>>,
-    selectivity: f64,
-) -> Node<'q> {
+    has_ordered: bool,
+    only: bool,
+) -> Option<Node<'q>> {
     let query = level.query;
-    let scope = level.scope;
-    let sets = expand_grouping_sets(&query.grouping_sets, query.group_distinct, MAX_SETS)
-        .unwrap_or_default();
-    let group_of = |t: usize| query.group.iter().find(|g| g.target == t);
-    let hashable = |set: &Vec<usize>| set.iter().all(|t| group_of(*t).is_some_and(|g| g.hashable));
-    let all_hashable = sets.iter().filter(|s| !s.is_empty()).all(hashable);
-    let has_empty = sets.iter().any(Vec::is_empty);
-    let strategy = if !all_hashable {
-        Strategy::Sorted
-    } else if has_empty {
-        Strategy::Mixed
-    } else {
-        Strategy::Hashed
-    };
     let c = input.cost;
-    let n = c.rows;
-    // The sets with the most items come first, as `preprocess_grouping_sets` sorts them.
-    let mut ordered: Vec<&Vec<usize>> = sets.iter().collect();
-    ordered.sort_by_key(|s| std::cmp::Reverse(s.len()));
-    let mut groups = 0.0;
-    let mut units_all = 0.0;
-    let mut out_sets = Vec::new();
+    let (rollups, hash_sets) = rollups(level, c.rows);
+    let group_of = |t: usize| query.group.iter().find(|g| g.target == t);
+    let group_keys = |r: &RollupSets| -> Vec<SortKey<'q>> {
+        r.sets[0]
+            .iter()
+            .filter_map(|&t| group_of(t).map(|g| sort_key(level.target(t), g)))
+            .collect()
+    };
+    let first_keys = rollups.first().map(group_keys).unwrap_or_default();
+    let first_keys = level.stats.canonical(first_keys, |k| &*k.item.expr);
+    let (is_sorted, count) = presorted(order, &first_keys);
+    let any_hashable = rollups.iter().any(|r| r.hashable) || !hash_sets.is_empty();
+    let can_hash = !has_ordered && any_hashable;
+    // The candidates in the order that `add_paths_to_grouping_rel` adds them, with true when the input needs the order of the first rollup.
+    let mut candidates: Vec<(Strategy, Vec<RollupSets>, bool)> = Vec::new();
+    if !rollups.is_empty() && (is_sorted || !only || count > 0) {
+        if can_hash {
+            let mut out = Vec::new();
+            let mut hashed = hash_sets.clone();
+            if rollups.len() > 1 && rollups[1..].iter().any(|r| r.hashable) {
+                out.push(rollups[0].clone());
+                for rollup in &rollups[1..] {
+                    if rollup.hashable {
+                        let sets = rollup.sets.iter().zip(&rollup.groups);
+                        hashed.extend(sets.map(|(s, g)| RollupSets::hash(s, *g)));
+                    } else {
+                        out.push(rollup.clone());
+                    }
+                }
+            }
+            if out.is_empty() && !hashed.is_empty() {
+                out = rollups.clone();
+            }
+            for rollup in hashed {
+                out.insert(0, rollup);
+            }
+            if !out.is_empty() {
+                candidates.push((Strategy::Mixed, out, true));
+            }
+        }
+        if hash_sets.is_empty() {
+            candidates.push((Strategy::Sorted, rollups.clone(), true));
+        }
+    }
+    if !only && can_hash {
+        // The first rollup stays a pass over the rows when they are in its order.
+        let (unhashed, rest) = match rollups.split_first() {
+            Some((first, rest)) if is_sorted => (Some(first.clone()), rest),
+            _ => (None, &rollups[..]),
+        };
+        if rest.iter().all(|r| r.hashable) {
+            let mut out = Vec::new();
+            let mut empty = 0;
+            for rollup in hash_sets.iter().chain(rest) {
+                for (set, groups) in rollup.sets.iter().zip(&rollup.groups) {
+                    if set.is_empty() {
+                        empty += 1;
+                    } else {
+                        out.push(RollupSets::hash(set, *groups));
+                    }
+                }
+            }
+            if !out.is_empty() {
+                let mut strategy = Strategy::Hashed;
+                if let Some(unhashed) = unhashed {
+                    out.push(unhashed);
+                    strategy = Strategy::Mixed;
+                } else if empty > 0 {
+                    let (sets, groups) = (vec![Vec::new(); empty], vec![1.0; empty]);
+                    out.push(RollupSets { sets, groups, hashable: false, hashed: false });
+                    strategy = Strategy::Mixed;
+                }
+                candidates.push((strategy, out, false));
+            }
+        }
+    }
+    let sorted_input = if is_sorted {
+        c
+    } else {
+        let (startup, total) = sort_cost(level, c, &first_keys, count, None);
+        Cost { startup, total, ..c }
+    };
+    let input_disabled = u32::from(sort_disabled(is_sorted, count));
+    // `add_path`: a later plan wins with fewer disabled nodes, or with a total cost that is lower by more than the fuzz factor.
+    let mut best: Option<(u32, Cost, usize)> = None;
+    for (i, (strategy, rollups, sorted)) in candidates.iter().enumerate() {
+        let input = if *sorted { sorted_input } else { c };
+        let (_, disabled, cost) = groupingsets_cost(*strategy, rollups, input, costs);
+        let disabled = disabled + if *sorted { input_disabled } else { 0 };
+        let wins = best
+            .is_none_or(|(d, b, _)| disabled < d || disabled == d && cost.total * 1.01 < b.total);
+        if wins {
+            best = Some((disabled, cost, i));
+        }
+    }
+    let (_, _, at) = best?;
+    let (strategy, rollups, sorted) = candidates.swap_remove(at);
+    let mut input = input;
+    if sorted {
+        input = sort_if(level, input, first_keys, order, None, only)?;
+    }
+    let (strategy, disabled, cost) = groupingsets_cost(strategy, &rollups, input.cost, costs);
     let mut keys: Vec<Item<'q>> = Vec::new();
-    for set in &ordered {
-        let set_exprs: Vec<&Expr> = set.iter().map(|t| level.target(*t)).collect();
-        groups += level.stats.groups(&set_exprs, n);
-        units_all += set.len() as f64 + units;
-        let items: Vec<Item<'q>> = set.iter().map(|t| Item::below(level.target(*t))).collect();
-        for item in &items {
+    let mut first_sort = rollups[0].hashed;
+    let mut plan_rollups = Vec::with_capacity(rollups.len());
+    for (i, rollup) in rollups.iter().enumerate() {
+        let sets: Vec<Vec<Item<'q>>> = rollup
+            .sets
+            .iter()
+            .map(|set| set.iter().map(|t| Item::below(level.target(*t))).collect())
+            .collect();
+        for item in sets.iter().flatten() {
             if !keys.iter().any(|k| k.expr.same(&item.expr)) {
                 keys.push(item.clone());
             }
         }
-        out_sets.push((strategy != Strategy::Sorted && !set.is_empty(), items));
-    }
-    let mut input = input;
-    let mut startup = c.total;
-    if strategy == Strategy::Sorted {
-        let first = ordered.first().map(|s| s.as_slice()).unwrap_or_default();
-        let sort_keys: Vec<SortKey<'q>> = first
-            .iter()
-            .filter_map(|t| group_of(*t).map(|g| sort_key(level.target(*t), g)))
-            .collect();
-        if let Some(sorted) = sort_if(level, input, sort_keys, order, None, false) {
-            input = sorted;
-        } else {
-            unreachable!("a sort of the cheapest plan has a result")
+        // `create_groupingsets_plan`: `make_sort_from_groupcols` sorts on all the items of the first set.
+        let sort =
+            if i > 0 && !rollup.hashed && !first_sort { group_keys(rollup) } else { Vec::new() };
+        if i > 0 && !rollup.hashed {
+            first_sort = false;
         }
-        startup = input.cost.startup;
-    }
-    let total = input.cost.total.max(c.total)
-        + cost::CPU_OPERATOR * n * units_all
-        + cost::CPU_TUPLE * groups;
-    if strategy != Strategy::Sorted {
-        startup += cost::CPU_OPERATOR * n * units_all;
+        plan_rollups.push(Rollup { hashed: rollup.hashed, sort, sets });
     }
     order.clear();
     let mut node =
-        Node::new(Kind::Aggregate { strategy, keys, sets: out_sets }, scope, vec![input]);
+        Node::new(Kind::Aggregate { strategy, keys, sets: plan_rollups }, level.scope, vec![input]);
     node.filter = filter;
-    node.cost = Cost {
-        startup,
-        total: total.max(startup),
-        rows: cost::clamp_rows(groups * selectivity),
-        width: 0,
-    };
-    node
+    node.disabled = disabled > 0;
+    node.cost = cost;
+    Some(node)
 }
 
 /// The window calls of the query for each window, by `winref`.

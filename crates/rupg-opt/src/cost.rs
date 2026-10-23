@@ -772,6 +772,11 @@ pub(crate) fn qual_costs<'a>(
         if matches!(expr.kind, ExprKind::Agg(_) | ExprKind::Window(_)) {
             return;
         }
+        // A call of `GROUPING` costs one operator, with its arguments.
+        if matches!(expr.kind, ExprKind::Grouping(_)) {
+            *calls += 1;
+            return;
+        }
         if let ExprKind::SubLink(link) = &expr.kind
             && let Some(sub) = subplans.iter().find(|s| std::ptr::eq(s.link, &**link))
         {

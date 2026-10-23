@@ -222,6 +222,30 @@ impl Writer {
         }
     }
 
+    /// `ExplainPropertyListNested`: a list of texts that is an item of a list, with no label in JSON and YAML.
+    pub(crate) fn list_nested(&mut self, label: &str, items: &[String]) {
+        let start = match self.format {
+            Format::Text | Format::Xml => return self.list(label, items),
+            Format::Json => {
+                self.json_line_ending();
+                self.spaces(2 * self.indent);
+                "["
+            }
+            Format::Yaml => {
+                self.yaml_line_starting();
+                "- ["
+            }
+        };
+        self.buf.push_str(start);
+        for (i, item) in items.iter().enumerate() {
+            if i > 0 {
+                self.buf.push_str(", ");
+            }
+            escape_json(&mut self.buf, item);
+        }
+        self.buf.push(']');
+    }
+
     /// `ExplainIndentText`: the spaces of the level at the start of a line of text.
     pub(crate) fn indent_text(&mut self) {
         if self.buf.is_empty() || self.buf.ends_with('\n') {

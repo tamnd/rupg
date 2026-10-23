@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The plan of grouping sets is the one of PostgreSQL: the sets that one sort gives form a rollup, and the `Agg` hashes the sets, sorts the rows once for each rollup, or does both in a `MixedAggregate`, whichever costs less. `EXPLAIN` shows the `Sort Key` of each rollup after the first one. (#NNN)
 - A column of a table whose primary key is in `GROUP BY` can be in the targets and in `HAVING` without an aggregate, as PostgreSQL allows it. A view of such a query depends on the primary key. (#591)
 - `GROUP BY` with no aggregate is a `Group` node of a sorted input in `EXPLAIN`, with the cost that PostgreSQL gives it, in place of a `GroupAggregate`. (#590)
 - The scan of a subquery of `FROM` reads each plan of the subquery that the planner keeps, with the order of its rows, as PostgreSQL does. `ORDER BY` and a merge join above a subquery need no sort when the subquery gives its rows in their order, and a `UNION` in `FROM` can use a `Unique` above a `Merge Append`. The scan of a query of `WITH` has the order of the rows of its plan. A subquery with `FOR UPDATE` keeps the cost of its `Subquery Scan`. (#589)

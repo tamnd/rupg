@@ -1,0 +1,406 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (id int PRIMARY KEY, x int, y int);
+CREATE TABLE
+> CREATE INDEX a_x ON a (x);
+CREATE INDEX
+> INSERT INTO a SELECT g, g % 7, g % 3 FROM generate_series(1, 50) g;
+INSERT 0 50
+> EXPLAIN SELECT x, count(*) FROM a GROUP BY ROLLUP (x);
+fields QUERY PLAN:25:-1:-1
+row MixedAggregate  (cost=0.00..47.71 rows=201 width=12)
+row   Hash Key: x
+row   Group Key: ()
+row   ->  Seq Scan on a  (cost=0.00..30.40 rows=2040 width=4)
+EXPLAIN
+> EXPLAIN SELECT x, y, count(*) FROM a GROUP BY ROLLUP (x, y);
+fields QUERY PLAN:25:-1:-1
+row MixedAggregate  (cost=0.00..65.05 rows=405 width=16)
+row   Hash Key: x, y
+row   Hash Key: x
+row   Group Key: ()
+row   ->  Seq Scan on a  (cost=0.00..30.40 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN SELECT x, y, count(*) FROM a GROUP BY CUBE (x, y);
+fields QUERY PLAN:25:-1:-1
+row MixedAggregate  (cost=0.00..77.25 rows=605 width=16)
+row   Hash Key: x, y
+row   Hash Key: x
+row   Hash Key: y
+row   Group Key: ()
+row   ->  Seq Scan on a  (cost=0.00..30.40 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN SELECT x, y, count(*) FROM a GROUP BY GROUPING SETS ((x), (y));
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=40.60..54.80 rows=400 width=16)
+row   Hash Key: x
+row   Hash Key: y
+row   ->  Seq Scan on a  (cost=0.00..30.40 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN SELECT x, y, count(*) FROM a GROUP BY GROUPING SETS ((x), (y), ());
+fields QUERY PLAN:25:-1:-1
+row MixedAggregate  (cost=0.00..59.91 rows=401 width=16)
+row   Hash Key: x
+row   Hash Key: y
+row   Group Key: ()
+row   ->  Seq Scan on a  (cost=0.00..30.40 rows=2040 width=8)
+EXPLAIN
+> SET enable_hashagg = off;
+SET
+> EXPLAIN SELECT x, count(*) FROM a GROUP BY ROLLUP (x);
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=0.15..86.96 rows=201 width=12)
+row   Group Key: x
+row   Group Key: ()
+row   ->  Index Only Scan using a_x on a  (cost=0.15..74.75 rows=2040 width=4)
+EXPLAIN
+> EXPLAIN SELECT x, y, count(*) FROM a GROUP BY ROLLUP (x, y);
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=0.70..157.78 rows=405 width=16)
+row   Group Key: x, y
+row   Group Key: x
+row   Group Key: ()
+row   ->  Incremental Sort  (cost=0.70..138.43 rows=2040 width=8)
+row         Sort Key: x, y
+row         Presorted Key: x
+row         ->  Index Scan using a_x on a  (cost=0.15..74.75 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN SELECT x, y, count(*) FROM a GROUP BY CUBE (x, y);
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=0.70..287.22 rows=605 width=16)
+row   Group Key: x, y
+row   Group Key: x
+row   Group Key: ()
+row   Sort Key: y
+row     Group Key: y
+row   ->  Incremental Sort  (cost=0.70..138.43 rows=2040 width=8)
+row         Sort Key: x, y
+row         Presorted Key: x
+row         ->  Index Scan using a_x on a  (cost=0.15..74.75 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN SELECT x, y, count(*) FROM a GROUP BY GROUPING SETS ((x), (y));
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=0.15..216.39 rows=400 width=16)
+row   Group Key: x
+row   Sort Key: y
+row     Group Key: y
+row   ->  Index Scan using a_x on a  (cost=0.15..74.75 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN SELECT x, y, count(*) FROM a GROUP BY GROUPING SETS ((x), (y), ());
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=0.15..216.40 rows=401 width=16)
+row   Group Key: x
+row   Group Key: ()
+row   Sort Key: y
+row     Group Key: y
+row   ->  Index Scan using a_x on a  (cost=0.15..74.75 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN SELECT x, count(*) FROM a GROUP BY ROLLUP (x) ORDER BY x;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=94.65..95.15 rows=201 width=12)
+row   Sort Key: x
+row   ->  GroupAggregate  (cost=0.15..86.96 rows=201 width=12)
+row         Group Key: x
+row         Group Key: ()
+row         ->  Index Only Scan using a_x on a  (cost=0.15..74.75 rows=2040 width=4)
+EXPLAIN
+> SELECT x, y, count(*) FROM a GROUP BY GROUPING SETS ((x), (y), ()) ORDER BY 1, 2;
+fields x@a.2:23:4:-1,y@a.3:23:4:-1,count:20:8:-1
+row 0,NULL,7
+row 1,NULL,8
+row 2,NULL,7
+row 3,NULL,7
+row 4,NULL,7
+row 5,NULL,7
+row 6,NULL,7
+row NULL,0,16
+row NULL,1,17
+row NULL,2,17
+row NULL,NULL,50
+SELECT 11
+> SELECT x, count(*) FROM a GROUP BY ROLLUP (x) ORDER BY 1;
+fields x@a.2:23:4:-1,count:20:8:-1
+row 0,7
+row 1,8
+row 2,7
+row 3,7
+row 4,7
+row 5,7
+row 6,7
+row NULL,50
+SELECT 8
+> EXPLAIN (COSTS OFF) SELECT x, y, count(*) FROM a GROUP BY GROUPING SETS ((x, y), (x), (y), ()) HAVING count(*) > 1;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate
+row   Group Key: x, y
+row   Group Key: x
+row   Group Key: ()
+row   Sort Key: y
+row     Group Key: y
+row   Filter: (count(*) > 1)
+row   ->  Incremental Sort
+row         Sort Key: x, y
+row         Presorted Key: x
+row         ->  Index Scan using a_x on a
+EXPLAIN
+> EXPLAIN (FORMAT JSON) SELECT x, y, count(*) FROM a GROUP BY CUBE (x, y);
+fields QUERY PLAN:114:-1:-1
+row [
+  {
+    "Plan": {
+      "Node Type": "Aggregate",
+      "Strategy": "Sorted",
+      "Partial Mode": "Simple",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Startup Cost": 0.70,
+      "Total Cost": 287.22,
+      "Plan Rows": 605,
+      "Plan Width": 16,
+      "Disabled": false,
+      "Grouping Sets": [
+        {
+          "Group Keys": [
+            ["x", "y"],
+            ["x"],
+            []
+          ]
+        },
+        {
+          "Sort Key": ["y"],
+          "Group Keys": [
+            ["y"]
+          ]
+        }
+      ],
+      "Plans": [
+        {
+          "Node Type": "Incremental Sort",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Startup Cost": 0.70,
+          "Total Cost": 138.43,
+          "Plan Rows": 2040,
+          "Plan Width": 8,
+          "Disabled": false,
+          "Sort Key": ["x", "y"],
+          "Presorted Key": ["x"],
+          "Plans": [
+            {
+              "Node Type": "Index Scan",
+              "Parent Relationship": "Outer",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Scan Direction": "Forward",
+              "Index Name": "a_x",
+              "Relation Name": "a",
+              "Alias": "a",
+              "Startup Cost": 0.15,
+              "Total Cost": 74.75,
+              "Plan Rows": 2040,
+              "Plan Width": 8,
+              "Disabled": false
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
+EXPLAIN
+> EXPLAIN (FORMAT YAML, COSTS OFF) SELECT x, y, count(*) FROM a GROUP BY GROUPING SETS ((x), (y), ());
+fields QUERY PLAN:25:-1:-1
+row - Plan: 
+    Node Type: "Aggregate"
+    Strategy: "Sorted"
+    Partial Mode: "Simple"
+    Parallel Aware: false
+    Async Capable: false
+    Disabled: false
+    Grouping Sets: 
+      - Group Keys: 
+          - ["x"]
+          - []
+      - Sort Key: 
+          - "y"
+        Group Keys: 
+          - ["y"]
+    Plans: 
+      - Node Type: "Index Scan"
+        Parent Relationship: "Outer"
+        Parallel Aware: false
+        Async Capable: false
+        Scan Direction: "Forward"
+        Index Name: "a_x"
+        Relation Name: "a"
+        Alias: "a"
+        Disabled: false
+EXPLAIN
+> EXPLAIN (FORMAT XML, COSTS OFF) SELECT x, y, count(*) FROM a GROUP BY GROUPING SETS ((x), (y), ());
+fields QUERY PLAN:142:-1:-1
+row <explain xmlns="http://www.postgresql.org/2009/explain">
+  <Query>
+    <Plan>
+      <Node-Type>Aggregate</Node-Type>
+      <Strategy>Sorted</Strategy>
+      <Partial-Mode>Simple</Partial-Mode>
+      <Parallel-Aware>false</Parallel-Aware>
+      <Async-Capable>false</Async-Capable>
+      <Disabled>false</Disabled>
+      <Grouping-Sets>
+        <Grouping-Set>
+          <Group-Keys>
+            <Group-Key>
+              <Item>x</Item>
+            </Group-Key>
+            <Group-Key>
+            </Group-Key>
+          </Group-Keys>
+        </Grouping-Set>
+        <Grouping-Set>
+          <Sort-Key>
+            <Item>y</Item>
+          </Sort-Key>
+          <Group-Keys>
+            <Group-Key>
+              <Item>y</Item>
+            </Group-Key>
+          </Group-Keys>
+        </Grouping-Set>
+      </Grouping-Sets>
+      <Plans>
+        <Plan>
+          <Node-Type>Index Scan</Node-Type>
+          <Parent-Relationship>Outer</Parent-Relationship>
+          <Parallel-Aware>false</Parallel-Aware>
+          <Async-Capable>false</Async-Capable>
+          <Scan-Direction>Forward</Scan-Direction>
+          <Index-Name>a_x</Index-Name>
+          <Relation-Name>a</Relation-Name>
+          <Alias>a</Alias>
+          <Disabled>false</Disabled>
+        </Plan>
+      </Plans>
+    </Plan>
+  </Query>
+</explain>
+EXPLAIN
+> RESET enable_hashagg;
+RESET
+> EXPLAIN (FORMAT JSON, COSTS OFF) SELECT x, y, count(*) FROM a GROUP BY GROUPING SETS ((x), (y), ());
+fields QUERY PLAN:114:-1:-1
+row [
+  {
+    "Plan": {
+      "Node Type": "Aggregate",
+      "Strategy": "Mixed",
+      "Partial Mode": "Simple",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Disabled": false,
+      "Grouping Sets": [
+        {
+          "Hash Keys": [
+            ["x"]
+          ]
+        },
+        {
+          "Hash Keys": [
+            ["y"]
+          ]
+        },
+        {
+          "Group Keys": [
+            []
+          ]
+        }
+      ],
+      "Plans": [
+        {
+          "Node Type": "Seq Scan",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Relation Name": "a",
+          "Alias": "a",
+          "Disabled": false
+        }
+      ]
+    }
+  }
+]
+EXPLAIN
+> EXPLAIN SELECT x, y, count(*) FROM a GROUP BY ROLLUP (x), ROLLUP (y);
+fields QUERY PLAN:25:-1:-1
+row MixedAggregate  (cost=0.00..77.25 rows=605 width=16)
+row   Hash Key: x, y
+row   Hash Key: x
+row   Hash Key: y
+row   Group Key: ()
+row   ->  Seq Scan on a  (cost=0.00..30.40 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN SELECT x, y, count(*) FROM a GROUP BY GROUPING SETS ((x, y), (y, x), (x)) ORDER BY y;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=105.39..106.91 rows=608 width=16)
+row   Sort Key: y
+row   ->  HashAggregate  (cost=45.70..77.28 rows=608 width=16)
+row         Hash Key: x, y
+row         Hash Key: x, y
+row         Hash Key: x
+row         ->  Seq Scan on a  (cost=0.00..30.40 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN SELECT x, count(DISTINCT y) FROM a GROUP BY ROLLUP (x);
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=0.15..86.96 rows=201 width=12)
+row   Group Key: x
+row   Group Key: ()
+row   ->  Index Scan using a_x on a  (cost=0.15..74.75 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN VERBOSE SELECT x, y, grouping(x, y), count(*) FROM a GROUP BY CUBE (x, y);
+fields QUERY PLAN:25:-1:-1
+row MixedAggregate  (cost=0.00..78.76 rows=605 width=20)
+row   Output: x, y, GROUPING(x, y), count(*)
+row   Hash Key: a.x, a.y
+row   Hash Key: a.x
+row   Hash Key: a.y
+row   Group Key: ()
+row   ->  Seq Scan on public.a  (cost=0.00..30.40 rows=2040 width=8)
+row         Output: id, x, y
+EXPLAIN
+> SELECT x, y, grouping(x, y), count(*) FROM a GROUP BY CUBE (x, y) ORDER BY 1, 2;
+fields x@a.2:23:4:-1,y@a.3:23:4:-1,grouping:23:4:-1,count:20:8:-1
+row 0,0,0,2
+row 0,1,0,3
+row 0,2,0,2
+row 0,NULL,1,7
+row 1,0,0,2
+row 1,1,0,3
+row 1,2,0,3
+row 1,NULL,1,8
+row 2,0,0,2
+row 2,1,0,2
+row 2,2,0,3
+row 2,NULL,1,7
+row 3,0,0,3
+row 3,1,0,2
+row 3,2,0,2
+row 3,NULL,1,7
+row 4,0,0,2
+row 4,1,0,3
+row 4,2,0,2
+row 4,NULL,1,7
+row 5,0,0,2
+row 5,1,0,2
+row 5,2,0,3
+row 5,NULL,1,7
+row 6,0,0,3
+row 6,1,0,2
+row 6,2,0,2
+row 6,NULL,1,7
+row NULL,0,2,16
+row NULL,1,2,17
+row NULL,2,2,17
+row NULL,NULL,3,50
+SELECT 32
