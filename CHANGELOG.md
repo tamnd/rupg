@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A column of a table whose primary key is in `GROUP BY` can be in the targets and in `HAVING` without an aggregate, as PostgreSQL allows it. A view of such a query depends on the primary key. (#591)
 - `GROUP BY` with no aggregate is a `Group` node of a sorted input in `EXPLAIN`, with the cost that PostgreSQL gives it, in place of a `GroupAggregate`. (#590)
 - The scan of a subquery of `FROM` reads each plan of the subquery that the planner keeps, with the order of its rows, as PostgreSQL does. `ORDER BY` and a merge join above a subquery need no sort when the subquery gives its rows in their order, and a `UNION` in `FROM` can use a `Unique` above a `Merge Append`. The scan of a query of `WITH` has the order of the rows of its plan. A subquery with `FOR UPDATE` keeps the cost of its `Subquery Scan`. (#589)
 - `UNION` without `ALL` also plans a `Unique` above a `Merge Append` of its `SELECT`s in the order of the columns, as PostgreSQL does. A `Unique` of a sort or of a `Merge Append` gives the rows in the order of the columns, so `ORDER BY` of the columns needs no other sort, also when a `SELECT` casts a column. (#588)

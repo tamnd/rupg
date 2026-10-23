@@ -70,6 +70,8 @@ pub struct Query {
     pub pushed: bool,
     /// The queries of `preprocess_minmax_aggregates` for a query whose aggregate calls are each `min` or `max` of one table, which the planner can run as an `InitPlan` that reads the first row of an index.
     pub minmax: Option<Box<MinMax>>,
+    /// `constraintDeps`: the OIDs of the primary keys that make columns of `GROUP BY` queries valid, which a view depends on.
+    pub constraint_deps: Vec<u32>,
 }
 
 /// `MinMaxAggInfo`: the form of a query whose aggregate calls are each `min` or `max`, with a subquery for each aggregate call that reads the first value in the order of its sort operator.
@@ -348,8 +350,9 @@ impl Analyzer<'_> {
         let group_distinct = s.groupDistinct;
         let grouped =
             self.has_aggs || !group.is_empty() || !grouping_sets.is_empty() || having.is_some();
+        let mut constraint_deps = Vec::new();
         if grouped {
-            self.check_grouping(
+            constraint_deps = self.check_grouping(
                 &mut targets,
                 having.as_mut(),
                 &group,
@@ -386,6 +389,7 @@ impl Analyzer<'_> {
             pulled: 0,
             pushed: false,
             minmax: None,
+            constraint_deps,
         };
         for clause in s.lockingClause.iter().flatten() {
             if let Node::LockingClause(clause) = clause {
