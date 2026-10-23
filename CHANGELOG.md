@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.70 (2026-10-23)
+
+This release plans grouping sets with rollups and MixedAggregate, plans a Group node for GROUP BY with no aggregate, and allows the columns of a table whose primary key is in GROUP BY. The scan of a subquery reads each plan of the subquery with its order, and UNION can use a Unique above a Merge Append.
+
 ### Added
 
 - The plan of grouping sets is the one of PostgreSQL: the sets that one sort gives form a rollup, and the `Agg` hashes the sets, sorts the rows once for each rollup, or does both in a `MixedAggregate`, whichever costs less. `EXPLAIN` shows the `Sort Key` of each rollup after the first one. (#592)
