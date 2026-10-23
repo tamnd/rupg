@@ -39,6 +39,7 @@ struct Options {
     /// The OID of the language.
     language: u32,
     strict: bool,
+    leakproof: bool,
     volatile: u8,
     parallel: u8,
     cost: u32,
@@ -48,6 +49,11 @@ struct Options {
     src: Option<String>,
     /// The place of `AS` in the query text.
     src_at: Option<usize>,
+}
+
+/// The error of `CreateFunction` and `AlterFunction` for `LEAKPROOF` from a role that is not a superuser.
+pub(super) fn only_superuser_leakproof() -> Error {
+    Error::new(SqlState::INSUFFICIENT_PRIVILEGE, "only superuser can define a leakproof function")
 }
 
 /// The text of the argument of an option.
@@ -77,6 +83,7 @@ fn options(stmt: &CreateFunctionStmt) -> Result<Options> {
     let mut out = Options {
         language: SQL_LANGUAGE,
         strict: false,
+        leakproof: false,
         volatile: b'v',
         parallel: b'u',
         cost: DEFAULT_COST,
@@ -115,6 +122,7 @@ fn options(stmt: &CreateFunctionStmt) -> Result<Options> {
                 return Err(not_yet(&format!("a function in the language {language}"), at));
             }
             ("strict", _) => out.strict = matches!(def.arg, Some(Node::Boolean(true))),
+            ("leakproof", _) => out.leakproof = matches!(def.arg, Some(Node::Boolean(true))),
             ("volatility", Some("immutable")) => out.volatile = b'i',
             ("volatility", Some("stable")) => out.volatile = b's',
             ("volatility", Some("volatile")) => out.volatile = b'v',
@@ -465,6 +473,7 @@ fn builtin_function(oid: u32) -> Option<Function> {
         support: 0,
         kind: b'f',
         strict: proc.strict,
+        leakproof: false,
         volatile: proc.volatile,
         parallel: b's',
         rettype: proc.rettype,
@@ -495,6 +504,9 @@ impl Definer<'_, '_> {
         };
         self.check_create_in(namespace, None)?;
         let options = options(stmt)?;
+        if options.leakproof && !self.is_superuser() {
+            return Err(only_superuser_leakproof());
+        }
         let procedure = stmt.is_procedure;
         let mut argtypes = Vec::new();
         let mut allargtypes = Vec::new();
@@ -637,6 +649,7 @@ impl Definer<'_, '_> {
             support,
             kind: if stmt.is_procedure { b'p' } else { b'f' },
             strict: options.strict,
+            leakproof: options.leakproof,
             volatile: options.volatile,
             parallel: options.parallel,
             rettype,

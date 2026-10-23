@@ -134,6 +134,12 @@ impl Definer<'_, '_> {
             };
             match (name, text) {
                 ("strict", _) => new.strict = matches!(def.arg, Some(Node::Boolean(true))),
+                ("leakproof", _) => {
+                    new.leakproof = matches!(def.arg, Some(Node::Boolean(true)));
+                    if new.leakproof && !self.is_superuser() {
+                        return Err(super::function::only_superuser_leakproof());
+                    }
+                }
                 ("volatility", Some("immutable")) => new.volatile = b'i',
                 ("volatility", Some("stable")) => new.volatile = b's',
                 ("volatility", Some("volatile")) => new.volatile = b'v',

@@ -5687,6 +5687,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/deferrable_unique.test")));
     }
 
+    /// `LEAKPROOF` and `NOT LEAKPROOF` in `CREATE FUNCTION`, `CREATE OR REPLACE FUNCTION` and `ALTER FUNCTION`, with `proleakproof`, the error for a procedure, the error for a role that is not a superuser and a second `LEAKPROOF`. `connection/leakproof.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn leakproof() {
+        big_stack(|| script(include_str!("connection/leakproof.test")));
+    }
+
     /// A query that is a `UNION ALL` of `SELECT`s with the types of its columns and has `ORDER BY` becomes an append relation, as `flatten_simple_union_all` makes it, so the planner can plan a `Merge Append` of the plans of the `SELECT`s in the order. A `SELECT` with its own `WHERE` is not a member of the append relation, as `is_safe_append_member`, and its plan gets a sort. `connection/plan_union_all_order.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_union_all_order() {

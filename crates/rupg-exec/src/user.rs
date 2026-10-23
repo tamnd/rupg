@@ -959,7 +959,7 @@ fn functions<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("prosupport", oid(f.support))
                 .set("prokind", Value::Char(f.kind))
                 .set("prosecdef", Value::Bool(false))
-                .set("proleakproof", Value::Bool(false))
+                .set("proleakproof", Value::Bool(f.leakproof))
                 .set("proisstrict", Value::Bool(f.strict))
                 .set("proretset", Value::Bool(f.retset))
                 .set("provolatile", Value::Char(f.volatile))
