@@ -1,0 +1,77 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE FUNCTION fh(bytea) RETURNS text STRICT IMMUTABLE PARALLEL SAFE LEAKPROOF RETURN substr(encode(sha256($1), 'hex'), 1, 32);
+CREATE FUNCTION
+> CREATE FUNCTION fh(text) RETURNS text STRICT IMMUTABLE PARALLEL SAFE LEAKPROOF RETURN substr(encode(sha256($1::bytea), 'hex'), 1, 32);
+CREATE FUNCTION
+> SELECT fh('abc'), fh('abc'::bytea);
+fields fh:25:-1:-1,fh:25:-1:-1
+row ba7816bf8f01cfea414140de5dae2223,ba7816bf8f01cfea414140de5dae2223
+SELECT 1
+> SELECT proname, proleakproof, proisstrict, provolatile, proparallel FROM pg_proc WHERE proname = 'fh' ORDER BY oid;
+fields proname@pg_proc.2:19:64:-1,proleakproof@pg_proc.12:16:1:-1,proisstrict@pg_proc.13:16:1:-1,provolatile@pg_proc.15:18:1:-1,proparallel@pg_proc.16:18:1:-1
+row fh,t,t,i,s
+row fh,t,t,i,s
+SELECT 2
+> CREATE FUNCTION nl(int) RETURNS int NOT LEAKPROOF LANGUAGE sql AS 'SELECT $1';
+CREATE FUNCTION
+> SELECT proleakproof FROM pg_proc WHERE proname = 'nl';
+fields proleakproof@pg_proc.12:16:1:-1
+row f
+SELECT 1
+> ALTER FUNCTION nl(int) LEAKPROOF;
+ALTER FUNCTION
+> SELECT proleakproof FROM pg_proc WHERE proname = 'nl';
+fields proleakproof@pg_proc.12:16:1:-1
+row t
+SELECT 1
+> ALTER FUNCTION nl(int) NOT LEAKPROOF;
+ALTER FUNCTION
+> SELECT proleakproof FROM pg_proc WHERE proname = 'nl';
+fields proleakproof@pg_proc.12:16:1:-1
+row f
+SELECT 1
+> CREATE OR REPLACE FUNCTION nl(int) RETURNS int LEAKPROOF LANGUAGE sql AS 'SELECT $1 + 1';
+CREATE FUNCTION
+> SELECT proleakproof, nl(1) FROM pg_proc WHERE proname = 'nl';
+fields proleakproof@pg_proc.12:16:1:-1,nl:23:4:-1
+row t,2
+SELECT 1
+> CREATE PROCEDURE pr() LEAKPROOF LANGUAGE sql AS 'SELECT 1';
+ERROR 42P13 invalid attribute in procedure definition at 23
+> CREATE ROLE regress_leak;
+CREATE ROLE
+> CREATE SCHEMA lks AUTHORIZATION regress_leak;
+CREATE SCHEMA
+> SET ROLE regress_leak;
+SET
+is_superuser=off
+> CREATE FUNCTION lks.lk(int) RETURNS int LEAKPROOF LANGUAGE sql AS 'SELECT $1';
+ERROR 42501 only superuser can define a leakproof function
+> CREATE FUNCTION lks.lk(int) RETURNS int NOT LEAKPROOF LANGUAGE sql AS 'SELECT $1';
+CREATE FUNCTION
+> ALTER FUNCTION lks.lk(int) LEAKPROOF;
+ERROR 42501 only superuser can define a leakproof function
+> ALTER FUNCTION lks.lk(int) NOT LEAKPROOF;
+ALTER FUNCTION
+> SELECT proleakproof FROM pg_proc WHERE proname = 'lk';
+fields proleakproof@pg_proc.12:16:1:-1
+row f
+SELECT 1
+> RESET ROLE;
+RESET
+is_superuser=on
+> ALTER FUNCTION lks.lk(int) LEAKPROOF;
+ALTER FUNCTION
+> SELECT proleakproof FROM pg_proc WHERE proname = 'lk';
+fields proleakproof@pg_proc.12:16:1:-1
+row t
+SELECT 1
+> ALTER FUNCTION lks.lk(int) LEAKPROOF STRICT LEAKPROOF;
+ERROR 42601 conflicting or redundant options at 45
+> DROP SCHEMA lks CASCADE;
+NOTICE 00000 drop cascades to function lks.lk(integer)
+DROP SCHEMA
+> DROP ROLE regress_leak;
+DROP ROLE

@@ -574,6 +574,8 @@ pub struct Function {
     pub kind: u8,
     /// `proisstrict`: true when a null argument gives null without a call.
     pub strict: bool,
+    /// `proleakproof`: true when the function has no side effects and gives no information about its arguments other than its result.
+    pub leakproof: bool,
     /// `provolatile`: `i` immutable, `s` stable or `v` volatile.
     pub volatile: u8,
     /// `proparallel`: `s` safe, `r` restricted or `u` unsafe.
@@ -2637,6 +2639,7 @@ impl Catalog {
             kind: b'f',
             // The constructors of a range type accept null bounds, which are infinite.
             strict: rettype == multirange,
+            leakproof: false,
             volatile: b'i',
             parallel: b's',
             rettype,
