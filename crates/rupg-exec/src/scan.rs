@@ -809,7 +809,11 @@ pub(crate) fn tuples(
     }
     let mut acc: Vec<Vec<usize>> = vec![vec![NONE; width]];
     let mut acc_relations: Vec<usize> = Vec::new();
-    for ((item, relations), conds) in items.iter().zip(own) {
+    let order = join_order(&items, &rest, tables);
+    let sequence = order.clone().unwrap_or_else(|| (0..items.len()).collect());
+    for i in sequence {
+        let (item, relations) = &items[i];
+        let conds = std::mem::take(&mut own[i]);
         let mut all = acc_relations.clone();
         all.extend(relations);
         let mut on = Vec::new();
@@ -833,7 +837,46 @@ pub(crate) fn tuples(
         acc = scan.join_item(input, item, conds, &vec![NONE; width])?;
         acc_relations = all;
     }
-    keep(acc, &rest, scan.test)
+    let mut acc = keep(acc, &rest, scan.test)?;
+    // The tuples come in the order of the joins in the written order, as the row numbers of the relations of each part give it.
+    if order.is_some() {
+        let columns: Vec<usize> = items.iter().flat_map(|(_, r)| r.iter().copied()).collect();
+        acc.sort_by(|a, b| columns.iter().map(|&c| a[c]).cmp(columns.iter().map(|&c| b[c])));
+    }
+    Ok(acc)
+}
+
+/// The order of the parts of `FROM` for the joins of [`tuples`], as `join_search_one_level` makes a join with no condition only when no other join has one: the written order, but when the next part has no `=` with the parts before it that a hash join can test, the first later part that has one comes first, so that the join does not make all the tuples of a cross join. `None` when the order is the written one. The parts keep the written order when a part reads other relations, as `LATERAL` lets it.
+fn join_order(
+    items: &[(&FromItem, Vec<usize>)],
+    conds: &[&Expr],
+    tables: &Tables,
+) -> Option<Vec<usize>> {
+    if items.len() < 3 || tables.needs.iter().any(|n| !n.is_empty()) {
+        return None;
+    }
+    let within =
+        |used: &[usize], set: &[usize]| !used.is_empty() && used.iter().all(|r| set.contains(r));
+    let links = |acc: &[usize], relations: &[usize]| {
+        conds.iter().any(|expr| {
+            let ExprKind::Func(f) = &expr.kind else { return false };
+            if !HASH_EQUALS.contains(&f.oid) || f.args.len() != 2 {
+                return false;
+            }
+            let (a, b) = (relations_of(&f.args[0]), relations_of(&f.args[1]));
+            (within(&a, acc) && within(&b, relations)) || (within(&b, acc) && within(&a, relations))
+        })
+    };
+    let mut rest: Vec<usize> = (1..items.len()).collect();
+    let mut order = vec![0];
+    let mut acc = items[0].1.clone();
+    while !rest.is_empty() {
+        let pick = rest.iter().position(|&i| links(&acc, &items[i].1)).unwrap_or(0);
+        let i = rest.remove(pick);
+        acc.extend(&items[i].1);
+        order.push(i);
+    }
+    (!order.is_sorted()).then_some(order)
 }
 
 impl Scan<'_, '_> {
