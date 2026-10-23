@@ -469,7 +469,8 @@ impl Connection {
             };
             let types = foreign.types.iter().cycle().take(params.len()).copied().collect();
             let planned = query::plan(node, &reader, &Params { types, variable: false })?;
-            *plan = Some(planned.fold(None, &reader)?);
+            // The action runs as the owner of the table, as the queries of `ri_triggers.c` do.
+            *plan = Some(planned.fold(None, &reader)?.unchecked());
         }
         let Some(plan) = plan.as_ref() else {
             return Err(Error::internal("an action of a foreign key with no plan"));

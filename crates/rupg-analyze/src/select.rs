@@ -74,6 +74,8 @@ pub struct Query {
     pub constraint_deps: Vec<u32>,
     /// For the query of `RETURNING`, the list as `EXPLAIN` shows it.
     pub shown: Option<Box<crate::Shown>>,
+    /// `rteperminfos`: the privileges that the statement needs on each relation that it reads or writes, also in its subqueries and in the queries of its views. Only the top query of a statement has them.
+    pub perms: Vec<crate::PermInfo>,
 }
 
 /// `MinMaxAggInfo`: the form of a query whose aggregate calls are each `min` or `max`, with a subquery for each aggregate call that reads the first value in the order of its sort operator.
@@ -393,11 +395,15 @@ impl Analyzer<'_> {
             minmax: None,
             constraint_deps,
             shown: None,
+            perms: Vec::new(),
         };
         for clause in s.lockingClause.iter().flatten() {
             if let Node::LockingClause(clause) = clause {
                 crate::locking::transform_locking_clause(&mut query, clause)?;
             }
+        }
+        if !s.lockingClause.is_empty() {
+            self.mark_locked(&query);
         }
         Ok(query)
     }

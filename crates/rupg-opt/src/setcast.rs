@@ -168,6 +168,7 @@ fn wrap(sub: &mut Query, columns: &[(u32, i32)], index: usize) -> Option<Query> 
         cte: None,
         tablesample: None,
         only: false,
+        perm: None,
     };
     Some(Query {
         relations: vec![relation],

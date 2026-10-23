@@ -16,6 +16,7 @@ use crate::coerce::{AtOpt, Context};
 use crate::colname::figure_colname;
 use crate::cte::{CteItem, CteRef};
 use crate::expr::{CastForm, Expr, ExprKind, JoinRow, Var};
+use crate::perm::{ACL_SELECT, PermInfo};
 use crate::typename::place;
 use crate::types;
 
@@ -72,6 +73,8 @@ pub struct Relation {
     pub tablesample: Option<TableSample>,
     /// True for `ONLY` before the name of a table. A partitioned table then gives no rows, and a table gives no rows of its children of `INHERITS`.
     pub only: bool,
+    /// `perminfoindex`: the index of the privileges of a table or a view in the privileges of the statement while the analyzer reads the statement, or `None` for a relation that needs no privileges.
+    pub perm: Option<usize>,
 }
 
 impl Relation {
@@ -95,6 +98,7 @@ impl Relation {
             cte: None,
             tablesample: None,
             only: false,
+            perm: None,
         }
     }
 
@@ -518,11 +522,13 @@ impl Analyzer<'_> {
         if let Some(item) = self.transition_reference(rv)? {
             return Ok(item);
         }
-        self.catalog_relation(rv)
+        self.catalog_relation(rv, false)
     }
 
     /// `addRangeTableEntry` for a table of the catalog: the entry and its namespace item. The target table of a write is a table of the catalog also when a query of `WITH` has its name, as `setTargetTable` finds it.
-    fn catalog_relation(&mut self, rv: &RangeVar) -> Result<Item> {
+    ///
+    /// The relation needs `SELECT`, or for the target table of a write with `target`, the privileges that [`Analyzer::target_table`] gave it.
+    fn catalog_relation(&mut self, rv: &RangeVar, target: bool) -> Result<Item> {
         let at = place(rv.location);
         let name = rv.relname.as_deref().unwrap_or_default();
         let oid = self.lookup_relation(rv)?.ok_or_else(|| {
@@ -549,25 +555,48 @@ impl Analyzer<'_> {
             error.at_opt(at)
         })?;
         let columns = self.open_relation(oid, name, at)?;
-        let subquery = self.view_query(oid)?.map(Box::new);
+        let perm = if target { self.target_perm } else { Some(self.add_perm(oid, ACL_SELECT)) };
+        let subquery = match self.view_query_perms(oid)? {
+            // The target of a write is a view with a trigger `INSTEAD OF`, which reads no table of the view.
+            Some((mut query, perms)) => {
+                if target {
+                    crate::perm::forget(&mut query);
+                } else {
+                    self.add_view_perms(oid, &mut query, perms);
+                }
+                Some(Box::new(query))
+            }
+            None => None,
+        };
         let alias = rv.alias.as_deref();
         let refname = alias.and_then(|a| a.aliasname.as_deref()).unwrap_or(name).to_string();
         let mut relation = Relation::new(oid, columns, subquery, None, None);
         relation.only = !rv.inh;
+        relation.perm = perm;
         self.add_relation(relation, refname, alias)
     }
 
     /// `ApplyRetrieveRule`: the query of a view of the user, which takes the place of the view as a subquery, or `None` for a relation that is not a view. A materialized view gives its rows from its heap, so its query takes its place only for the `INSERT` that fills it, as `refresh_matview_datafill` runs the query.
     pub(crate) fn view_query(&self, oid: u32) -> Result<Option<crate::Query>> {
+        Ok(self.view_query_perms(oid)?.map(|(query, _)| query))
+    }
+
+    /// [`Analyzer::view_query`] with the privileges that the query of the view needs.
+    fn view_query_perms(&self, oid: u32) -> Result<Option<(crate::Query, Vec<PermInfo>)>> {
         let Some(rel) = self.env.catalog().and_then(|c| c.relation(oid)) else { return Ok(None) };
         if rel.kind == RelKind::MatView && self.env.filling() != oid {
             return Ok(None);
         }
-        self.stored_query(oid)
+        self.stored_query_perms(oid)
     }
 
     /// The query of a view or of a materialized view of the user, or `None` for a relation that has no query. The analyzer reads the statement that made the view again, with the schemas of `search_path` of that statement. An error in the query of the view has no position, and the warnings of the query go.
     pub(crate) fn stored_query(&self, oid: u32) -> Result<Option<crate::Query>> {
+        Ok(self.stored_query_perms(oid)?.map(|(query, _)| query))
+    }
+
+    /// [`Analyzer::stored_query`] with the privileges that the query needs.
+    fn stored_query_perms(&self, oid: u32) -> Result<Option<(crate::Query, Vec<PermInfo>)>> {
         let Some(rel) = self.env.catalog().and_then(|c| c.relation(oid)) else { return Ok(None) };
         let Some(view) = &rel.view else { return Ok(None) };
         if self.views.contains(&oid) {
@@ -592,7 +621,8 @@ impl Analyzer<'_> {
         an.set_path(&view.path);
         an.views.clone_from(&self.views);
         an.views.push(oid);
-        an.select(select).map(Some).map_err(|error| error.with_position(None))
+        let query = an.select(select).map_err(|error| error.with_position(None))?;
+        Ok(Some((query, an.perms)))
     }
 
     /// `transformRangeSubselect` and `addRangeTableEntryForSubquery`: a subquery in `FROM` and its namespace item. With no alias, the name of the entry is `unnamed_subquery`, and a qualified name cannot use it.
@@ -1085,7 +1115,8 @@ impl Analyzer<'_> {
             .relations
             .first()
             .ok_or_else(|| Error::internal("RETURNING with no table"))?;
-        let relation = Relation::new(target.oid, target.columns.clone(), None, None, None);
+        let mut relation = Relation::new(target.oid, target.columns.clone(), None, None, None);
+        relation.perm = target.perm;
         let index = self.scope.relations.len();
         let mut item = self.add_relation(relation, name.to_string(), None)?;
         item.cols_visible = false;
@@ -1124,7 +1155,7 @@ impl Analyzer<'_> {
     /// `setTargetTable` for an `UPDATE` or a `DELETE`: the target table as the first part of `FROM`, in the namespace.
     pub(crate) fn target_relation(&mut self, rv: &RangeVar) -> Result<FromItem> {
         self.check_target(rv)?;
-        let item = self.catalog_relation(rv)?;
+        let item = self.catalog_relation(rv, true)?;
         let index = self.scope.entries[item.entry].relation.unwrap_or_default();
         self.scope.namespace.push(item);
         Ok(FromItem::Relation(index))
@@ -1137,7 +1168,7 @@ impl Analyzer<'_> {
     /// `42712` when the source has the name of the target table, and the errors of the source.
     pub(crate) fn merge_from(&mut self, rv: &RangeVar, source: &Node) -> Result<FromItem> {
         self.check_target(rv)?;
-        let target = self.catalog_relation(rv)?;
+        let target = self.catalog_relation(rv, true)?;
         let (item, _, namespace) = self.transform_from_item(source)?;
         if namespace.iter().any(|other| other.name == target.name) {
             return Err(Error::new(
@@ -1436,6 +1467,7 @@ impl Analyzer<'_> {
             } else {
                 Expr::new(ExprKind::Bool(crate::expr::BoolOp::And, conds), oid::BOOL)
             };
+            self.mark_select(&cond);
             on = Some(self.coerce_to_boolean(cond, "JOIN/USING")?);
             for (name, l, r) in pairs {
                 let expr = self.merged_column(
@@ -1587,7 +1619,16 @@ impl Analyzer<'_> {
     }
 
     /// `transformColumnRef`: the value of a column name.
+    ///
+    /// Each column that the reference reads needs `SELECT`, as `markVarForSelectPriv` marks it.
     pub(crate) fn column_ref(&mut self, c: &ColumnRef) -> Result<Expr> {
+        let expr = self.resolve_column_ref(c)?;
+        self.mark_select(&expr);
+        Ok(expr)
+    }
+
+    /// The body of [`Analyzer::column_ref`].
+    fn resolve_column_ref(&mut self, c: &ColumnRef) -> Result<Expr> {
         let at = place(c.location);
         if self.kind == Kind::ColumnDefault {
             return Err(Error::new(
@@ -2118,10 +2159,15 @@ impl Analyzer<'_> {
         let at = place(c.location);
         let names = fields(&c.fields);
         let Some((None, qualifier)) = names.split_last() else { return Ok(None) };
-        let items: Vec<Item> = match qualifier {
+        let items: Vec<(usize, Item)> = match qualifier {
             [] => {
-                let visible: Vec<Item> =
-                    self.scope.namespace.iter().filter(|i| i.cols_visible).cloned().collect();
+                let visible: Vec<(usize, Item)> = self
+                    .scope
+                    .namespace
+                    .iter()
+                    .filter(|i| i.cols_visible)
+                    .map(|i| (0, i.clone()))
+                    .collect();
                 if visible.is_empty() {
                     return Err(Error::new(
                         SqlState::SYNTAX_ERROR,
@@ -2154,7 +2200,7 @@ impl Analyzer<'_> {
                         for (_, expr) in &mut item.columns {
                             expr.raise(level);
                         }
-                        vec![item]
+                        vec![(level, item)]
                     }
                     None if schema.is_none() && qualifier.len() == 1 => {
                         // `plpgsql_post_column_ref`: `r.*` of a variable of a composite type gives the fields of the variable.
@@ -2170,8 +2216,15 @@ impl Analyzer<'_> {
             _ => return Ok(None),
         };
         let mut columns = Vec::new();
-        for item in items {
+        for (level, item) in items {
+            // `expandNSItemAttrs`: the relation needs `SELECT` also when it has no columns.
+            if let Some(relation) = self.level(level).entries[item.entry].relation {
+                self.mark_relation(level, relation);
+            }
             let shown = item.columns.len() - item.hidden;
+            for (_, expr) in item.columns.iter().take(shown) {
+                self.mark_select(expr);
+            }
             for (name, expr) in item.columns.into_iter().take(shown) {
                 columns.push((name, expr.at(at)));
             }

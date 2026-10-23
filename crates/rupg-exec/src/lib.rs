@@ -1268,7 +1268,9 @@ impl Plan {
         writes
             .into_iter()
             .map(|(n, query)| {
-                let plan = Plan { query: query.clone(), written: Arc::clone(&self.written) };
+                // The statement checks the privileges of all its parts before the first write.
+                let query = Query { perms: self.query.perms.clone(), ..query.clone() };
+                let plan = Plan { query, written: Arc::clone(&self.written) };
                 (plan, read.contains(&n))
             })
             .collect()
@@ -1337,8 +1339,16 @@ impl Plan {
                 format!("cannot execute {name} in a read-only transaction"),
             ));
         }
+        rupg_func::check_permissions(&self.query.perms, session)?;
         check_row_marks(&self.query, session)?;
         scan::check_scannable(&self.query, session)
+    }
+
+    /// The plan with no checks of the privileges of the statement, for a query that the server makes for its own work, such as the checks of a foreign key and the insert into a partition.
+    #[must_use]
+    pub fn unchecked(mut self) -> Plan {
+        self.query.perms.clear();
+        self
     }
 
     /// Runs the query and gives its rows. For an `INSERT`, the rows are the new rows of the table after the checks of its constraints. For an `UPDATE`, each new row ends with the ID of the version of the old row, and for a `DELETE` each row has only that ID.

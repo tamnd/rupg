@@ -2,6 +2,9 @@
 //!
 //! A port of the functions of `src/backend/utils/adt/acl.c` and of the checks of `aclchk.c` that they call. The privileges are the `aclitem[]` values of the static rows, which have the privileges that `initdb` gives. Each function has forms with a role name or OID first, or no role for the current user, and with the object as text or as an OID. The form of a call is clear from its values: a name is text and an OID is an OID. A form with the OID of an object that does not exist gives null.
 
+use std::collections::BTreeSet;
+
+use rupg_analyze::PermInfo;
 use rupg_catalog::{ObjRef, PG_CLASS, PG_LANGUAGE, PG_NAMESPACE, PG_PROC, PG_TYPE, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Owned};
@@ -839,6 +842,127 @@ pub fn insert_allowed(
         }
     }
     Ok(true)
+}
+
+/// `pg_class_aclmask` with `ACLMASK_ALL`: the bits of `mask` that `role` has on the relation, one bit at a time.
+fn class_bits(relid: u32, role: u32, mask: u32, session: &dyn Session) -> Result<u32> {
+    let mut result = 0;
+    for bit in [ACL_INSERT, ACL_SELECT, ACL_UPDATE, ACL_DELETE] {
+        if mask & bit != 0 && class_check(relid, role, bit, session)?.unwrap_or(false) {
+            result |= bit;
+        }
+    }
+    Ok(result)
+}
+
+/// `pg_attribute_aclcheck_all` with `ACLMASK_ALL`: true when each user column that is not dropped has the privilege. A relation with no columns does not have it.
+fn each_attribute_check(relid: u32, role: u32, mask: u32, session: &dyn Session) -> Result<bool> {
+    let Some(class) = class_of(relid, session) else { return Ok(false) };
+    let mut result = false;
+    for attribute in attributes_of(relid, session) {
+        if attribute.num < 1 || attribute.num > class.natts || attribute.dropped {
+            continue;
+        }
+        let Some(acl) = &attribute.acl else { return Ok(false) };
+        if aclmask(&parse_acl(acl)?, role, class.owner, mask) == 0 {
+            return Ok(false);
+        }
+        result = true;
+    }
+    Ok(result)
+}
+
+/// `ExecCheckPermissionsModified`: true when the role has the privilege on each of the columns, or on any column when there are no columns.
+fn modified_allowed(
+    relid: u32,
+    role: u32,
+    columns: &BTreeSet<i16>,
+    mask: u32,
+    session: &dyn Session,
+) -> Result<bool> {
+    if columns.is_empty() {
+        return Ok(all_attributes_check(relid, role, mask, session)?.unwrap_or(false));
+    }
+    for &attnum in columns {
+        if !attribute_check(relid, attnum, role, mask, session)?.unwrap_or(false) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// `ExecCheckOneRelPerms`: true when the role has the privileges of the statement on the relation, on the table or else on each column that the statement uses.
+fn one_relation_allowed(perm: &PermInfo, role: u32, session: &dyn Session) -> Result<bool> {
+    let relid = perm.relid;
+    let remaining = perm.required & !class_bits(relid, role, perm.required, session)?;
+    if remaining == 0 {
+        return Ok(true);
+    }
+    if remaining & !(ACL_SELECT | ACL_INSERT | ACL_UPDATE) != 0 {
+        return Ok(false);
+    }
+    if remaining & ACL_SELECT != 0 {
+        if perm.selected.is_empty()
+            && !all_attributes_check(relid, role, ACL_SELECT, session)?.unwrap_or(false)
+        {
+            return Ok(false);
+        }
+        for &attnum in &perm.selected {
+            let allowed = if attnum == 0 {
+                each_attribute_check(relid, role, ACL_SELECT, session)?
+            } else {
+                attribute_check(relid, attnum, role, ACL_SELECT, session)?.unwrap_or(false)
+            };
+            if !allowed {
+                return Ok(false);
+            }
+        }
+    }
+    if remaining & ACL_INSERT != 0
+        && !modified_allowed(relid, role, &perm.inserted, ACL_INSERT, session)?
+    {
+        return Ok(false);
+    }
+    if remaining & ACL_UPDATE != 0
+        && !modified_allowed(relid, role, &perm.updated, ACL_UPDATE, session)?
+    {
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// `ExecCheckPermissions`: an error for the first relation that the statement uses without the privileges that it needs. A relation of the query of a view counts as the owner of the view. A superuser has each privilege, and a relation that does not exist is not checked.
+///
+/// # Errors
+///
+/// `permission denied` for the relation, or the error of an ACL that is not correct.
+pub fn check_permissions(perms: &[PermInfo], session: &dyn Session) -> Result<()> {
+    for perm in perms {
+        if perm.required == 0 {
+            continue;
+        }
+        let role = if perm.check_as == 0 { current_user(session) } else { perm.check_as };
+        if superuser(role) {
+            continue;
+        }
+        let Some(class) = class_of(perm.relid, session) else { continue };
+        if one_relation_allowed(perm, role, session)? {
+            continue;
+        }
+        let object = match class.kind {
+            'v' => "view",
+            'm' => "materialized view",
+            'S' => "sequence",
+            'f' => "foreign table",
+            'i' | 'I' => "index",
+            _ => "table",
+        };
+        return Err(Error::new(
+            SqlState::INSUFFICIENT_PRIVILEGE,
+            format!("permission denied for {object} {}", class.name),
+        ));
+    }
+    Ok(())
 }
 
 /// The privileges that `nextval` needs: `USAGE` or `UPDATE`.

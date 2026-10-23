@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- A statement checks the privileges that it needs on the tables and the columns that it reads and writes before it runs, as `ExecCheckPermissions` does. A column grant is enough for the columns that the statement uses, the relations of a view count as the owner of the view unless the view has `security_invoker`, and `FOR UPDATE` needs `UPDATE`. (#NNN)
+
 ### Fixed
 
 - A column of the target table by a name with the schema in `RETURNING`, such as `RETURNING public.t.id`, now works in `INSERT`, `UPDATE`, `DELETE` and `MERGE`. Before, it gave `42P09` "table reference ... is ambiguous", because the names `old` and `new` of `RETURNING` also matched the table. Prisma sends this form.
