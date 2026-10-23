@@ -84,6 +84,17 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
             })
             .collect();
         removed_scans(plan, &mut spaces);
+        // The `Output` of the `ModifyTable` of an `INSERT` with `RETURNING` reads the columns of the target table.
+        for (s, space) in spaces.iter_mut().enumerate() {
+            let returning =
+                plan.scopes[s].query.write.as_ref().and_then(|w| w.returning.as_deref());
+            if let (Some(name), Some(returning)) = (&targets[s], returning)
+                && let Some(table) = returning.relations.first()
+            {
+                let columns = table.columns.iter().map(|c| c.name.clone()).collect();
+                space.target = Some((name.clone(), columns));
+            }
+        }
         let mut windows: Vec<Vec<Option<String>>> =
             plan.scopes.iter().map(|s| vec![None; s.query.windows.len()]).collect();
         window_names(&plan.root, &mut windows);

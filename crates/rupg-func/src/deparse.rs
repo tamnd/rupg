@@ -24,6 +24,7 @@ use rupg_analyze::{default_opclass, node, sort_operators};
 use rupg_catalog::{ConKind, Constraint, IndexInfo, PartStrategy, PartitionKey, RelKind, Relation};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
+use rupg_plan::TARGET;
 use rupg_types::{Value, oid, sql_name};
 
 use crate::io::to_text;
@@ -67,6 +68,8 @@ struct Namespace {
     inside: Vec<usize>,
     /// The subqueries of `FROM`, by the index of the relation, whose `Subquery Scan` the plan does not keep. A node above reads the target list of the plan of the subquery.
     removed: Vec<(usize, Rc<Removed>)>,
+    /// The name of the target table of an `INSERT` and the names of its columns, which a `Var` of [`TARGET`] reads, as the entry of the target table in the range table.
+    target: Option<(String, Vec<String>)>,
 }
 
 /// The target list of the plan of a subquery whose `Subquery Scan` the plan does not keep, as `trivial_subqueryscan` takes the scan out of the plan.
@@ -160,6 +163,7 @@ impl<'a> Deparser<'a> {
             joins: Vec::new(),
             inside: Vec::new(),
             removed: Vec::new(),
+            target: None,
         });
         d
     }
@@ -222,9 +226,15 @@ impl<'a> Deparser<'a> {
         let bogus = || Error::internal(format!("bogus varlevelsup: {}", var.levels_up));
         let depth = self.namespaces.len().checked_sub(var.levels_up + 1).ok_or_else(bogus)?;
         let space = &self.namespaces[depth];
-        let refname = space.names.get(var.relation).cloned().unwrap_or_default();
+        let target = space.target.as_ref().filter(|_| var.relation == TARGET);
+        let refname = match target {
+            Some((name, _)) => name.clone(),
+            None => space.names.get(var.relation).cloned().unwrap_or_default(),
+        };
+        let columns =
+            target.map(|(_, columns)| columns).or_else(|| space.columns.get(var.relation));
         let attname = match usize::try_from(var.attnum) {
-            Ok(n) if n > 0 => space.columns.get(var.relation).and_then(|c| c.get(n - 1)).cloned(),
+            Ok(n) if n > 0 => columns.and_then(|c| c.get(n - 1)).cloned(),
             _ => system_column(var.attnum).map(str::to_string),
         };
         let attname =
