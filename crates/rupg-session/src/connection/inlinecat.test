@@ -1,0 +1,78 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> create table ic (i int, v varchar(10), n name, b bool, t timestamptz, d date, c char(4), f float8);
+CREATE TABLE
+> insert into ic values (1, 'a', 'nm', true, '2020-01-02 03:04:05+00', '2020-01-02', 'xy', 1.5), (2, null, null, null, null, null, null, null);
+INSERT 0 2
+> explain (costs off, verbose) select i || 'x', 'x' || i, v || 1, n || 'q', b || 'z', c || 1, d || 'w', t || 'w', f || 'e' from ic;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.ic
+row   Output: ((i)::text || 'x'::text), ('x'::text || (i)::text), ((v)::text || '1'::text), ((n)::text || 'q'::text), ((b)::text || 'z'::text), ((c)::text || '1'::text), ((d)::text || 'w'::text), ((t)::text || 'w'::text), ((f)::text || 'e'::text)
+EXPLAIN
+> select i || 'x', 'x' || i, v || 1, n || 'q', b || 'z', c || 1, d || 'w', t || 'w', f || 'e' from ic order by i;
+fields ?column?:25:-1:-1,?column?:25:-1:-1,?column?:25:-1:-1,?column?:25:-1:-1,?column?:25:-1:-1,?column?:25:-1:-1,?column?:25:-1:-1,?column?:25:-1:-1,?column?:25:-1:-1
+row 1x,x1,a1,nmq,truez,xy1,2020-01-02w,2020-01-02 03:04:05+00w,1.5e
+row 2x,x2,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+SELECT 2
+> explain (costs off) select * from ic where i || 'x' = '1x';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ic
+row   Filter: (((i)::text || 'x'::text) = '1x'::text)
+EXPLAIN
+> explain (costs off) select * from ic where 'x' || i || 'y' = 'x1y';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ic
+row   Filter: ((('x'::text || (i)::text) || 'y'::text) = 'x1y'::text)
+EXPLAIN
+> explain (costs off, verbose) select quote_literal(i), quote_nullable(i), quote_literal(v), quote_nullable(b) from ic;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.ic
+row   Output: quote_literal((i)::text), quote_nullable((i)::text), quote_literal((v)::text), quote_nullable((b)::text)
+EXPLAIN
+> select quote_literal(i), quote_nullable(i), quote_literal(v), quote_nullable(v), quote_nullable(b) from ic order by i;
+fields quote_literal:25:-1:-1,quote_nullable:25:-1:-1,quote_literal:25:-1:-1,quote_nullable:25:-1:-1,quote_nullable:25:-1:-1
+row '1','1','a','a','true'
+row '2','2',NULL,NULL,NULL
+SELECT 2
+> explain (costs off, verbose) select 1 || 'x'::text, 'x' || 2, quote_literal(42), quote_nullable(null::int), 'a' || now()::date from ic;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.ic
+row   Output: '1x'::text, 'x2'::text, '''42'''::text, 'NULL'::text, ('a'::text || ((now())::date)::text)
+EXPLAIN
+> select 1 || 'x'::text, 'x' || 2, quote_literal(42), quote_nullable(null::int), null::int || 'x' from ic;
+fields ?column?:25:-1:-1,?column?:25:-1:-1,quote_literal:25:-1:-1,quote_nullable:25:-1:-1,?column?:25:-1:-1
+row 1x,x2,'42',NULL,NULL
+row 1x,x2,'42',NULL,NULL
+SELECT 2
+> explain (costs off, verbose) select i::text || 'x', null::int || 'a', case i when 1 then i || 'a' end from ic;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.ic
+row   Output: ((i)::text || 'x'::text), NULL::text, CASE i WHEN 1 THEN ((i)::text || 'a'::text) ELSE NULL::text END
+EXPLAIN
+> explain (costs off) select (i::text || '000' || i)::oid from ic order by 1;
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: (((((i)::text || '000'::text) || (i)::text))::oid)
+row   ->  Seq Scan on ic
+EXPLAIN
+> explain (costs off) select * from ic where 'k' || t = 'k';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ic
+row   Filter: (('k'::text || (t)::text) = 'k'::text)
+EXPLAIN
+> explain (costs off, verbose) select array[1] || 'x' from ic;
+ERROR 22P02 malformed array literal: "x" at 49
+DETAIL Array value must start with "{" or dimension information.
+> create view icv as select i || 'x' as a, quote_literal(i) as q from ic;
+CREATE VIEW
+> select pg_get_viewdef('icv'::regclass);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT (i || 'x'::text) AS a,
+    quote_literal(i) AS q
+   FROM ic;
+SELECT 1
+> drop view icv;
+DROP VIEW
+> drop table ic;
+DROP TABLE

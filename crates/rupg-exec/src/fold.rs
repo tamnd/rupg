@@ -466,15 +466,37 @@ fn immutable(func: u32) -> bool {
     builtin::proc_by_oid(func).is_some_and(|p| p.volatile == b'i')
 }
 
-/// `inline_function`: PostgreSQL inlines the SQL functions `textanycat`, `anytextcat`, `quote_literal(anyelement)` and `quote_nullable(anyelement)`, which are stable. The body casts the argument of any type to `text`, and the cast folds when the output function of the type is immutable. Then the call folds as an immutable function does.
-fn inlines_immutable(f: &Func, proc: &builtin::ProcRow) -> bool {
-    matches!(f.oid, 1285 | 1290 | 2003 | 2004)
-        && f.args.iter().zip(proc.argtypes).all(|(arg, &declared)| {
-            declared == oid::TEXT
-                || builtin::type_by_oid(arg.ty)
-                    .and_then(|t| builtin::proc_by_oid(t.output))
-                    .is_some_and(|p| p.volatile == b'i')
-        })
+/// The bodies of the SQL functions of `pg_proc` that `inline_function` puts in a query: the function of the body, its operator, and the argument that the body casts to `text`.
+fn inlined_body(func: u32) -> Option<(u32, Option<u32>, usize)> {
+    match func {
+        // `quote_literal(anyelement)`: `select pg_catalog.quote_literal($1::pg_catalog.text)`.
+        1285 => Some((1283, None, 0)),
+        // `quote_nullable(anyelement)`: `select pg_catalog.quote_nullable($1::pg_catalog.text)`.
+        1290 => Some((1289, None, 0)),
+        // `textanycat`: `select $1 operator(pg_catalog.||) $2::pg_catalog.text`.
+        2003 => Some((TEXTCAT, Some(TEXT_CONCAT), 1)),
+        // `anytextcat`: `select $1::pg_catalog.text operator(pg_catalog.||) $2`.
+        2004 => Some((TEXTCAT, Some(TEXT_CONCAT), 0)),
+        _ => None,
+    }
+}
+
+/// `textcat`.
+const TEXTCAT: u32 = 1258;
+/// The operator `||` of `text` and `text`.
+const TEXT_CONCAT: u32 = 654;
+
+/// True when a cast calls no volatile function: the function of the cast, or the output function of the type of the argument and the input function of the target.
+fn cast_not_volatile(cast: &Expr) -> bool {
+    let not_volatile = |func: u32| builtin::proc_by_oid(func).is_some_and(|p| p.volatile != b'v');
+    match &cast.kind {
+        ExprKind::Func(f) => not_volatile(f.oid),
+        ExprKind::CoerceViaIo(arg, _) => {
+            builtin::type_by_oid(arg.ty).is_some_and(|t| not_volatile(t.output))
+                && builtin::type_by_oid(cast.ty).is_some_and(|t| not_volatile(t.input))
+        }
+        _ => true,
+    }
 }
 
 impl<'a> Fold<'a> {
@@ -1049,12 +1071,50 @@ impl<'a> Fold<'a> {
         if proc.strict && values.iter().flatten().any(|v| v.is_null()) {
             return Ok(with(&expr, ExprKind::Const(Value::Null)));
         }
-        if values.iter().any(Option::is_none)
-            || proc.volatile != b'i' && !inlines_immutable(f, proc)
-        {
+        if let Some(inlined) = self.inline(&expr, f)? {
+            return Ok(inlined);
+        }
+        if values.iter().any(Option::is_none) || proc.volatile != b'i' {
             return Ok(expr);
         }
         self.evaluate(expr)
+    }
+
+    /// `inline_function` for the SQL functions of [`inlined_body`]: the body takes the place of the call, with the argument of any type cast to `text`, and then the cast and the call of the body fold. The body must call no volatile function, and the argument must not read the value of a `CASE` around it, as `contain_context_dependent_node` tests it.
+    fn inline(&self, expr: &Expr, f: &Func) -> Result<Option<Expr>> {
+        let Some((func, op, at)) = inlined_body(f.oid) else { return Ok(None) };
+        let Some(arg) = f.args.get(at) else { return Ok(None) };
+        let dependent = arg
+            .find(0, &mut |e, depth| {
+                (depth == 0 && matches!(e.kind, ExprKind::CaseTest)).then_some(())
+            })
+            .is_some();
+        let Some(cast) = rupg_analyze::explicit_cast(arg.clone(), oid::TEXT) else {
+            return Ok(None);
+        };
+        if dependent || !cast_not_volatile(&cast) {
+            return Ok(None);
+        }
+        let cast = match &cast.kind {
+            ExprKind::Relabel(inner, _) => match &inner.kind {
+                ExprKind::Const(v) => with(&cast, ExprKind::Const(relabel(v.clone(), oid::TEXT))),
+                _ => cast,
+            },
+            ExprKind::CoerceViaIo(..) => self.coerce(cast)?,
+            ExprKind::Func(_) => self.function(cast)?,
+            _ => cast,
+        };
+        let mut args = f.args.clone();
+        args[at] = cast;
+        let form = op.map_or(FuncForm::Call, FuncForm::Operator);
+        let call = Func { oid: func, args, form, variadic: false, retset: false };
+        self.function(Expr {
+            kind: ExprKind::Func(call),
+            ty: oid::TEXT,
+            typmod: -1,
+            ..expr.clone()
+        })
+        .map(Some)
     }
 
     /// `CoerceViaIO`: the output function of the type of the argument, then the input function of the type of the result. Each one folds as a function does.

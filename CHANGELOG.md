@@ -18,6 +18,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Fixed
 
+- The plan puts the bodies of the SQL functions `textanycat`, `anytextcat`, `quote_literal(anyelement)` and `quote_nullable(anyelement)` in place of their calls, as `inline_function` does. `EXPLAIN` now shows `((i)::text || 'x'::text)` for `i || 'x'` with an `integer` column, as PostgreSQL does (#NNN).
 - A rename of a function, a procedure or an aggregate by a role that is not its owner gives "must be owner of function", as PostgreSQL does. The rename also checks `CREATE` on the schema for a role that is not a superuser. A view that calls a renamed aggregate shows the new name (#633).
 - The check of `CREATE` on a schema reads `nspacl`, so a role that `GRANT CREATE ON SCHEMA` names, or that has the privileges of such a role, can create objects in the schema (#631).
 - A query with `HAVING` and no aggregate and no `GROUP BY` does not read `FROM` and does not test `WHERE`, as in PostgreSQL. `make_interval` gives the overflow error of `float8_mul` for a very large `secs`, and a default or a check constraint with a `regrole` or `regdatabase` constant is an error. (#621)
