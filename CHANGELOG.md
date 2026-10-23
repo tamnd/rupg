@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.73 (2026-10-23)
+
 ### Added
 
 - The executor joins first the parts of a `FROM` list that have an `=` between them, and does not make a cross join when a later part has a join condition. The rows keep the order of the written joins (#611).
@@ -12,7 +14,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Changed
 
-- The 42 crates of `crates/` can be published to crates.io. Before, each crate had `publish = false`. `rupg-types` now reads `tzdata.zi` and the `Default` time zone abbreviations from copies in its own directory, which `cargo xtask tzdata` makes, because a published crate cannot read `vendor/`.
+- The 42 crates of `crates/` can be published to crates.io. Before, each crate had `publish = false`. `rupg-types` now reads `tzdata.zi` and the `Default` time zone abbreviations from copies in its own directory, which `cargo xtask tzdata` makes, because a published crate cannot read `vendor/` (#612).
 
 ## 0.1.72 (2026-10-23)
 
