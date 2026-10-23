@@ -1,0 +1,49 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TYPE ih_person AS (id int, name text);
+CREATE TYPE
+> CREATE TABLE ih_persons OF ih_person;
+CREATE TABLE
+> CREATE TABLE ih_stuff (id int);
+CREATE TABLE
+> CREATE TABLE ih_plain (id int);
+CREATE TABLE
+> ALTER TABLE ih_persons INHERIT ih_stuff;
+ERROR 42809 cannot change inheritance of typed table
+> ALTER TABLE ih_persons NO INHERIT ih_stuff;
+ERROR 42809 cannot change inheritance of typed table
+> ALTER TABLE ih_persons NO INHERIT ih_no_such_table;
+ERROR 42809 cannot change inheritance of typed table
+> ALTER TABLE ih_plain NO INHERIT ih_stuff;
+ERROR 42P01 relation "ih_stuff" is not a parent of relation "ih_plain"
+> ALTER TABLE ih_persons ADD COLUMN extra int, NO INHERIT ih_stuff;
+ERROR 42809 cannot add column to typed table
+> CREATE TABLE ih_parted (a int) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TABLE ih_part1 PARTITION OF ih_parted FOR VALUES IN (1);
+CREATE TABLE
+> ALTER TABLE ih_part1 NO INHERIT ih_parted;
+ERROR 42809 cannot change inheritance of a partition
+> ALTER TABLE ih_part1 NO INHERIT ih_no_such_table;
+ERROR 42809 cannot change inheritance of a partition
+> ALTER TABLE ih_part1 INHERIT ih_stuff;
+ERROR 42809 cannot change inheritance of a partition
+> ALTER TABLE ih_persons NOT OF;
+ALTER TABLE
+> ALTER TABLE ih_persons INHERIT ih_stuff;
+ALTER TABLE
+> SELECT inhrelid::regclass, inhparent::regclass FROM pg_inherits WHERE inhrelid = 'ih_persons'::regclass;
+fields inhrelid:2205:4:-1,inhparent:2205:4:-1
+row ih_persons,ih_stuff
+SELECT 1
+> ALTER TABLE ih_persons NO INHERIT ih_stuff;
+ALTER TABLE
+> SELECT count(*) FROM pg_inherits WHERE inhrelid = 'ih_persons'::regclass;
+fields count:20:8:-1
+row 0
+SELECT 1
+> DROP TABLE ih_persons, ih_stuff, ih_plain, ih_parted;
+DROP TABLE
+> DROP TYPE ih_person;
+DROP TYPE

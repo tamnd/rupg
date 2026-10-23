@@ -570,11 +570,12 @@ impl Definer<'_, '_> {
             }
             AlterTableType::AT_AddInherit => {
                 self.simple_permissions(target, cmd, INHERIT)?;
-                self.prep_inherit(target, true)?;
+                self.prep_inherit(target)?;
                 passes.misc.push(MiscCmd::Inherit(Box::new(cmd.clone())));
             }
             AlterTableType::AT_DropInherit => {
                 self.simple_permissions(target, cmd, INHERIT)?;
+                self.prep_inherit(target)?;
                 let Some(Node::RangeVar(rv)) = &cmd.def else {
                     return Err(Error::internal("NO INHERIT with no parent"));
                 };
