@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `EXPLAIN VERBOSE` of a `MERGE` now shows the targets that PostgreSQL gives the node below the `Merge`: the ID of the version of the row of the target table, the columns of the source that the `WHEN` clauses read, and the ID of the version of the row of the source. The columns of the target table and the marker of the source row do not show. (#599)
+
 ## 0.1.71 (2026-10-23)
 
 This release adds PlaceHolderVar for the targets of a subquery below the nullable side of an outer join, counts the keys of the first window as the order that the query asks for, costs only the sampled pages of `TABLESAMPLE SYSTEM`, and shows the rows and the width of writes with `RETURNING`.
