@@ -1,0 +1,107 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (id int PRIMARY KEY, x int, t text);
+CREATE TABLE
+> CREATE TABLE b (k1 int, k2 int, y int, PRIMARY KEY (k1, k2));
+CREATE TABLE
+> CREATE TABLE c (id int PRIMARY KEY DEFERRABLE, z int);
+CREATE TABLE
+> CREATE TABLE d (id int UNIQUE, w int);
+CREATE TABLE
+> INSERT INTO a SELECT g, g % 3, 't' || g FROM generate_series(1, 6) g;
+INSERT 0 6
+> INSERT INTO b SELECT g % 2, g, g * 10 FROM generate_series(1, 4) g;
+INSERT 0 4
+> INSERT INTO d VALUES (1, 7), (2, 8);
+INSERT 0 2
+> SELECT id, x, t FROM a GROUP BY id ORDER BY id;
+fields id@a.1:23:4:-1,x@a.2:23:4:-1,t@a.3:25:-1:-1
+row 1,1,t1
+row 2,2,t2
+row 3,0,t3
+row 4,1,t4
+row 5,2,t5
+row 6,0,t6
+SELECT 6
+> SELECT id, x, count(*) FROM a GROUP BY id ORDER BY id;
+fields id@a.1:23:4:-1,x@a.2:23:4:-1,count:20:8:-1
+row 1,1,1
+row 2,2,1
+row 3,0,1
+row 4,1,1
+row 5,2,1
+row 6,0,1
+SELECT 6
+> SELECT a.x FROM a GROUP BY a.id HAVING a.x > 0 ORDER BY a.x, a.id;
+fields x@a.2:23:4:-1
+row 1
+row 1
+row 2
+row 2
+SELECT 4
+> SELECT k1, k2, y FROM b GROUP BY k1, k2 ORDER BY 1, 2;
+fields k1@b.1:23:4:-1,k2@b.2:23:4:-1,y@b.3:23:4:-1
+row 0,2,20
+row 0,4,40
+row 1,1,10
+row 1,3,30
+SELECT 4
+> SELECT k1, y FROM b GROUP BY k1;
+ERROR 42803 column "b.y" must appear in the GROUP BY clause or be used in an aggregate function at 12
+> SELECT id, z FROM c GROUP BY id;
+ERROR 42803 column "c.z" must appear in the GROUP BY clause or be used in an aggregate function at 12
+> SELECT id, w FROM d GROUP BY id;
+ERROR 42803 column "d.w" must appear in the GROUP BY clause or be used in an aggregate function at 12
+> SELECT a.id, a.x, b.y FROM a JOIN b ON a.id = b.k2 GROUP BY a.id, b.k1, b.k2 ORDER BY 1;
+fields id@a.1:23:4:-1,x@a.2:23:4:-1,y@b.3:23:4:-1
+row 1,1,10
+row 2,2,20
+row 3,0,30
+row 4,1,40
+SELECT 4
+> SELECT a.id, b.y FROM a JOIN b ON a.id = b.k2 GROUP BY a.id ORDER BY 1;
+ERROR 42803 column "b.y" must appear in the GROUP BY clause or be used in an aggregate function at 14
+> SELECT id, (SELECT x) FROM a GROUP BY id ORDER BY id;
+fields id@a.1:23:4:-1,x:23:4:-1
+row 1,1
+row 2,2
+row 3,0
+row 4,1
+row 5,2
+row 6,0
+SELECT 6
+> SELECT s.id, s.x FROM (SELECT * FROM a) s GROUP BY s.id ORDER BY 1;
+ERROR 42803 column "s.x" must appear in the GROUP BY clause or be used in an aggregate function at 14
+> CREATE VIEW v AS SELECT id, x FROM a GROUP BY id;
+CREATE VIEW
+> SELECT * FROM v ORDER BY id;
+fields id@v.1:23:4:-1,x@v.2:23:4:-1
+row 1,1
+row 2,2
+row 3,0
+row 4,1
+row 5,2
+row 6,0
+SELECT 6
+> ALTER TABLE a DROP CONSTRAINT a_pkey;
+ERROR 2BP01 cannot drop constraint a_pkey on table a because other objects depend on it
+DETAIL view v depends on constraint a_pkey on table a
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP VIEW v;
+DROP VIEW
+> EXPLAIN (COSTS OFF) SELECT id, x FROM a GROUP BY id;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate
+row   Group Key: id
+row   ->  Seq Scan on a
+EXPLAIN
+> SELECT id, x FROM a GROUP BY id, x ORDER BY id;
+fields id@a.1:23:4:-1,x@a.2:23:4:-1
+row 1,1
+row 2,2
+row 3,0
+row 4,1
+row 5,2
+row 6,0
+SELECT 6

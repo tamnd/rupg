@@ -428,7 +428,7 @@ impl Analyzer<'_> {
         Ok(())
     }
 
-    /// `parseCheckAggregates`: each column that the select list and `HAVING` read outside of an aggregate call must be an item of `GROUP BY`, or a column of a table whose primary key is in all the grouping sets. Each argument of `GROUPING` must be an item of `GROUP BY`. When the grouping sets expand to one set that is not empty, the query has no grouping sets.
+    /// `parseCheckAggregates`: each column that the select list and `HAVING` read outside of an aggregate call must be an item of `GROUP BY`, or a column of a table whose primary key is in all the grouping sets. Each argument of `GROUPING` must be an item of `GROUP BY`. When the grouping sets expand to one set that is not empty, the query has no grouping sets. The result is the OIDs of the primary keys that the query depends on.
     pub(crate) fn check_grouping(
         &self,
         targets: &mut [Target],
@@ -436,7 +436,7 @@ impl Analyzer<'_> {
         group: &[SortGroup],
         sets: &mut Vec<GroupingSet>,
         distinct: bool,
-    ) -> Result<()> {
+    ) -> Result<Vec<u32>> {
         // `gset_common`: the items that are in all the grouping sets.
         let mut common = None;
         if !sets.is_empty() {
@@ -480,6 +480,7 @@ impl Analyzer<'_> {
             vars: &vars,
             common: &common_vars,
             proven: Vec::new(),
+            deps: Vec::new(),
         };
         for target in targets.iter_mut() {
             finalize_grouping(&mut target.expr, 0, &grouped, non_var)?;
@@ -491,7 +492,9 @@ impl Analyzer<'_> {
             finalize_grouping(having, 0, &grouped, non_var)?;
             check.expr(having, 0)?;
         }
-        self.check_recursive_aggs(targets.iter().map(|t| &t.expr).chain(having.as_deref()))
+        let deps = check.deps;
+        self.check_recursive_aggs(targets.iter().map(|t| &t.expr).chain(having.as_deref()))?;
+        Ok(deps)
     }
 }
 
@@ -561,6 +564,8 @@ struct Check<'a, 'b> {
     common: &'a [Var],
     /// `func_grouped_rels`: the relations whose primary key is in `GROUP BY`.
     proven: Vec<usize>,
+    /// `constraintDeps`: the primary keys that the proofs of `proven` use.
+    deps: Vec<u32>,
 }
 
 impl Check<'_, '_> {
@@ -631,10 +636,17 @@ impl Check<'_, '_> {
         }
         // check_functional_grouping: all the columns of the primary key are in GROUP BY.
         let relid = self.analyzer.scope.relations[var.relation].oid;
-        if let Some(key) = builtin::primary_key(relid)
+        let key = match builtin::primary_key(relid) {
+            Some(key) => Some((0, key.to_vec())),
+            None => primary_key(self.analyzer, relid),
+        };
+        if let Some((constraint, key)) = key
             && key.iter().all(|&attnum| self.common.contains(&Var { attnum, ..var }))
         {
             self.proven.push(var.relation);
+            if constraint != 0 {
+                self.deps.push(constraint);
+            }
             return Ok(());
         }
         let (table, column) = self.analyzer.column_names(var);
@@ -647,4 +659,11 @@ impl Check<'_, '_> {
         };
         Err(grouping_error(message, at))
     }
+}
+
+/// `get_primary_key_attnos`: the OID and the columns of the primary key of a user table, or `None` when it has none or the key is deferrable.
+fn primary_key(analyzer: &Analyzer<'_>, relid: u32) -> Option<(u32, Vec<i16>)> {
+    let catalog = analyzer.env.catalog()?;
+    let key = catalog.constraints_of(relid).find(|c| c.kind == rupg_catalog::ConKind::Primary)?;
+    (!key.deferrable).then(|| (key.oid, key.keys.clone()))
 }

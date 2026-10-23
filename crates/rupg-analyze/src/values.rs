@@ -117,6 +117,7 @@ impl Analyzer<'_> {
             pulled: 0,
             pushed: false,
             minmax: None,
+            constraint_deps: Vec::new(),
         })
     }
 }
