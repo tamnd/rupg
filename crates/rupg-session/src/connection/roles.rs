@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use rupg_catalog::{
-    Catalog, ObjRef, PG_CLASS, PG_COLLATION, PG_EXTENSION, PG_LANGUAGE, PG_NAMESPACE, PG_PROC,
-    PG_TS_CONFIG, PG_TS_DICT, PG_TYPE, RangePart, RelKind,
+    Catalog, ObjRef, PG_CLASS, PG_COLLATION, PG_EXTENSION, PG_LANGUAGE, PG_NAMESPACE, PG_OPERATOR,
+    PG_PROC, PG_TS_CONFIG, PG_TS_DICT, PG_TYPE, RangePart, RelKind,
 };
 use rupg_common::{Error, SqlState};
 use rupg_func::Session;
@@ -439,6 +439,9 @@ fn owned_only(catalog: &Catalog, role: u32) -> Vec<ObjRef> {
     }
     for c in catalog.ts_configs() {
         add(PG_TS_CONFIG, c.oid, c.owner);
+    }
+    for o in catalog.operators() {
+        add(PG_OPERATOR, o.oid, o.owner);
     }
     objects
 }

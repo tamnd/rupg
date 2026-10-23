@@ -1,16 +1,19 @@
 //! `CREATE OPERATOR`, `DROP OPERATOR` and `COMMENT ON OPERATOR`: `DefineOperator` of `operatorcmds.c`, `OperatorCreate` of `pg_operator.c`, and the lookup of `LookupOperWithArgs` of `parse_oper.c`. The operators are found by name as `OpernameGetOprid` finds them, in the catalog and in the built-in rows.
 
 use rupg_catalog::{FIRST_NORMAL_OID, ObjRef, Operator, PG_OPERATOR, is_pinned};
-use rupg_common::{Error, Result, SqlState};
+use rupg_common::{Error, Object, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, OperatorRow};
-use rupg_sql::nodes::{DefElem, DefineStmt, DropStmt, Node, ObjectWithArgs, TypeName};
+use rupg_sql::nodes::{
+    AlterObjectSchemaStmt, AlterOperatorStmt, AlterOwnerStmt, DefElem, DefineStmt, DropStmt, Node,
+    ObjectWithArgs, TypeName,
+};
 use rupg_types::oid::{self, INTERNAL};
 
-use super::Definer;
 use super::comment::not_owner;
 use super::drop::{builtin_object, quote_identifier};
 use super::reloptions::def_boolean;
 use super::tsearch::{def_name, qualified_name};
+use super::{Definer, PG_TOAST_NAMESPACE};
 use crate::typename::{names, type_name_text};
 
 /// `BOOTSTRAP_SUPERUSERID`: the owner of the built-in operators.
@@ -21,11 +24,11 @@ const FIRST_GENBKI_OID: u32 = 10000;
 
 /// The facts of an operator that the lookups need, of the catalog or built in.
 #[derive(Clone, Copy, Debug)]
-struct Found {
-    oid: u32,
-    owner: u32,
+pub(super) struct Found {
+    pub(super) oid: u32,
+    pub(super) owner: u32,
     /// True for an operator that is not a shell.
-    defined: bool,
+    pub(super) defined: bool,
 }
 
 /// `validOperatorName`.
@@ -58,12 +61,12 @@ fn check_name(name: &str) -> Result<()> {
 }
 
 /// An error of `DefineOperator` and `OperatorValidateParams` with `ERRCODE_INVALID_FUNCTION_DEFINITION`.
-fn invalid(message: &str) -> Error {
+pub(super) fn invalid(message: &str) -> Error {
     Error::new(SqlState::INVALID_FUNCTION_DEFINITION, message)
 }
 
 /// `OperatorValidateParams`.
-fn validate_params(op: &Operator, commutator: bool, negator: bool) -> Result<()> {
+pub(super) fn validate_params(op: &Operator, commutator: bool, negator: bool) -> Result<()> {
     if op.left == 0 || op.right == 0 {
         let checks = [
             (commutator, "only binary operators can have commutators"),
@@ -96,8 +99,19 @@ fn builtin_row(oid: u32) -> Option<&'static OperatorRow> {
 }
 
 impl Definer<'_, '_> {
+    /// `object_ownercheck` for an operator with the owner: the role of the statement has the privileges of the owner.
+    pub(super) fn owns(&self, owner: u32) -> bool {
+        rupg_pgcatalog::roles::current().has_privs_of_role(self.user, owner)
+    }
+
     /// `OperatorGet`: the operator of the schema with the name and the input types.
-    fn operator_in(&self, namespace: u32, name: &str, left: u32, right: u32) -> Option<Found> {
+    pub(super) fn operator_in(
+        &self,
+        namespace: u32,
+        name: &str,
+        left: u32,
+        right: u32,
+    ) -> Option<Found> {
         if let Some(o) = self.catalog.operator_by_name(namespace, name, left, right) {
             return Some(Found { oid: o.oid, owner: o.owner, defined: o.code != 0 });
         }
@@ -112,7 +126,12 @@ impl Definer<'_, '_> {
     }
 
     /// `OpernameGetOprid`: the operator that a name and the input types give, in the schema of the name or in the first schema of the search path that has it. A schema that does not exist gives `None`.
-    fn opername_get_oprid(&self, list: &[&str], left: u32, right: u32) -> Result<Option<Found>> {
+    pub(super) fn opername_get_oprid(
+        &self,
+        list: &[&str],
+        left: u32,
+        right: u32,
+    ) -> Result<Option<Found>> {
         let (schema, name) = match self.an.split_name(list, None) {
             Ok(split) => split,
             Err(error) if error.state() == SqlState::UNDEFINED_SCHEMA => return Ok(None),
@@ -125,7 +144,7 @@ impl Definer<'_, '_> {
     }
 
     /// `op_signature_string`: the left type, the name and the right type.
-    fn op_signature(&self, list: &[&str], left: u32, right: u32) -> String {
+    pub(super) fn op_signature(&self, list: &[&str], left: u32, right: u32) -> String {
         let mut out = String::new();
         if left != 0 {
             out.push_str(&self.type_text(left));
@@ -203,13 +222,13 @@ impl Definer<'_, '_> {
     }
 
     /// `ValidateRestrictionEstimator`.
-    fn restriction_estimator(&self, list: &[&str]) -> Result<u32> {
+    pub(super) fn restriction_estimator(&self, list: &[&str]) -> Result<u32> {
         let found = self.func_oid(list, &[INTERNAL, oid::OID, INTERNAL, oid::INT4])?;
         self.check_estimator(list, found, "restriction")
     }
 
     /// `ValidateJoinEstimator`: the estimator has five arguments, or four in the old form.
-    fn join_estimator(&self, list: &[&str]) -> Result<u32> {
+    pub(super) fn join_estimator(&self, list: &[&str]) -> Result<u32> {
         let five = [INTERNAL, oid::OID, INTERNAL, oid::INT2, INTERNAL];
         let found =
             match (self.lookup_func_name(list, &five)?, self.lookup_func_name(list, &five[..4])?) {
@@ -297,7 +316,7 @@ impl Definer<'_, '_> {
                     format!("operator {name} already exists"),
                 ));
             }
-            if !self.is_superuser() && found.owner != self.user {
+            if !self.owns(found.owner) {
                 return Err(not_owner("operator", name));
             }
         }
@@ -337,7 +356,7 @@ impl Definer<'_, '_> {
         new: &Operator,
     ) -> Result<Option<u32>> {
         if let Some(found) = self.opername_get_oprid(list, left, right)? {
-            if !self.is_superuser() && found.owner != self.user {
+            if !self.owns(found.owner) {
                 return Err(not_owner("operator", &list.join(".")));
             }
             return Ok(Some(found.oid));
@@ -364,7 +383,7 @@ impl Definer<'_, '_> {
     }
 
     /// `OperatorUpd`: the commutator and the negator of the new operator `base` link back to it.
-    fn operator_upd(&mut self, base: u32, commutator: u32, negator: u32) -> Result<()> {
+    pub(super) fn operator_upd(&mut self, base: u32, commutator: u32, negator: u32) -> Result<()> {
         for (other, word) in [(commutator, "commutator"), (negator, "negator")] {
             if other == 0 {
                 continue;
@@ -406,7 +425,7 @@ impl Definer<'_, '_> {
     }
 
     /// `LookupOperWithArgs`: the operator of a name with the types of its inputs, where `NONE` is no type. With `missing_ok`, a type that does not exist is no type, and an operator that does not exist is `None`.
-    fn lookup_oper_with_args(
+    pub(super) fn lookup_oper_with_args(
         &self,
         item: &ObjectWithArgs,
         missing_ok: bool,
@@ -441,7 +460,7 @@ impl Definer<'_, '_> {
     }
 
     /// The schema of an operator.
-    fn operator_namespace(&self, oid: u32) -> u32 {
+    pub(super) fn operator_namespace(&self, oid: u32) -> u32 {
         match self.catalog.operator(oid) {
             Some(o) => o.namespace,
             None => builtin_row(oid).map_or(0, |o| o.namespace),
@@ -480,7 +499,7 @@ impl Definer<'_, '_> {
             let namespace = self.operator_namespace(found.oid);
             if !self.is_superuser()
                 && self.schema_owner(namespace) != Some(self.user)
-                && found.owner != self.user
+                && !self.owns(found.owner)
             {
                 return Err(not_owner("operator", &list.join(".")));
             }
@@ -501,13 +520,239 @@ impl Definer<'_, '_> {
         let found = self
             .lookup_oper_with_args(item, false)?
             .ok_or_else(|| Error::internal("an operator that the lookup did not find"))?;
-        if !self.is_superuser() && found.owner != self.user {
+        if !self.owns(found.owner) {
             return Err(not_owner("operator", &names(&item.objname).join(".")));
         }
         if found.oid < FIRST_NORMAL_OID {
             return Err(super::not_yet("COMMENT on a built-in object", None));
         }
         Ok(ObjRef::new(PG_OPERATOR, found.oid))
+    }
+
+    /// The row of an operator, of the catalog or built in. A built-in operator has no estimators here.
+    fn operator_row(&self, oid: u32) -> Option<Operator> {
+        if let Some(o) = self.catalog.operator(oid) {
+            return Some(o.clone());
+        }
+        builtin_row(oid).map(|o| Operator {
+            oid: o.oid,
+            name: o.name.to_string(),
+            namespace: o.namespace,
+            owner: BOOTSTRAP_SUPERUSER,
+            kind: o.kind,
+            can_merge: o.can_merge,
+            can_hash: o.can_hash,
+            left: o.left,
+            right: o.right,
+            result: o.result,
+            commutator: o.commutator,
+            negator: o.negator,
+            code: o.code,
+            restrict: 0,
+            join: 0,
+        })
+    }
+
+    /// The operator of `ALTER OPERATOR` by `LookupOperWithArgs`, with its row.
+    fn altered_operator(&self, object: Option<&ObjectWithArgs>) -> Result<Operator> {
+        let item = object.ok_or_else(|| Error::internal("an operator name with arguments"))?;
+        let found = self.lookup_oper_with_args(item, false)?;
+        found.and_then(|f| self.operator_row(f.oid)).ok_or_else(|| {
+            Error::internal("cache lookup failed for an operator that the lookup found")
+        })
+    }
+
+    /// `ValidateOperatorReference`: the commutator or the negator of `ALTER OPERATOR` exists, is not a shell, and has the role of the statement as its owner.
+    fn operator_reference(&self, list: &[&str], left: u32, right: u32) -> Result<u32> {
+        let undefined = |what: &str| {
+            Error::new(
+                SqlState::UNDEFINED_FUNCTION,
+                format!("operator {what}: {}", self.op_signature(list, left, right)),
+            )
+        };
+        let Some(found) = self.opername_get_oprid(list, left, right)? else {
+            return Err(undefined("does not exist"));
+        };
+        if !found.defined {
+            return Err(undefined("is only a shell"));
+        }
+        if !self.owns(found.owner) {
+            return Err(not_owner("operator", &list.join(".")));
+        }
+        Ok(found.oid)
+    }
+
+    /// `AlterOperator`: the options of `ALTER OPERATOR ... SET`. The commutator, the negator, `MERGES` and `HASHES` can only be set when they are not set yet. Then the row changes, its dependencies are made again, and `OperatorUpd` links the commutator and the negator back.
+    pub(super) fn alter_operator(&mut self, stmt: &AlterOperatorStmt) -> Result<()> {
+        let old = self.altered_operator(stmt.opername.as_deref())?;
+        let (mut restrict, mut join) = (None, None);
+        let (mut commutator, mut negator) = (None, None);
+        let (mut merges, mut hashes) = (None, None);
+        for def in stmt.options.iter().flatten() {
+            let Node::DefElem(def) = def else { continue };
+            let param = if def.arg.is_none() { None } else { Some(qualified_name(def)?) };
+            match def_name(def) {
+                "restrict" => restrict = Some(param),
+                "join" => join = Some(param),
+                "commutator" => commutator = Some(qualified_name(def)?),
+                "negator" => negator = Some(qualified_name(def)?),
+                "merges" => merges = Some(def_boolean("merges", def.arg.as_ref())?),
+                "hashes" => hashes = Some(def_boolean("hashes", def.arg.as_ref())?),
+                other => {
+                    let what = match other {
+                        "leftarg" | "rightarg" | "function" | "procedure" => "cannot be changed",
+                        _ => "not recognized",
+                    };
+                    return Err(Error::new(
+                        SqlState::SYNTAX_ERROR,
+                        format!("operator attribute \"{other}\" {what}"),
+                    ));
+                }
+            }
+        }
+        if !self.owns(old.owner) {
+            return Err(not_owner("operator", &old.name));
+        }
+        let restrict_oid = match &restrict {
+            Some(Some(list)) => self.restriction_estimator(list)?,
+            _ => 0,
+        };
+        let join_oid = match &join {
+            Some(Some(list)) => self.join_estimator(list)?,
+            _ => 0,
+        };
+        let commutator_oid = match &commutator {
+            Some(list) => self.operator_reference(list, old.right, old.left)?,
+            None => 0,
+        };
+        let negator_oid = match &negator {
+            Some(list) => self.operator_reference(list, old.left, old.right)?,
+            None => 0,
+        };
+        if negator_oid == old.oid {
+            return Err(invalid("operator cannot be its own negator"));
+        }
+        let set_once = [
+            (
+                commutator_oid != 0 && old.commutator != 0 && commutator_oid != old.commutator,
+                "commutator",
+            ),
+            (negator_oid != 0 && old.negator != 0 && negator_oid != old.negator, "negator"),
+            (old.can_merge && merges == Some(false), "merges"),
+            (old.can_hash && hashes == Some(false), "hashes"),
+        ];
+        if let Some((_, word)) = set_once.iter().find(|(bad, _)| *bad) {
+            return Err(invalid(&format!(
+                "operator attribute \"{word}\" cannot be changed if it has already been set"
+            )));
+        }
+        let check = Operator {
+            restrict: restrict_oid,
+            join: join_oid,
+            can_merge: merges.unwrap_or(false),
+            can_hash: hashes.unwrap_or(false),
+            ..old.clone()
+        };
+        validate_params(&check, commutator_oid != 0, negator_oid != 0)?;
+        if old.oid < FIRST_NORMAL_OID {
+            return Err(super::not_yet("ALTER OPERATOR of a built-in operator", None));
+        }
+        let mut new = old.clone();
+        if restrict.is_some() {
+            new.restrict = restrict_oid;
+        }
+        if join.is_some() {
+            new.join = join_oid;
+        }
+        if commutator_oid != 0 {
+            new.commutator = commutator_oid;
+        }
+        if negator_oid != 0 {
+            new.negator = negator_oid;
+        }
+        new.can_merge = merges.unwrap_or(new.can_merge);
+        new.can_hash = hashes.unwrap_or(new.can_hash);
+        self.catalog.replace_operator(old.oid, new)?;
+        self.operator_upd(old.oid, commutator_oid, negator_oid)
+    }
+
+    /// `AlterObjectOwner_internal` for an operator. An operator that has the owner already needs no change.
+    pub(super) fn alter_operator_owner(&mut self, stmt: &AlterOwnerStmt) -> Result<()> {
+        let role = stmt.newowner.as_deref().cloned().unwrap_or_default();
+        let owner = self.role_oid(&role)?;
+        let item = match &stmt.object {
+            Some(Node::ObjectWithArgs(item)) => Some(&**item),
+            _ => None,
+        };
+        let old = self.altered_operator(item)?;
+        if old.owner == owner {
+            return Ok(());
+        }
+        if !self.is_superuser() {
+            if !self.owns(old.owner) {
+                return Err(not_owner("operator", &old.name));
+            }
+            self.check_can_set_role(owner)?;
+            if !self.may_create_in(old.namespace, owner) {
+                return Err(Error::new(
+                    SqlState::INSUFFICIENT_PRIVILEGE,
+                    format!("permission denied for schema {}", self.schema_name(old.namespace)),
+                ));
+            }
+        }
+        if old.oid < FIRST_NORMAL_OID {
+            return Err(super::not_yet("ALTER OPERATOR of a built-in operator", None));
+        }
+        self.catalog.alter_operator(old.oid, |o| o.owner = owner)
+    }
+
+    /// `AlterObjectNamespace_internal` for an operator: `LookupCreationNamespace` and `CheckSetNamespace` for the new schema, the checks of the owner, and then the move. The unique index of `pg_operator` refuses an operator with the same name and input types in the new schema. An operator that is in the schema already needs no change.
+    pub(super) fn alter_operator_schema(&mut self, stmt: &AlterObjectSchemaStmt) -> Result<()> {
+        let item = match &stmt.object {
+            Some(Node::ObjectWithArgs(item)) => Some(&**item),
+            _ => None,
+        };
+        let old = self.altered_operator(item)?;
+        let schema = stmt.newschema.as_deref().unwrap_or_default();
+        if schema == "pg_temp" {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "cannot move objects into or out of temporary schemas",
+            ));
+        }
+        let namespace = self.an.schema(schema).ok_or_else(|| {
+            Error::new(SqlState::UNDEFINED_SCHEMA, format!("schema \"{schema}\" does not exist"))
+        })?;
+        self.check_create_in(namespace, None)?;
+        if old.namespace == namespace {
+            return Ok(());
+        }
+        if namespace == PG_TOAST_NAMESPACE || old.namespace == PG_TOAST_NAMESPACE {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "cannot move objects into or out of TOAST schema",
+            ));
+        }
+        if !self.is_superuser() && !self.owns(old.owner) {
+            return Err(not_owner("operator", &old.name));
+        }
+        if self.operator_in(namespace, &old.name, old.left, old.right).is_some() {
+            return Err(Error::new(
+                SqlState::UNIQUE_VIOLATION,
+                "duplicate key value violates unique constraint \"pg_operator_oprname_l_r_n_index\"",
+            )
+            .with_detail(format!(
+                "Key (oprname, oprleft, oprright, oprnamespace)=({}, {}, {}, {namespace}) already exists.",
+                old.name, old.left, old.right
+            ))
+            .with_object(Object::Constraint, "pg_operator_oprname_l_r_n_index"));
+        }
+        if old.oid < FIRST_NORMAL_OID {
+            return Err(super::not_yet("ALTER OPERATOR of a built-in operator", None));
+        }
+        let mut new = old.clone();
+        new.namespace = namespace;
+        self.catalog.replace_operator(old.oid, new)
     }
 
     /// `getObjectDescription` for an operator: `format_operator`, the name after its schema when the operator is not visible, with the input types, or `NONE` for no type.
