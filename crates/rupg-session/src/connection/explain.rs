@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 
-use rupg_analyze::{Expr, Params, Query};
+use rupg_analyze::{BoolOp, Expr, ExprKind, Params, Query};
 use rupg_common::{Error, SqlState};
 use rupg_func::Session;
 use rupg_opt::{Enable, Index, Member};
@@ -65,12 +65,33 @@ impl rupg_opt::Members for Members<'_, '_> {
 
     fn indexes(&self, table: u32) -> Vec<Index> {
         let Some(catalog) = self.reader.catalog() else { return Vec::new() };
+        let columns = catalog.relation(table).map(|t| t.columns.as_slice()).unwrap_or_default();
         let mut out: Vec<Index> = catalog
             .relations()
             .filter_map(|rel| {
                 let info = rel.index.as_ref().filter(|i| i.table == table && i.valid)?;
                 let count = usize::try_from(info.key_count).unwrap_or(0);
                 let class = |oid: &u32| builtin::opclasses().iter().find(|c| c.oid == *oid);
+                let exprs = info.exprs.as_deref().map_or_else(Vec::new, |text| {
+                    rupg_analyze::node::read_list(text).unwrap_or_default()
+                });
+                // `make_ands_implicit`: the parts of the `AND` of the predicate.
+                let predicate = match info.predicate.as_deref().map(rupg_analyze::node::read) {
+                    Some(Ok(Expr { kind: ExprKind::Bool(BoolOp::And, parts), .. })) => parts,
+                    Some(Ok(expr)) => vec![expr],
+                    Some(Err(_)) | None => Vec::new(),
+                };
+                let mut next = exprs.iter();
+                let width = info
+                    .keys
+                    .iter()
+                    .map(|&attnum| match usize::try_from(attnum) {
+                        Ok(n @ 1..) => {
+                            columns.get(n - 1).map_or(0, |c| rupg_opt::type_width(c.ty, c.typmod))
+                        }
+                        _ => next.next().map_or(0, |e| rupg_opt::type_width(e.ty, e.typmod)),
+                    })
+                    .sum();
                 Some(Index {
                     oid: rel.oid,
                     keys: info.keys.iter().take(count).copied().collect(),
@@ -93,6 +114,9 @@ impl rupg_opt::Members for Members<'_, '_> {
                     options: info.options.clone(),
                     collations: info.collations.clone(),
                     pages: f64::from(self.index_pages(table, info.method, info.pages)),
+                    exprs,
+                    predicate,
+                    width,
                 })
             })
             .collect();

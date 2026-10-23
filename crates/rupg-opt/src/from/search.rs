@@ -231,7 +231,7 @@ fn param_scans<'q>(
     prohibited: &BTreeSet<usize>,
     stats: &Stats,
 ) -> Vec<Param<'q>> {
-    let eq = eq_unique(r, base.tuples, &stats.unique);
+    let eq = eq_unique(r, base.tuples, stats.unique.clone());
     let table = |quals: Vec<Qual<'q>>, rows: f64, outer: BTreeSet<usize>, loops: f64| {
         let (pages, tuples) = (base.pages, base.tuples);
         index::Table { r, pages, tuples, rows, quals, eq: &eq, outer, loops }
