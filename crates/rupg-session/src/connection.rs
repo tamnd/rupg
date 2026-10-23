@@ -1157,6 +1157,7 @@ impl Connection {
                         _ => CommandTag::CreateTable,
                     },
                     Node::AlterTSConfigurationStmt(_) => CommandTag::AlterTextSearchConfiguration,
+                    Node::AlterOperatorStmt(_) => CommandTag::AlterOperator,
                     Node::TruncateStmt(_) => CommandTag::TruncateTable,
                     _ => CommandTag::CreateTable,
                 }))
@@ -1994,7 +1995,7 @@ impl Connection {
     }
 }
 
-/// `AlterObjectTypeCommandTag` for the kinds of relations, of types and of functions: the tag of `ALTER TABLE` and of `ALTER ... RENAME` for the kind of the object.
+/// `AlterObjectTypeCommandTag` for the kinds of relations, of types, of functions and of operators: the tag of `ALTER TABLE` and of `ALTER ... RENAME` for the kind of the object.
 fn alter_tag(kind: ObjectType) -> CommandTag {
     match kind {
         ObjectType::OBJECT_INDEX => CommandTag::AlterIndex,
@@ -2008,6 +2009,7 @@ fn alter_tag(kind: ObjectType) -> CommandTag {
         ObjectType::OBJECT_ROUTINE => CommandTag::AlterRoutine,
         ObjectType::OBJECT_PROCEDURE => CommandTag::AlterProcedure,
         ObjectType::OBJECT_TRIGGER => CommandTag::AlterTrigger,
+        ObjectType::OBJECT_OPERATOR => CommandTag::AlterOperator,
         _ => CommandTag::AlterTable,
     }
 }
@@ -5737,6 +5739,12 @@ mod tests {
     #[test]
     fn create_and_drop_operators() {
         big_stack(|| script(include_str!("connection/oper.test")));
+    }
+
+    /// `ALTER OPERATOR ... SET` with the estimators, the commutator, the negator, `MERGES` and `HASHES`, which can only be set once, and `ALTER OPERATOR ... OWNER TO` and `SET SCHEMA` with the checks of the owner and of the schema. `connection/alteroper.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn alter_operators() {
+        big_stack(|| script(include_str!("connection/alteroper.test")));
     }
 
     /// A query that is a `UNION ALL` of `SELECT`s with the types of its columns and has `ORDER BY` becomes an append relation, as `flatten_simple_union_all` makes it, so the planner can plan a `Merge Append` of the plans of the `SELECT`s in the order. A `SELECT` with its own `WHERE` is not a member of the append relation, as `is_safe_append_member`, and its plan gets a sort. `connection/plan_union_all_order.test` is the output of PostgreSQL 19 for the same script in a new database.

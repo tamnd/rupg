@@ -1,0 +1,277 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE FUNCTION alter_op_test_fn(boolean, boolean) RETURNS boolean AS $$ SELECT NULL::BOOLEAN; $$ LANGUAGE sql IMMUTABLE;
+CREATE FUNCTION
+> CREATE FUNCTION customcontsel(internal, oid, internal, integer) RETURNS float8 AS 'contsel' LANGUAGE internal STABLE STRICT;
+CREATE FUNCTION
+> CREATE OPERATOR === (    LEFTARG = boolean,    RIGHTARG = boolean,    PROCEDURE = alter_op_test_fn,    COMMUTATOR = ===,    NEGATOR = !==,    RESTRICT = customcontsel,    JOIN = contjoinsel,    HASHES, MERGES );
+CREATE OPERATOR
+> SELECT pg_describe_object(refclassid,refobjid,refobjsubid) as ref, deptype FROM pg_depend WHERE classid = 'pg_operator'::regclass AND objid = '===(bool,bool)'::regoperator ORDER BY 1;
+fields ref:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row function alter_op_test_fn(boolean,boolean),n
+row function customcontsel(internal,oid,internal,integer),n
+row schema public,n
+SELECT 3
+> ALTER OPERATOR === (boolean, boolean) SET (RESTRICT = NONE);
+ALTER OPERATOR
+> ALTER OPERATOR === (boolean, boolean) SET (JOIN = NONE);
+ALTER OPERATOR
+> SELECT oprrest, oprjoin FROM pg_operator WHERE oprname = '===' AND oprleft = 'boolean'::regtype AND oprright = 'boolean'::regtype;
+fields oprrest@pg_operator.14:24:4:-1,oprjoin@pg_operator.15:24:4:-1
+row -,-
+SELECT 1
+> SELECT pg_describe_object(refclassid,refobjid,refobjsubid) as ref, deptype FROM pg_depend WHERE classid = 'pg_operator'::regclass AND objid = '===(bool,bool)'::regoperator ORDER BY 1;
+fields ref:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row function alter_op_test_fn(boolean,boolean),n
+row schema public,n
+SELECT 2
+> ALTER OPERATOR === (boolean, boolean) SET (RESTRICT = contsel);
+ALTER OPERATOR
+> ALTER OPERATOR === (boolean, boolean) SET (JOIN = contjoinsel);
+ALTER OPERATOR
+> SELECT oprrest, oprjoin FROM pg_operator WHERE oprname = '===' AND oprleft = 'boolean'::regtype AND oprright = 'boolean'::regtype;
+fields oprrest@pg_operator.14:24:4:-1,oprjoin@pg_operator.15:24:4:-1
+row contsel,contjoinsel
+SELECT 1
+> SELECT pg_describe_object(refclassid,refobjid,refobjsubid) as ref, deptype FROM pg_depend WHERE classid = 'pg_operator'::regclass AND objid = '===(bool,bool)'::regoperator ORDER BY 1;
+fields ref:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row function alter_op_test_fn(boolean,boolean),n
+row schema public,n
+SELECT 2
+> ALTER OPERATOR === (boolean, boolean) SET (RESTRICT = NONE, JOIN = NONE);
+ALTER OPERATOR
+> SELECT oprrest, oprjoin FROM pg_operator WHERE oprname = '===' AND oprleft = 'boolean'::regtype AND oprright = 'boolean'::regtype;
+fields oprrest@pg_operator.14:24:4:-1,oprjoin@pg_operator.15:24:4:-1
+row -,-
+SELECT 1
+> ALTER OPERATOR === (boolean, boolean) SET (RESTRICT = customcontsel, JOIN = contjoinsel);
+ALTER OPERATOR
+> SELECT oprrest, oprjoin FROM pg_operator WHERE oprname = '===' AND oprleft = 'boolean'::regtype AND oprright = 'boolean'::regtype;
+fields oprrest@pg_operator.14:24:4:-1,oprjoin@pg_operator.15:24:4:-1
+row customcontsel,contjoinsel
+SELECT 1
+> SELECT pg_describe_object(refclassid,refobjid,refobjsubid) as ref, deptype FROM pg_depend WHERE classid = 'pg_operator'::regclass AND objid = '===(bool,bool)'::regoperator ORDER BY 1;
+fields ref:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row function alter_op_test_fn(boolean,boolean),n
+row function customcontsel(internal,oid,internal,integer),n
+row schema public,n
+SELECT 3
+> ALTER OPERATOR === (boolean, boolean) SET (RESTRICT = non_existent_func);
+ERROR 42883 function non_existent_func(internal, oid, internal, integer) does not exist
+> ALTER OPERATOR === (boolean, boolean) SET (JOIN = non_existent_func);
+ERROR 42883 function non_existent_func(internal, oid, internal, smallint, internal) does not exist
+> ALTER OPERATOR & (bit, bit) SET ("Restrict" = _int_contsel, "Join" = _int_contjoinsel);
+ERROR 42601 operator attribute "Restrict" not recognized
+> ALTER OPERATOR === (boolean, boolean) SET (LEFTARG = int4);
+ERROR 42601 operator attribute "leftarg" cannot be changed
+> ALTER OPERATOR === (boolean, boolean) SET (PROCEDURE = alter_op_test_fn);
+ERROR 42601 operator attribute "procedure" cannot be changed
+> ALTER OPERATOR === (boolean, boolean) SET (COMMUTATOR = NONE);
+ERROR 42601 commutator requires a parameter
+> ALTER OPERATOR === (boolean, boolean) SET (MERGES = 2);
+ERROR 42601 argument of merges must be a name
+> ALTER OPERATOR === (int4, boolean) SET (MERGES);
+ERROR 42883 operator does not exist: integer === boolean
+> ALTER OPERATOR nosuch.=== (boolean, boolean) SET (MERGES);
+ERROR 42883 operator does not exist: boolean nosuch.=== boolean
+> CREATE USER regress_alter_op_user;
+CREATE ROLE
+> SET SESSION AUTHORIZATION regress_alter_op_user;
+SET
+session_authorization=regress_alter_op_user
+is_superuser=off
+> ALTER OPERATOR === (boolean, boolean) SET (RESTRICT = NONE);
+ERROR 42501 must be owner of operator ===
+> ALTER OPERATOR === (boolean, boolean) OWNER TO regress_alter_op_user;
+ERROR 42501 must be owner of operator ===
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> CREATE FUNCTION alter_op_test_fn_bool_real(boolean, real) RETURNS boolean AS $$ SELECT NULL::BOOLEAN; $$ LANGUAGE sql IMMUTABLE;
+CREATE FUNCTION
+> CREATE FUNCTION alter_op_test_fn_real_bool(real, boolean) RETURNS boolean AS $$ SELECT NULL::BOOLEAN; $$ LANGUAGE sql IMMUTABLE;
+CREATE FUNCTION
+> CREATE OPERATOR === (    LEFTARG = boolean,    RIGHTARG = real,    PROCEDURE = alter_op_test_fn_bool_real );
+CREATE OPERATOR
+> CREATE OPERATOR ==== (    LEFTARG = real,    RIGHTARG = boolean,    PROCEDURE = alter_op_test_fn_real_bool );
+CREATE OPERATOR
+> CREATE OPERATOR !==== (    LEFTARG = boolean,    RIGHTARG = real,    PROCEDURE = alter_op_test_fn_bool_real );
+CREATE OPERATOR
+> ALTER OPERATOR === (boolean, real) SET (MERGES = false);
+ALTER OPERATOR
+> ALTER OPERATOR === (boolean, real) SET (HASHES = false);
+ALTER OPERATOR
+> ALTER OPERATOR === (boolean, real) SET (MERGES);
+ALTER OPERATOR
+> ALTER OPERATOR === (boolean, real) SET (HASHES);
+ALTER OPERATOR
+> SELECT oprcanmerge, oprcanhash FROM pg_operator WHERE oprname = '===' AND oprleft = 'boolean'::regtype AND oprright = 'real'::regtype;
+fields oprcanmerge@pg_operator.6:16:1:-1,oprcanhash@pg_operator.7:16:1:-1
+row t,t
+SELECT 1
+> ALTER OPERATOR === (boolean, real) SET (COMMUTATOR = ====);
+ALTER OPERATOR
+> SELECT op.oprname AS operator_name, com.oprname AS commutator_name, com.oprcode AS commutator_func FROM pg_operator op INNER JOIN pg_operator com ON (op.oid = com.oprcom AND op.oprcom = com.oid) WHERE op.oprname = '===' AND op.oprleft = 'boolean'::regtype AND op.oprright = 'real'::regtype;
+fields operator_name@pg_operator.2:19:64:-1,commutator_name@pg_operator.2:19:64:-1,commutator_func@pg_operator.13:24:4:-1
+row ===,====,alter_op_test_fn_real_bool
+SELECT 1
+> ALTER OPERATOR === (boolean, real) SET (NEGATOR = ===);
+ERROR 42P13 operator cannot be its own negator
+> ALTER OPERATOR === (boolean, real) SET (NEGATOR = !====);
+ALTER OPERATOR
+> SELECT op.oprname AS operator_name, neg.oprname AS negator_name, neg.oprcode AS negator_func FROM pg_operator op INNER JOIN pg_operator neg ON (op.oid = neg.oprnegate AND op.oprnegate = neg.oid) WHERE op.oprname = '===' AND op.oprleft = 'boolean'::regtype AND op.oprright = 'real'::regtype;
+fields operator_name@pg_operator.2:19:64:-1,negator_name@pg_operator.2:19:64:-1,negator_func@pg_operator.13:24:4:-1
+row ===,!====,alter_op_test_fn_bool_real
+SELECT 1
+> ALTER OPERATOR === (boolean, real) SET (NEGATOR = !====);
+ALTER OPERATOR
+> ALTER OPERATOR === (boolean, real) SET (COMMUTATOR = ====);
+ALTER OPERATOR
+> ALTER OPERATOR === (boolean, real) SET (MERGES);
+ALTER OPERATOR
+> ALTER OPERATOR === (boolean, real) SET (HASHES);
+ALTER OPERATOR
+> SELECT oprcanmerge, oprcanhash, pg_describe_object('pg_operator'::regclass, oprcom, 0) AS commutator, pg_describe_object('pg_operator'::regclass, oprnegate, 0) AS negator FROM pg_operator WHERE oprname = '===' AND oprleft = 'boolean'::regtype AND oprright = 'real'::regtype;
+fields oprcanmerge@pg_operator.6:16:1:-1,oprcanhash@pg_operator.7:16:1:-1,commutator:25:-1:-1,negator:25:-1:-1
+row t,t,operator ====(real,boolean),operator !====(boolean,real)
+SELECT 1
+> CREATE OPERATOR @= (    LEFTARG = real,    RIGHTARG = boolean,    PROCEDURE = alter_op_test_fn_real_bool );
+CREATE OPERATOR
+> CREATE OPERATOR @!= (    LEFTARG = boolean,    RIGHTARG = real,    PROCEDURE = alter_op_test_fn_bool_real );
+CREATE OPERATOR
+> ALTER OPERATOR === (boolean, real) SET (COMMUTATOR = @=);
+ERROR 42P13 operator attribute "commutator" cannot be changed if it has already been set
+> ALTER OPERATOR === (boolean, real) SET (NEGATOR = @!=);
+ERROR 42P13 operator attribute "negator" cannot be changed if it has already been set
+> ALTER OPERATOR === (boolean, real) SET (MERGES = false);
+ERROR 42P13 operator attribute "merges" cannot be changed if it has already been set
+> ALTER OPERATOR === (boolean, real) SET (HASHES = false);
+ERROR 42P13 operator attribute "hashes" cannot be changed if it has already been set
+> ALTER OPERATOR @=(real, boolean) SET (COMMUTATOR = ===);
+ERROR 42P13 commutator operator === is already the commutator of operator ====
+> ALTER OPERATOR @!=(boolean, real) SET (NEGATOR = ===);
+ERROR 42P13 negator operator === is already the negator of operator !====
+> SELECT oprcanmerge, oprcanhash, pg_describe_object('pg_operator'::regclass, oprcom, 0) AS commutator, pg_describe_object('pg_operator'::regclass, oprnegate, 0) AS negator FROM pg_operator WHERE oprname = '===' AND oprleft = 'boolean'::regtype AND oprright = 'real'::regtype;
+fields oprcanmerge@pg_operator.6:16:1:-1,oprcanhash@pg_operator.7:16:1:-1,commutator:25:-1:-1,negator:25:-1:-1
+row t,t,operator ====(real,boolean),operator !====(boolean,real)
+SELECT 1
+> CREATE OPERATOR <~> (    LEFTARG = boolean,    RIGHTARG = real,    PROCEDURE = alter_op_test_fn_bool_real,    NEGATOR = <!~> );
+CREATE OPERATOR
+> ALTER OPERATOR @!= (boolean, real) SET (NEGATOR = <!~>);
+ERROR 42883 operator is only a shell: boolean <!~> real
+> ALTER OPERATOR @!= (boolean, real) SET (NEGATOR = <?~>);
+ERROR 42883 operator does not exist: boolean <?~> real
+> ALTER OPERATOR @!= (boolean, real) SET (COMMUTATOR = <?~>);
+ERROR 42883 operator does not exist: real <?~> boolean
+> ALTER OPERATOR @= (real, boolean) SET (RESTRICT = contsel);
+ALTER OPERATOR
+> ALTER OPERATOR @= (real, boolean) SET (MERGES);
+ALTER OPERATOR
+> ALTER OPERATOR @!= (boolean, real) SET (MERGES, HASHES, RESTRICT = contsel, JOIN = contjoinsel);
+ALTER OPERATOR
+> SELECT oprname, oprcanmerge, oprcanhash, oprrest, oprjoin FROM pg_operator WHERE oprname = '@!=';
+fields oprname@pg_operator.2:19:64:-1,oprcanmerge@pg_operator.6:16:1:-1,oprcanhash@pg_operator.7:16:1:-1,oprrest@pg_operator.14:24:4:-1,oprjoin@pg_operator.15:24:4:-1
+row @!=,t,t,contsel,contjoinsel
+SELECT 1
+> ALTER OPERATOR === (boolean, boolean) OWNER TO regress_alter_op_user;
+ALTER OPERATOR
+> SELECT oprname, oprowner::regrole FROM pg_operator WHERE oprname = '===' ORDER BY oprright;
+fields oprname@pg_operator.2:19:64:-1,oprowner:4096:4:-1
+row ===,regress_alter_op_user
+row ===,postgres
+SELECT 2
+> ALTER OPERATOR === (boolean, boolean) OWNER TO nosuch_role;
+ERROR 42704 role "nosuch_role" does not exist
+> SET SESSION AUTHORIZATION regress_alter_op_user;
+SET
+session_authorization=regress_alter_op_user
+is_superuser=off
+> ALTER OPERATOR === (boolean, boolean) SET (RESTRICT = NONE);
+ALTER OPERATOR
+> ALTER OPERATOR === (boolean, boolean) SET (JOIN = contjoinsel);
+ALTER OPERATOR
+> ALTER OPERATOR === (boolean, real) SET (RESTRICT = NONE);
+ERROR 42501 must be owner of operator ===
+> ALTER OPERATOR === (boolean, boolean) OWNER TO postgres;
+ERROR 42501 must be able to SET ROLE "postgres"
+> ALTER OPERATOR === (boolean, real) OWNER TO regress_alter_op_user;
+ERROR 42501 must be owner of operator ===
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> SELECT oprname, oprrest, oprjoin FROM pg_operator WHERE oprname = '===' ORDER BY oprright;
+fields oprname@pg_operator.2:19:64:-1,oprrest@pg_operator.14:24:4:-1,oprjoin@pg_operator.15:24:4:-1
+row ===,-,contjoinsel
+row ===,-,-
+SELECT 2
+> CREATE SCHEMA alter_op_s;
+CREATE SCHEMA
+> ALTER OPERATOR === (boolean, boolean) SET SCHEMA nosuch;
+ERROR 3F000 schema "nosuch" does not exist
+> ALTER OPERATOR === (boolean, boolean) SET SCHEMA alter_op_s;
+ALTER OPERATOR
+> SELECT oprname, oprnamespace::regnamespace FROM pg_operator WHERE oprname = '===' ORDER BY oprright;
+fields oprname@pg_operator.2:19:64:-1,oprnamespace:4089:4:-1
+row ===,alter_op_s
+row ===,public
+SELECT 2
+> SELECT true OPERATOR(alter_op_s.===) true;
+fields ?column?:16:1:-1
+row NULL
+SELECT 1
+> SELECT pg_describe_object('pg_operator'::regclass, oid, 0) FROM pg_operator WHERE oprname = '===' ORDER BY oprright;
+fields pg_describe_object:25:-1:-1
+row operator alter_op_s.===(boolean,boolean)
+row operator ===(boolean,real)
+SELECT 2
+> ALTER OPERATOR alter_op_s.=== (boolean, boolean) SET SCHEMA alter_op_s;
+ALTER OPERATOR
+> ALTER OPERATOR alter_op_s.=== (boolean, boolean) SET SCHEMA pg_toast;
+ERROR 0A000 cannot move objects into or out of TOAST schema
+> DROP SCHEMA alter_op_s;
+ERROR 2BP01 cannot drop schema alter_op_s because other objects depend on it
+DETAIL operator alter_op_s.===(boolean,boolean) depends on schema alter_op_s
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> ALTER OPERATOR alter_op_s.=== (boolean, boolean) SET SCHEMA public;
+ALTER OPERATOR
+> SELECT oprname, oprnamespace::regnamespace FROM pg_operator WHERE oprname = '===' ORDER BY oprright;
+fields oprname@pg_operator.2:19:64:-1,oprnamespace:4089:4:-1
+row ===,public
+row ===,public
+SELECT 2
+> DROP SCHEMA alter_op_s;
+DROP SCHEMA
+> DROP USER regress_alter_op_user;
+ERROR 2BP01 role "regress_alter_op_user" cannot be dropped because some objects depend on it
+DETAIL owner of operator ===(boolean,boolean)
+> ALTER OPERATOR === (boolean, boolean) OWNER TO CURRENT_USER;
+ALTER OPERATOR
+> DROP USER regress_alter_op_user;
+DROP ROLE
+> DROP OPERATOR === (boolean, boolean);
+DROP OPERATOR
+> DROP OPERATOR === (boolean, real);
+DROP OPERATOR
+> DROP OPERATOR ==== (real, boolean);
+DROP OPERATOR
+> DROP OPERATOR !==== (boolean, real);
+DROP OPERATOR
+> DROP OPERATOR @= (real, boolean);
+DROP OPERATOR
+> DROP OPERATOR @!= (boolean, real);
+DROP OPERATOR
+> DROP OPERATOR <~> (boolean, real);
+DROP OPERATOR
+> DROP OPERATOR <!~> (boolean, real);
+DROP OPERATOR
+> DROP FUNCTION customcontsel(internal, oid, internal, integer);
+DROP FUNCTION
+> DROP FUNCTION alter_op_test_fn(boolean, boolean);
+DROP FUNCTION
+> DROP FUNCTION alter_op_test_fn_bool_real(boolean, real);
+DROP FUNCTION
+> DROP FUNCTION alter_op_test_fn_real_bool(real, boolean);
+DROP FUNCTION

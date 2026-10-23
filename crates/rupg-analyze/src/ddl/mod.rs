@@ -165,14 +165,15 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::CreateSeqStmt(_)
             | Node::AlterSeqStmt(_)
             | Node::AlterTSConfigurationStmt(_)
+            | Node::AlterOperatorStmt(_)
             | Node::TruncateStmt(_)
             | Node::RefreshMatViewStmt(_)
     ) || matches!(stmt, Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) || define.kind == ObjectType::OBJECT_OPERATOR)
         || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
         || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype) || alter.objtype == ObjectType::OBJECT_TYPE)
-        || matches!(stmt, Node::AlterOwnerStmt(alter) if alter.objectType == ObjectType::OBJECT_SCHEMA || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
+        || matches!(stmt, Node::AlterOwnerStmt(alter) if matches!(alter.objectType, ObjectType::OBJECT_SCHEMA | ObjectType::OBJECT_OPERATOR) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
         || matches!(stmt, Node::RenameStmt(rename) if rename::is_rename_kind(rename.renameType))
-        || matches!(stmt, Node::AlterObjectSchemaStmt(alter) if is_alter_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
+        || matches!(stmt, Node::AlterObjectSchemaStmt(alter) if is_alter_kind(alter.objectType) || alter.objectType == ObjectType::OBJECT_OPERATOR || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
         || matches!(stmt, Node::SelectStmt(select) if select.intoClause.is_some())
         || matches!(stmt, Node::GrantStmt(grant) if grant.targtype != GrantTargetType::ACL_TARGET_DEFAULTS)
 }
@@ -266,6 +267,9 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         {
             definer.alter_function_schema(alter)
         }
+        Node::AlterObjectSchemaStmt(alter) if alter.objectType == ObjectType::OBJECT_OPERATOR => {
+            definer.alter_operator_schema(alter)
+        }
         Node::AlterObjectSchemaStmt(alter) => definer.alter_relation_schema(alter),
         Node::CreateSeqStmt(create) => definer.create_sequence(create),
         Node::AlterSeqStmt(alter) => definer.alter_sequence(alter),
@@ -273,6 +277,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::DefineStmt(define) if define.kind == ObjectType::OBJECT_OPERATOR => {
             definer.create_operator(define)
         }
+        Node::AlterOperatorStmt(alter) => definer.alter_operator(alter),
         Node::AlterTSConfigurationStmt(alter) => definer.alter_ts_config(alter),
         Node::TruncateStmt(truncate) => definer.truncate(truncate),
         Node::GrantStmt(grant) => definer.grant(grant),
