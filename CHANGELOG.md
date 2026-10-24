@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `pg_current_xact_id`, `pg_current_xact_id_if_assigned`, `pg_current_snapshot` and `pg_xact_status` run, and so do `txid_current`, `txid_current_if_assigned`, `txid_current_snapshot` and `txid_status`. A transaction gets its ID at the first write, at a change of the catalog, at `LOCK ... IN ACCESS EXCLUSIVE MODE` or at a call of `pg_current_xact_id`. The snapshot has `latestCompletedXid + 1` as `xmax` and does not show the transaction of the session, as `GetSnapshotData` makes it. `pg_xact_status` gives `committed`, `aborted` or `in progress`, and `22023` for an ID in the future (#NNN).
+
 ## 0.1.76 (2026-10-24)
 
 ### Added
@@ -24,7 +28,6 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - `DROP OWNED BY` and `REASSIGN OWNED BY`, as `shdepDropOwned` and `shdepReassignOwned` run them. `DROP OWNED` revokes the privileges of each role on the objects that other roles own, drops the objects that the roles own with `RESTRICT` or `CASCADE`, and removes the grants of membership that the roles made. `REASSIGN OWNED` gives the objects of the roles to the new role, and a table takes its indexes, its sequences and its row type with it. Both statements check that the role of the statement has the privileges of each role, and they refuse the roles of `initdb`. `ALTER FUNCTION ... OWNER TO` and `ALTER TYPE ... OWNER TO` now also change the old owner to the new owner in the ACL of the object, as `aclnewowner` does (#663).
 - `ALTER DEFAULT PRIVILEGES` runs. It keeps the rows of `pg_default_acl`, and new tables, views, sequences, types, functions and schemas get the ACL of the default privileges of their owner. `DROP OWNED` revokes the default privileges and drops the ones of the role, `DROP ROLE` names them in its details, and `pg_describe_object` shows them (#665).
 - `CREATE SCHEMA` runs its schema elements: `CREATE TABLE`, `CREATE VIEW`, `CREATE INDEX`, `CREATE SEQUENCE`, `CREATE TRIGGER` and `GRANT`. The elements run as the owner of the schema, with the new schema first in `search_path`, in the order of `transformCreateSchemaStmtElements`: sequences, tables, views, indexes, triggers and grants. A foreign key of a table becomes an `ALTER TABLE ... ADD CONSTRAINT` after the other elements, so it can refer to a later table. An element that names another schema or makes a temporary table gives the error of `checkSchemaNameRV`. Before, the statement gave `0A000` (#666).
-- `pg_current_xact_id`, `pg_current_xact_id_if_assigned`, `pg_current_snapshot` and `pg_xact_status` run, and so do `txid_current`, `txid_current_if_assigned`, `txid_current_snapshot` and `txid_status`. A transaction gets its ID at the first write, at a change of the catalog, at `LOCK ... IN ACCESS EXCLUSIVE MODE` or at a call of `pg_current_xact_id`. The snapshot has `latestCompletedXid + 1` as `xmax` and does not show the transaction of the session, as `GetSnapshotData` makes it. `pg_xact_status` gives `committed`, `aborted` or `in progress`, and `22023` for an ID in the future (#NNN).
 
 ### Fixed
 
