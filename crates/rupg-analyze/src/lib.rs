@@ -69,7 +69,7 @@ pub use ddl::{
     REGRESS_SYMBOLS, RuleTree, SchemaElements, Script, SqlBody, Take, Transform, acl_dependents,
     acl_roles, attnums, copy_filter, copy_insert, copy_relation, copy_target, define, find_library,
     function_body, function_script, function_sqlbody, is_definition, lock_table, owned_objects,
-    rewrite_insert, rule_tree, trigger_when, vacuum_relations,
+    rewrite_insert, rule_tree, tablespace_options, trigger_when, vacuum_relations,
 };
 pub use expr::{
     Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, FieldStore, Func, FuncForm,

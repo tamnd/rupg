@@ -269,7 +269,7 @@ impl Connection {
     }
 
     /// `get_role_oid`: the roles of the catalog, and the user of the session, which is the bootstrap superuser when it is not a role of the catalog.
-    fn role_named(&self, name: &str) -> Result<u32, Error> {
+    pub(super) fn role_named(&self, name: &str) -> Result<u32, Error> {
         utility::role_oid(&self.roles(), name, &self.user).ok_or_else(|| {
             Error::new(SqlState::UNDEFINED_OBJECT, format!("role \"{name}\" does not exist"))
         })

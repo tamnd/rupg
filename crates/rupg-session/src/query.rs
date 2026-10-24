@@ -937,6 +937,13 @@ impl rupg_func::Session for Reader<'_> {
         }
     }
 
+    fn tablespaces(&self) -> Arc<[rupg_catalog::Tablespace]> {
+        match self.activity {
+            Some((_, store)) => store.tablespaces(),
+            None => Arc::from(Vec::new()),
+        }
+    }
+
     fn db_role_settings(&self) -> Vec<(u32, u32, Vec<String>)> {
         match self.activity {
             Some((_, store)) => store.db_role_settings(),

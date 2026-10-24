@@ -326,7 +326,7 @@ fn parts(object: ObjRef, session: &dyn Session) -> Option<Parts> {
             }
         },
         PG_TABLESPACE => {
-            builtin::owned_by_oid(Owned::Tablespace, oid).map(|t| Parts::named(t.name))
+            crate::dbsize::tablespace_name(oid, session).map(|name| Parts::named(&name))
         }
         PG_EXTENSION => catalog?.extensions().find(|e| e.oid == oid).map(|e| Parts::named(&e.name)),
         PG_STATISTIC_EXT => {

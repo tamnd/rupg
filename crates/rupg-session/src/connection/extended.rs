@@ -620,6 +620,21 @@ impl Connection {
                     position: error.position().map(|at| character_position(&statement.text, at)),
                     error,
                 })?
+            } else if let Node::CreateTableSpaceStmt(stmt) = node {
+                immediate_commit = true;
+                self.create_tablespace(stmt).map_err(|error| Failed {
+                    position: error.position().map(|at| character_position(&statement.text, at)),
+                    error,
+                })?
+            } else if let Node::DropTableSpaceStmt(stmt) = node {
+                let mut notices = Vec::new();
+                let result = self.drop_tablespace(stmt, &mut notices);
+                self.notices(&mut notices, &statement.text, &[], out);
+                immediate_commit = true;
+                result.map_err(|error| Failed {
+                    position: error.position().map(|at| character_position(&statement.text, at)),
+                    error,
+                })?
             } else if let Node::VacuumStmt(stmt) = node {
                 let mut notices = Vec::new();
                 let result = self.vacuum(stmt, &mut notices);

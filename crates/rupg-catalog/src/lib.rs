@@ -11,6 +11,7 @@
 pub mod database;
 pub mod names;
 pub mod size;
+pub mod tablespace;
 pub mod toast;
 
 mod aggregate;
@@ -48,6 +49,7 @@ use rupg_common::{Error, Object, Result, SqlState};
 
 pub use database::Database;
 use names::{index_column_names, make_object_name, name_addition};
+pub use tablespace::Tablespace;
 
 /// The first OID for a user object, `FirstNormalObjectId`.
 pub const FIRST_NORMAL_OID: u32 = 16384;
@@ -67,6 +69,8 @@ pub const PG_PROC: u32 = 1255;
 pub const PG_NAMESPACE: u32 = 2615;
 /// The OID of `pg_database`.
 pub const PG_DATABASE: u32 = 1262;
+/// The OID of `pg_tablespace`.
+pub const PG_TABLESPACE: u32 = 1213;
 /// The OID of `pg_largeobject`.
 pub const PG_LARGEOBJECT: u32 = 2613;
 /// The OID of the schema `pg_toast`.

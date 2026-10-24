@@ -645,6 +645,16 @@ fn session_object(kind: Owned, oid: u32, session: &dyn Session) -> Result<Option
             Some(language) => (None, language.owner),
             None => return Ok(None),
         },
+        Owned::Tablespace => {
+            let created = session.tablespaces();
+            let Some(tablespace) = created.iter().find(|t| t.oid == oid) else { return Ok(None) };
+            let acl: Option<Vec<&str>> =
+                tablespace.acl.as_ref().map(|acl| acl.iter().map(String::as_str).collect());
+            return Ok(Some((
+                acl_of(acl.as_deref(), AclKind::Tablespace, tablespace.owner)?,
+                tablespace.owner,
+            )));
+        }
         _ => return Ok(None),
     };
     let acl: Option<Vec<&str>> = granted_object(kind, oid, session)
@@ -756,6 +766,9 @@ pub(crate) fn simple_name(kind: Owned, name: &str, session: &dyn Session) -> Res
     }
     if found.is_none() && kind == Owned::Database {
         found = session.databases().iter().find(|d| d.name == name).map(|d| d.oid);
+    }
+    if found.is_none() && kind == Owned::Tablespace {
+        found = session.tablespaces().iter().find(|t| t.name == name).map(|t| t.oid);
     }
     found.ok_or_else(|| {
         let (state, what) = match kind {

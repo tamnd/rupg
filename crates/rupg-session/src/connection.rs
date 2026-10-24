@@ -51,6 +51,7 @@ mod rewrite;
 mod roles;
 mod route;
 mod savepoint;
+mod tablespaces;
 mod trigger;
 mod upsert;
 mod vacuum;
@@ -1789,6 +1790,12 @@ impl Connection {
             } else if let Node::AlterDatabaseSetStmt(stmt) = node {
                 drop(self.portals.get_mut().close(b""));
                 self.alter_database_set(stmt)
+            } else if let Node::CreateTableSpaceStmt(stmt) = node {
+                drop(self.portals.get_mut().close(b""));
+                self.create_tablespace(stmt)
+            } else if let Node::DropTableSpaceStmt(stmt) = node {
+                drop(self.portals.get_mut().close(b""));
+                self.drop_tablespace(stmt, &mut notices)
             } else if let Node::VacuumStmt(stmt) = node {
                 drop(self.portals.get_mut().close(b""));
                 self.vacuum(stmt, &mut notices)
@@ -3910,6 +3917,12 @@ mod tests {
     #[test]
     fn databases() {
         big_stack(|| script(include_str!("connection/databases.test")));
+    }
+
+    /// `CREATE TABLESPACE` and `DROP TABLESPACE` of in-place tablespaces: the checks of the statements, the rows of `pg_tablespace`, the functions of a tablespace, and the owner as a dependency of a role. `connection/tablespaces.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn tablespaces() {
+        big_stack(|| script(include_str!("connection/tablespaces.test")));
     }
 
     /// `CREATE ROLE`, `ALTER ROLE`, `DROP ROLE` and `GRANT` and `REVOKE` of a role: the rows of `pg_roles`, `pg_authid` and `pg_auth_members`, the errors, the notices, and a role that a transaction makes and rolls back. `connection/roles.test` is the output of PostgreSQL 19 for the same script in a new database.

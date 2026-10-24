@@ -410,6 +410,10 @@ pub trait Session {
     fn databases(&self) -> Arc<[rupg_catalog::Database]> {
         Arc::from(Vec::new())
     }
+    /// The rows of `pg_tablespace` of the tablespaces that `CREATE TABLESPACE` made, in the order of their OIDs. The rows of `pg_default` and `pg_global` are static rows. A session with no server has no other tablespaces.
+    fn tablespaces(&self) -> Arc<[rupg_catalog::Tablespace]> {
+        Arc::from(Vec::new())
+    }
     /// The rows of `pg_db_role_setting`: the OID of the database, the OID of the role, and the settings, each as `name=value`. A session with no server has no rows.
     fn db_role_settings(&self) -> Vec<(u32, u32, Vec<String>)> {
         Vec::new()

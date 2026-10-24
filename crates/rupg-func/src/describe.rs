@@ -182,7 +182,7 @@ pub fn describe(object: ObjRef, session: &dyn Session) -> Result<Option<String>>
                 .map(|d| format!("database {}", d.name)),
         },
         PG_TABLESPACE => {
-            builtin::owned_by_oid(Owned::Tablespace, oid).map(|t| format!("tablespace {}", t.name))
+            crate::dbsize::tablespace_name(oid, session).map(|name| format!("tablespace {name}"))
         }
         PG_EXTENSION => catalog
             .and_then(|c| c.extensions().find(|e| e.oid == oid))

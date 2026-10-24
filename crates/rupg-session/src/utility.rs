@@ -105,6 +105,8 @@ pub fn check(node: &Node, text: &str) -> Result<(), Error> {
         | Node::CreatedbStmt(_)
         | Node::DropdbStmt(_)
         | Node::AlterDatabaseSetStmt(_)
+        | Node::CreateTableSpaceStmt(_)
+        | Node::DropTableSpaceStmt(_)
         | Node::VacuumStmt(_) => Ok(()),
         _ => Err(not_supported(text)),
     }
