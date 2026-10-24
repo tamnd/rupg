@@ -57,11 +57,11 @@ pub(crate) fn forget(query: &mut Query) {
     }
 }
 
-/// `RelationHasSecurityInvoker`: true when the option `security_invoker` of the view is on.
-fn security_invoker(options: &[String]) -> bool {
+/// True when the boolean option `name` of `reloptions` is on, as `RelationHasSecurityInvoker` and `RelationIsSecurityView` read `security_invoker` and `security_barrier`.
+pub(crate) fn option_on(options: &[String], name: &str) -> bool {
     options.iter().any(|option| {
-        option.split_once('=').is_some_and(|(name, value)| {
-            name == "security_invoker"
+        option.split_once('=').is_some_and(|(option, value)| {
+            option == name
                 && matches!(
                     value.to_ascii_lowercase().as_str(),
                     "true" | "on" | "yes" | "1" | "t" | "y"
@@ -81,7 +81,11 @@ impl Analyzer<'_> {
     pub(crate) fn add_view_perms(&mut self, view: u32, query: &mut Query, perms: Vec<PermInfo>) {
         let rel = self.env.catalog().and_then(|c| c.relation(view));
         let owner = match rel {
-            Some(rel) if rel.kind == RelKind::View && security_invoker(&rel.options) => 0,
+            Some(rel)
+                if rel.kind == RelKind::View && option_on(&rel.options, "security_invoker") =>
+            {
+                0
+            }
             Some(rel) => rel.owner,
             None => 0,
         };

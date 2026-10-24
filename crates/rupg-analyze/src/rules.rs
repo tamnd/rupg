@@ -485,7 +485,7 @@ pub fn analyze_product(product: &Product, env: &dyn Env, params: &Params) -> Res
 }
 
 /// The expression with the value of each column of `row` in place of the column of the relation 0, as `ReplaceVarsFromTargetList` puts the new row in a generation expression.
-fn replace_row(expr: &mut Expr, row: &[Expr]) {
+pub(crate) fn replace_row(expr: &mut Expr, row: &[Expr]) {
     expr.each_mut(0, &mut |e, depth| {
         let ExprKind::Var(var) = e.kind else { return false };
         if var.levels_up != depth || var.relation != 0 {

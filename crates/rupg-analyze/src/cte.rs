@@ -809,6 +809,7 @@ impl Analyzer<'_> {
         query: &mut Query,
         with: Option<&WithClause>,
     ) -> Result<()> {
+        self.finish_auto_view();
         query.recursive = with.is_some_and(|w| w.recursive);
         query.ctes = self.take_ctes()?;
         Ok(())

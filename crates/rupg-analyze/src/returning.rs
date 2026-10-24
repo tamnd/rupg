@@ -130,6 +130,7 @@ impl Analyzer<'_> {
             .at_opt(at));
         }
         self.mark_origins(&mut targets);
+        self.auto_view_origins(&mut targets);
         // `resolveTargetListUnknowns`: a column of type `unknown` becomes `text`.
         for target in &mut targets {
             if target.expr.ty == oid::UNKNOWN {
