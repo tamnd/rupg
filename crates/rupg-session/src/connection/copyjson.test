@@ -1,0 +1,297 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> create temp table copytest (style text, test text, filler int);
+CREATE TABLE
+> insert into copytest values('DOS',E'abc\r\ndef',1);
+INSERT 0 1
+> insert into copytest values('Unix',E'abc\ndef',2);
+INSERT 0 1
+> insert into copytest values('Mac',E'abc\rdef',3);
+INSERT 0 1
+> insert into copytest values(E'esc\\ape',E'a\\r\\\r\\\n\\nb',4);
+INSERT 0 1
+> create temp table copytest_order (a int, b int, c int);
+CREATE TABLE
+> insert into copytest_order values (1, 2, 3);
+INSERT 0 1
+> copy copytest_order (c, b, a) to stdout (format json);
+copy out 0 0
+data {\"c\":3,\"b\":2,\"a\":1}\n
+copy done
+COPY 1
+> copy (select 1 union all select 2) to stdout with (format json);
+copy out 0 0
+data {\"?column?\":1}\n
+data {\"?column?\":2}\n
+copy done
+COPY 2
+> copy (select 1 as foo union all select 2) to stdout with (format json);
+copy out 0 0
+data {\"foo\":1}\n
+data {\"foo\":2}\n
+copy done
+COPY 2
+> copy (values (1), (2)) TO stdout with (format json);
+copy out 0 0
+data {\"column1\":1}\n
+data {\"column1\":2}\n
+copy done
+COPY 2
+> copy (select 1 union all select 2) to stdout with (format json, force_array true);
+copy out 0 0
+data [\n
+data  {\"?column?\":1}\n
+data ,{\"?column?\":2}\n
+data ]\n
+copy done
+COPY 2
+> copy (values (1), (2)) TO stdout with (format json, force_array true);
+copy out 0 0
+data [\n
+data  {\"column1\":1}\n
+data ,{\"column1\":2}\n
+data ]\n
+copy done
+COPY 2
+> copy copytest to stdout json;
+copy out 0 0
+data {\"style\":\"DOS\",\"test\":\"abc\\r\\ndef\",\"filler\":1}\n
+data {\"style\":\"Unix\",\"test\":\"abc\\ndef\",\"filler\":2}\n
+data {\"style\":\"Mac\",\"test\":\"abc\\rdef\",\"filler\":3}\n
+data {\"style\":\"esc\\\\ape\",\"test\":\"a\\\\r\\\\\\r\\\\\\n\\\\nb\",\"filler\":4}\n
+copy done
+COPY 4
+> copy copytest to stdout (format json);
+copy out 0 0
+data {\"style\":\"DOS\",\"test\":\"abc\\r\\ndef\",\"filler\":1}\n
+data {\"style\":\"Unix\",\"test\":\"abc\\ndef\",\"filler\":2}\n
+data {\"style\":\"Mac\",\"test\":\"abc\\rdef\",\"filler\":3}\n
+data {\"style\":\"esc\\\\ape\",\"test\":\"a\\\\r\\\\\\r\\\\\\n\\\\nb\",\"filler\":4}\n
+copy done
+COPY 4
+> copy (select * from copytest) to stdout (format json);
+copy out 0 0
+data {\"style\":\"DOS\",\"test\":\"abc\\r\\ndef\",\"filler\":1}\n
+data {\"style\":\"Unix\",\"test\":\"abc\\ndef\",\"filler\":2}\n
+data {\"style\":\"Mac\",\"test\":\"abc\\rdef\",\"filler\":3}\n
+data {\"style\":\"esc\\\\ape\",\"test\":\"a\\\\r\\\\\\r\\\\\\n\\\\nb\",\"filler\":4}\n
+copy done
+COPY 4
+> copy copytest to stdout (format json, delimiter '|');
+ERROR 42601 cannot specify DELIMITER in JSON mode
+> copy copytest to stdout (format json, null '\N');
+ERROR 42601 cannot specify NULL in JSON mode
+> copy copytest to stdout (format json, default '|');
+ERROR 42601 cannot specify DEFAULT in JSON mode
+> copy copytest to stdout (format json, header);
+ERROR 0A000 cannot specify HEADER in JSON mode
+> copy copytest to stdout (format json, header 1);
+ERROR 0A000 cannot specify HEADER in JSON mode
+> copy copytest to stdout (format json, quote '"');
+ERROR 0A000 COPY QUOTE requires CSV mode
+> copy copytest to stdout (format json, escape '"');
+ERROR 0A000 COPY ESCAPE requires CSV mode
+> copy copytest to stdout (format json, force_quote *);
+ERROR 0A000 COPY FORCE_QUOTE requires CSV mode
+> copy copytest to stdout (format json, force_not_null *);
+ERROR 0A000 COPY FORCE_NOT_NULL requires CSV mode
+> copy copytest to stdout (format json, force_null *);
+ERROR 0A000 COPY FORCE_NULL requires CSV mode
+> copy copytest to stdout (format json, on_error ignore);
+ERROR 22023 COPY ON_ERROR cannot be used with COPY TO at 39
+> copy copytest to stdout (format json, reject_limit 1);
+ERROR 22023 COPY REJECT_LIMIT requires ON_ERROR to be set to IGNORE
+> copy copytest (style, test, filler) to stdout (format json);
+copy out 0 0
+data {\"style\":\"DOS\",\"test\":\"abc\\r\\ndef\",\"filler\":1}\n
+data {\"style\":\"Unix\",\"test\":\"abc\\ndef\",\"filler\":2}\n
+data {\"style\":\"Mac\",\"test\":\"abc\\rdef\",\"filler\":3}\n
+data {\"style\":\"esc\\\\ape\",\"test\":\"a\\\\r\\\\\\r\\\\\\n\\\\nb\",\"filler\":4}\n
+copy done
+COPY 4
+> copy copytest to stdout (format csv, force_array true);
+ERROR 22023 COPY FORCE_ARRAY can only be used with JSON mode
+> copy copytest to stdout (format json, force_array);
+copy out 0 0
+data [\n
+data  {\"style\":\"DOS\",\"test\":\"abc\\r\\ndef\",\"filler\":1}\n
+data ,{\"style\":\"Unix\",\"test\":\"abc\\ndef\",\"filler\":2}\n
+data ,{\"style\":\"Mac\",\"test\":\"abc\\rdef\",\"filler\":3}\n
+data ,{\"style\":\"esc\\\\ape\",\"test\":\"a\\\\r\\\\\\r\\\\\\n\\\\nb\",\"filler\":4}\n
+data ]\n
+copy done
+COPY 4
+> copy copytest(style, test) to stdout (format json, force_array true);
+copy out 0 0
+data [\n
+data  {\"style\":\"DOS\",\"test\":\"abc\\r\\ndef\"}\n
+data ,{\"style\":\"Unix\",\"test\":\"abc\\ndef\"}\n
+data ,{\"style\":\"Mac\",\"test\":\"abc\\rdef\"}\n
+data ,{\"style\":\"esc\\\\ape\",\"test\":\"a\\\\r\\\\\\r\\\\\\n\\\\nb\"}\n
+data ]\n
+copy done
+COPY 4
+> copy copytest to stdout (format json, force_array false);
+copy out 0 0
+data {\"style\":\"DOS\",\"test\":\"abc\\r\\ndef\",\"filler\":1}\n
+data {\"style\":\"Unix\",\"test\":\"abc\\ndef\",\"filler\":2}\n
+data {\"style\":\"Mac\",\"test\":\"abc\\rdef\",\"filler\":3}\n
+data {\"style\":\"esc\\\\ape\",\"test\":\"a\\\\r\\\\\\r\\\\\\n\\\\nb\",\"filler\":4}\n
+copy done
+COPY 4
+> copy (select 1 where false) to stdout (format json, force_array);
+copy out 0 0
+data [\n
+data ]\n
+copy done
+COPY 0
+> create temp table copyjsontest_types (id int, js json, jsb jsonb, arr int[], n numeric(10,2), b boolean, ts timestamp, t text);
+CREATE TABLE
+> insert into copyjsontest_types values (1, '{"a":1}', '{"b":2}', '{1,2,3}', 3.14, true, '2024-01-15 10:30:00', 'hello'), (2, '[1,null,"x"]', '{"nested":{"k":"v"}}', '{4,5}', -99.99, false, '2024-06-30 23:59:59', 'world'), (3, 'null', 'null', '{}', null, null, null, null);
+INSERT 0 3
+> copy copyjsontest_types to stdout (format json);
+copy out 0 0
+data {\"id\":1,\"js\":{\"a\":1},\"jsb\":{\"b\": 2},\"arr\":[1,2,3],\"n\":3.14,\"b\":true,\"ts\":\"2024-01-15T10:30:00\",\"t\":\"hello\"}\n
+data {\"id\":2,\"js\":[1,null,\"x\"],\"jsb\":{\"nested\": {\"k\": \"v\"}},\"arr\":[4,5],\"n\":-99.99,\"b\":false,\"ts\":\"2024-06-30T23:59:59\",\"t\":\"world\"}\n
+data {\"id\":3,\"js\":null,\"jsb\":null,\"arr\":[],\"n\":null,\"b\":null,\"ts\":null,\"t\":null}\n
+copy done
+COPY 3
+> copy copyjsontest_types (id, js, jsb) to stdout (format json);
+copy out 0 0
+data {\"id\":1,\"js\":{\"a\":1},\"jsb\":{\"b\": 2}}\n
+data {\"id\":2,\"js\":[1,null,\"x\"],\"jsb\":{\"nested\": {\"k\": \"v\"}}}\n
+data {\"id\":3,\"js\":null,\"jsb\":null}\n
+copy done
+COPY 3
+> copy copyjsontest_types (id, arr, n, b) to stdout (format json);
+copy out 0 0
+data {\"id\":1,\"arr\":[1,2,3],\"n\":3.14,\"b\":true}\n
+data {\"id\":2,\"arr\":[4,5],\"n\":-99.99,\"b\":false}\n
+data {\"id\":3,\"arr\":[],\"n\":null,\"b\":null}\n
+copy done
+COPY 3
+> copy copyjsontest_types (jsb, t) to stdout (format json);
+copy out 0 0
+data {\"jsb\":{\"b\": 2},\"t\":\"hello\"}\n
+data {\"jsb\":{\"nested\": {\"k\": \"v\"}},\"t\":\"world\"}\n
+data {\"jsb\":null,\"t\":null}\n
+copy done
+COPY 3
+> copy copyjsontest_types (id, ts) to stdout (format json);
+copy out 0 0
+data {\"id\":1,\"ts\":\"2024-01-15T10:30:00\"}\n
+data {\"id\":2,\"ts\":\"2024-06-30T23:59:59\"}\n
+data {\"id\":3,\"ts\":null}\n
+copy done
+COPY 3
+> copy copyjsontest_types (js) to stdout (format json);
+copy out 0 0
+data {\"js\":{\"a\":1}}\n
+data {\"js\":[1,null,\"x\"]}\n
+data {\"js\":null}\n
+copy done
+COPY 3
+> copy copyjsontest_types (jsb) to stdout (format json);
+copy out 0 0
+data {\"jsb\":{\"b\": 2}}\n
+data {\"jsb\":{\"nested\": {\"k\": \"v\"}}}\n
+data {\"jsb\":null}\n
+copy done
+COPY 3
+> drop table copyjsontest_types;
+DROP TABLE
+> create temp table copyjsontest (id bigserial, f1 text, f2 timestamptz);
+CREATE TABLE
+> insert into copyjsontest select g.i, CASE WHEN g.i % 2 = 0 THEN 'line with '' in it: ' || g.i::text ELSE 'line with " in it: ' || g.i::text END, 'Mon Feb 10 17:32:01 1997 PST' from generate_series(1,5) as g(i);
+INSERT 0 5
+> insert into copyjsontest (f1) values (E'aaa\"bbb'::text), (E'aaa\\bbb'::text), (E'aaa\/bbb'::text), (E'aaa\bbbb'::text), (E'aaa\fbbb'::text), (E'aaa\nbbb'::text), (E'aaa\rbbb'::text), (E'aaa\tbbb'::text);
+INSERT 0 8
+> copy copyjsontest to stdout json;
+copy out 0 0
+data {\"id\":1,\"f1\":\"line with \\\" in it: 1\",\"f2\":\"1997-02-11T01:32:01+00:00\"}\n
+data {\"id\":2,\"f1\":\"line with \' in it: 2\",\"f2\":\"1997-02-11T01:32:01+00:00\"}\n
+data {\"id\":3,\"f1\":\"line with \\\" in it: 3\",\"f2\":\"1997-02-11T01:32:01+00:00\"}\n
+data {\"id\":4,\"f1\":\"line with \' in it: 4\",\"f2\":\"1997-02-11T01:32:01+00:00\"}\n
+data {\"id\":5,\"f1\":\"line with \\\" in it: 5\",\"f2\":\"1997-02-11T01:32:01+00:00\"}\n
+data {\"id\":1,\"f1\":\"aaa\\\"bbb\",\"f2\":null}\n
+data {\"id\":2,\"f1\":\"aaa\\\\bbb\",\"f2\":null}\n
+data {\"id\":3,\"f1\":\"aaa/bbb\",\"f2\":null}\n
+data {\"id\":4,\"f1\":\"aaa\\bbbb\",\"f2\":null}\n
+data {\"id\":5,\"f1\":\"aaa\\fbbb\",\"f2\":null}\n
+data {\"id\":6,\"f1\":\"aaa\\nbbb\",\"f2\":null}\n
+data {\"id\":7,\"f1\":\"aaa\\rbbb\",\"f2\":null}\n
+data {\"id\":8,\"f1\":\"aaa\\tbbb\",\"f2\":null}\n
+copy done
+COPY 13
+> create table cj_part (a int, b text) partition by range (a);
+CREATE TABLE
+> create table cj_part1 partition of cj_part for values from (0) to (10);
+CREATE TABLE
+> create table cj_part2 partition of cj_part for values from (10) to (20);
+CREATE TABLE
+> insert into cj_part values (15, 'x'), (1, 'y'), (12, null);
+INSERT 0 3
+> copy cj_part to stdout (format json);
+copy out 0 0
+data {\"a\":1,\"b\":\"y\"}\n
+data {\"a\":15,\"b\":\"x\"}\n
+data {\"a\":12,\"b\":null}\n
+copy done
+COPY 3
+> copy cj_part (b) to stdout (format json, force_array);
+copy out 0 0
+data [\n
+data  {\"b\":\"y\"}\n
+data ,{\"b\":\"x\"}\n
+data ,{\"b\":null}\n
+data ]\n
+copy done
+COPY 3
+> create table cj_gen (a int, b int generated always as (a * 2) stored, c int);
+CREATE TABLE
+> insert into cj_gen (a, c) values (1, 3);
+INSERT 0 1
+> copy cj_gen to stdout (format json);
+copy out 0 0
+data {\"a\":1,\"c\":3}\n
+copy done
+COPY 1
+> create type cj_pair as (x int, y text);
+CREATE TYPE
+> copy (select row(1, 'a')::cj_pair as p, row(2, 'b') as r, array[row(3,'c')::cj_pair] as arr) to stdout (format json);
+copy out 0 0
+data {\"p\":{\"x\":1,\"y\":\"a\"},\"r\":{\"f1\":2,\"f2\":\"b\"},\"arr\":[{\"x\":3,\"y\":\"c\"}]}\n
+copy done
+COPY 1
+> copy (select 1 as a, 2 as a, 'x"y' as "k""q") to stdout (format json);
+copy out 0 0
+data {\"a\":1,\"a\":2,\"k\\\"q\":\"x\\\"y\"}\n
+copy done
+COPY 1
+> copy (select 'NaN'::float8 as f, 'Infinity'::numeric as n, '1e100'::float8 as g, 'x'::bytea as by, '2020-01-01'::date as d, '(1,2)'::point as pt) to stdout (format json);
+copy out 0 0
+data {\"f\":\"NaN\",\"n\":\"Infinity\",\"g\":1e+100,\"by\":\"\\\\x78\",\"d\":\"2020-01-01\",\"pt\":\"(1,2)\"}\n
+copy done
+COPY 1
+> copy (select 1 as a) to stdout (format json, force_array false, force_array true);
+ERROR 42601 conflicting or redundant options at 65
+> copy (select 1 as a) to stdout (format json, freeze);
+ERROR 22023 COPY FREEZE cannot be used with COPY TO
+> copy (select 1 as a) to stdout (format json, encoding 'utf8');
+copy out 0 0
+data {\"a\":1}\n
+copy done
+COPY 1
+> create view cj_v as select * from copytest_order;
+NOTICE 00000 view "cj_v" will be a temporary view
+DETAIL It depends on temporary table copytest_order.
+CREATE VIEW
+> copy (select * from cj_v) to stdout (format json);
+copy out 0 0
+data {\"a\":1,\"b\":2,\"c\":3}\n
+copy done
+COPY 1
+> copy cj_v to stdout (format json);
+ERROR 42809 cannot copy from view "cj_v"
+HINT Try the COPY (SELECT ...) TO variant.

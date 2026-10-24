@@ -4841,7 +4841,7 @@ mod tests {
         });
     }
 
-    /// `COPY FROM` a program, the JSON format, an encoding other than `UTF8` and `COPY TO` a file or a program give `0A000`.
+    /// `COPY FROM` a program, an encoding other than `UTF8` and `COPY TO` a file or a program give `0A000`.
     #[test]
     fn copy_not_supported() {
         big_stack(|| {
@@ -4849,7 +4849,6 @@ mod tests {
             assert_eq!(script_lines(&mut c, "> CREATE TABLE t (a int)"), ["CREATE TABLE"]);
             for (sql, error) in [
                 ("COPY t FROM PROGRAM 'cat'", "COPY FROM a program is not supported yet"),
-                ("COPY t TO stdout (FORMAT json)", "COPY FORMAT JSON is not supported yet"),
                 (
                     "COPY t TO stdout (ENCODING 'latin1')",
                     "COPY with ENCODING LATIN1 is not supported yet",
@@ -5972,6 +5971,12 @@ mod tests {
     #[test]
     fn wco2() {
         big_stack(|| script(include_str!("connection/wco2.test")));
+    }
+
+    /// `COPY TO` with `FORMAT json`, from PostgreSQL `copy.sql`: a line with the row as `composite_to_json` writes it, `FORCE_ARRAY`, the column lists, the types, the escapes, partitions and the option errors.
+    #[test]
+    fn copyjson() {
+        big_stack(|| script(include_str!("connection/copyjson.test")));
     }
 
     /// `CREATE TABLE ... (LIKE ...)`, from `create_table_like.sql` of the PostgreSQL tests: the columns and the not-null constraints of the other relation, the options `INCLUDING DEFAULTS`, `GENERATED`, `IDENTITY`, `CONSTRAINTS`, `INDEXES`, `STORAGE`, `COMMENTS` and `ALL`, `LIKE` with `INHERITS`, and `LIKE` of a view, a composite type and a sequence. The script has catalog queries in place of `\d`, and it does not have the parts for virtual generated columns, `NOT ENFORCED`, `CREATE STATISTICS` and foreign tables. `connection/create_table_like.test` is the output of PostgreSQL 19 for the same script in a new database.

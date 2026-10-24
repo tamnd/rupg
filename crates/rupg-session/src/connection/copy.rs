@@ -1,11 +1,12 @@
-//! `COPY ... TO STDOUT`, as `DoCopy`, `ProcessCopyOptions`, `BeginCopyTo` and `DoCopyTo` in `copy.c` and `copyto.c` run it. The rows go to the client in the text, CSV or binary format. A file, a program and the JSON format give `0A000`. `COPY FROM` of the extended protocol gives `0A000` too.
+//! `COPY ... TO STDOUT`, as `DoCopy`, `ProcessCopyOptions`, `BeginCopyTo` and `DoCopyTo` in `copy.c` and `copyto.c` run it. The rows go to the client in the text, CSV, binary or JSON format. A file and a program give `0A000`. `COPY FROM` of the extended protocol gives `0A000` too.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use rupg_analyze::Params;
 use rupg_common::{Error, SqlState};
 use rupg_sql::nodes::{CopyStmt, DefElem, Node};
-use rupg_types::Value;
+use rupg_types::{Record, Value, oid};
 use rupg_wire::{CommandTag, OutBuf};
 
 use super::{Connection, Done};
@@ -78,6 +79,8 @@ pub(super) struct Options {
     /// `REJECT_LIMIT`: the number of rows that `ON_ERROR IGNORE` can skip, or `None` for no limit.
     pub(super) reject_limit: Option<i64>,
     pub(super) verbosity: Verbosity,
+    /// `FORCE_ARRAY`: the JSON format puts the rows in an array.
+    force_array: bool,
 }
 
 /// `CopyOnErrorChoice`: what `COPY ... FROM` does for a field that the input function of its type does not accept.
@@ -170,12 +173,6 @@ impl Connection {
             (options, plan, columns, selected, None)
         };
         let plan = plan.fold(None, &reader)?;
-        if options.format == Format::Json {
-            return Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                "COPY FORMAT JSON is not supported yet",
-            ));
-        }
         let force = force_quote(&options.force_quote, &columns, &selected, rel.as_deref())?;
         if let Some(name) = options.encoding
             && !matches!(name, "UTF8" | "SQL_ASCII")
@@ -205,9 +202,23 @@ impl Connection {
         }
         let binary = options.format == Format::Binary;
         let formats = vec![i16::from(binary); selected.len()];
-        *started = Some((binary, selected.len()));
+        let json = options.format == Format::Json;
+        let width = if json { 1 } else { selected.len() };
+        *started = Some((binary, width));
         let view = reader.view().cloned().unwrap_or_default();
         let (plan, writes) = self.start_writes(plan, &[], &view)?;
+        if json {
+            let types: Vec<u32> = plan.columns().iter().map(|target| target.expr.ty).collect();
+            let mut rows = plan.run(&[], &reader)?;
+            if let Some(order) = &partitions {
+                rows = by_partition(rows, order);
+            }
+            self.end_writes(writes, &[], Vec::new())?;
+            let names: Arc<[String]> = selected.iter().map(|&i| columns[i].clone()).collect();
+            let count = rows.len() as u64;
+            let data = json_rows(options.force_array, &types, &names, rows, &reader)?;
+            return Ok(Done::Copy(CopyOut { binary, columns: width, data, rows: count }));
+        }
         let rows = match &partitions {
             Some(order) => {
                 let types: Vec<u32> = plan.columns().iter().map(|target| target.expr.ty).collect();
@@ -590,6 +601,7 @@ pub(super) fn options(list: &[Option<Node>], is_from: bool) -> Result<Options, E
         on_error,
         reject_limit: reject,
         verbosity: log_verbosity.unwrap_or(Verbosity::Default),
+        force_array: force_array == Some(true),
     })
 }
 
@@ -822,6 +834,41 @@ fn csv_value(options: &Options, value: &[u8], force: bool, single: bool, out: &m
         out.push(byte);
     }
     out.push(options.quote);
+}
+
+/// `CopyToJsonOneRow`: a line for each row with the row as `composite_to_json` writes it, with the names of the columns as the keys. `FORCE_ARRAY` puts a line with `[` first and a line with `]` last, and a comma before each row after the first.
+fn json_rows(
+    force_array: bool,
+    types: &[u32],
+    names: &Arc<[String]>,
+    rows: Vec<Vec<Value>>,
+    session: &dyn rupg_func::Session,
+) -> Result<Vec<Vec<u8>>, Error> {
+    let mut data = Vec::with_capacity(rows.len() + 2);
+    if force_array {
+        data.push(b"[\n".to_vec());
+    }
+    for (i, mut values) in rows.into_iter().enumerate() {
+        values.truncate(types.len());
+        let record = Record { types: types.to_vec(), values, names: Some(Arc::clone(names)) };
+        let mut line = String::new();
+        if force_array {
+            line.push(if i == 0 { ' ' } else { ',' });
+        }
+        rupg_func::json_value(
+            oid::RECORD,
+            &Value::Record(Box::new(record)),
+            false,
+            session,
+            &mut line,
+        )?;
+        line.push('\n');
+        data.push(line.into_bytes());
+    }
+    if force_array {
+        data.push(b"]\n".to_vec());
+    }
+    Ok(data)
 }
 
 /// The `CopyData` messages of the binary format. The header goes with the first row, and the trailer is a message of its own, as `CopySendEndOfRow` sends them.
