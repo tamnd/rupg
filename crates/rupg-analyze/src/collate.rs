@@ -67,13 +67,15 @@ fn state(expr: &Expr, levels: &[&Query], catalog: Option<&Catalog>) -> State {
             };
         }
         ExprKind::SubLink(sub) => {
-            if !matches!(sub.kind, SubLinkKind::Expr | SubLinkKind::Array) {
-                return State::None;
-            }
+            let column = match sub.kind {
+                SubLinkKind::Expr | SubLinkKind::Array => 0,
+                SubLinkKind::Multi { column, .. } => column,
+                _ => return State::None,
+            };
             let mut inner = vec![&sub.query];
             inner.extend_from_slice(levels);
-            let first = sub.query.targets.iter().find(|t| !t.junk);
-            return State::Implicit(first.map_or(0, |t| state(&t.expr, &inner, catalog).oid()));
+            let target = sub.query.targets.iter().filter(|t| !t.junk).nth(column);
+            return State::Implicit(target.map_or(0, |t| state(&t.expr, &inner, catalog).oid()));
         }
         ExprKind::Case(case) => {
             case.whens.iter().map(|(_, then)| then).chain([&*case.default]).collect()

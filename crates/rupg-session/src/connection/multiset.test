@@ -1,0 +1,197 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE ms_t (a int, b int, c text);
+CREATE TABLE
+> INSERT INTO ms_t VALUES (5, 10, 'foo'), (10, 15, 'bar'), (41, 12, 'car');
+INSERT 0 3
+> UPDATE ms_t SET (c, b, a) = ('bugle', b + 11, DEFAULT) WHERE c = 'foo';
+UPDATE 1
+> SELECT * FROM ms_t ORDER BY a NULLS FIRST, b;
+fields a@ms_t.1:23:4:-1,b@ms_t.2:23:4:-1,c@ms_t.3:25:-1:-1
+row NULL,21,bugle
+row 10,15,bar
+row 41,12,car
+SELECT 3
+> UPDATE ms_t SET (b, a) = (SELECT a, b FROM ms_t WHERE b = 12 AND c = 'car') WHERE a = 10;
+UPDATE 1
+> SELECT * FROM ms_t ORDER BY a NULLS FIRST, b;
+fields a@ms_t.1:23:4:-1,b@ms_t.2:23:4:-1,c@ms_t.3:25:-1:-1
+row NULL,21,bugle
+row 12,41,bar
+row 41,12,car
+SELECT 3
+> UPDATE ms_t o SET (b, a) = (SELECT a + 1, b FROM ms_t i WHERE i.a = o.a AND i.b = o.b AND i.c IS NOT DISTINCT FROM o.c);
+UPDATE 3
+> SELECT * FROM ms_t ORDER BY a NULLS FIRST, b;
+fields a@ms_t.1:23:4:-1,b@ms_t.2:23:4:-1,c@ms_t.3:25:-1:-1
+row NULL,NULL,bugle
+row 12,42,car
+row 41,13,bar
+SELECT 3
+> UPDATE ms_t SET (a, b) = (SELECT a, b FROM ms_t WHERE c = 'zzz') WHERE c = 'car';
+UPDATE 1
+> SELECT * FROM ms_t ORDER BY a NULLS FIRST, b;
+fields a@ms_t.1:23:4:-1,b@ms_t.2:23:4:-1,c@ms_t.3:25:-1:-1
+row NULL,NULL,bugle
+row NULL,NULL,car
+row 41,13,bar
+SELECT 3
+> UPDATE ms_t SET (a, b) = (SELECT a, b FROM ms_t);
+ERROR 21000 more than one row returned by a subquery used as an expression
+> UPDATE ms_t SET (a, b) = (SELECT a FROM ms_t LIMIT 1);
+ERROR 42601 number of columns does not match number of values at 26
+> UPDATE ms_t SET (a) = (SELECT a, b FROM ms_t LIMIT 1);
+ERROR 42601 number of columns does not match number of values at 23
+> UPDATE ms_t SET (a, b) = (SELECT 'x', 1);
+ERROR 42804 column "a" is of type integer but expression is of type text at 34
+HINT You will need to rewrite or cast the expression.
+> UPDATE ms_t SET (a, b) = (SELECT 1, 2), c = 'one';
+UPDATE 3
+> SELECT * FROM ms_t ORDER BY a NULLS FIRST, b;
+fields a@ms_t.1:23:4:-1,b@ms_t.2:23:4:-1,c@ms_t.3:25:-1:-1
+row 1,2,one
+row 1,2,one
+row 1,2,one
+SELECT 3
+> UPDATE ms_t SET (a, b) = (SELECT 3, 4), (c) = (SELECT 'two') RETURNING *;
+fields a@ms_t.1:23:4:-1,b@ms_t.2:23:4:-1,c@ms_t.3:25:-1:-1
+row 3,4,two
+row 3,4,two
+row 3,4,two
+UPDATE 3
+> UPDATE ms_t SET (b, a) = (SELECT a * 2, b * 3 FROM ms_t i WHERE i.c = ms_t.c) RETURNING a, b, c;
+ERROR 21000 more than one row returned by a subquery used as an expression
+> UPDATE ms_t SET (a, b) = (SELECT * FROM (VALUES (7, 8)) v);
+UPDATE 3
+> SELECT * FROM ms_t ORDER BY a NULLS FIRST, b;
+fields a@ms_t.1:23:4:-1,b@ms_t.2:23:4:-1,c@ms_t.3:25:-1:-1
+row 7,8,two
+row 7,8,two
+row 7,8,two
+SELECT 3
+> UPDATE ms_t SET (a, b) = (SELECT v.* FROM (VALUES (9, 9)) v WHERE ms_t.a = 7);
+UPDATE 3
+> SELECT * FROM ms_t ORDER BY a NULLS FIRST, b;
+fields a@ms_t.1:23:4:-1,b@ms_t.2:23:4:-1,c@ms_t.3:25:-1:-1
+row 9,9,two
+row 9,9,two
+row 9,9,two
+SELECT 3
+> UPDATE ms_t SET (a, b) = (SELECT 1, 2 ORDER BY 1);
+UPDATE 3
+> UPDATE ms_t SET (a, a) = (SELECT 1, 2);
+ERROR 42601 multiple assignments to same column "a"
+> UPDATE ms_t SET (a, nosuch) = (SELECT 1, 2);
+ERROR 42703 column "nosuch" of relation "ms_t" does not exist at 21
+> CREATE SEQUENCE ms_s;
+CREATE SEQUENCE
+> UPDATE ms_t SET (a, b) = (SELECT nextval('ms_s'), nextval('ms_s')) RETURNING a, b;
+fields a@ms_t.1:23:4:-1,b@ms_t.2:23:4:-1
+row 1,2
+row 1,2
+row 1,2
+UPDATE 3
+> UPDATE ms_t SET (a, b) = (SELECT nextval('ms_s'), 0 FROM ms_t i WHERE i.c = ms_t.c) RETURNING a, b;
+ERROR 21000 more than one row returned by a subquery used as an expression
+> SELECT nextval('ms_s');
+fields nextval:20:8:-1
+row 5
+SELECT 1
+> EXPLAIN (COSTS OFF) UPDATE ms_t t SET (a, b) = (SELECT b, a FROM ms_t s WHERE s.a = t.a);
+fields QUERY PLAN:25:-1:-1
+row Update on ms_t t
+row   ->  Seq Scan on ms_t t
+row         SubPlan multiexpr_1
+row           ->  Seq Scan on ms_t s
+row                 Filter: (a = t.a)
+EXPLAIN
+> EXPLAIN (COSTS OFF) UPDATE ms_t t SET (a, b) = (SELECT 1, 2);
+fields QUERY PLAN:25:-1:-1
+row Update on ms_t t
+row   InitPlan multiexpr_1
+row     ->  Result
+row   ->  Seq Scan on ms_t t
+EXPLAIN
+> CREATE TABLE ms_u (a int PRIMARY KEY, b text);
+CREATE TABLE
+> INSERT INTO ms_u VALUES (1, 'Boo'), (3, 'Zoo');
+INSERT 0 2
+> WITH aaa AS (SELECT 1 AS a, 'Foo' AS b) INSERT INTO ms_u VALUES (1, 'Bar') ON CONFLICT (a) DO UPDATE SET (b, a) = (SELECT b, a FROM aaa) RETURNING *;
+fields a@ms_u.1:23:4:-1,b@ms_u.2:25:-1:-1
+row 1,Foo
+INSERT 0 1
+> INSERT INTO ms_u VALUES (1, 'Baz'), (3, 'Zaz') ON CONFLICT (a) DO UPDATE SET (b, a) = (SELECT b || ', Correlated', a FROM ms_u i WHERE i.a = ms_u.a) RETURNING *;
+fields a@ms_u.1:23:4:-1,b@ms_u.2:25:-1:-1
+row 1,Foo, Correlated
+row 3,Zoo, Correlated
+INSERT 0 2
+> INSERT INTO ms_u VALUES (1, 'Bat'), (3, 'Zot') ON CONFLICT (a) DO UPDATE SET (b, a) = (SELECT b || ', Excluded', a FROM ms_u i WHERE i.a = excluded.a) RETURNING *;
+fields a@ms_u.1:23:4:-1,b@ms_u.2:25:-1:-1
+row 1,Foo, Correlated, Excluded
+row 3,Zoo, Correlated, Excluded
+INSERT 0 2
+> INSERT INTO ms_u VALUES (1, 'x') ON CONFLICT (a) DO UPDATE SET (b, a) = (SELECT 'y', 5 FROM ms_u) RETURNING *;
+ERROR 21000 more than one row returned by a subquery used as an expression
+> MERGE INTO ms_u u USING (VALUES (1, 'm1'), (3, 'm3')) AS v(a, b) ON u.a = v.a WHEN MATCHED THEN UPDATE SET (b, a) = (SELECT v.b || u.b, u.a * 10) RETURNING merge_action(), u.*;
+fields merge_action:25:-1:-1,a@ms_u.1:23:4:-1,b@ms_u.2:25:-1:-1
+row UPDATE,10,m1Foo, Correlated, Excluded
+row UPDATE,30,m3Zoo, Correlated, Excluded
+MERGE 2
+> SELECT * FROM ms_u ORDER BY a;
+fields a@ms_u.1:23:4:-1,b@ms_u.2:25:-1:-1
+row 10,m1Foo, Correlated, Excluded
+row 30,m3Zoo, Correlated, Excluded
+SELECT 2
+> CREATE TABLE ms_p (a int, b text) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TABLE ms_p1 PARTITION OF ms_p FOR VALUES IN (1);
+CREATE TABLE
+> CREATE TABLE ms_p2 PARTITION OF ms_p FOR VALUES IN (2);
+CREATE TABLE
+> INSERT INTO ms_p VALUES (1, 'one'), (2, 'two');
+INSERT 0 2
+> UPDATE ms_p SET (a, b) = (SELECT 3 - ms_p.a, ms_p.b || '!') RETURNING tableoid::regclass, *;
+fields tableoid:2205:4:-1,a@ms_p.1:23:4:-1,b@ms_p.2:25:-1:-1
+row ms_p2,2,one!
+row ms_p1,1,two!
+UPDATE 2
+> CREATE VIEW ms_v AS SELECT a, b FROM ms_p;
+CREATE VIEW
+> UPDATE ms_v SET (a, b) = (SELECT 1, 'view') WHERE a = 1 RETURNING *;
+fields a@ms_v.1:23:4:-1,b@ms_v.2:25:-1:-1
+row 1,view
+UPDATE 1
+> CREATE FUNCTION ms_f() RETURNS int LANGUAGE sql AS $$ UPDATE ms_t SET (a, b) = (SELECT 100, 200) RETURNING a $$;
+CREATE FUNCTION
+> SELECT ms_f();
+fields ms_f:23:4:-1
+row 100
+SELECT 1
+> CREATE FUNCTION ms_g() RETURNS void LANGUAGE plpgsql AS $$ DECLARE r record; BEGIN UPDATE ms_t SET (a, b) = (SELECT 1, 2); FOR r IN SELECT a, b FROM ms_t LOOP RAISE NOTICE '% %', r.a, r.b; END LOOP; END $$;
+CREATE FUNCTION
+> SELECT ms_g();
+fields ms_g:2278:4:-1
+NOTICE 00000 1 2 (PL/pgSQL function ms_g() line 1 at RAISE)
+NOTICE 00000 1 2 (PL/pgSQL function ms_g() line 1 at RAISE)
+NOTICE 00000 1 2 (PL/pgSQL function ms_g() line 1 at RAISE)
+row 
+SELECT 1
+> UPDATE ms_t SET (a, b) = (SELECT b, a) WHERE false;
+UPDATE 0
+> UPDATE ms_t SET (a, b) = (SELECT sum(a)::int, count(*)::int FROM ms_t);
+UPDATE 3
+> SELECT * FROM ms_t ORDER BY a NULLS FIRST, b;
+fields a@ms_t.1:23:4:-1,b@ms_t.2:23:4:-1,c@ms_t.3:25:-1:-1
+row 3,3,two
+row 3,3,two
+row 3,3,two
+SELECT 3
+> DROP VIEW ms_v;
+DROP VIEW
+> DROP FUNCTION ms_f, ms_g;
+DROP FUNCTION
+> DROP TABLE ms_t, ms_u, ms_p;
+DROP TABLE
+> DROP SEQUENCE ms_s;
+DROP SEQUENCE

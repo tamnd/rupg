@@ -175,8 +175,8 @@ fn plan_with<'q>(query: &'q Query, members: &'q dyn Members) -> Plan<'q> {
 struct Builder<'q> {
     scopes: Vec<Scope<'q>>,
     labels: Vec<Label<'q>>,
-    /// The number of subplans of each kind of subquery so far, for their names, as `choose_plan_name`. The last two count the subplans of [`SubLink::alternative`] and of [`Query::minmax`].
-    counts: [usize; 8],
+    /// The number of subplans of each kind of subquery so far, for their names, as `choose_plan_name`. Then come the subplans of [`SubLink::alternative`], of [`Query::minmax`] and of `SET (a, b) = (SELECT ...)`.
+    counts: [usize; 9],
     /// The scopes of the subplan that the planner makes now, in the order of the range table.
     current: Vec<usize>,
     /// The scopes of each subplan that is done, in the order that the subplans end.
@@ -649,6 +649,17 @@ impl<'q> Builder<'q> {
 
     /// `make_subplan`: the plan of a subquery in an expression. A subquery with no reference to the query runs once as an `InitPlan`, except for `ANY` and `ALL`, which keep its rows in a hash table or in a `Material` node.
     fn sublink(&mut self, link: &'q SubLink, level: &mut Level<'q>) {
+        // Each column of `SET (a, b) = (SELECT ...)` has a copy of the subquery, and the copies after the first take the subplan of the first.
+        if let SubLinkKind::Multi { id, .. } = link.kind
+            && let Some(first) = self.labels.iter().find(|label| {
+                matches!(label.link.kind, SubLinkKind::Multi { id: other, .. } if other == id)
+                    && label.link.query == link.query
+            })
+        {
+            let (name, init) = (first.name.clone(), first.init);
+            self.labels.push(Label { link, name, init, hashed: false, alternative: false });
+            return;
+        }
         let (index, prefix) = match link.kind {
             SubLinkKind::Exists => (0, "exists"),
             SubLinkKind::Expr => (1, "expr"),
@@ -656,6 +667,7 @@ impl<'q> Builder<'q> {
             SubLinkKind::All => (3, "all"),
             SubLinkKind::Array => (4, "array"),
             SubLinkKind::RowCompare => (5, "rowcompare"),
+            SubLinkKind::Multi { .. } => (8, "multiexpr"),
         };
         self.counts[index] += 1;
         let name = format!("{prefix}_{}", self.counts[index]);

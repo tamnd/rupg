@@ -660,7 +660,7 @@ struct Cache {
     written: Arc<Vec<Rows>>,
     /// The flags `error` and `empty` of each `JsonExpr`, by the address of the node, as its `JsonExprState` keeps them from one evaluation to the next.
     json_flags: RefCell<Vec<(*const rupg_analyze::JsonExpr, jsonexpr::Flags)>>,
-    /// The number of rows that the next run of a recursive query of `WITH` must give, when the query that reads it needs no more, as the `ExecProcNode` calls of a `Limit` above a `CteScan` read them. The run takes it.
+    /// The number of rows that the next run must give, when the query that reads it needs no more: a recursive query of `WITH`, as the `ExecProcNode` calls of a `Limit` above a `CteScan` read them, or a subquery that gives one row, which stops at the second row. The run takes it.
     want: Cell<Option<usize>>,
     /// The number of bodies of functions in SQL that run around this run.
     depth: usize,
@@ -1140,6 +1140,11 @@ fn run_query(
         let needed = match count {
             Some(count) if !ordered => offset.saturating_add(count),
             _ => usize::MAX,
+        };
+        // A caller that reads no more rows stops the run, as `ExecProcNode` stops to read.
+        let needed = match want {
+            Some(want) if !ordered => needed.min(offset.saturating_add(want)),
+            _ => needed,
         };
         let levels = set_levels(&query.targets);
         // The window function calls run before the targets, and the rows come in the order of the last sort of the windows.
@@ -1785,6 +1790,8 @@ struct Eval<'a> {
     sets: Vec<(*const Expr, Value)>,
     /// The value of each window function call for the row, by the address of the call in the query.
     windows: Vec<(*const WindowFunc, Value)>,
+    /// The rows of the subquery of each `SET (a, b) = (SELECT ...)` for the last row that read it, by the ID of the item, which the columns of the item share, as `ExecSetParamPlan` sets the parameters of `PARAM_MULTIEXPR`.
+    multi: Vec<(u32, Vec<usize>, Rc<Rows>)>,
 }
 
 impl<'a> Eval<'a> {
@@ -1809,6 +1816,7 @@ impl<'a> Eval<'a> {
             domain_value: Vec::new(),
             sets: Vec::new(),
             windows: Vec::new(),
+            multi: Vec::new(),
         }
     }
 
@@ -2048,6 +2056,7 @@ impl<'a> Eval<'a> {
             domain_value: Vec::new(),
             sets: Vec::new(),
             windows: Vec::new(),
+            multi: Vec::new(),
         }
     }
 
@@ -2305,9 +2314,34 @@ impl<'a> Eval<'a> {
         let query = &sub.query;
         let mut frames = self.outer.to_vec();
         frames.push(Frame { tables: self.tables, tuple: self.tuple, group: Some(&self.group) });
-        let rows = self.cache.rows(query, || {
-            run_query(query, self.params, self.session, self.cache, &frames, exists)
-        })?;
+        let kept = match sub.kind {
+            SubLinkKind::Multi { id, .. } => self
+                .multi
+                .iter()
+                .find(|(other, tuple, _)| *other == id && tuple[..] == *self.tuple)
+                .map(|(_, _, rows)| Rc::clone(rows)),
+            _ => None,
+        };
+        let rows = match kept {
+            Some(rows) => rows,
+            None => {
+                let rows = self.cache.rows(query, || {
+                    // `ExecScanSubPlan` stops at the second row of a subquery that gives one row.
+                    if matches!(
+                        sub.kind,
+                        SubLinkKind::Expr | SubLinkKind::RowCompare | SubLinkKind::Multi { .. }
+                    ) {
+                        self.cache.want.set(Some(2));
+                    }
+                    run_query(query, self.params, self.session, self.cache, &frames, exists)
+                })?;
+                if let SubLinkKind::Multi { id, .. } = sub.kind {
+                    self.multi.retain(|(other, _, _)| *other != id);
+                    self.multi.push((id, self.tuple.to_vec(), Rc::clone(&rows)));
+                }
+                rows
+            }
+        };
         match sub.kind {
             SubLinkKind::Exists => Ok(Value::Bool(!rows.is_empty())),
             SubLinkKind::Expr => match rows.as_slice() {
@@ -2316,6 +2350,18 @@ impl<'a> Eval<'a> {
                     .first()
                     .cloned()
                     .ok_or_else(|| Error::internal("a subquery row has no column")),
+                _ => Err(Error::new(
+                    SqlState::CARDINALITY_VIOLATION,
+                    "more than one row returned by a subquery used as an expression",
+                )),
+            },
+            // No row gives a null for each column.
+            SubLinkKind::Multi { column, .. } => match rows.as_slice() {
+                [] => Ok(Value::Null),
+                [row] => row
+                    .get(column)
+                    .cloned()
+                    .ok_or_else(|| Error::internal("a subquery row has too few columns")),
                 _ => Err(Error::new(
                     SqlState::CARDINALITY_VIOLATION,
                     "more than one row returned by a subquery used as an expression",
@@ -3039,6 +3085,7 @@ pub fn evaluate(expr: &Expr, session: &dyn Session) -> Result<Value> {
         domain_value: Vec::new(),
         sets: Vec::new(),
         windows: Vec::new(),
+        multi: Vec::new(),
     };
     eval.eval(expr)
 }
@@ -3086,6 +3133,7 @@ pub(crate) fn evaluate_row(
         domain_value: Vec::new(),
         sets: Vec::new(),
         windows: Vec::new(),
+        multi: Vec::new(),
     };
     exprs.iter().map(|expr| eval.eval(expr)).collect()
 }
@@ -3131,6 +3179,7 @@ pub fn input_failure(ty: u32, value: &Value, session: &dyn Session) -> Result<Op
         domain_value: Vec::new(),
         sets: Vec::new(),
         windows: Vec::new(),
+        multi: Vec::new(),
     };
     for value in values {
         if let Some(error) = eval.domain_failure(domain, value)? {
