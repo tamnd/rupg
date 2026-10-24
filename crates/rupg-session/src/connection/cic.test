@@ -1,0 +1,179 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE ci_h (f1 text, f2 text);
+CREATE TABLE
+> CREATE INDEX CONCURRENTLY ci_i1 ON ci_h (f2, f1);
+CREATE INDEX
+> CREATE INDEX CONCURRENTLY IF NOT EXISTS ci_i1 ON ci_h (f2, f1);
+NOTICE 42P07 relation "ci_i1" already exists, skipping
+CREATE INDEX
+> INSERT INTO ci_h VALUES ('a', 'b');
+INSERT 0 1
+> INSERT INTO ci_h VALUES ('b', 'b');
+INSERT 0 1
+> CREATE UNIQUE INDEX CONCURRENTLY ci_i2 ON ci_h (f1);
+CREATE INDEX
+> CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS ci_i2 ON ci_h (f1);
+NOTICE 42P07 relation "ci_i2" already exists, skipping
+CREATE INDEX
+> INSERT INTO ci_h VALUES ('b', 'x');
+ERROR 23505 duplicate key value violates unique constraint "ci_i2"
+DETAIL Key (f1)=(b) already exists.
+> CREATE UNIQUE INDEX CONCURRENTLY ci_i3 ON ci_h (f2);
+ERROR 23505 could not create unique index "ci_i3"
+DETAIL Key (f2)=(b) is duplicated.
+> SELECT indexrelid::regclass, indisvalid, indisready, indislive FROM pg_index WHERE indrelid = 'ci_h'::regclass ORDER BY indexrelid::regclass::text;
+fields indexrelid:2205:4:-1,indisvalid@pg_index.11:16:1:-1,indisready@pg_index.13:16:1:-1,indislive@pg_index.14:16:1:-1
+row ci_i1,t,t,t
+row ci_i2,t,t,t
+row ci_i3,f,f,t
+SELECT 3
+> INSERT INTO ci_h VALUES ('c', 'b');
+INSERT 0 1
+> CREATE INDEX CONCURRENTLY ci_i4 ON ci_h (f2) WHERE f1 = 'a';
+CREATE INDEX
+> CREATE INDEX CONCURRENTLY ON ci_h ((f2 || f1));
+CREATE INDEX
+> BEGIN;
+BEGIN
+> CREATE INDEX CONCURRENTLY ci_i7 ON ci_h (f1);
+ERROR 25001 CREATE INDEX CONCURRENTLY cannot run inside a transaction block
+> COMMIT;
+ROLLBACK
+> BEGIN;
+BEGIN
+> CREATE INDEX ci_std ON ci_h (f2);
+CREATE INDEX
+> COMMIT;
+COMMIT
+> SELECT relname FROM pg_class WHERE relname LIKE 'ci_%' AND relkind = 'i' ORDER BY 1;
+fields relname@pg_class.2:19:64:-1
+row ci_h_expr_idx
+row ci_i1
+row ci_i2
+row ci_i3
+row ci_i4
+row ci_std
+SELECT 6
+> REINDEX TABLE ci_h;
+ERROR 23505 could not create unique index "ci_i3"
+DETAIL Key (f2)=(b) is duplicated.
+> DELETE FROM ci_h WHERE f2 = 'b' AND f1 <> 'a';
+DELETE 2
+> REINDEX TABLE ci_h;
+REINDEX
+> SELECT indexrelid::regclass, indisvalid, indisready FROM pg_index WHERE indrelid = 'ci_h'::regclass ORDER BY indexrelid::regclass::text;
+fields indexrelid:2205:4:-1,indisvalid@pg_index.11:16:1:-1,indisready@pg_index.13:16:1:-1
+row ci_h_expr_idx,t,t
+row ci_i1,t,t
+row ci_i2,t,t
+row ci_i3,t,t
+row ci_i4,t,t
+row ci_std,t,t
+SELECT 6
+> INSERT INTO ci_h VALUES ('z', 'b');
+ERROR 23505 duplicate key value violates unique constraint "ci_i3"
+DETAIL Key (f2)=(b) already exists.
+> CREATE TABLE ci_t4 (c1 int);
+CREATE TABLE
+> INSERT INTO ci_t4 VALUES (1), (1), (2);
+INSERT 0 3
+> CREATE UNIQUE INDEX CONCURRENTLY ci_i5 ON ci_t4 (c1);
+ERROR 23505 could not create unique index "ci_i5"
+DETAIL Key (c1)=(1) is duplicated.
+> INSERT INTO ci_t4 VALUES (2);
+INSERT 0 1
+> REINDEX TABLE CONCURRENTLY ci_t4;
+WARNING 55000 skipping reindex of invalid index "public.ci_i5"
+HINT Use DROP INDEX or REINDEX INDEX.
+NOTICE 00000 table "ci_t4" has no indexes that can be reindexed concurrently
+REINDEX
+> DELETE FROM ci_t4 WHERE c1 = 1;
+DELETE 2
+> REINDEX TABLE CONCURRENTLY ci_t4;
+WARNING 55000 skipping reindex of invalid index "public.ci_i5"
+HINT Use DROP INDEX or REINDEX INDEX.
+NOTICE 00000 table "ci_t4" has no indexes that can be reindexed concurrently
+REINDEX
+> SELECT indexrelid::regclass, indisvalid, indisready FROM pg_index WHERE indrelid = 'ci_t4'::regclass;
+fields indexrelid:2205:4:-1,indisvalid@pg_index.11:16:1:-1,indisready@pg_index.13:16:1:-1
+row ci_i5,f,f
+SELECT 1
+> DELETE FROM ci_t4 WHERE c1 = 2;
+DELETE 2
+> INSERT INTO ci_t4 VALUES (3);
+INSERT 0 1
+> REINDEX INDEX CONCURRENTLY ci_i5;
+REINDEX
+> SELECT indexrelid::regclass, indisvalid, indisready FROM pg_index WHERE indrelid = 'ci_t4'::regclass;
+fields indexrelid:2205:4:-1,indisvalid@pg_index.11:16:1:-1,indisready@pg_index.13:16:1:-1
+row ci_i5,t,t
+SELECT 1
+> INSERT INTO ci_t4 VALUES (3);
+ERROR 23505 duplicate key value violates unique constraint "ci_i5"
+DETAIL Key (c1)=(3) already exists.
+> CREATE TABLE ci_e (a int);
+CREATE TABLE
+> CREATE INDEX CONCURRENTLY ci_ex ON ci_e (nosuch);
+ERROR 42703 column "nosuch" does not exist at 42
+> SELECT count(*) FROM pg_class WHERE relname = 'ci_ex';
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE TABLE ci_p (a int) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE INDEX CONCURRENTLY ci_pi ON ci_p (a);
+ERROR 0A000 cannot create index on partitioned table "ci_p" concurrently
+> CREATE INDEX CONCURRENTLY ci_pi ON ONLY ci_p (a);
+ERROR 0A000 cannot create index on partitioned table "ci_p" concurrently
+> CREATE TEMP TABLE ci_tmp (f1 int, f2 text);
+CREATE TABLE
+> INSERT INTO ci_tmp VALUES (1, 'a'), (1, 'b');
+INSERT 0 2
+> CREATE UNIQUE INDEX CONCURRENTLY ci_tmpi ON ci_tmp (f1);
+ERROR 23505 could not create unique index "ci_tmpi"
+DETAIL Key (f1)=(1) is duplicated.
+> SELECT count(*) FROM pg_class WHERE relname = 'ci_tmpi';
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE INDEX CONCURRENTLY ci_tmpi ON ci_tmp (f1);
+CREATE INDEX
+> DROP INDEX CONCURRENTLY ci_tmpi;
+DROP INDEX
+> CREATE FUNCTION ci_f() RETURNS void LANGUAGE plpgsql AS $$ BEGIN CREATE INDEX CONCURRENTLY ci_fi ON ci_h (f1); END $$;
+CREATE FUNCTION
+> SELECT ci_f();
+fields ci_f:2278:4:-1
+ERROR 25001 CREATE INDEX CONCURRENTLY cannot be executed from a function or procedure (SQL statement "CREATE INDEX CONCURRENTLY ci_fi ON ci_h (f1)"
+PL/pgSQL function ci_f() line 1 at SQL statement)
+> CREATE FUNCTION ci_g() RETURNS void LANGUAGE plpgsql AS $$ BEGIN DROP INDEX CONCURRENTLY ci_i1; END $$;
+CREATE FUNCTION
+> SELECT ci_g();
+fields ci_g:2278:4:-1
+ERROR 25001 DROP INDEX CONCURRENTLY cannot be executed from a function or procedure (SQL statement "DROP INDEX CONCURRENTLY ci_i1"
+PL/pgSQL function ci_g() line 1 at SQL statement)
+> BEGIN;
+BEGIN
+> SELECT ci_f();
+fields ci_f:2278:4:-1
+ERROR 25001 CREATE INDEX CONCURRENTLY cannot run inside a transaction block (SQL statement "CREATE INDEX CONCURRENTLY ci_fi ON ci_h (f1)"
+PL/pgSQL function ci_f() line 1 at SQL statement)
+> ROLLBACK;
+ROLLBACK
+> CREATE SCHEMA ci_s CREATE TABLE t (a int) CREATE INDEX CONCURRENTLY ti ON t (a);
+ERROR 25001 CREATE INDEX CONCURRENTLY cannot be executed from a function or procedure
+> CREATE INDEX CONCURRENTLY ci_sys ON pg_class (relname);
+ERROR 42501 permission denied: "pg_class" is a system catalog
+> DROP INDEX CONCURRENTLY ci_i1;
+DROP INDEX
+> DROP INDEX CONCURRENTLY IF EXISTS ci_i1;
+NOTICE 00000 index "ci_i1" does not exist, skipping
+DROP INDEX
+> DROP INDEX CONCURRENTLY ci_i2, ci_i3;
+ERROR 0A000 DROP INDEX CONCURRENTLY does not support dropping multiple objects
+> DROP FUNCTION ci_f, ci_g;
+DROP FUNCTION
+> DROP TABLE ci_h, ci_t4, ci_e, ci_p, ci_tmp;
+DROP TABLE

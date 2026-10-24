@@ -1066,7 +1066,7 @@ impl Connection {
         );
         let result = set.and_then(|()| {
             schema.elements.iter().try_for_each(|(node, text)| {
-                self.define_as(node, text, notices, schema.owner).map(drop)
+                self.define_with(node, text, notices, schema.owner, true).map(drop)
             })
         });
         *self.settings.borrow_mut() = saved;
@@ -1083,21 +1083,10 @@ impl Connection {
 
     /// Runs a statement that defines an object. The statement takes the lock of the store, which the transaction holds until it ends. After an error the changes of the statement go, but its OIDs stay used.
     fn define(&self, node: &Node, text: &str, notices: &mut Vec<Notice>) -> Result<Done, Error> {
-        self.define_as(node, text, notices, self.current_role())
+        self.define_with(node, text, notices, self.current_role(), false)
     }
 
-    /// [`Connection::define`] as the role `role`, which owns the new objects.
-    fn define_as(
-        &self,
-        node: &Node,
-        text: &str,
-        notices: &mut Vec<Notice>,
-        role: u32,
-    ) -> Result<Done, Error> {
-        self.define_with(node, text, notices, role, false)
-    }
-
-    /// [`Connection::define_as`]. `call` is true for a statement of a function or a procedure, which is not at the top level, for the check of [`rupg_analyze::Defined::top_level`].
+    /// [`Connection::define`] as the role `role`, which owns the new objects. `call` is true for a statement that is not at the top level, a statement of a function or a procedure or an element of `CREATE SCHEMA`, for `PreventInTransactionBlock` of the statements with `CONCURRENTLY` and the check of [`rupg_analyze::Defined::top_level`]. After a failure of the build of `CREATE INDEX CONCURRENTLY` the index stays, as [`rupg_analyze::Defined::concurrent`] tells.
     fn define_with(
         &self,
         node: &Node,
@@ -1106,26 +1095,25 @@ impl Connection {
         role: u32,
         call: bool,
     ) -> Result<Done, Error> {
-        if let Node::DropStmt(stmt) = node
-            && stmt.concurrent
-            && self.transaction.in_block()
-        {
-            return Err(Error::new(
-                SqlState::ACTIVE_SQL_TRANSACTION,
-                "DROP INDEX CONCURRENTLY cannot run inside a transaction block",
-            ));
-        }
-        if let Node::AlterTableStmt(stmt) = node
-            && stmt.cmds.iter().flatten().any(|cmd| {
-                matches!(cmd, Node::AlterTableCmd(cmd) if cmd.subtype == AlterTableType::AT_DetachPartition
-                    && matches!(&cmd.def, Some(Node::PartitionCmd(part)) if part.concurrent))
-            })
-            && self.transaction.in_block()
-        {
-            return Err(Error::new(
-                SqlState::ACTIVE_SQL_TRANSACTION,
-                "ALTER TABLE ... DETACH CONCURRENTLY cannot run inside a transaction block",
-            ));
+        // `PreventInTransactionBlock` of the statements with `CONCURRENTLY`.
+        let concurrent = match node {
+            Node::IndexStmt(stmt) if stmt.concurrent => Some("CREATE INDEX CONCURRENTLY"),
+            Node::DropStmt(stmt) if stmt.concurrent => Some("DROP INDEX CONCURRENTLY"),
+            Node::AlterTableStmt(stmt)
+                if stmt.cmds.iter().flatten().any(|cmd| {
+                    matches!(cmd, Node::AlterTableCmd(cmd) if cmd.subtype == AlterTableType::AT_DetachPartition
+                        && matches!(&cmd.def, Some(Node::PartitionCmd(part)) if part.concurrent))
+                }) =>
+            {
+                Some("ALTER TABLE ... DETACH CONCURRENTLY")
+            }
+            _ => None,
+        };
+        if let Some(statement) = concurrent {
+            if call {
+                return Err(self.prevent_in_call(statement));
+            }
+            self.prevent_block(statement)?;
         }
         if matches!(node, Node::TruncateStmt(_))
             && self.settings.borrow().get("transaction_read_only").as_deref() == Some("on")
@@ -1166,6 +1154,7 @@ impl Connection {
             Message::Notice(error) => Notice { severity: Severity::Notice, error },
         }));
         let (transforms, fills) = (&defined.transforms, &defined.fills);
+        let analyzed = defined.result.is_ok();
         let rewrite = defined
             .result
             .and_then(|()| self.check_detached(&defined.detached))
@@ -1289,6 +1278,17 @@ impl Connection {
                 }))
             }
             Err(error) => {
+                if let Some(index) = defined.concurrent.filter(|_| analyzed) {
+                    // The first transaction of `DefineIndex` committed the index, so after a failure of the build it stays, invalid and not ready.
+                    let catalog = Arc::make_mut(&mut work);
+                    catalog.set_index_valid(index, false)?;
+                    catalog.set_index_ready(index, false)?;
+                    lease.catalog = work;
+                    if let Some(lease) = held.take() {
+                        lease.commit();
+                    }
+                    return Err(error);
+                }
                 Arc::make_mut(&mut lease.catalog).advance_oid(work.next_oid());
                 Err(error)
             }
@@ -4313,6 +4313,12 @@ mod tests {
     #[test]
     fn reindex() {
         big_stack(|| script(include_str!("connection/reindex.test")));
+    }
+
+    /// `CREATE INDEX CONCURRENTLY`: `IF NOT EXISTS`, a unique index, a partial index and an expression index, a transaction block, a function and an element of `CREATE SCHEMA`, a partitioned table, a temporary table, and a failed build, which leaves an index that is not valid and not ready until `REINDEX` builds it again. `connection/cic.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn cic() {
+        big_stack(|| script(include_str!("connection/cic.test")));
     }
 
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.

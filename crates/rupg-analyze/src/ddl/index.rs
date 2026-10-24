@@ -147,6 +147,12 @@ impl Definer<'_, '_> {
             )
             .with_detail(relkind_detail(kind)));
         }
+        if kind == b'p' && stmt.concurrent {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                format!("cannot create index on partitioned table \"{name}\" concurrently"),
+            ));
+        }
         let Some(rel) = self.catalog.relation(table) else {
             return Err(not_yet("an index on a built-in relation", None));
         };
@@ -198,9 +204,6 @@ impl Definer<'_, '_> {
         let options = self.create_index_options(method, &stmt.options)?;
         if stmt.tableSpace.is_some() {
             return Err(not_yet("TABLESPACE", None));
-        }
-        if stmt.concurrent {
-            return Err(not_yet("CREATE INDEX CONCURRENTLY", None));
         }
         if predicate.as_ref().is_some_and(|p| is_mutable(self.catalog, p)) {
             return Err(Error::new(
@@ -275,6 +278,10 @@ impl Definer<'_, '_> {
             pages,
         };
         let (index, constraint) = self.catalog.create_index(new)?;
+        // `DefineIndex` builds an index of `CONCURRENTLY` on a temporary table as any other index.
+        if stmt.concurrent && !self.catalog.is_temp_schema(namespace) {
+            self.concurrent = Some(index);
+        }
         if !options.is_empty() {
             self.catalog.set_options(index, options)?;
         }

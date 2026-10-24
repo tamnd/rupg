@@ -279,8 +279,10 @@ pub struct IndexInfo {
     pub clustered: bool,
     /// `indisreplident`: `REPLICA IDENTITY USING INDEX` chose the index.
     pub replica_identity: bool,
-    /// `indisvalid`: false for an index of a partitioned table that a partition does not have yet.
+    /// `indisvalid`: false for an index of a partitioned table that a partition does not have yet, and for an index of `CREATE INDEX CONCURRENTLY` whose build failed.
     pub valid: bool,
+    /// `indisready`: false for an index of `CREATE INDEX CONCURRENTLY` whose build failed. Such an index does not check the keys of new rows.
+    pub ready: bool,
     /// The index of the parent table that the index is a partition of, from `pg_inherits`, or 0.
     pub parent: u32,
 }
@@ -2213,6 +2215,14 @@ impl Catalog {
         Ok(())
     }
 
+    /// Sets `indisready` of an index.
+    pub fn set_index_ready(&mut self, index: u32, ready: bool) -> Result<()> {
+        if let Some(info) = self.relation_mut(index)?.index.as_mut() {
+            info.ready = ready;
+        }
+        Ok(())
+    }
+
     /// Sets `conislocal` and `coninhcount` of a constraint that a parent table gives.
     pub fn set_constraint_inherited(
         &mut self,
@@ -3454,6 +3464,7 @@ impl Catalog {
             clustered: false,
             replica_identity: false,
             valid: true,
+            ready: true,
             parent: 0,
         };
         let table_columns = self.relations.get(&new.table).map_or(&[][..], |r| &r.columns[..]);
@@ -3791,6 +3802,7 @@ impl Catalog {
             clustered: false,
             replica_identity: false,
             valid: true,
+            ready: true,
             parent: 0,
         };
         self.relations.insert(

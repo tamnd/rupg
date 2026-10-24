@@ -399,7 +399,7 @@ impl Connection {
     }
 }
 
-/// True if the change of the catalog from `old` to `new` changes the rows of the table `rel`: a change of the type of a column, a new not-null constraint, a new column with a default, a not-null constraint or a domain with constraints, a new constraint that checks the rows of the table or one that becomes valid, or a new unique index. A dropped table and a new column with no default keep the rows.
+/// True if the change of the catalog from `old` to `new` changes the rows of the table `rel`: a change of the type of a column, a new not-null constraint, a new column with a default, a not-null constraint or a domain with constraints, a new constraint that checks the rows of the table or one that becomes valid, or a new unique index or one that becomes ready. A dropped table and a new column with no default keep the rows.
 fn changes_rows(old: &Catalog, new: &Catalog, rel: &Relation) -> bool {
     let Some(now) = new.relation(rel.oid) else {
         return false;
@@ -437,9 +437,14 @@ fn changes_rows(old: &Catalog, new: &Catalog, rel: &Relation) -> bool {
             && (c.kind != ConKind::Foreign
                 || new.triggers_of(rel.oid).iter().any(|t| t.constraint == c.oid))
     });
+    // An index that `REINDEX` makes ready again checks the rows as a new index does.
     let index = new.relations().any(|index| {
-        old.relation(index.oid).is_none()
-            && index.index.as_ref().is_some_and(|info| info.table == rel.oid && info.unique)
+        let was_ready = old.relation(index.oid).and_then(|o| o.index.as_ref()).map(|i| i.ready);
+        was_ready != Some(true)
+            && index
+                .index
+                .as_ref()
+                .is_some_and(|info| info.table == rel.oid && info.unique && info.ready)
     });
     constraint || index
 }
