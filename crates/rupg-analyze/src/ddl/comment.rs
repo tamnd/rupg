@@ -4,7 +4,6 @@ use rupg_catalog::{
     FIRST_NORMAL_OID, ObjRef, PG_CLASS, PG_CONSTRAINT, PG_NAMESPACE, PG_PROC, PG_TYPE,
 };
 use rupg_common::{Error, Result, SqlState};
-use rupg_pgcatalog::builtin::{self, Named};
 use rupg_sql::nodes::{CommentStmt, Node, ObjectType, RangeVar};
 
 use super::drop_function::routine_word;
@@ -132,7 +131,7 @@ impl Definer<'_, '_> {
             }
             return Ok(ObjRef::new(PG_NAMESPACE, schema.oid));
         }
-        if builtin::named(Named::Namespace).iter().any(|n| n.name == name) {
+        if self.builtin_schema(name).is_some() {
             return Err(builtin_object());
         }
         Err(Error::new(SqlState::UNDEFINED_SCHEMA, format!("schema \"{name}\" does not exist")))

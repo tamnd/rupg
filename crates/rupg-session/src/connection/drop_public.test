@@ -1,0 +1,69 @@
+!details
+> CREATE TABLE dp_items (id int PRIMARY KEY, name text)
+CREATE TABLE
+> CREATE TABLE dp_orders (id int, item int REFERENCES dp_items)
+CREATE TABLE
+> CREATE VIEW dp_totals AS SELECT item, count(*) FROM dp_orders GROUP BY item
+CREATE VIEW
+> CREATE FUNCTION dp_double(int) RETURNS int LANGUAGE sql AS 'SELECT $1 * 2'
+CREATE FUNCTION
+> CREATE TYPE dp_mood AS ENUM ('sad', 'ok')
+CREATE TYPE
+> DROP SCHEMA public
+ERROR 2BP01 cannot drop schema public because other objects depend on it
+DETAIL table dp_items depends on schema public
+table dp_orders depends on schema public
+view dp_totals depends on schema public
+function dp_double(integer) depends on schema public
+type dp_mood depends on schema public
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP SCHEMA public CASCADE
+NOTICE 00000 drop cascades to 5 other objects
+DETAIL drop cascades to table dp_items
+drop cascades to table dp_orders
+drop cascades to view dp_totals
+drop cascades to function dp_double(integer)
+drop cascades to type dp_mood
+DROP SCHEMA
+> SELECT count(*) FROM pg_namespace WHERE nspname = 'public'
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM pg_description WHERE objoid = 2200
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT 'public'::regnamespace
+ERROR 3F000 schema "public" does not exist at 8
+> SELECT current_schema()
+fields current_schema:19:64:-1
+row NULL
+SELECT 1
+> CREATE TABLE dp_fail (a int)
+ERROR 3F000 no schema has been selected to create in at 14
+> CREATE SCHEMA public
+CREATE SCHEMA
+> SELECT nspname::text, nspowner::regrole::text, nspacl::text, oid > 16384 AS new FROM pg_namespace WHERE nspname = 'public'
+fields nspname:25:-1:-1,nspowner:25:-1:-1,nspacl:25:-1:-1,new:16:1:-1
+row public,postgres,NULL,t
+SELECT 1
+> SELECT obj_description('public'::regnamespace, 'pg_namespace')
+fields obj_description:25:-1:-1
+row NULL
+SELECT 1
+> CREATE TABLE dp_after (a int)
+CREATE TABLE
+> SELECT relnamespace::regnamespace::text FROM pg_class WHERE relname = 'dp_after'
+fields relnamespace:25:-1:-1
+row public
+SELECT 1
+> DROP SCHEMA public CASCADE
+NOTICE 00000 drop cascades to table dp_after
+DROP SCHEMA
+> DROP SCHEMA public
+ERROR 3F000 schema "public" does not exist
+> DROP SCHEMA IF EXISTS public
+NOTICE 00000 schema "public" does not exist, skipping
+DROP SCHEMA
+> CREATE SCHEMA public
+CREATE SCHEMA

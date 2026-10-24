@@ -598,7 +598,7 @@ impl<'a> Reader<'a> {
         }
         SCHEMAS
             .iter()
-            .find(|(n, _)| *n == name)
+            .find(|(n, oid)| *n == name && !self.catalog.schema_dropped(*oid))
             .map(|(_, oid)| *oid)
             .or_else(|| self.catalog.schema_by_name(name).map(|s| s.oid))
     }

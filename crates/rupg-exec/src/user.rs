@@ -156,6 +156,46 @@ pub(crate) fn grant_static(
     Ok(())
 }
 
+/// Takes out the static rows of the objects of `initdb` that `DROP` removed: the row of `pg_namespace`, and the rows of `pg_description` and `pg_init_privs` for the object.
+///
+/// # Errors
+///
+/// An internal error when a column of the table is not there.
+pub(crate) fn drop_static(
+    table: &Table,
+    rows: &mut Vec<Vec<Value>>,
+    catalog: &Catalog,
+    session: &dyn Session,
+) -> Result<()> {
+    let (oid, class) = match table.name {
+        "pg_namespace" => ("oid", None),
+        "pg_description" | "pg_init_privs" => ("objoid", Some("classoid")),
+        _ => return Ok(()),
+    };
+    if !catalog.any_builtin_dropped() {
+        return Ok(());
+    }
+    let mut dropped = Vec::new();
+    for row in 0..table.len.min(rows.len()) {
+        let Value::Oid(object) = cell(table, row, oid, session)? else { continue };
+        let class = match class {
+            Some(name) => match cell(table, row, name, session)? {
+                Value::Oid(class) => class,
+                _ => continue,
+            },
+            None => PG_NAMESPACE,
+        };
+        dropped.push(catalog.builtin_dropped(ObjRef::new(class, object)));
+    }
+    let mut at = 0;
+    rows.retain(|_| {
+        let keep = !dropped.get(at).copied().unwrap_or(false);
+        at += 1;
+        keep
+    });
+    Ok(())
+}
+
 /// An `int2vector`.
 fn int2_vector(values: &[i16]) -> Value {
     Value::Array(Box::new(Array::vector(values.iter().map(|&v| Some(Value::Int2(v))).collect())))

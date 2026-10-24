@@ -3,11 +3,11 @@
 use rupg_catalog::{
     FIRST_NORMAL_OID, ObjRef, PG_AMOP, PG_AMPROC, PG_ATTRDEF, PG_CLASS, PG_CONSTRAINT,
     PG_NAMESPACE, PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_PROC, PG_REWRITE, PG_STATISTIC_EXT,
-    PG_TRIGGER, PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, PG_TYPE, Refusal, RelKind,
-    Target, flag, is_pinned,
+    PG_TRIGGER, PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, PG_TYPE, PUBLIC, Refusal,
+    RelKind, Target, flag, is_pinned,
 };
 use rupg_common::{Error, Result, SqlState};
-use rupg_pgcatalog::builtin::{self, Named};
+use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{DropBehavior, DropStmt, Node, ObjectType, RangeVar};
 use rupg_sql::{Category, keyword};
 use rupg_types::{TypeInfo, format_type};
@@ -271,9 +271,7 @@ impl Definer<'_, '_> {
             };
             let oid = match self.catalog.schema_by_name(name) {
                 Some(schema) => Some(schema.oid),
-                None => {
-                    builtin::named(Named::Namespace).iter().find(|n| n.name == name).map(|n| n.oid)
-                }
+                None => self.builtin_schema(name).map(|n| n.oid),
             };
             let Some(oid) = oid else {
                 let message = format!("schema \"{name}\" does not exist");
@@ -287,7 +285,8 @@ impl Definer<'_, '_> {
                 return Err(not_owner("schema", name));
             }
             let object = ObjRef::new(PG_NAMESPACE, oid);
-            if oid < FIRST_NORMAL_OID && !is_pinned(object) {
+            // The schema `public` is an ordinary object of `initdb`, which `DROP` can remove.
+            if oid < FIRST_NORMAL_OID && !is_pinned(object) && oid != PUBLIC {
                 return Err(builtin_object());
             }
             objects.push(object);
