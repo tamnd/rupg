@@ -281,6 +281,10 @@ fn init_privs<'a>(
         .map_or(rupg_catalog::FIRST_NORMAL_OID, |schema| schema.oid);
     let mut rows = Vec::new();
     let mut add = |object: u32, class: u32, sub: i32, acl: Value| {
+        // `DROP` of a built-in object, for example `DROP SCHEMA public`, also removes its rows from `pg_init_privs`.
+        if catalog.builtin_dropped(ObjRef::new(class, object)) {
+            return;
+        }
         let mut row = Row::new(table);
         row.set("objoid", oid(object))
             .set("classoid", oid(class))
