@@ -1,0 +1,55 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE SCHEMA generated_stored_tests;
+CREATE SCHEMA
+> GRANT USAGE ON SCHEMA generated_stored_tests TO PUBLIC;
+GRANT
+> SET search_path = generated_stored_tests;
+SET
+search_path=generated_stored_tests
+> CREATE TABLE gtest_root (a int, b int, c int GENERATED ALWAYS AS (a + b) STORED) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TABLE gtest_node PARTITION OF gtest_root FOR VALUES IN (1) PARTITION BY LIST (b);
+CREATE TABLE
+> CREATE TABLE gtest_leaf PARTITION OF gtest_node FOR VALUES IN (1);
+CREATE TABLE
+> ALTER TABLE gtest_node ALTER COLUMN c DROP EXPRESSION;
+ERROR 42P16 cannot drop generation expression from inherited column
+> ALTER TABLE ONLY gtest_root ALTER COLUMN c DROP EXPRESSION;
+ERROR 0A000 ALTER TABLE / DROP EXPRESSION must be applied to child tables too
+> ALTER TABLE gtest_root ALTER COLUMN c DROP EXPRESSION;
+ALTER TABLE
+> DROP TABLE gtest_root;
+DROP TABLE
+> CREATE TABLE gtest31_1 (a int, b text GENERATED ALWAYS AS ('hello') STORED, c text);
+CREATE TABLE
+> CREATE TABLE gtest31_2 (x int, y gtest31_1);
+CREATE TABLE
+> ALTER TABLE gtest31_1 ALTER COLUMN b TYPE varchar;
+ERROR 0A000 cannot alter table "gtest31_1" because column "gtest31_2.y" uses its row type
+> ALTER TABLE gtest31_2 ADD CONSTRAINT cc CHECK ((y).b IS NOT NULL);
+ALTER TABLE
+> ALTER TABLE gtest31_1 ALTER COLUMN b SET EXPRESSION AS ('hello1');
+ERROR 0A000 cannot alter table "gtest31_1" because column "gtest31_2.y" uses its row type
+> ALTER TABLE gtest31_2 DROP CONSTRAINT cc;
+ALTER TABLE
+> CREATE INDEX gtest31_2_y_idx ON gtest31_2(((y).b));
+CREATE INDEX
+> ALTER TABLE gtest31_1 ALTER COLUMN b SET EXPRESSION AS ('hello3');
+ERROR 0A000 cannot alter table "gtest31_1" because column "gtest31_2.y" uses its row type
+> DROP TABLE gtest31_1, gtest31_2;
+DROP TABLE
+> CREATE TABLE gtest31_1 (a int, b text GENERATED ALWAYS AS ('hello') STORED, c text) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TABLE gtest31_2 (x int, y gtest31_1);
+CREATE TABLE
+> ALTER TABLE gtest31_1 ALTER COLUMN b TYPE varchar;
+ERROR 0A000 cannot alter table "gtest31_1" because column "gtest31_2.y" uses its row type
+> DROP TABLE gtest31_1, gtest31_2;
+DROP TABLE
+> CREATE TABLE gtest26 (
+>>     a int PRIMARY KEY,
+>>     b int GENERATED ALWAYS AS (a * 2) STORED
+>> );
+CREATE TABLE

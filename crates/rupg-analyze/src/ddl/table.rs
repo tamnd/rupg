@@ -1123,6 +1123,10 @@ impl Definer<'_, '_> {
         let number = self.catalog.add_column(table, new)?;
         match &column.default {
             Some(RawDefault::Expr(node)) if column.generated != 0 => {
+                // `ATRewriteTables` computes the new values, and a stored value of the row type would not get them.
+                if target.kind != b'p' {
+                    self.check_row_type_users(target)?;
+                }
                 self.add_generation_expression(table, number, node)?;
             }
             Some(RawDefault::Expr(node)) => {
@@ -1213,7 +1217,8 @@ impl Definer<'_, '_> {
         } else {
             self.catalog.create_table(new)?
         };
-        self.an.add_table(table, &plan.relname, &scope);
+        let row_type = self.catalog.relation(table).map_or(0, |r| r.row_type);
+        self.an.add_table(table, &plan.relname, &scope, row_type);
         for (i, column) in plan.columns.iter().enumerate() {
             let Some(default) = &column.default else { continue };
             let (ty, typmod) = (scope[i].1, scope[i].2);

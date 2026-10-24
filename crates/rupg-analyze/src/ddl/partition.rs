@@ -1,6 +1,7 @@
 //! The partition key of `PARTITION BY` and the bound of `PARTITION OF`, as `ComputePartitionAttrs`, `transformPartitionBound` and `check_new_partition_bound` give them.
 
 use std::cmp::Ordering;
+use std::collections::BTreeSet;
 
 use rupg_catalog::{ConKind, PartStrategy, PartitionBound, PartitionKey, RangeDatum};
 use rupg_common::{Error, Result, SqlState};
@@ -50,6 +51,13 @@ struct RangeBound {
 struct Part {
     name: String,
     bound: PartitionBound,
+}
+
+/// The error of `ComputePartitionAttrs` for a generated column in a partition key, which the routing of a row cannot read, as it comes before the column is computed.
+fn generated_key(column: &str, at: Option<usize>) -> Error {
+    Error::new(SqlState::INVALID_OBJECT_DEFINITION, "cannot use generated column in partition key")
+        .with_detail(format!("Column \"{column}\" is a generated column."))
+        .at_opt(at)
 }
 
 /// The error of a bound that does not fit the strategy of the partition key.
@@ -137,7 +145,8 @@ impl Definer<'_, '_> {
         if let Some(rel) = self.catalog.relation(table) {
             let columns: Vec<(String, u32, i32)> =
                 rel.columns.iter().map(crate::from::scope_column).collect();
-            self.an.add_table(table, relname, &columns);
+            let row_type = rel.row_type;
+            self.an.add_table(table, relname, &columns, row_type);
         }
         let mut transformed = Vec::with_capacity(elems.len());
         for elem in &elems {
@@ -165,6 +174,9 @@ impl Definer<'_, '_> {
                     let rel = self.catalog.relation(table);
                     let column = rel.and_then(|r| r.column_number(name).map(|n| (n, r.column(n))));
                     match column {
+                        Some((_, Some(c))) if c.generated != 0 => {
+                            return Err(generated_key(name, at));
+                        }
                         Some((n, Some(c))) => {
                             partkey.attrs.push(n);
                             (c.ty, c.collation)
@@ -196,6 +208,25 @@ impl Definer<'_, '_> {
                             SqlState::INVALID_OBJECT_DEFINITION,
                             "partition key expressions cannot contain system column references",
                         ));
+                    }
+                    // A whole-row reference reads all the columns of the table.
+                    let rel = self.catalog.relation(table);
+                    let mut read = BTreeSet::new();
+                    expr.find(0, &mut |e, _| {
+                        if let ExprKind::Var(var) = &e.kind {
+                            read.insert(var.attnum);
+                        }
+                        None::<()>
+                    });
+                    if read.remove(&0) {
+                        let width = rel.map_or(0, |r| r.columns.len());
+                        read.extend((1..=width).map(|n| i16::try_from(n).unwrap_or(i16::MAX)));
+                    }
+                    let generated = read
+                        .iter()
+                        .find_map(|&n| rel.and_then(|r| r.column(n)).filter(|c| c.generated != 0));
+                    if let Some(column) = generated {
+                        return Err(generated_key(&column.name, at));
                     }
                     let ty = expr.ty;
                     match &expr.kind {

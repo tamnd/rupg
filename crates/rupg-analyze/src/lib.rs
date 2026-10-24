@@ -48,6 +48,8 @@ mod walk;
 mod window;
 mod xmlexpr;
 
+use std::collections::BTreeMap;
+
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::Node;
 use rupg_types::{Value, oid};
@@ -270,6 +272,8 @@ pub(crate) struct Analyzer<'a> {
     perms: Vec<PermInfo>,
     /// The OIDs of the functions that the statement calls, for all the levels of the statement and the queries of its views.
     funcs: Vec<u32>,
+    /// The row types of the relations that [`Analyzer::add_table`] puts in the scope of a statement that defines them, which the catalog of the environment does not have yet.
+    row_types: BTreeMap<u32, u32>,
     /// The index in [`Analyzer::perms`] of the privileges of the target table of the write that the analyzer reads now, or `None`.
     target_perm: Option<usize>,
 }
@@ -326,6 +330,7 @@ impl<'a> Analyzer<'a> {
             assign: None,
             perms: Vec::new(),
             funcs: Vec::new(),
+            row_types: BTreeMap::new(),
             target_perm: None,
         }
     }

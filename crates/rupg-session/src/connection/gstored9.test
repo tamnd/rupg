@@ -1,0 +1,128 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE SCHEMA generated_stored_tests;
+CREATE SCHEMA
+> GRANT USAGE ON SCHEMA generated_stored_tests TO PUBLIC;
+GRANT
+> SET search_path = generated_stored_tests;
+SET
+search_path=generated_stored_tests
+> CREATE FUNCTION gtest_trigger_func() RETURNS trigger
+>>   LANGUAGE plpgsql
+>> AS $$
+>> BEGIN
+>>   IF tg_op IN ('DELETE', 'UPDATE') THEN
+>>     RAISE INFO '%: %: old = %', TG_NAME, TG_WHEN, OLD;
+>>   END IF;
+>>   IF tg_op IN ('INSERT', 'UPDATE') THEN
+>>     RAISE INFO '%: %: new = %', TG_NAME, TG_WHEN, NEW;
+>>   END IF;
+>>   IF tg_op = 'DELETE' THEN
+>>     RETURN OLD;
+>>   ELSE
+>>     RETURN NEW;
+>>   END IF;
+>> END
+>> $$;
+CREATE FUNCTION
+> CREATE TRIGGER gtest1 BEFORE DELETE OR UPDATE ON gtest26
+>>   FOR EACH ROW
+>>   WHEN (OLD.b < 0)
+>>   EXECUTE PROCEDURE gtest_trigger_func();
+ERROR 42P01 relation "gtest26" does not exist
+> CREATE TRIGGER gtest2a BEFORE INSERT OR UPDATE ON gtest26
+>>   FOR EACH ROW
+>>   WHEN (NEW.b < 0)
+>>   EXECUTE PROCEDURE gtest_trigger_func();
+ERROR 42P01 relation "gtest26" does not exist
+> CREATE TRIGGER gtest2b BEFORE INSERT OR UPDATE ON gtest26
+>>   FOR EACH ROW
+>>   WHEN (NEW.* IS NOT NULL)
+>>   EXECUTE PROCEDURE gtest_trigger_func();
+ERROR 42P01 relation "gtest26" does not exist
+> CREATE TRIGGER gtest2 BEFORE INSERT ON gtest26
+>>   FOR EACH ROW
+>>   WHEN (NEW.a < 0)
+>>   EXECUTE PROCEDURE gtest_trigger_func();
+ERROR 42P01 relation "gtest26" does not exist
+> CREATE TRIGGER gtest3 AFTER DELETE OR UPDATE ON gtest26
+>>   FOR EACH ROW
+>>   WHEN (OLD.b < 0)
+>>   EXECUTE PROCEDURE gtest_trigger_func();
+ERROR 42P01 relation "gtest26" does not exist
+> CREATE TRIGGER gtest4 AFTER INSERT OR UPDATE ON gtest26
+>>   FOR EACH ROW
+>>   WHEN (NEW.b < 0)
+>>   EXECUTE PROCEDURE gtest_trigger_func();
+ERROR 42P01 relation "gtest26" does not exist
+> INSERT INTO gtest26 (a) VALUES (-2), (0), (3);
+ERROR 42P01 relation "gtest26" does not exist at 13
+> SELECT * FROM gtest26 ORDER BY a;
+ERROR 42P01 relation "gtest26" does not exist at 15
+> UPDATE gtest26 SET a = a * -2;
+ERROR 42P01 relation "gtest26" does not exist at 8
+> SELECT * FROM gtest26 ORDER BY a;
+ERROR 42P01 relation "gtest26" does not exist at 15
+> DELETE FROM gtest26 WHERE a = -6;
+ERROR 42P01 relation "gtest26" does not exist at 13
+> SELECT * FROM gtest26 ORDER BY a;
+ERROR 42P01 relation "gtest26" does not exist at 15
+> DROP TRIGGER gtest1 ON gtest26;
+ERROR 42P01 relation "gtest26" does not exist
+> DROP TRIGGER gtest2 ON gtest26;
+ERROR 42P01 relation "gtest26" does not exist
+> DROP TRIGGER gtest3 ON gtest26;
+ERROR 42P01 relation "gtest26" does not exist
+> CREATE FUNCTION gtest_trigger_func3() RETURNS trigger
+>>   LANGUAGE plpgsql
+>> AS $$
+>> BEGIN
+>>   RAISE NOTICE 'OK';
+>>   RETURN NEW;
+>> END
+>> $$;
+CREATE FUNCTION
+> CREATE TRIGGER gtest11 BEFORE UPDATE OF b ON gtest26
+>>   FOR EACH ROW
+>>   EXECUTE PROCEDURE gtest_trigger_func3();
+ERROR 42P01 relation "gtest26" does not exist
+> UPDATE gtest26 SET a = 1 WHERE a = 0;
+ERROR 42P01 relation "gtest26" does not exist at 8
+> DROP TRIGGER gtest11 ON gtest26;
+ERROR 42P01 relation "gtest26" does not exist
+> TRUNCATE gtest26;
+ERROR 42P01 relation "gtest26" does not exist
+> CREATE FUNCTION gtest_trigger_func4() RETURNS trigger
+>>   LANGUAGE plpgsql
+>> AS $$
+>> BEGIN
+>>   NEW.a = 10;
+>>   NEW.b = 300;
+>>   RETURN NEW;
+>> END;
+>> $$;
+CREATE FUNCTION
+> CREATE TRIGGER gtest12_01 BEFORE INSERT OR UPDATE ON gtest26
+>>   FOR EACH ROW
+>>   EXECUTE PROCEDURE gtest_trigger_func();
+ERROR 42P01 relation "gtest26" does not exist
+> CREATE TRIGGER gtest12_02 BEFORE INSERT OR UPDATE ON gtest26
+>>   FOR EACH ROW
+>>   EXECUTE PROCEDURE gtest_trigger_func4();
+ERROR 42P01 relation "gtest26" does not exist
+> CREATE TRIGGER gtest12_03 BEFORE INSERT OR UPDATE ON gtest26
+>>   FOR EACH ROW
+>>   EXECUTE PROCEDURE gtest_trigger_func();
+ERROR 42P01 relation "gtest26" does not exist
+> INSERT INTO gtest26 (a) VALUES (1);
+ERROR 42P01 relation "gtest26" does not exist at 13
+> SELECT * FROM gtest26 ORDER BY a;
+ERROR 42P01 relation "gtest26" does not exist at 15
+> UPDATE gtest26 SET a = 11 WHERE a = 10;
+ERROR 42P01 relation "gtest26" does not exist at 8
+> SELECT * FROM gtest26 ORDER BY a;
+ERROR 42P01 relation "gtest26" does not exist at 15
+> SELECT attrelid, attname, attgenerated FROM pg_attribute WHERE attgenerated NOT IN ('', 's', 'v');
+fields attrelid@pg_attribute.1:26:4:-1,attname@pg_attribute.2:19:64:-1,attgenerated@pg_attribute.16:18:1:-1
+SELECT 0

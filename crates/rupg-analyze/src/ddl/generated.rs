@@ -62,7 +62,9 @@ impl Definer<'_, '_> {
         changed.add_checks(checks);
         self.catalog.remove_default(table, number);
         self.add_generation_expression(table, number, node)?;
+        // `ATRewriteTables` writes the rows again, and a stored value of the row type would not get the new values.
         if target.kind != b'p' {
+            self.check_row_type_users(target)?;
             let default = self.catalog.default_of(table, number).map(|d| d.expr.clone());
             self.added.push(Fill { table, column: number, default });
         }

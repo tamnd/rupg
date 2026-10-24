@@ -1222,8 +1222,17 @@ impl Analyzer<'_> {
         self.scope.namespace.truncate(items);
     }
 
-    /// `addRangeTableEntryForRelation` and `addNSItemToQuery` for a table of a statement that defines an object: the expressions of the statement can use the columns. Each column is a name, a type and a typmod.
-    pub(crate) fn add_table(&mut self, oid: u32, name: &str, columns: &[(String, u32, i32)]) {
+    /// `addRangeTableEntryForRelation` and `addNSItemToQuery` for a table of a statement that defines an object: the expressions of the statement can use the columns and the whole row, which has the type `row_type`. Each column is a name, a type and a typmod.
+    pub(crate) fn add_table(
+        &mut self,
+        oid: u32,
+        name: &str,
+        columns: &[(String, u32, i32)],
+        row_type: u32,
+    ) {
+        if row_type != 0 {
+            self.row_types.insert(oid, row_type);
+        }
         let index = self.scope.relations.len();
         let exprs: Vec<(String, Expr)> = columns
             .iter()
@@ -1785,6 +1794,9 @@ impl Analyzer<'_> {
     fn row_type(&self, rel: u32) -> Option<u32> {
         if let Some(catalog) = rupg_pgcatalog::catalog_by_oid(rel) {
             return Some(catalog.rowtype_oid).filter(|&ty| ty != 0);
+        }
+        if let Some(&ty) = self.row_types.get(&rel) {
+            return Some(ty);
         }
         self.env.catalog()?.relation(rel).map(|r| r.row_type).filter(|&ty| ty != 0)
     }

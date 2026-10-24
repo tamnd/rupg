@@ -1,0 +1,162 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE SCHEMA generated_stored_tests;
+CREATE SCHEMA
+> GRANT USAGE ON SCHEMA generated_stored_tests TO PUBLIC;
+GRANT
+> SET search_path = generated_stored_tests;
+SET
+search_path=generated_stored_tests
+> CREATE TABLE gtest_parent (f1 date NOT NULL, f2 bigint, f3 bigint) PARTITION BY RANGE (f1);
+CREATE TABLE
+> CREATE TABLE gtest_child PARTITION OF gtest_parent (
+>>     f3 WITH OPTIONS GENERATED ALWAYS AS (f2 * 2) STORED
+>> ) FOR VALUES FROM ('2016-07-01') TO ('2016-08-01');
+ERROR 42611 child column "f3" specifies generation expression
+HINT A child table column cannot be generated unless its parent column is.
+> CREATE TABLE gtest_child (f1 date NOT NULL, f2 bigint, f3 bigint GENERATED ALWAYS AS (f2 * 2) STORED);
+CREATE TABLE
+> ALTER TABLE gtest_parent ATTACH PARTITION gtest_child FOR VALUES FROM ('2016-07-01') TO ('2016-08-01');
+ERROR 42804 column "f3" in child table must not be a generated column
+> DROP TABLE gtest_parent, gtest_child;
+DROP TABLE
+> CREATE TABLE gtest_parent (f1 date NOT NULL, f2 bigint, f3 bigint GENERATED ALWAYS AS (f2 * 2) STORED) PARTITION BY RANGE (f1);
+CREATE TABLE
+> CREATE TABLE gtest_child PARTITION OF gtest_parent
+>>   FOR VALUES FROM ('2016-07-01') TO ('2016-08-01');
+CREATE TABLE
+> CREATE TABLE gtest_child2 PARTITION OF gtest_parent (
+>>     f3 WITH OPTIONS GENERATED ALWAYS AS (f2 * 22) STORED
+>> ) FOR VALUES FROM ('2016-08-01') TO ('2016-09-01');
+CREATE TABLE
+> CREATE TABLE gtest_child3 PARTITION OF gtest_parent (
+>>     f3 DEFAULT 42
+>> ) FOR VALUES FROM ('2016-09-01') TO ('2016-10-01');
+ERROR 42611 column "f3" inherits from generated column but specifies default
+> CREATE TABLE gtest_child3 PARTITION OF gtest_parent (
+>>     f3 WITH OPTIONS GENERATED ALWAYS AS IDENTITY
+>> ) FOR VALUES FROM ('2016-09-01') TO ('2016-10-01');
+ERROR 0A000 identity columns are not supported on partitions
+> CREATE TABLE gtest_child3 PARTITION OF gtest_parent (
+>>     f3 GENERATED ALWAYS AS (f2 * 2) VIRTUAL
+>> ) FOR VALUES FROM ('2016-09-01') TO ('2016-10-01');
+ERROR 42611 column "f3" inherits from generated column of different kind
+DETAIL Parent column is STORED, child column is VIRTUAL.
+> CREATE TABLE gtest_child3 (f1 date NOT NULL, f2 bigint, f3 bigint);
+CREATE TABLE
+> ALTER TABLE gtest_parent ATTACH PARTITION gtest_child3 FOR VALUES FROM ('2016-09-01') TO ('2016-10-01');
+ERROR 42804 column "f3" in child table must be a generated column
+> DROP TABLE gtest_child3;
+DROP TABLE
+> CREATE TABLE gtest_child3 (f1 date NOT NULL, f2 bigint, f3 bigint DEFAULT 42);
+CREATE TABLE
+> ALTER TABLE gtest_parent ATTACH PARTITION gtest_child3 FOR VALUES FROM ('2016-09-01') TO ('2016-10-01');
+ERROR 42804 column "f3" in child table must be a generated column
+> DROP TABLE gtest_child3;
+DROP TABLE
+> CREATE TABLE gtest_child3 (f1 date NOT NULL, f2 bigint, f3 bigint GENERATED ALWAYS AS IDENTITY);
+CREATE TABLE
+> ALTER TABLE gtest_parent ATTACH PARTITION gtest_child3 FOR VALUES FROM ('2016-09-01') TO ('2016-10-01');
+ERROR 55000 table "gtest_child3" being attached contains an identity column "f3"
+DETAIL The new partition may not contain an identity column.
+> DROP TABLE gtest_child3;
+DROP TABLE
+> CREATE TABLE gtest_child3 (f1 date NOT NULL, f2 bigint, f3 bigint GENERATED ALWAYS AS (f2 * 33) STORED);
+CREATE TABLE
+> ALTER TABLE gtest_parent ATTACH PARTITION gtest_child3 FOR VALUES FROM ('2016-09-01') TO ('2016-10-01');
+ALTER TABLE
+> INSERT INTO gtest_parent (f1, f2) VALUES ('2016-07-15', 1);
+INSERT 0 1
+> INSERT INTO gtest_parent (f1, f2) VALUES ('2016-07-15', 2);
+INSERT 0 1
+> INSERT INTO gtest_parent (f1, f2) VALUES ('2016-08-15', 3);
+INSERT 0 1
+> SELECT tableoid::regclass, * FROM gtest_parent ORDER BY 1, 2, 3;
+fields tableoid:2205:4:-1,f1@gtest_parent.1:1082:4:-1,f2@gtest_parent.2:20:8:-1,f3@gtest_parent.3:20:8:-1
+row gtest_child,2016-07-15,1,2
+row gtest_child,2016-07-15,2,4
+row gtest_child2,2016-08-15,3,66
+SELECT 3
+> SELECT tableoid::regclass, * FROM gtest_child ORDER BY 1, 2, 3;
+fields tableoid:2205:4:-1,f1@gtest_child.1:1082:4:-1,f2@gtest_child.2:20:8:-1,f3@gtest_child.3:20:8:-1
+row gtest_child,2016-07-15,1,2
+row gtest_child,2016-07-15,2,4
+SELECT 2
+> SELECT tableoid::regclass, * FROM gtest_child2 ORDER BY 1, 2, 3;
+fields tableoid:2205:4:-1,f1@gtest_child2.1:1082:4:-1,f2@gtest_child2.2:20:8:-1,f3@gtest_child2.3:20:8:-1
+row gtest_child2,2016-08-15,3,66
+SELECT 1
+> SELECT tableoid::regclass, * FROM gtest_child3 ORDER BY 1, 2, 3;
+fields tableoid:2205:4:-1,f1@gtest_child3.1:1082:4:-1,f2@gtest_child3.2:20:8:-1,f3@gtest_child3.3:20:8:-1
+SELECT 0
+> UPDATE gtest_parent SET f1 = f1 + 60 WHERE f2 = 1;
+UPDATE 1
+> SELECT tableoid::regclass, * FROM gtest_parent ORDER BY 1, 2, 3;
+fields tableoid:2205:4:-1,f1@gtest_parent.1:1082:4:-1,f2@gtest_parent.2:20:8:-1,f3@gtest_parent.3:20:8:-1
+row gtest_child,2016-07-15,2,4
+row gtest_child2,2016-08-15,3,66
+row gtest_child3,2016-09-13,1,33
+SELECT 3
+> ALTER TABLE ONLY gtest_parent ALTER COLUMN f3 SET EXPRESSION AS (f2 * 4);
+ALTER TABLE
+> ALTER TABLE gtest_child ALTER COLUMN f3 SET EXPRESSION AS (f2 * 10);
+ALTER TABLE
+> SELECT tableoid::regclass, * FROM gtest_parent ORDER BY 1, 2, 3;
+fields tableoid:2205:4:-1,f1@gtest_parent.1:1082:4:-1,f2@gtest_parent.2:20:8:-1,f3@gtest_parent.3:20:8:-1
+row gtest_child,2016-07-15,2,20
+row gtest_child2,2016-08-15,3,66
+row gtest_child3,2016-09-13,1,33
+SELECT 3
+> ALTER TABLE gtest_parent ALTER COLUMN f3 SET EXPRESSION AS (f2 * 2);
+ALTER TABLE
+> SELECT tableoid::regclass, * FROM gtest_parent ORDER BY 1, 2, 3;
+fields tableoid:2205:4:-1,f1@gtest_parent.1:1082:4:-1,f2@gtest_parent.2:20:8:-1,f3@gtest_parent.3:20:8:-1
+row gtest_child,2016-07-15,2,4
+row gtest_child2,2016-08-15,3,6
+row gtest_child3,2016-09-13,1,2
+SELECT 3
+> CREATE TABLE gtest_part_key (f1 date NOT NULL, f2 bigint, f3 bigint GENERATED ALWAYS AS (f2 * 2) STORED) PARTITION BY RANGE (f3);
+ERROR 42P17 cannot use generated column in partition key at 126
+DETAIL Column "f3" is a generated column.
+> CREATE TABLE gtest_part_key (f1 date NOT NULL, f2 bigint, f3 bigint GENERATED ALWAYS AS (f2 * 2) STORED) PARTITION BY RANGE ((f3));
+ERROR 42P17 cannot use generated column in partition key at 126
+DETAIL Column "f3" is a generated column.
+> CREATE TABLE gtest_part_key (f1 date NOT NULL, f2 bigint, f3 bigint GENERATED ALWAYS AS (f2 * 2) STORED) PARTITION BY RANGE ((f3 * 3));
+ERROR 42P17 cannot use generated column in partition key at 126
+DETAIL Column "f3" is a generated column.
+> CREATE TABLE gtest_part_key (f1 date NOT NULL, f2 bigint, f3 bigint GENERATED ALWAYS AS (f2 * 2) STORED) PARTITION BY RANGE ((gtest_part_key));
+ERROR 42P17 cannot use generated column in partition key at 126
+DETAIL Column "f3" is a generated column.
+> CREATE TABLE gtest_part_key (f1 date NOT NULL, f2 bigint, f3 bigint GENERATED ALWAYS AS (f2 * 2) STORED) PARTITION BY RANGE ((gtest_part_key is not null));
+ERROR 42P17 cannot use generated column in partition key at 126
+DETAIL Column "f3" is a generated column.
+> CREATE TABLE gtest25 (a int PRIMARY KEY);
+CREATE TABLE
+> INSERT INTO gtest25 VALUES (3), (4);
+INSERT 0 2
+> ALTER TABLE gtest25 ADD COLUMN b int GENERATED ALWAYS AS (a * 2) STORED, ALTER COLUMN b SET EXPRESSION AS (a * 3);
+ALTER TABLE
+> SELECT * FROM gtest25 ORDER BY a;
+fields a@gtest25.1:23:4:-1,b@gtest25.2:23:4:-1
+row 3,9
+row 4,12
+SELECT 2
+> ALTER TABLE gtest25 ADD COLUMN x int GENERATED ALWAYS AS (b * 4) STORED;
+ERROR 42P17 cannot use generated column "b" in column generation expression
+DETAIL A generated column cannot reference another generated column.
+> ALTER TABLE gtest25 ADD COLUMN x int GENERATED ALWAYS AS (z * 4) STORED;
+ERROR 42703 column "z" does not exist
+> ALTER TABLE gtest25 ADD COLUMN c int DEFAULT 42,
+>>   ADD COLUMN x int GENERATED ALWAYS AS (c * 4) STORED;
+ALTER TABLE
+> ALTER TABLE gtest25 ADD COLUMN d int DEFAULT 101;
+ALTER TABLE
+> ALTER TABLE gtest25 ALTER COLUMN d SET DATA TYPE float8,
+>>   ADD COLUMN y float8 GENERATED ALWAYS AS (d * 4) STORED;
+ALTER TABLE
+> SELECT * FROM gtest25 ORDER BY a;
+fields a@gtest25.1:23:4:-1,b@gtest25.2:23:4:-1,c@gtest25.3:23:4:-1,x@gtest25.4:23:4:-1,d@gtest25.5:701:8:-1,y@gtest25.6:701:8:-1
+row 3,9,42,168,101,404
+row 4,12,42,168,101,404
+SELECT 2

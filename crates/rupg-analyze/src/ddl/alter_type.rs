@@ -90,6 +90,16 @@ impl Definer<'_, '_> {
             }
             return Err(no_column(&column, &target.name));
         };
+        // `USING` would give values that are not the values of the generation expression.
+        let generated = rel.and_then(|r| r.column(number)).is_some_and(|c| c.generated != 0);
+        if generated && using.is_some() {
+            return Err(Error::new(
+                SqlState::INVALID_COLUMN_DEFINITION,
+                "cannot specify USING when altering type of generated column",
+            )
+            .with_detail(format!("Column \"{column}\" is a generated column."))
+            .at_opt(place(def.location)));
+        }
         if identity {
             self.alter_identity_type(target, number, def)?;
         }
