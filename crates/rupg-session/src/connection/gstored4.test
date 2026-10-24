@@ -1,0 +1,144 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE SCHEMA generated_stored_tests;
+CREATE SCHEMA
+> GRANT USAGE ON SCHEMA generated_stored_tests TO PUBLIC;
+GRANT
+> SET search_path = generated_stored_tests;
+SET
+search_path=generated_stored_tests
+> CREATE TABLE gtest20 (a int PRIMARY KEY, b int GENERATED ALWAYS AS (a * 2) STORED CHECK (b < 50));
+CREATE TABLE
+> INSERT INTO gtest20 (a) VALUES (10);
+INSERT 0 1
+> INSERT INTO gtest20 (a) VALUES (30);
+ERROR 23514 new row for relation "gtest20" violates check constraint "gtest20_b_check"
+DETAIL Failing row contains (30, 60).
+> ALTER TABLE gtest20 ALTER COLUMN b SET EXPRESSION AS (a * 100);
+ERROR 23514 check constraint "gtest20_b_check" of relation "gtest20" is violated by some row
+> ALTER TABLE gtest20 ALTER COLUMN b SET EXPRESSION AS (a * 3);
+ALTER TABLE
+> CREATE TABLE gtest20a (a int PRIMARY KEY, b int GENERATED ALWAYS AS (a * 2) STORED);
+CREATE TABLE
+> INSERT INTO gtest20a (a) VALUES (10);
+INSERT 0 1
+> INSERT INTO gtest20a (a) VALUES (30);
+INSERT 0 1
+> ALTER TABLE gtest20a ADD CHECK (b < 50);
+ERROR 23514 check constraint "gtest20a_b_check" of relation "gtest20a" is violated by some row
+> ALTER TABLE gtest20a ADD COLUMN c float8 DEFAULT random() CHECK (b < 50);
+ERROR 23514 check constraint "gtest20a_b_check" of relation "gtest20a" is violated by some row
+> ALTER TABLE gtest20a ADD COLUMN c float8 DEFAULT random() CHECK (b < 61);
+ALTER TABLE
+> CREATE TABLE gtest20b (a int PRIMARY KEY, b int GENERATED ALWAYS AS (a * 2) STORED);
+CREATE TABLE
+> INSERT INTO gtest20b (a) VALUES (10);
+INSERT 0 1
+> INSERT INTO gtest20b (a) VALUES (30);
+INSERT 0 1
+> ALTER TABLE gtest20b ADD CONSTRAINT chk CHECK (b < 50) NOT VALID;
+ALTER TABLE
+> ALTER TABLE gtest20b VALIDATE CONSTRAINT chk;
+ERROR 23514 check constraint "chk" of relation "gtest20b" is violated by some row
+> CREATE TABLE gtest20c (a int, b int GENERATED ALWAYS AS (a * 2) STORED);
+CREATE TABLE
+> ALTER TABLE gtest20c ADD CONSTRAINT whole_row_check CHECK (gtest20c IS NOT NULL);
+ALTER TABLE
+> INSERT INTO gtest20c VALUES (1);
+INSERT 0 1
+> INSERT INTO gtest20c VALUES (NULL);
+ERROR 23514 new row for relation "gtest20c" violates check constraint "whole_row_check"
+DETAIL Failing row contains (null, null).
+> ALTER TABLE gtest20c ALTER COLUMN b SET EXPRESSION AS (NULL::int);
+ERROR 23514 check constraint "whole_row_check" of relation "gtest20c" is violated by some row
+> CREATE TABLE gtest20d (a int, b int GENERATED ALWAYS AS (a * 2) STORED);
+CREATE TABLE
+> INSERT INTO gtest20d VALUES (1), (1);
+INSERT 0 2
+> CREATE INDEX gtest20d_idx1 ON gtest20d (a) WHERE gtest20d = ROW (1, 2);
+CREATE INDEX
+> ALTER TABLE gtest20d ALTER COLUMN b SET EXPRESSION AS (a * 2::bigint);
+ALTER TABLE
+> CREATE INDEX gtest20d_idx2 ON gtest20d ((gtest20d = ROW (1, 2)));
+CREATE INDEX
+> ALTER TABLE gtest20d ALTER COLUMN b SET EXPRESSION AS (a * 3);
+ALTER TABLE
+> CREATE TABLE gtest21a (a int PRIMARY KEY, b int GENERATED ALWAYS AS (nullif(a, 0)) STORED NOT NULL);
+CREATE TABLE
+> INSERT INTO gtest21a (a) VALUES (1);
+INSERT 0 1
+> INSERT INTO gtest21a (a) VALUES (0);
+ERROR 23502 null value in column "b" of relation "gtest21a" violates not-null constraint
+DETAIL Failing row contains (0, null).
+> CREATE TABLE gtest21ax (a int PRIMARY KEY, b int GENERATED ALWAYS AS (nullif(a, 0)) STORED, CONSTRAINT cc NOT NULL b);
+CREATE TABLE
+> INSERT INTO gtest21ax (a) VALUES (0);
+ERROR 23502 null value in column "b" of relation "gtest21ax" violates not-null constraint
+DETAIL Failing row contains (0, null).
+> INSERT INTO gtest21ax (a) VALUES (1);
+INSERT 0 1
+> ALTER TABLE gtest21ax ALTER COLUMN b SET EXPRESSION AS (nullif(a, 1));
+ERROR 23502 column "b" of relation "gtest21ax" contains null values
+> DROP TABLE gtest21ax;
+DROP TABLE
+> CREATE TABLE gtest21ax (a int PRIMARY KEY, b int GENERATED ALWAYS AS (nullif(a, 0)) STORED);
+CREATE TABLE
+> ALTER TABLE gtest21ax ADD CONSTRAINT cc NOT NULL b;
+ALTER TABLE
+> INSERT INTO gtest21ax (a) VALUES (0);
+ERROR 23502 null value in column "b" of relation "gtest21ax" violates not-null constraint
+DETAIL Failing row contains (0, null).
+> DROP TABLE gtest21ax;
+DROP TABLE
+> CREATE TABLE gtest21b (a int, b int GENERATED ALWAYS AS (nullif(a, 0)) STORED);
+CREATE TABLE
+> ALTER TABLE gtest21b ALTER COLUMN b SET NOT NULL;
+ALTER TABLE
+> INSERT INTO gtest21b (a) VALUES (1);
+INSERT 0 1
+> INSERT INTO gtest21b (a) VALUES (2), (0);
+ERROR 23502 null value in column "b" of relation "gtest21b" violates not-null constraint
+DETAIL Failing row contains (0, null).
+> INSERT INTO gtest21b (a) VALUES (NULL);
+ERROR 23502 null value in column "b" of relation "gtest21b" violates not-null constraint
+DETAIL Failing row contains (null, null).
+> ALTER TABLE gtest21b ALTER COLUMN b DROP NOT NULL;
+ALTER TABLE
+> INSERT INTO gtest21b (a) VALUES (0);
+INSERT 0 1
+> CREATE TABLE gtestnn_parent (
+>>     f1 int,
+>>     f2 bigint,
+>>     f3 bigint GENERATED ALWAYS AS (nullif(f1, 1) + nullif(f2, 10)) STORED NOT NULL
+>> ) PARTITION BY RANGE (f1);
+CREATE TABLE
+> CREATE TABLE gtestnn_child PARTITION OF gtestnn_parent FOR VALUES FROM (1) TO (5);
+CREATE TABLE
+> CREATE TABLE gtestnn_childdef PARTITION OF gtestnn_parent default;
+CREATE TABLE
+> INSERT INTO gtestnn_parent VALUES (2, 2, default), (3, 5, default), (14, 12, default);
+INSERT 0 3
+> INSERT INTO gtestnn_parent VALUES (1, 2, default);
+ERROR 23502 null value in column "f3" of relation "gtestnn_child" violates not-null constraint
+DETAIL Failing row contains (1, 2, null).
+> INSERT INTO gtestnn_parent VALUES (2, 10, default);
+ERROR 23502 null value in column "f3" of relation "gtestnn_child" violates not-null constraint
+DETAIL Failing row contains (2, 10, null).
+> ALTER TABLE gtestnn_parent ALTER COLUMN f3 SET EXPRESSION AS (nullif(f1, 2) + nullif(f2, 11));
+ERROR 23502 column "f3" of relation "gtestnn_child" contains null values
+> INSERT INTO gtestnn_parent VALUES (10, 11, default);
+INSERT 0 1
+> SELECT * FROM gtestnn_parent ORDER BY f1, f2, f3;
+fields f1@gtestnn_parent.1:23:4:-1,f2@gtestnn_parent.2:20:8:-1,f3@gtestnn_parent.3:20:8:-1
+row 2,2,4
+row 3,5,8
+row 10,11,21
+row 14,12,26
+SELECT 4
+> ALTER TABLE gtestnn_parent ADD COLUMN c int NOT NULL GENERATED ALWAYS AS (nullif(f1, 14) + nullif(f2, 10)) STORED;
+ERROR 23502 column "c" of relation "gtestnn_childdef" contains null values
+> ALTER TABLE gtestnn_parent ADD COLUMN c int NOT NULL GENERATED ALWAYS AS (nullif(f1, 13) + nullif(f2, 5)) STORED;
+ERROR 23502 column "c" of relation "gtestnn_child" contains null values
+> ALTER TABLE gtestnn_parent ADD COLUMN c int NOT NULL GENERATED ALWAYS AS (nullif(f1, 4) + nullif(f2, 6)) STORED;
+ALTER TABLE

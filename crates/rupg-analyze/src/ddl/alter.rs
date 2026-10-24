@@ -124,6 +124,8 @@ struct Passes {
     types: Vec<TypeCmd>,
     /// `AT_PASS_ADD_COL`: `ADD COLUMN` with its `IF NOT EXISTS`, in the order of the statement.
     columns: Vec<(ColumnDef, bool)>,
+    /// `AT_PASS_SET_EXPRESSION`: `SET EXPRESSION` of the column, with the expression, in the order of the statement.
+    expressions: Vec<(String, Node)>,
     /// `AT_PASS_ADD_CONSTR`: the constraints of `ADD CONSTRAINT` before their transform, with the subcommand that gives them.
     constraints: Vec<(Constraint, Origin)>,
     /// `AT_PASS_ADD_OTHERCONSTR`: `SET DEFAULT` and `ADD IDENTITY`, in the order of the statement. The check constraints and the foreign keys come after them, from the transform.
@@ -138,6 +140,8 @@ struct Passes {
 enum DropCmd {
     /// `DROP DEFAULT` of the column.
     Default(String),
+    /// `DROP EXPRESSION` of the column, with its `IF EXISTS`.
+    Expression(String, bool),
     /// `DROP IDENTITY` of the column, with `IF EXISTS`.
     Identity(String, bool),
     /// `DROP NOT NULL` of the column.
@@ -178,6 +182,8 @@ enum MiscCmd {
     NoInherit(Box<RangeVar>),
     /// `OF` with the type, or `NOT OF` with no type.
     Of(Option<Box<TypeName>>),
+    /// `VALIDATE CONSTRAINT` with the name of the constraint.
+    Validate(String),
 }
 
 /// The subcommand that gives a constraint of `AT_PASS_ADD_CONSTR`.
@@ -440,6 +446,22 @@ impl Definer<'_, '_> {
                     None => passes.drops.push(DropCmd::Default(column)),
                 }
             }
+            AlterTableType::AT_SetExpression => {
+                self.simple_permissions(target, cmd, TABLE)?;
+                recurse = passes.recurse;
+                let column = cmd.name.as_deref().unwrap_or_default().to_string();
+                let Some(def) = &cmd.def else {
+                    return Err(Error::internal("SET EXPRESSION without an expression"));
+                };
+                passes.expressions.push((column, def.clone()));
+            }
+            AlterTableType::AT_DropExpression => {
+                self.simple_permissions(target, cmd, TABLE)?;
+                recurse = passes.recurse;
+                self.prep_drop_expression(target, cmd, passes.recurse, passes.recursing)?;
+                let column = cmd.name.as_deref().unwrap_or_default().to_string();
+                passes.drops.push(DropCmd::Expression(column, cmd.missing_ok));
+            }
             AlterTableType::AT_AddConstraint => {
                 self.simple_permissions(target, cmd, TABLE)?;
                 let Some(Node::Constraint(con)) = &cmd.def else {
@@ -592,6 +614,11 @@ impl Definer<'_, '_> {
                 self.simple_permissions(target, cmd, TABLE)?;
                 passes.misc.push(MiscCmd::Of(None));
             }
+            AlterTableType::AT_ValidateConstraint => {
+                self.simple_permissions(target, cmd, TABLE)?;
+                let name = cmd.name.as_deref().unwrap_or_default().to_string();
+                passes.misc.push(MiscCmd::Validate(name));
+            }
             // A table has no OIDs, so `SET WITHOUT OIDS` has no work.
             AlterTableType::AT_DropOids => self.simple_permissions(target, cmd, TABLE)?,
             other => {
@@ -652,6 +679,9 @@ impl Definer<'_, '_> {
         for cmd in &passes.drops {
             match cmd {
                 DropCmd::Default(column) => self.column_default(target, column, None)?,
+                DropCmd::Expression(column, missing_ok) => {
+                    self.drop_expression(target, column, *missing_ok)?;
+                }
                 DropCmd::Identity(column, missing_ok) => {
                     self.drop_identity(target, column, *missing_ok, passes.recurse)?;
                 }
@@ -701,6 +731,9 @@ impl Definer<'_, '_> {
         }
         if !passes.columns.is_empty() || !passes.types.is_empty() {
             self.toast_after_columns(target.oid)?;
+        }
+        for (column, expr) in &passes.expressions {
+            self.set_expression(target, column, expr, &mut changed)?;
         }
         self.after_alter_type(&original, &changed)?;
         let mut not_nulls = Vec::new();
@@ -758,16 +791,18 @@ impl Definer<'_, '_> {
         for other in others {
             match other {
                 Other::Check(con) => {
-                    if !con.initially_valid && con.is_enforced {
-                        return Err(not_yet("NOT VALID", place(con.location)));
-                    }
                     self.table_scope(target.oid);
                     // `ATAddCheckNNConstraint` gives no query text to `AddRelationNewConstraints`, so the errors of the expression have no place.
                     let added = self
                         .add_checks(target.oid, std::slice::from_ref(&con))
                         .map_err(|e| e.with_position(None))?;
-                    verify |= con.is_enforced;
+                    // A `NOT VALID` constraint does not check the rows that the table has.
+                    let valid = con.initially_valid || !con.is_enforced;
+                    verify |= con.is_enforced && valid;
                     for oid in added {
+                        if !valid {
+                            self.catalog.set_constraint_validated(oid, false)?;
+                        }
                         self.add_check_to_partitions(target, oid, passes.recurse)?;
                     }
                 }
@@ -825,6 +860,9 @@ impl Definer<'_, '_> {
                 MiscCmd::NoInherit(rv) => self.drop_inherit(target, rv)?,
                 MiscCmd::Of(Some(name)) => self.add_of(target, name)?,
                 MiscCmd::Of(None) => self.drop_of(target)?,
+                MiscCmd::Validate(name) => {
+                    self.validate_constraint(target, name, passes.recurse, passes.recursing)?;
+                }
             }
         }
         if let Some(unlogged) = passes.persistence {

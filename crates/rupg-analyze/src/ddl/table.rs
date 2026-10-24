@@ -1324,8 +1324,13 @@ impl Definer<'_, '_> {
         Ok(expr)
     }
 
-    /// `cookDefault` and `StoreAttrDefault` for the generation expression of the new generated column `number` of `ADD COLUMN`. `ATExecAddColumn` gives no query text to `cookDefault`, so the errors of the expression have no place.
-    fn add_generation_expression(&mut self, table: u32, number: i16, node: &Node) -> Result<()> {
+    /// `cookDefault` and `StoreAttrDefault` for the generation expression of the generated column `number`, for `ADD COLUMN` and `SET EXPRESSION`. `ATExecAddColumn` and `ATExecSetExpression` give no query text to `cookDefault`, so the errors of the expression have no place.
+    pub(super) fn add_generation_expression(
+        &mut self,
+        table: u32,
+        number: i16,
+        node: &Node,
+    ) -> Result<()> {
         let rel = self
             .catalog
             .relation(table)

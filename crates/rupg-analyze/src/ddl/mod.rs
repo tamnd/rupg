@@ -20,6 +20,7 @@ mod enumtype;
 mod fkey;
 mod fkey_partition;
 mod function;
+mod generated;
 mod grant;
 mod identity;
 mod index;
@@ -47,6 +48,7 @@ mod truncate;
 mod tsearch;
 mod type_change;
 mod vacuum;
+mod validate;
 mod view;
 
 pub use copy::{
@@ -134,7 +136,7 @@ pub struct Transform {
     pub expr: Node,
 }
 
-/// The default of a new column of `ALTER TABLE ... ADD COLUMN`, as `ATExecAddColumn` keeps it in `tab->newvals`. The rows of the table get this default, also when a later subcommand of the statement sets or drops the default of the column.
+/// The default of a new column of `ALTER TABLE ... ADD COLUMN`, as `ATExecAddColumn` keeps it in `tab->newvals`, or the new expression of a generated column of `SET EXPRESSION`. The rows of the table get this default, also when a later subcommand of the statement sets or drops the default of the column.
 #[derive(Clone, Debug)]
 pub struct Fill {
     /// The OID of the table.
@@ -313,12 +315,12 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         .added
         .into_iter()
         .filter(|fill| {
-            let live = catalog
-                .relation(fill.table)
-                .and_then(|r| r.column(fill.column))
-                .is_some_and(|c| !c.dropped);
+            let column = catalog.relation(fill.table).and_then(|r| r.column(fill.column));
+            let live = column.is_some_and(|c| !c.dropped);
+            // A stored generated column computes its values again from the expression that it has now.
+            let generated = column.is_some_and(|c| c.generated != 0);
             let now = catalog.default_of(fill.table, fill.column).map(|d| &d.expr);
-            live && now != fill.default.as_ref()
+            live && (generated || now != fill.default.as_ref())
         })
         .collect();
     Defined {

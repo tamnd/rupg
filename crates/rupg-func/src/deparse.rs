@@ -156,10 +156,15 @@ struct SubName {
 
 impl<'a> Deparser<'a> {
     /// A deparse of an expression of one relation, as `deparse_context_for`: a `Var` shows the name of its column with no name of the relation.
-    fn for_columns(session: &'a dyn Session, columns: Vec<String>, paren: bool) -> Deparser<'a> {
+    fn for_columns(
+        session: &'a dyn Session,
+        name: &str,
+        columns: Vec<String>,
+        paren: bool,
+    ) -> Deparser<'a> {
         let mut d = Deparser::new(session, paren, 0);
         d.namespaces.push(Namespace {
-            names: vec![String::new()],
+            names: vec![name.to_string()],
             columns: vec![columns],
             print_aliases: vec![false],
             merged: Vec::new(),
@@ -1424,12 +1429,18 @@ fn column_names(relid: u32, session: &dyn Session) -> Option<Vec<String>> {
 }
 
 /// `deparse_expression_pretty` for a stored expression or a stored list of expressions, with the columns of the relation.
-fn deparse(text: &str, columns: &[String], paren: bool, session: &dyn Session) -> Result<String> {
+fn deparse(
+    text: &str,
+    name: &str,
+    columns: &[String],
+    paren: bool,
+    session: &dyn Session,
+) -> Result<String> {
     if node::is_bound(text) {
         return partition_bound(text, session);
     }
     let exprs = stored(text)?;
-    let mut d = Deparser::for_columns(session, columns.to_vec(), paren);
+    let mut d = Deparser::for_columns(session, name, columns.to_vec(), paren);
     d.list(&exprs, false)?;
     Ok(d.buf)
 }
@@ -1444,7 +1455,7 @@ fn bound_constant(d: &mut Deparser<'_>, e: &Expr) -> Result<()> {
 
 /// The `PartitionBoundSpec` part of `get_rule_expr`: the bound of a partition in `relpartbound`, as `FOR VALUES` shows it.
 fn partition_bound(text: &str, session: &dyn Session) -> Result<String> {
-    let mut d = Deparser::for_columns(session, Vec::new(), false);
+    let mut d = Deparser::for_columns(session, "", Vec::new(), false);
     match node::read_bound(text)? {
         StoredBound::Default => d.buf.push_str("DEFAULT"),
         StoredBound::Hash { modulus, remainder } => {
@@ -1497,14 +1508,14 @@ fn range_datums(d: &mut Deparser<'_>, datums: &[StoredDatum]) -> Result<()> {
 /// An internal error for a stored form that is not a constant, and the errors of the output function of the type.
 pub fn deparse_constant(text: &str, session: &dyn Session) -> Result<String> {
     let e = node::read(text)?;
-    let mut d = Deparser::for_columns(session, Vec::new(), false);
+    let mut d = Deparser::for_columns(session, "", Vec::new(), false);
     bound_constant(&mut d, &e)?;
     Ok(d.buf)
 }
 
 /// `deparse_expression` of a stored expression that has no column, such as the default of a domain in `typdefault`.
 pub fn deparse_expression(text: &str, session: &dyn Session) -> Result<String> {
-    deparse(text, &[], false, session)
+    deparse(text, "", &[], false, session)
 }
 
 /// `deparse_expression` of a stored expression of the relation `relid`, with the names of its columns, as `pg_get_expr` gives it. The relation 0 gives an expression with no columns, such as the check of a domain.
@@ -1522,7 +1533,8 @@ pub fn deparse_relation_expression(
     }
     let columns = column_names(relid, session)
         .ok_or_else(|| Error::internal(format!("cache lookup failed for relation {relid}")))?;
-    deparse(text, &columns, false, session)
+    let name = reg::class_name(relid, session).map_or("", |(name, _)| name);
+    deparse(text, name, &columns, false, session)
 }
 
 /// The expressions of a stored form. A list is `(...)`, and an expression is `{...}`.
@@ -1580,7 +1592,8 @@ fn get_expr(call: &Call<'_>, args: &[Value]) -> Result<Value> {
             None => return Ok(Value::Null),
         }
     };
-    Ok(Value::text(deparse(text, &columns, paren, session)?))
+    let name = reg::class_name(relid, session).map_or("", |(name, _)| name);
+    Ok(Value::text(deparse(text, name, &columns, paren, session)?))
 }
 
 /// The error for an object of a system catalog, which has no stored form that the engine can read yet.
@@ -1675,12 +1688,13 @@ fn constraint_def(con: &Constraint, paren: bool, session: &dyn Session) -> Resul
                 .as_deref()
                 .ok_or_else(|| Error::internal("a check constraint without its expression"))?;
             // The check of a domain has no relation and no column. It refers to the value with `VALUE`.
-            let columns: Vec<String> = if con.domain == 0 {
-                relation()?.columns.iter().map(|c| c.name.clone()).collect()
+            let (name, columns): (&str, Vec<String>) = if con.domain == 0 {
+                let rel = relation()?;
+                (&rel.name, rel.columns.iter().map(|c| c.name.clone()).collect())
             } else {
-                Vec::new()
+                ("", Vec::new())
             };
-            out.push_str(&format!("CHECK ({})", deparse(text, &columns, paren, session)?));
+            out.push_str(&format!("CHECK ({})", deparse(text, name, &columns, paren, session)?));
             if con.no_inherit {
                 out.push_str(" NO INHERIT");
             }
@@ -1925,7 +1939,7 @@ fn index_def(
             let e =
                 exprs.next().ok_or_else(|| Error::internal("too few entries in indexprs list"))?;
             if shown {
-                let mut d = Deparser::for_columns(session, columns.clone(), paren);
+                let mut d = Deparser::for_columns(session, &rel.name, columns.clone(), paren);
                 d.expr(e, false)?;
                 if looks_like_function(e) {
                     out.push_str(&d.buf);
@@ -1962,7 +1976,10 @@ fn index_def(
             out.push_str(" NULLS NOT DISTINCT");
         }
         if let Some(text) = &info.predicate {
-            out.push_str(&format!(" WHERE {}", deparse(text, &columns, paren, session)?));
+            out.push_str(&format!(
+                " WHERE {}",
+                deparse(text, &rel.name, &columns, paren, session)?
+            ));
         }
     }
     Ok(out)
@@ -2018,7 +2035,7 @@ fn partkey_def(
         } else {
             let e =
                 exprs.next().ok_or_else(|| Error::internal("too few entries in partexprs list"))?;
-            let mut d = Deparser::for_columns(session, columns.clone(), attrs_only);
+            let mut d = Deparser::for_columns(session, &rel.name, columns.clone(), attrs_only);
             d.expr(e, false)?;
             if looks_like_function(e) {
                 out.push_str(&d.buf);
@@ -2108,7 +2125,7 @@ fn get_partition_constraintdef(call: &Call<'_>, args: &[Value]) -> Result<Value>
         },
     };
     let columns = rel.columns.iter().map(|c| c.name.clone()).collect();
-    let mut d = Deparser::for_columns(call.session, columns, false);
+    let mut d = Deparser::for_columns(call.session, &rel.name, columns, false);
     d.expr(&expr, false)?;
     Ok(Value::text(d.buf))
 }

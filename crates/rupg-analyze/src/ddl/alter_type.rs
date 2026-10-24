@@ -42,6 +42,13 @@ pub(super) struct Changed {
     foreign: BTreeSet<u32>,
 }
 
+impl Changed {
+    /// The check constraints that a change of a generation expression makes again.
+    pub(super) fn add_checks(&mut self, checks: impl IntoIterator<Item = u32>) {
+        self.checks.extend(checks);
+    }
+}
+
 /// The error of `ATPrepAlterColumnType` for a column that the table does not have.
 fn no_column(column: &str, table: &str) -> Error {
     Error::new(
@@ -491,9 +498,10 @@ impl Definer<'_, '_> {
         let added = self
             .add_checks(con.relation, std::slice::from_ref(&check))
             .map_err(|e| e.with_position(None))?;
-        // The new constraint of a partition keeps the count of its parent table.
+        // The new constraint of a partition keeps the count of its parent table, and a `NOT VALID` constraint stays not valid.
         for oid in added {
             self.catalog.set_constraint_inherited(oid, con.local, con.inhcount)?;
+            self.catalog.set_constraint_validated(oid, con.validated)?;
         }
         Ok(())
     }

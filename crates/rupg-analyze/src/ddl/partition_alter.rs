@@ -189,7 +189,7 @@ impl Definer<'_, '_> {
                 }
                 let conflict = if no_inherit {
                     "non-inherited"
-                } else if !validated {
+                } else if con.validated && !validated {
                     "NOT VALID"
                 } else {
                     ""
@@ -230,8 +230,9 @@ impl Definer<'_, '_> {
                 false,
             )?;
             self.catalog.set_constraint_inherited(new, false, 1)?;
-            // Phase 3 of `ALTER TABLE` reads the rows of a partition with a new constraint.
-            if child.kind != b'p' {
+            self.catalog.set_constraint_validated(new, con.validated)?;
+            // Phase 3 of `ALTER TABLE` reads the rows of a partition with a new valid constraint.
+            if child.kind != b'p' && con.validated {
                 self.scans.push(child.oid);
             }
             self.add_check_to_partitions(&child, new, true)?;
