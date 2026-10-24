@@ -5,7 +5,7 @@ use rupg_sql::nodes::Node;
 
 use super::alter::Target;
 use super::reloptions::{self, Opt};
-use super::{Definer, not_yet, relkind_detail};
+use super::{Definer, relkind_detail};
 
 /// `HEAP_RELOPT_NAMESPACES`: the namespaces that the options of a table can have.
 const HEAP_NAMESPACES: &[&str] = &["toast"];
@@ -82,8 +82,13 @@ impl Definer<'_, '_> {
                 .with_detail(relkind_detail(kind)));
             }
         }
+        // A view with a check option must be automatically updatable.
         if target.kind == b'v' && options.iter().any(|o| o.starts_with("check_option=")) {
-            return Err(not_yet("WITH CHECK OPTION", None));
+            let (query, _) = self
+                .an
+                .stored_query_perms(target.oid)?
+                .ok_or_else(|| Error::internal("a view with no query"))?;
+            self.an.auto_updatable(&query, true).map_err(super::view::check_option_error)?;
         }
         self.catalog.set_options(target.oid, options)?;
         if let Some(rel) = self.catalog.relation(toast) {

@@ -192,6 +192,7 @@ impl Analyzer<'_> {
             updated: with_extra_updated(set_columns(list, &columns), &generated),
             instead,
             inherit,
+            view_check: None,
         });
         self.end_write_with(&mut query, s.withClause.as_deref())?;
         Ok(query)
@@ -353,6 +354,7 @@ impl Analyzer<'_> {
                 updated: Vec::new(),
                 instead,
                 inherit,
+                view_check: None,
             }),
             ..Query::default()
         };

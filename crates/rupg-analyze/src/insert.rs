@@ -76,6 +76,25 @@ pub struct Write {
     pub instead: bool,
     /// True for an `UPDATE`, a `DELETE` or a `MERGE` of a table with children of `INHERITS`, with no `ONLY`, as `expand_inherited_rtentry` adds the children. Each row of the query gives the OID of its table before the ID of its version, and each table of the tree checks and changes its rows, as the leaves of a partitioned table do.
     pub inherit: bool,
+    /// The checks of `WITH CHECK OPTION` of the views of an `INSERT` or an `UPDATE` of an automatically updatable view.
+    pub view_check: Option<ViewCheck>,
+}
+
+impl Write {
+    /// True when the write keeps the rows that it wrote, for `RETURNING` or for [`Write::view_check`].
+    #[must_use]
+    pub fn keeps_written(&self) -> bool {
+        self.returning.is_some() || self.view_check.is_some()
+    }
+}
+
+/// The `WithCheckOption` items of the kind `WCO_VIEW_CHECK` of a write, which `ExecWithCheckOptions` checks after the write of each row, before `RETURNING`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ViewCheck {
+    /// The query of the checks. It reads one relation, a row that the statement wrote with the columns of the table, and gives the condition of each view in the order of [`ViewCheck::views`].
+    pub query: Box<Query>,
+    /// The names of the views, the inner view first, as `rewriteTargetView` puts each new check at the start of the list.
+    pub views: Vec<String>,
 }
 
 /// `OnConflictExpr`: what an `INSERT` does for a new row with the key of a row that the table has.
@@ -412,6 +431,7 @@ impl Analyzer<'_> {
             updated,
             instead: self.is_view(table),
             inherit: false,
+            view_check: None,
         });
         self.end_write_with(&mut query, s.withClause.as_deref())?;
         Ok(query)
@@ -1565,7 +1585,7 @@ fn arbiters(inference: Inference, unique: &[Unique]) -> Result<Vec<usize>> {
 }
 
 /// The columns of the target table of a write. A dropped column keeps its place with no name and the type 0, and each new row has a null for it.
-fn write_columns(rel: &rupg_catalog::Relation) -> Vec<Column> {
+pub(crate) fn write_columns(rel: &rupg_catalog::Relation) -> Vec<Column> {
     rel.columns
         .iter()
         .map(|c| Column {

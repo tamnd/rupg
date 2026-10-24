@@ -1,0 +1,257 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE base_tbl (a int, b int DEFAULT 10);
+CREATE TABLE
+> INSERT INTO base_tbl VALUES (1,2), (2,3), (1,-1);
+INSERT 0 3
+> CREATE VIEW rw_view1 AS SELECT * FROM base_tbl WHERE a < b WITH LOCAL CHECK OPTION;
+CREATE VIEW
+> SELECT relname, reloptions FROM pg_class WHERE relname = 'rw_view1';
+fields relname@pg_class.2:19:64:-1,reloptions@pg_class.33:1009:-1:-1
+row rw_view1,{check_option=local}
+SELECT 1
+> SELECT table_name, check_option, is_updatable, is_insertable_into FROM information_schema.views WHERE table_name = 'rw_view1';
+fields table_name@information_schema.views.3:19:64:-1,check_option@information_schema.views.5:1043:-1:-1,is_updatable@information_schema.views.6:1043:-1:7,is_insertable_into@information_schema.views.7:1043:-1:7
+row rw_view1,LOCAL,YES,YES
+SELECT 1
+> INSERT INTO rw_view1 VALUES(3,4);
+INSERT 0 1
+> INSERT INTO rw_view1 VALUES(4,3);
+ERROR 44000 new row violates check option for view "rw_view1"
+DETAIL Failing row contains (4, 3).
+> INSERT INTO rw_view1 VALUES(5,null);
+ERROR 44000 new row violates check option for view "rw_view1"
+DETAIL Failing row contains (5, null).
+> UPDATE rw_view1 SET b = 5 WHERE a = 3;
+UPDATE 1
+> UPDATE rw_view1 SET b = -5 WHERE a = 3;
+ERROR 44000 new row violates check option for view "rw_view1"
+DETAIL Failing row contains (3, -5).
+> INSERT INTO rw_view1(a) VALUES (9);
+INSERT 0 1
+> INSERT INTO rw_view1(a) VALUES (10);
+ERROR 44000 new row violates check option for view "rw_view1"
+DETAIL Failing row contains (10, 10).
+> SELECT * FROM base_tbl ORDER BY a, b;
+fields a@base_tbl.1:23:4:-1,b@base_tbl.2:23:4:-1
+row 1,-1
+row 1,2
+row 2,3
+row 3,5
+row 9,10
+SELECT 5
+> DELETE FROM rw_view1 WHERE a = 9 RETURNING *;
+fields a@rw_view1.1:23:4:-1,b@rw_view1.2:23:4:-1
+row 9,10
+DELETE 1
+> INSERT INTO rw_view1 VALUES (6, 7), (8, 1), (7, 8) RETURNING *;
+ERROR 44000 new row violates check option for view "rw_view1"
+DETAIL Failing row contains (8, 1).
+> SELECT * FROM base_tbl ORDER BY a, b;
+fields a@base_tbl.1:23:4:-1,b@base_tbl.2:23:4:-1
+row 1,-1
+row 1,2
+row 2,3
+row 3,5
+SELECT 4
+> DROP TABLE base_tbl CASCADE;
+NOTICE 00000 drop cascades to view rw_view1
+DROP TABLE
+> 
+>> CREATE TABLE base_tbl (a int);
+CREATE TABLE
+> CREATE VIEW rw_view1 AS SELECT * FROM base_tbl WHERE a > 0;
+CREATE VIEW
+> CREATE VIEW rw_view2 AS SELECT * FROM rw_view1 WHERE a < 10 WITH CHECK OPTION;
+CREATE VIEW
+> SELECT relname, reloptions FROM pg_class WHERE relname = 'rw_view2';
+fields relname@pg_class.2:19:64:-1,reloptions@pg_class.33:1009:-1:-1
+row rw_view2,{check_option=cascaded}
+SELECT 1
+> SELECT table_name, check_option FROM information_schema.views WHERE table_name = 'rw_view2';
+fields table_name@information_schema.views.3:19:64:-1,check_option@information_schema.views.5:1043:-1:-1
+row rw_view2,CASCADED
+SELECT 1
+> INSERT INTO rw_view2 VALUES (-5);
+ERROR 44000 new row violates check option for view "rw_view1"
+DETAIL Failing row contains (-5).
+> INSERT INTO rw_view2 VALUES (5);
+INSERT 0 1
+> INSERT INTO rw_view2 VALUES (15);
+ERROR 44000 new row violates check option for view "rw_view2"
+DETAIL Failing row contains (15).
+> SELECT * FROM base_tbl;
+fields a@base_tbl.1:23:4:-1
+row 5
+SELECT 1
+> UPDATE rw_view2 SET a = a - 10;
+ERROR 44000 new row violates check option for view "rw_view1"
+DETAIL Failing row contains (-5).
+> UPDATE rw_view2 SET a = a + 10;
+ERROR 44000 new row violates check option for view "rw_view2"
+DETAIL Failing row contains (15).
+> CREATE OR REPLACE VIEW rw_view2 AS SELECT * FROM rw_view1 WHERE a < 10 WITH LOCAL CHECK OPTION;
+CREATE VIEW
+> SELECT table_name, check_option FROM information_schema.views WHERE table_name = 'rw_view2';
+fields table_name@information_schema.views.3:19:64:-1,check_option@information_schema.views.5:1043:-1:-1
+row rw_view2,LOCAL
+SELECT 1
+> INSERT INTO rw_view2 VALUES (-10);
+INSERT 0 1
+> INSERT INTO rw_view2 VALUES (20);
+ERROR 44000 new row violates check option for view "rw_view2"
+DETAIL Failing row contains (20).
+> SELECT * FROM base_tbl;
+fields a@base_tbl.1:23:4:-1
+row 5
+row -10
+SELECT 2
+> ALTER VIEW rw_view1 SET (check_option=here);
+ERROR 22023 invalid value for enum option "check_option": here
+DETAIL Valid values are "local" and "cascaded".
+> ALTER VIEW rw_view1 SET (check_option=local);
+ALTER VIEW
+> INSERT INTO rw_view2 VALUES (-20);
+ERROR 44000 new row violates check option for view "rw_view1"
+DETAIL Failing row contains (-20).
+> INSERT INTO rw_view2 VALUES (30);
+ERROR 44000 new row violates check option for view "rw_view2"
+DETAIL Failing row contains (30).
+> ALTER VIEW rw_view2 RESET (check_option);
+ALTER VIEW
+> SELECT table_name, check_option FROM information_schema.views WHERE table_name = 'rw_view2';
+fields table_name@information_schema.views.3:19:64:-1,check_option@information_schema.views.5:1043:-1:-1
+row rw_view2,NONE
+SELECT 1
+> INSERT INTO rw_view2 VALUES (30);
+INSERT 0 1
+> SELECT * FROM base_tbl;
+fields a@base_tbl.1:23:4:-1
+row 5
+row -10
+row 30
+SELECT 3
+> DROP TABLE base_tbl CASCADE;
+NOTICE 00000 drop cascades to 2 other objects
+DETAIL drop cascades to view rw_view1
+drop cascades to view rw_view2
+DROP TABLE
+> 
+>> CREATE TABLE base_tbl (a int);
+CREATE TABLE
+> CREATE VIEW rw_view1 AS SELECT * FROM base_tbl WITH CHECK OPTION;
+CREATE VIEW
+> CREATE VIEW rw_view2 AS SELECT * FROM rw_view1 WHERE a > 0;
+CREATE VIEW
+> CREATE VIEW rw_view3 AS SELECT * FROM rw_view2 WITH CHECK OPTION;
+CREATE VIEW
+> SELECT table_name, check_option FROM information_schema.views WHERE table_name LIKE E'rw\\_view_' ORDER BY table_name;
+fields table_name@information_schema.views.3:19:64:-1,check_option@information_schema.views.5:1043:-1:-1
+row rw_view1,CASCADED
+row rw_view2,NONE
+row rw_view3,CASCADED
+SELECT 3
+> INSERT INTO rw_view1 VALUES (-1);
+INSERT 0 1
+> INSERT INTO rw_view1 VALUES (1);
+INSERT 0 1
+> INSERT INTO rw_view2 VALUES (-2);
+INSERT 0 1
+> INSERT INTO rw_view2 VALUES (2);
+INSERT 0 1
+> INSERT INTO rw_view3 VALUES (-3);
+ERROR 44000 new row violates check option for view "rw_view2"
+DETAIL Failing row contains (-3).
+> INSERT INTO rw_view3 VALUES (3);
+INSERT 0 1
+> DROP TABLE base_tbl CASCADE;
+NOTICE 00000 drop cascades to 3 other objects
+DETAIL drop cascades to view rw_view1
+drop cascades to view rw_view2
+drop cascades to view rw_view3
+DROP TABLE
+> 
+>> CREATE TABLE base_tbl (a int, b int[]);
+CREATE TABLE
+> CREATE VIEW rw_view1 AS SELECT * FROM base_tbl WHERE a = ANY (b) WITH CHECK OPTION;
+CREATE VIEW
+> INSERT INTO rw_view1 VALUES (1, ARRAY[1,2,3]);
+INSERT 0 1
+> INSERT INTO rw_view1 VALUES (10, ARRAY[4,5]);
+ERROR 44000 new row violates check option for view "rw_view1"
+DETAIL Failing row contains (10, {4,5}).
+> UPDATE rw_view1 SET b[2] = -b[2] WHERE a = 1;
+UPDATE 1
+> UPDATE rw_view1 SET b[1] = -b[1] WHERE a = 1;
+ERROR 44000 new row violates check option for view "rw_view1"
+DETAIL Failing row contains (1, {-1,-2,3}).
+> PREPARE ins(int, int[]) AS INSERT INTO rw_view1 VALUES($1, $2);
+PREPARE
+> EXECUTE ins(2, ARRAY[1,2,3]);
+INSERT 0 1
+> EXECUTE ins(10, ARRAY[4,5]);
+ERROR 44000 new row violates check option for view "rw_view1"
+DETAIL Failing row contains (10, {4,5}).
+> DEALLOCATE PREPARE ins;
+DEALLOCATE
+> DROP TABLE base_tbl CASCADE;
+NOTICE 00000 drop cascades to view rw_view1
+DROP TABLE
+> 
+>> CREATE TABLE base_tbl (a int);
+CREATE TABLE
+> CREATE TABLE ref_tbl (a int PRIMARY KEY);
+CREATE TABLE
+> INSERT INTO ref_tbl SELECT * FROM generate_series(1,10);
+INSERT 0 10
+> CREATE VIEW rw_view1 AS SELECT * FROM base_tbl b WHERE EXISTS(SELECT 1 FROM ref_tbl r WHERE r.a = b.a) WITH CHECK OPTION;
+CREATE VIEW
+> INSERT INTO rw_view1 VALUES (5);
+INSERT 0 1
+> INSERT INTO rw_view1 VALUES (15);
+ERROR 44000 new row violates check option for view "rw_view1"
+DETAIL Failing row contains (15).
+> UPDATE rw_view1 SET a = a + 5;
+UPDATE 1
+> UPDATE rw_view1 SET a = a + 5;
+ERROR 44000 new row violates check option for view "rw_view1"
+DETAIL Failing row contains (15).
+> SELECT * FROM base_tbl;
+fields a@base_tbl.1:23:4:-1
+row 10
+SELECT 1
+> DROP TABLE base_tbl, ref_tbl CASCADE;
+NOTICE 00000 drop cascades to view rw_view1
+DROP TABLE
+> 
+>> CREATE TABLE base_tbl (a int, b int);
+CREATE TABLE
+> CREATE FUNCTION base_tbl_trig_fn() RETURNS trigger AS $$
+>> BEGIN
+>>   NEW.b := 10;
+>>   RETURN NEW;
+>> END;
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> CREATE TRIGGER base_tbl_trig BEFORE INSERT OR UPDATE ON base_tbl FOR EACH ROW EXECUTE PROCEDURE base_tbl_trig_fn();
+CREATE TRIGGER
+> CREATE VIEW rw_view1 AS SELECT * FROM base_tbl WHERE a < b WITH CHECK OPTION;
+CREATE VIEW
+> INSERT INTO rw_view1 VALUES (5,0);
+INSERT 0 1
+> INSERT INTO rw_view1 VALUES (15, 20);
+ERROR 44000 new row violates check option for view "rw_view1"
+DETAIL Failing row contains (15, 10).
+> UPDATE rw_view1 SET a = 20, b = 30;
+ERROR 44000 new row violates check option for view "rw_view1"
+DETAIL Failing row contains (20, 10).
+> SELECT * FROM base_tbl;
+fields a@base_tbl.1:23:4:-1,b@base_tbl.2:23:4:-1
+row 5,10
+SELECT 1
+> DROP TABLE base_tbl CASCADE;
+NOTICE 00000 drop cascades to view rw_view1
+DROP TABLE
+> DROP FUNCTION base_tbl_trig_fn();
+DROP FUNCTION

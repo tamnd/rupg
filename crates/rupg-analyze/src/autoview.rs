@@ -77,6 +77,26 @@ pub(crate) struct AutoView {
     given: Vec<i16>,
     /// The numbers of the columns of the view that the write gives values, for `insertedCols` or `updatedCols`.
     modified: BTreeSet<i16>,
+    /// The checks of `WITH CHECK OPTION` of an `INSERT` or an `UPDATE`: the name of each view and its condition on the base relation, the inner view first.
+    checks: Vec<(String, Expr)>,
+}
+
+/// The [`crate::ViewCheck`] of the checks `checks` on the base relation `rel`. The query reads the row that the statement wrote as the relation 0.
+fn view_check(rel: &rupg_catalog::Relation, checks: Vec<(String, Expr)>) -> crate::ViewCheck {
+    let mut relation = Relation::new(0, crate::insert::write_columns(rel), None, None, None);
+    relation.name.clone_from(&rel.name);
+    let (views, quals): (Vec<String>, Vec<Expr>) = checks.into_iter().unzip();
+    let targets = quals
+        .into_iter()
+        .map(|expr| Target { name: String::new(), expr, origin: None, junk: false })
+        .collect();
+    let query = Query {
+        relations: vec![relation],
+        from: vec![FromItem::Relation(0)],
+        targets,
+        ..Query::default()
+    };
+    crate::ViewCheck { query: Box::new(query), views }
 }
 
 /// `view_col_is_auto_updatable`: the number of the column of the base relation `base` that a column of the query of a view shows, or the reason that the column is not updatable.
@@ -182,7 +202,7 @@ impl AutoView {
 
 impl Analyzer<'_> {
     /// `view_query_is_auto_updatable`: the index of the base relation of the query of a view that the database can update with no rule, or the reason that it cannot. With `check_cols`, as for an `INSERT` and an `UPDATE`, the view must have an updatable column.
-    fn auto_updatable(
+    pub(crate) fn auto_updatable(
         &self,
         query: &Query,
         check_cols: bool,
@@ -251,6 +271,13 @@ impl Analyzer<'_> {
         })
     }
 
+    /// `RelationHasCheckOption`: `Some(true)` for a view with `check_option=cascaded`, `Some(false)` for `check_option=local`, and `None` for a view with no check option.
+    fn check_option(&self, view: u32) -> Option<bool> {
+        let rel = self.env.catalog().and_then(|c| c.relation(view))?;
+        let option = rel.options.iter().find_map(|o| o.strip_prefix("check_option="))?;
+        Some(option == "cascaded")
+    }
+
     /// True when the view has `security_barrier`.
     fn security_barrier(&self, view: u32) -> bool {
         self.env
@@ -273,6 +300,8 @@ impl Analyzer<'_> {
         let mut columns: Vec<ViewColumn> = Vec::new();
         let (mut barrier, mut quals) = (Vec::new(), Vec::new());
         let (mut levels, mut views) = (Vec::new(), Vec::new());
+        // `RelationHasCascadedCheckOption` of a view outside this view, which makes the check of each view under it cascaded.
+        let (mut checks, mut cascading) = (Vec::new(), false);
         for level in 0.. {
             let index = self
                 .auto_updatable(&query, check_cols)
@@ -307,6 +336,7 @@ impl Analyzer<'_> {
             } else {
                 // `ReplaceVarsFromTargetList` of the next `rewriteTargetView`: the values of the columns of the inner view in place of its columns.
                 let outer = columns.iter().map(|c| &c.expr).chain(&barrier).chain(&quals);
+                let outer = outer.chain(checks.iter().map(|(_, qual)| qual));
                 if outer.into_iter().any(reads_whole_row) {
                     return Err(not_yet("a whole-row reference to the view of an updatable view"));
                 }
@@ -318,20 +348,28 @@ impl Analyzer<'_> {
                             at.cloned().ok_or_else(|| Error::internal("a lost column"))?;
                     }
                 }
-                for qual in barrier.iter_mut().chain(&mut quals) {
+                let checked = checks.iter_mut().map(|(_, qual)| qual);
+                for qual in barrier.iter_mut().chain(&mut quals).chain(checked) {
                     crate::rules::replace_row(qual, &values);
                 }
             }
             levels.push((relation.perm, bases.iter().map(|b| b.as_ref().ok().copied()).collect()));
             views.push(view_oid);
+            let option = if kind == WriteKind::Delete { None } else { self.check_option(view_oid) };
+            let cascaded = cascading || option == Some(true);
             if let Some(mut qual) = query.filter.take() {
                 to_relation_0(&mut qual, index);
+                // A check with no condition lets each row through, so only a check with a condition goes in the list.
+                if cascaded || option.is_some() {
+                    checks.insert(0, (view.clone(), qual.clone()));
+                }
                 if self.security_barrier(view_oid) {
                     barrier.insert(0, qual);
                 } else {
                     quals.push(qual);
                 }
             }
+            cascading = cascaded;
             let inner = self.env.catalog().and_then(|c| c.relation(relation.oid));
             let Some(inner) = inner.filter(|r| r.kind == RelKind::View) else {
                 if self.has_rules(relation.oid, kind) {
@@ -350,6 +388,7 @@ impl Analyzer<'_> {
                     defaults,
                     given: Vec::new(),
                     modified: BTreeSet::new(),
+                    checks,
                 });
             };
             if self.user_triggers(relation.oid, INSTEAD_ROW | trigger_event(kind))
@@ -552,8 +591,14 @@ impl Analyzer<'_> {
     }
 
     /// The end of the write of an automatically updatable view: the privileges of the view and of the relations under it, as `rewriteTargetView` gives the base relation the privileges that the statement needs on the view, with `adjust_view_column_set` for the columns.
-    pub(crate) fn finish_auto_view(&mut self) {
-        let Some(auto) = self.auto_view.take() else { return };
+    pub(crate) fn finish_auto_view(&mut self, query: &mut Query) {
+        let Some(mut auto) = self.auto_view.take() else { return };
+        if let Some(write) = query.write.as_mut()
+            && !auto.checks.is_empty()
+            && let Some(rel) = self.env.catalog().and_then(|c| c.relation(auto.base.oid))
+        {
+            write.view_check = Some(view_check(rel, std::mem::take(&mut auto.checks)));
+        }
         let Some(view) = self.target_perm.and_then(|p| self.perms.get_mut(p)) else { return };
         // The statement read the columns of the base relation in the privileges of the view.
         let read = std::mem::take(&mut view.selected);

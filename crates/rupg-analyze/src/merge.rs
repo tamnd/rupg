@@ -311,6 +311,7 @@ impl Analyzer<'_> {
                 updated: crate::modify::with_extra_updated(updated, &generated),
                 instead: false,
                 inherit,
+                view_check: None,
             }),
             ..Query::default()
         };
