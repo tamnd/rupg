@@ -1001,7 +1001,7 @@ fn indexes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("indisclustered", Value::Bool(info.clustered))
                 .set("indisvalid", Value::Bool(info.valid))
                 .set("indcheckxmin", Value::Bool(false))
-                .set("indisready", Value::Bool(true))
+                .set("indisready", Value::Bool(info.ready))
                 .set("indislive", Value::Bool(true))
                 .set("indisreplident", Value::Bool(info.replica_identity))
                 .set("indkey", int2_vector(&info.keys))

@@ -545,7 +545,7 @@ impl Connection {
     ) -> rupg_common::Result<u64> {
         let mut notices = Vec::new();
         let result = if rupg_analyze::is_definition(node) {
-            self.define(node, text, &mut notices)
+            self.define_with(node, text, &mut notices, self.current_role(), true)
                 .map(|done| if let Done::Count(_, count) = done { count } else { 0 })
         } else if let Node::VariableSetStmt(_) = node {
             self.ts_config(node).and_then(|ts_config| {

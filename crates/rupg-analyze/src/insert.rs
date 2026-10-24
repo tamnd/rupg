@@ -910,7 +910,7 @@ impl Analyzer<'_> {
         Ok(list)
     }
 
-    /// The unique indexes of a table in the order of their OIDs. The index of a partitioned table has no storage: the indexes of the partitions check the rows, and it is an arbiter of `ON CONFLICT`.
+    /// The unique indexes of a table in the order of their OIDs. The index of a partitioned table has no storage: the indexes of the partitions check the rows, and it is an arbiter of `ON CONFLICT`. An index that is not ready, from a failed `CREATE INDEX CONCURRENTLY`, checks no row.
     pub(crate) fn unique_keys(&self, table: u32, columns: &[Column]) -> Result<Vec<Unique>> {
         let Some(catalog) = self.env.catalog() else {
             return Ok(Vec::new());
@@ -921,7 +921,7 @@ impl Analyzer<'_> {
             .filter_map(|rel| {
                 rel.index
                     .as_ref()
-                    .filter(|info| info.table == table && info.unique)
+                    .filter(|info| info.table == table && info.unique && info.ready)
                     .map(|info| (rel, info))
             })
             .collect();

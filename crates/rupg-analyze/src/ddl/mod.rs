@@ -133,6 +133,8 @@ pub struct Defined {
     pub schema: Option<SchemaElements>,
     /// The check of `PreventInTransactionBlock` that the statement needs after it found its relations, such as `REINDEX` of a partitioned table, or `None`. The caller runs the check before it keeps the changes, and after an error the messages of the statement go.
     pub top_level: Option<TopLevel>,
+    /// The new index of `CREATE INDEX CONCURRENTLY` on a table that is not temporary, or `None`. The first transaction of `DefineIndex` commits the index before the build, so after a failure of the build the caller keeps the index with `indisvalid` and `indisready` false.
+    pub concurrent: Option<u32>,
 }
 
 /// A statement that cannot run inside a transaction block or in a function, as `PreventInTransactionBlock` checks it.
@@ -283,6 +285,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         grantors: Vec::new(),
         schema: None,
         top_level: None,
+        concurrent: None,
     };
     let mut filled = None;
     let result = match stmt {
@@ -385,6 +388,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         grantors: definer.grantors,
         schema: definer.schema,
         top_level: definer.top_level,
+        concurrent: definer.concurrent,
     }
 }
 
@@ -544,6 +548,8 @@ pub(crate) struct Definer<'a, 'c> {
     schema: Option<SchemaElements>,
     /// The check of [`Defined::top_level`].
     top_level: Option<TopLevel>,
+    /// The index of [`Defined::concurrent`].
+    concurrent: Option<u32>,
 }
 
 /// An error for a part of a statement that rupg does not support yet.

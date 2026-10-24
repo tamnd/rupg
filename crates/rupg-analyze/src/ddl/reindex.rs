@@ -1,4 +1,4 @@
-//! `REINDEX`, as `ExecReindex`, `ReindexIndex`, `ReindexTable`, `ReindexPartitions`, `ReindexMultipleTables`, `ReindexMultipleInternal` and `ReindexRelationConcurrently` of `indexcmds.c` and `reindex_relation` and `reindex_index` of `index.c` run it. rupg builds the entries of an index from the rows of its table, so `REINDEX` gives each index that it builds again a new file, `relfilenode`, and changes nothing else. `REINDEX CONCURRENTLY` keeps the OID of an index, where PostgreSQL gives the new index a new OID and swaps the names. An index of the built-in catalog keeps its file, and `VERBOSE` shows no message for it.
+//! `REINDEX`, as `ExecReindex`, `ReindexIndex`, `ReindexTable`, `ReindexPartitions`, `ReindexMultipleTables`, `ReindexMultipleInternal` and `ReindexRelationConcurrently` of `indexcmds.c` and `reindex_relation` and `reindex_index` of `index.c` run it. rupg builds the entries of an index from the rows of its table, so `REINDEX` gives each index that it builds again a new file, `relfilenode`, and makes the index of a failed `CREATE INDEX CONCURRENTLY` valid and ready. `REINDEX CONCURRENTLY` keeps the OID of an index, where PostgreSQL gives the new index a new OID and swaps the names. An index of the built-in catalog keeps its file, and `VERBOSE` shows no message for it.
 //!
 //! The session runs the parts of `ExecReindex` and `ReindexMultipleTables` that read the state of the session before [`define`](super::define) runs the statement: [`reindex_options`], `PreventInTransactionBlock` of `CONCURRENTLY`, `SCHEMA`, `SYSTEM` and `DATABASE`, the tablespace of `TABLESPACE`, and the checks of the database of `SYSTEM` and `DATABASE`.
 
@@ -294,7 +294,7 @@ impl Definer<'_, '_> {
 
     /// `reindex_index`: the index gets a new file.
     fn reindex_one(&mut self, index: u32, verbose: bool) {
-        if self.catalog.set_new_file(index).is_err() {
+        if self.rebuild(index).is_err() {
             return;
         }
         if verbose {
@@ -337,7 +337,7 @@ impl Definer<'_, '_> {
     /// `ReindexRelationConcurrently` on the indexes: each one gets a new file. The messages of `VERBOSE` name each index with its schema. `alone` is true when the statement runs on the index itself, not on its table, and then the message of the index has the time. The caller of a table gives the time in the message of the table.
     fn reindex_concurrently(&mut self, indexes: &[u32], verbose: bool, alone: bool) {
         for &index in indexes {
-            if self.catalog.set_new_file(index).is_err() {
+            if self.rebuild(index).is_err() {
                 continue;
             }
             if verbose {
@@ -347,6 +347,13 @@ impl Definer<'_, '_> {
                 self.messages.push(info(format!("index \"{shown}\" was reindexed"), detail));
             }
         }
+    }
+
+    /// The new file of an index that the statement builds again. An index of a failed `CREATE INDEX CONCURRENTLY` becomes valid and ready, as `reindex_index` marks it, and the caller checks the keys of the rows of its table.
+    fn rebuild(&mut self, index: u32) -> Result<()> {
+        self.catalog.set_new_file(index)?;
+        self.catalog.set_index_valid(index, true)?;
+        self.catalog.set_index_ready(index, true)
     }
 
     /// The message of `VERBOSE` after a table: `ReindexMultipleInternal` names the table, and `ReindexRelationConcurrently` adds the time.
