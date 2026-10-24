@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.76 (2026-10-24)
+
 ### Added
 
 - `DROP SCHEMA public` removes the schema `public`, which `initdb` makes but does not pin. `CASCADE` removes the objects in it, and a later `CREATE SCHEMA public` makes a new schema. The search path, `regnamespace` and the scans of `pg_namespace`, `pg_description` and `pg_init_privs` do not find the removed schema (#653).
