@@ -3190,6 +3190,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/fk_triggers.test")));
     }
 
+    /// `DROP SCHEMA public`: the schema of `initdb` is not pinned, so `DROP` removes it and its objects, and `CREATE SCHEMA public` makes a new schema. `connection/drop_public.test` is the output of PostgreSQL 19 for the same statements.
+    #[test]
+    fn drop_public() {
+        big_stack(|| script(include_str!("connection/drop_public.test")));
+    }
+
     /// The calls of the built-in functions that `system_functions.sql` gives a body in SQL: the engine runs the body of each one that has no kernel. The rows of `pg_proc` have an empty `prosrc` and a `prosqlbody`. `connection/builtin_bodies.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn builtin_sql_bodies() {

@@ -68,7 +68,7 @@ pub use vacuum::vacuum_relations;
 
 use rupg_catalog::{Catalog, ObjRef, PG_CLASS, PG_PROC, PG_TYPE, RelKind};
 use rupg_common::{Error, Result, SqlState};
-use rupg_pgcatalog::builtin::{self, ClassRow, Named, Owned};
+use rupg_pgcatalog::builtin::{self, ClassRow, Named, NamedRow, Owned};
 use rupg_sql::nodes::{CreateSchemaStmt, GrantTargetType, Node, ObjectType, RangeVar};
 use rupg_types::{Value, oid};
 
@@ -604,10 +604,18 @@ impl Definer<'_, '_> {
         rupg_pgcatalog::roles::current().superuser(self.user)
     }
 
+    /// The built-in schema with the name, unless `DROP SCHEMA` removed it.
+    fn builtin_schema(&self, name: &str) -> Option<&'static NamedRow> {
+        builtin::named(Named::Namespace)
+            .iter()
+            .find(|n| n.name == name && !self.catalog.schema_dropped(n.oid))
+    }
+
     /// The owner of a schema, or `None` for a schema that does not exist.
     fn schema_owner(&self, namespace: u32) -> Option<u32> {
         match self.catalog.schema(namespace) {
             Some(schema) => Some(schema.owner),
+            None if self.catalog.schema_dropped(namespace) => None,
             None => builtin::owned_by_oid(Owned::Namespace, namespace).map(|n| n.owner),
         }
     }
@@ -617,6 +625,7 @@ impl Definer<'_, '_> {
         match self.catalog.schema(namespace) {
             Some(schema) => schema.name.clone(),
             None => builtin::named_by_oid(Named::Namespace, namespace)
+                .filter(|n| !self.catalog.schema_dropped(n.oid))
                 .map_or_else(String::new, |n| n.name.to_string()),
         }
     }
@@ -830,8 +839,8 @@ impl Definer<'_, '_> {
             )
             .with_detail("The prefix \"pg_\" is reserved for system schemas."));
         }
-        let exists = self.catalog.schema_by_name(&name).is_some()
-            || builtin::named(Named::Namespace).iter().any(|n| n.name == name);
+        let exists =
+            self.catalog.schema_by_name(&name).is_some() || self.builtin_schema(&name).is_some();
         if exists && stmt.if_not_exists {
             self.notice(
                 SqlState::DUPLICATE_SCHEMA,

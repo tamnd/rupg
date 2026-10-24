@@ -77,7 +77,7 @@ fn namespace_oid(name: &str, session: &dyn Session) -> Option<u32> {
     }
     builtin::named(Named::Namespace)
         .iter()
-        .find(|row| row.name == name)
+        .find(|row| row.name == name && !schema_dropped(row.oid, session))
         .map(|row| row.oid)
         .or_else(|| session.catalog()?.schema_by_name(name).map(|s| s.oid))
 }
@@ -85,8 +85,14 @@ fn namespace_oid(name: &str, session: &dyn Session) -> Option<u32> {
 /// The name of the schema with this OID.
 pub(crate) fn namespace_name(oid: u32, session: &dyn Session) -> Option<&str> {
     builtin::named_by_oid(Named::Namespace, oid)
+        .filter(|row| !schema_dropped(row.oid, session))
         .map(|row| row.name)
         .or_else(|| session.catalog()?.schema(oid).map(|s| s.name.as_str()))
+}
+
+/// True when `DROP SCHEMA` removed the built-in schema with the OID.
+fn schema_dropped(oid: u32, session: &dyn Session) -> bool {
+    session.catalog().is_some_and(|catalog| catalog.schema_dropped(oid))
 }
 
 /// The schemas that an unqualified name of a function, an operator or another object that is not a relation or a type searches: `pg_catalog` first when `search_path` does not name it, then the schemas of `search_path` that exist. The lookups of `namespace.c` skip the temporary schema.
@@ -680,6 +686,7 @@ fn name_in(kind: RegKind, text: &str, names: &[Cow<'_, str>], session: &dyn Sess
         builtin::named(named).iter().map(|r| (r.name, r.oid)).collect()
     };
     let mut schemas = rows(Named::Namespace);
+    schemas.retain(|&(_, oid)| !schema_dropped(oid, session));
     if let Some(catalog) = session.catalog() {
         schemas.extend(catalog.schemas().map(|s| (s.name.as_str(), s.oid)));
     }

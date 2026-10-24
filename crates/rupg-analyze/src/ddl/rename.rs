@@ -4,7 +4,6 @@
 
 use rupg_catalog::{ConKind, ObjRef, PG_CLASS, PG_PROC, PG_REWRITE, PG_TYPE, RelKind};
 use rupg_common::{Error, Result, SqlState};
-use rupg_pgcatalog::builtin::{self, Named};
 use rupg_sql::nodes::{ObjectType, RangeVar, RenameStmt};
 
 use super::alter::Target;
@@ -296,7 +295,7 @@ impl Definer<'_, '_> {
     /// `RenameSchema`. The views that read an object of the schema get a new text.
     fn rename_schema(&mut self, name: &str, newname: &str) -> Result<()> {
         let Some(schema) = self.catalog.schema_by_name(name) else {
-            if builtin::named(Named::Namespace).iter().any(|n| n.name == name) {
+            if self.builtin_schema(name).is_some() {
                 return Err(not_yet("ALTER SCHEMA RENAME of a built-in schema", None));
             }
             return Err(Error::new(
@@ -306,7 +305,7 @@ impl Definer<'_, '_> {
         };
         let (oid, owner) = (schema.oid, schema.owner);
         let exists = self.catalog.schema_by_name(newname).is_some()
-            || builtin::named(Named::Namespace).iter().any(|n| n.name == newname);
+            || self.builtin_schema(newname).is_some();
         if exists {
             return Err(Error::new(
                 SqlState::DUPLICATE_SCHEMA,

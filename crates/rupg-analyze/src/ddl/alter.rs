@@ -6,7 +6,7 @@
 
 use rupg_catalog::{ConKind, DepKind, PG_CLASS, RelKind};
 use rupg_common::{Error, Result, SqlState};
-use rupg_pgcatalog::builtin::{self, Named, Owned};
+use rupg_pgcatalog::builtin::{self, Owned};
 use rupg_sql::nodes::{
     AlterOwnerStmt, AlterTableCmd, AlterTableStmt, AlterTableType, ColumnDef, ConstrType,
     Constraint, DropBehavior, IndexStmt, Node, ObjectType, RangeVar, ReplicaIdentityStmt, RoleSpec,
@@ -1285,8 +1285,7 @@ impl Definer<'_, '_> {
             _ => String::new(),
         };
         let Some(schema) = self.catalog.schema_by_name(&name) else {
-            let builtin = builtin::named(Named::Namespace).iter().find(|n| n.name == name);
-            let Some(row) = builtin else {
+            let Some(row) = self.builtin_schema(&name) else {
                 return Err(Error::new(
                     SqlState::UNDEFINED_SCHEMA,
                     format!("schema \"{name}\" does not exist"),

@@ -39,7 +39,7 @@ pub use tsearch::{
     TsParser, TsTemplate,
 };
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use rupg_common::{Error, Object, Result, SqlState};
@@ -1153,6 +1153,8 @@ pub struct Catalog {
     uncommitted_types: Vec<u32>,
     /// `uncommitted_enum_values`: the labels that `ALTER TYPE ... ADD VALUE` of the open transaction gave to an enum type that an earlier transaction made. A statement cannot use such a label until the commit.
     uncommitted_labels: Vec<u32>,
+    /// The objects of `initdb` that `DROP` removed. Only the schema `public` is such an object, because each other object of `initdb` with an OID below `FIRST_UNPINNED_OID` is pinned.
+    dropped_builtins: BTreeSet<ObjRef>,
 }
 
 impl Default for Catalog {
@@ -1234,6 +1236,7 @@ impl Catalog {
             acls: Arc::default(),
             uncommitted_types: Vec::new(),
             uncommitted_labels: Vec::new(),
+            dropped_builtins: BTreeSet::new(),
         }
     }
 
@@ -1306,6 +1309,21 @@ impl Catalog {
     /// The schema with the OID.
     pub fn schema(&self, oid: u32) -> Option<&Schema> {
         self.schemas.get(&oid)
+    }
+
+    /// True when `DROP` removed the object of `initdb`. A lookup of the built-in objects must not find it.
+    pub fn builtin_dropped(&self, object: ObjRef) -> bool {
+        self.dropped_builtins.contains(&object)
+    }
+
+    /// True when `DROP` removed the schema of `initdb` with the OID.
+    pub fn schema_dropped(&self, oid: u32) -> bool {
+        self.builtin_dropped(ObjRef::new(PG_NAMESPACE, oid))
+    }
+
+    /// True when `DROP` removed an object of `initdb`.
+    pub fn any_builtin_dropped(&self) -> bool {
+        !self.dropped_builtins.is_empty()
     }
 
     /// The user schema with the name.
