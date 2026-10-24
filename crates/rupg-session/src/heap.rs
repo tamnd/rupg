@@ -250,7 +250,7 @@ impl Table {
             }
         }
         let values = values.into_boxed_slice();
-        let version = Version { tid, xmin, cmin, xmax: 0, cmax: 0, next: 0, values };
+        let version = Version { tid, xmin, cmin, xmax: 0, cmax: 0, aborted: 0, next: 0, values };
         if self.versions.last().is_none_or(|last| last.tid < tid) {
             self.versions.push(version);
         } else {
@@ -374,6 +374,8 @@ struct Version {
     xmax: u32,
     /// The command of `xmax` that deleted the version.
     cmax: u32,
+    /// The transaction that deleted the version and then aborted, or 0. The column `xmax` of the version shows it while no other transaction deletes the version, as `t_xmax` keeps the ID of an aborted transaction.
+    aborted: u32,
     /// `t_ctid`: the ID of the version that an `UPDATE` made from this version, or 0.
     next: u64,
     values: Box<[Value]>,
@@ -498,6 +500,15 @@ impl Heap {
 
     /// The rows of a table that the view sees, `HeapTupleSatisfiesMVCC`. Each row ends with the ID of its version.
     pub(crate) fn rows(&self, relation: u32, view: &View) -> Vec<Vec<Value>> {
+        self.visible_rows(relation, view, false)
+    }
+
+    /// The rows of a table that the view sees, as [`Heap::rows`] gives them, with the values of the system columns `xmin` and `xmax` of each version before the ID of the version.
+    pub(crate) fn rows_with_xids(&self, relation: u32, view: &View) -> Vec<Vec<Value>> {
+        self.visible_rows(relation, view, true)
+    }
+
+    fn visible_rows(&self, relation: u32, view: &View, xids: bool) -> Vec<Vec<Value>> {
         let state = self.state();
         let Some(table) = state.tables.get(&(view.database, relation)) else {
             return Vec::new();
@@ -507,8 +518,13 @@ impl Heap {
             .iter()
             .filter(|version| visible(version, view))
             .map(|version| {
-                let mut row = Vec::with_capacity(version.values.len() + 1);
+                let mut row = Vec::with_capacity(version.values.len() + 3);
                 row.extend_from_slice(&version.values);
+                if xids {
+                    let xmax = if version.xmax == 0 { version.aborted } else { version.xmax };
+                    row.push(Value::Oid(version.xmin));
+                    row.push(Value::Oid(xmax));
+                }
                 row.push(Value::Int8(version.tid.cast_signed()));
                 row
             })
@@ -820,6 +836,7 @@ impl Heap {
         for table in state.tables.values_mut() {
             table.versions.retain(|version| version.xmin != xid);
             for version in table.versions.iter_mut().filter(|version| version.xmax == xid) {
+                version.aborted = xid;
                 version.xmax = 0;
                 version.cmax = 0;
                 version.next = 0;
@@ -841,6 +858,7 @@ impl Heap {
             table.versions.retain(|version| version.xmin != xid || version.cmin < command);
             let deleted = |version: &&mut Version| version.xmax == xid && version.cmax >= command;
             for version in table.versions.iter_mut().filter(deleted) {
+                version.aborted = xid;
                 version.xmax = 0;
                 version.cmax = 0;
                 version.next = 0;

@@ -1189,11 +1189,16 @@ impl Plan {
         params: &[Value],
         session: &dyn Session,
     ) -> Result<Vec<Vec<Value>>> {
-        let Some(query) = self.query.write.as_ref().and_then(|w| w.returning.as_deref()) else {
-            return Ok(Vec::new());
+        let Some(write) = self.query.write.as_ref() else { return Ok(Vec::new()) };
+        let Some(query) = write.returning.as_deref() else { return Ok(Vec::new()) };
+        // A row that the statement inserted or that an `UPDATE` made has the transaction of the session as `xmin`.
+        let writer = match write.kind {
+            rupg_analyze::WriteKind::Delete => None,
+            _ => session.transaction_id(false).and_then(|xid| u32::try_from(xid).ok()),
         };
+        let tables = scan::given(query, vec![rows]).written_by(writer);
         let cache = self.cache();
-        cache.tables.borrow_mut().push((query, Rc::new(scan::given(query, vec![rows]))));
+        cache.tables.borrow_mut().push((query, Rc::new(tables)));
         run_query(query, params, session, &cache, &[], false)
     }
 

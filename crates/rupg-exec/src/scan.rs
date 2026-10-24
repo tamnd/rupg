@@ -21,6 +21,9 @@ const XMIN_ATTNUM: i16 = -2;
 /// `SelfItemPointerAttributeNumber`: the attribute number of `ctid`.
 const CTID_ATTNUM: i16 = -1;
 
+/// `MaxTransactionIdAttributeNumber`: the attribute number of `xmax`.
+const XMAX_ATTNUM: i16 = -4;
+
 /// `FrozenTransactionId`: the transaction ID of a row that each snapshot sees.
 const FROZEN_TRANSACTION_ID: u32 = 2;
 
@@ -64,6 +67,10 @@ pub(crate) struct Tables {
     names: Vec<Option<Arc<[String]>>>,
     /// For each relation, the other relations of the query that it reads, as [`lateral`] finds them.
     pub(crate) needs: Vec<Vec<usize>>,
+    /// For each relation, true when its rows end with the OID of the table of the row and the system columns `xmin` and `xmax` after the ID of the version, because the query reads `xmin` or `xmax`.
+    xids: Vec<bool>,
+    /// The transaction that wrote the rows that `RETURNING` reads, which is `xmin` of each row.
+    writer: Option<u32>,
     /// The rows of each relation that reads other relations. The scan adds the rows of each run.
     grown: Vec<RefCell<Vec<Vec<Value>>>>,
     /// The index of a column, by the relation and the attribute number, that the scan makes for the first run of a correlated subquery and uses again in the next runs.
@@ -136,6 +143,8 @@ impl Tables {
             types: vec![types],
             names: vec![None],
             needs: vec![Vec::new()],
+            xids: vec![false],
+            writer: None,
             grown: vec![RefCell::default()],
             indexes: RefCell::default(),
         }
@@ -147,32 +156,30 @@ impl Tables {
         if row == NONE {
             return Value::Null;
         }
+        let width = self.types[var.relation].len();
         if var.attnum == TABLE_OID_ATTNUM {
             // A row of a partitioned table, or of a table with children of `INHERITS`, has the OID of its table after the ID of its version.
-            let width = self.types[var.relation].len();
-            let leaf = if self.needs[var.relation].is_empty() {
-                self.rows[var.relation][row].get(width + 1).cloned()
-            } else {
-                self.grown[var.relation].borrow()[row].get(width + 1).cloned()
-            };
-            if let Some(Value::Oid(leaf)) = leaf {
+            if let Some(Value::Oid(leaf)) = self.trailer(var.relation, row, width + 1) {
                 return Value::Oid(leaf);
             }
             return Value::Oid(self.oids[var.relation]);
         }
-        // rupg has no row versions yet, so each row shows `xmin`, `cmin`, `xmax` and `cmax` of a frozen row that no transaction deleted.
-        if var.attnum == XMIN_ATTNUM {
-            return Value::Oid(FROZEN_TRANSACTION_ID);
+        if matches!(var.attnum, XMIN_ATTNUM | XMAX_ATTNUM) {
+            // A row of the catalog shows `xmin` and `xmax` of a frozen row that no transaction deleted.
+            let at = if var.attnum == XMIN_ATTNUM { width + 2 } else { width + 3 };
+            let xid = self.xids.get(var.relation).copied().unwrap_or(false);
+            if let Some(value) = self.trailer(var.relation, row, at).filter(|_| xid) {
+                return value;
+            }
+            if let Some(writer) = self.writer {
+                return Value::Oid(if var.attnum == XMIN_ATTNUM { writer } else { 0 });
+            }
+            let frozen = if var.attnum == XMIN_ATTNUM { FROZEN_TRANSACTION_ID } else { 0 };
+            return Value::Oid(frozen);
         }
-        let width = self.types[var.relation].len();
         if var.attnum == CTID_ATTNUM {
             // A row of a table of the user ends with the ID of its version, which `UPDATE` and `DELETE` read as `ctid`.
-            let tid = if self.needs[var.relation].is_empty() {
-                self.rows[var.relation][row].get(width).cloned()
-            } else {
-                self.grown[var.relation].borrow()[row].get(width).cloned()
-            };
-            if let Some(tid) = tid {
+            if let Some(tid) = self.trailer(var.relation, row, width) {
                 return tid;
             }
         }
@@ -203,6 +210,20 @@ impl Tables {
         }
         let grown = self.grown[var.relation].borrow();
         grown[row].get(column).cloned().unwrap_or(Value::Null)
+    }
+
+    /// The tables of [`given`] for the rows that the transaction `writer` inserted, whose `xmin` is `writer` and whose `xmax` is 0.
+    pub(crate) fn written_by(self, writer: Option<u32>) -> Tables {
+        Tables { writer, ..self }
+    }
+
+    /// The value at the place `at` of the row `row` of the relation `relation`, after the columns, or `None` when the row is shorter.
+    fn trailer(&self, relation: usize, row: usize, at: usize) -> Option<Value> {
+        if self.needs[relation].is_empty() {
+            self.rows[relation][row].get(at).cloned()
+        } else {
+            self.grown[relation].borrow()[row].get(at).cloned()
+        }
     }
 
     /// The tuples of a relation that reads other relations, for one row of those relations: the rows of a new run, which the relation keeps.
@@ -379,6 +400,7 @@ pub fn members(
 pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
     let mut used: Vec<Vec<bool>> =
         query.relations.iter().map(|r| vec![false; r.columns.len()]).collect();
+    let mut xids = vec![false; query.relations.len()];
     // The expressions of the subqueries in `FROM` count too, because a `LATERAL` subquery can read the columns of the query.
     for (expr, depth) in query.all_exprs(0) {
         expr.find(depth, &mut |e, depth| {
@@ -393,6 +415,9 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
                         }
                     }
                     Err(_) if var.attnum == 0 => used[var.relation].fill(true),
+                    Err(_) if matches!(var.attnum, XMIN_ATTNUM | XMAX_ATTNUM) => {
+                        xids[var.relation] = true;
+                    }
                     Err(_) => {}
                 }
             }
@@ -423,7 +448,8 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
         }
         let Some(catalog) = rupg_pgcatalog::catalog_by_oid(relation.oid) else {
             let nullable = nulls.contains(&index);
-            rows.push(Rc::new(user_rows(relation, (index, nullable), &conds, session)?));
+            let from = (index, nullable, xids[index]);
+            rows.push(Rc::new(user_rows(relation, from, &conds, session)?));
             continue;
         };
         let mut table = Vec::with_capacity(catalog.len);
@@ -460,6 +486,8 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
         types: query.relations.iter().map(|r| r.columns.iter().map(|c| c.ty).collect()).collect(),
         names: query.relations.iter().map(row_names).collect(),
         needs: lateral(query),
+        xids,
+        writer: None,
         grown: query.relations.iter().map(|_| RefCell::default()).collect(),
         indexes: RefCell::default(),
     })
@@ -473,6 +501,8 @@ pub(crate) fn given(query: &Query, rows: Vec<Vec<Vec<Value>>>) -> Tables {
         types: query.relations.iter().map(|r| r.columns.iter().map(|c| c.ty).collect()).collect(),
         names: query.relations.iter().map(row_names).collect(),
         needs: query.relations.iter().map(|_| Vec::new()).collect(),
+        xids: vec![false; query.relations.len()],
+        writer: None,
         grown: query.relations.iter().map(|_| RefCell::default()).collect(),
         indexes: RefCell::default(),
     }
@@ -524,10 +554,10 @@ pub(crate) fn check_scannable(query: &Query, session: &dyn Session) -> Result<()
     Ok(())
 }
 
-/// The rows of the relation `from` of the user, which is the relation `index` of the query, with true when an outer join can give it as nulls. A partitioned table gives the rows of the leaf partitions that the conditions `conds` of `WHERE` do not prune.
+/// The rows of the relation `from` of the user, which is the relation `index` of the query, with true when an outer join can give it as nulls and true when the query reads `xmin` or `xmax`. A partitioned table gives the rows of the leaf partitions that the conditions `conds` of `WHERE` do not prune. For `xmin` and `xmax`, each row ends with the ID of its version, the OID of its table, `xmin` and `xmax`.
 fn user_rows(
     from: &rupg_analyze::Relation,
-    (index, nullable): (usize, bool),
+    (index, nullable, xids): (usize, bool, bool),
     conds: &[&Expr],
     session: &dyn Session,
 ) -> Result<Vec<Vec<Value>>> {
@@ -542,7 +572,7 @@ fn user_rows(
         }
         let mut out = Vec::new();
         for leaf in crate::partition::pruned_leaves(oid, index, conds, nullable, session)? {
-            child_rows(relation, leaf, session, &mut out)?;
+            child_rows(relation, (leaf, xids), session, &mut out)?;
         }
         return Ok(out);
     }
@@ -551,22 +581,25 @@ fn user_rows(
         session.count_scan(oid);
         // A row from before an `ALTER TABLE ... ADD COLUMN` has no value for the new columns, which are null. The ID of the version stays at the end of the row.
         let width = relation.columns.len();
-        let mut rows = session.table_rows(oid)?;
+        let mut rows =
+            if xids { session.table_rows_with_xids(oid)? } else { session.table_rows(oid)? };
         let children = match session.catalog() {
             Some(catalog) if !from.only => catalog.all_inheritors(oid),
             _ => Vec::new(),
         };
         for row in &mut rows {
             let tid = row.pop().unwrap_or(Value::Null);
+            let system = if xids { row.split_off(row.len().saturating_sub(2)) } else { Vec::new() };
             row.resize(width, Value::Null);
             row.push(tid);
-            if !children.is_empty() {
+            if !children.is_empty() || xids {
                 row.push(Value::Oid(oid));
             }
+            row.extend(system);
         }
         // `expand_inherited_rtentry`: the rows of the tables that inherit from the table come after its own rows.
         for child in children {
-            child_rows(relation, child, session, &mut rows)?;
+            child_rows(relation, (child, xids), session, &mut rows)?;
         }
         return Ok(rows);
     }
@@ -583,10 +616,10 @@ fn user_rows(
     })
 }
 
-/// The rows of the table `child`, a leaf partition of the partitioned table `relation` or a table that inherits from the table `relation`, with the columns of `relation`. Each row has the ID of its version and then the OID of `child` at the end.
+/// The rows of the table `child`, a leaf partition of the partitioned table `relation` or a table that inherits from the table `relation`, with the columns of `relation`. Each row has the ID of its version and then the OID of `child` at the end, and then `xmin` and `xmax` when `xids` is true.
 fn child_rows(
     relation: &rupg_catalog::Relation,
-    child: u32,
+    (child, xids): (u32, bool),
     session: &dyn Session,
     out: &mut Vec<Vec<Value>>,
 ) -> Result<()> {
@@ -601,14 +634,18 @@ fn child_rows(
         })
         .collect();
     session.count_scan(child);
-    for mut row in session.table_rows(child)? {
+    let rows =
+        if xids { session.table_rows_with_xids(child)? } else { session.table_rows(child)? };
+    for mut row in rows {
         let tid = row.pop().unwrap_or(Value::Null);
+        let system = if xids { row.split_off(row.len().saturating_sub(2)) } else { Vec::new() };
         let mut values: Vec<Value> = map
             .iter()
             .map(|i| i.and_then(|i| row.get(i).cloned()).unwrap_or(Value::Null))
             .collect();
         values.push(tid);
         values.push(Value::Oid(child));
+        values.extend(system);
         out.push(values);
     }
     Ok(())

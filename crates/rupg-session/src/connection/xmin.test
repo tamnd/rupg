@@ -1,0 +1,142 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE xm (id int, a int);
+CREATE TABLE
+> BEGIN;
+BEGIN
+> INSERT INTO xm VALUES (1, 1);
+INSERT 0 1
+> SELECT a, xmin = pg_current_xact_id()::xid AS mine, xmax::text FROM xm;
+fields a@xm.2:23:4:-1,mine:16:1:-1,xmax:25:-1:-1
+row 1,t,0
+SELECT 1
+> COMMIT;
+COMMIT
+> SELECT a, xmin::text::bigint > 2 AS normal, xmax::text FROM xm;
+fields a@xm.2:23:4:-1,normal:16:1:-1,xmax:25:-1:-1
+row 1,t,0
+SELECT 1
+> BEGIN;
+BEGIN
+> DELETE FROM xm;
+DELETE 1
+> SELECT count(*) FROM xm;
+fields count:20:8:-1
+row 0
+SELECT 1
+> ROLLBACK;
+ROLLBACK
+> SELECT a, xmax::text <> '0' AS deleted, xmax = xmin AS same FROM xm;
+fields a@xm.2:23:4:-1,deleted:16:1:-1,same:16:1:-1
+row 1,t,f
+SELECT 1
+> BEGIN;
+BEGIN
+> UPDATE xm SET a = 2;
+UPDATE 1
+> SELECT a, xmin = pg_current_xact_id()::xid AS mine, xmax::text FROM xm;
+fields a@xm.2:23:4:-1,mine:16:1:-1,xmax:25:-1:-1
+row 2,t,0
+SELECT 1
+> COMMIT;
+COMMIT
+> SELECT pg_typeof(xmin), pg_typeof(xmax) FROM xm;
+fields pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
+row xid,xid
+SELECT 1
+> SELECT xmin::text = xmax::text AS same FROM xm;
+fields same:16:1:-1
+row f
+SELECT 1
+> CREATE TABLE tok (v int);
+CREATE TABLE
+> INSERT INTO tok SELECT xmin::text::int FROM xm;
+INSERT 0 1
+> UPDATE xm SET a = 3 WHERE id = 1 AND xmin = (SELECT v::text::xid FROM tok);
+UPDATE 1
+> UPDATE xm SET a = 4 WHERE id = 1 AND xmin = (SELECT v::text::xid FROM tok);
+UPDATE 0
+> SELECT a FROM xm;
+fields a@xm.2:23:4:-1
+row 3
+SELECT 1
+> SELECT x.a, y.xmin = x.xmin AS same FROM xm x JOIN xm y USING (id);
+fields a@xm.2:23:4:-1,same:16:1:-1
+row 3,t
+SELECT 1
+> SELECT count(*) FROM xm WHERE xmin = pg_current_xact_id()::xid;
+fields count:20:8:-1
+row 0
+SELECT 1
+> BEGIN;
+BEGIN
+> INSERT INTO xm VALUES (2, 2) RETURNING id, xmin = pg_current_xact_id()::xid AS mine, xmax::text;
+fields id@xm.1:23:4:-1,mine:16:1:-1,xmax:25:-1:-1
+row 2,t,0
+INSERT 0 1
+> UPDATE xm SET a = 5 WHERE id = 2 RETURNING id, xmin = pg_current_xact_id()::xid AS mine, xmax::text;
+fields id@xm.1:23:4:-1,mine:16:1:-1,xmax:25:-1:-1
+row 2,t,0
+UPDATE 1
+> COMMIT;
+COMMIT
+> CREATE UNIQUE INDEX xm_id ON xm (id);
+CREATE INDEX
+> INSERT INTO xm VALUES (2, 6), (3, 3) ON CONFLICT (id) DO UPDATE SET a = excluded.a RETURNING id, a, xmin = pg_current_xact_id()::xid AS mine;
+fields id@xm.1:23:4:-1,a@xm.2:23:4:-1,mine:16:1:-1
+row 2,6,t
+row 3,3,t
+INSERT 0 2
+> DROP INDEX xm_id;
+DROP INDEX
+> CREATE TABLE xp (a int) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE xp1 PARTITION OF xp FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> CREATE TABLE xp2 PARTITION OF xp FOR VALUES FROM (10) TO (20);
+CREATE TABLE
+> BEGIN;
+BEGIN
+> INSERT INTO xp VALUES (1), (11);
+INSERT 0 2
+> SELECT a, tableoid::regclass, xmin = pg_current_xact_id()::xid AS mine, xmax::text FROM xp ORDER BY a;
+fields a@xp.1:23:4:-1,tableoid:2205:4:-1,mine:16:1:-1,xmax:25:-1:-1
+row 1,xp1,t,0
+row 11,xp2,t,0
+SELECT 2
+> COMMIT;
+COMMIT
+> CREATE TABLE xc (b int) INHERITS (xm);
+CREATE TABLE
+> BEGIN;
+BEGIN
+> INSERT INTO xc VALUES (5, 5, 5);
+INSERT 0 1
+> SELECT id, tableoid::regclass, xmin = pg_current_xact_id()::xid AS mine FROM xm ORDER BY id;
+fields id@xm.1:23:4:-1,tableoid:2205:4:-1,mine:16:1:-1
+row 1,xm,f
+row 2,xm,f
+row 3,xm,f
+row 5,xc,t
+SELECT 4
+> SAVEPOINT s;
+SAVEPOINT
+> DELETE FROM xc;
+DELETE 1
+> ROLLBACK TO s;
+ROLLBACK
+> SELECT id, xmax::text <> '0' AS deleted FROM xc;
+fields id@xc.1:23:4:-1,deleted:16:1:-1
+row 5,t
+SELECT 1
+> COMMIT;
+COMMIT
+> DROP TABLE xc;
+DROP TABLE
+> DROP TABLE xm;
+DROP TABLE
+> DROP TABLE xp;
+DROP TABLE
+> DROP TABLE tok;
+DROP TABLE
