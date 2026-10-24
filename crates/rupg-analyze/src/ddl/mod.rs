@@ -34,6 +34,7 @@ mod partition_alter;
 mod partition_attach;
 mod partition_index;
 mod rangetype;
+mod reindex;
 mod relation_options;
 mod reloptions;
 mod rename;
@@ -67,6 +68,7 @@ pub use grant::acl_roles;
 pub(crate) use lock::relkind;
 pub use lock::{Allowed, Take, lock_table};
 pub use owned::{acl_dependents, owned_objects};
+pub use reindex::{ReindexOptions, reindex_options};
 pub use reloptions::tablespace_options;
 pub use rule::{RuleTree, rule_tree};
 pub use schema_elements::SchemaElements;
@@ -129,6 +131,17 @@ pub struct Defined {
     pub grantors: Vec<u32>,
     /// The elements of `CREATE SCHEMA`, which the caller runs after it keeps the new schema, or `None`.
     pub schema: Option<SchemaElements>,
+    /// The check of `PreventInTransactionBlock` that the statement needs after it found its relations, such as `REINDEX` of a partitioned table, or `None`. The caller runs the check before it keeps the changes, and after an error the messages of the statement go.
+    pub top_level: Option<TopLevel>,
+}
+
+/// A statement that cannot run inside a transaction block or in a function, as `PreventInTransactionBlock` checks it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TopLevel {
+    /// The name of the statement in the error, such as `REINDEX TABLE`.
+    pub statement: &'static str,
+    /// The context of the error, such as the partitioned table of `REINDEX`.
+    pub context: String,
 }
 
 /// A partition whose rows must satisfy its partition constraint, one entry of `tab->partition_constraint`.
@@ -269,6 +282,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         detached: Vec::new(),
         grantors: Vec::new(),
         schema: None,
+        top_level: None,
     };
     let mut filled = None;
     let result = match stmt {
@@ -338,6 +352,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::DropOwnedStmt(stmt) => definer.drop_owned(stmt),
         Node::AlterDefaultPrivilegesStmt(stmt) => definer.alter_default_privileges(stmt),
         Node::ReassignOwnedStmt(stmt) => definer.reassign_owned(stmt),
+        Node::ReindexStmt(stmt) => definer.reindex(stmt),
         _ => {
             Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "this statement is not supported yet"))
         }
@@ -369,6 +384,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         detached: definer.detached,
         grantors: definer.grantors,
         schema: definer.schema,
+        top_level: definer.top_level,
     }
 }
 
@@ -526,6 +542,8 @@ pub(crate) struct Definer<'a, 'c> {
     grantors: Vec<u32>,
     /// The elements of [`Defined::schema`].
     schema: Option<SchemaElements>,
+    /// The check of [`Defined::top_level`].
+    top_level: Option<TopLevel>,
 }
 
 /// An error for a part of a statement that rupg does not support yet.

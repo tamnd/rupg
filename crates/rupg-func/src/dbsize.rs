@@ -230,7 +230,7 @@ fn storage(relid: u32, call: &Call<'_>) -> Option<Storage> {
                 | RelKind::Partitioned
                 | RelKind::PartitionedIndex,
             ) => 0,
-            (None, _) => rel.oid,
+            (None, _) => rel.file,
         };
         return Some(Storage {
             oid: rel.oid,

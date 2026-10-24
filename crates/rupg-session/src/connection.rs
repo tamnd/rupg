@@ -47,6 +47,7 @@ mod foreign;
 mod merge;
 mod plpgsql;
 mod prepare;
+mod reindex;
 mod rewrite;
 mod roles;
 mod route;
@@ -1093,6 +1094,18 @@ impl Connection {
         notices: &mut Vec<Notice>,
         role: u32,
     ) -> Result<Done, Error> {
+        self.define_with(node, text, notices, role, false)
+    }
+
+    /// [`Connection::define_as`]. `call` is true for a statement of a function or a procedure, which is not at the top level, for the check of [`rupg_analyze::Defined::top_level`].
+    fn define_with(
+        &self,
+        node: &Node,
+        text: &str,
+        notices: &mut Vec<Notice>,
+        role: u32,
+        call: bool,
+    ) -> Result<Done, Error> {
         if let Node::DropStmt(stmt) = node
             && stmt.concurrent
             && self.transaction.in_block()
@@ -1129,7 +1142,20 @@ impl Connection {
         // A change of the catalog writes rows of the catalog, so the transaction gets an ID.
         self.transaction_id(true);
         let mut work = Catalog::clone(&self.catalog());
-        let defined = rupg_analyze::define(node, text, &self.reader(), &mut work, role);
+        let mut defined = rupg_analyze::define(node, text, &self.reader(), &mut work, role);
+        if let Some(top) = &defined.top_level
+            && defined.result.is_ok()
+        {
+            let checked = if call {
+                Err(self.prevent_in_call(top.statement))
+            } else {
+                self.prevent_block(top.statement)
+            };
+            if let Err(error) = checked {
+                defined.messages.clear();
+                defined.result = Err(error.with_context(top.context.clone()));
+            }
+        }
         if self.settings.borrow().get("track_counts").as_deref() != Some("off") {
             for &table in &defined.scans {
                 self.activity.count_scan(table);
@@ -1258,6 +1284,7 @@ impl Connection {
                     Node::DropOwnedStmt(_) => CommandTag::DropOwned,
                     Node::AlterDefaultPrivilegesStmt(_) => CommandTag::AlterDefaultPrivileges,
                     Node::ReassignOwnedStmt(_) => CommandTag::ReassignOwned,
+                    Node::ReindexStmt(_) => CommandTag::Reindex,
                     _ => CommandTag::CreateTable,
                 }))
             }
@@ -1799,6 +1826,9 @@ impl Connection {
             } else if let Node::VacuumStmt(stmt) = node {
                 drop(self.portals.get_mut().close(b""));
                 self.vacuum(stmt, &mut notices)
+            } else if let Node::ReindexStmt(stmt) = node {
+                drop(self.portals.get_mut().close(b""));
+                self.reindex(node, stmt, statement, &mut notices, false)
             } else if let Node::DeclareCursorStmt(stmt) = node {
                 drop(self.portals.get_mut().close(b""));
                 self.declare(stmt, text, None, &[], &mut notices)
@@ -4277,6 +4307,12 @@ mod tests {
     #[test]
     fn vacuum() {
         big_stack(|| script(include_str!("connection/vacuum.test")));
+    }
+
+    /// `REINDEX`: the options and their checks, an index, a table with a TOAST table, a partitioned table and a partitioned index, a schema, the system catalogs, the database, `CONCURRENTLY` in a transaction block and in a function, the messages of `VERBOSE`, the permissions, and the new `relfilenode` of each index. `connection/reindex.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn reindex() {
+        big_stack(|| script(include_str!("connection/reindex.test")));
     }
 
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
