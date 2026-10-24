@@ -3192,7 +3192,7 @@ mod tests {
         big_stack(|| script(include_str!("connection/fk_triggers.test")));
     }
 
-    /// `DROP SCHEMA public`: the schema of `initdb` is not pinned, so `DROP` removes it and its objects, and `CREATE SCHEMA public` makes a new schema. `connection/drop_public.test` is the output of PostgreSQL 19 for the same statements.
+    /// `DROP SCHEMA public`: the schema of `initdb` is not pinned, so `DROP` removes it, its objects and its row of `pg_init_privs`, and `CREATE SCHEMA public` makes a new schema with no row in `pg_init_privs`. `connection/drop_public.test` is the output of PostgreSQL 19 for the same statements.
     #[test]
     fn drop_public() {
         big_stack(|| script(include_str!("connection/drop_public.test")));

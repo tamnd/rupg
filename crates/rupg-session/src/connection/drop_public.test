@@ -33,6 +33,14 @@ SELECT 1
 fields count:20:8:-1
 row 0
 SELECT 1
+> SELECT count(*) FROM pg_init_privs WHERE objoid = 2200
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM pg_init_privs WHERE classoid = 'pg_namespace'::regclass
+fields count:20:8:-1
+row 1
+SELECT 1
 > SELECT 'public'::regnamespace
 ERROR 3F000 schema "public" does not exist at 8
 > SELECT current_schema()
@@ -67,3 +75,7 @@ NOTICE 00000 schema "public" does not exist, skipping
 DROP SCHEMA
 > CREATE SCHEMA public
 CREATE SCHEMA
+> SELECT count(*) FROM pg_init_privs WHERE classoid = 'pg_namespace'::regclass
+fields count:20:8:-1
+row 1
+SELECT 1
