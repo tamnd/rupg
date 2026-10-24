@@ -611,6 +611,7 @@ fn snowball(catalog: &mut Catalog, failed: &mut Vec<(String, Error)>, clock: &Os
             src: name.to_string(),
             bin: "$libdir/dict_snowball".to_string(),
             body: None,
+            config: Vec::new(),
         };
         let made =
             catalog.create_function(function, &[]).and_then(|oid| add_system_proc(catalog, oid));
@@ -789,6 +790,7 @@ fn plpgsql(catalog: &mut Catalog) -> Result<()> {
             src: name.to_string(),
             bin: "$libdir/plpgsql".to_string(),
             body: None,
+            config: Vec::new(),
         };
         *slot = catalog.create_function(function, &[])?;
         catalog.add_to_extension(ObjRef::new(PG_PROC, *slot), extension);

@@ -269,6 +269,22 @@ pub trait Session {
     ///
     /// The errors of `SET` for the name and the value.
     fn set_setting(&self, name: &str, value: Option<&str>, local: bool) -> Result<String>;
+    /// `GetConfigOptionFlags` with `GUC_LIST_QUOTE` and `SplitGUCList`: the elements of the value `text` of the parameter `name` when the parameter quotes the elements of its list, or `None` for another parameter and for a name that is not a parameter.
+    fn setting_list(&self, name: &str, text: &str) -> Option<Vec<String>> {
+        let _ = (name, text);
+        None
+    }
+    /// `fmgr_security_definer` for a function with settings: `ProcessGUCArray` with `GUC_ACTION_SAVE` gives the settings of `proconfig`, each one as `name=value`, until [`Session::end_function_settings`]. A session with no settings does nothing.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the names and of the values.
+    fn start_function_settings(&self, config: &[String]) -> Result<()> {
+        let _ = config;
+        Ok(())
+    }
+    /// `AtEOXact_GUC` at the end of the call of [`Session::start_function_settings`]: the settings go back to their values from before the call, other than the ones that a `SET` in the call changed.
+    fn end_function_settings(&self) {}
     /// `CHECK_FOR_INTERRUPTS`: the check for a cancel of the statement, which a long loop of the executor, such as the loop of a recursive query, does at each step. A session with no server has no cancel.
     ///
     /// # Errors

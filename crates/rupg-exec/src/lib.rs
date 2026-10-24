@@ -80,6 +80,21 @@ fn runs_body(func: u32) -> bool {
             && rupg_func::set_kernel(func).is_none()
 }
 
+/// `fmgr_security_definer` for a function with settings: `f` runs with the settings of `proconfig` of the function, which go back after it, also after an error. A function with no settings runs `f` alone.
+fn with_settings<T>(session: &dyn Session, func: u32, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    if func < FIRST_NORMAL_OID {
+        return f();
+    }
+    let config = match session.catalog().and_then(|c| c.function(func)) {
+        Some(function) if !function.config.is_empty() => function.config.clone(),
+        _ => return f(),
+    };
+    session.start_function_settings(&config)?;
+    let result = f();
+    session.end_function_settings();
+    result
+}
+
 /// True for a function in PL/pgSQL, which [`Session::call_function`] runs.
 fn procedural(func: u32) -> bool {
     builtin::proc_by_oid(func).is_some_and(|p| p.lang == PLPGSQL_LANGUAGE)
@@ -1857,11 +1872,14 @@ impl<'a> Eval<'a> {
             return Ok(if retset { Vec::new() } else { vec![vec![Value::Null; width]] });
         }
         let types: Vec<u32> = exprs.iter().map(|a| a.ty).collect();
+        let session = self.session;
         if procedural(f.oid) {
             // A row value gives a column for each field, and a null value gives a row of nulls.
             let composite = call.ty == oid::RECORD
                 || builtin::type_by_oid(call.ty).is_some_and(|t| t.kind == b'c');
-            let values = self.session.call_function(f.oid, &types, call.ty, &args)?;
+            let values = with_settings(session, f.oid, || {
+                session.call_function(f.oid, &types, call.ty, &args)
+            })?;
             return Ok(values
                 .into_iter()
                 .map(|value| match value {
@@ -1871,12 +1889,16 @@ impl<'a> Eval<'a> {
                 })
                 .collect());
         }
-        if let Some(body) = self.cache.body(f.oid, &types, self.session)? {
+        let rows = with_settings(session, f.oid, || {
+            let Some(body) = self.cache.body(f.oid, &types, session)? else { return Ok(None) };
             let Body::Query(query) = &*body else {
                 return Err(Error::internal("a function that returns a set with no query"));
             };
             let cache = self.cache.nested()?;
-            return run_query(query, &args, self.session, &cache, &[], false);
+            run_query(query, &args, session, &cache, &[], false).map(Some)
+        })?;
+        if let Some(rows) = rows {
+            return Ok(rows);
         }
         if row_function(f.oid) {
             // A null value gives a row of nulls.
@@ -1979,7 +2001,8 @@ impl<'a> Eval<'a> {
             return Ok(Vec::new());
         }
         let types: Vec<u32> = exprs.iter().map(|a| a.ty).collect();
-        self.session.call_function(f.oid, &types, ret, &args)
+        let session = self.session;
+        with_settings(session, f.oid, || session.call_function(f.oid, &types, ret, &args))
     }
 
     /// A new state for the evaluation of a condition on another tuple of the same query.
@@ -2390,6 +2413,18 @@ impl<'a> Eval<'a> {
         if strict(func) && args.iter().any(Value::is_null) {
             return Ok(Value::Null);
         }
+        with_settings(self.session, func, || self.run_function(func, types, ret, variadic, args))
+    }
+
+    /// [`Eval::call`] after the test of a strict function, with the settings of the function.
+    fn run_function(
+        &self,
+        func: u32,
+        types: &[u32],
+        ret: u32,
+        variadic: bool,
+        args: &[Value],
+    ) -> Result<Value> {
         if procedural(func) {
             let values = self.session.call_function(func, types, ret, args)?;
             return Ok(values.into_iter().next().unwrap_or(Value::Null));

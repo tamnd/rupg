@@ -6218,6 +6218,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/xidage.test")));
     }
 
+    /// `SET` of `CREATE FUNCTION` and `ALTER FUNCTION`: `proconfig` keeps each setting, `pg_get_functiondef` shows it, and a call runs with the settings, which go back at the end of the call, other than one that a `SET` in the call changed. `connection/fnset.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn fnset() {
+        big_stack(|| script(include_str!("connection/fnset.test")));
+    }
+
     /// `CREATE TABLE ... (LIKE ...)`, from `create_table_like.sql` of the PostgreSQL tests: the columns and the not-null constraints of the other relation, the options `INCLUDING DEFAULTS`, `GENERATED`, `IDENTITY`, `CONSTRAINTS`, `INDEXES`, `STORAGE`, `COMMENTS` and `ALL`, `LIKE` with `INHERITS`, and `LIKE` of a view, a composite type and a sequence. The script has catalog queries in place of `\d`, and it does not have the parts for virtual generated columns, `NOT ENFORCED`, `CREATE STATISTICS` and foreign tables. `connection/create_table_like.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn create_table_like() {

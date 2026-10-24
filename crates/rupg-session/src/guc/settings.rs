@@ -186,6 +186,15 @@ struct Slot {
     order: usize,
 }
 
+/// The values from before the settings of a function, which `NewGUCNestLevel` and `GUC_ACTION_SAVE` keep for `AtEOXact_GUC` at the end of the call.
+#[derive(Clone, Debug, Default)]
+struct Frame {
+    /// The slot of each name of the settings before the call, or `None` for a name with no slot.
+    saved: Vec<(String, Option<Slot>)>,
+    /// The names that a `SET` changed during the call, which keep their values after it.
+    kept: Vec<String>,
+}
+
 /// The order in which PostgreSQL 19 sends the reported parameters at startup, which is the order of its hash table.
 const STARTUP_REPORTS: [&str; 15] = [
     "IntervalStyle",
@@ -260,6 +269,8 @@ pub struct Settings {
     count: usize,
     /// The names of the slots that the current transaction changed.
     saved: Vec<String>,
+    /// The values from before the settings of each function that runs, the innermost one last.
+    frames: Vec<Frame>,
     /// The names of the reported parameters that changed since the last report, the first one first.
     pending: Vec<&'static str>,
     /// The value of each reported parameter that the client last got.
@@ -283,6 +294,7 @@ impl Settings {
             slots: Arc::default(),
             count: 0,
             saved: Vec::new(),
+            frames: Vec::new(),
             pending: Vec::new(),
             reported: Arc::default(),
             generation: 0,
@@ -754,7 +766,64 @@ impl Settings {
         }
         let parameter = slot.parameter;
         slot.current = value;
+        // `push_old_value`: a `SET` in a function changes the state `GUC_SAVE` of the call to `GUC_SET`, so the value stays after the call.
+        if action == Action::Set {
+            for frame in &mut self.frames {
+                if !frame.kept.iter().any(|kept| kept == key) {
+                    frame.kept.push(key.to_owned());
+                }
+            }
+        }
         self.changed(parameter);
+    }
+
+    /// `ProcessGUCArray` with `GUC_ACTION_SAVE` for a call of a function: each setting of `config`, as `name=value`, applies as a `SET LOCAL` until [`Settings::pop_function`].
+    ///
+    /// # Errors
+    ///
+    /// The errors of `SET` for the names and the values. The settings that applied before the error go back.
+    pub fn push_function(&mut self, config: &[String]) -> Result<(), Error> {
+        self.frames.push(Frame::default());
+        for item in config {
+            let Some((name, value)) = item.split_once('=') else { continue };
+            let key = find(name)
+                .map_or_else(|| name.to_ascii_lowercase(), |p| lower(p.name).into_owned());
+            let before = self.find_slot(&key).cloned();
+            if let Some(frame) = self.frames.last_mut()
+                && !frame.saved.iter().any(|(saved, _)| *saved == key)
+            {
+                frame.saved.push((key, before));
+            }
+            if let Err(error) = self.set(name, Some(value), Action::Local, Origin::Statement) {
+                self.pop_function();
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    /// `AtEOXact_GUC` at the end of a call of [`Settings::push_function`]: each setting of the call goes back to its value from before, other than one that a `SET` changed during the call. A placeholder that the call made stays, with its reset value.
+    pub fn pop_function(&mut self) {
+        let Some(frame) = self.frames.pop() else { return };
+        for (key, before) in frame.saved {
+            if frame.kept.contains(&key) {
+                continue;
+            }
+            let Some(slot) = owned(&mut self.slots, &self.base, &key) else { continue };
+            let now = slot.current.clone();
+            match before {
+                Some(before) => *slot = before,
+                None => {
+                    slot.current = slot.reset.clone();
+                    slot.save = None;
+                }
+            }
+            if slot.current != now {
+                let parameter = slot.parameter;
+                self.changed(parameter);
+            }
+        }
+        self.generation += 1;
     }
 
     /// Notes a change of a current value.

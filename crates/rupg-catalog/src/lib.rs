@@ -617,6 +617,8 @@ pub struct Function {
     pub bin: String,
     /// The text of the statement that made the function, or `None`.
     pub body: Option<FunctionBody>,
+    /// `proconfig`: the settings that apply during a call, each one as `name=value`, with the name of the parameter as PostgreSQL spells it.
+    pub config: Vec<String>,
 }
 
 /// The body of a function in SQL, which the analyzer reads again each time a query calls the function, as it reads the query of a view.
@@ -2741,6 +2743,7 @@ impl Catalog {
             src: src.to_string(),
             bin: String::new(),
             body: None,
+            config: Vec::new(),
         };
         let multirange_name = new.multirange_name.as_str();
         let variadic = Function {

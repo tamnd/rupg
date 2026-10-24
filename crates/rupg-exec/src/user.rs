@@ -1094,6 +1094,10 @@ fn functions<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                     "prosqlbody",
                     tree(f.body.as_ref().filter(|_| f.src.is_empty()).map(|b| &b.text)),
                 )
+                .set(
+                    "proconfig",
+                    if f.config.is_empty() { Value::Null } else { text_array(&f.config) },
+                )
                 .set("proacl", granted(catalog, ObjRef::new(PG_PROC, f.oid)));
             row
         })

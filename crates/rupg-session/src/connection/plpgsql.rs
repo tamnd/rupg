@@ -362,8 +362,9 @@ impl Connection {
         ret: u32,
         args: &[Value],
     ) -> rupg_common::Result<Vec<Value>> {
-        // `ExecuteCallStmt`: only a procedure that `CALL` runs can end the transaction.
-        let procedure = outer.catalog.function(func).is_some_and(|f| f.kind == b'p');
+        // `ExecuteCallStmt`: only a procedure that `CALL` runs can end the transaction, and not one with settings.
+        let procedure =
+            outer.catalog.function(func).is_some_and(|f| f.kind == b'p' && f.config.is_empty());
         let atomic = !(procedure && self.calls.nonatomic.get());
         // The queries of the function do not see the transition tables of a trigger that called it.
         let transition = self.transition.take();
@@ -502,7 +503,18 @@ impl Connection {
         // `SPI_register_trigger_data`: the queries of the function read the transition tables of the trigger.
         let outer = self.transition.replace(transition);
         let reader = self.reader();
-        let result = rupg_plpgsql::trigger(&PlSpi::new(self, &reader, true), call);
+        // `fmgr_security_definer`: the settings of the function apply during the call.
+        let config = reader.catalog.function(call.trigger.function).map(|f| f.config.clone());
+        let config = config.unwrap_or_default();
+        let result = if config.is_empty() {
+            rupg_plpgsql::trigger(&PlSpi::new(self, &reader, true), call)
+        } else {
+            self.settings.borrow_mut().push_function(&config).and_then(|()| {
+                let result = rupg_plpgsql::trigger(&PlSpi::new(self, &reader, true), call);
+                self.settings.borrow_mut().pop_function();
+                result
+            })
+        };
         self.trigger_warnings.borrow_mut().extend(reader.take_warnings());
         drop(reader);
         self.transition.replace(outer);
