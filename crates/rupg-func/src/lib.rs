@@ -487,6 +487,20 @@ pub trait Session {
         let _ = text;
         Err(not_yet("a query in a function"))
     }
+    /// `fmgr_sql` for a function in SQL whose body is [`rupg_analyze::Body::Statements`]: a call of the function `func` with the values `args` of the types `types`. The statements run one after the other, and the call gives the types of the columns of the last statement and its rows.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the statements, and `0A000` for a session that cannot run them.
+    fn call_sql_function(
+        &self,
+        func: u32,
+        types: &[u32],
+        args: &[Value],
+    ) -> Result<(Vec<u32>, Vec<Vec<Value>>)> {
+        let _ = (func, types, args);
+        Err(not_yet("a function in SQL with more than one statement"))
+    }
     /// `plpgsql_call_handler`: a call of the function `func` in PL/pgSQL with the values `args` of the types `types`, for the result type `ret`. It gives the value of the function, or a value for each row of a function that returns a set. A row is a `Record`.
     ///
     /// # Errors

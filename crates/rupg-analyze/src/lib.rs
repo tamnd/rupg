@@ -66,10 +66,10 @@ pub use constraints_set::set_constraints;
 pub use cte::{Cte, CteRef};
 pub use ddl::{
     Allowed, Body, CopyRelation, CopyTarget, Defined, Fill, Message, PartitionCheck,
-    REGRESS_SYMBOLS, RuleTree, SchemaElements, SqlBody, Take, Transform, acl_dependents, acl_roles,
-    attnums, copy_filter, copy_insert, copy_relation, copy_target, define, find_library,
-    function_body, function_sqlbody, is_definition, lock_table, owned_objects, rewrite_insert,
-    rule_tree, trigger_when, vacuum_relations,
+    REGRESS_SYMBOLS, RuleTree, SchemaElements, Script, SqlBody, Take, Transform, acl_dependents,
+    acl_roles, attnums, copy_filter, copy_insert, copy_relation, copy_target, define, find_library,
+    function_body, function_script, function_sqlbody, is_definition, lock_table, owned_objects,
+    rewrite_insert, rule_tree, trigger_when, vacuum_relations,
 };
 pub use expr::{
     Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, FieldStore, Func, FuncForm,
@@ -140,6 +140,10 @@ pub trait Env {
     /// The `allow_system_table_mods` setting, which lets a statement make a relation in a system schema. `initdb` turns it on.
     fn allow_system_table_mods(&self) -> bool {
         false
+    }
+    /// The `check_function_bodies` setting: `CREATE FUNCTION` checks the body of a function in SQL or in PL/pgSQL when it is on.
+    fn check_function_bodies(&self) -> bool {
+        true
     }
     /// The OID of the materialized view that `CREATE MATERIALIZED VIEW` or `REFRESH MATERIALIZED VIEW` fills, or 0. Only the `INSERT` that fills it can write it, and only there its query takes its place.
     fn filling(&self) -> u32 {
@@ -458,35 +462,45 @@ fn analyze_in<'a>(
     variables: Option<&'a dyn Variables>,
 ) -> Result<Query> {
     analyzer.variables = variables;
-    let mut query = match stmt {
-        Node::SelectStmt(select) => analyzer.select(select)?,
-        Node::InsertStmt(insert) => analyzer.insert(insert)?,
-        Node::UpdateStmt(update) => analyzer.update(update)?,
-        Node::DeleteStmt(delete) => analyzer.delete(delete)?,
-        Node::MergeStmt(merge) => analyzer.merge(merge)?,
-        Node::CallStmt(call) => analyzer.call(call)?,
-        _ => {
-            return Err(Error::new(
+    let query = analyzer.statement(stmt)?;
+    analyzer.finish(query)
+}
+
+impl Analyzer<'_> {
+    /// `transformStmt` for a statement that has a plan.
+    fn statement(&mut self, stmt: &Node) -> Result<Query> {
+        match stmt {
+            Node::SelectStmt(select) => self.select(select),
+            Node::InsertStmt(insert) => self.insert(insert),
+            Node::UpdateStmt(update) => self.update(update),
+            Node::DeleteStmt(delete) => self.delete(delete),
+            Node::MergeStmt(merge) => self.merge(merge),
+            Node::CallStmt(call) => self.call(call),
+            _ => Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
                 "this statement is not supported yet",
-            ));
-        }
-    };
-    if analyzer.variable {
-        for (i, ty) in analyzer.params.iter().enumerate() {
-            if *ty == 0 || *ty == oid::UNKNOWN {
-                return Err(Error::new(
-                    SqlState::INDETERMINATE_DATATYPE,
-                    format!("could not determine data type of parameter ${}", i + 1),
-                ));
-            }
+            )),
         }
     }
-    query.params = analyzer.params;
-    query.notices = analyzer.notices;
-    query.perms = analyzer.perms;
-    query.funcs = analyzer.funcs;
-    Ok(query)
+
+    /// The end of the analysis of a statement: the query gets the types of the parameters, the notices, the privileges and the functions that the analysis found.
+    fn finish(self, mut query: Query) -> Result<Query> {
+        if self.variable {
+            for (i, ty) in self.params.iter().enumerate() {
+                if *ty == 0 || *ty == oid::UNKNOWN {
+                    return Err(Error::new(
+                        SqlState::INDETERMINATE_DATATYPE,
+                        format!("could not determine data type of parameter ${}", i + 1),
+                    ));
+                }
+            }
+        }
+        query.params = self.params;
+        query.notices = self.notices;
+        query.perms = self.perms;
+        query.funcs = self.funcs;
+        Ok(query)
+    }
 }
 
 #[cfg(test)]

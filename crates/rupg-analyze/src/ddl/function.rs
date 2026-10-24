@@ -101,6 +101,8 @@ pub enum Body {
     Value(Expr),
     /// A body with a query, in `BEGIN ATOMIC` or in a string. A function that returns a set gives the rows of the query, and another function gives the first column of the first row, or null when the query gives no row.
     Query(Box<Query>),
+    /// A body with more than one statement, or with a statement that is not `SELECT`. The session runs the statements one after the other with [`function_script`], and the last statement gives the rows of the result. It has the types of the columns of the result, or no types for a function that returns `record` with no `OUT` parameter.
+    Statements(Vec<u32>),
 }
 
 /// The facts of the options of `CREATE FUNCTION`.
@@ -333,7 +335,8 @@ fn check_untrusted(function: &Function) -> Result<()> {
 enum Statements<'s> {
     Return(Option<&'s Node>),
     Atomic(Vec<&'s Node>),
-    String(Vec<Node>),
+    /// The statements of a body in a string, each with its text.
+    String(Vec<(Node, String)>),
 }
 
 /// The body of the statement.
@@ -360,7 +363,16 @@ fn statements<'s>(stmt: &'s CreateFunctionStmt, src: Option<&str>) -> Result<Sta
                 .into_iter()
                 .flatten()
                 .filter_map(|node| match node {
-                    Node::RawStmt(raw) => raw.stmt,
+                    Node::RawStmt(raw) => {
+                        let start = usize::try_from(raw.stmt_location).unwrap_or(0);
+                        // A length of 0 is the rest of the text.
+                        let end = match usize::try_from(raw.stmt_len) {
+                            Ok(0) | Err(_) => src.len(),
+                            Ok(len) => start + len,
+                        };
+                        let text = src.get(start..end).unwrap_or(src).to_string();
+                        raw.stmt.map(|stmt| (stmt, text))
+                    }
                     _ => None,
                 })
                 .collect();
@@ -425,16 +437,108 @@ fn input_names(function: &Function) -> Vec<String> {
         .collect()
 }
 
-/// The error of `check_sql_fn_retval` for a body with the wrong columns, in the function `name`.
-fn mismatch(rettype: u32, name: &str, detail: String) -> Error {
+/// The error of `check_sql_fn_retval` for a body with the wrong columns.
+fn mismatch(rettype: u32, detail: String) -> Error {
     Error::new(
         SqlState::INVALID_FUNCTION_DEFINITION,
-        format!(
-            "return type mismatch in function declared to return {} (SQL function \"{name}\")",
-            types::name(rettype)
-        ),
+        format!("return type mismatch in function declared to return {}", types::name(rettype)),
     )
     .with_detail(detail)
+}
+
+/// The error of `check_sql_fn_retval` for a body whose last statement gives no rows.
+fn no_final_query(rettype: u32) -> Error {
+    mismatch(
+        rettype,
+        "Function's final statement must be SELECT or INSERT/UPDATE/DELETE/MERGE RETURNING.".into(),
+    )
+}
+
+/// True for a statement that has a plan, which `fmgr_sql` runs with the executor. The other statements run with `ProcessUtility`.
+fn planned(node: &Node) -> bool {
+    match node {
+        Node::SelectStmt(select) => select.intoClause.is_none(),
+        Node::InsertStmt(_)
+        | Node::UpdateStmt(_)
+        | Node::DeleteStmt(_)
+        | Node::MergeStmt(_)
+        | Node::CallStmt(_) => true,
+        _ => false,
+    }
+}
+
+/// `prepare_next_query`: the query of the statement `node` of the body of `function`, for a call with arguments of the types `inputs`, with the names of the search path `path`. The last statement gives the result of the function, as `check_sql_fn_retval` checks it. `None` for a statement that has no plan, which can be the last statement only of a function that returns `void`.
+fn statement_query(
+    env: &dyn Env,
+    function: &Function,
+    path: Option<&[u32]>,
+    inputs: &[u32],
+    node: &Node,
+    last: bool,
+) -> Result<Option<Query>> {
+    let params = Params { types: inputs.to_vec(), variable: false };
+    let mut an = Analyzer::new(env, &params);
+    if let Some(path) = path {
+        an.set_path(path);
+    }
+    an.sql_function = Some((function.name.clone(), input_names(function)));
+    let query = if planned(node) { Some(an.statement(node)?) } else { None };
+    if let Some(query) = &query
+        && !query.out_args.is_empty()
+    {
+        return Err(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            "calling procedures with output arguments is not supported in SQL functions",
+        ));
+    }
+    let Some(mut query) = query else {
+        if last {
+            let (rettype, _) = an.result_shape(function, inputs)?;
+            if rettype != oid::VOID {
+                return Err(no_final_query(rettype));
+            }
+        }
+        return Ok(None);
+    };
+    if last {
+        let (rettype, columns) = an.result_shape(function, inputs)?;
+        // `CALL` gives no rows.
+        if rettype != oid::VOID && matches!(node, Node::CallStmt(_)) {
+            return Err(no_final_query(rettype));
+        }
+        an.result_columns(&mut query, rettype, &columns)?;
+    }
+    an.finish(query).map(Some)
+}
+
+/// `fmgr_sql_validator` for a body that is not one `SELECT`: the query of each statement that has a plan, with the checks of `check_sql_fn_retval` on the last statement. A body with no statement must be the body of a function that returns `void`.
+fn check_statements(
+    env: &dyn Env,
+    function: &Function,
+    path: Option<&[u32]>,
+    list: &[&Node],
+) -> Result<Vec<Query>> {
+    let inputs = &function.argtypes;
+    if list.is_empty() {
+        let rettype = result_type(function, &result_types(function, inputs)?);
+        if rettype != oid::VOID {
+            return Err(no_final_query(rettype));
+        }
+    }
+    let mut queries = Vec::new();
+    for (i, node) in list.iter().enumerate() {
+        let last = i + 1 == list.len();
+        queries.extend(statement_query(env, function, path, inputs, node, last)?);
+    }
+    Ok(queries)
+}
+
+/// The result type of a call of `function` whose result has columns of the types `columns`: the one type of a function that does not return `record`, or else the declared type.
+fn result_type(function: &Function, columns: &[u32]) -> u32 {
+    match columns {
+        [ty] if function.rettype != oid::RECORD => *ty,
+        _ => function.rettype,
+    }
 }
 
 /// The objects that an expression of a function refers to, as `recordDependencyOnExpr` records them: the objects that [`super::view::expr_references`] finds, also in the subqueries, in the order of `eliminate_duplicate_dependencies`. The catalog drops the references to pinned objects.
@@ -447,7 +551,7 @@ fn body_references(catalog: &Catalog, body: &Expr) -> Result<Vec<ObjRef>> {
 
 impl Analyzer<'_> {
     /// `transformReturnStmt` and `check_sql_fn_retval`: the `RETURN` expression, as a value of the result type. A value of type `unknown` becomes `text` first, and then the cast to the result type is an assignment cast.
-    fn return_body(&mut self, value: Option<&Node>, rettype: u32, name: &str) -> Result<Expr> {
+    fn return_body(&mut self, value: Option<&Node>, rettype: u32) -> Result<Expr> {
         let mut expr = self.with_kind(Kind::Select, |an| an.transform(value))?;
         // A function that returns `void` takes any value, and the call gives null.
         if rettype == oid::VOID {
@@ -458,26 +562,32 @@ impl Analyzer<'_> {
         }
         let actual = expr.ty;
         self.coerce_to_target(expr, rettype, -1, Context::Assignment, None)?.ok_or_else(|| {
-            mismatch(rettype, name, format!("Actual return type is {}.", types::name(actual)))
+            mismatch(rettype, format!("Actual return type is {}.", types::name(actual)))
         })
     }
 
-    /// The query of the last statement of a body, as `check_sql_fn_retval` checks it: the columns of the query must be the columns of the result, and each column takes an assignment cast to the type of the result column. A function that returns a composite type can also give one column of that type, and a function that returns `void` can give any columns. The other statements give an error, as rupg runs only one query.
-    fn query_body(
-        &mut self,
-        stmts: &[&Node],
-        rettype: u32,
-        columns: &[u32],
-        name: &str,
-    ) -> Result<Query> {
+    /// The body of the statements `stmts`: a body of one `SELECT` is its query, as [`Analyzer::result_columns`] checks it, and the session runs the statements of another body one after the other.
+    fn list_body(&mut self, stmts: &[&Node], rettype: u32, columns: &[u32]) -> Result<Body> {
         let [Node::SelectStmt(select)] = stmts else {
-            return Err(not_yet("a function body that is not one SELECT", None));
+            return Ok(Body::Statements(columns.to_vec()));
         };
         let mut query = self.select(select)?;
         query.params.clone_from(&self.params);
+        self.result_columns(&mut query, rettype, columns)?;
+        Ok(Body::Query(Box::new(query)))
+    }
+
+    /// The query of the last statement of a body, as `check_sql_fn_retval` checks it: the columns of the query, or of the `RETURNING` list of a write, must be the columns of the result, and each column takes an assignment cast to the type of the result column. A function that returns a composite type can also give one column of that type, and a function that returns `void` can give any columns. A write with no `RETURNING` gives no rows, so it can be the last statement only of a function that returns `void`.
+    fn result_columns(&mut self, query: &mut Query, rettype: u32, columns: &[u32]) -> Result<()> {
         if rettype == oid::VOID {
-            return Ok(query);
+            return Ok(());
         }
+        let query = if query.write.is_some() {
+            let returning = query.write.as_mut().and_then(|w| w.returning.as_deref_mut());
+            returning.ok_or_else(|| no_final_query(rettype))?
+        } else {
+            query
+        };
         let width = query.targets.iter().take_while(|t| !t.junk).count();
         let row = rettype == oid::RECORD || columns.len() != 1 || columns != [rettype];
         let whole_row = [rettype];
@@ -489,17 +599,12 @@ impl Analyzer<'_> {
         if !row && width != 1 {
             return Err(mismatch(
                 rettype,
-                name,
                 "Final statement must return exactly one column.".into(),
             ));
         }
         if row && !columns.is_empty() && width != columns.len() {
             let what = if width > columns.len() { "many" } else { "few" };
-            return Err(mismatch(
-                rettype,
-                name,
-                format!("Final statement returns too {what} columns."),
-            ));
+            return Err(mismatch(rettype, format!("Final statement returns too {what} columns.")));
         }
         for (i, &ty) in columns.iter().enumerate() {
             let target = &mut query.targets[i];
@@ -516,7 +621,6 @@ impl Analyzer<'_> {
             target.expr = cast.ok_or_else(|| {
                 mismatch(
                     rettype,
-                    name,
                     format!(
                         "Final statement returns {} instead of {} at column {}.",
                         types::name(actual),
@@ -526,7 +630,19 @@ impl Analyzer<'_> {
                 )
             })?;
         }
-        Ok(query)
+        Ok(())
+    }
+
+    /// The result type of a call of `function` with arguments of the types `inputs`, and the types of the columns of the result. A composite type gives the columns of its relation.
+    fn result_shape(&self, function: &Function, inputs: &[u32]) -> Result<(u32, Vec<u32>)> {
+        let mut columns = result_types(function, inputs)?;
+        let rettype = result_type(function, &columns);
+        if rettype != oid::RECORD
+            && let Some(fields) = self.row_columns(rettype)
+        {
+            columns = fields.iter().map(|c| c.ty).collect();
+        }
+        Ok((rettype, columns))
     }
 
     /// The body of a function for a call with arguments of the types `inputs`.
@@ -536,29 +652,15 @@ impl Analyzer<'_> {
         stmts: &Statements<'_>,
         inputs: &[u32],
     ) -> Result<Body> {
-        let mut columns = result_types(function, inputs)?;
-        let rettype = match columns.as_slice() {
-            [ty] if function.rettype != oid::RECORD => *ty,
-            _ => function.rettype,
-        };
-        // A composite type gives the columns of its relation.
-        if rettype != oid::RECORD
-            && let Some(fields) = self.row_columns(rettype)
-        {
-            columns = fields.iter().map(|c| c.ty).collect();
-        }
-        Ok(match stmts {
-            Statements::Return(value) => {
-                Body::Value(self.return_body(*value, rettype, &function.name)?)
-            }
-            Statements::Atomic(list) => {
-                Body::Query(Box::new(self.query_body(list, rettype, &columns, &function.name)?))
-            }
+        let (rettype, columns) = self.result_shape(function, inputs)?;
+        match stmts {
+            Statements::Return(value) => Ok(Body::Value(self.return_body(*value, rettype)?)),
+            Statements::Atomic(list) => self.list_body(list, rettype, &columns),
             Statements::String(list) => {
-                let list: Vec<&Node> = list.iter().collect();
-                Body::Query(Box::new(self.query_body(&list, rettype, &columns, &function.name)?))
+                let list: Vec<&Node> = list.iter().map(|(node, _)| node).collect();
+                self.list_body(&list, rettype, &columns)
             }
-        })
+        }
     }
 
     /// `interpret_func_support`: the support function with the name, which takes and returns `internal`.
@@ -607,6 +709,73 @@ pub fn function_body(env: &dyn Env, oid: u32, inputs: &[u32]) -> Result<Option<B
             crate::expand_virtual_body(&mut body, catalog)?;
         }
         Ok(Some(body))
+    })
+}
+
+/// The statements of the body of a function in SQL that [`Body::Statements`] runs, which `fmgr_sql` analyzes and runs one after the other, as `prepare_next_query` and `init_execution_state` do. A statement can see the changes of the statements before it.
+#[derive(Debug)]
+pub struct Script {
+    function: Function,
+    /// The search path of the names of the statements, or `None` for the current path.
+    path: Option<Vec<u32>>,
+    /// Each statement, with its text.
+    pub statements: Vec<(Node, String)>,
+}
+
+impl Script {
+    /// The name of the function.
+    pub fn name(&self) -> &str {
+        &self.function.name
+    }
+
+    /// The body in a string, or an empty text for a body in `BEGIN ATOMIC`.
+    pub fn src(&self) -> &str {
+        &self.function.src
+    }
+
+    /// True for a function that is not volatile, which can run only statements that do not write, as `readonly_func` of `SQLFunctionHashEntry` is.
+    pub fn read_only(&self) -> bool {
+        self.function.volatile != b'v'
+    }
+
+    /// True when the statement `i` has a plan. The other statements run as utility statements.
+    pub fn planned(&self, i: usize) -> bool {
+        self.statements.get(i).is_some_and(|(node, _)| planned(node))
+    }
+
+    /// `prepare_next_query`: the query of the statement `i` for a call with arguments of the types `inputs`. The last statement gives the result of the function, as `check_sql_fn_retval` checks it. `None` for a statement with no plan.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the analysis of the statement, and `42P13` for a last statement that does not give the result of the function.
+    pub fn analyze(&self, env: &dyn Env, inputs: &[u32], i: usize) -> Result<Option<Query>> {
+        let Some((node, _)) = self.statements.get(i) else { return Ok(None) };
+        let last = i + 1 == self.statements.len();
+        statement_query(env, &self.function, self.path.as_deref(), inputs, node, last)
+    }
+}
+
+/// The statements of the body of the function in SQL with the OID, for [`Body::Statements`]. `None` when the catalog has no function in SQL with the OID, or when the body is `RETURN`.
+///
+/// # Errors
+///
+/// The errors of the parse of the body, and `42P13` for a body with no statement in a function that does not return `void`.
+pub fn function_script(env: &dyn Env, oid: u32) -> Result<Option<Script>> {
+    with_statement(env, oid, |function, body, stmt| {
+        let src = (!function.src.is_empty()).then_some(function.src.as_str());
+        let statements = match statements(stmt, src)? {
+            Statements::Return(_) => return Ok(None),
+            Statements::Atomic(list) => {
+                list.into_iter().map(|node| (node.clone(), String::new())).collect()
+            }
+            Statements::String(list) => list,
+        };
+        if statements.is_empty() && function.rettype != oid::VOID {
+            return Err(no_final_query(function.rettype));
+        }
+        let path =
+            (stmt.sql_body.is_some() || !sets_path(&function.config)).then(|| body.path.clone());
+        Ok(Some(Script { function: function.clone(), path, statements }))
     })
 }
 
@@ -921,6 +1090,11 @@ impl Definer<'_, '_> {
             }
             _ => error,
         };
+        // `sql_function_parse_error_callback`: an error in the check of a body that has no place in the query text names the function.
+        let checked = |error: Error| match error.position() {
+            Some(_) => transpose(error),
+            None => error.with_context(format!("SQL function \"{name}\"")),
+        };
         let old = self
             .catalog
             .functions()
@@ -943,8 +1117,11 @@ impl Definer<'_, '_> {
             return self.store_function(old, function, &defaults, support, Vec::new());
         }
         if function.lang == PLPGSQL_LANGUAGE {
-            self.with_settings(&function.config, |d| d.check_plpgsql(stmt, &function))
-                .map_err(transpose)?;
+            // `plpgsql_validator` compiles the body only when `check_function_bodies` is on.
+            if self.an.env.check_function_bodies() {
+                self.with_settings(&function.config, |d| d.check_plpgsql(stmt, &function))
+                    .map_err(transpose)?;
+            }
             return self.store_function(old, function, &defaults, support, Vec::new());
         }
         // `fmgr_sql_validator`: the only pseudo-types that a function in SQL can take are the polymorphic types, and it can also return `void` and `record`.
@@ -961,23 +1138,30 @@ impl Definer<'_, '_> {
             ));
         }
         let stmts = statements(stmt, options.src.as_deref()).map_err(transpose)?;
-        // `fmgr_sql_validator` reads a body in a string only when no argument is polymorphic, and a body in SQL always.
+        // `fmgr_sql_validator` reads a body in a string only when no argument is polymorphic and `check_function_bodies` is on, and a body in SQL always.
         let polymorphic = function.argtypes.iter().any(|&ty| types::is_polymorphic(ty));
         if let Statements::String(_) = &stmts {
             // `ProcedureCreate` adds the function before `fmgr_sql_validator` reads a body in a string, so the body can call the function.
             let oid = self.store_function(old, function.clone(), &defaults, support, Vec::new())?;
-            if !polymorphic {
+            if !polymorphic && self.an.env.check_function_bodies() {
                 self.an.env.command_counter_increment(self.catalog);
                 self.with_settings(&function.config, |d| d.sql_body(&function, &stmts))
-                    .map_err(transpose)?;
+                    .map_err(checked)?;
             }
             return Ok(oid);
         }
-        let body = self.sql_body(&function, &stmts).map_err(transpose)?;
+        let (body, queries) = self.sql_body(&function, &stmts).map_err(checked)?;
         let refs = match &body {
             Body::Value(expr) => body_references(self.catalog, expr)?,
             Body::Query(query) => {
                 eliminate_duplicates(&super::view::function_references(self.catalog, query))
+            }
+            Body::Statements(_) => {
+                let refs: Vec<ObjRef> = queries
+                    .iter()
+                    .flat_map(|query| super::view::function_references(self.catalog, query))
+                    .collect();
+                eliminate_duplicates(&refs)
             }
         };
         self.store_function(old, function, &defaults, support, refs)
@@ -998,18 +1182,36 @@ impl Definer<'_, '_> {
         result
     }
 
-    /// `fmgr_sql_validator`: the body of a new function in SQL, for a call with arguments of the types of its parameters. A body in a string reads its names with the `search_path` of the settings of the function, when they set it.
-    fn sql_body(&mut self, function: &Function, stmts: &Statements<'_>) -> Result<Body> {
+    /// `fmgr_sql_validator`: the body of a new function in SQL, for a call with arguments of the types of its parameters, and the queries of the statements of a body that is not one `SELECT`. A body in a string reads its names with the `search_path` of the settings of the function, when they set it.
+    fn sql_body(
+        &mut self,
+        function: &Function,
+        stmts: &Statements<'_>,
+    ) -> Result<(Body, Vec<Query>)> {
         let params = Params { types: function.argtypes.clone(), variable: false };
         let mut an = Analyzer::new(self.an.env, &params);
         // The new analyzer takes the current path, which the settings gave.
-        if !matches!(stmts, Statements::String(_)) || !sets_path(&function.config) {
-            an.set_path(&self.an.path);
+        let path = (!matches!(stmts, Statements::String(_)) || !sets_path(&function.config))
+            .then(|| self.an.path.clone());
+        if let Some(path) = &path {
+            an.set_path(path);
         }
         an.sql_function = Some((function.name.clone(), input_names(function)));
         let body = an.body(function, stmts, &function.argtypes)?;
         self.an.notices.append(&mut an.notices);
-        Ok(body)
+        let mut queries = Vec::new();
+        if let Body::Statements(_) = &body {
+            let list: Vec<&Node> = match stmts {
+                Statements::Return(_) => Vec::new(),
+                Statements::Atomic(list) => list.clone(),
+                Statements::String(list) => list.iter().map(|(node, _)| node).collect(),
+            };
+            queries = check_statements(self.an.env, function, path.as_deref(), &list)?;
+            for query in &mut queries {
+                self.an.notices.append(&mut query.notices);
+            }
+        }
+        Ok((body, queries))
     }
 
     /// `ProcedureCreate`: adds the function to the catalog, or replaces `old`, with the dependencies `refs` of its body and the dependencies of its support function, its defaults and its types.

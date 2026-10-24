@@ -62,6 +62,8 @@ pub fn expand_virtual_body(body: &mut Body, catalog: &Catalog) -> Result<()> {
     match body {
         Body::Value(expr) => expand.expr(expr),
         Body::Query(query) => expand.query(query, None),
+        // The plan of each statement expands its own columns.
+        Body::Statements(_) => Ok(()),
     }
 }
 

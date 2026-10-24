@@ -59,7 +59,10 @@ pub use copy::{
     rewrite_insert,
 };
 pub(crate) use drop::quote_identifier;
-pub use function::{Body, REGRESS_SYMBOLS, SqlBody, find_library, function_body, function_sqlbody};
+pub use function::{
+    Body, REGRESS_SYMBOLS, Script, SqlBody, find_library, function_body, function_script,
+    function_sqlbody,
+};
 pub use grant::acl_roles;
 pub(crate) use lock::relkind;
 pub use lock::{Allowed, Take, lock_table};
@@ -429,6 +432,10 @@ impl Env for SchemaEnv<'_> {
 
     fn allow_system_table_mods(&self) -> bool {
         self.env.allow_system_table_mods()
+    }
+
+    fn check_function_bodies(&self) -> bool {
+        self.env.check_function_bodies()
     }
 
     fn sequence_row(&self, file: u32) -> Option<rupg_catalog::SequenceData> {

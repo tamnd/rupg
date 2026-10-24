@@ -6235,6 +6235,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/secdef.test")));
     }
 
+    /// A function in SQL with more than one statement, or with `INSERT`, `UPDATE` or `DELETE`: the statements run one after the other, each one sees the changes of the statements before it, and the last statement gives the result, also from `RETURNING`. An error has the number of the statement in its context, and `check_function_bodies` lets the body use a table that an earlier statement makes. `connection/sqlfn.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn sqlfn() {
+        big_stack(|| script(include_str!("connection/sqlfn.test")));
+    }
+
     /// `CREATE TABLE ... (LIKE ...)`, from `create_table_like.sql` of the PostgreSQL tests: the columns and the not-null constraints of the other relation, the options `INCLUDING DEFAULTS`, `GENERATED`, `IDENTITY`, `CONSTRAINTS`, `INDEXES`, `STORAGE`, `COMMENTS` and `ALL`, `LIKE` with `INHERITS`, and `LIKE` of a view, a composite type and a sequence. The script has catalog queries in place of `\d`, and it does not have the parts for virtual generated columns, `NOT ENFORCED`, `CREATE STATISTICS` and foreign tables. `connection/create_table_like.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn create_table_like() {

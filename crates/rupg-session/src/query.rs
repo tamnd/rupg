@@ -1060,6 +1060,21 @@ impl rupg_func::Session for Reader<'_> {
         }
     }
 
+    fn call_sql_function(
+        &self,
+        func: u32,
+        types: &[u32],
+        args: &[Value],
+    ) -> Result<(Vec<u32>, Vec<Vec<Value>>)> {
+        match self.conn {
+            Some(conn) => conn.sql_call(self, func, types, args),
+            None => Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "a function in SQL with more than one statement is not supported here",
+            )),
+        }
+    }
+
     fn run_query(&self, text: &str) -> Result<(Vec<u32>, Vec<Vec<Value>>)> {
         let (list, _) = rupg_sql::parse(text)?;
         let statements: Vec<&Node> = list
@@ -1265,6 +1280,10 @@ impl Env for Reader<'_> {
 
     fn allow_system_table_mods(&self) -> bool {
         self.settings().get("allow_system_table_mods").as_deref() == Some("on")
+    }
+
+    fn check_function_bodies(&self) -> bool {
+        self.settings().get("check_function_bodies").as_deref() != Some("off")
     }
 
     fn filling(&self) -> u32 {

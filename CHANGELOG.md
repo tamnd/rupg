@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- A function in SQL can have more than one statement, and its last statement can be `INSERT`, `UPDATE`, `DELETE` or `MERGE` with `RETURNING`. The statements run one after the other, and each one sees the changes of the statements before it. A statement can also be a utility statement, such as `CREATE TABLE`. `CREATE FUNCTION` checks each statement, and with `check_function_bodies` set to off it checks no statement. An error at run time has the line `SQL function "name" statement N`. A function that is not volatile cannot write, and no function can run `COMMIT` or `ROLLBACK` (#676).
+
 ## 0.1.77 (2026-10-24)
 
 ### Added
