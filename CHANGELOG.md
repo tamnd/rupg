@@ -7,7 +7,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Added
 
 - `pg_current_xact_id`, `pg_current_xact_id_if_assigned`, `pg_current_snapshot` and `pg_xact_status` run, and so do `txid_current`, `txid_current_if_assigned`, `txid_current_snapshot` and `txid_status`. A transaction gets its ID at the first write, at a change of the catalog, at `LOCK ... IN ACCESS EXCLUSIVE MODE` or at a call of `pg_current_xact_id`. The snapshot has `latestCompletedXid + 1` as `xmax` and does not show the transaction of the session, as `GetSnapshotData` makes it. `pg_xact_status` gives `committed`, `aborted` or `in progress`, and `22023` for an ID in the future (#667).
-- The system columns `xmin` and `xmax` give the transaction that inserted the row and the transaction that deleted it, also for the rows of a partitioned table and of a table with children of `INHERITS`. A row that an aborted transaction deleted keeps the ID of that transaction in `xmax`, as `t_xmax` keeps it. `RETURNING xmin` of an `INSERT` or an `UPDATE` gives the transaction of the session. Before, each row showed a frozen `xmin` and 0 as `xmax` (#NNN).
+- The system columns `xmin` and `xmax` give the transaction that inserted the row and the transaction that deleted it, also for the rows of a partitioned table and of a table with children of `INHERITS`. A row that an aborted transaction deleted keeps the ID of that transaction in `xmax`, as `t_xmax` keeps it. `RETURNING xmin` of an `INSERT` or an `UPDATE` gives the transaction of the session. Before, each row showed a frozen `xmin` and 0 as `xmax` (#668).
 
 ## 0.1.76 (2026-10-24)
 
