@@ -6,7 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- An `INSERT`, an `UPDATE` or a `DELETE` of an automatically updatable view writes the base relation of the view, as `rewriteTargetView` does. The view must read one table or view, and it must not have `DISTINCT`, `GROUP BY`, `HAVING`, a set operation, `WITH`, `LIMIT`, `OFFSET`, aggregates, window functions, set-returning functions or `TABLESAMPLE`. The conditions of the view apply to an `UPDATE` and a `DELETE`, also for `security_barrier` and for a view on a view. `SET` and the columns of an `INSERT` name the columns of the view, a column that is not updatable gives the error of PostgreSQL, and the defaults of the columns of the view apply. `RETURNING` gives the columns of the view. The statement needs the privileges on the view, and the owner of the view needs the privileges on the base relation (#NNN).
+- An `INSERT`, an `UPDATE` or a `DELETE` of an automatically updatable view writes the base relation of the view, as `rewriteTargetView` does. The view must read one table or view, and it must not have `DISTINCT`, `GROUP BY`, `HAVING`, a set operation, `WITH`, `LIMIT`, `OFFSET`, aggregates, window functions, set-returning functions or `TABLESAMPLE`. The conditions of the view apply to an `UPDATE` and a `DELETE`, also for `security_barrier` and for a view on a view. `SET` and the columns of an `INSERT` name the columns of the view, a column that is not updatable gives the error of PostgreSQL, and the defaults of the columns of the view apply. `RETURNING` gives the columns of the view. The statement needs the privileges on the view, and the owner of the view needs the privileges on the base relation (#650).
 
 ### Fixed
 
