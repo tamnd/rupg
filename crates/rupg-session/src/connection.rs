@@ -1136,6 +1136,7 @@ impl Connection {
                         ObjectType::OBJECT_TSCONFIGURATION => {
                             CommandTag::DropTextSearchConfiguration
                         }
+                        ObjectType::OBJECT_STATISTIC_EXT => CommandTag::DropStatistics,
                         _ => CommandTag::DropTable,
                     },
                     Node::AlterTableStmt(stmt) => alter_tag(stmt.objtype),
@@ -1170,6 +1171,8 @@ impl Connection {
                     Node::CreateOpFamilyStmt(_) => CommandTag::CreateOperatorFamily,
                     Node::AlterOpFamilyStmt(_) => CommandTag::AlterOperatorFamily,
                     Node::TruncateStmt(_) => CommandTag::TruncateTable,
+                    Node::CreateStatsStmt(_) => CommandTag::CreateStatistics,
+                    Node::AlterStatsStmt(_) => CommandTag::AlterStatistics,
                     _ => CommandTag::CreateTable,
                 }))
             }
@@ -2057,7 +2060,7 @@ impl Connection {
     }
 }
 
-/// `AlterObjectTypeCommandTag` for the kinds of relations, of types, of functions, of operators, and of operator classes and families: the tag of `ALTER TABLE` and of `ALTER ... RENAME` for the kind of the object.
+/// `AlterObjectTypeCommandTag` for the kinds of relations, of types, of functions, of operators, of operator classes and families, and of statistics objects: the tag of `ALTER TABLE` and of `ALTER ... RENAME` for the kind of the object.
 fn alter_tag(kind: ObjectType) -> CommandTag {
     match kind {
         ObjectType::OBJECT_INDEX => CommandTag::AlterIndex,
@@ -2075,6 +2078,7 @@ fn alter_tag(kind: ObjectType) -> CommandTag {
         ObjectType::OBJECT_OPERATOR => CommandTag::AlterOperator,
         ObjectType::OBJECT_OPCLASS => CommandTag::AlterOperatorClass,
         ObjectType::OBJECT_OPFAMILY => CommandTag::AlterOperatorFamily,
+        ObjectType::OBJECT_STATISTIC_EXT => CommandTag::AlterStatistics,
         _ => CommandTag::AlterTable,
     }
 }
@@ -5977,6 +5981,12 @@ mod tests {
     #[test]
     fn copyjson() {
         big_stack(|| script(include_str!("connection/copyjson.test")));
+    }
+
+    /// `CREATE STATISTICS`, `ALTER STATISTICS`, `DROP STATISTICS` and `COMMENT ON STATISTICS`, from `stats_ext.sql` of the PostgreSQL tests: the errors of the definition, the rows of `pg_statistic_ext` and `pg_depend`, the functions of the definition, the checks of the owner, and the names in the temporary schema and in other schemas. `connection/stx1.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn stx1() {
+        big_stack(|| script(include_str!("connection/stx1.test")));
     }
 
     /// `CREATE TABLE ... (LIKE ...)`, from `create_table_like.sql` of the PostgreSQL tests: the columns and the not-null constraints of the other relation, the options `INCLUDING DEFAULTS`, `GENERATED`, `IDENTITY`, `CONSTRAINTS`, `INDEXES`, `STORAGE`, `COMMENTS` and `ALL`, `LIKE` with `INHERITS`, and `LIKE` of a view, a composite type and a sequence. The script has catalog queries in place of `\d`, and it does not have the parts for virtual generated columns, `NOT ENFORCED`, `CREATE STATISTICS` and foreign tables. `connection/create_table_like.test` is the output of PostgreSQL 19 for the same script in a new database.

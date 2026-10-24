@@ -10,9 +10,9 @@ use rupg_types::{Record, Value, oid};
 use crate::describe::{
     NO_OBJECTS, PG_AM, PG_AMOP, PG_AMPROC, PG_ATTRDEF, PG_AUTHID, PG_CAST, PG_CLASS, PG_COLLATION,
     PG_CONSTRAINT, PG_CONVERSION, PG_DATABASE, PG_EXTENSION, PG_LANGUAGE, PG_LARGEOBJECT,
-    PG_NAMESPACE, PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_PROC, PG_REWRITE, PG_TABLESPACE,
-    PG_TRIGGER, PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, PG_TYPE, amop_parts,
-    amproc_parts, column_name, oid_arg,
+    PG_NAMESPACE, PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_PROC, PG_REWRITE, PG_STATISTIC_EXT,
+    PG_TABLESPACE, PG_TRIGGER, PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, PG_TYPE,
+    amop_parts, amproc_parts, column_name, oid_arg,
 };
 use crate::text::quote_identifier;
 use crate::{Call, Kernel, Session, bad_value, reg};
@@ -119,6 +119,7 @@ fn type_description(object: ObjRef, session: &dyn Session) -> Result<String> {
         PG_DATABASE => "database",
         PG_TABLESPACE => "tablespace",
         PG_EXTENSION => "extension",
+        PG_STATISTIC_EXT => "statistics object",
         class if NO_OBJECTS.contains(&class) => no_object_kind(class),
         class => {
             return Err(Error::new(
@@ -133,7 +134,6 @@ fn type_description(object: ObjRef, session: &dyn Session) -> Result<String> {
 /// The kind of an object of a catalog of `NO_OBJECTS`.
 fn no_object_kind(class: u32) -> &'static str {
     match class {
-        3381 => "statistics object",
         1261 => "role membership",
         2328 => "foreign-data wrapper",
         1417 => "server",
@@ -329,6 +329,10 @@ fn parts(object: ObjRef, session: &dyn Session) -> Option<Parts> {
             builtin::owned_by_oid(Owned::Tablespace, oid).map(|t| Parts::named(t.name))
         }
         PG_EXTENSION => catalog?.extensions().find(|e| e.oid == oid).map(|e| Parts::named(&e.name)),
+        PG_STATISTIC_EXT => {
+            let stat = catalog?.stat_ext(oid)?;
+            Parts::in_schema(stat.namespace, &stat.name, session)
+        }
         _ => None,
     }
 }

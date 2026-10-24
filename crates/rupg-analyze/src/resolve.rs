@@ -1001,6 +1001,7 @@ impl Analyzer<'_> {
             | Kind::FunctionDefault
             | Kind::Check
             | Kind::IndexExpression
+            | Kind::StatsExpression
             | Kind::IndexPredicate
             | Kind::ExecuteParameter
             | Kind::Transform

@@ -22,6 +22,7 @@ mod operator;
 mod owner;
 mod sequence;
 mod set_schema;
+mod stats;
 mod tsearch;
 
 pub use aggregate::{Aggregate, PG_AGGREGATE};
@@ -32,6 +33,7 @@ pub use opclass::{
 pub use operator::{Operator, PG_OPERATOR};
 pub use owner::acl_new_owner;
 pub use sequence::SequenceData;
+pub use stats::{PG_STATISTIC_EXT, StatExt};
 pub use tsearch::{
     PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, TsConfig, TsDictionary, TsMapping,
     TsParser, TsTemplate,
@@ -1142,6 +1144,7 @@ pub struct Catalog {
     ts_dictionaries: BTreeMap<u32, TsDictionary>,
     ts_configs: BTreeMap<u32, TsConfig>,
     ts_mappings: Vec<TsMapping>,
+    stat_exts: BTreeMap<u32, StatExt>,
     depends: Vec<Depend>,
     descriptions: Arc<BTreeMap<ObjRef, String>>,
     /// The ACLs that `GRANT` and `REVOKE` gave to the functions, the types, the languages and the columns, and to the objects of `initdb`. The relations and the schemas of the session keep their ACL in their own rows.
@@ -1225,6 +1228,7 @@ impl Catalog {
             ts_dictionaries: BTreeMap::new(),
             ts_configs: BTreeMap::new(),
             ts_mappings: Vec::new(),
+            stat_exts: BTreeMap::new(),
             depends: Vec::new(),
             descriptions: Arc::default(),
             acls: Arc::default(),

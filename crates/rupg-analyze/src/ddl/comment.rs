@@ -81,6 +81,7 @@ impl Definer<'_, '_> {
             | ObjectType::OBJECT_TSDICTIONARY
             | ObjectType::OBJECT_TSCONFIGURATION => self.comment_ts(stmt.objtype, object)?,
             ObjectType::OBJECT_OPERATOR => self.comment_operator(object)?,
+            ObjectType::OBJECT_STATISTIC_EXT => self.comment_stats(object)?,
             ObjectType::OBJECT_FUNCTION
             | ObjectType::OBJECT_PROCEDURE
             | ObjectType::OBJECT_ROUTINE

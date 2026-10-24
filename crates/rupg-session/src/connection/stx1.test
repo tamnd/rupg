@@ -1,0 +1,526 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE ext_stats_test (x text, y int, z int, w xid);
+CREATE TABLE
+> CREATE STATISTICS tst;
+ERROR 42601 syntax error at or near ";" at 22
+> CREATE STATISTICS tst ON a, b;
+ERROR 42601 syntax error at or near ";" at 30
+> CREATE STATISTICS tst FROM sometab;
+ERROR 42601 syntax error at or near "FROM" at 23
+> CREATE STATISTICS tst ON a, b FROM nonexistent;
+ERROR 42P01 relation "nonexistent" does not exist
+> CREATE STATISTICS tst ON a, b FROM ext_stats_test;
+ERROR 42703 column "a" does not exist
+> CREATE STATISTICS tst ON x, x, y FROM ext_stats_test;
+ERROR 42701 duplicate column name in statistics definition
+> CREATE STATISTICS tst ON x, x, y, x, x, y, x, x, y FROM ext_stats_test;
+ERROR 54011 cannot have more than 8 columns in statistics
+> CREATE STATISTICS tst ON x, x, y, x, x, (x || 'x'), (y + 1), (x || 'x'), (x || 'x'), (y + 1) FROM ext_stats_test;
+ERROR 54011 cannot have more than 8 columns in statistics
+> CREATE STATISTICS tst ON (x || 'x'), (x || 'x'), (y + 1), (x || 'x'), (x || 'x'), (y + 1), (x || 'x'), (x || 'x'), (y + 1) FROM ext_stats_test;
+ERROR 54011 cannot have more than 8 columns in statistics
+> CREATE STATISTICS tst ON (x || 'x'), (x || 'x'), y FROM ext_stats_test;
+ERROR 42701 duplicate expression in statistics definition
+> CREATE STATISTICS tst (unrecognized) ON x, y FROM ext_stats_test;
+ERROR 42601 unrecognized statistics kind "unrecognized"
+> CREATE STATISTICS tst ON x, y FROM ext_stats_test, ext_stats_test;
+ERROR 0A000 only a single relation is allowed in CREATE STATISTICS
+> CREATE STATISTICS tst ON x, y FROM ext_stats_test, (SELECT * FROM ext_stats_test) AS foo;
+ERROR 0A000 only a single relation is allowed in CREATE STATISTICS
+> CREATE STATISTICS tst ON a FROM (VALUES (x)) AS foo;
+ERROR 0A000 CREATE STATISTICS only supports relation names in the FROM clause
+> CREATE STATISTICS tst ON a FROM foo NATURAL JOIN bar;
+ERROR 0A000 CREATE STATISTICS only supports relation names in the FROM clause
+> CREATE STATISTICS tst ON a FROM (SELECT * FROM ext_stats_test) AS foo;
+ERROR 0A000 CREATE STATISTICS only supports relation names in the FROM clause
+> CREATE STATISTICS tst ON a FROM ext_stats_test s TABLESAMPLE system (x);
+ERROR 0A000 CREATE STATISTICS only supports relation names in the FROM clause
+> CREATE STATISTICS tst ON a FROM XMLTABLE('foo' PASSING 'bar' COLUMNS a text);
+ERROR 0A000 CREATE STATISTICS only supports relation names in the FROM clause
+> CREATE STATISTICS tst ON a FROM JSON_TABLE(jsonb '123', '$' COLUMNS (item int));
+ERROR 0A000 CREATE STATISTICS only supports relation names in the FROM clause
+> CREATE FUNCTION tftest(int) returns table(a int, b int) as $$
+>> SELECT $1, $1+i FROM generate_series(1,5) g(i);
+>> $$ LANGUAGE sql IMMUTABLE STRICT;
+CREATE FUNCTION
+> CREATE STATISTICS alt_stat2 ON a FROM tftest(1);
+ERROR 0A000 CREATE STATISTICS only supports relation names in the FROM clause
+> DROP FUNCTION tftest;
+DROP FUNCTION
+> CREATE STATISTICS tst ON (y) FROM ext_stats_test;
+ERROR 42P17 cannot create extended statistics on a single non-virtual column
+DETAIL Univariate statistics are already built for each individual non-virtual table column.
+> CREATE STATISTICS tst ON y + z FROM ext_stats_test;
+ERROR 42601 syntax error at or near "+" at 28
+> CREATE STATISTICS tst ON (x, y) FROM ext_stats_test;
+ERROR 42601 syntax error at or near "," at 28
+> CREATE STATISTICS tst on tableoid from ext_stats_test;
+ERROR 0A000 statistics creation on system columns is not supported
+> CREATE STATISTICS tst on (tableoid) from ext_stats_test;
+ERROR 0A000 statistics creation on system columns is not supported
+> CREATE STATISTICS tst on (tableoid::int+1) from ext_stats_test;
+ERROR 0A000 statistics creation on system columns is not supported
+> CREATE STATISTICS tst (ndistinct) ON xmin from ext_stats_test;
+ERROR 0A000 statistics creation on system columns is not supported
+> CREATE STATISTICS tst (ndistinct) ON (y + z) FROM ext_stats_test;
+ERROR 0A000 cannot specify statistics kinds when building univariate statistics
+> CREATE STATISTICS tst (ndistinct) ON x, w from ext_stats_test;
+ERROR 0A000 cannot create multivariate statistics on column "w"
+DETAIL The type xid has no default btree operator class.
+> CREATE STATISTICS tst ON (w), x from ext_stats_test;
+ERROR 0A000 cannot create multivariate statistics on column "w"
+DETAIL The type xid has no default btree operator class.
+> CREATE STATISTICS tst ON (y + z), (w) from ext_stats_test;
+ERROR 0A000 cannot create multivariate statistics on column "w"
+DETAIL The type xid has no default btree operator class.
+> CREATE STATISTICS tst ON (y + z), (y + z + 0) from ext_stats_test;
+CREATE STATISTICS
+> CREATE STATISTICS tst ON y, nosuch from ext_stats_test;
+ERROR 42710 statistics object "tst" already exists
+> CREATE STATISTICS tst ON (y + nosuch) from ext_stats_test;
+ERROR 42703 column "nosuch" does not exist at 31
+> CREATE STATISTICS tst ON (y + 1), (sum(z)) from ext_stats_test;
+ERROR 42803 aggregate functions are not allowed in statistics expressions at 36
+> CREATE STATISTICS tst ON (y + 1), (random()::int) from ext_stats_test;
+ERROR 42710 statistics object "tst" already exists
+> CREATE STATISTICS tst ON (y + 1), (generate_series(1, z)) from ext_stats_test;
+ERROR 0A000 set-returning functions are not allowed in statistics expressions at 36
+> CREATE STATISTICS tst ON (y + 1), ((SELECT 1)) from ext_stats_test;
+ERROR 0A000 cannot use subquery in statistics expression at 36
+> CREATE STATISTICS tst ON (y + 1), (z + $1) from ext_stats_test;
+ERROR 42P02 there is no parameter $1 at 40
+> CREATE STATISTICS tst ON y, z FROM pg_class;
+ERROR 42501 permission denied: "pg_class" is a system catalog
+> CREATE STATISTICS tst ON relname, relkind FROM pg_class;
+ERROR 42501 permission denied: "pg_class" is a system catalog
+> CREATE STATISTICS tst ON (w::text), x from ext_stats_test;
+ERROR 42710 statistics object "tst" already exists
+> CREATE STATISTICS tst ON x, y FROM ext_stats_test;
+ERROR 42710 statistics object "tst" already exists
+> CREATE STATISTICS tst ON y, z FROM ext_stats_test;
+ERROR 42710 statistics object "tst" already exists
+> CREATE STATISTICS IF NOT EXISTS tst ON y, z FROM ext_stats_test;
+NOTICE 42710 statistics object "tst" already exists, skipping
+CREATE STATISTICS
+> CREATE STATISTICS ON y, z FROM ext_stats_test;
+CREATE STATISTICS
+> CREATE STATISTICS ON y, z FROM ext_stats_test;
+CREATE STATISTICS
+> CREATE STATISTICS ON (y + z), (lower(x)), z FROM ext_stats_test;
+CREATE STATISTICS
+> CREATE STATISTICS ON (y * 2) FROM ext_stats_test;
+CREATE STATISTICS
+> CREATE STATISTICS ON (upper(x)) FROM ext_stats_test;
+CREATE STATISTICS
+> SELECT stxname, stxrelid::regclass, stxnamespace::regnamespace, stxowner::regrole, stxkeys, stxstattarget, stxkind, stxexprs IS NOT NULL AS has_exprs, pg_get_statisticsobjdef(oid), pg_get_statisticsobjdef_columns(oid), pg_get_statisticsobjdef_expressions(oid) FROM pg_statistic_ext ORDER BY oid;
+fields stxname@pg_statistic_ext.3:19:64:-1,stxrelid:2205:4:-1,stxnamespace:4089:4:-1,stxowner:4096:4:-1,stxkeys@pg_statistic_ext.6:22:-1:-1,stxstattarget@pg_statistic_ext.7:21:2:-1,stxkind@pg_statistic_ext.8:1002:-1:-1,has_exprs:16:1:-1,pg_get_statisticsobjdef:25:-1:-1,pg_get_statisticsobjdef_columns:25:-1:-1,pg_get_statisticsobjdef_expressions:1009:-1:-1
+row tst,ext_stats_test,public,postgres,,NULL,{d,f,m,e},t,CREATE STATISTICS public.tst ON (y + z), (y + z + 0) FROM ext_stats_test,(y + z), (y + z + 0),{"(y + z)","((y + z) + 0)"}
+row ext_stats_test_y_z_stat,ext_stats_test,public,postgres,2 3,NULL,{d,f,m},f,CREATE STATISTICS public.ext_stats_test_y_z_stat ON y, z FROM ext_stats_test,y, z,NULL
+row ext_stats_test_y_z_stat1,ext_stats_test,public,postgres,2 3,NULL,{d,f,m},f,CREATE STATISTICS public.ext_stats_test_y_z_stat1 ON y, z FROM ext_stats_test,y, z,NULL
+row ext_stats_test_expr_expr_z_stat,ext_stats_test,public,postgres,3,NULL,{d,f,m,e},t,CREATE STATISTICS public.ext_stats_test_expr_expr_z_stat ON z, (y + z), lower(x) FROM ext_stats_test,z, (y + z), lower(x),{"(y + z)",lower(x)}
+row ext_stats_test_expr_stat,ext_stats_test,public,postgres,,NULL,{e},t,CREATE STATISTICS public.ext_stats_test_expr_stat ON (y * 2) FROM ext_stats_test,(y * 2),{"(y * 2)"}
+row ext_stats_test_expr_stat1,ext_stats_test,public,postgres,,NULL,{e},t,CREATE STATISTICS public.ext_stats_test_expr_stat1 ON upper(x) FROM ext_stats_test,upper(x),{upper(x)}
+SELECT 6
+> SELECT pg_describe_object(classid, objid, objsubid), pg_describe_object(refclassid, refobjid, refobjsubid), deptype FROM pg_depend WHERE classid = 'pg_statistic_ext'::regclass ORDER BY objid, refobjsubid, refclassid;
+fields pg_describe_object:25:-1:-1,pg_describe_object:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row statistics object tst,table ext_stats_test,a
+row statistics object tst,schema public,n
+row statistics object tst,column y of table ext_stats_test,a
+row statistics object tst,column z of table ext_stats_test,a
+row statistics object ext_stats_test_y_z_stat,schema public,n
+row statistics object ext_stats_test_y_z_stat,column y of table ext_stats_test,a
+row statistics object ext_stats_test_y_z_stat,column z of table ext_stats_test,a
+row statistics object ext_stats_test_y_z_stat1,schema public,n
+row statistics object ext_stats_test_y_z_stat1,column y of table ext_stats_test,a
+row statistics object ext_stats_test_y_z_stat1,column z of table ext_stats_test,a
+row statistics object ext_stats_test_expr_expr_z_stat,schema public,n
+row statistics object ext_stats_test_expr_expr_z_stat,column x of table ext_stats_test,a
+row statistics object ext_stats_test_expr_expr_z_stat,column y of table ext_stats_test,a
+row statistics object ext_stats_test_expr_expr_z_stat,column z of table ext_stats_test,a
+row statistics object ext_stats_test_expr_expr_z_stat,column z of table ext_stats_test,a
+row statistics object ext_stats_test_expr_stat,table ext_stats_test,a
+row statistics object ext_stats_test_expr_stat,schema public,n
+row statistics object ext_stats_test_expr_stat,column y of table ext_stats_test,a
+row statistics object ext_stats_test_expr_stat1,table ext_stats_test,a
+row statistics object ext_stats_test_expr_stat1,schema public,n
+row statistics object ext_stats_test_expr_stat1,column x of table ext_stats_test,a
+SELECT 21
+> SELECT pg_describe_object(tableoid, oid, 0), pg_identify_object(tableoid, oid, 0) FROM pg_statistic_ext ORDER BY oid;
+fields pg_describe_object:25:-1:-1,pg_identify_object:2249:-1:-1
+row statistics object tst,("statistics object",public,tst,public.tst)
+row statistics object ext_stats_test_y_z_stat,("statistics object",public,ext_stats_test_y_z_stat,public.ext_stats_test_y_z_stat)
+row statistics object ext_stats_test_y_z_stat1,("statistics object",public,ext_stats_test_y_z_stat1,public.ext_stats_test_y_z_stat1)
+row statistics object ext_stats_test_expr_expr_z_stat,("statistics object",public,ext_stats_test_expr_expr_z_stat,public.ext_stats_test_expr_expr_z_stat)
+row statistics object ext_stats_test_expr_stat,("statistics object",public,ext_stats_test_expr_stat,public.ext_stats_test_expr_stat)
+row statistics object ext_stats_test_expr_stat1,("statistics object",public,ext_stats_test_expr_stat1,public.ext_stats_test_expr_stat1)
+SELECT 6
+> DROP TABLE ext_stats_test;
+DROP TABLE
+> SELECT count(*) FROM pg_statistic_ext;
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE TABLE ab1 (a INTEGER, b INTEGER, c INTEGER);
+CREATE TABLE
+> CREATE STATISTICS IF NOT EXISTS ab1_a_b_stats ON a, b FROM ab1;
+CREATE STATISTICS
+> COMMENT ON STATISTICS ab1_a_b_stats IS 'new comment';
+COMMENT
+> SELECT obj_description(oid, 'pg_statistic_ext') FROM pg_statistic_ext WHERE stxname = 'ab1_a_b_stats';
+fields obj_description:25:-1:-1
+row new comment
+SELECT 1
+> CREATE ROLE regress_stats_ext;
+CREATE ROLE
+> SET SESSION AUTHORIZATION regress_stats_ext;
+SET
+session_authorization=regress_stats_ext
+is_superuser=off
+> COMMENT ON STATISTICS ab1_a_b_stats IS 'changed comment';
+ERROR 42501 must be owner of statistics object ab1_a_b_stats
+> DROP STATISTICS ab1_a_b_stats;
+ERROR 42501 must be owner of statistics object ab1_a_b_stats
+> ALTER STATISTICS ab1_a_b_stats RENAME TO ab1_a_b_stats_new;
+ERROR 42501 must be owner of statistics object ab1_a_b_stats
+> ALTER STATISTICS ab1_a_b_stats SET STATISTICS 10;
+ERROR 42501 must be owner of statistics object ab1_a_b_stats
+> CREATE STATISTICS tst ON a, b FROM ab1;
+ERROR 42501 must be owner of table ab1
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> DROP ROLE regress_stats_ext;
+DROP ROLE
+> CREATE STATISTICS pg_temp.stats_ext_temp ON a, b FROM ab1;
+CREATE STATISTICS
+> SELECT regexp_replace(pg_describe_object(tableoid, oid, 0), 'pg_temp_[0-9]*', 'pg_temp_REDACTED') AS descr, pg_statistics_obj_is_visible(oid) AS visible FROM pg_statistic_ext WHERE stxname = 'stats_ext_temp';
+fields descr:25:-1:-1,visible:16:1:-1
+row statistics object pg_temp_REDACTED.stats_ext_temp,f
+SELECT 1
+> DROP STATISTICS stats_ext_temp;
+ERROR 42704 statistics object "stats_ext_temp" does not exist
+> DROP STATISTICS pg_temp.stats_ext_temp;
+DROP STATISTICS
+> CREATE STATISTICS IF NOT EXISTS ab1_a_b_stats ON a, b FROM ab1;
+NOTICE 42710 statistics object "ab1_a_b_stats" already exists, skipping
+CREATE STATISTICS
+> DROP STATISTICS ab1_a_b_stats;
+DROP STATISTICS
+> CREATE SCHEMA regress_schema_2;
+CREATE SCHEMA
+> CREATE STATISTICS regress_schema_2.ab1_a_b_stats ON a, b FROM ab1;
+CREATE STATISTICS
+> SELECT pg_get_statisticsobjdef(oid), pg_statistics_obj_is_visible(oid) FROM pg_statistic_ext WHERE stxname = 'ab1_a_b_stats';
+fields pg_get_statisticsobjdef:25:-1:-1,pg_statistics_obj_is_visible:16:1:-1
+row CREATE STATISTICS regress_schema_2.ab1_a_b_stats ON a, b FROM ab1,f
+SELECT 1
+> DROP STATISTICS regress_schema_2.ab1_a_b_stats;
+DROP STATISTICS
+> DROP STATISTICS IF EXISTS regress_schema_2.ab1_a_b_stats;
+NOTICE 00000 statistics object "regress_schema_2.ab1_a_b_stats" does not exist, skipping
+DROP STATISTICS
+> DROP STATISTICS IF EXISTS nosuch_schema.ab1_a_b_stats;
+NOTICE 00000 schema "nosuch_schema" does not exist, skipping
+DROP STATISTICS
+> DROP STATISTICS nosuch_schema.ab1_a_b_stats;
+ERROR 3F000 schema "nosuch_schema" does not exist
+> DROP STATISTICS IF EXISTS nostat, alsonot;
+NOTICE 00000 statistics object "nostat" does not exist, skipping
+NOTICE 00000 statistics object "alsonot" does not exist, skipping
+DROP STATISTICS
+> CREATE STATISTICS ab1_b_c_stats ON b, c FROM ab1;
+CREATE STATISTICS
+> CREATE STATISTICS ab1_a_b_c_stats ON a, b, c FROM ab1;
+CREATE STATISTICS
+> CREATE STATISTICS ab1_b_a_stats ON b, a FROM ab1;
+CREATE STATISTICS
+> CREATE STATISTICS ab1_expr ON (a + b), c FROM ab1;
+CREATE STATISTICS
+> CREATE STATISTICS ab1_expr2 ON (b + c), c FROM ab1;
+CREATE STATISTICS
+> ALTER TABLE ab1 DROP COLUMN a;
+ALTER TABLE
+> SELECT stxname, stxkeys, pg_get_statisticsobjdef(oid) FROM pg_statistic_ext WHERE stxname LIKE 'ab1%' ORDER BY stxname;
+fields stxname@pg_statistic_ext.3:19:64:-1,stxkeys@pg_statistic_ext.6:22:-1:-1,pg_get_statisticsobjdef:25:-1:-1
+row ab1_b_c_stats,2 3,CREATE STATISTICS public.ab1_b_c_stats ON b, c FROM ab1
+row ab1_expr2,3,CREATE STATISTICS public.ab1_expr2 ON c, (b + c) FROM ab1
+SELECT 2
+> DROP TABLE ab1;
+DROP TABLE
+> SELECT stxname FROM pg_statistic_ext WHERE stxname LIKE 'ab1%';
+fields stxname@pg_statistic_ext.3:19:64:-1
+SELECT 0
+> CREATE TABLE ab1 (a INTEGER, b INTEGER);
+CREATE TABLE
+> CREATE STATISTICS ab1_a_b_stats ON a, b FROM ab1;
+CREATE STATISTICS
+> ALTER STATISTICS ab1_a_b_stats SET STATISTICS 0;
+ALTER STATISTICS
+> SELECT stxstattarget FROM pg_statistic_ext WHERE stxname = 'ab1_a_b_stats';
+fields stxstattarget@pg_statistic_ext.7:21:2:-1
+row 0
+SELECT 1
+> ALTER STATISTICS ab1_a_b_stats SET STATISTICS -1;
+ALTER STATISTICS
+> SELECT stxstattarget FROM pg_statistic_ext WHERE stxname = 'ab1_a_b_stats';
+fields stxstattarget@pg_statistic_ext.7:21:2:-1
+row NULL
+SELECT 1
+> ALTER STATISTICS ab1_a_b_stats SET STATISTICS 20000;
+WARNING 22023 lowering statistics target to 10000
+ALTER STATISTICS
+> SELECT stxstattarget FROM pg_statistic_ext WHERE stxname = 'ab1_a_b_stats';
+fields stxstattarget@pg_statistic_ext.7:21:2:-1
+row 10000
+SELECT 1
+> ALTER STATISTICS ab1_a_b_stats SET STATISTICS -5;
+ERROR 22023 statistics target -5 is too low
+> ALTER STATISTICS ab1_a_b_stats SET STATISTICS DEFAULT;
+ALTER STATISTICS
+> SELECT stxstattarget FROM pg_statistic_ext WHERE stxname = 'ab1_a_b_stats';
+fields stxstattarget@pg_statistic_ext.7:21:2:-1
+row NULL
+SELECT 1
+> ALTER STATISTICS ab1_a_b_stats SET STATISTICS 100;
+ALTER STATISTICS
+> SELECT stxstattarget FROM pg_statistic_ext WHERE stxname = 'ab1_a_b_stats';
+fields stxstattarget@pg_statistic_ext.7:21:2:-1
+row 100
+SELECT 1
+> DROP TABLE ab1;
+DROP TABLE
+> ALTER STATISTICS ab1_a_b_stats SET STATISTICS 0;
+ERROR 42704 statistics object "ab1_a_b_stats" does not exist
+> ALTER STATISTICS IF EXISTS ab1_a_b_stats SET STATISTICS 0;
+NOTICE 00000 statistics object "ab1_a_b_stats" does not exist, skipping
+ALTER STATISTICS
+> CREATE TABLE ab1 (a INTEGER, b INTEGER, c TIMESTAMP, d TIMESTAMPTZ);
+CREATE TABLE
+> CREATE STATISTICS ab1_exprstat_1 ON (a+b) FROM ab1;
+CREATE STATISTICS
+> CREATE STATISTICS ab1_exprstat_2 ON (a+b) FROM ab1;
+CREATE STATISTICS
+> SELECT stxkind FROM pg_statistic_ext WHERE stxname = 'ab1_exprstat_2';
+fields stxkind@pg_statistic_ext.8:1002:-1:-1
+row {e}
+SELECT 1
+> CREATE STATISTICS ab1_exprstat_3 ON (a+b), a FROM ab1;
+CREATE STATISTICS
+> SELECT stxkind FROM pg_statistic_ext WHERE stxname = 'ab1_exprstat_3';
+fields stxkind@pg_statistic_ext.8:1002:-1:-1
+row {d,f,m,e}
+SELECT 1
+> CREATE STATISTICS ab1_exprstat_4 ON date_trunc('day', d) FROM ab1;
+CREATE STATISTICS
+> CREATE STATISTICS ab1_exprstat_5 ON date_trunc('day', c) FROM ab1;
+CREATE STATISTICS
+> CREATE STATISTICS ab1_exprstat_6 ON (case a when 1 then true else false end), b FROM ab1;
+CREATE STATISTICS
+> CREATE STATISTICS ab1_exprstat_7 (mcv, ndistinct) ON a, b, (a * 2 + b) FROM ab1;
+CREATE STATISTICS
+> CREATE STATISTICS ab1_exprstat_8 (dependencies) ON (coalesce(a, b)), (c::date) FROM ab1;
+CREATE STATISTICS
+> SELECT stxname, stxkeys, stxkind, pg_get_statisticsobjdef(oid), pg_get_statisticsobjdef_columns(oid), pg_get_statisticsobjdef_expressions(oid) FROM pg_statistic_ext WHERE stxrelid = 'ab1'::regclass ORDER BY stxname;
+fields stxname@pg_statistic_ext.3:19:64:-1,stxkeys@pg_statistic_ext.6:22:-1:-1,stxkind@pg_statistic_ext.8:1002:-1:-1,pg_get_statisticsobjdef:25:-1:-1,pg_get_statisticsobjdef_columns:25:-1:-1,pg_get_statisticsobjdef_expressions:1009:-1:-1
+row ab1_exprstat_1,,{e},CREATE STATISTICS public.ab1_exprstat_1 ON (a + b) FROM ab1,(a + b),{"(a + b)"}
+row ab1_exprstat_2,,{e},CREATE STATISTICS public.ab1_exprstat_2 ON (a + b) FROM ab1,(a + b),{"(a + b)"}
+row ab1_exprstat_3,1,{d,f,m,e},CREATE STATISTICS public.ab1_exprstat_3 ON a, (a + b) FROM ab1,a, (a + b),{"(a + b)"}
+row ab1_exprstat_4,,{e},CREATE STATISTICS public.ab1_exprstat_4 ON date_trunc('day'::text, d) FROM ab1,date_trunc('day'::text, d),{"date_trunc('day'::text, d)"}
+row ab1_exprstat_5,,{e},CREATE STATISTICS public.ab1_exprstat_5 ON date_trunc('day'::text, c) FROM ab1,date_trunc('day'::text, c),{"date_trunc('day'::text, c)"}
+row ab1_exprstat_6,2,{d,f,m,e},CREATE STATISTICS public.ab1_exprstat_6 ON b, (CASE a WHEN 1 THEN true ELSE false END) FROM ab1,b, (CASE a WHEN 1 THEN true ELSE false END),{"
+CASE a
+    WHEN 1 THEN true
+    ELSE false
+END"}
+row ab1_exprstat_7,1 2,{d,m,e},CREATE STATISTICS public.ab1_exprstat_7 (ndistinct, mcv) ON a, b, (a * 2 + b) FROM ab1,a, b, (a * 2 + b),{"((a * 2) + b)"}
+row ab1_exprstat_8,,{f,e},CREATE STATISTICS public.ab1_exprstat_8 (dependencies) ON COALESCE(a, b), (c::date) FROM ab1,COALESCE(a, b), (c::date),{"COALESCE(a, b)",(c)::date}
+SELECT 8
+> INSERT INTO ab1 SELECT x / 10, x / 3, '2020-10-01'::timestamp + x * interval '1 day', '2020-10-01'::timestamptz + x * interval '1 day' FROM generate_series(1, 100) x;
+INSERT 0 100
+> SELECT count(*) FROM ab1 WHERE (case a when 1 then true else false end) AND b=2;
+fields count:20:8:-1
+row 0
+SELECT 1
+> DROP TABLE ab1;
+DROP TABLE
+> CREATE schema tststats;
+CREATE SCHEMA
+> CREATE TABLE tststats.t (a int, b int, c text);
+CREATE TABLE
+> CREATE INDEX ti ON tststats.t (a, b);
+CREATE INDEX
+> CREATE SEQUENCE tststats.s;
+CREATE SEQUENCE
+> CREATE VIEW tststats.v AS SELECT * FROM tststats.t;
+CREATE VIEW
+> CREATE MATERIALIZED VIEW tststats.mv AS SELECT * FROM tststats.t;
+SELECT 0
+> CREATE TYPE tststats.ty AS (a int, b int, c text);
+CREATE TYPE
+> CREATE TABLE tststats.pt (a int, b int, c text) PARTITION BY RANGE (a, b);
+CREATE TABLE
+> CREATE TABLE tststats.pt1 PARTITION OF tststats.pt FOR VALUES FROM (-10, -10) TO (10, 10);
+CREATE TABLE
+> CREATE STATISTICS tststats.s1 ON a, b FROM tststats.t;
+CREATE STATISTICS
+> CREATE STATISTICS tststats.s2 ON a, b FROM tststats.ti;
+ERROR 42809 cannot define statistics for relation "ti"
+DETAIL This operation is not supported for indexes.
+> CREATE STATISTICS tststats.s3 ON a, b FROM tststats.s;
+ERROR 42809 cannot define statistics for relation "s"
+DETAIL This operation is not supported for sequences.
+> CREATE STATISTICS tststats.s4 ON a, b FROM tststats.v;
+ERROR 42809 cannot define statistics for relation "v"
+DETAIL This operation is not supported for views.
+> CREATE STATISTICS tststats.s5 ON a, b FROM tststats.mv;
+CREATE STATISTICS
+> CREATE STATISTICS tststats.s6 ON a, b FROM tststats.ty;
+ERROR 42809 cannot define statistics for relation "ty"
+DETAIL This operation is not supported for composite types.
+> CREATE STATISTICS tststats.s8 ON a, b FROM tststats.pt;
+CREATE STATISTICS
+> CREATE STATISTICS tststats.s9 ON a, b FROM tststats.pt1;
+CREATE STATISTICS
+> SELECT stxname, stxrelid::regclass FROM pg_statistic_ext ORDER BY stxname;
+fields stxname@pg_statistic_ext.3:19:64:-1,stxrelid:2205:4:-1
+row s1,tststats.t
+row s5,tststats.mv
+row s8,tststats.pt
+row s9,tststats.pt1
+SELECT 4
+> DROP SCHEMA tststats CASCADE;
+NOTICE 00000 drop cascades to 6 other objects
+DETAIL drop cascades to table tststats.t
+drop cascades to sequence tststats.s
+drop cascades to view tststats.v
+drop cascades to materialized view tststats.mv
+drop cascades to type tststats.ty
+drop cascades to table tststats.pt
+DROP SCHEMA
+> CREATE ROLE regress_alter_generic_user1;
+CREATE ROLE
+> CREATE ROLE regress_alter_generic_user2;
+CREATE ROLE
+> CREATE ROLE regress_alter_generic_user3;
+CREATE ROLE
+> GRANT regress_alter_generic_user3 TO regress_alter_generic_user1;
+GRANT ROLE
+> CREATE SCHEMA alt_nsp1;
+CREATE SCHEMA
+> CREATE SCHEMA alt_nsp2;
+CREATE SCHEMA
+> GRANT ALL ON SCHEMA alt_nsp1, alt_nsp2 TO public;
+GRANT
+> SET search_path = alt_nsp1, public;
+SET
+search_path=alt_nsp1, public
+> SET SESSION AUTHORIZATION regress_alter_generic_user1;
+SET
+session_authorization=regress_alter_generic_user1
+is_superuser=off
+> CREATE TABLE alt_regress_1 (a INTEGER, b INTEGER);
+CREATE TABLE
+> CREATE STATISTICS alt_stat1 ON a, b FROM alt_regress_1;
+CREATE STATISTICS
+> CREATE STATISTICS alt_stat2 ON a, b FROM alt_regress_1;
+CREATE STATISTICS
+> ALTER STATISTICS alt_stat1 RENAME TO alt_stat2;
+ERROR 42710 statistics object "alt_stat2" already exists in schema "alt_nsp1"
+> ALTER STATISTICS alt_stat1 RENAME TO alt_stat3;
+ALTER STATISTICS
+> ALTER STATISTICS alt_stat2 OWNER TO regress_alter_generic_user2;
+ERROR 42501 must be able to SET ROLE "regress_alter_generic_user2"
+> ALTER STATISTICS alt_stat2 OWNER TO regress_alter_generic_user3;
+ALTER STATISTICS
+> ALTER STATISTICS alt_stat2 SET SCHEMA alt_nsp2;
+ALTER STATISTICS
+> SET SESSION AUTHORIZATION regress_alter_generic_user2;
+SET
+session_authorization=regress_alter_generic_user2
+> CREATE TABLE alt_regress_2 (a INTEGER, b INTEGER);
+CREATE TABLE
+> CREATE STATISTICS alt_stat1 ON a, b FROM alt_regress_2;
+CREATE STATISTICS
+> CREATE STATISTICS alt_stat2 ON a, b FROM alt_regress_2;
+CREATE STATISTICS
+> ALTER STATISTICS alt_stat3 RENAME TO alt_stat4;
+ERROR 42501 must be owner of statistics object alt_stat3
+> ALTER STATISTICS alt_stat1 RENAME TO alt_stat4;
+ALTER STATISTICS
+> ALTER STATISTICS alt_stat3 OWNER TO regress_alter_generic_user2;
+ERROR 42501 must be owner of statistics object alt_stat3
+> ALTER STATISTICS alt_stat2 OWNER TO regress_alter_generic_user3;
+ERROR 42501 must be able to SET ROLE "regress_alter_generic_user3"
+> ALTER STATISTICS alt_stat3 SET SCHEMA alt_nsp2;
+ERROR 42501 must be owner of statistics object alt_stat3
+> ALTER STATISTICS alt_stat2 SET SCHEMA alt_nsp2;
+ERROR 42710 statistics object "alt_stat2" already exists in schema "alt_nsp2"
+> CREATE STATISTICS alt_stat5 ON a, b FROM alt_regress_1;
+ERROR 42501 must be owner of table alt_regress_1
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> SELECT nspname, stxname, rolname FROM pg_statistic_ext s, pg_namespace n, pg_authid a WHERE s.stxnamespace = n.oid AND s.stxowner = a.oid AND n.nspname in ('alt_nsp1', 'alt_nsp2') ORDER BY nspname, stxname;
+fields nspname@pg_namespace.2:19:64:-1,stxname@pg_statistic_ext.3:19:64:-1,rolname@pg_authid.2:19:64:-1
+row alt_nsp1,alt_stat2,regress_alter_generic_user2
+row alt_nsp1,alt_stat3,regress_alter_generic_user1
+row alt_nsp1,alt_stat4,regress_alter_generic_user2
+row alt_nsp2,alt_stat2,regress_alter_generic_user3
+SELECT 4
+> ALTER STATISTICS alt_stat2 SET SCHEMA pg_temp;
+ERROR 0A000 cannot move objects into or out of temporary schemas
+> ALTER STATISTICS alt_stat2 SET SCHEMA nosuch;
+ERROR 3F000 schema "nosuch" does not exist
+> ALTER STATISTICS nosuch RENAME TO x;
+ERROR 42704 statistics object "nosuch" does not exist
+> ALTER STATISTICS IF EXISTS nosuch RENAME TO x;
+ERROR 42601 syntax error at or near "RENAME" at 35
+> ALTER STATISTICS IF EXISTS nosuch OWNER TO regress_alter_generic_user1;
+ERROR 42601 syntax error at or near "OWNER" at 35
+> ALTER STATISTICS IF EXISTS nosuch SET SCHEMA alt_nsp2;
+ERROR 42601 syntax error at or near "SCHEMA" at 39
+> DROP TABLE alt_regress_2;
+DROP TABLE
+> SELECT stxname FROM pg_statistic_ext ORDER BY 1;
+fields stxname@pg_statistic_ext.3:19:64:-1
+row alt_stat2
+row alt_stat3
+SELECT 2
+> ALTER TABLE alt_regress_1 RENAME a TO aa;
+ALTER TABLE
+> SELECT pg_get_statisticsobjdef(oid) FROM pg_statistic_ext ORDER BY stxname;
+fields pg_get_statisticsobjdef:25:-1:-1
+row CREATE STATISTICS alt_nsp2.alt_stat2 ON aa, b FROM alt_regress_1
+row CREATE STATISTICS alt_nsp1.alt_stat3 ON aa, b FROM alt_regress_1
+SELECT 2
+> ALTER TABLE alt_regress_1 RENAME TO alt_regress_r;
+ALTER TABLE
+> SELECT pg_get_statisticsobjdef(oid) FROM pg_statistic_ext ORDER BY stxname;
+fields pg_get_statisticsobjdef:25:-1:-1
+row CREATE STATISTICS alt_nsp2.alt_stat2 ON aa, b FROM alt_regress_r
+row CREATE STATISTICS alt_nsp1.alt_stat3 ON aa, b FROM alt_regress_r
+SELECT 2
+> ALTER TABLE alt_regress_r ALTER aa TYPE bigint;
+ALTER TABLE
+> SELECT stxname, oid > 0, pg_get_statisticsobjdef(oid) FROM pg_statistic_ext ORDER BY stxname;
+fields stxname@pg_statistic_ext.3:19:64:-1,?column?:16:1:-1,pg_get_statisticsobjdef:25:-1:-1
+row alt_stat2,t,CREATE STATISTICS alt_nsp2.alt_stat2 ON aa, b FROM alt_regress_r
+row alt_stat3,t,CREATE STATISTICS alt_nsp1.alt_stat3 ON aa, b FROM alt_regress_r
+SELECT 2
+> DROP TABLE alt_regress_r;
+DROP TABLE
+> RESET search_path;
+RESET
+search_path="$user", public
+> DROP SCHEMA alt_nsp1, alt_nsp2 CASCADE;
+DROP SCHEMA
+> DROP ROLE regress_alter_generic_user1, regress_alter_generic_user2, regress_alter_generic_user3;
+DROP ROLE
+> SELECT pg_get_statisticsobjdef(0), pg_get_statisticsobjdef_columns(0), pg_get_statisticsobjdef_expressions(0), pg_statistics_obj_is_visible(0);
+fields pg_get_statisticsobjdef:25:-1:-1,pg_get_statisticsobjdef_columns:25:-1:-1,pg_get_statisticsobjdef_expressions:1009:-1:-1,pg_statistics_obj_is_visible:16:1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
