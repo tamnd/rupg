@@ -156,31 +156,39 @@ impl Stream for OsStream {
 
     fn set_tcp_option(&self, option: TcpOption, value: i32) -> Result<()> {
         set_tcp_option(&self.0, option, value).map_err(|e| {
-            Error::new(
-                SqlState::CONNECTION_FAILURE,
-                format!("setsockopt({}) failed: {e}", option.name()),
-            )
+            let message = if e.kind() == io::ErrorKind::Unsupported {
+                format!("setsockopt({}) not supported", option.name())
+            } else {
+                format!("setsockopt({}) failed: {e}", option.name())
+            };
+            Error::new(SqlState::CONNECTION_FAILURE, message)
         })
     }
 }
 
 /// The size of an option of the type `int` of C.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const INT_SIZE: libc::socklen_t = 4;
 
-/// The name of the option for `getsockopt` and `setsockopt` at the level `IPPROTO_TCP`.
-#[cfg(target_os = "linux")]
-fn tcp_name(option: TcpOption) -> libc::c_int {
+/// The name of the option for `getsockopt` and `setsockopt` at the level `IPPROTO_TCP`. macOS calls the idle time `TCP_KEEPALIVE`, and it does not have `TCP_USER_TIMEOUT`.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn tcp_name(option: TcpOption) -> Option<libc::c_int> {
     match option {
-        TcpOption::KeepalivesIdle => libc::TCP_KEEPIDLE,
-        TcpOption::KeepalivesInterval => libc::TCP_KEEPINTVL,
-        TcpOption::KeepalivesCount => libc::TCP_KEEPCNT,
-        TcpOption::UserTimeout => libc::TCP_USER_TIMEOUT,
+        #[cfg(target_os = "linux")]
+        TcpOption::KeepalivesIdle => Some(libc::TCP_KEEPIDLE),
+        #[cfg(target_os = "macos")]
+        TcpOption::KeepalivesIdle => Some(libc::TCP_KEEPALIVE),
+        TcpOption::KeepalivesInterval => Some(libc::TCP_KEEPINTVL),
+        TcpOption::KeepalivesCount => Some(libc::TCP_KEEPCNT),
+        #[cfg(target_os = "linux")]
+        TcpOption::UserTimeout => Some(libc::TCP_USER_TIMEOUT),
+        #[cfg(target_os = "macos")]
+        TcpOption::UserTimeout => None,
     }
 }
 
 /// `setsockopt` of an option of the type `int`.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn set_option(
     socket: &TcpStream,
     level: libc::c_int,
@@ -196,15 +204,16 @@ fn set_option(
 }
 
 /// Turns on `SO_KEEPALIVE`.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn keep_alive(socket: &TcpStream) -> io::Result<()> {
     set_option(socket, libc::SOL_SOCKET, libc::SO_KEEPALIVE, 1)
 }
 
-/// The value of a TCP option of the socket.
-#[cfg(target_os = "linux")]
+/// The value of a TCP option of the socket. An option that the system does not have is 0, as `pq_gettcpusertimeout` gives it.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn get_tcp_option(socket: &TcpStream, option: TcpOption) -> Option<i32> {
     use std::os::fd::AsRawFd;
+    let Some(name) = tcp_name(option) else { return Some(0) };
     let mut value: libc::c_int = 0;
     let mut size = INT_SIZE;
     // SAFETY: the socket stays open while `socket` lives, and `value` and `size` can take a write of their sizes.
@@ -212,7 +221,7 @@ fn get_tcp_option(socket: &TcpStream, option: TcpOption) -> Option<i32> {
         libc::getsockopt(
             socket.as_raw_fd(),
             libc::IPPROTO_TCP,
-            tcp_name(option),
+            name,
             (&raw mut value).cast(),
             &raw mut size,
         )
@@ -220,26 +229,29 @@ fn get_tcp_option(socket: &TcpStream, option: TcpOption) -> Option<i32> {
     (result == 0).then_some(value)
 }
 
-/// Sets a TCP option of the socket.
-#[cfg(target_os = "linux")]
+/// Sets a TCP option of the socket. An option that the system does not have fails, as `pq_settcpusertimeout` fails.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn set_tcp_option(socket: &TcpStream, option: TcpOption, value: i32) -> io::Result<()> {
-    set_option(socket, libc::IPPROTO_TCP, tcp_name(option), value)
+    let Some(name) = tcp_name(option) else {
+        return Err(io::ErrorKind::Unsupported.into());
+    };
+    set_option(socket, libc::IPPROTO_TCP, name, value)
 }
 
-/// Only Linux is done, so the other systems leave `SO_KEEPALIVE` off.
-#[cfg(not(target_os = "linux"))]
+/// Only Linux and macOS are done, so the other systems leave `SO_KEEPALIVE` off.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn keep_alive(_socket: &TcpStream) -> io::Result<()> {
     Ok(())
 }
 
-/// Only Linux is done, so the other systems do not know the options.
-#[cfg(not(target_os = "linux"))]
+/// Only Linux and macOS are done, so the other systems do not know the options.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn get_tcp_option(_socket: &TcpStream, _option: TcpOption) -> Option<i32> {
     None
 }
 
-/// Only Linux is done, so the other systems do not change the options.
-#[cfg(not(target_os = "linux"))]
+/// Only Linux and macOS are done, so the other systems do not change the options.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn set_tcp_option(_socket: &TcpStream, _option: TcpOption, _value: i32) -> io::Result<()> {
     Ok(())
 }

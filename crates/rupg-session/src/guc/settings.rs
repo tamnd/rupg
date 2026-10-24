@@ -1082,9 +1082,12 @@ impl Settings {
         }
     }
 
-    /// The show hooks of the TCP parameters, as `pq_getkeepalivesidle` and the others give the value: 0 for a Unix socket, the value of the parameter when it is not 0, and else the value that the system gave to the socket.
+    /// The show hooks of the TCP parameters, as `pq_getkeepalivesidle` and the others give the value: 0 for a Unix socket and for an option that the system does not have, the value of the parameter when it is not 0, and else the value that the system gave to the socket.
     fn tcp_shown(&self, parameter: &'static Parameter, index: usize) -> String {
         let Some(values) = self.socket else { return "0".to_owned() };
+        if !TcpOption::ALL[index].supported() {
+            return "0".to_owned();
+        }
         match self.setting(parameter) {
             Setting::Int(value) if value != 0 => value.to_string(),
             _ => values[index].to_string(),
@@ -1340,10 +1343,14 @@ mod tests {
         assert_eq!(s.get("tcp_keepalives_idle").as_deref(), Some("0"), "no socket");
         s.set_socket([7200, 75, 9, -1]);
         assert_eq!(s.get("tcp_keepalives_idle").as_deref(), Some("7200"));
-        assert_eq!(s.get("tcp_user_timeout").as_deref(), Some("-1"));
+        // macOS does not have `TCP_USER_TIMEOUT`, so it shows 0 for each value.
+        let macos = cfg!(target_os = "macos");
+        assert_eq!(s.get("tcp_user_timeout").as_deref(), Some(if macos { "0" } else { "-1" }));
         s.set("tcp_keepalives_idle", Some("60"), Action::Set, Origin::Statement).unwrap();
         assert_eq!(s.get("tcp_keepalives_idle").as_deref(), Some("60"));
         assert_eq!(s.tcp_values(), [60, 0, 0, 0]);
+        s.set("tcp_user_timeout", Some("5000"), Action::Set, Origin::Statement).unwrap();
+        assert_eq!(s.get("tcp_user_timeout").as_deref(), Some(if macos { "0" } else { "5000" }));
     }
 
     #[test]
