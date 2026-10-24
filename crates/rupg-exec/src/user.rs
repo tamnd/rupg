@@ -1071,7 +1071,7 @@ fn functions<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("provariadic", oid(variadic_type(catalog, f)))
                 .set("prosupport", oid(f.support))
                 .set("prokind", Value::Char(f.kind))
-                .set("prosecdef", Value::Bool(false))
+                .set("prosecdef", Value::Bool(f.secdef))
                 .set("proleakproof", Value::Bool(f.leakproof))
                 .set("proisstrict", Value::Bool(f.strict))
                 .set("proretset", Value::Bool(f.retset))

@@ -1,0 +1,161 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE ROLE sd_user;
+CREATE ROLE
+> CREATE TABLE sd_t (a int);
+CREATE TABLE
+> INSERT INTO sd_t VALUES (1), (2);
+INSERT 0 2
+> CREATE FUNCTION sd_count() RETURNS bigint LANGUAGE sql SECURITY DEFINER AS 'SELECT count(*) FROM sd_t';
+CREATE FUNCTION
+> CREATE FUNCTION sd_who() RETURNS text LANGUAGE sql SECURITY DEFINER AS $$ SELECT current_user || ' ' || session_user $$;
+CREATE FUNCTION
+> CREATE FUNCTION sd_who_inv() RETURNS text LANGUAGE sql AS $$ SELECT current_user || ' ' || session_user $$;
+CREATE FUNCTION
+> CREATE FUNCTION sd_pl() RETURNS text LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN RETURN current_user || ' ' || (SELECT count(*) FROM sd_t); END $$;
+CREATE FUNCTION
+> CREATE FUNCTION sd_role() RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN SET ROLE sd_user; END $$;
+CREATE FUNCTION
+> CREATE FUNCTION sd_set() RETURNS text LANGUAGE sql SECURITY DEFINER SET work_mem = '3MB' AS $$ SELECT current_setting('work_mem') $$;
+CREATE FUNCTION
+> CREATE PROCEDURE sd_proc() LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN RAISE NOTICE '%', current_user; END $$;
+CREATE PROCEDURE
+> SELECT proname, prosecdef FROM pg_proc WHERE proname LIKE 'sd\_%' ORDER BY 1;
+fields proname@pg_proc.2:19:64:-1,prosecdef@pg_proc.11:16:1:-1
+row sd_count,t
+row sd_pl,t
+row sd_proc,t
+row sd_role,t
+row sd_set,t
+row sd_who,t
+row sd_who_inv,f
+SELECT 7
+> SELECT pg_get_functiondef('sd_count'::regproc);
+fields pg_get_functiondef:25:-1:-1
+row CREATE OR REPLACE FUNCTION public.sd_count()
+ RETURNS bigint
+ LANGUAGE sql
+ SECURITY DEFINER
+AS $function$SELECT count(*) FROM sd_t$function$
+
+SELECT 1
+> SELECT pg_get_functiondef('sd_set'::regproc);
+fields pg_get_functiondef:25:-1:-1
+row CREATE OR REPLACE FUNCTION public.sd_set()
+ RETURNS text
+ LANGUAGE sql
+ SECURITY DEFINER
+ SET work_mem TO '3MB'
+AS $function$ SELECT current_setting('work_mem') $function$
+
+SELECT 1
+> SET ROLE sd_user;
+SET
+is_superuser=off
+> SELECT count(*) FROM sd_t;
+ERROR 42501 permission denied for table sd_t
+> SELECT sd_count();
+fields sd_count:20:8:-1
+row 2
+SELECT 1
+> SELECT sd_who(), sd_who_inv(), current_user;
+fields sd_who:25:-1:-1,sd_who_inv:25:-1:-1,current_user:19:64:-1
+row postgres postgres,sd_user postgres,sd_user
+SELECT 1
+> SELECT sd_pl();
+fields sd_pl:25:-1:-1
+row postgres 2
+SELECT 1
+> SELECT sd_set();
+fields sd_set:25:-1:-1
+row 3MB
+SELECT 1
+> CALL sd_proc();
+NOTICE 00000 postgres (PL/pgSQL function sd_proc() line 1 at RAISE)
+CALL
+> SELECT * FROM sd_count();
+fields sd_count:20:8:-1
+row 2
+SELECT 1
+> RESET ROLE;
+RESET
+is_superuser=on
+> SELECT sd_role();
+fields sd_role:2278:4:-1
+ERROR 42501 cannot set parameter "role" within security-definer function (SQL statement "SET ROLE sd_user"
+PL/pgSQL function sd_role() line 1 at SQL statement)
+> SELECT current_user = session_user AS same;
+fields same:16:1:-1
+row t
+SELECT 1
+> ALTER FUNCTION sd_who_inv() SECURITY DEFINER;
+ALTER FUNCTION
+> SELECT proname, prosecdef FROM pg_proc WHERE proname LIKE 'sd\_who%' ORDER BY 1;
+fields proname@pg_proc.2:19:64:-1,prosecdef@pg_proc.11:16:1:-1
+row sd_who,t
+row sd_who_inv,t
+SELECT 2
+> ALTER FUNCTION sd_who_inv() SECURITY INVOKER;
+ALTER FUNCTION
+> SELECT routine_name, security_type FROM information_schema.routines WHERE routine_name LIKE 'sd\_%' ORDER BY 1;
+fields routine_name@information_schema.routines.6:19:64:-1,security_type@information_schema.routines.50:1043:-1:-1
+row sd_count,DEFINER
+row sd_pl,DEFINER
+row sd_proc,DEFINER
+row sd_role,DEFINER
+row sd_set,DEFINER
+row sd_who,DEFINER
+row sd_who_inv,INVOKER
+SELECT 7
+> ALTER FUNCTION sd_pl() OWNER TO sd_user;
+ALTER FUNCTION
+> SELECT sd_pl();
+fields sd_pl:25:-1:-1
+ERROR 42501 permission denied for table sd_t (PL/pgSQL expression "current_user || ' ' || (SELECT count(*) FROM sd_t)"
+PL/pgSQL function sd_pl() line 1 at RETURN)
+> ALTER FUNCTION sd_who() OWNER TO sd_user;
+ALTER FUNCTION
+> SELECT sd_who();
+fields sd_who:25:-1:-1
+row sd_user postgres
+SELECT 1
+> CREATE FUNCTION sd_cfg() RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN PERFORM set_config('role', 'sd_user', true); END $$;
+CREATE FUNCTION
+> SELECT sd_cfg();
+fields sd_cfg:2278:4:-1
+ERROR 42501 cannot set parameter "role" within security-definer function (SQL statement "SELECT set_config('role', 'sd_user', true)"
+PL/pgSQL function sd_cfg() line 1 at PERFORM)
+> CREATE FUNCTION sd_mk() RETURNS text LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN CREATE TEMP TABLE sd_tmp (a int); RETURN (SELECT tableowner FROM pg_tables WHERE tablename = 'sd_tmp'); END $$;
+CREATE FUNCTION
+> ALTER FUNCTION sd_mk() OWNER TO sd_user;
+ALTER FUNCTION
+> SELECT sd_mk();
+fields sd_mk:25:-1:-1
+row sd_user
+SELECT 1
+> SELECT tableowner FROM pg_tables WHERE tablename = 'sd_tmp';
+fields tableowner@pg_tables.3:19:64:-1
+row sd_user
+SELECT 1
+> DROP TABLE sd_tmp;
+DROP TABLE
+> CREATE FUNCTION sd_err() RETURNS int LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN RAISE EXCEPTION 'boom'; END $$;
+CREATE FUNCTION
+> ALTER FUNCTION sd_err() OWNER TO sd_user;
+ALTER FUNCTION
+> SELECT sd_err();
+fields sd_err:23:4:-1
+ERROR P0001 boom (PL/pgSQL function sd_err() line 1 at RAISE)
+> SELECT current_user = session_user AS same;
+fields same:16:1:-1
+row t
+SELECT 1
+> DROP FUNCTION sd_count(), sd_who(), sd_who_inv(), sd_pl(), sd_role(), sd_set(), sd_err(), sd_cfg(), sd_mk();
+DROP FUNCTION
+> DROP PROCEDURE sd_proc();
+DROP PROCEDURE
+> DROP TABLE sd_t;
+DROP TABLE
+> DROP ROLE sd_user;
+DROP ROLE

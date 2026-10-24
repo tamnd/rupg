@@ -193,6 +193,8 @@ struct Frame {
     saved: Vec<(String, Option<Slot>)>,
     /// The names that a `SET` changed during the call, which keep their values after it.
     kept: Vec<String>,
+    /// The OID and the name of the owner of a `SECURITY DEFINER` function, which is the current user during the call.
+    definer: Option<(u32, String)>,
 }
 
 /// The order in which PostgreSQL 19 sends the reported parameters at startup, which is the order of its hash table.
@@ -338,6 +340,30 @@ impl Settings {
             Some(Setting::Int(value)) => value,
             _ => 0,
         })
+    }
+
+    /// The OID and the name of the current user of the innermost call of a `SECURITY DEFINER` function, or `None` outside such a call.
+    pub fn definer(&self) -> Option<&(u32, String)> {
+        self.frames.iter().rev().find_map(|frame| frame.definer.as_ref())
+    }
+
+    /// The check of `GUC_NOT_WHILE_SEC_REST` in `set_config_option`: `InLocalUserIdChange` is true in a call of a `SECURITY DEFINER` function, and then `role` and `session_authorization` cannot change, because the end of the call does not tell the settings.
+    ///
+    /// # Errors
+    ///
+    /// `42501` for `role` or `session_authorization` in such a call.
+    pub fn check_definer(&self, name: &str) -> Result<(), Error> {
+        let Some(parameter) = find(name) else { return Ok(()) };
+        if matches!(parameter.name, "role" | "session_authorization") && self.definer().is_some() {
+            return Err(Error::new(
+                SqlState::INSUFFICIENT_PRIVILEGE,
+                format!(
+                    "cannot set parameter \"{}\" within security-definer function",
+                    parameter.name
+                ),
+            ));
+        }
+        Ok(())
     }
 
     /// Changes whether the session counts as a superuser for the parameters that only a superuser can set, after `SET ROLE` or `SET SESSION AUTHORIZATION` changes the current user.
@@ -561,6 +587,9 @@ impl Settings {
             return self.set_placeholder(name, text, action, origin);
         };
         self.allowed(parameter, origin)?;
+        if origin == Origin::Statement {
+            self.check_definer(name)?;
+        }
         if text.is_none() && parameter.has(flag::NO_RESET) {
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
@@ -777,13 +806,17 @@ impl Settings {
         self.changed(parameter);
     }
 
-    /// `ProcessGUCArray` with `GUC_ACTION_SAVE` for a call of a function: each setting of `config`, as `name=value`, applies as a `SET LOCAL` until [`Settings::pop_function`].
+    /// `fmgr_security_definer` for a call of a function: `SetUserIdAndSecContext` makes `definer`, the OID and the name of the owner of a `SECURITY DEFINER` function, the current user, then `ProcessGUCArray` with `GUC_ACTION_SAVE` applies each setting of `config`, as `name=value`, as a `SET LOCAL`. Both stay until [`Settings::pop_function`].
     ///
     /// # Errors
     ///
     /// The errors of `SET` for the names and the values. The settings that applied before the error go back.
-    pub fn push_function(&mut self, config: &[String]) -> Result<(), Error> {
-        self.frames.push(Frame::default());
+    pub fn push_function(
+        &mut self,
+        config: &[String],
+        definer: Option<(u32, String)>,
+    ) -> Result<(), Error> {
+        self.frames.push(Frame { definer, ..Frame::default() });
         for item in config {
             let Some((name, value)) = item.split_once('=') else { continue };
             let key = find(name)

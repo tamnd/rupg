@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::rc::Rc;
 
 use rupg_analyze::{Env, Params, analyze};
@@ -42,8 +43,8 @@ impl rupg_func::Session for TestSession {
     fn clock(&self) -> i64 {
         10 * USECS_PER_DAY
     }
-    fn user(&self) -> &str {
-        "postgres"
+    fn user(&self) -> Cow<'_, str> {
+        Cow::Borrowed("postgres")
     }
     fn session_user(&self) -> &str {
         "postgres"

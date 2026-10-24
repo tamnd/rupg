@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::rc::Rc;
 
 use rupg_common::{Result, SqlState};
@@ -47,8 +48,8 @@ impl Session for TestSession {
     fn clock(&self) -> i64 {
         12 * USECS_PER_DAY
     }
-    fn user(&self) -> &str {
-        "alice"
+    fn user(&self) -> Cow<'_, str> {
+        Cow::Borrowed("alice")
     }
     fn session_user(&self) -> &str {
         "postgres"

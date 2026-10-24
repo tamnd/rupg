@@ -2,6 +2,7 @@
 //!
 //! [`Reader`] gives the analyzer and the functions the settings, the user, the database, the time zone, the times of the transaction and the statement, and the process ID. The time zone is the zone of [`rupg_types::tz`] for the canonical name in the setting.
 
+use std::borrow::Cow;
 use std::cell::{Ref, RefCell};
 use std::collections::BTreeSet;
 use std::rc::Rc;
@@ -10,7 +11,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use rupg_analyze::{Env, Params};
-use rupg_catalog::{Catalog, ConKind, DepKind, FIRST_NORMAL_OID, RangePart, SequenceData};
+use rupg_catalog::{
+    BOOTSTRAP_SUPERUSER, Catalog, ConKind, DepKind, FIRST_NORMAL_OID, RangePart, SequenceData,
+};
 use rupg_common::{Error, Result, SqlState};
 use rupg_exec::Plan;
 use rupg_func::{AdvisoryLock, Backend, Client, Randomness, Sequences};
@@ -601,13 +604,30 @@ impl<'a> Reader<'a> {
         self.settings.borrow()
     }
 
+    /// `GetUserId`: the name of the current user, which is the owner of the function in a call of a `SECURITY DEFINER` function.
+    pub(crate) fn current_user(&self) -> Cow<'_, str> {
+        match self.settings().definer() {
+            Some((_, name)) => Cow::Owned(name.clone()),
+            None => Cow::Borrowed(self.user),
+        }
+    }
+
+    /// `GetUserNameFromId`. The user of the login is the bootstrap superuser when no role has its name.
+    fn role_name(&self, role: u32) -> String {
+        let roles = rupg_pgcatalog::roles::current();
+        if role == BOOTSTRAP_SUPERUSER && roles.oid(self.login).is_none() {
+            return self.login.to_owned();
+        }
+        roles.name(role).map_or_else(|| role.to_string(), str::to_owned)
+    }
+
     /// The schemas of `search_path` that exist, in order, without the implicit schemas, as `recomputeNamespacePath` finds them. `$user` names the schema of the user, and `pg_temp` the temporary schema, which do not exist yet.
     fn path(&self) -> Vec<(String, u32)> {
         let text = self.settings().get("search_path").unwrap_or_default();
         let mut path: Vec<(String, u32)> = Vec::new();
         for name in guc::split_identifiers(&text, ',').unwrap_or_default() {
             let name = match name.as_str() {
-                "$user" => self.user.to_owned(),
+                "$user" => self.current_user().into_owned(),
                 "pg_temp" => match self.temp_name() {
                     Some(temp) => temp,
                     None => continue,
@@ -844,8 +864,8 @@ impl rupg_func::Session for Reader<'_> {
         now(self.clock)
     }
 
-    fn user(&self) -> &str {
-        self.user
+    fn user(&self) -> Cow<'_, str> {
+        self.current_user()
     }
 
     fn session_user(&self) -> &str {
@@ -1143,6 +1163,7 @@ impl rupg_func::Session for Reader<'_> {
     }
 
     fn set_setting(&self, name: &str, value: Option<&str>, local: bool) -> Result<String> {
+        self.settings().check_definer(name)?;
         if let Some(value) = value {
             utility::check_role(name, value, self.login, self.session_user)?;
         }
@@ -1164,11 +1185,12 @@ impl rupg_func::Session for Reader<'_> {
         guc::split_identifiers(text, ',')
     }
 
-    fn start_function_settings(&self, config: &[String]) -> Result<()> {
-        self.settings.borrow_mut().push_function(config)
+    fn start_function_call(&self, config: &[String], definer: Option<u32>) -> Result<()> {
+        let definer = definer.map(|role| (role, self.role_name(role)));
+        self.settings.borrow_mut().push_function(config, definer)
     }
 
-    fn end_function_settings(&self) {
+    fn end_function_call(&self) {
         self.settings.borrow_mut().pop_function();
     }
 }
@@ -1190,7 +1212,7 @@ impl Env for Reader<'_> {
     }
 
     fn push_function_settings(&self, config: &[String]) -> Result<()> {
-        self.settings.borrow_mut().push_function(config)
+        self.settings.borrow_mut().push_function(config, None)
     }
 
     fn pop_function_settings(&self) {

@@ -619,6 +619,8 @@ pub struct Function {
     pub body: Option<FunctionBody>,
     /// `proconfig`: the settings that apply during a call, each one as `name=value`, with the name of the parameter as PostgreSQL spells it.
     pub config: Vec<String>,
+    /// `prosecdef`: true for `SECURITY DEFINER`, which runs the function as its owner.
+    pub secdef: bool,
 }
 
 /// The body of a function in SQL, which the analyzer reads again each time a query calls the function, as it reads the query of a view.
@@ -2744,6 +2746,7 @@ impl Catalog {
             bin: String::new(),
             body: None,
             config: Vec::new(),
+            secdef: false,
         };
         let multirange_name = new.multirange_name.as_str();
         let variadic = Function {

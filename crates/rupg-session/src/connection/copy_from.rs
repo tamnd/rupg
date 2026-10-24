@@ -254,7 +254,7 @@ impl Connection {
         let target = rupg_analyze::copy_target(stmt, rv, &reader)?;
         let attnums: Vec<i16> =
             target.selected.iter().map(|&i| i16::try_from(i + 1).unwrap_or(i16::MAX)).collect();
-        if !rupg_func::insert_allowed(target.relid, self.role, &attnums, &reader)? {
+        if !rupg_func::insert_allowed(target.relid, self.current_role(), &attnums, &reader)? {
             let object = match target.kind {
                 b'v' => "view",
                 b'm' => "materialized view",

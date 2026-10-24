@@ -291,6 +291,7 @@ fn assign(
     value: Option<&str>,
     action: Action,
 ) -> Result<(), Error> {
+    cx.settings.check_definer(name)?;
     if let Some(value) = value {
         let session = cx.settings.get("session_authorization").unwrap_or_default();
         check_role(name, value, cx.user, &session)?;

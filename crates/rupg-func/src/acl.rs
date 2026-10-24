@@ -193,7 +193,7 @@ fn get_role_oid_or_public(name: &str, session: &dyn Session) -> Result<u32> {
 
 /// `GetUserId`: the OID of the current user.
 fn current_user(session: &dyn Session) -> u32 {
-    role_oid(session.user(), session).unwrap_or(BOOTSTRAP_SUPERUSER)
+    role_oid(&session.user(), session).unwrap_or(BOOTSTRAP_SUPERUSER)
 }
 
 /// `superuser_arg`. A role that does not exist is not a superuser.
