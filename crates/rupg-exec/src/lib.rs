@@ -102,6 +102,20 @@ fn procedural(func: u32) -> bool {
     builtin::proc_by_oid(func).is_some_and(|p| p.lang == PLPGSQL_LANGUAGE)
 }
 
+/// `fmgr_sql` for a function that does not return a set and whose last statement gave the rows `rows` with columns of the types `types`: the first column of the first row, or null. The columns of a function that returns a row make a row value. A function that returns `void` gives null.
+fn sql_result(ret: u32, rows: Rows, types: Vec<u32>) -> Value {
+    if ret == oid::VOID {
+        return Value::Null;
+    }
+    let Some(mut row) = rows.into_iter().next() else { return Value::Null };
+    let composite = builtin::type_by_oid(ret).is_some_and(|t| t.kind == b'c');
+    let whole = matches!(row.as_slice(), [Value::Record(_) | Value::Null]);
+    if row.len() == 1 && ((ret != oid::RECORD && !composite) || whole) {
+        return row.pop().unwrap_or(Value::Null);
+    }
+    Value::Record(Box::new(Record { types, values: row, names: None }))
+}
+
 /// True when a call in `FROM` needs the set kernel of the function: the function gives a set, or a row with `width` columns, or it is a procedure, which gives a row also with one column.
 fn table_function(func: u32, width: usize) -> bool {
     width > 1 || builtin::proc_by_oid(func).is_some_and(|p| p.retset || p.kind == b'p')
@@ -1893,11 +1907,18 @@ impl<'a> Eval<'a> {
         }
         let rows = with_settings(session, f.oid, || {
             let Some(body) = self.cache.body(f.oid, &types, session)? else { return Ok(None) };
-            let Body::Query(query) = &*body else {
-                return Err(Error::internal("a function that returns a set with no query"));
-            };
-            let cache = self.cache.nested()?;
-            run_query(query, &args, session, &cache, &[], false).map(Some)
+            match &*body {
+                Body::Query(query) => {
+                    let cache = self.cache.nested()?;
+                    run_query(query, &args, session, &cache, &[], false).map(Some)
+                }
+                Body::Statements(_) => {
+                    session.call_sql_function(f.oid, &types, &args).map(|(_, rows)| Some(rows))
+                }
+                Body::Value(_) => {
+                    Err(Error::internal("a function that returns a set with no query"))
+                }
+            }
         })?;
         if let Some(rows) = rows {
             return Ok(rows);
@@ -1974,10 +1995,12 @@ impl<'a> Eval<'a> {
         // A function in SQL that returns a composite type gives the types of the columns of its query.
         if types.is_empty() && rows.first().is_some_and(|row| row.len() > 1) {
             let args: Vec<u32> = rupg_analyze::expand_arguments(f)?.iter().map(|a| a.ty).collect();
-            if let Some(body) = self.cache.body(f.oid, &args, self.session)?
-                && let Body::Query(query) = &*body
-            {
-                types = query.targets.iter().filter(|t| !t.junk).map(|t| t.expr.ty).collect();
+            match self.cache.body(f.oid, &args, self.session)?.as_deref() {
+                Some(Body::Query(query)) => {
+                    types = query.targets.iter().filter(|t| !t.junk).map(|t| t.expr.ty).collect();
+                }
+                Some(Body::Statements(columns)) => types.clone_from(columns),
+                _ => {}
             }
         }
         let names: Option<Arc<[String]>> =
@@ -2440,25 +2463,22 @@ impl<'a> Eval<'a> {
                     let value = Eval::new(args, self.session, &tables, &cache, &[]).eval(expr)?;
                     Ok(if ret == oid::VOID { Value::Null } else { value })
                 }
-                // `fmgr_sql` for a function that does not return a set: the first column of the first row, or null. The columns of a function that returns a row make a row value.
                 Body::Query(query) => {
-                    let rows = run_query(query, args, self.session, &cache, &[], false)?;
-                    // `fmgr_sql` gives null for a function that returns `void`.
-                    if ret == oid::VOID {
-                        return Ok(Value::Null);
-                    }
-                    let Some(mut row) = rows.into_iter().next() else { return Ok(Value::Null) };
-                    let composite = builtin::type_by_oid(ret).is_some_and(|t| t.kind == b'c');
-                    let whole = matches!(row.as_slice(), [Value::Record(_) | Value::Null]);
-                    if row.len() == 1 && ((ret != oid::RECORD && !composite) || whole) {
-                        return Ok(row.pop().unwrap_or(Value::Null));
-                    }
+                    let rows = run_query(query, args, self.session, &cache, &[], false);
+                    // `sql_exec_error_callback`: a body that reads a relation is not inlined, so its error has the line of the function. A body with no `FROM` is inlined in PostgreSQL when it can be, and its error has no such line.
+                    let rows = rows.map_err(|error| {
+                        if query.relations.is_empty() {
+                            return error;
+                        }
+                        let name = builtin::proc_by_oid(func).map_or("", |p| p.name);
+                        error.with_context(format!("SQL function \"{name}\" statement 1"))
+                    })?;
                     let types = query.targets.iter().filter(|t| !t.junk).map(|t| t.expr.ty);
-                    Ok(Value::Record(Box::new(Record {
-                        types: types.collect(),
-                        values: row,
-                        names: None,
-                    })))
+                    Ok(sql_result(ret, rows, types.collect()))
+                }
+                Body::Statements(_) => {
+                    let (columns, rows) = self.session.call_sql_function(func, types, args)?;
+                    Ok(sql_result(ret, rows, columns))
                 }
             };
         }

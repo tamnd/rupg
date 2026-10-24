@@ -1,0 +1,227 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE ms_t (a int, b text);
+CREATE TABLE
+> CREATE FUNCTION ms_ins(x int) RETURNS int LANGUAGE sql AS $$ INSERT INTO ms_t VALUES (x, 'a'); SELECT count(*)::int FROM ms_t $$;
+CREATE FUNCTION
+> SELECT ms_ins(1);
+fields ms_ins:23:4:-1
+row 1
+SELECT 1
+> SELECT ms_ins(2);
+fields ms_ins:23:4:-1
+row 2
+SELECT 1
+> CREATE FUNCTION ms_ret(x int) RETURNS int LANGUAGE sql AS $$ INSERT INTO ms_t VALUES (x, 'r') RETURNING a * 10 $$;
+CREATE FUNCTION
+> SELECT ms_ret(3);
+fields ms_ret:23:4:-1
+row 30
+SELECT 1
+> CREATE FUNCTION ms_void(x int) RETURNS void LANGUAGE sql AS $$ UPDATE ms_t SET b = 'u' WHERE a = x; DELETE FROM ms_t WHERE a = 0 $$;
+CREATE FUNCTION
+> SELECT ms_void(1);
+fields ms_void:2278:4:-1
+row NULL
+SELECT 1
+> SELECT * FROM ms_t ORDER BY a;
+fields a@ms_t.1:23:4:-1,b@ms_t.2:25:-1:-1
+row 1,u
+row 2,a
+row 3,r
+SELECT 3
+> CREATE FUNCTION ms_set(x int) RETURNS SETOF ms_t LANGUAGE sql AS $$ UPDATE ms_t SET b = b || '!' WHERE a >= x; SELECT * FROM ms_t WHERE a >= x ORDER BY a $$;
+CREATE FUNCTION
+> SELECT * FROM ms_set(2);
+fields a:23:4:-1,b:25:-1:-1
+row 2,a!
+row 3,r!
+SELECT 2
+> SELECT a, b FROM ms_set(3);
+fields a:23:4:-1,b:25:-1:-1
+row 3,r!!
+SELECT 1
+> CREATE FUNCTION ms_del(x int) RETURNS SETOF int LANGUAGE sql AS $$ DELETE FROM ms_t WHERE a = x RETURNING a $$;
+CREATE FUNCTION
+> SELECT ms_del(3);
+fields ms_del:23:4:-1
+row 3
+SELECT 1
+> SELECT * FROM ms_del(2);
+fields ms_del:23:4:-1
+row 2
+SELECT 1
+> CREATE FUNCTION ms_row(x int) RETURNS ms_t LANGUAGE sql AS $$ INSERT INTO ms_t VALUES (x, 'row'); SELECT * FROM ms_t WHERE a = x $$;
+CREATE FUNCTION
+> SELECT ms_row(4)::text AS r;
+fields r:25:-1:-1
+row (4,row)
+SELECT 1
+> SELECT * FROM ms_row(5);
+fields a:23:4:-1,b:25:-1:-1
+row 5,row
+SELECT 1
+> CREATE FUNCTION ms_out(x int, OUT n int, OUT m text) LANGUAGE sql AS $$ UPDATE ms_t SET b = 'o' WHERE a = x; SELECT a, b FROM ms_t WHERE a = x $$;
+CREATE FUNCTION
+> SELECT * FROM ms_out(4);
+fields n:23:4:-1,m:25:-1:-1
+row 4,o
+SELECT 1
+> CREATE FUNCTION ms_atomic(x int) RETURNS int LANGUAGE sql BEGIN ATOMIC INSERT INTO ms_t VALUES (x, 'at'); SELECT max(a) FROM ms_t; END;
+CREATE FUNCTION
+> SELECT ms_atomic(9);
+fields ms_atomic:23:4:-1
+row 9
+SELECT 1
+> CREATE PROCEDURE ms_proc(x int) LANGUAGE sql AS $$ INSERT INTO ms_t VALUES (x, 'p'); INSERT INTO ms_t VALUES (x + 1, 'p') $$;
+CREATE PROCEDURE
+> CALL ms_proc(20);
+CALL
+> CREATE PROCEDURE ms_proc2(x int) LANGUAGE sql BEGIN ATOMIC DELETE FROM ms_t WHERE a = x; UPDATE ms_t SET b = 'p2' WHERE a = x + 1; END;
+CREATE PROCEDURE
+> CALL ms_proc2(20);
+CALL
+> SELECT * FROM ms_t ORDER BY a;
+fields a@ms_t.1:23:4:-1,b@ms_t.2:25:-1:-1
+row 1,u
+row 4,o
+row 5,row
+row 9,at
+row 21,p2
+SELECT 5
+> CREATE FUNCTION ms_bad() RETURNS int LANGUAGE sql AS $$ INSERT INTO ms_t VALUES (1, 'x') $$;
+ERROR 42P13 return type mismatch in function declared to return integer (SQL function "ms_bad")
+DETAIL Function's final statement must be SELECT or INSERT/UPDATE/DELETE/MERGE RETURNING.
+> CREATE FUNCTION ms_bad2() RETURNS int LANGUAGE sql AS $$ SELECT 1; SELECT 'a', 2 $$;
+ERROR 42P13 return type mismatch in function declared to return integer (SQL function "ms_bad2")
+DETAIL Final statement must return exactly one column.
+> CREATE FUNCTION ms_bad3() RETURNS int LANGUAGE sql AS $$ SELECT 1; SELECT * FROM no_such_table $$;
+ERROR 42P01 relation "no_such_table" does not exist at 82
+> CREATE FUNCTION ms_err(x int) RETURNS int LANGUAGE sql AS $$ INSERT INTO ms_t VALUES (x, 'e'); SELECT 1 / (x - x) $$;
+CREATE FUNCTION
+> SELECT ms_err(5);
+fields ms_err:23:4:-1
+ERROR 22012 division by zero (SQL function "ms_err" statement 2)
+> SELECT count(*) FROM ms_t WHERE a = 5;
+fields count:20:8:-1
+row 1
+SELECT 1
+> CREATE FUNCTION ms_err1(x int) RETURNS int LANGUAGE sql AS $$ SELECT count(*)::int / x FROM ms_t $$;
+CREATE FUNCTION
+> SELECT ms_err1(0);
+fields ms_err1:23:4:-1
+ERROR 22012 division by zero (SQL function "ms_err1" statement 1)
+> CREATE FUNCTION ms_two() RETURNS int LANGUAGE sql AS $$ SELECT 1; SELECT 2 $$;
+CREATE FUNCTION
+> SELECT ms_two();
+fields ms_two:23:4:-1
+row 2
+SELECT 1
+> CREATE FUNCTION ms_none() RETURNS int LANGUAGE sql AS $$ DELETE FROM ms_t WHERE a = 100; SELECT a FROM ms_t WHERE a = 100 $$;
+CREATE FUNCTION
+> SELECT ms_none() IS NULL AS none;
+fields none:16:1:-1
+row t
+SELECT 1
+> CREATE FUNCTION ms_cnt(x int) RETURNS bigint LANGUAGE sql AS $$ INSERT INTO ms_t VALUES (x, 'c'); SELECT count(*) FROM ms_t WHERE a = x $$;
+CREATE FUNCTION
+> SELECT ms_cnt(30), ms_cnt(30);
+fields ms_cnt:20:8:-1,ms_cnt:20:8:-1
+row 1,2
+SELECT 1
+> SELECT ms_cnt(31) FROM generate_series(1, 3);
+fields ms_cnt:20:8:-1
+row 1
+row 2
+row 3
+SELECT 3
+> SET check_function_bodies = off;
+SET
+> CREATE FUNCTION ms_ddl() RETURNS int LANGUAGE sql AS $$ CREATE TEMP TABLE ms_tmp (a int); INSERT INTO ms_tmp VALUES (1), (2); SELECT count(*)::int FROM ms_tmp $$;
+CREATE FUNCTION
+> RESET check_function_bodies;
+RESET
+> SELECT ms_ddl();
+fields ms_ddl:23:4:-1
+row 2
+SELECT 1
+> SELECT count(*) FROM ms_tmp;
+fields count:20:8:-1
+row 2
+SELECT 1
+> CREATE FUNCTION ms_poly(anyelement) RETURNS anyelement LANGUAGE sql AS $$ INSERT INTO ms_t VALUES (40, 'poly'); SELECT $1 $$;
+CREATE FUNCTION
+> SELECT ms_poly(7), ms_poly('x'::text);
+fields ms_poly:23:4:-1,ms_poly:25:-1:-1
+row 7,x
+SELECT 1
+> CREATE FUNCTION ms_named(val int) RETURNS int LANGUAGE sql AS $$ UPDATE ms_t SET b = 'named' WHERE a = val; SELECT a + val FROM ms_t WHERE a = val $$;
+CREATE FUNCTION
+> SELECT ms_named(40);
+fields ms_named:23:4:-1
+row 80
+SELECT 1
+> SELECT a, b FROM ms_t ORDER BY a, b;
+fields a@ms_t.1:23:4:-1,b@ms_t.2:25:-1:-1
+row 1,u
+row 4,o
+row 5,row
+row 9,at
+row 21,p2
+row 30,c
+row 30,c
+row 31,c
+row 31,c
+row 31,c
+row 40,named
+row 40,named
+SELECT 12
+> CREATE FUNCTION ms_stable() RETURNS int STABLE LANGUAGE sql AS $$ INSERT INTO ms_t VALUES (50, 's'); SELECT 1 $$;
+CREATE FUNCTION
+> SELECT ms_stable();
+fields ms_stable:23:4:-1
+ERROR 0A000 INSERT is not allowed in a non-volatile function (SQL function "ms_stable" statement 1)
+> CREATE FUNCTION ms_commit() RETURNS void LANGUAGE sql AS $$ COMMIT $$;
+CREATE FUNCTION
+> SELECT ms_commit();
+fields ms_commit:2278:4:-1
+ERROR 0A000 COMMIT is not allowed in an SQL function (SQL function "ms_commit" statement 1)
+> CREATE FUNCTION ms_empty() RETURNS int LANGUAGE sql AS $$ $$;
+ERROR 42P13 return type mismatch in function declared to return integer (SQL function "ms_empty")
+DETAIL Function's final statement must be SELECT or INSERT/UPDATE/DELETE/MERGE RETURNING.
+> CREATE FUNCTION ms_ev() RETURNS void LANGUAGE sql AS $$ $$;
+CREATE FUNCTION
+> SELECT ms_ev() IS NULL AS ev;
+fields ev:16:1:-1
+row t
+SELECT 1
+> CREATE FUNCTION ms_note() RETURNS int LANGUAGE sql AS $$ DROP TABLE IF EXISTS ms_nothing; SELECT 1 $$;
+CREATE FUNCTION
+> SELECT ms_note();
+fields ms_note:23:4:-1
+NOTICE 00000 table "ms_nothing" does not exist, skipping (SQL function "ms_note" statement 1)
+row 1
+SELECT 1
+> SET check_function_bodies = off;
+SET
+> CREATE FUNCTION ms_late() RETURNS int LANGUAGE sql AS $$ SELECT 1; SELECT * FROM ms_gone $$;
+CREATE FUNCTION
+> CREATE FUNCTION ms_late2() RETURNS int LANGUAGE sql AS $$ SELECT 1; INSERT INTO ms_t VALUES (60, 'l') $$;
+CREATE FUNCTION
+> RESET check_function_bodies;
+RESET
+> SELECT ms_late();
+fields ms_late:23:4:-1
+ERROR 42P01 relation "ms_gone" does not exist (SQL function "ms_late" statement 2)
+QUERY  SELECT 1; SELECT * FROM ms_gone  at 26
+> SELECT ms_late2();
+fields ms_late2:23:4:-1
+ERROR 42P13 return type mismatch in function declared to return integer (SQL function "ms_late2" statement 2)
+DETAIL Function's final statement must be SELECT or INSERT/UPDATE/DELETE/MERGE RETURNING.
+> DROP FUNCTION ms_ins, ms_ret, ms_void, ms_set, ms_del, ms_row, ms_out, ms_atomic, ms_err, ms_err1, ms_two, ms_none, ms_cnt, ms_ddl, ms_poly, ms_named, ms_stable, ms_commit, ms_ev, ms_note, ms_late, ms_late2;
+DROP FUNCTION
+> DROP PROCEDURE ms_proc, ms_proc2;
+DROP PROCEDURE
+> DROP TABLE ms_t;
+DROP TABLE

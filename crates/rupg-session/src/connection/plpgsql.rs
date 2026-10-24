@@ -10,7 +10,7 @@ use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
 use rupg_func::Session;
 use rupg_plpgsql::{Cache, Fetched, Spi};
-use rupg_sql::nodes::{DoStmt, FetchDirection, Node};
+use rupg_sql::nodes::{DoStmt, FetchDirection, Node, TransactionStmtKind};
 use rupg_types::Value;
 
 use super::{Applied, Connection, Done, savepoint};
@@ -172,6 +172,101 @@ impl<'a> PlSpi<'a> {
         let mut queue = self.conn.trigger_warnings.borrow_mut();
         let from = said.min(queue.len());
         self.outer.add_warnings(queue.split_off(from));
+    }
+}
+
+/// The statements of [`Connection::sql_call`].
+fn sql_statements(
+    spi: &PlSpi<'_>,
+    func: u32,
+    types: &[u32],
+    args: &[Value],
+) -> rupg_common::Result<(Vec<u32>, Vec<Vec<Value>>)> {
+    let script = rupg_analyze::function_script(spi.env(), func).and_then(|script| {
+        script.ok_or_else(|| Error::internal("a function in SQL with no statements"))
+    });
+    let script = script.map_err(|error| {
+        let name = spi.catalog().function(func).map(|f| f.name.clone()).unwrap_or_default();
+        error.with_position(None).with_context(format!("SQL function \"{name}\" during startup"))
+    })?;
+    // `sql_exec_error_callback`: the position of an error is in the body, which is the internal query.
+    let inner = |error: Error, context: &str| {
+        let error = match error.position() {
+            Some(at) if !script.src().is_empty() => {
+                error.with_position(None).with_internal(script.src(), Some(at))
+            }
+            _ => error.with_position(None),
+        };
+        error.with_context(context.to_owned())
+    };
+    let mut last = (Vec::new(), Vec::new());
+    for i in 0..script.statements.len() {
+        let context = format!("SQL function \"{}\" statement {}", script.name(), i + 1);
+        let mut notices = Vec::new();
+        let result = sql_statement(spi, &script, i, types, args, &mut notices);
+        for notice in notices {
+            spi.notice(inner(notice, &context));
+        }
+        last = result.map_err(|error| inner(error, &context))?;
+    }
+    Ok(last)
+}
+
+/// `init_execution_state` and `postquel_getnext` for the statement `i` of the function: the types of its columns and its rows. A statement with no plan runs with `ProcessUtility` and gives no rows. The notices of the statement go to `notices`.
+fn sql_statement(
+    spi: &PlSpi<'_>,
+    script: &rupg_analyze::Script,
+    i: usize,
+    types: &[u32],
+    args: &[Value],
+    notices: &mut Vec<Error>,
+) -> rupg_common::Result<(Vec<u32>, Vec<Vec<Value>>)> {
+    let (node, text) = &script.statements[i];
+    let not_allowed = |tag: &str, place: &str| {
+        Error::new(SqlState::FEATURE_NOT_SUPPORTED, format!("{tag} is not allowed in {place}"))
+    };
+    if !script.planned(i) {
+        if let Node::TransactionStmt(stmt) = node {
+            return Err(not_allowed(transaction_tag(stmt.kind), "an SQL function"));
+        }
+        spi.utility(node, text, notices)?;
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let query = script.analyze(spi.env(), types, i)?;
+    let query = query.ok_or_else(|| Error::internal("a statement of a function with no query"))?;
+    // `CommandIsReadOnly`: a function that is not volatile runs only queries that do not write.
+    let tag = match node {
+        Node::InsertStmt(_) => Some("INSERT"),
+        Node::UpdateStmt(_) => Some("UPDATE"),
+        Node::DeleteStmt(_) => Some("DELETE"),
+        Node::MergeStmt(_) => Some("MERGE"),
+        _ => None,
+    };
+    if let Some(tag) = tag
+        && script.read_only()
+    {
+        return Err(not_allowed(tag, "a non-volatile function"));
+    }
+    let plan = rupg_exec::prepare(query, spi.session())?.fold(None, spi.session())?;
+    notices.extend(plan.notices().iter().cloned());
+    let (rows, _) = spi.execute(&plan, args)?;
+    Ok((plan.columns().iter().map(|t| t.expr.ty).collect(), rows))
+}
+
+/// `CreateCommandName` of a transaction statement.
+fn transaction_tag(kind: TransactionStmtKind) -> &'static str {
+    match kind {
+        TransactionStmtKind::TRANS_STMT_BEGIN => "BEGIN",
+        TransactionStmtKind::TRANS_STMT_START => "START TRANSACTION",
+        TransactionStmtKind::TRANS_STMT_COMMIT => "COMMIT",
+        TransactionStmtKind::TRANS_STMT_ROLLBACK | TransactionStmtKind::TRANS_STMT_ROLLBACK_TO => {
+            "ROLLBACK"
+        }
+        TransactionStmtKind::TRANS_STMT_SAVEPOINT => "SAVEPOINT",
+        TransactionStmtKind::TRANS_STMT_RELEASE => "RELEASE",
+        TransactionStmtKind::TRANS_STMT_PREPARE => "PREPARE TRANSACTION",
+        TransactionStmtKind::TRANS_STMT_COMMIT_PREPARED => "COMMIT PREPARED",
+        _ => "ROLLBACK PREPARED",
     }
 }
 
@@ -371,6 +466,25 @@ impl Connection {
         // The queries of the function do not see the transition tables of a trigger that called it.
         let transition = self.transition.take();
         let result = rupg_plpgsql::call(&PlSpi::new(self, outer, atomic), func, types, ret, args);
+        self.transition.replace(transition);
+        result
+    }
+
+    /// `fmgr_sql`: a call of the function `func` in SQL whose body is not one `SELECT`, with the values `args` of the types `types`. The statements run one after the other as SPI runs the queries of a function in PL/pgSQL, so that a statement sees the changes of the statements before it, and a statement can make an object that the next statements use. It gives the types of the columns of the last statement and its rows. An error has the number of the statement in its context, as `sql_exec_error_callback` gives it.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the statements.
+    pub(crate) fn sql_call(
+        &self,
+        outer: &Reader<'_>,
+        func: u32,
+        types: &[u32],
+        args: &[Value],
+    ) -> rupg_common::Result<(Vec<u32>, Vec<Vec<Value>>)> {
+        // The queries of the function do not see the transition tables of a trigger that called it.
+        let transition = self.transition.take();
+        let result = sql_statements(&PlSpi::new(self, outer, true), func, types, args);
         self.transition.replace(transition);
         result
     }

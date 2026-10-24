@@ -10,7 +10,7 @@ use rupg_types::Value;
 use super::Deparser;
 use crate::calendar::format_g;
 use crate::text::quote_identifier;
-use crate::{Call, INTERNAL_LANGUAGE, Session, bad_value, reg};
+use crate::{Call, INTERNAL_LANGUAGE, Session, bad_value, not_yet, reg};
 
 /// The mode of an argument in `proargmodes`.
 const IN: u8 = b'i';
@@ -206,6 +206,9 @@ fn print_function_sqlbody(proc: &ProcRow, session: &dyn Session) -> Result<Optio
         SqlBody::Atomic(queries) => {
             d.buf.push_str("BEGIN ATOMIC\n");
             for query in &queries {
+                if query.write.is_some() {
+                    return Err(not_yet("a deparse of INSERT, UPDATE or DELETE in BEGIN ATOMIC"));
+                }
                 d.query_def(query, None, false, 1)?;
                 d.buf.push_str(";\n");
             }
