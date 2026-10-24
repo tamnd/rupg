@@ -955,7 +955,11 @@ impl Definer<'_, '_> {
         let refs = self.function_refs(&function, defaults, support, refs)?;
         match old {
             Some(old) => self.catalog.replace_function(old.oid, function, &refs).map(|()| old.oid),
-            None => self.catalog.create_function(function, &refs),
+            None => {
+                let oid = self.catalog.create_function(function, &refs)?;
+                self.apply_default_acl(ObjRef::new(PG_PROC, oid))?;
+                Ok(oid)
+            }
         }
     }
 

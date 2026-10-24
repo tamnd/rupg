@@ -159,6 +159,7 @@ impl Definer<'_, '_> {
         self.check_relation_name(namespace, &name)?;
         let new = NewRelation { namespace, name, owner: self.user, columns };
         let view = self.catalog.create_view(new, text.to_string(), path, &refs)?;
+        self.apply_default_acl(ObjRef::new(PG_CLASS, view))?;
         self.catalog.set_options(view, options)
     }
 }

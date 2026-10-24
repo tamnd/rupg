@@ -1179,6 +1179,7 @@ impl Connection {
                     Node::CreateStatsStmt(_) => CommandTag::CreateStatistics,
                     Node::AlterStatsStmt(_) => CommandTag::AlterStatistics,
                     Node::DropOwnedStmt(_) => CommandTag::DropOwned,
+                    Node::AlterDefaultPrivilegesStmt(_) => CommandTag::AlterDefaultPrivileges,
                     Node::ReassignOwnedStmt(_) => CommandTag::ReassignOwned,
                     _ => CommandTag::CreateTable,
                 }))
@@ -6110,6 +6111,12 @@ mod tests {
     #[test]
     fn dropowned() {
         big_stack(|| script(include_str!("connection/dropowned.test")));
+    }
+
+    /// `ALTER DEFAULT PRIVILEGES`: the rows of `pg_default_acl`, the errors of the statement, the ACLs of the new tables, views, sequences, types, functions and schemas, `pg_describe_object` of an entry, the entries of a schema that goes, and `DROP OWNED` and `DROP ROLE` with default privileges. The script does not have large objects and schema elements. `connection/defacl.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn defacl() {
+        big_stack(|| script(include_str!("connection/defacl.test")));
     }
 
     /// `CREATE TABLE ... (LIKE ...)`, from `create_table_like.sql` of the PostgreSQL tests: the columns and the not-null constraints of the other relation, the options `INCLUDING DEFAULTS`, `GENERATED`, `IDENTITY`, `CONSTRAINTS`, `INDEXES`, `STORAGE`, `COMMENTS` and `ALL`, `LIKE` with `INHERITS`, and `LIKE` of a view, a composite type and a sequence. The script has catalog queries in place of `\d`, and it does not have the parts for virtual generated columns, `NOT ENFORCED`, `CREATE STATISTICS` and foreign tables. `connection/create_table_like.test` is the output of PostgreSQL 19 for the same script in a new database.

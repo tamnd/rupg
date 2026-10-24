@@ -709,7 +709,10 @@ impl Definer<'_, '_> {
         }
         match old {
             Some(old) => self.catalog.replace_aggregate(old.oid, function, aggregate, &refs),
-            None => self.catalog.create_aggregate(function, aggregate, &refs).map(|_| ()),
+            None => {
+                let oid = self.catalog.create_aggregate(function, aggregate, &refs)?;
+                self.apply_default_acl(ObjRef::new(PG_PROC, oid))
+            }
         }
     }
 }

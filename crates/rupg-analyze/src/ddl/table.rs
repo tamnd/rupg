@@ -2,7 +2,8 @@
 
 use rupg_catalog::toast::{Shape, needs_toast};
 use rupg_catalog::{
-    Column, ConKind, DepKind, MAX_COLUMNS, NewRelation, RelKind, SequenceData, SequenceInfo,
+    Column, ConKind, DepKind, MAX_COLUMNS, NewRelation, ObjRef, PG_CLASS, PG_TYPE, RelKind,
+    SequenceData, SequenceInfo,
 };
 use rupg_common::{Error, Object, Result, SqlState};
 use rupg_pgcatalog::builtin;
@@ -414,6 +415,7 @@ impl Definer<'_, '_> {
         ];
         let new = NewRelation { namespace, name: name.to_string(), owner: self.user, columns };
         let oid = self.catalog.create_sequence(new, info)?;
+        self.apply_default_acl(ObjRef::new(PG_CLASS, oid))?;
         if unlogged {
             self.catalog.set_unlogged(oid, true)?;
         }
@@ -917,8 +919,8 @@ impl Definer<'_, '_> {
         }
         self.check_relation_name(namespace, &name)?;
         let new = NewRelation { namespace, name, owner: self.user, columns };
-        self.catalog.create_composite_type(new)?;
-        Ok(())
+        let ty = self.catalog.create_composite_type(new)?;
+        self.apply_default_acl(ObjRef::new(PG_TYPE, ty))
     }
 
     /// `42710` when the schema has a type with the name. `moveArrayTypeName` moves an array type that a type made out of the way, so only another type is a conflict.
@@ -1230,6 +1232,7 @@ impl Definer<'_, '_> {
         } else {
             self.catalog.create_table(new)?
         };
+        self.apply_default_acl(ObjRef::new(PG_CLASS, table))?;
         let row_type = self.catalog.relation(table).map_or(0, |r| r.row_type);
         self.an.add_table(table, &plan.relname, &scope, row_type);
         // `heap_create_with_catalog` and `CommandCounterIncrement` come before `AddRelationNewConstraints`, so the input of `regclass` in an expression finds the table.

@@ -15,6 +15,8 @@ use super::index::system_column;
 use super::{Definer, Found, not_yet};
 use crate::typename::names;
 
+mod defaults;
+
 const INSERT: u64 = 1;
 const SELECT: u64 = 1 << 1;
 const UPDATE: u64 = 1 << 2;
@@ -592,6 +594,9 @@ impl Definer<'_, '_> {
             PG_PROC => (ObjectType::OBJECT_ROUTINE, Kind::Function),
             PG_TYPE => (ObjectType::OBJECT_TYPE, Kind::Type),
             PG_LANGUAGE => (ObjectType::OBJECT_LANGUAGE, Kind::Language),
+            rupg_catalog::PG_DEFAULT_ACL => {
+                return self.remove_role_from_default_acl(role, object.oid);
+            }
             class => return Err(Error::internal(format!("unexpected object class {class}"))),
         };
         let grant = Grant {

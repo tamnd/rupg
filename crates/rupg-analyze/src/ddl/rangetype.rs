@@ -1,6 +1,6 @@
 //! `CREATE TYPE ... AS RANGE`, as `DefineRange` runs it.
 
-use rupg_catalog::{NewRange, RangeInfo};
+use rupg_catalog::{NewRange, ObjRef, PG_TYPE, RangeInfo};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{CreateRangeStmt, DefElem, List, Node};
@@ -176,8 +176,8 @@ impl Definer<'_, '_> {
             multirange_name,
             info,
         };
-        self.catalog.create_range(new)?;
-        Ok(())
+        let ty = self.catalog.create_range(new)?;
+        self.apply_default_acl(ObjRef::new(PG_TYPE, ty))
     }
 
     /// The first schema of `search_path`, where a new object goes when its name has no schema.
