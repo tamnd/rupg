@@ -1194,6 +1194,43 @@ impl Plan {
         run_query(query, params, session, &cache, &[], false)
     }
 
+    /// `ExecWithCheckOptions` for `WCO_VIEW_CHECK`: each row that the statement wrote, which starts with the columns of the table, must pass the check of each view of [`rupg_analyze::Write::view_check`], the inner view first. A null fails the check.
+    ///
+    /// # Errors
+    ///
+    /// `44000` for a row that fails a check, and the error of a function of a check.
+    pub fn view_check(
+        &self,
+        rows: &[Vec<Value>],
+        params: &[Value],
+        session: &dyn Session,
+    ) -> Result<()> {
+        let Some(info) = self.query.write.as_ref() else { return Ok(()) };
+        let Some(check) = info.view_check.as_ref() else { return Ok(()) };
+        let rows: Vec<Vec<Value>> =
+            rows.iter().map(|row| row[..info.width.min(row.len())].to_vec()).collect();
+        let query: &Query = &check.query;
+        let cache = self.cache();
+        cache.tables.borrow_mut().push((query, Rc::new(scan::given(query, vec![rows.clone()]))));
+        let results = run_query(query, params, session, &cache, &[], false)?;
+        for (row, result) in rows.iter().zip(results) {
+            let Some(at) = result.iter().position(|v| !matches!(v, Value::Bool(true))) else {
+                continue;
+            };
+            let types: Vec<u32> = session
+                .catalog()
+                .and_then(|c| c.relation(info.table))
+                .map(|r| r.columns.iter().map(|c| c.ty).collect())
+                .unwrap_or_default();
+            return Err(Error::new(
+                SqlState::WITH_CHECK_OPTION_VIOLATION,
+                format!("new row violates check option for view \"{}\"", check.views[at]),
+            )
+            .with_detail(failing_row(row, &types, session)?));
+        }
+        Ok(())
+    }
+
     /// `ExecOnConflictUpdate`: the new row of `ON CONFLICT DO UPDATE` for the row `existing` of the table, which ends with the ID of its version, and the row `excluded` that the statement proposed, after the checks of the constraints. The new row has the columns of the table, then the values that `RETURNING` carries. It is `None` when the condition of `WHERE` is not true.
     ///
     /// # Errors

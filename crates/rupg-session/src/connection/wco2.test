@@ -1,0 +1,216 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (a int, b text);
+CREATE TABLE
+> CREATE VIEW nv AS SELECT a, count(*) FROM t GROUP BY a WITH CHECK OPTION;
+ERROR 0A000 WITH CHECK OPTION is supported only on automatically updatable views
+HINT Views containing GROUP BY are not automatically updatable.
+> CREATE VIEW nv AS SELECT 1 AS x FROM t WITH LOCAL CHECK OPTION;
+ERROR 0A000 WITH CHECK OPTION is supported only on automatically updatable views
+HINT Views that have no updatable columns are not automatically updatable.
+> CREATE VIEW nv WITH (check_option = local) AS SELECT * FROM t WITH CHECK OPTION;
+ERROR 22023 parameter "check_option" specified more than once
+> CREATE VIEW nv WITH (check_option = sideways) AS SELECT * FROM t;
+ERROR 22023 invalid value for enum option "check_option": sideways
+DETAIL Valid values are "local" and "cascaded".
+> CREATE VIEW nv WITH (check_option = sideways) AS SELECT DISTINCT a FROM t;
+ERROR 0A000 WITH CHECK OPTION is supported only on automatically updatable views
+HINT Views containing DISTINCT are not automatically updatable.
+> CREATE VIEW gv AS SELECT a, count(*) FROM t GROUP BY a;
+CREATE VIEW
+> ALTER VIEW gv SET (check_option = local);
+ERROR 0A000 WITH CHECK OPTION is supported only on automatically updatable views
+HINT Views containing GROUP BY are not automatically updatable.
+> ALTER VIEW gv SET (check_option = nope);
+ERROR 22023 invalid value for enum option "check_option": nope
+DETAIL Valid values are "local" and "cascaded".
+> ALTER TABLE gv SET (check_option = cascaded);
+ERROR 0A000 WITH CHECK OPTION is supported only on automatically updatable views
+HINT Views containing GROUP BY are not automatically updatable.
+> CREATE VIEW v1 WITH (check_option = cascaded, security_barrier = true) AS SELECT * FROM t WHERE a > 0;
+CREATE VIEW
+> SELECT relname, reloptions FROM pg_class WHERE relname = 'v1';
+fields relname@pg_class.2:19:64:-1,reloptions@pg_class.33:1009:-1:-1
+row v1,{check_option=cascaded,security_barrier=true}
+SELECT 1
+> INSERT INTO v1 VALUES (1, 'one');
+INSERT 0 1
+> INSERT INTO v1 VALUES (0, repeat('x', 100));
+ERROR 44000 new row violates check option for view "v1"
+DETAIL Failing row contains (0, xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...).
+> INSERT INTO v1 VALUES (NULL, 'null');
+ERROR 44000 new row violates check option for view "v1"
+DETAIL Failing row contains (null, null).
+> UPDATE v1 SET a = -a RETURNING *;
+ERROR 44000 new row violates check option for view "v1"
+DETAIL Failing row contains (-1, one).
+> DELETE FROM v1 WHERE a = 1 RETURNING *;
+fields a@v1.1:23:4:-1,b@v1.2:25:-1:-1
+row 1,one
+DELETE 1
+> CREATE VIEW v2 AS SELECT b AS bb, a AS aa FROM v1 WHERE b <> 'bad' WITH LOCAL CHECK OPTION;
+CREATE VIEW
+> INSERT INTO v2 VALUES ('bad', 5);
+ERROR 44000 new row violates check option for view "v2"
+DETAIL Failing row contains (5, bad).
+> INSERT INTO v2 VALUES ('good', -5);
+ERROR 44000 new row violates check option for view "v1"
+DETAIL Failing row contains (-5, good).
+> INSERT INTO v2 VALUES ('good', 5) RETURNING *;
+fields bb@v2.1:25:-1:-1,aa@v2.2:23:4:-1
+row good,5
+INSERT 0 1
+> WITH w AS (INSERT INTO v2 VALUES ('x', -1) RETURNING *) SELECT * FROM w;
+ERROR 44000 new row violates check option for view "v1"
+DETAIL Failing row contains (-1, x).
+> WITH w AS (UPDATE v2 SET aa = 0 RETURNING *) SELECT 1;
+ERROR 44000 new row violates check option for view "v1"
+DETAIL Failing row contains (0, good).
+> SELECT * FROM t ORDER BY a;
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+row 5,good
+SELECT 1
+> CREATE VIEW v3 AS SELECT * FROM v2 WHERE aa < 100;
+CREATE VIEW
+> INSERT INTO v3 VALUES ('ok', 200);
+INSERT 0 1
+> INSERT INTO v3 VALUES ('bad', 200);
+ERROR 44000 new row violates check option for view "v2"
+DETAIL Failing row contains (200, bad).
+> ALTER VIEW v3 SET (check_option = local);
+ALTER VIEW
+> INSERT INTO v3 VALUES ('ok', 300);
+ERROR 44000 new row violates check option for view "v3"
+DETAIL Failing row contains (300, ok).
+> SELECT * FROM t ORDER BY a;
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+row 5,good
+row 200,ok
+SELECT 2
+> DROP TABLE t CASCADE;
+NOTICE 00000 drop cascades to 4 other objects
+DETAIL drop cascades to view gv
+drop cascades to view v1
+drop cascades to view v2
+drop cascades to view v3
+DROP TABLE
+> 
+>> CREATE TABLE u (a int PRIMARY KEY, b int);
+CREATE TABLE
+> INSERT INTO u VALUES (1, 1);
+INSERT 0 1
+> CREATE VIEW uv AS SELECT * FROM u WHERE b > 0 WITH CHECK OPTION;
+CREATE VIEW
+> INSERT INTO uv VALUES (1, -1);
+ERROR 23505 duplicate key value violates unique constraint "u_pkey"
+DETAIL Key (a)=(1) already exists.
+> INSERT INTO uv VALUES (1, 5), (2, -1);
+ERROR 23505 duplicate key value violates unique constraint "u_pkey"
+DETAIL Key (a)=(1) already exists.
+> CREATE FUNCTION note() RETURNS trigger AS $$
+>> BEGIN
+>>   RAISE NOTICE 'after % %', TG_OP, NEW;
+>>   RETURN NULL;
+>> END;
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> CREATE TRIGGER au AFTER INSERT OR UPDATE ON u FOR EACH ROW EXECUTE FUNCTION note();
+CREATE TRIGGER
+> INSERT INTO uv VALUES (3, 3);
+NOTICE 00000 after INSERT (3,3) (PL/pgSQL function note() line 3 at RAISE)
+INSERT 0 1
+> INSERT INTO uv VALUES (4, -4);
+ERROR 44000 new row violates check option for view "uv"
+DETAIL Failing row contains (4, -4).
+> UPDATE uv SET b = b - 10 WHERE a = 3;
+ERROR 44000 new row violates check option for view "uv"
+DETAIL Failing row contains (3, -7).
+> SELECT * FROM u ORDER BY a;
+fields a@u.1:23:4:-1,b@u.2:23:4:-1
+row 1,1
+row 3,3
+SELECT 2
+> DROP TABLE u CASCADE;
+NOTICE 00000 drop cascades to view uv
+DROP TABLE
+> DROP FUNCTION note();
+DROP FUNCTION
+> 
+>> CREATE TABLE g (a int, b int GENERATED ALWAYS AS (a * 2) STORED);
+CREATE TABLE
+> CREATE VIEW gv2 AS SELECT * FROM g WHERE b < 10 WITH CHECK OPTION;
+CREATE VIEW
+> INSERT INTO gv2 (a) VALUES (3);
+INSERT 0 1
+> INSERT INTO gv2 (a) VALUES (6);
+ERROR 44000 new row violates check option for view "gv2"
+DETAIL Failing row contains (6, 12).
+> UPDATE gv2 SET a = 7;
+ERROR 44000 new row violates check option for view "gv2"
+DETAIL Failing row contains (7, 14).
+> SELECT * FROM g;
+fields a@g.1:23:4:-1,b@g.2:23:4:-1
+row 3,6
+SELECT 1
+> DROP TABLE g CASCADE;
+NOTICE 00000 drop cascades to view gv2
+DROP TABLE
+> 
+>> CREATE TABLE pt (a int, b text) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE pt1 PARTITION OF pt FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> CREATE TABLE pt2 PARTITION OF pt FOR VALUES FROM (10) TO (20);
+CREATE TABLE
+> CREATE VIEW ptv AS SELECT b, a FROM pt WHERE a < 15 WITH CHECK OPTION;
+CREATE VIEW
+> INSERT INTO ptv VALUES ('x', 5), ('y', 12);
+INSERT 0 2
+> INSERT INTO ptv VALUES ('z', 17);
+ERROR 44000 new row violates check option for view "ptv"
+DETAIL Failing row contains (17, z).
+> UPDATE ptv SET a = a + 5 WHERE b = 'x' RETURNING *;
+fields b@ptv.1:25:-1:-1,a@ptv.2:23:4:-1
+row x,10
+UPDATE 1
+> UPDATE ptv SET a = a + 5 WHERE b = 'y';
+ERROR 44000 new row violates check option for view "ptv"
+DETAIL Failing row contains (17, y).
+> SELECT tableoid::regclass, * FROM pt ORDER BY a;
+fields tableoid:2205:4:-1,a@pt.1:23:4:-1,b@pt.2:25:-1:-1
+row pt2,10,x
+row pt2,12,y
+SELECT 2
+> DROP TABLE pt CASCADE;
+NOTICE 00000 drop cascades to view ptv
+DROP TABLE
+> 
+>> CREATE TABLE ip (a int, b text);
+CREATE TABLE
+> CREATE TABLE ic (c int) INHERITS (ip);
+CREATE TABLE
+> INSERT INTO ic VALUES (1, 'c', 9);
+INSERT 0 1
+> INSERT INTO ip VALUES (2, 'p');
+INSERT 0 1
+> CREATE VIEW ipv AS SELECT * FROM ip WHERE a < 5 WITH CHECK OPTION;
+CREATE VIEW
+> UPDATE ipv SET a = a + 10 WHERE b = 'c';
+ERROR 44000 new row violates check option for view "ipv"
+DETAIL Failing row contains (11, c).
+> UPDATE ipv SET a = a + 1 RETURNING *;
+fields a@ipv.1:23:4:-1,b@ipv.2:25:-1:-1
+row 3,p
+row 2,c
+UPDATE 2
+> SELECT * FROM ip ORDER BY a;
+fields a@ip.1:23:4:-1,b@ip.2:25:-1:-1
+row 2,c
+row 3,p
+SELECT 2
+> DROP TABLE ip CASCADE;
+NOTICE 00000 drop cascades to 2 other objects
+DETAIL drop cascades to table ic
+drop cascades to view ipv
+DROP TABLE

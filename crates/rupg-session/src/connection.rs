@@ -446,7 +446,7 @@ fn row_changes(
     info: &Write,
 ) -> Result<(Vec<Change>, Vec<Vec<Value>>), Error> {
     let update = info.kind == WriteKind::Update;
-    let returning = info.returning.is_some();
+    let returning = info.keeps_written();
     let mut changes = Vec::with_capacity(rows.len());
     let mut kept = Vec::with_capacity(if returning { rows.len() } else { 0 });
     for mut row in rows {
@@ -774,7 +774,7 @@ impl Connection {
             },
             (WriteKind::Insert, None) => {
                 let count = rows.len() as u64;
-                if info.returning.is_some() {
+                if info.keeps_written() {
                     written.clone_from(&rows);
                 }
                 if keep_rows {
@@ -853,7 +853,7 @@ impl Connection {
                         .filter_map(|&at| changes.get(at).and_then(|c| c.1.clone()))
                         .collect();
                 }
-                if info.returning.is_some() {
+                if info.keeps_written() {
                     let mut given: Vec<Option<Vec<Value>>> = given.into_iter().map(Some).collect();
                     written = applied
                         .iter()
@@ -863,6 +863,10 @@ impl Connection {
                 (if update { CommandTag::Update } else { CommandTag::Delete }, count)
             }
         };
+        // `ExecWithCheckOptions` checks the rows after the write, before the triggers `AFTER` fire. Its subqueries read with the snapshot of the statement.
+        if info.view_check.is_some() {
+            plan.view_check(&written, params, &self.reader().with_view(view.clone()))?;
+        }
         // The statements of the triggers `BEFORE` can end commands after the command of the write.
         self.command.set(self.command.get().max(view.command + 1));
         if !triggers.is_empty() {
@@ -5956,6 +5960,18 @@ mod tests {
     #[test]
     fn autoview2() {
         big_stack(|| script(include_str!("connection/autoview2.test")));
+    }
+
+    /// `WITH CHECK OPTION` of automatically updatable views, from `updatable_views.sql` of the PostgreSQL tests: `LOCAL` and `CASCADED` checks of views on views, the option `check_option` of `ALTER VIEW`, a view with no condition, conditions with arrays and subqueries, and a trigger `BEFORE` on the base table that changes the row. `connection/wco1.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn wco1() {
+        big_stack(|| script(include_str!("connection/wco1.test")));
+    }
+
+    /// `WITH CHECK OPTION` of automatically updatable views: the errors for a view that is not automatically updatable and for a bad option, a check with `security_barrier`, the detail of a long value and of nulls, writes in `WITH`, a duplicate key before the check, a trigger `AFTER` that the failed check stops, generated columns, a partitioned base table and a table with children of `INHERITS`. `connection/wco2.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn wco2() {
+        big_stack(|| script(include_str!("connection/wco2.test")));
     }
 
     /// `CREATE TABLE ... (LIKE ...)`, from `create_table_like.sql` of the PostgreSQL tests: the columns and the not-null constraints of the other relation, the options `INCLUDING DEFAULTS`, `GENERATED`, `IDENTITY`, `CONSTRAINTS`, `INDEXES`, `STORAGE`, `COMMENTS` and `ALL`, `LIKE` with `INHERITS`, and `LIKE` of a view, a composite type and a sequence. The script has catalog queries in place of `\d`, and it does not have the parts for virtual generated columns, `NOT ENFORCED`, `CREATE STATISTICS` and foreign tables. `connection/create_table_like.test` is the output of PostgreSQL 19 for the same script in a new database.

@@ -255,12 +255,12 @@ impl Connection {
             let fired = routing.route_fired(self, (info.table, row), &catalog, &reader)?;
             let Some((at, checked)) = fired else { continue };
             count += 1;
-            if info.returning.is_some() || keep {
+            if info.keeps_written() || keep {
                 let mut shown = routing.to_root(at, &checked, info.width);
                 if keep {
                     inserted.push(shown.clone());
                 }
-                if info.returning.is_some() {
+                if info.keeps_written() {
                     shown.push(Value::Oid(routing.oid(at)));
                     written.push(shown);
                 }
@@ -369,7 +369,7 @@ impl Connection {
         };
         let width = rel.columns.len();
         let update = info.kind == WriteKind::Update;
-        let returning = info.returning.is_some();
+        let returning = info.keeps_written();
         let mut done = ChangedRows { view: view.clone(), ..ChangedRows::default() };
         let mut routing = Routing::of(if update { TRIGGER_UPDATE } else { TRIGGER_DELETE });
         // The new rows that move to another leaf, after the old leaf deleted the old rows, with the place of each row in the statement.

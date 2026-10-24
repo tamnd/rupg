@@ -8,7 +8,7 @@ use rupg_catalog::{
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
-use rupg_sql::nodes::{Node, ViewCheckOption, ViewStmt};
+use rupg_sql::nodes::{DefElem, Node, ViewCheckOption, ViewStmt};
 use rupg_types::{Value, oid};
 
 use super::reloptions;
@@ -39,11 +39,24 @@ impl Definer<'_, '_> {
                 "views must not contain data-modifying statements in WITH",
             ));
         }
-        if stmt.withCheckOption != ViewCheckOption::NO_CHECK_OPTION {
-            return Err(not_yet("WITH CHECK OPTION", None));
+        // `WITH CHECK OPTION` is the option `check_option` of the view.
+        let mut options = stmt.options.clone();
+        let check = match stmt.withCheckOption {
+            ViewCheckOption::LOCAL_CHECK_OPTION => Some("local"),
+            ViewCheckOption::CASCADED_CHECK_OPTION => Some("cascaded"),
+            _ => None,
+        };
+        if let Some(check) = check {
+            let option = DefElem {
+                defname: Some("check_option".into()),
+                arg: Some(Node::String(check.into())),
+                location: -1,
+                ..DefElem::default()
+            };
+            options.push(Some(option.into()));
         }
-        if stmt.options.iter().flatten().any(|o| def_name(o) == Some("check_option")) {
-            return Err(not_yet("WITH CHECK OPTION", None));
+        if options.iter().flatten().any(|o| def_name(o) == Some("check_option")) {
+            self.an.auto_updatable(&query, true).map_err(check_option_error)?;
         }
         let targets: Vec<&Expr> =
             query.targets.iter().filter(|t| !t.junk).map(|t| &t.expr).collect();
@@ -121,11 +134,11 @@ impl Definer<'_, '_> {
                 _ => return Err(not_a_view(&name)),
             };
             check_view_columns(&columns, &old)?;
-            let options = view_options(&stmt.options)?;
+            let options = view_options(&options)?;
             self.catalog.replace_view(view, columns, text.to_string(), path, &refs)?;
             return self.catalog.set_options(view, options);
         }
-        let options = view_options(&stmt.options)?;
+        let options = view_options(&options)?;
         if columns.len() > MAX_COLUMNS {
             return Err(Error::new(
                 SqlState::TOO_MANY_COLUMNS,
@@ -183,6 +196,15 @@ fn view_options(options: &[Option<Node>]) -> Result<Vec<String>> {
     let options = reloptions::transform_create(options, None, &["toast"])?;
     reloptions::validate(&options, reloptions::VIEW, false)?;
     Ok(options)
+}
+
+/// The error of `DefineView` and `ATExecSetRelOptions` for the option `check_option` of a view that is not automatically updatable, with the reason as the hint.
+pub(super) fn check_option_error(reason: &str) -> Error {
+    Error::new(
+        SqlState::FEATURE_NOT_SUPPORTED,
+        "WITH CHECK OPTION is supported only on automatically updatable views",
+    )
+    .with_hint(reason)
 }
 
 /// The error of `CREATE OR REPLACE VIEW` for a relation that is not a view.
