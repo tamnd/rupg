@@ -18,6 +18,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Fixed
 
+- A function with a body in SQL depends on the tables and the functions that the subqueries of its `RETURN` expression read. Before, `DROP TABLE` did not find the function. The dependencies come in the order of `eliminate_duplicate_dependencies`, and a column takes the place of its whole relation, so a body in `BEGIN ATOMIC` does not also depend on the whole table (#656).
 - A trigger `BEFORE ... FOR EACH ROW` of a table with stored generated columns now sees nulls in the generated columns of `NEW`, and the write computes the generated columns after the triggers. The condition `WHEN` of a trigger `BEFORE` that reads a generated column of `NEW`, or `NEW` as a whole row of a table with generated columns, gives the error of `CreateTriggerFiringOn`. A trigger `UPDATE OF` a generated column fires when the statement changes a column that the generation expression reads (#649).
 
 ## 0.1.75 (2026-10-24)

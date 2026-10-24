@@ -3470,6 +3470,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/type_attribute.test")));
     }
 
+    /// The dependencies of a function on the objects that its body in SQL reads: a `RETURN` expression with subqueries, a body in `BEGIN ATOMIC`, a cast to a domain, and a relation that the body reads as a whole. A column takes the place of its relation, so `DROP TABLE` and `DROP FUNCTION` find each function. `connection/body_dependencies.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn body_dependencies() {
+        big_stack(|| script(include_str!("connection/body_dependencies.test")));
+    }
+
     /// The dependencies of views, defaults, check constraints, indexes, domains and functions on the fields of composite types that they select: `ALTER TYPE ... DROP ATTRIBUTE` and `ALTER TABLE ... DROP COLUMN` stop or drop these objects, the stored expressions keep the right fields after a drop, a view shows the new name of a field, and `ALTER TYPE ... ALTER ATTRIBUTE ... TYPE` makes the check constraints again. `connection/field_dependency.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn field_dependency() {
