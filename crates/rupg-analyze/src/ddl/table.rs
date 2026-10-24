@@ -1232,6 +1232,8 @@ impl Definer<'_, '_> {
         };
         let row_type = self.catalog.relation(table).map_or(0, |r| r.row_type);
         self.an.add_table(table, &plan.relname, &scope, row_type);
+        // `heap_create_with_catalog` and `CommandCounterIncrement` come before `AddRelationNewConstraints`, so the input of `regclass` in an expression finds the table.
+        self.an.env.command_counter_increment(self.catalog);
         for (i, column) in plan.columns.iter().enumerate() {
             let Some(default) = &column.default else { continue };
             let (ty, typmod) = (scope[i].1, scope[i].2);

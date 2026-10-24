@@ -66,6 +66,8 @@ pub(crate) use table::check_attribute_type;
 pub use trigger::trigger_when;
 pub use vacuum::vacuum_relations;
 
+use std::cell::RefCell;
+
 use rupg_catalog::{Catalog, ObjRef, PG_CLASS, PG_PROC, PG_TYPE, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, ClassRow, Named, NamedRow, Owned};
@@ -352,12 +354,28 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
 struct SchemaEnv<'e> {
     env: &'e dyn Env,
     schemas: Vec<(String, u32)>,
+    /// The relations that the statement added before the last [`Env::command_counter_increment`], which the session does not have: the schema, the name and the OID.
+    relations: RefCell<Vec<(u32, String, u32)>>,
 }
 
 impl<'e> SchemaEnv<'e> {
     fn new(env: &'e dyn Env, catalog: &Catalog) -> SchemaEnv<'e> {
         let schemas = catalog.schemas().map(|s| (s.name.clone(), s.oid)).collect();
-        SchemaEnv { env, schemas }
+        SchemaEnv { env, schemas, relations: RefCell::new(Vec::new()) }
+    }
+
+    /// The OID of a relation that the statement added, for the input `text` of `regclass`, as `regclassin` finds it after `CommandCounterIncrement`.
+    fn new_class(&self, text: &str) -> Option<u32> {
+        let names = rupg_types::qualified_name_list(text).ok()?;
+        let (spaces, name) = match names.as_slice() {
+            [name] => (self.search_path(), name),
+            [schema, name] => (vec![self.namespace(schema)?], name),
+            _ => return None,
+        };
+        let relations = self.relations.borrow();
+        spaces.iter().find_map(|&ns| {
+            relations.iter().find(|(n, rel, _)| *n == ns && rel == name).map(|(_, _, oid)| *oid)
+        })
     }
 }
 
@@ -379,7 +397,12 @@ impl Env for SchemaEnv<'_> {
     }
 
     fn input(&self, ty: u32, text: &str, typmod: i32) -> Result<Value> {
-        self.env.input(ty, text, typmod)
+        match self.env.input(ty, text, typmod) {
+            Err(error) if ty == oid::REGCLASS && error.state() == SqlState::UNDEFINED_TABLE => {
+                self.new_class(text).map(Value::Oid).ok_or(error)
+            }
+            value => value,
+        }
     }
 
     fn catalog(&self) -> Option<&Catalog> {
@@ -407,6 +430,12 @@ impl Env for SchemaEnv<'_> {
     }
 
     fn command_counter_increment(&self, catalog: &Catalog) {
+        let session = self.env.catalog();
+        *self.relations.borrow_mut() = catalog
+            .relations()
+            .filter(|r| session.is_none_or(|s| s.relation(r.oid).is_none()))
+            .map(|r| (r.namespace, r.name.clone(), r.oid))
+            .collect();
         self.env.command_counter_increment(catalog);
     }
 

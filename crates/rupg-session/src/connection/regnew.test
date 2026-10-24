@@ -1,0 +1,51 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE SCHEMA regnew_s;
+CREATE SCHEMA
+> CREATE TABLE gtest_tableoid (
+>>   a int PRIMARY KEY,
+>>   b bool GENERATED ALWAYS AS (tableoid = 'gtest_tableoid'::regclass) VIRTUAL
+>> );
+CREATE TABLE
+> INSERT INTO gtest_tableoid VALUES (1), (2);
+INSERT 0 2
+> ALTER TABLE gtest_tableoid ADD COLUMN
+>>   c regclass GENERATED ALWAYS AS (tableoid) VIRTUAL;
+ALTER TABLE
+> SELECT * FROM gtest_tableoid;
+fields a@gtest_tableoid.1:23:4:-1,b@gtest_tableoid.2:16:1:-1,c@gtest_tableoid.3:2205:4:-1
+row 1,t,gtest_tableoid
+row 2,t,gtest_tableoid
+SELECT 2
+> CREATE TABLE gtest_stored (a int, b bool GENERATED ALWAYS AS (tableoid = 'gtest_stored'::regclass) STORED);
+CREATE TABLE
+> INSERT INTO gtest_stored VALUES (1);
+INSERT 0 1
+> SELECT * FROM gtest_stored;
+fields a@gtest_stored.1:23:4:-1,b@gtest_stored.2:16:1:-1
+row 1,t
+SELECT 1
+> CREATE TABLE regnew_s.t1 (a int, b regclass DEFAULT 'regnew_s.t1'::regclass, CHECK (b = 'regnew_s.t1'::regclass));
+CREATE TABLE
+> INSERT INTO regnew_s.t1 (a) VALUES (1);
+INSERT 0 1
+> SELECT a, b FROM regnew_s.t1;
+fields a@regnew_s.t1.1:23:4:-1,b@regnew_s.t1.2:2205:4:-1
+row 1,regnew_s.t1
+SELECT 1
+> INSERT INTO regnew_s.t1 VALUES (2, 'gtest_stored');
+ERROR 23514 new row for relation "t1" violates check constraint "t1_b_check"
+DETAIL Failing row contains (2, gtest_stored).
+> CREATE TABLE t2 (a int DEFAULT 'nosuch'::regclass::oid::int);
+ERROR 42P01 relation "nosuch" does not exist at 32
+> CREATE TABLE t3 (a int CHECK ('t3'::regclass::oid > 0));
+CREATE TABLE
+> INSERT INTO t3 VALUES (1);
+INSERT 0 1
+> SELECT count(*) FROM t3;
+fields count:20:8:-1
+row 1
+SELECT 1
+> CREATE TABLE t4 (a regclass DEFAULT 't1'::regclass);
+ERROR 42P01 relation "t1" does not exist at 37
