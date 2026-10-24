@@ -23,7 +23,6 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Fixed
 
 - `pg_get_functiondef` now shows the body of a function in SQL with a `RETURN` body or a `BEGIN ATOMIC` body, as `print_function_sqlbody` does, in place of `AS` and a string. Before, it gave `0A000`. `CREATE PROCEDURE` with the empty body `BEGIN ATOMIC END` now gives `0A000` in place of `XX000` (#659).
-- `pg_init_privs` has no row for a built-in object that `DROP` removed. Before, the row of the schema `public` stayed after `DROP SCHEMA public`, and `pg_dump` read it.
 - `pg_init_privs` has no row for a built-in object that `DROP` removed. Before, the row of the schema `public` stayed after `DROP SCHEMA public`, and `pg_dump` read it (#660).
 - A function with a body in SQL depends on the tables and the functions that the subqueries of its `RETURN` expression read. Before, `DROP TABLE` did not find the function. The dependencies come in the order of `eliminate_duplicate_dependencies`, and a column takes the place of its whole relation, so a body in `BEGIN ATOMIC` does not also depend on the whole table (#656).
 - The input of `regclass` in a default, a generation expression or a check constraint of `CREATE TABLE` finds the new table, as PostgreSQL makes the table before it reads the expressions (#658).
