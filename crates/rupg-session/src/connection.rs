@@ -3247,6 +3247,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/reg_names.test")));
     }
 
+    /// A function in PL/pgSQL in the expression or the predicate of a unique index reads a table, and one in an exception block rolls back its subtransaction while the write of `CREATE INDEX` goes on. The function runs while the heap is not locked. `connection/index_functions.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn index_functions() {
+        big_stack(|| script(include_str!("connection/index_functions.test")));
+    }
+
     /// The implicit cast of `int2` to `oid` and to the OID alias types, whose function `int4(smallint)` gives an `int4`. `connection/int2_oid_cast.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn int2_oid_cast() {

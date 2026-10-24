@@ -1,0 +1,72 @@
+> CREATE TABLE lookup (k int);
+CREATE TABLE
+> INSERT INTO lookup VALUES (1), (2);
+INSERT 0 2
+> CREATE FUNCTION in_lookup(int) RETURNS bool IMMUTABLE LANGUAGE plpgsql AS $$ BEGIN RETURN EXISTS (SELECT 1 FROM public.lookup WHERE k = $1); END $$;
+CREATE FUNCTION
+> CREATE TABLE t (a int, b int);
+CREATE TABLE
+> INSERT INTO t VALUES (1, 10), (3, 10);
+INSERT 0 2
+> CREATE UNIQUE INDEX t_b ON t (b) WHERE in_lookup(a);
+CREATE INDEX
+> INSERT INTO t VALUES (2, 10);
+ERROR 23505 duplicate key value violates unique constraint "t_b"
+> INSERT INTO t VALUES (4, 10);
+INSERT 0 1
+> INSERT INTO t VALUES (2, 10) ON CONFLICT DO NOTHING;
+INSERT 0 0
+> INSERT INTO t VALUES (2, 20) ON CONFLICT DO NOTHING;
+INSERT 0 1
+> UPDATE t SET b = 20 WHERE a = 1;
+ERROR 23505 duplicate key value violates unique constraint "t_b"
+> UPDATE t SET b = 10 WHERE a = 1;
+UPDATE 1
+> SELECT * FROM t ORDER BY a, b;
+fields a@t.1:23:4:-1,b@t.2:23:4:-1
+row 1,10
+row 2,20
+row 3,10
+row 4,10
+SELECT 4
+> CREATE FUNCTION g(int) RETURNS int IMMUTABLE LANGUAGE plpgsql AS $$ BEGIN INSERT INTO public.lookup VALUES (1 / 0); RETURN 1; EXCEPTION WHEN OTHERS THEN RETURN 2; END $$;
+CREATE FUNCTION
+> CREATE TABLE u (a int);
+CREATE TABLE
+> INSERT INTO u VALUES (1), (2);
+INSERT 0 2
+> CREATE UNIQUE INDEX u_a ON u (a) WHERE g(a) > 0;
+CREATE INDEX
+> INSERT INTO u VALUES (1);
+ERROR 23505 duplicate key value violates unique constraint "u_a"
+> BEGIN;
+BEGIN
+> INSERT INTO u VALUES (3);
+INSERT 0 1
+> SAVEPOINT s;
+SAVEPOINT
+> INSERT INTO u VALUES (3);
+ERROR 23505 duplicate key value violates unique constraint "u_a"
+> ROLLBACK TO s;
+ROLLBACK
+> INSERT INTO u VALUES (4);
+INSERT 0 1
+> COMMIT;
+COMMIT
+> SELECT * FROM u ORDER BY a;
+fields a@u.1:23:4:-1
+row 1
+row 2
+row 3
+row 4
+SELECT 4
+> CREATE MATERIALIZED VIEW mv AS SELECT a AS c FROM u;
+SELECT 4
+> CREATE UNIQUE INDEX ON mv (c) WHERE g(c) > 0;
+CREATE INDEX
+> REFRESH MATERIALIZED VIEW mv;
+REFRESH MATERIALIZED VIEW
+> SELECT count(*) FROM mv;
+fields count:20:8:-1
+row 4
+SELECT 1

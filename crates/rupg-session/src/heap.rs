@@ -1,6 +1,5 @@
 //! The rows of the tables in memory, with the transaction IDs of `heapam_visibility.c`. Each version of a row has the transaction and the command that made it, and the transaction and the command that deleted it. A snapshot tells which versions a statement sees.
 
-use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -10,8 +9,29 @@ use rupg_common::{Error, Result, SqlState};
 use rupg_func::XactState;
 use rupg_types::{Value, oid};
 
-/// The key of a row in a unique index with an expression or a predicate, or `None` for a row that is not in the index, as [`rupg_exec::index_key`] gives it.
+/// The key of a row in a unique index with an expression or a predicate, or `None` for a row that is not in the index, as [`rupg_exec::index_key`] gives it. A function in an expression can read and change the heap, so the heap calls it only when it is not locked.
 pub(crate) type Derive<'a> = &'a dyn Fn(&Derived, &[Value]) -> Result<Option<Vec<Value>>>;
+
+/// The keys of a new row in the unique indexes with an expression or a predicate, by the place of the index in the unique keys of the write. The place of an index with no expression, or of an index that does not have the row, has `None`. The list is empty when no index has an expression.
+type Fresh = Vec<DerivedKey>;
+
+/// The key of a row in an index with an expression or a predicate, or `None` when the index does not have the row.
+type DerivedKey = Option<Box<[Value]>>;
+
+/// The keys of the new row `values` in the indexes of `unique` with an expression or a predicate. The expressions run before the write locks the heap.
+fn fresh(unique: &[Unique], values: &[Value], derive: Derive<'_>) -> Result<Fresh> {
+    if unique.iter().all(|key| key.derived.is_none()) {
+        return Ok(Vec::new());
+    }
+    let mut keys = Vec::with_capacity(unique.len());
+    for key in unique {
+        keys.push(match &key.derived {
+            Some(derived) => derive(derived, values)?.map(Vec::into_boxed_slice),
+            None => None,
+        });
+    }
+    Ok(keys)
+}
 
 /// `FirstNormalTransactionId`: the first transaction ID that a transaction gets.
 const FIRST_NORMAL_XID: u32 = 3;
@@ -108,6 +128,10 @@ struct KeyMap {
     /// The expressions and the predicate of the index. `columns` are then the places in the values of the expressions.
     derived: Option<Box<Derived>>,
     hashes: HashMap<u64, Vec<u64>>,
+    /// The key of each version in an index with an expression or a predicate, by the ID of the version. The expressions ran before the heap was locked.
+    derived_keys: HashMap<u64, Box<[Value]>>,
+    /// The map of an index with an expression did not get the key of a new version, because the write did not have the index. A later write with the index makes the map again.
+    stale: bool,
 }
 
 impl KeyMap {
@@ -118,27 +142,49 @@ impl KeyMap {
             nulls_not_distinct: key.nulls_not_distinct,
             derived: key.derived.clone(),
             hashes: HashMap::new(),
+            derived_keys: HashMap::new(),
+            stale: false,
         }
     }
 
     fn is(&self, key: &Unique) -> bool {
-        self.columns == key.columns
+        !self.stale
+            && self.columns == key.columns
             && self.types == key.types
             && self.nulls_not_distinct == key.nulls_not_distinct
             && self.derived == key.derived
     }
 
-    /// The values that the key columns are places in: the row itself, or the values of the expressions of the index. `None` is a row that is not in the index.
-    fn key<'v>(&self, values: &'v [Value], derive: Derive<'_>) -> Result<Option<Cow<'v, [Value]>>> {
+    /// The values that the key columns are places in for the version `tid` with the values `values`: the row itself, or the values of the expressions of the index. `None` is a row that is not in the index.
+    fn key<'v>(&'v self, tid: u64, values: &'v [Value]) -> Option<&'v [Value]> {
         match &self.derived {
-            None => Ok(Some(Cow::Borrowed(values))),
-            Some(derived) => Ok(derive(derived, values)?.map(Cow::Owned)),
+            None => Some(values),
+            Some(_) => self.derived_keys.get(&tid).map(|key| &**key),
         }
     }
 
-    /// The hash of the key of a row, as [`KeyMap::hash`] gives it, or `None` when the row is not in the index.
-    fn row_hash(&self, values: &[Value], derive: Derive<'_>) -> Result<Option<u64>> {
-        Ok(self.key(values, derive)?.and_then(|places| self.hash(&places)))
+    /// Adds the version `tid` with the values `values` to the map. For an index with an expression or a predicate, `derived` is the key of the version, or `None` when the index does not have the version.
+    fn add(&mut self, tid: u64, values: &[Value], derived: DerivedKey) {
+        let hash = if self.derived.is_none() {
+            self.hash(values)
+        } else if let Some(key) = derived {
+            let hash = self.hash(&key);
+            self.derived_keys.insert(tid, key);
+            hash
+        } else {
+            self.derived_keys.remove(&tid);
+            None
+        };
+        if let Some(hash) = hash {
+            self.hashes.entry(hash).or_default().push(tid);
+        }
+    }
+
+    /// The map of an index with an expression stops, as it misses the key of a new version.
+    fn make_stale(&mut self) {
+        self.stale = true;
+        self.hashes = HashMap::new();
+        self.derived_keys = HashMap::new();
     }
 
     /// The hash of the key of a row, or `None` when the key has a null and two nulls are not equal, so the key cannot conflict. Two keys that are equal have the same hash.
@@ -230,25 +276,28 @@ fn dirty(version: &Version, xid: u32, running: &BTreeSet<u32>) -> Seen {
 }
 
 impl Table {
-    /// Adds a version with the ID `kept` that an earlier try of the write had, or with a new ID, at its place in the order of the IDs. The version goes in the map of each unique key.
+    /// Adds a version with the ID `kept` that an earlier try of the write had, or with a new ID, at its place in the order of the IDs. The version goes in the map of each unique key. `fresh` has the keys of the version in the indexes of `unique` with an expression. The map of an index with an expression that is not in `unique` becomes stale.
     fn add(
         &mut self,
         kept: Option<u64>,
         (xmin, cmin): (u32, u32),
         values: Vec<Value>,
-        derive: Derive<'_>,
-    ) -> Result<u64> {
-        let mut hashes = Vec::with_capacity(self.keys.len());
-        for map in &self.keys {
-            hashes.push(map.row_hash(&values, derive)?);
-        }
+        (unique, fresh): (&[Unique], &[DerivedKey]),
+    ) -> u64 {
         let tid = kept.unwrap_or_else(|| {
             self.last_tid += 1;
             self.last_tid
         });
-        for (map, hash) in self.keys.iter_mut().zip(hashes) {
-            if let Some(hash) = hash {
-                map.hashes.entry(hash).or_default().push(tid);
+        for map in &mut self.keys {
+            if map.stale {
+                continue;
+            }
+            if map.derived.is_none() {
+                map.add(tid, &values, None);
+            } else if let Some(place) = unique.iter().position(|key| map.is(key)) {
+                map.add(tid, &values, fresh.get(place).cloned().flatten());
+            } else {
+                map.make_stale();
             }
         }
         let values = values.into_boxed_slice();
@@ -259,7 +308,7 @@ impl Table {
             let at = self.versions.partition_point(|other| other.tid < tid);
             self.versions.insert(at, version);
         }
-        Ok(tid)
+        tid
     }
 
     /// The place of the version `tid`.
@@ -267,18 +316,18 @@ impl Table {
         self.versions.binary_search_by_key(&tid, |version| version.tid).ok()
     }
 
-    /// The place in `keys` of the map of each unique key. The first write that checks a key makes its map from all the versions.
-    fn key_maps(&mut self, unique: &[Unique], derive: Derive<'_>) -> Result<Vec<usize>> {
+    /// The place in `keys` of the map of each unique key. The first write that checks a key with no expression makes its map from all the versions. The result is `None` when an index with an expression has no map, which [`Heap::lock_keys`] makes while the heap is not locked.
+    fn key_maps(&mut self, unique: &[Unique]) -> Option<Vec<usize>> {
+        self.keys.retain(|map| !map.stale);
         let mut places = Vec::with_capacity(unique.len());
         for key in unique {
             let place = match self.keys.iter().position(|map| map.is(key)) {
                 Some(place) => place,
+                None if key.derived.is_some() => return None,
                 None => {
                     let mut map = KeyMap::of(key);
                     for version in &self.versions {
-                        if let Some(hash) = map.row_hash(&version.values, derive)? {
-                            map.hashes.entry(hash).or_default().push(version.tid);
-                        }
+                        map.add(version.tid, &version.values, None);
                     }
                     self.keys.push(map);
                     self.keys.len() - 1
@@ -286,7 +335,7 @@ impl Table {
             };
             places.push(place);
         }
-        Ok(places)
+        Some(places)
     }
 
     /// `_bt_check_unique` of the new version `tid` for each unique key, in the order of the indexes. The result is the first conflict: a live version with the same key, or a transaction in progress that the write must wait for. `used` has the IDs of the new versions of the write up to `tid`. A conflict in a deferrable index is no error: the place of the index and `tid` go to `partial`, for the check after the statement.
@@ -295,7 +344,6 @@ impl Table {
         (places, unique): (&[usize], &[Unique]),
         used: &[u64],
         (xid, running): (u32, &BTreeSet<u32>),
-        derive: Derive<'_>,
         partial: &mut Vec<(usize, u64)>,
     ) -> Result<Option<Changed>> {
         let Some(&tid) = used.last() else {
@@ -307,10 +355,10 @@ impl Table {
         let row = &self.versions[at].values;
         for (index, &place) in places.iter().enumerate() {
             let map = &self.keys[place];
-            let Some(values) = map.key(row, derive)? else {
+            let Some(values) = map.key(tid, row) else {
                 continue;
             };
-            let Some(hash) = map.hash(&values) else {
+            let Some(hash) = map.hash(values) else {
                 continue;
             };
             for &other in map.hashes.get(&hash).into_iter().flatten() {
@@ -325,8 +373,8 @@ impl Table {
                 if seen == Seen::Dead {
                     continue;
                 }
-                match map.key(&version.values, derive)? {
-                    Some(other) if map.same(&values, &other)? => {}
+                match map.key(other, &version.values) {
+                    Some(other) if map.same(values, other)? => {}
                     _ => continue,
                 }
                 if unique.get(index).is_some_and(|key| key.deferrable.is_some()) {
@@ -351,6 +399,7 @@ impl Table {
             let at = self.versions.partition_point(|version| version.tid < first);
             let tail = self.versions.split_off(at);
             self.versions.extend(tail.into_iter().filter(|v| used.binary_search(&v.tid).is_err()));
+            self.forget_keys(used);
         }
         for &tid in deleted {
             if let Some(at) = self.find(tid) {
@@ -358,6 +407,24 @@ impl Table {
                 version.xmax = 0;
                 version.cmax = 0;
                 version.next = 0;
+            }
+        }
+    }
+
+    /// Removes the versions that `gone` picks.
+    fn remove(&mut self, gone: impl Fn(&Version) -> bool) {
+        if self.keys.iter().any(|map| !map.derived_keys.is_empty()) {
+            let tids: Vec<u64> = self.versions.iter().filter(|v| gone(v)).map(|v| v.tid).collect();
+            self.forget_keys(&tids);
+        }
+        self.versions.retain(|version| !gone(version));
+    }
+
+    /// Removes the keys of the versions `tids` that went from the maps of the indexes with an expression.
+    fn forget_keys(&mut self, tids: &[u64]) {
+        for map in self.keys.iter_mut().filter(|map| !map.derived_keys.is_empty()) {
+            for tid in tids {
+                map.derived_keys.remove(tid);
             }
         }
     }
@@ -465,6 +532,70 @@ pub(crate) fn tid_text(tid: u64) -> String {
 impl Heap {
     fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Locks the heap when the table `table` has the map of each unique key of `unique`, and gives the place of each map. The map of an index with an expression or a predicate gets the keys of the versions while the heap is not locked, as a function in an expression can read and change the heap. The versions that other writes add meanwhile get their keys in the next round.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the expressions of an index.
+    fn lock_keys(
+        &self,
+        table: (u32, u32),
+        unique: &[Unique],
+        derive: Derive<'_>,
+    ) -> Result<(MutexGuard<'_, State>, Vec<usize>)> {
+        // The maps that this call makes, by the place of the key in `unique`, with the address of the values of each version whose key the map has, as an abort and a new try of a write can give a new version the ID of an old one.
+        let mut made: Vec<(usize, KeyMap, HashMap<u64, usize>)> = Vec::new();
+        loop {
+            let mut state = self.state();
+            let rows = state.tables.entry(table).or_default();
+            if let Some(places) = rows.key_maps(unique) {
+                return Ok((state, places));
+            }
+            let mut todo = Vec::new();
+            for (place, key) in unique.iter().enumerate() {
+                if key.derived.is_none() || rows.keys.iter().any(|map| map.is(key)) {
+                    continue;
+                }
+                let at = match made.iter().position(|(other, ..)| *other == place) {
+                    Some(at) => at,
+                    None => {
+                        made.push((place, KeyMap::of(key), HashMap::new()));
+                        made.len() - 1
+                    }
+                };
+                let seen = &made[at].2;
+                let versions: Vec<_> = rows
+                    .versions
+                    .iter()
+                    .filter(|v| seen.get(&v.tid) != Some(&(v.values.as_ptr() as usize)))
+                    .map(|v| (v.tid, v.values.as_ptr() as usize, v.values.clone()))
+                    .collect();
+                if versions.is_empty() {
+                    let (_, map, _) = made.swap_remove(at);
+                    rows.keys.push(map);
+                } else {
+                    todo.push((place, versions));
+                }
+            }
+            if todo.is_empty() {
+                continue;
+            }
+            drop(state);
+            for (place, versions) in todo {
+                let Some((_, map, seen)) = made.iter_mut().find(|(other, ..)| *other == place)
+                else {
+                    continue;
+                };
+                let Some(derived) = map.derived.clone() else { continue };
+                for (tid, address, values) in versions {
+                    let key = derive(&derived, &values)?.map(Vec::into_boxed_slice);
+                    map.add(tid, &values, key);
+                    seen.insert(tid, address);
+                }
+            }
+        }
     }
 
     /// `GetNewTransactionId`: a transaction ID for a transaction of the session `pid` that writes. The transaction is in progress until [`Heap::commit`] or [`Heap::abort`].
@@ -592,31 +723,30 @@ impl Heap {
         (unique, derive): (&[Unique], Derive<'_>),
         kept: &[u64],
     ) -> Result<Changed> {
-        let mut state = self.state();
-        let State { tables, running, rechecks: pending, .. } = &mut *state;
-        let table = tables.entry((view.database, relation)).or_default();
         let count = rows.len() as u64;
         let made = (view.xid, view.command);
         if unique.is_empty() {
+            let mut state = self.state();
+            let table = state.tables.entry((view.database, relation)).or_default();
             for values in rows {
-                table.add(None, made, values, derive)?;
+                table.add(None, made, values, (unique, &[]));
             }
             return Ok(Changed::Done(count));
         }
-        let places = table.key_maps(unique, derive)?;
+        let mut keys = Vec::with_capacity(rows.len());
+        for values in &rows {
+            keys.push(fresh(unique, values, derive)?);
+        }
+        let (mut state, places) = self.lock_keys((view.database, relation), unique, derive)?;
+        let State { tables, running, rechecks: pending, .. } = &mut *state;
+        let table = tables.entry((view.database, relation)).or_default();
         let mut kept = kept.iter().copied();
         let mut used = Vec::with_capacity(rows.len());
         let mut partial = Vec::new();
-        for values in rows {
-            match table.add(kept.next(), made, values, derive) {
-                Ok(tid) => used.push(tid),
-                Err(error) => {
-                    table.undo(&used, &[]);
-                    return Err(error);
-                }
-            }
+        for (values, keys) in rows.into_iter().zip(&keys) {
+            used.push(table.add(kept.next(), made, values, (unique, keys)));
             let checked = (view.xid, &*running);
-            match table.check_keys((&places, unique), &used, checked, derive, &mut partial) {
+            match table.check_keys((&places, unique), &used, checked, &mut partial) {
                 Ok(None) => {}
                 result => {
                     table.undo(&used, &[]);
@@ -642,17 +772,21 @@ impl Heap {
         arbiters: &[usize],
         kept: Option<u64>,
     ) -> Result<Speculative> {
-        let mut state = self.state();
+        let keys = fresh(unique, &values, derive)?;
+        let (mut state, places) = self.lock_keys((view.database, relation), unique, derive)?;
         let State { tables, running, rechecks: pending, .. } = &mut *state;
         let table = tables.entry((view.database, relation)).or_default();
-        let places = table.key_maps(unique, derive)?;
         for &arbiter in arbiters {
             let Some(&place) = places.get(arbiter) else { continue };
             let map = &table.keys[place];
-            let Some(places) = map.key(&values, derive)? else {
+            let key = match &map.derived {
+                None => Some(values.as_slice()),
+                Some(_) => keys.get(arbiter).and_then(|key| key.as_deref()),
+            };
+            let Some(places) = key else {
                 continue;
             };
-            let Some(hash) = map.hash(&places) else {
+            let Some(hash) = map.hash(places) else {
                 continue;
             };
             for &other in map.hashes.get(&hash).into_iter().flatten() {
@@ -664,8 +798,8 @@ impl Heap {
                 if seen == Seen::Dead {
                     continue;
                 }
-                match map.key(&version.values, derive)? {
-                    Some(found) if map.same(&places, &found)? => {}
+                match map.key(other, &version.values) {
+                    Some(found) if map.same(places, found)? => {}
                     _ => continue,
                 }
                 if let Seen::Wait(holder) = seen {
@@ -681,10 +815,10 @@ impl Heap {
                 });
             }
         }
-        let used = [table.add(kept, (view.xid, view.command), values, derive)?];
+        let used = [table.add(kept, (view.xid, view.command), values, (unique, &keys))];
         let mut partial = Vec::new();
         let checked = (view.xid, &*running);
-        match table.check_keys((&places, unique), &used, checked, derive, &mut partial) {
+        match table.check_keys((&places, unique), &used, checked, &mut partial) {
             Ok(None) => {
                 pending.extend(rechecks(view, relation, unique, partial));
                 Ok(Speculative::Inserted)
@@ -711,14 +845,21 @@ impl Heap {
         applied: &mut Vec<usize>,
     ) -> Result<Changed> {
         applied.clear();
-        let mut state = self.state();
+        let mut keys = Vec::with_capacity(changes.len());
+        for (_, values) in &changes {
+            keys.push(match values {
+                Some(values) => fresh(unique, values, derive)?,
+                None => Vec::new(),
+            });
+        }
+        let (mut state, places) = self.lock_keys((view.database, relation), unique, derive)?;
         let State { tables, running, rechecks: pending, .. } = &mut *state;
         let Some(table) = tables.get_mut(&(view.database, relation)) else {
             return Ok(Changed::Done(0));
         };
-        let mut found = Vec::with_capacity(changes.len());
+        let mut found: Vec<(u64, Option<Vec<Value>>, Fresh)> = Vec::with_capacity(changes.len());
         let mut indexes = Vec::with_capacity(changes.len());
-        for (index, (tid, values)) in changes.into_iter().enumerate() {
+        for (index, ((tid, values), keys)) in changes.into_iter().zip(keys).enumerate() {
             let Ok(at) = table.versions.binary_search_by_key(&tid, |version| version.tid) else {
                 continue;
             };
@@ -738,28 +879,20 @@ impl Heap {
                 }
                 _ => return Ok(Changed::Again),
             }
-            if found.iter().any(|&(old, _)| old == tid) {
+            if found.iter().any(|(old, ..)| *old == tid) {
                 continue;
             }
-            found.push((tid, values));
+            found.push((tid, values, keys));
             indexes.push(index);
         }
         let count = found.len() as u64;
-        let places = table.key_maps(unique, derive)?;
         let mut kept = kept.iter().copied();
         let mut used = Vec::new();
         let mut deleted = Vec::with_capacity(found.len());
         let mut partial = Vec::new();
-        for (old, values) in found {
-            let next =
-                match values.map(|v| table.add(kept.next(), (view.xid, view.command), v, derive)) {
-                    Some(Ok(tid)) => tid,
-                    Some(Err(error)) => {
-                        table.undo(&used, &deleted);
-                        return Err(error);
-                    }
-                    None => 0,
-                };
+        for (old, values, keys) in found {
+            let made = (view.xid, view.command);
+            let next = values.map_or(0, |v| table.add(kept.next(), made, v, (unique, &keys)));
             if let Some(at) = table.find(old) {
                 let version = &mut table.versions[at];
                 version.xmax = view.xid;
@@ -772,7 +905,7 @@ impl Heap {
             }
             used.push(next);
             let checked = (view.xid, &*running);
-            match table.check_keys((&places, unique), &used, checked, derive, &mut partial) {
+            match table.check_keys((&places, unique), &used, checked, &mut partial) {
                 Ok(None) => {}
                 result => {
                     table.undo(&used, &deleted);
@@ -857,7 +990,7 @@ impl Heap {
     pub(crate) fn abort(&self, xid: u32) {
         let mut state = self.state();
         for table in state.tables.values_mut() {
-            table.versions.retain(|version| version.xmin != xid);
+            table.remove(|version| version.xmin == xid);
             for version in table.versions.iter_mut().filter(|version| version.xmax == xid) {
                 version.aborted = xid;
                 version.xmax = 0;
@@ -878,7 +1011,7 @@ impl Heap {
         let mut state = self.state();
         state.rechecks.retain(|recheck| recheck.xid != xid || recheck.command < command);
         for table in state.tables.values_mut() {
-            table.versions.retain(|version| version.xmin != xid || version.cmin < command);
+            table.remove(|version| version.xmin == xid && version.cmin >= command);
             let deleted = |version: &&mut Version| version.xmax == xid && version.cmax >= command;
             for version in table.versions.iter_mut().filter(deleted) {
                 version.aborted = xid;
@@ -910,19 +1043,19 @@ impl Heap {
         recheck: &Recheck,
         derive: Derive<'_>,
     ) -> Result<Option<Changed>> {
-        let mut state = self.state();
+        let unique = [Unique { deferrable: None, ..recheck.unique.clone() }];
+        let (mut state, places) =
+            self.lock_keys((recheck.database, recheck.table), &unique, derive)?;
         let State { tables, running, .. } = &mut *state;
         let Some(table) = tables.get_mut(&(recheck.database, recheck.table)) else {
             return Ok(None);
         };
-        let unique = [Unique { deferrable: None, ..recheck.unique.clone() }];
-        let places = table.key_maps(&unique, derive)?;
         let live = table.find(recheck.tid).map(|at| dirty(&table.versions[at], xid, running));
         if live.is_none_or(|seen| seen == Seen::Dead) {
             return Ok(None);
         }
         let checked = (xid, &*running);
-        table.check_keys((&places, &unique), &[recheck.tid], checked, derive, &mut Vec::new())
+        table.check_keys((&places, &unique), &[recheck.tid], checked, &mut Vec::new())
     }
 
     /// Removes the rows of the tables of a database that `keep` does not keep, after a commit drops the tables.
