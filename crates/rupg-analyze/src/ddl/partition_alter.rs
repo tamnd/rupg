@@ -76,12 +76,19 @@ impl Definer<'_, '_> {
             new.local = false;
             new.inhcount = 1;
             let own = self.catalog.add_column(child.oid, new)?;
+            // A generation expression reads the columns of the parent, which can have other numbers in the child.
+            let default = match &default {
+                Some(text) if column.generated != 0 => {
+                    Some(self.att_map(parent, child.oid)?.text(text)?)
+                }
+                _ => default.clone(),
+            };
             if let Some(text) = &default {
                 let expr = crate::node::read(text)?;
                 let refs = references(self.catalog, child.oid, &[&expr])?;
                 self.catalog.add_default(child.oid, own, text.clone(), &refs)?;
             }
-            self.added.push(Fill { table: child.oid, column: own, default: default.clone() });
+            self.added.push(Fill { table: child.oid, column: own, default });
             if let Some(name) = &not_null {
                 let used = self.catalog.constraints_of(child.oid).any(|c| c.name == *name);
                 let given = (!used).then_some(name.as_str());

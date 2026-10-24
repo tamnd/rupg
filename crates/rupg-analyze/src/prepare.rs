@@ -81,5 +81,6 @@ pub fn execute_params(exprs: &List, types: &[u32], env: &dyn Env) -> Result<Quer
         constraint_deps: Vec::new(),
         shown: None,
         perms: Vec::new(),
+        funcs: Vec::new(),
     })
 }

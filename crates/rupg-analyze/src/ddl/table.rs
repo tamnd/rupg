@@ -1081,9 +1081,6 @@ impl Definer<'_, '_> {
         let Some(column) = plan.columns.first() else {
             return Err(Error::internal("ADD COLUMN without a column"));
         };
-        if column.generated != 0 {
-            return Err(not_yet("ADD COLUMN of a generated column", place(def.location)));
-        }
         // The `OWNED BY` of the sequence of `generateSerialExtraStmts` comes first.
         if target.kind == b'c' && !plan.serials.is_empty() {
             return Err(Error::new(
@@ -1125,6 +1122,9 @@ impl Definer<'_, '_> {
         self.check_member_of_itself(new.ty, row_type)?;
         let number = self.catalog.add_column(table, new)?;
         match &column.default {
+            Some(RawDefault::Expr(node)) if column.generated != 0 => {
+                self.add_generation_expression(table, number, node)?;
+            }
             Some(RawDefault::Expr(node)) => {
                 let name = column.name.clone();
                 let node = node.clone();
@@ -1219,7 +1219,9 @@ impl Definer<'_, '_> {
             let (ty, typmod) = (scope[i].1, scope[i].2);
             let expr = match default {
                 RawDefault::Expr(node) if column.generated != 0 => {
-                    self.generation_expression(node, &plan.columns)?
+                    let columns: Vec<(&str, bool)> =
+                        plan.columns.iter().map(|c| (c.name.as_str(), c.generated != 0)).collect();
+                    self.generation_expression(node, &columns)?
                 }
                 RawDefault::Expr(node) => {
                     self.an.with_kind(Kind::ColumnDefault, |an| an.transform(Some(node)))?
@@ -1276,8 +1278,8 @@ impl Definer<'_, '_> {
         Ok(table)
     }
 
-    /// The part of `cookDefault` for the generation expression of a generated column of a new table: the expression must not read a generated column or the whole row, as `check_nested_generated` finds, and it must be immutable. `columns` are the columns of the table.
-    fn generation_expression(&mut self, node: &Node, columns: &[NewColumn]) -> Result<Expr> {
+    /// The part of `cookDefault` for the generation expression of a generated column: the expression must not read a generated column or the whole row, as `check_nested_generated` finds, and it must be immutable. `columns` gives, for each column of the table, its name and if it is a generated column.
+    fn generation_expression(&mut self, node: &Node, columns: &[(&str, bool)]) -> Result<Expr> {
         let expr = self.an.with_kind(Kind::Generated, |an| an.transform(Some(node)))?;
         let error = expr.find(0, &mut |e, depth| {
             let ExprKind::Var(var) = e.kind else { return None };
@@ -1297,13 +1299,13 @@ impl Definer<'_, '_> {
                     .at_opt(at),
                 );
             }
-            let column = usize::try_from(var.attnum).ok().and_then(|n| columns.get(n - 1))?;
-            (column.generated != 0).then(|| {
+            let &(name, generated) =
+                usize::try_from(var.attnum).ok().and_then(|n| columns.get(n - 1))?;
+            generated.then(|| {
                 Error::new(
                     SqlState::INVALID_OBJECT_DEFINITION,
                     format!(
-                        "cannot use generated column \"{}\" in column generation expression",
-                        column.name
+                        "cannot use generated column \"{name}\" in column generation expression"
                     ),
                 )
                 .with_detail("A generated column cannot reference another generated column.")
@@ -1320,6 +1322,42 @@ impl Definer<'_, '_> {
             ));
         }
         Ok(expr)
+    }
+
+    /// `cookDefault` and `StoreAttrDefault` for the generation expression of the new generated column `number` of `ADD COLUMN`. `ATExecAddColumn` gives no query text to `cookDefault`, so the errors of the expression have no place.
+    fn add_generation_expression(&mut self, table: u32, number: i16, node: &Node) -> Result<()> {
+        let rel = self
+            .catalog
+            .relation(table)
+            .ok_or_else(|| Error::internal(format!("cache lookup failed for relation {table}")))?;
+        let names: Vec<(String, bool)> =
+            rel.columns.iter().map(|c| (c.name.clone(), c.generated != 0 && !c.dropped)).collect();
+        let Some(new) = rel.column(number) else {
+            return Err(Error::internal("ADD COLUMN without a column"));
+        };
+        let (name, ty, typmod) = (new.name.clone(), new.ty, new.typmod);
+        self.table_scope(table);
+        let columns: Vec<(&str, bool)> = names.iter().map(|(n, g)| (n.as_str(), *g)).collect();
+        let expr = self.generation_expression(node, &columns).map_err(|e| e.with_position(None))?;
+        let from = expr.ty;
+        let Some(expr) = self
+            .an
+            .coerce_to_target(expr, ty, typmod, Context::Assignment, None)
+            .map_err(|e| e.with_position(None))?
+        else {
+            return Err(Error::new(
+                SqlState::DATATYPE_MISMATCH,
+                format!(
+                    "column \"{name}\" is of type {} but default expression is of type {}",
+                    types::name(ty),
+                    types::name(from)
+                ),
+            )
+            .with_hint("You will need to rewrite or cast the expression."));
+        };
+        let refs = references(self.catalog, table, &[&expr])?;
+        self.catalog.add_default(table, number, crate::node::write(&expr)?, &refs)?;
+        Ok(())
     }
 
     /// The check constraints of `AddRelationNewConstraints`. The result is the OIDs of the new constraints.

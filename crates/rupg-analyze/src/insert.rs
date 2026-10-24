@@ -15,7 +15,7 @@ use crate::Analyzer;
 use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
 use crate::expr::{BoolOp, Expr, ExprKind, FieldStore, Func, FuncForm, Var};
-use crate::from::{Column, FromItem, Relation};
+use crate::from::{Column, FromItem, Relation, TABLE_OID_ATTNUM};
 use crate::merge::Merge;
 use crate::modify::{carried_targets, set_columns};
 use crate::perm::{ACL_DELETE, ACL_INSERT, ACL_SELECT, ACL_UPDATE};
@@ -1097,7 +1097,7 @@ impl Analyzer<'_> {
     }
 
     /// The stored generated columns of the table, each with the index of the column from 0 and its generation expression, as `ExecComputeStoredGenerated` computes them for a new row. The leaf partitions of a partitioned table compute their own columns.
-    pub(crate) fn generated_columns(&self, table: u32) -> Result<Vec<(usize, Expr)>> {
+    pub(crate) fn generated_columns(&mut self, table: u32) -> Result<Vec<(usize, Expr)>> {
         let Some(catalog) = self.env.catalog() else { return Ok(Vec::new()) };
         let Some(relation) = catalog.relation(table) else { return Ok(Vec::new()) };
         if relation.kind == RelKind::Partitioned {
@@ -1110,7 +1110,18 @@ impl Analyzer<'_> {
             }
             let attnum = i16::try_from(index + 1).unwrap_or(i16::MAX);
             if let Some(default) = catalog.default_of(table, attnum) {
-                out.push((index, crate::node::read(&default.expr)?));
+                let mut expr: Expr = crate::node::read(&default.expr)?;
+                // `ExecComputeStoredGenerated` sets `tts_tableOid` of the new row first, so `tableoid` is the table.
+                expr.each_mut(0, &mut |e, depth| {
+                    let ExprKind::Var(var) = e.kind else { return false };
+                    if var.levels_up != depth || var.attnum != TABLE_OID_ATTNUM {
+                        return false;
+                    }
+                    *e = Expr::constant(Value::Oid(table), oid::OID, -1, None);
+                    true
+                });
+                self.note_funcs(&expr);
+                out.push((index, expr));
             }
         }
         Ok(out)
@@ -1187,6 +1198,7 @@ impl Analyzer<'_> {
             return Ok(expr);
         };
         let expr = crate::node::read(&text)?;
+        self.note_funcs(&expr);
         let from = expr.ty;
         self.coerce_to_target(expr, column.ty, column.typmod, Context::Assignment, None)?
             .ok_or_else(|| {
@@ -1359,7 +1371,7 @@ impl Analyzer<'_> {
     }
 
     /// The check constraints of the table with their conditions, in the order of their names, as `CheckConstraintFetch` sorts them.
-    pub(crate) fn checks(&self, table: u32) -> Result<Vec<(String, Expr)>> {
+    pub(crate) fn checks(&mut self, table: u32) -> Result<Vec<(String, Expr)>> {
         let Some(catalog) = self.env.catalog() else { return Ok(Vec::new()) };
         let mut checks: Vec<(String, &str)> = catalog
             .constraints_of(table)
@@ -1367,7 +1379,14 @@ impl Analyzer<'_> {
             .map(|c| (c.name.clone(), c.expr.as_deref().unwrap_or_default()))
             .collect();
         checks.sort_by(|a, b| a.0.cmp(&b.0));
-        checks.into_iter().map(|(name, text)| Ok((name, crate::node::read(text)?))).collect()
+        let checks: Vec<(String, Expr)> = checks
+            .into_iter()
+            .map(|(name, text)| Ok((name, crate::node::read(text)?)))
+            .collect::<Result<_>>()?;
+        for (_, expr) in &checks {
+            self.note_funcs(expr);
+        }
+        Ok(checks)
     }
 }
 

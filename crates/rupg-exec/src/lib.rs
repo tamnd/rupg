@@ -1361,6 +1361,7 @@ impl Plan {
             ));
         }
         rupg_func::check_permissions(&self.query.perms, session)?;
+        rupg_func::check_execute(&self.query.funcs, session)?;
         check_row_marks(&self.query, session)?;
         scan::check_scannable(&self.query, session)
     }

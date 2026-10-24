@@ -63,7 +63,7 @@ pub(crate) use table::check_attribute_type;
 pub use trigger::trigger_when;
 pub use vacuum::vacuum_relations;
 
-use rupg_catalog::{Catalog, ObjRef, PG_CLASS, PG_TYPE, RelKind};
+use rupg_catalog::{Catalog, ObjRef, PG_CLASS, PG_PROC, PG_TYPE, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, ClassRow, Named, Owned};
 use rupg_sql::nodes::{CreateSchemaStmt, GrantTargetType, Node, ObjectType, RangeVar};
@@ -507,7 +507,7 @@ fn column_numbers(exprs: &[&Expr]) -> Vec<i16> {
     numbers
 }
 
-/// `recordDependencyOnSingleRelExpr`: the objects that the expressions refer to. These are the columns of the relation, the relations and types of `regclass` and `regtype` constants, and the fields of composite types that the expressions select. The catalog drops the references to pinned objects. A `regrole` or `regdatabase` constant is an error, because a role and a database are shared objects.
+/// `recordDependencyOnSingleRelExpr`: the objects that the expressions refer to. These are the columns of the relation, the functions that the expressions call, the relations and types of `regclass` and `regtype` constants, and the fields of composite types that the expressions select. The catalog drops the references to pinned objects. A `regrole` or `regdatabase` constant is an error, because a role and a database are shared objects.
 fn references(catalog: &Catalog, relation: u32, exprs: &[&Expr]) -> Result<Vec<ObjRef>> {
     let mut refs: Vec<ObjRef> =
         column_numbers(exprs).into_iter().map(|n| ObjRef::column(relation, n)).collect();
@@ -531,6 +531,7 @@ fn references(catalog: &Catalog, relation: u32, exprs: &[&Expr]) -> Result<Vec<O
                 (ExprKind::Const(Value::Oid(oid)), oid::REGTYPE) => {
                     Some(ObjRef::new(PG_TYPE, *oid))
                 }
+                (ExprKind::Func(f), _) => Some(ObjRef::new(PG_PROC, f.oid)),
                 _ => field_reference(catalog, e),
             };
             for found in found.into_iter().chain(type_reference(e)) {

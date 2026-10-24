@@ -621,7 +621,8 @@ impl Analyzer<'_> {
         an.set_path(&view.path);
         an.views.clone_from(&self.views);
         an.views.push(oid);
-        let query = an.select(select).map_err(|error| error.with_position(None))?;
+        let mut query = an.select(select).map_err(|error| error.with_position(None))?;
+        query.funcs = an.funcs;
         Ok(Some((query, an.perms)))
     }
 
