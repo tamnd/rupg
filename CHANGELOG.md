@@ -10,6 +10,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - The system columns `xmin` and `xmax` give the transaction that inserted the row and the transaction that deleted it, also for the rows of a partitioned table and of a table with children of `INHERITS`. A row that an aborted transaction deleted keeps the ID of that transaction in `xmax`, as `t_xmax` keeps it. `RETURNING xmin` of an `INSERT` or an `UPDATE` gives the transaction of the session. Before, each row showed a frozen `xmin` and 0 as `xmax` (#668).
 - `age(xid)` and `mxid_age(xid)` run. `age` counts from the ID of the transaction, or from the next ID when the transaction has none, and the value stays the same until the end of the transaction, as `GetStableLatestTransactionId` gives it. An ID that is not normal gives `2147483647` (#669).
 
+### Fixed
+
+- On macOS, the server sets `SO_KEEPALIVE` on each TCP connection, and `tcp_keepalives_idle`, `tcp_keepalives_interval` and `tcp_keepalives_count` read and set the options of the socket, as on Linux. Before, `SHOW` gave 0 for them on macOS. macOS does not have `TCP_USER_TIMEOUT`, so `tcp_user_timeout` shows 0, and a value that is not 0 writes `setsockopt(TCP_USER_TIMEOUT) not supported` to the log, as in PostgreSQL (#PR).
+
 ## 0.1.76 (2026-10-24)
 
 ### Added
