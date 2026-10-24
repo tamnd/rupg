@@ -268,6 +268,21 @@ impl Definer<'_, '_> {
             if column.not_null && !own.not_null && inherited {
                 return Err(must_be_not_null(&column.name, &rel.name));
             }
+            if column.generated != 0 && own.generated == 0 {
+                return Err(Error::new(
+                    SqlState::DATATYPE_MISMATCH,
+                    format!("column \"{}\" in child table must be a generated column", column.name),
+                ));
+            }
+            if own.generated != 0 && column.generated == 0 {
+                return Err(Error::new(
+                    SqlState::DATATYPE_MISMATCH,
+                    format!(
+                        "column \"{}\" in child table must not be a generated column",
+                        column.name
+                    ),
+                ));
+            }
             let inhcount = own.inhcount.checked_add(1).ok_or_else(too_many_parents)?;
             merged.push((number, parent_number, own.local, inhcount));
         }

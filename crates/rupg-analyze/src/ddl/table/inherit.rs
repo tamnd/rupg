@@ -38,6 +38,44 @@ pub(in crate::ddl) fn collation_name(collation: u32) -> &'static str {
 }
 
 /// The error of two definitions of a column that do not agree, with the two values in the detail.
+/// The checks of `MergeChildAttribute` for a generated column: a column of the statement must be generated if and only if the inherited column `generated` is, with the same kind, and the column of a generated column must not have a default or an identity.
+pub(super) fn merge_generated(generated: u8, column: &NewColumn) -> Result<()> {
+    let name = &column.name;
+    if generated != 0 {
+        if column.default.is_some() && column.generated == 0 {
+            return Err(Error::new(
+                SqlState::INVALID_COLUMN_DEFINITION,
+                format!("column \"{name}\" inherits from generated column but specifies default"),
+            ));
+        }
+        if column.identity != 0 {
+            return Err(Error::new(
+                SqlState::INVALID_COLUMN_DEFINITION,
+                format!("column \"{name}\" inherits from generated column but specifies identity"),
+            ));
+        }
+    } else if column.generated != 0 {
+        return Err(Error::new(
+            SqlState::INVALID_COLUMN_DEFINITION,
+            format!("child column \"{name}\" specifies generation expression"),
+        )
+        .with_hint("A child table column cannot be generated unless its parent column is."));
+    }
+    if generated != 0 && column.generated != 0 && generated != column.generated {
+        let kind = |g: u8| if g == b's' { "STORED" } else { "VIRTUAL" };
+        return Err(Error::new(
+            SqlState::INVALID_COLUMN_DEFINITION,
+            format!("column \"{name}\" inherits from generated column of different kind"),
+        )
+        .with_detail(format!(
+            "Parent column is {}, child column is {}.",
+            kind(generated),
+            kind(column.generated)
+        )));
+    }
+    Ok(())
+}
+
 fn conflict(state: SqlState, message: String, first: &str, second: &str) -> Error {
     Error::new(state, message).with_detail(format!("{first} versus {second}"))
 }
@@ -195,6 +233,12 @@ impl Definer<'_, '_> {
                         compression_name(c.compression),
                     ));
                 }
+                if inh.generated != c.generated {
+                    return Err(Error::new(
+                        SqlState::DATATYPE_MISMATCH,
+                        format!("inherited column \"{}\" has a generation conflict", c.name),
+                    ));
+                }
                 inh.inhcount = inh.inhcount.saturating_add(1);
                 match (&prev.default, default) {
                     (None, Some(text)) => prev.default = Some(RawDefault::Cooked(text, parent)),
@@ -277,6 +321,7 @@ impl Definer<'_, '_> {
                     ));
                 }
             }
+            merge_generated(inh.generated, &column)?;
             inh.local = true;
             target.is_not_null |= column.is_not_null;
             if column.default.is_some() {
@@ -285,12 +330,21 @@ impl Definer<'_, '_> {
             }
             places.push(at);
         }
-        if let Some(name) = columns.iter().map(|c| &c.name).find(|n| bogus.contains(n)) {
-            return Err(Error::new(
-                SqlState::INVALID_COLUMN_DEFINITION,
-                format!("column \"{name}\" inherits conflicting default values"),
-            )
-            .with_hint("To resolve the conflict, specify a default explicitly."));
+        if let Some(c) = columns.iter().find(|c| bogus.contains(&c.name)) {
+            let name = &c.name;
+            return Err(if c.generated != 0 {
+                Error::new(
+                    SqlState::INVALID_COLUMN_DEFINITION,
+                    format!("column \"{name}\" inherits conflicting generation expressions"),
+                )
+                .with_hint("To resolve the conflict, specify a generation expression explicitly.")
+            } else {
+                Error::new(
+                    SqlState::INVALID_COLUMN_DEFINITION,
+                    format!("column \"{name}\" inherits conflicting default values"),
+                )
+                .with_hint("To resolve the conflict, specify a default explicitly.")
+            });
         }
         // The `serial` columns of the statement have new places.
         for serial in &mut plan.serials {
