@@ -881,10 +881,7 @@ fn leaf(
     let live: Vec<usize> = (0..rel.columns.len())
         .filter(|&i| !rel.columns[i].dropped && rel.columns[i].generated == 0)
         .collect();
-    let root_types = catalog
-        .relation(root)
-        .map(|r| r.columns.iter().map(|c| c.ty).collect())
-        .unwrap_or_default();
+    let root_types = catalog.relation(root).map(rupg_exec::row_types).unwrap_or_default();
     let up = match catalog.relation(root) {
         Some(parent) => rel
             .columns

@@ -46,6 +46,7 @@ mod typcache;
 mod typename;
 pub mod types;
 mod values;
+mod virtual_columns;
 mod walk;
 mod window;
 mod xmlexpr;
@@ -102,6 +103,7 @@ pub use setop::{SetKind, SetOp, SetTree, strength_name};
 pub use sort::{GroupingSet, SortGroup, expand_grouping_sets};
 pub use typcache::{default_opclass, equality_for_ordering, is_binary_coercible, sort_operators};
 pub use typename::parse_type;
+pub use virtual_columns::{expand_virtual, expand_virtual_body};
 pub use window::{
     FRAMEOPTION_END_OFFSET, FRAMEOPTION_END_OFFSET_FOLLOWING, FRAMEOPTION_END_UNBOUNDED_FOLLOWING,
     FRAMEOPTION_START_OFFSET, Frame, FrameBound, FrameExclusion, FrameMode, WindowClause,

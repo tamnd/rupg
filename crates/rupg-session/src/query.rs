@@ -1187,7 +1187,7 @@ impl Env for Reader<'_> {
 ///
 /// The errors of the analysis, and `0A000` for a part of the statement that the engine cannot run yet.
 pub(crate) fn plan(node: &Node, reader: &Reader<'_>, params: &Params) -> Result<Plan> {
-    rupg_exec::prepare(rupg_analyze::analyze(node, reader, params)?)
+    rupg_exec::prepare(rupg_analyze::analyze(node, reader, params)?, reader)
 }
 
 /// `_SPI_error_callback` for an error of the plan of the query of a function: an error with a position loses it, because the position is in the text of the query and not in the text of the client, and another error gets the text of the query in its context.

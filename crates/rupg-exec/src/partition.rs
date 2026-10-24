@@ -538,7 +538,7 @@ pub(crate) fn partition_check_error(
     row: &[Value],
     session: &dyn Session,
 ) -> Result<Error> {
-    let types: Vec<u32> = rel.columns.iter().map(|c| c.ty).collect();
+    let types = crate::insert::row_types(rel);
     let error = Error::new(
         SqlState::CHECK_VIOLATION,
         format!("new row for relation \"{}\" violates partition constraint", rel.name),

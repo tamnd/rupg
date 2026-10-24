@@ -297,6 +297,9 @@ impl Item {
     }
 }
 
+/// A generated column of a table: the index of the column from 0, its generation expression and `attgenerated`, `s` for a stored column or `v` for a virtual column.
+pub(crate) type Generated = (usize, Expr, u8);
+
 /// A column that the statement gives: the index of the column in the table, the place of its name in the column list, and the subscripts after the name, which are empty when the item sets the whole column.
 pub(crate) type Given = (usize, Option<usize>, List);
 
@@ -780,7 +783,7 @@ impl Analyzer<'_> {
         name: &str,
         columns: &[Column],
         checks: &[(String, Expr)],
-        generated: &[(usize, Expr)],
+        generated: &[Generated],
     ) -> Option<Box<Query>> {
         let bits = rupg_catalog::TRIGGER_ROW | rupg_catalog::TRIGGER_BEFORE | trigger_event(kind);
         // The triggers of a partitioned table fire as their clones in the leaf partitions, which check the rows.
@@ -1175,8 +1178,8 @@ impl Analyzer<'_> {
         relation.and_then(|r| r.columns.get(index)).map_or(0, |c| c.generated)
     }
 
-    /// The stored generated columns of the table, each with the index of the column from 0 and its generation expression, as `ExecComputeStoredGenerated` computes them for a new row. The leaf partitions of a partitioned table compute their own columns.
-    pub(crate) fn generated_columns(&mut self, table: u32) -> Result<Vec<(usize, Expr)>> {
+    /// The generated columns of the table, each with the index of the column from 0, its generation expression and `attgenerated`, as `ExecComputeStoredGenerated` computes them for a new row. The leaf partitions of a partitioned table compute their own columns.
+    pub(crate) fn generated_columns(&mut self, table: u32) -> Result<Vec<Generated>> {
         let Some(catalog) = self.env.catalog() else { return Ok(Vec::new()) };
         let Some(relation) = catalog.relation(table) else { return Ok(Vec::new()) };
         if relation.kind == RelKind::Partitioned {
@@ -1200,7 +1203,7 @@ impl Analyzer<'_> {
                     true
                 });
                 self.note_funcs(&expr);
-                out.push((index, expr));
+                out.push((index, expr, column.generated));
             }
         }
         Ok(out)
@@ -1238,6 +1241,14 @@ impl Analyzer<'_> {
         }
         // The write computes a generated column after the triggers `BEFORE`, which see a null.
         if self.generated(table, index) != 0 {
+            // The default of a view is a value that the generated column of the table does not take.
+            if self.auto_view_default(table, index).is_some() {
+                return Err(Error::new(
+                    SqlState::GENERATED_ALWAYS,
+                    format!("cannot insert a non-DEFAULT value into column \"{}\"", column.name),
+                )
+                .with_detail(format!("Column \"{}\" is a generated column.", column.name)));
+            }
             let mut null = Expr::new(ExprKind::Const(Value::Null), column.ty);
             null.typmod = column.typmod;
             return Ok(null);
@@ -1622,7 +1633,7 @@ pub(crate) fn with_checks(
     columns: &[Column],
     rows: Query,
     checks: Vec<(String, Expr)>,
-    generated: &[(usize, Expr)],
+    generated: &[Generated],
     tail: &[Column],
 ) -> Query {
     let width = columns.len();
@@ -1640,8 +1651,11 @@ pub(crate) fn with_checks(
         })
         .collect();
     let tail = targets.split_off(width);
-    for (index, expr) in generated {
-        if let Some(target) = targets.get_mut(*index) {
+    // A virtual generated column keeps its null, and a read of the row computes it.
+    for (index, expr, kind) in generated {
+        if *kind == b's'
+            && let Some(target) = targets.get_mut(*index)
+        {
             target.expr = expr.clone();
         }
     }
@@ -1661,7 +1675,7 @@ pub(crate) fn with_checks(
 }
 
 /// The expression with the generation expression of each stored generated column of `generated` in place of the column of the relation 0. The whole row of the relation 0 becomes a `RowExpr` of the `columns`, with the generation expressions in it.
-fn compute_generated(expr: &mut Expr, generated: &[(usize, Expr)], columns: &[Column]) {
+fn compute_generated(expr: &mut Expr, generated: &[Generated], columns: &[Column]) {
     if generated.is_empty() {
         return;
     }
@@ -1674,8 +1688,8 @@ fn compute_generated(expr: &mut Expr, generated: &[(usize, Expr)], columns: &[Co
             // A dropped column has no field.
             let fields = columns.iter().enumerate().filter(|(_, c)| c.ty != 0);
             let fields = fields
-                .map(|(i, c)| match generated.iter().find(|(at, _)| *at == i) {
-                    Some((_, value)) => {
+                .map(|(i, c)| match generated.iter().find(|(at, ..)| *at == i) {
+                    Some((_, value, _)) => {
                         let mut value = value.clone();
                         value.raise(depth);
                         value
@@ -1693,7 +1707,7 @@ fn compute_generated(expr: &mut Expr, generated: &[(usize, Expr)], columns: &[Co
             return true;
         }
         let index = usize::try_from(var.attnum).ok().and_then(|n| n.checked_sub(1));
-        let Some((_, value)) = generated.iter().find(|(i, _)| Some(*i) == index) else {
+        let Some((_, value, _)) = generated.iter().find(|(i, ..)| Some(*i) == index) else {
             return false;
         };
         let mut value = value.clone();

@@ -588,7 +588,11 @@ pub fn function_body(env: &dyn Env, oid: u32, inputs: &[u32]) -> Result<Option<B
     let mut an = Analyzer::new(env, &params);
     an.set_path(&body.path);
     an.sql_function = Some((function.name.clone(), input_names(function)));
-    an.body(function, &stmts, inputs).map(Some)
+    let mut body = an.body(function, &stmts, inputs)?;
+    if let Some(catalog) = env.catalog() {
+        crate::expand_virtual_body(&mut body, catalog)?;
+    }
+    Ok(Some(body))
 }
 
 /// A built-in function with a body in SQL, which `system_functions.sql` gives it. `initdb` runs that script with `search_path` set to `pg_catalog`.

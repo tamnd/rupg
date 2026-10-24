@@ -32,7 +32,7 @@ pub(crate) fn check_rows(
     if rel.is_some_and(|r| r.kind == rupg_catalog::RelKind::Partitioned) {
         return Ok(rows);
     }
-    let types: Vec<u32> = rel.map(|r| r.columns.iter().map(|c| c.ty).collect()).unwrap_or_default();
+    let types: Vec<u32> = rel.map(row_types).unwrap_or_default();
     let mut out = Vec::with_capacity(rows.len());
     let mut router = crate::partition::Router::default();
     let partition = rel.filter(|r| r.partition_of.is_some());
@@ -45,23 +45,24 @@ pub(crate) fn check_rows(
             return Err(crate::partition::partition_check_error(rel, &row[..info.width], session)?);
         }
         if let Some(rel) = rel {
-            for (column, value) in rel.columns.iter().zip(&row[..info.width]) {
-                if column.not_null && matches!(value, Value::Null) {
-                    let error = Error::new(
-                        SqlState::NOT_NULL_VIOLATION,
-                        format!(
-                            "null value in column \"{}\" of relation \"{}\" violates not-null constraint",
-                            column.name, info.name
-                        ),
-                    )
-                    .with_detail(failing_row(&row[..info.width], &types, session)?);
-                    return Err(rupg_func::with_table_column(
-                        error,
-                        rel.oid,
-                        &column.name,
-                        session,
-                    ));
-                }
+            // `ExecConstraints` checks the not-null constraints of the virtual generated columns after the others, with the generation expressions on the row.
+            let plain = rel.columns.iter().zip(&row[..info.width]).filter(|(c, value)| {
+                c.not_null && c.generated != b'v' && matches!(value, Value::Null)
+            });
+            let mut failed = plain.map(|(c, _)| c).next();
+            if failed.is_none() {
+                failed = virtual_null(rel, &row[..info.width], session)?;
+            }
+            if let Some(column) = failed {
+                let error = Error::new(
+                    SqlState::NOT_NULL_VIOLATION,
+                    format!(
+                        "null value in column \"{}\" of relation \"{}\" violates not-null constraint",
+                        column.name, info.name
+                    ),
+                )
+                .with_detail(failing_row(&row[..info.width], &types, session)?);
+                return Err(rupg_func::with_table_column(error, rel.oid, &column.name, session));
             }
         }
         for (i, name) in info.checks.iter().enumerate() {
@@ -90,7 +91,46 @@ pub(crate) fn check_rows(
     Ok(out)
 }
 
-/// `ExecBuildSlotValueDescription`: the detail `Failing row contains (...)` with the text of each value, `null` for a null value, and a value of more than 64 bytes cut with `...` after it.
+/// `ExecRelGenVirtualNotNull`: the first virtual generated column of the table `rel` with a not-null constraint whose generation expression is null for the row `row`.
+///
+/// # Errors
+///
+/// The error of a generation expression.
+fn virtual_null<'r>(
+    rel: &'r rupg_catalog::Relation,
+    row: &[Value],
+    session: &dyn Session,
+) -> Result<Option<&'r rupg_catalog::Column>> {
+    let Some(catalog) = session.catalog() else { return Ok(None) };
+    for (index, column) in rel.columns.iter().enumerate() {
+        if !column.not_null || column.generated != b'v' {
+            continue;
+        }
+        let attnum = i16::try_from(index + 1).unwrap_or(i16::MAX);
+        let Some(default) = catalog.default_of(rel.oid, attnum) else { continue };
+        let expr = rupg_analyze::node::read(&default.expr)?;
+        let types: Vec<u32> = rel.columns.iter().map(|c| c.ty).collect();
+        let value =
+            crate::evaluate_row(std::slice::from_ref(&expr), rel.oid, &types, row, session)?;
+        if matches!(value.as_slice(), [Value::Null]) {
+            return Ok(Some(column));
+        }
+    }
+    Ok(None)
+}
+
+/// The type of a virtual generated column in the types of [`failing_row`], whose value the detail shows as `virtual`.
+pub(crate) const VIRTUAL_TYPE: u32 = u32::MAX;
+
+/// The types of the columns of the table `rel` for [`failing_row`], with `u32::MAX` for a virtual generated column.
+pub fn row_types(rel: &rupg_catalog::Relation) -> Vec<u32> {
+    let ty = |c: &rupg_catalog::Column| {
+        if c.generated == b'v' && !c.dropped { VIRTUAL_TYPE } else { c.ty }
+    };
+    rel.columns.iter().map(ty).collect()
+}
+
+/// `ExecBuildSlotValueDescription`: the detail `Failing row contains (...)` with the text of each value, `null` for a null value, `virtual` for a virtual generated column, and a value of more than 64 bytes cut with `...` after it.
 ///
 /// # Errors
 ///
@@ -99,6 +139,10 @@ pub fn failing_row(row: &[Value], types: &[u32], session: &dyn Session) -> Resul
     let mut parts = Vec::with_capacity(row.len());
     // A dropped column has the type 0, and `ExecBuildSlotValueDescription` skips it.
     for (value, &ty) in row.iter().zip(types).filter(|&(_, &ty)| ty != 0) {
+        if ty == VIRTUAL_TYPE {
+            parts.push("virtual".to_string());
+            continue;
+        }
         parts.push(shown(ty, value, MAX_FIELD_LEN, session)?);
     }
     Ok(format!("Failing row contains ({}).", parts.join(", ")))

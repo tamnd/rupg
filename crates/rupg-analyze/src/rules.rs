@@ -13,6 +13,7 @@ use rupg_types::oid;
 use crate::agg::Kind;
 use crate::expr::{BoolOp, BoolTest, Expr, ExprKind, Var};
 use crate::from::Column;
+use crate::insert::Generated;
 use crate::walk::{self, Walker};
 use crate::{Analyzer, Env, Params, Query};
 
@@ -524,10 +525,10 @@ pub(crate) fn relation_row(columns: &[Column], relation: usize, offset: usize) -
         .collect()
 }
 
-/// The new row with the value of each stored generated column of `generated`, from the values of the other columns.
-pub(crate) fn with_generated(mut row: Vec<Expr>, generated: &[(usize, Expr)]) -> Vec<Expr> {
+/// The new row with the value of each generated column of `generated`, from the values of the other columns. The rules see the value of a virtual generated column too, as `get_generated_columns` gives it.
+pub(crate) fn with_generated(mut row: Vec<Expr>, generated: &[Generated]) -> Vec<Expr> {
     let values = row.clone();
-    for (index, expr) in generated {
+    for (index, expr, _) in generated {
         let mut expr = expr.clone();
         replace_row(&mut expr, &values);
         if let Some(slot) = row.get_mut(*index) {

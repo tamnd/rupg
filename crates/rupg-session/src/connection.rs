@@ -1887,7 +1887,7 @@ impl Connection {
         for product in products {
             let reader = self.reader();
             let plan = rupg_analyze::analyze_product(product, &reader, &Params::default())
-                .and_then(rupg_exec::prepare);
+                .and_then(|query| rupg_exec::prepare(query, &reader));
             notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
             let plan = plan?;
             notices.extend(plan.notices().iter().map(|error| Notice::warning(error.clone())));
@@ -5993,6 +5993,12 @@ mod tests {
     #[test]
     fn stx1() {
         big_stack(|| script(include_str!("connection/stx1.test")));
+    }
+
+    /// Virtual generated columns, from `generated_virtual.sql` of the PostgreSQL tests: the errors of the definition, `INSERT` and `UPDATE` with `DEFAULT`, whole-row and sublink reads, `UPDATE ... RETURNING old.*, new.*`, `MERGE`, views, CTEs, inheritance, check and not-null constraints, and reads on the nullable side of an outer join. The script does not have the psql meta-commands and the `COPY`, privilege and `ALTER TABLE` parts. `connection/gvirt.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn gvirt() {
+        big_stack(|| script(include_str!("connection/gvirt.test")));
     }
 
     /// `CREATE TABLE ... (LIKE ...)`, from `create_table_like.sql` of the PostgreSQL tests: the columns and the not-null constraints of the other relation, the options `INCLUDING DEFAULTS`, `GENERATED`, `IDENTITY`, `CONSTRAINTS`, `INDEXES`, `STORAGE`, `COMMENTS` and `ALL`, `LIKE` with `INHERITS`, and `LIKE` of a view, a composite type and a sequence. The script has catalog queries in place of `\d`, and it does not have the parts for virtual generated columns, `NOT ENFORCED`, `CREATE STATISTICS` and foreign tables. `connection/create_table_like.test` is the output of PostgreSQL 19 for the same script in a new database.
