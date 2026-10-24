@@ -946,6 +946,26 @@ impl Definer<'_, '_> {
         ))
     }
 
+    /// `pg_class_aclcheck` of `SELECT` on a relation of the kind `kind`, with `aclcheck_error` for the object type of `get_relkind_objtype`.
+    pub(super) fn check_relation_select(&self, relation: u32, kind: u8, name: &str) -> Result<()> {
+        let roles = rupg_pgcatalog::roles::current();
+        let object_kind = if kind == b'S' { Kind::Sequence } else { Kind::Table };
+        if self.pg_aclmask(&roles, Object::new(object_kind, relation), self.user, SELECT) != 0 {
+            return Ok(());
+        }
+        let shown = match kind {
+            b'S' => "sequence",
+            b'v' => "view",
+            b'm' => "materialized view",
+            b'f' => "foreign table",
+            _ => "table",
+        };
+        Err(Error::new(
+            SqlState::INSUFFICIENT_PRIVILEGE,
+            format!("permission denied for {shown} {name}"),
+        ))
+    }
+
     /// `object_aclcheck` of `EXECUTE` on a function, with `aclcheck_error`. `name` is the name of the function as the statement gives it.
     pub(super) fn check_function_execute(&self, function: u32, name: &str) -> Result<()> {
         let roles = rupg_pgcatalog::roles::current();

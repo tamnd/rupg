@@ -23,6 +23,11 @@ fn storage_name(storage: u8) -> &'static str {
     }
 }
 
+/// The `attstorage` of a column of the type `ty`: the storage of `STORAGE`, or the storage of the type for 0.
+pub(super) fn storage_of(ty: u32, storage: u8) -> u8 {
+    if storage == 0 { types::row(ty).map_or(b'x', |t| t.storage) } else { storage }
+}
+
 /// The name of a value of `attcompression`.
 fn compression_name(compression: u8) -> &'static str {
     match compression {
@@ -215,12 +220,13 @@ impl Definer<'_, '_> {
                         &format!("\"{}\"", collation_name(c.collation)),
                     ));
                 }
-                if inh.storage != c.storage {
+                let (mine, theirs) = (storage_of(inh.ty, inh.storage), storage_of(c.ty, c.storage));
+                if mine != theirs {
                     return Err(conflict(
                         SqlState::DATATYPE_MISMATCH,
                         format!("inherited column \"{}\" has a storage parameter conflict", c.name),
-                        storage_name(inh.storage),
-                        storage_name(c.storage),
+                        storage_name(mine),
+                        storage_name(theirs),
                     ));
                 }
                 if inh.compression == 0 {
@@ -300,11 +306,11 @@ impl Definer<'_, '_> {
             inh.identity = new.identity;
             if let Some(storage) = &column.storage {
                 let storage = attribute_storage(new.ty, storage)?;
-                if inh.storage != storage {
+                if storage_of(inh.ty, inh.storage) != storage {
                     return Err(conflict(
                         SqlState::DATATYPE_MISMATCH,
                         format!("column \"{name}\" has a storage parameter conflict"),
-                        storage_name(inh.storage),
+                        storage_name(storage_of(inh.ty, inh.storage)),
                         storage_name(storage),
                     ));
                 }

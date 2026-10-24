@@ -148,6 +148,27 @@ impl Definer<'_, '_> {
         constraint: Option<u32>,
         alter: bool,
     ) -> Result<bool> {
+        let (index, child_constraint) = self.clone_index(child, parent, constraint, alter)?;
+        self.catalog.set_index_parent(index, parent)?;
+        if let (Some(child_constraint), Some(constraint)) = (child_constraint, constraint) {
+            self.catalog.set_constraint_parent(child_constraint, constraint)?;
+        }
+        if self.catalog.relation(child).is_some_and(|r| r.kind == RelKind::Partitioned) {
+            return self.index_partitions(child, index, child_constraint, alter);
+        }
+        // `index_build` reads the rows of the partition with a sequential scan.
+        self.scans.push(child);
+        Ok(true)
+    }
+
+    /// `generateClonedIndexStmt` and the part of `DefineIndex` that makes the index: a new index of the table `child` with the definition of the index `parent` of another table, with the numbers of the columns of `child` and a name from the name of `child`. The constraint `constraint` of `parent` gives the kind of the new constraint. The result is the OID of the new index and of its constraint.
+    pub(super) fn clone_index(
+        &mut self,
+        child: u32,
+        parent: u32,
+        constraint: Option<u32>,
+        alter: bool,
+    ) -> Result<(u32, Option<u32>)> {
         let lookup = || Error::internal(format!("cache lookup failed for index {parent}"));
         let source = self.catalog.relation(parent).ok_or_else(lookup)?;
         let info = source.index.as_ref().ok_or_else(lookup)?;
@@ -213,16 +234,7 @@ impl Definer<'_, '_> {
         if !options.is_empty() {
             self.catalog.set_options(index, options)?;
         }
-        self.catalog.set_index_parent(index, parent)?;
-        if let (Some(child_constraint), Some(constraint)) = (child_constraint, constraint) {
-            self.catalog.set_constraint_parent(child_constraint, constraint)?;
-        }
-        if partitioned {
-            return self.index_partitions(child, index, child_constraint, alter);
-        }
-        // `index_build` reads the rows of the partition with a sequential scan.
-        self.scans.push(child);
-        Ok(true)
+        Ok((index, child_constraint))
     }
 
     /// The part of `DefineRelation` for a new partition of a partitioned table: the partition gets an index for each index of the parent table, in the order of their OIDs, with the constraint of the index.
