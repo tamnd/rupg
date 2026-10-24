@@ -126,3 +126,26 @@ ERROR 42P01 relation "gtest26" does not exist at 15
 > SELECT attrelid, attname, attgenerated FROM pg_attribute WHERE attgenerated NOT IN ('', 's', 'v');
 fields attrelid@pg_attribute.1:26:4:-1,attname@pg_attribute.2:19:64:-1,attgenerated@pg_attribute.16:18:1:-1
 SELECT 0
+> CREATE TABLE gtest28a (
+>>   a int,
+>>   b int,
+>>   c int,
+>>   x int GENERATED ALWAYS AS (b * 2) STORED
+>> );
+CREATE TABLE
+> ALTER TABLE gtest28a DROP COLUMN a;
+ALTER TABLE
+> CREATE TABLE gtest28b (LIKE gtest28a INCLUDING GENERATED);
+CREATE TABLE
+> SELECT attname, attgenerated, pg_get_expr(adbin, adrelid) FROM pg_attribute LEFT JOIN pg_attrdef ON adrelid = attrelid AND adnum = attnum WHERE attrelid = 'gtest28b'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,attgenerated@pg_attribute.16:18:1:-1,pg_get_expr:25:-1:-1
+row b,,NULL
+row c,,NULL
+row x,s,(b * 2)
+SELECT 3
+> INSERT INTO gtest28b (b, c) VALUES (3, 4);
+INSERT 0 1
+> SELECT * FROM gtest28b;
+fields b@gtest28b.1:23:4:-1,c@gtest28b.2:23:4:-1,x@gtest28b.3:23:4:-1
+row 3,4,6
+SELECT 1

@@ -1,8 +1,8 @@
 //! `DefineRule`: `CREATE RULE` and `DROP RULE`.
 //!
-//! The analyzer reads the condition and the actions of a rule as `transformRuleStmt` does, with the relation of the rule as `old` and as `new`, and runs the checks of `DefineQueryRewrite`. The catalog keeps the text of the statement and the schemas of `search_path`, and [`rule_tree`] reads the rule again for `pg_get_ruledef`. The executor does not apply the rules yet, because only `SELECT` runs.
+//! The analyzer reads the condition and the actions of a rule as `transformRuleStmt` does, with the relation of the rule as `old` and as `new`, and runs the checks of `DefineQueryRewrite`. The catalog keeps the text of the statement and the schemas of `search_path`, and [`rule_tree`] reads the rule again for `pg_get_ruledef`. [`crate::query_rewrite`] applies the rules of a write.
 
-use rupg_catalog::{NewRule, ObjRef, PG_REWRITE};
+use rupg_catalog::{NewRule, ObjRef, PG_CLASS, PG_REWRITE};
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{CmdType, DropBehavior, DropStmt, Node, RuleStmt};
 
@@ -81,13 +81,17 @@ impl Analyzer<'_> {
         for action in stmt.actions.iter().flatten() {
             let select = match action {
                 Node::SelectStmt(select) => select,
+                Node::InsertStmt(_) | Node::UpdateStmt(_) | Node::DeleteStmt(_) => {
+                    actions.push(self.rule_write(stmt, oid, name, action, qual.as_ref())?);
+                    continue;
+                }
                 Node::NotifyStmt(_) if qual.is_some() => {
                     return Err(invalid(
                         "rules with WHERE conditions can only have SELECT, INSERT, UPDATE, or DELETE actions",
                     ));
                 }
                 Node::NotifyStmt(_) => return Err(not_yet("NOTIFY in a rule", None)),
-                _ => return Err(not_yet("INSERT, UPDATE or DELETE in a rule", None)),
+                _ => return Err(Error::internal("a rule action that is not a statement")),
             };
             self.rule_scope(oid, name, [true, true], false)?;
             let query = self.select(select)?;
@@ -97,36 +101,74 @@ impl Analyzer<'_> {
                     "conditional UNION/INTERSECT/EXCEPT statements are not implemented",
                 ));
             }
-            let in_qual = |relation| qual.as_ref().is_some_and(|q| expr_uses(q, relation, 0));
-            let has_old = query_uses(&query, 0, 0) || in_qual(0);
-            let has_new = query_uses(&query, 1, 0) || in_qual(1);
-            match stmt.event {
-                CmdType::CMD_SELECT if has_old => {
-                    return Err(invalid("ON SELECT rule cannot use OLD"));
-                }
-                CmdType::CMD_SELECT if has_new => {
-                    return Err(invalid("ON SELECT rule cannot use NEW"));
-                }
-                CmdType::CMD_INSERT if has_old => {
-                    return Err(invalid("ON INSERT rule cannot use OLD"));
-                }
-                CmdType::CMD_DELETE if has_new => {
-                    return Err(invalid("ON DELETE rule cannot use NEW"));
-                }
-                _ => {}
-            }
-            for (relation, word) in [(0, "OLD"), (1, "NEW")] {
-                if query.ctes.iter().any(|c| query_uses(&c.query, relation, 1)) {
-                    return Err(Error::new(
-                        SqlState::FEATURE_NOT_SUPPORTED,
-                        format!("cannot refer to {word} within WITH query"),
-                    ));
-                }
-            }
+            check_rows(stmt, &query, qual.as_ref(), 0)?;
             actions.push(query);
         }
         Ok(RuleTree { base, qual, actions })
     }
+
+    /// `transformRuleStmt` for an action `INSERT`, `UPDATE` or `DELETE`. The action is a query below the range table of `old` and `new`, so that the target table of the action is its relation 0, and the action reads `old` and `new` one level up.
+    fn rule_write(
+        &mut self,
+        stmt: &RuleStmt,
+        oid: u32,
+        name: &str,
+        action: &Node,
+        qual: Option<&Expr>,
+    ) -> Result<Query> {
+        let returning = match action {
+            Node::InsertStmt(s) => s.returningClause.is_some(),
+            Node::UpdateStmt(s) => s.returningClause.is_some(),
+            Node::DeleteStmt(s) => s.returningClause.is_some(),
+            _ => false,
+        };
+        if returning {
+            return Err(not_yet("RETURNING in a rule", None));
+        }
+        self.rule_scope(oid, name, [true, true], false)?;
+        let defining = std::mem::replace(&mut self.rule.defining, true);
+        let query = self.sub_query(|analyzer| match action {
+            Node::InsertStmt(s) => analyzer.insert(s),
+            Node::UpdateStmt(s) => analyzer.update(s),
+            Node::DeleteStmt(s) => analyzer.delete(s),
+            _ => Err(Error::internal("a rule action that is not a write")),
+        });
+        self.rule.defining = defining;
+        let query = query?;
+        check_rows(stmt, &query, qual, 1)?;
+        Ok(query)
+    }
+}
+
+/// The checks of `transformRuleStmt` of the names `old` and `new` in an action, whose range table of `old` and `new` is `depth` levels up.
+fn check_rows(stmt: &RuleStmt, query: &Query, qual: Option<&Expr>, depth: usize) -> Result<()> {
+    let in_qual = |relation| qual.is_some_and(|q| expr_uses(q, relation, 0));
+    let has_old = query_uses(query, 0, depth) || in_qual(0);
+    let has_new = query_uses(query, 1, depth) || in_qual(1);
+    match stmt.event {
+        CmdType::CMD_SELECT if has_old => {
+            return Err(invalid("ON SELECT rule cannot use OLD"));
+        }
+        CmdType::CMD_SELECT if has_new => {
+            return Err(invalid("ON SELECT rule cannot use NEW"));
+        }
+        CmdType::CMD_INSERT if has_old => {
+            return Err(invalid("ON INSERT rule cannot use OLD"));
+        }
+        CmdType::CMD_DELETE if has_new => {
+            return Err(invalid("ON DELETE rule cannot use NEW"));
+        }
+        _ => {}
+    }
+    for (relation, word) in [(0, "OLD"), (1, "NEW")] {
+        if query.ctes.iter().any(|c| query_uses(&c.query, relation, depth + 1)) {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                format!("cannot refer to {word} within WITH query"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The query trees of the rule of the catalog with the OID, from the text of the rule and the `search_path` that the rule keeps, or `None` when the catalog has no rule with the OID. `pg_get_ruledef` shows these queries.
@@ -202,11 +244,18 @@ impl Definer<'_, '_> {
             query_references(self.catalog, &tree.base, &[], &mut actions);
         }
         for action in &tree.actions {
-            query_references(self.catalog, action, &[], &mut actions);
+            match &action.write {
+                // An action that writes is below the range table of `old` and `new`.
+                Some(write) => {
+                    actions.push(ObjRef::new(PG_CLASS, write.table));
+                    query_references(self.catalog, action, &[&tree.base], &mut actions);
+                }
+                None => query_references(self.catalog, action, &[], &mut actions),
+            }
         }
         let mut qual = Vec::new();
         if let Some(expr) = &tree.qual {
-            let context = tree.actions.first().unwrap_or(&tree.base);
+            let context = tree.actions.first().filter(|a| a.write.is_none()).unwrap_or(&tree.base);
             expr_references(self.catalog, expr, &[context], &mut qual);
         }
         let new = NewRule {

@@ -297,9 +297,11 @@ fn first_place(items: &[Item]) -> Option<usize> {
 impl Analyzer<'_> {
     /// `transformInsertStmt`: the query tree of an `INSERT`.
     pub(crate) fn insert(&mut self, s: &InsertStmt) -> Result<Query> {
+        let inverted = std::mem::take(&mut self.rule.inverted);
         self.write_with(s.withClause.as_deref())?;
         let rv = s.relation.as_deref().ok_or_else(|| Error::internal("an INSERT with no table"))?;
         let (table, name, columns) = self.target_table(rv, WriteKind::Insert)?;
+        let rows = std::mem::take(&mut self.rule.rows);
         let given = self.insert_targets(&s.cols, &name, &columns)?;
         let explicit = !s.cols.is_empty();
         let select = match &s.selectStmt {
@@ -333,6 +335,24 @@ impl Analyzer<'_> {
                 row_query(&columns, row)
             }
         };
+        if rows {
+            // The rows of `*rule*`: the new row, with its generated columns.
+            let generated = self.generated_columns(table)?;
+            let mut query = with_checks(&name, &columns, query, Vec::new(), &generated, &[]);
+            self.end_write_with(&mut query, s.withClause.as_deref())?;
+            self.rule.columns = columns;
+            return Ok(query);
+        }
+        if !inverted.is_empty() {
+            let generated = self.generated_columns(table)?;
+            let mut rows = with_checks(&name, &columns, query, Vec::new(), &[], &[]);
+            let new = crate::rules::relation_row(&columns, 0, 0);
+            let new = crate::rules::with_generated(new, &generated);
+            let new = crate::rules::named_row(&columns, new);
+            let quals = self.inverted_quals(&inverted, None, Some(new))?;
+            rows.filter = crate::rules::and_filter(rows.filter.take(), quals);
+            query = rows;
+        }
         // `ExecFindPartition` routes each row, and the partition then checks it.
         let checks = if self.is_partitioned(table) { Vec::new() } else { self.checks(table)? };
         let names = checks.iter().map(|(n, _)| n.clone()).collect();
@@ -626,6 +646,8 @@ impl Analyzer<'_> {
             RelKind::View
                 if kind != WriteKind::Merge
                     && self.user_triggers(oid, INSTEAD_ROW | trigger_event(kind)) => {}
+            // The rows of a statement for the rules of a view need no write of the view.
+            RelKind::View if self.rule.rows => {}
             RelKind::View => return Err(not_yet(&format!("{what} a view"))),
             RelKind::Partitioned => {}
             RelKind::MatView if self.env.filling() == oid => {}
@@ -642,10 +664,29 @@ impl Analyzer<'_> {
                 ));
             }
         }
-        if let Some(catalog) = self.env.catalog()
-            && catalog.rules().any(|r| r.relation == oid)
-        {
-            return Err(not_yet(&format!("{what} a table with rules")));
+        if let Some(catalog) = self.env.catalog() {
+            let mut rules = catalog.rules().filter(|r| r.relation == oid && crate::rules::fires(r));
+            if kind == WriteKind::Merge {
+                // `RewriteQuery`: a rule of an event other than `SELECT` stops a `MERGE`.
+                if rules.any(|r| r.event != b'1') {
+                    return Err(Error::new(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        format!("cannot execute MERGE on relation \"{name}\""),
+                    )
+                    .with_detail("MERGE is not supported for relations with rules."));
+                }
+            } else {
+                let code = match kind {
+                    WriteKind::Insert => b'3',
+                    WriteKind::Update => b'2',
+                    _ => b'4',
+                };
+                // [`crate::query_rewrite`] gives the statements of the rules, and a statement that it does not rewrite cannot write the table yet.
+                let done = self.rule.rows || self.rule.defining || self.rule.fired == Some(oid);
+                if !done && rules.any(|r| r.event == code) {
+                    return Err(not_yet(&format!("{what} a table with rules")));
+                }
+            }
         }
         // A dropped column keeps its place with no name and the type 0, and each new row has a null for it.
         let columns = rel

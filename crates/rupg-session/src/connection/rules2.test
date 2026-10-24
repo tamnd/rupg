@@ -1,0 +1,144 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE r_t (id int, v text);
+CREATE TABLE
+> CREATE TABLE r_log (op text, id int, v text);
+CREATE TABLE
+> CREATE RULE r_ins AS ON INSERT TO r_t DO ALSO INSERT INTO r_log VALUES ('ins', NEW.id, NEW.v);
+CREATE RULE
+> CREATE RULE r_del AS ON DELETE TO r_t DO ALSO INSERT INTO r_log VALUES ('del', OLD.id, OLD.v);
+CREATE RULE
+> CREATE RULE r_upd AS ON UPDATE TO r_t WHERE OLD.v <> NEW.v DO ALSO INSERT INTO r_log VALUES ('upd', OLD.id, OLD.v || '->' || NEW.v);
+CREATE RULE
+> INSERT INTO r_t VALUES (1, 'a'), (2, 'b'), (3, 'c');
+INSERT 0 3
+> INSERT INTO r_t SELECT 4, 'd';
+INSERT 0 1
+> UPDATE r_t SET v = 'B' WHERE id = 2;
+UPDATE 1
+> UPDATE r_t SET v = v WHERE id = 3;
+UPDATE 1
+> DELETE FROM r_t WHERE id > 2;
+DELETE 2
+> SELECT * FROM r_t ORDER BY id;
+fields id@r_t.1:23:4:-1,v@r_t.2:25:-1:-1
+row 1,a
+row 2,B
+SELECT 2
+> SELECT * FROM r_log ORDER BY op, id;
+fields op@r_log.1:25:-1:-1,id@r_log.2:23:4:-1,v@r_log.3:25:-1:-1
+row del,3,c
+row del,4,d
+row ins,1,a
+row ins,2,b
+row ins,3,c
+row ins,4,d
+row upd,2,b->B
+SELECT 7
+> INSERT INTO r_t VALUES (9, 'z') RETURNING *;
+fields id@r_t.1:23:4:-1,v@r_t.2:25:-1:-1
+row 9,z
+INSERT 0 1
+> INSERT INTO r_t VALUES (9, 'z') ON CONFLICT DO NOTHING;
+ERROR 0A000 INSERT with ON CONFLICT clause cannot be used with table that has INSERT or UPDATE rules
+> CREATE TABLE r_other (id int, v text);
+CREATE TABLE
+> CREATE RULE r_redirect AS ON INSERT TO r_other WHERE NEW.id < 0 DO INSTEAD INSERT INTO r_log VALUES ('neg', NEW.id, NEW.v);
+CREATE RULE
+> INSERT INTO r_other VALUES (-1, 'x'), (1, 'y');
+INSERT 0 1
+> SELECT * FROM r_other;
+fields id@r_other.1:23:4:-1,v@r_other.2:25:-1:-1
+row 1,y
+SELECT 1
+> SELECT * FROM r_log WHERE op = 'neg';
+fields op@r_log.1:25:-1:-1,id@r_log.2:23:4:-1,v@r_log.3:25:-1:-1
+row neg,-1,x
+SELECT 1
+> INSERT INTO r_other VALUES (5, 'q') RETURNING *;
+ERROR 0A000 cannot perform INSERT RETURNING on relation "r_other"
+HINT You need an unconditional ON INSERT DO INSTEAD rule with a RETURNING clause.
+> CREATE TABLE r_a (x int);
+CREATE TABLE
+> CREATE TABLE r_b (x int);
+CREATE TABLE
+> CREATE RULE r_a_b AS ON INSERT TO r_a DO INSERT INTO r_b VALUES (NEW.x);
+CREATE RULE
+> CREATE RULE r_b_a AS ON INSERT TO r_b DO INSERT INTO r_a VALUES (NEW.x);
+CREATE RULE
+> INSERT INTO r_a VALUES (1);
+ERROR 42P17 infinite recursion detected in rules for relation "r_a"
+> DROP RULE r_b_a ON r_b;
+DROP RULE
+> INSERT INTO r_a VALUES (2);
+INSERT 0 1
+> SELECT * FROM r_b;
+fields x@r_b.1:23:4:-1
+row 2
+SELECT 1
+> CREATE TABLE r_base (id int, v text);
+CREATE TABLE
+> CREATE VIEW r_view AS SELECT id, v FROM r_base;
+CREATE VIEW
+> CREATE RULE r_view_ins AS ON INSERT TO r_view DO INSTEAD INSERT INTO r_base VALUES (NEW.id, upper(NEW.v));
+CREATE RULE
+> CREATE RULE r_view_upd AS ON UPDATE TO r_view DO INSTEAD UPDATE r_base SET v = NEW.v WHERE id = OLD.id;
+CREATE RULE
+> CREATE RULE r_view_del AS ON DELETE TO r_view DO INSTEAD DELETE FROM r_base WHERE id = OLD.id;
+CREATE RULE
+> INSERT INTO r_view VALUES (1, 'one'), (2, 'two');
+INSERT 0 2
+> UPDATE r_view SET v = 'TWO!' WHERE id = 2;
+UPDATE 1
+> DELETE FROM r_view WHERE id = 1;
+DELETE 1
+> SELECT * FROM r_base;
+fields id@r_base.1:23:4:-1,v@r_base.2:25:-1:-1
+row 2,TWO!
+SELECT 1
+> CREATE TABLE r_n (x int);
+CREATE TABLE
+> CREATE RULE r_n_nothing AS ON DELETE TO r_n DO INSTEAD NOTHING;
+CREATE RULE
+> INSERT INTO r_n VALUES (1);
+INSERT 0 1
+> DELETE FROM r_n;
+DELETE 0
+> SELECT count(*) FROM r_n;
+fields count:20:8:-1
+row 1
+SELECT 1
+> MERGE INTO r_n USING (SELECT 1 AS x) s ON r_n.x = s.x WHEN MATCHED THEN DELETE;
+ERROR 0A000 cannot execute MERGE on relation "r_n"
+DETAIL MERGE is not supported for relations with rules.
+> CREATE TABLE r_m (x int, y int DEFAULT 7);
+CREATE TABLE
+> CREATE TABLE r_mlog (x int, y int);
+CREATE TABLE
+> CREATE RULE r_m1 AS ON INSERT TO r_m DO ALSO INSERT INTO r_mlog SELECT NEW.x, NEW.y;
+CREATE RULE
+> CREATE RULE r_m0 AS ON INSERT TO r_m DO ALSO INSERT INTO r_mlog VALUES (NEW.x * 10, 0);
+CREATE RULE
+> INSERT INTO r_m (x) VALUES (1);
+INSERT 0 1
+> SELECT * FROM r_mlog;
+fields x@r_mlog.1:23:4:-1,y@r_mlog.2:23:4:-1
+row 10,0
+row 1,7
+SELECT 2
+> UPDATE r_t SET v = 'Q' FROM r_other WHERE r_t.id = r_other.id;
+UPDATE 1
+> SELECT * FROM r_log ORDER BY op, id;
+fields op@r_log.1:25:-1:-1,id@r_log.2:23:4:-1,v@r_log.3:25:-1:-1
+row del,3,c
+row del,4,d
+row ins,1,a
+row ins,2,b
+row ins,3,c
+row ins,4,d
+row ins,9,z
+row neg,-1,x
+row upd,1,a->Q
+row upd,2,b->B
+SELECT 10

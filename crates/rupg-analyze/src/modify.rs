@@ -41,13 +41,35 @@ const SYSTEM_COLUMNS: [&str; 6] = ["tableoid", "ctid", "xmin", "cmin", "xmax", "
 impl Analyzer<'_> {
     /// `transformUpdateStmt`: the query tree of an `UPDATE`.
     pub(crate) fn update(&mut self, s: &UpdateStmt) -> Result<Query> {
+        let inverted = std::mem::take(&mut self.rule.inverted);
         self.write_with(s.withClause.as_deref())?;
         let rv = s.relation.as_deref().ok_or_else(|| Error::internal("an UPDATE with no table"))?;
         let (table, name, columns) = self.target_table(rv, WriteKind::Update)?;
+        let rows = std::mem::take(&mut self.rule.rows);
         self.mark_updated(&set_columns(&s.targetList, &columns));
         let from = self.target_from(rv, &s.fromClause)?;
         let filter = self.target_where(s.whereClause.as_ref())?;
         let row = self.update_row(rv, table, &name, &columns, &s.targetList)?;
+        if rows {
+            // The rows of `*rule*`: the new row, with its generated columns, then the old row.
+            let generated = if self.is_partitioned(table) {
+                Vec::new()
+            } else {
+                self.generated_columns(table)?
+            };
+            let mut targets = targets(&columns, crate::rules::with_generated(row, &generated));
+            targets.extend(old_row(&columns));
+            let mut query = Query {
+                relations: std::mem::take(&mut self.scope.relations),
+                from,
+                targets,
+                filter,
+                ..Query::default()
+            };
+            self.end_write_with(&mut query, s.withClause.as_deref())?;
+            self.rule.columns = columns;
+            return Ok(query);
+        }
         let (returning, carried) =
             self.write_returning(s.returningClause.as_deref(), WriteKind::Update)?;
         let tail = tail_columns(&carried);
@@ -76,6 +98,16 @@ impl Analyzer<'_> {
         // Each table of the tree of `INHERITS` checks its rows after its triggers.
         // The leaf partitions and the tables of the tree of `INHERITS` compute their generated columns.
         let generated = if partitioned { Vec::new() } else { self.generated_columns(table)? };
+        if !inverted.is_empty() {
+            let width = columns.len();
+            let row: Vec<Expr> = query.targets[..width].iter().map(|t| t.expr.clone()).collect();
+            let new = crate::rules::with_generated(row, &generated);
+            let old = crate::rules::relation_row(&columns, 0, 0);
+            let old = crate::rules::named_row(&columns, old);
+            let new = crate::rules::named_row(&columns, new);
+            let quals = self.inverted_quals(&inverted, Some(old), Some(new))?;
+            query.filter = crate::rules::and_filter(query.filter.take(), quals);
+        }
         let recheck = if inherit {
             None
         } else {
@@ -211,10 +243,26 @@ impl Analyzer<'_> {
 
     /// `transformDeleteStmt`: the query tree of a `DELETE`.
     pub(crate) fn delete(&mut self, s: &DeleteStmt) -> Result<Query> {
+        let inverted = std::mem::take(&mut self.rule.inverted);
         self.write_with(s.withClause.as_deref())?;
         let rv = s.relation.as_deref().ok_or_else(|| Error::internal("a DELETE with no table"))?;
         let (table, name, columns) = self.target_table(rv, WriteKind::Delete)?;
+        let rows = std::mem::take(&mut self.rule.rows);
         let from = self.target_from(rv, &s.usingClause)?;
+        if rows {
+            // The rows of `*rule*`: the old row.
+            let filter = self.target_where(s.whereClause.as_ref())?;
+            let mut query = Query {
+                relations: std::mem::take(&mut self.scope.relations),
+                from,
+                targets: old_row(&columns),
+                filter,
+                ..Query::default()
+            };
+            self.end_write_with(&mut query, s.withClause.as_deref())?;
+            self.rule.columns = columns;
+            return Ok(query);
+        }
         let inherit = self.inherits_target(WriteKind::Delete);
         // Each table of the tree of `INHERITS` fires its foreign keys.
         let foreign = if inherit {
@@ -222,7 +270,12 @@ impl Analyzer<'_> {
         } else {
             self.foreign_keys(table, WriteKind::Delete, &columns)?
         };
-        let filter = self.target_where(s.whereClause.as_ref())?;
+        let mut filter = self.target_where(s.whereClause.as_ref())?;
+        if !inverted.is_empty() {
+            let old = crate::rules::named_row(&columns, crate::rules::relation_row(&columns, 0, 0));
+            let quals = self.inverted_quals(&inverted, Some(old), None)?;
+            filter = crate::rules::and_filter(filter, quals);
+        }
         let (returning, carried) =
             self.write_returning(s.returningClause.as_deref(), WriteKind::Delete)?;
         // With `RETURNING`, each row gives the old row and the carried values before the ID of its version.

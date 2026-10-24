@@ -1823,6 +1823,9 @@ impl Connection {
         described: &mut Option<(Vec<Column>, Vec<Row>)>,
     ) -> Result<Done, Error> {
         self.settings.borrow_mut().take_snapshot();
+        if let Some(products) = rupg_analyze::query_rewrite(node, &self.reader())? {
+            return self.run_products(node, &products, notices, late);
+        }
         let reader = self.reader();
         let plan = query::plan(node, &reader, &Params::default());
         notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
@@ -1863,6 +1866,47 @@ impl Connection {
                 Err(error)
             }
         }
+    }
+
+    /// `ProcessQuery` for each statement of the rewrite of a write by the rules of its table, in order. Each statement sees the writes of the statements before it. The statement that sets the tag gives the result, and with none, the tag of the write has no rows.
+    fn run_products(
+        &self,
+        node: &Node,
+        products: &[rupg_analyze::Product],
+        notices: &mut Vec<Notice>,
+        late: &mut Vec<Notice>,
+    ) -> Result<Done, Error> {
+        let mut done = None;
+        for product in products {
+            let reader = self.reader();
+            let plan = rupg_analyze::analyze_product(product, &reader, &Params::default())
+                .and_then(rupg_exec::prepare);
+            notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
+            let plan = plan?;
+            notices.extend(plan.notices().iter().map(|error| Notice::warning(error.clone())));
+            let plan = plan.fold(None, &reader);
+            notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
+            let plan = plan?;
+            plan.start(&reader)?;
+            let Some(view) = reader.view() else {
+                return Err(Error::internal("the reader of the session has no view of the rows"));
+            };
+            let (plan, writes) = self.start_writes(plan, &[], view)?;
+            let rows = plan.run(&[], &reader);
+            late.extend(reader.take_warnings().into_iter().map(Notice::of_function));
+            let result = self.write_rows(&plan, &[], view, rows?, &[], writes);
+            late.extend(self.trigger_notices());
+            let result = result?;
+            if product.sets_tag {
+                done = Some(result);
+            }
+        }
+        let tag = match node {
+            Node::InsertStmt(_) => CommandTag::Insert,
+            Node::UpdateStmt(_) => CommandTag::Update,
+            _ => CommandTag::Delete,
+        };
+        Ok(done.unwrap_or(Done::Count(tag, 0)))
     }
 
     /// `ExecuteCallStmt`: `CALL` runs as a query that calls the procedure. A procedure with output arguments gives one row with them, and a procedure with none gives no rows.
@@ -4903,6 +4947,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/rules.test")));
     }
 
+    /// The rules `ON INSERT`, `ON UPDATE` and `ON DELETE` of a table and of a view: the actions `DO ALSO` and `DO INSTEAD` with `NEW` and `OLD`, a condition, the inverse condition on the statement for a rule `DO INSTEAD` with a condition, the command tags, and the errors for `RETURNING`, `ON CONFLICT`, `MERGE` and a rule that fires itself again. `connection/rules2.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn rules2() {
+        big_stack(|| script(include_str!("connection/rules2.test")));
+    }
+
     /// `CREATE TRIGGER`, `DROP TRIGGER`, `ALTER TRIGGER ... RENAME`, `ALTER TABLE ... ENABLE TRIGGER` and `COMMENT ON TRIGGER`: `pg_trigger`, `pg_get_triggerdef`, the rows of `pg_depend`, the views `triggers` and `triggered_update_columns`, and the errors of `CreateTriggerFiringOn`, `renametrig` and `EnableDisableTrigger`. `connection/triggers.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn triggers() {
@@ -5882,6 +5932,12 @@ mod tests {
     #[test]
     fn gstored9() {
         big_stack(|| script(include_str!("connection/gstored9.test")));
+    }
+
+    /// Stored generated columns, from the part of `generated_stored.sql` of the PostgreSQL tests on rules: the rules `DO ALSO` of `INSERT` and `UPDATE` see the new value of a generated column in `NEW`, and a rule `DO INSTEAD NOTHING` with a condition on a generated column stops the `UPDATE`. `connection/gstored10.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn gstored10() {
+        big_stack(|| script(include_str!("connection/gstored10.test")));
     }
 
     /// `CREATE TABLE ... (LIKE ...)`, from `create_table_like.sql` of the PostgreSQL tests: the columns and the not-null constraints of the other relation, the options `INCLUDING DEFAULTS`, `GENERATED`, `IDENTITY`, `CONSTRAINTS`, `INDEXES`, `STORAGE`, `COMMENTS` and `ALL`, `LIKE` with `INHERITS`, and `LIKE` of a view, a composite type and a sequence. The script has catalog queries in place of `\d`, and it does not have the parts for virtual generated columns, `NOT ENFORCED`, `CREATE STATISTICS` and foreign tables. `connection/create_table_like.test` is the output of PostgreSQL 19 for the same script in a new database.

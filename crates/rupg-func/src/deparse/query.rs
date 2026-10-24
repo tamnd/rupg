@@ -1843,6 +1843,9 @@ fn ruledef(rule: &rupg_catalog::Rule, pretty: bool, session: &dyn Session) -> Re
     let env = reg::SessionEnv(session);
     let tree = rupg_analyze::rule_tree(&env, rule.oid)?
         .ok_or_else(|| Error::internal(format!("cache lookup failed for rule {}", rule.oid)))?;
+    if tree.actions.iter().any(|a| a.write.is_some()) {
+        return Err(not_yet("a deparse of a rule action INSERT, UPDATE or DELETE"));
+    }
     let event = match rule.event {
         b'1' => "SELECT",
         b'2' => "UPDATE",
