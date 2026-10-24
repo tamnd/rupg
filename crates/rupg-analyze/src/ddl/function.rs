@@ -7,7 +7,9 @@ use rupg_catalog::{
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
-use rupg_sql::nodes::{CreateFunctionStmt, DefElem, FunctionParameterMode, Node};
+use rupg_sql::nodes::{
+    CreateFunctionStmt, DefElem, FunctionParameterMode, Node, VariableSetKind, VariableSetStmt,
+};
 use rupg_types::oid;
 
 use super::{Definer, not_yet};
@@ -120,6 +122,37 @@ struct Options {
     link: Option<String>,
     /// The place of `AS` in the query text.
     src_at: Option<usize>,
+    /// The settings of the clauses `SET`, as `proconfig` keeps them.
+    config: Vec<String>,
+}
+
+/// `update_proconfig_value`: the settings of a function after a clause `SET` or `RESET`. `GUCArrayAdd` puts a new value in place of the value of the same parameter, and `GUCArrayDelete` and `RESET ALL` remove values.
+pub(super) fn update_config(
+    env: &dyn Env,
+    config: &mut Vec<String>,
+    set: &VariableSetStmt,
+) -> Result<()> {
+    if set.kind == VariableSetKind::VAR_RESET_ALL {
+        config.clear();
+        return Ok(());
+    }
+    let (name, value) = env.function_setting(set)?;
+    let prefix = format!("{name}=");
+    let at = config.iter().position(|item| item.starts_with(&prefix));
+    match (value, at) {
+        (Some(value), Some(at)) => config[at] = format!("{prefix}{value}"),
+        (Some(value), None) => config.push(format!("{prefix}{value}")),
+        (None, Some(at)) => {
+            config.remove(at);
+        }
+        (None, None) => {}
+    }
+    Ok(())
+}
+
+/// True when the settings of a function set `search_path`, so that a body in a string reads its names with that path.
+fn sets_path(config: &[String]) -> bool {
+    config.iter().any(|item| item.starts_with("search_path="))
 }
 
 /// The error of `CreateFunction` and `AlterFunction` for `LEAKPROOF` from a role that is not a superuser.
@@ -150,7 +183,7 @@ fn option_list(def: &DefElem) -> Option<Vec<String>> {
 }
 
 /// `compute_function_attributes`: the options of the function. Each option that rupg does not have gives an error. An option that only a function can have gives `42P13` for a procedure.
-fn options(stmt: &CreateFunctionStmt) -> Result<Options> {
+fn options(stmt: &CreateFunctionStmt, env: &dyn Env) -> Result<Options> {
     let mut out = Options {
         language: SQL_LANGUAGE,
         language_name: "sql".to_string(),
@@ -164,6 +197,7 @@ fn options(stmt: &CreateFunctionStmt) -> Result<Options> {
         src: None,
         link: None,
         src_at: None,
+        config: Vec::new(),
     };
     for def in stmt.options.iter().flatten() {
         let Node::DefElem(def) = def else { continue };
@@ -218,6 +252,12 @@ fn options(stmt: &CreateFunctionStmt) -> Result<Options> {
                 _ => return Err(bad()),
             },
             ("support", _) => out.support = Some(option_list(def).ok_or_else(bad)?),
+            ("set", _) => match &def.arg {
+                Some(Node::VariableSetStmt(set)) => update_config(env, &mut out.config, set)?,
+                _ => return Err(bad()),
+            },
+            // `SECURITY INVOKER` is the default.
+            ("security", _) if matches!(def.arg, Some(Node::Boolean(false))) => {}
             ("as", _) => match option_list(def).as_deref() {
                 // The grammar gives one item, or two for a function in C.
                 Some([src, rest @ ..]) if rest.len() < 2 => {
@@ -555,7 +595,10 @@ pub fn function_body(env: &dyn Env, oid: u32, inputs: &[u32]) -> Result<Option<B
         let stmts = statements(stmt, src)?;
         let params = Params { types: inputs.to_vec(), variable: false };
         let mut an = Analyzer::new(env, &params);
-        an.set_path(&body.path);
+        // A body in a string of a function that sets `search_path` takes the current path, which the settings of the call gave.
+        if stmt.sql_body.is_some() || !sets_path(&function.config) {
+            an.set_path(&body.path);
+        }
         an.sql_function = Some((function.name.clone(), input_names(function)));
         let mut body = an.body(function, &stmts, inputs)?;
         if let Some(catalog) = env.catalog() {
@@ -674,6 +717,7 @@ fn builtin_function(oid: u32) -> Option<Function> {
         src: String::new(),
         bin: String::new(),
         body: Some(FunctionBody { text: text.into(), path: vec![crate::PG_CATALOG_NAMESPACE] }),
+        config: Vec::new(),
     })
 }
 
@@ -689,7 +733,7 @@ impl Definer<'_, '_> {
             })?,
         };
         self.check_create_in(namespace, None)?;
-        let options = options(stmt)?;
+        let options = options(stmt, self.an.env)?;
         // A function in C or in `internal` runs code that the database does not check, so these languages are not trusted.
         let untrusted = matches!(options.language, INTERNAL_LANGUAGE | C_LANGUAGE);
         if untrusted && !self.is_superuser() {
@@ -863,6 +907,7 @@ impl Definer<'_, '_> {
             bin,
             body: (!untrusted)
                 .then(|| FunctionBody { text: text.to_string(), path: self.an.path.clone() }),
+            config: options.config.clone(),
         };
         // `function_parse_error_transpose`: an error in a body in a string has its place in the query text.
         let transpose = |error: Error| match (&options.src, error.position()) {
@@ -894,7 +939,8 @@ impl Definer<'_, '_> {
             return self.store_function(old, function, &defaults, support, Vec::new());
         }
         if function.lang == PLPGSQL_LANGUAGE {
-            self.check_plpgsql(stmt, &function).map_err(transpose)?;
+            self.with_settings(&function.config, |d| d.check_plpgsql(stmt, &function))
+                .map_err(transpose)?;
             return self.store_function(old, function, &defaults, support, Vec::new());
         }
         // `fmgr_sql_validator`: the only pseudo-types that a function in SQL can take are the polymorphic types, and it can also return `void` and `record`.
@@ -918,7 +964,8 @@ impl Definer<'_, '_> {
             let oid = self.store_function(old, function.clone(), &defaults, support, Vec::new())?;
             if !polymorphic {
                 self.an.env.command_counter_increment(self.catalog);
-                self.sql_body(&function, &stmts).map_err(transpose)?;
+                self.with_settings(&function.config, |d| d.sql_body(&function, &stmts))
+                    .map_err(transpose)?;
             }
             return Ok(oid);
         }
@@ -932,11 +979,29 @@ impl Definer<'_, '_> {
         self.store_function(old, function, &defaults, support, refs)
     }
 
-    /// `fmgr_sql_validator`: the body of a new function in SQL, for a call with arguments of the types of its parameters.
+    /// `ProcedureCreate`: the validator of the language runs with the settings of the function, which `ProcessGUCArray` gives with `GUC_ACTION_SAVE`, and the settings go back after it.
+    fn with_settings<T>(
+        &mut self,
+        config: &[String],
+        f: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<T> {
+        if config.is_empty() {
+            return f(self);
+        }
+        self.an.env.push_function_settings(config)?;
+        let result = f(self);
+        self.an.env.pop_function_settings();
+        result
+    }
+
+    /// `fmgr_sql_validator`: the body of a new function in SQL, for a call with arguments of the types of its parameters. A body in a string reads its names with the `search_path` of the settings of the function, when they set it.
     fn sql_body(&mut self, function: &Function, stmts: &Statements<'_>) -> Result<Body> {
         let params = Params { types: function.argtypes.clone(), variable: false };
         let mut an = Analyzer::new(self.an.env, &params);
-        an.set_path(&self.an.path);
+        // The new analyzer takes the current path, which the settings gave.
+        if !matches!(stmts, Statements::String(_)) || !sets_path(&function.config) {
+            an.set_path(&self.an.path);
+        }
         an.sql_function = Some((function.name.clone(), input_names(function)));
         let body = an.body(function, stmts, &function.argtypes)?;
         self.an.notices.append(&mut an.notices);

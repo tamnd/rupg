@@ -179,6 +179,32 @@ pub trait Env {
         let _ = function;
         Ok(())
     }
+    /// `ExtractSetVariableArgs` and `validate_option_array_item` for a clause `SET` or `RESET` of a function: the name of the parameter as the stored setting spells it, and the value, or `None` for `RESET`. `SET ... FROM CURRENT` takes the current value.
+    ///
+    /// # Errors
+    ///
+    /// `0A000` when the session has no settings, and the errors of the name and of the value.
+    fn function_setting(
+        &self,
+        set: &rupg_sql::nodes::VariableSetStmt,
+    ) -> Result<(String, Option<String>)> {
+        let _ = set;
+        Err(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            "the settings of a function are not supported here",
+        ))
+    }
+    /// `ProcessGUCArray` with `GUC_ACTION_SAVE`: the settings of a function, each one as `name=value`, apply until [`Env::pop_function_settings`]. A session with no settings does nothing.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the names and of the values.
+    fn push_function_settings(&self, config: &[String]) -> Result<()> {
+        let _ = config;
+        Ok(())
+    }
+    /// `AtEOXact_GUC` at the end of [`Env::push_function_settings`]: the settings go back to their values from before, other than the ones that a `SET` changed.
+    fn pop_function_settings(&self) {}
     /// `evaluate_expr`: the value of an expression that reads no column, such as a value of the bound of a partition.
     ///
     /// # Errors

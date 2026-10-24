@@ -155,6 +155,14 @@ impl Definer<'_, '_> {
                         "parameter \"parallel\" must be SAFE, RESTRICTED, or UNSAFE",
                     ));
                 }
+                ("set", _) => match &def.arg {
+                    Some(Node::VariableSetStmt(set)) => {
+                        super::function::update_config(self.an.env, &mut new.config, set)?;
+                    }
+                    _ => return Err(Error::internal("a SET of ALTER FUNCTION with no setting")),
+                },
+                // `SECURITY INVOKER` is the default.
+                ("security", _) if matches!(def.arg, Some(Node::Boolean(false))) => {}
                 ("cost", _) => new.cost = whole_number(def, "COST")?,
                 ("rows", _) => {
                     new.rows = whole_number(def, "ROWS")?;

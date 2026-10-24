@@ -234,9 +234,11 @@ struct Attributes {
     src: String,
     /// The function has a body in SQL in `prosqlbody`.
     sql_body: bool,
+    /// `proconfig`, each item as `name=value`.
+    config: Vec<String>,
 }
 
-/// The attributes of a function of the catalog of the session, or of a built-in function from its static row. rupg has no `SECURITY DEFINER` and no `SET` option for a function, so `prosecdef` is false and `proconfig` is null for a function of the session. `proconfig` is null for each built-in function.
+/// The attributes of a function of the catalog of the session, or of a built-in function from its static row. rupg has no `SECURITY DEFINER` for a function, so `prosecdef` is false for a function of the session. `proconfig` is null for each built-in function.
 fn attributes(proc: &ProcRow, session: &dyn Session) -> Attributes {
     if let Some(f) = session.catalog().and_then(|c| c.function(proc.oid)) {
         return Attributes {
@@ -249,6 +251,7 @@ fn attributes(proc: &ProcRow, session: &dyn Session) -> Attributes {
             bin: (!f.bin.is_empty()).then(|| f.bin.clone()),
             src: f.src.clone(),
             sql_body: f.lang == SQL_LANGUAGE && f.src.is_empty() && f.body.is_some(),
+            config: f.config.clone(),
         };
     }
     let static_row = builtin::proc_row(proc.oid).and_then(|row| {
@@ -272,6 +275,7 @@ fn attributes(proc: &ProcRow, session: &dyn Session) -> Attributes {
         bin: text("probin"),
         src: proc.src.to_string(),
         sql_body: proc.sqlbody.is_some(),
+        config: Vec::new(),
     }
 }
 
@@ -366,6 +370,24 @@ pub(super) fn get_functiondef(call: &Call<'_>, args: &[Value]) -> Result<Value> 
         buf.push_str(&support_name(attrs.support, session)?);
     }
     if buf.len() != start {
+        buf.push('\n');
+    }
+    // Each setting of `proconfig` on its own line. A parameter with `GUC_LIST_QUOTE` shows each element of its list as a literal, and an empty list as `NULL`.
+    for item in &attrs.config {
+        let Some((name, value)) = item.split_once('=') else { continue };
+        buf.push_str(&format!(" SET {} TO ", quote_identifier(name)));
+        match session.setting_list(name, value) {
+            Some(list) if list.is_empty() => buf.push_str("NULL"),
+            Some(list) => {
+                for (i, element) in list.iter().enumerate() {
+                    if i > 0 {
+                        buf.push_str(", ");
+                    }
+                    simple_quote_literal(&mut buf, element, session);
+                }
+            }
+            None => simple_quote_literal(&mut buf, value, session),
+        }
         buf.push('\n');
     }
     if attrs.sql_body && proc.lang == SQL_LANGUAGE {

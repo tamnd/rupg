@@ -628,6 +628,7 @@ impl Definer<'_, '_> {
             src: "aggregate_dummy".into(),
             bin: String::new(),
             body: None,
+            config: Vec::new(),
         };
         let aggregate = Aggregate {
             function: 0,

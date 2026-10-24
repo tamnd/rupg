@@ -447,6 +447,21 @@ impl Env for SchemaEnv<'_> {
         self.env.check_function(function)
     }
 
+    fn function_setting(
+        &self,
+        set: &rupg_sql::nodes::VariableSetStmt,
+    ) -> Result<(String, Option<String>)> {
+        self.env.function_setting(set)
+    }
+
+    fn push_function_settings(&self, config: &[String]) -> Result<()> {
+        self.env.push_function_settings(config)
+    }
+
+    fn pop_function_settings(&self) {
+        self.env.pop_function_settings();
+    }
+
     fn command_counter_increment(&self, catalog: &Catalog) {
         let session = self.env.catalog();
         *self.relations.borrow_mut() = catalog

@@ -1,0 +1,169 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE SCHEMA fs;
+CREATE SCHEMA
+> CREATE TABLE fs.t (a int);
+CREATE TABLE
+> INSERT INTO fs.t VALUES (7);
+INSERT 0 1
+> CREATE FUNCTION f_path() RETURNS text LANGUAGE sql SET search_path = fs, public AS $$ SELECT current_setting('search_path') || ' ' || (SELECT a FROM t)::text $$;
+CREATE FUNCTION
+> SELECT f_path();
+fields f_path:25:-1:-1
+row fs, public 7
+SELECT 1
+> SHOW search_path;
+fields search_path:25:-1:-1
+row "$user", public
+SHOW
+> SELECT proconfig::text FROM pg_proc WHERE proname = 'f_path';
+fields proconfig:25:-1:-1
+row {"search_path=fs, public"}
+SELECT 1
+> SELECT pg_get_functiondef('f_path'::regproc);
+fields pg_get_functiondef:25:-1:-1
+row CREATE OR REPLACE FUNCTION public.f_path()
+ RETURNS text
+ LANGUAGE sql
+ SET search_path TO 'fs', 'public'
+AS $function$ SELECT current_setting('search_path') || ' ' || (SELECT a FROM t)::text $function$
+
+SELECT 1
+> CREATE FUNCTION f_mem() RETURNS text LANGUAGE plpgsql SET work_mem = '2MB' SET datestyle TO iso, mdy AS $$ BEGIN RETURN current_setting('work_mem') || ' ' || current_setting('datestyle'); END $$;
+CREATE FUNCTION
+> SELECT f_mem(), current_setting('work_mem');
+fields f_mem:25:-1:-1,current_setting:25:-1:-1
+row 2MB ISO, MDY,4MB
+SELECT 1
+> SELECT proconfig::text FROM pg_proc WHERE proname = 'f_mem';
+fields proconfig:25:-1:-1
+row {work_mem=2MB,"DateStyle=iso, mdy"}
+SELECT 1
+> SELECT pg_get_functiondef('f_mem'::regproc);
+fields pg_get_functiondef:25:-1:-1
+row CREATE OR REPLACE FUNCTION public.f_mem()
+ RETURNS text
+ LANGUAGE plpgsql
+ SET work_mem TO '2MB'
+ SET "DateStyle" TO 'iso, mdy'
+AS $function$ BEGIN RETURN current_setting('work_mem') || ' ' || current_setting('datestyle'); END $function$
+
+SELECT 1
+> CREATE FUNCTION f_inner() RETURNS text LANGUAGE plpgsql SET work_mem = '3MB' AS $$ BEGIN SET work_mem = '5MB'; SET LOCAL statement_timeout = '7s'; RETURN current_setting('work_mem'); END $$;
+CREATE FUNCTION
+> BEGIN;
+BEGIN
+> SELECT f_inner();
+fields f_inner:25:-1:-1
+row 5MB
+SELECT 1
+> SELECT current_setting('work_mem'), current_setting('statement_timeout');
+fields current_setting:25:-1:-1,current_setting:25:-1:-1
+row 5MB,7s
+SELECT 1
+> COMMIT;
+COMMIT
+> SHOW work_mem;
+fields work_mem:25:-1:-1
+row 5MB
+SHOW
+> RESET work_mem;
+RESET
+> CREATE FUNCTION f_local() RETURNS text LANGUAGE plpgsql SET work_mem = '3MB' AS $$ BEGIN SET LOCAL work_mem = '6MB'; RETURN current_setting('work_mem'); END $$;
+CREATE FUNCTION
+> BEGIN;
+BEGIN
+> SELECT f_local(), current_setting('work_mem');
+fields f_local:25:-1:-1,current_setting:25:-1:-1
+row 6MB,4MB
+SELECT 1
+> COMMIT;
+COMMIT
+> ALTER FUNCTION f_mem() SET work_mem = '4MB';
+ALTER FUNCTION
+> ALTER FUNCTION f_mem() SET extra_float_digits = 2;
+ALTER FUNCTION
+> SELECT proconfig::text FROM pg_proc WHERE proname = 'f_mem';
+fields proconfig:25:-1:-1
+row {work_mem=4MB,"DateStyle=iso, mdy",extra_float_digits=2}
+SELECT 1
+> ALTER FUNCTION f_mem() RESET work_mem;
+ALTER FUNCTION
+> SELECT proconfig::text FROM pg_proc WHERE proname = 'f_mem';
+fields proconfig:25:-1:-1
+row {"DateStyle=iso, mdy",extra_float_digits=2}
+SELECT 1
+> ALTER FUNCTION f_mem() RESET ALL;
+ALTER FUNCTION
+> SELECT proconfig IS NULL AS none FROM pg_proc WHERE proname = 'f_mem';
+fields none:16:1:-1
+row t
+SELECT 1
+> SET work_mem = '8MB';
+SET
+> ALTER FUNCTION f_mem() SET work_mem FROM CURRENT;
+ALTER FUNCTION
+> SELECT proconfig::text FROM pg_proc WHERE proname = 'f_mem';
+fields proconfig:25:-1:-1
+row {work_mem=8MB}
+SELECT 1
+> RESET work_mem;
+RESET
+> CREATE FUNCTION f_bad() RETURNS int LANGUAGE sql SET no_such_setting = 1 AS 'SELECT 1';
+ERROR 42704 unrecognized configuration parameter "no_such_setting"
+> CREATE FUNCTION f_bad() RETURNS int LANGUAGE sql SET work_mem = 'lots' AS 'SELECT 1';
+ERROR 22023 invalid value for parameter "work_mem": "lots"
+> CREATE FUNCTION f_ph() RETURNS text LANGUAGE sql SET my.opt = 'x' AS $$ SELECT current_setting('my.opt') $$;
+CREATE FUNCTION
+> SELECT f_ph();
+fields f_ph:25:-1:-1
+row x
+SELECT 1
+> SELECT current_setting('my.opt', true) IS NULL AS gone;
+fields gone:16:1:-1
+row f
+SELECT 1
+> CREATE FUNCTION f_inv() RETURNS int LANGUAGE sql SECURITY INVOKER AS 'SELECT 1';
+CREATE FUNCTION
+> SELECT prosecdef FROM pg_proc WHERE proname = 'f_inv';
+fields prosecdef@pg_proc.11:16:1:-1
+row f
+SELECT 1
+> CREATE PROCEDURE p_set() LANGUAGE plpgsql SET work_mem = '9MB' AS $$ BEGIN RAISE NOTICE '%', current_setting('work_mem'); END $$;
+CREATE PROCEDURE
+> CALL p_set();
+NOTICE 00000 9MB (PL/pgSQL function p_set() line 1 at RAISE)
+CALL
+> SELECT proname, proconfig::text FROM pg_proc WHERE proname IN ('p_set', 'f_ph') ORDER BY 1;
+fields proname@pg_proc.2:19:64:-1,proconfig:25:-1:-1
+row f_ph,{my.opt=x}
+row p_set,{work_mem=9MB}
+SELECT 2
+> CREATE FUNCTION f_err() RETURNS int LANGUAGE plpgsql SET work_mem = '3MB' AS $$ BEGIN RAISE EXCEPTION 'boom'; END $$;
+CREATE FUNCTION
+> SELECT f_err();
+fields f_err:23:4:-1
+ERROR P0001 boom (PL/pgSQL function f_err() line 1 at RAISE)
+> SHOW work_mem;
+fields work_mem:25:-1:-1
+row 4MB
+SHOW
+> CREATE FUNCTION f_catch() RETURNS text LANGUAGE plpgsql AS $$ BEGIN BEGIN PERFORM f_err(); EXCEPTION WHEN OTHERS THEN NULL; END; RETURN current_setting('work_mem'); END $$;
+CREATE FUNCTION
+> SELECT f_catch();
+fields f_catch:25:-1:-1
+row 4MB
+SELECT 1
+> SELECT routine_name, security_type FROM information_schema.routines WHERE routine_name IN ('f_inv', 'f_mem') ORDER BY 1;
+fields routine_name@information_schema.routines.6:19:64:-1,security_type@information_schema.routines.50:1043:-1:-1
+row f_inv,INVOKER
+row f_mem,INVOKER
+SELECT 2
+> DROP FUNCTION f_path(), f_mem(), f_inner(), f_local(), f_ph(), f_inv(), f_err(), f_catch();
+DROP FUNCTION
+> DROP PROCEDURE p_set();
+DROP PROCEDURE
+> DROP SCHEMA fs CASCADE;
+NOTICE 00000 drop cascades to table fs.t
+DROP SCHEMA

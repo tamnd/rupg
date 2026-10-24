@@ -17,7 +17,7 @@ use rupg_func::{AdvisoryLock, Backend, Client, Randomness, Sequences};
 use rupg_pgcatalog::builtin;
 use rupg_platform::os::OsEntropy;
 use rupg_platform::{Clock, Entropy};
-use rupg_sql::nodes::Node;
+use rupg_sql::nodes::{Node, VariableSetKind, VariableSetStmt};
 use rupg_types::{
     Array, ByteaOutput, DateFormat, DateOrder, DateStyle, IntervalStyle, Recv, TimeZone, Value,
     oid, tz,
@@ -1158,11 +1158,43 @@ impl rupg_func::Session for Reader<'_> {
         settings.set(name, value, action, Origin::Statement)?;
         Ok(settings.show(name)?.1)
     }
+
+    fn setting_list(&self, name: &str, text: &str) -> Option<Vec<String>> {
+        guc::find(name).filter(|parameter| parameter.has(guc::flag::LIST_QUOTE))?;
+        guc::split_identifiers(text, ',')
+    }
+
+    fn start_function_settings(&self, config: &[String]) -> Result<()> {
+        self.settings.borrow_mut().push_function(config)
+    }
+
+    fn end_function_settings(&self) {
+        self.settings.borrow_mut().pop_function();
+    }
 }
 
 impl Env for Reader<'_> {
     fn check_function(&self, function: &rupg_catalog::Function) -> Result<()> {
         rupg_plpgsql::validate(self, function)
+    }
+
+    fn function_setting(&self, set: &VariableSetStmt) -> Result<(String, Option<String>)> {
+        let name = set.name.as_deref().unwrap_or_default();
+        let settings = self.settings();
+        let value = match set.kind {
+            VariableSetKind::VAR_SET_VALUE => utility::flatten(name, &set.args)?,
+            VariableSetKind::VAR_SET_CURRENT => Some(settings.show(name)?.1),
+            _ => None,
+        };
+        Ok((settings.check_stored(name, value.as_deref())?, value))
+    }
+
+    fn push_function_settings(&self, config: &[String]) -> Result<()> {
+        self.settings.borrow_mut().push_function(config)
+    }
+
+    fn pop_function_settings(&self) {
+        self.settings.borrow_mut().pop_function();
     }
 
     fn command_counter_increment(&self, catalog: &Catalog) {
@@ -1265,11 +1297,8 @@ fn cursor_error(node: &Node, text: &str) -> Option<Error> {
         Node::SelectStmt(stmt) if stmt.intoClause.is_some() => ("SELECT INTO", false),
         Node::SelectStmt(_) => return None,
         Node::VariableSetStmt(stmt) => {
-            let reset = matches!(
-                stmt.kind,
-                rupg_sql::nodes::VariableSetKind::VAR_RESET
-                    | rupg_sql::nodes::VariableSetKind::VAR_RESET_ALL
-            );
+            let reset =
+                matches!(stmt.kind, VariableSetKind::VAR_RESET | VariableSetKind::VAR_RESET_ALL);
             (if reset { "RESET" } else { "SET" }, false)
         }
         Node::VariableShowStmt(_) => ("SHOW", true),
