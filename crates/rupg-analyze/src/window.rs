@@ -280,7 +280,8 @@ impl Analyzer<'_> {
             | Kind::TriggerWhen
             | Kind::CallArgument
             | Kind::PartitionBound
-            | Kind::PartitionExpression => {
+            | Kind::PartitionExpression
+            | Kind::Generated => {
                 Some(format!("window functions are not allowed in {}", self.kind.name()))
             }
             Kind::Other => return Err(not_yet("a window function in this place", at)),

@@ -196,9 +196,12 @@ impl Connection {
     ) -> Result<(), Error> {
         let Some(now) = work.relation(rel.oid) else { return Ok(()) };
         let width = rel.columns.len();
-        // A dropped column has no value in the new rows. The `INSERT` gives it a null.
+        // A dropped column has no value in the new rows. The `INSERT` gives it a null, and it computes a generated column again.
         let live: Vec<usize> = (0..width)
-            .filter(|&i| !rel.columns[i].dropped && now.columns.get(i).is_some_and(|c| !c.dropped))
+            .filter(|&i| {
+                !rel.columns[i].dropped
+                    && now.columns.get(i).is_some_and(|c| !c.dropped && c.generated == 0)
+            })
             .collect();
         let schemaname = match work.schema(now.namespace) {
             Some(schema) => schema.name.clone(),

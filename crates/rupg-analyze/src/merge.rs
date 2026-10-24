@@ -186,6 +186,7 @@ impl Analyzer<'_> {
         let partitioned = self.is_partitioned(table) || inherit;
         let checks = if partitioned { Vec::new() } else { self.checks(table)? };
         let names = checks.iter().map(|(n, _)| n.clone()).collect();
+        let generated = if partitioned { Vec::new() } else { self.generated_columns(table)? };
         let carried_columns: Vec<Column> = carried
             .iter()
             .map(|expr| Column {
@@ -220,8 +221,8 @@ impl Analyzer<'_> {
                 filter: part.condition,
                 ..Query::default()
             };
-            if writes && !checks.is_empty() {
-                query = with_checks(&name, &columns, query, checks.clone(), &[]);
+            if writes && (!checks.is_empty() || !generated.is_empty()) {
+                query = with_checks(&name, &columns, query, checks.clone(), &generated, &[]);
             }
             merge_clauses.push(MergeClause {
                 kind: part.kind,
@@ -282,7 +283,9 @@ impl Analyzer<'_> {
             [(MergeCommand::Insert, WriteKind::Insert), (MergeCommand::Update, WriteKind::Update)]
                 .into_iter()
                 .filter(|&(command, _)| uses(command))
-                .find_map(|(_, kind)| self.recheck(table, kind, &name, &columns, &checks));
+                .find_map(|(_, kind)| {
+                    self.recheck(table, kind, &name, &columns, &checks, &generated)
+                });
         let mut query = Query {
             relations: std::mem::take(&mut self.scope.relations),
             from: vec![from],

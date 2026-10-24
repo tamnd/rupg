@@ -460,11 +460,18 @@ fn relname(rv: &RangeVar) -> &str {
     rv.relname.as_deref().unwrap_or_default()
 }
 
-/// `contain_mutable_functions`: true when the expression calls a function that is not immutable.
+/// `contain_mutable_functions_after_planning`: true when the expression calls a function that is not immutable. The planner inlines `textanycat` and `anytextcat`, so a call of them is mutable only when the output function of the type of the other argument is.
 fn is_mutable(expr: &Expr) -> bool {
     let mutable_proc = |oid: u32| builtin::proc_by_oid(oid).is_none_or(|p| p.volatile != b'i');
     expr.find(0, &mut |e, _| {
         let mutable = match &e.kind {
+            // `textanycat` and `anytextcat`: `$1 || $2::text` and `$1::text || $2`.
+            ExprKind::Func(f) if matches!(f.oid, 2003 | 2004) => {
+                let other = f.args.get(if f.oid == 2003 { 1 } else { 0 });
+                other.is_none_or(|arg| {
+                    mutable_proc(builtin::type_by_oid(arg.ty).map_or(0, |t| t.output))
+                })
+            }
             ExprKind::Func(f) => mutable_proc(f.oid),
             ExprKind::NullIf { equal, .. } | ExprKind::Distinct { equal, .. } => {
                 mutable_proc(*equal)

@@ -147,8 +147,9 @@ impl Definer<'_, '_> {
                         collate: None,
                         collation: c.collation,
                         is_not_null: false,
-                        default: default.map(RawDefault::Cooked),
+                        default: default.map(|text| RawDefault::Cooked(text, parent)),
                         identity: 0,
+                        generated: c.generated,
                         storage: None,
                         compression: None,
                         inherited: Some(inherited),
@@ -196,8 +197,8 @@ impl Definer<'_, '_> {
                 }
                 inh.inhcount = inh.inhcount.saturating_add(1);
                 match (&prev.default, default) {
-                    (None, Some(text)) => prev.default = Some(RawDefault::Cooked(text)),
-                    (Some(RawDefault::Cooked(old)), Some(text))
+                    (None, Some(text)) => prev.default = Some(RawDefault::Cooked(text, parent)),
+                    (Some(RawDefault::Cooked(old, _)), Some(text))
                         if without_locations(Some(old)) != without_locations(Some(&text))
                             && !bogus.contains(&c.name) =>
                     {

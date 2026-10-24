@@ -18,10 +18,12 @@ use super::alter_column::{attribute_compression, attribute_storage};
 use super::comment::range_var;
 use super::partition_attach::without_locations;
 use super::sequence::conflicting;
-use super::{Definer, Fill, is_system_namespace, not_yet, references, relkind_detail, relname};
+use super::{
+    Definer, Fill, is_mutable, is_system_namespace, not_yet, references, relkind_detail, relname,
+};
 use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
-use crate::expr::ExprKind;
+use crate::expr::{Expr, ExprKind};
 use crate::insert::nextval;
 use crate::typename::{names, place};
 use crate::types;
@@ -40,8 +42,8 @@ enum RawDefault {
     Expr(Node),
     /// The `nextval` call of a `serial` column, with the index of its sequence.
     Serial(usize),
-    /// The stored default of the parent table of a partition.
-    Cooked(String),
+    /// The stored default of a parent table, with the OID of the parent. Its columns have the numbers of the parent.
+    Cooked(String, u32),
 }
 
 /// A column after `transformColumnDefinition`.
@@ -55,6 +57,8 @@ struct NewColumn {
     default: Option<RawDefault>,
     /// `attidentity`, or 0.
     identity: u8,
+    /// `attgenerated`: `s` for a stored generated column, or 0. The default is then the generation expression.
+    generated: u8,
     /// The name of the storage of `STORAGE`.
     storage: Option<String>,
     /// The name of the method of `COMPRESSION`.
@@ -101,6 +105,8 @@ struct Plan {
     parent: Option<u32>,
     /// The parent tables of `INHERITS`, in order.
     inherits: Vec<u32>,
+    /// `ofType`: true for a table of `OF type`.
+    typed: bool,
 }
 
 /// `makeNotNullConstraint`: an unnamed not-null constraint on the column.
@@ -298,6 +304,7 @@ impl Definer<'_, '_> {
             partbound: stmt.partbound.as_deref().cloned(),
             parent: None,
             inherits: Vec::new(),
+            typed: stmt.ofTypename.is_some(),
         };
         // The table constraints of a partition come after the columns of the parent table, as `transformIndexConstraint` finds the key columns of a partition in its parent table.
         let mut partition_constraints = Vec::new();
@@ -517,6 +524,7 @@ impl Definer<'_, '_> {
                 is_not_null: false,
                 default: None,
                 identity: 0,
+                generated: 0,
                 storage: None,
                 compression: None,
                 inherited: None,
@@ -536,6 +544,7 @@ impl Definer<'_, '_> {
             partbound: None,
             parent: None,
             inherits: Vec::new(),
+            typed: false,
         };
         let table = self.define_relation(&plan)?;
         if !options.is_empty() {
@@ -635,6 +644,7 @@ impl Definer<'_, '_> {
             is_not_null: false,
             default: None,
             identity: 0,
+            generated: 0,
             storage: def.storage_name.as_deref().map(str::to_string),
             compression: def.compression.as_deref().map(str::to_string),
             inherited: None,
@@ -658,6 +668,8 @@ impl Definer<'_, '_> {
             )
         };
         let mut saw_nullable = false;
+        let mut saw_default = false;
+        let mut saw_generated = false;
         let mut notnull: Option<usize> = None;
         let mut new_not_nulls = Vec::new();
         let mut new_checks = Vec::new();
@@ -707,7 +719,7 @@ impl Definer<'_, '_> {
                     }
                 }
                 ConstrType::CONSTR_DEFAULT => {
-                    if column.default.is_some() {
+                    if saw_default {
                         return Err(Error::new(
                             SqlState::SYNTAX_ERROR,
                             format!(
@@ -721,6 +733,7 @@ impl Definer<'_, '_> {
                         Some(expr) => RawDefault::Expr(expr),
                         None => RawDefault::Serial(plan.serials.len() - 1),
                     });
+                    saw_default = true;
                 }
                 ConstrType::CONSTR_IDENTITY => {
                     if plan.partbound.is_some() {
@@ -765,7 +778,30 @@ impl Definer<'_, '_> {
                     column.is_not_null = true;
                     saw_nullable = true;
                 }
-                ConstrType::CONSTR_GENERATED => return Err(not_yet("a generated column", at)),
+                ConstrType::CONSTR_GENERATED => {
+                    if plan.typed {
+                        return Err(Error::new(
+                            SqlState::FEATURE_NOT_SUPPORTED,
+                            "generated columns are not supported on typed tables",
+                        ));
+                    }
+                    if saw_generated {
+                        return Err(Error::new(
+                            SqlState::SYNTAX_ERROR,
+                            format!(
+                                "multiple generation clauses specified for column \"{name}\" of table \"{}\"",
+                                plan.relname
+                            ),
+                        )
+                        .at_opt(at));
+                    }
+                    if con.generated_kind != b's' {
+                        return Err(not_yet("a virtual generated column", at));
+                    }
+                    column.generated = con.generated_kind;
+                    column.default = con.raw_expr.map(RawDefault::Expr);
+                    saw_generated = true;
+                }
                 ConstrType::CONSTR_CHECK => new_checks.push(con),
                 ConstrType::CONSTR_PRIMARY | ConstrType::CONSTR_UNIQUE => {
                     if con.contype == ConstrType::CONSTR_PRIMARY {
@@ -791,16 +827,20 @@ impl Definer<'_, '_> {
                 | ConstrType::CONSTR_ATTR_NOT_ENFORCED => {}
                 _ => return Err(Error::internal("column exclusion constraints are not supported")),
             }
-            if column.default.is_some() && column.identity != 0 {
-                return Err(Error::new(
-                    SqlState::SYNTAX_ERROR,
-                    format!(
-                        "both default and identity specified for column \"{name}\" of table \"{}\"",
-                        plan.relname
-                    ),
-                )
-                .at_opt(at));
-            }
+            let both = match (saw_default, column.identity != 0, saw_generated) {
+                (true, true, _) => "default and identity",
+                (true, _, true) => "default and generation expression",
+                (_, true, true) => "identity and generation expression",
+                _ => continue,
+            };
+            return Err(Error::new(
+                SqlState::SYNTAX_ERROR,
+                format!(
+                    "both {both} specified for column \"{name}\" of table \"{}\"",
+                    plan.relname
+                ),
+            )
+            .at_opt(at));
         }
         if need_notnull && !(saw_nullable && column.is_not_null) {
             column.is_not_null = true;
@@ -933,6 +973,7 @@ impl Definer<'_, '_> {
             new.compression = parent.compression;
             // A partition has the identity of the column of its parent, as `MergeAttributes` gives it.
             new.identity = parent.identity;
+            new.generated = parent.generated;
             new.local = parent.local;
             new.inhcount = parent.inhcount;
             return Ok(new);
@@ -954,6 +995,7 @@ impl Definer<'_, '_> {
         let mut new = Column::new(column.name.clone(), ty, typmod, collation);
         new.ndims = i16::try_from(type_name.arrayBounds.len()).unwrap_or(i16::MAX);
         new.identity = column.identity;
+        new.generated = column.generated;
         if let Some(name) = &column.storage {
             new.storage = attribute_storage(ty, name)?;
         }
@@ -976,7 +1018,7 @@ impl Definer<'_, '_> {
                 .has_default
                 .then(|| self.catalog.default_of(parent, attnum))
                 .flatten()
-                .map(|d| RawDefault::Cooked(d.expr.clone()));
+                .map(|d| RawDefault::Cooked(d.expr.clone(), parent));
             let mut inherited = c.clone();
             inherited.local = false;
             inherited.inhcount = 1;
@@ -988,6 +1030,7 @@ impl Definer<'_, '_> {
                 is_not_null: false,
                 default,
                 identity: 0,
+                generated: c.generated,
                 storage: None,
                 compression: None,
                 inherited: Some(inherited),
@@ -1030,11 +1073,15 @@ impl Definer<'_, '_> {
             partbound: None,
             parent: None,
             inherits: Vec::new(),
+            typed: false,
         };
         self.column_definition(&mut plan, def)?;
         let Some(column) = plan.columns.first() else {
             return Err(Error::internal("ADD COLUMN without a column"));
         };
+        if column.generated != 0 {
+            return Err(not_yet("ADD COLUMN of a generated column", place(def.location)));
+        }
         // The `OWNED BY` of the sequence of `generateSerialExtraStmts` comes first.
         if target.kind == b'c' && !plan.serials.is_empty() {
             return Err(Error::new(
@@ -1086,7 +1133,7 @@ impl Definer<'_, '_> {
                 let refs = references(self.catalog, table, &[&expr])?;
                 self.catalog.add_default(table, number, crate::node::write(&expr)?, &refs)?;
             }
-            Some(RawDefault::Cooked(_)) | None => {}
+            Some(RawDefault::Cooked(..)) | None => {}
         }
         let default = self.catalog.default_of(table, number).map(|d| d.expr.clone());
         self.added.push(Fill { table, column: number, default });
@@ -1169,11 +1216,16 @@ impl Definer<'_, '_> {
             let Some(default) = &column.default else { continue };
             let (ty, typmod) = (scope[i].1, scope[i].2);
             let expr = match default {
+                RawDefault::Expr(node) if column.generated != 0 => {
+                    self.generation_expression(node, &plan.columns)?
+                }
                 RawDefault::Expr(node) => {
                     self.an.with_kind(Kind::ColumnDefault, |an| an.transform(Some(node)))?
                 }
                 RawDefault::Serial(k) => nextval(plan.serials[*k].oid)?,
-                RawDefault::Cooked(text) => crate::node::read(text)?,
+                RawDefault::Cooked(text, parent) => {
+                    crate::node::read(&self.att_map(*parent, table)?.text(text)?)?
+                }
             };
             let from = expr.ty;
             let Some(expr) =
@@ -1190,7 +1242,7 @@ impl Definer<'_, '_> {
                 )
                 .with_hint("You will need to rewrite or cast the expression."));
             };
-            if matches!(expr.kind, ExprKind::Const(Value::Null)) {
+            if column.generated == 0 && matches!(expr.kind, ExprKind::Const(Value::Null)) {
                 continue;
             }
             let refs = references(self.catalog, table, &[&expr])?;
@@ -1220,6 +1272,52 @@ impl Definer<'_, '_> {
             self.catalog.create_toast(table)?;
         }
         Ok(table)
+    }
+
+    /// The part of `cookDefault` for the generation expression of a generated column of a new table: the expression must not read a generated column or the whole row, as `check_nested_generated` finds, and it must be immutable. `columns` are the columns of the table.
+    fn generation_expression(&mut self, node: &Node, columns: &[NewColumn]) -> Result<Expr> {
+        let expr = self.an.with_kind(Kind::Generated, |an| an.transform(Some(node)))?;
+        let error = expr.find(0, &mut |e, depth| {
+            let ExprKind::Var(var) = e.kind else { return None };
+            if var.levels_up != depth {
+                return None;
+            }
+            let at = e.location;
+            if var.attnum == 0 {
+                return Some(
+                    Error::new(
+                        SqlState::INVALID_OBJECT_DEFINITION,
+                        "cannot use whole-row variable in column generation expression",
+                    )
+                    .with_detail(
+                        "This would cause the generated column to depend on its own value.",
+                    )
+                    .at_opt(at),
+                );
+            }
+            let column = usize::try_from(var.attnum).ok().and_then(|n| columns.get(n - 1))?;
+            (column.generated != 0).then(|| {
+                Error::new(
+                    SqlState::INVALID_OBJECT_DEFINITION,
+                    format!(
+                        "cannot use generated column \"{}\" in column generation expression",
+                        column.name
+                    ),
+                )
+                .with_detail("A generated column cannot reference another generated column.")
+                .at_opt(at)
+            })
+        });
+        if let Some(error) = error {
+            return Err(error);
+        }
+        if is_mutable(&expr) {
+            return Err(Error::new(
+                SqlState::INVALID_OBJECT_DEFINITION,
+                "generation expression is not immutable",
+            ));
+        }
+        Ok(expr)
     }
 
     /// The check constraints of `AddRelationNewConstraints`. The result is the OIDs of the new constraints.

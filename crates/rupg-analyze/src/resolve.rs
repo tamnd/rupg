@@ -1004,7 +1004,8 @@ impl Analyzer<'_> {
             | Kind::TriggerWhen
             | Kind::CallArgument
             | Kind::PartitionBound
-            | Kind::PartitionExpression => {
+            | Kind::PartitionExpression
+            | Kind::Generated => {
                 format!("set-returning functions are not allowed in {}", self.kind.name())
             }
             Kind::ValuesSingle | Kind::Other => {
