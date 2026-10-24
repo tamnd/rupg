@@ -7,6 +7,11 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Added
 
 - `pg_stat_get_autovacuum_scores` runs, so the view `pg_stat_autovacuum_scores` gives one row for each table, materialized view and TOAST table that is not temporary. The scores and the flags `do_vacuum`, `do_analyze` and `for_wraparound` come from the same steps as `relation_needs_vacanalyze`: the age of `relfrozenxid` and `relminmxid`, the counts of dead, inserted and changed rows, the settings of autovacuum and the options of the table. A TOAST table without its own options uses the options of its main table (#678).
+- `backend_xid` and `backend_xmin` of `pg_stat_activity` show the ID of the transaction of each session and the `xmin` of its snapshot. In `READ COMMITTED`, the `xmin` goes at the end of each statement, and in `REPEATABLE READ` it stays until the end of the transaction, as `PGPROC->xmin` does (#680).
+
+### Fixed
+
+- The `xmin` of `pg_current_snapshot` and `txid_current_snapshot` is the transaction of the session when it is the oldest transaction in progress, as `GetSnapshotData` gives it. Before, the session did not use its own transaction for `xmin` (#680).
 
 ## 0.1.78 (2026-10-25)
 
