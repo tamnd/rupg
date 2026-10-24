@@ -28,6 +28,7 @@ mod lock;
 mod matview;
 mod opclass;
 mod operator;
+mod owned;
 mod partition;
 mod partition_alter;
 mod partition_attach;
@@ -61,6 +62,7 @@ pub use function::{Body, REGRESS_SYMBOLS, SqlBody, find_library, function_body, 
 pub use grant::acl_roles;
 pub(crate) use lock::relkind;
 pub use lock::{Allowed, Take, lock_table};
+pub use owned::{acl_dependents, owned_objects};
 pub use rule::{RuleTree, rule_tree};
 pub(crate) use table::check_attribute_type;
 pub use trigger::trigger_when;
@@ -117,6 +119,8 @@ pub struct Defined {
     pub checks: Vec<PartitionCheck>,
     /// The partitions of `DETACH PARTITION` whose keys a foreign key refers to through the parent. Before the statement the caller checks that no row of a referencing table has a key of the partition, as `ATDetachCheckNoForeignKeyRefs` checks it, with the catalog before the statement.
     pub detached: Vec<u32>,
+    /// The roles of `DROP OWNED`. The caller removes the grants of membership that these roles made, as `shdepDropOwned` drops the rows of `pg_auth_members` with the role as the grantor.
+    pub grantors: Vec<u32>,
 }
 
 /// A partition whose rows must satisfy its partition constraint, one entry of `tab->partition_constraint`.
@@ -180,6 +184,8 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::RefreshMatViewStmt(_)
             | Node::CreateStatsStmt(_)
             | Node::AlterStatsStmt(_)
+            | Node::DropOwnedStmt(_)
+            | Node::ReassignOwnedStmt(_)
     ) || matches!(stmt, Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) || matches!(define.kind, ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_AGGREGATE))
         || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
         || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype) || alter.objtype == ObjectType::OBJECT_TYPE)
@@ -252,6 +258,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         views: Vec::new(),
         checks: Vec::new(),
         detached: Vec::new(),
+        grantors: Vec::new(),
     };
     let mut filled = None;
     let result = match stmt {
@@ -318,6 +325,8 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::AlterTSConfigurationStmt(alter) => definer.alter_ts_config(alter),
         Node::TruncateStmt(truncate) => definer.truncate(truncate),
         Node::GrantStmt(grant) => definer.grant(grant),
+        Node::DropOwnedStmt(stmt) => definer.drop_owned(stmt),
+        Node::ReassignOwnedStmt(stmt) => definer.reassign_owned(stmt),
         _ => {
             Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "this statement is not supported yet"))
         }
@@ -347,6 +356,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         views: definer.views,
         checks: definer.checks,
         detached: definer.detached,
+        grantors: definer.grantors,
     }
 }
 
@@ -481,6 +491,8 @@ pub(crate) struct Definer<'a, 'c> {
     checks: Vec<PartitionCheck>,
     /// The partitions of [`Defined::detached`].
     detached: Vec<u32>,
+    /// The roles of [`Defined::grantors`].
+    grantors: Vec<u32>,
 }
 
 /// An error for a part of a statement that rupg does not support yet.

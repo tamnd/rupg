@@ -237,7 +237,10 @@ impl Definer<'_, '_> {
             }
         }
         Self::check_user_function(&found)?;
-        self.catalog.alter_function(found.oid, |f| f.owner = new)
+        let roles = rupg_pgcatalog::roles::current();
+        let (old, new_name) = (roles.name(found.owner).unwrap_or_default(), roles.name(new));
+        let object = ObjRef::new(PG_PROC, found.oid);
+        self.catalog.set_object_owner(object, new, old, new_name.unwrap_or_default())
     }
 
     /// The function of the catalog for a candidate, or `0A000` for a built-in function.
