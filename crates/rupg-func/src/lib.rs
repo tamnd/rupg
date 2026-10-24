@@ -109,6 +109,7 @@ pub use random::Randomness;
 pub use reg::ts_config_setting;
 pub use regex::{AuthMatch, auth_compile, auth_search};
 pub use sequence::Sequences;
+pub use snapshot::XactState;
 pub use srf::{SetKernel, set_kernel};
 pub use stat::{RelationCounts, Writes};
 pub use text::quote_identifier;
@@ -235,6 +236,24 @@ pub trait Session {
     /// `MyTriggerDepth`: the number of the trigger functions that run, one in the other. It is 0 outside of a trigger.
     fn trigger_depth(&self) -> i32 {
         0
+    }
+    /// The ID of the transaction: `GetTopFullTransactionId` when `assign` is true, which gives an ID to a transaction that has none, and `GetTopFullTransactionIdIfAny` when it is false. `None` when the transaction has no ID or the session has no server.
+    fn transaction_id(&self, assign: bool) -> Option<u64> {
+        let _ = assign;
+        None
+    }
+    /// `ReadNextFullTransactionId`: the ID that the next transaction gets.
+    fn next_transaction_id(&self) -> u64 {
+        3
+    }
+    /// The state of the transaction `xid`, which is before [`Session::next_transaction_id`], or `None` when the session does not know it.
+    fn transaction_state(&self, xid: u32) -> Option<XactState> {
+        let _ = xid;
+        None
+    }
+    /// `GetActiveSnapshot`: the snapshot of the statement as a `pg_snapshot`, or `None` when the statement has no snapshot.
+    fn current_snapshot(&self) -> Option<rupg_types::Snapshot> {
+        None
     }
     /// The text of `version()`.
     fn version(&self) -> String;

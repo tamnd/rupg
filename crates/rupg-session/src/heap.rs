@@ -7,6 +7,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use rupg_analyze::{Derived, Unique};
 use rupg_common::{Error, Result, SqlState};
+use rupg_func::XactState;
 use rupg_types::{Value, oid};
 
 /// The key of a row in a unique index with an expression or a predicate, or `None` for a row that is not in the index, as [`rupg_exec::index_key`] gives it.
@@ -30,6 +31,10 @@ struct State {
     next_xid: u32,
     /// The transactions that are in progress, `ProcArray`.
     running: BTreeSet<u32>,
+    /// `latestCompletedXid`: the last transaction that committed or aborted, or 0.
+    latest_completed: u32,
+    /// The transactions that aborted, the aborted entries of `pg_xact`. A transaction before `next_xid` that is not in progress and did not abort committed.
+    aborted: BTreeSet<u32>,
     /// The process ID of the session of each transaction that is in progress.
     owners: HashMap<u32, i32>,
     /// The versions of the rows of each table, by the OID of the database and the OID of the table.
@@ -381,6 +386,22 @@ pub(crate) struct Snapshot {
     xmax: u32,
     /// The transactions before `xmax` that were in progress.
     running: BTreeSet<u32>,
+    /// `latestCompletedXid + 1`, the `xmax` of the snapshot of `GetSnapshotData`. No transaction from this ID on ended, so the visibility is the same with this ID as with `xmax`.
+    completed: u32,
+}
+
+impl Snapshot {
+    /// The snapshot as a `pg_snapshot`, as `GetSnapshotData` makes it for the session whose transaction is `own`: `latestCompletedXid + 1` as `xmax`, the transactions in progress before it without `own`, and the first of them as `xmin`.
+    pub(crate) fn exported(&self, own: u32) -> rupg_types::Snapshot {
+        let xip: Vec<u64> = self
+            .running
+            .range(..self.completed)
+            .filter(|&&xid| xid != own)
+            .map(|&xid| u64::from(xid))
+            .collect();
+        let xmax = u64::from(self.completed);
+        rupg_types::Snapshot { xmin: xip.first().copied().unwrap_or(xmax), xmax, xip }
+    }
 }
 
 /// What a statement sees of the rows: its snapshot, and the transaction and the command that run it.
@@ -448,10 +469,31 @@ impl Heap {
         xid
     }
 
+    /// `ReadNextFullTransactionId`: the transaction ID that the next transaction that writes gets.
+    pub(crate) fn next_xid(&self) -> u32 {
+        self.state().next_xid.max(FIRST_NORMAL_XID)
+    }
+
+    /// The state of the transaction `xid` in `pg_xact` and `ProcArray`, for a transaction before [`Heap::next_xid`].
+    pub(crate) fn xact_state(&self, xid: u32) -> XactState {
+        let state = self.state();
+        if state.running.contains(&xid) {
+            XactState::InProgress
+        } else if state.aborted.contains(&xid) {
+            XactState::Aborted
+        } else {
+            XactState::Committed
+        }
+    }
+
     /// `GetSnapshotData`: the transactions whose changes are not visible now.
     pub(crate) fn snapshot(&self) -> Snapshot {
         let state = self.state();
-        Snapshot { xmax: state.next_xid.max(FIRST_NORMAL_XID), running: state.running.clone() }
+        Snapshot {
+            xmax: state.next_xid.max(FIRST_NORMAL_XID),
+            running: state.running.clone(),
+            completed: (state.latest_completed + 1).max(FIRST_NORMAL_XID),
+        }
     }
 
     /// The rows of a table that the view sees, `HeapTupleSatisfiesMVCC`. Each row ends with the ID of its version.
@@ -766,6 +808,7 @@ impl Heap {
     pub(crate) fn commit(&self, xid: u32) {
         let mut state = self.state();
         state.running.remove(&xid);
+        state.latest_completed = state.latest_completed.max(xid);
         state.owners.remove(&xid);
         state.waits.remove(&xid);
         state.rechecks.retain(|recheck| recheck.xid != xid);
@@ -783,6 +826,8 @@ impl Heap {
             }
         }
         state.running.remove(&xid);
+        state.latest_completed = state.latest_completed.max(xid);
+        state.aborted.insert(xid);
         state.owners.remove(&xid);
         state.waits.remove(&xid);
         state.rechecks.retain(|recheck| recheck.xid != xid);
