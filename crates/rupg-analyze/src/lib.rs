@@ -268,6 +268,8 @@ pub(crate) struct Analyzer<'a> {
     assign: Option<plpgsql::Assign>,
     /// `p_rteperminfos`: the privileges that the statement needs on its relations, for all the levels of the statement.
     perms: Vec<PermInfo>,
+    /// The OIDs of the functions that the statement calls, for all the levels of the statement and the queries of its views.
+    funcs: Vec<u32>,
     /// The index in [`Analyzer::perms`] of the privileges of the target table of the write that the analyzer reads now, or `None`.
     target_perm: Option<usize>,
 }
@@ -323,6 +325,7 @@ impl<'a> Analyzer<'a> {
             variables: None,
             assign: None,
             perms: Vec::new(),
+            funcs: Vec::new(),
             target_perm: None,
         }
     }
@@ -437,6 +440,7 @@ fn analyze_in<'a>(
     query.params = analyzer.params;
     query.notices = analyzer.notices;
     query.perms = analyzer.perms;
+    query.funcs = analyzer.funcs;
     Ok(query)
 }
 

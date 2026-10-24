@@ -86,12 +86,23 @@ impl Analyzer<'_> {
             None => 0,
         };
         shift(query, self.perms.len());
+        self.funcs.append(&mut query.funcs);
         for mut perm in perms {
             if perm.check_as == 0 {
                 perm.check_as = owner;
             }
             self.perms.push(perm);
         }
+    }
+
+    /// The functions that a stored expression of the table calls, such as a default, a generation expression or a check constraint. The executor checks `EXECUTE` on them as on the calls of the statement.
+    pub(crate) fn note_funcs(&mut self, expr: &Expr) {
+        expr.find(0, &mut |e, _| {
+            if let ExprKind::Func(f) = &e.kind {
+                self.funcs.push(f.oid);
+            }
+            None::<()>
+        });
     }
 
     /// `markVarForSelectPriv`: each column of a relation that the expression reads needs `SELECT`, in the privileges of the relation at the level of the column.

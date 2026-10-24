@@ -921,6 +921,25 @@ impl Definer<'_, '_> {
                 }
             });
         }
+        let generated = rel.and_then(|r| r.column(number)).map_or(0, |c| c.generated);
+        if generated != 0 {
+            let error = Error::new(
+                SqlState::SYNTAX_ERROR,
+                format!(
+                    "column \"{column}\" of relation \"{}\" is a generated column",
+                    target.name
+                ),
+            );
+            return Err(match def {
+                Some(_) => {
+                    error.with_hint("Use ALTER TABLE ... ALTER COLUMN ... SET EXPRESSION instead.")
+                }
+                None if generated == b's' => {
+                    error.with_hint("Use ALTER TABLE ... ALTER COLUMN ... DROP EXPRESSION instead.")
+                }
+                None => error,
+            });
+        }
         let (ty, typmod) = rel.and_then(|r| r.column(number)).map_or((0, -1), |c| (c.ty, c.typmod));
         self.catalog.remove_default(target.oid, number);
         let Some(node) = def else { return Ok(()) };

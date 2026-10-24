@@ -1,0 +1,192 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE SCHEMA generated_stored_tests;
+CREATE SCHEMA
+> GRANT USAGE ON SCHEMA generated_stored_tests TO PUBLIC;
+GRANT
+> SET search_path = generated_stored_tests;
+SET
+search_path=generated_stored_tests
+> CREATE TABLE gtest0 (a int PRIMARY KEY, b int GENERATED ALWAYS AS (55) STORED);
+CREATE TABLE
+> CREATE TABLE gtest1 (a int PRIMARY KEY, b int GENERATED ALWAYS AS (a * 2) STORED);
+CREATE TABLE
+> INSERT INTO gtest1 VALUES (1), (2);
+INSERT 0 2
+> CREATE TABLE gtest2 (a int PRIMARY KEY, b int GENERATED ALWAYS AS (NULL) STORED);
+CREATE TABLE
+> INSERT INTO gtest2 VALUES (1);
+INSERT 0 1
+> SELECT * FROM gtest2;
+fields a@gtest2.1:23:4:-1,b@gtest2.2:23:4:-1
+row 1,NULL
+SELECT 1
+> CREATE TABLE gtest_varlena (a varchar, b varchar GENERATED ALWAYS AS (a) STORED);
+CREATE TABLE
+> INSERT INTO gtest_varlena (a) VALUES('01234567890123456789');
+INSERT 0 1
+> INSERT INTO gtest_varlena (a) VALUES(NULL);
+INSERT 0 1
+> SELECT * FROM gtest_varlena ORDER BY a;
+fields a@gtest_varlena.1:1043:-1:-1,b@gtest_varlena.2:1043:-1:-1
+row 01234567890123456789,01234567890123456789
+row NULL,NULL
+SELECT 2
+> DROP TABLE gtest_varlena;
+DROP TABLE
+> CREATE TYPE double_int as (a int, b int);
+CREATE TYPE
+> CREATE TABLE gtest4 (
+>>     a int,
+>>     b double_int GENERATED ALWAYS AS ((a * 2, a * 3)) STORED
+>> );
+CREATE TABLE
+> INSERT INTO gtest4 VALUES (1), (6);
+INSERT 0 2
+> SELECT a, (b).a AS ba, (b).b AS bb FROM gtest4;
+fields a@gtest4.1:23:4:-1,ba:23:4:-1,bb:23:4:-1
+row 1,2,3
+row 6,12,18
+SELECT 2
+> DROP TABLE gtest4;
+DROP TABLE
+> DROP TYPE double_int;
+DROP TYPE
+> CREATE TABLE gtest_tableoid (
+>>   a int PRIMARY KEY,
+>>   b bool GENERATED ALWAYS AS (tableoid <> 0) STORED
+>> );
+CREATE TABLE
+> INSERT INTO gtest_tableoid VALUES (1), (2);
+INSERT 0 2
+> ALTER TABLE gtest_tableoid ADD COLUMN
+>>   c regclass GENERATED ALWAYS AS (tableoid) STORED;
+ALTER TABLE
+> SELECT * FROM gtest_tableoid;
+fields a@gtest_tableoid.1:23:4:-1,b@gtest_tableoid.2:16:1:-1,c@gtest_tableoid.3:2205:4:-1
+row 1,t,gtest_tableoid
+row 2,t,gtest_tableoid
+SELECT 2
+> ALTER TABLE gtest_tableoid ADD COLUMN d int GENERATED ALWAYS AS (c::oid::int) STORED;
+ERROR 42P17 cannot use generated column "c" in column generation expression
+DETAIL A generated column cannot reference another generated column.
+> ALTER TABLE gtest_tableoid ADD COLUMN d int GENERATED ALWAYS AS (d * 2) STORED;
+ERROR 42P17 cannot use generated column "d" in column generation expression
+DETAIL A generated column cannot reference another generated column.
+> ALTER TABLE gtest_tableoid ADD COLUMN d int GENERATED ALWAYS AS (random()) STORED;
+ERROR 42P17 generation expression is not immutable
+> ALTER TABLE gtest_tableoid ADD COLUMN d int GENERATED ALWAYS AS (a * 5) STORED;
+ALTER TABLE
+> SELECT a, d FROM gtest_tableoid ORDER BY a;
+fields a@gtest_tableoid.1:23:4:-1,d@gtest_tableoid.4:23:4:-1
+row 1,5
+row 2,10
+SELECT 2
+> ALTER TABLE gtest_tableoid ALTER COLUMN d SET DEFAULT 1;
+ERROR 42601 column "d" of relation "gtest_tableoid" is a generated column
+HINT Use ALTER TABLE ... ALTER COLUMN ... SET EXPRESSION instead.
+> ALTER TABLE gtest_tableoid ALTER COLUMN d DROP DEFAULT;
+ERROR 42601 column "d" of relation "gtest_tableoid" is a generated column
+HINT Use ALTER TABLE ... ALTER COLUMN ... DROP EXPRESSION instead.
+> CREATE TABLE gtest_add (x int, a int);
+CREATE TABLE
+> CREATE TABLE gtest_addc (a int, y int, x int);
+CREATE TABLE
+> ALTER TABLE gtest_addc INHERIT gtest_add;
+ALTER TABLE
+> INSERT INTO gtest_addc VALUES (1, 2, 3), (4, 5, 6);
+INSERT 0 2
+> INSERT INTO gtest_add VALUES (7, 8);
+INSERT 0 1
+> ALTER TABLE gtest_add ADD COLUMN g int GENERATED ALWAYS AS (a * 10 + x) STORED;
+ALTER TABLE
+> SELECT * FROM gtest_add ORDER BY a;
+fields x@gtest_add.1:23:4:-1,a@gtest_add.2:23:4:-1,g@gtest_add.3:23:4:-1
+row 3,1,13
+row 6,4,46
+row 7,8,87
+SELECT 3
+> SELECT * FROM gtest_addc ORDER BY a;
+fields a@gtest_addc.1:23:4:-1,y@gtest_addc.2:23:4:-1,x@gtest_addc.3:23:4:-1,g@gtest_addc.4:23:4:-1
+row 1,2,3,13
+row 4,5,6,46
+SELECT 2
+> INSERT INTO gtest_addc (a, x) VALUES (9, 1);
+INSERT 0 1
+> UPDATE gtest_add SET x = x + 1;
+UPDATE 4
+> SELECT * FROM gtest_addc ORDER BY a;
+fields a@gtest_addc.1:23:4:-1,y@gtest_addc.2:23:4:-1,x@gtest_addc.3:23:4:-1,g@gtest_addc.4:23:4:-1
+row 1,2,4,14
+row 4,5,7,47
+row 9,NULL,2,92
+SELECT 3
+> DROP TABLE gtest_add CASCADE;
+NOTICE 00000 drop cascades to table gtest_addc
+DROP TABLE
+> CREATE TABLE gtest10 (a int PRIMARY KEY, b int, c int GENERATED ALWAYS AS (b * 2) STORED);
+CREATE TABLE
+> ALTER TABLE gtest10 DROP COLUMN b;
+ERROR 2BP01 cannot drop column b of table gtest10 because other objects depend on it
+DETAIL column c of table gtest10 depends on column b of table gtest10
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> ALTER TABLE gtest10 DROP COLUMN b CASCADE;
+NOTICE 00000 drop cascades to column c of table gtest10
+ALTER TABLE
+> CREATE TABLE gtest10a (a int PRIMARY KEY, b int GENERATED ALWAYS AS (a * 2) STORED);
+CREATE TABLE
+> ALTER TABLE gtest10a DROP COLUMN b;
+ALTER TABLE
+> INSERT INTO gtest10a (a) VALUES (1);
+INSERT 0 1
+> CREATE USER regress_user11;
+CREATE ROLE
+> CREATE TABLE gtest11 (a int PRIMARY KEY, b int, c int GENERATED ALWAYS AS (b * 2) STORED);
+CREATE TABLE
+> INSERT INTO gtest11 VALUES (1, 10), (2, 20);
+INSERT 0 2
+> GRANT SELECT (a, c) ON gtest11 TO regress_user11;
+GRANT
+> CREATE FUNCTION gf1(a int) RETURNS int AS $$ SELECT a * 3 $$ IMMUTABLE LANGUAGE SQL;
+CREATE FUNCTION
+> REVOKE ALL ON FUNCTION gf1(int) FROM PUBLIC;
+REVOKE
+> CREATE TABLE gtest12 (a int PRIMARY KEY, b int, c int GENERATED ALWAYS AS (gf1(b)) STORED);
+CREATE TABLE
+> INSERT INTO gtest12 VALUES (1, 10), (2, 20);
+INSERT 0 2
+> GRANT SELECT (a, c), INSERT ON gtest12 TO regress_user11;
+GRANT
+> SET ROLE regress_user11;
+SET
+is_superuser=off
+> SELECT a, b FROM gtest11;
+ERROR 42501 permission denied for table gtest11
+> SELECT a, c FROM gtest11;
+fields a@gtest11.1:23:4:-1,c@gtest11.3:23:4:-1
+row 1,20
+row 2,40
+SELECT 2
+> SELECT gf1(10);
+ERROR 42501 permission denied for function gf1
+> INSERT INTO gtest12 VALUES (3, 30), (4, 40);
+ERROR 42501 permission denied for function gf1
+> SELECT a, c FROM gtest12;
+fields a@gtest12.1:23:4:-1,c@gtest12.3:23:4:-1
+row 1,30
+row 2,60
+SELECT 2
+> RESET ROLE;
+RESET
+is_superuser=on
+> DROP FUNCTION gf1(int);
+ERROR 2BP01 cannot drop function gf1(integer) because other objects depend on it
+DETAIL column c of table gtest12 depends on function gf1(integer)
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP TABLE gtest11, gtest12;
+DROP TABLE
+> DROP FUNCTION gf1(int);
+DROP FUNCTION
+> DROP USER regress_user11;
+DROP ROLE

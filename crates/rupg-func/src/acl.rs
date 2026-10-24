@@ -965,6 +965,38 @@ pub fn check_permissions(perms: &[PermInfo], session: &dyn Session) -> Result<()
     Ok(())
 }
 
+/// The `EXECUTE` checks of `ExecInitFunc` and `ExecInitAgg`: an error for the first function that the current user cannot call. A superuser can call each function, and a function that does not exist is not checked.
+///
+/// # Errors
+///
+/// `permission denied` for the function or the aggregate.
+pub fn check_execute(funcs: &[u32], session: &dyn Session) -> Result<()> {
+    if funcs.is_empty() {
+        return Ok(());
+    }
+    let role = current_user(session);
+    if superuser(role) {
+        return Ok(());
+    }
+    for (i, &func) in funcs.iter().enumerate() {
+        if funcs[..i].contains(&func)
+            || object_check(Owned::Function, func, role, ACL_EXECUTE, session)? != Some(false)
+        {
+            continue;
+        }
+        let proc = builtin::proc_by_oid(func);
+        let object = if proc.is_some_and(|p| p.kind == b'a') { "aggregate" } else { "function" };
+        let name = proc
+            .map(|p| p.name.to_string())
+            .or_else(|| session.catalog().and_then(|c| c.function(func)).map(|f| f.name.clone()));
+        return Err(Error::new(
+            SqlState::INSUFFICIENT_PRIVILEGE,
+            format!("permission denied for {object} {}", name.unwrap_or_default()),
+        ));
+    }
+    Ok(())
+}
+
 /// The privileges that `nextval` needs: `USAGE` or `UPDATE`.
 pub(crate) const USAGE_UPDATE: u32 = ACL_USAGE | ACL_UPDATE;
 /// The privileges that `currval` and `lastval` need: `SELECT` or `USAGE`.

@@ -713,6 +713,9 @@ impl Analyzer<'_> {
             _ => None,
         };
         let prokind = proc.map_or(b'f', |p| p.kind);
+        if let Detail::Normal(c) = &detail {
+            self.funcs.push(c.oid);
+        }
         let found = matches!(detail, Detail::Normal(_) | Detail::Coercion(_));
         if proc_call && found && prokind != b'p' {
             return Err(Error::new(
@@ -1233,6 +1236,7 @@ impl Analyzer<'_> {
             )
             .at_opt(at));
         }
+        self.funcs.push(op.code);
         Ok(Expr {
             kind: ExprKind::Func(Func {
                 oid: op.code,

@@ -188,6 +188,7 @@ impl Analyzer<'_> {
             constraint_deps: Vec::new(),
             shown: None,
             perms: Vec::new(),
+            funcs: Vec::new(),
         })
     }
 
