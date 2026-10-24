@@ -1,0 +1,695 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE inhx (xx text DEFAULT 'text');
+CREATE TABLE
+> CREATE TABLE ctla (aa TEXT);
+CREATE TABLE
+> CREATE TABLE ctlb (bb TEXT) INHERITS (ctla);
+CREATE TABLE
+> CREATE TABLE foo (LIKE nonexistent);
+ERROR 42P01 relation "nonexistent" does not exist at 24
+> CREATE TABLE inhe (ee text, LIKE inhx) inherits (ctlb);
+CREATE TABLE
+> INSERT INTO inhe VALUES ('ee-col1', 'ee-col2', DEFAULT, 'ee-col4');
+INSERT 0 1
+> SELECT * FROM inhe; 
+fields aa@inhe.1:25:-1:-1,bb@inhe.2:25:-1:-1,ee@inhe.3:25:-1:-1,xx@inhe.4:25:-1:-1
+row ee-col1,ee-col2,NULL,ee-col4
+SELECT 1
+> SELECT * FROM inhx; 
+fields xx@inhx.1:25:-1:-1
+SELECT 0
+> SELECT * FROM ctlb; 
+fields aa@ctlb.1:25:-1:-1,bb@ctlb.2:25:-1:-1
+row ee-col1,ee-col2
+SELECT 1
+> SELECT * FROM ctla; 
+fields aa@ctla.1:25:-1:-1
+row ee-col1
+SELECT 1
+> CREATE TABLE inhf (LIKE inhx, LIKE inhx); 
+ERROR 42701 column "xx" specified more than once
+> CREATE TABLE inhf (LIKE inhx INCLUDING DEFAULTS INCLUDING CONSTRAINTS);
+CREATE TABLE
+> INSERT INTO inhf DEFAULT VALUES;
+INSERT 0 1
+> SELECT * FROM inhf; 
+fields xx@inhf.1:25:-1:-1
+row text
+SELECT 1
+> ALTER TABLE inhx add constraint foo CHECK (xx = 'text');
+ALTER TABLE
+> ALTER TABLE inhx ADD PRIMARY KEY (xx);
+ALTER TABLE
+> CREATE TABLE inhg (LIKE inhx); 
+CREATE TABLE
+> INSERT INTO inhg VALUES ('foo');
+INSERT 0 1
+> DROP TABLE inhg;
+DROP TABLE
+> CREATE TABLE inhg (x text, LIKE inhx INCLUDING CONSTRAINTS, y text); 
+CREATE TABLE
+> INSERT INTO inhg VALUES ('x', 'text', 'y'); 
+INSERT 0 1
+> INSERT INTO inhg VALUES ('x', 'text', 'y'); 
+INSERT 0 1
+> INSERT INTO inhg VALUES ('x', 'foo',  'y');  
+ERROR 23514 new row for relation "inhg" violates check constraint "foo"
+DETAIL Failing row contains (x, foo, y).
+> SELECT * FROM inhg; 
+fields x@inhg.1:25:-1:-1,xx@inhg.2:25:-1:-1,y@inhg.3:25:-1:-1
+row x,text,y
+row x,text,y
+SELECT 2
+> DROP TABLE inhg;
+DROP TABLE
+> CREATE TABLE test_like_id_1 (a bigint GENERATED ALWAYS AS IDENTITY, b text);
+CREATE TABLE
+> SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attgenerated, a.attidentity, a.attstorage, a.attcompression, pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = 'test_like_id_1'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1,attnotnull@pg_attribute.12:16:1:-1,attgenerated@pg_attribute.16:18:1:-1,attidentity@pg_attribute.15:18:1:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,pg_get_expr:25:-1:-1,col_description:25:-1:-1
+row a,bigint,t,,a,p,,NULL,NULL
+row b,text,f,,,x,,NULL,NULL
+SELECT 2
+> SELECT conname, contype, conislocal, coninhcount, connoinherit, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'test_like_id_1'::regclass ORDER BY conname COLLATE "C";
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1,pg_get_constraintdef:25:-1:-1
+row test_like_id_1_a_not_null,n,t,0,f,NOT NULL a
+SELECT 1
+> SELECT indexrelid::regclass::text, pg_get_indexdef(indexrelid), obj_description(indexrelid, 'pg_class') FROM pg_index WHERE indrelid = 'test_like_id_1'::regclass ORDER BY 1;
+fields indexrelid:25:-1:-1,pg_get_indexdef:25:-1:-1,obj_description:25:-1:-1
+SELECT 0
+> INSERT INTO test_like_id_1 (b) VALUES ('b1');
+INSERT 0 1
+> SELECT * FROM test_like_id_1;
+fields a@test_like_id_1.1:20:8:-1,b@test_like_id_1.2:25:-1:-1
+row 1,b1
+SELECT 1
+> CREATE TABLE test_like_id_2 (LIKE test_like_id_1);
+CREATE TABLE
+> SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attgenerated, a.attidentity, a.attstorage, a.attcompression, pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = 'test_like_id_2'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1,attnotnull@pg_attribute.12:16:1:-1,attgenerated@pg_attribute.16:18:1:-1,attidentity@pg_attribute.15:18:1:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,pg_get_expr:25:-1:-1,col_description:25:-1:-1
+row a,bigint,t,,,p,,NULL,NULL
+row b,text,f,,,x,,NULL,NULL
+SELECT 2
+> SELECT conname, contype, conislocal, coninhcount, connoinherit, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'test_like_id_2'::regclass ORDER BY conname COLLATE "C";
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1,pg_get_constraintdef:25:-1:-1
+row test_like_id_1_a_not_null,n,t,0,f,NOT NULL a
+SELECT 1
+> SELECT indexrelid::regclass::text, pg_get_indexdef(indexrelid), obj_description(indexrelid, 'pg_class') FROM pg_index WHERE indrelid = 'test_like_id_2'::regclass ORDER BY 1;
+fields indexrelid:25:-1:-1,pg_get_indexdef:25:-1:-1,obj_description:25:-1:-1
+SELECT 0
+> INSERT INTO test_like_id_2 (b) VALUES ('b2');
+ERROR 23502 null value in column "a" of relation "test_like_id_2" violates not-null constraint
+DETAIL Failing row contains (null, b2).
+> SELECT * FROM test_like_id_2;
+fields a@test_like_id_2.1:20:8:-1,b@test_like_id_2.2:25:-1:-1
+SELECT 0
+> CREATE TABLE test_like_id_3 (LIKE test_like_id_1 INCLUDING IDENTITY);
+CREATE TABLE
+> SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attgenerated, a.attidentity, a.attstorage, a.attcompression, pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = 'test_like_id_3'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1,attnotnull@pg_attribute.12:16:1:-1,attgenerated@pg_attribute.16:18:1:-1,attidentity@pg_attribute.15:18:1:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,pg_get_expr:25:-1:-1,col_description:25:-1:-1
+row a,bigint,t,,a,p,,NULL,NULL
+row b,text,f,,,x,,NULL,NULL
+SELECT 2
+> SELECT conname, contype, conislocal, coninhcount, connoinherit, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'test_like_id_3'::regclass ORDER BY conname COLLATE "C";
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1,pg_get_constraintdef:25:-1:-1
+row test_like_id_1_a_not_null,n,t,0,f,NOT NULL a
+SELECT 1
+> SELECT indexrelid::regclass::text, pg_get_indexdef(indexrelid), obj_description(indexrelid, 'pg_class') FROM pg_index WHERE indrelid = 'test_like_id_3'::regclass ORDER BY 1;
+fields indexrelid:25:-1:-1,pg_get_indexdef:25:-1:-1,obj_description:25:-1:-1
+SELECT 0
+> INSERT INTO test_like_id_3 (b) VALUES ('b3');
+INSERT 0 1
+> SELECT * FROM test_like_id_3;
+fields a@test_like_id_3.1:20:8:-1,b@test_like_id_3.2:25:-1:-1
+row 1,b3
+SELECT 1
+> DROP TABLE test_like_id_1, test_like_id_2, test_like_id_3;
+DROP TABLE
+> CREATE TABLE test_like_gen_1 (a int, b int GENERATED ALWAYS AS (a * 2) STORED);
+CREATE TABLE
+> SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attgenerated, a.attidentity, a.attstorage, a.attcompression, pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = 'test_like_gen_1'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1,attnotnull@pg_attribute.12:16:1:-1,attgenerated@pg_attribute.16:18:1:-1,attidentity@pg_attribute.15:18:1:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,pg_get_expr:25:-1:-1,col_description:25:-1:-1
+row a,integer,f,,,p,,NULL,NULL
+row b,integer,f,s,,p,,(a * 2),NULL
+SELECT 2
+> SELECT conname, contype, conislocal, coninhcount, connoinherit, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'test_like_gen_1'::regclass ORDER BY conname COLLATE "C";
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1,pg_get_constraintdef:25:-1:-1
+SELECT 0
+> SELECT indexrelid::regclass::text, pg_get_indexdef(indexrelid), obj_description(indexrelid, 'pg_class') FROM pg_index WHERE indrelid = 'test_like_gen_1'::regclass ORDER BY 1;
+fields indexrelid:25:-1:-1,pg_get_indexdef:25:-1:-1,obj_description:25:-1:-1
+SELECT 0
+> INSERT INTO test_like_gen_1 (a) VALUES (1);
+INSERT 0 1
+> SELECT * FROM test_like_gen_1;
+fields a@test_like_gen_1.1:23:4:-1,b@test_like_gen_1.2:23:4:-1
+row 1,2
+SELECT 1
+> CREATE TABLE test_like_gen_2 (LIKE test_like_gen_1);
+CREATE TABLE
+> SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attgenerated, a.attidentity, a.attstorage, a.attcompression, pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = 'test_like_gen_2'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1,attnotnull@pg_attribute.12:16:1:-1,attgenerated@pg_attribute.16:18:1:-1,attidentity@pg_attribute.15:18:1:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,pg_get_expr:25:-1:-1,col_description:25:-1:-1
+row a,integer,f,,,p,,NULL,NULL
+row b,integer,f,,,p,,NULL,NULL
+SELECT 2
+> SELECT conname, contype, conislocal, coninhcount, connoinherit, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'test_like_gen_2'::regclass ORDER BY conname COLLATE "C";
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1,pg_get_constraintdef:25:-1:-1
+SELECT 0
+> SELECT indexrelid::regclass::text, pg_get_indexdef(indexrelid), obj_description(indexrelid, 'pg_class') FROM pg_index WHERE indrelid = 'test_like_gen_2'::regclass ORDER BY 1;
+fields indexrelid:25:-1:-1,pg_get_indexdef:25:-1:-1,obj_description:25:-1:-1
+SELECT 0
+> INSERT INTO test_like_gen_2 (a) VALUES (1);
+INSERT 0 1
+> SELECT * FROM test_like_gen_2;
+fields a@test_like_gen_2.1:23:4:-1,b@test_like_gen_2.2:23:4:-1
+row 1,NULL
+SELECT 1
+> CREATE TABLE test_like_gen_3 (LIKE test_like_gen_1 INCLUDING GENERATED);
+CREATE TABLE
+> SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attgenerated, a.attidentity, a.attstorage, a.attcompression, pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = 'test_like_gen_3'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1,attnotnull@pg_attribute.12:16:1:-1,attgenerated@pg_attribute.16:18:1:-1,attidentity@pg_attribute.15:18:1:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,pg_get_expr:25:-1:-1,col_description:25:-1:-1
+row a,integer,f,,,p,,NULL,NULL
+row b,integer,f,s,,p,,(a * 2),NULL
+SELECT 2
+> SELECT conname, contype, conislocal, coninhcount, connoinherit, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'test_like_gen_3'::regclass ORDER BY conname COLLATE "C";
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1,pg_get_constraintdef:25:-1:-1
+SELECT 0
+> SELECT indexrelid::regclass::text, pg_get_indexdef(indexrelid), obj_description(indexrelid, 'pg_class') FROM pg_index WHERE indrelid = 'test_like_gen_3'::regclass ORDER BY 1;
+fields indexrelid:25:-1:-1,pg_get_indexdef:25:-1:-1,obj_description:25:-1:-1
+SELECT 0
+> INSERT INTO test_like_gen_3 (a) VALUES (1);
+INSERT 0 1
+> SELECT * FROM test_like_gen_3;
+fields a@test_like_gen_3.1:23:4:-1,b@test_like_gen_3.2:23:4:-1
+row 1,2
+SELECT 1
+> DROP TABLE test_like_gen_1, test_like_gen_2, test_like_gen_3;
+DROP TABLE
+> CREATE TABLE test_like_4 (b int DEFAULT 42,
+>>   c int GENERATED ALWAYS AS (a * 2) STORED,
+>>   a int CHECK (a > 0));
+CREATE TABLE
+> SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attgenerated, a.attidentity, a.attstorage, a.attcompression, pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = 'test_like_4'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1,attnotnull@pg_attribute.12:16:1:-1,attgenerated@pg_attribute.16:18:1:-1,attidentity@pg_attribute.15:18:1:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,pg_get_expr:25:-1:-1,col_description:25:-1:-1
+row b,integer,f,,,p,,42,NULL
+row c,integer,f,s,,p,,(a * 2),NULL
+row a,integer,f,,,p,,NULL,NULL
+SELECT 3
+> SELECT conname, contype, conislocal, coninhcount, connoinherit, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'test_like_4'::regclass ORDER BY conname COLLATE "C";
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1,pg_get_constraintdef:25:-1:-1
+row test_like_4_a_check,c,t,0,f,CHECK ((a > 0))
+SELECT 1
+> SELECT indexrelid::regclass::text, pg_get_indexdef(indexrelid), obj_description(indexrelid, 'pg_class') FROM pg_index WHERE indrelid = 'test_like_4'::regclass ORDER BY 1;
+fields indexrelid:25:-1:-1,pg_get_indexdef:25:-1:-1,obj_description:25:-1:-1
+SELECT 0
+> CREATE TABLE test_like_4a (LIKE test_like_4);
+CREATE TABLE
+> CREATE TABLE test_like_4b (LIKE test_like_4 INCLUDING DEFAULTS);
+CREATE TABLE
+> CREATE TABLE test_like_4c (LIKE test_like_4 INCLUDING GENERATED);
+CREATE TABLE
+> CREATE TABLE test_like_4d (LIKE test_like_4 INCLUDING DEFAULTS INCLUDING GENERATED);
+CREATE TABLE
+> SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attgenerated, a.attidentity, a.attstorage, a.attcompression, pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = 'test_like_4a'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1,attnotnull@pg_attribute.12:16:1:-1,attgenerated@pg_attribute.16:18:1:-1,attidentity@pg_attribute.15:18:1:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,pg_get_expr:25:-1:-1,col_description:25:-1:-1
+row b,integer,f,,,p,,NULL,NULL
+row c,integer,f,,,p,,NULL,NULL
+row a,integer,f,,,p,,NULL,NULL
+SELECT 3
+> SELECT conname, contype, conislocal, coninhcount, connoinherit, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'test_like_4a'::regclass ORDER BY conname COLLATE "C";
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1,pg_get_constraintdef:25:-1:-1
+SELECT 0
+> SELECT indexrelid::regclass::text, pg_get_indexdef(indexrelid), obj_description(indexrelid, 'pg_class') FROM pg_index WHERE indrelid = 'test_like_4a'::regclass ORDER BY 1;
+fields indexrelid:25:-1:-1,pg_get_indexdef:25:-1:-1,obj_description:25:-1:-1
+SELECT 0
+> INSERT INTO test_like_4a (a) VALUES(11);
+INSERT 0 1
+> SELECT a, b, c FROM test_like_4a;
+fields a@test_like_4a.3:23:4:-1,b@test_like_4a.1:23:4:-1,c@test_like_4a.2:23:4:-1
+row 11,NULL,NULL
+SELECT 1
+> SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attgenerated, a.attidentity, a.attstorage, a.attcompression, pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = 'test_like_4b'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1,attnotnull@pg_attribute.12:16:1:-1,attgenerated@pg_attribute.16:18:1:-1,attidentity@pg_attribute.15:18:1:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,pg_get_expr:25:-1:-1,col_description:25:-1:-1
+row b,integer,f,,,p,,42,NULL
+row c,integer,f,,,p,,NULL,NULL
+row a,integer,f,,,p,,NULL,NULL
+SELECT 3
+> SELECT conname, contype, conislocal, coninhcount, connoinherit, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'test_like_4b'::regclass ORDER BY conname COLLATE "C";
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1,pg_get_constraintdef:25:-1:-1
+SELECT 0
+> SELECT indexrelid::regclass::text, pg_get_indexdef(indexrelid), obj_description(indexrelid, 'pg_class') FROM pg_index WHERE indrelid = 'test_like_4b'::regclass ORDER BY 1;
+fields indexrelid:25:-1:-1,pg_get_indexdef:25:-1:-1,obj_description:25:-1:-1
+SELECT 0
+> INSERT INTO test_like_4b (a) VALUES(11);
+INSERT 0 1
+> SELECT a, b, c FROM test_like_4b;
+fields a@test_like_4b.3:23:4:-1,b@test_like_4b.1:23:4:-1,c@test_like_4b.2:23:4:-1
+row 11,42,NULL
+SELECT 1
+> SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attgenerated, a.attidentity, a.attstorage, a.attcompression, pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = 'test_like_4c'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1,attnotnull@pg_attribute.12:16:1:-1,attgenerated@pg_attribute.16:18:1:-1,attidentity@pg_attribute.15:18:1:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,pg_get_expr:25:-1:-1,col_description:25:-1:-1
+row b,integer,f,,,p,,NULL,NULL
+row c,integer,f,s,,p,,(a * 2),NULL
+row a,integer,f,,,p,,NULL,NULL
+SELECT 3
+> SELECT conname, contype, conislocal, coninhcount, connoinherit, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'test_like_4c'::regclass ORDER BY conname COLLATE "C";
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1,pg_get_constraintdef:25:-1:-1
+SELECT 0
+> SELECT indexrelid::regclass::text, pg_get_indexdef(indexrelid), obj_description(indexrelid, 'pg_class') FROM pg_index WHERE indrelid = 'test_like_4c'::regclass ORDER BY 1;
+fields indexrelid:25:-1:-1,pg_get_indexdef:25:-1:-1,obj_description:25:-1:-1
+SELECT 0
+> INSERT INTO test_like_4c (a) VALUES(11);
+INSERT 0 1
+> SELECT a, b, c FROM test_like_4c;
+fields a@test_like_4c.3:23:4:-1,b@test_like_4c.1:23:4:-1,c@test_like_4c.2:23:4:-1
+row 11,NULL,22
+SELECT 1
+> SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attgenerated, a.attidentity, a.attstorage, a.attcompression, pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = 'test_like_4d'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1,attnotnull@pg_attribute.12:16:1:-1,attgenerated@pg_attribute.16:18:1:-1,attidentity@pg_attribute.15:18:1:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,pg_get_expr:25:-1:-1,col_description:25:-1:-1
+row b,integer,f,,,p,,42,NULL
+row c,integer,f,s,,p,,(a * 2),NULL
+row a,integer,f,,,p,,NULL,NULL
+SELECT 3
+> SELECT conname, contype, conislocal, coninhcount, connoinherit, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'test_like_4d'::regclass ORDER BY conname COLLATE "C";
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1,pg_get_constraintdef:25:-1:-1
+SELECT 0
+> SELECT indexrelid::regclass::text, pg_get_indexdef(indexrelid), obj_description(indexrelid, 'pg_class') FROM pg_index WHERE indrelid = 'test_like_4d'::regclass ORDER BY 1;
+fields indexrelid:25:-1:-1,pg_get_indexdef:25:-1:-1,obj_description:25:-1:-1
+SELECT 0
+> INSERT INTO test_like_4d (a) VALUES(11);
+INSERT 0 1
+> SELECT a, b, c FROM test_like_4d;
+fields a@test_like_4d.3:23:4:-1,b@test_like_4d.1:23:4:-1,c@test_like_4d.2:23:4:-1
+row 11,42,22
+SELECT 1
+> CREATE TABLE test_like_5 (x point, y point, z point);
+CREATE TABLE
+> CREATE TABLE test_like_5x (p int CHECK (p > 0),
+>>    q int GENERATED ALWAYS AS (p * 2) STORED);
+CREATE TABLE
+> CREATE TABLE test_like_5c (LIKE test_like_4 INCLUDING ALL)
+>>   INHERITS (test_like_5, test_like_5x);
+CREATE TABLE
+> SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attgenerated, a.attidentity, a.attstorage, a.attcompression, pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = 'test_like_5c'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1,attnotnull@pg_attribute.12:16:1:-1,attgenerated@pg_attribute.16:18:1:-1,attidentity@pg_attribute.15:18:1:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,pg_get_expr:25:-1:-1,col_description:25:-1:-1
+row x,point,f,,,p,,NULL,NULL
+row y,point,f,,,p,,NULL,NULL
+row z,point,f,,,p,,NULL,NULL
+row p,integer,f,,,p,,NULL,NULL
+row q,integer,f,s,,p,,(p * 2),NULL
+row b,integer,f,,,p,,42,NULL
+row c,integer,f,s,,p,,(a * 2),NULL
+row a,integer,f,,,p,,NULL,NULL
+SELECT 8
+> SELECT conname, contype, conislocal, coninhcount, connoinherit, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'test_like_5c'::regclass ORDER BY conname COLLATE "C";
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1,pg_get_constraintdef:25:-1:-1
+row test_like_4_a_check,c,t,0,f,CHECK ((a > 0))
+row test_like_5x_p_check,c,f,1,f,CHECK ((p > 0))
+SELECT 2
+> SELECT indexrelid::regclass::text, pg_get_indexdef(indexrelid), obj_description(indexrelid, 'pg_class') FROM pg_index WHERE indrelid = 'test_like_5c'::regclass ORDER BY 1;
+fields indexrelid:25:-1:-1,pg_get_indexdef:25:-1:-1,obj_description:25:-1:-1
+SELECT 0
+> CREATE TABLE test_like_6 (a int, c text, b text);
+CREATE TABLE
+> ALTER TABLE test_like_6 DROP COLUMN c;
+ALTER TABLE
+> CREATE TABLE test_like_6c (LIKE test_like_6 INCLUDING ALL);
+CREATE TABLE
+> SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attgenerated, a.attidentity, a.attstorage, a.attcompression, pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = 'test_like_6c'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1,attnotnull@pg_attribute.12:16:1:-1,attgenerated@pg_attribute.16:18:1:-1,attidentity@pg_attribute.15:18:1:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,pg_get_expr:25:-1:-1,col_description:25:-1:-1
+row a,integer,f,,,p,,NULL,NULL
+row b,text,f,,,x,,NULL,NULL
+SELECT 2
+> SELECT conname, contype, conislocal, coninhcount, connoinherit, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'test_like_6c'::regclass ORDER BY conname COLLATE "C";
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1,pg_get_constraintdef:25:-1:-1
+SELECT 0
+> SELECT indexrelid::regclass::text, pg_get_indexdef(indexrelid), obj_description(indexrelid, 'pg_class') FROM pg_index WHERE indrelid = 'test_like_6c'::regclass ORDER BY 1;
+fields indexrelid:25:-1:-1,pg_get_indexdef:25:-1:-1,obj_description:25:-1:-1
+SELECT 0
+> DROP TABLE test_like_4, test_like_4a, test_like_4b, test_like_4c, test_like_4d;
+DROP TABLE
+> DROP TABLE test_like_5, test_like_5x, test_like_5c;
+DROP TABLE
+> DROP TABLE test_like_6, test_like_6c;
+DROP TABLE
+> CREATE TABLE inhg (x text, LIKE inhx INCLUDING INDEXES, y text); 
+CREATE TABLE
+> INSERT INTO inhg VALUES (5, 10);
+INSERT 0 1
+> INSERT INTO inhg VALUES (20, 10);
+ERROR 23505 duplicate key value violates unique constraint "inhg_pkey"
+DETAIL Key (xx)=(10) already exists.
+> DROP TABLE inhg;
+DROP TABLE
+> CREATE TABLE inhg (x text, LIKE inhx INCLUDING INDEXES, PRIMARY KEY(x)); 
+ERROR 42P16 multiple primary keys for table "inhg" are not allowed
+> CREATE TABLE inhz (xx text DEFAULT 'text', yy int UNIQUE);
+CREATE TABLE
+> CREATE UNIQUE INDEX inhz_xx_idx on inhz (xx) WHERE xx <> 'test';
+CREATE INDEX
+> CREATE TABLE inhg (x text UNIQUE, LIKE inhz INCLUDING INDEXES);
+CREATE TABLE
+> INSERT INTO inhg (xx, yy, x) VALUES ('test', 5, 10);
+INSERT 0 1
+> INSERT INTO inhg (xx, yy, x) VALUES ('test', 10, 15);
+INSERT 0 1
+> INSERT INTO inhg (xx, yy, x) VALUES ('foo', 10, 15);
+ERROR 23505 duplicate key value violates unique constraint "inhg_x_key"
+DETAIL Key (x)=(15) already exists.
+> DROP TABLE inhg;
+DROP TABLE
+> DROP TABLE inhz;
+DROP TABLE
+> CREATE TABLE inhz (x text REFERENCES inhz, LIKE inhx INCLUDING INDEXES);
+CREATE TABLE
+> SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attgenerated, a.attidentity, a.attstorage, a.attcompression, pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = 'inhz'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1,attnotnull@pg_attribute.12:16:1:-1,attgenerated@pg_attribute.16:18:1:-1,attidentity@pg_attribute.15:18:1:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,pg_get_expr:25:-1:-1,col_description:25:-1:-1
+row x,text,f,,,x,,NULL,NULL
+row xx,text,t,,,x,,NULL,NULL
+SELECT 2
+> SELECT conname, contype, conislocal, coninhcount, connoinherit, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'inhz'::regclass ORDER BY conname COLLATE "C";
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1,pg_get_constraintdef:25:-1:-1
+row inhx_xx_not_null,n,t,0,f,NOT NULL xx
+row inhz_pkey,p,t,0,t,PRIMARY KEY (xx)
+row inhz_x_fkey,f,t,0,t,FOREIGN KEY (x) REFERENCES inhz(xx)
+SELECT 3
+> SELECT indexrelid::regclass::text, pg_get_indexdef(indexrelid), obj_description(indexrelid, 'pg_class') FROM pg_index WHERE indrelid = 'inhz'::regclass ORDER BY 1;
+fields indexrelid:25:-1:-1,pg_get_indexdef:25:-1:-1,obj_description:25:-1:-1
+row inhz_pkey,CREATE UNIQUE INDEX inhz_pkey ON public.inhz USING btree (xx),NULL
+SELECT 1
+> DROP TABLE inhz;
+DROP TABLE
+> CREATE TABLE ctlt1 (a text CHECK (length(a) > 2) PRIMARY KEY,
+>> 	b text CHECK (length(b) > 100));
+CREATE TABLE
+> ALTER TABLE ctlt1 ADD CONSTRAINT cc CHECK (length(b) > 100) NOT VALID;
+ALTER TABLE
+> CREATE INDEX ctlt1_b_key ON ctlt1 (b);
+CREATE INDEX
+> CREATE INDEX ctlt1_fnidx ON ctlt1 ((a || b));
+CREATE INDEX
+> COMMENT ON COLUMN ctlt1.a IS 'A';
+COMMENT
+> COMMENT ON COLUMN ctlt1.b IS 'B';
+COMMENT
+> COMMENT ON CONSTRAINT ctlt1_a_check ON ctlt1 IS 't1_a_check';
+COMMENT
+> COMMENT ON INDEX ctlt1_pkey IS 'index pkey';
+COMMENT
+> COMMENT ON INDEX ctlt1_b_key IS 'index b_key';
+COMMENT
+> ALTER TABLE ctlt1 ALTER COLUMN a SET STORAGE MAIN;
+ALTER TABLE
+> CREATE TABLE ctlt2 (c text NOT NULL);
+CREATE TABLE
+> ALTER TABLE ctlt2 ALTER COLUMN c SET STORAGE EXTERNAL;
+ALTER TABLE
+> COMMENT ON COLUMN ctlt2.c IS 'C';
+COMMENT
+> COMMENT ON CONSTRAINT ctlt2_c_not_null ON ctlt2 IS 't2_c_not_null';
+COMMENT
+> CREATE TABLE ctlt3 (a text CHECK (length(a) < 5), c text CHECK (length(c) < 7));
+CREATE TABLE
+> ALTER TABLE ctlt3 ALTER COLUMN c SET STORAGE EXTERNAL;
+ALTER TABLE
+> ALTER TABLE ctlt3 ALTER COLUMN a SET STORAGE MAIN;
+ALTER TABLE
+> CREATE INDEX ctlt3_fnidx ON ctlt3 ((a || c));
+CREATE INDEX
+> COMMENT ON COLUMN ctlt3.a IS 'A3';
+COMMENT
+> COMMENT ON COLUMN ctlt3.c IS 'C';
+COMMENT
+> COMMENT ON CONSTRAINT ctlt3_a_check ON ctlt3 IS 't3_a_check';
+COMMENT
+> CREATE TABLE ctlt4 (a text, c text);
+CREATE TABLE
+> ALTER TABLE ctlt4 ALTER COLUMN c SET STORAGE EXTERNAL;
+ALTER TABLE
+> CREATE TABLE ctlt12_storage (LIKE ctlt1 INCLUDING STORAGE, LIKE ctlt2 INCLUDING STORAGE);
+CREATE TABLE
+> SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attgenerated, a.attidentity, a.attstorage, a.attcompression, pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = 'ctlt12_storage'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1,attnotnull@pg_attribute.12:16:1:-1,attgenerated@pg_attribute.16:18:1:-1,attidentity@pg_attribute.15:18:1:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,pg_get_expr:25:-1:-1,col_description:25:-1:-1
+row a,text,t,,,m,,NULL,NULL
+row b,text,f,,,x,,NULL,NULL
+row c,text,t,,,e,,NULL,NULL
+SELECT 3
+> SELECT conname, contype, conislocal, coninhcount, connoinherit, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'ctlt12_storage'::regclass ORDER BY conname COLLATE "C";
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1,pg_get_constraintdef:25:-1:-1
+row ctlt1_a_not_null,n,t,0,f,NOT NULL a
+row ctlt2_c_not_null,n,t,0,f,NOT NULL c
+SELECT 2
+> SELECT indexrelid::regclass::text, pg_get_indexdef(indexrelid), obj_description(indexrelid, 'pg_class') FROM pg_index WHERE indrelid = 'ctlt12_storage'::regclass ORDER BY 1;
+fields indexrelid:25:-1:-1,pg_get_indexdef:25:-1:-1,obj_description:25:-1:-1
+SELECT 0
+> CREATE TABLE ctlt12_comments (LIKE ctlt1 INCLUDING COMMENTS, LIKE ctlt2 INCLUDING COMMENTS);
+CREATE TABLE
+> SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attgenerated, a.attidentity, a.attstorage, a.attcompression, pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = 'ctlt12_comments'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1,attnotnull@pg_attribute.12:16:1:-1,attgenerated@pg_attribute.16:18:1:-1,attidentity@pg_attribute.15:18:1:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,pg_get_expr:25:-1:-1,col_description:25:-1:-1
+row a,text,t,,,x,,NULL,A
+row b,text,f,,,x,,NULL,B
+row c,text,t,,,x,,NULL,C
+SELECT 3
+> SELECT conname, contype, conislocal, coninhcount, connoinherit, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'ctlt12_comments'::regclass ORDER BY conname COLLATE "C";
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1,pg_get_constraintdef:25:-1:-1
+row ctlt1_a_not_null,n,t,0,f,NOT NULL a
+row ctlt2_c_not_null,n,t,0,f,NOT NULL c
+SELECT 2
+> SELECT indexrelid::regclass::text, pg_get_indexdef(indexrelid), obj_description(indexrelid, 'pg_class') FROM pg_index WHERE indrelid = 'ctlt12_comments'::regclass ORDER BY 1;
+fields indexrelid:25:-1:-1,pg_get_indexdef:25:-1:-1,obj_description:25:-1:-1
+SELECT 0
+> SELECT conname, description FROM pg_description, pg_constraint c WHERE classoid = 'pg_constraint'::regclass AND objoid = c.oid AND c.conrelid = 'ctlt12_comments'::regclass;
+fields conname@pg_constraint.2:19:64:-1,description@pg_description.4:25:-1:-1
+row ctlt2_c_not_null,t2_c_not_null
+SELECT 1
+> CREATE TABLE ctlt1_inh (LIKE ctlt1 INCLUDING CONSTRAINTS INCLUDING COMMENTS) INHERITS (ctlt1);
+NOTICE 00000 merging column "a" with inherited definition
+NOTICE 00000 merging column "b" with inherited definition
+NOTICE 00000 merging constraint "cc" with inherited definition
+NOTICE 00000 merging constraint "ctlt1_a_check" with inherited definition
+NOTICE 00000 merging constraint "ctlt1_b_check" with inherited definition
+CREATE TABLE
+> SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attgenerated, a.attidentity, a.attstorage, a.attcompression, pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = 'ctlt1_inh'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1,attnotnull@pg_attribute.12:16:1:-1,attgenerated@pg_attribute.16:18:1:-1,attidentity@pg_attribute.15:18:1:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,pg_get_expr:25:-1:-1,col_description:25:-1:-1
+row a,text,t,,,m,,NULL,A
+row b,text,f,,,x,,NULL,B
+SELECT 2
+> SELECT conname, contype, conislocal, coninhcount, connoinherit, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'ctlt1_inh'::regclass ORDER BY conname COLLATE "C";
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1,pg_get_constraintdef:25:-1:-1
+row cc,c,t,1,f,CHECK ((length(b) > 100))
+row ctlt1_a_check,c,t,1,f,CHECK ((length(a) > 2))
+row ctlt1_a_not_null,n,t,1,f,NOT NULL a
+row ctlt1_b_check,c,t,1,f,CHECK ((length(b) > 100))
+SELECT 4
+> SELECT indexrelid::regclass::text, pg_get_indexdef(indexrelid), obj_description(indexrelid, 'pg_class') FROM pg_index WHERE indrelid = 'ctlt1_inh'::regclass ORDER BY 1;
+fields indexrelid:25:-1:-1,pg_get_indexdef:25:-1:-1,obj_description:25:-1:-1
+SELECT 0
+> SELECT description FROM pg_description, pg_constraint c WHERE classoid = 'pg_constraint'::regclass AND objoid = c.oid AND c.conrelid = 'ctlt1_inh'::regclass;
+fields description@pg_description.4:25:-1:-1
+row t1_a_check
+SELECT 1
+> CREATE TABLE ctlt13_inh () INHERITS (ctlt1, ctlt3);
+NOTICE 00000 merging multiple inherited definitions of column "a"
+CREATE TABLE
+> SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attgenerated, a.attidentity, a.attstorage, a.attcompression, pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = 'ctlt13_inh'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1,attnotnull@pg_attribute.12:16:1:-1,attgenerated@pg_attribute.16:18:1:-1,attidentity@pg_attribute.15:18:1:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,pg_get_expr:25:-1:-1,col_description:25:-1:-1
+row a,text,t,,,m,,NULL,NULL
+row b,text,f,,,x,,NULL,NULL
+row c,text,f,,,e,,NULL,NULL
+SELECT 3
+> SELECT conname, contype, conislocal, coninhcount, connoinherit, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'ctlt13_inh'::regclass ORDER BY conname COLLATE "C";
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1,pg_get_constraintdef:25:-1:-1
+row cc,c,f,1,f,CHECK ((length(b) > 100))
+row ctlt1_a_check,c,f,1,f,CHECK ((length(a) > 2))
+row ctlt1_a_not_null,n,f,1,f,NOT NULL a
+row ctlt1_b_check,c,f,1,f,CHECK ((length(b) > 100))
+row ctlt3_a_check,c,f,1,f,CHECK ((length(a) < 5))
+row ctlt3_c_check,c,f,1,f,CHECK ((length(c) < 7))
+SELECT 6
+> SELECT indexrelid::regclass::text, pg_get_indexdef(indexrelid), obj_description(indexrelid, 'pg_class') FROM pg_index WHERE indrelid = 'ctlt13_inh'::regclass ORDER BY 1;
+fields indexrelid:25:-1:-1,pg_get_indexdef:25:-1:-1,obj_description:25:-1:-1
+SELECT 0
+> CREATE TABLE ctlt13_like (LIKE ctlt3 INCLUDING CONSTRAINTS INCLUDING INDEXES INCLUDING COMMENTS INCLUDING STORAGE) INHERITS (ctlt1);
+NOTICE 00000 merging column "a" with inherited definition
+CREATE TABLE
+> SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attgenerated, a.attidentity, a.attstorage, a.attcompression, pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = 'ctlt13_like'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1,attnotnull@pg_attribute.12:16:1:-1,attgenerated@pg_attribute.16:18:1:-1,attidentity@pg_attribute.15:18:1:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,pg_get_expr:25:-1:-1,col_description:25:-1:-1
+row a,text,t,,,m,,NULL,A3
+row b,text,f,,,x,,NULL,NULL
+row c,text,f,,,e,,NULL,C
+SELECT 3
+> SELECT conname, contype, conislocal, coninhcount, connoinherit, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'ctlt13_like'::regclass ORDER BY conname COLLATE "C";
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1,pg_get_constraintdef:25:-1:-1
+row cc,c,f,1,f,CHECK ((length(b) > 100))
+row ctlt1_a_check,c,f,1,f,CHECK ((length(a) > 2))
+row ctlt1_a_not_null,n,f,1,f,NOT NULL a
+row ctlt1_b_check,c,f,1,f,CHECK ((length(b) > 100))
+row ctlt3_a_check,c,t,0,f,CHECK ((length(a) < 5))
+row ctlt3_c_check,c,t,0,f,CHECK ((length(c) < 7))
+SELECT 6
+> SELECT indexrelid::regclass::text, pg_get_indexdef(indexrelid), obj_description(indexrelid, 'pg_class') FROM pg_index WHERE indrelid = 'ctlt13_like'::regclass ORDER BY 1;
+fields indexrelid:25:-1:-1,pg_get_indexdef:25:-1:-1,obj_description:25:-1:-1
+row ctlt13_like_expr_idx,CREATE INDEX ctlt13_like_expr_idx ON public.ctlt13_like USING btree (((a || c))),NULL
+SELECT 1
+> SELECT description FROM pg_description, pg_constraint c WHERE classoid = 'pg_constraint'::regclass AND objoid = c.oid AND c.conrelid = 'ctlt13_like'::regclass;
+fields description@pg_description.4:25:-1:-1
+row t3_a_check
+SELECT 1
+> CREATE TABLE ctlt_all (LIKE ctlt1 INCLUDING ALL);
+CREATE TABLE
+> SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attgenerated, a.attidentity, a.attstorage, a.attcompression, pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = 'ctlt_all'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1,attnotnull@pg_attribute.12:16:1:-1,attgenerated@pg_attribute.16:18:1:-1,attidentity@pg_attribute.15:18:1:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,pg_get_expr:25:-1:-1,col_description:25:-1:-1
+row a,text,t,,,m,,NULL,A
+row b,text,f,,,x,,NULL,B
+SELECT 2
+> SELECT conname, contype, conislocal, coninhcount, connoinherit, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'ctlt_all'::regclass ORDER BY conname COLLATE "C";
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1,pg_get_constraintdef:25:-1:-1
+row cc,c,t,0,f,CHECK ((length(b) > 100))
+row ctlt1_a_check,c,t,0,f,CHECK ((length(a) > 2))
+row ctlt1_a_not_null,n,t,0,f,NOT NULL a
+row ctlt1_b_check,c,t,0,f,CHECK ((length(b) > 100))
+row ctlt_all_pkey,p,t,0,t,PRIMARY KEY (a)
+SELECT 5
+> SELECT indexrelid::regclass::text, pg_get_indexdef(indexrelid), obj_description(indexrelid, 'pg_class') FROM pg_index WHERE indrelid = 'ctlt_all'::regclass ORDER BY 1;
+fields indexrelid:25:-1:-1,pg_get_indexdef:25:-1:-1,obj_description:25:-1:-1
+row ctlt_all_b_idx,CREATE INDEX ctlt_all_b_idx ON public.ctlt_all USING btree (b),index b_key
+row ctlt_all_expr_idx,CREATE INDEX ctlt_all_expr_idx ON public.ctlt_all USING btree (((a || b))),NULL
+row ctlt_all_pkey,CREATE UNIQUE INDEX ctlt_all_pkey ON public.ctlt_all USING btree (a),index pkey
+SELECT 3
+> SELECT c.relname, objsubid, description FROM pg_description, pg_index i, pg_class c WHERE classoid = 'pg_class'::regclass AND objoid = i.indexrelid AND c.oid = i.indexrelid AND i.indrelid = 'ctlt_all'::regclass ORDER BY c.relname, objsubid;
+fields relname@pg_class.2:19:64:-1,objsubid@pg_description.3:23:4:-1,description@pg_description.4:25:-1:-1
+row ctlt_all_b_idx,0,index b_key
+row ctlt_all_pkey,0,index pkey
+SELECT 2
+> SELECT s.stxname, objsubid, description FROM pg_description, pg_statistic_ext s WHERE classoid = 'pg_statistic_ext'::regclass AND objoid = s.oid AND s.stxrelid = 'ctlt_all'::regclass ORDER BY s.stxname, objsubid;
+fields stxname@pg_statistic_ext.3:19:64:-1,objsubid@pg_description.3:23:4:-1,description@pg_description.4:25:-1:-1
+SELECT 0
+> CREATE TABLE inh_error1 () INHERITS (ctlt1, ctlt4);
+NOTICE 00000 merging multiple inherited definitions of column "a"
+ERROR 42804 inherited column "a" has a storage parameter conflict
+DETAIL MAIN versus EXTENDED
+> CREATE TABLE inh_error2 (LIKE ctlt4 INCLUDING STORAGE) INHERITS (ctlt1);
+NOTICE 00000 merging column "a" with inherited definition
+ERROR 42804 column "a" has a storage parameter conflict
+DETAIL MAIN versus EXTENDED
+> CREATE TABLE pg_attrdef (LIKE ctlt1 INCLUDING ALL);
+CREATE TABLE
+> SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attgenerated, a.attidentity, a.attstorage, a.attcompression, pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = 'public.pg_attrdef'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1,attnotnull@pg_attribute.12:16:1:-1,attgenerated@pg_attribute.16:18:1:-1,attidentity@pg_attribute.15:18:1:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,pg_get_expr:25:-1:-1,col_description:25:-1:-1
+row a,text,t,,,m,,NULL,A
+row b,text,f,,,x,,NULL,B
+SELECT 2
+> SELECT conname, contype, conislocal, coninhcount, connoinherit, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'public.pg_attrdef'::regclass ORDER BY conname COLLATE "C";
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1,pg_get_constraintdef:25:-1:-1
+row cc,c,t,0,f,CHECK ((length(b) > 100))
+row ctlt1_a_check,c,t,0,f,CHECK ((length(a) > 2))
+row ctlt1_a_not_null,n,t,0,f,NOT NULL a
+row ctlt1_b_check,c,t,0,f,CHECK ((length(b) > 100))
+row pg_attrdef_pkey,p,t,0,t,PRIMARY KEY (a)
+SELECT 5
+> SELECT indexrelid::regclass::text, pg_get_indexdef(indexrelid), obj_description(indexrelid, 'pg_class') FROM pg_index WHERE indrelid = 'public.pg_attrdef'::regclass ORDER BY 1;
+fields indexrelid:25:-1:-1,pg_get_indexdef:25:-1:-1,obj_description:25:-1:-1
+row pg_attrdef_b_idx,CREATE INDEX pg_attrdef_b_idx ON public.pg_attrdef USING btree (b),index b_key
+row pg_attrdef_expr_idx,CREATE INDEX pg_attrdef_expr_idx ON public.pg_attrdef USING btree (((a || b))),NULL
+row pg_attrdef_pkey,CREATE UNIQUE INDEX pg_attrdef_pkey ON public.pg_attrdef USING btree (a),index pkey
+SELECT 3
+> DROP TABLE public.pg_attrdef;
+DROP TABLE
+> BEGIN;
+BEGIN
+> CREATE SCHEMA ctl_schema;
+CREATE SCHEMA
+> SET LOCAL search_path = ctl_schema, public;
+SET
+search_path=ctl_schema, public
+> CREATE TABLE ctlt1 (LIKE ctlt1 INCLUDING ALL);
+CREATE TABLE
+> SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attgenerated, a.attidentity, a.attstorage, a.attcompression, pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = 'ctlt1'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1,attnotnull@pg_attribute.12:16:1:-1,attgenerated@pg_attribute.16:18:1:-1,attidentity@pg_attribute.15:18:1:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,pg_get_expr:25:-1:-1,col_description:25:-1:-1
+row a,text,t,,,m,,NULL,A
+row b,text,f,,,x,,NULL,B
+SELECT 2
+> SELECT conname, contype, conislocal, coninhcount, connoinherit, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'ctlt1'::regclass ORDER BY conname COLLATE "C";
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1,pg_get_constraintdef:25:-1:-1
+row cc,c,t,0,f,CHECK ((length(b) > 100))
+row ctlt1_a_check,c,t,0,f,CHECK ((length(a) > 2))
+row ctlt1_a_not_null,n,t,0,f,NOT NULL a
+row ctlt1_b_check,c,t,0,f,CHECK ((length(b) > 100))
+row ctlt1_pkey,p,t,0,t,PRIMARY KEY (a)
+SELECT 5
+> SELECT indexrelid::regclass::text, pg_get_indexdef(indexrelid), obj_description(indexrelid, 'pg_class') FROM pg_index WHERE indrelid = 'ctlt1'::regclass ORDER BY 1;
+fields indexrelid:25:-1:-1,pg_get_indexdef:25:-1:-1,obj_description:25:-1:-1
+row ctlt1_b_idx,CREATE INDEX ctlt1_b_idx ON ctl_schema.ctlt1 USING btree (b),index b_key
+row ctlt1_expr_idx,CREATE INDEX ctlt1_expr_idx ON ctl_schema.ctlt1 USING btree (((a || b))),NULL
+row ctlt1_pkey,CREATE UNIQUE INDEX ctlt1_pkey ON ctl_schema.ctlt1 USING btree (a),index pkey
+SELECT 3
+> ROLLBACK;
+ROLLBACK
+search_path="$user", public
+> DROP TABLE ctlt1, ctlt2, ctlt3, ctlt4, ctlt12_storage, ctlt12_comments, ctlt1_inh, ctlt13_inh, ctlt13_like, ctlt_all, ctla, ctlb CASCADE;
+NOTICE 00000 drop cascades to table inhe
+DROP TABLE
+> CREATE TABLE noinh_con_copy (a int CHECK (a > 0) NO INHERIT, b int not null,
+>> 	c int not null no inherit);
+CREATE TABLE
+> COMMENT ON CONSTRAINT noinh_con_copy_b_not_null ON noinh_con_copy IS 'not null b';
+COMMENT
+> COMMENT ON CONSTRAINT noinh_con_copy_c_not_null ON noinh_con_copy IS 'not null c no inherit';
+COMMENT
+> CREATE TABLE noinh_con_copy1 (LIKE noinh_con_copy INCLUDING CONSTRAINTS INCLUDING COMMENTS);
+CREATE TABLE
+> SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attgenerated, a.attidentity, a.attstorage, a.attcompression, pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = 'noinh_con_copy1'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1,attnotnull@pg_attribute.12:16:1:-1,attgenerated@pg_attribute.16:18:1:-1,attidentity@pg_attribute.15:18:1:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,pg_get_expr:25:-1:-1,col_description:25:-1:-1
+row a,integer,f,,,p,,NULL,NULL
+row b,integer,t,,,p,,NULL,NULL
+row c,integer,t,,,p,,NULL,NULL
+SELECT 3
+> SELECT conname, contype, conislocal, coninhcount, connoinherit, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'noinh_con_copy1'::regclass ORDER BY conname COLLATE "C";
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1,pg_get_constraintdef:25:-1:-1
+row noinh_con_copy_a_check,c,t,0,t,CHECK ((a > 0)) NO INHERIT
+row noinh_con_copy_b_not_null,n,t,0,f,NOT NULL b
+row noinh_con_copy_c_not_null,n,t,0,t,NOT NULL c NO INHERIT
+SELECT 3
+> SELECT indexrelid::regclass::text, pg_get_indexdef(indexrelid), obj_description(indexrelid, 'pg_class') FROM pg_index WHERE indrelid = 'noinh_con_copy1'::regclass ORDER BY 1;
+fields indexrelid:25:-1:-1,pg_get_indexdef:25:-1:-1,obj_description:25:-1:-1
+SELECT 0
+> SELECT conname, description
+>> FROM  pg_description, pg_constraint c
+>> WHERE classoid = 'pg_constraint'::regclass
+>> AND   objoid = c.oid AND c.conrelid = 'noinh_con_copy1'::regclass
+>> ORDER BY conname COLLATE "C";
+fields conname@pg_constraint.2:19:64:-1,description@pg_description.4:25:-1:-1
+row noinh_con_copy_b_not_null,not null b
+row noinh_con_copy_c_not_null,not null c no inherit
+SELECT 2
+> CREATE TABLE noinh_con_copy1_parted (LIKE noinh_con_copy INCLUDING ALL)
+>>   PARTITION BY LIST (a);
+ERROR 42P16 cannot add NO INHERIT constraint to partitioned table "noinh_con_copy1_parted"
+> DROP TABLE noinh_con_copy, noinh_con_copy1;
+DROP TABLE
+> CREATE TABLE ctlt4 (a int, b text);
+CREATE TABLE
+> CREATE SEQUENCE ctlseq1;
+CREATE SEQUENCE
+> CREATE TABLE ctlt10 (LIKE ctlseq1);
+ERROR 42809 relation "ctlseq1" is invalid in LIKE clause at 27
+DETAIL This operation is not supported for sequences.
+> CREATE VIEW ctlv1 AS SELECT * FROM ctlt4;
+CREATE VIEW
+> CREATE TABLE ctlt11 (LIKE ctlv1);
+CREATE TABLE
+> CREATE TABLE ctlt11a (LIKE ctlv1 INCLUDING ALL);
+CREATE TABLE
+> CREATE TYPE ctlty1 AS (a int, b text);
+CREATE TYPE
+> CREATE TABLE ctlt12 (LIKE ctlty1);
+CREATE TABLE
+> DROP SEQUENCE ctlseq1;
+DROP SEQUENCE
+> DROP TYPE ctlty1;
+DROP TYPE
+> DROP VIEW ctlv1;
+DROP VIEW
+> DROP TABLE IF EXISTS ctlt4, ctlt10, ctlt11, ctlt11a, ctlt12;
+NOTICE 00000 table "ctlt10" does not exist, skipping
+DROP TABLE

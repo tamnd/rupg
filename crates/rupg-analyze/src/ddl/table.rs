@@ -29,6 +29,7 @@ use crate::typename::{names, place};
 use crate::types;
 
 mod inherit;
+mod like;
 mod typed;
 
 pub(super) use inherit::collation_name;
@@ -309,6 +310,7 @@ impl Definer<'_, '_> {
         };
         // The table constraints of a partition come after the columns of the parent table, as `transformIndexConstraint` finds the key columns of a partition in its parent table.
         let mut partition_constraints = Vec::new();
+        let mut likes = Vec::new();
         for element in stmt.tableElts.iter().flatten() {
             match element {
                 Node::ColumnDef(def) => self.column_definition(&mut plan, def)?,
@@ -316,7 +318,8 @@ impl Definer<'_, '_> {
                     partition_constraints.push(con)
                 }
                 Node::Constraint(con) => table_constraint(&mut plan, con)?,
-                _ => return Err(not_yet("CREATE TABLE LIKE", at)),
+                Node::TableLikeClause(like) => likes.push(self.table_like(&mut plan, like)?),
+                _ => return Err(Error::internal("unrecognized node type in a table element")),
             }
         }
         if let Some(ty) = of_type {
@@ -379,6 +382,10 @@ impl Definer<'_, '_> {
         self.create_toast_options(table, &stmt.options)?;
         for index in &indexes {
             self.create_index(index, false)?;
+        }
+        // The `LIKE` clauses come after the indexes and before the foreign keys, so a foreign key can use a primary key of `LIKE`.
+        for like in &likes {
+            self.expand_table_like(table, like)?;
         }
         for fk in &plan.foreign {
             self.add_foreign_key(table, fk)?;
@@ -1378,8 +1385,15 @@ impl Definer<'_, '_> {
             if !con.is_enforced {
                 return Err(not_yet("NOT ENFORCED", place(con.location)));
             }
-            let expr = self.an.with_kind(Kind::Check, |an| an.transform(con.raw_expr.as_ref()))?;
-            let expr = self.an.coerce_to_boolean(expr, "CHECK")?;
+            // A check constraint of `LIKE ... INCLUDING CONSTRAINTS` comes with its stored expression.
+            let expr = match con.cooked_expr.as_deref() {
+                Some(text) => crate::node::read(text)?,
+                None => {
+                    let expr =
+                        self.an.with_kind(Kind::Check, |an| an.transform(con.raw_expr.as_ref()))?;
+                    self.an.coerce_to_boolean(expr, "CHECK")?
+                }
+            };
             if let Some(name) = con.conname.as_deref()
                 && names.iter().any(|n| n == name)
             {
