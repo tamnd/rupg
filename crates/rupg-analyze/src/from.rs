@@ -391,6 +391,9 @@ impl Analyzer<'_> {
                 Ok((FromItem::Relation(index), item.clone(), vec![item]))
             }
             Node::JoinExpr(j) => self.join(j),
+            Node::RangeSubselect(r) if r.subquery.as_ref().is_some_and(crate::rules::is_write) => {
+                self.rule_relation(r)
+            }
             Node::RangeSubselect(r) => {
                 let item = self.range_subselect(r)?;
                 let index = self.scope.entries[item.entry].relation.unwrap_or_default();
@@ -647,6 +650,81 @@ impl Analyzer<'_> {
         let mut item = self.add_relation(relation, refname.to_string(), alias)?;
         item.rel_visible = alias.is_some();
         Ok(item)
+    }
+
+    /// The subquery `*rule*` of an action of a rule, which [`crate::rules`] makes: the rows that the statement of the user writes, with no write. The names `old` and `new` give the old row and the new row of each row, as `rewriteRuleAction` puts the target table of the statement and its new values in the action.
+    fn rule_relation(&mut self, r: &RangeSubselect) -> Result<(FromItem, Item, Vec<Item>)> {
+        let Some(stmt) = r.subquery.as_ref() else {
+            return Err(Error::internal("a rule subquery with no statement"));
+        };
+        let perm = self.target_perm;
+        let query = self.sub_level(false, |analyzer| {
+            analyzer.rule.rows = true;
+            let query = match stmt {
+                Node::InsertStmt(s) => analyzer.insert(s),
+                Node::UpdateStmt(s) => analyzer.update(s),
+                Node::DeleteStmt(s) => analyzer.delete(s),
+                _ => Err(Error::internal("a rule subquery that is not a write")),
+            };
+            analyzer.rule.rows = false;
+            query
+        });
+        self.target_perm = perm;
+        let query = query?;
+        let table = std::mem::take(&mut self.rule.columns);
+        let columns = query
+            .targets
+            .iter()
+            .map(|t| Column {
+                name: t.name.clone(),
+                ty: t.expr.ty,
+                typmod: t.expr.typmod,
+                not_null: false,
+            })
+            .collect();
+        let relation = Relation::new(0, columns, Some(Box::new(query)), None, None);
+        let mut top = self.add_relation(relation, "*rule*".to_string(), None)?;
+        top.rel_visible = false;
+        top.cols_visible = false;
+        let index = self.scope.entries[top.entry].relation.unwrap_or_default();
+        let width = table.len();
+        let rows: &[(&str, usize)] = match stmt {
+            Node::InsertStmt(_) => &[("new", 0)],
+            Node::UpdateStmt(_) => &[("old", width), ("new", 0)],
+            _ => &[("old", 0)],
+        };
+        let mut items = Vec::with_capacity(rows.len());
+        for &(name, offset) in rows {
+            let row = crate::rules::relation_row(&table, index, offset);
+            items.push(self.rule_item(name, crate::rules::named_row(&table, row)));
+        }
+        Ok((FromItem::Relation(index), top, items))
+    }
+
+    /// A namespace item `old` or `new` of a rule, whose columns are the values of `columns`: a qualified name can use it, and an unqualified name cannot.
+    pub(crate) fn rule_item(&mut self, name: &str, columns: Vec<(String, Expr)>) -> Item {
+        let entry = self.scope.entries.len();
+        self.scope.entries.push(Entry {
+            name: name.to_string(),
+            aliased: true,
+            columns: columns.iter().map(|(n, _)| n.clone()).collect(),
+            relation: None,
+            oid: 0,
+        });
+        Item {
+            entry,
+            name: name.to_string(),
+            columns,
+            rel_visible: true,
+            cols_visible: false,
+            hidden: 0,
+            returning: false,
+        }
+    }
+
+    /// Adds the item to the namespace of this query.
+    pub(crate) fn push_item(&mut self, item: Item) {
+        self.scope.namespace.push(item);
     }
 
     /// `parse_sub_analyze` for a subquery in `FROM`: the subquery sees the queries outside this query. It sees the parts of `FROM` before it only with `LATERAL`.

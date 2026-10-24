@@ -25,13 +25,21 @@ impl Analyzer<'_> {
         let Some(Node::SelectStmt(stmt)) = node else {
             return Err(Error::internal("a subquery that is not SelectStmt"));
         };
+        self.sub_query(|analyzer| analyzer.select(stmt))
+    }
+
+    /// [`Analyzer::sub_analyze`] for the analysis `f` of a statement below this query, which sees the names of this query.
+    pub(crate) fn sub_query(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<Query>,
+    ) -> Result<Query> {
         let scope = std::mem::take(&mut self.scope);
         self.outer.push(scope);
         let kind = std::mem::replace(&mut self.kind, Kind::Other);
         let has_aggs = std::mem::replace(&mut self.has_aggs, false);
         self.outer_kinds.push((Some(kind), has_aggs));
         let srfs = self.srfs;
-        let result = self.select(stmt);
+        let result = f(self);
         self.srfs = srfs;
         // An aggregate of this query in the subquery sets `has_aggs` of this query.
         self.has_aggs = self.outer_kinds.pop().map_or(has_aggs, |(_, has_aggs)| has_aggs);

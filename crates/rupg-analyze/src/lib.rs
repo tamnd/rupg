@@ -31,6 +31,7 @@ mod prepare;
 mod record;
 mod resolve;
 mod returning;
+mod rules;
 mod searchcycle;
 mod select;
 mod setop;
@@ -91,6 +92,7 @@ pub use poly::resolve as resolve_polymorphic;
 pub use prepare::{execute_params, param_types};
 pub use record::{out_columns, record_fields};
 pub use returning::{MERGE_ACTION, RETURNING_NEW, RETURNING_OLD, Shown};
+pub use rules::{Product, analyze_product, query_rewrite};
 pub use searchcycle::{CycleClause, SearchClause};
 pub use select::{MinMax, Query, Target};
 pub use setop::{SetKind, SetOp, SetTree, strength_name};
@@ -276,6 +278,8 @@ pub(crate) struct Analyzer<'a> {
     row_types: BTreeMap<u32, u32>,
     /// The index in [`Analyzer::perms`] of the privileges of the target table of the write that the analyzer reads now, or `None`.
     target_perm: Option<usize>,
+    /// The state of the rules of the write that the analyzer reads now.
+    rule: rules::State,
 }
 
 impl<'a> Analyzer<'a> {
@@ -332,6 +336,7 @@ impl<'a> Analyzer<'a> {
             funcs: Vec::new(),
             row_types: BTreeMap::new(),
             target_perm: None,
+            rule: rules::State::default(),
         }
     }
 
