@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.75 (2026-10-24)
+
 ### Added
 
 - The rules `ON INSERT`, `ON UPDATE` and `ON DELETE` of a table and of a view run, as `RewriteQuery` applies them. An action `INSERT`, `UPDATE` or `DELETE` of a rule sees the rows of the statement as `OLD` and `NEW`, with the new values of the stored generated columns, and the condition of the rule applies to each row. A rule `DO INSTEAD` replaces the statement, and a rule `DO INSTEAD` with a condition removes the rows for which the condition is true. The command tag comes from the statement or from its last action `DO INSTEAD` of the same kind. `RETURNING`, `ON CONFLICT`, `MERGE` and a rule that fires itself again give the errors of PostgreSQL (#647).
