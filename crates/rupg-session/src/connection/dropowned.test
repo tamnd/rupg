@@ -1,0 +1,218 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE USER regress_do_user0;
+CREATE ROLE
+> CREATE USER regress_do_user1;
+CREATE ROLE
+> CREATE USER regress_do_user2;
+CREATE ROLE
+> GRANT CREATE ON SCHEMA public TO regress_do_user0, regress_do_user1;
+GRANT
+> SET SESSION AUTHORIZATION regress_do_user0;
+SET
+session_authorization=regress_do_user0
+is_superuser=off
+> DROP OWNED BY regress_do_user1;
+ERROR 42501 permission denied to drop objects
+DETAIL Only roles with privileges of role "regress_do_user1" may drop objects owned by it.
+> DROP OWNED BY regress_do_user0, regress_do_user2;
+ERROR 42501 permission denied to drop objects
+DETAIL Only roles with privileges of role "regress_do_user2" may drop objects owned by it.
+> REASSIGN OWNED BY regress_do_user0 TO regress_do_user1;
+ERROR 42501 permission denied to reassign objects
+DETAIL Only roles with privileges of role "regress_do_user1" may reassign objects to it.
+> REASSIGN OWNED BY regress_do_user1 TO regress_do_user0;
+ERROR 42501 permission denied to reassign objects
+DETAIL Only roles with privileges of role "regress_do_user1" may reassign objects owned by it.
+> DROP OWNED BY regress_do_user0;
+WARNING 01006 no privileges could be revoked for "public"
+DROP OWNED
+> CREATE TABLE dot1 (f1 int unique);
+CREATE TABLE
+> GRANT ALL ON dot1 TO regress_do_user1 WITH GRANT OPTION;
+GRANT
+> SET SESSION AUTHORIZATION regress_do_user1;
+SET
+session_authorization=regress_do_user1
+> CREATE TABLE dot (a serial primary key, b text);
+CREATE TABLE
+> GRANT ALL ON dot1 TO regress_do_user2;
+GRANT
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> SELECT relacl::text FROM pg_class WHERE relname = 'dot1';
+fields relacl:25:-1:-1
+row {regress_do_user0=arwdDxtm/regress_do_user0,regress_do_user1=a*r*w*d*D*x*t*m*/regress_do_user0,regress_do_user2=arwdDxtm/regress_do_user1}
+SELECT 1
+> DROP OWNED BY regress_do_user1;
+DROP OWNED
+> SELECT relacl::text FROM pg_class WHERE relname = 'dot1';
+fields relacl:25:-1:-1
+row {regress_do_user0=arwdDxtm/regress_do_user0}
+SELECT 1
+> SELECT count(*) FROM pg_class WHERE relname IN ('dot', 'dot_a_seq', 'dot_pkey');
+fields count:20:8:-1
+row 0
+SELECT 1
+> GRANT ALL ON dot1 TO regress_do_user1;
+GRANT
+> GRANT CREATE ON SCHEMA public TO regress_do_user1;
+GRANT
+> SET SESSION AUTHORIZATION regress_do_user1;
+SET
+session_authorization=regress_do_user1
+is_superuser=off
+> CREATE TABLE dot (a serial primary key, b text);
+CREATE TABLE
+> CREATE FUNCTION do_func() RETURNS void LANGUAGE plpgsql AS $$ BEGIN END; $$;
+CREATE FUNCTION
+> CREATE TYPE do_enum AS ENUM ('red');
+CREATE TYPE
+> CREATE TYPE do_range AS RANGE (SUBTYPE = int4);
+CREATE TYPE
+> CREATE TABLE dot2 (f1 int);
+CREATE TABLE
+> CREATE SEQUENCE do_ss1;
+CREATE SEQUENCE
+> ALTER TABLE dot2 ALTER f1 SET DEFAULT nextval('do_ss1');
+ALTER TABLE
+> ALTER SEQUENCE do_ss1 OWNED BY dot2.f1;
+ALTER SEQUENCE
+> CREATE TYPE do_t AS (a int);
+CREATE TYPE
+> CREATE VIEW dov AS SELECT * FROM dot2;
+CREATE VIEW
+> GRANT SELECT ON dot2 TO regress_do_user0;
+GRANT
+> SELECT typowner = relowner FROM pg_type JOIN pg_class c ON typrelid = c.oid WHERE typname = 'do_t';
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> REASSIGN OWNED BY regress_do_user1 TO regress_do_user2;
+REASSIGN OWNED
+> SELECT c.relname, r.rolname, c.relacl::text FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner WHERE c.relname IN ('dot', 'dot_a_seq', 'dot_pkey', 'dot2', 'do_ss1', 'do_t', 'dov', 'dot1') ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,rolname@pg_roles.1:19:64:-1,relacl:25:-1:-1
+row do_ss1,regress_do_user2,NULL
+row do_t,regress_do_user2,NULL
+row dot,regress_do_user2,NULL
+row dot1,regress_do_user0,{regress_do_user0=arwdDxtm/regress_do_user0,regress_do_user1=arwdDxtm/regress_do_user0}
+row dot2,regress_do_user2,{regress_do_user2=arwdDxtm/regress_do_user2,regress_do_user0=r/regress_do_user2}
+row dot_a_seq,regress_do_user2,NULL
+row dot_pkey,regress_do_user2,NULL
+row dov,regress_do_user2,NULL
+SELECT 8
+> SELECT t.typname, r.rolname FROM pg_type t JOIN pg_roles r ON r.oid = t.typowner WHERE t.typname IN ('do_enum', '_do_enum', 'do_range', 'do_multirange', '_do_range', 'dot', 'do_t', '_do_t') ORDER BY 1;
+fields typname@pg_type.2:19:64:-1,rolname@pg_roles.1:19:64:-1
+row _do_enum,regress_do_user2
+row _do_range,regress_do_user2
+row _do_t,regress_do_user2
+row do_enum,regress_do_user2
+row do_multirange,regress_do_user2
+row do_range,regress_do_user2
+row do_t,regress_do_user2
+row dot,regress_do_user2
+SELECT 8
+> SELECT p.proname, r.rolname FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner WHERE p.proname = 'do_func';
+fields proname@pg_proc.2:19:64:-1,rolname@pg_roles.1:19:64:-1
+row do_func,regress_do_user2
+SELECT 1
+> SELECT typowner = relowner FROM pg_type JOIN pg_class c ON typrelid = c.oid WHERE typname = 'do_t';
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SET SESSION AUTHORIZATION regress_do_user0;
+SET
+session_authorization=regress_do_user0
+is_superuser=off
+> CREATE VIEW dov0 AS SELECT * FROM dot2;
+CREATE VIEW
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> DROP USER regress_do_user1;
+ERROR 2BP01 role "regress_do_user1" cannot be dropped because some objects depend on it
+DETAIL privileges for schema public
+privileges for table dot1
+> DROP OWNED BY regress_do_user1;
+DROP OWNED
+> DROP USER regress_do_user1;
+DROP ROLE
+> DROP USER regress_do_user2;
+ERROR 2BP01 role "regress_do_user2" cannot be dropped because some objects depend on it
+DETAIL owner of sequence dot_a_seq
+owner of table dot
+owner of function do_func()
+owner of type do_enum
+owner of type do_range
+owner of table dot2
+owner of sequence do_ss1
+owner of type do_t
+owner of view dov
+> DROP OWNED BY regress_do_user2;
+ERROR 2BP01 cannot drop desired object(s) because other objects depend on them
+DETAIL view dov0 depends on table dot2
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP OWNED BY regress_do_user2, regress_do_user0 CASCADE;
+DROP OWNED
+> SELECT count(*) FROM pg_class WHERE relname IN ('dot', 'dot2', 'dov', 'dov0', 'do_ss1', 'dot1');
+fields count:20:8:-1
+row 0
+SELECT 1
+> DROP USER regress_do_user2;
+DROP ROLE
+> DROP OWNED BY regress_do_user0;
+DROP OWNED
+> REVOKE CREATE ON SCHEMA public FROM regress_do_user0;
+REVOKE
+> DROP USER regress_do_user0;
+DROP ROLE
+> DROP OWNED BY nonesuch;
+ERROR 42704 role "nonesuch" does not exist
+> REASSIGN OWNED BY nonesuch TO CURRENT_USER;
+ERROR 42704 role "nonesuch" does not exist
+> DROP OWNED BY pg_signal_backend;
+ERROR 2BP01 cannot drop objects owned by role pg_signal_backend because they are required by the database system
+> REASSIGN OWNED BY pg_signal_backend TO CURRENT_USER;
+ERROR 2BP01 cannot reassign ownership of objects owned by role pg_signal_backend because they are required by the database system
+> CREATE ROLE regress_do_r1;
+CREATE ROLE
+> CREATE ROLE regress_do_r2;
+CREATE ROLE
+> CREATE ROLE regress_do_r3;
+CREATE ROLE
+> GRANT regress_do_r2 TO regress_do_r3 WITH ADMIN OPTION;
+GRANT ROLE
+> SET ROLE regress_do_r3;
+SET
+is_superuser=off
+> GRANT regress_do_r2 TO regress_do_r1;
+GRANT ROLE
+> RESET ROLE;
+RESET
+is_superuser=on
+> SELECT m.rolname, g.rolname LIKE 'regress%' FROM pg_auth_members a JOIN pg_roles m ON m.oid = a.member JOIN pg_roles g ON g.oid = a.grantor WHERE a.roleid = 'regress_do_r2'::regrole ORDER BY 1;
+fields rolname@pg_roles.1:19:64:-1,?column?:16:1:-1
+row regress_do_r1,t
+row regress_do_r3,f
+SELECT 2
+> DROP ROLE regress_do_r3;
+ERROR 2BP01 role "regress_do_r3" cannot be dropped because some objects depend on it
+DETAIL privileges for membership of role regress_do_r1 in role regress_do_r2
+> DROP OWNED BY regress_do_r3;
+DROP OWNED
+> SELECT m.rolname FROM pg_auth_members a JOIN pg_roles m ON m.oid = a.member WHERE a.roleid = 'regress_do_r2'::regrole ORDER BY 1;
+fields rolname@pg_roles.1:19:64:-1
+row regress_do_r3
+SELECT 1
+> DROP ROLE regress_do_r3;
+DROP ROLE
+> DROP ROLE regress_do_r1, regress_do_r2;
+DROP ROLE

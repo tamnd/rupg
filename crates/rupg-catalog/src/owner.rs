@@ -1,8 +1,14 @@
 //! The change of the owner of an object: `ATExecChangeOwner` for one relation and `AlterSchemaOwner_internal` for a schema, with `aclnewowner` for the privileges. The analyzer runs the checks and the walk to the indexes, the TOAST table and the sequences of a table.
 
+use std::sync::Arc;
+
 use rupg_common::Result;
 
 use super::{Catalog, no_object};
+use crate::{
+    ObjRef, PG_COLLATION, PG_EXTENSION, PG_LANGUAGE, PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_PROC,
+    PG_STATISTIC_EXT, PG_TS_CONFIG, PG_TS_DICT, PG_TYPE,
+};
 
 /// `ACL_ALL_RIGHTS_STR`: the letter of each privilege, in the order of its bit.
 const RIGHTS: &[u8] = b"arwdDxtXUCTcsAm";
@@ -128,6 +134,52 @@ impl Catalog {
         schema.owner = owner;
         if let Some(acl) = &schema.acl {
             schema.acl = Some(acl_new_owner(acl, old, new));
+        }
+        Ok(())
+    }
+
+    /// The change of `AlterObjectOwner_internal` for a function, a collation, a language, an extension, an operator, an operator class, an operator family, a statistics object, a text search dictionary and a text search configuration, and of `AlterTypeOwnerInternal` for the ACL of a type. The owner column changes, and the ACL that `GRANT` gave gets `aclnewowner`. The caller changes the owner of a type with [`Catalog::set_type_owner`] first. `old` and `new` are the names of the two roles, for the items of the ACL.
+    ///
+    /// # Errors
+    ///
+    /// An internal error for an object that the catalog does not have.
+    pub fn set_object_owner(
+        &mut self,
+        object: ObjRef,
+        owner: u32,
+        old: &str,
+        new: &str,
+    ) -> Result<()> {
+        let found = match object.class {
+            PG_TYPE => true,
+            PG_PROC => self.functions.get_mut(&object.oid).map(|f| f.owner = owner).is_some(),
+            PG_COLLATION => match Arc::make_mut(&mut self.collations).get_mut(&object.oid) {
+                Some(c) => {
+                    c.owner = owner;
+                    true
+                }
+                None => false,
+            },
+            PG_LANGUAGE => self.languages.get_mut(&object.oid).map(|l| l.owner = owner).is_some(),
+            PG_EXTENSION => self.extensions.get_mut(&object.oid).map(|e| e.owner = owner).is_some(),
+            PG_OPERATOR => self.operators.get_mut(&object.oid).map(|o| o.owner = owner).is_some(),
+            PG_OPCLASS => self.opclasses.get_mut(&object.oid).map(|c| c.owner = owner).is_some(),
+            PG_OPFAMILY => self.opfamilies.get_mut(&object.oid).map(|f| f.owner = owner).is_some(),
+            PG_STATISTIC_EXT => {
+                self.stat_exts.get_mut(&object.oid).map(|s| s.owner = owner).is_some()
+            }
+            PG_TS_DICT => {
+                self.ts_dictionaries.get_mut(&object.oid).map(|d| d.owner = owner).is_some()
+            }
+            PG_TS_CONFIG => self.ts_configs.get_mut(&object.oid).map(|c| c.owner = owner).is_some(),
+            _ => false,
+        };
+        if !found {
+            return Err(no_object("object", object.oid));
+        }
+        if let Some(acl) = self.object_acl(object) {
+            let acl = acl_new_owner(acl, old, new);
+            self.set_object_acl(object, Some(acl));
         }
         Ok(())
     }

@@ -1085,6 +1085,11 @@ impl Connection {
         match result {
             Ok(()) => {
                 let old = std::mem::replace(&mut lease.catalog, work);
+                if !defined.grantors.is_empty() {
+                    let mut roles = Roles::clone(&lease.roles);
+                    roles.members.retain(|m| !defined.grantors.contains(&m.grantor));
+                    lease.roles = Arc::new(roles);
+                }
                 if let Some(table) = defined.filled {
                     drop(held);
                     return self.fill(node, table, &old, notices);
@@ -1173,6 +1178,8 @@ impl Connection {
                     Node::TruncateStmt(_) => CommandTag::TruncateTable,
                     Node::CreateStatsStmt(_) => CommandTag::CreateStatistics,
                     Node::AlterStatsStmt(_) => CommandTag::AlterStatistics,
+                    Node::DropOwnedStmt(_) => CommandTag::DropOwned,
+                    Node::ReassignOwnedStmt(_) => CommandTag::ReassignOwned,
                     _ => CommandTag::CreateTable,
                 }))
             }
@@ -6097,6 +6104,12 @@ mod tests {
     #[test]
     fn ctlstat() {
         big_stack(|| script(include_str!("connection/ctlstat.test")));
+    }
+
+    /// `DROP OWNED` and `REASSIGN OWNED`, from `dependency.sql` of the PostgreSQL tests: the checks of the privileges, the revoke of the grants of the role, the drop of its objects and of the grants of membership that it made, and the new owner of its objects. The script has catalog queries in place of `\z` and `\d`, and it does not have default privileges and the grant on the database. `connection/dropowned.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn dropowned() {
+        big_stack(|| script(include_str!("connection/dropowned.test")));
     }
 
     /// `CREATE TABLE ... (LIKE ...)`, from `create_table_like.sql` of the PostgreSQL tests: the columns and the not-null constraints of the other relation, the options `INCLUDING DEFAULTS`, `GENERATED`, `IDENTITY`, `CONSTRAINTS`, `INDEXES`, `STORAGE`, `COMMENTS` and `ALL`, `LIKE` with `INHERITS`, and `LIKE` of a view, a composite type and a sequence. The script has catalog queries in place of `\d`, and it does not have the parts for virtual generated columns, `NOT ENFORCED`, `CREATE STATISTICS` and foreign tables. `connection/create_table_like.test` is the output of PostgreSQL 19 for the same script in a new database.

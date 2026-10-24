@@ -1,6 +1,6 @@
 //! `ALTER TYPE` and `ALTER DOMAIN` with `RENAME TO`, `SET SCHEMA` and `OWNER TO`, as `RenameType`, `AlterTypeNamespace` and `AlterTypeOwner` run them. A composite type changes with its relation. The views that name a changed type get a new text.
 
-use rupg_catalog::{PG_CLASS, PG_TYPE, RangePart, RelKind};
+use rupg_catalog::{ObjRef, PG_CLASS, PG_TYPE, RangePart, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{
@@ -143,7 +143,16 @@ impl Definer<'_, '_> {
         if facts.composite != 0 {
             return self.change_owner(facts.composite, new, true);
         }
-        self.catalog.set_type_owner(facts.oid, new)
+        self.catalog.set_type_owner(facts.oid, new)?;
+        let roles = rupg_pgcatalog::roles::current();
+        let (old, new_name) = (roles.name(facts.owner), roles.name(new));
+        let object = ObjRef::new(PG_TYPE, facts.oid);
+        self.catalog.set_object_owner(
+            object,
+            new,
+            old.unwrap_or_default(),
+            new_name.unwrap_or_default(),
+        )
     }
 
     /// The type that the names of `ALTER TYPE` or `ALTER DOMAIN` give, as `typenameTypeId` and `LookupTypeName` find it.

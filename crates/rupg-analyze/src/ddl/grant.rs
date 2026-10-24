@@ -584,6 +584,35 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
+    /// `RemoveRoleFromObjectACL`: `REVOKE ALL ... FROM role CASCADE` on the object, with the grantor that `select_best_grantor` picks for the role of the statement. The revoke of a relation takes the privileges of its columns too.
+    pub(super) fn remove_role_from_acl(&mut self, role: u32, object: ObjRef) -> Result<()> {
+        let (objtype, kind) = match object.class {
+            PG_CLASS => (ObjectType::OBJECT_TABLE, Kind::Table),
+            PG_NAMESPACE => (ObjectType::OBJECT_SCHEMA, Kind::Schema),
+            PG_PROC => (ObjectType::OBJECT_ROUTINE, Kind::Function),
+            PG_TYPE => (ObjectType::OBJECT_TYPE, Kind::Type),
+            PG_LANGUAGE => (ObjectType::OBJECT_LANGUAGE, Kind::Language),
+            class => return Err(Error::internal(format!("unexpected object class {class}"))),
+        };
+        let grant = Grant {
+            is_grant: false,
+            objtype,
+            all_privs: true,
+            privileges: 0,
+            col_privs: Vec::new(),
+            grantees: vec![role],
+            grant_option: false,
+            cascade: true,
+            grantor: None,
+        };
+        let roles = rupg_pgcatalog::roles::current();
+        if kind == Kind::Table {
+            self.grant_relation(&roles, &grant, object.oid)
+        } else {
+            self.grant_common(&roles, &grant, Object::new(kind, object.oid))
+        }
+    }
+
     /// `objectNamesToOids`: the objects that the statement names.
     fn grant_objects(&mut self, stmt: &GrantStmt) -> Result<Vec<Object>> {
         let mut objects = Vec::new();

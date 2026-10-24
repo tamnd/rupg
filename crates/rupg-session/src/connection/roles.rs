@@ -2,11 +2,7 @@
 
 use std::sync::Arc;
 
-use rupg_catalog::{
-    Catalog, ObjRef, PG_CLASS, PG_COLLATION, PG_EXTENSION, PG_LANGUAGE, PG_NAMESPACE, PG_OPCLASS,
-    PG_OPERATOR, PG_OPFAMILY, PG_PROC, PG_STATISTIC_EXT, PG_TS_CONFIG, PG_TS_DICT, PG_TYPE,
-    RangePart, RelKind,
-};
+use rupg_catalog::{Catalog, ObjRef};
 use rupg_common::{Error, SqlState};
 use rupg_func::Session;
 use rupg_pgcatalog::roles::{Attrs, Member, Role, Roles};
@@ -356,103 +352,8 @@ fn password_type(secret: &str) -> PasswordType {
 
 /// The objects of a catalog that have a dependency of `pg_shdepend` on their owner `role`, as `recordDependencyOnOwner` makes them. An index, a TOAST table, a composite type as a relation, the row type of a table, an array type and a multirange type have none.
 fn owned(catalog: &Catalog, role: u32) -> Vec<ObjRef> {
-    let mut objects = owned_only(catalog, role);
-    objects.extend(acl_dependents(catalog, role));
-    objects
-}
-
-/// The owner of an object that `GRANT` gave an ACL to. A built-in object has the bootstrap superuser as its owner.
-fn acl_owner(catalog: &Catalog, object: ObjRef) -> u32 {
-    let owner = match object.class {
-        PG_NAMESPACE => catalog.schema(object.oid).map(|s| s.owner),
-        PG_CLASS => catalog.relation(object.oid).map(|r| r.owner),
-        PG_TYPE => catalog.type_by_oid(object.oid).map(|t| t.owner),
-        PG_PROC => catalog.function(object.oid).map(|f| f.owner),
-        PG_LANGUAGE => catalog.languages().find(|l| l.oid == object.oid).map(|l| l.owner),
-        _ => None,
-    };
-    owner.unwrap_or(rupg_catalog::BOOTSTRAP_SUPERUSER)
-}
-
-/// The objects with an ACL that names the role other than as their owner, as `updateAclDependencies` records them in `pg_shdepend`.
-fn acl_dependents(catalog: &Catalog, role: u32) -> Vec<ObjRef> {
-    let names = |acl: &[String]| rupg_analyze::acl_roles(acl).contains(&role);
-    let mut objects = Vec::new();
-    for s in catalog.schemas() {
-        if s.owner != role && s.acl.as_deref().is_some_and(names) {
-            objects.push(ObjRef::new(PG_NAMESPACE, s.oid));
-        }
-    }
-    for r in catalog.relations() {
-        if r.owner != role && r.acl.as_deref().is_some_and(names) {
-            objects.push(ObjRef::new(PG_CLASS, r.oid));
-        }
-    }
-    for (object, acl) in catalog.object_acls() {
-        if acl_owner(catalog, object) != role && names(acl) {
-            objects.push(object);
-        }
-    }
-    objects
-}
-
-/// The objects that the role owns.
-fn owned_only(catalog: &Catalog, role: u32) -> Vec<ObjRef> {
-    let mut objects = Vec::new();
-    let mut add = |class: u32, oid: u32, owner: u32| {
-        if owner == role {
-            objects.push(ObjRef { class, oid, sub: 0 });
-        }
-    };
-    for s in catalog.schemas() {
-        add(PG_NAMESPACE, s.oid, s.owner);
-    }
-    for r in catalog.relations() {
-        if !matches!(
-            r.kind,
-            RelKind::Index | RelKind::PartitionedIndex | RelKind::Toast | RelKind::Composite
-        ) {
-            add(PG_CLASS, r.oid, r.owner);
-        }
-    }
-    for t in catalog.types() {
-        let row_type = t.relation != 0
-            && catalog.relation(t.relation).is_some_and(|r| r.kind != RelKind::Composite);
-        let multirange = matches!(t.range, Some(RangePart::Multirange(_)));
-        if t.element == 0 && !row_type && !multirange {
-            add(PG_TYPE, t.oid, t.owner);
-        }
-    }
-    for f in catalog.functions() {
-        add(PG_PROC, f.oid, f.owner);
-    }
-    for c in catalog.collations() {
-        add(PG_COLLATION, c.oid, c.owner);
-    }
-    for l in catalog.languages() {
-        add(PG_LANGUAGE, l.oid, l.owner);
-    }
-    for e in catalog.extensions() {
-        add(PG_EXTENSION, e.oid, e.owner);
-    }
-    for d in catalog.ts_dictionaries() {
-        add(PG_TS_DICT, d.oid, d.owner);
-    }
-    for c in catalog.ts_configs() {
-        add(PG_TS_CONFIG, c.oid, c.owner);
-    }
-    for s in catalog.stat_exts() {
-        add(PG_STATISTIC_EXT, s.oid, s.owner);
-    }
-    for o in catalog.operators() {
-        add(PG_OPERATOR, o.oid, o.owner);
-    }
-    for c in catalog.opclasses() {
-        add(PG_OPCLASS, c.oid, c.owner);
-    }
-    for f in catalog.opfamilies() {
-        add(PG_OPFAMILY, f.oid, f.owner);
-    }
+    let mut objects = rupg_analyze::owned_objects(catalog, role);
+    objects.extend(rupg_analyze::acl_dependents(catalog, role));
     objects
 }
 
@@ -1066,11 +967,11 @@ impl Connection {
             }
         }
         let reader = self.reader();
-        for object in owned_only(&local, roleid) {
+        for object in rupg_analyze::owned_objects(&local, roleid) {
             let text = rupg_func::describe(object, &reader)?.unwrap_or_default();
             objects.push((object.oid, object.class, object.sub, b'o', text));
         }
-        for object in acl_dependents(&local, roleid) {
+        for object in rupg_analyze::acl_dependents(&local, roleid) {
             let text = rupg_func::describe(object, &reader)?.unwrap_or_default();
             objects.push((object.oid, object.class, object.sub, b'a', text));
         }
