@@ -6,7 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- `pg_current_xact_id`, `pg_current_xact_id_if_assigned`, `pg_current_snapshot` and `pg_xact_status` run, and so do `txid_current`, `txid_current_if_assigned`, `txid_current_snapshot` and `txid_status`. A transaction gets its ID at the first write, at a change of the catalog, at `LOCK ... IN ACCESS EXCLUSIVE MODE` or at a call of `pg_current_xact_id`. The snapshot has `latestCompletedXid + 1` as `xmax` and does not show the transaction of the session, as `GetSnapshotData` makes it. `pg_xact_status` gives `committed`, `aborted` or `in progress`, and `22023` for an ID in the future (#NNN).
+- `pg_current_xact_id`, `pg_current_xact_id_if_assigned`, `pg_current_snapshot` and `pg_xact_status` run, and so do `txid_current`, `txid_current_if_assigned`, `txid_current_snapshot` and `txid_status`. A transaction gets its ID at the first write, at a change of the catalog, at `LOCK ... IN ACCESS EXCLUSIVE MODE` or at a call of `pg_current_xact_id`. The snapshot has `latestCompletedXid + 1` as `xmax` and does not show the transaction of the session, as `GetSnapshotData` makes it. `pg_xact_status` gives `committed`, `aborted` or `in progress`, and `22023` for an ID in the future (#667).
 
 ## 0.1.76 (2026-10-24)
 
