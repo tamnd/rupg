@@ -37,6 +37,8 @@ struct State {
     aborted: BTreeSet<u32>,
     /// The process ID of the session of each transaction that is in progress.
     owners: HashMap<u32, i32>,
+    /// `PGPROC->xmin`: the `xmin` of the oldest snapshot that each session holds, by the process ID.
+    xmins: HashMap<i32, u32>,
     /// The versions of the rows of each table, by the OID of the database and the OID of the table.
     tables: HashMap<(u32, u32), Table>,
     /// The transaction that each waiting transaction waits for, the edges of the wait graph of `DeadLockCheck`.
@@ -393,7 +395,12 @@ pub(crate) struct Snapshot {
 }
 
 impl Snapshot {
-    /// The snapshot as a `pg_snapshot`, as `GetSnapshotData` makes it for the session whose transaction is `own`: `latestCompletedXid + 1` as `xmax`, the transactions in progress before it without `own`, and the first of them as `xmin`.
+    /// The `xmin` of `GetSnapshotData`: the first transaction in progress before `latestCompletedXid + 1`, also when it is the transaction of the session, or `latestCompletedXid + 1` when there is none.
+    pub(crate) fn xmin(&self) -> u32 {
+        self.running.range(..self.completed).next().copied().unwrap_or(self.completed)
+    }
+
+    /// The snapshot as a `pg_snapshot`, as `GetSnapshotData` makes it for the session whose transaction is `own`: `latestCompletedXid + 1` as `xmax`, the transactions in progress before it without `own`, and [`Snapshot::xmin`] as `xmin`.
     pub(crate) fn exported(&self, own: u32) -> rupg_types::Snapshot {
         let xip: Vec<u64> = self
             .running
@@ -401,8 +408,7 @@ impl Snapshot {
             .filter(|&&xid| xid != own)
             .map(|&xid| u64::from(xid))
             .collect();
-        let xmax = u64::from(self.completed);
-        rupg_types::Snapshot { xmin: xip.first().copied().unwrap_or(xmax), xmax, xip }
+        rupg_types::Snapshot { xmin: u64::from(self.xmin()), xmax: u64::from(self.completed), xip }
     }
 }
 
@@ -474,6 +480,23 @@ impl Heap {
     /// `ReadNextFullTransactionId`: the transaction ID that the next transaction that writes gets.
     pub(crate) fn next_xid(&self) -> u32 {
         self.state().next_xid.max(FIRST_NORMAL_XID)
+    }
+
+    /// Sets the `xmin` of the session `pid` to the `xmin` of `snapshot` when the session holds no snapshot, as `GetSnapshotData` sets `MyProc->xmin`.
+    pub(crate) fn hold(&self, pid: i32, snapshot: &Snapshot) {
+        self.state().xmins.entry(pid).or_insert_with(|| snapshot.xmin());
+    }
+
+    /// The session `pid` holds no snapshot, as `SnapshotResetXmin` clears `MyProc->xmin`.
+    pub(crate) fn release(&self, pid: i32) {
+        self.state().xmins.remove(&pid);
+    }
+
+    /// `ProcNumberGetTransactionIds`: the transaction ID of the session `pid` and its `xmin`, with 0 for none.
+    pub(crate) fn transaction_ids(&self, pid: i32) -> (u32, u32) {
+        let state = self.state();
+        let xid = state.owners.iter().find(|&(_, &owner)| owner == pid).map_or(0, |(&xid, _)| xid);
+        (xid, state.xmins.get(&pid).copied().unwrap_or_default())
     }
 
     /// The state of the transaction `xid` in `pg_xact` and `ProcArray`, for a transaction before [`Heap::next_xid`].

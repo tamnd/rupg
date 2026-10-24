@@ -612,6 +612,7 @@ impl Connection {
         } else {
             heap.snapshot()
         };
+        heap.hold(self.pid, &snapshot);
         View {
             database: self.database_oid,
             snapshot,
@@ -1026,6 +1027,7 @@ impl Connection {
         }
         self.command.set(0);
         self.snapshot.replace(None);
+        heap.release(self.pid);
         self.end_deferred();
         self.events.borrow_mut().clear();
     }
@@ -6264,6 +6266,12 @@ mod tests {
     #[test]
     fn xactid() {
         big_stack(|| script(include_str!("connection/xactid.test")));
+    }
+
+    /// `backend_xid` and `backend_xmin` of `pg_stat_activity` in two sessions: the `xmin` of the snapshot of a transaction in `REPEATABLE READ` that stays out of a statement, the `xmin` of a statement in `READ COMMITTED` that goes at its end, the ID of a transaction that writes, and the `xmin` of `pg_current_snapshot` that is the transaction of the session. `connection/backend_xids.test` is the output of PostgreSQL 19 for the same script on two connections to a new database.
+    #[test]
+    fn backend_xids() {
+        big_stack(|| two_sessions(include_str!("connection/backend_xids.test")));
     }
 
     /// The system columns `xmin` and `xmax` of the rows of a table, a partitioned table and a table with children of `INHERITS`: the transaction that inserted the row, the transaction that deleted it, the ID of an aborted transaction that deleted it, and an `UPDATE` that checks `xmin`. `connection/xmin.test` is the output of PostgreSQL 19 for the same script in a new database.
