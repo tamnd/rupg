@@ -343,9 +343,6 @@ impl Definer<'_, '_> {
             self.merge_inherited_columns(&mut plan, &parents, namespace)?;
             plan.inherits = parents;
         }
-        if plan.columns.iter().any(|c| c.generated == b'v') {
-            return Err(not_yet("a virtual generated column", at));
-        }
         let mut table_rv = rv.clone();
         table_rv.schemaname = Some(self.schema_name(namespace).into());
         let indexes = index_constraints(&mut plan, &table_rv)?;
@@ -1125,13 +1122,16 @@ impl Definer<'_, '_> {
         }
         let new = self.catalog_column(column)?;
         check_attribute_type(&new.name, new.ty, self.an.env.allow_system_table_mods())?;
+        if new.generated == b'v' {
+            check_virtual_type(&new.name, new.ty)?;
+        }
         let row_type = self.catalog.relation(table).map_or(0, |r| r.row_type);
         self.check_member_of_itself(new.ty, row_type)?;
         let number = self.catalog.add_column(table, new)?;
         match &column.default {
             Some(RawDefault::Expr(node)) if column.generated != 0 => {
-                // `ATRewriteTables` computes the new values, and a stored value of the row type would not get them.
-                if target.kind != b'p' {
+                // `ATRewriteTables` computes the new values, and a stored value of the row type would not get them. A virtual generated column has no stored values.
+                if target.kind != b'p' && column.generated == b's' {
                     self.check_row_type_users(target)?;
                 }
                 self.add_generation_expression(table, number, node)?;
@@ -1148,7 +1148,10 @@ impl Definer<'_, '_> {
             }
             Some(RawDefault::Cooked(..)) | None => {}
         }
-        let default = self.catalog.default_of(table, number).map(|d| d.expr.clone());
+        let default = match column.generated {
+            b'v' => None,
+            _ => self.catalog.default_of(table, number).map(|d| d.expr.clone()),
+        };
         self.added.push(Fill { table, column: number, default });
         self.add_not_nulls(table, &plan)?;
         for serial in &plan.serials {
@@ -1208,6 +1211,9 @@ impl Definer<'_, '_> {
         }
         for column in &columns {
             check_attribute_type(&column.name, column.ty, self.an.env.allow_system_table_mods())?;
+            if column.generated == b'v' {
+                check_virtual_type(&column.name, column.ty)?;
+            }
         }
         self.check_relation_name(plan.namespace, &plan.relname)?;
         let shapes: Vec<Shape> = columns.iter().map(shape).collect();
@@ -1233,7 +1239,7 @@ impl Definer<'_, '_> {
                 RawDefault::Expr(node) if column.generated != 0 => {
                     let columns: Vec<(&str, bool)> =
                         plan.columns.iter().map(|c| (c.name.as_str(), c.generated != 0)).collect();
-                    self.generation_expression(node, &columns)?
+                    self.generation_expression(node, &columns, column.generated == b'v')?
                 }
                 RawDefault::Expr(node) => {
                     self.an.with_kind(Kind::ColumnDefault, |an| an.transform(Some(node)))?
@@ -1290,8 +1296,13 @@ impl Definer<'_, '_> {
         Ok(table)
     }
 
-    /// The part of `cookDefault` for the generation expression of a generated column: the expression must not read a generated column or the whole row, as `check_nested_generated` finds, and it must be immutable. `columns` gives, for each column of the table, its name and if it is a generated column.
-    fn generation_expression(&mut self, node: &Node, columns: &[(&str, bool)]) -> Result<Expr> {
+    /// The part of `cookDefault` for the generation expression of a generated column: the expression must not read a generated column or the whole row, as `check_nested_generated` finds, and it must be immutable. The expression of a virtual generated column must pass `check_virtual_generated_security` too. `columns` gives, for each column of the table, its name and if it is a generated column.
+    fn generation_expression(
+        &mut self,
+        node: &Node,
+        columns: &[(&str, bool)],
+        virtual_column: bool,
+    ) -> Result<Expr> {
         let expr = self.an.with_kind(Kind::Generated, |an| an.transform(Some(node)))?;
         let error = expr.find(0, &mut |e, depth| {
             let ExprKind::Var(var) = e.kind else { return None };
@@ -1327,11 +1338,14 @@ impl Definer<'_, '_> {
         if let Some(error) = error {
             return Err(error);
         }
-        if is_mutable(&expr) {
+        if is_mutable(self.catalog, &expr) {
             return Err(Error::new(
                 SqlState::INVALID_OBJECT_DEFINITION,
                 "generation expression is not immutable",
             ));
+        }
+        if virtual_column {
+            check_virtual_security(&expr)?;
         }
         Ok(expr)
     }
@@ -1353,9 +1367,12 @@ impl Definer<'_, '_> {
             return Err(Error::internal("ADD COLUMN without a column"));
         };
         let (name, ty, typmod) = (new.name.clone(), new.ty, new.typmod);
+        let virtual_column = new.generated == b'v';
         self.table_scope(table);
         let columns: Vec<(&str, bool)> = names.iter().map(|(n, g)| (n.as_str(), *g)).collect();
-        let expr = self.generation_expression(node, &columns).map_err(|e| e.with_position(None))?;
+        let expr = self
+            .generation_expression(node, &columns, virtual_column)
+            .map_err(|e| e.with_position(None))?;
         let from = expr.ty;
         let Some(expr) = self
             .an
@@ -1753,6 +1770,61 @@ pub(super) fn constraint_index(
         initdeferred: con.initdeferred,
         ..IndexStmt::default()
     }
+}
+
+/// The first OID that `initdb` does not pin, `FirstUnpinnedObjectId`. A function or a type with a lower OID is built in.
+const FIRST_UNPINNED_OID: u32 = 12000;
+
+/// `check_virtual_generated_security`: the generation expression of a virtual generated column calls only built-in functions and gives only built-in types, at each node of the expression.
+fn check_virtual_security(expr: &Expr) -> Result<()> {
+    let output = |ty: u32| types::row(ty).map_or(0, |t| t.output);
+    let input = |ty: u32| types::row(ty).map_or(0, |t| t.input);
+    let error = expr.find(0, &mut |e, _| {
+        // `check_functions_in_node`: the functions that the node calls.
+        let funcs = match &e.kind {
+            ExprKind::Func(f) => vec![f.oid],
+            ExprKind::NullIf { equal, .. } | ExprKind::Distinct { equal, .. } => vec![*equal],
+            ExprKind::ScalarArrayOp { func, .. } => vec![*func],
+            ExprKind::CoerceViaIo(arg, _) => vec![output(arg.ty), input(e.ty)],
+            _ => Vec::new(),
+        };
+        if funcs.iter().any(|&f| f >= FIRST_UNPINNED_OID) {
+            return Some(
+                Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    "generation expression uses user-defined function",
+                )
+                .with_detail("Virtual generated columns that make use of user-defined functions are not yet supported.")
+                .at_opt(e.location),
+            );
+        }
+        (e.ty >= FIRST_UNPINNED_OID).then(|| {
+            Error::new(SqlState::FEATURE_NOT_SUPPORTED, "generation expression uses user-defined type")
+                .with_detail("Virtual generated columns that make use of user-defined types are not yet supported.")
+                .at_opt(e.location)
+        })
+    });
+    error.map_or(Ok(()), Err)
+}
+
+/// The checks of `CheckAttributeType` with `CHKATYPE_IS_VIRTUAL` for a virtual generated column: its type cannot be a domain or a type that the user made.
+pub(crate) fn check_virtual_type(name: &str, ty: u32) -> Result<()> {
+    if types::row(ty).is_some_and(|t| t.kind == b'd') {
+        return Err(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            format!("virtual generated column \"{name}\" cannot have a domain type"),
+        ));
+    }
+    if ty >= FIRST_UNPINNED_OID {
+        return Err(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            format!("virtual generated column \"{name}\" cannot have a user-defined type"),
+        )
+        .with_detail(
+            "Virtual generated columns that make use of user-defined types are not yet supported.",
+        ));
+    }
+    Ok(())
 }
 
 /// `CheckAttributeType`: a column cannot have a pseudo-type, also as the base type of a domain or the element type of an array. The columns of a composite type passed the check when the type was made. `anyarray` allows the type `anyarray`, as `CHKATYPE_ANYARRAY` does when `allow_system_table_mods` is on.

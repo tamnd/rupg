@@ -6,7 +6,7 @@ use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{
     DeleteStmt, Node, RangeVar, ResTarget, ReturningClause, SubLinkType, UpdateStmt,
 };
-use rupg_types::oid;
+use rupg_types::{Value, oid};
 
 use crate::Analyzer;
 use crate::agg::Kind;
@@ -14,7 +14,7 @@ use crate::coerce::AtOpt;
 use crate::expr::{Expr, ExprKind, Var};
 use crate::from::{Column, FromItem, TABLE_OID_ATTNUM};
 use crate::insert::{
-    Item, Write, WriteKind, default_part, merge_parts, not_yet, targets, with_checks,
+    Generated, Item, Write, WriteKind, default_part, merge_parts, not_yet, targets, with_checks,
 };
 use crate::select::{Query, Target};
 use crate::sort::raw_location;
@@ -33,9 +33,9 @@ pub(crate) fn set_columns(list: &rupg_sql::nodes::List, columns: &[Column]) -> V
 }
 
 /// `ExecGetAllUpdatedCols`: the columns `updated` that `SET` gives, then the generated columns of `generated` that read one of them, as `ExecGetExtraUpdatedCols` adds them for the triggers of `UPDATE OF`.
-pub(crate) fn with_extra_updated(mut updated: Vec<i16>, generated: &[(usize, Expr)]) -> Vec<i16> {
+pub(crate) fn with_extra_updated(mut updated: Vec<i16>, generated: &[Generated]) -> Vec<i16> {
     let set = updated.clone();
-    for (index, expr) in generated {
+    for (index, expr, _) in generated {
         let attnum = i16::try_from(index + 1).unwrap_or(i16::MAX);
         let reads = expr.find(0, &mut |e, depth| match &e.kind {
             ExprKind::Var(var) if var.levels_up == depth && set.contains(&var.attnum) => Some(()),
@@ -269,6 +269,12 @@ impl Analyzer<'_> {
                     .with_detail(format!("Column \"{}\" is a generated column.", column.name)));
                 }
                 Some(Some(expr)) => expr,
+                // A virtual generated column stores a null, and a read of the row computes it.
+                Some(None) | None if self.generated(table, index) == b'v' => {
+                    let mut null = Expr::new(ExprKind::Const(Value::Null), column.ty);
+                    null.typmod = column.typmod;
+                    null
+                }
                 // A generated column keeps its old value until the write computes it.
                 Some(None) if self.generated(table, index) != 0 => column_var(index, column),
                 Some(None) => self.column_default(table, index, column)?,

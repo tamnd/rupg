@@ -114,7 +114,7 @@ impl Connection {
             let reader = self.reader();
             let values = rupg_analyze::execute_params(&stmt.params, &statement.params, &reader)?;
             notices.extend(values.notices.iter().map(|error| Notice::warning(error.clone())));
-            let plan = rupg_exec::prepare(values)?.fold(None, &reader)?;
+            let plan = rupg_exec::prepare(values, &reader)?.fold(None, &reader)?;
             plan.run(&[], &reader)?.into_iter().next().unwrap_or_default()
         };
         let reader = self.reader();

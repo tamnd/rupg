@@ -264,12 +264,15 @@ fn check_join(item: &FromItem) -> Result<()> {
 const MIXED_KEYS: &str =
     "Some of the datatypes only support hashing, while others only support sorting.";
 
-/// Checks a query and makes the plan to run it.
+/// Checks a query and makes the plan to run it. The plan reads the generation expression of each virtual generated column in place of the column, as `expand_virtual_generated_columns` puts it in the query.
 ///
 /// # Errors
 ///
 /// `0A000` for a function or a type that the engine does not have yet.
-pub fn prepare(query: Query) -> Result<Plan> {
+pub fn prepare(mut query: Query, session: &dyn Session) -> Result<Plan> {
+    if let Some(catalog) = session.catalog() {
+        rupg_analyze::expand_virtual(&mut query, catalog)?;
+    }
     rupg_analyze::check_outer_joins(&query)?;
     check_query(&query, query.write.is_none())?;
     check_write(&query)?;
@@ -1220,7 +1223,7 @@ impl Plan {
             let types: Vec<u32> = session
                 .catalog()
                 .and_then(|c| c.relation(info.table))
-                .map(|r| r.columns.iter().map(|c| c.ty).collect())
+                .map(row_types)
                 .unwrap_or_default();
             return Err(Error::new(
                 SqlState::WITH_CHECK_OPTION_VIOLATION,
@@ -2204,7 +2207,27 @@ impl<'a> Eval<'a> {
                 Ok(Value::Int4(bits))
             }
             ExprKind::JsonValue(v) => self.eval(&v.formatted),
-            ExprKind::PlaceHolder(p) => self.eval(&p.expr),
+            // A `PlaceHolderVar` is null in a row of an outer join that has no row of its relations.
+            ExprKind::PlaceHolder(p) => {
+                let tuple = if p.levels_up == 0 {
+                    self.tuple
+                } else {
+                    self.outer
+                        .len()
+                        .checked_sub(p.levels_up)
+                        .and_then(|i| self.outer.get(i))
+                        .ok_or_else(|| Error::internal("a column of an outer query has no row"))?
+                        .tuple
+                };
+                if !p.relations.is_empty()
+                    && p.relations
+                        .iter()
+                        .all(|r| tuple.get(*r).is_none_or(|row| *row == scan::NONE))
+                {
+                    return Ok(Value::Null);
+                }
+                self.eval(&p.expr)
+            }
             ExprKind::JsonCtor(c) => self.json_ctor(c),
             ExprKind::IsJson(p) => self.is_json(p),
             ExprKind::JsonExpr(e) => self.json_expr(e),
@@ -3094,7 +3117,7 @@ mod sort;
 mod user;
 mod window;
 
-pub use insert::failing_row;
+pub use insert::{failing_row, row_types};
 pub use partition::{Router, leaves as partition_leaves};
 pub use scan::members;
 pub use user::variadic_type;

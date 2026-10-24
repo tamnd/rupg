@@ -47,7 +47,8 @@ impl Definer<'_, '_> {
         let Some(number) = rel.and_then(|r| r.column_number(column)) else {
             return Err(no_column(column, &target.name));
         };
-        if rel.and_then(|r| r.column(number)).is_none_or(|c| c.generated == 0) {
+        let generated = rel.and_then(|r| r.column(number)).map_or(0, |c| c.generated);
+        if generated == 0 {
             return Err(not_generated(column, &target.name));
         }
         // `RememberAllDependentForRebuilding` and `RememberWholeRowDependentForRebuilding`.
@@ -63,7 +64,8 @@ impl Definer<'_, '_> {
         self.catalog.remove_default(table, number);
         self.add_generation_expression(table, number, node)?;
         // `ATRewriteTables` writes the rows again, and a stored value of the row type would not get the new values.
-        if target.kind != b'p' {
+        // A virtual generated column has no stored values, and the rows stay as they are.
+        if target.kind != b'p' && generated == b's' {
             self.check_row_type_users(target)?;
             let default = self.catalog.default_of(table, number).map(|d| d.expr.clone());
             self.added.push(Fill { table, column: number, default });

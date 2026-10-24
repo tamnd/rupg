@@ -96,7 +96,7 @@ fn run(sql: &str) -> Result<Vec<Vec<String>>> {
     let (stmts, _) = rupg_sql::parse(sql).map_err(rupg_common::Error::from)?;
     let Some(Some(Node::RawStmt(raw))) = stmts.first() else { panic!("no statement in {sql}") };
     let query = analyze(raw.stmt.as_ref().expect("a statement"), &session, &Params::default())?;
-    let plan = prepare(query)?;
+    let plan = prepare(query, &session)?;
     let rows = plan.run(&[], &session)?;
     let mut texts = Vec::new();
     for values in rows {

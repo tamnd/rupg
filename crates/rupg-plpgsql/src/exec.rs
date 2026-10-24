@@ -1635,7 +1635,7 @@ impl Exec<'_> {
             }
             let query =
                 rupg_analyze::analyze(&node, self.env(), &Params { types, variable: false })?;
-            rupg_exec::prepare(query)?
+            rupg_exec::prepare(query, self.session())?
                 .fold(None, self.session())
                 .map(|plan| Planned::Query(Box::new(plan)))
         })()
@@ -1844,7 +1844,7 @@ impl Exec<'_> {
             _ => rupg_analyze::analyze_with(&node, self.env(), &Params::default(), &resolver)?,
         };
         let simple = e.mode != Mode::Statement && is_simple(&query);
-        let plan = rupg_exec::prepare(query)?.fold(None, self.session())?;
+        let plan = rupg_exec::prepare(query, self.session())?.fold(None, self.session())?;
         let changes = self.spi.changes();
         Ok(Prepared { plan, bindings: resolver.bindings.into_inner(), changes, simple })
     }
@@ -1917,7 +1917,7 @@ impl Exec<'_> {
             Some(plan) => plan,
             None => {
                 let query = rupg_analyze::plpgsql_cast(self.env(), from, to.0, to.1)?;
-                let plan = Rc::new(rupg_exec::prepare(query)?);
+                let plan = Rc::new(rupg_exec::prepare(query, self.session())?);
                 self.c.casts.borrow_mut().insert(key, Rc::clone(&plan));
                 plan
             }
