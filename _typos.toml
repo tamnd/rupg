@@ -28,6 +28,8 @@ valu = "valu"
 abd = "abd"
 # The function `make_ands_implicit` of the planner.
 ands = "ands"
+# The operator families `alt_opf1` to `alt_opf19` of the test `alter_generic.sql` of PostgreSQL, in `opclass.test` and `opclass_alter.test`.
+opf = "opf"
 
 # Test inputs that are wrong on purpose.
 [default]
