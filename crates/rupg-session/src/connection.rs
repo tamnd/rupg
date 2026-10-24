@@ -412,6 +412,8 @@ pub struct Connection {
     copy_in: Option<copy_from::CopyIn>,
     /// The transaction ID of the transaction, or 0 while the transaction did not write a row.
     xid: Cell<u32>,
+    /// `GetStableLatestTransactionId`: the reference ID of `age` for the transaction, or 0 before its first call in the transaction.
+    stable_xid: Cell<u32>,
     /// `currentCommandId`: the commands of the transaction that wrote rows.
     command: Cell<u32>,
     /// The snapshot of a transaction in `REPEATABLE READ` or `SERIALIZABLE`, from its first statement to its end.
@@ -500,6 +502,7 @@ impl Connection {
             randomness: RefCell::new(Randomness::default()),
             copy_in: None,
             xid: Cell::new(0),
+            stable_xid: Cell::new(0),
             command: Cell::new(0),
             snapshot: RefCell::new(None),
             deferred: RefCell::new(Vec::new()),
@@ -980,6 +983,15 @@ impl Connection {
         Some(self.xid.get()).filter(|&xid| xid != 0)
     }
 
+    /// `GetStableLatestTransactionId`: the ID of the transaction, or the ID that the next transaction gets when it has none. The first call of a transaction keeps the value until the end of the transaction.
+    pub(crate) fn stable_xid(&self) -> u32 {
+        if self.stable_xid.get() == 0 {
+            let xid = self.transaction_id(false).unwrap_or_else(|| self.heap().next_xid());
+            self.stable_xid.set(xid);
+        }
+        self.stable_xid.get()
+    }
+
     /// The rows of the tables and the transactions in progress.
     pub(crate) fn heap(&self) -> &Heap {
         self.store.heap()
@@ -989,6 +1001,7 @@ impl Connection {
     fn end_heap(&self, commit: bool, defined: bool) {
         let heap = self.store.heap();
         let xid = self.xid.replace(0);
+        self.stable_xid.set(0);
         if xid != 0 {
             if commit {
                 heap.commit(xid);
@@ -6197,6 +6210,12 @@ mod tests {
     #[test]
     fn xmin() {
         big_stack(|| script(include_str!("connection/xmin.test")));
+    }
+
+    /// `age` and `mxid_age` of an `xid`: the IDs that are not normal, the age of `datfrozenxid` and `datminmxid`, and the age of the ID of the transaction and of `xmin`. `connection/xidage.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn xidage() {
+        big_stack(|| script(include_str!("connection/xidage.test")));
     }
 
     /// `CREATE TABLE ... (LIKE ...)`, from `create_table_like.sql` of the PostgreSQL tests: the columns and the not-null constraints of the other relation, the options `INCLUDING DEFAULTS`, `GENERATED`, `IDENTITY`, `CONSTRAINTS`, `INDEXES`, `STORAGE`, `COMMENTS` and `ALL`, `LIKE` with `INHERITS`, and `LIKE` of a view, a composite type and a sequence. The script has catalog queries in place of `\d`, and it does not have the parts for virtual generated columns, `NOT ENFORCED`, `CREATE STATISTICS` and foreign tables. `connection/create_table_like.test` is the output of PostgreSQL 19 for the same script in a new database.

@@ -1,4 +1,4 @@
-//! The functions of `pg_snapshot` and `txid_snapshot` from `xid8funcs.c`: `xmin`, `xmax`, the transactions in progress and the visibility of a transaction, and the functions of the ID, the snapshot and the state of a transaction. The functions of `txid_snapshot` have the same `prosrc` as the functions of `pg_snapshot`, and they give `bigint` where these give `xid8`. Both hold a `u64` in the bits of [`Value::Int8`].
+//! The functions of `pg_snapshot` and `txid_snapshot` from `xid8funcs.c`: `xmin`, `xmax`, the transactions in progress and the visibility of a transaction, and the functions of the ID, the snapshot and the state of a transaction. Also `age` and `mxid_age` of `xid` from `xid.c`. The functions of `txid_snapshot` have the same `prosrc` as the functions of `pg_snapshot`, and they give `bigint` where these give `xid8`. Both hold a `u64` in the bits of [`Value::Int8`].
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_types::{Snapshot, Value};
@@ -29,8 +29,31 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_current_xact_id_if_assigned" => current_xact_id_if_assigned,
         "pg_current_snapshot" => current_snapshot,
         "pg_xact_status" => xact_status,
+        "xid_age" => xid_age,
+        "mxid_age" => mxid_age,
         _ => return None,
     })
+}
+
+/// `ReadNextMultiXactId`: rupg has no multixacts, so the next is the first.
+const FIRST_MULTI_XACT_ID: u32 = 1;
+
+/// `xid_age`: the number of transactions from `xid` to [`crate::Session::stable_transaction_id`]. An ID that is not normal is the oldest.
+fn xid_age(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let Some(Value::Oid(xid)) = args.first() else { return Err(bad_value()) };
+    if *xid < FIRST_NORMAL_XID {
+        return Ok(Value::Int4(i32::MAX));
+    }
+    Ok(Value::Int4(call.session.stable_transaction_id().wrapping_sub(*xid).cast_signed()))
+}
+
+/// `mxid_age`: the number of multixacts from `xid` to the next multixact. The ID 0 is the oldest.
+fn mxid_age(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let Some(Value::Oid(xid)) = args.first() else { return Err(bad_value()) };
+    if *xid == 0 {
+        return Ok(Value::Int4(i32::MAX));
+    }
+    Ok(Value::Int4(FIRST_MULTI_XACT_ID.wrapping_sub(*xid).cast_signed()))
 }
 
 /// The snapshot of an argument.

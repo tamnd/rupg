@@ -1,0 +1,41 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> SELECT age('0'::xid), age('1'::xid), age('2'::xid);
+fields age:23:4:-1,age:23:4:-1,age:23:4:-1
+row 2147483647,2147483647,2147483647
+SELECT 1
+> SELECT mxid_age('0'::xid), mxid_age('1'::xid);
+fields mxid_age:23:4:-1,mxid_age:23:4:-1
+row 2147483647,0
+SELECT 1
+> SELECT pg_typeof(age('3'::xid)), pg_typeof(mxid_age('1'::xid));
+fields pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
+row integer,integer
+SELECT 1
+> SELECT age(datfrozenxid) >= 0 AS ok, mxid_age(datminmxid) FROM pg_database WHERE datname = current_database();
+fields ok:16:1:-1,mxid_age:23:4:-1
+row t,0
+SELECT 1
+> BEGIN;
+BEGIN
+> SELECT age(pg_current_xact_id()::xid);
+fields age:23:4:-1
+row 0
+SELECT 1
+> CREATE TABLE ag (a int);
+CREATE TABLE
+> INSERT INTO ag VALUES (1);
+INSERT 0 1
+> SELECT age(xmin) FROM ag;
+fields age:23:4:-1
+row 0
+SELECT 1
+> COMMIT;
+COMMIT
+> SELECT age(xmin) > 0 AS older FROM ag;
+fields older:16:1:-1
+row t
+SELECT 1
+> DROP TABLE ag;
+DROP TABLE
