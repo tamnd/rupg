@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- A function in SQL can have more than one statement, and its last statement can be `INSERT`, `UPDATE`, `DELETE` or `MERGE` with `RETURNING`. The statements run one after the other, and each one sees the changes of the statements before it. A statement can also be a utility statement, such as `CREATE TABLE`. `CREATE FUNCTION` checks each statement, and with `check_function_bodies` set to off it checks no statement. An error at run time has the line `SQL function "name" statement N`. A function that is not volatile cannot write, and no function can run `COMMIT` or `ROLLBACK` (#NNN).
+
 ## 0.1.77 (2026-10-24)
 
 ### Added
@@ -13,7 +17,6 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - `age(xid)` and `mxid_age(xid)` run. `age` counts from the ID of the transaction, or from the next ID when the transaction has none, and the value stays the same until the end of the transaction, as `GetStableLatestTransactionId` gives it. An ID that is not normal gives `2147483647` (#669).
 - The clause `SET` of `CREATE FUNCTION`, `CREATE PROCEDURE` and `ALTER FUNCTION`, with `RESET`, `RESET ALL` and `SET ... FROM CURRENT`. `proconfig` keeps each setting, and `pg_get_functiondef` shows each one on its own line. A call runs with the settings, and they go back at the end of the call, also after an error. A value that a `SET` in the call changes stays after the call, as `AtEOXact_GUC` keeps it. A body in a string reads its names with the `search_path` of the settings. `SECURITY INVOKER` is accepted (#671).
 - `SECURITY DEFINER` for `CREATE FUNCTION`, `CREATE PROCEDURE` and `ALTER FUNCTION`. A call runs as the owner of the function: the checks of the privileges, `current_user`, `"$user"` in `search_path` and the owner of a new object use the owner. `SET ROLE`, `SET SESSION AUTHORIZATION` and `set_config` of them give an error in the call, as in PostgreSQL. `prosecdef`, `pg_get_functiondef` and `information_schema.routines` show the option (#674).
-- A function in SQL can have more than one statement, and its last statement can be `INSERT`, `UPDATE`, `DELETE` or `MERGE` with `RETURNING`. The statements run one after the other, and each one sees the changes of the statements before it. A statement can also be a utility statement, such as `CREATE TABLE`. `CREATE FUNCTION` checks each statement, and with `check_function_bodies` set to off it checks no statement. An error at run time has the line `SQL function "name" statement N`. A function that is not volatile cannot write, and no function can run `COMMIT` or `ROLLBACK` (#NNN).
 
 ### Fixed
 
