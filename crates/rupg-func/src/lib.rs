@@ -412,6 +412,15 @@ pub trait Session {
         let _ = relation;
         Ok(Vec::new())
     }
+    /// The rows of [`Session::table_rows`], each with the system columns `xmin` and `xmax` of its version before the ID of the version.
+    ///
+    /// # Errors
+    ///
+    /// An error of the store of the rows.
+    fn table_rows_with_xids(&self, relation: u32) -> Result<Vec<Vec<Value>>> {
+        let _ = relation;
+        Ok(Vec::new())
+    }
     /// `pgstat_fetch_stat_tabentry`: the counters of a relation of the database of the session, from the snapshot of the transaction, or `None` for a relation with no entry. The first call of a transaction takes the snapshot.
     fn relation_counts(&self, relation: u32) -> Option<RelationCounts> {
         let _ = relation;

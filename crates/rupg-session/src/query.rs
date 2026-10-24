@@ -948,6 +948,13 @@ impl rupg_func::Session for Reader<'_> {
         }
     }
 
+    fn table_rows_with_xids(&self, relation: u32) -> Result<Vec<Vec<Value>>> {
+        match (self.activity, &self.view) {
+            (Some((_, store)), Some(view)) => Ok(store.heap().rows_with_xids(relation, view)),
+            _ => Ok(Vec::new()),
+        }
+    }
+
     fn relation_counts(&self, relation: u32) -> Option<rupg_func::RelationCounts> {
         let (activity, store) = self.activity?;
         activity.relation_counts(store, relation)

@@ -3644,7 +3644,7 @@ mod tests {
         big_stack(|| script(include_str!("connection/plpgsql_more.test")));
     }
 
-    /// The system columns `xmin`, `cmin`, `xmax` and `cmax` of a table and of a catalog, their types and their errors in a view, a subquery and a check constraint, the partition key functions for a table that is not partitioned, and the recovery functions on a server that is not in recovery. The script does not show the value of `xmin`, because rupg has no row versions yet. `connection/system_columns.test` is the output of PostgreSQL 19 for the same script in a new database.
+    /// The system columns `xmin`, `cmin`, `xmax` and `cmax` of a table and of a catalog, their types and their errors in a view, a subquery and a check constraint, the partition key functions for a table that is not partitioned, and the recovery functions on a server that is not in recovery. The script does not show the value of `xmin`, which is the ID of a transaction. `connection/system_columns.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn system_columns() {
         big_stack(|| script(include_str!("connection/system_columns.test")));
@@ -6191,6 +6191,12 @@ mod tests {
     #[test]
     fn xactid() {
         big_stack(|| script(include_str!("connection/xactid.test")));
+    }
+
+    /// The system columns `xmin` and `xmax` of the rows of a table, a partitioned table and a table with children of `INHERITS`: the transaction that inserted the row, the transaction that deleted it, the ID of an aborted transaction that deleted it, and an `UPDATE` that checks `xmin`. `connection/xmin.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn xmin() {
+        big_stack(|| script(include_str!("connection/xmin.test")));
     }
 
     /// `CREATE TABLE ... (LIKE ...)`, from `create_table_like.sql` of the PostgreSQL tests: the columns and the not-null constraints of the other relation, the options `INCLUDING DEFAULTS`, `GENERATED`, `IDENTITY`, `CONSTRAINTS`, `INDEXES`, `STORAGE`, `COMMENTS` and `ALL`, `LIKE` with `INHERITS`, and `LIKE` of a view, a composite type and a sequence. The script has catalog queries in place of `\d`, and it does not have the parts for virtual generated columns, `NOT ENFORCED`, `CREATE STATISTICS` and foreign tables. `connection/create_table_like.test` is the output of PostgreSQL 19 for the same script in a new database.
