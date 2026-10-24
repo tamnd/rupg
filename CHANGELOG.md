@@ -59,6 +59,12 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - The check of `CREATE` on a schema reads `nspacl`, so a role that `GRANT CREATE ON SCHEMA` names, or that has the privileges of such a role, can create objects in the schema (#631).
 - A query with `HAVING` and no aggregate and no `GROUP BY` does not read `FROM` and does not test `WHERE`, as in PostgreSQL. `make_interval` gives the overflow error of `float8_mul` for a very large `secs`, and a default or a check constraint with a `regrole` or `regdatabase` constant is an error. (#621)
 - A column of the target table by a name with the schema in `RETURNING`, such as `RETURNING public.t.id`, now works in `INSERT`, `UPDATE`, `DELETE` and `MERGE`. Before, it gave `42P09` "table reference ... is ambiguous", because the names `old` and `new` of `RETURNING` also matched the table. Prisma sends this form.
+- A statement checks the privileges that it needs on the tables and the columns that it reads and writes before it runs, as `ExecCheckPermissions` does. A column grant is enough for the columns that the statement uses, the relations of a view count as the owner of the view unless the view has `security_invoker`, and `FOR UPDATE` needs `UPDATE`. (#619)
+- `pg_get_functiondef(oid)` gives the `CREATE OR REPLACE FUNCTION` or `CREATE OR REPLACE PROCEDURE` statement of a function, with the same text as PostgreSQL for the built-in functions and for the functions in SQL and PL/pgSQL with a body in a string. A body in SQL, from `BEGIN ATOMIC` or `RETURN`, gives `0A000` for now. Prisma calls this function when it reads the schema.
+
+### Fixed
+
+- A column of the target table by a name with the schema in `RETURNING`, such as `RETURNING public.t.id`, now works in `INSERT`, `UPDATE`, `DELETE` and `MERGE`. Before, it gave `42P09` "table reference ... is ambiguous", because the names `old` and `new` of `RETURNING` also matched the table. Prisma sends this form (#618).
 
 ## 0.1.74 (2026-10-23)
 

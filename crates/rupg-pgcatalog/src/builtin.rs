@@ -1611,6 +1611,11 @@ pub fn procs() -> &'static [ProcRow] {
     &BUILTIN.procs
 }
 
+/// The number of the static row of `pg_proc` of the built-in function with this OID, or `None` for a function that is not in `pg_proc.dat`. The columns that [`ProcRow`] does not have, such as `procost`, are in the batches of [`catalog`] at this row.
+pub fn proc_row(oid: u32) -> Option<usize> {
+    BUILTIN.proc_oid.get(&oid).copied()
+}
+
 /// The built-in function with this OID, a function that [`add_system_proc`] added, or a function of a type that [`use_session_types`] gave to the thread.
 pub fn proc_by_oid(oid: u32) -> Option<&'static ProcRow> {
     BUILTIN

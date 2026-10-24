@@ -3602,6 +3602,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/function_arguments.test")));
     }
 
+    /// `pg_get_functiondef`: the built-in functions with options, a support function, `OUT` arguments, a window function and a result of `SETOF record`, a hash of the text of all the built-in functions without a body in SQL, an aggregate, an OID that is not a function, and the functions in SQL and in PL/pgSQL of a session with the options, a body that has the tag `$function$`, a procedure, a name that needs quotes and a temporary function. `connection/functiondef.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn functiondef() {
+        big_stack(|| script(include_str!("connection/functiondef.test")));
+    }
+
     /// The view `pg_sequences` for the sequences of `serial` columns, `pg_sequence_last_value` with its errors, `pg_my_temp_schema`, `pg_is_other_temp_schema` and the view `pg_seclabels`. `connection/sequences.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn sequences() {
