@@ -5940,6 +5940,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/gstored10.test")));
     }
 
+    /// Stored generated columns, from the part of `generated_stored.sql` of the PostgreSQL tests on triggers: the condition `WHEN` of a trigger `BEFORE` cannot read a generated column of `NEW`, and the new row of a trigger `BEFORE` has nulls for the generated columns, also after a dropped column and for `ON CONFLICT DO UPDATE`. `connection/gstored11.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn gstored11() {
+        big_stack(|| script(include_str!("connection/gstored11.test")));
+    }
+
     /// `CREATE TABLE ... (LIKE ...)`, from `create_table_like.sql` of the PostgreSQL tests: the columns and the not-null constraints of the other relation, the options `INCLUDING DEFAULTS`, `GENERATED`, `IDENTITY`, `CONSTRAINTS`, `INDEXES`, `STORAGE`, `COMMENTS` and `ALL`, `LIKE` with `INHERITS`, and `LIKE` of a view, a composite type and a sequence. The script has catalog queries in place of `\d`, and it does not have the parts for virtual generated columns, `NOT ENFORCED`, `CREATE STATISTICS` and foreign tables. `connection/create_table_like.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn create_table_like() {

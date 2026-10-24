@@ -308,7 +308,7 @@ impl Analyzer<'_> {
                     delete_foreign,
                 }),
                 recheck,
-                updated,
+                updated: crate::modify::with_extra_updated(updated, &generated),
                 instead: false,
                 inherit,
             }),

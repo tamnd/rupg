@@ -1,0 +1,231 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE gtest26 (
+>>     a int PRIMARY KEY,
+>>     b int GENERATED ALWAYS AS (a * 2) STORED
+>> );
+CREATE TABLE
+> 
+>> CREATE FUNCTION gtest_trigger_func() RETURNS trigger
+>>   LANGUAGE plpgsql
+>> AS $$
+>> BEGIN
+>>   IF tg_op IN ('DELETE', 'UPDATE') THEN
+>>     RAISE INFO '%: %: old = %', TG_NAME, TG_WHEN, OLD;
+>>   END IF;
+>>   IF tg_op IN ('INSERT', 'UPDATE') THEN
+>>     RAISE INFO '%: %: new = %', TG_NAME, TG_WHEN, NEW;
+>>   END IF;
+>>   IF tg_op = 'DELETE' THEN
+>>     RETURN OLD;
+>>   ELSE
+>>     RETURN NEW;
+>>   END IF;
+>> END
+>> $$;
+CREATE FUNCTION
+> 
+>> CREATE TRIGGER gtest1 BEFORE DELETE OR UPDATE ON gtest26
+>>   FOR EACH ROW
+>>   WHEN (OLD.b < 0)  -- ok
+>>   EXECUTE PROCEDURE gtest_trigger_func();
+CREATE TRIGGER
+> 
+>> CREATE TRIGGER gtest2a BEFORE INSERT OR UPDATE ON gtest26
+>>   FOR EACH ROW
+>>   WHEN (NEW.b < 0)  -- error
+>>   EXECUTE PROCEDURE gtest_trigger_func();
+ERROR 42P17 BEFORE trigger's WHEN condition cannot reference NEW generated columns at 83
+DETAIL Column "b" is a generated column.
+> 
+>> CREATE TRIGGER gtest2b BEFORE INSERT OR UPDATE ON gtest26
+>>   FOR EACH ROW
+>>   WHEN (NEW.* IS NOT NULL)  -- error
+>>   EXECUTE PROCEDURE gtest_trigger_func();
+ERROR 42P17 BEFORE trigger's WHEN condition cannot reference NEW generated columns at 83
+DETAIL A whole-row reference is used and the table contains generated columns.
+> 
+>> CREATE TRIGGER gtest2 BEFORE INSERT ON gtest26
+>>   FOR EACH ROW
+>>   WHEN (NEW.a < 0)
+>>   EXECUTE PROCEDURE gtest_trigger_func();
+CREATE TRIGGER
+> 
+>> CREATE TRIGGER gtest3 AFTER DELETE OR UPDATE ON gtest26
+>>   FOR EACH ROW
+>>   WHEN (OLD.b < 0)  -- ok
+>>   EXECUTE PROCEDURE gtest_trigger_func();
+CREATE TRIGGER
+> 
+>> CREATE TRIGGER gtest4 AFTER INSERT OR UPDATE ON gtest26
+>>   FOR EACH ROW
+>>   WHEN (NEW.b < 0)  -- ok
+>>   EXECUTE PROCEDURE gtest_trigger_func();
+CREATE TRIGGER
+> 
+>> INSERT INTO gtest26 (a) VALUES (-2), (0), (3);
+INFO 00000 gtest2: BEFORE: new = (-2,) (PL/pgSQL function gtest_trigger_func() line 7 at RAISE)
+INFO 00000 gtest4: AFTER: new = (-2,-4) (PL/pgSQL function gtest_trigger_func() line 7 at RAISE)
+INSERT 0 3
+> SELECT * FROM gtest26 ORDER BY a;
+fields a@gtest26.1:23:4:-1,b@gtest26.2:23:4:-1
+row -2,-4
+row 0,0
+row 3,6
+SELECT 3
+> UPDATE gtest26 SET a = a * -2;
+INFO 00000 gtest1: BEFORE: old = (-2,-4) (PL/pgSQL function gtest_trigger_func() line 4 at RAISE)
+INFO 00000 gtest1: BEFORE: new = (4,) (PL/pgSQL function gtest_trigger_func() line 7 at RAISE)
+INFO 00000 gtest3: AFTER: old = (-2,-4) (PL/pgSQL function gtest_trigger_func() line 4 at RAISE)
+INFO 00000 gtest3: AFTER: new = (4,8) (PL/pgSQL function gtest_trigger_func() line 7 at RAISE)
+INFO 00000 gtest4: AFTER: old = (3,6) (PL/pgSQL function gtest_trigger_func() line 4 at RAISE)
+INFO 00000 gtest4: AFTER: new = (-6,-12) (PL/pgSQL function gtest_trigger_func() line 7 at RAISE)
+UPDATE 3
+> SELECT * FROM gtest26 ORDER BY a;
+fields a@gtest26.1:23:4:-1,b@gtest26.2:23:4:-1
+row -6,-12
+row 0,0
+row 4,8
+SELECT 3
+> DELETE FROM gtest26 WHERE a = -6;
+INFO 00000 gtest1: BEFORE: old = (-6,-12) (PL/pgSQL function gtest_trigger_func() line 4 at RAISE)
+INFO 00000 gtest3: AFTER: old = (-6,-12) (PL/pgSQL function gtest_trigger_func() line 4 at RAISE)
+DELETE 1
+> SELECT * FROM gtest26 ORDER BY a;
+fields a@gtest26.1:23:4:-1,b@gtest26.2:23:4:-1
+row 0,0
+row 4,8
+SELECT 2
+> 
+>> DROP TRIGGER gtest1 ON gtest26;
+DROP TRIGGER
+> DROP TRIGGER gtest2 ON gtest26;
+DROP TRIGGER
+> DROP TRIGGER gtest3 ON gtest26;
+DROP TRIGGER
+> 
+>> -- Check that an UPDATE of "a" fires the trigger for UPDATE OF b, per
+>> -- SQL standard.
+>> CREATE FUNCTION gtest_trigger_func3() RETURNS trigger
+>>   LANGUAGE plpgsql
+>> AS $$
+>> BEGIN
+>>   RAISE NOTICE 'OK';
+>>   RETURN NEW;
+>> END
+>> $$;
+CREATE FUNCTION
+> 
+>> CREATE TRIGGER gtest11 BEFORE UPDATE OF b ON gtest26
+>>   FOR EACH ROW
+>>   EXECUTE PROCEDURE gtest_trigger_func3();
+CREATE TRIGGER
+> 
+>> UPDATE gtest26 SET a = 1 WHERE a = 0;
+NOTICE 00000 OK (PL/pgSQL function gtest_trigger_func3() line 3 at RAISE)
+UPDATE 1
+> 
+>> DROP TRIGGER gtest11 ON gtest26;
+DROP TRIGGER
+> TRUNCATE gtest26;
+TRUNCATE TABLE
+> 
+>> -- check that modifications of generated columns in triggers do
+>> -- not get propagated
+>> CREATE FUNCTION gtest_trigger_func4() RETURNS trigger
+>>   LANGUAGE plpgsql
+>> AS $$
+>> BEGIN
+>>   NEW.a = 10;
+>>   NEW.b = 300;
+>>   RETURN NEW;
+>> END;
+>> $$;
+CREATE FUNCTION
+> 
+>> CREATE TRIGGER gtest12_01 BEFORE INSERT OR UPDATE ON gtest26
+>>   FOR EACH ROW
+>>   EXECUTE PROCEDURE gtest_trigger_func();
+CREATE TRIGGER
+> 
+>> CREATE TRIGGER gtest12_02 BEFORE INSERT OR UPDATE ON gtest26
+>>   FOR EACH ROW
+>>   EXECUTE PROCEDURE gtest_trigger_func4();
+CREATE TRIGGER
+> 
+>> CREATE TRIGGER gtest12_03 BEFORE INSERT OR UPDATE ON gtest26
+>>   FOR EACH ROW
+>>   EXECUTE PROCEDURE gtest_trigger_func();
+CREATE TRIGGER
+> 
+>> INSERT INTO gtest26 (a) VALUES (1);
+INFO 00000 gtest12_01: BEFORE: new = (1,) (PL/pgSQL function gtest_trigger_func() line 7 at RAISE)
+INFO 00000 gtest12_03: BEFORE: new = (10,300) (PL/pgSQL function gtest_trigger_func() line 7 at RAISE)
+INSERT 0 1
+> SELECT * FROM gtest26 ORDER BY a;
+fields a@gtest26.1:23:4:-1,b@gtest26.2:23:4:-1
+row 10,20
+SELECT 1
+> UPDATE gtest26 SET a = 11 WHERE a = 10;
+INFO 00000 gtest12_01: BEFORE: old = (10,20) (PL/pgSQL function gtest_trigger_func() line 4 at RAISE)
+INFO 00000 gtest12_01: BEFORE: new = (11,) (PL/pgSQL function gtest_trigger_func() line 7 at RAISE)
+INFO 00000 gtest12_03: BEFORE: old = (10,20) (PL/pgSQL function gtest_trigger_func() line 4 at RAISE)
+INFO 00000 gtest12_03: BEFORE: new = (10,) (PL/pgSQL function gtest_trigger_func() line 7 at RAISE)
+UPDATE 1
+> SELECT * FROM gtest26 ORDER BY a;
+fields a@gtest26.1:23:4:-1,b@gtest26.2:23:4:-1
+row 10,20
+SELECT 1
+> 
+>> -- LIKE INCLUDING GENERATED and dropped column handling
+>> CREATE TABLE gtest28a (
+>>   a int,
+>>   b int,
+>>   c int,
+>>   x int GENERATED ALWAYS AS (b * 2) STORED
+>> );
+CREATE TABLE
+> DROP TABLE gtest26;
+DROP TABLE
+> CREATE TABLE gtest27x (x int, a int PRIMARY KEY, b int GENERATED ALWAYS AS (a + 100) STORED);
+CREATE TABLE
+> ALTER TABLE gtest27x DROP COLUMN x;
+ALTER TABLE
+> CREATE TRIGGER gtest27x_w BEFORE INSERT ON gtest27x
+>>   FOR EACH ROW
+>>   WHEN (NEW.b < 0)
+>>   EXECUTE PROCEDURE gtest_trigger_func();
+ERROR 42P17 BEFORE trigger's WHEN condition cannot reference NEW generated columns at 76
+DETAIL Column "b" is a generated column.
+> CREATE TRIGGER gtest27x_w BEFORE INSERT ON gtest27x
+>>   FOR EACH ROW
+>>   WHEN (NEW.a < 0)
+>>   EXECUTE PROCEDURE gtest_trigger_func();
+CREATE TRIGGER
+> CREATE TRIGGER gtest27x_b BEFORE UPDATE ON gtest27x
+>>   FOR EACH ROW
+>>   EXECUTE PROCEDURE gtest_trigger_func();
+CREATE TRIGGER
+> INSERT INTO gtest27x (a) VALUES (-1), (2);
+INFO 00000 gtest27x_w: BEFORE: new = (-1,) (PL/pgSQL function gtest_trigger_func() line 7 at RAISE)
+INSERT 0 2
+> INSERT INTO gtest27x (a) VALUES (2) ON CONFLICT (a) DO UPDATE SET a = 5;
+INFO 00000 gtest27x_b: BEFORE: old = (2,102) (PL/pgSQL function gtest_trigger_func() line 4 at RAISE)
+INFO 00000 gtest27x_b: BEFORE: new = (5,) (PL/pgSQL function gtest_trigger_func() line 7 at RAISE)
+INSERT 0 1
+> SELECT * FROM gtest27x ORDER BY a;
+fields a@gtest27x.2:23:4:-1,b@gtest27x.3:23:4:-1
+row -1,99
+row 5,105
+SELECT 2
+> CREATE TRIGGER gtest27x_a AFTER INSERT ON gtest27x
+>>   FOR EACH ROW
+>>   WHEN (NEW.* IS NOT NULL)
+>>   EXECUTE PROCEDURE gtest_trigger_func();
+CREATE TRIGGER
+> INSERT INTO gtest27x (a) VALUES (7);
+INFO 00000 gtest27x_a: AFTER: new = (7,107) (PL/pgSQL function gtest_trigger_func() line 7 at RAISE)
+INSERT 0 1
+> DROP TABLE gtest27x;
+DROP TABLE

@@ -396,6 +396,7 @@ impl Connection {
         let width = info.width;
         let all = self.table_width(info);
         let conds = if checked { info.checks.len() } else { 0 };
+        let generated = self.generated_columns(info);
         let heap = self.store.heap();
         let mut out = Vec::with_capacity(rows.len());
         'rows: for mut row in rows {
@@ -428,16 +429,19 @@ impl Connection {
             }
             let tail = row.split_off(width + conds);
             let given = row.split_off(width);
-            let mut new = row;
+            let computed = row;
+            let mut new = without_generated(&computed, &generated);
             let mut fired = false;
             for armed in &before {
                 if !self.enabled((armed, triggers.event), info, old.as_deref(), Some(&new))? {
                     continue;
                 }
+                let passed =
+                    if old.is_some() { without_generated(&new, &generated) } else { new.clone() };
                 let returned = self.call_trigger(
                     &armed.trigger,
                     triggers.event,
-                    (old.clone(), Some(new.clone())),
+                    (old.clone(), Some(passed)),
                     None,
                 )?;
                 let Some(returned) = returned else { continue 'rows };
@@ -448,8 +452,9 @@ impl Connection {
             let mut row = if fired {
                 plan.recheck(new, &reader)?
             } else {
-                new.extend(given);
-                new
+                let mut row = computed;
+                row.extend(given);
+                row
             };
             row.extend(tail);
             if checked {
@@ -644,12 +649,17 @@ impl Connection {
     ) -> Result<Option<Vec<Value>>, Error> {
         let old = old.map(|old| padded(old.to_vec(), self.table_width(info)));
         let given = new.split_off(info.width.min(new.len()));
+        let computed = new;
+        let generated = self.generated_columns(info);
+        let mut new = without_generated(&computed, &generated);
         let mut fired = false;
         for armed in triggers.of(true, true) {
             if !self.enabled((armed, triggers.event), info, old.as_deref(), Some(&new))? {
                 continue;
             }
-            let rows = (old.clone(), Some(new.clone()));
+            let passed =
+                if old.is_some() { without_generated(&new, &generated) } else { new.clone() };
+            let rows = (old.clone(), Some(passed));
             let Some(returned) = self.call_trigger(&armed.trigger, triggers.event, rows, None)?
             else {
                 return Ok(None);
@@ -661,8 +671,9 @@ impl Connection {
         let row = if fired {
             plan.recheck(new, &reader)?
         } else {
-            new.extend(given);
-            new
+            let mut row = computed;
+            row.extend(given);
+            row
         };
         let kind = if old.is_some() { WriteKind::Update } else { WriteKind::Insert };
         Ok(plan.check_rows_as(vec![row], kind, &reader)?.into_iter().next())
@@ -851,6 +862,14 @@ impl Connection {
     }
 
     /// The number of the columns of the table of the write, with the dropped columns. The rows of a `DELETE` have no columns.
+    /// The places of the generated columns of the table of the write.
+    fn generated_columns(&self, info: &Write) -> Vec<usize> {
+        let catalog = self.catalog();
+        let Some(relation) = catalog.relation(info.table) else { return Vec::new() };
+        let columns = relation.columns.iter().enumerate();
+        columns.filter(|(_, c)| c.generated != 0).map(|(i, _)| i).collect()
+    }
+
     fn table_width(&self, info: &Write) -> usize {
         self.catalog().relation(info.table).map_or(info.width, |r| r.columns.len())
     }
@@ -870,4 +889,15 @@ impl Connection {
         self.events.borrow_mut().clear();
         self.trigger_warnings.borrow_mut().clear();
     }
+}
+
+/// The new row of the triggers `BEFORE ... FOR EACH ROW`, with nulls for the generated columns at the places `generated`. `ExecComputeStoredGenerated` runs after the triggers, so the new row of an `INSERT` has nulls in these columns, and a trigger can set them for the next trigger. For an `UPDATE`, `plpgsql_exec_trigger` puts nulls in these columns of `NEW` before each trigger.
+fn without_generated(row: &[Value], generated: &[usize]) -> Vec<Value> {
+    let mut row = row.to_vec();
+    for &i in generated {
+        if let Some(value) = row.get_mut(i) {
+            *value = Value::Null;
+        }
+    }
+    row
 }

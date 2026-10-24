@@ -32,6 +32,22 @@ pub(crate) fn set_columns(list: &rupg_sql::nodes::List, columns: &[Column]) -> V
         .collect()
 }
 
+/// `ExecGetAllUpdatedCols`: the columns `updated` that `SET` gives, then the generated columns of `generated` that read one of them, as `ExecGetExtraUpdatedCols` adds them for the triggers of `UPDATE OF`.
+pub(crate) fn with_extra_updated(mut updated: Vec<i16>, generated: &[(usize, Expr)]) -> Vec<i16> {
+    let set = updated.clone();
+    for (index, expr) in generated {
+        let attnum = i16::try_from(index + 1).unwrap_or(i16::MAX);
+        let reads = expr.find(0, &mut |e, depth| match &e.kind {
+            ExprKind::Var(var) if var.levels_up == depth && set.contains(&var.attnum) => Some(()),
+            _ => None,
+        });
+        if reads.is_some() && !updated.contains(&attnum) {
+            updated.push(attnum);
+        }
+    }
+    updated
+}
+
 /// `SelfItemPointerAttributeNumber`: the attribute number of `ctid`, which reads the ID of the version of a row of the target table.
 const CTID_ATTNUM: i16 = -1;
 
@@ -136,7 +152,7 @@ impl Analyzer<'_> {
             on_conflict: None,
             merge: None,
             recheck,
-            updated: set_columns(&s.targetList, &columns),
+            updated: with_extra_updated(set_columns(&s.targetList, &columns), &generated),
             instead,
             inherit,
         });
