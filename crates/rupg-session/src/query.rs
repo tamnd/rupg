@@ -896,6 +896,10 @@ impl rupg_func::Session for Reader<'_> {
         self.conn.map_or(3, |conn| u64::from(conn.heap().next_xid()))
     }
 
+    fn stable_transaction_id(&self) -> u32 {
+        self.conn.map_or(3, Connection::stable_xid)
+    }
+
     fn transaction_state(&self, xid: u32) -> Option<rupg_func::XactState> {
         Some(self.conn?.heap().xact_state(xid))
     }

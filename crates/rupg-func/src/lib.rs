@@ -246,6 +246,10 @@ pub trait Session {
     fn next_transaction_id(&self) -> u64 {
         3
     }
+    /// `GetStableLatestTransactionId`: the ID of the transaction, or the ID that the next transaction gets when it has none, the same for the whole transaction.
+    fn stable_transaction_id(&self) -> u32 {
+        3
+    }
     /// The state of the transaction `xid`, which is before [`Session::next_transaction_id`], or `None` when the session does not know it.
     fn transaction_state(&self, xid: u32) -> Option<XactState> {
         let _ = xid;
