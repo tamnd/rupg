@@ -8,6 +8,7 @@ use rupg_sql::nodes::{
     RenameStmt,
 };
 
+use super::attmap::AttMap;
 use super::comment::{name_list, not_owner};
 use super::drop::{owner_word, quote_identifier};
 use super::index::{BTREE, system_column};
@@ -142,18 +143,8 @@ impl Definer<'_, '_> {
         };
         let list = names(&stmt.defnames);
         let (namespace, stat_name) = if list.is_empty() {
-            // `ChooseExtendedStatisticName` with the names of `ChooseExtendedStatisticNameAddition`.
-            let addition = name_addition(elems.iter().map(|e| e.name.as_deref().unwrap_or("expr")));
-            let mut label = "stat".to_string();
-            let mut pass = 0;
-            loop {
-                let name = make_object_name(&rel.name, Some(&addition), Some(&label));
-                if self.catalog.stat_ext_by_name(rel.namespace, &name).is_none() {
-                    break (rel.namespace, name);
-                }
-                pass += 1;
-                label = format!("stat{pass}");
-            }
+            let names = elems.iter().map(|e| e.name.as_deref().unwrap_or("expr"));
+            (rel.namespace, self.choose_stats_name(&rel.name, rel.namespace, names))
         } else {
             let (namespace, name) = self.stats_creation(&list)?;
             (namespace, name.to_string())
@@ -296,6 +287,75 @@ impl Definer<'_, '_> {
             exprs: text,
         };
         self.catalog.create_stat_ext(new, &refs)?;
+        Ok(())
+    }
+
+    /// `ChooseExtendedStatisticName` with the names of `ChooseExtendedStatisticNameAddition`: a name for a statistics object of the relation `relname` in the schema `namespace` that no other statistics object there has. `names` gives the names of the columns, with `expr` for each expression.
+    fn choose_stats_name<'n>(
+        &self,
+        relname: &str,
+        namespace: u32,
+        names: impl IntoIterator<Item = &'n str>,
+    ) -> String {
+        let addition = name_addition(names);
+        let mut label = "stat".to_string();
+        let mut pass = 0;
+        loop {
+            let name = make_object_name(relname, Some(&addition), Some(&label));
+            if self.catalog.stat_ext_by_name(namespace, &name).is_none() {
+                return name;
+            }
+            pass += 1;
+            label = format!("stat{pass}");
+        }
+    }
+
+    /// `generateClonedExtStatsStmt` and `CreateStatistics` for `LIKE ... INCLUDING STATISTICS`: a copy of the statistics object `stat` for the new table `table`, with the column numbers of `map`, the kinds of the object and a name that [`Self::choose_stats_name`] gives. With `comments`, the copy gets the comment of the object.
+    pub(super) fn clone_statistics(
+        &mut self,
+        stat: u32,
+        table: u32,
+        map: &AttMap,
+        comments: bool,
+    ) -> Result<()> {
+        let (Some(old), Some(rel)) =
+            (self.catalog.stat_ext(stat).cloned(), self.catalog.relation(table).cloned())
+        else {
+            return Ok(());
+        };
+        let mut keys = map.columns(&old.keys);
+        keys.sort_unstable();
+        let text = old.exprs.as_deref().map(|t| map.list_text(t)).transpose()?;
+        let exprs = match &text {
+            Some(text) => crate::node::read_list(text)?,
+            None => Vec::new(),
+        };
+        let columns = keys.iter().map(|&k| rel.column(k).map_or("", |c| c.name.as_str()));
+        let names: Vec<&str> = columns.chain(exprs.iter().map(|_| "expr")).collect();
+        let name = self.choose_stats_name(&rel.name, rel.namespace, names);
+        let refs = if exprs.is_empty() {
+            Vec::new()
+        } else {
+            references(self.catalog, table, &exprs.iter().collect::<Vec<_>>())?
+        };
+        let new = StatExt {
+            oid: 0,
+            name,
+            namespace: rel.namespace,
+            owner: self.user,
+            relation: table,
+            keys,
+            kinds: old.kinds,
+            target: None,
+            exprs: text,
+        };
+        let oid = self.catalog.create_stat_ext(new, &refs)?;
+        if comments
+            && let Some(text) =
+                self.catalog.description(ObjRef::new(PG_STATISTIC_EXT, stat)).map(str::to_string)
+        {
+            self.catalog.set_description(ObjRef::new(PG_STATISTIC_EXT, oid), Some(text));
+        }
         Ok(())
     }
 

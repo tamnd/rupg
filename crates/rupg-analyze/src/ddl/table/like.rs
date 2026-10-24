@@ -23,6 +23,8 @@ const GENERATED: u32 = 1 << 4;
 const IDENTITY: u32 = 1 << 5;
 /// `CREATE_TABLE_LIKE_INDEXES`.
 const INDEXES: u32 = 1 << 6;
+/// `CREATE_TABLE_LIKE_STATISTICS`.
+const STATISTICS: u32 = 1 << 7;
 /// `CREATE_TABLE_LIKE_STORAGE`.
 const STORAGE: u32 = 1 << 8;
 
@@ -207,7 +209,7 @@ impl Definer<'_, '_> {
         Ok(Like { relation: oid, options })
     }
 
-    /// `expandTableLikeClause` for the new table `table`: the comments of the columns and of the not-null constraints for `INCLUDING COMMENTS`, the check constraints for `INCLUDING CONSTRAINTS`, and the indexes with their constraints for `INCLUDING INDEXES`, with the column numbers of the new table. A check constraint or an index that reads the whole row is an error. The new table is empty, so the check constraints are valid.
+    /// `expandTableLikeClause` for the new table `table`: the comments of the columns and of the not-null constraints for `INCLUDING COMMENTS`, the check constraints for `INCLUDING CONSTRAINTS`, the indexes with their constraints for `INCLUDING INDEXES`, and the statistics objects for `INCLUDING STATISTICS`, with the column numbers of the new table. A check constraint or an index that reads the whole row is an error. The new table is empty, so the check constraints are valid.
     pub(super) fn expand_table_like(&mut self, table: u32, like: &Like) -> Result<()> {
         let source = like.relation;
         let source_name = self.catalog.relation(source).map(|r| r.name.clone()).unwrap_or_default();
@@ -303,6 +305,15 @@ impl Definer<'_, '_> {
                 if comments && let Some(text) = self.description(PG_CLASS, index, 0) {
                     self.catalog.set_description(ObjRef::new(PG_CLASS, new), Some(text));
                 }
+            }
+        }
+        if like.options & STATISTICS != 0 {
+            let mut stats: Vec<u32> =
+                self.catalog.stat_exts().filter(|s| s.relation == source).map(|s| s.oid).collect();
+            // `RelationGetStatExtList` gives the statistics objects in the order of their OIDs.
+            stats.sort_unstable();
+            for stat in stats {
+                self.clone_statistics(stat, table, &map, comments)?;
             }
         }
         Ok(())
