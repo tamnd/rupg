@@ -282,7 +282,7 @@ impl Item {
 pub(crate) type Given = (usize, Option<usize>, List);
 
 /// The bits in `tgtype` of a trigger `INSTEAD OF ... FOR EACH ROW`.
-const INSTEAD_ROW: i16 = rupg_catalog::TRIGGER_ROW | rupg_catalog::TRIGGER_INSTEAD;
+pub(crate) const INSTEAD_ROW: i16 = rupg_catalog::TRIGGER_ROW | rupg_catalog::TRIGGER_INSTEAD;
 
 /// The error of a clause that the analyzer does not take yet.
 pub(crate) fn not_yet(what: &str) -> Error {
@@ -302,7 +302,16 @@ impl Analyzer<'_> {
         let rv = s.relation.as_deref().ok_or_else(|| Error::internal("an INSERT with no table"))?;
         let (table, name, columns) = self.target_table(rv, WriteKind::Insert)?;
         let rows = std::mem::take(&mut self.rule.rows);
-        let given = self.insert_targets(&s.cols, &name, &columns)?;
+        if self.auto_view.is_some() && s.onConflictClause.is_some() {
+            return Err(not_yet("INSERT into an updatable view with ON CONFLICT"));
+        }
+        if self.auto_view.is_some() && !inverted.is_empty() {
+            return Err(not_yet("a conditional rule DO INSTEAD of an updatable view"));
+        }
+        let given = match self.auto_view_targets(&s.cols, columns.len())? {
+            Some(given) => given,
+            None => self.insert_targets(&s.cols, &name, &columns)?,
+        };
         let explicit = !s.cols.is_empty();
         let select = match &s.selectStmt {
             None => None,
@@ -649,7 +658,11 @@ impl Analyzer<'_> {
                     && self.user_triggers(oid, INSTEAD_ROW | trigger_event(kind)) => {}
             // The rows of a statement for the rules of a view need no write of the view.
             RelKind::View if self.rule.rows => {}
-            RelKind::View => return Err(not_yet(&format!("{what} a view"))),
+            RelKind::View if kind == WriteKind::Merge => {
+                return Err(not_yet(&format!("{what} a view")));
+            }
+            // `rewriteTargetView` writes the base relation of the view.
+            RelKind::View => {}
             RelKind::Partitioned => {}
             RelKind::MatView if self.env.filling() == oid => {}
             RelKind::MatView => {
@@ -689,17 +702,7 @@ impl Analyzer<'_> {
                 }
             }
         }
-        // A dropped column keeps its place with no name and the type 0, and each new row has a null for it.
-        let columns = rel
-            .columns
-            .iter()
-            .map(|c| Column {
-                name: if c.dropped { String::new() } else { c.name.clone() },
-                ty: c.ty,
-                typmod: c.typmod,
-                not_null: c.not_null,
-            })
-            .collect();
+        let columns = write_columns(rel);
         let name = rel.name.clone();
         let required = match kind {
             WriteKind::Insert => ACL_INSERT,
@@ -708,7 +711,20 @@ impl Analyzer<'_> {
             WriteKind::Merge => 0,
         };
         self.target_perm = Some(self.add_perm(oid, required));
-        Ok((oid, name, columns))
+        let auto = rel.kind == RelKind::View
+            && !self.rule.rows
+            && !self.user_triggers(oid, INSTEAD_ROW | trigger_event(kind));
+        if !auto {
+            return Ok((oid, name, columns));
+        }
+        let view = self.auto_view(oid, &name, kind)?;
+        let base = view.base_oid();
+        let rel = self.env.catalog().and_then(|c| c.relation(base));
+        let rel = rel.ok_or_else(|| Error::internal("an updatable view with no base relation"))?;
+        let columns = write_columns(rel);
+        let name = rel.name.clone();
+        self.auto_view = Some(view);
+        Ok((base, name, columns))
     }
 
     /// True when the table has a trigger of the user that fires in the default mode and whose type has all the bits `bits`, such as `TRIGGER_ROW | TRIGGER_BEFORE | TRIGGER_INSERT`. With no bits, any such trigger counts.
@@ -1050,6 +1066,7 @@ impl Analyzer<'_> {
             }
             return Err(error.at_opt(given[items.len()].1));
         }
+        self.auto_view_given(items.len())?;
         let mut row = Vec::with_capacity(items.len());
         for (item, (index, at, indirection)) in items.into_iter().zip(given) {
             let (index, at) = (*index, *at);
@@ -1206,8 +1223,11 @@ impl Analyzer<'_> {
             return Ok(null);
         }
         let attnum = i16::try_from(index + 1).unwrap_or(i16::MAX);
+        // A view of an automatically updatable view can have its own default for the column, which `rewriteTargetListIU` of the view gives.
+        let view_default = self.auto_view_default(table, index);
         let sequence = self.env.catalog().and_then(|c| c.root_identity_sequence(table, attnum));
-        if self.identity(table, index) != 0
+        if view_default.is_none()
+            && self.identity(table, index) != 0
             && let Some(sequence) = sequence
         {
             let mut expr = nextval(sequence)?;
@@ -1222,6 +1242,7 @@ impl Analyzer<'_> {
                 });
         }
         let catalog = self.env.catalog();
+        let (table, attnum) = view_default.unwrap_or((table, attnum));
         let text = catalog.and_then(|c| c.default_of(table, attnum)).map(|d| d.expr.clone());
         let text = text.or_else(|| {
             catalog
@@ -1543,13 +1564,26 @@ fn arbiters(inference: Inference, unique: &[Unique]) -> Result<Vec<usize>> {
     Ok(places)
 }
 
+/// The columns of the target table of a write. A dropped column keeps its place with no name and the type 0, and each new row has a null for it.
+fn write_columns(rel: &rupg_catalog::Relation) -> Vec<Column> {
+    rel.columns
+        .iter()
+        .map(|c| Column {
+            name: if c.dropped { String::new() } else { c.name.clone() },
+            ty: c.ty,
+            typmod: c.typmod,
+            not_null: c.not_null,
+        })
+        .collect()
+}
+
 /// True for a trigger of the table `table` that the user made and that fires in the default mode. The session checks the foreign keys itself, and a disabled trigger and a trigger for the replica mode do not fire.
 fn user_trigger(t: &rupg_catalog::Trigger, table: u32) -> bool {
     t.relation == table && !t.internal && t.fires()
 }
 
 /// The bit of `tgtype` for the event of a write.
-fn trigger_event(kind: WriteKind) -> i16 {
+pub(crate) fn trigger_event(kind: WriteKind) -> i16 {
     match kind {
         WriteKind::Insert => rupg_catalog::TRIGGER_INSERT,
         WriteKind::Update => rupg_catalog::TRIGGER_UPDATE,

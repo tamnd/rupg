@@ -249,6 +249,11 @@ pub(crate) struct Item {
 }
 
 impl Item {
+    /// The columns of an automatically updatable view in place of the columns of its base relation.
+    pub(crate) fn set_columns(&mut self, columns: impl Iterator<Item = (String, Expr)>) {
+        self.columns = columns.collect();
+    }
+
     /// Keeps the last `count` columns out of `*`.
     pub(crate) fn hide_last(&mut self, count: usize) {
         self.hidden = count;
@@ -532,6 +537,9 @@ impl Analyzer<'_> {
     ///
     /// The relation needs `SELECT`, or for the target table of a write with `target`, the privileges that [`Analyzer::target_table`] gave it.
     fn catalog_relation(&mut self, rv: &RangeVar, target: bool) -> Result<Item> {
+        if target && let Some(item) = self.auto_view_item(rv)? {
+            return Ok(item);
+        }
         let at = place(rv.location);
         let name = rv.relname.as_deref().unwrap_or_default();
         let oid = self.lookup_relation(rv)?.ok_or_else(|| {
@@ -599,7 +607,10 @@ impl Analyzer<'_> {
     }
 
     /// [`Analyzer::stored_query`] with the privileges that the query needs.
-    fn stored_query_perms(&self, oid: u32) -> Result<Option<(crate::Query, Vec<PermInfo>)>> {
+    pub(crate) fn stored_query_perms(
+        &self,
+        oid: u32,
+    ) -> Result<Option<(crate::Query, Vec<PermInfo>)>> {
         let Some(rel) = self.env.catalog().and_then(|c| c.relation(oid)) else { return Ok(None) };
         let Some(view) = &rel.view else { return Ok(None) };
         if self.views.contains(&oid) {
@@ -1200,6 +1211,7 @@ impl Analyzer<'_> {
         let mut item = self.add_relation(relation, name.to_string(), None)?;
         item.cols_visible = false;
         item.returning = true;
+        self.auto_view_returning(&mut item, index);
         self.scope.namespace.push(item);
         Ok(index)
     }
@@ -1217,6 +1229,18 @@ impl Analyzer<'_> {
         self.scope.entries[item.entry].oid = 0;
         self.scope.namespace.push(item);
         Ok(index)
+    }
+
+    /// The relations of the scope whose entries have the OID `oid`, as the relations that give the columns of an automatically updatable view.
+    pub(crate) fn entry_relations(&self, oid: u32) -> std::collections::BTreeSet<usize> {
+        self.scope.entries.iter().filter(|e| e.oid == oid).filter_map(|e| e.relation).collect()
+    }
+
+    /// The OID of the entry of the item and the names of its columns, which are the OID and the columns of the view for the base relation of an automatically updatable view.
+    pub(crate) fn set_entry_oid(&mut self, item: &Item, oid: u32) {
+        let entry = &mut self.scope.entries[item.entry];
+        entry.oid = oid;
+        entry.columns = item.columns.iter().map(|(name, _)| name.clone()).collect();
     }
 
     /// `setTargetTable`: a transition table of a trigger cannot be the target of a write.
@@ -1842,6 +1866,20 @@ impl Analyzer<'_> {
     /// `transformWholeRowRef`: the whole row of the relation of an item, as a `Var` with the attribute number 0. Its type is the row type of the relation, or `record` for a subquery, a function and `VALUES`.
     fn whole_row(&self, level: usize, item: &Item, at: Option<usize>) -> Result<Expr> {
         let entry = &self.level(level).entries[item.entry];
+        // `ReplaceVarsFromTargetList`: the whole row of an automatically updatable view is a row of the columns of the view, with the row type of the view.
+        let base = entry.relation.and_then(|r| self.level(level).relations.get(r));
+        if entry.oid != 0 && base.is_some_and(|r| r.oid != entry.oid) {
+            let fields = item.columns.iter().map(|(_, expr)| {
+                let mut expr = expr.clone();
+                expr.raise(level);
+                expr
+            });
+            let ty = self
+                .row_type(entry.oid)
+                .ok_or_else(|| not_yet("a whole-row reference to this relation", at))?;
+            let row = ExprKind::Row(fields.collect(), CastForm::Implicit);
+            return Ok(Expr::new(row, ty).at(at));
+        }
         let Some(relation) = entry.relation else {
             // The alias of `USING` is an item of the entry of the join with other columns.
             let alias = (entry.aliased && item.name == entry.name).then(|| item.name.clone());
@@ -1982,7 +2020,7 @@ impl Analyzer<'_> {
         let entry = &self.level(level).entries[item.entry];
         let Some(relation) = entry.relation else { return Ok(None) };
         let rel = self.level(level).relations.get(relation);
-        let view = rel.is_some_and(|r| r.subquery.is_some());
+        let view = rel.is_some_and(|r| r.subquery.is_some() || r.oid != entry.oid);
         let live = rel.map_or(0, |r| r.columns.iter().filter(|c| !c.is_dropped()).count());
         if item.columns.len() != live || entry.oid == 0 || view {
             // The item of a USING alias gives only the columns of USING, and a subquery and a view have no system columns.
@@ -2193,9 +2231,10 @@ impl Analyzer<'_> {
             scope.entries.iter().enumerate().map(move |(index, entry)| ((level, index), entry))
         });
         for (index, entry) in entries {
-            if entry.relation.is_none() {
-                continue;
-            }
+            let Some(relation) = entry.relation else { continue };
+            // The base relation of an automatically updatable view has the columns of the view and no system columns.
+            let relation = self.level(index.0).relations.get(relation);
+            let system = entry.oid != 0 && relation.is_none_or(|r| r.oid == entry.oid);
             let penalty =
                 table.map_or(0, |t| levenshtein(t, &entry.name).min(MAX_FUZZY_DISTANCE + 1));
             let mut exact = false;
@@ -2205,7 +2244,7 @@ impl Analyzer<'_> {
                 }
                 fuzzy.update(penalty, index, name, column, i);
             }
-            if (exact || (is_system_column(column) && entry.oid != 0)) && penalty == 0 {
+            if (exact || (is_system_column(column) && system)) && penalty == 0 {
                 fuzzy.exact.push(index);
             }
         }

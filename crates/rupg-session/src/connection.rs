@@ -5946,6 +5946,18 @@ mod tests {
         big_stack(|| script(include_str!("connection/gstored11.test")));
     }
 
+    /// Automatically updatable views, as `rewriteTargetView` writes them: `INSERT`, `UPDATE` and `DELETE` of a view write its base relation, with the conditions of the view, the names of the columns of the view, `RETURNING`, views on views and `security_barrier`. The script also has the errors of a view that is not automatically updatable and of a column that is not updatable, the triggers of the base relation, and the privileges of the owner of the view. `connection/autoview1.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn autoview1() {
+        big_stack(|| script(include_str!("connection/autoview1.test")));
+    }
+
+    /// Automatically updatable views, as `rewriteTargetView` writes them: `INSERT` with `VALUES`, `SELECT` and the defaults of the base table, `UPDATE ... FROM`, `DELETE ... USING`, writes of views in `WITH`, a partitioned base table, a table with children of `INHERITS` and `ONLY`, nested views with `security_barrier`, rules of the view, prepared statements and `EXPLAIN`. `connection/autoview2.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn autoview2() {
+        big_stack(|| script(include_str!("connection/autoview2.test")));
+    }
+
     /// `CREATE TABLE ... (LIKE ...)`, from `create_table_like.sql` of the PostgreSQL tests: the columns and the not-null constraints of the other relation, the options `INCLUDING DEFAULTS`, `GENERATED`, `IDENTITY`, `CONSTRAINTS`, `INDEXES`, `STORAGE`, `COMMENTS` and `ALL`, `LIKE` with `INHERITS`, and `LIKE` of a view, a composite type and a sequence. The script has catalog queries in place of `\d`, and it does not have the parts for virtual generated columns, `NOT ENFORCED`, `CREATE STATISTICS` and foreign tables. `connection/create_table_like.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn create_table_like() {

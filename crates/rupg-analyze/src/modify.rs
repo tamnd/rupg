@@ -54,6 +54,28 @@ const CTID_ATTNUM: i16 = -1;
 /// The names of the system columns, which `SET` cannot assign.
 const SYSTEM_COLUMNS: [&str; 6] = ["tableoid", "ctid", "xmin", "cmin", "xmax", "cmax"];
 
+/// The error of `transformUpdateTargetList` for an item of `SET` whose column the target relation `name` does not have.
+pub(crate) fn unknown_set_column(rv: &RangeVar, name: &str, rt: &ResTarget) -> Error {
+    let col_name = rt.name.as_deref().unwrap_or_default();
+    let at = place(rt.location);
+    if SYSTEM_COLUMNS.contains(&col_name) {
+        return Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            format!("cannot assign to system column \"{col_name}\""),
+        )
+        .at_opt(at);
+    }
+    let mut error = Error::new(
+        SqlState::UNDEFINED_COLUMN,
+        format!("column \"{col_name}\" of relation \"{name}\" does not exist"),
+    );
+    let alias = rv.alias.as_ref().and_then(|a| a.aliasname.as_deref());
+    if !rt.indirection.is_empty() && alias.or(rv.relname.as_deref()) == Some(col_name) {
+        error = error.with_hint("SET target columns cannot be qualified with the relation name.");
+    }
+    error.at_opt(at)
+}
+
 impl Analyzer<'_> {
     /// `transformUpdateStmt`: the query tree of an `UPDATE`.
     pub(crate) fn update(&mut self, s: &UpdateStmt) -> Result<Query> {
@@ -62,10 +84,25 @@ impl Analyzer<'_> {
         let rv = s.relation.as_deref().ok_or_else(|| Error::internal("an UPDATE with no table"))?;
         let (table, name, columns) = self.target_table(rv, WriteKind::Update)?;
         let rows = std::mem::take(&mut self.rule.rows);
-        self.mark_updated(&set_columns(&s.targetList, &columns));
+        if self.auto_view.is_some() && !inverted.is_empty() {
+            return Err(not_yet("a conditional rule DO INSTEAD of an updatable view"));
+        }
+        // The items of `SET` of an updatable view name the columns of its base relation.
+        let (renamed, unknown, fixed) = match self.auto_view_set(rv, &s.targetList, &columns) {
+            Some((list, unknown, fixed)) => (Some(list), unknown, fixed),
+            None => (None, None, None),
+        };
+        let list = renamed.as_ref().unwrap_or(&s.targetList);
+        self.mark_updated(&set_columns(list, &columns));
         let from = self.target_from(rv, &s.fromClause)?;
         let filter = self.target_where(s.whereClause.as_ref())?;
-        let row = self.update_row(rv, table, &name, &columns, &s.targetList)?;
+        let filter = self.auto_view_filter(filter);
+        // The items of `SET` must name updatable columns of the view.
+        if let Some(error) = unknown.or(fixed) {
+            self.set_items(list)?;
+            return Err(error);
+        }
+        let row = self.update_row(rv, table, &name, &columns, list)?;
         if rows {
             // The rows of `*rule*`: the new row, with its generated columns, then the old row.
             let generated = if self.is_partitioned(table) {
@@ -152,7 +189,7 @@ impl Analyzer<'_> {
             on_conflict: None,
             merge: None,
             recheck,
-            updated: with_extra_updated(set_columns(&s.targetList, &columns), &generated),
+            updated: with_extra_updated(set_columns(list, &columns), &generated),
             instead,
             inherit,
         });
@@ -176,24 +213,7 @@ impl Analyzer<'_> {
             let col_name = rt.name.as_deref().unwrap_or_default();
             let at = place(rt.location);
             let Some(index) = columns.iter().position(|c| c.name == col_name) else {
-                if SYSTEM_COLUMNS.contains(&col_name) {
-                    return Err(Error::new(
-                        SqlState::FEATURE_NOT_SUPPORTED,
-                        format!("cannot assign to system column \"{col_name}\""),
-                    )
-                    .at_opt(at));
-                }
-                let mut error = Error::new(
-                    SqlState::UNDEFINED_COLUMN,
-                    format!("column \"{col_name}\" of relation \"{name}\" does not exist"),
-                );
-                let alias = rv.alias.as_ref().and_then(|a| a.aliasname.as_deref());
-                if !rt.indirection.is_empty() && alias.or(rv.relname.as_deref()) == Some(col_name) {
-                    error = error.with_hint(
-                        "SET target columns cannot be qualified with the relation name.",
-                    );
-                }
-                return Err(error.at_opt(at));
+                return Err(unknown_set_column(rv, name, rt));
             };
             let column = &columns[index];
             let expr = match item {
@@ -287,7 +307,11 @@ impl Analyzer<'_> {
             self.foreign_keys(table, WriteKind::Delete, &columns)?
         };
         let mut filter = self.target_where(s.whereClause.as_ref())?;
+        filter = self.auto_view_filter(filter);
         if !inverted.is_empty() {
+            if self.auto_view.is_some() {
+                return Err(not_yet("a conditional rule DO INSTEAD of an updatable view"));
+            }
             let old = crate::rules::named_row(&columns, crate::rules::relation_row(&columns, 0, 0));
             let quals = self.inverted_quals(&inverted, Some(old), None)?;
             filter = crate::rules::and_filter(filter, quals);

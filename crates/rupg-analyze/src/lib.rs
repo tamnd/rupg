@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 mod agg;
+mod autoview;
 mod call;
 mod coerce;
 mod collate;
@@ -280,6 +281,8 @@ pub(crate) struct Analyzer<'a> {
     target_perm: Option<usize>,
     /// The state of the rules of the write that the analyzer reads now.
     rule: rules::State,
+    /// The view of the write that the analyzer reads now when the write goes to the base relation of the view, as `rewriteTargetView` makes it, or `None`.
+    auto_view: Option<autoview::AutoView>,
 }
 
 impl<'a> Analyzer<'a> {
@@ -337,6 +340,7 @@ impl<'a> Analyzer<'a> {
             row_types: BTreeMap::new(),
             target_perm: None,
             rule: rules::State::default(),
+            auto_view: None,
         }
     }
 

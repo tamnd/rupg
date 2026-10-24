@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- An `INSERT`, an `UPDATE` or a `DELETE` of an automatically updatable view writes the base relation of the view, as `rewriteTargetView` does. The view must read one table or view, and it must not have `DISTINCT`, `GROUP BY`, `HAVING`, a set operation, `WITH`, `LIMIT`, `OFFSET`, aggregates, window functions, set-returning functions or `TABLESAMPLE`. The conditions of the view apply to an `UPDATE` and a `DELETE`, also for `security_barrier` and for a view on a view. `SET` and the columns of an `INSERT` name the columns of the view, a column that is not updatable gives the error of PostgreSQL, and the defaults of the columns of the view apply. `RETURNING` gives the columns of the view. The statement needs the privileges on the view, and the owner of the view needs the privileges on the base relation (#650).
+
 ### Fixed
 
 - A trigger `BEFORE ... FOR EACH ROW` of a table with stored generated columns now sees nulls in the generated columns of `NEW`, and the write computes the generated columns after the triggers. The condition `WHEN` of a trigger `BEFORE` that reads a generated column of `NEW`, or `NEW` as a whole row of a table with generated columns, gives the error of `CreateTriggerFiringOn`. A trigger `UPDATE OF` a generated column fires when the statement changes a column that the generation expression reads (#649).
