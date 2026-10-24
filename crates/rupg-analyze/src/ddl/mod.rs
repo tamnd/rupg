@@ -39,6 +39,7 @@ mod reloptions;
 mod rename;
 mod row_type;
 mod rule;
+mod schema_elements;
 mod sequence;
 mod set_schema;
 mod statistics;
@@ -64,6 +65,7 @@ pub(crate) use lock::relkind;
 pub use lock::{Allowed, Take, lock_table};
 pub use owned::{acl_dependents, owned_objects};
 pub use rule::{RuleTree, rule_tree};
+pub use schema_elements::SchemaElements;
 pub(crate) use table::check_attribute_type;
 pub use trigger::trigger_when;
 pub use vacuum::vacuum_relations;
@@ -121,6 +123,8 @@ pub struct Defined {
     pub detached: Vec<u32>,
     /// The roles of `DROP OWNED`. The caller removes the grants of membership that these roles made, as `shdepDropOwned` drops the rows of `pg_auth_members` with the role as the grantor.
     pub grantors: Vec<u32>,
+    /// The elements of `CREATE SCHEMA`, which the caller runs after it keeps the new schema, or `None`.
+    pub schema: Option<SchemaElements>,
 }
 
 /// A partition whose rows must satisfy its partition constraint, one entry of `tab->partition_constraint`.
@@ -260,6 +264,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         checks: Vec::new(),
         detached: Vec::new(),
         grantors: Vec::new(),
+        schema: None,
     };
     let mut filled = None;
     let result = match stmt {
@@ -272,7 +277,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
             definer.refresh_matview(stmt).map(|matview| filled = matview)
         }
         Node::IndexStmt(index) => definer.create_index(index, false),
-        Node::CreateSchemaStmt(schema) => definer.create_schema(schema),
+        Node::CreateSchemaStmt(schema) => definer.create_schema(schema, text),
         Node::ViewStmt(view) => definer.create_view(view, text),
         Node::RuleStmt(rule) => definer.create_rule(rule, text),
         Node::CreateTrigStmt(trigger) => definer.create_trigger(trigger),
@@ -359,6 +364,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         checks: definer.checks,
         detached: definer.detached,
         grantors: definer.grantors,
+        schema: definer.schema,
     }
 }
 
@@ -495,6 +501,8 @@ pub(crate) struct Definer<'a, 'c> {
     detached: Vec<u32>,
     /// The roles of [`Defined::grantors`].
     grantors: Vec<u32>,
+    /// The elements of [`Defined::schema`].
+    schema: Option<SchemaElements>,
 }
 
 /// An error for a part of a statement that rupg does not support yet.
@@ -868,8 +876,8 @@ impl Definer<'_, '_> {
         }
     }
 
-    /// `CreateSchemaCommand`.
-    fn create_schema(&mut self, stmt: &CreateSchemaStmt) -> Result<()> {
+    /// `CreateSchemaCommand`. The elements of the statement go to [`Defined::schema`] with their parts of `text`, and the caller runs them.
+    fn create_schema(&mut self, stmt: &CreateSchemaStmt, text: &str) -> Result<()> {
         let owner = match &stmt.authrole {
             None => self.user,
             Some(role) => self.role_oid(role)?,
@@ -908,11 +916,14 @@ impl Definer<'_, '_> {
                 format!("schema \"{name}\" already exists"),
             ));
         }
-        if !stmt.schemaElts.is_empty() {
-            return Err(not_yet("CREATE SCHEMA with elements", None));
-        }
         let schema = self.catalog.create_schema(&name, owner)?;
-        self.apply_default_acl(ObjRef::new(PG_NAMESPACE, schema))
+        self.apply_default_acl(ObjRef::new(PG_NAMESPACE, schema))?;
+        if !stmt.schemaElts.is_empty() {
+            let elements: Vec<Node> = stmt.schemaElts.iter().flatten().cloned().collect();
+            let elements = schema_elements::schema_elements(&elements, &name, text)?;
+            self.schema = Some(SchemaElements { owner, schema: name, elements });
+        }
+        Ok(())
     }
 }
 
