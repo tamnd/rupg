@@ -1,6 +1,8 @@
 //! The parameter table against `pg_settings` of the oracle (spec/06 section 6.13).
 //!
-//! `pg_settings.tsv` is the output of `COPY (SELECT name, vartype, context, category, short_desc, extra_desc, unit, boot_val, min_val, max_val, enumvals FROM pg_settings ORDER BY lower(name)) TO STDOUT` on the oracle of PostgreSQL 19 at the pin, built on Linux with the options of spec/21 section 21.3.3. Each row must be the same as the row that the table gives.
+//! `pg_settings.tsv` is the output of `COPY (SELECT name, vartype, context, category, short_desc, extra_desc, unit, boot_val, min_val, max_val, enumvals FROM pg_settings ORDER BY lower(name)) TO STDOUT` on the oracle of PostgreSQL 19 at the pin, built on Linux on x86-64 with the options of spec/21 section 21.3.3. Each row must be the same as the row that the table gives.
+//!
+//! Some rows depend on the host that PostgreSQL builds on. `pg_settings_hosts.tsv` has these rows for the other hosts of the release builds, with the name of the host in the first column. On such a host, its row replaces the row of the oracle.
 
 use rupg_session::guc::{self, flag};
 
@@ -41,6 +43,17 @@ fn enumvals(p: &guc::Parameter) -> Option<String> {
     Some(format!("{{{}}}", names.join(",")))
 }
 
+/// The name of the host in `pg_settings_hosts.tsv`, or `None` for the host of the oracle build.
+const HOST: Option<&str> = if cfg!(all(target_os = "linux", not(target_arch = "x86_64"))) {
+    Some("linux-aarch64")
+} else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+    Some("macos-x86_64")
+} else if cfg!(target_os = "macos") {
+    Some("macos-aarch64")
+} else {
+    None
+};
+
 /// The row of the table, in the columns of the file.
 fn row(p: &guc::Parameter) -> Vec<Option<String>> {
     let (min, max) = p.range();
@@ -64,8 +77,17 @@ fn the_table_matches_pg_settings_of_the_oracle() {
     let shown: Vec<&guc::Parameter> =
         guc::all().iter().filter(|p| !p.has(flag::NO_SHOW_ALL)).collect();
     let lines: Vec<&str> = include_str!("pg_settings.tsv").lines().collect();
+    let host: Vec<&str> = include_str!("pg_settings_hosts.tsv")
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .filter(|(host, _)| Some(*host) == HOST)
+        .map(|(_, line)| line)
+        .collect();
     let mut differ = Vec::new();
     for line in &lines {
+        let name = line.split('\t').next().unwrap_or_default();
+        let line =
+            host.iter().find(|h| h.split('\t').next() == Some(name)).copied().unwrap_or(line);
         let expected: Vec<Option<String>> = line.split('\t').map(field).collect();
         let name = expected[0].clone().unwrap_or_default();
         match guc::find(&name) {

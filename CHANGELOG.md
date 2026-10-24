@@ -10,6 +10,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - The system columns `xmin` and `xmax` give the transaction that inserted the row and the transaction that deleted it, also for the rows of a partitioned table and of a table with children of `INHERITS`. A row that an aborted transaction deleted keeps the ID of that transaction in `xmax`, as `t_xmax` keeps it. `RETURNING xmin` of an `INSERT` or an `UPDATE` gives the transaction of the session. Before, each row showed a frozen `xmin` and 0 as `xmax` (#668).
 - `age(xid)` and `mxid_age(xid)` run. `age` counts from the ID of the transaction, or from the next ID when the transaction has none, and the value stays the same until the end of the transaction, as `GetStableLatestTransactionId` gives it. An ID that is not normal gives `2147483647` (#669).
 
+### Fixed
+
+- On macOS and on Linux on arm64, `pg_settings` and `SHOW` give the boot values and the options of PostgreSQL on that host. On macOS, `bgwriter_flush_after` and `checkpoint_flush_after` are 0, `file_extend_method` is `write_zeros`, `wal_sync_method` is `open_datasync` and has the option `fsync_writethrough`, and `recovery_init_sync_method` does not have `syncfs`. On arm64, `timing_clock_source` does not have `tsc`.
+
 ## 0.1.76 (2026-10-24)
 
 ### Added

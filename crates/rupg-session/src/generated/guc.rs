@@ -134,6 +134,12 @@ static FILE_EXTEND_METHOD_OPTIONS: [EnumOption; 2] = [
     EnumOption { name: "write_zeros", value: 1, hidden: false },
 ];
 
+/// `file_extend_method_options` on the hosts `all(target_os = "macos", target_arch = "x86_64")`, `all(target_os = "macos", not(target_arch = "x86_64"))`.
+#[rustfmt::skip]
+static FILE_EXTEND_METHOD_OPTIONS_2: [EnumOption; 1] = [
+    EnumOption { name: "write_zeros", value: 0, hidden: false },
+];
+
 /// `huge_pages_options`.
 #[rustfmt::skip]
 static HUGE_PAGES_OPTIONS: [EnumOption; 9] = [
@@ -235,6 +241,12 @@ static PLAN_CACHE_MODE_OPTIONS: [EnumOption; 3] = [
 static RECOVERY_INIT_SYNC_METHOD_OPTIONS: [EnumOption; 2] = [
     EnumOption { name: "fsync", value: 0, hidden: false },
     EnumOption { name: "syncfs", value: 1, hidden: false },
+];
+
+/// `recovery_init_sync_method_options` on the hosts `all(target_os = "macos", target_arch = "x86_64")`, `all(target_os = "macos", not(target_arch = "x86_64"))`.
+#[rustfmt::skip]
+static RECOVERY_INIT_SYNC_METHOD_OPTIONS_2: [EnumOption; 1] = [
+    EnumOption { name: "fsync", value: 0, hidden: false },
 ];
 
 /// `recovery_prefetch_options`.
@@ -347,6 +359,13 @@ static TIMING_CLOCK_SOURCE_OPTIONS: [EnumOption; 3] = [
     EnumOption { name: "tsc", value: 2, hidden: false },
 ];
 
+/// `timing_clock_source_options` on the hosts `all(target_os = "linux", not(target_arch = "x86_64"))`, `all(target_os = "macos", not(target_arch = "x86_64"))`.
+#[rustfmt::skip]
+static TIMING_CLOCK_SOURCE_OPTIONS_2: [EnumOption; 2] = [
+    EnumOption { name: "auto", value: 0, hidden: false },
+    EnumOption { name: "system", value: 1, hidden: false },
+];
+
 /// `track_function_options`.
 #[rustfmt::skip]
 static TRACK_FUNCTION_OPTIONS: [EnumOption; 3] = [
@@ -388,6 +407,16 @@ static WAL_SYNC_METHOD_OPTIONS: [EnumOption; 4] = [
     EnumOption { name: "fdatasync", value: 1, hidden: false },
     EnumOption { name: "open_sync", value: 2, hidden: false },
     EnumOption { name: "open_datasync", value: 3, hidden: false },
+];
+
+/// `wal_sync_method_options` on the hosts `all(target_os = "macos", target_arch = "x86_64")`, `all(target_os = "macos", not(target_arch = "x86_64"))`.
+#[rustfmt::skip]
+static WAL_SYNC_METHOD_OPTIONS_2: [EnumOption; 5] = [
+    EnumOption { name: "fsync", value: 0, hidden: false },
+    EnumOption { name: "fsync_writethrough", value: 1, hidden: false },
+    EnumOption { name: "fdatasync", value: 2, hidden: false },
+    EnumOption { name: "open_sync", value: 3, hidden: false },
+    EnumOption { name: "open_datasync", value: 4, hidden: false },
 ];
 
 /// `xmlbinary_options`.
@@ -747,7 +776,7 @@ pub(crate) static PARAMETERS: [Parameter; 425] = [
         short_desc: "Number of pages after which previously performed writes are flushed to disk.",
         extra_desc: Some("0 disables forced writeback."),
         flags: flag::UNIT_BLOCKS,
-        kind: Kind::Int { boot: 64, min: 0, max: 256 },
+        kind: if cfg!(any(all(target_os = "macos", target_arch = "x86_64"), all(target_os = "macos", not(target_arch = "x86_64")))) { Kind::Int { boot: 0, min: 0, max: 256 } } else { Kind::Int { boot: 64, min: 0, max: 256 } },
     },
     Parameter {
         name: "bgwriter_lru_maxpages",
@@ -828,7 +857,7 @@ pub(crate) static PARAMETERS: [Parameter; 425] = [
         short_desc: "Number of pages after which previously performed writes are flushed to disk.",
         extra_desc: Some("0 disables forced writeback."),
         flags: flag::UNIT_BLOCKS,
-        kind: Kind::Int { boot: 32, min: 0, max: 256 },
+        kind: if cfg!(any(all(target_os = "macos", target_arch = "x86_64"), all(target_os = "macos", not(target_arch = "x86_64")))) { Kind::Int { boot: 0, min: 0, max: 256 } } else { Kind::Int { boot: 32, min: 0, max: 256 } },
     },
     Parameter {
         name: "checkpoint_timeout",
@@ -1557,7 +1586,7 @@ pub(crate) static PARAMETERS: [Parameter; 425] = [
         short_desc: "Selects the method used for extending data files.",
         extra_desc: None,
         flags: 0,
-        kind: Kind::Enum { boot: 0, options: &FILE_EXTEND_METHOD_OPTIONS },
+        kind: if cfg!(any(all(target_os = "macos", target_arch = "x86_64"), all(target_os = "macos", not(target_arch = "x86_64")))) { Kind::Enum { boot: 0, options: &FILE_EXTEND_METHOD_OPTIONS_2 } } else { Kind::Enum { boot: 0, options: &FILE_EXTEND_METHOD_OPTIONS } },
     },
     Parameter {
         name: "from_collapse_limit",
@@ -2961,7 +2990,7 @@ pub(crate) static PARAMETERS: [Parameter; 425] = [
         short_desc: "Sets the method for synchronizing the data directory before crash recovery.",
         extra_desc: None,
         flags: 0,
-        kind: Kind::Enum { boot: 0, options: &RECOVERY_INIT_SYNC_METHOD_OPTIONS },
+        kind: if cfg!(any(all(target_os = "macos", target_arch = "x86_64"), all(target_os = "macos", not(target_arch = "x86_64")))) { Kind::Enum { boot: 0, options: &RECOVERY_INIT_SYNC_METHOD_OPTIONS_2 } } else { Kind::Enum { boot: 0, options: &RECOVERY_INIT_SYNC_METHOD_OPTIONS } },
     },
     Parameter {
         name: "recovery_min_apply_delay",
@@ -3681,7 +3710,7 @@ pub(crate) static PARAMETERS: [Parameter; 425] = [
         short_desc: "Controls the clock source used for collecting timing measurements.",
         extra_desc: Some("This enables the use of specialized clock sources, specifically the RDTSC clock source on x86-64 systems (if available), to support timing measurements with lower overhead during EXPLAIN and other instrumentation."),
         flags: 0,
-        kind: Kind::Enum { boot: 0, options: &TIMING_CLOCK_SOURCE_OPTIONS },
+        kind: if cfg!(any(all(target_os = "linux", not(target_arch = "x86_64")), all(target_os = "macos", not(target_arch = "x86_64")))) { Kind::Enum { boot: 0, options: &TIMING_CLOCK_SOURCE_OPTIONS_2 } } else { Kind::Enum { boot: 0, options: &TIMING_CLOCK_SOURCE_OPTIONS } },
     },
     Parameter {
         name: "trace_connection_negotiation",
@@ -4176,7 +4205,7 @@ pub(crate) static PARAMETERS: [Parameter; 425] = [
         short_desc: "Selects the method used for forcing WAL updates to disk.",
         extra_desc: None,
         flags: 0,
-        kind: Kind::Enum { boot: 1, options: &WAL_SYNC_METHOD_OPTIONS },
+        kind: if cfg!(any(all(target_os = "macos", target_arch = "x86_64"), all(target_os = "macos", not(target_arch = "x86_64")))) { Kind::Enum { boot: 4, options: &WAL_SYNC_METHOD_OPTIONS_2 } } else { Kind::Enum { boot: 1, options: &WAL_SYNC_METHOD_OPTIONS } },
     },
     Parameter {
         name: "wal_writer_delay",

@@ -1,6 +1,6 @@
 //! The configuration parameters of PostgreSQL, from `guc_parameters.dat` and `guc_tables.c`.
 //!
-//! `guc_parameters.dat` has one entry for each parameter. Most values in it are literals, but some boot values and limits are C expressions over macros of the build, for example `MAX_KILOBYTES` or `(8 * 1024 * 1024) / BLCKSZ`, and an enum names its options array and its boot value as a C constant. `guc_tables.c` holds 34 of the options arrays and the text of each group. The other five arrays are in files that rupg does not vendor, so they are copied below. The values of the macros and the `#ifdef` lines are the ones of the Linux build of the oracle (spec/21 section 21.3.3), because the table test compares `pg_settings` with that server.
+//! `guc_parameters.dat` has one entry for each parameter. Most values in it are literals, but some boot values and limits are C expressions over macros of the build, for example `MAX_KILOBYTES` or `(8 * 1024 * 1024) / BLCKSZ`, and an enum names its options array and its boot value as a C constant. `guc_tables.c` holds 34 of the options arrays and the text of each group. The other five arrays are in files that rupg does not vendor, so they are copied below. The values of the macros and the `#ifdef` lines are the ones of the Linux build of the oracle (spec/21 section 21.3.3), because the table test compares `pg_settings` with that server. [`HOSTS`] lists the other hosts of the release builds and their macros. When a host gives a parameter another kind, the generated table has a `cfg!` branch for that host.
 //!
 //! `cargo xtask guc [--check]` writes `crates/rupg-session/src/generated/guc.rs`. Lifted from `xtask/src/postgres/guc.rs` of tamnd/rudb at f5f7065a (spec/04 section 4.9).
 
@@ -50,6 +50,61 @@ const DEFINED: [&str; 12] = [
     "USE_LZ4",
     "USE_ZSTD",
 ];
+
+/// A host that PostgreSQL builds on with other macros than the oracle build. Some boot values and some options arrays depend on the host, so the generated table gives each host the kind that PostgreSQL has on it (spec/05 section 5.3).
+struct Host {
+    /// The Rust `cfg` predicate of the host.
+    cfg: &'static str,
+    /// The macros of [`DEFINED`] that the host does not have.
+    without: &'static [&'static str],
+    /// The macros that the host has and the oracle build does not have.
+    with: &'static [&'static str],
+    /// The macros of [`MACROS`] that have another value on the host.
+    macros: &'static [(&'static str, &'static str)],
+}
+
+/// The macros of macOS. macOS does not have `syncfs`, `copy_file_range`, `posix_fallocate` and `sync_file_range`. It has `copyfile` and `F_FULLFSYNC`, and its `O_DSYNC` is not `O_SYNC`, so the default of `wal_sync_method` is `open_datasync` (`pg_config_manual.h` and `xlogdefs.h`).
+const MACOS: [(&str, &str); 4] = [
+    ("DEFAULT_BGWRITER_FLUSH_AFTER", "0"),
+    ("DEFAULT_CHECKPOINT_FLUSH_AFTER", "0"),
+    ("DEFAULT_FILE_EXTEND_METHOD", "FILE_EXTEND_METHOD_WRITE_ZEROS"),
+    ("DEFAULT_WAL_SYNC_METHOD", "WAL_SYNC_METHOD_OPEN_DSYNC"),
+];
+
+/// The oracle host and the other hosts of the release builds. Windows is not here: its table is the table of the oracle build.
+const HOSTS: [Host; 4] = [
+    Host { cfg: "", without: &[], with: &[], macros: &[] },
+    Host {
+        cfg: r#"all(target_os = "linux", not(target_arch = "x86_64"))"#,
+        without: &["PG_INSTR_TSC_CLOCK"],
+        with: &[],
+        macros: &[],
+    },
+    Host {
+        cfg: r#"all(target_os = "macos", target_arch = "x86_64")"#,
+        without: &["HAVE_SYNCFS", "HAVE_COPY_FILE_RANGE", "HAVE_POSIX_FALLOCATE"],
+        with: &["HAVE_COPYFILE", "COPYFILE_CLONE_FORCE", "HAVE_FSYNC_WRITETHROUGH"],
+        macros: &MACOS,
+    },
+    Host {
+        cfg: r#"all(target_os = "macos", not(target_arch = "x86_64"))"#,
+        without: &[
+            "HAVE_SYNCFS",
+            "HAVE_COPY_FILE_RANGE",
+            "HAVE_POSIX_FALLOCATE",
+            "PG_INSTR_TSC_CLOCK",
+        ],
+        with: &["HAVE_COPYFILE", "COPYFILE_CLONE_FORCE", "HAVE_FSYNC_WRITETHROUGH"],
+        macros: &MACOS,
+    },
+];
+
+impl Host {
+    /// The macros that the `#if` lines test and that the host has.
+    fn defined(&self) -> Vec<&'static str> {
+        DEFINED.iter().filter(|m| !self.without.contains(m)).chain(self.with).copied().collect()
+    }
+}
 
 /// The macros in the boot values and the limits, with their values in the oracle build. A value can use other macros.
 const MACROS: [(&str, &str); 80] = [
@@ -214,6 +269,7 @@ const struct config_enum_entry dynamic_shared_memory_options[] = {
 "#;
 
 /// One entry of an options array: the name, the C constant and the hidden mark.
+#[derive(Clone, PartialEq)]
 struct Choice {
     name: String,
     constant: String,
@@ -237,14 +293,20 @@ fn guc(inputs: &[String]) -> Result<String, String> {
     let [dat, tables] = inputs else {
         return Err("guc: give guc_parameters.dat and guc_tables.c".to_string());
     };
-    let tables = preprocess(tables)?;
-    let mut arrays = options_arrays(&tables)?;
-    arrays.extend(options_arrays(&preprocess(OTHER_ARRAYS)?)?);
-    let groups = group_names(&tables)?;
-    let macros: BTreeMap<&str, &str> = MACROS.into_iter().collect();
+    let mut hosts = Vec::new();
+    for host in &HOSTS {
+        let defined = host.defined();
+        let mut arrays = options_arrays(&preprocess(tables, &defined)?)?;
+        arrays.extend(options_arrays(&preprocess(OTHER_ARRAYS, &defined)?)?);
+        let mut macros: BTreeMap<&str, &str> = MACROS.into_iter().collect();
+        macros.extend(host.macros.iter().copied());
+        hosts.push((host, arrays, macros));
+    }
+    let groups = group_names(&preprocess(tables, &DEFINED)?)?;
 
     let mut rows = Vec::new();
-    let mut used = BTreeMap::new();
+    // The options arrays that the table uses: the name of the static, the name of the C array, the entries and the hosts.
+    let mut used: Vec<(String, String, Vec<Choice>, Vec<&str>)> = Vec::new();
     for entry in dat_entries("guc_parameters.dat", dat)? {
         let field = |key: &str| entry.get(key).map(String::as_str);
         let name = field("name").ok_or("guc_parameters.dat: an entry with no name")?;
@@ -275,74 +337,102 @@ fn guc(inputs: &[String]) -> Result<String, String> {
         }
         let flags = if flags.is_empty() { "0".to_string() } else { flags.join(" | ") };
         let boot = field("boot_val").ok_or_else(|| bad("boot_val"))?;
-        let number = |key: &str| {
-            let text = field(key).ok_or_else(|| bad(key))?;
-            eval(text, &macros).map_err(|e| format!("{}: {e}", bad(key)))
-        };
-        let kind = match field("type") {
-            Some("bool") => {
-                let boot = match macros.get(boot).copied().unwrap_or(boot) {
-                    "true" => "true",
-                    "false" => "false",
-                    _ => return Err(bad("boot_val")),
-                };
-                format!("Kind::Bool {{ boot: {boot} }}")
-            }
-            Some("int") => {
-                let int = |key: &str| -> Result<i32, String> {
-                    let value = number(key)?;
-                    if value.fract() != 0.0
-                        || value < f64::from(i32::MIN)
-                        || value > f64::from(i32::MAX)
-                    {
-                        return Err(bad(key));
+        let mut kinds = Vec::new();
+        for (host, arrays, macros) in &hosts {
+            let number = |key: &str| {
+                let text = field(key).ok_or_else(|| bad(key))?;
+                eval(text, macros).map_err(|e| format!("{}: {e}", bad(key)))
+            };
+            let kind = match field("type") {
+                Some("bool") => {
+                    let boot = match macros.get(boot).copied().unwrap_or(boot) {
+                        "true" => "true",
+                        "false" => "false",
+                        _ => return Err(bad("boot_val")),
+                    };
+                    format!("Kind::Bool {{ boot: {boot} }}")
+                }
+                Some("int") => {
+                    let int = |key: &str| -> Result<i32, String> {
+                        let value = number(key)?;
+                        if value.fract() != 0.0
+                            || value < f64::from(i32::MIN)
+                            || value > f64::from(i32::MAX)
+                        {
+                            return Err(bad(key));
+                        }
+                        Ok(value as i32)
+                    };
+                    let (boot, min, max) = (int("boot_val")?, int("min")?, int("max")?);
+                    format!("Kind::Int {{ boot: {boot}, min: {min}, max: {max} }}")
+                }
+                Some("real") => {
+                    let (boot, min, max) = (number("boot_val")?, number("min")?, number("max")?);
+                    format!("Kind::Real {{ boot: {boot:?}, min: {min:?}, max: {max:?} }}")
+                }
+                Some("string") => match boot {
+                    "NULL" => "Kind::String { boot: None }".to_string(),
+                    boot => {
+                        let text = macros.get(boot).copied().unwrap_or(boot);
+                        let value = c_string(text).ok_or_else(|| bad("boot_val"))?;
+                        format!("Kind::String {{ boot: Some({value:?}) }}")
                     }
-                    Ok(value as i32)
-                };
-                let (boot, min, max) = (int("boot_val")?, int("min")?, int("max")?);
-                format!("Kind::Int {{ boot: {boot}, min: {min}, max: {max} }}")
-            }
-            Some("real") => {
-                let (boot, min, max) = (number("boot_val")?, number("min")?, number("max")?);
-                format!("Kind::Real {{ boot: {boot:?}, min: {min:?}, max: {max:?} }}")
-            }
-            Some("string") => match boot {
-                "NULL" => "Kind::String { boot: None }".to_string(),
-                boot => {
-                    let text = macros.get(boot).copied().unwrap_or(boot);
-                    let value = c_string(text).ok_or_else(|| bad("boot_val"))?;
-                    format!("Kind::String {{ boot: Some({value:?}) }}")
+                },
+                Some("enum") => {
+                    // `ssl_max_protocol_version` takes its array without the first entry.
+                    let options = field("options").ok_or_else(|| bad("options"))?;
+                    let (options, skip) = match options.split_once(" + ") {
+                        Some((options, "1")) => (options, 1),
+                        None => (options, 0),
+                        Some(_) => return Err(bad("options")),
+                    };
+                    let choices = arrays.get(options).ok_or_else(|| bad("options"))?;
+                    // The values come from the whole array, as the static array of options has them.
+                    let all = values(choices);
+                    let kept = all.get(skip..).ok_or_else(|| bad("options"))?;
+                    let constant = macros.get(boot).copied().unwrap_or(boot);
+                    let value = kept
+                        .iter()
+                        .find(|(c, _)| c == constant)
+                        .map(|&(_, v)| v)
+                        .ok_or_else(|| bad("boot_val"))?;
+                    let same = |(_, o, c, _): &&mut (String, String, Vec<Choice>, Vec<&str>)| {
+                        o == options && c == choices
+                    };
+                    let array = match used.iter_mut().find(same) {
+                        Some((array, _, _, cfgs)) => {
+                            if !cfgs.contains(&host.cfg) {
+                                cfgs.push(host.cfg);
+                            }
+                            array.clone()
+                        }
+                        None => {
+                            let upper = options.to_ascii_uppercase();
+                            let array = match used.iter().filter(|u| u.1 == options).count() {
+                                0 => upper,
+                                n => format!("{upper}_{}", n + 1),
+                            };
+                            used.push((
+                                array.clone(),
+                                options.to_string(),
+                                choices.clone(),
+                                vec![host.cfg],
+                            ));
+                            array
+                        }
+                    };
+                    match skip {
+                        0 => format!("Kind::Enum {{ boot: {value}, options: &{array} }}"),
+                        _ => format!(
+                            "Kind::Enum {{ boot: {value}, options: {array}.split_at({skip}).1 }}"
+                        ),
+                    }
                 }
-            },
-            Some("enum") => {
-                // `ssl_max_protocol_version` takes its array without the first entry.
-                let options = field("options").ok_or_else(|| bad("options"))?;
-                let (options, skip) = match options.split_once(" + ") {
-                    Some((options, "1")) => (options, 1),
-                    None => (options, 0),
-                    Some(_) => return Err(bad("options")),
-                };
-                let choices = arrays.get(options).ok_or_else(|| bad("options"))?;
-                // The values come from the whole array, as the static array of options has them.
-                let all = values(choices);
-                let kept = all.get(skip..).ok_or_else(|| bad("options"))?;
-                let constant = macros.get(boot).copied().unwrap_or(boot);
-                let value = kept
-                    .iter()
-                    .find(|(c, _)| c == constant)
-                    .map(|&(_, v)| v)
-                    .ok_or_else(|| bad("boot_val"))?;
-                let array = options.to_ascii_uppercase();
-                used.insert(options.to_string(), ());
-                match skip {
-                    0 => format!("Kind::Enum {{ boot: {value}, options: &{array} }}"),
-                    _ => format!(
-                        "Kind::Enum {{ boot: {value}, options: {array}.split_at({skip}).1 }}"
-                    ),
-                }
-            }
-            _ => return Err(bad("type")),
-        };
+                _ => return Err(bad("type")),
+            };
+            kinds.push((host.cfg, kind));
+        }
+        let kind = host_kind(&kinds);
         // `gen_guc_tables.pl` writes a description into C as it is, with `\` before a `"`.
         let short = field("short_desc").and_then(unescape).ok_or_else(|| bad("short_desc"))?;
         let extra = match field("long_desc") {
@@ -372,12 +462,15 @@ fn guc(inputs: &[String]) -> Result<String, String> {
          \n\
          use crate::guc::{Context, EnumOption, Kind, Parameter, flag};\n",
     );
-    for (options, ()) in &used {
-        let choices = &arrays[options];
+    used.sort_by(|a, b| (&a.1, &a.0).cmp(&(&b.1, &b.0)));
+    for (array, options, choices, cfgs) in &used {
+        let hosts = match cfgs.first() {
+            Some(&"") => String::new(),
+            _ => format!(" on the hosts `{}`", cfgs.join("`, `")),
+        };
         let _ = writeln!(
             out,
-            "\n/// `{options}`.\n#[rustfmt::skip]\nstatic {}: [EnumOption; {}] = [",
-            options.to_ascii_uppercase(),
+            "\n/// `{options}`{hosts}.\n#[rustfmt::skip]\nstatic {array}: [EnumOption; {}] = [",
             choices.len()
         );
         for (choice, (_, value)) in choices.iter().zip(values(choices)) {
@@ -414,6 +507,30 @@ fn guc(inputs: &[String]) -> Result<String, String> {
     Ok(out)
 }
 
+/// The kind of a parameter: a `cfg!` branch for each kind of another host that is not the kind of the oracle build, then the kind of the oracle build.
+fn host_kind(kinds: &[(&str, String)]) -> String {
+    let (_, oracle) = &kinds[0];
+    let mut branches: Vec<(Vec<&str>, &String)> = Vec::new();
+    for (cfg, kind) in &kinds[1..] {
+        if kind == oracle {
+            continue;
+        }
+        match branches.iter_mut().find(|(_, k)| *k == kind) {
+            Some((cfgs, _)) => cfgs.push(cfg),
+            None => branches.push((vec![cfg], kind)),
+        }
+    }
+    let mut out = String::new();
+    for (cfgs, kind) in branches {
+        let cfg = match cfgs[..] {
+            [one] => one.to_string(),
+            _ => format!("any({})", cfgs.join(", ")),
+        };
+        let _ = write!(out, "if cfg!({cfg}) {{ {kind} }} else ");
+    }
+    if out.is_empty() { oracle.clone() } else { format!("{out}{{ {oracle} }}") }
+}
+
 /// The value of each entry of an options array: the entries with the same C constant share a value, and the values count up from 0 in the order of the first entry of each constant.
 fn values(choices: &[Choice]) -> Vec<(String, usize)> {
     let mut seen: Vec<&str> = Vec::new();
@@ -433,7 +550,7 @@ fn values(choices: &[Choice]) -> Vec<(String, usize)> {
 }
 
 /// The lines of a C file that the oracle build compiles, with the `#if` lines removed. Only `#ifdef`, `#ifndef`, `#if` with `defined()`, `&&` and `||`, `#else` and `#endif` are known.
-fn preprocess(text: &str) -> Result<String, String> {
+fn preprocess(text: &str, defined: &[&str]) -> Result<String, String> {
     let mut stack: Vec<(bool, bool)> = Vec::new();
     let mut out = String::new();
     for line in text.lines() {
@@ -449,8 +566,8 @@ fn preprocess(text: &str) -> Result<String, String> {
         let (word, rest) = directive.split_once(char::is_whitespace).unwrap_or((directive, ""));
         let rest = rest.split("/*").next().unwrap_or("").trim();
         match word {
-            "ifdef" => stack.push((DEFINED.contains(&rest), false)),
-            "ifndef" => stack.push((!DEFINED.contains(&rest), false)),
+            "ifdef" => stack.push((defined.contains(&rest), false)),
+            "ifndef" => stack.push((!defined.contains(&rest), false)),
             "if" => {
                 let on = rest.split("||").any(|all| {
                     all.split("&&").all(|atom| {
@@ -459,7 +576,7 @@ fn preprocess(text: &str) -> Result<String, String> {
                             .strip_prefix("defined(")
                             .and_then(|a| a.strip_suffix(')'))
                             .unwrap_or(atom);
-                        DEFINED.contains(&atom.trim())
+                        defined.contains(&atom.trim())
                     })
                 });
                 stack.push((on, false));
@@ -748,13 +865,13 @@ mod tests {
     #[test]
     fn the_preprocessor_keeps_the_lines_of_the_oracle_build() {
         let text = "a\n#ifdef USE_LIBURING\nb\n#else\nc\n#endif\n#if defined(HAVE_COPYFILE) && defined(COPYFILE_CLONE_FORCE) || defined(HAVE_COPY_FILE_RANGE)\nd\n#endif\n#if defined(HAVE_COPYFILE) || defined(X)\ne\n#endif\n";
-        assert_eq!(preprocess(text).unwrap(), "a\nc\nd\n");
-        assert!(preprocess("#ifdef A\n").is_err());
+        assert_eq!(preprocess(text, &DEFINED).unwrap(), "a\nc\nd\n");
+        assert!(preprocess("#ifdef A\n", &DEFINED).is_err());
     }
 
     #[test]
     fn an_options_array_gives_shared_values_to_aliases() {
-        let arrays = options_arrays(&preprocess(OTHER_ARRAYS).unwrap()).unwrap();
+        let arrays = options_arrays(&preprocess(OTHER_ARRAYS, &DEFINED).unwrap()).unwrap();
         let levels = &arrays["wal_level_options"];
         let names: Vec<_> = levels.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["minimal", "replica", "archive", "hot_standby", "logical"]);
