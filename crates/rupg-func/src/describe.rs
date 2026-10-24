@@ -195,6 +195,26 @@ pub fn describe(object: ObjRef, session: &dyn Session) -> Result<Option<String>>
             };
             Some(format!("statistics object {name}"))
         }),
+        rupg_catalog::PG_DEFAULT_ACL => catalog.and_then(|c| c.default_acl(oid)).and_then(|d| {
+            let kind = match d.objtype {
+                b'r' => "relations",
+                b'S' => "sequences",
+                b'f' => "functions",
+                b'T' => "types",
+                b'n' => "schemas",
+                _ => "large objects",
+            };
+            let roles = rupg_pgcatalog::roles::current();
+            let role = roles.name(d.role)?;
+            let mut text = format!("default privileges on new {kind} belonging to role {role}");
+            if d.namespace != 0 {
+                text.push_str(&format!(
+                    " in schema {}",
+                    reg::namespace_name(d.namespace, session)?
+                ));
+            }
+            Some(text)
+        }),
         class if NO_OBJECTS.contains(&class) => None,
         class => {
             return Err(Error::new(

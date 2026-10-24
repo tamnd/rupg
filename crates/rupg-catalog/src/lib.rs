@@ -15,6 +15,7 @@ pub mod toast;
 
 mod aggregate;
 mod alter_type;
+mod default_acl;
 mod drop;
 mod enum_label;
 mod opclass;
@@ -26,6 +27,7 @@ mod stats;
 mod tsearch;
 
 pub use aggregate::{Aggregate, PG_AGGREGATE};
+pub use default_acl::{DefaultAcl, PG_DEFAULT_ACL};
 pub use drop::{Refusal, Target, flag};
 pub use opclass::{
     AmOp, AmProc, MemberLink, OpClass, OpFamily, PG_AM, PG_AMOP, PG_AMPROC, PG_OPFAMILY,
@@ -1149,6 +1151,8 @@ pub struct Catalog {
     descriptions: Arc<BTreeMap<ObjRef, String>>,
     /// The ACLs that `GRANT` and `REVOKE` gave to the functions, the types, the languages and the columns, and to the objects of `initdb`. The relations and the schemas of the session keep their ACL in their own rows.
     acls: Arc<BTreeMap<ObjRef, Vec<String>>>,
+    /// The rows of `pg_default_acl`, by OID.
+    default_acls: Arc<BTreeMap<u32, DefaultAcl>>,
     /// `uncommitted_enum_types`: the enum types that the open transaction made. [`Catalog::commit_enums`] clears them at the commit.
     uncommitted_types: Vec<u32>,
     /// `uncommitted_enum_values`: the labels that `ALTER TYPE ... ADD VALUE` of the open transaction gave to an enum type that an earlier transaction made. A statement cannot use such a label until the commit.
@@ -1259,6 +1263,7 @@ impl Catalog {
             depends: Vec::new(),
             descriptions: Arc::default(),
             acls: Arc::default(),
+            default_acls: Arc::default(),
             uncommitted_types: Vec::new(),
             uncommitted_labels: Vec::new(),
             dropped_builtins: BTreeSet::new(),

@@ -70,7 +70,7 @@ pub use vacuum::vacuum_relations;
 
 use std::cell::RefCell;
 
-use rupg_catalog::{Catalog, ObjRef, PG_CLASS, PG_PROC, PG_TYPE, RelKind};
+use rupg_catalog::{Catalog, ObjRef, PG_CLASS, PG_NAMESPACE, PG_PROC, PG_TYPE, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, ClassRow, Named, NamedRow, Owned};
 use rupg_sql::nodes::{CreateSchemaStmt, GrantTargetType, Node, ObjectType, RangeVar};
@@ -186,6 +186,7 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::AlterStatsStmt(_)
             | Node::DropOwnedStmt(_)
             | Node::ReassignOwnedStmt(_)
+            | Node::AlterDefaultPrivilegesStmt(_)
     ) || matches!(stmt, Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) || matches!(define.kind, ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_AGGREGATE))
         || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
         || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype) || alter.objtype == ObjectType::OBJECT_TYPE)
@@ -326,6 +327,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::TruncateStmt(truncate) => definer.truncate(truncate),
         Node::GrantStmt(grant) => definer.grant(grant),
         Node::DropOwnedStmt(stmt) => definer.drop_owned(stmt),
+        Node::AlterDefaultPrivilegesStmt(stmt) => definer.alter_default_privileges(stmt),
         Node::ReassignOwnedStmt(stmt) => definer.reassign_owned(stmt),
         _ => {
             Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "this statement is not supported yet"))
@@ -909,8 +911,8 @@ impl Definer<'_, '_> {
         if !stmt.schemaElts.is_empty() {
             return Err(not_yet("CREATE SCHEMA with elements", None));
         }
-        self.catalog.create_schema(&name, owner)?;
-        Ok(())
+        let schema = self.catalog.create_schema(&name, owner)?;
+        self.apply_default_acl(ObjRef::new(PG_NAMESPACE, schema))
     }
 }
 

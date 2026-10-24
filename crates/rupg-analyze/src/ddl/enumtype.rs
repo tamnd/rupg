@@ -1,6 +1,6 @@
 //! `CREATE TYPE ... AS ENUM`, as `DefineEnum` and `EnumValuesCreate` run it.
 
-use rupg_catalog::NewEnum;
+use rupg_catalog::{NewEnum, ObjRef, PG_TYPE};
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::CreateEnumStmt;
 
@@ -45,7 +45,7 @@ impl Definer<'_, '_> {
             owner: self.user,
             labels: labels.into_iter().map(str::to_string).collect(),
         };
-        self.catalog.create_enum(new)?;
-        Ok(())
+        let ty = self.catalog.create_enum(new)?;
+        self.apply_default_acl(ObjRef::new(PG_TYPE, ty))
     }
 }

@@ -1,6 +1,6 @@
 //! `CREATE DOMAIN`, as `DefineDomain` and `domainAddCheckConstraint` of `typecmds.c` run it.
 
-use rupg_catalog::{Domain, NewDomain};
+use rupg_catalog::{Domain, NewDomain, ObjRef, PG_TYPE};
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{ConstrType, Constraint, CreateDomainStmt, Node};
 use rupg_types::Value;
@@ -181,6 +181,7 @@ impl Definer<'_, '_> {
             domain: Domain { base, typmod, collation, default, not_null: false },
         };
         let domain = self.catalog.create_domain(new, &default_refs)?;
+        self.apply_default_acl(ObjRef::new(PG_TYPE, domain))?;
         for con in &constraints {
             match con.contype {
                 ConstrType::CONSTR_CHECK => self.add_domain_check(domain, con, (base, typmod))?,

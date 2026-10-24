@@ -253,6 +253,7 @@ pub(crate) fn rows(
         "pg_ts_config" => ts_configs(table, catalog),
         "pg_ts_config_map" => ts_mappings(table, catalog),
         "pg_statistic_ext" => statistic_exts(table, catalog),
+        "pg_default_acl" => default_acls(table, catalog),
         "pg_collation" => collations(table, catalog),
         "pg_enum" => enum_labels(table, catalog),
         "pg_range" => ranges(table, catalog),
@@ -1213,6 +1214,22 @@ fn statistic_exts<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("stxstattarget", s.target.map_or(Value::Null, Value::Int2))
                 .set("stxkind", char_array(&s.kinds))
                 .set("stxexprs", tree(s.exprs.as_ref()));
+            row
+        })
+        .collect()
+}
+
+/// The rows of `pg_default_acl` that `ALTER DEFAULT PRIVILEGES` adds.
+fn default_acls<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .default_acls()
+        .map(|d| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(d.oid))
+                .set("defaclrole", oid(d.role))
+                .set("defaclnamespace", oid(d.namespace))
+                .set("defaclobjtype", Value::Char(d.objtype))
+                .set("defaclacl", text_array(&d.acl));
             row
         })
         .collect()

@@ -107,6 +107,7 @@ impl Definer<'_, '_> {
         let mut info = params.info;
         info.data = SequenceData::new(params.last_value);
         let sequence = self.catalog.create_sequence(new, info)?;
+        self.apply_default_acl(ObjRef::new(PG_CLASS, sequence))?;
         if rv.relpersistence == b'u' {
             self.catalog.set_unlogged(sequence, true)?;
         }

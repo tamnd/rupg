@@ -1,0 +1,405 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE USER regress_da_u1;
+CREATE ROLE
+> CREATE USER regress_da_u2;
+CREATE ROLE
+> CREATE USER regress_da_u3;
+CREATE ROLE
+> CREATE SCHEMA da_s AUTHORIZATION regress_da_u1;
+CREATE SCHEMA
+> CREATE SCHEMA da_t AUTHORIZATION regress_da_u1;
+CREATE SCHEMA
+> GRANT CREATE ON SCHEMA public TO regress_da_u1;
+GRANT
+> ALTER DEFAULT PRIVILEGES FOR ROLE regress_da_u1 IN SCHEMA da_s GRANT USAGE ON SCHEMAS TO regress_da_u2;
+ERROR 0LP01 cannot use IN SCHEMA clause when using GRANT/REVOKE ON SCHEMAS
+> ALTER DEFAULT PRIVILEGES FOR ROLE regress_da_u1 IN SCHEMA da_s GRANT SELECT ON LARGE OBJECTS TO regress_da_u2;
+ERROR 0LP01 cannot use IN SCHEMA clause when using GRANT/REVOKE ON LARGE OBJECTS
+> ALTER DEFAULT PRIVILEGES FOR ROLE regress_da_u1 GRANT SELECT (a) ON TABLES TO regress_da_u2;
+ERROR 0LP01 default privileges cannot be set for columns
+> ALTER DEFAULT PRIVILEGES FOR ROLE regress_da_u1 GRANT INSERT ON FUNCTIONS TO regress_da_u2;
+ERROR 0LP01 invalid privilege type INSERT for function
+> ALTER DEFAULT PRIVILEGES FOR ROLE regress_da_u1 GRANT EXECUTE ON TABLES TO regress_da_u2;
+ERROR 0LP01 invalid privilege type EXECUTE for relation
+> ALTER DEFAULT PRIVILEGES FOR ROLE regress_da_u1 GRANT DELETE ON SEQUENCES TO regress_da_u2;
+ERROR 0LP01 invalid privilege type DELETE for sequence
+> ALTER DEFAULT PRIVILEGES FOR ROLE regress_da_u1 GRANT CREATE ON TYPES TO regress_da_u2;
+ERROR 0LP01 invalid privilege type CREATE for type
+> ALTER DEFAULT PRIVILEGES FOR ROLE regress_da_u1 GRANT SELECT ON SCHEMAS TO regress_da_u2;
+ERROR 0LP01 invalid privilege type SELECT for schema
+> ALTER DEFAULT PRIVILEGES FOR ROLE regress_da_u1 IN SCHEMA da_nosuch GRANT SELECT ON TABLES TO regress_da_u2;
+ERROR 3F000 schema "da_nosuch" does not exist
+> ALTER DEFAULT PRIVILEGES FOR ROLE regress_da_nosuch GRANT SELECT ON TABLES TO regress_da_u2;
+ERROR 42704 role "regress_da_nosuch" does not exist
+> ALTER DEFAULT PRIVILEGES FOR ROLE regress_da_u1 GRANT SELECT ON TABLES TO regress_da_nosuch;
+ERROR 42704 role "regress_da_nosuch" does not exist
+> ALTER DEFAULT PRIVILEGES FOR ROLE regress_da_u1 GRANT SELECT ON TABLES TO public WITH GRANT OPTION;
+ERROR 0LP01 grant options can only be granted to roles
+> SET SESSION AUTHORIZATION regress_da_u2;
+SET
+session_authorization=regress_da_u2
+is_superuser=off
+> ALTER DEFAULT PRIVILEGES FOR ROLE regress_da_u1 GRANT SELECT ON TABLES TO regress_da_u2;
+ERROR 42501 permission denied to change default privileges
+> ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO regress_da_u3;
+ALTER DEFAULT PRIVILEGES
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> SELECT defaclrole::regrole::text, defaclnamespace, defaclobjtype, defaclacl::text FROM pg_default_acl ORDER BY 1, 2, 3;
+fields defaclrole:25:-1:-1,defaclnamespace@pg_default_acl.3:26:4:-1,defaclobjtype@pg_default_acl.4:18:1:-1,defaclacl:25:-1:-1
+row regress_da_u2,0,r,{regress_da_u2=arwdDxtm/regress_da_u2,regress_da_u3=r/regress_da_u2}
+SELECT 1
+> ALTER DEFAULT PRIVILEGES FOR ROLE regress_da_u2 REVOKE SELECT ON TABLES FROM regress_da_u3;
+ALTER DEFAULT PRIVILEGES
+> SELECT count(*) FROM pg_default_acl;
+fields count:20:8:-1
+row 0
+SELECT 1
+> SET SESSION AUTHORIZATION regress_da_u1;
+SET
+session_authorization=regress_da_u1
+is_superuser=off
+> CREATE TABLE da_s.t0 (a int);
+CREATE TABLE
+> ALTER DEFAULT PRIVILEGES IN SCHEMA da_s, da_s GRANT SELECT ON TABLES TO public, public;
+ALTER DEFAULT PRIVILEGES
+> ALTER DEFAULT PRIVILEGES IN SCHEMA da_s GRANT INSERT, UPDATE ON TABLES TO regress_da_u2 WITH GRANT OPTION;
+ALTER DEFAULT PRIVILEGES
+> ALTER DEFAULT PRIVILEGES IN SCHEMA da_s REVOKE GRANT OPTION FOR UPDATE ON TABLES FROM regress_da_u2;
+ALTER DEFAULT PRIVILEGES
+> ALTER DEFAULT PRIVILEGES GRANT TRUNCATE ON TABLES TO regress_da_u3;
+ALTER DEFAULT PRIVILEGES
+> ALTER DEFAULT PRIVILEGES REVOKE DELETE ON TABLES FROM regress_da_u1;
+ALTER DEFAULT PRIVILEGES
+> ALTER DEFAULT PRIVILEGES IN SCHEMA da_s GRANT ALL ON SEQUENCES TO regress_da_u2;
+ALTER DEFAULT PRIVILEGES
+> ALTER DEFAULT PRIVILEGES FOR USER regress_da_u1 REVOKE EXECUTE ON FUNCTIONS FROM public;
+ALTER DEFAULT PRIVILEGES
+> ALTER DEFAULT PRIVILEGES IN SCHEMA da_s GRANT EXECUTE ON ROUTINES TO regress_da_u3;
+ALTER DEFAULT PRIVILEGES
+> ALTER DEFAULT PRIVILEGES REVOKE USAGE ON TYPES FROM public;
+ALTER DEFAULT PRIVILEGES
+> ALTER DEFAULT PRIVILEGES IN SCHEMA da_s GRANT USAGE ON TYPES TO regress_da_u2;
+ALTER DEFAULT PRIVILEGES
+> ALTER DEFAULT PRIVILEGES GRANT CREATE ON SCHEMAS TO regress_da_u3;
+ALTER DEFAULT PRIVILEGES
+> SELECT defaclrole::regrole::text, coalesce(nspname, '-'), defaclobjtype, defaclacl::text FROM pg_default_acl LEFT JOIN pg_namespace n ON n.oid = defaclnamespace ORDER BY 1, 2, 3;
+fields defaclrole:25:-1:-1,coalesce:19:64:-1,defaclobjtype@pg_default_acl.4:18:1:-1,defaclacl:25:-1:-1
+row regress_da_u1,-,T,{regress_da_u1=U/regress_da_u1}
+row regress_da_u1,-,f,{regress_da_u1=X/regress_da_u1}
+row regress_da_u1,-,n,{regress_da_u1=UC/regress_da_u1,regress_da_u3=C/regress_da_u1}
+row regress_da_u1,-,r,{regress_da_u1=arwDxtm/regress_da_u1,regress_da_u3=D/regress_da_u1}
+row regress_da_u1,da_s,S,{regress_da_u2=rwU/regress_da_u1}
+row regress_da_u1,da_s,T,{regress_da_u2=U/regress_da_u1}
+row regress_da_u1,da_s,f,{regress_da_u3=X/regress_da_u1}
+row regress_da_u1,da_s,r,{=r/regress_da_u1,regress_da_u2=a*w/regress_da_u1}
+SELECT 8
+> SELECT pg_describe_object(classid, objid, objsubid) FROM (SELECT 'pg_default_acl'::regclass AS classid, oid AS objid, 0 AS objsubid FROM pg_default_acl) d ORDER BY 1;
+fields pg_describe_object:25:-1:-1
+row default privileges on new functions belonging to role regress_da_u1
+row default privileges on new functions belonging to role regress_da_u1 in schema da_s
+row default privileges on new relations belonging to role regress_da_u1
+row default privileges on new relations belonging to role regress_da_u1 in schema da_s
+row default privileges on new schemas belonging to role regress_da_u1
+row default privileges on new sequences belonging to role regress_da_u1 in schema da_s
+row default privileges on new types belonging to role regress_da_u1
+row default privileges on new types belonging to role regress_da_u1 in schema da_s
+SELECT 8
+> CREATE TABLE da_s.t1 (a int);
+CREATE TABLE
+> CREATE TABLE da_t.t2 (a serial);
+CREATE TABLE
+> CREATE TABLE public.da_t3 (a int);
+CREATE TABLE
+> CREATE VIEW da_s.v1 AS SELECT 1 AS x;
+CREATE VIEW
+> CREATE MATERIALIZED VIEW da_s.m1 AS SELECT 1 AS x;
+SELECT 1
+> CREATE TABLE da_s.p1 (a int) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE da_s.t4 AS SELECT 1 AS x;
+SELECT 1
+> CREATE SEQUENCE da_s.q1;
+CREATE SEQUENCE
+> CREATE TABLE da_s.t5 (a serial, b int GENERATED ALWAYS AS IDENTITY);
+CREATE TABLE
+> CREATE INDEX ON da_s.t1 (a);
+CREATE INDEX
+> CREATE TYPE da_s.c1 AS (a int);
+CREATE TYPE
+> CREATE TYPE da_s.e1 AS ENUM ('x');
+CREATE TYPE
+> CREATE TYPE da_s.r1 AS RANGE (SUBTYPE = int4);
+CREATE TYPE
+> CREATE DOMAIN da_s.d1 AS int;
+CREATE DOMAIN
+> CREATE TYPE da_t.e2 AS ENUM ('x');
+CREATE TYPE
+> CREATE FUNCTION da_s.f1() RETURNS int LANGUAGE sql AS 'select 1';
+CREATE FUNCTION
+> CREATE PROCEDURE da_s.p2() LANGUAGE sql AS 'select 1';
+CREATE PROCEDURE
+> CREATE AGGREGATE da_s.agg1(int) (sfunc = int4pl, stype = int4);
+CREATE AGGREGATE
+> CREATE FUNCTION da_t.f2() RETURNS int LANGUAGE sql AS 'select 1';
+CREATE FUNCTION
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> CREATE SCHEMA da_u AUTHORIZATION regress_da_u1;
+CREATE SCHEMA
+> CREATE SCHEMA da_w AUTHORIZATION regress_da_u1;
+CREATE SCHEMA
+> CREATE SCHEMA da_x;
+CREATE SCHEMA
+> CREATE TABLE da_x.x1 (a int);
+CREATE TABLE
+> SET SESSION AUTHORIZATION regress_da_u1;
+SET
+session_authorization=regress_da_u1
+is_superuser=off
+> SELECT nspname, c.relname, c.relkind, c.relacl::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE nspname IN ('da_s', 'da_t', 'da_w', 'da_x') OR relname = 'da_t3' ORDER BY 1, 2;
+fields nspname@pg_namespace.2:19:64:-1,relname@pg_class.2:19:64:-1,relkind@pg_class.18:18:1:-1,relacl:25:-1:-1
+row da_s,c1,c,NULL
+row da_s,m1,m,{=r/regress_da_u1,regress_da_u1=arwDxtm/regress_da_u1,regress_da_u2=a*w/regress_da_u1,regress_da_u3=D/regress_da_u1}
+row da_s,p1,p,{=r/regress_da_u1,regress_da_u1=arwDxtm/regress_da_u1,regress_da_u2=a*w/regress_da_u1,regress_da_u3=D/regress_da_u1}
+row da_s,q1,S,{regress_da_u1=rwU/regress_da_u1,regress_da_u2=rwU/regress_da_u1}
+row da_s,t0,r,NULL
+row da_s,t1,r,{=r/regress_da_u1,regress_da_u1=arwDxtm/regress_da_u1,regress_da_u2=a*w/regress_da_u1,regress_da_u3=D/regress_da_u1}
+row da_s,t1_a_idx,i,NULL
+row da_s,t4,r,{=r/regress_da_u1,regress_da_u1=arwDxtm/regress_da_u1,regress_da_u2=a*w/regress_da_u1,regress_da_u3=D/regress_da_u1}
+row da_s,t5,r,{=r/regress_da_u1,regress_da_u1=arwDxtm/regress_da_u1,regress_da_u2=a*w/regress_da_u1,regress_da_u3=D/regress_da_u1}
+row da_s,t5_a_seq,S,{regress_da_u1=rwU/regress_da_u1,regress_da_u2=rwU/regress_da_u1}
+row da_s,t5_b_seq,S,{regress_da_u1=rwU/regress_da_u1,regress_da_u2=rwU/regress_da_u1}
+row da_s,v1,v,{=r/regress_da_u1,regress_da_u1=arwDxtm/regress_da_u1,regress_da_u2=a*w/regress_da_u1,regress_da_u3=D/regress_da_u1}
+row da_t,t2,r,{regress_da_u1=arwDxtm/regress_da_u1,regress_da_u3=D/regress_da_u1}
+row da_t,t2_a_seq,S,NULL
+row da_x,x1,r,NULL
+row public,da_t3,r,{regress_da_u1=arwDxtm/regress_da_u1,regress_da_u3=D/regress_da_u1}
+SELECT 16
+> SELECT nspname, t.typname, t.typtype, t.typacl::text FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE nspname IN ('da_s', 'da_t') ORDER BY 1, 2;
+fields nspname@pg_namespace.2:19:64:-1,typname@pg_type.2:19:64:-1,typtype@pg_type.7:18:1:-1,typacl:25:-1:-1
+row da_s,_c1,b,NULL
+row da_s,_d1,b,NULL
+row da_s,_e1,b,NULL
+row da_s,_m1,b,NULL
+row da_s,_p1,b,NULL
+row da_s,_r1,b,NULL
+row da_s,_r1_multirange,b,NULL
+row da_s,_t0,b,NULL
+row da_s,_t1,b,NULL
+row da_s,_t4,b,NULL
+row da_s,_t5,b,NULL
+row da_s,_v1,b,NULL
+row da_s,c1,c,{regress_da_u1=U/regress_da_u1,regress_da_u2=U/regress_da_u1}
+row da_s,d1,d,{regress_da_u1=U/regress_da_u1,regress_da_u2=U/regress_da_u1}
+row da_s,e1,e,{regress_da_u1=U/regress_da_u1,regress_da_u2=U/regress_da_u1}
+row da_s,m1,c,NULL
+row da_s,p1,c,NULL
+row da_s,r1,r,{regress_da_u1=U/regress_da_u1,regress_da_u2=U/regress_da_u1}
+row da_s,r1_multirange,m,NULL
+row da_s,t0,c,NULL
+row da_s,t1,c,NULL
+row da_s,t4,c,NULL
+row da_s,t5,c,NULL
+row da_s,v1,c,NULL
+row da_t,_e2,b,NULL
+row da_t,_t2,b,NULL
+row da_t,e2,e,{regress_da_u1=U/regress_da_u1}
+row da_t,t2,c,NULL
+SELECT 28
+> SELECT nspname, p.proname, p.prokind, p.proacl::text FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE nspname IN ('da_s', 'da_t') ORDER BY 1, 2;
+fields nspname@pg_namespace.2:19:64:-1,proname@pg_proc.2:19:64:-1,prokind@pg_proc.10:18:1:-1,proacl:25:-1:-1
+row da_s,agg1,a,{regress_da_u1=X/regress_da_u1,regress_da_u3=X/regress_da_u1}
+row da_s,f1,f,{regress_da_u1=X/regress_da_u1,regress_da_u3=X/regress_da_u1}
+row da_s,p2,p,{regress_da_u1=X/regress_da_u1,regress_da_u3=X/regress_da_u1}
+row da_s,r1,f,NULL
+row da_s,r1,f,NULL
+row da_s,r1_multirange,f,NULL
+row da_s,r1_multirange,f,NULL
+row da_s,r1_multirange,f,NULL
+row da_t,f2,f,{regress_da_u1=X/regress_da_u1}
+SELECT 9
+> SELECT nspname, nspacl::text FROM pg_namespace WHERE nspname LIKE 'da\_%' ORDER BY 1;
+fields nspname@pg_namespace.2:19:64:-1,nspacl:25:-1:-1
+row da_s,NULL
+row da_t,NULL
+row da_u,{regress_da_u1=UC/regress_da_u1,regress_da_u3=C/regress_da_u1}
+row da_w,{regress_da_u1=UC/regress_da_u1,regress_da_u3=C/regress_da_u1}
+row da_x,NULL
+SELECT 5
+> SELECT has_table_privilege('regress_da_u2', 'da_s.t1', 'INSERT WITH GRANT OPTION'), has_table_privilege('regress_da_u3', 'da_t.t2', 'TRUNCATE'), has_function_privilege('regress_da_u2', 'da_s.f1()', 'EXECUTE'), has_type_privilege('regress_da_u3', 'da_s.d1', 'USAGE');
+fields has_table_privilege:16:1:-1,has_table_privilege:16:1:-1,has_function_privilege:16:1:-1,has_type_privilege:16:1:-1
+row t,t,f,f
+SELECT 1
+> CREATE OR REPLACE FUNCTION da_t.f2() RETURNS int LANGUAGE sql AS 'select 2';
+CREATE FUNCTION
+> ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON FUNCTIONS FROM regress_da_u1;
+ALTER DEFAULT PRIVILEGES
+> CREATE OR REPLACE FUNCTION da_t.f2() RETURNS int LANGUAGE sql AS 'select 3';
+CREATE FUNCTION
+> CREATE FUNCTION da_t.f3() RETURNS int LANGUAGE sql AS 'select 1';
+CREATE FUNCTION
+> SELECT p.proname, p.proacl::text FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE nspname = 'da_t' ORDER BY 1;
+fields proname@pg_proc.2:19:64:-1,proacl:25:-1:-1
+row f2,{regress_da_u1=X/regress_da_u1}
+row f3,NULL
+SELECT 2
+> ALTER DEFAULT PRIVILEGES GRANT ALL ON FUNCTIONS TO regress_da_u1;
+ALTER DEFAULT PRIVILEGES
+> ALTER DEFAULT PRIVILEGES GRANT ALL ON FUNCTIONS TO public;
+ALTER DEFAULT PRIVILEGES
+> ALTER DEFAULT PRIVILEGES GRANT USAGE ON TYPES TO public;
+ALTER DEFAULT PRIVILEGES
+> ALTER DEFAULT PRIVILEGES GRANT DELETE ON TABLES TO regress_da_u1;
+ALTER DEFAULT PRIVILEGES
+> ALTER DEFAULT PRIVILEGES REVOKE TRUNCATE ON TABLES FROM regress_da_u3;
+ALTER DEFAULT PRIVILEGES
+> SELECT defaclrole::regrole::text, coalesce(nspname, '-'), defaclobjtype, defaclacl::text FROM pg_default_acl LEFT JOIN pg_namespace n ON n.oid = defaclnamespace ORDER BY 1, 2, 3;
+fields defaclrole:25:-1:-1,coalesce:19:64:-1,defaclobjtype@pg_default_acl.4:18:1:-1,defaclacl:25:-1:-1
+row regress_da_u1,-,n,{regress_da_u1=UC/regress_da_u1,regress_da_u3=C/regress_da_u1}
+row regress_da_u1,da_s,S,{regress_da_u2=rwU/regress_da_u1}
+row regress_da_u1,da_s,T,{regress_da_u2=U/regress_da_u1}
+row regress_da_u1,da_s,f,{regress_da_u3=X/regress_da_u1}
+row regress_da_u1,da_s,r,{=r/regress_da_u1,regress_da_u2=a*w/regress_da_u1}
+SELECT 5
+> BEGIN;
+BEGIN
+> ALTER DEFAULT PRIVILEGES IN SCHEMA da_t GRANT SELECT ON TABLES TO regress_da_u2;
+ALTER DEFAULT PRIVILEGES
+> SELECT count(*) FROM pg_default_acl;
+fields count:20:8:-1
+row 6
+SELECT 1
+> ROLLBACK;
+ROLLBACK
+> SELECT count(*) FROM pg_default_acl;
+fields count:20:8:-1
+row 5
+SELECT 1
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> DROP USER regress_da_u2;
+ERROR 2BP01 role "regress_da_u2" cannot be dropped because some objects depend on it
+DETAIL privileges for default privileges on new relations belonging to role regress_da_u1 in schema da_s
+privileges for default privileges on new sequences belonging to role regress_da_u1 in schema da_s
+privileges for default privileges on new types belonging to role regress_da_u1 in schema da_s
+privileges for table da_s.t1
+privileges for view da_s.v1
+privileges for materialized view da_s.m1
+privileges for table da_s.p1
+privileges for table da_s.t4
+privileges for sequence da_s.q1
+privileges for sequence da_s.t5_a_seq
+privileges for sequence da_s.t5_b_seq
+privileges for table da_s.t5
+privileges for type da_s.c1
+privileges for type da_s.e1
+privileges for type da_s.r1
+privileges for type da_s.d1
+> DROP USER regress_da_u3;
+ERROR 2BP01 role "regress_da_u3" cannot be dropped because some objects depend on it
+DETAIL privileges for default privileges on new functions belonging to role regress_da_u1 in schema da_s
+privileges for default privileges on new schemas belonging to role regress_da_u1
+privileges for table da_s.t1
+privileges for table da_t.t2
+privileges for table da_t3
+privileges for view da_s.v1
+privileges for materialized view da_s.m1
+privileges for table da_s.p1
+privileges for table da_s.t4
+privileges for table da_s.t5
+privileges for function da_s.f1()
+privileges for function da_s.p2()
+privileges for function da_s.agg1(integer)
+privileges for schema da_u
+privileges for schema da_w
+> DROP SCHEMA da_u, da_w, da_x CASCADE;
+NOTICE 00000 drop cascades to table da_x.x1
+DROP SCHEMA
+> DROP OWNED BY regress_da_u2;
+DROP OWNED
+> SELECT defaclrole::regrole::text, coalesce(nspname, '-'), defaclobjtype, defaclacl::text FROM pg_default_acl LEFT JOIN pg_namespace n ON n.oid = defaclnamespace ORDER BY 1, 2, 3;
+fields defaclrole:25:-1:-1,coalesce:19:64:-1,defaclobjtype@pg_default_acl.4:18:1:-1,defaclacl:25:-1:-1
+row regress_da_u1,-,n,{regress_da_u1=UC/regress_da_u1,regress_da_u3=C/regress_da_u1}
+row regress_da_u1,da_s,f,{regress_da_u3=X/regress_da_u1}
+row regress_da_u1,da_s,r,{=r/regress_da_u1}
+SELECT 3
+> ALTER DEFAULT PRIVILEGES FOR ROLE regress_da_u1 IN SCHEMA da_t GRANT SELECT ON TABLES TO regress_da_u3;
+ALTER DEFAULT PRIVILEGES
+> SELECT defaclrole::regrole::text, coalesce(nspname, '-'), defaclobjtype, defaclacl::text FROM pg_default_acl LEFT JOIN pg_namespace n ON n.oid = defaclnamespace ORDER BY 1, 2, 3;
+fields defaclrole:25:-1:-1,coalesce:19:64:-1,defaclobjtype@pg_default_acl.4:18:1:-1,defaclacl:25:-1:-1
+row regress_da_u1,-,n,{regress_da_u1=UC/regress_da_u1,regress_da_u3=C/regress_da_u1}
+row regress_da_u1,da_s,f,{regress_da_u3=X/regress_da_u1}
+row regress_da_u1,da_s,r,{=r/regress_da_u1}
+row regress_da_u1,da_t,r,{regress_da_u3=r/regress_da_u1}
+SELECT 4
+> DROP SCHEMA da_t CASCADE;
+NOTICE 00000 drop cascades to 4 other objects
+DETAIL drop cascades to table da_t.t2
+drop cascades to type da_t.e2
+drop cascades to function da_t.f2()
+drop cascades to function da_t.f3()
+DROP SCHEMA
+> SELECT defaclrole::regrole::text, coalesce(nspname, '-'), defaclobjtype, defaclacl::text FROM pg_default_acl LEFT JOIN pg_namespace n ON n.oid = defaclnamespace ORDER BY 1, 2, 3;
+fields defaclrole:25:-1:-1,coalesce:19:64:-1,defaclobjtype@pg_default_acl.4:18:1:-1,defaclacl:25:-1:-1
+row regress_da_u1,-,n,{regress_da_u1=UC/regress_da_u1,regress_da_u3=C/regress_da_u1}
+row regress_da_u1,da_s,f,{regress_da_u3=X/regress_da_u1}
+row regress_da_u1,da_s,r,{=r/regress_da_u1}
+SELECT 3
+> DROP USER regress_da_u2;
+DROP ROLE
+> DROP USER regress_da_u1;
+ERROR 2BP01 role "regress_da_u1" cannot be dropped because some objects depend on it
+DETAIL privileges for schema public
+owner of schema da_s
+owner of table da_s.t0
+owner of default privileges on new relations belonging to role regress_da_u1 in schema da_s
+owner of default privileges on new functions belonging to role regress_da_u1 in schema da_s
+owner of default privileges on new schemas belonging to role regress_da_u1
+owner of table da_s.t1
+owner of table da_t3
+owner of view da_s.v1
+owner of materialized view da_s.m1
+owner of table da_s.p1
+owner of table da_s.t4
+owner of sequence da_s.q1
+owner of sequence da_s.t5_a_seq
+owner of sequence da_s.t5_b_seq
+owner of table da_s.t5
+owner of type da_s.c1
+owner of type da_s.e1
+owner of type da_s.r1
+owner of type da_s.d1
+owner of function da_s.f1()
+owner of function da_s.p2()
+owner of function da_s.agg1(integer)
+> DROP OWNED BY regress_da_u3;
+DROP OWNED
+> SELECT defaclrole::regrole::text, coalesce(nspname, '-'), defaclobjtype, defaclacl::text FROM pg_default_acl LEFT JOIN pg_namespace n ON n.oid = defaclnamespace ORDER BY 1, 2, 3;
+fields defaclrole:25:-1:-1,coalesce:19:64:-1,defaclobjtype@pg_default_acl.4:18:1:-1,defaclacl:25:-1:-1
+row regress_da_u1,da_s,r,{=r/regress_da_u1}
+SELECT 1
+> DROP OWNED BY regress_da_u1;
+DROP OWNED
+> SELECT count(*) FROM pg_default_acl;
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM pg_namespace WHERE nspname LIKE 'da\_%';
+fields count:20:8:-1
+row 0
+SELECT 1
+> REVOKE CREATE ON SCHEMA public FROM regress_da_u1;
+REVOKE
+> DROP USER regress_da_u1;
+DROP ROLE
+> DROP USER regress_da_u3;
+DROP ROLE
