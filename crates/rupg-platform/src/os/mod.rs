@@ -434,6 +434,32 @@ mod tests {
         );
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    #[cfg_attr(miri, ignore = "Miri isolates the test from the operating system")]
+    fn tcp_options() {
+        use crate::net::TcpOption;
+
+        let listener = OsNet.listen("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr();
+        let c = OsNet.connect(&addr).unwrap();
+        let s = listener.accept().unwrap();
+        for option in TcpOption::ALL {
+            assert!(s.tcp_option(option).is_some_and(|v| v >= 0), "{}", option.name());
+        }
+        s.set_tcp_option(TcpOption::KeepalivesIdle, 60).unwrap();
+        assert_eq!(s.tcp_option(TcpOption::KeepalivesIdle), Some(60));
+        s.set_tcp_option(TcpOption::KeepalivesCount, 3).unwrap();
+        assert_eq!(s.tcp_option(TcpOption::KeepalivesCount), Some(3));
+        // macOS does not have `TCP_USER_TIMEOUT`, so the value is 0 and a change fails.
+        if cfg!(target_os = "macos") {
+            assert_eq!(s.tcp_option(TcpOption::UserTimeout), Some(0));
+            let e = s.set_tcp_option(TcpOption::UserTimeout, 5000).unwrap_err();
+            assert_eq!(e.message(), "setsockopt(TCP_USER_TIMEOUT) not supported");
+        }
+        drop(c);
+    }
+
     #[cfg(unix)]
     #[test]
     #[cfg_attr(miri, ignore = "Miri isolates the test from the operating system")]

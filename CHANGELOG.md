@@ -11,6 +11,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - `age(xid)` and `mxid_age(xid)` run. `age` counts from the ID of the transaction, or from the next ID when the transaction has none, and the value stays the same until the end of the transaction, as `GetStableLatestTransactionId` gives it. An ID that is not normal gives `2147483647` (#669).
 - The clause `SET` of `CREATE FUNCTION`, `CREATE PROCEDURE` and `ALTER FUNCTION`, with `RESET`, `RESET ALL` and `SET ... FROM CURRENT`. `proconfig` keeps each setting, and `pg_get_functiondef` shows each one on its own line. A call runs with the settings, and they go back at the end of the call, also after an error. A value that a `SET` in the call changes stays after the call, as `AtEOXact_GUC` keeps it. A body in a string reads its names with the `search_path` of the settings. `SECURITY INVOKER` is accepted (#671).
 
+### Fixed
+
+- On macOS, the server sets `SO_KEEPALIVE` on each TCP connection, and `tcp_keepalives_idle`, `tcp_keepalives_interval` and `tcp_keepalives_count` read and set the options of the socket, as on Linux. Before, `SHOW` gave 0 for them on macOS. macOS does not have `TCP_USER_TIMEOUT`, so `tcp_user_timeout` shows 0, and a value that is not 0 writes `setsockopt(TCP_USER_TIMEOUT) not supported` to the log, as in PostgreSQL (#672).
+
 ## 0.1.76 (2026-10-24)
 
 ### Added

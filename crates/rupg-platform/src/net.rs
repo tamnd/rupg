@@ -141,10 +141,17 @@ impl TcpOption {
         }
     }
 
+    /// Whether the system has the option. macOS does not have `TCP_USER_TIMEOUT`, so `pq_gettcpusertimeout` gives 0 there for each value of the parameter.
+    #[must_use]
+    pub fn supported(self) -> bool {
+        !(cfg!(target_os = "macos") && self == Self::UserTimeout)
+    }
+
     /// The name of the option of the system, for the messages.
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
+            Self::KeepalivesIdle if cfg!(target_os = "macos") => "TCP_KEEPALIVE",
             Self::KeepalivesIdle => "TCP_KEEPIDLE",
             Self::KeepalivesInterval => "TCP_KEEPINTVL",
             Self::KeepalivesCount => "TCP_KEEPCNT",
