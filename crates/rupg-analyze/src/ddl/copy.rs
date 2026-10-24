@@ -9,6 +9,7 @@ use rupg_sql::nodes::{
 
 use super::lock::{lookup, relkind};
 use super::relkind_detail;
+use crate::walk::{self, Walker};
 use crate::{Analyzer, Env, Params};
 
 /// The relation of a `COPY ... TO` and the query that reads its rows.
@@ -69,6 +70,19 @@ pub fn copy_target(stmt: &CopyStmt, rv: &RangeVar, env: &dyn Env) -> Result<Copy
             rel.columns.iter().filter(|c| !c.dropped).map(|c| c.generated != 0).collect()
         });
     let is_generated = |i: usize| generated.get(i).copied().unwrap_or(false);
+    if let Some(condition) = &stmt.whereClause {
+        let mut refs = WhereColumns { relname: &name, columns: &columns, used: Vec::new() };
+        walk::one(&mut refs, Some(condition));
+        let mut used = refs.used;
+        used.sort_unstable();
+        if let Some(&i) = used.iter().find(|&&i| is_generated(i)) {
+            return Err(Error::new(
+                SqlState::INVALID_COLUMN_REFERENCE,
+                "generated columns are not supported in COPY FROM WHERE conditions",
+            )
+            .with_detail(format!("Column \"{}\" is a generated column.", columns[i])));
+        }
+    }
     if names.is_empty() {
         selected.retain(|&i| !is_generated(i));
     } else if let Some(&i) = selected.iter().find(|&&i| is_generated(i)) {
@@ -79,6 +93,34 @@ pub fn copy_target(stmt: &CopyStmt, rv: &RangeVar, env: &dyn Env) -> Result<Copy
         .with_detail("Generated columns cannot be used in COPY."));
     }
     Ok(CopyTarget { relid, name, kind, columns, selected })
+}
+
+/// `pull_varattnos` for the `WHERE` of `COPY ... FROM`, on the raw tree: the columns of the relation that the condition names, as indexes into `columns`. A whole-row reference gives all the columns.
+struct WhereColumns<'a> {
+    relname: &'a str,
+    columns: &'a [String],
+    used: Vec<usize>,
+}
+
+impl Walker for WhereColumns<'_> {
+    fn node(&mut self, node: &Node) -> bool {
+        let Node::ColumnRef(cref) = node else { return walk::walk(self, node) };
+        let fields: Vec<Option<&str>> = cref.fields.iter().flatten().map(string).collect();
+        let position = |name: &str| self.columns.iter().position(|c| c == name);
+        match fields.as_slice() {
+            [Some(name)] if position(name).is_some() => self.used.extend(position(name)),
+            [Some(rel)] | [Some(rel), None] if *rel == self.relname => {
+                self.used.extend(0..self.columns.len());
+            }
+            [Some(rel), Some(name)] if *rel == self.relname => self.used.extend(position(name)),
+            _ => {}
+        }
+        false
+    }
+
+    fn select(&mut self, stmt: &SelectStmt) -> bool {
+        walk::select(self, stmt)
+    }
 }
 
 /// The checks of `DoCopy` and `BeginCopyTo` for the relation of `COPY ... TO`: `table_openrv`, `CopyGetAttnums` and the kind of the relation.

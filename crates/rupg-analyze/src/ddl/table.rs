@@ -32,6 +32,7 @@ mod inherit;
 mod typed;
 
 pub(super) use inherit::collation_name;
+use inherit::merge_generated;
 
 /// The names of the system columns.
 pub(super) const SYSTEM_COLUMNS: [&str; 6] = ["tableoid", "cmax", "xmax", "cmin", "xmin", "ctid"];
@@ -338,6 +339,9 @@ impl Definer<'_, '_> {
             let parents = self.inherit_parents(&stmt.inhRelations)?;
             self.merge_inherited_columns(&mut plan, &parents, namespace)?;
             plan.inherits = parents;
+        }
+        if plan.columns.iter().any(|c| c.generated == b'v') {
+            return Err(not_yet("a virtual generated column", at));
         }
         let mut table_rv = rv.clone();
         table_rv.schemaname = Some(self.schema_name(namespace).into());
@@ -795,9 +799,6 @@ impl Definer<'_, '_> {
                         )
                         .at_opt(at));
                     }
-                    if con.generated_kind != b's' {
-                        return Err(not_yet("a virtual generated column", at));
-                    }
                     column.generated = con.generated_kind;
                     column.default = con.raw_expr.map(RawDefault::Expr);
                     saw_generated = true;
@@ -1043,6 +1044,7 @@ impl Definer<'_, '_> {
                     format!("column \"{}\" does not exist", local.name),
                 ));
             };
+            merge_generated(column.generated, &local)?;
             column.is_not_null |= local.is_not_null;
             if local.default.is_some() {
                 column.default = local.default;
