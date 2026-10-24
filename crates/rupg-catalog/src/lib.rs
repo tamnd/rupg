@@ -1166,6 +1166,31 @@ impl Default for Catalog {
 /// The number of the encoding UTF8, the encoding of each database.
 const UTF8: i32 = 6;
 
+/// `eliminate_duplicate_dependencies`: the objects of `refs` from the highest OID down, without duplicates. A column takes the place of its whole relation, and each other column of the relation stays.
+pub fn eliminate_duplicates(refs: &[ObjRef]) -> Vec<ObjRef> {
+    let mut refs = refs.to_vec();
+    refs.sort_by(|a, b| {
+        b.oid
+            .cmp(&a.oid)
+            .then(a.class.cmp(&b.class))
+            .then(a.sub.cast_unsigned().cmp(&b.sub.cast_unsigned()))
+    });
+    let mut kept: Vec<ObjRef> = Vec::with_capacity(refs.len());
+    for r in refs {
+        match kept.last_mut() {
+            Some(prior) if prior.class == r.class && prior.oid == r.oid => {
+                if prior.sub == 0 {
+                    prior.sub = r.sub;
+                } else if prior.sub != r.sub {
+                    kept.push(r);
+                }
+            }
+            _ => kept.push(r),
+        }
+    }
+    kept
+}
+
 /// `IsPinnedObject`: true for an object that initdb made, except the schema `public`, the databases and the large objects.
 pub fn is_pinned(object: ObjRef) -> bool {
     if object.oid >= FIRST_UNPINNED_OID
@@ -2486,27 +2511,7 @@ impl Catalog {
 
     /// `recordDependencyOnExpr` with `DEPENDENCY_NORMAL`: the object depends on each object of `refs`. The objects come in the order of `eliminate_duplicate_dependencies`, from the highest OID down, and a column takes the place of its whole relation.
     fn depend_refs(&mut self, object: ObjRef, refs: &[ObjRef]) {
-        let mut refs = refs.to_vec();
-        refs.sort_by(|a, b| {
-            b.oid
-                .cmp(&a.oid)
-                .then(a.class.cmp(&b.class))
-                .then(a.sub.cast_unsigned().cmp(&b.sub.cast_unsigned()))
-        });
-        let mut kept: Vec<ObjRef> = Vec::with_capacity(refs.len());
-        for r in refs {
-            match kept.last_mut() {
-                Some(prior) if prior.class == r.class && prior.oid == r.oid => {
-                    if prior.sub == 0 {
-                        prior.sub = r.sub;
-                    } else if prior.sub != r.sub {
-                        kept.push(r);
-                    }
-                }
-                _ => kept.push(r),
-            }
-        }
-        for referenced in kept {
+        for referenced in eliminate_duplicates(refs) {
             self.depend(object, referenced, DepKind::Normal);
         }
     }

@@ -2,16 +2,18 @@
 //!
 //! The catalog keeps the text of the statement and the schemas of `search_path`, and the analyzer reads the body again each time a query calls the function, as it reads the query of a view. The analysis of a call uses the types of the arguments of the call, so a polymorphic argument has its actual type. The setup of a new cluster runs `CREATE FUNCTION` for the functions of `information_schema` too.
 
-use rupg_catalog::{Catalog, Function, FunctionBody, ObjRef, PG_PROC, PG_TYPE};
+use rupg_catalog::{
+    Catalog, Function, FunctionBody, ObjRef, PG_PROC, PG_TYPE, eliminate_duplicates,
+};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{CreateFunctionStmt, DefElem, FunctionParameterMode, Node};
 use rupg_types::oid;
 
-use super::{Definer, not_yet, references};
+use super::{Definer, not_yet};
 use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
-use crate::expr::{Expr, ExprKind};
+use crate::expr::Expr;
 use crate::select::Query;
 use crate::typename::{names, place};
 use crate::{Analyzer, Env, Params, node, poly, types};
@@ -393,24 +395,12 @@ fn mismatch(rettype: u32, name: &str, detail: String) -> Error {
     .with_detail(detail)
 }
 
-/// The objects that the body refers to, as `recordDependencyOnExpr` records them: the functions that it calls, and the objects that [`references`] finds. The catalog drops the references to pinned objects.
+/// The objects that an expression of a function refers to, as `recordDependencyOnExpr` records them: the objects that [`super::view::expr_references`] finds, also in the subqueries, in the order of `eliminate_duplicate_dependencies`. The catalog drops the references to pinned objects.
 fn body_references(catalog: &Catalog, body: &Expr) -> Result<Vec<ObjRef>> {
+    super::shared_constants(&[body])?;
     let mut refs = Vec::new();
-    body.find(0, &mut |e, _| {
-        if let ExprKind::Func(f) = &e.kind {
-            let found = ObjRef::new(PG_PROC, f.oid);
-            if !refs.contains(&found) {
-                refs.push(found);
-            }
-        }
-        None::<()>
-    });
-    for found in references(catalog, 0, &[body])? {
-        if !refs.contains(&found) {
-            refs.push(found);
-        }
-    }
-    Ok(refs)
+    super::view::expr_references(catalog, body, &[], &mut refs);
+    Ok(eliminate_duplicates(&refs))
 }
 
 impl Analyzer<'_> {
@@ -935,7 +925,9 @@ impl Definer<'_, '_> {
         let body = self.sql_body(&function, &stmts).map_err(transpose)?;
         let refs = match &body {
             Body::Value(expr) => body_references(self.catalog, expr)?,
-            Body::Query(query) => super::view::function_references(self.catalog, query),
+            Body::Query(query) => {
+                eliminate_duplicates(&super::view::function_references(self.catalog, query))
+            }
         };
         self.store_function(old, function, &defaults, support, refs)
     }

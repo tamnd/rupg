@@ -1,0 +1,61 @@
+!details
+> CREATE TABLE bd_t (id int, name text)
+CREATE TABLE
+> CREATE DOMAIN bd_d AS int CHECK (VALUE > 0)
+CREATE DOMAIN
+> CREATE FUNCTION bd_f(a int) RETURNS int RETURN a + 1
+CREATE FUNCTION
+> CREATE FUNCTION bd_ret(a int) RETURNS boolean RETURN EXISTS (SELECT 1 FROM bd_t WHERE id = bd_f(a))
+CREATE FUNCTION
+> CREATE FUNCTION bd_atomic(a int) RETURNS SETOF text BEGIN ATOMIC SELECT name FROM bd_t WHERE id = a; END
+CREATE FUNCTION
+> CREATE FUNCTION bd_dom(a bd_d) RETURNS bd_d RETURN (SELECT max(id) FROM bd_t t WHERE t.id > a)::bd_d
+CREATE FUNCTION
+> CREATE FUNCTION bd_whole(a int) RETURNS bigint BEGIN ATOMIC SELECT count(*) FROM bd_t; END
+CREATE FUNCTION
+> CREATE FUNCTION bd_two(a int) RETURNS text RETURN (SELECT name FROM bd_t WHERE id = a) || (SELECT name FROM bd_t WHERE id = bd_f(a))
+CREATE FUNCTION
+> SELECT objid::regprocedure::text AS f, refclassid::regclass::text AS c, CASE refclassid WHEN 'pg_proc'::regclass THEN refobjid::regprocedure::text WHEN 'pg_class'::regclass THEN refobjid::regclass::text WHEN 'pg_type'::regclass THEN refobjid::regtype::text ELSE refobjid::text END AS r, refobjsubid, deptype FROM pg_depend WHERE classid = 'pg_proc'::regclass AND objid IN (SELECT oid FROM pg_proc WHERE proname LIKE 'bd\_%') ORDER BY f, c, r, refobjsubid
+fields f:25:-1:-1,c:25:-1:-1,r:25:-1:-1,refobjsubid@pg_depend.6:23:4:-1,deptype@pg_depend.7:18:1:-1
+row bd_atomic(integer),pg_class,bd_t,1,n
+row bd_atomic(integer),pg_class,bd_t,2,n
+row bd_atomic(integer),pg_namespace,2200,0,n
+row bd_dom(bd_d),pg_class,bd_t,1,n
+row bd_dom(bd_d),pg_namespace,2200,0,n
+row bd_dom(bd_d),pg_type,bd_d,0,n
+row bd_f(integer),pg_namespace,2200,0,n
+row bd_ret(integer),pg_class,bd_t,1,n
+row bd_ret(integer),pg_namespace,2200,0,n
+row bd_ret(integer),pg_proc,bd_f(integer),0,n
+row bd_two(integer),pg_class,bd_t,1,n
+row bd_two(integer),pg_class,bd_t,2,n
+row bd_two(integer),pg_namespace,2200,0,n
+row bd_two(integer),pg_proc,bd_f(integer),0,n
+row bd_whole(integer),pg_class,bd_t,0,n
+row bd_whole(integer),pg_namespace,2200,0,n
+SELECT 16
+> DROP TABLE bd_t
+ERROR 2BP01 cannot drop table bd_t because other objects depend on it
+DETAIL function bd_ret(integer) depends on table bd_t
+function bd_atomic(integer) depends on table bd_t
+function bd_dom(bd_d) depends on table bd_t
+function bd_whole(integer) depends on table bd_t
+function bd_two(integer) depends on table bd_t
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP FUNCTION bd_f(int)
+ERROR 2BP01 cannot drop function bd_f(integer) because other objects depend on it
+DETAIL function bd_ret(integer) depends on function bd_f(integer)
+function bd_two(integer) depends on function bd_f(integer)
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP TABLE bd_t CASCADE
+NOTICE 00000 drop cascades to 5 other objects
+DETAIL drop cascades to function bd_ret(integer)
+drop cascades to function bd_atomic(integer)
+drop cascades to function bd_dom(bd_d)
+drop cascades to function bd_whole(integer)
+drop cascades to function bd_two(integer)
+DROP TABLE
+> DROP FUNCTION bd_f(int) CASCADE
+DROP FUNCTION
+> DROP DOMAIN bd_d CASCADE
+DROP DOMAIN
