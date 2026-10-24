@@ -184,7 +184,12 @@ impl Definer<'_, '_> {
             let expr = self.an.with_kind(Kind::TriggerWhen, |a| a.transform(Some(node)))?;
             let expr = self.an.coerce_to_boolean(expr, "WHEN")?;
             let base = when_base(&mut self.an);
-            check_when_vars(&expr, kind)?;
+            let generated: Vec<(String, bool)> = self
+                .catalog
+                .relation(oid)
+                .map(|r| r.columns.iter().map(|c| (c.name.clone(), c.generated != 0)).collect())
+                .unwrap_or_default();
+            check_when_vars(&expr, kind, &generated)?;
             expr_references(self.catalog, &expr, &[&base], &mut qual_refs);
             qual = Some(crate::node::write(&expr)?);
         }
@@ -693,9 +698,11 @@ impl Definer<'_, '_> {
     }
 }
 
-/// The checks of `CreateTriggerFiringOn` for the columns that the condition of `WHEN` reads. The relation 0 is `old` and the relation 1 is `new`.
-fn check_when_vars(expr: &Expr, kind: i16) -> Result<()> {
+/// The checks of `CreateTriggerFiringOn` for the columns that the condition of `WHEN` reads. The relation 0 is `old` and the relation 1 is `new`. `columns` has the name of each column of the table and true for a generated column.
+fn check_when_vars(expr: &Expr, kind: i16, columns: &[(String, bool)]) -> Result<()> {
     let row = kind & TRIGGER_ROW != 0;
+    let before = kind & TRIGGER_BEFORE != 0;
+    let has_generated = columns.iter().any(|(_, generated)| *generated);
     let error = expr.find(0, &mut |e, depth| {
         let ExprKind::Var(var) = &e.kind else { return None };
         if var.levels_up != depth {
@@ -712,9 +719,24 @@ fn check_when_vars(expr: &Expr, kind: i16) -> Result<()> {
             1 if kind & TRIGGER_DELETE != 0 => {
                 Some(invalid("DELETE trigger's WHEN condition cannot reference NEW values"))
             }
-            1 if var.attnum < 0 && kind & TRIGGER_BEFORE != 0 => Some(unsupported(
+            1 if var.attnum < 0 && before => Some(unsupported(
                 "BEFORE trigger's WHEN condition cannot reference NEW system columns",
             )),
+            1 if var.attnum == 0 && before && has_generated => Some(
+                invalid("BEFORE trigger's WHEN condition cannot reference NEW generated columns")
+                    .with_detail(
+                        "A whole-row reference is used and the table contains generated columns.",
+                    ),
+            ),
+            1 if before => {
+                let column = usize::try_from(var.attnum - 1).ok().and_then(|i| columns.get(i));
+                column.filter(|(_, generated)| *generated).map(|(name, _)| {
+                    invalid(
+                        "BEFORE trigger's WHEN condition cannot reference NEW generated columns",
+                    )
+                    .with_detail(format!("Column \"{name}\" is a generated column."))
+                })
+            }
             _ => None,
         };
         message.map(|m| m.at_opt(at))

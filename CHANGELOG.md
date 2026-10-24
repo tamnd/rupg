@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Fixed
+
+- A trigger `BEFORE ... FOR EACH ROW` of a table with stored generated columns now sees nulls in the generated columns of `NEW`, and the write computes the generated columns after the triggers. The condition `WHEN` of a trigger `BEFORE` that reads a generated column of `NEW`, or `NEW` as a whole row of a table with generated columns, gives the error of `CreateTriggerFiringOn`. A trigger `UPDATE OF` a generated column fires when the statement changes a column that the generation expression reads (#649).
+
 ## 0.1.75 (2026-10-24)
 
 ### Added

@@ -372,6 +372,7 @@ impl Analyzer<'_> {
         if conflict_set.is_some() {
             self.mark_updated(&updated);
         }
+        let updated = crate::modify::with_extra_updated(updated, &generated);
         if !checks.is_empty() || !generated.is_empty() {
             query = with_checks(&name, &columns, query, checks, &generated, &[]);
         }
