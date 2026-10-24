@@ -63,10 +63,12 @@ pub(crate) const PG_DATABASE: u32 = 1262;
 pub(crate) const PG_TABLESPACE: u32 = 1213;
 /// `pg_extension`.
 pub(crate) const PG_EXTENSION: u32 = 3079;
+/// `pg_statistic_ext`.
+pub(crate) const PG_STATISTIC_EXT: u32 = 3381;
 
-/// The catalogs of the kinds of objects that rupg does not have: `pg_statistic_ext`, `pg_auth_members`, `pg_foreign_data_wrapper`, `pg_foreign_server`, `pg_user_mapping`, `pg_default_acl`, `pg_event_trigger`, `pg_parameter_acl`, `pg_policy`, `pg_publication`, `pg_publication_namespace`, `pg_publication_rel`, `pg_subscription` and `pg_transform`.
-pub(crate) const NO_OBJECTS: [u32; 14] =
-    [3381, 1261, 2328, 1417, 1418, 826, 3466, 6243, 3256, 6104, 6237, 6106, 6100, 3576];
+/// The catalogs of the kinds of objects that rupg does not have: `pg_auth_members`, `pg_foreign_data_wrapper`, `pg_foreign_server`, `pg_user_mapping`, `pg_default_acl`, `pg_event_trigger`, `pg_parameter_acl`, `pg_policy`, `pg_publication`, `pg_publication_namespace`, `pg_publication_rel`, `pg_subscription` and `pg_transform`.
+pub(crate) const NO_OBJECTS: [u32; 13] =
+    [1261, 2328, 1417, 1418, 826, 3466, 6243, 3256, 6104, 6237, 6106, 6100, 3576];
 
 /// The names of the system columns, from `ctid` with the number -1.
 pub(crate) const SYSTEM_COLUMNS: [&str; 6] = ["ctid", "xmin", "cmin", "xmax", "cmax", "tableoid"];
@@ -185,6 +187,14 @@ pub fn describe(object: ObjRef, session: &dyn Session) -> Result<Option<String>>
         PG_EXTENSION => catalog
             .and_then(|c| c.extensions().find(|e| e.oid == oid))
             .map(|e| format!("extension {}", e.name)),
+        PG_STATISTIC_EXT => catalog.and_then(|c| c.stat_ext(oid)).and_then(|s| {
+            let name = if reg::stat_ext_visible(oid, session)? {
+                reg::qualified(None, &s.name)
+            } else {
+                reg::qualified(reg::namespace_name(s.namespace, session), &s.name)
+            };
+            Some(format!("statistics object {name}"))
+        }),
         class if NO_OBJECTS.contains(&class) => None,
         class => {
             return Err(Error::new(

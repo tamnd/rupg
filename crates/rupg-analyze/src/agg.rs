@@ -45,6 +45,8 @@ pub(crate) enum Kind {
     Check,
     /// `EXPR_KIND_INDEX_EXPRESSION`.
     IndexExpression,
+    /// `EXPR_KIND_STATS_EXPRESSION`.
+    StatsExpression,
     /// `EXPR_KIND_INDEX_PREDICATE`.
     IndexPredicate,
     /// `EXPR_KIND_FROM_FUNCTION`.
@@ -98,6 +100,7 @@ impl Kind {
             Kind::ColumnDefault | Kind::FunctionDefault => "DEFAULT expressions",
             Kind::Check => "check constraints",
             Kind::IndexExpression => "index expressions",
+            Kind::StatsExpression => "statistics expressions",
             Kind::IndexPredicate => "index predicates",
             Kind::FromFunction => "functions in FROM",
             Kind::Values | Kind::ValuesSingle => "VALUES",
@@ -122,6 +125,7 @@ impl Kind {
                 | Kind::FunctionDefault
                 | Kind::Check
                 | Kind::IndexExpression
+                | Kind::StatsExpression
                 | Kind::IndexPredicate
                 | Kind::ExecuteParameter
                 | Kind::Transform
@@ -139,6 +143,7 @@ impl Kind {
             Kind::ColumnDefault | Kind::FunctionDefault => "DEFAULT expression",
             Kind::Check => "check constraint",
             Kind::IndexExpression => "index expression",
+            Kind::StatsExpression => "statistics expression",
             Kind::ExecuteParameter => "EXECUTE parameter",
             Kind::Transform => "transform expression",
             Kind::TriggerWhen => "trigger WHEN condition",
@@ -406,6 +411,7 @@ impl Analyzer<'_> {
             | Kind::FunctionDefault
             | Kind::Check
             | Kind::IndexExpression
+            | Kind::StatsExpression
             | Kind::IndexPredicate
             | Kind::FromFunction
             | Kind::Values

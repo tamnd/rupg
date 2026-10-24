@@ -212,6 +212,7 @@ pub(crate) fn rows(
         "pg_ts_dict" => ts_dictionaries(table, catalog),
         "pg_ts_config" => ts_configs(table, catalog),
         "pg_ts_config_map" => ts_mappings(table, catalog),
+        "pg_statistic_ext" => statistic_exts(table, catalog),
         "pg_collation" => collations(table, catalog),
         "pg_enum" => enum_labels(table, catalog),
         "pg_range" => ranges(table, catalog),
@@ -1148,6 +1149,26 @@ fn ts_configs<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("cfgnamespace", oid(c.namespace))
                 .set("cfgowner", oid(c.owner))
                 .set("cfgparser", oid(c.parser));
+            row
+        })
+        .collect()
+}
+
+/// The statistics objects of `CREATE STATISTICS`. `stxstattarget` is null for the default target.
+fn statistic_exts<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .stat_exts()
+        .map(|s| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(s.oid))
+                .set("stxrelid", oid(s.relation))
+                .set("stxname", Value::text(s.name.clone()))
+                .set("stxnamespace", oid(s.namespace))
+                .set("stxowner", oid(s.owner))
+                .set("stxkeys", int2_vector(&s.keys))
+                .set("stxstattarget", s.target.map_or(Value::Null, Value::Int2))
+                .set("stxkind", char_array(&s.kinds))
+                .set("stxexprs", tree(s.exprs.as_ref()));
             row
         })
         .collect()

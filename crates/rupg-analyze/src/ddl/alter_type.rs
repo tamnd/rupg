@@ -5,8 +5,8 @@
 use std::collections::BTreeSet;
 
 use rupg_catalog::{
-    Column, ConKind, ObjRef, PG_ATTRDEF, PG_CLASS, PG_CONSTRAINT, PG_REWRITE, PG_TRIGGER, RelKind,
-    Target as DropTarget, flag,
+    Column, ConKind, ObjRef, PG_ATTRDEF, PG_CLASS, PG_CONSTRAINT, PG_REWRITE, PG_STATISTIC_EXT,
+    PG_TRIGGER, RelKind, Target as DropTarget, flag,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
@@ -351,6 +351,9 @@ impl Definer<'_, '_> {
                         column.map_or("", |c| c.name.as_str())
                     )));
                 }
+                // A statistics object on the column with no expressions keeps its column numbers.
+                PG_STATISTIC_EXT
+                    if self.catalog.stat_ext(object.oid).is_some_and(|s| s.exprs.is_none()) => {}
                 _ => {
                     return Err(not_yet(
                         &format!(

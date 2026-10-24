@@ -40,6 +40,7 @@ mod row_type;
 mod rule;
 mod sequence;
 mod set_schema;
+mod statistics;
 mod table;
 #[cfg(test)]
 mod tests;
@@ -175,12 +176,14 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::AlterOpFamilyStmt(_)
             | Node::TruncateStmt(_)
             | Node::RefreshMatViewStmt(_)
+            | Node::CreateStatsStmt(_)
+            | Node::AlterStatsStmt(_)
     ) || matches!(stmt, Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) || matches!(define.kind, ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_AGGREGATE))
         || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
         || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype) || alter.objtype == ObjectType::OBJECT_TYPE)
-        || matches!(stmt, Node::AlterOwnerStmt(alter) if matches!(alter.objectType, ObjectType::OBJECT_SCHEMA | ObjectType::OBJECT_OPERATOR) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
+        || matches!(stmt, Node::AlterOwnerStmt(alter) if matches!(alter.objectType, ObjectType::OBJECT_SCHEMA | ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
         || matches!(stmt, Node::RenameStmt(rename) if rename::is_rename_kind(rename.renameType))
-        || matches!(stmt, Node::AlterObjectSchemaStmt(alter) if is_alter_kind(alter.objectType) || alter.objectType == ObjectType::OBJECT_OPERATOR || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
+        || matches!(stmt, Node::AlterObjectSchemaStmt(alter) if is_alter_kind(alter.objectType) || matches!(alter.objectType, ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
         || matches!(stmt, Node::SelectStmt(select) if select.intoClause.is_some())
         || matches!(stmt, Node::GrantStmt(grant) if grant.targtype != GrantTargetType::ACL_TARGET_DEFAULTS)
 }
@@ -228,6 +231,7 @@ fn is_drop_kind(kind: ObjectType) -> bool {
             | ObjectType::OBJECT_OPERATOR
             | ObjectType::OBJECT_OPCLASS
             | ObjectType::OBJECT_OPFAMILY
+            | ObjectType::OBJECT_STATISTIC_EXT
     )
 }
 
@@ -288,7 +292,14 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::AlterObjectSchemaStmt(alter) if is_opcf_kind(alter.objectType) => {
             definer.alter_opcf_schema(alter)
         }
+        Node::AlterObjectSchemaStmt(alter)
+            if alter.objectType == ObjectType::OBJECT_STATISTIC_EXT =>
+        {
+            definer.alter_stats_schema(alter)
+        }
         Node::AlterObjectSchemaStmt(alter) => definer.alter_relation_schema(alter),
+        Node::CreateStatsStmt(create) => definer.create_statistics(create),
+        Node::AlterStatsStmt(alter) => definer.alter_statistics(alter),
         Node::CreateSeqStmt(create) => definer.create_sequence(create),
         Node::AlterSeqStmt(alter) => definer.alter_sequence(alter),
         Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) => definer.define_ts(define),

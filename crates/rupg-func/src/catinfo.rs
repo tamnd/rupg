@@ -55,10 +55,9 @@ fn operator_visible(call: &Call<'_>, args: &[Value]) -> Result<Value> {
         .map_or(Value::Null, |op| Value::Bool(reg::operator_visible(op, call.session))))
 }
 
-/// `pg_statistics_obj_is_visible`. The catalog has no extended statistics object, so each OID gives null.
-fn statistics_obj_visible(_: &Call<'_>, args: &[Value]) -> Result<Value> {
-    oid_arg(args, 0)?;
-    Ok(Value::Null)
+/// `pg_statistics_obj_is_visible`: true when the first statistics object with the name in the search path is this object. The search does not look in the temporary schema, so an object there is never visible.
+fn statistics_obj_visible(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(reg::stat_ext_visible(oid_arg(args, 0)?, call.session).map_or(Value::Null, Value::Bool))
 }
 
 /// `pg_get_userbyid`: the name of the role, or `unknown (OID=n)`.

@@ -97,6 +97,16 @@ pub(crate) fn path(session: &dyn Session) -> Vec<u32> {
     path
 }
 
+/// `StatisticsObjIsVisible`: true when the first statistics object with the name in [`path`] is this object, or `None` for an OID that is not a statistics object.
+pub(crate) fn stat_ext_visible(oid: u32, session: &dyn Session) -> Option<bool> {
+    let catalog = session.catalog()?;
+    let stat = catalog.stat_ext(oid)?;
+    let first = path(session)
+        .into_iter()
+        .find(|&ns| ns == stat.namespace || catalog.stat_ext_by_name(ns, &stat.name).is_some());
+    Some(first == Some(stat.namespace))
+}
+
 /// `activeSearchPath`: the schemas that an unqualified name of a relation or a type searches. The temporary schema of the session comes first, then `pg_catalog`, when `search_path` does not name them.
 pub(crate) fn temp_path(session: &dyn Session) -> Vec<u32> {
     let mut path: Vec<u32> =

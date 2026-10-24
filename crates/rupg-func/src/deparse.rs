@@ -1998,9 +1998,93 @@ fn looks_like_function(e: &Expr) -> bool {
     }
 }
 
-/// `pg_get_statisticsobjdef`, `pg_get_statisticsobjdef_columns` and `pg_get_statisticsobjdef_expressions`: the text of an object of extended statistics. rupg has no such objects, and an OID that is not an object gives null.
-fn get_statisticsobjdef(_: &Call<'_>, _: &[Value]) -> Result<Value> {
-    Ok(Value::Null)
+/// `pg_get_statisticsobj_worker`: the statement of a statistics object, or with `columns_only` only its columns and expressions. The statement has the schema of the object always, and the kinds only when the object does not have all of them. An expression that is not a call of a function is in parentheses. An OID that is not a statistics object gives `None`.
+fn statisticsobj_def(
+    oid: u32,
+    columns_only: bool,
+    session: &dyn Session,
+) -> Result<Option<String>> {
+    let catalog = session.catalog().ok_or_else(|| Error::internal("no catalog"))?;
+    let Some(stat) = catalog.stat_ext(oid) else { return Ok(None) };
+    let rel = catalog.relation(stat.relation).ok_or_else(|| {
+        Error::internal(format!("cache lookup failed for relation {}", stat.relation))
+    })?;
+    let exprs = match &stat.exprs {
+        Some(text) => node::read_list(text)?,
+        None => Vec::new(),
+    };
+    let mut out = String::new();
+    if !columns_only {
+        let schema = if reg::is_own_temp(stat.namespace, session) {
+            Some("pg_temp")
+        } else {
+            reg::namespace_name(stat.namespace, session)
+        };
+        out.push_str(&format!("CREATE STATISTICS {}", reg::qualified(schema, &stat.name)));
+        let kinds: Vec<&str> = [(b'd', "ndistinct"), (b'f', "dependencies"), (b'm', "mcv")]
+            .into_iter()
+            .filter(|(code, _)| stat.kinds.contains(code))
+            .map(|(_, word)| word)
+            .collect();
+        if kinds.len() < 3 && stat.keys.len() + exprs.len() > 1 {
+            out.push_str(&format!(" ({})", kinds.join(", ")));
+        }
+        out.push_str(" ON ");
+    }
+    let mut items = Vec::new();
+    for &attnum in &stat.keys {
+        let column = rel.column(attnum).ok_or_else(|| {
+            Error::internal(format!(
+                "cache lookup failed for attribute {attnum} of relation {}",
+                stat.relation
+            ))
+        })?;
+        items.push(quote_identifier(&column.name));
+    }
+    let columns: Vec<String> = rel.columns.iter().map(|c| c.name.clone()).collect();
+    for e in &exprs {
+        let mut d = Deparser::for_columns(session, &rel.name, columns.clone(), true);
+        d.flat = true;
+        d.expr(e, false)?;
+        items.push(if looks_like_function(e) { d.buf } else { format!("({})", d.buf) });
+    }
+    out.push_str(&items.join(", "));
+    if !columns_only {
+        out.push_str(&format!(" FROM {}", relation_name(stat.relation, session)?));
+    }
+    Ok(Some(out))
+}
+
+/// `pg_get_statisticsobjdef`: the statement of a statistics object, or null for an OID that is not one.
+fn get_statisticsobjdef(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let oid = args.first().and_then(Value::as_oid).ok_or_else(bad_value)?;
+    Ok(statisticsobj_def(oid, false, call.session)?.map_or(Value::Null, Value::text))
+}
+
+/// `pg_get_statisticsobjdef_columns`: the columns and the expressions of a statistics object.
+fn get_statisticsobjdef_columns(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let oid = args.first().and_then(Value::as_oid).ok_or_else(bad_value)?;
+    Ok(statisticsobj_def(oid, true, call.session)?.map_or(Value::Null, Value::text))
+}
+
+/// `pg_get_statisticsobjdef_expressions`: the expressions of a statistics object as a `text[]`, each with `PRETTYFLAG_INDENT` only, or null for an object with no expressions.
+fn get_statisticsobjdef_expressions(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let oid = args.first().and_then(Value::as_oid).ok_or_else(bad_value)?;
+    let catalog = call.session.catalog().ok_or_else(|| Error::internal("no catalog"))?;
+    let Some((stat, Some(text))) = catalog.stat_ext(oid).map(|s| (s, s.exprs.as_ref())) else {
+        return Ok(Value::Null);
+    };
+    let rel = catalog.relation(stat.relation).ok_or_else(|| {
+        Error::internal(format!("cache lookup failed for relation {}", stat.relation))
+    })?;
+    let columns: Vec<String> = rel.columns.iter().map(|c| c.name.clone()).collect();
+    let mut items = Vec::new();
+    for e in node::read_list(text)? {
+        let mut d = Deparser::for_columns(call.session, &rel.name, columns.clone(), false);
+        d.expr(&e, false)?;
+        items.push(Some(Value::text(d.buf)));
+    }
+    Ok(Value::Array(Box::new(rupg_types::Array::one(items))))
 }
 
 /// `pg_get_partkeydef_worker`: the partition key of a partitioned table, as `PARTITION BY` writes it.
@@ -2160,9 +2244,9 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_get_expr" | "pg_get_expr_ext" => get_expr,
         "pg_get_constraintdef" | "pg_get_constraintdef_ext" => get_constraintdef,
         "pg_get_indexdef" | "pg_get_indexdef_ext" => get_indexdef,
-        "pg_get_statisticsobjdef"
-        | "pg_get_statisticsobjdef_columns"
-        | "pg_get_statisticsobjdef_expressions" => get_statisticsobjdef,
+        "pg_get_statisticsobjdef" => get_statisticsobjdef,
+        "pg_get_statisticsobjdef_columns" => get_statisticsobjdef_columns,
+        "pg_get_statisticsobjdef_expressions" => get_statisticsobjdef_expressions,
         "pg_get_function_arguments" => function::get_function_arguments,
         "pg_get_function_identity_arguments" => function::get_function_identity_arguments,
         "pg_get_function_result" => function::get_function_result,

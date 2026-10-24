@@ -274,6 +274,7 @@ impl Analyzer<'_> {
             | Kind::ColumnDefault
             | Kind::FunctionDefault
             | Kind::IndexExpression
+            | Kind::StatsExpression
             | Kind::IndexPredicate
             | Kind::ExecuteParameter
             | Kind::Transform
