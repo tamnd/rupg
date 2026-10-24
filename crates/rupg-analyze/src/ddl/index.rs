@@ -93,7 +93,8 @@ impl Definer<'_, '_> {
             let columns: Vec<(String, u32, i32)> =
                 rel.columns.iter().map(crate::from::scope_column).collect();
             let relname = rel.name.clone();
-            self.an.add_table(table, &relname, &columns);
+            let row_type = rel.row_type;
+            self.an.add_table(table, &relname, &columns, row_type);
         }
         let predicate = match &stmt.whereClause {
             Some(node) => {

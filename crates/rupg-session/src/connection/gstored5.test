@@ -1,0 +1,175 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE SCHEMA generated_stored_tests;
+CREATE SCHEMA
+> GRANT USAGE ON SCHEMA generated_stored_tests TO PUBLIC;
+GRANT
+> SET search_path = generated_stored_tests;
+SET
+search_path=generated_stored_tests
+> CREATE TABLE gtest22a (a int PRIMARY KEY, b int GENERATED ALWAYS AS (a / 2) STORED UNIQUE);
+CREATE TABLE
+> INSERT INTO gtest22a VALUES (2);
+INSERT 0 1
+> INSERT INTO gtest22a VALUES (3);
+ERROR 23505 duplicate key value violates unique constraint "gtest22a_b_key"
+DETAIL Key (b)=(1) already exists.
+> INSERT INTO gtest22a VALUES (4);
+INSERT 0 1
+> CREATE TABLE gtest22b (a int, b int GENERATED ALWAYS AS (a / 2) STORED, PRIMARY KEY (a, b));
+CREATE TABLE
+> INSERT INTO gtest22b VALUES (2);
+INSERT 0 1
+> INSERT INTO gtest22b VALUES (2);
+ERROR 23505 duplicate key value violates unique constraint "gtest22b_pkey"
+DETAIL Key (a, b)=(2, 1) already exists.
+> CREATE TABLE gtest22c (a int, b int GENERATED ALWAYS AS (a * 2) STORED);
+CREATE TABLE
+> CREATE INDEX gtest22c_b_idx ON gtest22c (b);
+CREATE INDEX
+> CREATE INDEX gtest22c_expr_idx ON gtest22c ((b * 3));
+CREATE INDEX
+> CREATE INDEX gtest22c_pred_idx ON gtest22c (a) WHERE b > 0;
+CREATE INDEX
+> INSERT INTO gtest22c VALUES (1), (2), (3);
+INSERT 0 3
+> SET enable_seqscan TO off;
+SET
+> SET enable_bitmapscan TO off;
+SET
+> EXPLAIN (COSTS OFF) SELECT * FROM gtest22c WHERE b = 4;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using gtest22c_b_idx on gtest22c
+row   Index Cond: (b = 4)
+EXPLAIN
+> SELECT * FROM gtest22c WHERE b = 4;
+fields a@gtest22c.1:23:4:-1,b@gtest22c.2:23:4:-1
+row 2,4
+SELECT 1
+> EXPLAIN (COSTS OFF) SELECT * FROM gtest22c WHERE b * 3 = 6;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using gtest22c_expr_idx on gtest22c
+row   Index Cond: ((b * 3) = 6)
+EXPLAIN
+> SELECT * FROM gtest22c WHERE b * 3 = 6;
+fields a@gtest22c.1:23:4:-1,b@gtest22c.2:23:4:-1
+row 1,2
+SELECT 1
+> EXPLAIN (COSTS OFF) SELECT * FROM gtest22c WHERE a = 1 AND b > 0;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using gtest22c_pred_idx on gtest22c
+row   Index Cond: (a = 1)
+EXPLAIN
+> SELECT * FROM gtest22c WHERE a = 1 AND b > 0;
+fields a@gtest22c.1:23:4:-1,b@gtest22c.2:23:4:-1
+row 1,2
+SELECT 1
+> ALTER TABLE gtest22c ALTER COLUMN b SET EXPRESSION AS (a * 4);
+ALTER TABLE
+> ANALYZE gtest22c;
+ANALYZE
+> EXPLAIN (COSTS OFF) SELECT * FROM gtest22c WHERE b = 8;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using gtest22c_b_idx on gtest22c
+row   Index Cond: (b = 8)
+EXPLAIN
+> SELECT * FROM gtest22c WHERE b = 8;
+fields a@gtest22c.1:23:4:-1,b@gtest22c.2:23:4:-1
+row 2,8
+SELECT 1
+> EXPLAIN (COSTS OFF) SELECT * FROM gtest22c WHERE b * 3 = 12;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using gtest22c_expr_idx on gtest22c
+row   Index Cond: ((b * 3) = 12)
+EXPLAIN
+> SELECT * FROM gtest22c WHERE b * 3 = 12;
+fields a@gtest22c.1:23:4:-1,b@gtest22c.2:23:4:-1
+row 1,4
+SELECT 1
+> EXPLAIN (COSTS OFF) SELECT * FROM gtest22c WHERE a = 1 AND b > 0;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using gtest22c_pred_idx on gtest22c
+row   Index Cond: (a = 1)
+EXPLAIN
+> SELECT * FROM gtest22c WHERE a = 1 AND b > 0;
+fields a@gtest22c.1:23:4:-1,b@gtest22c.2:23:4:-1
+row 1,4
+SELECT 1
+> RESET enable_seqscan;
+RESET
+> RESET enable_bitmapscan;
+RESET
+> CREATE TABLE gtest23a (x int PRIMARY KEY, y int);
+CREATE TABLE
+> INSERT INTO gtest23a VALUES (1, 11), (2, 22), (3, 33);
+INSERT 0 3
+> CREATE TABLE gtest23x (a int PRIMARY KEY, b int GENERATED ALWAYS AS (a * 2) STORED REFERENCES gtest23a (x) ON UPDATE CASCADE);
+ERROR 42601 invalid ON UPDATE action for foreign key constraint containing generated column
+> CREATE TABLE gtest23x (a int PRIMARY KEY, b int GENERATED ALWAYS AS (a * 2) STORED REFERENCES gtest23a (x) ON DELETE SET NULL);
+ERROR 42601 invalid ON DELETE action for foreign key constraint containing generated column
+> CREATE TABLE gtest23b (a int PRIMARY KEY, b int GENERATED ALWAYS AS (a * 2) STORED REFERENCES gtest23a (x));
+CREATE TABLE
+> INSERT INTO gtest23b VALUES (1);
+INSERT 0 1
+> INSERT INTO gtest23b VALUES (5);
+ERROR 23503 insert or update on table "gtest23b" violates foreign key constraint "gtest23b_b_fkey"
+DETAIL Key (b)=(10) is not present in table "gtest23a".
+> ALTER TABLE gtest23b ALTER COLUMN b SET EXPRESSION AS (a * 5);
+ERROR 23503 insert or update on table "gtest23b" violates foreign key constraint "gtest23b_b_fkey"
+DETAIL Key (b)=(5) is not present in table "gtest23a".
+> ALTER TABLE gtest23b ALTER COLUMN b SET EXPRESSION AS (a * 1);
+ALTER TABLE
+> DROP TABLE gtest23b;
+DROP TABLE
+> DROP TABLE gtest23a;
+DROP TABLE
+> CREATE TABLE gtest23p (x int, y int GENERATED ALWAYS AS (x * 2) STORED, PRIMARY KEY (y));
+CREATE TABLE
+> INSERT INTO gtest23p VALUES (1), (2), (3);
+INSERT 0 3
+> CREATE TABLE gtest23q (a int PRIMARY KEY, b int REFERENCES gtest23p (y));
+CREATE TABLE
+> INSERT INTO gtest23q VALUES (1, 2);
+INSERT 0 1
+> INSERT INTO gtest23q VALUES (2, 5);
+ERROR 23503 insert or update on table "gtest23q" violates foreign key constraint "gtest23q_b_fkey"
+DETAIL Key (b)=(5) is not present in table "gtest23p".
+> CREATE DOMAIN gtestdomain1 AS int CHECK (VALUE < 10);
+CREATE DOMAIN
+> CREATE TABLE gtest24 (a int PRIMARY KEY, b gtestdomain1 GENERATED ALWAYS AS (a * 2) STORED);
+CREATE TABLE
+> INSERT INTO gtest24 (a) VALUES (4);
+INSERT 0 1
+> INSERT INTO gtest24 (a) VALUES (6);
+ERROR 23514 value for domain gtestdomain1 violates check constraint "gtestdomain1_check"
+> CREATE TYPE gtestdomain1range AS range (subtype = gtestdomain1);
+CREATE TYPE
+> CREATE TABLE gtest24r (a int PRIMARY KEY, b gtestdomain1range GENERATED ALWAYS AS (gtestdomain1range(a, a + 5)) STORED);
+CREATE TABLE
+> INSERT INTO gtest24r (a) VALUES (4);
+INSERT 0 1
+> INSERT INTO gtest24r (a) VALUES (6);
+ERROR 23514 value for domain gtestdomain1 violates check constraint "gtestdomain1_check"
+> CREATE TABLE gtest24at (a int PRIMARY KEY);
+CREATE TABLE
+> ALTER TABLE gtest24at ADD COLUMN b gtestdomain1 GENERATED ALWAYS AS (a * 2) STORED;
+ALTER TABLE
+> CREATE TABLE gtest24ata (a int PRIMARY KEY, b int GENERATED ALWAYS AS (a * 2) STORED);
+CREATE TABLE
+> ALTER TABLE gtest24ata ALTER COLUMN b TYPE gtestdomain1;
+ALTER TABLE
+> CREATE DOMAIN gtestdomainnn AS int CHECK (VALUE IS NOT NULL);
+CREATE DOMAIN
+> CREATE TABLE gtest24nn (a int, b gtestdomainnn GENERATED ALWAYS AS (a * 2) STORED);
+CREATE TABLE
+> INSERT INTO gtest24nn (a) VALUES (4);
+INSERT 0 1
+> INSERT INTO gtest24nn (a) VALUES (NULL);
+ERROR 23514 value for domain gtestdomainnn violates check constraint "gtestdomainnn_check"
+> CREATE TYPE gtest_type AS (f1 integer, f2 text, f3 bigint);
+CREATE TYPE
+> CREATE TABLE gtest28 OF gtest_type (f1 WITH OPTIONS GENERATED ALWAYS AS (f2 *2) STORED);
+ERROR 0A000 generated columns are not supported on typed tables
+> DROP TYPE gtest_type CASCADE;
+DROP TYPE

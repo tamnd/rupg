@@ -144,6 +144,7 @@ impl Definer<'_, '_> {
                 format!("permission denied for table {pk_name}"),
             ));
         }
+        self.check_generated_keys(table, &fk_keys, con)?;
         if fk_keys.len() != pk_keys.len() {
             return Err(invalid(
                 "number of referencing and referenced columns for foreign key disagree".into(),
@@ -174,6 +175,38 @@ impl Definer<'_, '_> {
         let oid = self.catalog.add_fk_constraint(new, 0, FkSide::Both)?;
         self.fk_recurse_referenced(oid, None)?;
         self.fk_recurse_referencing(oid, None)
+    }
+
+    /// The checks of `ATAddForeignKeyConstraint` for the generated columns of the referencing columns: the actions that write the column are not allowed, and a virtual column cannot be in a foreign key.
+    fn check_generated_keys(&self, table: u32, keys: &[i16], con: &Constraint) -> Result<()> {
+        let rel = self.catalog.relation(table);
+        for &key in keys {
+            let generated = rel.and_then(|r| r.column(key)).map_or(0, |c| c.generated);
+            if generated == 0 {
+                continue;
+            }
+            let invalid = |action: &str| {
+                Error::new(
+                    SqlState::SYNTAX_ERROR,
+                    format!(
+                        "invalid {action} action for foreign key constraint containing generated column"
+                    ),
+                )
+            };
+            if matches!(con.fk_upd_action, b'n' | b'd' | b'c') {
+                return Err(invalid("ON UPDATE"));
+            }
+            if matches!(con.fk_del_action, b'n' | b'd') {
+                return Err(invalid("ON DELETE"));
+            }
+            if generated == b'v' {
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    "foreign key constraints on virtual generated columns are not supported",
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// The equality operators `conpfeqop`, `conppeqop` and `conffeqop` of `ATAddForeignKeyConstraint` for the columns of a foreign key, from the operator classes of the unique index of the referenced table.

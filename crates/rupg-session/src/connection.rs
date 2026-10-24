@@ -5854,6 +5854,36 @@ mod tests {
         big_stack(|| script(include_str!("connection/gstored4.test")));
     }
 
+    /// Stored generated columns, from the fifth part of `generated_stored.sql` of the PostgreSQL tests: unique constraints, primary keys and indexes on generated columns, with the plans that read the indexes after `SET EXPRESSION`, foreign keys that refer to and from generated columns, and generated columns of domains and of range types over domains. `connection/gstored5.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn gstored5() {
+        big_stack(|| script(include_str!("connection/gstored5.test")));
+    }
+
+    /// Stored generated columns, from the sixth part of `generated_stored.sql` of the PostgreSQL tests: generated columns of partitions, with the checks of `CREATE TABLE ... PARTITION OF` and `ATTACH PARTITION`, `SET EXPRESSION` on a partitioned table and on a partition, generated columns in a partition key, and `ADD COLUMN` of generated columns with other subcommands. `connection/gstored6.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn gstored6() {
+        big_stack(|| script(include_str!("connection/gstored6.test")));
+    }
+
+    /// Stored generated columns, from the seventh part of `generated_stored.sql` of the PostgreSQL tests: `ALTER COLUMN ... TYPE` of a generated column and of a column that a generated column reads, `DROP COLUMN` with `ADD COLUMN` in one statement, `SET EXPRESSION` and `DROP EXPRESSION` on plain columns, and `DROP EXPRESSION` on a table with children of `INHERITS`. `connection/gstored7.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn gstored7() {
+        big_stack(|| script(include_str!("connection/gstored7.test")));
+    }
+
+    /// Stored generated columns, from the eighth part of `generated_stored.sql` of the PostgreSQL tests: `DROP EXPRESSION` in a tree of partitions, and the changes of a generated column of a table whose row type another table, a check constraint or an index uses. `connection/gstored8.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn gstored8() {
+        big_stack(|| script(include_str!("connection/gstored8.test")));
+    }
+
+    /// Stored generated columns, from the ninth part of `generated_stored.sql` of the PostgreSQL tests: the `WHEN` conditions and the row values of triggers on a table with a generated column, `UPDATE OF` a generated column, and a `BEFORE` trigger that changes a generated column. `connection/gstored9.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn gstored9() {
+        big_stack(|| script(include_str!("connection/gstored9.test")));
+    }
+
     /// `ADD CONSTRAINT ... NOT VALID` of a check constraint, which does not check the rows that the table has, and `VALIDATE CONSTRAINT`, which checks them and marks the constraint valid on the table and on its children first. A whole-row reference in a check constraint or in an index shows as `table.*`. `connection/notvalid.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn notvalid() {

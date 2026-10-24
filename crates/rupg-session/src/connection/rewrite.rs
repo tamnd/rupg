@@ -329,10 +329,23 @@ impl Connection {
         }
         drop(reader);
         let heap = self.store.heap();
+        // `ATPostAlterTypeCleanup` makes a foreign key on a generated column with a new expression again, so the new values are checked.
+        let regenerated = |constraint: u32| {
+            work.constraint(constraint).is_some_and(|c| {
+                c.keys.iter().any(|&k| {
+                    now.column(k).is_some_and(|col| col.generated != 0)
+                        && old.default_of(rel.oid, k).map(|d| &d.expr)
+                            != work.default_of(rel.oid, k).map(|d| &d.expr)
+                })
+            })
+        };
         let foreign: Vec<_> = info
             .foreign
             .iter()
-            .filter(|f| f.referencing && old.constraint(f.constraint).is_none())
+            .filter(|f| {
+                f.referencing
+                    && (old.constraint(f.constraint).is_none() || regenerated(f.constraint))
+            })
             .map(|f| rupg_analyze::Foreign { deferrable: false, deferred: false, ..f.clone() })
             .collect();
         let checked = if foreign.is_empty() { Vec::new() } else { new_rows.clone() };
