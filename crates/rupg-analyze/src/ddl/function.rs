@@ -560,6 +560,74 @@ impl Analyzer<'_> {
 ///
 /// The errors of the analysis of the body.
 pub fn function_body(env: &dyn Env, oid: u32, inputs: &[u32]) -> Result<Option<Body>> {
+    with_statement(env, oid, |function, body, stmt| {
+        let src = (!function.src.is_empty()).then_some(function.src.as_str());
+        let stmts = statements(stmt, src)?;
+        let params = Params { types: inputs.to_vec(), variable: false };
+        let mut an = Analyzer::new(env, &params);
+        an.set_path(&body.path);
+        an.sql_function = Some((function.name.clone(), input_names(function)));
+        let mut body = an.body(function, &stmts, inputs)?;
+        if let Some(catalog) = env.catalog() {
+            crate::expand_virtual_body(&mut body, catalog)?;
+        }
+        Ok(Some(body))
+    })
+}
+
+/// The body in SQL of a function, as `prosqlbody` keeps it.
+#[derive(Debug)]
+pub enum SqlBody {
+    /// A `RETURN` body: the value, with no cast to the result type.
+    Return(Expr),
+    /// A `BEGIN ATOMIC` body: the query of each statement.
+    Atomic(Vec<Query>),
+}
+
+/// The body in SQL of the function with the OID, as `interpret_AS_clause` analyzes it for `prosqlbody`: the arguments have their declared types, and the value of `RETURN` and the columns of the queries do not take a cast to the result type. `None` when the catalog has no function in SQL with the OID, or when the function has its body in a string.
+///
+/// # Errors
+///
+/// The errors of the analysis of the body.
+pub fn function_sqlbody(env: &dyn Env, oid: u32) -> Result<Option<SqlBody>> {
+    with_statement(env, oid, |function, body, stmt| {
+        if stmt.sql_body.is_none() {
+            return Ok(None);
+        }
+        let params = Params { types: function.argtypes.clone(), variable: false };
+        let analyzer = || {
+            let mut an = Analyzer::new(env, &params);
+            an.set_path(&body.path);
+            an.sql_function = Some((function.name.clone(), input_names(function)));
+            an
+        };
+        Ok(Some(match statements(stmt, None)? {
+            Statements::Return(value) => {
+                let mut an = analyzer();
+                let expr = an.with_kind(Kind::Select, |an| an.transform(value))?;
+                // `transformReturnStmt` gives the type `text` to a literal of an unknown type.
+                if expr.ty == oid::UNKNOWN {
+                    SqlBody::Return(an.coerce(expr, oid::TEXT, -1, Context::Implicit, None)?)
+                } else {
+                    SqlBody::Return(expr)
+                }
+            }
+            Statements::Atomic(list) => SqlBody::Atomic(
+                list.into_iter()
+                    .map(|node| crate::analyze_in(analyzer(), node, None))
+                    .collect::<Result<_>>()?,
+            ),
+            Statements::String(_) => return Ok(None),
+        }))
+    })
+}
+
+/// Runs `f` with the function in SQL with the OID, the text that the catalog keeps for it, and the `CREATE FUNCTION` statement of that text. `None` when the catalog has no function in SQL with the OID.
+fn with_statement<T>(
+    env: &dyn Env,
+    oid: u32,
+    f: impl FnOnce(&Function, &FunctionBody, &CreateFunctionStmt) -> Result<Option<T>>,
+) -> Result<Option<T>> {
     let built_in;
     let function = match env.catalog().and_then(|c| c.function(oid)) {
         Some(function) => function,
@@ -582,17 +650,7 @@ pub fn function_body(env: &dyn Env, oid: u32, inputs: &[u32]) -> Result<Option<B
     });
     let stmt =
         stmt.ok_or_else(|| Error::internal("the body of a function is not CREATE FUNCTION"))?;
-    let src = (!function.src.is_empty()).then_some(function.src.as_str());
-    let stmts = statements(stmt, src)?;
-    let params = Params { types: inputs.to_vec(), variable: false };
-    let mut an = Analyzer::new(env, &params);
-    an.set_path(&body.path);
-    an.sql_function = Some((function.name.clone(), input_names(function)));
-    let mut body = an.body(function, &stmts, inputs)?;
-    if let Some(catalog) = env.catalog() {
-        crate::expand_virtual_body(&mut body, catalog)?;
-    }
-    Ok(Some(body))
+    f(function, body, stmt)
 }
 
 /// A built-in function with a body in SQL, which `system_functions.sql` gives it. `initdb` runs that script with `search_path` set to `pg_catalog`.

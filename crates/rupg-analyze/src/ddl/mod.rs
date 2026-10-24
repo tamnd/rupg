@@ -57,7 +57,7 @@ pub use copy::{
     rewrite_insert,
 };
 pub(crate) use drop::quote_identifier;
-pub use function::{Body, REGRESS_SYMBOLS, find_library, function_body};
+pub use function::{Body, REGRESS_SYMBOLS, SqlBody, find_library, function_body, function_sqlbody};
 pub use grant::acl_roles;
 pub(crate) use lock::relkind;
 pub use lock::{Allowed, lock_table};
