@@ -573,7 +573,15 @@ impl Store {
 
     /// `pgstat_read_current_status`: a copy of the rows of the table, in the order of their numbers.
     pub(crate) fn backends(&self) -> Arc<[Backend]> {
-        self.backends_mut().iter().flatten().map(|slot| slot.backend.clone()).collect()
+        let heap = self.heap();
+        self.backends_mut()
+            .iter()
+            .flatten()
+            .map(|slot| {
+                let (xid, xmin) = heap.transaction_ids(slot.backend.pid);
+                Backend { xid, xmin, ..slot.backend.clone() }
+            })
+            .collect()
     }
 }
 

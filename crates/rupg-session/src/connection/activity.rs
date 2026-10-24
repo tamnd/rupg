@@ -282,6 +282,10 @@ impl Connection {
         };
         self.activity.query = None;
         self.report(state, None);
+        // Out of a statement, only the snapshot of a transaction in `REPEATABLE READ` stays, as `SnapshotResetXmin` keeps the registered snapshots.
+        if state == BackendState::IdleInTransactionAborted || self.snapshot.borrow().is_none() {
+            self.store.heap().release(self.pid);
+        }
     }
 
     /// `pgstat_report_xact_timestamp`: the start of the transaction, or `None` at its end.
@@ -348,6 +352,7 @@ impl Connection {
         let locks = self.store.locks();
         locks.release_all(self.pid, false);
         locks.release_all(self.pid, true);
+        self.store.heap().release(self.pid);
         if let Some(number) = self.activity.number.take() {
             self.store.leave(number);
         }
