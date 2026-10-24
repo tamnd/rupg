@@ -1,0 +1,104 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE ctlt1 (a text PRIMARY KEY, b text);
+CREATE TABLE
+> CREATE STATISTICS ctlt1_a_b_stat ON a,b FROM ctlt1;
+CREATE STATISTICS
+> CREATE STATISTICS ctlt1_expr_stat ON (a || b) FROM ctlt1;
+CREATE STATISTICS
+> CREATE STATISTICS ctlt1_nd (ndistinct) ON b, a FROM ctlt1;
+CREATE STATISTICS
+> COMMENT ON STATISTICS ctlt1_a_b_stat IS 'ab stats';
+COMMENT
+> COMMENT ON STATISTICS ctlt1_expr_stat IS 'ab expr stats';
+COMMENT
+> CREATE TABLE ctlt_all (LIKE ctlt1 INCLUDING ALL);
+CREATE TABLE
+> CREATE TABLE ctlt_st (LIKE ctlt1 INCLUDING STATISTICS);
+CREATE TABLE
+> CREATE TABLE ctlt_none (LIKE ctlt1 INCLUDING ALL EXCLUDING STATISTICS);
+CREATE TABLE
+> SELECT c.relname, s.stxname, s.stxkeys, s.stxkind, pg_get_expr(s.stxexprs, s.stxrelid), obj_description(s.oid, 'pg_statistic_ext') FROM pg_statistic_ext s JOIN pg_class c ON c.oid = s.stxrelid WHERE c.relname LIKE 'ctlt%' ORDER BY 1, 2;
+fields relname@pg_class.2:19:64:-1,stxname@pg_statistic_ext.3:19:64:-1,stxkeys@pg_statistic_ext.6:22:-1:-1,stxkind@pg_statistic_ext.8:1002:-1:-1,pg_get_expr:25:-1:-1,obj_description:25:-1:-1
+row ctlt1,ctlt1_a_b_stat,1 2,{d,f,m},NULL,ab stats
+row ctlt1,ctlt1_expr_stat,,{e},(a || b),ab expr stats
+row ctlt1,ctlt1_nd,1 2,{d},NULL,NULL
+row ctlt_all,ctlt_all_a_b_stat,1 2,{d,f,m},NULL,ab stats
+row ctlt_all,ctlt_all_a_b_stat1,1 2,{d},NULL,NULL
+row ctlt_all,ctlt_all_expr_stat,,{e},(a || b),ab expr stats
+row ctlt_st,ctlt_st_a_b_stat,1 2,{d,f,m},NULL,NULL
+row ctlt_st,ctlt_st_a_b_stat1,1 2,{d},NULL,NULL
+row ctlt_st,ctlt_st_expr_stat,,{e},(a || b),NULL
+SELECT 9
+> SELECT pg_get_statisticsobjdef(oid) FROM pg_statistic_ext WHERE stxname LIKE 'ctlt_all%' ORDER BY 1;
+fields pg_get_statisticsobjdef:25:-1:-1
+row CREATE STATISTICS public.ctlt_all_a_b_stat ON a, b FROM ctlt_all
+row CREATE STATISTICS public.ctlt_all_a_b_stat1 (ndistinct) ON a, b FROM ctlt_all
+row CREATE STATISTICS public.ctlt_all_expr_stat ON (a || b) FROM ctlt_all
+SELECT 3
+> CREATE TABLE ctlt_st2 (LIKE ctlt1 INCLUDING STATISTICS);
+CREATE TABLE
+> CREATE TABLE ctlt_st (LIKE ctlt1 INCLUDING STATISTICS);
+ERROR 42P07 relation "ctlt_st" already exists
+> SELECT stxname FROM pg_statistic_ext WHERE stxrelid = 'ctlt_st2'::regclass ORDER BY 1;
+fields stxname@pg_statistic_ext.3:19:64:-1
+row ctlt_st2_a_b_stat
+row ctlt_st2_a_b_stat1
+row ctlt_st2_expr_stat
+SELECT 3
+> DROP TABLE ctlt1;
+DROP TABLE
+> SELECT count(*) FROM pg_statistic_ext WHERE stxrelid = 'ctlt_st'::regclass;
+fields count:20:8:-1
+row 3
+SELECT 1
+> CREATE TABLE test_like_6 (a int, c text, b text);
+CREATE TABLE
+> CREATE STATISTICS ext_stat ON (a || b) FROM test_like_6;
+CREATE STATISTICS
+> ALTER TABLE test_like_6 DROP COLUMN c;
+ALTER TABLE
+> CREATE TABLE test_like_6c (LIKE test_like_6 INCLUDING ALL);
+CREATE TABLE
+> SELECT stxname, pg_get_statisticsobjdef(oid) FROM pg_statistic_ext WHERE stxrelid = 'test_like_6c'::regclass;
+fields stxname@pg_statistic_ext.3:19:64:-1,pg_get_statisticsobjdef:25:-1:-1
+row test_like_6c_expr_stat,CREATE STATISTICS public.test_like_6c_expr_stat ON (a || b) FROM test_like_6c
+SELECT 1
+> CREATE TABLE ctl_stats3_parent (a int, b int, c int);
+CREATE TABLE
+> ALTER TABLE ctl_stats3_parent DROP COLUMN b;
+ALTER TABLE
+> CREATE STATISTICS ctl_stats3_stat ON a, c FROM ctl_stats3_parent;
+CREATE STATISTICS
+> CREATE TABLE ctl_stats3_child (LIKE ctl_stats3_parent INCLUDING STATISTICS);
+CREATE TABLE
+> CREATE TABLE ctl_stats4_parent (a int, b int, c int, d int);
+CREATE TABLE
+> ALTER TABLE ctl_stats4_parent DROP COLUMN b;
+ALTER TABLE
+> CREATE STATISTICS ctl_stats4_stat ON a, c FROM ctl_stats4_parent;
+CREATE STATISTICS
+> CREATE TABLE ctl_stats4_child (LIKE ctl_stats4_parent INCLUDING STATISTICS);
+CREATE TABLE
+> SELECT s.stxrelid::regclass AS relation,
+>>        array_agg(a.attname ORDER BY u.ord) AS stats_columns
+>> FROM pg_statistic_ext s
+>> CROSS JOIN LATERAL
+>>   unnest(s.stxkeys::int2[]) WITH ORDINALITY AS u(attnum, ord)
+>> JOIN pg_attribute a
+>>   ON a.attrelid = s.stxrelid AND a.attnum = u.attnum
+>> WHERE s.stxrelid IN ('ctl_stats3_child'::regclass,
+>>                      'ctl_stats4_child'::regclass)
+>> GROUP BY s.stxrelid
+>> ORDER BY s.stxrelid::regclass::text;
+fields relation:2205:4:-1,stats_columns:1003:-1:-1
+row ctl_stats3_child,{a,c}
+row ctl_stats4_child,{a,c}
+SELECT 2
+> CREATE TABLE ctl_stats5 (x int, LIKE ctl_stats4_parent INCLUDING STATISTICS);
+CREATE TABLE
+> SELECT stxname, stxkeys FROM pg_statistic_ext WHERE stxrelid = 'ctl_stats5'::regclass;
+fields stxname@pg_statistic_ext.3:19:64:-1,stxkeys@pg_statistic_ext.6:22:-1:-1
+row ctl_stats5_a_c_stat,2 3
+SELECT 1

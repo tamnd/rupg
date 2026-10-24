@@ -6087,6 +6087,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/regnew.test")));
     }
 
+    /// `CREATE TABLE ... (LIKE ... INCLUDING STATISTICS)`, from `create_table_like.sql` of the PostgreSQL tests: the copies of the statistics objects with the names that `ChooseExtendedStatisticName` gives, their kinds, their expressions with the column numbers of the new table, and their comments with `INCLUDING COMMENTS`. `connection/ctlstat.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn ctlstat() {
+        big_stack(|| script(include_str!("connection/ctlstat.test")));
+    }
+
     /// `CREATE TABLE ... (LIKE ...)`, from `create_table_like.sql` of the PostgreSQL tests: the columns and the not-null constraints of the other relation, the options `INCLUDING DEFAULTS`, `GENERATED`, `IDENTITY`, `CONSTRAINTS`, `INDEXES`, `STORAGE`, `COMMENTS` and `ALL`, `LIKE` with `INHERITS`, and `LIKE` of a view, a composite type and a sequence. The script has catalog queries in place of `\d`, and it does not have the parts for virtual generated columns, `NOT ENFORCED`, `CREATE STATISTICS` and foreign tables. `connection/create_table_like.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn create_table_like() {
