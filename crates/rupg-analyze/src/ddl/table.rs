@@ -154,7 +154,7 @@ fn serial_info(ty: u32) -> SequenceInfo {
 }
 
 /// `transformConstraintAttrs`: `DEFERRABLE`, `INITIALLY DEFERRED` and the other attributes change the constraint before them.
-fn constraint_attrs(list: &mut [Constraint]) -> Result<()> {
+pub(super) fn constraint_attrs(list: &mut [Constraint]) -> Result<()> {
     let mut last: Option<usize> = None;
     let (mut saw_deferrability, mut saw_initially, mut saw_enforced) = (false, false, false);
     for i in 0..list.len() {

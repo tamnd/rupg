@@ -6,7 +6,7 @@ use std::cell::{Cell, Ref, RefCell};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use rupg_analyze::{Derived, Message, Params, Write, WriteKind};
+use rupg_analyze::{Derived, Message, Params, SchemaElements, Write, WriteKind};
 use rupg_catalog::{Catalog, database};
 use rupg_common::{Error, Level as ErrorLevel, Object, SqlState};
 use rupg_exec::Plan;
@@ -1013,6 +1013,33 @@ impl Connection {
         }
     }
 
+    /// Runs the elements of `CREATE SCHEMA` after the statement made the schema, as `CreateSchemaCommand` runs them: as the owner of the schema and with the schema first in `search_path`. The settings of the session come back after the elements, also after an error.
+    fn schema_elements(
+        &self,
+        schema: &SchemaElements,
+        notices: &mut Vec<Notice>,
+    ) -> Result<(), Error> {
+        let saved = self.settings.borrow().clone();
+        let old = saved.get("search_path").unwrap_or_default();
+        let mut path = rupg_func::quote_identifier(&schema.schema);
+        if !old.trim_start().is_empty() {
+            path = format!("{path}, {}", old.trim_start());
+        }
+        let set = self.settings.borrow_mut().set(
+            "search_path",
+            Some(&path),
+            Action::Set,
+            Origin::Statement,
+        );
+        let result = set.and_then(|()| {
+            schema.elements.iter().try_for_each(|(node, text)| {
+                self.define_as(node, text, notices, schema.owner).map(drop)
+            })
+        });
+        *self.settings.borrow_mut() = saved;
+        result
+    }
+
     /// The roles that a statement sees: the copy of the transaction when it holds the lock of the catalog, or the roles of the last commit.
     fn roles(&self) -> Arc<Roles> {
         match &*self.lease.borrow() {
@@ -1023,6 +1050,17 @@ impl Connection {
 
     /// Runs a statement that defines an object. The statement takes the lock of the store, which the transaction holds until it ends. After an error the changes of the statement go, but its OIDs stay used.
     fn define(&self, node: &Node, text: &str, notices: &mut Vec<Notice>) -> Result<Done, Error> {
+        self.define_as(node, text, notices, self.role)
+    }
+
+    /// [`Connection::define`] as the role `role`, which owns the new objects.
+    fn define_as(
+        &self,
+        node: &Node,
+        text: &str,
+        notices: &mut Vec<Notice>,
+        role: u32,
+    ) -> Result<Done, Error> {
         if let Node::DropStmt(stmt) = node
             && stmt.concurrent
             && self.transaction.in_block()
@@ -1057,7 +1095,7 @@ impl Connection {
             *self.lease.borrow_mut() = Some(lease);
         }
         let mut work = Catalog::clone(&self.catalog());
-        let defined = rupg_analyze::define(node, text, &self.reader(), &mut work, self.role);
+        let defined = rupg_analyze::define(node, text, &self.reader(), &mut work, role);
         if self.settings.borrow().get("track_counts").as_deref() != Some("off") {
             for &table in &defined.scans {
                 self.activity.count_scan(table);
@@ -1093,6 +1131,11 @@ impl Connection {
                 if let Some(table) = defined.filled {
                     drop(held);
                     return self.fill(node, table, &old, notices);
+                }
+                if let Some(schema) = defined.schema {
+                    drop(held);
+                    self.schema_elements(&schema, notices)?;
+                    return Ok(Done::Tag(CommandTag::CreateSchema));
                 }
                 Ok(Done::Tag(match node {
                     Node::CreateTableAsStmt(stmt) if stmt.objtype == ObjectType::OBJECT_MATVIEW => {
@@ -6117,6 +6160,12 @@ mod tests {
     #[test]
     fn defacl() {
         big_stack(|| script(include_str!("connection/defacl.test")));
+    }
+
+    /// `CREATE SCHEMA` with schema elements: the errors for an element in another schema and for a temporary table, the order in which the elements run, the owner and the grants of the new objects, the foreign keys of the tables, the text of a view, `search_path` after the statement, and an error in an element, which takes the schema away. `connection/schemaelts.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn schemaelts() {
+        big_stack(|| script(include_str!("connection/schemaelts.test")));
     }
 
     /// `CREATE TABLE ... (LIKE ...)`, from `create_table_like.sql` of the PostgreSQL tests: the columns and the not-null constraints of the other relation, the options `INCLUDING DEFAULTS`, `GENERATED`, `IDENTITY`, `CONSTRAINTS`, `INDEXES`, `STORAGE`, `COMMENTS` and `ALL`, `LIKE` with `INHERITS`, and `LIKE` of a view, a composite type and a sequence. The script has catalog queries in place of `\d`, and it does not have the parts for virtual generated columns, `NOT ENFORCED`, `CREATE STATISTICS` and foreign tables. `connection/create_table_like.test` is the output of PostgreSQL 19 for the same script in a new database.

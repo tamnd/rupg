@@ -1,0 +1,172 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE ROLE regress_create_schema_role SUPERUSER;
+CREATE ROLE
+> CREATE SCHEMA AUTHORIZATION regress_create_schema_role CREATE SEQUENCE schema_not_existing.seq;
+ERROR 42P15 CREATE specifies a schema (schema_not_existing) different from the one being created (regress_create_schema_role) at 72
+> CREATE SCHEMA AUTHORIZATION regress_create_schema_role CREATE TABLE schema_not_existing.tab (id int);
+ERROR 42P15 CREATE specifies a schema (schema_not_existing) different from the one being created (regress_create_schema_role) at 69
+> CREATE SCHEMA AUTHORIZATION regress_create_schema_role CREATE VIEW schema_not_existing.view AS SELECT 1;
+ERROR 42P15 CREATE specifies a schema (schema_not_existing) different from the one being created (regress_create_schema_role) at 68
+> CREATE SCHEMA AUTHORIZATION regress_create_schema_role CREATE INDEX ON schema_not_existing.tab (id);
+ERROR 42P15 CREATE specifies a schema (schema_not_existing) different from the one being created (regress_create_schema_role) at 72
+> CREATE SCHEMA AUTHORIZATION regress_create_schema_role CREATE TRIGGER schema_trig BEFORE INSERT ON schema_not_existing.tab EXECUTE FUNCTION schema_trig.no_func();
+ERROR 42P15 CREATE specifies a schema (schema_not_existing) different from the one being created (regress_create_schema_role) at 100
+> SET ROLE regress_create_schema_role;
+SET
+> CREATE SCHEMA AUTHORIZATION CURRENT_ROLE CREATE SEQUENCE schema_not_existing.seq;
+ERROR 42P15 CREATE specifies a schema (schema_not_existing) different from the one being created (regress_create_schema_role) at 58
+> CREATE SCHEMA regress_schema_1 AUTHORIZATION CURRENT_ROLE CREATE TABLE schema_not_existing.tab (id int);
+ERROR 42P15 CREATE specifies a schema (schema_not_existing) different from the one being created (regress_schema_1) at 72
+> RESET ROLE;
+RESET
+> CREATE SCHEMA AUTHORIZATION regress_create_schema_role CREATE TABLE regress_create_schema_role.tab (id int);
+CREATE SCHEMA
+> SELECT n.nspname, c.relname, c.relkind, c.relowner::regrole::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE nspname = 'regress_create_schema_role' ORDER BY 2;
+fields nspname@pg_namespace.2:19:64:-1,relname@pg_class.2:19:64:-1,relkind@pg_class.18:18:1:-1,relowner:25:-1:-1
+row regress_create_schema_role,tab,r,regress_create_schema_role
+SELECT 1
+> DROP SCHEMA regress_create_schema_role CASCADE;
+NOTICE 00000 drop cascades to table regress_create_schema_role.tab
+DROP SCHEMA
+> CREATE SCHEMA regress_schema_1 AUTHORIZATION regress_create_schema_role CREATE TABLE regress_schema_1.tab (id int);
+CREATE SCHEMA
+> DROP SCHEMA regress_schema_1 CASCADE;
+NOTICE 00000 drop cascades to table regress_schema_1.tab
+DROP SCHEMA
+> CREATE SCHEMA test_ns_schema_1
+>>   CREATE UNIQUE INDEX abc_a_idx ON abc (a)
+>>   CREATE VIEW abc_view AS SELECT a+1 AS a, b+1 AS b FROM abc
+>>   CREATE TABLE abc (a serial, b int UNIQUE);
+CREATE SCHEMA
+> SELECT COUNT(*) FROM pg_class WHERE relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'test_ns_schema_1');
+fields count:20:8:-1
+row 5
+SELECT 1
+> INSERT INTO test_ns_schema_1.abc DEFAULT VALUES;
+INSERT 0 1
+> INSERT INTO test_ns_schema_1.abc DEFAULT VALUES;
+INSERT 0 1
+> SELECT * FROM test_ns_schema_1.abc;
+fields a@test_ns_schema_1.abc.1:23:4:-1,b@test_ns_schema_1.abc.2:23:4:-1
+row 1,NULL
+row 2,NULL
+SELECT 2
+> SELECT * FROM test_ns_schema_1.abc_view;
+fields a@test_ns_schema_1.abc_view.1:23:4:-1,b@test_ns_schema_1.abc_view.2:23:4:-1
+row 2,NULL
+row 3,NULL
+SELECT 2
+> SELECT pg_get_viewdef('test_ns_schema_1.abc_view'::regclass);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT (a + 1) AS a,
+    (b + 1) AS b
+   FROM test_ns_schema_1.abc;
+SELECT 1
+> SELECT pg_get_serial_sequence('test_ns_schema_1.abc', 'a');
+fields pg_get_serial_sequence:25:-1:-1
+row test_ns_schema_1.abc_a_seq
+SELECT 1
+> SELECT current_setting('search_path');
+fields current_setting:25:-1:-1
+row "$user", public
+SELECT 1
+> CREATE SCHEMA s_t CREATE TEMP TABLE tt (a int);
+ERROR 42P16 cannot create temporary relation in non-temporary schema at 37
+> CREATE FUNCTION public.trigf() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+CREATE FUNCTION
+> CREATE SCHEMA s_g AUTHORIZATION regress_create_schema_role
+>>   GRANT SELECT ON TABLE tg TO PUBLIC
+>>   CREATE TRIGGER trg BEFORE INSERT ON tg FOR EACH ROW EXECUTE FUNCTION public.trigf()
+>>   CREATE TABLE tg (a int)
+>>   CREATE SEQUENCE sq;
+CREATE SCHEMA
+> SELECT relname, relkind, relowner::regrole::text, relacl::text FROM pg_class WHERE relnamespace = 's_g'::regnamespace ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,relkind@pg_class.18:18:1:-1,relowner:25:-1:-1,relacl:25:-1:-1
+row sq,S,regress_create_schema_role,NULL
+row tg,r,regress_create_schema_role,{regress_create_schema_role=arwdDxtm/regress_create_schema_role,=r/regress_create_schema_role}
+SELECT 2
+> SELECT tgname, tgrelid::regclass::text FROM pg_trigger WHERE tgname = 'trg';
+fields tgname@pg_trigger.4:19:64:-1,tgrelid:25:-1:-1
+row trg,s_g.tg
+SELECT 1
+> CREATE SCHEMA s_bad CREATE TABLE t1 (a int) CREATE TABLE t1 (b int);
+ERROR 42P07 relation "t1" already exists
+> SELECT count(*) FROM pg_namespace WHERE nspname = 's_bad';
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE SCHEMA s_bad2 CREATE VIEW v AS SELECT nosuch;
+ERROR 42703 column "nosuch" does not exist at 46
+> CREATE SCHEMA s_bad3 CREATE TABLE t (a int REFERENCES t DEFERRABLE DEFERRABLE);
+ERROR 42601 multiple DEFERRABLE/NOT DEFERRABLE clauses not allowed at 68
+> CREATE SCHEMA s_bad4 CREATE TABLE t (a int REFERENCES t INITIALLY DEFERRED NOT DEFERRABLE);
+ERROR 42601 constraint declared INITIALLY DEFERRED must be DEFERRABLE at 76
+> CREATE SCHEMA IF NOT EXISTS s_bad5 CREATE TABLE t (a int);
+ERROR 0A000 CREATE SCHEMA IF NOT EXISTS cannot include schema elements at 36
+> CREATE SCHEMA regress_schema_fk
+>>     CREATE TABLE regress_schema_fk.t2 (
+>>         b int,
+>>         a int REFERENCES t1 DEFERRABLE INITIALLY DEFERRED
+>>               REFERENCES t3 DEFERRABLE INITIALLY DEFERRED,
+>>         CONSTRAINT fk FOREIGN KEY (a) REFERENCES t1 NOT DEFERRABLE)
+>>     CREATE TABLE regress_schema_fk.t1 (a int PRIMARY KEY)
+>>     CREATE TABLE t3 (a int PRIMARY KEY)
+>>     CREATE TABLE t4 (b int, a int REFERENCES t5 NOT DEFERRABLE ENFORCED REFERENCES t6 DEFERRABLE INITIALLY IMMEDIATE, CONSTRAINT fk FOREIGN KEY (a) REFERENCES t6 DEFERRABLE INITIALLY DEFERRED)
+>>     CREATE TABLE t5 (a int, b int, PRIMARY KEY (a))
+>>     CREATE TABLE t6 (a int, b int, PRIMARY KEY (a));
+CREATE SCHEMA
+> SELECT conrelid::regclass::text, conname, contype, condeferrable, condeferred, conenforced, pg_get_constraintdef(oid) FROM pg_constraint WHERE connamespace = 'regress_schema_fk'::regnamespace ORDER BY 1, 2;
+fields conrelid:25:-1:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,condeferrable@pg_constraint.5:16:1:-1,condeferred@pg_constraint.6:16:1:-1,conenforced@pg_constraint.7:16:1:-1,pg_get_constraintdef:25:-1:-1
+row regress_schema_fk.t1,t1_a_not_null,n,f,f,t,NOT NULL a
+row regress_schema_fk.t1,t1_pkey,p,f,f,t,PRIMARY KEY (a)
+row regress_schema_fk.t2,fk,f,f,f,t,FOREIGN KEY (a) REFERENCES regress_schema_fk.t1(a)
+row regress_schema_fk.t2,t2_a_fkey,f,t,t,t,FOREIGN KEY (a) REFERENCES regress_schema_fk.t1(a) DEFERRABLE INITIALLY DEFERRED
+row regress_schema_fk.t2,t2_a_fkey1,f,t,t,t,FOREIGN KEY (a) REFERENCES regress_schema_fk.t3(a) DEFERRABLE INITIALLY DEFERRED
+row regress_schema_fk.t3,t3_a_not_null,n,f,f,t,NOT NULL a
+row regress_schema_fk.t3,t3_pkey,p,f,f,t,PRIMARY KEY (a)
+row regress_schema_fk.t4,fk,f,t,t,t,FOREIGN KEY (a) REFERENCES regress_schema_fk.t6(a) DEFERRABLE INITIALLY DEFERRED
+row regress_schema_fk.t4,t4_a_fkey,f,f,f,t,FOREIGN KEY (a) REFERENCES regress_schema_fk.t5(a)
+row regress_schema_fk.t4,t4_a_fkey1,f,t,f,t,FOREIGN KEY (a) REFERENCES regress_schema_fk.t6(a) DEFERRABLE
+row regress_schema_fk.t5,t5_a_not_null,n,f,f,t,NOT NULL a
+row regress_schema_fk.t5,t5_pkey,p,f,f,t,PRIMARY KEY (a)
+row regress_schema_fk.t6,t6_a_not_null,n,f,f,t,NOT NULL a
+row regress_schema_fk.t6,t6_pkey,p,f,f,t,PRIMARY KEY (a)
+SELECT 14
+> DROP SCHEMA regress_schema_fk CASCADE;
+NOTICE 00000 drop cascades to 6 other objects
+DETAIL drop cascades to table regress_schema_fk.t2
+drop cascades to table regress_schema_fk.t1
+drop cascades to table regress_schema_fk.t3
+drop cascades to table regress_schema_fk.t4
+drop cascades to table regress_schema_fk.t5
+drop cascades to table regress_schema_fk.t6
+DROP SCHEMA
+> BEGIN;
+BEGIN
+> CREATE SCHEMA s_x CREATE TABLE a (x int) CREATE VIEW b AS SELECT x FROM a;
+CREATE SCHEMA
+> INSERT INTO s_x.a VALUES (7);
+INSERT 0 1
+> SELECT * FROM s_x.b;
+fields x@s_x.b.1:23:4:-1
+row 7
+SELECT 1
+> ROLLBACK;
+ROLLBACK
+> SELECT count(*) FROM pg_namespace WHERE nspname = 's_x';
+fields count:20:8:-1
+row 0
+SELECT 1
+> DROP SCHEMA test_ns_schema_1, s_g CASCADE;
+NOTICE 00000 drop cascades to 4 other objects
+DETAIL drop cascades to sequence s_g.sq
+drop cascades to table s_g.tg
+drop cascades to table test_ns_schema_1.abc
+drop cascades to view test_ns_schema_1.abc_view
+DROP SCHEMA
+> DROP FUNCTION public.trigf();
+DROP FUNCTION
+> DROP ROLE regress_create_schema_role;
+DROP ROLE
