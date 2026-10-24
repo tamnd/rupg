@@ -103,6 +103,25 @@ pub(super) const BTREE: &[Opt] = &[
 pub(super) const HASH: &[Opt] =
     &[Opt { name: "fillfactor", kind: Kind::Int(10, 100), toast: false }];
 
+/// `spc_relopt_tab`: the options of a tablespace. `MAX_IO_CONCURRENCY` is 1000.
+const TABLESPACE: &[Opt] = &[
+    Opt { name: "random_page_cost", kind: Kind::Real(0.0, f64::MAX), toast: false },
+    Opt { name: "seq_page_cost", kind: Kind::Real(0.0, f64::MAX), toast: false },
+    Opt { name: "effective_io_concurrency", kind: Kind::Int(0, 1000), toast: false },
+    Opt { name: "maintenance_io_concurrency", kind: Kind::Int(0, 1000), toast: false },
+];
+
+/// `transformRelOptions` and `tablespace_reloptions` for `CREATE TABLESPACE`: the options of the statement, each as `name=value`, in the order of the statement. An option cannot have a namespace.
+///
+/// # Errors
+///
+/// `22023` for an option that a tablespace does not have, an option that the statement gives twice, or a value that is not valid.
+pub fn tablespace_options(defs: &[Option<Node>]) -> Result<Vec<String>> {
+    let options = transform(&[], defs, None, &[], false)?;
+    validate(&options, TABLESPACE, false)?;
+    Ok(options)
+}
+
 /// The error of a value that is not valid, `ERRCODE_INVALID_PARAMETER_VALUE`.
 fn invalid(message: String) -> Error {
     Error::new(SqlState::INVALID_PARAMETER_VALUE, message)

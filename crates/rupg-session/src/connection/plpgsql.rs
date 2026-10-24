@@ -571,6 +571,10 @@ impl Connection {
             Err(self.prevent_in_call("CREATE DATABASE"))
         } else if let Node::DropdbStmt(_) = node {
             Err(self.prevent_in_call("DROP DATABASE"))
+        } else if let Node::CreateTableSpaceStmt(_) = node {
+            Err(self.prevent_in_call("CREATE TABLESPACE"))
+        } else if let Node::DropTableSpaceStmt(_) = node {
+            Err(self.prevent_in_call("DROP TABLESPACE"))
         } else {
             Err(utility::not_supported(text))
         };

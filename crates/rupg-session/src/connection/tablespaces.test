@@ -1,0 +1,132 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLESPACE regress_ts1 LOCATION '';
+ERROR 42P17 tablespace location must be an absolute path
+> SET allow_in_place_tablespaces = true;
+SET
+> CREATE TABLESPACE regress_ts1 LOCATION 'relative';
+ERROR 42P17 tablespace location must be an absolute path
+> CREATE TABLESPACE pg_ts LOCATION '';
+ERROR 42939 unacceptable tablespace name "pg_ts"
+DETAIL The prefix "pg_" is reserved for system tablespaces.
+> CREATE TABLESPACE regress_ts1 LOCATION '/a''b';
+ERROR 42602 tablespace location cannot contain single quotes
+> CREATE TABLESPACE regress_ts1 LOCATION '';
+CREATE TABLESPACE
+> CREATE TABLESPACE regress_ts1 LOCATION '';
+ERROR 42710 tablespace "regress_ts1" already exists
+> CREATE TABLESPACE regress_ts2 LOCATION '' WITH (some_nonexistent_parameter = true);
+ERROR 22023 unrecognized parameter "some_nonexistent_parameter"
+> CREATE TABLESPACE regress_ts2 LOCATION '' WITH (random_page_cost = -1);
+ERROR 22023 value -1 out of bounds for option "random_page_cost"
+DETAIL Valid values are between "0.000000" and "179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368.000000".
+> CREATE TABLESPACE regress_ts2 LOCATION '' WITH (effective_io_concurrency = 2000);
+ERROR 22023 value 2000 out of bounds for option "effective_io_concurrency"
+DETAIL Valid values are between "0" and "1000".
+> CREATE TABLESPACE regress_ts2 LOCATION '' WITH (random_page_cost = 'x');
+ERROR 22023 invalid value for floating point option "random_page_cost": x
+> CREATE TABLESPACE regress_ts2 LOCATION '' WITH (random_page_cost = 1, random_page_cost = 2);
+ERROR 22023 parameter "random_page_cost" specified more than once
+> CREATE TABLESPACE regress_ts2 LOCATION '' WITH (pg.random_page_cost = 1);
+ERROR 22023 unrecognized parameter namespace "pg"
+> CREATE TABLESPACE regress_ts2 LOCATION '' WITH (random_page_cost = 3.0, Seq_Page_Cost = 1.5, effective_io_concurrency = 4, maintenance_io_concurrency = 5);
+CREATE TABLESPACE
+> CREATE ROLE regress_ts_user;
+CREATE ROLE
+> CREATE TABLESPACE regress_ts3 OWNER regress_ts_user LOCATION '';
+CREATE TABLESPACE
+> CREATE TABLESPACE regress_ts4 OWNER regress_nobody LOCATION '';
+ERROR 42704 role "regress_nobody" does not exist
+> CREATE TABLESPACE regress_ts4 OWNER CURRENT_USER LOCATION '';
+CREATE TABLESPACE
+> SELECT spcname, spcowner::regrole, spcacl, spcoptions FROM pg_tablespace ORDER BY oid;
+fields spcname@pg_tablespace.2:19:64:-1,spcowner:4096:4:-1,spcacl@pg_tablespace.4:1034:-1:-1,spcoptions@pg_tablespace.5:1009:-1:-1
+row pg_default,postgres,NULL,NULL
+row pg_global,postgres,NULL,NULL
+row regress_ts1,postgres,NULL,NULL
+row regress_ts2,postgres,NULL,{random_page_cost=3.0,seq_page_cost=1.5,effective_io_concurrency=4,maintenance_io_concurrency=5}
+row regress_ts3,regress_ts_user,NULL,NULL
+row regress_ts4,postgres,NULL,NULL
+SELECT 6
+> SELECT spcname, regexp_replace(pg_tablespace_location(oid), '(pg_tblspc)/(\d+)', '\1/NNN') AS loc FROM pg_tablespace ORDER BY oid;
+fields spcname@pg_tablespace.2:19:64:-1,loc:25:-1:-1
+row pg_default,
+row pg_global,
+row regress_ts1,pg_tblspc/NNN
+row regress_ts2,pg_tblspc/NNN
+row regress_ts3,pg_tblspc/NNN
+row regress_ts4,pg_tblspc/NNN
+SELECT 6
+> SELECT pg_tablespace_size('regress_ts1') >= 0 AS size;
+fields size:16:1:-1
+row t
+SELECT 1
+> SELECT has_tablespace_privilege('regress_ts_user', 'regress_ts1', 'CREATE') AS a, has_tablespace_privilege('regress_ts_user', 'regress_ts3', 'CREATE') AS b;
+fields a:16:1:-1,b:16:1:-1
+row f,t
+SELECT 1
+> SELECT pg_describe_object('pg_tablespace'::regclass, oid, 0) AS d FROM pg_tablespace WHERE spcname = 'regress_ts1';
+fields d:25:-1:-1
+row tablespace regress_ts1
+SELECT 1
+> SELECT (pg_identify_object('pg_tablespace'::regclass, oid, 0)).* FROM pg_tablespace WHERE spcname = 'regress_ts1';
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row tablespace,NULL,regress_ts1,regress_ts1
+SELECT 1
+> SELECT count(*) FROM pg_tablespace_databases((SELECT oid FROM pg_tablespace WHERE spcname = 'regress_ts1'));
+fields count:20:8:-1
+row 0
+SELECT 1
+> BEGIN;
+BEGIN
+> CREATE TABLESPACE regress_ts5 LOCATION '';
+ERROR 25001 CREATE TABLESPACE cannot run inside a transaction block
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> DROP TABLESPACE regress_ts1;
+ERROR 25001 DROP TABLESPACE cannot run inside a transaction block
+> ROLLBACK;
+ROLLBACK
+> DROP ROLE regress_ts_user;
+ERROR 2BP01 role "regress_ts_user" cannot be dropped because some objects depend on it
+DETAIL owner of tablespace regress_ts3
+> SET ROLE regress_ts_user;
+SET
+is_superuser=off
+> CREATE TABLESPACE regress_ts5 LOCATION '';
+ERROR 42501 permission denied to create tablespace "regress_ts5"
+HINT Must be superuser to create a tablespace.
+> DROP TABLESPACE regress_ts1;
+ERROR 42501 must be owner of tablespace regress_ts1
+> DROP TABLESPACE regress_ts3;
+DROP TABLESPACE
+> RESET ROLE;
+RESET
+is_superuser=on
+> DROP TABLESPACE pg_default;
+ERROR 42501 permission denied for tablespace pg_default
+> DROP TABLESPACE pg_global;
+ERROR 42501 permission denied for tablespace pg_global
+> DROP TABLESPACE regress_nope;
+ERROR 42704 tablespace "regress_nope" does not exist
+> DROP TABLESPACE IF EXISTS regress_nope;
+NOTICE 00000 tablespace "regress_nope" does not exist, skipping
+DROP TABLESPACE
+> DROP TABLESPACE regress_ts1;
+DROP TABLESPACE
+> DROP TABLESPACE regress_ts2;
+DROP TABLESPACE
+> DROP TABLESPACE regress_ts4;
+DROP TABLESPACE
+> SELECT spcname FROM pg_tablespace ORDER BY oid;
+fields spcname@pg_tablespace.2:19:64:-1
+row pg_default
+row pg_global
+SELECT 2
+> DROP ROLE regress_ts_user;
+DROP ROLE
+> RESET allow_in_place_tablespaces;
+RESET

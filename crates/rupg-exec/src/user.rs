@@ -247,6 +247,7 @@ pub(crate) fn rows(
         "pg_authid" => authids(table),
         "pg_auth_members" => auth_members(table),
         "pg_db_role_setting" => db_role_settings(table, session),
+        "pg_tablespace" => tablespaces(table, session),
         "pg_ts_template" => ts_templates(table, catalog),
         "pg_ts_parser" => ts_parsers(table, catalog),
         "pg_ts_dict" => ts_dictionaries(table, catalog),
@@ -430,6 +431,30 @@ fn auth_members(table: &Table) -> Vec<Row<'_>> {
                 .set("admin_option", Value::Bool(member.admin))
                 .set("inherit_option", Value::Bool(member.inherit))
                 .set("set_option", Value::Bool(member.set));
+            row
+        })
+        .collect()
+}
+
+/// The rows of `pg_tablespace` of the tablespaces that `CREATE TABLESPACE` made. A tablespace with no options has a null `spcoptions`.
+fn tablespaces<'a>(table: &'a Table, session: &dyn Session) -> Vec<Row<'a>> {
+    session
+        .tablespaces()
+        .iter()
+        .map(|tablespace| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(tablespace.oid))
+                .set("spcname", Value::text(tablespace.name.clone()))
+                .set("spcowner", oid(tablespace.owner))
+                .set("spcacl", tablespace.acl.as_deref().map_or(Value::Null, text_array))
+                .set(
+                    "spcoptions",
+                    if tablespace.options.is_empty() {
+                        Value::Null
+                    } else {
+                        text_array(&tablespace.options)
+                    },
+                );
             row
         })
         .collect()

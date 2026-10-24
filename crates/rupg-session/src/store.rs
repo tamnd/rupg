@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use rupg_catalog::{Catalog, Database, SequenceData};
+use rupg_catalog::{Catalog, Database, SequenceData, Tablespace};
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Backend, RelationCounts};
 use rupg_pgcatalog::roles::Roles;
@@ -65,6 +65,8 @@ struct State {
     next_oid: u32,
     /// The roles of `CREATE ROLE` and the memberships of `GRANT` of the last commit. The roles belong to the cluster, so each database sees them.
     roles: Arc<Roles>,
+    /// The rows of `pg_tablespace` of `CREATE TABLESPACE`, in the order of their OIDs. `CREATE TABLESPACE` and `DROP TABLESPACE` cannot run in a transaction block, so a change is at once in the rows.
+    tablespaces: Arc<[Tablespace]>,
 }
 
 /// A database: its row of `pg_database`, the catalog of its last commit and its lock.
@@ -96,7 +98,7 @@ impl Default for State {
                 )
             })
             .collect();
-        State { databases, next_oid, roles: Arc::default() }
+        State { databases, next_oid, roles: Arc::default(), tablespaces: Arc::from(Vec::new()) }
     }
 }
 
@@ -182,6 +184,41 @@ impl Store {
             .filter(|db| initdb.iter().all(|row| row.oid != db.row.oid))
             .map(|db| db.row.clone())
             .collect()
+    }
+
+    /// The rows of `pg_tablespace` of the tablespaces that `CREATE TABLESPACE` made, in the order of their OIDs.
+    pub(crate) fn tablespaces(&self) -> Arc<[Tablespace]> {
+        Arc::clone(&self.state().tablespaces)
+    }
+
+    /// `CreateTableSpace` after the checks of the statement: the new row of `pg_tablespace` with the next OID of the cluster. It gives the OID.
+    ///
+    /// # Errors
+    ///
+    /// `42710` for a name that another tablespace has.
+    pub(crate) fn create_tablespace(&self, mut row: Tablespace) -> Result<u32> {
+        let mut state = self.state();
+        if state.tablespaces.iter().any(|t| t.name == row.name) {
+            return Err(Error::new(
+                SqlState::DUPLICATE_OBJECT,
+                format!("tablespace \"{}\" already exists", row.name),
+            ));
+        }
+        row.oid = state.next_oid;
+        state.next_oid += 1;
+        let oid = row.oid;
+        let mut rows = state.tablespaces.to_vec();
+        rows.push(row);
+        state.tablespaces = Arc::from(rows);
+        Ok(oid)
+    }
+
+    /// `DropTableSpace` after the checks of the statement: the removal of the row of `pg_tablespace`.
+    pub(crate) fn drop_tablespace(&self, oid: u32) {
+        let mut state = self.state();
+        let rows: Vec<Tablespace> =
+            state.tablespaces.iter().filter(|t| t.oid != oid).cloned().collect();
+        state.tablespaces = Arc::from(rows);
     }
 
     /// The checks of `InitPostgres` for the database of a new session. It gives the OID of the database.

@@ -67,6 +67,7 @@ pub use grant::acl_roles;
 pub(crate) use lock::relkind;
 pub use lock::{Allowed, Take, lock_table};
 pub use owned::{acl_dependents, owned_objects};
+pub use reloptions::tablespace_options;
 pub use rule::{RuleTree, rule_tree};
 pub use schema_elements::SchemaElements;
 pub(crate) use table::check_attribute_type;

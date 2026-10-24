@@ -8,7 +8,7 @@ use rupg_pgcatalog::builtin::{self, Owned};
 use rupg_types::{Numeric, Value, numeric_in, numeric_out};
 
 use crate::acl;
-use crate::{Call, Kernel, bad_value, type_error};
+use crate::{Call, Kernel, Session, bad_value, type_error};
 
 /// `BLCKSZ`.
 const BLOCK: i64 = 8192;
@@ -401,10 +401,21 @@ fn database_by_oid(oid: u32, call: &Call<'_>) -> Result<u32> {
 
 /// The name of a database or a tablespace for the error of a missing privilege.
 fn object_name(kind: Owned, oid: u32, call: &Call<'_>) -> String {
+    if kind == Owned::Tablespace {
+        return tablespace_name(oid, call.session).unwrap_or_default();
+    }
     builtin::owned_by_oid(kind, oid).map(|r| r.name.to_string()).unwrap_or_else(|| {
         let databases = call.session.databases();
         databases.iter().find(|d| d.oid == oid).map(|d| d.name.clone()).unwrap_or_default()
     })
+}
+
+/// `get_tablespace_name`: the name of `pg_default`, of `pg_global` or of a tablespace that `CREATE TABLESPACE` made, or `None` when no tablespace has the OID.
+pub(crate) fn tablespace_name(oid: u32, session: &dyn Session) -> Option<String> {
+    match builtin::owned_by_oid(Owned::Tablespace, oid) {
+        Some(row) => Some(row.name.to_string()),
+        None => session.tablespaces().iter().find(|t| t.oid == oid).map(|t| t.name.clone()),
+    }
 }
 
 /// The error of `aclcheck_error` for a missing privilege.
@@ -459,7 +470,7 @@ fn tablespace_size(oid: u32, call: &Call<'_>) -> Result<Value> {
 /// `pg_tablespace_size(oid)`.
 fn tablespace_size_oid(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let oid = oid_arg(args, 0)?;
-    if builtin::owned_by_oid(Owned::Tablespace, oid).is_none() {
+    if tablespace_name(oid, call.session).is_none() {
         return Err(Error::new(
             SqlState::UNDEFINED_OBJECT,
             format!("tablespace with OID {oid} does not exist"),
@@ -474,11 +485,14 @@ fn tablespace_size_name(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     tablespace_size(acl::simple_name(Owned::Tablespace, name, call.session)?, call)
 }
 
-/// `pg_tablespace_location(oid)`: the empty string for `pg_default` and `pg_global`, where 0 is the default tablespace of the database. Another tablespace needs its link in `pg_tblspc`, and rupg has none.
-fn tablespace_location(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+/// `pg_tablespace_location(oid)`: the empty string for `pg_default` and `pg_global`, where 0 is the default tablespace of the database. A tablespace of `CREATE TABLESPACE` is in place, a directory in `pg_tblspc` and not a link, so its location is the path of the directory. Another OID has no entry in `pg_tblspc`.
+fn tablespace_location(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let oid = oid_arg(args, 0)?;
     if matches!(oid, 0 | DEFAULT_TABLESPACE | GLOBAL_TABLESPACE) {
         return Ok(Value::text(""));
+    }
+    if call.session.tablespaces().iter().any(|t| t.oid == oid) {
+        return Ok(Value::text(format!("pg_tblspc/{oid}")));
     }
     Err(Error::new(
         SqlState::UNDEFINED_FILE,
@@ -486,11 +500,14 @@ fn tablespace_location(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     ))
 }
 
-/// `pg_tablespace_databases(oid)`: the databases with files in a tablespace. Each database of rupg is in `pg_default`. `pg_global` and a tablespace with no directory give a warning and no rows.
+/// `pg_tablespace_databases(oid)`: the databases with files in a tablespace. Each database of rupg is in `pg_default`, so a tablespace of `CREATE TABLESPACE` has none. `pg_global` and a tablespace with no directory give a warning and no rows.
 pub(crate) fn tablespace_databases(call: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
     let oid = oid_arg(args, 0)?;
     if oid == GLOBAL_TABLESPACE {
         call.session.warn(Error::new(SqlState::WARNING, "global tablespace never has databases"));
+        return Ok(Vec::new());
+    }
+    if call.session.tablespaces().iter().any(|t| t.oid == oid) {
         return Ok(Vec::new());
     }
     if oid != DEFAULT_TABLESPACE {

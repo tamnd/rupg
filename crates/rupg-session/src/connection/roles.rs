@@ -32,6 +32,8 @@ const FIRST_NORMAL_OBJECT_ID: u32 = 16384;
 const PG_AUTH_MEMBERS: u32 = 1261;
 /// `DatabaseRelationId`.
 const PG_DATABASE: u32 = 1262;
+/// `TableSpaceRelationId`.
+const PG_TABLESPACE: u32 = 1213;
 /// `MAX_ENCRYPTED_PASSWORD_LEN`.
 const MAX_ENCRYPTED_PASSWORD_LEN: usize = 512;
 /// `MAX_REPORTED_DEPS`: the number of objects that the detail of `checkSharedDependencies` names.
@@ -965,6 +967,9 @@ impl Connection {
             if count > 0 {
                 remote.push((row.name, count));
             }
+        }
+        for row in self.store.tablespaces().iter().filter(|row| row.owner == roleid) {
+            objects.push((row.oid, PG_TABLESPACE, 0, b'o', format!("tablespace {}", row.name)));
         }
         let reader = self.reader();
         for object in rupg_analyze::owned_objects(&local, roleid) {
