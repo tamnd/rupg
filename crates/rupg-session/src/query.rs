@@ -888,6 +888,24 @@ impl rupg_func::Session for Reader<'_> {
         self.conn.map_or(0, Connection::trigger_depth)
     }
 
+    fn transaction_id(&self, assign: bool) -> Option<u64> {
+        self.conn?.transaction_id(assign).map(u64::from)
+    }
+
+    fn next_transaction_id(&self) -> u64 {
+        self.conn.map_or(3, |conn| u64::from(conn.heap().next_xid()))
+    }
+
+    fn transaction_state(&self, xid: u32) -> Option<rupg_func::XactState> {
+        Some(self.conn?.heap().xact_state(xid))
+    }
+
+    fn current_snapshot(&self) -> Option<rupg_types::Snapshot> {
+        let view = self.view.as_ref()?;
+        let own = self.conn.and_then(|conn| conn.transaction_id(false)).unwrap_or(view.xid);
+        Some(view.snapshot.exported(own))
+    }
+
     fn databases(&self) -> Arc<[rupg_catalog::Database]> {
         match self.activity {
             Some((_, store)) => store.created(),

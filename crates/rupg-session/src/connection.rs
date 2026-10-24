@@ -29,7 +29,7 @@ use rupg_wire::{
 
 use crate::block::{Block, Ending, Transaction};
 use crate::guc::{Action, Origin, Settings};
-use crate::heap::{Change, Changed, Recheck, Snapshot, View, tid_text};
+use crate::heap::{Change, Changed, Heap, Recheck, Snapshot, View, tid_text};
 use crate::query::{self, Column, Reader, Row, Transition};
 use crate::store::{Lease, Store};
 use crate::utility::{self, Context, Notice, Outcome};
@@ -972,6 +972,19 @@ impl Connection {
         self.marks.clear();
     }
 
+    /// The transaction ID of the transaction, or `None` when it has none. With `assign`, a transaction with no ID gets one, as `AssignTransactionId` gives it, and it is in progress until the transaction ends.
+    pub(crate) fn transaction_id(&self, assign: bool) -> Option<u32> {
+        if assign && self.xid.get() == 0 {
+            self.xid.set(self.store.heap().begin(self.pid));
+        }
+        Some(self.xid.get()).filter(|&xid| xid != 0)
+    }
+
+    /// The rows of the tables and the transactions in progress.
+    pub(crate) fn heap(&self) -> &Heap {
+        self.store.heap()
+    }
+
     /// The part of [`Connection::end_rows`] that a call in PL/pgSQL can do, as the transaction has no savepoints there.
     fn end_heap(&self, commit: bool, defined: bool) {
         let heap = self.store.heap();
@@ -1094,6 +1107,8 @@ impl Connection {
             let lease = self.store.lease(self.database_oid, &self.cancel)?;
             *self.lease.borrow_mut() = Some(lease);
         }
+        // A change of the catalog writes rows of the catalog, so the transaction gets an ID.
+        self.transaction_id(true);
         let mut work = Catalog::clone(&self.catalog());
         let defined = rupg_analyze::define(node, text, &self.reader(), &mut work, role);
         if self.settings.borrow().get("track_counts").as_deref() != Some("off") {
@@ -1382,6 +1397,10 @@ impl Connection {
             |relid, role| rupg_func::lock_table_allowed(relid, role, stmt.mode, &reader);
         let mut take = |relid| reader.lock_relation(relid, mode, !stmt.nowait);
         rupg_analyze::lock_table(stmt, &reader, self.role, &mut allowed, &mut take)?;
+        // `LogAccessExclusiveLockPrepare`: the transaction gets an ID for the log of an `ACCESS EXCLUSIVE` lock.
+        if mode == 8 {
+            self.transaction_id(true);
+        }
         Ok(Done::Tag(CommandTag::LockTable))
     }
 
@@ -6166,6 +6185,12 @@ mod tests {
     #[test]
     fn schemaelts() {
         big_stack(|| script(include_str!("connection/schemaelts.test")));
+    }
+
+    /// The ID and the snapshot of a transaction: `pg_current_xact_id`, `txid_current` and their `_if_assigned` forms, which a write, a change of the catalog and `LOCK ... ACCESS EXCLUSIVE` assign and a read does not, `pg_current_snapshot` and `txid_current_snapshot` without the transaction of the session, and `pg_xact_status` and `txid_status` of a committed, an aborted and a running transaction, of the special IDs and of an ID in the future. `connection/xactid.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn xactid() {
+        big_stack(|| script(include_str!("connection/xactid.test")));
     }
 
     /// `CREATE TABLE ... (LIKE ...)`, from `create_table_like.sql` of the PostgreSQL tests: the columns and the not-null constraints of the other relation, the options `INCLUDING DEFAULTS`, `GENERATED`, `IDENTITY`, `CONSTRAINTS`, `INDEXES`, `STORAGE`, `COMMENTS` and `ALL`, `LIKE` with `INHERITS`, and `LIKE` of a view, a composite type and a sequence. The script has catalog queries in place of `\d`, and it does not have the parts for virtual generated columns, `NOT ENFORCED`, `CREATE STATISTICS` and foreign tables. `connection/create_table_like.test` is the output of PostgreSQL 19 for the same script in a new database.

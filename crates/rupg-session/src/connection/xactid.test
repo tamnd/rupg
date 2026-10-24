@@ -1,0 +1,239 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> SELECT pg_typeof(pg_current_xact_id()), pg_typeof(txid_current()), pg_typeof(pg_current_snapshot()), pg_typeof(txid_current_snapshot()), pg_typeof(pg_xact_status('1'::xid8));
+fields pg_typeof:2206:4:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
+row xid8,bigint,pg_snapshot,txid_snapshot,text
+SELECT 1
+> SELECT pg_current_xact_id_if_assigned() IS NULL, txid_current_if_assigned() IS NULL;
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,t
+SELECT 1
+> BEGIN;
+BEGIN
+> SELECT pg_current_xact_id_if_assigned() IS NULL;
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT count(*) FROM pg_class WHERE relname = 'pg_class';
+fields count:20:8:-1
+row 1
+SELECT 1
+> SELECT pg_current_xact_id_if_assigned() IS NULL;
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT pg_current_xact_id() = pg_current_xact_id_if_assigned();
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT pg_current_xact_id() = pg_current_xact_id(), txid_current() = pg_current_xact_id()::text::bigint;
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,t
+SELECT 1
+> SELECT txid_current_if_assigned() = txid_current();
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT pg_current_xact_id() >= pg_snapshot_xmin(pg_current_snapshot());
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT pg_current_xact_id() NOT IN (SELECT pg_snapshot_xip(pg_current_snapshot()));
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT pg_visible_in_snapshot(pg_current_xact_id(), pg_current_snapshot());
+fields pg_visible_in_snapshot:16:1:-1
+row f
+SELECT 1
+> SELECT pg_xact_status(pg_current_xact_id());
+fields pg_xact_status:25:-1:-1
+row in progress
+SELECT 1
+> COMMIT;
+COMMIT
+> SELECT pg_current_xact_id() >= pg_snapshot_xmin(pg_current_snapshot());
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT pg_visible_in_snapshot(pg_current_xact_id(), pg_current_snapshot());
+fields pg_visible_in_snapshot:16:1:-1
+row f
+SELECT 1
+> SELECT txid_visible_in_snapshot(txid_current(), txid_current_snapshot());
+fields txid_visible_in_snapshot:16:1:-1
+row f
+SELECT 1
+> SELECT txid_current() >= txid_snapshot_xmin(txid_current_snapshot());
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT pg_snapshot_xmax(pg_current_snapshot()) >= pg_snapshot_xmin(pg_current_snapshot());
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT pg_snapshot_xmax(pg_current_snapshot()) <= pg_current_xact_id();
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> CREATE TABLE xa (a int);
+CREATE TABLE
+> CREATE SEQUENCE xs_c;
+CREATE SEQUENCE
+> CREATE SEQUENCE xs_a;
+CREATE SEQUENCE
+> CREATE SEQUENCE xs_w;
+CREATE SEQUENCE
+> BEGIN;
+BEGIN
+> SELECT setval('xs_c', txid_current()) > 0;
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> COMMIT;
+COMMIT
+> BEGIN;
+BEGIN
+> SELECT setval('xs_a', txid_current()) > 0;
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> INSERT INTO xa VALUES (1);
+INSERT 0 1
+> SELECT setval('xs_w', txid_current_if_assigned()) > 0;
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> INSERT INTO xa VALUES (2);
+INSERT 0 1
+> SELECT txid_current() = (SELECT last_value FROM xs_w);
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> ROLLBACK;
+ROLLBACK
+> SELECT count(*) FROM xa;
+fields count:20:8:-1
+row 0
+SELECT 1
+> BEGIN;
+BEGIN
+> SELECT pg_xact_status(last_value::text::xid8) FROM xs_c;
+fields pg_xact_status:25:-1:-1
+row committed
+SELECT 1
+> SELECT pg_xact_status(last_value::text::xid8) FROM xs_a;
+fields pg_xact_status:25:-1:-1
+row aborted
+SELECT 1
+> SELECT pg_xact_status(last_value::text::xid8) FROM xs_w;
+fields pg_xact_status:25:-1:-1
+row aborted
+SELECT 1
+> SELECT txid_status(last_value) FROM xs_c;
+fields txid_status:25:-1:-1
+row committed
+SELECT 1
+> SELECT txid_status(last_value) FROM xs_a;
+fields txid_status:25:-1:-1
+row aborted
+SELECT 1
+> SELECT pg_xact_status(pg_current_xact_id()), txid_status(txid_current());
+fields pg_xact_status:25:-1:-1,txid_status:25:-1:-1
+row in progress,in progress
+SELECT 1
+> SELECT pg_xact_status('1'::xid8), pg_xact_status('2'::xid8), pg_xact_status('0'::xid8) IS NULL, txid_status(0) IS NULL;
+fields pg_xact_status:25:-1:-1,pg_xact_status:25:-1:-1,?column?:16:1:-1,?column?:16:1:-1
+row committed,committed,t,t
+SELECT 1
+> SELECT pg_visible_in_snapshot(last_value::text::xid8, pg_current_snapshot()) FROM xs_c;
+fields pg_visible_in_snapshot:16:1:-1
+row t
+SELECT 1
+> COMMIT;
+COMMIT
+> CREATE FUNCTION test_future_xid_status(xid8) RETURNS void LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_xact_status($1); RAISE EXCEPTION 'no error'; EXCEPTION WHEN invalid_parameter_value THEN RAISE NOTICE 'Got expected error for xid in the future'; END; $$;
+CREATE FUNCTION
+> SELECT test_future_xid_status((pg_current_xact_id()::text::bigint + 10000)::text::xid8);
+fields test_future_xid_status:2278:4:-1
+NOTICE 00000 Got expected error for xid in the future (PL/pgSQL function test_future_xid_status(xid8) line 1 at RAISE)
+row 
+SELECT 1
+> SELECT test_future_xid_status((pg_current_xact_id_if_assigned()::text::bigint + 1)::text::xid8);
+fields test_future_xid_status:2278:4:-1
+ERROR P0001 no error (PL/pgSQL function test_future_xid_status(xid8) line 1 at RAISE)
+> SELECT pg_xact_status('4294967296'::xid8) IS NULL;
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> INSERT INTO xa VALUES (3) RETURNING pg_current_xact_id() = pg_current_xact_id_if_assigned();
+fields ?column?:16:1:-1
+row t
+INSERT 0 1
+> BEGIN;
+BEGIN
+> SELECT txid_current() > 0;
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SAVEPOINT s1;
+SAVEPOINT
+> SELECT txid_current() = txid_current_if_assigned();
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> ROLLBACK TO s1;
+ROLLBACK
+> SELECT txid_current_if_assigned() IS NOT NULL;
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> COMMIT;
+COMMIT
+> BEGIN;
+BEGIN
+> SET LOCAL work_mem = '8MB';
+SET
+> LOCK TABLE xa IN SHARE MODE;
+LOCK TABLE
+> SELECT txid_current_if_assigned() IS NULL;
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> LOCK TABLE xa;
+LOCK TABLE
+> SELECT txid_current_if_assigned() IS NOT NULL;
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> CREATE TABLE xb (a int);
+CREATE TABLE
+> SELECT txid_current_if_assigned() IS NOT NULL;
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> ROLLBACK;
+ROLLBACK
+> BEGIN ISOLATION LEVEL REPEATABLE READ;
+BEGIN
+> SELECT pg_snapshot_xmax(pg_current_snapshot()) = pg_snapshot_xmax(pg_current_snapshot());
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> COMMIT;
+COMMIT
+> DROP FUNCTION test_future_xid_status(xid8);
+DROP FUNCTION
+> DROP TABLE xa;
+DROP TABLE
+> DROP SEQUENCE xs_c, xs_a, xs_w;
+DROP SEQUENCE
