@@ -345,7 +345,12 @@ impl Definer<'_, '_> {
             plan.inherits = parents;
         }
         let mut table_rv = rv.clone();
-        table_rv.schemaname = Some(self.schema_name(namespace).into());
+        // The session does not see a temporary schema that this statement makes, so the indexes name it `pg_temp`.
+        table_rv.schemaname = Some(if namespace == self.an.temp {
+            "pg_temp".into()
+        } else {
+            self.schema_name(namespace).into()
+        });
         let indexes = index_constraints(&mut plan, &table_rv)?;
         let options = self.create_table_options(&stmt.options)?;
         if stmt.tablespacename.is_some() {

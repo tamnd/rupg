@@ -156,7 +156,7 @@ impl Connection {
     }
 
     /// `get_tablespace_oid`: the OID and the owner of the tablespace of the name.
-    fn tablespace_oid(&self, name: &str) -> Option<(u32, u32)> {
+    pub(super) fn tablespace_oid(&self, name: &str) -> Option<(u32, u32)> {
         match name {
             "pg_default" => Some((DEFAULT_TABLESPACE, BOOTSTRAP_SUPERUSER)),
             "pg_global" => Some((GLOBAL_TABLESPACE, BOOTSTRAP_SUPERUSER)),

@@ -1,0 +1,333 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE ri_t (a int PRIMARY KEY, b text);
+CREATE TABLE
+> CREATE INDEX ri_b ON ri_t (b);
+CREATE INDEX
+> CREATE TABLE ri_none (a int);
+CREATE TABLE
+> CREATE TABLE ri_files AS SELECT relname, relfilenode FROM pg_class WHERE relname IN ('ri_t', 'ri_t_pkey', 'ri_b');
+SELECT 3
+> INSERT INTO ri_t VALUES (1, 'x'), (2, 'y');
+INSERT 0 2
+> REINDEX TABLE ri_t;
+REINDEX
+> SELECT f.relname, c.relfilenode = f.relfilenode AS same FROM ri_files f JOIN pg_class c ON c.relname = f.relname ORDER BY 1;
+fields relname@ri_files.1:19:64:-1,same:16:1:-1
+row ri_b,f
+row ri_t,t
+row ri_t_pkey,f
+SELECT 3
+> SELECT pg_relation_filenode('ri_b') = relfilenode AS fn FROM pg_class WHERE relname = 'ri_b';
+fields fn:16:1:-1
+row t
+SELECT 1
+> DELETE FROM ri_files;
+DELETE 3
+> INSERT INTO ri_files SELECT relname, relfilenode FROM pg_class WHERE relname IN ('ri_t', 'ri_t_pkey', 'ri_b');
+INSERT 0 3
+> REINDEX INDEX ri_b;
+REINDEX
+> SELECT f.relname, c.relfilenode = f.relfilenode AS same FROM ri_files f JOIN pg_class c ON c.relname = f.relname ORDER BY 1;
+fields relname@ri_files.1:19:64:-1,same:16:1:-1
+row ri_b,f
+row ri_t,t
+row ri_t_pkey,t
+SELECT 3
+> SELECT * FROM ri_t WHERE a = 2;
+fields a@ri_t.1:23:4:-1,b@ri_t.2:25:-1:-1
+row 2,y
+SELECT 1
+> SELECT * FROM ri_t WHERE b = 'x';
+fields a@ri_t.1:23:4:-1,b@ri_t.2:25:-1:-1
+row 1,x
+SELECT 1
+> REINDEX TABLE ri_none;
+NOTICE 00000 table "ri_none" has no indexes to reindex
+REINDEX
+> REINDEX (CONCURRENTLY) TABLE ri_none;
+NOTICE 00000 table "ri_none" has no indexes that can be reindexed concurrently
+REINDEX
+> REINDEX TABLE CONCURRENTLY ri_t;
+REINDEX
+> REINDEX INDEX CONCURRENTLY ri_t_pkey;
+REINDEX
+> SELECT f.relname, c.relfilenode = f.relfilenode AS same FROM ri_files f JOIN pg_class c ON c.relname = f.relname ORDER BY 1;
+fields relname@ri_files.1:19:64:-1,same:16:1:-1
+row ri_b,f
+row ri_t,t
+row ri_t_pkey,f
+SELECT 3
+> SELECT indexrelid::regclass, indisvalid, indisprimary FROM pg_index WHERE indrelid = 'ri_t'::regclass ORDER BY indexrelid::regclass::text;
+fields indexrelid:2205:4:-1,indisvalid@pg_index.11:16:1:-1,indisprimary@pg_index.7:16:1:-1
+row ri_b,t,f
+row ri_t_pkey,t,t
+SELECT 2
+> SELECT conname, conindid::regclass FROM pg_constraint WHERE conrelid = 'ri_t'::regclass;
+fields conname@pg_constraint.2:19:64:-1,conindid:2205:4:-1
+row ri_t_a_not_null,-
+row ri_t_pkey,ri_t_pkey
+SELECT 2
+> REINDEX INDEX ri_t;
+ERROR 42809 "ri_t" is not an index
+> REINDEX TABLE ri_b;
+ERROR 42809 "ri_b" is not a table or materialized view
+> REINDEX TABLE ri_nope;
+ERROR 42P01 relation "ri_nope" does not exist
+> REINDEX INDEX ri_nope;
+ERROR 42P01 relation "ri_nope" does not exist
+> REINDEX INDEX nosuch.ri_nope;
+ERROR 3F000 schema "nosuch" does not exist
+> REINDEX (foo) TABLE ri_t;
+ERROR 42601 unrecognized REINDEX option "foo" at 10
+> REINDEX (VERBOSE false, CONCURRENTLY false) TABLE ri_t;
+REINDEX
+> REINDEX (TABLESPACE pg_default) TABLE ri_t;
+REINDEX
+> REINDEX (TABLESPACE nosuch) TABLE ri_t;
+ERROR 42704 tablespace "nosuch" does not exist
+> CREATE VIEW ri_v AS SELECT 1 AS x;
+CREATE VIEW
+> REINDEX TABLE ri_v;
+ERROR 42809 "ri_v" is not a table or materialized view
+> CREATE SEQUENCE ri_s;
+CREATE SEQUENCE
+> REINDEX TABLE ri_s;
+ERROR 42809 "ri_s" is not a table or materialized view
+> REINDEX INDEX ri_s;
+ERROR 42809 "ri_s" is not an index
+> CREATE TABLE ri_p (a int) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE ri_p1 PARTITION OF ri_p FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> CREATE INDEX ri_pi ON ri_p (a);
+CREATE INDEX
+> REINDEX TABLE ri_p;
+REINDEX
+> REINDEX INDEX ri_pi;
+REINDEX
+> REINDEX TABLE CONCURRENTLY ri_p;
+REINDEX
+> REINDEX INDEX CONCURRENTLY ri_pi;
+REINDEX
+> BEGIN;
+BEGIN
+> REINDEX TABLE ri_p;
+ERROR 25001 REINDEX TABLE cannot run inside a transaction block (while reindexing partitioned table "public.ri_p")
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> REINDEX INDEX ri_pi;
+ERROR 25001 REINDEX INDEX cannot run inside a transaction block (while reindexing partitioned index "public.ri_pi")
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> REINDEX TABLE CONCURRENTLY ri_t;
+ERROR 25001 REINDEX CONCURRENTLY cannot run inside a transaction block
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> REINDEX TABLE ri_t;
+REINDEX
+> REINDEX INDEX ri_b;
+REINDEX
+> COMMIT;
+COMMIT
+> BEGIN;
+BEGIN
+> REINDEX SCHEMA public;
+ERROR 25001 REINDEX SCHEMA cannot run inside a transaction block
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> REINDEX DATABASE;
+ERROR 25001 REINDEX DATABASE cannot run inside a transaction block
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> REINDEX SYSTEM;
+ERROR 25001 REINDEX SYSTEM cannot run inside a transaction block
+> ROLLBACK;
+ROLLBACK
+> REINDEX TABLE pg_class;
+REINDEX
+> REINDEX TABLE CONCURRENTLY pg_class;
+ERROR 0A000 cannot reindex system catalogs concurrently
+> REINDEX INDEX CONCURRENTLY pg_class_oid_index;
+ERROR 0A000 cannot reindex system catalogs concurrently
+> REINDEX SYSTEM CONCURRENTLY;
+ERROR 0A000 cannot reindex system catalogs concurrently
+> REINDEX (CONCURRENTLY) SYSTEM;
+ERROR 0A000 cannot reindex system catalogs concurrently
+> REINDEX SCHEMA CONCURRENTLY pg_catalog;
+WARNING 0A000 cannot reindex system catalogs concurrently, skipping all
+REINDEX
+> REINDEX DATABASE not_current_database;
+ERROR 0A000 can only reindex the currently open database
+> REINDEX SCHEMA ri_nosuch;
+ERROR 3F000 schema "ri_nosuch" does not exist
+> REINDEX SCHEMA public;
+REINDEX
+> REINDEX (VERBOSE) INDEX ri_b;
+INFO 00000 index "ri_b" was reindexed
+DETAIL CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+REINDEX
+> CREATE SCHEMA ri_vs;
+CREATE SCHEMA
+> CREATE TABLE ri_vs.t1 (a int PRIMARY KEY, c int UNIQUE);
+CREATE TABLE
+> CREATE TABLE ri_vs.t2 (a int);
+CREATE TABLE
+> CREATE TABLE ri_vs.t3 (a int PRIMARY KEY);
+CREATE TABLE
+> REINDEX (VERBOSE) SCHEMA ri_vs;
+INFO 00000 index "t1_pkey" was reindexed
+DETAIL CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+INFO 00000 index "t1_c_key" was reindexed
+DETAIL CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+INFO 00000 table "ri_vs.t1" was reindexed
+INFO 00000 index "t3_pkey" was reindexed
+DETAIL CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+INFO 00000 table "ri_vs.t3" was reindexed
+REINDEX
+> REINDEX (VERBOSE) TABLE ri_vs.t1;
+INFO 00000 index "t1_pkey" was reindexed
+DETAIL CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+INFO 00000 index "t1_c_key" was reindexed
+DETAIL CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+REINDEX
+> REINDEX (VERBOSE) TABLE ri_vs.t2;
+NOTICE 00000 table "t2" has no indexes to reindex
+REINDEX
+> REINDEX (VERBOSE, CONCURRENTLY) TABLE ri_vs.t1;
+INFO 00000 index "ri_vs.t1_pkey" was reindexed
+INFO 00000 index "ri_vs.t1_c_key" was reindexed
+INFO 00000 table "ri_vs.t1" was reindexed
+DETAIL CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s.
+REINDEX
+> REINDEX (VERBOSE, CONCURRENTLY) INDEX ri_vs.t3_pkey;
+INFO 00000 index "ri_vs.t3_pkey" was reindexed
+DETAIL CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s.
+REINDEX
+> REINDEX (VERBOSE) TABLE ri_p;
+INFO 00000 index "ri_p1_a_idx" was reindexed
+DETAIL CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+INFO 00000 table "public.ri_p1" was reindexed
+REINDEX
+> REINDEX (VERBOSE) INDEX ri_pi;
+INFO 00000 index "ri_p1_a_idx" was reindexed
+DETAIL CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+REINDEX
+> REINDEX (VERBOSE, CONCURRENTLY) TABLE ri_p;
+INFO 00000 index "public.ri_p1_a_idx" was reindexed
+INFO 00000 table "public.ri_p1" was reindexed
+DETAIL CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s.
+REINDEX
+> REINDEX (VERBOSE, CONCURRENTLY) INDEX ri_pi;
+INFO 00000 index "public.ri_p1_a_idx" was reindexed
+DETAIL CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s.
+REINDEX
+> REINDEX (VERBOSE false) TABLE ri_vs.t3;
+REINDEX
+> REINDEX (CONCURRENTLY 'x') TABLE ri_vs.t3;
+ERROR 42601 concurrently requires a Boolean value
+> DROP SCHEMA ri_vs CASCADE;
+NOTICE 00000 drop cascades to 3 other objects
+DETAIL drop cascades to table ri_vs.t1
+drop cascades to table ri_vs.t2
+drop cascades to table ri_vs.t3
+DROP SCHEMA
+> CREATE SCHEMA ri_empty;
+CREATE SCHEMA
+> REINDEX SCHEMA ri_empty;
+REINDEX
+> REINDEX SCHEMA CONCURRENTLY ri_empty;
+REINDEX
+> CREATE MATERIALIZED VIEW ri_mv AS SELECT 1 AS x;
+SELECT 1
+> CREATE INDEX ri_mvi ON ri_mv (x);
+CREATE INDEX
+> REINDEX TABLE ri_mv;
+REINDEX
+> REINDEX TABLE CONCURRENTLY ri_mv;
+REINDEX
+> CREATE TEMP TABLE ri_tmp (a int PRIMARY KEY);
+CREATE TABLE
+> REINDEX TABLE CONCURRENTLY ri_tmp;
+REINDEX
+> REINDEX INDEX CONCURRENTLY ri_tmp_pkey;
+REINDEX
+> CREATE ROLE regress_ri_user;
+CREATE ROLE
+> SET ROLE regress_ri_user;
+SET
+is_superuser=off
+> REINDEX TABLE ri_t;
+ERROR 42501 permission denied for table ri_t
+> REINDEX INDEX ri_b;
+ERROR 42501 permission denied for index ri_b
+> REINDEX SCHEMA public;
+ERROR 42501 must be owner of schema public
+> RESET ROLE;
+RESET
+is_superuser=on
+> GRANT MAINTAIN ON ri_t TO regress_ri_user;
+GRANT
+> SET ROLE regress_ri_user;
+SET
+is_superuser=off
+> REINDEX TABLE ri_t;
+REINDEX
+> REINDEX INDEX ri_b;
+REINDEX
+> RESET ROLE;
+RESET
+is_superuser=on
+> REVOKE MAINTAIN ON ri_t FROM regress_ri_user;
+REVOKE
+> GRANT pg_maintain TO regress_ri_user;
+GRANT ROLE
+> SET ROLE regress_ri_user;
+SET
+is_superuser=off
+> REINDEX TABLE ri_t;
+REINDEX
+> REINDEX SCHEMA public;
+REINDEX
+> RESET ROLE;
+RESET
+is_superuser=on
+> REVOKE pg_maintain FROM regress_ri_user;
+REVOKE ROLE
+> CREATE FUNCTION ri_f() RETURNS void LANGUAGE plpgsql AS $$ BEGIN REINDEX SCHEMA public; END $$;
+CREATE FUNCTION
+> SELECT ri_f();
+fields ri_f:2278:4:-1
+ERROR 25001 REINDEX SCHEMA cannot be executed from a function or procedure (SQL statement "REINDEX SCHEMA public"
+PL/pgSQL function ri_f() line 1 at SQL statement)
+> CREATE FUNCTION ri_g() RETURNS void LANGUAGE plpgsql AS $$ BEGIN REINDEX TABLE ri_t; END $$;
+CREATE FUNCTION
+> SELECT ri_g();
+fields ri_g:2278:4:-1
+row 
+SELECT 1
+> DROP FUNCTION ri_f, ri_g;
+DROP FUNCTION
+> DROP ROLE regress_ri_user;
+DROP ROLE
+> DROP TABLE ri_t, ri_none, ri_files, ri_p, ri_tmp;
+DROP TABLE
+> DROP VIEW ri_v;
+DROP VIEW
+> DROP SEQUENCE ri_s;
+DROP SEQUENCE
+> DROP MATERIALIZED VIEW ri_mv;
+DROP MATERIALIZED VIEW
+> DROP SCHEMA ri_empty;
+DROP SCHEMA

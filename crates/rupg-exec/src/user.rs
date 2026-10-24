@@ -525,7 +525,7 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                             | RelKind::Partitioned
                             | RelKind::PartitionedIndex,
                         ) => 0,
-                        (None, _) => rel.oid,
+                        (None, _) => rel.file,
                     }),
                 )
                 .set("reltablespace", oid(0))

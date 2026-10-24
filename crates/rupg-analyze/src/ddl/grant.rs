@@ -1000,6 +1000,17 @@ impl Definer<'_, '_> {
         ))
     }
 
+    /// `pg_class_aclcheck` of `MAINTAIN` on a relation of the catalog or built in: true when the role may run `REINDEX` and the other statements of upkeep on it. A member of `pg_maintain` has the privilege on each relation.
+    pub(super) fn may_maintain(&self, relation: u32) -> bool {
+        let roles = rupg_pgcatalog::roles::current();
+        self.pg_aclmask(&roles, Object::new(Kind::Table, relation), self.user, MAINTAIN) != 0
+    }
+
+    /// `has_privs_of_role` of the role of the statement for `pg_maintain`.
+    pub(super) fn has_pg_maintain(&self) -> bool {
+        rupg_pgcatalog::roles::current().has_privs_of_role(self.user, PG_MAINTAIN)
+    }
+
     /// `object_aclcheck` of `EXECUTE` on a function, with `aclcheck_error`. `name` is the name of the function as the statement gives it.
     pub(super) fn check_function_execute(&self, function: u32, name: &str) -> Result<()> {
         let roles = rupg_pgcatalog::roles::current();

@@ -11,7 +11,7 @@ use rupg_analyze::Params;
 use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
 use rupg_func::BackendState;
-use rupg_sql::nodes::Node;
+use rupg_sql::nodes::{Node, ReindexObjectType};
 use rupg_types::{Array, Value, oid};
 use rupg_wire::{Bind, CommandTag, Field, Oids, OutBuf, ProtocolError, Target};
 
@@ -631,6 +631,20 @@ impl Connection {
                 let result = self.drop_tablespace(stmt, &mut notices);
                 self.notices(&mut notices, &statement.text, &[], out);
                 immediate_commit = true;
+                result.map_err(|error| Failed {
+                    position: error.position().map(|at| character_position(&statement.text, at)),
+                    error,
+                })?
+            } else if let Node::ReindexStmt(stmt) = node {
+                let mut notices = Vec::new();
+                let result = self.reindex(node, stmt, &statement.text, &mut notices, false);
+                self.notices(&mut notices, &statement.text, &[], out);
+                immediate_commit = !matches!(
+                    stmt.kind,
+                    ReindexObjectType::REINDEX_OBJECT_INDEX
+                        | ReindexObjectType::REINDEX_OBJECT_TABLE
+                ) || rupg_analyze::reindex_options(stmt)
+                    .is_ok_and(|o| o.concurrently);
                 result.map_err(|error| Failed {
                     position: error.position().map(|at| character_position(&statement.text, at)),
                     error,

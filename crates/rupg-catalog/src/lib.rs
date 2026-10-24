@@ -313,6 +313,8 @@ pub struct SequenceInfo {
 pub struct Relation {
     /// The OID.
     pub oid: u32,
+    /// `relfilenode` of a relation with storage other than a sequence: the OID of the relation, and a new OID after a rebuild such as `REINDEX`. A sequence has its file in [`SequenceInfo::file`].
+    pub file: u32,
     /// The name.
     pub name: String,
     /// The OID of the schema.
@@ -2344,6 +2346,7 @@ impl Catalog {
             oid,
             Relation {
                 oid,
+                file: oid,
                 name: new.name,
                 namespace: new.namespace,
                 kind,
@@ -3019,6 +3022,13 @@ impl Catalog {
         Ok(oid)
     }
 
+    /// `RelationSetNewRelfilenumber`: the relation gets a new file, with a new OID, as `REINDEX` gives a new file to each index that it builds again.
+    pub fn set_new_file(&mut self, oid: u32) -> Result<()> {
+        let file = self.new_oid();
+        self.relation_mut(oid)?.file = file;
+        Ok(())
+    }
+
     /// Sets `relacl` of a relation.
     pub fn set_acl(&mut self, oid: u32, acl: Option<Vec<String>>) -> Result<()> {
         self.relation_mut(oid)?.acl = acl;
@@ -3037,6 +3047,7 @@ impl Catalog {
             oid,
             Relation {
                 oid,
+                file: oid,
                 name: new.name,
                 namespace: new.namespace,
                 kind: RelKind::Sequence,
@@ -3467,6 +3478,7 @@ impl Catalog {
             oid,
             Relation {
                 oid,
+                file: oid,
                 name: name.clone(),
                 namespace,
                 kind: if partitioned { RelKind::PartitionedIndex } else { RelKind::Index },
@@ -3738,6 +3750,7 @@ impl Catalog {
             oid,
             Relation {
                 oid,
+                file: oid,
                 name: name.clone(),
                 namespace,
                 kind: RelKind::Toast,
@@ -3784,6 +3797,7 @@ impl Catalog {
             index,
             Relation {
                 oid: index,
+                file: index,
                 name: format!("{name}_index"),
                 namespace,
                 kind: RelKind::Index,

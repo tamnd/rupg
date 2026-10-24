@@ -571,6 +571,8 @@ impl Connection {
             Err(self.prevent_in_call("CREATE DATABASE"))
         } else if let Node::DropdbStmt(_) = node {
             Err(self.prevent_in_call("DROP DATABASE"))
+        } else if let Node::ReindexStmt(stmt) = node {
+            self.reindex(node, stmt, text, &mut notices, true).map(|_| 0)
         } else if let Node::CreateTableSpaceStmt(_) = node {
             Err(self.prevent_in_call("CREATE TABLESPACE"))
         } else if let Node::DropTableSpaceStmt(_) = node {
@@ -583,7 +585,7 @@ impl Connection {
     }
 
     /// `PreventInTransactionBlock` for the statement `statement` in a call, which is not at the top level.
-    fn prevent_in_call(&self, statement: &str) -> Error {
+    pub(super) fn prevent_in_call(&self, statement: &str) -> Error {
         let place = if self.transaction.in_block() {
             "cannot run inside a transaction block"
         } else if self.calls.subs.get() > 0 {
