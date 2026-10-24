@@ -4323,6 +4323,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/cic.test")));
     }
 
+    /// `UPDATE ... SET (a, b) = (SELECT ...)`: a correlated and an uncorrelated subquery, no row, too many rows, the number of columns, the types, `RETURNING`, a volatile function that runs once for each row, `EXPLAIN`, `ON CONFLICT DO UPDATE`, `MERGE`, a partitioned table, a view and a function. `connection/multiset.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn multiset() {
+        big_stack(|| script(include_str!("connection/multiset.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {

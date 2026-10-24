@@ -325,7 +325,7 @@ impl Texts for PlanTexts<'_, '_> {
 }
 
 impl Deparser<'_> {
-    /// `get_rule_expr` for a `SubPlan`: the name of the subplan of a subquery, or of the `ANY` that runs in the place of `EXISTS`, with the test of `ANY`, `ALL` or a comparison of rows, where each column of the subquery shows as `(SubPlan any_1).col1`. The value of an `InitPlan` shows as `(InitPlan expr_1).col1`, as `get_parameter` shows the parameter that the `InitPlan` sets.
+    /// `get_rule_expr` for a `SubPlan`: the name of the subplan of a subquery, or of the `ANY` that runs in the place of `EXISTS`, with the test of `ANY`, `ALL` or a comparison of rows, where each column of the subquery shows as `(SubPlan any_1).col1`. A column of `SET (a, b) = (SELECT ...)` shows as `(SubPlan multiexpr_1).col1` or `(InitPlan multiexpr_1).col1`. The value of an `InitPlan` shows as `(InitPlan expr_1).col1`, as `get_parameter` shows the parameter that the `InitPlan` sets.
     pub(super) fn subplan_link(&mut self, sub: &SubLink, name: &SubName) -> Result<()> {
         let sub = match &sub.alternative {
             Some(any) if name.alternative => &**any,
@@ -336,6 +336,10 @@ impl Deparser<'_> {
             (false, true) => format!("hashed SubPlan {}", name.name),
             (false, false) => format!("SubPlan {}", name.name),
         };
+        if let SubLinkKind::Multi { column, .. } = sub.kind {
+            self.buf.push_str(&format!("({plan}).col{}", column + 1));
+            return Ok(());
+        }
         if name.init {
             match &sub.test {
                 Some(test) => self.subplan_test(test, &plan)?,
@@ -348,7 +352,7 @@ impl Deparser<'_> {
             SubLinkKind::All => "(ALL ",
             SubLinkKind::Any => "(ANY ",
             SubLinkKind::Array => "ARRAY(",
-            SubLinkKind::RowCompare | SubLinkKind::Expr => "(",
+            SubLinkKind::RowCompare | SubLinkKind::Expr | SubLinkKind::Multi { .. } => "(",
         });
         match &sub.test {
             Some(test) => self.subplan_test(test, &plan)?,

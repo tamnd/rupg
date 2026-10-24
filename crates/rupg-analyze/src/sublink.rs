@@ -72,6 +72,9 @@ impl Analyzer<'_> {
             query.targets.iter().filter(|t| !t.junk).map(|t| (t.expr.ty, t.expr.typmod)).collect();
         let (ty, typmod, test) = match kind {
             SubLinkKind::Exists => (oid::BOOL, -1, None),
+            SubLinkKind::Multi { .. } => {
+                return Err(Error::internal("a multiple-column subquery outside of SET"));
+            }
             SubLinkKind::Expr | SubLinkKind::Array => {
                 let [(ty, typmod)] = columns[..] else {
                     return Err(Error::new(

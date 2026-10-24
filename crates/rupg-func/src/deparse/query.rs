@@ -1353,7 +1353,7 @@ impl Deparser<'_> {
                 self.buf.push_str(&format!(" {opname} "));
                 true
             }
-            SubLinkKind::Expr | SubLinkKind::Array => false,
+            SubLinkKind::Expr | SubLinkKind::Array | SubLinkKind::Multi { .. } => false,
         };
         if paren {
             self.buf.push('(');

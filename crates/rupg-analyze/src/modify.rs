@@ -11,7 +11,7 @@ use rupg_types::{Value, oid};
 use crate::Analyzer;
 use crate::agg::Kind;
 use crate::coerce::AtOpt;
-use crate::expr::{Expr, ExprKind, Var};
+use crate::expr::{Expr, ExprKind, SubLink, SubLinkKind, Var};
 use crate::from::{Column, FromItem, TABLE_OID_ATTNUM};
 use crate::insert::{
     Generated, Item, Write, WriteKind, default_part, merge_parts, not_yet, targets, with_checks,
@@ -414,6 +414,8 @@ impl Analyzer<'_> {
     ) -> Result<Vec<(&'s ResTarget, Item)>> {
         let mut items = Vec::with_capacity(list.len());
         let mut fields: Vec<Option<Item>> = Vec::new();
+        // The number of the sub-SELECT items so far, which gives each one its ID, as `subLinkId`.
+        let mut subqueries = 0;
         for node in list {
             let Some(Node::ResTarget(rt)) = node else {
                 return Err(Error::internal("a SET item that is not ResTarget"));
@@ -421,7 +423,11 @@ impl Analyzer<'_> {
             let item = match &rt.val {
                 Some(Node::MultiAssignRef(multi)) => {
                     if multi.colno == 1 {
-                        fields = self.multi_source(multi.source.as_ref(), multi.ncolumns)?;
+                        fields = self.multi_source(
+                            multi.source.as_ref(),
+                            multi.ncolumns,
+                            &mut subqueries,
+                        )?;
                     }
                     let at = usize::try_from(multi.colno - 1).unwrap_or(usize::MAX);
                     fields
@@ -439,13 +445,48 @@ impl Analyzer<'_> {
         Ok(items)
     }
 
-    /// `transformMultiAssignRef`: the fields of the source of `SET (a, b) = ...`. A `ROW` expression gives its fields, which can be `DEFAULT`.
-    fn multi_source(&mut self, source: Option<&Node>, ncolumns: i32) -> Result<Vec<Option<Item>>> {
+    /// `transformMultiAssignRef`: the fields of the source of `SET (a, b) = ...`. A `ROW` expression gives its fields, which can be `DEFAULT`. A sub-SELECT gives a [`SubLinkKind::Multi`] for each of its columns, with the ID that follows `subqueries`.
+    fn multi_source(
+        &mut self,
+        source: Option<&Node>,
+        ncolumns: i32,
+        subqueries: &mut u32,
+    ) -> Result<Vec<Option<Item>>> {
         let at = raw_location(source);
         match source {
             Some(Node::SubLink(link)) if link.subLinkType == SubLinkType::EXPR_SUBLINK => {
-                Err(not_yet("a sub-SELECT as the source of a multiple-column UPDATE item")
-                    .at_opt(at))
+                let query =
+                    self.with_kind(Kind::UpdateSource, |a| a.sub_analyze(link.subselect.as_ref()))?;
+                let columns: Vec<&Expr> =
+                    query.targets.iter().filter(|t| !t.junk).map(|t| &t.expr).collect();
+                if usize::try_from(ncolumns).ok() != Some(columns.len()) {
+                    return Err(Error::new(
+                        SqlState::SYNTAX_ERROR,
+                        "number of columns does not match number of values",
+                    )
+                    .at_opt(place(link.location)));
+                }
+                *subqueries += 1;
+                let id = *subqueries;
+                let fields = columns
+                    .iter()
+                    .enumerate()
+                    .map(|(column, expr)| {
+                        let sub = SubLink {
+                            kind: SubLinkKind::Multi { id, column },
+                            test: None,
+                            query: query.clone(),
+                            alternative: None,
+                        };
+                        Some(Item::Expr(Expr {
+                            kind: ExprKind::SubLink(Box::new(sub)),
+                            ty: expr.ty,
+                            typmod: expr.typmod,
+                            location: expr.location,
+                        }))
+                    })
+                    .collect();
+                Ok(fields)
             }
             Some(Node::RowExpr(row)) => {
                 if usize::try_from(ncolumns).ok() != Some(row.args.len()) {

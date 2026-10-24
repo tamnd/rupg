@@ -233,6 +233,8 @@ pub enum SubLinkKind {
     Array,
     /// `(a, b) op (SELECT ...)`, which gives the result of the test on the one row.
     RowCompare,
+    /// `SET (a, b) = (SELECT ...)` of `UPDATE`, as `MULTIEXPR_SUBLINK` with its `PARAM_MULTIEXPR`: the value of the column `column`, from 0, of the one row. Each column of the item has a copy of the subquery with the same `id`, and the subquery runs once for each row.
+    Multi { id: u32, column: usize },
 }
 
 /// A column of a relation of `FROM`.
