@@ -124,6 +124,8 @@ struct Options {
     src_at: Option<usize>,
     /// The settings of the clauses `SET`, as `proconfig` keeps them.
     config: Vec<String>,
+    /// True for `SECURITY DEFINER`.
+    secdef: bool,
 }
 
 /// `update_proconfig_value`: the settings of a function after a clause `SET` or `RESET`. `GUCArrayAdd` puts a new value in place of the value of the same parameter, and `GUCArrayDelete` and `RESET ALL` remove values.
@@ -198,6 +200,7 @@ fn options(stmt: &CreateFunctionStmt, env: &dyn Env) -> Result<Options> {
         link: None,
         src_at: None,
         config: Vec::new(),
+        secdef: false,
     };
     for def in stmt.options.iter().flatten() {
         let Node::DefElem(def) = def else { continue };
@@ -256,8 +259,7 @@ fn options(stmt: &CreateFunctionStmt, env: &dyn Env) -> Result<Options> {
                 Some(Node::VariableSetStmt(set)) => update_config(env, &mut out.config, set)?,
                 _ => return Err(bad()),
             },
-            // `SECURITY INVOKER` is the default.
-            ("security", _) if matches!(def.arg, Some(Node::Boolean(false))) => {}
+            ("security", _) => out.secdef = matches!(def.arg, Some(Node::Boolean(true))),
             ("as", _) => match option_list(def).as_deref() {
                 // The grammar gives one item, or two for a function in C.
                 Some([src, rest @ ..]) if rest.len() < 2 => {
@@ -718,6 +720,7 @@ fn builtin_function(oid: u32) -> Option<Function> {
         bin: String::new(),
         body: Some(FunctionBody { text: text.into(), path: vec![crate::PG_CATALOG_NAMESPACE] }),
         config: Vec::new(),
+        secdef: false,
     })
 }
 
@@ -908,6 +911,7 @@ impl Definer<'_, '_> {
             body: (!untrusted)
                 .then(|| FunctionBody { text: text.to_string(), path: self.an.path.clone() }),
             config: options.config.clone(),
+            secdef: options.secdef,
         };
         // `function_parse_error_transpose`: an error in a body in a string has its place in the query text.
         let transpose = |error: Error| match (&options.src, error.position()) {

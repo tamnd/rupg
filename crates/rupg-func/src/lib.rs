@@ -74,6 +74,7 @@ mod updatable;
 mod xml;
 mod zones;
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
@@ -211,8 +212,8 @@ pub trait Session {
     fn statement_start(&self) -> i64;
     /// The time now in microseconds since 2000-01-01 UTC.
     fn clock(&self) -> i64;
-    /// The current user.
-    fn user(&self) -> &str;
+    /// The current user, which is the owner during a call of a `SECURITY DEFINER` function.
+    fn user(&self) -> Cow<'_, str>;
     /// The session user.
     fn session_user(&self) -> &str;
     /// `SYSTEM_USER`: the method of the authentication and the identity that it checked, as `auth_method:authn_id`, or `None` when the method checked no identity, as for `trust`.
@@ -274,17 +275,17 @@ pub trait Session {
         let _ = (name, text);
         None
     }
-    /// `fmgr_security_definer` for a function with settings: `ProcessGUCArray` with `GUC_ACTION_SAVE` gives the settings of `proconfig`, each one as `name=value`, until [`Session::end_function_settings`]. A session with no settings does nothing.
+    /// `fmgr_security_definer` for a function with settings or with `SECURITY DEFINER`: `definer`, the owner of a `SECURITY DEFINER` function, is the current user, and `ProcessGUCArray` with `GUC_ACTION_SAVE` gives the settings of `proconfig`, each one as `name=value`, until [`Session::end_function_call`]. A session with no settings does nothing.
     ///
     /// # Errors
     ///
     /// The errors of the names and of the values.
-    fn start_function_settings(&self, config: &[String]) -> Result<()> {
-        let _ = config;
+    fn start_function_call(&self, config: &[String], definer: Option<u32>) -> Result<()> {
+        let _ = (config, definer);
         Ok(())
     }
-    /// `AtEOXact_GUC` at the end of the call of [`Session::start_function_settings`]: the settings go back to their values from before the call, other than the ones that a `SET` in the call changed.
-    fn end_function_settings(&self) {}
+    /// The end of the call of [`Session::start_function_call`]: the current user from before the call comes back, and `AtEOXact_GUC` gives the settings their values from before the call, other than the ones that a `SET` in the call changed.
+    fn end_function_call(&self) {}
     /// `CHECK_FOR_INTERRUPTS`: the check for a cancel of the statement, which a long loop of the executor, such as the loop of a recursive query, does at each step. A session with no server has no cancel.
     ///
     /// # Errors

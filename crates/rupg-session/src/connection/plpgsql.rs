@@ -362,9 +362,11 @@ impl Connection {
         ret: u32,
         args: &[Value],
     ) -> rupg_common::Result<Vec<Value>> {
-        // `ExecuteCallStmt`: only a procedure that `CALL` runs can end the transaction, and not one with settings.
-        let procedure =
-            outer.catalog.function(func).is_some_and(|f| f.kind == b'p' && f.config.is_empty());
+        // `ExecuteCallStmt`: only a procedure that `CALL` runs can end the transaction, and not one with settings or with `SECURITY DEFINER`.
+        let procedure = outer
+            .catalog
+            .function(func)
+            .is_some_and(|f| f.kind == b'p' && f.config.is_empty() && !f.secdef);
         let atomic = !(procedure && self.calls.nonatomic.get());
         // The queries of the function do not see the transition tables of a trigger that called it.
         let transition = self.transition.take();
@@ -503,15 +505,17 @@ impl Connection {
         // `SPI_register_trigger_data`: the queries of the function read the transition tables of the trigger.
         let outer = self.transition.replace(transition);
         let reader = self.reader();
-        // `fmgr_security_definer`: the settings of the function apply during the call.
-        let config = reader.catalog.function(call.trigger.function).map(|f| f.config.clone());
-        let config = config.unwrap_or_default();
-        let result = if config.is_empty() {
+        // `fmgr_security_definer`: the function runs as its owner when it has `SECURITY DEFINER`, and its settings apply during the call.
+        let (config, definer) = reader
+            .catalog
+            .function(call.trigger.function)
+            .map_or((Vec::new(), None), |f| (f.config.clone(), f.secdef.then_some(f.owner)));
+        let result = if config.is_empty() && definer.is_none() {
             rupg_plpgsql::trigger(&PlSpi::new(self, &reader, true), call)
         } else {
-            self.settings.borrow_mut().push_function(&config).and_then(|()| {
+            reader.start_function_call(&config, definer).and_then(|()| {
                 let result = rupg_plpgsql::trigger(&PlSpi::new(self, &reader, true), call);
-                self.settings.borrow_mut().pop_function();
+                reader.end_function_call();
                 result
             })
         };

@@ -161,8 +161,7 @@ impl Definer<'_, '_> {
                     }
                     _ => return Err(Error::internal("a SET of ALTER FUNCTION with no setting")),
                 },
-                // `SECURITY INVOKER` is the default.
-                ("security", _) if matches!(def.arg, Some(Node::Boolean(false))) => {}
+                ("security", _) => new.secdef = matches!(def.arg, Some(Node::Boolean(true))),
                 ("cost", _) => new.cost = whole_number(def, "COST")?,
                 ("rows", _) => {
                     new.rows = whole_number(def, "ROWS")?;

@@ -562,6 +562,11 @@ impl Connection {
         self.session_user = session;
     }
 
+    /// `GetUserId`: the OID of the current user, which is the owner of the function in a call of a `SECURITY DEFINER` function.
+    fn current_role(&self) -> u32 {
+        self.settings.borrow().definer().map_or(self.role, |(role, _)| *role)
+    }
+
     /// What a statement reads of the session.
     fn reader(&self) -> Reader<'_> {
         self.reader_on(self.catalog())
@@ -1076,7 +1081,7 @@ impl Connection {
 
     /// Runs a statement that defines an object. The statement takes the lock of the store, which the transaction holds until it ends. After an error the changes of the statement go, but its OIDs stay used.
     fn define(&self, node: &Node, text: &str, notices: &mut Vec<Notice>) -> Result<Done, Error> {
-        self.define_as(node, text, notices, self.role)
+        self.define_as(node, text, notices, self.current_role())
     }
 
     /// [`Connection::define`] as the role `role`, which owns the new objects.
@@ -1409,7 +1414,7 @@ impl Connection {
         let mut allowed =
             |relid, role| rupg_func::lock_table_allowed(relid, role, stmt.mode, &reader);
         let mut take = |relid| reader.lock_relation(relid, mode, !stmt.nowait);
-        rupg_analyze::lock_table(stmt, &reader, self.role, &mut allowed, &mut take)?;
+        rupg_analyze::lock_table(stmt, &reader, self.current_role(), &mut allowed, &mut take)?;
         // `LogAccessExclusiveLockPrepare`: the transaction gets an ID for the log of an `ACCESS EXCLUSIVE` lock.
         if mode == 8 {
             self.transaction_id(true);
@@ -6222,6 +6227,12 @@ mod tests {
     #[test]
     fn fnset() {
         big_stack(|| script(include_str!("connection/fnset.test")));
+    }
+
+    /// `SECURITY DEFINER`: a call runs as the owner of the function, for the privileges, `current_user` and the owner of a new table, and `SET ROLE` cannot run in the call. `connection/secdef.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn secdef() {
+        big_stack(|| script(include_str!("connection/secdef.test")));
     }
 
     /// `CREATE TABLE ... (LIKE ...)`, from `create_table_like.sql` of the PostgreSQL tests: the columns and the not-null constraints of the other relation, the options `INCLUDING DEFAULTS`, `GENERATED`, `IDENTITY`, `CONSTRAINTS`, `INDEXES`, `STORAGE`, `COMMENTS` and `ALL`, `LIKE` with `INHERITS`, and `LIKE` of a view, a composite type and a sequence. The script has catalog queries in place of `\d`, and it does not have the parts for virtual generated columns, `NOT ENFORCED`, `CREATE STATISTICS` and foreign tables. `connection/create_table_like.test` is the output of PostgreSQL 19 for the same script in a new database.

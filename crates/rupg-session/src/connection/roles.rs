@@ -412,7 +412,7 @@ impl Connection {
                 role_oid(roles, spec.rolename.as_deref().unwrap_or_default())
             }
             RoleSpecType::ROLESPEC_PUBLIC => Err(does_not_exist("public")),
-            _ => Ok(self.role),
+            _ => Ok(self.current_role()),
         }
     }
 
@@ -421,7 +421,7 @@ impl Connection {
         match spec.roletype {
             RoleSpecType::ROLESPEC_CSTRING => spec.rolename.as_deref().unwrap_or_default().into(),
             RoleSpecType::ROLESPEC_PUBLIC => "public".into(),
-            _ => role_name(roles, self.role),
+            _ => role_name(roles, self.current_role()),
         }
     }
 
@@ -435,12 +435,12 @@ impl Connection {
 
     /// `has_createrole_privilege` for the current user.
     fn createrole(&self, roles: &Roles) -> bool {
-        roles.attrs(self.role).is_some_and(|a| a.superuser || a.createrole)
+        roles.attrs(self.current_role()).is_some_and(|a| a.superuser || a.createrole)
     }
 
     /// True when the current user is a superuser or has the attribute that `pick` gives.
     fn has_attr(&self, roles: &Roles, pick: fn(&Attrs) -> bool) -> bool {
-        roles.attrs(self.role).is_some_and(|a| a.superuser || pick(&a))
+        roles.attrs(self.current_role()).is_some_and(|a| a.superuser || pick(&a))
     }
 
     /// `encrypt_password` with `password_encryption`, and the check of `CreateRole` and `AlterRole` for an empty password. `None` is a password to clear.
@@ -528,7 +528,7 @@ impl Connection {
         attrs.replication = flag(options.replication)?.unwrap_or(attrs.replication);
         let connlimit = connection_limit(options.connlimit)?.unwrap_or(-1);
         attrs.bypassrls = flag(options.bypassrls)?.unwrap_or(attrs.bypassrls);
-        let current = self.role;
+        let current = self.current_role();
         if !work.superuser(current) {
             let only = |attr: &str| {
                 denied(
@@ -671,7 +671,7 @@ impl Connection {
         let connlimit = connection_limit(options.connlimit)?;
         let roleid = self.spec_oid(work, spec)?;
         let rolename = role_name(work, roleid);
-        let current = self.role;
+        let current = self.current_role();
         let superuser = work.superuser(current);
         if !superuser && work.superuser(roleid) {
             return Err(denied(
@@ -824,7 +824,7 @@ impl Connection {
                 "session user cannot be renamed",
             ));
         }
-        if roleid == self.role {
+        if roleid == self.current_role() {
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
                 "current user cannot be renamed",
@@ -847,13 +847,13 @@ impl Connection {
             ));
         }
         if work.superuser(roleid) {
-            if !work.superuser(self.role) {
+            if !work.superuser(self.current_role()) {
                 return Err(denied(
                     "permission denied to rename role",
                     "Only roles with the SUPERUSER attribute may rename roles with the SUPERUSER attribute.".to_string(),
                 ));
             }
-        } else if !self.createrole(work) || !is_admin_of_role(work, self.role, roleid) {
+        } else if !self.createrole(work) || !is_admin_of_role(work, self.current_role(), roleid) {
             return Err(denied(
                 "permission denied to rename role",
                 format!(
@@ -877,7 +877,7 @@ impl Connection {
         stmt: &DropRoleStmt,
         notices: &mut Vec<Notice>,
     ) -> Result<(), Error> {
-        let current = self.role;
+        let current = self.current_role();
         if !self.createrole(work) {
             return Err(denied(
                 "permission denied to drop role",
@@ -1081,7 +1081,7 @@ impl Connection {
             };
             let roleid = role_oid(work, rolename)?;
             self.membership_authorization(work, roleid, stmt.is_grant)?;
-            let current = self.role;
+            let current = self.current_role();
             if stmt.is_grant {
                 self.add_members(
                     work, current, rolename, roleid, &grantees, grantor, options, notices,
@@ -1112,7 +1112,7 @@ impl Connection {
         let (verb, verbs) = if is_grant { ("grant", "grant") } else { ("revoke", "revoke") };
         let message = format!("permission denied to {verb} role \"{name}\"");
         if roles.superuser(roleid) {
-            if !roles.superuser(self.role) {
+            if !roles.superuser(self.current_role()) {
                 return Err(denied(
                     &message,
                     format!(
@@ -1120,7 +1120,7 @@ impl Connection {
                     ),
                 ));
             }
-        } else if !has_admin_privs_of_role(roles, self.role, roleid) {
+        } else if !has_admin_privs_of_role(roles, self.current_role(), roleid) {
             return Err(denied(
                 &message,
                 format!(

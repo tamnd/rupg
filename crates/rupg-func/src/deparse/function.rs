@@ -238,7 +238,7 @@ struct Attributes {
     config: Vec<String>,
 }
 
-/// The attributes of a function of the catalog of the session, or of a built-in function from its static row. rupg has no `SECURITY DEFINER` for a function, so `prosecdef` is false for a function of the session. `proconfig` is null for each built-in function.
+/// The attributes of a function of the catalog of the session, or of a built-in function from its static row. `proconfig` is null for each built-in function.
 fn attributes(proc: &ProcRow, session: &dyn Session) -> Attributes {
     if let Some(f) = session.catalog().and_then(|c| c.function(proc.oid)) {
         return Attributes {
@@ -247,7 +247,7 @@ fn attributes(proc: &ProcRow, session: &dyn Session) -> Attributes {
             support: f.support,
             parallel: f.parallel,
             leakproof: f.leakproof,
-            secdef: false,
+            secdef: f.secdef,
             bin: (!f.bin.is_empty()).then(|| f.bin.clone()),
             src: f.src.clone(),
             sql_body: f.lang == SQL_LANGUAGE && f.src.is_empty() && f.body.is_some(),

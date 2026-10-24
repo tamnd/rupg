@@ -265,7 +265,7 @@ impl Connection {
 
     /// `superuser()` for the role of the session.
     pub(super) fn superuser(&self) -> bool {
-        self.roles().superuser(self.role)
+        self.roles().superuser(self.current_role())
     }
 
     /// `get_role_oid`: the roles of the catalog, and the user of the session, which is the bootstrap superuser when it is not a role of the catalog.
@@ -364,7 +364,7 @@ impl Connection {
 
         let owner = match &owner {
             Some(name) => self.role_named(name)?,
-            None => self.role,
+            None => self.current_role(),
         };
         if !self.superuser() {
             return Err(Error::new(
@@ -380,7 +380,7 @@ impl Connection {
                 format!("template database \"{template_name}\" does not exist"),
             ));
         };
-        if !source.is_template && !self.superuser() && source.owner != self.role {
+        if !source.is_template && !self.superuser() && source.owner != self.current_role() {
             return Err(Error::new(
                 SqlState::INSUFFICIENT_PRIVILEGE,
                 format!("permission denied to copy database \"{template_name}\""),
@@ -660,7 +660,7 @@ impl Connection {
             });
             return Ok(Done::Tag(CommandTag::DropDatabase));
         };
-        if !self.superuser() && row.owner != self.role {
+        if !self.superuser() && row.owner != self.current_role() {
             return Err(Error::new(
                 SqlState::INSUFFICIENT_PRIVILEGE,
                 format!("must be owner of database {name}"),
@@ -696,7 +696,7 @@ impl Connection {
                 format!("database \"{name}\" does not exist"),
             ));
         };
-        if !self.superuser() && row.owner != self.role {
+        if !self.superuser() && row.owner != self.current_role() {
             return Err(Error::new(
                 SqlState::INSUFFICIENT_PRIVILEGE,
                 format!("must be owner of database {name}"),

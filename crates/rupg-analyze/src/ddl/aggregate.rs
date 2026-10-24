@@ -629,6 +629,7 @@ impl Definer<'_, '_> {
             bin: String::new(),
             body: None,
             config: Vec::new(),
+            secdef: false,
         };
         let aggregate = Aggregate {
             function: 0,

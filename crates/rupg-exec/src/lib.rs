@@ -80,18 +80,20 @@ fn runs_body(func: u32) -> bool {
             && rupg_func::set_kernel(func).is_none()
 }
 
-/// `fmgr_security_definer` for a function with settings: `f` runs with the settings of `proconfig` of the function, which go back after it, also after an error. A function with no settings runs `f` alone.
+/// `fmgr_security_definer` for a function with settings or with `SECURITY DEFINER`: `f` runs as the owner of a `SECURITY DEFINER` function and with the settings of `proconfig` of the function, which go back after it, also after an error. Another function runs `f` alone.
 fn with_settings<T>(session: &dyn Session, func: u32, f: impl FnOnce() -> Result<T>) -> Result<T> {
     if func < FIRST_NORMAL_OID {
         return f();
     }
-    let config = match session.catalog().and_then(|c| c.function(func)) {
-        Some(function) if !function.config.is_empty() => function.config.clone(),
+    let (config, definer) = match session.catalog().and_then(|c| c.function(func)) {
+        Some(function) if function.secdef || !function.config.is_empty() => {
+            (function.config.clone(), function.secdef.then_some(function.owner))
+        }
         _ => return f(),
     };
-    session.start_function_settings(&config)?;
+    session.start_function_call(&config, definer)?;
     let result = f();
-    session.end_function_settings();
+    session.end_function_call();
     result
 }
 
