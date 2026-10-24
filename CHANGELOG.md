@@ -12,7 +12,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Fixed
 
-- On macOS and on Linux on arm64, `pg_settings` and `SHOW` give the boot values and the options of PostgreSQL on that host. On macOS, `bgwriter_flush_after` and `checkpoint_flush_after` are 0, `file_extend_method` is `write_zeros`, `wal_sync_method` is `open_datasync` and has the option `fsync_writethrough`, and `recovery_init_sync_method` does not have `syncfs`. On arm64, `timing_clock_source` does not have `tsc`.
+- On macOS and on Linux on arm64, `pg_settings` and `SHOW` give the boot values and the options of PostgreSQL on that host. On macOS, `bgwriter_flush_after` and `checkpoint_flush_after` are 0, `file_extend_method` is `write_zeros`, `wal_sync_method` is `open_datasync` and has the option `fsync_writethrough`, and `recovery_init_sync_method` does not have `syncfs`. On arm64, `timing_clock_source` does not have `tsc` (#670).
 
 ## 0.1.76 (2026-10-24)
 
