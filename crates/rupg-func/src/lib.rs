@@ -11,6 +11,7 @@ mod advisory;
 mod agg;
 mod amutils;
 mod array;
+mod autovacuum;
 mod binary;
 mod bit;
 mod bytea;
