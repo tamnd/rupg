@@ -298,12 +298,12 @@ enum Statements<'s> {
 fn statements<'s>(stmt: &'s CreateFunctionStmt, src: Option<&str>) -> Result<Statements<'s>> {
     match (&stmt.sql_body, src) {
         (Some(Node::ReturnStmt(ret)), None) => Ok(Statements::Return(ret.returnval.as_ref())),
-        (Some(Node::List(outer)), None) => {
-            let Some(Some(Node::List(list))) = outer.first() else {
-                return Err(Error::internal("a BEGIN ATOMIC body that is not a list"));
-            };
-            Ok(Statements::Atomic(list.iter().flatten().collect()))
-        }
+        (Some(Node::List(outer)), None) => match outer.first() {
+            Some(Some(Node::List(list))) => Ok(Statements::Atomic(list.iter().flatten().collect())),
+            // `BEGIN ATOMIC END` gives an empty list, and the tree keeps an empty list as no node.
+            Some(None) | None => Ok(Statements::Atomic(Vec::new())),
+            Some(Some(_)) => Err(Error::internal("a BEGIN ATOMIC body that is not a list")),
+        },
         (Some(_), Some(_)) => Err(Error::new(
             SqlState::INVALID_FUNCTION_DEFINITION,
             "duplicate function body specified",

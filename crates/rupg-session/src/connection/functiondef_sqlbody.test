@@ -1,0 +1,61 @@
+> SELECT count(*), md5(string_agg(pg_get_functiondef(oid), '' ORDER BY oid)) FROM pg_proc WHERE oid < 10000 AND prokind <> 'a' AND prosqlbody IS NOT NULL
+fields count:20:8:-1,md5:25:-1:-1
+row 45,987166642caf9bf177a56416eee692a0
+SELECT 1
+> SELECT string_to_table(pg_get_functiondef('ts_debug(text)'::regprocedure), E'\n') AS line
+fields line:25:-1:-1
+row CREATE OR REPLACE FUNCTION pg_catalog.ts_debug(document text, OUT alias text, OUT description text, OUT token text, OUT dictionaries regdictionary[], OUT dictionary regdictionary, OUT lexemes text[])
+row  RETURNS SETOF record
+row  LANGUAGE sql
+row  STABLE PARALLEL SAFE STRICT
+row BEGIN ATOMIC
+row  SELECT ts_debug.alias,
+row      ts_debug.description,
+row      ts_debug.token,
+row      ts_debug.dictionaries,
+row      ts_debug.dictionary,
+row      ts_debug.lexemes
+row     FROM ts_debug(get_current_ts_config(), ts_debug.document) ts_debug(alias, description, token, dictionaries, dictionary, lexemes);
+row END
+row 
+SELECT 14
+> CREATE TABLE fd_t(a int, b text)
+CREATE TABLE
+> CREATE FUNCTION fd_r(x int, y int DEFAULT 2) RETURNS int LANGUAGE sql IMMUTABLE STRICT RETURN x + y
+CREATE FUNCTION
+> SELECT string_to_table(pg_get_functiondef('fd_r'::regproc), E'\n') AS line
+fields line:25:-1:-1
+row CREATE OR REPLACE FUNCTION public.fd_r(x integer, y integer DEFAULT 2)
+row  RETURNS integer
+row  LANGUAGE sql
+row  IMMUTABLE STRICT
+row RETURN (x + y)
+row 
+SELECT 6
+> CREATE FUNCTION fd_s() RETURNS text LANGUAGE sql RETURN 'abc'
+CREATE FUNCTION
+> SELECT string_to_table(pg_get_functiondef('fd_s'::regproc), E'\n') AS line
+fields line:25:-1:-1
+row CREATE OR REPLACE FUNCTION public.fd_s()
+row  RETURNS text
+row  LANGUAGE sql
+row RETURN 'abc'::text
+row 
+SELECT 5
+> CREATE FUNCTION fd_a(n int) RETURNS SETOF fd_t LANGUAGE sql STABLE ROWS 5 BEGIN ATOMIC SELECT a, b FROM fd_t WHERE a > n ORDER BY a; END
+CREATE FUNCTION
+> SELECT string_to_table(pg_get_functiondef('fd_a'::regproc), E'\n') AS line
+fields line:25:-1:-1
+row CREATE OR REPLACE FUNCTION public.fd_a(n integer)
+row  RETURNS SETOF fd_t
+row  LANGUAGE sql
+row  STABLE ROWS 5
+row BEGIN ATOMIC
+row  SELECT fd_t.a,
+row      fd_t.b
+row     FROM fd_t
+row    WHERE (fd_t.a > fd_a.n)
+row    ORDER BY fd_t.a;
+row END
+row 
+SELECT 12

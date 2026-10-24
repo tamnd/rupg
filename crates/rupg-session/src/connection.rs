@@ -3202,6 +3202,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/function_sqlbody.test")));
     }
 
+    /// `pg_get_functiondef` of the built-in functions with a body in SQL, and of functions with a `RETURN` body and a `BEGIN ATOMIC` body. `connection/functiondef_sqlbody.test` is the output of PostgreSQL 19 for the same statements.
+    #[test]
+    fn functiondef_sqlbody() {
+        big_stack(|| script(include_str!("connection/functiondef_sqlbody.test")));
+    }
+
     /// The calls of the built-in functions that `system_functions.sql` gives a body in SQL: the engine runs the body of each one that has no kernel. The rows of `pg_proc` have an empty `prosrc` and a `prosqlbody`. `connection/builtin_bodies.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn builtin_sql_bodies() {
