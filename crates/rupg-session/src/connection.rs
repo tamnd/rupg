@@ -6025,6 +6025,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/gvirt.test")));
     }
 
+    /// The input of `regclass` in the defaults, the generation expressions and the check constraints of `CREATE TABLE` finds the new table, because PostgreSQL makes the table before it reads these expressions. `connection/regnew.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn regnew() {
+        big_stack(|| script(include_str!("connection/regnew.test")));
+    }
+
     /// `CREATE TABLE ... (LIKE ...)`, from `create_table_like.sql` of the PostgreSQL tests: the columns and the not-null constraints of the other relation, the options `INCLUDING DEFAULTS`, `GENERATED`, `IDENTITY`, `CONSTRAINTS`, `INDEXES`, `STORAGE`, `COMMENTS` and `ALL`, `LIKE` with `INHERITS`, and `LIKE` of a view, a composite type and a sequence. The script has catalog queries in place of `\d`, and it does not have the parts for virtual generated columns, `NOT ENFORCED`, `CREATE STATISTICS` and foreign tables. `connection/create_table_like.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn create_table_like() {
