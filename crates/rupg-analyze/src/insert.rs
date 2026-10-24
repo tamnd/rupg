@@ -14,7 +14,7 @@ use rupg_types::{Value, oid};
 use crate::Analyzer;
 use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
-use crate::expr::{BoolOp, Expr, ExprKind, FieldStore, Func, FuncForm, Var};
+use crate::expr::{BoolOp, CastForm, Expr, ExprKind, FieldStore, Func, FuncForm, Var};
 use crate::from::{Column, FromItem, Relation, TABLE_OID_ATTNUM};
 use crate::merge::Merge;
 use crate::modify::{carried_targets, set_columns};
@@ -1550,7 +1550,7 @@ pub(crate) fn with_checks(
         }
     }
     targets.extend(checks.into_iter().map(|(n, mut expr)| {
-        compute_generated(&mut expr, generated);
+        compute_generated(&mut expr, generated, &columns[..width]);
         Target { name: n, expr, origin: None, junk: false }
     }));
     targets.extend(tail);
@@ -1564,8 +1564,8 @@ pub(crate) fn with_checks(
     }
 }
 
-/// The expression with the generation expression of each stored generated column of `generated` in place of the column of the relation 0.
-fn compute_generated(expr: &mut Expr, generated: &[(usize, Expr)]) {
+/// The expression with the generation expression of each stored generated column of `generated` in place of the column of the relation 0. The whole row of the relation 0 becomes a `RowExpr` of the `columns`, with the generation expressions in it.
+fn compute_generated(expr: &mut Expr, generated: &[(usize, Expr)], columns: &[Column]) {
     if generated.is_empty() {
         return;
     }
@@ -1573,6 +1573,28 @@ fn compute_generated(expr: &mut Expr, generated: &[(usize, Expr)]) {
         let ExprKind::Var(var) = e.kind else { return false };
         if var.levels_up != depth || var.relation != 0 {
             return false;
+        }
+        if var.attnum == 0 {
+            // A dropped column has no field.
+            let fields = columns.iter().enumerate().filter(|(_, c)| c.ty != 0);
+            let fields = fields
+                .map(|(i, c)| match generated.iter().find(|(at, _)| *at == i) {
+                    Some((_, value)) => {
+                        let mut value = value.clone();
+                        value.raise(depth);
+                        value
+                    }
+                    None => {
+                        let attnum = i16::try_from(i + 1).unwrap_or(i16::MAX);
+                        let var = Var { relation: 0, attnum, levels_up: depth };
+                        let mut field = Expr::new(ExprKind::Var(var), c.ty);
+                        field.typmod = c.typmod;
+                        field
+                    }
+                })
+                .collect();
+            e.kind = ExprKind::Row(fields, CastForm::Implicit);
+            return true;
         }
         let index = usize::try_from(var.attnum).ok().and_then(|n| n.checked_sub(1));
         let Some((_, value)) = generated.iter().find(|(i, _)| Some(*i) == index) else {

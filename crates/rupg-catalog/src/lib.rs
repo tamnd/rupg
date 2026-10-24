@@ -2166,6 +2166,15 @@ impl Catalog {
         Ok(())
     }
 
+    /// Sets `convalidated` of a constraint.
+    pub fn set_constraint_validated(&mut self, constraint: u32, validated: bool) -> Result<()> {
+        let Some(con) = self.constraints.get_mut(&constraint) else {
+            return Err(no_object("constraint", constraint));
+        };
+        con.validated = validated;
+        Ok(())
+    }
+
     /// Sets `attislocal` and `attinhcount` of the column `number` of a table.
     pub fn set_column_inherited(
         &mut self,
@@ -3158,6 +3167,21 @@ impl Catalog {
         for (index, number) in self.index_columns_of(relation, column) {
             self.column_mut(index, number)?.compression = compression;
         }
+        Ok(())
+    }
+
+    /// `attgenerated` of a column, which `ATExecDropExpression` sets to 0.
+    ///
+    /// # Errors
+    ///
+    /// An internal error for a column that is not in the catalog.
+    pub fn set_column_generated(
+        &mut self,
+        relation: u32,
+        column: i16,
+        generated: u8,
+    ) -> Result<()> {
+        self.column_mut(relation, column)?.generated = generated;
         Ok(())
     }
 

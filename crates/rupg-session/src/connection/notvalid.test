@@ -1,0 +1,110 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE nv (a int PRIMARY KEY, b int);
+CREATE TABLE
+> INSERT INTO nv VALUES (1, 10), (2, -5);
+INSERT 0 2
+> ALTER TABLE nv ADD CONSTRAINT nv_b CHECK (b > 0) NOT VALID;
+ALTER TABLE
+> SELECT conname, convalidated, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'nv'::regclass ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1,pg_get_constraintdef:25:-1:-1
+row nv_a_not_null,t,NOT NULL a
+row nv_b,f,CHECK ((b > 0)) NOT VALID
+row nv_pkey,t,PRIMARY KEY (a)
+SELECT 3
+> INSERT INTO nv VALUES (3, -1);
+ERROR 23514 new row for relation "nv" violates check constraint "nv_b"
+DETAIL Failing row contains (3, -1).
+> INSERT INTO nv VALUES (3, 1);
+INSERT 0 1
+> UPDATE nv SET b = -2 WHERE a = 1;
+ERROR 23514 new row for relation "nv" violates check constraint "nv_b"
+DETAIL Failing row contains (1, -2).
+> ALTER TABLE nv VALIDATE CONSTRAINT nv_b;
+ERROR 23514 check constraint "nv_b" of relation "nv" is violated by some row
+> ALTER TABLE nv VALIDATE CONSTRAINT nope;
+ERROR 42704 constraint "nope" of relation "nv" does not exist
+> ALTER TABLE nv VALIDATE CONSTRAINT nv_pkey;
+ERROR 42809 cannot validate constraint "nv_pkey" of relation "nv"
+DETAIL This operation is not supported for this type of constraint.
+> ALTER TABLE nv ALTER COLUMN b TYPE bigint;
+ALTER TABLE
+> SELECT conname, convalidated FROM pg_constraint WHERE conrelid = 'nv'::regclass ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1
+row nv_a_not_null,t
+row nv_b,f
+row nv_pkey,t
+SELECT 3
+> DELETE FROM nv WHERE b < 0;
+DELETE 1
+> ALTER TABLE nv VALIDATE CONSTRAINT nv_b;
+ALTER TABLE
+> SELECT conname, convalidated, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'nv'::regclass ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1,pg_get_constraintdef:25:-1:-1
+row nv_a_not_null,t,NOT NULL a
+row nv_b,t,CHECK ((b > 0))
+row nv_pkey,t,PRIMARY KEY (a)
+SELECT 3
+> ALTER TABLE nv VALIDATE CONSTRAINT nv_b;
+ALTER TABLE
+> CREATE TABLE nvp (a int);
+CREATE TABLE
+> CREATE TABLE nvc (b int) INHERITS (nvp);
+CREATE TABLE
+> INSERT INTO nvc VALUES (-1, 0);
+INSERT 0 1
+> ALTER TABLE nvp ADD CONSTRAINT nvp_a CHECK (a > 0) NOT VALID;
+ALTER TABLE
+> SELECT conrelid::regclass, conname, convalidated, coninhcount FROM pg_constraint WHERE conname = 'nvp_a' ORDER BY 1;
+fields conrelid:2205:4:-1,conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row nvp,nvp_a,f,0
+row nvc,nvp_a,f,1
+SELECT 2
+> ALTER TABLE ONLY nvp VALIDATE CONSTRAINT nvp_a;
+ERROR 42P16 constraint must be validated on child tables too
+> ALTER TABLE nvp VALIDATE CONSTRAINT nvp_a;
+ERROR 23514 check constraint "nvp_a" of relation "nvc" is violated by some row
+> UPDATE nvc SET a = 1;
+UPDATE 1
+> ALTER TABLE nvc VALIDATE CONSTRAINT nvp_a;
+ALTER TABLE
+> SELECT conrelid::regclass, conname, convalidated FROM pg_constraint WHERE conname = 'nvp_a' ORDER BY 1;
+fields conrelid:2205:4:-1,conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1
+row nvp,nvp_a,f
+row nvc,nvp_a,t
+SELECT 2
+> ALTER TABLE nvp VALIDATE CONSTRAINT nvp_a;
+ALTER TABLE
+> SELECT conrelid::regclass, conname, convalidated FROM pg_constraint WHERE conname = 'nvp_a' ORDER BY 1;
+fields conrelid:2205:4:-1,conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1
+row nvp,nvp_a,t
+row nvc,nvp_a,t
+SELECT 2
+> CREATE TABLE nvw (a int, b int);
+CREATE TABLE
+> ALTER TABLE nvw ADD CONSTRAINT nvw_c CHECK (nvw IS NOT NULL AND row_to_json(nvw) IS NOT NULL);
+ALTER TABLE
+> SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'nvw_c';
+fields pg_get_constraintdef:25:-1:-1
+row CHECK (((nvw.* IS NOT NULL) AND (row_to_json(nvw.*) IS NOT NULL)))
+SELECT 1
+> INSERT INTO nvw VALUES (1, NULL);
+ERROR 23514 new row for relation "nvw" violates check constraint "nvw_c"
+DETAIL Failing row contains (1, null).
+> INSERT INTO nvw VALUES (1, 2);
+INSERT 0 1
+> ALTER TABLE nvw ALTER COLUMN b TYPE bigint;
+ALTER TABLE
+> SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'nvw_c';
+fields pg_get_constraintdef:25:-1:-1
+row CHECK (((nvw.* IS NOT NULL) AND (row_to_json(nvw.*) IS NOT NULL)))
+SELECT 1
+> CREATE INDEX nvw_i ON nvw ((nvw IS NOT NULL));
+CREATE INDEX
+> SELECT pg_get_indexdef('nvw_i'::regclass);
+fields pg_get_indexdef:25:-1:-1
+row CREATE INDEX nvw_i ON public.nvw USING btree (((nvw.* IS NOT NULL)))
+SELECT 1
+> DROP TABLE nv, nvp, nvc, nvw;
+DROP TABLE
