@@ -1,5 +1,7 @@
 # PostgreSQL names that are not in the dictionary of typos.
 [default.extend-words]
+# The column alias `ba` of `generated_stored.sql`, which `gstored3.test` copies.
+ba = "ba"
 brin = "brin"
 RESERV = "RESERV"
 IST = "IST"
