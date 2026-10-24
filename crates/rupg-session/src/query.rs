@@ -24,7 +24,7 @@ use rupg_types::{
 };
 use rupg_wire::{Field, Portals, Statements};
 
-use crate::advisory::{Edge, Request, Tag, mode_name};
+use crate::advisory::{EXCLUSIVE, Edge, Mode, Request, SHARE, Tag, mode_name};
 use crate::connection::{Activity, Connection, Portal, Prepared};
 use crate::guc::{self, Action, Origin, Settings};
 use crate::heap::View;
@@ -51,6 +51,8 @@ const PG_SLEEP: (&str, &str) = ("Timeout", "PgSleep");
 const SLEEP_SLICE_US: i64 = 10_000;
 /// The wait event of a wait for an advisory lock.
 const ADVISORY: (&str, &str) = ("Lock", "advisory");
+/// The wait event of a wait for the lock of a relation.
+const RELATION: (&str, &str) = ("Lock", "relation");
 /// The wait event of a wait for the end of a transaction that changed a row.
 const TRANSACTION_ID: (&str, &str) = ("Lock", "transactionid");
 
@@ -471,7 +473,7 @@ impl<'a> Reader<'a> {
     }
 
     /// `ProcSleep` for the request of the session in the queue of `tag`. After `deadlock_timeout`, the session looks once for a cycle of waits, as `CheckDeadLock` does. A cancel and the end of `lock_timeout` stop the wait.
-    fn wait_lock(&self, store: &Store, tag: Tag, share: bool, session: bool) -> Result<()> {
+    fn wait_lock(&self, store: &Store, tag: Tag, mode: Mode, session: bool) -> Result<()> {
         let locks = store.locks();
         let start = now(self.clock);
         let mut check = Some(start.saturating_add(self.timeout("deadlock_timeout") * 1000));
@@ -480,7 +482,7 @@ impl<'a> Reader<'a> {
             ms => Some(start.saturating_add(ms * 1000)),
         };
         let slice = Duration::from_micros(SLEEP_SLICE_US.cast_unsigned());
-        let waiting = || format!("waiting for {} on {tag}", mode_name(share));
+        let waiting = || format!("waiting for {} on {tag}", mode_name(mode));
         loop {
             if locks.wait(tag, self.pid, session, slice, store.tasks()) {
                 return Ok(());
@@ -507,6 +509,43 @@ impl<'a> Reader<'a> {
                 }
             }
         }
+    }
+
+    /// `LockAcquire` of `tag` in `mode` at the session level or at the transaction level. Without `wait`, a lock that is not free gives false. With `wait`, the session waits in the queue of the lock and reports the wait event `event`.
+    fn acquire(
+        &self,
+        tag: Tag,
+        mode: Mode,
+        session: bool,
+        wait: bool,
+        event: (&'static str, &'static str),
+    ) -> Result<bool> {
+        let (activity, store) = self.server()?;
+        let locks = store.locks();
+        match locks.request(tag, self.pid, mode, session, wait) {
+            Request::Granted => return Ok(true),
+            Request::Busy => return Ok(false),
+            Request::Deadlock(cycle) => return Err(deadlock(&cycle)),
+            Request::Queued => {}
+        }
+        activity.report_wait(store, Some(event));
+        let result = self.wait_lock(store, tag, mode, session);
+        activity.report_wait(store, None);
+        if result.is_err() {
+            locks.leave_queue(tag, self.pid);
+        }
+        result.map(|()| true)
+    }
+
+    /// `LockRelationOid` in `mode`, which is 1 for `AccessShareLock` to 8 for `AccessExclusiveLock`, or `ConditionalLockRelationOid` without `wait`. The transaction holds the lock until it ends. False when the lock is not free and the session does not wait.
+    ///
+    /// # Errors
+    ///
+    /// `57014` for a cancel, `55P03` at the end of `lock_timeout` and `40P01` for a cycle of waits.
+    pub(crate) fn lock_relation(&self, relation: u32, mode: Mode, wait: bool) -> Result<bool> {
+        let (_, store) = self.server()?;
+        let tag = Tag::Relation { database: database_oid(store, self.database), relation };
+        self.acquire(tag, mode, false, wait, RELATION)
     }
 
     /// `XactLockTableWait`: the wait of the transaction `xid` for the end of the transaction `holder`, which changed a row that the statement changes. After `deadlock_timeout`, the session looks once for a cycle of waits. A cancel and the end of `lock_timeout` stop the wait. `context` tells the row, as `XactLockTableWaitErrorCb` does.
@@ -619,7 +658,7 @@ fn deadlock(cycle: &[Edge]) -> Error {
             format!(
                 "Process {} waits for {} on {}; blocked by process {next}.",
                 edge.pid,
-                mode_name(edge.share),
+                mode_name(edge.mode),
                 edge.tag
             )
         })
@@ -699,28 +738,17 @@ impl rupg_func::Session for Reader<'_> {
     }
 
     fn advisory_lock(&self, lock: AdvisoryLock, wait: bool) -> Result<bool> {
-        let (activity, store) = self.server()?;
-        let tag = Tag { database: database_oid(store, self.database), key: lock.key };
-        let locks = store.locks();
-        match locks.request(tag, self.pid, lock.share, lock.session, wait) {
-            Request::Granted => return Ok(true),
-            Request::Busy => return Ok(false),
-            Request::Deadlock(cycle) => return Err(deadlock(&cycle)),
-            Request::Queued => {}
-        }
-        activity.report_wait(store, Some(ADVISORY));
-        let result = self.wait_lock(store, tag, lock.share, lock.session);
-        activity.report_wait(store, None);
-        if result.is_err() {
-            locks.leave_queue(tag, self.pid);
-        }
-        result.map(|()| true)
+        let (_, store) = self.server()?;
+        let tag = Tag::Advisory { database: database_oid(store, self.database), key: lock.key };
+        let mode = if lock.share { SHARE } else { EXCLUSIVE };
+        self.acquire(tag, mode, lock.session, wait, ADVISORY)
     }
 
     fn advisory_unlock(&self, lock: AdvisoryLock) -> Result<bool> {
         let (_, store) = self.server()?;
-        let tag = Tag { database: database_oid(store, self.database), key: lock.key };
-        Ok(store.locks().release(tag, self.pid, lock.share))
+        let tag = Tag::Advisory { database: database_oid(store, self.database), key: lock.key };
+        let mode = if lock.share { SHARE } else { EXCLUSIVE };
+        Ok(store.locks().release(tag, self.pid, mode))
     }
 
     fn advisory_unlock_all(&self) -> Result<()> {

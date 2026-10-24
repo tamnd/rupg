@@ -1,4 +1,4 @@
-//! `LOCK TABLE`, as `LockTableCommand` in `lockcmds.c` runs it: the checks of each relation of the statement and of the relations that a view reads. rupg takes no lock on a relation. A query of rupg reads the catalog of the last commit and waits for no lock, and no statement of rupg changes the rows of a table, so the modes up to `ROW EXCLUSIVE` have no effect on another session. The session runs these modes as checks only. A stronger mode gives `0A000`.
+//! `LOCK TABLE`, as `LockTableCommand` in `lockcmds.c` runs it: the checks of each relation of the statement and of the relations that a view reads, and the lock of each of these relations and of their children. The caller takes the locks. Only `LOCK TABLE` takes a lock on a relation in rupg, so a lock of `LOCK TABLE` waits only for the locks of `LOCK TABLE` in other sessions. The other statements take their locks in milestone 5.
 
 use rupg_catalog::RelKind;
 use rupg_common::{Error, Result, SqlState};
@@ -10,45 +10,27 @@ use super::view::parse_bool;
 use crate::expr::{Expr, ExprKind};
 use crate::{Analyzer, Env, Params, Query};
 
-/// The names of the lock modes, from `AccessShareLock`, which is 1.
-const MODES: [&str; 8] = [
-    "ACCESS SHARE",
-    "ROW SHARE",
-    "ROW EXCLUSIVE",
-    "SHARE UPDATE EXCLUSIVE",
-    "SHARE",
-    "SHARE ROW EXCLUSIVE",
-    "EXCLUSIVE",
-    "ACCESS EXCLUSIVE",
-];
-
-/// `RowExclusiveLock`, the strongest mode that rupg runs.
-const ROW_EXCLUSIVE: i32 = 3;
-
 /// The privilege check of `LOCK TABLE`. `allowed(relid, role)` is `LockTableAclCheck` for the mode of the statement: true when the role can lock the relation.
 pub type Allowed<'a> = dyn FnMut(u32, u32) -> Result<bool> + 'a;
 
-/// `LockTableCommand` for the role `user`. The caller does `RequireTransactionBlock` first.
+/// The lock of `LOCK TABLE` on one relation. `take(relid)` is `LockRelationOid` in the mode of the statement, or `ConditionalLockRelationOid` with `NOWAIT`. It gives false when the lock is not free and the statement has `NOWAIT`.
+pub type Take<'a> = dyn FnMut(u32) -> Result<bool> + 'a;
+
+/// `LockTableCommand` for the role `user`. The caller does `RequireTransactionBlock` first. The statement locks each relation after its checks, then the relations that the query of a view reads, or the children of a table without `ONLY`.
 ///
 /// # Errors
 ///
-/// `0A000` for a mode stronger than `ROW EXCLUSIVE`, the errors of `RangeVarGetRelid` for a name, `42809` for a relation that is not a table or a view, and `42501` for a relation that the role cannot lock. For a view, the owner of the view, or the current user when the view has `security_invoker`, must be able to lock each table and view that the query of the view reads.
+/// `55P03` for a lock that is not free with `NOWAIT`, the errors of `take`, the errors of `RangeVarGetRelid` for a name, `42809` for a relation that is not a table or a view, and `42501` for a relation that the role cannot lock. For a view, the owner of the view, or the current user when the view has `security_invoker`, must be able to lock each table and view that the query of the view reads.
 pub fn lock_table(
     stmt: &LockStmt,
     env: &dyn Env,
     user: u32,
     allowed: &mut Allowed<'_>,
+    take: &mut Take<'_>,
 ) -> Result<()> {
-    if stmt.mode > ROW_EXCLUSIVE {
-        let name = usize::try_from(stmt.mode - 1).ok().and_then(|i| MODES.get(i)).copied();
-        return Err(Error::new(
-            SqlState::FEATURE_NOT_SUPPORTED,
-            format!("LOCK TABLE in {} mode is not supported yet", name.unwrap_or("this")),
-        ));
-    }
     let params = Params::default();
     let an = Analyzer::new(env, &params);
-    let mut locker = Locker { an, allowed, ancestors: Vec::new() };
+    let mut locker = Locker { an, allowed, take, ancestors: Vec::new() };
     for node in stmt.relations.iter().flatten() {
         let Node::RangeVar(rv) = node else { continue };
         let relid = lookup(&locker.an, rv)?;
@@ -64,8 +46,17 @@ pub fn lock_table(
         if !(locker.allowed)(relid, user)? {
             return Err(denied(kind, name));
         }
+        if !(locker.take)(relid)? {
+            let name = match rv.schemaname.as_deref() {
+                Some(schema) => format!("{schema}.{name}"),
+                None => name.to_owned(),
+            };
+            return Err(not_free(&name));
+        }
         if kind == b'v' {
             locker.view(relid, user)?;
+        } else if rv.inh {
+            locker.children(relid)?;
         }
     }
     Ok(())
@@ -96,11 +87,23 @@ pub(super) fn lookup(an: &Analyzer<'_>, rv: &RangeVar) -> Result<u32> {
 struct Locker<'a, 'f> {
     an: Analyzer<'a>,
     allowed: &'f mut Allowed<'f>,
+    take: &'f mut Take<'f>,
     /// `ancestor_views`: the views that the walk is in.
     ancestors: Vec<u32>,
 }
 
 impl Locker<'_, '_> {
+    /// `LockTableRecurse`: the lock of each table that inherits from `relid` and of each partition, at each level. The children need no privileges.
+    fn children(&mut self, relid: u32) -> Result<()> {
+        let children = self.an.env.catalog().map(|c| c.all_inheritors(relid)).unwrap_or_default();
+        for child in children {
+            if !(self.take)(child)? {
+                return Err(not_free(&class_name(self.an.env, child)));
+            }
+        }
+        Ok(())
+    }
+
     /// `LockViewRecurse` for a view of the catalog. A built-in view has the bootstrap superuser as its owner and no `security_invoker`, so each check in its query passes, and the walk skips it.
     fn view(&mut self, relid: u32, user: u32) -> Result<()> {
         let Some(query) = self.an.view_query(relid)? else { return Ok(()) };
@@ -141,10 +144,15 @@ impl Locker<'_, '_> {
             if !(self.allowed)(relation.oid, check_as)? {
                 return Err(denied(kind, &class_name(self.an.env, relation.oid)));
             }
-            if let Some(sub) = relation.subquery.as_deref()
-                && kind == b'v'
-            {
-                self.view_query(relation.oid, sub, user)?;
+            if !(self.take)(relation.oid)? {
+                return Err(not_free(&class_name(self.an.env, relation.oid)));
+            }
+            if kind == b'v' {
+                if let Some(sub) = relation.subquery.as_deref() {
+                    self.view_query(relation.oid, sub, user)?;
+                }
+            } else if !relation.only {
+                self.children(relation.oid)?;
             }
         }
         for expr in query.exprs() {
@@ -207,4 +215,12 @@ pub(super) fn class_name(env: &dyn Env, relid: u32) -> String {
 fn denied(kind: u8, name: &str) -> Error {
     let object = if kind == b'v' { "view" } else { "table" };
     Error::new(SqlState::INSUFFICIENT_PRIVILEGE, format!("permission denied for {object} {name}"))
+}
+
+/// The error of a lock that is not free with `NOWAIT`.
+fn not_free(name: &str) -> Error {
+    Error::new(
+        SqlState::LOCK_NOT_AVAILABLE,
+        format!("could not obtain lock on relation \"{name}\""),
+    )
 }
