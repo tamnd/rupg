@@ -4956,13 +4956,15 @@ mod tests {
             })
             .unwrap();
         let (mut a, _) = connect_to(&store, 1234);
+        // A reads `pg_stat_activity` from a snapshot that lasts to the end of its transaction, so a third session looks at the wait.
+        let (mut c, _) = connect_to(&store, 1236);
         let look = query(
             "SELECT state, wait_event_type, wait_event, query FROM pg_stat_activity WHERE pid = 1235",
         );
-        let wait_for_b = |a: &mut Connection| {
+        let wait_for_b = |c: &mut Connection| {
             let mut lines = Vec::new();
             for _ in 0..2000 {
-                lines = send(a, &look);
+                lines = send(c, &look);
                 if lines.iter().any(|l| l.contains(",Lock,relation,")) {
                     break;
                 }
@@ -4974,14 +4976,14 @@ mod tests {
         send(&mut a, &query("BEGIN; LOCK t IN SHARE UPDATE EXCLUSIVE MODE"));
         cmds.send("BEGIN; LOCK t IN SHARE UPDATE EXCLUSIVE MODE".into()).unwrap();
         let want = "row active,Lock,relation,BEGIN; LOCK t IN SHARE UPDATE EXCLUSIVE MODE";
-        assert_eq!(wait_for_b(&mut a), want);
+        assert_eq!(wait_for_b(&mut c), want);
         send(&mut a, &query("COMMIT"));
         let lines = out.recv().unwrap();
         assert_eq!(lines, ["BEGIN", "LOCK TABLE", "ready T"]);
 
         send(&mut a, &query("BEGIN; LOCK u"));
         cmds.send("LOCK u IN ACCESS SHARE MODE".into()).unwrap();
-        assert_eq!(wait_for_b(&mut a), "row active,Lock,relation,LOCK u IN ACCESS SHARE MODE");
+        assert_eq!(wait_for_b(&mut c), "row active,Lock,relation,LOCK u IN ACCESS SHARE MODE");
         send(&mut a, &query("SET deadlock_timeout = 10"));
         let lines = send(&mut a, &query("LOCK t IN SHARE MODE"));
         assert!(lines.iter().any(|l| l == "ERROR 40P01 deadlock detected"), "{lines:?}");
