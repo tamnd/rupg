@@ -137,6 +137,8 @@ struct Deparser<'a> {
     outer_prefix: bool,
     /// For `EXPLAIN` of a condition of a scan, the relation of the scan. A column of another relation is the value of a parameter of a nested loop, which shows the name of its relation, as `get_parameter`.
     pub(crate) own: Option<usize>,
+    /// For the body of a function in SQL, the name of the function and the name of each argument, as the `funcname` and `argnames` of the outermost `deparse_namespace`. A parameter shows the name of its argument.
+    function: Option<(String, Vec<String>)>,
     buf: String,
 }
 
@@ -198,8 +200,26 @@ impl<'a> Deparser<'a> {
             window_names: Vec::new(),
             outer_prefix: false,
             own: None,
+            function: None,
             buf: String::new(),
         }
+    }
+
+    /// `get_parameter` for a parameter `$n` of the extended protocol or of a function. In the body of a function in SQL, an argument with a name shows the name, after the name of the function when a query has relations. Else it shows `$n`.
+    fn parameter(&mut self, n: usize) {
+        let named = self.function.as_ref().and_then(|(function, names)| {
+            let name = names.get(n.checked_sub(1)?).filter(|name| !name.is_empty())?;
+            Some((quote_identifier(function), quote_identifier(name)))
+        });
+        let Some((function, name)) = named else {
+            self.buf.push_str(&format!("${n}"));
+            return;
+        };
+        if self.namespaces.iter().any(|space| !space.names.is_empty()) {
+            self.buf.push_str(&function);
+            self.buf.push('.');
+        }
+        self.buf.push_str(&name);
     }
 
     /// `appendContextKeyword`: a new line with the indent and `plus` more spaces, then the keyword.
@@ -382,7 +402,7 @@ impl<'a> Deparser<'a> {
         }
         match &e.kind {
             ExprKind::Const(value) => self.constant(e, value, 0)?,
-            ExprKind::Param(n) => self.buf.push_str(&format!("${n}")),
+            ExprKind::Param(n) => self.parameter(*n),
             ExprKind::Var(var) if var.attnum == 0 => self.whole_row(var, e, false)?,
             ExprKind::Var(var) => {
                 self.variable(var, false)?;
@@ -2251,6 +2271,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_get_function_identity_arguments" => function::get_function_identity_arguments,
         "pg_get_function_result" => function::get_function_result,
         "pg_get_function_arg_default" => function::get_function_arg_default,
+        "pg_get_function_sqlbody" => function::get_function_sqlbody,
         "pg_get_viewdef" | "pg_get_viewdef_ext" | "pg_get_viewdef_wrap" => query::get_viewdef,
         "pg_get_viewdef_name" | "pg_get_viewdef_name_ext" => query::get_viewdef_name,
         "pg_get_ruledef" | "pg_get_ruledef_ext" => query::get_ruledef,

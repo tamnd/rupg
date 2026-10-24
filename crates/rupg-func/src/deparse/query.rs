@@ -36,7 +36,7 @@ const UNNEST: u32 = 2331;
 
 impl Deparser<'_> {
     /// `get_query_def`: the query with the names of its relations, in the queries outside it. `result` has the names of the columns of the result when the caller knows them, and `indent` is the indent of the query.
-    fn query_def(
+    pub(super) fn query_def(
         &mut self,
         query: &Query,
         result: Option<&[String]>,
@@ -45,7 +45,10 @@ impl Deparser<'_> {
     ) -> Result<()> {
         let space = self.namespace(query);
         let joins: usize = query.from.iter().map(join_count).sum();
-        let prefix = !self.namespaces.is_empty() || query.relations.len() + joins != 1;
+        // The body of a function in SQL has the namespace of the function outside the query.
+        let prefix = !self.namespaces.is_empty()
+            || self.function.is_some()
+            || query.relations.len() + joins != 1;
         let outputs = query
             .targets
             .iter()
@@ -359,7 +362,9 @@ impl Deparser<'_> {
             return Ok(());
         }
         self.indent += INDENT_STD;
-        self.buf.push(' ');
+        if !self.flat {
+            self.buf.push(' ');
+        }
         let mut sep = if query.recursive { "WITH RECURSIVE " } else { "WITH " };
         for cte in &query.ctes {
             self.buf.push_str(sep);
@@ -419,7 +424,9 @@ impl Deparser<'_> {
     /// `get_basic_select_query`: a `SELECT` with no set operation, or a plain `VALUES` list.
     fn basic_select(&mut self, query: &Query, result: Option<&[String]>) -> Result<()> {
         self.indent += INDENT_STD;
-        self.buf.push(' ');
+        if !self.flat {
+            self.buf.push(' ');
+        }
         if let Some(rows) = simple_values(query, result) {
             return self.values(rows);
         }

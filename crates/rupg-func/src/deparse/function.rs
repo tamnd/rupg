@@ -2,7 +2,7 @@
 //!
 //! The arguments come from the rows of `pg_proc` that `rupg-pgcatalog` has, with the functions of the session. [`arg_defaults`] reads the defaults of the arguments from `proargdefaults`.
 
-use rupg_analyze::{Expr, arg_defaults};
+use rupg_analyze::{Expr, SqlBody, arg_defaults, function_sqlbody};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, ProcRow};
 use rupg_types::Value;
@@ -176,4 +176,31 @@ pub(super) fn get_function_arg_default(call: &Call<'_>, args: &[Value]) -> Resul
         Some(c) => Ok(Value::text(default_text(c, call.session)?)),
         None => Ok(Value::Null),
     }
+}
+
+/// `pg_get_function_sqlbody(oid)`: the body in SQL of the function, as `print_function_sqlbody` shows it: `RETURN` and the value on one line, or `BEGIN ATOMIC`, each query on its lines with `;`, and `END`. Null for an OID that is not a function and for a function with no body in SQL.
+pub(super) fn get_function_sqlbody(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let Some(proc) = proc_arg(args)? else { return Ok(Value::Null) };
+    let env = reg::SessionEnv(call.session);
+    let Some(body) = function_sqlbody(&env, proc.oid)? else { return Ok(Value::Null) };
+    let names = arg_info(proc).into_iter().map(|(_, name, _)| name.to_string()).collect();
+    let mut d = Deparser::new(call.session, false, 0);
+    d.function = Some((proc.name.to_string(), names));
+    match body {
+        // The context of a `RETURN` body has no pretty flags.
+        SqlBody::Return(value) => {
+            d.flat = true;
+            d.buf.push_str("RETURN ");
+            d.expr(&value, true)?;
+        }
+        SqlBody::Atomic(queries) => {
+            d.buf.push_str("BEGIN ATOMIC\n");
+            for query in &queries {
+                d.query_def(query, None, false, 1)?;
+                d.buf.push_str(";\n");
+            }
+            d.buf.push_str("END");
+        }
+    }
+    Ok(Value::text(d.buf))
 }
