@@ -1688,6 +1688,11 @@ pub fn amprocs(family: u32, left: u32) -> &'static [AmprocRow] {
     BUILTIN.amprocs.get(&(family, left)).map_or(&[], Vec::as_slice)
 }
 
+/// The rows of `pg_amop` of the family, as `SearchSysCacheList1(AMOPSTRATEGY, ...)` finds them.
+pub fn amops_of_family(family: u32) -> impl Iterator<Item = &'static AmopRow> {
+    BUILTIN.amops.iter().filter(move |a| a.family == family)
+}
+
 /// The row of `pg_amop` with this OID.
 pub fn amop_by_oid(oid: u32) -> Option<&'static AmopRow> {
     BUILTIN.amops.iter().find(|a| a.oid == oid)

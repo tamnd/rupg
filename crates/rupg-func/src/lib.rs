@@ -9,6 +9,7 @@ mod acl;
 mod activity;
 mod advisory;
 mod agg;
+mod amutils;
 mod array;
 mod binary;
 mod bit;
@@ -600,6 +601,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| identify::by_src(src))
         .or_else(|| acl::by_src(src))
         .or_else(|| updatable::by_src(src))
+        .or_else(|| amutils::by_src(src))
         .or_else(|| deparse::by_src(src))
         .or_else(|| stat::by_src(src))
         .or_else(|| array::by_src(src))

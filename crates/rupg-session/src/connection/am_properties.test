@@ -1,0 +1,42 @@
+> SELECT string_agg(a.amname || ':' || coalesce(pg_indexam_has_property(a.oid, p)::text, '-'), ' ' ORDER BY a.oid, p) FROM pg_am a, unnest(array['can_order','can_unique','can_multi_col','can_exclude','can_include','clusterable','bogus']) p
+fields string_agg:25:-1:-1
+row heap:- heap:- heap:- heap:- heap:- heap:- heap:- btree:- btree:true btree:true btree:true btree:true btree:true btree:- hash:- hash:true hash:false hash:false hash:false hash:false hash:- gist:- gist:true gist:true gist:true gist:false gist:false gist:- gin:- gin:false gin:false gin:true gin:false gin:false gin:- brin:- brin:false brin:false brin:true brin:false brin:false brin:- spgist:- spgist:true spgist:true spgist:false spgist:false spgist:false spgist:-
+SELECT 1
+> SELECT pg_indexam_has_property(0, 'can_order'), pg_indexam_has_property(403, 'CAN_ORDER'), pg_indexam_has_property(2, 'can_order')
+fields pg_indexam_has_property:16:1:-1,pg_indexam_has_property:16:1:-1,pg_indexam_has_property:16:1:-1
+row NULL,t,NULL
+SELECT 1
+> CREATE TABLE t (i int, x text, n inet)
+CREATE TABLE
+> CREATE INDEX t_bt ON t (i DESC NULLS LAST, x) INCLUDE (n)
+CREATE INDEX
+> CREATE INDEX t_bt2 ON t (i NULLS FIRST)
+CREATE INDEX
+> CREATE INDEX t_h ON t USING hash (i)
+CREATE INDEX
+> SELECT string_agg(c.relname || ':' || p || ':' || coalesce(pg_index_has_property(c.oid, p)::text, '-'), ' ' ORDER BY c.relname, p) FROM pg_class c, unnest(array['clusterable','index_scan','bitmap_scan','backward_scan','can_order','asc','Index_Scan']) p WHERE c.relname LIKE 't\_%'
+fields string_agg:25:-1:-1
+row t_bt:Index_Scan:true t_bt:asc:- t_bt:backward_scan:true t_bt:bitmap_scan:true t_bt:can_order:- t_bt:clusterable:true t_bt:index_scan:true t_bt2:Index_Scan:true t_bt2:asc:- t_bt2:backward_scan:true t_bt2:bitmap_scan:true t_bt2:can_order:- t_bt2:clusterable:true t_bt2:index_scan:true t_h:Index_Scan:true t_h:asc:- t_h:backward_scan:true t_h:bitmap_scan:true t_h:can_order:- t_h:clusterable:false t_h:index_scan:true
+SELECT 1
+> SELECT c.relname || ':' || k, string_agg(coalesce(pg_index_column_has_property(c.oid, k, p)::text, '-'), ' ' ORDER BY p) FROM pg_class c, generate_series(0, 4) k, unnest(array['asc','desc','nulls_first','nulls_last','orderable','distance_orderable','returnable','search_array','search_nulls','clusterable','bogus']) p WHERE c.relname LIKE 't\_%' GROUP BY c.relname, k ORDER BY c.relname, k
+fields ?column?:25:-1:-1,string_agg:25:-1:-1
+row t_bt:0,- - - - - - - - - - -
+row t_bt:1,false - - true false false true true true true true
+row t_bt:2,true - - false false false true true true true true
+row t_bt:3,- - - - false - - false true - -
+row t_bt:4,- - - - - - - - - - -
+row t_bt2:0,- - - - - - - - - - -
+row t_bt2:1,true - - false false true false true true true true
+row t_bt2:2,- - - - - - - - - - -
+row t_bt2:3,- - - - - - - - - - -
+row t_bt2:4,- - - - - - - - - - -
+row t_h:0,- - - - - - - - - - -
+row t_h:1,false - - false false false false false false false false
+row t_h:2,- - - - - - - - - - -
+row t_h:3,- - - - - - - - - - -
+row t_h:4,- - - - - - - - - - -
+SELECT 15
+> SELECT pg_index_has_property('pg_class_oid_index', 'clusterable'), pg_index_column_has_property('pg_class_oid_index', 1, 'returnable'), pg_index_column_has_property('pg_class_oid_index', 1, 'asc'), pg_index_column_has_property('pg_class_oid_index', 2, 'asc'), pg_index_has_property('pg_class', 'clusterable'), pg_index_has_property(0, 'clusterable'), pg_index_column_has_property('t_bt', -1, 'asc')
+fields pg_index_has_property:16:1:-1,pg_index_column_has_property:16:1:-1,pg_index_column_has_property:16:1:-1,pg_index_column_has_property:16:1:-1,pg_index_has_property:16:1:-1,pg_index_has_property:16:1:-1,pg_index_column_has_property:16:1:-1
+row t,t,t,NULL,NULL,NULL,NULL
+SELECT 1
