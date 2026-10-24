@@ -17,7 +17,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Fixed
 
-- On macOS, the server sets `SO_KEEPALIVE` on each TCP connection, and `tcp_keepalives_idle`, `tcp_keepalives_interval` and `tcp_keepalives_count` read and set the options of the socket, as on Linux. Before, `SHOW` gave 0 for them on macOS. macOS does not have `TCP_USER_TIMEOUT`, so `tcp_user_timeout` shows 0, and a value that is not 0 writes `setsockopt(TCP_USER_TIMEOUT) not supported` to the log, as in PostgreSQL (#PR).
+- On macOS, the server sets `SO_KEEPALIVE` on each TCP connection, and `tcp_keepalives_idle`, `tcp_keepalives_interval` and `tcp_keepalives_count` read and set the options of the socket, as on Linux. Before, `SHOW` gave 0 for them on macOS. macOS does not have `TCP_USER_TIMEOUT`, so `tcp_user_timeout` shows 0, and a value that is not 0 writes `setsockopt(TCP_USER_TIMEOUT) not supported` to the log, as in PostgreSQL (#672).
 
 ## 0.1.76 (2026-10-24)
 
