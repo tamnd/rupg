@@ -10,7 +10,7 @@ use rupg_types::Value;
 use super::Deparser;
 use crate::calendar::format_g;
 use crate::text::quote_identifier;
-use crate::{Call, INTERNAL_LANGUAGE, Session, bad_value, not_yet, reg};
+use crate::{Call, INTERNAL_LANGUAGE, Session, bad_value, reg};
 
 /// The mode of an argument in `proargmodes`.
 const IN: u8 = b'i';
@@ -186,10 +186,15 @@ pub(super) fn get_function_arg_default(call: &Call<'_>, args: &[Value]) -> Resul
 /// `pg_get_function_sqlbody(oid)`: the body in SQL of the function, as `print_function_sqlbody` shows it: `RETURN` and the value on one line, or `BEGIN ATOMIC`, each query on its lines with `;`, and `END`. Null for an OID that is not a function and for a function with no body in SQL.
 pub(super) fn get_function_sqlbody(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let Some(proc) = proc_arg(args)? else { return Ok(Value::Null) };
-    let env = reg::SessionEnv(call.session);
-    let Some(body) = function_sqlbody(&env, proc.oid)? else { return Ok(Value::Null) };
+    Ok(print_function_sqlbody(proc, call.session)?.map_or(Value::Null, Value::text))
+}
+
+/// `print_function_sqlbody`: the body in SQL of the function, or `None` when the function has no body in SQL.
+fn print_function_sqlbody(proc: &ProcRow, session: &dyn Session) -> Result<Option<String>> {
+    let env = reg::SessionEnv(session);
+    let Some(body) = function_sqlbody(&env, proc.oid)? else { return Ok(None) };
     let names = arg_info(proc).into_iter().map(|(_, name, _)| name.to_string()).collect();
-    let mut d = Deparser::new(call.session, false, 0);
+    let mut d = Deparser::new(session, false, 0);
     d.function = Some((proc.name.to_string(), names));
     match body {
         // The context of a `RETURN` body has no pretty flags.
@@ -207,7 +212,7 @@ pub(super) fn get_function_sqlbody(call: &Call<'_>, args: &[Value]) -> Result<Va
             d.buf.push_str("END");
         }
     }
-    Ok(Value::text(d.buf))
+    Ok(Some(d.buf))
 }
 
 /// `ClanguageId`.
@@ -291,7 +296,7 @@ fn simple_quote_literal(buf: &mut String, value: &str, session: &dyn Session) {
     buf.push('\'');
 }
 
-/// `pg_get_functiondef(oid)`: the `CREATE OR REPLACE FUNCTION` or `CREATE OR REPLACE PROCEDURE` statement that makes the function again, or null for an OID that is not a function. An aggregate gives an error. The deparse of a body in SQL, from `BEGIN ATOMIC` or `RETURN`, is not supported yet.
+/// `pg_get_functiondef(oid)`: the `CREATE OR REPLACE FUNCTION` or `CREATE OR REPLACE PROCEDURE` statement that makes the function again, or null for an OID that is not a function. An aggregate gives an error. A function in SQL with a body in SQL shows the body as `pg_get_function_sqlbody` does, in place of `AS` and the string.
 pub(super) fn get_functiondef(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let Some(proc) = proc_arg(args)? else { return Ok(Value::Null) };
     let session = call.session;
@@ -302,9 +307,6 @@ pub(super) fn get_functiondef(call: &Call<'_>, args: &[Value]) -> Result<Value> 
         ));
     }
     let attrs = attributes(proc, session);
-    if attrs.sql_body && proc.lang == SQL_LANGUAGE {
-        return Err(not_yet("pg_get_functiondef of a function with a body in SQL"));
-    }
     let is_function = proc.kind != b'p';
     let schema = if proc.namespace != 0 && proc.namespace == reg::temp_namespace(session) {
         Some("pg_temp")
@@ -365,6 +367,14 @@ pub(super) fn get_functiondef(call: &Call<'_>, args: &[Value]) -> Result<Value> 
     }
     if buf.len() != start {
         buf.push('\n');
+    }
+    if attrs.sql_body && proc.lang == SQL_LANGUAGE {
+        let body = print_function_sqlbody(proc, session)?.ok_or_else(|| {
+            Error::internal(format!("cache lookup failed for function {}", proc.oid))
+        })?;
+        buf.push_str(&body);
+        buf.push('\n');
+        return Ok(Value::text(buf));
     }
     buf.push_str("AS ");
     if let Some(bin) = &attrs.bin {
