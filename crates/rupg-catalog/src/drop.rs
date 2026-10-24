@@ -253,6 +253,7 @@ impl Catalog {
                         not_null: false,
                         has_default: false,
                         identity: 0,
+                        generated: 0,
                         dropped: true,
                         stat_target: None,
                         storage: column.storage,

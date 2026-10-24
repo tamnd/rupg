@@ -74,13 +74,15 @@ impl Analyzer<'_> {
         let checks = if partitioned { Vec::new() } else { self.checks(table)? };
         let names = checks.iter().map(|(n, _)| n.clone()).collect();
         // Each table of the tree of `INHERITS` checks its rows after its triggers.
+        // The leaf partitions and the tables of the tree of `INHERITS` compute their generated columns.
+        let generated = if partitioned { Vec::new() } else { self.generated_columns(table)? };
         let recheck = if inherit {
             None
         } else {
-            self.recheck(table, WriteKind::Update, &name, &columns, &checks)
+            self.recheck(table, WriteKind::Update, &name, &columns, &checks, &generated)
         };
-        if !checks.is_empty() {
-            query = with_checks(&name, &columns, query, checks, &tail);
+        if !checks.is_empty() || !generated.is_empty() {
+            query = with_checks(&name, &columns, query, checks, &generated, &tail);
         }
         let width = columns.len();
         let unique = self.unique_keys(table, &columns)?;
@@ -190,7 +192,16 @@ impl Analyzer<'_> {
                         column.name
                     )));
                 }
+                Some(Some(_)) if self.generated(table, index) != 0 => {
+                    return Err(Error::new(
+                        SqlState::GENERATED_ALWAYS,
+                        format!("column \"{}\" can only be updated to DEFAULT", column.name),
+                    )
+                    .with_detail(format!("Column \"{}\" is a generated column.", column.name)));
+                }
                 Some(Some(expr)) => expr,
+                // A generated column keeps its old value until the write computes it.
+                Some(None) if self.generated(table, index) != 0 => column_var(index, column),
                 Some(None) => self.column_default(table, index, column)?,
                 None => column_var(index, column),
             });

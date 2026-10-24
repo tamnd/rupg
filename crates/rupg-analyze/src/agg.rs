@@ -71,6 +71,8 @@ pub(crate) enum Kind {
     PartitionBound,
     /// `EXPR_KIND_PARTITION_EXPRESSION`: an expression of `PARTITION BY` of a table.
     PartitionExpression,
+    /// `EXPR_KIND_GENERATED_COLUMN`: the expression of a generated column.
+    Generated,
 }
 
 impl Kind {
@@ -108,6 +110,7 @@ impl Kind {
             Kind::CallArgument => "CALL arguments",
             Kind::PartitionBound => "partition bound",
             Kind::PartitionExpression => "partition key expressions",
+            Kind::Generated => "column generation expressions",
         }
     }
 
@@ -126,6 +129,7 @@ impl Kind {
                 | Kind::CallArgument
                 | Kind::PartitionBound
                 | Kind::PartitionExpression
+                | Kind::Generated
         )
     }
 
@@ -141,6 +145,7 @@ impl Kind {
             Kind::CallArgument => "CALL argument",
             Kind::PartitionBound => "partition bound",
             Kind::PartitionExpression => "partition key expression",
+            Kind::Generated => "column generation expression",
             _ => "index predicate",
         }
     }
@@ -413,7 +418,8 @@ impl Analyzer<'_> {
             | Kind::TriggerWhen
             | Kind::CallArgument
             | Kind::PartitionBound
-            | Kind::PartitionExpression => {
+            | Kind::PartitionExpression
+            | Kind::Generated => {
                 return Err(grouping_error(
                     format!("{what} are not allowed in {}", place.name()),
                     at,

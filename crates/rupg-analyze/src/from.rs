@@ -1770,6 +1770,8 @@ impl Analyzer<'_> {
         };
         let ty = match entry.oid {
             0 => oid::RECORD,
+            // The table of a generation expression is new, and `check_nested_generated` gives the error for its whole row.
+            _ if self.kind == Kind::Generated => oid::RECORD,
             rel => self
                 .row_type(rel)
                 .ok_or_else(|| not_yet("a whole-row reference to this relation", at))?,
@@ -1906,6 +1908,14 @@ impl Analyzer<'_> {
             return Err(Error::new(
                 SqlState::INVALID_COLUMN_REFERENCE,
                 format!("system column \"{name}\" reference in check constraint is invalid"),
+            )
+            .at_opt(at));
+        }
+        // `scanNSItemForColumn`: a generation expression can use only the system column `tableoid`.
+        if self.kind == Kind::Generated {
+            return Err(Error::new(
+                SqlState::INVALID_COLUMN_REFERENCE,
+                format!("cannot use system column \"{name}\" in column generation expression"),
             )
             .at_opt(at));
         }

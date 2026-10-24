@@ -341,17 +341,19 @@ impl Analyzer<'_> {
             .as_deref()
             .filter(|c| matches!(c.action, OnConflictAction::ONCONFLICT_UPDATE))
             .map(|c| &c.targetList);
-        let mut recheck = self.recheck(table, WriteKind::Insert, &name, &columns, &checks);
+        let generated = self.generated_columns(table)?;
+        let mut recheck =
+            self.recheck(table, WriteKind::Insert, &name, &columns, &checks, &generated);
         if recheck.is_none() && conflict_set.is_some() {
             // The triggers `BEFORE UPDATE ... FOR EACH ROW` of `DO UPDATE` also come before the checks.
-            recheck = self.recheck(table, WriteKind::Update, &name, &columns, &checks);
+            recheck = self.recheck(table, WriteKind::Update, &name, &columns, &checks, &generated);
         }
         let updated = conflict_set.map_or_else(Vec::new, |list| set_columns(list, &columns));
         if conflict_set.is_some() {
             self.mark_updated(&updated);
         }
-        if !checks.is_empty() {
-            query = with_checks(&name, &columns, query, checks, &[]);
+        if !checks.is_empty() || !generated.is_empty() {
+            query = with_checks(&name, &columns, query, checks, &generated, &[]);
         }
         let width = columns.len();
         let unique = self.unique_keys(table, &columns)?;
@@ -430,8 +432,9 @@ impl Analyzer<'_> {
             query.targets.extend(carried_targets(carried));
             // The leaf partition checks the new row of a partitioned table.
             let checks = if self.is_partitioned(table) { Vec::new() } else { self.checks(table)? };
-            if !checks.is_empty() {
-                query = Box::new(with_checks(name, columns, *query, checks, &tail));
+            let generated = self.generated_columns(table)?;
+            if !checks.is_empty() || !generated.is_empty() {
+                query = Box::new(with_checks(name, columns, *query, checks, &generated, &tail));
             }
             conflict.update = Some(query);
         }
@@ -699,13 +702,15 @@ impl Analyzer<'_> {
         name: &str,
         columns: &[Column],
         checks: &[(String, Expr)],
+        generated: &[(usize, Expr)],
     ) -> Option<Box<Query>> {
         let bits = rupg_catalog::TRIGGER_ROW | rupg_catalog::TRIGGER_BEFORE | trigger_event(kind);
         // The triggers of a partitioned table fire as their clones in the leaf partitions, which check the rows.
         if self.is_partitioned(table) || !self.user_triggers(table, bits) {
             return None;
         }
-        let mut query = with_checks(name, columns, Query::default(), checks.to_vec(), &[]);
+        let mut query =
+            with_checks(name, columns, Query::default(), checks.to_vec(), generated, &[]);
         // The relation reads the row that the triggers give, not a subquery.
         let mut relation = Relation::new(0, columns.to_vec(), None, None, None);
         relation.name = name.to_string();
@@ -1031,6 +1036,16 @@ impl Analyzer<'_> {
                     ))
                     .with_hint("Use OVERRIDING SYSTEM VALUE to override."));
                 }
+                Item::Expr(_) if self.generated(table, index) != 0 => {
+                    return Err(Error::new(
+                        SqlState::GENERATED_ALWAYS,
+                        format!(
+                            "cannot insert a non-DEFAULT value into column \"{}\"",
+                            column.name
+                        ),
+                    )
+                    .with_detail(format!("Column \"{}\" is a generated column.", column.name)));
+                }
                 item => item,
             };
             row.push(match item {
@@ -1074,6 +1089,33 @@ impl Analyzer<'_> {
         relation.and_then(|r| r.columns.get(index)).map_or(0, |c| c.identity)
     }
 
+    /// `attgenerated` of the column of the table with the index `index` from 0, or 0 for a column that is not generated.
+    pub(crate) fn generated(&self, table: u32, index: usize) -> u8 {
+        let catalog = self.env.catalog();
+        let relation = catalog.and_then(|c| c.relation(table));
+        relation.and_then(|r| r.columns.get(index)).map_or(0, |c| c.generated)
+    }
+
+    /// The stored generated columns of the table, each with the index of the column from 0 and its generation expression, as `ExecComputeStoredGenerated` computes them for a new row. The leaf partitions of a partitioned table compute their own columns.
+    pub(crate) fn generated_columns(&self, table: u32) -> Result<Vec<(usize, Expr)>> {
+        let Some(catalog) = self.env.catalog() else { return Ok(Vec::new()) };
+        let Some(relation) = catalog.relation(table) else { return Ok(Vec::new()) };
+        if relation.kind == RelKind::Partitioned {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        for (index, column) in relation.columns.iter().enumerate() {
+            if column.generated == 0 || column.dropped {
+                continue;
+            }
+            let attnum = i16::try_from(index + 1).unwrap_or(i16::MAX);
+            if let Some(default) = catalog.default_of(table, attnum) {
+                out.push((index, crate::node::read(&default.expr)?));
+            }
+        }
+        Ok(out)
+    }
+
     /// `transformAssignedExpr`: the expression cast to the type of the column with an assignment cast.
     pub(crate) fn assign(&mut self, expr: Expr, column: &Column) -> Result<Expr> {
         let (from, at) = (expr.ty, expr.place());
@@ -1103,6 +1145,12 @@ impl Analyzer<'_> {
         // A dropped column gets a null, as `ExecInitInsertProjection` gives it.
         if column.is_dropped() {
             return Ok(Expr::new(ExprKind::Const(Value::Null), 0));
+        }
+        // The write computes a generated column after the triggers `BEFORE`, which see a null.
+        if self.generated(table, index) != 0 {
+            let mut null = Expr::new(ExprKind::Const(Value::Null), column.ty);
+            null.typmod = column.typmod;
+            return Ok(null);
         }
         let attnum = i16::try_from(index + 1).unwrap_or(i16::MAX);
         let sequence = self.env.catalog().and_then(|c| c.root_identity_sequence(table, attnum));
@@ -1453,12 +1501,13 @@ fn trigger_event(kind: WriteKind) -> i16 {
     }
 }
 
-/// The query that reads the rows of `rows` as a subquery with the name of the table, and gives the columns and then the condition of each check constraint. The values of `tail` come after the columns in each row of `rows`, and after the conditions in each row of the query, as the carried values of `RETURNING` and the ID of the version of the old row of an `UPDATE`.
+/// The query that reads the rows of `rows` as a subquery with the name of the table, and gives the columns and then the condition of each check constraint. The values of `tail` come after the columns in each row of `rows`, and after the conditions in each row of the query, as the carried values of `RETURNING` and the ID of the version of the old row of an `UPDATE`. A stored generated column of `generated` gets the value of its generation expression on the row, as `ExecComputeStoredGenerated` gives it before `ExecConstraints`, and the checks see that value.
 pub(crate) fn with_checks(
     name: &str,
     columns: &[Column],
     rows: Query,
     checks: Vec<(String, Expr)>,
+    generated: &[(usize, Expr)],
     tail: &[Column],
 ) -> Query {
     let width = columns.len();
@@ -1476,11 +1525,14 @@ pub(crate) fn with_checks(
         })
         .collect();
     let tail = targets.split_off(width);
-    targets.extend(checks.into_iter().map(|(n, expr)| Target {
-        name: n,
-        expr,
-        origin: None,
-        junk: false,
+    for (index, expr) in generated {
+        if let Some(target) = targets.get_mut(*index) {
+            target.expr = expr.clone();
+        }
+    }
+    targets.extend(checks.into_iter().map(|(n, mut expr)| {
+        compute_generated(&mut expr, generated);
+        Target { name: n, expr, origin: None, junk: false }
     }));
     targets.extend(tail);
     let mut relation = Relation::new(0, columns, Some(Box::new(rows)), None, None);
@@ -1491,6 +1543,27 @@ pub(crate) fn with_checks(
         targets,
         ..Query::default()
     }
+}
+
+/// The expression with the generation expression of each stored generated column of `generated` in place of the column of the relation 0.
+fn compute_generated(expr: &mut Expr, generated: &[(usize, Expr)]) {
+    if generated.is_empty() {
+        return;
+    }
+    expr.each_mut(0, &mut |e, depth| {
+        let ExprKind::Var(var) = e.kind else { return false };
+        if var.levels_up != depth || var.relation != 0 {
+            return false;
+        }
+        let index = usize::try_from(var.attnum).ok().and_then(|n| n.checked_sub(1));
+        let Some((_, value)) = generated.iter().find(|(i, _)| Some(*i) == index) else {
+            return false;
+        };
+        let mut value = value.clone();
+        value.raise(depth);
+        *e = value;
+        true
+    });
 }
 
 /// The error of `DEFAULT` for a part of a column, which has no default.

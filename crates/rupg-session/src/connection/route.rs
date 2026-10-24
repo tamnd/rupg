@@ -19,9 +19,9 @@ use crate::query::{self, Reader};
 struct Leaf {
     oid: u32,
     name: String,
-    /// The `INSERT` into the leaf, from [`rupg_analyze::copy_insert`], with a parameter for each column that is not dropped.
+    /// The `INSERT` into the leaf, from [`rupg_analyze::copy_insert`], with a parameter for each column of `live`.
     plan: Plan,
-    /// The columns of the leaf that are not dropped.
+    /// The columns of the leaf that are not dropped and not generated. The leaf computes its generated columns.
     live: Vec<usize>,
     /// For each column of the leaf, the column of the partitioned table of the statement with the same name. A dropped column has none.
     up: Vec<Option<usize>>,
@@ -878,7 +878,9 @@ fn leaf(
     } else {
         armed(catalog, reader, oid, event)?
     };
-    let live: Vec<usize> = (0..rel.columns.len()).filter(|&i| !rel.columns[i].dropped).collect();
+    let live: Vec<usize> = (0..rel.columns.len())
+        .filter(|&i| !rel.columns[i].dropped && rel.columns[i].generated == 0)
+        .collect();
     let root_types = catalog
         .relation(root)
         .map(|r| r.columns.iter().map(|c| c.ty).collect())

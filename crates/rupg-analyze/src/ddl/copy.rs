@@ -62,7 +62,22 @@ pub fn copy_target(stmt: &CopyStmt, rv: &RangeVar, env: &dyn Env) -> Result<Copy
     let columns = relation_columns(env, relid);
     let names: Vec<String> =
         stmt.attlist.iter().flatten().filter_map(string).map(str::to_string).collect();
-    let selected = attnums(&columns, &names, Some(&name))?;
+    let mut selected = attnums(&columns, &names, Some(&name))?;
+    // `CopyGetAttnums`: the default list has no generated column, and the list of the statement cannot name one.
+    let generated: Vec<bool> =
+        env.catalog().and_then(|c| c.relation(relid)).map_or_else(Vec::new, |rel| {
+            rel.columns.iter().filter(|c| !c.dropped).map(|c| c.generated != 0).collect()
+        });
+    let is_generated = |i: usize| generated.get(i).copied().unwrap_or(false);
+    if names.is_empty() {
+        selected.retain(|&i| !is_generated(i));
+    } else if let Some(&i) = selected.iter().find(|&&i| is_generated(i)) {
+        return Err(Error::new(
+            SqlState::INVALID_COLUMN_REFERENCE,
+            format!("column \"{}\" is a generated column", columns[i]),
+        )
+        .with_detail("Generated columns cannot be used in COPY."));
+    }
     Ok(CopyTarget { relid, name, kind, columns, selected })
 }
 

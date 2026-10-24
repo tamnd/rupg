@@ -62,6 +62,7 @@ impl Definer<'_, '_> {
                     is_not_null: false,
                     default: None,
                     identity: 0,
+                    generated: 0,
                     storage: None,
                     compression: None,
                     inherited: None,
