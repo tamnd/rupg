@@ -1,0 +1,60 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE vct (a int, d text COLLATE "C", e text);
+CREATE TABLE
+> CREATE VIEW vcv AS SELECT a, d, e FROM vct;
+CREATE VIEW
+> SELECT attname, collname FROM pg_attribute JOIN pg_collation c ON c.oid = attcollation WHERE attrelid = 'vcv'::regclass ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,collname@pg_collation.2:19:64:-1
+row d,C
+row e,default
+SELECT 2
+> CREATE OR REPLACE VIEW vcv AS SELECT a, d COLLATE "POSIX", e FROM vct;
+ERROR 42P16 cannot change collation of view column "d" from "C" to "POSIX"
+> CREATE OR REPLACE VIEW vcv AS SELECT a, d, e COLLATE "C" FROM vct;
+ERROR 42P16 cannot change collation of view column "e" from "default" to "C"
+> CREATE OR REPLACE VIEW vcv AS SELECT a, d COLLATE "C", e, d || e AS f FROM vct;
+CREATE VIEW
+> CREATE OR REPLACE VIEW vcv AS SELECT a, d, e, (d || e) COLLATE "POSIX" AS f FROM vct;
+ERROR 42P16 cannot change collation of view column "f" from "C" to "POSIX"
+> SELECT attname, collname FROM pg_attribute JOIN pg_collation c ON c.oid = attcollation WHERE attrelid = 'vcv'::regclass ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,collname@pg_collation.2:19:64:-1
+row d,C
+row e,default
+row f,C
+SELECT 3
+> SELECT pg_get_viewdef('vcv'::regclass);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a,
+    (d COLLATE "C") AS d,
+    e,
+    (d || e) AS f
+   FROM vct;
+SELECT 1
+> CREATE VIEW vcw AS SELECT d COLLATE "POSIX" || e AS g, (a + 1) AS h FROM vct WHERE e COLLATE "C" > 'a';
+CREATE VIEW
+> SELECT pg_get_viewdef('vcw'::regclass);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT ((d COLLATE "POSIX") || e) AS g,
+    (a + 1) AS h
+   FROM vct
+  WHERE ((e COLLATE "C") > 'a'::text);
+SELECT 1
+> INSERT INTO vct VALUES (1, 'x', 'y'), (2, 'b', '0');
+INSERT 0 2
+> SELECT * FROM vcw ORDER BY g COLLATE "C";
+fields g@vcw.1:25:-1:-1,h@vcw.2:23:4:-1
+row xy,2
+SELECT 1
+> SELECT d COLLATE "C" AS z FROM vct ORDER BY 1;
+fields z:25:-1:-1
+row b
+row x
+SELECT 2
+> DROP VIEW vcw;
+DROP VIEW
+> DROP VIEW vcv;
+DROP VIEW
+> DROP TABLE vct;
+DROP TABLE

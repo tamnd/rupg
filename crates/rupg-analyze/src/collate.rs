@@ -1,6 +1,6 @@
 //! `assign_collations_walker` of `parse_collate.c` for the columns of a query: the collation of each expression of the result.
 //!
-//! The analyzer does not keep a collation on each expression, so this module finds it again from the columns of the relations. A column and a constant have their own collation, a node with a result of a collatable type takes the collation of its inputs, and a node with no collatable input takes the collation of its type. A collation that is not the default wins over the default, and two different collations that are not the default give a conflict. The analyzer drops `COLLATE`, so an explicit collation does not count.
+//! The analyzer does not keep a collation on each expression, so this module finds it again from the columns of the relations. A column and a constant have their own collation, a node with a result of a collatable type takes the collation of its inputs, and a node with no collatable input takes the collation of its type. A collation that is not the default wins over the default, and two different collations that are not the default give a conflict. An explicit collation from `COLLATE` wins over an implicit one.
 
 use rupg_catalog::Catalog;
 
@@ -11,21 +11,25 @@ use crate::types;
 /// The OID of the collation `default`.
 pub(crate) const DEFAULT_COLLATION: u32 = 100;
 
-/// The collation state of an expression, as `assign_collations_context` without the explicit strength.
+/// The collation state of an expression, as `assign_collations_context`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum State {
     /// The expression has no collation, because its type is not collatable.
     None,
     /// An implicit collation.
     Implicit(u32),
+    /// An explicit collation, from `COLLATE`.
+    Explicit(u32),
     /// Two different implicit collations that are not the default.
     Conflict,
 }
 
 impl State {
-    /// `merge_collation_state` for two implicit states.
+    /// `merge_collation_state`. Of two different explicit collations the first one wins, where PostgreSQL gives an error.
     fn merge(self, other: State) -> State {
         match (self, other) {
+            (State::Explicit(_), _) => self,
+            (_, State::Explicit(_)) => other,
             (State::Conflict, _) | (_, State::Conflict) => State::Conflict,
             (State::None, s) | (s, State::None) => s,
             (State::Implicit(a), State::Implicit(b)) if a == b => self,
@@ -37,7 +41,7 @@ impl State {
     /// `exprCollation` after the walker: 0 for no collation and for a conflict.
     fn oid(self) -> u32 {
         match self {
-            State::Implicit(oid) => oid,
+            State::Implicit(oid) | State::Explicit(oid) => oid,
             State::None | State::Conflict => 0,
         }
     }
@@ -60,6 +64,7 @@ fn state(expr: &Expr, levels: &[&Query], catalog: Option<&Catalog>) -> State {
         return State::None;
     }
     let inputs: Vec<&Expr> = match &expr.kind {
+        ExprKind::Collate(_, collation) => return State::Explicit(*collation),
         ExprKind::Var(var) => {
             return match column_collation(*var, levels, catalog) {
                 0 => State::None,

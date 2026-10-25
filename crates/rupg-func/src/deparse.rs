@@ -429,6 +429,13 @@ impl<'a> Deparser<'a> {
                 self.expr(&na.arg, implicit)?;
             }
             ExprKind::Relabel(arg, form) => self.cast_node(e, arg, *form, e.typmod, implicit)?,
+            ExprKind::Collate(arg, collation) => {
+                self.open();
+                self.paren(arg, implicit, e)?;
+                self.buf.push_str(" COLLATE ");
+                self.buf.push_str(&collation_name(*collation, self.session)?);
+                self.close();
+            }
             ExprKind::CoerceViaIo(arg, form) => self.cast_node(e, arg, *form, -1, implicit)?,
             ExprKind::ArrayCoerce { arg, form, .. } => {
                 self.cast_node(e, arg, *form, e.typmod, implicit)?;
@@ -1387,6 +1394,7 @@ fn is_simple(e: &Expr, parent: &Expr, paren: bool) -> bool {
         | ExprKind::RowCompare(_)
         | ExprKind::CaseTest
         | ExprKind::FieldStore(_)
+        | ExprKind::Collate(..)
         | ExprKind::NamedArg(_) => false,
     }
 }
