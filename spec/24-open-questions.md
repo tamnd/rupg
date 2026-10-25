@@ -42,6 +42,8 @@ These questions came up while the documents were written. They are closed, and t
 
 **Q31. The checkpoint trigger.** Closed at M1. `max_wal_size` applies to the sum over all rings, as in PostgreSQL, so the worst redo is 1 GB for any number of rings. A ring that is half full also starts a checkpoint. Document 11 section 11.15 gives the reason, and #44 has the evidence.
 
+**Q70. Crate names.** Closed at M1. The 42 crates of the workspace that have no `publish = false` are on crates.io at version 0.1.84, under the names of document 22. The publish runs in the order of the dependencies, with all crates at one version, and `cargo publish --locked`. #83 has the record.
+
 ## 24.3 The 10x targets
 
 **Q1. Do the ClickBench rules accept the summaries?** H1 to H6 build structures at load from the data, under the honesty rule of document 02 section 2.4.5. The ClickBench maintainers decide what the untuned category allows. Raised by documents 02 and 20. Closes before the first submission, after M8. Decided by a written answer from the maintainers. Until then, every published rupg row has a second row with `rupg.use_summaries = off`.
@@ -193,8 +195,6 @@ These questions came up while the documents were written. They are closed, and t
 **Q68. The load case with a warm page cache.** Document 20 section 20.3 runs the load with the source in the page cache and without it. The gate reads the cold case. The board of ClickBench does not say which case each system used. Raised by document 20. Closes at M0.
 
 **Q69. Thresholds of the performance tests.** 3 percent more instructions on one query fails a change, 1 percent in total fails a change, a nightly slowdown over 5 percent opens a bug, and CI must finish in 30 minutes. These are budgets until the noise is measured. Raised by document 21. Closes at M1. At the M1 close (#2) part of this is measured. Two passes of `cargo xtask bench` on one machine differ by 0.01 percent or less for each case, and the CI workflow takes 7 to 14 minutes. The nightly wall time is not measured, so the question stays open for the 5 percent budget.
-
-**Q70. Crate names.** All 41 crate names and the two sibling repository names are free today. crates.io does not allow name squatting, so names are published at M1. Raised by document 22. Closes at M1. At the M1 close (#2) the names are not published. The project owner decides when to publish.
 
 **Q71. Dates.** The documents give no dates. A forecast is possible after M2, when the time per milestone and the lines against the budgets of document 22 are measured. Raised by document 23. Closes at M2.
 
