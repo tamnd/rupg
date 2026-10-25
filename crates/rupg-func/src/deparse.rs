@@ -386,6 +386,31 @@ impl<'a> Deparser<'a> {
         Ok(())
     }
 
+    /// `get_rule_expr_toplevel`: a whole-row `Var` gets the cast to its row type, so that the parser does not expand `*` in `ROW()` or `VALUES`.
+    pub(crate) fn toplevel(&mut self, e: &Expr, implicit: bool) -> Result<()> {
+        match &e.kind {
+            ExprKind::Var(var)
+                if var.attnum == 0
+                    && self.join_column(e).is_none()
+                    && self.merged_name(e).is_none() =>
+            {
+                self.whole_row(var, e, true)
+            }
+            _ => self.expr(e, implicit),
+        }
+    }
+
+    /// `get_rule_list_toplevel`: [`Deparser::toplevel`] for each expression of a list, with `, ` between them.
+    fn toplevel_list(&mut self, items: &[Expr], implicit: bool) -> Result<()> {
+        for (i, item) in items.iter().enumerate() {
+            if i > 0 {
+                self.buf.push_str(", ");
+            }
+            self.toplevel(item, implicit)?;
+        }
+        Ok(())
+    }
+
     /// `get_rule_expr`. `implicit` is `showimplicit`: true to show the casts that the analyzer added.
     fn expr(&mut self, e: &Expr, implicit: bool) -> Result<()> {
         if let Some((join, column)) = self.join_column(e) {
@@ -520,7 +545,7 @@ impl<'a> Deparser<'a> {
             }
             ExprKind::Row(args, form) => {
                 self.buf.push_str("ROW(");
-                self.list(args, true)?;
+                self.toplevel_list(args, true)?;
                 self.buf.push(')');
                 if *form == CastForm::Explicit {
                     let ty = reg::type_text(e.ty, Some(-1), self.session)?;
@@ -1156,14 +1181,14 @@ impl<'a> Deparser<'a> {
             if i > 0 {
                 self.buf.push_str(", ");
             }
-            self.expr(left, true)?;
+            self.toplevel(left, true)?;
         }
         self.buf.push_str(&format!(") {name} ROW("));
         for (i, (_, right)) in pairs.iter().enumerate() {
             if i > 0 {
                 self.buf.push_str(", ");
             }
-            self.expr(right, true)?;
+            self.toplevel(right, true)?;
         }
         self.buf.push_str("))");
         Ok(())

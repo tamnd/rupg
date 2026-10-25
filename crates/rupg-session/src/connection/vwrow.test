@@ -1,0 +1,69 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE wr8 (q1 int8, q2 int8);
+CREATE TABLE
+> INSERT INTO wr8 VALUES (1, 2), (3, 4);
+INSERT 0 2
+> CREATE TYPE wrnest AS (x wr8);
+CREATE TYPE
+> CREATE VIEW wrv1 AS SELECT ROW(i.*::wr8)::wrnest FROM wr8 i;
+CREATE VIEW
+> SELECT pg_get_viewdef('wrv1', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT ROW(i.*::wr8)::wrnest AS "row"
+   FROM wr8 i;
+SELECT 1
+> SELECT "row"::text FROM wrv1 ORDER BY 1;
+fields row:25:-1:-1
+row ("(1,2)")
+row ("(3,4)")
+SELECT 2
+> CREATE VIEW wrv2 AS SELECT * FROM wr8 i, LATERAL (VALUES(i.*::wr8)) ss;
+CREATE VIEW
+> SELECT pg_get_viewdef('wrv2', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT i.q1,
+    i.q2,
+    ss.column1
+   FROM wr8 i,
+    LATERAL ( VALUES (i.*::wr8)) ss;
+SELECT 1
+> SELECT q1, q2, column1::text FROM wrv2 ORDER BY 1;
+fields q1@wrv2.1:20:8:-1,q2@wrv2.2:20:8:-1,column1:25:-1:-1
+row 1,2,(1,2)
+row 3,4,(3,4)
+SELECT 2
+> CREATE VIEW wrv3 AS SELECT * FROM wr8 i WHERE i.* IN (VALUES(i.*::wr8));
+CREATE VIEW
+> SELECT pg_get_viewdef('wrv3', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT q1,
+    q2
+   FROM wr8 i
+  WHERE (i.* IN ( VALUES (i.*::wr8)));
+SELECT 1
+> SELECT * FROM wrv3 ORDER BY 1;
+fields q1@wrv3.1:20:8:-1,q2@wrv3.2:20:8:-1
+row 1,2
+row 3,4
+SELECT 2
+> CREATE VIEW wrv5 AS SELECT i.* AS w FROM wr8 i WHERE ROW(i.q1, i.q2) < ROW(3, 4);
+CREATE VIEW
+> SELECT pg_get_viewdef('wrv5', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT q1,
+    q2
+   FROM wr8 i
+  WHERE (ROW(q1, q2) < ROW(3, 4));
+SELECT 1
+> SELECT * FROM wrv5;
+fields q1@wrv5.1:20:8:-1,q2@wrv5.2:20:8:-1
+row 1,2
+SELECT 1
+> DROP VIEW wrv1, wrv2, wrv3, wrv5;
+DROP VIEW
+> DROP TYPE wrnest;
+DROP TYPE
+> DROP TABLE wr8;
+DROP TABLE
