@@ -1376,3 +1376,45 @@ DROP FUNCTION
 DROP FUNCTION
 > DROP TABLE sf_target;
 DROP TABLE
+> CREATE TABLE ruletest1 (a int);
+CREATE TABLE
+> CREATE TABLE ruletest2 (b int);
+CREATE TABLE
+> CREATE RULE rule1 AS ON INSERT TO ruletest1
+>>     DO INSTEAD INSERT INTO ruletest2 VALUES (NEW.*);
+CREATE RULE
+> INSERT INTO ruletest1 VALUES (1);
+INSERT 0 1
+> ALTER TABLE ruletest1 DISABLE RULE rule1;
+ALTER TABLE
+> INSERT INTO ruletest1 VALUES (2);
+INSERT 0 1
+> ALTER TABLE ruletest1 ENABLE RULE rule1;
+ALTER TABLE
+> SET session_replication_role = replica;
+SET
+> INSERT INTO ruletest1 VALUES (3);
+INSERT 0 1
+> ALTER TABLE ruletest1 ENABLE REPLICA RULE rule1;
+ALTER TABLE
+> INSERT INTO ruletest1 VALUES (4);
+INSERT 0 1
+> RESET session_replication_role;
+RESET
+> INSERT INTO ruletest1 VALUES (5);
+INSERT 0 1
+> SELECT * FROM ruletest1;
+fields a@ruletest1.1:23:4:-1
+row 2
+row 3
+row 5
+SELECT 3
+> SELECT * FROM ruletest2;
+fields b@ruletest2.1:23:4:-1
+row 1
+row 4
+SELECT 2
+> DROP TABLE ruletest1;
+DROP TABLE
+> DROP TABLE ruletest2;
+DROP TABLE

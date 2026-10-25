@@ -28,7 +28,7 @@ impl Status {
 }
 
 /// The honored parameters with the part of rupg that reads each one, in the order of the names without regard to case.
-pub static HONORED: [(&str, &str); 38] = [
+pub static HONORED: [(&str, &str); 39] = [
     ("application_name", "The server reports it to the client."),
     ("array_nulls", "The input of an array reads an unquoted NULL as a null when it is on."),
     ("bytea_output", "The output of bytea uses the hex or the escape form."),
@@ -65,6 +65,10 @@ pub static HONORED: [(&str, &str); 38] = [
     ("server_version", "The session reports the version of PostgreSQL and of rupg."),
     ("server_version_num", "The session reports the version of PostgreSQL."),
     ("session_authorization", "The session sets it from the role of the connection."),
+    (
+        "session_replication_role",
+        "In the mode replica only the triggers and the rules of ENABLE REPLICA and ENABLE ALWAYS fire.",
+    ),
     ("ssl", "The server takes TLS connections when it is on."),
     ("ssl_ca_file", "The server loads the root certificates for client certificates from it."),
     ("ssl_cert_file", "The server loads its certificate from it."),
@@ -91,16 +95,11 @@ pub static HONORED: [(&str, &str); 38] = [
 ];
 
 /// The refused parameters, with the values that rupg refuses and the reason, in the order of the names without regard to case.
-pub static REFUSED: [(&str, &[&str], &str); 4] = [
+pub static REFUSED: [(&str, &[&str], &str); 3] = [
     (
         "default_transaction_isolation",
         &["serializable"],
         "rupg has no serializable isolation before M5, and a client must not get a weaker level without an error.",
-    ),
-    (
-        "session_replication_role",
-        &["replica"],
-        "rupg has no triggers before M7, so it cannot keep the triggers of a replica from firing.",
     ),
     (
         "ssl_sni",

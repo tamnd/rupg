@@ -470,6 +470,10 @@ impl Env for SchemaEnv<'_> {
         self.env.allow_system_table_mods()
     }
 
+    fn replica(&self) -> bool {
+        self.env.replica()
+    }
+
     fn check_function_bodies(&self) -> bool {
         self.env.check_function_bodies()
     }

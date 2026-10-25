@@ -1452,10 +1452,6 @@ mod tests {
             message(set(&mut s, "transaction_isolation", "serializable")),
             "0A000 rupg does not support parameter \"transaction_isolation\" set to \"serializable\""
         );
-        assert_eq!(
-            message(set(&mut s, "session_replication_role", "replica")),
-            "0A000 rupg does not support parameter \"session_replication_role\" set to \"replica\""
-        );
         assert_eq!(state_of(set(&mut s, "transaction_isolation", "bogus")), "22023");
         set(&mut s, "session_replication_role", "local").unwrap();
         set(&mut s, "default_transaction_isolation", "repeatable read").unwrap();

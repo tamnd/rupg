@@ -793,10 +793,15 @@ pub struct Trigger {
     pub parent: u32,
 }
 
+/// True when a trigger or a rule with the state `enabled` fires in the mode of `session_replication_role`, as `TriggerEnabled` and `matchLocks` say. In the mode `replica` it fires when the state is `R` or `A`. In the modes `origin` and `local` it fires when the state is `O` or `A`. A disabled one, `D`, never fires.
+pub fn fires(enabled: u8, replica: bool) -> bool {
+    if replica { matches!(enabled, b'R' | b'A') } else { matches!(enabled, b'O' | b'A') }
+}
+
 impl Trigger {
-    /// True when the trigger fires with `session_replication_role` at `origin`, the default: `tgenabled` is `O` or `A`.
-    pub fn fires(&self) -> bool {
-        matches!(self.enabled, b'O' | b'A')
+    /// True when the trigger fires in the mode of `session_replication_role`, as [`fires`] says for its `tgenabled`.
+    pub fn fires(&self, replica: bool) -> bool {
+        fires(self.enabled, replica)
     }
 }
 

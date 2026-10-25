@@ -317,7 +317,8 @@ impl Analyzer<'_> {
         };
         let event = |e: u8| if code == 0 { e != b'1' } else { e == code };
         self.env.catalog().is_some_and(|c| {
-            c.rules().any(|r| r.relation == oid && event(r.event) && crate::rules::fires(r))
+            c.rules()
+                .any(|r| r.relation == oid && event(r.event) && crate::rules::fires(r, self.env))
         })
     }
 

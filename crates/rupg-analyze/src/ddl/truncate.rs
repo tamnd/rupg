@@ -66,7 +66,7 @@ impl Definer<'_, '_> {
         let fires = |t: &rupg_catalog::Trigger| {
             tables.contains(&t.relation)
                 && t.kind & rupg_catalog::TRIGGER_TRUNCATE != 0
-                && t.fires()
+                && t.fires(self.an.env.replica())
         };
         if self.catalog.triggers().any(fires) {
             return Err(not_yet("TRUNCATE of a table with TRUNCATE triggers", None));

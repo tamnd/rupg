@@ -313,7 +313,7 @@ server_version	honored
 server_version_num	honored
 session_authorization	honored
 session_preload_libraries	accepted
-session_replication_role	refused
+session_replication_role	honored
 shared_buffers	accepted
 shared_memory_size	accepted
 shared_memory_size_in_huge_pages	accepted

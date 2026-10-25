@@ -1,0 +1,64 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE p (a int PRIMARY KEY);
+CREATE TABLE
+> CREATE TABLE c (a int REFERENCES p);
+CREATE TABLE
+> CREATE TABLE log (t text);
+CREATE TABLE
+> CREATE FUNCTION tf() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO log VALUES (TG_NAME || ' ' || NEW.a); RETURN NEW; END $$;
+CREATE FUNCTION
+> CREATE TRIGGER t_origin BEFORE INSERT ON c FOR EACH ROW EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> CREATE TRIGGER t_replica BEFORE INSERT ON c FOR EACH ROW EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> CREATE TRIGGER t_always BEFORE INSERT ON c FOR EACH ROW EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> ALTER TABLE c ENABLE REPLICA TRIGGER t_replica;
+ALTER TABLE
+> ALTER TABLE c ENABLE ALWAYS TRIGGER t_always;
+ALTER TABLE
+> INSERT INTO c VALUES (1);
+ERROR 23503 insert or update on table "c" violates foreign key constraint "c_a_fkey"
+DETAIL Key (a)=(1) is not present in table "p".
+> SET session_replication_role = replica;
+SET
+> SHOW session_replication_role;
+fields session_replication_role:25:-1:-1
+row replica
+SHOW
+> INSERT INTO c VALUES (2);
+INSERT 0 1
+> SELECT * FROM c ORDER BY a;
+fields a@c.1:23:4:-1
+row 2
+SELECT 1
+> SET session_replication_role = local;
+SET
+> INSERT INTO p VALUES (3);
+INSERT 0 1
+> INSERT INTO c VALUES (3);
+INSERT 0 1
+> RESET session_replication_role;
+RESET
+> INSERT INTO c VALUES (4);
+ERROR 23503 insert or update on table "c" violates foreign key constraint "c_a_fkey"
+DETAIL Key (a)=(4) is not present in table "p".
+> SELECT * FROM log ORDER BY t;
+fields t@log.1:25:-1:-1
+row t_always 2
+row t_always 3
+row t_origin 3
+row t_replica 2
+SELECT 4
+> SELECT tgname, tgenabled FROM pg_trigger WHERE tgrelid = 'c'::regclass AND NOT tgisinternal ORDER BY 1;
+fields tgname@pg_trigger.4:19:64:-1,tgenabled@pg_trigger.7:18:1:-1
+row t_always,A
+row t_origin,O
+row t_replica,R
+SELECT 3
+> DROP TABLE c, p, log;
+DROP TABLE
+> DROP FUNCTION tf();
+DROP FUNCTION

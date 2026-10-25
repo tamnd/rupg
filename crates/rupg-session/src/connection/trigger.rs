@@ -186,7 +186,9 @@ pub(super) fn armed(
     event: i16,
 ) -> Result<Triggers, Error> {
     let found = catalog.triggers_of(table);
-    let found = found.into_iter().filter(|t| !t.internal && t.fires() && t.kind & event != 0);
+    let found = found.into_iter().filter(|t| {
+        !t.internal && t.fires(rupg_analyze::Env::replica(reader)) && t.kind & event != 0
+    });
     let mut list = Vec::new();
     for trigger in found {
         let when = rupg_analyze::trigger_when(reader, trigger.oid)?;
