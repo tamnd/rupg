@@ -324,9 +324,6 @@ impl Analyzer<'_> {
         let rv = s.relation.as_deref().ok_or_else(|| Error::internal("an INSERT with no table"))?;
         let (table, name, columns) = self.target_table(rv, WriteKind::Insert)?;
         let rows = std::mem::take(&mut self.rule.rows);
-        if self.auto_view.is_some() && s.onConflictClause.is_some() {
-            return Err(not_yet("INSERT into an updatable view with ON CONFLICT"));
-        }
         if self.auto_view.is_some() && !inverted.is_empty() {
             return Err(not_yet("a conditional rule DO INSTEAD of an updatable view"));
         }
@@ -392,6 +389,9 @@ impl Analyzer<'_> {
             .as_deref()
             .filter(|c| matches!(c.action, OnConflictAction::ONCONFLICT_UPDATE))
             .map(|c| &c.targetList);
+        // The items of `SET` of an updatable view name the columns of its base relation.
+        let renamed = conflict_set.and_then(|list| self.auto_view_set(rv, list, &columns));
+        let conflict_set = renamed.as_ref().map(|(list, _, _)| list).or(conflict_set);
         let generated = self.generated_columns(table)?;
         let mut recheck =
             self.recheck(table, WriteKind::Insert, &name, &columns, &checks, &generated);
@@ -525,7 +525,17 @@ impl Analyzer<'_> {
             return Ok((on_conflict, inference));
         }
         let excluded = self.add_excluded()?;
-        let parts = self.update_row(rv, table, name, columns, &clause.targetList).and_then(|row| {
+        // The items of `SET` of an updatable view name the columns of its base relation, and they must name updatable columns of the view.
+        let (renamed, error) = match self.auto_view_set(rv, &clause.targetList, columns) {
+            Some((list, unknown, fixed)) => (Some(list), unknown.or(fixed)),
+            None => (None, None),
+        };
+        let list = renamed.as_ref().unwrap_or(&clause.targetList);
+        let row = match error {
+            Some(error) => self.set_items(list).and(Err(error)),
+            None => self.update_row(rv, table, name, columns, list),
+        };
+        let parts = row.and_then(|row| {
             let filter = self.target_where(clause.whereClause.as_ref())?;
             Ok((row, filter))
         });
@@ -564,6 +574,8 @@ impl Analyzer<'_> {
             return Ok(Inference::All);
         };
         if let Some(conname) = infer.conname.as_deref() {
+            // The constraint is a constraint of the view that the statement names, which has none.
+            let (table, name) = self.auto_view_target().unwrap_or((table, name));
             let constraint = self
                 .env
                 .catalog()
@@ -608,7 +620,19 @@ impl Analyzer<'_> {
                 }
                 continue;
             };
-            let Some(index) = columns.iter().position(|c| c.name == column) else {
+            // A column of an updatable view is the expression of the view on the base relation.
+            let index = match self.auto_view_column(column) {
+                None => columns.iter().position(|c| c.name == column),
+                Some(Some(expr)) => match expr.kind {
+                    ExprKind::Var(var) if var.attnum > 0 => usize::try_from(var.attnum - 1).ok(),
+                    _ => {
+                        exprs.push(expr);
+                        continue;
+                    }
+                },
+                Some(None) => None,
+            };
+            let Some(index) = index else {
                 return Err(Error::new(
                     SqlState::UNDEFINED_COLUMN,
                     format!("column \"{column}\" does not exist"),
