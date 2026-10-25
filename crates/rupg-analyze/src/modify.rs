@@ -515,21 +515,24 @@ impl Analyzer<'_> {
                 Ok(fields)
             }
             Some(Node::RowExpr(row)) => {
-                if usize::try_from(ncolumns).ok() != Some(row.args.len()) {
+                // `transformRowExpr` with `transformExpressionList`: `t.*` gives the columns of `t`, and the count is of the fields after that.
+                let mut fields = Vec::with_capacity(row.args.len());
+                for arg in &row.args {
+                    if let Some(Node::SetToDefault(d)) = arg {
+                        fields.push(Some(Item::Default(place(d.location))));
+                        continue;
+                    }
+                    let exprs = self.with_kind(Kind::UpdateSource, |a| {
+                        a.transform_expression_list(std::slice::from_ref(arg))
+                    })?;
+                    fields.extend(exprs.into_iter().map(|e| Some(Item::Expr(e))));
+                }
+                if usize::try_from(ncolumns).ok() != Some(fields.len()) {
                     return Err(Error::new(
                         SqlState::SYNTAX_ERROR,
                         "number of columns does not match number of values",
                     )
                     .at_opt(at));
-                }
-                let mut fields = Vec::with_capacity(row.args.len());
-                for arg in &row.args {
-                    fields.push(Some(match arg {
-                        Some(Node::SetToDefault(d)) => Item::Default(place(d.location)),
-                        arg => Item::Expr(
-                            self.with_kind(Kind::UpdateSource, |a| a.transform(arg.as_ref()))?,
-                        ),
-                    }));
                 }
                 Ok(fields)
             }

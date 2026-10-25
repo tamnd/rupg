@@ -1,0 +1,41 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> create table rs (a int primary key, b text, c int);
+CREATE TABLE
+> insert into rs values (1, 'one', 10), (2, 'two', 20);
+INSERT 0 2
+> create table rs2 (x int, y text, z int);
+CREATE TABLE
+> insert into rs2 values (1, 'uno', 100);
+INSERT 0 1
+> update rs set (a, b, c) = row(rs2.*) from rs2 where rs.a = rs2.x returning *;
+fields a@rs.1:23:4:-1,b@rs.2:25:-1:-1,c@rs.3:23:4:-1,x@rs2.1:23:4:-1,y@rs2.2:25:-1:-1,z@rs2.3:23:4:-1
+row 1,uno,100,1,uno,100
+UPDATE 1
+> update rs set (b, c) = row(rs2.*) from rs2 where rs.a = rs2.x;
+ERROR 42601 number of columns does not match number of values at 24
+> update rs set (a, b, c, a) = row(rs2.*, 1) from rs2 where rs.a = rs2.x;
+ERROR 42601 multiple assignments to same column "a"
+> update rs set (a, b, c) = (rs2.*) from rs2 where rs.a = rs2.x returning *;
+ERROR 0A000 source for a multiple-column UPDATE item must be a sub-SELECT or ROW() expression at 28
+> update rs set (b, c) = row(default, rs.*) where a = 2;
+ERROR 42601 number of columns does not match number of values at 24
+> update rs set (b, c, a) = row(default, 7, default) where a = 2 returning *;
+ERROR 23502 null value in column "a" of relation "rs" violates not-null constraint
+DETAIL Failing row contains (null, null, 7).
+> insert into rs values (1, 'ins', 5) on conflict (a) do update set (a, b, c) = row(excluded.*) returning *;
+fields a@rs.1:23:4:-1,b@rs.2:25:-1:-1,c@rs.3:23:4:-1
+row 1,ins,5
+INSERT 0 1
+> insert into rs values (1, 'ins2', 6) on conflict (a) do update set (a, b, c) = row(excluded.*) where rs = (1, text 'ins', 5) and excluded = (1, text 'ins2', 6) returning *;
+fields a@rs.1:23:4:-1,b@rs.2:25:-1:-1,c@rs.3:23:4:-1
+row 1,ins2,6
+INSERT 0 1
+> update rs set (b, c) = row(rs2.y, rs2.*) from rs2;
+ERROR 42601 number of columns does not match number of values at 24
+> select * from rs order by a;
+fields a@rs.1:23:4:-1,b@rs.2:25:-1:-1,c@rs.3:23:4:-1
+row 1,ins2,6
+row 2,two,20
+SELECT 2

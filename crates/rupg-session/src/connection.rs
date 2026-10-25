@@ -4436,6 +4436,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/excl.test")));
     }
 
+    /// `SET (a, b) = ROW(...)` counts the fields after `t.*` in the row gives the columns of `t`, as `transformRowExpr` expands the row with `transformExpressionList`. `connection/rowstar.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn rowstar() {
+        big_stack(|| script(include_str!("connection/rowstar.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {
