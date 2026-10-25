@@ -219,6 +219,7 @@ fn check(expr: &Expr) -> Result<()> {
         }
         ExprKind::NamedArg(na) => check(&na.arg)?,
         ExprKind::Relabel(arg, _)
+        | ExprKind::Collate(arg, _)
         | ExprKind::CoerceToDomain(arg, _)
         | ExprKind::NullTest(arg, _)
         | ExprKind::BooleanTest(arg, _)
@@ -1034,7 +1035,7 @@ fn with_subqueries(
 fn constant(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Const(_) | ExprKind::Param(_) => true,
-        ExprKind::Relabel(arg, _) => constant(arg),
+        ExprKind::Relabel(arg, _) | ExprKind::Collate(arg, _) => constant(arg),
         ExprKind::Func(f) => {
             builtin::proc_by_oid(f.oid).is_some_and(|p| p.volatile == b'i')
                 && f.args.iter().all(constant)
@@ -2160,6 +2161,7 @@ impl<'a> Eval<'a> {
             ExprKind::Func(f) => self.func(f, expr),
             ExprKind::NamedArg(na) => self.eval(&na.arg),
             ExprKind::Relabel(arg, _) => Ok(relabel(self.eval(arg)?, expr.ty)),
+            ExprKind::Collate(arg, _) => self.eval(arg),
             ExprKind::CoerceViaIo(arg, _) => {
                 let value = self.eval(arg)?;
                 if value.is_null() {

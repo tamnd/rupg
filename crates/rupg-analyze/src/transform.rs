@@ -196,8 +196,15 @@ impl Analyzer<'_> {
                     )
                     .at_opt(at));
                 }
-                self.collation_oid(&c.collname, at)?;
-                Ok(arg)
+                let collation = self.collation_oid(&c.collname, at)?;
+                // A literal of no type yet keeps its form, so that the coercion of the literal still applies to it.
+                if arg.ty == oid::UNKNOWN {
+                    return Ok(arg);
+                }
+                let (ty, typmod) = (arg.ty, arg.typmod);
+                let mut expr = Expr::new(ExprKind::Collate(Box::new(arg), collation), ty).at(at);
+                expr.typmod = typmod;
+                Ok(expr)
             }
             Node::RowExpr(r) => {
                 let args = self.transform_expression_list(&r.args)?;

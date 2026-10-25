@@ -30,6 +30,8 @@ pub enum ExprKind {
     NamedArg(Box<NamedArg>),
     /// `RelabelType`: the value of the argument with another type that has the same binary form.
     Relabel(Box<Expr>, CastForm),
+    /// `CollateExpr`: the value of the argument with the collation of this OID, from a `COLLATE` clause.
+    Collate(Box<Expr>, u32),
     /// `CoerceViaIO`: the output function of the type of the argument, then the input function of the type of the expression.
     CoerceViaIo(Box<Expr>, CastForm),
     /// `ArrayCoerceExpr`: a cast of each element of an array. `element` casts [`ExprKind::CaseTest`], which is the value of one element.
@@ -826,6 +828,7 @@ impl Expr {
             | ExprKind::NamedArg(_)
             | ExprKind::Bool(..)
             | ExprKind::Relabel(..)
+            | ExprKind::Collate(..)
             | ExprKind::Case(_)
             | ExprKind::CaseTest
             | ExprKind::Row(..)
@@ -871,6 +874,7 @@ impl Expr {
             ExprKind::Grouping(g) => g.args.iter().collect(),
             ExprKind::PlaceHolder(p) => vec![&p.expr],
             ExprKind::Relabel(arg, _)
+            | ExprKind::Collate(arg, _)
             | ExprKind::CoerceViaIo(arg, _)
             | ExprKind::CoerceToDomain(arg, _)
             | ExprKind::NullTest(arg, _)
@@ -935,6 +939,7 @@ impl Expr {
             ExprKind::Grouping(g) => g.args.iter_mut().collect(),
             ExprKind::PlaceHolder(p) => vec![&mut p.expr],
             ExprKind::Relabel(arg, _)
+            | ExprKind::Collate(arg, _)
             | ExprKind::CoerceViaIo(arg, _)
             | ExprKind::CoerceToDomain(arg, _)
             | ExprKind::NullTest(arg, _)
@@ -1145,6 +1150,7 @@ impl Expr {
             | ExprKind::Distinct { args, .. }
             | ExprKind::ScalarArrayOp { args, .. } => args.first(),
             ExprKind::Relabel(arg, _)
+            | ExprKind::Collate(arg, _)
             | ExprKind::CoerceViaIo(arg, _)
             | ExprKind::CoerceToDomain(arg, _)
             | ExprKind::ArrayCoerce { arg, .. }

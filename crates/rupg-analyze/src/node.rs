@@ -206,6 +206,7 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
         ExprKind::Const(_) => "CONST",
         ExprKind::Func(_) => "FUNC",
         ExprKind::Relabel(..) => "RELABEL",
+        ExprKind::Collate(..) => "COLLATE",
         ExprKind::CoerceViaIo(..) => "COERCEVIAIO",
         ExprKind::ArrayCoerce { .. } => "ARRAYCOERCE",
         ExprKind::CoerceToDomain(..) => "COERCETODOMAIN",
@@ -275,6 +276,10 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
                 CastForm::Explicit => " :form explicit",
                 CastForm::Implicit => " :form implicit",
             });
+            write_field("arg", arg, out)?;
+        }
+        ExprKind::Collate(arg, collation) => {
+            out.push_str(&format!(" :collation {collation}"));
             write_field("arg", arg, out)?;
         }
         ExprKind::ArrayCoerce { arg, element, form } => {
@@ -1057,6 +1062,7 @@ fn expr_of(item: &Item) -> Result<Expr> {
             })
         }
         "RELABEL" => ExprKind::Relabel(f.expr("arg")?, cast_form(&f)?),
+        "COLLATE" => ExprKind::Collate(f.expr("arg")?, f.number("collation")?),
         "COERCEVIAIO" => ExprKind::CoerceViaIo(f.expr("arg")?, cast_form(&f)?),
         "COERCETODOMAIN" => ExprKind::CoerceToDomain(f.expr("arg")?, cast_form(&f)?),
         "COERCETODOMAINVALUE" => ExprKind::DomainValue,

@@ -608,6 +608,7 @@ impl<'a> Fold<'a> {
             ExprKind::Func(f) => self.all(&mut f.args),
             ExprKind::NamedArg(na) => self.subqueries(&mut na.arg),
             ExprKind::Relabel(arg, _)
+            | ExprKind::Collate(arg, _)
             | ExprKind::CoerceViaIo(arg, _)
             | ExprKind::CoerceToDomain(arg, _)
             | ExprKind::NullTest(arg, _)
@@ -743,6 +744,8 @@ impl<'a> Fold<'a> {
                     })),
                 ))
             }
+            // The executor does not use the collation, so the folded argument takes the place of the node.
+            ExprKind::Collate(arg, _) => self.expr(arg),
             ExprKind::Relabel(arg, form) => {
                 let arg = self.expr(arg)?;
                 Ok(match arg.kind {
@@ -1243,7 +1246,7 @@ impl<'a> Fold<'a> {
             ExprKind::Array { .. } | ExprKind::NullTest(..) | ExprKind::BooleanTest(..) => true,
             // `IS NOT DISTINCT FROM` is a `NOT` above a `DistinctExpr`.
             ExprKind::Distinct { not, .. } => !not,
-            ExprKind::Relabel(arg, _) => self.nonnullable(arg),
+            ExprKind::Relabel(arg, _) | ExprKind::Collate(arg, _) => self.nonnullable(arg),
             _ => false,
         }
     }

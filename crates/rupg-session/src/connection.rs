@@ -4530,6 +4530,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vjb.test")));
     }
 
+    /// `CREATE OR REPLACE VIEW` keeps the collation of each old column of the view, as `checkViewColumns` checks it, and `pg_get_viewdef` shows a `COLLATE` clause, as `get_rule_expr` does. `connection/vcoll.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vcoll() {
+        big_stack(|| script(include_str!("connection/vcoll.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {
