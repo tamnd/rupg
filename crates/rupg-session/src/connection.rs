@@ -4634,6 +4634,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vrowdesc.test")));
     }
 
+    /// A function that gives a set in the single row of `VALUES` of an `INSERT` inserts a row for each of its rows, as `check_srf_call_placement` allows for `EXPR_KIND_VALUES_SINGLE`, and the action `INSERT` of a `MERGE` gives the error of `ExecInitFunc`. `connection/vsrfval.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vsrfval() {
+        big_stack(|| script(include_str!("connection/vsrfval.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {

@@ -382,7 +382,10 @@ impl Analyzer<'_> {
                 let Some(Some(Node::List(list))) = select.valuesLists.first() else {
                     return Err(Error::internal("a VALUES row that is not a list"));
                 };
-                let items = self.value_items(list, Kind::ValuesSingle)?;
+                self.srf_values = true;
+                let items = self.value_items(list, Kind::ValuesSingle);
+                self.srf_values = false;
+                let items = items?;
                 let exprs =
                     self.insert_row(items, table, &columns, &given, explicit, s.r#override)?;
                 let row = self.full_row(table, &columns, &given, exprs)?;

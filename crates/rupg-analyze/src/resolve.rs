@@ -980,6 +980,7 @@ impl Analyzer<'_> {
             | Kind::OrderBy
             | Kind::DistinctOn
             | Kind::FromFunction => return Ok(()),
+            Kind::ValuesSingle if self.srf_values => return Ok(()),
             Kind::JoinOn => "set-returning functions are not allowed in JOIN conditions".to_owned(),
             Kind::WindowPartition
             | Kind::WindowOrder

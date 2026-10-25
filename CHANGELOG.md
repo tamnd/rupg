@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A function that gives a set in the single row of `VALUES` of an `INSERT` inserts a row for each of its rows, and a `VALUES` that is not part of an `INSERT` gives the error of PostgreSQL for such a function (#740).
 - The detail of a failing row and of a row that no partition takes follows the column privileges of the user, as in PostgreSQL (#739).
 - `CREATE MATERIALIZED VIEW` and `REFRESH MATERIALIZED VIEW` fill the materialized view as its owner with the `search_path` `pg_catalog, pg_temp` (#738).
 - A `SELECT ... INTO` in a subquery gives the error "SELECT ... INTO is not allowed here", and a `SELECT ... INTO` with a set operation makes its table (#737).
