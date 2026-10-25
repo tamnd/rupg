@@ -691,10 +691,10 @@ impl Analyzer<'_> {
         }
     }
 
-    /// The condition of an `UPDATE` or a `DELETE` of an automatically updatable view: the conditions of the views of `security_barrier`, the conditions of the other views, then the condition of the statement. `AddQual` puts the conditions of the views after the condition of the statement, but the planner of PostgreSQL runs a cheap condition first, and the executor runs the conditions in this order.
+    /// The condition of an `UPDATE` or a `DELETE` of an automatically updatable view: the conditions of the views of `security_barrier`, the condition of the statement, then the conditions of the other views, as `AddQual` puts each of them after the condition of the statement. The executor orders the conditions by their cost.
     pub(crate) fn auto_view_filter(&self, filter: Option<Expr>) -> Option<Expr> {
         let Some(auto) = &self.auto_view else { return filter };
-        let parts = auto.barrier.iter().chain(&auto.quals).cloned().chain(filter);
+        let parts = auto.barrier.iter().cloned().chain(filter).chain(auto.quals.iter().cloned());
         crate::rules::and_filter(None, parts.collect())
     }
 
@@ -789,6 +789,9 @@ impl Analyzer<'_> {
     /// The end of the write of an automatically updatable view: the privileges of the view and of the relations under it, as `rewriteTargetView` gives the base relation the privileges that the statement needs on the view, with `adjust_view_column_set` for the columns.
     pub(crate) fn finish_auto_view(&mut self, query: &mut Query) {
         let Some(mut auto) = self.auto_view.take() else { return };
+        if let Some(write) = query.write.as_mut() {
+            write.views = auto.levels.len();
+        }
         if let Some(write) = query.write.as_mut()
             && !auto.checks.is_empty()
             && let Some(rel) = self.env.catalog().and_then(|c| c.relation(auto.base.oid))

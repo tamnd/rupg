@@ -195,6 +195,7 @@ impl Analyzer<'_> {
             instead,
             inherit,
             view_check: None,
+            views: 0,
         });
         self.end_write_with(&mut query, s.withClause.as_deref())?;
         Ok(query)
@@ -365,6 +366,7 @@ impl Analyzer<'_> {
                 instead,
                 inherit,
                 view_check: None,
+                views: 0,
             }),
             ..Query::default()
         };

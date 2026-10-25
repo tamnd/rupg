@@ -80,6 +80,8 @@ pub struct Write {
     pub inherit: bool,
     /// The checks of `WITH CHECK OPTION` of the views of an `INSERT` or an `UPDATE` of an automatically updatable view.
     pub view_check: Option<ViewCheck>,
+    /// The number of automatically updatable views that the statement writes through. `rewriteTargetView` keeps the entry of each view in the range table and adds the entry of the relation under it.
+    pub views: usize,
 }
 
 impl Write {
@@ -467,6 +469,7 @@ impl Analyzer<'_> {
             instead: self.is_view(table),
             inherit: false,
             view_check: None,
+            views: 0,
         });
         self.end_write_with(&mut query, s.withClause.as_deref())?;
         Ok(query)
