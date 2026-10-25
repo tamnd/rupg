@@ -696,6 +696,22 @@ impl Heap {
             .collect()
     }
 
+    /// `heap_get_latest_tid`: the last version of the chain of updates from the version `tid` of a table, as the transaction of `view` sees the updates of its own and of the transactions that committed.
+    pub(crate) fn latest_tid(&self, view: &View, relation: u32, mut tid: u64) -> u64 {
+        let state = self.state();
+        let Some(table) = state.tables.get(&(view.database, relation)) else {
+            return tid;
+        };
+        while let Some(version) = table.find(tid).map(|at| &table.versions[at]) {
+            let done = version.xmax == view.xid || !state.running.contains(&version.xmax);
+            if version.next == 0 || version.xmax == 0 || !done {
+                break;
+            }
+            tid = version.next;
+        }
+        tid
+    }
+
     /// For each version of a table that the command `command` of the transaction `xid` added, in the order of their IDs, true if the transaction did not delete or update it after, as `SnapshotSelf` sees it.
     pub(crate) fn live(&self, database: u32, relation: u32, xid: u32, command: u32) -> Vec<bool> {
         let state = self.state();

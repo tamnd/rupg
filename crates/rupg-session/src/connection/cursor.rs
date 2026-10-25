@@ -26,6 +26,12 @@ use crate::utility::{self, Notice};
 #[derive(Debug)]
 pub(super) struct Cursor {
     rows: Vec<Vec<Value>>,
+    /// The `tableoid` and the `ctid` of the row of each table of `marks` for each row, which `WHERE CURRENT OF` reads.
+    tids: Vec<Vec<Value>>,
+    /// The OID of each table that `WHERE CURRENT OF` can find in the rows, from [`Plan::cursor`].
+    marks: Vec<u32>,
+    /// True for a query with `FOR UPDATE` or `FOR SHARE`.
+    locked: bool,
     /// The type of each column, for the output functions.
     types: Vec<u32>,
     /// The place of the scan of the executor: 0 is before the first row, `n` is on row `n`, and `rows.len() + 1` is after the last row.
@@ -60,7 +66,62 @@ pub(super) fn no_cursor(name: &str) -> Error {
     Error::new(SqlState::UNDEFINED_CURSOR, format!("cursor \"{name}\" does not exist"))
 }
 
+/// The rows of the run of the plan of a cursor and the error of the run, with the `tableoid` and the `ctid` that [`Plan::cursor`] adds after the columns split from each row.
+fn split(plan: &Plan, run: Result<Vec<Vec<Value>>, Error>) -> RunRows {
+    let (mut rows, error) = match run {
+        Ok(rows) => (rows, None),
+        Err(error) => (Vec::new(), Some(error)),
+    };
+    let width = plan.columns().len();
+    let tids = rows.iter_mut().map(|row| row.split_off(width.min(row.len()))).collect();
+    (rows, tids, error)
+}
+
+/// The rows of a cursor, the `tableoid` and the `ctid` of each row, and the error of the run.
+type RunRows = (Vec<Vec<Value>>, Vec<Vec<Value>>, Option<Error>);
+
 impl Cursor {
+    /// `execCurrentOf`: the `tableoid` and the `ctid` of the row of the table `table` that the cursor `name` is on. `relname` is the name of the table, for the errors.
+    pub(super) fn current_of(
+        &self,
+        name: &str,
+        table: u32,
+        relname: &str,
+    ) -> Result<(Value, Value), Error> {
+        let error = |text: &str| {
+            Error::new(SqlState::INVALID_CURSOR_STATE, format!("cursor \"{name}\" {text}"))
+        };
+        if self.held() {
+            return Err(error("is held from a previous transaction"));
+        }
+        let mut found = self.marks.iter().enumerate().filter(|(_, m)| **m == table);
+        let index = match (found.next(), found.next()) {
+            (Some((i, _)), None) => i,
+            (Some(_), Some(_)) => {
+                return Err(error(&format!(
+                    "has multiple FOR UPDATE/SHARE references to table \"{relname}\""
+                )));
+            }
+            (None, _) if self.locked => {
+                return Err(error(&format!(
+                    "does not have a FOR UPDATE/SHARE reference to table \"{relname}\""
+                )));
+            }
+            (None, _) => {
+                return Err(error(&format!(
+                    "is not a simply updatable scan of table \"{relname}\""
+                )));
+            }
+        };
+        let tids = self.at.checked_sub(1).and_then(|at| self.tids.get(at));
+        match tids {
+            Some(tids) if !self.at_start && !self.at_end => {
+                Ok((tids[2 * index].clone(), tids[2 * index + 1].clone()))
+            }
+            _ => Err(error("is not positioned on a row")),
+        }
+    }
+
     /// True for a cursor `WITH HOLD` that a transaction before this one declared.
     pub(super) fn held(&self) -> bool {
         self.hold && !self.fresh
@@ -324,7 +385,7 @@ impl Connection {
             }
         }
         notices.extend(plan.notices().iter().map(|error| Notice::warning(error.clone())));
-        Ok(plan)
+        Ok(plan.cursor())
     }
 
     /// `PerformCursorOpen`: makes the cursor with the rows of the query. `plan` is the plan of [`Connection::plan_cursor`] that `Bind` folded with the values of `params`, or `None` for a `DECLARE` of a `Query` message.
@@ -369,14 +430,14 @@ impl Connection {
         let run = plan.run(params, &reader);
         notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         drop(reader);
-        let (rows, error) = match run {
-            Ok(rows) => (rows, None),
-            Err(error) => (Vec::new(), Some(error)),
-        };
+        let (rows, tids, error) = split(&plan, run);
         let scroll = has(stmt.options, CURSOR_OPT_SCROLL)
             || (!has(stmt.options, CURSOR_OPT_NO_SCROLL) && plan.backward_scan());
         let cursor = Cursor {
             rows,
+            tids,
+            marks: plan.marks().to_vec(),
+            locked: plan.lock_clause().is_some(),
             types: plan.columns().iter().map(|target| target.expr.ty).collect(),
             at: 0,
             pos: 0,
@@ -415,14 +476,14 @@ impl Connection {
         text: &str,
         options: i32,
     ) {
-        let (rows, error) = match run {
-            Ok(rows) => (rows, None),
-            Err(error) => (Vec::new(), Some(error)),
-        };
+        let (rows, tids, error) = split(plan, run);
         let scroll = has(options, CURSOR_OPT_SCROLL)
             || (!has(options, CURSOR_OPT_NO_SCROLL) && plan.backward_scan());
         let cursor = Cursor {
             rows,
+            tids,
+            marks: plan.marks().to_vec(),
+            locked: plan.lock_clause().is_some(),
             types: plan.columns().iter().map(|target| target.expr.ty).collect(),
             at: 0,
             pos: 0,

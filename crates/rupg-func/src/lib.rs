@@ -492,6 +492,15 @@ pub trait Session {
         let _ = text;
         Err(not_yet("a query in a function"))
     }
+    /// `execCurrentOf`: the `tableoid` and the `ctid` of the row of the table `table` that the cursor `cursor` is on.
+    ///
+    /// # Errors
+    ///
+    /// `34000` when there is no such cursor, and `24000` when the cursor is not on a row of the table.
+    fn current_of(&self, cursor: &str, table: u32) -> Result<(Value, Value)> {
+        let _ = table;
+        Err(Error::new(SqlState::UNDEFINED_CURSOR, format!("cursor \"{cursor}\" does not exist")))
+    }
     /// `fmgr_sql` for a function in SQL whose body is [`rupg_analyze::Body::Statements`]: a call of the function `func` with the values `args` of the types `types`. The statements run one after the other, and the call gives the types of the columns of the last statement and its rows.
     ///
     /// # Errors

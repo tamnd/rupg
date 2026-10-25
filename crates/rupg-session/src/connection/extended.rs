@@ -163,6 +163,22 @@ impl Portal {
     pub(crate) fn cursor_row(&self, name: &[u8]) -> Option<Vec<Value>> {
         self.as_cursor().map(|cursor| cursor.row(name))
     }
+
+    /// `execCurrentOf` on the portal `name`: the `tableoid` and the `ctid` of the row of the table `table` that the cursor is on. `relname` is the name of the table.
+    pub(crate) fn current_of(
+        &self,
+        name: &str,
+        table: u32,
+        relname: &str,
+    ) -> Result<(Value, Value), Error> {
+        match self.as_cursor() {
+            Some(cursor) => cursor.current_of(name, table, relname),
+            None => Err(Error::new(
+                SqlState::INVALID_CURSOR_STATE,
+                format!("cursor \"{name}\" is not a SELECT query"),
+            )),
+        }
+    }
 }
 
 /// The error of a message, with the position in the query for an error of `Parse`.
