@@ -1,0 +1,161 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> LISTEN a;
+LISTEN
+> NOTIFY a;
+NOTIFY
+notify a 
+> NOTIFY a, 'hello';
+NOTIFY
+notify a hello
+> NOTIFY b, 'nobody';
+NOTIFY
+> SELECT pg_notify('a', 'from function');
+fields pg_notify:2278:4:-1
+row 
+SELECT 1
+notify a from function
+> SELECT pg_notify('a', NULL);
+fields pg_notify:2278:4:-1
+row 
+SELECT 1
+notify a 
+> SELECT pg_notify(NULL, 'x');
+fields pg_notify:2278:4:-1
+ERROR 22023 channel name cannot be empty
+> NOTIFY "";
+ERROR 42601 zero-length delimited identifier at or near """" at 8
+> SELECT pg_notify(repeat('c', 64), 'x');
+fields pg_notify:2278:4:-1
+ERROR 22023 channel name too long
+> SELECT pg_notify('a', repeat('p', 8000));
+fields pg_notify:2278:4:-1
+ERROR 22023 payload string too long
+> LISTEN "Mixed Case";
+LISTEN
+> SELECT * FROM pg_listening_channels() ORDER BY 1;
+fields pg_listening_channels:25:-1:-1
+row Mixed Case
+row a
+SELECT 2
+> NOTIFY "Mixed Case", 'm';
+NOTIFY
+notify Mixed Case m
+> BEGIN;
+BEGIN
+> NOTIFY a, 'one';
+NOTIFY
+> NOTIFY a, 'two';
+NOTIFY
+> NOTIFY a, 'one';
+NOTIFY
+> SELECT 1;
+fields ?column?:23:4:-1
+row 1
+SELECT 1
+> COMMIT;
+COMMIT
+notify a one
+notify a two
+> BEGIN;
+BEGIN
+> NOTIFY a, 'gone';
+NOTIFY
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> NOTIFY a, 'kept';
+NOTIFY
+> SAVEPOINT s;
+SAVEPOINT
+> NOTIFY a, 'undone';
+NOTIFY
+> ROLLBACK TO SAVEPOINT s;
+ROLLBACK
+> NOTIFY a, 'after';
+NOTIFY
+> COMMIT;
+COMMIT
+notify a kept
+notify a after
+> BEGIN;
+BEGIN
+> LISTEN c;
+LISTEN
+> SELECT * FROM pg_listening_channels() ORDER BY 1;
+fields pg_listening_channels:25:-1:-1
+row Mixed Case
+row a
+SELECT 2
+> NOTIFY c, 'in block';
+NOTIFY
+> COMMIT;
+COMMIT
+notify c in block
+> SELECT * FROM pg_listening_channels() ORDER BY 1;
+fields pg_listening_channels:25:-1:-1
+row Mixed Case
+row a
+row c
+SELECT 3
+> BEGIN;
+BEGIN
+> UNLISTEN c;
+UNLISTEN
+> NOTIFY c, 'unlistened';
+NOTIFY
+> COMMIT;
+COMMIT
+> BEGIN;
+BEGIN
+> LISTEN d;
+LISTEN
+> ROLLBACK;
+ROLLBACK
+> SELECT * FROM pg_listening_channels() ORDER BY 1;
+fields pg_listening_channels:25:-1:-1
+row Mixed Case
+row a
+SELECT 2
+> NOTIFY a, 'x'; NOTIFY a, 'y'; NOTIFY a, 'x';
+NOTIFY
+NOTIFY
+NOTIFY
+notify a x
+notify a y
+> BEGIN;
+BEGIN
+> NOTIFY a, 'fail';
+NOTIFY
+> SELECT 1/0;
+ERROR 22012 division by zero
+> COMMIT;
+ROLLBACK
+> SELECT pg_notification_queue_usage();
+fields pg_notification_queue_usage:701:8:-1
+row 0
+SELECT 1
+> UNLISTEN *;
+UNLISTEN
+> SELECT * FROM pg_listening_channels() ORDER BY 1;
+fields pg_listening_channels:25:-1:-1
+SELECT 0
+> NOTIFY a, 'none';
+NOTIFY
+> UNLISTEN nothing;
+UNLISTEN
+> LISTEN a;
+LISTEN
+> LISTEN a;
+LISTEN
+> SELECT * FROM pg_listening_channels() ORDER BY 1;
+fields pg_listening_channels:25:-1:-1
+row a
+SELECT 1
+> NOTIFY a, 'again';
+NOTIFY
+notify a again
+> UNLISTEN a;
+UNLISTEN

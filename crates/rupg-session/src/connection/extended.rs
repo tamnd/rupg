@@ -596,6 +596,8 @@ impl Connection {
                 })?
             } else if let Node::LockStmt(stmt) = node {
                 self.lock(stmt)?
+            } else if let Some(done) = self.async_statement(node) {
+                done?
             } else if let Node::ConstraintsSetStmt(stmt) = node {
                 let mut notices = Vec::new();
                 let result = self.set_constraints(stmt, &mut notices);

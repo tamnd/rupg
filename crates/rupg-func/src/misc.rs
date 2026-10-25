@@ -76,6 +76,13 @@ fn pg_typeof(call: &Call<'_>, _: &[Value]) -> Result<Value> {
     Ok(Value::Oid(call.args.first().copied().ok_or_else(bad_value)?))
 }
 
+/// `pg_notify(text, text)`: `Async_Notify` with the channel and the payload. It is not strict, and a null is an empty string.
+fn pg_notify(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let text = |at: usize| args.get(at).and_then(Value::as_str).unwrap_or_default();
+    call.session.notify(text(0), text(1))?;
+    Ok(Value::Text(String::new()))
+}
+
 fn pg_backend_pid(call: &Call<'_>, _: &[Value]) -> Result<Value> {
     Ok(Value::Int4(call.session.backend_pid()))
 }
@@ -457,6 +464,9 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "tid_block" => tid_block,
         "tid_offset" => tid_offset,
         "pg_backend_pid" => pg_backend_pid,
+        "pg_notify" => pg_notify,
+        // The queue of the notifications has no pages, so no part of it is in use.
+        "pg_notification_queue_usage" => |_, _| Ok(Value::Float8(0.0)),
         "pg_trigger_depth" => pg_trigger_depth,
         "pg_blocking_pids" => pg_blocking_pids,
         // No session waits for a safe snapshot, as a `SERIALIZABLE READ ONLY DEFERRABLE` transaction takes its snapshot with no wait.
