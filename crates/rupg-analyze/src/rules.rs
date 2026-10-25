@@ -351,7 +351,16 @@ fn rule_action(parts: &Parts, action: &Node, qual: Option<&Node>, event: CmdType
         }
         // A utility action runs once, with no regard to the condition or the rows of the statement.
         Node::NotifyStmt(_) => {}
-        _ => return Err(not_yet("SELECT in a rule")),
+        Node::SelectStmt(s) => {
+            if rows.is_some() && (s.op != SetOperation::SETOP_NONE || !s.valuesLists.is_empty()) {
+                return Err(not_yet("a rule action UNION or VALUES that reads OLD or NEW"));
+            }
+            if let Some(rows) = rows {
+                s.fromClause.insert(0, Some(rows));
+            }
+            s.whereClause = and(s.whereClause.take(), qual);
+        }
+        _ => return Err(Error::internal("a rule action that is not a statement")),
     }
     Ok(action)
 }

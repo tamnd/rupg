@@ -1,0 +1,42 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE rs (a int);
+CREATE TABLE
+> CREATE TABLE rs2 (b int);
+CREATE TABLE
+> INSERT INTO rs2 VALUES (10), (20);
+INSERT 0 2
+> CREATE RULE r1 AS ON INSERT TO rs DO ALSO SELECT new.a + 1 AS x, b FROM rs2 ORDER BY b;
+CREATE RULE
+> INSERT INTO rs VALUES (1);
+fields x:23:4:-1,b:23:4:-1
+row 2,10
+row 2,20
+INSERT 0 1
+> INSERT INTO rs VALUES (2) RETURNING a;
+fields a@rs.1:23:4:-1
+row 2
+INSERT 0 1
+> CREATE RULE r2 AS ON DELETE TO rs DO INSTEAD SELECT old.a;
+CREATE RULE
+> DELETE FROM rs;
+fields a:23:4:-1
+row 1
+row 2
+DELETE 0
+> SELECT pg_get_ruledef(oid) FROM pg_rewrite WHERE rulename IN ('r1', 'r2') ORDER BY rulename;
+fields pg_get_ruledef:25:-1:-1
+row CREATE RULE r1 AS
+    ON INSERT TO public.rs DO  SELECT (new.a + 1) AS x,
+    rs2.b
+   FROM rs2
+  ORDER BY rs2.b;
+row CREATE RULE r2 AS
+    ON DELETE TO public.rs DO INSTEAD  SELECT old.a;
+SELECT 2
+> SELECT * FROM rs ORDER BY a;
+fields a@rs.1:23:4:-1
+row 1
+row 2
+SELECT 2
