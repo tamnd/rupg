@@ -1000,7 +1000,8 @@ impl Analyzer<'_> {
             }
         }
         if let Some(catalog) = self.env.catalog() {
-            let mut rules = catalog.rules().filter(|r| r.relation == oid && crate::rules::fires(r));
+            let mut rules =
+                catalog.rules().filter(|r| r.relation == oid && crate::rules::fires(r, self.env));
             if kind == WriteKind::Merge {
                 // `RewriteQuery`: a rule of an event other than `SELECT` stops a `MERGE`.
                 if rules.any(|r| r.event != b'1') {
@@ -1050,10 +1051,11 @@ impl Analyzer<'_> {
         Ok((base, name, columns))
     }
 
-    /// True when the table has a trigger of the user that fires in the default mode and whose type has all the bits `bits`, such as `TRIGGER_ROW | TRIGGER_BEFORE | TRIGGER_INSERT`. With no bits, any such trigger counts.
+    /// True when the table has a trigger of the user that fires in the mode of the session and whose type has all the bits `bits`, such as `TRIGGER_ROW | TRIGGER_BEFORE | TRIGGER_INSERT`. With no bits, any such trigger counts.
     pub(crate) fn user_triggers(&self, table: u32, bits: i16) -> bool {
         let Some(catalog) = self.env.catalog() else { return false };
-        catalog.triggers().any(|t| user_trigger(t, table) && t.kind & bits == bits)
+        let replica = self.env.replica();
+        catalog.triggers().any(|t| user_trigger(t, table, replica) && t.kind & bits == bits)
     }
 
     /// True when the target of the write is a view, which only a view with a trigger `INSTEAD OF` for the event can be.
@@ -1116,7 +1118,7 @@ impl Analyzer<'_> {
         }
         let mut triggers: Vec<_> = catalog
             .triggers()
-            .filter(|t| t.relation == table && t.fires())
+            .filter(|t| t.relation == table && t.fires(self.env.replica()))
             .filter_map(|t| {
                 let function = rupg_catalog::foreign_key_function(t.function)?;
                 let event = match function {
@@ -2024,9 +2026,9 @@ pub(crate) fn write_columns(rel: &rupg_catalog::Relation) -> Vec<Column> {
         .collect()
 }
 
-/// True for a trigger of the table `table` that the user made and that fires in the default mode. The session checks the foreign keys itself, and a disabled trigger and a trigger for the replica mode do not fire.
-fn user_trigger(t: &rupg_catalog::Trigger, table: u32) -> bool {
-    t.relation == table && !t.internal && t.fires()
+/// True for a trigger of the table `table` that the user made and that fires in the mode of `session_replication_role`, which is `replica` when `replica` is true. The session checks the foreign keys itself.
+fn user_trigger(t: &rupg_catalog::Trigger, table: u32, replica: bool) -> bool {
+    t.relation == table && !t.internal && t.fires(replica)
 }
 
 /// The bit of `tgtype` for the event of a write.

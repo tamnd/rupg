@@ -143,6 +143,10 @@ pub trait Env {
     fn allow_system_table_mods(&self) -> bool {
         false
     }
+    /// True when `session_replication_role` is `replica`, so that only the triggers and the rules of `ENABLE REPLICA` and of `ENABLE ALWAYS` fire.
+    fn replica(&self) -> bool {
+        false
+    }
     /// The `check_function_bodies` setting: `CREATE FUNCTION` checks the body of a function in SQL or in PL/pgSQL when it is on.
     fn check_function_bodies(&self) -> bool {
         true

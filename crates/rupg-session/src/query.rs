@@ -1358,6 +1358,10 @@ impl Env for Reader<'_> {
         self.settings().get("allow_system_table_mods").as_deref() == Some("on")
     }
 
+    fn replica(&self) -> bool {
+        self.settings().get("session_replication_role").as_deref() == Some("replica")
+    }
+
     fn restrict_views(&self) -> bool {
         let setting = self.settings().get("restrict_nonsystem_relation_kind");
         setting.and_then(|s| guc::restricted_kinds(&s).ok()).is_some_and(|(view, _)| view)

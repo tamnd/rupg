@@ -147,9 +147,9 @@ fn event_word(event: CmdType) -> &'static str {
     }
 }
 
-/// True when the rule fires in the origin mode of `session_replication_role`, as `matchLocks` skips the rules that are disabled or that fire only on a replica.
-pub(crate) fn fires(rule: &Rule) -> bool {
-    rule.enabled != b'D' && rule.enabled != b'R'
+/// True when the rule fires in the mode of `session_replication_role`, as `matchLocks` skips the rules that are disabled or that fire only in the other mode.
+pub(crate) fn fires(rule: &Rule, env: &dyn Env) -> bool {
+    rupg_catalog::fires(rule.enabled, env.replica())
 }
 
 /// An error for a rule that rupg does not take yet.
@@ -589,7 +589,7 @@ fn rewrite_query(
     let name = catalog.relation(oid).map_or("", |r| r.name.as_str());
     let code = event_code(event);
     let mut rules: Vec<&Rule> =
-        catalog.rules().filter(|r| r.relation == oid && r.event == code && fires(r)).collect();
+        catalog.rules().filter(|r| r.relation == oid && r.event == code && fires(r, env)).collect();
     rules.sort_by(|a, b| a.name.cmp(&b.name));
     let parts = parts(stmt);
     let has_update = catalog.rules().any(|r| r.relation == oid && r.event == b'2');

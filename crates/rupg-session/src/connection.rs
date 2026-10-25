@@ -1464,8 +1464,10 @@ impl Connection {
         if tables.is_empty() {
             return Ok(());
         }
+        let replica =
+            self.settings.borrow().get("session_replication_role").as_deref() == Some("replica");
         let truncate = |t: &&rupg_catalog::Trigger| {
-            !t.internal && t.fires() && t.kind & rupg_catalog::TRIGGER_TRUNCATE != 0
+            !t.internal && t.fires(replica) && t.kind & rupg_catalog::TRIGGER_TRUNCATE != 0
         };
         if work.triggers().filter(truncate).any(|t| tables.contains(&t.relation)) {
             return Err(Error::new(
@@ -4796,10 +4798,16 @@ mod tests {
         big_stack(|| script(include_str!("connection/vrules4.test")));
     }
 
-    /// The rules regression test up to the rules that `ALTER TABLE` disables, with `pg_get_functiondef` of the settings of a function and of a `MERGE`, the functions of `pg_get_*def` for objects that do not exist and `MERGE` on a table with rules. `\sf` is `pg_get_functiondef` here. `connection/vrules5.test` is the output of PostgreSQL 19 for the same script in a new database.
+    /// The rules regression test to its end, with the rules that `ALTER TABLE` disables and that fire in the mode `replica` of `session_replication_role`, and with `pg_get_functiondef` of the settings of a function and of a `MERGE`, the functions of `pg_get_*def` for objects that do not exist and `MERGE` on a table with rules. `\sf` is `pg_get_functiondef` here. `connection/vrules5.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn vrules5() {
         big_stack(|| script(include_str!("connection/vrules5.test")));
+    }
+
+    /// `session_replication_role`: in the mode `replica` only the triggers of `ENABLE REPLICA` and `ENABLE ALWAYS` fire, and the foreign keys are not checked. In the mode `local` the triggers of the origin fire. `connection/replication_role.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn replication_role() {
+        big_stack(|| script(include_str!("connection/replication_role.test")));
     }
 
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
