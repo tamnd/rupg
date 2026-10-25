@@ -1,10 +1,12 @@
-//! `DefineRule`: `CREATE RULE` and `DROP RULE`.
+//! `DefineRule`: `CREATE RULE`, `DROP RULE`, `ALTER RULE ... RENAME` and `ALTER TABLE ... ENABLE RULE`.
 //!
 //! The analyzer reads the condition and the actions of a rule as `transformRuleStmt` does, with the relation of the rule as `old` and as `new`, and runs the checks of `DefineQueryRewrite`. The catalog keeps the text of the statement and the schemas of `search_path`, and [`rule_tree`] reads the rule again for `pg_get_ruledef`. [`crate::query_rewrite`] applies the rules of a write.
 
 use rupg_catalog::{NewRule, ObjRef, PG_CLASS, PG_REWRITE};
 use rupg_common::{Error, Result, SqlState};
-use rupg_sql::nodes::{CmdType, DropBehavior, DropStmt, Node, RuleStmt};
+use rupg_sql::nodes::{CmdType, DropBehavior, DropStmt, Node, RenameStmt, RuleStmt};
+
+use super::alter::Target;
 
 use super::comment::{name_list, not_owner, range_var};
 use super::drop::owner_word;
@@ -410,5 +412,83 @@ impl Definer<'_, '_> {
             objects.push(ObjRef::new(PG_REWRITE, rule));
         }
         self.perform(&objects, stmt.behavior == DropBehavior::DROP_CASCADE)
+    }
+    /// `RenameRewriteRule` with the checks of `RangeVarCallbackForRenameRule`.
+    pub(super) fn rename_rule(&mut self, stmt: &RenameStmt, newname: &str) -> Result<()> {
+        let rv = stmt.relation.as_deref().cloned().unwrap_or_default();
+        let found = self.lookup_relation(&rv)?;
+        let name = relname(&rv).to_string();
+        let code = self.kind_of(found);
+        if !matches!(code, b'r' | b'v' | b'p') {
+            return Err(Error::new(
+                SqlState::WRONG_OBJECT_TYPE,
+                format!("relation \"{name}\" cannot have rules"),
+            )
+            .with_detail(relkind_detail(code)));
+        }
+        if self.is_system(found) && !self.an.env.allow_system_table_mods() {
+            return Err(Error::new(
+                SqlState::INSUFFICIENT_PRIVILEGE,
+                format!("permission denied: \"{name}\" is a system catalog"),
+            ));
+        }
+        let Found::User(relation) = found else {
+            return Err(not_yet("ALTER RULE of a system catalog", None));
+        };
+        let rel = self.catalog.relation(relation);
+        let owner = rel.map_or(0, |r| r.owner);
+        if !self.is_superuser() && owner != self.user {
+            return Err(not_owner(owner_word(code), &name));
+        }
+        let relation_name = rel.map_or(String::new(), |r| r.name.clone());
+        let view = rel.is_some_and(|r| r.view.is_some());
+        let rule_of = |this: &Self, rulename: &str| match rulename {
+            RETURN if view => Some(None),
+            _ => this.catalog.rule_by_name(relation, rulename).map(|r| Some(r.oid)),
+        };
+        let subname = stmt.subname.as_deref().unwrap_or_default();
+        let Some(rule) = rule_of(self, subname) else {
+            return Err(Error::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!("rule \"{subname}\" for relation \"{relation_name}\" does not exist"),
+            ));
+        };
+        if rule_of(self, newname).is_some() {
+            return Err(Error::new(
+                SqlState::DUPLICATE_OBJECT,
+                format!("rule \"{newname}\" for relation \"{relation_name}\" already exists"),
+            ));
+        }
+        let Some(rule) = rule else {
+            return Err(Error::new(
+                SqlState::INVALID_OBJECT_DEFINITION,
+                "renaming an ON SELECT rule is not allowed",
+            ));
+        };
+        if newname == RETURN {
+            return Err(Error::new(
+                SqlState::INVALID_OBJECT_DEFINITION,
+                format!("non-view rule for \"{relation_name}\" must not be named \"{RETURN}\""),
+            ));
+        }
+        self.catalog.rename_rule(rule, newname);
+        Ok(())
+    }
+
+    /// `EnableDisableRule`: sets `ev_enabled` of the rule of the table with the name.
+    pub(super) fn enable_rule(
+        &mut self,
+        target: &Target,
+        rulename: &str,
+        enabled: u8,
+    ) -> Result<()> {
+        let Some(rule) = self.catalog.rule_by_name(target.oid, rulename).map(|r| r.oid) else {
+            return Err(Error::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!("rule \"{rulename}\" for relation \"{}\" does not exist", target.name),
+            ));
+        };
+        self.catalog.set_rule_enabled(rule, enabled);
+        Ok(())
     }
 }

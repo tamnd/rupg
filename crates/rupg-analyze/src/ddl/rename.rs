@@ -32,6 +32,7 @@ pub(super) fn is_rename_kind(kind: ObjectType) -> bool {
             | ObjectType::OBJECT_ROUTINE
             | ObjectType::OBJECT_AGGREGATE
             | ObjectType::OBJECT_TRIGGER
+            | ObjectType::OBJECT_RULE
             | ObjectType::OBJECT_OPCLASS
             | ObjectType::OBJECT_OPFAMILY
             | ObjectType::OBJECT_STATISTIC_EXT
@@ -52,6 +53,7 @@ impl Definer<'_, '_> {
             ObjectType::OBJECT_TABCONSTRAINT => self.rename_table_constraint(stmt, newname),
             ObjectType::OBJECT_TYPE | ObjectType::OBJECT_DOMAIN => self.rename_type(stmt),
             ObjectType::OBJECT_TRIGGER => self.rename_trigger(stmt, newname),
+            ObjectType::OBJECT_RULE => self.rename_rule(stmt, newname),
             ObjectType::OBJECT_OPCLASS | ObjectType::OBJECT_OPFAMILY => self.rename_opcf(stmt),
             ObjectType::OBJECT_STATISTIC_EXT => self.rename_stats(stmt),
             ObjectType::OBJECT_FUNCTION

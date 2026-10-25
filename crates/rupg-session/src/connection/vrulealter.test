@@ -1,0 +1,136 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE SCHEMA vra;
+CREATE SCHEMA
+> SET search_path = vra;
+SET
+search_path=vra
+> CREATE TABLE t (a int, b int);
+CREATE TABLE
+> CREATE TABLE log (a int, tag text);
+CREATE TABLE
+> CREATE VIEW v AS SELECT a, b FROM t;
+CREATE VIEW
+> CREATE RULE r1 AS ON INSERT TO t DO ALSO INSERT INTO log VALUES (new.a, 'r1');
+CREATE RULE
+> CREATE RULE r2 AS ON INSERT TO t DO ALSO INSERT INTO log VALUES (new.a, 'r2');
+CREATE RULE
+> CREATE RULE vi AS ON INSERT TO v DO INSTEAD INSERT INTO t VALUES (new.a, new.b);
+CREATE RULE
+> CREATE SEQUENCE s;
+CREATE SEQUENCE
+> INSERT INTO t VALUES (1, 1);
+INSERT 0 1
+> ALTER TABLE t DISABLE RULE r1;
+ALTER TABLE
+> INSERT INTO t VALUES (2, 2);
+INSERT 0 1
+> SELECT rulename, ev_enabled FROM pg_rewrite WHERE ev_class = 't'::regclass ORDER BY 1;
+fields rulename@pg_rewrite.2:19:64:-1,ev_enabled@pg_rewrite.5:18:1:-1
+row r1,D
+row r2,O
+SELECT 2
+> ALTER TABLE t ENABLE REPLICA RULE r2;
+ALTER TABLE
+> INSERT INTO t VALUES (3, 3);
+INSERT 0 1
+> ALTER TABLE t ENABLE ALWAYS RULE r1;
+ALTER TABLE
+> INSERT INTO t VALUES (4, 4);
+INSERT 0 1
+> SELECT rulename, ev_enabled FROM pg_rewrite WHERE ev_class = 't'::regclass ORDER BY 1;
+fields rulename@pg_rewrite.2:19:64:-1,ev_enabled@pg_rewrite.5:18:1:-1
+row r1,A
+row r2,R
+SELECT 2
+> ALTER TABLE t ENABLE RULE r2, DISABLE RULE r1;
+ALTER TABLE
+> INSERT INTO t VALUES (5, 5);
+INSERT 0 1
+> ALTER TABLE t ENABLE RULE r1;
+ALTER TABLE
+> ALTER TABLE t ENABLE RULE nosuch;
+ERROR 42704 rule "nosuch" for relation "t" does not exist
+> ALTER TABLE v DISABLE RULE vi;
+ERROR 42809 ALTER action DISABLE RULE cannot be performed on relation "v"
+DETAIL This operation is not supported for views.
+> ALTER TABLE s ENABLE RULE r1;
+ERROR 42809 ALTER action ENABLE RULE cannot be performed on relation "s"
+DETAIL This operation is not supported for sequences.
+> SELECT * FROM log ORDER BY a, tag;
+fields a@log.1:23:4:-1,tag@log.2:25:-1:-1
+row 1,r1
+row 1,r2
+row 2,r2
+row 4,r1
+row 5,r2
+SELECT 5
+> ALTER RULE r1 ON t RENAME TO r3;
+ALTER RULE
+> ALTER RULE r1 ON t RENAME TO r4;
+ERROR 42704 rule "r1" for relation "t" does not exist
+> ALTER RULE r3 ON t RENAME TO r2;
+ERROR 42710 rule "r2" for relation "t" already exists
+> ALTER RULE r3 ON t RENAME TO "_RETURN";
+ERROR 42P17 non-view rule for "t" must not be named "_RETURN"
+> ALTER RULE vi ON v RENAME TO "_RETURN";
+ERROR 42710 rule "_RETURN" for relation "v" already exists
+> ALTER RULE "_RETURN" ON v RENAME TO x;
+ERROR 42P17 renaming an ON SELECT rule is not allowed
+> ALTER RULE vi ON v RENAME TO vi2;
+ALTER RULE
+> ALTER RULE r1 ON s RENAME TO r2;
+ERROR 42809 relation "s" cannot have rules
+DETAIL This operation is not supported for sequences.
+> ALTER RULE r1 ON nosuch RENAME TO r2;
+ERROR 42P01 relation "nosuch" does not exist
+> ALTER RULE r3 ON t RENAME TO r3;
+ERROR 42710 rule "r3" for relation "t" already exists
+> SELECT rulename, ev_class::regclass::text, ev_enabled FROM pg_rewrite WHERE ev_class IN ('t'::regclass, 'v'::regclass) ORDER BY 1;
+fields rulename@pg_rewrite.2:19:64:-1,ev_class:25:-1:-1,ev_enabled@pg_rewrite.5:18:1:-1
+row _RETURN,v,O
+row r2,t,O
+row r3,t,O
+row vi2,v,O
+SELECT 4
+> INSERT INTO v VALUES (6, 6);
+INSERT 0 1
+> SELECT * FROM log ORDER BY a, tag;
+fields a@log.1:23:4:-1,tag@log.2:25:-1:-1
+row 1,r1
+row 1,r2
+row 2,r2
+row 4,r1
+row 5,r2
+row 6,r1
+row 6,r2
+SELECT 7
+> SELECT pg_get_ruledef(oid) FROM pg_rewrite WHERE rulename = 'r3';
+fields pg_get_ruledef:25:-1:-1
+row CREATE RULE r3 AS
+    ON INSERT TO vra.t DO  INSERT INTO log (a, tag)
+  VALUES (new.a, 'r1'::text);
+SELECT 1
+> CREATE ROLE vra_other;
+CREATE ROLE
+> GRANT USAGE ON SCHEMA vra TO vra_other;
+GRANT
+> SET ROLE vra_other;
+SET
+is_superuser=off
+> ALTER RULE r3 ON vra.t RENAME TO r9;
+ERROR 42501 must be owner of table t
+> ALTER TABLE vra.t DISABLE RULE r3;
+ERROR 42501 must be owner of table t
+> RESET ROLE;
+RESET
+is_superuser=on
+> REVOKE USAGE ON SCHEMA vra FROM vra_other;
+REVOKE
+> DROP ROLE vra_other;
+DROP ROLE
+> DROP RULE r3 ON t;
+DROP RULE
+> DROP RULE vi2 ON v;
+DROP RULE

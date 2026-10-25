@@ -2251,6 +2251,7 @@ fn alter_tag(kind: ObjectType) -> CommandTag {
         ObjectType::OBJECT_PROCEDURE => CommandTag::AlterProcedure,
         ObjectType::OBJECT_AGGREGATE => CommandTag::AlterAggregate,
         ObjectType::OBJECT_TRIGGER => CommandTag::AlterTrigger,
+        ObjectType::OBJECT_RULE => CommandTag::AlterRule,
         ObjectType::OBJECT_OPERATOR => CommandTag::AlterOperator,
         ObjectType::OBJECT_OPCLASS => CommandTag::AlterOperatorClass,
         ObjectType::OBJECT_OPFAMILY => CommandTag::AlterOperatorFamily,
@@ -4668,6 +4669,12 @@ mod tests {
     #[test]
     fn vrulestar() {
         big_stack(|| script(include_str!("connection/vrulestar.test")));
+    }
+
+    /// `ALTER RULE ... RENAME` and `ALTER TABLE ... ENABLE RULE` and `DISABLE RULE`: the new name and the new `ev_enabled` in `pg_rewrite`, the rules that fire after the change, and the errors of `RenameRewriteRule`, `RangeVarCallbackForRenameRule` and `EnableDisableRule`. `connection/vrulealter.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vrulealter() {
+        big_stack(|| script(include_str!("connection/vrulealter.test")));
     }
 
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
