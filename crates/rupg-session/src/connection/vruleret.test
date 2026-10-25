@@ -132,9 +132,9 @@ CREATE VIEW
 > CREATE RULE nvi AS ON INSERT TO nv DO INSTEAD INSERT INTO nn VALUES (new.a, new.b) RETURNING nn.a::numeric(5,1), nn.b;
 ERROR 42P17 RETURNING list's entry 1 has different size from column "a"
 DETAIL RETURNING list entry has type numeric(5,1), but column has type numeric(6,2).
-> CREATE RULE nvi AS ON INSERT TO nv DO INSTEAD INSERT INTO nn VALUES (new.a, new.b) RETURNING nn.a::numeric(6,2), nn.b;
+> CREATE RULE nvi AS ON INSERT TO nv DO INSTEAD INSERT INTO nn VALUES (new.a, new.b) RETURNING nn.a::numeric, nn.b;
 CREATE RULE
 > INSERT INTO nv VALUES (1.234, 2) RETURNING *;
-fields a@nv.1:1700:-1:393222,b@nv.2:23:4:-1
+fields a@nv.1:1700:-1:-1,b@nv.2:23:4:-1
 row 1.23,2
 INSERT 0 1

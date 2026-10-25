@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A cast with no typmod of a value with a typmod, such as `a::numeric` of a `numeric(6,2)` column, now gives the typmod -1 with no table column, as the `RelabelType` of PostgreSQL does. Views, `CREATE TABLE AS` and the deparse show it as PostgreSQL does (#NNN).
 - A rule `DO INSTEAD` can have a `RETURNING` list. The `RETURNING` list of the statement then gives its rows from the values of the rule list, and `pg_get_ruledef` shows the list. `CREATE RULE` gives the errors of PostgreSQL for a list that does not match the columns, for a conditional rule and for a rule that is not `INSTEAD` (#748).
 - `ALTER RULE ... RENAME TO`, and `ALTER TABLE ... ENABLE RULE` and `DISABLE RULE` (#747).
 - `old.*` and `new.*` in `VALUES` of a rule action, and `DEFAULT` in its rows (#746).

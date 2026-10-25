@@ -1,0 +1,54 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE nn (a numeric(6,2), v varchar(5), c char(3), b bit(4), t time(2));
+CREATE TABLE
+> INSERT INTO nn VALUES (1.234, 'ab', 'x', B'1010', '10:00:01.234');
+INSERT 0 1
+> SELECT a::numeric, v::varchar, c::bpchar, b::bit varying, t::time FROM nn;
+fields a:1700:-1:-1,v:1043:-1:-1,c:1042:-1:-1,b:1562:-1:-1,t:1083:8:-1
+row 1.23,ab,x  ,1010,10:00:01.23
+SELECT 1
+> SELECT a::numeric(6,2), v::varchar(5), a::numeric(8,3) FROM nn;
+fields a@nn.1:1700:-1:393222,v@nn.2:1043:-1:9,a:1700:-1:524295
+row 1.23,ab,1.230
+SELECT 1
+> SELECT CAST(a AS numeric), CAST(v AS text) FROM nn;
+fields a:1700:-1:-1,v:25:-1:-1
+row 1.23,ab
+SELECT 1
+> CREATE VIEW nv AS SELECT a::numeric AS a1, v::varchar AS v1, a AS a2 FROM nn;
+CREATE VIEW
+> SELECT pg_get_viewdef('nv'::regclass);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT (a)::numeric AS a1,
+    (v)::character varying AS v1,
+    a AS a2
+   FROM nn;
+SELECT 1
+> SELECT * FROM nv;
+fields a1@nv.1:1700:-1:-1,v1@nv.2:1043:-1:-1,a2@nv.3:1700:-1:393222
+row 1.23,ab,1.23
+SELECT 1
+> SELECT attname, atttypmod FROM pg_attribute WHERE attrelid = 'nv'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,atttypmod@pg_attribute.6:23:4:-1
+row a1,-1
+row v1,-1
+row a2,393222
+SELECT 3
+> CREATE TABLE n2 AS SELECT a::numeric AS a1, a FROM nn;
+SELECT 1
+> SELECT attname, atttypmod FROM pg_attribute WHERE attrelid = 'n2'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,atttypmod@pg_attribute.6:23:4:-1
+row a1,-1
+row a,393222
+SELECT 2
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT a::numeric FROM nn;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.nn
+row   Output: (a)::numeric
+EXPLAIN
+> SELECT (a::numeric) + 1, coalesce(a::numeric, 0) FROM nn;
+fields ?column?:1700:-1:-1,coalesce:1700:-1:-1
+row 2.23,1.23
+SELECT 1

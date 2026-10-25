@@ -819,6 +819,15 @@ impl Analyzer<'_> {
         let source = expr.ty;
         let place_of_expr = expr.place();
         match self.coerce_to_target(expr, target, typmod, Context::Explicit, at)? {
+            // `coerce_type_typmod`: a cast with no typmod of a value that has one is a `RelabelType` that shows the typmod -1.
+            Some(mut expr) if typmod < 0 && expr.typmod >= 0 && expr.ty == target => {
+                if let ExprKind::Const(_) = expr.kind {
+                    expr.typmod = -1;
+                    return Ok(expr);
+                }
+                let kind = ExprKind::Relabel(Box::new(expr), CastForm::Explicit);
+                Ok(Expr { kind, ty: target, typmod: -1, location: at })
+            }
             Some(expr) => Ok(expr),
             None => Err(Error::new(
                 SqlState::CANNOT_COERCE,
