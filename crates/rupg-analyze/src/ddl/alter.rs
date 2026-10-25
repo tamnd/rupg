@@ -176,6 +176,8 @@ enum MiscCmd {
     ReplicaIdentity(ReplicaIdentityStmt),
     /// `ENABLE TRIGGER` and `DISABLE TRIGGER`: the name of the trigger or no name for `ALL` and `USER`, the new `tgenabled`, and true for `USER`, which skips the internal triggers.
     Trigger(Option<String>, u8, bool),
+    /// `ENABLE RULE` and `DISABLE RULE`: the name of the rule and the new `ev_enabled`.
+    Rule(String, u8),
     /// `INHERIT`, with the command, which names the new parent.
     Inherit(Box<AlterTableCmd>),
     /// `NO INHERIT` with the parent.
@@ -600,6 +602,20 @@ impl Definer<'_, '_> {
                 let name = cmd.name.as_deref().filter(|_| named).map(str::to_owned);
                 passes.misc.push(MiscCmd::Trigger(name, enabled, user));
             }
+            AlterTableType::AT_EnableRule
+            | AlterTableType::AT_EnableAlwaysRule
+            | AlterTableType::AT_EnableReplicaRule
+            | AlterTableType::AT_DisableRule => {
+                self.simple_permissions(target, cmd, b"rp")?;
+                let enabled = match cmd.subtype {
+                    AlterTableType::AT_EnableRule => b'O',
+                    AlterTableType::AT_EnableAlwaysRule => b'A',
+                    AlterTableType::AT_EnableReplicaRule => b'R',
+                    _ => b'D',
+                };
+                let name = cmd.name.as_deref().unwrap_or_default().to_string();
+                passes.misc.push(MiscCmd::Rule(name, enabled));
+            }
             AlterTableType::AT_AddInherit => {
                 self.simple_permissions(target, cmd, INHERIT)?;
                 self.prep_inherit(target)?;
@@ -885,6 +901,7 @@ impl Definer<'_, '_> {
                         passes.recurse,
                     )?;
                 }
+                MiscCmd::Rule(name, enabled) => self.enable_rule(target, name, *enabled)?,
                 MiscCmd::Inherit(cmd) => self.add_inherit(target, cmd)?,
                 MiscCmd::NoInherit(rv) => self.drop_inherit(target, rv)?,
                 MiscCmd::Of(Some(name)) => self.add_of(target, name)?,

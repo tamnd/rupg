@@ -1657,6 +1657,20 @@ impl Catalog {
         self.rules.get(&oid)
     }
 
+    /// `RenameRewriteRule`: a new name for a rule. The caller checks that the relation has no rule with the new name.
+    pub fn rename_rule(&mut self, oid: u32, name: &str) {
+        if let Some(rule) = self.rules.get_mut(&oid) {
+            rule.name = name.to_string();
+        }
+    }
+
+    /// `EnableDisableRule`: sets `ev_enabled` of a rule.
+    pub fn set_rule_enabled(&mut self, oid: u32, enabled: u8) {
+        if let Some(rule) = self.rules.get_mut(&oid) {
+            rule.enabled = enabled;
+        }
+    }
+
     /// The rule of a relation with the name.
     pub fn rule_by_name(&self, relation: u32, name: &str) -> Option<&Rule> {
         self.rules.values().find(|r| r.relation == relation && r.name == name)
