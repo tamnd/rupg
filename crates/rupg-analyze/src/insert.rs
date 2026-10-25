@@ -139,6 +139,15 @@ pub enum InsertSource {
 }
 
 impl Write {
+    /// The checks of the policies of row-level security on the new rows of the write `kind`. The new rows of `ON CONFLICT DO UPDATE` of an `INSERT` have the checks of `WCO_RLS_UPDATE_CHECK`.
+    #[must_use]
+    pub fn policy_for(&self, kind: WriteKind) -> Option<&PolicyCheck> {
+        if self.kind == WriteKind::Insert && kind == WriteKind::Update {
+            return self.on_conflict.as_ref().and_then(|c| c.update_check.as_ref());
+        }
+        self.policy_check.as_ref()
+    }
+
     /// True when the write keeps the rows that it wrote, for `RETURNING` or for [`Write::view_check`].
     #[must_use]
     pub fn keeps_written(&self) -> bool {
@@ -162,6 +171,8 @@ pub struct PolicyCheck {
     pub query: Box<Query>,
     /// The name of the policy of each check, or `None` for the check of the permissive policies.
     pub policies: Vec<Option<String>>,
+    /// True for the checks of `WCO_RLS_CONFLICT_CHECK`, the conditions of `USING` on the row that the table has, whose error tells it.
+    pub using: bool,
 }
 
 /// `OnConflictExpr`: what an `INSERT` does for a new row with the key of a row that the table has.
@@ -179,6 +190,10 @@ pub struct OnConflict {
     pub carried: usize,
     /// The foreign keys that an update of a row checks, in the order of the names of their triggers.
     pub foreign: Vec<Foreign>,
+    /// The checks of `WCO_RLS_CONFLICT_CHECK` of `DO UPDATE` and `DO SELECT` on the row that the table has, after the condition of `WHERE`.
+    pub conflict_check: Option<PolicyCheck>,
+    /// The checks of `WCO_RLS_UPDATE_CHECK` of `DO UPDATE` on the new row.
+    pub update_check: Option<PolicyCheck>,
 }
 
 impl OnConflict {
@@ -703,6 +718,8 @@ impl Analyzer<'_> {
             select,
             carried: 0,
             foreign: Vec::new(),
+            conflict_check: None,
+            update_check: None,
         };
         if select.is_some() {
             // `DO SELECT` gives the row that the table has when `WHERE` lets it through.

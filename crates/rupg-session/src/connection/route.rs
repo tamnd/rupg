@@ -62,6 +62,8 @@ pub(super) struct Routing {
     modified: Vec<i16>,
     /// The checks of the policies of the partitioned table for its leaves.
     policy: Option<RootPolicy>,
+    /// The checks of the policies of the partitioned table for the new rows of `ON CONFLICT DO UPDATE`.
+    update_policy: Option<RootPolicy>,
 }
 
 impl Leaf {
@@ -96,6 +98,8 @@ impl Routing {
     /// The routing with the checks of the policies of the write `info`, which each leaf checks on its new rows.
     pub(super) fn with_policy(mut self, info: &Write) -> Routing {
         self.policy = info.policy_check.clone().map(|check| Rc::new((check, info.name.clone())));
+        let update = info.on_conflict.as_ref().and_then(|c| c.update_check.clone());
+        self.update_policy = update.map(|check| Rc::new((check, info.name.clone())));
         self
     }
 
@@ -191,7 +195,7 @@ impl Routing {
         conn.leaf_after((fire, (&updated, leaf.up.len())), rows)
     }
 
-    /// `ExecPartitionCheck` and `ExecConstraints` for a new row of the partitioned table that changes a row of the leaf at the place `at`. The result is the checked row with the columns of the leaf, or `None` when the leaf does not take the row.
+    /// `ExecPartitionCheck` and `ExecConstraints` for a new row of the partitioned table that changes a row of the leaf at the place `at`. The leaf checks the row with the policies of `ON CONFLICT DO UPDATE` of the partitioned table. The result is the checked row with the columns of the leaf, or `None` when the leaf does not take the row.
     ///
     /// # Errors
     ///
@@ -207,7 +211,7 @@ impl Routing {
         if !self.router.check(leaf.oid, &values, reader)? {
             return Ok(None);
         }
-        leaf_row(leaf, &values, reader).map(Some)
+        leaf_row_with(leaf, &values, self.update_policy.as_ref(), reader).map(Some)
     }
 
     /// A row of the leaf at the place `at` with the `width` columns of the partitioned table, as `execute_attr_map_slot` gives it.
@@ -861,8 +865,18 @@ fn leaf_updated(leaf: &Leaf, updated: &[i16]) -> Vec<i16> {
 
 /// The new row of the leaf partition `leaf` after the not-null and check constraints of the leaf, as `ExecConstraints` checks it.
 fn leaf_row(leaf: &Leaf, values: &[Value], reader: &Reader<'_>) -> Result<Vec<Value>, Error> {
-    // `ExecInsert` checks the policies of the partitioned table on the row of the leaf before the constraints of the leaf.
-    if let Some(policy) = &leaf.policy {
+    leaf_row_with(leaf, values, leaf.policy.as_ref(), reader)
+}
+
+/// [`leaf_row`] with the checks `policy` of the policies of the partitioned table.
+fn leaf_row_with(
+    leaf: &Leaf,
+    values: &[Value],
+    policy: Option<&RootPolicy>,
+    reader: &Reader<'_>,
+) -> Result<Vec<Value>, Error> {
+    // `ExecInsert` and `ExecUpdateAct` check the policies of the partitioned table on the row of the leaf before the constraints of the leaf.
+    if let Some(policy) = policy {
         let row = up(leaf, values, leaf.root_types.len());
         let (check, name) = &**policy;
         if let Some(Some(error)) = rupg_exec::policy_failures(check, name, vec![row], reader)?.pop()
