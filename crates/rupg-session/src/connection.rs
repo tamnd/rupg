@@ -188,6 +188,9 @@ const SPECIAL_WORKER_PROCS: i64 = 2;
 /// `NUM_AUXILIARY_PROCS` of `proc.h`: six auxiliary processes and `MAX_IO_WORKERS`, which is 32.
 const AUXILIARY_PROCS: i64 = 6 + 32;
 
+/// `GUC_SAFE_SEARCH_PATH`: the `search_path` that `RestrictSearchPath` sets for a maintenance command.
+const SAFE_SEARCH_PATH: &str = "pg_catalog, pg_temp";
+
 /// `InitializeShmemGUCs` for `num_os_semaphores`, after the configuration file: `ProcGlobalSemas`, which is one semaphore for each backend that `InitializeMaxBackends` counts and one for each auxiliary process. rupg uses no semaphores, but it gives the number that PostgreSQL uses. The sizes of the shared memory stay 0, because rupg does not have the shared memory of PostgreSQL.
 ///
 /// # Errors
@@ -1350,16 +1353,22 @@ impl Connection {
             return Err(Error::internal("the table of CREATE TABLE AS is gone"));
         };
         let matview = relation.kind == rupg_catalog::RelKind::MatView;
+        let owner = relation.owner;
+        // A built-in schema such as `public` has no row in the catalog of the user.
+        let schema = builtin::named_by_oid(builtin::Named::Namespace, relation.namespace)
+            .map(|row| row.name)
+            .or_else(|| catalog.schema(relation.namespace).map(|s| s.name.as_str()));
         let relation = RangeVar {
-            schemaname: catalog.schema(relation.namespace).map(|s| s.name.as_str().into()),
+            schemaname: schema.map(Into::into),
             relname: Some(relation.name.as_str().into()),
             inh: true,
             relpersistence: b'p',
             location: -1,
             ..RangeVar::default()
         };
+        // A materialized view reads its own query, which the catalog keeps, so that `search_path` of the fill does not change its names.
         let query = match node {
-            Node::RefreshMatViewStmt(_) => {
+            _ if matview => {
                 let star = ColumnRef { fields: vec![Some(A_Star {}.into())], location: -1 };
                 let target =
                     ResTarget { val: Some(star.into()), location: -1, ..ResTarget::default() };
@@ -1380,11 +1389,17 @@ impl Connection {
         let mut late = Vec::new();
         let mut described = None;
         if matview {
+            // `RefreshMatViewByOid` fills the materialized view as its owner, with the `search_path` of `RestrictSearchPath`.
+            let config = [format!("search_path={SAFE_SEARCH_PATH}")];
+            rupg_func::Session::start_function_call(&self.reader(), &config, Some(owner))?;
             self.filling.set(table);
         }
         let result =
             self.select(&Node::InsertStmt(Box::new(insert)), notices, &mut late, &mut described);
         self.filling.set(0);
+        if matview {
+            rupg_func::Session::end_function_call(&self.reader());
+        }
         notices.append(&mut late);
         match result {
             Ok(Done::Count(..)) if matches!(node, Node::RefreshMatViewStmt(_)) => {
@@ -4605,6 +4620,12 @@ mod tests {
     #[test]
     fn vselinto() {
         big_stack(|| script(include_str!("connection/vselinto.test")));
+    }
+
+    /// `CREATE MATERIALIZED VIEW` and `REFRESH MATERIALIZED VIEW` fill the materialized view as its owner with the `search_path` of `RestrictSearchPath`, as `RefreshMatViewByOid` does, and `CREATE TABLE AS` keeps the `search_path` and the user of the session. `connection/vmvpath.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vmvpath() {
+        big_stack(|| script(include_str!("connection/vmvpath.test")));
     }
 
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.

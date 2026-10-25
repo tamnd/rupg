@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `CREATE MATERIALIZED VIEW` and `REFRESH MATERIALIZED VIEW` fill the materialized view as its owner with the `search_path` `pg_catalog, pg_temp` (#738).
 - A `SELECT ... INTO` in a subquery gives the error "SELECT ... INTO is not allowed here", and a `SELECT ... INTO` with a set operation makes its table (#737).
 - A join gives its rows in the order of its plan for nested loops and hash joins over sequential scans, as PostgreSQL does for a query with no `ORDER BY` (#736).
 - `ALTER PROCEDURE` with an attribute that only a function has gives an error, and the error for a procedure that the role cannot call names the procedure (#735).
