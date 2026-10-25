@@ -1,0 +1,78 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE SCHEMA vmv;
+CREATE SCHEMA
+> SET search_path = vmv;
+SET
+search_path=vmv
+> CREATE TABLE t(i int);
+CREATE TABLE
+> INSERT INTO t VALUES (1), (2);
+INSERT 0 2
+> CREATE MATERIALIZED VIEW mv AS SELECT i, current_setting('search_path') AS path, current_user AS who FROM t;
+SELECT 2
+> SELECT * FROM mv ORDER BY i;
+fields i@mv.1:23:4:-1,path@mv.2:25:-1:-1,who@mv.3:19:64:-1
+row 1,pg_catalog, pg_temp,postgres
+row 2,pg_catalog, pg_temp,postgres
+SELECT 2
+> CREATE MATERIALIZED VIEW mv2 AS SELECT i, current_setting('search_path') AS path FROM t WITH NO DATA;
+CREATE MATERIALIZED VIEW
+> REFRESH MATERIALIZED VIEW mv2;
+REFRESH MATERIALIZED VIEW
+> SELECT * FROM mv2 ORDER BY 1;
+fields i@mv2.1:23:4:-1,path@mv2.2:25:-1:-1
+row 1,pg_catalog, pg_temp
+row 2,pg_catalog, pg_temp
+SELECT 2
+> SHOW search_path;
+fields search_path:25:-1:-1
+row vmv
+SHOW
+> CREATE ROLE vmv_owner;
+CREATE ROLE
+> GRANT USAGE ON SCHEMA vmv TO vmv_owner;
+GRANT
+> GRANT SELECT ON t TO vmv_owner;
+GRANT
+> ALTER MATERIALIZED VIEW mv OWNER TO vmv_owner;
+ALTER MATERIALIZED VIEW
+> REFRESH MATERIALIZED VIEW vmv.mv;
+REFRESH MATERIALIZED VIEW
+> SELECT * FROM mv ORDER BY i;
+fields i@mv.1:23:4:-1,path@mv.2:25:-1:-1,who@mv.3:19:64:-1
+row 1,pg_catalog, pg_temp,vmv_owner
+row 2,pg_catalog, pg_temp,vmv_owner
+SELECT 2
+> SELECT current_user;
+fields current_user:19:64:-1
+row postgres
+SELECT 1
+> CREATE TABLE ct AS SELECT i, current_setting('search_path') AS path FROM t;
+SELECT 2
+> SELECT * FROM ct ORDER BY i;
+fields i@ct.1:23:4:-1,path@ct.2:25:-1:-1
+row 1,vmv
+row 2,vmv
+SELECT 2
+> CREATE MATERIALIZED VIEW mv3 AS SELECT i FROM t WHERE i > (SELECT count(*) FROM pg_class WHERE relname = 'nothing');
+SELECT 2
+> SELECT * FROM mv3 ORDER BY i;
+fields i@mv3.1:23:4:-1
+row 1
+row 2
+SELECT 2
+> RESET search_path;
+RESET
+search_path="$user", public
+> DROP SCHEMA vmv CASCADE;
+NOTICE 00000 drop cascades to 5 other objects
+DETAIL drop cascades to table vmv.t
+drop cascades to materialized view vmv.mv
+drop cascades to materialized view vmv.mv2
+drop cascades to table vmv.ct
+drop cascades to materialized view vmv.mv3
+DROP SCHEMA
+> DROP ROLE vmv_owner;
+DROP ROLE
