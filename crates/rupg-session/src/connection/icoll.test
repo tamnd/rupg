@@ -1,0 +1,158 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> create table insertconflicttest(key int4, fruit text);
+CREATE TABLE
+> 
+>> -- invalid clauses
+>> insert into insertconflicttest values (1) on conflict (key int4_ops (fillfactor=10)) do nothing;
+ERROR 42P10 operator class options are not allowed in ON CONFLICT clause at 76
+> insert into insertconflicttest values (1) on conflict (key asc) do nothing;
+ERROR 42P10 ASC/DESC is not allowed in ON CONFLICT clause at 56
+> insert into insertconflicttest values (1) on conflict (key nulls last) do nothing;
+ERROR 42P10 NULLS FIRST/LAST is not allowed in ON CONFLICT clause at 56
+> create view insertconflictview as select * from insertconflicttest;
+CREATE VIEW
+> 
+>> create unique index op_index_key on insertconflicttest(key, fruit text_pattern_ops);
+CREATE INDEX
+> create unique index collation_index_key on insertconflicttest(key, fruit collate "C");
+CREATE INDEX
+> create unique index both_index_key on insertconflicttest(key, fruit collate "C" text_pattern_ops);
+CREATE INDEX
+> create unique index both_index_expr_key on insertconflicttest(key, lower(fruit) collate "C" text_pattern_ops);
+CREATE INDEX
+> 
+>> explain (costs off) insert into insertconflicttest values(0, 'Crowberry') on conflict (key) do nothing;
+ERROR 42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification
+> explain (costs off) insert into insertconflicttest values(0, 'Crowberry') on conflict (fruit) do nothing;
+ERROR 42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification
+> 
+>> explain (costs off) insert into insertconflicttest values(0, 'Crowberry') on conflict (key, fruit) do nothing;
+fields QUERY PLAN:25:-1:-1
+row Insert on insertconflicttest
+row   Conflict Resolution: NOTHING
+row   Conflict Arbiter Indexes: op_index_key, collation_index_key, both_index_key
+row   ->  Result
+EXPLAIN
+> explain (costs off) insert into insertconflicttest values(0, 'Crowberry') on conflict (fruit, key, fruit, key) do nothing;
+fields QUERY PLAN:25:-1:-1
+row Insert on insertconflicttest
+row   Conflict Resolution: NOTHING
+row   Conflict Arbiter Indexes: op_index_key, collation_index_key, both_index_key
+row   ->  Result
+EXPLAIN
+> explain (costs off) insert into insertconflicttest values(0, 'Crowberry') on conflict (lower(fruit), key, lower(fruit), key) do nothing;
+fields QUERY PLAN:25:-1:-1
+row Insert on insertconflicttest
+row   Conflict Resolution: NOTHING
+row   Conflict Arbiter Indexes: both_index_expr_key
+row   ->  Result
+EXPLAIN
+> explain (costs off) insert into insertconflictview values(0, 'Crowberry') on conflict (lower(fruit), key, lower(fruit), key) do nothing;
+fields QUERY PLAN:25:-1:-1
+row Insert on insertconflicttest
+row   Conflict Resolution: NOTHING
+row   Conflict Arbiter Indexes: both_index_expr_key
+row   ->  Result
+EXPLAIN
+> explain (costs off) insert into insertconflicttest values(0, 'Crowberry') on conflict (key, fruit text_pattern_ops) do nothing;
+fields QUERY PLAN:25:-1:-1
+row Insert on insertconflicttest
+row   Conflict Resolution: NOTHING
+row   Conflict Arbiter Indexes: op_index_key, both_index_key
+row   ->  Result
+EXPLAIN
+> explain (costs off) insert into insertconflicttest values(0, 'Crowberry') on conflict (key, fruit collate "C") do nothing;
+fields QUERY PLAN:25:-1:-1
+row Insert on insertconflicttest
+row   Conflict Resolution: NOTHING
+row   Conflict Arbiter Indexes: collation_index_key, both_index_key
+row   ->  Result
+EXPLAIN
+> explain (costs off) insert into insertconflicttest values(0, 'Crowberry') on conflict (fruit collate "C" text_pattern_ops, key) do nothing;
+fields QUERY PLAN:25:-1:-1
+row Insert on insertconflicttest
+row   Conflict Resolution: NOTHING
+row   Conflict Arbiter Indexes: both_index_key
+row   ->  Result
+EXPLAIN
+> explain (costs off) insert into insertconflicttest values(0, 'Crowberry') on conflict (lower(fruit) collate "C", key, key) do nothing;
+fields QUERY PLAN:25:-1:-1
+row Insert on insertconflicttest
+row   Conflict Resolution: NOTHING
+row   Conflict Arbiter Indexes: both_index_expr_key
+row   ->  Result
+EXPLAIN
+> explain (costs off) insert into insertconflicttest values(0, 'Crowberry') on conflict (fruit, key, fruit text_pattern_ops, key) do nothing;
+fields QUERY PLAN:25:-1:-1
+row Insert on insertconflicttest
+row   Conflict Resolution: NOTHING
+row   Conflict Arbiter Indexes: op_index_key, both_index_key
+row   ->  Result
+EXPLAIN
+> explain (costs off) insert into insertconflicttest values(0, 'Crowberry') on conflict (lower(fruit) collate "C" text_pattern_ops, key, key) do nothing;
+fields QUERY PLAN:25:-1:-1
+row Insert on insertconflicttest
+row   Conflict Resolution: NOTHING
+row   Conflict Arbiter Indexes: both_index_expr_key
+row   ->  Result
+EXPLAIN
+> 
+>> drop index op_index_key;
+DROP INDEX
+> drop index collation_index_key;
+DROP INDEX
+> drop index both_index_key;
+DROP INDEX
+> drop index both_index_expr_key;
+DROP INDEX
+> 
+>> create unique index cross_match on insertconflicttest(lower(fruit) collate "C", upper(fruit) text_pattern_ops);
+CREATE INDEX
+> 
+>> explain (costs off) insert into insertconflicttest values(0, 'Crowberry') on conflict (lower(fruit) text_pattern_ops, upper(fruit) collate "C") do nothing;
+ERROR 42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification
+> explain (costs off) insert into insertconflicttest values(0, 'Crowberry') on conflict (lower(fruit) collate "C", upper(fruit) text_pattern_ops) do nothing;
+fields QUERY PLAN:25:-1:-1
+row Insert on insertconflicttest
+row   Conflict Resolution: NOTHING
+row   Conflict Arbiter Indexes: cross_match
+row   ->  Result
+EXPLAIN
+> 
+>> drop index cross_match;
+DROP INDEX
+> 
+>> insert into insertconflicttest values (1) on conflict (key nope_ops) do nothing;
+ERROR 42704 operator class "nope_ops" does not exist for access method "btree"
+> insert into insertconflicttest values (1) on conflict (key collate "nope") do nothing;
+ERROR 42704 collation "nope" for encoding "UTF8" does not exist at 56
+> create unique index ic_c on insertconflicttest(fruit collate "C");
+CREATE INDEX
+> insert into insertconflicttest values (1, 'a') on conflict (fruit collate "C") do nothing;
+INSERT 0 1
+> insert into insertconflicttest values (2, 'a') on conflict (fruit collate "C") do update set key = excluded.key returning *;
+fields key@insertconflicttest.1:23:4:-1,fruit@insertconflicttest.2:25:-1:-1
+row 2,a
+INSERT 0 1
+> insert into insertconflicttest values (3, 'a') on conflict (fruit collate "POSIX") do nothing;
+ERROR 42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification
+> insert into insertconflicttest values (3, 'a') on conflict (fruit text_ops) do nothing returning *;
+fields key@insertconflicttest.1:23:4:-1,fruit@insertconflicttest.2:25:-1:-1
+INSERT 0 0
+> insert into insertconflicttest values (3, 'a') on conflict (fruit text_pattern_ops) do nothing;
+ERROR 42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification
+> insert into insertconflicttest values (3, 'a') on conflict (fruit pg_catalog.text_ops) do nothing returning *;
+fields key@insertconflicttest.1:23:4:-1,fruit@insertconflicttest.2:25:-1:-1
+INSERT 0 0
+> insert into insertconflicttest values (3, 'a') on conflict (fruit int4_ops) do nothing;
+ERROR 42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification
+> insert into insertconflictview values (4, 'a') on conflict (fruit collate "C") do update set key = 40 returning *;
+fields key@insertconflictview.1:23:4:-1,fruit@insertconflictview.2:25:-1:-1
+row 40,a
+INSERT 0 1
+> select * from insertconflicttest order by key;
+fields key@insertconflicttest.1:23:4:-1,fruit@insertconflicttest.2:25:-1:-1
+row 40,a
+SELECT 1

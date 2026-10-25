@@ -7,7 +7,7 @@ use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_sql::nodes::{
     InsertStmt, List, LockClauseStrength, Node, OnConflictAction, OnConflictClause, OverridingKind,
-    RangeVar, SelectStmt,
+    RangeVar, SelectStmt, SortByDir, SortByNulls,
 };
 use rupg_types::{Value, oid};
 
@@ -535,7 +535,7 @@ impl Analyzer<'_> {
         // The planner matches the inference with the indexes after the analysis.
         if let Some(conflict) = &mut on_conflict {
             conflict.all = matches!(inference, Inference::All);
-            conflict.arbiters = arbiters(inference, unique)?;
+            conflict.arbiters = arbiters(inference, unique, self.env.catalog())?;
         }
         Ok((on_conflict, returning))
     }
@@ -662,26 +662,58 @@ impl Analyzer<'_> {
         }
         let mut set = Vec::with_capacity(infer.indexElems.len());
         let mut exprs = Vec::new();
+        let mut exact = Vec::new();
         for node in &infer.indexElems {
             let Some(Node::IndexElem(elem)) = node else {
                 return Err(Error::internal("an inference element that is not IndexElem"));
             };
             let at = place(elem.location);
-            if !elem.collation.is_empty() || !elem.opclass.is_empty() {
-                return Err(not_yet(
-                    "a collation or an operator class in the inference of ON CONFLICT",
+            let not_allowed = |what: &str| {
+                Error::new(
+                    SqlState::INVALID_COLUMN_REFERENCE,
+                    format!("{what} is not allowed in ON CONFLICT clause"),
+                )
+                .at_opt(at)
+            };
+            if elem.ordering != SortByDir::SORTBY_DEFAULT {
+                return Err(not_allowed("ASC/DESC"));
+            }
+            if elem.nulls_ordering != SortByNulls::SORTBY_NULLS_DEFAULT {
+                return Err(not_allowed("NULLS FIRST/LAST"));
+            }
+            if !elem.opclassopts.is_empty() {
+                return Err(Error::new(
+                    SqlState::INVALID_COLUMN_REFERENCE,
+                    "operator class options are not allowed in ON CONFLICT clause",
                 )
                 .at_opt(at));
             }
+            let collation = match elem.collation.is_empty() {
+                true => 0,
+                false => self.collation_oid(&elem.collation, at)?,
+            };
+            let class = match elem.opclass.is_empty() {
+                true => None,
+                false => Some(self.btree_opclass(&elem.opclass)?),
+            };
+            let mut note = |target: Exact| {
+                if collation != 0 || class.is_some() {
+                    exact.push(ExactElem { target, collation, class });
+                }
+            };
             let Some(column) = elem.name.as_deref() else {
                 // `resolve_unique_index_expr`: an expression that is a column counts as the column.
                 let expr =
                     self.with_kind(Kind::IndexExpression, |a| a.transform(elem.expr.as_ref()))?;
                 match expr.kind {
                     ExprKind::Var(var) if var.levels_up == 0 && var.attnum > 0 => {
+                        note(Exact::Column(var.attnum));
                         set.extend(usize::try_from(var.attnum - 1).ok());
                     }
-                    _ => exprs.push(expr),
+                    _ => {
+                        note(Exact::Expr(exprs.len()));
+                        exprs.push(expr);
+                    }
                 }
                 continue;
             };
@@ -691,6 +723,7 @@ impl Analyzer<'_> {
                 Some(Some(expr)) => match expr.kind {
                     ExprKind::Var(var) if var.attnum > 0 => usize::try_from(var.attnum - 1).ok(),
                     _ => {
+                        note(Exact::Expr(exprs.len()));
                         exprs.push(expr);
                         continue;
                     }
@@ -710,6 +743,7 @@ impl Analyzer<'_> {
                 perm.required |= ACL_SELECT;
                 perm.selected.insert(i16::try_from(index + 1).unwrap_or(i16::MAX));
             }
+            note(Exact::Column(i16::try_from(index + 1).unwrap_or(i16::MAX)));
             set.push(index);
         }
         set.sort_unstable();
@@ -723,7 +757,42 @@ impl Analyzer<'_> {
                 _ => predicate.push(expr),
             }
         }
-        Ok(Inference::Columns { columns: set, exprs, predicate })
+        Ok(Inference::Columns { columns: set, exprs, predicate, exact })
+    }
+
+    /// `get_opclass_oid` for `btree`: the operator family and the input type of the operator class that the name gives, in the schema of the name or in the first schema of the search path that has it.
+    fn btree_opclass(&self, list: &[Option<Node>]) -> Result<(u32, u32)> {
+        const BTREE: u32 = 403;
+        let parts = crate::typename::names(list);
+        let (schema, name) = self.split_name(&parts, None)?;
+        let catalog = self.env.catalog();
+        let find = |namespace: u32| {
+            let user = catalog.and_then(|c| {
+                c.opclasses()
+                    .find(|c| c.method == BTREE && c.namespace == namespace && c.name == name)
+                    .map(|c| (c.family, c.intype))
+            });
+            user.or_else(|| {
+                let row = builtin::named(Named::Opclass)
+                    .iter()
+                    .find(|r| r.method == BTREE && r.namespace == namespace && r.name == name)?;
+                let class = builtin::opclasses().iter().find(|c| c.oid == row.oid)?;
+                Some((class.family, class.intype))
+            })
+        };
+        let found = match schema {
+            Some(namespace) => find(namespace),
+            None => self.path.iter().find_map(|&namespace| find(namespace)),
+        };
+        found.ok_or_else(|| {
+            Error::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!(
+                    "operator class \"{}\" does not exist for access method \"btree\"",
+                    parts.join(".")
+                ),
+            )
+        })
     }
 
     /// `setTargetTable`: the OID, the name and the columns of the table that the statement writes. A table with a constraint or an object that the executor does not check yet gives `0A000`. The table gets the privileges that the write needs, which a `MERGE` gives later from its clauses.
@@ -1615,14 +1684,74 @@ fn row_query(columns: &[Column], row: Vec<Expr>) -> Query {
 enum Inference {
     /// No inference: all the unique indexes.
     All,
-    /// The set of the columns of an inference, from 0, in order, the expressions of the inference, and the parts of its predicate.
-    Columns { columns: Vec<usize>, exprs: Vec<Expr>, predicate: Vec<Expr> },
+    /// The set of the columns of an inference, from 0, in order, the expressions of the inference, the parts of its predicate, and the elements with a collation or an operator class.
+    Columns { columns: Vec<usize>, exprs: Vec<Expr>, predicate: Vec<Expr>, exact: Vec<ExactElem> },
     /// The OID of the index of the constraint that `ON CONSTRAINT` names, or 0 for a constraint with no index.
     Constraint(u32),
 }
 
+/// An element of an inference with a collation or an operator class, `InferenceElem` with `infercollid` or `inferopclass`.
+struct ExactElem {
+    target: Exact,
+    /// The collation, or 0.
+    collation: u32,
+    /// The operator family and the input type of the operator class.
+    class: Option<(u32, u32)>,
+}
+
+/// The column or the expression of an [`ExactElem`].
+#[derive(Clone, Copy)]
+enum Exact {
+    /// The column number in the table.
+    Column(i16),
+    /// The place of the expression in the expressions of the inference.
+    Expr(usize),
+}
+
+/// `infer_collation_opclass_match`: true when a key column of the index is the element with its collation and the family and the input type of its operator class.
+fn exact_match(
+    elem: &ExactElem,
+    exprs: &[Expr],
+    key: &Unique,
+    catalog: Option<&rupg_catalog::Catalog>,
+) -> bool {
+    let info = catalog.and_then(|c| c.relation(key.oid)).and_then(|rel| rel.index.as_ref());
+    let Some(info) = info else { return false };
+    let count = usize::try_from(info.key_count).unwrap_or_default();
+    for (natt, &attno) in info.keys.iter().take(count).enumerate() {
+        if let Some(class) = elem.class {
+            let oid = info.classes.get(natt).copied().unwrap_or_default();
+            let user = catalog.and_then(|c| c.opclass(oid)).map(|c| (c.family, c.intype));
+            let found = user.or_else(|| {
+                builtin::opclasses().iter().find(|c| c.oid == oid).map(|c| (c.family, c.intype))
+            });
+            if found != Some(class) {
+                continue;
+            }
+        }
+        if elem.collation != 0 && info.collations.get(natt) != Some(&elem.collation) {
+            continue;
+        }
+        match elem.target {
+            Exact::Column(attnum) if attno == attnum => return true,
+            Exact::Expr(at) if attno == 0 => {
+                let indexed = key.derived.as_ref().and_then(|d| d.exprs.get(natt));
+                if indexed.is_some_and(|i| exprs.get(at).is_some_and(|e| e.same(i))) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// `infer_arbiter_indexes`: the places in `unique` of the arbiter indexes. An inference takes each unique index whose key has the same set of columns.
-fn arbiters(inference: Inference, unique: &[Unique]) -> Result<Vec<usize>> {
+fn arbiters(
+    inference: Inference,
+    unique: &[Unique],
+    catalog: Option<&rupg_catalog::Catalog>,
+) -> Result<Vec<usize>> {
     let places: Vec<usize> = match inference {
         Inference::All => return Ok((0..unique.len()).collect()),
         Inference::Constraint(0) => {
@@ -1643,9 +1772,10 @@ fn arbiters(inference: Inference, unique: &[Unique]) -> Result<Vec<usize>> {
             }
             return Ok(places);
         }
-        Inference::Columns { columns: set, exprs, predicate } => unique
+        Inference::Columns { columns: set, exprs, predicate, exact } => unique
             .iter()
             .enumerate()
+            .filter(|(_, key)| exact.iter().all(|e| exact_match(e, &exprs, key, catalog)))
             .filter(|(_, key)| {
                 let Some(derived) = &key.derived else {
                     let mut key = key.columns.clone();
@@ -1665,8 +1795,14 @@ fn arbiters(inference: Inference, unique: &[Unique]) -> Result<Vec<usize>> {
                 columns.sort_unstable();
                 columns.dedup();
                 // `predicate_implied_by`: each part of the predicate of the index is a part of the predicate of the inference.
+                // An expression with a collation or an operator class matched in `exact_match`.
+                let checked =
+                    |at: usize| exact.iter().any(|e| matches!(e.target, Exact::Expr(x) if x == at));
                 columns == set
-                    && exprs.iter().all(|e| indexed.iter().any(|i| i.same(e)))
+                    && exprs
+                        .iter()
+                        .enumerate()
+                        .all(|(at, e)| checked(at) || indexed.iter().any(|i| i.same(e)))
                     && indexed.iter().all(|i| exprs.iter().any(|e| e.same(i)))
                     && derived.predicate.iter().all(|p| predicate.iter().any(|e| e.same(p)))
             })
