@@ -294,7 +294,8 @@ impl Connection {
                 .collect();
             for mut values in plan.run_unchecked(&row, &reader)? {
                 for (column, value) in now.columns.iter().zip(&values) {
-                    if column.not_null && value.is_null() {
+                    // `ATRewriteTable` checks only the valid not-null constraints.
+                    if column.not_null && !column.not_null_invalid && value.is_null() {
                         let error = Error::new(
                             SqlState::NOT_NULL_VIOLATION,
                             format!(
@@ -410,13 +411,15 @@ fn changes_rows(old: &Catalog, new: &Catalog, rel: &Relation) -> bool {
     if now.columns.len() < rel.columns.len() {
         return true;
     }
+    // A `NOT VALID` not-null constraint does not check the rows, and one that becomes valid does.
+    let proven = |c: &rupg_catalog::Column| c.not_null && !c.not_null_invalid;
     // A dropped column keeps its value in the rows, as no query can read it.
     let same = rel.columns.iter().zip(&now.columns).all(|(before, after)| {
         after.dropped
             || before.ty == after.ty
                 && before.typmod == after.typmod
                 && before.collation == after.collation
-                && (before.not_null || !after.not_null)
+                && (proven(before) || !proven(after))
     });
     if !same {
         return true;

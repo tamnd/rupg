@@ -252,6 +252,7 @@ impl Catalog {
                         ndims: 0,
                         collation: 0,
                         not_null: false,
+                        not_null_invalid: false,
                         has_default: false,
                         identity: 0,
                         generated: 0,
@@ -286,6 +287,7 @@ impl Catalog {
                     && let Ok(column) = self.column_mut(con.relation, number)
                 {
                     column.not_null = false;
+                    column.not_null_invalid = false;
                 }
             }
             PG_NAMESPACE => {

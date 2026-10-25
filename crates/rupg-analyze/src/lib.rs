@@ -427,7 +427,7 @@ pub fn foreign_keys(env: &dyn Env, table: u32, kind: WriteKind) -> Result<Vec<Fo
         .iter()
         .map(|c| {
             let (name, ty, typmod) = from::scope_column(c);
-            Column { name, ty, typmod, not_null: c.not_null }
+            Column { name, ty, typmod, not_null: c.not_null && !c.not_null_invalid }
         })
         .collect();
     Analyzer::new(env, &Params::default()).foreign_keys(table, kind, &columns)

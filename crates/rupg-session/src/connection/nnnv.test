@@ -1,0 +1,148 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE nn_t (a int, b int);
+CREATE TABLE
+> INSERT INTO nn_t VALUES (1, 1), (NULL, 2);
+INSERT 0 2
+> ALTER TABLE nn_t ADD CONSTRAINT nn_t_a NOT NULL a;
+ERROR 23502 column "a" of relation "nn_t" contains null values
+> ALTER TABLE nn_t ADD CONSTRAINT nn_t_a NOT NULL a NOT VALID;
+ALTER TABLE
+> SELECT conname, convalidated, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'nn_t'::regclass ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1,pg_get_constraintdef:25:-1:-1
+row nn_t_a,f,NOT NULL a NOT VALID
+SELECT 1
+> SELECT attname, attnotnull FROM pg_attribute WHERE attrelid = 'nn_t'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,attnotnull@pg_attribute.12:16:1:-1
+row a,t
+row b,f
+SELECT 2
+> INSERT INTO nn_t VALUES (NULL, 3);
+ERROR 23502 null value in column "a" of relation "nn_t" violates not-null constraint
+DETAIL Failing row contains (null, 3).
+> SELECT b FROM nn_t WHERE a IS NULL;
+fields b@nn_t.2:23:4:-1
+row 2
+SELECT 1
+> SELECT count(*) FROM nn_t WHERE a IS NOT NULL;
+fields count:20:8:-1
+row 1
+SELECT 1
+> SELECT b FROM nn_t LEFT JOIN (SELECT 1 AS x) s ON true WHERE a IS NULL;
+fields b@nn_t.2:23:4:-1
+row 2
+SELECT 1
+> ALTER TABLE nn_t ALTER COLUMN b TYPE bigint;
+ALTER TABLE
+> ALTER TABLE nn_t ADD CONSTRAINT nn_t_a2 NOT NULL a;
+ERROR 55000 incompatible NOT VALID constraint "nn_t_a" on relation "nn_t"
+HINT You might need to validate it using ALTER TABLE ... VALIDATE CONSTRAINT.
+> ALTER TABLE nn_t ADD PRIMARY KEY (a);
+ERROR 55000 cannot create primary key on column "a"
+DETAIL The constraint "nn_t_a" on column "a" of table "nn_t", marked NOT VALID, is incompatible with a primary key.
+HINT You might need to validate it using ALTER TABLE ... VALIDATE CONSTRAINT.
+> ALTER TABLE nn_t VALIDATE CONSTRAINT nn_t_a;
+ERROR 23502 column "a" of relation "nn_t" contains null values
+> ALTER TABLE nn_t ALTER COLUMN a SET NOT NULL;
+ERROR 23502 column "a" of relation "nn_t" contains null values
+> UPDATE nn_t SET a = 2 WHERE a IS NULL;
+UPDATE 1
+> ALTER TABLE nn_t ALTER COLUMN a SET NOT NULL;
+ALTER TABLE
+> SELECT conname, convalidated FROM pg_constraint WHERE conrelid = 'nn_t'::regclass ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1
+row nn_t_a,t
+SELECT 1
+> ALTER TABLE nn_t VALIDATE CONSTRAINT nn_t_a;
+ALTER TABLE
+> ALTER TABLE nn_t ADD CONSTRAINT nn_t_b NOT NULL b NOT VALID;
+ALTER TABLE
+> ALTER TABLE nn_t VALIDATE CONSTRAINT nn_t_b;
+ALTER TABLE
+> SELECT conname, convalidated FROM pg_constraint WHERE conrelid = 'nn_t'::regclass ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1
+row nn_t_a,t
+row nn_t_b,t
+SELECT 2
+> CREATE TABLE nn_p (a int, b int);
+CREATE TABLE
+> CREATE TABLE nn_c (c int) INHERITS (nn_p);
+CREATE TABLE
+> INSERT INTO nn_c VALUES (NULL, NULL, 1);
+INSERT 0 1
+> ALTER TABLE nn_p ADD CONSTRAINT nn_p_a NOT NULL a NOT VALID;
+ALTER TABLE
+> SELECT conrelid::regclass::text AS rel, conname, convalidated, conislocal, coninhcount FROM pg_constraint WHERE contype = 'n' AND conrelid IN ('nn_p'::regclass, 'nn_c'::regclass) ORDER BY conrelid::regclass::text, conname;
+fields rel:25:-1:-1,conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row nn_c,nn_p_a,f,f,1
+row nn_p,nn_p_a,f,t,0
+SELECT 2
+> ALTER TABLE ONLY nn_p VALIDATE CONSTRAINT nn_p_a;
+ERROR 42P16 constraint must be validated on child tables too
+> ALTER TABLE nn_p VALIDATE CONSTRAINT nn_p_a;
+ERROR 23502 column "a" of relation "nn_c" contains null values
+> UPDATE nn_c SET a = 1;
+UPDATE 1
+> ALTER TABLE nn_p VALIDATE CONSTRAINT nn_p_a;
+ALTER TABLE
+> SELECT conrelid::regclass::text AS rel, conname, convalidated FROM pg_constraint WHERE contype = 'n' AND conrelid IN ('nn_p'::regclass, 'nn_c'::regclass) ORDER BY conrelid::regclass::text, conname;
+fields rel:25:-1:-1,conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1
+row nn_c,nn_p_a,t
+row nn_p,nn_p_a,t
+SELECT 2
+> ALTER TABLE nn_c ADD CONSTRAINT nn_c_b NOT NULL b NOT VALID;
+ALTER TABLE
+> ALTER TABLE nn_p ADD CONSTRAINT nn_p_b NOT NULL b;
+ERROR 55000 incompatible NOT VALID constraint "nn_c_b" on relation "nn_c"
+HINT You might need to validate it using ALTER TABLE ... VALIDATE CONSTRAINT.
+> ALTER TABLE nn_c ADD CONSTRAINT nn_c_c NOT NULL c;
+ALTER TABLE
+> ALTER TABLE nn_c ADD CONSTRAINT nn_c_c2 NOT NULL c NOT VALID;
+ERROR 55000 cannot create not-null constraint "nn_c_c2" on column "c" of table "nn_c"
+DETAIL A not-null constraint named "nn_c_c" already exists for this column.
+> SELECT conrelid::regclass::text AS rel, conname, convalidated, conislocal, coninhcount FROM pg_constraint WHERE contype = 'n' AND conrelid IN ('nn_p'::regclass, 'nn_c'::regclass) ORDER BY conrelid::regclass::text, conname;
+fields rel:25:-1:-1,conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row nn_c,nn_c_b,f,t,0
+row nn_c,nn_c_c,t,t,0
+row nn_c,nn_p_a,t,f,1
+row nn_p,nn_p_a,t,t,0
+SELECT 4
+> CREATE TABLE nn_q (a int) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TABLE nn_q1 PARTITION OF nn_q FOR VALUES IN (1);
+CREATE TABLE
+> CREATE TABLE nn_q2 PARTITION OF nn_q DEFAULT;
+CREATE TABLE
+> INSERT INTO nn_q VALUES (1), (NULL);
+INSERT 0 2
+> ALTER TABLE nn_q ADD CONSTRAINT nn_q_a NOT NULL a NOT VALID;
+ALTER TABLE
+> SELECT conrelid::regclass::text AS rel, conname, convalidated FROM pg_constraint WHERE contype = 'n' AND conname = 'nn_q_a' ORDER BY conrelid::regclass::text;
+fields rel:25:-1:-1,conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1
+row nn_q,nn_q_a,f
+row nn_q1,nn_q_a,f
+row nn_q2,nn_q_a,f
+SELECT 3
+> CREATE TABLE nn_q3 PARTITION OF nn_q FOR VALUES IN (3);
+CREATE TABLE
+> SELECT conrelid::regclass::text AS rel, conname, convalidated FROM pg_constraint WHERE contype = 'n' AND conname = 'nn_q_a' ORDER BY conrelid::regclass::text;
+fields rel:25:-1:-1,conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1
+row nn_q,nn_q_a,f
+row nn_q1,nn_q_a,f
+row nn_q2,nn_q_a,f
+row nn_q3,nn_q_a,t
+SELECT 4
+> ALTER TABLE nn_q VALIDATE CONSTRAINT nn_q_a;
+ERROR 23502 column "a" of relation "nn_q2" contains null values
+> DELETE FROM nn_q WHERE a IS NULL;
+DELETE 1
+> ALTER TABLE nn_q VALIDATE CONSTRAINT nn_q_a;
+ALTER TABLE
+> SELECT conrelid::regclass::text AS rel, conname, convalidated FROM pg_constraint WHERE contype = 'n' AND conname = 'nn_q_a' ORDER BY conrelid::regclass::text;
+fields rel:25:-1:-1,conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1
+row nn_q,nn_q_a,t
+row nn_q1,nn_q_a,t
+row nn_q2,nn_q_a,t
+row nn_q3,nn_q_a,t
+SELECT 4

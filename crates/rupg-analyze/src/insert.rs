@@ -1690,7 +1690,7 @@ pub(crate) fn write_columns(rel: &rupg_catalog::Relation) -> Vec<Column> {
             name: if c.dropped { String::new() } else { c.name.clone() },
             ty: c.ty,
             typmod: c.typmod,
-            not_null: c.not_null,
+            not_null: c.not_null && !c.not_null_invalid,
         })
         .collect()
 }
