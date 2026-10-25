@@ -10,6 +10,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - A volatile condition of `WHERE` that reads no column, such as `f_leak('x')`, runs for each row of the scan with the other conditions, in the order of their costs, as `distribute_qual_to_rels` gives it to the one relation of `FROM`. It also moves into a view with `security_barrier`. A condition that reads no column and calls no volatile function runs only once (#717).
 - The executor merges a view with `security_barrier` that is the only item of `FROM`, after the leakproof conditions moved into it. The conditions of the view run first, so a row of the view meets the conditions of the query before the scan reads the next row, as the `Subquery Scan` of PostgreSQL runs (#717).
 - `EXECUTE` of a prepared statement sends the notices of the functions that the statement calls (#717).
+- `EXPLAIN` names only the relations that the plan scans, as `set_rtable_names` does with `rels_used`. A subquery or a view whose `Subquery Scan` the plan takes out takes no name, so a relation in it keeps its alias, such as `l` in place of `l_1` (#718).
 
 ## 0.1.83 (2026-10-25)
 

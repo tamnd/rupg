@@ -1,0 +1,78 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE ac (cid int, name text);
+CREATE TABLE
+> CREATE TABLE acard (cid int, cnum text);
+CREATE TABLE
+> CREATE TABLE ause (cid int, ymd date);
+CREATE TABLE
+> CREATE VIEW acs WITH (security_barrier) AS SELECT * FROM ac l NATURAL JOIN acard r WHERE l.name = 'alice';
+CREATE VIEW
+> CREATE VIEW aus WITH (security_barrier) AS SELECT * FROM acs l NATURAL JOIN ause r;
+CREATE VIEW
+> CREATE VIEW aun AS SELECT * FROM acs l NATURAL JOIN ause r;
+CREATE VIEW
+> EXPLAIN (costs off) SELECT * FROM aus WHERE cnum = 'x';
+fields QUERY PLAN:25:-1:-1
+row Hash Join
+row   Hash Cond: (r.cid = l.cid)
+row   ->  Seq Scan on ause r
+row   ->  Hash
+row         ->  Nested Loop
+row               Join Filter: (l.cid = r_1.cid)
+row               ->  Seq Scan on ac l
+row                     Filter: (name = 'alice'::text)
+row               ->  Materialize
+row                     ->  Seq Scan on acard r_1
+row                           Filter: (cnum = 'x'::text)
+EXPLAIN
+> EXPLAIN (costs off) SELECT * FROM aun WHERE cnum = 'x';
+fields QUERY PLAN:25:-1:-1
+row Hash Join
+row   Hash Cond: (r.cid = l.cid)
+row   ->  Seq Scan on ause r
+row   ->  Hash
+row         ->  Nested Loop
+row               Join Filter: (l.cid = r_1.cid)
+row               ->  Seq Scan on ac l
+row                     Filter: (name = 'alice'::text)
+row               ->  Materialize
+row                     ->  Seq Scan on acard r_1
+row                           Filter: (cnum = 'x'::text)
+EXPLAIN
+> EXPLAIN (costs off) SELECT * FROM (SELECT * FROM ac l OFFSET 0) l JOIN ause r ON l.cid = r.cid;
+fields QUERY PLAN:25:-1:-1
+row Merge Join
+row   Merge Cond: (l.cid = r.cid)
+row   ->  Sort
+row         Sort Key: l.cid
+row         ->  Seq Scan on ac l
+row   ->  Sort
+row         Sort Key: r.cid
+row         ->  Seq Scan on ause r
+EXPLAIN
+> EXPLAIN (costs off) SELECT * FROM (SELECT * FROM ac l OFFSET 0) l WHERE l.cid > 1;
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on l
+row   Filter: (l.cid > 1)
+row   ->  Seq Scan on ac l_1
+EXPLAIN
+> EXPLAIN (costs off) SELECT * FROM (SELECT cid FROM ac l UNION ALL SELECT cid FROM acard l) l;
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on ac l_1
+row   ->  Seq Scan on acard l_2
+EXPLAIN
+> DROP VIEW aun;
+DROP VIEW
+> DROP VIEW aus;
+DROP VIEW
+> DROP VIEW acs;
+DROP VIEW
+> DROP TABLE ause;
+DROP TABLE
+> DROP TABLE acard;
+DROP TABLE
+> DROP TABLE ac;
+DROP TABLE

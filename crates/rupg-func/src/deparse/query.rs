@@ -93,7 +93,7 @@ impl Deparser<'_> {
                 used.insert(name.clone(), 0);
             }
         }
-        self.namespace_in(query, &mut used, false)
+        self.namespace_in(query, &mut used, false, &[])
     }
 
     /// The name of a relation before `set_rtable_names` makes it unique: the alias, or else the name of the table.
@@ -104,12 +104,13 @@ impl Deparser<'_> {
         }
     }
 
-    /// [`Deparser::namespace`] with the names that are in use. For `EXPLAIN`, as `select_rtable_names_for_explain`, a join has no name, because no node of the plan reads a join, and a column of `USING` shows as its value.
+    /// [`Deparser::namespace`] with the names that are in use. For `EXPLAIN`, as `select_rtable_names_for_explain`, a join has no name, because no node of the plan reads a join, and a column of `USING` shows as its value. The relations in `hidden` take no unique name.
     pub(super) fn namespace_in(
         &self,
         query: &Query,
         used: &mut HashMap<String, u32>,
         explain: bool,
+        hidden: &[usize],
     ) -> Namespace {
         let mut joins = Vec::new();
         let mut order = Vec::new();
@@ -139,6 +140,11 @@ impl Deparser<'_> {
             match *slot {
                 Slot::Relation(i) => {
                     let Some(rel) = query.relations.get(i) else { continue };
+                    // A relation that the plan does not scan has no name in the range table.
+                    if hidden.contains(&i) {
+                        space.names[i] = self.base_name(rel);
+                        continue;
+                    }
                     space.names[i] = unique_name(self.base_name(rel), used);
                 }
                 Slot::Join(k) => {
