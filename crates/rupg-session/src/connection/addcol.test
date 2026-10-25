@@ -1,0 +1,348 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> create table tt2 (a int, b int, c int);
+CREATE TABLE
+> create table tt3 (ax int8, b int2, c numeric);
+CREATE TABLE
+> create table tt4 (ay int, b int, q int);
+CREATE TABLE
+> create view v1 as select * from tt2 natural join tt3;
+CREATE VIEW
+> create view v1a as select * from (tt2 natural join tt3) j;
+CREATE VIEW
+> create view v2 as select * from tt2 join tt3 using (b,c) join tt4 using (b);
+CREATE VIEW
+> create view v2a as select * from (tt2 join tt3 using (b,c) join tt4 using (b)) j;
+CREATE VIEW
+> create view v3 as select * from tt2 join tt3 using (b,c) full join tt4 using (b);
+CREATE VIEW
+> select pg_get_viewdef('v1', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT tt2.b,
+    tt3.c,
+    tt2.a,
+    tt3.ax
+   FROM tt2
+     JOIN tt3 USING (b, c);
+SELECT 1
+> select pg_get_viewdef('v1a', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT j.b,
+    j.c,
+    j.a,
+    j.ax
+   FROM (tt2
+     JOIN tt3 USING (b, c)) j;
+SELECT 1
+> select pg_get_viewdef('v2', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT tt2.b,
+    tt3.c,
+    tt2.a,
+    tt3.ax,
+    tt4.ay,
+    tt4.q
+   FROM tt2
+     JOIN tt3 USING (b, c)
+     JOIN tt4 USING (b);
+SELECT 1
+> select pg_get_viewdef('v2a', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT j.b,
+    j.c,
+    j.a,
+    j.ax,
+    j.ay,
+    j.q
+   FROM (tt2
+     JOIN tt3 USING (b, c)
+     JOIN tt4 USING (b)) j;
+SELECT 1
+> select pg_get_viewdef('v3', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT b,
+    tt3.c,
+    tt2.a,
+    tt3.ax,
+    tt4.ay,
+    tt4.q
+   FROM tt2
+     JOIN tt3 USING (b, c)
+     FULL JOIN tt4 USING (b);
+SELECT 1
+> alter table tt2 add column d int;
+ALTER TABLE
+> alter table tt2 add column e int;
+ALTER TABLE
+> select pg_get_viewdef('v1', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT tt2.b,
+    tt3.c,
+    tt2.a,
+    tt3.ax
+   FROM tt2
+     JOIN tt3 USING (b, c);
+SELECT 1
+> select pg_get_viewdef('v1a', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT j.b,
+    j.c,
+    j.a,
+    j.ax
+   FROM (tt2
+     JOIN tt3 USING (b, c)) j;
+SELECT 1
+> select pg_get_viewdef('v2', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT tt2.b,
+    tt3.c,
+    tt2.a,
+    tt3.ax,
+    tt4.ay,
+    tt4.q
+   FROM tt2
+     JOIN tt3 USING (b, c)
+     JOIN tt4 USING (b);
+SELECT 1
+> select pg_get_viewdef('v2a', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT j.b,
+    j.c,
+    j.a,
+    j.ax,
+    j.ay,
+    j.q
+   FROM (tt2
+     JOIN tt3 USING (b, c)
+     JOIN tt4 USING (b)) j;
+SELECT 1
+> select pg_get_viewdef('v3', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT b,
+    tt3.c,
+    tt2.a,
+    tt3.ax,
+    tt4.ay,
+    tt4.q
+   FROM tt2
+     JOIN tt3 USING (b, c)
+     FULL JOIN tt4 USING (b);
+SELECT 1
+> alter table tt3 rename c to d;
+ALTER TABLE
+> select pg_get_viewdef('v1', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT tt2.b,
+    tt3.c,
+    tt2.a,
+    tt3.ax
+   FROM tt2
+     JOIN tt3 tt3(ax, b, c) USING (b, c);
+SELECT 1
+> select pg_get_viewdef('v1a', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT j.b,
+    j.c,
+    j.a,
+    j.ax
+   FROM (tt2
+     JOIN tt3 tt3(ax, b, c) USING (b, c)) j;
+SELECT 1
+> select pg_get_viewdef('v2', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT tt2.b,
+    tt3.c,
+    tt2.a,
+    tt3.ax,
+    tt4.ay,
+    tt4.q
+   FROM tt2
+     JOIN tt3 tt3(ax, b, c) USING (b, c)
+     JOIN tt4 USING (b);
+SELECT 1
+> select pg_get_viewdef('v2a', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT j.b,
+    j.c,
+    j.a,
+    j.ax,
+    j.ay,
+    j.q
+   FROM (tt2
+     JOIN tt3 tt3(ax, b, c) USING (b, c)
+     JOIN tt4 USING (b)) j;
+SELECT 1
+> select pg_get_viewdef('v3', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT b,
+    tt3.c,
+    tt2.a,
+    tt3.ax,
+    tt4.ay,
+    tt4.q
+   FROM tt2
+     JOIN tt3 tt3(ax, b, c) USING (b, c)
+     FULL JOIN tt4 USING (b);
+SELECT 1
+> alter table tt3 add column c int;
+ALTER TABLE
+> alter table tt3 add column e int;
+ALTER TABLE
+> select pg_get_viewdef('v1', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT tt2.b,
+    tt3.c,
+    tt2.a,
+    tt3.ax
+   FROM tt2
+     JOIN tt3 tt3(ax, b, c, c_1, e) USING (b, c);
+SELECT 1
+> select pg_get_viewdef('v1a', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT j.b,
+    j.c,
+    j.a,
+    j.ax
+   FROM (tt2
+     JOIN tt3 tt3(ax, b, c, c_1, e) USING (b, c)) j(b, c, a, d, e, ax, c_1, e_1);
+SELECT 1
+> select pg_get_viewdef('v2', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT tt2.b,
+    tt3.c,
+    tt2.a,
+    tt3.ax,
+    tt4.ay,
+    tt4.q
+   FROM tt2
+     JOIN tt3 tt3(ax, b, c, c_1, e) USING (b, c)
+     JOIN tt4 USING (b);
+SELECT 1
+> select pg_get_viewdef('v2a', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT j.b,
+    j.c,
+    j.a,
+    j.ax,
+    j.ay,
+    j.q
+   FROM (tt2
+     JOIN tt3 tt3(ax, b, c, c_1, e) USING (b, c)
+     JOIN tt4 USING (b)) j(b, c, a, d, e, ax, c_1, e_1, ay, q);
+SELECT 1
+> select pg_get_viewdef('v3', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT b,
+    tt3.c,
+    tt2.a,
+    tt3.ax,
+    tt4.ay,
+    tt4.q
+   FROM tt2
+     JOIN tt3 tt3(ax, b, c, c_1, e) USING (b, c)
+     FULL JOIN tt4 USING (b);
+SELECT 1
+> alter table tt2 drop column d;
+ALTER TABLE
+> select pg_get_viewdef('v1', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT tt2.b,
+    tt3.c,
+    tt2.a,
+    tt3.ax
+   FROM tt2
+     JOIN tt3 tt3(ax, b, c, c_1, e) USING (b, c);
+SELECT 1
+> select pg_get_viewdef('v1a', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT j.b,
+    j.c,
+    j.a,
+    j.ax
+   FROM (tt2
+     JOIN tt3 tt3(ax, b, c, c_1, e) USING (b, c)) j(b, c, a, e, ax, c_1, e_1);
+SELECT 1
+> select pg_get_viewdef('v2', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT tt2.b,
+    tt3.c,
+    tt2.a,
+    tt3.ax,
+    tt4.ay,
+    tt4.q
+   FROM tt2
+     JOIN tt3 tt3(ax, b, c, c_1, e) USING (b, c)
+     JOIN tt4 USING (b);
+SELECT 1
+> select pg_get_viewdef('v2a', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT j.b,
+    j.c,
+    j.a,
+    j.ax,
+    j.ay,
+    j.q
+   FROM (tt2
+     JOIN tt3 tt3(ax, b, c, c_1, e) USING (b, c)
+     JOIN tt4 USING (b)) j(b, c, a, e, ax, c_1, e_1, ay, q);
+SELECT 1
+> select pg_get_viewdef('v3', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT b,
+    tt3.c,
+    tt2.a,
+    tt3.ax,
+    tt4.ay,
+    tt4.q
+   FROM tt2
+     JOIN tt3 tt3(ax, b, c, c_1, e) USING (b, c)
+     FULL JOIN tt4 USING (b);
+SELECT 1
+> create table tt11 (x int, y int);
+CREATE TABLE
+> create table tt12 (x int, z int);
+CREATE TABLE
+> create table tt13 (z int, q int);
+CREATE TABLE
+> create view vv6 as select x,y,z,q from
+>>   (tt11 join tt12 using(x)) join tt13 using(z);
+CREATE VIEW
+> select pg_get_viewdef('vv6', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT tt11.x,
+    tt11.y,
+    tt12.z,
+    tt13.q
+   FROM tt11
+     JOIN tt12 USING (x)
+     JOIN tt13 USING (z);
+SELECT 1
+> alter table tt11 add column z int;
+ALTER TABLE
+> select pg_get_viewdef('vv6', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT tt11.x,
+    tt11.y,
+    tt12.z,
+    tt13.q
+   FROM tt11 tt11(x, y, z_1)
+     JOIN tt12 USING (x)
+     JOIN tt13 USING (z);
+SELECT 1
+> select * from v1; select * from v3; select * from vv6;
+fields b@v1.1:23:4:-1,c@v1.2:1700:-1:-1,a@v1.3:23:4:-1,ax@v1.4:20:8:-1
+SELECT 0
+fields b@v3.1:23:4:-1,c@v3.2:1700:-1:-1,a@v3.3:23:4:-1,ax@v3.4:20:8:-1,ay@v3.5:23:4:-1,q@v3.6:23:4:-1
+SELECT 0
+fields x@vv6.1:23:4:-1,y@vv6.2:23:4:-1,z@vv6.3:23:4:-1,q@vv6.4:23:4:-1
+SELECT 0
+> drop table tt2, tt3, tt4, tt11, tt12, tt13 cascade;
+NOTICE 00000 drop cascades to 6 other objects
+DETAIL drop cascades to view vv6
+drop cascades to view v1
+drop cascades to view v1a
+drop cascades to view v2
+drop cascades to view v2a
+drop cascades to view v3
+DROP TABLE

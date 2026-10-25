@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `ALTER TABLE ... ADD COLUMN` gives each view that reads the table a new text, as `pg_get_viewdef` writes it. The deparse gives a new column a name that the other columns of the relation do not have, such as `tt3 tt3(ax, b, c, c_1, e)`, so that a join with `USING` or `NATURAL` keeps its columns. The deparse of a join also counts only the columns of a table that are not dropped (#NNN).
+
 ## 0.1.82 (2026-10-25)
 
 ### Added

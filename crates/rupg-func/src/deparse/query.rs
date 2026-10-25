@@ -166,7 +166,7 @@ impl Deparser<'_> {
                 state.using_names(&joins, k, &[]);
             }
         }
-        // `set_relation_column_names` reads the names of the columns of a table or a view from the catalog, so a column that `ALTER ... RENAME` renamed after the analysis of the query shows its new name.
+        // `set_relation_column_names` reads the names of the columns of a table or a view from the catalog, so a column that `ALTER ... RENAME` renamed after the analysis of the query shows its new name. A column that `ALTER TABLE ... ADD COLUMN` added after the analysis has a name too, which the other names of the relation do not have. A dropped column has no name.
         let catalog = self.session.catalog();
         let real_names: Vec<Vec<String>> = query
             .relations
@@ -176,13 +176,18 @@ impl Deparser<'_> {
                     .and_then(|c| c.relation(rel.oid))
                     .filter(|now| rel.oid != 0 && now.columns.len() >= rel.columns.len());
                 match now {
-                    Some(now) => {
-                        now.columns.iter().take(rel.columns.len()).map(|c| c.name.clone()).collect()
-                    }
+                    Some(now) => now
+                        .columns
+                        .iter()
+                        .map(|c| if c.dropped { String::new() } else { c.name.clone() })
+                        .collect(),
                     None => rel.columns.iter().map(|c| c.name.clone()).collect(),
                 }
             })
             .collect();
+        for (names, real) in state.relations.iter_mut().zip(&real_names) {
+            names.resize(real.len().max(names.len()), None);
+        }
         let mut print_join = vec![false; joins.len()];
         for slot in &order {
             match *slot {
@@ -190,7 +195,9 @@ impl Deparser<'_> {
                     let Some(rel) = query.relations.get(i) else { continue };
                     let given: &[String] = rel.alias.as_deref().unwrap_or_default();
                     for (c, column) in real_names[i].iter().enumerate() {
-                        if state.relations[i][c].is_none() {
+                        if state.relations[i][c].is_none() && column.is_empty() {
+                            state.relations[i][c] = Some(String::new());
+                        } else if state.relations[i][c].is_none() {
                             let wanted = given.get(c).unwrap_or(column);
                             let name = state.unique(wanted, Slot::Relation(i));
                             state.relations[i][c] = Some(name);
@@ -832,7 +839,9 @@ impl Deparser<'_> {
         if coldef {
             self.coldef(&columns, &rel.columns)?;
         } else if print_aliases && !columns.is_empty() {
-            let names: Vec<String> = columns.iter().map(|c| quote_identifier(c)).collect();
+            // `get_column_alias_list` leaves out a dropped column.
+            let names: Vec<String> =
+                columns.iter().filter(|c| !c.is_empty()).map(|c| quote_identifier(c)).collect();
             self.buf.push_str(&format!("({})", names.join(", ")));
         }
         // `TABLESAMPLE` goes after the alias.
@@ -1717,8 +1726,15 @@ impl ColumnNames {
         for i in join.using.len()..join.columns.len() {
             let (l, r) = join.sources.get(i).copied().unwrap_or_default();
             let (side, number) = if l > 0 { (info.left, l) } else { (info.right, r) };
-            let real =
-                self.names(side).and_then(|n| n.get(number.wrapping_sub(1))).cloned().flatten();
+            // The number of a column of a table counts the columns that are not dropped.
+            let names = self.names(side).map(Vec::as_slice).unwrap_or_default();
+            let real = match side {
+                Slot::Relation(_) => {
+                    names.iter().filter(|n| n.as_deref() != Some("")).nth(number.wrapping_sub(1))
+                }
+                Slot::Join(_) => names.get(number.wrapping_sub(1)),
+            };
+            let real = real.cloned().flatten();
             let Some(real) = real else { continue };
             let assigned = self.joins.get(k).and_then(|n| n.get(i)).cloned().flatten();
             let name = match (&join.alias, assigned) {
