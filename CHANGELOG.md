@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- The action of a rule checks the privileges of the owner of the table of the rule, and the privileges of the statement of the user are checked first (#NNN).
+
 ## 0.1.88 (2026-10-26)
 
 ### Added

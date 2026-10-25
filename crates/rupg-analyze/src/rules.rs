@@ -37,6 +37,8 @@ pub struct Product {
     source: Source,
     /// The list of `RETURNING` of the statement of the user, its name of the target relation and the OID of the relation, for the action whose list of `RETURNING` gives the rows.
     returning: Option<Returning>,
+    /// The [`State::owners`] of the statement.
+    owners: Vec<u32>,
 }
 
 impl Product {
@@ -69,6 +71,7 @@ struct Item {
     inverted: Vec<Node>,
     fired: Option<u32>,
     returning: Option<Returning>,
+    owners: Vec<u32>,
 }
 
 /// The state of the analysis of the rules of a write.
@@ -90,6 +93,10 @@ pub(crate) struct State {
     pub(crate) values: Option<Vec<Expr>>,
     /// The list of `RETURNING` of the statement of the user while the analyzer reads the action of a rule that gives its rows.
     pub(crate) returning: Option<Returning>,
+    /// `setRuleCheckAsUser`: for each level of the subquery `*rule*`, from the action itself outward, the owner of the table of the rule, whose privileges count for the relations that the action names. A level past the end is the statement of the user, with the privileges of the current user.
+    pub(crate) owners: Vec<u32>,
+    /// The level of the subquery `*rule*` that the analyzer reads now, which is 0 for the action itself.
+    pub(crate) level: usize,
 }
 
 /// The alias of the subquery that the rewrite makes of the `VALUES` of an action `INSERT`.
@@ -528,7 +535,7 @@ pub fn query_rewrite(stmt: &Node, env: &dyn Env) -> Result<Option<Vec<Product>>>
         return Ok(None);
     }
     let mut events = Vec::new();
-    let Some(items) = rewrite_query(stmt, Source::Original, env, &mut events)? else {
+    let Some(items) = rewrite_query(stmt, Source::Original, env, &mut events, &[])? else {
         return Ok(None);
     };
     // The statement of the user sets the tag, or else the last action of a rule `DO INSTEAD` of the same kind of write.
@@ -550,6 +557,7 @@ pub fn query_rewrite(stmt: &Node, env: &dyn Env) -> Result<Option<Vec<Product>>>
             fired: item.fired,
             source: item.source,
             returning: item.returning,
+            owners: item.owners,
         })
         .collect();
     Ok(Some(products))
@@ -574,12 +582,13 @@ pub fn copy_rules_error(products: &[Product]) -> Option<Error> {
     Some(Error::new(SqlState::FEATURE_NOT_SUPPORTED, text))
 }
 
-/// `RewriteQuery` for a write: `None` when no rule of the target table fires for it.
+/// `RewriteQuery` for a write: `None` when no rule of the target table fires for it. `owners` is the [`State::owners`] of the statement.
 fn rewrite_query(
     stmt: &Node,
     source: Source,
     env: &dyn Env,
     events: &mut Vec<(u32, CmdType)>,
+    owners: &[u32],
 ) -> Result<Option<Vec<Item>>> {
     let Some(catalog) = env.catalog() else { return Ok(None) };
     let Some((event, rv)) = target_of(stmt) else { return Ok(None) };
@@ -587,6 +596,10 @@ fn rewrite_query(
         return Ok(None);
     };
     let name = catalog.relation(oid).map_or("", |r| r.name.as_str());
+    // `RelationBuildRuleLock`: the actions of a rule that is not `SELECT` have the privileges of the owner of the table.
+    let action_owners: Vec<u32> = std::iter::once(catalog.relation(oid).map_or(0, |r| r.owner))
+        .chain(owners.iter().copied())
+        .collect();
     let code = event_code(event);
     let mut rules: Vec<&Rule> =
         catalog.rules().filter(|r| r.relation == oid && r.event == code && fires(r, env)).collect();
@@ -649,7 +662,7 @@ fn rewrite_query(
                 ));
             }
             returning |= gives_rows;
-            match rewrite_query(&product, source, env, events)? {
+            match rewrite_query(&product, source, env, events, &action_owners)? {
                 Some(_) if gives_rows => {
                     return Err(not_yet("RETURNING in a rule action that rules rewrite"));
                 }
@@ -665,6 +678,7 @@ fn rewrite_query(
                         inverted: Vec::new(),
                         fired,
                         returning,
+                        owners: action_owners.clone(),
                     })
                 }
             }
@@ -689,6 +703,7 @@ fn rewrite_query(
             inverted: inverted.unwrap_or_default(),
             fired: Some(oid),
             returning: None,
+            owners: owners.to_vec(),
         };
         if event == CmdType::CMD_INSERT {
             result.insert(0, item);
@@ -709,6 +724,7 @@ pub fn analyze_product(product: &Product, env: &dyn Env, params: &Params) -> Res
     analyzer.rule.fired = product.fired;
     analyzer.rule.inverted.clone_from(&product.inverted);
     analyzer.rule.returning.clone_from(&product.returning);
+    analyzer.rule.owners.clone_from(&product.owners);
     let query = crate::analyze_in(analyzer, &product.stmt, None);
     if product.action { query.map_err(|error| error.with_position(None)) } else { query }
 }

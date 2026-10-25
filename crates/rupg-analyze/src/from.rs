@@ -716,6 +716,7 @@ impl Analyzer<'_> {
             return Err(Error::internal("a rule subquery with no statement"));
         };
         let perm = self.target_perm;
+        self.rule.level += 1;
         let query = self.sub_level(false, |analyzer| {
             analyzer.rule.rows = true;
             let query = match stmt {
@@ -727,6 +728,7 @@ impl Analyzer<'_> {
             analyzer.rule.rows = false;
             query
         });
+        self.rule.level -= 1;
         self.target_perm = perm;
         let query = query?;
         let table = std::mem::take(&mut self.rule.columns);

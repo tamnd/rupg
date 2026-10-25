@@ -4810,6 +4810,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/replication_role.test")));
     }
 
+    /// The privileges of the actions of rules: the owner of the table of the rule needs the privileges on the tables of the action, also for a view with `security_invoker` and for a rule that a rule fires, and the privileges of the statement of the user count first. `connection/ruleperm.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn ruleperm() {
+        big_stack(|| script(include_str!("connection/ruleperm.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

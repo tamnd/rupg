@@ -987,12 +987,14 @@ fn one_relation_allowed(perm: &PermInfo, role: u32, session: &dyn Session) -> Re
     Ok(true)
 }
 
-/// `ExecCheckPermissions`: an error for the first relation that the statement uses without the privileges that it needs. A relation of the query of a view counts as the owner of the view. A superuser has each privilege, and a relation that does not exist is not checked.
+/// `ExecCheckPermissions`: an error for the first relation that the statement uses without the privileges that it needs. A relation of the query of a view counts as the owner of the view. The checks of the statement that a rule rewrites come before the checks of the action of the rule. A superuser has each privilege, and a relation that does not exist is not checked.
 ///
 /// # Errors
 ///
 /// `permission denied` for the relation, or the error of an ACL that is not correct.
 pub fn check_permissions(perms: &[PermInfo], session: &dyn Session) -> Result<()> {
+    let mut perms: Vec<&PermInfo> = perms.iter().collect();
+    perms.sort_by_key(|perm| std::cmp::Reverse(perm.rule_level));
     for perm in perms {
         if perm.required == 0 {
             continue;
