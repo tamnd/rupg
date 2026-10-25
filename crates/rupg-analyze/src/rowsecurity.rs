@@ -9,7 +9,7 @@ use rupg_types::{Value, oid};
 use crate::Env;
 use crate::expr::{BoolOp, Expr, ExprKind, Var};
 use crate::from::{Column, FromItem, Relation};
-use crate::insert::{PolicyCheck, WriteKind};
+use crate::insert::{PolicyCheck, PolicyKind, WriteKind};
 use crate::perm::{ACL_DELETE, ACL_INSERT, ACL_SELECT, ACL_UPDATE, PermInfo, shift_expr};
 use crate::select::{Query, Target};
 
@@ -60,6 +60,7 @@ pub fn apply_row_security(
         seen: false,
         target: None,
         target_quals: None,
+        merge_target: false,
     };
     let result = walk.write(query).and_then(|()| walk.query(query));
     query.perms = walk.perms;
@@ -83,6 +84,8 @@ struct Walk<'a> {
     target: Option<usize>,
     /// The `securityQuals` of the target table of an `UPDATE` or a `DELETE`, which go in the query that reads the table.
     target_quals: Option<Vec<Expr>>,
+    /// True when [`Walk::target_quals`] are the quals of the target table of a `MERGE`, which limit the rows before the join.
+    merge_target: bool,
 }
 
 /// The conditions of the policies of a table, each with the OIDs of the policies that give it, as `list_append_unique` compares them.
@@ -133,7 +136,11 @@ impl Walk<'_> {
             }
             if relation.perm.is_some() && relation.perm == self.target {
                 if let Some(quals) = self.target_quals.take() {
-                    add_target_quals(query, index, quals);
+                    if self.merge_target {
+                        add_merge_quals(query, index, quals);
+                    } else {
+                        add_target_quals(query, index, quals);
+                    }
                 }
                 continue;
             }
@@ -180,9 +187,11 @@ impl Walk<'_> {
     fn write(&mut self, query: &mut Query) -> Result<()> {
         let Some(write) = query.write.as_mut() else { return Ok(()) };
         let writes = ACL_INSERT | ACL_UPDATE | ACL_DELETE;
-        let Some(index) =
-            self.perms.iter().position(|p| p.relid == write.table && p.required & writes != 0)
-        else {
+        // A `MERGE` with only `DO NOTHING` needs no privilege to write the target table.
+        let merge = write.kind == WriteKind::Merge;
+        let Some(index) = self.perms.iter().position(|p| {
+            p.relid == write.table && (p.required & writes != 0 || merge && p.required != 0)
+        }) else {
             return Ok(());
         };
         self.target = Some(index);
@@ -205,14 +214,20 @@ impl Walk<'_> {
             WriteKind::Insert => b'a',
             WriteKind::Update => b'w',
             WriteKind::Delete => b'd',
-            WriteKind::Merge => {
-                return Err(not_yet("MERGE on a table that row-level security policies apply to"));
+            WriteKind::Merge if write.inherit || rel.kind == RelKind::Partitioned => {
+                return Err(not_yet(
+                    "MERGE into a table with children that row-level security policies apply to",
+                ));
             }
+            WriteKind::Merge => b'm',
         };
         let (table, name) = (write.table, rel.name.clone());
         let columns = crate::insert::write_columns(rel);
         let role = self.security.role(perm.check_as);
         let select = perm.required & ACL_SELECT != 0;
+        if cmd == b'm' {
+            return self.merge(write, (table, &name, &columns), role, select);
+        }
         if cmd != b'a' {
             let mut quals = Quals { quals: Vec::new(), keys: Vec::new() };
             self.add_quals(table, cmd, role, &mut quals)?;
@@ -229,7 +244,8 @@ impl Walk<'_> {
             if select {
                 self.add_checks(table, b'r', role, true, &mut checks)?;
             }
-            write.policy_check = Some(self.check_query(table, (&name, &columns), checks, false)?);
+            write.policy_check =
+                Some(self.check_query(table, (&name, &columns), checks, PolicyKind::New)?);
         }
         // `INSERT ... ON CONFLICT DO UPDATE` and `DO SELECT` check the row that the table has with the conditions of `USING` of the policies of `UPDATE` and `SELECT`, and `DO UPDATE` checks the new row with the policies of `UPDATE`.
         if let Some(conflict) = write.on_conflict.as_mut().filter(|c| c.update.is_some()) {
@@ -241,7 +257,7 @@ impl Walk<'_> {
                 self.add_checks(table, b'r', role, true, &mut checks)?;
             }
             conflict.conflict_check =
-                Some(self.check_query(table, (&name, &columns), checks, true)?);
+                Some(self.check_query(table, (&name, &columns), checks, PolicyKind::Conflict)?);
             if conflict.select.is_none() {
                 let mut checks = Checks::default();
                 self.add_checks(table, b'w', role, false, &mut checks)?;
@@ -249,19 +265,62 @@ impl Walk<'_> {
                     self.add_checks(table, b'r', role, true, &mut checks)?;
                 }
                 conflict.update_check =
-                    Some(self.check_query(table, (&name, &columns), checks, false)?);
+                    Some(self.check_query(table, (&name, &columns), checks, PolicyKind::New)?);
             }
         }
         Ok(())
     }
 
-    /// The query of the checks `checks` of the table `table`, which reads a row with the columns `columns` of the table. With `using`, the error of a check names the conditions of `USING`, as `WCO_RLS_CONFLICT_CHECK` gives it.
+    /// `get_row_security_policies` for the target table of a `MERGE`. The conditions of `USING` of the policies of `SELECT` limit the rows of the target table before the join, and each action checks its rows: an `UPDATE` checks the row of the target table with the conditions of `USING` of the policies of `UPDATE`, and its new row with the policies of `UPDATE` and `SELECT`, a `DELETE` checks the row of the target table with the policies of `DELETE`, and an `INSERT` checks its new row with the policies of `INSERT`, and with the policies of `SELECT` when the statement has `RETURNING`.
+    fn merge(
+        &mut self,
+        write: &mut crate::insert::Write,
+        (table, name, columns): (u32, &str, &[Column]),
+        role: u32,
+        select: bool,
+    ) -> Result<()> {
+        if select {
+            let mut quals = Quals { quals: Vec::new(), keys: Vec::new() };
+            self.add_quals(table, b'r', role, &mut quals)?;
+            let mut quals = quals.quals;
+            self.sublinks(table, name, &mut quals)?;
+            self.target_quals = Some(quals);
+            self.merge_target = true;
+        }
+        let mut checks = Checks::default();
+        self.add_checks(table, b'a', role, false, &mut checks)?;
+        if select && write.returning.is_some() {
+            self.add_checks(table, b'r', role, true, &mut checks)?;
+        }
+        write.policy_check =
+            Some(self.check_query(table, (name, columns), checks, PolicyKind::New)?);
+        let mut checks = Checks::default();
+        self.add_checks(table, b'w', role, false, &mut checks)?;
+        if select {
+            self.add_checks(table, b'r', role, true, &mut checks)?;
+        }
+        let update_check = self.check_query(table, (name, columns), checks, PolicyKind::New)?;
+        let mut checks = Checks::default();
+        self.add_checks(table, b'w', role, true, &mut checks)?;
+        let update_target = self.check_query(table, (name, columns), checks, PolicyKind::Target)?;
+        let mut checks = Checks::default();
+        self.add_checks(table, b'd', role, true, &mut checks)?;
+        let delete_target = self.check_query(table, (name, columns), checks, PolicyKind::Target)?;
+        if let Some(merge) = write.merge.as_mut() {
+            merge.update_check = Some(update_check);
+            merge.update_target = Some(update_target);
+            merge.delete_target = Some(delete_target);
+        }
+        Ok(())
+    }
+
+    /// The query of the checks `checks` of the kind `kind` of the table `table`, which reads a row with the columns `columns` of the table.
     fn check_query(
         &mut self,
         table: u32,
         (name, columns): (&str, &[Column]),
         checks: Checks,
-        using: bool,
+        kind: PolicyKind,
     ) -> Result<PolicyCheck> {
         let (policies, mut quals): (Vec<Option<String>>, Vec<Expr>) =
             checks.checks.into_iter().unzip();
@@ -278,7 +337,7 @@ impl Walk<'_> {
             targets,
             ..Query::default()
         };
-        Ok(PolicyCheck { query: Box::new(query), policies, using })
+        Ok(PolicyCheck { query: Box::new(query), policies, kind })
     }
 
     /// `get_row_security_policies` for a table that a query reads: the conditions of the policies that apply to the role of its checks, or `None` when no policy applies. With `FOR UPDATE` or `FOR SHARE`, the conditions of the policies of `UPDATE` come first.
@@ -473,19 +532,7 @@ fn conjuncts(expr: &Expr) -> usize {
 
 /// The `securityQuals` `quals` of the target table of a write, which is the relation `index` of `query`, at the start of the condition of the query. Each condition has its own security level, before the levels of the views of the query.
 fn add_target_quals(query: &mut Query, index: usize, mut quals: Vec<Expr>) {
-    if index != 0 {
-        for qual in &mut quals {
-            qual.each_mut(0, &mut |e, depth| {
-                if let ExprKind::Var(var) = &mut e.kind
-                    && var.levels_up == depth
-                    && var.relation == 0
-                {
-                    var.relation = index;
-                }
-                false
-            });
-        }
-    }
+    renumber(&mut quals, index);
     let mut barrier: Vec<usize> = quals.iter().map(conjuncts).collect();
     barrier.append(&mut query.barrier);
     query.barrier = barrier;
@@ -494,6 +541,64 @@ fn add_target_quals(query: &mut Query, index: usize, mut quals: Vec<Expr>) {
         1 => quals.pop(),
         _ => Some(Expr::new(ExprKind::Bool(BoolOp::And, quals), oid::BOOL)),
     };
+}
+
+/// The conditions `quals`, which read the relation 0, with the relation at the place `index` in its place.
+fn renumber(quals: &mut [Expr], index: usize) {
+    if index == 0 {
+        return;
+    }
+    for qual in quals {
+        qual.each_mut(0, &mut |e, depth| {
+            if let ExprKind::Var(var) = &mut e.kind
+                && var.levels_up == depth
+                && var.relation == 0
+            {
+                var.relation = index;
+            }
+            false
+        });
+    }
+}
+
+/// `transform_MERGE_to_join` with the security quals `quals` of the target table at the place `index`: the target table joins a relation with one row on the conditions, so they limit the rows of the target table before the join with the source, and the source row of a row that they hide has no match.
+fn add_merge_quals(query: &mut Query, index: usize, mut quals: Vec<Expr>) {
+    renumber(&mut quals, index);
+    let one = query.relations.len();
+    let column = Column { name: "one".to_string(), ty: oid::BOOL, typmod: -1, not_null: false };
+    let value = Expr::constant(Value::Bool(true), oid::BOOL, -1, None);
+    let mut relation = Relation::new(0, vec![column], None, None, Some(vec![vec![value]]));
+    relation.name = "*VALUES*".to_string();
+    query.relations.push(relation);
+    let mut on = match quals.len() {
+        1 => quals.pop(),
+        _ => Some(Expr::new(ExprKind::Bool(BoolOp::And, quals), oid::BOOL)),
+    };
+    for item in &mut query.from {
+        if replace_relation(item, index, one, &mut on) {
+            break;
+        }
+    }
+}
+
+/// Puts the join of the relation `index` with the relation `one` on the condition `on` in the place of the relation `index` in the tree `item`. True when the tree has the relation.
+fn replace_relation(item: &mut FromItem, index: usize, one: usize, on: &mut Option<Expr>) -> bool {
+    match item {
+        FromItem::Relation(at) if *at == index => {
+            *item = crate::merge::join(
+                crate::from::JoinKind::Inner,
+                FromItem::Relation(index),
+                FromItem::Relation(one),
+                on.take(),
+            );
+            true
+        }
+        FromItem::Join(join) => {
+            replace_relation(&mut join.left, index, one, on)
+                || replace_relation(&mut join.right, index, one, on)
+        }
+        _ => false,
+    }
 }
 
 /// The table `relation` as a subquery that reads the table and keeps the rows that pass the conditions `quals`, in their order. Each column of the subquery is the column of the table with the same number, and a dropped column is a null.

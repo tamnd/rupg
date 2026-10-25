@@ -87,7 +87,7 @@ pub use from::{
 pub use funcargs::{arg_defaults, expand_arguments};
 pub use insert::{
     Action, ConflictDef, Deferrable, Derived, Foreign, InsertDef, InsertSource, OnConflict,
-    PolicyCheck, Unique, ViewCheck, Write, WriteKind,
+    PolicyCheck, PolicyKind, Unique, ViewCheck, Write, WriteKind,
 };
 pub use locking::{RowMark, check_outer_joins, first_row_mark, locked_tables};
 pub use merge::{MatchKind, Merge, MergeClause, MergeClauseDef, MergeCommand, MergeDef};

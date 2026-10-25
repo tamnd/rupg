@@ -16,7 +16,7 @@ use crate::agg::Kind;
 use crate::coerce::AtOpt;
 use crate::expr::{Expr, ExprKind, Var};
 use crate::from::{Column, FromItem, Join, JoinKind, Relation};
-use crate::insert::{Foreign, Given, Write, WriteKind, targets, with_checks};
+use crate::insert::{Foreign, Given, PolicyCheck, Write, WriteKind, targets, with_checks};
 use crate::modify::{carried_targets, old_row, set_columns, table_oid_target, tid_target};
 use crate::perm::{ACL_DELETE, ACL_INSERT, ACL_SELECT, ACL_UPDATE};
 use crate::returning::rewrite;
@@ -68,6 +68,12 @@ pub struct Merge {
     pub delete_foreign: Vec<Foreign>,
     /// The form of the statement before the join, when the analysis keeps it for a deparse.
     pub def: Option<Box<MergeDef>>,
+    /// The checks of `WCO_RLS_UPDATE_CHECK` on the new row of an `UPDATE` action. [`Write::policy_check`] has the checks of an `INSERT` action.
+    pub update_check: Option<PolicyCheck>,
+    /// The checks of `WCO_RLS_MERGE_UPDATE_CHECK` on the row of the target table of an `UPDATE` action.
+    pub update_target: Option<PolicyCheck>,
+    /// The checks of `WCO_RLS_MERGE_DELETE_CHECK` on the row of the target table of a `DELETE` action.
+    pub delete_target: Option<PolicyCheck>,
 }
 
 /// A `MERGE` as `transformMergeStmt` gives it, before `transform_MERGE_to_join` joins the source and the target table, which `get_merge_query_def` shows.
@@ -408,6 +414,9 @@ impl Analyzer<'_> {
                     update_foreign,
                     delete_foreign,
                     def,
+                    update_check: None,
+                    update_target: None,
+                    delete_target: None,
                 }),
                 recheck,
                 updated: crate::modify::with_extra_updated(updated, &generated),
@@ -537,7 +546,7 @@ impl Analyzer<'_> {
 }
 
 /// A join with no names of its own.
-fn join(kind: JoinKind, left: FromItem, right: FromItem, on: Option<Expr>) -> FromItem {
+pub(crate) fn join(kind: JoinKind, left: FromItem, right: FromItem, on: Option<Expr>) -> FromItem {
     FromItem::Join(Box::new(Join {
         kind,
         left,
