@@ -1,0 +1,45 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE DOMAIN uop_ad AS int[];
+CREATE DOMAIN
+> CREATE FUNCTION uop_make(int, int) RETURNS uop_ad AS 'declare x uop_ad; begin x := array[$1,$2]; return x; end' LANGUAGE plpgsql VOLATILE;
+CREATE FUNCTION
+> CREATE FUNCTION uop_eq(uop_ad, uop_ad) RETURNS boolean AS 'begin return array_eq($1, $2); end' LANGUAGE plpgsql;
+CREATE FUNCTION
+> CREATE OPERATOR = (procedure = uop_eq, leftarg = uop_ad, rightarg = uop_ad);
+CREATE OPERATOR
+> SELECT NULLIF(uop_make(1,2), array[2,3]::uop_ad);
+fields nullif:1007:-1:-1
+row {1,2}
+SELECT 1
+> SELECT NULLIF(uop_make(1,2), array[1,2]::uop_ad);
+fields nullif:1007:-1:-1
+row NULL
+SELECT 1
+> SELECT uop_make(1,2) IS DISTINCT FROM array[1,2]::uop_ad, uop_make(1,2) IS NOT DISTINCT FROM array[1,3]::uop_ad;
+fields ?column?:16:1:-1,?column?:16:1:-1
+row f,f
+SELECT 1
+> CREATE FUNCTION uop_lt(int, text) RETURNS boolean AS 'SELECT $1::text < $2' LANGUAGE sql;
+CREATE FUNCTION
+> CREATE OPERATOR <<< (procedure = uop_lt, leftarg = int, rightarg = text);
+CREATE OPERATOR
+> SELECT 5 <<< ANY (ARRAY['4', '6']), 5 <<< ALL (ARRAY['4', '6']);
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,f
+SELECT 1
+> CREATE FUNCTION uop_teq(int, text) RETURNS boolean AS 'SELECT $1::text = $2' LANGUAGE sql;
+CREATE FUNCTION
+> CREATE OPERATOR === (procedure = uop_teq, leftarg = int, rightarg = text);
+CREATE OPERATOR
+> DROP FUNCTION uop_make, uop_eq CASCADE;
+NOTICE 00000 drop cascades to operator =(uop_ad,uop_ad)
+DROP FUNCTION
+> DROP DOMAIN uop_ad;
+DROP DOMAIN
+> DROP FUNCTION uop_lt, uop_teq CASCADE;
+NOTICE 00000 drop cascades to 2 other objects
+DETAIL drop cascades to operator ===(integer,text)
+drop cascades to operator <<<(integer,text)
+DROP FUNCTION

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- NULLIF, IS DISTINCT FROM, IN, ANY, ALL and the row comparisons run an operator whose function is in SQL or in PL/pgSQL, as a call of the function does (#767).
 - EXPLAIN of a statement that rules rewrite shows the plan of each statement that the rewrite gives, and "Query rewrites to nothing" when it gives none, and the queries of WITH of the statement go to the top level of each action, as rewriteRuleAction puts them (#766).
 - `pg_get_viewdef` shows the `VALUES` list of a view as `(VALUES ...)` after `ALTER TABLE ... RENAME COLUMN`, as PostgreSQL does (#765).
 - The action of a rule checks the privileges of the owner of the table of the rule, and the privileges of the statement of the user are checked first (#764).

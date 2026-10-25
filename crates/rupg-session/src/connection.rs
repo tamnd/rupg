@@ -4828,6 +4828,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/explain_rules.test")));
     }
 
+    /// `NULLIF`, `IS DISTINCT FROM` and `ANY` with an operator whose function is in SQL or in PL/pgSQL, which run the body of the function. `connection/operator_bodies.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn operator_bodies() {
+        big_stack(|| script(include_str!("connection/operator_bodies.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {
