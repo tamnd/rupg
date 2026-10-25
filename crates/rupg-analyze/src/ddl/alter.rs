@@ -471,6 +471,8 @@ impl Definer<'_, '_> {
                 };
                 if con.contype == ConstrType::CONSTR_PRIMARY {
                     self.prep_primary_key(target, con, passes)?;
+                } else if con.indexname.is_some() {
+                    self.constraint_index_of(target, con)?;
                 }
                 passes.constraints.push(((**con).clone(), Origin::Command));
             }
@@ -646,7 +648,11 @@ impl Definer<'_, '_> {
         con: &Constraint,
         passes: &mut Passes,
     ) -> Result<()> {
-        for key in names(&con.keys) {
+        let using = match con.indexname {
+            Some(_) => self.constraint_index_of(target, con)?.1,
+            None => names(&con.keys).into_iter().map(str::to_string).collect(),
+        };
+        for key in using.iter().map(String::as_str) {
             let column = self.catalog.relation(target.oid).and_then(|r| r.column_number(key));
             let existing = column.and_then(|n| self.not_null_of(target.oid, n));
             if let Some((name, no_inherit, validated)) = existing {
@@ -747,6 +753,7 @@ impl Definer<'_, '_> {
         self.after_alter_type(&original, &changed)?;
         let mut not_nulls = Vec::new();
         let mut indexes = Vec::new();
+        let mut existing = Vec::new();
         let mut others: Vec<Other> = Vec::new();
         let rv = RangeVar {
             schemaname: Some(self.schema_name(target.namespace).into()),
@@ -764,6 +771,11 @@ impl Definer<'_, '_> {
         for (con, defaulted, origin) in column_constraints.chain(constraints) {
             match con.contype {
                 ConstrType::CONSTR_NOTNULL => not_nulls.push((con, origin)),
+                ConstrType::CONSTR_PRIMARY | ConstrType::CONSTR_UNIQUE
+                    if con.indexname.is_some() =>
+                {
+                    existing.push(con);
+                }
                 ConstrType::CONSTR_PRIMARY | ConstrType::CONSTR_UNIQUE => {
                     indexes.push(alter_index_constraint(&con, &rv)?);
                 }
@@ -788,6 +800,9 @@ impl Definer<'_, '_> {
         }
         for index in &indexes {
             self.create_index(index, true)?;
+        }
+        for con in &existing {
+            self.add_index_constraint(target, con)?;
         }
         for cmd in &passes.defaults {
             match cmd {
@@ -1374,9 +1389,6 @@ fn can_set_role(member: u32, role: u32) -> bool {
 /// `transformIndexConstraint` for `ALTER TABLE`: the index of a primary key or a unique constraint on the columns of the table. `DefineIndex` finds the columns, so a column that does not exist gives its error.
 fn alter_index_constraint(con: &Constraint, rv: &RangeVar) -> Result<IndexStmt> {
     let at = place(con.location);
-    if con.indexname.is_some() {
-        return Err(not_yet("ADD CONSTRAINT ... USING INDEX", at));
-    }
     if con.without_overlaps {
         return Err(not_yet("WITHOUT OVERLAPS", at));
     }

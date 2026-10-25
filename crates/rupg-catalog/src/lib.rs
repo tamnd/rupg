@@ -3572,37 +3572,10 @@ impl Catalog {
         let me = ObjRef::new(PG_CLASS, oid);
         let mut constraint_oid = None;
         if let Some(kind) = new.constraint {
-            let mut constraint = self.new_constraint(name, namespace, kind, new.table, keys);
-            constraint.index = oid;
-            constraint.no_inherit = true;
-            constraint.deferrable = new.deferrable;
-            constraint.deferred = new.deferred;
-            let referenced = ObjRef::new(PG_CONSTRAINT, constraint.oid);
-            constraint_oid = Some(constraint.oid);
-            self.insert_constraint(constraint);
-            self.depend(me, referenced, DepKind::Internal);
-            // `index_constraint_create`: a deferrable constraint gets the trigger that checks its keys again after the statement or at the commit.
-            if new.deferrable {
-                let mut trigger = Trigger {
-                    relation: new.table,
-                    constraint_index: oid,
-                    constraint: referenced.oid,
-                    function: UNIQUE_KEY_RECHECK,
-                    kind: TRIGGER_ROW | TRIGGER_INSERT | TRIGGER_UPDATE,
-                    deferrable: true,
-                    deferred: new.deferred,
-                    enabled: b'O',
-                    internal: true,
-                    ..Trigger::default()
-                };
-                let prefix = if kind == ConKind::Primary {
-                    "PK_ConstraintTrigger"
-                } else {
-                    "Unique_ConstraintTrigger"
-                };
-                self.add_trigger(&mut trigger, prefix);
-                self.relation_mut(new.table)?.has_triggers = true;
-            }
+            let key_keys = keys[..new.key_count.min(keys.len())].to_vec();
+            let made =
+                self.index_constraint(oid, name, kind, key_keys, (new.deferrable, new.deferred));
+            constraint_oid = Some(made?);
         } else {
             let simple: Vec<i16> = keys.iter().copied().filter(|&k| k != 0).collect();
             if simple.is_empty() {
@@ -3804,6 +3777,80 @@ impl Catalog {
             self.depend(me, ObjRef::new(PG_TRIGGER, trigger.parent), DepKind::PartitionPri);
             self.depend(me, ObjRef::new(PG_CLASS, trigger.relation), DepKind::PartitionSec);
         }
+    }
+
+    /// `index_constraint_create`: the primary key or the unique constraint `kind` of the index `index`, with the name `name`, on the key columns `keys` of the table. The index depends on the constraint. A deferrable constraint gets the trigger that checks its keys again after the statement or at the commit.
+    fn index_constraint(
+        &mut self,
+        index: u32,
+        name: String,
+        kind: ConKind,
+        keys: Vec<i16>,
+        (deferrable, deferred): (bool, bool),
+    ) -> Result<u32> {
+        let table = self.relation(index).and_then(|r| r.index.as_ref()).map_or(0, |i| i.table);
+        let namespace = self.relation_facts(table)?.1;
+        let mut constraint = self.new_constraint(name, namespace, kind, table, keys);
+        constraint.index = index;
+        constraint.no_inherit = true;
+        constraint.deferrable = deferrable;
+        constraint.deferred = deferred;
+        let referenced = ObjRef::new(PG_CONSTRAINT, constraint.oid);
+        self.insert_constraint(constraint);
+        self.depend(ObjRef::new(PG_CLASS, index), referenced, DepKind::Internal);
+        if deferrable {
+            let mut trigger = Trigger {
+                relation: table,
+                constraint_index: index,
+                constraint: referenced.oid,
+                function: UNIQUE_KEY_RECHECK,
+                kind: TRIGGER_ROW | TRIGGER_INSERT | TRIGGER_UPDATE,
+                deferrable: true,
+                deferred,
+                enabled: b'O',
+                internal: true,
+                ..Trigger::default()
+            };
+            let prefix = if kind == ConKind::Primary {
+                "PK_ConstraintTrigger"
+            } else {
+                "Unique_ConstraintTrigger"
+            };
+            self.add_trigger(&mut trigger, prefix);
+            self.relation_mut(table)?.has_triggers = true;
+        }
+        Ok(referenced.oid)
+    }
+
+    /// `index_constraint_create` for `ALTER TABLE ... ADD CONSTRAINT ... USING INDEX`: the existing index `index` gets the primary key or the unique constraint `kind`, with the name of the index. The index loses its automatic dependencies on the columns of the table, because it depends on the constraint now. A primary key sets `indisprimary`, and a deferrable constraint clears `indimmediate`.
+    ///
+    /// # Errors
+    ///
+    /// `42710` when the table has a constraint with the name of the index, and an internal error for an index that the catalog does not have.
+    pub fn attach_index_constraint(
+        &mut self,
+        index: u32,
+        kind: ConKind,
+        deferrable: bool,
+        deferred: bool,
+    ) -> Result<u32> {
+        let rel = self.relation(index).ok_or_else(|| no_object("index", index))?;
+        let info = rel.index.as_ref().ok_or_else(|| no_object("index", index))?;
+        let name = rel.name.clone();
+        let table = info.table;
+        let keys =
+            info.keys[..usize::try_from(info.key_count).unwrap_or(0).min(info.keys.len())].to_vec();
+        let relname = self.relation_facts(table)?.0;
+        self.check_constraint_name(table, &name, &relname)?;
+        let me = ObjRef::new(PG_CLASS, index);
+        self.depends.retain(|d| {
+            !(d.object == me && d.kind == DepKind::Auto && d.referenced.class == PG_CLASS)
+        });
+        if let Some(info) = self.relation_mut(index)?.index.as_mut() {
+            info.primary |= kind == ConKind::Primary;
+            info.immediate &= !deferrable;
+        }
+        self.index_constraint(index, name, kind, keys, (deferrable, deferred))
     }
 
     /// `create_toast_table`: the TOAST table of a table and its index, in the schema `pg_toast`, or in `pg_toast_temp_N` for a table of the temporary schema `pg_temp_N`. The TOAST table gets an OID, then its index. They have no row type.
