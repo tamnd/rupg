@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.86 (2026-10-25)
+
 ### Added
 
 - `pg_get_functiondef` shows an `INSERT` of a `BEGIN ATOMIC` body, as PostgreSQL does (#742).
