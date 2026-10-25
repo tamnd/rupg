@@ -102,7 +102,7 @@ pub fn snapshot_in(s: &str) -> Result<Snapshot, TypeError> {
         return Err(syntax());
     }
     at += end + 1;
-    if xmin == 0 || xmax == 0 || xmax < xmin {
+    if !valid(xmin) || !valid(xmax) || xmax < xmin {
         return Err(syntax());
     }
     let mut xip = Vec::new();
@@ -124,6 +124,11 @@ pub fn snapshot_in(s: &str) -> Result<Snapshot, TypeError> {
         }
     }
     Ok(Snapshot { xmin, xmax, xip })
+}
+
+/// `FullTransactionIdIsValid`: the transaction ID in the low 32 bits is not 0. A value with an epoch and the ID 0, such as 2^63, is not valid.
+fn valid(full: u64) -> bool {
+    full & u64::from(u32::MAX) != 0
 }
 
 /// `pg_snapshot_out`: `xmin:xmax:` and the transactions in progress with a `,` between them.
@@ -155,7 +160,7 @@ pub fn snapshot_recv(recv: &mut Recv<'_>) -> Result<Snapshot, TypeError> {
     };
     let xmin = recv.i64()?.cast_unsigned();
     let xmax = recv.i64()?.cast_unsigned();
-    if xmin == 0 || xmax == 0 || xmax < xmin {
+    if !valid(xmin) || !valid(xmax) || xmax < xmin {
         return Err(bad());
     }
     let mut xip = Vec::new();
@@ -192,6 +197,7 @@ mod tests {
         assert_eq!(text(" 10:20:"), "10:20:");
         assert_eq!(text("00010:020:"), "10:20:");
         assert_eq!(text("10:10:"), "10:10:");
+        assert_eq!(text("1:9223372036854775807:3"), "1:9223372036854775807:3");
         assert_eq!(
             text("18446744073709551616:18446744073709551616:"),
             "18446744073709551615:18446744073709551615:"
@@ -207,6 +213,8 @@ mod tests {
             "10 :20:",
             "10:20",
             "-1:20:",
+            "1:9223372036854775808:3",
+            "4294967296:4294967297:",
         ] {
             let error = snapshot_in(bad).unwrap_err();
             assert_eq!(
