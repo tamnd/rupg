@@ -3,7 +3,7 @@
 All changes that a user can see are in this file. The version is 0.M.patch, where M is the last milestone that closed. See [`spec/23-milestones.md`](spec/23-milestones.md) section 23.17.
 
 ## Unreleased
-- `ALTER TABLE ... ADD CONSTRAINT ... PRIMARY KEY USING INDEX` and `UNIQUE USING INDEX` make the constraint on an existing unique index, as `transformIndexConstraint` and `ATExecAddIndexConstraint` do. A constraint name that differs from the index name renames the index with a notice. A primary key adds the not-null constraints of its columns. The index must be a valid unique btree index of the table with no constraint, no expression, no predicate and the default sorting behavior, else the error of PostgreSQL. The `conkey` of a primary key or a unique constraint now has only the key columns and not the `INCLUDE` columns. `CREATE TABLE` with `USING INDEX` gives `0A000` (#NNN).
+- `ALTER TABLE ... ADD CONSTRAINT ... PRIMARY KEY USING INDEX` and `UNIQUE USING INDEX` make the constraint on an existing unique index, as `transformIndexConstraint` and `ATExecAddIndexConstraint` do. A constraint name that differs from the index name renames the index with a notice. A primary key adds the not-null constraints of its columns. The index must be a valid unique btree index of the table with no constraint, no expression, no predicate and the default sorting behavior, else the error of PostgreSQL. The `conkey` of a primary key or a unique constraint now has only the key columns and not the `INCLUDE` columns. `CREATE TABLE` with `USING INDEX` gives `0A000` (#700).
 
 ## 0.1.80 (2026-10-25)
 
