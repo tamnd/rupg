@@ -187,6 +187,7 @@ pub fn rule_tree(env: &dyn Env, oid: u32) -> Result<Option<RuleTree>> {
     let Some(stmt) = stmt else { return Err(Error::internal("the text of a rule is not a rule")) };
     let mut an = Analyzer::new(env, &Params::default());
     an.set_path(&rule.path);
+    an.keep_source = true;
     an.rule_tree(stmt, rule.relation, name).map(Some).map_err(|error| error.with_position(None))
 }
 

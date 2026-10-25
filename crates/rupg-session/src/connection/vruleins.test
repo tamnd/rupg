@@ -1,0 +1,145 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE SCHEMA vri;
+CREATE SCHEMA
+> SET search_path = vri;
+SET
+search_path=vri
+> CREATE TABLE t (a int, b text, c int[]);
+CREATE TABLE
+> CREATE TABLE s (x int, y text);
+CREATE TABLE
+> CREATE RULE r1 AS ON INSERT TO s DO INSERT INTO t (a, b) VALUES (new.x, new.y);
+CREATE RULE
+> CREATE RULE r2 AS ON INSERT TO s DO ALSO INSERT INTO t VALUES (1, 'q'), (new.x, new.y);
+CREATE RULE
+> CREATE RULE r3 AS ON INSERT TO s WHERE new.x > 5 DO INSTEAD INSERT INTO t (b, a) SELECT new.y, new.x;
+CREATE RULE
+> CREATE RULE r4 AS ON UPDATE TO s DO INSERT INTO t AS tt (a) VALUES (old.x);
+CREATE RULE
+> CREATE RULE r5 AS ON INSERT TO s DO (INSERT INTO t (a) VALUES (new.x); INSERT INTO t DEFAULT VALUES);
+CREATE RULE
+> CREATE RULE r6 AS ON INSERT TO s DO INSERT INTO t (c[1], c[2]) VALUES (new.x, 2);
+CREATE RULE
+> CREATE TYPE ct AS (p int, q int[]);
+CREATE TYPE
+> CREATE DOMAIN cd AS ct CHECK ((VALUE).p IS DISTINCT FROM 0);
+CREATE DOMAIN
+> CREATE DOMAIN ad AS cd[];
+CREATE DOMAIN
+> CREATE TABLE u (f1 ct, f2 ct[], f3 cd, f4 ad);
+CREATE TABLE
+> CREATE TABLE w (x int, y int);
+CREATE TABLE
+> CREATE RULE w1 AS ON INSERT TO w DO INSERT INTO u (f1.q[1], f1.q[2]) VALUES (new.x, new.y);
+CREATE RULE
+> CREATE RULE w2 AS ON INSERT TO w DO INSERT INTO u (f2[1].p, f2[1].q[2]) VALUES (1, 2), (new.x, new.y);
+CREATE RULE
+> CREATE RULE w3 AS ON INSERT TO w DO INSERT INTO u (f2[1].p, f2[1].q[2]) SELECT new.x, new.y;
+CREATE RULE
+> CREATE RULE w4 AS ON INSERT TO w DO INSERT INTO u (f3.q[1], f4[1].p) SELECT new.x, new.y;
+CREATE RULE
+> CREATE RULE w5 AS ON INSERT TO w DO INSERT INTO u (f4[new.x:2].p) VALUES (new.y);
+ERROR 42804 cannot assign to field "p" of column "f4" because its type cd[] is not a composite type at 52
+> SELECT rulename, pg_get_ruledef(oid) FROM pg_rewrite WHERE ev_class = 'w'::regclass ORDER BY 1;
+fields rulename@pg_rewrite.2:19:64:-1,pg_get_ruledef:25:-1:-1
+row w1,CREATE RULE w1 AS
+    ON INSERT TO vri.w DO  INSERT INTO u (f1.q[1], f1.q[2])
+  VALUES (new.x, new.y);
+row w2,CREATE RULE w2 AS
+    ON INSERT TO vri.w DO  INSERT INTO u (f2[1].p, f2[1].q[2]) VALUES (1,2), (new.x,new.y);
+row w3,CREATE RULE w3 AS
+    ON INSERT TO vri.w DO  INSERT INTO u (f2[1].p, f2[1].q[2])  SELECT new.x,
+            new.y;
+row w4,CREATE RULE w4 AS
+    ON INSERT TO vri.w DO  INSERT INTO u (f3.q[1], f4[1].p)  SELECT new.x,
+            new.y;
+SELECT 4
+> INSERT INTO w VALUES (3, 4);
+INSERT 0 1
+> SELECT f1::text, f2::text, f3::text, f4::text FROM u;
+fields f1:25:-1:-1,f2:25:-1:-1,f3:25:-1:-1,f4:25:-1:-1
+row (,"{3,4}"),NULL,NULL,NULL
+row NULL,{"(1,[2:2]={2})"},NULL,NULL
+row NULL,{"(3,[2:2]={4})"},NULL,NULL
+row NULL,{"(3,[2:2]={4})"},NULL,NULL
+row NULL,NULL,(,{3}),{"(4,)"}
+SELECT 5
+> SELECT rulename, pg_get_ruledef(oid) FROM pg_rewrite WHERE ev_class = 's'::regclass ORDER BY 1;
+fields rulename@pg_rewrite.2:19:64:-1,pg_get_ruledef:25:-1:-1
+row r1,CREATE RULE r1 AS
+    ON INSERT TO vri.s DO  INSERT INTO t (a, b)
+  VALUES (new.x, new.y);
+row r2,CREATE RULE r2 AS
+    ON INSERT TO vri.s DO  INSERT INTO t (a, b) VALUES (1,'q'::text), (new.x,new.y);
+row r3,CREATE RULE r3 AS
+    ON INSERT TO vri.s
+   WHERE (new.x > 5) DO INSTEAD  INSERT INTO t (b, a)  SELECT new.y,
+            new.x;
+row r4,CREATE RULE r4 AS
+    ON UPDATE TO vri.s DO  INSERT INTO t AS tt (a)
+  VALUES (old.x);
+row r5,CREATE RULE r5 AS
+    ON INSERT TO vri.s DO ( INSERT INTO t (a)
+  VALUES (new.x);
+ INSERT INTO t DEFAULT VALUES;
+);
+row r6,CREATE RULE r6 AS
+    ON INSERT TO vri.s DO  INSERT INTO t (c[1], c[2])
+  VALUES (new.x, 2);
+SELECT 6
+> SELECT rulename, pg_get_ruledef(oid, true) FROM pg_rewrite WHERE ev_class = 's'::regclass ORDER BY 1;
+fields rulename@pg_rewrite.2:19:64:-1,pg_get_ruledef:25:-1:-1
+row r1,CREATE RULE r1 AS
+    ON INSERT TO s DO  INSERT INTO t (a, b)
+  VALUES (new.x, new.y);
+row r2,CREATE RULE r2 AS
+    ON INSERT TO s DO  INSERT INTO t (a, b) VALUES (1,'q'::text), (new.x,new.y);
+row r3,CREATE RULE r3 AS
+    ON INSERT TO s
+   WHERE new.x > 5 DO INSTEAD  INSERT INTO t (b, a)  SELECT new.y,
+            new.x;
+row r4,CREATE RULE r4 AS
+    ON UPDATE TO s DO  INSERT INTO t AS tt (a)
+  VALUES (old.x);
+row r5,CREATE RULE r5 AS
+    ON INSERT TO s DO ( INSERT INTO t (a)
+  VALUES (new.x);
+ INSERT INTO t DEFAULT VALUES;
+);
+row r6,CREATE RULE r6 AS
+    ON INSERT TO s DO  INSERT INTO t (c[1], c[2])
+  VALUES (new.x, 2);
+SELECT 6
+> INSERT INTO s VALUES (1, 'a'), (7, 'b');
+INSERT 0 1
+> SELECT * FROM t ORDER BY a, b;
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1007:-1:-1
+row 1,a,NULL
+row 1,a,NULL
+row 1,q,NULL
+row 1,q,NULL
+row 1,NULL,NULL
+row 7,b,NULL
+row 7,b,NULL
+row 7,b,NULL
+row 7,NULL,NULL
+row NULL,NULL,NULL
+row NULL,NULL,NULL
+row NULL,NULL,{1,2}
+row NULL,NULL,{7,2}
+SELECT 13
+> RESET search_path;
+RESET
+search_path="$user", public
+> DROP SCHEMA vri CASCADE;
+NOTICE 00000 drop cascades to 7 other objects
+DETAIL drop cascades to table vri.t
+drop cascades to table vri.s
+drop cascades to type vri.ct
+drop cascades to type vri.cd
+drop cascades to type vri.ad
+drop cascades to table vri.u
+drop cascades to table vri.w
+DROP SCHEMA
