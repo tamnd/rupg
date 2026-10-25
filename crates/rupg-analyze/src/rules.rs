@@ -6,7 +6,8 @@ use rupg_catalog::Rule;
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{
     A_Star, Alias, BoolExpr, BoolExprType, CmdType, ColumnRef, Node, RangeSubselect, RangeVar,
-    ResTarget, ReturningClause, RuleStmt, SelectStmt, SetOperation, WithClause,
+    ResTarget, ReturningClause, RuleStmt, SelectStmt, SetOperation, SubLink, SubLinkType,
+    WithClause,
 };
 use rupg_types::oid;
 
@@ -184,6 +185,70 @@ fn uses_row(node: &Node) -> bool {
     w.0
 }
 
+/// The walk that finds a column name with no name of a relation.
+struct Bare(bool);
+
+impl Walker for Bare {
+    fn node(&mut self, node: &Node) -> bool {
+        if let Node::ColumnRef(c) = node
+            && let [Some(Node::String(_))] = c.fields.as_slice()
+        {
+            self.0 = true;
+            return true;
+        }
+        walk::walk(self, node)
+    }
+
+    fn select(&mut self, stmt: &SelectStmt) -> bool {
+        walk::select(self, stmt)
+    }
+}
+
+/// The condition of a rule as the action reads it. `transformRuleStmt` reads the condition of a rule `ON INSERT` with the columns of `new` visible, and of a rule `ON DELETE` with the columns of `old` visible, so a column name with no name of a relation is a column of the row. In the action these names would read the tables of the action, so a condition with such a name becomes `(SELECT condition FROM (SELECT new.*) AS new)`, whose `FROM` gives the columns of the row first.
+fn row_qual(qual: &Node, event: CmdType) -> Node {
+    let name = match event {
+        CmdType::CMD_INSERT => "new",
+        CmdType::CMD_DELETE => "old",
+        _ => return qual.clone(),
+    };
+    let mut w = Bare(false);
+    w.node(qual);
+    if !w.0 {
+        return qual.clone();
+    }
+    let target = |val| {
+        Some(Node::ResTarget(Box::new(ResTarget {
+            name: None,
+            indirection: Vec::new(),
+            val: Some(val),
+            location: -1,
+        })))
+    };
+    let star = ColumnRef {
+        fields: vec![Some(Node::String(name.into())), Some(Node::A_Star(Box::new(A_Star {})))],
+        location: -1,
+    };
+    let row = SelectStmt {
+        targetList: vec![target(Node::ColumnRef(Box::new(star)))],
+        ..SelectStmt::default()
+    };
+    let select = SelectStmt {
+        targetList: vec![target(qual.clone())],
+        fromClause: vec![Some(Node::RangeSubselect(Box::new(RangeSubselect {
+            lateral: false,
+            subquery: Some(Node::SelectStmt(Box::new(row))),
+            alias: Some(Box::new(Alias { aliasname: Some(name.into()), colnames: Vec::new() })),
+        })))],
+        ..SelectStmt::default()
+    };
+    Node::SubLink(Box::new(SubLink {
+        subLinkType: SubLinkType::EXPR_SUBLINK,
+        subselect: Some(Node::SelectStmt(Box::new(select))),
+        location: -1,
+        ..SubLink::default()
+    }))
+}
+
 /// True when a query of the `WITH` clause changes data.
 fn writes_in_with(with: Option<&WithClause>) -> bool {
     with.is_some_and(|w| {
@@ -286,6 +351,8 @@ fn has_returning(stmt: &Node) -> bool {
 
 /// `rewriteRuleAction`: the action with the statement of the user as `*rule*` first in its `FROM`, and the condition of the rule in its `WHERE`. The action keeps its list of `RETURNING` only when the statement of the user has one. An action that reads neither `old` nor `new`, with no condition that reads them, runs once for the statement, as the target table then leaves the join tree of the action.
 fn rule_action(parts: &Parts, action: &Node, qual: Option<&Node>, event: CmdType) -> Result<Node> {
+    let qual = qual.map(|q| row_qual(q, event));
+    let qual = qual.as_ref();
     let needs_rows = uses_row(action)
         || qual.is_some_and(uses_row)
         || event == CmdType::CMD_INSERT
@@ -686,9 +753,11 @@ impl Analyzer<'_> {
         old: Option<Vec<(String, Expr)>>,
         new: Option<Vec<(String, Expr)>>,
     ) -> Result<Vec<Expr>> {
+        // `transformRuleStmt` reads the condition with the columns of `old` and `new` visible, so a column with no name of a relation is a column of the row of the event.
         for (name, row) in [("old", old), ("new", new)] {
             if let Some(row) = row {
-                let item = self.rule_item(name, row);
+                let mut item = self.rule_item(name, row);
+                item.show_columns();
                 self.push_item(item);
             }
         }

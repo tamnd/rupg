@@ -266,6 +266,11 @@ pub(crate) struct Item {
 }
 
 impl Item {
+    /// Lets an unqualified column name use the item.
+    pub(crate) fn show_columns(&mut self) {
+        self.cols_visible = true;
+    }
+
     /// The columns of an automatically updatable view in place of the columns of its base relation.
     pub(crate) fn set_columns(&mut self, columns: impl Iterator<Item = (String, Expr)>) {
         self.columns = columns.collect();
