@@ -180,7 +180,8 @@ impl Connection {
             };
             self.rewrite_table(&old, rel, work, &view, rows, transforms)?;
         }
-        self.command.set(command + 1);
+        // A function in an index expression can end commands after the command of the rewrite.
+        self.command.set(self.command.get().max(command + 1));
         Ok(())
     }
 

@@ -348,6 +348,8 @@ impl Spi for PlSpi<'_> {
 
     fn begin_sub(&self) -> usize {
         self.conn.calls.subs.set(self.conn.calls.subs.get() + 1);
+        // A subtransaction has no transaction ID of its own, so its changes start at a new command. A rollback of the block then keeps the changes that the statement that called the function made before, as a write that runs an index expression.
+        self.conn.command.set(self.conn.command.get() + 1);
         let mark = self.conn.mark();
         let portals = self.conn.portals.borrow().iter().map(|(name, _)| name.to_vec()).collect();
         let mut marks = self.marks.borrow_mut();
