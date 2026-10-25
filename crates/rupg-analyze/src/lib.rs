@@ -98,7 +98,7 @@ pub use poly::resolve as resolve_polymorphic;
 pub use prepare::{execute_params, param_types};
 pub use record::{out_columns, record_fields};
 pub use returning::{MERGE_ACTION, RETURNING_NEW, RETURNING_OLD, Shown};
-pub use rules::{Product, analyze_product, query_rewrite};
+pub use rules::{Product, analyze_product, copy_rules_error, query_rewrite};
 pub use searchcycle::{CycleClause, SearchClause};
 pub use select::{MinMax, Query, Target};
 pub use setop::{SetKind, SetOp, SetTree, strength_name};

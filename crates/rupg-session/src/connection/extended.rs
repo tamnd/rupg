@@ -722,11 +722,11 @@ impl Connection {
                     }
                     tag = Some((done, count));
                 }
-                Done::Copy(copy) => {
+                Done::Copy(mut copy) => {
                     if let Some(portal) = self.portals.get_mut().find_mut(name) {
                         portal.run = Run::Done;
                     }
-                    copy.send_data(out);
+                    self.send_copy_data(&mut copy, &statement.text, out);
                     tag = Some((CommandTag::Copy, copy.rows));
                 }
             }

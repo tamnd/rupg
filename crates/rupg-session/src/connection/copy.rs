@@ -5,13 +5,15 @@ use std::sync::Arc;
 
 use rupg_analyze::Params;
 use rupg_common::{Error, SqlState};
+use rupg_exec::Plan;
 use rupg_sql::nodes::{CopyStmt, DefElem, Node};
 use rupg_types::{Record, Value, oid};
 use rupg_wire::{CommandTag, OutBuf};
 
-use super::{Connection, Done};
+use super::{Applied, Connection, Done};
 use crate::guc::encoding;
-use crate::query;
+use crate::query::{self, Reader};
+use crate::utility::Notice;
 
 /// `PGCOPY\n\377\r\n\0`, the signature of the binary format.
 pub(super) const BINARY_SIGNATURE: &[u8; 11] = b"PGCOPY\n\xff\r\n\0";
@@ -27,6 +29,8 @@ pub(super) struct CopyOut {
     pub(super) data: Vec<Vec<u8>>,
     /// The number of rows, for `CommandComplete`.
     pub(super) rows: u64,
+    /// The notices of the triggers of a write before its rows, and the notices of the triggers at the end of the write, which come after `CopyDone`.
+    pub(super) notices: (Vec<Notice>, Vec<Notice>),
 }
 
 /// `CopyFormat`.
@@ -105,20 +109,22 @@ pub(super) enum Verbosity {
     Verbose,
 }
 
-impl CopyOut {
-    /// `CopyOutResponse`, the `CopyData` messages and `CopyDone`.
-    pub(super) fn send_data(&self, out: &mut OutBuf) {
-        copy_out_response(out, self.binary, self.columns);
-        for data in &self.data {
+impl Connection {
+    /// `CopyOutResponse`, the `CopyData` messages and `CopyDone`, with the notices of the triggers of a write of the query of `text`.
+    pub(super) fn send_copy_data(&self, copy: &mut CopyOut, text: &str, out: &mut OutBuf) {
+        copy_out_response(out, copy.binary, copy.columns);
+        self.notices(&mut copy.notices.0, text, &[], out);
+        for data in &copy.data {
             out.copy_data(data);
         }
         out.copy_done();
+        self.notices(&mut copy.notices.1, text, &[], out);
     }
 
-    /// The messages of [`CopyOut::send_data`], then `CommandComplete`.
-    pub(super) fn send(&self, out: &mut OutBuf) {
-        self.send_data(out);
-        out.command_tag(CommandTag::Copy, self.rows);
+    /// The messages of [`Connection::send_copy_data`], then `CommandComplete`.
+    pub(super) fn send_copy(&self, copy: &mut CopyOut, text: &str, out: &mut OutBuf) {
+        self.send_copy_data(copy, text, out);
+        out.command_tag(CommandTag::Copy, copy.rows);
     }
 }
 
@@ -154,19 +160,16 @@ impl Connection {
             let Some(node) = &stmt.query else {
                 return Err(Error::internal("a COPY with no relation and no query"));
             };
-            let Node::SelectStmt(select) = node else {
-                return Err(Error::new(
-                    SqlState::FEATURE_NOT_SUPPORTED,
-                    format!("COPY of {} is not supported yet", statement_name(node)),
-                ));
+            let plan = match node {
+                Node::SelectStmt(select) if select.intoClause.is_some() => {
+                    return Err(Error::new(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        "COPY (SELECT INTO) is not supported",
+                    ));
+                }
+                Node::SelectStmt(_) => query::plan(node, &reader, &Params::default())?,
+                _ => write_plan(node, &reader)?,
             };
-            if select.intoClause.is_some() {
-                return Err(Error::new(
-                    SqlState::FEATURE_NOT_SUPPORTED,
-                    "COPY (SELECT INTO) is not supported",
-                ));
-            }
-            let plan = query::plan(node, &reader, &Params::default())?;
             let columns: Vec<String> =
                 query::columns(&plan).into_iter().map(|column| column.name).collect();
             let selected = (0..columns.len()).collect();
@@ -206,33 +209,91 @@ impl Connection {
         let width = if json { 1 } else { selected.len() };
         *started = Some((binary, width));
         let view = reader.view().cloned().unwrap_or_default();
+        if plan.write().is_some() {
+            plan.start(&reader)?;
+        }
         let (plan, writes) = self.start_writes(plan, &[], &view)?;
+        let types: Vec<u32> = plan.columns().iter().map(|target| target.expr.ty).collect();
+        let mut notices = (Vec::new(), Vec::new());
+        // The rows of `RETURNING` of a write, or of a query that `WITH` statements that change data end with.
+        let (values, writes) = if plan.write().is_some() {
+            let rows = plan.run(&[], &reader);
+            let applied = rows.and_then(|rows| self.apply_write(&plan, &[], &view, rows));
+            notices.0 = self.trigger_notices();
+            let Applied { written, view: after, batches, .. } = applied?;
+            let reader = self.reader().with_view(after);
+            let rows = plan.returning(written, &[], &reader)?;
+            let ended = self.end_writes(writes, &[], batches);
+            notices.1 = self.trigger_notices();
+            ended?;
+            (Some(rows), None)
+        } else {
+            (None, Some(writes))
+        };
         if json {
-            let types: Vec<u32> = plan.columns().iter().map(|target| target.expr.ty).collect();
-            let mut rows = plan.run(&[], &reader)?;
+            let mut rows = match values {
+                Some(rows) => rows,
+                None => plan.run(&[], &reader)?,
+            };
             if let Some(order) = &partitions {
                 rows = by_partition(rows, order);
             }
-            self.end_writes(writes, &[], Vec::new())?;
+            if let Some(writes) = writes {
+                self.end_writes(writes, &[], Vec::new())?;
+            }
             let names: Arc<[String]> = selected.iter().map(|&i| columns[i].clone()).collect();
             let count = rows.len() as u64;
             let data = json_rows(options.force_array, &types, &names, rows, &reader)?;
-            return Ok(Done::Copy(CopyOut { binary, columns: width, data, rows: count }));
+            return Ok(Done::Copy(CopyOut { binary, columns: width, data, rows: count, notices }));
         }
-        let rows = match &partitions {
-            Some(order) => {
-                let types: Vec<u32> = plan.columns().iter().map(|target| target.expr.ty).collect();
-                let rows = by_partition(plan.run(&[], &reader)?, order);
-                rows.iter().map(|values| query::encode(&types, values, &reader, &formats)).collect()
-            }
-            None => query::run(&plan, &[], &reader, &formats),
+        let encode = |rows: Vec<Vec<Value>>| {
+            rows.iter().map(|values| query::encode(&types, values, &reader, &formats)).collect()
+        };
+        let rows: Vec<_> = match (values, &partitions) {
+            (Some(rows), _) => encode(rows),
+            (None, Some(order)) => encode(by_partition(plan.run(&[], &reader)?, order)),
+            (None, None) => query::run(&plan, &[], &reader, &formats),
         }?;
-        self.end_writes(writes, &[], Vec::new())?;
+        if let Some(writes) = writes {
+            self.end_writes(writes, &[], Vec::new())?;
+        }
         let names: Vec<&str> = selected.iter().map(|&i| columns[i].as_str()).collect();
         let data =
             if binary { binary_rows(&rows) } else { text_rows(&options, &names, &force, &rows) };
-        Ok(Done::Copy(CopyOut { binary, columns: selected.len(), data, rows: rows.len() as u64 }))
+        let rows = rows.len() as u64;
+        Ok(Done::Copy(CopyOut { binary, columns: selected.len(), data, rows, notices }))
     }
+}
+
+/// `BeginCopyTo` for the query of `COPY` that is an `INSERT`, an `UPDATE`, a `DELETE` or a `MERGE`: the plan of the statement, or of the one statement of the rewrite by a rule `DO INSTEAD`. The statement must have `RETURNING`.
+fn write_plan(node: &Node, reader: &Reader<'_>) -> Result<Plan, Error> {
+    let not_supported = |text: &str| Error::new(SqlState::FEATURE_NOT_SUPPORTED, text.to_owned());
+    let plan = match rupg_analyze::query_rewrite(node, reader)? {
+        Some(products) => {
+            if let Some(error) = rupg_analyze::copy_rules_error(&products) {
+                return Err(error);
+            }
+            let [product] = products.as_slice() else {
+                return Err(Error::internal("a rewrite of more than one statement"));
+            };
+            if !matches!(
+                product.stmt,
+                Node::InsertStmt(_)
+                    | Node::UpdateStmt(_)
+                    | Node::DeleteStmt(_)
+                    | Node::MergeStmt(_)
+            ) {
+                return Err(not_supported("COPY query must not be a utility command"));
+            }
+            let query = rupg_analyze::analyze_product(product, reader, &Params::default())?;
+            rupg_exec::prepare(query, reader)?
+        }
+        None => query::plan(node, reader, &Params::default())?,
+    };
+    if plan.write().is_some_and(|write| write.returning.is_none()) {
+        return Err(not_supported("COPY query must have a RETURNING clause"));
+    }
+    Ok(plan)
 }
 
 /// The rows of a `COPY ... TO` of a partitioned table in the order of `DoCopyTo`: the rows of each partition of `order` in turn, each partition in the order of its scan. Each row has the OID of its partition last, and the result has no OIDs.
@@ -247,17 +308,6 @@ fn by_partition(rows: Vec<Vec<Value>>, order: &[u32]) -> Vec<Vec<Value>> {
         }
     }
     parts.into_iter().flatten().collect()
-}
-
-/// The name of a statement in the query of `COPY` that is not a `SELECT`.
-fn statement_name(node: &Node) -> &'static str {
-    match node {
-        Node::InsertStmt(_) => "INSERT",
-        Node::UpdateStmt(_) => "UPDATE",
-        Node::DeleteStmt(_) => "DELETE",
-        Node::MergeStmt(_) => "MERGE",
-        _ => "this statement",
-    }
 }
 
 /// `ProcessCopyOptions`. `is_from` is true for `COPY ... FROM`.

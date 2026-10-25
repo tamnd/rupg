@@ -1,0 +1,196 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> create table copydml_test (id serial, t text);
+CREATE TABLE
+> insert into copydml_test (t) values ('a');
+INSERT 0 1
+> insert into copydml_test (t) values ('b');
+INSERT 0 1
+> insert into copydml_test (t) values ('c');
+INSERT 0 1
+> insert into copydml_test (t) values ('d');
+INSERT 0 1
+> insert into copydml_test (t) values ('e');
+INSERT 0 1
+> 
+>> copy (insert into copydml_test (t) values ('f') returning id) to stdout;
+copy out 0 0
+data 6\n
+copy done
+COPY 1
+> copy (update copydml_test set t = 'g' where t = 'f' returning id) to stdout;
+copy out 0 0
+data 6\n
+copy done
+COPY 1
+> copy (delete from copydml_test where t = 'g' returning id) to stdout;
+copy out 0 0
+data 6\n
+copy done
+COPY 1
+> 
+>>
+>> copy (insert into copydml_test default values) to stdout;
+ERROR 0A000 COPY query must have a RETURNING clause
+> copy (update copydml_test set t = 'g') to stdout;
+ERROR 0A000 COPY query must have a RETURNING clause
+> copy (delete from copydml_test) to stdout;
+ERROR 0A000 COPY query must have a RETURNING clause
+> 
+>> create rule qqq as on insert to copydml_test do instead nothing;
+CREATE RULE
+> copy (insert into copydml_test default values) to stdout;
+ERROR 0A000 DO INSTEAD NOTHING rules are not supported for COPY
+> drop rule qqq on copydml_test;
+DROP RULE
+> create rule qqq as on insert to copydml_test do also delete from copydml_test;
+CREATE RULE
+> copy (insert into copydml_test default values) to stdout;
+ERROR 0A000 DO ALSO rules are not supported for COPY
+> drop rule qqq on copydml_test;
+DROP RULE
+> create rule qqq as on insert to copydml_test do instead (delete from copydml_test; delete from copydml_test);
+CREATE RULE
+> copy (insert into copydml_test default values) to stdout;
+ERROR 0A000 multi-statement DO INSTEAD rules are not supported for COPY
+> drop rule qqq on copydml_test;
+DROP RULE
+> create rule qqq as on insert to copydml_test where new.t <> 'f' do instead delete from copydml_test;
+CREATE RULE
+> copy (insert into copydml_test default values) to stdout;
+ERROR 0A000 conditional DO INSTEAD rules are not supported for COPY
+> drop rule qqq on copydml_test;
+DROP RULE
+> 
+>> create rule qqq as on update to copydml_test do instead nothing;
+CREATE RULE
+> copy (update copydml_test set t = 'f') to stdout;
+ERROR 0A000 DO INSTEAD NOTHING rules are not supported for COPY
+> drop rule qqq on copydml_test;
+DROP RULE
+> create rule qqq as on update to copydml_test do also delete from copydml_test;
+CREATE RULE
+> copy (update copydml_test set t = 'f') to stdout;
+ERROR 0A000 DO ALSO rules are not supported for COPY
+> drop rule qqq on copydml_test;
+DROP RULE
+> create rule qqq as on update to copydml_test do instead (delete from copydml_test; delete from copydml_test);
+CREATE RULE
+> copy (update copydml_test set t = 'f') to stdout;
+ERROR 0A000 multi-statement DO INSTEAD rules are not supported for COPY
+> drop rule qqq on copydml_test;
+DROP RULE
+> create rule qqq as on update to copydml_test where new.t <> 'f' do instead delete from copydml_test;
+CREATE RULE
+> copy (update copydml_test set t = 'f') to stdout;
+ERROR 0A000 conditional DO INSTEAD rules are not supported for COPY
+> drop rule qqq on copydml_test;
+DROP RULE
+> 
+>> create rule qqq as on delete to copydml_test do instead nothing;
+CREATE RULE
+> copy (delete from copydml_test) to stdout;
+ERROR 0A000 DO INSTEAD NOTHING rules are not supported for COPY
+> drop rule qqq on copydml_test;
+DROP RULE
+> create rule qqq as on delete to copydml_test do also insert into copydml_test default values;
+CREATE RULE
+> copy (delete from copydml_test) to stdout;
+ERROR 0A000 DO ALSO rules are not supported for COPY
+> drop rule qqq on copydml_test;
+DROP RULE
+> create rule qqq as on delete to copydml_test do instead (insert into copydml_test default values; insert into copydml_test default values);
+CREATE RULE
+> copy (delete from copydml_test) to stdout;
+ERROR 0A000 multi-statement DO INSTEAD rules are not supported for COPY
+> drop rule qqq on copydml_test;
+DROP RULE
+> create rule qqq as on delete to copydml_test where old.t <> 'f' do instead insert into copydml_test default values;
+CREATE RULE
+> copy (delete from copydml_test) to stdout;
+ERROR 0A000 conditional DO INSTEAD rules are not supported for COPY
+> drop rule qqq on copydml_test;
+DROP RULE
+> 
+>> create function qqq_trig() returns trigger as $$
+>> begin
+>> if tg_op in ('INSERT', 'UPDATE') then
+>>     raise notice '% % %', tg_when, tg_op, new.id;
+>>     return new;
+>> else
+>>     raise notice '% % %', tg_when, tg_op, old.id;
+>>     return old;
+>> end if;
+>> end
+>> $$ language plpgsql;
+CREATE FUNCTION
+> create trigger qqqbef before insert or update or delete on copydml_test
+>>     for each row execute procedure qqq_trig();
+CREATE TRIGGER
+> create trigger qqqaf after insert or update or delete on copydml_test
+>>     for each row execute procedure qqq_trig();
+CREATE TRIGGER
+> 
+>> copy (insert into copydml_test (t) values ('f') returning id) to stdout;
+copy out 0 0
+NOTICE 00000 BEFORE INSERT 7 (PL/pgSQL function qqq_trig() line 4 at RAISE)
+data 7\n
+copy done
+NOTICE 00000 AFTER INSERT 7 (PL/pgSQL function qqq_trig() line 4 at RAISE)
+COPY 1
+> copy (update copydml_test set t = 'g' where t = 'f' returning id) to stdout;
+copy out 0 0
+NOTICE 00000 BEFORE UPDATE 7 (PL/pgSQL function qqq_trig() line 4 at RAISE)
+data 7\n
+copy done
+NOTICE 00000 AFTER UPDATE 7 (PL/pgSQL function qqq_trig() line 4 at RAISE)
+COPY 1
+> copy (delete from copydml_test where t = 'g' returning id) to stdout;
+copy out 0 0
+NOTICE 00000 BEFORE DELETE 7 (PL/pgSQL function qqq_trig() line 7 at RAISE)
+data 7\n
+copy done
+NOTICE 00000 AFTER DELETE 7 (PL/pgSQL function qqq_trig() line 7 at RAISE)
+COPY 1
+> 
+>> drop table copydml_test;
+DROP TABLE
+> drop function qqq_trig();
+DROP FUNCTION
+> CREATE TABLE cd2 (a int, b text);
+CREATE TABLE
+> COPY (INSERT INTO cd2 VALUES (1, 'x'), (2, 'y') RETURNING *) TO STDOUT WITH (FORMAT csv, HEADER);
+copy out 0 0,0
+data a,b\n
+data 1,x\n
+data 2,y\n
+copy done
+COPY 2
+> COPY (UPDATE cd2 SET b = b || '!' RETURNING a, b) TO STDOUT (FORMAT json);
+copy out 0 0
+data {\"a\":1,\"b\":\"x!\"}\n
+data {\"a\":2,\"b\":\"y!\"}\n
+copy done
+COPY 2
+> COPY (MERGE INTO cd2 USING (VALUES (1), (3)) AS v(a) ON cd2.a = v.a WHEN MATCHED THEN UPDATE SET b = 'm' WHEN NOT MATCHED THEN INSERT VALUES (v.a, 'n') RETURNING merge_action(), *) TO STDOUT;
+copy out 0 0,0,0,0
+data UPDATE\t1\t1\tm\n
+data INSERT\t3\t3\tn\n
+copy done
+COPY 2
+> COPY (MERGE INTO cd2 USING (VALUES (1)) AS v(a) ON cd2.a = v.a WHEN MATCHED THEN DELETE) TO STDOUT;
+ERROR 0A000 COPY query must have a RETURNING clause
+> COPY (WITH w AS (DELETE FROM cd2 WHERE a = 3 RETURNING a) SELECT * FROM w) TO STDOUT;
+copy out 0 0
+data 3\n
+copy done
+COPY 1
+> COPY (DELETE FROM cd2 RETURNING a / 0) TO STDOUT;
+copy out 0 0
+ERROR 22012 division by zero
+> SELECT * FROM cd2 ORDER BY a;
+fields a@cd2.1:23:4:-1,b@cd2.2:25:-1:-1
+row 1,m
+row 2,y!
+SELECT 2
