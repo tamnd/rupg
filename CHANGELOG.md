@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - Subscripts of `point`, `lseg`, `box` and `line` now work as in PostgreSQL. A fetch such as `p[0]` gives the coordinate or the point, and gives null for a subscript out of the value. An assignment such as `UPDATE t SET p[0] = 10` changes one element. A slice gives the same errors as in PostgreSQL (#693).
 - `ALTER TABLE ... ALTER CONSTRAINT` now changes the deferrability of a foreign key and of its triggers, also on the partitions, and the inheritability of a not-null constraint, as in PostgreSQL. `NOT ENFORCED` is not supported yet (#694).
+- `ALTER TABLE ... ADD FOREIGN KEY ... NOT VALID` now adds the foreign key without a check of the rows that the table has, also on the partitions, and `VALIDATE CONSTRAINT` then checks the rows, as in PostgreSQL. A partition that becomes a child of a valid foreign key gets the check of its rows (#NNN).
 
 ## 0.1.79 (2026-10-25)
 

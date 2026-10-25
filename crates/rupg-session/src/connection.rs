@@ -4388,6 +4388,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/altercon.test")));
     }
 
+    /// `ADD FOREIGN KEY ... NOT VALID` and `VALIDATE CONSTRAINT` of a foreign key, on a table, on the partitions of a partitioned table and to a partitioned table. `connection/fknv.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn fknv() {
+        big_stack(|| script(include_str!("connection/fknv.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {

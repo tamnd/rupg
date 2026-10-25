@@ -816,9 +816,6 @@ impl Definer<'_, '_> {
                     }
                 }
                 Other::Foreign(con, validated) => {
-                    if !con.initially_valid && con.is_enforced {
-                        return Err(not_yet("NOT VALID", place(con.location)));
-                    }
                     if target.kind == b'p' && !passes.recurse {
                         let pk = con.pktable.as_deref().map_or("", relname);
                         return Err(Error::new(
@@ -829,9 +826,11 @@ impl Definer<'_, '_> {
                             ),
                         ));
                     }
-                    self.add_foreign_key(target.oid, &con)?;
+                    // `transformFKConstraints` makes a foreign key on a new column with no default valid, as the column has only nulls.
+                    let valid = con.initially_valid || !validated;
+                    self.add_foreign_key(target.oid, &con, valid)?;
                     // `RI_Initial_Check` reads the rows of the table, or of each leaf partition of a partitioned table.
-                    if con.is_enforced && validated {
+                    if con.is_enforced && validated && valid {
                         let leaves = self.leaves(target.oid);
                         self.scans.extend(leaves);
                     }

@@ -53,8 +53,13 @@ impl Definer<'_, '_> {
         Err(Error::new(SqlState::INVALID_TABLE_DEFINITION, message))
     }
 
-    /// Adds the foreign key `con` to the table.
-    pub(super) fn add_foreign_key(&mut self, table: u32, con: &Constraint) -> Result<()> {
+    /// Adds the foreign key `con` to the table, as `ATAddForeignKeyConstraint` does. The constraint is not valid when `valid` is false.
+    pub(super) fn add_foreign_key(
+        &mut self,
+        table: u32,
+        con: &Constraint,
+        valid: bool,
+    ) -> Result<()> {
         let (table_name, namespace) = match self.catalog.relation(table) {
             Some(rel) => (rel.name.clone(), rel.namespace),
             None => {
@@ -173,6 +178,10 @@ impl Definer<'_, '_> {
             foreign,
         };
         let oid = self.catalog.add_fk_constraint(new, 0, FkSide::Both)?;
+        // A `NOT VALID` foreign key does not check the rows that the table has, and its clones are not valid either.
+        if !valid {
+            self.catalog.set_constraint_validated(oid, false)?;
+        }
         self.fk_recurse_referenced(oid, None)?;
         self.fk_recurse_referencing(oid, None)
     }
