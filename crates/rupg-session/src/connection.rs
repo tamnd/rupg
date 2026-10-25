@@ -4376,6 +4376,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/doselect.test")));
     }
 
+    /// The subscripts of `point`, `lseg`, `box` and `line`, which read and write a coordinate or a point of the value as an element of a fixed-length array from 0. `connection/geosub.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn geosub() {
+        big_stack(|| script(include_str!("connection/geosub.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {

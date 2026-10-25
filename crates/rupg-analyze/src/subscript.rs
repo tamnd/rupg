@@ -11,7 +11,7 @@ use crate::types;
 
 /// `array_subscript_handler`, the `typsubscript` of a true array type.
 const ARRAY_SUBSCRIPT_HANDLER: u32 = 6179;
-/// `raw_array_subscript_handler`, the `typsubscript` of a type of fixed length that is an array of its elements, such as `name`. Only `name` is supported here.
+/// `raw_array_subscript_handler`, the `typsubscript` of a type of fixed length that is an array of its elements: `name`, `point`, `lseg`, `box` and `line`.
 const RAW_ARRAY_SUBSCRIPT_HANDLER: u32 = 6180;
 
 impl Analyzer<'_> {
@@ -176,15 +176,13 @@ impl Analyzer<'_> {
         Err(Error::new(state, message).at_opt(at))
     }
 
-    /// `transformContainerSubscripts` for a fetch. A domain over an array subscripts its base type, and `int2vector` and `oidvector` are `int2[]` and `oid[]`. A `name` is an array of `"char"`. The result is the element, or an array for a slice, with the typmod of the container.
+    /// `transformContainerSubscripts` for a fetch. A domain over an array subscripts its base type, and `int2vector` and `oidvector` are `int2[]` and `oid[]`. A `name` is an array of `"char"`, a `point` and a `line` are arrays of `float8`, and an `lseg` and a `box` are arrays of `point`. The result is the element, or an array for a slice, with the typmod of the container.
     fn container_subscripts(&mut self, container: Expr, subscripts: &[&A_Indices]) -> Result<Expr> {
         let (ty, typmod) = container_type(container.ty, container.typmod);
         let row = types::row(ty);
         let element = match row {
             Some(row) if row.subscript == ARRAY_SUBSCRIPT_HANDLER && row.elem != 0 => row.elem,
-            Some(row) if row.subscript == RAW_ARRAY_SUBSCRIPT_HANDLER && ty == oid::NAME => {
-                row.elem
-            }
+            Some(row) if row.subscript == RAW_ARRAY_SUBSCRIPT_HANDLER && row.elem != 0 => row.elem,
             Some(row) if row.subscript != 0 => {
                 return Err(Error::new(
                     SqlState::FEATURE_NOT_SUPPORTED,
