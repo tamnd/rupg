@@ -118,15 +118,6 @@ impl Analyzer<'_> {
         action: &Node,
         qual: Option<&Expr>,
     ) -> Result<Query> {
-        let returning = match action {
-            Node::InsertStmt(s) => s.returningClause.is_some(),
-            Node::UpdateStmt(s) => s.returningClause.is_some(),
-            Node::DeleteStmt(s) => s.returningClause.is_some(),
-            _ => false,
-        };
-        if returning {
-            return Err(not_yet("RETURNING in a rule", None));
-        }
         self.rule_scope(oid, name, [true, true], false)?;
         let defining = std::mem::replace(&mut self.rule.defining, true);
         let query = self.sub_query(|analyzer| match action {
@@ -234,7 +225,10 @@ impl Definer<'_, '_> {
         let rulename = stmt.rulename.as_deref().unwrap_or_default();
         if stmt.event == CmdType::CMD_SELECT {
             self.check_select_rule(stmt, &tree, code, oid, &name)?;
-        } else if rulename == RETURN {
+        } else {
+            self.check_returning(stmt, &tree, oid)?;
+        }
+        if stmt.event != CmdType::CMD_SELECT && rulename == RETURN {
             return Err(invalid(format!(
                 "non-view rule for \"{name}\" must not be named \"{RETURN}\""
             )));
@@ -356,6 +350,65 @@ impl Definer<'_, '_> {
             return Err(invalid(format!("view rule for \"{name}\" must be named \"{RETURN}\"")));
         }
         Err(not_yet("CREATE OR REPLACE RULE of the _RETURN rule of a view", None))
+    }
+
+    /// The checks of `DefineQueryRewrite` for the `RETURNING` of the actions of a rule that is not `ON SELECT`: only one action of a rule `DO INSTEAD` with no condition can have it, and its list has the columns of the relation of the rule, as `checkRuleResultList` checks them.
+    fn check_returning(&self, stmt: &RuleStmt, tree: &RuleTree, oid: u32) -> Result<()> {
+        let unsupported = |text: &str| Error::new(SqlState::FEATURE_NOT_SUPPORTED, text);
+        let mut have = false;
+        for action in &tree.actions {
+            let Some(returning) = action.write.as_ref().and_then(|w| w.returning.as_deref()) else {
+                continue;
+            };
+            if have {
+                return Err(unsupported("cannot have multiple RETURNING lists in a rule"));
+            }
+            have = true;
+            if tree.qual.is_some() {
+                return Err(unsupported("RETURNING lists are not supported in conditional rules"));
+            }
+            if !stmt.instead {
+                return Err(unsupported("RETURNING lists are not supported in non-INSTEAD rules"));
+            }
+            let columns = self.catalog.relation(oid).map(|r| r.columns.clone()).unwrap_or_default();
+            let mut count = 0;
+            for target in returning.targets.iter().filter(|t| !t.junk) {
+                count += 1;
+                let Some(column) = columns.get(count - 1) else {
+                    return Err(invalid("RETURNING list has too many entries"));
+                };
+                if column.ty == 0 && column.name.is_empty() {
+                    return Err(unsupported(
+                        "cannot create a RETURNING list for a relation containing dropped columns",
+                    ));
+                }
+                let (expr, attname) = (&target.expr, &column.name);
+                if expr.ty != column.ty {
+                    return Err(invalid(format!(
+                        "RETURNING list's entry {count} has different type from column \"{attname}\""
+                    ))
+                    .with_detail(format!(
+                        "RETURNING list entry has type {}, but column has type {}.",
+                        types::name(expr.ty),
+                        types::name(column.ty)
+                    )));
+                }
+                if expr.typmod != column.typmod && expr.typmod != -1 && column.typmod != -1 {
+                    return Err(invalid(format!(
+                        "RETURNING list's entry {count} has different size from column \"{attname}\""
+                    ))
+                    .with_detail(format!(
+                        "RETURNING list entry has type {}, but column has type {}.",
+                        types::with_typmod(expr.ty, expr.typmod),
+                        types::with_typmod(column.ty, column.typmod)
+                    )));
+                }
+            }
+            if count != columns.len() {
+                return Err(invalid("RETURNING list has too few entries"));
+            }
+        }
+        Ok(())
     }
 
     /// `RemoveObjects` for `DROP RULE`: the rule of the relation with the name, with the check of `check_object_ownership`.

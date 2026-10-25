@@ -6,7 +6,7 @@ use rupg_catalog::Rule;
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{
     A_Star, Alias, BoolExpr, BoolExprType, CmdType, ColumnRef, Node, RangeSubselect, RangeVar,
-    ResTarget, RuleStmt, SelectStmt, SetOperation, WithClause,
+    ResTarget, ReturningClause, RuleStmt, SelectStmt, SetOperation, WithClause,
 };
 use rupg_types::oid;
 
@@ -34,7 +34,19 @@ pub struct Product {
     /// The OID of the target table when the rewrite fired its rules for this statement.
     fired: Option<u32>,
     source: Source,
+    /// The list of `RETURNING` of the statement of the user, its name of the target relation and the OID of the relation, for the action whose list of `RETURNING` gives the rows.
+    returning: Option<Returning>,
 }
+
+impl Product {
+    /// True for the action of a rule whose list of `RETURNING` gives the rows of the statement of the user.
+    pub fn gives_rows(&self) -> bool {
+        self.returning.is_some()
+    }
+}
+
+/// The list of `RETURNING` of the statement of the user, the name of its target relation and the OID of the relation.
+pub(crate) type Returning = (String, ReturningClause, u32);
 
 /// `querySource`: where a statement of the rewrite comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,6 +67,7 @@ struct Item {
     source: Source,
     inverted: Vec<Node>,
     fired: Option<u32>,
+    returning: Option<Returning>,
 }
 
 /// The state of the analysis of the rules of a write.
@@ -74,6 +87,8 @@ pub(crate) struct State {
     pub(crate) defaults: Option<Vec<Expr>>,
     /// [`State::defaults`] while the analyzer reads the subquery `*VALUES*`, for its `VALUES` list.
     pub(crate) values: Option<Vec<Expr>>,
+    /// The list of `RETURNING` of the statement of the user while the analyzer reads the action of a rule that gives its rows.
+    pub(crate) returning: Option<Returning>,
 }
 
 /// The alias of the subquery that the rewrite makes of the `VALUES` of an action `INSERT`.
@@ -181,10 +196,11 @@ fn writes_in_with(with: Option<&WithClause>) -> bool {
     })
 }
 
-/// The statement with no `RETURNING`, and its `WITH` clause, and true when it has `RETURNING`, `ON CONFLICT` or a condition of `WHERE`, and its parts of `FROM` or `USING`.
+/// The statement with no `RETURNING`, and its `WITH` clause, and true when it has `RETURNING`, `ON CONFLICT` or a condition of `WHERE`, and its parts of `FROM` or `USING`. `clause` is the list of `RETURNING` and the name of the target relation.
 struct Parts {
     base: Node,
     returning: bool,
+    clause: Option<(String, ReturningClause)>,
     on_conflict: bool,
     filter: bool,
     from: bool,
@@ -193,6 +209,17 @@ struct Parts {
 
 fn parts(stmt: &Node) -> Parts {
     let mut base = stmt.clone();
+    let clause = match stmt {
+        Node::InsertStmt(s) => s.returningClause.as_deref().zip(s.relation.as_deref()),
+        Node::UpdateStmt(s) => s.returningClause.as_deref().zip(s.relation.as_deref()),
+        Node::DeleteStmt(s) => s.returningClause.as_deref().zip(s.relation.as_deref()),
+        _ => None,
+    };
+    let clause = clause.map(|(clause, rv)| {
+        let alias = rv.alias.as_ref().and_then(|a| a.aliasname.clone());
+        let name = alias.or_else(|| rv.relname.clone()).unwrap_or_default();
+        (name.to_string(), clause.clone())
+    });
     let (returning, on_conflict, filter, from, with) = match &mut base {
         Node::InsertStmt(s) => (
             s.returningClause.take().is_some(),
@@ -217,7 +244,7 @@ fn parts(stmt: &Node) -> Parts {
         ),
         _ => (false, false, false, false, None),
     };
-    Parts { base, returning, on_conflict, filter, from, with }
+    Parts { base, returning, clause, on_conflict, filter, from, with }
 }
 
 /// The `CREATE RULE` statement of the text that the catalog keeps for a rule.
@@ -247,7 +274,17 @@ fn and(node: Option<Node>, more: Option<&Node>) -> Option<Node> {
     }
 }
 
-/// `rewriteRuleAction`: the action with the statement of the user as `*rule*` first in its `FROM`, and the condition of the rule in its `WHERE`. An action that reads neither `old` nor `new`, with no condition that reads them, runs once for the statement, as the target table then leaves the join tree of the action.
+/// True when the write has a list of `RETURNING`.
+fn has_returning(stmt: &Node) -> bool {
+    match stmt {
+        Node::InsertStmt(s) => s.returningClause.is_some(),
+        Node::UpdateStmt(s) => s.returningClause.is_some(),
+        Node::DeleteStmt(s) => s.returningClause.is_some(),
+        _ => false,
+    }
+}
+
+/// `rewriteRuleAction`: the action with the statement of the user as `*rule*` first in its `FROM`, and the condition of the rule in its `WHERE`. The action keeps its list of `RETURNING` only when the statement of the user has one. An action that reads neither `old` nor `new`, with no condition that reads them, runs once for the statement, as the target table then leaves the join tree of the action.
 fn rule_action(parts: &Parts, action: &Node, qual: Option<&Node>, event: CmdType) -> Result<Node> {
     let needs_rows = uses_row(action)
         || qual.is_some_and(uses_row)
@@ -268,8 +305,8 @@ fn rule_action(parts: &Parts, action: &Node, qual: Option<&Node>, event: CmdType
     let mut action = action.clone();
     match &mut action {
         Node::InsertStmt(s) => {
-            if s.returningClause.is_some() {
-                return Err(not_yet("RETURNING in a rule"));
+            if !parts.returning {
+                s.returningClause = None;
             }
             if rows.is_none() && qual.is_none() {
                 return Ok(action);
@@ -295,8 +332,8 @@ fn rule_action(parts: &Parts, action: &Node, qual: Option<&Node>, event: CmdType
             select.whereClause = and(select.whereClause.take(), qual);
         }
         Node::UpdateStmt(s) => {
-            if s.returningClause.is_some() {
-                return Err(not_yet("RETURNING in a rule"));
+            if !parts.returning {
+                s.returningClause = None;
             }
             if let Some(rows) = rows {
                 s.fromClause.insert(0, Some(rows));
@@ -304,8 +341,8 @@ fn rule_action(parts: &Parts, action: &Node, qual: Option<&Node>, event: CmdType
             s.whereClause = and(s.whereClause.take(), qual);
         }
         Node::DeleteStmt(s) => {
-            if s.returningClause.is_some() {
-                return Err(not_yet("RETURNING in a rule"));
+            if !parts.returning {
+                s.returningClause = None;
             }
             if let Some(rows) = rows {
                 s.usingClause.insert(0, Some(rows));
@@ -392,6 +429,7 @@ pub fn query_rewrite(stmt: &Node, env: &dyn Env) -> Result<Option<Vec<Product>>>
             inverted: item.inverted,
             fired: item.fired,
             source: item.source,
+            returning: item.returning,
         })
         .collect();
     Ok(Some(products))
@@ -472,6 +510,8 @@ fn rewrite_query(
         }
     }
     let mut result = Vec::new();
+    // `RewriteQuery`: only one action can give the rows of `RETURNING`.
+    let mut returning = false;
     if !products.is_empty() {
         if events.contains(&(oid, event)) {
             return Err(Error::new(
@@ -481,16 +521,37 @@ fn rewrite_query(
         }
         events.push((oid, event));
         for (product, source) in products {
+            let gives_rows = has_returning(&product);
+            if gives_rows && returning {
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    "cannot have RETURNING lists in multiple rules",
+                ));
+            }
+            returning |= gives_rows;
             match rewrite_query(&product, source, env, events)? {
+                Some(_) if gives_rows => {
+                    return Err(not_yet("RETURNING in a rule action that rules rewrite"));
+                }
                 Some(items) => result.extend(items),
                 None => {
-                    result.push(Item { stmt: product, source, inverted: Vec::new(), fired: None })
+                    let returning = gives_rows
+                        .then(|| parts.clause.clone().map(|(name, clause)| (name, clause, oid)))
+                        .flatten();
+                    let fired = None;
+                    result.push(Item {
+                        stmt: product,
+                        source,
+                        inverted: Vec::new(),
+                        fired,
+                        returning,
+                    })
                 }
             }
         }
         events.pop();
     }
-    if (instead || inverted.is_some()) && parts.returning {
+    if (instead || inverted.is_some()) && parts.returning && !returning {
         let word = event_word(event);
         return Err(Error::new(
             SqlState::FEATURE_NOT_SUPPORTED,
@@ -507,6 +568,7 @@ fn rewrite_query(
             source,
             inverted: inverted.unwrap_or_default(),
             fired: Some(oid),
+            returning: None,
         };
         if event == CmdType::CMD_INSERT {
             result.insert(0, item);
@@ -526,6 +588,7 @@ pub fn analyze_product(product: &Product, env: &dyn Env, params: &Params) -> Res
     let mut analyzer = Analyzer::new(env, params);
     analyzer.rule.fired = product.fired;
     analyzer.rule.inverted.clone_from(&product.inverted);
+    analyzer.rule.returning.clone_from(&product.returning);
     let query = crate::analyze_in(analyzer, &product.stmt, None);
     if product.action { query.map_err(|error| error.with_position(None)) } else { query }
 }

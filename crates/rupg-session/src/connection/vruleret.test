@@ -1,0 +1,140 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE SCHEMA vrr;
+CREATE SCHEMA
+> SET search_path = vrr;
+SET
+search_path=vrr
+> CREATE TABLE t (id int, val text, n numeric(6,2));
+CREATE TABLE
+> CREATE VIEW v AS SELECT id, val FROM t;
+CREATE VIEW
+> CREATE RULE vi AS ON INSERT TO v DO INSTEAD INSERT INTO t VALUES (new.id, new.val, 1) RETURNING t.id, t.val;
+CREATE RULE
+> CREATE RULE vu AS ON UPDATE TO v DO INSTEAD UPDATE t SET val = new.val WHERE t.id = old.id RETURNING t.id, t.val || '!';
+CREATE RULE
+> CREATE RULE vd AS ON DELETE TO v DO INSTEAD DELETE FROM t WHERE t.id = old.id RETURNING t.id, upper(t.val);
+CREATE RULE
+> INSERT INTO v VALUES (1, 'a'), (2, 'b') RETURNING *;
+fields id@v.1:23:4:-1,val@v.2:25:-1:-1
+row 1,a
+row 2,b
+INSERT 0 2
+> INSERT INTO v VALUES (3, 'c') RETURNING val, id * 10 AS ten;
+fields val@v.2:25:-1:-1,ten:23:4:-1
+row c,30
+INSERT 0 1
+> INSERT INTO v AS x VALUES (4, 'd') RETURNING x.id, (SELECT x.val || 'q');
+fields id@v.1:23:4:-1,?column?:25:-1:-1
+row 4,dq
+INSERT 0 1
+> INSERT INTO v VALUES (5, 'e');
+INSERT 0 1
+> UPDATE v SET val = 'z' WHERE id = 2 RETURNING *;
+fields id@v.1:23:4:-1,val@v.2:25:-1:-1
+row 2,z!
+UPDATE 1
+> UPDATE v SET val = 'y' WHERE id > 3 RETURNING v.val, v::text;
+fields val@v.2:25:-1:-1,v:25:-1:-1
+row y!,(4,y!)
+row y!,(5,y!)
+UPDATE 2
+> UPDATE v SET val = 'w' WHERE id = 1;
+UPDATE 1
+> DELETE FROM v WHERE id = 3 RETURNING *;
+fields id@v.1:23:4:-1,val@v.2:25:-1:-1
+row 3,C
+DELETE 1
+> DELETE FROM v WHERE id = 5 RETURNING id;
+fields id@v.1:23:4:-1
+row 5
+DELETE 1
+> SELECT * FROM t ORDER BY id;
+fields id@t.1:23:4:-1,val@t.2:25:-1:-1,n@t.3:1700:-1:393222
+row 1,w,1.00
+row 2,z,1.00
+row 4,y,1.00
+SELECT 3
+> SELECT rulename, pg_get_ruledef(oid) FROM pg_rewrite WHERE ev_class = 'v'::regclass AND rulename <> '_RETURN' ORDER BY 1;
+fields rulename@pg_rewrite.2:19:64:-1,pg_get_ruledef:25:-1:-1
+row vd,CREATE RULE vd AS
+    ON DELETE TO vrr.v DO INSTEAD  DELETE FROM t
+  WHERE (t.id = old.id)
+  RETURNING t.id,
+    upper(t.val) AS upper;
+row vi,CREATE RULE vi AS
+    ON INSERT TO vrr.v DO INSTEAD  INSERT INTO t (id, val, n)
+  VALUES (new.id, new.val, 1)
+  RETURNING t.id,
+    t.val;
+row vu,CREATE RULE vu AS
+    ON UPDATE TO vrr.v DO INSTEAD  UPDATE t SET val = new.val
+  WHERE (t.id = old.id)
+  RETURNING t.id,
+    (t.val || '!'::text) AS "?column?";
+SELECT 3
+> CREATE VIEW w AS SELECT id, val FROM t;
+CREATE VIEW
+> CREATE RULE wi AS ON INSERT TO w DO INSTEAD INSERT INTO t VALUES (new.id, new.val);
+CREATE RULE
+> INSERT INTO w VALUES (6, 'f') RETURNING *;
+ERROR 0A000 cannot perform INSERT RETURNING on relation "w"
+HINT You need an unconditional ON INSERT DO INSTEAD rule with a RETURNING clause.
+> INSERT INTO w VALUES (6, 'f');
+INSERT 0 1
+> CREATE RULE w1 AS ON UPDATE TO w DO INSTEAD (UPDATE t SET val = new.val RETURNING id, val; UPDATE t SET val = new.val RETURNING id, val);
+ERROR 0A000 cannot have multiple RETURNING lists in a rule
+> CREATE RULE w2 AS ON UPDATE TO w WHERE old.id > 0 DO INSTEAD UPDATE t SET val = new.val RETURNING id, val;
+ERROR 0A000 RETURNING lists are not supported in conditional rules
+> CREATE RULE w3 AS ON UPDATE TO w DO ALSO UPDATE t SET val = new.val RETURNING id, val;
+ERROR 0A000 RETURNING lists are not supported in non-INSTEAD rules
+> CREATE RULE w4 AS ON UPDATE TO w DO INSTEAD UPDATE t SET val = new.val RETURNING id, val, n;
+ERROR 42P17 RETURNING list has too many entries
+> CREATE RULE w5 AS ON UPDATE TO w DO INSTEAD UPDATE t SET val = new.val RETURNING id;
+ERROR 42P17 RETURNING list has too few entries
+> CREATE RULE w6 AS ON UPDATE TO w DO INSTEAD UPDATE t SET val = new.val RETURNING val, id;
+ERROR 42P17 RETURNING list's entry 1 has different type from column "id"
+DETAIL RETURNING list entry has type text, but column has type integer.
+> CREATE RULE w7 AS ON UPDATE TO w DO INSTEAD UPDATE t SET val = new.val RETURNING n::int, val;
+CREATE RULE
+> CREATE RULE w8 AS ON UPDATE TO w DO INSTEAD UPDATE t SET val = new.val WHERE t.id = new.id RETURNING *;
+ERROR 42P17 RETURNING list has too many entries
+> CREATE RULE w9 AS ON UPDATE TO w DO INSTEAD UPDATE t SET val = new.val WHERE t.id = new.id RETURNING t.id, t.val;
+CREATE RULE
+> UPDATE w SET val = 'g' WHERE id = 6 RETURNING *;
+ERROR 0A000 cannot have RETURNING lists in multiple rules
+> CREATE TABLE u (id int, val text);
+CREATE TABLE
+> CREATE RULE ud AS ON DELETE TO u DO INSTEAD UPDATE t SET val = 'gone' WHERE t.id = old.id RETURNING t.id, t.val;
+CREATE RULE
+> INSERT INTO u VALUES (6, 'u6');
+INSERT 0 1
+> DELETE FROM u RETURNING *;
+fields id:23:4:-1,val:25:-1:-1
+row 6,gone
+DELETE 0
+> SELECT * FROM u;
+fields id@u.1:23:4:-1,val@u.2:25:-1:-1
+row 6,u6
+SELECT 1
+> SELECT * FROM t ORDER BY id;
+fields id@t.1:23:4:-1,val@t.2:25:-1:-1,n@t.3:1700:-1:393222
+row 1,w,1.00
+row 2,z,1.00
+row 4,y,1.00
+row 6,gone,NULL
+SELECT 4
+> CREATE TABLE nn (a numeric(6,2), b int);
+CREATE TABLE
+> CREATE VIEW nv AS SELECT a, b FROM nn;
+CREATE VIEW
+> CREATE RULE nvi AS ON INSERT TO nv DO INSTEAD INSERT INTO nn VALUES (new.a, new.b) RETURNING nn.a::numeric(5,1), nn.b;
+ERROR 42P17 RETURNING list's entry 1 has different size from column "a"
+DETAIL RETURNING list entry has type numeric(5,1), but column has type numeric(6,2).
+> CREATE RULE nvi AS ON INSERT TO nv DO INSTEAD INSERT INTO nn VALUES (new.a, new.b) RETURNING nn.a::numeric(6,2), nn.b;
+CREATE RULE
+> INSERT INTO nv VALUES (1.234, 2) RETURNING *;
+fields a@nv.1:1700:-1:393222,b@nv.2:23:4:-1
+row 1.23,2
+INSERT 0 1
