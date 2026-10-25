@@ -4382,6 +4382,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/geosub.test")));
     }
 
+    /// `ALTER TABLE ... ALTER CONSTRAINT`: the deferrability of a foreign key and of its triggers, also on partitions, the inheritability of a not-null constraint, and the errors. `connection/altercon.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn altercon() {
+        big_stack(|| script(include_str!("connection/altercon.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {

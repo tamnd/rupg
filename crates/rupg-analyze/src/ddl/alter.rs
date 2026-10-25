@@ -8,9 +8,9 @@ use rupg_catalog::{ConKind, DepKind, PG_CLASS, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Owned};
 use rupg_sql::nodes::{
-    AlterOwnerStmt, AlterTableCmd, AlterTableStmt, AlterTableType, ColumnDef, ConstrType,
-    Constraint, DropBehavior, IndexStmt, Node, ObjectType, RangeVar, ReplicaIdentityStmt, RoleSpec,
-    RoleSpecType, TypeName,
+    ATAlterConstraint, AlterOwnerStmt, AlterTableCmd, AlterTableStmt, AlterTableType, ColumnDef,
+    ConstrType, Constraint, DropBehavior, IndexStmt, Node, ObjectType, RangeVar,
+    ReplicaIdentityStmt, RoleSpec, RoleSpecType, TypeName,
 };
 use rupg_types::Value;
 
@@ -184,11 +184,13 @@ enum MiscCmd {
     Of(Option<Box<TypeName>>),
     /// `VALIDATE CONSTRAINT` with the name of the constraint.
     Validate(String),
+    /// `ALTER CONSTRAINT`.
+    AlterConstraint(Box<ATAlterConstraint>),
 }
 
 /// The subcommand that gives a constraint of `AT_PASS_ADD_CONSTR`.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Origin {
+pub(super) enum Origin {
     /// `ALTER COLUMN ... SET NOT NULL`, which `ATExecSetNotNull` runs.
     SetNotNull,
     /// `ADD CONSTRAINT` or a constraint of `ADD COLUMN`, which `ATAddCheckNNConstraint` runs.
@@ -614,6 +616,13 @@ impl Definer<'_, '_> {
                 self.simple_permissions(target, cmd, TABLE)?;
                 passes.misc.push(MiscCmd::Of(None));
             }
+            AlterTableType::AT_AlterConstraint => {
+                self.simple_permissions(target, cmd, b"rp")?;
+                let Some(Node::ATAlterConstraint(alter)) = &cmd.def else {
+                    return Err(Error::internal("ALTER CONSTRAINT with no constraint"));
+                };
+                passes.misc.push(MiscCmd::AlterConstraint(alter.clone()));
+            }
             AlterTableType::AT_ValidateConstraint => {
                 self.simple_permissions(target, cmd, TABLE)?;
                 let name = cmd.name.as_deref().unwrap_or_default().to_string();
@@ -863,6 +872,9 @@ impl Definer<'_, '_> {
                 MiscCmd::Validate(name) => {
                     self.validate_constraint(target, name, passes.recurse, passes.recursing)?;
                 }
+                MiscCmd::AlterConstraint(alter) => {
+                    self.alter_constraint(target, alter, passes.recurse)?;
+                }
             }
         }
         if let Some(unlogged) = passes.persistence {
@@ -1013,7 +1025,7 @@ impl Definer<'_, '_> {
     }
 
     /// `ATExecSetNotNull`, and the not-null constraint of `ATAddCheckNNConstraint` and `AddRelationNewConstraints`. A column with a not-null constraint keeps it, as `AdjustNotNullInheritance` does: the constraint counts the parent table when the recursion reaches the table, and else it becomes a constraint of the table itself. A new constraint goes on to the children with the same name. With `ONLY`, a table with children cannot get a new constraint, but `SET NOT NULL` gives a table with children of `INHERITS` a constraint that is `NO INHERIT`, and the not-null constraints of a primary key always go on to the partitions. The result is true for a new constraint, which a scan of the table must check.
-    fn alter_not_null(
+    pub(super) fn alter_not_null(
         &mut self,
         target: &Target,
         con: &Constraint,
