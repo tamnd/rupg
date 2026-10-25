@@ -4822,6 +4822,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/values_view.test")));
     }
 
+    /// `EXPLAIN` of a statement that rules rewrite: the plan of each statement of the rewrite, in the text form and in the form JSON, and `Query rewrites to nothing` for `DO INSTEAD NOTHING`. `connection/explain_rules.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn explain_rules() {
+        big_stack(|| script(include_str!("connection/explain_rules.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

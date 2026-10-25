@@ -192,6 +192,56 @@ fn uses_row(node: &Node) -> bool {
     w.0
 }
 
+/// The walk that finds a relation with no schema whose name is one of the names.
+struct Names<'a>(&'a [String], bool);
+
+impl Walker for Names<'_> {
+    fn node(&mut self, node: &Node) -> bool {
+        if let Node::RangeVar(rv) = node
+            && rv.schemaname.is_none()
+            && rv.relname.as_deref().is_some_and(|n| self.0.iter().any(|c| c == n))
+        {
+            self.1 = true;
+            return true;
+        }
+        walk::walk(self, node)
+    }
+
+    fn select(&mut self, stmt: &SelectStmt) -> bool {
+        walk::select(self, stmt)
+    }
+}
+
+/// The names of the queries of a `WITH` clause.
+fn cte_names(with: &WithClause) -> Vec<String> {
+    with.ctes
+        .iter()
+        .flatten()
+        .filter_map(|cte| match cte {
+            Node::CommonTableExpr(c) => c.ctename.as_deref().map(str::to_string),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `rewriteRuleAction`: the action gets the queries of `WITH` of the statement of the user after its own, so that they are at the top level of the action. The statement of the user in `*rule*` then reads them from the action. An error for a name that both have.
+fn add_ctes(target: &mut Option<Box<WithClause>>, with: &WithClause) -> Result<()> {
+    let target =
+        target.get_or_insert_with(|| Box::new(WithClause { location: -1, ..Default::default() }));
+    let own = cte_names(target);
+    if let Some(name) = cte_names(with).into_iter().find(|n| own.contains(n)) {
+        return Err(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            format!(
+                "WITH query name \"{name}\" appears in both a rule action and the query being rewritten"
+            ),
+        ));
+    }
+    target.ctes.extend(with.ctes.iter().cloned());
+    target.recursive |= with.recursive;
+    Ok(())
+}
+
 /// The walk that finds a column name with no name of a relation.
 struct Bare(bool);
 
@@ -369,10 +419,26 @@ fn rule_action(parts: &Parts, action: &Node, qual: Option<&Node>, event: CmdType
             "a rule action that does not read OLD or NEW for a statement with FROM or USING",
         ));
     }
+    // The queries of `WITH` move to the action, unless a name of the action
+    // would then read a query of `WITH` in place of its table.
+    let hoist = parts.with.as_ref().filter(|with| {
+        let mut names = Names(&cte_names(with), false);
+        names.node(action);
+        !names.1 && !matches!(action, Node::NotifyStmt(_))
+    });
+    let mut base = parts.base.clone();
+    if hoist.is_some() {
+        match &mut base {
+            Node::InsertStmt(s) => s.withClause = None,
+            Node::UpdateStmt(s) => s.withClause = None,
+            Node::DeleteStmt(s) => s.withClause = None,
+            _ => {}
+        }
+    }
     let rows = needs_rows.then(|| {
         Node::RangeSubselect(Box::new(RangeSubselect {
             lateral: false,
-            subquery: Some(parts.base.clone()),
+            subquery: Some(base),
             alias: Some(Box::new(Alias { aliasname: Some(RULE.into()), colnames: Vec::new() })),
         }))
     });
@@ -395,6 +461,15 @@ fn rule_action(parts: &Parts, action: &Node, qual: Option<&Node>, event: CmdType
             }
             if !parts.returning {
                 s.returningClause = None;
+            }
+            // An action `INSERT ... SELECT` gets them in its `SELECT`.
+            if let Some(with) = hoist {
+                match s.selectStmt.as_mut() {
+                    Some(Node::SelectStmt(select)) if select.valuesLists.is_empty() => {
+                        add_ctes(&mut select.withClause, with)?
+                    }
+                    _ => add_ctes(&mut s.withClause, with)?,
+                }
             }
             if rows.is_none() && qual.is_none() {
                 return Ok(action);
@@ -424,6 +499,9 @@ fn rule_action(parts: &Parts, action: &Node, qual: Option<&Node>, event: CmdType
             if !parts.returning {
                 s.returningClause = None;
             }
+            if let Some(with) = hoist {
+                add_ctes(&mut s.withClause, with)?;
+            }
             if let Some(rows) = rows {
                 lateral_items(&mut s.fromClause);
                 s.fromClause.insert(0, Some(rows));
@@ -433,6 +511,9 @@ fn rule_action(parts: &Parts, action: &Node, qual: Option<&Node>, event: CmdType
         Node::DeleteStmt(s) => {
             if !parts.returning {
                 s.returningClause = None;
+            }
+            if let Some(with) = hoist {
+                add_ctes(&mut s.withClause, with)?;
             }
             if let Some(rows) = rows {
                 lateral_items(&mut s.usingClause);
@@ -449,6 +530,9 @@ fn rule_action(parts: &Parts, action: &Node, qual: Option<&Node>, event: CmdType
             if rows.is_some() && !s.valuesLists.is_empty() {
                 // The columns of `VALUES` keep their names `column1` and on.
                 values_to_select(s, false)?;
+            }
+            if let Some(with) = hoist {
+                add_ctes(&mut s.withClause, with)?;
             }
             if let Some(rows) = rows {
                 lateral_items(&mut s.fromClause);

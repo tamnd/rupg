@@ -304,15 +304,61 @@ impl Connection {
         let started = self.clock.monotonic();
         self.settings.borrow_mut().take_snapshot();
         let reader = self.reader();
-        let plan = query::plan(inner, &reader, &Params::default());
+        // `ExplainQuery`: `QueryRewrite` gives the statements of the rules, and each one shows its plan. A blank line comes between the plans of the text form.
+        let Some(products) = rupg_analyze::query_rewrite(inner, &reader)? else {
+            let plan = query::plan(inner, &reader, &Params::default());
+            let text = self.explain_plan(plan, &parsed, started, &reader, notices)?;
+            return Ok(explain_rows(text, parsed.format));
+        };
+        // `ExplainBeginOutput` and `ExplainEndOutput` of the form JSON put the plans in one array, and `ExplainSeparatePlans` puts a blank line between the plans of the text form.
+        if products.len() != 1 && !matches!(parsed.format, Format::Text | Format::Json) {
+            return Err(not_yet("EXPLAIN of a statement that rules rewrite in this format"));
+        }
+        let mut texts = Vec::with_capacity(products.len());
+        for product in &products {
+            let plan = rupg_analyze::analyze_product(product, &reader, &Params::default())
+                .and_then(|query| rupg_exec::prepare(query, &reader));
+            texts.push(self.explain_plan(plan, &parsed, started, &reader, notices)?);
+        }
+        let text = match parsed.format {
+            Format::Text if texts.is_empty() => "Query rewrites to nothing".to_string(),
+            Format::Text => texts.join("\n\n"),
+            Format::Json if texts.len() != 1 => {
+                let inner: Vec<&str> = texts
+                    .iter()
+                    .map(|t| {
+                        let t = t.strip_prefix("[\n").unwrap_or(t);
+                        t.strip_suffix("\n]").unwrap_or(t)
+                    })
+                    .collect();
+                if inner.is_empty() {
+                    "[\n]".to_string()
+                } else {
+                    format!("[\n{}\n]", inner.join(",\n"))
+                }
+            }
+            _ => texts.concat(),
+        };
+        Ok(explain_rows(text, parsed.format))
+    }
+
+    /// `ExplainOneQuery`: the text of the plan of one statement.
+    fn explain_plan(
+        &self,
+        plan: Result<rupg_exec::Plan, Error>,
+        parsed: &Parsed,
+        started: std::time::Duration,
+        reader: &Reader<'_>,
+        notices: &mut Vec<Notice>,
+    ) -> Result<String, Error> {
         notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         let plan = plan?;
         notices.extend(plan.notices().iter().map(|error| Notice::warning(error.clone())));
-        let plan = plan.fold(None, &reader);
+        let plan = plan.fold(None, reader);
         notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         let plan = plan?;
         let members = Members {
-            reader: &reader,
+            reader,
             error: RefCell::new(None),
             heap: self.store.heap(),
             database: self.database_oid,
@@ -339,18 +385,22 @@ impl Connection {
             format: parsed.format,
             planning_time,
         };
-        let text = rupg_func::explain(&tree, &options, &reader)?;
-        let ty = match parsed.format {
-            Format::Json => oid::JSON,
-            Format::Xml => oid::XML,
-            Format::Text | Format::Yaml => oid::TEXT,
-        };
-        let columns = vec![Column { ty, ..Column::text("QUERY PLAN".to_string()) }];
-        let rows = if parsed.format == Format::Text {
-            text.split('\n').map(|line| vec![Some(line.as_bytes().to_vec())]).collect()
-        } else {
-            vec![vec![Some(text.into_bytes())]]
-        };
-        Ok(Done::Rows { columns, rows, tag: CommandTag::Explain })
+        rupg_func::explain(&tree, &options, reader)
     }
+}
+
+/// The rows of `EXPLAIN`: a row for each line of the text form, and one row with the whole value for the other forms.
+fn explain_rows(text: String, format: Format) -> Done {
+    let ty = match format {
+        Format::Json => oid::JSON,
+        Format::Xml => oid::XML,
+        Format::Text | Format::Yaml => oid::TEXT,
+    };
+    let columns = vec![Column { ty, ..Column::text("QUERY PLAN".to_string()) }];
+    let rows = if format == Format::Text {
+        text.split('\n').map(|line| vec![Some(line.as_bytes().to_vec())]).collect()
+    } else {
+        vec![vec![Some(text.into_bytes())]]
+    };
+    Done::Rows { columns, rows, tag: CommandTag::Explain }
 }

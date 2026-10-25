@@ -1,0 +1,127 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE hat_data (hat_name char(10), hat_color char(10));
+CREATE TABLE
+> CREATE UNIQUE INDEX hat_data_unique_idx ON hat_data (hat_name COLLATE "C" bpchar_pattern_ops);
+CREATE INDEX
+> CREATE TABLE hats (hat_name char(10) primary key, hat_color char(10));
+CREATE TABLE
+> CREATE RULE hat_upsert AS ON INSERT TO hats DO INSTEAD INSERT INTO hat_data VALUES (NEW.hat_name, NEW.hat_color) ON CONFLICT (hat_name COLLATE "C" bpchar_pattern_ops) DO UPDATE SET hat_name = hat_data.hat_name, hat_color = excluded.hat_color WHERE excluded.hat_color <> 'forbidden' AND hat_data.* != excluded.* RETURNING *;
+CREATE RULE
+> explain (costs off) INSERT INTO hats VALUES ('h8', 'forbidden') RETURNING *;
+fields QUERY PLAN:25:-1:-1
+row Insert on hat_data
+row   Conflict Resolution: UPDATE
+row   Conflict Arbiter Indexes: hat_data_unique_idx
+row   Conflict Filter: ((excluded.hat_color <> 'forbidden'::bpchar) AND (hat_data.* <> excluded.*))
+row   ->  Result
+EXPLAIN
+> EXPLAIN (costs off) WITH data(hat_name, hat_color) AS MATERIALIZED (VALUES ('h8', 'green'), ('h9', 'blue'), ('h7', 'forbidden')) INSERT INTO hats SELECT * FROM data RETURNING *;
+fields QUERY PLAN:25:-1:-1
+row Insert on hat_data
+row   Conflict Resolution: UPDATE
+row   Conflict Arbiter Indexes: hat_data_unique_idx
+row   Conflict Filter: ((excluded.hat_color <> 'forbidden'::bpchar) AND (hat_data.* <> excluded.*))
+row   CTE data
+row     ->  Values Scan on "*VALUES*"
+row   ->  CTE Scan on data
+EXPLAIN
+> CREATE TABLE xr_t (a int, b int);
+CREATE TABLE
+> CREATE TABLE xr_log (a int);
+CREATE TABLE
+> CREATE TABLE xr_n (a int);
+CREATE TABLE
+> CREATE RULE xr_also AS ON INSERT TO xr_t DO ALSO INSERT INTO xr_log VALUES (NEW.a);
+CREATE RULE
+> CREATE RULE xr_upd AS ON UPDATE TO xr_t DO INSTEAD (INSERT INTO xr_log VALUES (OLD.a); UPDATE xr_log SET a = NEW.a WHERE a = OLD.a);
+CREATE RULE
+> CREATE RULE xr_del AS ON DELETE TO xr_n DO INSTEAD NOTHING;
+CREATE RULE
+> EXPLAIN (COSTS OFF) INSERT INTO xr_t VALUES (1, 2);
+fields QUERY PLAN:25:-1:-1
+row Insert on xr_t
+row   ->  Result
+row 
+row Insert on xr_log
+row   ->  Result
+EXPLAIN
+> EXPLAIN (COSTS OFF) UPDATE xr_t SET a = 3 WHERE b = 2;
+fields QUERY PLAN:25:-1:-1
+row Insert on xr_log
+row   ->  Seq Scan on xr_t
+row         Filter: (b = 2)
+row 
+row Update on xr_log
+row   ->  Hash Join
+row         Hash Cond: (xr_log.a = xr_t.a)
+row         ->  Seq Scan on xr_log
+row         ->  Hash
+row               ->  Seq Scan on xr_t
+row                     Filter: (b = 2)
+EXPLAIN
+> EXPLAIN (COSTS OFF) DELETE FROM xr_n;
+fields QUERY PLAN:25:-1:-1
+row Query rewrites to nothing
+EXPLAIN
+> EXPLAIN (COSTS OFF) INSERT INTO xr_t SELECT * FROM xr_t;
+fields QUERY PLAN:25:-1:-1
+row Insert on xr_t
+row   ->  Seq Scan on xr_t xr_t_1
+row 
+row Insert on xr_log
+row   ->  Seq Scan on xr_t
+EXPLAIN
+> EXPLAIN (COSTS OFF, FORMAT JSON) DELETE FROM xr_n;
+fields QUERY PLAN:114:-1:-1
+row [
+]
+EXPLAIN
+> EXPLAIN (COSTS OFF, FORMAT JSON) INSERT INTO xr_t VALUES (1, 2);
+fields QUERY PLAN:114:-1:-1
+row [
+  {
+    "Plan": {
+      "Node Type": "ModifyTable",
+      "Operation": "Insert",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Relation Name": "xr_t",
+      "Alias": "xr_t",
+      "Disabled": false,
+      "Plans": [
+        {
+          "Node Type": "Result",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Disabled": false
+        }
+      ]
+    }
+  },
+  {
+    "Plan": {
+      "Node Type": "ModifyTable",
+      "Operation": "Insert",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Relation Name": "xr_log",
+      "Alias": "xr_log",
+      "Disabled": false,
+      "Plans": [
+        {
+          "Node Type": "Result",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Disabled": false
+        }
+      ]
+    }
+  }
+]
+EXPLAIN
+> DROP TABLE hats, hat_data, xr_t, xr_log, xr_n;
+DROP TABLE
