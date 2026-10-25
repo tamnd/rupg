@@ -681,8 +681,12 @@ impl Analyzer<'_> {
                     && self.user_triggers(oid, INSTEAD_ROW | trigger_event(kind)) => {}
             // The rows of a statement for the rules of a view need no write of the view.
             RelKind::View if self.rule.rows => {}
-            RelKind::View if kind == WriteKind::Merge => {
-                return Err(not_yet(&format!("{what} a view")));
+            RelKind::View
+                if kind == WriteKind::Merge
+                    && !self.merge_does_nothing()
+                    && self.view_has_instead_trigger(oid, kind) =>
+            {
+                return Err(not_yet("MERGE into a view with INSTEAD OF triggers"));
             }
             // `rewriteTargetView` writes the base relation of the view.
             RelKind::View => {}
@@ -734,13 +738,20 @@ impl Analyzer<'_> {
             WriteKind::Merge => 0,
         };
         self.target_perm = Some(self.add_perm(oid, required));
+        // A `MERGE` with only `DO NOTHING` reads the view as a view with triggers `INSTEAD OF` does, and it writes no row, so the base relation of an updatable view does the same.
+        let nothing = kind == WriteKind::Merge && self.merge_does_nothing();
         let auto = rel.kind == RelKind::View
             && !self.rule.rows
-            && !self.user_triggers(oid, INSTEAD_ROW | trigger_event(kind));
+            && (nothing || !self.view_has_instead_trigger(oid, kind));
         if !auto {
             return Ok((oid, name, columns));
         }
-        let view = self.auto_view(oid, &name, kind)?;
+        let view = match self.auto_view(oid, &name, kind) {
+            Err(_) if nothing => {
+                return Err(not_yet("MERGE with DO NOTHING into a view that is not updatable"));
+            }
+            view => view?,
+        };
         let base = view.base_oid();
         let rel = self.env.catalog().and_then(|c| c.relation(base));
         let rel = rel.ok_or_else(|| Error::internal("an updatable view with no base relation"))?;

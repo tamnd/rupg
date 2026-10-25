@@ -165,6 +165,46 @@ impl Analyzer<'_> {
         } else {
             None
         };
+        // `ReplaceVarsFromTargetList`: the whole row of an automatically updatable view is a row of the columns of the view, which is null when the action has no such row.
+        let view_rows = |expr: &mut Expr, depth: usize| {
+            let ExprKind::Row(fields, CastForm::Implicit) = &expr.kind else { return false };
+            if expr.ty == oid::RECORD {
+                return false;
+            }
+            let first = fields.iter().find_map(|f| {
+                f.find(depth, &mut |e: &Expr, d| match e.kind {
+                    ExprKind::Var(var) if var.levels_up == d => Some(var.relation),
+                    _ => None,
+                })
+            });
+            let Some(relation) = first else { return false };
+            let is_old = Some(relation) == old;
+            if !is_old && Some(relation) != new {
+                return false;
+            }
+            let null = Expr::new(ExprKind::Const(Value::Null), expr.ty);
+            match (&no_row, kind) {
+                (Some((insert, delete)), _) => {
+                    let mut when = if is_old { insert.clone() } else { delete.clone() };
+                    rewrite(&mut when, 0, &mut |e: &mut Expr, _| {
+                        if let ExprKind::Var(v) = &mut e.kind {
+                            v.levels_up = depth;
+                        }
+                    });
+                    let row = std::mem::replace(expr, null.clone());
+                    let case =
+                        Case { arg: None, whens: vec![(when, null)], default: Box::new(row) };
+                    expr.kind = ExprKind::Case(case);
+                }
+                (None, WriteKind::Insert) if is_old => *expr = null,
+                (None, WriteKind::Delete) if !is_old => *expr = null,
+                _ => {}
+            }
+            true
+        };
+        for expr in targets.iter_mut().map(|t| &mut t.expr).chain(&mut shown) {
+            rewrite_until(expr, 0, &mut |e: &mut Expr, depth| view_rows(e, depth));
+        }
         let source = |relation: usize| {
             if Some(relation) == old {
                 match kind {
@@ -278,6 +318,19 @@ impl Analyzer<'_> {
             ..Query::default()
         };
         Ok((query, carried))
+    }
+}
+
+/// As [`rewrite`], but `f` gives `true` for an expression whose expressions it does not see.
+fn rewrite_until(expr: &mut Expr, depth: usize, f: &mut dyn FnMut(&mut Expr, usize) -> bool) {
+    if f(expr, depth) {
+        return;
+    }
+    for child in expr.children_mut() {
+        rewrite_until(child, depth, f);
+    }
+    if let ExprKind::SubLink(sub) = &mut expr.kind {
+        sub.query.each_expr_mut(depth + 1, &mut |e, depth| rewrite_until(e, depth, &mut *f));
     }
 }
 

@@ -408,7 +408,7 @@ impl Analyzer<'_> {
     }
 
     /// `transformTargetList` for the items of `SET`, with `DEFAULT` kept at the top of an item. An item of `SET (a, b) = ROW(...)` takes its field of the row.
-    fn set_items<'s>(
+    pub(crate) fn set_items<'s>(
         &mut self,
         list: &'s rupg_sql::nodes::List,
     ) -> Result<Vec<(&'s ResTarget, Item)>> {

@@ -1,0 +1,268 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE mv_base (a int PRIMARY KEY, b text DEFAULT 'Unspecified', c int);
+CREATE TABLE
+> INSERT INTO mv_base VALUES (1, 'Row 1', 10), (2, 'Row 2', 20), (3, 'Row 3', 30), (-1, 'Neg', 0);
+INSERT 0 4
+> CREATE VIEW mv_v1 AS SELECT b AS bb, a AS aa, c * 2 AS cc FROM mv_base WHERE a > 0;
+CREATE VIEW
+> MERGE INTO mv_v1 t USING (VALUES (1, 'New 1'), (4, 'New 4')) AS s(a, b) ON t.aa = s.a WHEN MATCHED THEN UPDATE SET bb = s.b WHEN NOT MATCHED THEN INSERT (aa, bb) VALUES (s.a, s.b);
+MERGE 2
+> SELECT * FROM mv_base ORDER BY a;
+fields a@mv_base.1:23:4:-1,b@mv_base.2:25:-1:-1,c@mv_base.3:23:4:-1
+row -1,Neg,0
+row 1,New 1,10
+row 2,Row 2,20
+row 3,Row 3,30
+row 4,New 4,NULL
+SELECT 5
+> MERGE INTO mv_v1 t USING (VALUES (-1, 'Hidden'), (2, 'Two')) AS s(a, b) ON t.aa = s.a WHEN MATCHED THEN UPDATE SET bb = s.b WHEN NOT MATCHED THEN DO NOTHING;
+MERGE 1
+> SELECT * FROM mv_base ORDER BY a;
+fields a@mv_base.1:23:4:-1,b@mv_base.2:25:-1:-1,c@mv_base.3:23:4:-1
+row -1,Neg,0
+row 1,New 1,10
+row 2,Two,20
+row 3,Row 3,30
+row 4,New 4,NULL
+SELECT 5
+> MERGE INTO mv_v1 t USING (VALUES (-1, 'Hidden')) AS s(a, b) ON t.aa = s.a WHEN NOT MATCHED THEN INSERT VALUES (s.b, s.a);
+ERROR 23505 duplicate key value violates unique constraint "mv_base_pkey"
+DETAIL Key (a)=(-1) already exists.
+> MERGE INTO mv_v1 t USING (VALUES (3)) AS s(a) ON t.aa = s.a WHEN MATCHED AND t.cc > 50 THEN DELETE RETURNING merge_action(), s.*, t.*, old::text, new::text, new IS NULL AS no_new;
+fields merge_action:25:-1:-1,a:23:4:-1,bb@mv_v1.1:25:-1:-1,aa@mv_v1.2:23:4:-1,cc@mv_v1.3:23:4:-1,old:25:-1:-1,new:25:-1:-1,no_new:16:1:-1
+row DELETE,3,Row 3,3,60,("Row 3",3,60),NULL,t
+MERGE 1
+> SELECT * FROM mv_base ORDER BY a;
+fields a@mv_base.1:23:4:-1,b@mv_base.2:25:-1:-1,c@mv_base.3:23:4:-1
+row -1,Neg,0
+row 1,New 1,10
+row 2,Two,20
+row 4,New 4,NULL
+SELECT 4
+> MERGE INTO mv_v1 t USING (VALUES (1), (2), (5)) AS s(a) ON t.aa = s.a WHEN MATCHED AND t.aa = 1 THEN DELETE WHEN MATCHED THEN UPDATE SET bb = t.bb || '!' WHEN NOT MATCHED THEN INSERT (aa) VALUES (s.a) RETURNING merge_action(), s.a, old.*, new.*, old::text, new::text, old IS NULL AS no_old;
+fields merge_action:25:-1:-1,a:23:4:-1,bb@mv_v1.1:25:-1:-1,aa@mv_v1.2:23:4:-1,cc@mv_v1.3:23:4:-1,bb@mv_v1.1:25:-1:-1,aa@mv_v1.2:23:4:-1,cc@mv_v1.3:23:4:-1,old:25:-1:-1,new:25:-1:-1,no_old:16:1:-1
+row DELETE,1,New 1,1,20,NULL,NULL,NULL,("New 1",1,20),NULL,f
+row UPDATE,2,Two,2,40,Two!,2,40,(Two,2,40),(Two!,2,40),f
+row INSERT,5,NULL,NULL,NULL,Unspecified,5,NULL,NULL,(Unspecified,5,),t
+MERGE 3
+> SELECT * FROM mv_base ORDER BY a;
+fields a@mv_base.1:23:4:-1,b@mv_base.2:25:-1:-1,c@mv_base.3:23:4:-1
+row -1,Neg,0
+row 2,Two!,20
+row 4,New 4,NULL
+row 5,Unspecified,NULL
+SELECT 4
+> MERGE INTO mv_v1 t USING (VALUES (2)) AS s(a) ON t.aa = s.a WHEN NOT MATCHED BY SOURCE THEN UPDATE SET bb = 'Not matched by source' RETURNING merge_action(), t.*;
+fields merge_action:25:-1:-1,bb@mv_v1.1:25:-1:-1,aa@mv_v1.2:23:4:-1,cc@mv_v1.3:23:4:-1
+row UPDATE,Not matched by source,4,NULL
+row UPDATE,Not matched by source,5,NULL
+MERGE 2
+> SELECT * FROM mv_base ORDER BY a;
+fields a@mv_base.1:23:4:-1,b@mv_base.2:25:-1:-1,c@mv_base.3:23:4:-1
+row -1,Neg,0
+row 2,Two!,20
+row 4,Not matched by source,NULL
+row 5,Not matched by source,NULL
+SELECT 4
+> WITH m AS (MERGE INTO mv_v1 t USING (VALUES (2), (7)) AS s(a) ON t.aa = s.a WHEN NOT MATCHED BY SOURCE THEN DELETE WHEN NOT MATCHED BY TARGET THEN INSERT (aa, bb) VALUES (s.a, 'Seven') RETURNING merge_action() AS action, s.a, t.aa, t.bb) SELECT * FROM m ORDER BY aa;
+fields action:25:-1:-1,a:23:4:-1,aa@mv_v1.2:23:4:-1,bb@mv_v1.1:25:-1:-1
+row DELETE,NULL,4,Not matched by source
+row DELETE,NULL,5,Not matched by source
+row INSERT,7,7,Seven
+SELECT 3
+> SELECT * FROM mv_base ORDER BY a;
+fields a@mv_base.1:23:4:-1,b@mv_base.2:25:-1:-1,c@mv_base.3:23:4:-1
+row -1,Neg,0
+row 2,Two!,20
+row 7,Seven,NULL
+SELECT 3
+> MERGE INTO mv_v1 t USING (VALUES (2)) AS s(a) ON t.aa = s.a WHEN MATCHED THEN UPDATE SET cc = 1;
+ERROR 0A000 cannot merge into column "cc" of view "mv_v1"
+DETAIL View columns that are not columns of their base relation are not updatable.
+> MERGE INTO mv_v1 t USING (VALUES (9)) AS s(a) ON t.aa = s.a WHEN NOT MATCHED THEN INSERT (aa, cc) VALUES (s.a, 1);
+ERROR 0A000 cannot merge into column "cc" of view "mv_v1"
+DETAIL View columns that are not columns of their base relation are not updatable.
+> MERGE INTO mv_v1 t USING (VALUES (9)) AS s(a) ON t.aa = s.a WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT VALUES ('x', s.a, 1);
+ERROR 0A000 cannot merge into column "cc" of view "mv_v1"
+DETAIL View columns that are not columns of their base relation are not updatable.
+> MERGE INTO mv_v1 t USING (VALUES (9)) AS s(a) ON t.aa = s.a WHEN MATCHED THEN UPDATE SET nosuch = 1;
+ERROR 42703 column "nosuch" of relation "mv_v1" does not exist at 90
+> CREATE VIEW mv_ro AS SELECT DISTINCT a, b FROM mv_base;
+CREATE VIEW
+> MERGE INTO mv_ro t USING (VALUES (1)) AS s(a) ON t.a = s.a WHEN MATCHED THEN DELETE;
+ERROR 55000 cannot delete from view "mv_ro"
+DETAIL Views containing DISTINCT are not automatically updatable.
+HINT To enable deleting from the view using MERGE, provide an INSTEAD OF DELETE trigger.
+> MERGE INTO mv_ro t USING (VALUES (1)) AS s(a) ON t.a = s.a WHEN MATCHED THEN UPDATE SET b = 'x';
+ERROR 55000 cannot update view "mv_ro"
+DETAIL Views containing DISTINCT are not automatically updatable.
+HINT To enable updating the view using MERGE, provide an INSTEAD OF UPDATE trigger.
+> MERGE INTO mv_ro t USING (VALUES (1)) AS s(a) ON t.a = s.a WHEN NOT MATCHED THEN INSERT VALUES (s.a, 'x');
+ERROR 55000 cannot insert into view "mv_ro"
+DETAIL Views containing DISTINCT are not automatically updatable.
+HINT To enable inserting into the view using MERGE, provide an INSTEAD OF INSERT trigger.
+> MERGE INTO mv_ro t USING (VALUES (1)) AS s(a) ON t.a = s.a WHEN MATCHED THEN DO NOTHING WHEN NOT MATCHED THEN INSERT VALUES (s.a, 'x');
+ERROR 55000 cannot insert into view "mv_ro"
+DETAIL Views containing DISTINCT are not automatically updatable.
+HINT To enable inserting into the view using MERGE, provide an INSTEAD OF INSERT trigger.
+> CREATE VIEW mv_const AS SELECT 1 AS one, 'x'::text AS two FROM mv_base;
+CREATE VIEW
+> MERGE INTO mv_const t USING (VALUES (1)) AS s(a) ON t.one = s.a WHEN MATCHED THEN DELETE;
+MERGE 3
+> MERGE INTO mv_const t USING (VALUES (1)) AS s(a) ON t.one = s.a WHEN MATCHED THEN UPDATE SET two = 'y';
+ERROR 55000 cannot update view "mv_const"
+DETAIL Views that have no updatable columns are not automatically updatable.
+HINT To enable updating the view using MERGE, provide an INSTEAD OF UPDATE trigger.
+> CREATE VIEW mv_chk AS SELECT a, b FROM mv_base WHERE a < 100 WITH CHECK OPTION;
+CREATE VIEW
+> MERGE INTO mv_chk t USING (VALUES (50, 'Fifty')) AS s(a, b) ON t.a = s.a WHEN NOT MATCHED THEN INSERT VALUES (s.a, s.b);
+MERGE 1
+> MERGE INTO mv_chk t USING (VALUES (150, 'Big')) AS s(a, b) ON t.a = s.a WHEN NOT MATCHED THEN INSERT VALUES (s.a, s.b);
+ERROR 44000 new row violates check option for view "mv_chk"
+DETAIL Failing row contains (150, Big, null).
+> MERGE INTO mv_chk t USING (VALUES (50)) AS s(a) ON t.a = s.a WHEN MATCHED THEN UPDATE SET a = 200;
+ERROR 44000 new row violates check option for view "mv_chk"
+DETAIL Failing row contains (200, Fifty, null).
+> MERGE INTO mv_chk t USING (VALUES (50)) AS s(a) ON t.a = s.a WHEN MATCHED THEN UPDATE SET a = 60;
+MERGE 1
+> SELECT * FROM mv_base ORDER BY a;
+fields a@mv_base.1:23:4:-1,b@mv_base.2:25:-1:-1,c@mv_base.3:23:4:-1
+row 60,Fifty,NULL
+SELECT 1
+> CREATE VIEW mv_v2 AS SELECT aa AS x, bb AS y FROM mv_v1 WHERE aa < 50;
+CREATE VIEW
+> MERGE INTO mv_v2 t USING (VALUES (2, 'Via v2'), (8, 'Eight')) AS s(a, b) ON t.x = s.a WHEN MATCHED THEN UPDATE SET y = s.b WHEN NOT MATCHED THEN INSERT VALUES (s.a, s.b) RETURNING merge_action(), t.*;
+fields merge_action:25:-1:-1,x@mv_v2.1:23:4:-1,y@mv_v2.2:25:-1:-1
+row INSERT,2,Via v2
+row INSERT,8,Eight
+MERGE 2
+> MERGE INTO mv_v2 t USING (VALUES (60)) AS s(a) ON t.x = s.a WHEN NOT MATCHED THEN INSERT VALUES (s.a, 'Sixty');
+ERROR 23505 duplicate key value violates unique constraint "mv_base_pkey"
+DETAIL Key (a)=(60) already exists.
+> SELECT * FROM mv_base ORDER BY a;
+fields a@mv_base.1:23:4:-1,b@mv_base.2:25:-1:-1,c@mv_base.3:23:4:-1
+row 2,Via v2,NULL
+row 8,Eight,NULL
+row 60,Fifty,NULL
+SELECT 3
+> CREATE VIEW mv_cv AS SELECT a, b FROM mv_base WHERE a < 10 WITH CASCADED CHECK OPTION;
+CREATE VIEW
+> CREATE VIEW mv_cv2 AS SELECT a, b FROM mv_cv WHERE a > 0;
+CREATE VIEW
+> MERGE INTO mv_cv2 t USING (VALUES (30, 'x')) AS s(a, b) ON t.a = s.a WHEN NOT MATCHED THEN INSERT VALUES (s.a, s.b);
+ERROR 44000 new row violates check option for view "mv_cv"
+DETAIL Failing row contains (30, x, null).
+> MERGE INTO mv_cv2 t USING (VALUES (5, 'Five')) AS s(a, b) ON t.a = s.a WHEN NOT MATCHED THEN INSERT VALUES (s.a, s.b);
+MERGE 1
+> CREATE VIEW mv_def AS SELECT a, b FROM mv_base;
+CREATE VIEW
+> ALTER VIEW mv_def ALTER COLUMN b SET DEFAULT 'View default';
+ALTER VIEW
+> MERGE INTO mv_def t USING (VALUES (11)) AS s(a) ON t.a = s.a WHEN NOT MATCHED THEN INSERT (a) VALUES (s.a);
+MERGE 1
+> MERGE INTO mv_def t USING (VALUES (12)) AS s(a) ON t.a = s.a WHEN NOT MATCHED THEN INSERT VALUES (s.a, DEFAULT);
+MERGE 1
+> MERGE INTO mv_def t USING (VALUES (12)) AS s(a) ON t.a = s.a WHEN MATCHED THEN UPDATE SET b = DEFAULT;
+MERGE 1
+> SELECT * FROM mv_base WHERE a > 10 ORDER BY a;
+fields a@mv_base.1:23:4:-1,b@mv_base.2:25:-1:-1,c@mv_base.3:23:4:-1
+row 11,View default,NULL
+row 12,View default,NULL
+row 60,Fifty,NULL
+SELECT 3
+> CREATE FUNCTION mv_trig() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE NOTICE 'trigger % on %', TG_OP, TG_TABLE_NAME; RETURN NULL; END $$;
+CREATE FUNCTION
+> CREATE TRIGGER mv_t_ins INSTEAD OF INSERT ON mv_def FOR EACH ROW EXECUTE FUNCTION mv_trig();
+CREATE TRIGGER
+> MERGE INTO mv_def t USING (VALUES (13)) AS s(a) ON t.a = s.a WHEN NOT MATCHED THEN INSERT VALUES (s.a, 'x') WHEN MATCHED THEN DELETE;
+ERROR 0A000 cannot merge into view "mv_def"
+DETAIL MERGE is not supported for views with INSTEAD OF triggers for some actions but not all.
+HINT To enable merging into the view, either provide a full set of INSTEAD OF triggers or drop the existing INSTEAD OF triggers.
+> MERGE INTO mv_def t USING (VALUES (13)) AS s(a) ON t.a = s.a WHEN MATCHED THEN DELETE;
+MERGE 0
+> MERGE INTO mv_def t USING (VALUES (13)) AS s(a) ON t.a = s.a WHEN MATCHED THEN DO NOTHING WHEN NOT MATCHED THEN DO NOTHING;
+MERGE 0
+> CREATE TABLE mv_trg_log (op text, a int);
+CREATE TABLE
+> CREATE FUNCTION mv_base_trig() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO mv_trg_log VALUES (TG_OP, COALESCE(NEW.a, OLD.a)); RETURN COALESCE(NEW, OLD); END $$;
+CREATE FUNCTION
+> CREATE TRIGGER mv_base_t BEFORE INSERT OR UPDATE OR DELETE ON mv_base FOR EACH ROW EXECUTE FUNCTION mv_base_trig();
+CREATE TRIGGER
+> MERGE INTO mv_v1 t USING (VALUES (2), (20)) AS s(a) ON t.aa = s.a WHEN MATCHED THEN UPDATE SET bb = 'Trig' WHEN NOT MATCHED THEN INSERT (aa) VALUES (s.a);
+MERGE 2
+> SELECT * FROM mv_trg_log;
+fields op@mv_trg_log.1:25:-1:-1,a@mv_trg_log.2:23:4:-1
+row UPDATE,2
+row INSERT,20
+SELECT 2
+> CREATE TABLE mv_p (a int, b text) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE mv_p1 PARTITION OF mv_p FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> CREATE TABLE mv_p2 PARTITION OF mv_p FOR VALUES FROM (10) TO (20);
+CREATE TABLE
+> INSERT INTO mv_p VALUES (1, 'p1'), (11, 'p2');
+INSERT 0 2
+> CREATE VIEW mv_pv AS SELECT b, a FROM mv_p WHERE b <> 'skip';
+CREATE VIEW
+> MERGE INTO mv_pv t USING (VALUES (1, 'one'), (11, 'eleven'), (15, 'fifteen')) AS s(a, b) ON t.a = s.a WHEN MATCHED THEN UPDATE SET a = t.a + 1, b = s.b WHEN NOT MATCHED THEN INSERT VALUES (s.b, s.a);
+MERGE 3
+> SELECT tableoid::regclass, * FROM mv_p ORDER BY a;
+fields tableoid:2205:4:-1,a@mv_p.1:23:4:-1,b@mv_p.2:25:-1:-1
+row mv_p1,2,one
+row mv_p2,12,eleven
+row mv_p2,15,fifteen
+SELECT 3
+> CREATE VIEW mv_sb WITH (security_barrier = true) AS SELECT a, b FROM mv_base WHERE a % 2 = 0;
+CREATE VIEW
+> MERGE INTO mv_sb t USING (VALUES (2, 'Even'), (3, 'Odd')) AS s(a, b) ON t.a = s.a WHEN MATCHED THEN UPDATE SET b = s.b WHEN NOT MATCHED THEN DO NOTHING RETURNING merge_action(), t.*;
+fields merge_action:25:-1:-1,a@mv_sb.1:23:4:-1,b@mv_sb.2:25:-1:-1
+row UPDATE,2,Even
+MERGE 1
+> WITH m AS (MERGE INTO mv_v1 t USING (VALUES (2)) AS s(a) ON t.aa = s.a WHEN MATCHED THEN UPDATE SET bb = 'CTE' RETURNING t.aa, t.bb) SELECT * FROM m;
+fields aa@mv_v1.2:23:4:-1,bb@mv_v1.1:25:-1:-1
+row 2,CTE
+SELECT 1
+> BEGIN;
+BEGIN
+> MERGE INTO mv_v1 t USING mv_base s ON t.aa = s.a WHEN MATCHED THEN UPDATE SET bb = 'All';
+MERGE 7
+> SELECT count(*) FROM mv_base WHERE b = 'All';
+fields count:20:8:-1
+row 7
+SELECT 1
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> INSERT INTO mv_v1 (aa) VALUES (100) RETURNING old::text, new::text;
+fields old:25:-1:-1,new:25:-1:-1
+row NULL,(Unspecified,100,)
+INSERT 0 1
+> DELETE FROM mv_v1 WHERE aa = 100 RETURNING old::text, new::text, new IS NULL AS no_new;
+fields old:25:-1:-1,new:25:-1:-1,no_new:16:1:-1
+row (Unspecified,100,),NULL,t
+DELETE 1
+> ROLLBACK;
+ROLLBACK
+> DROP TABLE mv_base CASCADE;
+NOTICE 00000 drop cascades to 9 other objects
+DETAIL drop cascades to view mv_v1
+drop cascades to view mv_v2
+drop cascades to view mv_ro
+drop cascades to view mv_const
+drop cascades to view mv_chk
+drop cascades to view mv_cv
+drop cascades to view mv_cv2
+drop cascades to view mv_def
+drop cascades to view mv_sb
+DROP TABLE
+> DROP TABLE mv_p CASCADE;
+NOTICE 00000 drop cascades to view mv_pv
+DROP TABLE
+> DROP TABLE mv_trg_log;
+DROP TABLE
+> DROP FUNCTION mv_trig, mv_base_trig;
+DROP FUNCTION

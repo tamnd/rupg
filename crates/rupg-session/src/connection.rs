@@ -875,7 +875,8 @@ impl Connection {
             }
         };
         // `ExecWithCheckOptions` checks the rows after the write, before the triggers `AFTER` fire. Its subqueries read with the snapshot of the statement.
-        if info.view_check.is_some() {
+        // A `MERGE` checks the rows of its inserts and its updates.
+        if info.view_check.is_some() && info.kind != WriteKind::Merge {
             plan.view_check(&written, params, &self.reader().with_view(view.clone()))?;
         }
         // The statements of the triggers `BEFORE` can end commands after the command of the write.
@@ -4333,6 +4334,12 @@ mod tests {
     #[test]
     fn multiset() {
         big_stack(|| script(include_str!("connection/multiset.test")));
+    }
+
+    /// `MERGE` into an automatically updatable view: the columns of the view, its conditions on the rows that match and on `NOT MATCHED BY SOURCE`, `RETURNING`, `WITH CHECK OPTION`, a view on a view, the defaults of the view, the errors of a view that is not updatable, of a column that is not updatable and of a view with triggers `INSTEAD OF` for some actions, the triggers of the base table, a partitioned table, `security_barrier` and `WITH`. `connection/mergeview.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn mergeview() {
+        big_stack(|| script(include_str!("connection/mergeview.test")));
     }
 
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.

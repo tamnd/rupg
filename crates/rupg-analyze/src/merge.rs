@@ -6,7 +6,7 @@
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{
-    CmdType, MergeMatchKind, MergeStmt, MergeSupportFunc, MergeWhenClause, Node, RangeVar,
+    CmdType, List, MergeMatchKind, MergeStmt, MergeSupportFunc, MergeWhenClause, Node, RangeVar,
 };
 use rupg_types::{Value, oid};
 
@@ -75,6 +75,16 @@ struct Parts {
     row: Vec<Expr>,
 }
 
+/// The action of a `WHEN` clause.
+fn command(kind: CmdType) -> MergeCommand {
+    match kind {
+        CmdType::CMD_INSERT => MergeCommand::Insert,
+        CmdType::CMD_UPDATE => MergeCommand::Update,
+        CmdType::CMD_DELETE => MergeCommand::Delete,
+        _ => MergeCommand::Nothing,
+    }
+}
+
 /// The kind of the rows of a `WHEN` clause.
 fn match_kind(clause: &MergeWhenClause) -> MatchKind {
     match clause.matchKind {
@@ -123,6 +133,7 @@ impl Analyzer<'_> {
             }
         }
         let rv = s.relation.as_deref().ok_or_else(|| Error::internal("a MERGE with no table"))?;
+        self.merge_actions = clauses.iter().map(|c| command(c.commandType)).collect();
         let (table, name, columns) = self.target_table(rv, WriteKind::Merge)?;
         // `DO NOTHING` needs `SELECT`, so that the target table needs some privilege.
         let required = clauses.iter().fold(0, |bits, clause| {
@@ -152,8 +163,17 @@ impl Analyzer<'_> {
         let mut updated = Vec::new();
         for clause in &clauses {
             let kind = match_kind(clause);
-            if matches!(clause.commandType, CmdType::CMD_UPDATE) {
-                for column in set_columns(&clause.targetList, &columns) {
+            let update = matches!(clause.commandType, CmdType::CMD_UPDATE);
+            // The items of `SET` of an updatable view name the columns of its base relation.
+            let set =
+                if update { self.auto_view_set(rv, &clause.targetList, &columns) } else { None };
+            let (renamed, error) = match set {
+                Some((list, unknown, fixed)) => (Some(list), unknown.or(fixed)),
+                None => (None, None),
+            };
+            let list = renamed.as_ref().unwrap_or(&clause.targetList);
+            if update {
+                for column in set_columns(list, &columns) {
                     if !updated.contains(&column) {
                         updated.push(column);
                     }
@@ -163,7 +183,10 @@ impl Analyzer<'_> {
                 kind != MatchKind::NotMatchedByTarget,
                 kind != MatchKind::NotMatchedBySource,
             );
-            let part = self.merge_clause(clause, kind, rv, table, &name, &columns);
+            let part = match error {
+                Some(error) => self.set_items(list).and(Err(error)),
+                None => self.merge_clause(clause, list, kind, rv, (table, &name, &columns)),
+            };
             self.set_namespace(full);
             let mut part = part?;
             // A column of the source becomes a carried value, which is the relation 1 of the query of the clause.
@@ -181,6 +204,7 @@ impl Analyzer<'_> {
             }
             parts.push(part);
         }
+        self.auto_view_merge_triggers()?;
         // The leaf partition of each row of a partitioned table checks the row after the routing, and so does the table of each row of a table with children of `INHERITS`.
         let inherit = self.inherits_target(WriteKind::Merge);
         let partitioned = self.is_partitioned(table) || inherit;
@@ -253,7 +277,22 @@ impl Analyzer<'_> {
             (false, true) => JoinKind::Left,
             (false, false) => JoinKind::Inner,
         };
-        let from = join(kind, source, FromItem::Relation(0), Some(on));
+        // The conditions of an updatable view limit the rows of the target table before the join, as a join with one row does.
+        let target_item = match self.auto_view_quals() {
+            None => FromItem::Relation(0),
+            Some(quals) => {
+                let index = self.scope.relations.len();
+                let column =
+                    Column { name: "one".to_string(), ty: oid::BOOL, typmod: -1, not_null: false };
+                let value = Expr::new(ExprKind::Const(Value::Bool(true)), oid::BOOL);
+                let mut relation =
+                    Relation::new(0, vec![column], None, None, Some(vec![vec![value]]));
+                relation.name = "*VALUES*".to_string();
+                self.scope.relations.push(relation);
+                join(JoinKind::Inner, FromItem::Relation(0), FromItem::Relation(index), Some(quals))
+            }
+        };
+        let from = join(kind, source, target_item, Some(on));
         let mut query_targets = old_row(&columns);
         if partitioned {
             query_targets.push(table_oid_target());
@@ -323,11 +362,10 @@ impl Analyzer<'_> {
     fn merge_clause(
         &mut self,
         clause: &MergeWhenClause,
+        list: &List,
         kind: MatchKind,
         rv: &RangeVar,
-        table: u32,
-        name: &str,
-        columns: &[Column],
+        (table, name, columns): (u32, &str, &[Column]),
     ) -> Result<Parts> {
         let condition = match &clause.condition {
             None => None,
@@ -338,26 +376,42 @@ impl Analyzer<'_> {
         };
         let (command, row) = match clause.commandType {
             CmdType::CMD_INSERT => {
-                let given = self.insert_targets(&clause.targetList, name, columns)?;
-                let exprs = if clause.values.is_empty() {
-                    // `INSERT DEFAULT VALUES`.
-                    Vec::new()
-                } else {
-                    self.mark_inserted(&given);
-                    let items = self.value_items(&clause.values, Kind::ValuesSingle)?;
-                    let explicit = !clause.targetList.is_empty();
-                    self.insert_row(items, table, columns, &given, explicit, clause.r#override)?
-                };
-                (MergeCommand::Insert, self.full_row(table, columns, &given, exprs)?)
+                self.swap_auto_view_defaults();
+                let row = self.merge_insert(clause, table, name, columns);
+                self.swap_auto_view_defaults();
+                (MergeCommand::Insert, row?)
             }
-            CmdType::CMD_UPDATE => (
-                MergeCommand::Update,
-                self.update_row(rv, table, name, columns, &clause.targetList)?,
-            ),
+            CmdType::CMD_UPDATE => {
+                (MergeCommand::Update, self.update_row(rv, table, name, columns, list)?)
+            }
             CmdType::CMD_DELETE => (MergeCommand::Delete, Vec::new()),
             _ => (MergeCommand::Nothing, Vec::new()),
         };
         Ok(Parts { kind, command, condition, row })
+    }
+
+    /// The new row of an `INSERT` action of a `MERGE`: the expressions of `VALUES` for the columns that the action gives, and the defaults of the other columns.
+    fn merge_insert(
+        &mut self,
+        clause: &MergeWhenClause,
+        table: u32,
+        name: &str,
+        columns: &[Column],
+    ) -> Result<Vec<Expr>> {
+        let given = match self.auto_view_targets(&clause.targetList, columns.len())? {
+            Some(given) => given,
+            None => self.insert_targets(&clause.targetList, name, columns)?,
+        };
+        let exprs = if clause.values.is_empty() {
+            // `INSERT DEFAULT VALUES`.
+            Vec::new()
+        } else {
+            self.mark_inserted(&given);
+            let items = self.value_items(&clause.values, Kind::ValuesSingle)?;
+            let explicit = !clause.targetList.is_empty();
+            self.insert_row(items, table, columns, &given, explicit, clause.r#override)?
+        };
+        self.full_row(table, columns, &given, exprs)
     }
 
     /// `transformMergeSupportFunc`: `merge_action()`, which is only in the list of `RETURNING` of a `MERGE` or in a subquery of it. It reads the column of the relation of the action.

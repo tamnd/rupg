@@ -156,6 +156,7 @@ impl Connection {
             }
             done.push(action);
         }
+        self.merge_view_check(plan, info, params, &view, &done)?;
         if !fire.is_empty() {
             self.after_merge(info, fire, &done)?;
         }
@@ -412,6 +413,7 @@ impl Connection {
             oids.push(oid);
             done.push(action);
         }
+        self.merge_view_check(plan, info, params, &view, &done)?;
         if !fire.is_empty() {
             self.after_merge(info, fire, &captured)?;
         }
@@ -421,6 +423,26 @@ impl Connection {
             written = pairs.map(|(action, &oid)| returned(action, width, Some(oid))).collect();
         }
         Ok(Merged { count: done.len() as u64, written, batches, view })
+    }
+
+    /// `ExecWithCheckOptions` for `WCO_VIEW_CHECK` of a `MERGE` into an updatable view: the new row of each insert and of each update must pass the checks of the views, before the triggers `AFTER` fire.
+    ///
+    /// # Errors
+    ///
+    /// `44000` for a row that fails a check.
+    fn merge_view_check(
+        &self,
+        plan: &Plan,
+        info: &Write,
+        params: &[Value],
+        view: &View,
+        done: &[Action],
+    ) -> Result<(), Error> {
+        if info.view_check.is_none() {
+            return Ok(());
+        }
+        let rows: Vec<Vec<Value>> = done.iter().filter_map(|a| a.new.clone()).collect();
+        plan.view_check(&rows, params, &self.reader().with_view(view.clone()))
     }
 
     /// True when the relation `table` is a partitioned table.
