@@ -1598,6 +1598,19 @@ fn walk_from<'q>(item: &'q FromItem, joins: &mut Vec<JoinInfo<'q>>, order: &mut 
     Slot::Join(k)
 }
 
+/// The name with `_` and the number, with characters dropped from the end of the name so that the result is shorter than `NAMEDATALEN`, as `set_rtable_names` and `make_colname_unique` make it.
+fn suffixed(name: &str, number: u32) -> String {
+    let suffix = format!("_{number}");
+    let mut end = name.len();
+    while end + suffix.len() >= rupg_catalog::names::NAMEDATALEN && end > 0 {
+        end -= 1;
+        while !name.is_char_boundary(end) {
+            end -= 1;
+        }
+    }
+    format!("{}{suffix}", &name[..end])
+}
+
 /// The name, or the name with `_1`, `_2` and so on when another relation of the query or of a query outside it has the name, as `set_rtable_names` chooses it.
 pub(super) fn unique_name(base: String, used: &mut HashMap<String, u32>) -> String {
     let Some(mut counter) = used.get(&base).copied() else {
@@ -1606,7 +1619,7 @@ pub(super) fn unique_name(base: String, used: &mut HashMap<String, u32>) -> Stri
     };
     let name = loop {
         counter += 1;
-        let name = format!("{base}_{counter}");
+        let name = suffixed(&base, counter);
         if !used.contains_key(&name) {
             break name;
         }
@@ -1673,7 +1686,7 @@ impl ColumnNames {
         if !taken(name) {
             return name.to_string();
         }
-        (1..).map(|i| format!("{name}_{i}")).find(|n| !taken(n)).unwrap_or_default()
+        (1..).map(|i| suffixed(name, i)).find(|n| !taken(n)).unwrap_or_default()
     }
 
     /// `set_using_names`: the names of the columns of `USING` of a join and of the joins in it. A join pushes these names down to the columns of its sides, and a join with no alias also pushes down the names that a join above it gives.

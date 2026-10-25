@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Drop characters from the end of a long relation or column name before `_N` makes it unique, so the name stays shorter than `NAMEDATALEN` (#NNN).
 - Print a whole-row reference in `ROW()`, `VALUES` and a row comparison with the cast to its row type, as `get_rule_expr_toplevel` does (#728).
 - A view of a function in `FROM` that gives the row type of a table depends on each column of the table that the view reads, as `process_function_rte_ref` records it. So `ALTER TABLE` cannot drop such a column or change its type while the view reads it. `ALTER TABLE ... DROP COLUMN` writes again only the text of the views that read the table in `FROM` (#727).
 - `pg_get_viewdef` shows a column of `USING` by the unique name that the deparse gives it in `USING`, as `x_1 AS x` when two joins have a column `x`. The names of an alias go to the columns that are not dropped, and `ALTER TABLE ... DROP COLUMN` writes the text of the views of the table again. Before, a later `ALTER TABLE` of a view of a table with a dropped column could fail with "has 3 columns available but 4 columns specified" (#726).

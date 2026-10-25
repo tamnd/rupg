@@ -4554,6 +4554,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vwrow.test")));
     }
 
+    /// A long alias that is not unique gets `_1` after characters are dropped from its end, so the name stays shorter than `NAMEDATALEN`, as `set_rtable_names` makes it. `connection/vlong.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vlong() {
+        big_stack(|| script(include_str!("connection/vlong.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {
