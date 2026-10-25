@@ -114,6 +114,21 @@ impl Deparser<'_> {
         done
     }
 
+    /// `get_query_def` for an action of a rule. An `INSERT` reads `old` and `new` of `base` one level up.
+    fn rule_action(&mut self, action: &Query, base: &Query) -> Result<()> {
+        if action.write.is_none() {
+            return self.query_def(action, None, true, 0);
+        }
+        // The range table of the action has `old`, `new` and the target table, so the columns show the names of their tables.
+        let space = self.namespace(base);
+        let saved_prefix = std::mem::replace(&mut self.prefix, true);
+        self.namespaces.push(space);
+        let done = self.write_def(action, 0);
+        self.namespaces.pop();
+        self.prefix = saved_prefix;
+        done
+    }
+
     /// The text of [`Deparser::write_def`] for an `INSERT` whose target table has the name `refname`.
     fn insert_body(&mut self, def: &rupg_analyze::InsertDef, refname: &str) -> Result<()> {
         self.indent += INDENT_STD;
@@ -132,16 +147,26 @@ impl Deparser<'_> {
         }
         self.buf.push(' ');
         if !def.columns.is_empty() {
-            let names: Vec<String> = def
-                .columns
-                .iter()
-                .map(|&n| {
-                    let column = usize::try_from(n - 1).ok().and_then(|i| rel.columns.get(i));
-                    column.map_or_else(String::new, |c| quote_identifier(&c.name))
-                })
-                .collect();
+            // The first row shows the parts of the columns that the values go to.
+            let first = match &def.source {
+                InsertSource::Row(row) => Some(row.as_slice()),
+                InsertSource::Values(rows) => rows.first().map(Vec::as_slice),
+                InsertSource::Select(_, parts) => Some(parts.as_slice()),
+                InsertSource::Default => None,
+            };
             self.buf.push('(');
-            self.buf.push_str(&names.join(", "));
+            for (i, &n) in def.columns.iter().enumerate() {
+                if i > 0 {
+                    self.buf.push_str(", ");
+                }
+                let column = usize::try_from(n - 1).ok().and_then(|i| rel.columns.get(i));
+                if let Some(column) = column {
+                    self.buf.push_str(&quote_identifier(&column.name));
+                }
+                if let Some(Some(value)) = first.and_then(|row| row.get(i)) {
+                    self.indirection(value)?;
+                }
+            }
             self.buf.push_str(") ");
         }
         match def.overriding {
@@ -152,7 +177,7 @@ impl Deparser<'_> {
             _ => {}
         }
         match &def.source {
-            InsertSource::Select(sub) => self.query_def(sub, None, false, self.indent)?,
+            InsertSource::Select(sub, _) => self.query_def(sub, None, false, self.indent)?,
             // `get_values_def`.
             InsertSource::Values(rows) => {
                 self.buf.push_str("VALUES ");
@@ -175,14 +200,19 @@ impl Deparser<'_> {
         Ok(())
     }
 
-    /// The values of a row of `VALUES` of an `INSERT`, with `DEFAULT` for `None`, between `sep`.
+    /// The values of a row of `VALUES` of an `INSERT`, with `DEFAULT` for `None`, between `sep`. The value for a part of a column shows the new value of the part.
     fn value_list(&mut self, row: &[Option<Expr>], sep: &str) -> Result<()> {
         for (i, value) in row.iter().enumerate() {
             if i > 0 {
                 self.buf.push_str(sep);
             }
             match value {
-                Some(value) => self.toplevel(value, false)?,
+                Some(value) => {
+                    let at = self.buf.len();
+                    let part = self.indirection(value)?;
+                    self.buf.truncate(at);
+                    self.toplevel(part, false)?;
+                }
                 None => self.buf.push_str("DEFAULT"),
             }
         }
@@ -2006,9 +2036,6 @@ fn ruledef(rule: &rupg_catalog::Rule, pretty: bool, session: &dyn Session) -> Re
     let env = reg::SessionEnv(session);
     let tree = rupg_analyze::rule_tree(&env, rule.oid)?
         .ok_or_else(|| Error::internal(format!("cache lookup failed for rule {}", rule.oid)))?;
-    if tree.actions.iter().any(|a| a.write.is_some()) {
-        return Err(not_yet("a deparse of a rule action INSERT, UPDATE or DELETE"));
-    }
     let event = match rule.event {
         b'1' => "SELECT",
         b'2' => "UPDATE",
@@ -2024,7 +2051,7 @@ fn ruledef(rule: &rupg_catalog::Rule, pretty: bool, session: &dyn Session) -> Re
     d.buf = format!("CREATE RULE {} AS\n    ON {event} TO {name}", quote_identifier(&rule.name));
     if let Some(qual) = &tree.qual {
         d.buf.push_str("\n   WHERE ");
-        let context = tree.actions.first().unwrap_or(&tree.base);
+        let context = tree.actions.first().filter(|a| a.write.is_none()).unwrap_or(&tree.base);
         let space = d.namespace(context);
         d.prefix = context.relations.len() != 1;
         d.indent = INDENT_STD;
@@ -2041,13 +2068,13 @@ fn ruledef(rule: &rupg_catalog::Rule, pretty: bool, session: &dyn Session) -> Re
     match tree.actions.as_slice() {
         [] => d.buf.push_str("NOTHING;"),
         [action] => {
-            d.query_def(action, None, true, 0)?;
+            d.rule_action(action, &tree.base)?;
             d.buf.push(';');
         }
         actions => {
             d.buf.push('(');
             for action in actions {
-                d.query_def(action, None, true, 0)?;
+                d.rule_action(action, &tree.base)?;
                 d.buf.push_str(";\n");
             }
             d.buf.push_str(");");

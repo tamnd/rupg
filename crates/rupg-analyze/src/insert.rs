@@ -109,8 +109,8 @@ pub enum InsertSource {
     Row(Vec<Option<Expr>>),
     /// The rows of `VALUES` with more than one row.
     Values(Vec<Vec<Option<Expr>>>),
-    /// The query of `INSERT ... SELECT`.
-    Select(Box<Query>),
+    /// The query of `INSERT ... SELECT`, and for each column the assignment to the part of the column of the value of the query, or `None` for a whole column.
+    Select(Box<Query>, Vec<Option<Expr>>),
 }
 
 impl Write {
@@ -389,10 +389,8 @@ impl Analyzer<'_> {
             None => self.insert_targets(&s.cols, &name, &columns)?,
         };
         let explicit = !s.cols.is_empty();
-        // A part of a column and an `INSERT` into a view do not keep their form.
-        let keep = self.keep_source
-            && self.auto_view.is_none()
-            && given.iter().all(|(_, _, indirection)| indirection.is_empty());
+        // An `INSERT` into a view does not keep its form.
+        let keep = self.keep_source && self.auto_view.is_none();
         let mut kept = None;
         let select = match &s.selectStmt {
             None => None,
@@ -408,9 +406,25 @@ impl Analyzer<'_> {
             Some(select) if general_select(select) => {
                 let query =
                     self.insert_select(select, table, &columns, &given, explicit, s.r#override)?;
-                if keep && let Some(sub) = query.relations.first().and_then(|r| r.subquery.clone())
-                {
-                    kept = Some(InsertSource::Select(sub));
+                if keep && let Some(relation) = query.relations.first() {
+                    let mut assigned = Vec::with_capacity(given.len());
+                    for (i, (index, at, indirection)) in given.iter().enumerate() {
+                        let part = match relation.columns.get(i) {
+                            Some(c) if !indirection.is_empty() => {
+                                let attnum = i16::try_from(i + 1).unwrap_or(i16::MAX);
+                                let var = Var { relation: 0, attnum, levels_up: 0 };
+                                let mut value = Expr::new(ExprKind::Var(var), c.ty);
+                                value.typmod = c.typmod;
+                                let column = &columns[*index];
+                                Some(self.assign_part(column, indirection, *at, value, None)?)
+                            }
+                            _ => None,
+                        };
+                        assigned.push(part);
+                    }
+                    if let Some(sub) = relation.subquery.clone() {
+                        kept = Some(InsertSource::Select(sub, assigned));
+                    }
                 }
                 query
             }
@@ -510,7 +524,7 @@ impl Analyzer<'_> {
                 InsertSource::Default => 0,
                 InsertSource::Row(row) => row.len(),
                 InsertSource::Values(rows) => rows.first().map_or(0, Vec::len),
-                InsertSource::Select(sub) => sub.targets.iter().filter(|t| !t.junk).count(),
+                InsertSource::Select(sub, _) => sub.targets.iter().filter(|t| !t.junk).count(),
             };
             let mut target = Relation::new(table, columns.clone(), None, None, None);
             target.name = alias.clone().unwrap_or_else(|| name.clone());
@@ -1624,7 +1638,7 @@ impl Analyzer<'_> {
         })
     }
 
-    /// A row of `VALUES` as an [`InsertDef`] keeps it: the value of each item for its column, as `transformInsertRow` gives it, or `None` for `DEFAULT`. The row keeps the value of an identity column with `OVERRIDING USER VALUE`, which only `rewriteTargetListIU` drops.
+    /// A row of `VALUES` as an [`InsertDef`] keeps it: the value of each item for its column, as `transformInsertRow` gives it, or `None` for `DEFAULT`. The value for a part of a column is the assignment to the part of a null value. The row keeps the value of an identity column with `OVERRIDING USER VALUE`, which only `rewriteTargetListIU` drops.
     fn kept_row(
         &mut self,
         items: &[Item],
@@ -1634,9 +1648,14 @@ impl Analyzer<'_> {
         items
             .iter()
             .zip(given)
-            .map(|(item, (index, _, _))| match item {
+            .map(|(item, (index, at, indirection))| match item {
                 Item::Default(_) => Ok(None),
-                Item::Expr(expr) => self.assign(expr.clone(), &columns[*index]).map(Some),
+                Item::Expr(expr) if indirection.is_empty() => {
+                    self.assign(expr.clone(), &columns[*index]).map(Some)
+                }
+                Item::Expr(expr) => self
+                    .assign_part(&columns[*index], indirection, *at, expr.clone(), None)
+                    .map(Some),
             })
             .collect()
     }

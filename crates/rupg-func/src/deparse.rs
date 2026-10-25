@@ -18,7 +18,8 @@ use rupg_analyze::{
     Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, JsonBehavior,
     JsonBehaviorKind, JsonCtor, JsonCtorKind, JsonEncoding, JsonExpr, JsonExprOp, JsonFormat,
     JsonFormatKind, JsonItemType, JsonTable, JsonTablePlan, JsonTableScan, JsonWrapper, RowCompare,
-    SortGroup, SqlValue, SubLink, SubLinkKind, Var, WindowClause, WindowFunc, XmlExpr, XmlOp,
+    SortGroup, SqlValue, SubLink, SubLinkKind, Subscript, Var, WindowClause, WindowFunc, XmlExpr,
+    XmlOp,
 };
 use rupg_analyze::{
     MERGE_ACTION, RETURNING_NEW, RETURNING_OLD, default_opclass, node, sort_operators,
@@ -484,19 +485,7 @@ impl<'a> Deparser<'a> {
                 if parens {
                     self.buf.push(')');
                 }
-                for (i, upper) in sub.upper.iter().enumerate() {
-                    self.buf.push('[');
-                    if let Some(lower) = &sub.lower {
-                        if let Some(Some(lower)) = lower.get(i) {
-                            self.expr(lower, false)?;
-                        }
-                        self.buf.push(':');
-                    }
-                    if let Some(upper) = upper {
-                        self.expr(upper, false)?;
-                    }
-                    self.buf.push(']');
-                }
+                self.subscripts(sub)?;
                 // An assignment shows its new value after the subscripts.
                 if let Some(assign) = &sub.assign {
                     self.buf.push_str(" := ");
@@ -1449,6 +1438,53 @@ impl Deparser<'_> {
             }
         }
         row_field_name(arg.ty, field, self.session)
+    }
+
+    /// `printSubscripts`: the subscripts of each dimension, with the bounds of a slice.
+    fn subscripts(&mut self, sub: &Subscript) -> Result<()> {
+        for (i, upper) in sub.upper.iter().enumerate() {
+            self.buf.push('[');
+            if let Some(lower) = &sub.lower {
+                if let Some(Some(lower)) = lower.get(i) {
+                    self.expr(lower, false)?;
+                }
+                self.buf.push(':');
+            }
+            if let Some(upper) = upper {
+                self.expr(upper, false)?;
+            }
+            self.buf.push(']');
+        }
+        Ok(())
+    }
+
+    /// `processIndirection`: the fields and the subscripts of an assignment to a part of a column, after the name of the column, and the new value of the part, which the caller shows.
+    pub(crate) fn indirection<'e>(&mut self, expr: &'e Expr) -> Result<&'e Expr> {
+        let mut node = expr;
+        loop {
+            match &node.kind {
+                ExprKind::FieldStore(store) => {
+                    let Some((field, value)) = store.fields.first() else { break };
+                    let name = row_field_name(node.ty, *field, self.session)?;
+                    self.buf.push('.');
+                    self.buf.push_str(&quote_identifier(&name));
+                    node = value;
+                }
+                ExprKind::Subscript(sub) if sub.assign.is_some() => {
+                    self.subscripts(sub)?;
+                    let Some(value) = &sub.assign else { break };
+                    node = value;
+                }
+                // An implicit domain check above a part steps down to the part.
+                ExprKind::CoerceToDomain(arg, CastForm::Implicit)
+                    if matches!(arg.kind, ExprKind::FieldStore(_) | ExprKind::Subscript(_)) =>
+                {
+                    node = arg;
+                }
+                _ => break,
+            }
+        }
+        Ok(node)
     }
 }
 
