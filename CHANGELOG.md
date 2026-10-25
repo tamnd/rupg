@@ -11,7 +11,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - `CREATE FUNCTION` and `ALTER FUNCTION` take a `COST` with a fraction, such as `COST 0.000001`. `procost` keeps the value as a `float4` (#710).
 - The planner reads `procost` of each function. A call costs `procost` times `cpu_operator_cost`, as `add_function_cost` adds it, so `EXPLAIN` shows the costs of PostgreSQL for a function in PL/pgSQL, which costs 100, and for a function such as `to_tsvector`. The conditions of a scan come in the order of their costs, so a function with `COST 0.000001` runs first (#711).
 - The executor runs the conditions of `WHERE` in the order of their costs, as `order_qual_clauses` orders them. The conditions of a view with `security_barrier` of an `UPDATE` or a `DELETE` run first, but a cheap leakproof condition can run before them (#712).
-- The executor merges a simple view and a simple subquery of `FROM` into the query, as `pull_up_simple_subquery` does, so the conditions of the view and of the query run in the order of their costs. A leakproof condition moves into a view with `security_barrier` (#NNN).
+- The executor merges a simple view and a simple subquery of `FROM` into the query, as `pull_up_simple_subquery` does, so the conditions of the view and of the query run in the order of their costs. A leakproof condition moves into a view with `security_barrier` (#713).
 
 ## 0.1.82 (2026-10-25)
 
