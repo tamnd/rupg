@@ -18,20 +18,20 @@ use rupg_types::{Value, oid};
 
 use crate::{exists, exprs, minmax, pushdown, setcast};
 
-/// The query with each simple subquery in `FROM` merged into the query above it, also in the subqueries of the query, and with the conditions of `WHERE` that the planner moves into the other subqueries of `FROM`.
-pub fn pull_up(query: &Query) -> Query {
+/// The query with each simple subquery and each simple view in `FROM` merged into the query above it, also in the subqueries of the query, and with the conditions of `WHERE` that the planner moves into the other subqueries of `FROM`. `barrier` is true for a view with `security_barrier`, which does not merge and takes only the leakproof conditions.
+pub fn pull_up(query: &Query, barrier: &dyn Fn(u32) -> bool) -> Query {
     let mut query = query.clone();
     merge_join(&mut query);
     flatten(&mut query);
-    pull_all(&mut query);
-    pushdown::push_all(&mut query);
+    pull_all(&mut query, barrier);
+    pushdown::push_all(&mut query, barrier);
     setcast::wrap_all(&mut query);
     exists::fill_all(&mut query);
     minmax::fill_all(&mut query);
     query
 }
 
-/// `pull_up_simple_subquery` for the executor: each simple subquery and each view of `FROM` of a `SELECT` merges into the query, also in the subqueries of the query, the inner subqueries first. The conditions of the subquery come before the conditions of the query, so that the executor orders them all by their costs, as the planner of PostgreSQL does. `barrier` is true for a view with `security_barrier`, which `is_simple_subquery` does not merge, and the leakproof conditions of the query move into such a view. The subqueries that merge are those that `EXPLAIN` merges, and the views. The query of a write stays as it is.
+/// `pull_up_simple_subquery` for the executor: each simple subquery and each view of `FROM` of a `SELECT` merges into the query, also in the subqueries of the query, the inner subqueries first. The conditions of the subquery come before the conditions of the query, so that the executor orders them all by their costs, as the planner of PostgreSQL does. `barrier` is true for a view with `security_barrier`, which `is_simple_subquery` does not merge, and the leakproof conditions of the query move into such a view. The subqueries and the views that merge are those that `EXPLAIN` merges. The query of a write stays as it is.
 pub fn merge_from(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
     for relation in &mut query.relations {
         if let Some(sub) = &mut relation.subquery {
@@ -51,7 +51,7 @@ pub fn merge_from(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
     if query.write.is_some() {
         return;
     }
-    while let Some((r, top)) = candidate(query, Some(barrier)) {
+    while let Some((r, top)) = candidate(query, barrier, true) {
         merge(query, r, top);
     }
     pushdown::push_barrier(query, barrier);
@@ -233,10 +233,10 @@ fn flatten(query: &mut Query) {
 }
 
 /// Merges the simple subqueries of the query and of its subqueries, the inner subqueries first, as `pull_up_simple_subquery` merges the subqueries of a subquery before the subquery.
-fn pull_all(query: &mut Query) {
+fn pull_all(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
     for relation in &mut query.relations {
         if let Some(sub) = &mut relation.subquery {
-            pull_all(sub);
+            pull_all(sub, barrier);
         }
     }
     for expr in query.exprs_mut() {
@@ -244,17 +244,17 @@ fn pull_all(query: &mut Query) {
             if depth == 0
                 && let ExprKind::SubLink(link) = &mut e.kind
             {
-                pull_all(&mut link.query);
+                pull_all(&mut link.query, barrier);
             }
             false
         });
     }
-    while let Some((r, top)) = candidate(query, None) {
+    while let Some((r, top)) = candidate(query, barrier, false) {
         merge(query, r, top);
     }
     // PostgreSQL pulls up the subqueries of `WHERE` before the subqueries of `FROM`. Here the subqueries of `FROM` merge first, so that they keep their places in the list of `FROM`, and the subquery of an `ANY` then merges as the inner side of its semi join.
     if pull_sublinks(query) {
-        while let Some((r, top)) = candidate(query, None) {
+        while let Some((r, top)) = candidate(query, barrier, false) {
             merge(query, r, top);
         }
     }
@@ -630,8 +630,12 @@ fn places(item: &FromItem, top: bool, on: bool, out: &mut Vec<(usize, bool, bool
     }
 }
 
-/// The first subquery of `FROM` that the planner merges, with true when it is an item of the list of `FROM`. The planner does not merge a query of `WITH`, nor a view yet unless `views` is false for it, as for the executor, and it merges a `LATERAL` subquery when [`lateral_fits`] lets it and the query does not read a target of the subquery that reads the query below an outer join that gives nulls for the subquery. Below the side of an outer join that can give nulls, a target of the subquery that is not a column becomes a `PlaceHolderVar`, which the planner makes here only for a subquery with a `FROM`, for a reference of the query itself and for a target with no subquery. In a join, the subquery has one item in `FROM`, and its `WHERE` joins the `ON` of the join, so that the subquery is not the side of an outer join that keeps its rows or a side of a full join when it has a `WHERE`. The query does not read the whole row of the subquery, which `pullup_replace_vars` makes a `ROW` of the targets.
-fn candidate(query: &Query, views: Option<&dyn Fn(u32) -> bool>) -> Option<(usize, bool)> {
+/// The first subquery of `FROM` that the planner merges, with true when it is an item of the list of `FROM`. The planner does not merge a query of `WITH`, nor a view for which `barrier` is true, and it merges a `LATERAL` subquery when [`lateral_fits`] lets it and the query does not read a target of the subquery that reads the query below an outer join that gives nulls for the subquery. Below the side of an outer join that can give nulls, a target of the subquery that is not a column becomes a `PlaceHolderVar`, which the planner makes here only for a subquery with a `FROM`, for a reference of the query itself and for a target with no subquery. In a join, the subquery has one item in `FROM`, and its `WHERE` joins the `ON` of the join, so that the subquery is not the side of an outer join that keeps its rows or a side of a full join when it has a `WHERE`. The query does not read the whole row of the subquery, which `pullup_replace_vars` makes a `ROW` of the targets.
+fn candidate(
+    query: &Query,
+    barrier: &dyn Fn(u32) -> bool,
+    executor: bool,
+) -> Option<(usize, bool)> {
     if query.set_op.is_some()
         || checks_wrapper(query)
         || !query.row_marks.is_empty()
@@ -654,7 +658,7 @@ fn candidate(query: &Query, views: Option<&dyn Fn(u32) -> bool>) -> Option<(usiz
             return None;
         }
         let relation = query.relations.get(r)?;
-        let sub = pullable(relation, views)?;
+        let sub = pullable(relation, barrier, executor)?;
         let used = used(query, r);
         if relation.lateral {
             let safe = query.from.iter().find_map(|item| lowest_outer(item, r))?;
@@ -710,12 +714,16 @@ pub(crate) fn nullable_places(item: &FromItem, nullable: bool, out: &mut Vec<usi
     }
 }
 
-/// The subquery of a relation that is a subquery in `FROM`, not a query of `WITH`, and not a view unless `views` is false for it. A `LATERAL` subquery has no function in `FROM`, as the planner does not mark the functions `LATERAL` when it merges the subquery, and for the executor no `TABLESAMPLE`.
-fn pullable<'r>(relation: &'r Relation, views: Option<&dyn Fn(u32) -> bool>) -> Option<&'r Query> {
-    let view = relation.oid != 0 && views.is_some_and(|barrier| !barrier(relation.oid));
+/// The subquery of a relation that is a subquery in `FROM`, not a query of `WITH`, and not a view for which `barrier` is true. A `LATERAL` subquery has no function in `FROM`, as the planner does not mark the functions `LATERAL` when it merges the subquery, and for the executor no `TABLESAMPLE`.
+fn pullable<'r>(
+    relation: &'r Relation,
+    barrier: &dyn Fn(u32) -> bool,
+    executor: bool,
+) -> Option<&'r Query> {
+    let view = relation.oid != 0 && !barrier(relation.oid);
     let plain = (relation.oid == 0 || view) && relation.cte.is_none();
     // The executor reads the sample of a table when the query starts, so the sample of a `LATERAL` subquery stays in the subquery, which runs for each row.
-    let sampled = views.is_some() && sub_sampled(relation);
+    let sampled = executor && sub_sampled(relation);
     relation.subquery.as_deref().filter(|sub| {
         plain
             && !sampled
