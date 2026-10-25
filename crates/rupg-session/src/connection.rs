@@ -4664,6 +4664,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vruleupd.test")));
     }
 
+    /// `old.*` and `new.*` in the `VALUES` of an action `INSERT` of a rule, and `(e).*` in `VALUES`, give a value for each column or each field, as `transformExpressionList` expands them. `connection/vrulestar.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vrulestar() {
+        big_stack(|| script(include_str!("connection/vrulestar.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {

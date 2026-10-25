@@ -70,6 +70,32 @@ pub(crate) struct State {
     pub(crate) columns: Vec<Column>,
     /// The conditions that the next write inverts, which read `old` and `new`.
     pub(crate) inverted: Vec<Node>,
+    /// The defaults of the target columns of an action `INSERT` whose `VALUES` the rewrite made the subquery `*VALUES*`, for `DEFAULT` in its rows, as `rewriteValuesRTE` gives them.
+    pub(crate) defaults: Option<Vec<Expr>>,
+    /// [`State::defaults`] while the analyzer reads the subquery `*VALUES*`, for its `VALUES` list.
+    pub(crate) values: Option<Vec<Expr>>,
+}
+
+/// The alias of the subquery that the rewrite makes of the `VALUES` of an action `INSERT`.
+pub(crate) const VALUES_NAME: &str = "*VALUES*";
+
+/// True when the `SELECT` of an `INSERT` reads the subquery `*VALUES*` that the rewrite made, and the `VALUES` of the subquery has `DEFAULT`.
+pub(crate) fn has_values_default(select: &SelectStmt) -> bool {
+    select.fromClause.iter().flatten().any(|item| match item {
+        Node::RangeSubselect(r) if r.lateral => {
+            let named = r.alias.as_ref().and_then(|a| a.aliasname.as_deref()) == Some(VALUES_NAME);
+            named && matches!(&r.subquery, Some(Node::SelectStmt(s)) if has_default(s))
+        }
+        _ => false,
+    })
+}
+
+/// True when a row of the `VALUES` of the `SELECT` has `DEFAULT`.
+fn has_default(select: &SelectStmt) -> bool {
+    select.valuesLists.iter().flatten().any(|row| match row {
+        Node::List(items) => items.iter().flatten().any(|n| matches!(n, Node::SetToDefault(_))),
+        _ => false,
+    })
 }
 
 /// The kind of a write and its target table.
@@ -292,16 +318,11 @@ fn rule_action(parts: &Parts, action: &Node, qual: Option<&Node>, event: CmdType
     Ok(action)
 }
 
-/// The `VALUES` of an `INSERT` as a `SELECT` that can have `FROM` and `WHERE`: one row gives the list of `SELECT`, and more rows are a `LATERAL` subquery.
+/// The `VALUES` of an `INSERT` as a `SELECT` that can have `FROM` and `WHERE`: one row with no `DEFAULT` gives the list of `SELECT`, and other rows are a `LATERAL` subquery.
 fn values_to_select(select: &mut SelectStmt) -> Result<()> {
-    let has_default = select.valuesLists.iter().flatten().any(|row| match row {
-        Node::List(items) => items.iter().flatten().any(|n| matches!(n, Node::SetToDefault(_))),
-        _ => false,
-    });
-    if has_default {
-        return Err(not_yet("DEFAULT in VALUES of a rule action"));
-    }
-    if let [Some(Node::List(items))] = select.valuesLists.as_slice() {
+    if let [Some(Node::List(items))] = select.valuesLists.as_slice()
+        && !has_default(select)
+    {
         select.targetList = items
             .iter()
             .map(|item| {
@@ -320,7 +341,7 @@ fn values_to_select(select: &mut SelectStmt) -> Result<()> {
         valuesLists: std::mem::take(&mut select.valuesLists),
         ..SelectStmt::default()
     };
-    let name = "*VALUES*";
+    let name = VALUES_NAME;
     select.fromClause.push(Some(Node::RangeSubselect(Box::new(RangeSubselect {
         lateral: true,
         subquery: Some(Node::SelectStmt(Box::new(values))),

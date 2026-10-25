@@ -677,7 +677,15 @@ impl Analyzer<'_> {
 
     /// `transformRangeSubselect` and `addRangeTableEntryForSubquery`: a subquery in `FROM` and its namespace item. With no alias, the name of the entry is `unnamed_subquery`, and a qualified name cannot use it.
     fn range_subselect(&mut self, r: &RangeSubselect) -> Result<Item> {
-        let query = self.subquery_in_from(r.subquery.as_ref(), r.lateral)?;
+        let alias = r.alias.as_deref();
+        if r.lateral
+            && alias.and_then(|a| a.aliasname.as_deref()) == Some(crate::rules::VALUES_NAME)
+        {
+            self.rule.values = self.rule.defaults.take();
+        }
+        let query = self.subquery_in_from(r.subquery.as_ref(), r.lateral);
+        self.rule.values = None;
+        let query = query?;
         let columns = query
             .targets
             .iter()
@@ -689,7 +697,6 @@ impl Analyzer<'_> {
                 not_null: false,
             })
             .collect();
-        let alias = r.alias.as_deref();
         let refname = alias.and_then(|a| a.aliasname.as_deref()).unwrap_or("unnamed_subquery");
         let mut relation = Relation::new(0, columns, Some(Box::new(query)), None, None);
         relation.lateral = r.lateral;

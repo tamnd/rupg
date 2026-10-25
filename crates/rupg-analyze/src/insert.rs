@@ -406,8 +406,18 @@ impl Analyzer<'_> {
                 row_query(&columns, row)
             }
             Some(select) if general_select(select) => {
+                // `rewriteValuesRTE`: `DEFAULT` in the `VALUES` that the rewrite of a rule made a subquery is the default of the column.
+                if crate::rules::has_values_default(select) {
+                    let mut defaults = Vec::with_capacity(given.len());
+                    for (index, _, _) in &given {
+                        defaults.push(self.column_default(table, *index, &columns[*index])?);
+                    }
+                    self.rule.defaults = Some(defaults);
+                }
                 let query =
-                    self.insert_select(select, table, &columns, &given, explicit, s.r#override)?;
+                    self.insert_select(select, table, &columns, &given, explicit, s.r#override);
+                self.rule.defaults = None;
+                let query = query?;
                 if keep && let Some(relation) = query.relations.first() {
                     let mut assigned = Vec::with_capacity(given.len());
                     for (i, (index, at, indirection)) in given.iter().enumerate() {
@@ -1297,12 +1307,22 @@ impl Analyzer<'_> {
         Ok(given)
     }
 
-    /// `transformExpressionList` for a row of `VALUES` in an `INSERT`, which keeps `DEFAULT` at the top of an item.
+    /// `transformExpressionList` for a row of `VALUES` in an `INSERT`, which keeps `DEFAULT` at the top of an item. `t.*` and `(e).*` give an item for each column of the relation or each field of the row.
     pub(crate) fn value_items(&mut self, list: &List, kind: Kind) -> Result<Vec<Item>> {
         let mut items = Vec::with_capacity(list.len());
         for node in list {
             if let Some(Node::SetToDefault(d)) = node {
                 items.push(Item::Default(place(d.location)));
+                continue;
+            }
+            // `t.*` and `(e).*` give the columns of the relation or the fields of the row.
+            let columns = self.with_kind(kind, |a| match node {
+                Some(Node::ColumnRef(c)) => a.expand_star(c),
+                Some(Node::A_Indirection(i)) => a.expand_indirection_star(i),
+                _ => Ok(None),
+            })?;
+            if let Some(columns) = columns {
+                items.extend(columns.into_iter().map(|(_, e)| Item::Expr(e)));
                 continue;
             }
             items.push(Item::Expr(self.with_kind(kind, |a| a.transform(node.as_ref()))?));
