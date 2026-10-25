@@ -282,6 +282,24 @@ impl Locks {
         find_cycle(&table, &waits, owner, owner, &mut path, &mut seen).then_some(path)
     }
 
+    /// `GetBlockerStatusData` for the request of `owner`: each other owner that holds a mode that conflicts with the mode of the request, and each other owner before it in the queue with a mode that conflicts.
+    pub(crate) fn blockers(&self, owner: i32) -> Vec<i32> {
+        let table = self.table();
+        let mut pids = Vec::new();
+        for lock in table.values() {
+            let Some(at) = lock.waiting(owner) else { continue };
+            let mode = lock.queue[at].mode;
+            let holds = lock.holds.iter().map(|hold| (hold.owner, hold.mode));
+            let ahead = lock.queue[..at].iter().map(|wait| (wait.owner, wait.mode));
+            for (pid, held) in holds.chain(ahead) {
+                if pid != owner && conflicts(mode, held) && !pids.contains(&pid) {
+                    pids.push(pid);
+                }
+            }
+        }
+        pids
+    }
+
     /// `LockRelease` of a hold of the session level: false when the owner has no such hold.
     pub(crate) fn release(&self, tag: Tag, owner: i32, mode: Mode) -> bool {
         let mut table = self.table();
@@ -479,6 +497,10 @@ mod tests {
         // A share request waits behind the exclusive request.
         assert_eq!(locks.request(tag(1), 3, SHARE, true, false), Request::Busy);
         assert_eq!(locks.request(tag(1), 3, SHARE, true, true), Request::Queued);
+        // The share request waits for no hold, but for the exclusive request before it.
+        assert_eq!(locks.blockers(1), [] as [i32; 0]);
+        assert_eq!(locks.blockers(2), [1]);
+        assert_eq!(locks.blockers(3), [2]);
         assert!(!locks.wait(tag(1), 2, true, Duration::ZERO, None));
         assert!(!locks.wait(tag(1), 3, true, Duration::ZERO, None));
         locks.release_all(1, true);

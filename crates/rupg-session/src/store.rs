@@ -67,6 +67,8 @@ struct State {
     roles: Arc<Roles>,
     /// The rows of `pg_tablespace` of `CREATE TABLESPACE`, in the order of their OIDs. `CREATE TABLESPACE` and `DROP TABLESPACE` cannot run in a transaction block, so a change is at once in the rows.
     tablespaces: Arc<[Tablespace]>,
+    /// The database whose lock each waiting session waits for, by the process ID of the session.
+    waiting: HashMap<i32, u32>,
 }
 
 /// A database: its row of `pg_database`, the catalog of its last commit and its lock.
@@ -74,7 +76,8 @@ struct State {
 struct Db {
     row: Database,
     committed: Arc<Catalog>,
-    locked: bool,
+    /// The process ID of the session whose transaction holds the lock of the database, or `None` when the lock is free.
+    locked: Option<i32>,
     /// The `setconfig` of the row of `pg_db_role_setting` for the database and every role: the settings of `ALTER DATABASE ... SET`, each as `name=value`.
     settings: Vec<String>,
 }
@@ -89,16 +92,17 @@ impl Default for State {
             .map(|row| {
                 (
                     row.oid,
-                    Db {
-                        row,
-                        committed: Arc::clone(&catalog),
-                        locked: false,
-                        settings: Vec::new(),
-                    },
+                    Db { row, committed: Arc::clone(&catalog), locked: None, settings: Vec::new() },
                 )
             })
             .collect();
-        State { databases, next_oid, roles: Arc::default(), tablespaces: Arc::from(Vec::new()) }
+        State {
+            databases,
+            next_oid,
+            roles: Arc::default(),
+            tablespaces: Arc::from(Vec::new()),
+            waiting: HashMap::new(),
+        }
     }
 }
 
@@ -266,24 +270,39 @@ impl Store {
         }
     }
 
-    /// Takes the lock of a database for a transaction, with a copy of the catalog of the last commit. The session waits while another transaction holds the lock. A cancel of the session stops the wait with `57014`.
-    pub(crate) fn lease(self: &Arc<Self>, database: u32, cancel: &AtomicBool) -> Result<Lease> {
+    /// Takes the lock of a database for a transaction of the session `pid`, with a copy of the catalog of the last commit. The session waits while another transaction holds the lock, and `report` tells the start and the end of the wait. A cancel of the session stops the wait with `57014`.
+    pub(crate) fn lease(
+        self: &Arc<Self>,
+        database: u32,
+        pid: i32,
+        cancel: &AtomicBool,
+        report: &dyn Fn(bool),
+    ) -> Result<Lease> {
         let mut state = self.state();
-        loop {
+        let mut waited = false;
+        let result = loop {
             let Some(db) = state.databases.get(&database) else {
-                return Err(Error::new(
+                break Err(Error::new(
                     SqlState::UNDEFINED_DATABASE,
                     format!("database with OID {database} does not exist"),
                 ));
             };
-            if !db.locked {
-                break;
+            if db.locked.is_none() {
+                break Ok(());
             }
             if cancel.swap(false, Ordering::Relaxed) {
-                return Err(Error::new(
+                break Err(Error::new(
                     SqlState::QUERY_CANCELED,
                     "canceling statement due to user request",
                 ));
+            }
+            if !waited {
+                waited = true;
+                state.waiting.insert(pid, database);
+                drop(state);
+                report(true);
+                state = self.state();
+                continue;
             }
             if let Some(tasks) = &self.tasks {
                 drop(state);
@@ -293,18 +312,32 @@ impl Store {
             }
             state =
                 self.free.wait_timeout(state, WAIT_SLICE).unwrap_or_else(PoisonError::into_inner).0;
+        };
+        if waited {
+            state.waiting.remove(&pid);
+            drop(state);
+            report(false);
+            state = self.state();
         }
+        result?;
         let next = state.next_oid;
         let Some(db) = state.databases.get_mut(&database) else {
             return Err(Error::internal("the database is gone"));
         };
-        db.locked = true;
+        db.locked = Some(pid);
         let mut catalog = Arc::clone(&db.committed);
         if catalog.next_oid() < next {
             Arc::make_mut(&mut catalog).advance_oid(next);
         }
         let roles = Arc::clone(&state.roles);
         Ok(Lease { store: Arc::clone(self), database, catalog, base: Arc::clone(&roles), roles })
+    }
+
+    /// The session whose transaction holds the lock of the database that the session `pid` waits for.
+    pub(crate) fn lease_blocker(&self, pid: i32) -> Option<i32> {
+        let state = self.state();
+        let database = state.waiting.get(&pid)?;
+        state.databases.get(database)?.locked.filter(|&holder| holder != pid)
     }
 
     /// `createdb` after the checks of the options: the check of the name, the wait for the other sessions of the template to end, and the copy of the catalog of the template. `me` is the number of the session in the table. It gives the OID of the new database.
@@ -360,7 +393,7 @@ impl Store {
         Arc::make_mut(&mut committed).advance_oid(next);
         state.next_oid = next;
         let oid = row.oid;
-        state.databases.insert(oid, Db { row, committed, locked: false, settings: Vec::new() });
+        state.databases.insert(oid, Db { row, committed, locked: None, settings: Vec::new() });
         Ok(oid)
     }
 
@@ -681,7 +714,7 @@ impl Drop for Lease {
             if db.committed.next_oid() < next {
                 Arc::make_mut(&mut db.committed).advance_oid(next);
             }
-            db.locked = false;
+            db.locked = None;
         }
         drop(state);
         self.store.free.notify_all();
@@ -697,13 +730,13 @@ mod tests {
     fn rollback_keeps_the_oids() {
         let store = Arc::new(Store::new());
         let cancel = AtomicBool::new(false);
-        let mut lease = store.lease(POSTGRES, &cancel).unwrap();
+        let mut lease = store.lease(POSTGRES, 1, &cancel, &|_| {}).unwrap();
         Arc::make_mut(&mut lease.catalog).create_schema("s", 10).unwrap();
         let next = lease.catalog.next_oid();
         drop(lease);
         assert!(store.committed(POSTGRES).schema_by_name("s").is_none());
         assert_eq!(store.committed(POSTGRES).next_oid(), next);
-        let mut lease = store.lease(POSTGRES, &cancel).unwrap();
+        let mut lease = store.lease(POSTGRES, 1, &cancel, &|_| {}).unwrap();
         let oid = Arc::make_mut(&mut lease.catalog).create_schema("s", 10).unwrap();
         assert_eq!(oid, next);
         lease.commit();
@@ -729,11 +762,11 @@ mod tests {
     #[test]
     fn cancel_stops_the_wait() {
         let store = Arc::new(Store::new());
-        let held = store.lease(POSTGRES, &AtomicBool::new(false)).unwrap();
-        let error = store.lease(POSTGRES, &AtomicBool::new(true)).unwrap_err();
+        let held = store.lease(POSTGRES, 1, &AtomicBool::new(false), &|_| {}).unwrap();
+        let error = store.lease(POSTGRES, 2, &AtomicBool::new(true), &|_| {}).unwrap_err();
         assert_eq!(error.state(), SqlState::QUERY_CANCELED);
         drop(held);
-        assert!(store.lease(POSTGRES, &AtomicBool::new(false)).is_ok());
+        assert!(store.lease(POSTGRES, 2, &AtomicBool::new(false), &|_| {}).is_ok());
     }
 
     /// Tasks whose `yield_now` runs the other task: the end of the transaction that holds the lock.
@@ -760,9 +793,9 @@ mod tests {
     fn a_waiter_lets_the_holder_run() {
         let holder = Arc::new(Holder::default());
         let store = Arc::new(Store::with_tasks(holder.clone()));
-        let held = store.lease(POSTGRES, &AtomicBool::new(false)).unwrap();
+        let held = store.lease(POSTGRES, 1, &AtomicBool::new(false), &|_| {}).unwrap();
         *holder.0.lock().unwrap() = Some(held);
-        assert!(store.lease(POSTGRES, &AtomicBool::new(false)).is_ok());
+        assert!(store.lease(POSTGRES, 2, &AtomicBool::new(false), &|_| {}).is_ok());
         assert!(holder.0.lock().unwrap().is_none());
     }
 }

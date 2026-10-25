@@ -80,6 +80,33 @@ fn pg_backend_pid(call: &Call<'_>, _: &[Value]) -> Result<Value> {
     Ok(Value::Int4(call.session.backend_pid()))
 }
 
+/// An `int4[]` of process IDs.
+fn pids(pids: Vec<i32>) -> Value {
+    Value::Array(Box::new(Array::one(pids.into_iter().map(|pid| Some(Value::Int4(pid))).collect())))
+}
+
+/// `pg_blocking_pids(int4)`: the process IDs of the sessions that block the session `pid`.
+fn pg_blocking_pids(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let Some(&Value::Int4(pid)) = args.first() else { return Err(bad_value()) };
+    Ok(pids(call.session.blocking_pids(pid)))
+}
+
+/// `pg_isolation_test_session_is_blocked(int4, int4[])`: true when one of the sessions in the array blocks the session `pid`, as isolationtester asks after each step.
+fn pg_isolation_test_session_is_blocked(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let Some(&Value::Int4(pid)) = args.first() else { return Err(bad_value()) };
+    let Some(Value::Array(interesting)) = args.get(1) else { return Err(bad_value()) };
+    if interesting.values.iter().any(Option::is_none) {
+        return Err(Error::new(SqlState::NULL_VALUE_NOT_ALLOWED, "array must not contain nulls"));
+    }
+    let blocking = call.session.blocking_pids(pid);
+    let blocked = interesting
+        .values
+        .iter()
+        .flatten()
+        .any(|value| matches!(value, Value::Int4(other) if blocking.contains(other)));
+    Ok(Value::Bool(blocked))
+}
+
 /// `pg_trigger_depth`: the number of the trigger functions that run, one in the other, in the session.
 fn pg_trigger_depth(call: &Call<'_>, _: &[Value]) -> Result<Value> {
     Ok(Value::Int4(call.session.trigger_depth()))
@@ -431,6 +458,10 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "tid_offset" => tid_offset,
         "pg_backend_pid" => pg_backend_pid,
         "pg_trigger_depth" => pg_trigger_depth,
+        "pg_blocking_pids" => pg_blocking_pids,
+        // No session waits for a safe snapshot, as a `SERIALIZABLE READ ONLY DEFERRABLE` transaction takes its snapshot with no wait.
+        "pg_safe_snapshot_blocking_pids" => |_, _| Ok(pids(Vec::new())),
+        "pg_isolation_test_session_is_blocked" => pg_isolation_test_session_is_blocked,
         "pg_sleep" => pg_sleep,
         "pg_client_encoding" => pg_client_encoding,
         "getdatabaseencoding" => getdatabaseencoding,

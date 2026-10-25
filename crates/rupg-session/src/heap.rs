@@ -962,6 +962,24 @@ impl Heap {
         self.state().waits.remove(&xid);
     }
 
+    /// The process IDs of the sessions whose transactions the transactions of the session `pid` wait for.
+    pub(crate) fn blockers(&self, pid: i32) -> Vec<i32> {
+        let state = self.state();
+        let mut pids = Vec::new();
+        for (xid, holder) in &state.waits {
+            if state.owners.get(xid) != Some(&pid) {
+                continue;
+            }
+            if let Some(&holder) = state.owners.get(holder)
+                && holder != pid
+                && !pids.contains(&holder)
+            {
+                pids.push(holder);
+            }
+        }
+        pids
+    }
+
     /// `DeadLockCheck`: the cycle of waits from `xid` back to `xid`, or `None` when the waits of `xid` make no cycle.
     pub(crate) fn deadlock(&self, xid: u32) -> Option<Vec<Wait>> {
         let state = self.state();
@@ -1243,6 +1261,8 @@ mod tests {
         );
         heap.wait(b, a);
         assert_eq!(heap.deadlock(b), None);
+        assert_eq!(heap.blockers(2), [1]);
+        assert_eq!(heap.blockers(1), [] as [i32; 0]);
         heap.wait(a, b);
         let cycle = heap.deadlock(b).unwrap();
         assert_eq!(cycle, [Wait { pid: 2, xid: a, holder: 1 }, Wait { pid: 1, xid: b, holder: 2 }]);

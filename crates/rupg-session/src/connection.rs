@@ -1147,7 +1147,7 @@ impl Connection {
             ));
         }
         if self.lease.borrow().is_none() {
-            let lease = self.store.lease(self.database_oid, &self.cancel)?;
+            let lease = self.lease_catalog()?;
             *self.lease.borrow_mut() = Some(lease);
         }
         // A change of the catalog writes rows of the catalog, so the transaction gets an ID.
