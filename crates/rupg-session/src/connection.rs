@@ -4589,6 +4589,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vdropx.test")));
     }
 
+    /// `ALTER PROCEDURE` with an attribute that only a function has gives the error of `AlterFunction`, and `CALL` of a procedure that the current role cannot execute names the procedure in the error of `aclcheck_error`. `connection/vproc.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vproc() {
+        big_stack(|| script(include_str!("connection/vproc.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {

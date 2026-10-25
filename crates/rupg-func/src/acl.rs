@@ -998,10 +998,15 @@ pub fn check_execute(funcs: &[u32], session: &dyn Session) -> Result<()> {
             continue;
         }
         let proc = builtin::proc_by_oid(func);
-        let object = if proc.is_some_and(|p| p.kind == b'a') { "aggregate" } else { "function" };
-        let name = proc
-            .map(|p| p.name.to_string())
-            .or_else(|| session.catalog().and_then(|c| c.function(func)).map(|f| f.name.clone()));
+        let user = session.catalog().and_then(|c| c.function(func));
+        let kind = proc.map(|p| p.kind).or_else(|| user.map(|f| f.kind));
+        // `ExecuteCallStmt` names a procedure, and `ExecInitAgg` an aggregate.
+        let object = match kind {
+            Some(b'a') => "aggregate",
+            Some(b'p') => "procedure",
+            _ => "function",
+        };
+        let name = proc.map(|p| p.name.to_string()).or_else(|| user.map(|f| f.name.clone()));
         return Err(Error::new(
             SqlState::INSUFFICIENT_PRIVILEGE,
             format!("permission denied for {object} {}", name.unwrap_or_default()),
