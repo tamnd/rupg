@@ -1,0 +1,79 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> create view rule_v1 as values(1,2);
+CREATE VIEW
+> SELECT pg_get_viewdef('rule_v1'::regclass, true);
+fields pg_get_viewdef:25:-1:-1
+row  VALUES (1,2);
+SELECT 1
+> alter table rule_v1 rename column column2 to q2;
+ALTER TABLE
+> SELECT pg_get_viewdef('rule_v1'::regclass, true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT column1,
+    column2 AS q2
+   FROM (VALUES (1,2)) "*VALUES*";
+SELECT 1
+> SELECT pg_get_viewdef('rule_v1'::regclass, false);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT column1,
+    column2 AS q2
+   FROM (VALUES (1,2)) "*VALUES*";
+SELECT 1
+> drop view rule_v1;
+DROP VIEW
+> create view rule_v1(x) as values(1,2);
+CREATE VIEW
+> SELECT pg_get_viewdef('rule_v1'::regclass, true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT column1 AS x,
+    column2
+   FROM (VALUES (1,2)) "*VALUES*";
+SELECT 1
+> alter table rule_v1 rename column column2 to q2;
+ALTER TABLE
+> SELECT pg_get_viewdef('rule_v1'::regclass, true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT column1 AS x,
+    column2 AS q2
+   FROM (VALUES (1,2)) "*VALUES*";
+SELECT 1
+> drop view rule_v1;
+DROP VIEW
+> create view rule_v1(x) as select * from (values(1,2)) v;
+CREATE VIEW
+> SELECT pg_get_viewdef('rule_v1'::regclass, true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT column1 AS x,
+    column2
+   FROM ( VALUES (1,2)) v;
+SELECT 1
+> alter table rule_v1 rename column column2 to q2;
+ALTER TABLE
+> SELECT pg_get_viewdef('rule_v1'::regclass, true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT column1 AS x,
+    column2 AS q2
+   FROM ( VALUES (1,2)) v;
+SELECT 1
+> drop view rule_v1;
+DROP VIEW
+> create view rule_v1(x) as select * from (values(1,2)) v(q, w);
+CREATE VIEW
+> SELECT pg_get_viewdef('rule_v1'::regclass, true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT q AS x,
+    w
+   FROM ( VALUES (1,2)) v(q, w);
+SELECT 1
+> alter table rule_v1 rename column w to q2;
+ALTER TABLE
+> SELECT pg_get_viewdef('rule_v1'::regclass, true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT q AS x,
+    w AS q2
+   FROM ( VALUES (1,2)) v(q, w);
+SELECT 1
+> drop view rule_v1;
+DROP VIEW

@@ -4816,6 +4816,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/ruleperm.test")));
     }
 
+    /// `pg_get_viewdef` of a view of `VALUES` after `ALTER TABLE ... RENAME COLUMN`: the list `"*VALUES*"` shows as `(VALUES ...)`, and a subquery of `VALUES` in the text of the view shows as `( VALUES ...)`. `connection/values_view.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn values_view() {
+        big_stack(|| script(include_str!("connection/values_view.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {
