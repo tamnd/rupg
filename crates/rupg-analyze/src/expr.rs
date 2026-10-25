@@ -99,6 +99,17 @@ pub enum ExprKind {
     JsonTable(Box<JsonTable>),
     /// `XmlExpr`: `XMLELEMENT`, `XMLFOREST`, `XMLCONCAT`, `XMLPARSE`, `XMLPI`, `XMLROOT`, `XMLSERIALIZE` or `IS DOCUMENT`.
     Xml(Box<XmlExpr>),
+    /// `CurrentOfExpr`: `WHERE CURRENT OF`, of type `boolean`.
+    CurrentOf(Box<CurrentOf>),
+}
+
+/// `CurrentOfExpr`: the condition of `WHERE CURRENT OF` on the target table of an `UPDATE` or a `DELETE`, which is true for the row that the cursor is on, as `execCurrentOf` finds it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CurrentOf {
+    /// The OID of the target table.
+    pub table: u32,
+    /// The name of the cursor: a constant for `cursor_name`, or the parameter of a variable of PL/pgSQL for `cursor_param`. Then `tableoid` and `ctid` of the target table.
+    pub args: Vec<Expr>,
 }
 
 /// The whole row of a join, or of the alias of `USING`.
@@ -830,6 +841,7 @@ impl Expr {
             | ExprKind::Distinct { args, .. }
             | ExprKind::ScalarArrayOp { args, .. }
             | ExprKind::Array { elements: args, .. } => args.iter().collect(),
+            ExprKind::CurrentOf(c) => c.args.iter().collect(),
             ExprKind::JoinRow(row) => row.fields.iter().collect(),
             ExprKind::JsonValue(v) => vec![&v.raw, &v.formatted],
             ExprKind::JsonCtor(c) => c.args.iter().chain(&c.func).chain(&c.coercion).collect(),
@@ -896,6 +908,7 @@ impl Expr {
             | ExprKind::Distinct { args, .. }
             | ExprKind::ScalarArrayOp { args, .. }
             | ExprKind::Array { elements: args, .. } => args.iter_mut().collect(),
+            ExprKind::CurrentOf(c) => c.args.iter_mut().collect(),
             ExprKind::JoinRow(row) => row.fields.iter_mut().collect(),
             ExprKind::JsonValue(v) => vec![&mut v.raw, &mut v.formatted],
             ExprKind::JsonCtor(c) => {

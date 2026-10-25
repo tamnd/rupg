@@ -616,6 +616,14 @@ impl<'a> Deparser<'a> {
             ExprKind::Xml(x) => self.xml_expr(x)?,
             ExprKind::JsonExpr(j) => self.json_expr(j, implicit)?,
             ExprKind::JsonTable(_) => return Err(Error::internal("JSON_TABLE out of FROM")),
+            ExprKind::CurrentOf(c) => match c.args.first().map(|a| &a.kind) {
+                Some(ExprKind::Param(n)) => self.buf.push_str(&format!("CURRENT OF ${n}")),
+                Some(ExprKind::Const(name)) => {
+                    let name = name.as_str().unwrap_or_default();
+                    self.buf.push_str(&format!("CURRENT OF {}", quote_identifier(name)));
+                }
+                _ => return Err(Error::internal("CURRENT OF with no cursor")),
+            },
             ExprKind::IsJson(p) => {
                 self.open();
                 self.paren(&p.expr, true, e)?;
@@ -1334,6 +1342,7 @@ fn is_simple(e: &Expr, parent: &Expr, paren: bool) -> bool {
         | ExprKind::JsonExpr(_)
         | ExprKind::JsonTable(_)
         | ExprKind::Xml(_)
+        | ExprKind::CurrentOf(_)
         | ExprKind::Case(_) => true,
         ExprKind::Func(f) if !matches!(f.form, FuncForm::Operator(_)) => true,
         ExprKind::JsonValue(v) => is_simple(&v.raw, e, paren),

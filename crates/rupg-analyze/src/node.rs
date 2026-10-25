@@ -242,6 +242,7 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
         | ExprKind::Window(_)
         | ExprKind::SubLink(_)
         | ExprKind::SubColumn(_)
+        | ExprKind::CurrentOf(_)
         | ExprKind::JsonTable(_) => {
             return Err(Error::internal("a stored expression cannot have this node"));
         }
@@ -506,6 +507,7 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
         | ExprKind::Window(_)
         | ExprKind::SubLink(_)
         | ExprKind::SubColumn(_)
+        | ExprKind::CurrentOf(_)
         | ExprKind::JsonTable(_) => {}
     }
     out.push('}');

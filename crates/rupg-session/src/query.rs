@@ -1138,6 +1138,28 @@ impl rupg_func::Session for Reader<'_> {
         })
     }
 
+    fn current_of(&self, cursor: &str, table: u32) -> Result<(Value, Value)> {
+        let portals = self.portals.map(RefCell::borrow);
+        let portal = portals.as_ref().and_then(|portals| portals.find(cursor.as_bytes()));
+        let Some(portal) = portal else {
+            return Err(Error::new(
+                SqlState::UNDEFINED_CURSOR,
+                format!("cursor \"{cursor}\" does not exist"),
+            ));
+        };
+        let relname = self.catalog.relation(table).map(|r| r.name.clone()).unwrap_or_default();
+        let (oid, tid) = portal.current_of(cursor, table, &relname)?;
+        // A version that the transaction updated after the fetch has a newer version, which the scan of `TidScan` finds.
+        let latest = match (self.activity, &self.view, &oid, &tid) {
+            (Some((_, store)), Some(view), Value::Oid(relation), Value::Int8(id)) => {
+                let id = store.heap().latest_tid(view, *relation, id.cast_unsigned());
+                Value::Int8(id.cast_signed())
+            }
+            _ => tid,
+        };
+        Ok((oid, latest))
+    }
+
     fn cursors(&self) -> Vec<Vec<Value>> {
         self.portals.map_or_else(Vec::new, |portals| {
             portals.borrow().iter().filter_map(|(name, portal)| portal.cursor_row(name)).collect()

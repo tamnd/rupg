@@ -10,9 +10,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use rupg_analyze::{
-    Aggref, Body, BoolOp, BoolTest, Case, Expr, ExprKind, FieldStore, FromFunction, FromItem, Func,
-    FuncForm, IsJson, JsonCtor, JsonCtorKind, JsonFormatKind, Query, RowCompare, SetKind, SetOp,
-    SetTree, SortGroup, SqlValue, SubLink, SubLinkKind, Subscript, TableSample, Target, WindowFunc,
+    Aggref, Body, BoolOp, BoolTest, Case, CurrentOf, Expr, ExprKind, FieldStore, FromFunction,
+    FromItem, Func, FuncForm, IsJson, JsonCtor, JsonCtorKind, JsonFormatKind, Query, RowCompare,
+    SetKind, SetOp, SetTree, SortGroup, SqlValue, SubLink, SubLinkKind, Subscript, TableSample,
+    Target, WindowFunc,
 };
 use rupg_catalog::FIRST_NORMAL_OID;
 use rupg_common::{Error, Result, SqlState};
@@ -26,6 +27,8 @@ pub struct Plan {
     query: Query,
     /// The rows of `RETURNING` of each statement of `WITH` that changes data, by the number of the statement, which the references to the statement read.
     written: Arc<Vec<Rows>>,
+    /// The tables of a cursor that `WHERE CURRENT OF` can read, from [`Plan::cursor`].
+    marks: Vec<u32>,
 }
 
 /// The error of a feature that the engine does not have yet.
@@ -264,6 +267,7 @@ fn check(expr: &Expr) -> Result<()> {
         ExprKind::JsonExpr(e) => e.children().into_iter().try_for_each(check)?,
         ExprKind::Xml(x) => x.children().into_iter().try_for_each(check)?,
         ExprKind::JsonTable(t) => t.children().into_iter().try_for_each(check)?,
+        ExprKind::CurrentOf(c) => c.args.iter().try_for_each(check)?,
         ExprKind::Window(w) => {
             if w.agg {
                 agg::method(&agg::window_aggref(w), expr.ty, expr.location)?;
@@ -312,7 +316,7 @@ pub fn prepare(mut query: Query, session: &dyn Session) -> Result<Plan> {
         check_query(&cte.query, false)?;
         check_write(&cte.query)?;
     }
-    Ok(Plan { query, written: Arc::default() })
+    Ok(Plan { query, written: Arc::default(), marks: Vec::new() })
 }
 
 /// Checks the queries of `ON CONFLICT DO UPDATE` and of the clauses of `MERGE` of a write.
@@ -1223,7 +1227,7 @@ impl Plan {
             return write.returning.as_ref().map_or(&[], |query| &query.targets);
         }
         let n = self.query.targets.iter().take_while(|t| !t.junk).count();
-        &self.query.targets[..n]
+        &self.query.targets[..n - 2 * self.marks.len()]
     }
 
     /// `ExecProcessReturning`: the rows of `RETURNING` for the rows that the statement wrote. Each row has the columns of the table, then the values that the query of the statement carries for `RETURNING`. A query with no `RETURNING` gives no rows.
@@ -1384,7 +1388,7 @@ impl Plan {
             .map(|(n, query)| {
                 // The statement checks the privileges of all its parts before the first write.
                 let query = Query { perms: self.query.perms.clone(), ..query.clone() };
-                let plan = Plan { query, written: Arc::clone(&self.written) };
+                let plan = Plan { query, written: Arc::clone(&self.written), marks: Vec::new() };
                 (plan, read.contains(&n))
             })
             .collect()
@@ -1431,7 +1435,7 @@ impl Plan {
         for cte in query.ctes.iter_mut().filter(|c| c.write.is_some()) {
             *cte.query = fold::query(&cte.query, params, session)?;
         }
-        Ok(Plan { query, written: Arc::clone(&self.written) })
+        Ok(Plan { query, written: Arc::clone(&self.written), marks: self.marks.clone() })
     }
 
     /// `ExecSupportsBackwardScan` on the plan that PostgreSQL makes for the query, which decides if a cursor with neither `SCROLL` nor `NO SCROLL` can scan backward.
@@ -2311,6 +2315,7 @@ impl<'a> Eval<'a> {
                 rupg_func::xml_expr(x, &values, self.session)
             }
             ExprKind::JsonTable(_) => Err(Error::internal("JSON_TABLE out of FROM")),
+            ExprKind::CurrentOf(c) => self.current_of(c),
             ExprKind::Window(w) => self
                 .windows
                 .iter()
@@ -2318,6 +2323,22 @@ impl<'a> Eval<'a> {
                 .map(|(_, value)| value.clone())
                 .ok_or_else(|| Error::internal("a window function call is outside of a window")),
         }
+    }
+
+    /// `ExecEvalCurrentOfExpr` as the scan checks it: true for the row of the table that the cursor is on, which `execCurrentOf` finds.
+    fn current_of(&mut self, c: &CurrentOf) -> Result<Value> {
+        let [name, tableoid, ctid] = c.args.as_slice() else {
+            return Err(Error::internal("CURRENT OF has no cursor"));
+        };
+        let name = match self.eval(name)? {
+            Value::Text(name) => name,
+            Value::Null => {
+                return Err(Error::new(SqlState::INVALID_CURSOR_NAME, "cursor variable is null"));
+            }
+            _ => return Err(Error::internal("the cursor of CURRENT OF is not text")),
+        };
+        let (oid, tid) = self.session.current_of(&name, c.table)?;
+        Ok(Value::Bool(self.eval(tableoid)? == oid && self.eval(ctid)? == tid))
     }
 
     /// `ExecScanSubPlan`: the value of a subquery in an expression.
@@ -3314,6 +3335,7 @@ fn relabel(value: Value, ty: u32) -> Value {
 }
 
 mod agg;
+mod cursor;
 mod fold;
 mod insert;
 mod jsonexpr;

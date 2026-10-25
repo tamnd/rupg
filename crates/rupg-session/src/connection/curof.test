@@ -1,0 +1,345 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE co2 (a int);
+CREATE TABLE
+> INSERT INTO co2 VALUES (5);
+INSERT 0 1
+> CREATE TABLE co (a int, b text);
+CREATE TABLE
+> INSERT INTO co VALUES (1, 'one'), (2, 'two'), (3, 'three'), (2, 'two');
+INSERT 0 4
+> BEGIN;
+BEGIN
+> DECLARE c CURSOR FOR SELECT * FROM co;
+DECLARE CURSOR
+> UPDATE co SET b = 'x' WHERE CURRENT OF c;
+ERROR 24000 cursor "c" is not positioned on a row
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> DECLARE c CURSOR FOR SELECT * FROM co;
+DECLARE CURSOR
+> FETCH 2 FROM c;
+fields a@co.1:23:4:-1,b@co.2:25:-1:-1
+row 1,one
+row 2,two
+FETCH 2
+> UPDATE co SET b = 'second' WHERE CURRENT OF c RETURNING *;
+fields a@co.1:23:4:-1,b@co.2:25:-1:-1
+row 2,second
+UPDATE 1
+> DELETE FROM co WHERE CURRENT OF c RETURNING a;
+fields a@co.1:23:4:-1
+row 2
+DELETE 1
+> DELETE FROM co WHERE CURRENT OF c;
+DELETE 0
+> FETCH 1 FROM c;
+fields a@co.1:23:4:-1,b@co.2:25:-1:-1
+row 3,three
+FETCH 1
+> UPDATE co SET b = 'third' WHERE CURRENT OF c;
+UPDATE 1
+> FETCH ALL FROM c;
+fields a@co.1:23:4:-1,b@co.2:25:-1:-1
+row 2,two
+FETCH 1
+> UPDATE co SET b = 'end' WHERE CURRENT OF c;
+ERROR 24000 cursor "c" is not positioned on a row
+> COMMIT;
+ROLLBACK
+> SELECT * FROM co ORDER BY a, b;
+fields a@co.1:23:4:-1,b@co.2:25:-1:-1
+row 1,one
+row 2,two
+row 2,two
+row 3,three
+SELECT 4
+> BEGIN;
+BEGIN
+> DECLARE c2 CURSOR FOR SELECT a FROM co WHERE a > 1 FOR UPDATE;
+DECLARE CURSOR
+> FETCH c2;
+fields a@co.1:23:4:-1
+row 2
+FETCH 1
+> UPDATE co SET a = a * 10 WHERE CURRENT OF c2;
+UPDATE 1
+> FETCH c2;
+fields a@co.1:23:4:-1
+row 3
+FETCH 1
+> UPDATE co SET a = a * 10 WHERE CURRENT OF c2;
+UPDATE 1
+> SELECT * FROM co ORDER BY a, b;
+fields a@co.1:23:4:-1,b@co.2:25:-1:-1
+row 1,one
+row 2,two
+row 20,two
+row 30,three
+SELECT 4
+> SAVEPOINT s;
+SAVEPOINT
+> UPDATE co SET a = 0 WHERE CURRENT OF nope;
+ERROR 34000 cursor "nope" does not exist
+> ROLLBACK TO s;
+ROLLBACK
+> UPDATE co2 SET a = 0 WHERE CURRENT OF c2;
+ERROR 24000 cursor "c2" does not have a FOR UPDATE/SHARE reference to table "co2"
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> DECLARE c11 CURSOR FOR SELECT * FROM co ORDER BY a FOR UPDATE;
+DECLARE CURSOR
+> FETCH 2 c11;
+fields a@co.1:23:4:-1,b@co.2:25:-1:-1
+row 1,one
+row 2,two
+FETCH 2
+> DELETE FROM co WHERE CURRENT OF c11;
+DELETE 1
+> SELECT * FROM co ORDER BY a, b;
+fields a@co.1:23:4:-1,b@co.2:25:-1:-1
+row 1,one
+row 2,two
+row 3,three
+SELECT 3
+> DECLARE c12 CURSOR FOR SELECT x.a FROM co AS x JOIN co AS y ON x.a = y.a FOR UPDATE OF x;
+DECLARE CURSOR
+> FETCH c12;
+fields a@co.1:23:4:-1
+row 1
+FETCH 1
+> UPDATE co SET b = 'j' WHERE CURRENT OF c12;
+UPDATE 1
+> DECLARE c13 CURSOR FOR SELECT * FROM co LIMIT 2;
+DECLARE CURSOR
+> FETCH c13;
+fields a@co.1:23:4:-1,b@co.2:25:-1:-1
+row 3,three
+FETCH 1
+> UPDATE co SET b = 'lim' WHERE CURRENT OF c13 RETURNING *;
+fields a@co.1:23:4:-1,b@co.2:25:-1:-1
+row 3,lim
+UPDATE 1
+> DECLARE c14 CURSOR FOR SELECT x.a FROM co AS x, co AS y FOR UPDATE;
+DECLARE CURSOR
+> FETCH c14;
+fields a@co.1:23:4:-1
+row 2
+FETCH 1
+> UPDATE co SET b = 'm' WHERE CURRENT OF c14;
+ERROR 24000 cursor "c14" has multiple FOR UPDATE/SHARE references to table "co"
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> DECLARE c15 CURSOR FOR SELECT * FROM co2 FOR UPDATE;
+DECLARE CURSOR
+> FETCH c15;
+fields a@co2.1:23:4:-1
+row 5
+FETCH 1
+> UPDATE co SET b = 'm' WHERE CURRENT OF c15;
+ERROR 24000 cursor "c15" does not have a FOR UPDATE/SHARE reference to table "co"
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> DECLARE c16 CURSOR FOR SELECT * FROM (SELECT * FROM co WHERE a > 1) s;
+DECLARE CURSOR
+> FETCH c16;
+fields a@co.1:23:4:-1,b@co.2:25:-1:-1
+row 2,two
+FETCH 1
+> UPDATE co SET b = 'sub' WHERE CURRENT OF c16 RETURNING *;
+fields a@co.1:23:4:-1,b@co.2:25:-1:-1
+row 2,sub
+UPDATE 1
+> ROLLBACK;
+ROLLBACK
+> PREPARE pu AS UPDATE co SET b = 'prep' WHERE CURRENT OF c17 RETURNING *;
+PREPARE
+> BEGIN;
+BEGIN
+> DECLARE c17 CURSOR FOR SELECT * FROM co;
+DECLARE CURSOR
+> FETCH 3 c17;
+fields a@co.1:23:4:-1,b@co.2:25:-1:-1
+row 1,one
+row 2,two
+row 3,three
+FETCH 3
+> EXECUTE pu;
+fields a@co.1:23:4:-1,b@co.2:25:-1:-1
+row 3,prep
+UPDATE 1
+> FETCH c17;
+fields a@co.1:23:4:-1,b@co.2:25:-1:-1
+row 2,two
+FETCH 1
+> EXECUTE pu;
+fields a@co.1:23:4:-1,b@co.2:25:-1:-1
+row 2,prep
+UPDATE 1
+> ROLLBACK;
+ROLLBACK
+> DEALLOCATE pu;
+DEALLOCATE
+> BEGIN;
+BEGIN
+> DECLARE c3 CURSOR FOR SELECT a, count(*) FROM co GROUP BY a ORDER BY a;
+DECLARE CURSOR
+> FETCH c3;
+fields a@co.1:23:4:-1,count:20:8:-1
+row 1,1
+FETCH 1
+> UPDATE co SET a = 0 WHERE CURRENT OF c3;
+ERROR 24000 cursor "c3" is not a simply updatable scan of table "co"
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> DECLARE c4 CURSOR FOR SELECT co.a FROM co, co AS x WHERE co.a = x.a;
+DECLARE CURSOR
+> FETCH c4;
+fields a@co.1:23:4:-1
+row 1
+FETCH 1
+> UPDATE co SET a = 0 WHERE CURRENT OF c4;
+ERROR 24000 cursor "c4" is not a simply updatable scan of table "co"
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> DECLARE c5 CURSOR FOR SELECT * FROM co ORDER BY a;
+DECLARE CURSOR
+> FETCH c5;
+fields a@co.1:23:4:-1,b@co.2:25:-1:-1
+row 1,one
+FETCH 1
+> UPDATE co SET a = 0 WHERE CURRENT OF c5;
+ERROR 24000 cursor "c5" is not a simply updatable scan of table "co"
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> DECLARE c6 CURSOR WITH HOLD FOR SELECT * FROM co;
+DECLARE CURSOR
+> FETCH c6;
+fields a@co.1:23:4:-1,b@co.2:25:-1:-1
+row 1,one
+FETCH 1
+> COMMIT;
+COMMIT
+> UPDATE co SET a = 0 WHERE CURRENT OF c6;
+ERROR 24000 cursor "c6" is held from a previous transaction
+> CLOSE c6;
+CLOSE CURSOR
+> CREATE TABLE cop (a int);
+CREATE TABLE
+> CREATE TABLE coc (b int) INHERITS (cop);
+CREATE TABLE
+> INSERT INTO cop VALUES (1);
+INSERT 0 1
+> INSERT INTO coc VALUES (2, 20);
+INSERT 0 1
+> BEGIN;
+BEGIN
+> DECLARE c7 CURSOR FOR SELECT * FROM cop;
+DECLARE CURSOR
+> FETCH c7;
+fields a@cop.1:23:4:-1
+row 1
+FETCH 1
+> FETCH c7;
+fields a@cop.1:23:4:-1
+row 2
+FETCH 1
+> UPDATE cop SET a = a + 100 WHERE CURRENT OF c7;
+UPDATE 1
+> SELECT tableoid::regclass, * FROM cop ORDER BY a;
+fields tableoid:2205:4:-1,a@cop.1:23:4:-1
+row cop,1
+row coc,102
+SELECT 2
+> UPDATE ONLY cop SET a = a + 100 WHERE CURRENT OF c7;
+UPDATE 0
+> ROLLBACK;
+ROLLBACK
+> CREATE VIEW cov AS SELECT * FROM co;
+CREATE VIEW
+> BEGIN;
+BEGIN
+> DECLARE c8 CURSOR FOR SELECT * FROM cov;
+DECLARE CURSOR
+> FETCH c8;
+fields a@cov.1:23:4:-1,b@cov.2:25:-1:-1
+row 1,one
+FETCH 1
+> UPDATE cov SET a = 0 WHERE CURRENT OF c8;
+ERROR 0A000 WHERE CURRENT OF on a view is not implemented
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> DECLARE c9 CURSOR FOR SELECT a FROM co WHERE a = 1;
+DECLARE CURSOR
+> FETCH c9;
+fields a@co.1:23:4:-1
+row 1
+FETCH 1
+> UPDATE co SET a = 7 WHERE CURRENT OF c9 AND a = 1;
+ERROR 42601 syntax error at or near "AND" at 41
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> DECLARE c10 SCROLL CURSOR FOR SELECT a, b FROM co;
+DECLARE CURSOR
+> FETCH LAST c10;
+fields a@co.1:23:4:-1,b@co.2:25:-1:-1
+row 2,two
+FETCH 1
+> FETCH PRIOR c10;
+fields a@co.1:23:4:-1,b@co.2:25:-1:-1
+row 3,three
+FETCH 1
+> DELETE FROM co WHERE CURRENT OF c10 RETURNING *;
+fields a@co.1:23:4:-1,b@co.2:25:-1:-1
+row 3,three
+DELETE 1
+> FETCH ABSOLUTE 0 c10;
+fields a@co.1:23:4:-1,b@co.2:25:-1:-1
+FETCH 0
+> DELETE FROM co WHERE CURRENT OF c10;
+ERROR 24000 cursor "c10" is not positioned on a row
+> ROLLBACK;
+ROLLBACK
+> CREATE FUNCTION co_f() RETURNS int LANGUAGE plpgsql AS $$
+>> DECLARE
+>>   r record;
+>>   cur CURSOR FOR SELECT a FROM co FOR UPDATE;
+>>   n int := 0;
+>> BEGIN
+>>   FOR r IN cur LOOP
+>>     UPDATE co SET a = a + 1000 WHERE CURRENT OF cur;
+>>     n := n + 1;
+>>   END LOOP;
+>>   RETURN n;
+>> END $$;
+CREATE FUNCTION
+> SELECT co_f();
+fields co_f:23:4:-1
+row 4
+SELECT 1
+> SELECT * FROM co ORDER BY a, b;
+fields a@co.1:23:4:-1,b@co.2:25:-1:-1
+row 1001,one
+row 1002,two
+row 1002,two
+row 1003,three
+SELECT 4

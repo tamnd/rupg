@@ -4,14 +4,14 @@
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{
-    DeleteStmt, Node, RangeVar, ResTarget, ReturningClause, SubLinkType, UpdateStmt,
+    CurrentOfExpr, DeleteStmt, Node, RangeVar, ResTarget, ReturningClause, SubLinkType, UpdateStmt,
 };
 use rupg_types::{Value, oid};
 
 use crate::Analyzer;
 use crate::agg::Kind;
 use crate::coerce::AtOpt;
-use crate::expr::{Expr, ExprKind, SubLink, SubLinkKind, Var};
+use crate::expr::{CurrentOf, Expr, ExprKind, SubLink, SubLinkKind, Var};
 use crate::from::{Column, FromItem, TABLE_OID_ATTNUM};
 use crate::insert::{
     Generated, Item, Write, WriteKind, default_part, merge_parts, not_yet, targets, with_checks,
@@ -383,6 +383,30 @@ impl Analyzer<'_> {
         }
     }
 
+    /// `transformCurrentOfExpr`: the condition of `WHERE CURRENT OF` on the target table, which is the relation 0. In a function of PL/pgSQL, a name that is a variable of type `refcursor` gives the name of the cursor as a parameter. An updatable view has no `ctid`, so the rewriter of PostgreSQL rejects the condition.
+    fn current_of(&mut self, c: &CurrentOfExpr) -> Result<Expr> {
+        if self.auto_view.is_some() {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "WHERE CURRENT OF on a view is not implemented",
+            ));
+        }
+        let name = c.cursor_name.as_deref().unwrap_or_default();
+        let variable = match self.variables {
+            Some(variables) => variables.column(&[name], None)?,
+            None => None,
+        };
+        let cursor = match variable.filter(|v| v.ty == oid::REFCURSOR) {
+            Some(v) => Expr::new(ExprKind::Param(v.param), v.ty),
+            None => Expr::new(ExprKind::Const(Value::text(name)), oid::TEXT),
+        };
+        let table = self.scope.relations.first().map_or(0, |r| r.oid);
+        let var =
+            |attnum, ty| Expr::new(ExprKind::Var(Var { relation: 0, attnum, levels_up: 0 }), ty);
+        let args = vec![cursor, var(TABLE_OID_ATTNUM, oid::OID), var(-1, oid::TID)];
+        Ok(Expr::new(ExprKind::CurrentOf(Box::new(CurrentOf { table, args })), oid::BOOL))
+    }
+
     /// The target table, then the relations of `FROM` or `USING`, as `setTargetTable` and `transformFromClause` add them. A name that the list gives twice is an error.
     pub(crate) fn target_from(
         &mut self,
@@ -395,11 +419,11 @@ impl Analyzer<'_> {
         Ok(items)
     }
 
-    /// `transformWhereClause` of the statement, with `WHERE CURRENT OF` as an error.
+    /// `transformWhereClause` of the statement. `WHERE CURRENT OF` is the condition of [`Analyzer::current_of`].
     pub(crate) fn target_where(&mut self, node: Option<&Node>) -> Result<Option<Expr>> {
         match node {
             None => Ok(None),
-            Some(Node::CurrentOfExpr(_)) => Err(not_yet("WHERE CURRENT OF")),
+            Some(Node::CurrentOfExpr(c)) => self.current_of(c).map(Some),
             Some(node) => {
                 let expr = self.with_kind(Kind::Where, |a| a.transform(Some(node)))?;
                 Ok(Some(self.coerce_to_boolean(expr, "WHERE")?))

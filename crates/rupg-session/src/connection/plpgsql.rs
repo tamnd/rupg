@@ -309,11 +309,12 @@ impl Spi for PlSpi<'_> {
     ) -> rupg_common::Result<String> {
         let reader = self.reader();
         plan.start(&*reader)?;
+        let plan = plan.cursor();
         let run = plan.run(params, &*reader);
         self.forward(&reader);
         drop(reader);
         let name = name.map_or_else(|| self.new_portal_name(), str::to_owned);
-        self.conn.open_portal(&name, plan, run, text, options);
+        self.conn.open_portal(&name, &plan, run, text, options);
         Ok(name)
     }
 

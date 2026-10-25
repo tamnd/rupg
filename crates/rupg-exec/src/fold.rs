@@ -684,6 +684,7 @@ impl<'a> Fold<'a> {
                 t.children_mut().into_iter().try_for_each(|e| self.subqueries(e))
             }
             ExprKind::Xml(x) => x.children_mut().into_iter().try_for_each(|e| self.subqueries(e)),
+            ExprKind::CurrentOf(c) => self.all(&mut c.args),
             ExprKind::Window(w) => {
                 self.all(&mut w.args)?;
                 match &mut w.filter {
@@ -1030,6 +1031,11 @@ impl<'a> Fold<'a> {
                 let immutable = !matches!(x.op, XmlOp::Element | XmlOp::Forest);
                 let folded = with(expr, ExprKind::Xml(x));
                 if all && immutable { self.evaluate(folded) } else { Ok(folded) }
+            }
+            ExprKind::CurrentOf(c) => {
+                let mut c = c.clone();
+                c.args = self.list(&c.args)?;
+                Ok(with(expr, ExprKind::CurrentOf(c)))
             }
             // The columns read the row of the plan as a `CaseTest`, which is not the value of a `CASE` around the call.
             ExprKind::JsonTable(t) => {
