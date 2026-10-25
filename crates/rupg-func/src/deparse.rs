@@ -256,9 +256,10 @@ impl<'a> Deparser<'a> {
     fn variable(&mut self, var: &Var, in_order_by: bool) -> Result<String> {
         let bogus = || Error::internal(format!("bogus varlevelsup: {}", var.levels_up));
         let depth = self.namespaces.len().checked_sub(var.levels_up + 1).ok_or_else(bogus)?;
+        // `MergeSupportFunc` is not a `Var`, so that its column always shows its name.
         if var.relation == MERGE_ACTION {
             self.buf.push_str("MERGE_ACTION()");
-            return Ok("merge_action".to_string());
+            return Ok(String::new());
         }
         let space = &self.namespaces[depth];
         let target = match (&space.target, &space.returning, var.relation) {

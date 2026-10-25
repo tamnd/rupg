@@ -1701,7 +1701,7 @@ impl Analyzer<'_> {
     }
 
     /// A row of `VALUES` as an [`InsertDef`] keeps it: the value of each item for its column, as `transformInsertRow` gives it, or `None` for `DEFAULT`. The value for a part of a column is the assignment to the part of a null value. The row keeps the value of an identity column with `OVERRIDING USER VALUE`, which only `rewriteTargetListIU` drops.
-    fn kept_row(
+    pub(crate) fn kept_row(
         &mut self,
         items: &[Item],
         columns: &[Column],

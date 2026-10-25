@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use rupg_analyze::{
     Column, ConflictDef, Cte, FRAMEOPTION_END_OFFSET, FRAMEOPTION_END_UNBOUNDED_FOLLOWING,
     FRAMEOPTION_START_OFFSET, Frame, FromFunction, FromItem, GroupingSet, InsertSource, Join,
-    JoinKind, JoinRow, NullTreatment, Query, Relation, SetKind, SetOp, SetTree, TableSample,
-    WriteKind,
+    JoinKind, JoinRow, MatchKind, MergeClauseDef, MergeCommand, MergeDef, NullTreatment, Query,
+    Relation, SetKind, SetOp, SetTree, TableSample, WriteKind,
 };
 use rupg_sql::nodes::{
     FRAMEOPTION_BETWEEN, FRAMEOPTION_END_CURRENT_ROW, FRAMEOPTION_END_OFFSET_PRECEDING,
@@ -90,7 +90,7 @@ impl Deparser<'_> {
         done
     }
 
-    /// `get_insert_query_def`, `get_update_query_def` and `get_delete_query_def`: an `INSERT`, an `UPDATE` or a `DELETE` in the form that the analysis kept before the rewrite, with `indent` as the indent of the query. `MERGE` is not supported yet.
+    /// `get_insert_query_def`, `get_update_query_def` and `get_delete_query_def`: an `INSERT`, an `UPDATE` or a `DELETE` in the form that the analysis kept before the rewrite, with `indent` as the indent of the query, or a `MERGE` as [`Deparser::merge_def`] shows it.
     pub(super) fn write_def(&mut self, query: &Query, indent: i32) -> Result<()> {
         let write = query.write.as_ref().ok_or_else(|| Error::internal("a query with no write"))?;
         let kept =
@@ -98,6 +98,10 @@ impl Deparser<'_> {
         let conflict = write.insert_def.as_ref().and_then(|d| d.conflict.as_ref());
         let plain =
             (write.on_conflict.is_none() || conflict.is_some()) && kept.is_none_or(|k| k.is_some());
+        let merge = write.merge.as_ref().and_then(|m| m.def.as_deref());
+        if let Some(def) = merge.filter(|_| plain) {
+            return self.merge_def(query, def, indent);
+        }
         let def = match (&write.insert_def, &write.set_def, write.kind) {
             (Some(def), _, WriteKind::Insert) if plain => def,
             (_, Some(set), WriteKind::Update) if plain => {
@@ -125,6 +129,116 @@ impl Deparser<'_> {
         self.namespaces.pop();
         self.indent = saved_indent;
         done
+    }
+
+    /// `get_merge_query_def`: a `MERGE` in the form that the analysis kept before the join of the source and the target table.
+    fn merge_def(&mut self, query: &Query, def: &MergeDef, indent: i32) -> Result<()> {
+        let shown = Query {
+            relations: def.relations.clone(),
+            from: vec![FromItem::Relation(0), def.source.clone()],
+            ..Query::default()
+        };
+        let space = self.namespace(&shown);
+        let refname = space.names.first().cloned().unwrap_or_default();
+        // The range table has the target table and the source.
+        let saved_prefix = std::mem::replace(&mut self.prefix, true);
+        let saved_indent = std::mem::replace(&mut self.indent, indent);
+        self.namespaces.push(space);
+        let done = self
+            .with_clause(query)
+            .and_then(|()| self.merge_body(&shown, def, &refname))
+            .and_then(|()| self.returning_clause(query));
+        self.namespaces.pop();
+        self.indent = saved_indent;
+        self.prefix = saved_prefix;
+        done
+    }
+
+    /// The text of [`Deparser::merge_def`] for a target table with the name `refname`, before `RETURNING`.
+    fn merge_body(&mut self, shown: &Query, def: &MergeDef, refname: &str) -> Result<()> {
+        self.indent += INDENT_STD;
+        if !self.flat {
+            self.buf.push(' ');
+        }
+        let rel = def.relations.first().ok_or_else(|| Error::internal("a MERGE with no table"))?;
+        self.buf.push_str("MERGE INTO ");
+        if rel.only {
+            self.buf.push_str("ONLY ");
+        }
+        self.buf.push_str(&relation_name(rel.oid, self.session)?);
+        // `get_rte_alias` with no `AS`.
+        let renamed =
+            reg::class_name(rel.oid, self.session).is_none_or(|(name, _)| name != refname);
+        if rel.alias.is_some() || renamed {
+            self.buf.push(' ');
+            self.buf.push_str(&quote_identifier(refname));
+        }
+        self.clause_items(shown, std::slice::from_ref(&def.source), " USING ")?;
+        self.keyword(" ON ", -INDENT_STD, INDENT_STD, 2);
+        self.expr(&def.on, false)?;
+        // With `NOT MATCHED BY SOURCE`, each `NOT MATCHED` shows `BY SOURCE` or `BY TARGET`.
+        let by_source = def.clauses.iter().any(|c| c.kind == MatchKind::NotMatchedBySource);
+        for clause in &def.clauses {
+            self.keyword(" WHEN ", -INDENT_STD, INDENT_STD, 2);
+            self.buf.push_str(match clause.kind {
+                MatchKind::Matched => "MATCHED",
+                MatchKind::NotMatchedBySource => "NOT MATCHED BY SOURCE",
+                MatchKind::NotMatchedByTarget if by_source => "NOT MATCHED BY TARGET",
+                MatchKind::NotMatchedByTarget => "NOT MATCHED",
+            });
+            if let Some(condition) = &clause.condition {
+                self.keyword(" AND ", -INDENT_STD, INDENT_STD, 3);
+                self.expr(condition, false)?;
+            }
+            self.keyword(" THEN ", -INDENT_STD, INDENT_STD, 3);
+            match clause.command {
+                MergeCommand::Insert => self.merge_insert(rel, clause)?,
+                MergeCommand::Update => {
+                    self.buf.push_str("UPDATE SET ");
+                    self.set_list(rel, &clause.items)?;
+                }
+                MergeCommand::Delete => self.buf.push_str("DELETE"),
+                MergeCommand::Nothing => self.buf.push_str("DO NOTHING"),
+            }
+        }
+        Ok(())
+    }
+
+    /// The `INSERT` of a `WHEN` clause of [`Deparser::merge_body`], as `get_insert_query_def` shows the columns and the values.
+    fn merge_insert(&mut self, rel: &Relation, clause: &MergeClauseDef) -> Result<()> {
+        self.buf.push_str("INSERT");
+        if !clause.items.is_empty() {
+            self.buf.push_str(" (");
+            for (i, (n, value)) in clause.items.iter().enumerate() {
+                if i > 0 {
+                    self.buf.push_str(", ");
+                }
+                let column = usize::try_from(n - 1).ok().and_then(|i| rel.columns.get(i));
+                if let Some(column) = column {
+                    self.buf.push_str(&quote_identifier(&column.name));
+                }
+                if let Some(value) = value {
+                    self.indirection(value)?;
+                }
+            }
+            self.buf.push(')');
+        }
+        match clause.overriding {
+            OverridingKind::OVERRIDING_SYSTEM_VALUE => {
+                self.buf.push_str(" OVERRIDING SYSTEM VALUE");
+            }
+            OverridingKind::OVERRIDING_USER_VALUE => self.buf.push_str(" OVERRIDING USER VALUE"),
+            _ => {}
+        }
+        if clause.items.is_empty() {
+            self.buf.push_str(" DEFAULT VALUES");
+            return Ok(());
+        }
+        let values: Vec<Option<Expr>> = clause.items.iter().map(|(_, v)| v.clone()).collect();
+        self.keyword(" VALUES (", -INDENT_STD, INDENT_STD, 4);
+        self.value_list(&values, ", ")?;
+        self.buf.push(')');
+        Ok(())
     }
 
     /// The part `ON CONFLICT` of `get_insert_query_def`. The inference reads the target table with no prefix, and `SET` and `WHERE` read the target table and `excluded`.

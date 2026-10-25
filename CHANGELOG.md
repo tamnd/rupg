@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `pg_get_functiondef` shows the body of a function with a `MERGE` (#760).
 - A rule action can be an `INSERT` with `ON CONFLICT`, and `pg_get_ruledef` shows the clause (#759).
 - A rule action can be a VALUES list that reads OLD and NEW, can have WITH queries that write data, and can have subqueries in FROM that read OLD and NEW. The deparse shows WITH of a write (#758).
 - A rule condition can name a column of the row without OLD or NEW (#757).

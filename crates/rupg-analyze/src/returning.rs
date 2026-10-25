@@ -30,7 +30,7 @@ pub struct Shown {
     /// `returningOldAlias` and `returningNewAlias`: the names of the old and the new row.
     pub old: String,
     pub new: String,
-    /// The targets of the list as the statement gives them, with the columns of the relations of the statement, when the analysis keeps the form of the statement for a deparse. A column of `old` or `new` reads [`RETURNING_OLD`] or [`RETURNING_NEW`].
+    /// The targets of the list as the statement gives them, with the columns of the relations of the statement, when the analysis keeps the form of the statement for a deparse. A column of `old` or `new` reads [`RETURNING_OLD`] or [`RETURNING_NEW`], and `merge_action()` reads [`MERGE_ACTION`].
     pub kept: Option<Vec<crate::select::Target>>,
 }
 
@@ -147,6 +147,7 @@ impl Analyzer<'_> {
             }
         }
         let [old, new] = relations;
+        let merge_action = self.scope.merge_action;
         let kept = self.keep_source.then(|| {
             let mut kept = targets.clone();
             for target in &mut kept {
@@ -159,6 +160,8 @@ impl Analyzer<'_> {
                         e.kind = ExprKind::Var(Var { relation: RETURNING_OLD, ..var });
                     } else if Some(var.relation) == new {
                         e.kind = ExprKind::Var(Var { relation: RETURNING_NEW, ..var });
+                    } else if Some(var.relation) == merge_action {
+                        e.kind = ExprKind::Var(Var { relation: MERGE_ACTION, ..var });
                     }
                 });
             }
