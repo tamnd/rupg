@@ -164,9 +164,42 @@ pub struct BufferStats {
     pub writes: u64,
 }
 
+/// The cells of the hit counter. A power of two.
+const HIT_CELLS: usize = 64;
+
+/// One cell of the hit counter on its own cache line. 128 bytes covers the pair of lines that the prefetcher of x86-64 fetches and the line of Apple M processors.
+#[derive(Debug, Default)]
+#[repr(align(128))]
+struct HitCell(AtomicU64);
+
+/// The hit counter. A hit is the hot path of the pool, and one shared counter makes every core write the same cache line: with 10 threads a hit then costs about 20 times more. So each thread adds to its own cell, and the stats add the cells.
+#[derive(Debug)]
+struct Hits(Box<[HitCell]>);
+
+impl Default for Hits {
+    fn default() -> Hits {
+        Hits((0..HIT_CELLS).map(|_| HitCell::default()).collect())
+    }
+}
+
+impl Hits {
+    fn add(&self) {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        thread_local! {
+            static CELL: usize = NEXT.fetch_add(1, Ordering::Relaxed) % HIT_CELLS;
+        }
+        let cell = CELL.with(|c| *c);
+        self.0[cell].0.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn get(&self) -> u64 {
+        self.0.iter().map(|c| c.0.load(Ordering::Relaxed)).fold(0, u64::wrapping_add)
+    }
+}
+
 #[derive(Debug, Default)]
 struct Counters {
-    hits: AtomicU64,
+    hits: Hits,
     misses: AtomicU64,
     evictions: AtomicU64,
     writes: AtomicU64,
@@ -385,7 +418,7 @@ impl BufferPool {
             reserved: self.budget.lock().bytes(),
             resident,
             dirty,
-            hits: get(&self.counters.hits),
+            hits: self.counters.hits.get(),
             misses: get(&self.counters.misses),
             evictions: get(&self.counters.evictions),
             writes: get(&self.counters.writes),
@@ -537,7 +570,7 @@ impl BufferPool {
                 loop {
                     let seen = frame.latch.load();
                     if seen.state() != State::Evicted {
-                        self.counters.hits.fetch_add(1, Ordering::Relaxed);
+                        self.counters.hits.add();
                         return Ok(index);
                     }
                     if frame.latch.try_exclusive(seen) {
@@ -548,7 +581,7 @@ impl BufferPool {
             }
             Units::Table(t) => match t.lookup(page) {
                 Some(index) => {
-                    self.counters.hits.fetch_add(1, Ordering::Relaxed);
+                    self.counters.hits.add();
                     Ok(index)
                 }
                 None => self.load_table(t, page),
