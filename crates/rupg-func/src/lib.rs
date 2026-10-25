@@ -84,7 +84,10 @@ use rupg_common::{Error, Object, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_types::{ByteaOutput, DateFormat, IntervalStyle, TimeZone, TypeError, Value};
 
-pub use acl::{check_execute, check_permissions, insert_allowed, lock_table_allowed};
+pub use acl::{
+    check_execute, check_permissions, insert_allowed, lock_table_allowed, partition_key_shown,
+    shown_columns,
+};
 pub use activity::{Backend, BackendState, Client, Ssl};
 pub use agg::check_percentile;
 pub use cast::local_time;

@@ -121,6 +121,20 @@ impl Error {
         self
     }
 
+    /// Puts the detail line, or takes the detail line away for `None`.
+    #[must_use]
+    pub fn with_detail_opt(mut self, detail: Option<String>) -> Error {
+        match detail {
+            Some(detail) => self.with_detail(detail),
+            None => {
+                if let Some(more) = self.more.as_mut() {
+                    more.detail = None;
+                }
+                self
+            }
+        }
+    }
+
     /// Adds the hint line.
     #[must_use]
     pub fn with_hint(mut self, hint: impl Into<String>) -> Error {

@@ -550,6 +550,49 @@ fn attribute_check(relid: u32, attnum: i16, role: u32, mask: u32, session: &dyn 
     Ok(Some(aclmask(&parse_acl(acl)?, role, class.owner, mask) != 0))
 }
 
+/// `ExecBuildSlotValueDescription`: the numbers of the columns of `relid` that the detail of a failing row shows to the current user, or `None` for all of them when the user has `SELECT` on the table. A column shows when the user has `SELECT` on it or the statement gives it a value (`modified`).
+///
+/// # Errors
+///
+/// The error of an ACL that does not parse.
+pub fn shown_columns(
+    relid: u32,
+    modified: &[i16],
+    session: &dyn Session,
+) -> Result<Option<Vec<i16>>> {
+    let role = current_user(session);
+    if class_check(relid, role, ACL_SELECT, session)? != Some(false) {
+        return Ok(None);
+    }
+    let mut shown = Vec::new();
+    for attribute in attributes_of(relid, session).iter().filter(|a| a.num >= 1 && !a.dropped) {
+        if modified.contains(&attribute.num)
+            || attribute_check(relid, attribute.num, role, ACL_SELECT, session)? == Some(true)
+        {
+            shown.push(attribute.num);
+        }
+    }
+    Ok(Some(shown))
+}
+
+/// `ExecBuildSlotPartitionKeyDescription`: true when the detail of a row that no partition of `relid` takes shows the partition key, whose columns are `attrs` with 0 for an expression. The current user must have `SELECT` on the table, or on each column of the key with no expression in the key.
+///
+/// # Errors
+///
+/// The error of an ACL that does not parse.
+pub fn partition_key_shown(relid: u32, attrs: &[i16], session: &dyn Session) -> Result<bool> {
+    let role = current_user(session);
+    if class_check(relid, role, ACL_SELECT, session)? != Some(false) {
+        return Ok(true);
+    }
+    for &attnum in attrs {
+        if attnum == 0 || attribute_check(relid, attnum, role, ACL_SELECT, session)? != Some(true) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// `pg_attribute_aclcheck_all_ext` with `ACLMASK_ANY`: true when a user column that is not dropped has a privilege of `mask`.
 fn all_attributes_check(relid: u32, role: u32, mask: u32, session: &dyn Session) -> Check {
     let Some(class) = class_of(relid, session) else { return Ok(None) };

@@ -72,9 +72,17 @@ struct Dispatch {
 #[derive(Debug, Default)]
 pub struct Router {
     dispatch: Vec<Dispatch>,
+    /// The columns that the statement gives values, for the detail of a row that a partition does not take.
+    modified: Vec<i16>,
 }
 
 impl Router {
+    /// A router for a statement that gives values to the columns `modified` of its table.
+    #[must_use]
+    pub fn of(modified: &[i16]) -> Router {
+        Router { modified: modified.to_vec(), ..Router::default() }
+    }
+
     /// `ExecFindPartition`: the leaf partition of a row of the partitioned table `root`, and the row with the columns of the partition. A root that is itself a partition first checks its partition constraint.
     ///
     /// # Errors
@@ -89,7 +97,7 @@ impl Router {
         let catalog = catalog(session)?;
         let rel = relation(catalog, root)?;
         if rel.partition_of.is_some() && !self.check(root, &row, session)? {
-            return Err(partition_check_error(rel, &row, session)?);
+            return Err(partition_check_error(rel, &row, &self.modified, session)?);
         }
         let (mut oid, mut row) = (root, row);
         while relation(catalog, oid)?.kind == RelKind::Partitioned {
@@ -148,7 +156,8 @@ impl Router {
         if self.check(table, row, session)? {
             return Ok(());
         }
-        Err(partition_check_error(relation(catalog(session)?, table)?, row, session)?)
+        let rel = relation(catalog(session)?, table)?;
+        Err(partition_check_error(rel, row, &self.modified, session)?)
     }
 
     /// The index of the dispatch of the partitioned table `oid`.
@@ -520,12 +529,16 @@ fn no_partition(
     for (value, &ty) in values.iter().zip(&d.types) {
         shown.push(crate::insert::shown(ty, value, MAX_FIELD_LEN, session)?);
     }
-    let columns = rupg_func::partition_key_columns(rel, session)?;
     let error = Error::new(
         SqlState::CHECK_VIOLATION,
         format!("no partition of relation \"{}\" found for row", d.name),
-    )
-    .with_detail(format!(
+    );
+    let attrs = rel.partition_key.as_ref().map_or(&[][..], |k| &k.attrs);
+    if !rupg_func::partition_key_shown(rel.oid, attrs, session)? {
+        return Ok(rupg_func::with_table(error, rel.oid, session));
+    }
+    let columns = rupg_func::partition_key_columns(rel, session)?;
+    let error = error.with_detail(format!(
         "Partition key of the failing row contains ({columns}) = ({}).",
         shown.join(", ")
     ));
@@ -536,6 +549,7 @@ fn no_partition(
 pub(crate) fn partition_check_error(
     rel: &Relation,
     row: &[Value],
+    modified: &[i16],
     session: &dyn Session,
 ) -> Result<Error> {
     let types = crate::insert::row_types(rel);
@@ -543,6 +557,6 @@ pub(crate) fn partition_check_error(
         SqlState::CHECK_VIOLATION,
         format!("new row for relation \"{}\" violates partition constraint", rel.name),
     )
-    .with_detail(crate::insert::failing_row(row, &types, session)?);
+    .with_detail_opt(crate::insert::failing_row(row, &types, (rel.oid, modified), session)?);
     Ok(rupg_func::with_table(error, rel.oid, session))
 }

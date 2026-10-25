@@ -170,7 +170,7 @@ impl Connection {
     ) -> Result<Upserted, Error> {
         let catalog = self.catalog();
         let heap = self.store.heap();
-        let mut routing = Routing::of(TRIGGER_INSERT);
+        let mut routing = Routing::of(TRIGGER_INSERT, &info.modified);
         // The places of the arbiters in the unique keys of each leaf, at the place of the leaf.
         let mut arbiters: Vec<Vec<usize>> = Vec::new();
         let mut done = Upserted::default();

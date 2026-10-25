@@ -371,6 +371,7 @@ impl Analyzer<'_> {
                 inherit,
                 view_check: None,
                 views: 0,
+                modified: Vec::new(),
             }),
             ..Query::default()
         };
@@ -426,7 +427,6 @@ impl Analyzer<'_> {
             // `INSERT DEFAULT VALUES`.
             Vec::new()
         } else {
-            self.mark_inserted(&given);
             let items = self.value_items(&clause.values, Kind::ValuesSingle)?;
             let explicit = !clause.targetList.is_empty();
             self.insert_row(items, table, columns, &given, explicit, clause.r#override)?

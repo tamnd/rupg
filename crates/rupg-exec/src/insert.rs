@@ -42,7 +42,12 @@ pub(crate) fn check_rows(
             && let Some(rel) = partition
             && !router.check(rel.oid, &row[..info.width], session)?
         {
-            return Err(crate::partition::partition_check_error(rel, &row[..info.width], session)?);
+            return Err(crate::partition::partition_check_error(
+                rel,
+                &row[..info.width],
+                &info.modified,
+                session,
+            )?);
         }
         if let Some(rel) = rel {
             // `ExecConstraints` checks the not-null constraints of the virtual generated columns after the others, with the generation expressions on the row.
@@ -61,7 +66,12 @@ pub(crate) fn check_rows(
                         column.name, info.name
                     ),
                 )
-                .with_detail(failing_row(&row[..info.width], &types, session)?);
+                .with_detail_opt(failing_row(
+                    &row[..info.width],
+                    &types,
+                    (info.table, &info.modified),
+                    session,
+                )?);
                 return Err(rupg_func::with_table_column(error, rel.oid, &column.name, session));
             }
         }
@@ -74,7 +84,12 @@ pub(crate) fn check_rows(
                         info.name
                     ),
                 )
-                .with_detail(failing_row(&row[..info.width], &types, session)?);
+                .with_detail_opt(failing_row(
+                    &row[..info.width],
+                    &types,
+                    (info.table, &info.modified),
+                    session,
+                )?);
                 return Err(rupg_func::with_table_constraint(error, info.table, name, session));
             }
         }
@@ -84,7 +99,12 @@ pub(crate) fn check_rows(
             && let Some(rel) = partition
             && !router.check(rel.oid, &row[..info.width], session)?
         {
-            return Err(crate::partition::partition_check_error(rel, &row[..info.width], session)?);
+            return Err(crate::partition::partition_check_error(
+                rel,
+                &row[..info.width],
+                &info.modified,
+                session,
+            )?);
         }
         out.push(row);
     }
@@ -130,22 +150,41 @@ pub fn row_types(rel: &rupg_catalog::Relation) -> Vec<u32> {
     rel.columns.iter().map(ty).collect()
 }
 
-/// `ExecBuildSlotValueDescription`: the detail `Failing row contains (...)` with the text of each value, `null` for a null value, `virtual` for a virtual generated column, and a value of more than 64 bytes cut with `...` after it.
+/// `ExecBuildSlotValueDescription`: the detail `Failing row contains (...)` for a row of the table `relid` with the text of each value, `null` for a null value, `virtual` for a virtual generated column, and a value of more than 64 bytes cut with `...` after it. When the current user has no `SELECT` on the table, the detail names the columns that it shows, `(a, b) = (...)`, with only the columns of [`rupg_func::shown_columns`], and there is no detail when no column shows. `modified` are the columns that the statement gives values.
 ///
 /// # Errors
 ///
 /// The errors of the output functions of the types.
-pub fn failing_row(row: &[Value], types: &[u32], session: &dyn Session) -> Result<String> {
-    let mut parts = Vec::with_capacity(row.len());
+pub fn failing_row(
+    row: &[Value],
+    types: &[u32],
+    (relid, modified): (u32, &[i16]),
+    session: &dyn Session,
+) -> Result<Option<String>> {
+    let visible = rupg_func::shown_columns(relid, modified, session)?;
+    let rel = session.catalog().and_then(|c| c.relation(relid));
+    let (mut parts, mut names) = (Vec::with_capacity(row.len()), Vec::new());
     // A dropped column has the type 0, and `ExecBuildSlotValueDescription` skips it.
-    for (value, &ty) in row.iter().zip(types).filter(|&(_, &ty)| ty != 0) {
+    for (index, (value, &ty)) in row.iter().zip(types).enumerate().filter(|(_, (_, ty))| **ty != 0)
+    {
+        if let Some(visible) = &visible {
+            if !visible.contains(&i16::try_from(index + 1).unwrap_or(i16::MAX)) {
+                continue;
+            }
+            names.push(rel.and_then(|r| r.columns.get(index)).map_or("", |c| c.name.as_str()));
+        }
         if ty == VIRTUAL_TYPE {
             parts.push("virtual".to_string());
             continue;
         }
         parts.push(shown(ty, value, MAX_FIELD_LEN, session)?);
     }
-    Ok(format!("Failing row contains ({}).", parts.join(", ")))
+    let values = parts.join(", ");
+    Ok(match visible {
+        None => Some(format!("Failing row contains ({values}).")),
+        Some(_) if names.is_empty() => None,
+        Some(_) => Some(format!("Failing row contains ({}) = ({values}).", names.join(", "))),
+    })
 }
 
 /// The text of a value in the detail of an error: `null` for a null value, and a value of more than `max` bytes cut with `...` after it, as `pg_mbcliplen` cuts it.
