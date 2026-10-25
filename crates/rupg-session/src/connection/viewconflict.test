@@ -1,0 +1,178 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE vc_t (a int PRIMARY KEY, b text DEFAULT 'Unspecified');
+CREATE TABLE
+> INSERT INTO vc_t VALUES (1, 'Row 1'), (2, 'Row 2');
+INSERT 0 2
+> CREATE VIEW vc_v AS SELECT a, upper(b) AS upper FROM vc_t;
+CREATE VIEW
+> INSERT INTO vc_v (a) VALUES (3) ON CONFLICT DO NOTHING;
+INSERT 0 1
+> INSERT INTO vc_v (a) VALUES (3) ON CONFLICT DO NOTHING;
+INSERT 0 0
+> INSERT INTO vc_v (a) VALUES (3) ON CONFLICT (a) DO NOTHING;
+INSERT 0 0
+> INSERT INTO vc_v (a) VALUES (3) ON CONFLICT (a) DO UPDATE SET a = excluded.a;
+INSERT 0 1
+> INSERT INTO vc_v (a) VALUES (3) ON CONFLICT (a) DO UPDATE SET upper = 'blarg';
+ERROR 0A000 cannot insert into column "upper" of view "vc_v"
+DETAIL View columns that are not columns of their base relation are not updatable.
+> INSERT INTO vc_v (a) VALUES (3) ON CONFLICT (a) DO UPDATE SET nosuch = 1;
+ERROR 42703 column "nosuch" of relation "vc_v" does not exist at 63
+> INSERT INTO vc_v (a) VALUES (3) ON CONFLICT (upper) DO NOTHING;
+ERROR 42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification
+> INSERT INTO vc_v (a) VALUES (3) ON CONFLICT (nosuch) DO NOTHING;
+ERROR 42703 column "nosuch" does not exist at 45
+> INSERT INTO vc_v (a) VALUES (3) ON CONFLICT ON CONSTRAINT vc_t_pkey DO NOTHING;
+ERROR 42704 constraint "vc_t_pkey" for table "vc_v" does not exist
+> INSERT INTO vc_v (a) VALUES (3) ON CONFLICT (a) DO UPDATE SET a = excluded.a WHERE excluded.upper = 'UNSPECIFIED' RETURNING old.a AS old_a, old.upper AS old_upper, new.a AS new_a, new.upper AS new_upper;
+fields old_a@vc_v.1:23:4:-1,old_upper@vc_v.2:25:-1:-1,new_a@vc_v.1:23:4:-1,new_upper@vc_v.2:25:-1:-1
+row 3,UNSPECIFIED,3,UNSPECIFIED
+INSERT 0 1
+> INSERT INTO vc_v (a) VALUES (3) ON CONFLICT (a) DO UPDATE SET a = excluded.a WHERE excluded.upper = 'NO' RETURNING *;
+fields a@vc_v.1:23:4:-1,upper@vc_v.2:25:-1:-1
+INSERT 0 0
+> INSERT INTO vc_v (a) VALUES (3), (4) ON CONFLICT (a) DO UPDATE SET a = vc_v.a + 10 RETURNING a, upper;
+fields a@vc_v.1:23:4:-1,upper@vc_v.2:25:-1:-1
+row 13,UNSPECIFIED
+row 4,UNSPECIFIED
+INSERT 0 2
+> SELECT * FROM vc_t ORDER BY a;
+fields a@vc_t.1:23:4:-1,b@vc_t.2:25:-1:-1
+row 1,Row 1
+row 2,Row 2
+row 4,Unspecified
+row 13,Unspecified
+SELECT 4
+> CREATE TABLE vc_u (a text UNIQUE, b float8);
+CREATE TABLE
+> INSERT INTO vc_u VALUES ('xyxyxy', 0);
+INSERT 0 1
+> CREATE VIEW vc_uv AS SELECT b, b + 1 AS c, a, '2.0'::text AS two FROM vc_u;
+CREATE VIEW
+> INSERT INTO vc_uv (a, b) VALUES ('xyxyxy', 1) ON CONFLICT (a) DO UPDATE SET b = vc_uv.b;
+INSERT 0 1
+> SELECT * FROM vc_u;
+fields a@vc_u.1:25:-1:-1,b@vc_u.2:701:8:-1
+row xyxyxy,0
+SELECT 1
+> INSERT INTO vc_uv (a, b) VALUES ('xyxyxy', 1) ON CONFLICT (a) DO UPDATE SET b = excluded.b;
+INSERT 0 1
+> SELECT * FROM vc_u;
+fields a@vc_u.1:25:-1:-1,b@vc_u.2:701:8:-1
+row xyxyxy,1
+SELECT 1
+> INSERT INTO vc_uv (a, b) VALUES ('xyxyxy', 3) ON CONFLICT (a) DO UPDATE SET b = cast(excluded.two AS float8);
+INSERT 0 1
+> SELECT * FROM vc_u;
+fields a@vc_u.1:25:-1:-1,b@vc_u.2:701:8:-1
+row xyxyxy,2
+SELECT 1
+> INSERT INTO vc_uv (a, b) VALUES ('xyxyxy', 3) ON CONFLICT (a) DO UPDATE SET b = excluded.b WHERE excluded.c > 0;
+INSERT 0 1
+> SELECT * FROM vc_u;
+fields a@vc_u.1:25:-1:-1,b@vc_u.2:701:8:-1
+row xyxyxy,3
+SELECT 1
+> INSERT INTO vc_uv (a, b) VALUES ('xyxyxy', 5) ON CONFLICT (a) DO UPDATE SET b = excluded.c + vc_uv.c RETURNING *;
+fields b@vc_uv.1:701:8:-1,c@vc_uv.2:701:8:-1,a@vc_uv.3:25:-1:-1,two@vc_uv.4:25:-1:-1
+row 10,11,xyxyxy,2.0
+INSERT 0 1
+> INSERT INTO vc_uv (a, b) VALUES ('xyxyxy', 5) ON CONFLICT (a) DO UPDATE SET c = 1;
+ERROR 0A000 cannot insert into column "c" of view "vc_uv"
+DETAIL View columns that are not columns of their base relation are not updatable.
+> INSERT INTO vc_uv (a, b) VALUES ('xyxyxy', 5) ON CONFLICT (b) DO NOTHING;
+ERROR 42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification
+> CREATE TABLE vc_w (k int PRIMARY KEY, n int DEFAULT 7, s text);
+CREATE TABLE
+> CREATE VIEW vc_wv AS SELECT s AS ss, k AS kk FROM vc_w WHERE k < 10 WITH CHECK OPTION;
+CREATE VIEW
+> INSERT INTO vc_wv VALUES ('one', 1);
+INSERT 0 1
+> INSERT INTO vc_wv VALUES ('again', 1) ON CONFLICT (kk) DO UPDATE SET ss = excluded.ss || '/' || vc_wv.ss RETURNING *;
+fields ss@vc_wv.1:25:-1:-1,kk@vc_wv.2:23:4:-1
+row again/one,1
+INSERT 0 1
+> INSERT INTO vc_wv VALUES ('big', 1) ON CONFLICT (kk) DO UPDATE SET kk = 20;
+ERROR 44000 new row violates check option for view "vc_wv"
+DETAIL Failing row contains (20, 7, again/one).
+> INSERT INTO vc_wv VALUES ('new', 2) ON CONFLICT (kk) DO UPDATE SET kk = 20 RETURNING *;
+fields ss@vc_wv.1:25:-1:-1,kk@vc_wv.2:23:4:-1
+row new,2
+INSERT 0 1
+> ALTER VIEW vc_wv ALTER COLUMN ss SET DEFAULT 'view default';
+ALTER VIEW
+> INSERT INTO vc_wv (kk) VALUES (1) ON CONFLICT (kk) DO UPDATE SET ss = 'was ' || excluded.ss RETURNING *;
+fields ss@vc_wv.1:25:-1:-1,kk@vc_wv.2:23:4:-1
+row was view default,1
+INSERT 0 1
+> INSERT INTO vc_wv (kk) VALUES (3) ON CONFLICT (kk) DO UPDATE SET ss = 'was ' || excluded.ss RETURNING *;
+fields ss@vc_wv.1:25:-1:-1,kk@vc_wv.2:23:4:-1
+row view default,3
+INSERT 0 1
+> SELECT * FROM vc_w ORDER BY k;
+fields k@vc_w.1:23:4:-1,n@vc_w.2:23:4:-1,s@vc_w.3:25:-1:-1
+row 1,7,was view default
+row 2,7,new
+row 3,7,view default
+SELECT 3
+> CREATE VIEW vc_wv2 AS SELECT kk AS k2, ss AS s2 FROM vc_wv WHERE kk > 0;
+CREATE VIEW
+> INSERT INTO vc_wv2 VALUES (1, 'outer') ON CONFLICT (k2) DO UPDATE SET s2 = excluded.s2 RETURNING *;
+fields k2@vc_wv2.1:23:4:-1,s2@vc_wv2.2:25:-1:-1
+row 1,outer
+INSERT 0 1
+> INSERT INTO vc_wv2 VALUES (1, 'outer') ON CONFLICT (k2) DO UPDATE SET k2 = 30;
+ERROR 44000 new row violates check option for view "vc_wv"
+DETAIL Failing row contains (30, 7, outer).
+> INSERT INTO vc_wv2 VALUES (5, 'five') ON CONFLICT (k2) DO NOTHING RETURNING *;
+fields k2@vc_wv2.1:23:4:-1,s2@vc_wv2.2:25:-1:-1
+row 5,five
+INSERT 0 1
+> SELECT * FROM vc_w ORDER BY k;
+fields k@vc_w.1:23:4:-1,n@vc_w.2:23:4:-1,s@vc_w.3:25:-1:-1
+row 1,7,outer
+row 2,7,new
+row 3,7,view default
+row 5,7,five
+SELECT 4
+> CREATE TABLE vc_x (a text, b int);
+CREATE TABLE
+> CREATE UNIQUE INDEX vc_x_lower ON vc_x (lower(a));
+CREATE INDEX
+> CREATE VIEW vc_xv AS SELECT lower(a) AS la, a, b FROM vc_x;
+CREATE VIEW
+> INSERT INTO vc_xv (a, b) VALUES ('Hello', 1);
+INSERT 0 1
+> INSERT INTO vc_xv (a, b) VALUES ('HELLO', 2) ON CONFLICT (la) DO UPDATE SET b = vc_xv.b + excluded.b RETURNING *;
+fields la@vc_xv.1:25:-1:-1,a@vc_xv.2:25:-1:-1,b@vc_xv.3:23:4:-1
+row hello,Hello,3
+INSERT 0 1
+> INSERT INTO vc_xv (a, b) VALUES ('HELLO', 2) ON CONFLICT (lower(a)) DO UPDATE SET b = 0 RETURNING *;
+fields la@vc_xv.1:25:-1:-1,a@vc_xv.2:25:-1:-1,b@vc_xv.3:23:4:-1
+row hello,Hello,0
+INSERT 0 1
+> WITH w AS (INSERT INTO vc_xv (a, b) VALUES ('hello', 9) ON CONFLICT (la) DO UPDATE SET a = excluded.a RETURNING la, a, b) SELECT * FROM w;
+fields la@vc_xv.1:25:-1:-1,a@vc_xv.2:25:-1:-1,b@vc_xv.3:23:4:-1
+row hello,hello,0
+SELECT 1
+> SELECT * FROM vc_x;
+fields a@vc_x.1:25:-1:-1,b@vc_x.2:23:4:-1
+row hello,0
+SELECT 1
+> CREATE FUNCTION vc_trig() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE NOTICE '% % on %', TG_WHEN, TG_OP, TG_TABLE_NAME; RETURN NULL; END $$;
+CREATE FUNCTION
+> CREATE TRIGGER vc_s1 BEFORE INSERT OR UPDATE ON vc_wv FOR EACH STATEMENT EXECUTE FUNCTION vc_trig();
+CREATE TRIGGER
+> CREATE TRIGGER vc_s2 AFTER INSERT OR UPDATE ON vc_wv FOR EACH STATEMENT EXECUTE FUNCTION vc_trig();
+CREATE TRIGGER
+> CREATE TRIGGER vc_s3 BEFORE INSERT OR UPDATE ON vc_w FOR EACH STATEMENT EXECUTE FUNCTION vc_trig();
+CREATE TRIGGER
+> INSERT INTO vc_wv VALUES ('trig', 1) ON CONFLICT (kk) DO UPDATE SET ss = excluded.ss;
+NOTICE 00000 BEFORE INSERT on vc_w (PL/pgSQL function vc_trig() line 1 at RAISE)
+NOTICE 00000 BEFORE UPDATE on vc_w (PL/pgSQL function vc_trig() line 1 at RAISE)
+INSERT 0 1
+> INSERT INTO vc_wv VALUES ('trig', 1) ON CONFLICT (kk) DO NOTHING;
+NOTICE 00000 BEFORE INSERT on vc_w (PL/pgSQL function vc_trig() line 1 at RAISE)
+INSERT 0 0

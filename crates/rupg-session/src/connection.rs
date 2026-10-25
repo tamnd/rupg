@@ -4364,6 +4364,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/mergetrig.test")));
     }
 
+    /// `INSERT ... ON CONFLICT` into an automatically updatable view: the inference, `SET` and `EXCLUDED` name the columns of the view, a column of the view that is an expression infers an index on the expression, `ON CONSTRAINT` looks for a constraint of the view, and `WITH CHECK OPTION` checks the row of `DO UPDATE`. `connection/viewconflict.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn viewconflict() {
+        big_stack(|| script(include_str!("connection/viewconflict.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {

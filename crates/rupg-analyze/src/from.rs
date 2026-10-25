@@ -1225,7 +1225,9 @@ impl Analyzer<'_> {
             .ok_or_else(|| Error::internal("ON CONFLICT with no table"))?;
         let relation = Relation::new(target.oid, target.columns.clone(), None, None, None);
         let index = self.scope.relations.len();
-        let item = self.add_relation(relation, "excluded".to_string(), None)?;
+        let mut item = self.add_relation(relation, "excluded".to_string(), None)?;
+        // `EXCLUDED` of an updatable view has the columns of the view.
+        self.auto_view_returning(&mut item, index);
         self.scope.entries[item.entry].oid = 0;
         self.scope.namespace.push(item);
         Ok(index)

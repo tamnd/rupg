@@ -557,6 +557,17 @@ impl Analyzer<'_> {
         auto.defaults.get(&index).copied()
     }
 
+    /// The OID and the name of the automatically updatable view that the statement writes.
+    pub(crate) fn auto_view_target(&self) -> Option<(u32, &str)> {
+        self.auto_view.as_ref().map(|auto| (auto.oid, auto.name.as_str()))
+    }
+
+    /// The column `name` of the automatically updatable view that the statement writes, as its expression on the base relation, which is the relation 0: `Some(None)` when the view has no such column, and `None` for another write. The inference of `ON CONFLICT` names the columns of the view.
+    pub(crate) fn auto_view_column(&self, name: &str) -> Option<Option<Expr>> {
+        let auto = self.auto_view.as_ref()?;
+        Some(auto.columns.iter().find(|c| c.name == name).map(|c| c.expr.clone()))
+    }
+
     /// The part of `setTargetTable` for an automatically updatable view: the base relation as the relation 0, and an item with the name of the view or its alias that gives the columns of the view. A view has no system columns.
     pub(crate) fn auto_view_item(&mut self, rv: &RangeVar) -> Result<Option<crate::from::Item>> {
         let Some(auto) = &self.auto_view else { return Ok(None) };

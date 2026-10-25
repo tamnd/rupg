@@ -109,7 +109,7 @@ impl Connection {
                     Speculative::Inserted => {
                         done.count += 1;
                         self.count_inserts(info.table, 1);
-                        if info.returning.is_some() {
+                        if info.keeps_written() {
                             let mut written = row.clone();
                             written.resize(row.len() + conflict.carried, Value::Null);
                             done.written.push(written);
@@ -211,7 +211,7 @@ impl Connection {
                     Speculative::Inserted => {
                         done.count += 1;
                         self.count_inserts(oid, 1);
-                        if info.returning.is_some() {
+                        if info.keeps_written() {
                             let mut written = routing.to_root(at, &checked, info.width);
                             written.push(Value::Oid(oid));
                             written.resize(info.width + 1 + conflict.carried, Value::Null);
@@ -334,7 +334,7 @@ impl Connection {
             }
         }
         done.count += 1;
-        if info.returning.is_some() {
+        if info.keeps_written() {
             let mut written = routing.to_root(at, &checked, info.width);
             written.push(Value::Oid(oid));
             written.extend(carried);
@@ -414,7 +414,7 @@ impl Connection {
         done.count += 1;
         let keep = fire.after_rows();
         let foreign = keep || info.on_conflict.as_ref().is_some_and(|c| !c.foreign.is_empty());
-        if info.returning.is_some() {
+        if info.keeps_written() {
             let mut written = new.clone();
             written.extend(carried);
             done.written.push(written);
