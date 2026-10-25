@@ -2077,6 +2077,8 @@ impl Connection {
     ) -> Result<Done, Error> {
         let mut done = None;
         let mut returned = None;
+        // The rows of an action `SELECT`, which the client gets when no list of `RETURNING` gives the rows, as each query of `PORTAL_MULTI_QUERY` sends its own rows.
+        let mut selected = None;
         for product in products {
             if let Some(done) = self.async_statement(&product.stmt) {
                 done?;
@@ -2092,6 +2094,24 @@ impl Connection {
             notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
             let plan = plan?;
             plan.start(&reader)?;
+            if plan.write().is_none() {
+                // An action `SELECT` runs as a query, and its rows go to the client.
+                let mut columns = query::columns(&plan);
+                let rows = query::run_select(&plan, &[], &reader, &[]).map_err(|(_, error)| error);
+                late.extend(reader.take_warnings().into_iter().map(Notice::of_function));
+                let rows = rows?;
+                if selected.is_some() {
+                    return Err(Error::new(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        "more than one rule action SELECT is not supported yet",
+                    ));
+                }
+                for column in &mut columns {
+                    column.origin = (0, 0);
+                }
+                selected = Some((columns, rows));
+                continue;
+            }
             let Some(view) = reader.view() else {
                 return Err(Error::internal("the reader of the session has no view of the rows"));
             };
@@ -2120,7 +2140,7 @@ impl Connection {
             _ => CommandTag::Delete,
         };
         let done = done.unwrap_or(Done::Count(tag, 0));
-        Ok(match (returned, done) {
+        Ok(match (returned.or(selected), done) {
             (Some((columns, rows)), Done::Count(tag, count)) => {
                 Done::Returned { columns, rows, tag, count }
             }
@@ -4738,6 +4758,12 @@ mod tests {
     #[test]
     fn vrulenotify() {
         big_stack(|| script(include_str!("connection/vrulenotify.test")));
+    }
+
+    /// `SELECT` as an action of a rule: it reads the rows of the statement as `old` and `new`, and the client gets its rows before the tag of the statement when no list of `RETURNING` gives the rows. `pg_get_ruledef` shows the action. `connection/vrulesel.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vrulesel() {
+        big_stack(|| script(include_str!("connection/vrulesel.test")));
     }
 
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
