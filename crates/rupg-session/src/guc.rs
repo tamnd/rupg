@@ -12,7 +12,7 @@ mod check;
 mod settings;
 mod status;
 
-pub use check::{ZoneError, encoding, split_identifiers, zone};
+pub use check::{ZoneError, encoding, restricted_kinds, split_identifiers, zone};
 pub use settings::{
     Action, Arg, Characteristics, Current, Origin, Savepoint, Settings, Source, flatten,
 };

@@ -146,6 +146,10 @@ pub trait Env {
     fn check_function_bodies(&self) -> bool {
         true
     }
+    /// `restrict_nonsystem_relation_kind` has `view`: a query cannot read or write a view of the user.
+    fn restrict_views(&self) -> bool {
+        false
+    }
     /// The OID of the materialized view that `CREATE MATERIALIZED VIEW` or `REFRESH MATERIALIZED VIEW` fills, or 0. Only the `INSERT` that fills it can write it, and only there its query takes its place.
     fn filling(&self) -> u32 {
         0

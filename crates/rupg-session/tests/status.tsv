@@ -297,7 +297,7 @@ remove_temp_files_after_crash	accepted
 reserved_connections	accepted
 restart_after_crash	accepted
 restore_command	accepted
-restrict_nonsystem_relation_kind	accepted
+restrict_nonsystem_relation_kind	honored
 role	accepted
 row_security	accepted
 scram_iterations	honored

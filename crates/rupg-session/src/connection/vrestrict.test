@@ -1,0 +1,69 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE rst (a int);
+CREATE TABLE
+> CREATE VIEW rsv AS SELECT a FROM rst;
+CREATE VIEW
+> CREATE VIEW rsw AS SELECT a FROM rsv;
+CREATE VIEW
+> SET restrict_nonsystem_relation_kind TO 'view';
+SET
+> SHOW restrict_nonsystem_relation_kind;
+fields restrict_nonsystem_relation_kind:25:-1:-1
+row view
+SHOW
+> SELECT a FROM rsv WHERE a > 0;
+ERROR 55000 access to non-system view "rsv" is restricted
+> INSERT INTO rsv VALUES (1);
+ERROR 55000 access to non-system view "rsv" is restricted
+> UPDATE rsv SET a = 2;
+ERROR 55000 access to non-system view "rsv" is restricted
+> DELETE FROM rsv;
+ERROR 55000 access to non-system view "rsv" is restricted
+> SELECT a FROM rst;
+fields a@rst.1:23:4:-1
+SELECT 0
+> SELECT * FROM (SELECT a FROM rsw) s;
+ERROR 55000 access to non-system view "rsw" is restricted
+> SELECT (SELECT count(*) FROM rsv);
+ERROR 55000 access to non-system view "rsv" is restricted
+> SELECT viewname FROM pg_views WHERE viewname = 'rsv';
+fields viewname@pg_views.2:19:64:-1
+row rsv
+SELECT 1
+> SELECT count(*) >= 0 FROM pg_stats;
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SET restrict_nonsystem_relation_kind TO 'View, "foreign-table"';
+SET
+> SHOW restrict_nonsystem_relation_kind;
+fields restrict_nonsystem_relation_kind:25:-1:-1
+row View, "foreign-table"
+SHOW
+> SELECT a FROM rsv;
+ERROR 55000 access to non-system view "rsv" is restricted
+> SET restrict_nonsystem_relation_kind TO 'table';
+ERROR 22023 invalid value for parameter "restrict_nonsystem_relation_kind": "table"
+DETAIL Unrecognized key word: "table".
+> SET restrict_nonsystem_relation_kind TO 'view,';
+ERROR 22023 invalid value for parameter "restrict_nonsystem_relation_kind": "view,"
+DETAIL List syntax is invalid.
+> SET restrict_nonsystem_relation_kind TO 'foreign-table';
+SET
+> SELECT a FROM rsv;
+fields a@rsv.1:23:4:-1
+SELECT 0
+> RESET restrict_nonsystem_relation_kind;
+RESET
+> INSERT INTO rsv VALUES (1);
+INSERT 0 1
+> SELECT a FROM rsw;
+fields a@rsw.1:23:4:-1
+row 1
+SELECT 1
+> DROP VIEW rsw, rsv;
+DROP VIEW
+> DROP TABLE rst;
+DROP TABLE
