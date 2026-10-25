@@ -1,0 +1,110 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE rn (a int, b text);
+CREATE TABLE
+> CREATE TABLE rlog (a int);
+CREATE TABLE
+> LISTEN rn_ch;
+LISTEN
+> LISTEN "Other";
+LISTEN
+> CREATE RULE r1 AS ON DELETE TO rn DO NOTIFY rn_ch;
+CREATE RULE
+> CREATE RULE r2 AS ON INSERT TO rn DO ALSO (NOTIFY rn_ch, 'it''s new'; INSERT INTO rlog VALUES (new.a));
+CREATE RULE
+> CREATE RULE r3 AS ON UPDATE TO rn DO INSTEAD NOTIFY "Other", 'upd';
+CREATE RULE
+> CREATE RULE r4 AS ON UPDATE TO rn WHERE new.a > 5 DO NOTIFY rn_ch;
+ERROR 42P17 rules with WHERE conditions can only have SELECT, INSERT, UPDATE, or DELETE actions
+> SELECT pg_get_ruledef(oid), pg_get_ruledef(oid, true) FROM pg_rewrite WHERE rulename IN ('r1', 'r2', 'r3') ORDER BY rulename;
+fields pg_get_ruledef:25:-1:-1,pg_get_ruledef:25:-1:-1
+row CREATE RULE r1 AS
+    ON DELETE TO public.rn DO
+ NOTIFY rn_ch;,CREATE RULE r1 AS
+    ON DELETE TO rn DO
+ NOTIFY rn_ch;
+row CREATE RULE r2 AS
+    ON INSERT TO public.rn DO (
+ NOTIFY rn_ch, 'it''s new';
+ INSERT INTO rlog (a)
+  VALUES (new.a);
+);,CREATE RULE r2 AS
+    ON INSERT TO rn DO (
+ NOTIFY rn_ch, 'it''s new';
+ INSERT INTO rlog (a)
+  VALUES (new.a);
+);
+row CREATE RULE r3 AS
+    ON UPDATE TO public.rn DO INSTEAD
+ NOTIFY "Other", 'upd';,CREATE RULE r3 AS
+    ON UPDATE TO rn DO INSTEAD
+ NOTIFY "Other", 'upd';
+SELECT 3
+> SELECT rulename, definition FROM pg_rules WHERE tablename = 'rn' ORDER BY 1;
+fields rulename@pg_rules.3:19:64:-1,definition@pg_rules.4:25:-1:-1
+row r1,CREATE RULE r1 AS
+    ON DELETE TO public.rn DO
+ NOTIFY rn_ch;
+row r2,CREATE RULE r2 AS
+    ON INSERT TO public.rn DO (
+ NOTIFY rn_ch, 'it''s new';
+ INSERT INTO rlog (a)
+  VALUES (new.a);
+);
+row r3,CREATE RULE r3 AS
+    ON UPDATE TO public.rn DO INSTEAD
+ NOTIFY "Other", 'upd';
+SELECT 3
+> INSERT INTO rn VALUES (1, 'x'), (2, 'y');
+INSERT 0 2
+notify rn_ch it's new
+> INSERT INTO rn SELECT 3, 'z' WHERE false;
+INSERT 0 0
+notify rn_ch it's new
+> UPDATE rn SET b = 'w';
+UPDATE 0
+notify Other upd
+> DELETE FROM rn WHERE a = 1;
+DELETE 1
+notify rn_ch 
+> DELETE FROM rn WHERE false;
+DELETE 0
+notify rn_ch 
+> SELECT * FROM rn ORDER BY a;
+fields a@rn.1:23:4:-1,b@rn.2:25:-1:-1
+row 2,y
+SELECT 1
+> SELECT * FROM rlog ORDER BY a;
+fields a@rlog.1:23:4:-1
+row 1
+row 2
+SELECT 2
+> BEGIN;
+BEGIN
+> DELETE FROM rn;
+DELETE 1
+> ROLLBACK;
+ROLLBACK
+> INSERT INTO rn VALUES (4, 'v') RETURNING a;
+fields a@rn.1:23:4:-1
+row 4
+INSERT 0 1
+notify rn_ch it's new
+> CREATE TABLE rc (a int);
+CREATE TABLE
+> CREATE RULE rq AS ON INSERT TO rc DO INSTEAD NOTIFY rn_ch, 'copy';
+CREATE RULE
+> INSERT INTO rc VALUES (1);
+INSERT 0 0
+notify rn_ch copy
+> COPY (INSERT INTO rc VALUES (2)) TO STDOUT;
+ERROR 0A000 COPY query must not be a utility command
+> SELECT count(*) FROM rc;
+fields count:20:8:-1
+row 0
+SELECT 1
+> DROP RULE r1 ON rn;
+DROP RULE
+> DELETE FROM rn;
+DELETE 2

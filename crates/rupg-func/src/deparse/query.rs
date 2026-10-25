@@ -261,6 +261,19 @@ impl Deparser<'_> {
 
     /// `get_query_def` for an action of a rule. An `INSERT`, an `UPDATE` or a `DELETE` reads `old` and `new` of `base` one level up.
     fn rule_action(&mut self, action: &Query, base: &Query) -> Result<()> {
+        // `get_utility_query_def`, in a context of its own as `get_query_def` makes it.
+        if let Some((channel, payload)) = &action.notify {
+            let indent = self.indent;
+            self.keyword("", 0, INDENT_STD, 1);
+            self.indent = indent;
+            self.buf.push_str("NOTIFY ");
+            self.buf.push_str(&quote_identifier(channel));
+            if let Some(payload) = payload {
+                self.buf.push_str(", ");
+                super::function::simple_quote_literal(&mut self.buf, payload, self.session);
+            }
+            return Ok(());
+        }
         if action.write.is_none() {
             return self.query_def(action, None, true, 0);
         }

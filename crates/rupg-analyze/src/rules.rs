@@ -349,7 +349,8 @@ fn rule_action(parts: &Parts, action: &Node, qual: Option<&Node>, event: CmdType
             }
             s.whereClause = and(s.whereClause.take(), qual);
         }
-        Node::NotifyStmt(_) => return Err(not_yet("NOTIFY in a rule")),
+        // A utility action runs once, with no regard to the condition or the rows of the statement.
+        Node::NotifyStmt(_) => {}
         _ => return Err(not_yet("SELECT in a rule")),
     }
     Ok(action)
