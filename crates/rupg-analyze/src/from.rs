@@ -108,6 +108,22 @@ impl Relation {
         self.oid != 0 || self.cte.as_ref().is_some_and(|c| c.transition)
     }
 
+    /// The name that the alias of the relation gives to each column, in the order of the columns. The alias does not name a dropped column of a table, so the names of the alias go to the other columns in order.
+    pub fn alias_names(&self) -> Vec<Option<&str>> {
+        let mut given = self.alias.as_deref().unwrap_or_default().iter();
+        let table = self.of_table();
+        self.columns
+            .iter()
+            .map(|c| if table && c.is_dropped() { None } else { given.next().map(String::as_str) })
+            .collect()
+    }
+
+    /// The place of each column that is not a dropped column of a table.
+    pub fn live_columns(&self) -> Vec<usize> {
+        let table = self.of_table();
+        (0..self.columns.len()).filter(|&i| !(table && self.columns[i].is_dropped())).collect()
+    }
+
     /// The call of `JSON_TABLE` when the relation is one.
     pub fn json_table(&self) -> Option<&crate::expr::JsonTable> {
         match self.function.as_ref()?.calls.as_slice() {

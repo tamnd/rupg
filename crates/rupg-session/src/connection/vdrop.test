@@ -1,0 +1,166 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> create table tt7 (x int, xx int, y int);
+CREATE TABLE
+> alter table tt7 drop column xx;
+ALTER TABLE
+> create table tt8 (x int, z int);
+CREATE TABLE
+> create view vv2 as
+>> select * from (values(1,2,3,4,5)) v(a,b,c,d,e)
+>> union all
+>> select * from tt7 full join tt8 using (x), tt8 tt8x;
+CREATE VIEW
+> select pg_get_viewdef('vv2', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT v.a,
+    v.b,
+    v.c,
+    v.d,
+    v.e
+   FROM ( VALUES (1,2,3,4,5)) v(a, b, c, d, e)
+UNION ALL
+ SELECT x AS a,
+    tt7.y AS b,
+    tt8.z AS c,
+    tt8x.x_1 AS d,
+    tt8x.z AS e
+   FROM tt7
+     FULL JOIN tt8 USING (x),
+    tt8 tt8x(x_1, z);
+SELECT 1
+> create view vv3 as
+>> select * from (values(1,2,3,4,5,6)) v(a,b,c,x,e,f)
+>> union all
+>> select * from
+>>   tt7 full join tt8 using (x),
+>>   tt7 tt7x full join tt8 tt8x using (x);
+CREATE VIEW
+> select pg_get_viewdef('vv3', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT v.a,
+    v.b,
+    v.c,
+    v.x,
+    v.e,
+    v.f
+   FROM ( VALUES (1,2,3,4,5,6)) v(a, b, c, x, e, f)
+UNION ALL
+ SELECT x AS a,
+    tt7.y AS b,
+    tt8.z AS c,
+    x_1 AS x,
+    tt7x.y AS e,
+    tt8x.z AS f
+   FROM tt7
+     FULL JOIN tt8 USING (x),
+    tt7 tt7x(x_1, y)
+     FULL JOIN tt8 tt8x(x_1, z) USING (x_1);
+SELECT 1
+> create view vv4 as
+>> select * from (values(1,2,3,4,5,6,7)) v(a,b,c,x,e,f,g)
+>> union all
+>> select * from
+>>   tt7 full join tt8 using (x),
+>>   tt7 tt7x full join tt8 tt8x using (x) full join tt8 tt8y using (x);
+CREATE VIEW
+> select pg_get_viewdef('vv4', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT v.a,
+    v.b,
+    v.c,
+    v.x,
+    v.e,
+    v.f,
+    v.g
+   FROM ( VALUES (1,2,3,4,5,6,7)) v(a, b, c, x, e, f, g)
+UNION ALL
+ SELECT x AS a,
+    tt7.y AS b,
+    tt8.z AS c,
+    x_1 AS x,
+    tt7x.y AS e,
+    tt8x.z AS f,
+    tt8y.z AS g
+   FROM tt7
+     FULL JOIN tt8 USING (x),
+    tt7 tt7x(x_1, y)
+     FULL JOIN tt8 tt8x(x_1, z) USING (x_1)
+     FULL JOIN tt8 tt8y(x_1, z) USING (x_1);
+SELECT 1
+> alter table tt7 add column zz int;
+ALTER TABLE
+> alter table tt7 add column z int;
+ALTER TABLE
+> alter table tt7 drop column zz;
+ALTER TABLE
+> alter table tt8 add column z2 int;
+ALTER TABLE
+> select pg_get_viewdef('vv2', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT v.a,
+    v.b,
+    v.c,
+    v.d,
+    v.e
+   FROM ( VALUES (1,2,3,4,5)) v(a, b, c, d, e)
+UNION ALL
+ SELECT x AS a,
+    tt7.y AS b,
+    tt8.z AS c,
+    tt8x.x_1 AS d,
+    tt8x.z AS e
+   FROM tt7
+     FULL JOIN tt8 USING (x),
+    tt8 tt8x(x_1, z, z2);
+SELECT 1
+> select pg_get_viewdef('vv3', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT v.a,
+    v.b,
+    v.c,
+    v.x,
+    v.e,
+    v.f
+   FROM ( VALUES (1,2,3,4,5,6)) v(a, b, c, x, e, f)
+UNION ALL
+ SELECT x AS a,
+    tt7.y AS b,
+    tt8.z AS c,
+    x_1 AS x,
+    tt7x.y AS e,
+    tt8x.z AS f
+   FROM tt7
+     FULL JOIN tt8 USING (x),
+    tt7 tt7x(x_1, y, z)
+     FULL JOIN tt8 tt8x(x_1, z, z2) USING (x_1);
+SELECT 1
+> select pg_get_viewdef('vv4', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT v.a,
+    v.b,
+    v.c,
+    v.x,
+    v.e,
+    v.f,
+    v.g
+   FROM ( VALUES (1,2,3,4,5,6,7)) v(a, b, c, x, e, f, g)
+UNION ALL
+ SELECT x AS a,
+    tt7.y AS b,
+    tt8.z AS c,
+    x_1 AS x,
+    tt7x.y AS e,
+    tt8x.z AS f,
+    tt8y.z AS g
+   FROM tt7
+     FULL JOIN tt8 USING (x),
+    tt7 tt7x(x_1, y, z)
+     FULL JOIN tt8 tt8x(x_1, z, z2) USING (x_1)
+     FULL JOIN tt8 tt8y(x_1, z, z2) USING (x_1);
+SELECT 1
+> drop view vv2, vv3, vv4;
+DROP VIEW
+> drop table tt7, tt8;
+DROP TABLE

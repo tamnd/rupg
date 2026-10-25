@@ -4536,6 +4536,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vcoll.test")));
     }
 
+    /// A view with two joins of `USING` on columns of the same name shows the second column of `USING` by its unique name, and `ALTER TABLE ... DROP COLUMN` writes the text of a view again with no alias for the dropped column, as `set_relation_column_names` skips it. `connection/vdrop.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vdrop() {
+        big_stack(|| script(include_str!("connection/vdrop.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {

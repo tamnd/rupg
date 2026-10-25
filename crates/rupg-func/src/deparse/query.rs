@@ -166,6 +166,7 @@ impl Deparser<'_> {
             unique_using: joins
                 .iter()
                 .any(|j| j.join.alias.is_none() && !j.join.using.is_empty() && !j.join.plain_using),
+            live: query.relations.iter().map(Relation::live_columns).collect(),
         };
         for slot in tops {
             if let Slot::Join(k) = slot {
@@ -199,12 +200,12 @@ impl Deparser<'_> {
             match *slot {
                 Slot::Relation(i) => {
                     let Some(rel) = query.relations.get(i) else { continue };
-                    let given: &[String] = rel.alias.as_deref().unwrap_or_default();
+                    let given = rel.alias_names();
                     for (c, column) in real_names[i].iter().enumerate() {
                         if state.relations[i][c].is_none() && column.is_empty() {
                             state.relations[i][c] = Some(String::new());
                         } else if state.relations[i][c].is_none() {
-                            let wanted = given.get(c).unwrap_or(column);
+                            let wanted = given.get(c).copied().flatten().unwrap_or(column);
                             let name = state.unique(wanted, Slot::Relation(i));
                             state.relations[i][c] = Some(name);
                         }
@@ -214,13 +215,17 @@ impl Deparser<'_> {
             }
         }
         for (i, rel) in query.relations.iter().enumerate() {
-            let given: &[String] = rel.alias.as_deref().unwrap_or_default();
+            let given = rel.alias_names();
             let names: Vec<String> =
                 state.relations[i].iter().map(|n| n.clone().unwrap_or_default()).collect();
             // The real name of a column of a table or a view is the name in the catalog. For another relation, it is the name that the alias gives.
             let changed =
                 real_names[i].iter().zip(&names).enumerate().any(|(c, (column, name))| {
-                    let real = if rel.oid != 0 { column } else { given.get(c).unwrap_or(column) };
+                    let real = if rel.oid != 0 {
+                        column.as_str()
+                    } else {
+                        given.get(c).copied().flatten().unwrap_or(column)
+                    };
                     name != real
                 });
             // `JSON_TABLE` does not show the names of its columns after its alias.
@@ -229,7 +234,9 @@ impl Deparser<'_> {
             } else if rel.oid != 0 {
                 changed
             } else {
-                rel.function.is_some() || !given.is_empty() || changed
+                rel.function.is_some()
+                    || rel.alias.as_ref().is_some_and(|a| !a.is_empty())
+                    || changed
             };
             space.columns.push(names);
             space.print_aliases.push(print);
@@ -244,9 +251,10 @@ impl Deparser<'_> {
                 print_aliases: print_join[k],
             });
         }
+        // A column of `USING` shows the name that the deparse gives it in `USING`, which can differ from the name of the query when two joins have a column of the same name, as `get_variable` reads it from `colinfo`.
         if !explain {
-            for item in &query.from {
-                merged_columns(item, &mut space.merged);
+            for (info, names) in joins.iter().zip(&space.joins) {
+                merged_columns(info.join, &names.using, &mut space.merged);
             }
         }
         space.relations.clone_from(&query.relations);
@@ -993,8 +1001,12 @@ impl Deparser<'_> {
         if let Some(name) = &names.name {
             let mut text = format!(" {}", quote_identifier(name));
             if names.print_aliases && !names.columns.is_empty() {
-                let columns: Vec<String> =
-                    names.columns.iter().map(|c| quote_identifier(c)).collect();
+                let columns: Vec<String> = names
+                    .columns
+                    .iter()
+                    .filter(|c| !c.is_empty())
+                    .map(|c| quote_identifier(c))
+                    .collect();
                 text.push_str(&format!("({})", columns.join(", ")));
             }
             self.buf.push_str(&text);
@@ -1505,13 +1517,10 @@ impl Deparser<'_> {
     }
 }
 
-/// The values and the names of the columns of `USING` of the joins with no alias in a part of `FROM` that are not columns of one side.
-fn merged_columns(item: &FromItem, out: &mut Vec<(Expr, String)>) {
-    let FromItem::Join(join) = item else { return };
-    merged_columns(&join.left, out);
-    merged_columns(&join.right, out);
+/// The values and the names in `names` of the columns of `USING` of a join with no alias that are not columns of one side.
+fn merged_columns(join: &Join, names: &[String], out: &mut Vec<(Expr, String)>) {
     if join.alias.is_none() {
-        for (value, name) in join.merged.iter().zip(&join.using) {
+        for (value, name) in join.merged.iter().zip(names) {
             if !matches!(value.kind, ExprKind::Var(_)) {
                 out.push((value.clone(), name.clone()));
             }
@@ -1620,6 +1629,8 @@ struct ColumnNames {
     using: Vec<String>,
     /// `unique_using`: true when a join with no alias has a column of `USING` that is not a column of one side, as `has_dangerous_join_using` finds.
     unique_using: bool,
+    /// For each relation, the place of each column that was not dropped when the analyzer read the query, which the number of a column of a join counts.
+    live: Vec<Vec<usize>>,
 }
 
 impl ColumnNames {
@@ -1732,16 +1743,21 @@ impl ColumnNames {
         for i in join.using.len()..join.columns.len() {
             let (l, r) = join.sources.get(i).copied().unwrap_or_default();
             let (side, number) = if l > 0 { (info.left, l) } else { (info.right, r) };
-            // The number of a column of a table counts the columns that are not dropped.
+            // The number of a column of a table counts the columns that were not dropped when the analyzer read the query.
             let names = self.names(side).map(Vec::as_slice).unwrap_or_default();
-            let real = match side {
-                Slot::Relation(_) => {
-                    names.iter().filter(|n| n.as_deref() != Some("")).nth(number.wrapping_sub(1))
+            let place = match side {
+                Slot::Relation(r) => {
+                    self.live.get(r).and_then(|live| live.get(number.wrapping_sub(1))).copied()
                 }
-                Slot::Join(_) => names.get(number.wrapping_sub(1)),
+                Slot::Join(_) => number.checked_sub(1),
             };
-            let real = real.cloned().flatten();
+            let real = place.and_then(|p| names.get(p)).cloned().flatten();
             let Some(real) = real else { continue };
+            // A column that `ALTER TABLE ... DROP COLUMN` dropped after the analysis has no name in the join either.
+            if real.is_empty() {
+                self.push(Slot::Join(k), i + 1, "");
+                continue;
+            }
             let assigned = self.joins.get(k).and_then(|n| n.get(i)).cloned().flatten();
             let name = match (&join.alias, assigned) {
                 (None, _) => real.clone(),
