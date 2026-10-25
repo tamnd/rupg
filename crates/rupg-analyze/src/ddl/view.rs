@@ -299,6 +299,30 @@ pub(super) fn query_references(
     refs.extend(query.constraint_deps.iter().map(|&c| ObjRef::new(PG_CONSTRAINT, c)));
 }
 
+/// `process_function_rte_ref`: the column of the relation of the composite type that a call of a function in `FROM` gives for the column `attnum` of the relation of the call. The row type has no field for a dropped column, so the column is the live column of the same place.
+fn function_column_reference(
+    catalog: &Catalog,
+    function: &crate::FromFunction,
+    attnum: i16,
+) -> Option<ObjRef> {
+    let mut place = usize::try_from(attnum).ok()?.checked_sub(1)?;
+    for (call, count) in &function.calls {
+        if place >= *count {
+            place -= count;
+            continue;
+        }
+        let relid = match types::row(call.ty) {
+            Some(row) if row.kind == b'c' => row.relid,
+            Some(_) => return None,
+            None => catalog.relations().find(|r| r.row_type == call.ty)?.oid,
+        };
+        let rel = catalog.relation(relid)?;
+        let (i, _) = rel.columns.iter().enumerate().filter(|(_, c)| !c.dropped).nth(place)?;
+        return Some(ObjRef::column(relid, i16::try_from(i + 1).ok()?));
+    }
+    None
+}
+
 /// The references of an expression of the first query of `levels`. A column of the whole row has no reference.
 pub(super) fn expr_references(
     catalog: &Catalog,
@@ -313,6 +337,8 @@ pub(super) fn expr_references(
                 && relation.oid != 0
             {
                 refs.push(ObjRef::column(relation.oid, var.attnum));
+            } else if let Some(function) = relation.and_then(|r| r.function.as_ref()) {
+                refs.extend(function_column_reference(catalog, function, var.attnum));
             }
         }
         (ExprKind::Const(Value::Oid(found)), oid::REGCLASS) => {

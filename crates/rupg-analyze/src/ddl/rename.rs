@@ -341,6 +341,15 @@ impl Definer<'_, '_> {
 
     /// Adds to [`super::Defined::views`] the views whose query reads the relation `table`. A rule that is not the rule of a view keeps its text.
     pub(super) fn views_reading(&mut self, table: u32) {
+        self.views_reading_where(table, false);
+    }
+
+    /// [`Self::views_reading`] for the views that read the table itself in `FROM`, where the text can give an alias to each column of the table. A view that reads only the columns of a function that gives the row type of the table keeps its text.
+    pub(super) fn views_reading_table(&mut self, table: u32) {
+        self.views_reading_where(table, true);
+    }
+
+    fn views_reading_where(&mut self, table: u32, in_from: bool) {
         let rules: Vec<u32> = self
             .catalog
             .depends()
@@ -353,10 +362,19 @@ impl Definer<'_, '_> {
             if let Some(view) = self.catalog.view_of_rule(rule).map(|v| v.oid)
                 && view != table
                 && !self.views.contains(&view)
+                && (!in_from || self.view_reads_relation(view, table))
             {
                 self.views.push(view);
             }
         }
+    }
+
+    /// Whether the query of the view has the relation `table` in a `FROM`, also in a subquery. A query that does not analyze counts as one that has it.
+    fn view_reads_relation(&self, view: u32, table: u32) -> bool {
+        let Ok(Some(query)) = self.an.stored_query(view) else { return true };
+        let mut refs = Vec::new();
+        super::view::query_references(self.catalog, &query, &[], &mut refs);
+        refs.contains(&ObjRef::new(PG_CLASS, table))
     }
 
     /// Adds to [`super::Defined::views`] the views whose query reads an object that `uses` accepts. A rule that is not the rule of a view and reads such an object gives `0A000`, as rupg cannot write the text of a rule again yet.
