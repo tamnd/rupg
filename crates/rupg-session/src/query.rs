@@ -4,13 +4,14 @@
 
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use rupg_analyze::{Env, Params};
+
 use rupg_catalog::{
     BOOTSTRAP_SUPERUSER, Catalog, ConKind, DepKind, FIRST_NORMAL_OID, RangePart, SequenceData,
 };
@@ -34,6 +35,9 @@ use crate::heap::View;
 use crate::param::type_error;
 use crate::store::Store;
 use crate::utility;
+
+/// The relations of a join in the order of its plan, each with true when its rows come in reverse.
+type JoinOrder = Vec<(usize, bool)>;
 
 /// The schemas of a new database, from `pg_namespace.dat`.
 const SCHEMAS: [(&str, u32); 3] = [("pg_catalog", 11), ("pg_toast", 99), ("public", 2200)];
@@ -179,6 +183,8 @@ pub(crate) struct Reader<'a> {
     conn: Option<&'a Connection>,
     /// The transition tables of the trigger whose function runs, which the queries of the function read by their names.
     transition: Option<Transition>,
+    /// The order of the rows of the joins of each query that the statement ran, by the address of the query, so that a subquery that runs for each row of the query outside it plans its joins once.
+    join_orders: RefCell<BTreeMap<usize, Option<JoinOrder>>>,
 }
 
 /// The zone of a `TimeZone` value, or the value if it is not a zone.
@@ -377,6 +383,7 @@ impl<'a> Reader<'a> {
             view: None,
             conn: None,
             transition: None,
+            join_orders: RefCell::new(BTreeMap::new()),
         }
     }
 
@@ -729,6 +736,18 @@ fn date_format(text: &str) -> DateFormat {
 }
 
 impl rupg_func::Session for Reader<'_> {
+    fn join_order(&self, query: &rupg_analyze::Query) -> Option<Vec<(usize, bool)>> {
+        let (_, store) = self.activity?;
+        let address = std::ptr::from_ref(query) as usize;
+        if let Some(order) = self.join_orders.borrow().get(&address) {
+            return order.clone();
+        }
+        let database = database_oid(store, self.database);
+        let order = crate::connection::join_order(self, store.heap(), database, query);
+        self.join_orders.borrow_mut().insert(address, order.clone());
+        order
+    }
+
     fn interrupted(&self) -> Result<()> {
         if self.cancel.is_some_and(|c| c.swap(false, Ordering::Relaxed)) {
             return Err(Error::new(

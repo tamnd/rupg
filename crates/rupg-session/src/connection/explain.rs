@@ -144,6 +144,29 @@ impl rupg_opt::Members for Members<'_, '_> {
     }
 }
 
+/// The order of the rows of the joins of `query`, from the plan that `EXPLAIN` shows for it, as [`rupg_opt::join_order`] gives it. `None` when the plan gives its rows in another order or the planner fails.
+pub(crate) fn join_order(
+    reader: &Reader<'_>,
+    heap: &Heap,
+    database: u32,
+    query: &Query,
+) -> Option<Vec<(usize, bool)>> {
+    let members = Members { reader, error: RefCell::new(None), heap, database };
+    let barrier = |view: u32| {
+        reader
+            .catalog()
+            .and_then(|c| c.relation(view))
+            .is_some_and(|r| rupg_analyze::option_on(&r.options, "security_barrier"))
+    };
+    let mut query = rupg_opt::pull_up(query, &barrier);
+    rupg_opt::remove_joins(&mut query, &members);
+    let tree = rupg_opt::plan(&query, &members);
+    if members.error.take().is_some() {
+        return None;
+    }
+    rupg_opt::join_order(&tree)
+}
+
 /// The options of `EXPLAIN`, as `ParseExplainOptionList` reads them.
 #[derive(Debug, Default)]
 struct Parsed {
