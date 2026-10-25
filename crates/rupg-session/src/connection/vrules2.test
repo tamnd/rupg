@@ -1,0 +1,500 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE shoe_data (
+>> 	shoename   char(10),
+>> 	sh_avail   integer,
+>> 	slcolor    char(10),
+>> 	slminlen   float,
+>> 	slmaxlen   float,
+>> 	slunit     char(8)
+>> );
+CREATE TABLE
+> CREATE TABLE shoelace_data (
+>> 	sl_name    char(10),
+>> 	sl_avail   integer,
+>> 	sl_color   char(10),
+>> 	sl_len     float,
+>> 	sl_unit    char(8)
+>> );
+CREATE TABLE
+> CREATE TABLE unit (
+>> 	un_name    char(8),
+>> 	un_fact    float
+>> );
+CREATE TABLE
+> CREATE VIEW shoe AS
+>> 	SELECT sh.shoename,
+>> 		   sh.sh_avail,
+>> 		   sh.slcolor,
+>> 		   sh.slminlen,
+>> 		   sh.slminlen * un.un_fact AS slminlen_cm,
+>> 		   sh.slmaxlen,
+>> 		   sh.slmaxlen * un.un_fact AS slmaxlen_cm,
+>> 		   sh.slunit
+>> 	  FROM shoe_data sh, unit un
+>> 	 WHERE sh.slunit = un.un_name;
+CREATE VIEW
+> CREATE VIEW shoelace AS
+>> 	SELECT s.sl_name,
+>> 		   s.sl_avail,
+>> 		   s.sl_color,
+>> 		   s.sl_len,
+>> 		   s.sl_unit,
+>> 		   s.sl_len * u.un_fact AS sl_len_cm
+>> 	  FROM shoelace_data s, unit u
+>> 	 WHERE s.sl_unit = u.un_name;
+CREATE VIEW
+> CREATE VIEW shoe_ready AS
+>> 	SELECT rsh.shoename,
+>> 		   rsh.sh_avail,
+>> 		   rsl.sl_name,
+>> 		   rsl.sl_avail,
+>> 		   int4smaller(rsh.sh_avail, rsl.sl_avail) AS total_avail
+>> 	  FROM shoe rsh, shoelace rsl
+>> 	 WHERE rsl.sl_color = rsh.slcolor
+>> 	   AND rsl.sl_len_cm >= rsh.slminlen_cm
+>> 	   AND rsl.sl_len_cm <= rsh.slmaxlen_cm;
+CREATE VIEW
+> INSERT INTO unit VALUES ('cm', 1.0);
+INSERT 0 1
+> INSERT INTO unit VALUES ('m', 100.0);
+INSERT 0 1
+> INSERT INTO unit VALUES ('inch', 2.54);
+INSERT 0 1
+> INSERT INTO shoe_data VALUES ('sh1', 2, 'black', 70.0, 90.0, 'cm');
+INSERT 0 1
+> INSERT INTO shoe_data VALUES ('sh2', 0, 'black', 30.0, 40.0, 'inch');
+INSERT 0 1
+> INSERT INTO shoe_data VALUES ('sh3', 4, 'brown', 50.0, 65.0, 'cm');
+INSERT 0 1
+> INSERT INTO shoe_data VALUES ('sh4', 3, 'brown', 40.0, 50.0, 'inch');
+INSERT 0 1
+> INSERT INTO shoelace_data VALUES ('sl1', 5, 'black', 80.0, 'cm');
+INSERT 0 1
+> INSERT INTO shoelace_data VALUES ('sl2', 6, 'black', 100.0, 'cm');
+INSERT 0 1
+> INSERT INTO shoelace_data VALUES ('sl3', 0, 'black', 35.0 , 'inch');
+INSERT 0 1
+> INSERT INTO shoelace_data VALUES ('sl4', 8, 'black', 40.0 , 'inch');
+INSERT 0 1
+> INSERT INTO shoelace_data VALUES ('sl5', 4, 'brown', 1.0 , 'm');
+INSERT 0 1
+> INSERT INTO shoelace_data VALUES ('sl6', 0, 'brown', 0.9 , 'm');
+INSERT 0 1
+> INSERT INTO shoelace_data VALUES ('sl7', 7, 'brown', 60 , 'cm');
+INSERT 0 1
+> INSERT INTO shoelace_data VALUES ('sl8', 1, 'brown', 40 , 'inch');
+INSERT 0 1
+> SELECT * FROM shoelace ORDER BY sl_name;
+fields sl_name@shoelace.1:1042:-1:14,sl_avail@shoelace.2:23:4:-1,sl_color@shoelace.3:1042:-1:14,sl_len@shoelace.4:701:8:-1,sl_unit@shoelace.5:1042:-1:12,sl_len_cm@shoelace.6:701:8:-1
+row sl1       ,5,black     ,80,cm      ,80
+row sl2       ,6,black     ,100,cm      ,100
+row sl3       ,0,black     ,35,inch    ,88.9
+row sl4       ,8,black     ,40,inch    ,101.6
+row sl5       ,4,brown     ,1,m       ,100
+row sl6       ,0,brown     ,0.9,m       ,90
+row sl7       ,7,brown     ,60,cm      ,60
+row sl8       ,1,brown     ,40,inch    ,101.6
+SELECT 8
+> SELECT * FROM shoe_ready WHERE total_avail >= 2 ORDER BY 1;
+fields shoename@shoe_ready.1:1042:-1:14,sh_avail@shoe_ready.2:23:4:-1,sl_name@shoe_ready.3:1042:-1:14,sl_avail@shoe_ready.4:23:4:-1,total_avail@shoe_ready.5:23:4:-1
+row sh1       ,2,sl1       ,5,2
+row sh3       ,4,sl7       ,7,4
+SELECT 2
+>     CREATE TABLE shoelace_log (
+>>         sl_name    char(10),
+>>         sl_avail   integer,
+>>         log_who    name,
+>>         log_when   timestamp
+>>     );
+CREATE TABLE
+>     CREATE RULE log_shoelace AS ON UPDATE TO shoelace_data
+>>         WHERE NEW.sl_avail != OLD.sl_avail
+>>         DO INSERT INTO shoelace_log VALUES (
+>>                                         NEW.sl_name,
+>>                                         NEW.sl_avail,
+>>                                         'Al Bundy',
+>>                                         'epoch'
+>>                                     );
+CREATE RULE
+> UPDATE shoelace_data SET sl_avail = 6 WHERE  sl_name = 'sl7';
+UPDATE 1
+> SELECT * FROM shoelace_log;
+fields sl_name@shoelace_log.1:1042:-1:14,sl_avail@shoelace_log.2:23:4:-1,log_who@shoelace_log.3:19:64:-1,log_when@shoelace_log.4:1114:8:-1
+row sl7       ,6,Al Bundy,1970-01-01 00:00:00
+SELECT 1
+>     CREATE RULE shoelace_ins AS ON INSERT TO shoelace
+>>         DO INSTEAD
+>>         INSERT INTO shoelace_data VALUES (
+>>                NEW.sl_name,
+>>                NEW.sl_avail,
+>>                NEW.sl_color,
+>>                NEW.sl_len,
+>>                NEW.sl_unit);
+CREATE RULE
+>     CREATE RULE shoelace_upd AS ON UPDATE TO shoelace
+>>         DO INSTEAD
+>>         UPDATE shoelace_data SET
+>>                sl_name = NEW.sl_name,
+>>                sl_avail = NEW.sl_avail,
+>>                sl_color = NEW.sl_color,
+>>                sl_len = NEW.sl_len,
+>>                sl_unit = NEW.sl_unit
+>>          WHERE sl_name = OLD.sl_name;
+CREATE RULE
+>     CREATE RULE shoelace_del AS ON DELETE TO shoelace
+>>         DO INSTEAD
+>>         DELETE FROM shoelace_data
+>>          WHERE sl_name = OLD.sl_name;
+CREATE RULE
+>     CREATE TABLE shoelace_arrive (
+>>         arr_name    char(10),
+>>         arr_quant   integer
+>>     );
+CREATE TABLE
+>     CREATE TABLE shoelace_ok (
+>>         ok_name     char(10),
+>>         ok_quant    integer
+>>     );
+CREATE TABLE
+>     CREATE RULE shoelace_ok_ins AS ON INSERT TO shoelace_ok
+>>         DO INSTEAD
+>>         UPDATE shoelace SET
+>>                sl_avail = sl_avail + NEW.ok_quant
+>>          WHERE sl_name = NEW.ok_name;
+CREATE RULE
+> INSERT INTO shoelace_arrive VALUES ('sl3', 10);
+INSERT 0 1
+> INSERT INTO shoelace_arrive VALUES ('sl6', 20);
+INSERT 0 1
+> INSERT INTO shoelace_arrive VALUES ('sl8', 20);
+INSERT 0 1
+> SELECT * FROM shoelace ORDER BY sl_name;
+fields sl_name@shoelace.1:1042:-1:14,sl_avail@shoelace.2:23:4:-1,sl_color@shoelace.3:1042:-1:14,sl_len@shoelace.4:701:8:-1,sl_unit@shoelace.5:1042:-1:12,sl_len_cm@shoelace.6:701:8:-1
+row sl1       ,5,black     ,80,cm      ,80
+row sl2       ,6,black     ,100,cm      ,100
+row sl3       ,0,black     ,35,inch    ,88.9
+row sl4       ,8,black     ,40,inch    ,101.6
+row sl5       ,4,brown     ,1,m       ,100
+row sl6       ,0,brown     ,0.9,m       ,90
+row sl7       ,6,brown     ,60,cm      ,60
+row sl8       ,1,brown     ,40,inch    ,101.6
+SELECT 8
+> insert into shoelace_ok select * from shoelace_arrive;
+INSERT 0 0
+> SELECT * FROM shoelace ORDER BY sl_name;
+fields sl_name@shoelace.1:1042:-1:14,sl_avail@shoelace.2:23:4:-1,sl_color@shoelace.3:1042:-1:14,sl_len@shoelace.4:701:8:-1,sl_unit@shoelace.5:1042:-1:12,sl_len_cm@shoelace.6:701:8:-1
+row sl1       ,5,black     ,80,cm      ,80
+row sl2       ,6,black     ,100,cm      ,100
+row sl3       ,10,black     ,35,inch    ,88.9
+row sl4       ,8,black     ,40,inch    ,101.6
+row sl5       ,4,brown     ,1,m       ,100
+row sl6       ,20,brown     ,0.9,m       ,90
+row sl7       ,6,brown     ,60,cm      ,60
+row sl8       ,21,brown     ,40,inch    ,101.6
+SELECT 8
+> SELECT * FROM shoelace_log ORDER BY sl_name;
+fields sl_name@shoelace_log.1:1042:-1:14,sl_avail@shoelace_log.2:23:4:-1,log_who@shoelace_log.3:19:64:-1,log_when@shoelace_log.4:1114:8:-1
+row sl3       ,10,Al Bundy,1970-01-01 00:00:00
+row sl6       ,20,Al Bundy,1970-01-01 00:00:00
+row sl7       ,6,Al Bundy,1970-01-01 00:00:00
+row sl8       ,21,Al Bundy,1970-01-01 00:00:00
+SELECT 4
+>     CREATE VIEW shoelace_obsolete AS
+>> 	SELECT * FROM shoelace WHERE NOT EXISTS
+>> 	    (SELECT shoename FROM shoe WHERE slcolor = sl_color);
+CREATE VIEW
+>     CREATE VIEW shoelace_candelete AS
+>> 	SELECT * FROM shoelace_obsolete WHERE sl_avail = 0;
+CREATE VIEW
+> insert into shoelace values ('sl9', 0, 'pink', 35.0, 'inch', 0.0);
+INSERT 0 1
+> insert into shoelace values ('sl10', 1000, 'magenta', 40.0, 'inch', 0.0);
+INSERT 0 1
+> insert into shoelace values ('sl10', 1000, 'magenta', 40.0, 'inch', 0.0)
+>>   on conflict do nothing;
+ERROR 0A000 INSERT with ON CONFLICT clause cannot be used with table that has INSERT or UPDATE rules
+> SELECT * FROM shoelace_obsolete ORDER BY sl_len_cm;
+fields sl_name@shoelace_obsolete.1:1042:-1:14,sl_avail@shoelace_obsolete.2:23:4:-1,sl_color@shoelace_obsolete.3:1042:-1:14,sl_len@shoelace_obsolete.4:701:8:-1,sl_unit@shoelace_obsolete.5:1042:-1:12,sl_len_cm@shoelace_obsolete.6:701:8:-1
+row sl9       ,0,pink      ,35,inch    ,88.9
+row sl10      ,1000,magenta   ,40,inch    ,101.6
+SELECT 2
+> SELECT * FROM shoelace_candelete;
+fields sl_name@shoelace_candelete.1:1042:-1:14,sl_avail@shoelace_candelete.2:23:4:-1,sl_color@shoelace_candelete.3:1042:-1:14,sl_len@shoelace_candelete.4:701:8:-1,sl_unit@shoelace_candelete.5:1042:-1:12,sl_len_cm@shoelace_candelete.6:701:8:-1
+row sl9       ,0,pink      ,35,inch    ,88.9
+SELECT 1
+> DELETE FROM shoelace WHERE EXISTS
+>>     (SELECT * FROM shoelace_candelete
+>>              WHERE sl_name = shoelace.sl_name);
+DELETE 1
+> SELECT * FROM shoelace ORDER BY sl_name;
+fields sl_name@shoelace.1:1042:-1:14,sl_avail@shoelace.2:23:4:-1,sl_color@shoelace.3:1042:-1:14,sl_len@shoelace.4:701:8:-1,sl_unit@shoelace.5:1042:-1:12,sl_len_cm@shoelace.6:701:8:-1
+row sl1       ,5,black     ,80,cm      ,80
+row sl10      ,1000,magenta   ,40,inch    ,101.6
+row sl2       ,6,black     ,100,cm      ,100
+row sl3       ,10,black     ,35,inch    ,88.9
+row sl4       ,8,black     ,40,inch    ,101.6
+row sl5       ,4,brown     ,1,m       ,100
+row sl6       ,20,brown     ,0.9,m       ,90
+row sl7       ,6,brown     ,60,cm      ,60
+row sl8       ,21,brown     ,40,inch    ,101.6
+SELECT 9
+> SELECT * FROM shoe ORDER BY shoename;
+fields shoename@shoe.1:1042:-1:14,sh_avail@shoe.2:23:4:-1,slcolor@shoe.3:1042:-1:14,slminlen@shoe.4:701:8:-1,slminlen_cm@shoe.5:701:8:-1,slmaxlen@shoe.6:701:8:-1,slmaxlen_cm@shoe.7:701:8:-1,slunit@shoe.8:1042:-1:12
+row sh1       ,2,black     ,70,70,90,90,cm      
+row sh2       ,0,black     ,30,76.2,40,101.6,inch    
+row sh3       ,4,brown     ,50,50,65,65,cm      
+row sh4       ,3,brown     ,40,101.6,50,127,inch    
+SELECT 4
+> SELECT count(*) FROM shoe;
+fields count:20:8:-1
+row 4
+SELECT 1
+> CREATE VIEW nupd AS SELECT DISTINCT sl_name FROM shoelace_data;
+CREATE VIEW
+> CREATE TABLE nupd_t (a char(10));
+CREATE TABLE
+> CREATE RULE nupd_r AS ON INSERT TO nupd_t DO INSTEAD UPDATE nupd SET sl_name = new.a;
+CREATE RULE
+> SELECT pg_get_ruledef(oid) FROM pg_rewrite WHERE rulename = 'nupd_r';
+fields pg_get_ruledef:25:-1:-1
+row CREATE RULE nupd_r AS
+    ON INSERT TO public.nupd_t DO INSTEAD  UPDATE nupd SET sl_name = new.a;
+SELECT 1
+> INSERT INTO nupd_t VALUES ('x');
+ERROR 55000 cannot update view "nupd"
+DETAIL Views containing DISTINCT are not automatically updatable.
+HINT To enable updating the view, provide an INSTEAD OF UPDATE trigger or an unconditional ON UPDATE DO INSTEAD rule.
+> CREATE RULE nupd_d AS ON DELETE TO nupd_t DO INSTEAD DELETE FROM nupd WHERE sl_name = old.a;
+CREATE RULE
+> DELETE FROM nupd_t;
+ERROR 55000 cannot delete from view "nupd"
+DETAIL Views containing DISTINCT are not automatically updatable.
+HINT To enable deleting from the view, provide an INSTEAD OF DELETE trigger or an unconditional ON DELETE DO INSTEAD rule.
+> create table rules_foo (f1 int);
+CREATE TABLE
+> create table rules_foo2 (f1 int);
+CREATE TABLE
+> create rule rules_foorule as on insert to rules_foo where f1 < 100
+>> do instead nothing;
+CREATE RULE
+> insert into rules_foo values(1);
+INSERT 0 0
+> insert into rules_foo values(1001);
+INSERT 0 1
+> select * from rules_foo;
+fields f1@rules_foo.1:23:4:-1
+row 1001
+SELECT 1
+> drop rule rules_foorule on rules_foo;
+DROP RULE
+> create rule rules_foorule as on insert to rules_foo where f1 < 100
+>> do instead insert into rules_foo2 values (f1);
+ERROR 42703 column "f1" does not exist at 110
+DETAIL There are columns named "f1", but they are in tables that cannot be referenced from this part of the query.
+HINT Try using a table-qualified name.
+> create rule rules_foorule as on insert to rules_foo where f1 < 100
+>> do instead insert into rules_foo2 values (new.f1);
+CREATE RULE
+> insert into rules_foo values(2);
+INSERT 0 0
+> insert into rules_foo values(100);
+INSERT 0 1
+> select * from rules_foo;
+fields f1@rules_foo.1:23:4:-1
+row 1001
+row 100
+SELECT 2
+> select * from rules_foo2;
+fields f1@rules_foo2.1:23:4:-1
+row 2
+SELECT 1
+> drop rule rules_foorule on rules_foo;
+DROP RULE
+> drop table rules_foo;
+DROP TABLE
+> drop table rules_foo2;
+DROP TABLE
+> create table pparent (pid int, txt text);
+CREATE TABLE
+> insert into pparent values (1,'parent1');
+INSERT 0 1
+> insert into pparent values (2,'parent2');
+INSERT 0 1
+> create table cchild (pid int, descrip text);
+CREATE TABLE
+> insert into cchild values (1,'descrip1');
+INSERT 0 1
+> create view vview as
+>>   select pparent.pid, txt, descrip from
+>>     pparent left join cchild using (pid);
+CREATE VIEW
+> create rule rrule as
+>>   on update to vview do instead
+>> (
+>>   insert into cchild (pid, descrip)
+>>     select old.pid, new.descrip where old.descrip isnull;
+>>   update cchild set descrip = new.descrip where cchild.pid = old.pid;
+>> );
+CREATE RULE
+> select * from vview;
+fields pid@vview.1:23:4:-1,txt@vview.2:25:-1:-1,descrip@vview.3:25:-1:-1
+row 1,parent1,descrip1
+row 2,parent2,NULL
+SELECT 2
+> update vview set descrip='test1' where pid=1;
+UPDATE 1
+> select * from vview;
+fields pid@vview.1:23:4:-1,txt@vview.2:25:-1:-1,descrip@vview.3:25:-1:-1
+row 1,parent1,test1
+row 2,parent2,NULL
+SELECT 2
+> update vview set descrip='test2' where pid=2;
+UPDATE 1
+> select * from vview;
+fields pid@vview.1:23:4:-1,txt@vview.2:25:-1:-1,descrip@vview.3:25:-1:-1
+row 1,parent1,test1
+row 2,parent2,test2
+SELECT 2
+> update vview set descrip='test3' where pid=3;
+UPDATE 0
+> select * from vview;
+fields pid@vview.1:23:4:-1,txt@vview.2:25:-1:-1,descrip@vview.3:25:-1:-1
+row 1,parent1,test1
+row 2,parent2,test2
+SELECT 2
+> select * from cchild;
+fields pid@cchild.1:23:4:-1,descrip@cchild.2:25:-1:-1
+row 1,test1
+row 2,test2
+SELECT 2
+> drop rule rrule on vview;
+DROP RULE
+> drop view vview;
+DROP VIEW
+> drop table pparent;
+DROP TABLE
+> drop table cchild;
+DROP TABLE
+> CREATE TABLE ruletest_tbl (a int, b int);
+CREATE TABLE
+> CREATE TABLE ruletest_tbl2 (a int, b int);
+CREATE TABLE
+> CREATE OR REPLACE RULE myrule AS ON INSERT TO ruletest_tbl
+>> 	DO INSTEAD INSERT INTO ruletest_tbl2 VALUES (10, 10);
+CREATE RULE
+> INSERT INTO ruletest_tbl VALUES (99, 99);
+INSERT 0 1
+> CREATE OR REPLACE RULE myrule AS ON INSERT TO ruletest_tbl
+>> 	DO INSTEAD INSERT INTO ruletest_tbl2 VALUES (1000, 1000);
+CREATE RULE
+> INSERT INTO ruletest_tbl VALUES (99, 99);
+INSERT 0 1
+> SELECT * FROM ruletest_tbl2;
+fields a@ruletest_tbl2.1:23:4:-1,b@ruletest_tbl2.2:23:4:-1
+row 10,10
+row 1000,1000
+SELECT 2
+> create table rule_and_refint_t1 (
+>> 	id1a integer,
+>> 	id1b integer,
+>> 	primary key (id1a, id1b)
+>> );
+CREATE TABLE
+> create table rule_and_refint_t2 (
+>> 	id2a integer,
+>> 	id2c integer,
+>> 	primary key (id2a, id2c)
+>> );
+CREATE TABLE
+> create table rule_and_refint_t3 (
+>> 	id3a integer,
+>> 	id3b integer,
+>> 	id3c integer,
+>> 	data text,
+>> 	primary key (id3a, id3b, id3c),
+>> 	foreign key (id3a, id3b) references rule_and_refint_t1 (id1a, id1b),
+>> 	foreign key (id3a, id3c) references rule_and_refint_t2 (id2a, id2c)
+>> );
+CREATE TABLE
+> insert into rule_and_refint_t1 values (1, 11);
+INSERT 0 1
+> insert into rule_and_refint_t1 values (1, 12);
+INSERT 0 1
+> insert into rule_and_refint_t1 values (2, 21);
+INSERT 0 1
+> insert into rule_and_refint_t1 values (2, 22);
+INSERT 0 1
+> insert into rule_and_refint_t2 values (1, 11);
+INSERT 0 1
+> insert into rule_and_refint_t2 values (1, 12);
+INSERT 0 1
+> insert into rule_and_refint_t2 values (2, 21);
+INSERT 0 1
+> insert into rule_and_refint_t2 values (2, 22);
+INSERT 0 1
+> insert into rule_and_refint_t3 values (1, 11, 11, 'row1');
+INSERT 0 1
+> insert into rule_and_refint_t3 values (1, 11, 12, 'row2');
+INSERT 0 1
+> insert into rule_and_refint_t3 values (1, 12, 11, 'row3');
+INSERT 0 1
+> insert into rule_and_refint_t3 values (1, 12, 12, 'row4');
+INSERT 0 1
+> insert into rule_and_refint_t3 values (1, 11, 13, 'row5');
+ERROR 23503 insert or update on table "rule_and_refint_t3" violates foreign key constraint "rule_and_refint_t3_id3a_id3c_fkey"
+DETAIL Key (id3a, id3c)=(1, 13) is not present in table "rule_and_refint_t2".
+> insert into rule_and_refint_t3 values (1, 13, 11, 'row6');
+ERROR 23503 insert or update on table "rule_and_refint_t3" violates foreign key constraint "rule_and_refint_t3_id3a_id3b_fkey"
+DETAIL Key (id3a, id3b)=(1, 13) is not present in table "rule_and_refint_t1".
+> insert into rule_and_refint_t3 values (1, 13, 11, 'row6')
+>>   on conflict do nothing;
+ERROR 23503 insert or update on table "rule_and_refint_t3" violates foreign key constraint "rule_and_refint_t3_id3a_id3b_fkey"
+DETAIL Key (id3a, id3b)=(1, 13) is not present in table "rule_and_refint_t1".
+> insert into rule_and_refint_t3 values (1, 13, 11, 'row6')
+>>   on conflict (id3a, id3b, id3c) do update
+>>   set id3b = excluded.id3b;
+ERROR 23503 insert or update on table "rule_and_refint_t3" violates foreign key constraint "rule_and_refint_t3_id3a_id3b_fkey"
+DETAIL Key (id3a, id3b)=(1, 13) is not present in table "rule_and_refint_t1".
+> insert into shoelace values ('sl9', 0, 'pink', 35.0, 'inch', 0.0)
+>>   on conflict (sl_name) do update
+>>   set sl_avail = excluded.sl_avail;
+ERROR 0A000 INSERT with ON CONFLICT clause cannot be used with table that has INSERT or UPDATE rules
+> create rule rule_and_refint_t3_ins as on insert to rule_and_refint_t3
+>> 	where (exists (select 1 from rule_and_refint_t3
+>> 			where (((rule_and_refint_t3.id3a = new.id3a)
+>> 			and (rule_and_refint_t3.id3b = new.id3b))
+>> 			and (rule_and_refint_t3.id3c = new.id3c))))
+>> 	do instead update rule_and_refint_t3 set data = new.data
+>> 	where (((rule_and_refint_t3.id3a = new.id3a)
+>> 	and (rule_and_refint_t3.id3b = new.id3b))
+>> 	and (rule_and_refint_t3.id3c = new.id3c));
+CREATE RULE
+> insert into rule_and_refint_t3 values (1, 11, 13, 'row7');
+ERROR 23503 insert or update on table "rule_and_refint_t3" violates foreign key constraint "rule_and_refint_t3_id3a_id3c_fkey"
+DETAIL Key (id3a, id3c)=(1, 13) is not present in table "rule_and_refint_t2".
+> insert into rule_and_refint_t3 values (1, 13, 11, 'row8');
+ERROR 23503 insert or update on table "rule_and_refint_t3" violates foreign key constraint "rule_and_refint_t3_id3a_id3b_fkey"
+DETAIL Key (id3a, id3b)=(1, 13) is not present in table "rule_and_refint_t1".
+> create view rules_fooview as select 'rules_foo'::text;
+CREATE VIEW
+> drop rule "_RETURN" on rules_fooview;
+ERROR 2BP01 cannot drop rule _RETURN on view rules_fooview because view rules_fooview requires it
+HINT You can drop view rules_fooview instead.
+> drop view rules_fooview;
+DROP VIEW
+> create table rules_fooview (x int, y text);
+CREATE TABLE
+> create rule "_RETURN" as on select to rules_fooview do instead
+>>   select 1 as x, 'aaa'::text as y;
+ERROR 42809 relation "rules_fooview" cannot have ON SELECT rules
+DETAIL This operation is not supported for tables.
+> drop table rules_fooview;
+DROP TABLE
+> create table rules_fooview (x int, y text) partition by list (x);
+CREATE TABLE
+> create rule "_RETURN" as on select to rules_fooview do instead
+>>   select 1 as x, 'aaa'::text as y;
+ERROR 42809 relation "rules_fooview" cannot have ON SELECT rules
+DETAIL This operation is not supported for partitioned tables.

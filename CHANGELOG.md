@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A rule condition can name a column of the row without OLD or NEW (#NNN).
 - A rule action can write a view that has its own rules, and CREATE RULE does not check that the view of an action can be updated (#755).
 - COMMENT ON RULE (#754).
 - A rule action can be a SELECT, and the client gets its rows (#753).

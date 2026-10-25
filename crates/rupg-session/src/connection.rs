@@ -4778,6 +4778,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vshoe.test")));
     }
 
+    /// The rules regression test after the shoelace part: conditional rules `DO INSTEAD`, a rule of a view with two actions, rules and foreign keys, and `CREATE OR REPLACE RULE`. `connection/vrules2.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vrules2() {
+        big_stack(|| script(include_str!("connection/vrules2.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {
