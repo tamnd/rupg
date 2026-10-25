@@ -338,6 +338,19 @@ pub trait Session {
     fn advisory_unlock_all(&self) -> Result<()> {
         Err(not_yet("an advisory lock in a session with no server"))
     }
+    /// `Async_Notify`: the transaction sends a notification on the channel `channel` with the payload `payload` when it commits.
+    ///
+    /// # Errors
+    ///
+    /// `22023` for a channel name or a payload that is not valid, and `0A000` for a session with no server.
+    fn notify(&self, channel: &str, payload: &str) -> Result<()> {
+        let _ = (channel, payload);
+        Err(not_yet("NOTIFY in a session with no server"))
+    }
+    /// The channels that the session listens on, for `pg_listening_channels`. The order is not defined.
+    fn listening_channels(&self) -> Vec<String> {
+        Vec::new()
+    }
     /// The rows of `pg_show_all_settings`, one for each parameter that `SHOW ALL` lists, in the 17 columns of the function.
     fn all_settings(&self) -> Vec<Vec<Value>> {
         Vec::new()

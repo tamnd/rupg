@@ -353,6 +353,7 @@ impl Connection {
         locks.release_all(self.pid, false);
         locks.release_all(self.pid, true);
         self.store.heap().release(self.pid);
+        self.store.listeners().leave(self.pid);
         if let Some(number) = self.activity.number.take() {
             self.store.leave(number);
         }

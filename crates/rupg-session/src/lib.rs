@@ -13,6 +13,7 @@ pub mod connection;
 mod generated;
 pub mod guc;
 mod heap;
+mod notify;
 mod param;
 mod query;
 pub mod store;

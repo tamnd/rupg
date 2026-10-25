@@ -44,6 +44,7 @@ mod deferred;
 mod explain;
 mod extended;
 mod foreign;
+mod listen;
 mod merge;
 mod plpgsql;
 mod prepare;
@@ -428,6 +429,8 @@ pub struct Connection {
     snapshot: RefCell<Option<Snapshot>>,
     /// The rows of the deferred triggers of the foreign keys, in the order of the writes.
     deferred: RefCell<Vec<Batch>>,
+    /// The `LISTEN`, `UNLISTEN` and `NOTIFY` of the transaction.
+    notify: RefCell<crate::notify::Pending>,
     /// The events of the deferred constraint triggers, in the order of the writes.
     deferred_events: RefCell<Vec<trigger::Event>>,
     /// The new versions whose keys a deferred unique constraint checks at the commit, in the order of the writes.
@@ -514,6 +517,7 @@ impl Connection {
             command: Cell::new(0),
             snapshot: RefCell::new(None),
             deferred: RefCell::new(Vec::new()),
+            notify: RefCell::default(),
             deferred_events: RefCell::new(Vec::new()),
             deferred_unique: RefCell::new(Vec::new()),
             modes: RefCell::new(deferred::Modes::default()),
@@ -1037,6 +1041,7 @@ impl Connection {
         let heap = self.store.heap();
         let xid = self.xid.replace(0);
         self.stable_xid.set(0);
+        self.end_notify(commit);
         if xid != 0 {
             if commit {
                 heap.commit(xid);
@@ -1680,6 +1685,7 @@ impl Connection {
         self.report_idle();
         self.sync_role();
         self.session.set_utf8(self.utf8());
+        self.send_notifications(out);
         let mut reports = self.settings.get_mut().reports();
         // PostgreSQL changes `is_superuser` inside the change of `session_authorization`, so it reports `session_authorization` first.
         let at = |reports: &[(&str, String)], name| reports.iter().position(|(n, _)| *n == name);
@@ -1833,6 +1839,9 @@ impl Connection {
             } else if let Node::LockStmt(stmt) = node {
                 drop(self.portals.get_mut().close(b""));
                 self.lock(stmt)
+            } else if let Some(done) = self.async_statement(node) {
+                drop(self.portals.get_mut().close(b""));
+                done
             } else if let Node::ConstraintsSetStmt(stmt) = node {
                 drop(self.portals.get_mut().close(b""));
                 self.set_constraints(stmt, &mut notices)
@@ -2526,6 +2535,9 @@ mod tests {
                 }
                 Backend::CopyData(data) => format!("data {}", data.escape_ascii()),
                 Backend::CopyDone => "copy done".into(),
+                Backend::NotificationResponse { channel, payload, .. } => {
+                    format!("notify {} {}", text(channel), text(payload))
+                }
                 Backend::ErrorResponse(fields) | Backend::NoticeResponse(fields) => {
                     let mut line = format!(
                         "{} {} {}",
@@ -4710,6 +4722,37 @@ mod tests {
     #[test]
     fn vcasttm() {
         big_stack(|| script(include_str!("connection/vcasttm.test")));
+    }
+
+    /// `LISTEN`, `UNLISTEN`, `NOTIFY` and `pg_notify` in one session: the notifications that the session sends to itself after a commit, with no two the same in a transaction, none after a rollback or for a subtransaction that rolled back, the errors of the channel and the payload, and `pg_listening_channels`. `connection/vnotify.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vnotify() {
+        big_stack(|| script(include_str!("connection/vnotify.test")));
+    }
+
+    /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
+    #[test]
+    fn notify_other_sessions() {
+        big_stack(|| {
+            let store = Arc::new(Store::new());
+            let (mut a, _) = connect_to(&store, 11);
+            let (mut b, _) = connect_to(&store, 12);
+            let mut c = connect_database(&store, 13, "template1");
+            for conn in [&mut b, &mut c] {
+                assert_eq!(send(conn, &query("LISTEN ch")), ["LISTEN", "ready I"]);
+            }
+            assert_eq!(send(&mut b, &query("BEGIN")), ["BEGIN", "ready T"]);
+            assert_eq!(send(&mut a, &query("NOTIFY ch, 'p'")), ["NOTIFY", "ready I"]);
+            assert_eq!(
+                send(&mut b, &query("SELECT 1")),
+                ["columns ?column?", "row 1", "SELECT 1", "ready T"]
+            );
+            assert_eq!(send(&mut b, &query("COMMIT")), ["COMMIT", "notify ch p", "ready I"]);
+            assert_eq!(
+                send(&mut c, &query("SELECT 1")),
+                ["columns ?column?", "row 1", "SELECT 1", "ready I"]
+            );
+        });
     }
 
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.

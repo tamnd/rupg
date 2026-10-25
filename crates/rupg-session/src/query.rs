@@ -1193,6 +1193,20 @@ impl rupg_func::Session for Reader<'_> {
         Ok((oid, latest))
     }
 
+    fn notify(&self, channel: &str, payload: &str) -> Result<()> {
+        let Some(conn) = self.conn else {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "NOTIFY in a session with no server is not supported yet",
+            ));
+        };
+        conn.notify(channel, payload)
+    }
+
+    fn listening_channels(&self) -> Vec<String> {
+        self.conn.map_or_else(Vec::new, Connection::listening_channels)
+    }
+
     fn cursors(&self) -> Vec<Vec<Value>> {
         self.portals.map_or_else(Vec::new, |portals| {
             portals.borrow().iter().filter_map(|(name, portal)| portal.cursor_row(name)).collect()

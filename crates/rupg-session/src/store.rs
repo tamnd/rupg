@@ -15,6 +15,7 @@ use crate::advisory::Locks;
 use crate::auth::AuthFiles;
 use crate::connection::Pending;
 use crate::heap::Heap;
+use crate::notify::Listeners;
 
 /// How long a session waits for the lock before it looks at its cancel flag again.
 const WAIT_SLICE: Duration = Duration::from_millis(50);
@@ -47,6 +48,8 @@ pub struct Store {
     relations: Mutex<HashMap<(u32, u32), RelationCounts>>,
     /// The rows of the tables.
     heap: Heap,
+    /// The sessions that listen for notifications.
+    listeners: Listeners,
 }
 
 /// A slot of the table of the sessions.
@@ -473,6 +476,11 @@ impl Store {
     /// The rows of the tables.
     pub(crate) fn heap(&self) -> &Heap {
         &self.heap
+    }
+
+    /// The sessions that listen for notifications.
+    pub(crate) fn listeners(&self) -> &Listeners {
+        &self.listeners
     }
 
     /// The row of the file of a sequence, or `None` when no session changed it.

@@ -1,4 +1,4 @@
-//! `SAVEPOINT`, `RELEASE SAVEPOINT` and `ROLLBACK TO SAVEPOINT`, as `DefineSavepoint`, `ReleaseSavepoint` and `RollbackToSavepoint` of `xact.c` run them. A subtransaction has no transaction ID of its own. Each savepoint keeps the state of the transaction at its start, and a rollback of the subtransaction brings that state back: the rows that the later commands wrote, the catalog, the settings, the queue of the deferred triggers, the modes of `SET CONSTRAINTS`, the advisory locks of the transaction level, the counts of the rows that the transaction wrote, and the portals of the subtransaction.
+//! `SAVEPOINT`, `RELEASE SAVEPOINT` and `ROLLBACK TO SAVEPOINT`, as `DefineSavepoint`, `ReleaseSavepoint` and `RollbackToSavepoint` of `xact.c` run them. A subtransaction has no transaction ID of its own. Each savepoint keeps the state of the transaction at its start, and a rollback of the subtransaction brings that state back: the rows that the later commands wrote, the catalog, the settings, the queue of the deferred triggers, the modes of `SET CONSTRAINTS`, the advisory locks of the transaction level, the counts of the rows that the transaction wrote, its `LISTEN`, `UNLISTEN` and `NOTIFY`, and the portals of the subtransaction.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -34,6 +34,8 @@ pub(super) struct Mark {
     locks: Vec<(Tag, Mode, u32)>,
     /// The rows that the transaction wrote in each relation, for the statistics.
     writes: BTreeMap<u32, Pending>,
+    /// The `LISTEN`, `UNLISTEN` and `NOTIFY` of the transaction.
+    notify: crate::notify::Pending,
 }
 
 impl Connection {
@@ -85,6 +87,7 @@ impl Connection {
             modes: self.modes.borrow().clone(),
             locks: self.store.locks().xact_holds(self.pid),
             writes: self.activity.writes(),
+            notify: self.notify.borrow().clone(),
         }
     }
 
@@ -127,5 +130,6 @@ impl Connection {
         self.modes.borrow_mut().clone_from(&mark.modes);
         self.store.locks().release_since(self.pid, &mark.locks);
         self.activity.roll_back_writes(&mark.writes);
+        self.notify.borrow_mut().clone_from(&mark.notify);
     }
 }
