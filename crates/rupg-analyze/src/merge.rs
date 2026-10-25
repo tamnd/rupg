@@ -352,6 +352,7 @@ impl Analyzer<'_> {
                 kind: WriteKind::Merge,
                 table,
                 name,
+                alias: None,
                 width: columns.len(),
                 checks: names,
                 unique,

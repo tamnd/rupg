@@ -1,0 +1,73 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> create table ex_t (key int primary key, fruit text);
+CREATE TABLE
+> create table ex_o (a int);
+CREATE TABLE
+> explain (costs off) insert into ex_t values (1, 'a') on conflict (key) do update set fruit = excluded.fruit where excluded.fruit <> 'b';
+fields QUERY PLAN:25:-1:-1
+row Insert on ex_t
+row   Conflict Resolution: UPDATE
+row   Conflict Arbiter Indexes: ex_t_pkey
+row   Conflict Filter: (excluded.fruit <> 'b'::text)
+row   ->  Result
+EXPLAIN
+> explain (costs off) insert into ex_t as i values (1, 'a') on conflict (key) do update set fruit = excluded.fruit where i.fruit <> excluded.fruit;
+fields QUERY PLAN:25:-1:-1
+row Insert on ex_t i
+row   Conflict Resolution: UPDATE
+row   Conflict Arbiter Indexes: ex_t_pkey
+row   Conflict Filter: (i.fruit <> excluded.fruit)
+row   ->  Result
+EXPLAIN
+> explain (costs off) insert into ex_t as i values (1, 'a') on conflict (key) do update set fruit = excluded.fruit where excluded.* is null;
+fields QUERY PLAN:25:-1:-1
+row Insert on ex_t i
+row   Conflict Resolution: UPDATE
+row   Conflict Arbiter Indexes: ex_t_pkey
+row   Conflict Filter: (excluded.* IS NULL)
+row   ->  Result
+EXPLAIN
+> explain (costs off) insert into ex_t values (1, 'a') on conflict (key) do update set fruit = excluded.fruit where ex_t.fruit <> 'c';
+fields QUERY PLAN:25:-1:-1
+row Insert on ex_t
+row   Conflict Resolution: UPDATE
+row   Conflict Arbiter Indexes: ex_t_pkey
+row   Conflict Filter: (ex_t.fruit <> 'c'::text)
+row   ->  Result
+EXPLAIN
+> explain (verbose, costs off) insert into ex_t as i values (1, 'a') on conflict (key) do update set fruit = excluded.fruit where i.key > 0 returning i.*;
+fields QUERY PLAN:25:-1:-1
+row Insert on public.ex_t i
+row   Output: i.key, i.fruit
+row   Conflict Resolution: UPDATE
+row   Conflict Arbiter Indexes: ex_t_pkey
+row   Conflict Filter: (i.key > 0)
+row   ->  Result
+row         Output: 1, 'a'::text
+EXPLAIN
+> explain (verbose, costs off) insert into ex_t values (1, 'a') on conflict (key) do update set fruit = excluded.fruit returning *;
+fields QUERY PLAN:25:-1:-1
+row Insert on public.ex_t
+row   Output: ex_t.key, ex_t.fruit
+row   Conflict Resolution: UPDATE
+row   Conflict Arbiter Indexes: ex_t_pkey
+row   ->  Result
+row         Output: 1, 'a'::text
+EXPLAIN
+> explain (costs off) insert into ex_t as i values (1, 'a') on conflict (key) do nothing;
+fields QUERY PLAN:25:-1:-1
+row Insert on ex_t i
+row   Conflict Resolution: NOTHING
+row   Conflict Arbiter Indexes: ex_t_pkey
+row   ->  Result
+EXPLAIN
+> explain (costs off) insert into ex_t as i values (1, 'a') on conflict (key) do select where i.fruit = 'x' returning *;
+fields QUERY PLAN:25:-1:-1
+row Insert on ex_t i
+row   Conflict Resolution: SELECT
+row   Conflict Arbiter Indexes: ex_t_pkey
+row   Conflict Filter: (i.fruit = 'x'::text)
+row   ->  Result
+EXPLAIN
