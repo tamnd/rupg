@@ -31,6 +31,32 @@ pub fn pull_up(query: &Query) -> Query {
     query
 }
 
+/// `pull_up_simple_subquery` for the executor: each simple subquery and each view of `FROM` of a `SELECT` merges into the query, also in the subqueries of the query, the inner subqueries first. The conditions of the subquery come before the conditions of the query, so that the executor orders them all by their costs, as the planner of PostgreSQL does. `barrier` is true for a view with `security_barrier`, which `is_simple_subquery` does not merge, and the leakproof conditions of the query move into such a view. The subqueries that merge are those that `EXPLAIN` merges, and the views. The query of a write stays as it is.
+pub fn merge_from(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
+    for relation in &mut query.relations {
+        if let Some(sub) = &mut relation.subquery {
+            merge_from(sub, barrier);
+        }
+    }
+    for expr in query.exprs_mut() {
+        expr.each_mut(0, &mut |e, depth| {
+            if depth == 0
+                && let ExprKind::SubLink(link) = &mut e.kind
+            {
+                merge_from(&mut link.query, barrier);
+            }
+            false
+        });
+    }
+    if query.write.is_some() {
+        return;
+    }
+    while let Some((r, top)) = candidate(query, Some(barrier)) {
+        merge(query, r, top);
+    }
+    pushdown::push_barrier(query, barrier);
+}
+
 /// `transform_MERGE_to_join`: the join of a `MERGE` has the target table on its left side and the source on its right side. With `NOT MATCHED BY SOURCE`, the executor of PostgreSQL tests the whole row of the source, so the plan does not read the one-row `VALUES` that marks the source rows here. A `MERGE` in `WITH` changes too.
 fn merge_join(query: &mut Query) {
     for cte in &mut query.ctes {
@@ -223,12 +249,12 @@ fn pull_all(query: &mut Query) {
             false
         });
     }
-    while let Some((r, top)) = candidate(query) {
+    while let Some((r, top)) = candidate(query, None) {
         merge(query, r, top);
     }
     // PostgreSQL pulls up the subqueries of `WHERE` before the subqueries of `FROM`. Here the subqueries of `FROM` merge first, so that they keep their places in the list of `FROM`, and the subquery of an `ANY` then merges as the inner side of its semi join.
     if pull_sublinks(query) {
-        while let Some((r, top)) = candidate(query) {
+        while let Some((r, top)) = candidate(query, None) {
             merge(query, r, top);
         }
     }
@@ -604,8 +630,8 @@ fn places(item: &FromItem, top: bool, on: bool, out: &mut Vec<(usize, bool, bool
     }
 }
 
-/// The first subquery of `FROM` that the planner merges, with true when it is an item of the list of `FROM`. The planner does not merge a view or a query of `WITH` yet, and it merges a `LATERAL` subquery when [`lateral_fits`] lets it and the query does not read a target of the subquery that reads the query below an outer join that gives nulls for the subquery. Below the side of an outer join that can give nulls, a target of the subquery that is not a column becomes a `PlaceHolderVar`, which the planner makes here only for a subquery with a `FROM`, for a reference of the query itself and for a target with no subquery. In a join, the subquery has one item in `FROM`, and its `WHERE` joins the `ON` of the join, so that the subquery is not the side of an outer join that keeps its rows or a side of a full join when it has a `WHERE`. The query does not read the whole row of the subquery, which `pullup_replace_vars` makes a `ROW` of the targets.
-fn candidate(query: &Query) -> Option<(usize, bool)> {
+/// The first subquery of `FROM` that the planner merges, with true when it is an item of the list of `FROM`. The planner does not merge a query of `WITH`, nor a view yet unless `views` is false for it, as for the executor, and it merges a `LATERAL` subquery when [`lateral_fits`] lets it and the query does not read a target of the subquery that reads the query below an outer join that gives nulls for the subquery. Below the side of an outer join that can give nulls, a target of the subquery that is not a column becomes a `PlaceHolderVar`, which the planner makes here only for a subquery with a `FROM`, for a reference of the query itself and for a target with no subquery. In a join, the subquery has one item in `FROM`, and its `WHERE` joins the `ON` of the join, so that the subquery is not the side of an outer join that keeps its rows or a side of a full join when it has a `WHERE`. The query does not read the whole row of the subquery, which `pullup_replace_vars` makes a `ROW` of the targets.
+fn candidate(query: &Query, views: Option<&dyn Fn(u32) -> bool>) -> Option<(usize, bool)> {
     if query.set_op.is_some()
         || checks_wrapper(query)
         || !query.row_marks.is_empty()
@@ -628,7 +654,7 @@ fn candidate(query: &Query) -> Option<(usize, bool)> {
             return None;
         }
         let relation = query.relations.get(r)?;
-        let sub = pullable(relation)?;
+        let sub = pullable(relation, views)?;
         let used = used(query, r);
         if relation.lateral {
             let safe = query.from.iter().find_map(|item| lowest_outer(item, r))?;
@@ -684,12 +710,26 @@ pub(crate) fn nullable_places(item: &FromItem, nullable: bool, out: &mut Vec<usi
     }
 }
 
-/// The subquery of a relation that is a subquery in `FROM`, not a view or a query of `WITH`. A `LATERAL` subquery has no function in `FROM`, as the planner does not mark the functions `LATERAL` when it merges the subquery.
-fn pullable(relation: &Relation) -> Option<&Query> {
-    let plain = relation.oid == 0 && relation.cte.is_none();
+/// The subquery of a relation that is a subquery in `FROM`, not a query of `WITH`, and not a view unless `views` is false for it. A `LATERAL` subquery has no function in `FROM`, as the planner does not mark the functions `LATERAL` when it merges the subquery, and for the executor no `TABLESAMPLE`.
+fn pullable<'r>(relation: &'r Relation, views: Option<&dyn Fn(u32) -> bool>) -> Option<&'r Query> {
+    let view = relation.oid != 0 && views.is_some_and(|barrier| !barrier(relation.oid));
+    let plain = (relation.oid == 0 || view) && relation.cte.is_none();
+    // The executor reads the sample of a table when the query starts, so the sample of a `LATERAL` subquery stays in the subquery, which runs for each row.
+    let sampled = views.is_some() && sub_sampled(relation);
     relation.subquery.as_deref().filter(|sub| {
-        plain && !(relation.lateral && sub.relations.iter().any(|r| r.function.is_some()))
+        plain
+            && !sampled
+            && !(relation.lateral && sub.relations.iter().any(|r| r.function.is_some()))
     })
+}
+
+/// True for a `LATERAL` subquery with `TABLESAMPLE` on a relation.
+fn sub_sampled(relation: &Relation) -> bool {
+    relation.lateral
+        && relation
+            .subquery
+            .as_deref()
+            .is_some_and(|sub| sub.relations.iter().any(|r| r.tablesample.is_some()))
 }
 
 /// The relations of the lowest outer join above the relation `r`, as `lowest_outer_join` of `pull_up_subqueries_recurse` finds it, with `Some(None)` when no outer join is above the relation and `None` when the item does not have it. A semi join and an anti join are outer joins here.

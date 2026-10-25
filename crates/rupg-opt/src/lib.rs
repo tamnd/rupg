@@ -30,7 +30,7 @@ use rupg_types::oid;
 
 pub use cost::type_width;
 pub use joinrm::remove_joins;
-pub use pullup::pull_up;
+pub use pullup::{merge_from, pull_up};
 
 /// The tables of the inheritance trees of the relations of the queries, their indexes and the settings of the session, which the planner has no catalog for.
 pub trait Members: std::fmt::Debug {

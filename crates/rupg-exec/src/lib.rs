@@ -29,6 +29,27 @@ pub struct Plan {
     written: Arc<Vec<Rows>>,
     /// The tables of a cursor that `WHERE CURRENT OF` can read, from [`Plan::cursor`].
     marks: Vec<u32>,
+    /// The query that a run of the plan runs, from [`Plan::fold`]: the query with the simple subqueries and views of `FROM` merged into it, as [`rupg_opt::merge_from`] merges them, or `None` when the run runs [`Plan::query`]. `EXPLAIN` shows [`Plan::query`].
+    run: Option<Box<Query>>,
+}
+
+/// The query of a `SELECT` with the simple subqueries and views of `FROM` merged into it, as `pull_up_simple_subquery` merges them, or `None` when no subquery merges. A view with `security_barrier` stays a subquery.
+fn merged(query: &Query, session: &dyn Session) -> Option<Box<Query>> {
+    if query.write.is_some()
+        || query.ctes.iter().any(|c| c.write.is_some())
+        || !query.relations.iter().any(|r| r.subquery.is_some())
+    {
+        return None;
+    }
+    let barrier = |view: u32| {
+        session
+            .catalog()
+            .and_then(|c| c.relation(view))
+            .is_some_and(|r| rupg_analyze::option_on(&r.options, "security_barrier"))
+    };
+    let mut run = query.clone();
+    rupg_opt::merge_from(&mut run, &barrier);
+    (run != *query).then(|| Box::new(run))
 }
 
 /// The error of a feature that the engine does not have yet.
@@ -316,7 +337,7 @@ pub fn prepare(mut query: Query, session: &dyn Session) -> Result<Plan> {
         check_query(&cte.query, false)?;
         check_write(&cte.query)?;
     }
-    Ok(Plan { query, written: Arc::default(), marks: Vec::new() })
+    Ok(Plan { query, written: Arc::default(), marks: Vec::new(), run: None })
 }
 
 /// Checks the queries of `ON CONFLICT DO UPDATE` and of the clauses of `MERGE` of a write.
@@ -1388,7 +1409,12 @@ impl Plan {
             .map(|(n, query)| {
                 // The statement checks the privileges of all its parts before the first write.
                 let query = Query { perms: self.query.perms.clone(), ..query.clone() };
-                let plan = Plan { query, written: Arc::clone(&self.written), marks: Vec::new() };
+                let plan = Plan {
+                    query,
+                    written: Arc::clone(&self.written),
+                    marks: Vec::new(),
+                    run: None,
+                };
                 (plan, read.contains(&n))
             })
             .collect()
@@ -1435,7 +1461,13 @@ impl Plan {
         for cte in query.ctes.iter_mut().filter(|c| c.write.is_some()) {
             *cte.query = fold::query(&cte.query, params, session)?;
         }
-        Ok(Plan { query, written: Arc::clone(&self.written), marks: self.marks.clone() })
+        let run = merged(&query, session);
+        Ok(Plan { query, written: Arc::clone(&self.written), marks: self.marks.clone(), run })
+    }
+
+    /// The query that a run of the plan runs.
+    fn runnable(&self) -> &Query {
+        self.run.as_deref().unwrap_or(&self.query)
     }
 
     /// `ExecSupportsBackwardScan` on the plan that PostgreSQL makes for the query, which decides if a cursor with neither `SCROLL` nor `NO SCROLL` can scan backward.
@@ -1492,10 +1524,10 @@ impl Plan {
     ) -> std::result::Result<Rows, (Rows, Error)> {
         let cache = self.cache();
         if self.query.write.is_none() && !self.modifying_cte() {
-            cache.top.set(Some(&raw const self.query));
+            cache.top.set(Some(&raw const *self.runnable()));
         }
         self.start(session)
-            .and_then(|()| run_query(&self.query, params, session, &cache, &[], false))
+            .and_then(|()| run_query(self.runnable(), params, session, &cache, &[], false))
             .and_then(|rows| self.check(rows, session))
             .map_err(|error| (cache.sent.take(), error))
     }
@@ -1511,7 +1543,7 @@ impl Plan {
         session: &dyn Session,
     ) -> Result<Vec<Vec<Value>>> {
         self.start(session)?;
-        run_query(&self.query, params, session, &self.cache(), &[], false)
+        run_query(self.runnable(), params, session, &self.cache(), &[], false)
     }
 
     /// The new row of an `INSERT` or an `UPDATE` after the triggers `BEFORE ... FOR EACH ROW` changed it: the columns `row`, then the conditions of the check constraints, from [`rupg_analyze::Write::recheck`]. A write with no such query gives the row as it is.

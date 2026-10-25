@@ -1,0 +1,59 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE qo (id int, person text, visibility text);
+CREATE TABLE
+> INSERT INTO qo VALUES (1, 'Tom', 'public'), (2, 'Dick', 'private'), (3, 'Harry', 'public');
+INSERT 0 3
+> CREATE FUNCTION snoop(anyelement) RETURNS boolean AS $$ BEGIN RAISE NOTICE 'snooped value: %', $1; RETURN true; END; $$ LANGUAGE plpgsql COST 0.000001;
+CREATE FUNCTION
+> CREATE VIEW qv AS SELECT * FROM qo WHERE visibility = 'public';
+CREATE VIEW
+> CREATE VIEW qsb WITH (security_barrier) AS SELECT * FROM qo WHERE visibility = 'public';
+CREATE VIEW
+> SELECT count(*) FROM qv WHERE snoop(person);
+fields count:20:8:-1
+NOTICE 00000 snooped value: Tom (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+NOTICE 00000 snooped value: Dick (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+NOTICE 00000 snooped value: Harry (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+row 2
+SELECT 1
+> SELECT count(*) FROM qsb WHERE snoop(person);
+fields count:20:8:-1
+NOTICE 00000 snooped value: Tom (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+NOTICE 00000 snooped value: Harry (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+row 2
+SELECT 1
+> SELECT count(*) FROM qsb WHERE id > 1 AND snoop(person);
+fields count:20:8:-1
+NOTICE 00000 snooped value: Harry (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+row 1
+SELECT 1
+> SELECT count(*) FROM (SELECT * FROM qo WHERE visibility = 'public') s WHERE snoop(person);
+fields count:20:8:-1
+NOTICE 00000 snooped value: Tom (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+NOTICE 00000 snooped value: Dick (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+NOTICE 00000 snooped value: Harry (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+row 2
+SELECT 1
+> SELECT count(*) FROM (SELECT * FROM qo WHERE visibility = 'public' OFFSET 0) s WHERE snoop(person);
+fields count:20:8:-1
+NOTICE 00000 snooped value: Tom (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+NOTICE 00000 snooped value: Harry (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+row 2
+SELECT 1
+> SELECT count(*) FROM qv a JOIN qo b USING (id) WHERE snoop(a.person);
+fields count:20:8:-1
+NOTICE 00000 snooped value: Tom (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+NOTICE 00000 snooped value: Dick (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+NOTICE 00000 snooped value: Harry (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+row 2
+SELECT 1
+> DROP VIEW qsb;
+DROP VIEW
+> DROP VIEW qv;
+DROP VIEW
+> DROP TABLE qo;
+DROP TABLE
+> DROP FUNCTION snoop(anyelement);
+DROP FUNCTION
