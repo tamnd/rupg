@@ -925,7 +925,7 @@ fn constraint<'a>(table: &'a Table, con: &Constraint) -> Row<'a> {
         .set("contype", code(con.kind.code()))
         .set("condeferrable", Value::Bool(con.deferrable))
         .set("condeferred", Value::Bool(con.deferred))
-        .set("conenforced", Value::Bool(true))
+        .set("conenforced", Value::Bool(con.enforced))
         .set("convalidated", Value::Bool(con.validated))
         .set("conrelid", oid(con.relation))
         .set("contypid", oid(con.domain))

@@ -1410,9 +1410,6 @@ impl Definer<'_, '_> {
         let mut names: Vec<String> = Vec::new();
         let mut added = Vec::new();
         for con in checks {
-            if !con.is_enforced {
-                return Err(not_yet("NOT ENFORCED", place(con.location)));
-            }
             // A check constraint of `LIKE ... INCLUDING CONSTRAINTS` comes with its stored expression.
             let expr = match con.cooked_expr.as_deref() {
                 Some(text) => crate::node::read(text)?,
@@ -1434,7 +1431,8 @@ impl Definer<'_, '_> {
             let refs = references(self.catalog, table, &[&expr])?;
             let text = crate::node::write(&expr)?;
             if let Some(name) = con.conname.as_deref()
-                && let Some(oid) = self.merge_check(table, name, &text, con.is_no_inherit)?
+                && let Some(oid) =
+                    self.merge_check(table, name, &text, con.is_no_inherit, con.is_enforced)?
             {
                 names.push(name.to_string());
                 added.push(oid);
@@ -1460,6 +1458,10 @@ impl Definer<'_, '_> {
                 &refs,
                 con.is_no_inherit,
             )?;
+            // A `NOT ENFORCED` constraint is also not valid.
+            if !con.is_enforced {
+                self.catalog.set_constraint_enforced(oid, false)?;
+            }
             if let Some(con) = self.catalog.constraint(oid) {
                 names.push(con.name.clone());
             }
@@ -1468,13 +1470,14 @@ impl Definer<'_, '_> {
         Ok(added)
     }
 
-    /// `MergeWithExistingConstraint`: a check constraint of the statement with the name of a constraint that the table takes from a parent is that constraint when the expressions are the same. The result is the OID of the constraint, or `None` when the table has no such constraint.
+    /// `MergeWithExistingConstraint`: a check constraint of the statement with the name of a constraint that the table takes from a parent is that constraint when the expressions are the same. The result is the OID of the constraint, or `None` when the table has no such constraint. A `NOT ENFORCED` constraint cannot merge with an enforced one, and an enforced constraint makes the inherited one enforced.
     fn merge_check(
         &mut self,
         table: u32,
         name: &str,
         text: &str,
         no_inherit: bool,
+        enforced: bool,
     ) -> Result<Option<u32>> {
         let Some(con) = self
             .catalog
@@ -1487,13 +1490,23 @@ impl Definer<'_, '_> {
         if without_locations(expr) != without_locations(Some(text)) {
             return Ok(None);
         }
-        let (oid, inhcount) = (con.oid, con.inhcount);
+        let (oid, inhcount, inherited_enforced) = (con.oid, con.inhcount, con.enforced);
+        let relation = || self.catalog.relation(table).map(|r| r.name.clone()).unwrap_or_default();
         if no_inherit {
-            let relation = self.catalog.relation(table).map(|r| r.name.clone()).unwrap_or_default();
             return Err(Error::new(
                 SqlState::INVALID_OBJECT_DEFINITION,
                 format!(
-                    "constraint \"{name}\" conflicts with inherited constraint on relation \"{relation}\""
+                    "constraint \"{name}\" conflicts with inherited constraint on relation \"{}\"",
+                    relation()
+                ),
+            ));
+        }
+        if !enforced && inherited_enforced {
+            return Err(Error::new(
+                SqlState::INVALID_OBJECT_DEFINITION,
+                format!(
+                    "constraint \"{name}\" conflicts with NOT ENFORCED constraint on relation \"{}\"",
+                    relation()
                 ),
             ));
         }
@@ -1502,6 +1515,9 @@ impl Definer<'_, '_> {
             format!("merging constraint \"{name}\" with inherited definition"),
         );
         self.catalog.set_constraint_inherited(oid, true, inhcount)?;
+        if enforced && !inherited_enforced {
+            self.catalog.set_constraint_enforced(oid, true)?;
+        }
         Ok(Some(oid))
     }
 

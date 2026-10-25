@@ -1735,7 +1735,10 @@ fn constraint_def(con: &Constraint, paren: bool, session: &dyn Session) -> Resul
     if con.deferred {
         out.push_str(" INITIALLY DEFERRED");
     }
-    if !con.validated {
+    // The validated status does not matter for a constraint that is `NOT ENFORCED`.
+    if !con.enforced {
+        out.push_str(" NOT ENFORCED");
+    } else if !con.validated {
         out.push_str(" NOT VALID");
     }
     Ok(out)

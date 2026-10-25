@@ -173,9 +173,11 @@ impl Definer<'_, '_> {
             let text = map.text(&parent_text)?;
             let existing =
                 self.catalog.constraints_of(child.oid).find(|c| c.name == con.name).map(|c| {
-                    (c.oid, c.kind, c.expr.clone(), c.no_inherit, c.validated, c.local, c.inhcount)
+                    let state = (c.validated, c.enforced);
+                    (c.oid, c.kind, c.expr.clone(), c.no_inherit, state, c.local, c.inhcount)
                 });
-            if let Some((found, kind, expr, no_inherit, validated, local, inhcount)) = existing {
+            if let Some((found, kind, expr, no_inherit, state, local, inhcount)) = existing {
+                let (validated, enforced) = state;
                 if kind != ConKind::Check
                     || without_locations(expr.as_deref()) != without_locations(Some(&text))
                 {
@@ -189,8 +191,10 @@ impl Definer<'_, '_> {
                 }
                 let conflict = if no_inherit {
                     "non-inherited"
-                } else if con.validated && !validated {
+                } else if con.validated && enforced && !validated {
                     "NOT VALID"
+                } else if con.enforced && !enforced {
+                    "NOT ENFORCED"
                 } else {
                     ""
                 };
@@ -231,6 +235,9 @@ impl Definer<'_, '_> {
             )?;
             self.catalog.set_constraint_inherited(new, false, 1)?;
             self.catalog.set_constraint_validated(new, con.validated)?;
+            if !con.enforced {
+                self.catalog.set_constraint_enforced(new, false)?;
+            }
             // Phase 3 of `ALTER TABLE` reads the rows of a partition with a new valid constraint.
             if child.kind != b'p' && con.validated {
                 self.scans.push(child.oid);

@@ -5,19 +5,23 @@
 use rupg_catalog::{
     ConKind, Constraint, FkSide, NewForeignKey, ObjRef, PG_CONSTRAINT, PG_TRIGGER, RelKind,
 };
-use rupg_common::{Error, Result};
+use rupg_common::{Error, Result, SqlState};
 
 use super::Definer;
 
 impl Definer<'_, '_> {
-    /// `addFkRecurseReferenced`: the action triggers of the foreign key `constraint` on its referenced table, as clones of `parents` when it has them. For a partitioned referenced table, each partition gets a clone of the constraint, which goes on to the partitions of the partition.
+    /// `addFkRecurseReferenced`: the action triggers of the foreign key `constraint` on its referenced table, as clones of `parents` when it has them. A foreign key that is `NOT ENFORCED` has no triggers. For a partitioned referenced table, each partition gets a clone of the constraint, which goes on to the partitions of the partition.
     pub(super) fn fk_recurse_referenced(
         &mut self,
         constraint: u32,
         parents: Option<(u32, u32)>,
     ) -> Result<()> {
-        let triggers = self.catalog.add_fk_action_triggers(constraint, parents)?;
         let con = self.foreign_constraint(constraint)?;
+        let triggers = if con.enforced {
+            self.catalog.add_fk_action_triggers(constraint, parents)?
+        } else {
+            (0, 0)
+        };
         let Some(foreign) = con.foreign.clone() else { return Ok(()) };
         if !self.is_partitioned(foreign.table) {
             return Ok(());
@@ -40,14 +44,18 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
-    /// `addFkRecurseReferencing`: the check triggers of the foreign key `constraint` on its referencing table, as clones of `parents` when it has them. For a partitioned referencing table, each partition takes a foreign key of its own that is the same, or else it gets a clone of the constraint, which goes on to the partitions of the partition.
+    /// `addFkRecurseReferencing`: the check triggers of the foreign key `constraint` on its referencing table, as clones of `parents` when it has them. A foreign key that is `NOT ENFORCED` has no triggers. For a partitioned referencing table, each partition takes a foreign key of its own that is the same, or else it gets a clone of the constraint, which goes on to the partitions of the partition.
     pub(super) fn fk_recurse_referencing(
         &mut self,
         constraint: u32,
         parents: Option<(u32, u32)>,
     ) -> Result<()> {
-        let triggers = self.catalog.add_fk_check_triggers(constraint, parents)?;
         let con = self.foreign_constraint(constraint)?;
+        let triggers = if con.enforced {
+            self.catalog.add_fk_check_triggers(constraint, parents)?
+        } else {
+            (0, 0)
+        };
         let Some(foreign) = con.foreign.clone() else { return Ok(()) };
         if !self.is_partitioned(con.relation) {
             return Ok(());
@@ -141,17 +149,36 @@ impl Definer<'_, '_> {
         triggers: (u32, u32),
     ) -> Result<bool> {
         let Some(wanted) = parent.foreign.as_ref() else { return Ok(false) };
-        let found = self.catalog.constraints_of(partition).find(|c| {
+        let same_keys = |c: &&Constraint| {
             c.kind == ConKind::Foreign
-                && c.parent == 0
                 && c.keys == keys
+                && c.foreign.as_ref().is_some_and(|f| {
+                    f.table == wanted.table && f.keys == wanted.keys && f.pf_eq == wanted.pf_eq
+                })
+        };
+        // A foreign key with the same keys and another enforceability is an error, so that the partition does not get a second constraint.
+        if let Some(c) = self
+            .catalog
+            .constraints_of(partition)
+            .find(|c| same_keys(c) && c.enforced != parent.enforced)
+        {
+            let relation = self.catalog.relation(partition).map(|r| r.name.clone());
+            return Err(Error::new(
+                SqlState::INVALID_OBJECT_DEFINITION,
+                format!(
+                    "constraint \"{}\" enforceability conflicts with constraint \"{}\" on relation \"{}\"",
+                    parent.name,
+                    c.name,
+                    relation.unwrap_or_default()
+                ),
+            ));
+        }
+        let found = self.catalog.constraints_of(partition).filter(same_keys).find(|c| {
+            c.parent == 0
                 && c.deferrable == parent.deferrable
                 && c.deferred == parent.deferred
                 && c.foreign.as_ref().is_some_and(|f| {
-                    f.table == wanted.table
-                        && f.keys == wanted.keys
-                        && f.pf_eq == wanted.pf_eq
-                        && f.update == wanted.update
+                    f.update == wanted.update
                         && f.delete == wanted.delete
                         && f.match_type == wanted.match_type
                 })

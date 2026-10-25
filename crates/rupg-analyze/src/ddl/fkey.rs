@@ -87,9 +87,6 @@ impl Definer<'_, '_> {
             ),
         };
         let at = place(con.location);
-        if !con.is_enforced {
-            return Err(not_yet("NOT ENFORCED", at));
-        }
         if con.fk_with_period || con.pk_with_period {
             return Err(not_yet("PERIOD", at));
         }
@@ -181,6 +178,10 @@ impl Definer<'_, '_> {
         // A `NOT VALID` foreign key does not check the rows that the table has, and its clones are not valid either.
         if !valid {
             self.catalog.set_constraint_validated(oid, false)?;
+        }
+        // A `NOT ENFORCED` foreign key is not valid, and it and its clones have no triggers.
+        if !con.is_enforced {
+            self.catalog.set_constraint_enforced(oid, false)?;
         }
         self.fk_recurse_referenced(oid, None)?;
         self.fk_recurse_referencing(oid, None)

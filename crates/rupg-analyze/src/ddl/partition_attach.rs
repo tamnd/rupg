@@ -353,11 +353,20 @@ impl Definer<'_, '_> {
                     ),
                 ));
             }
-            if con.validated && !found.validated {
+            if con.validated && found.enforced && !found.validated {
                 return Err(Error::new(
                     SqlState::INVALID_OBJECT_DEFINITION,
                     format!(
                         "constraint \"{}\" conflicts with NOT VALID constraint on child table \"{}\"",
+                        found.name, rel.name
+                    ),
+                ));
+            }
+            if con.enforced && !found.enforced {
+                return Err(Error::new(
+                    SqlState::INVALID_OBJECT_DEFINITION,
+                    format!(
+                        "constraint \"{}\" conflicts with NOT ENFORCED constraint on child table \"{}\"",
                         found.name, rel.name
                     ),
                 ));
