@@ -100,6 +100,27 @@ pub struct InsertDef {
     /// `OVERRIDING SYSTEM VALUE` or `OVERRIDING USER VALUE`.
     pub overriding: OverridingKind,
     pub source: InsertSource,
+    /// The clause `ON CONFLICT`.
+    pub conflict: Option<ConflictDef>,
+}
+
+/// `OnConflictExpr` as `transformOnConflictClause` gives it, which `get_insert_query_def` shows.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ConflictDef {
+    /// The elements of the inference, each with its collation, its operator class and the input type of the class, or 0. They read the target table.
+    pub elems: Vec<(Expr, u32, u32, u32)>,
+    /// The predicate of the inference.
+    pub predicate: Option<Expr>,
+    /// The OID of the constraint of `ON CONSTRAINT`, or 0.
+    pub constraint: u32,
+    /// The target table and `EXCLUDED`, which `SET` and `WHERE` of `DO UPDATE` and of `DO SELECT` read.
+    pub relations: Vec<Relation>,
+    /// The items of `SET` of `DO UPDATE`, as [`Write::set_def`] has them.
+    pub set: Option<Vec<(i16, Option<Expr>)>>,
+    /// The strength of the lock of `DO SELECT`.
+    pub select: Option<LockClauseStrength>,
+    /// The condition of `WHERE` of `DO UPDATE` or of `DO SELECT`.
+    pub filter: Option<Expr>,
 }
 
 /// The rows of an [`InsertDef`].
@@ -521,14 +542,14 @@ impl Analyzer<'_> {
         let width = columns.len();
         let unique = self.unique_keys(table, &columns)?;
         let foreign = self.foreign_keys(table, WriteKind::Insert, &columns)?;
-        let (mut on_conflict, mut returning) = (None, None);
+        let (mut on_conflict, mut returning, mut conflict) = (None, None, None);
         if s.onConflictClause.is_some() || s.returningClause.is_some() {
             let outer = std::mem::take(&mut self.scope);
             // `ON CONFLICT` and `RETURNING` can read the queries of `WITH`.
             self.scope.ctes.clone_from(&outer.ctes);
             let result = self.insert_clauses(s, rv, table, &name, &columns, &unique);
             self.scope = outer;
-            (on_conflict, returning) = result?;
+            (on_conflict, returning, conflict) = result?;
         }
         let alias = rv.alias.as_ref().and_then(|a| a.aliasname.as_ref()).map(ToString::to_string);
         let insert_def = kept.map(|source| {
@@ -546,7 +567,8 @@ impl Analyzer<'_> {
                 .take(width)
                 .map(|(index, _, _)| i16::try_from(index + 1).unwrap_or(i16::MAX))
                 .collect();
-            Box::new(InsertDef { target, columns, overriding: s.r#override, source })
+            let conflict = conflict.take();
+            Box::new(InsertDef { target, columns, overriding: s.r#override, source, conflict })
         });
         query.write = Some(Write {
             kind: WriteKind::Insert,
@@ -583,7 +605,7 @@ impl Analyzer<'_> {
         name: &str,
         columns: &[Column],
         unique: &[Unique],
-    ) -> Result<(Option<OnConflict>, Option<Box<Query>>)> {
+    ) -> Result<InsertClauses> {
         if let Some(clause) = s.onConflictClause.as_deref()
             && clause.action == OnConflictAction::ONCONFLICT_SELECT
             && s.returningClause.is_none()
@@ -595,12 +617,12 @@ impl Analyzer<'_> {
             .at_opt(place(clause.location)));
         }
         self.target_from(rv, &[])?;
-        let (mut on_conflict, inference) = match s.onConflictClause.as_deref() {
-            None => (None, Inference::All),
+        let (mut on_conflict, inference, def) = match s.onConflictClause.as_deref() {
+            None => (None, Inference::All, None),
             Some(clause) => {
-                let (on_conflict, inference) =
+                let (on_conflict, inference, def) =
                     self.on_conflict(clause, rv, table, name, columns)?;
-                (Some(on_conflict), inference)
+                (Some(on_conflict), inference, Some(def))
             }
         };
         // With `DO UPDATE`, the old row of `RETURNING` is the row that the statement updates, as for an `UPDATE`. With `DO SELECT`, the old and the new rows are the row that the table has.
@@ -642,7 +664,7 @@ impl Analyzer<'_> {
             conflict.all = matches!(inference, Inference::All);
             conflict.arbiters = arbiters(inference, unique, self.env.catalog())?;
         }
-        Ok((on_conflict, returning))
+        Ok((on_conflict, returning, def))
     }
 
     /// `transformOnConflictClause`: the inference of the arbiter indexes, and the query of `DO UPDATE` with the new row. `SET` and `WHERE` see the target table and `EXCLUDED`, and the clauses after them see only the target table.
@@ -653,13 +675,15 @@ impl Analyzer<'_> {
         table: u32,
         name: &str,
         columns: &[Column],
-    ) -> Result<(OnConflict, Inference)> {
+    ) -> Result<(OnConflict, Inference, ConflictDef)> {
         let (update, select) = match clause.action {
             OnConflictAction::ONCONFLICT_NOTHING => (false, None),
             OnConflictAction::ONCONFLICT_UPDATE => (true, None),
             _ => (false, Some(clause.lockStrength)),
         };
-        let inference = self.inference(clause, update || select.is_some(), table, name, columns)?;
+        let (inference, mut def) =
+            self.inference(clause, update || select.is_some(), table, name, columns)?;
+        def.select = select;
         let mut on_conflict = OnConflict {
             arbiters: Vec::new(),
             all: false,
@@ -681,11 +705,13 @@ impl Analyzer<'_> {
                 filter: filter?,
                 ..Query::default()
             };
+            def.relations = excluded_named(&query.relations, excluded);
+            def.filter.clone_from(&query.filter);
             on_conflict.update = Some(Box::new(query));
-            return Ok((on_conflict, inference));
+            return Ok((on_conflict, inference, def));
         }
         if !update {
-            return Ok((on_conflict, inference));
+            return Ok((on_conflict, inference, def));
         }
         let excluded = self.add_excluded()?;
         // The items of `SET` of an updatable view name the columns of its base relation, and they must name updatable columns of the view.
@@ -694,9 +720,10 @@ impl Analyzer<'_> {
             None => (None, None),
         };
         let list = renamed.as_ref().unwrap_or(&clause.targetList);
+        let mut set = Vec::new();
         let row = match error {
             Some(error) => self.set_items(list).and(Err(error)),
-            None => self.update_row(rv, table, name, columns, list, None),
+            None => self.update_row(rv, table, name, columns, list, Some(&mut set)),
         };
         let parts = row.and_then(|row| {
             let filter = self.target_where(clause.whereClause.as_ref())?;
@@ -711,12 +738,15 @@ impl Analyzer<'_> {
             filter,
             ..Query::default()
         };
+        def.relations = excluded_named(&query.relations, excluded);
+        def.filter.clone_from(&query.filter);
+        def.set = Some(set);
         on_conflict.update = Some(Box::new(query));
         on_conflict.foreign = self.foreign_keys(table, WriteKind::Update, columns)?;
-        Ok((on_conflict, inference))
+        Ok((on_conflict, inference, def))
     }
 
-    /// `transformOnConflictArbiter`: the columns of the inference, or the index of the constraint that the clause names.
+    /// `transformOnConflictArbiter`: the columns of the inference, or the index of the constraint that the clause names, and the clause as [`ConflictDef`] shows it.
     fn inference(
         &mut self,
         clause: &OnConflictClause,
@@ -724,7 +754,8 @@ impl Analyzer<'_> {
         table: u32,
         name: &str,
         columns: &[Column],
-    ) -> Result<Inference> {
+    ) -> Result<(Inference, ConflictDef)> {
+        let mut def = ConflictDef::default();
         let Some(infer) = clause.infer.as_deref() else {
             if update {
                 let what = if clause.action == OnConflictAction::ONCONFLICT_SELECT {
@@ -741,7 +772,7 @@ impl Analyzer<'_> {
                 .with_hint("For example, ON CONFLICT (column_name).")
                 .at_opt(place(clause.location)));
             }
-            return Ok(Inference::All);
+            return Ok((Inference::All, def));
         };
         if let Some(conname) = infer.conname.as_deref() {
             // The constraint is a constraint of the view that the statement names, which has none.
@@ -759,11 +790,12 @@ impl Analyzer<'_> {
             // The columns of the constraint need `SELECT`.
             let keys = constraint.keys.clone();
             let index = constraint.index;
+            def.constraint = constraint.oid;
             if let Some(perm) = self.target_perm_mut() {
                 perm.required |= ACL_SELECT;
                 perm.selected.extend(keys);
             }
-            return Ok(Inference::Constraint(index));
+            return Ok((Inference::Constraint(index), def));
         }
         let mut set = Vec::with_capacity(infer.indexElems.len());
         let mut exprs = Vec::new();
@@ -797,9 +829,12 @@ impl Analyzer<'_> {
                 true => 0,
                 false => self.collation_oid(&elem.collation, at)?,
             };
-            let class = match elem.opclass.is_empty() {
-                true => None,
-                false => Some(self.btree_opclass(&elem.opclass)?),
+            let (oid, class) = match elem.opclass.is_empty() {
+                true => ((0, 0), None),
+                false => {
+                    let (oid, family, intype) = self.btree_opclass(&elem.opclass)?;
+                    ((oid, intype), Some((family, intype)))
+                }
             };
             let mut note = |target: Exact| {
                 if collation != 0 || class.is_some() {
@@ -810,6 +845,7 @@ impl Analyzer<'_> {
                 // `resolve_unique_index_expr`: an expression that is a column counts as the column.
                 let expr =
                     self.with_kind(Kind::IndexExpression, |a| a.transform(elem.expr.as_ref()))?;
+                def.elems.push((expr.clone(), collation, oid.0, oid.1));
                 match expr.kind {
                     ExprKind::Var(var) if var.levels_up == 0 && var.attnum > 0 => {
                         note(Exact::Column(var.attnum));
@@ -849,6 +885,7 @@ impl Analyzer<'_> {
                 perm.selected.insert(i16::try_from(index + 1).unwrap_or(i16::MAX));
             }
             note(Exact::Column(i16::try_from(index + 1).unwrap_or(i16::MAX)));
+            def.elems.push((column_var(index, &columns[index]), collation, oid.0, oid.1));
             set.push(index);
         }
         set.sort_unstable();
@@ -857,16 +894,17 @@ impl Analyzer<'_> {
         if let Some(clause) = infer.whereClause.as_ref() {
             let expr = self.with_kind(Kind::IndexPredicate, |a| a.transform(Some(clause)))?;
             let expr = self.coerce_to_boolean(expr, "WHERE")?;
+            def.predicate = Some(expr.clone());
             match expr.kind {
                 ExprKind::Bool(BoolOp::And, parts) => predicate = parts,
                 _ => predicate.push(expr),
             }
         }
-        Ok(Inference::Columns { columns: set, exprs, predicate, exact })
+        Ok((Inference::Columns { columns: set, exprs, predicate, exact }, def))
     }
 
-    /// `get_opclass_oid` for `btree`: the operator family and the input type of the operator class that the name gives, in the schema of the name or in the first schema of the search path that has it.
-    fn btree_opclass(&self, list: &[Option<Node>]) -> Result<(u32, u32)> {
+    /// `get_opclass_oid` for `btree`: the OID, the operator family and the input type of the operator class that the name gives, in the schema of the name or in the first schema of the search path that has it.
+    fn btree_opclass(&self, list: &[Option<Node>]) -> Result<(u32, u32, u32)> {
         const BTREE: u32 = 403;
         let parts = crate::typename::names(list);
         let (schema, name) = self.split_name(&parts, None)?;
@@ -875,14 +913,14 @@ impl Analyzer<'_> {
             let user = catalog.and_then(|c| {
                 c.opclasses()
                     .find(|c| c.method == BTREE && c.namespace == namespace && c.name == name)
-                    .map(|c| (c.family, c.intype))
+                    .map(|c| (c.oid, c.family, c.intype))
             });
             user.or_else(|| {
                 let row = builtin::named(Named::Opclass)
                     .iter()
                     .find(|r| r.method == BTREE && r.namespace == namespace && r.name == name)?;
                 let class = builtin::opclasses().iter().find(|c| c.oid == row.oid)?;
-                Some((class.family, class.intype))
+                Some((row.oid, class.family, class.intype))
             })
         };
         let found = match schema {
@@ -1830,6 +1868,19 @@ enum Inference {
     Columns { columns: Vec<usize>, exprs: Vec<Expr>, predicate: Vec<Expr>, exact: Vec<ExactElem> },
     /// The OID of the index of the constraint that `ON CONSTRAINT` names, or 0 for a constraint with no index.
     Constraint(u32),
+}
+
+/// `ON CONFLICT` and `RETURNING` of an `INSERT`, and `ON CONFLICT` in the form that [`ConflictDef`] keeps.
+type InsertClauses = (Option<OnConflict>, Option<Box<Query>>, Option<ConflictDef>);
+
+/// The relations of the query of `DO UPDATE` or of `DO SELECT` for [`ConflictDef::relations`], where the relation at `excluded` has the name `excluded`, as its entry has the alias.
+fn excluded_named(relations: &[Relation], excluded: usize) -> Vec<Relation> {
+    let mut relations = relations.to_vec();
+    if let Some(relation) = relations.get_mut(excluded) {
+        relation.name = "excluded".to_string();
+        relation.alias = Some(Vec::new());
+    }
+    relations
 }
 
 /// An element of an inference with a collation or an operator class, `InferenceElem` with `infercollid` or `inferopclass`.

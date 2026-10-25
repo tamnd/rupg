@@ -5,9 +5,9 @@
 use rupg_catalog::Rule;
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{
-    A_Star, Alias, BoolExpr, BoolExprType, CmdType, ColumnRef, Node, RangeSubselect, RangeVar,
-    ResTarget, ReturningClause, RuleStmt, SelectStmt, SetOperation, SubLink, SubLinkType,
-    WithClause,
+    A_Star, Alias, BoolExpr, BoolExprType, CmdType, ColumnRef, Node, OnConflictAction,
+    RangeSubselect, RangeVar, ResTarget, ReturningClause, RuleStmt, SelectStmt, SetOperation,
+    SubLink, SubLinkType, WithClause,
 };
 use rupg_types::oid;
 
@@ -372,6 +372,20 @@ fn rule_action(parts: &Parts, action: &Node, qual: Option<&Node>, event: CmdType
     let mut action = action.clone();
     match &mut action {
         Node::InsertStmt(s) => {
+            // `rewriteRuleAction`: the statement must have `RETURNING` for an action with `DO SELECT`.
+            let select = s
+                .onConflictClause
+                .as_deref()
+                .is_some_and(|c| c.action == OnConflictAction::ONCONFLICT_SELECT);
+            if select && !parts.returning {
+                return Err(Error::new(
+                    SqlState::SYNTAX_ERROR,
+                    "ON CONFLICT DO SELECT requires a RETURNING clause",
+                )
+                .with_detail(
+                    "A rule action is INSERT ... ON CONFLICT DO SELECT, which requires a RETURNING clause.",
+                ));
+            }
             if !parts.returning {
                 s.returningClause = None;
             }

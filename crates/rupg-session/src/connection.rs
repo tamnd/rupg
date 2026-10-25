@@ -4790,6 +4790,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vrules3.test")));
     }
 
+    /// The rules regression test up to the rules with `ON CONFLICT`, which `pg_rules` shows and which give the rows of the conflicts. `connection/vrules4.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vrules4() {
+        big_stack(|| script(include_str!("connection/vrules4.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {
