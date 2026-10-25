@@ -1,0 +1,35 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE PROCEDURE p1(a int) LANGUAGE sql AS $$ SELECT a $$;
+CREATE PROCEDURE
+> ALTER PROCEDURE p1(int) STRICT;
+ERROR 42P13 invalid attribute in procedure definition at 25
+> ALTER PROCEDURE p1(int) IMMUTABLE;
+ERROR 42P13 invalid attribute in procedure definition at 25
+> ALTER PROCEDURE p1(int) COST 5;
+ERROR 42P13 invalid attribute in procedure definition at 25
+> ALTER PROCEDURE p1(int) SECURITY DEFINER;
+ALTER PROCEDURE
+> ALTER PROCEDURE p1(int) SET work_mem = '2MB';
+ALTER PROCEDURE
+> SELECT prosecdef, proconfig FROM pg_proc WHERE proname = 'p1';
+fields prosecdef@pg_proc.11:16:1:-1,proconfig@pg_proc.29:1009:-1:-1
+row t,{work_mem=2MB}
+SELECT 1
+> CREATE ROLE vproc_user;
+CREATE ROLE
+> REVOKE EXECUTE ON PROCEDURE p1(int) FROM PUBLIC;
+REVOKE
+> SET ROLE vproc_user;
+SET
+is_superuser=off
+> CALL p1(1);
+ERROR 42501 permission denied for procedure p1
+> RESET ROLE;
+RESET
+is_superuser=on
+> DROP PROCEDURE p1(int);
+DROP PROCEDURE
+> DROP ROLE vproc_user;
+DROP ROLE

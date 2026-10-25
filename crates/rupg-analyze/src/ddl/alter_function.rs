@@ -109,7 +109,7 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
-    /// `AlterFunction`: the options of `ALTER FUNCTION`, as `compute_common_attribute` reads them. A second option of a kind gives `42601` at the place of the option.
+    /// `AlterFunction`: the options of `ALTER FUNCTION`, as `compute_common_attribute` reads them. A second option of a kind gives `42601` at the place of the option, and an option that only a function has gives `42P13` for a procedure.
     pub(super) fn alter_function(&mut self, stmt: &AlterFunctionStmt) -> Result<()> {
         let item = stmt.func.as_deref().ok_or_else(|| Error::internal("a function name"))?;
         let found = self.altered_function(stmt.objtype, item)?;
@@ -124,6 +124,17 @@ impl Definer<'_, '_> {
         for def in stmt.actions.iter().flatten() {
             let Node::DefElem(def) = def else { continue };
             let name = def.defname.as_deref().unwrap_or_default();
+            let attribute = matches!(
+                name,
+                "volatility" | "strict" | "leakproof" | "cost" | "rows" | "support" | "parallel"
+            );
+            if found.kind == b'p' && attribute {
+                return Err(Error::new(
+                    SqlState::INVALID_FUNCTION_DEFINITION,
+                    "invalid attribute in procedure definition",
+                )
+                .with_position(place(def.location)));
+            }
             if name != "set" {
                 if seen.contains(&name) {
                     return Err(Error::new(
