@@ -454,7 +454,7 @@ fn no_final_query(rettype: u32) -> Error {
 /// True for a statement that has a plan, which `fmgr_sql` runs with the executor. The other statements run with `ProcessUtility`.
 fn planned(node: &Node) -> bool {
     match node {
-        Node::SelectStmt(select) => select.intoClause.is_none(),
+        Node::SelectStmt(select) => crate::select_into(select).is_none(),
         Node::InsertStmt(_)
         | Node::UpdateStmt(_)
         | Node::DeleteStmt(_)

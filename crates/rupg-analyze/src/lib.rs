@@ -101,7 +101,7 @@ pub use returning::{MERGE_ACTION, RETURNING_NEW, RETURNING_OLD, Shown};
 pub use rules::{Product, analyze_product, copy_rules_error, query_rewrite};
 pub use searchcycle::{CycleClause, SearchClause};
 pub use select::{MinMax, Query, Target};
-pub use setop::{SetKind, SetOp, SetTree, strength_name};
+pub use setop::{SetKind, SetOp, SetTree, select_into, strength_name, without_into};
 pub use sort::{GroupingSet, SortGroup, expand_grouping_sets};
 pub use typcache::{default_opclass, equality_for_ordering, is_binary_coercible, sort_operators};
 pub use typename::parse_type;

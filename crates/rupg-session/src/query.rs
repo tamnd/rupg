@@ -102,7 +102,7 @@ pub(crate) type Row = Vec<Option<Vec<u8>>>;
 pub(crate) fn is_query(node: &Node) -> bool {
     matches!(
         node,
-        Node::SelectStmt(select) if select.intoClause.is_none()
+        Node::SelectStmt(select) if rupg_analyze::select_into(select).is_none()
     ) || matches!(
         node,
         Node::InsertStmt(_) | Node::UpdateStmt(_) | Node::DeleteStmt(_) | Node::MergeStmt(_)
@@ -1402,7 +1402,9 @@ fn cursor_error(node: &Node, text: &str) -> Option<Error> {
         returning.as_ref().is_some_and(|clause| !clause.exprs.is_empty())
     };
     let (tag, rows) = match node {
-        Node::SelectStmt(stmt) if stmt.intoClause.is_some() => ("SELECT INTO", false),
+        Node::SelectStmt(stmt) if rupg_analyze::select_into(stmt).is_some() => {
+            ("SELECT INTO", false)
+        }
         Node::SelectStmt(_) => return None,
         Node::VariableSetStmt(stmt) => {
             let reset =

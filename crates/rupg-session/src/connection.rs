@@ -1340,10 +1340,9 @@ impl Connection {
     ) -> Result<Done, Error> {
         let query = match node {
             Node::CreateTableAsStmt(stmt) => stmt.query.clone(),
-            Node::SelectStmt(stmt) => Some(Node::SelectStmt(Box::new(SelectStmt {
-                intoClause: None,
-                ..(**stmt).clone()
-            }))),
+            Node::SelectStmt(stmt) => {
+                Some(Node::SelectStmt(Box::new(rupg_analyze::without_into(stmt))))
+            }
             _ => None,
         };
         let catalog = self.catalog();
@@ -4600,6 +4599,12 @@ mod tests {
     #[test]
     fn vjoinorder() {
         big_stack(|| script(include_str!("connection/vjoinorder.test")));
+    }
+
+    /// A `SELECT ... INTO` in a subquery, a CTE, a cursor or `INSERT ... SELECT` gives the error of `transformSelectStmt`, and the `INTO` of a set operation is on its leftmost `SELECT`, where `transformOptionalSelectInto` finds it. `connection/vselinto.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vselinto() {
+        big_stack(|| script(include_str!("connection/vselinto.test")));
     }
 
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.

@@ -161,7 +161,7 @@ impl Connection {
                 return Err(Error::internal("a COPY with no relation and no query"));
             };
             let plan = match node {
-                Node::SelectStmt(select) if select.intoClause.is_some() => {
+                Node::SelectStmt(select) if rupg_analyze::select_into(select).is_some() => {
                     return Err(Error::new(
                         SqlState::FEATURE_NOT_SUPPORTED,
                         "COPY (SELECT INTO) is not supported",

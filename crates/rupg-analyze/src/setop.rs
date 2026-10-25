@@ -3,7 +3,7 @@
 //! Each `SELECT` of the tree is a subquery of the query, in the order of the tree from the left. The columns of the query are the columns of the leftmost `SELECT`, with the types that the operations give. `ORDER BY` can use only the names and the numbers of the columns.
 
 use rupg_common::{Error, Result, SqlState};
-use rupg_sql::nodes::{LockClauseStrength, SelectStmt, SetOperation};
+use rupg_sql::nodes::{IntoClause, LockClauseStrength, SelectStmt, SetOperation};
 use rupg_types::oid;
 
 use crate::Analyzer;
@@ -11,7 +11,7 @@ use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
 use crate::expr::{Expr, ExprKind, Var};
 use crate::from::{Column, Relation};
-use crate::select::{Query, Target};
+use crate::select::{Query, Target, into_not_allowed};
 use crate::sort::{SortGroup, set_group};
 use crate::typename::place;
 
@@ -81,6 +81,38 @@ pub fn strength_name(strength: LockClauseStrength) -> &'static str {
     }
 }
 
+/// The leftmost `SELECT` of the set operation `s`, or `s` when it is not a set operation.
+fn leftmost(s: &SelectStmt) -> &SelectStmt {
+    let mut leftmost = s;
+    while leftmost.op != SetOperation::SETOP_NONE
+        && let Some(left) = leftmost.larg.as_deref()
+    {
+        leftmost = left;
+    }
+    leftmost
+}
+
+/// The `INTO` of `select`, as `transformOptionalSelectInto` finds it: the grammar puts the `INTO` of a set operation on its leftmost `SELECT`.
+pub fn select_into(select: &SelectStmt) -> Option<&IntoClause> {
+    leftmost(select).intoClause.as_deref()
+}
+
+/// The query of the `SELECT ... INTO` `select` with no `INTO`, which `transformOptionalSelectInto` makes the query of a `CREATE TABLE AS`.
+pub fn without_into(select: &SelectStmt) -> SelectStmt {
+    fn strip(s: &mut SelectStmt) {
+        if s.op != SetOperation::SETOP_NONE
+            && let Some(left) = s.larg.as_deref_mut()
+        {
+            strip(left);
+        } else {
+            s.intoClause = None;
+        }
+    }
+    let mut query = select.clone();
+    strip(&mut query);
+    query
+}
+
 /// The error of `FOR UPDATE` and the other locking clauses in a set operation.
 fn locking_error(s: &SelectStmt) -> Result<()> {
     match s.lockingClause.first() {
@@ -101,17 +133,9 @@ fn best(exprs: [&Expr; 2], ty: u32) -> Option<usize> {
 impl Analyzer<'_> {
     /// `transformSetOperationStmt`: the query tree of a set operation.
     pub(crate) fn set_operation(&mut self, s: &SelectStmt, parent: Option<usize>) -> Result<Query> {
-        let mut leftmost = s;
-        while leftmost.op != SetOperation::SETOP_NONE
-            && let Some(left) = leftmost.larg.as_deref()
-        {
-            leftmost = left;
-        }
-        if leftmost.intoClause.is_some() {
-            return Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                "SELECT INTO is not supported yet",
-            ));
+        let leftmost = leftmost(s);
+        if let Some(into) = &leftmost.intoClause {
+            return Err(into_not_allowed(into));
         }
         let (tree, _) = self.set_tree(s, true, std::ptr::from_ref(leftmost), parent)?;
         let SetTree::Op(op) = tree else {

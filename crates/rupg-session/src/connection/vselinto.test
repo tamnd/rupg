@@ -1,0 +1,42 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE int4_tbl (f1 int);
+CREATE TABLE
+> DECLARE foo CURSOR FOR SELECT 1 INTO int4_tbl;
+ERROR 42601 SELECT ... INTO is not allowed here at 38
+> COPY (SELECT 1 INTO frak UNION SELECT 2) TO 'blob';
+ERROR 0A000 COPY (SELECT INTO) is not supported
+> COPY (SELECT 1 INTO frak) TO STDOUT;
+ERROR 0A000 COPY (SELECT INTO) is not supported
+> SELECT * FROM (SELECT 1 INTO f) bar;
+ERROR 42601 SELECT ... INTO is not allowed here at 30
+> SELECT * FROM (SELECT 1 INTO f UNION SELECT 2) bar;
+ERROR 42601 SELECT ... INTO is not allowed here at 30
+> SELECT (SELECT 1 INTO f);
+ERROR 42601 SELECT ... INTO is not allowed here at 23
+> SELECT EXISTS (SELECT 1 INTO f);
+ERROR 42601 SELECT ... INTO is not allowed here at 30
+> WITH w AS (SELECT 1 INTO f) SELECT * FROM w;
+ERROR 42601 SELECT ... INTO is not allowed here at 26
+> CREATE VIEW foo AS SELECT 1 INTO int4_tbl;
+ERROR 0A000 views must not contain SELECT INTO
+> INSERT INTO int4_tbl SELECT 1 INTO f;
+ERROR 42601 SELECT ... INTO is not allowed here at 36
+> SELECT 1 UNION SELECT 2 INTO f;
+ERROR 42601 INTO is only allowed on first SELECT of UNION/INTERSECT/EXCEPT at 30
+> SELECT 1 AS a INTO vsi1 UNION SELECT 2 ORDER BY 1;
+SELECT 2
+> SELECT * FROM vsi1 ORDER BY a;
+fields a@vsi1.1:23:4:-1
+row 1
+row 2
+SELECT 2
+> SELECT 1 AS a INTO vsi2 UNION ALL SELECT 2 EXCEPT SELECT 1;
+SELECT 1
+> SELECT * FROM vsi2;
+fields a@vsi2.1:23:4:-1
+row 2
+SELECT 1
+> DROP TABLE vsi1, vsi2, int4_tbl;
+DROP TABLE
