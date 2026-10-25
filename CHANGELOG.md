@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.85 (2026-10-25)
+
 ### Added
 
 - Honor `restrict_nonsystem_relation_kind = view`: a query cannot read or write a view of the user, as `ApplyRetrieveRule` and `rewriteTargetView` check it (#731).
