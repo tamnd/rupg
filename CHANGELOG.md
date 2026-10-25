@@ -16,6 +16,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - `EXECUTE` of a prepared statement sends the notices of the functions that the statement calls (#717).
 - `EXPLAIN` names only the relations that the plan scans, as `set_rtable_names` does with `rels_used`. A subquery or a view whose `Subquery Scan` the plan takes out takes no name, so a relation in it keeps its alias, such as `l` in place of `l_1` (#718).
 
+### Fixed
+
+- `Cargo.lock` lists the dependency of `rupg-exec` on `rupg-opt` again, so `cargo build --locked` and `cargo publish --locked` work. CI now fails when `Cargo.lock` does not agree with the manifests (#720).
+
 ## 0.1.83 (2026-10-25)
 
 ### Added
