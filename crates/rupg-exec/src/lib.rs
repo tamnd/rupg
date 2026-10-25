@@ -188,6 +188,11 @@ fn set_levels(targets: &[Target]) -> Vec<Vec<&Expr>> {
     levels
 }
 
+/// Checks that the engine can run the function of an operator, as for a call of the function: a function in SQL or in PL/pgSQL runs its body.
+fn op_kernel(func: u32, location: Option<usize>) -> Result<()> {
+    if runs_body(func) { Ok(()) } else { kernel(func, location).map(|_| ()) }
+}
+
 /// Checks that the engine has every function and every type that an expression uses.
 fn check(expr: &Expr) -> Result<()> {
     match &expr.kind {
@@ -260,7 +265,7 @@ fn check(expr: &Expr) -> Result<()> {
         | ExprKind::NullIf { equal: func, args }
         | ExprKind::Distinct { equal: func, args, .. }
         | ExprKind::ScalarArrayOp { func, args, .. } => {
-            kernel(*func, expr.location)?;
+            op_kernel(*func, expr.location)?;
             args.iter().try_for_each(check)?;
         }
         ExprKind::Array { elements, .. } | ExprKind::Row(elements, _) => {
@@ -270,7 +275,7 @@ fn check(expr: &Expr) -> Result<()> {
         // The executor calls the comparison function of each pair of fields, not the operator.
         ExprKind::RowCompare(rc) => {
             for (op, &compare) in rc.ops.iter().zip(&rc.compares) {
-                kernel(compare, expr.location)?;
+                op_kernel(compare, expr.location)?;
                 op.children().into_iter().try_for_each(check)?;
             }
         }
