@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Print the cast after a scalar subquery in `ANY` or `ALL`, so the text of a view reads back as the same array comparison (#NNN).
 - Drop characters from the end of a long relation or column name before `_N` makes it unique, so the name stays shorter than `NAMEDATALEN` (#729).
 - Print a whole-row reference in `ROW()`, `VALUES` and a row comparison with the cast to its row type, as `get_rule_expr_toplevel` does (#728).
 - A view of a function in `FROM` that gives the row type of a table depends on each column of the table that the view reads, as `process_function_rte_ref` records it. So `ALTER TABLE` cannot drop such a column or change its type while the view reads it. `ALTER TABLE ... DROP COLUMN` writes again only the text of the views that read the table in `FROM` (#727).
