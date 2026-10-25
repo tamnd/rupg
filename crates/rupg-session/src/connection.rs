@@ -4548,6 +4548,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vfndep.test")));
     }
 
+    /// A whole-row reference in `ROW()`, in `VALUES` and in a row comparison prints with the cast to its row type, as `get_rule_expr_toplevel` prints it, so the parser does not expand `*` when it reads the text of the view again. `connection/vwrow.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vwrow() {
+        big_stack(|| script(include_str!("connection/vwrow.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {

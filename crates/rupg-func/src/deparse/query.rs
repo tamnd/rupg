@@ -708,7 +708,7 @@ impl Deparser<'_> {
                 if j > 0 {
                     self.buf.push(',');
                 }
-                self.expr(value, false)?;
+                self.toplevel(value, false)?;
             }
             self.buf.push(')');
         }
