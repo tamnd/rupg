@@ -2,7 +2,9 @@
 //!
 //! The catalog keeps the text of a view, and the text names the objects that the query reads. So a rename gives the views that read the renamed objects in [`super::Defined::views`], and the caller writes their text again from the query of the old names.
 
-use rupg_catalog::{ConKind, ObjRef, PG_CLASS, PG_PROC, PG_REWRITE, PG_TYPE, RelKind};
+use rupg_catalog::{
+    ConKind, DepKind, ObjRef, PG_CLASS, PG_POLICY, PG_PROC, PG_REWRITE, PG_TYPE, RelKind,
+};
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{ObjectType, RangeVar, RenameStmt};
 
@@ -33,6 +35,7 @@ pub(super) fn is_rename_kind(kind: ObjectType) -> bool {
             | ObjectType::OBJECT_AGGREGATE
             | ObjectType::OBJECT_TRIGGER
             | ObjectType::OBJECT_RULE
+            | ObjectType::OBJECT_POLICY
             | ObjectType::OBJECT_OPCLASS
             | ObjectType::OBJECT_OPFAMILY
             | ObjectType::OBJECT_STATISTIC_EXT
@@ -54,6 +57,7 @@ impl Definer<'_, '_> {
             ObjectType::OBJECT_TYPE | ObjectType::OBJECT_DOMAIN => self.rename_type(stmt),
             ObjectType::OBJECT_TRIGGER => self.rename_trigger(stmt, newname),
             ObjectType::OBJECT_RULE => self.rename_rule(stmt, newname),
+            ObjectType::OBJECT_POLICY => self.rename_policy(stmt, newname),
             ObjectType::OBJECT_OPCLASS | ObjectType::OBJECT_OPFAMILY => self.rename_opcf(stmt),
             ObjectType::OBJECT_STATISTIC_EXT => self.rename_stats(stmt),
             ObjectType::OBJECT_FUNCTION
@@ -381,6 +385,15 @@ impl Definer<'_, '_> {
 
     /// Adds to [`super::Defined::views`] the views whose query reads an object that `uses` accepts. A rule that is not the rule of a view and reads such an object gives `0A000`, as rupg cannot write the text of a rule again yet.
     pub(super) fn views_using(&mut self, uses: impl Fn(ObjRef) -> bool) -> Result<()> {
+        // The text of a policy names the objects that its expressions read.
+        if self
+            .catalog
+            .depends()
+            .iter()
+            .any(|d| d.object.class == PG_POLICY && d.kind == DepKind::Normal && uses(d.referenced))
+        {
+            return Err(not_yet("ALTER ... RENAME of an object that a policy reads", None));
+        }
         let rules: Vec<u32> = self
             .catalog
             .depends()

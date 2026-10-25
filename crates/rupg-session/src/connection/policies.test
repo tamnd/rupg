@@ -1,0 +1,203 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE ROLE regress_pol_a;
+CREATE ROLE
+> CREATE ROLE regress_pol_b;
+CREATE ROLE
+> CREATE TABLE pol_t (a int, b text, c int);
+CREATE TABLE
+> CREATE TABLE pol_u (x int);
+CREATE TABLE
+> CREATE VIEW pol_v AS SELECT * FROM pol_t;
+CREATE VIEW
+> CREATE POLICY p1 ON pol_t USING (a > 0);
+CREATE POLICY
+> CREATE POLICY p1 ON pol_t USING (a > 1);
+ERROR 42710 policy "p1" for table "pol_t" already exists
+> CREATE POLICY p2 ON pol_t AS RESTRICTIVE FOR SELECT TO regress_pol_a, regress_pol_b USING (b <> 'x');
+CREATE POLICY
+> CREATE POLICY p3 ON pol_t FOR INSERT TO regress_pol_a WITH CHECK (c IS NOT NULL);
+CREATE POLICY
+> CREATE POLICY p4 ON pol_t FOR UPDATE USING (a = c) WITH CHECK (a < 100);
+CREATE POLICY
+> CREATE POLICY p5 ON pol_t FOR DELETE TO public USING (EXISTS (SELECT 1 FROM pol_u WHERE x = a));
+CREATE POLICY
+> CREATE POLICY p6 ON pol_t FOR SELECT TO regress_pol_a, public USING (true);
+WARNING 22023 ignoring specified roles other than PUBLIC
+HINT All roles are members of the PUBLIC role.
+CREATE POLICY
+> CREATE POLICY p7 ON pol_t FOR SELECT USING (a > 0) WITH CHECK (a > 0);
+ERROR 42601 WITH CHECK cannot be applied to SELECT or DELETE
+> CREATE POLICY p7 ON pol_t FOR DELETE USING (a > 0) WITH CHECK (a > 0);
+ERROR 42601 WITH CHECK cannot be applied to SELECT or DELETE
+> CREATE POLICY p7 ON pol_t FOR INSERT USING (a > 0);
+ERROR 42601 only WITH CHECK expression allowed for INSERT
+> CREATE POLICY p7 ON pol_v USING (true);
+ERROR 42809 "pol_v" is not a table
+> CREATE POLICY p7 ON pg_class USING (true);
+ERROR 42501 permission denied: "pg_class" is a system catalog
+> CREATE POLICY p7 ON pol_missing USING (true);
+ERROR 42P01 relation "pol_missing" does not exist
+> CREATE POLICY p7 ON pol_t USING (nosuch > 0);
+ERROR 42703 column "nosuch" does not exist
+> CREATE POLICY p7 ON pol_t USING (count(*) > 0);
+ERROR 42803 aggregate functions are not allowed in policy expressions
+> CREATE POLICY p7 ON pol_t USING (a);
+ERROR 42804 argument of POLICY must be type boolean, not type integer
+> CREATE POLICY p7 ON pol_t TO regress_nosuch USING (true);
+ERROR 42704 role "regress_nosuch" does not exist
+> CREATE POLICY p7 ON pol_t USING (generate_series(1, 2) > 0);
+ERROR 0A000 set-returning functions are not allowed in policy expressions
+> CREATE POLICY p8 ON pol_t FOR ALL TO CURRENT_USER USING (current_user = 'x' AND b = current_user::text);
+CREATE POLICY
+> SELECT polname, polcmd, polpermissive, polroles::regrole[], pg_get_expr(polqual, polrelid) AS qual, pg_get_expr(polwithcheck, polrelid) AS check FROM pg_policy ORDER BY polname;
+fields polname@pg_policy.2:19:64:-1,polcmd@pg_policy.4:18:1:-1,polpermissive@pg_policy.5:16:1:-1,polroles:4097:-1:-1,qual:25:-1:-1,check:25:-1:-1
+row p1,*,t,{-},(a > 0),NULL
+row p2,r,f,{regress_pol_a,regress_pol_b},(b <> 'x'::text),NULL
+row p3,a,t,{regress_pol_a},NULL,(c IS NOT NULL)
+row p4,w,t,{-},(a = c),(a < 100)
+row p5,d,t,{-},(EXISTS ( SELECT 1
+   FROM pol_u
+  WHERE (pol_u.x = pol_t.a))),NULL
+row p6,r,t,{-},true,NULL
+row p8,*,t,{postgres},((CURRENT_USER = 'x'::name) AND (b = (CURRENT_USER)::text)),NULL
+SELECT 7
+> SELECT schemaname, tablename, policyname, permissive, roles, cmd, qual, with_check FROM pg_policies ORDER BY policyname;
+fields schemaname@pg_policies.1:19:64:-1,tablename@pg_policies.2:19:64:-1,policyname@pg_policies.3:19:64:-1,permissive@pg_policies.4:25:-1:-1,roles@pg_policies.5:1003:-1:-1,cmd@pg_policies.6:25:-1:-1,qual@pg_policies.7:25:-1:-1,with_check@pg_policies.8:25:-1:-1
+row public,pol_t,p1,PERMISSIVE,{public},ALL,(a > 0),NULL
+row public,pol_t,p2,RESTRICTIVE,{regress_pol_a,regress_pol_b},SELECT,(b <> 'x'::text),NULL
+row public,pol_t,p3,PERMISSIVE,{regress_pol_a},INSERT,NULL,(c IS NOT NULL)
+row public,pol_t,p4,PERMISSIVE,{public},UPDATE,(a = c),(a < 100)
+row public,pol_t,p5,PERMISSIVE,{public},DELETE,(EXISTS ( SELECT 1
+   FROM pol_u
+  WHERE (pol_u.x = pol_t.a))),NULL
+row public,pol_t,p6,PERMISSIVE,{public},SELECT,true,NULL
+row public,pol_t,p8,PERMISSIVE,{postgres},ALL,((CURRENT_USER = 'x'::name) AND (b = (CURRENT_USER)::text)),NULL
+SELECT 7
+> SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'pol_t';
+fields relname@pg_class.2:19:64:-1,relrowsecurity@pg_class.24:16:1:-1,relforcerowsecurity@pg_class.25:16:1:-1
+row pol_t,f,f
+SELECT 1
+> ALTER TABLE pol_t ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> ALTER TABLE pol_t FORCE ROW LEVEL SECURITY;
+ALTER TABLE
+> SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'pol_t';
+fields relname@pg_class.2:19:64:-1,relrowsecurity@pg_class.24:16:1:-1,relforcerowsecurity@pg_class.25:16:1:-1
+row pol_t,t,t
+SELECT 1
+> ALTER TABLE pol_t NO FORCE ROW LEVEL SECURITY, DISABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'pol_t';
+fields relname@pg_class.2:19:64:-1,relrowsecurity@pg_class.24:16:1:-1,relforcerowsecurity@pg_class.25:16:1:-1
+row pol_t,f,f
+SELECT 1
+> ALTER TABLE pol_v ENABLE ROW LEVEL SECURITY;
+ERROR 42809 ALTER action ENABLE ROW SECURITY cannot be performed on relation "pol_v"
+DETAIL This operation is not supported for views.
+> ALTER POLICY p1 ON pol_t TO regress_pol_b;
+ALTER POLICY
+> ALTER POLICY p1 ON pol_t USING (a > 5);
+ALTER POLICY
+> ALTER POLICY p3 ON pol_t USING (a > 5);
+ERROR 42601 only WITH CHECK expression allowed for INSERT
+> ALTER POLICY p2 ON pol_t WITH CHECK (a > 5);
+ERROR 42601 only USING expression allowed for SELECT, DELETE
+> ALTER POLICY p4 ON pol_t TO public WITH CHECK (a < 50);
+ALTER POLICY
+> ALTER POLICY nosuch ON pol_t USING (true);
+ERROR 42704 policy "nosuch" for table "pol_t" does not exist
+> ALTER POLICY p1 ON pol_t RENAME TO p1x;
+ALTER POLICY
+> ALTER POLICY p1x ON pol_t RENAME TO p2;
+ERROR 42710 policy "p2" for table "pol_t" already exists
+> ALTER POLICY nosuch ON pol_t RENAME TO p9;
+ERROR 42704 policy "nosuch" for table "pol_t" does not exist
+> SELECT polname, polcmd, polroles::regrole[], pg_get_expr(polqual, polrelid) AS qual, pg_get_expr(polwithcheck, polrelid) AS check FROM pg_policy ORDER BY polname;
+fields polname@pg_policy.2:19:64:-1,polcmd@pg_policy.4:18:1:-1,polroles:4097:-1:-1,qual:25:-1:-1,check:25:-1:-1
+row p1x,*,{regress_pol_b},(a > 5),NULL
+row p2,r,{regress_pol_a,regress_pol_b},(b <> 'x'::text),NULL
+row p3,a,{regress_pol_a},NULL,(c IS NOT NULL)
+row p4,w,{-},(a = c),(a < 50)
+row p5,d,{-},(EXISTS ( SELECT 1
+   FROM pol_u
+  WHERE (pol_u.x = pol_t.a))),NULL
+row p6,r,{-},true,NULL
+row p8,*,{postgres},((CURRENT_USER = 'x'::name) AND (b = (CURRENT_USER)::text)),NULL
+SELECT 7
+> COMMENT ON POLICY p1x ON pol_t IS 'the first';
+COMMENT
+> SELECT d.description, pg_describe_object(d.classoid, d.objoid, 0) FROM pg_description d WHERE d.classoid = 'pg_policy'::regclass;
+fields description@pg_description.4:25:-1:-1,pg_describe_object:25:-1:-1
+row the first,policy p1x on table pol_t
+SELECT 1
+> SELECT pg_describe_object(classid, objid, objsubid) AS obj, pg_describe_object(refclassid, refobjid, refobjsubid) AS ref, deptype FROM pg_depend WHERE classid = 'pg_policy'::regclass ORDER BY 1, 2;
+fields obj:25:-1:-1,ref:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row policy p1x on table pol_t,column a of table pol_t,n
+row policy p1x on table pol_t,table pol_t,a
+row policy p2 on table pol_t,column b of table pol_t,n
+row policy p2 on table pol_t,table pol_t,a
+row policy p3 on table pol_t,column c of table pol_t,n
+row policy p3 on table pol_t,table pol_t,a
+row policy p4 on table pol_t,column a of table pol_t,n
+row policy p4 on table pol_t,column a of table pol_t,n
+row policy p4 on table pol_t,column c of table pol_t,n
+row policy p4 on table pol_t,table pol_t,a
+row policy p5 on table pol_t,column a of table pol_t,n
+row policy p5 on table pol_t,column x of table pol_u,n
+row policy p5 on table pol_t,table pol_t,a
+row policy p6 on table pol_t,table pol_t,a
+row policy p8 on table pol_t,column b of table pol_t,n
+row policy p8 on table pol_t,table pol_t,a
+SELECT 16
+> SELECT * FROM pg_identify_object('pg_policy'::regclass, (SELECT oid FROM pg_policy WHERE polname = 'p4'), 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row policy,NULL,NULL,p4 on public.pol_t
+SELECT 1
+> DROP ROLE regress_pol_b;
+ERROR 2BP01 role "regress_pol_b" cannot be dropped because some objects depend on it
+DETAIL target of policy p1x on table pol_t
+target of policy p2 on table pol_t
+> DROP TABLE pol_u;
+ERROR 2BP01 cannot drop table pol_u because other objects depend on it
+DETAIL policy p5 on table pol_t depends on table pol_u
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP POLICY p5 ON pol_t;
+DROP POLICY
+> DROP POLICY p5 ON pol_t;
+ERROR 42704 policy "p5" for table "pol_t" does not exist
+> DROP POLICY IF EXISTS p5 ON pol_t;
+NOTICE 00000 policy "p5" for relation "pol_t" does not exist, skipping
+DROP POLICY
+> DROP POLICY IF EXISTS p5 ON pol_missing;
+NOTICE 00000 relation "pol_missing" does not exist, skipping
+DROP POLICY
+> DROP ROLE regress_pol_b;
+ERROR 2BP01 role "regress_pol_b" cannot be dropped because some objects depend on it
+DETAIL target of policy p1x on table pol_t
+target of policy p2 on table pol_t
+> DROP OWNED BY regress_pol_b;
+DROP OWNED
+> SELECT polname, polroles::regrole[] FROM pg_policy ORDER BY polname;
+fields polname@pg_policy.2:19:64:-1,polroles:4097:-1:-1
+row p2,{regress_pol_a}
+row p3,{regress_pol_a}
+row p4,{-}
+row p6,{-}
+row p8,{postgres}
+SELECT 5
+> DROP ROLE regress_pol_b;
+DROP ROLE
+> DROP TABLE pol_u;
+DROP TABLE
+> DROP VIEW pol_v;
+DROP VIEW
+> DROP TABLE pol_t;
+DROP TABLE
+> SELECT count(*) FROM pg_policy;
+fields count:20:8:-1
+row 0
+SELECT 1
+> DROP ROLE regress_pol_a;
+DROP ROLE

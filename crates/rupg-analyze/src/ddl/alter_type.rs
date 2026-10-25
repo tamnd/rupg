@@ -5,8 +5,8 @@
 use std::collections::BTreeSet;
 
 use rupg_catalog::{
-    Column, ConKind, ObjRef, PG_ATTRDEF, PG_CLASS, PG_CONSTRAINT, PG_REWRITE, PG_STATISTIC_EXT,
-    PG_TRIGGER, RelKind, Target as DropTarget, flag,
+    Column, ConKind, ObjRef, PG_ATTRDEF, PG_CLASS, PG_CONSTRAINT, PG_POLICY, PG_REWRITE,
+    PG_STATISTIC_EXT, PG_TRIGGER, RelKind, Target as DropTarget, flag,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
@@ -280,6 +280,17 @@ impl Definer<'_, '_> {
                     return Err(Error::new(
                         SqlState::FEATURE_NOT_SUPPORTED,
                         "cannot alter type of a column used by a view or rule",
+                    )
+                    .with_detail(format!(
+                        "{} depends on column \"{}\".",
+                        self.describe(object),
+                        cmd.column
+                    )));
+                }
+                PG_POLICY => {
+                    return Err(Error::new(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        "cannot alter type of a column used in a policy definition",
                     )
                     .with_detail(format!(
                         "{} depends on column \"{}\".",

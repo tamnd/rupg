@@ -1678,12 +1678,27 @@ fn pretty_arg(args: &[Value], index: usize) -> Result<bool> {
     }
 }
 
+/// The OID of the policy and true for `WITH CHECK` of the text that `pg_policy` gives for `polqual` and `polwithcheck`: `policy <oid> qual` or `policy <oid> check`. The catalog keeps the text of the statement of a policy, not a stored form.
+fn policy_marker(text: &str) -> Option<(u32, bool)> {
+    let rest = text.strip_prefix("policy ")?;
+    let (oid, which) = rest.split_once(' ')?;
+    let check = match which {
+        "qual" => false,
+        "check" => true,
+        _ => return None,
+    };
+    Some((oid.parse().ok()?, check))
+}
+
 /// `pg_get_expr(pg_node_tree, oid [, bool])`.
 fn get_expr(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let text = args.first().and_then(Value::as_str).ok_or_else(bad_value)?;
     let relid = args.get(1).and_then(Value::as_oid).ok_or_else(bad_value)?;
     let paren = pretty_arg(args, 2)?;
     let session = call.session;
+    if let Some((oid, check)) = policy_marker(text) {
+        return Ok(query::policy_expr(oid, check, paren, session)?.map_or(Value::Null, Value::text));
+    }
     let columns = if relid == 0 {
         if stored(text)?.iter().any(has_var) {
             return Err(Error::new(

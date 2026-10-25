@@ -1240,6 +1240,8 @@ impl Connection {
                     Node::AlterEnumStmt(_) => CommandTag::AlterType,
                     Node::ViewStmt(_) => CommandTag::CreateView,
                     Node::RuleStmt(_) => CommandTag::CreateRule,
+                    Node::CreatePolicyStmt(_) => CommandTag::CreatePolicy,
+                    Node::AlterPolicyStmt(_) => CommandTag::AlterPolicy,
                     Node::CreateTrigStmt(_) => CommandTag::CreateTrigger,
                     Node::CommentStmt(_) => CommandTag::Comment,
                     Node::GrantStmt(stmt) if stmt.is_grant => CommandTag::Grant,
@@ -1253,6 +1255,7 @@ impl Connection {
                         ObjectType::OBJECT_TYPE => CommandTag::DropType,
                         ObjectType::OBJECT_DOMAIN => CommandTag::DropDomain,
                         ObjectType::OBJECT_RULE => CommandTag::DropRule,
+                        ObjectType::OBJECT_POLICY => CommandTag::DropPolicy,
                         ObjectType::OBJECT_TRIGGER => CommandTag::DropTrigger,
                         ObjectType::OBJECT_FUNCTION => CommandTag::DropFunction,
                         ObjectType::OBJECT_PROCEDURE => CommandTag::DropProcedure,
@@ -2310,6 +2313,7 @@ fn alter_tag(kind: ObjectType) -> CommandTag {
         ObjectType::OBJECT_AGGREGATE => CommandTag::AlterAggregate,
         ObjectType::OBJECT_TRIGGER => CommandTag::AlterTrigger,
         ObjectType::OBJECT_RULE => CommandTag::AlterRule,
+        ObjectType::OBJECT_POLICY => CommandTag::AlterPolicy,
         ObjectType::OBJECT_OPERATOR => CommandTag::AlterOperator,
         ObjectType::OBJECT_OPCLASS => CommandTag::AlterOperatorClass,
         ObjectType::OBJECT_OPFAMILY => CommandTag::AlterOperatorFamily,
@@ -4832,6 +4836,12 @@ mod tests {
     #[test]
     fn operator_bodies() {
         big_stack(|| script(include_str!("connection/operator_bodies.test")));
+    }
+
+    /// `CREATE POLICY`, `ALTER POLICY`, `DROP POLICY` and the row security of tables: the rows of `pg_policy` and `pg_policies`, the errors of the statements, the dependencies, `DROP ROLE` and `DROP OWNED`. `connection/policies.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn policies() {
+        big_stack(|| script(include_str!("connection/policies.test")));
     }
 
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.

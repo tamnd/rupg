@@ -167,6 +167,9 @@ pub fn describe(object: ObjRef, session: &dyn Session) -> Result<Option<String>>
         PG_TRIGGER => catalog.and_then(|c| c.trigger(oid)).and_then(|t| {
             Some(format!("trigger {} on {}", t.name, relation_text(t.relation, session)?))
         }),
+        rupg_catalog::PG_POLICY => catalog.and_then(|c| c.policy(oid)).and_then(|p| {
+            Some(format!("policy {} on {}", p.name, relation_text(p.relation, session)?))
+        }),
         PG_NAMESPACE => reg::namespace_name(oid, session).map(|name| format!("schema {name}")),
         PG_TS_PARSER => ts_text(Named::Parser, "parser", oid, session),
         PG_TS_DICT => ts_text(Named::Dictionary, "dictionary", oid, session),

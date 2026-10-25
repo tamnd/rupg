@@ -36,6 +36,7 @@ mod partition;
 mod partition_alter;
 mod partition_attach;
 mod partition_index;
+mod policy;
 mod rangetype;
 mod reindex;
 mod relation_options;
@@ -71,7 +72,8 @@ pub use function::{
 pub use grant::acl_roles;
 pub(crate) use lock::relkind;
 pub use lock::{Allowed, Take, lock_table};
-pub use owned::{acl_dependents, owned_objects};
+pub use owned::{acl_dependents, owned_objects, policy_targets};
+pub use policy::policy_tree;
 pub use reindex::{ReindexOptions, reindex_options};
 pub use reloptions::tablespace_options;
 pub use rule::{RuleTree, rule_tree};
@@ -196,6 +198,8 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::CreateRangeStmt(_)
             | Node::ViewStmt(_)
             | Node::RuleStmt(_)
+            | Node::CreatePolicyStmt(_)
+            | Node::AlterPolicyStmt(_)
             | Node::CreateTrigStmt(_)
             | Node::CreateFunctionStmt(_)
             | Node::AlterFunctionStmt(_)
@@ -255,6 +259,7 @@ fn is_drop_kind(kind: ObjectType) -> bool {
             | ObjectType::OBJECT_TYPE
             | ObjectType::OBJECT_DOMAIN
             | ObjectType::OBJECT_RULE
+            | ObjectType::OBJECT_POLICY
             | ObjectType::OBJECT_TRIGGER
             | ObjectType::OBJECT_FUNCTION
             | ObjectType::OBJECT_PROCEDURE
@@ -316,6 +321,8 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::CreateSchemaStmt(schema) => definer.create_schema(schema, text),
         Node::ViewStmt(view) => definer.create_view(view, text),
         Node::RuleStmt(rule) => definer.create_rule(rule, text),
+        Node::CreatePolicyStmt(policy) => definer.create_policy(policy, text),
+        Node::AlterPolicyStmt(policy) => definer.alter_policy(policy, text),
         Node::CreateTrigStmt(trigger) => definer.create_trigger(trigger),
         Node::CreateDomainStmt(domain) => definer.create_domain(domain).map(|_| ()),
         Node::CompositeTypeStmt(stmt) => definer.create_composite_type(stmt),

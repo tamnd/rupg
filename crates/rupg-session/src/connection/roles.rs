@@ -356,6 +356,7 @@ fn password_type(secret: &str) -> PasswordType {
 fn owned(catalog: &Catalog, role: u32) -> Vec<ObjRef> {
     let mut objects = rupg_analyze::owned_objects(catalog, role);
     objects.extend(rupg_analyze::acl_dependents(catalog, role));
+    objects.extend(rupg_analyze::policy_targets(catalog, role));
     objects
 }
 
@@ -980,6 +981,10 @@ impl Connection {
             let text = rupg_func::describe(object, &reader)?.unwrap_or_default();
             objects.push((object.oid, object.class, object.sub, b'a', text));
         }
+        for object in rupg_analyze::policy_targets(&local, roleid) {
+            let text = rupg_func::describe(object, &reader)?.unwrap_or_default();
+            objects.push((object.oid, object.class, object.sub, b'r', text));
+        }
         for m in work.members.iter().filter(|m| m.grantor == roleid) {
             let text = format!(
                 "membership of role {} in role {}",
@@ -996,10 +1001,10 @@ impl Connection {
                 hidden += 1;
                 continue;
             }
-            lines.push(if deptype == b'o' {
-                format!("owner of {text}")
-            } else {
-                format!("privileges for {text}")
+            lines.push(match deptype {
+                b'o' => format!("owner of {text}"),
+                b'r' => format!("target of {text}"),
+                _ => format!("privileges for {text}"),
             });
         }
         let mut hidden_databases = 0;

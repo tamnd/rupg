@@ -111,6 +111,8 @@ pub const PG_EXTENSION: u32 = 3079;
 pub const BTREE: u32 = 403;
 /// The OID of the catalog `pg_trigger`.
 pub const PG_TRIGGER: u32 = 2620;
+/// The OID of the catalog `pg_policy`.
+pub const PG_POLICY: u32 = 3256;
 /// The OID of `RI_FKey_check_ins`. The other functions of the foreign keys follow it in the order of `ri_triggers.c`.
 const RI_FKEY_CHECK_INS: u32 = 1644;
 /// The OID of `unique_key_recheck`, the function of the trigger of a deferrable unique constraint.
@@ -360,6 +362,10 @@ pub struct Relation {
     pub inherits: Vec<u32>,
     /// `reloftype`: the composite type of a typed table, or 0.
     pub of_type: u32,
+    /// `relrowsecurity`: true after `ENABLE ROW LEVEL SECURITY`.
+    pub row_security: bool,
+    /// `relforcerowsecurity`: true after `FORCE ROW LEVEL SECURITY`.
+    pub force_row_security: bool,
 }
 
 /// The strategy of a partition key, `partstrat`.
@@ -863,6 +869,36 @@ pub struct Rule {
     pub path: Vec<u32>,
 }
 
+/// A policy of `CREATE POLICY`, one row of `pg_policy`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Policy {
+    /// The OID, or 0 for a new policy of [`Catalog::set_policy`].
+    pub oid: u32,
+    /// The name.
+    pub name: String,
+    /// `polrelid`: the OID of the table.
+    pub relation: u32,
+    /// `polcmd`: `*` for all the commands, else `r`, `a`, `w` or `d`.
+    pub cmd: u8,
+    /// `polpermissive`: false for `AS RESTRICTIVE`.
+    pub permissive: bool,
+    /// `polroles`: the OIDs of the roles, or 0 alone for `PUBLIC`.
+    pub roles: Vec<u32>,
+    /// `polqual`: the expression of `USING`, or `None`.
+    pub qual: Option<PolicyExpr>,
+    /// `polwithcheck`: the expression of `WITH CHECK`, or `None`.
+    pub check: Option<PolicyExpr>,
+}
+
+/// An expression of a policy. The catalog keeps the text of the statement that gave the expression, `CREATE POLICY` or `ALTER POLICY`, and only the analyzer reads it back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PolicyExpr {
+    /// The text of the statement.
+    pub text: String,
+    /// The schemas of `search_path` when the statement ran, in order.
+    pub path: Vec<u32>,
+}
+
 /// The facts of a new rule for [`Catalog::create_rule`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewRule {
@@ -1165,6 +1201,7 @@ pub struct Catalog {
     extensions: BTreeMap<u32, Extension>,
     triggers: BTreeMap<u32, Trigger>,
     rules: BTreeMap<u32, Rule>,
+    policies: BTreeMap<u32, Policy>,
     collations: Arc<BTreeMap<u32, Collation>>,
     ts_templates: BTreeMap<u32, TsTemplate>,
     ts_parsers: BTreeMap<u32, TsParser>,
@@ -1278,6 +1315,7 @@ impl Catalog {
             extensions: BTreeMap::new(),
             triggers: BTreeMap::new(),
             rules: BTreeMap::new(),
+            policies: BTreeMap::new(),
             collations: Arc::default(),
             ts_templates: BTreeMap::new(),
             ts_parsers: BTreeMap::new(),
@@ -1679,6 +1717,61 @@ impl Catalog {
     /// The rule of a relation with the name.
     pub fn rule_by_name(&self, relation: u32, name: &str) -> Option<&Rule> {
         self.rules.values().find(|r| r.relation == relation && r.name == name)
+    }
+
+    /// The policies in the order of their OIDs.
+    pub fn policies(&self) -> impl Iterator<Item = &Policy> {
+        self.policies.values()
+    }
+
+    /// The policy with the OID.
+    pub fn policy(&self, oid: u32) -> Option<&Policy> {
+        self.policies.get(&oid)
+    }
+
+    /// The policy of a table with the name.
+    pub fn policy_by_name(&self, relation: u32, name: &str) -> Option<&Policy> {
+        self.policies.values().find(|p| p.relation == relation && p.name == name)
+    }
+
+    /// `rename_policy`: a new name for a policy. The caller checks that the table has no policy with the new name.
+    pub fn rename_policy(&mut self, oid: u32, name: &str) {
+        if let Some(policy) = self.policies.get_mut(&oid) {
+            policy.name = name.to_string();
+        }
+    }
+
+    /// `RemoveRoleFromObjectPolicy` when other roles stay: new roles for a policy.
+    pub fn set_policy_roles(&mut self, oid: u32, roles: Vec<u32>) {
+        if let Some(policy) = self.policies.get_mut(&oid) {
+            policy.roles = roles;
+        }
+    }
+
+    /// `CreatePolicy` with a policy of OID 0, and `AlterPolicy` with the OID of the policy: the row of `pg_policy` and its dependencies. The policy depends on its table, then on the objects that the expression of `USING` reads, then on the objects that the expression of `WITH CHECK` reads. The result is the OID of the policy.
+    pub fn set_policy(&mut self, mut policy: Policy, qual: &[ObjRef], check: &[ObjRef]) -> u32 {
+        if policy.oid == 0 {
+            policy.oid = self.new_oid();
+        }
+        let oid = policy.oid;
+        let object = ObjRef::new(PG_POLICY, oid);
+        self.depends.retain(|d| d.object != object);
+        self.depend(object, ObjRef::new(PG_CLASS, policy.relation), DepKind::Auto);
+        self.depend_refs(object, qual);
+        self.depend_refs(object, check);
+        self.policies.insert(oid, policy);
+        oid
+    }
+
+    /// `ATExecSetRowSecurity` and `ATExecForceNoForceRowSecurity`: sets `relrowsecurity` or `relforcerowsecurity` of a table.
+    pub fn set_row_security(&mut self, oid: u32, force: bool, on: bool) -> Result<()> {
+        let rel = self.relation_mut(oid)?;
+        if force {
+            rel.force_row_security = on;
+        } else {
+            rel.row_security = on;
+        }
+        Ok(())
     }
 
     /// The collations in the order of their OIDs.
@@ -2452,6 +2545,8 @@ impl Catalog {
                 partition_of: None,
                 inherits: Vec::new(),
                 of_type: 0,
+                row_security: false,
+                force_row_security: false,
                 unlogged: false,
             },
         );
@@ -3153,6 +3248,8 @@ impl Catalog {
                 partition_of: None,
                 inherits: Vec::new(),
                 of_type: 0,
+                row_security: false,
+                force_row_security: false,
                 unlogged: false,
             },
         );
@@ -3588,6 +3685,8 @@ impl Catalog {
                 partition_of: None,
                 inherits: Vec::new(),
                 of_type: 0,
+                row_security: false,
+                force_row_security: false,
                 unlogged,
             },
         );
@@ -3910,6 +4009,8 @@ impl Catalog {
                 partition_of: None,
                 inherits: Vec::new(),
                 of_type: 0,
+                row_security: false,
+                force_row_security: false,
                 unlogged,
             },
         );
@@ -3958,6 +4059,8 @@ impl Catalog {
                 partition_of: None,
                 inherits: Vec::new(),
                 of_type: 0,
+                row_security: false,
+                force_row_security: false,
                 unlogged,
             },
         );

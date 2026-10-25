@@ -11,7 +11,7 @@ use rupg_pgcatalog::builtin::{self, Owned};
 use rupg_types::{RegKind, Value, qualified_name_list};
 
 use crate::reg;
-use crate::{Call, Kernel, Session, bad_value, type_error};
+use crate::{Call, Kernel, Session, bad_value, not_yet, type_error};
 
 const ACL_INSERT: u32 = 1 << 0;
 const ACL_SELECT: u32 = 1 << 1;
@@ -995,7 +995,7 @@ fn one_relation_allowed(perm: &PermInfo, role: u32, session: &dyn Session) -> Re
 pub fn check_permissions(perms: &[PermInfo], session: &dyn Session) -> Result<()> {
     let mut perms: Vec<&PermInfo> = perms.iter().collect();
     perms.sort_by_key(|perm| std::cmp::Reverse(perm.rule_level));
-    for perm in perms {
+    for &perm in &perms {
         if perm.required == 0 {
             continue;
         }
@@ -1019,6 +1019,14 @@ pub fn check_permissions(perms: &[PermInfo], session: &dyn Session) -> Result<()
             SqlState::INSUFFICIENT_PRIVILEGE,
             format!("permission denied for {object} {}", class.name),
         ));
+    }
+    for perm in &perms {
+        let role = if perm.check_as == 0 { current_user(session) } else { perm.check_as };
+        if perm.required != 0 && rls_enabled(perm.relid, role, session) {
+            return Err(not_yet(
+                "a statement that the row-level security policies of a table apply to",
+            ));
+        }
     }
     Ok(())
 }
@@ -1590,12 +1598,27 @@ fn acldefault(_call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Array(Box::new(rupg_types::Array::one(items))))
 }
 
-/// `row_security_active(oid)` and `row_security_active(text)`: true when row security applies to the relation for the current user. No relation of rupg has row security, so the result is false. A name of a relation that does not exist is an error.
-fn row_security_active(call: &Call<'_>, args: &[Value]) -> Result<Value> {
-    if let Some(Value::Text(name)) = args.first() {
-        table_name(name, call.session)?;
+/// `check_enable_rls` with the result `RLS_ENABLED`: true when the policies of the relation apply to the role. They do not apply to a relation without row security, to a role with `BYPASSRLS` or to a superuser, or to the owner unless the relation has `FORCE ROW LEVEL SECURITY`.
+pub(crate) fn rls_enabled(relid: u32, role: u32, session: &dyn Session) -> bool {
+    let Some(rel) = session.catalog().and_then(|c| c.relation(relid)) else { return false };
+    if !rel.row_security {
+        return false;
     }
-    Ok(Value::Bool(false))
+    let roles = rupg_pgcatalog::roles::current();
+    if roles.superuser(role) || roles.attrs(role).is_some_and(|a| a.bypassrls) {
+        return false;
+    }
+    rel.force_row_security || !has_privs_of_role(role, rel.owner)
+}
+
+/// `row_security_active(oid)` and `row_security_active(text)`: true when row security applies to the relation for the current user. A name of a relation that does not exist is an error.
+fn row_security_active(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let relid = match args.first() {
+        Some(Value::Text(name)) => table_name(name, call.session)?,
+        Some(value) => value.as_oid().ok_or_else(bad_value)?,
+        None => return Err(bad_value()),
+    };
+    Ok(Value::Bool(rls_enabled(relid, current_user(call.session), call.session)))
 }
 
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
