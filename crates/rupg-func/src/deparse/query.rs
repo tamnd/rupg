@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use rupg_analyze::{
-    Column, Cte, FRAMEOPTION_END_OFFSET, FRAMEOPTION_END_UNBOUNDED_FOLLOWING,
+    Column, ConflictDef, Cte, FRAMEOPTION_END_OFFSET, FRAMEOPTION_END_UNBOUNDED_FOLLOWING,
     FRAMEOPTION_START_OFFSET, Frame, FromFunction, FromItem, GroupingSet, InsertSource, Join,
     JoinKind, JoinRow, NullTreatment, Query, Relation, SetKind, SetOp, SetTree, TableSample,
     WriteKind,
@@ -14,7 +14,8 @@ use rupg_sql::nodes::{
     FRAMEOPTION_BETWEEN, FRAMEOPTION_END_CURRENT_ROW, FRAMEOPTION_END_OFFSET_PRECEDING,
     FRAMEOPTION_EXCLUDE_CURRENT_ROW, FRAMEOPTION_EXCLUDE_GROUP, FRAMEOPTION_EXCLUDE_TIES,
     FRAMEOPTION_NONDEFAULT, FRAMEOPTION_RANGE, FRAMEOPTION_ROWS, FRAMEOPTION_START_CURRENT_ROW,
-    FRAMEOPTION_START_OFFSET_PRECEDING, FRAMEOPTION_START_UNBOUNDED_PRECEDING, OverridingKind,
+    FRAMEOPTION_START_OFFSET_PRECEDING, FRAMEOPTION_START_UNBOUNDED_PRECEDING, LockClauseStrength,
+    OverridingKind,
 };
 use rupg_types::qualified_name_list;
 
@@ -89,12 +90,14 @@ impl Deparser<'_> {
         done
     }
 
-    /// `get_insert_query_def`, `get_update_query_def` and `get_delete_query_def`: an `INSERT`, an `UPDATE` or a `DELETE` in the form that the analysis kept before the rewrite, with `indent` as the indent of the query. `ON CONFLICT` and `MERGE` are not supported yet.
+    /// `get_insert_query_def`, `get_update_query_def` and `get_delete_query_def`: an `INSERT`, an `UPDATE` or a `DELETE` in the form that the analysis kept before the rewrite, with `indent` as the indent of the query. `MERGE` is not supported yet.
     pub(super) fn write_def(&mut self, query: &Query, indent: i32) -> Result<()> {
         let write = query.write.as_ref().ok_or_else(|| Error::internal("a query with no write"))?;
         let kept =
             write.returning.as_deref().map(|r| r.shown.as_ref().and_then(|s| s.kept.as_ref()));
-        let plain = write.on_conflict.is_none() && kept.is_none_or(|k| k.is_some());
+        let conflict = write.insert_def.as_ref().and_then(|d| d.conflict.as_ref());
+        let plain =
+            (write.on_conflict.is_none() || conflict.is_some()) && kept.is_none_or(|k| k.is_some());
         let def = match (&write.insert_def, &write.set_def, write.kind) {
             (Some(def), _, WriteKind::Insert) if plain => def,
             (_, Some(set), WriteKind::Update) if plain => {
@@ -117,10 +120,109 @@ impl Deparser<'_> {
         let done = self
             .with_clause(query)
             .and_then(|()| self.insert_body(def, &refname))
+            .and_then(|()| conflict.map_or(Ok(()), |c| self.conflict_clause(c)))
             .and_then(|()| self.returning_clause(query));
         self.namespaces.pop();
         self.indent = saved_indent;
         done
+    }
+
+    /// The part `ON CONFLICT` of `get_insert_query_def`. The inference reads the target table with no prefix, and `SET` and `WHERE` read the target table and `excluded`.
+    fn conflict_clause(&mut self, conflict: &ConflictDef) -> Result<()> {
+        self.buf.push_str(" ON CONFLICT");
+        if !conflict.elems.is_empty() {
+            let saved_prefix = std::mem::replace(&mut self.prefix, false);
+            let done = self.inference(conflict);
+            self.prefix = saved_prefix;
+            done?;
+        } else if conflict.constraint != 0 {
+            let constraint = self.session.catalog().and_then(|c| c.constraint(conflict.constraint));
+            let constraint = constraint.ok_or_else(|| {
+                Error::internal(format!(
+                    "cache lookup failed for constraint {}",
+                    conflict.constraint
+                ))
+            })?;
+            self.buf.push_str(" ON CONSTRAINT ");
+            self.buf.push_str(&quote_identifier(&constraint.name));
+        }
+        let lock = match (conflict.select, &conflict.set) {
+            (Some(LockClauseStrength::LCS_NONE), _) => " DO SELECT",
+            (Some(LockClauseStrength::LCS_FORKEYSHARE), _) => " DO SELECT FOR KEY SHARE",
+            (Some(LockClauseStrength::LCS_FORSHARE), _) => " DO SELECT FOR SHARE",
+            (Some(LockClauseStrength::LCS_FORNOKEYUPDATE), _) => " DO SELECT FOR NO KEY UPDATE",
+            (Some(_), _) => " DO SELECT FOR UPDATE",
+            (None, Some(_)) => " DO UPDATE SET ",
+            (None, None) => {
+                self.buf.push_str(" DO NOTHING");
+                return Ok(());
+            }
+        };
+        self.buf.push_str(lock);
+        // `SET` and `WHERE` read the range table of the statement, which has the target table and `excluded`.
+        let query = Query {
+            relations: conflict.relations.clone(),
+            from: (0..conflict.relations.len()).map(FromItem::Relation).collect(),
+            ..Query::default()
+        };
+        let outer = self.namespaces.pop();
+        let space = self.namespace(&query);
+        let saved_prefix = std::mem::replace(&mut self.prefix, true);
+        self.namespaces.push(space);
+        let done = self.conflict_action(conflict);
+        self.namespaces.pop();
+        self.namespaces.extend(outer);
+        self.prefix = saved_prefix;
+        done
+    }
+
+    /// The elements of the inference of [`Deparser::conflict_clause`], as `get_rule_expr` shows `InferenceElem`, then its predicate.
+    fn inference(&mut self, conflict: &ConflictDef) -> Result<()> {
+        self.buf.push('(');
+        for (i, (expr, collation, class, intype)) in conflict.elems.iter().enumerate() {
+            if i > 0 {
+                self.buf.push_str(", ");
+            }
+            // A column or a call in the syntax of a function shows with no parentheses, as `pg_get_indexdef_worker` shows them.
+            let bare = matches!(&expr.kind, ExprKind::Var(_))
+                || matches!(&expr.kind, ExprKind::Func(f) if f.form == FuncForm::Call);
+            if !bare {
+                self.buf.push('(');
+            }
+            self.expr(expr, false)?;
+            if !bare {
+                self.buf.push(')');
+            }
+            if *collation != 0 {
+                self.buf.push_str(" COLLATE ");
+                self.buf.push_str(&super::collation_name(*collation, self.session)?);
+            }
+            if *class != 0 {
+                self.buf.push_str(&super::opclass_name(*class, *intype, self.session)?);
+            }
+        }
+        self.buf.push(')');
+        if let Some(predicate) = &conflict.predicate {
+            self.keyword(" WHERE ", -INDENT_STD, INDENT_STD, 1);
+            self.expr(predicate, false)?;
+        }
+        Ok(())
+    }
+
+    /// `SET` of `DO UPDATE` and `WHERE` of `DO UPDATE` or of `DO SELECT`.
+    fn conflict_action(&mut self, conflict: &ConflictDef) -> Result<()> {
+        if let Some(set) = &conflict.set {
+            let rel = conflict
+                .relations
+                .first()
+                .ok_or_else(|| Error::internal("ON CONFLICT with no table"))?;
+            self.set_list(rel, set)?;
+        }
+        if let Some(filter) = &conflict.filter {
+            self.keyword(" WHERE ", -INDENT_STD, INDENT_STD, 1);
+            self.expr(filter, false)?;
+        }
+        Ok(())
     }
 
     /// [`Deparser::write_def`] for an `UPDATE` with the items of `SET`, or for a `DELETE` with no items.
