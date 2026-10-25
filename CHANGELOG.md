@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.2.0 (2026-10-26)
+
 ### Added
 
 - `pg_get_viewdef` shows the `VALUES` list of a view as `(VALUES ...)` after `ALTER TABLE ... RENAME COLUMN`, as PostgreSQL does (#765).
