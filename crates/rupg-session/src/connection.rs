@@ -4506,6 +4506,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/valias.test")));
     }
 
+    /// `ctid` of a table of the user: the item pointer of the version of each row, which a view can give, a condition can compare, and a cursor finds the row of `CURRENT OF` by. A view column of `ctid` is not updatable. `connection/vctid.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vctid() {
+        big_stack(|| script(include_str!("connection/vctid.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {

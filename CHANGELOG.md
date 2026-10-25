@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A query can read `ctid` of a table of the user. The column gives the item pointer `(page,item)` of the version of the row, as `heap_getsysattr` does, so a view can show it, a condition can compare it with a `tid`, and `information_schema.columns` shows the column of a view as not updatable (#NNN).
 - The executor orders `x op ANY (array)` and `x op ALL (array)` by the cost of `cost_qual_eval_walker`: the operator runs for half of the items of the array, and a constant array of 9 items or more costs one hash and one comparison (#716).
 - A volatile condition of `WHERE` that reads no column, such as `f_leak('x')`, runs for each row of the scan with the other conditions, in the order of their costs, as `distribute_qual_to_rels` gives it to the one relation of `FROM`. It also moves into a view with `security_barrier`. A condition that reads no column and calls no volatile function runs only once (#717).
 - The executor merges a view with `security_barrier` that is the only item of `FROM`, after the leakproof conditions moved into it. The conditions of the view run first, so a row of the view meets the conditions of the query before the scan reads the next row, as the `Subquery Scan` of PostgreSQL runs (#717).

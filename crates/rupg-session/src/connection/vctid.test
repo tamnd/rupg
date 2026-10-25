@@ -1,0 +1,109 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE ct (a int, b text);
+CREATE TABLE
+> INSERT INTO ct VALUES (1, 'one'), (2, 'two'), (3, 'three');
+INSERT 0 3
+> SELECT ctid, a, b FROM ct ORDER BY a;
+fields ctid@ct.-1:27:6:-1,a@ct.1:23:4:-1,b@ct.2:25:-1:-1
+row (0,1),1,one
+row (0,2),2,two
+row (0,3),3,three
+SELECT 3
+> UPDATE ct SET b = 'uno' WHERE a = 1;
+UPDATE 1
+> SELECT ctid, a FROM ct ORDER BY a;
+fields ctid@ct.-1:27:6:-1,a@ct.1:23:4:-1
+row (0,4),1
+row (0,2),2
+row (0,3),3
+SELECT 3
+> SELECT a FROM ct WHERE ctid = '(0,2)';
+fields a@ct.1:23:4:-1
+row 2
+SELECT 1
+> DELETE FROM ct WHERE a = 2;
+DELETE 1
+> INSERT INTO ct VALUES (4, 'four');
+INSERT 0 1
+> SELECT t.ctid, a FROM ct t ORDER BY ctid;
+fields ctid@ct.-1:27:6:-1,a@ct.1:23:4:-1
+row (0,3),3
+row (0,4),1
+row (0,5),4
+SELECT 3
+> CREATE VIEW ctv AS SELECT ctid, a, b FROM ct;
+CREATE VIEW
+> SELECT * FROM ctv ORDER BY a;
+fields ctid@ctv.1:27:6:-1,a@ctv.2:23:4:-1,b@ctv.3:25:-1:-1
+row (0,4),1,uno
+row (0,3),3,three
+row (0,5),4,four
+SELECT 3
+> SELECT pg_get_viewdef('ctv');
+fields pg_get_viewdef:25:-1:-1
+row  SELECT ctid,
+    a,
+    b
+   FROM ct;
+SELECT 1
+> SELECT column_name, is_updatable FROM information_schema.columns WHERE table_name = 'ctv' ORDER BY ordinal_position;
+fields column_name@information_schema.columns.4:19:64:-1,is_updatable@information_schema.columns.44:1043:-1:7
+row ctid,NO
+row a,YES
+row b,YES
+SELECT 3
+> INSERT INTO ctv VALUES (null, 5, 'five');
+ERROR 0A000 cannot insert into column "ctid" of view "ctv"
+DETAIL View columns that refer to system columns are not updatable.
+> INSERT INTO ctv (a, b) VALUES (5, 'five');
+INSERT 0 1
+> UPDATE ctv SET ctid = null WHERE a = 5;
+ERROR 0A000 cannot update column "ctid" of view "ctv"
+DETAIL View columns that refer to system columns are not updatable.
+> UPDATE ctv SET b = 'FIVE' WHERE a = 5;
+UPDATE 1
+> SELECT ctid, * FROM ctv ORDER BY a;
+fields ctid@ctv.1:27:6:-1,ctid@ctv.1:27:6:-1,a@ctv.2:23:4:-1,b@ctv.3:25:-1:-1
+row (0,4),(0,4),1,uno
+row (0,3),(0,3),3,three
+row (0,5),(0,5),4,four
+row (0,7),(0,7),5,FIVE
+SELECT 4
+> EXPLAIN (verbose, costs off) SELECT ctid FROM ctv WHERE a > 1;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.ct
+row   Output: ct.ctid
+row   Filter: (ct.a > 1)
+EXPLAIN
+> SELECT (SELECT ctid FROM ct WHERE a = o.a) FROM ct o ORDER BY a;
+fields ctid:27:6:-1
+row (0,4)
+row (0,3)
+row (0,5)
+row (0,7)
+SELECT 4
+> BEGIN;
+BEGIN
+> DECLARE c CURSOR FOR SELECT ctid, a FROM ct;
+DECLARE CURSOR
+> FETCH 1 FROM c;
+fields ctid@ct.-1:27:6:-1,a@ct.1:23:4:-1
+row (0,3),3
+FETCH 1
+> UPDATE ct SET b = 'cur' WHERE CURRENT OF c;
+UPDATE 1
+> SELECT ctid, a, b FROM ct ORDER BY a;
+fields ctid@ct.-1:27:6:-1,a@ct.1:23:4:-1,b@ct.2:25:-1:-1
+row (0,4),1,uno
+row (0,8),3,cur
+row (0,5),4,four
+row (0,7),5,FIVE
+SELECT 4
+> COMMIT;
+COMMIT
+> DROP VIEW ctv;
+DROP VIEW
+> DROP TABLE ct;
+DROP TABLE

@@ -21,6 +21,20 @@ const XMIN_ATTNUM: i16 = -2;
 /// `SelfItemPointerAttributeNumber`: the attribute number of `ctid`.
 const CTID_ATTNUM: i16 = -1;
 
+/// `MaxHeapTuplesPerPage`: the number of items of a page of a table, which the ID of a version gives in its item pointer.
+const TUPLES_PER_PAGE: i64 = 291;
+
+/// `heap_getsysattr` for `ctid`: a column `ctid` of the type `tid` gives the item pointer of the ID of the version of the row, `(page,item)`, as `tidout` shows it. The plans of a write and of a cursor read the ID itself, as a `bigint`.
+pub(crate) fn item_pointer(value: Value, var: Var, ty: u32) -> Value {
+    match value {
+        Value::Int8(id) if var.attnum == CTID_ATTNUM && ty == oid::TID => {
+            let at = id.saturating_sub(1).max(0);
+            Value::Int8((at / TUPLES_PER_PAGE) << 16 | (at % TUPLES_PER_PAGE + 1))
+        }
+        value => value,
+    }
+}
+
 /// `MaxTransactionIdAttributeNumber`: the attribute number of `xmax`.
 const XMAX_ATTNUM: i16 = -4;
 

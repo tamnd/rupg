@@ -31,7 +31,7 @@ impl Plan {
                 })
                 .collect();
             let added = marks.iter().flat_map(|&(i, _)| {
-                [var(i, TABLE_OID_ATTNUM, oid::OID), var(i, CTID_ATTNUM, oid::TID)]
+                [var(i, TABLE_OID_ATTNUM, oid::OID), var(i, CTID_ATTNUM, oid::INT8)]
             });
             add(&mut query, added.collect());
             marks.into_iter().map(|(_, oid)| oid).collect()
@@ -90,7 +90,7 @@ fn scan(query: &mut Query, sub: bool) -> Option<u32> {
     } else {
         return None;
     };
-    let (tableoid, ctid) = (var(i, TABLE_OID_ATTNUM, oid::OID), var(i, CTID_ATTNUM, oid::TID));
+    let (tableoid, ctid) = (var(i, TABLE_OID_ATTNUM, oid::OID), var(i, CTID_ATTNUM, oid::INT8));
     add(query, if sub { vec![ctid, tableoid] } else { vec![tableoid, ctid] });
     Some(oid)
 }

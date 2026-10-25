@@ -2264,7 +2264,9 @@ impl<'a> Eval<'a> {
                 Ok(Value::Record(Box::new(Record { types, values, names })))
             }
             ExprKind::SqlValue(v) => self.sql_value(*v),
-            ExprKind::Var(var) if var.levels_up == 0 => Ok(self.tables.var(self.tuple, *var)),
+            ExprKind::Var(var) if var.levels_up == 0 => {
+                Ok(scan::item_pointer(self.tables.var(self.tuple, *var), *var, expr.ty))
+            }
             ExprKind::Var(var) => {
                 let frame = self
                     .outer
@@ -2272,7 +2274,7 @@ impl<'a> Eval<'a> {
                     .checked_sub(var.levels_up)
                     .and_then(|i| self.outer.get(i))
                     .ok_or_else(|| Error::internal("a column of an outer query has no row"))?;
-                Ok(frame.tables.var(frame.tuple, *var))
+                Ok(scan::item_pointer(frame.tables.var(frame.tuple, *var), *var, expr.ty))
             }
             ExprKind::SubLink(sub) => self.sublink(sub, expr.ty),
             ExprKind::SubColumn(n) => self
