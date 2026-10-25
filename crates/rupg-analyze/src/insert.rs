@@ -54,6 +54,8 @@ pub struct Write {
     pub table: u32,
     /// The name of the table, for the errors of the constraints.
     pub name: String,
+    /// The alias of the target table of an `INSERT`, as `INSERT INTO t AS a`, which `EXPLAIN` shows.
+    pub alias: Option<String>,
     /// The number of columns of the table. The first targets of the query are the columns. For a `DELETE` it is 0.
     pub width: usize,
     /// The names of the check constraints in the order of their names. The targets after the columns are the conditions of these constraints, in the same order.
@@ -452,6 +454,7 @@ impl Analyzer<'_> {
             kind: WriteKind::Insert,
             table,
             name,
+            alias: rv.alias.as_ref().and_then(|a| a.aliasname.as_ref()).map(ToString::to_string),
             width,
             checks: names,
             unique,

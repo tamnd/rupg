@@ -4430,6 +4430,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/icoll.test")));
     }
 
+    /// `EXPLAIN` of `INSERT ... ON CONFLICT` names the target table by its alias, and the row that the insert proposes `excluded`, as `set_rtable_names` names the entries of the one range table. `connection/excl.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn excl() {
+        big_stack(|| script(include_str!("connection/excl.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {

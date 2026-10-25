@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::ptr;
 use std::rc::Rc;
 
-use rupg_analyze::{Expr, SortGroup, SubLink, SubLinkKind};
+use rupg_analyze::{Expr, FromItem, SortGroup, SubLink, SubLinkKind};
 use rupg_plan::{Kind, Node, Plan, TARGET, Texts};
 use rupg_sql::nodes::FRAMEOPTION_NONDEFAULT;
 
@@ -46,6 +46,10 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
         let mut spaces: Vec<Option<Namespace>> = vec![None; count];
         let mut targets = vec![None; count];
         let mut used: HashMap<String, u32> = HashMap::new();
+        // `transformOnConflictClause`: the entry `excluded` of the range table comes after the target table of the `INSERT`.
+        let mut conflicts = Vec::new();
+        conflict_scopes(&plan.root, &mut conflicts);
+        let mut excluded = vec![None; count];
         for &s in &plan.order {
             let Some(scope) = plan.scopes.get(s) else { continue };
             if spaces[s].is_some() {
@@ -66,9 +70,14 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
                 continue;
             }
             if let Some(write) = scope.target {
-                let base = reg::class_name(write.table, session)
-                    .map_or_else(|| write.name.clone(), |(name, _)| name.to_string());
+                let base = write.alias.clone().unwrap_or_else(|| {
+                    reg::class_name(write.table, session)
+                        .map_or_else(|| write.name.clone(), |(name, _)| name.to_string())
+                });
                 targets[s] = Some(super::query::unique_name(base, &mut used));
+                if write.on_conflict.as_ref().is_some_and(|c| c.update.is_some()) {
+                    excluded[s] = Some(super::query::unique_name("excluded".into(), &mut used));
+                }
             }
             spaces[s] = Some(d.namespace_in(scope.query, &mut used, true));
         }
@@ -81,6 +90,21 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
                 })
             })
             .collect();
+        // The query of `DO UPDATE` reads the target table and `excluded` with the names of their entries.
+        for (update, insert) in conflicts {
+            let Some(space) = spaces.get_mut(update) else { continue };
+            if let Some(Some(name)) = targets.get(insert)
+                && let Some(slot) = space.names.get_mut(0)
+            {
+                slot.clone_from(name);
+            }
+            if let Some(Some(name)) = excluded.get(insert)
+                && let Some(FromItem::Relation(at)) = plan.scopes[update].query.from.get(1)
+                && let Some(slot) = space.names.get_mut(*at)
+            {
+                slot.clone_from(name);
+            }
+        }
         removed_scans(plan, &mut spaces);
         // The `Output` of the `ModifyTable` of an `INSERT` with `RETURNING` reads the columns of the target table, and a column of `old` or `new` reads the columns of the table with the name of the row.
         for (s, space) in spaces.iter_mut().enumerate() {
@@ -200,6 +224,21 @@ fn subquery_scans(node: &Node<'_>, out: &mut Vec<(usize, usize)>) {
 }
 
 /// The names of the windows of the nodes of a plan, by the scope and the number of each window.
+/// The scope of the query of `DO UPDATE` of each `ModifyTable` with `ON CONFLICT`, with the scope of the `ModifyTable`.
+fn conflict_scopes(node: &Node<'_>, out: &mut Vec<(usize, usize)>) {
+    if let Kind::Modify { conflict: Some(conflict), .. } = &node.kind
+        && let Some(update) = conflict.scope
+    {
+        out.push((update, node.scope));
+    }
+    for child in &node.children {
+        conflict_scopes(child, out);
+    }
+    for sub in node.init_plans.iter().chain(&node.sub_plans) {
+        conflict_scopes(&sub.plan, out);
+    }
+}
+
 fn window_names(node: &Node<'_>, out: &mut [Vec<Option<String>>]) {
     if let Kind::WindowAgg { name, window, .. } = &node.kind
         && let Some(slot) = out.get_mut(node.scope).and_then(|w| w.get_mut(*window))
