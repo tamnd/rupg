@@ -45,6 +45,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - Row-level security policies now apply to `INSERT`, `UPDATE` and `DELETE`. The `USING` conditions limit the rows that `UPDATE` and `DELETE` change, and the `WITH CHECK` conditions check each new row after the `BEFORE` triggers and before the constraints, also in the partitions of a partitioned table. The detail of an error does not show the values of a row that the policies hide (#770).
 - Row-level security policies now filter the rows that a query reads. Permissive and restrictive policies, the policy roles, `FORCE ROW LEVEL SECURITY`, views, the recursion error and `row_security = off` work as in PostgreSQL (#769).
 
+### Fixed
+
+- A page hit in the buffer pool no longer writes a cache line that all threads share. With 10 threads, an optimistic hit in the window costs 27 ns, not 470 ns (#773).
+
 ## 0.2.0 (2026-10-26)
 
 ### Added
