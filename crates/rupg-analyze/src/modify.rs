@@ -132,6 +132,7 @@ impl Analyzer<'_> {
             from,
             targets: targets(&columns, row),
             filter,
+            barrier: self.auto_view_barrier(),
             ..Query::default()
         };
         query.targets.extend(carried_targets(carried));
@@ -342,6 +343,7 @@ impl Analyzer<'_> {
             targets.push(tid_target());
         }
         let mut query = Query {
+            barrier: self.auto_view_barrier(),
             relations: std::mem::take(&mut self.scope.relations),
             from,
             targets,

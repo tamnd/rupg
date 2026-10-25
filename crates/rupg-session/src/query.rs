@@ -292,6 +292,7 @@ fn use_types(catalog: &Catalog) {
                     retset: f.retset,
                     volatile: f.volatile,
                     cost: f.cost,
+                    leakproof: f.leakproof,
                     kind: f.kind,
                     rettype: f.rettype,
                     argtypes: f.argtypes.clone(),

@@ -78,7 +78,7 @@ pub use expr::{
     JsonCtorKind, JsonEncoding, JsonExpr, JsonExprOp, JsonFormat, JsonFormatKind, JsonItemType,
     JsonReturning, JsonTable, JsonTableColumn, JsonTablePlan, JsonTableScan, JsonValue,
     JsonWrapper, NamedArg, NullTreatment, PlaceHolder, RowCompare, RowCompareKind, SqlValue,
-    SubLink, SubLinkKind, Subscript, Var, WindowFunc, XmlExpr, XmlOp,
+    SubLink, SubLinkKind, Subscript, Var, WindowFunc, XmlExpr, XmlOp, func_cost,
 };
 pub use from::{
     Column, FromFunction, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM, TableSample,

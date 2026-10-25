@@ -68,6 +68,8 @@ pub struct Query {
     pub pulled: usize,
     /// True when each condition of `WHERE` is a condition of the query above that the planner moved into the query, which had no `WHERE`. A `SELECT` of a `UNION ALL` with no `WHERE` is a member of the append relation, as `is_safe_append_member` lets it.
     pub pushed: bool,
+    /// For an `UPDATE` or a `DELETE` of a view, the number of the parts of `AND` of the condition of each view with `security_barrier`, the inner view first. These conditions come first in [`Query::filter`], and they have the `security_level` of `securityQuals`: the conditions of a view run before the conditions of the views above it and of the statement, as `order_qual_clauses` orders them.
+    pub barrier: Vec<usize>,
     /// The queries of `preprocess_minmax_aggregates` for a query whose aggregate calls are each `min` or `max` of one table, which the planner can run as an `InitPlan` that reads the first row of an index.
     pub minmax: Option<Box<MinMax>>,
     /// `constraintDeps`: the OIDs of the primary keys that make columns of `GROUP BY` queries valid, which a view depends on.
@@ -394,6 +396,7 @@ impl Analyzer<'_> {
             out_args: Vec::new(),
             pulled: 0,
             pushed: false,
+            barrier: Vec::new(),
             minmax: None,
             constraint_deps,
             shown: None,

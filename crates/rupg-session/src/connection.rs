@@ -4470,6 +4470,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/fqcost.test")));
     }
 
+    /// The executor runs the conditions of `WHERE` in the order of their costs, as `order_qual_clauses` orders them, and the conditions of a view with `security_barrier` of an `UPDATE` or a `DELETE` first, but for a cheap leakproof condition. `connection/qorder.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn qorder() {
+        big_stack(|| script(include_str!("connection/qorder.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {
