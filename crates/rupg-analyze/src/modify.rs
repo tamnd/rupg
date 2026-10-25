@@ -407,7 +407,7 @@ impl Analyzer<'_> {
         let table = self.scope.relations.first().map_or(0, |r| r.oid);
         let var =
             |attnum, ty| Expr::new(ExprKind::Var(Var { relation: 0, attnum, levels_up: 0 }), ty);
-        let args = vec![cursor, var(TABLE_OID_ATTNUM, oid::OID), var(-1, oid::TID)];
+        let args = vec![cursor, var(TABLE_OID_ATTNUM, oid::OID), var(CTID_ATTNUM, oid::INT8)];
         Ok(Expr::new(ExprKind::CurrentOf(Box::new(CurrentOf { table, args })), oid::BOOL))
     }
 

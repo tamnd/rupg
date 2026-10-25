@@ -2056,8 +2056,11 @@ impl Analyzer<'_> {
             )
             .at_opt(at));
         }
-        // The condition of a trigger names the system columns of the row, and `CREATE TRIGGER` gives the error for a `BEFORE` trigger.
-        if name == "ctid" && self.kind != Kind::TriggerWhen {
+        // The condition of a trigger names the system columns of the row, and `CREATE TRIGGER` gives the error for a `BEFORE` trigger. A table of the catalog has no IDs of the versions of its rows.
+        if name == "ctid"
+            && self.kind != Kind::TriggerWhen
+            && entry.oid < rupg_catalog::FIRST_NORMAL_OID
+        {
             return Err(not_yet("the system column \"ctid\"", at));
         }
         let var = Var { relation, attnum, levels_up: level };
