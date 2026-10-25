@@ -508,8 +508,9 @@ impl Analyzer<'_> {
                 )
                 .at_opt(place(again.location)));
             }
-            // A statement that changes data runs once, so only the statement at the top can have it.
-            if !matches!(cte.ctequery, Some(Node::SelectStmt(_))) && !self.outer.is_empty() {
+            // A statement that changes data runs once, so only the statement at the top can have it. The action of a rule that `CREATE RULE` reads is at the top below the range table of `old` and `new`.
+            let top = usize::from(self.rule.defining);
+            if !matches!(cte.ctequery, Some(Node::SelectStmt(_))) && self.outer.len() > top {
                 return Err(Error::new(
                     SqlState::FEATURE_NOT_SUPPORTED,
                     "WITH clause containing a data-modifying statement must be at the top level",

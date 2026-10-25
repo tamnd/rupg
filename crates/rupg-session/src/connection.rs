@@ -4784,6 +4784,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vrules2.test")));
     }
 
+    /// More of the rules regression test: rules and views, the ON SELECT rules that PostgreSQL does not allow, `ALTER RULE ... RENAME`, and rules with `FOR UPDATE`. `connection/vrules3.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vrules3() {
+        big_stack(|| script(include_str!("connection/vrules3.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {
