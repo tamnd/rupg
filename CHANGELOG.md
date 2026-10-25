@@ -11,7 +11,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - `UPDATE ... SET (a, b) = (SELECT ...)` runs, also in `ON CONFLICT DO UPDATE` and `MERGE`. The subquery runs once for each row, no row gives nulls, and a second row is an error. `EXPLAIN` shows the subplan as `multiexpr_1`. A subquery that gives one value now stops at its second row, as in PostgreSQL, so a volatile function in it runs no more often than in PostgreSQL (#684).
 - `MERGE` into an automatically updatable view writes the base table of the view, as an `UPDATE`, an `INSERT` or a `DELETE` of the view does. The conditions of the view limit the rows of the target, so a row that the view does not show is not matched. `WITH CHECK OPTION` checks the new rows of the inserts and the updates, and the defaults of the view apply. The errors of a view that is not updatable, of a column that is not updatable and of a view with `INSTEAD OF` triggers for some actions but not all are those of PostgreSQL (#686).
 - `MERGE` into a view with `INSTEAD OF` triggers for all its actions calls the trigger of the action of each row, as an `INSERT`, an `UPDATE` or a `DELETE` of the view does. A trigger that gives a null row skips the action, and `RETURNING` shows the row that the trigger gave (#687).
-- `MERGE` with only `DO NOTHING` actions now runs on any view, also on a view that is not automatically updatable. It reads the view and fires no triggers, as PostgreSQL does (#NNN).
+- `MERGE` with only `DO NOTHING` actions now runs on any view, also on a view that is not automatically updatable. It reads the view and fires no triggers, as PostgreSQL does (#689).
 
 ### Fixed
 
