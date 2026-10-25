@@ -6,7 +6,8 @@
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{
-    CmdType, List, MergeMatchKind, MergeStmt, MergeSupportFunc, MergeWhenClause, Node, RangeVar,
+    CmdType, List, MergeMatchKind, MergeStmt, MergeSupportFunc, MergeWhenClause, Node,
+    OverridingKind, RangeVar,
 };
 use rupg_types::{Value, oid};
 
@@ -15,7 +16,7 @@ use crate::agg::Kind;
 use crate::coerce::AtOpt;
 use crate::expr::{Expr, ExprKind, Var};
 use crate::from::{Column, FromItem, Join, JoinKind, Relation};
-use crate::insert::{Foreign, Write, WriteKind, targets, with_checks};
+use crate::insert::{Foreign, Given, Write, WriteKind, targets, with_checks};
 use crate::modify::{carried_targets, old_row, set_columns, table_oid_target, tid_target};
 use crate::perm::{ACL_DELETE, ACL_INSERT, ACL_SELECT, ACL_UPDATE};
 use crate::returning::rewrite;
@@ -65,6 +66,33 @@ pub struct Merge {
     pub update_foreign: Vec<Foreign>,
     /// The foreign keys that a deleted row checks.
     pub delete_foreign: Vec<Foreign>,
+    /// The form of the statement before the join, when the analysis keeps it for a deparse.
+    pub def: Option<Box<MergeDef>>,
+}
+
+/// A `MERGE` as `transformMergeStmt` gives it, before `transform_MERGE_to_join` joins the source and the target table, which `get_merge_query_def` shows.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MergeDef {
+    /// The relations of the statement. The target table is the relation 0.
+    pub relations: Vec<Relation>,
+    /// The item of `USING`.
+    pub source: FromItem,
+    /// The condition of `ON`.
+    pub on: Expr,
+    /// The `WHEN` clauses in the order of the statement.
+    pub clauses: Vec<MergeClauseDef>,
+}
+
+/// A `WHEN` clause of a [`MergeDef`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct MergeClauseDef {
+    pub kind: MatchKind,
+    pub command: MergeCommand,
+    pub condition: Option<Expr>,
+    /// The columns of `INSERT` with their values, or the items of `SET` of `UPDATE`, as [`Write::set_def`] has them. A value is `None` for `DEFAULT`.
+    pub items: Vec<(i16, Option<Expr>)>,
+    /// `OVERRIDING SYSTEM VALUE` or `OVERRIDING USER VALUE` of `INSERT`.
+    pub overriding: OverridingKind,
 }
 
 /// A `WHEN` clause after the analysis of its parts, before the analyzer knows all the carried values.
@@ -73,6 +101,8 @@ struct Parts {
     command: MergeCommand,
     condition: Option<Expr>,
     row: Vec<Expr>,
+    /// The clause before the analyzer carries the values of the source, when the analysis keeps it.
+    def: Option<MergeClauseDef>,
 }
 
 /// The action of a `WHEN` clause.
@@ -152,6 +182,8 @@ impl Analyzer<'_> {
         let source = self.merge_from(rv, source)?;
         let on = self.with_kind(Kind::JoinOn, |a| a.transform(s.joinCondition.as_ref()))?;
         let on = self.coerce_to_boolean(on, "JOIN/ON")?;
+        let keep = self.keep_source && self.auto_view.is_none();
+        let kept = keep.then(|| (source.clone(), on.clone()));
         let (returning, mut carried) = match s.returningClause.as_deref() {
             None => (None, Vec::new()),
             Some(clause) => {
@@ -189,6 +221,9 @@ impl Analyzer<'_> {
             };
             self.set_namespace(full);
             let mut part = part?;
+            if !keep {
+                part.def = None;
+            }
             // A column of the source becomes a carried value, which is the relation 1 of the query of the clause.
             let mut change = |expr: &mut Expr, depth: usize| {
                 let ExprKind::Var(var) = expr.kind else { return };
@@ -227,6 +262,14 @@ impl Analyzer<'_> {
             .ok_or_else(|| Error::internal("a MERGE with no table"))?;
         // The query of a clause reads the row of the join, and not the query of a view.
         target.subquery = None;
+        let def = kept.map(|(source, on)| {
+            Box::new(MergeDef {
+                relations: self.scope.relations.clone(),
+                source,
+                on,
+                clauses: parts.iter().filter_map(|p| p.def.clone()).collect(),
+            })
+        });
         let mut merge_clauses = Vec::with_capacity(parts.len());
         for part in parts {
             let writes = matches!(part.command, MergeCommand::Insert | MergeCommand::Update);
@@ -364,6 +407,7 @@ impl Analyzer<'_> {
                     insert_foreign,
                     update_foreign,
                     delete_foreign,
+                    def,
                 }),
                 recheck,
                 updated: crate::modify::with_extra_updated(updated, &generated),
@@ -397,29 +441,39 @@ impl Analyzer<'_> {
                 Some(self.coerce_to_boolean(expr, "WHEN")?)
             }
         };
+        let mut items = Vec::new();
         let (command, row) = match clause.commandType {
             CmdType::CMD_INSERT => {
                 self.swap_auto_view_defaults();
-                let row = self.merge_insert(clause, table, name, columns);
+                let row = self.merge_insert(clause, table, name, columns, &mut items);
                 self.swap_auto_view_defaults();
                 (MergeCommand::Insert, row?)
             }
-            CmdType::CMD_UPDATE => {
-                (MergeCommand::Update, self.update_row(rv, table, name, columns, list, None)?)
-            }
+            CmdType::CMD_UPDATE => (
+                MergeCommand::Update,
+                self.update_row(rv, table, name, columns, list, Some(&mut items))?,
+            ),
             CmdType::CMD_DELETE => (MergeCommand::Delete, Vec::new()),
             _ => (MergeCommand::Nothing, Vec::new()),
         };
-        Ok(Parts { kind, command, condition, row })
+        let def = Some(MergeClauseDef {
+            kind,
+            command,
+            condition: condition.clone(),
+            items,
+            overriding: clause.r#override,
+        });
+        Ok(Parts { kind, command, condition, row, def })
     }
 
-    /// The new row of an `INSERT` action of a `MERGE`: the expressions of `VALUES` for the columns that the action gives, and the defaults of the other columns.
+    /// The new row of an `INSERT` action of a `MERGE`: the expressions of `VALUES` for the columns that the action gives, and the defaults of the other columns. `kept` gets the columns of `VALUES` with their values, as [`MergeClauseDef::items`] has them.
     fn merge_insert(
         &mut self,
         clause: &MergeWhenClause,
         table: u32,
         name: &str,
         columns: &[Column],
+        kept: &mut Vec<(i16, Option<Expr>)>,
     ) -> Result<Vec<Expr>> {
         let given = match self.auto_view_targets(&clause.targetList, columns.len())? {
             Some(given) => given,
@@ -441,6 +495,12 @@ impl Analyzer<'_> {
                     "set-valued function called in context that cannot accept a set",
                 )
                 .at_opt(self.srfs.1));
+            }
+            // The targets of an updatable view are the columns of its base relation, and such a `MERGE` keeps no definition.
+            if self.auto_view.is_none() {
+                let values = self.kept_row(&items, columns, &given)?;
+                let attnum = |(index, _, _): &Given| i16::try_from(index + 1).unwrap_or(i16::MAX);
+                kept.extend(given.iter().map(attnum).zip(values));
             }
             let explicit = !clause.targetList.is_empty();
             self.insert_row(items, table, columns, &given, explicit, clause.r#override)?

@@ -4796,6 +4796,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vrules4.test")));
     }
 
+    /// The rules regression test up to the rules that `ALTER TABLE` disables, with `pg_get_functiondef` of the settings of a function and of a `MERGE`, the functions of `pg_get_*def` for objects that do not exist and `MERGE` on a table with rules. `\sf` is `pg_get_functiondef` here. `connection/vrules5.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vrules5() {
+        big_stack(|| script(include_str!("connection/vrules5.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

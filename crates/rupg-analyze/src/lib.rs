@@ -89,7 +89,7 @@ pub use insert::{
     ViewCheck, Write, WriteKind,
 };
 pub use locking::{RowMark, check_outer_joins, first_row_mark, locked_tables};
-pub use merge::{MatchKind, Merge, MergeClause, MergeCommand};
+pub use merge::{MatchKind, Merge, MergeClause, MergeClauseDef, MergeCommand, MergeDef};
 pub use perm::{PermInfo, option_on};
 pub use plpgsql::{
     Variable, Variables, analyze_assign, analyze_assign_part, analyze_with, column_type,
