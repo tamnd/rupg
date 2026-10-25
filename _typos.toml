@@ -32,6 +32,10 @@ abd = "abd"
 ands = "ands"
 # The operator families `alt_opf1` to `alt_opf19` of the test `alter_generic.sql` of PostgreSQL, in `opclass.test` and `opclass_alter.test`.
 opf = "opf"
+# The view `vview` of the test `rules.sql` of PostgreSQL, in `vrules2.test`.
+vview = "vview"
+# The view `sav` of the test of `= ANY` in a view definition, in `vsaop.test`.
+sav = "sav"
 
 # Test inputs that are wrong on purpose.
 [default]
