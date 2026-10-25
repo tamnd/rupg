@@ -50,6 +50,8 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
         let mut conflicts = Vec::new();
         conflict_scopes(&plan.root, &mut conflicts);
         let mut excluded = vec![None; count];
+        let mut kept = Vec::new();
+        subquery_scans(&plan.root, &mut kept);
         for &s in &plan.order {
             let Some(scope) = plan.scopes.get(s) else { continue };
             if spaces[s].is_some() {
@@ -79,7 +81,8 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
                     excluded[s] = Some(super::query::unique_name("excluded".into(), &mut used));
                 }
             }
-            spaces[s] = Some(d.namespace_in(scope.query, &mut used, true));
+            let hidden = unscanned(plan, s, &kept);
+            spaces[s] = Some(d.namespace_in(scope.query, &mut used, true, &hidden));
             // `ApplyRetrieveRule`: the entry of a view with triggers `INSTEAD OF` that the statement writes comes after the entries of the query.
             if let Some(write) =
                 scope.query.write.as_ref().filter(|w| w.instead && scope.target.is_none())
@@ -98,7 +101,7 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
             .enumerate()
             .map(|(s, space)| {
                 space.unwrap_or_else(|| {
-                    d.namespace_in(plan.scopes[s].query, &mut HashMap::new(), true)
+                    d.namespace_in(plan.scopes[s].query, &mut HashMap::new(), true, &[])
                 })
             })
             .collect();
@@ -177,6 +180,27 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
         d.subplans.clone_from(&self.subplans);
         Ok(d)
     }
+}
+
+/// `set_rtable_names` with the `rels_used` of `ExplainPreScanNode`: the subqueries of `FROM` of the scope `s` whose `Subquery Scan` the plan does not keep, as `trivial_subqueryscan` takes it out, take no name, because no node of the plan scans them. `kept` has the scope and the relation of each `Subquery Scan`. A subquery of a set operation, and a subquery that is a set operation, keep their names.
+fn unscanned(plan: &Plan<'_>, s: usize, kept: &[(usize, usize)]) -> Vec<usize> {
+    let outer = plan.scopes[s].query;
+    if outer.set_op.is_some() {
+        return Vec::new();
+    }
+    plan.scopes
+        .iter()
+        .filter(|scope| {
+            scope.parent == Some(s) && scope.leaf.is_none() && scope.query.set_op.is_none()
+        })
+        .filter_map(|scope| {
+            outer
+                .relations
+                .iter()
+                .position(|rel| rel.subquery.as_deref().is_some_and(|q| ptr::eq(q, scope.query)))
+        })
+        .filter(|r| !kept.contains(&(s, *r)))
+        .collect()
 }
 
 /// The subqueries of `FROM` whose `Subquery Scan` the plan does not keep, as `trivial_subqueryscan` takes the scan out of the plan. A column of such a subquery shows the target of the subquery with the names of the subquery, so the inner subqueries come first. A subquery of a set operation does not count.

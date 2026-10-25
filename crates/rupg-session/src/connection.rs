@@ -4500,6 +4500,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vleak.test")));
     }
 
+    /// `EXPLAIN` names only the relations that the plan scans, as `select_rtable_names_for_explain` passes `rels_used` to `set_rtable_names`: a subquery or a view whose `Subquery Scan` the plan does not keep takes no name, so a relation in it can take the alias. A subquery of `UNION ALL` keeps its name. `connection/valias.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn valias() {
+        big_stack(|| script(include_str!("connection/valias.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {
