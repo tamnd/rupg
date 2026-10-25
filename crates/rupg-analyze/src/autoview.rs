@@ -10,7 +10,7 @@ use rupg_sql::nodes::{List, Node, RangeVar};
 use rupg_types::{Value, oid};
 
 use crate::Analyzer;
-use crate::expr::{CastForm, Expr, ExprKind};
+use crate::expr::{BoolOp, CastForm, Expr, ExprKind};
 use crate::from::{Column, FromItem, Relation};
 use crate::insert::{Given, INSTEAD_ROW, WriteKind, not_yet, trigger_event};
 use crate::merge::MergeCommand;
@@ -696,6 +696,17 @@ impl Analyzer<'_> {
         let Some(auto) = &self.auto_view else { return filter };
         let parts = auto.barrier.iter().chain(&auto.quals).cloned().chain(filter);
         crate::rules::and_filter(None, parts.collect())
+    }
+
+    /// The number of the parts of `AND` of the condition of each view of `security_barrier` at the start of [`Self::auto_view_filter`], for [`Query::barrier`].
+    pub(crate) fn auto_view_barrier(&self) -> Vec<usize> {
+        fn count(expr: &Expr) -> usize {
+            match &expr.kind {
+                ExprKind::Bool(BoolOp::And, args) => args.iter().map(count).sum(),
+                _ => 1,
+            }
+        }
+        self.auto_view.as_ref().map_or(Vec::new(), |auto| auto.barrier.iter().map(count).collect())
     }
 
     /// The items of `SET` of an `UPDATE` of an automatically updatable view, with the column of the base relation in place of each column of the view, or `None` for another write. The list comes with the error of an item whose column the view does not have, and with the error of a column of the view that is not updatable, which `rewriteTargetView` gives after the analysis.

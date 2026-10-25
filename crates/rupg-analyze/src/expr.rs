@@ -1,5 +1,6 @@
 //! `Expr`, an expression of the query tree with its type, as the `Expr` nodes of `primnodes.h` after `transformExpr`.
 
+use rupg_pgcatalog::builtin;
 use rupg_types::Value;
 
 use crate::select::Query;
@@ -800,6 +801,18 @@ impl Expr {
         }
     }
 
+    /// The cost of the calls of functions and operators in the node of this expression, without its children, in units of `cpu_operator_cost`, as `cost_qual_eval_walker` adds it. A call, an operator, `NULLIF` and `IS DISTINCT FROM` cost the `procost` of their function, as `add_function_cost` adds it.
+    pub fn own_cost(&self) -> f64 {
+        match &self.kind {
+            ExprKind::Func(f) => func_cost(f.oid),
+            ExprKind::NullIf { equal, .. } | ExprKind::Distinct { equal, .. } => func_cost(*equal),
+            ExprKind::ScalarArrayOp { .. } | ExprKind::MinMax { .. } => 1.0,
+            // The input function of the new type and the output function of the old type.
+            ExprKind::CoerceViaIo(..) => 2.0,
+            _ => 0.0,
+        }
+    }
+
     /// The expressions that this expression has as its arguments.
     pub fn children(&self) -> Vec<&Expr> {
         match &self.kind {
@@ -1114,4 +1127,9 @@ impl Expr {
             (a, b) => a.or(b),
         }
     }
+}
+
+/// `procost` of the function `func`, as `get_func_cost` reads it, or 1 for a function that is not known.
+pub fn func_cost(func: u32) -> f64 {
+    builtin::proc_by_oid(func).map_or(1.0, |p| f64::from(p.cost))
 }

@@ -77,6 +77,7 @@ pub fn execute_params(exprs: &List, types: &[u32], env: &dyn Env) -> Result<Quer
         out_args: Vec::new(),
         pulled: 0,
         pushed: false,
+        barrier: Vec::new(),
         minmax: None,
         constraint_deps: Vec::new(),
         shown: None,

@@ -62,6 +62,8 @@ pub struct ProcRow {
     pub volatile: u8,
     /// `procost`: the cost of a call in units of `cpu_operator_cost`.
     pub cost: f32,
+    /// `proleakproof`: the function gives no information about its arguments other than its result.
+    pub leakproof: bool,
     pub nargs: i16,
     pub nargdefaults: i16,
     pub rettype: u32,
@@ -625,6 +627,7 @@ fn load_procs() -> Vec<ProcRow> {
     let (variadic, kind, strict) = (r.oid("provariadic"), r.char("prokind"), r.bool("proisstrict"));
     let (retset, volatile, cost) =
         (r.bool("proretset"), r.char("provolatile"), r.float4("procost"));
+    let leakproof = r.bool("proleakproof");
     let (nargs, nargdefaults, rettype) =
         (r.int2("pronargs"), r.int2("pronargdefaults"), r.oid("prorettype"));
     let argtypes = match r.batch("proargtypes").values {
@@ -644,6 +647,7 @@ fn load_procs() -> Vec<ProcRow> {
             retset: retset[i],
             volatile: volatile[i],
             cost: cost[i],
+            leakproof: leakproof[i],
             nargs: nargs[i],
             nargdefaults: nargdefaults[i],
             rettype: rettype[i],
@@ -1164,6 +1168,8 @@ pub struct SessionFunction {
     pub volatile: u8,
     /// `procost`, a positive number.
     pub cost: f32,
+    /// `proleakproof`.
+    pub leakproof: bool,
     /// `prokind`: `f` for a function, `p` for a procedure or `a` for an aggregate.
     pub kind: u8,
     pub rettype: u32,
@@ -1352,6 +1358,7 @@ fn function_row(new: &SessionFunction) -> ProcRow {
         retset: new.retset,
         volatile: new.volatile,
         cost: new.cost,
+        leakproof: new.leakproof,
         nargs: i16::try_from(new.argtypes.len()).unwrap_or(i16::MAX),
         nargdefaults: new.nargdefaults,
         rettype: new.rettype,

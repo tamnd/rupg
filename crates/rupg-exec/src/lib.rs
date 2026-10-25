@@ -843,7 +843,7 @@ fn inherited(outer: &[Frame<'_>]) -> Vec<*const Expr> {
 }
 
 /// True when a subquery reads a column of a query outside it, so that it must run again for each row of that query.
-fn correlated(query: &Query) -> bool {
+pub(crate) fn correlated(query: &Query) -> bool {
     query.all_exprs(0).iter().any(|(e, depth)| {
         e.find(*depth, &mut |e, depth| match e.kind {
             ExprKind::Var(var) if var.levels_up > depth => Some(()),

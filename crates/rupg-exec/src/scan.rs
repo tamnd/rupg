@@ -759,6 +759,68 @@ fn conjuncts<'q>(expr: &'q Expr, out: &mut Vec<&'q Expr>) {
     }
 }
 
+/// `order_qual_clauses`: the conditions in the order of their security levels, and in the order of their costs in each level. The first conditions are the conditions of the views with `security_barrier`, with the number of conditions of each view in `barrier`, and the other conditions come after them. A condition that is leakproof and costs less than 10 has the level 0, as it can give no information about the rows that a view hides. The sort is stable.
+fn order_quals<'q>(filter: Vec<&'q Expr>, barrier: &[usize]) -> Vec<&'q Expr> {
+    let mut levels =
+        barrier.iter().enumerate().flat_map(|(level, &n)| std::iter::repeat_n(level, n));
+    let mut items: Vec<(usize, f64, &Expr)> = filter
+        .into_iter()
+        .map(|expr| {
+            let cost = qual_cost(expr);
+            let level = levels.next().unwrap_or(barrier.len());
+            let level = if cost < 10.0 && !leaky(expr) { 0 } else { level };
+            (level, cost, expr)
+        })
+        .collect();
+    items.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    items.into_iter().map(|(_, _, expr)| expr).collect()
+}
+
+/// `contain_leaked_vars`: true when the expression can give information about a column of the query other than through its result, as a call of a function that is not leakproof with a column in its arguments does. An expression of a kind that the check does not know is leaky.
+fn leaky(expr: &Expr) -> bool {
+    let func = match &expr.kind {
+        ExprKind::CurrentOf(_) => return false,
+        ExprKind::Var(_)
+        | ExprKind::Const(_)
+        | ExprKind::Param(_)
+        | ExprKind::Array { .. }
+        | ExprKind::FieldSelect(..)
+        | ExprKind::FieldStore(_)
+        | ExprKind::NamedArg(_)
+        | ExprKind::Bool(..)
+        | ExprKind::Relabel(..)
+        | ExprKind::Case(_)
+        | ExprKind::CaseTest
+        | ExprKind::Row(..)
+        | ExprKind::SqlValue(_)
+        | ExprKind::NullTest(..)
+        | ExprKind::BooleanTest(..) => None,
+        ExprKind::Func(f) => Some(f.oid),
+        ExprKind::NullIf { equal, .. } | ExprKind::Distinct { equal, .. } => Some(*equal),
+        ExprKind::ScalarArrayOp { func, .. } => Some(*func),
+        _ => return true,
+    };
+    if let Some(func) = func
+        && !rupg_pgcatalog::builtin::proc_by_oid(func).is_some_and(|p| p.leakproof)
+        && !relations_of(expr).is_empty()
+    {
+        return true;
+    }
+    expr.children().into_iter().any(leaky)
+}
+
+/// The cost of a condition for each row for `order_qual_clauses`, in units of `cpu_operator_cost`, as `cost_qual_eval` finds it: the costs of the calls of functions and operators, outside the subqueries. A subquery that reads no column of the query runs once before the scan, as an `InitPlan` does, and costs nothing. The executor does not know the cost of the plan of a subquery that runs for each row, so it takes the cost of [`CORRELATED`].
+fn qual_cost(expr: &Expr) -> f64 {
+    let own = match &expr.kind {
+        ExprKind::SubLink(link) if crate::correlated(&link.query) => CORRELATED,
+        _ => expr.own_cost(),
+    };
+    own + expr.children().into_iter().map(qual_cost).sum::<f64>()
+}
+
+/// The cost of a subquery that runs for each row, for [`qual_cost`]: more than a call of a function in PL/pgSQL, which costs 100, as the scan of a small table costs more.
+const CORRELATED: f64 = 10_000.0;
+
 /// A join: the tuples of both sides, the condition, the kind and the relations of each side.
 struct JoinInput<'a> {
     left: Vec<Vec<usize>>,
@@ -827,6 +889,7 @@ pub(crate) fn tuples(
     if let Some(expr) = &query.filter {
         conjuncts(expr, &mut filter);
     }
+    let filter = order_quals(filter, &query.barrier);
     let items: Vec<(&FromItem, Vec<usize>)> = query
         .from
         .iter()

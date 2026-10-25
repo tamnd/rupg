@@ -793,7 +793,7 @@ pub(crate) fn qual_costs<'a>(
             out.0 += startup;
             out.1 += per_row;
         } else {
-            *calls += exprs::own_calls(expr);
+            *calls += expr.own_cost();
         }
         for child in expr.children() {
             walk(child, subplans, calls, out);
@@ -814,7 +814,7 @@ fn array_op_cost(func: u32, any: bool, args: &[Expr]) -> (f64, f64) {
     let Some(array) = args.get(1) else { return (0.0, CPU_OPERATOR) };
     let array = strip_array_coercion(array);
     let items = array_length(array);
-    let op = CPU_OPERATOR * exprs::func_cost(func);
+    let op = CPU_OPERATOR * rupg_analyze::func_cost(func);
     if hashed_array_op(func, any, args.first().map_or(0, |a| a.ty), array) {
         return (items * CPU_OPERATOR, CPU_OPERATOR + op);
     }

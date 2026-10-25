@@ -1,0 +1,81 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE qo (id int, person text, visibility text);
+CREATE TABLE
+> INSERT INTO qo VALUES (1, 'Tom', 'public'), (2, 'Dick', 'private'), (3, 'Harry', 'public');
+INSERT 0 3
+> CREATE FUNCTION snoop(anyelement) RETURNS boolean AS $$ BEGIN RAISE NOTICE 'snooped value: %', $1; RETURN true; END; $$ LANGUAGE plpgsql COST 0.000001;
+CREATE FUNCTION
+> CREATE FUNCTION dear(anyelement) RETURNS boolean AS $$ BEGIN RAISE NOTICE 'dear value: %', $1; RETURN true; END; $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT count(*) FROM qo WHERE dear(person) AND snoop(person);
+fields count:20:8:-1
+NOTICE 00000 snooped value: Tom (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+NOTICE 00000 dear value: Tom (PL/pgSQL function dear(anyelement) line 1 at RAISE)
+NOTICE 00000 snooped value: Dick (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+NOTICE 00000 dear value: Dick (PL/pgSQL function dear(anyelement) line 1 at RAISE)
+NOTICE 00000 snooped value: Harry (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+NOTICE 00000 dear value: Harry (PL/pgSQL function dear(anyelement) line 1 at RAISE)
+row 3
+SELECT 1
+> SELECT count(*) FROM qo WHERE dear(person) AND visibility = 'public';
+fields count:20:8:-1
+NOTICE 00000 dear value: Tom (PL/pgSQL function dear(anyelement) line 1 at RAISE)
+NOTICE 00000 dear value: Harry (PL/pgSQL function dear(anyelement) line 1 at RAISE)
+row 2
+SELECT 1
+> SELECT count(*) FROM qo WHERE 10 / (id - 2) > 0 AND id <> 2;
+fields count:20:8:-1
+row 1
+SELECT 1
+> SELECT count(*) FROM qo a WHERE (SELECT dear(b.person) FROM qo b WHERE b.id = a.id) AND snoop(a.person);
+fields count:20:8:-1
+NOTICE 00000 snooped value: Tom (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+NOTICE 00000 dear value: Tom (PL/pgSQL function dear(anyelement) line 1 at RAISE)
+NOTICE 00000 snooped value: Dick (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+NOTICE 00000 dear value: Dick (PL/pgSQL function dear(anyelement) line 1 at RAISE)
+NOTICE 00000 snooped value: Harry (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+NOTICE 00000 dear value: Harry (PL/pgSQL function dear(anyelement) line 1 at RAISE)
+row 3
+SELECT 1
+> CREATE VIEW qv AS SELECT * FROM qo WHERE visibility = 'public';
+CREATE VIEW
+> UPDATE qv SET person = person WHERE snoop(person);
+NOTICE 00000 snooped value: Tom (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+NOTICE 00000 snooped value: Dick (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+NOTICE 00000 snooped value: Harry (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+UPDATE 2
+> DELETE FROM qv WHERE snoop(person) AND id > 100;
+NOTICE 00000 snooped value: Dick (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+NOTICE 00000 snooped value: Tom (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+NOTICE 00000 snooped value: Harry (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+DELETE 0
+> CREATE VIEW qsb WITH (security_barrier) AS SELECT * FROM qo WHERE visibility = 'public';
+CREATE VIEW
+> UPDATE qsb SET person = person WHERE snoop(person);
+NOTICE 00000 snooped value: Tom (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+NOTICE 00000 snooped value: Harry (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+UPDATE 2
+> DELETE FROM qsb WHERE snoop(person) AND id > 100;
+DELETE 0
+> CREATE VIEW qsb2 AS SELECT * FROM qsb WHERE dear(id);
+CREATE VIEW
+> UPDATE qsb2 SET person = person WHERE snoop(person);
+NOTICE 00000 snooped value: Tom (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+NOTICE 00000 dear value: 1 (PL/pgSQL function dear(anyelement) line 1 at RAISE)
+NOTICE 00000 snooped value: Harry (PL/pgSQL function snoop(anyelement) line 1 at RAISE)
+NOTICE 00000 dear value: 3 (PL/pgSQL function dear(anyelement) line 1 at RAISE)
+UPDATE 2
+> DROP VIEW qsb2;
+DROP VIEW
+> DROP VIEW qsb;
+DROP VIEW
+> DROP VIEW qv;
+DROP VIEW
+> DROP TABLE qo;
+DROP TABLE
+> DROP FUNCTION snoop(anyelement);
+DROP FUNCTION
+> DROP FUNCTION dear(anyelement);
+DROP FUNCTION
