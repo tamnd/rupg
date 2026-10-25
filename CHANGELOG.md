@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.84 (2026-10-25)
+
 ### Added
 
 - A leaky condition on a view of `security_barrier` over a join runs only on the rows of the view. Before, the executor merged the view, and the condition ran in the scan of a table of the join, so it saw rows that the view hides (#723).
