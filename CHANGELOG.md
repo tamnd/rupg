@@ -6,7 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- `pg_snapshot` input rejects an `xmin` or an `xmax` whose low 32 bits are 0, such as 2^63, as `FullTransactionIdIsValid` does (#NNN).
+- `pg_snapshot` input rejects an `xmin` or an `xmax` whose low 32 bits are 0, such as 2^63, as `FullTransactionIdIsValid` does (#733).
 
 ## 0.1.85 (2026-10-25)
 
