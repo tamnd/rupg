@@ -994,9 +994,10 @@ impl Analyzer<'_> {
             WriteKind::Merge => 0,
         };
         self.target_perm = Some(self.add_perm(oid, required));
-        // `view_has_instead_trigger`: a `MERGE` with only `DO NOTHING` needs no trigger, and it reads the view as a view with triggers `INSTEAD OF` does.
+        // `view_has_instead_trigger`: a `MERGE` with only `DO NOTHING` needs no trigger, and it reads the view as a view with triggers `INSTEAD OF` does. `transformRuleStmt` does not check that the view of an action can be updated, as the rewrite of the action checks it.
         let auto = rel.kind == RelKind::View
             && !self.rule.rows
+            && !self.rule.defining
             && !self.view_has_instead_trigger(oid, kind);
         if !auto {
             return Ok((oid, name, columns));
