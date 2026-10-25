@@ -6,7 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- A rule action can be a SELECT, and the client gets its rows (#NNN).
+- A rule action can be a SELECT, and the client gets its rows (#753).
 - A rule can have the action `NOTIFY`. It runs once for each statement that fires the rule, and `pg_get_ruledef` shows it (#752).
 - `LISTEN`, `UNLISTEN`, `NOTIFY` and the functions `pg_notify`, `pg_listening_channels` and `pg_notification_queue_usage`. A commit sends each notification to the sessions of the database that listen on its channel, and a session sends them to its client before its next `ReadyForQuery` outside of a transaction block (#751).
 
