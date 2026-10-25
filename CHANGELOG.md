@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A leaky condition on a view of `security_barrier` over a join runs only on the rows of the view. Before, the executor merged the view, and the condition ran in the scan of a table of the join, so it saw rows that the view hides (#NNN).
 - `EXPLAIN` of a write through an automatically updatable view names the relation before each column, because the range table keeps the entry of the view, as `rewriteTargetView` does. The condition of the statement comes before the conditions of the views that are not `security_barrier`, as `AddQual` puts them (#722).
 - A view with `security_invoker` checks its tables as the current user also when a view of another owner reads it, as `RelationBuildRuleLock` gives `InvalidOid` to `setRuleCheckAsUser`. Before, the view outside gave its owner to them (#721).
 - A query can read `ctid` of a table of the user. The column gives the item pointer `(page,item)` of the version of the row, as `heap_getsysattr` does, so a view can show it, a condition can compare it with a `tid`, and `information_schema.columns` shows the column of a view as not updatable (#719).
