@@ -12,23 +12,30 @@ const MAX_FIELD_LEN: usize = 64;
 pub(crate) fn check(
     info: &Write,
     rows: Vec<Vec<Value>>,
+    policy: Vec<Option<Error>>,
     session: &dyn Session,
 ) -> Result<Vec<Vec<Value>>> {
-    if matches!(info.kind, WriteKind::Delete | WriteKind::Merge) || info.recheck.is_some() {
+    if !checks_now(info) {
         return Ok(rows);
     }
-    check_rows(info, info.kind, rows, session)
+    check_rows(info, info.kind, rows, policy, session)
 }
 
-/// The checks of [`check`] on new rows of the table, with the conditions of the check constraints after the columns. `kind` is the write of the rows: `WriteKind::Insert` or `WriteKind::Update` for the action of a `MERGE`, which tells when the partition constraint of a partition checks the row.
+/// True when [`check`] checks the rows of the write.
+pub(crate) fn checks_now(info: &Write) -> bool {
+    !matches!(info.kind, WriteKind::Delete | WriteKind::Merge) && info.recheck.is_none()
+}
+
+/// The checks of [`check`] on new rows of the table, with the conditions of the check constraints after the columns. `kind` is the write of the rows: `WriteKind::Insert` or `WriteKind::Update` for the action of a `MERGE`, which tells when the partition constraint of a partition checks the row. `policy` has the error of the checks of the policies of row-level security for each row that fails them, which comes before the errors of the constraints.
 pub(crate) fn check_rows(
     info: &Write,
     kind: WriteKind,
     rows: Vec<Vec<Value>>,
+    mut policy: Vec<Option<Error>>,
     session: &dyn Session,
 ) -> Result<Vec<Vec<Value>>> {
     let rel = session.catalog().and_then(|c| c.relation(info.table));
-    // The partition of each row of a partitioned table checks the row after the routing.
+    // The partition of each row of a partitioned table checks the row after the routing, also with the policies of the partitioned table.
     if rel.is_some_and(|r| r.kind == rupg_catalog::RelKind::Partitioned) {
         return Ok(rows);
     }
@@ -36,7 +43,7 @@ pub(crate) fn check_rows(
     let mut out = Vec::with_capacity(rows.len());
     let mut router = crate::partition::Router::default();
     let partition = rel.filter(|r| r.partition_of.is_some());
-    for mut row in rows {
+    for (at, mut row) in rows.into_iter().enumerate() {
         // `ExecUpdateAct` checks the partition constraint first.
         if kind == WriteKind::Update
             && let Some(rel) = partition
@@ -48,6 +55,10 @@ pub(crate) fn check_rows(
                 &info.modified,
                 session,
             )?);
+        }
+        // `ExecInsert` and `ExecUpdateAct` check the policies before the constraints.
+        if let Some(error) = policy.get_mut(at).and_then(Option::take) {
+            return Err(error);
         }
         if let Some(rel) = rel {
             // `ExecConstraints` checks the not-null constraints of the virtual generated columns after the others, with the generation expressions on the row.
@@ -161,6 +172,9 @@ pub fn failing_row(
     (relid, modified): (u32, &[i16]),
     session: &dyn Session,
 ) -> Result<Option<String>> {
+    if rupg_func::row_security_hides(relid, session) {
+        return Ok(None);
+    }
     let visible = rupg_func::shown_columns(relid, modified, session)?;
     let rel = session.catalog().and_then(|c| c.relation(relid));
     let (mut parts, mut names) = (Vec::with_capacity(row.len()), Vec::new());

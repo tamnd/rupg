@@ -80,6 +80,8 @@ pub struct Write {
     pub inherit: bool,
     /// The checks of `WITH CHECK OPTION` of the views of an `INSERT` or an `UPDATE` of an automatically updatable view.
     pub view_check: Option<ViewCheck>,
+    /// The checks of the policies of row-level security of an `INSERT` or an `UPDATE`.
+    pub policy_check: Option<PolicyCheck>,
     /// The number of automatically updatable views that the statement writes through. `rewriteTargetView` keeps the entry of each view in the range table and adds the entry of the relation under it.
     pub views: usize,
     /// The numbers of the columns that the statement gives values, as `ExecGetInsertedCols` and `ExecGetUpdatedCols` give them for the detail of a failing row. The plan fills them from the privileges of the query.
@@ -151,6 +153,15 @@ pub struct ViewCheck {
     pub query: Box<Query>,
     /// The names of the views, the inner view first, as `rewriteTargetView` puts each new check at the start of the list.
     pub views: Vec<String>,
+}
+
+/// The `WithCheckOption` items of the kinds `WCO_RLS_INSERT_CHECK` and `WCO_RLS_UPDATE_CHECK` of a write, which `ExecWithCheckOptions` checks on each new row after the triggers `BEFORE ... FOR EACH ROW` and before the constraints of the table.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PolicyCheck {
+    /// The query of the checks. It reads one relation, a new row with the columns of the table, and gives the condition of each check.
+    pub query: Box<Query>,
+    /// The name of the policy of each check, or `None` for the check of the permissive policies.
+    pub policies: Vec<Option<String>>,
 }
 
 /// `OnConflictExpr`: what an `INSERT` does for a new row with the key of a row that the table has.
@@ -587,6 +598,7 @@ impl Analyzer<'_> {
             instead: self.is_view(table),
             inherit: false,
             view_check: None,
+            policy_check: None,
             views: 0,
             modified: Vec::new(),
             insert_def,

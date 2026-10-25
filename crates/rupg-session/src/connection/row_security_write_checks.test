@@ -1,0 +1,129 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE ROLE regress_rls_u3;
+CREATE ROLE
+> CREATE TABLE rls_t3 (a int PRIMARY KEY, b text);
+CREATE TABLE
+> GRANT ALL ON rls_t3 TO regress_rls_u3;
+GRANT
+> CREATE TABLE rls_allow (b text);
+CREATE TABLE
+> INSERT INTO rls_allow VALUES ('ok'), ('fine');
+INSERT 0 2
+> GRANT SELECT ON rls_allow TO regress_rls_u3;
+GRANT
+> INSERT INTO rls_t3 VALUES (1, 'ok'), (2, 'fine'), (3, 'hidden');
+INSERT 0 3
+> ALTER TABLE rls_t3 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> CREATE POLICY p3 ON rls_t3 USING (b <> 'hidden') WITH CHECK (b IN (SELECT b FROM rls_allow));
+CREATE POLICY
+> CREATE FUNCTION rls_trig() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN IF NEW.b = ''fix'' THEN NEW.b := ''ok''; END IF; RETURN NEW; END';
+CREATE FUNCTION
+> CREATE TRIGGER t3b BEFORE INSERT OR UPDATE ON rls_t3 FOR EACH ROW EXECUTE FUNCTION rls_trig();
+CREATE TRIGGER
+> SET SESSION AUTHORIZATION regress_rls_u3;
+SET
+session_authorization=regress_rls_u3
+is_superuser=off
+> INSERT INTO rls_t3 VALUES (4, 'fix');
+INSERT 0 1
+> INSERT INTO rls_t3 VALUES (5, 'nope');
+ERROR 42501 new row violates row-level security policy for table "rls_t3"
+> INSERT INTO rls_t3 VALUES (1, 'ok');
+ERROR 23505 duplicate key value violates unique constraint "rls_t3_pkey"
+> INSERT INTO rls_t3 VALUES (3, 'ok');
+ERROR 23505 duplicate key value violates unique constraint "rls_t3_pkey"
+> INSERT INTO rls_t3 VALUES (6, 'fine') ON CONFLICT DO NOTHING;
+INSERT 0 1
+> INSERT INTO rls_t3 VALUES (3, 'fine') ON CONFLICT DO NOTHING;
+INSERT 0 0
+> UPDATE rls_t3 SET b = 'fix' WHERE a = 2;
+UPDATE 1
+> UPDATE rls_t3 SET b = 'nope' WHERE a = 2;
+ERROR 42501 new row violates row-level security policy for table "rls_t3"
+> UPDATE rls_t3 SET a = 1 WHERE a = 2;
+ERROR 23505 duplicate key value violates unique constraint "rls_t3_pkey"
+> SELECT * FROM rls_t3 ORDER BY a;
+fields a@rls_t3.1:23:4:-1,b@rls_t3.2:25:-1:-1
+row 1,ok
+row 2,ok
+row 4,ok
+row 6,fine
+SELECT 4
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> SELECT * FROM rls_t3 ORDER BY a;
+fields a@rls_t3.1:23:4:-1,b@rls_t3.2:25:-1:-1
+row 1,ok
+row 2,ok
+row 3,hidden
+row 4,ok
+row 6,fine
+SELECT 5
+> CREATE TABLE rls_p (a int, b text) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE rls_p1 PARTITION OF rls_p FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> CREATE TABLE rls_p2 PARTITION OF rls_p FOR VALUES FROM (10) TO (20);
+CREATE TABLE
+> GRANT ALL ON rls_p TO regress_rls_u3;
+GRANT
+> INSERT INTO rls_p VALUES (1, 'a'), (11, 'b'), (5, 'c'), (15, 'd');
+INSERT 0 4
+> ALTER TABLE rls_p ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> CREATE POLICY pp ON rls_p USING (a < 12) WITH CHECK (a < 14);
+CREATE POLICY
+> SET SESSION AUTHORIZATION regress_rls_u3;
+SET
+session_authorization=regress_rls_u3
+is_superuser=off
+> SELECT * FROM rls_p ORDER BY a;
+fields a@rls_p.1:23:4:-1,b@rls_p.2:25:-1:-1
+row 1,a
+row 5,c
+row 11,b
+SELECT 3
+> INSERT INTO rls_p VALUES (13, 'e');
+INSERT 0 1
+> INSERT INTO rls_p VALUES (14, 'f');
+ERROR 42501 new row violates row-level security policy for table "rls_p"
+> INSERT INTO rls_p VALUES (30, 'g');
+ERROR 23514 no partition of relation "rls_p" found for row
+> UPDATE rls_p SET a = a + 1 RETURNING *;
+ERROR 42501 new row violates row-level security policy for table "rls_p"
+> UPDATE rls_p SET a = 19 WHERE a = 2;
+UPDATE 0
+> DELETE FROM rls_p WHERE b = 'd';
+DELETE 0
+> DELETE FROM rls_p RETURNING *;
+fields a@rls_p.1:23:4:-1,b@rls_p.2:25:-1:-1
+row 1,a
+row 5,c
+row 11,b
+DELETE 3
+> SELECT * FROM rls_p1 ORDER BY a;
+ERROR 42501 permission denied for table rls_p1
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> SELECT * FROM rls_p ORDER BY a;
+fields a@rls_p.1:23:4:-1,b@rls_p.2:25:-1:-1
+row 13,e
+row 15,d
+SELECT 2
+> DROP TABLE rls_p;
+DROP TABLE
+> DROP TABLE rls_t3;
+DROP TABLE
+> DROP TABLE rls_allow;
+DROP TABLE
+> DROP FUNCTION rls_trig();
+DROP FUNCTION
+> DROP ROLE regress_rls_u3;
+DROP ROLE

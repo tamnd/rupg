@@ -1,0 +1,170 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE ROLE regress_rls_owner;
+CREATE ROLE
+> CREATE ROLE regress_rls_user;
+CREATE ROLE
+> CREATE TABLE rls_w (a int, b text, c int CHECK (c > 0));
+CREATE TABLE
+> ALTER TABLE rls_w OWNER TO regress_rls_owner;
+ALTER TABLE
+> GRANT ALL ON rls_w TO regress_rls_user;
+GRANT
+> INSERT INTO rls_w VALUES (1, 'one', 1), (2, 'two', 2), (3, 'three', 3), (4, 'four', 4), (5, 'five', 5), (6, 'six', 6);
+INSERT 0 6
+> ALTER TABLE rls_w ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> CREATE TABLE rls_ok (a int);
+CREATE TABLE
+> INSERT INTO rls_ok VALUES (1), (2), (3), (4), (10), (11);
+INSERT 0 6
+> GRANT SELECT ON rls_ok TO public;
+GRANT
+> SET SESSION AUTHORIZATION regress_rls_user;
+SET
+session_authorization=regress_rls_user
+is_superuser=off
+> INSERT INTO rls_w VALUES (7, 'seven', 7);
+ERROR 42501 new row violates row-level security policy for table "rls_w"
+> UPDATE rls_w SET b = 'x';
+UPDATE 0
+> DELETE FROM rls_w;
+DELETE 0
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> CREATE POLICY ps ON rls_w FOR SELECT USING (a <= 4);
+CREATE POLICY
+> CREATE POLICY pi ON rls_w FOR INSERT WITH CHECK (a > 0 AND a < 20);
+CREATE POLICY
+> CREATE POLICY pu ON rls_w FOR UPDATE USING (a % 2 = 0) WITH CHECK (a < 10);
+CREATE POLICY
+> CREATE POLICY pd ON rls_w FOR DELETE USING (a IN (SELECT a FROM rls_ok));
+CREATE POLICY
+> CREATE POLICY pr ON rls_w AS RESTRICTIVE FOR INSERT WITH CHECK (b <> 'bad');
+CREATE POLICY
+> SET SESSION AUTHORIZATION regress_rls_user;
+SET
+session_authorization=regress_rls_user
+is_superuser=off
+> SELECT * FROM rls_w ORDER BY a;
+fields a@rls_w.1:23:4:-1,b@rls_w.2:25:-1:-1,c@rls_w.3:23:4:-1
+row 1,one,1
+row 2,two,2
+row 3,three,3
+row 4,four,4
+SELECT 4
+> INSERT INTO rls_w VALUES (7, 'seven', 7);
+INSERT 0 1
+> INSERT INTO rls_w VALUES (30, 'thirty', 30);
+ERROR 42501 new row violates row-level security policy for table "rls_w"
+> INSERT INTO rls_w VALUES (8, 'bad', 8);
+ERROR 42501 new row violates row-level security policy "pr" for table "rls_w"
+> INSERT INTO rls_w VALUES (9, 'bad', -1);
+ERROR 42501 new row violates row-level security policy "pr" for table "rls_w"
+> INSERT INTO rls_w VALUES (31, 'x', -1);
+ERROR 42501 new row violates row-level security policy for table "rls_w"
+> INSERT INTO rls_w VALUES (8, 'eight', 8) RETURNING *;
+ERROR 42501 new row violates row-level security policy for table "rls_w"
+> INSERT INTO rls_w VALUES (3, 'three again', 3) RETURNING a, b;
+fields a@rls_w.1:23:4:-1,b@rls_w.2:25:-1:-1
+row 3,three again
+INSERT 0 1
+> UPDATE rls_w SET b = b || '!';
+UPDATE 2
+> UPDATE rls_w SET b = b || '?' WHERE a > 2 RETURNING *;
+fields a@rls_w.1:23:4:-1,b@rls_w.2:25:-1:-1,c@rls_w.3:23:4:-1
+row 4,four!?,4
+UPDATE 1
+> UPDATE rls_w SET a = a + 10 WHERE a = 2;
+ERROR 42501 new row violates row-level security policy for table "rls_w"
+> UPDATE rls_w SET c = -1 WHERE a = 4;
+ERROR 23514 new row for relation "rls_w" violates check constraint "rls_w_c_check"
+> UPDATE rls_w SET a = 12 WHERE a = 6;
+UPDATE 0
+> DELETE FROM rls_w WHERE a > 3 RETURNING *;
+fields a@rls_w.1:23:4:-1,b@rls_w.2:25:-1:-1,c@rls_w.3:23:4:-1
+row 4,four!?,4
+DELETE 1
+> DELETE FROM rls_w WHERE b LIKE 'one%';
+DELETE 1
+> DELETE FROM rls_w;
+DELETE 3
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> SELECT * FROM rls_w ORDER BY a, b;
+fields a@rls_w.1:23:4:-1,b@rls_w.2:25:-1:-1,c@rls_w.3:23:4:-1
+row 5,five,5
+row 6,six,6
+row 7,seven,7
+SELECT 3
+> CREATE POLICY pa ON rls_w FOR ALL TO regress_rls_user USING (a = 5);
+CREATE POLICY
+> SET SESSION AUTHORIZATION regress_rls_user;
+SET
+session_authorization=regress_rls_user
+is_superuser=off
+> SELECT * FROM rls_w ORDER BY a, b;
+fields a@rls_w.1:23:4:-1,b@rls_w.2:25:-1:-1,c@rls_w.3:23:4:-1
+row 5,five,5
+SELECT 1
+> UPDATE rls_w SET b = 'five!' WHERE a = 5 RETURNING *;
+fields a@rls_w.1:23:4:-1,b@rls_w.2:25:-1:-1,c@rls_w.3:23:4:-1
+row 5,five!,5
+UPDATE 1
+> INSERT INTO rls_w VALUES (5, 'five again', 5) RETURNING a;
+fields a@rls_w.1:23:4:-1
+row 5
+INSERT 0 1
+> INSERT INTO rls_w VALUES (15, 'fifteen', 15);
+INSERT 0 1
+> INSERT INTO rls_w VALUES (16, 'sixteen', 16) RETURNING a;
+ERROR 42501 new row violates row-level security policy for table "rls_w"
+> DELETE FROM rls_w WHERE a = 5;
+DELETE 2
+> UPDATE rls_w w SET b = o.a::text FROM rls_ok o WHERE o.a = w.a RETURNING w.a, w.b;
+fields a@rls_w.1:23:4:-1,b@rls_w.2:25:-1:-1
+UPDATE 0
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> SELECT * FROM rls_w ORDER BY a, b;
+fields a@rls_w.1:23:4:-1,b@rls_w.2:25:-1:-1,c@rls_w.3:23:4:-1
+row 6,six,6
+row 7,seven,7
+row 15,fifteen,15
+SELECT 3
+> ALTER TABLE rls_w FORCE ROW LEVEL SECURITY;
+ALTER TABLE
+> SET SESSION AUTHORIZATION regress_rls_owner;
+SET
+session_authorization=regress_rls_owner
+is_superuser=off
+> INSERT INTO rls_w VALUES (40, 'forty', 40);
+ERROR 42501 new row violates row-level security policy for table "rls_w"
+> UPDATE rls_w SET b = 'owner' WHERE a = 2;
+UPDATE 0
+> SET row_security = off;
+SET
+> INSERT INTO rls_w VALUES (41, 'forty one', 41);
+ERROR 42501 query would be affected by row-level security policy for table "rls_w"
+HINT To disable the policy for the table's owner, use ALTER TABLE NO FORCE ROW LEVEL SECURITY.
+> RESET row_security;
+RESET
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> DROP TABLE rls_w;
+DROP TABLE
+> DROP TABLE rls_ok;
+DROP TABLE
+> DROP ROLE regress_rls_owner;
+DROP ROLE
+> DROP ROLE regress_rls_user;
+DROP ROLE
