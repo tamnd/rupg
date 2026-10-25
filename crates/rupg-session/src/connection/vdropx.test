@@ -1,0 +1,141 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> DROP COLLATION IF EXISTS test_collation_exists;
+NOTICE 00000 collation "test_collation_exists" does not exist, skipping
+DROP COLLATION
+> DROP COLLATION test_collation_exists;
+ERROR 42704 collation "test_collation_exists" for encoding "UTF8" does not exist
+> DROP COLLATION IF EXISTS no_such_schema.foo;
+NOTICE 00000 schema "no_such_schema" does not exist, skipping
+DROP COLLATION
+> DROP COLLATION no_such_schema.foo;
+ERROR 3F000 schema "no_such_schema" does not exist
+> DROP COLLATION "C";
+ERROR 2BP01 cannot drop collation "C" because it is required by the database system
+> DROP CONVERSION test_conversion_exists;
+ERROR 42704 conversion "test_conversion_exists" does not exist
+> DROP CONVERSION IF EXISTS test_conversion_exists;
+NOTICE 00000 conversion "test_conversion_exists" does not exist, skipping
+DROP CONVERSION
+> DROP CONVERSION IF EXISTS no_such_schema.foo;
+NOTICE 00000 schema "no_such_schema" does not exist, skipping
+DROP CONVERSION
+> DROP CONVERSION iso8859_1_to_utf8;
+ERROR 42704 conversion "iso8859_1_to_utf8" does not exist
+> DROP EXTENSION test_extension_exists;
+ERROR 42704 extension "test_extension_exists" does not exist
+> DROP EXTENSION IF EXISTS test_extension_exists, other_ext;
+NOTICE 00000 extension "test_extension_exists" does not exist, skipping
+NOTICE 00000 extension "other_ext" does not exist, skipping
+DROP EXTENSION
+> DROP LANGUAGE test_language_exists;
+ERROR 42704 language "test_language_exists" does not exist
+> DROP LANGUAGE IF EXISTS test_language_exists;
+NOTICE 00000 language "test_language_exists" does not exist, skipping
+DROP LANGUAGE
+> DROP LANGUAGE sql;
+ERROR 2BP01 cannot drop language sql because it is required by the database system
+> DROP CAST (text AS text);
+ERROR 42704 cast from type text to type text does not exist
+> DROP CAST IF EXISTS (text AS text);
+NOTICE 00000 cast from type text to type text does not exist, skipping
+DROP CAST
+> DROP CAST IF EXISTS (INTEGER AS no_such_type2);
+NOTICE 00000 type "no_such_type2" does not exist, skipping
+DROP CAST
+> DROP CAST IF EXISTS (no_such_type1 AS INTEGER);
+NOTICE 00000 type "no_such_type1" does not exist, skipping
+DROP CAST
+> DROP CAST IF EXISTS (INTEGER AS no_such_schema.bar);
+NOTICE 00000 schema "no_such_schema" does not exist, skipping
+DROP CAST
+> DROP CAST IF EXISTS (no_such_schema.foo AS INTEGER);
+NOTICE 00000 schema "no_such_schema" does not exist, skipping
+DROP CAST
+> DROP CAST (integer AS no_such_type2);
+ERROR 42704 type "no_such_type2" does not exist
+> DROP CAST (int4 AS int8);
+ERROR 2BP01 cannot drop cast from integer to bigint because it is required by the database system
+> DROP CAST (int4 AS int8) CASCADE;
+ERROR 2BP01 cannot drop cast from integer to bigint because it is required by the database system
+> DROP FOREIGN DATA WRAPPER test_fdw_exists;
+ERROR 42704 foreign-data wrapper "test_fdw_exists" does not exist
+> DROP FOREIGN DATA WRAPPER IF EXISTS test_fdw_exists;
+NOTICE 00000 foreign-data wrapper "test_fdw_exists" does not exist, skipping
+DROP FOREIGN DATA WRAPPER
+> DROP SERVER test_server_exists;
+ERROR 42704 server "test_server_exists" does not exist
+> DROP SERVER IF EXISTS test_server_exists;
+NOTICE 00000 server "test_server_exists" does not exist, skipping
+DROP SERVER
+> DROP EVENT TRIGGER test_event_exists;
+ERROR 42704 event trigger "test_event_exists" does not exist
+> DROP EVENT TRIGGER IF EXISTS test_event_exists;
+NOTICE 00000 event trigger "test_event_exists" does not exist, skipping
+DROP EVENT TRIGGER
+> DROP PUBLICATION test_pub_exists;
+ERROR 42704 publication "test_pub_exists" does not exist
+> DROP PUBLICATION IF EXISTS test_pub_exists;
+NOTICE 00000 publication "test_pub_exists" does not exist, skipping
+DROP PUBLICATION
+> DROP ACCESS METHOD no_such_am;
+ERROR 42704 access method "no_such_am" does not exist
+> DROP ACCESS METHOD IF EXISTS no_such_am;
+NOTICE 00000 access method "no_such_am" does not exist, skipping
+DROP ACCESS METHOD
+> DROP ACCESS METHOD btree;
+ERROR 2BP01 cannot drop access method btree because it is required by the database system
+> DROP FOREIGN TABLE no_such_ft;
+ERROR 42704 foreign table "no_such_ft" does not exist
+> DROP FOREIGN TABLE IF EXISTS no_such_ft;
+NOTICE 00000 foreign table "no_such_ft" does not exist, skipping
+DROP FOREIGN TABLE
+> DROP FOREIGN TABLE IF EXISTS no_such_schema.foo;
+NOTICE 00000 schema "no_such_schema" does not exist, skipping
+DROP FOREIGN TABLE
+> CREATE TABLE dx_t (a int);
+CREATE TABLE
+> DROP FOREIGN TABLE dx_t;
+ERROR 42809 "dx_t" is not a foreign table
+HINT Use DROP TABLE to remove a table.
+> DROP TABLE dx_t;
+DROP TABLE
+> DROP AGGREGATE IF EXISTS foo(no_such_schema.no_such_type);
+NOTICE 00000 schema "no_such_schema" does not exist, skipping
+DROP AGGREGATE
+> DROP FUNCTION IF EXISTS foo(no_such_schema.no_such_type);
+NOTICE 00000 schema "no_such_schema" does not exist, skipping
+DROP FUNCTION
+> DROP FUNCTION IF EXISTS foo(int, no_such_schema.no_such_type);
+NOTICE 00000 schema "no_such_schema" does not exist, skipping
+DROP FUNCTION
+> DROP OPERATOR IF EXISTS + (no_such_schema.no_such_type, no_such_schema.no_such_type);
+NOTICE 00000 schema "no_such_schema" does not exist, skipping
+DROP OPERATOR
+> DROP OPERATOR IF EXISTS # (NONE, no_such_schema.no_such_type);
+NOTICE 00000 schema "no_such_schema" does not exist, skipping
+DROP OPERATOR
+> DROP OPERATOR IF EXISTS + (int, no_such_schema.no_such_type);
+NOTICE 00000 schema "no_such_schema" does not exist, skipping
+DROP OPERATOR
+> DROP FUNCTION foo(no_such_schema.no_such_type);
+ERROR 3F000 schema "no_such_schema" does not exist
+> CREATE ROLE regress_dx_user;
+CREATE ROLE
+> SET ROLE regress_dx_user;
+SET
+is_superuser=off
+> DROP CAST (int4 AS int8);
+ERROR 42501 must be owner of type integer or type bigint
+> DROP LANGUAGE sql;
+ERROR 42501 must be owner of language sql
+> DROP ACCESS METHOD btree;
+ERROR 42501 must be superuser
+> DROP COLLATION "C";
+ERROR 42501 must be owner of collation C
+> RESET ROLE;
+RESET
+is_superuser=on
+> DROP ROLE regress_dx_user;
+DROP ROLE

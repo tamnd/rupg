@@ -93,7 +93,13 @@ impl Definer<'_, '_> {
         for arg in item.objargs.iter().flatten() {
             let Node::TypeName(arg) = arg else { return Err(Error::internal("a type name")) };
             let text = type_name_text(arg);
-            let Some(ty) = self.an.lookup_type_name(arg)? else {
+            let found = match self.an.lookup_type_name(arg) {
+                Err(error) if missing_ok && error.state() == SqlState::UNDEFINED_SCHEMA => {
+                    return self.skip(error.message().to_string());
+                }
+                found => found?,
+            };
+            let Some(ty) = found else {
                 let message = format!("type \"{text}\" does not exist");
                 if missing_ok {
                     return self.skip(message);

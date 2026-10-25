@@ -16,6 +16,7 @@ mod domain;
 mod drop;
 mod drop_constraint;
 mod drop_function;
+mod drop_named;
 mod enum_label;
 mod enumtype;
 mod fkey;
@@ -266,6 +267,17 @@ fn is_drop_kind(kind: ObjectType) -> bool {
             | ObjectType::OBJECT_OPCLASS
             | ObjectType::OBJECT_OPFAMILY
             | ObjectType::OBJECT_STATISTIC_EXT
+            | ObjectType::OBJECT_FOREIGN_TABLE
+            | ObjectType::OBJECT_ACCESS_METHOD
+            | ObjectType::OBJECT_CAST
+            | ObjectType::OBJECT_COLLATION
+            | ObjectType::OBJECT_CONVERSION
+            | ObjectType::OBJECT_EXTENSION
+            | ObjectType::OBJECT_LANGUAGE
+            | ObjectType::OBJECT_FDW
+            | ObjectType::OBJECT_FOREIGN_SERVER
+            | ObjectType::OBJECT_EVENT_TRIGGER
+            | ObjectType::OBJECT_PUBLICATION
     )
 }
 
