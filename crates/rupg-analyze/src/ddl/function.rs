@@ -29,7 +29,7 @@ const INTERNAL_LANGUAGE: u32 = 12;
 /// The OID of the language `c`, the functions of a library.
 const C_LANGUAGE: u32 = 13;
 /// The default `procost` of a function in a language other than C and `internal`.
-const DEFAULT_COST: u32 = 100;
+const DEFAULT_COST: f32 = 100.0;
 /// The suffix of the file of a library, `DLSUFFIX` on Linux.
 const DLSUFFIX: &str = ".so";
 /// The name of the library of the regression tests of PostgreSQL, `regress.so`.
@@ -115,7 +115,7 @@ struct Options {
     leakproof: bool,
     volatile: u8,
     parallel: u8,
-    cost: Option<u32>,
+    cost: Option<f32>,
     rows: Option<u32>,
     support: Option<Vec<String>>,
     /// The body in a string, from `AS`. For a function in C it is the file of the library.
@@ -248,10 +248,7 @@ fn options(stmt: &CreateFunctionStmt, env: &dyn Env) -> Result<Options> {
             ("parallel", Some("safe")) => out.parallel = b's',
             ("parallel", Some("restricted")) => out.parallel = b'r',
             ("parallel", Some("unsafe")) => out.parallel = b'u',
-            ("cost", _) => match def.arg {
-                Some(Node::Integer(cost)) if cost > 0 => out.cost = Some(cost.unsigned_abs()),
-                _ => return Err(bad()),
-            },
+            ("cost", _) => out.cost = Some(super::alter_function::positive_cost(def)?),
             ("rows", _) => match def.arg {
                 Some(Node::Integer(rows)) if rows > 0 => out.rows = Some(rows.unsigned_abs()),
                 _ => return Err(bad()),
@@ -1055,7 +1052,7 @@ impl Definer<'_, '_> {
             namespace,
             owner: self.user,
             lang: options.language,
-            cost: options.cost.unwrap_or(if untrusted { 1 } else { DEFAULT_COST }),
+            cost: options.cost.unwrap_or(if untrusted { 1.0 } else { DEFAULT_COST }),
             rows: if retset { options.rows.unwrap_or(DEFAULT_ROWS) } else { 0 },
             support,
             kind: if stmt.is_procedure { b'p' } else { b'f' },

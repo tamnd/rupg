@@ -1,0 +1,72 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE FUNCTION fc1(int) RETURNS boolean AS $$ BEGIN RETURN true; END; $$ LANGUAGE plpgsql COST 0.000001;
+CREATE FUNCTION
+> SELECT procost, prorows FROM pg_proc WHERE oid = 'fc1(int)'::regprocedure;
+fields procost@pg_proc.6:700:4:-1,prorows@pg_proc.7:700:4:-1
+row 1e-06,0
+SELECT 1
+> SELECT pg_get_functiondef('fc1(int)'::regprocedure);
+fields pg_get_functiondef:25:-1:-1
+row CREATE OR REPLACE FUNCTION public.fc1(integer)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ COST 1e-06
+AS $function$ BEGIN RETURN true; END; $function$
+
+SELECT 1
+> ALTER FUNCTION fc1(int) COST 2.5;
+ALTER FUNCTION
+> SELECT procost FROM pg_proc WHERE oid = 'fc1(int)'::regprocedure;
+fields procost@pg_proc.6:700:4:-1
+row 2.5
+SELECT 1
+> SELECT pg_get_functiondef('fc1(int)'::regprocedure);
+fields pg_get_functiondef:25:-1:-1
+row CREATE OR REPLACE FUNCTION public.fc1(integer)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ COST 2.5
+AS $function$ BEGIN RETURN true; END; $function$
+
+SELECT 1
+> ALTER FUNCTION fc1(int) COST 1e40;
+ALTER FUNCTION
+> SELECT procost FROM pg_proc WHERE oid = 'fc1(int)'::regprocedure;
+fields procost@pg_proc.6:700:4:-1
+row Infinity
+SELECT 1
+> ALTER FUNCTION fc1(int) COST 0.0;
+ERROR 22023 COST must be positive
+> ALTER FUNCTION fc1(int) COST -1.5;
+ERROR 22023 COST must be positive
+> CREATE FUNCTION fc2(int) RETURNS int LANGUAGE sql COST 0 AS 'SELECT $1';
+ERROR 22023 COST must be positive
+> CREATE FUNCTION fc2(int) RETURNS int LANGUAGE sql COST 0.5 AS 'SELECT $1';
+CREATE FUNCTION
+> SELECT procost FROM pg_proc WHERE oid = 'fc2(int)'::regprocedure;
+fields procost@pg_proc.6:700:4:-1
+row 0.5
+SELECT 1
+> CREATE OR REPLACE FUNCTION fc2(int) RETURNS int LANGUAGE sql COST 12345.678 AS 'SELECT $1';
+CREATE FUNCTION
+> SELECT procost FROM pg_proc WHERE oid = 'fc2(int)'::regprocedure;
+fields procost@pg_proc.6:700:4:-1
+row 12345.678
+SELECT 1
+> SELECT pg_get_functiondef('fc2(int)'::regprocedure);
+fields pg_get_functiondef:25:-1:-1
+row CREATE OR REPLACE FUNCTION public.fc2(integer)
+ RETURNS integer
+ LANGUAGE sql
+ COST 12345.7
+AS $function$SELECT $1$function$
+
+SELECT 1
+> CREATE FUNCTION fc3() RETURNS int LANGUAGE sql COST 'abc' AS 'SELECT 1';
+ERROR 42601 syntax error at or near "'abc'" at 53
+> DROP FUNCTION fc1(int);
+DROP FUNCTION
+> DROP FUNCTION fc2(int);
+DROP FUNCTION
