@@ -335,11 +335,6 @@ impl Analyzer<'_> {
             .any(|kind| self.user_triggers(view, INSTEAD_ROW | trigger_event(kind)))
     }
 
-    /// True when the `MERGE` that the analyzer reads now has only actions `DO NOTHING`.
-    pub(crate) fn merge_does_nothing(&self) -> bool {
-        self.merge_actions.iter().all(|&c| c == MergeCommand::Nothing)
-    }
-
     /// `error_view_not_updatable`: the error of a write of the view `view` with the OID `oid` that is not automatically updatable. For a `MERGE`, the error names the first action that has no trigger `INSTEAD OF`.
     fn view_not_updatable(&self, view: &str, oid: u32, kind: WriteKind, detail: &str) -> Error {
         if kind != WriteKind::Merge {
