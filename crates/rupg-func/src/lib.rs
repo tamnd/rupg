@@ -85,8 +85,8 @@ use rupg_pgcatalog::builtin;
 use rupg_types::{ByteaOutput, DateFormat, IntervalStyle, TimeZone, TypeError, Value};
 
 pub use acl::{
-    check_execute, check_permissions, insert_allowed, lock_table_allowed, partition_key_shown,
-    shown_columns,
+    apply_row_security, check_execute, check_permissions, current_user_oid, insert_allowed,
+    lock_table_allowed, partition_key_shown, shown_columns,
 };
 pub use activity::{Backend, BackendState, Client, Ssl};
 pub use agg::check_percentile;

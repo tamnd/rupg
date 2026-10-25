@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Row-level security policies now filter the rows that a query reads. Permissive and restrictive policies, the policy roles, `FORCE ROW LEVEL SECURITY`, views, the recursion error and `row_security = off` work as in PostgreSQL (#769).
 - `CREATE POLICY`, `ALTER POLICY`, `DROP POLICY` and `COMMENT ON POLICY` make and change the rows of `pg_policy`, and `pg_get_expr` shows their expressions. `ALTER TABLE` sets `ENABLE`, `DISABLE`, `FORCE` and `NO FORCE ROW LEVEL SECURITY`, `DROP ROLE` reports the policies that name the role, and `DROP OWNED` removes the role from them. A statement that the policies of a table apply to gives `0A000` until rupg applies them (#768).
 - NULLIF, IS DISTINCT FROM, IN, ANY, ALL and the row comparisons run an operator whose function is in SQL or in PL/pgSQL, as a call of the function does (#767).
 - EXPLAIN of a statement that rules rewrite shows the plan of each statement that the rewrite gives, and "Query rewrites to nothing" when it gives none, and the queries of WITH of the statement go to the top level of each action, as rewriteRuleAction puts them (#766).

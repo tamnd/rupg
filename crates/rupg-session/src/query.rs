@@ -1405,6 +1405,20 @@ pub(crate) fn plan(node: &Node, reader: &Reader<'_>, params: &Params) -> Result<
     rupg_exec::prepare(rupg_analyze::analyze(node, reader, params)?, reader)
 }
 
+/// [`plan`] for a statement that the server runs for its own work, such as the action of a foreign key, with no checks of the privileges and no row security, as the queries of `ri_triggers.c` run as the owner of the table with `SECURITY_NOFORCE_RLS`.
+///
+/// # Errors
+///
+/// The errors of [`plan`].
+pub(crate) fn plan_internal(node: &Node, reader: &Reader<'_>, params: &Params) -> Result<Plan> {
+    let mut query = rupg_analyze::analyze(node, reader, params)?;
+    // The plan keeps the columns of the privileges, which give the columns that the write changes.
+    for perm in &mut query.perms {
+        perm.required = 0;
+    }
+    rupg_exec::prepare(query, reader)
+}
+
 /// `_SPI_error_callback` for an error of the plan of the query of a function: an error with a position loses it, because the position is in the text of the query and not in the text of the client, and another error gets the text of the query in its context.
 pub(crate) fn inner_error(error: Error, text: &str) -> Error {
     if error.position().is_some() {

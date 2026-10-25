@@ -1,0 +1,273 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE ROLE regress_rls_alice;
+CREATE ROLE
+> CREATE ROLE regress_rls_bob;
+CREATE ROLE
+> CREATE ROLE regress_rls_carol;
+CREATE ROLE
+> GRANT regress_rls_bob TO regress_rls_carol;
+GRANT ROLE
+> CREATE TABLE rls_doc (did int, dauthor text, dlevel int, dtitle text);
+CREATE TABLE
+> ALTER TABLE rls_doc OWNER TO regress_rls_alice;
+ALTER TABLE
+> INSERT INTO rls_doc VALUES (1, 'regress_rls_bob', 1, 'my first novel'), (2, 'regress_rls_bob', 2, 'my second novel'), (3, 'regress_rls_carol', 1, 'great science fiction'), (4, 'regress_rls_alice', 3, 'secret plan'), (5, 'regress_rls_carol', 2, 'my history book');
+INSERT 0 5
+> CREATE TABLE rls_lvl (lvl int, lname text);
+CREATE TABLE
+> INSERT INTO rls_lvl VALUES (1, 'unclassified'), (2, 'confidential'), (3, 'secret');
+INSERT 0 3
+> GRANT ALL ON rls_doc, rls_lvl TO public;
+GRANT
+> CREATE FUNCTION rls_leak(text) RETURNS bool COST 0.0000001 LANGUAGE plpgsql AS 'BEGIN RAISE NOTICE ''f_leak => %'', $1; RETURN true; END';
+CREATE FUNCTION
+> SET SESSION AUTHORIZATION regress_rls_alice;
+SET
+session_authorization=regress_rls_alice
+is_superuser=off
+> ALTER TABLE rls_doc ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> SELECT * FROM rls_doc ORDER BY did;
+fields did@rls_doc.1:23:4:-1,dauthor@rls_doc.2:25:-1:-1,dlevel@rls_doc.3:23:4:-1,dtitle@rls_doc.4:25:-1:-1
+row 1,regress_rls_bob,1,my first novel
+row 2,regress_rls_bob,2,my second novel
+row 3,regress_rls_carol,1,great science fiction
+row 4,regress_rls_alice,3,secret plan
+row 5,regress_rls_carol,2,my history book
+SELECT 5
+> SET SESSION AUTHORIZATION regress_rls_bob;
+SET
+session_authorization=regress_rls_bob
+> SELECT * FROM rls_doc ORDER BY did;
+fields did@rls_doc.1:23:4:-1,dauthor@rls_doc.2:25:-1:-1,dlevel@rls_doc.3:23:4:-1,dtitle@rls_doc.4:25:-1:-1
+SELECT 0
+> SELECT count(*) FROM rls_doc;
+fields count:20:8:-1
+row 0
+SELECT 1
+> SET SESSION AUTHORIZATION regress_rls_alice;
+SET
+session_authorization=regress_rls_alice
+> CREATE POLICY p1 ON rls_doc AS PERMISSIVE USING (dlevel <= (SELECT lvl FROM rls_lvl WHERE lname = 'confidential'));
+CREATE POLICY
+> CREATE POLICY p2 ON rls_doc AS RESTRICTIVE TO regress_rls_carol USING (dauthor = current_user);
+CREATE POLICY
+> CREATE POLICY p3 ON rls_doc FOR UPDATE TO regress_rls_bob USING (did % 2 = 1);
+CREATE POLICY
+> SET SESSION AUTHORIZATION regress_rls_bob;
+SET
+session_authorization=regress_rls_bob
+> SELECT * FROM rls_doc WHERE rls_leak(dtitle) ORDER BY did;
+fields did@rls_doc.1:23:4:-1,dauthor@rls_doc.2:25:-1:-1,dlevel@rls_doc.3:23:4:-1,dtitle@rls_doc.4:25:-1:-1
+NOTICE 00000 f_leak => my first novel (PL/pgSQL function rls_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => my second novel (PL/pgSQL function rls_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => great science fiction (PL/pgSQL function rls_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => my history book (PL/pgSQL function rls_leak(text) line 1 at RAISE)
+row 1,regress_rls_bob,1,my first novel
+row 2,regress_rls_bob,2,my second novel
+row 3,regress_rls_carol,1,great science fiction
+row 5,regress_rls_carol,2,my history book
+SELECT 4
+> SELECT * FROM rls_doc d JOIN rls_lvl l ON d.dlevel = l.lvl WHERE rls_leak(l.lname) ORDER BY did;
+fields did@rls_doc.1:23:4:-1,dauthor@rls_doc.2:25:-1:-1,dlevel@rls_doc.3:23:4:-1,dtitle@rls_doc.4:25:-1:-1,lvl@rls_lvl.1:23:4:-1,lname@rls_lvl.2:25:-1:-1
+NOTICE 00000 f_leak => unclassified (PL/pgSQL function rls_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => confidential (PL/pgSQL function rls_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => secret (PL/pgSQL function rls_leak(text) line 1 at RAISE)
+row 1,regress_rls_bob,1,my first novel,1,unclassified
+row 2,regress_rls_bob,2,my second novel,2,confidential
+row 3,regress_rls_carol,1,great science fiction,1,unclassified
+row 5,regress_rls_carol,2,my history book,2,confidential
+SELECT 4
+> SELECT l.lname, d.did FROM rls_lvl l LEFT JOIN rls_doc d ON d.dlevel = l.lvl ORDER BY 1, 2;
+fields lname@rls_lvl.2:25:-1:-1,did@rls_doc.1:23:4:-1
+row confidential,2
+row confidential,5
+row secret,NULL
+row unclassified,1
+row unclassified,3
+SELECT 5
+> SELECT * FROM rls_doc ORDER BY did FOR UPDATE;
+fields did@rls_doc.1:23:4:-1,dauthor@rls_doc.2:25:-1:-1,dlevel@rls_doc.3:23:4:-1,dtitle@rls_doc.4:25:-1:-1
+row 1,regress_rls_bob,1,my first novel
+row 2,regress_rls_bob,2,my second novel
+row 3,regress_rls_carol,1,great science fiction
+row 5,regress_rls_carol,2,my history book
+SELECT 4
+> SELECT d::text FROM rls_doc d ORDER BY did;
+fields d:25:-1:-1
+row (1,regress_rls_bob,1,"my first novel")
+row (2,regress_rls_bob,2,"my second novel")
+row (3,regress_rls_carol,1,"great science fiction")
+row (5,regress_rls_carol,2,"my history book")
+SELECT 4
+> SELECT (SELECT count(*) FROM rls_doc) AS n;
+fields n:20:8:-1
+row 4
+SELECT 1
+> WITH w AS (SELECT * FROM rls_doc) SELECT did FROM w ORDER BY did;
+fields did@rls_doc.1:23:4:-1
+row 1
+row 2
+row 3
+row 5
+SELECT 4
+> SELECT row_security_active('rls_doc');
+fields row_security_active:16:1:-1
+row t
+SELECT 1
+> SET SESSION AUTHORIZATION regress_rls_carol;
+SET
+session_authorization=regress_rls_carol
+> SELECT * FROM rls_doc ORDER BY did;
+fields did@rls_doc.1:23:4:-1,dauthor@rls_doc.2:25:-1:-1,dlevel@rls_doc.3:23:4:-1,dtitle@rls_doc.4:25:-1:-1
+row 3,regress_rls_carol,1,great science fiction
+row 5,regress_rls_carol,2,my history book
+SELECT 2
+> SET SESSION AUTHORIZATION regress_rls_alice;
+SET
+session_authorization=regress_rls_alice
+> SELECT * FROM rls_doc ORDER BY did;
+fields did@rls_doc.1:23:4:-1,dauthor@rls_doc.2:25:-1:-1,dlevel@rls_doc.3:23:4:-1,dtitle@rls_doc.4:25:-1:-1
+row 1,regress_rls_bob,1,my first novel
+row 2,regress_rls_bob,2,my second novel
+row 3,regress_rls_carol,1,great science fiction
+row 4,regress_rls_alice,3,secret plan
+row 5,regress_rls_carol,2,my history book
+SELECT 5
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> CREATE VIEW rls_view AS SELECT * FROM rls_doc;
+CREATE VIEW
+> ALTER VIEW rls_view OWNER TO regress_rls_carol;
+ALTER VIEW
+> GRANT SELECT ON rls_view TO public;
+GRANT
+> SET SESSION AUTHORIZATION regress_rls_bob;
+SET
+session_authorization=regress_rls_bob
+is_superuser=off
+> SELECT * FROM rls_view ORDER BY did;
+fields did@rls_view.1:23:4:-1,dauthor@rls_view.2:25:-1:-1,dlevel@rls_view.3:23:4:-1,dtitle@rls_view.4:25:-1:-1
+row 1,regress_rls_bob,1,my first novel
+row 2,regress_rls_bob,2,my second novel
+SELECT 2
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> ALTER VIEW rls_view SET (security_invoker = true);
+ALTER VIEW
+> SET SESSION AUTHORIZATION regress_rls_bob;
+SET
+session_authorization=regress_rls_bob
+is_superuser=off
+> SELECT * FROM rls_view ORDER BY did;
+fields did@rls_view.1:23:4:-1,dauthor@rls_view.2:25:-1:-1,dlevel@rls_view.3:23:4:-1,dtitle@rls_view.4:25:-1:-1
+row 1,regress_rls_bob,1,my first novel
+row 2,regress_rls_bob,2,my second novel
+row 3,regress_rls_carol,1,great science fiction
+row 5,regress_rls_carol,2,my history book
+SELECT 4
+> SET row_security = off;
+SET
+> SELECT * FROM rls_doc;
+ERROR 42501 query would be affected by row-level security policy for table "rls_doc"
+> SET SESSION AUTHORIZATION regress_rls_alice;
+SET
+session_authorization=regress_rls_alice
+> SELECT count(*) FROM rls_doc;
+fields count:20:8:-1
+row 5
+SELECT 1
+> ALTER TABLE rls_doc FORCE ROW LEVEL SECURITY;
+ALTER TABLE
+> SELECT count(*) FROM rls_doc;
+ERROR 42501 query would be affected by row-level security policy for table "rls_doc"
+HINT To disable the policy for the table's owner, use ALTER TABLE NO FORCE ROW LEVEL SECURITY.
+> SET row_security = on;
+SET
+> SELECT count(*) FROM rls_doc;
+fields count:20:8:-1
+row 4
+SELECT 1
+> ALTER TABLE rls_doc NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> CREATE TABLE rls_rec1 (a int);
+CREATE TABLE
+> CREATE TABLE rls_rec2 (a int);
+CREATE TABLE
+> INSERT INTO rls_rec1 VALUES (1), (2);
+INSERT 0 2
+> INSERT INTO rls_rec2 VALUES (2), (3);
+INSERT 0 2
+> GRANT ALL ON rls_rec1, rls_rec2 TO public;
+GRANT
+> CREATE POLICY r1 ON rls_rec1 USING (a IN (SELECT a FROM rls_rec2));
+CREATE POLICY
+> CREATE POLICY r2 ON rls_rec2 USING (a IN (SELECT a FROM rls_rec1));
+CREATE POLICY
+> ALTER TABLE rls_rec1 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> ALTER TABLE rls_rec2 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> SET SESSION AUTHORIZATION regress_rls_bob;
+SET
+session_authorization=regress_rls_bob
+is_superuser=off
+> SELECT * FROM rls_rec1;
+ERROR 42P17 infinite recursion detected in policy for relation "rls_rec1"
+> SELECT * FROM rls_rec2;
+ERROR 42P17 infinite recursion detected in policy for relation "rls_rec2"
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> SELECT * FROM rls_rec1;
+fields a@rls_rec1.1:23:4:-1
+row 1
+row 2
+SELECT 2
+> CREATE TABLE rls_drop (a int, b int, c int);
+CREATE TABLE
+> INSERT INTO rls_drop VALUES (1, 2, 3), (4, 5, 6);
+INSERT 0 2
+> ALTER TABLE rls_drop DROP COLUMN b;
+ALTER TABLE
+> ALTER TABLE rls_drop ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> CREATE POLICY d1 ON rls_drop USING (c > 3);
+CREATE POLICY
+> GRANT SELECT ON rls_drop TO public;
+GRANT
+> SET SESSION AUTHORIZATION regress_rls_bob;
+SET
+session_authorization=regress_rls_bob
+is_superuser=off
+> SELECT * FROM rls_drop;
+fields a@rls_drop.1:23:4:-1,c@rls_drop.3:23:4:-1
+row 4,6
+SELECT 1
+> SELECT d.*, d::text FROM rls_drop d;
+fields a@rls_drop.1:23:4:-1,c@rls_drop.3:23:4:-1,d:25:-1:-1
+row 4,6,(4,6)
+SELECT 1
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> DROP OWNED BY regress_rls_alice, regress_rls_bob, regress_rls_carol;
+DROP OWNED
+> DROP ROLE regress_rls_alice;
+DROP ROLE
+> DROP ROLE regress_rls_bob;
+DROP ROLE
+> DROP ROLE regress_rls_carol;
+DROP ROLE

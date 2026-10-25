@@ -39,26 +39,56 @@ pub struct PermInfo {
     pub rule_level: usize,
 }
 
-/// Adds `offset` to the index of the privileges of each relation of the query and of its subqueries in `FROM`, after the privileges of the query of a view go after the privileges of the statement.
-fn shift(query: &mut Query, offset: usize) {
+/// Calls `f` for the query and for each query in it: the subqueries in `FROM`, the queries of `WITH` and the subqueries of its expressions.
+fn each_query(query: &mut Query, f: &mut impl FnMut(&mut Query)) {
+    fn expr(e: &mut Expr, f: &mut impl FnMut(&mut Query)) {
+        for child in e.children_mut() {
+            expr(child, f);
+        }
+        if let ExprKind::SubLink(link) = &mut e.kind {
+            each_query(&mut link.query, f);
+        }
+    }
+    f(query);
     for relation in &mut query.relations {
-        if let Some(perm) = &mut relation.perm {
-            *perm += offset;
-        }
         if let Some(sub) = relation.subquery.as_deref_mut() {
-            shift(sub, offset);
+            each_query(sub, f);
         }
+    }
+    for cte in &mut query.ctes {
+        each_query(&mut cte.query, f);
+    }
+    for e in query.exprs_mut() {
+        expr(e, f);
     }
 }
 
-/// Forgets the privileges of the relations of the query and of its subqueries in `FROM`, for the query of a view that the statement does not read.
-pub(crate) fn forget(query: &mut Query) {
-    for relation in &mut query.relations {
-        relation.perm = None;
-        if let Some(sub) = relation.subquery.as_deref_mut() {
-            forget(sub);
+/// Adds `offset` to the index of the privileges of each relation of the query and of the queries in it, after the privileges of the query of a view or of a policy go after the privileges of the statement.
+pub(crate) fn shift(query: &mut Query, offset: usize) {
+    each_query(query, &mut |q| {
+        for perm in q.relations.iter_mut().filter_map(|r| r.perm.as_mut()) {
+            *perm += offset;
         }
+    });
+}
+
+/// [`shift`] for the subqueries of an expression.
+pub(crate) fn shift_expr(expr: &mut Expr, offset: usize) {
+    for child in expr.children_mut() {
+        shift_expr(child, offset);
     }
+    if let ExprKind::SubLink(link) = &mut expr.kind {
+        shift(&mut link.query, offset);
+    }
+}
+
+/// Forgets the privileges of the relations of the query and of the queries in it, for the query of a view that the statement does not read.
+pub(crate) fn forget(query: &mut Query) {
+    each_query(query, &mut |q| {
+        for relation in &mut q.relations {
+            relation.perm = None;
+        }
+    });
 }
 
 /// True when the boolean option `name` of `reloptions` is on, as `RelationHasSecurityInvoker` and `RelationIsSecurityView` read `security_invoker` and `security_barrier`.
@@ -72,6 +102,12 @@ pub fn option_on(options: &[String], name: &str) -> bool {
                 )
         })
     })
+}
+
+/// True when a subquery of `FROM` for the relation `rel` is a security barrier: a view with `security_barrier`, or a table, which the plan reads through a subquery only when its row-level security policies apply.
+pub fn security_barrier(rel: &rupg_catalog::Relation) -> bool {
+    matches!(rel.kind, RelKind::Table | RelKind::Partitioned)
+        || option_on(&rel.options, "security_barrier")
 }
 
 impl Analyzer<'_> {

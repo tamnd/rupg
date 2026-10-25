@@ -935,7 +935,7 @@ fn leaf(
     let params =
         Params { types: live.iter().map(|&i| rel.columns[i].ty).collect(), variable: true };
     // `ExecCheckPermissions` checks the parent table, not the partition.
-    let plan = query::plan(&node, reader, &params)?.fold(None, reader)?.unchecked();
+    let plan = query::plan_internal(&node, reader, &params)?.fold(None, reader)?;
     let qualified = format!("{schemaname}.{}", rel.name);
     Ok(Leaf {
         oid,

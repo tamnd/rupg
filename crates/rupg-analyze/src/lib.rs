@@ -32,6 +32,7 @@ mod prepare;
 mod record;
 mod resolve;
 mod returning;
+mod rowsecurity;
 mod rules;
 mod searchcycle;
 mod select;
@@ -90,7 +91,7 @@ pub use insert::{
 };
 pub use locking::{RowMark, check_outer_joins, first_row_mark, locked_tables};
 pub use merge::{MatchKind, Merge, MergeClause, MergeClauseDef, MergeCommand, MergeDef};
-pub use perm::{PermInfo, option_on};
+pub use perm::{PermInfo, option_on, security_barrier};
 pub use plpgsql::{
     Variable, Variables, analyze_assign, analyze_assign_part, analyze_with, column_type,
     plpgsql_cast, relation_by_names, relation_row_type, row_type_fields,
@@ -99,6 +100,7 @@ pub use poly::resolve as resolve_polymorphic;
 pub use prepare::{execute_params, param_types};
 pub use record::{out_columns, record_fields};
 pub use returning::{MERGE_ACTION, RETURNING_NEW, RETURNING_OLD, Shown};
+pub use rowsecurity::{RlsStatus, RowSecurity, apply_row_security};
 pub use rules::{Product, analyze_product, copy_rules_error, query_rewrite};
 pub use searchcycle::{CycleClause, SearchClause};
 pub use select::{MinMax, Query, Target};

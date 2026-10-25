@@ -4,14 +4,14 @@
 
 use std::collections::BTreeSet;
 
-use rupg_analyze::PermInfo;
+use rupg_analyze::{PermInfo, RlsStatus, RowSecurity};
 use rupg_catalog::{ObjRef, PG_CLASS, PG_LANGUAGE, PG_NAMESPACE, PG_PROC, PG_TYPE, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Owned};
 use rupg_types::{RegKind, Value, qualified_name_list};
 
 use crate::reg;
-use crate::{Call, Kernel, Session, bad_value, not_yet, type_error};
+use crate::{Call, Kernel, Session, bad_value, type_error};
 
 const ACL_INSERT: u32 = 1 << 0;
 const ACL_SELECT: u32 = 1 << 1;
@@ -1020,14 +1020,6 @@ pub fn check_permissions(perms: &[PermInfo], session: &dyn Session) -> Result<()
             format!("permission denied for {object} {}", class.name),
         ));
     }
-    for perm in &perms {
-        let role = if perm.check_as == 0 { current_user(session) } else { perm.check_as };
-        if perm.required != 0 && rls_enabled(perm.relid, role, session) {
-            return Err(not_yet(
-                "a statement that the row-level security policies of a table apply to",
-            ));
-        }
-    }
     Ok(())
 }
 
@@ -1598,17 +1590,85 @@ fn acldefault(_call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Array(Box::new(rupg_types::Array::one(items))))
 }
 
-/// `check_enable_rls` with the result `RLS_ENABLED`: true when the policies of the relation apply to the role. They do not apply to a relation without row security, to a role with `BYPASSRLS` or to a superuser, or to the owner unless the relation has `FORCE ROW LEVEL SECURITY`.
-pub(crate) fn rls_enabled(relid: u32, role: u32, session: &dyn Session) -> bool {
-    let Some(rel) = session.catalog().and_then(|c| c.relation(relid)) else { return false };
-    if !rel.row_security {
-        return false;
+/// `FirstNormalObjectId`: a relation with a lower OID is built in and has no row security.
+const FIRST_NORMAL_OBJECT_ID: u32 = 16384;
+
+/// `check_enable_rls` with `noError`: the policies of the relation apply to the role, unless the relation has no row security, the role has `BYPASSRLS` or is a superuser, or the role is the owner and the relation has no `FORCE ROW LEVEL SECURITY`. The result also tells if the role is the owner.
+fn rls_check(relid: u32, role: u32, session: &dyn Session) -> (RlsStatus, bool) {
+    let Some(rel) = session.catalog().and_then(|c| c.relation(relid)) else {
+        return (RlsStatus::None, false);
+    };
+    if relid < FIRST_NORMAL_OBJECT_ID || !rel.row_security {
+        return (RlsStatus::None, false);
     }
     let roles = rupg_pgcatalog::roles::current();
     if roles.superuser(role) || roles.attrs(role).is_some_and(|a| a.bypassrls) {
-        return false;
+        return (RlsStatus::NoneEnv, false);
     }
-    rel.force_row_security || !has_privs_of_role(role, rel.owner)
+    let owner = has_privs_of_role(role, rel.owner);
+    if owner && !rel.force_row_security {
+        return (RlsStatus::NoneEnv, true);
+    }
+    (RlsStatus::Enabled, owner)
+}
+
+/// `check_enable_rls` with the result `RLS_ENABLED`: true when the policies of the relation apply to the role.
+pub(crate) fn rls_enabled(relid: u32, role: u32, session: &dyn Session) -> bool {
+    rls_check(relid, role, session).0 == RlsStatus::Enabled
+}
+
+/// The roles of the session for the policies of the tables of a query.
+struct PolicyRoles<'a>(&'a dyn Session);
+
+impl RowSecurity for PolicyRoles<'_> {
+    fn status(&self, relid: u32, check_as: u32) -> Result<RlsStatus> {
+        let (status, owner) = rls_check(relid, self.role(check_as), self.0);
+        if status == RlsStatus::Enabled && self.0.setting("row_security").as_deref() == Some("off")
+        {
+            let name = self.0.catalog().and_then(|c| c.relation(relid)).map_or("", |r| &r.name);
+            let error = Error::new(
+                SqlState::INSUFFICIENT_PRIVILEGE,
+                format!(
+                    "query would be affected by row-level security policy for table \"{name}\""
+                ),
+            );
+            return Err(if owner {
+                error.with_hint(
+                    "To disable the policy for the table's owner, use ALTER TABLE NO FORCE ROW LEVEL SECURITY.",
+                )
+            } else {
+                error
+            });
+        }
+        Ok(status)
+    }
+
+    fn role(&self, check_as: u32) -> u32 {
+        if check_as == 0 { current_user(self.0) } else { check_as }
+    }
+
+    fn applies(&self, roles: &[u32], role: u32) -> bool {
+        roles.first() == Some(&0) || roles.iter().any(|&r| has_privs_of_role(role, r))
+    }
+}
+
+/// `fireRIRrules` for the policies: the query with the conditions of the policies of its tables that apply to the roles of their checks, as [`rupg_analyze::apply_row_security`] puts them. The result is the current user when a table of the query has row security, as `row_security_user_id` marks the plan for another walk under another role.
+///
+/// # Errors
+///
+/// The errors of [`rupg_analyze::apply_row_security`].
+pub fn apply_row_security(
+    query: &mut rupg_analyze::Query,
+    session: &dyn Session,
+) -> Result<Option<u32>> {
+    let env = reg::SessionEnv(session);
+    let seen = rupg_analyze::apply_row_security(query, &env, &PolicyRoles(session))?;
+    Ok(seen.then(|| current_user(session)))
+}
+
+/// The OID of the current user.
+pub fn current_user_oid(session: &dyn Session) -> u32 {
+    current_user(session)
 }
 
 /// `row_security_active(oid)` and `row_security_active(text)`: true when row security applies to the relation for the current user. A name of a relation that does not exist is an error.

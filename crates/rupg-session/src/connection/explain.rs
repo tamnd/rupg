@@ -153,10 +153,7 @@ pub(crate) fn join_order(
 ) -> Option<Vec<(usize, bool)>> {
     let members = Members { reader, error: RefCell::new(None), heap, database };
     let barrier = |view: u32| {
-        reader
-            .catalog()
-            .and_then(|c| c.relation(view))
-            .is_some_and(|r| rupg_analyze::option_on(&r.options, "security_barrier"))
+        reader.catalog().and_then(|c| c.relation(view)).is_some_and(rupg_analyze::security_barrier)
     };
     let mut query = rupg_opt::pull_up(query, &barrier);
     rupg_opt::remove_joins(&mut query, &members);
@@ -367,7 +364,7 @@ impl Connection {
             reader
                 .catalog()
                 .and_then(|c| c.relation(view))
-                .is_some_and(|r| rupg_analyze::option_on(&r.options, "security_barrier"))
+                .is_some_and(rupg_analyze::security_barrier)
         };
         let mut query = rupg_opt::pull_up(plan.query(), &barrier);
         rupg_opt::remove_joins(&mut query, &members);
