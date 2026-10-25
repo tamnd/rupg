@@ -12,6 +12,7 @@ use crate::Analyzer;
 use crate::expr::{CastForm, Expr, ExprKind};
 use crate::from::{Column, FromItem, Relation};
 use crate::insert::{Given, INSTEAD_ROW, WriteKind, not_yet, trigger_event};
+use crate::merge::MergeCommand;
 use crate::select::{Query, Target};
 
 /// A column of a view that is not updatable, as `view_col_is_auto_updatable` finds it: the view, the column and the reason.
@@ -32,7 +33,11 @@ pub(crate) struct Fixed {
 impl Fixed {
     /// The error of an `INSERT` or an `UPDATE` that gives the column a value.
     fn error(&self, kind: WriteKind) -> Error {
-        let what = if kind == WriteKind::Insert { "insert into" } else { "update" };
+        let what = match kind {
+            WriteKind::Insert => "insert into",
+            WriteKind::Merge => "merge into",
+            _ => "update",
+        };
         Error::new(
             SqlState::FEATURE_NOT_SUPPORTED,
             format!("cannot {what} column \"{}\" of view \"{}\"", self.column, self.view),
@@ -73,10 +78,14 @@ pub(crate) struct AutoView {
     levels: Vec<(Option<usize>, Vec<Option<i16>>)>,
     /// For each column of the base relation whose view column has a default of `ALTER VIEW ... SET DEFAULT`, the view and the number of the column in the view. The outer view comes first, as `rewriteTargetListIU` adds the defaults of each view before `rewriteTargetView`.
     defaults: BTreeMap<usize, (u32, i16)>,
+    /// The defaults of the `INSERT` actions of a `MERGE`, as [`AutoView::defaults`] gives them for an `INSERT`. [`Analyzer::swap_auto_view_defaults`] puts them in place of the defaults of the `UPDATE` actions.
+    insert_defaults: BTreeMap<usize, (u32, i16)>,
     /// For an `INSERT`, the number of the column of the view of each item of [`Given`], in the same order.
     given: Vec<i16>,
-    /// The numbers of the columns of the view that the write gives values, for `insertedCols` or `updatedCols`.
-    modified: BTreeSet<i16>,
+    /// The numbers of the columns of the view that an `INSERT` or an action `INSERT` of a `MERGE` gives values, for `insertedCols`.
+    inserted: BTreeSet<i16>,
+    /// The numbers of the columns of the view that an `UPDATE` or an action `UPDATE` of a `MERGE` gives values, for `updatedCols`.
+    updated: BTreeSet<i16>,
     /// The checks of `WITH CHECK OPTION` of an `INSERT` or an `UPDATE`: the name of each view and its condition on the base relation, the inner view first.
     checks: Vec<(String, Expr)>,
 }
@@ -188,6 +197,37 @@ fn not_updatable(view: &str, kind: WriteKind, detail: &str) -> Error {
         .with_hint(hint)
 }
 
+/// `error_view_not_updatable` for a `MERGE`: the error of the action `kind` of a view that is not automatically updatable. `MERGE` does not use rules, so the hint names only the trigger.
+fn merge_not_updatable(view: &str, kind: WriteKind, detail: &str) -> Error {
+    let (message, hint) = match kind {
+        WriteKind::Insert => (
+            format!("cannot insert into view \"{view}\""),
+            "To enable inserting into the view using MERGE, provide an INSTEAD OF INSERT trigger.",
+        ),
+        WriteKind::Delete => (
+            format!("cannot delete from view \"{view}\""),
+            "To enable deleting from the view using MERGE, provide an INSTEAD OF DELETE trigger.",
+        ),
+        _ => (
+            format!("cannot update view \"{view}\""),
+            "To enable updating the view using MERGE, provide an INSTEAD OF UPDATE trigger.",
+        ),
+    };
+    Error::new(SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE, message)
+        .with_detail(detail)
+        .with_hint(hint)
+}
+
+/// The kind of the write of an action of a `MERGE`, or `None` for `DO NOTHING`.
+fn action_kind(command: MergeCommand) -> Option<WriteKind> {
+    match command {
+        MergeCommand::Insert => Some(WriteKind::Insert),
+        MergeCommand::Update => Some(WriteKind::Update),
+        MergeCommand::Delete => Some(WriteKind::Delete),
+        MergeCommand::Nothing => None,
+    }
+}
+
 /// The first error of the columns of `fixed`, as `view_cols_are_auto_updatable` finds it: the outer view first, and in a view the first column.
 fn first_fixed<'f>(fixed: impl Iterator<Item = &'f Fixed>, kind: WriteKind) -> Option<Error> {
     fixed.min_by_key(|f| (f.level, f.attnum)).map(|f| f.error(kind))
@@ -259,16 +299,79 @@ impl Analyzer<'_> {
         Ok(*index)
     }
 
-    /// True when the relation has a rule for the event of the write.
+    /// True when the relation has a rule for the event of the write. For a `MERGE`, a rule of any event other than `SELECT` counts, as `RewriteQuery` does not let a `MERGE` write such a relation.
     fn has_rules(&self, oid: u32, kind: WriteKind) -> bool {
         let code = match kind {
             WriteKind::Insert => b'3',
             WriteKind::Update => b'2',
-            _ => b'4',
+            WriteKind::Delete => b'4',
+            WriteKind::Merge => 0,
         };
+        let event = |e: u8| if code == 0 { e != b'1' } else { e == code };
         self.env.catalog().is_some_and(|c| {
-            c.rules().any(|r| r.relation == oid && r.event == code && crate::rules::fires(r))
+            c.rules().any(|r| r.relation == oid && event(r.event) && crate::rules::fires(r))
         })
+    }
+
+    /// `view_has_instead_trigger`: true when the view has a trigger `INSTEAD OF ... FOR EACH ROW` for the event of the write. For a `MERGE`, true when each action other than `DO NOTHING` has such a trigger, which is also true when all the actions are `DO NOTHING`.
+    pub(crate) fn view_has_instead_trigger(&self, view: u32, kind: WriteKind) -> bool {
+        if kind != WriteKind::Merge {
+            return self.user_triggers(view, INSTEAD_ROW | trigger_event(kind));
+        }
+        self.merge_actions
+            .iter()
+            .filter_map(|&c| action_kind(c))
+            .all(|kind| self.user_triggers(view, INSTEAD_ROW | trigger_event(kind)))
+    }
+
+    /// True when the view has a trigger `INSTEAD OF ... FOR EACH ROW` for the event of the write, or for a `MERGE`, for one of its actions.
+    fn some_instead_trigger(&self, view: u32, kind: WriteKind) -> bool {
+        if kind != WriteKind::Merge {
+            return self.user_triggers(view, INSTEAD_ROW | trigger_event(kind));
+        }
+        self.merge_actions
+            .iter()
+            .filter_map(|&c| action_kind(c))
+            .any(|kind| self.user_triggers(view, INSTEAD_ROW | trigger_event(kind)))
+    }
+
+    /// True when the `MERGE` that the analyzer reads now has only actions `DO NOTHING`.
+    pub(crate) fn merge_does_nothing(&self) -> bool {
+        self.merge_actions.iter().all(|&c| c == MergeCommand::Nothing)
+    }
+
+    /// `error_view_not_updatable`: the error of a write of the view `view` with the OID `oid` that is not automatically updatable. For a `MERGE`, the error names the first action that has no trigger `INSTEAD OF`.
+    fn view_not_updatable(&self, view: &str, oid: u32, kind: WriteKind, detail: &str) -> Error {
+        if kind != WriteKind::Merge {
+            return not_updatable(view, kind, detail);
+        }
+        let first = self
+            .merge_actions
+            .iter()
+            .filter_map(|&c| action_kind(c))
+            .find(|&kind| !self.user_triggers(oid, INSTEAD_ROW | trigger_event(kind)));
+        merge_not_updatable(view, first.unwrap_or(WriteKind::Update), detail)
+    }
+
+    /// The part of `rewriteTargetView` for a `MERGE` of a view with triggers `INSTEAD OF` for some of its actions: such a view must have a trigger for each action or for none.
+    ///
+    /// # Errors
+    ///
+    /// `0A000` when the view has a trigger `INSTEAD OF` for an action of the `MERGE`.
+    pub(crate) fn auto_view_merge_triggers(&self) -> Result<()> {
+        let Some(auto) = &self.auto_view else { return Ok(()) };
+        if !self.some_instead_trigger(auto.oid, WriteKind::Merge) {
+            return Ok(());
+        }
+        Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, format!("cannot merge into view \"{}\"", auto.name))
+            .with_detail("MERGE is not supported for views with INSTEAD OF triggers for some actions but not all.")
+            .with_hint("To enable merging into the view, either provide a full set of INSTEAD OF triggers or drop the existing INSTEAD OF triggers."))
+    }
+
+    /// The conditions of the views of an automatically updatable view that a `MERGE` writes, which limit the rows of the target table as `transform_MERGE_to_join` limits them: the conditions of the views of `security_barrier` first, then the conditions of the other views.
+    pub(crate) fn auto_view_quals(&self) -> Option<Expr> {
+        let auto = self.auto_view.as_ref()?;
+        crate::rules::and_filter(None, auto.barrier.iter().chain(&auto.quals).cloned().collect())
     }
 
     /// `RelationHasCheckOption`: `Some(true)` for a view with `check_option=cascaded`, `Some(false)` for `check_option=local`, and `None` for a view with no check option.
@@ -292,7 +395,15 @@ impl Analyzer<'_> {
     ///
     /// `55000` when the view or a view that it reads is not automatically updatable.
     pub(crate) fn auto_view(&mut self, oid: u32, name: &str, kind: WriteKind) -> Result<AutoView> {
-        let check_cols = matches!(kind, WriteKind::Insert | WriteKind::Update);
+        // `insert_or_update`: an `INSERT`, an `UPDATE` or a `MERGE` with an action `INSERT` or `UPDATE`.
+        let check_cols = match kind {
+            WriteKind::Insert | WriteKind::Update => true,
+            WriteKind::Delete => false,
+            WriteKind::Merge => self
+                .merge_actions
+                .iter()
+                .any(|c| matches!(c, MergeCommand::Insert | MergeCommand::Update)),
+        };
         let (mut query, perms) =
             self.stored_query_perms(oid)?.ok_or_else(|| Error::internal("a view with no query"))?;
         self.add_view_perms(oid, &mut query, perms);
@@ -305,7 +416,7 @@ impl Analyzer<'_> {
         for level in 0.. {
             let index = self
                 .auto_updatable(&query, check_cols)
-                .map_err(|d| not_updatable(&view, kind, d))?;
+                .map_err(|d| self.view_not_updatable(&view, view_oid, kind, d))?;
             let relation = query.relations[index].clone();
             let shown: Vec<&Target> = query.targets.iter().filter(|t| !t.junk).collect();
             let mut values = Vec::with_capacity(shown.len());
@@ -355,7 +466,7 @@ impl Analyzer<'_> {
             }
             levels.push((relation.perm, bases.iter().map(|b| b.as_ref().ok().copied()).collect()));
             views.push(view_oid);
-            let option = if kind == WriteKind::Delete { None } else { self.check_option(view_oid) };
+            let option = if check_cols { self.check_option(view_oid) } else { None };
             let cascaded = cascading || option == Some(true);
             if let Some(mut qual) = query.filter.take() {
                 to_relation_0(&mut qual, index);
@@ -376,6 +487,11 @@ impl Analyzer<'_> {
                     return Err(not_yet("a write of a view whose base relation has rules"));
                 }
                 let defaults = self.view_defaults(&views, &levels, kind);
+                let insert_defaults = if kind == WriteKind::Merge {
+                    self.view_defaults(&views, &levels, WriteKind::Insert)
+                } else {
+                    BTreeMap::new()
+                };
                 return Ok(AutoView {
                     oid,
                     name: name.to_string(),
@@ -386,14 +502,14 @@ impl Analyzer<'_> {
                     quals,
                     levels,
                     defaults,
+                    insert_defaults,
                     given: Vec::new(),
-                    modified: BTreeSet::new(),
+                    inserted: BTreeSet::new(),
+                    updated: BTreeSet::new(),
                     checks,
                 });
             };
-            if self.user_triggers(relation.oid, INSTEAD_ROW | trigger_event(kind))
-                || self.has_rules(relation.oid, kind)
-            {
+            if self.some_instead_trigger(relation.oid, kind) || self.has_rules(relation.oid, kind) {
                 return Err(not_yet(
                     "a write of a view whose base view has INSTEAD OF triggers or rules",
                 ));
@@ -431,6 +547,13 @@ impl Analyzer<'_> {
             }
         }
         defaults
+    }
+
+    /// Puts the defaults of the `INSERT` actions of a `MERGE` in place of the defaults of its `UPDATE` actions, or back. `rewriteTargetListIU` gives the defaults of each action of a `MERGE` by the kind of the action.
+    pub(crate) fn swap_auto_view_defaults(&mut self) {
+        if let Some(auto) = self.auto_view.as_mut() {
+            std::mem::swap(&mut auto.defaults, &mut auto.insert_defaults);
+        }
     }
 
     /// The default of the column `index` of the base relation of an automatically updatable view from a view, or `None`: the view and the number of the column in the view.
@@ -534,7 +657,7 @@ impl Analyzer<'_> {
                 }
                 continue;
             };
-            auto.modified.insert(i16::try_from(index + 1).unwrap_or(i16::MAX));
+            auto.updated.insert(i16::try_from(index + 1).unwrap_or(i16::MAX));
             match &auto.columns[index].base {
                 Ok(attnum) => {
                     let base = usize::try_from(attnum - 1).ok().and_then(|i| columns.get(i));
@@ -543,7 +666,8 @@ impl Analyzer<'_> {
                 Err(f) => fixed.push(f.clone()),
             }
         }
-        Some((renamed, unknown, first_fixed(fixed.iter(), WriteKind::Update)))
+        let kind = auto.kind;
+        Some((renamed, unknown, first_fixed(fixed.iter(), kind)))
     }
 
     /// `checkInsertTargets` for an `INSERT` of an automatically updatable view: the columns of the view that the statement names, or all of them, each as the column of the base relation that it shows. A column that is not updatable gets the number `width` and more, which [`Analyzer::auto_view_given`] checks.
@@ -582,12 +706,12 @@ impl Analyzer<'_> {
     pub(crate) fn auto_view_given(&mut self, count: usize) -> Result<()> {
         let Some(auto) = self.auto_view.as_mut() else { return Ok(()) };
         let provided = auto.given.iter().take(count);
-        auto.modified.extend(provided.clone());
+        auto.inserted.extend(provided.clone());
         let fixed = provided.filter_map(|&n| {
             let column = usize::try_from(n - 1).ok().and_then(|i| auto.columns.get(i))?;
             column.base.as_ref().err()
         });
-        first_fixed(fixed, WriteKind::Insert).map_or(Ok(()), Err)
+        first_fixed(fixed, auto.kind).map_or(Ok(()), Err)
     }
 
     /// The end of the write of an automatically updatable view: the privileges of the view and of the relations under it, as `rewriteTargetView` gives the base relation the privileges that the statement needs on the view, with `adjust_view_column_set` for the columns.
@@ -607,28 +731,23 @@ impl Analyzer<'_> {
             .filter(|(_, c)| read.contains(&0) || reads_any(&c.expr, &read))
             .map(|(n, _)| n)
             .collect();
-        view.inserted.clear();
-        view.updated.clear();
-        let insert = auto.kind == WriteKind::Insert;
-        if insert {
-            view.inserted.clone_from(&auto.modified);
-        } else {
-            view.updated.clone_from(&auto.modified);
-        }
+        view.inserted.clone_from(&auto.inserted);
+        view.updated.clone_from(&auto.updated);
         let required = view.required;
-        let mut columns = auto.modified;
-        for (perm, map) in &auto.levels {
-            columns = columns
+        let (mut inserted, mut updated) = (auto.inserted, auto.updated);
+        let down = |columns: &BTreeSet<i16>, map: &[Option<i16>]| -> BTreeSet<i16> {
+            columns
                 .iter()
                 .filter_map(|&n| map.get(usize::try_from(n - 1).ok()?).copied().flatten())
-                .collect();
+                .collect()
+        };
+        for (perm, map) in &auto.levels {
+            inserted = down(&inserted, map);
+            updated = down(&updated, map);
             let Some(perm) = perm.and_then(|p| self.perms.get_mut(p)) else { continue };
             perm.required = required;
-            if insert {
-                perm.inserted.clone_from(&columns);
-            } else if auto.kind == WriteKind::Update {
-                perm.updated.clone_from(&columns);
-            }
+            perm.inserted.clone_from(&inserted);
+            perm.updated.clone_from(&updated);
         }
     }
 }

@@ -319,6 +319,8 @@ pub(crate) struct Analyzer<'a> {
     rule: rules::State,
     /// The view of the write that the analyzer reads now when the write goes to the base relation of the view, as `rewriteTargetView` makes it, or `None`.
     auto_view: Option<autoview::AutoView>,
+    /// The actions of the `WHEN` clauses of the `MERGE` that the analyzer reads now, in the order of the statement, which `view_has_instead_trigger` and `rewriteTargetView` read for a view.
+    merge_actions: Vec<MergeCommand>,
 }
 
 impl<'a> Analyzer<'a> {
@@ -377,6 +379,7 @@ impl<'a> Analyzer<'a> {
             target_perm: None,
             rule: rules::State::default(),
             auto_view: None,
+            merge_actions: Vec::new(),
         }
     }
 
