@@ -172,6 +172,20 @@ row 7,cte (upd)
 SELECT 1
 > ROLLBACK;
 ROLLBACK
+> MERGE INTO mt_ro t USING (VALUES (7), (8)) AS s(a) ON t.a = s.a WHEN MATCHED THEN DO NOTHING WHEN NOT MATCHED THEN DO NOTHING;
+MERGE 0
+> CREATE VIEW mt_agg AS SELECT count(*) AS n FROM mt_base;
+CREATE VIEW
+> MERGE INTO mt_agg t USING (VALUES (1)) AS s(n) ON t.n = s.n WHEN MATCHED THEN DO NOTHING;
+MERGE 0
+> MERGE INTO mt_agg t USING (VALUES (1)) AS s(n) ON t.n = s.n WHEN MATCHED THEN DELETE;
+ERROR 55000 cannot delete from view "mt_agg"
+DETAIL Views that return aggregate functions are not automatically updatable.
+HINT To enable deleting from the view using MERGE, provide an INSTEAD OF DELETE trigger.
+> MERGE INTO mt_agg t USING (SELECT 1 AS n WHERE false) AS s ON t.n = s.n WHEN NOT MATCHED BY SOURCE THEN DO NOTHING;
+MERGE 0
+> DROP VIEW mt_agg;
+DROP VIEW
 > DROP VIEW mt_ro;
 DROP VIEW
 > DROP VIEW mt_v;
