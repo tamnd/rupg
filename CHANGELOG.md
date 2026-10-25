@@ -8,7 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - `ON CONFLICT` takes a collation and an operator class on an element of the inference, as `infer_collation_opclass_match` does. Such an element takes only the unique indexes whose key column has the same collation, or an operator class of the same family and input type. `ASC`, `DESC`, `NULLS FIRST`, `NULLS LAST` and operator class options in the inference give the errors of PostgreSQL (#704).
 - `EXPLAIN` of `INSERT ... ON CONFLICT` names the row that the insert proposes `excluded` and the target table by its alias, as `set_rtable_names` does. Before, the conflict filter showed `excluded` with the name of the table, and `INSERT INTO t AS a` showed no alias (#705).
-- `SET (a, b, c) = ROW(t.*)` of `UPDATE` and `ON CONFLICT DO UPDATE` expands `t.*` to the columns of `t` before it counts the fields, as `transformRowExpr` does. Before, this gave `number of columns does not match number of values` (#NNN).
+- `SET (a, b, c) = ROW(t.*)` of `UPDATE` and `ON CONFLICT DO UPDATE` expands `t.*` to the columns of `t` before it counts the fields, as `transformRowExpr` does. Before, this gave `number of columns does not match number of values` (#706).
 
 ## 0.1.81 (2026-10-25)
 
