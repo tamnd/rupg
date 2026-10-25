@@ -372,6 +372,7 @@ impl Analyzer<'_> {
                 view_check: None,
                 views: 0,
                 modified: Vec::new(),
+                insert_def: None,
             }),
             ..Query::default()
         };

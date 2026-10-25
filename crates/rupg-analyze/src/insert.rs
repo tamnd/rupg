@@ -84,6 +84,33 @@ pub struct Write {
     pub views: usize,
     /// The numbers of the columns that the statement gives values, as `ExecGetInsertedCols` and `ExecGetUpdatedCols` give them for the detail of a failing row. The plan fills them from the privileges of the query.
     pub modified: Vec<i16>,
+    /// The form of an `INSERT` before the rewrite, when the analysis keeps it for a deparse.
+    pub insert_def: Option<Box<InsertDef>>,
+}
+
+/// An `INSERT` as `transformInsertStmt` gives it, before `rewriteTargetListIU` adds the defaults of the other columns, which `get_insert_query_def` shows.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InsertDef {
+    /// The target table, with its alias.
+    pub target: Relation,
+    /// The numbers of the columns that have a value, from 1, in the order of the column list.
+    pub columns: Vec<i16>,
+    /// `OVERRIDING SYSTEM VALUE` or `OVERRIDING USER VALUE`.
+    pub overriding: OverridingKind,
+    pub source: InsertSource,
+}
+
+/// The rows of an [`InsertDef`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum InsertSource {
+    /// `DEFAULT VALUES`.
+    Default,
+    /// The single row of `VALUES`, with the value of each column of [`InsertDef::columns`], or `None` for `DEFAULT`.
+    Row(Vec<Option<Expr>>),
+    /// The rows of `VALUES` with more than one row.
+    Values(Vec<Vec<Option<Expr>>>),
+    /// The query of `INSERT ... SELECT`.
+    Select(Box<Query>),
 }
 
 impl Write {
@@ -362,6 +389,11 @@ impl Analyzer<'_> {
             None => self.insert_targets(&s.cols, &name, &columns)?,
         };
         let explicit = !s.cols.is_empty();
+        // A part of a column and an `INSERT` into a view do not keep their form.
+        let keep = self.keep_source
+            && self.auto_view.is_none()
+            && given.iter().all(|(_, _, indirection)| indirection.is_empty());
+        let mut kept = None;
         let select = match &s.selectStmt {
             None => None,
             Some(Node::SelectStmt(select)) => Some(&**select),
@@ -369,14 +401,30 @@ impl Analyzer<'_> {
         };
         let mut query = match select {
             None => {
+                kept = keep.then_some(InsertSource::Default);
                 let row = self.full_row(table, &columns, &given, Vec::new())?;
                 row_query(&columns, row)
             }
             Some(select) if general_select(select) => {
-                self.insert_select(select, table, &columns, &given, explicit, s.r#override)?
+                let query =
+                    self.insert_select(select, table, &columns, &given, explicit, s.r#override)?;
+                if keep && let Some(sub) = query.relations.first().and_then(|r| r.subquery.clone())
+                {
+                    kept = Some(InsertSource::Select(sub));
+                }
+                query
             }
             Some(select) if select.valuesLists.len() > 1 => {
-                self.insert_values(select, table, &columns, &given, explicit, s.r#override)?
+                let mut rows = keep.then(Vec::new);
+                let query = self.insert_values(
+                    select,
+                    table,
+                    &columns,
+                    (&given, explicit, s.r#override),
+                    rows.as_mut(),
+                )?;
+                kept = rows.map(InsertSource::Values);
+                query
             }
             Some(select) => {
                 let Some(Some(Node::List(list))) = select.valuesLists.first() else {
@@ -386,6 +434,9 @@ impl Analyzer<'_> {
                 let items = self.value_items(list, Kind::ValuesSingle);
                 self.srf_values = false;
                 let items = items?;
+                if keep {
+                    kept = Some(InsertSource::Row(self.kept_row(&items, &columns, &given)?));
+                }
                 let exprs =
                     self.insert_row(items, table, &columns, &given, explicit, s.r#override)?;
                 let row = self.full_row(table, &columns, &given, exprs)?;
@@ -453,11 +504,29 @@ impl Analyzer<'_> {
             self.scope = outer;
             (on_conflict, returning) = result?;
         }
+        let alias = rv.alias.as_ref().and_then(|a| a.aliasname.as_ref()).map(ToString::to_string);
+        let insert_def = kept.map(|source| {
+            let width = match &source {
+                InsertSource::Default => 0,
+                InsertSource::Row(row) => row.len(),
+                InsertSource::Values(rows) => rows.first().map_or(0, Vec::len),
+                InsertSource::Select(sub) => sub.targets.iter().filter(|t| !t.junk).count(),
+            };
+            let mut target = Relation::new(table, columns.clone(), None, None, None);
+            target.name = alias.clone().unwrap_or_else(|| name.clone());
+            target.alias = alias.as_ref().map(|_| Vec::new());
+            let columns = given
+                .iter()
+                .take(width)
+                .map(|(index, _, _)| i16::try_from(index + 1).unwrap_or(i16::MAX))
+                .collect();
+            Box::new(InsertDef { target, columns, overriding: s.r#override, source })
+        });
         query.write = Some(Write {
             kind: WriteKind::Insert,
             table,
             name,
-            alias: rv.alias.as_ref().and_then(|a| a.aliasname.as_ref()).map(ToString::to_string),
+            alias,
             width,
             checks: names,
             unique,
@@ -472,6 +541,7 @@ impl Analyzer<'_> {
             view_check: None,
             views: 0,
             modified: Vec::new(),
+            insert_def,
         });
         self.end_write_with(&mut query, s.withClause.as_deref())?;
         Ok(query)
@@ -1554,15 +1624,31 @@ impl Analyzer<'_> {
         })
     }
 
+    /// A row of `VALUES` as an [`InsertDef`] keeps it: the value of each item for its column, as `transformInsertRow` gives it, or `None` for `DEFAULT`. The row keeps the value of an identity column with `OVERRIDING USER VALUE`, which only `rewriteTargetListIU` drops.
+    fn kept_row(
+        &mut self,
+        items: &[Item],
+        columns: &[Column],
+        given: &[Given],
+    ) -> Result<Vec<Option<Expr>>> {
+        items
+            .iter()
+            .zip(given)
+            .map(|(item, (index, _, _))| match item {
+                Item::Default(_) => Ok(None),
+                Item::Expr(expr) => self.assign(expr.clone(), &columns[*index]).map(Some),
+            })
+            .collect()
+    }
+
     /// `INSERT ... VALUES` with more than one row: each row gets the types of the columns, and the rows are a `VALUES` relation that the row reads.
     fn insert_values(
         &mut self,
         select: &SelectStmt,
         table: u32,
         columns: &[Column],
-        given: &[Given],
-        explicit: bool,
-        overriding: OverridingKind,
+        (given, explicit, overriding): (&[Given], bool, OverridingKind),
+        mut kept: Option<&mut Vec<Vec<Option<Expr>>>>,
     ) -> Result<Query> {
         let mut rows: Vec<Vec<Expr>> = Vec::with_capacity(select.valuesLists.len());
         let mut length = None;
@@ -1581,6 +1667,9 @@ impl Analyzer<'_> {
                     .at_opt(first_place(&items)));
                 }
                 Some(_) => {}
+            }
+            if let Some(kept) = kept.as_mut() {
+                kept.push(self.kept_row(&items, columns, given)?);
             }
             let row = self.insert_row(items, table, columns, given, explicit, overriding)?;
             // `transformInsertRow` with `strip_indirection`: the row keeps the value of a part of a column, and the row of the table sets the part.

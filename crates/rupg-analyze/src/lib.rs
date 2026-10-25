@@ -85,7 +85,8 @@ pub use from::{
 };
 pub use funcargs::{arg_defaults, expand_arguments};
 pub use insert::{
-    Action, Deferrable, Derived, Foreign, OnConflict, Unique, ViewCheck, Write, WriteKind,
+    Action, Deferrable, Derived, Foreign, InsertDef, InsertSource, OnConflict, Unique, ViewCheck,
+    Write, WriteKind,
 };
 pub use locking::{RowMark, check_outer_joins, first_row_mark, locked_tables};
 pub use merge::{MatchKind, Merge, MergeClause, MergeCommand};
@@ -295,6 +296,8 @@ pub(crate) struct Analyzer<'a> {
     keep_unknowns: bool,
     /// True while the analyzer reads the single row of `VALUES` of an `INSERT` or of an action `INSERT` of a `MERGE`, whose list of targets can call a function that gives a set, as `check_srf_call_placement` allows for `EXPR_KIND_VALUES_SINGLE`.
     srf_values: bool,
+    /// True when an `INSERT` keeps its form before the rewrite in [`Write::insert_def`], for a deparse of the query as `get_insert_query_def` shows it.
+    pub(crate) keep_source: bool,
     /// The views whose queries the analyzer reads now, from the outermost. A view in its own query gives `42P17`, as `fireRIRrules` does.
     views: Vec<u32>,
     /// The base type and the typmod of the domain whose check constraint the analyzer reads now, or `None`. Then the name `value` is [`ExprKind::DomainValue`].
@@ -371,6 +374,7 @@ impl<'a> Analyzer<'a> {
             has_windows: false,
             keep_unknowns: false,
             srf_values: false,
+            keep_source: false,
             views: Vec::new(),
             domain_value: None,
             sql_function: None,
