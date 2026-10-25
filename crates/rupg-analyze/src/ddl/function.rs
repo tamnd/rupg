@@ -835,6 +835,8 @@ pub fn function_sqlbody(env: &dyn Env, oid: u32) -> Result<Option<SqlBody>> {
             let mut an = Analyzer::new(env, &params);
             an.set_path(&body.path);
             an.sql_function = Some((function.name.clone(), input_names(function)));
+            // `pg_get_function_sqlbody` shows an `INSERT` as the analysis gives it.
+            an.keep_source = true;
             an
         };
         Ok(Some(match statements(stmt, None)? {

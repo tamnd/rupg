@@ -6,14 +6,15 @@ use std::collections::HashMap;
 
 use rupg_analyze::{
     Column, Cte, FRAMEOPTION_END_OFFSET, FRAMEOPTION_END_UNBOUNDED_FOLLOWING,
-    FRAMEOPTION_START_OFFSET, Frame, FromFunction, FromItem, GroupingSet, Join, JoinKind, JoinRow,
-    NullTreatment, Query, Relation, SetKind, SetOp, SetTree, TableSample,
+    FRAMEOPTION_START_OFFSET, Frame, FromFunction, FromItem, GroupingSet, InsertSource, Join,
+    JoinKind, JoinRow, NullTreatment, Query, Relation, SetKind, SetOp, SetTree, TableSample,
+    WriteKind,
 };
 use rupg_sql::nodes::{
     FRAMEOPTION_BETWEEN, FRAMEOPTION_END_CURRENT_ROW, FRAMEOPTION_END_OFFSET_PRECEDING,
     FRAMEOPTION_EXCLUDE_CURRENT_ROW, FRAMEOPTION_EXCLUDE_GROUP, FRAMEOPTION_EXCLUDE_TIES,
     FRAMEOPTION_NONDEFAULT, FRAMEOPTION_RANGE, FRAMEOPTION_ROWS, FRAMEOPTION_START_CURRENT_ROW,
-    FRAMEOPTION_START_OFFSET_PRECEDING, FRAMEOPTION_START_UNBOUNDED_PRECEDING,
+    FRAMEOPTION_START_OFFSET_PRECEDING, FRAMEOPTION_START_UNBOUNDED_PRECEDING, OverridingKind,
 };
 use rupg_types::qualified_name_list;
 
@@ -82,6 +83,110 @@ impl Deparser<'_> {
         self.in_group_by = saved_group;
         self.outputs = saved_outputs;
         done
+    }
+
+    /// `get_insert_query_def`: an `INSERT` in the form that the analysis kept before the rewrite, with `indent` as the indent of the query. `WITH`, `ON CONFLICT`, `RETURNING`, `UPDATE`, `DELETE` and `MERGE` are not supported yet.
+    pub(super) fn write_def(&mut self, query: &Query, indent: i32) -> Result<()> {
+        let write = query.write.as_ref().ok_or_else(|| Error::internal("a query with no write"))?;
+        let def = match &write.insert_def {
+            Some(def)
+                if write.kind == WriteKind::Insert
+                    && write.on_conflict.is_none()
+                    && write.returning.is_none()
+                    && query.ctes.is_empty() =>
+            {
+                def
+            }
+            _ => return Err(not_yet("a deparse of this INSERT, UPDATE, DELETE or MERGE")),
+        };
+        let target = Query {
+            relations: vec![def.target.clone()],
+            from: vec![FromItem::Relation(0)],
+            ..Query::default()
+        };
+        let space = self.namespace(&target);
+        let refname = space.names.first().cloned().unwrap_or_default();
+        let saved_indent = std::mem::replace(&mut self.indent, indent);
+        self.namespaces.push(space);
+        let done = self.insert_body(def, &refname);
+        self.namespaces.pop();
+        self.indent = saved_indent;
+        done
+    }
+
+    /// The text of [`Deparser::write_def`] for an `INSERT` whose target table has the name `refname`.
+    fn insert_body(&mut self, def: &rupg_analyze::InsertDef, refname: &str) -> Result<()> {
+        self.indent += INDENT_STD;
+        if !self.flat {
+            self.buf.push(' ');
+        }
+        let rel = &def.target;
+        self.buf.push_str("INSERT INTO ");
+        self.buf.push_str(&relation_name(rel.oid, self.session)?);
+        // `get_rte_alias`: `INSERT` needs `AS` before the alias.
+        let renamed =
+            reg::class_name(rel.oid, self.session).is_none_or(|(name, _)| name != refname);
+        if rel.alias.is_some() || renamed {
+            self.buf.push_str(" AS ");
+            self.buf.push_str(&quote_identifier(refname));
+        }
+        self.buf.push(' ');
+        if !def.columns.is_empty() {
+            let names: Vec<String> = def
+                .columns
+                .iter()
+                .map(|&n| {
+                    let column = usize::try_from(n - 1).ok().and_then(|i| rel.columns.get(i));
+                    column.map_or_else(String::new, |c| quote_identifier(&c.name))
+                })
+                .collect();
+            self.buf.push('(');
+            self.buf.push_str(&names.join(", "));
+            self.buf.push_str(") ");
+        }
+        match def.overriding {
+            OverridingKind::OVERRIDING_SYSTEM_VALUE => {
+                self.buf.push_str("OVERRIDING SYSTEM VALUE ");
+            }
+            OverridingKind::OVERRIDING_USER_VALUE => self.buf.push_str("OVERRIDING USER VALUE "),
+            _ => {}
+        }
+        match &def.source {
+            InsertSource::Select(sub) => self.query_def(sub, None, false, self.indent)?,
+            // `get_values_def`.
+            InsertSource::Values(rows) => {
+                self.buf.push_str("VALUES ");
+                for (i, row) in rows.iter().enumerate() {
+                    if i > 0 {
+                        self.buf.push_str(", ");
+                    }
+                    self.buf.push('(');
+                    self.value_list(row, ",")?;
+                    self.buf.push(')');
+                }
+            }
+            InsertSource::Row(row) => {
+                self.keyword("VALUES (", -INDENT_STD, INDENT_STD, 2);
+                self.value_list(row, ", ")?;
+                self.buf.push(')');
+            }
+            InsertSource::Default => self.buf.push_str("DEFAULT VALUES"),
+        }
+        Ok(())
+    }
+
+    /// The values of a row of `VALUES` of an `INSERT`, with `DEFAULT` for `None`, between `sep`.
+    fn value_list(&mut self, row: &[Option<Expr>], sep: &str) -> Result<()> {
+        for (i, value) in row.iter().enumerate() {
+            if i > 0 {
+                self.buf.push_str(sep);
+            }
+            match value {
+                Some(value) => self.toplevel(value, false)?,
+                None => self.buf.push_str("DEFAULT"),
+            }
+        }
+        Ok(())
     }
 
     /// `set_rtable_names`, `set_using_names`, `set_relation_column_names` and `set_join_column_names`: a name for each relation and each join with an alias that no other relation of the query or of the queries outside it has, and the names of the columns of each relation and each join. The names come in the order of the range table, where a join comes after the relations in it.

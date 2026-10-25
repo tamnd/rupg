@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `pg_get_functiondef` shows an `INSERT` of a `BEGIN ATOMIC` body, as PostgreSQL does (#NNN).
 - A statement with no plan in a `BEGIN ATOMIC` body is an error with the command tag of the statement, as in PostgreSQL (#741).
 - A function that gives a set in the single row of `VALUES` of an `INSERT` inserts a row for each of its rows, and a `VALUES` that is not part of an `INSERT` gives the error of PostgreSQL for such a function (#740).
 - The detail of a failing row and of a row that no partition takes follows the column privileges of the user, as in PostgreSQL (#739).

@@ -197,6 +197,7 @@ impl Analyzer<'_> {
             view_check: None,
             views: 0,
             modified: Vec::new(),
+            insert_def: None,
         });
         self.end_write_with(&mut query, s.withClause.as_deref())?;
         Ok(query)
@@ -369,6 +370,7 @@ impl Analyzer<'_> {
                 view_check: None,
                 views: 0,
                 modified: Vec::new(),
+                insert_def: None,
             }),
             ..Query::default()
         };
