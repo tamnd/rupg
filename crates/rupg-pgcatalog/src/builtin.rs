@@ -60,6 +60,8 @@ pub struct ProcRow {
     pub retset: bool,
     /// `provolatile`: `i` immutable, `s` stable or `v` volatile.
     pub volatile: u8,
+    /// `procost`: the cost of a call in units of `cpu_operator_cost`.
+    pub cost: f32,
     pub nargs: i16,
     pub nargdefaults: i16,
     pub rettype: u32,
@@ -446,6 +448,13 @@ impl Rows {
         }
     }
 
+    fn float4(&self, column: &str) -> &'static [f32] {
+        match self.batch(column).values {
+            Values::Float4(v) => v,
+            _ => panic!("{column} is not a float4 column"),
+        }
+    }
+
     fn bool(&self, column: &str) -> &'static [bool] {
         match self.batch(column).values {
             Values::Bool(v) => v,
@@ -614,7 +623,8 @@ fn load_procs() -> Vec<ProcRow> {
     let (oid, name, namespace, lang) =
         (r.oid("oid"), r.text("proname"), r.oid("pronamespace"), r.oid("prolang"));
     let (variadic, kind, strict) = (r.oid("provariadic"), r.char("prokind"), r.bool("proisstrict"));
-    let (retset, volatile) = (r.bool("proretset"), r.char("provolatile"));
+    let (retset, volatile, cost) =
+        (r.bool("proretset"), r.char("provolatile"), r.float4("procost"));
     let (nargs, nargdefaults, rettype) =
         (r.int2("pronargs"), r.int2("pronargdefaults"), r.oid("prorettype"));
     let argtypes = match r.batch("proargtypes").values {
@@ -633,6 +643,7 @@ fn load_procs() -> Vec<ProcRow> {
             strict: strict[i],
             retset: retset[i],
             volatile: volatile[i],
+            cost: cost[i],
             nargs: nargs[i],
             nargdefaults: nargdefaults[i],
             rettype: rettype[i],
@@ -1142,7 +1153,7 @@ struct RangeRow {
 }
 
 /// A function in SQL of the catalog of a session, for [`use_session_types`].
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SessionFunction {
     pub oid: u32,
     pub name: String,
@@ -1151,6 +1162,8 @@ pub struct SessionFunction {
     pub strict: bool,
     pub retset: bool,
     pub volatile: u8,
+    /// `procost`, a positive number.
+    pub cost: f32,
     /// `prokind`: `f` for a function, `p` for a procedure or `a` for an aggregate.
     pub kind: u8,
     pub rettype: u32,
@@ -1169,6 +1182,9 @@ pub struct SessionFunction {
     /// `prosrc` of a function in C or in `internal`, the symbol that runs it, or empty for another language.
     pub src: String,
 }
+
+// `procost` is never NaN, so the equality of two functions is an equivalence.
+impl Eq for SessionFunction {}
 
 /// An operator of the catalog of a session, for [`use_session_types`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1335,6 +1351,7 @@ fn function_row(new: &SessionFunction) -> ProcRow {
         strict: new.strict,
         retset: new.retset,
         volatile: new.volatile,
+        cost: new.cost,
         nargs: i16::try_from(new.argtypes.len()).unwrap_or(i16::MAX),
         nargdefaults: new.nargdefaults,
         rettype: new.rettype,

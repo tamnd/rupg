@@ -347,7 +347,7 @@ fn between<'q>(
         .map(|(q, _)| q.clone())
         .collect();
     quals.extend(classes.iter().filter_map(|c| c.condition(left, right)));
-    quals.sort_by_key(|q| exprs::calls(&q.expr));
+    quals.sort_by(|a, b| exprs::calls(&a.expr).total_cmp(&exprs::calls(&b.expr)));
     quals
 }
 

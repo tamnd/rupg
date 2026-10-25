@@ -9,6 +9,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - `ALTER TABLE ... ADD COLUMN` gives each view that reads the table a new text, as `pg_get_viewdef` writes it. The deparse gives a new column a name that the other columns of the relation do not have, such as `tt3 tt3(ax, b, c, c_1, e)`, so that a join with `USING` or `NATURAL` keeps its columns. The deparse of a join also counts only the columns of a table that are not dropped (#709).
 - `pg_blocking_pids`, `pg_safe_snapshot_blocking_pids` and `pg_isolation_test_session_is_blocked` run. A session is blocked by each session that holds or waits before it for a lock that conflicts, by the session of the transaction that it waits for, and by the session that holds the lock of the catalog of its database. A session that waits for the lock of the catalog now shows the wait event `Lock`, `object`. Thus isolationtester of PostgreSQL can run its tests on rupg (#695).
 - `CREATE FUNCTION` and `ALTER FUNCTION` take a `COST` with a fraction, such as `COST 0.000001`. `procost` keeps the value as a `float4` (#710).
+- The planner reads `procost` of each function. A call costs `procost` times `cpu_operator_cost`, as `add_function_cost` adds it, so `EXPLAIN` shows the costs of PostgreSQL for a function in PL/pgSQL, which costs 100, and for a function such as `to_tsvector`. The conditions of a scan come in the order of their costs, so a function with `COST 0.000001` runs first (#711).
 
 ## 0.1.82 (2026-10-25)
 

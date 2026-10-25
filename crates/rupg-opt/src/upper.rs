@@ -191,9 +191,9 @@ fn sort_if<'q>(
 fn agg_units(aggs: &[&Aggref]) -> f64 {
     aggs.iter()
         .map(|a| {
-            let args: usize = a.args.iter().map(exprs::calls).sum();
-            let filter = a.filter.as_deref().map_or(0, exprs::calls);
-            (1 + args + filter) as f64
+            let args: f64 = a.args.iter().map(exprs::calls).sum();
+            let filter = a.filter.as_deref().map_or(0.0, exprs::calls);
+            1.0 + args + filter
         })
         .sum()
 }
@@ -1772,9 +1772,9 @@ fn windows<'q>(
         let c = node.cost;
         let mut total = c.total;
         for call in &calls[window] {
-            let args: usize = call.args.iter().map(exprs::calls).sum();
-            let filter = call.filter.as_deref().map_or(0, exprs::calls);
-            total += cost::CPU_OPERATOR * (1 + args + filter) as f64 * c.rows;
+            let args: f64 = call.args.iter().map(exprs::calls).sum();
+            let filter = call.filter.as_deref().map_or(0.0, exprs::calls);
+            total += cost::CPU_OPERATOR * (1.0 + args + filter) * c.rows;
         }
         let nkeys = (partition.len() + clause.order.len()) as f64;
         total += cost::CPU_OPERATOR * nkeys * c.rows + cost::CPU_TUPLE * c.rows;

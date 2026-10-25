@@ -1,0 +1,56 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE fq (person text, visibility text);
+CREATE TABLE
+> INSERT INTO fq VALUES ('Tom', 'public'), ('Dick', 'private'), ('Harry', 'public');
+INSERT 0 3
+> CREATE FUNCTION snoop(anyelement) RETURNS boolean AS $$ BEGIN RAISE NOTICE 'snooped value: %', $1; RETURN true; END; $$ LANGUAGE plpgsql COST 0.000001;
+CREATE FUNCTION
+> CREATE FUNCTION dear(anyelement) RETURNS boolean AS $$ BEGIN RAISE NOTICE 'dear value: %', $1; RETURN true; END; $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> EXPLAIN (costs off) SELECT * FROM fq WHERE dear(person) AND person <> 'x' AND snoop(person);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on fq
+row   Filter: (snoop(person) AND (person <> 'x'::text) AND dear(person))
+EXPLAIN
+> EXPLAIN SELECT * FROM fq WHERE dear(person);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on fq  (cost=0.00..238.80 rows=293 width=64)
+row   Filter: dear(person)
+EXPLAIN
+> EXPLAIN SELECT * FROM fq WHERE snoop(person);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on fq  (cost=0.00..18.80 rows=293 width=64)
+row   Filter: snoop(person)
+EXPLAIN
+> EXPLAIN SELECT * FROM fq WHERE person IN ('a', 'b') AND dear(person);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on fq  (cost=0.00..241.00 rows=3 width=64)
+row   Filter: ((person = ANY ('{a,b}'::text[])) AND dear(person))
+EXPLAIN
+> EXPLAIN (costs off) SELECT * FROM fq WHERE to_tsvector(person) @@ to_tsquery('tom') AND person > 'a';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on fq
+row   Filter: ((person > 'a'::text) AND (to_tsvector(person) @@ to_tsquery('tom'::text)))
+EXPLAIN
+> EXPLAIN (costs off) SELECT * FROM fq WHERE pg_table_is_visible(1259) AND person > 'a';
+fields QUERY PLAN:25:-1:-1
+row Result
+row   One-Time Filter: pg_table_is_visible('1259'::oid)
+row   ->  Seq Scan on fq
+row         Filter: (person > 'a'::text)
+EXPLAIN
+> ALTER FUNCTION dear(anyelement) COST 0.0000001;
+ALTER FUNCTION
+> EXPLAIN (costs off) SELECT * FROM fq WHERE dear(person) AND person <> 'x' AND snoop(person);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on fq
+row   Filter: (dear(person) AND snoop(person) AND (person <> 'x'::text))
+EXPLAIN
+> DROP TABLE fq;
+DROP TABLE
+> DROP FUNCTION snoop(anyelement);
+DROP FUNCTION
+> DROP FUNCTION dear(anyelement);
+DROP FUNCTION

@@ -767,7 +767,7 @@ pub(crate) fn qual_costs<'a>(
     quals: impl IntoIterator<Item = &'a Expr>,
     subplans: &[SubCost],
 ) -> (f64, f64) {
-    fn walk(expr: &Expr, subplans: &[SubCost], calls: &mut usize, out: &mut (f64, f64)) {
+    fn walk(expr: &Expr, subplans: &[SubCost], calls: &mut f64, out: &mut (f64, f64)) {
         // An aggregate call and a window call cost nothing, as a column, with their arguments.
         if matches!(expr.kind, ExprKind::Agg(_) | ExprKind::Window(_)) {
             return;
@@ -778,7 +778,7 @@ pub(crate) fn qual_costs<'a>(
         }
         // A call of `GROUPING` costs one operator, with its arguments.
         if matches!(expr.kind, ExprKind::Grouping(_)) {
-            *calls += 1;
+            *calls += 1.0;
             return;
         }
         if let ExprKind::SubLink(link) = &expr.kind
@@ -801,10 +801,10 @@ pub(crate) fn qual_costs<'a>(
     }
     let (mut startup, mut per_row) = (0.0, 0.0);
     for qual in quals {
-        let (mut calls, mut sub) = (0, (0.0, 0.0));
+        let (mut calls, mut sub) = (0.0, (0.0, 0.0));
         walk(qual, subplans, &mut calls, &mut sub);
         startup += sub.0;
-        per_row += CPU_OPERATOR * calls as f64 + sub.1;
+        per_row += CPU_OPERATOR * calls + sub.1;
     }
     (startup, per_row)
 }
@@ -814,10 +814,11 @@ fn array_op_cost(func: u32, any: bool, args: &[Expr]) -> (f64, f64) {
     let Some(array) = args.get(1) else { return (0.0, CPU_OPERATOR) };
     let array = strip_array_coercion(array);
     let items = array_length(array);
+    let op = CPU_OPERATOR * exprs::func_cost(func);
     if hashed_array_op(func, any, args.first().map_or(0, |a| a.ty), array) {
-        return (items * CPU_OPERATOR, CPU_OPERATOR + CPU_OPERATOR);
+        return (items * CPU_OPERATOR, CPU_OPERATOR + op);
     }
-    (0.0, CPU_OPERATOR * items * 0.5)
+    (0.0, op * items * 0.5)
 }
 
 /// `strip_array_coercion`: the array below a relabel and below a coercion of an array whose items only relabel.
