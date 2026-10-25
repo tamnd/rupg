@@ -106,7 +106,7 @@ impl Analyzer<'_> {
             }
         }
         let mut relations = [None, None];
-        for (index, slot) in relations.iter_mut().zip(&names) {
+        for ((index, slot), old) in relations.iter_mut().zip(&names).zip([true, false]) {
             let Some((name, at)) = slot else { continue };
             if self.has_refname(name)? {
                 return Err(Error::new(
@@ -115,7 +115,7 @@ impl Analyzer<'_> {
                 )
                 .at_opt(*at));
             }
-            *index = Some(self.add_returning_item(name)?);
+            *index = Some(self.add_returning_item(name, old, kind)?);
         }
         let mut targets = self.target_list(&clause.exprs, Kind::Returning)?;
         if targets.is_empty() {

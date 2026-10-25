@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use rupg_catalog::RelKind;
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{List, Node, RangeVar};
+use rupg_types::{Value, oid};
 
 use crate::Analyzer;
 use crate::expr::{CastForm, Expr, ExprKind};
@@ -218,6 +219,13 @@ fn merge_not_updatable(view: &str, kind: WriteKind, detail: &str) -> Error {
         .with_hint(hint)
 }
 
+/// The error of a `MERGE` of the view `view` with triggers `INSTEAD OF` for some of its actions.
+fn merge_some_triggers(view: &str) -> Error {
+    Error::new(SqlState::FEATURE_NOT_SUPPORTED, format!("cannot merge into view \"{view}\""))
+        .with_detail("MERGE is not supported for views with INSTEAD OF triggers for some actions but not all.")
+        .with_hint("To enable merging into the view, either provide a full set of INSTEAD OF triggers or drop the existing INSTEAD OF triggers.")
+}
+
 /// The kind of the write of an action of a `MERGE`, or `None` for `DO NOTHING`.
 fn action_kind(command: MergeCommand) -> Option<WriteKind> {
     match command {
@@ -348,21 +356,6 @@ impl Analyzer<'_> {
         merge_not_updatable(view, first.unwrap_or(WriteKind::Update), detail)
     }
 
-    /// The part of `rewriteTargetView` for a `MERGE` of a view with triggers `INSTEAD OF` for some of its actions: such a view must have a trigger for each action or for none.
-    ///
-    /// # Errors
-    ///
-    /// `0A000` when the view has a trigger `INSTEAD OF` for an action of the `MERGE`.
-    pub(crate) fn auto_view_merge_triggers(&self) -> Result<()> {
-        let Some(auto) = &self.auto_view else { return Ok(()) };
-        if !self.some_instead_trigger(auto.oid, WriteKind::Merge) {
-            return Ok(());
-        }
-        Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, format!("cannot merge into view \"{}\"", auto.name))
-            .with_detail("MERGE is not supported for views with INSTEAD OF triggers for some actions but not all.")
-            .with_hint("To enable merging into the view, either provide a full set of INSTEAD OF triggers or drop the existing INSTEAD OF triggers."))
-    }
-
     /// The conditions of the views of an automatically updatable view that a `MERGE` writes, which limit the rows of the target table as `transform_MERGE_to_join` limits them: the conditions of the views of `security_barrier` first, then the conditions of the other views.
     pub(crate) fn auto_view_quals(&self) -> Option<Expr> {
         let auto = self.auto_view.as_ref()?;
@@ -412,6 +405,10 @@ impl Analyzer<'_> {
             let index = self
                 .auto_updatable(&query, check_cols)
                 .map_err(|d| self.view_not_updatable(&view, view_oid, kind, d))?;
+            // `rewriteTargetView` of a `MERGE` of a view with triggers `INSTEAD OF` for some of its actions: such a view must have a trigger for each action or for none.
+            if kind == WriteKind::Merge && self.some_instead_trigger(view_oid, kind) {
+                return Err(merge_some_triggers(&view));
+            }
             let relation = query.relations[index].clone();
             let shown: Vec<&Target> = query.targets.iter().filter(|t| !t.junk).collect();
             let mut values = Vec::with_capacity(shown.len());
@@ -477,7 +474,9 @@ impl Analyzer<'_> {
             }
             cascading = cascaded;
             let inner = self.env.catalog().and_then(|c| c.relation(relation.oid));
-            let Some(inner) = inner.filter(|r| r.kind == RelKind::View) else {
+            // `RewriteQuery`: the triggers `INSTEAD OF` of an inner view do the write of the inner view.
+            let triggers = self.view_has_instead_trigger(relation.oid, kind);
+            let Some(inner) = inner.filter(|r| r.kind == RelKind::View && !triggers) else {
                 if self.has_rules(relation.oid, kind) {
                     return Err(not_yet("a write of a view whose base relation has rules"));
                 }
@@ -504,10 +503,8 @@ impl Analyzer<'_> {
                     checks,
                 });
             };
-            if self.some_instead_trigger(relation.oid, kind) || self.has_rules(relation.oid, kind) {
-                return Err(not_yet(
-                    "a write of a view whose base view has INSTEAD OF triggers or rules",
-                ));
+            if self.has_rules(relation.oid, kind) {
+                return Err(not_yet("a write of a view whose base view has rules"));
             }
             view.clone_from(&inner.name);
             view_oid = relation.oid;
@@ -578,8 +575,12 @@ impl Analyzer<'_> {
         let view = auto.oid;
         let columns: Vec<(String, Expr)> =
             auto.columns.iter().map(|c| (c.name.clone(), c.expr.clone())).collect();
+        let (name, given) = (relation.name.clone(), relation.alias.clone());
         let mut item = self.add_relation(relation, refname, alias)?;
         let index = self.scope.relations.len() - 1;
+        // `rewriteTargetView`: the entry of the base relation is the entry of the query of the view, with its name and not the alias of the statement.
+        let base = &mut self.scope.relations[index];
+        (base.name, base.alias) = (name, given);
         item.set_columns(columns.into_iter().map(|(n, mut e)| {
             from_relation_0(&mut e, index);
             (n, e)
@@ -588,16 +589,62 @@ impl Analyzer<'_> {
         Ok(Some(item))
     }
 
-    /// The columns of the view as the item `old` or `new` of `RETURNING`, which reads the relation `index`.
-    pub(crate) fn auto_view_returning(&mut self, item: &mut crate::from::Item, index: usize) {
-        let Some(auto) = &self.auto_view else { return };
+    /// The columns of the view as the item `old` or `new` of `RETURNING` or as `EXCLUDED`, which reads the relation `index`. `row` is the kind of the write, as `RETURNING` sees it, and true for the old row or false for the new row.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the operator `=` of the action of a `MERGE`.
+    pub(crate) fn auto_view_returning(
+        &mut self,
+        item: &mut crate::from::Item,
+        index: usize,
+        row: Option<(WriteKind, bool)>,
+    ) -> Result<()> {
+        let Some(auto) = &self.auto_view else { return Ok(()) };
         let view = auto.oid;
-        item.set_columns(auto.columns.iter().map(|c| {
-            let mut expr = c.expr.clone();
+        let mut columns: Vec<(String, Expr)> =
+            auto.columns.iter().map(|c| (c.name.clone(), c.expr.clone())).collect();
+        // `ReplaceVarsFromTargetList`: a column of the view that is not a column of the base relation is in a `ReturningExpr`, which gives a null when the action has no such row.
+        if let Some(when) = row.map(|(kind, old)| self.no_row(kind, old)).transpose()?.flatten() {
+            for (_, expr) in &mut columns {
+                if matches!(expr.kind, ExprKind::Var(var) if var.relation == 0 && var.levels_up == 0)
+                {
+                    continue;
+                }
+                let (ty, typmod) = (expr.ty, expr.typmod);
+                let mut null = Expr::new(ExprKind::Const(Value::Null), ty);
+                null.typmod = typmod;
+                let value = std::mem::replace(expr, null.clone());
+                let case = crate::expr::Case {
+                    arg: None,
+                    whens: vec![(when.clone(), null)],
+                    default: Box::new(value),
+                };
+                *expr = Expr::new(ExprKind::Case(case), ty);
+                expr.typmod = typmod;
+            }
+        }
+        item.set_columns(columns.into_iter().map(|(name, mut expr)| {
             from_relation_0(&mut expr, index);
-            (c.name.clone(), expr)
+            (name, expr)
         }));
         self.set_entry_oid(item, view);
+        Ok(())
+    }
+
+    /// The condition that a write of `kind` has no old row, when `old` is true, or no new row: `true` for the old row of an `INSERT` and the new row of a `DELETE`, a test of `merge_action()` for a `MERGE`, and `None` when the row is always there.
+    fn no_row(&mut self, kind: WriteKind, old: bool) -> Result<Option<Expr>> {
+        if (kind == WriteKind::Insert && old) || (kind == WriteKind::Delete && !old) {
+            return Ok(Some(Expr::new(ExprKind::Const(Value::Bool(true)), oid::BOOL)));
+        }
+        let Some(relation) = self.scope.merge_action.filter(|_| kind == WriteKind::Merge) else {
+            return Ok(None);
+        };
+        let var = crate::expr::Var { relation, attnum: 1, levels_up: 0 };
+        let var = Expr::new(ExprKind::Var(var), oid::TEXT);
+        let name = if old { "INSERT" } else { "DELETE" };
+        let name = Expr::new(ExprKind::Const(Value::Text(name.into())), oid::TEXT);
+        self.make_op(&["="], Some(var), name, None).map(Some)
     }
 
     /// `markTargetListOrigins` for `RETURNING` of an automatically updatable view: a column of the view and the whole row of the view name the view and the number of the column in the view, as the parser sees the view before `rewriteTargetView`. Another value of the view has no origin.
@@ -625,6 +672,14 @@ impl Analyzer<'_> {
                 false
             });
             // A column of the view that reads no column of the base relation, such as a constant, has its name.
+            // The value of a column of the view in a `ReturningExpr` of [`Analyzer::auto_view_returning`].
+            if let ExprKind::Case(case) = &expr.kind
+                && case.arg.is_none()
+                && let [(_, result)] = case.whens.as_slice()
+                && matches!(result.kind, ExprKind::Const(Value::Null))
+            {
+                expr = (*case.default).clone();
+            }
             let same = |c: &ViewColumn| c.expr.same(&expr);
             let named = auto.columns.iter().position(|c| c.name == target.name && same(c));
             let index =

@@ -719,7 +719,8 @@ impl<'q> Builder<'q> {
                 scope,
             }
         });
-        let relation = if operation == Operation::Insert { TARGET } else { 0 };
+        // `ApplyRetrieveRule`: the view with triggers `INSTEAD OF` that an `UPDATE`, a `DELETE` or a `MERGE` writes is one more entry of the range table after the subquery of the view.
+        let relation = if operation == Operation::Insert || write.instead { TARGET } else { 0 };
         let c = node.cost;
         let mut out = Node::new(
             Kind::Modify { operation, table: write.table, relation, conflict, targets: Vec::new() },
