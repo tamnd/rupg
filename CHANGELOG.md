@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.79 (2026-10-25)
+
 ### Added
 
 - `pg_stat_get_autovacuum_scores` runs, so the view `pg_stat_autovacuum_scores` gives one row for each table, materialized view and TOAST table that is not temporary. The scores and the flags `do_vacuum`, `do_analyze` and `for_wraparound` come from the same steps as `relation_needs_vacanalyze`: the age of `relfrozenxid` and `relminmxid`, the counts of dead, inserted and changed rows, the settings of autovacuum and the options of the table. A TOAST table without its own options uses the options of its main table (#678).
