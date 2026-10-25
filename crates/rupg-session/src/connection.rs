@@ -60,6 +60,7 @@ mod writes;
 
 pub(crate) use activity::{Activity, Pending};
 use copy_from::Begin;
+pub(crate) use explain::join_order;
 use extended::Failed;
 pub(crate) use extended::{Portal, Prepared};
 use writes::Writes;
@@ -4593,6 +4594,12 @@ mod tests {
     #[test]
     fn vproc() {
         big_stack(|| script(include_str!("connection/vproc.test")));
+    }
+
+    /// A join gives its rows in the order of its plan: a nested loop gives the rows of its inner side for each row of its outer side, and a hash join gives the rows of its inner side that match in the reverse order of the scan, as `ExecHashTableInsert` puts each row at the head of its bucket. `connection/vjoinorder.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vjoinorder() {
+        big_stack(|| script(include_str!("connection/vjoinorder.test")));
     }
 
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.

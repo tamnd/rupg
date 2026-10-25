@@ -22,8 +22,8 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 
 use rupg_analyze::{
-    Cte, Expr, ExprKind, FromItem, Query, SubLink, SubLinkKind, TABLE_OID_ATTNUM, Var, Write,
-    WriteKind,
+    Cte, Expr, ExprKind, FromItem, JoinKind, Query, SubLink, SubLinkKind, TABLE_OID_ATTNUM, Var,
+    Write, WriteKind,
 };
 use rupg_plan::{Item, Kind, Label, Leaf, Node, Operation, Plan, Scope, SubPlan};
 use rupg_types::oid;
@@ -144,6 +144,46 @@ pub fn plan<'q>(query: &'q Query, members: &'q dyn Members) -> Plan<'q> {
     let plan = plan_with(query, members);
     ENABLE.with(|e| e.set(saved));
     plan
+}
+
+/// The order of the rows of the joins of the plan `plan` of a query, as `ExecNestLoop` and `ExecHashJoin` give them: the relations of the query from the outermost loop to the innermost one, each with true when its rows come in the reverse order of the scan. A nested loop gives the rows of its inner side for each row of its outer side, and a hash join gives the rows of its inner side in the reverse order, as `ExecHashTableInsert` puts each row at the head of its bucket. `None` when the plan has a node that gives its rows in another order, such as a sort, an index scan or a merge join.
+pub fn join_order(plan: &Plan<'_>) -> Option<Vec<(usize, bool)>> {
+    let mut node = &plan.root;
+    loop {
+        match &node.kind {
+            Kind::Limit | Kind::LockRows | Kind::Materialize => {}
+            Kind::Aggregate { strategy: rupg_plan::Strategy::Plain, .. } => {}
+            Kind::Result { .. } if node.children.len() == 1 => {}
+            _ => break,
+        }
+        node = node.children.first()?;
+    }
+    let mut out = Vec::new();
+    loop_order(node, false, &mut out).then_some(out)
+}
+
+/// The relations of the join tree `node` for [`join_order`], with `reverse` for the rows of an inner side of a hash join.
+fn loop_order(node: &Node<'_>, reverse: bool, out: &mut Vec<(usize, bool)>) -> bool {
+    let inner_or_left = |join: &JoinKind| matches!(join, JoinKind::Inner | JoinKind::Left);
+    match (&node.kind, node.children.as_slice()) {
+        (Kind::SeqScan(relation), []) if node.scope == 0 && node.member.is_none() => {
+            out.push((*relation, reverse));
+            true
+        }
+        (Kind::Materialize, [child]) => loop_order(child, reverse, out),
+        (Kind::NestedLoop { join, .. }, [outer, inner]) if inner_or_left(join) => {
+            loop_order(outer, reverse, out) && loop_order(inner, reverse, out)
+        }
+        (Kind::HashJoin { join, .. }, [outer, hash]) if inner_or_left(join) => {
+            match (&hash.kind, hash.children.as_slice()) {
+                (Kind::Hash, [inner]) => {
+                    loop_order(outer, reverse, out) && loop_order(inner, !reverse, out)
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
 }
 
 /// [`plan`] with the settings of `members` in place.

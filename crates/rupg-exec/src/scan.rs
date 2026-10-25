@@ -3,6 +3,7 @@
 //! A tuple of the join is the row number of each relation of the query, or [`NONE`] for a relation that a row of an outer join does not have. The rows of each relation are read once, with only the columns that the query uses.
 
 use std::cell::RefCell;
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -813,7 +814,7 @@ struct JoinInput<'a> {
 }
 
 /// The value of an expression for a tuple. A condition passes when it gives true.
-type Test<'a> = dyn FnMut(&Expr, &[usize]) -> Result<Value> + 'a;
+pub(crate) type Test<'a> = dyn FnMut(&Expr, &[usize]) -> Result<Value> + 'a;
 
 /// The run of a relation that reads other relations: the rows of the relation for a tuple of the relations that it reads.
 pub(crate) type Source<'a> = dyn FnMut(usize, &[usize]) -> Result<Vec<Vec<Value>>> + 'a;
@@ -853,7 +854,7 @@ fn keep(tuples: Vec<Vec<usize>>, conds: &[&Expr], test: &mut Test<'_>) -> Result
     Ok(kept)
 }
 
-/// The tuples of the query before the target list: the parts of `FROM` joined with a cross join, and the `WHERE` condition. Each part of `WHERE` that `AND` joins goes down to the smallest part of `FROM` that has its relations, where the query can test it on fewer rows. `test` gives true when a condition is true for a tuple.
+/// The tuples of the query before the target list: the parts of `FROM` joined with a cross join, and the `WHERE` condition. Each part of `WHERE` that `AND` joins goes down to the smallest part of `FROM` that has its relations, where the query can test it on fewer rows. `test` gives true when a condition is true for a tuple. The tuples come in the order `planned` of the joins of the plan, which [`rupg_opt::join_order`] gives, when it has each relation of `FROM`.
 ///
 /// # Errors
 ///
@@ -863,6 +864,7 @@ pub(crate) fn tuples(
     tables: &Tables,
     test: &mut Test<'_>,
     source: &mut Source<'_>,
+    planned: Option<&[(usize, bool)]>,
 ) -> Result<Vec<Vec<usize>>> {
     let width = query.relations.len();
     let mut scan = Scan { tables, width, test, source };
@@ -927,8 +929,26 @@ pub(crate) fn tuples(
         acc_relations = all;
     }
     let mut acc = keep(acc, &rest, scan.test)?;
-    // The tuples come in the order of the joins in the written order, as the row numbers of the relations of each part give it.
-    if order.is_some() {
+    let mut all: Vec<usize> = items.iter().flat_map(|(_, r)| r.iter().copied()).collect();
+    all.sort_unstable();
+    let planned = planned.filter(|planned| {
+        let mut relations: Vec<usize> = planned.iter().map(|&(r, _)| r).collect();
+        relations.sort_unstable();
+        relations == all
+    });
+    if let Some(planned) = planned {
+        let cmp = |a: &Vec<usize>, b: &Vec<usize>| {
+            planned
+                .iter()
+                .map(|&(r, reverse)| if reverse { b[r].cmp(&a[r]) } else { a[r].cmp(&b[r]) })
+                .find(|o| o.is_ne())
+                .unwrap_or(Ordering::Equal)
+        };
+        if !acc.is_sorted_by(|a, b| cmp(a, b).is_le()) {
+            acc.sort_by(cmp);
+        }
+    } else if order.is_some() {
+        // The tuples come in the order of the joins in the written order, as the row numbers of the relations of each part give it.
         let columns: Vec<usize> = items.iter().flat_map(|(_, r)| r.iter().copied()).collect();
         acc.sort_by(|a, b| columns.iter().map(|&c| a[c]).cmp(columns.iter().map(|&c| b[c])));
     }
