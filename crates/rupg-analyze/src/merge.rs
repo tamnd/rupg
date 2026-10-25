@@ -373,6 +373,7 @@ impl Analyzer<'_> {
                 views: 0,
                 modified: Vec::new(),
                 insert_def: None,
+                set_def: None,
             }),
             ..Query::default()
         };
@@ -404,7 +405,7 @@ impl Analyzer<'_> {
                 (MergeCommand::Insert, row?)
             }
             CmdType::CMD_UPDATE => {
-                (MergeCommand::Update, self.update_row(rv, table, name, columns, list)?)
+                (MergeCommand::Update, self.update_row(rv, table, name, columns, list, None)?)
             }
             CmdType::CMD_DELETE => (MergeCommand::Delete, Vec::new()),
             _ => (MergeCommand::Nothing, Vec::new()),

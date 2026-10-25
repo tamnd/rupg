@@ -102,7 +102,10 @@ impl Analyzer<'_> {
             self.set_items(list)?;
             return Err(error);
         }
-        let row = self.update_row(rv, table, &name, &columns, list)?;
+        // An `UPDATE` of a view and a rewrite for a rule do not keep their form.
+        let keep = self.keep_source && self.auto_view.is_none() && inverted.is_empty();
+        let mut set_def = keep.then(Vec::new);
+        let row = self.update_row(rv, table, &name, &columns, list, set_def.as_mut())?;
         if rows {
             // The rows of `*rule*`: the new row, with its generated columns, then the old row.
             let generated = if self.is_partitioned(table) {
@@ -198,12 +201,13 @@ impl Analyzer<'_> {
             views: 0,
             modified: Vec::new(),
             insert_def: None,
+            set_def,
         });
         self.end_write_with(&mut query, s.withClause.as_deref())?;
         Ok(query)
     }
 
-    /// `transformUpdateTargetList` with the defaults of `rewriteTargetListIU`: the new row of an `UPDATE` or of `ON CONFLICT DO UPDATE` for the items of `SET`. A column that `SET` does not give keeps the value of the column of the target table, which is the relation 0.
+    /// `transformUpdateTargetList` with the defaults of `rewriteTargetListIU`: the new row of an `UPDATE` or of `ON CONFLICT DO UPDATE` for the items of `SET`. A column that `SET` does not give keeps the value of the column of the target table, which is the relation 0. `kept` gets the items before `rewriteTargetListIU`.
     pub(crate) fn update_row(
         &mut self,
         rv: &RangeVar,
@@ -211,6 +215,7 @@ impl Analyzer<'_> {
         name: &str,
         columns: &[Column],
         list: &rupg_sql::nodes::List,
+        kept: Option<&mut Vec<(i16, Option<Expr>)>>,
     ) -> Result<Vec<Expr>> {
         let items = self.set_items(list)?;
         // `transformUpdateTargetList`: the column of each item, and the expression cast to the type of the column.
@@ -236,6 +241,10 @@ impl Analyzer<'_> {
                 }
             };
             given.push((index, expr));
+        }
+        if let Some(kept) = kept {
+            let attnum = |index: usize| i16::try_from(index + 1).unwrap_or(i16::MAX);
+            kept.extend(given.iter().map(|(index, expr)| (attnum(*index), expr.clone())));
         }
         // `process_matched_tle` of `rewriteTargetListIU`: a column gets one item, or the items that set parts of the column make one value.
         let mut slots: Vec<Option<Option<Expr>>> = vec![None; columns.len()];
@@ -371,6 +380,8 @@ impl Analyzer<'_> {
                 views: 0,
                 modified: Vec::new(),
                 insert_def: None,
+                set_def: (self.keep_source && self.auto_view.is_none() && inverted.is_empty())
+                    .then(Vec::new),
             }),
             ..Query::default()
         };

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `pg_get_ruledef` and `pg_get_functiondef` show `UPDATE` and `DELETE`, and a view shows `ONLY` (#745).
 - `pg_get_ruledef` and `\d+` show a rule action `INSERT`, also with values for parts of columns (#744).
 
 ## 0.1.86 (2026-10-25)

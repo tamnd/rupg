@@ -86,6 +86,8 @@ pub struct Write {
     pub modified: Vec<i16>,
     /// The form of an `INSERT` before the rewrite, when the analysis keeps it for a deparse.
     pub insert_def: Option<Box<InsertDef>>,
+    /// The items of `SET` of an `UPDATE` before the rewrite, or no items for a `DELETE`, when the analysis keeps the form for a deparse. Each item has the number of its column from 1, and its value, or `None` for `DEFAULT`. The value for a part of a column is the assignment to the part of the old value.
+    pub set_def: Option<Vec<(i16, Option<Expr>)>>,
 }
 
 /// An `INSERT` as `transformInsertStmt` gives it, before `rewriteTargetListIU` adds the defaults of the other columns, which `get_insert_query_def` shows.
@@ -556,6 +558,7 @@ impl Analyzer<'_> {
             views: 0,
             modified: Vec::new(),
             insert_def,
+            set_def: None,
         });
         self.end_write_with(&mut query, s.withClause.as_deref())?;
         Ok(query)
@@ -683,7 +686,7 @@ impl Analyzer<'_> {
         let list = renamed.as_ref().unwrap_or(&clause.targetList);
         let row = match error {
             Some(error) => self.set_items(list).and(Err(error)),
-            None => self.update_row(rv, table, name, columns, list),
+            None => self.update_row(rv, table, name, columns, list, None),
         };
         let parts = row.and_then(|row| {
             let filter = self.target_where(clause.whereClause.as_ref())?;
