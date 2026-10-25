@@ -601,6 +601,13 @@ impl<'a> Deparser<'a> {
                     .ok_or_else(|| Error::internal(format!("no operator for function {func}")))?;
                 self.buf.push_str(&format!(" {} {} (", op.name, if *any { "ANY" } else { "ALL" }));
                 self.paren(&args[1], true, e)?;
+                // A bare scalar subquery after `ANY` reads back as an `ANY` subquery, so the text has a cast that the analyzer takes away again.
+                if let ExprKind::SubLink(sub) = &args[1].kind
+                    && sub.kind == SubLinkKind::Expr
+                {
+                    let ty = reg::type_text(args[1].ty, Some(args[1].typmod), self.session)?;
+                    self.buf.push_str(&format!("::{ty}"));
+                }
                 self.buf.push(')');
                 self.close();
             }

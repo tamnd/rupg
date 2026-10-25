@@ -1,0 +1,18 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE VIEW sav AS SELECT 'foo'::text = ANY(ARRAY['abc','def','foo']::text[]) c1, 'foo'::text = ANY((SELECT ARRAY['abc','def','foo']::text[])::text[]) c2, 3 = ALL((SELECT ARRAY[3, 3])::int[]) c3, 2 = ANY(SELECT 2) c4;
+CREATE VIEW
+> SELECT pg_get_viewdef('sav', true);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT 'foo'::text = ANY (ARRAY['abc'::text, 'def'::text, 'foo'::text]) AS c1,
+    'foo'::text = ANY ((( SELECT ARRAY['abc'::text, 'def'::text, 'foo'::text] AS "array"))::text[]) AS c2,
+    3 = ALL ((( SELECT ARRAY[3, 3] AS "array"))::integer[]) AS c3,
+    (2 IN ( SELECT 2)) AS c4;
+SELECT 1
+> SELECT * FROM sav;
+fields c1@sav.1:16:1:-1,c2@sav.2:16:1:-1,c3@sav.3:16:1:-1,c4@sav.4:16:1:-1
+row t,t,t,t
+SELECT 1
+> DROP VIEW sav;
+DROP VIEW
