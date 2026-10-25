@@ -4464,6 +4464,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/fcost.test")));
     }
 
+    /// The planner orders the conditions of a scan by the `procost` of their functions, as `order_qual_clauses` does, and `EXPLAIN` adds `procost` times `cpu_operator_cost` for each call. `connection/fqcost.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn fqcost() {
+        big_stack(|| script(include_str!("connection/fqcost.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {

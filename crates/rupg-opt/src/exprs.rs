@@ -226,22 +226,25 @@ pub(crate) fn can_merge(op: u32) -> bool {
     builtin::operator_by_oid(op).is_some_and(|row| row.can_merge)
 }
 
-/// The number of calls of functions and operators in an expression, outside its subqueries, which is the cost of the expression for each row in units of `cpu_operator_cost`, as `cost_qual_eval`. A row comparison costs the operators of its columns, which are its children.
-pub(crate) fn calls(expr: &Expr) -> usize {
-    own_calls(expr) + expr.children().into_iter().map(calls).sum::<usize>()
+/// The cost of the calls of functions and operators in an expression, outside its subqueries, in units of `cpu_operator_cost`, which is the cost of the expression for each row, as `cost_qual_eval`. A row comparison costs the operators of its columns, which are its children.
+pub(crate) fn calls(expr: &Expr) -> f64 {
+    own_calls(expr) + expr.children().into_iter().map(calls).sum::<f64>()
 }
 
-/// The calls of [`calls`] in the node of an expression, without its children.
-pub(crate) fn own_calls(expr: &Expr) -> usize {
-    match expr.kind {
-        ExprKind::Func(_)
-        | ExprKind::NullIf { .. }
-        | ExprKind::Distinct { .. }
-        | ExprKind::ScalarArrayOp { .. }
-        | ExprKind::MinMax { .. } => 1,
+/// `procost` of the function `func`, as `get_func_cost` reads it, or 1 for a function that the planner does not know.
+pub(crate) fn func_cost(func: u32) -> f64 {
+    builtin::proc_by_oid(func).map_or(1.0, |p| f64::from(p.cost))
+}
+
+/// The cost of [`calls`] in the node of an expression, without its children. A call, an operator, `NULLIF` and `IS DISTINCT FROM` cost the `procost` of their function, as `add_function_cost` adds it.
+pub(crate) fn own_calls(expr: &Expr) -> f64 {
+    match &expr.kind {
+        ExprKind::Func(f) => func_cost(f.oid),
+        ExprKind::NullIf { equal, .. } | ExprKind::Distinct { equal, .. } => func_cost(*equal),
+        ExprKind::ScalarArrayOp { .. } | ExprKind::MinMax { .. } => 1.0,
         // The input function of the new type and the output function of the old type.
-        ExprKind::CoerceViaIo(..) => 2,
-        _ => 0,
+        ExprKind::CoerceViaIo(..) => 2.0,
+        _ => 0.0,
     }
 }
 
