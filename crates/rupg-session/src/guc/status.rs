@@ -28,7 +28,7 @@ impl Status {
 }
 
 /// The honored parameters with the part of rupg that reads each one, in the order of the names without regard to case.
-pub static HONORED: [(&str, &str); 37] = [
+pub static HONORED: [(&str, &str); 38] = [
     ("application_name", "The server reports it to the client."),
     ("array_nulls", "The input of an array reads an unquoted NULL as a null when it is on."),
     ("bytea_output", "The output of bytea uses the hex or the escape form."),
@@ -55,6 +55,10 @@ pub static HONORED: [(&str, &str); 37] = [
     ("md5_password_warnings", "The server warns when a client uses an MD5 password."),
     ("password_encryption", "The server stores new passwords with this method."),
     ("port", "The server listens on this port and names its socket with it."),
+    (
+        "restrict_nonsystem_relation_kind",
+        "With view in the list, a query cannot read or write a view of the user.",
+    ),
     ("scram_iterations", "The server uses this iteration count for new SCRAM secrets."),
     ("search_path", "The analyzer looks up the functions and the types in these schemas."),
     ("server_encoding", "rupg keeps all text in UTF8."),

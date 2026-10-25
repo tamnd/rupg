@@ -46,6 +46,12 @@ pub(super) fn check(
         ("DateStyle", Setting::String(text)) => datestyle(&text, current, reset)
             .map(Setting::String)
             .map_err(|detail| invalid(parameter, &text, Some(detail))),
+        ("restrict_nonsystem_relation_kind", Setting::String(text)) => {
+            match restricted_kinds(&text) {
+                Ok(_) => Ok(Setting::String(text)),
+                Err(detail) => Err(invalid(parameter, &text, Some(detail))),
+            }
+        }
         ("TimeZone" | "log_timezone", Setting::String(text)) => match zone(&text) {
             Ok(zone) => Ok(Setting::String(zone.name().to_owned())),
             Err(ZoneError::Invalid(detail)) => Err(invalid(parameter, &text, detail)),
@@ -93,6 +99,23 @@ fn clean_ascii(text: &str) -> String {
         }
     }
     clean
+}
+
+/// `check_restrict_nonsystem_relation_kind`: whether the list has `view` and whether it has `foreign-table`, or the detail of the error for a list that has a syntax error or another word.
+pub fn restricted_kinds(text: &str) -> Result<(bool, bool), String> {
+    let words =
+        split_identifiers(text, ',').ok_or_else(|| "List syntax is invalid.".to_string())?;
+    let (mut view, mut foreign) = (false, false);
+    for word in words {
+        if word.eq_ignore_ascii_case("view") {
+            view = true;
+        } else if word.eq_ignore_ascii_case("foreign-table") {
+            foreign = true;
+        } else {
+            return Err(format!("Unrecognized key word: \"{word}\"."));
+        }
+    }
+    Ok((view, foreign))
 }
 
 /// `SplitIdentifierString`: a list of names with `separator` between them. A name in double quotes keeps its case and a doubled quote stands for one. A name without quotes is in lower case. `None` for a list with a syntax error.

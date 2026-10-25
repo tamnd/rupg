@@ -584,6 +584,9 @@ impl Analyzer<'_> {
         })?;
         let columns = self.open_relation(oid, name, at)?;
         let perm = if target { self.target_perm } else { Some(self.add_perm(oid, ACL_SELECT)) };
+        if !target {
+            self.check_view_restricted(oid)?;
+        }
         let subquery = match self.view_query_perms(oid)? {
             // The target of a write is a view with a trigger `INSTEAD OF`, which reads no table of the view.
             Some((mut query, perms)) => {
@@ -607,6 +610,21 @@ impl Analyzer<'_> {
     /// `ApplyRetrieveRule`: the query of a view of the user, which takes the place of the view as a subquery, or `None` for a relation that is not a view. A materialized view gives its rows from its heap, so its query takes its place only for the `INSERT` that fills it, as `refresh_matview_datafill` runs the query.
     pub(crate) fn view_query(&self, oid: u32) -> Result<Option<crate::Query>> {
         Ok(self.view_query_perms(oid)?.map(|(query, _)| query))
+    }
+
+    /// The check of `restrict_nonsystem_relation_kind` in `ApplyRetrieveRule` and `rewriteTargetView`: a view of the user gives `55000` when the setting has `view`.
+    pub(crate) fn check_view_restricted(&self, oid: u32) -> Result<()> {
+        if oid < rupg_catalog::FIRST_NORMAL_OID || !self.env.restrict_views() {
+            return Ok(());
+        }
+        let Some(rel) = self.env.catalog().and_then(|c| c.relation(oid)) else { return Ok(()) };
+        if rel.kind != RelKind::View {
+            return Ok(());
+        }
+        Err(Error::new(
+            SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
+            format!("access to non-system view \"{}\" is restricted", rel.name),
+        ))
     }
 
     /// [`Analyzer::view_query`] with the privileges that the query of the view needs.

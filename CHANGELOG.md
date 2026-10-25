@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Honor `restrict_nonsystem_relation_kind = view`: a query cannot read or write a view of the user, as `ApplyRetrieveRule` and `rewriteTargetView` check it (#731).
 - Print the cast after a scalar subquery in `ANY` or `ALL`, so the text of a view reads back as the same array comparison (#730).
 - Drop characters from the end of a long relation or column name before `_N` makes it unique, so the name stays shorter than `NAMEDATALEN` (#729).
 - Print a whole-row reference in `ROW()`, `VALUES` and a row comparison with the cast to its row type, as `get_rule_expr_toplevel` does (#728).

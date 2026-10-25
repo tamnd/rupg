@@ -392,6 +392,7 @@ impl Analyzer<'_> {
                 .iter()
                 .any(|c| matches!(c, MergeCommand::Insert | MergeCommand::Update)),
         };
+        self.check_view_restricted(oid)?;
         let (mut query, perms) =
             self.stored_query_perms(oid)?.ok_or_else(|| Error::internal("a view with no query"))?;
         self.add_view_perms(oid, &mut query, perms);
