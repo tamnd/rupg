@@ -92,7 +92,12 @@ impl Analyzer<'_> {
                         "rules with WHERE conditions can only have SELECT, INSERT, UPDATE, or DELETE actions",
                     ));
                 }
-                Node::NotifyStmt(_) => return Err(not_yet("NOTIFY in a rule", None)),
+                Node::NotifyStmt(notify) => {
+                    let channel = notify.conditionname.as_deref().unwrap_or_default().to_string();
+                    let payload = notify.payload.as_deref().map(str::to_string);
+                    actions.push(Query { notify: Some((channel, payload)), ..Query::default() });
+                    continue;
+                }
                 _ => return Err(Error::internal("a rule action that is not a statement")),
             };
             self.rule_scope(oid, name, [true, true], false)?;

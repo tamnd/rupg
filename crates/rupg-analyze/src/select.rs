@@ -81,6 +81,8 @@ pub struct Query {
     pub perms: Vec<crate::PermInfo>,
     /// The OIDs of the functions and of the functions of the operators that the statement calls, also in its subqueries and in the queries of its views, as `ExecInitFunc` checks `EXECUTE` on them. Only the top query of a statement has them.
     pub funcs: Vec<u32>,
+    /// `utilityStmt` of an action `NOTIFY` of a rule: the channel and the payload. The query has nothing else.
+    pub notify: Option<(String, Option<String>)>,
 }
 
 /// `MinMaxAggInfo`: the form of a query whose aggregate calls are each `min` or `max`, with a subquery for each aggregate call that reads the first value in the order of its sort operator.
@@ -404,6 +406,7 @@ impl Analyzer<'_> {
             shown: None,
             perms: Vec::new(),
             funcs: Vec::new(),
+            notify: None,
         };
         for clause in s.lockingClause.iter().flatten() {
             if let Node::LockingClause(clause) = clause {

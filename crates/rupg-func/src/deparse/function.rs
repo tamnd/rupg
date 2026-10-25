@@ -292,7 +292,7 @@ fn language_name(oid: u32, session: &dyn Session) -> Result<String> {
 }
 
 /// `simple_quote_literal`: the value in single quotes, with each quote twice, and with each backslash twice when `standard_conforming_strings` is off.
-fn simple_quote_literal(buf: &mut String, value: &str, session: &dyn Session) {
+pub(super) fn simple_quote_literal(buf: &mut String, value: &str, session: &dyn Session) {
     let conforming = session.setting("standard_conforming_strings").is_none_or(|v| v == "on");
     buf.push('\'');
     for c in value.chars() {

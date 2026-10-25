@@ -140,6 +140,7 @@ impl Analyzer<'_> {
             shown: None,
             perms: Vec::new(),
             funcs: Vec::new(),
+            notify: None,
         })
     }
 }

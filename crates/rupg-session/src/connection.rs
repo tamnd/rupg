@@ -2078,6 +2078,10 @@ impl Connection {
         let mut done = None;
         let mut returned = None;
         for product in products {
+            if let Some(done) = self.async_statement(&product.stmt) {
+                done?;
+                continue;
+            }
             let reader = self.reader();
             let plan = rupg_analyze::analyze_product(product, &reader, &Params::default())
                 .and_then(|query| rupg_exec::prepare(query, &reader));
@@ -4728,6 +4732,12 @@ mod tests {
     #[test]
     fn vnotify() {
         big_stack(|| script(include_str!("connection/vnotify.test")));
+    }
+
+    /// `NOTIFY` as an action of a rule: it runs once for the statement, with no regard to its rows, also for a rule `DO INSTEAD`. `pg_get_ruledef` shows it as `get_utility_query_def` does, and `CREATE RULE` gives the error of PostgreSQL for `NOTIFY` in a rule with a condition. `connection/vrulenotify.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vrulenotify() {
+        big_stack(|| script(include_str!("connection/vrulenotify.test")));
     }
 
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
