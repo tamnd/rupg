@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.87 (2026-10-26)
+
 ### Added
 
 - A cast with no typmod of a value with a typmod, such as `a::numeric` of a `numeric(6,2)` column, now gives the typmod -1 with no table column, as the `RelabelType` of PostgreSQL does. Views, `CREATE TABLE AS` and the deparse show it as PostgreSQL does (#749).
