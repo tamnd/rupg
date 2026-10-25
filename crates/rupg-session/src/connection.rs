@@ -4406,6 +4406,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/noenf.test")));
     }
 
+    /// `ALTER TABLE ... ADD CONSTRAINT ... USING INDEX`: a primary key and a unique constraint on an existing index, the rename of the index, the not-null constraints of a primary key, a deferrable constraint and its trigger, an `INCLUDE` column, `NULLS NOT DISTINCT`, and the errors for an index that cannot have the constraint. `connection/uix.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn uix() {
+        big_stack(|| script(include_str!("connection/uix.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {

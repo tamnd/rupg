@@ -52,6 +52,7 @@ mod trigger;
 mod truncate;
 mod tsearch;
 mod type_change;
+mod using_index;
 mod vacuum;
 mod validate;
 mod view;

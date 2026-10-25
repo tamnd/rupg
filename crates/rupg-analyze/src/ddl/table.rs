@@ -1703,7 +1703,7 @@ fn index_constraint(plan: &mut Plan, con: &Constraint, rv: &RangeVar) -> Result<
     }
     if con.indexname.is_some() {
         return Err(Error::new(
-            SqlState::SYNTAX_ERROR,
+            SqlState::FEATURE_NOT_SUPPORTED,
             "cannot use an existing index in CREATE TABLE",
         )
         .at_opt(at));

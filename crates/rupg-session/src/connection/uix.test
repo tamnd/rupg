@@ -1,0 +1,157 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE ui_t (a int, b int, c text);
+CREATE TABLE
+> INSERT INTO ui_t VALUES (1, 10, 'x'), (2, 20, 'y');
+INSERT 0 2
+> CREATE UNIQUE INDEX ui_t_a_idx ON ui_t (a);
+CREATE INDEX
+> ALTER TABLE ui_t ADD CONSTRAINT ui_t_pk PRIMARY KEY USING INDEX ui_t_a_idx;
+NOTICE 00000 ALTER TABLE / ADD CONSTRAINT USING INDEX will rename index "ui_t_a_idx" to "ui_t_pk"
+ALTER TABLE
+> SELECT conname, contype, conindid::regclass::text AS idx, conkey, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'ui_t'::regclass ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,idx:25:-1:-1,conkey@pg_constraint.21:1005:-1:-1,pg_get_constraintdef:25:-1:-1
+row ui_t_a_not_null,n,-,{1},NOT NULL a
+row ui_t_pk,p,ui_t_pk,{1},PRIMARY KEY (a)
+SELECT 2
+> SELECT indexrelid::regclass::text AS idx, indisprimary, indisunique, indimmediate FROM pg_index WHERE indrelid = 'ui_t'::regclass ORDER BY 1;
+fields idx:25:-1:-1,indisprimary@pg_index.7:16:1:-1,indisunique@pg_index.5:16:1:-1,indimmediate@pg_index.9:16:1:-1
+row ui_t_pk,t,t,t
+SELECT 1
+> SELECT attname, attnotnull FROM pg_attribute WHERE attrelid = 'ui_t'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,attnotnull@pg_attribute.12:16:1:-1
+row a,t
+row b,f
+row c,f
+SELECT 3
+> INSERT INTO ui_t VALUES (1, 30, 'z');
+ERROR 23505 duplicate key value violates unique constraint "ui_t_pk"
+DETAIL Key (a)=(1) already exists.
+> INSERT INTO ui_t VALUES (NULL, 30, 'z');
+ERROR 23502 null value in column "a" of relation "ui_t" violates not-null constraint
+DETAIL Failing row contains (null, 30, z).
+> DROP INDEX ui_t_pk;
+ERROR 2BP01 cannot drop index ui_t_pk because constraint ui_t_pk on table ui_t requires it
+HINT You can drop constraint ui_t_pk on table ui_t instead.
+> CREATE UNIQUE INDEX ui_t_b_idx ON ui_t (b);
+CREATE INDEX
+> ALTER TABLE ui_t ADD PRIMARY KEY USING INDEX ui_t_b_idx;
+ERROR 42P16 multiple primary keys for table "ui_t" are not allowed
+> ALTER TABLE ui_t ADD UNIQUE USING INDEX ui_t_b_idx;
+ALTER TABLE
+> SELECT conname, contype, conindid::regclass::text AS idx FROM pg_constraint WHERE conrelid = 'ui_t'::regclass ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,idx:25:-1:-1
+row ui_t_a_not_null,n,-
+row ui_t_b_idx,u,ui_t_b_idx
+row ui_t_pk,p,ui_t_pk
+SELECT 3
+> ALTER TABLE ui_t ADD CONSTRAINT ui_x UNIQUE USING INDEX ui_t_b_idx;
+ERROR 55000 index "ui_t_b_idx" is already associated with a constraint at 22
+> ALTER TABLE ui_t ADD CONSTRAINT ui_x UNIQUE USING INDEX nope;
+ERROR 42704 index "nope" does not exist at 22
+> CREATE INDEX ui_t_c_idx ON ui_t (c);
+CREATE INDEX
+> ALTER TABLE ui_t ADD CONSTRAINT ui_x UNIQUE USING INDEX ui_t_c_idx;
+ERROR 42809 "ui_t_c_idx" is not a unique index at 22
+DETAIL Cannot create a primary key or unique constraint using such an index.
+> CREATE UNIQUE INDEX ui_t_e_idx ON ui_t ((b + 1));
+CREATE INDEX
+> ALTER TABLE ui_t ADD CONSTRAINT ui_x UNIQUE USING INDEX ui_t_e_idx;
+ERROR 42809 index "ui_t_e_idx" contains expressions at 22
+DETAIL Cannot create a primary key or unique constraint using such an index.
+> CREATE UNIQUE INDEX ui_t_p_idx ON ui_t (c) WHERE b > 0;
+CREATE INDEX
+> ALTER TABLE ui_t ADD CONSTRAINT ui_x UNIQUE USING INDEX ui_t_p_idx;
+ERROR 42809 "ui_t_p_idx" is a partial index at 22
+DETAIL Cannot create a primary key or unique constraint using such an index.
+> CREATE UNIQUE INDEX ui_t_d_idx ON ui_t (c DESC);
+CREATE INDEX
+> ALTER TABLE ui_t ADD CONSTRAINT ui_x UNIQUE USING INDEX ui_t_d_idx;
+ERROR 42809 index "ui_t_d_idx" column number 1 does not have default sorting behavior at 22
+DETAIL Cannot create a primary key or unique constraint using such an index.
+> CREATE UNIQUE INDEX ui_t_i_idx ON ui_t (c) INCLUDE (b);
+CREATE INDEX
+> ALTER TABLE ui_t ADD CONSTRAINT ui_t_i_idx UNIQUE USING INDEX ui_t_i_idx DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE
+> SELECT conname, contype, condeferrable, condeferred, conkey, pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'ui_t_i_idx';
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,condeferrable@pg_constraint.5:16:1:-1,condeferred@pg_constraint.6:16:1:-1,conkey@pg_constraint.21:1005:-1:-1,pg_get_constraintdef:25:-1:-1
+row ui_t_i_idx,u,t,t,{3},UNIQUE (c) INCLUDE (b) DEFERRABLE INITIALLY DEFERRED
+SELECT 1
+> SELECT indimmediate FROM pg_index WHERE indexrelid = 'ui_t_i_idx'::regclass;
+fields indimmediate@pg_index.9:16:1:-1
+row f
+SELECT 1
+> SELECT count(*) FROM pg_trigger WHERE tgrelid = 'ui_t'::regclass;
+fields count:20:8:-1
+row 1
+SELECT 1
+> CREATE TABLE ui_o (a int);
+CREATE TABLE
+> CREATE UNIQUE INDEX ui_o_a_idx ON ui_o (a);
+CREATE INDEX
+> ALTER TABLE ui_t ADD CONSTRAINT ui_x UNIQUE USING INDEX ui_o_a_idx;
+ERROR 55000 index "ui_o_a_idx" does not belong to table "ui_t" at 22
+> INSERT INTO ui_o VALUES (1), (NULL);
+INSERT 0 2
+> ALTER TABLE ui_o ADD PRIMARY KEY USING INDEX ui_o_a_idx;
+ERROR 23502 column "a" of relation "ui_o" contains null values
+> DELETE FROM ui_o WHERE a IS NULL;
+DELETE 1
+> ALTER TABLE ui_o ADD PRIMARY KEY USING INDEX ui_o_a_idx;
+ALTER TABLE
+> SELECT conname FROM pg_constraint WHERE conrelid = 'ui_o'::regclass ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1
+row ui_o_a_idx
+row ui_o_a_not_null
+SELECT 2
+> CREATE TABLE ui_n (a int);
+CREATE TABLE
+> CREATE UNIQUE INDEX ui_n_a_idx ON ui_n (a) NULLS NOT DISTINCT;
+CREATE INDEX
+> ALTER TABLE ui_n ADD PRIMARY KEY USING INDEX ui_n_a_idx;
+ERROR 42P16 primary keys cannot use NULLS NOT DISTINCT indexes
+> ALTER TABLE ui_n ADD UNIQUE USING INDEX ui_n_a_idx;
+ALTER TABLE
+> SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'ui_n'::regclass;
+fields pg_get_constraintdef:25:-1:-1
+row UNIQUE NULLS NOT DISTINCT (a)
+SELECT 1
+> CREATE TABLE ui_q (a int, b int, UNIQUE (a));
+CREATE TABLE
+> CREATE UNIQUE INDEX ui_q_b_idx ON ui_q (b);
+CREATE INDEX
+> ALTER TABLE ui_q ADD CONSTRAINT ui_q_a_key UNIQUE USING INDEX ui_q_b_idx;
+NOTICE 00000 ALTER TABLE / ADD CONSTRAINT USING INDEX will rename index "ui_q_b_idx" to "ui_q_a_key"
+ERROR 42P07 relation "ui_q_a_key" already exists
+> CREATE INDEX ui_q_h_idx ON ui_q USING hash (b);
+CREATE INDEX
+> ALTER TABLE ui_q ADD CONSTRAINT ui_h UNIQUE USING INDEX ui_q_h_idx;
+ERROR 42809 "ui_q_h_idx" is not a unique index at 22
+DETAIL Cannot create a primary key or unique constraint using such an index.
+> CREATE TABLE ui_p (a int) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE UNIQUE INDEX ui_p_a_idx ON ui_p (a);
+CREATE INDEX
+> ALTER TABLE ui_p ADD UNIQUE USING INDEX ui_p_a_idx;
+ERROR 0A000 ALTER TABLE / ADD CONSTRAINT USING INDEX is not supported on partitioned tables
+> CREATE TABLE ui_c (a int, UNIQUE USING INDEX ui_q_b_idx);
+ERROR 0A000 cannot use an existing index in CREATE TABLE at 27
+> ALTER TABLE ui_t DROP CONSTRAINT ui_t_pk;
+ALTER TABLE
+> SELECT relname FROM pg_class WHERE relname LIKE 'ui_t%' ORDER BY relname;
+fields relname@pg_class.2:19:64:-1
+row ui_t
+row ui_t_b_idx
+row ui_t_c_idx
+row ui_t_d_idx
+row ui_t_e_idx
+row ui_t_i_idx
+row ui_t_p_idx
+SELECT 7
+> SELECT attname, attnotnull FROM pg_attribute WHERE attrelid = 'ui_t'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,attnotnull@pg_attribute.12:16:1:-1
+row a,t
+row b,f
+row c,f
+SELECT 3
