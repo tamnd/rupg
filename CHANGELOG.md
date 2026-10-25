@@ -8,7 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- A `COLLATE` clause stays in the analyzed query as a `CollateExpr`. So `CREATE OR REPLACE VIEW` gives an error when it changes the collation of a column, as `checkViewColumns` does, a new view column takes the explicit collation, and `pg_get_viewdef` shows the clause. Before, the analyzer dropped the clause (#NNN).
+- A `COLLATE` clause stays in the analyzed query as a `CollateExpr`. So `CREATE OR REPLACE VIEW` gives an error when it changes the collation of a column, as `checkViewColumns` does, a new view column takes the explicit collation, and `pg_get_viewdef` shows the clause. Before, the analyzer dropped the clause (#725).
 - A leaky condition on a view of `security_barrier` over a join runs only on the rows of the view. Before, the executor merged the view, and the condition ran in the scan of a table of the join, so it saw rows that the view hides (#723).
 - `EXPLAIN` of a write through an automatically updatable view names the relation before each column, because the range table keeps the entry of the view, as `rewriteTargetView` does. The condition of the statement comes before the conditions of the views that are not `security_barrier`, as `AddQual` puts them (#722).
 - A view with `security_invoker` checks its tables as the current user also when a view of another owner reads it, as `RelationBuildRuleLock` gives `InvalidOid` to `setRuleCheckAsUser`. Before, the view outside gave its owner to them (#721).
