@@ -45,6 +45,9 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: cargo fmt
         run: cargo fmt --all --check
+      # The release build and cargo publish use --locked, so Cargo.lock must agree with the manifests.
+      - name: lock file
+        run: cargo metadata --locked --format-version 1 > /dev/null
       # A crate may depend only on a crate of a lower rank. See spec/22-crate-layout.md section 22.3.
       - name: layer rule
         run: cargo xtask layers
