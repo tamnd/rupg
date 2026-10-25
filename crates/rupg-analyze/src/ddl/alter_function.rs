@@ -36,8 +36,8 @@ fn function_name(object: Option<&Node>) -> Result<&ObjectWithArgs> {
     }
 }
 
-/// `defGetNumeric` for `COST` and `ROWS`. rupg keeps the values as whole numbers, so a value with a fraction gives `0A000`.
-fn whole_number(def: &DefElem, word: &str) -> Result<u32> {
+/// `defGetNumeric` for `COST` and `ROWS`: the value, which must be positive.
+fn positive_number(def: &DefElem, word: &str) -> Result<f64> {
     let value = match &def.arg {
         Some(Node::Integer(value)) => f64::from(*value),
         Some(Node::Float(text)) => text.parse().unwrap_or(f64::NAN),
@@ -54,6 +54,18 @@ fn whole_number(def: &DefElem, word: &str) -> Result<u32> {
             format!("{word} must be positive"),
         ));
     }
+    Ok(value)
+}
+
+/// `defGetNumeric` for `COST`, as `procost` keeps it in a `float4`.
+pub(super) fn positive_cost(def: &DefElem) -> Result<f32> {
+    #[allow(clippy::cast_possible_truncation)]
+    Ok(positive_number(def, "COST")? as f32)
+}
+
+/// `defGetNumeric` for `ROWS`. rupg keeps the value as a whole number, so a value with a fraction gives `0A000`.
+fn whole_number(def: &DefElem, word: &str) -> Result<u32> {
+    let value = positive_number(def, word)?;
     if value.fract() != 0.0 || value > f64::from(u32::MAX) {
         return Err(not_yet(&format!("a {word} that is not a whole number"), None));
     }
@@ -162,7 +174,7 @@ impl Definer<'_, '_> {
                     _ => return Err(Error::internal("a SET of ALTER FUNCTION with no setting")),
                 },
                 ("security", _) => new.secdef = matches!(def.arg, Some(Node::Boolean(true))),
-                ("cost", _) => new.cost = whole_number(def, "COST")?,
+                ("cost", _) => new.cost = positive_cost(def)?,
                 ("rows", _) => {
                     new.rows = whole_number(def, "ROWS")?;
                     if !new.retset {

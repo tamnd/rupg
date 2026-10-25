@@ -609,7 +609,7 @@ impl Definer<'_, '_> {
             namespace,
             owner: self.user,
             lang: INTERNAL_LANGUAGE,
-            cost: 1,
+            cost: 1.0,
             rows: 0,
             support,
             kind: b'a',

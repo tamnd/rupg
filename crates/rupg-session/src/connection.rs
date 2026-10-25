@@ -4458,6 +4458,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/addcol.test")));
     }
 
+    /// `COST` of `CREATE FUNCTION` and of `ALTER FUNCTION` takes a number with a fraction, as `procost` is a `float4`. `connection/fcost.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn fcost() {
+        big_stack(|| script(include_str!("connection/fcost.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {

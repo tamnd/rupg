@@ -578,7 +578,7 @@ pub struct Domain {
 }
 
 /// A function, one row of `pg_proc`: a function of the setup of a new cluster, such as a function in SQL of `information_schema`, or a function that `CREATE FUNCTION` makes.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Function {
     /// The OID. [`Catalog::create_function`] sets it.
     pub oid: u32,
@@ -590,8 +590,8 @@ pub struct Function {
     pub owner: u32,
     /// `prolang`: the OID of the language.
     pub lang: u32,
-    /// `procost`: the cost in units of `cpu_operator_cost`.
-    pub cost: u32,
+    /// `procost`: the cost in units of `cpu_operator_cost`, a positive number.
+    pub cost: f32,
     /// `prorows`: the number of rows of a function that returns a set, or 0.
     pub rows: u32,
     /// `prosupport`: the OID of the support function, or 0.
@@ -633,6 +633,9 @@ pub struct Function {
     /// `prosecdef`: true for `SECURITY DEFINER`, which runs the function as its owner.
     pub secdef: bool,
 }
+
+// `procost` is never NaN, so the equality of two functions is an equivalence.
+impl Eq for Function {}
 
 /// The body of a function in SQL, which the analyzer reads again each time a query calls the function, as it reads the query of a view.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2796,7 +2799,7 @@ impl Catalog {
             namespace: new.namespace,
             owner: BOOTSTRAP_SUPERUSER,
             lang: INTERNAL_LANGUAGE,
-            cost: 1,
+            cost: 1.0,
             rows: 0,
             support: 0,
             kind: b'f',

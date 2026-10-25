@@ -1084,7 +1084,7 @@ fn functions<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
         .map(|f| {
             let mut row = Row::new(table);
             #[allow(clippy::cast_precision_loss)]
-            let (cost, rows) = (f.cost as f32, f.rows as f32);
+            let (cost, rows) = (f.cost, f.rows as f32);
             let names = if f.argnames.is_empty() { Value::Null } else { text_array(&f.argnames) };
             row.set("oid", oid(f.oid))
                 .set("proname", Value::text(f.name.clone()))
