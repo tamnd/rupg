@@ -2636,6 +2636,7 @@ impl<'a> Eval<'a> {
             Value::Null => return Ok(Value::Null),
             Value::Array(array) => array,
             Value::Text(name) => return self.name_subscript(&name, sub),
+            Value::Bytea(bytes) => return self.geo_subscript(&bytes, sub),
             _ => return Err(Error::internal("the container of a SubscriptingRef is not an array")),
         };
         let upper = self.subscript_list(&sub.upper)?;
@@ -2656,8 +2657,14 @@ impl<'a> Eval<'a> {
     /// `ExecEvalSubscriptingRef` for an assignment to an element or a slice of an array: the array with the new value. A null array is the empty array, and a null subscript is an error. A null value for a slice leaves the array as it is.
     fn subscript_assign(&mut self, sub: &Subscript, assign: &Expr) -> Result<Value> {
         let array = match self.eval(&sub.container)? {
+            Value::Null if is_geo(sub.container.ty) => {
+                // `array_subscript_assign`: a null of a fixed-length type stays null.
+                self.assign_subscripts(&sub.upper)?;
+                return Ok(Value::Null);
+            }
             Value::Null => Array::empty(),
             Value::Array(array) => *array,
+            Value::Bytea(bytes) => return self.geo_assign(bytes, sub, assign),
             Value::Text(_) => {
                 return Err(Error::new(
                     SqlState::FEATURE_NOT_SUPPORTED,
@@ -2760,6 +2767,83 @@ impl<'a> Eval<'a> {
             }
             _ => Ok(Value::Null),
         }
+    }
+
+    /// A fetch from a `point`, an `lseg`, a `box` or a `line`, which `raw_array_subscript_handler` reads as a fixed-length array from 0 of its `float8` or `point` elements. A subscript out of the array or more than one subscript gives null. A slice is an error after its subscripts, as in `array_get_slice`.
+    fn geo_subscript(&mut self, bytes: &[u8], sub: &Subscript) -> Result<Value> {
+        let Some(upper) = self.subscript_list(&sub.upper)? else { return Ok(Value::Null) };
+        if let Some(lower) = &sub.lower {
+            if self.subscript_list(lower)?.is_none() {
+                return Ok(Value::Null);
+            }
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "slices of fixed-length arrays not implemented",
+            ));
+        }
+        let [Some(index)] = upper[..] else { return Ok(Value::Null) };
+        let width = geo_element_width(bytes);
+        let Ok(i) = usize::try_from(index) else { return Ok(Value::Null) };
+        let Some(element) = bytes.get(i * width..(i + 1) * width) else { return Ok(Value::Null) };
+        Ok(geo_element(element))
+    }
+
+    /// `array_set_element` and `array_set_slice` for a `point`, an `lseg`, a `box` or a `line`: the value with the new element. A null value leaves the value as it is, as in `array_subscript_assign`.
+    fn geo_assign(&mut self, mut bytes: Vec<u8>, sub: &Subscript, assign: &Expr) -> Result<Value> {
+        let upper = self.assign_subscripts(&sub.upper)?;
+        if let Some(lower) = &sub.lower {
+            self.assign_subscripts(lower)?;
+        }
+        let width = geo_element_width(&bytes);
+        let index = match upper[..] {
+            [Some(index)] => usize::try_from(index).ok().filter(|i| (i + 1) * width <= bytes.len()),
+            _ => None,
+        };
+        let value = if is_indirection(assign) {
+            let old =
+                index.map_or(Value::Null, |i| geo_element(&bytes[i * width..(i + 1) * width]));
+            self.case.push(old);
+            let value = self.eval(assign);
+            self.case.pop();
+            value?
+        } else {
+            self.eval(assign)?
+        };
+        if value.is_null() {
+            return Ok(Value::Bytea(bytes));
+        }
+        if sub.lower.is_some() {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "updates on slices of fixed-length arrays not implemented",
+            ));
+        }
+        if upper.len() != 1 {
+            return Err(Error::new(
+                SqlState::ARRAY_SUBSCRIPT_ERROR,
+                "wrong number of array subscripts",
+            ));
+        }
+        let Some(i) = index else {
+            return Err(Error::new(
+                SqlState::ARRAY_SUBSCRIPT_ERROR,
+                "array subscript out of range",
+            ));
+        };
+        let element = match value {
+            Value::Float8(f) => f.to_be_bytes().to_vec(),
+            Value::Bytea(point) => point,
+            _ => {
+                return Err(Error::internal(
+                    "the element of a geometric value is not a float8 or a point",
+                ));
+            }
+        };
+        if element.len() != width {
+            return Err(Error::internal("the element of a geometric value has the wrong length"));
+        }
+        bytes[i * width..(i + 1) * width].copy_from_slice(&element);
+        Ok(Value::Bytea(bytes))
     }
 
     /// The values of the subscripts of one bound, with `None` for a bound that the query does not give. A null subscript gives `None` for the list.
@@ -3236,7 +3320,24 @@ pub use user::variadic_type;
 #[cfg(test)]
 mod tests;
 
-/// `array_get_element`: the element at the subscripts, or null when the number of subscripts is not the number of dimensions or a subscript is outside its dimension.
+/// Whether `ty` is `point`, `lseg`, `box` or `line`, or a domain over one of them: a type of fixed length whose subscripts `raw_array_subscript_handler` reads.
+fn is_geo(ty: u32) -> bool {
+    matches!(base_type(ty), oid::POINT | oid::LSEG | oid::BOX | oid::LINE)
+}
+
+/// The length of an element of a geometric value that subscripts read: the 16 bytes of a `point` in an `lseg` or a `box`, which have 32 bytes, or the 8 bytes of a `float8` in a `point` or a `line`.
+fn geo_element_width(bytes: &[u8]) -> usize {
+    if bytes.len() == 32 { 16 } else { 8 }
+}
+
+/// The element of a geometric value in its bytes: a `point` or a `float8`.
+fn geo_element(bytes: &[u8]) -> Value {
+    match <[u8; 8]>::try_from(bytes) {
+        Ok(float) => Value::Float8(f64::from_be_bytes(float)),
+        Err(_) => Value::Bytea(bytes.to_vec()),
+    }
+}
+
 /// `isAssignmentIndirectionExpr`: whether the new value of an assignment is an assignment to a part of the old value, which it reads as `CaseTest`.
 fn is_indirection(expr: &Expr) -> bool {
     match &expr.kind {
@@ -3247,6 +3348,7 @@ fn is_indirection(expr: &Expr) -> bool {
     }
 }
 
+/// `array_get_element`: the element at the subscripts, or null when the number of subscripts is not the number of dimensions or a subscript is outside its dimension.
 fn array_element(array: &Array<Value>, subscripts: &[Option<i32>]) -> Value {
     if subscripts.len() != array.dims.len() {
         return Value::Null;

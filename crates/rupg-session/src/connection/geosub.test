@@ -1,0 +1,122 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> SELECT p[0], p[1], p[2], p[-1], p[NULL] FROM (VALUES (point '(1.5,-2)')) v(p);
+fields p:701:8:-1,p:701:8:-1,p:701:8:-1,p:701:8:-1,p:701:8:-1
+row 1.5,-2,NULL,NULL,NULL
+SELECT 1
+> SELECT pg_typeof(p[0]) FROM (VALUES (point '(1,2)')) v(p);
+fields pg_typeof:2206:4:-1
+row double precision
+SELECT 1
+> SELECT b[0], b[1], b[2], b[0][0], b[1][1] FROM (VALUES (box '(1,2),(3,4)')) v(b);
+fields b:600:16:-1,b:600:16:-1,b:600:16:-1,b:600:16:-1,b:600:16:-1
+row (3,4),(1,2),NULL,NULL,NULL
+SELECT 1
+> SELECT pg_typeof(b[0]) FROM (VALUES (box '(1,2),(3,4)')) v(b);
+fields pg_typeof:2206:4:-1
+row point
+SELECT 1
+> SELECT l[0], l[1][0] FROM (VALUES (lseg '[(1,2),(3,4)]')) v(l);
+fields l:600:16:-1,l:600:16:-1
+row (1,2),NULL
+SELECT 1
+> SELECT l[0], l[1], l[2], l[3] FROM (VALUES (line '{1,2,3}')) v(l);
+fields l:701:8:-1,l:701:8:-1,l:701:8:-1,l:701:8:-1
+row 1,2,3,NULL
+SELECT 1
+> SELECT p[0][0] FROM (VALUES (point '(1,2)')) v(p);
+fields p:701:8:-1
+row NULL
+SELECT 1
+> SELECT (point '(1,2)')[0:1];
+ERROR 0A000 slices of fixed-length arrays not implemented
+> SELECT p[NULL:1] FROM (VALUES (point '(1,2)')) v(p);
+fields p:600:16:-1
+row NULL
+SELECT 1
+> SELECT (NULL::point)[0];
+fields point:701:8:-1
+row NULL
+SELECT 1
+> SELECT c[0] FROM (VALUES (circle '<(1,2),3>')) v(c);
+ERROR 42804 cannot subscript type circle because it does not support subscripting at 8
+> SELECT p['1'] FROM (VALUES (point '(1,2)')) v(p);
+fields p:701:8:-1
+row 2
+SELECT 1
+> CREATE TABLE gs (id int, p point, b box);
+CREATE TABLE
+> INSERT INTO gs VALUES (1, '(1,2)', '(1,2),(3,4)'), (2, NULL, NULL);
+INSERT 0 2
+> UPDATE gs SET p[0] = 10 WHERE id = 1;
+UPDATE 1
+> UPDATE gs SET b[1] = '(0,0)' WHERE id = 1;
+UPDATE 1
+> UPDATE gs SET b[0][1] = 7 WHERE id = 1;
+ERROR 42804 subscripted assignment to "b" requires type point but expression is of type integer at 15
+HINT You will need to rewrite or cast the expression.
+> SELECT * FROM gs ORDER BY id;
+fields id@gs.1:23:4:-1,p@gs.2:600:16:-1,b@gs.3:603:32:-1
+row 1,(10,2),(3,4),(0,0)
+row 2,NULL,NULL
+SELECT 2
+> UPDATE gs SET p[1] = 5, b[0] = '(9,9)' WHERE id = 2;
+UPDATE 1
+> SELECT * FROM gs ORDER BY id;
+fields id@gs.1:23:4:-1,p@gs.2:600:16:-1,b@gs.3:603:32:-1
+row 1,(10,2),(3,4),(0,0)
+row 2,NULL,NULL
+SELECT 2
+> UPDATE gs SET p[1] = NULL WHERE id = 1;
+UPDATE 1
+> SELECT * FROM gs ORDER BY id;
+fields id@gs.1:23:4:-1,p@gs.2:600:16:-1,b@gs.3:603:32:-1
+row 1,(10,2),(3,4),(0,0)
+row 2,NULL,NULL
+SELECT 2
+> UPDATE gs SET p[2] = 1 WHERE id = 1;
+ERROR 2202E array subscript out of range
+> UPDATE gs SET p[-1] = 1 WHERE id = 1;
+ERROR 2202E array subscript out of range
+> UPDATE gs SET p[NULL] = 1 WHERE id = 1;
+ERROR 22004 array subscript in assignment must not be null
+> UPDATE gs SET p[0:1] = '{1,2}' WHERE id = 1;
+ERROR 22P02 invalid input syntax for type point: "{1,2}" at 24
+> UPDATE gs SET p[0][0] = 1 WHERE id = 1;
+ERROR 2202E wrong number of array subscripts
+> INSERT INTO gs (id, p[0]) VALUES (3, 4);
+INSERT 0 1
+> SELECT * FROM gs ORDER BY id;
+fields id@gs.1:23:4:-1,p@gs.2:600:16:-1,b@gs.3:603:32:-1
+row 1,(10,2),(3,4),(0,0)
+row 2,NULL,NULL
+row 3,NULL,NULL
+SELECT 3
+> SELECT id, p[0] AS x, p[1] AS y FROM gs WHERE p[0] > 1 ORDER BY id;
+fields id@gs.1:23:4:-1,x:701:8:-1,y:701:8:-1
+row 1,10,2
+SELECT 1
+> CREATE DOMAIN dp AS point;
+CREATE DOMAIN
+> SELECT (point '(3,4)'::dp)[1];
+fields dp:701:8:-1
+row 4
+SELECT 1
+> CREATE VIEW gsv AS SELECT p[0] AS x, b[1][0] AS bx FROM gs;
+CREATE VIEW
+> SELECT pg_get_viewdef('gsv');
+fields pg_get_viewdef:25:-1:-1
+row  SELECT p[0] AS x,
+    b[1][0] AS bx
+   FROM gs;
+SELECT 1
+> SELECT * FROM gsv ORDER BY x;
+fields x@gsv.1:701:8:-1,bx@gsv.2:600:16:-1
+row 10,NULL
+row NULL,NULL
+row NULL,NULL
+SELECT 3
+> DO $$ DECLARE q point := '(1,2)'; BEGIN q[0] := 8; RAISE NOTICE '%', q; END $$;
+NOTICE 00000 (8,2) (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
