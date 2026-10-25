@@ -4706,6 +4706,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vruleret.test")));
     }
 
+    /// A cast with no typmod of a value with a typmod, as `a::numeric` of a column `numeric(6,2)`: the typmod -1 that the `RelabelType` of `coerce_type_typmod` shows, in the description of the rows, in the columns of a view and of `CREATE TABLE AS`, and in the deparse. `connection/vcasttm.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vcasttm() {
+        big_stack(|| script(include_str!("connection/vcasttm.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {
