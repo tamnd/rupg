@@ -6,7 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- A join gives its rows in the order of its plan for nested loops and hash joins over sequential scans, as PostgreSQL does for a query with no `ORDER BY` (#NNN).
+- A join gives its rows in the order of its plan for nested loops and hash joins over sequential scans, as PostgreSQL does for a query with no `ORDER BY` (#736).
 - `ALTER PROCEDURE` with an attribute that only a function has gives an error, and the error for a procedure that the role cannot call names the procedure (#735).
 - `DROP` of an access method, cast, collation, conversion, extension, language, foreign-data wrapper, server, event trigger, publication or foreign table gives the errors and the `IF EXISTS` notices of PostgreSQL, and `DROP FUNCTION` and `DROP OPERATOR` with `IF EXISTS` skip a missing schema of an argument type (#734).
 - `pg_snapshot` input rejects an `xmin` or an `xmax` whose low 32 bits are 0, such as 2^63, as `FullTransactionIdIsValid` does (#733).
