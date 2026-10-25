@@ -1,0 +1,121 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE USER regress_rule_user1;
+CREATE ROLE
+> CREATE TABLE ruletest_t1 (x int);
+CREATE TABLE
+> CREATE TABLE ruletest_t2 (x int);
+CREATE TABLE
+> CREATE VIEW ruletest_v1 WITH (security_invoker=true) AS
+>>     SELECT * FROM ruletest_t1;
+CREATE VIEW
+> GRANT INSERT ON ruletest_v1 TO regress_rule_user1;
+GRANT
+> CREATE RULE rule1 AS ON INSERT TO ruletest_v1
+>>     DO INSTEAD INSERT INTO ruletest_t2 VALUES (NEW.*);
+CREATE RULE
+> SET SESSION AUTHORIZATION regress_rule_user1;
+SET
+session_authorization=regress_rule_user1
+is_superuser=off
+> INSERT INTO ruletest_v1 VALUES (1);
+INSERT 0 1
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> CREATE TABLE ruletest_t3 (x int);
+CREATE TABLE
+> CREATE RULE rule2 AS ON UPDATE TO ruletest_t1
+>>     DO INSTEAD INSERT INTO ruletest_t2 VALUES (OLD.*);
+CREATE RULE
+> REVOKE ALL ON ruletest_t2 FROM regress_rule_user1;
+REVOKE
+> REVOKE ALL ON ruletest_t3 FROM regress_rule_user1;
+REVOKE
+> ALTER TABLE ruletest_t1 OWNER TO regress_rule_user1;
+ALTER TABLE
+> SET SESSION AUTHORIZATION regress_rule_user1;
+SET
+session_authorization=regress_rule_user1
+is_superuser=off
+> UPDATE ruletest_t1 t1 SET x = 0 FROM ruletest_t3 t3 WHERE t1.x = t3.x;
+ERROR 42501 permission denied for table ruletest_t3
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> SELECT * FROM ruletest_t1;
+fields x@ruletest_t1.1:23:4:-1
+SELECT 0
+> SELECT * FROM ruletest_t2;
+fields x@ruletest_t2.1:23:4:-1
+row 1
+SELECT 1
+> DROP VIEW ruletest_v1;
+DROP VIEW
+> DROP RULE rule2 ON ruletest_t1;
+DROP RULE
+> DROP TABLE ruletest_t3;
+DROP TABLE
+> DROP TABLE ruletest_t2;
+DROP TABLE
+> DROP TABLE ruletest_t1;
+DROP TABLE
+> DROP USER regress_rule_user1;
+DROP ROLE
+> CREATE USER regress_rule_user2;
+CREATE ROLE
+> CREATE TABLE rp_t1 (x int);
+CREATE TABLE
+> CREATE TABLE rp_t2 (x int);
+CREATE TABLE
+> CREATE TABLE rp_log (x int, who text);
+CREATE TABLE
+> GRANT ALL ON rp_t1 TO regress_rule_user2;
+GRANT
+> CREATE RULE rp_r1 AS ON INSERT TO rp_t1 DO ALSO INSERT INTO rp_t2 VALUES (NEW.x);
+CREATE RULE
+> CREATE RULE rp_r2 AS ON INSERT TO rp_t2 DO ALSO INSERT INTO rp_log VALUES (NEW.x, current_user);
+CREATE RULE
+> SET SESSION AUTHORIZATION regress_rule_user2;
+SET
+session_authorization=regress_rule_user2
+is_superuser=off
+> INSERT INTO rp_t1 VALUES (7);
+INSERT 0 1
+> SELECT * FROM rp_t2;
+ERROR 42501 permission denied for table rp_t2
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> SELECT * FROM rp_t2;
+fields x@rp_t2.1:23:4:-1
+row 7
+SELECT 1
+> SELECT * FROM rp_log;
+fields x@rp_log.1:23:4:-1,who@rp_log.2:25:-1:-1
+row 7,regress_rule_user2
+SELECT 1
+> ALTER TABLE rp_t2 OWNER TO regress_rule_user2;
+ALTER TABLE
+> SET SESSION AUTHORIZATION regress_rule_user2;
+SET
+session_authorization=regress_rule_user2
+is_superuser=off
+> INSERT INTO rp_t1 VALUES (8);
+ERROR 42501 permission denied for table rp_log
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> SELECT * FROM rp_log;
+fields x@rp_log.1:23:4:-1,who@rp_log.2:25:-1:-1
+row 7,regress_rule_user2
+SELECT 1
+> DROP TABLE rp_t1, rp_t2, rp_log;
+DROP TABLE
+> DROP USER regress_rule_user2;
+DROP ROLE

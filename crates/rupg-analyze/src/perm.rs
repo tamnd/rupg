@@ -35,6 +35,8 @@ pub struct PermInfo {
     pub inserted: BTreeSet<i16>,
     /// `updatedCols`: the numbers of the columns that an `UPDATE` sets.
     pub updated: BTreeSet<i16>,
+    /// The level of the subquery `*rule*` of an action of a rule that names the relation, which is 0 for the action itself. `rewriteRuleAction` puts the privileges of the statement that the rule rewrites before the privileges of the action, so the checks start at the deepest level.
+    pub rule_level: usize,
 }
 
 /// Adds `offset` to the index of the privileges of each relation of the query and of its subqueries in `FROM`, after the privileges of the query of a view go after the privileges of the statement.
@@ -73,9 +75,11 @@ pub fn option_on(options: &[String], name: &str) -> bool {
 }
 
 impl Analyzer<'_> {
-    /// `addRTEPermissionInfo`: a new entry of the privileges of the statement for the relation, which needs the bits `required`. It gives the index of the entry.
+    /// `addRTEPermissionInfo`: a new entry of the privileges of the statement for the relation, which needs the bits `required`. It gives the index of the entry. In an action of a rule, the owner of the table of the rule gets the checks, as `setRuleCheckAsUser` sets `checkAsUser`.
     pub(crate) fn add_perm(&mut self, relid: u32, required: u32) -> usize {
-        self.perms.push(PermInfo { relid, required, ..PermInfo::default() });
+        let rule_level = self.rule.level;
+        let check_as = self.rule.owners.get(rule_level).copied().unwrap_or(0);
+        self.perms.push(PermInfo { relid, required, check_as, rule_level, ..PermInfo::default() });
         self.perms.len() - 1
     }
 
