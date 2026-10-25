@@ -1257,6 +1257,17 @@ impl Connection {
                             CommandTag::DropTextSearchConfiguration
                         }
                         ObjectType::OBJECT_STATISTIC_EXT => CommandTag::DropStatistics,
+                        ObjectType::OBJECT_FOREIGN_TABLE => CommandTag::DropForeignTable,
+                        ObjectType::OBJECT_ACCESS_METHOD => CommandTag::DropAccessMethod,
+                        ObjectType::OBJECT_CAST => CommandTag::DropCast,
+                        ObjectType::OBJECT_COLLATION => CommandTag::DropCollation,
+                        ObjectType::OBJECT_CONVERSION => CommandTag::DropConversion,
+                        ObjectType::OBJECT_EXTENSION => CommandTag::DropExtension,
+                        ObjectType::OBJECT_LANGUAGE => CommandTag::DropLanguage,
+                        ObjectType::OBJECT_FDW => CommandTag::DropForeignDataWrapper,
+                        ObjectType::OBJECT_FOREIGN_SERVER => CommandTag::DropServer,
+                        ObjectType::OBJECT_EVENT_TRIGGER => CommandTag::DropEventTrigger,
+                        ObjectType::OBJECT_PUBLICATION => CommandTag::DropPublication,
                         _ => CommandTag::DropTable,
                     },
                     Node::AlterTableStmt(stmt) => alter_tag(stmt.objtype),
@@ -4570,6 +4581,12 @@ mod tests {
     #[test]
     fn vrestrict() {
         big_stack(|| script(include_str!("connection/vrestrict.test")));
+    }
+
+    /// `DROP` of the kinds of objects that rupg cannot make: a missing access method, cast, collation, conversion, extension, language, foreign-data wrapper, server, event trigger, publication or foreign table gives the error of `get_object_address`, or with `IF EXISTS` the notice of `does_not_exist_skipping`, a pinned object gives the error of `findDependentObjects`, and a role that is not a superuser fails the check of `check_object_ownership`. A missing schema of a type of the arguments of `DROP FUNCTION` and `DROP OPERATOR` with `IF EXISTS` gives a notice. `connection/vdropx.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vdropx() {
+        big_stack(|| script(include_str!("connection/vdropx.test")));
     }
 
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.

@@ -441,7 +441,13 @@ impl Definer<'_, '_> {
         let mut types = [0; 2];
         for (slot, arg) in types.iter_mut().zip(item.objargs.iter()) {
             let Some(Node::TypeName(arg)) = arg else { continue };
-            *slot = match self.an.lookup_type_name(arg)? {
+            let found = match self.an.lookup_type_name(arg) {
+                Err(error) if missing_ok && error.state() == SqlState::UNDEFINED_SCHEMA => {
+                    return Ok(None);
+                }
+                found => found?,
+            };
+            *slot = match found {
                 Some(ty) => ty,
                 None if missing_ok => 0,
                 None => {
@@ -489,16 +495,20 @@ impl Definer<'_, '_> {
                     _ => None,
                 };
                 let missing_type = item.objargs.iter().flatten().find_map(|arg| match arg {
-                    Node::TypeName(arg) if matches!(self.an.lookup_type_name(arg), Ok(None)) => {
-                        Some(type_name_text(arg))
-                    }
+                    Node::TypeName(arg) => match self.an.lookup_type_name(arg) {
+                        Ok(None) => {
+                            Some(format!("type \"{}\" does not exist", type_name_text(arg)))
+                        }
+                        Err(error) => Some(error.message().to_string()),
+                        Ok(Some(_)) => None,
+                    },
                     _ => None,
                 });
                 let message = match (schema, missing_type) {
                     (Some(schema), _) if self.an.schema(schema).is_none() => {
                         format!("schema \"{schema}\" does not exist, skipping")
                     }
-                    (_, Some(ty)) => format!("type \"{ty}\" does not exist, skipping"),
+                    (_, Some(message)) => format!("{message}, skipping"),
                     _ => format!("operator {} does not exist, skipping", list.join(".")),
                 };
                 self.notice(SqlState::SUCCESSFUL_COMPLETION, message);

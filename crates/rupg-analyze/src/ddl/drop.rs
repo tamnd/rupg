@@ -32,7 +32,7 @@ struct Kind {
 }
 
 /// `dropmsgstringarray`, without the kinds that rupg does not have.
-const KINDS: [Kind; 6] = [
+const KINDS: [Kind; 7] = [
     Kind {
         code: b'r',
         missing_state: SqlState::UNDEFINED_TABLE,
@@ -74,6 +74,13 @@ const KINDS: [Kind; 6] = [
         word: "materialized view",
         article: "a materialized view",
         hint: "Use DROP MATERIALIZED VIEW to remove a materialized view.",
+    },
+    Kind {
+        code: b'f',
+        missing_state: SqlState::UNDEFINED_OBJECT,
+        word: "foreign table",
+        article: "a foreign table",
+        hint: "Use DROP FOREIGN TABLE to remove a foreign table.",
     },
 ];
 
@@ -137,7 +144,8 @@ impl Definer<'_, '_> {
             | ObjectType::OBJECT_VIEW
             | ObjectType::OBJECT_MATVIEW
             | ObjectType::OBJECT_INDEX
-            | ObjectType::OBJECT_SEQUENCE => self.find_relations(stmt)?,
+            | ObjectType::OBJECT_SEQUENCE
+            | ObjectType::OBJECT_FOREIGN_TABLE => self.find_relations(stmt)?,
             ObjectType::OBJECT_TSPARSER
             | ObjectType::OBJECT_TSDICTIONARY
             | ObjectType::OBJECT_TSTEMPLATE
@@ -151,6 +159,16 @@ impl Definer<'_, '_> {
             | ObjectType::OBJECT_AGGREGATE => self.find_functions(stmt)?,
             ObjectType::OBJECT_RULE => return self.drop_rule(stmt),
             ObjectType::OBJECT_TRIGGER => return self.drop_trigger(stmt),
+            ObjectType::OBJECT_ACCESS_METHOD
+            | ObjectType::OBJECT_CAST
+            | ObjectType::OBJECT_COLLATION
+            | ObjectType::OBJECT_CONVERSION
+            | ObjectType::OBJECT_EXTENSION
+            | ObjectType::OBJECT_LANGUAGE
+            | ObjectType::OBJECT_FDW
+            | ObjectType::OBJECT_FOREIGN_SERVER
+            | ObjectType::OBJECT_EVENT_TRIGGER
+            | ObjectType::OBJECT_PUBLICATION => return self.drop_named(stmt),
             _ => return Err(not_yet("DROP of this kind of object", None)),
         };
         self.perform(&objects, stmt.behavior == DropBehavior::DROP_CASCADE)
@@ -177,6 +195,7 @@ impl Definer<'_, '_> {
             ObjectType::OBJECT_SEQUENCE => &KINDS[1],
             ObjectType::OBJECT_VIEW => &KINDS[2],
             ObjectType::OBJECT_MATVIEW => &KINDS[5],
+            ObjectType::OBJECT_FOREIGN_TABLE => &KINDS[6],
             _ => &KINDS[0],
         };
         let mut objects = Vec::new();

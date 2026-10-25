@@ -1739,6 +1739,13 @@ pub fn access_method_name(oid: u32) -> Option<&'static str> {
     Some(r.text("amname")[at])
 }
 
+/// The OID of the access method with this name, from `pg_am`.
+pub fn access_method_oid(name: &str) -> Option<u32> {
+    let r = Rows::new("pg_am");
+    let at = r.text("amname").iter().position(|&n| n == name)?;
+    Some(r.oid("oid")[at])
+}
+
 /// The row of `pg_aggregate` of the aggregate function with this OID.
 pub fn aggregate(fnoid: u32) -> Option<&'static AggregateRow> {
     BUILTIN.aggregate_fn.get(&fnoid).map(|&i| &BUILTIN.aggregates[i]).or_else(|| {
