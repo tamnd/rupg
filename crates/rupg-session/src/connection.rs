@@ -4628,6 +4628,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vmvpath.test")));
     }
 
+    /// The detail of a failing row shows only the columns that the user can read or that the statement gives values, as `ExecBuildSlotValueDescription` builds it, and the detail of a row that no partition takes shows the key only when the user can read all its columns, as `ExecBuildSlotPartitionKeyDescription` builds it. `connection/vrowdesc.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vrowdesc() {
+        big_stack(|| script(include_str!("connection/vrowdesc.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {

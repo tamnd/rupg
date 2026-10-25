@@ -388,7 +388,9 @@ impl Connection {
             Some(info) => self.write_triggers(info)?,
             None => Triggers::default(),
         };
-        let routing = (target.kind == b'p').then(|| Routing::of(TRIGGER_INSERT));
+        let modified =
+            plan.as_deref().and_then(Plan::write).map_or(&[][..], |w| w.modified.as_slice());
+        let routing = (target.kind == b'p').then(|| Routing::of(TRIGGER_INSERT, modified));
         if routing.is_some() {
             triggers.retain_statement();
         }

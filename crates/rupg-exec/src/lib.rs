@@ -333,12 +333,28 @@ pub fn prepare(mut query: Query, session: &dyn Session) -> Result<Plan> {
     rupg_analyze::check_outer_joins(&query)?;
     check_query(&query, query.write.is_none())?;
     check_write(&query)?;
+    let perms = std::mem::take(&mut query.perms);
+    fill_modified(query.write.as_mut(), &perms);
+    for cte in &mut query.ctes {
+        fill_modified(cte.query.write.as_mut(), &perms);
+    }
+    query.perms = perms;
     for cte in query.ctes.iter().filter(|c| c.write.is_some()) {
         rupg_analyze::check_outer_joins(&cte.query)?;
         check_query(&cte.query, false)?;
         check_write(&cte.query)?;
     }
     Ok(Plan { query, written: Arc::default(), marks: Vec::new(), run: None })
+}
+
+/// Puts in [`rupg_analyze::Write::modified`] the columns of the table of the write that the privileges `perms` of the statement give values, as `ExecGetInsertedCols` and `ExecGetUpdatedCols` read them from the entry of the result relation.
+fn fill_modified(write: Option<&mut rupg_analyze::Write>, perms: &[rupg_analyze::PermInfo]) {
+    let Some(write) = write else { return };
+    let mut modified = BTreeSet::new();
+    for perm in perms.iter().filter(|p| p.relid == write.table) {
+        modified.extend(perm.inserted.iter().chain(&perm.updated).copied());
+    }
+    write.modified = modified.into_iter().collect();
 }
 
 /// Checks the queries of `ON CONFLICT DO UPDATE` and of the clauses of `MERGE` of a write.
@@ -1311,7 +1327,12 @@ impl Plan {
                 SqlState::WITH_CHECK_OPTION_VIOLATION,
                 format!("new row violates check option for view \"{}\"", check.views[at]),
             )
-            .with_detail(failing_row(row, &types, session)?));
+            .with_detail_opt(failing_row(
+                row,
+                &types,
+                (info.table, &info.modified),
+                session,
+            )?));
         }
         Ok(())
     }

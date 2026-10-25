@@ -39,6 +39,10 @@ struct Leaf {
     qualified: String,
     /// The type of each column of the partitioned table of the statement, for the detail of an error.
     root_types: Vec<u32>,
+    /// The partitioned table of the statement.
+    root: u32,
+    /// The columns of the partitioned table that the statement gives values, for the detail of an error.
+    modified: Vec<i16>,
 }
 
 /// The routing of the rows of a statement into the leaf partitions of a partitioned table, and the rows of each leaf that the statement did not write yet.
@@ -48,6 +52,8 @@ pub(super) struct Routing {
     leaves: Vec<Leaf>,
     /// The bit in `tgtype` of the event whose triggers of the leaves fire, or 0 when a leaf with triggers gives an error.
     event: i16,
+    /// The columns of the partitioned table that the statement gives values, as `ExecGetInsertedCols` and `ExecGetUpdatedCols` give them.
+    modified: Vec<i16>,
 }
 
 impl Leaf {
@@ -70,8 +76,13 @@ impl Leaf {
 
 impl Routing {
     /// A routing whose leaves fire their triggers for the event `event`, a bit of `tgtype`.
-    pub(super) fn of(event: i16) -> Routing {
-        Routing { event, ..Routing::default() }
+    pub(super) fn of(event: i16, modified: &[i16]) -> Routing {
+        Routing {
+            router: Router::of(modified),
+            event,
+            modified: modified.to_vec(),
+            ..Routing::default()
+        }
     }
 
     /// `ExecFindPartition` for a new row of the partitioned table `root`, then the triggers `BEFORE INSERT ... FOR EACH ROW` of the leaf, which fire before `ExecConstraints` checks the row with the constraints of the leaf. After the triggers, `ExecInsert` also checks the partition constraint of the leaf. The result is the index of the leaf and the checked row with the columns of the leaf, or `None` when a trigger skips the row.
@@ -87,7 +98,8 @@ impl Routing {
         reader: &Reader<'_>,
     ) -> Result<Option<(usize, Vec<Value>)>, Error> {
         let (oid, values) = self.router.route(root, row, reader)?;
-        let at = leaf_at(&mut self.leaves, catalog, (root, oid, self.event), reader)?;
+        let at =
+            leaf_at(&mut self.leaves, catalog, (root, oid, self.event), &self.modified, reader)?;
         let Self { router, leaves, .. } = self;
         let leaf = &leaves[at];
         if !leaf.fire.before_rows() {
@@ -246,7 +258,7 @@ impl Connection {
     ) -> Result<Routed, Error> {
         let catalog = self.catalog();
         let reader = self.reader();
-        let mut routing = Routing::of(TRIGGER_INSERT);
+        let mut routing = Routing::of(TRIGGER_INSERT, &info.modified);
         let (mut written, mut inserted) = (Vec::new(), Vec::new());
         // The new rows of the leaves with triggers `AFTER ... FOR EACH ROW`.
         let mut after = Vec::new();
@@ -371,7 +383,8 @@ impl Connection {
         let update = info.kind == WriteKind::Update;
         let returning = info.keeps_written();
         let mut done = ChangedRows { view: view.clone(), ..ChangedRows::default() };
-        let mut routing = Routing::of(if update { TRIGGER_UPDATE } else { TRIGGER_DELETE });
+        let mut routing =
+            Routing::of(if update { TRIGGER_UPDATE } else { TRIGGER_DELETE }, &info.modified);
         // The new rows that move to another leaf, after the old leaf deleted the old rows, with the place of each row in the statement.
         let mut moved: Vec<(usize, usize, Vec<Value>)> = Vec::new();
         // The events of the triggers `AFTER ... FOR EACH ROW` and the rows of the transition tables, with the place of each row in the statement.
@@ -508,8 +521,8 @@ impl Connection {
         let heap = self.store.heap();
         let table = info.table;
         let event = if update { TRIGGER_UPDATE } else { TRIGGER_DELETE };
-        let Routing { router, leaves, event: first } = routing;
-        let at = leaf_at(leaves, catalog, (table, old, *first), reader)?;
+        let Routing { router, leaves, event: first, .. } = routing;
+        let at = leaf_at(leaves, catalog, (table, old, *first), &info.modified, reader)?;
         leaves[at].arm(event, catalog, reader)?;
         let leaf = &leaves[at];
         // The old row of the leaf for the triggers.
@@ -552,7 +565,7 @@ impl Connection {
             item.new = Some(leaf_row(&leaves[at], &values, reader)?);
         } else if update {
             let (to, values) = router.route(table, row[..width].to_vec(), reader)?;
-            let to = leaf_at(leaves, catalog, (table, to, *first), reader)?;
+            let to = leaf_at(leaves, catalog, (table, to, *first), &info.modified, reader)?;
             if to == at {
                 item.new = Some(leaf_row(&leaves[to], &values, reader)?);
             } else {
@@ -774,12 +787,15 @@ fn leaf_at(
     leaves: &mut Vec<Leaf>,
     catalog: &Catalog,
     (root, oid, event): (u32, u32, i16),
+    modified: &[i16],
     reader: &Reader<'_>,
 ) -> Result<usize, Error> {
     if let Some(at) = leaves.iter().position(|leaf| leaf.oid == oid) {
         return Ok(at);
     }
-    leaves.push(leaf(catalog, (root, oid, event), reader)?);
+    let mut new = leaf(catalog, (root, oid, event), reader)?;
+    new.modified = modified.to_vec();
+    leaves.push(new);
     Ok(leaves.len() - 1)
 }
 
@@ -835,13 +851,14 @@ fn leaf_row(leaf: &Leaf, values: &[Value], reader: &Reader<'_>) -> Result<Vec<Va
 fn root_detail(leaf: &Leaf, row: &[Value], error: Error, reader: &Reader<'_>) -> Error {
     let state = error.state();
     if !matches!(state, SqlState::CHECK_VIOLATION | SqlState::NOT_NULL_VIOLATION)
-        || !error.detail().is_some_and(|d| d.starts_with("Failing row contains"))
+        || !error.message().contains(" violates ")
     {
         return error;
     }
     let shown = up(leaf, row, leaf.root_types.len());
-    match rupg_exec::failing_row(&shown, &leaf.root_types, reader) {
-        Ok(detail) => error.with_detail(detail),
+    let of = (leaf.root, leaf.modified.as_slice());
+    match rupg_exec::failing_row(&shown, &leaf.root_types, of, reader) {
+        Ok(detail) => error.with_detail_opt(detail),
         Err(_) => error,
     }
 }
@@ -933,6 +950,8 @@ fn leaf(
         armed: Vec::new(),
         qualified,
         root_types,
+        root,
+        modified: Vec::new(),
     })
 }
 

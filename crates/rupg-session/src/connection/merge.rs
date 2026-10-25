@@ -338,7 +338,7 @@ impl Connection {
     ) -> Result<Merged, Error> {
         let catalog = self.catalog();
         let width = info.width;
-        let mut routing = Routing::of(TRIGGER_INSERT);
+        let mut routing = Routing::of(TRIGGER_INSERT, &info.modified);
         let mut view = view.clone();
         let mut rows = rows;
         // The actions of the join, and for each action the new row and the leaf of the write, or `None` when the leaves did not write the row.

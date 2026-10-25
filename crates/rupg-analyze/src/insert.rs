@@ -82,6 +82,8 @@ pub struct Write {
     pub view_check: Option<ViewCheck>,
     /// The number of automatically updatable views that the statement writes through. `rewriteTargetView` keeps the entry of each view in the range table and adds the entry of the relation under it.
     pub views: usize,
+    /// The numbers of the columns that the statement gives values, as `ExecGetInsertedCols` and `ExecGetUpdatedCols` give them for the detail of a failing row. The plan fills them from the privileges of the query.
+    pub modified: Vec<i16>,
 }
 
 impl Write {
@@ -365,10 +367,6 @@ impl Analyzer<'_> {
             Some(Node::SelectStmt(select)) => Some(&**select),
             Some(_) => return Err(Error::internal("an INSERT source that is not SELECT")),
         };
-        // `DEFAULT VALUES` gives no column a value.
-        if select.is_some() {
-            self.mark_inserted(&given);
-        }
         let mut query = match select {
             None => {
                 let row = self.full_row(table, &columns, &given, Vec::new())?;
@@ -470,6 +468,7 @@ impl Analyzer<'_> {
             inherit: false,
             view_check: None,
             views: 0,
+            modified: Vec::new(),
         });
         self.end_write_with(&mut query, s.withClause.as_deref())?;
         Ok(query)
@@ -1252,6 +1251,8 @@ impl Analyzer<'_> {
             return Err(error.at_opt(given[items.len()].1));
         }
         self.auto_view_given(items.len())?;
+        // `transformInsertStmt` puts in `insertedCols` only the columns that have an expression, and `DEFAULT VALUES` gives no column a value.
+        self.mark_inserted(&given[..items.len()]);
         let mut row = Vec::with_capacity(items.len());
         for (item, (index, at, indirection)) in items.into_iter().zip(given) {
             let (index, at) = (*index, *at);
