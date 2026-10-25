@@ -575,13 +575,16 @@ pub fn shown_columns(
     Ok(Some(shown))
 }
 
-/// `ExecBuildSlotPartitionKeyDescription`: true when the detail of a row that no partition of `relid` takes shows the partition key, whose columns are `attrs` with 0 for an expression. The current user must have `SELECT` on the table, or on each column of the key with no expression in the key.
+/// `ExecBuildSlotPartitionKeyDescription`: true when the detail of a row that no partition of `relid` takes shows the partition key, whose columns are `attrs` with 0 for an expression. No policy of row-level security of the table may apply to the current user, and the current user must have `SELECT` on the table, or on each column of the key with no expression in the key.
 ///
 /// # Errors
 ///
 /// The error of an ACL that does not parse.
 pub fn partition_key_shown(relid: u32, attrs: &[i16], session: &dyn Session) -> Result<bool> {
     let role = current_user(session);
+    if rls_enabled(relid, role, session) {
+        return Ok(false);
+    }
     if class_check(relid, role, ACL_SELECT, session)? != Some(false) {
         return Ok(true);
     }
@@ -1615,6 +1618,11 @@ fn rls_check(relid: u32, role: u32, session: &dyn Session) -> (RlsStatus, bool) 
 /// `check_enable_rls` with the result `RLS_ENABLED`: true when the policies of the relation apply to the role.
 pub(crate) fn rls_enabled(relid: u32, role: u32, session: &dyn Session) -> bool {
     rls_check(relid, role, session).0 == RlsStatus::Enabled
+}
+
+/// `check_enable_rls` with `noError` for the current user: true when the policies of the table `relid` apply, so that the detail of an error does not show the values of a row, as `ExecBuildSlotValueDescription` and `BuildIndexValueDescription` hide them.
+pub fn row_security_hides(relid: u32, session: &dyn Session) -> bool {
+    rls_enabled(relid, current_user(session), session)
 }
 
 /// The roles of the session for the policies of the tables of a query.

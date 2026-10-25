@@ -414,6 +414,7 @@ impl Analyzer<'_> {
                 instead,
                 inherit,
                 view_check: None,
+                policy_check: None,
                 views: 0,
                 modified: Vec::new(),
                 insert_def: None,

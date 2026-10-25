@@ -7,6 +7,10 @@ use rupg_exec::{Plan, Router};
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_sql::nodes::RangeVar;
 use rupg_types::Value;
+use std::rc::Rc;
+
+/// The row security check of a partitioned root, with the name of the root table.
+type RootPolicy = Rc<(rupg_analyze::PolicyCheck, String)>;
 
 use super::Connection;
 use super::foreign::Batch;
@@ -43,6 +47,8 @@ struct Leaf {
     root: u32,
     /// The columns of the partitioned table that the statement gives values, for the detail of an error.
     modified: Vec<i16>,
+    /// The checks of the policies of the partitioned table, with its name, which `ExecInsert` maps to the leaf.
+    policy: Option<RootPolicy>,
 }
 
 /// The routing of the rows of a statement into the leaf partitions of a partitioned table, and the rows of each leaf that the statement did not write yet.
@@ -54,6 +60,8 @@ pub(super) struct Routing {
     event: i16,
     /// The columns of the partitioned table that the statement gives values, as `ExecGetInsertedCols` and `ExecGetUpdatedCols` give them.
     modified: Vec<i16>,
+    /// The checks of the policies of the partitioned table for its leaves.
+    policy: Option<RootPolicy>,
 }
 
 impl Leaf {
@@ -85,6 +93,12 @@ impl Routing {
         }
     }
 
+    /// The routing with the checks of the policies of the write `info`, which each leaf checks on its new rows.
+    pub(super) fn with_policy(mut self, info: &Write) -> Routing {
+        self.policy = info.policy_check.clone().map(|check| Rc::new((check, info.name.clone())));
+        self
+    }
+
     /// `ExecFindPartition` for a new row of the partitioned table `root`, then the triggers `BEFORE INSERT ... FOR EACH ROW` of the leaf, which fire before `ExecConstraints` checks the row with the constraints of the leaf. After the triggers, `ExecInsert` also checks the partition constraint of the leaf. The result is the index of the leaf and the checked row with the columns of the leaf, or `None` when a trigger skips the row.
     ///
     /// # Errors
@@ -98,8 +112,13 @@ impl Routing {
         reader: &Reader<'_>,
     ) -> Result<Option<(usize, Vec<Value>)>, Error> {
         let (oid, values) = self.router.route(root, row, reader)?;
-        let at =
-            leaf_at(&mut self.leaves, catalog, (root, oid, self.event), &self.modified, reader)?;
+        let at = leaf_at(
+            &mut self.leaves,
+            catalog,
+            (root, oid, self.event),
+            (&self.modified, &self.policy),
+            reader,
+        )?;
         let Self { router, leaves, .. } = self;
         let leaf = &leaves[at];
         if !leaf.fire.before_rows() {
@@ -258,7 +277,7 @@ impl Connection {
     ) -> Result<Routed, Error> {
         let catalog = self.catalog();
         let reader = self.reader();
-        let mut routing = Routing::of(TRIGGER_INSERT, &info.modified);
+        let mut routing = Routing::of(TRIGGER_INSERT, &info.modified).with_policy(info);
         let (mut written, mut inserted) = (Vec::new(), Vec::new());
         // The new rows of the leaves with triggers `AFTER ... FOR EACH ROW`.
         let mut after = Vec::new();
@@ -384,7 +403,8 @@ impl Connection {
         let returning = info.keeps_written();
         let mut done = ChangedRows { view: view.clone(), ..ChangedRows::default() };
         let mut routing =
-            Routing::of(if update { TRIGGER_UPDATE } else { TRIGGER_DELETE }, &info.modified);
+            Routing::of(if update { TRIGGER_UPDATE } else { TRIGGER_DELETE }, &info.modified)
+                .with_policy(info);
         // The new rows that move to another leaf, after the old leaf deleted the old rows, with the place of each row in the statement.
         let mut moved: Vec<(usize, usize, Vec<Value>)> = Vec::new();
         // The events of the triggers `AFTER ... FOR EACH ROW` and the rows of the transition tables, with the place of each row in the statement.
@@ -521,8 +541,8 @@ impl Connection {
         let heap = self.store.heap();
         let table = info.table;
         let event = if update { TRIGGER_UPDATE } else { TRIGGER_DELETE };
-        let Routing { router, leaves, event: first, .. } = routing;
-        let at = leaf_at(leaves, catalog, (table, old, *first), &info.modified, reader)?;
+        let Routing { router, leaves, event: first, policy, .. } = routing;
+        let at = leaf_at(leaves, catalog, (table, old, *first), (&info.modified, policy), reader)?;
         leaves[at].arm(event, catalog, reader)?;
         let leaf = &leaves[at];
         // The old row of the leaf for the triggers.
@@ -565,7 +585,8 @@ impl Connection {
             item.new = Some(leaf_row(&leaves[at], &values, reader)?);
         } else if update {
             let (to, values) = router.route(table, row[..width].to_vec(), reader)?;
-            let to = leaf_at(leaves, catalog, (table, to, *first), &info.modified, reader)?;
+            let to =
+                leaf_at(leaves, catalog, (table, to, *first), (&info.modified, policy), reader)?;
             if to == at {
                 item.new = Some(leaf_row(&leaves[to], &values, reader)?);
             } else {
@@ -787,7 +808,7 @@ fn leaf_at(
     leaves: &mut Vec<Leaf>,
     catalog: &Catalog,
     (root, oid, event): (u32, u32, i16),
-    modified: &[i16],
+    (modified, policy): (&[i16], &Option<RootPolicy>),
     reader: &Reader<'_>,
 ) -> Result<usize, Error> {
     if let Some(at) = leaves.iter().position(|leaf| leaf.oid == oid) {
@@ -795,6 +816,7 @@ fn leaf_at(
     }
     let mut new = leaf(catalog, (root, oid, event), reader)?;
     new.modified = modified.to_vec();
+    new.policy.clone_from(policy);
     leaves.push(new);
     Ok(leaves.len() - 1)
 }
@@ -839,6 +861,15 @@ fn leaf_updated(leaf: &Leaf, updated: &[i16]) -> Vec<i16> {
 
 /// The new row of the leaf partition `leaf` after the not-null and check constraints of the leaf, as `ExecConstraints` checks it.
 fn leaf_row(leaf: &Leaf, values: &[Value], reader: &Reader<'_>) -> Result<Vec<Value>, Error> {
+    // `ExecInsert` checks the policies of the partitioned table on the row of the leaf before the constraints of the leaf.
+    if let Some(policy) = &leaf.policy {
+        let row = up(leaf, values, leaf.root_types.len());
+        let (check, name) = &**policy;
+        if let Some(Some(error)) = rupg_exec::policy_failures(check, name, vec![row], reader)?.pop()
+        {
+            return Err(error);
+        }
+    }
     let params: Vec<Value> =
         leaf.live.iter().map(|&i| values.get(i).cloned().unwrap_or(Value::Null)).collect();
     let checked = leaf.plan.run_unchecked(&params, reader)?;
@@ -952,6 +983,7 @@ fn leaf(
         root_types,
         root,
         modified: Vec::new(),
+        policy: None,
     })
 }
 

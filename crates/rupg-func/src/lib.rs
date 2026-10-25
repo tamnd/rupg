@@ -86,7 +86,7 @@ use rupg_types::{ByteaOutput, DateFormat, IntervalStyle, TimeZone, TypeError, Va
 
 pub use acl::{
     apply_row_security, check_execute, check_permissions, current_user_oid, insert_allowed,
-    lock_table_allowed, partition_key_shown, shown_columns,
+    lock_table_allowed, partition_key_shown, row_security_hides, shown_columns,
 };
 pub use activity::{Backend, BackendState, Client, Ssl};
 pub use agg::check_percentile;

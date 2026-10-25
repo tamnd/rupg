@@ -964,11 +964,13 @@ impl Connection {
             Ok(shown) => shown,
             Err(error) => return error,
         };
-        let error = Error::new(
+        let mut error = Error::new(
             SqlState::UNIQUE_VIOLATION,
             format!("duplicate key value violates unique constraint \"{}\"", unique.name),
-        )
-        .with_detail(format!("Key ({columns})=({values}) already exists."));
+        );
+        if !rupg_func::row_security_hides(table, &self.reader()) {
+            error = error.with_detail(format!("Key ({columns})=({values}) already exists."));
+        }
         rupg_func::with_table_constraint(error, table, &unique.name, &self.reader())
     }
 
@@ -4848,6 +4850,18 @@ mod tests {
     #[test]
     fn row_security_reads() {
         big_stack(|| script(include_str!("connection/row_security_reads.test")));
+    }
+
+    /// Row security on the rows that `INSERT`, `UPDATE` and `DELETE` write: the conditions of `USING` on the rows of the table, the checks of `WITH CHECK` on the new rows, and the policies of `SELECT` for `RETURNING`. `connection/row_security_writes.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn row_security_writes() {
+        big_stack(|| script(include_str!("connection/row_security_writes.test")));
+    }
+
+    /// The checks of the policies of row security after the triggers `BEFORE`, with a subquery, with a unique key, and on a partitioned table. `connection/row_security_write_checks.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn row_security_write_checks() {
+        big_stack(|| script(include_str!("connection/row_security_write_checks.test")));
     }
 
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.

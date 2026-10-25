@@ -1371,7 +1371,7 @@ impl Plan {
         let tables = scan::given(base, vec![vec![existing], vec![excluded]]);
         cache.tables.borrow_mut().push((base, Rc::new(tables)));
         let rows = run_query(query, params, session, &cache, &[], false)?;
-        Ok(insert::check(info, rows, session)?.into_iter().next())
+        Ok(insert::check(info, rows, Vec::new(), session)?.into_iter().next())
     }
 
     /// `ExecMergeMatched` and `ExecMergeNotMatched` for one clause of a `MERGE`: the row that the clause gives for the row `target` of the table, which ends with the ID of its version, and the carried values of the row of the join. It is `None` when the condition of the clause is not true. The new row of an `INSERT` or an `UPDATE` has the columns of the table, after the checks of the constraints. With [`rupg_analyze::Write::recheck`] it has the conditions of the checks after the columns, because the triggers `BEFORE ... FOR EACH ROW` come before the checks.
@@ -1403,12 +1403,20 @@ impl Plan {
         cache.tables.borrow_mut().push((base, Rc::new(tables)));
         let rows = run_query(query, params, session, &cache, &[], false)?;
         let rows = match clause.command {
-            rupg_analyze::MergeCommand::Insert if info.recheck.is_none() => {
-                insert::check_rows(info, rupg_analyze::WriteKind::Insert, rows, session)?
-            }
-            rupg_analyze::MergeCommand::Update if info.recheck.is_none() => {
-                insert::check_rows(info, rupg_analyze::WriteKind::Update, rows, session)?
-            }
+            rupg_analyze::MergeCommand::Insert if info.recheck.is_none() => insert::check_rows(
+                info,
+                rupg_analyze::WriteKind::Insert,
+                rows,
+                Vec::new(),
+                session,
+            )?,
+            rupg_analyze::MergeCommand::Update if info.recheck.is_none() => insert::check_rows(
+                info,
+                rupg_analyze::WriteKind::Update,
+                rows,
+                Vec::new(),
+                session,
+            )?,
             _ => rows,
         };
         Ok(rows.into_iter().next())
@@ -1612,7 +1620,10 @@ impl Plan {
         session: &dyn Session,
     ) -> Result<Vec<Vec<Value>>> {
         match &self.query.write {
-            Some(info) => insert::check_rows(info, info.kind, rows, session),
+            Some(info) => {
+                let policy = self.policy_failures(&rows, session)?;
+                insert::check_rows(info, info.kind, rows, policy, session)
+            }
             None => Ok(rows),
         }
     }
@@ -1629,7 +1640,10 @@ impl Plan {
         session: &dyn Session,
     ) -> Result<Vec<Vec<Value>>> {
         match &self.query.write {
-            Some(info) => insert::check_rows(info, kind, rows, session),
+            Some(info) => {
+                let policy = self.policy_failures(&rows, session)?;
+                insert::check_rows(info, kind, rows, policy, session)
+            }
             None => Ok(rows),
         }
     }
@@ -1641,10 +1655,64 @@ impl Plan {
     /// The error of a not-null constraint or of a check constraint.
     pub fn check(&self, rows: Vec<Vec<Value>>, session: &dyn Session) -> Result<Vec<Vec<Value>>> {
         match &self.query.write {
-            Some(info) => insert::check(info, rows, session),
-            None => Ok(rows),
+            Some(info) if insert::checks_now(info) => {
+                let policy = self.policy_failures(&rows, session)?;
+                insert::check(info, rows, policy, session)
+            }
+            Some(_) | None => Ok(rows),
         }
     }
+
+    /// [`policy_failures`] for the new rows of the write. A partitioned table checks each row in its leaf partition, after the routing.
+    ///
+    /// # Errors
+    ///
+    /// The error of a function of a check.
+    fn policy_failures(
+        &self,
+        rows: &[Vec<Value>],
+        session: &dyn Session,
+    ) -> Result<Vec<Option<Error>>> {
+        let Some(info) = self.query.write.as_ref() else { return Ok(Vec::new()) };
+        let Some(check) = info.policy_check.as_ref() else { return Ok(Vec::new()) };
+        let rel = session.catalog().and_then(|c| c.relation(info.table));
+        if rel.is_some_and(|r| r.kind == rupg_catalog::RelKind::Partitioned) {
+            return Ok(Vec::new());
+        }
+        let rows: Vec<Vec<Value>> =
+            rows.iter().map(|row| row[..info.width.min(row.len())].to_vec()).collect();
+        policy_failures(check, &info.name, rows, session)
+    }
+}
+
+/// `ExecWithCheckOptions` for `WCO_RLS_INSERT_CHECK` and `WCO_RLS_UPDATE_CHECK`: for each new row `rows` of the table `table`, with the columns of the table, the error of the first check of `check` that the row does not pass, or `None`. A null fails the check.
+///
+/// # Errors
+///
+/// The error of a function of a check.
+pub fn policy_failures(
+    check: &rupg_analyze::PolicyCheck,
+    table: &str,
+    rows: Vec<Vec<Value>>,
+    session: &dyn Session,
+) -> Result<Vec<Option<Error>>> {
+    let query: &Query = &check.query;
+    let cache = Cache::default();
+    cache.tables.borrow_mut().push((query, Rc::new(scan::given(query, vec![rows]))));
+    let results = run_query(query, &[], session, &cache, &[], false)?;
+    Ok(results
+        .iter()
+        .map(|result| {
+            let at = result.iter().position(|v| !matches!(v, Value::Bool(true)))?;
+            let message = match check.policies.get(at).cloned().flatten() {
+                Some(policy) => format!(
+                    "new row violates row-level security policy \"{policy}\" for table \"{table}\""
+                ),
+                None => format!("new row violates row-level security policy for table \"{table}\""),
+            };
+            Some(Error::new(SqlState::INSUFFICIENT_PRIVILEGE, message))
+        })
+        .collect())
 }
 
 /// `TriggerEnabled` for the condition of `WHEN` of a trigger: true when the condition `qual` is true for the old row `old` and the new row `new`. The relations of the query `base` are the old row and the new row, as [`rupg_analyze::trigger_when`] gives them.
