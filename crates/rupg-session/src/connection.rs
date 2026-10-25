@@ -1961,7 +1961,7 @@ impl Connection {
                     self.notices(&mut late, text, &[], out);
                     out.command_tag(tag, count);
                 }
-                Done::Copy(copy) => copy.send(out),
+                Done::Copy(mut copy) => self.send_copy(&mut copy, text, out),
             }
         }
         false
@@ -4416,6 +4416,12 @@ mod tests {
     #[test]
     fn curof() {
         big_stack(|| script(include_str!("connection/curof.test")));
+    }
+
+    /// `COPY` of `INSERT`, `UPDATE`, `DELETE` and `MERGE` with `RETURNING`, the notices of the triggers of the write, the CSV and JSON formats, and the errors for a statement with no `RETURNING` and for the rules of the table. `connection/cdml.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn cdml() {
+        big_stack(|| script(include_str!("connection/cdml.test")));
     }
 
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.

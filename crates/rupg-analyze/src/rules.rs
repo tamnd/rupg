@@ -33,6 +33,7 @@ pub struct Product {
     inverted: Vec<Node>,
     /// The OID of the target table when the rewrite fired its rules for this statement.
     fired: Option<u32>,
+    source: Source,
 }
 
 /// `querySource`: where a statement of the rewrite comes from.
@@ -247,8 +248,11 @@ fn rule_action(parts: &Parts, action: &Node, qual: Option<&Node>, event: CmdType
             if rows.is_none() && qual.is_none() {
                 return Ok(action);
             }
-            let Some(Node::SelectStmt(select)) = &mut s.selectStmt else {
-                return Err(not_yet("DEFAULT VALUES in a rule action"));
+            // DEFAULT VALUES becomes a SELECT with no columns, so that every
+            // column takes its default for each row that the qual keeps.
+            let select = s.selectStmt.get_or_insert_with(|| Node::SelectStmt(Box::default()));
+            let Node::SelectStmt(select) = select else {
+                return Err(not_yet("a rule action INSERT that is not a SELECT"));
             };
             if select.op != SetOperation::SETOP_NONE {
                 return Err(Error::new(
@@ -366,9 +370,29 @@ pub fn query_rewrite(stmt: &Node, env: &dyn Env) -> Result<Option<Vec<Product>>>
             action: item.source != Source::Original,
             inverted: item.inverted,
             fired: item.fired,
+            source: item.source,
         })
         .collect();
     Ok(Some(products))
+}
+
+/// The checks of `BeginCopyTo` on the rewrite of the query of `COPY` by the rules of its table: the error for a rewrite that is not one statement.
+pub fn copy_rules_error(products: &[Product]) -> Option<Error> {
+    let text = match products {
+        [] => "DO INSTEAD NOTHING rules are not supported for COPY",
+        [_] => return None,
+        _ => products
+            .iter()
+            .find_map(|p| match p.source {
+                Source::QualInstead => {
+                    Some("conditional DO INSTEAD rules are not supported for COPY")
+                }
+                Source::Also => Some("DO ALSO rules are not supported for COPY"),
+                _ => None,
+            })
+            .unwrap_or("multi-statement DO INSTEAD rules are not supported for COPY"),
+    };
+    Some(Error::new(SqlState::FEATURE_NOT_SUPPORTED, text))
 }
 
 /// `RewriteQuery` for a write: `None` when no rule of the target table fires for it.
