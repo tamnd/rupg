@@ -17,7 +17,8 @@ impl Analyzer<'_> {
     /// `transformValuesClause`: the query tree of a `VALUES` list, with its `ORDER BY`, `LIMIT` and `OFFSET`.
     pub(crate) fn values_clause(&mut self, s: &SelectStmt) -> Result<Query> {
         let mut columns: Vec<Vec<Expr>> = Vec::new();
-        let kind = if s.valuesLists.len() == 1 { Kind::ValuesSingle } else { Kind::Values };
+        // `transformValuesClause` reads each row with `EXPR_KIND_VALUES`, also a single row.
+        let kind = Kind::Values;
         for (row, list) in s.valuesLists.iter().enumerate() {
             let Some(Node::List(list)) = list else {
                 return Err(Error::internal("a VALUES row that is not a list"));

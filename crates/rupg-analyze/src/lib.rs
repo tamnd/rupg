@@ -293,6 +293,8 @@ pub(crate) struct Analyzer<'a> {
     has_windows: bool,
     /// True when the next `SELECT` keeps its columns of type `unknown`, as `parse_sub_analyze` with no `resolve_unknowns` does for a part of a set operation.
     keep_unknowns: bool,
+    /// True while the analyzer reads the single row of `VALUES` of an `INSERT` or of an action `INSERT` of a `MERGE`, whose list of targets can call a function that gives a set, as `check_srf_call_placement` allows for `EXPR_KIND_VALUES_SINGLE`.
+    srf_values: bool,
     /// The views whose queries the analyzer reads now, from the outermost. A view in its own query gives `42P17`, as `fireRIRrules` does.
     views: Vec<u32>,
     /// The base type and the typmod of the domain whose check constraint the analyzer reads now, or `None`. Then the name `value` is [`ExprKind::DomainValue`].
@@ -368,6 +370,7 @@ impl<'a> Analyzer<'a> {
             windowdefs: Vec::new(),
             has_windows: false,
             keep_unknowns: false,
+            srf_values: false,
             views: Vec::new(),
             domain_value: None,
             sql_function: None,

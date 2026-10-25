@@ -427,7 +427,19 @@ impl Analyzer<'_> {
             // `INSERT DEFAULT VALUES`.
             Vec::new()
         } else {
-            let items = self.value_items(&clause.values, Kind::ValuesSingle)?;
+            let before = self.srfs.0;
+            self.srf_values = true;
+            let items = self.value_items(&clause.values, Kind::ValuesSingle);
+            self.srf_values = false;
+            let items = items?;
+            // `ExecInitFunc` of the projection of the action does not take a set.
+            if self.srfs.0 != before {
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    "set-valued function called in context that cannot accept a set",
+                )
+                .at_opt(self.srfs.1));
+            }
             let explicit = !clause.targetList.is_empty();
             self.insert_row(items, table, columns, &given, explicit, clause.r#override)?
         };

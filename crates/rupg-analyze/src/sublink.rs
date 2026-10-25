@@ -39,8 +39,9 @@ impl Analyzer<'_> {
         let has_aggs = std::mem::replace(&mut self.has_aggs, false);
         self.outer_kinds.push((Some(kind), has_aggs));
         let srfs = self.srfs;
+        let srf_values = std::mem::take(&mut self.srf_values);
         let result = f(self);
-        self.srfs = srfs;
+        (self.srfs, self.srf_values) = (srfs, srf_values);
         // An aggregate of this query in the subquery sets `has_aggs` of this query.
         self.has_aggs = self.outer_kinds.pop().map_or(has_aggs, |(_, has_aggs)| has_aggs);
         self.kind = kind;

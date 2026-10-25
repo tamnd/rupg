@@ -802,8 +802,9 @@ impl Analyzer<'_> {
         let has_aggs = std::mem::replace(&mut self.has_aggs, false);
         self.outer_kinds.push((None, has_aggs));
         let srfs = self.srfs;
+        let srf_values = std::mem::take(&mut self.srf_values);
         let result = f(self);
-        self.srfs = srfs;
+        (self.srfs, self.srf_values) = (srfs, srf_values);
         self.has_aggs = self.outer_kinds.pop().map_or(has_aggs, |(_, has_aggs)| has_aggs);
         self.kind = kind;
         let mut scope = self.outer.pop().unwrap_or_default();
