@@ -25,6 +25,8 @@ pub struct PermInfo {
     pub relid: u32,
     /// `checkAsUser`: the role whose privileges count, or 0 for the current user. A relation of the query of a view uses the owner of the view, unless the view has `security_invoker`.
     pub check_as: u32,
+    /// True for a relation of the query of a view with `security_invoker`, whose 0 in `check_as` stays the current user in a view outside it, as `RelationBuildRuleLock` gives `InvalidOid` to `setRuleCheckAsUser` for the rules of the view.
+    pub invoker: bool,
     /// `requiredPerms`: the bits of `ACL_SELECT`, `ACL_INSERT`, `ACL_UPDATE` and `ACL_DELETE` that the statement needs.
     pub required: u32,
     /// `selectedCols`: the numbers of the columns that the statement reads, with 0 for the whole row.
@@ -80,20 +82,19 @@ impl Analyzer<'_> {
     /// The part of `ApplyRetrieveRule` for the privileges: the privileges of the query of the view `view` go after the privileges of the statement, and they are the privileges of the owner of the view, unless the view has `security_invoker`.
     pub(crate) fn add_view_perms(&mut self, view: u32, query: &mut Query, perms: Vec<PermInfo>) {
         let rel = self.env.catalog().and_then(|c| c.relation(view));
+        let invoker = rel.is_some_and(|rel| {
+            rel.kind == RelKind::View && option_on(&rel.options, "security_invoker")
+        });
         let owner = match rel {
-            Some(rel)
-                if rel.kind == RelKind::View && option_on(&rel.options, "security_invoker") =>
-            {
-                0
-            }
-            Some(rel) => rel.owner,
-            None => 0,
+            Some(rel) if !invoker => rel.owner,
+            _ => 0,
         };
         shift(query, self.perms.len());
         self.funcs.append(&mut query.funcs);
         for mut perm in perms {
-            if perm.check_as == 0 {
+            if perm.check_as == 0 && !perm.invoker {
                 perm.check_as = owner;
+                perm.invoker = invoker;
             }
             self.perms.push(perm);
         }
