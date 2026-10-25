@@ -12,11 +12,11 @@ use rupg_types::oid;
 use crate::{exprs, from, pullup, upper};
 
 /// Moves the conditions of `WHERE` that the planner can move into the subqueries of `FROM`, then does the same in each subquery, also in the subqueries of the expressions.
-pub(crate) fn push_all(query: &mut Query) {
-    push(query);
+pub(crate) fn push_all(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
+    push(query, barrier);
     for relation in &mut query.relations {
         if let Some(sub) = &mut relation.subquery {
-            push_all(sub);
+            push_all(sub, barrier);
         }
     }
     for expr in query.exprs_mut() {
@@ -24,15 +24,15 @@ pub(crate) fn push_all(query: &mut Query) {
             if depth == 0
                 && let ExprKind::SubLink(link) = &mut e.kind
             {
-                push_all(&mut link.query);
+                push_all(&mut link.query, barrier);
             }
             false
         });
     }
 }
 
-/// Reduces the outer joins of `FROM` and removes the tests of `IS NULL` that an anti join makes redundant, then moves each part of `WHERE` that reads one subquery of `FROM` into the subquery, when `qual_is_pushdown_safe` lets it. The subquery is not on the side of an outer join that can give nulls, where the condition tests the rows of the join. The planner does not move a condition into a view or a query of `WITH` yet.
-fn push(query: &mut Query) {
+/// Reduces the outer joins of `FROM` and removes the tests of `IS NULL` that an anti join makes redundant, then moves each part of `WHERE` that reads one subquery of `FROM` into the subquery, when `qual_is_pushdown_safe` lets it. The subquery is not on the side of an outer join that can give nulls, where the condition tests the rows of the join. Only a leakproof condition moves into a view with `security_barrier`, for which `barrier` is true. The planner does not move a condition into a query of `WITH` yet.
+fn push(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
     let mut above = BTreeSet::new();
     for part in query.filter.iter().chain(upper::having_split(query).0) {
         above.extend(from::nonnullable_rels(part, true));
@@ -65,7 +65,9 @@ fn push(query: &mut Query) {
                 _ => return None,
             };
             let relation = query.relations.get(r)?;
-            let plain = relation.oid == 0 && relation.cte.is_none() && !nullable.contains(&r);
+            let view = relation.oid != 0 && (!barrier(relation.oid) || !part.leaky());
+            let plain =
+                (relation.oid == 0 || view) && relation.cte.is_none() && !nullable.contains(&r);
             let sub = relation.subquery.as_deref().filter(|_| plain)?;
             pushable(sub, part, r).then_some(r)
         })

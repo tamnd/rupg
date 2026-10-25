@@ -4482,6 +4482,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vsel.test")));
     }
 
+    /// `EXPLAIN` of a simple view shows the scan of its base table, with the conditions of the view and of the query, as `pull_up_simple_subquery` merges the view. A view with `security_barrier` stays a subquery and takes only the leakproof conditions. `connection/vexp.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vexp() {
+        big_stack(|| script(include_str!("connection/vexp.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {

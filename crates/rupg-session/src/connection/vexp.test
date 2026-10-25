@@ -1,0 +1,94 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE qo (id int PRIMARY KEY, person text, visibility text);
+CREATE TABLE
+> CREATE TABLE qp (id int, note text);
+CREATE TABLE
+> CREATE FUNCTION snoop(anyelement) RETURNS boolean AS $$ BEGIN RAISE NOTICE 'snooped value: %', $1; RETURN true; END; $$ LANGUAGE plpgsql COST 0.000001;
+CREATE FUNCTION
+> CREATE VIEW qv AS SELECT * FROM qo WHERE visibility = 'public';
+CREATE VIEW
+> CREATE VIEW qsb WITH (security_barrier) AS SELECT * FROM qo WHERE visibility = 'public';
+CREATE VIEW
+> CREATE VIEW qj AS SELECT qo.id, qo.person, qp.note FROM qo JOIN qp ON qo.id = qp.id;
+CREATE VIEW
+> EXPLAIN (costs off) SELECT * FROM qv WHERE snoop(person);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on qo
+row   Filter: (snoop(person) AND (visibility = 'public'::text))
+EXPLAIN
+> EXPLAIN (costs off) SELECT * FROM qv WHERE id = 1;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using qo_pkey on qo
+row   Index Cond: (id = 1)
+row   Filter: (visibility = 'public'::text)
+EXPLAIN
+> EXPLAIN (costs off) SELECT * FROM qsb WHERE snoop(person);
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on qsb
+row   Filter: snoop(qsb.person)
+row   ->  Seq Scan on qo
+row         Filter: (visibility = 'public'::text)
+EXPLAIN
+> EXPLAIN (costs off) SELECT * FROM qsb WHERE id > 1 AND snoop(person);
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on qsb
+row   Filter: snoop(qsb.person)
+row   ->  Bitmap Heap Scan on qo
+row         Recheck Cond: (id > 1)
+row         Filter: (visibility = 'public'::text)
+row         ->  Bitmap Index Scan on qo_pkey
+row               Index Cond: (id > 1)
+EXPLAIN
+> EXPLAIN (costs off) SELECT * FROM qj WHERE note = 'x';
+fields QUERY PLAN:25:-1:-1
+row Hash Join
+row   Hash Cond: (qo.id = qp.id)
+row   ->  Seq Scan on qo
+row   ->  Hash
+row         ->  Seq Scan on qp
+row               Filter: (note = 'x'::text)
+EXPLAIN
+> EXPLAIN (costs off) SELECT * FROM qv a LEFT JOIN qp b ON a.id = b.id;
+fields QUERY PLAN:25:-1:-1
+row Hash Right Join
+row   Hash Cond: (b.id = qo.id)
+row   ->  Seq Scan on qp b
+row   ->  Hash
+row         ->  Seq Scan on qo
+row               Filter: (visibility = 'public'::text)
+EXPLAIN
+> EXPLAIN (costs off) SELECT * FROM qp b LEFT JOIN qv a ON a.id = b.id;
+fields QUERY PLAN:25:-1:-1
+row Hash Left Join
+row   Hash Cond: (b.id = qo.id)
+row   ->  Seq Scan on qp b
+row   ->  Hash
+row         ->  Seq Scan on qo
+row               Filter: (visibility = 'public'::text)
+EXPLAIN
+> EXPLAIN (costs off) SELECT count(*) FROM qv;
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   ->  Seq Scan on qo
+row         Filter: (visibility = 'public'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM qv WHERE id = 1;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using qo_pkey on qo  (cost=0.15..8.17 rows=1 width=68)
+row   Index Cond: (id = 1)
+row   Filter: (visibility = 'public'::text)
+EXPLAIN
+> DROP VIEW qj;
+DROP VIEW
+> DROP VIEW qsb;
+DROP VIEW
+> DROP VIEW qv;
+DROP VIEW
+> DROP TABLE qp;
+DROP TABLE
+> DROP TABLE qo;
+DROP TABLE
+> DROP FUNCTION snoop(anyelement);
+DROP FUNCTION
