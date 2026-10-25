@@ -15,7 +15,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Fixed
 
-- `Cargo.lock` lists the dependency of `rupg-exec` on `rupg-opt` again, so `cargo build --locked` and `cargo publish --locked` work. CI now fails when `Cargo.lock` does not agree with the manifests (#NUM).
+- `Cargo.lock` lists the dependency of `rupg-exec` on `rupg-opt` again, so `cargo build --locked` and `cargo publish --locked` work. CI now fails when `Cargo.lock` does not agree with the manifests (#720).
 
 ## 0.1.83 (2026-10-25)
 
