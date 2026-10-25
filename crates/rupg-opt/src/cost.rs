@@ -809,6 +809,16 @@ pub(crate) fn qual_costs<'a>(
     (startup, per_row)
 }
 
+/// The cost of the node of an expression for each row, without its children, in units of `cpu_operator_cost`, as `cost_qual_eval_walker` adds it. A call costs its `procost`, and `x op ANY (array)` costs its operator for half of the items of the array, or one hash and one comparison for a constant array of 9 items or more.
+pub fn node_cost(expr: &Expr) -> f64 {
+    match &expr.kind {
+        ExprKind::ScalarArrayOp { func, any, args } => {
+            array_op_cost(*func, *any, args).1 / CPU_OPERATOR
+        }
+        _ => expr.own_cost(),
+    }
+}
+
 /// The cost of `x op ANY (array)` or `x op ALL (array)`, as `cost_qual_eval_walker` finds it: the start cost and the cost for each row. The operator runs for half of the items of the array. A hash table of the items costs one hash for each item when it starts, then one hash and one comparison for each row.
 fn array_op_cost(func: u32, any: bool, args: &[Expr]) -> (f64, f64) {
     let Some(array) = args.get(1) else { return (0.0, CPU_OPERATOR) };

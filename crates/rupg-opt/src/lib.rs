@@ -28,7 +28,7 @@ use rupg_analyze::{
 use rupg_plan::{Item, Kind, Label, Leaf, Node, Operation, Plan, Scope, SubPlan};
 use rupg_types::oid;
 
-pub use cost::type_width;
+pub use cost::{node_cost, type_width};
 pub use joinrm::remove_joins;
 pub use pullup::{merge_from, pull_up};
 

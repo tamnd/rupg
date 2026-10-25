@@ -776,11 +776,11 @@ fn order_quals<'q>(filter: Vec<&'q Expr>, barrier: &[usize]) -> Vec<&'q Expr> {
     items.into_iter().map(|(_, _, expr)| expr).collect()
 }
 
-/// The cost of a condition for each row for `order_qual_clauses`, in units of `cpu_operator_cost`, as `cost_qual_eval` finds it: the costs of the calls of functions and operators, outside the subqueries. A subquery that reads no column of the query runs once before the scan, as an `InitPlan` does, and costs nothing. The executor does not know the cost of the plan of a subquery that runs for each row, so it takes the cost of [`CORRELATED`].
+/// The cost of a condition for each row for `order_qual_clauses`, in units of `cpu_operator_cost`, as `cost_qual_eval` finds it: the costs of the calls of functions and operators, outside the subqueries, with the items of an array of `ANY` and `ALL`. A subquery that reads no column of the query runs once before the scan, as an `InitPlan` does, and costs nothing. The executor does not know the cost of the plan of a subquery that runs for each row, so it takes the cost of [`CORRELATED`].
 fn qual_cost(expr: &Expr) -> f64 {
     let own = match &expr.kind {
         ExprKind::SubLink(link) if crate::correlated(&link.query) => CORRELATED,
-        _ => expr.own_cost(),
+        _ => rupg_opt::node_cost(expr),
     };
     own + expr.children().into_iter().map(qual_cost).sum::<f64>()
 }
