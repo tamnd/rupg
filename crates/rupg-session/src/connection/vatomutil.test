@@ -1,0 +1,69 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE SCHEMA vau;
+CREATE SCHEMA
+> SET search_path = vau;
+SET
+search_path=vau
+> CREATE TABLE t (a int);
+CREATE TABLE
+> CREATE PROCEDURE p1() LANGUAGE sql BEGIN ATOMIC CREATE TABLE x (a int); END;
+ERROR 0A000 CREATE TABLE is not yet supported in unquoted SQL function body
+> CREATE PROCEDURE p2() LANGUAGE sql BEGIN ATOMIC INSERT INTO t VALUES (1); CALL p0(); END;
+ERROR 42883 procedure p0() does not exist at 80
+DETAIL There is no procedure of that name.
+> CREATE PROCEDURE p0() LANGUAGE sql BEGIN ATOMIC INSERT INTO t VALUES (1); END;
+CREATE PROCEDURE
+> CREATE PROCEDURE p3() LANGUAGE sql BEGIN ATOMIC CALL p0(); END;
+ERROR 0A000 CALL is not yet supported in unquoted SQL function body
+> CREATE FUNCTION f1() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT 1 INTO y; END;
+ERROR 42601 SELECT ... INTO is not allowed here at 74
+> CREATE FUNCTION f2() RETURNS int LANGUAGE sql BEGIN ATOMIC TRUNCATE t; SELECT 1; END;
+ERROR 0A000 TRUNCATE TABLE is not yet supported in unquoted SQL function body
+> CREATE FUNCTION f3() RETURNS int LANGUAGE sql BEGIN ATOMIC DROP TABLE t; END;
+ERROR 0A000 DROP TABLE is not yet supported in unquoted SQL function body
+> CREATE FUNCTION f4() RETURNS int LANGUAGE sql BEGIN ATOMIC ALTER TABLE t ADD COLUMN b int; END;
+ERROR 0A000 ALTER TABLE is not yet supported in unquoted SQL function body
+> CREATE FUNCTION f5() RETURNS int LANGUAGE sql BEGIN ATOMIC CREATE INDEX ON t (a); END;
+ERROR 0A000 CREATE INDEX is not yet supported in unquoted SQL function body
+> CREATE FUNCTION f6() RETURNS int LANGUAGE sql BEGIN ATOMIC CREATE VIEW v AS SELECT 1; END;
+ERROR 0A000 CREATE VIEW is not yet supported in unquoted SQL function body
+> CREATE FUNCTION f7() RETURNS int LANGUAGE sql BEGIN ATOMIC GRANT SELECT ON t TO public; END;
+ERROR 0A000 GRANT is not yet supported in unquoted SQL function body
+> CREATE FUNCTION f8() RETURNS int LANGUAGE sql BEGIN ATOMIC LOCK TABLE t; END;
+ERROR 0A000 LOCK TABLE is not yet supported in unquoted SQL function body
+> CREATE FUNCTION f9() RETURNS int LANGUAGE sql BEGIN ATOMIC NOTIFY x; END;
+ERROR 0A000 NOTIFY is not yet supported in unquoted SQL function body
+> CREATE FUNCTION f10() RETURNS int LANGUAGE sql BEGIN ATOMIC CREATE SEQUENCE s; END;
+ERROR 0A000 CREATE SEQUENCE is not yet supported in unquoted SQL function body
+> CREATE FUNCTION f11() RETURNS int LANGUAGE sql BEGIN ATOMIC COMMENT ON TABLE t IS 'x'; END;
+ERROR 0A000 COMMENT is not yet supported in unquoted SQL function body
+> CREATE FUNCTION f12() RETURNS int LANGUAGE sql BEGIN ATOMIC CREATE TABLE z AS SELECT 1; END;
+ERROR 0A000 CREATE TABLE AS is not yet supported in unquoted SQL function body
+> CREATE FUNCTION f13() RETURNS int LANGUAGE sql BEGIN ATOMIC CREATE FUNCTION g() RETURNS int RETURN 1; END;
+ERROR 0A000 CREATE FUNCTION is not yet supported in unquoted SQL function body
+> CREATE FUNCTION f14() RETURNS int LANGUAGE sql BEGIN ATOMIC VALUES (1); END;
+CREATE FUNCTION
+> SELECT f14();
+fields f14:23:4:-1
+row 1
+SELECT 1
+> CREATE FUNCTION f15() RETURNS int LANGUAGE sql RETURN 1;
+CREATE FUNCTION
+> SELECT proname FROM pg_proc WHERE pronamespace = 'vau'::regnamespace ORDER BY 1;
+fields proname@pg_proc.2:19:64:-1
+row f14
+row f15
+row p0
+SELECT 3
+> RESET search_path;
+RESET
+search_path="$user", public
+> DROP SCHEMA vau CASCADE;
+NOTICE 00000 drop cascades to 4 other objects
+DETAIL drop cascades to table vau.t
+drop cascades to function vau.p0()
+drop cascades to function vau.f14()
+drop cascades to function vau.f15()
+DROP SCHEMA

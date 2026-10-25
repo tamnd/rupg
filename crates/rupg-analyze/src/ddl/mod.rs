@@ -9,6 +9,7 @@ mod alter_inherit;
 mod alter_type;
 mod attmap;
 mod cluster;
+mod cmdtag;
 mod comment;
 mod copy;
 mod create_table_as;
