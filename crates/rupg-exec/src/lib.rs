@@ -1408,25 +1408,34 @@ impl Plan {
         {
             base = inner;
         }
+        let old = target[..info.width.min(target.len())].to_vec();
         let cache = self.cache();
         let tables = scan::given(base, vec![vec![target], vec![carried]]);
         cache.tables.borrow_mut().push((base, Rc::new(tables)));
         let rows = run_query(query, params, session, &cache, &[], false)?;
-        let rows = match clause.command {
-            rupg_analyze::MergeCommand::Insert if info.recheck.is_none() => insert::check_rows(
-                info,
-                rupg_analyze::WriteKind::Insert,
-                rows,
-                Vec::new(),
-                session,
-            )?,
-            rupg_analyze::MergeCommand::Update if info.recheck.is_none() => insert::check_rows(
-                info,
-                rupg_analyze::WriteKind::Update,
-                rows,
-                Vec::new(),
-                session,
-            )?,
+        // `ExecMergeMatched` checks the row of the target table after the condition of the clause and before the triggers.
+        let merge = info.merge.as_ref();
+        let target_check = match clause.command {
+            rupg_analyze::MergeCommand::Update => merge.and_then(|m| m.update_target.as_ref()),
+            rupg_analyze::MergeCommand::Delete => merge.and_then(|m| m.delete_target.as_ref()),
+            _ => None,
+        };
+        if !rows.is_empty()
+            && let Some(check) = target_check
+            && let Some(Some(error)) = policy_failures(check, &info.name, vec![old], session)?.pop()
+        {
+            return Err(error);
+        }
+        let kind = match clause.command {
+            rupg_analyze::MergeCommand::Insert => Some(rupg_analyze::WriteKind::Insert),
+            rupg_analyze::MergeCommand::Update => Some(rupg_analyze::WriteKind::Update),
+            _ => None,
+        };
+        let rows = match kind {
+            Some(kind) if info.recheck.is_none() => {
+                let policy = self.policy_failures(&rows, kind, session)?;
+                insert::check_rows(info, kind, rows, policy, session)?
+            }
             _ => rows,
         };
         Ok(rows.into_iter().next())
@@ -1696,7 +1705,7 @@ impl Plan {
     }
 }
 
-/// `ExecWithCheckOptions` for `WCO_RLS_INSERT_CHECK`, `WCO_RLS_UPDATE_CHECK` and `WCO_RLS_CONFLICT_CHECK`: for each new row `rows` of the table `table`, with the columns of the table, the error of the first check of `check` that the row does not pass, or `None`. A null fails the check.
+/// `ExecWithCheckOptions` for the checks of row-level security: for each new row `rows` of the table `table`, with the columns of the table, the error of the first check of `check` that the row does not pass, or `None`. A null fails the check.
 ///
 /// # Errors
 ///
@@ -1715,13 +1724,17 @@ pub fn policy_failures(
         .iter()
         .map(|result| {
             let at = result.iter().position(|v| !matches!(v, Value::Bool(true)))?;
-            let using = if check.using { " (USING expression)" } else { "" };
+            let (row, using) = match check.kind {
+                rupg_analyze::PolicyKind::New => ("new", ""),
+                rupg_analyze::PolicyKind::Conflict => ("new", " (USING expression)"),
+                rupg_analyze::PolicyKind::Target => ("target", " (USING expression)"),
+            };
             let message = match check.policies.get(at).cloned().flatten() {
                 Some(policy) => format!(
-                    "new row violates row-level security policy \"{policy}\"{using} for table \"{table}\""
+                    "{row} row violates row-level security policy \"{policy}\"{using} for table \"{table}\""
                 ),
                 None => format!(
-                    "new row violates row-level security policy{using} for table \"{table}\""
+                    "{row} row violates row-level security policy{using} for table \"{table}\""
                 ),
             };
             Some(Error::new(SqlState::INSUFFICIENT_PRIVILEGE, message))

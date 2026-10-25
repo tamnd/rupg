@@ -1,0 +1,112 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE ROLE regress_rls_u5;
+CREATE ROLE
+> CREATE TABLE rls_t5 (a int PRIMARY KEY, b text);
+CREATE TABLE
+> CREATE TABLE rls_s5 (a int, b text);
+CREATE TABLE
+> GRANT ALL ON rls_t5 TO regress_rls_u5;
+GRANT
+> GRANT ALL ON rls_s5 TO regress_rls_u5;
+GRANT
+> INSERT INTO rls_t5 VALUES (1, 'ok'), (2, 'fine'), (3, 'hidden'), (4, 'locked'), (5, 'keep');
+INSERT 0 5
+> ALTER TABLE rls_t5 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> CREATE POLICY p5r ON rls_t5 FOR SELECT USING (b <> 'hidden');
+CREATE POLICY
+> CREATE POLICY p5a ON rls_t5 FOR INSERT WITH CHECK (b <> 'bad');
+CREATE POLICY
+> CREATE POLICY p5w ON rls_t5 FOR UPDATE USING (b <> 'locked') WITH CHECK (b <> 'worse');
+CREATE POLICY
+> CREATE POLICY p5d ON rls_t5 FOR DELETE USING (b <> 'keep');
+CREATE POLICY
+> SET SESSION AUTHORIZATION regress_rls_u5;
+SET
+session_authorization=regress_rls_u5
+is_superuser=off
+> INSERT INTO rls_s5 VALUES (3, 'x');
+INSERT 0 1
+> MERGE INTO rls_t5 t USING rls_s5 s ON t.a = s.a WHEN MATCHED THEN UPDATE SET b = s.b WHEN NOT MATCHED THEN INSERT VALUES (s.a, s.b);
+ERROR 23505 duplicate key value violates unique constraint "rls_t5_pkey"
+> SELECT * FROM rls_t5 ORDER BY a;
+fields a@rls_t5.1:23:4:-1,b@rls_t5.2:25:-1:-1
+row 1,ok
+row 2,fine
+row 4,locked
+row 5,keep
+SELECT 4
+> MERGE INTO rls_t5 t USING (VALUES (3, 'y')) s(a, b) ON t.a = s.a WHEN NOT MATCHED THEN INSERT VALUES (s.a, s.b);
+ERROR 23505 duplicate key value violates unique constraint "rls_t5_pkey"
+> MERGE INTO rls_t5 t USING (VALUES (6, 'bad')) s(a, b) ON t.a = s.a WHEN NOT MATCHED THEN INSERT VALUES (s.a, s.b);
+ERROR 42501 new row violates row-level security policy for table "rls_t5"
+> MERGE INTO rls_t5 t USING (VALUES (6, 'hidden')) s(a, b) ON t.a = s.a WHEN NOT MATCHED THEN INSERT VALUES (s.a, s.b);
+MERGE 1
+> MERGE INTO rls_t5 t USING (VALUES (7, 'hidden')) s(a, b) ON t.a = s.a WHEN NOT MATCHED THEN INSERT VALUES (s.a, s.b) RETURNING *;
+ERROR 42501 new row violates row-level security policy for table "rls_t5"
+> MERGE INTO rls_t5 t USING (VALUES (4, 'y')) s(a, b) ON t.a = s.a WHEN MATCHED THEN UPDATE SET b = s.b;
+ERROR 42501 target row violates row-level security policy (USING expression) for table "rls_t5"
+> MERGE INTO rls_t5 t USING (VALUES (4, 'y')) s(a, b) ON t.a = s.a WHEN MATCHED AND t.b = 'nomatch' THEN UPDATE SET b = s.b;
+MERGE 0
+> MERGE INTO rls_t5 t USING (VALUES (4, 'y')) s(a, b) ON t.a = s.a WHEN MATCHED THEN DELETE;
+MERGE 1
+> MERGE INTO rls_t5 t USING (VALUES (5, 'y')) s(a, b) ON t.a = s.a WHEN MATCHED THEN DELETE;
+ERROR 42501 target row violates row-level security policy (USING expression) for table "rls_t5"
+> MERGE INTO rls_t5 t USING (VALUES (5, 'y')) s(a, b) ON t.a = s.a WHEN MATCHED THEN DO NOTHING;
+MERGE 0
+> MERGE INTO rls_t5 t USING (VALUES (2, 'worse')) s(a, b) ON t.a = s.a WHEN MATCHED THEN UPDATE SET b = s.b;
+ERROR 42501 new row violates row-level security policy for table "rls_t5"
+> MERGE INTO rls_t5 t USING (VALUES (2, 'hidden')) s(a, b) ON t.a = s.a WHEN MATCHED THEN UPDATE SET b = s.b;
+ERROR 42501 new row violates row-level security policy for table "rls_t5"
+> MERGE INTO rls_t5 t USING (VALUES (2, 'two')) s(a, b) ON t.a = s.a WHEN MATCHED THEN UPDATE SET b = s.b RETURNING *;
+fields a:23:4:-1,b:25:-1:-1,a@rls_t5.1:23:4:-1,b@rls_t5.2:25:-1:-1
+row 2,two,2,two
+MERGE 1
+> MERGE INTO rls_t5 t USING (VALUES (1, 'z')) s(a, b) ON t.a = s.a WHEN MATCHED THEN DELETE RETURNING *;
+fields a:23:4:-1,b:25:-1:-1,a@rls_t5.1:23:4:-1,b@rls_t5.2:25:-1:-1
+row 1,z,1,ok
+MERGE 1
+> MERGE INTO rls_t5 t USING (VALUES (9, 'z')) s(a, b) ON t.a = s.a WHEN NOT MATCHED BY SOURCE AND t.a = 4 THEN UPDATE SET b = 'q';
+MERGE 0
+> MERGE INTO rls_t5 t USING (VALUES (9, 'z')) s(a, b) ON t.a = s.a WHEN NOT MATCHED BY SOURCE AND t.a = 2 THEN UPDATE SET b = 'q' WHEN NOT MATCHED THEN INSERT VALUES (s.a, s.b);
+MERGE 2
+> SELECT * FROM rls_t5 ORDER BY a;
+fields a@rls_t5.1:23:4:-1,b@rls_t5.2:25:-1:-1
+row 2,q
+row 5,keep
+row 9,z
+SELECT 3
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> SELECT * FROM rls_t5 ORDER BY a;
+fields a@rls_t5.1:23:4:-1,b@rls_t5.2:25:-1:-1
+row 2,q
+row 3,hidden
+row 5,keep
+row 6,hidden
+row 9,z
+SELECT 5
+> CREATE POLICY p5w2 ON rls_t5 AS RESTRICTIVE FOR UPDATE USING (a < 9) WITH CHECK (b <> 'nine');
+CREATE POLICY
+> SET SESSION AUTHORIZATION regress_rls_u5;
+SET
+session_authorization=regress_rls_u5
+is_superuser=off
+> MERGE INTO rls_t5 t USING (VALUES (9, 'z')) s(a, b) ON t.a = s.a WHEN MATCHED THEN UPDATE SET b = s.b;
+ERROR 42501 target row violates row-level security policy "p5w2" (USING expression) for table "rls_t5"
+> MERGE INTO rls_t5 t USING (VALUES (2, 'nine')) s(a, b) ON t.a = s.a WHEN MATCHED THEN UPDATE SET b = s.b;
+ERROR 42501 new row violates row-level security policy "p5w2" for table "rls_t5"
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> DROP TABLE rls_t5;
+DROP TABLE
+> DROP TABLE rls_s5;
+DROP TABLE
+> DROP ROLE regress_rls_u5;
+DROP ROLE
