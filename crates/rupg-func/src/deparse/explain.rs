@@ -80,6 +80,18 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
                 }
             }
             spaces[s] = Some(d.namespace_in(scope.query, &mut used, true));
+            // `ApplyRetrieveRule`: the entry of a view with triggers `INSTEAD OF` that the statement writes comes after the entries of the query.
+            if let Some(write) =
+                scope.query.write.as_ref().filter(|w| w.instead && scope.target.is_none())
+            {
+                // The entry has the name of the subquery of the view: the alias of the statement, or the name of the view.
+                let base = scope
+                    .query
+                    .relations
+                    .first()
+                    .map_or_else(|| write.name.clone(), |relation| relation.name.clone());
+                targets[s] = Some(super::query::unique_name(base, &mut used));
+            }
         }
         let mut spaces: Vec<Namespace> = spaces
             .into_iter()

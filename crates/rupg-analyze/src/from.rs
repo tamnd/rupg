@@ -16,6 +16,7 @@ use crate::coerce::{AtOpt, Context};
 use crate::colname::figure_colname;
 use crate::cte::{CteItem, CteRef};
 use crate::expr::{CastForm, Expr, ExprKind, JoinRow, Var};
+use crate::insert::WriteKind;
 use crate::perm::{ACL_SELECT, PermInfo};
 use crate::typename::place;
 use crate::types;
@@ -1198,8 +1199,13 @@ impl Analyzer<'_> {
         self.scope.namespace.truncate(items);
     }
 
-    /// `addNSItemForReturning`: adds the target table, which is the first relation of the scope, with the name `old` or `new` of `RETURNING`. A qualified name can use the item, but an unqualified name cannot. It gives the index of the new relation.
-    pub(crate) fn add_returning_item(&mut self, name: &str) -> Result<usize> {
+    /// `addNSItemForReturning`: adds the target table, which is the first relation of the scope, with the name `old` or `new` of `RETURNING`, the old row when `old` is true, for a write of `kind`. A qualified name can use the item, but an unqualified name cannot. It gives the index of the new relation.
+    pub(crate) fn add_returning_item(
+        &mut self,
+        name: &str,
+        old: bool,
+        kind: WriteKind,
+    ) -> Result<usize> {
         let target = self
             .scope
             .relations
@@ -1211,7 +1217,7 @@ impl Analyzer<'_> {
         let mut item = self.add_relation(relation, name.to_string(), None)?;
         item.cols_visible = false;
         item.returning = true;
-        self.auto_view_returning(&mut item, index);
+        self.auto_view_returning(&mut item, index, Some((kind, old)))?;
         self.scope.namespace.push(item);
         Ok(index)
     }
@@ -1227,7 +1233,7 @@ impl Analyzer<'_> {
         let index = self.scope.relations.len();
         let mut item = self.add_relation(relation, "excluded".to_string(), None)?;
         // `EXCLUDED` of an updatable view has the columns of the view.
-        self.auto_view_returning(&mut item, index);
+        self.auto_view_returning(&mut item, index, None)?;
         self.scope.entries[item.entry].oid = 0;
         self.scope.namespace.push(item);
         Ok(index)

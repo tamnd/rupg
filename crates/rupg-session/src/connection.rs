@@ -687,6 +687,10 @@ impl Connection {
             // The triggers `INSTEAD OF` of a view write the rows, and the triggers `FOR EACH STATEMENT` of the view fire before and after them.
             self.before_statement(&triggers, info)?;
             let (count, written) = self.instead_rows(info, &triggers, rows)?;
+            // `ExecInsert` and `ExecUpdate` check the rows that the triggers give against the views above the view.
+            if info.view_check.is_some() {
+                plan.view_check(&written, params, &self.reader().with_view(view.clone()))?;
+            }
             self.after_write(info, &triggers, &[], &[])?;
             let tag = match info.kind {
                 WriteKind::Insert => CommandTag::Insert,
@@ -4440,6 +4444,12 @@ mod tests {
     #[test]
     fn rowstar() {
         big_stack(|| script(include_str!("connection/rowstar.test")));
+    }
+
+    /// A write of an updatable view whose base view has triggers `INSTEAD OF` goes to the triggers of the base view. `connection/vtrig.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vtrig() {
+        big_stack(|| script(include_str!("connection/vtrig.test")));
     }
 
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.

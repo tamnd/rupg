@@ -467,7 +467,7 @@ impl Connection {
         Ok(out)
     }
 
-    /// `ExecIRInsertTriggers`, `ExecIRUpdateTriggers` and `ExecIRDeleteTriggers`: the triggers `INSTEAD OF ... FOR EACH ROW` of a view for the rows of the plan, in the order of their names. A trigger that gives a null row skips the row, and the row that a trigger gives is the new row for the next trigger and for `RETURNING`. The rows of an `INSERT` and of an `UPDATE` start with the new row, and the rows of an `UPDATE` and of a `DELETE` end with the old row. It gives the number of rows that the triggers did not skip, and the rows of `RETURNING`.
+    /// `ExecIRInsertTriggers`, `ExecIRUpdateTriggers` and `ExecIRDeleteTriggers`: the triggers `INSTEAD OF ... FOR EACH ROW` of a view for the rows of the plan, in the order of their names. A trigger that gives a null row skips the row, and the row that a trigger gives is the new row for the next trigger, for the checks of the views above the view and for `RETURNING`. The rows of an `INSERT` and of an `UPDATE` start with the new row, and the rows of an `UPDATE` and of a `DELETE` end with the old row. It gives the number of rows that the triggers did not skip, and the rows of `RETURNING`.
     ///
     /// # Errors
     ///
@@ -479,7 +479,7 @@ impl Connection {
         rows: Vec<Vec<Value>>,
     ) -> Result<(u64, Vec<Vec<Value>>), Error> {
         let all = self.table_width(info);
-        let returning = info.returning.is_some();
+        let returning = info.keeps_written();
         let (mut count, mut written) = (0, Vec::new());
         for mut row in rows {
             let old = (info.kind != WriteKind::Insert)

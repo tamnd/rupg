@@ -213,6 +213,8 @@ impl Connection {
             action.new = new;
             done.push(action);
         }
+        // The rows that the triggers give pass the checks of the views above the view.
+        self.merge_view_check(plan, info, params, view, &done)?;
         self.after_merge(info, fire, &done)?;
         let mut written = Vec::new();
         if info.returning.is_some() {

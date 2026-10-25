@@ -1,0 +1,385 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE base_tbl (a int PRIMARY KEY, b text DEFAULT 'Unspecified');
+CREATE TABLE
+> INSERT INTO base_tbl SELECT i, 'Row ' || i FROM generate_series(-2, 2) g(i);
+INSERT 0 5
+> CREATE VIEW rw_view1 AS
+>>   SELECT *, 'Const1' AS c1 FROM base_tbl WHERE a>0 OFFSET 0;
+CREATE VIEW
+> CREATE VIEW rw_view2 AS
+>>   SELECT *, 'Const2' AS c2 FROM rw_view1 WHERE a<10;
+CREATE VIEW
+> CREATE FUNCTION rw_view1_trig_fn()
+>> RETURNS trigger AS
+>> $$
+>> BEGIN
+>>   IF TG_OP = 'INSERT' THEN
+>>     INSERT INTO base_tbl VALUES (NEW.a, NEW.b);
+>>     NEW.c1 = 'Trigger Const1';
+>>     RETURN NEW;
+>>   ELSIF TG_OP = 'UPDATE' THEN
+>>     UPDATE base_tbl SET b=NEW.b WHERE a=OLD.a;
+>>     NEW.c1 = 'Trigger Const1';
+>>     RETURN NEW;
+>>   ELSIF TG_OP = 'DELETE' THEN
+>>     DELETE FROM base_tbl WHERE a=OLD.a;
+>>     RETURN OLD;
+>>   END IF;
+>> END;
+>> $$
+>> LANGUAGE plpgsql;
+CREATE FUNCTION
+> CREATE TRIGGER rw_view1_ins_trig INSTEAD OF INSERT ON rw_view1
+>>   FOR EACH ROW EXECUTE PROCEDURE rw_view1_trig_fn();
+CREATE TRIGGER
+> CREATE TRIGGER rw_view1_upd_trig INSTEAD OF UPDATE ON rw_view1
+>>   FOR EACH ROW EXECUTE PROCEDURE rw_view1_trig_fn();
+CREATE TRIGGER
+> CREATE TRIGGER rw_view1_del_trig INSTEAD OF DELETE ON rw_view1
+>>   FOR EACH ROW EXECUTE PROCEDURE rw_view1_trig_fn();
+CREATE TRIGGER
+> INSERT INTO rw_view2 VALUES (3, 'Row 3') RETURNING old.*, new.*;
+fields a@rw_view2.1:23:4:-1,b@rw_view2.2:25:-1:-1,c1@rw_view2.3:25:-1:-1,c2@rw_view2.4:25:-1:-1,a@rw_view2.1:23:4:-1,b@rw_view2.2:25:-1:-1,c1@rw_view2.3:25:-1:-1,c2@rw_view2.4:25:-1:-1
+row NULL,NULL,NULL,NULL,3,Row 3,Trigger Const1,Const2
+INSERT 0 1
+> UPDATE rw_view2 SET b='Row three' WHERE a=3 RETURNING old.*, new.*;
+fields a@rw_view2.1:23:4:-1,b@rw_view2.2:25:-1:-1,c1@rw_view2.3:25:-1:-1,c2@rw_view2.4:25:-1:-1,a@rw_view2.1:23:4:-1,b@rw_view2.2:25:-1:-1,c1@rw_view2.3:25:-1:-1,c2@rw_view2.4:25:-1:-1
+row 3,Row 3,Const1,Const2,3,Row three,Trigger Const1,Const2
+UPDATE 1
+> SELECT * FROM rw_view2;
+fields a@rw_view2.1:23:4:-1,b@rw_view2.2:25:-1:-1,c1@rw_view2.3:25:-1:-1,c2@rw_view2.4:25:-1:-1
+row 1,Row 1,Const1,Const2
+row 2,Row 2,Const1,Const2
+row 3,Row three,Const1,Const2
+SELECT 3
+> DELETE FROM rw_view2 WHERE a=3 RETURNING old.*, new.*;
+fields a@rw_view2.1:23:4:-1,b@rw_view2.2:25:-1:-1,c1@rw_view2.3:25:-1:-1,c2@rw_view2.4:25:-1:-1,a@rw_view2.1:23:4:-1,b@rw_view2.2:25:-1:-1,c1@rw_view2.3:25:-1:-1,c2@rw_view2.4:25:-1:-1
+row 3,Row three,Const1,Const2,NULL,NULL,NULL,NULL
+DELETE 1
+> SELECT * FROM rw_view2;
+fields a@rw_view2.1:23:4:-1,b@rw_view2.2:25:-1:-1,c1@rw_view2.3:25:-1:-1,c2@rw_view2.4:25:-1:-1
+row 1,Row 1,Const1,Const2
+row 2,Row 2,Const1,Const2
+SELECT 2
+> MERGE INTO rw_view2 t
+>>   USING (SELECT x, 'R'||x FROM generate_series(0,3) x) AS s(a,b) ON t.a = s.a
+>>   WHEN MATCHED AND t.a <= 1 THEN DELETE
+>>   WHEN MATCHED THEN UPDATE SET b = s.b
+>>   WHEN NOT MATCHED AND s.a > 0 THEN INSERT VALUES (s.a, s.b)
+>>   RETURNING merge_action(), s.*, old::text, new::text, t.*;
+fields merge_action:25:-1:-1,a:23:4:-1,b:25:-1:-1,old:25:-1:-1,new:25:-1:-1,a@rw_view2.1:23:4:-1,b@rw_view2.2:25:-1:-1,c1@rw_view2.3:25:-1:-1,c2@rw_view2.4:25:-1:-1
+row DELETE,1,R1,(1,"Row 1",Const1,Const2),NULL,1,Row 1,Const1,Const2
+row UPDATE,2,R2,(2,"Row 2",Const1,Const2),(2,R2,"Trigger Const1",Const2),2,R2,Trigger Const1,Const2
+row INSERT,3,R3,NULL,(3,R3,"Trigger Const1",Const2),3,R3,Trigger Const1,Const2
+MERGE 3
+> SELECT * FROM base_tbl ORDER BY a;
+fields a@base_tbl.1:23:4:-1,b@base_tbl.2:25:-1:-1
+row -2,Row -2
+row -1,Row -1
+row 0,Row 0
+row 2,R2
+row 3,R3
+SELECT 5
+> WITH m AS (MERGE INTO rw_view2 t
+>>   USING (SELECT x, 'r'||x FROM generate_series(0,2) x) AS s(a,b) ON t.a = s.a
+>>   WHEN MATCHED THEN UPDATE SET b = s.b
+>>   WHEN NOT MATCHED AND s.a > 0 THEN INSERT VALUES (s.a, s.b)
+>>   WHEN NOT MATCHED BY SOURCE THEN UPDATE SET b = 'Not matched by source'
+>>   RETURNING merge_action(), s.*, old::text, new::text, t.*)
+>> SELECT * FROM m ORDER BY 1, 2;
+fields merge_action:25:-1:-1,a:23:4:-1,b:25:-1:-1,old:25:-1:-1,new:25:-1:-1,a@rw_view2.1:23:4:-1,b@rw_view2.2:25:-1:-1,c1@rw_view2.3:25:-1:-1,c2@rw_view2.4:25:-1:-1
+row INSERT,1,r1,NULL,(1,r1,"Trigger Const1",Const2),1,r1,Trigger Const1,Const2
+row UPDATE,2,r2,(2,R2,Const1,Const2),(2,r2,"Trigger Const1",Const2),2,r2,Trigger Const1,Const2
+row UPDATE,NULL,NULL,(3,R3,Const1,Const2),(3,"Not matched by source","Trigger Const1",Const2),3,Not matched by source,Trigger Const1,Const2
+SELECT 3
+> SELECT * FROM base_tbl ORDER BY a;
+fields a@base_tbl.1:23:4:-1,b@base_tbl.2:25:-1:-1
+row -2,Row -2
+row -1,Row -1
+row 0,Row 0
+row 1,r1
+row 2,r2
+row 3,Not matched by source
+SELECT 6
+> EXPLAIN (costs off) UPDATE rw_view2 SET a=3 WHERE a=2;
+fields QUERY PLAN:25:-1:-1
+row Update on rw_view1 rw_view1_1
+row   ->  Subquery Scan on rw_view1
+row         Filter: ((rw_view1.a < 10) AND (rw_view1.a = 2))
+row         ->  Bitmap Heap Scan on base_tbl
+row               Recheck Cond: (a > 0)
+row               ->  Bitmap Index Scan on base_tbl_pkey
+row                     Index Cond: (a > 0)
+EXPLAIN
+> EXPLAIN (costs off) DELETE FROM rw_view2 WHERE a=2;
+fields QUERY PLAN:25:-1:-1
+row Delete on rw_view1 rw_view1_1
+row   ->  Subquery Scan on rw_view1
+row         Filter: ((rw_view1.a < 10) AND (rw_view1.a = 2))
+row         ->  Bitmap Heap Scan on base_tbl
+row               Recheck Cond: (a > 0)
+row               ->  Bitmap Index Scan on base_tbl_pkey
+row                     Index Cond: (a > 0)
+EXPLAIN
+> EXPLAIN (costs off)
+>> MERGE INTO rw_view2 t
+>>   USING (SELECT x, 'R'||x FROM generate_series(0,3) x) AS s(a,b) ON t.a = s.a
+>>   WHEN MATCHED AND t.a <= 1 THEN DELETE
+>>   WHEN MATCHED THEN UPDATE SET b = s.b
+>>   WHEN NOT MATCHED AND s.a > 0 THEN INSERT VALUES (s.a, s.b);
+fields QUERY PLAN:25:-1:-1
+row Merge on rw_view1 rw_view1_1
+row   ->  Hash Right Join
+row         Hash Cond: (rw_view1.a = x.x)
+row         ->  Subquery Scan on rw_view1
+row               Filter: (rw_view1.a < 10)
+row               ->  Bitmap Heap Scan on base_tbl
+row                     Recheck Cond: (a > 0)
+row                     ->  Bitmap Index Scan on base_tbl_pkey
+row                           Index Cond: (a > 0)
+row         ->  Hash
+row               ->  Function Scan on generate_series x
+EXPLAIN
+> DROP TRIGGER rw_view1_del_trig ON rw_view1;
+DROP TRIGGER
+> MERGE INTO rw_view2 t
+>>   USING (SELECT x, 'R'||x FROM generate_series(0,3) x) AS s(a,b) ON t.a = s.a
+>>   WHEN MATCHED AND t.a <= 1 THEN DELETE
+>>   WHEN MATCHED THEN UPDATE SET b = s.b
+>>   WHEN NOT MATCHED AND s.a > 0 THEN INSERT VALUES (s.a, s.b);
+ERROR 55000 cannot delete from view "rw_view1"
+DETAIL Views containing LIMIT or OFFSET are not automatically updatable.
+HINT To enable deleting from the view using MERGE, provide an INSTEAD OF DELETE trigger.
+> MERGE INTO rw_view2 t
+>>   USING (SELECT x, 'R'||x FROM generate_series(0,3) x) AS s(a,b) ON t.a = s.a
+>>   WHEN MATCHED THEN UPDATE SET b = s.b
+>>   WHEN NOT MATCHED AND s.a > 0 THEN INSERT VALUES (s.a, s.b);
+MERGE 3
+> DROP TRIGGER rw_view1_ins_trig ON rw_view1;
+DROP TRIGGER
+> MERGE INTO rw_view2 t
+>>   USING (SELECT x, 'R'||x FROM generate_series(0,3) x) AS s(a,b) ON t.a = s.a
+>>   WHEN MATCHED THEN UPDATE SET b = s.b
+>>   WHEN NOT MATCHED AND s.a > 0 THEN INSERT VALUES (s.a, s.b);
+ERROR 55000 cannot insert into view "rw_view1"
+DETAIL Views containing LIMIT or OFFSET are not automatically updatable.
+HINT To enable inserting into the view using MERGE, provide an INSTEAD OF INSERT trigger.
+> MERGE INTO rw_view2 t
+>>   USING (SELECT x, 'R'||x FROM generate_series(0,3) x) AS s(a,b) ON t.a = s.a
+>>   WHEN MATCHED THEN UPDATE SET b = s.b;
+MERGE 3
+> CREATE TRIGGER rw_view2_upd_trig INSTEAD OF UPDATE ON rw_view2
+>>   FOR EACH ROW EXECUTE PROCEDURE rw_view1_trig_fn();
+CREATE TRIGGER
+> MERGE INTO rw_view2 t
+>>   USING (SELECT x, 'R'||x FROM generate_series(0,3) x) AS s(a,b) ON t.a = s.a
+>>   WHEN MATCHED THEN UPDATE SET b = s.b
+>>   WHEN NOT MATCHED AND s.a > 0 THEN INSERT VALUES (s.a, s.b);
+ERROR 0A000 cannot merge into view "rw_view2"
+DETAIL MERGE is not supported for views with INSTEAD OF triggers for some actions but not all.
+HINT To enable merging into the view, either provide a full set of INSTEAD OF triggers or drop the existing INSTEAD OF triggers.
+> MERGE INTO rw_view2 t
+>>   USING (SELECT x, 'R'||x FROM generate_series(0,3) x) AS s(a,b) ON t.a = s.a
+>>   WHEN MATCHED THEN UPDATE SET b = s.b;
+MERGE 3
+> SELECT * FROM base_tbl ORDER BY a;
+fields a@base_tbl.1:23:4:-1,b@base_tbl.2:25:-1:-1
+row -2,Row -2
+row -1,Row -1
+row 0,Row 0
+row 1,R1
+row 2,R2
+row 3,R3
+SELECT 6
+> DROP TABLE base_tbl CASCADE;
+NOTICE 00000 drop cascades to 2 other objects
+DETAIL drop cascades to view rw_view1
+drop cascades to view rw_view2
+DROP TABLE
+> DROP FUNCTION rw_view1_trig_fn();
+DROP FUNCTION
+> CREATE TABLE base_tbl (a int, b int);
+CREATE TABLE
+> CREATE VIEW rw_view1 AS SELECT a FROM base_tbl WHERE a < b;
+CREATE VIEW
+> CREATE FUNCTION rw_view1_trig_fn()
+>> RETURNS trigger AS
+>> $$
+>> BEGIN
+>>   IF TG_OP = 'INSERT' THEN
+>>     INSERT INTO base_tbl VALUES (NEW.a, 10);
+>>     RETURN NEW;
+>>   ELSIF TG_OP = 'UPDATE' THEN
+>>     UPDATE base_tbl SET a=NEW.a WHERE a=OLD.a;
+>>     RETURN NEW;
+>>   ELSIF TG_OP = 'DELETE' THEN
+>>     DELETE FROM base_tbl WHERE a=OLD.a;
+>>     RETURN OLD;
+>>   END IF;
+>> END;
+>> $$
+>> LANGUAGE plpgsql;
+CREATE FUNCTION
+> CREATE TRIGGER rw_view1_trig
+>>   INSTEAD OF INSERT OR UPDATE OR DELETE ON rw_view1
+>>   FOR EACH ROW EXECUTE PROCEDURE rw_view1_trig_fn();
+CREATE TRIGGER
+> CREATE VIEW rw_view2 AS
+>>   SELECT * FROM rw_view1 WHERE a > 0 WITH LOCAL CHECK OPTION;
+CREATE VIEW
+> INSERT INTO rw_view2 VALUES (-5);
+ERROR 44000 new row violates check option for view "rw_view2"
+DETAIL Failing row contains (-5).
+> MERGE INTO rw_view2 t USING (VALUES (-5)) AS v(a) ON t.a = v.a
+>>   WHEN NOT MATCHED THEN INSERT VALUES (v.a);
+ERROR 44000 new row violates check option for view "rw_view2"
+DETAIL Failing row contains (-5).
+> INSERT INTO rw_view2 VALUES (5);
+INSERT 0 1
+> MERGE INTO rw_view2 t USING (VALUES (6)) AS v(a) ON t.a = v.a
+>>   WHEN NOT MATCHED THEN INSERT VALUES (v.a);
+MERGE 1
+> INSERT INTO rw_view2 VALUES (50);
+INSERT 0 1
+> MERGE INTO rw_view2 t USING (VALUES (60)) AS v(a) ON t.a = v.a
+>>   WHEN NOT MATCHED THEN INSERT VALUES (v.a);
+MERGE 1
+> UPDATE rw_view2 SET a = a - 10;
+ERROR 44000 new row violates check option for view "rw_view2"
+DETAIL Failing row contains (-5).
+> MERGE INTO rw_view2 t USING (VALUES (6)) AS v(a) ON t.a = v.a
+>>   WHEN MATCHED THEN UPDATE SET a = t.a - 10;
+ERROR 44000 new row violates check option for view "rw_view2"
+DETAIL Failing row contains (-4).
+> SELECT * FROM base_tbl;
+fields a@base_tbl.1:23:4:-1,b@base_tbl.2:23:4:-1
+row 5,10
+row 6,10
+row 50,10
+row 60,10
+SELECT 4
+> ALTER VIEW rw_view2 SET (check_option=cascaded);
+ALTER VIEW
+> INSERT INTO rw_view2 VALUES (100);
+INSERT 0 1
+> UPDATE rw_view2 SET a = 200 WHERE a = 5;
+UPDATE 1
+> SELECT * FROM base_tbl;
+fields a@base_tbl.1:23:4:-1,b@base_tbl.2:23:4:-1
+row 6,10
+row 50,10
+row 60,10
+row 100,10
+row 200,10
+SELECT 5
+> DROP TABLE base_tbl CASCADE;
+NOTICE 00000 drop cascades to 2 other objects
+DETAIL drop cascades to view rw_view1
+drop cascades to view rw_view2
+DROP TABLE
+> CREATE TABLE rk (a int PRIMARY KEY, b text);
+CREATE TABLE
+> CREATE VIEW rkv AS SELECT a, b, 'k' AS c, a + 1 AS d, coalesce(b, 'z') AS e FROM rk;
+CREATE VIEW
+> INSERT INTO rkv (a, b) VALUES (1, 'x'), (2, NULL) RETURNING old.*, new.*;
+fields a@rkv.1:23:4:-1,b@rkv.2:25:-1:-1,c@rkv.3:25:-1:-1,d@rkv.4:23:4:-1,e@rkv.5:25:-1:-1,a@rkv.1:23:4:-1,b@rkv.2:25:-1:-1,c@rkv.3:25:-1:-1,d@rkv.4:23:4:-1,e@rkv.5:25:-1:-1
+row NULL,NULL,NULL,NULL,NULL,1,x,k,2,x
+row NULL,NULL,NULL,NULL,NULL,2,NULL,k,3,z
+INSERT 0 2
+> UPDATE rkv SET b = 'y' WHERE a = 2 RETURNING old.*, new.*;
+fields a@rkv.1:23:4:-1,b@rkv.2:25:-1:-1,c@rkv.3:25:-1:-1,d@rkv.4:23:4:-1,e@rkv.5:25:-1:-1,a@rkv.1:23:4:-1,b@rkv.2:25:-1:-1,c@rkv.3:25:-1:-1,d@rkv.4:23:4:-1,e@rkv.5:25:-1:-1
+row 2,NULL,k,3,z,2,y,k,3,y
+UPDATE 1
+> MERGE INTO rkv t USING (VALUES (1), (3)) AS v(a) ON t.a = v.a WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT (a) VALUES (v.a) RETURNING merge_action(), old.c, old.e, new.c, new.e;
+fields merge_action:25:-1:-1,c@rkv.3:25:-1:-1,e@rkv.5:25:-1:-1,c@rkv.3:25:-1:-1,e@rkv.5:25:-1:-1
+row DELETE,k,x,NULL,NULL
+row INSERT,NULL,NULL,k,z
+MERGE 2
+> DELETE FROM rkv RETURNING old.*, new.*;
+fields a@rkv.1:23:4:-1,b@rkv.2:25:-1:-1,c@rkv.3:25:-1:-1,d@rkv.4:23:4:-1,e@rkv.5:25:-1:-1,a@rkv.1:23:4:-1,b@rkv.2:25:-1:-1,c@rkv.3:25:-1:-1,d@rkv.4:23:4:-1,e@rkv.5:25:-1:-1
+row 2,y,k,3,y,NULL,NULL,NULL,NULL,NULL
+row 3,NULL,k,4,z,NULL,NULL,NULL,NULL,NULL
+DELETE 2
+> DROP TABLE rk CASCADE;
+NOTICE 00000 drop cascades to view rkv
+DROP TABLE
+> CREATE TABLE bt (a int PRIMARY KEY, b text);
+CREATE TABLE
+> CREATE VIEW bv AS SELECT * FROM bt WHERE a > 0;
+CREATE VIEW
+> EXPLAIN (costs off) MERGE INTO bv t USING (SELECT x FROM generate_series(0,3) x) AS s(a) ON t.a = s.a WHEN MATCHED THEN UPDATE SET b = 'x';
+fields QUERY PLAN:25:-1:-1
+row Merge on bt
+row   ->  Nested Loop
+row         ->  Function Scan on generate_series x
+row         ->  Index Scan using bt_pkey on bt
+row               Index Cond: ((a = x.x) AND (a > 0))
+EXPLAIN
+> EXPLAIN (costs off) UPDATE bv t SET b = 'y' WHERE t.a = 2;
+fields QUERY PLAN:25:-1:-1
+row Update on bt
+row   ->  Index Scan using bt_pkey on bt
+row         Index Cond: ((a > 0) AND (a = 2))
+EXPLAIN
+> CREATE VIEW bv2 AS SELECT * FROM bt OFFSET 0;
+CREATE VIEW
+> CREATE FUNCTION bf() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+CREATE FUNCTION
+> CREATE TRIGGER bvt INSTEAD OF UPDATE ON bv2 FOR EACH ROW EXECUTE FUNCTION bf();
+CREATE TRIGGER
+> EXPLAIN (costs off) UPDATE bv2 t SET b = 'y' WHERE t.a = 2;
+fields QUERY PLAN:25:-1:-1
+row Update on bv2 t_1
+row   ->  Subquery Scan on t
+row         Filter: (t.a = 2)
+row         ->  Seq Scan on bt
+EXPLAIN
+> EXPLAIN (costs off) MERGE INTO bv2 t USING (SELECT x FROM generate_series(0,3) x) AS s(a) ON t.a = s.a WHEN MATCHED THEN UPDATE SET b = 'x';
+fields QUERY PLAN:25:-1:-1
+row Merge on bv2 t_1
+row   ->  Hash Join
+row         Hash Cond: (t.a = x.x)
+row         ->  Subquery Scan on t
+row               ->  Seq Scan on bt
+row         ->  Hash
+row               ->  Function Scan on generate_series x
+EXPLAIN
+> INSERT INTO bt VALUES (1, 'a'), (2, 'b'), (5, 'e');
+INSERT 0 3
+> CREATE TABLE blog (op text, o text, n text);
+CREATE TABLE
+> CREATE OR REPLACE FUNCTION bf() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO blog VALUES (TG_OP, OLD::text, NEW::text); RETURN NEW; END $$;
+CREATE FUNCTION
+> CREATE TRIGGER bvi INSTEAD OF INSERT ON bv2 FOR EACH ROW EXECUTE FUNCTION bf();
+CREATE TRIGGER
+> MERGE INTO bv2 t USING (SELECT x FROM generate_series(0,3) x) AS s(a) ON t.a = s.a WHEN MATCHED THEN UPDATE SET b = 'x' WHEN NOT MATCHED THEN INSERT VALUES (s.a, 'n');
+MERGE 4
+> MERGE INTO bv t USING (SELECT x FROM generate_series(-1,3) x) AS s(a) ON t.a = s.a WHEN MATCHED THEN UPDATE SET b = 'm' || s.a WHEN NOT MATCHED THEN INSERT VALUES (s.a + 10, 'i');
+MERGE 5
+> SELECT * FROM bt ORDER BY a;
+fields a@bt.1:23:4:-1,b@bt.2:25:-1:-1
+row 1,m1
+row 2,m2
+row 5,e
+row 9,i
+row 10,i
+row 13,i
+SELECT 6
+> SELECT * FROM blog ORDER BY 1, 3;
+fields op@blog.1:25:-1:-1,o@blog.2:25:-1:-1,n@blog.3:25:-1:-1
+row INSERT,NULL,(0,n)
+row INSERT,NULL,(3,n)
+row UPDATE,(1,a),(1,x)
+row UPDATE,(2,b),(2,x)
+SELECT 4
+> DROP TABLE blog;
+DROP TABLE
+> DROP TABLE bt CASCADE;
+NOTICE 00000 drop cascades to 2 other objects
+DETAIL drop cascades to view bv
+drop cascades to view bv2
+DROP TABLE
+> DROP FUNCTION bf();
+DROP FUNCTION

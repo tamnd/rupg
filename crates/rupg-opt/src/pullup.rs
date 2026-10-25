@@ -39,6 +39,8 @@ fn merge_join(query: &mut Query) {
     if query.write.as_ref().is_none_or(|w| w.kind != WriteKind::Merge) {
         return;
     }
+    view_rows(query);
+    view_quals(query);
     let [FromItem::Join(join)] = query.from.as_mut_slice() else { return };
     if !matches!(join.right, FromItem::Relation(0)) {
         return;
@@ -71,6 +73,77 @@ fn merge_join(query: &mut Query) {
             target.expr.kind = ExprKind::Const(Value::Bool(true));
         }
     }
+}
+
+/// `transform_MERGE_to_join`: the conditions of an updatable view are the conditions of the target table below the join of the `MERGE`. When the join can give nulls for the target table, they join the `ON` of the join, and the one-row `VALUES` that holds them leaves the plan. The relation stays in the list of relations.
+fn view_quals(query: &mut Query) {
+    let [FromItem::Join(join)] = query.from.as_mut_slice() else { return };
+    let join = &mut **join;
+    if !matches!(join.kind, JoinKind::Inner | JoinKind::Left) {
+        return;
+    }
+    let FromItem::Join(inner) = &mut join.right else { return };
+    let (FromItem::Relation(0), FromItem::Relation(r)) = (&inner.left, &inner.right) else {
+        return;
+    };
+    let relation = &query.relations[*r];
+    let helper = inner.kind == JoinKind::Inner
+        && relation.name == "*VALUES*"
+        && relation.columns.len() == 1
+        && relation.columns[0].name == "one"
+        && relation.values.as_ref().is_some_and(|v| v.len() == 1);
+    if !helper {
+        return;
+    }
+    let quals = inner.on.take();
+    join.right = FromItem::Relation(0);
+    if let Some(quals) = quals {
+        join.on = Some(match join.on.take() {
+            Some(on) => and(on, Some(quals)),
+            None => quals,
+        });
+    }
+}
+
+/// `transform_MERGE_to_join`: the target of a `MERGE` into a view with triggers `INSTEAD OF` is the subquery of the view, and a whole row of the subquery tells a row of the view from a source row with no match. The one-row `VALUES` that tells them apart here leaves the plan, and its column becomes a value of the subquery that the join gives nulls for. The relation stays in the list of relations.
+fn view_rows(query: &mut Query) {
+    let [FromItem::Join(join)] = query.from.as_mut_slice() else { return };
+    let join = &mut **join;
+    let item =
+        if matches!(join.right, FromItem::Join(_)) { &mut join.right } else { &mut join.left };
+    let FromItem::Join(inner) = item else { return };
+    let FromItem::Relation(r) = inner.right else { return };
+    // The target is the subquery of the view, or its join with the conditions of an updatable view above it.
+    let target = match &inner.left {
+        FromItem::Relation(0) => true,
+        FromItem::Join(quals) => matches!(quals.left, FromItem::Relation(0)),
+        FromItem::Relation(_) => false,
+    };
+    let relation = &query.relations[r];
+    let helper = target
+        && inner.kind == JoinKind::Inner
+        && inner.on.is_none()
+        && relation.name == "*VALUES*"
+        && relation.columns.len() == 1
+        && relation.columns[0].name == "ctid"
+        && relation.values.as_ref().is_some_and(|v| v.len() == 1);
+    if !helper {
+        return;
+    }
+    *item = std::mem::replace(&mut inner.left, FromItem::Relation(0));
+    let mut row = |e: &mut Expr, depth: usize| {
+        if let ExprKind::Var(v) = e.kind
+            && v.relation == r
+            && v.levels_up == depth
+        {
+            let value = Expr::new(ExprKind::Const(Value::Int8(0)), oid::INT8);
+            let p = PlaceHolder { expr: value, relations: vec![0], levels_up: depth };
+            *e = Expr::new(ExprKind::PlaceHolder(Box::new(p)), oid::INT8);
+            return true;
+        }
+        false
+    };
+    query.each_expr_mut(0, &mut |e, depth| e.each_mut(depth, &mut row));
 }
 
 /// `flatten_simple_union_all`: a query that is a `UNION ALL` of `SELECT`s with the types of its columns becomes a query that reads the `UNION ALL` as its one relation, so that the planner plans an append relation. Only a query with `ORDER BY` changes, as the plan of the append relation is the same as the plan of the set operation when no order is necessary. With `ORDER BY`, the planner can then use a `Merge Append` of the plans of the `SELECT`s in the order.

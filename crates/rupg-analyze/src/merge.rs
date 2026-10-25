@@ -204,7 +204,6 @@ impl Analyzer<'_> {
             }
             parts.push(part);
         }
-        self.auto_view_merge_triggers()?;
         // The leaf partition of each row of a partitioned table checks the row after the routing, and so does the table of each row of a table with children of `INHERITS`.
         let inherit = self.inherits_target(WriteKind::Merge);
         let partitioned = self.is_partitioned(table) || inherit;
