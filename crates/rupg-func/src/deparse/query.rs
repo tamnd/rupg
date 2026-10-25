@@ -1356,7 +1356,12 @@ impl Deparser<'_> {
             self.buf.push(')');
         } else if let Some(sub) = &rel.subquery {
             self.buf.push('(');
-            self.query_def(sub, None, true, self.indent)?;
+            // rupg keeps the text of a view, and its parse gives the subquery `"*VALUES*"` for a `VALUES` list in `FROM`. `get_from_clause_item` shows the `VALUES` list that the stored view of PostgreSQL keeps.
+            let named = self.namespaces.last().and_then(|space| space.names.get(index));
+            match simple_values(sub, None).filter(|_| named.is_some_and(|n| n == "*VALUES*")) {
+                Some(rows) => self.values(rows)?,
+                None => self.query_def(sub, None, true, self.indent)?,
+            }
             self.buf.push(')');
         }
         let space = self.namespaces.last().ok_or_else(|| Error::internal("no namespace"))?;

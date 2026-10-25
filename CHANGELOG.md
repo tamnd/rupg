@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `pg_get_viewdef` shows the `VALUES` list of a view as `(VALUES ...)` after `ALTER TABLE ... RENAME COLUMN`, as PostgreSQL does (#765).
 - The action of a rule checks the privileges of the owner of the table of the rule, and the privileges of the statement of the user are checked first (#764).
 
 ## 0.1.88 (2026-10-26)
