@@ -72,6 +72,7 @@ impl Definer<'_, '_> {
             ObjectType::OBJECT_COLUMN => self.comment_column(object)?,
             ObjectType::OBJECT_TABCONSTRAINT => self.comment_constraint(object)?,
             ObjectType::OBJECT_TRIGGER => self.comment_trigger(object)?,
+            ObjectType::OBJECT_RULE => self.comment_rule(object)?,
             ObjectType::OBJECT_TYPE | ObjectType::OBJECT_DOMAIN => {
                 self.comment_type(stmt.objtype, object)?
             }

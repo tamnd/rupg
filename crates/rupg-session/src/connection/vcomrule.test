@@ -1,0 +1,54 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE cr (a int);
+CREATE TABLE
+> CREATE VIEW crv AS SELECT a FROM cr;
+CREATE VIEW
+> CREATE RULE r1 AS ON INSERT TO cr DO ALSO NOTIFY cr;
+CREATE RULE
+> COMMENT ON RULE r1 ON cr IS 'the rule';
+COMMENT
+> COMMENT ON RULE "_RETURN" ON crv IS 'the view rule';
+COMMENT
+> SELECT r.rulename, d.description FROM pg_rewrite r JOIN pg_description d ON d.objoid = r.oid AND d.classoid = 'pg_rewrite'::regclass ORDER BY 1;
+fields rulename@pg_rewrite.2:19:64:-1,description@pg_description.4:25:-1:-1
+row _RETURN,the view rule
+row r1,the rule
+SELECT 2
+> SELECT obj_description(oid, 'pg_rewrite') FROM pg_rewrite WHERE rulename = 'r1';
+fields obj_description:25:-1:-1
+row the rule
+SELECT 1
+> COMMENT ON RULE r1 ON cr IS NULL;
+COMMENT
+> SELECT count(*) FROM pg_description WHERE classoid = 'pg_rewrite'::regclass;
+fields count:20:8:-1
+row 1
+SELECT 1
+> COMMENT ON RULE r9 ON cr IS 'x';
+ERROR 42704 rule "r9" for relation "cr" does not exist
+> COMMENT ON RULE r1 ON nosuch IS 'x';
+ERROR 42P01 relation "nosuch" does not exist
+> COMMENT ON RULE r1 IS 'x';
+ERROR 42601 syntax error at or near "IS" at 20
+> COMMENT ON RULE r1 ON cr IS 'again';
+COMMENT
+> DROP RULE r1 ON cr;
+DROP RULE
+> SELECT count(*) FROM pg_description WHERE classoid = 'pg_rewrite'::regclass;
+fields count:20:8:-1
+row 1
+SELECT 1
+> CREATE ROLE crrole;
+CREATE ROLE
+> SET ROLE crrole;
+SET
+is_superuser=off
+> COMMENT ON RULE "_RETURN" ON crv IS 'x';
+ERROR 42501 must be owner of relation crv
+> RESET ROLE;
+RESET
+is_superuser=on
+> DROP ROLE crrole;
+DROP ROLE
