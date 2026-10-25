@@ -8,7 +8,7 @@ use rupg_types::{Value, oid};
 
 use crate::Env;
 use crate::expr::{BoolOp, Expr, ExprKind, Var};
-use crate::from::{FromItem, Relation};
+use crate::from::{Column, FromItem, Relation};
 use crate::insert::{PolicyCheck, WriteKind};
 use crate::perm::{ACL_DELETE, ACL_INSERT, ACL_SELECT, ACL_UPDATE, PermInfo, shift_expr};
 use crate::select::{Query, Target};
@@ -101,6 +101,7 @@ impl Quals {
 }
 
 /// The checks of the policies of a write, each with the name of its policy, or `None` for the check of the permissive policies. Each check has a key of the name and of the policies and their conditions that give it, as `list_append_unique` compares the items.
+#[derive(Default)]
 struct Checks {
     checks: Vec<(Option<String>, Expr)>,
     keys: Vec<CheckKey>,
@@ -201,11 +202,6 @@ impl Walk<'_> {
             RlsStatus::Enabled => self.seen = true,
         }
         let cmd = match write.kind {
-            WriteKind::Insert if write.on_conflict.as_ref().is_some_and(|c| c.update.is_some()) => {
-                return Err(not_yet(
-                    "ON CONFLICT DO UPDATE on a table that row-level security policies apply to",
-                ));
-            }
             WriteKind::Insert => b'a',
             WriteKind::Update => b'w',
             WriteKind::Delete => b'd',
@@ -228,29 +224,61 @@ impl Walk<'_> {
             self.target_quals = Some(quals);
         }
         if cmd != b'd' {
-            let mut checks = Checks { checks: Vec::new(), keys: Vec::new() };
+            let mut checks = Checks::default();
             self.add_checks(table, cmd, role, false, &mut checks)?;
             if select {
                 self.add_checks(table, b'r', role, true, &mut checks)?;
             }
-            let (policies, mut quals): (Vec<Option<String>>, Vec<Expr>) =
-                checks.checks.into_iter().unzip();
-            self.sublinks(table, &name, &mut quals)?;
-            let mut relation = Relation::new(0, columns, None, None, None);
-            relation.name = name;
-            let targets = quals
-                .into_iter()
-                .map(|expr| Target { name: String::new(), expr, origin: None, junk: false })
-                .collect();
-            let query = Query {
-                relations: vec![relation],
-                from: vec![FromItem::Relation(0)],
-                targets,
-                ..Query::default()
-            };
-            write.policy_check = Some(PolicyCheck { query: Box::new(query), policies });
+            write.policy_check = Some(self.check_query(table, (&name, &columns), checks, false)?);
+        }
+        // `INSERT ... ON CONFLICT DO UPDATE` and `DO SELECT` check the row that the table has with the conditions of `USING` of the policies of `UPDATE` and `SELECT`, and `DO UPDATE` checks the new row with the policies of `UPDATE`.
+        if let Some(conflict) = write.on_conflict.as_mut().filter(|c| c.update.is_some()) {
+            let mut checks = Checks::default();
+            if perm.required & ACL_UPDATE != 0 {
+                self.add_checks(table, b'w', role, true, &mut checks)?;
+            }
+            if select {
+                self.add_checks(table, b'r', role, true, &mut checks)?;
+            }
+            conflict.conflict_check =
+                Some(self.check_query(table, (&name, &columns), checks, true)?);
+            if conflict.select.is_none() {
+                let mut checks = Checks::default();
+                self.add_checks(table, b'w', role, false, &mut checks)?;
+                if select {
+                    self.add_checks(table, b'r', role, true, &mut checks)?;
+                }
+                conflict.update_check =
+                    Some(self.check_query(table, (&name, &columns), checks, false)?);
+            }
         }
         Ok(())
+    }
+
+    /// The query of the checks `checks` of the table `table`, which reads a row with the columns `columns` of the table. With `using`, the error of a check names the conditions of `USING`, as `WCO_RLS_CONFLICT_CHECK` gives it.
+    fn check_query(
+        &mut self,
+        table: u32,
+        (name, columns): (&str, &[Column]),
+        checks: Checks,
+        using: bool,
+    ) -> Result<PolicyCheck> {
+        let (policies, mut quals): (Vec<Option<String>>, Vec<Expr>) =
+            checks.checks.into_iter().unzip();
+        self.sublinks(table, name, &mut quals)?;
+        let mut relation = Relation::new(0, columns.to_vec(), None, None, None);
+        relation.name = name.to_string();
+        let targets = quals
+            .into_iter()
+            .map(|expr| Target { name: String::new(), expr, origin: None, junk: false })
+            .collect();
+        let query = Query {
+            relations: vec![relation],
+            from: vec![FromItem::Relation(0)],
+            targets,
+            ..Query::default()
+        };
+        Ok(PolicyCheck { query: Box::new(query), policies, using })
     }
 
     /// `get_row_security_policies` for a table that a query reads: the conditions of the policies that apply to the role of its checks, or `None` when no policy applies. With `FOR UPDATE` or `FOR SHARE`, the conditions of the policies of `UPDATE` come first.

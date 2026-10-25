@@ -1367,11 +1367,21 @@ impl Plan {
         {
             base = inner;
         }
+        let old = existing[..info.width.min(existing.len())].to_vec();
         let cache = self.cache();
         let tables = scan::given(base, vec![vec![existing], vec![excluded]]);
         cache.tables.borrow_mut().push((base, Rc::new(tables)));
         let rows = run_query(query, params, session, &cache, &[], false)?;
-        Ok(insert::check(info, rows, Vec::new(), session)?.into_iter().next())
+        // `ExecOnConflictUpdate` checks the row that the table has after the condition of `WHERE`.
+        let conflict = info.on_conflict.as_ref();
+        if !rows.is_empty()
+            && let Some(check) = conflict.and_then(|c| c.conflict_check.as_ref())
+            && let Some(Some(error)) = policy_failures(check, &info.name, vec![old], session)?.pop()
+        {
+            return Err(error);
+        }
+        let policy = self.policy_failures(&rows, rupg_analyze::WriteKind::Update, session)?;
+        Ok(insert::check(info, rows, policy, session)?.into_iter().next())
     }
 
     /// `ExecMergeMatched` and `ExecMergeNotMatched` for one clause of a `MERGE`: the row that the clause gives for the row `target` of the table, which ends with the ID of its version, and the carried values of the row of the join. It is `None` when the condition of the clause is not true. The new row of an `INSERT` or an `UPDATE` has the columns of the table, after the checks of the constraints. With [`rupg_analyze::Write::recheck`] it has the conditions of the checks after the columns, because the triggers `BEFORE ... FOR EACH ROW` come before the checks.
@@ -1621,7 +1631,7 @@ impl Plan {
     ) -> Result<Vec<Vec<Value>>> {
         match &self.query.write {
             Some(info) => {
-                let policy = self.policy_failures(&rows, session)?;
+                let policy = self.policy_failures(&rows, info.kind, session)?;
                 insert::check_rows(info, info.kind, rows, policy, session)
             }
             None => Ok(rows),
@@ -1641,7 +1651,7 @@ impl Plan {
     ) -> Result<Vec<Vec<Value>>> {
         match &self.query.write {
             Some(info) => {
-                let policy = self.policy_failures(&rows, session)?;
+                let policy = self.policy_failures(&rows, kind, session)?;
                 insert::check_rows(info, kind, rows, policy, session)
             }
             None => Ok(rows),
@@ -1656,14 +1666,14 @@ impl Plan {
     pub fn check(&self, rows: Vec<Vec<Value>>, session: &dyn Session) -> Result<Vec<Vec<Value>>> {
         match &self.query.write {
             Some(info) if insert::checks_now(info) => {
-                let policy = self.policy_failures(&rows, session)?;
+                let policy = self.policy_failures(&rows, info.kind, session)?;
                 insert::check(info, rows, policy, session)
             }
             Some(_) | None => Ok(rows),
         }
     }
 
-    /// [`policy_failures`] for the new rows of the write. A partitioned table checks each row in its leaf partition, after the routing.
+    /// [`policy_failures`] for the new rows of the write `kind`. A partitioned table checks each row in its leaf partition, after the routing.
     ///
     /// # Errors
     ///
@@ -1671,10 +1681,11 @@ impl Plan {
     fn policy_failures(
         &self,
         rows: &[Vec<Value>],
+        kind: rupg_analyze::WriteKind,
         session: &dyn Session,
     ) -> Result<Vec<Option<Error>>> {
         let Some(info) = self.query.write.as_ref() else { return Ok(Vec::new()) };
-        let Some(check) = info.policy_check.as_ref() else { return Ok(Vec::new()) };
+        let Some(check) = info.policy_for(kind) else { return Ok(Vec::new()) };
         let rel = session.catalog().and_then(|c| c.relation(info.table));
         if rel.is_some_and(|r| r.kind == rupg_catalog::RelKind::Partitioned) {
             return Ok(Vec::new());
@@ -1685,7 +1696,7 @@ impl Plan {
     }
 }
 
-/// `ExecWithCheckOptions` for `WCO_RLS_INSERT_CHECK` and `WCO_RLS_UPDATE_CHECK`: for each new row `rows` of the table `table`, with the columns of the table, the error of the first check of `check` that the row does not pass, or `None`. A null fails the check.
+/// `ExecWithCheckOptions` for `WCO_RLS_INSERT_CHECK`, `WCO_RLS_UPDATE_CHECK` and `WCO_RLS_CONFLICT_CHECK`: for each new row `rows` of the table `table`, with the columns of the table, the error of the first check of `check` that the row does not pass, or `None`. A null fails the check.
 ///
 /// # Errors
 ///
@@ -1704,11 +1715,14 @@ pub fn policy_failures(
         .iter()
         .map(|result| {
             let at = result.iter().position(|v| !matches!(v, Value::Bool(true)))?;
+            let using = if check.using { " (USING expression)" } else { "" };
             let message = match check.policies.get(at).cloned().flatten() {
                 Some(policy) => format!(
-                    "new row violates row-level security policy \"{policy}\" for table \"{table}\""
+                    "new row violates row-level security policy \"{policy}\"{using} for table \"{table}\""
                 ),
-                None => format!("new row violates row-level security policy for table \"{table}\""),
+                None => format!(
+                    "new row violates row-level security policy{using} for table \"{table}\""
+                ),
             };
             Some(Error::new(SqlState::INSUFFICIENT_PRIVILEGE, message))
         })

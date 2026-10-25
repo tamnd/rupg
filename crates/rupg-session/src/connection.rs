@@ -4864,6 +4864,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/row_security_write_checks.test")));
     }
 
+    /// Row-level security on `INSERT ... ON CONFLICT DO UPDATE` and `DO SELECT`: the checks of the proposed row, of the row that the table has and of the new row. `connection/row_security_upsert.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn row_security_upsert() {
+        big_stack(|| script(include_str!("connection/row_security_upsert.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

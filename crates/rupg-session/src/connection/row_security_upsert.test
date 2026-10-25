@@ -1,0 +1,164 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE ROLE regress_rls_u4;
+CREATE ROLE
+> CREATE TABLE rls_t4 (a int PRIMARY KEY, b text);
+CREATE TABLE
+> GRANT ALL ON rls_t4 TO regress_rls_u4;
+GRANT
+> INSERT INTO rls_t4 VALUES (1, 'ok'), (2, 'fine'), (3, 'hidden'), (4, 'locked');
+INSERT 0 4
+> ALTER TABLE rls_t4 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> CREATE POLICY p4r ON rls_t4 FOR SELECT USING (b <> 'hidden');
+CREATE POLICY
+> CREATE POLICY p4a ON rls_t4 FOR INSERT WITH CHECK (b <> 'bad');
+CREATE POLICY
+> CREATE POLICY p4w ON rls_t4 FOR UPDATE USING (b <> 'locked') WITH CHECK (b <> 'worse');
+CREATE POLICY
+> CREATE POLICY p4d ON rls_t4 FOR DELETE USING (true);
+CREATE POLICY
+> SET SESSION AUTHORIZATION regress_rls_u4;
+SET
+session_authorization=regress_rls_u4
+is_superuser=off
+> INSERT INTO rls_t4 VALUES (5, 'new') ON CONFLICT (a) DO UPDATE SET b = 'upd';
+INSERT 0 1
+> INSERT INTO rls_t4 VALUES (5, 'x') ON CONFLICT (a) DO UPDATE SET b = 'upd';
+INSERT 0 1
+> INSERT INTO rls_t4 VALUES (6, 'bad') ON CONFLICT (a) DO UPDATE SET b = 'upd';
+ERROR 42501 new row violates row-level security policy for table "rls_t4"
+> INSERT INTO rls_t4 VALUES (1, 'bad') ON CONFLICT (a) DO UPDATE SET b = 'upd2';
+ERROR 42501 new row violates row-level security policy for table "rls_t4"
+> INSERT INTO rls_t4 VALUES (3, 'x') ON CONFLICT (a) DO UPDATE SET b = 'upd';
+ERROR 42501 new row violates row-level security policy (USING expression) for table "rls_t4"
+> INSERT INTO rls_t4 VALUES (4, 'x') ON CONFLICT (a) DO UPDATE SET b = 'upd';
+ERROR 42501 new row violates row-level security policy (USING expression) for table "rls_t4"
+> INSERT INTO rls_t4 VALUES (2, 'x') ON CONFLICT (a) DO UPDATE SET b = 'worse';
+ERROR 42501 new row violates row-level security policy for table "rls_t4"
+> INSERT INTO rls_t4 VALUES (2, 'x') ON CONFLICT (a) DO UPDATE SET b = 'hidden';
+ERROR 42501 new row violates row-level security policy for table "rls_t4"
+> INSERT INTO rls_t4 VALUES (2, 'x') ON CONFLICT (a) DO UPDATE SET b = 'two' WHERE rls_t4.b = 'nomatch';
+INSERT 0 0
+> INSERT INTO rls_t4 VALUES (4, 'x') ON CONFLICT (a) DO UPDATE SET b = 'upd' WHERE rls_t4.b = 'nomatch';
+INSERT 0 0
+> INSERT INTO rls_t4 VALUES (2, 'x') ON CONFLICT (a) DO UPDATE SET b = excluded.b RETURNING *;
+fields a@rls_t4.1:23:4:-1,b@rls_t4.2:25:-1:-1
+row 2,x
+INSERT 0 1
+> INSERT INTO rls_t4 VALUES (1, 'x') ON CONFLICT (a) DO SELECT RETURNING *;
+fields a@rls_t4.1:23:4:-1,b@rls_t4.2:25:-1:-1
+row 1,ok
+INSERT 0 1
+> INSERT INTO rls_t4 VALUES (3, 'x') ON CONFLICT (a) DO SELECT RETURNING *;
+ERROR 42501 new row violates row-level security policy (USING expression) for table "rls_t4"
+> INSERT INTO rls_t4 VALUES (4, 'x') ON CONFLICT (a) DO SELECT RETURNING *;
+fields a@rls_t4.1:23:4:-1,b@rls_t4.2:25:-1:-1
+row 4,locked
+INSERT 0 1
+> INSERT INTO rls_t4 VALUES (4, 'x') ON CONFLICT (a) DO SELECT FOR UPDATE RETURNING *;
+ERROR 42501 new row violates row-level security policy (USING expression) for table "rls_t4"
+> INSERT INTO rls_t4 VALUES (7, 'x') ON CONFLICT (a) DO SELECT RETURNING *;
+fields a@rls_t4.1:23:4:-1,b@rls_t4.2:25:-1:-1
+row 7,x
+INSERT 0 1
+> SELECT * FROM rls_t4 ORDER BY a;
+fields a@rls_t4.1:23:4:-1,b@rls_t4.2:25:-1:-1
+row 1,ok
+row 2,x
+row 4,locked
+row 5,upd
+row 7,x
+SELECT 5
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> SELECT * FROM rls_t4 ORDER BY a;
+fields a@rls_t4.1:23:4:-1,b@rls_t4.2:25:-1:-1
+row 1,ok
+row 2,x
+row 3,hidden
+row 4,locked
+row 5,upd
+row 7,x
+SELECT 6
+> CREATE POLICY p4w2 ON rls_t4 AS RESTRICTIVE FOR UPDATE USING (a < 6) WITH CHECK (b <> 'nine');
+CREATE POLICY
+> SET SESSION AUTHORIZATION regress_rls_u4;
+SET
+session_authorization=regress_rls_u4
+is_superuser=off
+> INSERT INTO rls_t4 VALUES (7, 'x') ON CONFLICT (a) DO UPDATE SET b = 'upd';
+ERROR 42501 new row violates row-level security policy "p4w2" (USING expression) for table "rls_t4"
+> INSERT INTO rls_t4 VALUES (1, 'x') ON CONFLICT (a) DO UPDATE SET b = 'nine';
+ERROR 42501 new row violates row-level security policy "p4w2" for table "rls_t4"
+> INSERT INTO rls_t4 VALUES (1, 'x') ON CONFLICT (a) DO UPDATE SET b = 'ten';
+INSERT 0 1
+> SELECT * FROM rls_t4 ORDER BY a;
+fields a@rls_t4.1:23:4:-1,b@rls_t4.2:25:-1:-1
+row 1,ten
+row 2,x
+row 4,locked
+row 5,upd
+row 7,x
+SELECT 5
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> DROP TABLE rls_t4;
+DROP TABLE
+> CREATE TABLE rls_p4 (a int PRIMARY KEY, b text) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE rls_p4a PARTITION OF rls_p4 FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> CREATE TABLE rls_p4b PARTITION OF rls_p4 FOR VALUES FROM (10) TO (20);
+CREATE TABLE
+> GRANT ALL ON rls_p4 TO regress_rls_u4;
+GRANT
+> INSERT INTO rls_p4 VALUES (1, 'ok'), (11, 'locked');
+INSERT 0 2
+> ALTER TABLE rls_p4 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> CREATE POLICY q4r ON rls_p4 FOR SELECT USING (true);
+CREATE POLICY
+> CREATE POLICY q4a ON rls_p4 FOR INSERT WITH CHECK (b <> 'bad');
+CREATE POLICY
+> CREATE POLICY q4w ON rls_p4 FOR UPDATE USING (b <> 'locked') WITH CHECK (b <> 'worse');
+CREATE POLICY
+> SET SESSION AUTHORIZATION regress_rls_u4;
+SET
+session_authorization=regress_rls_u4
+is_superuser=off
+> INSERT INTO rls_p4 VALUES (2, 'bad') ON CONFLICT DO NOTHING;
+ERROR 42501 new row violates row-level security policy for table "rls_p4"
+> INSERT INTO rls_p4 VALUES (2, 'bad') ON CONFLICT (a) DO UPDATE SET b = 'x';
+ERROR 42501 new row violates row-level security policy for table "rls_p4"
+> INSERT INTO rls_p4 VALUES (1, 'y') ON CONFLICT (a) DO UPDATE SET b = 'worse';
+ERROR 42501 new row violates row-level security policy for table "rls_p4"
+> INSERT INTO rls_p4 VALUES (11, 'y') ON CONFLICT (a) DO UPDATE SET b = 'z';
+ERROR 42501 new row violates row-level security policy (USING expression) for table "rls_p4"
+> INSERT INTO rls_p4 VALUES (1, 'y') ON CONFLICT (a) DO UPDATE SET b = excluded.b RETURNING *;
+fields a@rls_p4.1:23:4:-1,b@rls_p4.2:25:-1:-1
+row 1,y
+INSERT 0 1
+> INSERT INTO rls_p4 VALUES (3, 'n') ON CONFLICT (a) DO UPDATE SET b = 'x' RETURNING *;
+fields a@rls_p4.1:23:4:-1,b@rls_p4.2:25:-1:-1
+row 3,n
+INSERT 0 1
+> SELECT * FROM rls_p4 ORDER BY a;
+fields a@rls_p4.1:23:4:-1,b@rls_p4.2:25:-1:-1
+row 1,y
+row 3,n
+row 11,locked
+SELECT 3
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> DROP TABLE rls_p4;
+DROP TABLE
+> DROP ROLE regress_rls_u4;
+DROP ROLE
