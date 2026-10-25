@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- The executor orders `x op ANY (array)` and `x op ALL (array)` by the cost of `cost_qual_eval_walker`: the operator runs for half of the items of the array, and a constant array of 9 items or more costs one hash and one comparison (#NNN).
+
 ## 0.1.83 (2026-10-25)
 
 ### Added

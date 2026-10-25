@@ -4488,6 +4488,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vexp.test")));
     }
 
+    /// The executor orders the conditions of `WHERE` by their costs, and `x op ANY (array)` costs its operator for half of the items of the array, or one hash and one comparison for a constant array of 9 items or more, as `cost_qual_eval_walker` finds it. `connection/saorder.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn saorder() {
+        big_stack(|| script(include_str!("connection/saorder.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {

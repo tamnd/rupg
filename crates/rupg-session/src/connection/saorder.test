@@ -1,0 +1,73 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE so (x int);
+CREATE TABLE
+> INSERT INTO so VALUES (1);
+INSERT 0 1
+> CREATE FUNCTION na(int) RETURNS boolean AS $$ BEGIN RAISE NOTICE 'a %', $1; RETURN true; END; $$ LANGUAGE plpgsql COST 2.5;
+CREATE FUNCTION
+> CREATE FUNCTION na5(int) RETURNS boolean AS $$ BEGIN RAISE NOTICE 'a5 %', $1; RETURN true; END; $$ LANGUAGE plpgsql COST 5;
+CREATE FUNCTION
+> CREATE FUNCTION nb(int) RETURNS int AS $$ BEGIN RAISE NOTICE 'b %', $1; RETURN $1; END; $$ LANGUAGE plpgsql COST 1;
+CREATE FUNCTION
+> SELECT * FROM so WHERE na(x) AND nb(x) = ANY(ARRAY[1,2]);
+fields x@so.1:23:4:-1
+NOTICE 00000 b 1 (PL/pgSQL function nb(integer) line 1 at RAISE)
+NOTICE 00000 a 1 (PL/pgSQL function na(integer) line 1 at RAISE)
+row 1
+SELECT 1
+> SELECT * FROM so WHERE na(x) AND nb(x) = ANY(ARRAY[1,2,3,4,5,6,7,8]);
+fields x@so.1:23:4:-1
+NOTICE 00000 a 1 (PL/pgSQL function na(integer) line 1 at RAISE)
+NOTICE 00000 b 1 (PL/pgSQL function nb(integer) line 1 at RAISE)
+row 1
+SELECT 1
+> SELECT * FROM so WHERE na(x) AND nb(x) IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20);
+fields x@so.1:23:4:-1
+NOTICE 00000 a 1 (PL/pgSQL function na(integer) line 1 at RAISE)
+NOTICE 00000 b 1 (PL/pgSQL function nb(integer) line 1 at RAISE)
+row 1
+SELECT 1
+> SELECT * FROM so WHERE na5(x) AND nb(x) IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20);
+fields x@so.1:23:4:-1
+NOTICE 00000 b 1 (PL/pgSQL function nb(integer) line 1 at RAISE)
+NOTICE 00000 a5 1 (PL/pgSQL function na5(integer) line 1 at RAISE)
+row 1
+SELECT 1
+> SELECT * FROM so WHERE na5(x) AND nb(x) = ANY(ARRAY[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,x]);
+fields x@so.1:23:4:-1
+NOTICE 00000 a5 1 (PL/pgSQL function na5(integer) line 1 at RAISE)
+NOTICE 00000 b 1 (PL/pgSQL function nb(integer) line 1 at RAISE)
+row 1
+SELECT 1
+> SELECT * FROM so WHERE na(x) AND nb(x) <> ALL(ARRAY[2,3]);
+fields x@so.1:23:4:-1
+NOTICE 00000 b 1 (PL/pgSQL function nb(integer) line 1 at RAISE)
+NOTICE 00000 a 1 (PL/pgSQL function na(integer) line 1 at RAISE)
+row 1
+SELECT 1
+> SELECT * FROM so WHERE na5(x) AND nb(x) NOT IN (2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21);
+fields x@so.1:23:4:-1
+NOTICE 00000 b 1 (PL/pgSQL function nb(integer) line 1 at RAISE)
+NOTICE 00000 a5 1 (PL/pgSQL function na5(integer) line 1 at RAISE)
+row 1
+SELECT 1
+> EXPLAIN (costs off) SELECT * FROM so WHERE na(x) AND nb(x) = ANY(ARRAY[1,2,3,4,5,6,7,8]);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on so
+row   Filter: (na(x) AND (nb(x) = ANY ('{1,2,3,4,5,6,7,8}'::integer[])))
+EXPLAIN
+> EXPLAIN SELECT * FROM so WHERE nb(x) IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on so  (cost=0.05..54.68 rows=255 width=4)
+row   Filter: (nb(x) = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20}'::integer[]))
+EXPLAIN
+> DROP TABLE so;
+DROP TABLE
+> DROP FUNCTION na(int);
+DROP FUNCTION
+> DROP FUNCTION na5(int);
+DROP FUNCTION
+> DROP FUNCTION nb(int);
+DROP FUNCTION
