@@ -188,6 +188,8 @@ enum MiscCmd {
     Validate(String),
     /// `ALTER CONSTRAINT`.
     AlterConstraint(Box<ATAlterConstraint>),
+    /// `ENABLE ROW LEVEL SECURITY` and `DISABLE ROW LEVEL SECURITY`, or with the first flag `FORCE ROW LEVEL SECURITY` and `NO FORCE ROW LEVEL SECURITY`. The second flag is true for `ENABLE` and `FORCE`.
+    RowSecurity(bool, bool),
 }
 
 /// The subcommand that gives a constraint of `AT_PASS_ADD_CONSTR`.
@@ -652,6 +654,19 @@ impl Definer<'_, '_> {
                 let name = cmd.name.as_deref().unwrap_or_default().to_string();
                 passes.misc.push(MiscCmd::Validate(name));
             }
+            AlterTableType::AT_EnableRowSecurity
+            | AlterTableType::AT_DisableRowSecurity
+            | AlterTableType::AT_ForceRowSecurity
+            | AlterTableType::AT_NoForceRowSecurity => {
+                self.simple_permissions(target, cmd, b"rp")?;
+                let (force, on) = match cmd.subtype {
+                    AlterTableType::AT_EnableRowSecurity => (false, true),
+                    AlterTableType::AT_DisableRowSecurity => (false, false),
+                    AlterTableType::AT_ForceRowSecurity => (true, true),
+                    _ => (true, false),
+                };
+                passes.misc.push(MiscCmd::RowSecurity(force, on));
+            }
             // A table has no OIDs, so `SET WITHOUT OIDS` has no work.
             AlterTableType::AT_DropOids => self.simple_permissions(target, cmd, TABLE)?,
             other => {
@@ -902,6 +917,9 @@ impl Definer<'_, '_> {
                     )?;
                 }
                 MiscCmd::Rule(name, enabled) => self.enable_rule(target, name, *enabled)?,
+                MiscCmd::RowSecurity(force, on) => {
+                    self.catalog.set_row_security(target.oid, *force, *on)?;
+                }
                 MiscCmd::Inherit(cmd) => self.add_inherit(target, cmd)?,
                 MiscCmd::NoInherit(rv) => self.drop_inherit(target, rv)?,
                 MiscCmd::Of(Some(name)) => self.add_of(target, name)?,

@@ -76,6 +76,15 @@ pub fn owned_objects(catalog: &Catalog, role: u32) -> Vec<ObjRef> {
     objects
 }
 
+/// The policies that name the role in `polroles`, as `CreatePolicy` records them in `pg_shdepend` with `SHARED_DEPENDENCY_POLICY`.
+pub fn policy_targets(catalog: &Catalog, role: u32) -> Vec<ObjRef> {
+    catalog
+        .policies()
+        .filter(|p| p.roles.contains(&role))
+        .map(|p| ObjRef::new(rupg_catalog::PG_POLICY, p.oid))
+        .collect()
+}
+
 /// The objects with an ACL that names the role other than as their owner, as `updateAclDependencies` records them in `pg_shdepend`. The ACL of a column gives an object with the number of the column.
 pub fn acl_dependents(catalog: &Catalog, role: u32) -> Vec<ObjRef> {
     let names = |acl: &[String]| super::acl_roles(acl).contains(&role);
@@ -159,6 +168,7 @@ impl Definer<'_, '_> {
             for object in revoked {
                 self.remove_role_from_acl(role, object)?;
             }
+            self.remove_role_from_policies(role, &mut doomed);
             let mut owned = owned_objects(self.catalog, role);
             owned.sort_by_key(|o| o.oid);
             for object in owned {

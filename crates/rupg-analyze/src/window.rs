@@ -279,6 +279,7 @@ impl Analyzer<'_> {
             | Kind::ExecuteParameter
             | Kind::Transform
             | Kind::TriggerWhen
+            | Kind::Policy
             | Kind::CallArgument
             | Kind::PartitionBound
             | Kind::PartitionExpression

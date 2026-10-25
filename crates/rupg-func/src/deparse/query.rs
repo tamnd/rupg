@@ -2437,6 +2437,24 @@ pub(super) fn get_ruledef(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Text(format!("CREATE RULE {rule} AS\n    ON SELECT TO {name} DO INSTEAD {query}")))
 }
 
+/// `pg_get_expr` of `polqual` or `polwithcheck`: the expression of `USING` of the policy `oid`, or of `WITH CHECK` with `check`, as `deparse_context_for` gives it with the table of the policy alone. The result is `None` when the policy has no such expression.
+pub(super) fn policy_expr(
+    oid: u32,
+    check: bool,
+    paren: bool,
+    session: &dyn Session,
+) -> Result<Option<String>> {
+    let env = reg::SessionEnv(session);
+    let Some((base, qual)) = rupg_analyze::policy_tree(&env, oid, check)? else {
+        return Ok(None);
+    };
+    let mut d = Deparser::new(session, paren, 0);
+    let space = d.namespace(&base);
+    d.namespaces.push(space);
+    d.expr(&qual, false)?;
+    Ok(Some(d.buf))
+}
+
 /// `make_ruledef` for a rule of `CREATE RULE`. The condition reads the names of the first action, and `DO INSTEAD NOTHING` has the query of `NOTHING` as its action.
 fn ruledef(rule: &rupg_catalog::Rule, pretty: bool, session: &dyn Session) -> Result<String> {
     let env = reg::SessionEnv(session);

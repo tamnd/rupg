@@ -67,6 +67,8 @@ pub(crate) enum Kind {
     Transform,
     /// `EXPR_KIND_TRIGGER_WHEN`: the condition of `WHEN` of `CREATE TRIGGER`.
     TriggerWhen,
+    /// `EXPR_KIND_POLICY`: an expression of `USING` or of `WITH CHECK` of `CREATE POLICY`.
+    Policy,
     /// `EXPR_KIND_CALL_ARGUMENT`: an argument of `CALL`.
     CallArgument,
     /// `EXPR_KIND_PARTITION_BOUND`: a value of `FOR VALUES` of a partition.
@@ -110,6 +112,7 @@ impl Kind {
             Kind::Returning => "RETURNING",
             Kind::Transform => "transform expressions",
             Kind::TriggerWhen => "trigger WHEN conditions",
+            Kind::Policy => "policy expressions",
             Kind::CallArgument => "CALL arguments",
             Kind::PartitionBound => "partition bound",
             Kind::PartitionExpression => "partition key expressions",
@@ -422,6 +425,7 @@ impl Analyzer<'_> {
             | Kind::Returning
             | Kind::Transform
             | Kind::TriggerWhen
+            | Kind::Policy
             | Kind::CallArgument
             | Kind::PartitionBound
             | Kind::PartitionExpression

@@ -2,9 +2,9 @@
 
 use rupg_catalog::{
     FIRST_NORMAL_OID, ObjRef, PG_AMOP, PG_AMPROC, PG_ATTRDEF, PG_CLASS, PG_CONSTRAINT,
-    PG_NAMESPACE, PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_PROC, PG_REWRITE, PG_STATISTIC_EXT,
-    PG_TRIGGER, PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, PG_TYPE, PUBLIC, Refusal,
-    RelKind, Target, flag, is_pinned,
+    PG_NAMESPACE, PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_POLICY, PG_PROC, PG_REWRITE,
+    PG_STATISTIC_EXT, PG_TRIGGER, PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, PG_TYPE,
+    PUBLIC, Refusal, RelKind, Target, flag, is_pinned,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
@@ -158,6 +158,7 @@ impl Definer<'_, '_> {
             | ObjectType::OBJECT_ROUTINE
             | ObjectType::OBJECT_AGGREGATE => self.find_functions(stmt)?,
             ObjectType::OBJECT_RULE => return self.drop_rule(stmt),
+            ObjectType::OBJECT_POLICY => return self.drop_policy(stmt),
             ObjectType::OBJECT_TRIGGER => return self.drop_trigger(stmt),
             ObjectType::OBJECT_ACCESS_METHOD
             | ObjectType::OBJECT_CAST
@@ -506,6 +507,12 @@ impl Definer<'_, '_> {
                     }
                     None => format!("rule {}", object.oid),
                 },
+            },
+            PG_POLICY => match self.catalog.policy(object.oid) {
+                Some(policy) => {
+                    format!("policy {} on {}", policy.name, self.describe_relation(policy.relation))
+                }
+                None => format!("policy {}", object.oid),
             },
             PG_NAMESPACE => format!("schema {}", self.schema_name(object.oid)),
             PG_TS_PARSER | PG_TS_DICT | PG_TS_TEMPLATE | PG_TS_CONFIG => self.describe_ts(object),

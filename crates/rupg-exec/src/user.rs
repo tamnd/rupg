@@ -242,6 +242,7 @@ pub(crate) fn rows(
         "pg_depend" => depends(table, catalog),
         "pg_description" => descriptions(table, catalog),
         "pg_rewrite" => rewrites(table, catalog),
+        "pg_policy" => policies(table, catalog),
         "pg_init_privs" => init_privs(table, catalog, session)?,
         "pg_database" => databases(table, session),
         "pg_authid" => authids(table),
@@ -564,8 +565,8 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                         _ => false,
                     }),
                 )
-                .set("relrowsecurity", Value::Bool(false))
-                .set("relforcerowsecurity", Value::Bool(false))
+                .set("relrowsecurity", Value::Bool(rel.row_security))
+                .set("relforcerowsecurity", Value::Bool(rel.force_row_security))
                 .set("relispopulated", Value::Bool(rel.view.as_ref().is_none_or(|v| v.populated)))
                 .set(
                     "relreplident",
@@ -1038,6 +1039,26 @@ fn rewrites<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("is_instead", Value::Bool(instead))
                 .set("ev_qual", Value::text(if qualified { text.as_str() } else { "<>" }))
                 .set("ev_action", Value::text(text.clone()));
+            row
+        })
+        .collect()
+}
+
+/// The rows of `pg_policy`. `polqual` and `polwithcheck` give a text that `pg_get_expr` knows, as the catalog keeps the text of the statement of a policy.
+fn policies<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .policies()
+        .map(|p| {
+            let marker = |which: &str| Value::text(format!("policy {} {which}", p.oid));
+            let mut row = Row::new(table);
+            row.set("oid", oid(p.oid))
+                .set("polname", Value::text(p.name.as_str()))
+                .set("polrelid", oid(p.relation))
+                .set("polcmd", code(char::from(p.cmd)))
+                .set("polpermissive", Value::Bool(p.permissive))
+                .set("polroles", oid_array(&p.roles))
+                .set("polqual", p.qual.as_ref().map_or(Value::Null, |_| marker("qual")))
+                .set("polwithcheck", p.check.as_ref().map_or(Value::Null, |_| marker("check")));
             row
         })
         .collect()

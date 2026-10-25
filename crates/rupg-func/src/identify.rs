@@ -305,6 +305,14 @@ fn parts(object: ObjRef, session: &dyn Session) -> Option<Parts> {
                 relation(on, session)?
             )))
         }
+        rupg_catalog::PG_POLICY => {
+            let policy = catalog?.policy(oid)?;
+            Some(Parts::identity(format!(
+                "{} on {}",
+                quote_identifier(&policy.name),
+                relation(policy.relation, session)?
+            )))
+        }
         PG_TRIGGER => {
             let trigger = catalog?.trigger(oid)?;
             Some(Parts::identity(format!(

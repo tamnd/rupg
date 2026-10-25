@@ -1459,6 +1459,15 @@ impl Analyzer<'_> {
         Ok(())
     }
 
+    /// The scope of an expression of a policy, as `CreatePolicy` makes it: the table `oid` with the name `name` alone.
+    pub(crate) fn policy_scope(&mut self, oid: u32, name: &str) -> Result<()> {
+        self.scope = Scope::default();
+        let relation = Relation::new(oid, self.open_relation(oid, name, None)?, None, None, None);
+        let item = self.add_relation(relation, name.to_string(), None)?;
+        self.scope.namespace.push(item);
+        Ok(())
+    }
+
     /// `RangeVarGetRelid`: the OID of the relation that a name gives, or `None`. The relation can be of any kind.
     pub(crate) fn lookup_relation(&self, rv: &RangeVar) -> Result<Option<u32>> {
         let at = place(rv.location);
