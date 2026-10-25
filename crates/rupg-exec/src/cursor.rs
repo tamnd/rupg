@@ -36,7 +36,7 @@ impl Plan {
             add(&mut query, added.collect());
             marks.into_iter().map(|(_, oid)| oid).collect()
         };
-        Plan { query, written, marks }
+        Plan { query, written, marks, run: None }
     }
 
     /// The OID of each table whose `tableoid` and `ctid` the rows of the cursor end with, from [`Plan::cursor`].

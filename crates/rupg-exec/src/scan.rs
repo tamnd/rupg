@@ -768,45 +768,12 @@ fn order_quals<'q>(filter: Vec<&'q Expr>, barrier: &[usize]) -> Vec<&'q Expr> {
         .map(|expr| {
             let cost = qual_cost(expr);
             let level = levels.next().unwrap_or(barrier.len());
-            let level = if cost < 10.0 && !leaky(expr) { 0 } else { level };
+            let level = if cost < 10.0 && !expr.leaky() { 0 } else { level };
             (level, cost, expr)
         })
         .collect();
     items.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
     items.into_iter().map(|(_, _, expr)| expr).collect()
-}
-
-/// `contain_leaked_vars`: true when the expression can give information about a column of the query other than through its result, as a call of a function that is not leakproof with a column in its arguments does. An expression of a kind that the check does not know is leaky.
-fn leaky(expr: &Expr) -> bool {
-    let func = match &expr.kind {
-        ExprKind::CurrentOf(_) => return false,
-        ExprKind::Var(_)
-        | ExprKind::Const(_)
-        | ExprKind::Param(_)
-        | ExprKind::Array { .. }
-        | ExprKind::FieldSelect(..)
-        | ExprKind::FieldStore(_)
-        | ExprKind::NamedArg(_)
-        | ExprKind::Bool(..)
-        | ExprKind::Relabel(..)
-        | ExprKind::Case(_)
-        | ExprKind::CaseTest
-        | ExprKind::Row(..)
-        | ExprKind::SqlValue(_)
-        | ExprKind::NullTest(..)
-        | ExprKind::BooleanTest(..) => None,
-        ExprKind::Func(f) => Some(f.oid),
-        ExprKind::NullIf { equal, .. } | ExprKind::Distinct { equal, .. } => Some(*equal),
-        ExprKind::ScalarArrayOp { func, .. } => Some(*func),
-        _ => return true,
-    };
-    if let Some(func) = func
-        && !rupg_pgcatalog::builtin::proc_by_oid(func).is_some_and(|p| p.leakproof)
-        && !relations_of(expr).is_empty()
-    {
-        return true;
-    }
-    expr.children().into_iter().any(leaky)
 }
 
 /// The cost of a condition for each row for `order_qual_clauses`, in units of `cpu_operator_cost`, as `cost_qual_eval` finds it: the costs of the calls of functions and operators, outside the subqueries. A subquery that reads no column of the query runs once before the scan, as an `InitPlan` does, and costs nothing. The executor does not know the cost of the plan of a subquery that runs for each row, so it takes the cost of [`CORRELATED`].

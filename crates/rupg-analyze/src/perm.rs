@@ -58,7 +58,7 @@ pub(crate) fn forget(query: &mut Query) {
 }
 
 /// True when the boolean option `name` of `reloptions` is on, as `RelationHasSecurityInvoker` and `RelationIsSecurityView` read `security_invoker` and `security_barrier`.
-pub(crate) fn option_on(options: &[String], name: &str) -> bool {
+pub fn option_on(options: &[String], name: &str) -> bool {
     options.iter().any(|option| {
         option.split_once('=').is_some_and(|(option, value)| {
             option == name

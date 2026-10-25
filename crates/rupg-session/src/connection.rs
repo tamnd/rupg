@@ -4476,6 +4476,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/qorder.test")));
     }
 
+    /// A simple view and a simple subquery of `FROM` merge into the query, as `pull_up_simple_subquery` merges them, so that a cheap condition of the query runs before the condition of the view. A view with `security_barrier` and a subquery with `OFFSET` stay subqueries. `connection/vsel.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vsel() {
+        big_stack(|| script(include_str!("connection/vsel.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {

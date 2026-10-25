@@ -813,6 +813,43 @@ impl Expr {
         }
     }
 
+    /// `contain_leaked_vars`: true when the expression can give information about a column of the query other than through its result, as a call of a function that is not leakproof with a column in its arguments does. An expression of a kind that the check does not know is leaky.
+    pub fn leaky(&self) -> bool {
+        let func = match &self.kind {
+            ExprKind::CurrentOf(_) => return false,
+            ExprKind::Var(_)
+            | ExprKind::Const(_)
+            | ExprKind::Param(_)
+            | ExprKind::Array { .. }
+            | ExprKind::FieldSelect(..)
+            | ExprKind::FieldStore(_)
+            | ExprKind::NamedArg(_)
+            | ExprKind::Bool(..)
+            | ExprKind::Relabel(..)
+            | ExprKind::Case(_)
+            | ExprKind::CaseTest
+            | ExprKind::Row(..)
+            | ExprKind::SqlValue(_)
+            | ExprKind::NullTest(..)
+            | ExprKind::BooleanTest(..) => None,
+            ExprKind::Func(f) => Some(f.oid),
+            ExprKind::NullIf { equal, .. } | ExprKind::Distinct { equal, .. } => Some(*equal),
+            ExprKind::ScalarArrayOp { func, .. } => Some(*func),
+            _ => return true,
+        };
+        if let Some(func) = func
+            && !builtin::proc_by_oid(func).is_some_and(|p| p.leakproof)
+            && self
+                .find(0, &mut |e, depth| {
+                    matches!(e.kind, ExprKind::Var(v) if v.levels_up == depth).then_some(())
+                })
+                .is_some()
+        {
+            return true;
+        }
+        self.children().into_iter().any(Expr::leaky)
+    }
+
     /// The expressions that this expression has as its arguments.
     pub fn children(&self) -> Vec<&Expr> {
         match &self.kind {

@@ -86,6 +86,33 @@ fn push(query: &mut Query) {
     query.filter = and_all(keep);
 }
 
+/// `set_subquery_pathlist` for the executor: each part of `WHERE` that reads only a view with `security_barrier` of the list of `FROM` moves into the view when it is leakproof, as `qual_is_pushdown_safe` lets such a condition pass the barrier. `barrier` is true for a view with `security_barrier`. The other parts stay above the view.
+pub(crate) fn push_barrier(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
+    let Some(filter) = query.filter.take() else { return };
+    let mut owned = Vec::new();
+    owned_parts(filter, &mut owned);
+    let mut keep = Vec::new();
+    for part in owned {
+        let rels = exprs::relations(&part);
+        let to = rels.first().copied().filter(|&r| {
+            let relation = &query.relations[r];
+            rels.len() == 1
+                && query.from.iter().any(|item| matches!(item, FromItem::Relation(k) if *k == r))
+                && relation.cte.is_none()
+                && !relation.lateral
+                && relation.oid != 0
+                && barrier(relation.oid)
+                && !part.leaky()
+                && relation.subquery.as_deref().is_some_and(|sub| pushable(sub, &part, r))
+        });
+        match to.and_then(|r| query.relations[r].subquery.as_deref_mut().map(|sub| (r, sub))) {
+            Some((r, sub)) => push_qual(sub, r, part),
+            None => keep.push(part),
+        }
+    }
+    query.filter = and_all(keep);
+}
+
 /// The `AND` of the conditions, or `None` when there is no condition.
 fn and_all(mut parts: Vec<Expr>) -> Option<Expr> {
     match parts.len() {
