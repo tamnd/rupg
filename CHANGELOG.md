@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A view of a function in `FROM` that gives the row type of a table depends on each column of the table that the view reads, as `process_function_rte_ref` records it. So `ALTER TABLE` cannot drop such a column or change its type while the view reads it. `ALTER TABLE ... DROP COLUMN` writes again only the text of the views that read the table in `FROM` (#NNN).
 - `pg_get_viewdef` shows a column of `USING` by the unique name that the deparse gives it in `USING`, as `x_1 AS x` when two joins have a column `x`. The names of an alias go to the columns that are not dropped, and `ALTER TABLE ... DROP COLUMN` writes the text of the views of the table again. Before, a later `ALTER TABLE` of a view of a table with a dropped column could fail with "has 3 columns available but 4 columns specified" (#726).
 - A `COLLATE` clause stays in the analyzed query as a `CollateExpr`. So `CREATE OR REPLACE VIEW` gives an error when it changes the collation of a column, as `checkViewColumns` does, a new view column takes the explicit collation, and `pg_get_viewdef` shows the clause. Before, the analyzer dropped the clause (#725).
 

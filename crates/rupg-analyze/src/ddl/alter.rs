@@ -440,9 +440,9 @@ impl Definer<'_, '_> {
                 let name = cmd.name.as_deref().unwrap_or_default().to_string();
                 let cascade = cmd.behavior == DropBehavior::DROP_CASCADE;
                 passes.drops.push(DropCmd::Column(name, cmd.missing_ok, cascade));
-                // The text of a view can give an alias to each column of the table, so a view that reads the table gets a new text with no alias for the dropped column. A view of a composite type reads its fields by their names, so its text stays.
+                // The text of a view can give an alias to each column of the table, so a view that reads the table in `FROM` gets a new text with no alias for the dropped column. A view that reads the fields of the row type by their names keeps its text.
                 if target.kind != b'c' {
-                    self.views_reading(target.oid);
+                    self.views_reading_table(target.oid);
                 }
             }
             AlterTableType::AT_ColumnDefault => {
