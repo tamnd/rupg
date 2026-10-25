@@ -508,6 +508,41 @@ fn statement_query(
     an.finish(query).map(Some)
 }
 
+/// `interpret_AS_clause` for a `BEGIN ATOMIC` body: each statement in turn takes its analysis, and a statement that has no plan is an error. A `CALL` resolves its procedure before the error.
+fn check_atomic(
+    env: &dyn Env,
+    function: &Function,
+    path: Option<&[u32]>,
+    list: &[&Node],
+) -> Result<()> {
+    let params = Params { types: function.argtypes.clone(), variable: false };
+    for node in list {
+        if let Node::SelectStmt(select) = node
+            && let Some(into) = crate::select_into(select)
+        {
+            return Err(crate::select::into_not_allowed(into));
+        }
+        if planned(node) {
+            let mut an = Analyzer::new(env, &params);
+            if let Some(path) = path {
+                an.set_path(path);
+            }
+            an.sql_function = Some((function.name.clone(), input_names(function)));
+            an.statement(node)?;
+        }
+        if !planned(node) || matches!(node, Node::CallStmt(_)) {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                format!(
+                    "{} is not yet supported in unquoted SQL function body",
+                    super::cmdtag::command_tag(node)
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// `fmgr_sql_validator` for a body that is not one `SELECT`: the query of each statement that has a plan, with the checks of `check_sql_fn_retval` on the last statement. A body with no statement must be the body of a function that returns `void`.
 fn check_statements(
     env: &dyn Env,
@@ -1135,6 +1170,9 @@ impl Definer<'_, '_> {
             ));
         }
         let stmts = statements(stmt, options.src.as_deref()).map_err(transpose)?;
+        if let Statements::Atomic(list) = &stmts {
+            check_atomic(self.an.env, &function, Some(&self.an.path), list)?;
+        }
         // `fmgr_sql_validator` reads a body in a string only when no argument is polymorphic and `check_function_bodies` is on, and a body in SQL always.
         let polymorphic = function.argtypes.iter().any(|&ty| types::is_polymorphic(ty));
         if let Statements::String(_) = &stmts {

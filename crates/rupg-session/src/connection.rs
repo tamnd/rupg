@@ -4640,6 +4640,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vsrfval.test")));
     }
 
+    /// A statement with no plan in a `BEGIN ATOMIC` body is an error with the command tag of the statement, as `interpret_AS_clause` gives it, after the analysis of the statements before it. A `CALL` resolves its procedure first, and `SELECT ... INTO` is not allowed. `connection/vatomutil.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vatomutil() {
+        big_stack(|| script(include_str!("connection/vatomutil.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {
