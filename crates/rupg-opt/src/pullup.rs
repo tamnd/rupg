@@ -58,7 +58,7 @@ pub fn merge_from(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
     merge_barrier(query);
 }
 
-/// For the executor, a view with `security_barrier` that is the only item of `FROM` merges too, after its leakproof conditions moved into it, so that each row of the view meets the other conditions of the query before the scan reads the next row, as the `Subquery Scan` of PostgreSQL runs. The conditions of the view keep their own level in `barrier` of the query, so that the executor runs them first, as `order_qual_clauses` orders the `securityQuals` of a view of an `UPDATE`.
+/// For the executor, a view with `security_barrier` that is the only item of `FROM` and reads one relation merges too, after its leakproof conditions moved into it, so that each row of the view meets the other conditions of the query before the scan reads the next row, as the `Subquery Scan` of PostgreSQL runs. The conditions of the view keep their own level in `barrier` of the query, so that the executor runs them first, as `order_qual_clauses` orders the `securityQuals` of a view of an `UPDATE`.
 fn merge_barrier(query: &mut Query) {
     let [FromItem::Relation(r)] = query.from[..] else { return };
     if !query.barrier.is_empty() || query.relations.get(r).is_none_or(|v| v.oid == 0) {
@@ -68,6 +68,10 @@ fn merge_barrier(query: &mut Query) {
         return;
     }
     let Some(sub) = query.relations[r].subquery.as_deref() else { return };
+    // A condition of the query that reads one relation of a join of the view would run in the scan of that relation, below the join and the conditions of the view.
+    if !matches!(sub.from[..], [FromItem::Relation(_)]) || sub.relations.len() != 1 {
+        return;
+    }
     let mut parts = Vec::new();
     if let Some(filter) = &sub.filter {
         exprs::and_parts(filter, &mut parts);
