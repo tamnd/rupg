@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.88 (2026-10-26)
+
 ### Added
 
 - `SET session_replication_role = replica` works. In that mode only the triggers and the rules of `ENABLE REPLICA` and `ENABLE ALWAYS` fire, and the foreign keys are not checked (#762).
