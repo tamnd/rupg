@@ -30,6 +30,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Fixed
 
 - A function in PL/pgSQL in the expression or the predicate of a unique index can read and change the tables. Before, such a function made all the sessions wait with no end, as the write held the lock of the rows while the function waited for the same lock. The expressions of an index now run before the write takes the lock, and each index keeps the keys of its rows. An exception block in such a function no longer rolls back the rows that `CREATE INDEX` or the write wrote before the function ran (#685).
+- A recursive query of `WITH` in the recursive term of another recursive query with `LIMIT` stops after the rows that the step needs, as `RecursiveUnion` stops to read the step. Before, the inner query with no end used all the memory, and the server stopped (#688).
 - The `xmin` of `pg_current_snapshot` and `txid_current_snapshot` is the transaction of the session when it is the oldest transaction in progress, as `GetSnapshotData` gives it. Before, the session did not use its own transaction for `xmin` (#680).
 
 ## 0.1.78 (2026-10-25)

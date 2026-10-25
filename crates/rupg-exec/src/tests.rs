@@ -211,6 +211,12 @@ fn recursive_limit() {
         assert_eq!(one(&format!("SELECT count(*) FROM ({with} SELECT * FROM t LIMIT 10) s")), "10");
         let query = format!("SELECT sum(n) FROM ({with} SELECT n FROM t OFFSET 5 LIMIT 5) s");
         assert_eq!(one(&query), "40");
+        // A recursive query with no end in the recursive term stops after the rows that the step needs.
+        let inner = "WITH RECURSIVE x(n) AS (VALUES (1) UNION ALL (SELECT n FROM q UNION ALL SELECT n + 10 FROM x)) SELECT n FROM x";
+        let query = format!(
+            "WITH RECURSIVE q(n) AS (VALUES (1) UNION ALL ({inner})) SELECT sum(n) FROM (SELECT * FROM q LIMIT 30) s"
+        );
+        assert_eq!(one(&query), "590");
     });
 }
 

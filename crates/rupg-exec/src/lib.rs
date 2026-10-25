@@ -527,6 +527,13 @@ fn recursive_rows(
             let Some(sub) = &query.relations[i].subquery else {
                 return Err(Error::internal("a SELECT of a set operation with no query"));
             };
+            // `RecursiveUnion` stops to read the step when it has enough rows. With `UNION ALL` and one `SELECT` in the recursive term, the step only needs the rows that are not there yet, and a recursive query in the step stops after them.
+            if op.all
+                && let SetTree::Leaf(_) = op.right
+                && let Some(want) = want
+            {
+                run.cache.want.set(Some(want - rows.len()));
+            }
             run_query(sub, run.params, run.session, run.cache, &frames, false)
         };
         let next = part_rows(&op.right, &mut leaf, run.session);
@@ -1073,8 +1080,13 @@ fn run_query(
         && agg::calls(query).is_empty();
     let open = !degenerate && gate(query, &mut eval)?;
     let mut tables = if open {
-        let want = count.filter(|_| reads_all(query)).map(|count| count.saturating_add(offset));
-        with_subqueries(query, &base, params, session, cache, outer, want)?
+        // The rows that the caller reads limit the rows of the query, as the `LIMIT` of the query does.
+        let limit = match (count, want) {
+            (Some(count), Some(want)) => Some(count.min(want)),
+            (count, want) => count.or(want),
+        };
+        let limit = limit.filter(|_| reads_all(query)).map(|limit| limit.saturating_add(offset));
+        with_subqueries(query, &base, params, session, cache, outer, limit)?
     } else {
         Rc::clone(&base)
     };
