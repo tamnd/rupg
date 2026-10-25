@@ -7,6 +7,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Added
 
 - `ALTER TABLE ... ADD COLUMN` gives each view that reads the table a new text, as `pg_get_viewdef` writes it. The deparse gives a new column a name that the other columns of the relation do not have, such as `tt3 tt3(ax, b, c, c_1, e)`, so that a join with `USING` or `NATURAL` keeps its columns. The deparse of a join also counts only the columns of a table that are not dropped (#709).
+- `pg_blocking_pids`, `pg_safe_snapshot_blocking_pids` and `pg_isolation_test_session_is_blocked` run. A session is blocked by each session that holds or waits before it for a lock that conflicts, by the session of the transaction that it waits for, and by the session that holds the lock of the catalog of its database. A session that waits for the lock of the catalog now shows the wait event `Lock`, `object`. Thus isolationtester of PostgreSQL can run its tests on rupg (#695).
 
 ## 0.1.82 (2026-10-25)
 
@@ -24,6 +25,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - `ALTER TABLE ... ADD CONSTRAINT ... PRIMARY KEY USING INDEX` and `UNIQUE USING INDEX` make the constraint on an existing unique index, as `transformIndexConstraint` and `ATExecAddIndexConstraint` do. A constraint name that differs from the index name renames the index with a notice. A primary key adds the not-null constraints of its columns. The index must be a valid unique btree index of the table with no constraint, no expression, no predicate and the default sorting behavior, else the error of PostgreSQL. The `conkey` of a primary key or a unique constraint now has only the key columns and not the `INCLUDE` columns. `CREATE TABLE` with `USING INDEX` gives `0A000` (#700).
 - `UPDATE` and `DELETE` take `WHERE CURRENT OF`. The cursor can be a plain scan of one table, or a query with `FOR UPDATE` or `FOR SHARE`. A cursor variable of a function in PL/pgSQL also works. The errors for a cursor that is not on a row, that is held from a previous transaction or that is not a simple scan of the table are the same as in PostgreSQL (#701).
 - `COPY (query) TO` takes an `INSERT`, `UPDATE`, `DELETE` or `MERGE` with `RETURNING`, as `BeginCopyTo` does. The rows of `RETURNING` are the output, and the triggers of the statement fire. A rule on the table gives the errors of PostgreSQL for `DO INSTEAD NOTHING`, `DO ALSO`, conditional and multi-statement rules. A statement without `RETURNING` gives `COPY query must have a RETURNING clause`. A rule action can now be `INSERT ... DEFAULT VALUES` with a condition or with `OLD` (#702).
+
+### Fixed
+
+- A recursive query of `WITH` in the recursive term of another recursive query with `LIMIT` stops after the rows that the step needs, as `RecursiveUnion` stops to read the step. Before, the inner query with no end used all the memory, and the server stopped (#688).
 
 ## 0.1.80 (2026-10-25)
 
@@ -51,7 +56,6 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Fixed
 
 - A function in PL/pgSQL in the expression or the predicate of a unique index can read and change the tables. Before, such a function made all the sessions wait with no end, as the write held the lock of the rows while the function waited for the same lock. The expressions of an index now run before the write takes the lock, and each index keeps the keys of its rows. An exception block in such a function no longer rolls back the rows that `CREATE INDEX` or the write wrote before the function ran (#685).
-- A recursive query of `WITH` in the recursive term of another recursive query with `LIMIT` stops after the rows that the step needs, as `RecursiveUnion` stops to read the step. Before, the inner query with no end used all the memory, and the server stopped (#688).
 - The `xmin` of `pg_current_snapshot` and `txid_current_snapshot` is the transaction of the session when it is the oldest transaction in progress, as `GetSnapshotData` gives it. Before, the session did not use its own transaction for `xmin` (#680).
 
 ## 0.1.78 (2026-10-25)

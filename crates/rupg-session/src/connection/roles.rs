@@ -367,7 +367,7 @@ impl Connection {
         notices: &mut Vec<Notice>,
     ) -> Result<Done, Error> {
         if self.lease.get_mut().is_none() {
-            *self.lease.get_mut() = Some(self.store.lease(self.database_oid, &self.cancel)?);
+            *self.lease.get_mut() = Some(self.lease_catalog()?);
         }
         let mut work = Roles::clone(&self.roles());
         let tag = match node {

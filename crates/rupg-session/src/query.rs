@@ -958,6 +958,18 @@ impl rupg_func::Session for Reader<'_> {
         }
     }
 
+    fn blocking_pids(&self, pid: i32) -> Vec<i32> {
+        let Some((_, store)) = self.activity else { return Vec::new() };
+        let mut pids = store.locks().blockers(pid);
+        let lease = store.lease_blocker(pid);
+        for holder in store.heap().blockers(pid).into_iter().chain(lease) {
+            if !pids.contains(&holder) {
+                pids.push(holder);
+            }
+        }
+        pids
+    }
+
     fn clear_backends(&self) {
         if let Some((activity, _)) = self.activity {
             activity.clear();

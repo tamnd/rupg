@@ -423,6 +423,11 @@ pub trait Session {
     fn backends(&self) -> Arc<[Backend]> {
         Arc::from(Vec::new())
     }
+    /// `BackendPidGetProc` and `GetBlockerStatusData`: the process IDs of the sessions that hold or wait for a lock that the session `pid` waits for, or for whose transaction it waits. A session with no server has no waits.
+    fn blocking_pids(&self, pid: i32) -> Vec<i32> {
+        let _ = pid;
+        Vec::new()
+    }
     /// `pgstat_clear_snapshot`: drops the snapshot of the table of the sessions and of the statistics.
     fn clear_backends(&self) {}
     /// `pgstat_count_heap_scan`: counts a sequential scan of a relation in the counts of the transaction. A session with no server keeps no counts.
