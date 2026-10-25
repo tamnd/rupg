@@ -468,9 +468,9 @@ impl Connection {
                 return Err(Error::internal("an action of a foreign key with no statement"));
             };
             let types = foreign.types.iter().cycle().take(params.len()).copied().collect();
-            let planned = query::plan(node, &reader, &Params { types, variable: false })?;
+            let planned = query::plan_internal(node, &reader, &Params { types, variable: false })?;
             // The action runs as the owner of the table, as the queries of `ri_triggers.c` do.
-            *plan = Some(planned.fold(None, &reader)?.unchecked());
+            *plan = Some(planned.fold(None, &reader)?);
         }
         let Some(plan) = plan.as_ref() else {
             return Err(Error::internal("an action of a foreign key with no plan"));

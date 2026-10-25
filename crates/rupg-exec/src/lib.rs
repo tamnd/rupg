@@ -31,6 +31,8 @@ pub struct Plan {
     marks: Vec<u32>,
     /// The query that a run of the plan runs, from [`Plan::fold`]: the query with the simple subqueries and views of `FROM` merged into it, as [`rupg_opt::merge_from`] merges them, or `None` when the run runs [`Plan::query`]. `EXPLAIN` shows [`Plan::query`].
     run: Option<Box<Query>>,
+    /// `row_security_user_id`: the current user when a table of the query has row security, whose policies the plan has for that role.
+    row_security: Option<u32>,
 }
 
 /// The query of a `SELECT` with the simple subqueries and views of `FROM` merged into it, as `pull_up_simple_subquery` merges them, or `None` when no subquery merges. A view with `security_barrier` stays a subquery.
@@ -42,10 +44,7 @@ fn merged(query: &Query, session: &dyn Session) -> Option<Box<Query>> {
         return None;
     }
     let barrier = |view: u32| {
-        session
-            .catalog()
-            .and_then(|c| c.relation(view))
-            .is_some_and(|r| rupg_analyze::option_on(&r.options, "security_barrier"))
+        session.catalog().and_then(|c| c.relation(view)).is_some_and(rupg_analyze::security_barrier)
     };
     let mut run = query.clone();
     rupg_opt::merge_from(&mut run, &barrier);
@@ -332,6 +331,7 @@ const MIXED_KEYS: &str =
 ///
 /// `0A000` for a function or a type that the engine does not have yet.
 pub fn prepare(mut query: Query, session: &dyn Session) -> Result<Plan> {
+    let row_security = rupg_func::apply_row_security(&mut query, session)?;
     if let Some(catalog) = session.catalog() {
         rupg_analyze::expand_virtual(&mut query, catalog)?;
     }
@@ -349,7 +349,7 @@ pub fn prepare(mut query: Query, session: &dyn Session) -> Result<Plan> {
         check_query(&cte.query, false)?;
         check_write(&cte.query)?;
     }
-    Ok(Plan { query, written: Arc::default(), marks: Vec::new(), run: None })
+    Ok(Plan { query, written: Arc::default(), marks: Vec::new(), run: None, row_security })
 }
 
 /// Puts in [`rupg_analyze::Write::modified`] the columns of the table of the write that the privileges `perms` of the statement give values, as `ExecGetInsertedCols` and `ExecGetUpdatedCols` read them from the entry of the result relation.
@@ -1444,6 +1444,7 @@ impl Plan {
                     written: Arc::clone(&self.written),
                     marks: Vec::new(),
                     run: None,
+                    row_security: self.row_security,
                 };
                 (plan, read.contains(&n))
             })
@@ -1492,7 +1493,13 @@ impl Plan {
             *cte.query = fold::query(&cte.query, params, session)?;
         }
         let run = merged(&query, session);
-        Ok(Plan { query, written: Arc::clone(&self.written), marks: self.marks.clone(), run })
+        Ok(Plan {
+            query,
+            written: Arc::clone(&self.written),
+            marks: self.marks.clone(),
+            run,
+            row_security: self.row_security,
+        })
     }
 
     /// The query that a run of the plan runs.
@@ -1518,6 +1525,9 @@ impl Plan {
                 SqlState::READ_ONLY_SQL_TRANSACTION,
                 format!("cannot execute {name} in a read-only transaction"),
             ));
+        }
+        if self.row_security.is_some_and(|user| user != rupg_func::current_user_oid(session)) {
+            return Err(not_yet("a plan of a query on a table with row security for another role"));
         }
         rupg_func::check_permissions(&self.query.perms, session)?;
         rupg_func::check_execute(&self.query.funcs, session)?;

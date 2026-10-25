@@ -97,7 +97,7 @@ pub fn policy_tree(env: &dyn Env, oid: u32, check: bool) -> Result<Option<(Query
 }
 
 impl Analyzer<'_> {
-    /// `transformWhereClause` with `EXPR_KIND_POLICY` for an expression of a policy on the table `oid` with the name `name`. The result is the range table of the expression and the expression.
+    /// `transformWhereClause` with `EXPR_KIND_POLICY` for an expression of a policy on the table `oid` with the name `name`. The result is the range table of the expression, with the privileges and the functions of its subqueries, and the expression.
     pub(crate) fn policy_expr(
         &mut self,
         node: &Node,
@@ -107,8 +107,12 @@ impl Analyzer<'_> {
         self.policy_scope(oid, name)?;
         let expr = self.with_kind(Kind::Policy, |a| a.transform(Some(node)))?;
         let expr = self.coerce_to_boolean(expr, "POLICY")?;
-        let base =
-            Query { relations: std::mem::take(&mut self.scope.relations), ..Query::default() };
+        let base = Query {
+            relations: std::mem::take(&mut self.scope.relations),
+            perms: std::mem::take(&mut self.perms),
+            funcs: std::mem::take(&mut self.funcs),
+            ..Query::default()
+        };
         Ok((base, expr))
     }
 }

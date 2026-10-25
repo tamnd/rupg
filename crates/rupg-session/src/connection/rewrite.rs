@@ -250,9 +250,10 @@ impl Connection {
         if now.kind == RelKind::MatView {
             self.filling.set(rel.oid);
         }
-        let plan = query::plan(&node, &reader, &params).and_then(|plan| plan.fold(None, &reader));
+        let plan =
+            query::plan_internal(&node, &reader, &params).and_then(|plan| plan.fold(None, &reader));
         self.filling.set(0);
-        let plan = plan?.unchecked();
+        let plan = plan?;
         let Some(info) = plan.write() else {
             return Err(Error::internal("the rewrite of a table with no plan of its rows"));
         };
