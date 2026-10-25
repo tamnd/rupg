@@ -681,13 +681,6 @@ impl Analyzer<'_> {
                     && self.user_triggers(oid, INSTEAD_ROW | trigger_event(kind)) => {}
             // The rows of a statement for the rules of a view need no write of the view.
             RelKind::View if self.rule.rows => {}
-            RelKind::View
-                if kind == WriteKind::Merge
-                    && !self.merge_does_nothing()
-                    && self.view_has_instead_trigger(oid, kind) =>
-            {
-                return Err(not_yet("MERGE into a view with INSTEAD OF triggers"));
-            }
             // `rewriteTargetView` writes the base relation of the view.
             RelKind::View => {}
             RelKind::Partitioned => {}

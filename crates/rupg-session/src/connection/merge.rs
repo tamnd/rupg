@@ -190,6 +190,37 @@ impl Connection {
         Ok(Merged { count: done.len() as u64, written, batches, view })
     }
 
+    /// `ExecMerge` for a view with triggers `INSTEAD OF` for all the actions of the clauses: the triggers of the action of each row of the join do the action, as `ExecMergeMatched` and `ExecMergeNotMatched` call `ExecIRInsertTriggers`, `ExecIRUpdateTriggers` and `ExecIRDeleteTriggers`. A trigger that gives a null row skips the action, and the row that the trigger of an insert or of an update gives is the new row of `RETURNING`.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the clauses and of the triggers.
+    pub(super) fn merge_instead(
+        &self,
+        plan: &Plan,
+        info: &Write,
+        (merge, fire): (&Merge, &MergeTriggers),
+        params: &[Value],
+        view: &View,
+        rows: Vec<Vec<Value>>,
+    ) -> Result<Merged, Error> {
+        let actions = self.merge_actions(plan, info, (merge, fire), params, view, rows)?;
+        let mut done = Vec::with_capacity(actions.len());
+        for mut action in actions {
+            let Some(triggers) = fire.of(action.command) else { continue };
+            let old = (action.command != MergeCommand::Insert).then(|| action.old.clone());
+            let Some(new) = self.instead_row(triggers, old, action.new.take())? else { continue };
+            action.new = new;
+            done.push(action);
+        }
+        self.after_merge(info, fire, &done)?;
+        let mut written = Vec::new();
+        if info.returning.is_some() {
+            written = done.iter().map(|action| returned(action, info.width, None)).collect();
+        }
+        Ok(Merged { count: done.len() as u64, written, batches: Vec::new(), view: view.clone() })
+    }
+
     /// The action of each row of the join: the first clause of the kind of the row whose condition is true. Each row of the join has the columns of the target table, the ID of the version of the row of the target table, the marker of the source row and the carried values. The triggers `BEFORE ... FOR EACH ROW` of the action fire for the row, as `ExecMergeMatched` and `ExecMergeNotMatched` fire them, and a trigger that gives a null row skips the action.
     fn merge_actions(
         &self,
@@ -237,7 +268,11 @@ impl Connection {
                 old.truncate(width);
                 let tid = tid.unwrap_or_default();
                 let Some(triggers) = fire.of(clause.command) else { break };
-                if clause.command != MergeCommand::Insert && seen.contains(&(leaf, tid)) {
+                // The rows of a view have no ID of their versions, so the triggers `INSTEAD OF` can see a row twice.
+                if clause.command != MergeCommand::Insert
+                    && !info.instead
+                    && seen.contains(&(leaf, tid))
+                {
                     return Err(Error::new(
                         SqlState::CARDINALITY_VIOLATION,
                         "MERGE command cannot affect row a second time",

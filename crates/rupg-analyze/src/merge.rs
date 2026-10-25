@@ -220,12 +220,14 @@ impl Analyzer<'_> {
                 not_null: false,
             })
             .collect();
-        let target = self
+        let mut target = self
             .scope
             .relations
             .first()
             .cloned()
             .ok_or_else(|| Error::internal("a MERGE with no table"))?;
+        // The query of a clause reads the row of the join, and not the query of a view.
+        target.subquery = None;
         let mut merge_clauses = Vec::with_capacity(parts.len());
         for part in parts {
             let writes = matches!(part.command, MergeCommand::Insert | MergeCommand::Update);
@@ -292,12 +294,29 @@ impl Analyzer<'_> {
                 join(JoinKind::Inner, FromItem::Relation(0), FromItem::Relation(index), Some(quals))
             }
         };
+        // `view_has_instead_trigger`: the triggers `INSTEAD OF` of a view do the actions, and the rows of the view have no ID of their versions. A column of a join with one row tells a row of the view from a source row with no match.
+        let instead = self.is_view(table);
+        let mut tid = tid_target();
+        let target_item = if instead {
+            let index = self.scope.relations.len();
+            let column =
+                Column { name: "ctid".to_string(), ty: oid::INT8, typmod: -1, not_null: false };
+            let value = Expr::new(ExprKind::Const(Value::Int8(0)), oid::INT8);
+            let mut relation = Relation::new(0, vec![column], None, None, Some(vec![vec![value]]));
+            relation.name = "*VALUES*".to_string();
+            self.scope.relations.push(relation);
+            let var = Var { relation: index, attnum: 1, levels_up: 0 };
+            tid.expr = Expr::new(ExprKind::Var(var), oid::INT8);
+            join(JoinKind::Inner, target_item, FromItem::Relation(index), None)
+        } else {
+            target_item
+        };
         let from = join(kind, source, target_item, Some(on));
         let mut query_targets = old_row(&columns);
         if partitioned {
             query_targets.push(table_oid_target());
         }
-        query_targets.push(tid_target());
+        query_targets.push(tid);
         query_targets.push(Target {
             name: String::new(),
             expr: Expr::new(marker, oid::BOOL),
@@ -348,7 +367,7 @@ impl Analyzer<'_> {
                 }),
                 recheck,
                 updated: crate::modify::with_extra_updated(updated, &generated),
-                instead: false,
+                instead,
                 inherit,
                 view_check: None,
             }),

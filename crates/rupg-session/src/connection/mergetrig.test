@@ -1,0 +1,182 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE mt_base (a int PRIMARY KEY, b text);
+CREATE TABLE
+> INSERT INTO mt_base VALUES (1, 'one'), (2, 'two'), (3, 'three');
+INSERT 0 3
+> CREATE VIEW mt_v AS SELECT a, b, a * 10 AS c FROM mt_base;
+CREATE VIEW
+> CREATE TABLE mt_log (seq serial, op text, old_row text, new_row text);
+CREATE TABLE
+> CREATE FUNCTION mt_instead() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   INSERT INTO mt_log (op, old_row, new_row) VALUES (TG_OP, OLD::text, NEW::text);
+>>   IF TG_OP = 'INSERT' THEN
+>>     IF NEW.a = 99 THEN RETURN NULL; END IF;
+>>     INSERT INTO mt_base VALUES (NEW.a, NEW.b);
+>>     NEW.b := NEW.b || ' (ins)';
+>>     RETURN NEW;
+>>   ELSIF TG_OP = 'UPDATE' THEN
+>>     UPDATE mt_base SET a = NEW.a, b = NEW.b WHERE a = OLD.a;
+>>     NEW.b := NEW.b || ' (upd)';
+>>     RETURN NEW;
+>>   ELSE
+>>     DELETE FROM mt_base WHERE a = OLD.a;
+>>     RETURN OLD;
+>>   END IF;
+>> END $$;
+CREATE FUNCTION
+> CREATE FUNCTION mt_stmt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE NOTICE '% % statement on %', TG_WHEN, TG_OP, TG_TABLE_NAME; RETURN NULL; END $$;
+CREATE FUNCTION
+> CREATE TRIGGER mt_ins INSTEAD OF INSERT ON mt_v FOR EACH ROW EXECUTE FUNCTION mt_instead();
+CREATE TRIGGER
+> CREATE TRIGGER mt_upd INSTEAD OF UPDATE ON mt_v FOR EACH ROW EXECUTE FUNCTION mt_instead();
+CREATE TRIGGER
+> CREATE TRIGGER mt_del INSTEAD OF DELETE ON mt_v FOR EACH ROW EXECUTE FUNCTION mt_instead();
+CREATE TRIGGER
+> CREATE TRIGGER mt_bs BEFORE INSERT OR UPDATE OR DELETE ON mt_v FOR EACH STATEMENT EXECUTE FUNCTION mt_stmt();
+CREATE TRIGGER
+> CREATE TRIGGER mt_as AFTER INSERT OR UPDATE OR DELETE ON mt_v FOR EACH STATEMENT EXECUTE FUNCTION mt_stmt();
+CREATE TRIGGER
+> MERGE INTO mt_v t USING (VALUES (1, 'uno'), (4, 'four')) AS s(a, b) ON t.a = s.a WHEN MATCHED THEN UPDATE SET b = s.b WHEN NOT MATCHED THEN INSERT VALUES (s.a, s.b);
+NOTICE 00000 BEFORE INSERT statement on mt_v (PL/pgSQL function mt_stmt() line 1 at RAISE)
+NOTICE 00000 BEFORE UPDATE statement on mt_v (PL/pgSQL function mt_stmt() line 1 at RAISE)
+NOTICE 00000 AFTER UPDATE statement on mt_v (PL/pgSQL function mt_stmt() line 1 at RAISE)
+NOTICE 00000 AFTER INSERT statement on mt_v (PL/pgSQL function mt_stmt() line 1 at RAISE)
+MERGE 2
+> SELECT * FROM mt_base ORDER BY a;
+fields a@mt_base.1:23:4:-1,b@mt_base.2:25:-1:-1
+row 1,uno
+row 2,two
+row 3,three
+row 4,four
+SELECT 4
+> SELECT op, old_row, new_row FROM mt_log ORDER BY seq;
+fields op@mt_log.2:25:-1:-1,old_row@mt_log.3:25:-1:-1,new_row@mt_log.4:25:-1:-1
+row UPDATE,(1,one,10),(1,uno,10)
+row INSERT,NULL,(4,four,)
+SELECT 2
+> TRUNCATE mt_log;
+TRUNCATE TABLE
+> MERGE INTO mt_v t USING (VALUES (2), (5), (99)) AS s(a) ON t.a = s.a WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT (a, b) VALUES (s.a, 'new ' || s.a) RETURNING merge_action(), s.a, t.*, old.a AS old_a, new.b AS new_b;
+NOTICE 00000 BEFORE INSERT statement on mt_v (PL/pgSQL function mt_stmt() line 1 at RAISE)
+NOTICE 00000 BEFORE DELETE statement on mt_v (PL/pgSQL function mt_stmt() line 1 at RAISE)
+NOTICE 00000 AFTER DELETE statement on mt_v (PL/pgSQL function mt_stmt() line 1 at RAISE)
+NOTICE 00000 AFTER INSERT statement on mt_v (PL/pgSQL function mt_stmt() line 1 at RAISE)
+fields merge_action:25:-1:-1,a:23:4:-1,a@mt_v.1:23:4:-1,b@mt_v.2:25:-1:-1,c@mt_v.3:23:4:-1,old_a@mt_v.1:23:4:-1,new_b@mt_v.2:25:-1:-1
+row DELETE,2,2,two,20,2,NULL
+row INSERT,5,5,new 5 (ins),NULL,NULL,new 5 (ins)
+MERGE 2
+> SELECT * FROM mt_base ORDER BY a;
+fields a@mt_base.1:23:4:-1,b@mt_base.2:25:-1:-1
+row 1,uno
+row 3,three
+row 4,four
+row 5,new 5
+SELECT 4
+> SELECT op, old_row, new_row FROM mt_log ORDER BY seq;
+fields op@mt_log.2:25:-1:-1,old_row@mt_log.3:25:-1:-1,new_row@mt_log.4:25:-1:-1
+row DELETE,(2,two,20),NULL
+row INSERT,NULL,(5,"new 5",)
+row INSERT,NULL,(99,"new 99",)
+SELECT 3
+> TRUNCATE mt_log;
+TRUNCATE TABLE
+> MERGE INTO mt_v t USING (VALUES (3, 'x'), (3, 'y')) AS s(a, b) ON t.a = s.a WHEN MATCHED THEN UPDATE SET b = s.b;
+NOTICE 00000 BEFORE UPDATE statement on mt_v (PL/pgSQL function mt_stmt() line 1 at RAISE)
+NOTICE 00000 AFTER UPDATE statement on mt_v (PL/pgSQL function mt_stmt() line 1 at RAISE)
+MERGE 2
+> SELECT * FROM mt_base ORDER BY a;
+fields a@mt_base.1:23:4:-1,b@mt_base.2:25:-1:-1
+row 1,uno
+row 3,y
+row 4,four
+row 5,new 5
+SELECT 4
+> SELECT op, old_row, new_row FROM mt_log ORDER BY seq;
+fields op@mt_log.2:25:-1:-1,old_row@mt_log.3:25:-1:-1,new_row@mt_log.4:25:-1:-1
+row UPDATE,(3,three,30),(3,x,30)
+row UPDATE,(3,three,30),(3,y,30)
+SELECT 2
+> TRUNCATE mt_log;
+TRUNCATE TABLE
+> WITH m AS (MERGE INTO mt_v t USING (VALUES (1)) AS s(a) ON t.a = s.a WHEN MATCHED AND t.c > 5 THEN UPDATE SET a = t.a + 100, b = 'moved' WHEN NOT MATCHED BY SOURCE THEN DELETE RETURNING merge_action() AS action, old.a AS old_a, old.b AS old_b, new.a AS new_a, new.b AS new_b) SELECT * FROM m ORDER BY old_a;
+NOTICE 00000 BEFORE UPDATE statement on mt_v (PL/pgSQL function mt_stmt() line 1 at RAISE)
+NOTICE 00000 BEFORE DELETE statement on mt_v (PL/pgSQL function mt_stmt() line 1 at RAISE)
+NOTICE 00000 AFTER DELETE statement on mt_v (PL/pgSQL function mt_stmt() line 1 at RAISE)
+NOTICE 00000 AFTER UPDATE statement on mt_v (PL/pgSQL function mt_stmt() line 1 at RAISE)
+fields action:25:-1:-1,old_a@mt_v.1:23:4:-1,old_b@mt_v.2:25:-1:-1,new_a@mt_v.1:23:4:-1,new_b@mt_v.2:25:-1:-1
+row UPDATE,1,uno,101,moved (upd)
+row DELETE,3,y,NULL,NULL
+row DELETE,4,four,NULL,NULL
+row DELETE,5,new 5,NULL,NULL
+SELECT 4
+> SELECT * FROM mt_base ORDER BY a;
+fields a@mt_base.1:23:4:-1,b@mt_base.2:25:-1:-1
+row 101,moved
+SELECT 1
+> SELECT op, old_row, new_row FROM mt_log ORDER BY old_row;
+fields op@mt_log.2:25:-1:-1,old_row@mt_log.3:25:-1:-1,new_row@mt_log.4:25:-1:-1
+row UPDATE,(1,uno,10),(101,moved,10)
+row DELETE,(3,y,30),NULL
+row DELETE,(4,four,40),NULL
+row DELETE,(5,"new 5",50),NULL
+SELECT 4
+> TRUNCATE mt_log;
+TRUNCATE TABLE
+> MERGE INTO mt_v t USING (VALUES (7)) AS s(a) ON t.a = s.a WHEN MATCHED THEN DO NOTHING WHEN NOT MATCHED THEN INSERT (a) VALUES (s.a);
+NOTICE 00000 BEFORE INSERT statement on mt_v (PL/pgSQL function mt_stmt() line 1 at RAISE)
+NOTICE 00000 AFTER INSERT statement on mt_v (PL/pgSQL function mt_stmt() line 1 at RAISE)
+MERGE 1
+> SELECT * FROM mt_base ORDER BY a;
+fields a@mt_base.1:23:4:-1,b@mt_base.2:25:-1:-1
+row 7,NULL
+row 101,moved
+SELECT 2
+> MERGE INTO mt_v t USING (VALUES (7)) AS s(a) ON t.a = s.a WHEN MATCHED THEN UPDATE SET c = 1;
+NOTICE 00000 BEFORE UPDATE statement on mt_v (PL/pgSQL function mt_stmt() line 1 at RAISE)
+NOTICE 00000 AFTER UPDATE statement on mt_v (PL/pgSQL function mt_stmt() line 1 at RAISE)
+MERGE 1
+> MERGE INTO mt_v t USING mt_base s ON t.a = s.a WHEN MATCHED AND s.a > 100 THEN DELETE;
+NOTICE 00000 BEFORE DELETE statement on mt_v (PL/pgSQL function mt_stmt() line 1 at RAISE)
+NOTICE 00000 AFTER DELETE statement on mt_v (PL/pgSQL function mt_stmt() line 1 at RAISE)
+MERGE 1
+> SELECT * FROM mt_base ORDER BY a;
+fields a@mt_base.1:23:4:-1,b@mt_base.2:25:-1:-1
+row 7,NULL
+SELECT 1
+> SELECT op, old_row, new_row FROM mt_log ORDER BY seq;
+fields op@mt_log.2:25:-1:-1,old_row@mt_log.3:25:-1:-1,new_row@mt_log.4:25:-1:-1
+row INSERT,NULL,(7,,)
+row UPDATE,(7,,70),(7,,1)
+row DELETE,(101,moved,1010),NULL
+SELECT 3
+> CREATE VIEW mt_ro AS SELECT DISTINCT a, b FROM mt_base;
+CREATE VIEW
+> CREATE TRIGGER mt_ro_upd INSTEAD OF UPDATE ON mt_ro FOR EACH ROW EXECUTE FUNCTION mt_instead();
+CREATE TRIGGER
+> MERGE INTO mt_ro t USING (VALUES (7)) AS s(a) ON t.a = s.a WHEN MATCHED THEN UPDATE SET b = 'seven';
+MERGE 1
+> SELECT * FROM mt_base ORDER BY a;
+fields a@mt_base.1:23:4:-1,b@mt_base.2:25:-1:-1
+row 7,seven
+SELECT 1
+> BEGIN;
+BEGIN
+> WITH m AS (MERGE INTO mt_v t USING (VALUES (7, 'cte')) AS s(a, b) ON t.a = s.a WHEN MATCHED THEN UPDATE SET b = s.b RETURNING t.a, new.b) SELECT * FROM m;
+NOTICE 00000 BEFORE UPDATE statement on mt_v (PL/pgSQL function mt_stmt() line 1 at RAISE)
+NOTICE 00000 AFTER UPDATE statement on mt_v (PL/pgSQL function mt_stmt() line 1 at RAISE)
+fields a@mt_v.1:23:4:-1,b@mt_v.2:25:-1:-1
+row 7,cte (upd)
+SELECT 1
+> ROLLBACK;
+ROLLBACK
+> DROP VIEW mt_ro;
+DROP VIEW
+> DROP VIEW mt_v;
+DROP VIEW
+> DROP TABLE mt_base, mt_log;
+DROP TABLE
+> DROP FUNCTION mt_instead, mt_stmt;
+DROP FUNCTION
