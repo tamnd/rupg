@@ -477,26 +477,14 @@ impl Connection {
         triggers: &Triggers,
         rows: Vec<Vec<Value>>,
     ) -> Result<(u64, Vec<Vec<Value>>), Error> {
-        let instead: Vec<&Armed> =
-            triggers.list.iter().filter(|t| t.trigger.kind & INSTEAD_ROW == INSTEAD_ROW).collect();
         let all = self.table_width(info);
         let returning = info.returning.is_some();
         let (mut count, mut written) = (0, Vec::new());
-        'rows: for mut row in rows {
+        for mut row in rows {
             let old = (info.kind != WriteKind::Insert)
                 .then(|| row.split_off(row.len().saturating_sub(all)));
-            let mut new = (info.kind != WriteKind::Delete).then(|| row[..info.width].to_vec());
-            for armed in &instead {
-                let rows = (old.clone(), new.clone());
-                let Some(returned) =
-                    self.call_trigger(&armed.trigger, triggers.event, rows, None)?
-                else {
-                    continue 'rows;
-                };
-                if new.is_some() {
-                    new = Some(returned);
-                }
-            }
+            let new = (info.kind != WriteKind::Delete).then(|| row[..info.width].to_vec());
+            let Some(new) = self.instead_row(triggers, old, new)? else { continue };
             count += 1;
             if returning {
                 match new {
@@ -509,6 +497,31 @@ impl Connection {
             }
         }
         Ok((count, written))
+    }
+
+    /// The triggers `INSTEAD OF ... FOR EACH ROW` of a view for one row, with the old row of an `UPDATE` or a `DELETE` and the new row of an `INSERT` or an `UPDATE`. It gives `None` when a trigger gives a null row, which skips the row, and else the new row that the last trigger gave.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the triggers.
+    pub(super) fn instead_row(
+        &self,
+        triggers: &Triggers,
+        old: Option<Vec<Value>>,
+        mut new: Option<Vec<Value>>,
+    ) -> Result<Option<Option<Vec<Value>>>, Error> {
+        let instead = triggers.list.iter().filter(|t| t.trigger.kind & INSTEAD_ROW == INSTEAD_ROW);
+        for armed in instead {
+            let rows = (old.clone(), new.clone());
+            let Some(returned) = self.call_trigger(&armed.trigger, triggers.event, rows, None)?
+            else {
+                return Ok(None);
+            };
+            if new.is_some() {
+                new = Some(returned);
+            }
+        }
+        Ok(Some(new))
     }
 
     /// `ExecARInsertTriggers`, `ExecASInsertTriggers` and the other calls of the triggers `AFTER` of a write: the events of the triggers `FOR EACH ROW` for the rows `old` and `new` that the write changed, then the events of the triggers `FOR EACH STATEMENT`, at the end of the queue. A trigger with transition tables reads all the rows of the write in them.

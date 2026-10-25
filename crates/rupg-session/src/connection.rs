@@ -667,6 +667,22 @@ impl Connection {
             return Err(Error::internal("a plan that does not write"));
         };
         let mut triggers = self.write_triggers(info)?;
+        if info.instead && info.kind == WriteKind::Merge {
+            let Some(merge) = info.merge.as_ref() else {
+                return Err(Error::internal("a MERGE with no clauses"));
+            };
+            let fire = self.merge_triggers(info, merge)?;
+            self.before_merge(&fire, info)?;
+            let done = self.merge_instead(plan, info, (merge, &fire), params, view, rows)?;
+            let (count, written) = (done.count, done.written);
+            return Ok(Applied {
+                tag: CommandTag::Merge,
+                count,
+                written,
+                view: view.clone(),
+                batches: Vec::new(),
+            });
+        }
         if info.instead {
             // The triggers `INSTEAD OF` of a view write the rows, and the triggers `FOR EACH STATEMENT` of the view fire before and after them.
             self.before_statement(&triggers, info)?;
@@ -4340,6 +4356,12 @@ mod tests {
     #[test]
     fn mergeview() {
         big_stack(|| script(include_str!("connection/mergeview.test")));
+    }
+
+    /// `MERGE` into a view with triggers `INSTEAD OF` for all its actions: the triggers of each action with the old and the new rows of the view, a trigger that skips a row, `RETURNING` with the row of a trigger, a row of the view that two source rows match, `NOT MATCHED BY SOURCE`, the triggers `FOR EACH STATEMENT` of the view, a view that is not updatable and `WITH`. `connection/mergetrig.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn mergetrig() {
+        big_stack(|| script(include_str!("connection/mergetrig.test")));
     }
 
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
