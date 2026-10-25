@@ -6,7 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- Subscripts of `point`, `lseg`, `box` and `line` now work as in PostgreSQL. A fetch such as `p[0]` gives the coordinate or the point, and gives null for a subscript out of the value. An assignment such as `UPDATE t SET p[0] = 10` changes one element. A slice gives the same errors as in PostgreSQL (#NNN).
+- Subscripts of `point`, `lseg`, `box` and `line` now work as in PostgreSQL. A fetch such as `p[0]` gives the coordinate or the point, and gives null for a subscript out of the value. An assignment such as `UPDATE t SET p[0] = 10` changes one element. A slice gives the same errors as in PostgreSQL (#693).
 
 ## 0.1.79 (2026-10-25)
 
