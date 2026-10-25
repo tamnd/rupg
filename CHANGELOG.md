@@ -6,7 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- A rule `DO INSTEAD` can have a `RETURNING` list. The `RETURNING` list of the statement then gives its rows from the values of the rule list, and `pg_get_ruledef` shows the list. `CREATE RULE` gives the errors of PostgreSQL for a list that does not match the columns, for a conditional rule and for a rule that is not `INSTEAD` (#NNN).
+- A rule `DO INSTEAD` can have a `RETURNING` list. The `RETURNING` list of the statement then gives its rows from the values of the rule list, and `pg_get_ruledef` shows the list. `CREATE RULE` gives the errors of PostgreSQL for a list that does not match the columns, for a conditional rule and for a rule that is not `INSTEAD` (#748).
 - `ALTER RULE ... RENAME TO`, and `ALTER TABLE ... ENABLE RULE` and `DISABLE RULE` (#747).
 - `old.*` and `new.*` in `VALUES` of a rule action, and `DEFAULT` in its rows (#746).
 - `pg_get_ruledef` and `pg_get_functiondef` show `UPDATE` and `DELETE`, and a view shows `ONLY` (#745).
