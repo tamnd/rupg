@@ -4766,6 +4766,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vrulesel.test")));
     }
 
+    /// `COMMENT ON RULE` sets and drops the comment of a rule, and `DROP RULE` drops it too. `connection/vcomrule.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vcomrule() {
+        big_stack(|| script(include_str!("connection/vcomrule.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

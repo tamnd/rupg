@@ -471,6 +471,38 @@ impl Definer<'_, '_> {
         }
         self.perform(&objects, stmt.behavior == DropBehavior::DROP_CASCADE)
     }
+    /// `get_object_address_relobject` and `check_object_ownership` for `COMMENT ON RULE`: the rule of the relation with the name.
+    pub(super) fn comment_rule(&mut self, object: Option<&Node>) -> Result<ObjRef> {
+        let names = name_list(object);
+        let Some((&rulename, parent)) = names.split_last().filter(|(_, r)| !r.is_empty()) else {
+            return Err(Error::new(
+                SqlState::SYNTAX_ERROR,
+                "must specify relation and object name",
+            ));
+        };
+        let rv = range_var(parent)?;
+        let Found::User(relation) = self.lookup_relation(&rv)? else {
+            return Err(not_yet("COMMENT ON RULE of a system catalog", None));
+        };
+        let rel = self.catalog.relation(relation);
+        let relation_name = rel.map_or(String::new(), |r| r.name.clone());
+        let owner = rel.map_or(0, |r| r.owner);
+        let rule = match rel.and_then(|r| r.view.as_ref()) {
+            Some(view) if rulename == RETURN => Some(view.rule),
+            _ => self.catalog.rule_by_name(relation, rulename).map(|r| r.oid),
+        };
+        let Some(rule) = rule else {
+            return Err(Error::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!("rule \"{rulename}\" for relation \"{relation_name}\" does not exist"),
+            ));
+        };
+        if !self.is_superuser() && owner != self.user {
+            return Err(not_owner("relation", &relation_name));
+        }
+        Ok(ObjRef::new(PG_REWRITE, rule))
+    }
+
     /// `RenameRewriteRule` with the checks of `RangeVarCallbackForRenameRule`.
     pub(super) fn rename_rule(&mut self, stmt: &RenameStmt, newname: &str) -> Result<()> {
         let rv = stmt.relation.as_deref().cloned().unwrap_or_default();
