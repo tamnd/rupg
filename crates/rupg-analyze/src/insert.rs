@@ -6,8 +6,8 @@ use rupg_catalog::{ConKind, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_sql::nodes::{
-    InsertStmt, List, Node, OnConflictAction, OnConflictClause, OverridingKind, RangeVar,
-    SelectStmt,
+    InsertStmt, List, LockClauseStrength, Node, OnConflictAction, OnConflictClause, OverridingKind,
+    RangeVar, SelectStmt,
 };
 use rupg_types::{Value, oid};
 
@@ -17,7 +17,7 @@ use crate::coerce::{AtOpt, Context};
 use crate::expr::{BoolOp, CastForm, Expr, ExprKind, FieldStore, Func, FuncForm, Var};
 use crate::from::{Column, FromItem, Relation, TABLE_OID_ATTNUM};
 use crate::merge::Merge;
-use crate::modify::{carried_targets, set_columns};
+use crate::modify::{carried_targets, column_var, set_columns};
 use crate::perm::{ACL_DELETE, ACL_INSERT, ACL_SELECT, ACL_UPDATE};
 use crate::select::{Query, Target};
 use crate::typename::place;
@@ -106,10 +106,34 @@ pub struct OnConflict {
     pub all: bool,
     /// The query of `DO UPDATE`, or `None` for `DO NOTHING`. It reads two relations: the row that the table has, with the ID of its version at the end, and `EXCLUDED`, the row that the statement proposed. It gives the new row, then the conditions of the check constraints, then the values that `RETURNING` carries, or no row when the condition of `WHERE` is not true.
     pub update: Option<Box<Query>>,
+    /// The strength of the lock of `DO SELECT`, or `None` for `DO UPDATE` and `DO NOTHING`. [`OnConflict::update`] is then the query of `DO SELECT`, which gives the row that the table has, and the statement writes no row.
+    pub select: Option<LockClauseStrength>,
     /// The number of values that `RETURNING` carries: the columns of the old row. A row that the statement inserts has nulls for them.
     pub carried: usize,
     /// The foreign keys that an update of a row checks, in the order of the names of their triggers.
     pub foreign: Vec<Foreign>,
+}
+
+impl OnConflict {
+    /// True for `DO SELECT` with a lock, such as `FOR UPDATE`.
+    #[must_use]
+    pub fn locks(&self) -> bool {
+        self.select.is_some_and(|strength| strength != LockClauseStrength::LCS_NONE)
+    }
+
+    /// `show_modifytable_info`: what the statement does for a conflict, as `EXPLAIN` shows it. `DO SELECT` shows its lock.
+    #[must_use]
+    pub fn resolution(&self) -> &'static str {
+        match self.select {
+            Some(LockClauseStrength::LCS_NONE) => "SELECT",
+            Some(LockClauseStrength::LCS_FORKEYSHARE) => "SELECT FOR KEY SHARE",
+            Some(LockClauseStrength::LCS_FORSHARE) => "SELECT FOR SHARE",
+            Some(LockClauseStrength::LCS_FORNOKEYUPDATE) => "SELECT FOR NO KEY UPDATE",
+            Some(_) => "SELECT FOR UPDATE",
+            None if self.update.is_some() => "UPDATE",
+            None => "NOTHING",
+        }
+    }
 }
 
 /// What a trigger of a foreign key on the referenced table does for an old key, `confdeltype` and `confupdtype`.
@@ -400,7 +424,12 @@ impl Analyzer<'_> {
             recheck = self.recheck(table, WriteKind::Update, &name, &columns, &checks, &generated);
         }
         let updated = conflict_set.map_or_else(Vec::new, |list| set_columns(list, &columns));
-        if conflict_set.is_some() {
+        // `DO SELECT` with a lock needs `UPDATE` too.
+        let locks = s.onConflictClause.as_deref().is_some_and(|c| {
+            c.action == OnConflictAction::ONCONFLICT_SELECT
+                && c.lockStrength != LockClauseStrength::LCS_NONE
+        });
+        if conflict_set.is_some() || locks {
             self.mark_updated(&updated);
         }
         let updated = crate::modify::with_extra_updated(updated, &generated);
@@ -450,6 +479,16 @@ impl Analyzer<'_> {
         columns: &[Column],
         unique: &[Unique],
     ) -> Result<(Option<OnConflict>, Option<Box<Query>>)> {
+        if let Some(clause) = s.onConflictClause.as_deref()
+            && clause.action == OnConflictAction::ONCONFLICT_SELECT
+            && s.returningClause.is_none()
+        {
+            return Err(Error::new(
+                SqlState::SYNTAX_ERROR,
+                "ON CONFLICT DO SELECT requires a RETURNING clause",
+            )
+            .at_opt(place(clause.location)));
+        }
         self.target_from(rv, &[])?;
         let (mut on_conflict, inference) = match s.onConflictClause.as_deref() {
             None => (None, Inference::All),
@@ -459,7 +498,7 @@ impl Analyzer<'_> {
                 (Some(on_conflict), inference)
             }
         };
-        // With `DO UPDATE`, the old row of `RETURNING` is the row that the statement updates, as for an `UPDATE`.
+        // With `DO UPDATE`, the old row of `RETURNING` is the row that the statement updates, as for an `UPDATE`. With `DO SELECT`, the old and the new rows are the row that the table has.
         let update = on_conflict.as_ref().is_some_and(|c| c.update.is_some());
         let kind = if update { WriteKind::Update } else { WriteKind::Insert };
         let (returning, carried) = match s.returningClause.as_deref() {
@@ -483,9 +522,11 @@ impl Analyzer<'_> {
                 .collect();
             conflict.carried = carried.len();
             query.targets.extend(carried_targets(carried));
-            // The leaf partition checks the new row of a partitioned table.
-            let checks = if self.is_partitioned(table) { Vec::new() } else { self.checks(table)? };
-            let generated = self.generated_columns(table)?;
+            // The leaf partition checks the new row of a partitioned table, and `DO SELECT` writes no row.
+            let write = conflict.select.is_none() && !self.is_partitioned(table);
+            let checks = if write { self.checks(table)? } else { Vec::new() };
+            let generated =
+                if conflict.select.is_none() { self.generated_columns(table)? } else { Vec::new() };
             if !checks.is_empty() || !generated.is_empty() {
                 query = Box::new(with_checks(name, columns, *query, checks, &generated, &tail));
             }
@@ -508,19 +549,36 @@ impl Analyzer<'_> {
         name: &str,
         columns: &[Column],
     ) -> Result<(OnConflict, Inference)> {
-        let update = match clause.action {
-            OnConflictAction::ONCONFLICT_NOTHING => false,
-            OnConflictAction::ONCONFLICT_UPDATE => true,
-            _ => return Err(not_yet("ON CONFLICT DO SELECT")),
+        let (update, select) = match clause.action {
+            OnConflictAction::ONCONFLICT_NOTHING => (false, None),
+            OnConflictAction::ONCONFLICT_UPDATE => (true, None),
+            _ => (false, Some(clause.lockStrength)),
         };
-        let inference = self.inference(clause, update, table, name, columns)?;
+        let inference = self.inference(clause, update || select.is_some(), table, name, columns)?;
         let mut on_conflict = OnConflict {
             arbiters: Vec::new(),
             all: false,
             update: None,
+            select,
             carried: 0,
             foreign: Vec::new(),
         };
+        if select.is_some() {
+            // `DO SELECT` gives the row that the table has when `WHERE` lets it through.
+            let excluded = self.add_excluded()?;
+            let filter = self.target_where(clause.whereClause.as_ref());
+            self.hide_last_item();
+            let row = columns.iter().enumerate().map(|(at, c)| column_var(at, c)).collect();
+            let query = Query {
+                relations: self.scope.relations.clone(),
+                from: vec![FromItem::Relation(0), FromItem::Relation(excluded)],
+                targets: targets(columns, row),
+                filter: filter?,
+                ..Query::default()
+            };
+            on_conflict.update = Some(Box::new(query));
+            return Ok((on_conflict, inference));
+        }
         if !update {
             return Ok((on_conflict, inference));
         }
@@ -564,9 +622,16 @@ impl Analyzer<'_> {
     ) -> Result<Inference> {
         let Some(infer) = clause.infer.as_deref() else {
             if update {
+                let what = if clause.action == OnConflictAction::ONCONFLICT_SELECT {
+                    "SELECT"
+                } else {
+                    "UPDATE"
+                };
                 return Err(Error::new(
                     SqlState::SYNTAX_ERROR,
-                    "ON CONFLICT DO UPDATE requires inference specification or constraint name",
+                    format!(
+                        "ON CONFLICT DO {what} requires inference specification or constraint name"
+                    ),
                 )
                 .with_hint("For example, ON CONFLICT (column_name).")
                 .at_opt(place(clause.location)));

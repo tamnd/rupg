@@ -4370,6 +4370,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/viewconflict.test")));
     }
 
+    /// `INSERT ... ON CONFLICT DO SELECT`: a row with a conflict gives the row that the table has to `RETURNING` when `WHERE` lets it through, and the statement writes no row. `RETURNING` is required, the old and the new rows are the row that the table has, a lock needs `UPDATE`, and a lock of a row of the same command is an error. `connection/doselect.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn doselect() {
+        big_stack(|| script(include_str!("connection/doselect.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {

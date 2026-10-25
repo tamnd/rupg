@@ -575,7 +575,7 @@ pub(crate) fn table_oid_target() -> Target {
 }
 
 /// The column of the target table, which is the relation 0, with the index `index` from 0.
-fn column_var(index: usize, column: &Column) -> Expr {
+pub(crate) fn column_var(index: usize, column: &Column) -> Expr {
     let attnum = i16::try_from(index + 1).unwrap_or(i16::MAX);
     let mut expr = Expr::new(ExprKind::Var(Var { relation: 0, attnum, levels_up: 0 }), column.ty);
     expr.typmod = column.typmod;

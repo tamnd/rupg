@@ -1,0 +1,174 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE ds_t (k int PRIMARY KEY, v text, n int DEFAULT 0);
+CREATE TABLE
+> INSERT INTO ds_t VALUES (1, 'one', 10), (2, 'two', 20);
+INSERT 0 2
+> INSERT INTO ds_t VALUES (1, 'uno') ON CONFLICT (k) DO SELECT;
+ERROR 42601 ON CONFLICT DO SELECT requires a RETURNING clause at 36
+> INSERT INTO ds_t VALUES (1, 'uno') ON CONFLICT DO SELECT RETURNING *;
+ERROR 42601 ON CONFLICT DO SELECT requires inference specification or constraint name at 36
+HINT For example, ON CONFLICT (column_name).
+> INSERT INTO ds_t VALUES (1, 'uno') ON CONFLICT (k) DO SELECT RETURNING *;
+fields k@ds_t.1:23:4:-1,v@ds_t.2:25:-1:-1,n@ds_t.3:23:4:-1
+row 1,one,10
+INSERT 0 1
+> INSERT INTO ds_t VALUES (1, 'uno'), (3, 'three') ON CONFLICT (k) DO SELECT RETURNING k, v, n;
+fields k@ds_t.1:23:4:-1,v@ds_t.2:25:-1:-1,n@ds_t.3:23:4:-1
+row 1,one,10
+row 3,three,0
+INSERT 0 2
+> INSERT INTO ds_t VALUES (1, 'uno'), (2, 'dos') ON CONFLICT (k) DO SELECT WHERE ds_t.n > 15 RETURNING *;
+fields k@ds_t.1:23:4:-1,v@ds_t.2:25:-1:-1,n@ds_t.3:23:4:-1
+row 2,two,20
+INSERT 0 1
+> INSERT INTO ds_t VALUES (1, 'uno'), (2, 'dos') ON CONFLICT (k) DO SELECT WHERE excluded.v = 'uno' RETURNING *, excluded.v;
+ERROR 42P01 invalid reference to FROM-clause entry for table "excluded" at 112
+DETAIL There is an entry for table "excluded", but it cannot be referenced from this part of the query.
+> INSERT INTO ds_t VALUES (1, 'uno'), (2, 'dos') ON CONFLICT (k) DO SELECT WHERE excluded.v = 'uno' RETURNING ds_t.*;
+fields k@ds_t.1:23:4:-1,v@ds_t.2:25:-1:-1,n@ds_t.3:23:4:-1
+row 1,one,10
+INSERT 0 1
+> INSERT INTO ds_t VALUES (2, 'dos') ON CONFLICT (k) DO SELECT RETURNING old.v AS old_v, new.v AS new_v, old.k, new.n;
+fields old_v@ds_t.2:25:-1:-1,new_v@ds_t.2:25:-1:-1,k@ds_t.1:23:4:-1,n@ds_t.3:23:4:-1
+row two,two,2,20
+INSERT 0 1
+> INSERT INTO ds_t VALUES (4, 'four') ON CONFLICT (k) DO SELECT RETURNING old.v AS old_v, new.v AS new_v;
+fields old_v@ds_t.2:25:-1:-1,new_v@ds_t.2:25:-1:-1
+row NULL,four
+INSERT 0 1
+> INSERT INTO ds_t VALUES (1, 'uno') ON CONFLICT (k) DO SELECT FOR UPDATE RETURNING *;
+fields k@ds_t.1:23:4:-1,v@ds_t.2:25:-1:-1,n@ds_t.3:23:4:-1
+row 1,one,10
+INSERT 0 1
+> INSERT INTO ds_t VALUES (1, 'uno') ON CONFLICT (k) DO SELECT FOR SHARE RETURNING *;
+fields k@ds_t.1:23:4:-1,v@ds_t.2:25:-1:-1,n@ds_t.3:23:4:-1
+row 1,one,10
+INSERT 0 1
+> INSERT INTO ds_t VALUES (1, 'uno') ON CONFLICT (k) DO SELECT FOR NO KEY UPDATE RETURNING *;
+fields k@ds_t.1:23:4:-1,v@ds_t.2:25:-1:-1,n@ds_t.3:23:4:-1
+row 1,one,10
+INSERT 0 1
+> INSERT INTO ds_t VALUES (1, 'uno') ON CONFLICT (k) DO SELECT FOR KEY SHARE WHERE ds_t.v = 'one' RETURNING *;
+fields k@ds_t.1:23:4:-1,v@ds_t.2:25:-1:-1,n@ds_t.3:23:4:-1
+row 1,one,10
+INSERT 0 1
+> INSERT INTO ds_t VALUES (1, 'a'), (1, 'b') ON CONFLICT (k) DO SELECT RETURNING *;
+fields k@ds_t.1:23:4:-1,v@ds_t.2:25:-1:-1,n@ds_t.3:23:4:-1
+row 1,one,10
+row 1,one,10
+INSERT 0 2
+> INSERT INTO ds_t VALUES (1, 'a'), (1, 'b') ON CONFLICT (k) DO SELECT FOR UPDATE RETURNING *;
+fields k@ds_t.1:23:4:-1,v@ds_t.2:25:-1:-1,n@ds_t.3:23:4:-1
+row 1,one,10
+row 1,one,10
+INSERT 0 2
+> INSERT INTO ds_t VALUES (5, 'a'), (5, 'b') ON CONFLICT (k) DO SELECT RETURNING *;
+fields k@ds_t.1:23:4:-1,v@ds_t.2:25:-1:-1,n@ds_t.3:23:4:-1
+row 5,a,0
+row 5,a,0
+INSERT 0 2
+> INSERT INTO ds_t VALUES (6, 'a'), (6, 'b') ON CONFLICT (k) DO SELECT FOR UPDATE RETURNING *;
+ERROR 21000 ON CONFLICT DO SELECT command cannot affect row a second time
+HINT Ensure that no rows proposed for insertion within the same command have duplicate constrained values.
+> INSERT INTO ds_t VALUES (1, 'uno') ON CONFLICT DO SELECT FOR UPDATE RETURNING *;
+ERROR 42601 ON CONFLICT DO SELECT requires inference specification or constraint name at 36
+HINT For example, ON CONFLICT (column_name).
+> WITH w AS (INSERT INTO ds_t VALUES (2, 'x'), (7, 'seven') ON CONFLICT (k) DO SELECT RETURNING k, v) SELECT * FROM w ORDER BY k;
+fields k@ds_t.1:23:4:-1,v@ds_t.2:25:-1:-1
+row 2,two
+row 7,seven
+SELECT 2
+> SELECT * FROM ds_t ORDER BY k;
+fields k@ds_t.1:23:4:-1,v@ds_t.2:25:-1:-1,n@ds_t.3:23:4:-1
+row 1,one,10
+row 2,two,20
+row 3,three,0
+row 4,four,0
+row 5,a,0
+row 7,seven,0
+SELECT 6
+> CREATE FUNCTION ds_trig() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE NOTICE '% % % on %', TG_WHEN, TG_LEVEL, TG_OP, TG_TABLE_NAME; IF TG_LEVEL = 'ROW' AND TG_OP <> 'DELETE' THEN RETURN NEW; END IF; RETURN NULL; END $$;
+CREATE FUNCTION
+> CREATE TRIGGER ds_bs BEFORE INSERT OR UPDATE ON ds_t FOR EACH STATEMENT EXECUTE FUNCTION ds_trig();
+CREATE TRIGGER
+> CREATE TRIGGER ds_as AFTER INSERT OR UPDATE ON ds_t FOR EACH STATEMENT EXECUTE FUNCTION ds_trig();
+CREATE TRIGGER
+> CREATE TRIGGER ds_br BEFORE INSERT OR UPDATE ON ds_t FOR EACH ROW EXECUTE FUNCTION ds_trig();
+CREATE TRIGGER
+> CREATE TRIGGER ds_ar AFTER INSERT OR UPDATE ON ds_t FOR EACH ROW EXECUTE FUNCTION ds_trig();
+CREATE TRIGGER
+> INSERT INTO ds_t VALUES (1, 'uno') ON CONFLICT (k) DO SELECT RETURNING *;
+NOTICE 00000 BEFORE STATEMENT INSERT on ds_t (PL/pgSQL function ds_trig() line 1 at RAISE)
+NOTICE 00000 BEFORE ROW INSERT on ds_t (PL/pgSQL function ds_trig() line 1 at RAISE)
+NOTICE 00000 AFTER STATEMENT INSERT on ds_t (PL/pgSQL function ds_trig() line 1 at RAISE)
+fields k@ds_t.1:23:4:-1,v@ds_t.2:25:-1:-1,n@ds_t.3:23:4:-1
+row 1,one,10
+INSERT 0 1
+> INSERT INTO ds_t VALUES (1, 'uno') ON CONFLICT (k) DO SELECT FOR UPDATE RETURNING *;
+NOTICE 00000 BEFORE STATEMENT INSERT on ds_t (PL/pgSQL function ds_trig() line 1 at RAISE)
+NOTICE 00000 BEFORE ROW INSERT on ds_t (PL/pgSQL function ds_trig() line 1 at RAISE)
+NOTICE 00000 AFTER STATEMENT INSERT on ds_t (PL/pgSQL function ds_trig() line 1 at RAISE)
+fields k@ds_t.1:23:4:-1,v@ds_t.2:25:-1:-1,n@ds_t.3:23:4:-1
+row 1,one,10
+INSERT 0 1
+> DROP TRIGGER ds_bs ON ds_t;
+DROP TRIGGER
+> DROP TRIGGER ds_as ON ds_t;
+DROP TRIGGER
+> DROP TRIGGER ds_br ON ds_t;
+DROP TRIGGER
+> DROP TRIGGER ds_ar ON ds_t;
+DROP TRIGGER
+> CREATE TABLE ds_p (k int, v text, PRIMARY KEY (k)) PARTITION BY RANGE (k);
+CREATE TABLE
+> CREATE TABLE ds_p1 PARTITION OF ds_p FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> CREATE TABLE ds_p2 PARTITION OF ds_p FOR VALUES FROM (10) TO (20);
+CREATE TABLE
+> INSERT INTO ds_p VALUES (1, 'a'), (11, 'b');
+INSERT 0 2
+> INSERT INTO ds_p VALUES (1, 'x'), (11, 'y'), (12, 'z') ON CONFLICT (k) DO SELECT RETURNING tableoid::regclass, *;
+fields tableoid:2205:4:-1,k@ds_p.1:23:4:-1,v@ds_p.2:25:-1:-1
+row ds_p1,1,a
+row ds_p2,11,b
+row ds_p2,12,z
+INSERT 0 3
+> CREATE VIEW ds_v AS SELECT k, upper(v) AS uv, v FROM ds_t;
+CREATE VIEW
+> INSERT INTO ds_v (k, v) VALUES (1, 'x') ON CONFLICT (k) DO SELECT WHERE ds_v.uv = 'ONE' AND excluded.uv = 'X' RETURNING *;
+fields k@ds_v.1:23:4:-1,uv@ds_v.2:25:-1:-1,v@ds_v.3:25:-1:-1
+row 1,ONE,one
+INSERT 0 1
+> INSERT INTO ds_v (k, v) VALUES (2, 'x') ON CONFLICT (k) DO SELECT WHERE ds_v.uv = 'ONE' RETURNING *;
+fields k@ds_v.1:23:4:-1,uv@ds_v.2:25:-1:-1,v@ds_v.3:25:-1:-1
+INSERT 0 0
+> CREATE ROLE ds_user;
+CREATE ROLE
+> GRANT SELECT, INSERT ON ds_t TO ds_user;
+GRANT
+> SET ROLE ds_user;
+SET
+is_superuser=off
+> INSERT INTO ds_t VALUES (1, 'uno') ON CONFLICT (k) DO SELECT RETURNING k;
+fields k@ds_t.1:23:4:-1
+row 1
+INSERT 0 1
+> INSERT INTO ds_t VALUES (1, 'uno') ON CONFLICT (k) DO SELECT FOR UPDATE RETURNING k;
+ERROR 42501 permission denied for table ds_t
+> RESET ROLE;
+RESET
+is_superuser=on
+> DROP OWNED BY ds_user;
+DROP OWNED
+> DROP ROLE ds_user;
+DROP ROLE
+> EXPLAIN (COSTS OFF) INSERT INTO ds_t VALUES (1, 'uno') ON CONFLICT (k) DO SELECT FOR UPDATE WHERE ds_t.n > 0 RETURNING *;
+fields QUERY PLAN:25:-1:-1
+row Insert on ds_t
+row   Conflict Resolution: SELECT FOR UPDATE
+row   Conflict Arbiter Indexes: ds_t_pkey
+row   Conflict Filter: (ds_t.n > 0)
+row   ->  Result
+EXPLAIN

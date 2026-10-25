@@ -565,10 +565,7 @@ impl Explainer<'_, '_> {
             Kind::Modify { operation, targets, conflict, .. } => {
                 self.modify_targets(node, operation.name(), targets);
                 let Some(conflict) = conflict else { return Ok(()) };
-                self.w.text(
-                    "Conflict Resolution",
-                    if conflict.update { "UPDATE" } else { "NOTHING" },
-                );
+                self.w.text("Conflict Resolution", conflict.resolution);
                 if !conflict.arbiters.is_empty() {
                     let names: Vec<String> = conflict
                         .arbiters

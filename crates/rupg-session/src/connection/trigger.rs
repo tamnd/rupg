@@ -247,7 +247,8 @@ impl Connection {
     ///
     /// The error of the condition of `WHEN` of a trigger.
     pub(super) fn conflict_triggers(&self, info: &Write) -> Result<Triggers, Error> {
-        if info.on_conflict.as_ref().is_some_and(|c| c.update.is_some()) {
+        // `DO SELECT` writes no row, so it fires no trigger `UPDATE`.
+        if info.on_conflict.as_ref().is_some_and(|c| c.update.is_some() && c.select.is_none()) {
             self.triggers_of(info, TRIGGER_UPDATE)
         } else {
             Ok(Triggers::default())
