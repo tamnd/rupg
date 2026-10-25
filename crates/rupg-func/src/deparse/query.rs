@@ -85,17 +85,18 @@ impl Deparser<'_> {
         done
     }
 
-    /// `get_insert_query_def`: an `INSERT` in the form that the analysis kept before the rewrite, with `indent` as the indent of the query. `WITH`, `ON CONFLICT`, `RETURNING`, `UPDATE`, `DELETE` and `MERGE` are not supported yet.
+    /// `get_insert_query_def`, `get_update_query_def` and `get_delete_query_def`: an `INSERT`, an `UPDATE` or a `DELETE` in the form that the analysis kept before the rewrite, with `indent` as the indent of the query. `WITH`, `ON CONFLICT`, `RETURNING` and `MERGE` are not supported yet.
     pub(super) fn write_def(&mut self, query: &Query, indent: i32) -> Result<()> {
         let write = query.write.as_ref().ok_or_else(|| Error::internal("a query with no write"))?;
-        let def = match &write.insert_def {
-            Some(def)
-                if write.kind == WriteKind::Insert
-                    && write.on_conflict.is_none()
-                    && write.returning.is_none()
-                    && query.ctes.is_empty() =>
-            {
-                def
+        let plain =
+            write.on_conflict.is_none() && write.returning.is_none() && query.ctes.is_empty();
+        let def = match (&write.insert_def, &write.set_def, write.kind) {
+            (Some(def), _, WriteKind::Insert) if plain => def,
+            (_, Some(set), WriteKind::Update) if plain => {
+                return self.change_def(query, Some(set), indent);
+            }
+            (_, Some(_), WriteKind::Delete) if plain => {
+                return self.change_def(query, None, indent);
             }
             _ => return Err(not_yet("a deparse of this INSERT, UPDATE, DELETE or MERGE")),
         };
@@ -114,7 +115,112 @@ impl Deparser<'_> {
         done
     }
 
-    /// `get_query_def` for an action of a rule. An `INSERT` reads `old` and `new` of `base` one level up.
+    /// [`Deparser::write_def`] for an `UPDATE` with the items of `SET`, or for a `DELETE` with no items.
+    fn change_def(
+        &mut self,
+        query: &Query,
+        set: Option<&[(i16, Option<Expr>)]>,
+        indent: i32,
+    ) -> Result<()> {
+        let space = self.namespace(query);
+        let refname = space.names.first().cloned().unwrap_or_default();
+        // The body of a function in SQL has the namespace of the function outside the query.
+        let prefix =
+            !self.namespaces.is_empty() || self.function.is_some() || query.relations.len() != 1;
+        let saved_prefix = std::mem::replace(&mut self.prefix, prefix);
+        let saved_indent = std::mem::replace(&mut self.indent, indent);
+        self.namespaces.push(space);
+        let done = self.change_body(query, set, &refname);
+        self.namespaces.pop();
+        self.indent = saved_indent;
+        self.prefix = saved_prefix;
+        done
+    }
+
+    /// The text of [`Deparser::change_def`] for a target table with the name `refname`. The target table is the first item of `FROM`, and the other items show after `FROM` of an `UPDATE` or after `USING` of a `DELETE`.
+    fn change_body(
+        &mut self,
+        query: &Query,
+        set: Option<&[(i16, Option<Expr>)]>,
+        refname: &str,
+    ) -> Result<()> {
+        self.indent += INDENT_STD;
+        if !self.flat {
+            self.buf.push(' ');
+        }
+        let rel =
+            query.relations.first().ok_or_else(|| Error::internal("a write with no table"))?;
+        self.buf.push_str(if set.is_some() { "UPDATE " } else { "DELETE FROM " });
+        if rel.only {
+            self.buf.push_str("ONLY ");
+        }
+        self.buf.push_str(&relation_name(rel.oid, self.session)?);
+        // `get_rte_alias` with no `AS`.
+        let renamed =
+            reg::class_name(rel.oid, self.session).is_none_or(|(name, _)| name != refname);
+        if rel.alias.is_some() || renamed {
+            self.buf.push(' ');
+            self.buf.push_str(&quote_identifier(refname));
+        }
+        if let Some(set) = set {
+            self.buf.push_str(" SET ");
+            self.set_list(rel, set)?;
+        }
+        let word = if set.is_some() { " FROM " } else { " USING " };
+        self.clause_items(query, query.from.get(1..).unwrap_or_default(), word)?;
+        if let Some(filter) = &query.filter {
+            self.keyword(" WHERE ", -INDENT_STD, INDENT_STD, 1);
+            self.expr(filter, false)?;
+        }
+        Ok(())
+    }
+
+    /// `get_update_query_targetlist_def`: each item of `SET` as `column = value`, with the parts of the column that the value goes to. The columns of the items of one sub-`SELECT` show as `(a, b) = (SELECT ...)`.
+    fn set_list(&mut self, rel: &Relation, set: &[(i16, Option<Expr>)]) -> Result<()> {
+        let mut values = Vec::with_capacity(set.len());
+        for (_, value) in set {
+            let at = self.buf.len();
+            let value = value.as_ref().map(|v| self.indirection(v)).transpose()?;
+            self.buf.truncate(at);
+            values.push(value);
+        }
+        let multi = |value: Option<&Expr>| match value.map(|v| &v.kind) {
+            Some(ExprKind::SubLink(sub)) => match sub.kind {
+                SubLinkKind::Multi { id, .. } => Some(id),
+                _ => None,
+            },
+            _ => None,
+        };
+        for (i, ((attnum, kept), value)) in set.iter().zip(&values).enumerate() {
+            let id = multi(*value);
+            let first = i == 0 || id.is_none() || multi(values[i - 1]) != id;
+            let last = id.is_none() || values.get(i + 1).is_none_or(|next| multi(*next) != id);
+            if i > 0 {
+                self.buf.push_str(", ");
+            }
+            if first && id.is_some() {
+                self.buf.push('(');
+            }
+            let column = usize::try_from(attnum - 1).ok().and_then(|i| rel.columns.get(i));
+            if let Some(column) = column {
+                self.buf.push_str(&quote_identifier(&column.name));
+            }
+            if let Some(kept) = kept {
+                self.indirection(kept)?;
+            }
+            if !last {
+                continue;
+            }
+            self.buf.push_str(if id.is_some() { ") = " } else { " = " });
+            match value {
+                Some(value) => self.expr(value, false)?,
+                None => self.buf.push_str("DEFAULT"),
+            }
+        }
+        Ok(())
+    }
+
+    /// `get_query_def` for an action of a rule. An `INSERT`, an `UPDATE` or a `DELETE` reads `old` and `new` of `base` one level up.
     fn rule_action(&mut self, action: &Query, base: &Query) -> Result<()> {
         if action.write.is_none() {
             return self.query_def(action, None, true, 0);
@@ -909,11 +1015,16 @@ impl Deparser<'_> {
         usize::try_from(self.wrap).is_ok_and(|wrap| line + item.len() > wrap)
     }
 
-    /// `get_from_clause`: the items of `FROM`. An item after the first starts a new line when the line gets longer than the wrap column.
+    /// `get_from_clause`: the items of `FROM`.
     fn clause_from(&mut self, query: &Query) -> Result<()> {
-        for (i, item) in query.from.iter().enumerate() {
+        self.clause_items(query, &query.from, " FROM ")
+    }
+
+    /// `get_from_clause` for the items after `word`. An item after the first starts a new line when the line gets longer than the wrap column.
+    fn clause_items(&mut self, query: &Query, items: &[FromItem], word: &str) -> Result<()> {
+        for (i, item) in items.iter().enumerate() {
             if i == 0 {
-                self.keyword(" FROM ", -INDENT_STD, INDENT_STD, 2);
+                self.keyword(word, -INDENT_STD, INDENT_STD, 2);
                 self.range_item(item, query)?;
                 continue;
             }
@@ -952,6 +1063,10 @@ impl Deparser<'_> {
         if let Some(cte) = &rel.cte {
             self.buf.push_str(&quote_identifier(&cte.name));
         } else if rel.oid != 0 {
+            // `only_marker`.
+            if rel.only {
+                self.buf.push_str("ONLY ");
+            }
             self.buf.push_str(&relation_name(rel.oid, self.session)?);
         } else if let Some(table) = rel.json_table() {
             self.json_table(table)?;

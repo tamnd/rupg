@@ -1,0 +1,158 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE SCHEMA vru;
+CREATE SCHEMA
+> SET search_path = vru;
+SET
+search_path=vru
+> CREATE TYPE ct AS (p int, q int[]);
+CREATE TYPE
+> CREATE TABLE t (a int, b text, c int[], d ct);
+CREATE TABLE
+> CREATE TABLE s (x int, y text);
+CREATE TABLE
+> CREATE TABLE k (x int, z text);
+CREATE TABLE
+> CREATE TABLE p (a int, b text);
+CREATE TABLE
+> CREATE TABLE p1 () INHERITS (p);
+CREATE TABLE
+> CREATE RULE r1 AS ON UPDATE TO s DO UPDATE t SET b = new.y WHERE a = old.x;
+CREATE RULE
+> CREATE RULE r2 AS ON UPDATE TO s DO ALSO UPDATE t AS tt SET a = tt.a + 1, b = DEFAULT, c[1] = new.x, d.p = 5, d.q[2] = 6;
+CREATE RULE
+> CREATE RULE r3 AS ON DELETE TO s DO DELETE FROM t WHERE a = old.x AND b = old.y;
+CREATE RULE
+> CREATE RULE r4 AS ON DELETE TO s DO INSTEAD DELETE FROM t AS q USING k WHERE q.a = k.x AND k.z = old.y;
+CREATE RULE
+> CREATE RULE r5 AS ON INSERT TO s DO UPDATE t SET b = k.z FROM k WHERE t.a = k.x AND k.x = new.x;
+CREATE RULE
+> CREATE RULE r6 AS ON INSERT TO s DO (DELETE FROM t; UPDATE ONLY p SET a = 1; DELETE FROM ONLY p WHERE b IS NULL);
+CREATE RULE
+> CREATE RULE r7 AS ON UPDATE TO s WHERE old.x <> new.x DO UPDATE t SET (a, b) = (new.x, new.y) WHERE a = old.x;
+CREATE RULE
+> CREATE RULE r8 AS ON UPDATE TO s DO UPDATE t SET (a, b) = (SELECT k.x, k.z FROM k WHERE k.x = new.x), c[2] = 3 WHERE t.a = old.x;
+CREATE RULE
+> CREATE FUNCTION f1(int) RETURNS void LANGUAGE sql BEGIN ATOMIC UPDATE t SET b = 'z' WHERE a = $1; UPDATE t AS q SET b = k.z FROM k WHERE q.a = k.x; DELETE FROM t WHERE a > $1; DELETE FROM ONLY p USING k; END;
+CREATE FUNCTION
+> SELECT pg_get_functiondef('f1'::regproc);
+fields pg_get_functiondef:25:-1:-1
+row CREATE OR REPLACE FUNCTION vru.f1(integer)
+ RETURNS void
+ LANGUAGE sql
+BEGIN ATOMIC
+ UPDATE t SET b = 'z'::text
+   WHERE (t.a = $1);
+ UPDATE t q SET b = k.z
+    FROM k
+   WHERE (q.a = k.x);
+ DELETE FROM t
+   WHERE (t.a > $1);
+ DELETE FROM ONLY p
+    USING k;
+END
+
+SELECT 1
+> SELECT rulename, pg_get_ruledef(oid) FROM pg_rewrite WHERE ev_class = 's'::regclass ORDER BY 1;
+fields rulename@pg_rewrite.2:19:64:-1,pg_get_ruledef:25:-1:-1
+row r1,CREATE RULE r1 AS
+    ON UPDATE TO vru.s DO  UPDATE t SET b = new.y
+  WHERE (t.a = old.x);
+row r2,CREATE RULE r2 AS
+    ON UPDATE TO vru.s DO  UPDATE t tt SET a = (tt.a + 1), b = DEFAULT, c[1] = new.x, d.p = 5, d.q[2] = 6;
+row r3,CREATE RULE r3 AS
+    ON DELETE TO vru.s DO  DELETE FROM t
+  WHERE ((t.a = old.x) AND (t.b = old.y));
+row r4,CREATE RULE r4 AS
+    ON DELETE TO vru.s DO INSTEAD  DELETE FROM t q
+   USING k
+  WHERE ((q.a = k.x) AND (k.z = old.y));
+row r5,CREATE RULE r5 AS
+    ON INSERT TO vru.s DO  UPDATE t SET b = k.z
+   FROM k
+  WHERE ((t.a = k.x) AND (k.x = new.x));
+row r6,CREATE RULE r6 AS
+    ON INSERT TO vru.s DO ( DELETE FROM t;
+ UPDATE ONLY p SET a = 1;
+ DELETE FROM ONLY p
+  WHERE (p.b IS NULL);
+);
+row r7,CREATE RULE r7 AS
+    ON UPDATE TO vru.s
+   WHERE (old.x <> new.x) DO  UPDATE t SET a = new.x, b = new.y
+  WHERE (t.a = old.x);
+row r8,CREATE RULE r8 AS
+    ON UPDATE TO vru.s DO  UPDATE t SET (a, b) = ( SELECT k.x,
+            k.z
+           FROM k
+          WHERE (k.x = new.x)), c[2] = 3
+  WHERE (t.a = old.x);
+SELECT 8
+> SELECT rulename, pg_get_ruledef(oid, true) FROM pg_rewrite WHERE ev_class = 's'::regclass ORDER BY 1;
+fields rulename@pg_rewrite.2:19:64:-1,pg_get_ruledef:25:-1:-1
+row r1,CREATE RULE r1 AS
+    ON UPDATE TO s DO  UPDATE t SET b = new.y
+  WHERE t.a = old.x;
+row r2,CREATE RULE r2 AS
+    ON UPDATE TO s DO  UPDATE t tt SET a = tt.a + 1, b = DEFAULT, c[1] = new.x, d.p = 5, d.q[2] = 6;
+row r3,CREATE RULE r3 AS
+    ON DELETE TO s DO  DELETE FROM t
+  WHERE t.a = old.x AND t.b = old.y;
+row r4,CREATE RULE r4 AS
+    ON DELETE TO s DO INSTEAD  DELETE FROM t q
+   USING k
+  WHERE q.a = k.x AND k.z = old.y;
+row r5,CREATE RULE r5 AS
+    ON INSERT TO s DO  UPDATE t SET b = k.z
+   FROM k
+  WHERE t.a = k.x AND k.x = new.x;
+row r6,CREATE RULE r6 AS
+    ON INSERT TO s DO ( DELETE FROM t;
+ UPDATE ONLY p SET a = 1;
+ DELETE FROM ONLY p
+  WHERE p.b IS NULL;
+);
+row r7,CREATE RULE r7 AS
+    ON UPDATE TO s
+   WHERE old.x <> new.x DO  UPDATE t SET a = new.x, b = new.y
+  WHERE t.a = old.x;
+row r8,CREATE RULE r8 AS
+    ON UPDATE TO s DO  UPDATE t SET (a, b) = ( SELECT k.x,
+            k.z
+           FROM k
+          WHERE k.x = new.x), c[2] = 3
+  WHERE t.a = old.x;
+SELECT 8
+> INSERT INTO t VALUES (1, 'a'), (2, 'b');
+INSERT 0 2
+> INSERT INTO k VALUES (1, 'k1'), (2, 'k2');
+INSERT 0 2
+> INSERT INTO s VALUES (1, 'x');
+INSERT 0 1
+> SELECT a, b, c, d::text FROM t ORDER BY a, b;
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1007:-1:-1,d:25:-1:-1
+SELECT 0
+> UPDATE s SET y = 'u';
+UPDATE 1
+> SELECT a, b, c, d::text FROM t ORDER BY a, b;
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1007:-1:-1,d:25:-1:-1
+SELECT 0
+> DELETE FROM s;
+DELETE 0
+> SELECT a, b, c, d::text FROM t ORDER BY a, b;
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1007:-1:-1,d:25:-1:-1
+SELECT 0
+> RESET search_path;
+RESET
+search_path="$user", public
+> DROP SCHEMA vru CASCADE;
+NOTICE 00000 drop cascades to 7 other objects
+DETAIL drop cascades to type vru.ct
+drop cascades to table vru.t
+drop cascades to table vru.s
+drop cascades to table vru.k
+drop cascades to table vru.p
+drop cascades to table vru.p1
+drop cascades to function vru.f1(integer)
+DROP SCHEMA

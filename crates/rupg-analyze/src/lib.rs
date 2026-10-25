@@ -296,7 +296,7 @@ pub(crate) struct Analyzer<'a> {
     keep_unknowns: bool,
     /// True while the analyzer reads the single row of `VALUES` of an `INSERT` or of an action `INSERT` of a `MERGE`, whose list of targets can call a function that gives a set, as `check_srf_call_placement` allows for `EXPR_KIND_VALUES_SINGLE`.
     srf_values: bool,
-    /// True when an `INSERT` keeps its form before the rewrite in [`Write::insert_def`], for a deparse of the query as `get_insert_query_def` shows it.
+    /// True when an `INSERT`, an `UPDATE` or a `DELETE` keeps its form before the rewrite in [`Write::insert_def`] or [`Write::set_def`], for a deparse of the query as `get_insert_query_def`, `get_update_query_def` and `get_delete_query_def` show it.
     pub(crate) keep_source: bool,
     /// The views whose queries the analyzer reads now, from the outermost. A view in its own query gives `42P17`, as `fireRIRrules` does.
     views: Vec<u32>,
