@@ -1,0 +1,198 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE ac_pk (id int PRIMARY KEY, u int UNIQUE);
+CREATE TABLE
+> CREATE TABLE ac_fk (id int REFERENCES ac_pk ON DELETE CASCADE, r int CONSTRAINT ac_fk_r REFERENCES ac_pk, c int CHECK (c > 0), n int NOT NULL);
+CREATE TABLE
+> SELECT conname, condeferrable, condeferred FROM pg_constraint WHERE conrelid = 'ac_fk'::regclass AND contype = 'f' ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1,condeferrable@pg_constraint.5:16:1:-1,condeferred@pg_constraint.6:16:1:-1
+row ac_fk_id_fkey,f,f
+row ac_fk_r,f,f
+SELECT 2
+> ALTER TABLE ac_fk ALTER CONSTRAINT ac_fk_r DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE
+> SELECT conname, condeferrable, condeferred FROM pg_constraint WHERE conrelid = 'ac_fk'::regclass AND contype = 'f' ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1,condeferrable@pg_constraint.5:16:1:-1,condeferred@pg_constraint.6:16:1:-1
+row ac_fk_id_fkey,f,f
+row ac_fk_r,t,t
+SELECT 2
+> SELECT tgrelid::regclass, tgfoid::regproc, tgdeferrable, tginitdeferred FROM pg_trigger WHERE tgconstraint = (SELECT oid FROM pg_constraint WHERE conname = 'ac_fk_r') ORDER BY tgfoid::regproc::text;
+fields tgrelid:2205:4:-1,tgfoid:24:4:-1,tgdeferrable@pg_trigger.12:16:1:-1,tginitdeferred@pg_trigger.13:16:1:-1
+row ac_fk,"RI_FKey_check_ins",t,t
+row ac_fk,"RI_FKey_check_upd",t,t
+row ac_pk,"RI_FKey_noaction_del",t,t
+row ac_pk,"RI_FKey_noaction_upd",t,t
+SELECT 4
+> BEGIN;
+BEGIN
+> INSERT INTO ac_fk VALUES (NULL, 1, 1, 1);
+INSERT 0 1
+> INSERT INTO ac_pk VALUES (1, 1);
+INSERT 0 1
+> COMMIT;
+COMMIT
+> BEGIN;
+BEGIN
+> INSERT INTO ac_fk VALUES (NULL, 2, 1, 1);
+INSERT 0 1
+> COMMIT;
+ERROR 23503 insert or update on table "ac_fk" violates foreign key constraint "ac_fk_r"
+DETAIL Key (r)=(2) is not present in table "ac_pk".
+> ALTER TABLE ac_fk ALTER CONSTRAINT ac_fk_r NOT DEFERRABLE;
+ALTER TABLE
+> SELECT conname, condeferrable, condeferred FROM pg_constraint WHERE conrelid = 'ac_fk'::regclass AND contype = 'f' ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1,condeferrable@pg_constraint.5:16:1:-1,condeferred@pg_constraint.6:16:1:-1
+row ac_fk_id_fkey,f,f
+row ac_fk_r,f,f
+SELECT 2
+> BEGIN;
+BEGIN
+> INSERT INTO ac_fk VALUES (NULL, 2, 1, 1);
+ERROR 23503 insert or update on table "ac_fk" violates foreign key constraint "ac_fk_r"
+DETAIL Key (r)=(2) is not present in table "ac_pk".
+> ROLLBACK;
+ROLLBACK
+> ALTER TABLE ac_fk ALTER CONSTRAINT ac_fk_id_fkey DEFERRABLE;
+ALTER TABLE
+> SELECT tgrelid::regclass, tgfoid::regproc, tgdeferrable, tginitdeferred FROM pg_trigger WHERE tgconstraint = (SELECT oid FROM pg_constraint WHERE conname = 'ac_fk_id_fkey') ORDER BY tgfoid::regproc::text;
+fields tgrelid:2205:4:-1,tgfoid:24:4:-1,tgdeferrable@pg_trigger.12:16:1:-1,tginitdeferred@pg_trigger.13:16:1:-1
+row ac_pk,"RI_FKey_cascade_del",f,f
+row ac_fk,"RI_FKey_check_ins",t,f
+row ac_fk,"RI_FKey_check_upd",t,f
+row ac_pk,"RI_FKey_noaction_upd",t,f
+SELECT 4
+> BEGIN;
+BEGIN
+> SET CONSTRAINTS ac_fk_id_fkey DEFERRED;
+SET CONSTRAINTS
+> INSERT INTO ac_fk VALUES (5, NULL, 1, 1);
+INSERT 0 1
+> INSERT INTO ac_pk VALUES (5, 5);
+INSERT 0 1
+> COMMIT;
+COMMIT
+> ALTER TABLE ac_fk ALTER CONSTRAINT ac_fk_r ENFORCED;
+ALTER TABLE
+> ALTER TABLE ac_fk ALTER CONSTRAINT ac_fk_c_check DEFERRABLE;
+ERROR 42809 constraint "ac_fk_c_check" of relation "ac_fk" is not a foreign key constraint
+> ALTER TABLE ac_pk ALTER CONSTRAINT ac_pk_u_key ENFORCED;
+ERROR 42809 cannot alter enforceability of constraint "ac_pk_u_key" of relation "ac_pk"
+HINT Only foreign key and check constraints can change enforceability.
+> ALTER TABLE ac_pk ALTER CONSTRAINT ac_pk_u_key NOT ENFORCED;
+ERROR 42809 cannot alter enforceability of constraint "ac_pk_u_key" of relation "ac_pk"
+HINT Only foreign key and check constraints can change enforceability.
+> ALTER TABLE ac_pk ALTER CONSTRAINT ac_pk_u_key NOT VALID;
+ERROR 0A000 constraints cannot be altered to be NOT VALID at 48
+> ALTER TABLE ac_fk ALTER CONSTRAINT ac_fk_r NO INHERIT;
+ERROR 42809 constraint "ac_fk_r" of relation "ac_fk" is not a not-null constraint
+> ALTER TABLE ac_fk ALTER CONSTRAINT ac_fk_r INHERIT;
+ERROR 42809 constraint "ac_fk_r" of relation "ac_fk" is not a not-null constraint
+> ALTER TABLE ac_fk ALTER CONSTRAINT nope DEFERRABLE;
+ERROR 42704 constraint "nope" of relation "ac_fk" does not exist
+> ALTER TABLE ac_fk ALTER CONSTRAINT ac_fk_r DEFERRABLE NOT DEFERRABLE;
+ERROR 42601 conflicting constraint properties at 55
+> ALTER TABLE ac_fk ALTER CONSTRAINT ac_fk_r NOT DEFERRABLE INITIALLY DEFERRED;
+ERROR 42601 constraint declared INITIALLY DEFERRED must be DEFERRABLE at 59
+> CREATE VIEW ac_v AS SELECT 1 AS a;
+CREATE VIEW
+> ALTER TABLE ac_v ALTER CONSTRAINT x DEFERRABLE;
+ERROR 42809 ALTER action ALTER CONSTRAINT cannot be performed on relation "ac_v"
+DETAIL This operation is not supported for views.
+> CREATE TABLE ac_par (a int, b int);
+CREATE TABLE
+> ALTER TABLE ac_par ADD CONSTRAINT ac_par_a_nn NOT NULL a;
+ALTER TABLE
+> CREATE TABLE ac_ch1 () INHERITS (ac_par);
+CREATE TABLE
+> CREATE TABLE ac_ch2 (a int NOT NULL, b int);
+CREATE TABLE
+> ALTER TABLE ac_ch2 INHERIT ac_par;
+ALTER TABLE
+> SELECT conrelid::regclass, conname, connoinherit, conislocal, coninhcount FROM pg_constraint WHERE contype = 'n' AND conrelid::regclass::text LIKE 'ac_%' ORDER BY conrelid::regclass::text, conname;
+fields conrelid:2205:4:-1,conname@pg_constraint.2:19:64:-1,connoinherit@pg_constraint.19:16:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row ac_ch1,ac_par_a_nn,f,f,1
+row ac_ch2,ac_ch2_a_not_null,f,t,1
+row ac_fk,ac_fk_n_not_null,f,t,0
+row ac_par,ac_par_a_nn,f,t,0
+row ac_pk,ac_pk_id_not_null,f,t,0
+SELECT 5
+> ALTER TABLE ac_par ALTER CONSTRAINT ac_par_a_nn NO INHERIT;
+ALTER TABLE
+> SELECT conrelid::regclass, conname, connoinherit, conislocal, coninhcount FROM pg_constraint WHERE contype = 'n' AND conrelid::regclass::text LIKE 'ac_%' ORDER BY conrelid::regclass::text, conname;
+fields conrelid:2205:4:-1,conname@pg_constraint.2:19:64:-1,connoinherit@pg_constraint.19:16:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row ac_ch1,ac_par_a_nn,f,t,0
+row ac_ch2,ac_ch2_a_not_null,f,t,0
+row ac_fk,ac_fk_n_not_null,f,t,0
+row ac_par,ac_par_a_nn,t,t,0
+row ac_pk,ac_pk_id_not_null,f,t,0
+SELECT 5
+> ALTER TABLE ac_par ALTER CONSTRAINT ac_par_a_nn NO INHERIT;
+ALTER TABLE
+> ALTER TABLE ac_ch1 ALTER CONSTRAINT ac_par_a_nn INHERIT;
+ALTER TABLE
+> ALTER TABLE ac_ch1 DROP CONSTRAINT ac_par_a_nn;
+ALTER TABLE
+> INSERT INTO ac_ch1 VALUES (NULL, 1);
+INSERT 0 1
+> ALTER TABLE ac_par ALTER CONSTRAINT ac_par_a_nn INHERIT;
+ERROR 23502 column "a" of relation "ac_ch1" contains null values
+> DELETE FROM ac_ch1;
+DELETE 1
+> ALTER TABLE ac_par ALTER CONSTRAINT ac_par_a_nn INHERIT;
+ALTER TABLE
+> SELECT conrelid::regclass, conname, connoinherit, conislocal, coninhcount FROM pg_constraint WHERE contype = 'n' AND conrelid::regclass::text LIKE 'ac_%' ORDER BY conrelid::regclass::text, conname;
+fields conrelid:2205:4:-1,conname@pg_constraint.2:19:64:-1,connoinherit@pg_constraint.19:16:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row ac_ch1,ac_par_a_nn,f,f,1
+row ac_ch2,ac_ch2_a_not_null,f,t,1
+row ac_fk,ac_fk_n_not_null,f,t,0
+row ac_par,ac_par_a_nn,f,t,0
+row ac_pk,ac_pk_id_not_null,f,t,0
+SELECT 5
+> ALTER TABLE ac_ch1 ALTER CONSTRAINT ac_par_a_nn NO INHERIT;
+ERROR 55000 cannot alter inherited constraint "ac_par_a_nn" on relation "ac_ch1"
+> CREATE TABLE ac_ppk (id int PRIMARY KEY) PARTITION BY RANGE (id);
+CREATE TABLE
+> CREATE TABLE ac_ppk1 PARTITION OF ac_ppk FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> CREATE TABLE ac_pfk (id int CONSTRAINT ac_pfk_id REFERENCES ac_ppk, k int NOT NULL) PARTITION BY RANGE (id);
+CREATE TABLE
+> CREATE TABLE ac_pfk1 PARTITION OF ac_pfk FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> ALTER TABLE ONLY ac_pfk ALTER CONSTRAINT ac_pfk_id DEFERRABLE;
+ERROR 42P16 constraint must be altered in child tables too
+HINT Do not specify the ONLY keyword.
+> ALTER TABLE ac_pfk1 ALTER CONSTRAINT ac_pfk_id DEFERRABLE;
+ERROR 55000 cannot alter constraint "ac_pfk_id" on relation "ac_pfk1"
+DETAIL Constraint "ac_pfk_id" is derived from constraint "ac_pfk_id" of relation "ac_pfk".
+HINT You may alter the constraint it derives from instead.
+> ALTER TABLE ac_pfk ALTER CONSTRAINT ac_pfk_k_not_null NO INHERIT;
+ERROR 0A000 not-null constraint "ac_pfk_k_not_null" on partitioned table "ac_pfk" cannot be NO INHERIT
+> ALTER TABLE ac_pfk ALTER CONSTRAINT ac_pfk_id DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE
+> SELECT conrelid::regclass, confrelid::regclass, condeferrable, condeferred FROM pg_constraint WHERE contype = 'f' AND conname = 'ac_pfk_id' ORDER BY conrelid::regclass::text, confrelid::regclass::text;
+fields conrelid:2205:4:-1,confrelid:2205:4:-1,condeferrable@pg_constraint.5:16:1:-1,condeferred@pg_constraint.6:16:1:-1
+row ac_pfk,ac_ppk,t,t
+row ac_pfk1,ac_ppk,t,t
+SELECT 2
+> SELECT tgrelid::regclass, tgfoid::regproc, tgdeferrable, tginitdeferred FROM pg_trigger WHERE tgconstraint IN (SELECT oid FROM pg_constraint WHERE conname = 'ac_pfk_id') ORDER BY tgrelid::regclass::text, tgfoid::regproc::text;
+fields tgrelid:2205:4:-1,tgfoid:24:4:-1,tgdeferrable@pg_trigger.12:16:1:-1,tginitdeferred@pg_trigger.13:16:1:-1
+row ac_pfk,"RI_FKey_check_ins",t,t
+row ac_pfk,"RI_FKey_check_upd",t,t
+row ac_pfk1,"RI_FKey_check_ins",t,t
+row ac_pfk1,"RI_FKey_check_upd",t,t
+row ac_ppk,"RI_FKey_noaction_del",t,t
+row ac_ppk,"RI_FKey_noaction_upd",t,t
+SELECT 6
+> BEGIN;
+BEGIN
+> INSERT INTO ac_pfk VALUES (3, 1);
+INSERT 0 1
+> INSERT INTO ac_ppk VALUES (3);
+INSERT 0 1
+> COMMIT;
+COMMIT
+> SELECT * FROM ac_pfk;
+fields id@ac_pfk.1:23:4:-1,k@ac_pfk.2:23:4:-1
+row 3,1
+SELECT 1

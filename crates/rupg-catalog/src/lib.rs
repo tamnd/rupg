@@ -2238,6 +2238,38 @@ impl Catalog {
         Ok(())
     }
 
+    /// `AlterConstrUpdateConstraintEntry` and `AlterConstrTriggerDeferrability`: sets `condeferrable` and `condeferred` of a foreign key, and `tgdeferrable` and `tginitdeferred` of its triggers that check the rows and of its triggers of `NO ACTION`. The other triggers of the actions always fire at once.
+    pub fn set_constraint_deferrability(
+        &mut self,
+        constraint: u32,
+        deferrable: bool,
+        deferred: bool,
+    ) -> Result<()> {
+        let Some(con) = self.constraints.get_mut(&constraint) else {
+            return Err(no_object("constraint", constraint));
+        };
+        con.deferrable = deferrable;
+        con.deferred = deferred;
+        // `RI_FKey_check_ins`, `RI_FKey_check_upd`, `RI_FKey_noaction_del` and `RI_FKey_noaction_upd`.
+        let deferring = [0, 1, 10, 11].map(|at| RI_FKEY_CHECK_INS + at);
+        for trigger in self.triggers.values_mut() {
+            if trigger.constraint == constraint && deferring.contains(&trigger.function) {
+                trigger.deferrable = deferrable;
+                trigger.deferred = deferred;
+            }
+        }
+        Ok(())
+    }
+
+    /// Sets `connoinherit` of a constraint.
+    pub fn set_constraint_no_inherit(&mut self, constraint: u32, no_inherit: bool) -> Result<()> {
+        let Some(con) = self.constraints.get_mut(&constraint) else {
+            return Err(no_object("constraint", constraint));
+        };
+        con.no_inherit = no_inherit;
+        Ok(())
+    }
+
     /// Sets `convalidated` of a constraint.
     pub fn set_constraint_validated(&mut self, constraint: u32, validated: bool) -> Result<()> {
         let Some(con) = self.constraints.get_mut(&constraint) else {

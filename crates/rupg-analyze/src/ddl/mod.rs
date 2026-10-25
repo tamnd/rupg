@@ -3,6 +3,7 @@
 mod aggregate;
 mod alter;
 mod alter_column;
+mod alter_constraint;
 mod alter_function;
 mod alter_inherit;
 mod alter_type;
