@@ -1,0 +1,63 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE bw (a int, b int);
+CREATE TABLE
+> INSERT INTO bw VALUES (1, 10), (2, 20);
+INSERT 0 2
+> CREATE VIEW vw1 AS SELECT * FROM bw;
+CREATE VIEW
+> CREATE VIEW vw2 AS SELECT a AS x, b AS y FROM vw1 WHERE a > 0;
+CREATE VIEW
+> EXPLAIN (verbose, costs off) UPDATE vw1 SET b = b + 1 RETURNING *;
+fields QUERY PLAN:25:-1:-1
+row Update on public.bw
+row   Output: bw.a, bw.b
+row   ->  Seq Scan on public.bw
+row         Output: (bw.b + 1), bw.ctid
+EXPLAIN
+> EXPLAIN (verbose, costs off) DELETE FROM vw1 WHERE b > 5;
+fields QUERY PLAN:25:-1:-1
+row Delete on public.bw
+row   ->  Seq Scan on public.bw
+row         Output: bw.ctid
+row         Filter: (bw.b > 5)
+EXPLAIN
+> EXPLAIN (verbose, costs off) INSERT INTO vw1 VALUES (3, 30);
+fields QUERY PLAN:25:-1:-1
+row Insert on public.bw
+row   ->  Result
+row         Output: 3, 30
+EXPLAIN
+> EXPLAIN (verbose, costs off) UPDATE vw2 SET y = y + 1 WHERE x < 5 RETURNING x, y;
+fields QUERY PLAN:25:-1:-1
+row Update on public.bw
+row   Output: bw.a, bw.b
+row   ->  Seq Scan on public.bw
+row         Output: (bw.b + 1), bw.ctid
+row         Filter: ((bw.a < 5) AND (bw.a > 0))
+EXPLAIN
+> EXPLAIN (verbose, costs off) UPDATE bw SET b = b + 1 RETURNING *;
+fields QUERY PLAN:25:-1:-1
+row Update on public.bw
+row   Output: a, b
+row   ->  Seq Scan on public.bw
+row         Output: (b + 1), ctid
+EXPLAIN
+> EXPLAIN (costs off) UPDATE vw1 SET b = b + 1 WHERE a < 2;
+fields QUERY PLAN:25:-1:-1
+row Update on bw
+row   ->  Seq Scan on bw
+row         Filter: (a < 2)
+EXPLAIN
+> UPDATE vw2 SET y = y + 1 RETURNING *;
+fields x@vw2.1:23:4:-1,y@vw2.2:23:4:-1
+row 1,11
+row 2,21
+UPDATE 2
+> DROP VIEW vw2;
+DROP VIEW
+> DROP VIEW vw1;
+DROP VIEW
+> DROP TABLE bw;
+DROP TABLE

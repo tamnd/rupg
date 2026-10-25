@@ -370,6 +370,7 @@ impl Analyzer<'_> {
                 instead,
                 inherit,
                 view_check: None,
+                views: 0,
             }),
             ..Query::default()
         };
