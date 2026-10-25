@@ -339,6 +339,26 @@ impl Definer<'_, '_> {
         self.views_using(|object| objects.contains(&object))
     }
 
+    /// Adds to [`super::Defined::views`] the views whose query reads the relation `table`. A rule that is not the rule of a view keeps its text.
+    pub(super) fn views_reading(&mut self, table: u32) {
+        let rules: Vec<u32> = self
+            .catalog
+            .depends()
+            .iter()
+            .filter(|d| d.object.class == PG_REWRITE)
+            .filter(|d| d.referenced.class == PG_CLASS && d.referenced.oid == table)
+            .map(|d| d.object.oid)
+            .collect();
+        for rule in rules {
+            if let Some(view) = self.catalog.view_of_rule(rule).map(|v| v.oid)
+                && view != table
+                && !self.views.contains(&view)
+            {
+                self.views.push(view);
+            }
+        }
+    }
+
     /// Adds to [`super::Defined::views`] the views whose query reads an object that `uses` accepts. A rule that is not the rule of a view and reads such an object gives `0A000`, as rupg cannot write the text of a rule again yet.
     pub(super) fn views_using(&mut self, uses: impl Fn(ObjRef) -> bool) -> Result<()> {
         let rules: Vec<u32> = self

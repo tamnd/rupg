@@ -381,6 +381,8 @@ impl Definer<'_, '_> {
                     return Err(Error::internal("ADD COLUMN without a column"));
                 };
                 passes.columns.push(((**def).clone(), cmd.missing_ok));
+                // The text of a view names the columns of a join with `USING` and of `NATURAL`, which a new column can make ambiguous, so a view that reads the table gets a new text with an alias for the columns, as `pg_get_viewdef` gives it.
+                self.views_reading(target.oid);
             }
             AlterTableType::AT_AlterColumnType => {
                 self.simple_permissions(target, cmd, TABLE_TYPE)?;

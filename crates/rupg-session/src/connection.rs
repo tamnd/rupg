@@ -4452,6 +4452,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vtrig.test")));
     }
 
+    /// A new column of a table that a view reads gives the view a new text, as `pg_get_viewdef` writes it with an alias for the columns of the table, so that the columns of `USING` and of `NATURAL` stay the same. `connection/addcol.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn addcol() {
+        big_stack(|| script(include_str!("connection/addcol.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {
