@@ -117,6 +117,8 @@ enum Done {
     Tag(CommandTag),
     /// `RowDescription`, the rows, then `CommandComplete` with the tag and the number of rows.
     Rows { columns: Vec<Column>, rows: Vec<Row>, tag: CommandTag },
+    /// The rows of the list of `RETURNING` of the action of a rule, then `CommandComplete` with the tag and the number of rows of the statement that sets the tag.
+    Returned { columns: Vec<Column>, rows: Vec<Row>, tag: CommandTag, count: u64 },
     /// The rows of a `FETCH`: `RowDescription` in the format, the rows, then `CommandComplete` with `FETCH` and the number of rows.
     Fetch { columns: Vec<Column>, rows: Vec<Row>, format: i16 },
     /// `CommandComplete` with this tag and a count, as `MOVE` gives.
@@ -1956,12 +1958,17 @@ impl Connection {
                 }
                 self.finish_xact();
             }
+            let returned = match &outcome {
+                Done::Returned { count, .. } => Some(*count),
+                _ => None,
+            };
             match outcome {
                 Done::Tag(tag) => {
                     self.notices(&mut late, text, &[], out);
                     out.command_tag(tag, 0);
                 }
-                Done::Rows { columns, rows, tag } => {
+                Done::Rows { columns, rows, tag } | Done::Returned { columns, rows, tag, .. } => {
+                    let count = returned.unwrap_or(rows.len() as u64);
                     // The rows of `RETURNING` come after the end of the write, as `FillPortalStore` gives them, so the notices of the write come before the description of the rows.
                     if tag != CommandTag::Select {
                         self.notices(&mut late, text, &[], out);
@@ -1974,7 +1981,7 @@ impl Connection {
                         let values: Vec<Option<&[u8]>> = row.iter().map(Option::as_deref).collect();
                         out.data_row(&values);
                     }
-                    out.command_tag(tag, rows.len() as u64);
+                    out.command_tag(tag, count);
                 }
                 Done::Fetch { columns, rows, format } => {
                     let fields: Vec<Field<'_>> =
@@ -2060,6 +2067,7 @@ impl Connection {
         late: &mut Vec<Notice>,
     ) -> Result<Done, Error> {
         let mut done = None;
+        let mut returned = None;
         for product in products {
             let reader = self.reader();
             let plan = rupg_analyze::analyze_product(product, &reader, &Params::default())
@@ -2080,7 +2088,16 @@ impl Connection {
             let result = self.write_rows(&plan, &[], view, rows?, &[], writes);
             late.extend(self.trigger_notices());
             let result = result?;
-            if product.sets_tag {
+            if product.gives_rows()
+                && !product.sets_tag
+                && let Done::Rows { mut columns, rows, .. } = result
+            {
+                // The columns of the rows of an action that does not set the tag have no table, as `PortalStart` describes them from the statement that sets it.
+                for column in &mut columns {
+                    column.origin = (0, 0);
+                }
+                returned = Some((columns, rows));
+            } else if product.sets_tag {
                 done = Some(result);
             }
         }
@@ -2089,7 +2106,13 @@ impl Connection {
             Node::UpdateStmt(_) => CommandTag::Update,
             _ => CommandTag::Delete,
         };
-        Ok(done.unwrap_or(Done::Count(tag, 0)))
+        let done = done.unwrap_or(Done::Count(tag, 0));
+        Ok(match (returned, done) {
+            (Some((columns, rows)), Done::Count(tag, count)) => {
+                Done::Returned { columns, rows, tag, count }
+            }
+            (_, done) => done,
+        })
     }
 
     /// `ExecuteCallStmt`: `CALL` runs as a query that calls the procedure. A procedure with output arguments gives one row with them, and a procedure with none gives no rows.
@@ -4675,6 +4698,12 @@ mod tests {
     #[test]
     fn vrulealter() {
         big_stack(|| script(include_str!("connection/vrulealter.test")));
+    }
+
+    /// `RETURNING` in the action of a rule: the rows of the list of the statement of the user with the values of the list of the action, the tag of the statement that sets it, the deparse of the list, and the errors of `checkRuleResultList` and `RewriteQuery`. `connection/vruleret.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vruleret() {
+        big_stack(|| script(include_str!("connection/vruleret.test")));
     }
 
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.

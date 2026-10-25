@@ -706,7 +706,7 @@ impl Connection {
                     }
                     tag = Some((done, 0));
                 }
-                Done::Rows { rows, tag, .. } => {
+                Done::Rows { rows, tag, .. } | Done::Returned { rows, tag, .. } => {
                     if let Some(portal) = self.portals.get_mut().find_mut(name) {
                         portal.run = Run::Rows { rows, at: 0, tag, error: pending.take() };
                     }

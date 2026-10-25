@@ -30,6 +30,8 @@ pub struct Shown {
     /// `returningOldAlias` and `returningNewAlias`: the names of the old and the new row.
     pub old: String,
     pub new: String,
+    /// The targets of the list as the statement gives them, with the columns of the relations of the statement, when the analysis keeps the form of the statement for a deparse. A column of `old` or `new` reads [`RETURNING_OLD`] or [`RETURNING_NEW`].
+    pub kept: Option<Vec<crate::select::Target>>,
 }
 
 /// The place where a column of `RETURNING` takes its value.
@@ -131,6 +133,12 @@ impl Analyzer<'_> {
         }
         self.mark_origins(&mut targets);
         self.auto_view_origins(&mut targets);
+        // `rewriteRuleAction`: the list of the statement of the user gives the rows of the action, with the values of the list of the action in place of the columns of the target relation of the statement.
+        if self.outer.is_empty()
+            && let Some((refname, clause, oid)) = self.rule.returning.take()
+        {
+            targets = self.user_returning(&refname, &clause, oid, &targets)?;
+        }
         // `resolveTargetListUnknowns`: a column of type `unknown` becomes `text`.
         for target in &mut targets {
             if target.expr.ty == oid::UNKNOWN {
@@ -139,6 +147,23 @@ impl Analyzer<'_> {
             }
         }
         let [old, new] = relations;
+        let kept = self.keep_source.then(|| {
+            let mut kept = targets.clone();
+            for target in &mut kept {
+                rewrite(&mut target.expr, 0, &mut |e: &mut Expr, depth| {
+                    let ExprKind::Var(var) = e.kind else { return };
+                    if var.levels_up != depth {
+                        return;
+                    }
+                    if Some(var.relation) == old {
+                        e.kind = ExprKind::Var(Var { relation: RETURNING_OLD, ..var });
+                    } else if Some(var.relation) == new {
+                        e.kind = ExprKind::Var(Var { relation: RETURNING_NEW, ..var });
+                    }
+                });
+            }
+            kept
+        });
         let mut shown: Vec<Expr> = targets.iter().map(|t| t.expr.clone()).collect();
         let table = self
             .scope
@@ -314,10 +339,65 @@ impl Analyzer<'_> {
             relations: vec![relation],
             from: vec![FromItem::Relation(0)],
             targets,
-            shown: Some(Box::new(Shown { targets: shown, old, new })),
+            shown: Some(Box::new(Shown { targets: shown, old, new, kept })),
             ..Query::default()
         };
         Ok((query, carried))
+    }
+
+    /// `ReplaceVarsFromTargetList` for `rewriteRuleAction`: the list of `RETURNING` of the statement of the user, which reads the relation `oid` with the name `refname`, with the values of `row` in place of the columns of the relation.
+    fn user_returning(
+        &mut self,
+        refname: &str,
+        clause: &ReturningClause,
+        oid: u32,
+        row: &[crate::select::Target],
+    ) -> Result<Vec<crate::select::Target>> {
+        let columns = self.open_relation(oid, refname, None)?;
+        let action = std::mem::take(&mut self.scope);
+        let result = self.user_returning_in(refname, clause, oid, columns);
+        self.scope = action;
+        let mut targets = result?;
+        let row: Vec<Expr> = row.iter().map(|t| t.expr.clone()).collect();
+        // The whole row of the relation is a row of the values.
+        let mut replace = |e: &mut Expr, depth: usize| {
+            let ExprKind::Var(var) = e.kind else { return false };
+            if var.levels_up != depth || var.relation != 0 {
+                return false;
+            }
+            let raised = |value: &Expr| {
+                let mut value = value.clone();
+                value.raise(depth);
+                value
+            };
+            if var.attnum == 0 {
+                e.kind = ExprKind::Row(row.iter().map(raised).collect(), CastForm::Implicit);
+            } else if let Some(value) =
+                usize::try_from(var.attnum).ok().and_then(|n| row.get(n.wrapping_sub(1)))
+            {
+                *e = raised(value);
+            }
+            true
+        };
+        for target in &mut targets {
+            rewrite_until(&mut target.expr, 0, &mut replace);
+        }
+        Ok(targets)
+    }
+
+    fn user_returning_in(
+        &mut self,
+        refname: &str,
+        clause: &ReturningClause,
+        oid: u32,
+        columns: Vec<Column>,
+    ) -> Result<Vec<crate::select::Target>> {
+        let relation = Relation::new(oid, columns, None, None, None);
+        let item = self.add_relation(relation, refname.to_string(), None)?;
+        self.push_item(item);
+        let mut targets = self.target_list(&clause.exprs, Kind::Returning)?;
+        self.mark_origins(&mut targets);
+        Ok(targets)
     }
 }
 

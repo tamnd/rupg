@@ -85,11 +85,14 @@ impl Deparser<'_> {
         done
     }
 
-    /// `get_insert_query_def`, `get_update_query_def` and `get_delete_query_def`: an `INSERT`, an `UPDATE` or a `DELETE` in the form that the analysis kept before the rewrite, with `indent` as the indent of the query. `WITH`, `ON CONFLICT`, `RETURNING` and `MERGE` are not supported yet.
+    /// `get_insert_query_def`, `get_update_query_def` and `get_delete_query_def`: an `INSERT`, an `UPDATE` or a `DELETE` in the form that the analysis kept before the rewrite, with `indent` as the indent of the query. `WITH`, `ON CONFLICT` and `MERGE` are not supported yet.
     pub(super) fn write_def(&mut self, query: &Query, indent: i32) -> Result<()> {
         let write = query.write.as_ref().ok_or_else(|| Error::internal("a query with no write"))?;
-        let plain =
-            write.on_conflict.is_none() && write.returning.is_none() && query.ctes.is_empty();
+        let kept =
+            write.returning.as_deref().map(|r| r.shown.as_ref().and_then(|s| s.kept.as_ref()));
+        let plain = write.on_conflict.is_none()
+            && kept.is_none_or(|k| k.is_some())
+            && query.ctes.is_empty();
         let def = match (&write.insert_def, &write.set_def, write.kind) {
             (Some(def), _, WriteKind::Insert) if plain => def,
             (_, Some(set), WriteKind::Update) if plain => {
@@ -109,7 +112,7 @@ impl Deparser<'_> {
         let refname = space.names.first().cloned().unwrap_or_default();
         let saved_indent = std::mem::replace(&mut self.indent, indent);
         self.namespaces.push(space);
-        let done = self.insert_body(def, &refname);
+        let done = self.insert_body(def, &refname).and_then(|()| self.returning_clause(query));
         self.namespaces.pop();
         self.indent = saved_indent;
         done
@@ -130,7 +133,8 @@ impl Deparser<'_> {
         let saved_prefix = std::mem::replace(&mut self.prefix, prefix);
         let saved_indent = std::mem::replace(&mut self.indent, indent);
         self.namespaces.push(space);
-        let done = self.change_body(query, set, &refname);
+        let done =
+            self.change_body(query, set, &refname).and_then(|()| self.returning_clause(query));
         self.namespaces.pop();
         self.indent = saved_indent;
         self.prefix = saved_prefix;
@@ -173,6 +177,41 @@ impl Deparser<'_> {
             self.expr(filter, false)?;
         }
         Ok(())
+    }
+
+    /// `get_returning_clause`: `RETURNING` with the names of `old` and `new` that are not the default names, then the list as the statement gives it. The namespace of the statement is the last namespace.
+    fn returning_clause(&mut self, query: &Query) -> Result<()> {
+        let returning = query.write.as_ref().and_then(|w| w.returning.as_deref());
+        let Some(returning) = returning else { return Ok(()) };
+        let shown = returning.shown.as_deref();
+        let Some((shown, kept)) = shown.and_then(|s| Some((s, s.kept.as_ref()?))) else {
+            return Err(not_yet("a deparse of this RETURNING"));
+        };
+        self.keyword(" RETURNING", -INDENT_STD, INDENT_STD, 1);
+        let renamed = [("OLD", &shown.old, "old"), ("NEW", &shown.new, "new")];
+        let renamed: Vec<_> =
+            renamed.iter().filter(|(_, name, plain)| !name.is_empty() && name != plain).collect();
+        for (i, (word, name, _)) in renamed.iter().enumerate() {
+            self.buf.push_str(if i == 0 { " WITH (" } else { ", " });
+            self.buf.push_str(&format!("{word} AS {}", quote_identifier(name)));
+        }
+        if !renamed.is_empty() {
+            self.buf.push(')');
+        }
+        let columns =
+            returning.relations.first().map(|r| r.columns.iter().map(|c| c.name.clone()).collect());
+        let names = (shown.old.clone(), shown.new.clone(), columns.unwrap_or_default());
+        let space = self
+            .namespaces
+            .last_mut()
+            .ok_or_else(|| Error::internal("RETURNING with no namespace"))?;
+        let outer = space.returning.replace(names);
+        let list = Query { targets: kept.clone(), ..Query::default() };
+        let done = self.target_list(&list, None);
+        if let Some(space) = self.namespaces.last_mut() {
+            space.returning = outer;
+        }
+        done
     }
 
     /// `get_update_query_targetlist_def`: each item of `SET` as `column = value`, with the parts of the column that the value goes to. The columns of the items of one sub-`SELECT` show as `(a, b) = (SELECT ...)`.
