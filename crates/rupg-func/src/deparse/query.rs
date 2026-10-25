@@ -44,6 +44,10 @@ impl Deparser<'_> {
         names_visible: bool,
         indent: i32,
     ) -> Result<()> {
+        // A query of `WITH` can be a write.
+        if query.write.is_some() {
+            return self.write_def(query, indent);
+        }
         let space = self.namespace(query);
         let joins: usize = query.from.iter().map(join_count).sum();
         // The body of a function in SQL has the namespace of the function outside the query.
@@ -85,14 +89,12 @@ impl Deparser<'_> {
         done
     }
 
-    /// `get_insert_query_def`, `get_update_query_def` and `get_delete_query_def`: an `INSERT`, an `UPDATE` or a `DELETE` in the form that the analysis kept before the rewrite, with `indent` as the indent of the query. `WITH`, `ON CONFLICT` and `MERGE` are not supported yet.
+    /// `get_insert_query_def`, `get_update_query_def` and `get_delete_query_def`: an `INSERT`, an `UPDATE` or a `DELETE` in the form that the analysis kept before the rewrite, with `indent` as the indent of the query. `ON CONFLICT` and `MERGE` are not supported yet.
     pub(super) fn write_def(&mut self, query: &Query, indent: i32) -> Result<()> {
         let write = query.write.as_ref().ok_or_else(|| Error::internal("a query with no write"))?;
         let kept =
             write.returning.as_deref().map(|r| r.shown.as_ref().and_then(|s| s.kept.as_ref()));
-        let plain = write.on_conflict.is_none()
-            && kept.is_none_or(|k| k.is_some())
-            && query.ctes.is_empty();
+        let plain = write.on_conflict.is_none() && kept.is_none_or(|k| k.is_some());
         let def = match (&write.insert_def, &write.set_def, write.kind) {
             (Some(def), _, WriteKind::Insert) if plain => def,
             (_, Some(set), WriteKind::Update) if plain => {
@@ -112,7 +114,10 @@ impl Deparser<'_> {
         let refname = space.names.first().cloned().unwrap_or_default();
         let saved_indent = std::mem::replace(&mut self.indent, indent);
         self.namespaces.push(space);
-        let done = self.insert_body(def, &refname).and_then(|()| self.returning_clause(query));
+        let done = self
+            .with_clause(query)
+            .and_then(|()| self.insert_body(def, &refname))
+            .and_then(|()| self.returning_clause(query));
         self.namespaces.pop();
         self.indent = saved_indent;
         done
@@ -133,8 +138,10 @@ impl Deparser<'_> {
         let saved_prefix = std::mem::replace(&mut self.prefix, prefix);
         let saved_indent = std::mem::replace(&mut self.indent, indent);
         self.namespaces.push(space);
-        let done =
-            self.change_body(query, set, &refname).and_then(|()| self.returning_clause(query));
+        let done = self
+            .with_clause(query)
+            .and_then(|()| self.change_body(query, set, &refname))
+            .and_then(|()| self.returning_clause(query));
         self.namespaces.pop();
         self.indent = saved_indent;
         self.prefix = saved_prefix;
@@ -223,7 +230,8 @@ impl Deparser<'_> {
             self.buf.truncate(at);
             values.push(value);
         }
-        let multi = |value: Option<&Expr>| match value.map(|v| &v.kind) {
+        // `get_update_query_targetlist_def` looks for the `PARAM_MULTIEXPR` under the implicit casts.
+        let multi = |value: Option<&Expr>| match value.map(|v| &v.strip_implicit().kind) {
             Some(ExprKind::SubLink(sub)) => match sub.kind {
                 SubLinkKind::Multi { id, .. } => Some(id),
                 _ => None,
@@ -252,6 +260,8 @@ impl Deparser<'_> {
             }
             self.buf.push_str(if id.is_some() { ") = " } else { " = " });
             match value {
+                // `get_update_query_targetlist_def` shows the sublink of the items.
+                Some(value) if id.is_some() => self.expr(value.strip_implicit(), false)?,
                 Some(value) => self.expr(value, false)?,
                 None => self.buf.push_str("DEFAULT"),
             }
@@ -2089,9 +2099,17 @@ impl ColumnNames {
     }
 }
 
-/// `get_simple_values_rte`: the rows of the query when it is a plain `VALUES` list whose columns keep their names.
+/// `get_simple_values_rte`: the rows of the query when it is a plain `VALUES` list whose columns keep their names. The tables `old` and `new` of the action of a rule, which are not in `FROM`, do not count.
 fn simple_values<'q>(query: &'q Query, result: Option<&[String]>) -> Option<&'q [Vec<Expr>]> {
-    let [rel] = query.relations.as_slice() else { return None };
+    let [FromItem::Relation(index)] = query.from.as_slice() else { return None };
+    let rel = query.relations.get(*index)?;
+    let rule_entry = |r: &Relation| {
+        r.oid != 0 && r.subquery.is_none() && r.function.is_none() && r.values.is_none()
+    };
+    let others = query.relations.iter().enumerate().filter(|&(i, _)| i != *index);
+    if !others.into_iter().all(|(_, r)| rule_entry(r)) {
+        return None;
+    }
     let rows = rel.values.as_deref()?;
     if query.targets.len() != rel.columns.len() {
         return None;

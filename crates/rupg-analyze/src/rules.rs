@@ -391,9 +391,10 @@ fn rule_action(parts: &Parts, action: &Node, qual: Option<&Node>, event: CmdType
                 ));
             }
             if !select.valuesLists.is_empty() {
-                values_to_select(select)?;
+                values_to_select(select, true)?;
             }
             if let Some(rows) = rows {
+                lateral_items(&mut select.fromClause);
                 select.fromClause.insert(0, Some(rows));
             }
             select.whereClause = and(select.whereClause.take(), qual);
@@ -403,6 +404,7 @@ fn rule_action(parts: &Parts, action: &Node, qual: Option<&Node>, event: CmdType
                 s.returningClause = None;
             }
             if let Some(rows) = rows {
+                lateral_items(&mut s.fromClause);
                 s.fromClause.insert(0, Some(rows));
             }
             s.whereClause = and(s.whereClause.take(), qual);
@@ -412,6 +414,7 @@ fn rule_action(parts: &Parts, action: &Node, qual: Option<&Node>, event: CmdType
                 s.returningClause = None;
             }
             if let Some(rows) = rows {
+                lateral_items(&mut s.usingClause);
                 s.usingClause.insert(0, Some(rows));
             }
             s.whereClause = and(s.whereClause.take(), qual);
@@ -419,10 +422,15 @@ fn rule_action(parts: &Parts, action: &Node, qual: Option<&Node>, event: CmdType
         // A utility action runs once, with no regard to the condition or the rows of the statement.
         Node::NotifyStmt(_) => {}
         Node::SelectStmt(s) => {
-            if rows.is_some() && (s.op != SetOperation::SETOP_NONE || !s.valuesLists.is_empty()) {
-                return Err(not_yet("a rule action UNION or VALUES that reads OLD or NEW"));
+            if rows.is_some() && s.op != SetOperation::SETOP_NONE {
+                return Err(not_yet("a rule action UNION that reads OLD or NEW"));
+            }
+            if rows.is_some() && !s.valuesLists.is_empty() {
+                // The columns of `VALUES` keep their names `column1` and on.
+                values_to_select(s, false)?;
             }
             if let Some(rows) = rows {
+                lateral_items(&mut s.fromClause);
                 s.fromClause.insert(0, Some(rows));
             }
             s.whereClause = and(s.whereClause.take(), qual);
@@ -432,9 +440,30 @@ fn rule_action(parts: &Parts, action: &Node, qual: Option<&Node>, event: CmdType
     Ok(action)
 }
 
-/// The `VALUES` of an `INSERT` as a `SELECT` that can have `FROM` and `WHERE`: one row with no `DEFAULT` gives the list of `SELECT`, and other rows are a `LATERAL` subquery.
-fn values_to_select(select: &mut SelectStmt) -> Result<()> {
-    if let [Some(Node::List(items))] = select.valuesLists.as_slice()
+/// The items of `FROM` of an action with `*rule*` first, with each subquery and each function `LATERAL`. `rewriteRuleAction` puts the values of `new` in place of its names, so a subquery of the action can read `new` and `old`. Here they read `*rule*`, which only a `LATERAL` item can read. `CREATE RULE` read the action without `LATERAL`, so this changes no other name.
+fn lateral_items(list: &mut [Option<Node>]) {
+    for item in list.iter_mut().flatten() {
+        lateral_item(item);
+    }
+}
+
+fn lateral_item(item: &mut Node) {
+    match item {
+        Node::RangeSubselect(r) => r.lateral = true,
+        Node::RangeFunction(r) => r.lateral = true,
+        Node::JoinExpr(j) => {
+            for side in [&mut j.larg, &mut j.rarg].into_iter().flatten() {
+                lateral_item(side);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The `VALUES` of an action as a `SELECT` that can have `FROM` and `WHERE`: the rows are a `LATERAL` subquery. With `inline`, one row with no `DEFAULT` gives the list of `SELECT`, which is good for an `INSERT`, as its columns have no names.
+fn values_to_select(select: &mut SelectStmt, inline: bool) -> Result<()> {
+    if inline
+        && let [Some(Node::List(items))] = select.valuesLists.as_slice()
         && !has_default(select)
     {
         select.targetList = items

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A rule action can be a VALUES list that reads OLD and NEW, can have WITH queries that write data, and can have subqueries in FROM that read OLD and NEW. The deparse shows WITH of a write (#758).
 - A rule condition can name a column of the row without OLD or NEW (#757).
 - A rule action can write a view that has its own rules, and CREATE RULE does not check that the view of an action can be updated (#755).
 - COMMENT ON RULE (#754).
