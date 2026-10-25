@@ -3650,6 +3650,8 @@ impl Catalog {
             constraint.parent = parent;
             constraint.local = false;
             constraint.inhcount = 1;
+            // A clone has the `convalidated` of its parent, as `addFkRecurseReferencing` and `CloneFkReferencing` give it.
+            constraint.validated = self.constraints.get(&parent).is_none_or(|p| p.validated);
         }
         let oid = constraint.oid;
         let referenced = new.foreign.table;

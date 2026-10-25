@@ -156,7 +156,7 @@ impl Definer<'_, '_> {
                         && f.match_type == wanted.match_type
                 })
         });
-        let Some(oid) = found.map(|c| c.oid) else { return Ok(false) };
+        let Some((oid, valid)) = found.map(|c| (c.oid, c.validated)) else { return Ok(false) };
         // `RemoveInheritedConstraint`: the clones of the constraint for the partitions of the referenced table go, with their triggers.
         if self.is_partitioned(wanted.table) {
             let clones: Vec<u32> = self
@@ -185,6 +185,10 @@ impl Definer<'_, '_> {
         let (insert, update) = self.fk_triggers(oid, partition, true);
         self.catalog.set_trigger_parent(insert, triggers.0);
         self.catalog.set_trigger_parent(update, triggers.1);
+        // A valid parent has only valid clones, so a clone that is not valid gets the check of its rows.
+        if parent.validated && !valid {
+            self.validate_foreign_key(oid)?;
+        }
         Ok(true)
     }
 

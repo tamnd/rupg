@@ -1,0 +1,186 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE nv_pk (a int PRIMARY KEY);
+CREATE TABLE
+> INSERT INTO nv_pk VALUES (1), (2);
+INSERT 0 2
+> CREATE TABLE nv_fk (a int, b int);
+CREATE TABLE
+> INSERT INTO nv_fk VALUES (1, 1), (3, 3);
+INSERT 0 2
+> ALTER TABLE nv_fk ADD CONSTRAINT nv_fk_a FOREIGN KEY (a) REFERENCES nv_pk;
+ERROR 23503 insert or update on table "nv_fk" violates foreign key constraint "nv_fk_a"
+DETAIL Key (a)=(3) is not present in table "nv_pk".
+> ALTER TABLE nv_fk ADD CONSTRAINT nv_fk_a FOREIGN KEY (a) REFERENCES nv_pk NOT VALID;
+ALTER TABLE
+> SELECT conname, convalidated, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'nv_fk'::regclass ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1,pg_get_constraintdef:25:-1:-1
+row nv_fk_a,f,FOREIGN KEY (a) REFERENCES nv_pk(a) NOT VALID
+SELECT 1
+> INSERT INTO nv_fk VALUES (4, 4);
+ERROR 23503 insert or update on table "nv_fk" violates foreign key constraint "nv_fk_a"
+DETAIL Key (a)=(4) is not present in table "nv_pk".
+> INSERT INTO nv_fk VALUES (2, 2);
+INSERT 0 1
+> UPDATE nv_fk SET b = 30 WHERE a = 3;
+UPDATE 1
+> ALTER TABLE nv_fk VALIDATE CONSTRAINT nv_fk_a;
+ERROR 23503 insert or update on table "nv_fk" violates foreign key constraint "nv_fk_a"
+DETAIL Key (a)=(3) is not present in table "nv_pk".
+> SELECT convalidated FROM pg_constraint WHERE conname = 'nv_fk_a';
+fields convalidated@pg_constraint.8:16:1:-1
+row f
+SELECT 1
+> DELETE FROM nv_fk WHERE a = 3;
+DELETE 1
+> ALTER TABLE nv_fk VALIDATE CONSTRAINT nv_fk_a;
+ALTER TABLE
+> SELECT convalidated FROM pg_constraint WHERE conname = 'nv_fk_a';
+fields convalidated@pg_constraint.8:16:1:-1
+row t
+SELECT 1
+> ALTER TABLE nv_fk VALIDATE CONSTRAINT nv_fk_a;
+ALTER TABLE
+> ALTER TABLE nv_fk ADD COLUMN c int REFERENCES nv_pk NOT VALID;
+ERROR 42601 syntax error at or near "VALID" at 57
+> ALTER TABLE nv_fk ADD COLUMN d int DEFAULT 1 REFERENCES nv_pk NOT VALID;
+ERROR 42601 syntax error at or near "VALID" at 67
+> SELECT conname, convalidated FROM pg_constraint WHERE conrelid = 'nv_fk'::regclass ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1
+row nv_fk_a,t
+SELECT 1
+> CREATE TABLE nv_fk2 (a int, FOREIGN KEY (a) REFERENCES nv_pk NOT VALID);
+CREATE TABLE
+> SELECT conname, convalidated FROM pg_constraint WHERE conrelid = 'nv_fk2'::regclass ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1
+row nv_fk2_a_fkey,t
+SELECT 1
+> BEGIN;
+BEGIN
+> INSERT INTO nv_fk2 VALUES (1);
+INSERT 0 1
+> ALTER TABLE nv_fk2 ADD CONSTRAINT nv_fk2_b FOREIGN KEY (a) REFERENCES nv_pk NOT VALID;
+ALTER TABLE
+> INSERT INTO nv_fk2 VALUES (9);
+ERROR 23503 insert or update on table "nv_fk2" violates foreign key constraint "nv_fk2_a_fkey"
+DETAIL Key (a)=(9) is not present in table "nv_pk".
+> ROLLBACK;
+ROLLBACK
+> CREATE TABLE nv_p (a int, b int) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE nv_p1 PARTITION OF nv_p FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> CREATE TABLE nv_p2 PARTITION OF nv_p FOR VALUES FROM (10) TO (20);
+CREATE TABLE
+> INSERT INTO nv_p VALUES (1, 1), (11, 5);
+INSERT 0 2
+> ALTER TABLE nv_p ADD CONSTRAINT nv_p_b FOREIGN KEY (b) REFERENCES nv_pk NOT VALID;
+ALTER TABLE
+> SELECT conrelid::regclass::text AS rel, conname, convalidated, conparentid <> 0 AS child FROM pg_constraint WHERE conname = 'nv_p_b' ORDER BY conrelid::regclass::text;
+fields rel:25:-1:-1,conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1,child:16:1:-1
+row nv_p,nv_p_b,f,f
+row nv_p1,nv_p_b,f,t
+row nv_p2,nv_p_b,f,t
+SELECT 3
+> CREATE TABLE nv_p3 PARTITION OF nv_p FOR VALUES FROM (20) TO (30);
+CREATE TABLE
+> SELECT conrelid::regclass::text AS rel, convalidated FROM pg_constraint WHERE conname = 'nv_p_b' ORDER BY conrelid::regclass::text;
+fields rel:25:-1:-1,convalidated@pg_constraint.8:16:1:-1
+row nv_p,f
+row nv_p1,f
+row nv_p2,f
+row nv_p3,f
+SELECT 4
+> ALTER TABLE nv_p VALIDATE CONSTRAINT nv_p_b;
+ERROR 23503 insert or update on table "nv_p2" violates foreign key constraint "nv_p_b"
+DETAIL Key (b)=(5) is not present in table "nv_pk".
+> UPDATE nv_p SET b = 2 WHERE a = 11;
+UPDATE 1
+> ALTER TABLE nv_p VALIDATE CONSTRAINT nv_p_b;
+ALTER TABLE
+> SELECT conrelid::regclass::text AS rel, convalidated FROM pg_constraint WHERE conname = 'nv_p_b' ORDER BY conrelid::regclass::text;
+fields rel:25:-1:-1,convalidated@pg_constraint.8:16:1:-1
+row nv_p,t
+row nv_p1,t
+row nv_p2,t
+row nv_p3,t
+SELECT 4
+> CREATE TABLE nv_p4 (a int, b int);
+CREATE TABLE
+> INSERT INTO nv_p4 VALUES (35, 7);
+INSERT 0 1
+> ALTER TABLE nv_p4 ADD CONSTRAINT nv_p_b FOREIGN KEY (b) REFERENCES nv_pk NOT VALID;
+ALTER TABLE
+> ALTER TABLE nv_p ATTACH PARTITION nv_p4 FOR VALUES FROM (30) TO (40);
+ERROR 23503 insert or update on table "nv_p4" violates foreign key constraint "nv_p_b"
+DETAIL Key (b)=(7) is not present in table "nv_pk".
+> UPDATE nv_p4 SET b = 1;
+UPDATE 1
+> ALTER TABLE nv_p ATTACH PARTITION nv_p4 FOR VALUES FROM (30) TO (40);
+ALTER TABLE
+> SELECT conrelid::regclass::text AS rel, convalidated, conparentid <> 0 AS child FROM pg_constraint WHERE conname = 'nv_p_b' ORDER BY conrelid::regclass::text;
+fields rel:25:-1:-1,convalidated@pg_constraint.8:16:1:-1,child:16:1:-1
+row nv_p,t,f
+row nv_p1,t,t
+row nv_p2,t,t
+row nv_p3,t,t
+row nv_p4,t,t
+SELECT 5
+> CREATE TABLE nv_q (a int, b int) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE nv_q1 PARTITION OF nv_q FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> INSERT INTO nv_q VALUES (1, 8);
+INSERT 0 1
+> CREATE TABLE nv_q2 (a int, b int);
+CREATE TABLE
+> INSERT INTO nv_q2 VALUES (15, 9);
+INSERT 0 1
+> ALTER TABLE nv_q2 ADD CONSTRAINT nv_q_b FOREIGN KEY (b) REFERENCES nv_pk NOT VALID;
+ALTER TABLE
+> ALTER TABLE nv_q ADD CONSTRAINT nv_q_b FOREIGN KEY (b) REFERENCES nv_pk NOT VALID;
+ALTER TABLE
+> ALTER TABLE nv_q ATTACH PARTITION nv_q2 FOR VALUES FROM (10) TO (20);
+ALTER TABLE
+> SELECT conrelid::regclass::text AS rel, convalidated, conparentid <> 0 AS child FROM pg_constraint WHERE conname = 'nv_q_b' ORDER BY conrelid::regclass::text;
+fields rel:25:-1:-1,convalidated@pg_constraint.8:16:1:-1,child:16:1:-1
+row nv_q,f,f
+row nv_q1,f,t
+row nv_q2,f,t
+SELECT 3
+> ALTER TABLE nv_q DETACH PARTITION nv_q2;
+ALTER TABLE
+> SELECT conrelid::regclass::text AS rel, convalidated, conparentid <> 0 AS child FROM pg_constraint WHERE conname = 'nv_q_b' ORDER BY conrelid::regclass::text;
+fields rel:25:-1:-1,convalidated@pg_constraint.8:16:1:-1,child:16:1:-1
+row nv_q,f,f
+row nv_q1,f,t
+row nv_q2,f,f
+SELECT 3
+> CREATE TABLE nv_rpk (a int PRIMARY KEY) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE nv_rpk1 PARTITION OF nv_rpk FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> INSERT INTO nv_rpk VALUES (1);
+INSERT 0 1
+> CREATE TABLE nv_rfk (a int);
+CREATE TABLE
+> INSERT INTO nv_rfk VALUES (1), (5);
+INSERT 0 2
+> ALTER TABLE nv_rfk ADD CONSTRAINT nv_rfk_a FOREIGN KEY (a) REFERENCES nv_rpk NOT VALID;
+ALTER TABLE
+> SELECT confrelid::regclass::text AS ref, convalidated, conparentid <> 0 AS child FROM pg_constraint WHERE conname = 'nv_rfk_a' ORDER BY confrelid::regclass::text;
+fields ref:25:-1:-1,convalidated@pg_constraint.8:16:1:-1,child:16:1:-1
+row nv_rpk,f,f
+SELECT 1
+> ALTER TABLE nv_rfk VALIDATE CONSTRAINT nv_rfk_a;
+ERROR 23503 insert or update on table "nv_rfk" violates foreign key constraint "nv_rfk_a"
+DETAIL Key (a)=(5) is not present in table "nv_rpk".
+> DELETE FROM nv_rfk WHERE a = 5;
+DELETE 1
+> ALTER TABLE nv_rfk VALIDATE CONSTRAINT nv_rfk_a;
+ALTER TABLE
+> SELECT confrelid::regclass::text AS ref, convalidated FROM pg_constraint WHERE conname = 'nv_rfk_a' ORDER BY confrelid::regclass::text;
+fields ref:25:-1:-1,convalidated@pg_constraint.8:16:1:-1
+row nv_rpk,t
+SELECT 1

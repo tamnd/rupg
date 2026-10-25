@@ -344,8 +344,10 @@ impl Connection {
             .foreign
             .iter()
             .filter(|f| {
-                f.referencing
-                    && (old.constraint(f.constraint).is_none() || regenerated(f.constraint))
+                // A foreign key that becomes valid checks the rows, and a `NOT VALID` one does not.
+                let validated = work.constraint(f.constraint).is_some_and(|c| c.validated)
+                    && old.constraint(f.constraint).is_none_or(|o| !o.validated);
+                f.referencing && (validated || regenerated(f.constraint))
             })
             .map(|f| rupg_analyze::Foreign { deferrable: false, deferred: false, ..f.clone() })
             .collect();

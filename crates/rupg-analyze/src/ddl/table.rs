@@ -391,7 +391,8 @@ impl Definer<'_, '_> {
             self.expand_table_like(table, like)?;
         }
         for fk in &plan.foreign {
-            self.add_foreign_key(table, fk)?;
+            // `transformFKConstraints` makes a foreign key of `CREATE TABLE` valid, as the table has no rows.
+            self.add_foreign_key(table, fk, true)?;
         }
         for serial in &plan.serials {
             let column = i16::try_from(serial.column + 1).unwrap_or(i16::MAX);
