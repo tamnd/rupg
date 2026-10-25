@@ -16,6 +16,8 @@ use crate::setop::strength_name;
 impl Analyzer<'_> {
     /// `transformValuesClause`: the query tree of a `VALUES` list, with its `ORDER BY`, `LIMIT` and `OFFSET`.
     pub(crate) fn values_clause(&mut self, s: &SelectStmt) -> Result<Query> {
+        // The `VALUES` of an action `INSERT` of a rule takes the default of the column for `DEFAULT`.
+        let defaults = self.rule.values.take();
         let mut columns: Vec<Vec<Expr>> = Vec::new();
         // `transformValuesClause` reads each row with `EXPR_KIND_VALUES`, also a single row.
         let kind = Kind::Values;
@@ -25,7 +27,22 @@ impl Analyzer<'_> {
             };
             let mut exprs = Vec::with_capacity(list.len());
             for node in list {
-                exprs.push(self.with_kind(kind, |a| a.transform(node.as_ref()))?);
+                if let (Some(Node::SetToDefault(_)), Some(defaults)) = (node, &defaults)
+                    && let Some(default) = defaults.get(exprs.len())
+                {
+                    exprs.push(default.clone());
+                    continue;
+                }
+                // `transformExpressionList`: `t.*` and `(e).*` give the columns of the relation or the fields of the row.
+                let star = self.with_kind(kind, |a| match node {
+                    Some(Node::ColumnRef(c)) => a.expand_star(c),
+                    Some(Node::A_Indirection(i)) => a.expand_indirection_star(i),
+                    _ => Ok(None),
+                })?;
+                match star {
+                    Some(star) => exprs.extend(star.into_iter().map(|(_, e)| e)),
+                    None => exprs.push(self.with_kind(kind, |a| a.transform(node.as_ref()))?),
+                }
             }
             if row == 0 {
                 columns = vec![Vec::with_capacity(s.valuesLists.len()); exprs.len()];
