@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.2.0 (2026-10-26)
+
 ### Added
 
 - `CREATE POLICY`, `ALTER POLICY`, `DROP POLICY` and `COMMENT ON POLICY` make and change the rows of `pg_policy`, and `pg_get_expr` shows their expressions. `ALTER TABLE` sets `ENABLE`, `DISABLE`, `FORCE` and `NO FORCE ROW LEVEL SECURITY`, `DROP ROLE` reports the policies that name the role, and `DROP OWNED` removes the role from them. A statement that the policies of a table apply to gives `0A000` until rupg applies them (#768).
