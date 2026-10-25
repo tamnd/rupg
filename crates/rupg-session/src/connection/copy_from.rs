@@ -267,6 +267,7 @@ impl Connection {
                 format!("permission denied for {object} {}", target.name),
             ));
         }
+        rupg_func::copy_from_row_security(target.relid, &reader)?;
         if self.settings.borrow().get("transaction_read_only").as_deref() == Some("on") {
             return Err(Error::new(
                 SqlState::READ_ONLY_SQL_TRANSACTION,

@@ -1625,6 +1625,22 @@ pub fn row_security_hides(relid: u32, session: &dyn Session) -> bool {
     rls_enabled(relid, current_user(session), session)
 }
 
+/// `DoCopy` for `COPY FROM` into the table `relid`. The policies of a table do not check the rows of `COPY FROM`, so it is an error when they apply to the current user, and `check_enable_rls` gives the error of `row_security = off`.
+///
+/// # Errors
+///
+/// `0A000` when the policies apply, and `42501` when they would apply with `row_security = off`.
+pub fn copy_from_row_security(relid: u32, session: &dyn Session) -> Result<()> {
+    if PolicyRoles(session).status(relid, 0)? == RlsStatus::Enabled {
+        return Err(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            "COPY FROM not supported with row-level security",
+        )
+        .with_hint("Use INSERT statements instead."));
+    }
+    Ok(())
+}
+
 /// The roles of the session for the policies of the tables of a query.
 struct PolicyRoles<'a>(&'a dyn Session);
 

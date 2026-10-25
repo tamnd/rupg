@@ -4876,6 +4876,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/row_security_merge.test")));
     }
 
+    /// Row-level security on `COPY`: `COPY TO` gives the rows that the policies let through, and `COPY FROM` is an error when the policies apply. `connection/row_security_copy.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn row_security_copy() {
+        big_stack(|| script(include_str!("connection/row_security_copy.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

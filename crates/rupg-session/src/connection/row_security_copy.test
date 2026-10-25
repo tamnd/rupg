@@ -1,0 +1,72 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE ROLE regress_rls_u6;
+CREATE ROLE
+> CREATE TABLE rls_t6 (a int, b text);
+CREATE TABLE
+> GRANT ALL ON rls_t6 TO regress_rls_u6;
+GRANT
+> INSERT INTO rls_t6 VALUES (1, 'ok'), (2, 'hidden'), (3, 'fine');
+INSERT 0 3
+> ALTER TABLE rls_t6 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> CREATE POLICY p6 ON rls_t6 USING (b <> 'hidden');
+CREATE POLICY
+> SET SESSION AUTHORIZATION regress_rls_u6;
+SET
+session_authorization=regress_rls_u6
+is_superuser=off
+> COPY rls_t6 TO STDOUT;
+copy out 0 0,0
+data 1\tok\n
+data 3\tfine\n
+copy done
+COPY 2
+> COPY rls_t6 (b) TO STDOUT;
+copy out 0 0
+data ok\n
+data fine\n
+copy done
+COPY 2
+> COPY (SELECT * FROM rls_t6 ORDER BY a DESC) TO STDOUT;
+copy out 0 0,0
+data 3\tfine\n
+data 1\tok\n
+copy done
+COPY 2
+> COPY rls_t6 FROM STDIN;
+ERROR 0A000 COPY FROM not supported with row-level security
+HINT Use INSERT statements instead.
+> SET row_security = off;
+SET
+> COPY rls_t6 TO STDOUT;
+ERROR 42501 query would be affected by row-level security policy for table "rls_t6"
+> RESET row_security;
+RESET
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> COPY rls_t6 TO STDOUT;
+copy out 0 0,0
+data 1\tok\n
+data 2\thidden\n
+data 3\tfine\n
+copy done
+COPY 3
+> ALTER TABLE rls_t6 FORCE ROW LEVEL SECURITY;
+ALTER TABLE
+> COPY rls_t6 TO STDOUT;
+copy out 0 0,0
+data 1\tok\n
+data 2\thidden\n
+data 3\tfine\n
+copy done
+COPY 3
+> RESET SESSION AUTHORIZATION;
+RESET
+> DROP TABLE rls_t6;
+DROP TABLE
+> DROP ROLE regress_rls_u6;
+DROP ROLE
