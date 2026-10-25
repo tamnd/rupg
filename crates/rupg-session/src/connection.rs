@@ -4512,6 +4512,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vctid.test")));
     }
 
+    /// A view with `security_invoker` under a view of another owner: the view outside checks the view inside as its owner, and the view inside checks its tables as the current user, as `RelationBuildRuleLock` gives `InvalidOid` to `setRuleCheckAsUser` for its rules. `connection/vinvoker.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vinvoker() {
+        big_stack(|| script(include_str!("connection/vinvoker.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {

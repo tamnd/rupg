@@ -1,0 +1,324 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE USER regress_vi_user1;
+CREATE ROLE
+> CREATE USER regress_vi_user2;
+CREATE ROLE
+> CREATE USER regress_vi_user3;
+CREATE ROLE
+> GRANT CREATE ON SCHEMA public TO PUBLIC;
+GRANT
+> CREATE TABLE base_tbl(a int, b text, c float);
+CREATE TABLE
+> INSERT INTO base_tbl VALUES (1, 'Row 1', 1.0);
+INSERT 0 1
+> SET SESSION AUTHORIZATION regress_vi_user1;
+SET
+session_authorization=regress_vi_user1
+is_superuser=off
+> CREATE VIEW rw_view1 AS SELECT b AS bb, c AS cc, a AS aa FROM base_tbl;
+CREATE VIEW
+> ALTER VIEW rw_view1 SET (security_invoker = true);
+ALTER VIEW
+> SELECT * FROM rw_view1;
+ERROR 42501 permission denied for table base_tbl
+> UPDATE rw_view1 SET aa=aa;
+ERROR 42501 permission denied for table base_tbl
+> MERGE INTO rw_view1 t USING (VALUES (2, 'Row 2', 2.0)) AS v(a,b,c) ON t.aa = v.a
+>>   WHEN NOT MATCHED THEN INSERT VALUES (v.b, v.c, v.a);
+ERROR 42501 permission denied for table base_tbl
+> SET SESSION AUTHORIZATION regress_vi_user2;
+SET
+session_authorization=regress_vi_user2
+> CREATE VIEW rw_view2 AS SELECT cc AS ccc, aa AS aaa, bb AS bbb FROM rw_view1;
+CREATE VIEW
+> GRANT SELECT, UPDATE ON rw_view2 TO regress_vi_user3;
+GRANT
+> SELECT * FROM rw_view2;
+ERROR 42501 permission denied for view rw_view1
+> UPDATE rw_view2 SET aaa=aaa;
+ERROR 42501 permission denied for view rw_view1
+> MERGE INTO rw_view2 t USING (VALUES (2, 'Row 2', 2.0)) AS v(a,b,c) ON t.aaa = v.a
+>>   WHEN NOT MATCHED THEN INSERT VALUES (v.c, v.a, v.b);
+ERROR 42501 permission denied for view rw_view1
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> GRANT SELECT ON base_tbl TO regress_vi_user1;
+GRANT
+> GRANT UPDATE (a, b) ON base_tbl TO regress_vi_user1;
+GRANT
+> SET SESSION AUTHORIZATION regress_vi_user1;
+SET
+session_authorization=regress_vi_user1
+is_superuser=off
+> SELECT * FROM rw_view1;
+fields bb@rw_view1.1:25:-1:-1,cc@rw_view1.2:701:8:-1,aa@rw_view1.3:23:4:-1
+row Row 1,1,1
+SELECT 1
+> UPDATE rw_view1 SET aa=aa, bb=bb;
+UPDATE 1
+> UPDATE rw_view1 SET cc=cc;
+ERROR 42501 permission denied for table base_tbl
+> MERGE INTO rw_view1 t USING (VALUES (1)) AS v(a) ON t.aa = v.a
+>>   WHEN MATCHED THEN UPDATE SET aa = aa, bb = bb;
+MERGE 1
+> MERGE INTO rw_view1 t USING (VALUES (1)) AS v(a) ON t.aa = v.a
+>>   WHEN MATCHED THEN UPDATE SET cc = cc;
+ERROR 42501 permission denied for table base_tbl
+> SET SESSION AUTHORIZATION regress_vi_user2;
+SET
+session_authorization=regress_vi_user2
+> SELECT * FROM rw_view2;
+ERROR 42501 permission denied for view rw_view1
+> UPDATE rw_view2 SET aaa=aaa;
+ERROR 42501 permission denied for view rw_view1
+> MERGE INTO rw_view2 t USING (VALUES (1)) AS v(a) ON t.aaa = v.a
+>>   WHEN MATCHED THEN UPDATE SET aaa = aaa;
+ERROR 42501 permission denied for view rw_view1
+> SET SESSION AUTHORIZATION regress_vi_user3;
+SET
+session_authorization=regress_vi_user3
+> SELECT * FROM rw_view2;
+ERROR 42501 permission denied for view rw_view1
+> UPDATE rw_view2 SET aaa=aaa;
+ERROR 42501 permission denied for view rw_view1
+> MERGE INTO rw_view2 t USING (VALUES (1)) AS v(a) ON t.aaa = v.a
+>>   WHEN MATCHED THEN UPDATE SET aaa = aaa;
+ERROR 42501 permission denied for view rw_view1
+> SET SESSION AUTHORIZATION regress_vi_user1;
+SET
+session_authorization=regress_vi_user1
+> GRANT SELECT ON rw_view1 TO regress_vi_user2;
+GRANT
+> GRANT UPDATE (bb, cc) ON rw_view1 TO regress_vi_user2;
+GRANT
+> SET SESSION AUTHORIZATION regress_vi_user2;
+SET
+session_authorization=regress_vi_user2
+> SELECT * FROM rw_view2;
+ERROR 42501 permission denied for table base_tbl
+> UPDATE rw_view2 SET bbb=bbb;
+ERROR 42501 permission denied for table base_tbl
+> MERGE INTO rw_view2 t USING (VALUES (1)) AS v(a) ON t.aaa = v.a
+>>   WHEN MATCHED THEN UPDATE SET bbb = bbb;
+ERROR 42501 permission denied for table base_tbl
+> SET SESSION AUTHORIZATION regress_vi_user3;
+SET
+session_authorization=regress_vi_user3
+> SELECT * FROM rw_view2;
+ERROR 42501 permission denied for table base_tbl
+> UPDATE rw_view2 SET bbb=bbb;
+ERROR 42501 permission denied for table base_tbl
+> MERGE INTO rw_view2 t USING (VALUES (1)) AS v(a) ON t.aaa = v.a
+>>   WHEN MATCHED THEN UPDATE SET bbb = bbb;
+ERROR 42501 permission denied for table base_tbl
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> GRANT SELECT ON base_tbl TO regress_vi_user2;
+GRANT
+> GRANT UPDATE (a, c) ON base_tbl TO regress_vi_user2;
+GRANT
+> SET SESSION AUTHORIZATION regress_vi_user2;
+SET
+session_authorization=regress_vi_user2
+is_superuser=off
+> SELECT * FROM rw_view2;
+fields ccc@rw_view2.1:701:8:-1,aaa@rw_view2.2:23:4:-1,bbb@rw_view2.3:25:-1:-1
+row 1,1,Row 1
+SELECT 1
+> UPDATE rw_view2 SET aaa=aaa;
+ERROR 42501 permission denied for view rw_view1
+> UPDATE rw_view2 SET bbb=bbb;
+ERROR 42501 permission denied for table base_tbl
+> UPDATE rw_view2 SET ccc=ccc;
+UPDATE 1
+> MERGE INTO rw_view2 t USING (VALUES (1)) AS v(a) ON t.aaa = v.a
+>>   WHEN MATCHED THEN UPDATE SET aaa = aaa;
+ERROR 42501 permission denied for view rw_view1
+> MERGE INTO rw_view2 t USING (VALUES (1)) AS v(a) ON t.aaa = v.a
+>>   WHEN MATCHED THEN UPDATE SET bbb = bbb;
+ERROR 42501 permission denied for table base_tbl
+> MERGE INTO rw_view2 t USING (VALUES (1)) AS v(a) ON t.aaa = v.a
+>>   WHEN MATCHED THEN UPDATE SET ccc = ccc;
+MERGE 1
+> SET SESSION AUTHORIZATION regress_vi_user3;
+SET
+session_authorization=regress_vi_user3
+> SELECT * FROM rw_view2;
+ERROR 42501 permission denied for table base_tbl
+> UPDATE rw_view2 SET aaa=aaa;
+ERROR 42501 permission denied for view rw_view1
+> UPDATE rw_view2 SET bbb=bbb;
+ERROR 42501 permission denied for table base_tbl
+> UPDATE rw_view2 SET ccc=ccc;
+ERROR 42501 permission denied for table base_tbl
+> MERGE INTO rw_view2 t USING (VALUES (1)) AS v(a) ON t.aaa = v.a
+>>   WHEN MATCHED THEN UPDATE SET aaa = aaa;
+ERROR 42501 permission denied for view rw_view1
+> MERGE INTO rw_view2 t USING (VALUES (1)) AS v(a) ON t.aaa = v.a
+>>   WHEN MATCHED THEN UPDATE SET bbb = bbb;
+ERROR 42501 permission denied for table base_tbl
+> MERGE INTO rw_view2 t USING (VALUES (1)) AS v(a) ON t.aaa = v.a
+>>   WHEN MATCHED THEN UPDATE SET ccc = ccc;
+ERROR 42501 permission denied for table base_tbl
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> GRANT SELECT ON base_tbl TO regress_vi_user3;
+GRANT
+> GRANT UPDATE (a, c) ON base_tbl TO regress_vi_user3;
+GRANT
+> SET SESSION AUTHORIZATION regress_vi_user3;
+SET
+session_authorization=regress_vi_user3
+is_superuser=off
+> SELECT * FROM rw_view2;
+fields ccc@rw_view2.1:701:8:-1,aaa@rw_view2.2:23:4:-1,bbb@rw_view2.3:25:-1:-1
+row 1,1,Row 1
+SELECT 1
+> UPDATE rw_view2 SET aaa=aaa;
+ERROR 42501 permission denied for view rw_view1
+> UPDATE rw_view2 SET bbb=bbb;
+ERROR 42501 permission denied for table base_tbl
+> UPDATE rw_view2 SET ccc=ccc;
+UPDATE 1
+> MERGE INTO rw_view2 t USING (VALUES (1)) AS v(a) ON t.aaa = v.a
+>>   WHEN MATCHED THEN UPDATE SET aaa = aaa;
+ERROR 42501 permission denied for view rw_view1
+> MERGE INTO rw_view2 t USING (VALUES (1)) AS v(a) ON t.aaa = v.a
+>>   WHEN MATCHED THEN UPDATE SET bbb = bbb;
+ERROR 42501 permission denied for table base_tbl
+> MERGE INTO rw_view2 t USING (VALUES (1)) AS v(a) ON t.aaa = v.a
+>>   WHEN MATCHED THEN UPDATE SET ccc = ccc;
+MERGE 1
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> REVOKE SELECT, UPDATE ON base_tbl FROM regress_vi_user1;
+REVOKE
+> SET SESSION AUTHORIZATION regress_vi_user1;
+SET
+session_authorization=regress_vi_user1
+is_superuser=off
+> SELECT * FROM rw_view1;
+ERROR 42501 permission denied for table base_tbl
+> UPDATE rw_view1 SET aa=aa;
+ERROR 42501 permission denied for table base_tbl
+> MERGE INTO rw_view1 t USING (VALUES (1)) AS v(a) ON t.aa = v.a
+>>   WHEN MATCHED THEN UPDATE SET aa = aa;
+ERROR 42501 permission denied for table base_tbl
+> SET SESSION AUTHORIZATION regress_vi_user2;
+SET
+session_authorization=regress_vi_user2
+> SELECT * FROM rw_view2;
+fields ccc@rw_view2.1:701:8:-1,aaa@rw_view2.2:23:4:-1,bbb@rw_view2.3:25:-1:-1
+row 1,1,Row 1
+SELECT 1
+> UPDATE rw_view2 SET aaa=aaa;
+ERROR 42501 permission denied for view rw_view1
+> UPDATE rw_view2 SET bbb=bbb;
+ERROR 42501 permission denied for table base_tbl
+> UPDATE rw_view2 SET ccc=ccc;
+UPDATE 1
+> MERGE INTO rw_view2 t USING (VALUES (1)) AS v(a) ON t.aaa = v.a
+>>   WHEN MATCHED THEN UPDATE SET aaa = aaa;
+ERROR 42501 permission denied for view rw_view1
+> MERGE INTO rw_view2 t USING (VALUES (1)) AS v(a) ON t.aaa = v.a
+>>   WHEN MATCHED THEN UPDATE SET bbb = bbb;
+ERROR 42501 permission denied for table base_tbl
+> MERGE INTO rw_view2 t USING (VALUES (1)) AS v(a) ON t.aaa = v.a
+>>   WHEN MATCHED THEN UPDATE SET ccc = ccc;
+MERGE 1
+> SET SESSION AUTHORIZATION regress_vi_user3;
+SET
+session_authorization=regress_vi_user3
+> SELECT * FROM rw_view2;
+fields ccc@rw_view2.1:701:8:-1,aaa@rw_view2.2:23:4:-1,bbb@rw_view2.3:25:-1:-1
+row 1,1,Row 1
+SELECT 1
+> UPDATE rw_view2 SET aaa=aaa;
+ERROR 42501 permission denied for view rw_view1
+> UPDATE rw_view2 SET bbb=bbb;
+ERROR 42501 permission denied for table base_tbl
+> UPDATE rw_view2 SET ccc=ccc;
+UPDATE 1
+> MERGE INTO rw_view2 t USING (VALUES (1)) AS v(a) ON t.aaa = v.a
+>>   WHEN MATCHED THEN UPDATE SET aaa = aaa;
+ERROR 42501 permission denied for view rw_view1
+> MERGE INTO rw_view2 t USING (VALUES (1)) AS v(a) ON t.aaa = v.a
+>>   WHEN MATCHED THEN UPDATE SET bbb = bbb;
+ERROR 42501 permission denied for table base_tbl
+> MERGE INTO rw_view2 t USING (VALUES (1)) AS v(a) ON t.aaa = v.a
+>>   WHEN MATCHED THEN UPDATE SET ccc = ccc;
+MERGE 1
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> REVOKE SELECT, UPDATE ON base_tbl FROM regress_vi_user2;
+REVOKE
+> SET SESSION AUTHORIZATION regress_vi_user2;
+SET
+session_authorization=regress_vi_user2
+is_superuser=off
+> SELECT * FROM rw_view2;
+ERROR 42501 permission denied for table base_tbl
+> UPDATE rw_view2 SET aaa=aaa;
+ERROR 42501 permission denied for view rw_view1
+> UPDATE rw_view2 SET bbb=bbb;
+ERROR 42501 permission denied for table base_tbl
+> UPDATE rw_view2 SET ccc=ccc;
+ERROR 42501 permission denied for table base_tbl
+> MERGE INTO rw_view2 t USING (VALUES (1)) AS v(a) ON t.aaa = v.a
+>>   WHEN MATCHED THEN UPDATE SET aaa = aaa;
+ERROR 42501 permission denied for view rw_view1
+> MERGE INTO rw_view2 t USING (VALUES (1)) AS v(a) ON t.aaa = v.a
+>>   WHEN MATCHED THEN UPDATE SET bbb = bbb;
+ERROR 42501 permission denied for table base_tbl
+> MERGE INTO rw_view2 t USING (VALUES (1)) AS v(a) ON t.aaa = v.a
+>>   WHEN MATCHED THEN UPDATE SET ccc = ccc;
+ERROR 42501 permission denied for table base_tbl
+> SET SESSION AUTHORIZATION regress_vi_user3;
+SET
+session_authorization=regress_vi_user3
+> SELECT * FROM rw_view2;
+fields ccc@rw_view2.1:701:8:-1,aaa@rw_view2.2:23:4:-1,bbb@rw_view2.3:25:-1:-1
+row 1,1,Row 1
+SELECT 1
+> UPDATE rw_view2 SET aaa=aaa;
+ERROR 42501 permission denied for view rw_view1
+> UPDATE rw_view2 SET bbb=bbb;
+ERROR 42501 permission denied for table base_tbl
+> UPDATE rw_view2 SET ccc=ccc;
+UPDATE 1
+> MERGE INTO rw_view2 t USING (VALUES (1)) AS v(a) ON t.aaa = v.a
+>>   WHEN MATCHED THEN UPDATE SET aaa = aaa;
+ERROR 42501 permission denied for view rw_view1
+> MERGE INTO rw_view2 t USING (VALUES (1)) AS v(a) ON t.aaa = v.a
+>>   WHEN MATCHED THEN UPDATE SET bbb = bbb;
+ERROR 42501 permission denied for table base_tbl
+> MERGE INTO rw_view2 t USING (VALUES (1)) AS v(a) ON t.aaa = v.a
+>>   WHEN MATCHED THEN UPDATE SET ccc = ccc;
+MERGE 1
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> DROP TABLE base_tbl CASCADE;
+NOTICE 00000 drop cascades to 2 other objects
+DETAIL drop cascades to view rw_view1
+drop cascades to view rw_view2
+DROP TABLE
+> DROP USER regress_vi_user1;
+DROP ROLE
+> DROP USER regress_vi_user2;
+DROP ROLE
+> DROP USER regress_vi_user3;
+DROP ROLE
