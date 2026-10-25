@@ -1047,9 +1047,6 @@ impl Definer<'_, '_> {
                 format!("column \"{key}\" of relation \"{}\" does not exist", target.name),
             ));
         };
-        if !con.initially_valid {
-            return Err(not_yet("NOT VALID", place(con.location)));
-        }
         if let Some((name, no_inherit, validated)) = self.not_null_of(target.oid, column) {
             let prerequisite =
                 |message: String| Error::new(SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE, message);
@@ -1062,7 +1059,8 @@ impl Definer<'_, '_> {
                     "You might need to make the existing constraint inheritable using ALTER TABLE ... ALTER CONSTRAINT ... INHERIT.",
                 ));
             }
-            if !validated {
+            // `ATExecSetNotNull` validates a `NOT VALID` constraint of the table, and `AdjustNotNullInheritance` does not take a valid constraint over it.
+            if !validated && con.initially_valid && origin != Origin::SetNotNull {
                 return Err(prerequisite(format!(
                     "incompatible NOT VALID constraint \"{name}\" on relation \"{}\"",
                     target.name
@@ -1097,6 +1095,8 @@ impl Definer<'_, '_> {
                     )?;
                 } else if !local {
                     self.catalog.set_constraint_inherited(oid, true, inhcount)?;
+                } else if !validated && origin == Origin::SetNotNull {
+                    self.validate_constraint(target, &name, recurse, false)?;
                 }
             }
             return Ok(false);
@@ -1122,8 +1122,12 @@ impl Definer<'_, '_> {
         if recursing {
             self.catalog.set_constraint_inherited(oid, false, 1)?;
         }
+        // A `NOT VALID` constraint does not check the rows that the table has.
+        if !con.initially_valid {
+            self.catalog.set_constraint_validated(oid, false)?;
+        }
         if no_inherit {
-            return Ok(true);
+            return Ok(con.initially_valid);
         }
         let mut inherited = con.clone();
         inherited.conname = self.catalog.constraint(oid).map(|c| c.name.as_str().into());
@@ -1132,7 +1136,7 @@ impl Definer<'_, '_> {
                 self.scans.push(child.oid);
             }
         }
-        Ok(true)
+        Ok(con.initially_valid)
     }
 
     /// `ATExecChangeOwner`: the new owner of the relation, then of its indexes, its TOAST table and the sequences that it owns. `recursing` is true for these.

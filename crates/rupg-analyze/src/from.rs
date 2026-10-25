@@ -147,7 +147,7 @@ pub struct Column {
     pub name: String,
     pub ty: u32,
     pub typmod: i32,
-    /// `attnotnull`: the column has a not-null constraint.
+    /// `attnullability` is `ATTNULLABLE_VALID`: the column has a valid not-null constraint, so no row has a null in it.
     pub not_null: bool,
 }
 
@@ -1470,7 +1470,7 @@ impl Analyzer<'_> {
                     name: if c.dropped { String::new() } else { c.name.clone() },
                     ty: c.ty,
                     typmod: c.typmod,
-                    not_null: c.not_null,
+                    not_null: c.not_null && !c.not_null_invalid,
                 })
                 .collect());
         }

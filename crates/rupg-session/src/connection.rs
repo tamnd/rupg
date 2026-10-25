@@ -4394,6 +4394,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/fknv.test")));
     }
 
+    /// `ADD CONSTRAINT ... NOT NULL ... NOT VALID`, `VALIDATE CONSTRAINT` and `SET NOT NULL` of a not-null constraint that is not valid, on a table, on the children of `INHERITS` and on the partitions. A query does not take the column as not null. `connection/nnnv.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn nnnv() {
+        big_stack(|| script(include_str!("connection/nnnv.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {
