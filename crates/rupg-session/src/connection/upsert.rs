@@ -283,6 +283,16 @@ impl Connection {
                 return Ok(true);
             };
             let carried = new.split_off(info.width.min(new.len()));
+            // `ExecOnConflictSelect`: the row that the leaf has goes to `RETURNING`, and the statement writes no row.
+            if info.on_conflict.as_ref().is_some_and(|c| c.select.is_some()) {
+                done.count += 1;
+                if info.keeps_written() {
+                    new.push(Value::Oid(routing.oid(at)));
+                    new.extend(carried);
+                    done.written.push(new);
+                }
+                return Ok(true);
+            }
             let catalog = self.catalog();
             let fired = routing.before_update(
                 self,
@@ -372,6 +382,14 @@ impl Connection {
         let Some(mut new) = new else {
             return Ok(true);
         };
+        // `ExecOnConflictSelect`: the row that the table has goes to `RETURNING`, and the statement writes no row.
+        if info.on_conflict.as_ref().is_some_and(|c| c.select.is_some()) {
+            done.count += 1;
+            if info.keeps_written() {
+                done.written.push(new);
+            }
+            return Ok(true);
+        }
         // With triggers `BEFORE ... FOR EACH ROW`, the conditions of the checks follow the columns.
         let conds = if info.recheck.is_some() { info.checks.len() } else { 0 };
         let carried = new.split_off((info.width + conds).min(new.len()));
@@ -450,11 +468,12 @@ fn to_update(
     if conflict.update.is_none() {
         return Ok(false);
     }
-    // `heap_lock_tuple` gives `TM_Invisible` for a version of the command.
-    if command {
+    // `heap_lock_tuple` gives `TM_Invisible` for a version of the command. `DO SELECT` with no lock only fetches the row.
+    if command && (conflict.select.is_none() || conflict.locks()) {
+        let what = if conflict.select.is_some() { "SELECT" } else { "UPDATE" };
         return Err(Error::new(
             SqlState::CARDINALITY_VIOLATION,
-            "ON CONFLICT DO UPDATE command cannot affect row a second time",
+            format!("ON CONFLICT DO {what} command cannot affect row a second time"),
         )
         .with_hint(
             "Ensure that no rows proposed for insertion within the same command have duplicate constrained values.",

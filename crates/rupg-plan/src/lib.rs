@@ -349,8 +349,8 @@ impl Operation {
 /// The `ON CONFLICT` clause of an `INSERT`.
 #[derive(Clone, Debug)]
 pub struct Conflict<'q> {
-    /// True for `DO UPDATE`, false for `DO NOTHING`.
-    pub update: bool,
+    /// What the statement does for a conflict, as `EXPLAIN` shows it: `UPDATE`, `NOTHING`, or `SELECT` with its lock.
+    pub resolution: &'static str,
     /// The OIDs of the arbiter indexes.
     pub arbiters: Vec<u32>,
     /// The condition of `WHERE` of `DO UPDATE`, in the scope of the query of `DO UPDATE`.

@@ -708,7 +708,7 @@ impl<'q> Builder<'q> {
                 filter = parts.into_iter().map(Item::of).collect();
             }
             Conflict {
-                update: c.update.is_some(),
+                resolution: c.resolution(),
                 arbiters: c
                     .arbiters
                     .iter()
