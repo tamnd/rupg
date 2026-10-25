@@ -1,16 +1,17 @@
 //! `transformSelectStmt` of `analyze.c`: `FROM`, the target list, the `WHERE` condition, `GROUP BY`, `HAVING`, `ORDER BY`, `DISTINCT`, `LIMIT` and `OFFSET`.
 
 use rupg_common::{Error, Result, SqlState};
-use rupg_sql::nodes::{LimitOption, List, Node, SelectStmt, SetOperation};
+use rupg_sql::nodes::{IntoClause, LimitOption, List, Node, SelectStmt, SetOperation};
 use rupg_types::oid;
 
 use crate::Analyzer;
 use crate::agg::Kind;
-use crate::coerce::Context;
+use crate::coerce::{AtOpt, Context};
 use crate::colname::figure_colname;
 use crate::expr::{Expr, ExprKind};
 use crate::from::{FromItem, Relation};
 use crate::sort::SortGroup;
+use crate::typename::place;
 use crate::window::WindowClause;
 
 /// The query tree of a `SELECT`.
@@ -200,9 +201,10 @@ impl Query {
     }
 }
 
-/// The error of a clause that the analyzer does not take yet.
-fn not_yet(what: &str) -> Error {
-    Error::new(SqlState::FEATURE_NOT_SUPPORTED, format!("{what} is not supported yet"))
+/// The error of `transformSelectStmt` and `transformSetOperationStmt` for a `SELECT ... INTO` in a place where only a query can be, such as a subquery. A top-level `SELECT ... INTO` is a `CREATE TABLE AS`.
+pub(crate) fn into_not_allowed(into: &IntoClause) -> Error {
+    let at = into.rel.as_ref().and_then(|r| place(r.location));
+    Error::new(SqlState::SYNTAX_ERROR, "SELECT ... INTO is not allowed here").at_opt(at)
 }
 
 impl Analyzer<'_> {
@@ -289,8 +291,8 @@ impl Analyzer<'_> {
 
     /// The query tree of a `SELECT` that is not a set operation or a `VALUES` list, with its windows.
     fn simple_select(&mut self, s: &SelectStmt, keep_unknowns: bool) -> Result<Query> {
-        if s.intoClause.is_some() {
-            return Err(not_yet("SELECT INTO"));
+        if let Some(into) = &s.intoClause {
+            return Err(into_not_allowed(into));
         }
         // The windows of the `WINDOW` clause come first, and each query has its own windows.
         let defs = s.windowClause.iter().flatten().filter_map(|node| match node {

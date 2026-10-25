@@ -26,7 +26,7 @@ impl Definer<'_, '_> {
         let Some(Node::SelectStmt(select)) = stmt.query.as_ref() else {
             return Err(Error::internal("the query of a view is not a SELECT"));
         };
-        if select.intoClause.is_some() {
+        if crate::select_into(select).is_some() {
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
                 "views must not contain SELECT INTO",

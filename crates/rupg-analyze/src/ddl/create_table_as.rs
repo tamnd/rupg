@@ -40,10 +40,10 @@ impl Definer<'_, '_> {
 
     /// `SELECT ... INTO`, which the grammar of PostgreSQL makes a `CREATE TABLE AS` with the same query and no `INTO`.
     pub(super) fn select_into(&mut self, stmt: &SelectStmt) -> Result<Option<u32>> {
-        let Some(into) = stmt.intoClause.as_deref() else {
+        let Some(into) = crate::select_into(stmt) else {
             return Err(Error::internal("SELECT INTO with no INTO clause"));
         };
-        let query = SelectStmt { intoClause: None, ..stmt.clone() };
+        let query = crate::without_into(stmt);
         self.query_table(&query, into, false, None)
     }
 
