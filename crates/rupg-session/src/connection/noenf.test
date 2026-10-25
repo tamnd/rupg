@@ -1,0 +1,130 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE ne_t (a int, b int, CONSTRAINT ne_t_a CHECK (a > 0) NOT ENFORCED);
+CREATE TABLE
+> SELECT conname, conenforced, convalidated, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'ne_t'::regclass ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1,conenforced@pg_constraint.7:16:1:-1,convalidated@pg_constraint.8:16:1:-1,pg_get_constraintdef:25:-1:-1
+row ne_t_a,f,f,CHECK ((a > 0)) NOT ENFORCED
+SELECT 1
+> INSERT INTO ne_t VALUES (-1, 1);
+INSERT 0 1
+> ALTER TABLE ne_t ADD CONSTRAINT ne_t_b CHECK (b > 0) NOT ENFORCED;
+ALTER TABLE
+> INSERT INTO ne_t VALUES (1, -1);
+INSERT 0 1
+> ALTER TABLE ne_t VALIDATE CONSTRAINT ne_t_a;
+ERROR 55000 cannot validate NOT ENFORCED constraint
+> ALTER TABLE ne_t ALTER CONSTRAINT ne_t_a ENFORCED;
+ERROR 23514 check constraint "ne_t_a" of relation "ne_t" is violated by some row
+> DELETE FROM ne_t WHERE a < 0;
+DELETE 1
+> ALTER TABLE ne_t ALTER CONSTRAINT ne_t_a ENFORCED;
+ALTER TABLE
+> SELECT conname, conenforced, convalidated FROM pg_constraint WHERE conrelid = 'ne_t'::regclass ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1,conenforced@pg_constraint.7:16:1:-1,convalidated@pg_constraint.8:16:1:-1
+row ne_t_a,t,t
+row ne_t_b,f,f
+SELECT 2
+> INSERT INTO ne_t VALUES (-2, 2);
+ERROR 23514 new row for relation "ne_t" violates check constraint "ne_t_a"
+DETAIL Failing row contains (-2, 2).
+> ALTER TABLE ne_t ALTER CONSTRAINT ne_t_a NOT ENFORCED;
+ALTER TABLE
+> INSERT INTO ne_t VALUES (-2, 2);
+INSERT 0 1
+> SELECT conname, conenforced, convalidated FROM pg_constraint WHERE conrelid = 'ne_t'::regclass ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1,conenforced@pg_constraint.7:16:1:-1,convalidated@pg_constraint.8:16:1:-1
+row ne_t_a,f,f
+row ne_t_b,f,f
+SELECT 2
+> ALTER TABLE ne_t ADD CONSTRAINT ne_t_c CHECK (b > 0) NOT ENFORCED NOT VALID;
+ALTER TABLE
+> ALTER TABLE ne_t ADD CONSTRAINT ne_t_d CHECK (b < 100) ENFORCED;
+ALTER TABLE
+> SELECT b FROM ne_t WHERE b < 0;
+fields b@ne_t.2:23:4:-1
+row -1
+SELECT 1
+> CREATE TABLE ne_pk (a int PRIMARY KEY);
+CREATE TABLE
+> INSERT INTO ne_pk VALUES (1);
+INSERT 0 1
+> CREATE TABLE ne_fk (a int REFERENCES ne_pk NOT ENFORCED);
+CREATE TABLE
+> SELECT conname, conenforced, convalidated, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'ne_fk'::regclass ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1,conenforced@pg_constraint.7:16:1:-1,convalidated@pg_constraint.8:16:1:-1,pg_get_constraintdef:25:-1:-1
+row ne_fk_a_fkey,f,f,FOREIGN KEY (a) REFERENCES ne_pk(a) NOT ENFORCED
+SELECT 1
+> SELECT count(*) FROM pg_trigger WHERE tgconstraint = (SELECT oid FROM pg_constraint WHERE conname = 'ne_fk_a_fkey');
+fields count:20:8:-1
+row 0
+SELECT 1
+> INSERT INTO ne_fk VALUES (5);
+INSERT 0 1
+> ALTER TABLE ne_fk VALIDATE CONSTRAINT ne_fk_a_fkey;
+ERROR 55000 cannot validate NOT ENFORCED constraint
+> ALTER TABLE ne_fk ALTER CONSTRAINT ne_fk_a_fkey ENFORCED;
+ERROR 23503 insert or update on table "ne_fk" violates foreign key constraint "ne_fk_a_fkey"
+DETAIL Key (a)=(5) is not present in table "ne_pk".
+> DELETE FROM ne_fk;
+DELETE 1
+> INSERT INTO ne_fk VALUES (1);
+INSERT 0 1
+> ALTER TABLE ne_fk ALTER CONSTRAINT ne_fk_a_fkey ENFORCED;
+ALTER TABLE
+> SELECT conname, conenforced, convalidated FROM pg_constraint WHERE conrelid = 'ne_fk'::regclass ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1,conenforced@pg_constraint.7:16:1:-1,convalidated@pg_constraint.8:16:1:-1
+row ne_fk_a_fkey,t,t
+SELECT 1
+> SELECT count(*) FROM pg_trigger WHERE tgconstraint = (SELECT oid FROM pg_constraint WHERE conname = 'ne_fk_a_fkey');
+fields count:20:8:-1
+row 4
+SELECT 1
+> INSERT INTO ne_fk VALUES (6);
+ERROR 23503 insert or update on table "ne_fk" violates foreign key constraint "ne_fk_a_fkey"
+DETAIL Key (a)=(6) is not present in table "ne_pk".
+> DELETE FROM ne_pk;
+ERROR 23503 update or delete on table "ne_pk" violates foreign key constraint "ne_fk_a_fkey" on table "ne_fk"
+DETAIL Key (a)=(1) is still referenced from table "ne_fk".
+> ALTER TABLE ne_fk ALTER CONSTRAINT ne_fk_a_fkey NOT ENFORCED;
+ALTER TABLE
+> SELECT count(*) FROM pg_trigger WHERE tgconstraint = (SELECT oid FROM pg_constraint WHERE conname = 'ne_fk_a_fkey');
+fields count:20:8:-1
+row 0
+SELECT 1
+> DELETE FROM ne_pk;
+DELETE 1
+> INSERT INTO ne_fk VALUES (7);
+INSERT 0 1
+> ALTER TABLE ne_fk ADD CONSTRAINT ne_fk_b FOREIGN KEY (a) REFERENCES ne_pk NOT ENFORCED;
+ALTER TABLE
+> ALTER TABLE ne_fk ADD CONSTRAINT ne_fk_c FOREIGN KEY (a) REFERENCES ne_pk NOT ENFORCED DEFERRABLE;
+ALTER TABLE
+> SELECT conname, conenforced, convalidated, condeferrable FROM pg_constraint WHERE conrelid = 'ne_fk'::regclass ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1,conenforced@pg_constraint.7:16:1:-1,convalidated@pg_constraint.8:16:1:-1,condeferrable@pg_constraint.5:16:1:-1
+row ne_fk_a_fkey,f,f,f
+row ne_fk_b,f,f,f
+row ne_fk_c,f,f,t
+SELECT 3
+> CREATE TABLE ne_p (a int, b int, CHECK (b > 0) NOT ENFORCED) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE ne_p1 PARTITION OF ne_p FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> SELECT conrelid::regclass::text AS rel, conname, conenforced, convalidated FROM pg_constraint WHERE conrelid IN ('ne_p'::regclass, 'ne_p1'::regclass) ORDER BY conrelid::regclass::text, conname;
+fields rel:25:-1:-1,conname@pg_constraint.2:19:64:-1,conenforced@pg_constraint.7:16:1:-1,convalidated@pg_constraint.8:16:1:-1
+row ne_p,ne_p_b_check,f,f
+row ne_p1,ne_p_b_check,f,f
+SELECT 2
+> CREATE TABLE ne_p2 (a int, b int, CONSTRAINT ne_p_b_check CHECK (b > 0));
+CREATE TABLE
+> ALTER TABLE ne_p ATTACH PARTITION ne_p2 FOR VALUES FROM (10) TO (20);
+ALTER TABLE
+> CREATE TABLE ne_p3 (a int, b int, CONSTRAINT ne_p_b_check CHECK (b > 0) NOT ENFORCED);
+CREATE TABLE
+> CREATE TABLE ne_q (a int, b int, CONSTRAINT ne_p_b_check CHECK (b > 0)) PARTITION BY RANGE (a);
+CREATE TABLE
+> ALTER TABLE ne_q ATTACH PARTITION ne_p3 FOR VALUES FROM (0) TO (10);
+ERROR 42P17 constraint "ne_p_b_check" conflicts with NOT ENFORCED constraint on child table "ne_p3"
+> CREATE DOMAIN ne_d AS int CHECK (VALUE > 0) NOT ENFORCED;
+ERROR 42P17 specifying constraint enforceability not supported for domains at 45

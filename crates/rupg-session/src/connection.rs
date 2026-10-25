@@ -4400,6 +4400,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/nnnv.test")));
     }
 
+    /// `NOT ENFORCED` check constraints and foreign keys, `ALTER CONSTRAINT ... ENFORCED` and `NOT ENFORCED`, `VALIDATE CONSTRAINT` of a constraint that is not enforced, the partitions of a table with such a constraint and the conflict of `ATTACH PARTITION`. A foreign key that is not enforced has no triggers. `connection/noenf.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn noenf() {
+        big_stack(|| script(include_str!("connection/noenf.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {

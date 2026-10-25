@@ -219,16 +219,16 @@ impl Definer<'_, '_> {
             self.copy_like_comments(source, table)?;
         }
         if like.options & CONSTRAINTS != 0 {
-            let mut checks: Vec<(String, Option<String>, bool)> = self
+            let mut checks: Vec<(String, Option<String>, bool, bool)> = self
                 .catalog
                 .constraints_of(source)
                 .filter(|c| c.kind == ConKind::Check)
-                .map(|c| (c.name.clone(), c.expr.clone(), c.no_inherit))
+                .map(|c| (c.name.clone(), c.expr.clone(), c.no_inherit, c.enforced))
                 .collect();
             // `CheckConstraintFetch` sorts the check constraints by their names.
             checks.sort_by(|a, b| a.0.cmp(&b.0));
             let mut cooked = Vec::with_capacity(checks.len());
-            for (name, text, no_inherit) in &checks {
+            for (name, text, no_inherit, enforced) in &checks {
                 let text = text.as_deref().unwrap_or_default();
                 let expr = crate::node::read(text)?;
                 if column_numbers(&[&expr]).contains(&0) {
@@ -241,8 +241,8 @@ impl Definer<'_, '_> {
                     conname: Some(name.as_str().into()),
                     cooked_expr: Some(map.text(text)?.as_str().into()),
                     is_no_inherit: *no_inherit,
-                    is_enforced: true,
-                    initially_valid: true,
+                    is_enforced: *enforced,
+                    initially_valid: *enforced,
                     skip_validation: true,
                     location: -1,
                     ..Constraint::default()

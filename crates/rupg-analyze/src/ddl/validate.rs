@@ -18,20 +18,27 @@ impl Definer<'_, '_> {
         recursing: bool,
     ) -> Result<()> {
         let found = self.catalog.constraints_of(target.oid).find(|c| c.name == name);
-        let Some(con) = found.map(|c| (c.oid, c.kind, c.validated, c.no_inherit, c.keys.clone()))
+        let Some(con) =
+            found.map(|c| (c.oid, c.kind, (c.validated, c.enforced), c.no_inherit, c.keys.clone()))
         else {
             return Err(Error::new(
                 SqlState::UNDEFINED_OBJECT,
                 format!("constraint \"{name}\" of relation \"{}\" does not exist", target.name),
             ));
         };
-        let (oid, kind, validated, no_inherit, keys) = con;
+        let (oid, kind, (validated, enforced), no_inherit, keys) = con;
         if !matches!(kind, ConKind::Foreign | ConKind::Check | ConKind::NotNull) {
             return Err(Error::new(
                 SqlState::WRONG_OBJECT_TYPE,
                 format!("cannot validate constraint \"{name}\" of relation \"{}\"", target.name),
             )
             .with_detail("This operation is not supported for this type of constraint."));
+        }
+        if !enforced {
+            return Err(Error::new(
+                SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
+                "cannot validate NOT ENFORCED constraint",
+            ));
         }
         if validated {
             return Ok(());

@@ -361,21 +361,23 @@ impl Definer<'_, '_> {
 
     /// The check constraints that a table takes from its parents in `MergeAttributes`, from each parent in the order of their names, with the numbers of the columns of the table. Each keeps its name, and a constraint `NO INHERIT` stays with the parent. Two parents can give a constraint with one name only when the expressions are the same, and then it is one constraint that counts both.
     pub(super) fn inherit_checks(&mut self, table: u32, parents: &[u32]) -> Result<()> {
-        // The name, the expression and the number of the parents that give it.
-        let mut merged: Vec<(String, String, Vec<i16>, i16)> = Vec::new();
+        // The name, the expression, the columns, the number of the parents that give it and whether one of them is enforced.
+        let mut merged: Vec<(String, String, Vec<i16>, i16, bool)> = Vec::new();
         for &parent in parents {
             let map = self.att_map(parent, table)?;
-            let mut checks: Vec<(String, String, Vec<i16>)> = self
+            let mut checks: Vec<(String, String, Vec<i16>, bool)> = self
                 .catalog
                 .constraints_of(parent)
                 .filter(|c| c.kind == ConKind::Check && !c.no_inherit)
-                .map(|c| (c.name.clone(), c.expr.clone().unwrap_or_default(), c.keys.clone()))
+                .map(|c| {
+                    (c.name.clone(), c.expr.clone().unwrap_or_default(), c.keys.clone(), c.enforced)
+                })
                 .collect();
             checks.sort_by(|a, b| a.0.cmp(&b.0));
-            for (name, text, keys) in checks {
+            for (name, text, keys, enforced) in checks {
                 let (text, keys) = (map.text(&text)?, map.columns(&keys));
                 let Some(prev) = merged.iter_mut().find(|m| m.0 == name) else {
-                    merged.push((name, text, keys, 1));
+                    merged.push((name, text, keys, 1, enforced));
                     continue;
                 };
                 if without_locations(Some(&prev.1)) != without_locations(Some(&text)) {
@@ -387,13 +389,18 @@ impl Definer<'_, '_> {
                     ));
                 }
                 prev.3 = prev.3.saturating_add(1);
+                // `MergeCheckConstraint`: the constraint is enforced when one of the parents enforces it.
+                prev.4 |= enforced;
             }
         }
-        for (name, text, keys, count) in merged {
+        for (name, text, keys, count, enforced) in merged {
             let expr = node::read(&text)?;
             let refs = references(self.catalog, table, &[&expr])?;
             let oid = self.catalog.add_check(table, Some(&name), text, keys, &refs, false)?;
             self.catalog.set_constraint_inherited(oid, false, count)?;
+            if !enforced {
+                self.catalog.set_constraint_enforced(oid, false)?;
+            }
         }
         Ok(())
     }

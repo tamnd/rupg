@@ -733,6 +733,8 @@ pub struct Constraint {
     pub deferred: bool,
     /// `convalidated`.
     pub validated: bool,
+    /// `conenforced`: false for a check constraint or a foreign key that is `NOT ENFORCED`. Writes do not check such a constraint.
+    pub enforced: bool,
     /// `connoinherit`.
     pub no_inherit: bool,
     /// `conislocal`: false for a constraint that only a parent table gives.
@@ -2273,6 +2275,16 @@ impl Catalog {
         Ok(())
     }
 
+    /// Sets `conenforced` of a check constraint or a foreign key, and `convalidated` to the same value, as `ATExecAlterCheckConstrEnforceability` and `ATExecAlterFKConstrEnforceability` do.
+    pub fn set_constraint_enforced(&mut self, constraint: u32, enforced: bool) -> Result<()> {
+        let Some(con) = self.constraints.get_mut(&constraint) else {
+            return Err(no_object("constraint", constraint));
+        };
+        con.enforced = enforced;
+        con.validated = enforced;
+        Ok(())
+    }
+
     /// Sets `convalidated` of a constraint.
     pub fn set_constraint_validated(&mut self, constraint: u32, validated: bool) -> Result<()> {
         let Some(con) = self.constraints.get_mut(&constraint) else {
@@ -3370,6 +3382,7 @@ impl Catalog {
             deferrable: false,
             deferred: false,
             validated: true,
+            enforced: true,
             no_inherit: false,
             local: true,
             inhcount: 0,
@@ -3664,6 +3677,7 @@ impl Catalog {
             constraint.inhcount = 1;
             // A clone has the `convalidated` of its parent, as `addFkRecurseReferencing` and `CloneFkReferencing` give it.
             constraint.validated = self.constraints.get(&parent).is_none_or(|p| p.validated);
+            constraint.enforced = self.constraints.get(&parent).is_none_or(|p| p.enforced);
         }
         let oid = constraint.oid;
         let referenced = new.foreign.table;

@@ -1556,7 +1556,7 @@ impl Analyzer<'_> {
         let Some(catalog) = self.env.catalog() else { return Ok(Vec::new()) };
         let mut checks: Vec<(String, &str)> = catalog
             .constraints_of(table)
-            .filter(|c| c.kind == ConKind::Check)
+            .filter(|c| c.kind == ConKind::Check && c.enforced)
             .map(|c| (c.name.clone(), c.expr.as_deref().unwrap_or_default()))
             .collect();
         checks.sort_by(|a, b| a.0.cmp(&b.0));
