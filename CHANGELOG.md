@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.82 (2026-10-25)
+
 ### Added
 
 - `ON CONFLICT` takes a collation and an operator class on an element of the inference, as `infer_collation_opclass_match` does. Such an element takes only the unique indexes whose key column has the same collation, or an operator class of the same family and input type. `ASC`, `DESC`, `NULLS FIRST`, `NULLS LAST` and operator class options in the inference give the errors of PostgreSQL (#704).
