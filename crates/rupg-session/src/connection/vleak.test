@@ -1,0 +1,135 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE lc (cid int, name text, passwd text);
+CREATE TABLE
+> INSERT INTO lc VALUES (1, 'alice', 'p1'), (2, 'bob', 'p2'), (3, 'eve', 'p3');
+INSERT 0 3
+> CREATE TABLE lu (cid int, amount int);
+CREATE TABLE
+> INSERT INTO lu VALUES (1, 10), (2, 20);
+INSERT 0 2
+> CREATE FUNCTION f_leak(text) RETURNS bool LANGUAGE plpgsql COST 0.0000001 AS 'BEGIN RAISE NOTICE ''f_leak => %'', $1; RETURN true; END';
+CREATE FUNCTION
+> CREATE FUNCTION f_stable(text) RETURNS bool LANGUAGE plpgsql STABLE COST 0.0000001 AS 'BEGIN RAISE NOTICE ''f_stable => %'', $1; RETURN true; END';
+CREATE FUNCTION
+> CREATE VIEW lnormal AS SELECT * FROM lc WHERE name = 'alice';
+CREATE VIEW
+> CREATE VIEW lsecure WITH (security_barrier) AS SELECT * FROM lc WHERE name = 'alice';
+CREATE VIEW
+> SELECT count(*) FROM lnormal v WHERE f_leak('passwd') AND f_leak(passwd);
+fields count:20:8:-1
+NOTICE 00000 f_leak => passwd (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => p1 (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => passwd (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => p2 (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => passwd (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => p3 (PL/pgSQL function f_leak(text) line 1 at RAISE)
+row 1
+SELECT 1
+> SELECT count(*) FROM lsecure v WHERE f_leak('passwd') AND f_leak(passwd);
+fields count:20:8:-1
+NOTICE 00000 f_leak => passwd (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => p1 (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => passwd (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => passwd (PL/pgSQL function f_leak(text) line 1 at RAISE)
+row 1
+SELECT 1
+> SELECT count(*) FROM lc WHERE f_leak('x') AND f_leak(passwd);
+fields count:20:8:-1
+NOTICE 00000 f_leak => x (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => p1 (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => x (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => p2 (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => x (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => p3 (PL/pgSQL function f_leak(text) line 1 at RAISE)
+row 3
+SELECT 1
+> SELECT count(*) FROM lc WHERE f_stable('s') AND f_leak(passwd);
+fields count:20:8:-1
+NOTICE 00000 f_stable => s (PL/pgSQL function f_stable(text) line 1 at RAISE)
+NOTICE 00000 f_leak => p1 (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => p2 (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => p3 (PL/pgSQL function f_leak(text) line 1 at RAISE)
+row 3
+SELECT 1
+> SELECT count(*) FROM lc WHERE f_leak(passwd) AND f_leak('y');
+fields count:20:8:-1
+NOTICE 00000 f_leak => p1 (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => y (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => p2 (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => y (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => p3 (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => y (PL/pgSQL function f_leak(text) line 1 at RAISE)
+row 3
+SELECT 1
+> SELECT count(*) FROM lc, lu WHERE lc.cid = lu.cid AND f_leak('j');
+fields count:20:8:-1
+NOTICE 00000 f_leak => j (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => j (PL/pgSQL function f_leak(text) line 1 at RAISE)
+row 2
+SELECT 1
+> SELECT count(*) FROM (SELECT * FROM lc OFFSET 0) s WHERE f_leak('o') AND f_leak(passwd);
+fields count:20:8:-1
+NOTICE 00000 f_leak => o (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => p1 (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => o (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => p2 (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => o (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => p3 (PL/pgSQL function f_leak(text) line 1 at RAISE)
+row 3
+SELECT 1
+> SELECT f_leak('t') WHERE f_leak('w');
+fields f_leak:16:1:-1
+NOTICE 00000 f_leak => w (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => t (PL/pgSQL function f_leak(text) line 1 at RAISE)
+row t
+SELECT 1
+> PREPARE p1 AS SELECT count(*) FROM lnormal WHERE f_leak(passwd);
+PREPARE
+> PREPARE p2 AS SELECT count(*) FROM lsecure WHERE f_leak(passwd);
+PREPARE
+> EXECUTE p1;
+NOTICE 00000 f_leak => p1 (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => p2 (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => p3 (PL/pgSQL function f_leak(text) line 1 at RAISE)
+fields count:20:8:-1
+row 1
+SELECT 1
+> EXECUTE p2;
+NOTICE 00000 f_leak => p1 (PL/pgSQL function f_leak(text) line 1 at RAISE)
+fields count:20:8:-1
+row 1
+SELECT 1
+> ALTER VIEW lsecure SET (security_barrier = false);
+ALTER VIEW
+> ALTER VIEW lnormal SET (security_barrier = true);
+ALTER VIEW
+> EXECUTE p1;
+NOTICE 00000 f_leak => p1 (PL/pgSQL function f_leak(text) line 1 at RAISE)
+fields count:20:8:-1
+row 1
+SELECT 1
+> EXECUTE p2;
+NOTICE 00000 f_leak => p1 (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => p2 (PL/pgSQL function f_leak(text) line 1 at RAISE)
+NOTICE 00000 f_leak => p3 (PL/pgSQL function f_leak(text) line 1 at RAISE)
+fields count:20:8:-1
+row 1
+SELECT 1
+> DEALLOCATE p1;
+DEALLOCATE
+> DEALLOCATE p2;
+DEALLOCATE
+> DROP VIEW lsecure;
+DROP VIEW
+> DROP VIEW lnormal;
+DROP VIEW
+> DROP TABLE lu;
+DROP TABLE
+> DROP TABLE lc;
+DROP TABLE
+> DROP FUNCTION f_leak(text);
+DROP FUNCTION
+> DROP FUNCTION f_stable(text);
+DROP FUNCTION

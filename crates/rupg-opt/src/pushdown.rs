@@ -88,7 +88,7 @@ fn push(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
     query.filter = and_all(keep);
 }
 
-/// `set_subquery_pathlist` for the executor: each part of `WHERE` that reads only a view with `security_barrier` of the list of `FROM` moves into the view when it is leakproof, as `qual_is_pushdown_safe` lets such a condition pass the barrier. `barrier` is true for a view with `security_barrier`. The other parts stay above the view.
+/// `set_subquery_pathlist` for the executor: each part of `WHERE` that reads only a view with `security_barrier` of the list of `FROM`, or a volatile part that reads no relation when the view is the only item of `FROM`, moves into the view when it is leakproof, as `qual_is_pushdown_safe` lets such a condition pass the barrier. `barrier` is true for a view with `security_barrier`. The other parts stay above the view.
 pub(crate) fn push_barrier(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
     let Some(filter) = query.filter.take() else { return };
     let mut owned = Vec::new();
@@ -96,9 +96,14 @@ pub(crate) fn push_barrier(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
     let mut keep = Vec::new();
     for part in owned {
         let rels = exprs::relations(&part);
-        let to = rels.first().copied().filter(|&r| {
+        // A volatile condition that reads no relation is a condition of the one relation of `FROM`, as in [`push`].
+        let only = match query.from.as_slice() {
+            [FromItem::Relation(r)] if rels.is_empty() && exprs::volatile(&part) => Some(*r),
+            _ => None,
+        };
+        let to = rels.first().copied().or(only).filter(|&r| {
             let relation = &query.relations[r];
-            rels.len() == 1
+            rels.len() <= 1
                 && query.from.iter().any(|item| matches!(item, FromItem::Relation(k) if *k == r))
                 && relation.cte.is_none()
                 && !relation.lateral

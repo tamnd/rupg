@@ -4494,6 +4494,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/saorder.test")));
     }
 
+    /// A volatile condition that reads no column runs for each row of the scan of the one relation of `FROM`, in the order of the costs of the conditions, and it moves into a view with `security_barrier`, as `distribute_qual_to_rels` gives it the relations of its level. A condition that reads no column and calls no volatile function runs once, in the one-time filter. A prepared statement reads a view with and without `security_barrier`. `connection/vleak.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vleak() {
+        big_stack(|| script(include_str!("connection/vleak.test")));
+    }
+
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn alter_database_set() {

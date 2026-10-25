@@ -114,12 +114,18 @@ impl Connection {
             let reader = self.reader();
             let values = rupg_analyze::execute_params(&stmt.params, &statement.params, &reader)?;
             notices.extend(values.notices.iter().map(|error| Notice::warning(error.clone())));
-            let plan = rupg_exec::prepare(values, &reader)?.fold(None, &reader)?;
-            plan.run(&[], &reader)?.into_iter().next().unwrap_or_default()
+            let plan = rupg_exec::prepare(values, &reader)?.fold(None, &reader);
+            let rows = plan.and_then(|plan| plan.run(&[], &reader));
+            notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
+            rows?.into_iter().next().unwrap_or_default()
         };
         let reader = self.reader();
         let plan = match &statement.plan {
-            Some(plan) => Some(plan.fold(Some(&params), &reader)?),
+            Some(plan) => {
+                let plan = plan.fold(Some(&params), &reader);
+                notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
+                Some(plan?)
+            }
             None => None,
         };
         statement.count_plan(reader.settings().get("plan_cache_mode").as_deref());
@@ -127,12 +133,16 @@ impl Connection {
             let view = reader.view().cloned().unwrap_or_default();
             let (plan, writes) = self.start_writes(plan, &params, &view)?;
             if plan.write().is_some() {
-                let rows = plan.run(&params, &reader)?;
+                let rows = plan.run(&params, &reader);
+                notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
+                let rows = rows?;
                 let done = self.write_rows(&plan, &params, &view, rows, formats, writes);
                 notices.extend(self.trigger_notices());
                 return done;
             }
-            let rows = query::run(&plan, &params, &reader, formats)?;
+            let rows = query::run(&plan, &params, &reader, formats);
+            notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
+            let rows = rows?;
             let ended = self.end_writes(writes, &params, Vec::new());
             notices.extend(self.trigger_notices());
             ended?;

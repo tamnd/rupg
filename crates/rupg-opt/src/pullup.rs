@@ -55,6 +55,27 @@ pub fn merge_from(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
         merge(query, r, top);
     }
     pushdown::push_barrier(query, barrier);
+    merge_barrier(query);
+}
+
+/// For the executor, a view with `security_barrier` that is the only item of `FROM` merges too, after its leakproof conditions moved into it, so that each row of the view meets the other conditions of the query before the scan reads the next row, as the `Subquery Scan` of PostgreSQL runs. The conditions of the view keep their own level in `barrier` of the query, so that the executor runs them first, as `order_qual_clauses` orders the `securityQuals` of a view of an `UPDATE`.
+fn merge_barrier(query: &mut Query) {
+    let [FromItem::Relation(r)] = query.from[..] else { return };
+    if !query.barrier.is_empty() || query.relations.get(r).is_none_or(|v| v.oid == 0) {
+        return;
+    }
+    if candidate(query, &|_| false, true) != Some((r, true)) {
+        return;
+    }
+    let Some(sub) = query.relations[r].subquery.as_deref() else { return };
+    let mut parts = Vec::new();
+    if let Some(filter) = &sub.filter {
+        exprs::and_parts(filter, &mut parts);
+    }
+    let mut levels = sub.barrier.clone();
+    levels.push(parts.len().saturating_sub(levels.iter().sum()));
+    merge(query, r, true);
+    query.barrier = levels;
 }
 
 /// `transform_MERGE_to_join`: the join of a `MERGE` has the target table on its left side and the source on its right side. With `NOT MATCHED BY SOURCE`, the executor of PostgreSQL tests the whole row of the source, so the plan does not read the one-row `VALUES` that marks the source rows here. A `MERGE` in `WITH` changes too.
@@ -659,6 +680,10 @@ fn candidate(
         }
         let relation = query.relations.get(r)?;
         let sub = pullable(relation, barrier, executor)?;
+        // The levels of the conditions of a merged view with `security_barrier` hold for the conditions of the query only when the subquery is the only item of `FROM`.
+        if !sub.barrier.is_empty() && (query.from.len() != 1 || !query.barrier.is_empty()) {
+            return None;
+        }
         let used = used(query, r);
         if relation.lateral {
             let safe = query.from.iter().find_map(|item| lowest_outer(item, r))?;
@@ -954,6 +979,9 @@ fn merge(query: &mut Query, r: usize, top: bool) {
     }
     query.relations.append(&mut sub.relations);
     query.pulled += 1 + sub.pulled + result;
+    if !sub.barrier.is_empty() {
+        query.barrier = std::mem::take(&mut sub.barrier);
+    }
     if let Some(filter) = sub.filter {
         query.filter = Some(and(filter, query.filter.take()));
     }

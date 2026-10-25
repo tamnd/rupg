@@ -856,6 +856,8 @@ pub(crate) fn tuples(
     if let Some(expr) = &query.filter {
         conjuncts(expr, &mut filter);
     }
+    // The one-time filter of the gate ran each condition that reads no column and calls no volatile function before the scan.
+    filter.retain(|expr| expr.first_var().is_some() || crate::volatile(expr));
     let filter = order_quals(filter, &query.barrier);
     let items: Vec<(&FromItem, Vec<usize>)> = query
         .from
@@ -866,11 +868,15 @@ pub(crate) fn tuples(
             (item, relations)
         })
         .collect();
-    // A condition with no relation stays at the top, so that it runs once for each tuple as in a query with no FROM.
+    // A condition with no relation stays at the top, so that it runs once for each tuple as in a query with no FROM. With one item in `FROM`, it is a condition of the item, as `distribute_qual_to_rels` gives a volatile condition with no column the relations of its level, so that it runs with the other conditions of the scan in the order of their costs.
     let mut own: Vec<Vec<&Expr>> = vec![Vec::new(); items.len()];
     let mut rest = Vec::new();
     for expr in filter {
         let relations = relations_of(expr);
+        if relations.is_empty() && items.len() == 1 {
+            own[0].push(expr);
+            continue;
+        }
         match items.iter().position(|(_, r)| !relations.is_empty() && covered(expr, r)) {
             Some(i) => own[i].push(expr),
             None => rest.push(expr),
