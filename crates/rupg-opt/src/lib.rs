@@ -57,6 +57,11 @@ pub trait Members: std::fmt::Debug {
         None
     }
 
+    /// `partitions_are_ordered` and `build_partition_pathkeys`: the column numbers of the key of the partitioned table `table` when the partitions `members`, in the order of their bounds, hold the rows in the order of the key, or `None`.
+    fn ordered_partitions(&self, _table: u32, _members: &[u32]) -> Option<Vec<i16>> {
+        None
+    }
+
     /// The comparison of two values that are not null, of the types that the arguments give, as the B-tree support function `cmp` of the types gives it. The selectivity functions call the operators of the statistics through it, as `selfuncs.c` calls them through `fmgr`.
     fn compare(&self) -> Compare {
         no_compare
@@ -203,6 +208,21 @@ pub(crate) fn set_width(relation: &Relation, attnum: i16, width: i32) {
     WIDTHS.with(|w| w.borrow_mut().insert((at, attnum), width));
 }
 
+thread_local! {
+    /// The place of each member of an inheritance tree in the list of the members of its relation, as `expand_inherited_rtentry` gives the members their range table entries.
+    static MEMBER_PLACES: RefCell<BTreeMap<u32, usize>> = RefCell::default();
+}
+
+/// The place of the member `oid` in the list of the members of its relation, which [`set_member_places`] set.
+fn member_place(oid: u32) -> usize {
+    MEMBER_PLACES.with(|m| m.borrow().get(&oid).copied().unwrap_or(usize::MAX))
+}
+
+/// Sets the places of the members of a relation.
+pub(crate) fn set_member_places(oids: &[u32]) {
+    MEMBER_PLACES.with(|m| m.borrow_mut().extend(oids.iter().enumerate().map(|(at, &o)| (o, at))));
+}
+
 /// The statistics of the tables of the query and of the queries in it, from `members`.
 fn query_statistics(query: &Query, members: &dyn Members, out: &mut Statistics) {
     fn expr(e: &Expr, members: &dyn Members, out: &mut Statistics) {
@@ -290,7 +310,9 @@ pub fn plan<'q>(query: &'q Query, members: &'q dyn Members) -> Plan<'q> {
     let saved_compare = COMPARE.with(|c| c.replace(members.compare()));
     let saved_match = PATTERN_MATCH.with(|c| c.replace(members.pattern_match()));
     let saved_widths = WIDTHS.with(|w| w.take());
+    let saved_places = MEMBER_PLACES.with(|m| m.take());
     let plan = plan_with(query, members);
+    MEMBER_PLACES.with(|m| m.replace(saved_places));
     WIDTHS.with(|w| w.replace(saved_widths));
     PATTERN_MATCH.with(|c| c.set(saved_match));
     COMPARE.with(|c| c.set(saved_compare));
@@ -768,10 +790,22 @@ impl<'q> Builder<'q> {
             self.current.push(node.scope);
             return;
         }
-        let append =
-            matches!(node.kind, Kind::Append) && node.children.iter().all(|c| c.member.is_some());
-        for child in &mut node.children {
-            self.leaves(level, child, append);
+        // The sort of a member below a `Merge Append` reads the member, and has its name.
+        if append && matches!(node.kind, Kind::Sort(_)) && from::member_of(node).is_some() {
+            for child in &mut node.children {
+                self.leaves(level, child, append);
+                node.scope = child.scope;
+            }
+            return;
+        }
+        let append = from::members_append(node);
+        // The members have their names in the order of their relations, also when an `Append` reads the partitions from the last one.
+        let mut order: Vec<usize> = (0..node.children.len()).collect();
+        if append {
+            order.sort_by_key(|&at| from::member_of(&node.children[at]).map_or(0, member_place));
+        }
+        for at in order {
+            self.leaves(level, &mut node.children[at], append);
         }
         if let Kind::Modify {
             operation: Operation::Update | Operation::Delete,

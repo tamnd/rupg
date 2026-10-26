@@ -864,7 +864,7 @@ impl<'q> Builder<'q> {
                     };
                     if let Some(members) = members {
                         let quals = (base.as_slice(), quals.as_slice());
-                        return vec![inherit::scan(level, r, quals, members, self.members, stats)];
+                        return inherit::scan(level, r, quals, members, self.members, stats);
                     }
                     indexes = self.members.map(|m| m.indexes(relation.oid)).unwrap_or_default();
                     size = self.members.map_or_else(Size::default, |m| m.size(relation.oid));
@@ -1436,11 +1436,27 @@ pub(crate) fn scanned(kind: &Kind<'_>) -> Option<usize> {
 
 /// True when the node is the `Append` of the members of a table with children of `INHERITS`, which has the table itself as a member. `apply_scanjoin_target_to_paths` gives the targets to the members of a partitioned table, but not to the members of such a table.
 pub(crate) fn inheritance_append(query: &Query, node: &Node<'_>) -> bool {
-    let Some(r) = node.children.first().and_then(|c| scanned(&c.kind)) else { return false };
+    let first = node.children.first().map(|c| match c.kind {
+        Kind::Sort(_) => c.children.first().unwrap_or(c),
+        _ => c,
+    });
+    let Some(r) = first.and_then(|c| scanned(&c.kind)) else { return false };
     let Some(oid) = query.relations.get(r).map(|rel| rel.oid) else { return false };
-    matches!(node.kind, Kind::Append)
-        && node.children.iter().all(|c| c.member.is_some())
-        && node.children.iter().any(|c| c.member == Some(oid))
+    members_append(node) && node.children.iter().any(|c| member_of(c) == Some(oid))
+}
+
+/// The table of the scan of a member of an inheritance tree, or of the sort of one below a `Merge Append` or an ordered `Append`.
+pub(crate) fn member_of(node: &Node<'_>) -> Option<u32> {
+    match (&node.kind, node.children.as_slice()) {
+        (Kind::Sort(_), [child]) if node.member.is_none() => child.member,
+        _ => node.member,
+    }
+}
+
+/// True when the node is an `Append` or a `Merge Append` of the members of an inheritance tree.
+pub(crate) fn members_append(node: &Node<'_>) -> bool {
+    matches!(node.kind, Kind::Append | Kind::MergeAppend(_))
+        && node.children.iter().all(|c| member_of(c).is_some())
 }
 
 /// The parts of the conditions of the joins of an item of `FROM`, the joins below first.

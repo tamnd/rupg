@@ -85,7 +85,7 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
     let set_op = level.query.set_op.is_some();
     match &node.kind {
         // `create_append_plan`: the members of an inheritance tree give the items that the node above reads, and the `Append` gives the rows of its members as they are.
-        Kind::Append if node.children.iter().all(|c| c.member.is_some()) => {
+        Kind::Append | Kind::MergeAppend(_) if from::members_append(node) => {
             for child in &mut node.children {
                 set(level, child, want.clone(), false);
             }
@@ -117,7 +117,9 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
         // `make_sort_input_target`: a `Result` above the sort computes the targets that come after the sort from the other targets and from the columns, the aggregate calls and the window calls of those targets, which the sort gives.
         Kind::Result { replaces: None, one_time }
             if one_time.is_empty()
-                && node.children.first().is_some_and(|c| !from::append_rel(level.query, c)) =>
+                && node.children.first().is_some_and(|c| {
+                    !from::append_rel(level.query, c) && !from::inheritance_append(level.query, c)
+                }) =>
         {
             let late = upper::postponed(level);
             let is_late = |at: usize| late.get(at).copied().unwrap_or(false);

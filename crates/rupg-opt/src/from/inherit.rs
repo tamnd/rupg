@@ -1,11 +1,13 @@
-//! `set_append_rel_size` and `set_append_rel_pathlist` for the members of an inheritance tree and the partitions of a partitioned table: each member is a table of its own, with its size, its statistics and its indexes, and the `Append` reads the cheapest scan of each member.
+//! `set_append_rel_size` and `set_append_rel_pathlist` for the members of an inheritance tree and the partitions of a partitioned table: each member is a table of its own, with its size, its statistics and its indexes. The `Append` reads the cheapest scan of each member, and a `Merge Append` or an ordered `Append` reads the scans of the members in an order.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use rupg_plan::{Cost, Kind, Node, Statistic};
+use rupg_analyze::{Expr, ExprKind};
+use rupg_plan::{Cost, Item, Kind, Node, SortKey, Statistic};
 
-use super::{Qual, Rel, Stats, dummy, index, tid, variable_ranges};
+use super::paths::costs;
+use super::{OrderKey, Paths, Qual, Rel, Stats, dummy, index, tid, variable_ranges};
 use crate::{Index, Level, Member, Members, cost};
 
 /// The column numbers of a member for the columns of its parent, as `make_inh_translation_list` gives them.
@@ -58,7 +60,7 @@ impl<'m> Columns<'m> {
     }
 }
 
-/// `set_append_rel_size` and `create_append_plan`: the cheapest scan of each member of the inheritance tree of the relation `r`, under an `Append` when there are two or more, each with the conditions of the relation. Each member has the estimates of its own statistics, and its scans by its indexes and by `ctid`, as `set_plain_rel_pathlist`. The relation has the rows of its members, and the width of each column of the relation is the mean of its widths in the members, by their rows. With no member the relation is a `Result` with no rows, as `set_dummy_rel_pathlist`.
+/// `set_append_rel_size` and `add_paths_to_append_rel`: the scans of each member of the inheritance tree of the relation `r`, each with the conditions of the relation, under an `Append` of the cheapest scans when there are two or more, and the ordered plans of [`ordered`]. Each member has the estimates of its own statistics, and its scans by its indexes and by `ctid`, as `set_plain_rel_pathlist`. The relation has the rows of its members, and the width of each column of the relation is the mean of its widths in the members, by their rows. With no member the relation is a `Result` with no rows, as `set_dummy_rel_pathlist`, and with one member the relation has the scans of the member.
 pub(super) fn scan<'q>(
     level: &Level<'q>,
     r: usize,
@@ -66,14 +68,15 @@ pub(super) fn scan<'q>(
     members: Vec<Member>,
     hooks: Option<&dyn Members>,
     stats: &mut Stats,
-) -> Rel<'q> {
+) -> Vec<Rel<'q>> {
     let relation = &level.query.relations[r];
     let (qual_startup, qual_cost) = stats.qual_costs(quals.iter().map(|q| &*q.expr));
     let per_row = cost::CPU_TUPLE + qual_cost;
     let unique = stats.unique.columns.clone();
     let (mut tuples, mut rows, mut size) = (0.0, 0.0, 0.0);
     let mut sizes: BTreeMap<i16, f64> = BTreeMap::new();
-    let mut children = Vec::with_capacity(members.len());
+    let rels = BTreeSet::from([r]);
+    let mut lists: Vec<Vec<Rel<'q>>> = Vec::with_capacity(members.len());
     for member in &members {
         let columns = Columns::new(member);
         let indexes: Vec<Index> = hooks
@@ -119,23 +122,11 @@ pub(super) fn scan<'q>(
             outer: BTreeSet::new(),
             loops: 1.0,
         };
-        let (tids, current) = tid::paths(level, &table, stats);
-        let mut found: Vec<Node<'q>> = tids.into_iter().map(|rel| rel.node).collect();
+        let (mut found, current) = tid::paths(level, &table, stats);
         if !current {
-            found.push(seq);
-            found.extend(
-                index::paths(level, &table, &indexes, stats).into_iter().map(|rel| rel.node),
-            );
+            found.push(Rel { node: seq, rels: rels.clone(), order: Vec::new() });
+            found.extend(index::paths(level, &table, &indexes, stats));
         }
-        // `set_cheapest`: the scan with the fewest disabled nodes and then the least total cost.
-        let mut node = found
-            .into_iter()
-            .reduce(|best, n| {
-                let key = |n: &Node<'_>| (n.disabled_nodes(), n.cost.total);
-                if key(&n) < key(&best) { n } else { best }
-            })
-            .unwrap_or_else(|| dummy(level.scope, &BTreeSet::from([r]), false));
-        node.member = Some(member.oid);
         // `set_rel_width` of the member: the width of a column from the statistics of the member, or else from its type.
         let width = |attnum: i16| -> i32 {
             match attnum {
@@ -161,11 +152,23 @@ pub(super) fn scan<'q>(
             node_width += w;
             *sizes.entry(attnum).or_default() += f64::from(w) * n;
         }
-        node.cost.width = node_width;
+        // `add_path` and `set_cheapest` of the member: the cheapest scan comes first.
+        let mut paths = Paths::new(stats.startup);
+        for mut rel in found {
+            rel.node.member = Some(member.oid);
+            rel.node.cost.width = node_width;
+            paths.add(costs(&rel.node), rel.order.clone(), rel);
+        }
+        let mut kept = paths.kept();
+        if kept.is_empty() {
+            let mut node = dummy(level.scope, &rels, false);
+            node.member = Some(member.oid);
+            kept.push(Rel { node, rels: rels.clone(), order: Vec::new() });
+        }
+        lists.push(kept);
         size += f64::from(node_width) * n;
         tuples += count;
         rows += n;
-        children.push(node);
         stats.unique.columns.clone_from(&unique);
     }
     // `examine_simple_variable`: the relation has the statistics with `stainherit` true of its table.
@@ -183,20 +186,184 @@ pub(super) fn scan<'q>(
             crate::set_width(relation, *attnum, width);
         }
     }
-    let rels = BTreeSet::from([r]);
-    let node = match children.len() {
-        0 => dummy(level.scope, &rels, false),
-        1 => children.remove(0),
-        _ => {
-            // `cost_append`: the start of the first member, and the costs of all the members with half of `cpu_tuple_cost` for each row.
-            let startup = children[0].cost.startup;
-            let total: f64 = children.iter().map(|c| c.cost.total).sum::<f64>()
-                + cost::CPU_TUPLE * cost::APPEND_CPU * rows;
-            let width = if rows > 0.0 { (size / rows).round_ties_even() as i32 } else { 0 };
-            let mut node = Node::new(Kind::Append, level.scope, children);
-            node.cost = Cost { startup, total, rows, width };
-            node
-        }
+    match lists.len() {
+        0 => return vec![Rel { node: dummy(level.scope, &rels, false), rels, order: Vec::new() }],
+        1 => return lists.remove(0),
+        _ => {}
+    }
+    let width = if rows > 0.0 { (size / rows).round_ties_even() as i32 } else { 0 };
+    let cheapest = lists.iter().filter_map(|l| l.first()).map(|rel| rel.node.clone()).collect();
+    let mut paths = Paths::new(stats.startup);
+    let node = append(level.scope, cheapest, false, width);
+    paths.add(costs(&node), Vec::new(), Rel { node, rels: rels.clone(), order: Vec::new() });
+    let oids: Vec<u32> = members.iter().map(|m| m.oid).collect();
+    crate::set_member_places(&oids);
+    let partition = hooks.and_then(|m| m.ordered_partitions(relation.oid, &oids));
+    let ordered = Ordered { level, r, lists: &lists, partition: partition.as_deref(), width };
+    for rel in ordered.plans(stats) {
+        paths.add(costs(&rel.node), rel.order.clone(), rel);
+    }
+    paths.kept()
+}
+
+/// `cost_append`: the rows and the costs of the members, with half of `cpu_tuple_cost` for each row. An `Append` with no order starts with its first member, and an ordered `Append` starts with all of them, so that a `LIMIT` does not seem to read only the first member at little cost.
+fn append<'q>(scope: usize, children: Vec<Node<'q>>, ordered: bool, width: i32) -> Node<'q> {
+    let rows: f64 = children.iter().map(|c| c.cost.rows).sum();
+    let startup = if ordered {
+        children.iter().map(|c| c.cost.startup).sum()
+    } else {
+        children.first().map_or(0.0, |c| c.cost.startup)
     };
-    Rel { node, rels, order: Vec::new() }
+    let total: f64 = children.iter().map(|c| c.cost.total).sum::<f64>()
+        + cost::CPU_TUPLE * cost::APPEND_CPU * rows;
+    let mut node = Node::new(Kind::Append, scope, children);
+    node.cost = Cost { startup, total, rows, width };
+    node
+}
+
+/// `cost_merge_append`: the heap of the first row of each member, with two operator calls for each comparison, then a comparison in the heap for each row, with half of `cpu_tuple_cost` for each row.
+fn merge_append<'q>(
+    scope: usize,
+    children: Vec<Node<'q>>,
+    keys: Vec<SortKey<'q>>,
+    width: i32,
+) -> Node<'q> {
+    let n = children.len().max(2) as f64;
+    let log_n = n.log2();
+    let comparison = 2.0 * cost::CPU_OPERATOR;
+    let rows: f64 = children.iter().map(|c| c.cost.rows).sum();
+    let first = comparison * n * log_n;
+    let run = rows * comparison * log_n + cost::CPU_TUPLE * cost::APPEND_CPU * rows;
+    let input_startup: f64 = children.iter().map(|c| c.cost.startup).sum();
+    let input_total: f64 = children.iter().map(|c| c.cost.total).sum();
+    let mut node = Node::new(Kind::MergeAppend(keys), scope, children);
+    node.cost =
+        Cost { startup: first + input_startup, total: first + run + input_total, rows, width };
+    node
+}
+
+/// True when the two orders have the same keys.
+fn same_order(a: &[OrderKey], b: &[OrderKey]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(x, y)| y.exprs.iter().any(|e| x.sorts(e, y.desc, y.nulls_first)))
+}
+
+/// `pathkeys_contained_in`: true when the order starts with the keys.
+fn starts_with(order: &[OrderKey], keys: &[OrderKey]) -> bool {
+    order.get(..keys.len()).is_some_and(|first| same_order(first, keys))
+}
+
+/// The plans of the members of an append relation, for its ordered plans.
+struct Ordered<'a, 'q> {
+    level: &'a Level<'q>,
+    r: usize,
+    /// The plans of each member that `add_path` keeps, the cheapest first.
+    lists: &'a [Vec<Rel<'q>>],
+    /// The columns of the key of a partitioned table whose partitions are in the order of the key.
+    partition: Option<&'a [i16]>,
+    width: i32,
+}
+
+impl<'q> Ordered<'_, 'q> {
+    /// `generate_orderedappend_paths`: for each order of a plan of a member, a `Merge Append` of the plans of the members in that order, one of the plans that cost the least to start and one of the plans that cost the least in total. A member with no plan in the order gets a sort of its cheapest plan. When the order is the order of the partitions, or the reverse of it, an `Append` of the partitions in that order gives the rows in order.
+    fn plans(&self, stats: &Stats) -> Vec<Rel<'q>> {
+        let mut all: Vec<&[OrderKey]> = Vec::new();
+        for rel in self.lists.iter().flatten() {
+            if !rel.order.is_empty() && !all.iter().any(|o| same_order(o, &rel.order)) {
+                all.push(&rel.order);
+            }
+        }
+        let mut out = Vec::new();
+        for keys in all {
+            // `pathkeys_count_contained_in`: a member whose plans have only the first keys needs an incremental sort, which the planner does not cost yet.
+            let partial = self.lists.iter().flatten().any(|rel| {
+                let n =
+                    (1..=keys.len()).take_while(|&n| starts_with(&rel.order, &keys[..n])).count();
+                n > 0 && n < keys.len()
+            });
+            if partial {
+                continue;
+            }
+            // `get_cheapest_path_for_pathkeys`: the plan in the order that costs the least to start and the one that costs the least in total, or the cheapest plan with a sort.
+            let mut startup = Vec::new();
+            let mut total = Vec::new();
+            for list in self.lists {
+                let sorted = || (0..list.len()).filter(|&i| starts_with(&list[i].order, keys));
+                let cost = |i: usize| list[i].node.cost;
+                let first = sorted().min_by(|&a, &b| {
+                    let (a, b) = (cost(a), cost(b));
+                    a.startup.total_cmp(&b.startup).then(a.total.total_cmp(&b.total))
+                });
+                let cheapest = sorted().min_by(|&a, &b| {
+                    let (a, b) = (cost(a), cost(b));
+                    a.total.total_cmp(&b.total).then(a.startup.total_cmp(&b.startup))
+                });
+                startup.push(first.unwrap_or(0));
+                total.push(cheapest.unwrap_or(0));
+            }
+            let mut choices = vec![startup.clone()];
+            if total != startup {
+                choices.push(total);
+            }
+            for choice in choices {
+                let node = self.plan(keys, &choice);
+                let rels = BTreeSet::from([self.r]);
+                let order = stats.useful(&rels, keys);
+                out.push(Rel { node, rels, order });
+            }
+        }
+        out
+    }
+
+    /// `match_partition_order`: true when the keys are the first keys of the partitions, each in the direction `desc` with the nulls last for an ascending order, or all the keys of the partitions and more.
+    fn partition_order(&self, keys: &[OrderKey], desc: bool) -> bool {
+        let Some(attnums) = self.partition else { return false };
+        let var = |e: &Expr, attnum: i16| matches!(e.kind, ExprKind::Var(v) if v.relation == self.r && v.levels_up == 0 && v.attnum == attnum);
+        keys.iter().zip(attnums).all(|(k, &a)| {
+            k.desc == desc && k.nulls_first == desc && k.exprs.iter().any(|e| var(e, a))
+        })
+    }
+
+    /// `create_merge_append_path`, or `create_append_path` with the order of the partitions: the plans `choice` of the members, each with a sort when it is not in the order `keys`.
+    fn plan(&self, keys: &[OrderKey], choice: &[usize]) -> Node<'q> {
+        let r = self.r;
+        let own =
+            |e: &&Expr| matches!(e.kind, ExprKind::Var(v) if v.relation == r && v.levels_up == 0);
+        let sort_keys: Vec<SortKey<'q>> = keys
+            .iter()
+            .filter_map(|k| {
+                let expr = k.exprs.iter().find(own).or_else(|| k.exprs.first())?;
+                Some(SortKey {
+                    item: Item::owned(expr.clone()),
+                    desc: k.desc,
+                    using: None,
+                    nulls_first: k.nulls_first,
+                })
+            })
+            .collect();
+        let bound = super::append::limit_tuples(self.level.query, r);
+        let mut children: Vec<Node<'q>> = self
+            .lists
+            .iter()
+            .zip(choice)
+            .map(|(list, &at)| {
+                let rel = &list[at];
+                if starts_with(&rel.order, keys) {
+                    return rel.node.clone();
+                }
+                let mut node = super::sort(rel.node.clone(), sort_keys.clone(), bound);
+                node.cost.width = rel.node.cost.width;
+                node
+            })
+            .collect();
+        let scope = self.level.scope;
+        if self.partition_order(keys, false) {
+            return append(scope, children, true, self.width);
+        }
+        if self.partition_order(keys, true) {
+            children.reverse();
+            return append(scope, children, true, self.width);
+        }
+        merge_append(scope, children, sort_keys, self.width)
+    }
 }
