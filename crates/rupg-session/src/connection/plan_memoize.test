@@ -1,0 +1,418 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> SET enable_hashjoin = off;
+SET
+> SET enable_mergejoin = off;
+SET
+> CREATE TABLE mo (a int, b int, c int, t text);
+CREATE TABLE
+> INSERT INTO mo SELECT x % 20, x, x % 300, 'k' || (x % 10) FROM generate_series(1, 1000) x;
+INSERT 0 1000
+> CREATE TABLE mi (a int, b int, t text, f float8);
+CREATE TABLE
+> INSERT INTO mi SELECT x, x % 7, 'k' || (x % 10), x FROM generate_series(1, 300) x;
+INSERT 0 300
+> CREATE INDEX mi_a ON mi (a);
+CREATE INDEX
+> CREATE INDEX mi_t ON mi (t);
+CREATE INDEX
+> CREATE INDEX mi_f ON mi (f);
+CREATE INDEX
+> CREATE TABLE mu (a int PRIMARY KEY, b int);
+CREATE TABLE
+> INSERT INTO mu SELECT x, x FROM generate_series(1, 300) x;
+INSERT 0 300
+> CREATE TABLE mn (a int, b int);
+CREATE TABLE
+> INSERT INTO mn SELECT x % 20, x FROM generate_series(1, 1000) x;
+INSERT 0 1000
+> ANALYZE mo;
+ANALYZE
+> ANALYZE mi;
+ANALYZE
+> ANALYZE mu;
+ANALYZE
+> EXPLAIN SELECT * FROM mo JOIN mi ON mi.a = mo.a;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.16..44.79 rows=1000 width=34)
+row   ->  Seq Scan on mo  (cost=0.00..16.00 rows=1000 width=15)
+row   ->  Memoize  (cost=0.16..0.19 rows=1 width=19)
+row         Cache Key: mo.a
+row         Cache Mode: logical
+row         Estimates: capacity=20 distinct keys=20 lookups=1000 hit percent=98.00%
+row         ->  Index Scan using mi_a on mi  (cost=0.15..0.18 rows=1 width=19)
+row               Index Cond: (a = mo.a)
+EXPLAIN
+> EXPLAIN SELECT * FROM mo JOIN mi ON mi.a = mo.a WHERE mo.b < 500;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.16..35.10 rows=499 width=34)
+row   ->  Seq Scan on mo  (cost=0.00..18.50 rows=499 width=15)
+row         Filter: (b < 500)
+row   ->  Memoize  (cost=0.16..0.21 rows=1 width=19)
+row         Cache Key: mo.a
+row         Cache Mode: logical
+row         Estimates: capacity=20 distinct keys=20 lookups=499 hit percent=95.99%
+row         ->  Index Scan using mi_a on mi  (cost=0.15..0.20 rows=1 width=19)
+row               Index Cond: (a = mo.a)
+EXPLAIN
+> EXPLAIN SELECT * FROM mo JOIN mi ON mi.a = mo.c;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.16..95.42 rows=1000 width=34)
+row   ->  Seq Scan on mo  (cost=0.00..16.00 rows=1000 width=15)
+row   ->  Memoize  (cost=0.16..0.19 rows=1 width=19)
+row         Cache Key: mo.c
+row         Cache Mode: logical
+row         Estimates: capacity=300 distinct keys=300 lookups=1000 hit percent=70.00%
+row         ->  Index Scan using mi_a on mi  (cost=0.15..0.18 rows=1 width=19)
+row               Index Cond: (a = mo.c)
+EXPLAIN
+> EXPLAIN SELECT * FROM mo JOIN mi ON mi.a = mo.a + 1;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.16..44.84 rows=1000 width=34)
+row   ->  Seq Scan on mo  (cost=0.00..16.00 rows=1000 width=15)
+row   ->  Memoize  (cost=0.16..0.19 rows=1 width=19)
+row         Cache Key: (mo.a + 1)
+row         Cache Mode: logical
+row         Estimates: capacity=20 distinct keys=20 lookups=1000 hit percent=98.00%
+row         ->  Index Scan using mi_a on mi  (cost=0.15..0.18 rows=1 width=19)
+row               Index Cond: (a = (mo.a + 1))
+EXPLAIN
+> EXPLAIN SELECT * FROM mo JOIN mi ON mi.t = mo.t;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.16..410.99 rows=30000 width=34)
+row   ->  Seq Scan on mo  (cost=0.00..16.00 rows=1000 width=15)
+row   ->  Memoize  (cost=0.16..0.70 rows=30 width=19)
+row         Cache Key: mo.t
+row         Cache Mode: logical
+row         Estimates: capacity=10 distinct keys=10 lookups=1000 hit percent=99.00%
+row         ->  Index Scan using mi_t on mi  (cost=0.15..0.69 rows=30 width=19)
+row               Index Cond: (t = mo.t)
+EXPLAIN
+> EXPLAIN SELECT * FROM mo JOIN mi ON mi.f = mo.a;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.16..44.84 rows=1000 width=34)
+row   ->  Seq Scan on mo  (cost=0.00..16.00 rows=1000 width=15)
+row   ->  Memoize  (cost=0.16..0.19 rows=1 width=19)
+row         Cache Key: mo.a
+row         Cache Mode: logical
+row         Estimates: capacity=20 distinct keys=20 lookups=1000 hit percent=98.00%
+row         ->  Index Scan using mi_f on mi  (cost=0.15..0.18 rows=1 width=19)
+row               Index Cond: (f = (mo.a)::double precision)
+EXPLAIN
+> EXPLAIN SELECT * FROM mo JOIN mi ON mi.a = mo.a AND mi.b = mo.c;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.16..96.17 rows=4 width=34)
+row   ->  Seq Scan on mo  (cost=0.00..16.00 rows=1000 width=15)
+row   ->  Memoize  (cost=0.16..0.19 rows=1 width=19)
+row         Cache Key: mo.a, mo.c
+row         Cache Mode: logical
+row         Estimates: capacity=300 distinct keys=300 lookups=1000 hit percent=70.00%
+row         ->  Index Scan using mi_a on mi  (cost=0.15..0.18 rows=1 width=19)
+row               Index Cond: (a = mo.a)
+row               Filter: (mo.c = b)
+EXPLAIN
+> EXPLAIN SELECT * FROM mo LEFT JOIN mi ON mi.a = mo.a;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join  (cost=0.16..44.79 rows=1000 width=34)
+row   ->  Seq Scan on mo  (cost=0.00..16.00 rows=1000 width=15)
+row   ->  Memoize  (cost=0.16..0.19 rows=1 width=19)
+row         Cache Key: mo.a
+row         Cache Mode: logical
+row         Estimates: capacity=20 distinct keys=20 lookups=1000 hit percent=98.00%
+row         ->  Index Scan using mi_a on mi  (cost=0.15..0.18 rows=1 width=19)
+row               Index Cond: (a = mo.a)
+EXPLAIN
+> EXPLAIN SELECT * FROM mo JOIN mu ON mu.a = mo.a;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.16..44.75 rows=1000 width=23)
+row   ->  Seq Scan on mo  (cost=0.00..16.00 rows=1000 width=15)
+row   ->  Memoize  (cost=0.16..0.19 rows=1 width=8)
+row         Cache Key: mo.a
+row         Cache Mode: logical
+row         Estimates: capacity=20 distinct keys=20 lookups=1000 hit percent=98.00%
+row         ->  Index Scan using mu_pkey on mu  (cost=0.15..0.18 rows=1 width=8)
+row               Index Cond: (a = mo.a)
+EXPLAIN
+> EXPLAIN SELECT * FROM mo LEFT JOIN mu ON mu.a = mo.a;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join  (cost=0.16..44.75 rows=1000 width=23)
+row   ->  Seq Scan on mo  (cost=0.00..16.00 rows=1000 width=15)
+row   ->  Memoize  (cost=0.16..0.19 rows=1 width=8)
+row         Cache Key: mo.a
+row         Cache Mode: logical
+row         Estimates: capacity=20 distinct keys=20 lookups=1000 hit percent=98.00%
+row         ->  Index Scan using mu_pkey on mu  (cost=0.15..0.18 rows=1 width=8)
+row               Index Cond: (a = mo.a)
+EXPLAIN
+> EXPLAIN SELECT * FROM mo WHERE EXISTS (SELECT 1 FROM mu WHERE mu.a = mo.a);
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.16..44.75 rows=1000 width=15)
+row   ->  Seq Scan on mo  (cost=0.00..16.00 rows=1000 width=15)
+row   ->  Memoize  (cost=0.16..0.19 rows=1 width=4)
+row         Cache Key: mo.a
+row         Cache Mode: logical
+row         Estimates: capacity=20 distinct keys=20 lookups=1000 hit percent=98.00%
+row         ->  Index Only Scan using mu_pkey on mu  (cost=0.15..0.18 rows=1 width=4)
+row               Index Cond: (a = mo.a)
+EXPLAIN
+> EXPLAIN SELECT * FROM mo WHERE EXISTS (SELECT 1 FROM mi WHERE mi.a = mo.a);
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Semi Join  (cost=0.15..207.00 rows=1000 width=15)
+row   ->  Seq Scan on mo  (cost=0.00..16.00 rows=1000 width=15)
+row   ->  Index Only Scan using mi_a on mi  (cost=0.15..0.18 rows=1 width=4)
+row         Index Cond: (a = mo.a)
+EXPLAIN
+> EXPLAIN SELECT * FROM mo WHERE NOT EXISTS (SELECT 1 FROM mu WHERE mu.a = mo.c);
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Anti Join  (cost=0.16..95.42 rows=1 width=15)
+row   ->  Seq Scan on mo  (cost=0.00..16.00 rows=1000 width=15)
+row   ->  Memoize  (cost=0.16..0.19 rows=1 width=4)
+row         Cache Key: mo.c
+row         Cache Mode: logical
+row         Estimates: capacity=300 distinct keys=300 lookups=1000 hit percent=70.00%
+row         ->  Index Only Scan using mu_pkey on mu  (cost=0.15..0.18 rows=1 width=4)
+row               Index Cond: (a = mo.c)
+EXPLAIN
+> EXPLAIN SELECT * FROM mo JOIN mu ON mu.a = mo.a AND mu.b > mo.b;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.15..209.45 rows=333 width=23)
+row   ->  Seq Scan on mo  (cost=0.00..16.00 rows=1000 width=15)
+row   ->  Index Scan using mu_pkey on mu  (cost=0.15..0.18 rows=1 width=8)
+row         Index Cond: (a = mo.a)
+row         Filter: (b > mo.b)
+EXPLAIN
+> EXPLAIN SELECT count(*) FROM mo JOIN mi ON mi.a = mo.a;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=47.29..47.30 rows=1 width=8)
+row   ->  Nested Loop  (cost=0.16..44.79 rows=1000 width=0)
+row         ->  Seq Scan on mo  (cost=0.00..16.00 rows=1000 width=4)
+row         ->  Memoize  (cost=0.16..0.19 rows=1 width=4)
+row               Cache Key: mo.a
+row               Cache Mode: logical
+row               Estimates: capacity=20 distinct keys=20 lookups=1000 hit percent=98.00%
+row               ->  Index Only Scan using mi_a on mi  (cost=0.15..0.18 rows=1 width=4)
+row                     Index Cond: (a = mo.a)
+EXPLAIN
+> EXPLAIN SELECT * FROM mn JOIN mi ON mi.a = mn.a;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.15..444.10 rows=2260 width=27)
+row   ->  Seq Scan on mn  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Index Scan using mi_a on mi  (cost=0.15..0.17 rows=1 width=19)
+row         Index Cond: (a = mn.a)
+EXPLAIN
+> EXPLAIN SELECT * FROM mo JOIN mi ON mi.a = mo.a WHERE mo.b = 5;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.15..26.68 rows=1 width=34)
+row   ->  Seq Scan on mo  (cost=0.00..18.50 rows=1 width=15)
+row         Filter: (b = 5)
+row   ->  Index Scan using mi_a on mi  (cost=0.15..8.17 rows=1 width=19)
+row         Index Cond: (a = mo.a)
+EXPLAIN
+> EXPLAIN SELECT * FROM mo JOIN mi ON mi.a = mo.a JOIN mu ON mu.a = mi.b;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.32..71.49 rows=1000 width=42)
+row   ->  Nested Loop  (cost=0.16..44.79 rows=1000 width=34)
+row         ->  Seq Scan on mo  (cost=0.00..16.00 rows=1000 width=15)
+row         ->  Memoize  (cost=0.16..0.19 rows=1 width=19)
+row               Cache Key: mo.a
+row               Cache Mode: logical
+row               Estimates: capacity=20 distinct keys=20 lookups=1000 hit percent=98.00%
+row               ->  Index Scan using mi_a on mi  (cost=0.15..0.18 rows=1 width=19)
+row                     Index Cond: (a = mo.a)
+row   ->  Memoize  (cost=0.16..0.23 rows=1 width=8)
+row         Cache Key: mi.b
+row         Cache Mode: logical
+row         Estimates: capacity=7 distinct keys=7 lookups=1000 hit percent=99.30%
+row         ->  Index Scan using mu_pkey on mu  (cost=0.15..0.22 rows=1 width=8)
+row               Index Cond: (a = mi.b)
+EXPLAIN
+> EXPLAIN (VERBOSE) SELECT mo.b, mi.b FROM mo JOIN mi ON mi.a = mo.a;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.16..44.79 rows=1000 width=8)
+row   Output: mo.b, mi.b
+row   ->  Seq Scan on public.mo  (cost=0.00..16.00 rows=1000 width=8)
+row         Output: mo.a, mo.b, mo.c, mo.t
+row   ->  Memoize  (cost=0.16..0.19 rows=1 width=8)
+row         Output: mi.b, mi.a
+row         Cache Key: mo.a
+row         Cache Mode: logical
+row         Estimates: capacity=20 distinct keys=20 lookups=1000 hit percent=98.00%
+row         ->  Index Scan using mi_a on public.mi  (cost=0.15..0.18 rows=1 width=8)
+row               Output: mi.b, mi.a
+row               Index Cond: (mi.a = mo.a)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM mo JOIN mi ON mi.a = mo.a;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Seq Scan on mo
+row   ->  Memoize
+row         Cache Key: mo.a
+row         Cache Mode: logical
+row         ->  Index Scan using mi_a on mi
+row               Index Cond: (a = mo.a)
+EXPLAIN
+> EXPLAIN (FORMAT JSON) SELECT * FROM mo JOIN mi ON mi.a = mo.a;
+fields QUERY PLAN:114:-1:-1
+row [
+  {
+    "Plan": {
+      "Node Type": "Nested Loop",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Join Type": "Inner",
+      "Startup Cost": 0.16,
+      "Total Cost": 44.79,
+      "Plan Rows": 1000,
+      "Plan Width": 34,
+      "Disabled": false,
+      "Inner Unique": false,
+      "Plans": [
+        {
+          "Node Type": "Seq Scan",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Relation Name": "mo",
+          "Alias": "mo",
+          "Startup Cost": 0.00,
+          "Total Cost": 16.00,
+          "Plan Rows": 1000,
+          "Plan Width": 15,
+          "Disabled": false
+        },
+        {
+          "Node Type": "Memoize",
+          "Parent Relationship": "Inner",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Startup Cost": 0.16,
+          "Total Cost": 0.19,
+          "Plan Rows": 1,
+          "Plan Width": 19,
+          "Disabled": false,
+          "Cache Key": "mo.a",
+          "Cache Mode": "logical",
+          "Estimated Capacity": 20,
+          "Estimated Distinct Lookup Keys": 20,
+          "Estimated Lookups": 1000,
+          "Estimated Hit Percent": 98.00,
+          "Plans": [
+            {
+              "Node Type": "Index Scan",
+              "Parent Relationship": "Outer",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Scan Direction": "Forward",
+              "Index Name": "mi_a",
+              "Relation Name": "mi",
+              "Alias": "mi",
+              "Startup Cost": 0.15,
+              "Total Cost": 0.18,
+              "Plan Rows": 1,
+              "Plan Width": 19,
+              "Disabled": false,
+              "Index Cond": "(a = mo.a)"
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
+EXPLAIN
+> EXPLAIN (FORMAT YAML) SELECT * FROM mo JOIN mi ON mi.a = mo.a;
+fields QUERY PLAN:25:-1:-1
+row - Plan: 
+    Node Type: "Nested Loop"
+    Parallel Aware: false
+    Async Capable: false
+    Join Type: "Inner"
+    Startup Cost: 0.16
+    Total Cost: 44.79
+    Plan Rows: 1000
+    Plan Width: 34
+    Disabled: false
+    Inner Unique: false
+    Plans: 
+      - Node Type: "Seq Scan"
+        Parent Relationship: "Outer"
+        Parallel Aware: false
+        Async Capable: false
+        Relation Name: "mo"
+        Alias: "mo"
+        Startup Cost: 0.00
+        Total Cost: 16.00
+        Plan Rows: 1000
+        Plan Width: 15
+        Disabled: false
+      - Node Type: "Memoize"
+        Parent Relationship: "Inner"
+        Parallel Aware: false
+        Async Capable: false
+        Startup Cost: 0.16
+        Total Cost: 0.19
+        Plan Rows: 1
+        Plan Width: 19
+        Disabled: false
+        Cache Key: "mo.a"
+        Cache Mode: "logical"
+        Estimated Capacity: 20
+        Estimated Distinct Lookup Keys: 20
+        Estimated Lookups: 1000
+        Estimated Hit Percent: 98.00
+        Plans: 
+          - Node Type: "Index Scan"
+            Parent Relationship: "Outer"
+            Parallel Aware: false
+            Async Capable: false
+            Scan Direction: "Forward"
+            Index Name: "mi_a"
+            Relation Name: "mi"
+            Alias: "mi"
+            Startup Cost: 0.15
+            Total Cost: 0.18
+            Plan Rows: 1
+            Plan Width: 19
+            Disabled: false
+            Index Cond: "(a = mo.a)"
+EXPLAIN
+> SET enable_memoize = off;
+SET
+> EXPLAIN SELECT * FROM mo JOIN mi ON mi.a = mo.a;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.15..207.00 rows=1000 width=34)
+row   ->  Seq Scan on mo  (cost=0.00..16.00 rows=1000 width=15)
+row   ->  Index Scan using mi_a on mi  (cost=0.15..0.18 rows=1 width=19)
+row         Index Cond: (a = mo.a)
+EXPLAIN
+> RESET enable_memoize;
+RESET
+> SET enable_nestloop = off;
+SET
+> EXPLAIN SELECT * FROM mo JOIN mi ON mi.a = mo.a;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.15..207.00 rows=1000 width=34)
+row   Disabled: true
+row   ->  Seq Scan on mo  (cost=0.00..16.00 rows=1000 width=15)
+row   ->  Index Scan using mi_a on mi  (cost=0.15..0.18 rows=1 width=19)
+row         Index Cond: (a = mo.a)
+EXPLAIN
+> RESET enable_nestloop;
+RESET
+> RESET enable_hashjoin;
+RESET
+> RESET enable_mergejoin;
+RESET
+> EXPLAIN SELECT * FROM mo JOIN mi ON mi.a = mo.a;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=8.75..38.50 rows=1000 width=34)
+row   Hash Cond: (mo.a = mi.a)
+row   ->  Seq Scan on mo  (cost=0.00..16.00 rows=1000 width=15)
+row   ->  Hash  (cost=5.00..5.00 rows=300 width=19)
+row         ->  Seq Scan on mi  (cost=0.00..5.00 rows=300 width=19)
+EXPLAIN
+> SELECT count(*), sum(mi.b) FROM mo JOIN mi ON mi.a = mo.a;
+fields count:20:8:-1,sum:20:8:-1
+row 950,2850
+SELECT 1

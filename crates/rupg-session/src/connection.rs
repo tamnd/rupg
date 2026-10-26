@@ -4994,6 +4994,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_index_stats.test")));
     }
 
+    /// The `Memoize` node over a parameterized index scan of the inner side of a nested loop, with its keys, its mode and the estimates of the cache from the statistics of the tables. `connection/plan_memoize.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_memoize() {
+        big_stack(|| script(include_str!("connection/plan_memoize.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

@@ -96,6 +96,7 @@ pub struct Enable {
     pub incremental_sort: bool,
     pub hashagg: bool,
     pub material: bool,
+    pub memoize: bool,
     pub presorted_aggregate: bool,
     pub nestloop: bool,
     pub mergejoin: bool,
@@ -113,6 +114,7 @@ impl Default for Enable {
             incremental_sort: true,
             hashagg: true,
             material: true,
+            memoize: true,
             presorted_aggregate: true,
             nestloop: true,
             mergejoin: true,
@@ -274,7 +276,7 @@ fn loop_order(node: &Node<'_>, reverse: bool, out: &mut Vec<(usize, bool)>) -> b
             out.push((*relation, reverse));
             true
         }
-        (Kind::Materialize, [child]) => loop_order(child, reverse, out),
+        (Kind::Materialize | Kind::Memoize(_), [child]) => loop_order(child, reverse, out),
         (Kind::NestedLoop { join, .. }, [outer, inner]) if inner_or_left(join) => {
             loop_order(outer, reverse, out) && loop_order(inner, reverse, out)
         }

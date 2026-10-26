@@ -3,6 +3,7 @@
 pub(crate) mod append;
 mod classes;
 mod index;
+mod memoize;
 pub(crate) mod paths;
 mod search;
 
@@ -24,6 +25,7 @@ use rupg_types::{Value, oid};
 
 use crate::{Builder, Index, Level, Member, Size, cost, exprs, pullup, upper};
 use index::Param;
+use memoize::Memo;
 use paths::{Paths, costs};
 
 /// The plans of the rows of `FROM` that `add_path` keeps, each with the order of its rows.
@@ -155,13 +157,19 @@ impl Stats {
 
     /// `estimate_num_groups` with no statistics: the number of groups of rows by the values of the expressions. A `boolean` expression has 2 values, and each other expression has the values of its columns. Two columns that are equal or that an equivalence class makes equal count once. The columns of each relation have the product of their numbers of distinct values, at most a tenth of the tuples of the relation, or the largest number of one column when it is more. A relation with fewer rows after its conditions than its tuples has fewer values, as the formula of Yao. A column of a relation that the level does not know has 200 values.
     pub(crate) fn groups(&self, exprs: &[&Expr], input_rows: f64) -> f64 {
+        self.groups_estimated(exprs, input_rows).0
+    }
+
+    /// [`Stats::groups`], and true when the number of distinct values of a column is the default, as `SELFLAG_USED_DEFAULT`.
+    pub(crate) fn groups_estimated(&self, exprs: &[&Expr], input_rows: f64) -> (f64, bool) {
         let input_rows = cost::clamp_rows(input_rows);
         if exprs.is_empty() {
-            return 1.0;
+            return (1.0, false);
         }
         let mut numdistinct = 1.0;
-        // Each column with its relation and its number of distinct values, as a `GroupVarInfo`.
-        let mut infos: Vec<(Expr, usize, f64)> = Vec::new();
+        let mut used_default = false;
+        // Each column with its relation, its number of distinct values and true when the number is the default, as a `GroupVarInfo`.
+        let mut infos: Vec<(Expr, usize, f64, bool)> = Vec::new();
         for &expr in exprs {
             if expr.ty == oid::BOOL {
                 numdistinct *= 2.0;
@@ -170,20 +178,21 @@ impl Stats {
             let mut columns = Vec::new();
             exprs::vars_of(expr, &mut columns);
             if columns.is_empty() && exprs::volatile(expr) {
-                return input_rows;
+                return (input_rows, used_default);
             }
             for column in columns {
                 self.add_group_var(&mut infos, column);
             }
         }
-        while let Some((_, rel, _)) = infos.first() {
+        while let Some((_, rel, ..)) = infos.first() {
             let rel = *rel;
             let (mut reldistinct, mut relmax) = (1.0f64, 1.0f64);
             let mut count = 0;
-            for (_, _, nd) in infos.iter().filter(|i| i.1 == rel) {
+            for (_, _, nd, default) in infos.iter().filter(|i| i.1 == rel) {
                 reldistinct *= nd;
                 relmax = relmax.max(*nd);
                 count += 1;
+                used_default |= default;
             }
             infos.retain(|i| i.1 != rel);
             match self.rows.get(&rel) {
@@ -205,16 +214,16 @@ impl Stats {
                 None => numdistinct *= reldistinct,
             }
         }
-        numdistinct.ceil().min(input_rows).max(1.0)
+        (numdistinct.ceil().min(input_rows).max(1.0), used_default)
     }
 
     /// `add_unique_group_var`: adds a column to the columns of the groups, when it is not there. Of two columns of different relations that an equivalence class makes equal, the column with fewer distinct values stays.
-    fn add_group_var(&self, infos: &mut Vec<(Expr, usize, f64)>, column: Expr) {
+    fn add_group_var(&self, infos: &mut Vec<(Expr, usize, f64, bool)>, column: Expr) {
         let ExprKind::Var(var) = column.kind else { return };
-        let (nd, _, _) = numdistinct(&column, self);
+        let (nd, default, _) = numdistinct(&column, self);
         let mut i = 0;
         while i < infos.len() {
-            let (other, rel, other_nd) = &infos[i];
+            let (other, rel, other_nd, _) = &infos[i];
             if other.same(&column) {
                 return;
             }
@@ -227,7 +236,7 @@ impl Stats {
             }
             i += 1;
         }
-        infos.push((column, var.relation, nd));
+        infos.push((column, var.relation, nd, default));
     }
 
     /// `exprs_known_equal`: true when an equivalence class has the two expressions.
@@ -323,6 +332,17 @@ impl Stats {
                     self.needed.push((var, width, at.clone()));
                 }
             }
+        }
+    }
+
+    /// `get_expr_width`: the width of a column that the query reads, or else the width of the type of the expression.
+    fn expr_width(&self, expr: &Expr) -> i32 {
+        match &expr.kind {
+            ExprKind::Var(var) => match self.needed.iter().find(|(v, ..)| v == var) {
+                Some((_, width, _)) => *width,
+                None => cost::type_width(expr.ty, expr.typmod),
+            },
+            _ => cost::type_width(expr.ty, expr.typmod),
         }
     }
 
@@ -2737,7 +2757,16 @@ fn choose<'q>(
                 each.extend(loops);
                 for (i, param) in inner_params.iter().enumerate() {
                     if param.outer.is_subset(&outer.rels) {
-                        each.push(param_loop(&input, join, param, i, (quals, filter)));
+                        let left = (quals, filter);
+                        each.push(param_loop(&input, join, param, i, left, None));
+                        // `get_memoize_path`, which `PGS_NESTLOOP_MEMOIZE` allows.
+                        if enable.memoize && enable.nestloop {
+                            let memo =
+                                memoize::memoize(outer, param, join, inner_unique, left, stats);
+                            if let Some(memo) = memo {
+                                each.push(param_loop(&input, join, param, i, left, Some(memo)));
+                            }
+                        }
                     }
                 }
                 each.extend(material);
@@ -2954,7 +2983,8 @@ struct Candidate<'q> {
     param: Option<usize>,
     /// `disabled_nodes`: the disabled nodes of the join and of its two sides.
     disabled: u32,
-    _marker: std::marker::PhantomData<&'q ()>,
+    /// For a nested loop, the `Memoize` node over its inner side.
+    memo: Option<Memo<'q>>,
 }
 
 impl Candidate<'_> {
@@ -3048,7 +3078,8 @@ fn nested_loops<'q>(input: &Input<'_, 'q>, join: JoinKind, lateral: bool) -> Vec
         materialize.push(true);
     }
     for materialize in materialize {
-        let (startup, total) = nested_cost(input, materialize);
+        let wrapped = materialize.then(|| material_costs(input.inner.node.cost));
+        let (startup, total) = nested_cost(input, wrapped);
         out.push(Candidate {
             method: Method::Nested,
             join,
@@ -3062,19 +3093,20 @@ fn nested_loops<'q>(input: &Input<'_, 'q>, join: JoinKind, lateral: bool) -> Vec
             unique: false,
             param: None,
             disabled: 0,
-            _marker: std::marker::PhantomData,
+            memo: None,
         });
     }
     out
 }
 
-/// The nested loop with the parameterized scan `param` as its inner side, as `match_unsorted_outer` makes it with each plan of `cheapest_parameterized_paths`. The join does not test the conditions that the scan tests, as `create_nestloop_path`.
+/// The nested loop with the parameterized scan `param` as its inner side, as `match_unsorted_outer` makes it with each plan of `cheapest_parameterized_paths`, or with a `Memoize` node over the scan. The join does not test the conditions that the scan tests, as `create_nestloop_path`. A `Memoize` node is not an index scan for `has_indexed_join_quals`.
 fn param_loop<'q>(
     input: &Input<'_, 'q>,
     join: JoinKind,
     param: &Param<'q>,
     i: usize,
     (quals, filter): (&[Qual<'q>], &[Qual<'q>]),
+    memo: Option<Memo<'q>>,
 ) -> Candidate<'q> {
     let left = |list: &[Qual<'q>]| -> Vec<Qual<'q>> {
         let enforced = |q: &Qual<'q>| param.enforced.iter().any(|e| e.expr.same(&q.expr));
@@ -3085,7 +3117,8 @@ fn param_loop<'q>(
     // `has_indexed_join_quals`: a condition that runs once is a condition of the join of all the relations, which the index does not test.
     let gated = !input.stats.gated.is_empty()
         && input.outer.rels.union(&param.rel.rels).count() == input.stats.gated.len();
-    let indexed = param.indexed && quals.is_empty() && filter.is_empty() && !gated;
+    let indexed =
+        memo.is_none() && param.indexed && quals.is_empty() && filter.is_empty() && !gated;
     let input = Input {
         inner: &param.rel,
         quals: &quals,
@@ -3095,7 +3128,8 @@ fn param_loop<'q>(
         indexed,
         ..*input
     };
-    let (startup, total) = nested_cost(&input, false);
+    let wrapped = memo.as_ref().map(|m| (memoize::path_cost(param.rel.node.cost), m.rescan));
+    let (startup, total) = nested_cost(&input, wrapped);
     Candidate {
         method: Method::Nested,
         join,
@@ -3109,21 +3143,22 @@ fn param_loop<'q>(
         unique: false,
         param: Some(i),
         disabled: 0,
-        _marker: std::marker::PhantomData,
+        memo,
     }
 }
 
-/// The start and the total cost of a nested loop, with a `Material` node on the inner side or with none.
-fn nested_cost(input: &Input<'_, '_>, materialize: bool) -> (f64, f64) {
+/// The costs of the inner side of a nested loop with a `Material` node over it, as `cost_material`, with the costs of a scan again.
+fn material_costs(i: Cost) -> (Cost, (f64, f64)) {
+    let spill = cost::spill(i.rows, i.width);
+    let total = i.total + 2.0 * cost::CPU_OPERATOR * i.rows + spill;
+    (Cost { total, ..i }, (0.0, cost::CPU_OPERATOR * i.rows + spill))
+}
+
+/// The start and the total cost of a nested loop, with the inner side that the input has or, with `wrapped`, with the costs of a node over it and the costs of a scan of that node again.
+fn nested_cost(input: &Input<'_, '_>, wrapped: Option<(Cost, (f64, f64))>) -> (f64, f64) {
     let o = input.outer.node.cost;
-    let (inner, rescan) = if materialize {
-        let i = input.inner.node.cost;
-        let spill = cost::spill(i.rows, i.width);
-        let total = i.total + 2.0 * cost::CPU_OPERATOR * i.rows + spill;
-        (Cost { total, ..i }, (0.0, cost::CPU_OPERATOR * i.rows + spill))
-    } else {
-        (input.inner.node.cost, rescan(&input.inner.node))
-    };
+    let (inner, rescan) =
+        wrapped.unwrap_or_else(|| (input.inner.node.cost, rescan(&input.inner.node)));
     let startup = o.startup + inner.startup;
     let mut run = o.total - o.startup;
     if o.rows > 1.0 {
@@ -3260,7 +3295,7 @@ fn hash_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>>
         unique: false,
         param: None,
         disabled: 0,
-        _marker: std::marker::PhantomData,
+        memo: None,
     })
 }
 
@@ -3474,7 +3509,7 @@ fn merge_join<'q>(
         unique: false,
         param: None,
         disabled: 0,
-        _marker: std::marker::PhantomData,
+        memo: None,
     })
 }
 
@@ -3533,8 +3568,11 @@ impl<'q> Candidate<'q> {
         let order = self.order(&outer, &inner, quals);
         let node = match self.method {
             Method::Nested => {
-                let inner_node =
-                    if self.materialize { materialize(inner.node) } else { inner.node };
+                let inner_node = match &self.memo {
+                    Some(memo) => memoize::node(inner.node, memo),
+                    None if self.materialize => materialize(inner.node),
+                    None => inner.node,
+                };
                 let join_filter = quals.iter().map(|q| q.item()).collect();
                 Node::new(
                     Kind::NestedLoop { join: self.join, join_filter },

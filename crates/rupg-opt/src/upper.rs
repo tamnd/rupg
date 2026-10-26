@@ -403,6 +403,7 @@ fn project_late<'q>(level: &Level<'q>, mut node: Node<'q>, targets: TargetCosts)
             | Kind::Limit
             | Kind::LockRows
             | Kind::Materialize
+            | Kind::Memoize(_)
             | Kind::Hash
             | Kind::Append
             | Kind::MergeAppend(_)

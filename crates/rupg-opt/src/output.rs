@@ -156,6 +156,7 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
         | Kind::Unique
         | Kind::LockRows
         | Kind::Materialize
+        | Kind::Memoize(_)
         | Kind::Hash
             if !node.children.is_empty() =>
         {
@@ -182,6 +183,7 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
         | Kind::Unique
         | Kind::LockRows
         | Kind::Materialize
+        | Kind::Memoize(_)
         | Kind::Hash
         | Kind::BitmapIndexScan { .. }
         | Kind::BitmapAnd
@@ -221,8 +223,13 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
         Kind::NestedLoop { join_filter, .. } => {
             let mut parts: Vec<Expr> =
                 join_filter.iter().map(|i| i.expr.as_ref().clone()).collect();
-            // `distribute_qual_to_rels` marks the columns of a join clause as needed at the join, also when a parameterized scan of the inner side tests the clause.
-            if let Some(inner) = node.children.get(1) {
+            // `distribute_qual_to_rels` marks the columns of a join clause as needed at the join, also when a parameterized scan of the inner side tests the clause. The scan can be below a `Memoize` node.
+            let inner = node.children.get(1);
+            let inner = match inner.map(|i| (&i.kind, i.children.first())) {
+                Some((Kind::Memoize(_), scan)) => scan,
+                _ => inner,
+            };
+            if let Some(inner) = inner {
                 let rels = from::node_rels(inner);
                 let conds = match &inner.kind {
                     Kind::IndexScan { cond, .. } => cond.as_slice(),

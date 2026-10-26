@@ -4,7 +4,7 @@ use rupg_analyze::{ExprKind, JoinKind, Relation};
 use rupg_common::Result;
 
 use crate::format::Writer;
-use crate::{Item, Kind, Node, Plan, Replaced, Rollup, SortKey, Strategy, Texts};
+use crate::{Item, Kind, Memoize, Node, Plan, Replaced, Rollup, SortKey, Strategy, Texts};
 
 /// The form of the output, the option `FORMAT`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -109,6 +109,7 @@ fn names(kind: &Kind<'_>) -> Names {
         Kind::HashJoin { .. } => Names { pname: "Hash".to_string(), ..simple("Hash Join") },
         Kind::Hash => simple("Hash"),
         Kind::Materialize => simple("Materialize"),
+        Kind::Memoize(_) => simple("Memoize"),
         Kind::Aggregate { strategy: Strategy::Group, .. } => simple("Group"),
         Kind::Aggregate { strategy, .. } => {
             let (pname, strategy) = match strategy {
@@ -517,6 +518,7 @@ impl Explainer<'_, '_> {
                 self.qual("Join Filter", scope, join_filter, upper)?;
                 self.qual("Filter", scope, &node.filter, upper)?;
             }
+            Kind::Memoize(memo) => self.memoize(scope, memo, upper)?,
             Kind::Aggregate { strategy, keys, sets } => {
                 if sets.is_empty() {
                     if !keys.is_empty() {
@@ -613,6 +615,33 @@ impl Explainer<'_, '_> {
             self.w.close_group("Target Table", true);
         }
         self.w.close_group("Target Tables", false);
+    }
+
+    /// `show_memoize_info`: the keys of the cache, its mode and, with costs, the estimates of the planner.
+    fn memoize(&mut self, scope: usize, memo: &Memoize<'_>, prefix: bool) -> Result<()> {
+        let keys = self.items(scope, &memo.keys, prefix)?;
+        self.w.text("Cache Key", &keys.join(", "));
+        self.w.text("Cache Mode", if memo.binary { "binary" } else { "logical" });
+        if !self.options.costs {
+            return Ok(());
+        }
+        if self.w.format == Format::Text {
+            self.w.indent_text();
+            let line = format!(
+                "Estimates: capacity={} distinct keys={:.0} lookups={:.0} hit percent={:.2}%\n",
+                memo.capacity,
+                memo.distinct,
+                memo.lookups,
+                memo.hit * 100.0
+            );
+            self.w.buf.push_str(&line);
+        } else {
+            self.w.integer("Estimated Capacity", None, i64::from(memo.capacity));
+            self.w.float("Estimated Distinct Lookup Keys", None, memo.distinct, 0);
+            self.w.float("Estimated Lookups", None, memo.lookups, 0);
+            self.w.float("Estimated Hit Percent", None, memo.hit * 100.0, 2);
+        }
+        Ok(())
     }
 
     /// `show_qual`: the conditions of a node, with `AND` between them, or nothing for no condition.
