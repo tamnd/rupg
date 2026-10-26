@@ -1,7 +1,7 @@
 //! `DROP TABLE`, `DROP VIEW`, `DROP INDEX`, `DROP SEQUENCE`, `DROP SCHEMA`, `DROP TYPE`, `DROP DOMAIN`, `DROP FUNCTION`, `DROP TEXT SEARCH`, `DROP OPERATOR` and `DROP STATISTICS`, as `RemoveRelations` and `RemoveObjects` run them. The statement finds all its objects first, then [`Catalog::deletions`] finds the objects that depend on them, and the report of `reportDependentObjects` names these objects as `getObjectDescription` does. A built-in object that is not pinned, such as the schema `public` or a view of `information_schema`, gives `0A000`.
 
 use rupg_catalog::{
-    FIRST_NORMAL_OID, ObjRef, PG_AMOP, PG_AMPROC, PG_ATTRDEF, PG_CLASS, PG_CONSTRAINT,
+    FIRST_NORMAL_OID, ObjRef, PG_AMOP, PG_AMPROC, PG_ATTRDEF, PG_CAST, PG_CLASS, PG_CONSTRAINT,
     PG_NAMESPACE, PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_POLICY, PG_PROC, PG_REWRITE,
     PG_STATISTIC_EXT, PG_TRIGGER, PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, PG_TYPE,
     PUBLIC, Refusal, RelKind, Target, flag, is_pinned,
@@ -541,6 +541,14 @@ impl Definer<'_, '_> {
                     }
                     None => format!("function {}", object.oid),
                 },
+            },
+            PG_CAST => match self.catalog.casts().find(|c| c.oid == object.oid) {
+                Some(cast) => format!(
+                    "cast from {} to {}",
+                    self.type_text(cast.source),
+                    self.type_text(cast.target)
+                ),
+                None => format!("cast {}", object.oid),
             },
             class => format!("object {class} {}", object.oid),
         }

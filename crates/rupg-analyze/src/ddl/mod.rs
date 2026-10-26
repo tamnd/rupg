@@ -9,6 +9,7 @@ mod alter_inherit;
 mod alter_type;
 mod attmap;
 mod basetype;
+mod cast;
 mod cluster;
 mod cmdtag;
 mod comment;
@@ -219,6 +220,7 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::DropOwnedStmt(_)
             | Node::ReassignOwnedStmt(_)
             | Node::AlterDefaultPrivilegesStmt(_)
+            | Node::CreateCastStmt(_)
     ) || matches!(stmt, Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) || matches!(define.kind, ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_AGGREGATE | ObjectType::OBJECT_TYPE))
         || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
         || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype) || alter.objtype == ObjectType::OBJECT_TYPE)
@@ -371,6 +373,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::DefineStmt(define) if define.kind == ObjectType::OBJECT_TYPE => {
             definer.define_type(define)
         }
+        Node::CreateCastStmt(stmt) => definer.create_cast(stmt),
         Node::AlterOperatorStmt(alter) => definer.alter_operator(alter),
         Node::CreateOpFamilyStmt(create) => definer.create_opfamily(create),
         Node::CreateOpClassStmt(create) => definer.create_opclass(create),

@@ -1248,6 +1248,7 @@ impl Connection {
                     | Node::CreateEnumStmt(_)
                     | Node::CreateRangeStmt(_) => CommandTag::CreateType,
                     Node::AlterEnumStmt(_) => CommandTag::AlterType,
+                    Node::CreateCastStmt(_) => CommandTag::CreateCast,
                     Node::ViewStmt(_) => CommandTag::CreateView,
                     Node::RuleStmt(_) => CommandTag::CreateRule,
                     Node::CreatePolicyStmt(_) => CommandTag::CreatePolicy,
@@ -5119,6 +5120,12 @@ mod tests {
     #[test]
     fn type_base() {
         big_stack(|| script(include_str!("connection/type_base.test")));
+    }
+
+    /// `CREATE CAST` with a function, `WITH INOUT` and `WITHOUT FUNCTION`, with the checks of `CreateCast`, the rows of `pg_cast`, the dependencies, and a binary cast that keeps the bits of an `integer` as a `real`. `connection/cast_create.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn cast_create() {
+        big_stack(|| script(include_str!("connection/cast_create.test")));
     }
 
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
