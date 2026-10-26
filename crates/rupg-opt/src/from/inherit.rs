@@ -265,8 +265,9 @@ pub(super) fn param_scans<'q>(
         s.ranges.retain(|&(at, _), _| at != r);
         s.ranges.extend(m.ranges.iter().cloned());
         s.unique.columns.clone_from(&m.unique);
+        let own: Vec<Joined<'q>> = classes.iter().map(Joined::child).collect();
         let found = (r, &m.base, m.plans.as_slice(), semi);
-        let mut params = search::param_scans(level, found, (joins, semis), classes, prohibited, &s);
+        let mut params = search::param_scans(level, found, (joins, semis), &own, prohibited, &s);
         for p in &mut params {
             p.rel.node.member = Some(m.oid);
             p.rel.node.cost.width = m.width;
@@ -274,7 +275,7 @@ pub(super) fn param_scans<'q>(
                 outers.push(p.outer.clone());
             }
         }
-        lists.push((s, params));
+        lists.push((s, own, params));
     }
     // The width of the relation is the mean of the widths of the members, by their rows, as in [`scan`].
     let size: f64 = parent.members.iter().map(|m| f64::from(m.width) * m.base.rows).sum();
@@ -286,7 +287,9 @@ pub(super) fn param_scans<'q>(
             .members
             .iter()
             .zip(&lists)
-            .map(|(m, (s, params))| child(r, m, params, &outer, (joins, semis), classes, s))
+            .map(|(m, (s, own, params))| {
+                child(level, (r, m, params), &outer, (joins, semis), own, s)
+            })
             .collect();
         let Some(children) = children else { continue };
         let t = search::param_table(r, parent, &eq, (joins, semis), classes, stats, &outer);
@@ -310,11 +313,10 @@ pub(super) fn param_scans<'q>(
     paths.params().into_iter().flatten().collect()
 }
 
-/// `get_cheapest_parameterized_child_path`: the scan of the member `m` with the values of the relations `outer` that costs the least in total. When the cheapest scan with no more of these values has other values, each scan of the member gets the conditions of the other values, as `reparameterize_path`, and the cheapest of them wins. Only a sequential scan can get them, as a filter.
+/// `get_cheapest_parameterized_child_path`: the scan of the member `m` with the values of the relations `outer` that costs the least in total. When the cheapest scan with no more of these values has other values, each scan of the member gets the conditions of the other values, as `reparameterize_path`, and the cheapest of them wins. A sequential scan, and an index scan or a bitmap heap scan with no parameters, can get them.
 fn child<'q>(
-    r: usize,
-    m: &MemberBase<'q>,
-    params: &[Param<'q>],
+    level: &Level<'q>,
+    (r, m, params): (usize, &MemberBase<'q>, &[Param<'q>]),
     outer: &BTreeSet<usize>,
     (joins, semis): (&[Qual<'q>], &[Semis]),
     classes: &[Joined<'q>],
@@ -344,7 +346,19 @@ fn child<'q>(
         return Some(node.clone());
     }
     let eq = stats.estimate(r, m.base.tuples);
-    let t = search::param_table(r, &m.base, &eq, (joins, semis), classes, stats, outer);
+    let mut t = search::param_table(r, &m.base, &eq, (joins, semis), classes, stats, outer);
+    // `get_cheapest_parameterized_child_path` gives a `loop_count` of 1.
+    t.loops = 1.0;
+    let plain = index::Table {
+        r,
+        pages: m.base.pages,
+        tuples: m.base.tuples,
+        rows: m.base.rows,
+        quals: m.base.quals.clone(),
+        eq: &eq,
+        outer: BTreeSet::new(),
+        loops: 1.0,
+    };
     let extra = t.quals.get(m.base.quals.len()..).unwrap_or_default();
     let mut best: Option<Node<'q>> = None;
     for (node, o) in all {
@@ -357,7 +371,10 @@ fn child<'q>(
             // `create_seqscan_path` with the parameters: the conditions of the joins in the filter, for each tuple of the member.
             let (startup, per_tuple) = stats.qual_costs(extra.iter().map(|q| &*q.expr));
             let mut seq = node.clone();
-            seq.filter.extend(extra.iter().map(Qual::item));
+            // `order_qual_clauses` of the conditions of the member and of the joins.
+            let mut quals = t.quals.clone();
+            stats.sort_quals(&mut quals);
+            seq.filter = quals.iter().map(Qual::item).collect();
             seq.cost.startup += startup;
             seq.cost.total += startup + per_tuple * m.base.tuples;
             seq.cost.rows = t.rows;
@@ -365,6 +382,15 @@ fn child<'q>(
                 continue;
             }
             seq
+        } else if o.is_empty()
+            && let Some(mut scan) =
+                index::reparameterize(level, (&plain, &t), &m.base.indexes, node, stats)
+        {
+            (scan.member, scan.cost.width) = (node.member, node.cost.width);
+            if best.as_ref().is_some_and(|b| !cheaper(&scan, b)) {
+                continue;
+            }
+            scan
         } else {
             continue;
         };

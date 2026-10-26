@@ -67,6 +67,12 @@ pub(super) struct Joined<'q> {
 }
 
 impl<'q> Joined<'q> {
+    /// The class for a member of a table with members: `add_child_rel_equivalences` gives the member its own members of the class, and the class made no condition of them yet.
+    pub(super) fn child(&self) -> Joined<'q> {
+        let (members, families) = (self.members.clone(), self.families.clone());
+        Joined { members, families, id: self.id, derived: RefCell::default() }
+    }
+
     /// The members of the class, each with its relation.
     pub(super) fn members(&self) -> &[(&'q Expr, usize)] {
         &self.members
