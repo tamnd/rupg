@@ -127,6 +127,13 @@ pub(super) fn tuple_len(values: &[Value]) -> usize {
     header + len
 }
 
+/// `IndexTupleSize` of an index tuple with the values `values`, from `index_form_tuple`: the header of 8 bytes, with the null bitmap of 4 bytes up to a multiple of 8 when a value is null, and then the data, up to a multiple of 8. The values are not compressed.
+pub(super) fn index_tuple_len(values: &[Value]) -> usize {
+    let header = if values.iter().any(Value::is_null) { 16 } else { 8 };
+    let layouts: Vec<Layout> = values.iter().filter(|v| !v.is_null()).map(layout).collect();
+    max_align(header + data_len(&layouts))
+}
+
 /// The lengths of the values `values` of a version, as `ANALYZE` reads them: `VARSIZE_ANY` of the value in the version, which is the length of the TOAST pointer for a value that [`tuple_len`] moves to the TOAST table, and `toast_raw_datum_size`, the length of the value with a header of four bytes. A null value and a value of fixed length give 0 for both.
 pub(crate) fn stored_widths(values: &[Value]) -> Vec<(usize, usize)> {
     let nulls = values.iter().any(Value::is_null);

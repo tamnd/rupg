@@ -218,6 +218,8 @@ pub struct Index {
     pub collations: Vec<u32>,
     /// `pages`: the pages of the index.
     pub pages: f64,
+    /// `tree_height` of `_bt_getrootheight`: the level of the root of a `btree` index, 0 when the root is a leaf.
+    pub height: u32,
     /// `indexprs`: the expression of each key column with the number 0, in the order of the columns. A column of the table is a column of the relation 0.
     pub exprs: Vec<Expr>,
     /// `indpred`: the parts of the `AND` of the predicate of a partial index. A column of the table is a column of the relation 0.

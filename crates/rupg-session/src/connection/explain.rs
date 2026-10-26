@@ -16,7 +16,7 @@ use rupg_wire::CommandTag;
 use super::copy::{def_boolean, def_string};
 use super::extended::protocol_error;
 use super::{Connection, Done};
-use crate::heap::Heap;
+use crate::heap::{BtreeSize, Heap, Shape};
 use crate::query::{self, Column, Reader};
 use crate::utility::Notice;
 
@@ -38,6 +38,48 @@ impl Members<'_, '_> {
         } else {
             pages.max(1)
         }
+    }
+
+    /// The pages and the height of the index `index` of the table `table` with the columns `columns`. A `btree` index on columns of the table with no predicate has the size that [`Heap::btree_size`] gives from the versions of the table, and another index has the pages of [`Members::index_pages`] and a height of 0.
+    fn index_size(
+        &self,
+        table: u32,
+        index: &rupg_catalog::Relation,
+        columns: &[rupg_catalog::Column],
+    ) -> BtreeSize {
+        let Some(info) = &index.index else { return BtreeSize::EMPTY };
+        let pages = self.index_pages(table, info.method, info.pages);
+        let fallback = BtreeSize { blocks: u32::try_from(pages).unwrap_or(1), height: 0 };
+        if info.method != rupg_catalog::BTREE || info.predicate.is_some() || info.pages == 0 {
+            return fallback;
+        }
+        let places: Option<Vec<usize>> = info
+            .keys
+            .iter()
+            .map(|&attnum| usize::try_from(attnum).ok().filter(|n| *n > 0).map(|n| n - 1))
+            .collect();
+        let Some(places) = places else { return fallback };
+        let Some(types) = places.iter().map(|&p| columns.get(p).map(|c| c.ty)).collect() else {
+            return fallback;
+        };
+        let option = |name: &str| {
+            index.options.iter().find_map(|text| {
+                let (found, value) = text.split_once('=')?;
+                (found == name).then(|| value.to_ascii_lowercase())
+            })
+        };
+        let shape = Shape {
+            columns: places,
+            types,
+            key_count: usize::try_from(info.key_count).unwrap_or(0),
+            options: info.options.clone(),
+            unique: info.unique,
+            fillfactor: option("fillfactor").and_then(|v| v.parse().ok()).unwrap_or(90),
+            deduplicate: option("deduplicate_items").is_none_or(|v| {
+                !matches!(v.as_str(), "off" | "of" | "false" | "f" | "no" | "n" | "0")
+            }),
+        };
+        self.heap.btree_size(self.database, table, index.oid, &shape)
     }
 }
 
@@ -108,6 +150,7 @@ impl rupg_opt::Members for Members<'_, '_> {
                     Some(Ok(expr)) => vec![expr],
                     Some(Err(_)) | None => Vec::new(),
                 };
+                let size = self.index_size(table, rel, columns);
                 let mut next = exprs.iter();
                 let width = info
                     .keys
@@ -140,7 +183,8 @@ impl rupg_opt::Members for Members<'_, '_> {
                         .collect(),
                     options: info.options.clone(),
                     collations: info.collations.clone(),
-                    pages: f64::from(self.index_pages(table, info.method, info.pages)),
+                    pages: f64::from(size.blocks),
+                    height: size.height,
                     exprs,
                     predicate,
                     width,
