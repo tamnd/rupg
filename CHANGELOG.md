@@ -6,7 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- `CREATE INDEX` and `REINDEX` give a new index of a table with rows its `relpages` and `reltuples` in `pg_class`, as `index_update_stats` does: the pages of a `btree` index and the rows that it has, and the buckets of a `hash` index for the rows that the stats of the table give (#NNN).
+- `CREATE INDEX` and `REINDEX` give a new index of a table with rows its `relpages` and `reltuples` in `pg_class`, as `index_update_stats` does: the pages of a `btree` index and the rows that it has, and the buckets of a `hash` index for the rows that the stats of the table give (#820).
 - Index scans of a btree index on `inet` for `<<`, `<<=`, `>>` and `>>=` with a constant network, with the index conditions of the range of the network as `network_subset_support` makes them and the operator in the filter, and the default selectivities of `networksel` (#819).
 - The static rows of `pg_database` have `datfrozenxid` 654, as the `VACUUM FREEZE` of `initdb` leaves them, so that the databases of a new cluster agree with `INITDB_FROZEN_XID` (#818).
 - A new cluster starts at the transaction ID 662 with `datfrozenxid` 654, as `initdb` of PostgreSQL 19 leaves it, and `pg_xact_status` and `txid_status` give NULL for an ID before 654, whose entry of `pg_xact` is gone (#817).
