@@ -2,7 +2,10 @@
 
 use std::collections::BTreeSet;
 
-use rupg_analyze::{Aggref, BoolOp, Expr, ExprKind, FuncForm, PlaceHolder, Query, Var, WindowFunc};
+use rupg_analyze::{
+    Aggref, BoolOp, Expr, ExprKind, FuncForm, PlaceHolder, Query, Var, WindowFunc, default_opclass,
+    types,
+};
 use rupg_pgcatalog::builtin;
 use rupg_types::Value;
 
@@ -219,6 +222,27 @@ pub(crate) fn commute(expr: &Expr) -> Option<Expr> {
 /// True when the operator can test a hash join, `oprcanhash`.
 pub(crate) fn can_hash(op: u32) -> bool {
     builtin::operator_by_oid(op).is_some_and(|row| row.can_hash)
+}
+
+/// `hash_ok_operator`: a call of an operator with two arguments that can use a hash table and whose function is strict. The `=` of arrays and the `=` of records can use a hash table only when the type of the left argument has a hash function, as `op_hashjoinable` finds it: an array whose element type has one, and a record that is not of the type `record`, whose columns `lookup_type_cache` cannot know.
+pub(crate) fn hash_ok(expr: &Expr) -> bool {
+    const ARRAY_EQ: u32 = 1070;
+    const RECORD_EQ: u32 = 2988;
+    const HASH: u32 = 405;
+    let ExprKind::Func(f) = &expr.kind else { return false };
+    let FuncForm::Operator(op) = f.form else { return false };
+    if f.args.len() != 2 {
+        return false;
+    }
+    let ty = f.args[0].ty;
+    match op {
+        ARRAY_EQ => {
+            let element = types::element(types::base(ty));
+            element != 0 && default_opclass(element, HASH).is_some()
+        }
+        RECORD_EQ => types::base(ty) != rupg_types::oid::RECORD,
+        _ => can_hash(op) && builtin::proc_by_oid(f.oid).is_some_and(|p| p.strict),
+    }
 }
 
 /// True when the operator can test a merge join, `oprcanmerge`, which makes the condition an equivalence of PostgreSQL.

@@ -1070,8 +1070,8 @@ fn hashable_test(link: &SubLink) -> bool {
     fn hashable(expr: &Expr) -> bool {
         match &expr.kind {
             ExprKind::Bool(rupg_analyze::BoolOp::And, args) => args.iter().all(hashable),
-            _ => exprs::binary(expr).is_some_and(|(op, left, right)| {
-                exprs::can_hash(op)
+            _ => exprs::binary(expr).is_some_and(|(_, left, right)| {
+                exprs::hash_ok(expr)
                     && !matches!(left.kind, ExprKind::SubColumn(_))
                     && matches!(right.kind, ExprKind::SubColumn(_))
             }),

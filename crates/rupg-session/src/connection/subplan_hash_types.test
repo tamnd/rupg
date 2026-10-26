@@ -1,0 +1,38 @@
+> explain (verbose, costs off) select row(row(row(1))) = any (select row(row(1)))
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Output: (ANY ('("(1)")'::record = (SubPlan any_1).col1))
+row   SubPlan any_1
+row     ->  Materialize
+row           Output: '("(1)")'::record
+row           ->  Result
+row                 Output: '("(1)")'::record
+EXPLAIN
+> select row(row(row(1))) = any (select row(row(1)))
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> explain (verbose, costs off) select row(1, 2) = any (select row(1, 2))
+ERROR 42601 subquery has too few columns at 47
+> explain (verbose, costs off) select array[1] = any (select array[2])
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Output: (ANY ('{1}'::integer[] = (hashed SubPlan any_1).col1))
+row   SubPlan any_1
+row     ->  Result
+row           Output: '{2}'::integer[]
+EXPLAIN
+> explain (verbose, costs off) select array[1::money] = any (select array[2::money])
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Output: (ANY (ARRAY[(1)::money] = (SubPlan any_1).col1))
+row   SubPlan any_1
+row     ->  Materialize
+row           Output: (ARRAY[(2)::money])
+row           ->  Result
+row                 Output: ARRAY[(2)::money]
+EXPLAIN
+> create type rh_t as (a int, b text)
+CREATE TYPE
+> explain (verbose, costs off) select row(1, 'x')::rh_t = any (select row(2, 'y')::rh_t)
+ERROR 42601 subquery has too few columns at 55
