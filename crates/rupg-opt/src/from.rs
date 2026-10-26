@@ -5,6 +5,7 @@ mod classes;
 mod index;
 mod memoize;
 pub(crate) mod paths;
+mod scansel;
 mod search;
 
 use std::borrow::Cow;
@@ -838,6 +839,20 @@ impl<'q> Builder<'q> {
                     for q in &quals {
                         variable_ranges(self.members, &q.expr, (r, relation.oid), &indexes, stats);
                     }
+                    // `mergejoinscansel` reads the histograms of the columns of the conditions of the joins.
+                    let joined: Vec<i16> = stats
+                        .joins
+                        .iter()
+                        .flatten()
+                        .map(|(side, _)| side)
+                        .chain(stats.equal.iter().flat_map(|(members, _)| members))
+                        .filter_map(plain_var)
+                        .filter(|v| v.levels_up == 0 && v.relation == r)
+                        .map(|v| v.attnum)
+                        .collect();
+                    for attnum in joined {
+                        column_range(self.members, attnum, (r, relation.oid), &indexes, stats);
+                    }
                     for index in &indexes {
                         if let ([key], true, false) =
                             (index.keys.as_slice(), index.unique, index.partial)
@@ -1383,22 +1398,33 @@ fn variable_ranges(
         .into_iter()
         .find_map(|side| plain_var(side).filter(|v| v.levels_up == 0 && v.relation == r));
     let Some(var) = column else { return };
+    column_range(members, var.attnum, (r, table), indexes, stats);
+}
+
+/// `get_actual_variable_range` for the column `attnum` of the relation `r`, the table `table`, when the column has a histogram and is the first key of a `btree` index of the table with no predicate and with the default operator class of its type.
+fn column_range(
+    members: Option<&dyn crate::Members>,
+    attnum: i16,
+    (r, table): (usize, u32),
+    indexes: &[Index],
+    stats: &mut Stats,
+) {
     let histogram = stats
         .columns
         .get(&r)
-        .and_then(|c| c.get(&var.attnum))
+        .and_then(|c| c.get(&attnum))
         .is_some_and(|s| s.slots.iter().any(|slot| slot.kind == STATISTIC_KIND_HISTOGRAM));
-    if !histogram || stats.ranges.contains_key(&(r, var.attnum)) {
+    if !histogram || stats.ranges.contains_key(&(r, attnum)) {
         return;
     }
     let ordered = indexes.iter().any(|index| {
         index.method == index::BTREE_AM
             && !index.partial
-            && index.keys.first() == Some(&var.attnum)
+            && index.keys.first() == Some(&attnum)
             && index.default_class.first() == Some(&true)
     });
-    let range = members.filter(|_| ordered).and_then(|m| m.variable_range(table, var.attnum));
-    stats.ranges.insert((r, var.attnum), range);
+    let range = members.filter(|_| ordered).and_then(|m| m.variable_range(table, attnum));
+    stats.ranges.insert((r, attnum), range);
 }
 
 /// `set_append_rel_size` and `create_append_plan`: the scans of the members of the inheritance tree of the relation `r`, under an `Append` when there are two or more, each with the conditions of the relation. With no member the relation is a `Result` with no rows, as `set_dummy_rel_pathlist`.
@@ -3461,17 +3487,37 @@ fn merge_join<'q>(
         }
     };
     let (o, i) = (side(input.outer, sort_outer), side(input.inner, sort_inner));
-    let (outer_rows, inner_rows) =
+    let (outer_path_rows, inner_path_rows) =
         (nonzero(input.outer.node.cost.rows), nonzero(input.inner.node.cost.rows));
+    // The first clause gives the parts of the sides that the join reads. The outer side of a left join or an anti join, and the inner side of a right join, are read to the end.
+    let (mut outer_sel, mut inner_sel) = match keys.first() {
+        Some(&(c, desc, nulls_first)) if join != JoinKind::Full => {
+            let clause = &clauses[c];
+            scansel::mergejoinscansel(input.stats, &clause.outer, &clause.inner, desc, nulls_first)
+        }
+        _ => (scansel::ALL, scansel::ALL),
+    };
+    if matches!(join, JoinKind::Left | JoinKind::Anti) {
+        outer_sel = scansel::ALL;
+    } else if matches!(join, JoinKind::Right | JoinKind::RightAnti) {
+        inner_sel = scansel::ALL;
+    }
+    let outer_skip = (outer_path_rows * outer_sel.start).round_ties_even();
+    let inner_skip = (inner_path_rows * inner_sel.start).round_ties_even();
+    let outer_rows = cost::clamp_rows(outer_path_rows * outer_sel.end);
+    let inner_rows = cost::clamp_rows(inner_path_rows * inner_sel.end);
+    // The fractions follow the rounding of the rows, which matters for a side with few rows.
+    let (outer_start, outer_end) = (outer_skip / outer_path_rows, outer_rows / outer_path_rows);
+    let (inner_start, inner_end) = (inner_skip / inner_path_rows, inner_rows / inner_path_rows);
     let tuples = tuple_count(input, &clauses);
     // `skip_mark_restore`: when the inner side is unique and the join has no other condition, the join never goes back to an inner row. With the unique rows of a semi join as the outer side, no outer row has the value of the row before it.
     let skip_mark_restore = input.unique.is_some() && other.is_empty() && !input.filtered;
     let rescanned =
-        if skip_mark_restore || input.made.0 { 0.0 } else { (tuples - inner_rows).max(0.0) };
-    let ratio = 1.0 + rescanned / inner_rows.max(1.0);
-    let inner_run = i.1 - i.0;
-    let startup = o.0 + i.0;
-    let mut run = o.1 - o.0;
+        if skip_mark_restore || input.made.0 { 0.0 } else { (tuples - inner_path_rows).max(0.0) };
+    let ratio = 1.0 + rescanned / inner_rows;
+    let inner_run = (i.1 - i.0) * (inner_end - inner_start);
+    let mut startup = o.0 + (o.1 - o.0) * outer_start + i.0 + (i.1 - i.0) * inner_start;
+    let mut run = (o.1 - o.0) * (outer_end - outer_start);
     let material = inner_run + cost::CPU_OPERATOR * inner_rows * ratio;
     let bare = inner_run * ratio;
     // The inner side needs a `Material` node when it is cheaper, when its node cannot go back to a row that it gave, as `ExecSupportsMarkRestore`, or when its sort does not fit in `work_mem`.
@@ -3485,12 +3531,16 @@ fn merge_join<'q>(
             || !sort_inner
                 && !matches!(
                     input.inner.node.kind,
-                    Kind::Sort(_) | Kind::Materialize | Kind::Result { .. }
+                    Kind::Sort(_)
+                        | Kind::Materialize
+                        | Kind::Result { .. }
+                        | Kind::IndexScan { .. }
                 )
             || allowed && sort_inner && spills);
     run += if materialize { material } else { bare };
-    run +=
-        cost::qual_cost(clauses.iter().map(|c| &*c.item.expr)) * (outer_rows + inner_rows * ratio);
+    let merge_qual = cost::qual_cost(clauses.iter().map(|c| &*c.item.expr));
+    startup += merge_qual * (outer_skip + inner_skip * ratio);
+    run += merge_qual * ((outer_rows - outer_skip) + (inner_rows - inner_skip) * ratio);
     // The start cost of the conditions that are not the clauses of the join counts in the start cost of the join.
     let (qual_startup, qual_cost) = input.stats.qual_costs(other.iter().map(|q| &*q.expr));
     let startup = startup + qual_startup + input.filter_startup;
