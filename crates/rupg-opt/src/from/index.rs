@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use rupg_analyze::{BoolOp, Expr, ExprKind, FuncForm, Var, types};
 use rupg_pgcatalog::builtin;
 use rupg_plan::{Cost, Item, Kind, Node, STATISTIC_KIND_CORRELATION};
-use rupg_types::{Array, Value, oid};
+use rupg_types::{Array, Inet, Value, oid};
 
 use super::classes::Joined;
 use super::{OrderKey, Qual, Rel, Stats, plain_var};
@@ -816,7 +816,7 @@ fn match_clauses<'q>(r: usize, index: &Index, sources: &[&Source<'q>]) -> Vec<Cl
     out
 }
 
-/// `match_clause_to_indexcol`: the condition as clauses of the key column of the index, when the column can test it. An operator of the operator family of the column must have the column on one side and on the other side a value that reads no column of the table and calls no volatile function. With the column on the right, the commutator of the operator must be in the family, and the clause is the condition with the commutator, as `commute_op_clause`. `x op ANY (array)` and `IS NULL` and `IS NOT NULL` of the column are clauses too. A pattern operator with the column on the left gives the lossy clauses of the fixed prefix of the pattern, as `match_pattern_prefix`.
+/// `match_clause_to_indexcol`: the condition as clauses of the key column of the index, when the column can test it. An operator of the operator family of the column must have the column on one side and on the other side a value that reads no column of the table and calls no volatile function. With the column on the right, the commutator of the operator must be in the family, and the clause is the condition with the commutator, as `commute_op_clause`. `x op ANY (array)` and `IS NULL` and `IS NOT NULL` of the column are clauses too. A pattern operator with the column on the left gives the lossy clauses of the fixed prefix of the pattern, as `match_pattern_prefix`. A network operator `<<`, `<<=`, `>>` or `>>=` with a constant network gives the lossy clauses of the range of the network, as `network_subset_support`.
 fn match_clause<'q>(
     r: usize,
     index: &Index,
@@ -916,23 +916,27 @@ fn match_one<'q>(
         }
         _ => {
             let (op, left, right) = exprs::binary(expr)?;
+            let lossy = |(expr, s)| Clause {
+                expr: Cow::Owned(expr),
+                column,
+                orig: orig.clone(),
+                at,
+                class,
+                kind: ClauseKind::Op(s),
+                lossy: true,
+            };
             if is_column(left) && other_ok(right) {
                 let Some(s) = strategy(op, family) else {
-                    let derived = prefix_clauses(expr, family)?;
-                    let lossy = |(expr, s)| Clause {
-                        expr: Cow::Owned(expr),
-                        column,
-                        orig: orig.clone(),
-                        at,
-                        class,
-                        kind: ClauseKind::Op(s),
-                        lossy: true,
-                    };
+                    let derived = prefix_clauses(expr, family)
+                        .or_else(|| network_clauses(expr, true, family))?;
                     return Some(derived.into_iter().map(lossy).collect());
                 };
                 return Some(clause(orig.clone(), ClauseKind::Op(s)));
             }
             if is_column(right) && other_ok(left) {
+                if let Some(derived) = network_clauses(expr, false, family) {
+                    return Some(derived.into_iter().map(lossy).collect());
+                }
                 let commutator = builtin::operator_by_oid(op)?.commutator;
                 let s = strategy(commutator, family)?;
                 let commuted = exprs::commute(expr)?;
@@ -1003,6 +1007,43 @@ fn prefix_clauses(expr: &Expr, family: u32) -> Option<Vec<(Expr, i16)>> {
         out.push(clause);
     }
     Some(out)
+}
+
+/// `network_subset_support` and `match_network_subset`: the clauses of the column for `column << value` and `column <<= value` of `inet` when `left` is true, and for `value >> column` and `value >>= column` when it is false, with their strategies. The value must be a constant that is not NULL. The clauses are `>` of `network_scan_first` of the value, or `>=` for `<<=` and `>>=`, and `<=` of `network_scan_last`: the network of the value, and its broadcast address with the whole mask. Each operator must be in the family of the column.
+fn network_clauses(expr: &Expr, left: bool, family: u32) -> Option<Vec<(Expr, i16)>> {
+    let (op, l, r) = exprs::binary(expr)?;
+    let row = builtin::operator_by_oid(op)?;
+    if row.left != oid::INET || row.right != oid::INET {
+        return None;
+    }
+    let (eq, key, value) = match (row.name, left) {
+        ("<<", true) => (false, l, r),
+        ("<<=", true) => (true, l, r),
+        (">>", false) => (false, r, l),
+        (">>=", false) => (true, r, l),
+        _ => return None,
+    };
+    let ExprKind::Const(Value::Inet(net)) = &value.kind else { return None };
+    let first = net.masked(net.bits);
+    let mut last = *net;
+    for (n, byte) in last.addr.iter_mut().take(net.family.size()).enumerate() {
+        let done = n.saturating_mul(8);
+        let kept = usize::from(net.bits).saturating_sub(done).min(8);
+        *byte |= 0xffu8.checked_shr(u32::try_from(kept).unwrap_or(8)).unwrap_or(0);
+    }
+    last.bits = net.family.max_bits();
+    let make = |name: &str, bound: Inet| {
+        let row =
+            builtin::operators_named(name).find(|o| o.left == oid::INET && o.right == oid::INET)?;
+        let s = strategy(row.oid, family)?;
+        let ExprKind::Func(f) = &expr.kind else { return None };
+        let mut func = f.clone();
+        func.oid = row.code;
+        func.form = FuncForm::Operator(row.oid);
+        func.args = vec![key.clone(), Expr::new(ExprKind::Const(Value::Inet(bound)), oid::INET)];
+        Some((Expr::new(ExprKind::Func(func), oid::BOOL), s))
+    };
+    Some(vec![make(if eq { ">=" } else { ">" }, first)?, make("<=", last)?])
 }
 
 /// `get_op_opfamily_strategy`: the strategy of a search operator in the operator family, or `None` when the family has not the operator.

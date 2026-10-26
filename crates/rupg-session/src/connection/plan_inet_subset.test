@@ -1,0 +1,86 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE INET_TBL (c cidr, i inet);
+CREATE TABLE
+> INSERT INTO INET_TBL (c, i) VALUES ('192.168.1', '192.168.1.226/24');
+INSERT 0 1
+> INSERT INTO INET_TBL (c, i) VALUES ('192.168.1.0/26', '192.168.1.226');
+INSERT 0 1
+> INSERT INTO INET_TBL (c, i) VALUES ('192.168.1', '192.168.1.0/24');
+INSERT 0 1
+> INSERT INTO INET_TBL (c, i) VALUES ('192.168.1', '192.168.1.0/25');
+INSERT 0 1
+> INSERT INTO INET_TBL (c, i) VALUES ('192.168.1', '192.168.1.255/24');
+INSERT 0 1
+> INSERT INTO INET_TBL (c, i) VALUES ('192.168.1', '192.168.1.255/25');
+INSERT 0 1
+> INSERT INTO INET_TBL (c, i) VALUES ('10', '10.1.2.3/8');
+INSERT 0 1
+> INSERT INTO INET_TBL (c, i) VALUES ('10.0.0.0', '10.1.2.3/8');
+INSERT 0 1
+> INSERT INTO INET_TBL (c, i) VALUES ('10.1.2.3', '10.1.2.3/32');
+INSERT 0 1
+> INSERT INTO INET_TBL (c, i) VALUES ('10.1.2', '10.1.2.3/24');
+INSERT 0 1
+> INSERT INTO INET_TBL (c, i) VALUES ('10.1', '10.1.2.3/16');
+INSERT 0 1
+> INSERT INTO INET_TBL (c, i) VALUES ('10', '10.1.2.3/8');
+INSERT 0 1
+> INSERT INTO INET_TBL (c, i) VALUES ('10', '11.1.2.3/8');
+INSERT 0 1
+> INSERT INTO INET_TBL (c, i) VALUES ('10', '9.1.2.3/8');
+INSERT 0 1
+> INSERT INTO INET_TBL (c, i) VALUES ('10:23::f1', '10:23::f1/64');
+INSERT 0 1
+> INSERT INTO INET_TBL (c, i) VALUES ('10:23::8000/113', '10:23::ffff');
+INSERT 0 1
+> INSERT INTO INET_TBL (c, i) VALUES ('::ffff:1.2.3.4', '::4.3.2.1/24');
+INSERT 0 1
+> CREATE INDEX inet_idx1 ON inet_tbl(i);
+CREATE INDEX
+> SET enable_seqscan TO off;
+SET
+> EXPLAIN SELECT * FROM inet_tbl WHERE i<<'192.168.1.0/24'::cidr;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using inet_idx1 on inet_tbl  (cost=0.14..8.16 rows=1 width=64)
+row   Index Cond: ((i > '192.168.1.0/24'::inet) AND (i <= '192.168.1.255'::inet))
+row   Filter: (i << '192.168.1.0/24'::inet)
+EXPLAIN
+> EXPLAIN SELECT * FROM inet_tbl WHERE i<<='192.168.1.0/24'::cidr;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using inet_idx1 on inet_tbl  (cost=0.14..8.16 rows=1 width=64)
+row   Index Cond: ((i >= '192.168.1.0/24'::inet) AND (i <= '192.168.1.255'::inet))
+row   Filter: (i <<= '192.168.1.0/24'::inet)
+EXPLAIN
+> EXPLAIN SELECT * FROM inet_tbl WHERE '192.168.1.0/24'::cidr >>= i;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using inet_idx1 on inet_tbl  (cost=0.14..8.16 rows=1 width=64)
+row   Index Cond: ((i >= '192.168.1.0/24'::inet) AND (i <= '192.168.1.255'::inet))
+row   Filter: ('192.168.1.0/24'::inet >>= i)
+EXPLAIN
+> EXPLAIN SELECT * FROM inet_tbl WHERE '192.168.1.0/24'::cidr >> i;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using inet_idx1 on inet_tbl  (cost=0.14..8.16 rows=1 width=64)
+row   Index Cond: ((i > '192.168.1.0/24'::inet) AND (i <= '192.168.1.255'::inet))
+row   Filter: ('192.168.1.0/24'::inet >> i)
+EXPLAIN
+> EXPLAIN SELECT * FROM inet_tbl WHERE i << '::/0'::cidr;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using inet_idx1 on inet_tbl  (cost=0.14..8.16 rows=1 width=64)
+row   Index Cond: ((i > '::/0'::inet) AND (i <= 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff'::inet))
+row   Filter: (i << '::/0'::inet)
+EXPLAIN
+> EXPLAIN SELECT * FROM inet_tbl WHERE i <<= '10.1.2.3/30'::inet;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using inet_idx1 on inet_tbl  (cost=0.14..8.16 rows=1 width=64)
+row   Index Cond: ((i >= '10.1.2.0/30'::inet) AND (i <= '10.1.2.3'::inet))
+row   Filter: (i <<= '10.1.2.3/30'::inet)
+EXPLAIN
+> SET enable_seqscan TO on;
+SET
+> EXPLAIN SELECT * FROM inet_tbl WHERE i<<'192.168.1.0/24'::cidr;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on inet_tbl  (cost=0.00..1.21 rows=1 width=64)
+row   Filter: (i << '192.168.1.0/24'::inet)
+EXPLAIN
