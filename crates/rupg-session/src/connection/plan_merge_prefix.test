@@ -1,0 +1,114 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE mp1 (a int, b int, c int);
+CREATE TABLE
+> CREATE TABLE mp2 (a int, b int, c int);
+CREATE TABLE
+> INSERT INTO mp1 SELECT x, x % 50, x % 7 FROM generate_series(1, 5000) x;
+INSERT 0 5000
+> INSERT INTO mp2 SELECT x + 2000, x % 20, x % 9 FROM generate_series(1, 4000) x;
+INSERT 0 4000
+> CREATE INDEX mp1_a ON mp1 (a);
+CREATE INDEX
+> CREATE INDEX mp2_a ON mp2 (a);
+CREATE INDEX
+> CREATE INDEX mp2_ab ON mp2 (a, b);
+CREATE INDEX
+> ANALYZE mp1, mp2;
+ANALYZE
+> SET enable_hashjoin = off;
+SET
+> SET enable_nestloop = off;
+SET
+> EXPLAIN SELECT * FROM mp1 JOIN mp2 ON mp1.a = mp2.a AND mp1.b = mp2.b;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=71.96..336.31 rows=80 width=24)
+row   Merge Cond: (mp1.a = mp2.a)
+row   Join Filter: (mp2.b = mp1.b)
+row   ->  Index Scan using mp1_a on mp1  (cost=0.28..166.28 rows=5000 width=12)
+row   ->  Index Scan using mp2_a on mp2  (cost=0.28..133.28 rows=4000 width=12)
+EXPLAIN
+> EXPLAIN SELECT * FROM mp1 JOIN mp2 ON mp1.a = mp2.a AND mp1.b = mp2.b AND mp1.c = mp2.c;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=71.96..346.31 rows=9 width=24)
+row   Merge Cond: (mp1.a = mp2.a)
+row   Join Filter: ((mp2.b = mp1.b) AND (mp2.c = mp1.c))
+row   ->  Index Scan using mp1_a on mp1  (cost=0.28..166.28 rows=5000 width=12)
+row   ->  Index Scan using mp2_a on mp2  (cost=0.28..133.28 rows=4000 width=12)
+EXPLAIN
+> EXPLAIN SELECT * FROM mp1 JOIN mp2 ON mp1.b = mp2.b AND mp1.a = mp2.a;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=71.96..336.31 rows=80 width=24)
+row   Merge Cond: (mp1.a = mp2.a)
+row   Join Filter: (mp2.b = mp1.b)
+row   ->  Index Scan using mp1_a on mp1  (cost=0.28..166.28 rows=5000 width=12)
+row   ->  Index Scan using mp2_a on mp2  (cost=0.28..133.28 rows=4000 width=12)
+EXPLAIN
+> EXPLAIN SELECT * FROM mp1 LEFT JOIN mp2 ON mp1.a = mp2.a AND mp1.b = mp2.b;
+fields QUERY PLAN:25:-1:-1
+row Merge Left Join  (cost=0.56..336.31 rows=5000 width=24)
+row   Merge Cond: (mp1.a = mp2.a)
+row   Join Filter: (mp1.b = mp2.b)
+row   ->  Index Scan using mp1_a on mp1  (cost=0.28..166.28 rows=5000 width=12)
+row   ->  Index Scan using mp2_a on mp2  (cost=0.28..133.28 rows=4000 width=12)
+EXPLAIN
+> EXPLAIN SELECT * FROM mp1 FULL JOIN mp2 ON mp1.a = mp2.a AND mp1.b = mp2.b;
+fields QUERY PLAN:25:-1:-1
+row Merge Full Join  (cost=385.47..604.34 rows=5000 width=24)
+row   Merge Cond: ((mp2.a = mp1.a) AND (mp2.b = mp1.b))
+row   ->  Index Scan using mp2_ab on mp2  (cost=0.28..160.84 rows=4000 width=12)
+row   ->  Sort  (cost=385.19..397.69 rows=5000 width=12)
+row         Sort Key: mp1.a, mp1.b
+row         ->  Seq Scan on mp1  (cost=0.00..78.00 rows=5000 width=12)
+EXPLAIN
+> EXPLAIN SELECT * FROM mp1 RIGHT JOIN mp2 ON mp1.a = mp2.a AND mp1.b = mp2.b;
+fields QUERY PLAN:25:-1:-1
+row Merge Left Join  (cost=71.96..372.06 rows=4000 width=24)
+row   Merge Cond: (mp2.a = mp1.a)
+row   Join Filter: (mp1.b = mp2.b)
+row   ->  Index Scan using mp2_a on mp2  (cost=0.28..133.28 rows=4000 width=12)
+row   ->  Index Scan using mp1_a on mp1  (cost=0.28..166.28 rows=5000 width=12)
+EXPLAIN
+> EXPLAIN SELECT * FROM mp1 WHERE EXISTS (SELECT 1 FROM mp2 WHERE mp2.a = mp1.a AND mp2.c = mp1.c);
+fields QUERY PLAN:25:-1:-1
+row Merge Semi Join  (cost=71.96..336.31 rows=4000 width=12)
+row   Merge Cond: (mp1.a = mp2.a)
+row   Join Filter: (mp2.c = mp1.c)
+row   ->  Index Scan using mp1_a on mp1  (cost=0.28..166.28 rows=5000 width=12)
+row   ->  Index Scan using mp2_a on mp2  (cost=0.28..133.28 rows=4000 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM mp1 JOIN mp2 ON mp1.a = mp2.a AND mp1.b = mp2.b AND mp1.c < mp2.c;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=71.96..346.31 rows=27 width=24)
+row   Merge Cond: (mp1.a = mp2.a)
+row   Join Filter: ((mp1.c < mp2.c) AND (mp2.b = mp1.b))
+row   ->  Index Scan using mp1_a on mp1  (cost=0.28..166.28 rows=5000 width=12)
+row   ->  Index Scan using mp2_a on mp2  (cost=0.28..133.28 rows=4000 width=12)
+EXPLAIN
+> EXPLAIN SELECT * FROM mp1 JOIN mp2 ON mp1.a = mp2.a AND mp1.b = mp2.b ORDER BY mp1.a;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=71.96..336.31 rows=80 width=24)
+row   Merge Cond: (mp1.a = mp2.a)
+row   Join Filter: (mp2.b = mp1.b)
+row   ->  Index Scan using mp1_a on mp1  (cost=0.28..166.28 rows=5000 width=12)
+row   ->  Index Scan using mp2_a on mp2  (cost=0.28..133.28 rows=4000 width=12)
+EXPLAIN
+> DROP INDEX mp2_ab;
+DROP INDEX
+> EXPLAIN SELECT * FROM mp1 JOIN mp2 ON mp1.a = mp2.a AND mp1.b = mp2.b;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=71.96..336.31 rows=80 width=24)
+row   Merge Cond: (mp1.a = mp2.a)
+row   Join Filter: (mp2.b = mp1.b)
+row   ->  Index Scan using mp1_a on mp1  (cost=0.28..166.28 rows=5000 width=12)
+row   ->  Index Scan using mp2_a on mp2  (cost=0.28..133.28 rows=4000 width=12)
+EXPLAIN
+> EXPLAIN SELECT * FROM mp1 JOIN mp2 ON mp1.a = mp2.a AND mp1.c = mp2.c;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=71.96..336.31 rows=445 width=24)
+row   Merge Cond: (mp1.a = mp2.a)
+row   Join Filter: (mp2.c = mp1.c)
+row   ->  Index Scan using mp1_a on mp1  (cost=0.28..166.28 rows=5000 width=12)
+row   ->  Index Scan using mp2_a on mp2  (cost=0.28..133.28 rows=4000 width=12)
+EXPLAIN

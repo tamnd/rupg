@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A merge join uses the clauses whose values are in the first keys of the order of its outer side, and it tests the other clauses as conditions of the join, as `find_mergeclauses_for_outer_pathkeys`. The planner also tries the inner plans that are in the order of only the first keys, as `generate_mergejoin_paths` (#NNN).
 - The planner gives a merge join the cost of only the parts of its sides that the join reads, from the ranges of the values of the first merge clause, as `mergejoinscansel` does. An index scan under a merge join does not get a `Materialize` node, because it can mark and restore its position (#798).
 - A new unique index, primary key or constraint on a table with rows checks the rows in place, so the pages of the heap and the `ctid` of the rows stay as in PostgreSQL (#796).
 - The planner reads the pages and the height of each `btree` index from a model of the build of the index, as `_bt_load` writes the pages (#794).
