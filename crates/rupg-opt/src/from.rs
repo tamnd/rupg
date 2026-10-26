@@ -1655,8 +1655,8 @@ fn needed(level: &Level<'_>, stats: &mut Stats, used: Option<&[bool]>) {
     stats.window = window;
     stats.groups = vec![group, distinct];
     stats.startup = level.fraction > 0.0;
-    for (r, relation) in relations.iter().enumerate() {
-        for (expr, depth) in lateral_exprs(relation) {
+    for r in 0..relations.len() {
+        for (expr, depth) in lateral_exprs_at(query, r) {
             let mut at = exprs::relations_at(expr, depth);
             at.insert(r);
             stats.need(expr, depth, &at, relations);
@@ -2479,10 +2479,29 @@ fn lateral(level: &Level<'_>, rels: &BTreeSet<usize>, other: &BTreeSet<usize>) -
 /// The relations of the query that the expressions of a relation of `FROM` read: its function, its `VALUES` lists or the columns of the query in its subquery.
 pub(crate) fn lateral_rels(level: &Level<'_>, r: usize) -> BTreeSet<usize> {
     let mut out = BTreeSet::new();
-    for expr in lateral_exprs(&level.query.relations[r]) {
+    for expr in lateral_exprs_at(level.query, r) {
         out.extend(exprs::relations_at(expr.0, expr.1));
     }
     out.remove(&r);
+    out
+}
+
+/// [`lateral_exprs`] of the relation `r` of the query, with the expressions of the `PlaceHolderVar`s that the scan of `r` computes, whose columns of the other relations are its `ph_lateral`.
+pub(crate) fn lateral_exprs_at(query: &Query, r: usize) -> Vec<(&Expr, usize)> {
+    let mut out = lateral_exprs(&query.relations[r]);
+    for (expr, depth) in query.all_exprs(0) {
+        expr.find(0, &mut |e, d| {
+            if let ExprKind::PlaceHolder(p) = &e.kind
+                && p.levels_up == d + depth
+            {
+                let at = exprs::eval_at(p);
+                if at.len() == 1 && at.contains(&r) {
+                    out.push((&p.expr, p.levels_up));
+                }
+            }
+            None::<()>
+        });
+    }
     out
 }
 

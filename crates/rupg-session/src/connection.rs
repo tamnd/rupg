@@ -3588,6 +3588,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/lateral_inner.test")));
     }
 
+    /// A `LATERAL` subquery of one relation on the side of an outer join that gives nulls merges into the query when a target that reads the query needs a `PlaceHolderVar`. The scan of the relation computes it, and the columns that it reads are the `ph_lateral` of the scan, so the scan is the inner side of a nested loop. `connection/lateral_placeholder.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn lateral_placeholder() {
+        big_stack(|| script(include_str!("connection/lateral_placeholder.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {
