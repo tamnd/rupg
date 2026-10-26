@@ -71,6 +71,8 @@ pub struct Query {
     pub pushed: bool,
     /// For an `UPDATE` or a `DELETE` of a view, and for a `SELECT` whose view with `security_barrier` the executor merged, the number of the parts of `AND` of the condition of each view with `security_barrier`, the inner view first. These conditions come first in [`Query::filter`], and they have the `security_level` of `securityQuals`: the conditions of a view run before the conditions of the views above it and of the statement, as `order_qual_clauses` orders them.
     pub barrier: Vec<usize>,
+    /// For `EXPLAIN`, the conditions of the policies of row-level security that the planner put in [`Query::filter`], each with its `security_level`, as `process_security_barrier_quals` gives the `securityQuals` of a table their levels. The other conditions have a higher level, as `qual_security_level`.
+    pub security: Vec<(Expr, usize)>,
     /// The queries of `preprocess_minmax_aggregates` for a query whose aggregate calls are each `min` or `max` of one table, which the planner can run as an `InitPlan` that reads the first row of an index.
     pub minmax: Option<Box<MinMax>>,
     /// `constraintDeps`: the OIDs of the primary keys that make columns of `GROUP BY` queries valid, which a view depends on.
@@ -401,6 +403,7 @@ impl Analyzer<'_> {
             pulled: 0,
             pushed: false,
             barrier: Vec::new(),
+            security: Vec::new(),
             minmax: None,
             constraint_deps,
             shown: None,

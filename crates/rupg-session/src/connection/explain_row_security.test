@@ -1,0 +1,190 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE ROLE regress_rx_u;
+CREATE ROLE
+> CREATE FUNCTION rx_leak(text) RETURNS bool COST 0.0000001 LANGUAGE plpgsql AS 'BEGIN RAISE NOTICE ''leak => %'', $1; RETURN true; END';
+CREATE FUNCTION
+> CREATE TABLE rx_lv (u name PRIMARY KEY, lv int);
+CREATE TABLE
+> INSERT INTO rx_lv VALUES ('regress_rx_u', 2);
+INSERT 0 1
+> CREATE TABLE rx_doc (id int PRIMARY KEY, lv int, cid int, title text, owner name);
+CREATE TABLE
+> INSERT INTO rx_doc SELECT g, g % 4, g % 3, 'doc' || g, CASE WHEN g % 2 = 0 THEN 'regress_rx_u' ELSE 'other' END FROM generate_series(1, 8) g;
+INSERT 0 8
+> CREATE TABLE rx_cat (cid int PRIMARY KEY, cname text);
+CREATE TABLE
+> INSERT INTO rx_cat VALUES (0, 'zero'), (1, 'one'), (2, 'two');
+INSERT 0 3
+> CREATE TABLE rx_p (a int, b text);
+CREATE TABLE
+> CREATE TABLE rx_c1 (c int) INHERITS (rx_p);
+CREATE TABLE
+> INSERT INTO rx_p SELECT g, 'p' || g FROM generate_series(1, 4) g;
+INSERT 0 4
+> INSERT INTO rx_c1 SELECT g, 'c' || g, g FROM generate_series(5, 8) g;
+INSERT 0 4
+> GRANT SELECT ON rx_lv, rx_doc, rx_cat, rx_p, rx_c1 TO regress_rx_u;
+GRANT
+> ALTER TABLE rx_doc ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> ALTER TABLE rx_p ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> CREATE POLICY d1 ON rx_doc USING (lv <= (SELECT lv FROM rx_lv WHERE u = current_user));
+CREATE POLICY
+> CREATE POLICY p1 ON rx_p USING (a % 2 = 0);
+CREATE POLICY
+> SET SESSION AUTHORIZATION regress_rx_u;
+SET
+session_authorization=regress_rx_u
+is_superuser=off
+> EXPLAIN (COSTS OFF) SELECT * FROM rx_doc WHERE rx_leak(title);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on rx_doc
+row   Filter: ((lv <= (InitPlan expr_1).col1) AND rx_leak(title))
+row   InitPlan expr_1
+row     ->  Index Scan using rx_lv_pkey on rx_lv
+row           Index Cond: (u = CURRENT_USER)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM rx_doc NATURAL JOIN rx_cat WHERE rx_leak(title);
+fields QUERY PLAN:25:-1:-1
+row Hash Join
+row   Hash Cond: (rx_cat.cid = rx_doc.cid)
+row   InitPlan expr_1
+row     ->  Index Scan using rx_lv_pkey on rx_lv
+row           Index Cond: (u = CURRENT_USER)
+row   ->  Seq Scan on rx_cat
+row   ->  Hash
+row         ->  Seq Scan on rx_doc
+row               Filter: ((lv <= (InitPlan expr_1).col1) AND rx_leak(title))
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM rx_doc d WHERE rx_leak(d.title) AND d.cid = 1;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on rx_doc d
+row   Filter: ((lv <= (InitPlan expr_1).col1) AND (cid = 1) AND rx_leak(title))
+row   InitPlan expr_1
+row     ->  Index Scan using rx_lv_pkey on rx_lv
+row           Index Cond: (u = CURRENT_USER)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT id FROM rx_doc WHERE id = 4;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using rx_doc_pkey on rx_doc
+row   Index Cond: (id = 4)
+row   Filter: (lv <= (InitPlan expr_1).col1)
+row   InitPlan expr_1
+row     ->  Index Scan using rx_lv_pkey on rx_lv
+row           Index Cond: (u = CURRENT_USER)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM rx_p WHERE rx_leak(b);
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on rx_p rx_p_1
+row         Filter: (((a % 2) = 0) AND rx_leak(b))
+row   ->  Seq Scan on rx_c1 rx_p_2
+row         Filter: (((a % 2) = 0) AND rx_leak(b))
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM rx_p;
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on rx_p rx_p_1
+row         Filter: ((a % 2) = 0)
+row   ->  Seq Scan on rx_c1 rx_p_2
+row         Filter: ((a % 2) = 0)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT a + 1 FROM rx_p;
+fields QUERY PLAN:25:-1:-1
+row Result
+row   ->  Append
+row         ->  Seq Scan on rx_p rx_p_1
+row               Filter: ((a % 2) = 0)
+row         ->  Seq Scan on rx_c1 rx_p_2
+row               Filter: ((a % 2) = 0)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT count(*) FROM (SELECT * FROM rx_doc WHERE rx_leak(title)) s;
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   InitPlan expr_1
+row     ->  Index Scan using rx_lv_pkey on rx_lv
+row           Index Cond: (u = CURRENT_USER)
+row   ->  Seq Scan on rx_doc
+row         Filter: ((lv <= (InitPlan expr_1).col1) AND rx_leak(title))
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM rx_cat c WHERE EXISTS (SELECT 1 FROM rx_doc d WHERE d.cid = c.cid);
+fields QUERY PLAN:25:-1:-1
+row Hash Join
+row   Hash Cond: (c.cid = d.cid)
+row   InitPlan expr_1
+row     ->  Index Scan using rx_lv_pkey on rx_lv
+row           Index Cond: (u = CURRENT_USER)
+row   ->  Seq Scan on rx_cat c
+row   ->  Hash
+row         ->  HashAggregate
+row               Group Key: d.cid
+row               ->  Seq Scan on rx_doc d
+row                     Filter: (lv <= (InitPlan expr_1).col1)
+EXPLAIN
+> SELECT id, title FROM rx_doc WHERE rx_leak(title) ORDER BY id;
+fields id@rx_doc.1:23:4:-1,title@rx_doc.4:25:-1:-1
+NOTICE 00000 leak => doc1 (PL/pgSQL function rx_leak(text) line 1 at RAISE)
+NOTICE 00000 leak => doc2 (PL/pgSQL function rx_leak(text) line 1 at RAISE)
+NOTICE 00000 leak => doc4 (PL/pgSQL function rx_leak(text) line 1 at RAISE)
+NOTICE 00000 leak => doc5 (PL/pgSQL function rx_leak(text) line 1 at RAISE)
+NOTICE 00000 leak => doc6 (PL/pgSQL function rx_leak(text) line 1 at RAISE)
+NOTICE 00000 leak => doc8 (PL/pgSQL function rx_leak(text) line 1 at RAISE)
+row 1,doc1
+row 2,doc2
+row 4,doc4
+row 5,doc5
+row 6,doc6
+row 8,doc8
+SELECT 6
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> CREATE POLICY d2 ON rx_doc AS RESTRICTIVE USING (owner = 'regress_rx_u');
+CREATE POLICY
+> CREATE POLICY d3 ON rx_doc AS RESTRICTIVE USING (cid < 2);
+CREATE POLICY
+> SET SESSION AUTHORIZATION regress_rx_u;
+SET
+session_authorization=regress_rx_u
+is_superuser=off
+> EXPLAIN (COSTS OFF) SELECT * FROM rx_doc WHERE rx_leak(title);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on rx_doc
+row   Filter: ((cid < 2) AND (lv <= (InitPlan expr_1).col1) AND (owner = 'regress_rx_u'::name) AND rx_leak(title))
+row   InitPlan expr_1
+row     ->  Index Scan using rx_lv_pkey on rx_lv
+row           Index Cond: (u = CURRENT_USER)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM rx_doc WHERE id > 2 AND rx_leak(title);
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on rx_doc
+row   Recheck Cond: (id > 2)
+row   Filter: ((cid < 2) AND (lv <= (InitPlan expr_1).col1) AND (owner = 'regress_rx_u'::name) AND rx_leak(title))
+row   InitPlan expr_1
+row     ->  Index Scan using rx_lv_pkey on rx_lv
+row           Index Cond: (u = CURRENT_USER)
+row   ->  Bitmap Index Scan on rx_doc_pkey
+row         Index Cond: (id > 2)
+EXPLAIN
+> SELECT id, title FROM rx_doc WHERE rx_leak(title) ORDER BY id;
+fields id@rx_doc.1:23:4:-1,title@rx_doc.4:25:-1:-1
+NOTICE 00000 leak => doc4 (PL/pgSQL function rx_leak(text) line 1 at RAISE)
+NOTICE 00000 leak => doc6 (PL/pgSQL function rx_leak(text) line 1 at RAISE)
+row 4,doc4
+row 6,doc6
+SELECT 2
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> DROP TABLE rx_doc, rx_cat, rx_lv, rx_p CASCADE;
+NOTICE 00000 drop cascades to table rx_c1
+DROP TABLE
+> DROP FUNCTION rx_leak(text);
+DROP FUNCTION
+> DROP ROLE regress_rx_u;
+DROP ROLE

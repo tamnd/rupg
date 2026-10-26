@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rupg_analyze::{
     BoolOp, BoolTest, Expr, ExprKind, FromItem, JoinKind, Query, Relation, SetKind, SetOp, SetTree,
-    SortGroup, Var, expand_grouping_sets,
+    SortGroup, SubLinkKind, Var, expand_grouping_sets,
 };
 use rupg_pgcatalog::builtin;
 use rupg_plan::{Cost, Item, Kind, Node, Replaced, SortKey, Strategy};
@@ -120,9 +120,20 @@ impl Stats {
         self.qual_costs(quals).1
     }
 
-    /// `order_qual_clauses`: the conditions in the order of their cost for each row, and in their order for the same cost.
+    /// `order_qual_clauses`: the conditions in the order of their security levels, and in the order of their cost for each row in each level, and in their order for the same cost. A leakproof condition that costs less than 10 times `cpu_operator_cost` has the level 0.
     fn sort_quals(&self, quals: &mut [Qual<'_>]) {
-        quals.sort_by(|a, b| self.qual_cost([&*a.expr]).total_cmp(&self.qual_cost([&*b.expr])));
+        // The other conditions of a scan with policies come after the policies, and the conditions of a scan with no policies have the level 0.
+        let top = if quals.iter().any(|q| q.security.is_some()) { usize::MAX } else { 0 };
+        let key = |qual: &Qual<'_>| {
+            let cost = self.qual_cost([&*qual.expr]);
+            let level = qual.security.unwrap_or(top);
+            let cheap = cost < 10.0 * cost::CPU_OPERATOR && !leaky(&qual.expr);
+            (if cheap { 0 } else { level }, cost)
+        };
+        quals.sort_by(|a, b| {
+            let ((a_level, a_cost), (b_level, b_cost)) = (key(a), key(b));
+            a_level.cmp(&b_level).then(a_cost.total_cmp(&b_cost))
+        });
     }
 
     /// `estimate_num_groups` with no statistics: the number of groups of rows by the values of the expressions. A `boolean` expression has 2 values, and each other expression has the values of its columns. Two columns that are equal or that an equivalence class makes equal count once. The columns of each relation have the product of their numbers of distinct values, at most a tenth of the tuples of the relation, or the largest number of one column when it is more. A relation with fewer rows after its conditions than its tuples has fewer values, as the formula of Yao. A column of a relation that the level does not know has 200 values.
@@ -361,19 +372,37 @@ struct Qual<'q> {
     divisors: Vec<f64>,
     /// `parent_ec`: the place of the equivalence class that made the condition of a join, or `None`.
     class: Option<usize>,
+    /// `security_level` of a condition of a policy of row-level security, or `None` for a condition of the query, which has a higher level.
+    security: Option<usize>,
 }
 
 impl<'q> Qual<'q> {
     /// A condition of the query.
     fn of(expr: &'q Expr, rels: BTreeSet<usize>, outer: bool) -> Qual<'q> {
         let divisors = Vec::new();
-        Qual { expr: Cow::Borrowed(expr), rels, outer, order: None, divisors, class: None }
+        Qual {
+            expr: Cow::Borrowed(expr),
+            rels,
+            outer,
+            order: None,
+            divisors,
+            class: None,
+            security: None,
+        }
     }
 
     /// A condition that the planner makes from an equivalence class.
     fn implied(expr: Expr, rels: BTreeSet<usize>) -> Qual<'q> {
         let divisors = Vec::new();
-        Qual { expr: Cow::Owned(expr), rels, outer: false, order: None, divisors, class: None }
+        Qual {
+            expr: Cow::Owned(expr),
+            rels,
+            outer: false,
+            order: None,
+            divisors,
+            class: None,
+            security: None,
+        }
     }
 
     /// The condition as an expression that the node computes.
@@ -501,7 +530,8 @@ impl<'q> Builder<'q> {
             }
             // A volatile condition with no column runs once for each row of the join of all the relations, as `distribute_qual_to_rels`.
             let rels = if rels.is_empty() { all.clone() } else { rels };
-            quals.push(Qual::of(part, rels, false));
+            let security = query.security.iter().find(|(e, _)| e == part).map(|&(_, level)| level);
+            quals.push(Qual { security, ..Qual::of(part, rels, false) });
         }
         let mut nonnullable = BTreeSet::new();
         for qual in &quals {
@@ -1532,6 +1562,25 @@ fn place_join<'q>(join: &mut JoinTree<'q>, qual: Qual<'q>) {
         }
         _ => join.filter.push(qual),
     }
+}
+
+/// `contain_leaked_vars` of a condition after `SS_process_sublinks`: a subquery that reads no column of the query runs once as an `InitPlan`, and its `Param` leaks no value.
+fn leaky(expr: &Expr) -> bool {
+    if !expr.leaky() {
+        return false;
+    }
+    let mut expr = expr.clone();
+    expr.each_mut(0, &mut |e, _| {
+        if let ExprKind::SubLink(link) = &e.kind
+            && matches!(link.kind, SubLinkKind::Expr | SubLinkKind::Array | SubLinkKind::Exists)
+            && !exprs::correlated(&link.query, 1)
+        {
+            *e = Expr::constant(Value::Null, e.ty, -1, None);
+            return true;
+        }
+        false
+    });
+    expr.leaky()
 }
 
 /// True for a condition that PostgreSQL keeps in an equivalence class: an `=` that a merge join can use, with no volatile function, that is not a condition of an outer join.

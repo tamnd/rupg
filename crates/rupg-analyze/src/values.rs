@@ -135,6 +135,7 @@ impl Analyzer<'_> {
             pulled: 0,
             pushed: false,
             barrier: Vec::new(),
+            security: Vec::new(),
             minmax: None,
             constraint_deps: Vec::new(),
             shown: None,
