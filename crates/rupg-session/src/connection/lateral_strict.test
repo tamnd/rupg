@@ -1,0 +1,54 @@
+> create table tk (unique1 int, ten int, fivethous int)
+CREATE TABLE
+> insert into tk select g, g % 10, g % 5000 from generate_series(0,9999) g
+INSERT 0 10000
+> analyze tk
+ANALYZE
+> explain (verbose, costs off) select t1.ten, sum(x) from tk t1 left join lateral (select t1.ten + t2.ten as x, t2.fivethous from tk t2) ss on t1.unique1 = ss.fivethous group by t1.ten order by t1.ten
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Output: t1.ten, (sum((t1.ten + t2.ten)))
+row   Sort Key: t1.ten
+row   ->  HashAggregate
+row         Output: t1.ten, sum((t1.ten + t2.ten))
+row         Group Key: t1.ten
+row         ->  Hash Right Join
+row               Output: t1.ten, t2.ten
+row               Hash Cond: (t2.fivethous = t1.unique1)
+row               ->  Seq Scan on public.tk t2
+row                     Output: t2.unique1, t2.ten, t2.fivethous
+row               ->  Hash
+row                     Output: t1.ten, t1.unique1
+row                     ->  Seq Scan on public.tk t1
+row                           Output: t1.ten, t1.unique1
+EXPLAIN
+> select t1.ten, sum(x) from tk t1 left join lateral (select t1.ten + t2.ten as x, t2.fivethous from tk t2) ss on t1.unique1 = ss.fivethous group by t1.ten order by t1.ten
+fields ten@tk.2:23:4:-1,sum:20:8:-1
+row 0,0
+row 1,2000
+row 2,4000
+row 3,6000
+row 4,8000
+row 5,10000
+row 6,12000
+row 7,14000
+row 8,16000
+row 9,18000
+SELECT 10
+> select t1.unique1, x from tk t1 left join lateral (select t1.ten + t2.ten as x, t2.fivethous from tk t2) ss on t1.unique1 = ss.fivethous + 5000 where t1.unique1 between 4998 and 5001 order by 1
+fields unique1@tk.1:23:4:-1,x:23:4:-1
+row 4998,NULL
+row 4999,NULL
+row 5000,0
+row 5000,0
+row 5001,2
+row 5001,2
+SELECT 6
+> select t1.unique1, x from tk t1 left join lateral (select t1.ten as x, t2.fivethous from tk t2) ss on t1.unique1 = ss.fivethous + 9998 where t1.unique1 > 9996 order by 1
+fields unique1@tk.1:23:4:-1,x@tk.2:23:4:-1
+row 9997,NULL
+row 9998,8
+row 9998,8
+row 9999,9
+row 9999,9
+SELECT 5

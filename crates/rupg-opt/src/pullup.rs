@@ -750,7 +750,7 @@ fn places(item: &FromItem, top: bool, on: bool, out: &mut Vec<(usize, bool, bool
     }
 }
 
-/// The first subquery of `FROM` that the planner merges, with true when it is an item of the list of `FROM`. The planner does not merge a query of `WITH`, nor a view for which `barrier` is true, and it merges a `LATERAL` subquery when [`lateral_fits`] lets it and the query does not read a target of the subquery that reads the query below an outer join that gives nulls for the subquery. Below the side of an outer join that can give nulls, a target of the subquery that is not a column becomes a `PlaceHolderVar`, which the planner makes here only for a subquery with a `FROM`, for a reference of the query itself and for a target with no subquery. In a join, the subquery has one item in `FROM`, and its `WHERE` joins the `ON` of the join, so that the subquery is not the side of an outer join that keeps its rows or a side of a full join when it has a `WHERE`. The query does not read the whole row of the subquery, which `pullup_replace_vars` makes a `ROW` of the targets.
+/// The first subquery of `FROM` that the planner merges, with true when it is an item of the list of `FROM`. The planner does not merge a query of `WITH`, nor a view for which `barrier` is true, and it merges a `LATERAL` subquery when [`lateral_fits`] lets it and the query does not read a target of the subquery that reads the query and needs a `PlaceHolderVar` below an outer join that gives nulls for the subquery. A strict target that reads a column of the subquery goes null with the subquery, so it needs none. Below the side of an outer join that can give nulls, a target of the subquery that is not a column becomes a `PlaceHolderVar`, which the planner makes here only for a subquery with a `FROM`, for a reference of the query itself and for a target with no subquery. In a join, the subquery has one item in `FROM`, and its `WHERE` joins the `ON` of the join, so that the subquery is not the side of an outer join that keeps its rows or a side of a full join when it has a `WHERE`. The query does not read the whole row of the subquery, which `pullup_replace_vars` makes a `ROW` of the targets.
 fn candidate(
     query: &Query,
     barrier: &dyn Fn(u32) -> bool,
@@ -788,8 +788,9 @@ fn candidate(
             let safe = query.from.iter().find_map(|item| lowest_outer(item, r))?;
             let reads = |attnum: &i16| {
                 let at = usize::try_from(attnum - 1).ok();
-                at.and_then(|at| sub.targets.get(at))
-                    .is_some_and(|t| !exprs::relations_at(&t.expr, 1).is_empty())
+                at.and_then(|at| sub.targets.get(at)).is_some_and(|t| {
+                    !exprs::relations_at(&t.expr, 1).is_empty() && needs_placeholder(&t.expr)
+                })
             };
             if !lateral_fits(sub, safe.as_ref()) || nullable.contains(&r) && used.iter().any(reads)
             {
@@ -999,6 +1000,8 @@ fn merge(query: &mut Query, r: usize, top: bool) {
     }
     // `replace_empty_jointree`: a subquery with no `FROM` has an `RTE_RESULT` in its range table.
     let result = usize::from(sub.from.is_empty() && sub.pulled == 0);
+    // Before the move, a reference of a `LATERAL` subquery to the query is one level up, so that the check sees only the columns of the subquery.
+    let placeholders: Vec<bool> = sub.targets.iter().map(|t| needs_placeholder(&t.expr)).collect();
     move_up(&mut sub, query.relations.len());
     let mut inside = Vec::new();
     for item in &sub.from {
@@ -1033,7 +1036,7 @@ fn merge(query: &mut Query, r: usize, top: bool) {
             let at = usize::try_from(v.attnum - 1).ok();
             if let Some(target) = at.and_then(|at| targets.get(at)) {
                 let mut new = target.clone();
-                if wrap.get() && needs_placeholder(&new) {
+                if wrap.get() && at.is_some_and(|at| placeholders[at]) {
                     let (ty, typmod) = (new.ty, new.typmod);
                     let p = PlaceHolder { expr: new, relations: inside.clone(), levels_up: 0 };
                     new = Expr::new(ExprKind::PlaceHolder(Box::new(p)), ty);
@@ -1111,7 +1114,7 @@ fn plain_on(item: &FromItem, r: usize, out: &mut Vec<*const Expr>) -> Option<boo
     }
 }
 
-/// True when a target of a subquery needs a `PlaceHolderVar` above an outer join that gives nulls for the subquery, as `pullup_replace_vars_callback` finds it. A column and a `PlaceHolderVar` of the query do not, and neither does an expression that reads one of them with no construct that can give a value for a null.
+/// True when a target of a subquery needs a `PlaceHolderVar` above an outer join that gives nulls for the subquery, as `pullup_replace_vars_callback` finds it. A column and a `PlaceHolderVar` of the subquery do not, and neither does an expression that reads one of them with no construct that can give a value for a null. A reference of a `LATERAL` subquery to the query above it is not a column of the subquery.
 fn needs_placeholder(target: &Expr) -> bool {
     match &target.kind {
         ExprKind::Var(v) => v.levels_up != 0,

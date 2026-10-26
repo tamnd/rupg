@@ -3576,6 +3576,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/pushdown_conflict.test")));
     }
 
+    /// A `LATERAL` subquery on the side of an outer join that gives nulls merges into the query when the targets that the query reads and that read the query are strict and read a column of the subquery, so the join can be a hash join. A target that is only a reference to the query keeps the subquery. `connection/lateral_strict.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn lateral_strict() {
+        big_stack(|| script(include_str!("connection/lateral_strict.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {
