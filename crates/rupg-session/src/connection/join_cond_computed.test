@@ -1,0 +1,50 @@
+> create table sju (a int, b int)
+CREATE TABLE
+> insert into sju select i%10, i%10 from generate_series(1,1000)i
+INSERT 0 1000
+> create index on sju(a, b)
+CREATE INDEX
+> analyze sju
+ANALYZE
+> explain (verbose, costs off) select a from sju order by a + b
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Output: a, ((a + b))
+row   Sort Key: ((sju.a + sju.b))
+row   ->  Seq Scan on public.sju
+row         Output: a, (a + b)
+EXPLAIN
+> explain (verbose, costs off) select * from sju t1 join sju t2 on t1.a + 1 = t2.b + 2
+fields QUERY PLAN:25:-1:-1
+row Merge Join
+row   Output: t1.a, t1.b, t2.a, t2.b
+row   Merge Cond: (((t1.a + 1)) = ((t2.b + 2)))
+row   ->  Sort
+row         Output: t1.a, t1.b, ((t1.a + 1))
+row         Sort Key: ((t1.a + 1))
+row         ->  Seq Scan on public.sju t1
+row               Output: t1.a, t1.b, (t1.a + 1)
+row   ->  Sort
+row         Output: t2.a, t2.b, ((t2.b + 2))
+row         Sort Key: ((t2.b + 2))
+row         ->  Seq Scan on public.sju t2
+row               Output: t2.a, t2.b, (t2.b + 2)
+EXPLAIN
+> set enable_hashjoin = off
+SET
+> explain (verbose, costs off) select * from sju t1 join sju t2 on t1.a + 1 = t2.b + 2
+fields QUERY PLAN:25:-1:-1
+row Merge Join
+row   Output: t1.a, t1.b, t2.a, t2.b
+row   Merge Cond: (((t1.a + 1)) = ((t2.b + 2)))
+row   ->  Sort
+row         Output: t1.a, t1.b, ((t1.a + 1))
+row         Sort Key: ((t1.a + 1))
+row         ->  Seq Scan on public.sju t1
+row               Output: t1.a, t1.b, (t1.a + 1)
+row   ->  Sort
+row         Output: t2.a, t2.b, ((t2.b + 2))
+row         Sort Key: ((t2.b + 2))
+row         ->  Seq Scan on public.sju t2
+row               Output: t2.a, t2.b, (t2.b + 2)
+EXPLAIN

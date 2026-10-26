@@ -138,6 +138,8 @@ struct Deparser<'a> {
     outer_prefix: bool,
     /// For `EXPLAIN` of a condition of a scan, the relation of the scan. A column of another relation is the value of a parameter of a nested loop, which shows the name of its relation, as `get_parameter`.
     pub(crate) own: Option<usize>,
+    /// For `EXPLAIN` of a condition of a join, the expressions of the targets of the nodes below it. Such an expression that is not a column is the value that the node below gives, in parentheses, as `get_special_variable` shows an `OUTER_VAR` or an `INNER_VAR`.
+    computed: Vec<Expr>,
     /// For the body of a function in SQL, the name of the function and the name of each argument, as the `funcname` and `argnames` of the outermost `deparse_namespace`. A parameter shows the name of its argument.
     function: Option<(String, Vec<String>)>,
     buf: String,
@@ -201,6 +203,7 @@ impl<'a> Deparser<'a> {
             window_names: Vec::new(),
             outer_prefix: false,
             own: None,
+            computed: Vec::new(),
             function: None,
             buf: String::new(),
         }
@@ -415,6 +418,17 @@ impl<'a> Deparser<'a> {
 
     /// `get_rule_expr`. `implicit` is `showimplicit`: true to show the casts that the analyzer added.
     fn expr(&mut self, e: &Expr, implicit: bool) -> Result<()> {
+        if !self.computed.is_empty()
+            && !matches!(e.kind, ExprKind::Var(_) | ExprKind::Const(_) | ExprKind::PlaceHolder(_))
+            && self.computed.iter().any(|c| c.same(e))
+        {
+            let saved = std::mem::take(&mut self.computed);
+            self.buf.push('(');
+            let done = self.expr(e, true);
+            self.buf.push(')');
+            self.computed = saved;
+            return done;
+        }
         if let Some((join, column)) = self.join_column(e) {
             if self.prefix {
                 self.buf.push_str(&quote_identifier(&join));
@@ -619,9 +633,13 @@ impl<'a> Deparser<'a> {
             }
             // A `PlaceHolderVar` above the node that computes it reads it from below, as `get_variable` shows a target of the node below that is not a column.
             ExprKind::PlaceHolder(p) => {
+                // A placeholder is the value that a node below gives already.
+                let saved = std::mem::take(&mut self.computed);
                 self.buf.push('(');
-                self.expr(&p.expr, true)?;
+                let done = self.expr(&p.expr, true);
                 self.buf.push(')');
+                self.computed = saved;
+                done?;
             }
             ExprKind::Window(w) => self.window_func(w)?,
             ExprKind::SubLink(sub) => {

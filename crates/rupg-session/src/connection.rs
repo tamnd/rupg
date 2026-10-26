@@ -3682,6 +3682,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/semijoin_unique_order.test")));
     }
 
+    /// A `Sort` shows the keys that the node below computes for it in its output, and a condition of a join shows an expression that a side gives in parentheses, as `get_special_variable` shows an `OUTER_VAR` or an `INNER_VAR`. `connection/join_cond_computed.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn join_cond_computed() {
+        big_stack(|| script(include_str!("connection/join_cond_computed.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {
