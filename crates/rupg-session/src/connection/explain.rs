@@ -48,7 +48,10 @@ impl Members<'_, '_> {
         columns: &[rupg_catalog::Column],
     ) -> BtreeSize {
         let Some(info) = &index.index else { return BtreeSize::EMPTY };
-        let pages = self.index_pages(table, info.method, info.pages);
+        // The build of an index with rows gave it the pages of `index_update_stats`.
+        let built = self.heap.size(self.database, index.oid);
+        let pages = if built.reltuples >= 0.0 { built.relpages } else { info.pages };
+        let pages = self.index_pages(table, info.method, pages);
         let fallback = BtreeSize { blocks: u32::try_from(pages).unwrap_or(1), height: 0 };
         match btree_shape(index, columns) {
             Some(shape) => self.heap.btree_size(self.database, table, index.oid, &shape),

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The planner makes index scans and bitmap index scans of `hash` indexes for `=`, with the costs of `hashcostestimate` and the pages of the build of the index (#821).
 - `CREATE INDEX` and `REINDEX` give a new index of a table with rows its `relpages` and `reltuples` in `pg_class`, as `index_update_stats` does: the pages of a `btree` index and the rows that it has, and the buckets of a `hash` index for the rows that the stats of the table give (#820).
 - Index scans of a btree index on `inet` for `<<`, `<<=`, `>>` and `>>=` with a constant network, with the index conditions of the range of the network as `network_subset_support` makes them and the operator in the filter, and the default selectivities of `networksel` (#819).
 - The static rows of `pg_database` have `datfrozenxid` 654, as the `VACUUM FREEZE` of `initdb` leaves them, so that the databases of a new cluster agree with `INITDB_FROZEN_XID` (#818).
