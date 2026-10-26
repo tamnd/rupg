@@ -1,0 +1,138 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE ip1 (a int, b int, c text);
+CREATE TABLE
+> INSERT INTO ip1 SELECT x, x % 100, 'v' || x FROM generate_series(1, 10000) x;
+INSERT 0 10000
+> SELECT pg_relation_size('ip1') / 8192 AS blocks;
+fields blocks:20:8:-1
+row 55
+SELECT 1
+> CREATE UNIQUE INDEX ip1_a ON ip1 (a);
+CREATE INDEX
+> SELECT pg_relation_size('ip1') / 8192 AS blocks;
+fields blocks:20:8:-1
+row 55
+SELECT 1
+> ALTER TABLE ip1 ADD CONSTRAINT ip1_b CHECK (b < 100);
+ALTER TABLE
+> ALTER TABLE ip1 ADD PRIMARY KEY (a, b);
+ALTER TABLE
+> ALTER TABLE ip1 ALTER COLUMN c SET NOT NULL;
+ALTER TABLE
+> ALTER TABLE ip1 ADD UNIQUE (c);
+ALTER TABLE
+> SELECT pg_relation_size('ip1') / 8192 AS blocks;
+fields blocks:20:8:-1
+row 55
+SELECT 1
+> SELECT ctid, a FROM ip1 WHERE a IN (1, 5000, 10000) ORDER BY a;
+fields ctid@ip1.-1:27:6:-1,a@ip1.1:23:4:-1
+row (0,1),1
+row (27,5),5000
+row (54,10),10000
+SELECT 3
+> ANALYZE ip1;
+ANALYZE
+> SELECT relpages, reltuples FROM pg_class WHERE relname = 'ip1';
+fields relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row 55,10000
+SELECT 1
+> EXPLAIN SELECT * FROM ip1 WHERE b = 7;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ip1  (cost=0.00..180.00 rows=100 width=13)
+row   Filter: (b = 7)
+EXPLAIN
+> ALTER TABLE ip1 ADD CONSTRAINT ip1_bad CHECK (b < 50);
+ERROR 23514 check constraint "ip1_bad" of relation "ip1" is violated by some row
+> SELECT pg_relation_size('ip1') / 8192 AS blocks;
+fields blocks:20:8:-1
+row 55
+SELECT 1
+> CREATE TABLE ip2 (a int, b int);
+CREATE TABLE
+> INSERT INTO ip2 VALUES (1, 1), (2, 2), (2, 3), (1, 4), (NULL, 5), (NULL, 6);
+INSERT 0 6
+> CREATE UNIQUE INDEX ip2_a ON ip2 (a);
+ERROR 23505 could not create unique index "ip2_a"
+DETAIL Key (a)=(2) is duplicated.
+> CREATE UNIQUE INDEX ip2_a ON ip2 (a) NULLS NOT DISTINCT;
+ERROR 23505 could not create unique index "ip2_a"
+DETAIL Key (a)=(2) is duplicated.
+> DELETE FROM ip2 WHERE b IN (3, 4);
+DELETE 2
+> CREATE UNIQUE INDEX ip2_a ON ip2 (a);
+CREATE INDEX
+> CREATE UNIQUE INDEX ip2_an ON ip2 (a) NULLS NOT DISTINCT;
+ERROR 23505 could not create unique index "ip2_an"
+DETAIL Key (a)=(null) is duplicated.
+> CREATE UNIQUE INDEX ip2_e ON ip2 ((a + b));
+CREATE INDEX
+> CREATE UNIQUE INDEX ip2_p ON ip2 (b) WHERE a IS NOT NULL;
+CREATE INDEX
+> SELECT ctid, * FROM ip2 ORDER BY b;
+fields ctid@ip2.-1:27:6:-1,a@ip2.1:23:4:-1,b@ip2.2:23:4:-1
+row (0,1),1,1
+row (0,2),2,2
+row (0,5),NULL,5
+row (0,6),NULL,6
+SELECT 4
+> INSERT INTO ip2 VALUES (1, 9);
+ERROR 23505 duplicate key value violates unique constraint "ip2_a"
+DETAIL Key (a)=(1) already exists.
+> INSERT INTO ip2 VALUES (9, 1);
+ERROR 23505 duplicate key value violates unique constraint "ip2_p"
+DETAIL Key (b)=(1) already exists.
+> CREATE TABLE ip3 (a int, b text);
+CREATE TABLE
+> INSERT INTO ip3 VALUES (3, 'x'), (1, 'y'), (2, 'z'), (1, 'w'), (3, 'v');
+INSERT 0 5
+> ALTER TABLE ip3 ADD PRIMARY KEY (a);
+ERROR 23505 could not create unique index "ip3_pkey"
+DETAIL Key (a)=(1) is duplicated.
+> CREATE UNIQUE INDEX ip3_lower ON ip3 (lower(b));
+CREATE INDEX
+> ALTER TABLE ip3 ADD CONSTRAINT ip3_u UNIQUE (b);
+ALTER TABLE
+> SELECT ctid, * FROM ip3;
+fields ctid@ip3.-1:27:6:-1,a@ip3.1:23:4:-1,b@ip3.2:25:-1:-1
+row (0,1),3,x
+row (0,2),1,y
+row (0,3),2,z
+row (0,4),1,w
+row (0,5),3,v
+SELECT 5
+> BEGIN;
+BEGIN
+> DELETE FROM ip3 WHERE b IN ('w', 'v');
+DELETE 2
+> ALTER TABLE ip3 ADD PRIMARY KEY (a);
+ALTER TABLE
+> SELECT ctid, * FROM ip3;
+fields ctid@ip3.-1:27:6:-1,a@ip3.1:23:4:-1,b@ip3.2:25:-1:-1
+row (0,1),3,x
+row (0,2),1,y
+row (0,3),2,z
+SELECT 3
+> COMMIT;
+COMMIT
+> INSERT INTO ip3 VALUES (1, 'q');
+ERROR 23505 duplicate key value violates unique constraint "ip3_pkey"
+DETAIL Key (a)=(1) already exists.
+> CREATE TABLE ip4 (a int, n int);
+CREATE TABLE
+> INSERT INTO ip4 VALUES (1, 1), (2, 2), (5, 3);
+INSERT 0 3
+> ALTER TABLE ip4 ADD FOREIGN KEY (a) REFERENCES ip3;
+ERROR 23503 insert or update on table "ip4" violates foreign key constraint "ip4_a_fkey"
+DETAIL Key (a)=(5) is not present in table "ip3".
+> DELETE FROM ip4 WHERE a = 5;
+DELETE 1
+> ALTER TABLE ip4 ADD FOREIGN KEY (a) REFERENCES ip3;
+ALTER TABLE
+> SELECT ctid, * FROM ip4;
+fields ctid@ip4.-1:27:6:-1,a@ip4.1:23:4:-1,n@ip4.2:23:4:-1
+row (0,1),1,1
+row (0,2),2,2
+SELECT 2

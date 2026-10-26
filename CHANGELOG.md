@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A new unique index, primary key or constraint on a table with rows checks the rows in place, so the pages of the heap and the `ctid` of the rows stay as in PostgreSQL (#796).
 - The planner reads the pages and the height of each `btree` index from a model of the build of the index, as `_bt_load` writes the pages (#794).
 - The planner makes a `Memoize` node over a parameterized scan of the inner side of a nested loop, and `EXPLAIN` shows its keys, its mode and its estimates (#793).
 - The planner reads the correlation of the first column of an index from the statistics for the cost of an index scan (#792).
