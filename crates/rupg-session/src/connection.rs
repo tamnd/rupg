@@ -5012,6 +5012,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/rows_stay_for_checks.test")));
     }
 
+    /// The costs of merge joins of analyzed tables whose values cover different ranges, from the parts of the sides that the join reads, as `mergejoinscansel` gives them: with outer joins, semi joins, anti joins, nulls, `DESC`, `NULLS FIRST` and text. `connection/plan_merge_scansel.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_merge_scansel() {
+        big_stack(|| script(include_str!("connection/plan_merge_scansel.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

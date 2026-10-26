@@ -1,0 +1,159 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE mj1 (a int, b int, t text);
+CREATE TABLE
+> CREATE TABLE mj2 (a int, b int, t text);
+CREATE TABLE
+> CREATE TABLE mj3 (a int, n int);
+CREATE TABLE
+> INSERT INTO mj1 SELECT x, x % 50, 'k' || (x % 300) FROM generate_series(1, 5000) x;
+INSERT 0 5000
+> INSERT INTO mj2 SELECT x + 2000, x % 20, 'k' || (x % 100) FROM generate_series(1, 4000) x;
+INSERT 0 4000
+> INSERT INTO mj3 SELECT x * 3, CASE WHEN x % 4 = 0 THEN NULL ELSE x END FROM generate_series(1, 1000) x;
+INSERT 0 1000
+> CREATE INDEX mj1_a ON mj1 (a);
+CREATE INDEX
+> CREATE INDEX mj2_a ON mj2 (a);
+CREATE INDEX
+> ANALYZE mj1, mj2, mj3;
+ANALYZE
+> SET enable_hashjoin = off;
+SET
+> SET enable_nestloop = off;
+SET
+> EXPLAIN SELECT * FROM mj1 JOIN mj2 ON mj1.a = mj2.a;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=71.96..326.31 rows=4000 width=23)
+row   Merge Cond: (mj1.a = mj2.a)
+row   ->  Index Scan using mj1_a on mj1  (cost=0.28..166.28 rows=5000 width=12)
+row   ->  Index Scan using mj2_a on mj2  (cost=0.28..133.28 rows=4000 width=11)
+EXPLAIN
+> EXPLAIN SELECT * FROM mj2 JOIN mj1 ON mj1.a = mj2.a;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=71.96..326.31 rows=4000 width=23)
+row   Merge Cond: (mj2.a = mj1.a)
+row   ->  Index Scan using mj2_a on mj2  (cost=0.28..133.28 rows=4000 width=11)
+row   ->  Index Scan using mj1_a on mj1  (cost=0.28..166.28 rows=5000 width=12)
+EXPLAIN
+> EXPLAIN SELECT * FROM mj1 LEFT JOIN mj2 ON mj1.a = mj2.a;
+fields QUERY PLAN:25:-1:-1
+row Merge Left Join  (cost=0.56..326.31 rows=5000 width=23)
+row   Merge Cond: (mj1.a = mj2.a)
+row   ->  Index Scan using mj1_a on mj1  (cost=0.28..166.28 rows=5000 width=12)
+row   ->  Index Scan using mj2_a on mj2  (cost=0.28..133.28 rows=4000 width=11)
+EXPLAIN
+> EXPLAIN SELECT * FROM mj1 RIGHT JOIN mj2 ON mj1.a = mj2.a;
+fields QUERY PLAN:25:-1:-1
+row Merge Left Join  (cost=71.96..362.06 rows=4000 width=23)
+row   Merge Cond: (mj2.a = mj1.a)
+row   ->  Index Scan using mj2_a on mj2  (cost=0.28..133.28 rows=4000 width=11)
+row   ->  Index Scan using mj1_a on mj1  (cost=0.28..166.28 rows=5000 width=12)
+EXPLAIN
+> EXPLAIN SELECT * FROM mj1 FULL JOIN mj2 ON mj1.a = mj2.a;
+fields QUERY PLAN:25:-1:-1
+row Merge Full Join  (cost=0.56..362.06 rows=5000 width=23)
+row   Merge Cond: (mj1.a = mj2.a)
+row   ->  Index Scan using mj1_a on mj1  (cost=0.28..166.28 rows=5000 width=12)
+row   ->  Index Scan using mj2_a on mj2  (cost=0.28..133.28 rows=4000 width=11)
+EXPLAIN
+> EXPLAIN SELECT * FROM mj1 WHERE EXISTS (SELECT 1 FROM mj2 WHERE mj2.a = mj1.a);
+fields QUERY PLAN:25:-1:-1
+row Merge Semi Join  (cost=71.96..326.31 rows=4000 width=12)
+row   Merge Cond: (mj1.a = mj2.a)
+row   ->  Index Scan using mj1_a on mj1  (cost=0.28..166.28 rows=5000 width=12)
+row   ->  Index Only Scan using mj2_a on mj2  (cost=0.28..133.28 rows=4000 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM mj1 WHERE NOT EXISTS (SELECT 1 FROM mj2 WHERE mj2.a = mj1.a);
+fields QUERY PLAN:25:-1:-1
+row Merge Anti Join  (cost=0.56..326.31 rows=1000 width=12)
+row   Merge Cond: (mj1.a = mj2.a)
+row   ->  Index Scan using mj1_a on mj1  (cost=0.28..166.28 rows=5000 width=12)
+row   ->  Index Only Scan using mj2_a on mj2  (cost=0.28..133.28 rows=4000 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM mj1 JOIN mj3 ON mj1.a = mj3.a;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=65.18..187.21 rows=1000 width=20)
+row   Merge Cond: (mj1.a = mj3.a)
+row   ->  Index Scan using mj1_a on mj1  (cost=0.28..166.28 rows=5000 width=12)
+row   ->  Sort  (cost=64.83..67.33 rows=1000 width=8)
+row         Sort Key: mj3.a
+row         ->  Seq Scan on mj3  (cost=0.00..15.00 rows=1000 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM mj1 JOIN mj3 ON mj1.a = mj3.n;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=65.11..113.28 rows=750 width=20)
+row   Merge Cond: (mj1.a = mj3.n)
+row   ->  Index Scan using mj1_a on mj1  (cost=0.28..166.28 rows=5000 width=12)
+row   ->  Sort  (cost=64.83..67.33 rows=1000 width=8)
+row         Sort Key: mj3.n
+row         ->  Seq Scan on mj3  (cost=0.00..15.00 rows=1000 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM mj1 JOIN mj2 ON mj1.b = mj2.b;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=686.51..6691.51 rows=400000 width=23)
+row   Merge Cond: (mj2.b = mj1.b)
+row   ->  Sort  (cost=301.32..311.32 rows=4000 width=11)
+row         Sort Key: mj2.b
+row         ->  Seq Scan on mj2  (cost=0.00..62.00 rows=4000 width=11)
+row   ->  Sort  (cost=385.19..397.69 rows=5000 width=12)
+row         Sort Key: mj1.b
+row         ->  Seq Scan on mj1  (cost=0.00..78.00 rows=5000 width=12)
+EXPLAIN
+> EXPLAIN SELECT * FROM mj1 JOIN mj2 ON mj1.t = mj2.t;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=686.51..1699.51 rows=66200 width=23)
+row   Merge Cond: (mj2.t = mj1.t)
+row   ->  Sort  (cost=301.32..311.32 rows=4000 width=11)
+row         Sort Key: mj2.t
+row         ->  Seq Scan on mj2  (cost=0.00..62.00 rows=4000 width=11)
+row   ->  Sort  (cost=385.19..397.69 rows=5000 width=12)
+row         Sort Key: mj1.t
+row         ->  Seq Scan on mj1  (cost=0.00..78.00 rows=5000 width=12)
+EXPLAIN
+> EXPLAIN SELECT * FROM mj1 JOIN mj2 ON mj1.a = mj2.a ORDER BY mj1.a DESC;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=36.31..290.66 rows=4000 width=23)
+row   Merge Cond: (mj1.a = mj2.a)
+row   ->  Index Scan Backward using mj1_a on mj1  (cost=0.28..166.28 rows=5000 width=12)
+row   ->  Index Scan Backward using mj2_a on mj2  (cost=0.28..133.28 rows=4000 width=11)
+EXPLAIN
+> EXPLAIN SELECT * FROM mj1 JOIN mj3 ON mj1.a = mj3.n ORDER BY mj1.a NULLS FIRST;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=149.09..150.97 rows=750 width=20)
+row   Sort Key: mj1.a NULLS FIRST
+row   ->  Merge Join  (cost=65.11..113.28 rows=750 width=20)
+row         Merge Cond: (mj1.a = mj3.n)
+row         ->  Index Scan using mj1_a on mj1  (cost=0.28..166.28 rows=5000 width=12)
+row         ->  Sort  (cost=64.83..67.33 rows=1000 width=8)
+row               Sort Key: mj3.n
+row               ->  Seq Scan on mj3  (cost=0.00..15.00 rows=1000 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM mj1 JOIN mj2 ON mj1.a = mj2.a WHERE mj1.a < 3000;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=46.97..247.78 rows=2399 width=23)
+row   Merge Cond: (mj1.a = mj2.a)
+row   ->  Index Scan using mj1_a on mj1  (cost=0.28..108.77 rows=2999 width=12)
+row         Index Cond: (a < 3000)
+row   ->  Index Scan using mj2_a on mj2  (cost=0.28..133.28 rows=4000 width=11)
+EXPLAIN
+> EXPLAIN SELECT * FROM mj1 a1 JOIN mj1 a2 ON a1.a = a2.a;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=0.56..407.56 rows=5000 width=24)
+row   Merge Cond: (a1.a = a2.a)
+row   ->  Index Scan using mj1_a on mj1 a1  (cost=0.28..166.28 rows=5000 width=12)
+row   ->  Index Scan using mj1_a on mj1 a2  (cost=0.28..166.28 rows=5000 width=12)
+EXPLAIN
+> EXPLAIN SELECT * FROM mj1 JOIN mj2 ON mj1.a = mj2.a JOIN mj3 ON mj2.a = mj3.a;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=140.12..294.66 rows=800 width=31)
+row   Merge Cond: (mj2.a = mj1.a)
+row   ->  Merge Join  (cost=68.44..115.86 rows=1000 width=19)
+row         Merge Cond: (mj2.a = mj3.a)
+row         ->  Index Scan using mj2_a on mj2  (cost=0.28..133.28 rows=4000 width=11)
+row         ->  Sort  (cost=64.83..67.33 rows=1000 width=8)
+row               Sort Key: mj3.a
+row               ->  Seq Scan on mj3  (cost=0.00..15.00 rows=1000 width=8)
+row   ->  Index Scan using mj1_a on mj1  (cost=0.28..166.28 rows=5000 width=12)
+EXPLAIN
