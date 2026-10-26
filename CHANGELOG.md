@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A condition of `WHERE` that reads a `UNION ALL` subquery with `LATERAL` and the relations that the subquery reads now moves into each member of the subquery, as in PG. A member with no `FROM` tests it as a One-Time Filter. (#852)
 - The planner now puts a Memoize node above the inner side of a lateral nested loop. The cache key is the outer values that the inner side reads, as in PG. (#851)
 - A `LATERAL` subquery of one relation on the nullable side of an outer join now merges into the query when a target that reads the query needs a `PlaceHolderVar`. The scan of the relation computes the `PlaceHolderVar`, and the columns of the query that it reads are the lateral references of the scan, as `ph_lateral` makes them, so the plan matches PostgreSQL (#850).
 - A relation that reads the other side of its join as a lateral reference is now only the inner side of a nested loop, and its scan tests the conditions of the join that it can test, as PostgreSQL plans a parameterized inner path. Before, the planner could make a hash join or a merge join that read the inner side once, and the filters of function, values and CTE scans showed a column of another relation with no prefix (#849).

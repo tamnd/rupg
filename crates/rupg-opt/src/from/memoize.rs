@@ -129,6 +129,17 @@ pub(super) fn lateral<'q>(
         exprs::columns_at(&value, 0, &mut columns);
         lateral.extend(columns.into_iter().filter(|c| !exprs::relations_at(c, 0).contains(&r)));
     }
+    // The conditions that `pushdown` moved into the members of a `UNION ALL` are the `ppi_clauses` of the path in PG, whose columns come before the lateral columns.
+    let members = query.relations[r].subquery.as_deref().filter(|s| s.set_op.is_some());
+    for member in members.iter().flat_map(|s| &s.relations) {
+        if let Some(filter) =
+            member.subquery.as_deref().filter(|m| m.pushed).and_then(|m| m.filter.as_ref())
+        {
+            let mut columns = Vec::new();
+            exprs::columns_at(filter, 2, &mut columns);
+            lateral.extend(columns.into_iter().filter(|c| !exprs::relations_at(c, 0).contains(&r)));
+        }
+    }
     for (expr, depth) in super::lateral_exprs(&query.relations[r]) {
         let mut columns = Vec::new();
         exprs::columns_at(expr, depth, &mut columns);
