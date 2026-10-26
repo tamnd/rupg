@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 
 pub mod builtin;
+mod catalog_stats;
 mod generated;
 pub mod icu;
 pub mod roles;

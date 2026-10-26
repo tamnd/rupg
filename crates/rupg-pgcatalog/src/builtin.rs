@@ -1812,6 +1812,301 @@ pub fn cast(source: u32, target: u32) -> Option<&'static CastRow> {
     })
 }
 
+/// `relpages` and `reltuples` of the system catalogs and of their indexes in a new database, as the `VACUUM` and `ANALYZE` of `initdb` leave them, by the OID of the relation.
+static CATALOG_SIZES: [(u32, i32, f32); 188] = [
+    (112, 1, 0.0),
+    (113, 1, 0.0),
+    (174, 1, 0.0),
+    (175, 1, 0.0),
+    (548, 1, 0.0),
+    (549, 1, 0.0),
+    (826, 0, 0.0),
+    (827, 1, 0.0),
+    (828, 1, 0.0),
+    (1213, 1, 2.0),
+    (1214, 1, 0.0),
+    (1232, 2, 0.0),
+    (1233, 2, 0.0),
+    (1247, 15, 637.0),
+    (1249, 57, 3259.0),
+    (1255, 101, 3430.0),
+    (1259, 15, 421.0),
+    (1260, 1, 17.0),
+    (1261, 1, 3.0),
+    (1262, 1, 3.0),
+    (1417, 0, 0.0),
+    (1418, 0, 0.0),
+    (2187, 1, 0.0),
+    (2224, 0, 0.0),
+    (2228, 2, 6.0),
+    (2328, 0, 0.0),
+    (2396, 1, 1.0),
+    (2397, 2, 1.0),
+    (2579, 2, 194.0),
+    (2600, 3, 163.0),
+    (2601, 1, 7.0),
+    (2602, 7, 951.0),
+    (2603, 5, 720.0),
+    (2604, 0, 0.0),
+    (2605, 2, 249.0),
+    (2606, 5, 194.0),
+    (2607, 2, 98.0),
+    (2608, 14, 1770.0),
+    (2609, 46, 5353.0),
+    (2610, 4, 163.0),
+    (2611, 0, 0.0),
+    (2612, 1, 4.0),
+    (2613, 0, 0.0),
+    (2615, 1, 4.0),
+    (2616, 3, 179.0),
+    (2617, 14, 805.0),
+    (2618, 13, 153.0),
+    (2619, 26, 417.0),
+    (2620, 0, 0.0),
+    (2650, 2, 163.0),
+    (2651, 2, 7.0),
+    (2652, 2, 7.0),
+    (2653, 6, 951.0),
+    (2654, 6, 951.0),
+    (2655, 5, 720.0),
+    (2656, 1, 0.0),
+    (2657, 1, 0.0),
+    (2658, 16, 3259.0),
+    (2659, 11, 3259.0),
+    (2660, 2, 249.0),
+    (2661, 2, 249.0),
+    (2662, 4, 421.0),
+    (2663, 6, 421.0),
+    (2664, 5, 194.0),
+    (2665, 5, 194.0),
+    (2666, 2, 194.0),
+    (2667, 2, 194.0),
+    (2668, 2, 98.0),
+    (2669, 2, 98.0),
+    (2670, 2, 98.0),
+    (2671, 2, 3.0),
+    (2672, 2, 3.0),
+    (2673, 10, 1770.0),
+    (2674, 8, 1770.0),
+    (2675, 27, 5353.0),
+    (2676, 2, 17.0),
+    (2677, 2, 17.0),
+    (2678, 2, 163.0),
+    (2679, 2, 163.0),
+    (2680, 1, 0.0),
+    (2681, 2, 4.0),
+    (2682, 2, 4.0),
+    (2683, 1, 0.0),
+    (2684, 2, 4.0),
+    (2685, 2, 4.0),
+    (2686, 2, 179.0),
+    (2687, 2, 179.0),
+    (2688, 5, 805.0),
+    (2689, 6, 805.0),
+    (2690, 12, 3430.0),
+    (2691, 33, 3430.0),
+    (2692, 2, 153.0),
+    (2693, 2, 153.0),
+    (2694, 2, 3.0),
+    (2695, 2, 3.0),
+    (2696, 5, 417.0),
+    (2697, 2, 2.0),
+    (2698, 2, 2.0),
+    (2699, 1, 0.0),
+    (2701, 1, 0.0),
+    (2702, 1, 0.0),
+    (2703, 4, 637.0),
+    (2704, 6, 637.0),
+    (2753, 2, 148.0),
+    (2754, 2, 148.0),
+    (2755, 2, 148.0),
+    (2756, 5, 951.0),
+    (2757, 4, 720.0),
+    (2964, 0, 0.0),
+    (2965, 1, 0.0),
+    (2995, 0, 0.0),
+    (2996, 1, 0.0),
+    (3079, 1, 1.0),
+    (3080, 2, 1.0),
+    (3081, 2, 1.0),
+    (3085, 5, 896.0),
+    (3118, 0, 0.0),
+    (3119, 1, 0.0),
+    (3164, 8, 896.0),
+    (3256, 0, 0.0),
+    (3257, 1, 0.0),
+    (3258, 1, 0.0),
+    (3350, 0, 0.0),
+    (3351, 1, 0.0),
+    (3379, 1, 0.0),
+    (3380, 1, 0.0),
+    (3381, 0, 0.0),
+    (3394, 3, 241.0),
+    (3395, 2, 241.0),
+    (3429, 0, 0.0),
+    (3433, 1, 0.0),
+    (3455, 2, 421.0),
+    (3456, 16, 896.0),
+    (3466, 0, 0.0),
+    (3467, 1, 0.0),
+    (3468, 1, 0.0),
+    (3501, 0, 0.0),
+    (3502, 1, 0.0),
+    (3503, 1, 0.0),
+    (3534, 1, 0.0),
+    (3541, 1, 6.0),
+    (3542, 2, 6.0),
+    (3574, 1, 0.0),
+    (3575, 1, 0.0),
+    (3576, 0, 0.0),
+    (3592, 0, 0.0),
+    (3593, 1, 0.0),
+    (3596, 0, 0.0),
+    (3597, 1, 0.0),
+    (3600, 1, 32.0),
+    (3601, 1, 1.0),
+    (3602, 1, 32.0),
+    (3603, 4, 608.0),
+    (3604, 2, 32.0),
+    (3605, 2, 32.0),
+    (3606, 2, 1.0),
+    (3607, 2, 1.0),
+    (3608, 2, 32.0),
+    (3609, 5, 608.0),
+    (3712, 2, 32.0),
+    (3764, 1, 5.0),
+    (3766, 2, 5.0),
+    (3767, 2, 5.0),
+    (3997, 1, 0.0),
+    (5002, 1, 0.0),
+    (6000, 0, 0.0),
+    (6001, 1, 0.0),
+    (6002, 1, 0.0),
+    (6100, 0, 0.0),
+    (6102, 0, 0.0),
+    (6104, 0, 0.0),
+    (6106, 0, 0.0),
+    (6110, 1, 0.0),
+    (6111, 1, 0.0),
+    (6112, 1, 0.0),
+    (6113, 1, 0.0),
+    (6114, 1, 0.0),
+    (6115, 1, 0.0),
+    (6116, 1, 0.0),
+    (6117, 1, 0.0),
+    (6237, 0, 0.0),
+    (6238, 1, 0.0),
+    (6239, 1, 0.0),
+    (6243, 0, 0.0),
+    (6246, 1, 0.0),
+    (6247, 1, 0.0),
+    (6302, 2, 3.0),
+    (6303, 2, 3.0),
+];
+
+/// `relpages` and `reltuples` of the system catalog or the index of a system catalog with the OID `oid` in a new database.
+pub fn catalog_size(oid: u32) -> Option<(i32, f32)> {
+    let at = CATALOG_SIZES.binary_search_by_key(&oid, |&(o, ..)| o).ok()?;
+    let (_, pages, tuples) = CATALOG_SIZES[at];
+    Some((pages, tuples))
+}
+
+/// A row of `pg_statistic` of a system catalog in a new database.
+#[derive(Debug)]
+pub struct CatalogStatistic {
+    /// `starelid`.
+    pub table: u32,
+    /// `staattnum`.
+    pub attnum: i16,
+    /// `stainherit`.
+    pub inherit: bool,
+    /// `stanullfrac`.
+    pub null_frac: f32,
+    /// `stawidth`.
+    pub width: i32,
+    /// `stadistinct`.
+    pub distinct: f32,
+    /// The slots that have a kind, in the order of their numbers.
+    pub slots: &'static [CatalogSlot],
+}
+
+/// A slot of a row of `pg_statistic` of a system catalog: `stakindN`, `staopN`, `stacollN`, `stanumbersN`, and the text form of the array of `stavaluesN`.
+#[derive(Debug)]
+pub struct CatalogSlot {
+    pub kind: i16,
+    pub operator: u32,
+    pub collation: u32,
+    pub numbers: Option<&'static [f32]>,
+    pub values: Option<&'static str>,
+}
+
+/// The rows of `pg_statistic` of the system catalog with the OID `table` in a new database, as the `ANALYZE` of `initdb` makes them.
+pub fn catalog_statistics(table: u32) -> &'static [CatalogStatistic] {
+    let rows = &crate::catalog_stats::ROWS;
+    let start = rows.partition_point(|r| r.table < table);
+    let end = rows.partition_point(|r| r.table <= table);
+    &rows[start..end]
+}
+
+/// An index of a system catalog, from the static rows of `pg_index`. Each one is a `btree` index on columns.
+#[derive(Debug)]
+pub struct CatalogIndex {
+    pub oid: u32,
+    /// `indnkeyatts`.
+    pub key_count: usize,
+    pub unique: bool,
+    /// `indkey`.
+    pub keys: &'static [i16],
+    /// `indclass`.
+    pub classes: &'static [u32],
+    /// `indoption`.
+    pub options: &'static [i16],
+    /// `indcollation`.
+    pub collations: &'static [u32],
+}
+
+/// The indexes of the system catalog with the OID `table`, in the order of their OIDs, as `RelationGetIndexList` gives them.
+///
+/// # Panics
+///
+/// When the static rows of `pg_index` do not have the columns of the catalog header, which the generator makes sure of.
+pub fn catalog_indexes(table: u32) -> Vec<CatalogIndex> {
+    let rows = Rows::new("pg_index");
+    let int2v = |column: &str| match rows.batch(column).values {
+        Values::Int2Vector(v) => v,
+        _ => panic!("{column} is not an int2vector column"),
+    };
+    let oidv = |column: &str| match rows.batch(column).values {
+        Values::OidVector(v) => v,
+        _ => panic!("{column} is not an oidvector column"),
+    };
+    let key_count = match rows.batch("indnkeyatts").values {
+        Values::Int2(v) => v,
+        _ => panic!("indnkeyatts is not an int2 column"),
+    };
+    let (keys, options) = (int2v("indkey"), int2v("indoption"));
+    let (classes, collations) = (oidv("indclass"), oidv("indcollation"));
+    let unique = rows.bool("indisunique");
+    let oids = rows.oid("indexrelid");
+    let mut out: Vec<CatalogIndex> = rows
+        .oid("indrelid")
+        .iter()
+        .enumerate()
+        .filter(|&(_, &t)| t == table)
+        .map(|(i, _)| CatalogIndex {
+            oid: oids[i],
+            key_count: usize::try_from(key_count[i]).unwrap_or(0),
+            unique: unique[i],
+            keys: keys[i],
+            classes: classes[i],
+            options: options[i],
+            collations: collations[i],
+        })
+        .collect();
+    out.sort_by_key(|i| i.oid);
+    out
+}
+
 /// Every built-in operator class.
 pub fn opclasses() -> &'static [OpclassRow] {
     &BUILTIN.opclasses
