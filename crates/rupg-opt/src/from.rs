@@ -1632,7 +1632,7 @@ fn needed(level: &Level<'_>, stats: &mut Stats, used: Option<&[bool]>) {
         && query.grouping_sets.is_empty()
         && crate::enable().presorted_aggregate
     {
-        let ordered = upper::aggregate_order(query);
+        let ordered = upper::aggregate_order(query, stats);
         let ordered =
             ordered.into_iter().map(|k| (k.item.expr.into_owned(), k.desc, k.nulls_first));
         stats.canonical(ordered.collect(), |k| &k.0)
