@@ -9,11 +9,11 @@ use rupg_analyze::{Expr, JoinKind};
 use super::classes::{Found, Joined};
 use super::index::{self, Param};
 use super::paths::{Paths, costs};
-use super::tid;
 use super::{
     Base, Candidate, Part, Qual, Rel, Special, Stats, choose, finish, join_rels, join_rows,
     lateral_rels, semi_rels, semi_selectivity, semifactors, unique_rels,
 };
+use super::{inherit, tid};
 use crate::{Level, cost, exprs};
 
 /// `geqo_threshold`: with this many items or more, PostgreSQL finds the order of the joins with the genetic optimizer. The planner then joins the items in their order.
@@ -221,10 +221,10 @@ pub(super) fn search<'q>(
 }
 
 /// The outer side of a semi join, its inner side, and the groups of the values of the inner side.
-type Semis = (BTreeSet<usize>, BTreeSet<usize>, f64);
+pub(super) type Semis = (BTreeSet<usize>, BTreeSet<usize>, f64);
 
-/// The parameterized scans of an item that is the table `r`, for the inner side of a nested loop, as `cheapest_parameterized_paths`. `joins` has the conditions of the joins that a scan of the table can test, and `prohibited` has the relations that read the table with a lateral reference. For each set of outer relations the scan has the conditions of `get_baserel_parampathinfo`: the conditions of the table, the conditions of `joins` that the table and the set read, and the condition of each class with a member in the table and a member in the set. Its rows are the rows of the table that pass them, and a nested loop scans it once for each row of the smallest outer relation, as `get_loop_count`. When the table is on the outer side of a semi join in `semis` and the outer relation is on its inner side, the rows of the outer relation are at most the groups of the values of the semi join, as `adjust_rowcount_for_semijoins`. The scans that `add_path` keeps with the plans of the item are the parameterized scans of the item. The inner side of a semi join or an anti join keeps a scan with a lower start cost, as `consider_param_startup`.
-fn param_scans<'q>(
+/// The parameterized scans of an item that is the table `r`, for the inner side of a nested loop, as `cheapest_parameterized_paths`. `joins` has the conditions of the joins that a scan of the table can test, and `prohibited` has the relations that read the table with a lateral reference. For each set of outer relations the scan has the conditions and the rows of [`param_table`]. A table with members has the parameterized `Append` of its members. The scans that `add_path` keeps with the plans of the item are the parameterized scans of the item. The inner side of a semi join or an anti join keeps a scan with a lower start cost, as `consider_param_startup`.
+pub(super) fn param_scans<'q>(
     level: &Level<'q>,
     (r, base, plans, semi): (usize, &Base<'q>, &[Rel<'q>], bool),
     (joins, semis): (&[Qual<'q>], &[Semis]),
@@ -232,33 +232,23 @@ fn param_scans<'q>(
     prohibited: &BTreeSet<usize>,
     stats: &Stats,
 ) -> Vec<Param<'q>> {
+    if !base.members.is_empty() {
+        let found = (r, base, plans, semi);
+        return inherit::param_scans(level, found, (joins, semis), classes, prohibited, stats);
+    }
     let eq = stats.estimate(r, base.tuples);
-    let table = |quals: Vec<Qual<'q>>, rows: f64, outer: BTreeSet<usize>, loops: f64| {
-        let (pages, tuples) = (base.pages, base.tuples);
-        index::Table { r, pages, tuples, rows, quals, eq: &eq, outer, loops }
+    let ppi =
+        |outer: &BTreeSet<usize>| param_table(r, base, &eq, (joins, semis), classes, stats, outer);
+    let plain = index::Table {
+        r,
+        pages: base.pages,
+        tuples: base.tuples,
+        rows: base.rows,
+        quals: base.quals.clone(),
+        eq: &eq,
+        outer: BTreeSet::new(),
+        loops: 1.0,
     };
-    let ppi = |outer: &BTreeSet<usize>| {
-        let mut joined = outer.clone();
-        joined.insert(r);
-        let mut quals = base.quals.clone();
-        let n = quals.len();
-        quals.extend(joins.iter().filter(|q| q.rels.is_subset(&joined)).cloned());
-        let inner = BTreeSet::from([r]);
-        quals.extend(classes.iter().filter_map(|c| c.condition(outer, &inner)));
-        // `get_parameterized_baserel_size`: the conditions of the joins, then the conditions of the table.
-        let all = quals[n..].iter().chain(&quals[..n]).map(|q| &*q.expr);
-        let rows = cost::clamp_rows(base.tuples * cost::list_selectivity_by(all, &eq));
-        let rows = rows.min(base.rows);
-        let fewest =
-            outer.iter().filter_map(|o| Some((o, stats.rows.get(o)?.1))).map(|(o, rows)| {
-                let semi =
-                    semis.iter().filter(|(left, right, _)| left.contains(&r) && right.contains(o));
-                semi.fold(rows, |rows, (_, _, unique)| rows.min(*unique))
-            });
-        let loops = fewest.fold(0.0, |m: f64, x| if m == 0.0 || m > x { x } else { m });
-        table(quals, rows, outer.clone(), if loops > 0.0 { loops } else { 1.0 })
-    };
-    let plain = table(base.quals.clone(), base.rows, BTreeSet::new(), 1.0);
     let mut found =
         index::param_paths(level, &plain, &base.indexes, joins, classes, prohibited, &ppi, stats);
     found.extend(tid::param_paths(level, &plain, joins, classes, prohibited, &ppi, stats));
@@ -275,6 +265,37 @@ fn param_scans<'q>(
         paths.add_param(costs(&p.rel.node), keys, outer, p.rel.node.cost.rows, Some(p));
     }
     paths.params().into_iter().flatten().collect()
+}
+
+/// `get_baserel_parampathinfo`: the table `r` with the conditions of a parameterized scan with the values of the relations `outer`. The conditions are the conditions of the table, the conditions of `joins` that the table and `outer` read, and the condition of each class with a member in the table and a member in `outer`. Its rows are the rows of the table that pass them, and a nested loop scans it once for each row of the smallest outer relation, as `get_loop_count`. When the table is on the outer side of a semi join in `semis` and the outer relation is on its inner side, the rows of the outer relation are at most the groups of the values of the semi join, as `adjust_rowcount_for_semijoins`.
+pub(super) fn param_table<'a, 'q>(
+    r: usize,
+    base: &Base<'q>,
+    eq: &'a dyn cost::Estimate,
+    (joins, semis): (&[Qual<'q>], &[Semis]),
+    classes: &[Joined<'q>],
+    stats: &Stats,
+    outer: &BTreeSet<usize>,
+) -> index::Table<'a, 'q> {
+    let mut joined = outer.clone();
+    joined.insert(r);
+    let mut quals = base.quals.clone();
+    let n = quals.len();
+    quals.extend(joins.iter().filter(|q| q.rels.is_subset(&joined)).cloned());
+    let inner = BTreeSet::from([r]);
+    quals.extend(classes.iter().filter_map(|c| c.condition(outer, &inner)));
+    // `get_parameterized_baserel_size`: the conditions of the joins, then the conditions of the table.
+    let all = quals[n..].iter().chain(&quals[..n]).map(|q| &*q.expr);
+    let rows = cost::clamp_rows(base.tuples * cost::list_selectivity_by(all, eq));
+    let rows = rows.min(base.rows);
+    let fewest = outer.iter().filter_map(|o| Some((o, stats.rows.get(o)?.1))).map(|(o, rows)| {
+        let semi = semis.iter().filter(|(left, right, _)| left.contains(&r) && right.contains(o));
+        semi.fold(rows, |rows, (_, _, unique)| rows.min(*unique))
+    });
+    let loops = fewest.fold(0.0, |m: f64, x| if m == 0.0 || m > x { x } else { m });
+    let loops = if loops > 0.0 { loops } else { 1.0 };
+    let (pages, tuples) = (base.pages, base.tuples);
+    index::Table { r, pages, tuples, rows, quals, eq, outer: outer.clone(), loops }
 }
 
 /// The joins of the items in their order, each with the conditions that its two sides have. An item that is the inner side of a special join joins with its special join.
