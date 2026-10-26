@@ -1,0 +1,188 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE ps (a int, b text, c bool, d int, e float8);
+CREATE TABLE
+> INSERT INTO ps SELECT x, 'v' || (x % 10), CASE WHEN x % 10 = 0 THEN NULL ELSE x % 10 < 7 END, CASE WHEN x <= 5000 THEN x % 50 ELSE x END, CASE WHEN x % 5 = 0 THEN NULL ELSE x * 1.5 END FROM generate_series(1, 10000) x;
+INSERT 0 10000
+> ANALYZE ps;
+ANALYZE
+> EXPLAIN SELECT * FROM ps;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..162.00 rows=10000 width=20)
+EXPLAIN
+> EXPLAIN SELECT a FROM ps WHERE b = 'v3';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..187.00 rows=1000 width=4)
+row   Filter: (b = 'v3'::text)
+EXPLAIN
+> EXPLAIN SELECT a FROM ps WHERE b = 'zzz';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..187.00 rows=1 width=4)
+row   Filter: (b = 'zzz'::text)
+EXPLAIN
+> EXPLAIN SELECT a FROM ps WHERE d = 7;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..187.00 rows=100 width=4)
+row   Filter: (d = 7)
+EXPLAIN
+> EXPLAIN SELECT a FROM ps WHERE d = 7000;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..187.00 rows=1 width=4)
+row   Filter: (d = 7000)
+EXPLAIN
+> EXPLAIN SELECT a FROM ps WHERE d <> 7;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..187.00 rows=9900 width=4)
+row   Filter: (d <> 7)
+EXPLAIN
+> EXPLAIN SELECT a FROM ps WHERE b <> 'zzz';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..187.00 rows=10000 width=4)
+row   Filter: (b <> 'zzz'::text)
+EXPLAIN
+> EXPLAIN SELECT a FROM ps WHERE e IS NULL;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..162.00 rows=2000 width=4)
+row   Filter: (e IS NULL)
+EXPLAIN
+> EXPLAIN SELECT a FROM ps WHERE e IS NOT NULL;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..162.00 rows=8000 width=4)
+row   Filter: (e IS NOT NULL)
+EXPLAIN
+> EXPLAIN SELECT a FROM ps WHERE c;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..162.00 rows=6000 width=4)
+row   Filter: c
+EXPLAIN
+> EXPLAIN SELECT a FROM ps WHERE NOT c;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..162.00 rows=4000 width=4)
+row   Filter: (NOT c)
+EXPLAIN
+> EXPLAIN SELECT a FROM ps WHERE c IS TRUE;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..162.00 rows=6000 width=4)
+row   Filter: (c IS TRUE)
+EXPLAIN
+> EXPLAIN SELECT a FROM ps WHERE c IS NOT FALSE;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..162.00 rows=7000 width=4)
+row   Filter: (c IS NOT FALSE)
+EXPLAIN
+> EXPLAIN SELECT a FROM ps WHERE c IS UNKNOWN;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..162.00 rows=1000 width=4)
+row   Filter: (c IS UNKNOWN)
+EXPLAIN
+> EXPLAIN SELECT a FROM ps WHERE c IS NOT TRUE;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..162.00 rows=4000 width=4)
+row   Filter: (c IS NOT TRUE)
+EXPLAIN
+> EXPLAIN SELECT a FROM ps WHERE b = 'v3' AND d = 7;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=10 width=4)
+row   Filter: ((b = 'v3'::text) AND (d = 7))
+EXPLAIN
+> EXPLAIN SELECT a FROM ps WHERE b IN ('v1', 'v2', 'zz');
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..199.50 rows=2000 width=4)
+row   Filter: (b = ANY ('{v1,v2,zz}'::text[]))
+EXPLAIN
+> EXPLAIN SELECT a FROM ps WHERE d = ANY (ARRAY[1, 2, 7000]);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..199.50 rows=201 width=4)
+row   Filter: (d = ANY ('{1,2,7000}'::integer[]))
+EXPLAIN
+> EXPLAIN SELECT a FROM ps WHERE b <> ALL (ARRAY['v1', 'v2']);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..187.00 rows=8000 width=4)
+row   Filter: (b <> ALL ('{v1,v2}'::text[]))
+EXPLAIN
+> EXPLAIN SELECT a FROM ps WHERE d = (SELECT 7);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.01..187.01 rows=2 width=4)
+row   Filter: (d = (InitPlan expr_1).col1)
+row   InitPlan expr_1
+row     ->  Result  (cost=0.00..0.01 rows=1 width=4)
+EXPLAIN
+> EXPLAIN SELECT a FROM ps WHERE a = 5;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..187.00 rows=1 width=4)
+row   Filter: (a = 5)
+EXPLAIN
+> EXPLAIN SELECT a FROM ps WHERE e = 3.0;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..187.00 rows=1 width=4)
+row   Filter: (e = '3'::double precision)
+EXPLAIN
+> EXPLAIN SELECT a FROM ps WHERE b = 'v3' OR d = 7;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=1090 width=4)
+row   Filter: ((b = 'v3'::text) OR (d = 7))
+EXPLAIN
+> EXPLAIN SELECT a FROM ps WHERE b IS DISTINCT FROM 'v3';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..187.00 rows=9000 width=4)
+row   Filter: (b IS DISTINCT FROM 'v3'::text)
+EXPLAIN
+> EXPLAIN SELECT a FROM ps WHERE d = 7::bigint;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..187.00 rows=100 width=4)
+row   Filter: (d = '7'::bigint)
+EXPLAIN
+> CREATE TABLE pz (a int, c bool);
+CREATE TABLE
+> INSERT INTO pz SELECT x, x % 2 = 0 FROM generate_series(1, 50) x;
+INSERT 0 50
+> EXPLAIN SELECT * FROM pz WHERE a = 3;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pz  (cost=0.00..40.88 rows=12 width=5)
+row   Filter: (a = 3)
+EXPLAIN
+> EXPLAIN SELECT * FROM pz WHERE c;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pz  (cost=0.00..34.70 rows=1235 width=5)
+row   Filter: c
+EXPLAIN
+> EXPLAIN SELECT * FROM pz WHERE a <> 3;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pz  (cost=0.00..40.88 rows=2458 width=5)
+row   Filter: (a <> 3)
+EXPLAIN
+> ANALYZE pz;
+ANALYZE
+> EXPLAIN SELECT * FROM pz WHERE a = 3;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pz  (cost=0.00..1.62 rows=1 width=5)
+row   Filter: (a = 3)
+EXPLAIN
+> EXPLAIN SELECT * FROM pz WHERE c;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pz  (cost=0.00..1.50 rows=25 width=5)
+row   Filter: c
+EXPLAIN
+> EXPLAIN SELECT * FROM pz WHERE c IS FALSE;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pz  (cost=0.00..1.50 rows=25 width=5)
+row   Filter: (c IS FALSE)
+EXPLAIN
+> CREATE TABLE pw (a int, t text);
+CREATE TABLE
+> INSERT INTO pw SELECT x, repeat('q', 100 + x % 50) FROM generate_series(1, 300) x;
+INSERT 0 300
+> ANALYZE pw;
+ANALYZE
+> EXPLAIN SELECT * FROM pw;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pw  (cost=0.00..9.00 rows=300 width=130)
+EXPLAIN
+> EXPLAIN SELECT t FROM pw WHERE a = 1;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pw  (cost=0.00..9.75 rows=1 width=126)
+row   Filter: (a = 1)
+EXPLAIN
+> DROP TABLE ps, pz, pw;
+DROP TABLE

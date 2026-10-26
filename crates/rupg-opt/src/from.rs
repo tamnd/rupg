@@ -7,14 +7,18 @@ pub(crate) mod paths;
 mod search;
 
 use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use rupg_analyze::{
     BoolOp, BoolTest, Expr, ExprKind, FromItem, JoinKind, Query, Relation, SetKind, SetOp, SetTree,
     SortGroup, SubLinkKind, Var, expand_grouping_sets,
 };
 use rupg_pgcatalog::builtin;
-use rupg_plan::{Cost, Item, Kind, Node, Replaced, SortKey, Strategy};
+use rupg_plan::{
+    Cost, Item, Kind, Node, Replaced, STATISTIC_KIND_MCV, SortKey, Statistic, Strategy,
+};
 use rupg_types::{Value, oid};
 
 use crate::{Builder, Index, Level, Member, Size, cost, exprs, pullup, upper};
@@ -82,9 +86,17 @@ pub(crate) struct Stats {
     subplans: Vec<cost::SubCost>,
     /// The relations of the join that tests the conditions that run once, which is the join of all the relations, or none when there is no such condition.
     gated: BTreeSet<usize>,
+    /// The statistics of the columns of each table of the level, by column number, from `pg_statistic` with `stainherit` false.
+    columns: BTreeMap<usize, Rc<BTreeMap<i16, Statistic>>>,
 }
 
 impl Stats {
+    /// The estimates of the conditions of the relation `r` with `tuples` tuples.
+    fn estimate(&self, r: usize, tuples: f64) -> ScanEstimate {
+        let columns = self.columns.get(&r).cloned().unwrap_or_default();
+        ScanEstimate { r, tuples, unique: self.unique.clone(), columns }
+    }
+
     /// The columns of the members of the equivalence classes that a node of the join of `rels` gives: each column of the relations whose class has a relation that is not in `rels`.
     pub(crate) fn class_columns<'a>(
         &'a self,
@@ -797,6 +809,7 @@ impl<'q> Builder<'q> {
                     }
                     indexes = self.members.map(|m| m.indexes(relation.oid)).unwrap_or_default();
                     size = self.members.map_or_else(Size::default, |m| m.size(relation.oid));
+                    stats.columns.insert(r, crate::statistics(relation.oid));
                     for index in &indexes {
                         if let ([key], true, false) =
                             (index.keys.as_slice(), index.unique, index.partial)
@@ -847,7 +860,7 @@ impl<'q> Builder<'q> {
                 }
             },
         };
-        let eq = eq_unique(r, tuples, stats.unique.clone());
+        let eq = stats.estimate(r, tuples);
         let selectivity = cost::list_selectivity_by(quals.iter().map(|q| &*q.expr), &eq);
         let rows = cost::clamp_rows(tuples * selectivity);
         stats.rows.insert(r, (tuples, rows));
@@ -946,15 +959,100 @@ fn sub_order(
 }
 
 /// `var_eq_const` and `var_eq_non_const`: `=` of a unique column or a unique expression of the table `r` of `tuples` rows and a value that reads no column of the table passes one row.
-fn eq_unique(r: usize, tuples: f64, unique: Unique) -> impl Fn(&Expr, &Expr) -> Option<f64> {
-    move |a, b| {
-        [(a, b), (b, a)].into_iter().find_map(|(column, value)| {
-            (unique.has(column)
-                && exprs::relations(column) == BTreeSet::from([r])
-                && !exprs::relations(value).contains(&r)
-                && tuples >= 1.0)
-                .then(|| 1.0 / tuples)
+/// The estimates of the conditions of the relation `r` of `tuples` tuples, as `examine_variable` finds the columns of the relation: `isunique` for a unique column, and the statistics of `pg_statistic` for a column of a table.
+#[derive(Debug)]
+pub(crate) struct ScanEstimate {
+    r: usize,
+    tuples: f64,
+    unique: Unique,
+    columns: Rc<BTreeMap<i16, Statistic>>,
+}
+
+impl ScanEstimate {
+    /// `get_restriction_variable`: of the two sides of a condition, the side that reads the relation alone and the side that does not read it.
+    fn sides<'e>(&self, a: &'e Expr, b: &'e Expr) -> Option<(&'e Expr, &'e Expr)> {
+        [(a, b), (b, a)].into_iter().find(|(column, value)| {
+            exprs::relations(column) == BTreeSet::from([self.r])
+                && !exprs::relations(value).contains(&self.r)
         })
+    }
+
+    /// `var_eq_const` for a constant `value`, and `var_eq_non_const` for another value. A unique column matches one row. With statistics a constant that is a most common value has its frequency, and another constant has a part of the other values. A value that is not a constant has the part of one distinct value, at most the frequency of the first most common value. `negate` gives `<>`, which is the rest of the rows that are not null.
+    fn var_eq(&self, column: &Expr, value: &Expr, negate: bool) -> f64 {
+        let statistic = cost::Estimate::statistic(self, column);
+        let nullfrac = statistic.map_or(0.0, |s| f64::from(s.null_frac));
+        let unique = self.unique.has(column);
+        let mut constant = value;
+        while let ExprKind::Relabel(arg, _) = &constant.kind {
+            constant = arg;
+        }
+        let constant = match &constant.kind {
+            ExprKind::Const(Value::Null) => return 0.0,
+            ExprKind::Const(v) => Some(v),
+            _ => None,
+        };
+        let numdistinct = || cost::numdistinct(column, statistic, unique, Some(self.tuples)).0;
+        let selec = if unique && self.tuples >= 1.0 {
+            1.0 / self.tuples
+        } else if let Some(s) = statistic {
+            let mcv = s.slots.iter().find(|slot| slot.kind == STATISTIC_KIND_MCV);
+            let numbers = mcv.and_then(|m| m.numbers.as_deref()).unwrap_or_default();
+            let values = mcv.and_then(|m| m.values.as_deref()).unwrap_or_default();
+            match constant {
+                Some(c) => {
+                    let equal = |v: &Value| {
+                        crate::compare(column.ty, v, value.ty, c).is_some_and(Ordering::is_eq)
+                    };
+                    match values.iter().position(equal).and_then(|at| numbers.get(at)) {
+                        Some(&freq) => f64::from(freq),
+                        None => {
+                            let sumcommon: f64 = numbers.iter().map(|&n| f64::from(n)).sum();
+                            let mut selec: f64 = (1.0 - sumcommon - nullfrac).clamp(0.0, 1.0);
+                            let other = numdistinct() - numbers.len() as f64;
+                            if other > 1.0 {
+                                selec /= other;
+                            }
+                            match numbers.last() {
+                                Some(&least) if selec > f64::from(least) => f64::from(least),
+                                _ => selec,
+                            }
+                        }
+                    }
+                }
+                None => {
+                    let mut selec = 1.0 - nullfrac;
+                    let nd = numdistinct();
+                    if nd > 1.0 {
+                        selec /= nd;
+                    }
+                    match numbers.first() {
+                        Some(&most) if selec > f64::from(most) => f64::from(most),
+                        _ => selec,
+                    }
+                }
+            }
+        } else {
+            1.0 / numdistinct()
+        };
+        let selec = if negate { 1.0 - selec - nullfrac } else { selec };
+        selec.clamp(0.0, 1.0)
+    }
+}
+
+impl cost::Estimate for ScanEstimate {
+    fn eq(&self, left: &Expr, right: &Expr) -> Option<f64> {
+        let (column, value) = self.sides(left, right)?;
+        Some(self.var_eq(column, value, false))
+    }
+
+    fn neq(&self, left: &Expr, right: &Expr) -> Option<f64> {
+        let (column, value) = self.sides(left, right)?;
+        Some(self.var_eq(column, value, true))
+    }
+
+    fn statistic(&self, expr: &Expr) -> Option<&Statistic> {
+        let var = plain_var(expr).filter(|v| v.levels_up == 0 && v.relation == self.r)?;
+        self.columns.get(&var.attnum)
     }
 }
 
@@ -1676,27 +1774,8 @@ fn numdistinct(expr: &Expr, stats: &Stats) -> (f64, bool, Option<(f64, f64)>) {
         _ => None,
     };
     let unique = stats.unique.has(expr);
-    let known = if unique {
-        // A unique column has as many values as the relation has tuples, whatever its type.
-        rel.map(|(tuples, _)| tuples)
-    } else if expr.ty == oid::BOOL {
-        Some(2.0)
-    } else if let ExprKind::Var(var) = expr.strip_implicit().kind
-        && var.attnum < 0
-    {
-        // `tableoid` has one value in a relation, and the other system columns are unique.
-        if var.attnum == -6 { Some(1.0) } else { rel.map(|(tuples, _)| tuples) }
-    } else {
-        None
-    };
-    let nd = match (known, rel) {
-        (Some(nd), _) => (cost::clamp_rows(nd), false),
-        (None, Some((tuples, _))) if tuples > 0.0 && tuples < cost::NUM_DISTINCT => {
-            (cost::clamp_rows(tuples), false)
-        }
-        _ => (cost::NUM_DISTINCT, true),
-    };
-    (nd.0, nd.1, rel)
+    let (nd, default) = cost::numdistinct(expr, None, unique, rel.map(|(tuples, _)| tuples));
+    (nd, default, rel)
 }
 
 /// The number of distinct values of an expression with no statistics for `eqjoinsel_inner`, which does not clamp it to the rows of its relation after the conditions. The flag is true for the default.

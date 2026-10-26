@@ -43,7 +43,7 @@ pub(super) struct Table<'a, 'q> {
     /// The conditions of the scan in the order of `baserestrictinfo`, and then for a parameterized scan the conditions of the joins that it tests, as `ppi_clauses`.
     pub(super) quals: Vec<Qual<'q>>,
     /// The selectivity of `=` of two values, as [`cost::list_selectivity_by`] reads it.
-    pub(super) eq: &'a dyn Fn(&Expr, &Expr) -> Option<f64>,
+    pub(super) eq: &'a dyn cost::Estimate,
     /// `required_outer` of a parameterized scan: the relations of the values that it reads.
     pub(super) outer: BTreeSet<usize>,
     /// `loop_count`: the scans of the table that a nested loop makes, as `get_loop_count` finds them.

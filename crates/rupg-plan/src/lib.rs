@@ -6,6 +6,7 @@
 
 mod explain;
 mod format;
+mod statistic;
 
 use std::borrow::Cow;
 
@@ -13,6 +14,9 @@ use rupg_analyze::{Expr, ExprKind, JoinKind, Query, SubLink, Write};
 use rupg_common::Result;
 
 pub use explain::{Format, Options, explain};
+pub use statistic::{
+    STATISTIC_KIND_CORRELATION, STATISTIC_KIND_HISTOGRAM, STATISTIC_KIND_MCV, StatSlot, Statistic,
+};
 
 /// The relation of a scope that is the target table of an `INSERT`, which is not a relation of the query.
 pub const TARGET: usize = usize::MAX;
