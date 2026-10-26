@@ -2937,6 +2937,22 @@ impl Catalog {
         Ok(oid)
     }
 
+    /// `CastCreate`: a cast from `source` to `target` with the function `func`, or 0, that depends on the two types, on the function, and on the binary casts `casts` that the function needs. The analyzer checks that no cast has the two types. The return value is the OID of the cast.
+    pub fn create_cast(&mut self, cast: Cast, casts: [u32; 2]) -> u32 {
+        let oid = self.new_oid();
+        let object = ObjRef::new(PG_CAST, oid);
+        let mut refs = vec![ObjRef::new(PG_TYPE, cast.source), ObjRef::new(PG_TYPE, cast.target)];
+        if cast.func != 0 {
+            refs.push(ObjRef::new(PG_PROC, cast.func));
+        }
+        refs.extend(casts.into_iter().filter(|&c| c != 0).map(|c| ObjRef::new(PG_CAST, c)));
+        self.casts.insert(oid, Cast { oid, ..cast });
+        for referenced in refs {
+            self.depend(object, referenced, DepKind::Normal);
+        }
+        oid
+    }
+
     /// `TypeShellMake`: a shell type, which has no array type. The type depends on its schema. The return value is the OID of the type.
     ///
     /// # Errors

@@ -3497,7 +3497,13 @@ fn cast_result(func: u32, ty: u32) -> Option<u32> {
 #[allow(clippy::cast_sign_loss, clippy::cast_possible_wrap)]
 fn relabel(value: Value, ty: u32) -> Value {
     let ty = base_type(ty);
+    // A cast of `CREATE CAST ... WITHOUT FUNCTION` keeps the bits of the value, also between an integer type and a float type.
+    let ty = builtin::base_representation(ty).unwrap_or(ty);
     match value {
+        Value::Int4(v) if ty == oid::FLOAT4 => Value::Float4(f32::from_bits(v as u32)),
+        Value::Float4(v) if ty == oid::INT4 => Value::Int4(v.to_bits() as i32),
+        Value::Int8(v) if ty == oid::FLOAT8 => Value::Float8(f64::from_bits(v as u64)),
+        Value::Float8(v) if ty == oid::INT8 => Value::Int8(v.to_bits() as i64),
         Value::Int4(v) if ty != oid::INT4 => Value::Oid(v as u32),
         Value::Oid(v) if ty == oid::INT4 => Value::Int4(v as i32),
         Value::Array(mut array) => {

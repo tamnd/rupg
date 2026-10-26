@@ -5,7 +5,7 @@ use rupg_catalog::{
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named, Owned};
-use rupg_sql::nodes::{DropStmt, Node, ObjectType, TypeName};
+use rupg_sql::nodes::{DropBehavior, DropStmt, Node, ObjectType, TypeName};
 
 use super::comment::not_owner;
 use super::drop::{builtin_object, quote_identifier};
@@ -28,6 +28,7 @@ struct Removable {
 impl Definer<'_, '_> {
     /// The objects of `RemoveObjects` for the kinds of this module. A missing object gives the error of `get_object_address`, or with `IF EXISTS` the notice of `does_not_exist_skipping`.
     pub(super) fn drop_named(&mut self, stmt: &DropStmt) -> Result<()> {
+        let mut objects = Vec::new();
         for item in stmt.objects.iter().flatten() {
             let found = match stmt.removeType {
                 ObjectType::OBJECT_CAST => self.find_cast(item, stmt.missing_ok)?,
@@ -37,6 +38,10 @@ impl Definer<'_, '_> {
                 kind => self.find_by_name(kind, item, stmt.missing_ok)?,
             };
             let Some(found) = found else { continue };
+            if found.object.oid >= FIRST_NORMAL_OID && found.object.class == PG_CAST {
+                objects.push(found.object);
+                continue;
+            }
             if found.object.oid >= FIRST_NORMAL_OID {
                 return Err(not_yet("DROP of this kind of object", None));
             }
@@ -51,7 +56,7 @@ impl Definer<'_, '_> {
                 ),
             ));
         }
-        Ok(())
+        self.perform(&objects, stmt.behavior == DropBehavior::DROP_CASCADE)
     }
 
     /// The notice of `does_not_exist_skipping`.

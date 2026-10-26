@@ -1265,6 +1265,18 @@ pub enum SessionType {
     Function(SessionFunction),
     Aggregate(SessionAggregate),
     Operator(SessionOperator),
+    Cast(SessionCast),
+}
+
+/// A cast of the catalog of a session that `CREATE CAST` made, for [`use_session_types`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionCast {
+    pub oid: u32,
+    pub source: u32,
+    pub target: u32,
+    pub func: u32,
+    pub context: u8,
+    pub method: u8,
 }
 
 /// The types of the catalog that the session of the thread uses now.
@@ -1372,6 +1384,17 @@ fn session_rows(ty: &SessionType) -> Option<Interned> {
                 code: new.code,
             };
             Interned { operator: Some(Box::leak(Box::new(row))), ..Interned::default() }
+        }
+        SessionType::Cast(new) => {
+            let row = CastRow {
+                oid: new.oid,
+                source: new.source,
+                target: new.target,
+                func: new.func,
+                context: new.context,
+                method: new.method,
+            };
+            Interned { casts: vec![Box::leak(Box::new(row))], ..Interned::default() }
         }
     })
 }

@@ -364,6 +364,19 @@ fn use_types(catalog: &Catalog) {
             code: o.code,
         })
     }));
+    // The cast of a range type to its multirange type comes with the range type.
+    let made =
+        catalog.casts().filter(|c| catalog.type_by_oid(c.source).is_none_or(|t| t.range.is_none()));
+    types.extend(made.map(|c| {
+        builtin::SessionType::Cast(builtin::SessionCast {
+            oid: c.oid,
+            source: c.source,
+            target: c.target,
+            func: c.func,
+            context: c.context,
+            method: c.method,
+        })
+    }));
     types.extend(catalog.aggregates().map(|a| {
         builtin::SessionType::Aggregate(builtin::SessionAggregate {
             fnoid: a.function,

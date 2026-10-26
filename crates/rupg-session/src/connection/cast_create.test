@@ -1,0 +1,118 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TYPE xf4;
+CREATE TYPE
+> CREATE FUNCTION xf4in(cstring) RETURNS xf4 IMMUTABLE STRICT LANGUAGE internal AS 'int4in';
+NOTICE 42809 return type xf4 is only a shell
+CREATE FUNCTION
+> CREATE FUNCTION xf4out(xf4) RETURNS cstring IMMUTABLE STRICT LANGUAGE internal AS 'int4out';
+NOTICE 42809 argument type xf4 is only a shell at 24
+CREATE FUNCTION
+> CREATE TYPE xf4 (input = xf4in, output = xf4out, like = float4);
+CREATE TYPE
+> CREATE CAST (xf4 AS float4) WITHOUT FUNCTION;
+CREATE CAST
+> CREATE CAST (float4 AS xf4) WITHOUT FUNCTION;
+CREATE CAST
+> CREATE CAST (xf4 AS integer) WITHOUT FUNCTION;
+CREATE CAST
+> CREATE CAST (integer AS xf4) WITHOUT FUNCTION;
+CREATE CAST
+> CREATE CAST (integer AS xf4) WITHOUT FUNCTION;
+ERROR 42710 cast from type integer to type xf4 already exists
+> CREATE CAST (xf4 AS float8) WITHOUT FUNCTION;
+ERROR 42P17 source and target data types are not physically compatible
+> CREATE CAST (xf4 AS xf4) WITHOUT FUNCTION;
+ERROR 42P17 source data type and target data type are the same
+> CREATE CAST (xf4 AS cstring) WITHOUT FUNCTION;
+ERROR 42809 target data type cstring is a pseudo-type
+> CREATE CAST (xf4 AS int4[]) WITHOUT FUNCTION;
+ERROR 42P17 source and target data types are not physically compatible
+> CREATE CAST (xf4 AS nosuch) WITHOUT FUNCTION;
+ERROR 42704 type "nosuch" does not exist
+> SELECT castsource::regtype, casttarget::regtype, castfunc, castcontext, castmethod FROM pg_cast WHERE castsource = 'xf4'::regtype OR casttarget = 'xf4'::regtype ORDER BY 1::text, 2::text;
+fields castsource:2206:4:-1,casttarget:2206:4:-1,castfunc@pg_cast.4:26:4:-1,castcontext@pg_cast.5:18:1:-1,castmethod@pg_cast.6:18:1:-1
+row xf4,real,0,e,b
+row real,xf4,0,e,b
+row xf4,integer,0,e,b
+row integer,xf4,0,e,b
+SELECT 4
+> SELECT pg_describe_object(classid, objid, objsubid) AS obj, pg_describe_object(refclassid, refobjid, refobjsubid) AS ref, deptype FROM pg_depend WHERE classid = 'pg_cast'::regclass AND objid IN (SELECT oid FROM pg_cast WHERE castsource = 'xf4'::regtype) ORDER BY 1, 2;
+fields obj:25:-1:-1,ref:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row cast from xf4 to integer,type xf4,n
+row cast from xf4 to real,type xf4,n
+SELECT 2
+> SELECT x'3f800000'::integer::xf4::float4, x'00000001'::integer::xf4::float4, x'7f7fffff'::integer::xf4::float4;
+fields float4:700:4:-1,float4:700:4:-1,float4:700:4:-1
+row 1,1e-45,3.4028235e+38
+SELECT 1
+> SELECT float4send(bits::integer::xf4::float4) AS ibits, bits::integer::xf4::float4 AS flt FROM (VALUES (x'00000002'), (x'00800000'), (x'40490fdb'), (x'ff800000')) t(bits);
+fields ibits:17:-1:-1,flt:700:4:-1
+row \x00000002,3e-45
+row \x00800000,1.1754944e-38
+row \x40490fdb,3.1415927
+row \xff800000,-Infinity
+SELECT 4
+> SELECT (1.5::float4)::xf4::integer, (-2.0::float4)::xf4::text;
+fields int4:23:4:-1,text:25:-1:-1
+row 1069547520,-1073741824
+SELECT 1
+> SELECT '1069547520'::xf4::float4;
+fields float4:700:4:-1
+row 1.5
+SELECT 1
+> CREATE FUNCTION xf4_to_int8(xf4) RETURNS int8 IMMUTABLE LANGUAGE sql AS 'SELECT 7::int8';
+CREATE FUNCTION
+> CREATE CAST (xf4 AS int8) WITH FUNCTION xf4_to_int8(xf4);
+CREATE CAST
+> CREATE CAST (xf4 AS int2) WITH FUNCTION xf4_to_int8(xf4);
+ERROR 42P17 return data type of cast function must match or be binary-coercible to target data type
+> CREATE CAST (int8 AS xf4) WITH FUNCTION xf4_to_int8(xf4);
+ERROR 42P17 argument of cast function must match or be binary-coercible from source data type
+> CREATE CAST (xf4 AS numeric) WITH FUNCTION nosuch(xf4);
+ERROR 42883 function nosuch(xf4) does not exist
+> CREATE CAST (xf4 AS text) WITH INOUT AS ASSIGNMENT;
+CREATE CAST
+> SELECT '5'::xf4::int8, '5'::xf4::text;
+fields int8:20:8:-1,text:25:-1:-1
+row 7,5
+SELECT 1
+> SELECT castsource::regtype, casttarget::regtype, castfunc::regproc, castcontext, castmethod FROM pg_cast WHERE castsource = 'xf4'::regtype AND castmethod <> 'b' ORDER BY 2::text;
+fields castsource:2206:4:-1,casttarget:2206:4:-1,castfunc:24:4:-1,castcontext@pg_cast.5:18:1:-1,castmethod@pg_cast.6:18:1:-1
+row xf4,bigint,xf4_to_int8,e,f
+row xf4,text,-,a,i
+SELECT 2
+> DROP FUNCTION xf4_to_int8(xf4);
+ERROR 2BP01 cannot drop function xf4_to_int8(xf4) because other objects depend on it
+DETAIL cast from xf4 to bigint depends on function xf4_to_int8(xf4)
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP CAST (xf4 AS float8);
+ERROR 42704 cast from type xf4 to type double precision does not exist
+> DROP CAST IF EXISTS (xf4 AS float8);
+NOTICE 00000 cast from type xf4 to type float8 does not exist, skipping
+DROP CAST
+> DROP CAST (xf4 AS text);
+DROP CAST
+> DROP CAST (xf4 AS integer);
+DROP CAST
+> SELECT count(*) FROM pg_cast WHERE castsource = 'xf4'::regtype;
+fields count:20:8:-1
+row 2
+SELECT 1
+> SELECT '5'::xf4::integer;
+ERROR 42846 cannot cast type xf4 to integer at 16
+> DROP TYPE xf4 CASCADE;
+NOTICE 00000 drop cascades to 7 other objects
+DETAIL drop cascades to function xf4in(cstring)
+drop cascades to function xf4out(xf4)
+drop cascades to cast from xf4 to real
+drop cascades to cast from real to xf4
+drop cascades to cast from integer to xf4
+drop cascades to function xf4_to_int8(xf4)
+drop cascades to cast from xf4 to bigint
+DROP TYPE
+> SELECT count(*) FROM pg_cast WHERE castsource > 16384 OR casttarget > 16384;
+fields count:20:8:-1
+row 0
+SELECT 1
