@@ -1,0 +1,34 @@
+> CREATE TYPE ri_pair AS (a int, b int)
+CREATE TYPE
+> CREATE TYPE ri_flag AS (a smallint, b bool)
+CREATE TYPE
+> CREATE TYPE ri_text AS (a int, b text)
+CREATE TYPE
+> CREATE TYPE ri_point AS (a int, b point)
+CREATE TYPE
+> CREATE TYPE ri_num AS (x numeric)
+CREATE TYPE
+> SELECT row(1, 2)::ri_pair *< row(1, 3)::ri_pair, row(1, 2)::ri_pair *= row(1, 2)::ri_pair, row(1, 3)::ri_pair *>= row(1, 2)::ri_pair, row(1, -2)::ri_pair *< row(1, 3)::ri_pair
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,f
+SELECT 1
+> SELECT row(-2, true)::ri_flag *< row(-1, true)::ri_flag, row(0, false)::ri_flag *< row(0, true)::ri_flag, row(1, null)::ri_flag *> row(1, true)::ri_flag
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t
+SELECT 1
+> SELECT row(1, 'abc')::ri_text *< row(1, 'abcd')::ri_text, row(1, 'abc')::ri_text *> row(1, 'abd')::ri_text, row(1, '(1,2)')::ri_point *< row(1, '(1,3)')::ri_point
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t
+SELECT 1
+> SELECT row(1.0)::ri_num *= row(1.00)::ri_num, row(1.0)::ri_num = row(1.00)::ri_num, row(1.0)::ri_num *> row(1.00)::ri_num, row(0)::ri_num *= row(0.0)::ri_num, row('NaN')::ri_num *< row(1)::ri_num
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row f,t,t,f,f
+SELECT 1
+> SELECT btrecordimagecmp(row(1, 2)::ri_pair, row(1, 3)::ri_pair), btrecordimagecmp(row(1.0)::ri_num, row(1.0)::ri_num)
+fields btrecordimagecmp:23:4:-1,btrecordimagecmp:23:4:-1
+row -1,0
+SELECT 1
+> SELECT row(1, 2)::ri_pair *< row(1, 'abc')::ri_text
+ERROR 42804 cannot compare dissimilar column types integer and text at record column 2
+> SELECT row(1, 2)::ri_pair *<> row(1)::ri_num
+ERROR 42804 cannot compare dissimilar column types integer and numeric at record column 1

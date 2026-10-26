@@ -3558,6 +3558,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/regression_aggregates.test")));
     }
 
+    /// The operators `*=`, `*<` and the others of `record_image_ops` and `btrecordimagecmp`, which compare the bytes of the columns: a negative integer above a positive one, `false` below `true`, a null above a value, text and a point by their bytes, `1.0` and `1.00` different as `numeric`, and the errors of columns of different types. `connection/record_image.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn record_image() {
+        big_stack(|| script(include_str!("connection/record_image.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {
