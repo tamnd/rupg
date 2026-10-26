@@ -1,0 +1,24 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE INFINITE_INTERVAL_TBL (i interval);
+CREATE TABLE
+> INSERT INTO INFINITE_INTERVAL_TBL VALUES ('infinity'), ('-infinity'), ('1 year 2 days 3 hours');
+INSERT 0 3
+> EXPLAIN SELECT lhst.i lhs, rhst.i rhs FROM INFINITE_INTERVAL_TBL lhst CROSS JOIN INFINITE_INTERVAL_TBL rhst WHERE NOT isfinite(lhst.i);
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..28577.83 rows=2281050 width=32)
+row   ->  Seq Scan on infinite_interval_tbl rhst  (cost=0.00..28.50 rows=1850 width=16)
+row   ->  Materialize  (cost=0.00..39.29 rows=1233 width=16)
+row         ->  Seq Scan on infinite_interval_tbl lhst  (cost=0.00..33.12 rows=1233 width=16)
+row               Filter: (NOT isfinite(i))
+EXPLAIN
+> SELECT lhst.i lhs, rhst.i rhs, lhst.i < rhst.i AS lt FROM INFINITE_INTERVAL_TBL lhst CROSS JOIN INFINITE_INTERVAL_TBL rhst WHERE NOT isfinite(lhst.i);
+fields lhs@infinite_interval_tbl.1:1186:16:-1,rhs@infinite_interval_tbl.1:1186:16:-1,lt:16:1:-1
+row infinity,infinity,f
+row -infinity,infinity,t
+row infinity,-infinity,f
+row -infinity,-infinity,f
+row infinity,1 year 2 days 03:00:00,f
+row -infinity,1 year 2 days 03:00:00,t
+SELECT 6

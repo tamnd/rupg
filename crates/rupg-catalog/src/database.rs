@@ -8,6 +8,8 @@ pub const TEMPLATE0: u32 = 4;
 pub const POSTGRES: u32 = 5;
 /// `DATCONNLIMIT_UNLIMITED`.
 pub const UNLIMITED: i32 = -1;
+/// `datfrozenxid` of the databases of a new cluster: the `VACUUM FREEZE` of `initdb` of PostgreSQL 19 runs in the transaction 654. It is also `oldestXid` and `oldestClogXid` of the cluster.
+pub const INITDB_FROZEN_XID: u32 = 654;
 
 /// A row of `pg_database`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,7 +53,7 @@ impl Database {
             is_template,
             allow_connections,
             connection_limit: UNLIMITED,
-            frozen_xid: 0,
+            frozen_xid: INITDB_FROZEN_XID,
             min_mxid: 1,
             tablespace: 1663,
             collate: "C".to_owned(),
