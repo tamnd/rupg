@@ -400,7 +400,8 @@ fn regr_r2(_: &Call<'_>, args: &[Value]) -> Result<Value> {
         } else {
             numerator / denominator
         };
-        Some(result.min(1.0))
+        // `f64::min` takes 1 for NaN, which the comparison of PG keeps.
+        Some(if result > 1.0 { 1.0 } else { result })
     })
 }
 
