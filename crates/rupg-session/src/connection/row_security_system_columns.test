@@ -1,0 +1,168 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE ROLE regress_rls_u7;
+CREATE ROLE
+> GRANT CREATE ON SCHEMA public TO regress_rls_u7;
+GRANT
+> CREATE FUNCTION rls7_leak(text) RETURNS bool COST 0.0000001 LANGUAGE plpgsql AS 'BEGIN RAISE NOTICE ''leak => %'', $1; RETURN true; END';
+CREATE FUNCTION
+> CREATE TABLE rls7_p (a int, b text);
+CREATE TABLE
+> CREATE TABLE rls7_c (c int) INHERITS (rls7_p);
+CREATE TABLE
+> GRANT ALL ON rls7_p, rls7_c TO regress_rls_u7;
+GRANT
+> INSERT INTO rls7_p VALUES (1, 'one'), (2, 'two'), (3, 'three');
+INSERT 0 3
+> INSERT INTO rls7_c VALUES (4, 'four', 40), (5, 'five', 50);
+INSERT 0 2
+> ALTER TABLE rls7_p ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> ALTER TABLE rls7_c ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> CREATE POLICY p7 ON rls7_p USING (a % 2 = 1);
+CREATE POLICY
+> CREATE POLICY p7c ON rls7_c USING (a % 2 = 0);
+CREATE POLICY
+> CREATE TABLE rls7_b (a int, b text);
+CREATE TABLE
+> GRANT ALL ON rls7_b TO regress_rls_u7;
+GRANT
+> INSERT INTO rls7_b SELECT g, 'b' || g FROM generate_series(1, 8) g;
+INSERT 0 8
+> ALTER TABLE rls7_b ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> CREATE POLICY p7b ON rls7_b USING (a % 2 = 0) WITH CHECK (a % 2 = 0);
+CREATE POLICY
+> CREATE TABLE rls7_part (a int, b text) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE rls7_part1 PARTITION OF rls7_part FOR VALUES FROM (0) TO (5);
+CREATE TABLE
+> CREATE TABLE rls7_part2 PARTITION OF rls7_part FOR VALUES FROM (5) TO (10);
+CREATE TABLE
+> GRANT ALL ON rls7_part TO regress_rls_u7;
+GRANT
+> INSERT INTO rls7_part SELECT g, 'p' || g FROM generate_series(1, 8) g;
+INSERT 0 8
+> ALTER TABLE rls7_part ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> CREATE POLICY p7p ON rls7_part USING (a > 2 AND a < 7);
+CREATE POLICY
+> SET SESSION AUTHORIZATION regress_rls_u7;
+SET
+session_authorization=regress_rls_u7
+is_superuser=off
+> CREATE VIEW rls7_v WITH (security_barrier) AS SELECT * FROM rls7_b WHERE a > 0 WITH CHECK OPTION;
+CREATE VIEW
+> SELECT tableoid::regclass, * FROM rls7_p ORDER BY a;
+fields tableoid:2205:4:-1,a@rls7_p.1:23:4:-1,b@rls7_p.2:25:-1:-1
+row rls7_p,1,one
+row rls7_p,3,three
+row rls7_c,5,five
+SELECT 3
+> SELECT tableoid::regclass, ctid, * FROM rls7_c ORDER BY a;
+fields tableoid:2205:4:-1,ctid@rls7_c.-1:27:6:-1,a@rls7_c.1:23:4:-1,b@rls7_c.2:25:-1:-1,c@rls7_c.3:23:4:-1
+row rls7_c,(0,1),4,four,40
+SELECT 1
+> SELECT a, b, tableoid::regclass FROM rls7_p UNION ALL SELECT a, b, tableoid::regclass FROM rls7_c ORDER BY 1, 3;
+fields a:23:4:-1,b:25:-1:-1,tableoid:2205:4:-1
+row 1,one,rls7_p
+row 3,three,rls7_p
+row 4,four,rls7_c
+row 5,five,rls7_c
+SELECT 4
+> SELECT ctid, * FROM rls7_b WHERE rls7_leak(b) ORDER BY a;
+fields ctid@rls7_b.-1:27:6:-1,a@rls7_b.1:23:4:-1,b@rls7_b.2:25:-1:-1
+NOTICE 00000 leak => b2 (PL/pgSQL function rls7_leak(text) line 1 at RAISE)
+NOTICE 00000 leak => b4 (PL/pgSQL function rls7_leak(text) line 1 at RAISE)
+NOTICE 00000 leak => b6 (PL/pgSQL function rls7_leak(text) line 1 at RAISE)
+NOTICE 00000 leak => b8 (PL/pgSQL function rls7_leak(text) line 1 at RAISE)
+row (0,2),2,b2
+row (0,4),4,b4
+row (0,6),6,b6
+row (0,8),8,b8
+SELECT 4
+> SELECT tableoid::regclass, * FROM rls7_part ORDER BY a;
+fields tableoid:2205:4:-1,a@rls7_part.1:23:4:-1,b@rls7_part.2:25:-1:-1
+row rls7_part1,3,p3
+row rls7_part1,4,p4
+row rls7_part2,5,p5
+row rls7_part2,6,p6
+SELECT 4
+> COPY rls7_part TO STDOUT WITH (DELIMITER ',');
+copy out 0 0,0
+data 3,p3\n
+data 4,p4\n
+data 5,p5\n
+data 6,p6\n
+copy done
+COPY 4
+> UPDATE rls7_v SET b = 'yyy' WHERE a = 4 AND rls7_leak(b);
+NOTICE 00000 leak => b4 (PL/pgSQL function rls7_leak(text) line 1 at RAISE)
+UPDATE 1
+> UPDATE rls7_v SET b = 'zzz' WHERE a = 3 AND rls7_leak(b);
+UPDATE 0
+> DELETE FROM rls7_v WHERE a = 6 AND rls7_leak(b);
+NOTICE 00000 leak => b6 (PL/pgSQL function rls7_leak(text) line 1 at RAISE)
+DELETE 1
+> SELECT * FROM rls7_b ORDER BY a;
+fields a@rls7_b.1:23:4:-1,b@rls7_b.2:25:-1:-1
+row 2,b2
+row 4,yyy
+row 8,b8
+SELECT 3
+> WITH c AS (UPDATE rls7_b SET a = a + 1 RETURNING *) SELECT * FROM c;
+ERROR 42501 new row violates row-level security policy for table "rls7_b"
+> WITH c AS (UPDATE rls7_b SET a = a RETURNING *) SELECT * FROM c ORDER BY a;
+fields a@rls7_b.1:23:4:-1,b@rls7_b.2:25:-1:-1
+row 2,b2
+row 4,yyy
+row 8,b8
+SELECT 3
+> WITH c AS (INSERT INTO rls7_b VALUES (21, 'fail') RETURNING *) SELECT * FROM c;
+ERROR 42501 new row violates row-level security policy for table "rls7_b"
+> WITH c AS (INSERT INTO rls7_b VALUES (20, 'ok') RETURNING *) SELECT * FROM c;
+fields a@rls7_b.1:23:4:-1,b@rls7_b.2:25:-1:-1
+row 20,ok
+SELECT 1
+> WITH c AS (DELETE FROM rls7_b WHERE a = 20 RETURNING tableoid::regclass, *) SELECT * FROM c;
+fields tableoid:2205:4:-1,a@rls7_b.1:23:4:-1,b@rls7_b.2:25:-1:-1
+row rls7_b,20,ok
+SELECT 1
+> WITH c AS (DELETE FROM rls7_b WHERE a < 3 RETURNING *) UPDATE rls7_b SET b = 'u' WHERE a = 8 RETURNING *;
+fields a@rls7_b.1:23:4:-1,b@rls7_b.2:25:-1:-1
+row 8,u
+UPDATE 1
+> DELETE FROM ONLY rls7_p WHERE rls7_leak(b) RETURNING tableoid::regclass, *;
+NOTICE 00000 leak => one (PL/pgSQL function rls7_leak(text) line 1 at RAISE)
+NOTICE 00000 leak => three (PL/pgSQL function rls7_leak(text) line 1 at RAISE)
+fields tableoid:2205:4:-1,a@rls7_p.1:23:4:-1,b@rls7_p.2:25:-1:-1
+row rls7_p,1,one
+row rls7_p,3,three
+DELETE 2
+> SELECT * FROM rls7_b ORDER BY a;
+fields a@rls7_b.1:23:4:-1,b@rls7_b.2:25:-1:-1
+row 4,yyy
+row 8,u
+SELECT 2
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> SELECT tableoid::regclass, * FROM rls7_p ORDER BY a;
+fields tableoid:2205:4:-1,a@rls7_p.1:23:4:-1,b@rls7_p.2:25:-1:-1
+row rls7_p,2,two
+row rls7_c,4,four
+row rls7_c,5,five
+SELECT 3
+> DROP VIEW rls7_v;
+DROP VIEW
+> REVOKE CREATE ON SCHEMA public FROM regress_rls_u7;
+REVOKE
+> DROP TABLE rls7_c, rls7_p, rls7_b, rls7_part;
+DROP TABLE
+> DROP FUNCTION rls7_leak(text);
+DROP FUNCTION
+> DROP ROLE regress_rls_u7;
+DROP ROLE

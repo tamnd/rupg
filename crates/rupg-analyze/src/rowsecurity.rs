@@ -8,10 +8,13 @@ use rupg_types::{Value, oid};
 
 use crate::Env;
 use crate::expr::{BoolOp, Expr, ExprKind, Var};
-use crate::from::{Column, FromItem, Relation};
+use crate::from::{Column, FromItem, Relation, TABLE_OID_ATTNUM};
 use crate::insert::{PolicyCheck, PolicyKind, WriteKind};
 use crate::perm::{ACL_DELETE, ACL_INSERT, ACL_SELECT, ACL_UPDATE, PermInfo, shift_expr};
 use crate::select::{Query, Target};
+
+/// The attribute number of the system column `ctid`.
+const CTID_ATTNUM: i16 = -1;
 
 /// `FirstNormalObjectId`: a relation with a lower OID is built in and has no policies.
 const FIRST_NORMAL_OBJECT_ID: u32 = 16384;
@@ -45,7 +48,7 @@ pub trait RowSecurity {
 ///
 /// # Errors
 ///
-/// `42P17` for a policy that reads its own table through the policies of other tables, `42501` for a table whose policies apply when `row_security` is off, and `0A000` for `ON CONFLICT DO UPDATE`, `ON CONFLICT DO SELECT` and `MERGE` on a table whose policies apply.
+/// `42P17` for a policy that reads its own table through the policies of other tables, `42501` for a table whose policies apply when `row_security` is off, and `0A000` for `MERGE` into a table with children whose policies apply.
 pub fn apply_row_security(
     query: &mut Query,
     env: &dyn Env,
@@ -62,7 +65,7 @@ pub fn apply_row_security(
         target_quals: None,
         merge_target: false,
     };
-    let result = walk.write(query).and_then(|()| walk.query(query));
+    let result = walk.statement(query);
     query.perms = walk.perms;
     query.funcs.append(&mut walk.funcs);
     result.map(|()| walk.seen)
@@ -145,16 +148,16 @@ impl Walk<'_> {
                 continue;
             }
             if let Some(quals) = self.relation_quals(relation)? {
-                if system_columns(query, index) {
-                    return Err(not_yet(
-                        "a system column of a table that row-level security policies apply to",
-                    ));
-                }
-                wrap(&mut query.relations[index], quals);
+                let system = system_columns(query, index);
+                wrap(&mut query.relations[index], quals, system);
             }
         }
         for cte in &mut query.ctes {
-            self.query(&mut cte.query)?;
+            if cte.write.is_some() {
+                self.statement(&mut cte.query)?;
+            } else {
+                self.query(&mut cte.query)?;
+            }
         }
         for expr in query.exprs_mut() {
             self.expr(expr)?;
@@ -172,6 +175,15 @@ impl Walk<'_> {
         Ok(())
     }
 
+    /// The statement `query` and the policies of the target table of its write, also for a statement of `WITH` that changes data, as `fireRIRrules` runs for the query of each such statement. The target of the statement replaces the target of the statement above it during the walk.
+    fn statement(&mut self, query: &mut Query) -> Result<()> {
+        let outer = (self.target.take(), self.target_quals.take(), self.merge_target);
+        self.merge_target = false;
+        let result = self.write(query).and_then(|()| self.query(query));
+        (self.target, self.target_quals, self.merge_target) = outer;
+        result
+    }
+
     /// The subqueries of an expression.
     fn expr(&mut self, expr: &mut Expr) -> Result<()> {
         for child in expr.children_mut() {
@@ -185,15 +197,23 @@ impl Walk<'_> {
 
     /// `get_row_security_policies` for the target table of a write: the `securityQuals` of an `UPDATE` and of a `DELETE`, which [`Walk::query`] puts in the query that reads the table, and the `withCheckOptions` of an `INSERT` and of an `UPDATE`, which the write checks on each new row. When the write needs `SELECT` on the table, as for `RETURNING`, the policies of `SELECT` add to both.
     fn write(&mut self, query: &mut Query) -> Result<()> {
-        let Some(write) = query.write.as_mut() else { return Ok(()) };
+        let Some(write) = query.write.as_ref() else { return Ok(()) };
         let writes = ACL_INSERT | ACL_UPDATE | ACL_DELETE;
         // A `MERGE` with only `DO NOTHING` needs no privilege to write the target table.
         let merge = write.kind == WriteKind::Merge;
-        let Some(index) = self.perms.iter().position(|p| {
+        let target = |p: &PermInfo| {
             p.relid == write.table && (p.required & writes != 0 || merge && p.required != 0)
-        }) else {
+        };
+        // The target of an `UPDATE`, a `DELETE` or a `MERGE` is a relation of its query, and another statement of the query can write the same table.
+        let own = query
+            .relations
+            .iter()
+            .filter_map(|r| r.perm)
+            .find(|&i| self.perms.get(i).is_some_and(target));
+        let Some(index) = own.or_else(|| self.perms.iter().position(target)) else {
             return Ok(());
         };
+        let Some(write) = query.write.as_mut() else { return Ok(()) };
         self.target = Some(index);
         let perm = self.perms[index].clone();
         let Some(rel) = self.env.catalog().and_then(|c| c.relation(write.table)) else {
@@ -602,7 +622,7 @@ fn replace_relation(item: &mut FromItem, index: usize, one: usize, on: &mut Opti
 }
 
 /// The table `relation` as a subquery that reads the table and keeps the rows that pass the conditions `quals`, in their order. Each column of the subquery is the column of the table with the same number, and a dropped column is a null.
-fn wrap(relation: &mut Relation, quals: Vec<Expr>) {
+fn wrap(relation: &mut Relation, quals: Vec<Expr>, system: bool) {
     let mut inner = relation.clone();
     inner.perm = None;
     inner.lateral = false;
@@ -628,7 +648,17 @@ fn wrap(relation: &mut Relation, quals: Vec<Expr>) {
                 junk: false,
             }
         })
-        .collect();
+        .collect::<Vec<_>>();
+    // A row of a table has the ID of its version and then the OID of its table after its columns, and the subquery gives them in the same places, so that the query reads the system columns of the table from the rows of the subquery.
+    let mut targets = targets;
+    if system {
+        for (name, attnum, ty) in
+            [("ctid", CTID_ATTNUM, oid::TID), ("tableoid", TABLE_OID_ATTNUM, oid::OID)]
+        {
+            let expr = Expr::new(ExprKind::Var(Var { relation: 0, attnum, levels_up: 0 }), ty);
+            targets.push(Target { name: name.to_string(), expr, origin: None, junk: false });
+        }
+    }
     let barrier = quals.iter().map(conjuncts).collect();
     let filter = match quals.len() {
         1 => quals.into_iter().next(),
