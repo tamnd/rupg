@@ -106,7 +106,7 @@ impl MemoryPool {
     fn try_take(&self, bytes: u64) -> bool {
         let limit = self.limit();
         self.used
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
                 used.checked_add(bytes).filter(|&n| n <= limit)
             })
             .is_ok()

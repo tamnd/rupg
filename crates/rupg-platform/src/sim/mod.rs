@@ -110,7 +110,7 @@ impl SimClock {
 
     /// Moves the wall clock by `delta_ms`, which can be negative. The monotonic clock does not move.
     pub fn jump_wall(&self, delta_ms: i64) {
-        let _ = self.wall_ms.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |w| {
+        let _ = self.wall_ms.try_update(Ordering::SeqCst, Ordering::SeqCst, |w| {
             Some(w.saturating_add_signed(delta_ms))
         });
     }
