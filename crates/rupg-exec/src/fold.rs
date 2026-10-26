@@ -14,6 +14,11 @@ use super::{agg, evaluate, null_test, relabel, volatile};
 
 mod prepqual;
 
+/// The OID of `count("any")` in `pg_proc`.
+const COUNT_ANY: u32 = 2147;
+/// The OID of `count()`, which `count(*)` calls.
+const COUNT_STAR: u32 = 2803;
+
 /// `subquery_planner`: folds the expressions of a query in the order of `preprocess_expression`, which is the target list, the conditions of the joins and `WHERE`, `HAVING`, `OFFSET` and `LIMIT`. The subqueries of each clause come after the clause, as `SS_process_sublinks` plans them. `params` has the values of the parameters of `Bind`, which a custom plan takes as constants.
 pub(crate) fn query(
     query: &Query,
@@ -979,6 +984,19 @@ impl<'a> Fold<'a> {
                 agg.args = self.list(&agg.args)?;
                 if let Some(filter) = &agg.filter {
                     agg.filter = Some(Box::new(self.expr(filter)?));
+                }
+                // `int8inc_support`: `count` of an argument that cannot be null is `count(*)`.
+                if agg.oid == COUNT_ANY
+                    && agg.levels_up == 0
+                    && agg.order.is_empty()
+                    && agg.distinct.is_empty()
+                    && let [arg] = agg.args.as_slice()
+                    && self.nonnullable(arg)
+                {
+                    agg.oid = COUNT_STAR;
+                    agg.args.clear();
+                    agg.nargs = 0;
+                    agg.star = true;
                 }
                 Ok(with(expr, ExprKind::Agg(agg)))
             }
