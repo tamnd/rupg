@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Fixed
+
+- The fuzz targets build again, and the quick CI job checks the fuzz crate (#807).
+
 ## 0.2.2 (2026-10-26)
 
 ### Added
