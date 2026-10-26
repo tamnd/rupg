@@ -29,6 +29,33 @@ fn read(args: &[Value], at: usize) -> Result<Cow<'_, Array<Value>>> {
     }
 }
 
+/// A function that gives an array of the type of its first argument, called on the text of an `anyarray` value. It works on the array of the text of the elements, and it gives the text of `array_out` of the result, as `enforce_generic_type_consistency` gives `anyarray` as the result type.
+fn on_anyarray(call: &Call<'_>, args: &[Value], kernel: Kernel) -> Result<Value> {
+    if !matches!(args.first(), Some(Value::Text(_))) {
+        return kernel(call, args);
+    }
+    let mut inner_args = args.to_vec();
+    inner_args[0] = value(read(args, 0)?.into_owned());
+    let mut types = call.args.to_vec();
+    if let Some(first) = types.first_mut() {
+        *first = rupg_types::oid::TEXT_ARRAY;
+    }
+    let inner = Call {
+        session: call.session,
+        args: &types,
+        ret: rupg_types::oid::TEXT_ARRAY,
+        variadic: call.variadic,
+        want: call.want,
+    };
+    let result = kernel(&inner, &inner_args)?;
+    if matches!(result, Value::Null) {
+        return Ok(result);
+    }
+    let mut out = Vec::new();
+    output(rupg_types::oid::TEXT_ARRAY, &result, call.session, &mut out)?;
+    String::from_utf8(out).map(Value::Text).map_err(|_| bad_value())
+}
+
 /// An array as a value.
 fn value(array: Array<Value>) -> Value {
     Value::Array(Box::new(array))
@@ -767,11 +794,11 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "array_position" | "array_position_start" => array_position,
         "array_positions" => array_positions,
         "array_fill" | "array_fill_with_lower_bounds" => array_fill,
-        "array_reverse" => array_reverse,
-        "array_shuffle" => array_shuffle,
-        "array_sample" => array_sample,
+        "array_reverse" => |call, args| on_anyarray(call, args, array_reverse),
+        "array_shuffle" => |call, args| on_anyarray(call, args, array_shuffle),
+        "array_sample" => |call, args| on_anyarray(call, args, array_sample),
         "array_sort" | "array_sort_order" | "array_sort_order_nulls_first" => array_sort,
-        "trim_array" => trim_array,
+        "trim_array" => |call, args| on_anyarray(call, args, trim_array),
         "arraycontains" => arraycontains,
         "arraycontained" => arraycontained,
         "arrayoverlap" => arrayoverlap,

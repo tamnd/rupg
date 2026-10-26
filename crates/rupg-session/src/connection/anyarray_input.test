@@ -43,3 +43,40 @@ ERROR 42804 cannot determine element type of "anyarray" argument
 fields l:23:4:-1
 row 3
 SELECT 1
+> SELECT array_reverse(most_common_vals) FROM pg_stats WHERE tablename = 's' ORDER BY attname;
+fields array_reverse:2277:-1:-1
+row {2,1,0}
+row {x1,x0}
+SELECT 2
+> SELECT trim_array(most_common_vals, 1) FROM pg_stats WHERE tablename = 's' ORDER BY attname;
+fields trim_array:2277:-1:-1
+row {0,1}
+row {x0}
+SELECT 2
+> SELECT pg_typeof(array_reverse(most_common_vals)) FROM pg_stats WHERE tablename = 's' ORDER BY attname;
+fields pg_typeof:2206:4:-1
+row anyarray
+row anyarray
+SELECT 2
+> SELECT cardinality(array_sample(most_common_vals, 1)) FROM pg_stats WHERE tablename = 's' ORDER BY attname;
+fields cardinality:23:4:-1
+row 1
+row 1
+SELECT 2
+> SELECT cardinality(array_shuffle(most_common_vals)) FROM pg_stats WHERE tablename = 's' ORDER BY attname;
+fields cardinality:23:4:-1
+row 3
+row 2
+SELECT 2
+> SELECT array_length(array_reverse(most_common_vals), 1) FROM pg_stats WHERE tablename = 's' ORDER BY attname;
+fields array_length:23:4:-1
+row 3
+row 2
+SELECT 2
+> SELECT array_reverse(most_common_vals)::text FROM pg_stats WHERE tablename = 's' ORDER BY attname;
+fields array_reverse:25:-1:-1
+row {2,1,0}
+row {x1,x0}
+SELECT 2
+> SELECT most_common_vals @> most_common_vals FROM pg_stats WHERE tablename = 's' ORDER BY attname;
+ERROR 42804 cannot determine element type of "anyarray" argument
