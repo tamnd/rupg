@@ -342,6 +342,7 @@ impl rupg_opt::Members for Members<'_, '_> {
             material: on("enable_material"),
             memoize: on("enable_memoize"),
             presorted_aggregate: on("enable_presorted_aggregate"),
+            group_by_reordering: on("enable_group_by_reordering"),
             nestloop: on("enable_nestloop"),
             mergejoin: on("enable_mergejoin"),
             hashjoin: on("enable_hashjoin"),
