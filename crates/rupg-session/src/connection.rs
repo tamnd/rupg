@@ -5096,6 +5096,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_inet_subset.test")));
     }
 
+    /// `index_update_stats` of `CREATE INDEX` and `REINDEX`: an index of a table with rows has the pages and the rows of its build in `pg_class`, and an index of an empty table has the pages of a new index. A `hash` index has the buckets for the rows that the stats of the table give. `connection/index_build_stats.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn index_build_stats() {
+        big_stack(|| script(include_str!("connection/index_build_stats.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {
