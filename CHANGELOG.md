@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A condition on a subquery with `DISTINCT`, a window or a set operation that makes groups stays above the subquery when it compares a column of the grouping with an operator outside the family of the `=` of the grouping, as point 6 of `qual_is_pushdown_safe`, and a set operation on a composite type whose fields can be hashed uses a hash table (#847).
 - A condition of `HAVING` that compares an item of `GROUP BY` with an operator outside the family of the `=` of the group, such as `*=`, stays in `HAVING` as `find_having_conflicts` keeps it, and a composite type whose fields can be hashed groups with a hash table (#846).
 - The `record_image_ops` operators `*=`, `*<>`, `*<`, `*<=`, `*>` and `*>=` work, and `btrecordimagecmp` compares the bytes of the columns as `record_image_cmp` does, so `row(1.0)` and `row(1.00)` are different (#845).
 - `float8_combine`, the combine function of the `float8` variance aggregates, can be called as a function (#844).
