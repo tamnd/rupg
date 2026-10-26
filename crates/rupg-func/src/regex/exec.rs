@@ -223,6 +223,11 @@ impl Program {
         })
     }
 
+    /// True when the pattern has back references.
+    pub(super) fn has_backrefs(&self) -> bool {
+        self.backrefs
+    }
+
     /// The start of the leftmost match in `s` that starts at `from` or after it.
     pub(super) fn first(&self, s: &[u32], from: usize) -> Option<usize> {
         let mut search = Search { program: self, s, looks: vec![Vec::new(); self.progs.len()] };
