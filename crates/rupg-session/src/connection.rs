@@ -3570,6 +3570,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/having_conflict.test")));
     }
 
+    /// A condition on a subquery with `DISTINCT`, `DISTINCT ON`, a window or a set operation that makes groups stays above the subquery when it compares a column of the grouping with an operator that is not in a family with the `=` of the grouping, such as `*=` on a composite type or the `=` of `oid` on an `integer` column. `UNION ALL` and `=` let the condition move. A set operation on a composite type whose fields can be hashed uses a hash table. `connection/pushdown_conflict.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn pushdown_conflict() {
+        big_stack(|| script(include_str!("connection/pushdown_conflict.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

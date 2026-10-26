@@ -260,8 +260,10 @@ pub(crate) fn owned_parts(expr: Expr, out: &mut Vec<Expr>) {
 
 /// True when the condition `part`, which reads the subquery `r`, can move into the subquery. A `UNION ALL` that `pull_up_simple_union_all` makes an append relation gives the condition to each member, as `set_append_rel_size`: a member that `pull_up_simple_subquery` merges takes it as it is, and another member takes it when `set_subquery_pathlist` lets it. The planner does not give the condition to only some members.
 fn pushable(sub: &Query, part: &Expr, r: usize) -> bool {
-    let fits =
-        |q: &Query| safety(q).is_some_and(|(columns, volatile)| safe(part, r, &columns, volatile));
+    let fits = |q: &Query| {
+        safety(q).is_some_and(|(columns, volatile)| safe(part, r, &columns, volatile))
+            && !grouping_conflict(q, part, r)
+    };
     let Some(op) = sub.set_op.as_ref().filter(|_| from::simple_union_all(sub)) else {
         return fits(sub);
     };
@@ -334,6 +336,47 @@ fn safety(sub: &Query) -> Option<(Vec<bool>, bool)> {
     op.left.each_leaf(&mut each);
     op.right.each_leaf(&mut each);
     ok.then_some((columns, volatile))
+}
+
+/// Point 6 of `qual_is_pushdown_safe`: true when the subquery has `DISTINCT`, a window or a set operation that makes groups, and the condition compares a column of the grouping with an operator whose equality is not the equality of the grouping, as `expression_has_grouping_conflict` finds it.
+fn grouping_conflict(sub: &Query, part: &Expr, r: usize) -> bool {
+    let groups = sub.set_op.as_ref().is_some_and(|op| setop_equal(op, 0).is_some());
+    if sub.windows.is_empty() && sub.distinct.is_empty() && !groups {
+        return false;
+    }
+    let equal = |e: &Expr| match &e.kind {
+        ExprKind::Var(v) if v.levels_up == 0 && v.relation == r => {
+            usize::try_from(v.attnum - 1).ok().and_then(|at| column_equal(sub, at))
+        }
+        _ => None,
+    };
+    upper::conflict_walk(&equal, None, part)
+}
+
+/// `subquery_column_grouping_eqop`: the function of the `=` operator that the subquery groups the column with: from `DISTINCT` or `DISTINCT ON`, from `PARTITION BY` when each window has the column, or from the set operation.
+fn column_equal(sub: &Query, at: usize) -> Option<u32> {
+    if let Some(d) = sub.distinct.iter().find(|d| d.target == at) {
+        return Some(d.equal);
+    }
+    if !sub.windows.is_empty() {
+        let mut equal = None;
+        for w in &sub.windows {
+            equal = Some(w.partition.iter().find(|p| p.target == at)?.equal);
+        }
+        return equal;
+    }
+    sub.set_op.as_ref().and_then(|op| setop_equal(op, at))
+}
+
+/// `setop_column_grouping_eqop`: the function of the `=` operator of the column of the first operation of the tree that makes groups, or `None` when no operation makes groups.
+fn setop_equal(op: &SetOp, at: usize) -> Option<u32> {
+    if let Some(g) = op.groups.get(at) {
+        return Some(g.equal);
+    }
+    [&op.left, &op.right].into_iter().find_map(|t| match t {
+        SetTree::Op(o) => setop_equal(o, at),
+        SetTree::Leaf(_) => None,
+    })
 }
 
 /// True when the set operation or an operation below it is an `EXCEPT`.

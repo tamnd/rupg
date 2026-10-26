@@ -64,11 +64,15 @@ pub(crate) fn having_split(query: &Query) -> (Vec<&Expr>, Vec<&Expr>) {
 fn grouping_conflict(query: &Query, expr: &Expr) -> bool {
     let groups: Vec<(&Expr, u32)> =
         query.group.iter().map(|g| (&query.targets[g.target].expr, g.equal)).collect();
-    !groups.is_empty() && conflict_walk(&groups, None, expr)
+    let equal = |e: &Expr| groups.iter().find(|(g, _)| g.same(e)).map(|&(_, equal)| equal);
+    !groups.is_empty() && conflict_walk(&equal, None, expr)
 }
 
-/// `grouping_conflict_walker`: the walk of [`grouping_conflict`]. An operator of a btree or a hash family checks its operands, and a simple `CASE` on an item of `GROUP BY` checks the item where each `WHEN` compares it. Any other use of an item is safe.
-fn conflict_walk(groups: &[(&Expr, u32)], case_arg: Option<&Expr>, expr: &Expr) -> bool {
+/// The function of the `=` operator that a grouping uses for an expression that is an item of the grouping, or `None` for an expression that is not.
+pub(crate) type GroupEqual<'a> = dyn Fn(&Expr) -> Option<u32> + 'a;
+
+/// `grouping_conflict_walker`: the walk of [`grouping_conflict`], with `equal` to find the items of the grouping. An operator of a btree or a hash family checks its operands, and a simple `CASE` on an item of `GROUP BY` checks the item where each `WHEN` compares it. Any other use of an item is safe.
+pub(crate) fn conflict_walk(groups: &GroupEqual<'_>, case_arg: Option<&Expr>, expr: &Expr) -> bool {
     let walk = |e: &Expr| conflict_walk(groups, case_arg, e);
     match &expr.kind {
         ExprKind::Func(f) => match f.form {
@@ -92,7 +96,7 @@ fn conflict_walk(groups: &[(&Expr, u32)], case_arg: Option<&Expr>, expr: &Expr) 
         }
         ExprKind::Case(c) if c.arg.is_some() => {
             let arg = strip_relabel(c.arg.as_deref().unwrap_or(expr));
-            let inner = if groups.iter().any(|(g, _)| g.same(arg)) {
+            let inner = if groups(arg).is_some() {
                 Some(arg)
             } else if conflict_walk(groups, case_arg, arg) {
                 return true;
@@ -108,7 +112,7 @@ fn conflict_walk(groups: &[(&Expr, u32)], case_arg: Option<&Expr>, expr: &Expr) 
 }
 
 /// `grouping_check_operand`: true when the operand is an item of `GROUP BY` and the operator is not in a family with the `=` operator of the group, as `equality_ops_are_compatible`. Any other operand is walked.
-fn conflict_operand(groups: &[(&Expr, u32)], case_arg: Option<&Expr>, op: u32, arg: &Expr) -> bool {
+fn conflict_operand(groups: &GroupEqual<'_>, case_arg: Option<&Expr>, op: u32, arg: &Expr) -> bool {
     let mut node = strip_relabel(arg);
     if matches!(node.kind, ExprKind::CaseTest) {
         match case_arg {
@@ -116,8 +120,8 @@ fn conflict_operand(groups: &[(&Expr, u32)], case_arg: Option<&Expr>, op: u32, a
             None => return false,
         }
     }
-    match groups.iter().find(|(g, _)| g.same(node)) {
-        Some(&(_, equal)) => !equality_compatible(op, equal),
+    match groups(node) {
+        Some(equal) => !equality_compatible(op, equal),
         None => conflict_walk(groups, case_arg, arg),
     }
 }

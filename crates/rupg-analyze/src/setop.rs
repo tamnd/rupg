@@ -13,6 +13,7 @@ use crate::expr::{Expr, ExprKind, Var};
 use crate::from::{Column, Relation};
 use crate::select::{Query, Target, into_not_allowed};
 use crate::sort::{SortGroup, set_group};
+use crate::typcache;
 use crate::typename::place;
 
 /// The kinds of set operation.
@@ -304,6 +305,7 @@ impl Analyzer<'_> {
                 if l.ty == ty && r.ty == ty && l.typmod == r.typmod { l.typmod } else { -1 };
             if kind != SetKind::Union || !s.all {
                 let mut group = set_group(i, ty, at)?;
+                group.hashable = self.hashable(typcache::operators(ty).eq, ty);
                 // A recursive `UNION` must hash the rows, and a record can hash when each of its fields can, which the executor finds out.
                 if recursive && matches!(ty, oid::RECORD | oid::RECORD_ARRAY) {
                     group.hashable = true;

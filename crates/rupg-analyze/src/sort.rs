@@ -591,7 +591,7 @@ impl Analyzer<'_> {
 
     /// The operator of `ORDER BY ... USING op`, its `=` operator and true when it sorts in descending order.
     /// `op_hashjoinable`, with `record_fields_have_hashing` for the `=` of a composite type: it can use a hash table when each field of the type can, as `cache_record_field_properties` finds it. The fields of `record` are not known, so its `=` cannot.
-    fn hashable(&self, eq: u32, ty: u32) -> bool {
+    pub(crate) fn hashable(&self, eq: u32, ty: u32) -> bool {
         if eq != typcache::RECORD_EQ_OP {
             return typcache::hashable(eq, ty);
         }

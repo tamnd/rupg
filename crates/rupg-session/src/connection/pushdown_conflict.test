@@ -1,0 +1,143 @@
+> CREATE TYPE t_rec AS (x numeric)
+CREATE TYPE
+> CREATE TEMP TABLE pdt (id int, a t_rec)
+CREATE TABLE
+> INSERT INTO pdt VALUES (1, ROW(1.00)::t_rec), (2, ROW(1.0)::t_rec), (3, ROW(2)::t_rec)
+INSERT 0 3
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT DISTINCT ON (a) id, a FROM pdt ORDER BY a, id) s WHERE a *= ROW(1.0)::t_rec
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on s
+row   Filter: (s.a *= '(1.0)'::t_rec)
+row   ->  Unique
+row         ->  Sort
+row               Sort Key: pdt.a, pdt.id
+row               ->  Seq Scan on pdt
+EXPLAIN
+> SELECT id, a::text FROM (SELECT DISTINCT ON (a) id, a FROM pdt ORDER BY a, id) s WHERE a *= ROW(1.0)::t_rec
+fields id@pdt.1:23:4:-1,a:25:-1:-1
+SELECT 0
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT id, a, count(*) OVER (PARTITION BY a) AS cnt FROM pdt) s WHERE a *= ROW(1.0)::t_rec
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on s
+row   Filter: (s.a *= '(1.0)'::t_rec)
+row   ->  WindowAgg
+row         Window: w1 AS (PARTITION BY pdt.a)
+row         ->  Sort
+row               Sort Key: pdt.a
+row               ->  Seq Scan on pdt
+EXPLAIN
+> SELECT id, a::text, cnt FROM (SELECT id, a, count(*) OVER (PARTITION BY a) AS cnt FROM pdt) s WHERE a *= ROW(1.0)::t_rec
+fields id@pdt.1:23:4:-1,a:25:-1:-1,cnt:20:8:-1
+row 2,(1.0),2
+SELECT 1
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT DISTINCT a FROM pdt) s WHERE a *= ROW(1.0)::t_rec
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on s
+row   Filter: (s.a *= '(1.0)'::t_rec)
+row   ->  HashAggregate
+row         Group Key: pdt.a
+row         ->  Seq Scan on pdt
+EXPLAIN
+> SELECT a::text FROM (SELECT DISTINCT a FROM pdt) s WHERE a *= ROW(1.0)::t_rec
+fields a:25:-1:-1
+SELECT 0
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT DISTINCT ON (a) id, a FROM pdt ORDER BY a, id) s WHERE a = ROW(1.0)::t_rec
+fields QUERY PLAN:25:-1:-1
+row Limit
+row   ->  Sort
+row         Sort Key: pdt.id
+row         ->  Seq Scan on pdt
+row               Filter: (a = '(1.0)'::t_rec)
+EXPLAIN
+> SELECT id, a::text FROM (SELECT DISTINCT ON (a) id, a FROM pdt ORDER BY a, id) s WHERE a = ROW(1.0)::t_rec
+fields id@pdt.1:23:4:-1,a:25:-1:-1
+row 1,(1.00)
+SELECT 1
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT DISTINCT id FROM pdt) s WHERE (CASE id::oid WHEN 1 THEN 1 ELSE 0 END) = 1
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on s
+row   Filter: (CASE (s.id)::oid WHEN '1'::oid THEN 1 ELSE 0 END = 1)
+row   ->  HashAggregate
+row         Group Key: pdt.id
+row         ->  Seq Scan on pdt
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT DISTINCT id FROM pdt) s WHERE (CASE id WHEN 1 THEN 1 ELSE 0 END) = 1
+fields QUERY PLAN:25:-1:-1
+row Unique
+row   ->  Sort
+row         Sort Key: pdt.id
+row         ->  Seq Scan on pdt
+row               Filter: (CASE id WHEN 1 THEN 1 ELSE 0 END = 1)
+EXPLAIN
+> CREATE TEMP TABLE u1 (a t_rec)
+CREATE TABLE
+> CREATE TEMP TABLE u2 (a t_rec)
+CREATE TABLE
+> INSERT INTO u1 VALUES (ROW(1.00)::t_rec), (ROW(1.0)::t_rec)
+INSERT 0 2
+> INSERT INTO u2 VALUES (ROW(1.0)::t_rec)
+INSERT 0 1
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT a FROM u1 UNION SELECT a FROM u2) s WHERE a *= ROW(1.0)::t_rec
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on s
+row   Filter: (s.a *= '(1.0)'::t_rec)
+row   ->  HashAggregate
+row         Group Key: u1.a
+row         ->  Append
+row               ->  Seq Scan on u1
+row               ->  Seq Scan on u2
+EXPLAIN
+> SELECT a::text FROM (SELECT a FROM u1 UNION SELECT a FROM u2) s WHERE a *= ROW(1.0)::t_rec
+fields a:25:-1:-1
+SELECT 0
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT a FROM u1 INTERSECT SELECT a FROM u2) s WHERE a *= ROW(1.0)::t_rec
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on s
+row   Filter: (s.a *= '(1.0)'::t_rec)
+row   ->  HashSetOp Intersect
+row         ->  Seq Scan on u1
+row         ->  Seq Scan on u2
+EXPLAIN
+> SELECT a::text FROM (SELECT a FROM u1 INTERSECT SELECT a FROM u2) s WHERE a *= ROW(1.0)::t_rec
+fields a:25:-1:-1
+SELECT 0
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT a FROM u1 INTERSECT ALL SELECT a FROM u2) s WHERE a *= ROW(1.0)::t_rec
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on s
+row   Filter: (s.a *= '(1.0)'::t_rec)
+row   ->  HashSetOp Intersect All
+row         ->  Seq Scan on u1
+row         ->  Seq Scan on u2
+EXPLAIN
+> SELECT a::text FROM (SELECT a FROM u1 INTERSECT ALL SELECT a FROM u2) s WHERE a *= ROW(1.0)::t_rec
+fields a:25:-1:-1
+SELECT 0
+> EXPLAIN (COSTS OFF) SELECT * FROM ((SELECT a FROM u1 UNION SELECT a FROM u2) UNION ALL SELECT a FROM u2) s WHERE a *= ROW(1.0)::t_rec
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on s
+row   Filter: (s.a *= '(1.0)'::t_rec)
+row   ->  Append
+row         ->  HashAggregate
+row               Group Key: u1.a
+row               ->  Append
+row                     ->  Seq Scan on u1
+row                     ->  Seq Scan on u2
+row         ->  Seq Scan on u2 u2_1
+EXPLAIN
+> SELECT a::text FROM ((SELECT a FROM u1 UNION SELECT a FROM u2) UNION ALL SELECT a FROM u2) s WHERE a *= ROW(1.0)::t_rec
+fields a:25:-1:-1
+row (1.0)
+SELECT 1
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT a FROM u1 UNION ALL SELECT a FROM u2) s WHERE a *= ROW(1.0)::t_rec
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on u1
+row         Filter: (a *= '(1.0)'::t_rec)
+row   ->  Seq Scan on u2
+row         Filter: (a *= '(1.0)'::t_rec)
+EXPLAIN
+> SELECT a::text FROM (SELECT a FROM u1 UNION ALL SELECT a FROM u2) s WHERE a *= ROW(1.0)::t_rec
+fields a:25:-1:-1
+row (1.0)
+row (1.0)
+SELECT 2
