@@ -142,6 +142,22 @@ impl rupg_opt::Members for Members<'_, '_> {
         self.heap.variable_range(self.database, table, column, order)
     }
 
+    fn ordered_partitions(&self, table: u32, members: &[u32]) -> Option<Vec<i16>> {
+        let catalog = self.reader.catalog()?;
+        let key = catalog.relation(table)?.partition_key.as_ref()?;
+        // A `RANGE` partition holds the rows below the bound of the next one, and the default partition holds rows of any place in the order.
+        let direct = |m: &u32| {
+            let of = catalog.relation(*m).and_then(|r| r.partition_of.as_ref());
+            of.is_some_and(|of| {
+                of.parent == table && !matches!(of.bound, rupg_catalog::PartitionBound::Default)
+            })
+        };
+        let ordered = matches!(key.strategy, rupg_catalog::PartStrategy::Range)
+            && key.attrs.iter().all(|&a| a > 0)
+            && members.iter().all(direct);
+        ordered.then(|| key.attrs.clone())
+    }
+
     fn compare(&self) -> rupg_opt::Compare {
         |left, a, right, b| rupg_func::compare(left, a, right, b).ok()
     }

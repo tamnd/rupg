@@ -433,14 +433,22 @@ fn project(node: &mut Node<'_>, startup: f64, per_row: f64) {
     if startup == 0.0 && per_row == 0.0 {
         return;
     }
-    if matches!(node.kind, Kind::Append) && node.children.iter().all(|c| c.member.is_some()) {
+    if from::members_append(node) {
+        // A `Merge Append` and an ordered `Append` start with all their members, and another `Append` with its first member.
+        let first = node.children.first().map_or(0.0, |c| c.cost.startup);
+        let merge = matches!(node.kind, Kind::MergeAppend(_)) || node.cost.startup != first;
         for child in &mut node.children {
             let added = startup + per_row * child.cost.rows;
             child.cost.startup += startup;
             child.cost.total += added;
             node.cost.total += added;
+            if merge {
+                node.cost.startup += startup;
+            }
         }
-        node.cost.startup = node.children.first().map_or(0.0, |c| c.cost.startup);
+        if !merge {
+            node.cost.startup = node.children.first().map_or(0.0, |c| c.cost.startup);
+        }
         return;
     }
     node.cost.startup += startup;

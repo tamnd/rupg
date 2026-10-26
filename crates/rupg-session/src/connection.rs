@@ -5048,6 +5048,18 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_inherit_stats.test")));
     }
 
+    /// The ordered scans of the members of an inheritance tree make a `Merge Append`, and the ordered scans of the partitions of a range partitioned table in the order of their bounds make an `Append` with the order of the partition key, as `generate_orderedappend_paths`. A join and `LIMIT` read these orders. `connection/plan_inherit_order.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_inherit_order() {
+        big_stack(|| script(include_str!("connection/plan_inherit_order.test")));
+    }
+
+    /// A member with no index in the order of a `Merge Append` or of an ordered `Append` gets a sort, a descending order reads the partitions from the last one, and a partitioned table with a default partition makes a `Merge Append`. `connection/plan_inherit_sort.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_inherit_sort() {
+        big_stack(|| script(include_str!("connection/plan_inherit_sort.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

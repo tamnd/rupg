@@ -310,7 +310,7 @@ impl<'q> AppendRel<'q> {
 }
 
 /// `limit_tuples` of `grouping_planner`: the rows that `LIMIT` and `OFFSET` read, for a sort of the relation `r` that is all the relations of the query, when the query has no step between the sort and `LIMIT`.
-fn limit_tuples(query: &Query, r: usize) -> Option<f64> {
+pub(super) fn limit_tuples(query: &Query, r: usize) -> Option<f64> {
     let only = matches!(query.from.as_slice(), [FromItem::Relation(at)] if *at == r);
     if !only
         || query.grouped

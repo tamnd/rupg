@@ -1,0 +1,150 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE p (id integer, v text);
+CREATE TABLE
+> CREATE TABLE c1 () INHERITS (p);
+CREATE TABLE
+> CREATE TABLE c2 (extra integer) INHERITS (p);
+CREATE TABLE
+> INSERT INTO p SELECT g, 'p' || g FROM generate_series(1, 100) g;
+INSERT 0 100
+> INSERT INTO c1 SELECT g, 'c' || g FROM generate_series(1, 1000) g;
+INSERT 0 1000
+> INSERT INTO c2 SELECT g, 'd' || g, g FROM generate_series(1, 3000) g;
+INSERT 0 3000
+> CREATE INDEX ON c1 (id);
+CREATE INDEX
+> CREATE INDEX ON c2 (id);
+CREATE INDEX
+> ANALYZE p, c1, c2;
+ANALYZE
+> EXPLAIN SELECT * FROM p ORDER BY id LIMIT 5;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=4.24..4.48 rows=5 width=9)
+row   ->  Merge Append  (cost=4.24..202.48 rows=4100 width=9)
+row         Sort Key: p.id
+row         ->  Sort  (cost=3.66..3.91 rows=100 width=7)
+row               Sort Key: p_1.id
+row               ->  Seq Scan on p p_1  (cost=0.00..2.00 rows=100 width=7)
+row         ->  Index Scan using c1_id_idx on c1 p_2  (cost=0.28..40.27 rows=1000 width=8)
+row         ->  Index Scan using c2_id_idx on c2 p_3  (cost=0.28..105.28 rows=3000 width=9)
+EXPLAIN
+> EXPLAIN SELECT * FROM p ORDER BY id DESC LIMIT 5;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=4.24..4.48 rows=5 width=9)
+row   ->  Merge Append  (cost=4.24..202.48 rows=4100 width=9)
+row         Sort Key: p.id DESC
+row         ->  Sort  (cost=3.66..3.91 rows=100 width=7)
+row               Sort Key: p_1.id DESC
+row               ->  Seq Scan on p p_1  (cost=0.00..2.00 rows=100 width=7)
+row         ->  Index Scan Backward using c1_id_idx on c1 p_2  (cost=0.28..40.27 rows=1000 width=8)
+row         ->  Index Scan Backward using c2_id_idx on c2 p_3  (cost=0.28..105.28 rows=3000 width=9)
+EXPLAIN
+> EXPLAIN SELECT id, v FROM p ORDER BY v;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=331.53..341.78 rows=4100 width=9)
+row   Sort Key: p.v
+row   ->  Append  (cost=0.00..85.50 rows=4100 width=9)
+row         ->  Seq Scan on p p_1  (cost=0.00..2.00 rows=100 width=7)
+row         ->  Seq Scan on c1 p_2  (cost=0.00..16.00 rows=1000 width=8)
+row         ->  Seq Scan on c2 p_3  (cost=0.00..47.00 rows=3000 width=9)
+EXPLAIN
+> EXPLAIN SELECT id + 1 FROM p ORDER BY id LIMIT 3;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=3.87..4.05 rows=3 width=8)
+row   ->  Result  (cost=3.87..253.36 rows=4100 width=8)
+row         ->  Merge Append  (cost=3.87..202.11 rows=4100 width=4)
+row               Sort Key: p.id
+row               ->  Sort  (cost=3.29..3.54 rows=100 width=4)
+row                     Sort Key: p_1.id
+row                     ->  Seq Scan on p p_1  (cost=0.00..2.00 rows=100 width=4)
+row               ->  Index Only Scan using c1_id_idx on c1 p_2  (cost=0.28..40.27 rows=1000 width=4)
+row               ->  Index Only Scan using c2_id_idx on c2 p_3  (cost=0.28..105.28 rows=3000 width=4)
+EXPLAIN
+> CREATE TABLE q (k integer, w text) PARTITION BY RANGE (k);
+CREATE TABLE
+> CREATE TABLE q1 PARTITION OF q FOR VALUES FROM (0) TO (1000);
+CREATE TABLE
+> CREATE TABLE q2 PARTITION OF q FOR VALUES FROM (1000) TO (5000);
+CREATE TABLE
+> CREATE TABLE q3 PARTITION OF q FOR VALUES FROM (5000) TO (6000);
+CREATE TABLE
+> INSERT INTO q SELECT g, 'q' || g FROM generate_series(0, 5999) g;
+INSERT 0 6000
+> CREATE INDEX ON q (k);
+CREATE INDEX
+> ANALYZE q;
+ANALYZE
+> EXPLAIN SELECT * FROM q ORDER BY k DESC LIMIT 3;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.83..0.95 rows=3 width=10)
+row   ->  Append  (cost=0.83..243.83 rows=6000 width=10)
+row         ->  Index Scan Backward using q3_k_idx on q3 q_3  (cost=0.28..40.27 rows=1000 width=10)
+row         ->  Index Scan Backward using q2_k_idx on q2 q_2  (cost=0.28..133.28 rows=4000 width=10)
+row         ->  Index Scan Backward using q1_k_idx on q1 q_1  (cost=0.28..40.27 rows=1000 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM q WHERE k > 500 ORDER BY k;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.83..236.56 rows=5499 width=10)
+row   ->  Index Scan using q1_k_idx on q1 q_1  (cost=0.28..23.01 rows=499 width=8)
+row         Index Cond: (k > 500)
+row   ->  Index Scan using q2_k_idx on q2 q_2  (cost=0.28..143.28 rows=4000 width=10)
+row         Index Cond: (k > 500)
+row   ->  Index Scan using q3_k_idx on q3 q_3  (cost=0.28..42.77 rows=1000 width=10)
+row         Index Cond: (k > 500)
+EXPLAIN
+> EXPLAIN SELECT k * 2 FROM q ORDER BY k LIMIT 3;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.83..0.96 rows=3 width=8)
+row   ->  Append  (cost=0.83..258.83 rows=6000 width=8)
+row         ->  Index Only Scan using q1_k_idx on q1 q_1  (cost=0.28..42.77 rows=1000 width=8)
+row         ->  Index Only Scan using q2_k_idx on q2 q_2  (cost=0.28..143.28 rows=4000 width=8)
+row         ->  Index Only Scan using q3_k_idx on q3 q_3  (cost=0.28..42.77 rows=1000 width=8)
+EXPLAIN
+> DROP INDEX q_k_idx;
+DROP INDEX
+> CREATE INDEX ON q1 (k);
+CREATE INDEX
+> CREATE INDEX ON q3 (k);
+CREATE INDEX
+> EXPLAIN SELECT * FROM q ORDER BY k LIMIT 3;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=114.25..114.31 rows=3 width=10)
+row   ->  Append  (cost=114.25..234.25 rows=6000 width=10)
+row         ->  Index Scan using q1_k_idx on q1 q_1  (cost=0.28..40.27 rows=1000 width=8)
+row         ->  Sort  (cost=113.70..123.70 rows=4000 width=10)
+row               Sort Key: q_2.k
+row               ->  Seq Scan on q2 q_2  (cost=0.00..62.00 rows=4000 width=10)
+row         ->  Index Scan using q3_k_idx on q3 q_3  (cost=0.28..40.27 rows=1000 width=10)
+EXPLAIN
+> CREATE TABLE r (k integer, w text) PARTITION BY RANGE (k);
+CREATE TABLE
+> CREATE TABLE r1 PARTITION OF r FOR VALUES FROM (0) TO (1000);
+CREATE TABLE
+> CREATE TABLE rd PARTITION OF r DEFAULT;
+CREATE TABLE
+> INSERT INTO r SELECT g, 'r' || g FROM generate_series(0, 2999) g;
+INSERT 0 3000
+> CREATE INDEX ON r (k);
+CREATE INDEX
+> ANALYZE r;
+ANALYZE
+> EXPLAIN SELECT * FROM r ORDER BY k LIMIT 3;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.56..0.70 rows=3 width=9)
+row   ->  Merge Append  (cost=0.56..142.56 rows=3000 width=9)
+row         Sort Key: r.k
+row         ->  Index Scan using r1_k_idx on r1 r_1  (cost=0.28..40.27 rows=1000 width=8)
+row         ->  Index Scan using rd_k_idx on rd r_2  (cost=0.28..72.28 rows=2000 width=10)
+EXPLAIN
+> EXPLAIN SELECT * FROM r WHERE k < 500 ORDER BY k LIMIT 3;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.56..0.75 rows=3 width=8)
+row   ->  Merge Append  (cost=0.56..32.34 rows=501 width=8)
+row         Sort Key: r.k
+row         ->  Index Scan using r1_k_idx on r1 r_1  (cost=0.28..23.02 rows=500 width=8)
+row               Index Cond: (k < 500)
+row         ->  Index Scan using rd_k_idx on rd r_2  (cost=0.28..4.29 rows=1 width=10)
+row               Index Cond: (k < 500)
+EXPLAIN
