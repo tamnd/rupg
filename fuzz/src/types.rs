@@ -2,6 +2,7 @@
 //!
 //! A target gives one value to the input or the receive function of a type. A panic and an internal error (`XX000`) are failures. When the function accepts the value, the output, input, send and receive functions must agree on it: the text of the value must read back to the same text, and the binary form must read back to the same text. A difference from PostgreSQL is not a failure of the target, because the oracle is a separate process. The replay tool runs the corpus of a target on the oracle and shows each case where rupg gives a different answer.
 
+use std::borrow::Cow;
 use std::rc::Rc;
 
 use arbitrary::{Arbitrary, Unstructured};
@@ -176,8 +177,8 @@ impl Session for FuzzSession {
     fn clock(&self) -> i64 {
         10 * USECS_PER_DAY
     }
-    fn user(&self) -> &str {
-        "postgres"
+    fn user(&self) -> Cow<'_, str> {
+        Cow::Borrowed("postgres")
     }
     fn session_user(&self) -> &str {
         "postgres"
