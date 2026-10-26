@@ -50,6 +50,22 @@ pub trait Io: Send + Sync + fmt::Debug {
     /// True if the file exists.
     fn exists(&self, path: &Path) -> Result<bool>;
 
+    /// Gives the file `from` the name `to` in one step, as `rename(2)` does. A file with the name `to` is replaced. Call [`Io::sync_dir`] after it to make the new name durable.
+    ///
+    /// # Errors
+    ///
+    /// The file `from` does not exist, or the operating system refuses the rename. An implementation without a rename gives `0A000`.
+    fn rename(&self, from: &Path, to: &Path) -> Result<()> {
+        Err(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            format!(
+                "could not rename file \"{}\" to \"{}\": not supported",
+                from.display(),
+                to.display()
+            ),
+        ))
+    }
+
     /// Makes the names in a directory durable, for example after a new file. Call it before the engine depends on the new file after a crash.
     fn sync_dir(&self, path: &Path) -> Result<()>;
 

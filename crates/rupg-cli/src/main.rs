@@ -1,13 +1,13 @@
 //! The `rupg` binary: `serve`, `check`, `strip`, `upgrade`, `import`, `dump`.
 //!
-//! The commands arrive with the milestones of `spec/23-milestones.md`. At M1 the binary prints its version and its build configuration, and `rupg check FILE` checks a database file. At M2 `rupg serve` runs the PostgreSQL server.
+//! The commands arrive with the milestones of `spec/23-milestones.md`. At M1 the binary prints its version and its build configuration, `rupg check FILE` checks a database file, and `rupg upgrade OLD NEW` copies a database file to a new file in the format of this release. At M2 `rupg serve` runs the PostgreSQL server.
 
 #![forbid(unsafe_code)]
 
 use std::process::ExitCode;
 use std::sync::Arc;
 
-const USAGE: &str = "usage: rupg [--version | --print-config | --help | check FILE | serve [-D DIR] [--listen ADDR] [--pwfile FILE] [-c name=value]...]";
+const USAGE: &str = "usage: rupg [--version | --print-config | --help | check FILE | upgrade OLD NEW | serve [-D DIR] [--listen ADDR] [--pwfile FILE] [-c name=value]...]";
 
 /// The server log on the standard error, one message after the other, as PostgreSQL writes it with `log_destination = stderr`.
 #[derive(Debug)]
@@ -36,6 +36,13 @@ fn main() -> ExitCode {
         }
         Some("check") => match &args[1..] {
             [file] => check(file),
+            _ => {
+                eprintln!("{USAGE}");
+                ExitCode::from(2)
+            }
+        },
+        Some("upgrade") => match &args[1..] {
+            [from, to] => upgrade(from, to),
             _ => {
                 eprintln!("{USAGE}");
                 ExitCode::from(2)
@@ -75,6 +82,22 @@ fn check(file: &str) -> ExitCode {
         }
         Err(e) => {
             eprintln!("rupg check: {file}: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `rupg upgrade OLD NEW`. It prints the counts and exits with 0, or prints the error and exits with 1. The old file does not change.
+fn upgrade(from: &str, to: &str) -> ExitCode {
+    match rupg::upgrade(from, to) {
+        Ok(r) => {
+            println!("{from} -> {to}: upgraded");
+            println!("tables: {}", r.tables);
+            println!("rows: {}", r.rows);
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("rupg upgrade: {e}");
             ExitCode::FAILURE
         }
     }

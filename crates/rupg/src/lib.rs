@@ -28,6 +28,7 @@ mod check;
 mod database;
 #[cfg(feature = "server")]
 pub mod server;
+mod upgrade;
 
 pub use check::{Report, check, check_on};
 pub use database::{Database, Options, Platform, Table, Transaction};
@@ -37,6 +38,7 @@ pub use rupg_common::{
 pub use rupg_table::ColumnDef;
 pub use rupg_txn::Isolation;
 pub use rupg_types::{Datum, TypeId};
+pub use upgrade::{Upgrade, upgrade, upgrade_on};
 
 /// The version of rupg. It is 0.M.patch, where M is the last milestone that closed.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

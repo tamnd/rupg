@@ -463,8 +463,31 @@ impl<P: PageAccess> Transaction<P> {
     /// Adds a row with `values` to `table` and gives its row id.
     pub fn insert(&mut self, table: &Arc<Table>, values: &[Datum]) -> Result<RowId> {
         let stored = table.def().encode(values)?;
-        let xid = self.writer();
         let id = self.row_id(table)?;
+        self.insert_row(table, id, stored)?;
+        Ok(id)
+    }
+
+    /// Adds a row with `values` to `table` with the row id `id`, and moves the row id counter of the table past `id`. `rupg upgrade` uses it, so that each row of the new file has the row id that it had in the old file. An id of another shard gives SQLSTATE `XX000`, and an id that a row has gives the error of the hot store.
+    pub fn insert_as(&mut self, table: &Arc<Table>, id: RowId, values: &[Datum]) -> Result<()> {
+        if id.shard() != table.shard() {
+            return Err(Error::internal(format!(
+                "the row id {id} is not of the shard of table \"{}\"",
+                table.def().name()
+            )));
+        }
+        let stored = table.def().encode(values)?;
+        table.saw(id);
+        self.insert_row(table, id, stored)
+    }
+
+    fn insert_row(
+        &mut self,
+        table: &Arc<Table>,
+        id: RowId,
+        stored: Vec<Option<Vec<u8>>>,
+    ) -> Result<()> {
+        let xid = self.writer();
         let mut row = Row {
             id,
             header: VersionHeader::owned_by(xid.bits(), 0, 0),
@@ -482,7 +505,7 @@ impl<P: PageAccess> Transaction<P> {
             return Err(e);
         }
         self.writes.push(Written { table: table.clone(), id, undo, delete: false });
-        Ok(id)
+        Ok(())
     }
 
     /// Writes `values` in the row `id` of `table`. The result is false if the row is deleted, or if this command changed it already.

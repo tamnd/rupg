@@ -436,6 +436,19 @@ impl Io for SimIo {
         Ok(lock(&self.disk).files.contains_key(path))
     }
 
+    /// The disk keeps a file under its name, so a handle that was open on the name `from` fails after the rename. The new name is durable at once, as the names of new files are.
+    fn rename(&self, from: &Path, to: &Path) -> Result<()> {
+        let mut disk = lock(&self.disk);
+        let Some(file) = disk.files.remove(from) else {
+            return Err(Error::new(
+                SqlState::UNDEFINED_FILE,
+                format!("could not rename file \"{}\": no such file", from.display()),
+            ));
+        };
+        disk.files.insert(to.to_path_buf(), file);
+        Ok(())
+    }
+
     fn read_dir(&self, path: &Path) -> Result<Vec<(String, bool)>> {
         // The disk has files only. A directory is the parent of a file.
         let disk = lock(&self.disk);

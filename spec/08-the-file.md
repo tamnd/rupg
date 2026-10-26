@@ -389,7 +389,7 @@ A physical page or extent goes through three states: allocated, pending free, an
 
 ## 8.11 Encryption
 
-Encryption is chosen when the file is created, with `rupg.encryption = 'aes-256-gcm'` and a key source. It cannot be turned on later except by a rewrite with `rupg-cli copy`. An encrypted file sets an incompatible feature flag.
+Encryption is chosen when the file is created, with `rupg.encryption = 'aes-256-gcm'` and a key source. It cannot be turned on later except by a rewrite with `rupg upgrade`. An encrypted file sets an incompatible feature flag.
 
 **The data key is wrapped.** At create, rupg draws a 256-bit data key from the operating system. It wraps the data key with a key encryption key and stores the wrapped key, the key derivation parameters and a key identifier in the identity block, and a key check value in each slot. The key encryption key comes either from a passphrase through Argon2id (RFC 9106) or from a key provider that the embedding program or the server configuration supplies. A new passphrase rewraps the data key and changes no page.
 
@@ -486,9 +486,9 @@ The identity block and each slot have a format major and minor number and three 
 
 Encryption, a new checksum algorithm and a new page header layout are incompatible features. A new optional summary kind is a read-only-compatible feature, because an old writer would not maintain it. A new statistics record that readers can ignore is a compatible feature.
 
-**Format major 0 makes no promise.** Until the first release, a new rupg version can refuse an older file, and `rupg-cli copy` converts it. The identifiers of document 04 section 4.7 are fixed at M1, so most format changes before the release are local to one kind of page or extent.
+**Format major 0 makes no promise.** Until the first release, a new rupg version can refuse an older file, and `rupg upgrade` converts it. The identifiers of document 04 section 4.7 are fixed at M1, so most format changes before the release are local to one kind of page or extent.
 
-**From format major 1, every release opens every earlier major 1 file.** An upgrade that adds a feature sets its flag at the next checkpoint after the first use of the feature. A file never gets a flag for a feature it does not use, so a file written by a new version and never using a new feature still opens in the old version. A change to the major number requires `rupg-cli copy`, and a release that changes it ships the converter.
+**From format major 1, every release opens every earlier major 1 file.** An upgrade that adds a feature sets its flag at the next checkpoint after the first use of the feature. A file never gets a flag for a feature it does not use, so a file written by a new version and never using a new feature still opens in the old version. A change to the major number requires `rupg upgrade`, and a release that changes it ships the converter.
 
 ## 8.16 Crash tests and gates
 
