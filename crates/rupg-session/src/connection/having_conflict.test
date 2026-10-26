@@ -1,0 +1,63 @@
+> create type avg_rec as (x numeric);
+CREATE TYPE
+> create temp table t_having (id int, a avg_rec);
+CREATE TABLE
+> insert into t_having values (1, row(1.0)::avg_rec), (2, row(1.00)::avg_rec), (3, row(2)::avg_rec);
+INSERT 0 3
+> explain (costs off) select a, count(*) from t_having group by a having a *= row(1.0)::avg_rec;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate
+row   Group Key: a
+row   Filter: (a *= '(1.0)'::avg_rec)
+row   ->  Seq Scan on t_having
+EXPLAIN
+> select a::text, count(*) from t_having group by a having a *= row(1.0)::avg_rec;
+fields a:25:-1:-1,count:20:8:-1
+row (1.0),2
+SELECT 1
+> explain (costs off) select a, count(*) from t_having group by a having a *= any (array[row(1.0)::avg_rec]);
+fields QUERY PLAN:25:-1:-1
+row HashAggregate
+row   Group Key: a
+row   Filter: (a *= ANY ('{(1.0)}'::avg_rec[]))
+row   ->  Seq Scan on t_having
+EXPLAIN
+> select a::text, count(*) from t_having group by a having a *= any (array[row(1.0)::avg_rec]);
+fields a:25:-1:-1,count:20:8:-1
+row (1.0),2
+SELECT 1
+> explain (costs off) select a, count(*) from t_having group by a having a = row(1.0)::avg_rec;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate
+row   ->  Seq Scan on t_having
+row         Filter: (a = '(1.0)'::avg_rec)
+EXPLAIN
+> select a::text, count(*) from t_having group by a having a = row(1.0)::avg_rec;
+fields a:25:-1:-1,count:20:8:-1
+row (1.0),2
+SELECT 1
+> explain (costs off) select a, count(*) from t_having group by a having case a when row(1.0)::avg_rec then true else false end;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate
+row   Group Key: a
+row   ->  Seq Scan on t_having
+row         Filter: CASE a WHEN '(1.0)'::avg_rec THEN true ELSE false END
+EXPLAIN
+> explain (costs off) select id, count(*) from t_having group by id having id < 3 and case id when 1 then true else false end;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate
+row   Group Key: id
+row   ->  Seq Scan on t_having
+row         Filter: ((id < 3) AND CASE id WHEN 1 THEN true ELSE false END)
+EXPLAIN
+> explain (costs off) select distinct a from t_having;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate
+row   Group Key: a
+row   ->  Seq Scan on t_having
+EXPLAIN
+> select a::text, count(*) from t_having group by a order by 2;
+fields a:25:-1:-1,count:20:8:-1
+row (2),1
+row (1.0),2
+SELECT 2

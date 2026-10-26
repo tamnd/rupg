@@ -3564,6 +3564,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/record_image.test")));
     }
 
+    /// A condition of `HAVING` on an item of `GROUP BY` stays in `HAVING` when its operator is not in a family with the `=` of the group, such as `*=` on a composite type, and goes to `WHERE` for `=`, `<` and a simple `CASE`. A composite type whose fields can be hashed groups with a hash table. `connection/having_conflict.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn having_conflict() {
+        big_stack(|| script(include_str!("connection/having_conflict.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {
