@@ -639,6 +639,7 @@ impl Connection {
         if load.triggers.after_rows() {
             load.inserted.extend(rows.iter().cloned());
         }
+        self.heap_layout(info.table);
         if info.unique.is_empty() {
             heap.insert(
                 info.table,

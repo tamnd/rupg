@@ -717,6 +717,7 @@ impl Connection {
         if self.xid.get() == 0 {
             self.xid.set(heap.begin(self.pid));
         }
+        self.heap_layout(info.table);
         let mut view = View { xid: self.xid.get(), ..view.clone() };
         // The tables of the tree of `INHERITS` change their rows as the leaves of a partitioned table.
         let partitioned = info.inherit
@@ -1087,6 +1088,32 @@ impl Connection {
             Some(lease) => Arc::clone(&lease.catalog),
             None => self.store.committed(self.database_oid),
         }
+    }
+
+    /// Gives the heap `attlen` and `attalign` of the columns of the table `table` with a built-in type of fixed length, so that a version of the table takes the bytes of its version in PostgreSQL, as `heap_compute_data_size` stores it.
+    fn heap_layout(&self, table: u32) {
+        if let Some(relation) = self.catalog().relation(table) {
+            self.relation_layout(relation);
+        }
+    }
+
+    /// [`Self::heap_layout`] for the columns of the relation `relation`.
+    fn relation_layout(&self, relation: &rupg_catalog::Relation) {
+        let fixed = relation
+            .columns
+            .iter()
+            .map(|column| {
+                let ty = builtin::type_by_oid(column.ty).filter(|_| !column.dropped)?;
+                let align = match ty.align {
+                    b's' => 2,
+                    b'i' => 4,
+                    b'd' => 8,
+                    _ => 1,
+                };
+                (ty.len > 0).then(|| (usize::from(ty.len.unsigned_abs()), align))
+            })
+            .collect();
+        self.store.heap().set_layout(self.database_oid, relation.oid, fixed);
     }
 
     /// Runs the elements of `CREATE SCHEMA` after the statement made the schema, as `CreateSchemaCommand` runs them: as the owner of the schema and with the schema first in `search_path`. The settings of the session come back after the elements, also after an error.
@@ -3611,6 +3638,12 @@ mod tests {
     #[test]
     fn values_pullup() {
         big_stack(|| script(include_str!("connection/values_pullup.test")));
+    }
+
+    /// `heap_compute_data_size`: a value of a column with a type of fixed length, such as `name`, takes the length of the type in its page, so `relpages` is the same as in PostgreSQL.
+    #[test]
+    fn heap_fixed() {
+        big_stack(|| script(include_str!("connection/heap_fixed.test")));
     }
 
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.

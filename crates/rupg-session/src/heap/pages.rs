@@ -45,7 +45,7 @@ enum Layout {
     Varlena(usize, usize),
 }
 
-/// The storage of a value as the type of its variant stores it. `Text` has the storage of `text`, so a value of `name` takes less space than in PostgreSQL. The types whose storage the engine does not follow take 16 bytes of data.
+/// The storage of a value as the type of its variant stores it. `Text` has the storage of `text`, and a value of `name` gets the storage of its column from [`Fixed`]. The types whose storage the engine does not follow take 16 bytes of data.
 fn layout(value: &Value) -> Layout {
     match value {
         Value::Null => Layout::Fixed(0, 1),
@@ -87,7 +87,7 @@ fn layout(value: &Value) -> Layout {
             Layout::Varlena(len - 4, align)
         }
         // A composite value is a `HeapTupleHeader` with its fields.
-        Value::Record(record) => Layout::Varlena(tuple_len(&record.values) - 4, 8),
+        Value::Record(record) => Layout::Varlena(tuple_len(&record.values, &[]) - 4, 8),
         _ => Layout::Varlena(16, 4),
     }
 }
@@ -101,11 +101,22 @@ fn data_len(layouts: &[Layout]) -> usize {
     })
 }
 
-/// `t_len` of a version with the values `values`, from `heap_form_tuple`: the header with the null bitmap, then the data. A version longer than `TOAST_TUPLE_THRESHOLD` has its longest values in the TOAST table, as `heap_toast_insert_or_update` moves them while the data is too long. A value that the TOAST table takes is not compressed first, as the engine has no `pglz`.
-pub(super) fn tuple_len(values: &[Value]) -> usize {
+/// `attlen` and `attalign` of a column with a type of fixed length, as bytes, or `None` for a column whose values have the storage of their variants.
+pub(crate) type Fixed = Option<(usize, usize)>;
+
+/// `t_len` of a version with the values `values`, from `heap_form_tuple`: the header with the null bitmap, then the data. A value of a column with a type of fixed length in `fixed` has the length and the alignment of the type. A version longer than `TOAST_TUPLE_THRESHOLD` has its longest values in the TOAST table, as `heap_toast_insert_or_update` moves them while the data is too long. A value that the TOAST table takes is not compressed first, as the engine has no `pglz`.
+pub(super) fn tuple_len(values: &[Value], fixed: &[Fixed]) -> usize {
     let nulls = values.iter().any(Value::is_null);
     let header = max_align(TUPLE_HEADER + if nulls { values.len().div_ceil(8) } else { 0 });
-    let mut layouts: Vec<Layout> = values.iter().filter(|v| !v.is_null()).map(layout).collect();
+    let mut layouts: Vec<Layout> = values
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| !v.is_null())
+        .map(|(at, v)| match fixed.get(at).copied().flatten() {
+            Some((len, align)) => Layout::Fixed(len, align),
+            None => layout(v),
+        })
+        .collect();
     let mut len = data_len(&layouts);
     if header + len > TOAST_THRESHOLD {
         while header + len > TOAST_THRESHOLD {

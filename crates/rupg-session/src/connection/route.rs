@@ -333,6 +333,7 @@ impl Connection {
                 return Err(Error::internal("a partition with no plan of its rows"));
             };
             let checked = if leaf_info.foreign.is_empty() { Vec::new() } else { rows.clone() };
+            self.heap_layout(leaf.oid);
             let mut kept = Vec::new();
             loop {
                 match heap.insert(
@@ -664,6 +665,7 @@ impl Connection {
             };
             let changes: Vec<Change> =
                 items.iter().map(|item| (item.tid, item.new.clone())).collect();
+            self.heap_layout(leaf.oid);
             let (mut kept, mut made) = (Vec::new(), Vec::new());
             loop {
                 let changed = heap.change(

@@ -11,8 +11,8 @@ use rupg_func::{HeapSize, Statistic, XactState};
 use rupg_types::{Value, oid};
 
 pub(crate) use btree::{Shape, Size as BtreeSize};
+pub(crate) use pages::{Fixed, Skip, stored_widths};
 use pages::{Pages, Pruned, generation_of, max_align, page_of, slot_of, tuple_len};
-pub(crate) use pages::{Skip, stored_widths};
 
 mod btree;
 mod fsm;
@@ -134,6 +134,8 @@ struct Table {
     statistics: BTreeMap<(i16, bool), Statistic>,
     /// The size of each `btree` index of the table by the OID of the index, from the versions that the table had.
     btree_sizes: BTreeMap<u32, btree::Cached>,
+    /// The storage of each column with a type of fixed length, which the new versions take in their pages.
+    fixed: Vec<Fixed>,
 }
 
 /// The versions of a table by the hash of their key, for one unique key, which takes the place of the btree of a unique index. The map can keep the ID of a version that went, which a check skips.
@@ -303,7 +305,7 @@ impl Table {
         old: Option<u32>,
     ) -> u64 {
         // A write that waited makes its versions again in the place that the first try took.
-        let len = max_align(tuple_len(&values));
+        let len = max_align(tuple_len(&values, &self.fixed));
         let tid = kept.unwrap_or_else(|| {
             let bulk = self.bulk.filter(|&made| made == (xmin, cmin));
             let (page, slot) = self.pages.place(len, old, bulk);
@@ -1221,6 +1223,15 @@ impl Heap {
             .get(&(database, relation))
             .map(|table| table.statistics.values().cloned().collect())
             .unwrap_or_default()
+    }
+
+    /// Sets `attlen` and `attalign` of the columns of the table `relation` with a type of fixed length, which the new versions take in their pages, as `heap_compute_data_size` stores them.
+    pub(crate) fn set_layout(&self, database: u32, relation: u32, fixed: Vec<Fixed>) {
+        let mut state = self.state();
+        let table = state.tables.entry((database, relation)).or_default();
+        if table.fixed != fixed {
+            table.fixed = fixed;
+        }
     }
 
     /// `vac_update_relstats`: sets `relpages` and `reltuples` of a table, outside of the transactions.

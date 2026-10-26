@@ -1,0 +1,42 @@
+> CREATE TABLE hn (a int4, b name, c name, d text)
+CREATE TABLE
+> INSERT INTO hn SELECT i, 'x' || i, 'y', 'z' FROM generate_series(1, 1000) i
+INSERT 0 1000
+> VACUUM ANALYZE hn
+VACUUM
+> SELECT relpages, reltuples FROM pg_class WHERE relname = 'hn'
+fields relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row 21,1000
+SELECT 1
+> CREATE TABLE hp (a int2, b point, c name, d int8)
+CREATE TABLE
+> INSERT INTO hp SELECT i, point(i, i), 'n', i FROM generate_series(1, 1000) i
+INSERT 0 1000
+> VACUUM ANALYZE hp
+VACUUM
+> SELECT relpages, reltuples FROM pg_class WHERE relname = 'hp'
+fields relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row 16,1000
+SELECT 1
+> CREATE TABLE hc AS SELECT a, b FROM hn
+SELECT 1000
+> VACUUM hc
+VACUUM
+> SELECT relpages FROM pg_class WHERE relname = 'hc'
+fields relpages@pg_class.10:23:4:-1
+row 13
+SELECT 1
+> ALTER TABLE hc ALTER COLUMN a TYPE int8
+ALTER TABLE
+> VACUUM hc
+VACUUM
+> SELECT relpages FROM pg_class WHERE relname = 'hc'
+fields relpages@pg_class.10:23:4:-1
+row 13
+SELECT 1
+> EXPLAIN SELECT * FROM hn
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on hn  (cost=0.00..31.00 rows=1000 width=134)
+EXPLAIN
+> DROP TABLE hn, hp, hc
+DROP TABLE

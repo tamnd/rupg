@@ -372,6 +372,9 @@ impl Connection {
         }
         // `ATRewriteTable` writes the rows with a `BulkInsertState`.
         heap.start_bulk(rel.oid, view);
+        if let Some(new) = work.relation(rel.oid) {
+            self.relation_layout(new);
+        }
         let mut kept = Vec::new();
         loop {
             match heap.insert(
