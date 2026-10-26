@@ -1,8 +1,10 @@
 //! The functions of the arrays in `array_userfuncs.c`, `arrayfuncs.c` and `varlena.c`: `string_to_array`, `array_to_string`, the functions that read the dimensions, `array_append`, `array_prepend` and `array_cat`, `array_remove` and `array_replace`, `array_position` and `array_positions`, `array_fill`, `array_reverse`, `array_shuffle`, `array_sample`, `array_sort`, `trim_array`, the operators `@>`, `<@` and `&&`, and `width_bucket` with an array of thresholds.
 
+use std::borrow::Cow;
+
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
-use rupg_types::{Array, ArrayDim, MAX_ARRAY_SIZE, MAXDIM, Value};
+use rupg_types::{Array, ArrayDim, MAX_ARRAY_SIZE, MAXDIM, Value, array_in};
 
 use crate::io::{base_type, output};
 use crate::{Call, Kernel, bad_value};
@@ -12,6 +14,18 @@ fn array(args: &[Value], at: usize) -> Result<&Array<Value>> {
     match args.get(at) {
         Some(Value::Array(array)) => Ok(array),
         _ => Err(bad_value()),
+    }
+}
+
+/// The array of an argument that a function only reads. An `anyarray` value of `pg_statistic` keeps the text of `array_out`, and it gives the array of the text of its elements, as the output function of the element type wrote them.
+fn read(args: &[Value], at: usize) -> Result<Cow<'_, Array<Value>>> {
+    match args.get(at) {
+        Some(Value::Text(text)) => {
+            let element = |e: &str| Ok(Value::Text(e.to_owned()));
+            let array = array_in(text, b',', true, element).map_err(|_| bad_value())?;
+            Ok(Cow::Owned(array))
+        }
+        _ => array(args, at).map(Cow::Borrowed),
     }
 }
 
@@ -72,7 +86,7 @@ fn array_to_string(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let elem = element_type(call.args.first().copied().unwrap_or(0))?;
     let mut out = Vec::new();
     let mut first = true;
-    for element in &array(args, 0)?.values {
+    for element in &read(args, 0)?.values {
         let element = element.as_ref().filter(|v| !matches!(v, Value::Null));
         if element.is_none() && null.is_none() {
             continue;
@@ -89,8 +103,11 @@ fn array_to_string(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     String::from_utf8(out).map(Value::Text).map_err(|_| bad_value())
 }
 
-/// The element type of an array type, or of a domain over an array type.
+/// The element type of an array type, or of a domain over an array type. The elements of an `anyarray` value are its text, as `read` gives them.
 fn element_type(ty: u32) -> Result<u32> {
+    if ty == rupg_types::oid::ANYARRAY {
+        return Ok(rupg_types::oid::TEXT);
+    }
     match builtin::type_by_oid(base_type(ty)) {
         Some(row) if row.elem != 0 => Ok(row.elem),
         _ => Err(crate::not_yet(format_args!("an array function on the type {ty}"))),
@@ -105,31 +122,32 @@ fn dim(array: &Array<Value>, n: i32) -> Option<ArrayDim> {
 
 /// `array_length`.
 fn array_length(_: &Call<'_>, args: &[Value]) -> Result<Value> {
-    let found = dim(array(args, 0)?, dimension(args, 1)?);
+    let found = dim(&*read(args, 0)?, dimension(args, 1)?);
     Ok(found.map_or(Value::Null, |d| Value::Int4(d.len)))
 }
 
 /// `array_lower`.
 fn array_lower(_: &Call<'_>, args: &[Value]) -> Result<Value> {
-    let found = dim(array(args, 0)?, dimension(args, 1)?);
+    let found = dim(&*read(args, 0)?, dimension(args, 1)?);
     Ok(found.map_or(Value::Null, |d| Value::Int4(d.lower)))
 }
 
 /// `array_upper`.
 fn array_upper(_: &Call<'_>, args: &[Value]) -> Result<Value> {
-    let found = dim(array(args, 0)?, dimension(args, 1)?);
+    let found = dim(&*read(args, 0)?, dimension(args, 1)?);
     Ok(found.map_or(Value::Null, |d| Value::Int4(d.lower + d.len - 1)))
 }
 
 /// `array_ndims`: the number of dimensions, or null for an empty array.
 fn array_ndims(_: &Call<'_>, args: &[Value]) -> Result<Value> {
-    let dims = array(args, 0)?.dims.len();
+    let dims = read(args, 0)?.dims.len();
     Ok(if dims == 0 { Value::Null } else { int4(dims) })
 }
 
 /// `array_dims`: the bounds of each dimension, as `[1:3][2:4]`, or null for an empty array.
 fn array_dims(_: &Call<'_>, args: &[Value]) -> Result<Value> {
-    let dims = &array(args, 0)?.dims;
+    let array = read(args, 0)?;
+    let dims = &array.dims;
     if dims.is_empty() {
         return Ok(Value::Null);
     }
@@ -140,7 +158,7 @@ fn array_dims(_: &Call<'_>, args: &[Value]) -> Result<Value> {
 
 /// `array_cardinality`: `cardinality`, the number of elements in all the dimensions.
 fn array_cardinality(_: &Call<'_>, args: &[Value]) -> Result<Value> {
-    Ok(int4(array(args, 0)?.values.len()))
+    Ok(int4(read(args, 0)?.values.len()))
 }
 
 /// The array of an argument of `array_append` or `array_prepend`, as `fetch_array_arg_replace_nulls` gives it: a null array is empty. The array must be empty or have one dimension.

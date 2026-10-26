@@ -6211,6 +6211,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/array_agg_array.test")));
     }
 
+    /// The functions on an `anyarray` value of `pg_stats` and `pg_statistic`, as `enforce_generic_type_consistency` allows them: `array_length` and the others with only one argument of the family and no result of the family work, and `unnest`, `=` and the functions of the `anycompatible` family give the errors of PostgreSQL. `connection/anyarray_input.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn anyarray_input() {
+        big_stack(|| script(include_str!("connection/anyarray_input.test")));
+    }
+
     /// The input and output of `pg_ndistinct` and `pg_dependencies`, their errors, the casts to `bytea`, the error for `pg_mcv_list` input, `pg_mcv_list_items` and the view `pg_stats_ext`. `connection/stats_types.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn stats_types() {

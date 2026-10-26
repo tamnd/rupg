@@ -30,6 +30,8 @@ struct Families {
     /// True when an argument or the result is `anycompatiblemultirange`.
     wants_compatible_multirange: bool,
     has_compatible: bool,
+    /// The polymorphic result type of the enforcement, or 0 for the check.
+    result: u32,
 }
 
 /// The error of two arguments of one family with different types.
@@ -82,6 +84,7 @@ fn collect(inputs: &[u32], declared: &[u32], result: u32) -> Result<Families> {
         compatible_array: result == oid::ANYCOMPATIBLEARRAY,
         wants_compatible_range: result == oid::ANYCOMPATIBLERANGE,
         wants_compatible_multirange: result == oid::ANYCOMPATIBLEMULTIRANGE,
+        result,
         ..Families::default()
     };
     for (&input, &decl) in inputs.iter().zip(declared) {
@@ -183,9 +186,26 @@ fn collect(inputs: &[u32], declared: &[u32], result: u32) -> Result<Families> {
     Ok(f)
 }
 
-/// The checks of the first family: the element type of the array, the range of the multirange and the subtype of the range must be the element type.
+/// The checks of the first family: the element type of the array, the range of the multirange and the subtype of the range must be the element type. An `anyarray` input, such as a column of `pg_statistic`, fits an `anyarray` argument when it is the only argument of the family and the result does not need its element type. The element is then `anyelement`, as `enforce_generic_type_consistency` does, and the check allows it, as `check_generic_type_consistency` does.
 fn first_family(f: &mut Families) -> Result<()> {
-    if f.array != 0 {
+    if f.array == oid::ANYARRAY {
+        if f.result != 0 {
+            let family1 = matches!(
+                f.result,
+                oid::ANYELEMENT
+                    | oid::ANYNONARRAY
+                    | oid::ANYENUM
+                    | oid::ANYRANGE
+                    | oid::ANYMULTIRANGE
+            );
+            if f.any_element_args != 1 || family1 {
+                return Err(mismatch(
+                    "cannot determine element type of \"anyarray\" argument".into(),
+                ));
+            }
+            f.element = oid::ANYELEMENT;
+        }
+    } else if f.array != 0 {
         let element = types::element(f.array);
         if element == 0 {
             return Err(not_kind("anyarray", "an array", f.array));
