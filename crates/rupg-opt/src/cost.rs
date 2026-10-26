@@ -296,6 +296,8 @@ pub(crate) fn selectivity_by(expr: &Expr, est: &dyn Estimate) -> f64 {
             if *not { sel } else { 1.0 - sel }
         }
         ExprKind::ScalarArrayOp { func, any, args } => array_selectivity(*func, *any, args, est),
+        // `rowcomparesel`: the operator of the first pair.
+        ExprKind::RowCompare(rc) => rc.ops.first().map_or(INEQ_SEL, each),
         // `CURRENT OF` gives at most one row of its table.
         ExprKind::CurrentOf(_) => {
             est.current_of_tuples(expr).filter(|&t| t > 0.0).map_or(0.5, |t| 1.0 / t)

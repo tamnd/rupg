@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 
-use rupg_analyze::{BoolOp, Expr, ExprKind, FuncForm, Var, types};
+use rupg_analyze::{BoolOp, Expr, ExprKind, FuncForm, RowCompare, RowCompareKind, Var, types};
 use rupg_pgcatalog::builtin;
 use rupg_plan::{Cost, Item, Kind, Node, STATISTIC_KIND_CORRELATION};
 use rupg_types::{Array, Inet, Value, oid};
@@ -116,12 +116,15 @@ impl<'q> Source<'q> {
 }
 
 impl Clause<'_> {
-    /// The value that the column is compared with, which `index_other_operands_eval_cost` costs, or `None` for `IS NULL` and `IS NOT NULL`.
-    fn other(&self) -> Option<&Expr> {
+    /// The values that the columns are compared with, which `index_other_operands_eval_cost` costs: none for `IS NULL` and `IS NOT NULL`, and the right side of each pair of a row comparison.
+    fn other(&self) -> Vec<&Expr> {
         match &self.expr.kind {
-            ExprKind::ScalarArrayOp { args, .. } => args.get(1),
-            ExprKind::NullTest(..) => None,
-            _ => exprs::binary(&self.expr).map(|(_, _, right)| right),
+            ExprKind::ScalarArrayOp { args, .. } => args.get(1).into_iter().collect(),
+            ExprKind::NullTest(..) => Vec::new(),
+            ExprKind::RowCompare(rc) => {
+                rc.ops.iter().filter_map(exprs::binary).map(|(_, _, right)| right).collect()
+            }
+            _ => exprs::binary(&self.expr).map(|(_, _, right)| right).into_iter().collect(),
         }
     }
 }
@@ -849,31 +852,14 @@ fn match_one<'q>(
 ) -> Option<Vec<Clause<'q>>> {
     let expr = &*source.expr;
     let (orig, at, class) = (&source.expr, source.at, source.class);
-    let attnum = *index.keys.get(column)?;
     let family = *index.families.get(column)?;
-    // The collation `C` of a column of `name` is the collation of each condition of the column.
-    let name_collation = index.collations.get(column) == Some(&C_COLLATION);
-    if attnum < 0
-        || family == 0
-        || !(name_collation || matches!(index.collations.get(column), Some(0 | 100) | None))
-    {
-        return None;
-    }
-    // `match_index_to_operand`: a key column that is an expression matches the same expression.
-    let indexed = if attnum == 0 { Some(key_expr(index, r, column)?) } else { None };
-    let is_column = |e: &Expr| {
-        let found = match &indexed {
-            Some(indexed) => e.same(indexed),
-            None => plain_var(e)
-                .is_some_and(|v| v.relation == r && v.attnum == attnum && v.levels_up == 0),
-        };
-        found && (!name_collation || e.ty == oid::NAME)
-    };
+    let is_column = key_test(r, index, column)?;
     let other_ok = |e: &Expr| !exprs::relations(e).contains(&r) && !exprs::volatile(e);
     let clause = |expr: Cow<'q, Expr>, kind| {
         vec![Clause { expr, column, orig: orig.clone(), at, class, kind, lossy: false }]
     };
     match &expr.kind {
+        ExprKind::RowCompare(rc) => row_compare(r, index, column, rc, source).map(|c| vec![c]),
         ExprKind::ScalarArrayOp { func, any: true, args } => {
             let [left, array] = args.as_slice() else { return None };
             let element = builtin::type_by_oid(array.ty).map_or(0, |t| t.elem);
@@ -959,6 +945,113 @@ fn match_one<'q>(
             None
         }
     }
+}
+
+/// `match_index_to_operand` for the key column `column` of the index: the test of an expression that is the column, or `None` when no condition can use the column. A key column that is an expression matches the same expression. The collation `C` of a column of `name` is the collation of each condition of the column.
+fn key_test(r: usize, index: &Index, column: usize) -> Option<impl Fn(&Expr) -> bool> {
+    let attnum = *index.keys.get(column)?;
+    let family = *index.families.get(column)?;
+    let name_collation = index.collations.get(column) == Some(&C_COLLATION);
+    if attnum < 0
+        || family == 0
+        || !(name_collation || matches!(index.collations.get(column), Some(0 | 100) | None))
+    {
+        return None;
+    }
+    let indexed = if attnum == 0 { Some(key_expr(index, r, column)?) } else { None };
+    Some(move |e: &Expr| {
+        let found = match &indexed {
+            Some(indexed) => e.same(indexed),
+            None => plain_var(e)
+                .is_some_and(|v| v.relation == r && v.attnum == attnum && v.levels_up == 0),
+        };
+        found && (!name_collation || e.ty == oid::NAME)
+    })
+}
+
+/// `match_rowcompare_to_indexcol` and `expand_indexqual_rowcompare`: the clause of a row comparison of a `btree` index whose first pair has the key column `column` on one side, with an ordering operator of the family of the column, and a value on the other side. The next pairs count while each has a key column of the index on the same side, the operator of the same strategy in the family of that column, and a value. When all the pairs count and the key columns are on the left, the clause is the comparison. Else the clause has the pairs that count, with the operators commuted for the key columns on the right, and is lossy: `<` becomes `<=` and `>` becomes `>=`, and a single pair is an operator.
+fn row_compare<'p, 'q>(
+    r: usize,
+    index: &Index,
+    column: usize,
+    rc: &'p RowCompare,
+    source: &Source<'q>,
+) -> Option<Clause<'q>> {
+    if index.method != BTREE_AM {
+        return None;
+    }
+    let pairs = rc.ops.iter().map(exprs::binary).collect::<Option<Vec<_>>>()?;
+    let ExprKind::Func(call) = &rc.ops.first()?.kind else { return None };
+    let other_ok = |e: &Expr| !exprs::relations(e).contains(&r) && !exprs::volatile(e);
+    let &(op, left, right) = pairs.first()?;
+    let is_column = key_test(r, index, column)?;
+    let on_left = if is_column(left) && other_ok(right) {
+        true
+    } else if is_column(right) && other_ok(left) {
+        false
+    } else {
+        return None;
+    };
+    let commuted = |op: u32| {
+        if on_left {
+            Some(op)
+        } else {
+            builtin::operator_by_oid(op).map(|o| o.commutator).filter(|&c| c != 0)
+        }
+    };
+    let family = *index.families.get(column)?;
+    let first = commuted(op)?;
+    let mut s = strategy(first, family).filter(|s| matches!(s, 1 | 2 | 4 | 5))?;
+    let side = |pair: (&'p Expr, &'p Expr)| if on_left { pair } else { (pair.1, pair.0) };
+    let mut matched = vec![(first, family, side((left, right)))];
+    for &(op, left, right) in &pairs[1..] {
+        let Some(op) = commuted(op) else { break };
+        let (key, value) = side((left, right));
+        if !other_ok(value) {
+            break;
+        }
+        let family = (0..index.keys.len()).find_map(|i| {
+            let f = *index.families.get(i)?;
+            (strategy(op, f) == Some(s) && key_test(r, index, i)?(key)).then_some(f)
+        });
+        let Some(family) = family else { break };
+        matched.push((op, family, (key, value)));
+    }
+    let lossy = matched.len() != pairs.len();
+    let expr = if on_left && !lossy {
+        source.expr.clone()
+    } else {
+        if lossy && matches!(s, 1 | 5) {
+            s = if s == 1 { 2 } else { 4 };
+            for (op, family, _) in &mut matched {
+                let row = builtin::operator_by_oid(*op)?;
+                *op = builtin::opfamily_member(*family, row.left, row.right, s)?;
+            }
+        }
+        let make = |&(op, _, (key, value)): &(u32, u32, (&Expr, &Expr))| {
+            let row = builtin::operator_by_oid(op)?;
+            let mut func = call.clone();
+            func.oid = row.code;
+            func.form = FuncForm::Operator(row.oid);
+            func.args = vec![key.clone(), value.clone()];
+            Some(Expr::new(ExprKind::Func(func), oid::BOOL))
+        };
+        let ops = matched.iter().map(make).collect::<Option<Vec<_>>>()?;
+        let expr = match <[Expr; 1]>::try_from(ops) {
+            Ok([op]) => op,
+            Err(ops) => {
+                let kind = RowCompareKind::of_strategy(u32::try_from(s).ok()?)?;
+                let compares = rc.compares.iter().take(ops.len()).copied().collect();
+                Expr::new(
+                    ExprKind::RowCompare(Box::new(RowCompare { kind, ops, compares })),
+                    oid::BOOL,
+                )
+            }
+        };
+        Cow::Owned(expr)
+    };
+    let (orig, at, class) = (source.expr.clone(), source.at, source.class);
+    Some(Clause { expr, column, orig, at, class, kind: ClauseKind::Op(s), lossy })
 }
 
 /// `make_SAOP_expr`: the array of the values of the type. The array is a constant when each value is one, and an `ARRAY` of the values otherwise.
@@ -1569,7 +1662,7 @@ fn hash_cost(
     } else {
         index_pages * cost::RANDOM_PAGE
     };
-    let others = clauses.iter().filter_map(Clause::other);
+    let others = clauses.iter().flat_map(Clause::other);
     let qual_arg: f64 = others.map(|o| stats.qual_costs([o])).map(|(s, p)| s + p).sum();
     let qual_op = cost::CPU_OPERATOR * clauses.len() as f64;
     total += qual_arg + index_tuples * (cost::CPU_INDEX_TUPLE + qual_op);
@@ -1667,7 +1760,7 @@ fn btree_cost(
     } else {
         index_pages * cost::RANDOM_PAGE
     };
-    let others = clauses.iter().filter_map(Clause::other);
+    let others = clauses.iter().flat_map(Clause::other);
     let qual_arg: f64 = others.map(|o| stats.qual_costs([o])).map(|(s, p)| s + p).sum();
     let qual_op = cost::CPU_OPERATOR * clauses.len() as f64;
     let mut startup = qual_arg;
