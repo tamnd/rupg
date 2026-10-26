@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A join condition in a pulled-up `LATERAL` subquery that reads a relation before the subquery now gives the right rows. The scan also uses an index lookup for such a condition, so the slow lateral join query in the `join` regression test now runs in about 2 seconds. (#856)
 - `EXPLAIN` now shows in parentheses a column of a `LATERAL` subquery whose `Subquery Scan` the plan does not keep, when the target of the subquery is a column of the query above. PostgreSQL plans such a target as a `Param`, which `get_variable` shows in parentheses. (#855)
 - A value of a column with a type of fixed length now takes the length and the alignment of the type in the pages of the heap, as `heap_compute_data_size` stores it. A value of `name` took the bytes of a `text` before, so `tenk1` had 134 pages where PostgreSQL has 345, and the planner chose other plans. (#854)
 - The planner now pulls up a `VALUES` of one row in `FROM` as PostgreSQL does in `pull_up_simple_values`. The row becomes a simple subquery that merges into the query, so that a join with `(VALUES (1))` gives a filter with the constant and no `Values Scan`. A row with a volatile function or a function that gives a set stays a `Values Scan`. (#853)
