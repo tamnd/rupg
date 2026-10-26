@@ -351,7 +351,8 @@ fn generate<'q>(class: &Class<'q>, own: &BTreeSet<usize>, top: bool) -> Option<G
 /// True when two constants are not equal, or `None` when the planner cannot tell: they must have one type that compares the bytes of the values.
 fn unequal(a: &Expr, b: &Expr) -> Option<bool> {
     let (ExprKind::Const(x), ExprKind::Const(y)) = (&a.kind, &b.kind) else { return None };
-    let plain = matches!(a.ty, oid::INT2 | oid::INT4 | oid::INT8 | oid::BOOL | oid::TEXT);
+    let plain =
+        matches!(a.ty, oid::INT2 | oid::INT4 | oid::INT8 | oid::BOOL | oid::TEXT | oid::TID);
     if a.ty != b.ty || !plain || matches!(x, Value::Null) || matches!(y, Value::Null) {
         return None;
     }
