@@ -7,6 +7,7 @@ use std::sync::Arc;
 use rupg_analyze::Params;
 use rupg_common::{Error, SqlState};
 use rupg_sql::nodes::{DeallocateStmt, ExecuteStmt, Node, PrepareStmt};
+use rupg_types::Value;
 use rupg_wire::CommandTag;
 
 use super::extended::{Prepared, protocol_error};
@@ -94,31 +95,10 @@ impl Connection {
         }
         let name = stmt.name.as_deref().unwrap_or("");
         let statement = Arc::clone(self.statements.get(name.as_bytes()).map_err(protocol_error)?);
-        let expected = statement.params.len();
-        if stmt.params.len() != expected {
-            return Err(Error::new(
-                SqlState::SYNTAX_ERROR,
-                format!("wrong number of parameters for prepared statement \"{name}\""),
-            )
-            .with_detail(format!(
-                "Expected {expected} parameters but got {}.",
-                stmt.params.len()
-            )));
-        }
-        if statement.plan.is_some() || expected > 0 {
+        if statement.plan.is_some() || !statement.params.is_empty() {
             self.settings.borrow_mut().take_snapshot();
         }
-        let params = if expected == 0 {
-            Vec::new()
-        } else {
-            let reader = self.reader();
-            let values = rupg_analyze::execute_params(&stmt.params, &statement.params, &reader)?;
-            notices.extend(values.notices.iter().map(|error| Notice::warning(error.clone())));
-            let plan = rupg_exec::prepare(values, &reader)?.fold(None, &reader);
-            let rows = plan.and_then(|plan| plan.run(&[], &reader));
-            notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
-            rows?.into_iter().next().unwrap_or_default()
-        };
+        let params = self.execute_params(stmt, &statement, notices)?;
         let reader = self.reader();
         let replanned = statement.replan(&reader)?;
         let plan = match replanned.as_ref().or(statement.plan.as_ref()) {
@@ -169,6 +149,43 @@ impl Connection {
             };
             utility::run(node, text, &mut cx).map(Done::from)
         }
+    }
+
+    /// `EvaluateParams`: the values of the parameters of `EXECUTE` for the prepared statement `statement`, after the check of their number.
+    ///
+    /// # Errors
+    ///
+    /// `42601` for a wrong number of parameters, and the errors of the expressions of the parameters.
+    pub(super) fn execute_params(
+        &self,
+        stmt: &ExecuteStmt,
+        statement: &Prepared,
+        notices: &mut Vec<Notice>,
+    ) -> Result<Vec<Value>, Error> {
+        let name = stmt.name.as_deref().unwrap_or("");
+        let expected = statement.params.len();
+        if stmt.params.len() != expected {
+            return Err(Error::new(
+                SqlState::SYNTAX_ERROR,
+                format!("wrong number of parameters for prepared statement \"{name}\""),
+            )
+            .with_detail(format!(
+                "Expected {expected} parameters but got {}.",
+                stmt.params.len()
+            )));
+        }
+        let params = if expected == 0 {
+            Vec::new()
+        } else {
+            let reader = self.reader();
+            let values = rupg_analyze::execute_params(&stmt.params, &statement.params, &reader)?;
+            notices.extend(values.notices.iter().map(|error| Notice::warning(error.clone())));
+            let plan = rupg_exec::prepare(values, &reader)?.fold(None, &reader);
+            let rows = plan.and_then(|plan| plan.run(&[], &reader));
+            notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
+            rows?.into_iter().next().unwrap_or_default()
+        };
+        Ok(params)
     }
 
     /// `DeallocateQuery`.
