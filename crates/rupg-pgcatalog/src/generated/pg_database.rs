@@ -71,7 +71,7 @@ pub(crate) static COLUMNS: [Batch; 18] = [
     // datfrozenxid
     Batch {
         values: Values::Oid(&[
-            0, 0, 0,
+            654, 654, 654,
         ]),
         nulls: &[],
     },
