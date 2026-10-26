@@ -96,6 +96,8 @@ pub struct MinMax {
     pub targets: Vec<Expr>,
     /// The `HAVING` condition of the query with the same subqueries.
     pub having: Option<Expr>,
+    /// The query with these targets, for `DISTINCT`, `ORDER BY`, `LIMIT` and `OFFSET`, which `grouping_planner` plans above the `MinMaxAggPath`. It is `None` when the query has none of them.
+    pub upper: Option<Box<Query>>,
 }
 
 /// A column of the result.
