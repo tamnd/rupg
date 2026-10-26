@@ -771,7 +771,7 @@ fn join<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, parts: 
                 continue;
             }
             for r in other {
-                for (expr, depth) in from::lateral_exprs(&level.query.relations[*r]) {
+                for (expr, depth) in from::lateral_exprs_at(level.query, *r) {
                     let mut refs = Vec::new();
                     add_columns(expr, depth, &mut refs);
                     for col in refs {

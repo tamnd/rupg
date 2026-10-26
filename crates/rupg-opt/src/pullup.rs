@@ -750,7 +750,7 @@ fn places(item: &FromItem, top: bool, on: bool, out: &mut Vec<(usize, bool, bool
     }
 }
 
-/// The first subquery of `FROM` that the planner merges, with true when it is an item of the list of `FROM`. The planner does not merge a query of `WITH`, nor a view for which `barrier` is true, and it merges a `LATERAL` subquery when [`lateral_fits`] lets it and the query does not read a target of the subquery that reads the query and needs a `PlaceHolderVar` below an outer join that gives nulls for the subquery. A strict target that reads a column of the subquery goes null with the subquery, so it needs none. Below the side of an outer join that can give nulls, a target of the subquery that is not a column becomes a `PlaceHolderVar`, which the planner makes here only for a subquery with a `FROM`, for a reference of the query itself and for a target with no subquery. In a join, the subquery has one item in `FROM`, and its `WHERE` joins the `ON` of the join, so that the subquery is not the side of an outer join that keeps its rows or a side of a full join when it has a `WHERE`. The query does not read the whole row of the subquery, which `pullup_replace_vars` makes a `ROW` of the targets.
+/// The first subquery of `FROM` that the planner merges, with true when it is an item of the list of `FROM`. The planner does not merge a query of `WITH`, nor a view for which `barrier` is true, and it merges a `LATERAL` subquery when [`lateral_fits`] lets it and the query does not read a target of the subquery that reads the query and needs a `PlaceHolderVar` below an outer join that gives nulls for the subquery, unless the `FROM` of the subquery is one relation, whose scan computes the `PlaceHolderVar` with the columns of the query as its `ph_lateral`. A strict target that reads a column of the subquery goes null with the subquery, so it needs none. Below the side of an outer join that can give nulls, a target of the subquery that is not a column becomes a `PlaceHolderVar`, which the planner makes here only for a subquery with a `FROM`, for a reference of the query itself and for a target with no subquery. In a join, the subquery has one item in `FROM`, and its `WHERE` joins the `ON` of the join, so that the subquery is not the side of an outer join that keeps its rows or a side of a full join when it has a `WHERE`. The query does not read the whole row of the subquery, which `pullup_replace_vars` makes a `ROW` of the targets.
 fn candidate(
     query: &Query,
     barrier: &dyn Fn(u32) -> bool,
@@ -786,13 +786,16 @@ fn candidate(
         let used = used(query, r);
         if relation.lateral {
             let safe = query.from.iter().find_map(|item| lowest_outer(item, r))?;
+            // A `PlaceHolderVar` of a subquery of one relation is computed by the scan of that relation, which reads the query as its `ph_lateral`.
+            let single = matches!(sub.from.as_slice(), [FromItem::Relation(_)]);
             let reads = |attnum: &i16| {
                 let at = usize::try_from(attnum - 1).ok();
                 at.and_then(|at| sub.targets.get(at)).is_some_and(|t| {
                     !exprs::relations_at(&t.expr, 1).is_empty() && needs_placeholder(&t.expr)
                 })
             };
-            if !lateral_fits(sub, safe.as_ref()) || nullable.contains(&r) && used.iter().any(reads)
+            if !lateral_fits(sub, safe.as_ref())
+                || nullable.contains(&r) && !single && used.iter().any(reads)
             {
                 return None;
             }
