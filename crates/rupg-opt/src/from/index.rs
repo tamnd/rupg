@@ -1,11 +1,11 @@
-//! `create_index_paths` for one table: the scans of the table by its btree indexes, as `build_index_paths` makes them, with the costs of `btcostestimate`, `genericcostestimate` and `cost_index`. The planner has no statistics, so the order of the rows in the table has no correlation with the order of the index.
+//! `create_index_paths` for one table: the scans of the table by its btree indexes, as `build_index_paths` makes them, with the costs of `btcostestimate`, `genericcostestimate` and `cost_index`. The correlation of the first column of an index comes from the statistics of the column.
 
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use rupg_analyze::{BoolOp, Expr, ExprKind, FuncForm, Var, types};
 use rupg_pgcatalog::builtin;
-use rupg_plan::{Cost, Item, Kind, Node};
+use rupg_plan::{Cost, Item, Kind, Node, STATISTIC_KIND_CORRELATION};
 use rupg_types::{Array, Value, oid};
 
 use super::classes::Joined;
@@ -1104,7 +1104,7 @@ fn scan<'q>(
     Rel { node, rels: BTreeSet::from([table.r]), order }
 }
 
-/// `cost_index` with no correlation: the start cost and the total cost of the scan of the table by the index with the clauses, and the conditions of the scan that are not clauses of the index, in the order of `order_qual_clauses`. Each row costs a random page of the table, as `index_pages_fetched` finds the pages, and the conditions that are not clauses. A condition that a clause from the same equivalence class tests is not in the filter, as `extract_nonindex_conditions`.
+/// `cost_index`: the start cost and the total cost of the scan of the table by the index with the clauses, and the conditions of the scan that are not clauses of the index, in the order of `order_qual_clauses`. The pages of the table cost between a random page for each row, as `index_pages_fetched` finds the pages, and one random page and then sequential pages for the fraction of the pages that the selectivity gives, by the square of the correlation of the index. Each row costs the conditions that are not clauses. A condition that a clause from the same equivalence class tests is not in the filter, as `extract_nonindex_conditions`.
 fn index_scan_cost<'q>(
     table: &Table<'_, 'q>,
     index: &Index,
@@ -1131,18 +1131,46 @@ fn index_scan_cost<'q>(
     let mut startup = index_startup;
     let mut run = index_total - index_startup;
     let fetched = cost::clamp_rows(selectivity * table.tuples);
+    let min_pages = (selectivity * table.pages).ceil();
     // A scan in a nested loop reads the pages that the other scans read from the cache.
-    if table.loops > 1.0 {
+    let (max_io, min_io) = if table.loops > 1.0 {
         let pages = pages_fetched(fetched * table.loops, table.pages, index.pages, table.pages);
-        run += pages * cost::RANDOM_PAGE / table.loops;
+        let min = pages_fetched(min_pages * table.loops, table.pages, index.pages, table.pages);
+        (pages * cost::RANDOM_PAGE / table.loops, min * cost::RANDOM_PAGE / table.loops)
     } else {
         let pages = pages_fetched(fetched, table.pages, index.pages, table.pages);
-        run += pages * cost::RANDOM_PAGE;
-    }
+        let min = if min_pages > 0.0 {
+            cost::RANDOM_PAGE + (min_pages - 1.0).max(0.0) * cost::SEQ_PAGE
+        } else {
+            0.0
+        };
+        (pages * cost::RANDOM_PAGE, min)
+    };
+    let correlation = correlation(table.r, index, stats);
+    run += max_io + correlation * correlation * (min_io - max_io);
     let (qual_startup, qual_cost) = stats.qual_costs(filter.iter().map(|q| &*q.expr));
     startup += qual_startup;
     run += (cost::CPU_TUPLE + qual_cost) * fetched;
     (startup, startup + run, filter)
+}
+
+/// `btcost_correlation`: the correlation of the order of the first key column of the index with the order of the rows of the table, from the statistics of the column when the index has the default operator class of the column. A `DESC` column turns it around, and an index with more key columns has 0.75 of it.
+fn correlation(r: usize, index: &Index, stats: &Stats) -> f64 {
+    let (Some(&attnum), Some(true)) = (index.keys.first(), index.default_class.first().copied())
+    else {
+        return 0.0;
+    };
+    let statistic = stats.columns.get(&r).and_then(|columns| columns.get(&attnum));
+    let slot =
+        statistic.and_then(|s| s.slots.iter().find(|s| s.kind == STATISTIC_KIND_CORRELATION));
+    let Some(&number) = slot.and_then(|s| s.numbers.as_deref()).and_then(<[f32]>::first) else {
+        return 0.0;
+    };
+    let mut correlation = f64::from(number);
+    if index.options.first().is_some_and(|o| o & 1 != 0) {
+        correlation = -correlation;
+    }
+    if index.keys.len() > 1 { correlation * 0.75 } else { correlation }
 }
 
 /// `choose_bitmap_and`: the best bitmap of the bitmaps. Of the bitmaps with the same conditions, the cheapest stays. In the order of their costs, each bitmap starts a list, and each bitmap after it whose conditions are new goes in the list when the `BitmapAnd` makes the heap scan cheaper. The cheapest list wins.

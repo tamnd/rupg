@@ -4988,6 +4988,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_join.test")));
     }
 
+    /// The costs of the index scans of analyzed tables, with the correlation of the first column of the index. Each index has one leaf page. `connection/plan_index_stats.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_index_stats() {
+        big_stack(|| script(include_str!("connection/plan_index_stats.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

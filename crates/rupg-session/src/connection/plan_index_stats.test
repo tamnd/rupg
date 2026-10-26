@@ -1,0 +1,209 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> SET enable_bitmapscan = off;
+SET
+> SET enable_seqscan = off;
+SET
+> CREATE TABLE ic (a int, b int, c int, d text, p text);
+CREATE TABLE
+> INSERT INTO ic SELECT x, 300 - x, (x * 7) % 300, 'v' || lpad((x % 50)::text, 3, '0'), repeat('p', 300) FROM generate_series(1, 300) x;
+INSERT 0 300
+> CREATE INDEX ic_a ON ic (a);
+CREATE INDEX
+> CREATE INDEX ic_b ON ic (b);
+CREATE INDEX
+> CREATE INDEX ic_c ON ic (c);
+CREATE INDEX
+> CREATE INDEX ic_ad ON ic (a DESC);
+CREATE INDEX
+> CREATE INDEX ic_ba ON ic (b, a);
+CREATE INDEX
+> CREATE INDEX ic_d ON ic (d);
+CREATE INDEX
+> CREATE INDEX ic_dp ON ic (d text_pattern_ops);
+CREATE INDEX
+> ANALYZE ic;
+ANALYZE
+> SELECT attname, correlation FROM pg_stats WHERE tablename = 'ic' ORDER BY attname;
+fields attname@pg_stats.4:19:64:-1,correlation@pg_stats.13:700:4:-1
+row a,1
+row b,-1
+row c,0.13725708
+row d,0.1664463
+row p,1
+SELECT 5
+> EXPLAIN SELECT * FROM ic WHERE a < 10;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using ic_ad on ic  (cost=0.15..8.30 rows=9 width=321)
+row   Index Cond: (a < 10)
+EXPLAIN
+> EXPLAIN SELECT * FROM ic WHERE a < 150;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using ic_ad on ic  (cost=0.15..16.75 rows=149 width=321)
+row   Index Cond: (a < 150)
+EXPLAIN
+> EXPLAIN SELECT * FROM ic WHERE a BETWEEN 100 AND 120;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using ic_ad on ic  (cost=0.15..8.57 rows=21 width=321)
+row   Index Cond: ((a >= 100) AND (a <= 120))
+EXPLAIN
+> EXPLAIN SELECT * FROM ic WHERE b < 10;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using ic_b on ic  (cost=0.15..8.32 rows=10 width=321)
+row   Index Cond: (b < 10)
+EXPLAIN
+> EXPLAIN SELECT * FROM ic WHERE b > 200;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using ic_b on ic  (cost=0.15..13.88 rows=99 width=321)
+row   Index Cond: (b > 200)
+EXPLAIN
+> EXPLAIN SELECT * FROM ic WHERE c < 10;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using ic_c on ic  (cost=0.15..35.79 rows=10 width=321)
+row   Index Cond: (c < 10)
+EXPLAIN
+> EXPLAIN SELECT * FROM ic WHERE c < 150;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using ic_c on ic  (cost=0.15..61.92 rows=150 width=321)
+row   Index Cond: (c < 150)
+EXPLAIN
+> EXPLAIN SELECT * FROM ic WHERE d = 'v042';
+fields QUERY PLAN:25:-1:-1
+row Index Scan using ic_d on ic  (cost=0.15..23.81 rows=6 width=321)
+row   Index Cond: (d = 'v042'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ic WHERE d < 'v010';
+fields QUERY PLAN:25:-1:-1
+row Index Scan using ic_d on ic  (cost=0.15..59.81 rows=60 width=321)
+row   Index Cond: (d < 'v010'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ic WHERE d ~<~ 'v010';
+fields QUERY PLAN:25:-1:-1
+row Index Scan using ic_dp on ic  (cost=0.15..61.20 rows=60 width=321)
+row   Index Cond: (d ~<~ 'v010'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ic ORDER BY a LIMIT 10;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.15..1.00 rows=10 width=321)
+row   ->  Index Scan Backward using ic_ad on ic  (cost=0.15..25.65 rows=300 width=321)
+EXPLAIN
+> EXPLAIN SELECT * FROM ic ORDER BY a DESC LIMIT 10;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.15..1.00 rows=10 width=321)
+row   ->  Index Scan using ic_ad on ic  (cost=0.15..25.65 rows=300 width=321)
+EXPLAIN
+> EXPLAIN SELECT * FROM ic ORDER BY c LIMIT 10;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.15..2.27 rows=10 width=321)
+row   ->  Index Scan using ic_c on ic  (cost=0.15..63.91 rows=300 width=321)
+EXPLAIN
+> EXPLAIN SELECT * FROM ic ORDER BY b, a LIMIT 10;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.24..1.54 rows=10 width=321)
+row   ->  Incremental Sort  (cost=0.24..39.15 rows=300 width=321)
+row         Sort Key: b, a
+row         Presorted Key: b
+row         ->  Index Scan using ic_b on ic  (cost=0.15..25.65 rows=300 width=321)
+EXPLAIN
+> EXPLAIN SELECT * FROM ic ORDER BY d LIMIT 10;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.15..2.26 rows=10 width=321)
+row   ->  Index Scan using ic_d on ic  (cost=0.15..63.57 rows=300 width=321)
+EXPLAIN
+> EXPLAIN SELECT * FROM ic WHERE b = 5 AND a = 295;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using ic_ba on ic  (cost=0.15..8.17 rows=1 width=321)
+row   Index Cond: ((b = 5) AND (a = 295))
+EXPLAIN
+> EXPLAIN SELECT * FROM ic WHERE a = ANY ('{1,2,3,200}');
+fields QUERY PLAN:25:-1:-1
+row Index Scan using ic_ad on ic  (cost=0.15..8.22 rows=4 width=321)
+row   Index Cond: (a = ANY ('{1,2,3,200}'::integer[]))
+EXPLAIN
+> DROP INDEX ic_a;
+DROP INDEX
+> DROP INDEX ic_b;
+DROP INDEX
+> EXPLAIN SELECT * FROM ic WHERE a < 10;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using ic_ad on ic  (cost=0.15..8.30 rows=9 width=321)
+row   Index Cond: (a < 10)
+EXPLAIN
+> EXPLAIN SELECT * FROM ic WHERE b < 10;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using ic_ba on ic  (cost=0.15..20.57 rows=10 width=321)
+row   Index Cond: (b < 10)
+EXPLAIN
+> EXPLAIN SELECT * FROM ic WHERE a > 290;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using ic_ad on ic  (cost=0.15..8.32 rows=10 width=321)
+row   Index Cond: (a > 290)
+EXPLAIN
+> EXPLAIN SELECT * FROM ic WHERE a = 5;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using ic_ad on ic  (cost=0.15..8.17 rows=1 width=321)
+row   Index Cond: (a = 5)
+EXPLAIN
+> CREATE TABLE id2 (k int, v int, p text);
+CREATE TABLE
+> INSERT INTO id2 SELECT x / 10, x, repeat('q', 200) FROM generate_series(1, 300) x;
+INSERT 0 300
+> CREATE INDEX id2_k ON id2 (k);
+CREATE INDEX
+> ANALYZE id2;
+ANALYZE
+> EXPLAIN SELECT * FROM id2 WHERE k = 7;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using id2_k on id2  (cost=0.15..8.32 rows=10 width=212)
+row   Index Cond: (k = 7)
+EXPLAIN
+> EXPLAIN SELECT * FROM id2 WHERE k < 5;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using id2_k on id2  (cost=0.15..10.01 rows=49 width=212)
+row   Index Cond: (k < 5)
+EXPLAIN
+> EXPLAIN SELECT * FROM id2 WHERE k < 20;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using id2_k on id2  (cost=0.15..17.65 rows=200 width=212)
+row   Index Cond: (k < 20)
+EXPLAIN
+> SET enable_seqscan = on;
+SET
+> EXPLAIN SELECT * FROM ic WHERE c < 30;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ic  (cost=0.00..17.75 rows=30 width=321)
+row   Filter: (c < 30)
+EXPLAIN
+> EXPLAIN SELECT * FROM ic WHERE a < 100;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using ic_ad on ic  (cost=0.15..13.88 rows=99 width=321)
+row   Index Cond: (a < 100)
+EXPLAIN
+> EXPLAIN SELECT * FROM ic WHERE a < 20;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using ic_ad on ic  (cost=0.15..8.48 rows=19 width=321)
+row   Index Cond: (a < 20)
+EXPLAIN
+> SET enable_hashjoin = off;
+SET
+> SET enable_mergejoin = off;
+SET
+> SET enable_memoize = off;
+SET
+> EXPLAIN SELECT * FROM id2 JOIN ic ON ic.a = id2.k WHERE id2.v < 50;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.15..86.32 rows=49 width=533)
+row   ->  Seq Scan on id2  (cost=0.00..13.75 rows=49 width=212)
+row         Filter: (v < 50)
+row   ->  Index Scan using ic_ad on ic  (cost=0.15..1.47 rows=1 width=321)
+row         Index Cond: (a = id2.k)
+EXPLAIN
+> EXPLAIN SELECT * FROM id2 JOIN ic ON ic.c = id2.k WHERE id2.v < 50;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.15..86.32 rows=49 width=533)
+row   ->  Seq Scan on id2  (cost=0.00..13.75 rows=49 width=212)
+row         Filter: (v < 50)
+row   ->  Index Scan using ic_c on ic  (cost=0.15..1.47 rows=1 width=321)
+row         Index Cond: (c = id2.k)
+EXPLAIN
