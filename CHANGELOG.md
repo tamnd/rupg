@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- EXPLAIN VERBOSE names the temporary schema of the session `pg_temp`, as `get_namespace_name_or_temp`, and not `pg_temp_N` (#837).
 - The release workflow has a job that publishes the crates to crates.io with trusted publishing, in the order of their dependencies, and skips a version that crates.io has already (#835).
 - An index now tests a condition of a column when the collation of the index is the collation of the column, as `IndexCollMatchesExprColl`, so an index on a column with `COLLATE "C"` serves its conditions, and an index with another collation than its column does not (#834).
 - A row comparison such as `(a, b) > (1, 2)` is now a condition of a btree index scan, as `match_rowcompare_to_indexcol` makes it, and its selectivity is that of its first pair, as `rowcomparesel` (#832).

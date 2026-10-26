@@ -332,7 +332,12 @@ impl Texts for PlanTexts<'_, '_> {
                 None => return (String::new(), String::new()),
             }
         };
-        let schema = reg::namespace_name(namespace, self.session).unwrap_or_default();
+        // `get_namespace_name_or_temp`: the temporary schema of the session is `pg_temp`.
+        let schema = if reg::is_own_temp(namespace, self.session) {
+            "pg_temp"
+        } else {
+            reg::namespace_name(namespace, self.session).unwrap_or_default()
+        };
         (name.to_string(), schema.to_string())
     }
 
