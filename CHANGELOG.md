@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.2.2 (2026-10-26)
+
 ### Added
 
 - Each member of an inheritance tree and each partition gets its own scan, with its own statistics, indexes and width, as `set_append_rel_pathlist` does. A member can now use an `Index Scan`, an `Index Only Scan`, a `Bitmap Heap Scan` or a `Tid Scan` (#803).
