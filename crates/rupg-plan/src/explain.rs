@@ -94,6 +94,8 @@ fn names(kind: &Kind<'_>) -> Names {
         Kind::IndexScan { only: false, .. } => simple("Index Scan"),
         Kind::IndexScan { only: true, .. } => simple("Index Only Scan"),
         Kind::BitmapHeapScan { .. } => simple("Bitmap Heap Scan"),
+        Kind::TidScan { range: false, .. } => simple("Tid Scan"),
+        Kind::TidScan { range: true, .. } => simple("Tid Range Scan"),
         Kind::BitmapIndexScan { .. } => simple("Bitmap Index Scan"),
         Kind::BitmapAnd => simple("BitmapAnd"),
         Kind::BitmapOr => simple("BitmapOr"),
@@ -360,6 +362,7 @@ impl Explainer<'_, '_> {
             Kind::SeqScan(r)
             | Kind::SampleScan(r)
             | Kind::IndexScan { relation: r, .. }
+            | Kind::TidScan { relation: r, .. }
             | Kind::BitmapHeapScan { relation: r, .. } => {
                 let table = node.member.unwrap_or(relation_of(r).oid);
                 (r, Some("Relation Name"), Some((table, false)))
@@ -470,6 +473,11 @@ impl Explainer<'_, '_> {
             Kind::IndexScan { cond, relation, .. } => {
                 let own = Some(*relation);
                 self.scan_qual("Index Cond", scope, cond, self.options.verbose, own)?;
+                self.scan_qual("Filter", scope, &node.filter, self.options.verbose, own)?;
+            }
+            Kind::TidScan { cond, relation, .. } => {
+                let own = Some(*relation);
+                self.scan_qual("TID Cond", scope, cond, self.options.verbose, own)?;
                 self.scan_qual("Filter", scope, &node.filter, self.options.verbose, own)?;
             }
             Kind::BitmapIndexScan { cond, relation, .. } => {

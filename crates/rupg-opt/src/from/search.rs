@@ -9,6 +9,7 @@ use rupg_analyze::{Expr, JoinKind};
 use super::classes::{Found, Joined};
 use super::index::{self, Param};
 use super::paths::{Paths, costs};
+use super::tid;
 use super::{
     Base, Candidate, Part, Qual, Rel, Special, Stats, choose, finish, join_rels, join_rows,
     lateral_rels, semi_rels, semi_selectivity, semifactors, unique_rels,
@@ -258,8 +259,9 @@ fn param_scans<'q>(
         table(quals, rows, outer.clone(), if loops > 0.0 { loops } else { 1.0 })
     };
     let plain = table(base.quals.clone(), base.rows, BTreeSet::new(), 1.0);
-    let found =
+    let mut found =
         index::param_paths(level, &plain, &base.indexes, joins, classes, prohibited, &ppi, stats);
+    found.extend(tid::param_paths(level, &plain, joins, classes, prohibited, &ppi, stats));
     if found.is_empty() {
         return Vec::new();
     }

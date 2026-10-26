@@ -179,6 +179,11 @@ pub(crate) trait Estimate {
     fn histogram_ineq(&self, _column: &Expr, _value: &Expr, _op: Inequality) -> Option<f64> {
         None
     }
+
+    /// `tuples` of the relation of the target of `CURRENT OF`, or `None` when the estimate has not the relation.
+    fn current_of_tuples(&self, _expr: &Expr) -> Option<f64> {
+        None
+    }
 }
 
 impl<F: Fn(&Expr, &Expr) -> Option<f64>> Estimate for F {
@@ -280,6 +285,10 @@ pub(crate) fn selectivity_by(expr: &Expr, est: &dyn Estimate) -> f64 {
             if *not { sel } else { 1.0 - sel }
         }
         ExprKind::ScalarArrayOp { func, any, args } => array_selectivity(*func, *any, args, est),
+        // `CURRENT OF` gives at most one row of its table.
+        ExprKind::CurrentOf(_) => {
+            est.current_of_tuples(expr).filter(|&t| t > 0.0).map_or(0.5, |t| 1.0 / t)
+        }
         _ => match exprs::binary(expr) {
             Some((op, left, right)) => {
                 let known = match builtin::operator_by_oid(op).map(|o| o.name) {
@@ -865,56 +874,50 @@ fn prefix_selectivity(est: &dyn Estimate, column: &Expr, prefix: &Expr) -> f64 {
     sel.max(est.eq(column, prefix).unwrap_or(EQ_SEL))
 }
 
-/// `make_greater_string` in the C collation: the prefix with its last character incremented, as `pg_utf8_increment` increments it, or `byte_increment` for `bytea`. A last character that cannot be incremented is removed, and the character before it is incremented.
+/// [`greater_bytes`] of a constant prefix of `text` or `bytea`.
 fn greater_string(prefix: &Expr) -> Option<Expr> {
-    let (mut bytes, bytea) = match &prefix.kind {
-        ExprKind::Const(Value::Text(t)) => (t.as_bytes().to_vec(), false),
-        ExprKind::Const(Value::Bytea(b)) => (b.clone(), true),
+    let value = match &prefix.kind {
+        ExprKind::Const(Value::Text(t)) => {
+            Value::Text(String::from_utf8(greater_bytes(t.as_bytes(), false)?).ok()?)
+        }
+        ExprKind::Const(Value::Bytea(b)) => Value::Bytea(greater_bytes(b, true)?),
         _ => return None,
     };
-    while !bytes.is_empty() {
-        let len = bytes.len();
-        let width = if bytea {
-            1
+    Some(Expr::new(ExprKind::Const(value), prefix.ty))
+}
+
+/// `make_greater_string` in the C collation: the prefix with its last character made the next character, as `pg_utf8_increment` makes it, or for `bytea` with its last byte made one more. A character with no next character goes, and the character before it is made the next one. The result is `None` when no character has a next one.
+pub(crate) fn greater_bytes(prefix: &[u8], bytes: bool) -> Option<Vec<u8>> {
+    let mut work = prefix.to_vec();
+    while !work.is_empty() {
+        let mut start = work.len() - 1;
+        if bytes {
+            if work[start] < 0xFF {
+                work[start] += 1;
+                return Some(work);
+            }
         } else {
-            let text = String::from_utf8_lossy(&bytes);
-            text.chars().next_back().map_or(1, char::len_utf8).min(len)
-        };
-        let last = &mut bytes[len - width..];
-        let incremented = if bytea { byte_increment(&mut last[0]) } else { utf8_increment(last) };
-        if incremented {
-            let value = if bytea {
-                Value::Bytea(bytes)
-            } else {
-                Value::Text(String::from_utf8(bytes).ok()?)
-            };
-            return Some(Expr::new(ExprKind::Const(value), prefix.ty));
+            while start > 0 && work[start] & 0xC0 == 0x80 {
+                start -= 1;
+            }
+            if utf8_increment(&mut work[start..]) {
+                return Some(work);
+            }
         }
-        bytes.truncate(len - width);
+        work.truncate(start);
     }
     None
 }
 
-/// `byte_increment`: the byte plus one, or false when it is the greatest byte.
-fn byte_increment(b: &mut u8) -> bool {
-    match b.checked_add(1) {
-        Some(next) => {
-            *b = next;
-            true
-        }
-        None => false,
-    }
-}
-
-/// `pg_utf8_increment`: the character with its last byte that can grow incremented, or false when no byte can.
+/// `pg_utf8_increment`: makes the character of UTF-8 the next character with the same length, and gives false when there is none.
 fn utf8_increment(c: &mut [u8]) -> bool {
     let len = c.len();
-    if len > 4 || len == 0 {
+    if len > 4 {
         return false;
     }
-    for at in (2..len).rev() {
-        if c[at] < 0xBF {
-            c[at] += 1;
+    for i in (2..len).rev() {
+        if c[i] < 0xBF {
+            c[i] += 1;
             return true;
         }
     }

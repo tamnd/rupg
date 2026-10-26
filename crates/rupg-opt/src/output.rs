@@ -232,7 +232,7 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             if let Some(inner) = inner {
                 let rels = from::node_rels(inner);
                 let conds = match &inner.kind {
-                    Kind::IndexScan { cond, .. } => cond.as_slice(),
+                    Kind::IndexScan { cond, .. } | Kind::TidScan { cond, .. } => cond.as_slice(),
                     Kind::BitmapHeapScan { recheck, .. } => recheck.as_slice(),
                     _ => &[],
                 };
@@ -270,6 +270,7 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
         }
         Kind::SeqScan(r)
         | Kind::IndexScan { relation: r, .. }
+        | Kind::TidScan { relation: r, .. }
         | Kind::BitmapHeapScan { relation: r, .. }
         | Kind::SampleScan(r)
         | Kind::FunctionScan(r)
@@ -821,6 +822,7 @@ fn items_mut<'n, 'q>(node: &'n mut Node<'q>) -> Vec<&'n mut Item<'q>> {
     match &mut node.kind {
         Kind::Result { one_time: items, .. }
         | Kind::IndexScan { cond: items, .. }
+        | Kind::TidScan { cond: items, .. }
         | Kind::BitmapHeapScan { recheck: items, .. }
         | Kind::BitmapIndexScan { cond: items, .. }
         | Kind::NestedLoop { join_filter: items, .. } => out.extend(items),

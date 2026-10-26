@@ -207,6 +207,7 @@ impl rupg_opt::Members for Members<'_, '_> {
             indexscan: on("enable_indexscan"),
             indexonlyscan: on("enable_indexonlyscan"),
             bitmapscan: on("enable_bitmapscan"),
+            tidscan: on("enable_tidscan"),
             sort: on("enable_sort"),
             incremental_sort: on("enable_incremental_sort"),
             hashagg: on("enable_hashagg"),

@@ -7,6 +7,7 @@ mod memoize;
 pub(crate) mod paths;
 mod scansel;
 mod search;
+mod tid;
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
@@ -94,6 +95,8 @@ pub(crate) struct Stats {
     columns: BTreeMap<usize, Rc<BTreeMap<i16, Statistic>>>,
     /// `get_actual_variable_range`: the least and the greatest value of the columns of the relations that a `btree` index reads in order, which the conditions of the scans compare with a constant.
     ranges: BTreeMap<(usize, i16), Option<(Value, Value)>>,
+    /// `pages` of each table of the level, which the estimate of an inequality of `ctid` reads.
+    pages: BTreeMap<usize, f64>,
 }
 
 impl Stats {
@@ -102,7 +105,8 @@ impl Stats {
         let columns = self.columns.get(&r).cloned().unwrap_or_default();
         let ranges = self.ranges.range((r, i16::MIN)..=(r, i16::MAX));
         let ranges = ranges.map(|(&(_, attnum), range)| (attnum, range.clone())).collect();
-        ScanEstimate { r, tuples, unique: self.unique.clone(), columns, ranges }
+        let pages = self.pages.get(&r).copied();
+        ScanEstimate { r, tuples, pages, unique: self.unique.clone(), columns, ranges }
     }
 
     /// The columns of the members of the equivalence classes that a node of the join of `rels` gives: each column of the relations whose class has a relation that is not in `rels`.
@@ -877,6 +881,7 @@ impl<'q> Builder<'q> {
                         }
                     }
                     let (pages, tuples) = cost::table_size(relation, size);
+                    stats.pages.insert(r, pages);
                     match &relation.tablesample {
                         // `set_tablesample_rel_size` and `cost_samplescan`: `SYSTEM` reads the fraction of the pages, each at the cost of a random page, and `BERNOULLI` reads each page in order. The fraction is a `real`, and a percent out of range is a tenth.
                         Some(sample) => {
@@ -962,7 +967,7 @@ impl<'q> Builder<'q> {
             }
             return kept.kept();
         }
-        if indexes.is_empty() || !matches!(seq.node.kind, Kind::SeqScan(_)) {
+        if !matches!(seq.node.kind, Kind::SeqScan(_)) {
             return vec![seq];
         }
         let (pages, _) = cost::table_size(relation, size);
@@ -971,7 +976,21 @@ impl<'q> Builder<'q> {
         let table = index::Table { r, pages, tuples, rows, quals, eq: &eq, outer, loops: 1.0 };
         let stored = Base { pages, tuples, rows, quals: base, indexes: indexes.clone() };
         self.bases.insert((level.scope, r), stored);
+        // `set_plain_rel_pathlist`: the scans by `ctid` come first, and a scan of `CURRENT OF` is the only scan.
+        let (mut tids, current) = tid::paths(level, &table, stats);
+        for rel in &mut tids {
+            add_targets(&mut rel.node);
+        }
+        if current {
+            return tids;
+        }
+        if indexes.is_empty() && tids.is_empty() {
+            return vec![seq];
+        }
         let mut paths = Paths::new(stats.startup);
+        for rel in tids {
+            paths.add(costs(&rel.node), Vec::new(), rel);
+        }
         paths.add(costs(&seq.node), Vec::new(), seq);
         for mut rel in index::paths(level, &table, &indexes, stats) {
             add_targets(&mut rel.node);
@@ -1007,6 +1026,8 @@ fn sub_order(
 pub(crate) struct ScanEstimate {
     r: usize,
     tuples: f64,
+    /// `pages` of a table, or `None` for another relation.
+    pages: Option<f64>,
     unique: Unique,
     columns: Rc<BTreeMap<i16, Statistic>>,
     ranges: BTreeMap<i16, Option<(Value, Value)>>,
@@ -1092,6 +1113,13 @@ impl ScanEstimate {
         if constant.is_null() {
             return Some(0.0);
         }
+        if let (Some(var), Value::Int8(tid)) = (plain_var(column), constant)
+            && var.attnum == tid::CTID
+            && column.ty == oid::TID
+            && value.ty == oid::TID
+        {
+            return self.ctid_ineq(*tid, op);
+        }
         let s = cost::Estimate::statistic(self, column)?;
         let test = |v: &Value| crate::compare(column.ty, v, value.ty, constant).map(|o| op.test(o));
         let (mut mcv_selec, mut sumcommon) = (0.0, 0.0);
@@ -1110,6 +1138,31 @@ impl ScanEstimate {
         let mut selec = 1.0 - f64::from(s.null_frac) - sumcommon;
         selec *= self.ineq_histogram(column, value, op, mcvs)?.unwrap_or(0.5);
         selec += mcv_selec;
+        Some(selec.clamp(0.0, 1.0))
+    }
+
+    /// `scalarineqsel` for `ctid`, which has no statistics: the part of the pages of the table before the item pointer `tid`, where the last page has half the rows of the other pages. The item number of the pointer is a part of its page by the rows of a page. `<` has one row less and `>=` one row more than this estimate of `<=`. A table with no pages gives all its rows.
+    fn ctid_ineq(&self, tid: i64, op: cost::Inequality) -> Option<f64> {
+        let pages = self.pages?;
+        if pages == 0.0 {
+            return Some(1.0);
+        }
+        let mut block = f64::from(u32::try_from(tid >> 16).ok()?);
+        let mut density = self.tuples / (pages - 0.5);
+        if block >= pages - 1.0 {
+            density *= 0.5;
+        }
+        if density > 0.0 {
+            let offset = f64::from(u16::try_from(tid & 0xFFFF).ok()?);
+            block += (offset / density).min(1.0);
+        }
+        let mut selec = block / (pages - 0.5);
+        if op.iseq == op.isgt && self.tuples >= 1.0 {
+            selec -= 1.0 / self.tuples;
+        }
+        if op.isgt {
+            selec = 1.0 - selec;
+        }
         Some(selec.clamp(0.0, 1.0))
     }
 
@@ -1242,6 +1295,10 @@ impl cost::Estimate for ScanEstimate {
     fn statistic(&self, expr: &Expr) -> Option<&Statistic> {
         let var = plain_var(expr).filter(|v| v.levels_up == 0 && v.relation == self.r)?;
         self.columns.get(&var.attnum)
+    }
+
+    fn current_of_tuples(&self, expr: &Expr) -> Option<f64> {
+        (exprs::relations(expr) == BTreeSet::from([self.r])).then_some(self.tuples)
     }
 
     fn histogram_ineq(&self, column: &Expr, value: &Expr, op: cost::Inequality) -> Option<f64> {
@@ -2402,6 +2459,7 @@ pub(crate) fn node_rels(node: &Node<'_>) -> BTreeSet<usize> {
     match &node.kind {
         Kind::SeqScan(r)
         | Kind::IndexScan { relation: r, .. }
+        | Kind::TidScan { relation: r, .. }
         | Kind::BitmapHeapScan { relation: r, .. }
         | Kind::SampleScan(r)
         | Kind::FunctionScan(r)

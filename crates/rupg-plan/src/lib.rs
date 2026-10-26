@@ -238,6 +238,8 @@ pub enum Kind<'q> {
         cond: Vec<Item<'q>>,
         columns: Vec<i16>,
     },
+    /// `TidScan`: the rows of a relation of the scope at the item pointers of the condition `tidquals`, or `TidRangeScan` when `range`: the rows of the pages between the item pointers of the conditions `tidrangequals`.
+    TidScan { relation: usize, range: bool, cond: Vec<Item<'q>> },
     /// `BitmapHeapScan`: the rows of a relation of the scope at the places that the bitmap of the child gives, with the conditions of the indexes of the bitmap, `bitmapqualorig`, which the node tests again.
     BitmapHeapScan { relation: usize, recheck: Vec<Item<'q>> },
     /// `BitmapIndexScan`: the bitmap of the places of the rows of a relation of the scope that its index `index` finds with the conditions of the index.

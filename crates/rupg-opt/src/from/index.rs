@@ -962,65 +962,12 @@ fn prefix_clauses(expr: &Expr, family: u32) -> Option<Vec<(Expr, i16)>> {
         return Some(vec![make("=", &prefix)?]);
     }
     let mut out = vec![make(greater_equal, &prefix)?];
-    if let Some(greater) = greater_string(&prefix, right_ty == oid::BYTEA)
+    if let Some(greater) = cost::greater_bytes(&prefix, right_ty == oid::BYTEA)
         && let Some(clause) = make(less, &greater)
     {
         out.push(clause);
     }
     Some(out)
-}
-
-/// `make_greater_string` in the C collation: the prefix with its last character made the next character, as `pg_utf8_increment` makes it, or for `bytea` with its last byte made one more. A character with no next character goes, and the character before it is made the next one. The result is `None` when no character has a next one.
-fn greater_string(prefix: &[u8], bytes: bool) -> Option<Vec<u8>> {
-    let mut work = prefix.to_vec();
-    while !work.is_empty() {
-        let mut start = work.len() - 1;
-        if bytes {
-            if work[start] < 0xFF {
-                work[start] += 1;
-                return Some(work);
-            }
-        } else {
-            while start > 0 && work[start] & 0xC0 == 0x80 {
-                start -= 1;
-            }
-            if utf8_increment(&mut work[start..]) {
-                return Some(work);
-            }
-        }
-        work.truncate(start);
-    }
-    None
-}
-
-/// `pg_utf8_increment`: makes the character of UTF-8 the next character with the same length, and gives false when there is none.
-fn utf8_increment(c: &mut [u8]) -> bool {
-    let len = c.len();
-    if len > 4 {
-        return false;
-    }
-    for i in (2..len).rev() {
-        if c[i] < 0xBF {
-            c[i] += 1;
-            return true;
-        }
-    }
-    if len >= 2 {
-        let limit = match c[0] {
-            0xED => 0x9F,
-            0xF4 => 0x8F,
-            _ => 0xBF,
-        };
-        if c[1] < limit {
-            c[1] += 1;
-            return true;
-        }
-    }
-    if matches!(c[0], 0x7F | 0xDF | 0xEF | 0xF4) {
-        return false;
-    }
-    c[0] += 1;
-    true
 }
 
 /// `get_op_opfamily_strategy`: the strategy of a search operator in the operator family, or `None` when the family has not the operator.

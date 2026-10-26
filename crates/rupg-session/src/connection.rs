@@ -5030,6 +5030,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_pattern_stats.test")));
     }
 
+    /// `Tid Scan` and `Tid Range Scan`: a condition `ctid = value`, `ctid = ANY (array)`, an `OR` of them and `CURRENT OF` read the rows at their item pointers, an inequality of `ctid` reads a range of pages, and a nested loop scans its inner side by the `ctid` of its outer side. The estimate of an inequality of `ctid` comes from the pages of the table. `connection/plan_tid_scan.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_tid_scan() {
+        big_stack(|| script(include_str!("connection/plan_tid_scan.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

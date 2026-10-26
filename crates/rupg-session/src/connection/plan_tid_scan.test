@@ -1,0 +1,224 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE tidscan(id integer);
+CREATE TABLE
+> INSERT INTO tidscan VALUES (1), (2), (3);
+INSERT 0 3
+> SELECT ctid, * FROM tidscan;
+fields ctid@tidscan.-1:27:6:-1,id@tidscan.1:23:4:-1
+row (0,1),1
+row (0,2),2
+row (0,3),3
+SELECT 3
+> EXPLAIN SELECT ctid, * FROM tidscan WHERE ctid = '(0,1)';
+fields QUERY PLAN:25:-1:-1
+row Tid Scan on tidscan  (cost=0.00..4.01 rows=1 width=10)
+row   TID Cond: (ctid = '(0,1)'::tid)
+EXPLAIN
+> SELECT ctid, * FROM tidscan WHERE ctid = '(0,1)';
+fields ctid@tidscan.-1:27:6:-1,id@tidscan.1:23:4:-1
+row (0,1),1
+SELECT 1
+> EXPLAIN SELECT ctid, * FROM tidscan WHERE '(0,1)' = ctid;
+fields QUERY PLAN:25:-1:-1
+row Tid Scan on tidscan  (cost=0.00..4.01 rows=1 width=10)
+row   TID Cond: ('(0,1)'::tid = ctid)
+EXPLAIN
+> EXPLAIN SELECT ctid, * FROM tidscan WHERE ctid = '(0,2)' OR '(0,1)' = ctid;
+fields QUERY PLAN:25:-1:-1
+row Tid Scan on tidscan  (cost=0.01..8.03 rows=2 width=10)
+row   TID Cond: ((ctid = '(0,2)'::tid) OR ('(0,1)'::tid = ctid))
+EXPLAIN
+> SELECT ctid, * FROM tidscan WHERE ctid = '(0,2)' OR '(0,1)' = ctid;
+fields ctid@tidscan.-1:27:6:-1,id@tidscan.1:23:4:-1
+row (0,1),1
+row (0,2),2
+SELECT 2
+> EXPLAIN SELECT ctid, * FROM tidscan WHERE ctid = ANY(ARRAY['(0,1)', '(0,2)']::tid[]);
+fields QUERY PLAN:25:-1:-1
+row Tid Scan on tidscan  (cost=0.00..8.02 rows=2 width=10)
+row   TID Cond: (ctid = ANY ('{"(0,1)","(0,2)"}'::tid[]))
+EXPLAIN
+> SELECT ctid, * FROM tidscan WHERE ctid = ANY(ARRAY['(0,1)', '(0,2)']::tid[]);
+fields ctid@tidscan.-1:27:6:-1,id@tidscan.1:23:4:-1
+row (0,1),1
+row (0,2),2
+SELECT 2
+> EXPLAIN SELECT ctid, * FROM tidscan WHERE ctid != ANY(ARRAY['(0,1)', '(0,2)']::tid[]);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on tidscan  (cost=0.00..41.88 rows=2550 width=10)
+row   Filter: (ctid <> ANY ('{"(0,1)","(0,2)"}'::tid[]))
+EXPLAIN
+> EXPLAIN SELECT ctid, * FROM tidscan WHERE (id = 3 AND ctid IN ('(0,2)', '(0,3)')) OR (ctid = '(0,1)' AND id = 1);
+fields QUERY PLAN:25:-1:-1
+row Tid Scan on tidscan  (cost=0.01..12.05 rows=1 width=10)
+row   TID Cond: ((ctid = ANY ('{"(0,2)","(0,3)"}'::tid[])) OR (ctid = '(0,1)'::tid))
+row   Filter: (((id = 3) AND (ctid = ANY ('{"(0,2)","(0,3)"}'::tid[]))) OR ((ctid = '(0,1)'::tid) AND (id = 1)))
+EXPLAIN
+> SELECT ctid, * FROM tidscan WHERE (id = 3 AND ctid IN ('(0,2)', '(0,3)')) OR (ctid = '(0,1)' AND id = 1);
+fields ctid@tidscan.-1:27:6:-1,id@tidscan.1:23:4:-1
+row (0,1),1
+row (0,3),3
+SELECT 2
+> EXPLAIN SELECT * FROM tidscan WHERE ctid = '(0,1)' AND id = 1;
+fields QUERY PLAN:25:-1:-1
+row Tid Scan on tidscan  (cost=0.00..4.02 rows=1 width=4)
+row   TID Cond: (ctid = '(0,1)'::tid)
+row   Filter: (id = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM tidscan WHERE ctid = '(0,1)' AND ctid = '(0,2)';
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.00 rows=0 width=0)
+row   Replaces: Scan on tidscan
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT * FROM tidscan WHERE id = 1 AND id = 2;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.00 rows=0 width=0)
+row   Replaces: Scan on tidscan
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT * FROM tidscan WHERE ctid < '(1,0)';
+fields QUERY PLAN:25:-1:-1
+row Tid Range Scan on tidscan  (cost=0.00..7.68 rows=267 width=4)
+row   TID Cond: (ctid < '(1,0)'::tid)
+EXPLAIN
+> EXPLAIN SELECT * FROM tidscan WHERE ctid >= '(0,2)' AND ctid <= '(0,3)';
+fields QUERY PLAN:25:-1:-1
+row Tid Range Scan on tidscan  (cost=0.01..4.02 rows=2 width=4)
+row   TID Cond: ((ctid >= '(0,2)'::tid) AND (ctid <= '(0,3)'::tid))
+EXPLAIN
+> EXPLAIN SELECT * FROM tidscan WHERE '(0,2)' > ctid;
+fields QUERY PLAN:25:-1:-1
+row Tid Range Scan on tidscan  (cost=0.00..4.01 rows=1 width=4)
+row   TID Cond: ('(0,2)'::tid > ctid)
+EXPLAIN
+> SELECT ctid, * FROM tidscan WHERE ctid >= '(0,2)' AND ctid <= '(0,3)';
+fields ctid@tidscan.-1:27:6:-1,id@tidscan.1:23:4:-1
+row (0,2),2
+row (0,3),3
+SELECT 2
+> BEGIN;
+BEGIN
+> DECLARE c CURSOR FOR SELECT ctid, * FROM tidscan;
+DECLARE CURSOR
+> FETCH NEXT FROM c;
+fields ctid@tidscan.-1:27:6:-1,id@tidscan.1:23:4:-1
+row (0,1),1
+FETCH 1
+> EXPLAIN UPDATE tidscan SET id = -id WHERE CURRENT OF c;
+fields QUERY PLAN:25:-1:-1
+row Update on tidscan  (cost=0.00..4.01 rows=0 width=0)
+row   ->  Tid Scan on tidscan  (cost=0.00..4.01 rows=1 width=10)
+row         TID Cond: CURRENT OF c
+EXPLAIN
+> EXPLAIN DELETE FROM tidscan WHERE CURRENT OF c;
+fields QUERY PLAN:25:-1:-1
+row Delete on tidscan  (cost=0.00..4.01 rows=0 width=0)
+row   ->  Tid Scan on tidscan  (cost=0.00..4.01 rows=1 width=6)
+row         TID Cond: CURRENT OF c
+EXPLAIN
+> SET enable_tidscan TO off;
+SET
+> EXPLAIN UPDATE tidscan SET id = -id WHERE CURRENT OF c;
+fields QUERY PLAN:25:-1:-1
+row Update on tidscan  (cost=0.00..4.01 rows=0 width=0)
+row   ->  Tid Scan on tidscan  (cost=0.00..4.01 rows=1 width=10)
+row         TID Cond: CURRENT OF c
+EXPLAIN
+> ROLLBACK;
+ROLLBACK
+> SET enable_hashjoin TO off;
+SET
+> EXPLAIN SELECT t1.ctid, t1.*, t2.ctid, t2.* FROM tidscan t1 JOIN tidscan t2 ON t1.ctid = t2.ctid WHERE t1.id = 1;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..94.17 rows=13 width=20)
+row   ->  Seq Scan on tidscan t1  (cost=0.00..41.88 rows=13 width=10)
+row         Filter: (id = 1)
+row   ->  Tid Scan on tidscan t2  (cost=0.00..4.01 rows=1 width=10)
+row         TID Cond: (t1.ctid = ctid)
+EXPLAIN
+> EXPLAIN SELECT t1.ctid, t1.*, t2.ctid, t2.* FROM tidscan t1 LEFT JOIN tidscan t2 ON t1.ctid = t2.ctid WHERE t1.id = 1;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join  (cost=0.00..94.17 rows=13 width=20)
+row   ->  Seq Scan on tidscan t1  (cost=0.00..41.88 rows=13 width=10)
+row         Filter: (id = 1)
+row   ->  Tid Scan on tidscan t2  (cost=0.00..4.01 rows=1 width=10)
+row         TID Cond: (t1.ctid = ctid)
+EXPLAIN
+> RESET enable_hashjoin;
+RESET
+> CREATE TABLE tbig (a int, b text);
+CREATE TABLE
+> INSERT INTO tbig SELECT x, repeat('x', 100) FROM generate_series(1, 5000) x;
+INSERT 0 5000
+> ANALYZE tbig;
+ANALYZE
+> EXPLAIN SELECT * FROM tbig WHERE ctid = '(3,4)';
+fields QUERY PLAN:25:-1:-1
+row Tid Scan on tbig  (cost=0.00..4.01 rows=1 width=105)
+row   TID Cond: (ctid = '(3,4)'::tid)
+EXPLAIN
+> EXPLAIN SELECT * FROM tbig WHERE ctid = ANY(ARRAY['(0,1)', '(2,2)', '(5,1)']::tid[]);
+fields QUERY PLAN:25:-1:-1
+row Tid Scan on tbig  (cost=0.00..12.03 rows=3 width=105)
+row   TID Cond: (ctid = ANY ('{"(0,1)","(2,2)","(5,1)"}'::tid[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM tbig WHERE ctid = '(3,4)' OR ctid = '(4,5)' OR ctid = '(6,1)';
+fields QUERY PLAN:25:-1:-1
+row Tid Scan on tbig  (cost=0.01..12.04 rows=3 width=105)
+row   TID Cond: ((ctid = '(3,4)'::tid) OR (ctid = '(4,5)'::tid) OR (ctid = '(6,1)'::tid))
+EXPLAIN
+> EXPLAIN SELECT * FROM tbig WHERE ctid < '(10,0)';
+fields QUERY PLAN:25:-1:-1
+row Tid Range Scan on tbig  (cost=0.00..19.77 rows=577 width=105)
+row   TID Cond: (ctid < '(10,0)'::tid)
+EXPLAIN
+> EXPLAIN SELECT * FROM tbig WHERE ctid > '(10,0)' AND ctid < '(20,0)';
+fields QUERY PLAN:25:-1:-1
+row Tid Range Scan on tbig  (cost=0.01..19.78 rows=577 width=105)
+row   TID Cond: ((ctid > '(10,0)'::tid) AND (ctid < '(20,0)'::tid))
+EXPLAIN
+> EXPLAIN SELECT * FROM tbig WHERE ctid >= '(50,0)';
+fields QUERY PLAN:25:-1:-1
+row Tid Range Scan on tbig  (cost=0.00..61.11 rows=2111 width=105)
+row   TID Cond: (ctid >= '(50,0)'::tid)
+EXPLAIN
+> EXPLAIN SELECT * FROM tbig WHERE ctid = '(3,4)' AND a > 10;
+fields QUERY PLAN:25:-1:-1
+row Tid Scan on tbig  (cost=0.00..4.02 rows=1 width=105)
+row   TID Cond: (ctid = '(3,4)'::tid)
+row   Filter: (a > 10)
+EXPLAIN
+> EXPLAIN SELECT * FROM tbig WHERE ctid < '(10,0)' AND a > 10;
+fields QUERY PLAN:25:-1:-1
+row Tid Range Scan on tbig  (cost=0.00..21.22 rows=576 width=105)
+row   TID Cond: (ctid < '(10,0)'::tid)
+row   Filter: (a > 10)
+EXPLAIN
+> EXPLAIN SELECT a FROM tbig WHERE ctid = '(1,1)' OR a = 5;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on tbig  (cost=0.00..162.00 rows=2 width=4)
+row   Filter: ((ctid = '(1,1)'::tid) OR (a = 5))
+EXPLAIN
+> EXPLAIN SELECT count(*) FROM tbig WHERE ctid < '(100,0)';
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=152.50..152.51 rows=1 width=8)
+row   ->  Tid Range Scan on tbig  (cost=0.00..140.00 rows=5000 width=0)
+row         TID Cond: (ctid < '(100,0)'::tid)
+EXPLAIN
+> SET enable_tidscan TO off;
+SET
+> EXPLAIN SELECT * FROM tbig WHERE ctid = '(3,4)';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on tbig  (cost=0.00..149.50 rows=1 width=105)
+row   Filter: (ctid = '(3,4)'::tid)
+EXPLAIN
+> EXPLAIN SELECT * FROM tbig WHERE ctid < '(10,0)';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on tbig  (cost=0.00..149.50 rows=577 width=105)
+row   Filter: (ctid < '(10,0)'::tid)
+EXPLAIN
+> RESET enable_tidscan;
+RESET

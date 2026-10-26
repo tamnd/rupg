@@ -80,7 +80,9 @@ fn hashable(ty: u32) -> bool {
 /// `contain_volatile_functions` for the conditions of the scans of a node, as `get_memoize_path` tests `baserestrictinfo`.
 fn volatile_node(node: &Node<'_>) -> bool {
     let cond: &[Item<'_>] = match &node.kind {
-        Kind::IndexScan { cond, .. } | Kind::BitmapIndexScan { cond, .. } => cond,
+        Kind::IndexScan { cond, .. }
+        | Kind::BitmapIndexScan { cond, .. }
+        | Kind::TidScan { cond, .. } => cond,
         Kind::BitmapHeapScan { recheck, .. } => recheck,
         _ => &[],
     };
