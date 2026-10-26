@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `array_reverse`, `trim_array`, `array_sample` and `array_shuffle` accept the `anyarray` columns of `pg_stats` and `pg_statistic`, and they give an `anyarray` (#814).
 - The functions that take one `anyarray` argument and do not give a type of its family, such as `array_length`, `cardinality` and `array_to_string`, accept the `anyarray` columns of `pg_stats` and `pg_statistic`, as `enforce_generic_type_consistency` does. Other calls give the error `cannot determine element type of "anyarray" argument` (#813).
 - A table with inheritance children or partitions can be the inner side of a nested loop, as a parameterized `Append` of the scans of its members (#812).
 
