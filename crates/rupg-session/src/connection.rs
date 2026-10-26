@@ -3676,6 +3676,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/subplan_material_init.test")));
     }
 
+    /// The unique rows of the inner side of a semi join are in the order of the members of the equivalence classes of their values, and a merge join whose outer side needs no sort keeps the rest of the order of that side, so `ORDER BY` needs no sort above the join. `connection/semijoin_unique_order.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn semijoin_unique_order() {
+        big_stack(|| script(include_str!("connection/semijoin_unique_order.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

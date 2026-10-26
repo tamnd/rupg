@@ -1,0 +1,43 @@
+> create table sju (a int, b int)
+CREATE TABLE
+> insert into sju select i%10, i%10 from generate_series(1,1000)i
+INSERT 0 1000
+> create index on sju(a, b)
+CREATE INDEX
+> analyze sju
+ANALYZE
+> explain (costs off) select * from sju t1, sju t2 where (t1.a, t2.a) in (select a, b from sju t3) order by t1.a, t2.a
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Merge Join
+row         Merge Cond: (t3.a = t1.a)
+row         ->  Unique
+row               ->  Index Only Scan using sju_a_b_idx on sju t3
+row         ->  Index Only Scan using sju_a_b_idx on sju t1
+row   ->  Memoize
+row         Cache Key: t3.b
+row         Cache Mode: logical
+row         ->  Index Only Scan using sju_a_b_idx on sju t2
+row               Index Cond: (a = t3.b)
+EXPLAIN
+> create table eo1 (x int primary key, y int)
+CREATE TABLE
+> create table eo2 (x int primary key, y int)
+CREATE TABLE
+> insert into eo1 select i, i from generate_series(1,1000) i
+INSERT 0 1000
+> insert into eo2 select i, i from generate_series(1,1000) i
+INSERT 0 1000
+> analyze eo1
+ANALYZE
+> analyze eo2
+ANALYZE
+> explain (costs off) select * from eo1 join eo2 on eo1.x = eo2.y order by eo2.y limit 3
+fields QUERY PLAN:25:-1:-1
+row Limit
+row   ->  Nested Loop
+row         Join Filter: (eo1.x = eo2.y)
+row         ->  Index Scan using eo1_pkey on eo1
+row         ->  Materialize
+row               ->  Seq Scan on eo2
+EXPLAIN

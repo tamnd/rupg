@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A query that sorts the rows of a semi join by its values no longer adds a sort, when the unique rows of the inner side and the merge join above them are in that order already. The order of the unique rows has the members of the equivalence classes of the values, and a merge join whose outer side needs no sort keeps the rest of the order of that side, as `match_unsorted_outer` does (#861).
 - `EXPLAIN VERBOSE` of an uncorrelated `ALL` subplan now puts the initplans of the subplan on its `Materialize` node and shows the output of the node, as `materialize_finished_plan` does (#860).
 - `pg_get_viewdef` now shows the locking clauses of a view, such as `FOR UPDATE OF t NOWAIT`, one for each relation, as `get_select_query_def` does. The analyzer keeps the wait policy of each row mark and whether a lock outside pushed the mark into a subquery (#859).
 

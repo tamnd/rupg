@@ -268,6 +268,16 @@ impl Stats {
         }
     }
 
+    /// `make_canonical_pathkey`: the key of an order by the expression, with the other members of its equivalence class.
+    pub(crate) fn order_key(&self, expr: &Expr, desc: bool, nulls_first: bool) -> OrderKey {
+        let mut exprs = vec![expr.clone()];
+        if let Some((members, _)) = self.equal.iter().find(|(m, _)| m.iter().any(|e| e.same(expr)))
+        {
+            exprs.extend(members.iter().filter(|m| !m.same(expr)).cloned());
+        }
+        OrderKey { exprs, desc, nulls_first }
+    }
+
     /// `make_pathkeys_for_sortclauses_extended` with `remove_redundant`: the items of a list of keys without the items whose keys are redundant, as `pathkey_is_redundant` finds them.
     pub(crate) fn canonical<T>(&self, items: Vec<T>, expr: impl Fn(&T) -> &Expr) -> Vec<T> {
         let mut out: Vec<T> = Vec::new();
@@ -2693,10 +2703,7 @@ fn unique_rels<'q>(semi: &Semi<'q>, side: &[Rel<'q>], stats: &Stats) -> Option<V
     let cheapest = &side[0];
     let groups = stats.groups(&values, cheapest.node.cost.rows);
     let n = keys.len() as f64;
-    let order: Vec<OrderKey> = keys
-        .iter()
-        .map(|&k| OrderKey { exprs: vec![k.clone()], desc: false, nulls_first: false })
-        .collect();
+    let order: Vec<OrderKey> = keys.iter().map(|&k| stats.order_key(k, false, false)).collect();
     let mut paths = Paths::new(stats.startup);
     if semi.sort {
         for (at, rel) in side.iter().enumerate() {
@@ -3817,7 +3824,7 @@ fn merge_clauses<'q>(clauses: Vec<Clause<'q>>, keys: &[MergeKey]) -> Vec<(Clause
 }
 
 impl<'q> Candidate<'q> {
-    /// The order of the rows of the join, as `build_join_pathkeys`: the order of the outer side for a nested loop, the order of the values of the conditions for a merge join that is not a right join, a right anti join or a full join, and no order for a hash join.
+    /// The order of the rows of the join, as `build_join_pathkeys`: the order of the outer side for a nested loop, the order of the values of the conditions for a merge join that is not a right join, a right anti join or a full join, and no order for a hash join. A merge join whose outer side needs no sort keeps the rest of the order of the outer side after the keys of the join, as `match_unsorted_outer` gives the order of the outer path.
     fn order(&self, outer: &Rel<'q>, inner: &Rel<'q>, quals: &[Qual<'q>]) -> Vec<OrderKey> {
         match self.method {
             Method::Nested => outer.order.clone(),
@@ -3825,14 +3832,18 @@ impl<'q> Candidate<'q> {
                 if !matches!(self.join, JoinKind::Right | JoinKind::RightAnti | JoinKind::Full) =>
             {
                 let clauses = split(quals, &outer.rels, &inner.rels, exprs::can_merge).0;
-                merge_clauses(clauses, &self.keys)
+                let mut order: Vec<OrderKey> = merge_clauses(clauses, &self.keys)
                     .into_iter()
                     .map(|(c, desc, nulls_first)| OrderKey {
                         exprs: vec![c.outer, c.inner],
                         desc,
                         nulls_first,
                     })
-                    .collect()
+                    .collect();
+                if !self.sort.0 {
+                    order.extend(outer.order.iter().skip(order.len()).cloned());
+                }
+                order
             }
             Method::Merge | Method::Hash => Vec::new(),
         }
