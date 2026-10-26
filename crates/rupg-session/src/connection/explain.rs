@@ -74,6 +74,14 @@ impl rupg_opt::Members for Members<'_, '_> {
         }
     }
 
+    fn statistics(&self, table: u32) -> Vec<rupg_func::Statistic> {
+        self.heap.statistics(self.database, table)
+    }
+
+    fn compare(&self) -> rupg_opt::Compare {
+        |left, a, right, b| rupg_func::compare(left, a, right, b).ok()
+    }
+
     fn indexes(&self, table: u32) -> Vec<Index> {
         let Some(catalog) = self.reader.catalog() else { return Vec::new() };
         let columns = catalog.relation(table).map(|t| t.columns.as_slice()).unwrap_or_default();

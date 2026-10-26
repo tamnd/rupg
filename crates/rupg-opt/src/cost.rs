@@ -1,7 +1,8 @@
-//! The estimates of `costsize.c` and `selfuncs.c` with no statistics: the number of rows of a table, the widths of the values, the selectivity of the conditions and the costs of the nodes.
+//! The estimates of `costsize.c` and `selfuncs.c`: the number of rows of a table, the widths of the values, the selectivity of the conditions and the costs of the nodes.
 
 use rupg_analyze::{BoolOp, BoolTest, Expr, ExprKind, Relation, SubLink, SubLinkKind};
 use rupg_pgcatalog::builtin;
+use rupg_plan::{STATISTIC_KIND_MCV, Statistic};
 use rupg_types::{Value, oid};
 
 use crate::{Member, Size, exprs};
@@ -74,22 +75,39 @@ pub fn type_width(ty: u32, typmod: i32) -> i32 {
     32
 }
 
-/// The width of a column of a relation, as `get_attavgwidth` with no statistics. A system column has the width of its type.
+/// The width of a column of a relation: `stawidth` from `get_attavgwidth` for a column of a table with statistics, else the width of its type. A system column has the width of its type.
 pub(crate) fn column_width(relation: &Relation, attnum: i16) -> i32 {
     match attnum {
         0 => WHOLE_ROW_HEADER + row_width(relation),
         -1 => 6,
         a if a < 0 => 4,
-        a => relation
-            .columns
-            .get(usize::try_from(a - 1).unwrap_or(usize::MAX))
-            .map_or(32, |c| type_width(c.ty, c.typmod)),
+        a => {
+            let analyzed = analyzed_width(relation, a);
+            analyzed.unwrap_or_else(|| {
+                relation
+                    .columns
+                    .get(usize::try_from(a - 1).unwrap_or(usize::MAX))
+                    .map_or(32, |c| type_width(c.ty, c.typmod))
+            })
+        }
     }
 }
 
-/// `get_rel_data_width`: the width of the columns of a relation that are not dropped.
+/// `get_attavgwidth`: `stawidth` of a column of a table with statistics, when it is more than 0.
+fn analyzed_width(relation: &Relation, attnum: i16) -> Option<i32> {
+    if relation.oid == 0 {
+        return None;
+    }
+    crate::statistics(relation.oid).get(&attnum).map(|s| s.width).filter(|w| *w > 0)
+}
+
+/// `get_rel_data_width`: the width of the columns of a relation that are not dropped, from their statistics or their types.
 pub(crate) fn row_width(relation: &Relation) -> i32 {
-    relation.columns.iter().filter(|c| c.ty != 0).map(|c| type_width(c.ty, c.typmod)).sum()
+    let width = |(at, c): (usize, &rupg_analyze::Column)| {
+        let attnum = i16::try_from(at + 1).unwrap_or(i16::MAX);
+        analyzed_width(relation, attnum).unwrap_or_else(|| type_width(c.ty, c.typmod))
+    };
+    relation.columns.iter().enumerate().filter(|(_, c)| c.ty != 0).map(width).sum()
 }
 
 /// The width of a value of an expression: the width of the column for a column, or else the width of its type.
@@ -135,22 +153,91 @@ pub(crate) fn clamp_rows(rows: f64) -> f64 {
     if rows <= 1.0 { 1.0 } else { rows.round_ties_even() }
 }
 
-/// `clause_selectivity` with no statistics: the fraction of the rows that pass a condition.
-pub(crate) fn selectivity(expr: &Expr) -> f64 {
-    selectivity_by(expr, &|_, _| None)
+/// What the estimates of the conditions know of the values that they read, as `examine_variable` finds it: the selectivity of `=` and of `<>`, and the statistics of a column in `pg_statistic`.
+pub(crate) trait Estimate {
+    /// `eqsel` for `left = right`, or `None` for the default estimate.
+    fn eq(&self, left: &Expr, right: &Expr) -> Option<f64>;
+
+    /// `neqsel` for `left <> right`, or `None` for the default estimate. It is the rest of the rows of `=`.
+    fn neq(&self, left: &Expr, right: &Expr) -> Option<f64> {
+        self.eq(left, right).map(|sel| 1.0 - sel)
+    }
+
+    /// The statistics of an expression, as `examine_variable` finds them.
+    fn statistic(&self, _expr: &Expr) -> Option<&Statistic> {
+        None
+    }
 }
 
-/// `clause_selectivity` with no statistics, where `eq` can give the selectivity of `=` of two values, as `eqsel` finds it for a unique column. `<>` is the rest of the rows, as `neqsel`.
-pub(crate) fn selectivity_by(expr: &Expr, eq: &dyn Fn(&Expr, &Expr) -> Option<f64>) -> f64 {
-    let each = |e: &Expr| selectivity_by(e, eq);
+impl<F: Fn(&Expr, &Expr) -> Option<f64>> Estimate for F {
+    fn eq(&self, left: &Expr, right: &Expr) -> Option<f64> {
+        self(left, right)
+    }
+}
+
+/// The estimate of `=` with no statistics, which is the default.
+fn no_statistics(_: &Expr, _: &Expr) -> Option<f64> {
+    None
+}
+
+/// `get_variable_numdistinct`: the number of distinct values of an expression with the statistics `statistic`, with true for the default. A unique expression has a distinct value for each row that is not null. With no statistics a `boolean` has 2 values, `ctid` is unique and `tableoid` has 1 value. Else a relative number takes the `tuples` of the relation of the expression, and a small relation has as many values as tuples.
+pub(crate) fn numdistinct(
+    expr: &Expr,
+    statistic: Option<&Statistic>,
+    unique: bool,
+    tuples: Option<f64>,
+) -> (f64, bool) {
+    let (mut stadistinct, nullfrac) = match statistic {
+        Some(s) => (f64::from(s.distinct), f64::from(s.null_frac)),
+        None if expr.ty == oid::BOOL => (2.0, 0.0),
+        None => match expr.strip_implicit().kind {
+            ExprKind::Var(var) if var.attnum == -1 => (-1.0, 0.0),
+            ExprKind::Var(var) if var.attnum == -6 => (1.0, 0.0),
+            _ => (0.0, 0.0),
+        },
+    };
+    if unique {
+        stadistinct = -(1.0 - nullfrac);
+    }
+    if stadistinct > 0.0 {
+        return (clamp_rows(stadistinct), false);
+    }
+    let Some(ntuples) = tuples.filter(|t| *t > 0.0) else { return (NUM_DISTINCT, true) };
+    if stadistinct < 0.0 {
+        return (clamp_rows(-stadistinct * ntuples), false);
+    }
+    if ntuples < NUM_DISTINCT {
+        return (clamp_rows(ntuples), false);
+    }
+    (NUM_DISTINCT, true)
+}
+
+/// `clause_selectivity` with no statistics: the fraction of the rows that pass a condition.
+pub(crate) fn selectivity(expr: &Expr) -> f64 {
+    selectivity_by(expr, &no_statistics)
+}
+
+/// `clause_selectivity`, with the estimates of `est` for `=`, `<>` and the columns with statistics.
+pub(crate) fn selectivity_by(expr: &Expr, est: &dyn Estimate) -> f64 {
+    let each = |e: &Expr| selectivity_by(e, est);
     match &expr.kind {
-        ExprKind::Bool(BoolOp::And, args) => list_selectivity_by(args, eq),
+        ExprKind::Bool(BoolOp::And, args) => list_selectivity_by(args, est),
         ExprKind::Bool(BoolOp::Or, args) => {
             args.iter().map(each).fold(0.0, |s1, s2| s1 + s2 - s1 * s2)
         }
         ExprKind::Bool(BoolOp::Not, args) => 1.0 - args.first().map_or(0.5, each),
-        ExprKind::NullTest(_, true) => EQ_SEL,
-        ExprKind::NullTest(_, false) => 1.0 - EQ_SEL,
+        // `nulltestsel`: the null fraction of the statistics. A system column is never null.
+        ExprKind::NullTest(arg, is_null) => {
+            let sel = match (est.statistic(arg), &arg.kind) {
+                (Some(s), _) => f64::from(s.null_frac),
+                (None, ExprKind::Var(var)) if var.attnum < 0 => 0.0,
+                (None, _) => EQ_SEL,
+            };
+            if *is_null { sel } else { 1.0 - sel }
+        }
+        ExprKind::BooleanTest(arg, test) if est.statistic(arg).is_some() => {
+            est.statistic(arg).map_or(0.5, |s| bool_test(s, *test))
+        }
         // `booltestsel` with no statistics: `IS UNKNOWN` has `DEFAULT_UNK_SEL`, and the other tests take the selectivity of the argument, or the rest of the rows, as if the argument is not null.
         ExprKind::BooleanTest(_, BoolTest::IsUnknown) => EQ_SEL,
         ExprKind::BooleanTest(_, BoolTest::IsNotUnknown) => 1.0 - EQ_SEL,
@@ -164,6 +251,11 @@ pub(crate) fn selectivity_by(expr: &Expr, eq: &dyn Fn(&Expr, &Expr) -> Option<f6
         {
             link.test.as_ref().map_or(0.5, each)
         }
+        // `boolvarsel`: a column with statistics is `= true`.
+        ExprKind::Var(_) if est.statistic(expr).is_some() => {
+            let value = Expr::new(ExprKind::Const(Value::Bool(true)), oid::BOOL);
+            est.eq(expr, &value).unwrap_or(0.5)
+        }
         // `boolvarsel` with no statistics: a column, a parameter or a subplan.
         ExprKind::Var(_)
         | ExprKind::Param(_)
@@ -175,21 +267,23 @@ pub(crate) fn selectivity_by(expr: &Expr, eq: &dyn Fn(&Expr, &Expr) -> Option<f6
         // `clause_selectivity_ext` estimates `IS DISTINCT FROM` as the rest of the rows of its `=` operator, and `IS NOT DISTINCT FROM` as the operator.
         ExprKind::Distinct { not, args, .. } => {
             let sel = match args.as_slice() {
-                [left, right] => eq(left, right).unwrap_or(EQ_SEL),
+                [left, right] => est.eq(left, right).unwrap_or(EQ_SEL),
                 _ => EQ_SEL,
             };
             if *not { sel } else { 1.0 - sel }
         }
-        ExprKind::ScalarArrayOp { func, any, args } => array_selectivity(*func, *any, args, eq),
+        ExprKind::ScalarArrayOp { func, any, args } => array_selectivity(*func, *any, args, est),
         _ => match exprs::binary(expr) {
             Some((op, left, right)) => {
-                let name = builtin::operator_by_oid(op).map(|o| o.name);
-                match (name, eq(left, right)) {
-                    (Some("="), Some(sel)) => sel,
-                    (Some("<>"), Some(sel)) => 1.0 - sel,
-                    _ => pattern_selectivity(op, left, right, eq)
-                        .unwrap_or_else(|| operator_selectivity(op)),
-                }
+                let known = match builtin::operator_by_oid(op).map(|o| o.name) {
+                    Some("=") => est.eq(left, right),
+                    Some("<>") => est.neq(left, right),
+                    _ => None,
+                };
+                known.unwrap_or_else(|| {
+                    pattern_selectivity(op, left, right, est)
+                        .unwrap_or_else(|| operator_selectivity(op))
+                })
             }
             None => INEQ_SEL,
         },
@@ -197,12 +291,7 @@ pub(crate) fn selectivity_by(expr: &Expr, eq: &dyn Fn(&Expr, &Expr) -> Option<f6
 }
 
 /// `scalararraysel` with no statistics: the selectivity of the operator for each item of the array, with the chance that one item passes for `ANY` or that each item passes for `ALL`. For `= ANY` and for `<> ALL` the chances of the items are disjoint, so that they add, when the sum is a probability. An array that is not a constant or a list of `ARRAY[...]` has 10 items that the condition knows nothing about.
-fn array_selectivity(
-    func: u32,
-    any: bool,
-    args: &[Expr],
-    eq: &dyn Fn(&Expr, &Expr) -> Option<f64>,
-) -> f64 {
+fn array_selectivity(func: u32, any: bool, args: &[Expr], est: &dyn Estimate) -> f64 {
     let [left, array] = args else { return 0.5 };
     let element = builtin::type_by_oid(array.ty).map_or(0, |t| t.elem);
     let Some(op) = array_operator(func, left.ty, element) else { return 0.5 };
@@ -213,12 +302,15 @@ fn array_selectivity(
         if one_relation && matches!(value.kind, ExprKind::Const(Value::Null)) {
             return 0.0;
         }
-        match (op.name, eq(left, value)) {
-            ("=", Some(sel)) => sel,
-            ("<>", Some(sel)) => 1.0 - sel,
-            _ => pattern_selectivity(op.oid, left, value, eq)
-                .unwrap_or_else(|| operator_selectivity(op.oid)),
-        }
+        let known = match op.name {
+            "=" => est.eq(left, value),
+            "<>" => est.neq(left, value),
+            _ => None,
+        };
+        known.unwrap_or_else(|| {
+            pattern_selectivity(op.oid, left, value, est)
+                .unwrap_or_else(|| operator_selectivity(op.oid))
+        })
     };
     let array = strip_array_coercion(array);
     let items: Vec<Expr> = match &array.kind {
@@ -264,6 +356,40 @@ fn array_selectivity(
     s1.clamp(0.0, 1.0)
 }
 
+/// `booltestsel` with the statistics of the argument: the fraction of `true` from the first most common value, or half of the values that are not null when there is no list.
+fn bool_test(s: &Statistic, test: BoolTest) -> f64 {
+    let freq_null = f64::from(s.null_frac);
+    let first =
+        s.slots.iter().find(|slot| slot.kind == STATISTIC_KIND_MCV).and_then(|slot| {
+            Some((slot.values.as_ref()?.first()?, *slot.numbers.as_ref()?.first()?))
+        });
+    let sel = match first {
+        Some((value, freq)) => {
+            let freq_true = if *value == Value::Bool(true) {
+                f64::from(freq)
+            } else {
+                1.0 - f64::from(freq) - freq_null
+            };
+            let freq_false = 1.0 - freq_true - freq_null;
+            match test {
+                BoolTest::IsUnknown => freq_null,
+                BoolTest::IsNotUnknown => 1.0 - freq_null,
+                BoolTest::IsTrue => freq_true,
+                BoolTest::IsNotTrue => 1.0 - freq_true,
+                BoolTest::IsFalse => freq_false,
+                BoolTest::IsNotFalse => 1.0 - freq_false,
+            }
+        }
+        None => match test {
+            BoolTest::IsUnknown => freq_null,
+            BoolTest::IsNotUnknown => 1.0 - freq_null,
+            BoolTest::IsTrue | BoolTest::IsFalse => (1.0 - freq_null) / 2.0,
+            BoolTest::IsNotTrue | BoolTest::IsNotFalse => (freq_null + 1.0) / 2.0,
+        },
+    };
+    sel.clamp(0.0, 1.0)
+}
+
 /// The operator of `x op ANY (array)` or `x op ALL (array)` whose function is `func`, for the type of `x` and the type of the items of the array.
 pub(crate) fn array_operator(
     func: u32,
@@ -276,19 +402,19 @@ pub(crate) fn array_operator(
 
 /// `clauselist_selectivity` with no statistics: the fraction of the rows that pass all the conditions.
 pub(crate) fn list_selectivity<'a>(quals: impl IntoIterator<Item = &'a Expr>) -> f64 {
-    list_selectivity_by(quals, &|_, _| None)
+    list_selectivity_by(quals, &no_statistics)
 }
 
-/// `clauselist_selectivity` with no statistics, with `eq` as [`selectivity_by`] reads it. The product of the selectivities of the conditions, but a low bound and a high bound of the same value, such as `x > 1 AND x < 5`, are a range, as `addRangeClause` finds them. Of two low bounds or two high bounds of a value, the smaller selectivity counts. With no statistics each bound has the default selectivity, so that a range has `DEFAULT_RANGE_INEQ_SEL`.
+/// `clauselist_selectivity`, with the estimates of `est` as [`selectivity_by`] reads them. The product of the selectivities of the conditions, but a low bound and a high bound of the same value, such as `x > 1 AND x < 5`, are a range, as `addRangeClause` finds them. Of two low bounds or two high bounds of a value, the smaller selectivity counts. With no statistics each bound has the default selectivity, so that a range has `DEFAULT_RANGE_INEQ_SEL`.
 pub(crate) fn list_selectivity_by<'a>(
     quals: impl IntoIterator<Item = &'a Expr>,
-    eq: &dyn Fn(&Expr, &Expr) -> Option<f64>,
+    est: &dyn Estimate,
 ) -> f64 {
     let mut s1 = 1.0;
     // The value of each range, with the selectivity of its low bound and of its high bound.
     let mut ranges: Vec<(&Expr, Option<f64>, Option<f64>)> = Vec::new();
     for expr in quals {
-        let s2 = selectivity_by(expr, eq);
+        let s2 = selectivity_by(expr, est);
         let Some((value, low)) = range_bound(expr) else {
             s1 *= s2;
             continue;
@@ -364,12 +490,7 @@ enum Pattern {
 }
 
 /// `patternsel_common` with no statistics: the selectivity of `LIKE`, `ILIKE`, a regular expression or `^@` of a column and a constant pattern. A pattern that has all of the value is `=` of the value, as `var_eq_const`. Otherwise the selectivity is `DEFAULT_MATCH_SEL` for the fixed prefix of the pattern, times the selectivity of the rest of the pattern, between 0.0001 and 0.9999. The result is `None` when the estimator uses its default.
-fn pattern_selectivity(
-    op: u32,
-    left: &Expr,
-    right: &Expr,
-    eq: &dyn Fn(&Expr, &Expr) -> Option<f64>,
-) -> Option<f64> {
+fn pattern_selectivity(op: u32, left: &Expr, right: &Expr, est: &dyn Estimate) -> Option<f64> {
     let row = builtin::operator_by_oid(op)?;
     let (kind, negate) = match row.name {
         "~~" => (Pattern::Like, false),
@@ -405,7 +526,7 @@ fn pattern_selectivity(
             ExprKind::Const(Value::Bytea(_)) => Value::Bytea(prefix),
             _ => Value::Text(String::from_utf8_lossy(&prefix).into_owned()),
         };
-        eq(left, &Expr::new(ExprKind::Const(value), right.ty)).unwrap_or(EQ_SEL)
+        est.eq(left, &Expr::new(ExprKind::Const(value), right.ty)).unwrap_or(EQ_SEL)
     } else {
         let prefix_sel = if status == Prefix::Partial { EQ_SEL } else { 1.0 };
         (prefix_sel * rest).clamp(0.0001, 0.9999)

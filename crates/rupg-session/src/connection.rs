@@ -4970,6 +4970,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/analyze_stats.test")));
     }
 
+    /// `EXPLAIN` of the scans of tables after `ANALYZE`: the rows of `=`, `<>`, `IS NULL` and the tests of a `boolean` come from the most common values, the null fraction and the number of distinct values in `pg_statistic`, and the widths of the columns come from `stawidth`. `connection/plan_statistics.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_statistics() {
+        big_stack(|| script(include_str!("connection/plan_statistics.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

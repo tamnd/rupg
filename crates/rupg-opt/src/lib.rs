@@ -17,16 +17,18 @@ mod setcast;
 mod setop;
 mod upper;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::ops::Range;
+use std::rc::Rc;
 
 use rupg_analyze::{
     Cte, Expr, ExprKind, FromItem, JoinKind, Query, SubLink, SubLinkKind, TABLE_OID_ATTNUM, Var,
     Write, WriteKind,
 };
-use rupg_plan::{Item, Kind, Label, Leaf, Node, Operation, Plan, Scope, SubPlan};
-use rupg_types::oid;
+use rupg_plan::{Item, Kind, Label, Leaf, Node, Operation, Plan, Scope, Statistic, SubPlan};
+use rupg_types::{Value, oid};
 
 pub use cost::{node_cost, type_width};
 pub use joinrm::remove_joins;
@@ -43,6 +45,16 @@ pub trait Members: std::fmt::Debug {
     /// The size of the heap of the table with the OID `table`: `RelationGetNumberOfBlocks`, and `relpages` and `reltuples` of `pg_class`.
     fn size(&self, _table: u32) -> Size {
         Size::default()
+    }
+
+    /// The statistics of the columns of the table with the OID `table` in `pg_statistic`, which `examine_simple_variable` reads.
+    fn statistics(&self, _table: u32) -> Vec<Statistic> {
+        Vec::new()
+    }
+
+    /// The comparison of two values that are not null, of the types that the arguments give, as the B-tree support function `cmp` of the types gives it. The selectivity functions call the operators of the statistics through it, as `selfuncs.c` calls them through `fmgr`.
+    fn compare(&self) -> Compare {
+        no_compare
     }
 
     /// The `enable_*` settings of the session.
@@ -114,6 +126,63 @@ pub(crate) fn enable() -> Enable {
     ENABLE.with(Cell::get)
 }
 
+/// The order of two values that are not null with their types, or `None` when the types do not compare.
+pub type Compare = fn(u32, &Value, u32, &Value) -> Option<Ordering>;
+
+/// The comparison when the planner has none: no two values compare.
+fn no_compare(_: u32, _: &Value, _: u32, _: &Value) -> Option<Ordering> {
+    None
+}
+
+thread_local! {
+    /// The comparison of the values of the plan that the planner makes now.
+    static COMPARE: Cell<Compare> = Cell::new(no_compare);
+}
+
+/// The order of two values that are not null with their types, as [`Members::compare`] gives it.
+pub(crate) fn compare(left: u32, a: &Value, right: u32, b: &Value) -> Option<Ordering> {
+    COMPARE.with(Cell::get)(left, a, right, b)
+}
+
+/// The statistics of the columns of each table of a plan, by column number.
+type Statistics = BTreeMap<u32, Rc<BTreeMap<i16, Statistic>>>;
+
+thread_local! {
+    /// The statistics with `stainherit` false of the columns of the tables of the plan that the planner makes now, which PostgreSQL reads from the cache of `pg_statistic`.
+    static STATISTICS: RefCell<Statistics> = RefCell::default();
+}
+
+/// The statistics with `stainherit` false of the columns of the table `table`, by column number, as `examine_simple_variable` and `get_attavgwidth` read them.
+pub(crate) fn statistics(table: u32) -> Rc<BTreeMap<i16, Statistic>> {
+    STATISTICS.with(|s| s.borrow().get(&table).cloned().unwrap_or_default())
+}
+
+/// The statistics of the tables of the query and of the queries in it, from `members`.
+fn query_statistics(query: &Query, members: &dyn Members, out: &mut Statistics) {
+    fn expr(e: &Expr, members: &dyn Members, out: &mut Statistics) {
+        for child in e.children() {
+            expr(child, members, out);
+        }
+        if let ExprKind::SubLink(link) = &e.kind {
+            query_statistics(&link.query, members, out);
+        }
+    }
+    for relation in &query.relations {
+        if let Some(sub) = &relation.subquery {
+            query_statistics(sub, members, out);
+        } else if relation.oid != 0 && !out.contains_key(&relation.oid) {
+            let all = members.statistics(relation.oid).into_iter().filter(|s| !s.inherit);
+            out.insert(relation.oid, Rc::new(all.map(|s| (s.attnum, s)).collect()));
+        }
+    }
+    for cte in &query.ctes {
+        query_statistics(&cte.query, members, out);
+    }
+    for e in query.exprs() {
+        expr(e, members, out);
+    }
+}
+
 /// An index of a table, with the facts of `IndexOptInfo` that the planner uses.
 #[derive(Clone, Debug)]
 pub struct Index {
@@ -165,8 +234,14 @@ pub struct Member {
 /// The plan of a query, with the members of the relations that `members` gives.
 pub fn plan<'q>(query: &'q Query, members: &'q dyn Members) -> Plan<'q> {
     let saved = ENABLE.with(|e| e.replace(members.enable()));
+    let mut statistics = Statistics::new();
+    query_statistics(query, members, &mut statistics);
+    let saved_statistics = STATISTICS.with(|s| s.replace(statistics));
+    let saved_compare = COMPARE.with(|c| c.replace(members.compare()));
     let plan = plan_with(query, members);
+    COMPARE.with(|c| c.set(saved_compare));
     ENABLE.with(|e| e.set(saved));
+    STATISTICS.with(|s| s.replace(saved_statistics));
     plan
 }
 
