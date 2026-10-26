@@ -90,6 +90,24 @@ impl Prepared {
         ]
     }
 
+    /// `RevalidateCachedQuery` for a plan of a query on a table with row security: the plan of the statement again, with the policies of the current role and the current `row_security`, or `None` for a plan that stays. `plancache.c` plans such a query again when the role or `row_security` changes, and when a policy of the table changes. rupg does not track the changes of the policies, so it plans the query again for each run.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the analysis and of the plan, such as `42501` for a table whose policies apply when `row_security` is off.
+    pub(super) fn replan(&self, reader: &query::Reader<'_>) -> Result<Option<Plan>, Error> {
+        let Some(node) =
+            self.stmt.as_ref().filter(|_| self.plan.as_ref().is_some_and(Plan::row_security))
+        else {
+            return Ok(None);
+        };
+        if !query::is_query(node) {
+            return Ok(None);
+        }
+        let params = Params { types: self.params.clone(), variable: true };
+        query::plan(node, reader, &params).map(Some)
+    }
+
     /// `choose_custom_plan` in `plancache.c`: counts a run of the statement with a generic plan or with a custom plan, as `GetCachedPlan` does.
     ///
     /// A statement without parameters, a utility statement and an empty query use the generic plan. Else `plan_cache_mode` decides, and in the mode `auto` the first five runs use a custom plan. After them PostgreSQL compares the cost of the generic plan with the mean cost of the custom plans. rupg has no costs, so it uses the generic plan, as PostgreSQL does when the generic plan costs less.
@@ -380,10 +398,13 @@ impl Connection {
         drop(reader);
         let result_formats = values.finish()?;
         // `GetCachedPlan` plans the query with the values of the parameters, as a custom plan, before the portal takes the formats of the result.
-        let plan = match &statement.plan {
-            Some(plan) => Some(plan.fold(Some(&params), &self.reader())?),
+        let reader = self.reader();
+        let replanned = statement.replan(&reader)?;
+        let plan = match replanned.as_ref().or(statement.plan.as_ref()) {
+            Some(plan) => Some(plan.fold(Some(&params), &reader)?),
             None => None,
         };
+        drop(reader);
         statement.count_plan(self.settings.borrow().get("plan_cache_mode").as_deref());
         let formats = match &statement.columns {
             Some(columns) => {

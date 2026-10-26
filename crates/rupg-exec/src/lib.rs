@@ -1499,6 +1499,11 @@ impl Plan {
         &self.query.notices
     }
 
+    /// `dependsOnRole`: true when a table of the query has row security, so that the policies of the plan are the policies of the role that made it.
+    pub fn row_security(&self) -> bool {
+        self.row_security.is_some()
+    }
+
     /// The types of the parameters.
     pub fn params(&self) -> &[u32] {
         &self.query.params
