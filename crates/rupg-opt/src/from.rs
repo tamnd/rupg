@@ -865,6 +865,15 @@ impl<'q> Builder<'q> {
                         }),
                     };
                     if let Some(members) = members {
+                        // `remove_useless_groupby_columns`: a partitioned table, which is not one of its members, has no row twice, so its unique indexes count, unlike those of a parent of `INHERITS`.
+                        if !members.iter().any(|m| m.oid == relation.oid) {
+                            let indexes = self.members.map(|m| m.indexes(relation.oid));
+                            for index in indexes.unwrap_or_default() {
+                                if functional(relation, &index) {
+                                    stats.functional.entry(r).or_default().push(index.keys);
+                                }
+                            }
+                        }
                         let both = (base.as_slice(), quals.as_slice());
                         let (rels, members) =
                             inherit::scan(level, r, both, members, self.members, stats);
@@ -907,16 +916,10 @@ impl<'q> Builder<'q> {
                                 stats.unique.exprs.push(expr);
                             }
                         }
+                        if functional(relation, index) {
+                            stats.functional.entry(r).or_default().push(index.keys.clone());
+                        }
                         if index.unique && index.immediate && !index.partial {
-                            let not_null = |k: &i16| {
-                                usize::try_from(*k - 1)
-                                    .ok()
-                                    .and_then(|c| relation.columns.get(c))
-                                    .is_some_and(|c| c.not_null)
-                            };
-                            if index.nulls_not_distinct || index.keys.iter().all(not_null) {
-                                stats.functional.entry(r).or_default().push(index.keys.clone());
-                            }
                             stats.distinct.entry(r).or_default().push(index.keys.clone());
                         }
                     }
@@ -3812,4 +3815,18 @@ impl<'q> Candidate<'q> {
         node.disabled = self.method_disabled();
         Rel { node, rels: BTreeSet::new(), order }
     }
+}
+
+/// `remove_useless_groupby_columns`: true when the keys of the index decide the other columns of its table, as a unique index that is not deferrable and not partial, on columns that are `NOT NULL` or with `NULLS NOT DISTINCT`.
+fn functional(relation: &Relation, index: &Index) -> bool {
+    let not_null = |k: &i16| {
+        usize::try_from(*k - 1)
+            .ok()
+            .and_then(|c| relation.columns.get(c))
+            .is_some_and(|c| c.not_null)
+    };
+    index.unique
+        && index.immediate
+        && !index.partial
+        && (index.nulls_not_distinct || index.keys.iter().all(not_null))
 }
