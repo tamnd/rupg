@@ -4,10 +4,11 @@
 //!
 //! An `Execute` that completes does not end the transaction. The statements after it, up to `Sync`, run in one implicit block, and `Sync` commits it. A transaction statement, and a statement that must commit at once such as `DISCARD ALL`, end the transaction at the end of their `Execute`.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, Weak};
 
 use rupg_analyze::Params;
+use rupg_catalog::Catalog;
 use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
 use rupg_func::BackendState;
@@ -39,6 +40,8 @@ pub(crate) struct Prepared {
     prepare_time: i64,
     /// True for a statement of `PREPARE`, and false for a statement of `Parse`.
     from_sql: bool,
+    /// The catalog that the plan read. A change of the catalog makes a new catalog, so the plan is stale when the catalog of the session is not this one.
+    catalog: Weak<Catalog>,
     /// The number of runs with a generic plan.
     generic_plans: AtomicI64,
     /// The number of runs with a custom plan.
@@ -63,8 +66,31 @@ impl Prepared {
             plan,
             prepare_time,
             from_sql,
+            catalog: Weak::new(),
             generic_plans: AtomicI64::new(0),
             custom_plans: AtomicI64::new(0),
+        }
+    }
+
+    /// The statement with a plan that read `catalog`.
+    pub(super) fn planned_on(mut self, catalog: &Arc<Catalog>) -> Prepared {
+        self.catalog = Arc::downgrade(catalog);
+        self
+    }
+
+    /// The statement with the new plan `plan` of `replan`, which read `catalog`. The columns come from the new plan, as a table that is made again has a new OID. The counts of the runs stay.
+    pub(super) fn renew(&self, plan: Plan, catalog: &Arc<Catalog>) -> Prepared {
+        Prepared {
+            text: self.text.clone(),
+            stmt: self.stmt.clone(),
+            params: self.params.clone(),
+            columns: query::returns_rows(&plan).then(|| query::columns(&plan)),
+            plan: Some(plan),
+            prepare_time: self.prepare_time,
+            from_sql: self.from_sql,
+            catalog: Arc::downgrade(catalog),
+            generic_plans: AtomicI64::new(self.generic_plans.load(Ordering::Relaxed)),
+            custom_plans: AtomicI64::new(self.custom_plans.load(Ordering::Relaxed)),
         }
     }
 
@@ -90,22 +116,38 @@ impl Prepared {
         ]
     }
 
-    /// `RevalidateCachedQuery` for a plan of a query on a table with row security: the plan of the statement again, with the policies of the current role and the current `row_security`, or `None` for a plan that stays. `plancache.c` plans such a query again when the role or `row_security` changes, and when a policy of the table changes. rupg does not track the changes of the policies, so it plans the query again for each run.
+    /// `RevalidateCachedQuery`: the plan of the statement again, or `None` for a plan that stays. The plan is stale after a change of the catalog, such as `ALTER TABLE` or `DROP TABLE`. `plancache.c` also plans a query on a table with row security again when the role or `row_security` changes, and when a policy of the table changes. rupg does not track these changes, so it plans such a query again for each run.
     ///
     /// # Errors
     ///
-    /// The errors of the analysis and of the plan, such as `42501` for a table whose policies apply when `row_security` is off.
+    /// The errors of the analysis and of the plan, such as `42P01` for a table that is gone and `42501` for a table whose policies apply when `row_security` is off. `0A000` when the new plan gives other columns.
     pub(super) fn replan(&self, reader: &query::Reader<'_>) -> Result<Option<Plan>, Error> {
-        let Some(node) =
-            self.stmt.as_ref().filter(|_| self.plan.as_ref().is_some_and(Plan::row_security))
-        else {
+        let (Some(node), Some(plan)) = (&self.stmt, &self.plan) else {
             return Ok(None);
         };
-        if !query::is_query(node) {
+        let same = std::ptr::eq(self.catalog.as_ptr(), Arc::as_ptr(&reader.catalog));
+        if (same && !plan.row_security()) || !query::is_query(node) {
             return Ok(None);
         }
         let params = Params { types: self.params.clone(), variable: true };
-        query::plan(node, reader, &params).map(Some)
+        let plan = query::plan(node, reader, &params)?;
+        let columns = query::returns_rows(&plan).then(|| query::columns(&plan));
+        let changed = match (&columns, &self.columns) {
+            (Some(new), Some(old)) => {
+                new.len() != old.len()
+                    || new.iter().zip(old).any(|(new, old)| {
+                        new.name != old.name || new.ty != old.ty || new.typmod != old.typmod
+                    })
+            }
+            (new, old) => new.is_some() != old.is_some(),
+        };
+        if changed {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "cached plan must not change result type",
+            ));
+        }
+        Ok(Some(plan))
     }
 
     /// `choose_custom_plan` in `plancache.c`: counts a run of the statement with a generic plan or with a custom plan, as `GetCachedPlan` does.
@@ -348,7 +390,8 @@ impl Connection {
         }
         self.interrupted()?;
         let prepared =
-            Prepared::new(text, stmt, params, columns, plan, self.statement_start, false);
+            Prepared::new(text, stmt, params, columns, plan, self.statement_start, false)
+                .planned_on(&self.catalog());
         self.statements.insert(name, Arc::new(prepared))?;
         out.parse_complete();
         Ok(())
@@ -356,7 +399,7 @@ impl Connection {
 
     /// `exec_bind_message`.
     pub(super) fn bind(&mut self, bind: Bind<'_>, out: &mut OutBuf) -> Result<(), Failed> {
-        let statement = Arc::clone(self.statements.get(bind.statement)?);
+        let mut statement = Arc::clone(self.statements.get(bind.statement)?);
         self.report(BackendState::Running, Some(&statement.text));
         self.start_xact();
         let mut values = bind.params(statement.params.len())?;
@@ -400,7 +443,14 @@ impl Connection {
         // `GetCachedPlan` plans the query with the values of the parameters, as a custom plan, before the portal takes the formats of the result.
         let reader = self.reader();
         let replanned = statement.replan(&reader)?;
-        let plan = match replanned.as_ref().or(statement.plan.as_ref()) {
+        let catalog = Arc::clone(&reader.catalog);
+        drop(reader);
+        if let Some(plan) = replanned {
+            statement = Arc::new(statement.renew(plan, &catalog));
+            *self.statements.get_mut(bind.statement)? = Arc::clone(&statement);
+        }
+        let reader = self.reader();
+        let plan = match &statement.plan {
             Some(plan) => Some(plan.fold(Some(&params), &reader)?),
             None => None,
         };

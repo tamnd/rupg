@@ -2350,10 +2350,10 @@ fn statements<'a>(list: &'a rupg_sql::nodes::List, text: &'a str) -> Vec<(&'a No
         .collect()
 }
 
-/// The position of a byte offset in characters, from 1, as the field `P` gives it.
+/// The position of a byte offset in characters, from 1, as the field `P` gives it. An offset after the end of the text, such as an offset in the text of a prepared statement that `EXECUTE` plans again, counts one character for each byte after the end, as PostgreSQL gives the position in the text of the statement.
 fn character_position(text: &str, at: usize) -> usize {
-    let at = at.min(text.len());
-    text.as_bytes()[..at].iter().filter(|&&b| b & 0xc0 != 0x80).count() + 1
+    let end = at.min(text.len());
+    text.as_bytes()[..end].iter().filter(|&&b| b & 0xc0 != 0x80).count() + (at - end) + 1
 }
 
 #[cfg(test)]
@@ -4898,6 +4898,12 @@ mod tests {
     #[test]
     fn explain_execute() {
         big_stack(|| script(include_str!("connection/explain_execute.test")));
+    }
+
+    /// The prepared statements after a change of the catalog: a plan that reads the new catalog, `0A000` for a plan that gives other columns, the errors of a table or a column that is gone, and the policies of a table that enables row security after `PREPARE`. `connection/prepared_statements_replan.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn prepared_statements_replan() {
+        big_stack(|| script(include_str!("connection/prepared_statements_replan.test")));
     }
 
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.

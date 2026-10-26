@@ -1,0 +1,161 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE pc_t (a int, b text);
+CREATE TABLE
+> INSERT INTO pc_t SELECT g, 'v' || g FROM generate_series(1, 6) g;
+INSERT 0 6
+> PREPARE p1 AS SELECT * FROM pc_t ORDER BY a;
+PREPARE
+> PREPARE p2(int) AS SELECT a, b FROM pc_t WHERE a <= $1 ORDER BY a;
+PREPARE
+> PREPARE p3(int) AS SELECT count(*) FROM pc_t WHERE a > $1;
+PREPARE
+> PREPARE p4(int) AS UPDATE pc_t SET b = b || '!' WHERE a = $1 RETURNING a, b;
+PREPARE
+> EXECUTE p1;
+fields a@pc_t.1:23:4:-1,b@pc_t.2:25:-1:-1
+row 1,v1
+row 2,v2
+row 3,v3
+row 4,v4
+row 5,v5
+row 6,v6
+SELECT 6
+> EXECUTE p2(2);
+fields a@pc_t.1:23:4:-1,b@pc_t.2:25:-1:-1
+row 1,v1
+row 2,v2
+SELECT 2
+> EXECUTE p3(1);
+fields count:20:8:-1
+row 5
+SELECT 1
+> EXECUTE p4(1);
+fields a@pc_t.1:23:4:-1,b@pc_t.2:25:-1:-1
+row 1,v1!
+UPDATE 1
+> CREATE INDEX pc_t_a ON pc_t (a);
+CREATE INDEX
+> EXECUTE p2(3);
+fields a@pc_t.1:23:4:-1,b@pc_t.2:25:-1:-1
+row 1,v1!
+row 2,v2
+row 3,v3
+SELECT 3
+> ALTER TABLE pc_t ADD COLUMN c int DEFAULT 7;
+ALTER TABLE
+> EXECUTE p1;
+ERROR 0A000 cached plan must not change result type
+> EXECUTE p2(2);
+fields a@pc_t.1:23:4:-1,b@pc_t.2:25:-1:-1
+row 1,v1!
+row 2,v2
+SELECT 2
+> EXECUTE p3(2);
+fields count:20:8:-1
+row 4
+SELECT 1
+> EXECUTE p4(2);
+fields a@pc_t.1:23:4:-1,b@pc_t.2:25:-1:-1
+row 2,v2!
+UPDATE 1
+> ALTER TABLE pc_t ALTER COLUMN b TYPE varchar(10);
+ALTER TABLE
+> EXECUTE p2(2);
+ERROR 0A000 cached plan must not change result type
+> EXECUTE p3(3);
+fields count:20:8:-1
+row 3
+SELECT 1
+> ALTER TABLE pc_t DROP COLUMN c;
+ALTER TABLE
+> EXECUTE p1;
+ERROR 0A000 cached plan must not change result type
+> EXECUTE p3(4);
+fields count:20:8:-1
+row 2
+SELECT 1
+> ALTER TABLE pc_t RENAME COLUMN a TO aa;
+ALTER TABLE
+> EXECUTE p3(5);
+ERROR 42703 column "a" does not exist at 52
+> ALTER TABLE pc_t RENAME COLUMN aa TO a;
+ALTER TABLE
+> EXECUTE p3(5);
+fields count:20:8:-1
+row 1
+SELECT 1
+> DROP TABLE pc_t;
+DROP TABLE
+> EXECUTE p3(1);
+ERROR 42P01 relation "pc_t" does not exist at 41
+> CREATE TABLE pc_t (a int, b text);
+CREATE TABLE
+> INSERT INTO pc_t VALUES (10, 'x'), (20, 'y');
+INSERT 0 2
+> EXECUTE p3(1);
+fields count:20:8:-1
+row 2
+SELECT 1
+> EXECUTE p2(15);
+fields a@pc_t.1:23:4:-1,b@pc_t.2:25:-1:-1
+row 10,x
+SELECT 1
+> BEGIN;
+BEGIN
+> ALTER TABLE pc_t ADD COLUMN d int;
+ALTER TABLE
+> EXECUTE p1;
+ERROR 0A000 cached plan must not change result type
+> ROLLBACK;
+ROLLBACK
+> EXECUTE p2(25);
+fields a@pc_t.1:23:4:-1,b@pc_t.2:25:-1:-1
+row 10,x
+row 20,y
+SELECT 2
+> SELECT name, generic_plans, custom_plans FROM pg_prepared_statements WHERE name <> 'p3' ORDER BY name;
+fields name@pg_prepared_statements.1:25:-1:-1,generic_plans@pg_prepared_statements.7:20:8:-1,custom_plans@pg_prepared_statements.8:20:8:-1
+row p1,1,0
+row p2,0,5
+row p4,0,2
+SELECT 3
+> CREATE ROLE regress_pc_u;
+CREATE ROLE
+> GRANT SELECT ON pc_t TO regress_pc_u;
+GRANT
+> PREPARE p5 AS SELECT a FROM pc_t ORDER BY a;
+PREPARE
+> EXECUTE p5;
+fields a@pc_t.1:23:4:-1
+row 10
+row 20
+SELECT 2
+> ALTER TABLE pc_t ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> CREATE POLICY pp ON pc_t USING (a > 15);
+CREATE POLICY
+> SET SESSION AUTHORIZATION regress_pc_u;
+SET
+session_authorization=regress_pc_u
+is_superuser=off
+> EXECUTE p5;
+fields a@pc_t.1:23:4:-1
+row 20
+SELECT 1
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> EXECUTE p5;
+fields a@pc_t.1:23:4:-1
+row 10
+row 20
+SELECT 2
+> DEALLOCATE ALL;
+DEALLOCATE ALL
+> DROP TABLE pc_t;
+DROP TABLE
+> DROP ROLE regress_pc_u;
+DROP ROLE
