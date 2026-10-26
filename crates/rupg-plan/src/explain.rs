@@ -537,7 +537,7 @@ impl Explainer<'_, '_> {
                 self.texts.below(Vec::new());
             }
             Kind::Memoize(memo) => self.memoize(scope, memo, upper)?,
-            Kind::Aggregate { strategy, keys, sets } => {
+            Kind::Aggregate { strategy, keys, sets, .. } => {
                 if sets.is_empty() {
                     if !keys.is_empty() {
                         let keys = self.items(scope, keys, upper)?;

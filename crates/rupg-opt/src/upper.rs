@@ -1122,7 +1122,12 @@ impl<'q> Builder<'q> {
             match kept {
                 0 => {
                     let strategy = Strategy::Hashed;
-                    let kind = Kind::Aggregate { strategy, keys: keys.clone(), sets: Vec::new() };
+                    let kind = Kind::Aggregate {
+                        strategy,
+                        keys: keys.clone(),
+                        sets: Vec::new(),
+                        unique: false,
+                    };
                     let mut node = Node::new(kind, scope, vec![append.clone()]);
                     node.cost = Cost { startup: hash_startup, total: hash_total, rows, width };
                     node.disabled = !enable.hashagg;
@@ -1288,7 +1293,12 @@ fn aggregate<'q>(
         let startup = c.total + cost::CPU_OPERATOR * units * n + finals;
         let total = startup + cost::CPU_TUPLE + having_startup + having_cost;
         let mut node = Node::new(
-            Kind::Aggregate { strategy: Strategy::Plain, keys: Vec::new(), sets: Vec::new() },
+            Kind::Aggregate {
+                strategy: Strategy::Plain,
+                keys: Vec::new(),
+                sets: Vec::new(),
+                unique: false,
+            },
             scope,
             vec![input],
         );
@@ -1388,7 +1398,12 @@ fn aggregate<'q>(
     };
     if !only && hashable && hash_wins {
         let mut node = Node::new(
-            Kind::Aggregate { strategy: Strategy::Hashed, keys: hash_keys, sets: Vec::new() },
+            Kind::Aggregate {
+                strategy: Strategy::Hashed,
+                keys: hash_keys,
+                sets: Vec::new(),
+                unique: false,
+            },
             scope,
             vec![input],
         );
@@ -1405,8 +1420,11 @@ fn aggregate<'q>(
     *order = sorted_order;
     order.truncate(group.len());
     let strategy = if group_node { Strategy::Group } else { Strategy::Sorted };
-    let mut node =
-        Node::new(Kind::Aggregate { strategy, keys, sets: Vec::new() }, scope, vec![input]);
+    let mut node = Node::new(
+        Kind::Aggregate { strategy, keys, sets: Vec::new(), unique: false },
+        scope,
+        vec![input],
+    );
     node.filter = filter;
     let startup = sorted_input.startup + having_startup;
     node.cost = Cost { startup, total: sorted_total, rows, width: 0 };
@@ -1942,8 +1960,11 @@ fn grouping_sets<'q>(
         plan_rollups.push(Rollup { hashed: rollup.hashed, sort, sets });
     }
     order.clear();
-    let mut node =
-        Node::new(Kind::Aggregate { strategy, keys, sets: plan_rollups }, level.scope, vec![input]);
+    let mut node = Node::new(
+        Kind::Aggregate { strategy, keys, sets: plan_rollups, unique: false },
+        level.scope,
+        vec![input],
+    );
     node.filter = filter;
     node.disabled = disabled > 0;
     node.cost = cost;
@@ -2226,7 +2247,12 @@ fn distinct<'q>(
     if !only && hashable && hash_wins {
         let items = processed.iter().map(|d| Item::below(level.target(d.target))).collect();
         let mut node = Node::new(
-            Kind::Aggregate { strategy: Strategy::Hashed, keys: items, sets: Vec::new() },
+            Kind::Aggregate {
+                strategy: Strategy::Hashed,
+                keys: items,
+                sets: Vec::new(),
+                unique: false,
+            },
             scope,
             vec![input],
         );

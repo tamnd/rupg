@@ -3688,6 +3688,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/join_cond_computed.test")));
     }
 
+    /// The input of an `Agg` has the keys in the order of the target list, as `make_group_input_target`, and the input of the `Agg` of a semi join has the target of the side first, as `create_final_unique_paths`. A hash join and a merge join test the conditions of the equivalence classes in the order of the classes, as `build_joinrel_restrictlist`.
+    #[test]
+    fn group_input_order() {
+        big_stack(|| script(include_str!("connection/group_input_order.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

@@ -2739,7 +2739,12 @@ fn unique_rels<'q>(semi: &Semi<'q>, side: &[Rel<'q>], stats: &Stats) -> Option<V
         let startup = c.total + cost::CPU_OPERATOR * n * c.rows;
         let total = startup + cost::CPU_TUPLE * groups;
         let items = keys.iter().map(|&k| Item::below(k)).collect();
-        let kind = Kind::Aggregate { strategy: Strategy::Hashed, keys: items, sets: Vec::new() };
+        let kind = Kind::Aggregate {
+            strategy: Strategy::Hashed,
+            keys: items,
+            sets: Vec::new(),
+            unique: true,
+        };
         // The target of the `Agg` is the target of the side without the new items, as `create_final_unique_paths` gives it.
         let width = cheapest.node.cost.width;
         let mut node = Node::new(kind, input.scope, vec![input]);
@@ -3254,11 +3259,13 @@ fn split<'q>(
     let mut other = Vec::new();
     for qual in quals {
         match clause(qual, outer, inner, usable) {
-            Some(c) => clauses.push(c),
+            Some(c) => clauses.push(((qual.class.is_none(), qual.class, qual.order), c)),
             None => other.push(qual.clone()),
         }
     }
-    (clauses, other)
+    // `build_joinrel_restrictlist`: the conditions of the equivalence classes come first, in the order of the classes, then the other conditions in the order of `deconstruct_jointree`.
+    clauses.sort_by_key(|(key, _)| *key);
+    (clauses.into_iter().map(|(_, c)| c).collect(), other)
 }
 
 /// The number of rows of the join that pass the conditions, as `approx_tuple_count`.
