@@ -498,6 +498,85 @@ pub struct Type {
     pub labels: Option<Vec<EnumLabel>>,
     /// The facts of a range type or of a multirange type, or `None` for a type of another kind.
     pub range: Option<RangePart>,
+    /// The facts of a base type that `CREATE TYPE` made, or of a shell type, or `None` for a type of another kind.
+    pub base: Option<BaseType>,
+}
+
+/// The facts of a base type or of a shell type in its row of `pg_type`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BaseType {
+    /// `typisdefined`: false for a shell type, which `CREATE TYPE` with no parameters makes.
+    pub defined: bool,
+    /// `typlen`: the length of a fixed-length type, -1 for a varlena and -2 for a C string.
+    pub len: i16,
+    /// `typbyval`.
+    pub by_val: bool,
+    /// `typcategory`.
+    pub category: u8,
+    /// `typispreferred`.
+    pub preferred: bool,
+    /// `typdelim`.
+    pub delim: u8,
+    /// `typinput`.
+    pub input: u32,
+    /// `typoutput`.
+    pub output: u32,
+    /// `typreceive`, or 0.
+    pub receive: u32,
+    /// `typsend`, or 0.
+    pub send: u32,
+    /// `typmodin`, or 0.
+    pub modin: u32,
+    /// `typmodout`, or 0.
+    pub modout: u32,
+    /// `typanalyze`, or 0.
+    pub analyze: u32,
+    /// `typsubscript`, or 0.
+    pub subscript: u32,
+    /// `typalign`.
+    pub align: u8,
+    /// `typstorage`.
+    pub storage: u8,
+    /// `typcollation`, or 0.
+    pub collation: u32,
+    /// `typdefault`, or `None`.
+    pub default: Option<String>,
+}
+
+/// `F_SHELL_IN` and `F_SHELL_OUT`, the input and the output functions of a shell type.
+const SHELL_IO: (u32, u32) = (2398, 2399);
+
+impl BaseType {
+    /// The facts that `TypeShellMake` gives a shell type: the representation of `int4`, which does not matter, as no value has the type.
+    pub fn shell() -> BaseType {
+        BaseType {
+            defined: false,
+            len: 4,
+            by_val: true,
+            category: b'P',
+            preferred: false,
+            delim: b',',
+            input: SHELL_IO.0,
+            output: SHELL_IO.1,
+            receive: 0,
+            send: 0,
+            modin: 0,
+            modout: 0,
+            analyze: 0,
+            subscript: 0,
+            align: b'i',
+            storage: b'p',
+            collation: 0,
+            default: None,
+        }
+    }
+}
+
+impl Type {
+    /// True for a shell type, which has no `typisdefined`.
+    pub fn is_shell(&self) -> bool {
+        self.base.as_ref().is_some_and(|b| !b.defined)
+    }
 }
 
 /// The facts of a range type, one row of `pg_range`.
@@ -2504,6 +2583,7 @@ impl Catalog {
                 domain: None,
                 labels: None,
                 range: None,
+                base: None,
             },
         );
         self.types.insert(
@@ -2519,6 +2599,7 @@ impl Catalog {
                 domain: None,
                 labels: None,
                 range: None,
+                base: None,
             },
         );
         self.relations.insert(
@@ -2766,6 +2847,7 @@ impl Catalog {
                 domain: Some(new.domain),
                 labels: None,
                 range: None,
+                base: None,
             },
         );
         self.types.insert(
@@ -2781,6 +2863,7 @@ impl Catalog {
                 domain: None,
                 labels: None,
                 range: None,
+                base: None,
             },
         );
         // `record_object_address_dependencies` sorts the objects by the OID of their catalog.
@@ -2828,6 +2911,7 @@ impl Catalog {
                 domain: None,
                 labels: Some(labels),
                 range: None,
+                base: None,
             },
         );
         self.types.insert(
@@ -2843,12 +2927,45 @@ impl Catalog {
                 domain: None,
                 labels: None,
                 range: None,
+                base: None,
             },
         );
         let me = ObjRef::new(PG_TYPE, oid);
         self.depend(me, ObjRef::new(PG_NAMESPACE, new.namespace), DepKind::Normal);
         self.depend(ObjRef::new(PG_TYPE, array), me, DepKind::Internal);
         self.uncommitted_types.push(oid);
+        Ok(oid)
+    }
+
+    /// `TypeShellMake`: a shell type, which has no array type. The type depends on its schema. The return value is the OID of the type.
+    ///
+    /// # Errors
+    ///
+    /// `42710` when the schema has a type with the name that is not an array type of another type.
+    pub fn create_shell_type(&mut self, namespace: u32, name: &str, owner: u32) -> Result<u32> {
+        self.check_new_type(namespace, name)?;
+        let oid = self.new_oid();
+        self.types.insert(
+            oid,
+            Type {
+                oid,
+                name: name.to_string(),
+                namespace,
+                owner,
+                relation: 0,
+                element: 0,
+                array: 0,
+                domain: None,
+                labels: None,
+                range: None,
+                base: Some(BaseType::shell()),
+            },
+        );
+        self.depend(
+            ObjRef::new(PG_TYPE, oid),
+            ObjRef::new(PG_NAMESPACE, namespace),
+            DepKind::Normal,
+        );
         Ok(oid)
     }
 
@@ -2877,6 +2994,7 @@ impl Catalog {
             domain: None,
             labels: None,
             range: None,
+            base: None,
         };
         let me = ObjRef::new(PG_TYPE, oid);
         let multi = ObjRef::new(PG_TYPE, multirange);

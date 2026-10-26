@@ -8,7 +8,8 @@ use rupg_catalog::{
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{
-    CreateFunctionStmt, DefElem, FunctionParameterMode, Node, VariableSetKind, VariableSetStmt,
+    CreateFunctionStmt, DefElem, FunctionParameterMode, Node, TypeName, VariableSetKind,
+    VariableSetStmt,
 };
 use rupg_types::oid;
 
@@ -17,7 +18,7 @@ use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
 use crate::expr::Expr;
 use crate::select::Query;
-use crate::typename::{names, place};
+use crate::typename::{names, place, type_name_text};
 use crate::{Analyzer, Env, Params, node, poly, types};
 
 /// The OID of the language `sql`.
@@ -978,7 +979,7 @@ impl Definer<'_, '_> {
             if ty.setof {
                 return bad("functions cannot accept set arguments", at);
             }
-            let ty = self.an.type_name(ty)?.0;
+            let ty = self.argument_type(ty, options.language)?;
             let input = matches!(mode, b'i' | b'b' | b'v');
             if input && argmodes.contains(&b'v') {
                 return bad("VARIADIC parameter must be the last input parameter", at);
@@ -1052,7 +1053,7 @@ impl Definer<'_, '_> {
         let (rettype, retset) = match (stmt.returnType.as_deref(), required) {
             (_, required) if procedure => (required.unwrap_or(oid::VOID), false),
             (Some(ret), _) => {
-                let rettype = self.an.type_name(ret)?.0;
+                let rettype = self.return_type(ret, options.language)?;
                 if let Some(required) = required.filter(|&r| r != rettype) {
                     return Err(Error::new(
                         SqlState::INVALID_FUNCTION_DEFINITION,
@@ -1205,6 +1206,89 @@ impl Definer<'_, '_> {
     }
 
     /// `ProcedureCreate`: the validator of the language runs with the settings of the function, which `ProcessGUCArray` gives with `GUC_ACTION_SAVE`, and the settings go back after it.
+    /// The type of an argument, as `interpret_function_parameter_list` looks it up: a shell type gives a notice, and in a function in SQL an error.
+    fn argument_type(&mut self, name: &TypeName, language: u32) -> Result<u32> {
+        let at = place(name.location);
+        let Some((ty, _, defined)) = self.an.lookup_type_mod(name)? else {
+            return Err(Error::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!("type {} does not exist", type_name_text(name)),
+            )
+            .at_opt(at));
+        };
+        if !defined {
+            if language == SQL_LANGUAGE {
+                return Err(Error::new(
+                    SqlState::INVALID_FUNCTION_DEFINITION,
+                    format!("SQL function cannot accept shell type {}", type_name_text(name)),
+                )
+                .at_opt(at));
+            }
+            self.an.notices.push(
+                Error::new(
+                    SqlState::WRONG_OBJECT_TYPE,
+                    format!("argument type {} is only a shell", type_name_text(name)),
+                )
+                .at_opt(at)
+                .as_notice(),
+            );
+        }
+        Ok(ty)
+    }
+
+    /// `compute_return_type`: the result type. A shell type gives a notice, and in a function in SQL an error. A function in C or in `internal` whose result type does not exist makes a shell type with the name, as it can be the input function of a new type. The errors have no position.
+    fn return_type(&mut self, name: &TypeName, language: u32) -> Result<u32> {
+        let text = type_name_text(name);
+        match self.an.lookup_type_mod(name).map_err(|e| e.with_position(None))? {
+            Some((ty, _, true)) => Ok(ty),
+            Some((_, _, false)) if language == SQL_LANGUAGE => Err(Error::new(
+                SqlState::INVALID_FUNCTION_DEFINITION,
+                format!("SQL function cannot return shell type {text}"),
+            )),
+            Some((ty, _, false)) => {
+                self.an.notices.push(
+                    Error::new(
+                        SqlState::WRONG_OBJECT_TYPE,
+                        format!("return type {text} is only a shell"),
+                    )
+                    .as_notice(),
+                );
+                Ok(ty)
+            }
+            None if !name.pct_type
+                && name.arrayBounds.is_empty()
+                && name.typmods.is_empty()
+                && matches!(language, INTERNAL_LANGUAGE | C_LANGUAGE) =>
+            {
+                self.an.notices.push(
+                    Error::new(
+                        SqlState::UNDEFINED_OBJECT,
+                        format!("type \"{text}\" is not yet defined"),
+                    )
+                    .with_detail("Creating a shell type definition.")
+                    .as_notice(),
+                );
+                let parts = names(&name.names);
+                let (schema, type_name) = self.an.split_name(&parts, None)?;
+                let namespace = match schema {
+                    Some(namespace) => namespace,
+                    None => self.an.env.search_path().first().copied().ok_or_else(|| {
+                        Error::new(
+                            SqlState::UNDEFINED_SCHEMA,
+                            "no schema has been selected to create in",
+                        )
+                    })?,
+                };
+                self.check_create_in(namespace, None)?;
+                self.catalog.create_shell_type(namespace, type_name, self.user)
+            }
+            None => Err(Error::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!("type \"{text}\" does not exist"),
+            )),
+        }
+    }
+
     fn with_settings<T>(
         &mut self,
         config: &[String],

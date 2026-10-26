@@ -196,6 +196,33 @@ fn use_types(catalog: &Catalog) {
         .types()
         .filter(|ty| ty.oid >= FIRST_NORMAL_OID)
         .filter_map(|ty| {
+            if let Some(base) = &ty.base {
+                return Some(builtin::SessionType::Base(builtin::SessionBase {
+                    oid: ty.oid,
+                    name: ty.name.clone(),
+                    namespace: ty.namespace,
+                    array: ty.array,
+                    array_name: catalog
+                        .type_by_oid(ty.array)
+                        .map(|a| a.name.clone())
+                        .unwrap_or_default(),
+                    defined: base.defined,
+                    len: base.len,
+                    by_val: base.by_val,
+                    category: base.category,
+                    preferred: base.preferred,
+                    delim: base.delim,
+                    input: base.input,
+                    output: base.output,
+                    receive: base.receive,
+                    send: base.send,
+                    modin: base.modin,
+                    modout: base.modout,
+                    align: base.align,
+                    storage: base.storage,
+                    collation: base.collation,
+                }));
+            }
             let array = catalog.type_by_oid(ty.array)?;
             if ty.relation != 0 {
                 return Some(builtin::SessionType::Row(builtin::SessionRowType {

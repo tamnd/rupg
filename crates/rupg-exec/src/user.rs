@@ -4,8 +4,8 @@
 
 use rupg_analyze::node;
 use rupg_catalog::{
-    Catalog, ConKind, Constraint, Function, ObjRef, PG_CLASS, PG_LANGUAGE, PG_NAMESPACE, PG_PROC,
-    PG_TYPE, PartitionBound, RangePart, RelKind, Relation, Type,
+    BaseType, Catalog, ConKind, Constraint, Function, ObjRef, PG_CLASS, PG_LANGUAGE, PG_NAMESPACE,
+    PG_PROC, PG_TYPE, PartitionBound, RangePart, RelKind, Relation, Type,
 };
 use rupg_common::{Error, Result};
 use rupg_func::Session;
@@ -662,6 +662,31 @@ fn type_row(table: &Table, type_oid: u32, session: &dyn Session) -> Result<usize
     Err(Error::internal(format!("cache lookup failed for type {type_oid}")))
 }
 
+/// The row of a base type that `CREATE TYPE` made or of a shell type, as `TypeCreate` and `TypeShellMake` fill it. A shell type has the `typtype` `p`.
+fn base_row<'a>(table: &'a Table, base: &BaseType, session: &dyn Session) -> Result<Row<'a>> {
+    let mut row = Row::copy(table, type_row(table, OID_TYPE, session)?, session)?;
+    row.set("typlen", Value::Int2(base.len))
+        .set("typbyval", Value::Bool(base.by_val))
+        .set("typtype", code(if base.defined { 'b' } else { 'p' }))
+        .set("typcategory", Value::Char(base.category))
+        .set("typispreferred", Value::Bool(base.preferred))
+        .set("typisdefined", Value::Bool(base.defined))
+        .set("typdelim", Value::Char(base.delim))
+        .set("typsubscript", oid(base.subscript))
+        .set("typinput", oid(base.input))
+        .set("typoutput", oid(base.output))
+        .set("typreceive", oid(base.receive))
+        .set("typsend", oid(base.send))
+        .set("typmodin", oid(base.modin))
+        .set("typmodout", oid(base.modout))
+        .set("typanalyze", oid(base.analyze))
+        .set("typalign", Value::Char(base.align))
+        .set("typstorage", Value::Char(base.storage))
+        .set("typcollation", oid(base.collation))
+        .set("typdefault", base.default.clone().map_or(Value::Null, Value::text));
+    Ok(row)
+}
+
 /// The row types, the domains and their array types. The row of a row type copies the row of the row type of `pg_class`, which has the same form. The row of a domain copies the row of its base type, as `DefineDomain` takes the storage of the base type. An enum type copies the row of `oid`, and its array type copies the row of `_oid`. Another array type copies the array type of the row type of `pg_class` or of the base type of the domain.
 fn types<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) -> Result<Vec<Row<'a>>> {
     let row_type = rupg_pgcatalog::catalog("pg_class").map_or(0, |c| c.rowtype_oid);
@@ -684,6 +709,8 @@ fn types<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) -> Resu
             let mut row = Row::copy(table, type_row(table, template, session)?, session)?;
             row.set("typalign", Value::Char(align));
             row
+        } else if let Some(base) = &ty.base {
+            base_row(table, base, session)?
         } else if ty.labels.is_some() {
             let mut row = Row::copy(table, type_row(table, OID_TYPE, session)?, session)?;
             row.set("typtype", code('e'))
