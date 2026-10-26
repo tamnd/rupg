@@ -291,7 +291,7 @@ Gate G1 needs clients to read the catalog with SQL at M2, so the SQL front, a fi
 
 The version of a release is `0.M.patch`. The release at the close of milestone M is `0.M.0`, and fixes on that line are `0.M.1`, `0.M.2` and on. M0 publishes no crate. 1.0 follows M12 when the conditions of document 21 section 21.17 hold. A version number says what was measured, so a release that is not at a closed milestone has no `0.M.0` number.
 
-The file format has its own version in the header slots (document 08). From M1 on, every release can open every file that an earlier release of the same `0.M` line wrote. Between `0.M` lines the file format may change, and `rupg upgrade` writes a new file in the new format from the old one. From 1.0 on, the format changes only with an upgrade path that the crash tests cover.
+The file format has its own version in the header slots (document 08). From M1 on, every release can open every file that an earlier release of the same `0.M` line wrote. Between `0.M` lines the file format may change, and `rupg-cli copy` writes a new file in the new format from the old one (document 08 section 8.15). From 1.0 on, the format changes only with an upgrade path that the crash tests cover.
 
 ## 23.18 The checklist at each close
 
