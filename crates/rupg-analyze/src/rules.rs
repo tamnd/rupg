@@ -422,7 +422,9 @@ fn rule_action(parts: &Parts, action: &Node, qual: Option<&Node>, event: CmdType
     // The queries of `WITH` move to the action, unless a name of the action
     // would then read a query of `WITH` in place of its table.
     let hoist = parts.with.as_ref().filter(|with| {
-        let mut names = Names(&cte_names(with), false);
+        // Rust 1.88, the MSRV, drops a temporary in a tuple struct at the end of the statement, so the names get their own binding.
+        let ctes = cte_names(with);
+        let mut names = Names(&ctes, false);
         names.node(action);
         !names.1 && !matches!(action, Node::NotifyStmt(_))
     });
