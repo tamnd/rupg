@@ -58,7 +58,7 @@ impl Unique {
 }
 
 /// The estimates of the relations of a query level for the costs of the joins and of the nodes above them.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct Stats {
     /// The rows of each relation before and after its conditions, as `tuples` and `rows` of its `RelOptInfo`.
     rows: BTreeMap<usize, (f64, f64)>,
@@ -863,8 +863,17 @@ impl<'q> Builder<'q> {
                         }),
                     };
                     if let Some(members) = members {
-                        let quals = (base.as_slice(), quals.as_slice());
-                        return inherit::scan(level, r, quals, members, self.members, stats);
+                        let both = (base.as_slice(), quals.as_slice());
+                        let (rels, members) =
+                            inherit::scan(level, r, both, members, self.members, stats);
+                        if !members.is_empty() {
+                            let (tuples, rows) = stats.rows.get(&r).copied().unwrap_or_default();
+                            let indexes = Vec::new();
+                            let stored =
+                                Base { pages: 0.0, tuples, rows, quals: base, indexes, members };
+                            self.bases.insert((level.scope, r), stored);
+                        }
+                        return rels;
                     }
                     indexes = self.members.map(|m| m.indexes(relation.oid)).unwrap_or_default();
                     size = self.members.map_or_else(Size::default, |m| m.size(relation.oid));
@@ -1003,7 +1012,14 @@ impl<'q> Builder<'q> {
         let quals = base.clone();
         let outer = BTreeSet::new();
         let table = index::Table { r, pages, tuples, rows, quals, eq: &eq, outer, loops: 1.0 };
-        let stored = Base { pages, tuples, rows, quals: base, indexes: indexes.clone() };
+        let stored = Base {
+            pages,
+            tuples,
+            rows,
+            quals: base,
+            indexes: indexes.clone(),
+            members: Vec::new(),
+        };
         self.bases.insert((level.scope, r), stored);
         // `set_plain_rel_pathlist`: the scans by `ctid` come first, and a scan of `CURRENT OF` is the only scan.
         let (mut tids, current) = tid::paths(level, &table, stats);
@@ -1350,6 +1366,8 @@ pub(crate) struct Base<'q> {
     /// `baserestrictinfo`.
     quals: Vec<Qual<'q>>,
     indexes: Vec<Index>,
+    /// The members of a table with inheritance children or partitions, whose parameterized scans make the parameterized `Append` of the table.
+    members: Vec<inherit::MemberBase<'q>>,
 }
 
 /// `trivial_pathtarget` of `set_subquery_pathlist`: the columns of the relation `r` that the plan reads above the scan are each column of the subquery in order. The plan reads them in the order that they first come in the targets and in `HAVING`, as `build_base_rel_tlists` adds them, then in the conditions of the joins.

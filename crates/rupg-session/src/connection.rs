@@ -5060,6 +5060,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_inherit_sort.test")));
     }
 
+    /// A join with a table with members reads the ordered rows of the members in a merge join, as a semi join or as an outer join, and the inner side of a nested loop is an `Append` of the scans of the members with the parameters of the outer side, as `get_appendrel_parampathinfo`, where a member with no such scan tests the conditions of the join in the filter of its sequential scan. `connection/plan_inherit_join.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_inherit_join() {
+        big_stack(|| script(include_str!("connection/plan_inherit_join.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

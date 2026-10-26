@@ -463,8 +463,11 @@ impl Explainer<'_, '_> {
                 self.qual("One-Time Filter", scope, one_time, upper)?;
                 self.qual("Filter", scope, &node.filter, upper)?;
             }
-            Kind::SeqScan(_)
-            | Kind::ValuesScan(_)
+            Kind::SeqScan(r) => {
+                let own = Some(*r);
+                self.scan_qual("Filter", scope, &node.filter, self.options.verbose, own)?;
+            }
+            Kind::ValuesScan(_)
             | Kind::CteScan(_)
             | Kind::WorkTableScan(_)
             | Kind::TableFunctionScan(_) => {

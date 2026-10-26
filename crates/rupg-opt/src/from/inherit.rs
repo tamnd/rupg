@@ -6,9 +6,29 @@ use std::rc::Rc;
 use rupg_analyze::{Expr, ExprKind};
 use rupg_plan::{Cost, Item, Kind, Node, SortKey, Statistic};
 
+use rupg_types::Value;
+
+use super::classes::Joined;
+use super::index::Param;
 use super::paths::costs;
-use super::{OrderKey, Paths, Qual, Rel, Stats, dummy, index, tid, variable_ranges};
+use super::search::{self, Semis};
+use super::{Base, OrderKey, Paths, Qual, Rel, Stats, dummy, index, tid, variable_ranges};
 use crate::{Index, Level, Member, Members, cost};
+
+/// The least and the greatest value of a column of a member, by the relation and the column, as `get_actual_variable_range` gives them.
+type Ranges = Vec<((usize, i16), Option<(Value, Value)>)>;
+
+/// A member of a table with members, with its table, its statistics and its scans, from which [`param_scans`] makes the parameterized scans of the member.
+#[derive(Debug)]
+pub(super) struct MemberBase<'q> {
+    oid: u32,
+    base: Base<'q>,
+    columns: Rc<BTreeMap<i16, Statistic>>,
+    ranges: Ranges,
+    unique: BTreeSet<(usize, i16)>,
+    plans: Vec<Rel<'q>>,
+    width: i32,
+}
 
 /// The column numbers of a member for the columns of its parent, as `make_inh_translation_list` gives them.
 struct Columns<'m> {
@@ -68,7 +88,7 @@ pub(super) fn scan<'q>(
     members: Vec<Member>,
     hooks: Option<&dyn Members>,
     stats: &mut Stats,
-) -> Vec<Rel<'q>> {
+) -> (Vec<Rel<'q>>, Vec<MemberBase<'q>>) {
     let relation = &level.query.relations[r];
     let (qual_startup, qual_cost) = stats.qual_costs(quals.iter().map(|q| &*q.expr));
     let per_row = cost::CPU_TUPLE + qual_cost;
@@ -77,6 +97,7 @@ pub(super) fn scan<'q>(
     let mut sizes: BTreeMap<i16, f64> = BTreeMap::new();
     let rels = BTreeSet::from([r]);
     let mut lists: Vec<Vec<Rel<'q>>> = Vec::with_capacity(members.len());
+    let mut bases = Vec::with_capacity(members.len());
     for member in &members {
         let columns = Columns::new(member);
         let indexes: Vec<Index> = hooks
@@ -165,6 +186,23 @@ pub(super) fn scan<'q>(
             node.member = Some(member.oid);
             kept.push(Rel { node, rels: rels.clone(), order: Vec::new() });
         }
+        let ranges = stats.ranges.range((r, i16::MIN)..=(r, i16::MAX));
+        bases.push(MemberBase {
+            oid: member.oid,
+            base: Base {
+                pages,
+                tuples: count,
+                rows: n,
+                quals: base.to_vec(),
+                indexes,
+                members: Vec::new(),
+            },
+            columns: stats.columns.get(&r).cloned().unwrap_or_default(),
+            ranges: ranges.map(|(k, v)| (*k, v.clone())).collect(),
+            unique: stats.unique.columns.clone(),
+            plans: kept.clone(),
+            width: node_width,
+        });
         lists.push(kept);
         size += f64::from(node_width) * n;
         tuples += count;
@@ -187,8 +225,11 @@ pub(super) fn scan<'q>(
         }
     }
     match lists.len() {
-        0 => return vec![Rel { node: dummy(level.scope, &rels, false), rels, order: Vec::new() }],
-        1 => return lists.remove(0),
+        0 => {
+            let node = dummy(level.scope, &rels, false);
+            return (vec![Rel { node, rels, order: Vec::new() }], Vec::new());
+        }
+        1 => return (lists.remove(0), Vec::new()),
         _ => {}
     }
     let width = if rows > 0.0 { (size / rows).round_ties_even() as i32 } else { 0 };
@@ -203,7 +244,133 @@ pub(super) fn scan<'q>(
     for rel in ordered.plans(stats) {
         paths.add(costs(&rel.node), rel.order.clone(), rel);
     }
-    paths.kept()
+    (paths.kept(), bases)
+}
+
+/// The parameterized `Append` paths of `add_paths_to_append_rel` for the table `r` with members, for the inner side of a nested loop. Each member has its parameterized scans, from its own statistics and indexes, as [`search::param_scans`]. For each set of outer relations of a scan of a member, the `Append` reads the scan of each member from [`child`], or the table has no `Append` for the set when a member has no such scan. The `Append` tests the conditions of the joins of the set, as `get_appendrel_parampathinfo`, and the scans that `add_path` keeps with the plans of the table are the parameterized scans of the table.
+pub(super) fn param_scans<'q>(
+    level: &Level<'q>,
+    (r, parent, plans, semi): (usize, &Base<'q>, &[Rel<'q>], bool),
+    (joins, semis): (&[Qual<'q>], &[Semis]),
+    classes: &[Joined<'q>],
+    prohibited: &BTreeSet<usize>,
+    stats: &Stats,
+) -> Vec<Param<'q>> {
+    let mut lists = Vec::with_capacity(parent.members.len());
+    let mut outers: Vec<BTreeSet<usize>> = Vec::new();
+    for m in &parent.members {
+        let mut s = stats.clone();
+        s.columns.insert(r, m.columns.clone());
+        s.pages.insert(r, m.base.pages);
+        s.ranges.retain(|&(at, _), _| at != r);
+        s.ranges.extend(m.ranges.iter().cloned());
+        s.unique.columns.clone_from(&m.unique);
+        let found = (r, &m.base, m.plans.as_slice(), semi);
+        let mut params = search::param_scans(level, found, (joins, semis), classes, prohibited, &s);
+        for p in &mut params {
+            p.rel.node.member = Some(m.oid);
+            p.rel.node.cost.width = m.width;
+            if !outers.contains(&p.outer) {
+                outers.push(p.outer.clone());
+            }
+        }
+        lists.push((s, params));
+    }
+    // The width of the relation is the mean of the widths of the members, by their rows, as in [`scan`].
+    let size: f64 = parent.members.iter().map(|m| f64::from(m.width) * m.base.rows).sum();
+    let width = if parent.rows > 0.0 { (size / parent.rows).round_ties_even() as i32 } else { 0 };
+    let eq = stats.estimate(r, parent.tuples);
+    let mut found = Vec::new();
+    for outer in outers {
+        let children: Option<Vec<Node<'q>>> = parent
+            .members
+            .iter()
+            .zip(&lists)
+            .map(|(m, (s, params))| child(r, m, params, &outer, (joins, semis), classes, s))
+            .collect();
+        let Some(children) = children else { continue };
+        let t = search::param_table(r, parent, &eq, (joins, semis), classes, stats, &outer);
+        let enforced = t.quals.get(parent.quals.len()..).unwrap_or_default().to_vec();
+        let node = append(level.scope, children, false, width);
+        let rel = Rel { node, rels: BTreeSet::from([r]), order: Vec::new() };
+        found.push(Param { rel, outer, enforced, indexed: false });
+    }
+    if found.is_empty() {
+        return found;
+    }
+    let mut paths = Paths::with_params(stats.startup, semi);
+    for rel in plans {
+        let keys = rel.order.clone();
+        paths.add_param(costs(&rel.node), keys, BTreeSet::new(), rel.node.cost.rows, None);
+    }
+    for p in found {
+        let (keys, outer) = (p.rel.order.clone(), p.outer.clone());
+        paths.add_param(costs(&p.rel.node), keys, outer, p.rel.node.cost.rows, Some(p));
+    }
+    paths.params().into_iter().flatten().collect()
+}
+
+/// `get_cheapest_parameterized_child_path`: the scan of the member `m` with the values of the relations `outer` that costs the least in total. When the cheapest scan with no more of these values has other values, each scan of the member gets the conditions of the other values, as `reparameterize_path`, and the cheapest of them wins. Only a sequential scan can get them, as a filter.
+fn child<'q>(
+    r: usize,
+    m: &MemberBase<'q>,
+    params: &[Param<'q>],
+    outer: &BTreeSet<usize>,
+    (joins, semis): (&[Qual<'q>], &[Semis]),
+    classes: &[Joined<'q>],
+    stats: &Stats,
+) -> Option<Node<'q>> {
+    let none = BTreeSet::new();
+    let all: Vec<(&Node<'q>, &BTreeSet<usize>)> = m
+        .plans
+        .iter()
+        .map(|p| (&p.node, &none))
+        .chain(params.iter().map(|p| (&p.rel.node, &p.outer)))
+        .filter(|(_, o)| o.is_subset(outer))
+        .collect();
+    // `compare_path_costs` by the total cost: the disabled nodes, then the total cost, then the start cost.
+    let cheaper = |a: &Node<'q>, b: &Node<'q>| {
+        let (a, b) = (costs(a), costs(b));
+        (a.0, a.2, a.1).partial_cmp(&(b.0, b.2, b.1)).is_some_and(|o| o.is_lt())
+    };
+    let mut cheapest: Option<(&Node<'q>, &BTreeSet<usize>)> = None;
+    for &(node, o) in &all {
+        if cheapest.is_none_or(|(c, _)| cheaper(node, c)) {
+            cheapest = Some((node, o));
+        }
+    }
+    let (node, o) = cheapest?;
+    if o == outer {
+        return Some(node.clone());
+    }
+    let eq = stats.estimate(r, m.base.tuples);
+    let t = search::param_table(r, &m.base, &eq, (joins, semis), classes, stats, outer);
+    let extra = t.quals.get(m.base.quals.len()..).unwrap_or_default();
+    let mut best: Option<Node<'q>> = None;
+    for (node, o) in all {
+        if best.as_ref().is_some_and(|b| !cheaper(node, b)) {
+            continue;
+        }
+        let node = if o == outer {
+            node.clone()
+        } else if matches!(node.kind, Kind::SeqScan(_)) {
+            // `create_seqscan_path` with the parameters: the conditions of the joins in the filter, for each tuple of the member.
+            let (startup, per_tuple) = stats.qual_costs(extra.iter().map(|q| &*q.expr));
+            let mut seq = node.clone();
+            seq.filter.extend(extra.iter().map(Qual::item));
+            seq.cost.startup += startup;
+            seq.cost.total += startup + per_tuple * m.base.tuples;
+            seq.cost.rows = t.rows;
+            if best.as_ref().is_some_and(|b| !cheaper(&seq, b)) {
+                continue;
+            }
+            seq
+        } else {
+            continue;
+        };
+        best = Some(node);
+    }
+    best
 }
 
 /// `cost_append`: the rows and the costs of the members, with half of `cpu_tuple_cost` for each row. An `Append` with no order starts with its first member, and an ordered `Append` starts with all of them, so that a `LIMIT` does not seem to read only the first member at little cost.

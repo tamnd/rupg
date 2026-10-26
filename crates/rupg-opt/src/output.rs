@@ -86,10 +86,14 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
     match &node.kind {
         // `create_append_plan`: the members of an inheritance tree give the items that the node above reads, and the `Append` gives the rows of its members as they are.
         Kind::Append | Kind::MergeAppend(_) if from::members_append(node) => {
+            let before: Vec<i32> = node.children.iter().map(|c| c.cost.width).collect();
             for child in &mut node.children {
                 set(level, child, want.clone(), false);
             }
-            // `set_append_rel_size`: the width of the relation is the mean of the widths of its members, by their rows.
+            // `set_append_rel_size`: the width of the relation is the mean of the widths of its members, by the rows of their scans with no parameters. The planner gave the node this width, so only a change in the width of a member changes it.
+            if node.children.iter().map(|c| c.cost.width).eq(before) {
+                return;
+            }
             let rows: f64 = node.children.iter().map(|c| c.cost.rows).sum();
             let size: f64 =
                 node.children.iter().map(|c| f64::from(c.cost.width) * c.cost.rows).sum();
