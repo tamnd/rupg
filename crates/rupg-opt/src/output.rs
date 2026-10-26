@@ -19,16 +19,26 @@ pub(crate) fn level<'q>(level: &Level<'q>, node: &mut Node<'q>) {
     let want = if level.no_targets {
         Vec::new()
     } else {
-        let targets: Vec<Item<'q>> = match (&node.kind, &level.query.minmax) {
-            (Kind::Result { replaces: Some(Replaced::MinMax), .. }, Some(minmax)) => {
-                minmax.targets.iter().map(Item::of).collect()
-            }
+        let targets: Vec<Item<'q>> = match &level.query.minmax {
+            Some(minmax) if replaced(level, node) => match minmax.upper.as_deref() {
+                Some(upper) => upper.targets.iter().map(|t| Item::of(&t.expr)).collect(),
+                None => minmax.targets.iter().map(Item::of).collect(),
+            },
             _ => level.display_query.targets.iter().map(|t| Item::of(&t.expr)).collect(),
         };
         targets.into_iter().chain(level.marks.iter().map(|m| item(m.clone()))).collect()
     };
     set(level, node, want, false);
     placeholders(level, node);
+}
+
+/// True when the `Result` of `create_minmaxagg_path` takes the place of the groups of the query, below the nodes of `DISTINCT`, `ORDER BY` and `LIMIT`.
+fn replaced(level: &Level<'_>, node: &Node<'_>) -> bool {
+    match (&node.kind, &node.children[..]) {
+        (Kind::Result { replaces: Some(Replaced::MinMax), .. }, _) => node.scope == level.display,
+        (_, [child]) if node.scope == level.display => replaced(level, child),
+        _ => false,
+    }
 }
 
 /// The item of an expression that the planner made.

@@ -32,7 +32,7 @@ pub(crate) fn fill_all(query: &mut Query) {
     query.minmax = minmax(query).map(Box::new);
 }
 
-/// `preprocess_minmax_aggregates`: the subqueries of a query with aggregate calls and no `GROUP BY`, no window and no `WITH`, which reads one table. Each aggregate call is `min` or `max` of one argument, with no `ORDER BY` and no `FILTER`, as `can_minmax_aggs` takes it. The planner does not take a query with `ORDER BY`, `DISTINCT`, `LIMIT`, `OFFSET`, a function that gives a set, or a subquery in an expression yet.
+/// `preprocess_minmax_aggregates`: the subqueries of a query with aggregate calls and no `GROUP BY`, no window and no `WITH`, which reads one table. Each aggregate call is `min` or `max` of one argument, with no `ORDER BY` and no `FILTER`, as `can_minmax_aggs` takes it. The planner does not take a query with a function that gives a set, or a subquery in an expression yet.
 fn minmax(query: &Query) -> Option<MinMax> {
     let plain = query.grouped
         && query.group.is_empty()
@@ -42,10 +42,6 @@ fn minmax(query: &Query) -> Option<MinMax> {
         && query.set_op.is_none()
         && query.row_marks.is_empty()
         && query.write.is_none()
-        && query.sort.is_empty()
-        && query.distinct.is_empty()
-        && query.limit.is_none()
-        && query.offset.is_none()
         && !query.has_target_srfs();
     if !plain {
         return None;
@@ -133,9 +129,21 @@ fn minmax(query: &Query) -> Option<MinMax> {
         });
         expr
     };
-    let targets = query.targets.iter().map(|t| replace(&t.expr)).collect();
+    let targets: Vec<Expr> = query.targets.iter().map(|t| replace(&t.expr)).collect();
     let having = query.having.as_ref().map(replace);
-    Some(MinMax { aggs, targets, having })
+    let steps = !query.sort.is_empty()
+        || !query.distinct.is_empty()
+        || query.limit.is_some()
+        || query.offset.is_some();
+    let upper = steps.then(|| {
+        let mut upper = query.clone();
+        for (target, expr) in upper.targets.iter_mut().zip(&targets) {
+            target.expr = expr.clone();
+        }
+        upper.having.clone_from(&having);
+        Box::new(upper)
+    });
+    Some(MinMax { aggs, targets, having, upper })
 }
 
 /// `build_minmax_path`: the subquery of an aggregate call, which reads the argument of the call from the rows of the query where it is not null, in the order of the sort operator, with `LIMIT 1`. A column of a query outside is one more level up.

@@ -1,5 +1,6 @@
 //! The nodes above the join of `FROM`, as `grouping_planner` makes them: the aggregates, the windows, the functions that give sets, `DISTINCT`, `ORDER BY`, the locks of rows and `LIMIT`. Also the plan of a set operation and the node of a statement that writes a table.
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 
 use rupg_analyze::{
@@ -185,6 +186,65 @@ fn sort_if<'q>(
     let mut out = Node::new(Kind::IncrementalSort { keys, presorted: count }, scope, vec![node]);
     out.cost = Cost { startup, total, ..c };
     Some(out)
+}
+
+/// The steps of `DISTINCT`, `ORDER BY`, row locks and `LIMIT` above the plan of the groups of a query, as the end of `grouping_planner` adds them.
+fn steps<'q>(
+    level: &Level<'q>,
+    mut node: Node<'q>,
+    order: &mut Vec<OrderKey>,
+    only: bool,
+    costs: TargetCosts,
+) -> Option<Node<'q>> {
+    let query = level.query;
+    let scope = level.display;
+    if query.set_op.is_none() && !query.distinct.is_empty() {
+        node = distinct(level, node, order, only, costs.last)?;
+    }
+    let (count, offset) = limit_estimates(query);
+    if !query.sort.is_empty() {
+        let keys: Vec<SortKey<'q>> =
+            query.sort.iter().map(|s| sort_key(level.target(s.target), s)).collect();
+        let keys = level.stats.canonical(keys, |k| &*k.item.expr);
+        let bound = (count > 0.0 && offset >= 0.0).then_some(count + offset);
+        node = sort_if(level, node, keys, order, bound, only)?;
+        if costs.late {
+            node = project_late(level, node, costs);
+        }
+    }
+    if !query.row_marks.is_empty() {
+        let c = node.cost;
+        node = Node::new(Kind::LockRows, scope, vec![node]);
+        node.cost = Cost { total: c.total + cost::CPU_TUPLE * c.rows, ..c };
+        // `create_lockrows_path`: a lock can fetch a new version of a row, so the rows have no order.
+        order.clear();
+    }
+    if limit_needed(query) {
+        let c = node.cost;
+        node = Node::new(Kind::Limit, scope, vec![node]);
+        node.cost = limit_cost(c, count, offset);
+    }
+    Some(node)
+}
+
+/// `set_plan_references`: the keys of the nodes above the `Result` of `create_minmaxagg_path` read the subqueries in the place of the aggregate calls. The planner finds the keys with the aggregate calls, as `standard_qp_callback` makes the pathkeys before `preprocess_minmax_aggregates`, so that a key is not a constant.
+fn upper_keys<'q>(node: &mut Node<'q>, query: &'q Query, upper: &'q Query) {
+    let swap = |item: &mut Item<'q>| {
+        if let Some(at) = query.targets.iter().position(|t| t.expr.same(&item.expr)) {
+            item.expr = Cow::Borrowed(&upper.targets[at].expr);
+        }
+    };
+    match &mut node.kind {
+        Kind::Result { replaces: Some(Replaced::MinMax), .. } => return,
+        Kind::Sort(keys) | Kind::IncrementalSort { keys, .. } => {
+            keys.iter_mut().for_each(|k| swap(&mut k.item));
+        }
+        Kind::Aggregate { keys, .. } => keys.iter_mut().for_each(swap),
+        _ => {}
+    }
+    if let [child] = &mut node.children[..] {
+        upper_keys(child, query, upper);
+    }
 }
 
 /// The cost of the transition of the aggregate calls for each row, in units of `cpu_operator_cost`, as `get_agg_clause_costs`: a call of the transition function and the cost of the arguments and of `FILTER`.
@@ -550,31 +610,6 @@ impl<'q> Builder<'q> {
             c.startup += start;
             c.total += start + per_row;
         }
-        if c.total >= normal.cost.total {
-            self.groups[first..].iter_mut().for_each(Vec::clear);
-            return normal;
-        }
-        // Each subquery of the new targets takes the name of its subplan. A subquery that the query had is a copy of it, which takes the label of the subquery of the query.
-        let query = level.query;
-        let mut own =
-            sublinks(query.targets.iter().map(|t| &t.expr).chain(&query.having)).into_iter();
-        for link in sublinks(minmax.targets.iter().chain(&minmax.having)) {
-            if let Some(at) = minmax.aggs.iter().position(|tries| tries[0] == link.query) {
-                let name = plans[at].0.clone();
-                self.labels.push(Label {
-                    link,
-                    name,
-                    init: true,
-                    hashed: false,
-                    alternative: false,
-                });
-            } else if let Some(orig) = own.next()
-                && let Some(label) = self.labels.iter().find(|l| std::ptr::eq(l.link, orig))
-            {
-                let (name, init, hashed) = (label.name.clone(), label.init, label.hashed);
-                self.labels.push(Label { link, name, init, hashed, alternative: false });
-            }
-        }
         let mut one_time = Vec::new();
         if let Some(having) = &minmax.having {
             let mut parts = Vec::new();
@@ -584,6 +619,48 @@ impl<'q> Builder<'q> {
         let replaces = Some(Replaced::MinMax);
         let mut node = Node::new(Kind::Result { replaces, one_time }, level.display, Vec::new());
         node.cost = c;
+        // `grouping_planner` plans `DISTINCT`, `ORDER BY` and `LIMIT` above the `MinMaxAggPath`, with the targets that read the subqueries.
+        if let Some(upper) = minmax.upper.as_deref() {
+            let Some(found) = steps(level, node, &mut Vec::new(), false, costs) else {
+                self.groups[first..].iter_mut().for_each(Vec::clear);
+                return normal;
+            };
+            node = found;
+            upper_keys(&mut node, level.query, upper);
+        }
+        if node.cost.total >= normal.cost.total {
+            self.groups[first..].iter_mut().for_each(Vec::clear);
+            return normal;
+        }
+        // Each subquery of the new targets takes the name of its subplan. A subquery that the query had is a copy of it, which takes the label of the subquery of the query.
+        let query = level.query;
+        let upper = minmax.upper.as_deref();
+        let new: [Vec<&Expr>; 2] = [
+            minmax.targets.iter().chain(&minmax.having).collect(),
+            upper.map_or_else(Vec::new, |u| u.targets.iter().map(|t| &t.expr).collect()),
+        ];
+        for exprs in new {
+            let mut own =
+                sublinks(query.targets.iter().map(|t| &t.expr).chain(&query.having)).into_iter();
+            for link in sublinks(exprs) {
+                if let Some(at) = minmax.aggs.iter().position(|tries| tries[0] == link.query) {
+                    let name = plans[at].0.clone();
+                    self.labels.push(Label {
+                        link,
+                        name,
+                        init: true,
+                        hashed: false,
+                        alternative: false,
+                    });
+                } else if let Some(orig) = own.next()
+                    && let Some(label) = self.labels.iter().find(|l| std::ptr::eq(l.link, orig))
+                {
+                    let (name, init, hashed) = (label.name.clone(), label.init, label.hashed);
+                    self.labels.push(Label { link, name, init, hashed, alternative: false });
+                }
+            }
+        }
+        // `SS_finalize_plan` puts the subplans on the top node of the query.
         node.init_plans = plans
             .into_iter()
             .map(|(name, plan)| SubPlan { name: format!("InitPlan {name}"), plan })
@@ -655,33 +732,8 @@ impl<'q> Builder<'q> {
                     width: 0,
                 };
             }
-            if !query.distinct.is_empty() {
-                node = distinct(level, node, &mut order, only, costs.last)?;
-            }
         }
-        let (count, offset) = limit_estimates(query);
-        if !query.sort.is_empty() {
-            let keys: Vec<SortKey<'q>> =
-                query.sort.iter().map(|s| sort_key(level.target(s.target), s)).collect();
-            let keys = level.stats.canonical(keys, |k| &*k.item.expr);
-            let bound = (count > 0.0 && offset >= 0.0).then_some(count + offset);
-            node = sort_if(level, node, keys, &mut order, bound, only)?;
-            if costs.late {
-                node = project_late(level, node, costs);
-            }
-        }
-        if !query.row_marks.is_empty() {
-            let c = node.cost;
-            node = Node::new(Kind::LockRows, scope, vec![node]);
-            node.cost = Cost { total: c.total + cost::CPU_TUPLE * c.rows, ..c };
-            // `create_lockrows_path`: a lock can fetch a new version of a row, so the rows have no order.
-            order.clear();
-        }
-        if limit_needed(query) {
-            let c = node.cost;
-            node = Node::new(Kind::Limit, scope, vec![node]);
-            node.cost = limit_cost(c, count, offset);
-        }
+        let node = steps(level, node, &mut order, only, costs)?;
         Some((node, order))
     }
 
