@@ -123,9 +123,9 @@ impl Shortest for f32 {
     }
 }
 
-/// True when `d` times 10 to the power `e10` is `c` times 2 to the power `e2`. The decimal is a sum of powers of 2 only when 5 to the power `-e10` divides `d`, and it has the factor 5 to the power `e10` that must divide `c`. Both `d` and `c` are less than 5 to the power 25, so the two are not equal when `e10` is outside -24 to 24, and in that range the products fit in `u128`.
+/// True when `d` times 10 to the power `e10` is `c` times 2 to the power `e2`. The decimal is a sum of powers of 2 only when 5 to the power `-e10` divides `d`, and it has the factor 5 to the power `e10` that must divide `c`. `d` is a `u64`, which is less than 5 to the power 28, and `c` is less than 5 to the power 25, so the two are not equal when `e10` is outside -27 to 24, and in that range the products fit in `u128`.
 fn same_value(d: u64, e10: i32, c: u64, e2: i32) -> bool {
-    if !(-24..=24).contains(&e10) {
+    if !(-27..=24).contains(&e10) {
         return false;
     }
     let left = u128::from(d) * 5u128.pow(e10.max(0).unsigned_abs());
@@ -549,6 +549,8 @@ mod tests {
             (123456789012345680.0, "1.2345678901234568e+17"),
             (1e100, "1e+100"),
             (5e-324, "5e-324"),
+            // 2 to the power -25 is halfway between two texts of 17 digits, and Ryu takes the even one.
+            (f64::from_bits(0x3e60_0000_0000_0000), "2.9802322387695312e-08"),
             (f64::MAX, "1.7976931348623157e+308"),
             (0.0, "0"),
             (-0.0, "-0"),
