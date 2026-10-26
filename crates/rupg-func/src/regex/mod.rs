@@ -99,6 +99,9 @@ impl Regex {
     /// True when the pattern matches a part of `s`.
     pub(crate) fn is_match(&self, s: &str) -> bool {
         let chars: Vec<u32> = s.chars().map(u32::from).collect();
+        if self.prog.has_backrefs() {
+            return matches!(self.search(&chars, 0), Ok(Some(_)));
+        }
         self.prog.first(&chars, 0).is_some()
     }
 
@@ -134,6 +137,9 @@ impl Regex {
     ) -> std::result::Result<Option<tree::Groups>, Code> {
         let tree = self.tree.get_or_init(|| tree::Tree::new(&self.parsed));
         let tree = tree.as_ref().map_err(|code| *code)?;
+        if self.prog.has_backrefs() {
+            return Ok(tree.cfind(chars, from));
+        }
         let mut from = from;
         while let Some(begin) = self.prog.first(chars, from) {
             if let Some(groups) = tree.find(chars, begin) {
@@ -806,6 +812,11 @@ mod tests {
         assert!(is("[[:digit:]]+", "x12"));
         assert!(is("[^a-c]", "abcd"));
         assert!(!is("[^a-c]", "abc"));
+        assert!(!is("$()|^\\1", "a"));
+        assert!(!is(".. ()|\\1", "a"));
+        assert!(is("()*\\1", "a"));
+        assert!(is("()+\\1", "a"));
+        assert!(is("(a)|b\\1", "xa"));
     }
 
     #[test]

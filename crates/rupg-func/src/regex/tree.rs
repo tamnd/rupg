@@ -299,6 +299,32 @@ impl Tree {
         Ok(Tree { root, progs, groups: parsed.groups, icase: parsed.cflags & flags::ICASE != 0 })
     }
 
+    /// `cfindloop`: the leftmost match from `from` for a pattern with back references. The search finds the first end of a match of the program of the root, then tries each start up to that end. When no start gives a match, the search goes on after the end, but only while that position is before the end of the text, so a match that starts at the end of the text is found only by the first search.
+    pub(super) fn cfind(&self, s: &[u32], from: usize) -> Option<Groups> {
+        let mut d = Dissect { tree: self, s, ends: BTreeMap::new(), pmatch: Vec::new() };
+        let mut close = from;
+        loop {
+            let mut first: Option<usize> = None;
+            for begin in close..=s.len() {
+                if first.is_some_and(|end| begin > end) {
+                    break;
+                }
+                let limit = first.unwrap_or(s.len());
+                if let Some(end) = d.shortest(&self.root, begin, begin, limit) {
+                    first = Some(end);
+                }
+            }
+            let end = first?;
+            if let Some(groups) = (close..=end).find_map(|begin| self.find(s, begin)) {
+                return Some(groups);
+            }
+            close = end + 1;
+            if close >= s.len() {
+                return None;
+            }
+        }
+    }
+
     /// `cfindloop`: the positions of the leftmost match that starts at `begin`, the longest or the shortest as the root prefers.
     pub(super) fn find(&self, s: &[u32], begin: usize) -> Option<Groups> {
         let mut d =
