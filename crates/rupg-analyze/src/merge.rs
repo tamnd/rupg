@@ -304,7 +304,10 @@ impl Analyzer<'_> {
                 query: Box::new(query),
             });
         }
-        let has = |kind: MatchKind| merge_clauses.iter().any(|c| c.kind == kind);
+        // `transform_MERGE_to_join`: an action `DO NOTHING` does not need the rows of an outer join.
+        let has = |kind: MatchKind| {
+            merge_clauses.iter().any(|c| c.kind == kind && c.command != MergeCommand::Nothing)
+        };
         let (by_source, by_target) =
             (has(MatchKind::NotMatchedBySource), has(MatchKind::NotMatchedByTarget));
         // With `NOT MATCHED BY SOURCE`, a marker with each source row tells a row of the target table with no source row.

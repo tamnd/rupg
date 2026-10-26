@@ -1,0 +1,134 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE USER regress_mg_alice NOLOGIN;
+CREATE ROLE
+> CREATE USER regress_mg_bob NOLOGIN;
+CREATE ROLE
+> GRANT CREATE ON SCHEMA public TO regress_mg_alice;
+GRANT
+> SET SESSION AUTHORIZATION regress_mg_alice;
+SET
+session_authorization=regress_mg_alice
+is_superuser=off
+> CREATE TABLE rls_test_src (a int PRIMARY KEY, b text);
+CREATE TABLE
+> ALTER TABLE rls_test_src ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> GRANT SELECT, UPDATE ON rls_test_src TO public;
+GRANT
+> INSERT INTO rls_test_src VALUES (1, 'src a');
+INSERT 0 1
+> CREATE TABLE rls_test_tgt (a int PRIMARY KEY, b text, c text);
+CREATE TABLE
+> ALTER TABLE rls_test_tgt ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON rls_test_tgt TO public;
+GRANT
+> CREATE FUNCTION rls_test_tgt_set_c() RETURNS trigger AS
+>>   $$ BEGIN new.c = upper(new.b); RETURN new; END; $$
+>>   LANGUAGE plpgsql;
+CREATE FUNCTION
+> CREATE TRIGGER rls_test_tgt_set_c BEFORE INSERT OR UPDATE ON rls_test_tgt
+>>   FOR EACH ROW EXECUTE FUNCTION rls_test_tgt_set_c();
+CREATE TRIGGER
+> CREATE FUNCTION rls_test_policy_fn(text, record) RETURNS bool AS
+>>   $$ BEGIN RAISE NOTICE '%.%', $1, $2; RETURN true; END; $$
+>>   LANGUAGE plpgsql;
+CREATE FUNCTION
+> CREATE POLICY sel_pol ON rls_test_src FOR SELECT
+>>   USING (true);
+CREATE POLICY
+> CREATE POLICY upd_pol ON rls_test_src FOR UPDATE
+>>   USING (rls_test_policy_fn('UPDATE USING on rls_test_src', rls_test_src))
+>>   WITH CHECK (rls_test_policy_fn('UPDATE CHECK on rls_test_src', rls_test_src));
+CREATE POLICY
+> CREATE POLICY sel_pol ON rls_test_tgt FOR SELECT
+>>   USING (rls_test_policy_fn('SELECT USING on rls_test_tgt', rls_test_tgt));
+CREATE POLICY
+> CREATE POLICY ins_pol ON rls_test_tgt FOR INSERT
+>>   WITH CHECK (rls_test_policy_fn('INSERT CHECK on rls_test_tgt', rls_test_tgt));
+CREATE POLICY
+> CREATE POLICY upd_pol ON rls_test_tgt FOR UPDATE
+>>   USING (rls_test_policy_fn('UPDATE USING on rls_test_tgt', rls_test_tgt))
+>>   WITH CHECK (rls_test_policy_fn('UPDATE CHECK on rls_test_tgt', rls_test_tgt));
+CREATE POLICY
+> CREATE POLICY del_pol ON rls_test_tgt FOR DELETE
+>>   USING (rls_test_policy_fn('DELETE USING on rls_test_tgt', rls_test_tgt));
+CREATE POLICY
+> SET SESSION AUTHORIZATION regress_mg_bob;
+SET
+session_authorization=regress_mg_bob
+> INSERT INTO rls_test_tgt VALUES (1, 'tgt a');
+NOTICE 00000 INSERT CHECK on rls_test_tgt.(1,"tgt a","TGT A") (PL/pgSQL function rls_test_policy_fn(text,record) line 1 at RAISE)
+INSERT 0 1
+> MERGE INTO rls_test_tgt t USING rls_test_src s ON t.a = s.a
+>>   WHEN NOT MATCHED THEN DO NOTHING;
+NOTICE 00000 SELECT USING on rls_test_tgt.(1,"tgt a","TGT A") (PL/pgSQL function rls_test_policy_fn(text,record) line 1 at RAISE)
+MERGE 0
+> TRUNCATE rls_test_tgt;
+TRUNCATE TABLE
+> MERGE INTO rls_test_tgt t USING rls_test_src s ON t.a = s.a
+>>   WHEN NOT MATCHED THEN INSERT VALUES (1, 'tgt a');
+NOTICE 00000 INSERT CHECK on rls_test_tgt.(1,"tgt a","TGT A") (PL/pgSQL function rls_test_policy_fn(text,record) line 1 at RAISE)
+MERGE 1
+> TRUNCATE rls_test_tgt;
+TRUNCATE TABLE
+> MERGE INTO rls_test_tgt t USING rls_test_src s ON t.a = s.a
+>>   WHEN NOT MATCHED THEN INSERT VALUES (1, 'tgt a')
+>>   RETURNING *;
+NOTICE 00000 INSERT CHECK on rls_test_tgt.(1,"tgt a","TGT A") (PL/pgSQL function rls_test_policy_fn(text,record) line 1 at RAISE)
+NOTICE 00000 SELECT USING on rls_test_tgt.(1,"tgt a","TGT A") (PL/pgSQL function rls_test_policy_fn(text,record) line 1 at RAISE)
+fields a@rls_test_src.1:23:4:-1,b@rls_test_src.2:25:-1:-1,a@rls_test_tgt.1:23:4:-1,b@rls_test_tgt.2:25:-1:-1,c@rls_test_tgt.3:25:-1:-1
+row 1,src a,1,tgt a,TGT A
+MERGE 1
+> MERGE INTO rls_test_tgt t USING rls_test_src s ON t.a = s.a
+>>   WHEN MATCHED THEN UPDATE SET b = 'tgt b';
+NOTICE 00000 SELECT USING on rls_test_tgt.(1,"tgt a","TGT A") (PL/pgSQL function rls_test_policy_fn(text,record) line 1 at RAISE)
+NOTICE 00000 UPDATE USING on rls_test_tgt.(1,"tgt a","TGT A") (PL/pgSQL function rls_test_policy_fn(text,record) line 1 at RAISE)
+NOTICE 00000 UPDATE CHECK on rls_test_tgt.(1,"tgt b","TGT B") (PL/pgSQL function rls_test_policy_fn(text,record) line 1 at RAISE)
+NOTICE 00000 SELECT USING on rls_test_tgt.(1,"tgt b","TGT B") (PL/pgSQL function rls_test_policy_fn(text,record) line 1 at RAISE)
+MERGE 1
+> MERGE INTO rls_test_tgt t USING rls_test_src s ON t.a = s.a
+>>   WHEN MATCHED THEN UPDATE SET b = 'tgt c'
+>>   RETURNING *;
+NOTICE 00000 SELECT USING on rls_test_tgt.(1,"tgt b","TGT B") (PL/pgSQL function rls_test_policy_fn(text,record) line 1 at RAISE)
+NOTICE 00000 UPDATE USING on rls_test_tgt.(1,"tgt b","TGT B") (PL/pgSQL function rls_test_policy_fn(text,record) line 1 at RAISE)
+NOTICE 00000 UPDATE CHECK on rls_test_tgt.(1,"tgt c","TGT C") (PL/pgSQL function rls_test_policy_fn(text,record) line 1 at RAISE)
+NOTICE 00000 SELECT USING on rls_test_tgt.(1,"tgt c","TGT C") (PL/pgSQL function rls_test_policy_fn(text,record) line 1 at RAISE)
+fields a@rls_test_src.1:23:4:-1,b@rls_test_src.2:25:-1:-1,a@rls_test_tgt.1:23:4:-1,b@rls_test_tgt.2:25:-1:-1,c@rls_test_tgt.3:25:-1:-1
+row 1,src a,1,tgt c,TGT C
+MERGE 1
+> BEGIN;
+BEGIN
+> MERGE INTO rls_test_tgt t USING rls_test_src s ON t.a = s.a
+>>   WHEN MATCHED THEN DELETE;
+NOTICE 00000 SELECT USING on rls_test_tgt.(1,"tgt c","TGT C") (PL/pgSQL function rls_test_policy_fn(text,record) line 1 at RAISE)
+NOTICE 00000 DELETE USING on rls_test_tgt.(1,"tgt c","TGT C") (PL/pgSQL function rls_test_policy_fn(text,record) line 1 at RAISE)
+MERGE 1
+> ROLLBACK;
+ROLLBACK
+> MERGE INTO rls_test_tgt t USING rls_test_src s ON t.a = s.a
+>>   WHEN MATCHED THEN DELETE
+>>   RETURNING *;
+NOTICE 00000 SELECT USING on rls_test_tgt.(1,"tgt c","TGT C") (PL/pgSQL function rls_test_policy_fn(text,record) line 1 at RAISE)
+NOTICE 00000 DELETE USING on rls_test_tgt.(1,"tgt c","TGT C") (PL/pgSQL function rls_test_policy_fn(text,record) line 1 at RAISE)
+fields a@rls_test_src.1:23:4:-1,b@rls_test_src.2:25:-1:-1,a@rls_test_tgt.1:23:4:-1,b@rls_test_tgt.2:25:-1:-1,c@rls_test_tgt.3:25:-1:-1
+row 1,src a,1,tgt c,TGT C
+MERGE 1
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> DROP TABLE rls_test_src, rls_test_tgt;
+DROP TABLE
+> DROP FUNCTION rls_test_tgt_set_c;
+DROP FUNCTION
+> DROP FUNCTION rls_test_policy_fn;
+DROP FUNCTION
+> REVOKE CREATE ON SCHEMA public FROM regress_mg_alice;
+REVOKE
+> DROP USER regress_mg_alice;
+DROP ROLE
+> DROP USER regress_mg_bob;
+DROP ROLE

@@ -263,8 +263,10 @@ impl Connection {
                 Some(_) => MatchKind::Matched,
             };
             for clause in merge.clauses.iter().filter(|c| c.kind == kind) {
-                let out =
-                    plan.merge_clause(clause, row.clone(), carried.clone(), params, &reader)?;
+                let out = plan.merge_clause(clause, row.clone(), carried.clone(), params, &reader);
+                // The notices of the checks of the policies come in the order of the rows, with the notices of the triggers.
+                self.trigger_warnings.borrow_mut().extend(reader.take_warnings());
+                let out = out?;
                 let Some(mut out) = out else { continue };
                 let mut old = row.clone();
                 old.truncate(width);
