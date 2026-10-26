@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 
 use rupg_analyze::{BoolOp, BoolTest, Expr, ExprKind, Relation, SubLink, SubLinkKind};
 use rupg_pgcatalog::builtin;
-use rupg_plan::{STATISTIC_KIND_MCV, Statistic};
+use rupg_plan::{STATISTIC_KIND_HISTOGRAM, STATISTIC_KIND_MCV, Statistic};
 use rupg_types::{DATE_INFINITY, DATE_NEGATIVE_INFINITY, NetFamily, USECS_PER_DAY, Value, oid};
 
 use crate::{Member, Size, exprs};
@@ -172,6 +172,11 @@ pub(crate) trait Estimate {
 
     /// The statistics of an expression, as `examine_variable` finds them.
     fn statistic(&self, _expr: &Expr) -> Option<&Statistic> {
+        None
+    }
+
+    /// `ineq_histogram_selectivity` for the inequality `op` of the column `column` and the constant `value`: the part of the histogram that passes, or `None` with no histogram.
+    fn histogram_ineq(&self, _column: &Expr, _value: &Expr, _op: Inequality) -> Option<f64> {
         None
     }
 }
@@ -728,7 +733,7 @@ enum Pattern {
     Prefix,
 }
 
-/// `patternsel_common` with no statistics: the selectivity of `LIKE`, `ILIKE`, a regular expression or `^@` of a column and a constant pattern. A pattern that has all of the value is `=` of the value, as `var_eq_const`. Otherwise the selectivity is `DEFAULT_MATCH_SEL` for the fixed prefix of the pattern, times the selectivity of the rest of the pattern, between 0.0001 and 0.9999. The result is `None` when the estimator uses its default.
+/// `patternsel_common`: the selectivity of `LIKE`, `ILIKE`, a regular expression or `^@` of a column and a constant pattern. A pattern that has all of the value is `=` of the value, as `var_eq_const`. Otherwise the part of the histogram whose values match the pattern counts, when the histogram has at least 100 values. With a smaller histogram or none the estimate is the selectivity of the fixed prefix of the pattern times the selectivity of the rest of the pattern, and a histogram of 10 to 100 values counts in proportion to its size. The result is between 0.0001 and 0.9999 for the values that are not the most common values, and the most common values that match the pattern add their frequencies. The result is `None` when the estimator uses its default.
 fn pattern_selectivity(op: u32, left: &Expr, right: &Expr, est: &dyn Estimate) -> Option<f64> {
     let row = builtin::operator_by_oid(op)?;
     let (kind, negate) = match row.name {
@@ -756,21 +761,179 @@ fn pattern_selectivity(op: u32, left: &Expr, right: &Expr, est: &dyn Estimate) -
         ExprKind::Const(Value::Bytea(b)) => b.as_slice(),
         _ => return None,
     };
-    if !matches!(left.ty, oid::TEXT | oid::VARCHAR | oid::NAME | oid::BPCHAR | oid::BYTEA) {
-        return None;
-    }
+    let ExprKind::Const(constant) = &pattern.kind else { return None };
+    // `rdatatype`: the prefix has the type of the column for `bpchar` and `bytea`, and `text` for `text` and `name`.
+    let prefix_type = match left.ty {
+        oid::TEXT | oid::VARCHAR | oid::NAME => oid::TEXT,
+        oid::BPCHAR => oid::BPCHAR,
+        oid::BYTEA => oid::BYTEA,
+        _ => return None,
+    };
+    let statistic = est.statistic(left);
+    let nullfrac = statistic.map_or(0.0, |s| f64::from(s.null_frac));
     let (prefix, status, rest) = fixed_prefix(text, kind);
-    let sel = if status == Prefix::Exact {
-        let value = match &pattern.kind {
+    let prefix = Expr::new(
+        ExprKind::Const(match &pattern.kind {
             ExprKind::Const(Value::Bytea(_)) => Value::Bytea(prefix),
             _ => Value::Text(String::from_utf8_lossy(&prefix).into_owned()),
-        };
-        est.eq(left, &Expr::new(ExprKind::Const(value), right.ty)).unwrap_or(EQ_SEL)
+        }),
+        prefix_type,
+    );
+    let sel = if status == Prefix::Exact {
+        est.eq(left, &prefix).unwrap_or(EQ_SEL)
     } else {
-        let prefix_sel = if status == Prefix::Partial { EQ_SEL } else { 1.0 };
-        (prefix_sel * rest).clamp(0.0001, 0.9999)
+        // A negated operator estimates the operator that it negates.
+        let positive = if negate { row.negator } else { op };
+        let test = |v: &Value| crate::pattern_match(positive, v, constant).unwrap_or(false);
+        let (hist, hist_size) = histogram_selectivity(statistic, &test, 10, 1);
+        let mut selec = match hist {
+            Some(hist) if hist_size >= 100 => hist,
+            _ => {
+                let prefix_sel = if status == Prefix::Partial {
+                    prefix_selectivity(est, left, &prefix)
+                } else {
+                    1.0
+                };
+                let heuristic = prefix_sel * rest;
+                match hist {
+                    // A histogram of 10 to 100 values counts more when it is larger.
+                    Some(hist) => {
+                        let weight = hist_size as f64 / 100.0;
+                        hist * weight + heuristic * (1.0 - weight)
+                    }
+                    None => heuristic,
+                }
+            }
+        };
+        selec = selec.clamp(0.0001, 0.9999);
+        let (mcv_selec, sumcommon) = mcv_selectivity(statistic, &test);
+        selec *= 1.0 - nullfrac - sumcommon;
+        selec + mcv_selec
     };
-    Some(if negate { 1.0 - sel } else { sel }.clamp(0.0, 1.0))
+    Some(if negate { 1.0 - sel - nullfrac } else { sel }.clamp(0.0, 1.0))
+}
+
+/// `mcv_selectivity`: the sum of the frequencies of the most common values that pass `test`, and the sum of the frequencies of all of them.
+fn mcv_selectivity(statistic: Option<&Statistic>, test: &dyn Fn(&Value) -> bool) -> (f64, f64) {
+    let Some(mcv) = statistic.and_then(|s| s.slots.iter().find(|s| s.kind == STATISTIC_KIND_MCV))
+    else {
+        return (0.0, 0.0);
+    };
+    let values = mcv.values.as_deref().unwrap_or_default();
+    let numbers = mcv.numbers.as_deref().unwrap_or_default();
+    let (mut mcv_selec, mut sumcommon) = (0.0, 0.0);
+    for (v, &n) in values.iter().zip(numbers) {
+        if test(v) {
+            mcv_selec += f64::from(n);
+        }
+        sumcommon += f64::from(n);
+    }
+    (mcv_selec, sumcommon)
+}
+
+/// `histogram_selectivity`: the part of the values of the histogram that pass `test`, without the first and the last `skip` values, and the number of the values of the histogram. The part is `None` when the histogram has fewer than `min_size` values.
+fn histogram_selectivity(
+    statistic: Option<&Statistic>,
+    test: &dyn Fn(&Value) -> bool,
+    min_size: usize,
+    skip: usize,
+) -> (Option<f64>, usize) {
+    let Some(values) = statistic
+        .and_then(|s| s.slots.iter().find(|s| s.kind == STATISTIC_KIND_HISTOGRAM))
+        .map(|slot| slot.values.as_deref().unwrap_or_default())
+    else {
+        return (None, 0);
+    };
+    let size = values.len();
+    if size < min_size {
+        return (None, size);
+    }
+    let inner = &values[skip..size - skip];
+    let matches = inner.iter().filter(|v| test(v)).count();
+    (Some(matches as f64 / inner.len() as f64), size)
+}
+
+/// `prefix_selectivity`: the selectivity of the values that start with the constant `prefix`, from the histogram of `column`, as `column >= prefix AND column < greater`, where `greater` is the least string after the prefix, as `make_greater_string` makes it. It is at least the selectivity of `=` of the prefix. With no histogram it is `DEFAULT_MATCH_SEL`.
+fn prefix_selectivity(est: &dyn Estimate, column: &Expr, prefix: &Expr) -> f64 {
+    let ge = Inequality { isgt: true, iseq: true, sorted: true };
+    let Some(mut sel) = est.histogram_ineq(column, prefix, ge) else { return EQ_SEL };
+    if let Some(greater) = greater_string(prefix) {
+        let lt = Inequality { isgt: false, iseq: false, sorted: true };
+        let top = est.histogram_ineq(column, &greater, lt).unwrap_or(0.0);
+        sel = top + sel - 1.0;
+    }
+    sel.max(est.eq(column, prefix).unwrap_or(EQ_SEL))
+}
+
+/// `make_greater_string` in the C collation: the prefix with its last character incremented, as `pg_utf8_increment` increments it, or `byte_increment` for `bytea`. A last character that cannot be incremented is removed, and the character before it is incremented.
+fn greater_string(prefix: &Expr) -> Option<Expr> {
+    let (mut bytes, bytea) = match &prefix.kind {
+        ExprKind::Const(Value::Text(t)) => (t.as_bytes().to_vec(), false),
+        ExprKind::Const(Value::Bytea(b)) => (b.clone(), true),
+        _ => return None,
+    };
+    while !bytes.is_empty() {
+        let len = bytes.len();
+        let width = if bytea {
+            1
+        } else {
+            let text = String::from_utf8_lossy(&bytes);
+            text.chars().next_back().map_or(1, char::len_utf8).min(len)
+        };
+        let last = &mut bytes[len - width..];
+        let incremented = if bytea { byte_increment(&mut last[0]) } else { utf8_increment(last) };
+        if incremented {
+            let value = if bytea {
+                Value::Bytea(bytes)
+            } else {
+                Value::Text(String::from_utf8(bytes).ok()?)
+            };
+            return Some(Expr::new(ExprKind::Const(value), prefix.ty));
+        }
+        bytes.truncate(len - width);
+    }
+    None
+}
+
+/// `byte_increment`: the byte plus one, or false when it is the greatest byte.
+fn byte_increment(b: &mut u8) -> bool {
+    match b.checked_add(1) {
+        Some(next) => {
+            *b = next;
+            true
+        }
+        None => false,
+    }
+}
+
+/// `pg_utf8_increment`: the character with its last byte that can grow incremented, or false when no byte can.
+fn utf8_increment(c: &mut [u8]) -> bool {
+    let len = c.len();
+    if len > 4 || len == 0 {
+        return false;
+    }
+    for at in (2..len).rev() {
+        if c[at] < 0xBF {
+            c[at] += 1;
+            return true;
+        }
+    }
+    if len >= 2 {
+        let limit = match c[0] {
+            0xED => 0x9F,
+            0xF4 => 0x8F,
+            _ => 0xBF,
+        };
+        if c[1] < limit {
+            c[1] += 1;
+            return true;
+        }
+    }
+    if matches!(c[0], 0x7F | 0xDF | 0xEF | 0xF4) {
+        return false;
+    }
+    c[0] += 1;
+    true
 }
 
 /// `pattern_fixed_prefix` for `match_pattern_prefix`: the fixed prefix of the pattern of a positive `LIKE`, `ILIKE`, regular expression or `^@`, and true when the pattern is all prefix. The pattern must be a constant that is not null. The result is `None` for another operator or pattern, and for a pattern with no fixed prefix.

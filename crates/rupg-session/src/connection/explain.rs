@@ -132,6 +132,10 @@ impl rupg_opt::Members for Members<'_, '_> {
         |left, a, right, b| rupg_func::compare(left, a, right, b).ok()
     }
 
+    fn pattern_match(&self) -> rupg_opt::PatternMatch {
+        rupg_func::pattern_match
+    }
+
     fn indexes(&self, table: u32) -> Vec<Index> {
         let Some(catalog) = self.reader.catalog() else { return Vec::new() };
         let columns = catalog.relation(table).map(|t| t.columns.as_slice()).unwrap_or_default();

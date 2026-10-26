@@ -223,6 +223,11 @@ fn matches(args: &[Value], cflags: u32) -> Result<bool> {
     Ok(compile(arg(args, 1)?, cflags)?.is_match(arg(args, 0)?))
 }
 
+/// `textregexeq` and `texticregexeq`: true when the text matches the regular expression, without the case with `icase`.
+pub(crate) fn regex_match(args: &[Value], icase: bool) -> Result<bool> {
+    matches(args, if icase { flags::ADVANCED | flags::ICASE } else { flags::ADVANCED })
+}
+
 fn regexeq(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Bool(matches(args, flags::ADVANCED)?))
 }

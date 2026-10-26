@@ -1,0 +1,163 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE ps (t text, s text, v varchar(20), n text, c char(6), b bytea, few text);
+CREATE TABLE
+> INSERT INTO ps SELECT 'item' || x, 'k' || (x % 40), 'v' || (x % 1000), CASE WHEN x % 5 = 0 THEN NULL ELSE 'n' || x END, 'c' || (x % 300), ('\x' || lpad(to_hex(x % 4000), 4, '0'))::bytea, CASE WHEN x % 3 = 0 THEN 'apple' WHEN x % 3 = 1 THEN 'banana' ELSE 'cherry' END FROM generate_series(1, 10000) x;
+INSERT 0 10000
+> ALTER TABLE ps ALTER COLUMN v SET STATISTICS 30;
+ALTER TABLE
+> ALTER TABLE ps ALTER COLUMN c SET STATISTICS 5;
+ALTER TABLE
+> ANALYZE ps;
+ANALYZE
+> EXPLAIN SELECT * FROM ps WHERE t LIKE 'item1%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=1111 width=36)
+row   Filter: (t ~~ 'item1%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE t LIKE 'item12%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=101 width=36)
+row   Filter: (t ~~ 'item12%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE t LIKE '%99';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=1 width=36)
+row   Filter: (t ~~ '%99'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE t LIKE 'item1_';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=1 width=36)
+row   Filter: (t ~~ 'item1_'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE t NOT LIKE 'item1%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=8889 width=36)
+row   Filter: (t !~~ 'item1%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE t ILIKE 'ITEM1%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=1111 width=36)
+row   Filter: (t ~~* 'ITEM1%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE t ~ '^item[12]';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=2222 width=36)
+row   Filter: (t ~ '^item[12]'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE t ~ '5$';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=1 width=36)
+row   Filter: (t ~ '5$'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE t ~* 'ITEM9';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=1111 width=36)
+row   Filter: (t ~* 'ITEM9'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE t !~ '^item9';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=8889 width=36)
+row   Filter: (t !~ '^item9'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE t ^@ 'item7';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=1111 width=36)
+row   Filter: (t ^@ 'item7'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE t LIKE 'item123';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=1 width=36)
+row   Filter: (t ~~ 'item123'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE s LIKE 'k1%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=2750 width=36)
+row   Filter: (s ~~ 'k1%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE s LIKE '%3';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=1000 width=36)
+row   Filter: (s ~~ '%3'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE s NOT LIKE 'k1%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=7250 width=36)
+row   Filter: (s !~~ 'k1%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE v LIKE 'v1%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=1154 width=36)
+row   Filter: ((v)::text ~~ 'v1%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE v LIKE 'v99%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=17 width=36)
+row   Filter: ((v)::text ~~ 'v99%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE v LIKE '%7';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=1670 width=36)
+row   Filter: ((v)::text ~~ '%7'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE n LIKE 'n1%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=889 width=36)
+row   Filter: (n ~~ 'n1%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE n NOT LIKE 'n1%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=7111 width=36)
+row   Filter: (n !~~ 'n1%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE n LIKE '%0';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=1 width=36)
+row   Filter: (n ~~ '%0'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE c LIKE 'c1%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=2130 width=36)
+row   Filter: (c ~~ 'c1%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE c LIKE 'c2%5';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=616 width=36)
+row   Filter: (c ~~ 'c2%5'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE b LIKE '\001%'::bytea;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=784 width=36)
+row   Filter: (b ~~ '\x0125'::bytea)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE few LIKE 'b%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=3334 width=36)
+row   Filter: (few ~~ 'b%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE few LIKE '%rr%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=3333 width=36)
+row   Filter: (few ~~ '%rr%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE few NOT LIKE 'a%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=6667 width=36)
+row   Filter: (few !~~ 'a%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE few ~ 'an';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=3334 width=36)
+row   Filter: (few ~ 'an'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE t LIKE 'zzz%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=1 width=36)
+row   Filter: (t ~~ 'zzz%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ps WHERE t LIKE 'item~%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ps  (cost=0.00..212.00 rows=1 width=36)
+row   Filter: (t ~~ 'item~%'::text)
+EXPLAIN

@@ -5024,6 +5024,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_merge_prefix.test")));
     }
 
+    /// The estimates of `LIKE`, `ILIKE`, regular expressions and `^@` of analyzed columns, from the most common values and the histogram that match the pattern and from the part of the histogram of the fixed prefix: with large and small histograms, nulls, `NOT`, `varchar`, `char`, `bytea` and columns with only most common values. `connection/plan_pattern_stats.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_pattern_stats() {
+        big_stack(|| script(include_str!("connection/plan_pattern_stats.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {
