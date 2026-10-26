@@ -1864,13 +1864,14 @@ fn acl_statements(script: &str) -> Result<Vec<AclStatement>, String> {
     Ok(out)
 }
 
-/// The databases that `initdb` makes from `template1`: `make_template0` makes `template0` with the OID 4, and `make_postgres` makes `postgres` with the OID 5. `CREATE DATABASE` does not copy `datacl`, and each step adds a comment.
+/// The databases that `initdb` makes from `template1`: `make_template0` makes `template0` with the OID 4, and `make_postgres` makes `postgres` with the OID 5. `CREATE DATABASE` does not copy `datacl`, and each step adds a comment. Before the copies, `vacuum_db` of `initdb` freezes `template1` in the transaction 654, which becomes its `datfrozenxid`, as `INITDB_FROZEN_XID` of rupg-catalog holds.
 fn initdb_databases(rows: &mut Vec<Row>) -> Result<(), String> {
     let template1 = rows
-        .iter()
+        .iter_mut()
         .find(|r| r.get("datname").map(String::as_str) == Some("template1"))
-        .cloned()
         .ok_or("pg_database.dat: no template1")?;
+    template1.insert("datfrozenxid".into(), "654".into());
+    let template1 = template1.clone();
     let copies = [
         ("4", "template0", "t", "f", "unmodifiable empty database"),
         ("5", "postgres", "f", "t", "default administrative connection database"),
