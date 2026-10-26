@@ -1,6 +1,6 @@
 //! `ExplainPrintPlan` and `ExplainNode` of `explain.c`: the nodes of a plan with their names, their estimates and their parts, in the form that the options of `EXPLAIN` choose.
 
-use rupg_analyze::{ExprKind, JoinKind, Relation};
+use rupg_analyze::{Expr, ExprKind, JoinKind, Relation};
 use rupg_common::Result;
 
 use crate::format::Writer;
@@ -517,18 +517,24 @@ impl Explainer<'_, '_> {
             }
             Kind::SubqueryScan(_) => self.qual("Filter", scope, &node.filter, true)?,
             Kind::NestedLoop { join_filter, .. } => {
+                self.texts.below(computed(node));
                 self.qual("Join Filter", scope, join_filter, upper)?;
                 self.qual("Filter", scope, &node.filter, upper)?;
+                self.texts.below(Vec::new());
             }
             Kind::MergeJoin { cond, join_filter, .. } => {
+                self.texts.below(computed(node));
                 self.qual("Merge Cond", scope, cond, upper)?;
                 self.qual("Join Filter", scope, join_filter, upper)?;
                 self.qual("Filter", scope, &node.filter, upper)?;
+                self.texts.below(Vec::new());
             }
             Kind::HashJoin { cond, join_filter, .. } => {
+                self.texts.below(computed(node));
                 self.qual("Hash Cond", scope, cond, upper)?;
                 self.qual("Join Filter", scope, join_filter, upper)?;
                 self.qual("Filter", scope, &node.filter, upper)?;
+                self.texts.below(Vec::new());
             }
             Kind::Memoize(memo) => self.memoize(scope, memo, upper)?,
             Kind::Aggregate { strategy, keys, sets } => {
@@ -807,4 +813,14 @@ impl Explainer<'_, '_> {
         }
         Ok(())
     }
+}
+
+/// The expressions of the targets of the two sides of a join that are not columns, which a condition of the join reads from the side as `fix_join_expr` finds them in its target list.
+fn computed(node: &Node<'_>) -> Vec<Expr> {
+    node.children
+        .iter()
+        .flat_map(|child| &child.output)
+        .filter(|item| !matches!(item.expr.kind, ExprKind::Var(_)))
+        .map(|item| item.expr.as_ref().clone())
+        .collect()
 }

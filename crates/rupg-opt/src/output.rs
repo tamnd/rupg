@@ -188,7 +188,8 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
                     }
                 }
             }
-            node.output = want.iter().map(Item::passed).collect();
+            // The node does not project, so its target is the target of the node below with the keys that it computes for the sort.
+            node.output = below.iter().map(Item::passed).collect();
             if let Some(child) = node.children.first_mut() {
                 // `prepare_sort_from_pathkeys`: a key that the node below computes for the sort does not count in its width.
                 let added = width(level, child.scope, &below[want.len()..]);

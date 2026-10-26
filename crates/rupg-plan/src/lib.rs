@@ -394,6 +394,11 @@ pub trait Texts {
     /// The errors of the deparse.
     fn expr(&mut self, scope: usize, expr: &Expr, prefix: bool) -> Result<String>;
 
+    /// Sets the expressions of the targets of the nodes below the join whose conditions come next. The texts show such an expression in parentheses, as the value that the node below gives. An empty list ends the conditions of the join.
+    fn below(&mut self, exprs: Vec<Expr>) {
+        let _ = exprs;
+    }
+
     /// [`Self::expr`] for an expression that a node reads from the node below, which shows the casts that the analyzer added at its top, as `get_special_variable` writes it.
     ///
     /// # Errors

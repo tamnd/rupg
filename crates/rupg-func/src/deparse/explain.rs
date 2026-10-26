@@ -36,6 +36,8 @@ struct PlanTexts<'a, 'q> {
     /// The name of each window of each scope, as `WindowAgg.winname`.
     windows: Vec<Vec<Option<String>>>,
     subplans: Vec<SubName>,
+    /// The expressions of the targets of the nodes below the join whose conditions the texts show now.
+    computed: Vec<Expr>,
 }
 
 impl<'a, 'q> PlanTexts<'a, 'q> {
@@ -154,7 +156,7 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
                 alternative: l.alternative,
             })
             .collect();
-        PlanTexts { session, plan, spaces, targets, windows, subplans }
+        PlanTexts { session, plan, spaces, targets, windows, subplans, computed: Vec::new() }
     }
 
     /// A deparse of the expressions of a scope, with the names of the scope and of the scopes outside it.
@@ -178,6 +180,7 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
         d.window_targets = query.targets.iter().map(|t| t.expr.clone()).collect();
         d.window_names.clone_from(&self.windows[scope]);
         d.subplans.clone_from(&self.subplans);
+        d.computed.clone_from(&self.computed);
         Ok(d)
     }
 }
@@ -290,6 +293,10 @@ fn window_names(node: &Node<'_>, out: &mut [Vec<Option<String>>]) {
 }
 
 impl Texts for PlanTexts<'_, '_> {
+    fn below(&mut self, exprs: Vec<Expr>) {
+        self.computed = exprs;
+    }
+
     fn expr(&mut self, scope: usize, expr: &Expr, prefix: bool) -> Result<String> {
         let mut d = self.deparser(scope, prefix)?;
         d.expr(expr, false)?;
