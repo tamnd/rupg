@@ -1,0 +1,69 @@
+> create table lx_a (f1 int)
+CREATE TABLE
+> insert into lx_a values (0), (1)
+INSERT 0 2
+> create table lx_b (u int, t int)
+CREATE TABLE
+> insert into lx_b select g, g % 3 from generate_series(0, 4) g
+INSERT 0 5
+> select count(*) from lx_a t1, lateral (select * from lx_b t2, lateral (select t2.t as x offset 0) s0 join lx_b t3 on t3.u = t1.f1) ss1
+fields count:20:8:-1
+row 10
+SELECT 1
+> select count(*) from lx_a t1, lateral (select * from lx_b t2, (select 1 as x offset 0) s0 join lx_b t3 on t3.u = t1.f1) ss1
+fields count:20:8:-1
+row 10
+SELECT 1
+> select t1.f1, ss1.* from lx_a t1, lateral (select t2.u, t3.u as u3 from lx_b t2 left join lx_b t3 on t3.u = t1.f1 + t2.t) ss1 order by 1, 2, 3
+fields f1@lx_a.1:23:4:-1,u@lx_b.1:23:4:-1,u3@lx_b.1:23:4:-1
+row 0,0,0
+row 0,1,1
+row 0,2,2
+row 0,3,0
+row 0,4,1
+row 1,0,1
+row 1,1,2
+row 1,2,3
+row 1,3,1
+row 1,4,2
+SELECT 10
+> select t1.f1, ss1.* from lx_a t1 left join lateral (select t2.u, t3.u as u3 from lx_b t2 join lx_b t3 on t3.u = t1.f1 and t2.u = t3.u + 1) ss1 on true order by 1, 2, 3
+fields f1@lx_a.1:23:4:-1,u@lx_b.1:23:4:-1,u3@lx_b.1:23:4:-1
+row 0,1,0
+row 1,2,1
+SELECT 2
+> select t1.f1, ss1.* from lx_a t1, lateral (select t2.u, t3.u as u3 from lx_b t2 full join lx_b t3 on t3.u = t1.f1 and t2.u = t3.u) ss1 order by 1, 2, 3
+fields f1@lx_a.1:23:4:-1,u@lx_b.1:23:4:-1,u3@lx_b.1:23:4:-1
+row 0,0,0
+row 0,1,NULL
+row 0,2,NULL
+row 0,3,NULL
+row 0,4,NULL
+row 0,NULL,1
+row 0,NULL,2
+row 0,NULL,3
+row 0,NULL,4
+row 1,0,NULL
+row 1,1,1
+row 1,2,NULL
+row 1,3,NULL
+row 1,4,NULL
+row 1,NULL,0
+row 1,NULL,2
+row 1,NULL,3
+row 1,NULL,4
+SELECT 18
+> select t1.f1, ss1.* from lx_a t1, lateral (select t2.u, t3.u as u3, t4.u as u4 from lx_b t2 join (lx_b t3 left join lx_b t4 on t4.u = t1.f1) on t3.u = t2.u where t2.u < 2) ss1 order by 1, 2, 3, 4
+fields f1@lx_a.1:23:4:-1,u@lx_b.1:23:4:-1,u3@lx_b.1:23:4:-1,u4@lx_b.1:23:4:-1
+row 0,0,0,0
+row 0,1,1,0
+row 1,0,0,1
+row 1,1,1,1
+SELECT 4
+> select t1.f1, ss1.* from lx_a t1, lateral (select t2.u, t3.u as u3 from lx_b t2 join lx_b t3 on t3.u = t1.f1 where t3.t = t2.t + t1.f1) ss1 order by 1, 2, 3
+fields f1@lx_a.1:23:4:-1,u@lx_b.1:23:4:-1,u3@lx_b.1:23:4:-1
+row 0,0,0
+row 0,3,0
+row 1,0,1
+row 1,3,1
+SELECT 4

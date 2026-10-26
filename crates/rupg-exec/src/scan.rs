@@ -356,6 +356,26 @@ fn nullable(item: &FromItem, out: &mut Vec<usize>) {
     }
 }
 
+/// The relations outside a part of `FROM` that the conditions of its joins read, as the conditions of a `LATERAL` subquery that the planner pulled up do.
+fn join_reads(item: &FromItem) -> Vec<usize> {
+    fn conditions(item: &FromItem, out: &mut Vec<usize>) {
+        if let FromItem::Join(join) = item {
+            if let Some(on) = &join.on {
+                out.extend(relations_of(on));
+            }
+            conditions(&join.left, out);
+            conditions(&join.right, out);
+        }
+    }
+    let (mut read, mut own) = (Vec::new(), Vec::new());
+    conditions(item, &mut read);
+    relations_in(item, &mut own);
+    read.retain(|r| !own.contains(r));
+    read.sort_unstable();
+    read.dedup();
+    read
+}
+
 /// The relations of a part of `FROM`.
 fn relations_in(item: &FromItem, out: &mut Vec<usize>) {
     match item {
@@ -741,24 +761,24 @@ fn plain_var(expr: &Expr) -> Option<Var> {
     }
 }
 
-/// True when an expression reads columns of an outer query and nothing of its own query, so that it has one value for each run of the query: a column of an outer query, a constant, a parameter, or a function that is not volatile of such expressions, as `t1.tenthous + 1`. An index of the other side then gives the rows of each run, as an index scan of PostgreSQL does with a parameter of the outer plan.
-fn outer_expr(expr: &Expr) -> bool {
-    fn fixed(expr: &Expr, outer: &mut bool) -> bool {
+/// True when an expression reads columns of an outer query or of the relations `bound` of the outer side of a nested loop, and nothing else of its own query, so that it has one value for each run of the scan: such a column, a constant, a parameter, or a function that is not volatile of such expressions, as `t1.tenthous + 1`. An index of the other side then gives the rows of each run, as an index scan of PostgreSQL does with a parameter of the outer plan.
+fn outer_expr(expr: &Expr, bound: &[usize]) -> bool {
+    fn fixed(expr: &Expr, bound: &[usize], outer: &mut bool) -> bool {
         match &expr.kind {
-            ExprKind::Var(var) if var.levels_up > 0 => {
+            ExprKind::Var(var) if var.levels_up > 0 || bound.contains(&var.relation) => {
                 *outer = true;
                 true
             }
             ExprKind::Const(_) | ExprKind::Param(_) => true,
-            ExprKind::Relabel(arg, _) | ExprKind::CoerceViaIo(arg, _) => fixed(arg, outer),
+            ExprKind::Relabel(arg, _) | ExprKind::CoerceViaIo(arg, _) => fixed(arg, bound, outer),
             ExprKind::Func(f) if !f.retset && !crate::volatile(expr) => {
-                f.args.iter().all(|arg| fixed(arg, outer))
+                f.args.iter().all(|arg| fixed(arg, bound, outer))
             }
             _ => false,
         }
     }
     let mut outer = false;
-    fixed(expr, &mut outer) && outer
+    fixed(expr, bound, &mut outer) && outer
 }
 
 /// The parts of a condition that `AND` joins. They are references and not copies, because the cache of the rows of a subquery keeps them by the address of the subquery: a copy that the scan drops can free an address that another subquery then gets.
@@ -838,19 +858,38 @@ fn covered(expr: &Expr, relations: &[usize]) -> bool {
 
 /// The tuples that pass every condition.
 fn keep(tuples: Vec<Vec<usize>>, conds: &[&Expr], test: &mut Test<'_>) -> Result<Vec<Vec<usize>>> {
+    keep_in(tuples, conds, test, &[])
+}
+
+/// The tuples that pass every condition. A condition can read the relations of the outer side of a nested loop, whose rows `context` has.
+fn keep_in(
+    tuples: Vec<Vec<usize>>,
+    conds: &[&Expr],
+    test: &mut Test<'_>,
+    context: &[usize],
+) -> Result<Vec<Vec<usize>>> {
     if conds.is_empty() {
         return Ok(tuples);
     }
+    let reads = context.iter().any(|&c| c != NONE)
+        && conds.iter().any(|e| relations_of(e).iter().any(|&r| context[r] != NONE));
     let mut kept = Vec::with_capacity(tuples.len());
     'tuple: for tuple in tuples {
+        let full = if reads { merged(context, &tuple) } else { Vec::new() };
+        let seen = if reads { &full } else { &tuple };
         for expr in conds {
-            if test(expr, &tuple)? != Value::Bool(true) {
+            if test(expr, seen)? != Value::Bool(true) {
                 continue 'tuple;
             }
         }
         kept.push(tuple);
     }
     Ok(kept)
+}
+
+/// The relations that the outer side of a nested loop gives one row for each run of a part of `FROM`, which `context` has, other than the relations `own` of the part.
+fn bound(context: &[usize], own: &[usize]) -> Vec<usize> {
+    (0..context.len()).filter(|r| context[*r] != NONE && !own.contains(r)).collect()
 }
 
 /// The tuples of the query before the target list: the parts of `FROM` joined with a cross join, and the `WHERE` condition. Each part of `WHERE` that `AND` joins goes down to the smallest part of `FROM` that has its relations, where the query can test it on fewer rows. `test` gives true when a condition is true for a tuple. The tuples come in the order `planned` of the joins of the plan, which [`rupg_opt::join_order`] gives, when it has each relation of `FROM`.
@@ -954,13 +993,16 @@ pub(crate) fn tuples(
     Ok(acc)
 }
 
-/// The order of the parts of `FROM` for the joins of [`tuples`], as `join_search_one_level` makes a join with no condition only when no other join has one: the written order, but when the next part has no `=` with the parts before it that a hash join can test, the first later part that has one comes first, so that the join does not make all the tuples of a cross join. `None` when the order is the written one. The parts keep the written order when a part reads other relations, as `LATERAL` lets it.
+/// The order of the parts of `FROM` for the joins of [`tuples`], as `join_search_one_level` makes a join with no condition only when no other join has one: the written order, but when the next part has no `=` with the parts before it that a hash join can test, the first later part that has one comes first, so that the join does not make all the tuples of a cross join. `None` when the order is the written one. The parts keep the written order when a part reads other relations, as `LATERAL` lets it, or when the condition of a join in a part reads other parts.
 fn join_order(
     items: &[(&FromItem, Vec<usize>)],
     conds: &[&Expr],
     tables: &Tables,
 ) -> Option<Vec<usize>> {
-    if items.len() < 3 || tables.needs.iter().any(|n| !n.is_empty()) {
+    if items.len() < 3
+        || tables.needs.iter().any(|n| !n.is_empty())
+        || items.iter().any(|(item, _)| !join_reads(item).is_empty())
+    {
         return None;
     }
     let within =
@@ -996,8 +1038,10 @@ impl Scan<'_, '_> {
         conds: Vec<&'q Expr>,
         context: &[usize],
     ) -> Result<Vec<Vec<usize>>> {
-        // A part that reads only relations outside the join, which `context` holds, runs once for all the tuples of the left side.
-        if !self.tables.depends_on(input.right_relations, input.left_relations) {
+        // A part that reads only relations outside the join, which `context` holds, runs once for all the tuples of the left side. The condition of a join in the part can read the left side when the part comes from a `LATERAL` subquery that the planner pulled up.
+        let reads = self.tables.depends_on(input.right_relations, input.left_relations)
+            || join_reads(item).iter().any(|r| input.left_relations.contains(r));
+        if !reads {
             input.right = self.item_tuples(item, conds, context)?;
             return join(input, self.tables, self.test);
         }
@@ -1020,25 +1064,36 @@ impl Scan<'_, '_> {
     }
 
     /// The rows of a relation that can pass the conditions `conds`, through an index of a column, when a condition is an `=` of the column and an expression of the columns of an outer query, as in a correlated subquery. The subquery runs for each row of the outer query, and the index makes each run read only the rows with the value of that row, as an index scan with a parameter does. `None` when no condition is such an `=`.
-    fn lookup(&mut self, relation: usize, conds: &[&Expr]) -> Result<Option<Vec<usize>>> {
+    fn lookup(
+        &mut self,
+        relation: usize,
+        conds: &[&Expr],
+        context: &[usize],
+    ) -> Result<Option<Vec<usize>>> {
+        let bound = bound(context, &[relation]);
         let found = conds.iter().find_map(|expr| {
             let ExprKind::Func(f) = &expr.kind else { return None };
             if !HASH_EQUALS.contains(&f.oid) || f.args.len() != 2 {
                 return None;
             }
-            match (plain_var(&f.args[0]), plain_var(&f.args[1])) {
-                (Some(var), None) if var.relation == relation && outer_expr(&f.args[1]) => {
-                    Some((var, &f.args[1]))
-                }
-                (None, Some(var)) if var.relation == relation && outer_expr(&f.args[0]) => {
-                    Some((var, &f.args[0]))
-                }
-                _ => None,
+            // The other side can be a column of a relation of the outer side of the nested loop.
+            let (a, b) = (&f.args[0], &f.args[1]);
+            let pick = |column: &Expr, other: &Expr| {
+                plain_var(column)
+                    .is_some_and(|var| var.relation == relation && outer_expr(other, &bound))
+            };
+            if pick(a, b) {
+                plain_var(a).map(|var| (var, b))
+            } else if pick(b, a) {
+                plain_var(b).map(|var| (var, a))
+            } else {
+                None
             }
         });
         let Some((var, outer)) = found else { return Ok(None) };
         // A null equals no value.
-        let Some(k) = key((self.test)(outer, &vec![NONE; self.width])?) else {
+        let tuple = if bound.is_empty() { vec![NONE; self.width] } else { context.to_vec() };
+        let Some(k) = key((self.test)(outer, &tuple)?) else {
             return Ok(Some(Vec::new()));
         };
         Ok(Some(self.tables.index(var).get(&k).cloned().unwrap_or_default()))
@@ -1055,10 +1110,10 @@ impl Scan<'_, '_> {
         let j = match item {
             FromItem::Relation(index) if !self.tables.needs[*index].is_empty() => {
                 let tuples = self.tables.run(*index, context, width, self.source)?;
-                return keep(tuples, &conds, self.test);
+                return keep_in(tuples, &conds, self.test, context);
             }
             FromItem::Relation(index) => {
-                let rows = match self.lookup(*index, &conds)? {
+                let rows = match self.lookup(*index, &conds, context)? {
                     Some(rows) => rows,
                     None => (0..self.tables.rows[*index].len()).collect(),
                 };
@@ -1070,7 +1125,7 @@ impl Scan<'_, '_> {
                         tuple
                     })
                     .collect();
-                return keep(tuples, &conds, self.test);
+                return keep_in(tuples, &conds, self.test, context);
             }
             FromItem::Join(j) => j,
         };
@@ -1081,16 +1136,21 @@ impl Scan<'_, '_> {
         if let Some(expr) = &j.on {
             conjuncts(expr, &mut on);
         }
+        // A condition that reads one side and the relations of the outer side of a nested loop, which have one row for this run, reads that side only.
+        let outside = bound(context, &[&left_relations[..], &right_relations].concat());
+        let only = |expr: &Expr, side: &[usize]| {
+            let relations = relations_of(expr);
+            relations.iter().any(|r| side.contains(r))
+                && relations.iter().all(|r| side.contains(r) || outside.contains(r))
+        };
         // A condition on one side goes down to that side when the join keeps every row of that side. The other conditions of an inner join join the condition of the join, and those of an outer join test its result.
         let (mut to_left, mut to_right, mut after) = (Vec::new(), Vec::new(), Vec::new());
         let push_left = matches!(j.kind, JoinKind::Inner | JoinKind::Left);
         let push_right = matches!(j.kind, JoinKind::Inner | JoinKind::Right);
         for expr in conds {
-            let relations = relations_of(expr);
-            let nonempty = !relations.is_empty();
-            if push_left && nonempty && covered(expr, &left_relations) {
+            if push_left && only(expr, &left_relations) {
                 to_left.push(expr);
-            } else if push_right && nonempty && covered(expr, &right_relations) {
+            } else if push_right && only(expr, &right_relations) {
                 to_right.push(expr);
             } else if j.kind == JoinKind::Inner {
                 on.push(expr);
@@ -1102,11 +1162,9 @@ impl Scan<'_, '_> {
         if j.kind != JoinKind::Full {
             let mut kept = Vec::with_capacity(on.len());
             for expr in on {
-                let relations = relations_of(expr);
-                let nonempty = !relations.is_empty();
-                if nonempty && j.kind != JoinKind::Left && covered(expr, &left_relations) {
+                if j.kind != JoinKind::Left && only(expr, &left_relations) {
                     to_left.push(expr);
-                } else if nonempty && j.kind != JoinKind::Right && covered(expr, &right_relations) {
+                } else if j.kind != JoinKind::Right && only(expr, &right_relations) {
                     to_right.push(expr);
                 } else {
                     kept.push(expr);
@@ -1114,7 +1172,13 @@ impl Scan<'_, '_> {
             }
             on = kept;
         }
-        let left = self.item_tuples(&j.left, to_left, context)?;
+        let mut left = self.item_tuples(&j.left, to_left, context)?;
+        // The condition of the join and the conditions after it can read the relations outside the join, whose rows the tuples then take from `context`.
+        if !outside.is_empty() {
+            for tuple in &mut left {
+                *tuple = merged(context, tuple);
+            }
+        }
         let input = JoinInput {
             left,
             right: Vec::new(),
