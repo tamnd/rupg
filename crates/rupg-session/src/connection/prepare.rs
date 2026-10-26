@@ -76,7 +76,8 @@ impl Connection {
             Some(plan),
             self.statement_start,
             true,
-        );
+        )
+        .planned_on(&self.catalog());
         self.statements.insert(name.as_bytes(), Arc::new(prepared)).map_err(protocol_error)?;
         Ok(Done::Tag(CommandTag::Prepare))
     }
@@ -94,14 +95,23 @@ impl Connection {
                 .with_hint("Increase the configuration parameter \"max_stack_depth\" (currently 2048kB), after ensuring the platform's stack depth limit is adequate."));
         }
         let name = stmt.name.as_deref().unwrap_or("");
-        let statement = Arc::clone(self.statements.get(name.as_bytes()).map_err(protocol_error)?);
+        let mut statement =
+            Arc::clone(self.statements.get(name.as_bytes()).map_err(protocol_error)?);
         if statement.plan.is_some() || !statement.params.is_empty() {
             self.settings.borrow_mut().take_snapshot();
         }
         let params = self.execute_params(stmt, &statement, notices)?;
         let reader = self.reader();
         let replanned = statement.replan(&reader)?;
-        let plan = match replanned.as_ref().or(statement.plan.as_ref()) {
+        let catalog = Arc::clone(&reader.catalog);
+        drop(reader);
+        if let Some(plan) = replanned {
+            statement = Arc::new(statement.renew(plan, &catalog));
+            *self.statements.get_mut(name.as_bytes()).map_err(protocol_error)? =
+                Arc::clone(&statement);
+        }
+        let reader = self.reader();
+        let plan = match &statement.plan {
             Some(plan) => {
                 let plan = plan.fold(Some(&params), &reader);
                 notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));

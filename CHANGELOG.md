@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A prepared statement plans its query again after a change of the catalog, such as `ALTER TABLE` or `DROP TABLE`, and gives `0A000` "cached plan must not change result type" when the new plan gives other columns (#778).
 - `EXPLAIN EXECUTE` shows the plan of a prepared statement with the values of its parameters, as a custom plan, and counts the plan in `pg_prepared_statements` (#777).
 - A prepared statement on a table with row security plans its query again at each run, so that it gets the policies of the current role and of the current `row_security`, and the changes of the policies after `PREPARE` (#776).
 - A query can read the system columns `tableoid` and `ctid` of a table that row-level security policies apply to, and a statement of `WITH` that changes data checks the policies of its target table, so that `WITH c AS (INSERT ... RETURNING *)` gives `42501` for a row that the policies do not let in (#775).
