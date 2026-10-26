@@ -3,6 +3,7 @@
 pub(crate) mod append;
 mod classes;
 mod index;
+mod inherit;
 mod memoize;
 pub(crate) mod paths;
 mod scansel;
@@ -25,7 +26,7 @@ use rupg_plan::{
 };
 use rupg_types::{Value, oid};
 
-use crate::{Builder, Index, Level, Member, Size, cost, exprs, pullup, upper};
+use crate::{Builder, Index, Level, Size, cost, exprs, pullup, upper};
 use index::Param;
 use memoize::Memo;
 use paths::{Paths, costs};
@@ -348,6 +349,33 @@ impl Stats {
                 None => cost::type_width(expr.ty, expr.typmod),
             },
             _ => cost::type_width(expr.ty, expr.typmod),
+        }
+    }
+
+    /// The columns of the relation `r` that a place outside the relation reads, as [`Stats::width`] counts them.
+    fn read_columns(&self, r: usize) -> Vec<i16> {
+        let rels = BTreeSet::from([r]);
+        let read =
+            self.needed.iter().filter(|(v, _, places)| v.relation == r && !places.is_subset(&rels));
+        read.map(|(v, ..)| v.attnum).collect()
+    }
+
+    /// The width of the `PlaceHolderVar`s that the relation `r` computes and a place outside the relation reads, as [`Stats::width`] counts them.
+    fn placeholder_width(&self, r: usize) -> i32 {
+        let rels = BTreeSet::from([r]);
+        let computed = self
+            .placeholders
+            .iter()
+            .filter(|(_, _, eval, places)| eval.is_subset(&rels) && !places.is_subset(&rels));
+        computed.map(|(_, width, ..)| width).sum()
+    }
+
+    /// Sets the width of the column `attnum` of the relation `r`, as `set_append_rel_size` sets `attr_widths` of a parent.
+    fn set_width(&mut self, r: usize, attnum: i16, width: i32) {
+        for (v, w, _) in &mut self.needed {
+            if v.relation == r && v.attnum == attnum {
+                *w = width;
+            }
         }
     }
 
@@ -835,7 +863,8 @@ impl<'q> Builder<'q> {
                         }),
                     };
                     if let Some(members) = members {
-                        return vec![members_scan(level, r, &quals, members, stats)];
+                        let quals = (base.as_slice(), quals.as_slice());
+                        return vec![inherit::scan(level, r, quals, members, self.members, stats)];
                     }
                     indexes = self.members.map(|m| m.indexes(relation.oid)).unwrap_or_default();
                     size = self.members.map_or_else(Size::default, |m| m.size(relation.oid));
@@ -1394,10 +1423,21 @@ pub(crate) fn append_rel(query: &Query, node: &Node<'_>) -> bool {
     node.filter.is_empty() && sub.is_some_and(simple_union_all)
 }
 
+/// The relation that a scan of a table reads.
+pub(crate) fn scanned(kind: &Kind<'_>) -> Option<usize> {
+    match kind {
+        Kind::SeqScan(r)
+        | Kind::IndexScan { relation: r, .. }
+        | Kind::TidScan { relation: r, .. }
+        | Kind::BitmapHeapScan { relation: r, .. } => Some(*r),
+        _ => None,
+    }
+}
+
 /// True when the node is the `Append` of the members of a table with children of `INHERITS`, which has the table itself as a member. `apply_scanjoin_target_to_paths` gives the targets to the members of a partitioned table, but not to the members of such a table.
 pub(crate) fn inheritance_append(query: &Query, node: &Node<'_>) -> bool {
-    let Some(Kind::SeqScan(r)) = node.children.first().map(|c| &c.kind) else { return false };
-    let Some(oid) = query.relations.get(*r).map(|rel| rel.oid) else { return false };
+    let Some(r) = node.children.first().and_then(|c| scanned(&c.kind)) else { return false };
+    let Some(oid) = query.relations.get(r).map(|rel| rel.oid) else { return false };
     matches!(node.kind, Kind::Append)
         && node.children.iter().all(|c| c.member.is_some())
         && node.children.iter().any(|c| c.member == Some(oid))
@@ -1492,53 +1532,6 @@ fn column_range(
     });
     let range = members.filter(|_| ordered).and_then(|m| m.variable_range(table, attnum));
     stats.ranges.insert((r, attnum), range);
-}
-
-/// `set_append_rel_size` and `create_append_plan`: the scans of the members of the inheritance tree of the relation `r`, under an `Append` when there are two or more, each with the conditions of the relation. With no member the relation is a `Result` with no rows, as `set_dummy_rel_pathlist`.
-fn members_scan<'q>(
-    level: &Level<'q>,
-    r: usize,
-    quals: &[Qual<'q>],
-    members: Vec<Member>,
-    stats: &mut Stats,
-) -> Rel<'q> {
-    let selectivity = cost::list_selectivity(quals.iter().map(|q| &*q.expr));
-    let per_row = cost::CPU_TUPLE + stats.qual_cost(quals.iter().map(|q| &*q.expr));
-    let (mut tuples, mut rows) = (0.0, 0.0);
-    let mut children = Vec::with_capacity(members.len());
-    for member in &members {
-        let (pages, count) = cost::member_size(member);
-        let mut node = Node::new(Kind::SeqScan(r), level.scope, Vec::new());
-        node.member = Some(member.oid);
-        node.filter = quals.iter().map(|q| q.item()).collect();
-        let n = cost::clamp_rows(count * selectivity);
-        let total = pages * cost::SEQ_PAGE + count * per_row;
-        node.cost = Cost { startup: 0.0, total, rows: n, width: 0 };
-        node.disabled = !crate::enable().seqscan;
-        tuples += count;
-        rows += n;
-        children.push(node);
-    }
-    stats.rows.insert(r, (tuples, rows));
-    let rels = BTreeSet::from([r]);
-    let width = stats.width(&rels);
-    for child in &mut children {
-        child.cost.width = width;
-    }
-    let node = match children.len() {
-        0 => dummy(level.scope, &rels, false),
-        1 => children.remove(0),
-        _ => {
-            // `cost_append`: the start of the first member, and the costs of all the members with half of `cpu_tuple_cost` for each row.
-            let startup = children[0].cost.startup;
-            let total: f64 = children.iter().map(|c| c.cost.total).sum::<f64>()
-                + cost::CPU_TUPLE * cost::APPEND_CPU * rows;
-            let mut node = Node::new(Kind::Append, level.scope, children);
-            node.cost = Cost { startup, total, rows, width };
-            node
-        }
-    };
-    Rel { node, rels, order: Vec::new() }
 }
 
 /// The columns that each place of a query level reads, as `build_base_rel_tlists`, `distribute_qual_to_rels` and `find_lateral_references` set `attr_needed`: the target list, the conditions of `WHERE` and of `ON`, and the lateral references. With `used`, the query is a member of an append relation, and only the targets that the query above reads count.

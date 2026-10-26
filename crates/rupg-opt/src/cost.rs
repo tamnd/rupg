@@ -26,7 +26,7 @@ const PAGE_SPACE: i32 = 8168;
 /// `MAXALIGN(SizeofHeapTupleHeader) + sizeof(ItemIdData)`.
 const TUPLE_OVERHEAD: i32 = 28;
 /// `MAXALIGN(SizeofHeapTupleHeader)`: the header of the row of a whole-row column, which `set_rel_width` adds to the width of its columns.
-const WHOLE_ROW_HEADER: i32 = 24;
+pub(crate) const WHOLE_ROW_HEADER: i32 = 24;
 /// `DEFAULT_EQ_SEL`.
 pub(crate) const EQ_SEL: f64 = 0.005;
 /// `DEFAULT_INEQ_SEL`.

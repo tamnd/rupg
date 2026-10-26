@@ -5036,6 +5036,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_tid_scan.test")));
     }
 
+    /// The members of an inheritance tree and the partitions of a partitioned table each get the cheapest of their own scans, with the statistics, the indexes and the width of the member, as `set_append_rel_pathlist`.
+    #[test]
+    fn plan_inherit_scan() {
+        big_stack(|| script(include_str!("connection/plan_inherit_scan.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

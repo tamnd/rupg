@@ -260,6 +260,8 @@ pub struct Member {
     pub has_children: bool,
     /// The size of the heap of the table.
     pub size: Size,
+    /// The column number in the table of each column of the parent, by name, or 0 for a dropped column of the parent.
+    pub attnums: Vec<i16>,
 }
 
 /// The plan of a query, with the members of the relations that `members` gives.
@@ -735,14 +737,15 @@ impl<'q> Builder<'q> {
         if node.scope != level.scope {
             return;
         }
-        if let (Some(_), Kind::SeqScan(r)) = (node.member, &node.kind) {
+        if let (Some(_), Some(r)) = (node.member, from::scanned(&node.kind)) {
             let write = level.write;
-            let target = *r == 0
+            let target = r == 0
                 && write.is_some_and(|w| matches!(w.kind, WriteKind::Update | WriteKind::Delete));
-            let leaf = Leaf { of: level.scope, relation: *r, renamed: append || target };
+            let leaf = Leaf { of: level.scope, relation: r, renamed: append || target };
             let parent = self.scopes[level.scope].parent;
             self.scopes.push(Scope { query: level.query, parent, target: None, leaf: Some(leaf) });
-            node.scope = self.scopes.len() - 1;
+            // The index scans below a `Bitmap Heap Scan` read the member too.
+            rescope(node, level.scope, self.scopes.len() - 1);
             self.current.push(node.scope);
             return;
         }
@@ -970,6 +973,17 @@ fn init_cost(link: &SubLink, plan: &Node<'_>) -> f64 {
     match link.kind {
         SubLinkKind::Exists => c.startup + (c.total - c.startup) / cost::clamp_rows(c.rows),
         _ => c.total,
+    }
+}
+
+/// Moves the node and the nodes below it of the scope `from` to the scope `to`.
+fn rescope(node: &mut Node<'_>, from: usize, to: usize) {
+    if node.scope != from {
+        return;
+    }
+    node.scope = to;
+    for child in &mut node.children {
+        rescope(child, from, to);
     }
 }
 

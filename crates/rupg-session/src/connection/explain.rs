@@ -93,6 +93,7 @@ impl rupg_opt::Members for Members<'_, '_> {
             }
         };
         let catalog = self.reader.catalog()?;
+        let parent = catalog.relation(query.relations.get(relation)?.oid)?;
         let members = oids
             .into_iter()
             .filter_map(|oid| {
@@ -101,7 +102,20 @@ impl rupg_opt::Members for Members<'_, '_> {
                     table.columns.iter().filter(|c| !c.dropped).map(|c| (c.ty, c.typmod)).collect();
                 let has_children = !catalog.all_inheritors(oid).is_empty();
                 let size = rupg_opt::Members::size(self, oid);
-                Some(Member { oid, columns, has_children, size })
+                // `make_inh_translation_list`: the column of the child with the name of each column of the parent.
+                let attnums = parent
+                    .columns
+                    .iter()
+                    .map(|p| {
+                        let found = (!p.dropped)
+                            .then(|| {
+                                table.columns.iter().position(|c| !c.dropped && c.name == p.name)
+                            })
+                            .flatten();
+                        found.and_then(|at| i16::try_from(at + 1).ok()).unwrap_or(0)
+                    })
+                    .collect();
+                Some(Member { oid, columns, has_children, size, attnums })
             })
             .collect();
         Some(members)
