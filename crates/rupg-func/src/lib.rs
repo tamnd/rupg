@@ -192,12 +192,18 @@ pub struct AdvisoryLock {
     pub session: bool,
 }
 
-/// The size of the heap of a table, `RelationGetNumberOfBlocks`, and `relpages` and `reltuples` of the table, which `VACUUM`, `ANALYZE` and `CREATE INDEX` set.
+/// The size of the heap of a table and of its forks, `RelationGetNumberOfBlocks`, and `relpages`, `reltuples`, `relallvisible` and `relallfrozen` of the table, which `VACUUM`, `ANALYZE` and `CREATE INDEX` set.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HeapSize {
     pub blocks: u32,
     pub relpages: i32,
     pub reltuples: f32,
+    pub relallvisible: i32,
+    pub relallfrozen: i32,
+    /// The pages of the free space map fork.
+    pub fsm_blocks: u32,
+    /// The pages of the visibility map fork.
+    pub vm_blocks: u32,
 }
 
 /// The state of the session that the functions read.

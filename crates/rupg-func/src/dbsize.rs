@@ -193,8 +193,8 @@ struct Storage {
     shared: bool,
     /// `relfilenode`, or the OID for a mapped catalog.
     filenode: u32,
-    /// The pages of the main fork and of the free space map.
-    pages: (i64, i64),
+    /// The pages of the main fork, of the free space map and of the visibility map.
+    pages: (i64, i64, i64),
     /// `reltoastrelid`.
     toast: u32,
 }
@@ -216,13 +216,15 @@ fn storage(relid: u32, call: &Call<'_>) -> Option<Storage> {
         let pages = match (rel.kind, &rel.index) {
             (RelKind::Index, Some(index)) => {
                 let fsm = if index.method == BRIN { BRIN_FSM_PAGES } else { 0 };
-                (i64::from(index.pages), fsm)
+                (i64::from(index.pages), fsm, 0)
             }
-            (RelKind::Sequence, _) => (1, 0),
+            (RelKind::Sequence, _) => (1, 0, 0),
             (RelKind::Table | RelKind::Toast | RelKind::MatView, _) => {
-                (call.session.heap_size(rel.oid).map_or(0, |s| i64::from(s.blocks)), 0)
+                call.session.heap_size(rel.oid).map_or((0, 0, 0), |s| {
+                    (i64::from(s.blocks), i64::from(s.fsm_blocks), i64::from(s.vm_blocks))
+                })
             }
-            _ => (0, 0),
+            _ => (0, 0, 0),
         };
         let filenode = match (&rel.sequence, rel.kind) {
             (Some(info), _) => info.file,
@@ -256,7 +258,7 @@ fn storage(relid: u32, call: &Call<'_>) -> Option<Storage> {
         kind: row.kind,
         shared: row.shared,
         filenode,
-        pages: (0, 0),
+        pages: (0, 0, 0),
         toast: 0,
     })
 }
@@ -266,7 +268,8 @@ fn fork_pages(rel: &Storage, fork: &str) -> Result<i64> {
     match fork {
         "main" => Ok(rel.pages.0),
         "fsm" => Ok(rel.pages.1),
-        "vm" | "init" => Ok(0),
+        "vm" => Ok(rel.pages.2),
+        "init" => Ok(0),
         _ => Err(Error::new(SqlState::INVALID_PARAMETER_VALUE, "invalid fork name")
             .with_hint("Valid fork names are \"main\", \"fsm\", \"vm\", and \"init\".")),
     }
@@ -274,7 +277,7 @@ fn fork_pages(rel: &Storage, fork: &str) -> Result<i64> {
 
 /// The size of each fork of a relation.
 fn forks_size(rel: &Storage) -> i64 {
-    (rel.pages.0 + rel.pages.1) * BLOCK
+    (rel.pages.0 + rel.pages.1 + rel.pages.2) * BLOCK
 }
 
 /// The indexes of a relation of the catalog of the session.
