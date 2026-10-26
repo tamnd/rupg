@@ -2,7 +2,7 @@
 #
 # It runs on a tag v0.M.patch. The tag must match the workspace version and CHANGELOG.md must have a section for it.
 #
-# M1 shipped the first public API, so the 42 crates of crates/ are published to crates.io (spec/22-crate-layout.md section 22.13). crates.io trusted publishing works only for a crate that exists, so the first version of each crate is published by hand with a token. Then a publish job uses trusted publishing through OIDC, with no long-lived token.
+# M1 shipped the first public API, so the 42 crates of crates/ are published to crates.io (spec/22-crate-layout.md section 22.13). crates.io trusted publishing works only for a crate that exists, so the first version of each crate is published by hand with a token. Then the job crates uses trusted publishing through OIDC, with no long-lived token. Each crate must have a trusted publisher on crates.io for the repository tamnd/rupg and the workflow release.yml.
 
 name: release
 
@@ -164,3 +164,59 @@ jobs:
           else
             gh release create "$TAG" dist/* --title "rupg $TAG" --notes-file notes.md --verify-tag
           fi
+
+  crates:
+    name: publish the crates
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+        id: auth
+      # Each crate goes after the crates of the workspace that it depends on. A version that crates.io has already is skipped, so the job can run again after a failure. crates.io limits how fast an account publishes, so a publish that gets 429 waits and tries again.
+      - name: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          set -euo pipefail
+          cargo metadata --format-version 1 --no-deps > metadata.json
+          python3 - > order.txt <<'PY'
+          import json
+          meta = json.load(open("metadata.json"))
+          crates = {p["name"]: p for p in meta["packages"] if p.get("publish") != []}
+          done, order = set(), []
+          def visit(name):
+              if name in done:
+                  return
+              done.add(name)
+              for dep in crates[name]["dependencies"]:
+                  if dep["kind"] != "dev" and dep["name"] in crates:
+                      visit(dep["name"])
+              order.append(name)
+          for name in sorted(crates):
+              visit(name)
+          for name in order:
+              print(name, crates[name]["version"])
+          PY
+          while read -r name version; do
+            if curl -sf -o /dev/null -A "rupg release (github.com/tamnd/rupg)" "https://crates.io/api/v1/crates/$name/$version"; then
+              echo "$name $version is on crates.io"
+              continue
+            fi
+            for try in $(seq 1 30); do
+              if cargo publish --locked --no-verify -p "$name" 2>&1 | tee publish.log; then
+                break
+              fi
+              if ! grep -q "429" publish.log || [ "$try" = 30 ]; then
+                exit 1
+              fi
+              echo "crates.io limits the rate, wait and try again"
+              sleep 70
+            done
+          done < order.txt
