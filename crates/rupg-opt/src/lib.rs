@@ -277,6 +277,8 @@ pub struct Index {
     pub options: Vec<i16>,
     /// `indexcollations`: the collation of each key column, or 0 for a type that has no collation.
     pub collations: Vec<u32>,
+    /// The collation of the table column of each key column, which a condition of the column has when it has no `COLLATE`, or 0 for an expression.
+    pub column_collations: Vec<u32>,
     /// `pages`: the pages of the index.
     pub pages: f64,
     /// `tree_height` of `_bt_getrootheight`: the level of the root of a `btree` index, 0 when the root is a leaf.
