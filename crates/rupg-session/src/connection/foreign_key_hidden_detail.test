@@ -1,0 +1,117 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE USER regress_fk_alice NOLOGIN;
+CREATE ROLE
+> CREATE USER regress_fk_bob NOLOGIN;
+CREATE ROLE
+> CREATE TABLE fk_pk (a int PRIMARY KEY, b text);
+CREATE TABLE
+> CREATE TABLE fk_ref (x int PRIMARY KEY, a int REFERENCES fk_pk, y int);
+CREATE TABLE
+> CREATE TABLE fk_ref2 (a int, c int, FOREIGN KEY (a) REFERENCES fk_pk ON DELETE RESTRICT);
+CREATE TABLE
+> INSERT INTO fk_pk VALUES (1, 'one'), (2, 'two');
+INSERT 0 2
+> INSERT INTO fk_ref VALUES (1, 1, 1);
+INSERT 0 1
+> INSERT INTO fk_ref2 VALUES (2, 2);
+INSERT 0 1
+> GRANT INSERT, UPDATE ON fk_ref TO regress_fk_alice;
+GRANT
+> GRANT DELETE, UPDATE ON fk_pk TO regress_fk_alice;
+GRANT
+> SET SESSION AUTHORIZATION regress_fk_alice;
+SET
+session_authorization=regress_fk_alice
+is_superuser=off
+> INSERT INTO fk_ref VALUES (2, 5, 1);
+ERROR 23503 insert or update on table "fk_ref" violates foreign key constraint "fk_ref_a_fkey"
+DETAIL Key is not present in table "fk_pk".
+> UPDATE fk_ref SET a = 7;
+ERROR 23503 insert or update on table "fk_ref" violates foreign key constraint "fk_ref_a_fkey"
+DETAIL Key is not present in table "fk_pk".
+> DELETE FROM fk_pk WHERE a = 1;
+ERROR 42501 permission denied for table fk_pk
+> DELETE FROM fk_pk WHERE a = 2;
+ERROR 42501 permission denied for table fk_pk
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> GRANT SELECT (a) ON fk_ref TO regress_fk_alice;
+GRANT
+> GRANT SELECT (b) ON fk_pk TO regress_fk_alice;
+GRANT
+> SET SESSION AUTHORIZATION regress_fk_alice;
+SET
+session_authorization=regress_fk_alice
+is_superuser=off
+> INSERT INTO fk_ref VALUES (2, 5, 1);
+ERROR 23503 insert or update on table "fk_ref" violates foreign key constraint "fk_ref_a_fkey"
+DETAIL Key (a)=(5) is not present in table "fk_pk".
+> DELETE FROM fk_pk WHERE b = 'one';
+ERROR 23503 update or delete on table "fk_pk" violates foreign key constraint "fk_ref_a_fkey" on table "fk_ref"
+DETAIL Key is still referenced from table "fk_ref".
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> GRANT SELECT (a) ON fk_pk TO regress_fk_alice;
+GRANT
+> SET SESSION AUTHORIZATION regress_fk_alice;
+SET
+session_authorization=regress_fk_alice
+is_superuser=off
+> DELETE FROM fk_pk WHERE a = 1;
+ERROR 23503 update or delete on table "fk_pk" violates foreign key constraint "fk_ref_a_fkey" on table "fk_ref"
+DETAIL Key (a)=(1) is still referenced from table "fk_ref".
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> GRANT SELECT ON fk_ref, fk_pk TO regress_fk_bob;
+GRANT
+> GRANT INSERT ON fk_ref TO regress_fk_bob;
+GRANT
+> GRANT DELETE ON fk_pk TO regress_fk_bob;
+GRANT
+> ALTER TABLE fk_ref ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> ALTER TABLE fk_pk ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> CREATE POLICY p1 ON fk_ref USING (true) WITH CHECK (true);
+CREATE POLICY
+> CREATE POLICY p2 ON fk_pk USING (true);
+CREATE POLICY
+> SET SESSION AUTHORIZATION regress_fk_bob;
+SET
+session_authorization=regress_fk_bob
+is_superuser=off
+> INSERT INTO fk_ref VALUES (3, 6, 1);
+ERROR 23503 insert or update on table "fk_ref" violates foreign key constraint "fk_ref_a_fkey"
+DETAIL Key is not present in table "fk_pk".
+> DELETE FROM fk_pk WHERE a = 1;
+ERROR 23503 update or delete on table "fk_pk" violates foreign key constraint "fk_ref_a_fkey" on table "fk_ref"
+DETAIL Key is still referenced from table "fk_ref".
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> INSERT INTO fk_ref VALUES (3, 6, 1);
+ERROR 23503 insert or update on table "fk_ref" violates foreign key constraint "fk_ref_a_fkey"
+DETAIL Key (a)=(6) is not present in table "fk_pk".
+> DELETE FROM fk_pk WHERE a = 2;
+ERROR 23001 update or delete on table "fk_pk" violates RESTRICT setting of foreign key constraint "fk_ref2_a_fkey" on table "fk_ref2"
+DETAIL Key (a)=(2) is referenced from table "fk_ref2".
+> ALTER TABLE fk_pk FORCE ROW LEVEL SECURITY;
+ALTER TABLE
+> DELETE FROM fk_pk WHERE a = 2;
+ERROR 23001 update or delete on table "fk_pk" violates RESTRICT setting of foreign key constraint "fk_ref2_a_fkey" on table "fk_ref2"
+DETAIL Key (a)=(2) is referenced from table "fk_ref2".
+> DROP TABLE fk_ref, fk_ref2, fk_pk;
+DROP TABLE
+> DROP USER regress_fk_alice;
+DROP ROLE
+> DROP USER regress_fk_bob;
+DROP ROLE

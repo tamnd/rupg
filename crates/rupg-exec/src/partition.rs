@@ -534,7 +534,7 @@ fn no_partition(
         format!("no partition of relation \"{}\" found for row", d.name),
     );
     let attrs = rel.partition_key.as_ref().map_or(&[][..], |k| &k.attrs);
-    if !rupg_func::partition_key_shown(rel.oid, attrs, session)? {
+    if !rupg_func::key_shown(rel.oid, attrs, session)? {
         return Ok(rupg_func::with_table(error, rel.oid, session));
     }
     let columns = rupg_func::partition_key_columns(rel, session)?;

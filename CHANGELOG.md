@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The detail of the error of a foreign key hides the key when the current user has no `SELECT` on the table or on each column of the key, or when the policies of row-level security of the table apply (#784).
 ## 0.2.1 (2026-10-26)
 
 ### Added
