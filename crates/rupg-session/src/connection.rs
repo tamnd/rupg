@@ -3694,6 +3694,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/group_input_order.test")));
     }
 
+    /// A subplan of `= ANY` uses a hash table only when the type of the values has a hash function, as `hash_ok_operator`, and a constant in the targets of a `Material` stays a constant. A row cast to a composite type is a list of values for `= ANY`, as `transformSubLink` finds it.
+    #[test]
+    fn subplan_hash_types() {
+        big_stack(|| script(include_str!("connection/subplan_hash_types.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

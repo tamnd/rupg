@@ -102,9 +102,10 @@ impl Analyzer<'_> {
                 }
             }
             SubLinkKind::Any | SubLinkKind::All | SubLinkKind::RowCompare => {
-                let left = match &s.testexpr {
-                    Some(Node::RowExpr(r)) => self.transform_expression_list(&r.args)?,
-                    node => vec![self.transform(node.as_ref())?],
+                // A row is a list of values after its transform, also when a cast to a composite type keeps it a row.
+                let left = match self.transform(s.testexpr.as_ref())? {
+                    Expr { kind: ExprKind::Row(args, _), .. } => args,
+                    expr => vec![expr],
                 };
                 let op_names = if s.operName.is_empty() { vec!["="] } else { names(&s.operName) };
                 let message = match left.len().cmp(&columns.len()) {

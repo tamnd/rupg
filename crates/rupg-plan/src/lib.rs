@@ -205,9 +205,10 @@ impl<'q> Item<'q> {
         Item { expr: Cow::Owned(expr), below: false }
     }
 
-    /// The same expression as the input of the node above.
+    /// The same expression as the input of the node above. A constant stays a constant, as `set_dummy_tlist_references` keeps it.
     pub fn passed(&self) -> Item<'q> {
-        Item { expr: self.expr.clone(), below: !matches!(self.expr.kind, ExprKind::Var(_)) }
+        let below = !matches!(self.expr.kind, ExprKind::Var(_) | ExprKind::Const(_));
+        Item { expr: self.expr.clone(), below }
     }
 }
 

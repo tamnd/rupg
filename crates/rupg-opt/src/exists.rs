@@ -1,7 +1,6 @@
 //! The form of a correlated `EXISTS` as `ANY` on a subquery that reads no column of the query, which a hash table can run, as `convert_EXISTS_to_ANY` makes it.
 
-use rupg_analyze::{BoolOp, Expr, ExprKind, FuncForm, Query, SubLink, SubLinkKind};
-use rupg_pgcatalog::builtin;
+use rupg_analyze::{BoolOp, Expr, ExprKind, Query, SubLink, SubLinkKind};
 use rupg_types::{Value, oid};
 
 use crate::exprs;
@@ -45,7 +44,7 @@ fn alternative(query: &Query) -> Option<SubLink> {
     exprs::and_parts(&filter, &mut parts);
     let (mut lefts, mut rights, mut where_parts) = (Vec::new(), Vec::new(), Vec::new());
     for part in parts {
-        let Some((_, left, right)) = exprs::binary(part).filter(|_| hash_ok(part)) else {
+        let Some((_, left, right)) = exprs::binary(part).filter(|_| exprs::hash_ok(part)) else {
             where_parts.push(part.clone());
             continue;
         };
@@ -53,7 +52,7 @@ fn alternative(query: &Query) -> Option<SubLink> {
             lefts.push(part.clone());
             rights.push(right.clone());
         } else if outer(right) {
-            let commuted = exprs::commute(part).filter(hash_ok)?;
+            let commuted = exprs::commute(part).filter(exprs::hash_ok)?;
             lefts.push(commuted);
             rights.push(left.clone());
         } else {
@@ -132,14 +131,6 @@ pub(crate) fn simplify(query: &Query) -> Option<Query> {
     sub.distinct_on = false;
     sub.sort.clear();
     Some(sub)
-}
-
-/// `hash_ok_operator`: a call of an operator that can use a hash table and whose function is strict.
-fn hash_ok(expr: &Expr) -> bool {
-    let ExprKind::Func(f) = &expr.kind else { return false };
-    matches!(f.form, FuncForm::Operator(op) if exprs::can_hash(op))
-        && f.args.len() == 2
-        && builtin::proc_by_oid(f.oid).is_some_and(|p| p.strict)
 }
 
 /// `contain_vars_of_level` with level 1: the expression of the subquery reads a column of the query.
