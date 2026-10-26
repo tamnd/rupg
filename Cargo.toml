@@ -8,8 +8,8 @@ exclude = ["fuzz"]
 # The version is 0.M.patch, where M is the last milestone that closed. See spec/23-milestones.md section 23.17.
 version = "0.2.1"
 edition = "2024"
-# The MSRV is 1.88.0. Safe functions with target_feature need 1.86. core::hint::select_unpredictable needs 1.88. See spec/22-crate-layout.md section 22.11.
-rust-version = "1.88.0"
+# The MSRV is 1.98.0, one release behind the pinned toolchain. See spec/22-crate-layout.md section 22.11.
+rust-version = "1.98.0"
 license = "Apache-2.0"
 repository = "https://github.com/tamnd/rupg"
 homepage = "https://github.com/tamnd/rupg"
@@ -65,7 +65,7 @@ rupg-wire = { version = "=0.2.1", path = "crates/rupg-wire" }
 
 # Outside crates. Each one is in the table of spec/22-crate-layout.md section 22.5. The lower bound of each crate is the version in Cargo.lock when the bound last changed. The nightly job of the oldest versions checks the bounds.
 # libc: the system calls of rupg-platform on Unix, for example F_FULLFSYNC and getentropy.
-libc = "0.2.190"
+libc = "0.2.191"
 # sha2, hmac, pbkdf2, md-5: SCRAM-SHA-256 and MD5 passwords in rupg-wire. See spec/22-crate-layout.md section 22.5.
 hmac = "0.13"
 md-5 = "0.11"

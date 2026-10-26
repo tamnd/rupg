@@ -53,7 +53,7 @@ Each gate is a measured number that decides if a milestone is done. When a gate 
 
 ## Building
 
-You need Rust 1.98.0. The `rust-toolchain.toml` file selects it. The MSRV is 1.88.0.
+You need Rust 1.99.1. The `rust-toolchain.toml` file selects it. The MSRV is 1.98.0.
 
 ```sh
 cargo build --release

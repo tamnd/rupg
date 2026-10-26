@@ -25,7 +25,7 @@ This document gives the crates of rupg, the rank of each crate, what each crate 
 ```
 rupg/
   Cargo.toml              resolver 3, members crates/* and xtask, one version
-  rust-toolchain.toml     channel 1.98.0
+  rust-toolchain.toml     channel 1.99.1
   clippy.toml             disallowed methods and types
   deny.toml               section 22.6
   crates/
@@ -287,9 +287,9 @@ rudb found that `opt-level = "z"` on the CLI crate, with LTO, size-optimized the
 
 ## 22.11 The toolchain
 
-The toolchain is pinned to Rust 1.98.0 in `rust-toolchain.toml`, with `rustfmt`, `clippy` and `rust-src`. A new clippy or rustfmt release then cannot turn CI red overnight. A change to the pin is one commit.
+The toolchain is pinned to Rust 1.99.1 in `rust-toolchain.toml`, with `rustfmt`, `clippy` and `rust-src`. A new clippy or rustfmt release then cannot turn CI red overnight. A change to the pin is one commit.
 
-The MSRV is 1.88.0, as in rudb, and the CI job of document 21 section 21.16 builds on it. Two features set the floor. `#[target_feature]` on a safe function became stable in 1.86, and the kernels use it for each SIMD path. `core::hint::select_unpredictable` became stable in 1.88, and the filter kernels use it for branch-free selection. The edition is 2024 and the resolver is 3. The license of every rupg crate is Apache-2.0.
+The MSRV is 1.98.0, one release behind the pinned toolchain, and the CI job of document 21 section 21.16 builds on it. The floor was 1.88.0, as in rudb, and the project raised it in October 2026 to use the language and library of recent releases. The kernels need at least 1.88, for `#[target_feature]` on a safe function (1.86) and `core::hint::select_unpredictable` (1.88). The edition is 2024 and the resolver is 3. The license of every rupg crate is Apache-2.0.
 
 ## 22.12 The sibling repositories
 
