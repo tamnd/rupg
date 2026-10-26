@@ -1,0 +1,109 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TYPE xs;
+CREATE TYPE
+> CREATE TYPE xs;
+ERROR 42710 type "xs" already exists
+> CREATE TYPE int4;
+CREATE TYPE
+> SELECT typname, typtype, typlen, typbyval, typcategory, typispreferred, typisdefined, typdelim, typinput, typoutput, typreceive, typsend, typarray, typalign, typstorage, typacl FROM pg_type WHERE typname = 'xs';
+fields typname@pg_type.2:19:64:-1,typtype@pg_type.7:18:1:-1,typlen@pg_type.5:21:2:-1,typbyval@pg_type.6:16:1:-1,typcategory@pg_type.8:18:1:-1,typispreferred@pg_type.9:16:1:-1,typisdefined@pg_type.10:16:1:-1,typdelim@pg_type.11:18:1:-1,typinput@pg_type.16:24:4:-1,typoutput@pg_type.17:24:4:-1,typreceive@pg_type.18:24:4:-1,typsend@pg_type.19:24:4:-1,typarray@pg_type.15:26:4:-1,typalign@pg_type.23:18:1:-1,typstorage@pg_type.24:18:1:-1,typacl@pg_type.32:1034:-1:-1
+row xs,p,4,t,P,f,f,,,shell_in,shell_out,-,-,0,i,p,NULL
+SELECT 1
+> SELECT 'xs'::regtype;
+ERROR 42704 type "xs" is only a shell at 8
+> SELECT to_regtype('xs'), to_regtype('public.xs');
+fields to_regtype:2206:4:-1,to_regtype:2206:4:-1
+row NULL,NULL
+SELECT 1
+> SELECT NULL::xs;
+ERROR 42704 type "xs" is only a shell at 14
+> CREATE TABLE ts (a xs);
+ERROR 42704 type "xs" is only a shell at 20
+> CREATE FUNCTION xsin(cstring) RETURNS xs IMMUTABLE STRICT LANGUAGE internal AS 'int4in';
+NOTICE 42809 return type xs is only a shell
+CREATE FUNCTION
+> CREATE FUNCTION xsout(xs) RETURNS cstring IMMUTABLE STRICT LANGUAGE internal AS 'int4out';
+NOTICE 42809 argument type xs is only a shell at 23
+CREATE FUNCTION
+> CREATE FUNCTION xs_sql(xs) RETURNS int LANGUAGE sql AS 'select 1';
+ERROR 42P13 SQL function cannot accept shell type xs at 24
+> CREATE FUNCTION xs_sqlr() RETURNS xs LANGUAGE sql AS 'select 1';
+ERROR 42P13 SQL function cannot return shell type xs
+> CREATE FUNCTION newtin(cstring) RETURNS newt IMMUTABLE STRICT LANGUAGE internal AS 'int4in';
+NOTICE 42704 type "newt" is not yet defined
+DETAIL Creating a shell type definition.
+CREATE FUNCTION
+> CREATE FUNCTION nope() RETURNS nonexist LANGUAGE plpgsql AS 'begin end';
+ERROR 42704 type "nonexist" does not exist
+> CREATE FUNCTION nope2(nonexist) RETURNS int LANGUAGE sql AS 'select 1';
+ERROR 42704 type nonexist does not exist at 23
+> CREATE FUNCTION nope3(cstring) RETURNS nonexist[] LANGUAGE internal AS 'int4in';
+ERROR 42704 type "nonexist[]" does not exist
+> SELECT typname, typtype, typisdefined, typarray FROM pg_type WHERE typname IN ('xs', 'newt') ORDER BY 1;
+fields typname@pg_type.2:19:64:-1,typtype@pg_type.7:18:1:-1,typisdefined@pg_type.10:16:1:-1,typarray@pg_type.15:26:4:-1
+row newt,p,f,0
+row xs,p,f,0
+SELECT 2
+> SELECT proname, prorettype::regtype, proargtypes::regtype[] FROM pg_proc WHERE proname IN ('xsin', 'xsout', 'newtin') ORDER BY 1;
+fields proname@pg_proc.2:19:64:-1,prorettype:2206:4:-1,proargtypes:2211:-1:-1
+row newtin,newt,[0:0]={cstring}
+row xsin,xs,[0:0]={cstring}
+row xsout,cstring,[0:0]={xs}
+SELECT 3
+> SELECT pg_describe_object(classid, objid, objsubid) AS obj, deptype FROM pg_depend WHERE refobjid = (SELECT oid FROM pg_type WHERE typname = 'xs') ORDER BY 1;
+fields obj:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row function xsin(cstring),n
+row function xsout(xs),n
+SELECT 2
+> SELECT pg_describe_object(refclassid, refobjid, refobjsubid) AS ref, deptype FROM pg_depend WHERE objid = (SELECT oid FROM pg_type WHERE typname = 'xs') ORDER BY 1;
+fields ref:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row schema public,n
+SELECT 1
+> SELECT format_type(oid, NULL) FROM pg_type WHERE typname = 'xs';
+fields format_type:25:-1:-1
+row xs
+SELECT 1
+> DROP TYPE xs;
+ERROR 2BP01 cannot drop type xs because other objects depend on it
+DETAIL function xsin(cstring) depends on type xs
+function xsout(xs) depends on type xs
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP TYPE xs CASCADE;
+NOTICE 00000 drop cascades to 2 other objects
+DETAIL drop cascades to function xsin(cstring)
+drop cascades to function xsout(xs)
+DROP TYPE
+> DROP TYPE newt CASCADE;
+NOTICE 00000 drop cascades to function newtin(cstring)
+DROP TYPE
+> DROP TYPE IF EXISTS xs;
+NOTICE 00000 type "xs" does not exist, skipping
+DROP TYPE
+> SELECT count(*) FROM pg_type WHERE typname IN ('xs', 'newt');
+fields count:20:8:-1
+row 0
+SELECT 1
+> BEGIN;
+BEGIN
+> CREATE TYPE xr;
+CREATE TYPE
+> ROLLBACK;
+ROLLBACK
+> SELECT count(*) FROM pg_type WHERE typname = 'xr';
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE ROLE shell_user;
+CREATE ROLE
+> SET ROLE shell_user;
+SET
+is_superuser=off
+> CREATE TYPE xu;
+ERROR 42501 must be superuser to create a base type
+> RESET ROLE;
+RESET
+is_superuser=on
+> DROP ROLE shell_user;
+DROP ROLE

@@ -1114,6 +1114,33 @@ pub struct SessionEnum {
     pub uncommitted: Vec<u32>,
 }
 
+/// A base type of the catalog of a session that `CREATE TYPE` made, or a shell type, for [`use_session_types`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionBase {
+    pub oid: u32,
+    pub name: String,
+    pub namespace: u32,
+    /// The OID of the array type, or 0 for a shell type.
+    pub array: u32,
+    pub array_name: String,
+    /// `typisdefined`: false for a shell type, whose row has the `typtype` `p`.
+    pub defined: bool,
+    pub len: i16,
+    pub by_val: bool,
+    pub category: u8,
+    pub preferred: bool,
+    pub delim: u8,
+    pub input: u32,
+    pub output: u32,
+    pub receive: u32,
+    pub send: u32,
+    pub modin: u32,
+    pub modout: u32,
+    pub align: u8,
+    pub storage: u8,
+    pub collation: u32,
+}
+
 /// The labels of an enum type that [`use_session_types`] gave to the thread, for [`enum_labels`].
 #[derive(Debug)]
 struct EnumRow {
@@ -1232,6 +1259,7 @@ pub enum SessionType {
     Row(SessionRowType),
     Enum(SessionEnum),
     Range(SessionRange),
+    Base(SessionBase),
     Function(SessionFunction),
     Aggregate(SessionAggregate),
     Operator(SessionOperator),
@@ -1308,6 +1336,7 @@ fn session_rows(ty: &SessionType) -> Option<Interned> {
             }
         }
         SessionType::Range(new) => range_rows(new)?,
+        SessionType::Base(new) => Interned { types: base_rows(new)?, ..Interned::default() },
         SessionType::Function(new) => {
             Interned { procs: vec![Box::leak(Box::new(function_row(new)))], ..Interned::default() }
         }
@@ -1466,6 +1495,53 @@ fn enum_rows(new: SessionEnum) -> Option<(TypeRow, TypeRow)> {
     Some((row, array))
 }
 
+/// The OID of `int4`, the template of the row of a base type. [`INT4_ARRAY`] is the template of its array type.
+const INT4: u32 = 23;
+
+/// The rows of a base type and of its array type, as `DefineType` makes them, or the row of a shell type, as `TypeShellMake` makes it. The array type copies `_int4`, with the alignment `d` when the base type has it, else `i`.
+fn base_rows(new: &SessionBase) -> Option<Vec<&'static TypeRow>> {
+    let template = type_by_oid(INT4)?;
+    let row = TypeRow {
+        oid: new.oid,
+        name: new.name.clone().leak(),
+        namespace: new.namespace,
+        len: new.len,
+        by_val: new.by_val,
+        kind: if new.defined { b'b' } else { b'p' },
+        category: new.category,
+        preferred: new.preferred,
+        delim: new.delim,
+        array: new.array,
+        input: new.input,
+        output: new.output,
+        receive: new.receive,
+        send: new.send,
+        modin: new.modin,
+        modout: new.modout,
+        align: new.align,
+        storage: new.storage,
+        collation: new.collation,
+        ..*template
+    };
+    let mut rows = vec![&*Box::leak(Box::new(row))];
+    if new.array != 0 {
+        let array = TypeRow {
+            oid: new.array,
+            name: new.array_name.clone().leak(),
+            namespace: new.namespace,
+            delim: new.delim,
+            elem: new.oid,
+            modin: new.modin,
+            modout: new.modout,
+            align: if new.align == b'd' { b'd' } else { b'i' },
+            collation: new.collation,
+            ..*type_by_oid(INT4_ARRAY)?
+        };
+        rows.push(Box::leak(Box::new(array)));
+    }
+    Some(rows)
+}
+
 /// The OID of the type `text`.
 const TEXT: u32 = 25;
 
@@ -1568,7 +1644,7 @@ pub fn enum_label_is_uncommitted(ty: u32, label: u32) -> bool {
     SESSION.with_borrow(|s| s.enums.iter().any(|e| e.oid == ty && e.uncommitted.contains(&label)))
 }
 
-/// The OID of `_int4`, the template of the array type of a domain over a type with no array type.
+/// The OID of `_int4`, the template of the array type of a domain over a type with no array type and of the array type of a base type.
 const INT4_ARRAY: u32 = 1007;
 
 /// The OID of `domain_in`, the input function of every domain.

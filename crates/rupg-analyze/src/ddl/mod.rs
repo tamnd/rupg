@@ -8,6 +8,7 @@ mod alter_function;
 mod alter_inherit;
 mod alter_type;
 mod attmap;
+mod basetype;
 mod cluster;
 mod cmdtag;
 mod comment;
@@ -218,7 +219,7 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::DropOwnedStmt(_)
             | Node::ReassignOwnedStmt(_)
             | Node::AlterDefaultPrivilegesStmt(_)
-    ) || matches!(stmt, Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) || matches!(define.kind, ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_AGGREGATE))
+    ) || matches!(stmt, Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) || matches!(define.kind, ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_AGGREGATE | ObjectType::OBJECT_TYPE))
         || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
         || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype) || alter.objtype == ObjectType::OBJECT_TYPE)
         || matches!(stmt, Node::AlterOwnerStmt(alter) if matches!(alter.objectType, ObjectType::OBJECT_SCHEMA | ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
@@ -366,6 +367,9 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         }
         Node::DefineStmt(define) if define.kind == ObjectType::OBJECT_AGGREGATE => {
             definer.create_aggregate(define)
+        }
+        Node::DefineStmt(define) if define.kind == ObjectType::OBJECT_TYPE => {
+            definer.define_type(define)
         }
         Node::AlterOperatorStmt(alter) => definer.alter_operator(alter),
         Node::CreateOpFamilyStmt(create) => definer.create_opfamily(create),

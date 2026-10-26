@@ -1,5 +1,6 @@
 //! The type of a `TypeName`, as `typenameTypeIdAndMod` of `parse_type.c` finds it: the OID from the name and the array bounds, and the typmod from the type modifiers and the `typmodin` function of the type.
 
+use rupg_catalog::FIRST_NORMAL_OID;
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, TypeRow};
 use rupg_sql::nodes::{Node, RangeVar, TypeName};
@@ -98,13 +99,18 @@ pub fn parse_type(text: &str, env: &dyn Env) -> Result<Result<(u32, i32)>> {
         return Err(invalid());
     }
     let mut analyzer = Analyzer::new(env, &Params::default());
-    match analyzer.type_name(&name) {
-        Ok(found) => Ok(Ok(found)),
-        Err(e) if e.state() == SqlState::UNDEFINED_SCHEMA => Ok(Err(e.with_position(None))),
-        Err(e) if e.state() == SqlState::UNDEFINED_OBJECT => Ok(Err(Error::new(
+    let missing = |what: &str| {
+        Ok(Err(Error::new(
             SqlState::UNDEFINED_OBJECT,
-            format!("type \"{}\" does not exist", type_name_text(&name)),
-        ))),
+            format!("type \"{}\" {what}", type_name_text(&name)),
+        )))
+    };
+    match analyzer.lookup_type_mod(&name) {
+        Ok(Some((ty, typmod, true))) => Ok(Ok((ty, typmod))),
+        Ok(Some((_, _, false))) => missing("is only a shell"),
+        Ok(None) => missing("does not exist"),
+        Err(e) if e.state() == SqlState::UNDEFINED_SCHEMA => Ok(Err(e.with_position(None))),
+        Err(e) if e.state() == SqlState::UNDEFINED_OBJECT => missing("does not exist"),
         Err(e) => Err(e.with_position(None)),
     }
 }
@@ -116,16 +122,21 @@ struct Found {
     array: u32,
     /// The OID of the `typmodin` function, or 0.
     modin: u32,
+    /// `typisdefined`: false for a shell type.
+    defined: bool,
 }
 
 impl Found {
+    /// A type of the rows of the thread. A shell type of a session has the `typtype` `p`, which no other type of a session has.
     fn builtin(row: &TypeRow) -> Found {
-        Found { oid: row.oid, array: row.array, modin: row.modin }
+        let shell = row.kind == b'p' && row.oid >= FIRST_NORMAL_OID;
+        Found { oid: row.oid, array: row.array, modin: row.modin, defined: !shell }
     }
 
-    /// A row type or an array type of the catalog, which takes no type modifier.
+    /// A type of the catalog. A base type has the `typmodin` function that `CREATE TYPE` gave it, and another type takes no type modifier.
     fn user(ty: &rupg_catalog::Type) -> Found {
-        Found { oid: ty.oid, array: ty.array, modin: 0 }
+        let modin = ty.base.as_ref().map_or(0, |b| b.modin);
+        Found { oid: ty.oid, array: ty.array, modin, defined: !ty.is_shell() }
     }
 }
 
@@ -202,11 +213,31 @@ impl Analyzer<'_> {
         Ok((column.ty, -1))
     }
 
-    /// `typenameTypeIdAndMod`: the OID and the typmod of a type name.
+    /// `typenameTypeIdAndMod`: the OID and the typmod of a type name. A shell type is an error.
     pub(crate) fn type_name(&mut self, name: &TypeName) -> Result<(u32, i32)> {
         let at = place(name.location);
+        let Some((ty, typmod, defined)) = self.lookup_type_mod(name)? else {
+            return Err(Error::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!("type \"{}\" does not exist", type_name_text(name)),
+            )
+            .at_opt(at));
+        };
+        if !defined {
+            return Err(Error::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!("type \"{}\" is only a shell", type_name_text(name)),
+            )
+            .at_opt(at));
+        }
+        Ok((ty, typmod))
+    }
+
+    /// `LookupTypeName` with the typmod: the OID, the typmod and `typisdefined` of the type that the name gives, or `None` when no type has the name. A shell type is not an error, as `CREATE FUNCTION` takes one.
+    pub(crate) fn lookup_type_mod(&mut self, name: &TypeName) -> Result<Option<(u32, i32, bool)>> {
+        let at = place(name.location);
         if name.pct_type {
-            return self.column_type_of(name);
+            return self.column_type_of(name).map(|(ty, typmod)| Some((ty, typmod, true)));
         }
         let mut row = if name.typeOid != 0 {
             self.type_by_oid(name.typeOid)
@@ -217,19 +248,13 @@ impl Analyzer<'_> {
             // `get_array_type`: an array type has no array type, so the name finds no type.
             row = row.and_then(|element| self.type_by_oid(element.array));
         }
-        let Some(row) = row else {
-            return Err(Error::new(
-                SqlState::UNDEFINED_OBJECT,
-                format!("type \"{}\" does not exist", type_name_text(name)),
-            )
-            .at_opt(at));
-        };
+        let Some(row) = row else { return Ok(None) };
         let first = self.notices.len();
         let typmod = self.type_modifier(name, &row).map_err(|e| e.at_opt(at))?;
         for notice in &mut self.notices[first..] {
             *notice = notice.clone().at_opt(at);
         }
-        Ok((row.oid, typmod))
+        Ok(Some((row.oid, typmod, row.defined)))
     }
 
     /// `LookupTypeName` for a statement that names a type as an object, such as `DROP TYPE`: the OID of the type, or `None` when the schema has no type with the name. The type modifiers do not count, and the errors have no position.

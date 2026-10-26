@@ -1312,6 +1312,7 @@ impl Connection {
                     Node::DefineStmt(stmt) => match stmt.kind {
                         ObjectType::OBJECT_OPERATOR => CommandTag::CreateOperator,
                         ObjectType::OBJECT_AGGREGATE => CommandTag::CreateAggregate,
+                        ObjectType::OBJECT_TYPE => CommandTag::CreateType,
                         ObjectType::OBJECT_TSPARSER => CommandTag::CreateTextSearchParser,
                         ObjectType::OBJECT_TSDICTIONARY => CommandTag::CreateTextSearchDictionary,
                         ObjectType::OBJECT_TSTEMPLATE => CommandTag::CreateTextSearchTemplate,
@@ -5106,6 +5107,12 @@ mod tests {
     #[test]
     fn plan_index_hash() {
         big_stack(|| script(include_str!("connection/plan_index_hash.test")));
+    }
+
+    /// Shell types of `CREATE TYPE` with no parameters, with the notices of `CREATE FUNCTION` for a shell type, the shell type that a function in `internal` makes for a result type that does not exist, and the errors for a shell type in a query. `connection/type_shell.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn type_shell() {
+        big_stack(|| script(include_str!("connection/type_shell.test")));
     }
 
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
