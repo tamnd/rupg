@@ -1,16 +1,16 @@
 //! The rows of the tables in memory, with the transaction IDs of `heapam_visibility.c`. Each version of a row has the transaction and the command that made it, and the transaction and the command that deleted it. A snapshot tells which versions a statement sees.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use rupg_analyze::{Derived, Unique};
 use rupg_common::{Error, Result, SqlState};
-use rupg_func::{HeapSize, XactState};
+use rupg_func::{HeapSize, Statistic, XactState};
 use rupg_types::{Value, oid};
 
-pub(crate) use pages::Skip;
 use pages::{Pages, Pruned, generation_of, max_align, page_of, slot_of, tuple_len};
+pub(crate) use pages::{Skip, stored_widths};
 
 mod fsm;
 mod pages;
@@ -127,6 +127,8 @@ struct Table {
     bulk: Option<(u32, u32)>,
     /// The pages of the heap before each `TRUNCATE` of the transaction in progress, with the transaction and the command, which a rollback brings back, as `RelationSetNewRelfilenumber` gives the table a new file.
     truncated: Vec<(u32, u32, Pages)>,
+    /// The rows of `pg_statistic` of the table, by `staattnum` and `stainherit`, which `ANALYZE` writes outside of the transactions.
+    statistics: BTreeMap<(i16, bool), Statistic>,
 }
 
 /// The versions of a table by the hash of their key, for one unique key, which takes the place of the btree of a unique index. The map can keep the ID of a version that went, which a check skips.
@@ -1034,6 +1036,54 @@ impl Heap {
             done(v.xmin) && (v.xmax == 0 || (v.xmax != xid && state.running.contains(&v.xmax)))
         };
         table.versions.iter().filter(live).count() as u64
+    }
+
+    /// `acquire_sample_rows` of `ANALYZE` for the transaction `xid`: the values of the live versions of a table, as [`Heap::live_count`] counts them, in the order of their places in the heap, and the number of the live versions. A table with more than `target` live versions gives `target` of them at equal distances, where PostgreSQL takes a random sample.
+    pub(crate) fn sample(
+        &self,
+        database: u32,
+        relation: u32,
+        xid: u32,
+        target: usize,
+    ) -> (Vec<Vec<Value>>, f64) {
+        let state = self.state();
+        let Some(table) = state.tables.get(&(database, relation)) else {
+            return (Vec::new(), 0.0);
+        };
+        let done = |x: u32| x == xid || !state.running.contains(&x);
+        let live: Vec<&Version> = table
+            .versions
+            .iter()
+            .filter(|v| {
+                done(v.xmin) && (v.xmax == 0 || (v.xmax != xid && state.running.contains(&v.xmax)))
+            })
+            .collect();
+        let total = live.len();
+        let rows = if total <= target {
+            live.iter().map(|v| v.values.to_vec()).collect()
+        } else {
+            (0..target).map(|i| live[i * total / target].values.to_vec()).collect()
+        };
+        (rows, total as f64)
+    }
+
+    /// `update_attstats`: replaces the rows of `pg_statistic` of a table for the columns of `rows`, outside of the transactions.
+    pub(crate) fn set_statistics(&self, database: u32, relation: u32, rows: Vec<Statistic>) {
+        let mut state = self.state();
+        let table = state.tables.entry((database, relation)).or_default();
+        for row in rows {
+            table.statistics.insert((row.attnum, row.inherit), row);
+        }
+    }
+
+    /// The rows of `pg_statistic` of a table, in the order of `staattnum` and `stainherit`.
+    pub(crate) fn statistics(&self, database: u32, relation: u32) -> Vec<Statistic> {
+        let state = self.state();
+        state
+            .tables
+            .get(&(database, relation))
+            .map(|table| table.statistics.values().cloned().collect())
+            .unwrap_or_default()
     }
 
     /// `vac_update_relstats`: sets `relpages` and `reltuples` of a table, outside of the transactions.

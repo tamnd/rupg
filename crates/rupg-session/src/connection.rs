@@ -36,6 +36,7 @@ use crate::utility::{self, Context, Notice, Outcome};
 use foreign::Batch;
 
 mod activity;
+mod analyze;
 mod copy;
 mod copy_from;
 mod cursor;
@@ -4961,6 +4962,12 @@ mod tests {
     #[test]
     fn heap_vacuum() {
         big_stack(|| script(include_str!("connection/heap_vacuum.test")));
+    }
+
+    /// `ANALYZE` writes the statistics of the columns, which `pg_stats` and `pg_statistic` show. `connection/analyze_stats.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn analyze_stats() {
+        big_stack(|| script(include_str!("connection/analyze_stats.test")));
     }
 
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.

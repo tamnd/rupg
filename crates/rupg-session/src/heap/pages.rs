@@ -127,6 +127,52 @@ pub(super) fn tuple_len(values: &[Value]) -> usize {
     header + len
 }
 
+/// The lengths of the values `values` of a version, as `ANALYZE` reads them: `VARSIZE_ANY` of the value in the version, which is the length of the TOAST pointer for a value that [`tuple_len`] moves to the TOAST table, and `toast_raw_datum_size`, the length of the value with a header of four bytes. A null value and a value of fixed length give 0 for both.
+pub(crate) fn stored_widths(values: &[Value]) -> Vec<(usize, usize)> {
+    let nulls = values.iter().any(Value::is_null);
+    let header = max_align(TUPLE_HEADER + if nulls { values.len().div_ceil(8) } else { 0 });
+    let mut layouts: Vec<Layout> = values.iter().map(layout).collect();
+    let mut toasted = vec![false; values.len()];
+    let present = |layouts: &[Layout]| {
+        let kept: Vec<Layout> = layouts
+            .iter()
+            .zip(values)
+            .filter(|(_, v)| !v.is_null())
+            .map(|(layout, _)| *layout)
+            .collect();
+        data_len(&kept)
+    };
+    while header + present(&layouts) > TOAST_THRESHOLD {
+        let longest = layouts
+            .iter()
+            .enumerate()
+            .filter(|&(at, _)| !values[at].is_null())
+            .filter_map(|(at, layout)| match *layout {
+                Layout::Varlena(size, _) if size + 4 > max_align(TOAST_POINTER) => Some((size, at)),
+                _ => None,
+            })
+            .max_by_key(|&(size, at)| (size, std::cmp::Reverse(at)));
+        let Some((_, at)) = longest else { break };
+        layouts[at] = Layout::Fixed(TOAST_POINTER, 1);
+        toasted[at] = true;
+    }
+    values
+        .iter()
+        .zip(layouts)
+        .zip(toasted)
+        .map(|((value, layout), toasted)| match layout {
+            _ if value.is_null() => (0, 0),
+            Layout::Fixed(..) if toasted => {
+                let Layout::Varlena(size, _) = self::layout(value) else { return (0, 0) };
+                (TOAST_POINTER, size + 4)
+            }
+            Layout::Fixed(..) => (0, 0),
+            Layout::Varlena(size, _) if size < 127 => (size + 1, size + 4),
+            Layout::Varlena(size, _) => (size + 4, size + 4),
+        })
+        .collect()
+}
+
 /// `HEAPBLOCKS_PER_PAGE` of `visibilitymap.c`: the heap pages that a page of the visibility map covers, with two bits for each.
 const VM_HEAP_BLOCKS: u32 = (PAGE_SIZE as u32 - PAGE_HEADER as u32) * 4;
 

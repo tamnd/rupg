@@ -10,7 +10,7 @@ use crate::{Analyzer, Env, Params};
 /// The OID of `pg_statistic`, which `analyze_rel` skips.
 const PG_STATISTIC: u32 = 2619;
 
-/// `vacuum` for the relations `rels` of a `VacuumStmt`, after `ExecVacuum` has read the options. `vacuum` is true for `VACUUM`, and `analyze` is true for `ANALYZE` or for `VACUUM` with the option `ANALYZE`. The warnings for the relations that the statement skips go to `warnings`, also when a later relation gives an error. The result is the OIDs of the relations that the statement processes, in the order of the list.
+/// `vacuum` for the relations `rels` of a `VacuumStmt`, after `ExecVacuum` has read the options. `vacuum` is true for `VACUUM`, and `analyze` is true for `ANALYZE` or for `VACUUM` with the option `ANALYZE`. The warnings for the relations that the statement skips go to `warnings`, also when a later relation gives an error. The result is the OIDs of the relations that the statement processes, in the order of the list, each with the names of the columns of its column list and with `inh` of its name, which is false for `ONLY`.
 ///
 /// # Errors
 ///
@@ -21,7 +21,7 @@ pub fn vacuum_relations(
     vacuum: bool,
     analyze: bool,
     warnings: &mut Vec<Error>,
-) -> Result<Vec<u32>> {
+) -> Result<Vec<(u32, Vec<String>, bool)>> {
     let params = Params::default();
     let an = Analyzer::new(env, &params);
     let mut found = Vec::new();
@@ -29,17 +29,25 @@ pub fn vacuum_relations(
     for node in rels.iter().flatten() {
         let Node::VacuumRelation(vrel) = node else { continue };
         let Some(rv) = &vrel.relation else { continue };
-        found.push((lookup(&an, rv)?, &vrel.va_cols));
+        found.push((lookup(&an, rv)?, &vrel.va_cols, rv.inh));
     }
-    for (relid, va_cols) in found {
+    for (relid, va_cols, inh) in found {
         let kind = relkind(env, relid);
         let name = class_name(env, relid);
         if vacuum && !matches!(kind, b'r' | b'm' | b't' | b'p') {
             warnings.push(skipping(&name, "vacuum"));
             continue;
         }
+        let columns = va_cols
+            .iter()
+            .flatten()
+            .filter_map(|node| match node {
+                Node::String(name) => Some(name.to_string()),
+                _ => None,
+            })
+            .collect();
         if !analyze || relid == PG_STATISTIC {
-            done.push(relid);
+            done.push((relid, columns, inh));
             continue;
         }
         check_columns(env, relid, &name, va_cols)?;
@@ -47,7 +55,7 @@ pub fn vacuum_relations(
             warnings.push(skipping(&name, "analyze"));
             continue;
         }
-        done.push(relid);
+        done.push((relid, columns, inh));
     }
     Ok(done)
 }
