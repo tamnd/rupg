@@ -277,9 +277,9 @@ impl Connection {
         existing.push(Value::Int8(tid.cast_signed()));
         let (checked, carried) = {
             let reader = self.reader().with_view(view.clone());
-            let Some(mut new) =
-                plan.conflict_update(existing, excluded.to_vec(), params, &reader)?
-            else {
+            let new = plan.conflict_update(existing, excluded.to_vec(), params, &reader);
+            self.trigger_warnings.borrow_mut().extend(reader.take_warnings());
+            let Some(mut new) = new? else {
                 return Ok(true);
             };
             let carried = new.split_off(info.width.min(new.len()));
@@ -377,7 +377,10 @@ impl Connection {
         let new = {
             // A subquery of `SET` reads with the snapshot of the statement.
             let reader = self.reader().with_view(view.clone());
-            plan.conflict_update(existing, excluded.to_vec(), params, &reader)?
+            let new = plan.conflict_update(existing, excluded.to_vec(), params, &reader);
+            // The messages of `RAISE` of the functions of the policies go with the messages of the triggers.
+            self.trigger_warnings.borrow_mut().extend(reader.take_warnings());
+            new?
         };
         let Some(mut new) = new else {
             return Ok(true);

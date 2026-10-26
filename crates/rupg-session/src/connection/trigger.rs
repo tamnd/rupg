@@ -394,7 +394,7 @@ impl Connection {
         let checked = info.recheck.is_some();
         if before.is_empty() {
             // The rows of an upsert with only triggers of `DO UPDATE` have the conditions of the checks.
-            return if checked { plan.check_rows(rows, &self.reader()) } else { Ok(rows) };
+            return if checked { self.checking(|r| plan.check_rows(rows, r)) } else { Ok(rows) };
         }
         let width = info.width;
         let all = self.table_width(info);
@@ -451,20 +451,18 @@ impl Connection {
                 new = returned;
                 fired = true;
             }
-            let reader = self.reader();
-            let mut row = if fired {
-                plan.recheck(new, &reader)?
-            } else {
-                let mut row = computed;
-                row.extend(given);
-                row
-            };
-            row.extend(tail);
-            if checked {
-                out.extend(plan.check_rows(vec![row], &reader)?);
-            } else {
-                out.push(row);
-            }
+            let rows = self.checking(|reader| {
+                let mut row = if fired {
+                    plan.recheck(new, reader)?
+                } else {
+                    let mut row = computed;
+                    row.extend(given);
+                    row
+                };
+                row.extend(tail);
+                if checked { plan.check_rows(vec![row], reader) } else { Ok(vec![row]) }
+            })?;
+            out.extend(rows);
         }
         Ok(out)
     }
@@ -683,16 +681,17 @@ impl Connection {
             new = returned;
             fired = true;
         }
-        let reader = self.reader();
-        let row = if fired {
-            plan.recheck(new, &reader)?
-        } else {
-            let mut row = computed;
-            row.extend(given);
-            row
-        };
         let kind = if old.is_some() { WriteKind::Update } else { WriteKind::Insert };
-        Ok(plan.check_rows_as(vec![row], kind, &reader)?.into_iter().next())
+        self.checking(|reader| {
+            let row = if fired {
+                plan.recheck(new, reader)?
+            } else {
+                let mut row = computed;
+                row.extend(given);
+                row
+            };
+            Ok(plan.check_rows_as(vec![row], kind, reader)?.into_iter().next())
+        })
     }
 
     /// `ExecBRDeleteTriggers` for the row `old` of the table that an action of a `MERGE` deletes. It is false when a trigger gives a null row, which skips the row.
@@ -893,6 +892,14 @@ impl Connection {
     /// The place at the end of the queue of the triggers `AFTER`.
     pub(super) fn event_mark(&self) -> usize {
         self.events.borrow().len()
+    }
+
+    /// Runs `f` with a new reader, for the checks of the new rows after the triggers, and keeps the messages of `RAISE` of the functions of the checks after the messages of the triggers.
+    fn checking<T>(&self, f: impl FnOnce(&Reader<'_>) -> Result<T, Error>) -> Result<T, Error> {
+        let reader = self.reader();
+        let result = f(&reader);
+        self.trigger_warnings.borrow_mut().extend(reader.take_warnings());
+        result
     }
 
     /// The messages of `RAISE` of the triggers that fired, as notices.

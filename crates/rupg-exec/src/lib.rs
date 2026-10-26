@@ -1380,7 +1380,12 @@ impl Plan {
         {
             return Err(error);
         }
-        let policy = self.policy_failures(&rows, rupg_analyze::WriteKind::Update, session)?;
+        // With triggers `BEFORE ... FOR EACH ROW`, the policies check the new row after the triggers.
+        let policy = if insert::checks_now(info) {
+            self.policy_failures(&rows, rupg_analyze::WriteKind::Update, session)?
+        } else {
+            Vec::new()
+        };
         Ok(insert::check(info, rows, policy, session)?.into_iter().next())
     }
 
