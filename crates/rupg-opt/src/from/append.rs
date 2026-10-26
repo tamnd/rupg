@@ -296,13 +296,7 @@ impl<'q> AppendRel<'q> {
                     expr.ty = c.ty;
                     expr.typmod = c.typmod;
                 }
-                let mut exprs = vec![expr.clone()];
-                if let Some((class, _)) =
-                    stats.equal.iter().find(|(m, _)| m.iter().any(|e| e.same(&expr)))
-                {
-                    exprs.extend(class.iter().filter(|m| !m.same(&expr)).cloned());
-                }
-                OrderKey { exprs, desc, nulls_first }
+                stats.order_key(&expr, desc, nulls_first)
             })
             .collect();
         Rel { node, rels: seq.rels.clone(), order }

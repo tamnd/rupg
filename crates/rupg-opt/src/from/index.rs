@@ -1203,13 +1203,7 @@ fn order(
         let option = index.options.get(i).copied().unwrap_or(0);
         let desc = (option & DESC != 0) != backward;
         let nulls_first = (option & NULLS_FIRST != 0) != backward;
-        let mut exprs = vec![expr.clone()];
-        if let Some((members, _)) =
-            stats.equal.iter().find(|(m, _)| m.iter().any(|e| e.same(&expr)))
-        {
-            exprs.extend(members.iter().filter(|m| !m.same(&expr)).cloned());
-        }
-        out.push(OrderKey { exprs, desc, nulls_first });
+        out.push(stats.order_key(&expr, desc, nulls_first));
     }
     out
 }
