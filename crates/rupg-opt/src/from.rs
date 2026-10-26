@@ -2859,6 +2859,9 @@ fn choose<'q>(
             indexed: false,
             stats,
         };
+        // A side that reads the other side as a lateral reference is the inner side of a nested loop, which runs it again for each outer row. A hash join and a merge join read the inner side once, so that `add_paths_to_joinrel` makes them only with an inner side that is not parameterized.
+        let reads_outer =
+            if swapped { lateral(level, left_rels, right_rels) } else { lateral_right };
         let nested =
             matches!(join, JoinKind::Inner | JoinKind::Left | JoinKind::Semi | JoinKind::Anti);
         let inner_params = match swapped {
@@ -2869,7 +2872,7 @@ fn choose<'q>(
         // `add_paths_to_joinrel`: a setting that turns off merge joins or hash joins takes them away, but a full join keeps them, as it may have no other plan. A nested loop with a `Material` node needs nested loops.
         let enable = crate::enable();
         let full = join == JoinKind::Full;
-        let merge = join != JoinKind::RightSemi && (enable.mergejoin || full);
+        let merge = join != JoinKind::RightSemi && (enable.mergejoin || full) && !reads_outer;
         let mut candidates: Vec<Candidate<'q>> = Vec::new();
         if merge {
             candidates.extend(sorted_merge(&input, join));
@@ -2879,7 +2882,7 @@ fn choose<'q>(
             let input = Input { outer, ..input };
             let mut each = Vec::new();
             if nested {
-                let mut loops = nested_loops(&input, join, lateral_right);
+                let mut loops = nested_loops(&input, join, reads_outer);
                 let material =
                     (loops.len() > 1).then(|| loops.remove(1)).filter(|_| enable.nestloop);
                 each.extend(loops);
@@ -2904,7 +2907,7 @@ fn choose<'q>(
             }
             candidates.extend(each.into_iter().map(|c| Candidate { paths: (p, c.paths.1), ..c }));
         }
-        if enable.hashjoin || full {
+        if (enable.hashjoin || full) && !reads_outer {
             candidates.extend(hash_join(&input, join));
         }
         for candidate in candidates {
@@ -2935,11 +2938,35 @@ fn finish<'q>(
 ) -> Rel<'q> {
     let mut rels = left.rels.clone();
     rels.extend(right.rels.iter().copied());
-    let (outer, inner) = if best.swapped { (right, left) } else { (left, right) };
-    let mut out = best.make(level.scope, outer, inner, quals, rows);
+    let (outer, mut inner) = if best.swapped { (right, left) } else { (left, right) };
+    let quals = lateral_quals(level, best, &outer, &mut inner, quals);
+    let mut out = best.make(level.scope, outer, inner, &quals, rows);
     out.node.filter = filter.iter().map(|q| q.item()).collect();
     out.rels = rels;
     out
+}
+
+/// The conditions of a nested loop whose inner relation reads the outer side as a lateral reference, after the inner scan takes the conditions that it can test. The scan is parameterized by the relations that it reads, so that `join_clause_is_movable_into` lets it test each condition on its relation and those relations, as the clauses of its `ParamPathInfo`. The other conditions stay with the join.
+fn lateral_quals<'q>(
+    level: &Level<'q>,
+    best: &Candidate<'q>,
+    outer: &Rel<'q>,
+    inner: &mut Rel<'q>,
+    quals: &[Qual<'q>],
+) -> Vec<Qual<'q>> {
+    let scan = inner.rels.len() == 1 && best.method == Method::Nested && best.memo.is_none();
+    if !scan || !lateral(level, &inner.rels, &outer.rels) {
+        return quals.to_vec();
+    }
+    let mut reach: BTreeSet<usize> =
+        inner.rels.iter().flat_map(|r| lateral_rels(level, *r)).collect();
+    reach.extend(inner.rels.iter().copied());
+    let (moved, kept): (Vec<_>, Vec<_>) = quals
+        .iter()
+        .cloned()
+        .partition(|q| q.rels.is_subset(&reach) && !q.rels.is_disjoint(&inner.rels));
+    inner.node.filter.extend(moved.iter().map(|q| q.item()));
+    kept
 }
 
 /// The items of the problem of the order of the joins of a join domain, as the list of `deconstruct_jointree`, the conditions of its inner joins and its semi joins, and its left joins, semi joins and anti joins, as `make_outerjoininfo` makes them. The inner side of a left join, a semi join or an anti join is one item. A condition above a left join that reads its inner side is a condition of the domain, and the search tests it at the left join or above it. A condition with no column has the relations of its join.

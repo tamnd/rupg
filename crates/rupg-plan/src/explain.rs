@@ -467,11 +467,12 @@ impl Explainer<'_, '_> {
                 let own = Some(*r);
                 self.scan_qual("Filter", scope, &node.filter, self.options.verbose, own)?;
             }
-            Kind::ValuesScan(_)
-            | Kind::CteScan(_)
-            | Kind::WorkTableScan(_)
-            | Kind::TableFunctionScan(_) => {
-                self.qual("Filter", scope, &node.filter, self.options.verbose)?;
+            Kind::ValuesScan(r)
+            | Kind::CteScan(r)
+            | Kind::WorkTableScan(r)
+            | Kind::TableFunctionScan(r) => {
+                let own = Some(*r);
+                self.scan_qual("Filter", scope, &node.filter, self.options.verbose, own)?;
             }
             Kind::IndexScan { cond, relation, .. } => {
                 let own = Some(*relation);
@@ -493,7 +494,7 @@ impl Explainer<'_, '_> {
             }
             Kind::SampleScan(r) => {
                 self.sampling(scope, *r, upper)?;
-                self.qual("Filter", scope, &node.filter, self.options.verbose)?;
+                self.scan_qual("Filter", scope, &node.filter, self.options.verbose, Some(*r))?;
             }
             Kind::FunctionScan(r) => {
                 if self.options.verbose {
@@ -512,7 +513,7 @@ impl Explainer<'_, '_> {
                         self.w.text("Function Call", &text);
                     }
                 }
-                self.qual("Filter", scope, &node.filter, self.options.verbose)?;
+                self.scan_qual("Filter", scope, &node.filter, self.options.verbose, Some(*r))?;
             }
             Kind::SubqueryScan(_) => self.qual("Filter", scope, &node.filter, true)?,
             Kind::NestedLoop { join_filter, .. } => {
