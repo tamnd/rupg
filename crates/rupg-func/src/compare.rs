@@ -240,6 +240,137 @@ fn record_equal(args: &[Value]) -> Result<bool> {
     Ok(record_order(a, b, true)?.is_eq())
 }
 
+/// The bytes of a value as `record_image_cmp` compares them on a little-endian machine.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum Image {
+    /// The `Datum` of a type that is passed by value, which compares as an unsigned number, so a negative integer is above a positive one.
+    Datum(u64),
+    /// The bytes of a type of fixed length that is passed by reference, which `memcmp` compares.
+    Fixed(Vec<u8>),
+    /// The data of a varlena, which `memcmp` compares, and then the length.
+    Var(Vec<u8>),
+}
+
+/// The image of a value that is not null, made from the bytes of its binary output.
+fn image(ty: u32, value: &Value) -> Result<Image> {
+    let ty = base_type(ty);
+    let mut sent = Vec::new();
+    crate::io::send(ty, value, &mut sent)?;
+    let Some(row) = builtin::type_by_oid(ty) else { return Ok(Image::Var(sent)) };
+    if row.by_val {
+        let datum = sent.iter().fold(0u64, |d, b| d << 8 | u64::from(*b));
+        // `Int32GetDatum` and the others extend the sign, and `ObjectIdGetDatum` does not.
+        let bits = 8 * sent.len() as u32;
+        let datum = if bits < 64 && !matches!(value, Value::Oid(_)) {
+            let shift = 64 - bits;
+            ((datum << shift).cast_signed() >> shift).cast_unsigned()
+        } else {
+            datum
+        };
+        return Ok(Image::Datum(datum));
+    }
+    if row.len > 0 {
+        // The fields of the C struct, which the binary output sends in big-endian order.
+        let fields: &[usize] = match ty {
+            oid::POINT | oid::LSEG | oid::BOX | oid::LINE | oid::CIRCLE => &[8; 4],
+            oid::INTERVAL => &[8, 4, 4],
+            oid::TIMETZ => &[8, 4],
+            oid::TID => &[2, 2, 2],
+            oid::NAME => {
+                sent.resize(usize::try_from(row.len).unwrap_or(0), 0);
+                &[]
+            }
+            _ => &[],
+        };
+        let mut at = 0;
+        for &n in fields {
+            if let Some(field) = sent.get_mut(at..at + n) {
+                field.reverse();
+            }
+            at += n;
+        }
+        return Ok(Image::Fixed(sent));
+    }
+    if ty == oid::NUMERIC {
+        return Ok(Image::Var(numeric_image(&sent)));
+    }
+    Ok(Image::Var(sent))
+}
+
+/// `make_result`: the bytes of a `numeric` as it is stored, from its binary output. Special values have only the header. Other values have the short header when the scale and the weight fit in it, or else the long header, then the digits.
+fn numeric_image(sent: &[u8]) -> Vec<u8> {
+    let word = |at: usize| sent.get(at..at + 2).map_or(0, |b| u16::from_be_bytes([b[0], b[1]]));
+    let (count, sign, dscale) = (usize::from(word(0)), word(4), word(6));
+    let mut weight = i32::from(word(2).cast_signed());
+    if sign >= 0xc000 {
+        return sign.to_le_bytes().to_vec();
+    }
+    let mut digits: Vec<u16> = (0..count).map(|i| word(8 + 2 * i)).collect();
+    while digits.first() == Some(&0) {
+        digits.remove(0);
+        weight -= 1;
+    }
+    while digits.last() == Some(&0) {
+        digits.pop();
+    }
+    let sign = if digits.is_empty() {
+        weight = 0;
+        0
+    } else {
+        sign
+    };
+    let mut out = Vec::new();
+    if dscale <= 0x3f && (-64..=63).contains(&weight) {
+        let header = if sign == 0x4000 { 0x8000 | 0x2000 } else { 0x8000 }
+            | dscale << 7
+            | if weight < 0 { 0x40 } else { 0 }
+            | (weight as u16 & 0x3f);
+        out.extend(header.to_le_bytes());
+    } else {
+        out.extend((sign | dscale & 0x3fff).to_le_bytes());
+        out.extend((weight as i16).to_le_bytes());
+    }
+    for digit in digits {
+        out.extend(digit.to_le_bytes());
+    }
+    out
+}
+
+/// `record_image_cmp`: the order of two records by the images of their columns. Two nulls are equal, and a null is above a value.
+fn image_order(args: &[Value]) -> Result<Ordering> {
+    let [Value::Record(a), Value::Record(b)] = args else { return Err(bad_value()) };
+    let columns = a.types.iter().zip(&a.values).zip(b.types.iter().zip(&b.values));
+    for (n, ((&left, x), (&right, y))) in columns.enumerate() {
+        if left != right {
+            return Err(Error::new(
+                SqlState::DATATYPE_MISMATCH,
+                format!(
+                    "cannot compare dissimilar column types {} and {} at record column {}",
+                    format_type(left),
+                    format_type(right),
+                    n + 1
+                ),
+            ));
+        }
+        let order = match (x.is_null(), y.is_null()) {
+            (true, true) => Ordering::Equal,
+            (true, false) => Ordering::Greater,
+            (false, true) => Ordering::Less,
+            (false, false) => image(left, x)?.cmp(&image(right, y)?),
+        };
+        if order.is_ne() {
+            return Ok(order);
+        }
+    }
+    if a.values.len() != b.values.len() {
+        return Err(Error::new(
+            SqlState::DATATYPE_MISMATCH,
+            "cannot compare record types with different numbers of columns",
+        ));
+    }
+    Ok(Ordering::Equal)
+}
+
 /// True when two values that are not null are equal.
 ///
 /// # Errors
@@ -546,6 +677,27 @@ pub(crate) fn by_src(src: &str, proc: &ProcRow) -> Option<Kernel> {
         "xidneq" => return Some(xid_ne),
         "record_eq" => return Some(|_, args| record_equal(args).map(Value::Bool)),
         "record_ne" => return Some(|_, args| record_equal(args).map(|eq| Value::Bool(!eq))),
+        "record_image_eq" => {
+            return Some(|_, args| image_order(args).map(|o| Value::Bool(o.is_eq())));
+        }
+        "record_image_ne" => {
+            return Some(|_, args| image_order(args).map(|o| Value::Bool(o.is_ne())));
+        }
+        "record_image_lt" => {
+            return Some(|_, args| image_order(args).map(|o| Value::Bool(o.is_lt())));
+        }
+        "record_image_le" => {
+            return Some(|_, args| image_order(args).map(|o| Value::Bool(o.is_le())));
+        }
+        "record_image_gt" => {
+            return Some(|_, args| image_order(args).map(|o| Value::Bool(o.is_gt())));
+        }
+        "record_image_ge" => {
+            return Some(|_, args| image_order(args).map(|o| Value::Bool(o.is_ge())));
+        }
+        "btrecordimagecmp" => {
+            return Some(|_, args| image_order(args).map(|o| Value::Int4(o as i32)));
+        }
         _ => {}
     }
     if !comparable(*left, *right) {
