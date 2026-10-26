@@ -2905,6 +2905,46 @@ fn choose<'q>(
                 let material =
                     (loops.len() > 1).then(|| loops.remove(1)).filter(|_| enable.nestloop);
                 each.extend(loops);
+                // `get_memoize_path` over the inner relation that reads the outer side, with the conditions that its scan tests as its parameters.
+                let moved = (reads_outer && enable.memoize && enable.nestloop)
+                    .then(|| movable(level, &outer.rels, &input.inner.rels, quals))
+                    .flatten();
+                if let Some((moved, _)) = moved
+                    && let Some(&r) = input.inner.rels.first()
+                {
+                    let all = quals.len() + filter.len();
+                    let unique = (join, inner_unique);
+                    let memo = memoize::lateral(
+                        level.query,
+                        r,
+                        outer,
+                        input.inner,
+                        unique,
+                        &moved,
+                        all,
+                        stats,
+                    );
+                    if let Some(memo) = memo {
+                        let wrapped =
+                            Some((memoize::path_cost(input.inner.node.cost), memo.rescan));
+                        let (startup, total) = nested_cost(&input, wrapped);
+                        each.push(Candidate {
+                            method: Method::Nested,
+                            join,
+                            swapped: false,
+                            startup,
+                            total,
+                            materialize: false,
+                            sort: (false, false),
+                            keys: Vec::new(),
+                            paths: (0, 0),
+                            unique: false,
+                            param: None,
+                            disabled: 0,
+                            memo: Some(memo),
+                        });
+                    }
+                }
                 for (i, param) in inner_params.iter().enumerate() {
                     if param.outer.is_subset(&outer.rels) {
                         let left = (quals, filter);
@@ -2965,7 +3005,7 @@ fn finish<'q>(
     out
 }
 
-/// The conditions of a nested loop whose inner relation reads the outer side as a lateral reference, after the inner scan takes the conditions that it can test. The scan is parameterized by the relations that it reads, so that `join_clause_is_movable_into` lets it test each condition on its relation and those relations, as the clauses of its `ParamPathInfo`. The other conditions stay with the join.
+/// The conditions of a nested loop whose inner relation reads the outer side as a lateral reference, after the inner scan takes the conditions that [`movable`] finds. The other conditions stay with the join.
 fn lateral_quals<'q>(
     level: &Level<'q>,
     best: &Candidate<'q>,
@@ -2973,19 +3013,29 @@ fn lateral_quals<'q>(
     inner: &mut Rel<'q>,
     quals: &[Qual<'q>],
 ) -> Vec<Qual<'q>> {
-    let scan = inner.rels.len() == 1 && best.method == Method::Nested && best.memo.is_none();
-    if !scan || !lateral(level, &inner.rels, &outer.rels) {
-        return quals.to_vec();
-    }
-    let mut reach: BTreeSet<usize> =
-        inner.rels.iter().flat_map(|r| lateral_rels(level, *r)).collect();
-    reach.extend(inner.rels.iter().copied());
-    let (moved, kept): (Vec<_>, Vec<_>) = quals
-        .iter()
-        .cloned()
-        .partition(|q| q.rels.is_subset(&reach) && !q.rels.is_disjoint(&inner.rels));
+    let found = (best.method == Method::Nested && best.param.is_none())
+        .then(|| movable(level, &outer.rels, &inner.rels, quals))
+        .flatten();
+    let Some((moved, kept)) = found else { return quals.to_vec() };
     inner.node.filter.extend(moved.iter().map(|q| q.item()));
     kept
+}
+
+/// The conditions that the scan of the inner relation of a nested loop tests when the relation reads the outer side as a lateral reference, and the conditions that stay with the join, or `None` for an inner side of more than one relation or with no lateral reference to the outer side. The scan is parameterized by the relations that it reads, so that `join_clause_is_movable_into` lets it test each condition on its relation and those relations, as the `ppi_clauses` of its `ParamPathInfo`.
+fn movable<'q>(
+    level: &Level<'q>,
+    outer: &BTreeSet<usize>,
+    inner: &BTreeSet<usize>,
+    quals: &[Qual<'q>],
+) -> Option<(Vec<Qual<'q>>, Vec<Qual<'q>>)> {
+    if inner.len() != 1 || !lateral(level, inner, outer) {
+        return None;
+    }
+    let mut reach: BTreeSet<usize> = inner.iter().flat_map(|r| lateral_rels(level, *r)).collect();
+    reach.extend(inner.iter().copied());
+    Some(
+        quals.iter().cloned().partition(|q| q.rels.is_subset(&reach) && !q.rels.is_disjoint(inner)),
+    )
 }
 
 /// The items of the problem of the order of the joins of a join domain, as the list of `deconstruct_jointree`, the conditions of its inner joins and its semi joins, and its left joins, semi joins and anti joins, as `make_outerjoininfo` makes them. The inner side of a left join, a semi join or an anti join is one item. A condition above a left join that reads its inner side is a condition of the domain, and the search tests it at the left join or above it. A condition with no column has the relations of its join.
