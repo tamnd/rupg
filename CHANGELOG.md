@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.2.3 (2026-10-26)
+
 ### Added
 
 - `rupg upgrade OLD NEW` copies a database file to a new file in the format of this release. It does not change the old file, and it keeps the tables, their OIDs and the row ids (#809).
