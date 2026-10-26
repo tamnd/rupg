@@ -26,6 +26,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "int2_avg_accum" | "int4_avg_accum" => int_avg_accum,
         "int8_avg" => int8_avg,
         "float4_accum" | "float8_accum" => float_accum,
+        "float8_combine" => float_combine,
         "float8_avg" => float8_avg,
         "float8_var_pop" => float8_var_pop,
         "float8_var_samp" => float8_var_samp,
@@ -149,6 +150,32 @@ fn float_accum(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     } else if value.is_nan() || value.is_infinite() {
         sxx = f64::NAN;
     }
+    Ok(array(vec![Value::Float8(n), Value::Float8(sx), Value::Float8(sxx)]))
+}
+
+/// `float8_combine`: the state of the inputs of two states of `float8_accum`.
+#[allow(clippy::float_cmp)]
+fn float_combine(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [a, b] = args else { return Err(bad_value()) };
+    let ([n1, sx1, sxx1], [n2, sx2, sxx2]) = (float_state(a)?, float_state(b)?);
+    let [n, sx, sxx] = if n1 == 0.0 {
+        [n2, sx2, sxx2]
+    } else if n2 == 0.0 {
+        [n1, sx1, sxx1]
+    } else {
+        let n = n1 + n2;
+        // `float8_pl`: only finite values that give an infinite sum are an overflow.
+        let sx = sx1 + sx2;
+        if sx.is_infinite() && !sx1.is_infinite() && !sx2.is_infinite() {
+            return Err(float_overflow());
+        }
+        let tmp = sx1 / n1 - sx2 / n2;
+        let sxx = sxx1 + sxx2 + n1 * n2 * tmp * tmp / n;
+        if sxx.is_infinite() && !sxx1.is_infinite() && !sxx2.is_infinite() {
+            return Err(float_overflow());
+        }
+        [n, sx, sxx]
+    };
     Ok(array(vec![Value::Float8(n), Value::Float8(sx), Value::Float8(sxx)]))
 }
 
