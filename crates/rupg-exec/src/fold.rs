@@ -386,6 +386,8 @@ struct Fold<'a> {
     nulled: Vec<bool>,
     /// For each relation, true for a subquery that the planner pulls up into the query.
     pulled: Vec<bool>,
+    /// True when the planner pulls up a `VALUES` of one row, which it does not in the query of a write.
+    values: bool,
     /// `case_val`: the argument of each open `CASE` when it is a constant.
     case: Vec<Option<Expr>>,
 }
@@ -517,7 +519,28 @@ impl<'a> Fold<'a> {
             .iter()
             .map(|r| query.set_op.is_none() && r.subquery.as_deref().is_some_and(simple_subquery))
             .collect();
-        Fold { params, session, relations: &query.relations, nulled, pulled, case: Vec::new() }
+        let values = query.write.is_none() && query.set_op.is_none();
+        Fold {
+            params,
+            session,
+            relations: &query.relations,
+            nulled,
+            pulled,
+            values,
+            case: Vec::new(),
+        }
+    }
+
+    /// The value of the column `var` of a `VALUES` of one row with no volatile function and no function that gives a set, as `is_simple_values` finds it.
+    fn values_row(&self, var: Var) -> Option<&'a Expr> {
+        if !self.values {
+            return None;
+        }
+        let [row] = self.relations.get(var.relation)?.values.as_deref()? else { return None };
+        if row.iter().any(|e| volatile(e) || e.first_set_call().is_some()) {
+            return None;
+        }
+        row.get(usize::try_from(var.attnum - 1).ok()?)
     }
 
     /// The subquery in `FROM` that the planner pulls up for a relation.
@@ -529,8 +552,15 @@ impl<'a> Fold<'a> {
         relations.get(relation)?.subquery.as_deref()
     }
 
-    /// `pull_up_simple_subquery`: a column of a subquery that the planner pulls up is the expression of the subquery, which folds where the query reads the column. A constant takes the place of the column, unless an outer join can make the column null, where a `PlaceHolderVar` keeps it.
+    /// `pull_up_simple_subquery`: a column of a subquery that the planner pulls up is the expression of the subquery, which folds where the query reads the column. A constant takes the place of the column, unless an outer join can make the column null, where a `PlaceHolderVar` keeps it. A column of a `VALUES` of one row is the value of the row, as `pull_up_simple_values` pulls it up when `is_simple_values` lets it.
     fn var(&mut self, expr: &Expr, var: Var) -> Result<Expr> {
+        if let Some(value) = (var.levels_up == 0).then(|| self.values_row(var)).flatten() {
+            let folded = self.expr(value)?;
+            return Ok(match folded.kind {
+                ExprKind::Const(v) if !self.nulled[var.relation] => with(expr, ExprKind::Const(v)),
+                _ => expr.clone(),
+            });
+        }
         let sub = if var.levels_up == 0 { self.pulled_query(var.relation) } else { None };
         let target =
             sub.zip(usize::try_from(var.attnum - 1).ok()).and_then(|(s, i)| s.targets.get(i));
