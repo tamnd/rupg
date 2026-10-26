@@ -920,7 +920,12 @@ impl<'q> Builder<'q> {
         let init = !correlated && !matches!(link.kind, SubLinkKind::Any | SubLinkKind::All);
         let hashed = !correlated && link.kind == SubLinkKind::Any && hashable_test(link);
         if !correlated && !init && !hashed && enable().material {
+            // `materialize_finished_plan` moves the initplans of the plan to the `Material` node.
+            let init_plans = std::mem::take(&mut plan.init_plans);
+            let output = plan.output.iter().map(Item::passed).collect();
             plan = upper::materialize(plan);
+            plan.init_plans = init_plans;
+            plan.output = output;
         }
         self.labels.push(Label { link, name: name.clone(), init, hashed, alternative: false });
         if init {
