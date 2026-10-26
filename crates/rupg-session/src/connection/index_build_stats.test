@@ -1,0 +1,60 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (a int, b text);
+CREATE TABLE
+> CREATE INDEX t_a ON t (a);
+CREATE INDEX
+> CREATE INDEX t_h ON t USING hash (a);
+CREATE INDEX
+> SELECT relname, relpages, reltuples FROM pg_class WHERE relname LIKE 't%' AND relnamespace = 'public'::regnamespace ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row t,0,-1
+row t_a,1,0
+row t_h,6,0
+SELECT 3
+> INSERT INTO t SELECT g, 'x' FROM generate_series(1, 3) g;
+INSERT 0 3
+> CREATE INDEX t_b ON t (b);
+CREATE INDEX
+> CREATE INDEX t_h2 ON t USING hash (a);
+CREATE INDEX
+> SELECT relname, relpages, reltuples FROM pg_class WHERE relname LIKE 't%' AND relnamespace = 'public'::regnamespace ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row t,1,3
+row t_a,1,0
+row t_b,2,3
+row t_h,6,0
+row t_h2,4,3
+SELECT 5
+> INSERT INTO t SELECT g, 'x' FROM generate_series(1, 2000) g;
+INSERT 0 2000
+> DELETE FROM t WHERE a < 100;
+DELETE 102
+> CREATE INDEX t_c ON t (a, b);
+CREATE INDEX
+> CREATE INDEX t_h4 ON t USING hash (a);
+CREATE INDEX
+> SELECT relname, relpages, reltuples FROM pg_class WHERE relname LIKE 't%' AND relnamespace = 'public'::regnamespace ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row t,9,1901
+row t_a,1,0
+row t_b,2,3
+row t_c,8,1901
+row t_h,6,0
+row t_h2,4,3
+row t_h4,10,1901
+SELECT 7
+> REINDEX INDEX t_a;
+REINDEX
+> SELECT relname, relpages, reltuples FROM pg_class WHERE relname = 't_a';
+fields relname@pg_class.2:19:64:-1,relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row t_a,8,1901
+SELECT 1
+> CREATE TABLE u (a int PRIMARY KEY);
+CREATE TABLE
+> SELECT relname, relpages, reltuples FROM pg_class WHERE relname LIKE 'u%' AND relnamespace = 'public'::regnamespace ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row u,0,-1
+row u_pkey,1,0
+SELECT 2

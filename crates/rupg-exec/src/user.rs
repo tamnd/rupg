@@ -503,9 +503,11 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) -> Ve
             let (am, pages, tuples) = match rel.kind {
                 RelKind::Table | RelKind::Toast | RelKind::MatView => (HEAP, stats.0, stats.1),
                 RelKind::Partitioned => (0, stats.0, stats.1),
-                RelKind::Index => {
-                    rel.index.as_ref().map_or((0, 1, 0.0), |i| (i.method, i.pages, 0.0))
-                }
+                // An index that `index_update_stats` saw has the stats of its build, and another one the pages of a new index.
+                RelKind::Index => rel.index.as_ref().map_or((0, 1, 0.0), |i| match stats {
+                    (pages, tuples) if tuples >= 0.0 => (i.method, pages, tuples),
+                    _ => (i.method, i.pages, 0.0),
+                }),
                 RelKind::PartitionedIndex => {
                     rel.index.as_ref().map_or((0, 0, -1.0), |i| (i.method, 0, -1.0))
                 }

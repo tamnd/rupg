@@ -50,37 +50,45 @@ impl Members<'_, '_> {
         let Some(info) = &index.index else { return BtreeSize::EMPTY };
         let pages = self.index_pages(table, info.method, info.pages);
         let fallback = BtreeSize { blocks: u32::try_from(pages).unwrap_or(1), height: 0 };
-        if info.method != rupg_catalog::BTREE || info.predicate.is_some() || info.pages == 0 {
-            return fallback;
+        match btree_shape(index, columns) {
+            Some(shape) => self.heap.btree_size(self.database, table, index.oid, &shape),
+            None => fallback,
         }
-        let places: Option<Vec<usize>> = info
-            .keys
-            .iter()
-            .map(|&attnum| usize::try_from(attnum).ok().filter(|n| *n > 0).map(|n| n - 1))
-            .collect();
-        let Some(places) = places else { return fallback };
-        let Some(types) = places.iter().map(|&p| columns.get(p).map(|c| c.ty)).collect() else {
-            return fallback;
-        };
-        let option = |name: &str| {
-            index.options.iter().find_map(|text| {
-                let (found, value) = text.split_once('=')?;
-                (found == name).then(|| value.to_ascii_lowercase())
-            })
-        };
-        let shape = Shape {
-            columns: places,
-            types,
-            key_count: usize::try_from(info.key_count).unwrap_or(0),
-            options: info.options.clone(),
-            unique: info.unique,
-            fillfactor: option("fillfactor").and_then(|v| v.parse().ok()).unwrap_or(90),
-            deduplicate: option("deduplicate_items").is_none_or(|v| {
-                !matches!(v.as_str(), "off" | "of" | "false" | "f" | "no" | "n" | "0")
-            }),
-        };
-        self.heap.btree_size(self.database, table, index.oid, &shape)
     }
+}
+
+/// The shape of the `btree` index `index` on columns of a table with the columns `columns` and no predicate, for [`Heap::btree_size`]. `None` for another index.
+pub(super) fn btree_shape(
+    index: &rupg_catalog::Relation,
+    columns: &[rupg_catalog::Column],
+) -> Option<Shape> {
+    let info = index.index.as_ref()?;
+    if info.method != rupg_catalog::BTREE || info.predicate.is_some() || info.pages == 0 {
+        return None;
+    }
+    let places: Option<Vec<usize>> = info
+        .keys
+        .iter()
+        .map(|&attnum| usize::try_from(attnum).ok().filter(|n| *n > 0).map(|n| n - 1))
+        .collect();
+    let places = places?;
+    let types = places.iter().map(|&p| columns.get(p).map(|c| c.ty)).collect::<Option<_>>()?;
+    let option = |name: &str| {
+        index.options.iter().find_map(|text| {
+            let (found, value) = text.split_once('=')?;
+            (found == name).then(|| value.to_ascii_lowercase())
+        })
+    };
+    Some(Shape {
+        columns: places,
+        types,
+        key_count: usize::try_from(info.key_count).unwrap_or(0),
+        options: info.options.clone(),
+        unique: info.unique,
+        fillfactor: option("fillfactor").and_then(|v| v.parse().ok()).unwrap_or(90),
+        deduplicate: option("deduplicate_items")
+            .is_none_or(|v| !matches!(v.as_str(), "off" | "of" | "false" | "f" | "no" | "n" | "0")),
+    })
 }
 
 impl rupg_opt::Members for Members<'_, '_> {

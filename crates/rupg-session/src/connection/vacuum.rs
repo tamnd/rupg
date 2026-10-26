@@ -1,6 +1,7 @@
 //! `VACUUM` and `ANALYZE`, as `ExecVacuum` and `vacuum` of `vacuum.c` run them: the options, the checks of the options and of the relations, and the warnings for the relations that the statement skips. `VACUUM` removes the dead row versions of each table, and the statement sets `relpages`, `reltuples`, `relallvisible` and `relallfrozen` of each table. `ANALYZE` writes the statistics of the columns to `pg_statistic`. `VACUUM FULL` runs as a plain `VACUUM`.
 
-use rupg_catalog::{Catalog, RelKind};
+use rupg_catalog::size::{empty_index_pages, new_table_tuples};
+use rupg_catalog::{Catalog, RelKind, Relation};
 
 use rupg_common::{Error, SqlState};
 use rupg_sql::nodes::{DefElem, Node, VacuumStmt};
@@ -12,8 +13,14 @@ use crate::guc;
 use crate::heap::Skip;
 use rupg_types::Value;
 
-use super::analyze;
+use super::{analyze, explain};
 use crate::utility::Notice;
+
+/// The OID of the access method `hash`.
+const HASH: u32 = 405;
+
+/// `hashm_ffactor` of a new `hash` index: the rows of a bucket before a split, for the fill factor 75 and the width of an item with its line pointer, as `_hash_init` finds it.
+const HASH_BUCKET_ROWS: f64 = 307.0;
 
 /// `MIN_BAS_VAC_RING_SIZE_KB` and `MAX_BAS_VAC_RING_SIZE_KB`.
 const RING_SIZE_KB: (i32, i32) = (128, 16 * 1024 * 1024);
@@ -202,7 +209,7 @@ impl Connection {
         let relids = if parsed.only_database_stats {
             Vec::new()
         } else if stmt.rels.is_empty() {
-            let kinds = |r: &&rupg_catalog::Relation| {
+            let kinds = |r: &&Relation| {
                 matches!(r.kind, RelKind::Table | RelKind::MatView | RelKind::Partitioned)
             };
             catalog.relations().filter(kinds).map(|r| (r.oid, Vec::new())).collect()
@@ -299,7 +306,7 @@ impl Connection {
         } else {
             vec![relid]
         };
-        let tables: Vec<(&rupg_catalog::Relation, f64)> = tables
+        let tables: Vec<(&Relation, f64)> = tables
             .iter()
             .filter_map(|&oid| catalog.relation(oid))
             .filter(|r| matches!(r.kind, RelKind::Table | RelKind::MatView))
@@ -386,12 +393,17 @@ impl Connection {
 
     /// `index_update_stats` after a statement that built indexes, the indexes of `new` that are not in `old` or that have a new file: `relpages` and `reltuples` of the table of each index, while `autovacuum` is on and the table does not turn it off. A table with no rows that no `VACUUM` or `ANALYZE` counted keeps its `reltuples` of -1.
     pub(super) fn index_stats(&self, old: &Catalog, new: &Catalog) {
-        let mut tables: Vec<u32> = new
+        let built: Vec<&Relation> = new
             .relations()
+            .filter(|r| r.kind == RelKind::Index && r.index.is_some())
             .filter(|r| old.relation(r.oid).is_none_or(|o| o.file != r.file))
-            .filter_map(|r| r.index.as_ref().filter(|_| r.kind == RelKind::Index))
-            .map(|index| index.table)
             .collect();
+        // Each index has the stats of its build, from the stats of the table before the statement.
+        for index in &built {
+            self.built_index_stats(new, index);
+        }
+        let mut tables: Vec<u32> =
+            built.iter().filter_map(|r| r.index.as_ref()).map(|index| index.table).collect();
         if tables.is_empty() || self.settings.borrow().get("autovacuum").as_deref() == Some("off") {
             return;
         }
@@ -414,6 +426,55 @@ impl Connection {
                 let blocks = i32::try_from(size.blocks).unwrap_or(i32::MAX);
                 heap.set_stats(self.database_oid, table, blocks, live);
             }
+        }
+    }
+
+    /// `index_update_stats` of a new index: `relpages` from the pages of the index and `reltuples` from the rows that it has. A `btree` index has the pages that [`Heap::btree_size`] gives, and a `hash` index has the metapage, its buckets and the bitmap page, as `_hash_init` makes them for the rows that `estimate_rel_size` gives for the table, when its rows fill no bucket. An index with no rows keeps the pages of a new index and a `reltuples` of 0, as do a partial index and the indexes of other access methods.
+    fn built_index_stats(&self, catalog: &Catalog, index: &Relation) {
+        let heap = self.heap();
+        let Some(info) = &index.index else { return };
+        let Some(table) = catalog.relation(info.table) else { return };
+        let live = heap.live_count(self.database_oid, info.table, self.xid.get());
+        let size = heap.size(self.database_oid, info.table);
+        let pages = match info.method {
+            _ if live == 0 || info.predicate.is_some() || info.exprs.is_some() => None,
+            rupg_catalog::BTREE => explain::btree_shape(index, &table.columns).map(|shape| {
+                heap.btree_size(self.database_oid, info.table, index.oid, &shape).blocks
+            }),
+            HASH => {
+                let mut blocks = f64::from(size.blocks);
+                if blocks < 10.0 && size.reltuples < 0.0 && catalog.children(table.oid).is_empty() {
+                    blocks = 10.0;
+                }
+                let tuples = if size.reltuples >= 0.0 && size.relpages > 0 {
+                    f64::from(size.reltuples) / f64::from(size.relpages) * blocks
+                } else {
+                    let widths = table
+                        .columns
+                        .iter()
+                        .filter(|c| !c.dropped)
+                        .map(|c| rupg_opt::type_width(c.ty, c.typmod));
+                    let fillfactor = table
+                        .options
+                        .iter()
+                        .find_map(|o| o.strip_prefix("fillfactor=")?.parse().ok())
+                        .unwrap_or(100);
+                    new_table_tuples(widths, fillfactor) / 10.0 * blocks
+                };
+                let pages = empty_index_pages(info.method, tuples.round_ties_even());
+                // The rows that fill no bucket need no split of a bucket.
+                let buckets = f64::from(pages.saturating_sub(2));
+                (live as f64 <= buckets * HASH_BUCKET_ROWS)
+                    .then(|| u32::try_from(pages).unwrap_or(1))
+            }
+            _ => None,
+        };
+        match pages {
+            Some(pages) => {
+                let pages = i32::try_from(pages).unwrap_or(i32::MAX);
+                heap.set_stats(self.database_oid, index.oid, pages, live as f32);
+            }
+            None => heap.set_stats(self.database_oid, index.oid, 0, -1.0),
         }
     }
 
