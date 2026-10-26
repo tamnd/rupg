@@ -54,7 +54,7 @@ fn mismatch(message: String) -> Error {
 }
 
 /// `defGetTypeName`.
-fn def_type_name(def: &DefElem) -> Result<TypeName> {
+pub(super) fn def_type_name(def: &DefElem) -> Result<TypeName> {
     match &def.arg {
         None => Err(no_parameter(def)),
         Some(Node::TypeName(name)) => Ok((**name).clone()),

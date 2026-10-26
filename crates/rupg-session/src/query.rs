@@ -221,6 +221,11 @@ fn use_types(catalog: &Catalog) {
                     align: base.align,
                     storage: base.storage,
                     collation: base.collation,
+                    like: catalog
+                        .function(base.input)
+                        .filter(|f| f.lang == INTERNAL_LANGUAGE)
+                        .and_then(|f| builtin::type_of_input_function(&f.src))
+                        .unwrap_or(0),
                 }));
             }
             let array = catalog.type_by_oid(ty.array)?;

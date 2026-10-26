@@ -176,7 +176,11 @@ impl Definer<'_, '_> {
     }
 
     /// `LookupFuncName` with the exact types of the arguments: the function and its result type.
-    fn lookup_func_name(&self, list: &[&str], args: &[u32]) -> Result<Option<(u32, u32)>> {
+    pub(super) fn lookup_func_name(
+        &self,
+        list: &[&str],
+        args: &[u32],
+    ) -> Result<Option<(u32, u32)>> {
         let (schema, name) = self.an.split_name(list, None)?;
         let path = schema.map_or_else(|| self.an.path.clone(), |schema| vec![schema]);
         let found = path.iter().find_map(|&namespace| {
@@ -192,7 +196,7 @@ impl Definer<'_, '_> {
     }
 
     /// `LookupFuncName` with `noError` false.
-    fn func_oid(&self, list: &[&str], args: &[u32]) -> Result<(u32, u32)> {
+    pub(super) fn func_oid(&self, list: &[&str], args: &[u32]) -> Result<(u32, u32)> {
         if let Some(found) = self.lookup_func_name(list, args)? {
             return Ok(found);
         }

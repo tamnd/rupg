@@ -1,0 +1,134 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TYPE xb (input = xbin, output = xbout);
+ERROR 42710 type "xb" does not exist
+HINT Create the type as a shell type, then create its I/O functions, then do a full CREATE TYPE.
+> CREATE TYPE xb;
+CREATE TYPE
+> CREATE FUNCTION xbin(cstring) RETURNS xb IMMUTABLE STRICT LANGUAGE internal AS 'int4in';
+NOTICE 42809 return type xb is only a shell
+CREATE FUNCTION
+> CREATE FUNCTION xbout(xb) RETURNS cstring IMMUTABLE STRICT LANGUAGE internal AS 'int4out';
+NOTICE 42809 argument type xb is only a shell at 23
+CREATE FUNCTION
+> CREATE FUNCTION xbvin(cstring) RETURNS xb VOLATILE STRICT LANGUAGE internal AS 'int4in';
+NOTICE 42809 return type xb is only a shell
+CREATE FUNCTION
+> CREATE FUNCTION xbbad(cstring) RETURNS int IMMUTABLE STRICT LANGUAGE internal AS 'int4in';
+CREATE FUNCTION
+> CREATE TYPE xb (input = xbin, output = xbout, like = no_such_type);
+ERROR 42704 type "no_such_type" does not exist at 54
+> CREATE TYPE xb (output = xbout);
+ERROR 42P17 type input function must be specified
+> CREATE TYPE xb (input = xbin);
+ERROR 42P17 type output function must be specified
+> CREATE TYPE xb (input = nofunc, output = xbout);
+ERROR 42883 function nofunc(cstring) does not exist
+> CREATE TYPE xb (input = xbbad, output = xbout);
+ERROR 42P17 type input function xbbad must return type xb
+> CREATE TYPE xb (input = xbin, output = xbout, typmod_out = xbout);
+ERROR 42P17 type modifier output function is useless without a type modifier input function
+> CREATE TYPE xb (input = xbin, output = xbout, category = 'é');
+ERROR 22023 invalid type category "é": must be simple ASCII
+> CREATE TYPE xb (input = xbin, output = xbout, alignment = int8);
+ERROR 22023 alignment "int8" not recognized
+> CREATE TYPE xb (input = xbin, output = xbout, storage = big);
+ERROR 22023 storage "big" not recognized
+> CREATE TYPE xb (input = xbin, output = xbout, input = xbin);
+ERROR 42601 conflicting or redundant options at 47
+> CREATE TYPE xb (input = xbin, output = xbout, like = float4, bogus = 1, category = 'N');
+WARNING 42601 type attribute "bogus" not recognized at 62
+CREATE TYPE
+> SELECT typname, typtype, typlen, typbyval, typcategory, typispreferred, typisdefined, typdelim, typinput, typoutput, typreceive, typsend, typelem::regtype, typalign, typstorage, typcollation, typdefault FROM pg_type WHERE typname IN ('xb', '_xb') ORDER BY 1;
+fields typname@pg_type.2:19:64:-1,typtype@pg_type.7:18:1:-1,typlen@pg_type.5:21:2:-1,typbyval@pg_type.6:16:1:-1,typcategory@pg_type.8:18:1:-1,typispreferred@pg_type.9:16:1:-1,typisdefined@pg_type.10:16:1:-1,typdelim@pg_type.11:18:1:-1,typinput@pg_type.16:24:4:-1,typoutput@pg_type.17:24:4:-1,typreceive@pg_type.18:24:4:-1,typsend@pg_type.19:24:4:-1,typelem:2206:4:-1,typalign@pg_type.23:18:1:-1,typstorage@pg_type.24:18:1:-1,typcollation@pg_type.29:26:4:-1,typdefault@pg_type.31:25:-1:-1
+row _xb,b,-1,f,A,f,t,,,array_in,array_out,array_recv,array_send,xb,i,x,0,NULL
+row xb,b,4,t,N,f,t,,,xbin,xbout,-,-,-,i,p,0,NULL
+SELECT 2
+> SELECT t.typname, a.typname FROM pg_type t JOIN pg_type a ON a.oid = t.typarray WHERE t.typname = 'xb';
+fields typname@pg_type.2:19:64:-1,typname@pg_type.2:19:64:-1
+row xb,_xb
+SELECT 1
+> SELECT '12'::xb::text, '{1,2,3}'::xb[]::text, NULL::xb::text, '{1,2}'::_xb::text;
+fields text:25:-1:-1,text:25:-1:-1,text:25:-1:-1,text:25:-1:-1
+row 12,{1,2,3},NULL,{1,2}
+SELECT 1
+> SELECT '12'::xb::text;
+fields text:25:-1:-1
+row 12
+SELECT 1
+> SELECT 'x'::xb;
+ERROR 22P02 invalid input syntax for type integer: "x" at 8
+> CREATE TABLE tb (a xb, b xb[]);
+CREATE TABLE
+> INSERT INTO tb VALUES ('7', '{4,5}'), (NULL, NULL);
+INSERT 0 2
+> SELECT a::text, b::text, a IS NULL FROM tb;
+fields a:25:-1:-1,b:25:-1:-1,?column?:16:1:-1
+row 7,{4,5},f
+row NULL,NULL,t
+SELECT 2
+> SELECT pg_typeof(a), pg_typeof(b) FROM tb LIMIT 1;
+fields pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
+row xb,xb[]
+SELECT 1
+> SELECT pg_describe_object(refclassid, refobjid, refobjsubid) AS ref, deptype FROM pg_depend WHERE objid = 'xb'::regtype ORDER BY 1;
+fields ref:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row function xbin(cstring),n
+row function xbout(xb),n
+row schema public,n
+SELECT 3
+> SELECT pg_describe_object(classid, objid, objsubid) AS obj, deptype FROM pg_depend WHERE refobjid = 'xb'::regtype ORDER BY 1;
+fields obj:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row column a of table tb,n
+row function xbin(cstring),n
+row function xbout(xb),n
+row function xbvin(cstring),n
+row type xb[],i
+SELECT 5
+> CREATE TYPE xb (input = xbin, output = xbout);
+ERROR 42710 type "xb" already exists
+> CREATE TYPE xc;
+CREATE TYPE
+> CREATE FUNCTION xcin(cstring) RETURNS xc VOLATILE STRICT LANGUAGE internal AS 'int4in';
+NOTICE 42809 return type xc is only a shell
+CREATE FUNCTION
+> CREATE FUNCTION xcout(xc) RETURNS cstring IMMUTABLE STRICT LANGUAGE internal AS 'int4out';
+NOTICE 42809 argument type xc is only a shell at 23
+CREATE FUNCTION
+> CREATE TYPE xc (input = xcin, output = xcout, internallength = 4, passedbyvalue, alignment = int4, default = '3', delimiter = ';', preferred = true);
+WARNING 42P17 type input function xcin should not be volatile
+CREATE TYPE
+> SELECT typname, typlen, typbyval, typalign, typdelim, typdefault, typispreferred FROM pg_type WHERE typname = 'xc';
+fields typname@pg_type.2:19:64:-1,typlen@pg_type.5:21:2:-1,typbyval@pg_type.6:16:1:-1,typalign@pg_type.23:18:1:-1,typdelim@pg_type.11:18:1:-1,typdefault@pg_type.31:25:-1:-1,typispreferred@pg_type.9:16:1:-1
+row xc,4,t,i,;,3,t
+SELECT 1
+> SELECT '{1;2}'::xc[]::text, ('{1;2}'::xc[])[2]::text;
+fields text:25:-1:-1,text:25:-1:-1
+row {1;2},2
+SELECT 1
+> DROP TYPE xb;
+ERROR 2BP01 cannot drop type xb because other objects depend on it
+DETAIL function xbin(cstring) depends on type xb
+function xbout(xb) depends on type xb
+function xbvin(cstring) depends on type xb
+column b of table tb depends on type xb[]
+column a of table tb depends on type xb
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP TYPE xb CASCADE;
+NOTICE 00000 drop cascades to 5 other objects
+DETAIL drop cascades to function xbin(cstring)
+drop cascades to function xbout(xb)
+drop cascades to function xbvin(cstring)
+drop cascades to column b of table tb
+drop cascades to column a of table tb
+DROP TYPE
+> DROP TYPE xc CASCADE;
+NOTICE 00000 drop cascades to 2 other objects
+DETAIL drop cascades to function xcin(cstring)
+drop cascades to function xcout(xc)
+DROP TYPE
+> SELECT count(*) FROM pg_type WHERE typname IN ('xb', '_xb', 'xc', '_xc');
+fields count:20:8:-1
+row 0
+SELECT 1

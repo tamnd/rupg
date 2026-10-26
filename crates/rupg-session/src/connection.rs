@@ -5115,6 +5115,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/type_shell.test")));
     }
 
+    /// `CREATE TYPE` of a base type: the checks of the parameters and of the I/O functions, the rows of the type and of its array type in `pg_type`, the values of the type, which have the form of the type of the internal input function, and the dependencies. `connection/type_base.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn type_base() {
+        big_stack(|| script(include_str!("connection/type_base.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

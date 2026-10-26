@@ -721,6 +721,15 @@ fn types<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) -> Resu
                 .set("typreceive", enum_function("enum_recv"))
                 .set("typsend", enum_function("enum_send"));
             row
+        } else if let Some(base) = element.and_then(|e| e.base.as_ref()) {
+            // The array type of a base type, as `DefineType` makes it: the alignment is `d` or `i`.
+            let mut row = Row::copy(table, type_row(table, INT4_ARRAY, session)?, session)?;
+            row.set("typalign", code(if base.align == b'd' { 'd' } else { 'i' }))
+                .set("typdelim", Value::Char(base.delim))
+                .set("typmodin", oid(base.modin))
+                .set("typmodout", oid(base.modout))
+                .set("typcollation", oid(base.collation));
+            row
         } else if element.is_some_and(|e| e.labels.is_some()) {
             Row::copy(table, type_row(table, OID_ARRAY, session)?, session)?
         } else if let Some(domain) = element_domain {

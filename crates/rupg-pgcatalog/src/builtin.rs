@@ -1139,6 +1139,8 @@ pub struct SessionBase {
     pub align: u8,
     pub storage: u8,
     pub collation: u32,
+    /// The built-in type whose input function the input function of the type runs, as an internal function with the name of a built-in function in its `prosrc`, or 0. The values of the type have the form of the values of that type.
+    pub like: u32,
 }
 
 /// The labels of an enum type that [`use_session_types`] gave to the thread, for [`enum_labels`].
@@ -1627,6 +1629,22 @@ fn range_rows(new: &SessionRange) -> Option<Interned> {
         casts: vec![Box::leak(Box::new(cast))],
         ..Interned::default()
     })
+}
+
+/// The built-in type whose values have the form of the values of a base type that [`use_session_types`] gave to the thread, as [`SessionBase::like`] gives it. `None` for another type.
+pub fn base_representation(ty: u32) -> Option<u32> {
+    SESSION.with_borrow(|s| {
+        s.given.iter().find_map(|given| match given {
+            SessionType::Base(base) if base.oid == ty && base.like != 0 => Some(base.like),
+            _ => None,
+        })
+    })
+}
+
+/// The built-in base type whose input function is the built-in function with the name, for [`SessionBase::like`].
+pub fn type_of_input_function(name: &str) -> Option<u32> {
+    procs_named(name)
+        .find_map(|p| types().iter().find(|t| t.input == p.oid && t.kind == b'b').map(|t| t.oid))
 }
 
 /// The OID and the name of each label of an enum type that [`use_session_types`] gave to the thread, in their sort order. `None` for a type that is not such an enum type.

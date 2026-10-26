@@ -26,6 +26,12 @@ pub fn base_type(ty: u32) -> u32 {
     ty
 }
 
+/// The type whose input and output functions read and write the values of a type: [`base_type`], or the built-in type of a base type that `CREATE TYPE` made with internal functions of a built-in type.
+fn io_type(ty: u32) -> u32 {
+    let ty = base_type(ty);
+    builtin::base_representation(ty).unwrap_or(ty)
+}
+
 /// The element type and the delimiter of an array type, or `None` for a type that is not an array. `int2vector` and `oidvector` are not arrays here, because they have their own functions.
 pub(crate) fn array_of(ty: u32) -> Option<(u32, u8)> {
     if ty == oid::INT2VECTOR || ty == oid::OIDVECTOR {
@@ -42,7 +48,7 @@ pub(crate) fn array_of(ty: u32) -> Option<(u32, u8)> {
 
 /// True when the engine has the output and the send function of the type.
 pub fn output_supported(ty: u32) -> bool {
-    let ty = base_type(ty);
+    let ty = io_type(ty);
     if let Some((elem, _)) = array_of(ty) {
         return output_supported(elem);
     }
@@ -172,7 +178,7 @@ pub fn is_row_type(ty: u32) -> bool {
 
 /// True when the engine has the text input function of the type.
 pub fn input_supported(ty: u32) -> bool {
-    let ty = base_type(ty);
+    let ty = io_type(ty);
     if let Some((elem, _)) = array_of(ty) {
         return input_supported(elem);
     }
@@ -220,7 +226,7 @@ pub(crate) fn datetime_input<'a>(
 ///
 /// `0A000` for a type that has no output function here, and the error of the output function, such as a timestamp out of range.
 pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) -> Result<()> {
-    let ty = base_type(ty);
+    let ty = io_type(ty);
     if is_enum(ty)
         && let Value::Oid(label) = value
     {
@@ -579,7 +585,7 @@ fn vector<T>(array: &Array<Value>, get: impl Fn(&Value) -> Option<T>) -> Result<
 ///
 /// The errors of [`output`].
 pub fn to_text(ty: u32, value: &Value, session: &dyn Session) -> Result<String> {
-    match (base_type(ty), value) {
+    match (io_type(ty), value) {
         (oid::BOOL, Value::Bool(v)) => Ok(if *v { "true" } else { "false" }.to_string()),
         (oid::BPCHAR, Value::Text(v)) => Ok(v.trim_end_matches(' ').to_string()),
         (_, Value::Text(v)) => Ok(v.clone()),
@@ -723,7 +729,7 @@ fn input_value(
         Some(row) if row.kind == b'd' => row.typmod,
         _ => typmod,
     };
-    let ty = base_type(ty);
+    let ty = io_type(ty);
     if let Some((elem, delim)) = array_of(ty) {
         // A hard error of an element stops the input of the array as a hard error.
         let mut hard = None;
@@ -1010,7 +1016,7 @@ fn receive_from(
     typmod: i32,
     session: &dyn Session,
 ) -> std::result::Result<Value, Received> {
-    let ty = base_type(ty);
+    let ty = io_type(ty);
     if let Some((elem, _)) = array_of(ty) {
         let mut failed = None;
         let array =
@@ -1150,7 +1156,7 @@ pub(crate) fn send_kernel(call: &Call<'_>, args: &[Value]) -> Result<Value> {
 ///
 /// `0A000` for a type that has no send function here.
 pub fn send(ty: u32, value: &Value, out: &mut Vec<u8>) -> Result<()> {
-    let ty = base_type(ty);
+    let ty = io_type(ty);
     if let Some((elem, _)) = array_of(ty) {
         let Value::Array(array) = value else { return Err(bad_value()) };
         let mut failed = None;
