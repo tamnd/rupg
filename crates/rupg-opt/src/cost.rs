@@ -728,6 +728,9 @@ fn operator_selectivity(op: u32) -> f64 {
         "~~" | "~~*" | "~" | "~*" => EQ_SEL,
         "!~~" | "!~~*" | "!~" | "!~*" => 1.0 - EQ_SEL,
         "^@" => EQ_SEL,
+        // `networksel`: `DEFAULT_OVERLAP_SEL` and `DEFAULT_INCLUSION_SEL`.
+        "&&" if row.left == oid::INET => 0.01,
+        "<<" | "<<=" | ">>" | ">>=" if row.left == oid::INET => 0.005,
         _ => INEQ_SEL,
     }
 }

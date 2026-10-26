@@ -5090,6 +5090,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/xact_status_initdb.test")));
     }
 
+    /// The index conditions of the range of a network for `<<`, `<<=`, `>>` and `>>=` of `inet`, with the condition in the filter. `connection/plan_inet_subset.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_inet_subset() {
+        big_stack(|| script(include_str!("connection/plan_inet_subset.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

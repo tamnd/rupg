@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Index scans of a btree index on `inet` for `<<`, `<<=`, `>>` and `>>=` with a constant network, with the index conditions of the range of the network as `network_subset_support` makes them and the operator in the filter, and the default selectivities of `networksel` (#819).
 - The static rows of `pg_database` have `datfrozenxid` 654, as the `VACUUM FREEZE` of `initdb` leaves them, so that the databases of a new cluster agree with `INITDB_FROZEN_XID` (#818).
 - A new cluster starts at the transaction ID 662 with `datfrozenxid` 654, as `initdb` of PostgreSQL 19 leaves it, and `pg_xact_status` and `txid_status` give NULL for an ID before 654, whose entry of `pg_xact` is gone (#817).
 - In the parameterized `Append` of a table with members, a member with no parameterized scan can use its index scan or its bitmap heap scan, with the conditions of the join in the filter, as `reparameterize_path` does. Each member makes its own conditions of the equivalence classes, so the sides of the conditions are in the order of PostgreSQL (#815).
