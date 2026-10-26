@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.3.0 (2026-10-26)
+
 ### Added
 
 - The planner makes index scans and bitmap index scans of `hash` indexes for `=`, with the costs of `hashcostestimate` and the pages of the build of the index (#821).
