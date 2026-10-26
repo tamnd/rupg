@@ -1,0 +1,50 @@
+> explain (verbose, costs off) select 1 = all (select (select 1))
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Output: (ALL (1 = (SubPlan all_1).col1))
+row   SubPlan all_1
+row     ->  Materialize
+row           Output: ((InitPlan expr_1).col1)
+row           InitPlan expr_1
+row             ->  Result
+row                   Output: 1
+row           ->  Result
+row                 Output: (InitPlan expr_1).col1
+EXPLAIN
+> select 1 = all (select (select 1))
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> create table mi_t (a int, b int)
+CREATE TABLE
+> insert into mi_t values (1, 2), (3, 4)
+INSERT 0 2
+> explain (verbose, costs off) select * from mi_t where a <> all (select b + (select 1) from mi_t)
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.mi_t
+row   Output: mi_t.a, mi_t.b
+row   Filter: (ALL (mi_t.a <> (SubPlan all_1).col1))
+row   SubPlan all_1
+row     ->  Materialize
+row           Output: ((mi_t_1.b + (InitPlan expr_1).col1))
+row           InitPlan expr_1
+row             ->  Result
+row                   Output: 1
+row           ->  Seq Scan on public.mi_t mi_t_1
+row                 Output: (mi_t_1.b + (InitPlan expr_1).col1)
+EXPLAIN
+> select * from mi_t where a <> all (select b + (select 1) from mi_t)
+fields a@mi_t.1:23:4:-1,b@mi_t.2:23:4:-1
+row 1,2
+SELECT 1
+> explain (verbose, costs off) select * from mi_t where a <> all (select b from mi_t)
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.mi_t
+row   Output: mi_t.a, mi_t.b
+row   Filter: (ALL (mi_t.a <> (SubPlan all_1).col1))
+row   SubPlan all_1
+row     ->  Materialize
+row           Output: mi_t_1.b
+row           ->  Seq Scan on public.mi_t mi_t_1
+row                 Output: mi_t_1.b
+EXPLAIN

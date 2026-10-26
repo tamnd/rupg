@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `EXPLAIN VERBOSE` of an uncorrelated `ALL` subplan now puts the initplans of the subplan on its `Materialize` node and shows the output of the node, as `materialize_finished_plan` does (#860).
 - `pg_get_viewdef` now shows the locking clauses of a view, such as `FOR UPDATE OF t NOWAIT`, one for each relation, as `get_select_query_def` does. The analyzer keeps the wait policy of each row mark and whether a lock outside pushed the mark into a subquery (#859).
 
 ## 0.3.1 (2026-10-27)

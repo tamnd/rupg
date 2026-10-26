@@ -3670,6 +3670,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/view_locking.test")));
     }
 
+    /// The `Material` node over the plan of an uncorrelated `ALL` subplan takes the initplans of the plan and shows the columns of the plan below as its output, as `materialize_finished_plan` does. `connection/subplan_material_init.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn subplan_material_init() {
+        big_stack(|| script(include_str!("connection/subplan_material_init.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {
