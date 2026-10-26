@@ -4930,6 +4930,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/row_security_merge_checks.test")));
     }
 
+    /// The detail of the error of a foreign key hides the key when the current user has no `SELECT` on the table or on each column of the key, or when the policies of the table apply, as `ri_ReportViolation` hides it. `connection/foreign_key_hidden_detail.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn foreign_key_hidden_detail() {
+        big_stack(|| script(include_str!("connection/foreign_key_hidden_detail.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

@@ -299,9 +299,9 @@ impl Connection {
             Keys::of(rows, &foreign.other_columns, &foreign.types, &foreign.types)
         });
         if !keys.has(&probe, &foreign.types)? {
-            let shown = self.key_text(foreign, key, &foreign.referencing_types)?;
+            let shown = self.key_text(batch, foreign, key, &foreign.referencing_types)?;
             return Err(violation(batch, foreign, &self.reader()).with_detail(format!(
-                "Key {shown} is not present in table \"{}\".",
+                "Key{shown} is not present in table \"{}\".",
                 foreign.other_name
             )));
         }
@@ -333,10 +333,10 @@ impl Connection {
             Keys::of(rows, &foreign.other_columns, &foreign.referencing_types, &foreign.types)
         });
         if keys.has(&probe, &foreign.types)? {
-            let shown = self.key_text(foreign, key, &foreign.types)?;
+            let shown = self.key_text(batch, foreign, key, &foreign.types)?;
             let still = if restrict { "" } else { "still " };
             return Err(violation(batch, foreign, &self.reader()).with_detail(format!(
-                "Key {shown} is {still}referenced from table \"{}\".",
+                "Key{shown} is {still}referenced from table \"{}\".",
                 foreign.other_name
             )));
         }
@@ -375,7 +375,7 @@ impl Connection {
                     if !others.has(&probe, &foreign.types)? {
                         continue;
                     }
-                    let shown = self.key_text(foreign, &key, &foreign.types)?;
+                    let shown = key_values(&key, &foreign.types, &reader)?;
                     let error = Error::new(
                         SqlState::FOREIGN_KEY_VIOLATION,
                         format!(
@@ -384,7 +384,8 @@ impl Connection {
                         ),
                     )
                     .with_detail(format!(
-                        "Key {shown} is still referenced from table \"{}\".",
+                        "Key ({})=({shown}) is still referenced from table \"{}\".",
+                        foreign.names.join(", "),
                         foreign.other_name
                     ));
                     return Err(rupg_func::with_table_constraint(
@@ -481,24 +482,45 @@ impl Connection {
         self.apply_write(plan, params, &view, rows)
     }
 
-    /// The key of the detail of `ri_ReportViolation`: `(a, b)=(1, x)`, with the names of the columns as they are and the values of their output functions.
-    fn key_text(&self, foreign: &Foreign, key: &[&Value], types: &[u32]) -> Result<String, Error> {
+    /// `ri_ReportViolation`: the key of the row of `batch` with its columns, as ` (a, b)=(1, 2)`, or nothing when the current user may not see it, as the policies of the table or the privileges of the user hide it.
+    fn key_text(
+        &self,
+        batch: &Batch,
+        foreign: &Foreign,
+        key: &[&Value],
+        types: &[u32],
+    ) -> Result<String, Error> {
         let reader = self.reader();
-        let mut values = String::new();
-        for (value, &ty) in key.iter().zip(types) {
-            if !values.is_empty() {
-                values.push_str(", ");
-            }
-            if value.is_null() {
-                values.push_str("null");
-            } else {
-                let mut out = Vec::new();
-                rupg_func::output(ty, value, &reader, &mut out)?;
-                values.push_str(&String::from_utf8_lossy(&out));
-            }
+        let attrs: Vec<i16> =
+            foreign.columns.iter().map(|&c| i16::try_from(c + 1).unwrap_or(0)).collect();
+        if !rupg_func::key_shown(batch.table, &attrs, &reader)? {
+            return Ok(String::new());
         }
-        Ok(format!("({})=({values})", foreign.names.join(", ")))
+        let values = key_values(key, types, &reader)?;
+        Ok(format!(" ({})=({values})", foreign.names.join(", ")))
     }
+}
+
+/// The values of a key as the detail of an error shows them, with `null` for a null value.
+fn key_values(
+    key: &[&Value],
+    types: &[u32],
+    session: &dyn rupg_func::Session,
+) -> Result<String, Error> {
+    let mut values = String::new();
+    for (value, &ty) in key.iter().zip(types) {
+        if !values.is_empty() {
+            values.push_str(", ");
+        }
+        if value.is_null() {
+            values.push_str("null");
+        } else {
+            let mut out = Vec::new();
+            rupg_func::output(ty, value, session, &mut out)?;
+            values.push_str(&String::from_utf8_lossy(&out));
+        }
+    }
+    Ok(values)
 }
 
 /// The error of `ri_ReportViolation` with no detail, or of `ri_restrict` for `RESTRICT`. The object of the error is the constraint on the referencing table.
