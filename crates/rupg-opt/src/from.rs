@@ -1957,7 +1957,7 @@ pub(crate) fn plain_var(expr: &Expr) -> Option<Var> {
     }
 }
 
-/// The number of distinct values of an expression with no statistics, as `get_variable_numdistinct`, and the tuples and the rows of the relation when the expression reads one relation. A unique column has as many values as tuples, a `boolean` has 2 values, `tableoid` has 1 and the other system columns are unique. A small table has as many values as tuples, and the others have 200. The flag is true for the default.
+/// The number of distinct values of an expression, as `get_variable_numdistinct`, and the tuples and the rows of the relation when the expression reads one relation. With statistics it is `stadistinct`. A unique column has as many values as tuples, a `boolean` has 2 values, `tableoid` has 1 and the other system columns are unique. A small table has as many values as tuples, and the others have 200. The flag is true for the default.
 fn numdistinct(expr: &Expr, stats: &Stats) -> (f64, bool, Option<(f64, f64)>) {
     let rels = exprs::relations(expr);
     let rel = match (rels.len(), rels.first()) {
@@ -1965,23 +1965,163 @@ fn numdistinct(expr: &Expr, stats: &Stats) -> (f64, bool, Option<(f64, f64)>) {
         _ => None,
     };
     let unique = stats.unique.has(expr);
-    let (nd, default) = cost::numdistinct(expr, None, unique, rel.map(|(tuples, _)| tuples));
+    let statistic = column_statistic(expr, stats);
+    let (nd, default) = cost::numdistinct(expr, statistic, unique, rel.map(|(tuples, _)| tuples));
     (nd, default, rel)
 }
 
-/// The number of distinct values of an expression with no statistics for `eqjoinsel_inner`, which does not clamp it to the rows of its relation after the conditions. The flag is true for the default.
-fn distinct(expr: &Expr, stats: &Stats) -> (f64, bool) {
-    let (nd, default, _) = numdistinct(expr, stats);
-    (nd, default)
+/// The statistics of a column of a table of the level, or of the column under a `RelabelType`, as `examine_variable` finds them for a `Var`.
+fn column_statistic<'s>(expr: &Expr, stats: &'s Stats) -> Option<&'s Statistic> {
+    let var = plain_var(expr).filter(|v| v.levels_up == 0)?;
+    stats.columns.get(&var.relation)?.get(&var.attnum)
 }
 
-/// The selectivity of a condition of a join, as `clause_selectivity` finds it for each part of the condition. An `=` of a value of each side is `1 / max(nd1, nd2)`, as `eqjoinsel` with no statistics. An `=` of a unique column and a value that reads no relation, in a part of an `OR`, passes one tuple of the relation, as `var_eq_const`.
+/// The most common values of a column and their frequencies, when its statistics have both.
+fn mcvs(statistic: Option<&Statistic>) -> Option<(&[Value], &[f32])> {
+    let slot = statistic?.slots.iter().find(|slot| slot.kind == STATISTIC_KIND_MCV)?;
+    Some((slot.values.as_deref()?, slot.numbers.as_deref()?))
+}
+
+/// A side of an `=` of a join, as `get_join_variables` finds it: the number of its distinct values, true when the number is the default, its statistics, the tuples and the rows of its relation, and its type.
+struct JoinVar<'s> {
+    nd: f64,
+    default: bool,
+    statistic: Option<&'s Statistic>,
+    rel: Option<(f64, f64)>,
+    ty: u32,
+}
+
+impl<'s> JoinVar<'s> {
+    fn new(expr: &Expr, stats: &'s Stats) -> Self {
+        let (nd, default, rel) = numdistinct(expr, stats);
+        let mut ty = expr;
+        while let ExprKind::Relabel(arg, _) = &ty.kind {
+            ty = arg;
+        }
+        JoinVar { nd, default, statistic: column_statistic(expr, stats), rel, ty: ty.ty }
+    }
+
+    fn nullfrac(&self) -> f64 {
+        self.statistic.map_or(0.0, |s| f64::from(s.null_frac))
+    }
+}
+
+/// The matches of the most common values of two sides, as `eqjoinsel_find_matches` finds them for the first `n2` values of the second side: the flags of the values of each side that match, the number of the pairs that match and the sum of the products of the frequencies of the pairs. A value matches one value of the other side at most.
+fn find_matches(
+    (ty1, values1): (u32, &[Value]),
+    (ty2, values2): (u32, &[Value]),
+    (numbers1, numbers2): (&[f32], &[f32]),
+    n2: usize,
+) -> (Vec<bool>, Vec<bool>, usize, f64) {
+    let n2 = n2.min(values2.len());
+    let mut hasmatch1 = vec![false; values1.len()];
+    let mut hasmatch2 = vec![false; n2];
+    let (mut nmatches, mut matchprodfreq) = (0, 0.0);
+    for (i, v1) in values1.iter().enumerate() {
+        for (j, v2) in values2[..n2].iter().enumerate() {
+            if hasmatch2[j] || !crate::compare(ty1, v1, ty2, v2).is_some_and(Ordering::is_eq) {
+                continue;
+            }
+            hasmatch1[i] = true;
+            hasmatch2[j] = true;
+            matchprodfreq += f64::from(numbers1[i]) * f64::from(numbers2[j]);
+            nmatches += 1;
+            break;
+        }
+    }
+    (hasmatch1, hasmatch2, nmatches, matchprodfreq)
+}
+
+/// The sums of the frequencies of the values that match and that do not match, each at most 1.
+fn match_freqs(numbers: &[f32], hasmatch: &[bool]) -> (f64, f64) {
+    let (mut matched, mut unmatched) = (0.0, 0.0);
+    for (&n, &m) in numbers.iter().zip(hasmatch) {
+        if m {
+            matched += f64::from(n);
+        } else {
+            unmatched += f64::from(n);
+        }
+    }
+    (matched.clamp(0.0, 1.0), unmatched.clamp(0.0, 1.0))
+}
+
+/// `eqjoinsel_inner`: the selectivity of an `=` of a value of each side for an inner join. With the most common values of both sides, the pairs of the values that match have the products of their frequencies, and the other values of a side match the values of the other side that are not most common values, or that have no match, as one of the other distinct values. The smaller estimate of the two sides is the selectivity. With no such values, it is `(1 - nullfrac1) * (1 - nullfrac2) / max(nd1, nd2)`.
+fn eqjoinsel_inner(v1: &JoinVar<'_>, v2: &JoinVar<'_>) -> f64 {
+    let (Some((values1, numbers1)), Some((values2, numbers2))) =
+        (mcvs(v1.statistic), mcvs(v2.statistic))
+    else {
+        return (1.0 - v1.nullfrac()) * (1.0 - v2.nullfrac()) / v1.nd.max(v2.nd);
+    };
+    let (hasmatch1, hasmatch2, nmatches, matchprodfreq) =
+        find_matches((v1.ty, values1), (v2.ty, values2), (numbers1, numbers2), values2.len());
+    let matchprodfreq = matchprodfreq.clamp(0.0, 1.0);
+    let (matchfreq1, unmatchfreq1) = match_freqs(numbers1, &hasmatch1);
+    let (matchfreq2, unmatchfreq2) = match_freqs(numbers2, &hasmatch2);
+    let otherfreq1 = (1.0 - v1.nullfrac() - matchfreq1 - unmatchfreq1).clamp(0.0, 1.0);
+    let otherfreq2 = (1.0 - v2.nullfrac() - matchfreq2 - unmatchfreq2).clamp(0.0, 1.0);
+    let (nvalues1, nvalues2, nmatches) =
+        (numbers1.len() as f64, numbers2.len() as f64, nmatches as f64);
+    let mut totalsel1 = matchprodfreq;
+    if v2.nd > nvalues2 {
+        totalsel1 += unmatchfreq1 * otherfreq2 / (v2.nd - nvalues2);
+    }
+    if v2.nd > nmatches {
+        totalsel1 += otherfreq1 * (otherfreq2 + unmatchfreq2) / (v2.nd - nmatches);
+    }
+    let mut totalsel2 = matchprodfreq;
+    if v1.nd > nvalues1 {
+        totalsel2 += unmatchfreq2 * otherfreq1 / (v1.nd - nvalues1);
+    }
+    if v1.nd > nmatches {
+        totalsel2 += otherfreq2 * (otherfreq1 + unmatchfreq1) / (v1.nd - nmatches);
+    }
+    if totalsel1 < totalsel2 { totalsel1 } else { totalsel2 }
+}
+
+/// `eqjoinsel_semi`: the fraction of the rows of the outer side `v1` of a semi join or an anti join that have a match on the inner side `v2`, whose `inner_rows` rows are the rows of the inner side. The number of the inner values is at most the rows of its relation and the rows of the inner side, and with the most common values of both sides only the first `nd2` inner values can match. The outer values that match have their frequencies, and of the other outer values that are not null all have a match when the outer side has no more distinct values than the inner side, or else the fraction `nd2 / nd1`, or half when a number of distinct values is the default.
+fn eqjoinsel_semi(v1: &JoinVar<'_>, v2: &JoinVar<'_>, inner_rows: f64) -> f64 {
+    let (mut nd1, mut nd2, mut default2) = (v1.nd, v2.nd, v2.default);
+    if let Some((_, rows)) = v2.rel
+        && nd2 >= rows
+    {
+        (nd2, default2) = (rows, false);
+    }
+    if nd2 >= inner_rows {
+        (nd2, default2) = (inner_rows, false);
+    }
+    let nullfrac1 = v1.nullfrac();
+    let (Some((values1, numbers1)), Some((values2, numbers2))) =
+        (mcvs(v1.statistic), mcvs(v2.statistic))
+    else {
+        return if v1.default || default2 {
+            0.5 * (1.0 - nullfrac1)
+        } else if nd1 <= nd2 || nd2 < 0.0 {
+            1.0 - nullfrac1
+        } else {
+            nd2 / nd1 * (1.0 - nullfrac1)
+        };
+    };
+    // `Min(sslot2->nvalues, nd2)` goes to an `int`, which drops the fraction.
+    let clamped = (values2.len() as f64).min(nd2) as usize;
+    let (hasmatch1, _, nmatches, _) =
+        find_matches((v1.ty, values1), (v2.ty, values2), (numbers1, numbers2), clamped);
+    let (matchfreq1, _) = match_freqs(numbers1, &hasmatch1);
+    let uncertainfrac = if !v1.default && !default2 {
+        nd1 -= nmatches as f64;
+        nd2 -= nmatches as f64;
+        if nd1 <= nd2 || nd2 < 0.0 { 1.0 } else { nd2 / nd1 }
+    } else {
+        0.5
+    };
+    let uncertain = (1.0 - matchfreq1 - nullfrac1).clamp(0.0, 1.0);
+    matchfreq1 + uncertainfrac * uncertain
+}
+
+/// The selectivity of a condition of a join, as `clause_selectivity` finds it for each part of the condition. An `=` of a value of each side has the selectivity of `eqjoinsel_inner`. An `=` of a unique column and a value that reads no relation, in a part of an `OR`, passes one tuple of the relation, as `var_eq_const`.
 fn join_selectivity(qual: &Qual<'_>, stats: &Stats) -> f64 {
     let eq = |left: &Expr, right: &Expr| {
         if exprs::reads_columns(left) && exprs::reads_columns(right) {
-            let (l, _) = distinct(left, stats);
-            let (r, _) = distinct(right, stats);
-            return Some(1.0 / l.max(r));
+            return Some(eqjoinsel_inner(&JoinVar::new(left, stats), &JoinVar::new(right, stats)));
         }
         [(left, right), (right, left)].into_iter().find_map(|(column, value)| {
             let rels = exprs::relations(column);
@@ -2453,25 +2593,9 @@ fn semi_selectivity(quals: &[Qual<'_>], inner: &Rel<'_>, stats: &Stats) -> f64 {
         } else {
             (left, right)
         };
-        let (nd1, default1) = distinct(outer_value, stats);
-        let (mut nd2, mut default2, rel) = numdistinct(inner_value, stats);
-        let inner_selectivity = 1.0 / nd1.max(nd2);
-        if let Some((_, rows)) = rel
-            && nd2 >= rows
-        {
-            (nd2, default2) = (rows, false);
-        }
-        if nd2 >= inner_rows {
-            (nd2, default2) = (inner_rows, false);
-        }
-        let selectivity = if default1 || default2 {
-            0.5
-        } else if nd1 <= nd2 {
-            1.0
-        } else {
-            nd2 / nd1
-        };
-        selectivity.min(inner_rows * inner_selectivity)
+        let (v1, v2) = (JoinVar::new(outer_value, stats), JoinVar::new(inner_value, stats));
+        let selectivity = eqjoinsel_semi(&v1, &v2, inner_rows);
+        selectivity.min(inner_rows * eqjoinsel_inner(&v1, &v2)).clamp(0.0, 1.0)
     };
     quals.iter().map(one).product()
 }
@@ -2880,11 +3004,40 @@ fn split<'q>(
 fn tuple_count(input: &Input<'_, '_>, clauses: &[Clause<'_>]) -> f64 {
     let mut selectivity = 1.0;
     for c in clauses {
-        let (l, _) = distinct(&c.outer, input.stats);
-        let (r, _) = distinct(&c.inner, input.stats);
-        selectivity /= l.max(r);
+        selectivity *= eqjoinsel_inner(
+            &JoinVar::new(&c.outer, input.stats),
+            &JoinVar::new(&c.inner, input.stats),
+        );
     }
     cost::clamp_rows(input.outer.node.cost.rows * input.inner.node.cost.rows * selectivity)
+}
+
+/// `estimate_hash_bucket_stats`: the fraction of the inner rows in a bucket of all the batches for a key of a hash join, and the frequency of the most common value of the key, or 0 when it is not known. A column with a histogram and no most common values is unique. The bucket has 0.1 of the rows, or the frequency when it is more, when the number of the distinct values is the default. The conditions of the relation take away values in the same fraction as rows, and the bucket has at least the frequency.
+fn bucket_stats(key: &Expr, virtual_buckets: f64, stats: &Stats) -> (f64, f64) {
+    let statistic = column_statistic(key, stats);
+    let (nd, default, rel) = numdistinct(key, stats);
+    let mcv_freq = match statistic {
+        Some(s) => match s.slots.iter().find(|slot| slot.kind == STATISTIC_KIND_MCV) {
+            Some(mcv) => {
+                mcv.numbers.as_deref().and_then(|n| n.first()).map_or(0.0, |&n| f64::from(n))
+            }
+            None if s.slots.iter().any(|slot| slot.kind == STATISTIC_KIND_HISTOGRAM) => match rel {
+                Some((tuples, _)) if tuples > 0.0 => 1.0 / tuples,
+                _ => 0.0,
+            },
+            None => 0.0,
+        },
+        None => 0.0,
+    };
+    if default {
+        return (mcv_freq.max(0.1), mcv_freq);
+    }
+    let nd = match rel {
+        Some((tuples, rows)) if tuples > 0.0 => cost::clamp_rows(nd * rows / tuples),
+        _ => nd,
+    };
+    let estfract = if nd > virtual_buckets { 1.0 / virtual_buckets } else { 1.0 / nd };
+    (estfract.max(mcv_freq), mcv_freq)
 }
 
 /// The nested loops of a join, with their costs as `initial_cost_nestloop` and `final_cost_nestloop`: with the plain inner side, and then with a `Material` node over the inner side, as `match_unsorted_outer` makes them. The inner side gets no `Material` node when it keeps its rows already, reads the outer side or `enable_material` is off.
@@ -3052,31 +3205,24 @@ fn hash_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>>
         startup += cost::SEQ_PAGE * inner_pages;
         run += cost::SEQ_PAGE * (inner_pages + 2.0 * outer_pages);
     }
-    // `estimate_hash_bucket_stats`: the fraction of the inner rows in a bucket of all the batches, 0.1 with no statistics.
     let virtual_buckets = buckets * batches;
     // The unique rows of the inner side of a semi join fill the buckets evenly, and no value has more than one row.
-    let bucket = if input.made.1 {
-        1.0 / virtual_buckets
+    let (bucket, mcv_freq) = if input.made.1 {
+        (1.0 / virtual_buckets, 0.0)
     } else {
-        clauses
-            .iter()
-            .map(|c| match numdistinct(&c.inner, input.stats) {
-                (_, true, _) => 0.1,
-                (nd, false, rel) => {
-                    // The conditions of the relation take away values in the same fraction as rows.
-                    let nd = match rel {
-                        Some((tuples, rows)) if tuples > 0.0 => {
-                            cost::clamp_rows(nd * rows / tuples)
-                        }
-                        _ => nd,
-                    };
-                    (1.0 / nd.clamp(1.0, virtual_buckets)).max(1.0e-6)
-                }
-            })
-            .fold(1.0, f64::min)
+        clauses.iter().map(|c| bucket_stats(&c.inner, virtual_buckets, input.stats)).fold(
+            (1.0_f64, 1.0_f64),
+            |(bucket, freq), (this_bucket, this_freq)| {
+                // A frequency of 0 is not known.
+                let freq = if this_freq > 0.0 && freq > this_freq { this_freq } else { freq };
+                (bucket.min(this_bucket), freq)
+            },
+        )
     };
-    // With no statistics, the most common value of the inner side can be all of its rows. The bucket of that value must fit in `hash_mem`, because more batches cannot split it. A hash join that does not fit costs `disable_cost` more, so that the planner uses it only when it has no other plan.
-    if !input.made.1 && cost::byte_size(i.rows, i.width) > cost::HASH_MEM {
+    // The most common value of the inner side has the fraction `mcv_freq` of its rows, all of them with no statistics. The bucket of that value must fit in `hash_mem`, because more batches cannot split it. A hash join that does not fit costs `disable_cost` more, so that the planner uses it only when it has no other plan.
+    if !input.made.1
+        && cost::byte_size(cost::clamp_rows(i.rows * mcv_freq), i.width) > cost::HASH_MEM
+    {
         startup += cost::DISABLE;
     }
     // The conditions of the hash cost as `cost_qual_eval` finds them for each row that a bucket has.
