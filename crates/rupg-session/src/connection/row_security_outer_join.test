@@ -1,0 +1,124 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE USER regress_jn_alice NOLOGIN;
+CREATE ROLE
+> CREATE TABLE jn_cat (cid int PRIMARY KEY, cname text);
+CREATE TABLE
+> CREATE TABLE jn_doc (did int PRIMARY KEY, cid int, dlevel int, dtitle text);
+CREATE TABLE
+> CREATE TABLE jn_tag (tid int PRIMARY KEY, did int, tname text);
+CREATE TABLE
+> INSERT INTO jn_cat VALUES (1, 'one'), (2, 'two'), (3, 'three'), (4, 'four');
+INSERT 0 4
+> INSERT INTO jn_doc VALUES (1, 1, 1, 'a'), (2, 2, 2, 'b'), (3, 3, 1, 'c'), (5, 1, 2, 'e');
+INSERT 0 4
+> INSERT INTO jn_tag VALUES (1, 1, 'x'), (2, 2, 'y'), (3, 5, 'z');
+INSERT 0 3
+> GRANT SELECT ON jn_cat, jn_doc, jn_tag TO regress_jn_alice;
+GRANT
+> ALTER TABLE jn_doc ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> CREATE POLICY p1 ON jn_doc USING (dlevel <= 1);
+CREATE POLICY
+> ALTER TABLE jn_tag ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> CREATE POLICY p2 ON jn_tag USING (tname <> 'y');
+CREATE POLICY
+> SET SESSION AUTHORIZATION regress_jn_alice;
+SET
+session_authorization=regress_jn_alice
+is_superuser=off
+> SELECT c.cid, d.did FROM jn_cat c LEFT JOIN jn_doc d ON c.cid = d.did ORDER BY 1, 2;
+fields cid@jn_cat.1:23:4:-1,did@jn_doc.1:23:4:-1
+row 1,1
+row 2,NULL
+row 3,3
+row 4,NULL
+SELECT 4
+> EXPLAIN (COSTS OFF) SELECT c.cid FROM jn_cat c LEFT JOIN jn_doc d ON c.cid = d.did;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on jn_cat c
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT c.cid, d.did FROM jn_cat c LEFT JOIN jn_doc d ON c.cid = d.did;
+fields QUERY PLAN:25:-1:-1
+row Hash Left Join
+row   Hash Cond: (c.cid = d.did)
+row   ->  Seq Scan on jn_cat c
+row   ->  Hash
+row         ->  Seq Scan on jn_doc d
+row               Filter: (dlevel <= 1)
+EXPLAIN
+> SELECT c.cid, d.did FROM jn_doc d RIGHT JOIN jn_cat c ON c.cid = d.cid ORDER BY 1, 2;
+fields cid@jn_cat.1:23:4:-1,did@jn_doc.1:23:4:-1
+row 1,1
+row 2,NULL
+row 3,3
+row 4,NULL
+SELECT 4
+> EXPLAIN (COSTS OFF) SELECT c.cid, d.did FROM jn_doc d RIGHT JOIN jn_cat c ON c.cid = d.cid;
+fields QUERY PLAN:25:-1:-1
+row Hash Right Join
+row   Hash Cond: (d.cid = c.cid)
+row   ->  Seq Scan on jn_doc d
+row         Filter: (dlevel <= 1)
+row   ->  Hash
+row         ->  Seq Scan on jn_cat c
+EXPLAIN
+> SELECT c.cid, d.did FROM jn_cat c FULL JOIN jn_doc d ON c.cid = d.cid ORDER BY 1, 2;
+fields cid@jn_cat.1:23:4:-1,did@jn_doc.1:23:4:-1
+row 1,1
+row 2,NULL
+row 3,3
+row 4,NULL
+SELECT 4
+> SELECT c.cid, d.did, t.tid FROM jn_cat c LEFT JOIN (jn_doc d JOIN jn_tag t ON t.did = d.did) ON c.cid = d.cid ORDER BY 1, 2, 3;
+fields cid@jn_cat.1:23:4:-1,did@jn_doc.1:23:4:-1,tid@jn_tag.1:23:4:-1
+row 1,1,1
+row 2,NULL,NULL
+row 3,NULL,NULL
+row 4,NULL,NULL
+SELECT 4
+> EXPLAIN (COSTS OFF) SELECT c.cid, d.did, t.tid FROM jn_cat c LEFT JOIN (jn_doc d JOIN jn_tag t ON t.did = d.did) ON c.cid = d.cid;
+fields QUERY PLAN:25:-1:-1
+row Hash Right Join
+row   Hash Cond: (d.cid = c.cid)
+row   ->  Hash Join
+row         Hash Cond: (t.did = d.did)
+row         ->  Seq Scan on jn_tag t
+row               Filter: (tname <> 'y'::text)
+row         ->  Hash
+row               ->  Seq Scan on jn_doc d
+row                     Filter: (dlevel <= 1)
+row   ->  Hash
+row         ->  Seq Scan on jn_cat c
+EXPLAIN
+> SELECT c.cid, d.did, t.tid FROM jn_cat c LEFT JOIN jn_doc d ON c.cid = d.cid LEFT JOIN jn_tag t ON t.did = d.did ORDER BY 1, 2, 3;
+fields cid@jn_cat.1:23:4:-1,did@jn_doc.1:23:4:-1,tid@jn_tag.1:23:4:-1
+row 1,1,1
+row 2,NULL,NULL
+row 3,3,NULL
+row 4,NULL,NULL
+SELECT 4
+> SELECT d.did, t.tid FROM jn_doc d LEFT JOIN jn_tag t ON t.did = d.did WHERE d.cid = 1 ORDER BY 1, 2;
+fields did@jn_doc.1:23:4:-1,tid@jn_tag.1:23:4:-1
+row 1,1
+SELECT 1
+> EXPLAIN (COSTS OFF) SELECT d.did, t.tid FROM jn_doc d LEFT JOIN jn_tag t ON t.did = d.did WHERE d.cid = 1;
+fields QUERY PLAN:25:-1:-1
+row Hash Right Join
+row   Hash Cond: (t.did = d.did)
+row   ->  Seq Scan on jn_tag t
+row         Filter: (tname <> 'y'::text)
+row   ->  Hash
+row         ->  Seq Scan on jn_doc d
+row               Filter: ((dlevel <= 1) AND (cid = 1))
+EXPLAIN
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> DROP TABLE jn_cat, jn_doc, jn_tag;
+DROP TABLE
+> DROP USER regress_jn_alice;
+DROP ROLE

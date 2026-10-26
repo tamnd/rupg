@@ -4936,6 +4936,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/foreign_key_hidden_detail.test")));
     }
 
+    /// The conditions of the policies of a table on the nullable side of an outer join remove the rows of the table before the join, so the join stays an outer join and `EXPLAIN` shows them on the scan of the table. A left join to such a table with a unique key leaves the plan. `connection/row_security_outer_join.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn row_security_outer_join() {
+        big_stack(|| script(include_str!("connection/row_security_outer_join.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {
