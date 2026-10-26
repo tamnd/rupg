@@ -194,13 +194,20 @@ impl rupg_opt::Members for Members<'_, '_> {
             && let Some((pages, tuples)) = builtin::catalog_size(table)
         {
             let pages = f64::from(pages);
-            return Size { blocks: pages, relpages: pages, reltuples: f64::from(tuples) };
+            // initdb ends with `VACUUM FREEZE`, which marks each page of a catalog all visible.
+            return Size {
+                blocks: pages,
+                relpages: pages,
+                reltuples: f64::from(tuples),
+                relallvisible: pages,
+            };
         }
         let size = self.heap.size(self.database, table);
         Size {
             blocks: f64::from(size.blocks),
             relpages: f64::from(size.relpages),
             reltuples: f64::from(size.reltuples),
+            relallvisible: f64::from(size.relallvisible),
         }
     }
 

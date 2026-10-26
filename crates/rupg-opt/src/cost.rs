@@ -150,6 +150,17 @@ fn estimate_size(width: i32, size: Size, has_children: bool) -> (f64, f64) {
     (pages, (density * pages).round_ties_even())
 }
 
+/// `table_block_relation_estimate_size`: the fraction of the `pages` of the table that the visibility map marks all visible, which an index only scan does not read.
+pub(crate) fn all_visible(size: Size, pages: f64) -> f64 {
+    if size.relallvisible == 0.0 || pages <= 0.0 {
+        0.0
+    } else if size.relallvisible >= pages {
+        1.0
+    } else {
+        size.relallvisible / pages
+    }
+}
+
 /// `clamp_row_est`: a number of rows that is a whole number and at least 1. As `rint`, a half goes to the even number.
 pub(crate) fn clamp_rows(rows: f64) -> f64 {
     if rows <= 1.0 { 1.0 } else { rows.round_ties_even() }

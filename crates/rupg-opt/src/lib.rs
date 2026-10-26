@@ -87,11 +87,13 @@ pub struct Size {
     pub relpages: f64,
     /// `reltuples` of `pg_class`, or -1 when the table was never vacuumed or analyzed.
     pub reltuples: f64,
+    /// `relallvisible` of `pg_class`: the pages that the visibility map marks all visible.
+    pub relallvisible: f64,
 }
 
 impl Default for Size {
     fn default() -> Size {
-        Size { blocks: 0.0, relpages: 0.0, reltuples: -1.0 }
+        Size { blocks: 0.0, relpages: 0.0, reltuples: -1.0, relallvisible: 0.0 }
     }
 }
 
