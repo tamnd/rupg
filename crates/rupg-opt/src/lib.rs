@@ -52,6 +52,11 @@ pub trait Members: std::fmt::Debug {
         Vec::new()
     }
 
+    /// `get_actual_variable_endpoint` of an index of the table `table` whose first key is the column `attnum`: the least and the greatest value of the column that is not null, of the versions of the rows that are not dead. `None` when the column has no value that is not null.
+    fn variable_range(&self, _table: u32, _attnum: i16) -> Option<(Value, Value)> {
+        None
+    }
+
     /// The comparison of two values that are not null, of the types that the arguments give, as the B-tree support function `cmp` of the types gives it. The selectivity functions call the operators of the statistics through it, as `selfuncs.c` calls them through `fmgr`.
     fn compare(&self) -> Compare {
         no_compare

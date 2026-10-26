@@ -1,5 +1,6 @@
 //! The rows of the tables in memory, with the transaction IDs of `heapam_visibility.c`. Each version of a row has the transaction and the command that made it, and the transaction and the command that deleted it. A snapshot tells which versions a statement sees.
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -1065,6 +1066,41 @@ impl Heap {
             (0..target).map(|i| live[i * total / target].values.to_vec()).collect()
         };
         (rows, total as f64)
+    }
+
+    /// `get_actual_variable_endpoint`: the least and the greatest value that is not null of the column at `column` of a table, in the order `order`, of the versions that `SnapshotNonVacuumable` sees. A version is dead when a transaction that ended deleted it before the horizon of the running transactions and of the snapshots, as `HeapTupleSatisfiesVacuum` finds it.
+    pub(crate) fn variable_range(
+        &self,
+        database: u32,
+        relation: u32,
+        column: usize,
+        order: impl Fn(&Value, &Value) -> Option<Ordering>,
+    ) -> Option<(Value, Value)> {
+        let state = self.state();
+        let table = state.tables.get(&(database, relation))?;
+        let horizon = state
+            .running
+            .first()
+            .copied()
+            .into_iter()
+            .chain(state.xmins.values().copied())
+            .fold((state.latest_completed + 1).max(FIRST_NORMAL_XID), u32::min);
+        let dead =
+            |v: &Version| v.xmax != 0 && !state.running.contains(&v.xmax) && v.xmax < horizon;
+        let mut range: Option<(&Value, &Value)> = None;
+        for version in table.versions.iter().filter(|v| !dead(v)) {
+            let Some(value) = version.values.get(column).filter(|v| !v.is_null()) else {
+                continue;
+            };
+            range = Some(match range {
+                None => (value, value),
+                Some((min, max)) => (
+                    if order(value, min)?.is_lt() { value } else { min },
+                    if order(value, max)?.is_gt() { value } else { max },
+                ),
+            });
+        }
+        range.map(|(min, max)| (min.clone(), max.clone()))
     }
 
     /// `update_attstats`: replaces the rows of `pg_statistic` of a table for the columns of `rows`, outside of the transactions.

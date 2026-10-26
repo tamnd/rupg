@@ -4976,6 +4976,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_statistics.test")));
     }
 
+    /// The estimates of `<`, `<=`, `>` and `>=` with a constant come from the most common values and the histogram of the column, and from the least and the greatest value of an index. `connection/plan_inequality.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_inequality() {
+        big_stack(|| script(include_str!("connection/plan_inequality.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

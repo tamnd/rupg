@@ -1,0 +1,298 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE pi (a int, b int, c text, d date, n numeric, f float8, t timestamp, y bytea, g bigint);
+CREATE TABLE
+> INSERT INTO pi SELECT x, x % 100, 'v' || (x % 37), date '2020-01-01' + (x % 1000), x / 7.0, x * 0.25, timestamp '2021-03-01 00:00' + x * interval '17 minutes', ('\x' || lpad(to_hex(x), 6, '0'))::bytea, CASE WHEN x % 3 = 0 THEN NULL WHEN x <= 4000 THEN x % 40 ELSE x END FROM generate_series(1, 10000) x;
+INSERT 0 10000
+> ANALYZE pi;
+ANALYZE
+> EXPLAIN SELECT a FROM pi WHERE a < 500;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=499 width=4)
+row   Filter: (a < 500)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE a <= 500;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=500 width=4)
+row   Filter: (a <= 500)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE a > 9000;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=1000 width=4)
+row   Filter: (a > 9000)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE a >= 9000;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=1001 width=4)
+row   Filter: (a >= 9000)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE a < 1;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=1 width=4)
+row   Filter: (a < 1)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE a <= 1;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=1 width=4)
+row   Filter: (a <= 1)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE a > 10000;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=1 width=4)
+row   Filter: (a > 10000)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE a < 0;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=1 width=4)
+row   Filter: (a < 0)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE a > 20000;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=1 width=4)
+row   Filter: (a > 20000)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE 500 > a;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=499 width=4)
+row   Filter: (500 > a)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE a > 100 AND a < 200;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..263.00 rows=99 width=4)
+row   Filter: ((a > 100) AND (a < 200))
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE a BETWEEN 100 AND 200;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..263.00 rows=101 width=4)
+row   Filter: ((a >= 100) AND (a <= 200))
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE a > 100 AND a < 200 AND a < 150;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..288.00 rows=49 width=4)
+row   Filter: ((a > 100) AND (a < 200) AND (a < 150))
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE a < 500 OR a > 9000;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..263.00 rows=1449 width=4)
+row   Filter: ((a < 500) OR (a > 9000))
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE NOT (a < 10);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=9991 width=4)
+row   Filter: (a >= 10)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE a > 5000 AND a < 4000;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..263.00 rows=50 width=4)
+row   Filter: ((a > 5000) AND (a < 4000))
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE a < 2500::bigint;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=2499 width=4)
+row   Filter: (a < '2500'::bigint)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE a < 2500.5;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..263.00 rows=3333 width=4)
+row   Filter: ((a)::numeric < 2500.5)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE a < NULL;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.00 rows=0 width=0)
+row   Replaces: Scan on pi
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE b < 5;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=500 width=4)
+row   Filter: (b < 5)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE b >= 95;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=500 width=4)
+row   Filter: (b >= 95)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE b > 20 AND b < 30;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..263.00 rows=900 width=4)
+row   Filter: ((b > 20) AND (b < 30))
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE c < 'v2';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=3242 width=4)
+row   Filter: (c < 'v2'::text)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE c > 'v5';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=1084 width=4)
+row   Filter: (c > 'v5'::text)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE c ~<~ 'v3';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=6213 width=4)
+row   Filter: (c ~<~ 'v3'::text)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE c ~>=~ 'v3';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=3787 width=4)
+row   Filter: (c ~>=~ 'v3'::text)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE d >= date '2022-01-01';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=2690 width=4)
+row   Filter: (d >= '2022-01-01'::date)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE d < date '2020-03-01';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=601 width=4)
+row   Filter: (d < '2020-03-01'::date)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE n < 10.5;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=72 width=4)
+row   Filter: (n < 10.5)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE n > 1000;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=3000 width=4)
+row   Filter: (n > '1000'::numeric)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE f > 2000.3;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=1999 width=4)
+row   Filter: (f > '2000.3'::double precision)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE f <= 17;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=68 width=4)
+row   Filter: (f <= '17'::double precision)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE t < timestamp '2021-03-10 12:00';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=804 width=4)
+row   Filter: (t < '2021-03-10 12:00:00'::timestamp without time zone)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE t > timestamp '2021-04-15';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=6188 width=4)
+row   Filter: (t > '2021-04-15 00:00:00'::timestamp without time zone)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE y < '\x000500'::bytea;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=1279 width=4)
+row   Filter: (y < '\x000500'::bytea)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE y >= '\x001f00'::bytea;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=2065 width=4)
+row   Filter: (y >= '\x001f00'::bytea)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE g < 20;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=1334 width=4)
+row   Filter: (g < 20)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE g > 6000;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..238.00 rows=2667 width=4)
+row   Filter: (g > 6000)
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE g > 30 AND g < 5000;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..263.00 rows=1265 width=4)
+row   Filter: ((g > 30) AND (g < 5000))
+EXPLAIN
+> EXPLAIN SELECT a FROM pi WHERE g < 20 AND b < 50;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pi  (cost=0.00..263.00 rows=667 width=4)
+row   Filter: ((g < 20) AND (b < 50))
+EXPLAIN
+> CREATE TABLE pk (id int PRIMARY KEY, x int);
+CREATE TABLE
+> CREATE INDEX pk_x ON pk (x);
+CREATE INDEX
+> INSERT INTO pk SELECT x, x * 3 FROM generate_series(1, 10000) x;
+INSERT 0 10000
+> ANALYZE pk;
+ANALYZE
+> INSERT INTO pk SELECT x, x * 3 FROM generate_series(10001, 12000) x;
+INSERT 0 2000
+> DELETE FROM pk WHERE id <= 1000;
+DELETE 1000
+> SET enable_indexscan = off;
+SET
+> SET enable_bitmapscan = off;
+SET
+> EXPLAIN SELECT x FROM pk WHERE id > 9000;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pk  (cost=0.00..204.00 rows=1200 width=4)
+row   Filter: (id > 9000)
+EXPLAIN
+> EXPLAIN SELECT x FROM pk WHERE id > 11000;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pk  (cost=0.00..204.00 rows=57 width=4)
+row   Filter: (id > 11000)
+EXPLAIN
+> EXPLAIN SELECT x FROM pk WHERE id < 2000;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pk  (cost=0.00..204.00 rows=2399 width=4)
+row   Filter: (id < 2000)
+EXPLAIN
+> EXPLAIN SELECT x FROM pk WHERE id < 500;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pk  (cost=0.00..204.00 rows=599 width=4)
+row   Filter: (id < 500)
+EXPLAIN
+> EXPLAIN SELECT x FROM pk WHERE id < 5;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pk  (cost=0.00..204.00 rows=1 width=4)
+row   Filter: (id < 5)
+EXPLAIN
+> EXPLAIN SELECT x FROM pk WHERE x > 33000;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pk  (cost=0.00..204.00 rows=57 width=4)
+row   Filter: (x > 33000)
+EXPLAIN
+> EXPLAIN SELECT x FROM pk WHERE x < 100 OR x > 35000;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pk  (cost=0.00..234.00 rows=19 width=4)
+row   Filter: ((x < 100) OR (x > 35000))
+EXPLAIN
+> VACUUM pk;
+VACUUM
+> EXPLAIN SELECT x FROM pk WHERE id < 2000;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pk  (cost=0.00..191.50 rows=2199 width=4)
+row   Filter: (id < 2000)
+EXPLAIN
+> EXPLAIN SELECT x FROM pk WHERE id < 500;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pk  (cost=0.00..191.50 rows=549 width=4)
+row   Filter: (id < 500)
+EXPLAIN
+> EXPLAIN SELECT x FROM pk WHERE id < 5;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pk  (cost=0.00..191.50 rows=1 width=4)
+row   Filter: (id < 5)
+EXPLAIN
+> CREATE TABLE p2 (a int);
+CREATE TABLE
+> CREATE INDEX p2_a ON p2 (a);
+CREATE INDEX
+> INSERT INTO p2 VALUES (1), (2), (5), (5), (9);
+INSERT 0 5
+> ANALYZE p2;
+ANALYZE
+> INSERT INTO p2 VALUES (20), (30);
+INSERT 0 2
+> EXPLAIN SELECT a FROM p2 WHERE a > 3;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p2  (cost=0.00..1.06 rows=3 width=4)
+row   Filter: (a > 3)
+EXPLAIN
+> EXPLAIN SELECT a FROM p2 WHERE a < 3;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p2  (cost=0.00..1.06 rows=1 width=4)
+row   Filter: (a < 3)
+EXPLAIN
