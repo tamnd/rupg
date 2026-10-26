@@ -1,9 +1,11 @@
 //! The estimates of `costsize.c` and `selfuncs.c`: the number of rows of a table, the widths of the values, the selectivity of the conditions and the costs of the nodes.
 
+use std::cmp::Ordering;
+
 use rupg_analyze::{BoolOp, BoolTest, Expr, ExprKind, Relation, SubLink, SubLinkKind};
 use rupg_pgcatalog::builtin;
 use rupg_plan::{STATISTIC_KIND_MCV, Statistic};
-use rupg_types::{Value, oid};
+use rupg_types::{DATE_INFINITY, DATE_NEGATIVE_INFINITY, NetFamily, USECS_PER_DAY, Value, oid};
 
 use crate::{Member, Size, exprs};
 
@@ -163,6 +165,11 @@ pub(crate) trait Estimate {
         self.eq(left, right).map(|sel| 1.0 - sel)
     }
 
+    /// `scalarineqsel_wrapper` for the inequality `op` of `left` and `right`, or `None` for the default estimate.
+    fn ineq(&self, _left: &Expr, _right: &Expr, _op: Inequality) -> Option<f64> {
+        None
+    }
+
     /// The statistics of an expression, as `examine_variable` finds them.
     fn statistic(&self, _expr: &Expr) -> Option<&Statistic> {
         None
@@ -226,13 +233,8 @@ pub(crate) fn selectivity_by(expr: &Expr, est: &dyn Estimate) -> f64 {
             args.iter().map(each).fold(0.0, |s1, s2| s1 + s2 - s1 * s2)
         }
         ExprKind::Bool(BoolOp::Not, args) => 1.0 - args.first().map_or(0.5, each),
-        // `nulltestsel`: the null fraction of the statistics. A system column is never null.
         ExprKind::NullTest(arg, is_null) => {
-            let sel = match (est.statistic(arg), &arg.kind) {
-                (Some(s), _) => f64::from(s.null_frac),
-                (None, ExprKind::Var(var)) if var.attnum < 0 => 0.0,
-                (None, _) => EQ_SEL,
-            };
+            let sel = null_selectivity(arg, est);
             if *is_null { sel } else { 1.0 - sel }
         }
         ExprKind::BooleanTest(arg, test) if est.statistic(arg).is_some() => {
@@ -278,7 +280,7 @@ pub(crate) fn selectivity_by(expr: &Expr, est: &dyn Estimate) -> f64 {
                 let known = match builtin::operator_by_oid(op).map(|o| o.name) {
                     Some("=") => est.eq(left, right),
                     Some("<>") => est.neq(left, right),
-                    _ => None,
+                    _ => scalar_inequality(op).and_then(|op| est.ineq(left, right, op)),
                 };
                 known.unwrap_or_else(|| {
                     pattern_selectivity(op, left, right, est)
@@ -288,6 +290,235 @@ pub(crate) fn selectivity_by(expr: &Expr, est: &dyn Estimate) -> f64 {
             None => INEQ_SEL,
         },
     }
+}
+
+/// `nulltestsel` for `IS NULL`: the null fraction of the statistics. A system column is never null.
+fn null_selectivity(arg: &Expr, est: &dyn Estimate) -> f64 {
+    match (est.statistic(arg), &arg.kind) {
+        (Some(s), _) => f64::from(s.null_frac),
+        (None, ExprKind::Var(var)) if var.attnum < 0 => 0.0,
+        (None, _) => EQ_SEL,
+    }
+}
+
+/// An operator that `scalarltsel`, `scalarlesel`, `scalargtsel` or `scalargesel` estimates.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Inequality {
+    /// True for `>` and `>=`.
+    pub(crate) isgt: bool,
+    /// True for `<=` and `>=`.
+    pub(crate) iseq: bool,
+    /// True when the operator has the order of the default operator class of its type, which the histogram has, as `comparison_ops_are_compatible` finds it. The pattern operators such as `~<~` have the order of the bytes.
+    pub(crate) sorted: bool,
+}
+
+impl Inequality {
+    /// The result of the operator for the order of its two sides.
+    pub(crate) fn test(self, order: Ordering) -> bool {
+        match (self.isgt, self.iseq) {
+            (false, false) => order.is_lt(),
+            (false, true) => order.is_le(),
+            (true, false) => order.is_gt(),
+            (true, true) => order.is_ge(),
+        }
+    }
+}
+
+/// The operators `<`, `<=`, `>` and `>=` and the pattern operators `~<~`, `~<=~`, `~>~` and `~>=~`, of the types that `scalarltsel` and the other estimators of inequalities serve. The geometric types, the ranges and the multiranges have other estimators for these operators.
+pub(crate) fn scalar_inequality(op: u32) -> Option<Inequality> {
+    const OTHER: [u32; 6] =
+        [oid::LSEG, oid::PATH, oid::BOX, oid::CIRCLE, oid::ANYRANGE, oid::ANYMULTIRANGE];
+    let row = builtin::operator_by_oid(op).filter(|row| !OTHER.contains(&row.left))?;
+    let (isgt, iseq, sorted) = match row.name {
+        "<" => (false, false, true),
+        "<=" => (false, true, true),
+        ">" => (true, false, true),
+        ">=" => (true, true, true),
+        "~<~" => (false, false, false),
+        "~<=~" => (false, true, false),
+        "~>~" => (true, false, false),
+        "~>=~" => (true, true, false),
+        _ => return None,
+    };
+    Some(Inequality { isgt, iseq, sorted })
+}
+
+/// `convert_to_scalar`: the value `value` of the type `ty` and the bounds `low` and `high` of a bin of the histogram of the type `bounds` on a scale of `double`, on which the planner takes the place of the value in the bin. A number, a time and a network address have their own scale. Strings and `bytea` have a scale of the bytes after the prefix that the three values share. `None` for the types that have no scale, or for bounds of a type of another group than the value.
+pub(crate) fn convert_to_scalar(
+    value: &Value,
+    ty: u32,
+    low: &Value,
+    high: &Value,
+    bounds: u32,
+) -> Option<(f64, f64, f64)> {
+    let each = |f: fn(&Value, u32) -> Option<f64>| {
+        Some((f(value, ty)?, f(low, bounds)?, f(high, bounds)?))
+    };
+    match ty {
+        oid::BOOL
+        | oid::INT2
+        | oid::INT4
+        | oid::INT8
+        | oid::FLOAT4
+        | oid::FLOAT8
+        | oid::NUMERIC
+        | oid::OID
+        | oid::REGPROC
+        | oid::REGPROCEDURE
+        | oid::REGOPER
+        | oid::REGOPERATOR
+        | oid::REGCLASS
+        | oid::REGTYPE
+        | oid::REGCOLLATION
+        | oid::REGCONFIG
+        | oid::REGDICTIONARY
+        | oid::REGROLE
+        | oid::REGNAMESPACE
+        | oid::REGDATABASE => each(numeric_scalar),
+        oid::CHAR | oid::BPCHAR | oid::VARCHAR | oid::TEXT | oid::NAME => {
+            let (v, l, h) =
+                (string_datum(value, ty)?, string_datum(low, bounds)?, string_datum(high, bounds)?);
+            Some(string_scalar(&v, &l, &h))
+        }
+        oid::BYTEA => match (value, low, high) {
+            (Value::Bytea(v), Value::Bytea(l), Value::Bytea(h)) if bounds == oid::BYTEA => {
+                Some(bytea_scalar(v, l, h))
+            }
+            _ => None,
+        },
+        oid::TIMESTAMP | oid::TIMESTAMPTZ | oid::DATE | oid::INTERVAL | oid::TIME | oid::TIMETZ => {
+            each(timevalue_scalar)
+        }
+        oid::INET | oid::CIDR => each(network_scalar),
+        _ => None,
+    }
+}
+
+/// `convert_numeric_to_scalar`.
+fn numeric_scalar(value: &Value, ty: u32) -> Option<f64> {
+    if !matches!(
+        ty,
+        oid::BOOL
+            | oid::INT2
+            | oid::INT4
+            | oid::INT8
+            | oid::FLOAT4
+            | oid::FLOAT8
+            | oid::NUMERIC
+            | oid::OID
+            | oid::REGPROC
+            | oid::REGPROCEDURE
+            | oid::REGOPER
+            | oid::REGOPERATOR
+            | oid::REGCLASS
+            | oid::REGTYPE
+            | oid::REGCOLLATION
+            | oid::REGCONFIG
+            | oid::REGDICTIONARY
+            | oid::REGROLE
+            | oid::REGNAMESPACE
+            | oid::REGDATABASE
+    ) {
+        return None;
+    }
+    match value {
+        Value::Bool(b) => Some(f64::from(u8::from(*b))),
+        Value::Int2(n) => Some(f64::from(*n)),
+        Value::Int4(n) => Some(f64::from(*n)),
+        Value::Int8(n) => Some(*n as f64),
+        Value::Float4(n) => Some(f64::from(*n)),
+        Value::Float8(n) => Some(*n),
+        Value::Numeric(n) => Some(n.to_f64()),
+        Value::Oid(n) => Some(f64::from(*n)),
+        _ => None,
+    }
+}
+
+/// `convert_string_datum` for the collation `C`: the bytes of the string.
+fn string_datum(value: &Value, ty: u32) -> Option<Vec<u8>> {
+    match (value, ty) {
+        (Value::Char(c), oid::CHAR) => Some(vec![*c]),
+        (Value::Text(s), oid::BPCHAR | oid::VARCHAR | oid::TEXT | oid::NAME) => {
+            Some(s.as_bytes().to_vec())
+        }
+        _ => None,
+    }
+}
+
+/// `convert_string_to_scalar`: the range of the bytes of the bounds, widened to the letters or the digits that it has a part of, or to the printable ASCII bytes when it is less than 10 bytes, and the three strings after their common prefix on that scale.
+fn string_scalar(value: &[u8], low: &[u8], high: &[u8]) -> (f64, f64, f64) {
+    let first = i32::from(high.first().copied().unwrap_or(0));
+    let (mut rangelo, mut rangehi) = (first, first);
+    for &c in low.iter().chain(high) {
+        rangelo = rangelo.min(i32::from(c));
+        rangehi = rangehi.max(i32::from(c));
+    }
+    for (a, z) in [(b'A', b'Z'), (b'a', b'z'), (b'0', b'9')] {
+        let (a, z) = (i32::from(a), i32::from(z));
+        if rangelo <= z && rangehi >= a {
+            rangelo = rangelo.min(a);
+            rangehi = rangehi.max(z);
+        }
+    }
+    if rangehi - rangelo < 9 {
+        rangelo = i32::from(b' ');
+        rangehi = 127;
+    }
+    let common = low.iter().zip(high).zip(value).take_while(|((l, h), v)| l == h && l == v).count();
+    let scale = |s: &[u8]| one_string_scalar(&s[common..], rangelo, rangehi, 12);
+    (scale(value), scale(low), scale(high))
+}
+
+/// `convert_one_string_to_scalar` and `convert_one_bytea_to_scalar`: the first `limit` bytes of a string as the digits of a fraction in the base of the range, with the bytes out of the range just out of it.
+fn one_string_scalar(value: &[u8], rangelo: i32, rangehi: i32, limit: usize) -> f64 {
+    let base = f64::from(rangehi - rangelo + 1);
+    let mut num = 0.0;
+    let mut denom = base;
+    for &c in value.iter().take(limit) {
+        let ch = i32::from(c).clamp(rangelo - 1, rangehi + 1);
+        num += f64::from(ch - rangelo) / denom;
+        denom *= base;
+    }
+    num
+}
+
+/// `convert_bytea_to_scalar`: the three values after their common prefix on the scale of all the bytes.
+fn bytea_scalar(value: &[u8], low: &[u8], high: &[u8]) -> (f64, f64, f64) {
+    let common = low.iter().zip(high).zip(value).take_while(|((l, h), v)| l == h && l == v).count();
+    let scale = |s: &[u8]| one_string_scalar(&s[common..], 0, 255, 10);
+    (scale(value), scale(low), scale(high))
+}
+
+/// `convert_timevalue_to_scalar`: the microseconds of a time, and of a date from 2000-01-01, with an infinite date at the end of the scale. A month of an interval is a twelfth of 365.25 days, and a time with a time zone is its time in UTC.
+fn timevalue_scalar(value: &Value, ty: u32) -> Option<f64> {
+    match (value, ty) {
+        (Value::Timestamp(t), oid::TIMESTAMP) | (Value::TimestampTz(t), oid::TIMESTAMPTZ) => {
+            Some(*t as f64)
+        }
+        (Value::Date(d), oid::DATE) => Some(match *d {
+            DATE_NEGATIVE_INFINITY => -f64::MAX,
+            DATE_INFINITY => f64::MAX,
+            d => f64::from(d) * USECS_PER_DAY as f64,
+        }),
+        (Value::Interval(i), oid::INTERVAL) => Some(
+            i.time as f64
+                + f64::from(i.day) * USECS_PER_DAY as f64
+                + f64::from(i.month) * ((365.25 / 12.0) * USECS_PER_DAY as f64),
+        ),
+        (Value::Time(t), oid::TIME) => Some(*t as f64),
+        (Value::TimeTz(t, zone), oid::TIMETZ) => Some(*t as f64 + f64::from(*zone) * 1000000.0),
+        _ => None,
+    }
+}
+
+/// `convert_network_to_scalar` for `inet` and `cidr`: the family and the first 4 bytes of an IPv4 address or the first 5 bytes of an IPv6 address as the digits of a number of base 256.
+fn network_scalar(value: &Value, ty: u32) -> Option<f64> {
+    let (Value::Inet(ip), oid::INET | oid::CIDR) = (value, ty) else { return None };
+    let (family, len) = match ip.family {
+        NetFamily::V4 => (2.0, 4),
+        NetFamily::V6 => (3.0, 5),
+    };
+    Some(ip.addr[..len].iter().fold(family, |res, &b| res * 256.0 + f64::from(b)))
 }
 
 /// `scalararraysel` with no statistics: the selectivity of the operator for each item of the array, with the chance that one item passes for `ANY` or that each item passes for `ALL`. For `= ANY` and for `<> ALL` the chances of the items are disjoint, so that they add, when the sum is a probability. An array that is not a constant or a list of `ARRAY[...]` has 10 items that the condition knows nothing about.
@@ -405,7 +636,7 @@ pub(crate) fn list_selectivity<'a>(quals: impl IntoIterator<Item = &'a Expr>) ->
     list_selectivity_by(quals, &no_statistics)
 }
 
-/// `clauselist_selectivity`, with the estimates of `est` as [`selectivity_by`] reads them. The product of the selectivities of the conditions, but a low bound and a high bound of the same value, such as `x > 1 AND x < 5`, are a range, as `addRangeClause` finds them. Of two low bounds or two high bounds of a value, the smaller selectivity counts. With no statistics each bound has the default selectivity, so that a range has `DEFAULT_RANGE_INEQ_SEL`.
+/// `clauselist_selectivity`, with the estimates of `est` as [`selectivity_by`] reads them. The product of the selectivities of the conditions, but a low bound and a high bound of the same value, such as `x > 1 AND x < 5`, are a range, as `addRangeClause` finds them. Of two low bounds or two high bounds of a value, the smaller selectivity counts. A bound with the default selectivity makes the range `DEFAULT_RANGE_INEQ_SEL`.
 pub(crate) fn list_selectivity_by<'a>(
     quals: impl IntoIterator<Item = &'a Expr>,
     est: &dyn Estimate,
@@ -430,10 +661,18 @@ pub(crate) fn list_selectivity_by<'a>(
         let bound = if low { lo } else { hi };
         *bound = Some(bound.map_or(s2, |b| b.min(s2)));
     }
-    // `clauselist_selectivity` puts each new range first in its list.
-    for (_, lo, hi) in ranges.into_iter().rev() {
+    // `clauselist_selectivity` puts each new range first in its list. A range of two bounds with estimates is the rows of the two bounds less the rows of all, with the null rows that the two bounds both leave out.
+    for (value, lo, hi) in ranges.into_iter().rev() {
         s1 *= match (lo, hi) {
-            (Some(_), Some(_)) => RANGE_INEQ_SEL,
+            (Some(lo), Some(hi)) if lo == INEQ_SEL || hi == INEQ_SEL => RANGE_INEQ_SEL,
+            (Some(lo), Some(hi)) => {
+                let s2 = hi + lo - 1.0 + null_selectivity(value, est);
+                match s2 {
+                    s2 if s2 < -0.01 => RANGE_INEQ_SEL,
+                    s2 if s2 <= 0.0 => 1.0e-10,
+                    s2 => s2,
+                }
+            }
             (Some(s2), None) | (None, Some(s2)) => s2,
             (None, None) => 1.0,
         };
@@ -442,7 +681,7 @@ pub(crate) fn list_selectivity_by<'a>(
 }
 
 /// The value of a condition that `clauselist_selectivity` puts in a range, with true when the condition is a low bound of the value: an operator `<`, `<=`, `>` or `>=`, or one of the pattern operators such as `~<~`, with the estimator `scalarltsel`, `scalarlesel`, `scalargtsel` or `scalargesel`, a value of one relation on one side and a value that reads no relation and calls no volatile function on the other side.
-fn range_bound(expr: &Expr) -> Option<(&Expr, bool)> {
+pub(crate) fn range_bound(expr: &Expr) -> Option<(&Expr, bool)> {
     // The geometric types, the ranges and the multiranges have other estimators for these operators.
     const OTHER: [u32; 6] =
         [oid::LSEG, oid::PATH, oid::BOX, oid::CIRCLE, oid::ANYRANGE, oid::ANYMULTIRANGE];

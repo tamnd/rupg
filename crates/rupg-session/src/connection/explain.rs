@@ -78,6 +78,14 @@ impl rupg_opt::Members for Members<'_, '_> {
         self.heap.statistics(self.database, table)
     }
 
+    fn variable_range(&self, table: u32, attnum: i16) -> Option<(Value, Value)> {
+        let catalog = self.reader.catalog()?;
+        let column = usize::try_from(attnum - 1).ok()?;
+        let ty = catalog.relation(table)?.columns.get(column)?.ty;
+        let order = |a: &Value, b: &Value| rupg_func::compare(ty, a, ty, b).ok();
+        self.heap.variable_range(self.database, table, column, order)
+    }
+
     fn compare(&self) -> rupg_opt::Compare {
         |left, a, right, b| rupg_func::compare(left, a, right, b).ok()
     }

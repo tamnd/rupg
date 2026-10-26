@@ -17,7 +17,8 @@ use rupg_analyze::{
 };
 use rupg_pgcatalog::builtin;
 use rupg_plan::{
-    Cost, Item, Kind, Node, Replaced, STATISTIC_KIND_MCV, SortKey, Statistic, Strategy,
+    Cost, Item, Kind, Node, Replaced, STATISTIC_KIND_HISTOGRAM, STATISTIC_KIND_MCV, SortKey,
+    Statistic, Strategy,
 };
 use rupg_types::{Value, oid};
 
@@ -88,13 +89,17 @@ pub(crate) struct Stats {
     gated: BTreeSet<usize>,
     /// The statistics of the columns of each table of the level, by column number, from `pg_statistic` with `stainherit` false.
     columns: BTreeMap<usize, Rc<BTreeMap<i16, Statistic>>>,
+    /// `get_actual_variable_range`: the least and the greatest value of the columns of the relations that a `btree` index reads in order, which the conditions of the scans compare with a constant.
+    ranges: BTreeMap<(usize, i16), Option<(Value, Value)>>,
 }
 
 impl Stats {
     /// The estimates of the conditions of the relation `r` with `tuples` tuples.
     fn estimate(&self, r: usize, tuples: f64) -> ScanEstimate {
         let columns = self.columns.get(&r).cloned().unwrap_or_default();
-        ScanEstimate { r, tuples, unique: self.unique.clone(), columns }
+        let ranges = self.ranges.range((r, i16::MIN)..=(r, i16::MAX));
+        let ranges = ranges.map(|(&(_, attnum), range)| (attnum, range.clone())).collect();
+        ScanEstimate { r, tuples, unique: self.unique.clone(), columns, ranges }
     }
 
     /// The columns of the members of the equivalence classes that a node of the join of `rels` gives: each column of the relations whose class has a relation that is not in `rels`.
@@ -810,6 +815,9 @@ impl<'q> Builder<'q> {
                     indexes = self.members.map(|m| m.indexes(relation.oid)).unwrap_or_default();
                     size = self.members.map_or_else(Size::default, |m| m.size(relation.oid));
                     stats.columns.insert(r, crate::statistics(relation.oid));
+                    for q in &quals {
+                        variable_ranges(self.members, &q.expr, (r, relation.oid), &indexes, stats);
+                    }
                     for index in &indexes {
                         if let ([key], true, false) =
                             (index.keys.as_slice(), index.unique, index.partial)
@@ -966,6 +974,7 @@ pub(crate) struct ScanEstimate {
     tuples: f64,
     unique: Unique,
     columns: Rc<BTreeMap<i16, Statistic>>,
+    ranges: BTreeMap<i16, Option<(Value, Value)>>,
 }
 
 impl ScanEstimate {
@@ -1037,6 +1046,143 @@ impl ScanEstimate {
         let selec = if negate { 1.0 - selec - nullfrac } else { selec };
         selec.clamp(0.0, 1.0)
     }
+
+    /// `scalarineqsel` for `column op value`: the most common values that pass the operator, and the part of the histogram of the other values that is below or above the constant `value`. With no histogram half of the other values pass.
+    fn scalar_ineq(&self, column: &Expr, value: &Expr, op: cost::Inequality) -> Option<f64> {
+        let mut value = value;
+        while let ExprKind::Relabel(arg, _) = &value.kind {
+            value = arg;
+        }
+        let ExprKind::Const(constant) = &value.kind else { return None };
+        if constant.is_null() {
+            return Some(0.0);
+        }
+        let s = cost::Estimate::statistic(self, column)?;
+        let test = |v: &Value| crate::compare(column.ty, v, value.ty, constant).map(|o| op.test(o));
+        let (mut mcv_selec, mut sumcommon) = (0.0, 0.0);
+        let mut mcvs = 0;
+        if let Some(mcv) = s.slots.iter().find(|slot| slot.kind == STATISTIC_KIND_MCV) {
+            let values = mcv.values.as_deref().unwrap_or_default();
+            let numbers = mcv.numbers.as_deref().unwrap_or_default();
+            mcvs = numbers.len();
+            for (v, &n) in values.iter().zip(numbers) {
+                if test(v)? {
+                    mcv_selec += f64::from(n);
+                }
+                sumcommon += f64::from(n);
+            }
+        }
+        let mut selec = 1.0 - f64::from(s.null_frac) - sumcommon;
+        selec *= self.ineq_histogram(column, value, op, mcvs)?.unwrap_or(0.5);
+        selec += mcv_selec;
+        Some(selec.clamp(0.0, 1.0))
+    }
+
+    /// `ineq_histogram_selectivity`: the part of the histogram of `column` that passes `column op value`, with `mcvs` most common values, or `None` in the result when there is no histogram. The binary search finds the bin of the constant, and the place of the constant in the bin comes from [`cost::convert_to_scalar`]. The first and the last bound are the least and the greatest value of the column when an index gives them. An operator of another order than the histogram takes the part of the bounds that pass it.
+    fn ineq_histogram(
+        &self,
+        column: &Expr,
+        value: &Expr,
+        op: cost::Inequality,
+        mcvs: usize,
+    ) -> Option<Option<f64>> {
+        let s = cost::Estimate::statistic(self, column)?;
+        let ExprKind::Const(constant) = &value.kind else { return None };
+        let Some(hist) = s.slots.iter().find(|slot| slot.kind == STATISTIC_KIND_HISTOGRAM) else {
+            return Some(None);
+        };
+        let mut values: Vec<Value> = hist.values.clone().unwrap_or_default();
+        let nvalues = values.len();
+        if nvalues <= 1 {
+            return Some(None);
+        }
+        let test = |v: &Value| crate::compare(column.ty, v, value.ty, constant).map(|o| op.test(o));
+        let cutoff = 0.01 / (nvalues - 1) as f64;
+        if !op.sorted {
+            let mut nmatch = 0;
+            for v in &values {
+                if test(v)? {
+                    nmatch += 1;
+                }
+            }
+            let hist_selec = f64::from(nmatch) / nvalues as f64;
+            return Some(Some(hist_selec.clamp(cutoff, 1.0 - cutoff)));
+        }
+        let range =
+            plain_var(column).and_then(|var| self.ranges.get(&var.attnum)).cloned().flatten();
+        let mut have_end = false;
+        if nvalues == 2
+            && let Some((min, max)) = range.clone()
+        {
+            values = vec![min, max];
+            have_end = true;
+        }
+        let (mut lobound, mut hibound) = (0, nvalues);
+        while lobound < hibound {
+            let probe = (lobound + hibound) / 2;
+            if nvalues > 2 && (probe == 0 || probe == nvalues - 1) {
+                have_end = range.is_some();
+                if let Some((min, max)) = &range {
+                    values[probe] = if probe == 0 { min.clone() } else { max.clone() };
+                }
+            }
+            let mut ltcmp = test(&values[probe])?;
+            if op.isgt {
+                ltcmp = !ltcmp;
+            }
+            if ltcmp {
+                lobound = probe + 1;
+            } else {
+                hibound = probe;
+            }
+        }
+        let histfrac = if lobound == 0 {
+            0.0
+        } else if lobound >= nvalues {
+            1.0
+        } else {
+            let i = lobound;
+            let mut eq_selec = 0.0;
+            if i == 1 || op.isgt == op.iseq {
+                let unique = self.unique.has(column);
+                let otherdistinct =
+                    cost::numdistinct(column, Some(s), unique, Some(self.tuples)).0 - mcvs as f64;
+                if otherdistinct > 1.0 {
+                    eq_selec = 1.0 / otherdistinct;
+                }
+            }
+            let binfrac = match cost::convert_to_scalar(
+                constant,
+                value.ty,
+                &values[i - 1],
+                &values[i],
+                column.ty,
+            ) {
+                Some((_, low, high)) if high <= low => 0.5,
+                Some((val, low, _)) if val <= low => 0.0,
+                Some((val, _, high)) if val >= high => 1.0,
+                Some((val, low, high)) => {
+                    let binfrac = (val - low) / (high - low);
+                    if binfrac.is_nan() || !(0.0..=1.0).contains(&binfrac) { 0.5 } else { binfrac }
+                }
+                None => 0.5,
+            };
+            let mut histfrac = ((i - 1) as f64 + binfrac) / (nvalues - 1) as f64;
+            if i == 1 {
+                histfrac += eq_selec * (1.0 - binfrac);
+            }
+            if op.isgt == op.iseq {
+                histfrac -= eq_selec;
+            }
+            histfrac
+        };
+        let hist_selec = if op.isgt { 1.0 - histfrac } else { histfrac };
+        Some(Some(if have_end {
+            hist_selec.clamp(0.0, 1.0)
+        } else {
+            hist_selec.clamp(cutoff, 1.0 - cutoff)
+        }))
+    }
 }
 
 impl cost::Estimate for ScanEstimate {
@@ -1048,6 +1194,14 @@ impl cost::Estimate for ScanEstimate {
     fn neq(&self, left: &Expr, right: &Expr) -> Option<f64> {
         let (column, value) = self.sides(left, right)?;
         Some(self.var_eq(column, value, true))
+    }
+
+    /// `scalarineqsel_wrapper`: the column goes on the left, so that a column on the right turns the operator around.
+    fn ineq(&self, left: &Expr, right: &Expr, op: cost::Inequality) -> Option<f64> {
+        let (column, value) = self.sides(left, right)?;
+        let op =
+            if std::ptr::eq(column, left) { op } else { cost::Inequality { isgt: !op.isgt, ..op } };
+        self.scalar_ineq(column, value, op)
     }
 
     fn statistic(&self, expr: &Expr) -> Option<&Statistic> {
@@ -1188,6 +1342,43 @@ pub(crate) fn distinct_keys(sub: &Query) -> Vec<Vec<i16>> {
         out.push(columns.map(|(at, _)| attnum(at)).collect());
     }
     out
+}
+
+/// `get_actual_variable_range` for the columns of the relation `r`, the table `table`, that the inequalities of `expr` compare with a constant, when the column has a histogram and is the first key of a `btree` index of the table with no predicate and with the default operator class of its type.
+fn variable_ranges(
+    members: Option<&dyn crate::Members>,
+    expr: &Expr,
+    (r, table): (usize, u32),
+    indexes: &[Index],
+    stats: &mut Stats,
+) {
+    for child in expr.children() {
+        variable_ranges(members, child, (r, table), indexes, stats);
+    }
+    let Some((op, left, right)) = exprs::binary(expr) else { return };
+    if cost::scalar_inequality(op).is_none() {
+        return;
+    }
+    let column = [left, right]
+        .into_iter()
+        .find_map(|side| plain_var(side).filter(|v| v.levels_up == 0 && v.relation == r));
+    let Some(var) = column else { return };
+    let histogram = stats
+        .columns
+        .get(&r)
+        .and_then(|c| c.get(&var.attnum))
+        .is_some_and(|s| s.slots.iter().any(|slot| slot.kind == STATISTIC_KIND_HISTOGRAM));
+    if !histogram || stats.ranges.contains_key(&(r, var.attnum)) {
+        return;
+    }
+    let ordered = indexes.iter().any(|index| {
+        index.method == index::BTREE_AM
+            && !index.partial
+            && index.keys.first() == Some(&var.attnum)
+            && index.default_class.first() == Some(&true)
+    });
+    let range = members.filter(|_| ordered).and_then(|m| m.variable_range(table, var.attnum));
+    stats.ranges.insert((r, var.attnum), range);
 }
 
 /// `set_append_rel_size` and `create_append_plan`: the scans of the members of the inheritance tree of the relation `r`, under an `Append` when there are two or more, each with the conditions of the relation. With no member the relation is a `Result` with no rows, as `set_dummy_rel_pathlist`.

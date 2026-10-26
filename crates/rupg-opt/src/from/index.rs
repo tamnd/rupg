@@ -13,7 +13,7 @@ use super::{OrderKey, Qual, Rel, Stats, plain_var};
 use crate::{Index, Level, cost, exprs};
 
 /// `BTREE_AM_OID`, the OID of the access method `btree`.
-const BTREE_AM: u32 = 403;
+pub(super) const BTREE_AM: u32 = 403;
 /// `BTEqualStrategyNumber`.
 const EQUAL: i16 = 3;
 /// `TEXT_PATTERN_BTREE_FAM_OID`, the operator family `text_pattern_ops` of btree.
