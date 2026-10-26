@@ -178,7 +178,7 @@ The file holds the data, the summaries, the indexes, the catalog, the log rings,
 4. **Compaction rewrites half-empty segments.** A segment with more than 25 percent deleted rows is a candidate. Compaction writes a new segment and frees the old one when no snapshot can see it.
 5. **Summaries have a size budget.** `rupg_summary_size(regclass)` reports their bytes (document 12). They count in the disk number by the honesty rule of document 02 section 2.4.5.
 
-**The disk number for ClickBench.** At M4, G3 asks for less than 9.45 GB. The log rings of the ClickBench machine with 16 workers are 1 GiB of that if they are at the default size. That is too much. So the ClickBench run must use a smaller ring, and the ring size is a configuration line of the run. A ring of 8 MiB for each worker is 128 MiB. Whether a ring that small is enough for the load is a question that M1 answers with a measurement.
+**The disk number for ClickBench.** At M4, G3 asks for less than 9.45 GB. The log rings of the ClickBench machine with 16 workers are 1 GiB of that if they are at the default size. That is too much. So the ClickBench run must use a smaller ring, and the ring size is a configuration line of the run. A ring of 8 MiB for each worker is 128 MiB. M1 measured it (Q30 of document 24). On a machine with 6 cores, a load of 1 GiB with a ring of 8 MiB for each writer was 10.8 to 14.2 percent slower than with the default ring in two of three runs, and the noise of the machine was as large as the effect. So the ClickBench run sets one extent of 16 MiB for each worker, which is 256 MiB for 16 workers.
 
 ### 19.10.2 The bytes in motion
 

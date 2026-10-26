@@ -389,11 +389,11 @@ From M10, the Jepsen test runs on 3 to 16 nodes with partitions, process kills, 
 
 ## 21.14 Performance regression
 
-**Per change: instructions retired.** On a dedicated Linux x86-64 runner, CI runs a fixed set of queries with `perf stat -e instructions` and records the count for each query, as the rudb `tenx` work does. The set is the 43 ClickBench queries on a 1 million row sample, the 22 TPC-H queries at SF0.1, 1,000 YCSB point reads, and 100 TPC-C new-order transactions. A change fails when it raises the instructions of one query by more than 3 percent or the total by more than 1 percent. Both thresholds are budgets. A change may pass them on purpose with a reason in the commit message.
+**Per change: instructions retired.** On a dedicated Linux x86-64 runner, CI runs a fixed set of queries with `perf stat -e instructions` and records the count for each query, as the rudb `tenx` work does. The set is the 43 ClickBench queries on a 1 million row sample, the 22 TPC-H queries at SF0.1, 1,000 YCSB point reads, and 100 TPC-C new-order transactions. A change fails when it raises the instructions of one query by more than 3 percent or the total by more than 1 percent. Both thresholds are budgets. A change may pass them on purpose with a reason in the commit message. The first part of the set is the M1 set of `rupg-bench instructions --m1`: 7 operations of the Rust API of the `rupg` facade on the in-memory file system, counted in user mode. Its counts are in `ratchet.toml` of tamnd/rupg-bench, and their spread is at most 0.7 percent for one operation (Q69 of document 24).
 
 **Per change: allocations.** The same run counts the allocations of a point read, a point write and a prepared statement execution. A point read must make no heap allocation after the plan cache is warm. This protects gate G4 from day to day.
 
-**Nightly: time.** Each night `rupg-bench` runs ClickBench, TPC-H SF1 and SF10, YCSB and TPC-C on `gpc`, and each week ClickBench on `c6a.4xlarge` with the rules of document 20. A slowdown over 5 percent, a budget, opens a bug at the commit that `bisect` finds.
+**Nightly: time.** Each night `rupg-bench` runs ClickBench, TPC-H SF1 and SF10, YCSB and TPC-C on `gpc`, and each week ClickBench on `c6a.4xlarge` with the rules of document 20. A slowdown over 5 percent, a budget, opens a bug at the commit that `bisect` finds. The budget of 5 percent applies only to a run on a dedicated machine. On a shared machine the wall time of the same load changed by more than 40 percent between runs, so a nightly run on a shared machine compares only instruction counts.
 
 **At a milestone: the gate.** The gates of document 02 section 2.10 run with the full rules of document 20.
 
