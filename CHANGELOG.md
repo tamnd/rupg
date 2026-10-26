@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `EXPLAIN` now shows in parentheses a column of a `LATERAL` subquery whose `Subquery Scan` the plan does not keep, when the target of the subquery is a column of the query above. PostgreSQL plans such a target as a `Param`, which `get_variable` shows in parentheses. (#855)
 - A value of a column with a type of fixed length now takes the length and the alignment of the type in the pages of the heap, as `heap_compute_data_size` stores it. A value of `name` took the bytes of a `text` before, so `tenk1` had 134 pages where PostgreSQL has 345, and the planner chose other plans. (#854)
 - The planner now pulls up a `VALUES` of one row in `FROM` as PostgreSQL does in `pull_up_simple_values`. The row becomes a simple subquery that merges into the query, so that a join with `(VALUES (1))` gives a filter with the constant and no `Values Scan`. A row with a volatile function or a function that gives a set stays a `Values Scan`. (#853)
 - A condition of `WHERE` that reads a `UNION ALL` subquery with `LATERAL` and the relations that the subquery reads now moves into each member of the subquery, as in PG. A member with no `FROM` tests it as a One-Time Filter. (#852)

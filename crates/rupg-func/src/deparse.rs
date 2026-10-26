@@ -280,14 +280,14 @@ impl<'a> Deparser<'a> {
         };
         let attname =
             attname.ok_or_else(|| Error::internal(format!("invalid attnum {}", var.attnum)))?;
-        // A column of a `Subquery Scan` that the plan does not keep is the target of the plan of the subquery, as `get_variable` finds it for `OUTER_VAR`. A target that is not a column gets parentheses.
+        // A column of a `Subquery Scan` that the plan does not keep is the target of the plan of the subquery, as `get_variable` finds it for `OUTER_VAR`. A target that is not a column of the subquery gets parentheses, also a column of the query above, which is a `Param` of the plan.
         let removed = space.removed.iter().find(|(r, _)| *r == var.relation);
         if let Some(removed) = removed.map(|(_, removed)| Rc::clone(removed))
             && let Ok(at @ 1..) = usize::try_from(var.attnum)
             && let Some(target) = removed.targets.get(at - 1)
         {
             let outer = std::mem::replace(&mut self.namespaces, removed.namespaces.clone());
-            let parens = !matches!(target.kind, ExprKind::Var(_));
+            let parens = !matches!(target.kind, ExprKind::Var(v) if v.levels_up == 0);
             if parens {
                 self.buf.push('(');
             }
