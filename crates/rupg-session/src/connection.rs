@@ -4982,6 +4982,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_inequality.test")));
     }
 
+    /// The estimates of the joins of the columns with statistics, from the most common values of both sides for the inner joins, the outer joins, the semi joins and the anti joins, and the buckets of the hash joins. `connection/plan_join.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_join() {
+        big_stack(|| script(include_str!("connection/plan_join.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

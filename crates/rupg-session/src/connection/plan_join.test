@@ -1,0 +1,358 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE ja (id int, k int, s int, t text, n int);
+CREATE TABLE
+> INSERT INTO ja SELECT x, x % 50, CASE WHEN x % 10 < 6 THEN 1 WHEN x % 10 < 8 THEN 2 ELSE x END, 'k' || (x % 20), CASE WHEN x % 4 = 0 THEN NULL ELSE x % 30 END FROM generate_series(1, 5000) x;
+INSERT 0 5000
+> CREATE TABLE jb (id int, k int, s int, t text, n int);
+CREATE TABLE
+> INSERT INTO jb SELECT x, x % 80, CASE WHEN x % 5 = 0 THEN 1 ELSE x + 100 END, 'k' || (x % 30), CASE WHEN x % 2 = 0 THEN NULL ELSE x % 45 END FROM generate_series(1, 3000) x;
+INSERT 0 3000
+> CREATE TABLE jc (id int PRIMARY KEY, k int, v int);
+CREATE TABLE
+> INSERT INTO jc SELECT x, x % 7, x * 3 FROM generate_series(1, 2000) x;
+INSERT 0 2000
+> CREATE TABLE jd (k int, w int);
+CREATE TABLE
+> INSERT INTO jd SELECT x % 300, x FROM generate_series(1, 900) x;
+INSERT 0 900
+> ANALYZE ja;
+ANALYZE
+> ANALYZE jb;
+ANALYZE
+> ANALYZE jc;
+ANALYZE
+> ANALYZE jd;
+ANALYZE
+> EXPLAIN SELECT * FROM ja JOIN jb ON ja.k = jb.k;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=85.50..2306.50 rows=189000 width=38)
+row   Hash Cond: (ja.k = jb.k)
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=48.00..48.00 rows=3000 width=19)
+row         ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=19)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja JOIN jb ON ja.s = jb.s;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=85.50..21949.00 rows=1802000 width=38)
+row   Hash Cond: (ja.s = jb.s)
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=48.00..48.00 rows=3000 width=19)
+row         ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=19)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja JOIN jb ON ja.t = jb.t;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=85.50..5804.00 rows=500000 width=38)
+row   Hash Cond: (ja.t = jb.t)
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=48.00..48.00 rows=3000 width=19)
+row         ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=19)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja JOIN jb ON ja.n = jb.n;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=85.50..1860.25 rows=126250 width=38)
+row   Hash Cond: (ja.n = jb.n)
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=48.00..48.00 rows=3000 width=19)
+row         ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=19)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja JOIN jb ON ja.id = jb.id;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=85.50..215.25 rows=3000 width=38)
+row   Hash Cond: (ja.id = jb.id)
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=48.00..48.00 rows=3000 width=19)
+row         ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=19)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja JOIN jb ON ja.k = jb.s;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=143.50..1223.00 rows=64900 width=38)
+row   Hash Cond: (jb.s = ja.k)
+row   ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=19)
+row   ->  Hash  (cost=81.00..81.00 rows=5000 width=19)
+row         ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja JOIN jb ON ja.n = jb.k;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=85.50..1840.67 rows=142417 width=38)
+row   Hash Cond: (ja.n = jb.k)
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=48.00..48.00 rows=3000 width=19)
+row         ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=19)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja JOIN jc ON ja.k = jc.id;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=56.00..150.15 rows=5000 width=31)
+row   Hash Cond: (ja.k = jc.id)
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=31.00..31.00 rows=2000 width=12)
+row         ->  Seq Scan on jc  (cost=0.00..31.00 rows=2000 width=12)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja JOIN jc ON ja.id = jc.k;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=143.50..202.00 rows=2000 width=31)
+row   Hash Cond: (jc.k = ja.id)
+row   ->  Seq Scan on jc  (cost=0.00..31.00 rows=2000 width=12)
+row   ->  Hash  (cost=81.00..81.00 rows=5000 width=19)
+row         ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja JOIN jd ON ja.k = jd.k;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=24.25..286.50 rows=15000 width=27)
+row   Hash Cond: (ja.k = jd.k)
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=13.00..13.00 rows=900 width=8)
+row         ->  Seq Scan on jd  (cost=0.00..13.00 rows=900 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM jb JOIN jd ON jb.id = jd.k;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=24.25..100.00 rows=900 width=27)
+row   Hash Cond: (jb.id = jd.k)
+row   ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=19)
+row   ->  Hash  (cost=13.00..13.00 rows=900 width=8)
+row         ->  Seq Scan on jd  (cost=0.00..13.00 rows=900 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja LEFT JOIN jb ON ja.k = jb.k;
+fields QUERY PLAN:25:-1:-1
+row Hash Left Join  (cost=85.50..2306.50 rows=189000 width=38)
+row   Hash Cond: (ja.k = jb.k)
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=48.00..48.00 rows=3000 width=19)
+row         ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=19)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja LEFT JOIN jb ON ja.s = jb.s;
+fields QUERY PLAN:25:-1:-1
+row Hash Left Join  (cost=85.50..21949.00 rows=1802000 width=38)
+row   Hash Cond: (ja.s = jb.s)
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=48.00..48.00 rows=3000 width=19)
+row         ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=19)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja FULL JOIN jb ON ja.n = jb.n;
+fields QUERY PLAN:25:-1:-1
+row Hash Full Join  (cost=85.50..1860.25 rows=126250 width=38)
+row   Hash Cond: (ja.n = jb.n)
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=48.00..48.00 rows=3000 width=19)
+row         ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=19)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja JOIN jb ON ja.k = jb.k AND ja.t = jb.t;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=93.00..737.00 rows=6300 width=38)
+row   Hash Cond: ((ja.k = jb.k) AND (ja.t = jb.t))
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=48.00..48.00 rows=3000 width=19)
+row         ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=19)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja JOIN jb ON ja.k = jb.k WHERE ja.id < 1000;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=85.50..606.57 rows=37762 width=38)
+row   Hash Cond: (ja.k = jb.k)
+row   ->  Seq Scan on ja  (cost=0.00..93.50 rows=999 width=19)
+row         Filter: (id < 1000)
+row   ->  Hash  (cost=48.00..48.00 rows=3000 width=19)
+row         ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=19)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja JOIN jb ON ja.k = jb.k WHERE jb.s = 1;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=143.50..653.50 rows=37800 width=38)
+row   Hash Cond: (jb.k = ja.k)
+row   ->  Seq Scan on jb  (cost=0.00..55.50 rows=600 width=19)
+row         Filter: (s = 1)
+row   ->  Hash  (cost=81.00..81.00 rows=5000 width=19)
+row         ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja WHERE EXISTS (SELECT 1 FROM jb WHERE jb.k = ja.k);
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=57.30..207.05 rows=5000 width=19)
+row   Hash Cond: (ja.k = jb.k)
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=56.30..56.30 rows=80 width=4)
+row         ->  HashAggregate  (cost=55.50..56.30 rows=80 width=4)
+row               Group Key: jb.k
+row               ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja WHERE EXISTS (SELECT 1 FROM jb WHERE jb.s = ja.s);
+fields QUERY PLAN:25:-1:-1
+row Hash Semi Join  (cost=85.50..247.75 rows=5000 width=19)
+row   Hash Cond: (ja.s = jb.s)
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=48.00..48.00 rows=3000 width=4)
+row         ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja WHERE EXISTS (SELECT 1 FROM jb WHERE jb.n = ja.n);
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=56.51..192.36 rows=3750 width=19)
+row   Hash Cond: (ja.n = jb.n)
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=55.95..55.95 rows=45 width=4)
+row         ->  HashAggregate  (cost=55.50..55.95 rows=45 width=4)
+row               Group Key: jb.n
+row               ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja WHERE EXISTS (SELECT 1 FROM jb WHERE jb.id = ja.id);
+fields QUERY PLAN:25:-1:-1
+row Hash Semi Join  (cost=85.50..213.00 rows=3000 width=19)
+row   Hash Cond: (ja.id = jb.id)
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=48.00..48.00 rows=3000 width=4)
+row         ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja WHERE EXISTS (SELECT 1 FROM jb WHERE jb.k = ja.k AND jb.id < 30);
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=56.11..170.56 rows=1827 width=19)
+row   Hash Cond: (ja.k = jb.k)
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=55.81..55.81 rows=24 width=4)
+row         ->  HashAggregate  (cost=55.57..55.81 rows=24 width=4)
+row               Group Key: jb.k
+row               ->  Seq Scan on jb  (cost=0.00..55.50 rows=29 width=4)
+row                     Filter: (id < 30)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja WHERE EXISTS (SELECT 1 FROM jb WHERE jb.s = ja.s AND jb.id < 30);
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=56.22..184.35 rows=3056 width=19)
+row   Hash Cond: (ja.s = jb.s)
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=55.86..55.86 rows=29 width=4)
+row         ->  HashAggregate  (cost=55.57..55.86 rows=29 width=4)
+row               Group Key: jb.s
+row               ->  Seq Scan on jb  (cost=0.00..55.50 rows=29 width=4)
+row                     Filter: (id < 30)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja WHERE NOT EXISTS (SELECT 1 FROM jb WHERE jb.k = ja.k);
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=85.50..191.50 rows=1 width=19)
+row   Hash Cond: (ja.k = jb.k)
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=48.00..48.00 rows=3000 width=4)
+row         ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja WHERE NOT EXISTS (SELECT 1 FROM jb WHERE jb.s = ja.s);
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=85.50..197.75 rows=1 width=19)
+row   Hash Cond: (ja.s = jb.s)
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=48.00..48.00 rows=3000 width=4)
+row         ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja WHERE NOT EXISTS (SELECT 1 FROM jd WHERE jd.k = ja.id);
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=24.25..166.09 rows=4700 width=19)
+row   Hash Cond: (ja.id = jd.k)
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=13.00..13.00 rows=900 width=4)
+row         ->  Seq Scan on jd  (cost=0.00..13.00 rows=900 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM jb WHERE EXISTS (SELECT 1 FROM ja WHERE ja.s = jb.s);
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=116.05..189.73 rows=1601 width=19)
+row   Hash Cond: (jb.s = ja.s)
+row   ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=19)
+row   ->  Hash  (cost=103.52..103.52 rows=1002 width=4)
+row         ->  HashAggregate  (cost=93.50..103.52 rows=1002 width=4)
+row               Group Key: ja.s
+row               ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM jd WHERE EXISTS (SELECT 1 FROM ja WHERE ja.k = jd.k);
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=94.62..111.66 rows=150 width=8)
+row   Hash Cond: (jd.k = ja.k)
+row   ->  Seq Scan on jd  (cost=0.00..13.00 rows=900 width=8)
+row   ->  Hash  (cost=94.00..94.00 rows=50 width=4)
+row         ->  HashAggregate  (cost=93.50..94.00 rows=50 width=4)
+row               Group Key: ja.k
+row               ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja WHERE k IN (SELECT k FROM jb);
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=57.30..207.05 rows=5000 width=19)
+row   Hash Cond: (ja.k = jb.k)
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=56.30..56.30 rows=80 width=4)
+row         ->  HashAggregate  (cost=55.50..56.30 rows=80 width=4)
+row               Group Key: jb.k
+row               ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja WHERE s IN (SELECT s FROM jb WHERE id < 100);
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=57.98..187.66 rows=3196 width=19)
+row   Hash Cond: (ja.s = jb.s)
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=56.74..56.74 rows=99 width=4)
+row         ->  HashAggregate  (cost=55.75..56.74 rows=99 width=4)
+row               Group Key: jb.s
+row               ->  Seq Scan on jb  (cost=0.00..55.50 rows=99 width=4)
+row                     Filter: (id < 100)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja WHERE t IN (SELECT t FROM jb);
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=56.17..205.93 rows=5000 width=19)
+row   Hash Cond: (ja.t = jb.t)
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=55.80..55.80 rows=30 width=3)
+row         ->  HashAggregate  (cost=55.50..55.80 rows=30 width=3)
+row               Group Key: jb.t
+row               ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=3)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja JOIN jb ON ja.k = jb.k JOIN jc ON jb.id = jc.id;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=136.89..1646.64 rows=126000 width=50)
+row   Hash Cond: (ja.k = jb.k)
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=111.89..111.89 rows=2000 width=31)
+row         ->  Hash Join  (cost=56.00..111.89 rows=2000 width=31)
+row               Hash Cond: (jb.id = jc.id)
+row               ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=19)
+row               ->  Hash  (cost=31.00..31.00 rows=2000 width=12)
+row                     ->  Seq Scan on jc  (cost=0.00..31.00 rows=2000 width=12)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja JOIN jd ON ja.k = jd.k JOIN jc ON jd.w = jc.id;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=83.00..345.25 rows=15000 width=39)
+row   Hash Cond: (ja.k = jd.k)
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Hash  (cost=71.75..71.75 rows=900 width=20)
+row         ->  Hash Join  (cost=24.25..71.75 rows=900 width=20)
+row               Hash Cond: (jc.id = jd.w)
+row               ->  Seq Scan on jc  (cost=0.00..31.00 rows=2000 width=12)
+row               ->  Hash  (cost=13.00..13.00 rows=900 width=8)
+row                     ->  Seq Scan on jd  (cost=0.00..13.00 rows=900 width=8)
+EXPLAIN
+> EXPLAIN SELECT ja.k, count(*) FROM ja JOIN jb ON ja.s = jb.s GROUP BY ja.k;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=30959.00..30959.50 rows=50 width=12)
+row   Group Key: ja.k
+row   ->  Hash Join  (cost=85.50..21949.00 rows=1802000 width=4)
+row         Hash Cond: (ja.s = jb.s)
+row         ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=8)
+row         ->  Hash  (cost=48.00..48.00 rows=3000 width=4)
+row               ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=4)
+EXPLAIN
+> EXPLAIN SELECT count(*) FROM ja JOIN jb ON ja.k = jb.k + 1;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=1886.50..1886.51 rows=1 width=8)
+row   ->  Hash Join  (cost=143.50..1699.00 rows=75000 width=0)
+row         Hash Cond: ((jb.k + 1) = ja.k)
+row         ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=4)
+row         ->  Hash  (cost=81.00..81.00 rows=5000 width=4)
+row               ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja JOIN jb ON ja.k = jb.k OR ja.s = jb.s;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..262636.50 rows=1968295 width=38)
+row   Join Filter: ((ja.k = jb.k) OR (ja.s = jb.s))
+row   ->  Seq Scan on ja  (cost=0.00..81.00 rows=5000 width=19)
+row   ->  Materialize  (cost=0.00..63.00 rows=3000 width=19)
+row         ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=19)
+EXPLAIN
+> EXPLAIN SELECT * FROM ja, jb WHERE ja.k = jb.k AND ja.s = 1;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=85.50..1463.00 rows=113400 width=38)
+row   Hash Cond: (ja.k = jb.k)
+row   ->  Seq Scan on ja  (cost=0.00..93.50 rows=3000 width=19)
+row         Filter: (s = 1)
+row   ->  Hash  (cost=48.00..48.00 rows=3000 width=19)
+row         ->  Seq Scan on jb  (cost=0.00..48.00 rows=3000 width=19)
+EXPLAIN

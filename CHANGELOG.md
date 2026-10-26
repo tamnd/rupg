@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The planner estimates the `=` conditions of the joins from the most common values and the number of distinct values of both sides, and the buckets of the hash joins from the most common value (#791).
 - The planner estimates `<`, `<=`, `>` and `>=` with a constant from the most common values and the histogram of a column, and from the real least and greatest values of an index (#790).
 - The planner estimates the rows of `=`, `<>`, `IS NULL` and the tests of a `boolean` from `pg_statistic`, and the widths of the columns from `stawidth` (#789).
 - `ANALYZE` computes the statistics of the columns and writes them to `pg_statistic`, which `pg_stats` shows (#788).
