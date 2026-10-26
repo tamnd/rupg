@@ -1,0 +1,174 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE bt1 (a int, b int, t text, n int, f float8, c bigint);
+CREATE TABLE
+> INSERT INTO bt1 SELECT x, x % 100, 'v' || (x % 500), CASE WHEN x % 3 = 0 THEN NULL ELSE x % 50 END, x % 100, x FROM generate_series(1, 10000) x;
+INSERT 0 10000
+> CREATE INDEX bt1_a ON bt1 (a);
+CREATE INDEX
+> CREATE INDEX bt1_b ON bt1 (b);
+CREATE INDEX
+> CREATE INDEX bt1_t ON bt1 (t);
+CREATE INDEX
+> CREATE INDEX bt1_n ON bt1 (n);
+CREATE INDEX
+> CREATE INDEX bt1_f ON bt1 (f);
+CREATE INDEX
+> CREATE INDEX bt1_ba ON bt1 (b, a);
+CREATE INDEX
+> CREATE INDEX bt1_tb ON bt1 (t, b);
+CREATE INDEX
+> CREATE INDEX bt1_ainc ON bt1 (c) INCLUDE (t);
+CREATE INDEX
+> CREATE INDEX bt1_bdesc ON bt1 (b DESC, c);
+CREATE INDEX
+> CREATE INDEX bt1_ff ON bt1 (c, a) WITH (fillfactor = 50);
+CREATE INDEX
+> CREATE INDEX bt1_nodup ON bt1 (n, t) WITH (deduplicate_items = off);
+CREATE INDEX
+> ANALYZE bt1;
+ANALYZE
+> CREATE TABLE bt2 (a int PRIMARY KEY, b text);
+CREATE TABLE
+> INSERT INTO bt2 SELECT x, repeat('w', x % 40) FROM generate_series(1, 5000) x;
+INSERT 0 5000
+> CREATE INDEX bt2_b ON bt2 (b);
+CREATE INDEX
+> ANALYZE bt2;
+ANALYZE
+> CREATE TABLE bt3 (a bigint, b int);
+CREATE TABLE
+> INSERT INTO bt3 SELECT x, x % 1000 FROM generate_series(1, 60000) x;
+INSERT 0 60000
+> CREATE INDEX bt3_a ON bt3 (a);
+CREATE INDEX
+> CREATE INDEX bt3_b ON bt3 (b);
+CREATE INDEX
+> ANALYZE bt3;
+ANALYZE
+> SET enable_seqscan = off;
+SET
+> SET enable_bitmapscan = off;
+SET
+> EXPLAIN SELECT * FROM bt1 WHERE a = 77;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using bt1_a on bt1  (cost=0.29..8.30 rows=1 width=32)
+row   Index Cond: (a = 77)
+EXPLAIN
+> EXPLAIN SELECT * FROM bt1 WHERE a < 3000;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using bt1_a on bt1  (cost=0.29..115.77 rows=2999 width=32)
+row   Index Cond: (a < 3000)
+EXPLAIN
+> EXPLAIN SELECT * FROM bt1 WHERE b = 7;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using bt1_b on bt1  (cost=0.29..253.94 rows=100 width=32)
+row   Index Cond: (b = 7)
+EXPLAIN
+> EXPLAIN SELECT * FROM bt1 WHERE b < 30;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using bt1_b on bt1  (cost=0.29..380.68 rows=3000 width=32)
+row   Index Cond: (b < 30)
+EXPLAIN
+> EXPLAIN SELECT * FROM bt1 WHERE t = 'v42';
+fields QUERY PLAN:25:-1:-1
+row Index Scan using bt1_t on bt1  (cost=0.29..76.61 rows=20 width=32)
+row   Index Cond: (t = 'v42'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM bt1 WHERE t < 'v3';
+fields QUERY PLAN:25:-1:-1
+row Index Scan using bt1_t on bt1  (cost=0.29..414.23 rows=4460 width=32)
+row   Index Cond: (t < 'v3'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM bt1 WHERE n = 7;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using bt1_n on bt1  (cost=0.29..298.44 rows=133 width=32)
+row   Index Cond: (n = 7)
+EXPLAIN
+> EXPLAIN SELECT * FROM bt1 WHERE n IS NULL;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using bt1_n on bt1  (cost=0.29..390.44 rows=3333 width=32)
+row   Index Cond: (n IS NULL)
+EXPLAIN
+> EXPLAIN SELECT * FROM bt1 WHERE f = 7;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using bt1_f on bt1  (cost=0.29..253.94 rows=100 width=32)
+row   Index Cond: (f = '7'::double precision)
+EXPLAIN
+> EXPLAIN SELECT * FROM bt1 WHERE f < 30;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using bt1_f on bt1  (cost=0.29..404.68 rows=3000 width=32)
+row   Index Cond: (f < '30'::double precision)
+EXPLAIN
+> EXPLAIN SELECT * FROM bt1 WHERE b = 7 AND a < 5000;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using bt1_ba on bt1  (cost=0.29..157.25 rows=50 width=32)
+row   Index Cond: ((b = 7) AND (a < 5000))
+EXPLAIN
+> EXPLAIN SELECT * FROM bt1 WHERE t = 'v42' AND b = 42;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using bt1_tb on bt1  (cost=0.29..8.30 rows=1 width=32)
+row   Index Cond: ((t = 'v42'::text) AND (b = 42))
+EXPLAIN
+> EXPLAIN SELECT * FROM bt1 WHERE c = 77;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using bt1_ff on bt1  (cost=0.29..8.30 rows=1 width=32)
+row   Index Cond: (c = 77)
+EXPLAIN
+> EXPLAIN SELECT * FROM bt1 WHERE c < 3000;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using bt1_ainc on bt1  (cost=0.29..127.77 rows=2999 width=32)
+row   Index Cond: (c < 3000)
+EXPLAIN
+> EXPLAIN SELECT t FROM bt1 WHERE c < 3000;
+fields QUERY PLAN:25:-1:-1
+row Index Only Scan using bt1_ainc on bt1  (cost=0.29..127.77 rows=2999 width=4)
+row   Index Cond: (c < 3000)
+EXPLAIN
+> EXPLAIN SELECT * FROM bt1 WHERE b = 7 ORDER BY b DESC, c;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using bt1_bdesc on bt1  (cost=0.29..253.98 rows=100 width=32)
+row   Index Cond: (b = 7)
+EXPLAIN
+> EXPLAIN SELECT * FROM bt1 WHERE c = 77 AND a = 77;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using bt1_ff on bt1  (cost=0.29..8.30 rows=1 width=32)
+row   Index Cond: ((c = 77) AND (a = 77))
+EXPLAIN
+> EXPLAIN SELECT * FROM bt1 WHERE c < 3000 AND a < 3000;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using bt1_a on bt1  (cost=0.29..123.27 rows=899 width=32)
+row   Index Cond: (a < 3000)
+row   Filter: (c < 3000)
+EXPLAIN
+> EXPLAIN SELECT * FROM bt1 WHERE n = 7 AND t = 'v7';
+fields QUERY PLAN:25:-1:-1
+row Index Scan using bt1_nodup on bt1  (cost=0.29..8.30 rows=1 width=32)
+row   Index Cond: ((n = 7) AND (t = 'v7'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM bt2 WHERE a = 77;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using bt2_pkey on bt2  (cost=0.28..8.30 rows=1 width=24)
+row   Index Cond: (a = 77)
+EXPLAIN
+> EXPLAIN SELECT * FROM bt2 WHERE a < 3000;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using bt2_pkey on bt2  (cost=0.28..112.81 rows=2999 width=24)
+row   Index Cond: (a < 3000)
+EXPLAIN
+> EXPLAIN SELECT * FROM bt2 WHERE b = 'www';
+fields QUERY PLAN:25:-1:-1
+row Index Scan using bt2_b on bt2  (cost=0.28..146.32 rows=125 width=24)
+row   Index Cond: (b = 'www'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM bt2 WHERE b < 'www';
+fields QUERY PLAN:25:-1:-1
+row Index Scan using bt2_b on bt2  (cost=0.28..150.70 rows=375 width=24)
+row   Index Cond: (b < 'www'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM bt3 WHERE a = 77;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using bt3_a on bt3  (cost=0.29..8.31 rows=1 width=12)
+row   Index Cond: (a = 77)
+EXPLAIN

@@ -1579,8 +1579,8 @@ fn btree_cost(
         startup += descent;
         total += scans * descent;
     }
-    // The index has no pages below its root yet, so its tree has a height of 0.
-    let descent = PAGE_CPU_MULTIPLIER * cost::CPU_OPERATOR;
+    // Each page from the root down to a leaf costs `cpu_operator_cost` times 50.
+    let descent = f64::from(index.height + 1) * PAGE_CPU_MULTIPLIER * cost::CPU_OPERATOR;
     startup += descent;
     total += scans * descent;
     (startup, total, selectivity)

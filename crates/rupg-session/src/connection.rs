@@ -5000,6 +5000,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_memoize.test")));
     }
 
+    /// The costs of scans of `btree` indexes, from the pages and the height that the indexes have after `CREATE INDEX`: with posting lists, `INCLUDE`, `DESC`, `fillfactor` and nulls. `connection/plan_btree_size.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_btree_size() {
+        big_stack(|| script(include_str!("connection/plan_btree_size.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

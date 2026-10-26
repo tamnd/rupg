@@ -10,9 +10,11 @@ use rupg_common::{Error, Result, SqlState};
 use rupg_func::{HeapSize, Statistic, XactState};
 use rupg_types::{Value, oid};
 
+pub(crate) use btree::{Shape, Size as BtreeSize};
 use pages::{Pages, Pruned, generation_of, max_align, page_of, slot_of, tuple_len};
 pub(crate) use pages::{Skip, stored_widths};
 
+mod btree;
 mod fsm;
 mod pages;
 
@@ -130,6 +132,8 @@ struct Table {
     truncated: Vec<(u32, u32, Pages)>,
     /// The rows of `pg_statistic` of the table, by `staattnum` and `stainherit`, which `ANALYZE` writes outside of the transactions.
     statistics: BTreeMap<(i16, bool), Statistic>,
+    /// The size of each `btree` index of the table by the OID of the index, from the versions that the table had.
+    btree_sizes: BTreeMap<u32, btree::Cached>,
 }
 
 /// The versions of a table by the hash of their key, for one unique key, which takes the place of the btree of a unique index. The map can keep the ID of a version that went, which a check skips.
@@ -1026,6 +1030,52 @@ impl Heap {
             fsm_blocks,
             vm_blocks,
         }
+    }
+
+    /// `RelationGetNumberOfBlocks` and `_bt_getrootheight` of the `btree` index `index` of the shape `shape` on a table, from the versions of the table that a transaction that did not abort inserted, as `CREATE INDEX` would build the index now. A table with more versions than [`btree::EXACT`] gives the size of a sample, which serves until the versions change by a 32nd. The values of the sample are read with the heap locked and sorted with the heap not locked.
+    pub(crate) fn btree_size(
+        &self,
+        database: u32,
+        relation: u32,
+        index: u32,
+        shape: &Shape,
+    ) -> BtreeSize {
+        let (entries, total, made, count) = {
+            let state = self.state();
+            let Some(table) = state.tables.get(&(database, relation)) else {
+                return BtreeSize::EMPTY;
+            };
+            let count = table.versions.len();
+            if let Some(cached) = table.btree_sizes.get(&index)
+                && cached.shape == *shape
+                && (cached.made == table.made && cached.count == count
+                    || count > btree::EXACT && cached.count.abs_diff(count) < cached.count / 32)
+            {
+                return cached.size;
+            }
+            let step = count.div_ceil(btree::EXACT).max(1);
+            let kept = table.versions.iter().filter(|v| !state.aborted.contains(&v.xmin));
+            let total = if step == 1 { 0 } else { kept.clone().count() };
+            let entries: Vec<Box<[Value]>> = kept
+                .step_by(step)
+                .map(|v| {
+                    shape
+                        .columns
+                        .iter()
+                        .map(|&c| v.values.get(c).cloned().unwrap_or(Value::Null))
+                        .collect()
+                })
+                .collect();
+            let total = total.max(entries.len());
+            (entries, total, table.made, count)
+        };
+        let size = btree::size(entries, total, shape);
+        let mut state = self.state();
+        if let Some(table) = state.tables.get_mut(&(database, relation)) {
+            let cached = btree::Cached { made, count, shape: shape.clone(), size };
+            table.btree_sizes.insert(index, cached);
+        }
+        size
     }
 
     /// The number of live versions of a table for `ANALYZE` and `VACUUM`, as `heapam_scan_analyze_next_tuple` counts them for the transaction `xid`: the versions that a transaction that committed or `xid` inserted, and that no transaction deleted, or that a transaction in progress other than `xid` deletes.
