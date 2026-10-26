@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The planner now pulls up a `VALUES` of one row in `FROM` as PostgreSQL does in `pull_up_simple_values`. The row becomes a simple subquery that merges into the query, so that a join with `(VALUES (1))` gives a filter with the constant and no `Values Scan`. A row with a volatile function or a function that gives a set stays a `Values Scan`. (#853)
 - A condition of `WHERE` that reads a `UNION ALL` subquery with `LATERAL` and the relations that the subquery reads now moves into each member of the subquery, as in PG. A member with no `FROM` tests it as a One-Time Filter. (#852)
 - The planner now puts a Memoize node above the inner side of a lateral nested loop. The cache key is the outer values that the inner side reads, as in PG. (#851)
 - A `LATERAL` subquery of one relation on the nullable side of an outer join now merges into the query when a target that reads the query needs a `PlaceHolderVar`. The scan of the relation computes the `PlaceHolderVar`, and the columns of the query that it reads are the lateral references of the scan, as `ph_lateral` makes them, so the plan matches PostgreSQL (#850).

@@ -1,0 +1,135 @@
+> create table t(q1 int8, q2 int8)
+CREATE TABLE
+> insert into t values (1, 2), (2, 3), (3, null)
+INSERT 0 3
+> analyze t
+ANALYZE
+> create table tk(unique1 int, unique2 int)
+CREATE TABLE
+> insert into tk select g, 9999 - g from generate_series(0, 9999) g
+INSERT 0 10000
+> create index tk_unique1 on tk(unique1)
+CREATE INDEX
+> create index tk_unique2 on tk(unique2)
+CREATE INDEX
+> analyze tk
+ANALYZE
+> explain (costs off) select * from t b join (values(1)) ss(x) on b.q1 = ss.x
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t b
+row   Filter: (q1 = 1)
+EXPLAIN
+> select * from t b join (values(1)) ss(x) on b.q1 = ss.x
+fields q1@t.1:20:8:-1,q2@t.2:20:8:-1,x:23:4:-1
+row 1,2,1
+SELECT 1
+> explain (costs off) select * from t b, (values(1, 'a')) ss(x, y)
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t b
+EXPLAIN
+> select * from t b, (values(1, 'a')) ss(x, y) order by 1
+fields q1@t.1:20:8:-1,q2@t.2:20:8:-1,x:23:4:-1,y:25:-1:-1
+row 1,2,1,a
+row 2,3,1,a
+row 3,NULL,1,a
+SELECT 3
+> explain (costs off) select * from t b left join (values(1)) ss(x) on b.q1 = ss.x
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join
+row   Join Filter: (b.q1 = 1)
+row   ->  Seq Scan on t b
+row   ->  Materialize
+row         ->  Result
+EXPLAIN
+> select * from t b left join (values(1)) ss(x) on b.q1 = ss.x order by 1
+fields q1@t.1:20:8:-1,q2@t.2:20:8:-1,x:23:4:-1
+row 1,2,1
+row 2,3,NULL
+row 3,NULL,NULL
+SELECT 3
+> explain (verbose, costs off) select * from t b left join (values(1)) ss(x) on b.q1 = ss.x where ss.x is null
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join
+row   Output: b.q1, b.q2, (1)
+row   Join Filter: (b.q1 = 1)
+row   Filter: ((1) IS NULL)
+row   ->  Seq Scan on public.t b
+row         Output: b.q1, b.q2
+row   ->  Materialize
+row         Output: (1)
+row         ->  Result
+row               Output: 1
+EXPLAIN
+> select * from t b left join (values(1)) ss(x) on b.q1 = ss.x where ss.x is null order by 1
+fields q1@t.1:20:8:-1,q2@t.2:20:8:-1,x:23:4:-1
+row 2,3,NULL
+row 3,NULL,NULL
+SELECT 2
+> select * from t b left join (values(null::int)) ss(x) on true order by 1
+fields q1@t.1:20:8:-1,q2@t.2:20:8:-1,x:23:4:-1
+row 1,2,NULL
+row 2,3,NULL
+row 3,NULL,NULL
+SELECT 3
+> explain (costs off) select * from t a, t b join lateral (values(a.q1)) ss(x) on b.q2 = ss.x
+fields QUERY PLAN:25:-1:-1
+row Hash Join
+row   Hash Cond: (b.q2 = a.q1)
+row   ->  Seq Scan on t b
+row   ->  Hash
+row         ->  Seq Scan on t a
+EXPLAIN
+> select * from t a, t b join lateral (values(a.q1)) ss(x) on b.q2 = ss.x order by 1
+fields q1@t.1:20:8:-1,q2@t.2:20:8:-1,q1@t.1:20:8:-1,q2@t.2:20:8:-1,x:20:8:-1
+row 2,3,1,2,2
+row 3,NULL,2,3,3
+SELECT 2
+> select * from t a left join lateral (values(a.q2 + 1)) ss(x) on true order by 1
+fields q1@t.1:20:8:-1,q2@t.2:20:8:-1,x:20:8:-1
+row 1,2,3
+row 2,3,4
+row 3,NULL,NULL
+SELECT 3
+> explain (costs off) select count(*) from tk a, tk b join lateral (values(a.unique1)) ss(x) on b.unique2 = ss.x
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   ->  Hash Join
+row         Hash Cond: (a.unique1 = b.unique2)
+row         ->  Seq Scan on tk a
+row         ->  Hash
+row               ->  Seq Scan on tk b
+EXPLAIN
+> select count(*) from tk a, tk b join lateral (values(a.unique1)) ss(x) on b.unique2 = ss.x
+fields count:20:8:-1
+row 10000
+SELECT 1
+> explain (costs off) select * from t a, lateral (values(a.q1 + 1, random())) ss(x)
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Seq Scan on t a
+row   ->  Values Scan on "*VALUES*"
+EXPLAIN
+> select count(*) from (values(1)) v(x), lateral generate_series(1, v.x + 2) g
+fields count:20:8:-1
+row 3
+SELECT 1
+> select (select x from (values(t.q1 * 10)) v(x)) from t order by 1
+fields x:20:8:-1
+row 10
+row 20
+row 30
+SELECT 3
+> create table w(a int, b text)
+CREATE TABLE
+> insert into w select * from (values(1, 'one')) v
+INSERT 0 1
+> update w set b = v.y from (values(1, 'uno')) v(x, y) where w.a = v.x
+UPDATE 1
+> select * from w
+fields a@w.1:23:4:-1,b@w.2:25:-1:-1
+row 1,uno
+SELECT 1
+> with c as (select * from (values(5)) v(x)) select * from c
+fields x:23:4:-1
+row 5
+SELECT 1

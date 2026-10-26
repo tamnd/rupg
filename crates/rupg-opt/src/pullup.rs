@@ -11,7 +11,7 @@ use std::ptr;
 
 use rupg_analyze::{
     BoolOp, BoolTest, Column, Expr, ExprKind, FromItem, Func, FuncForm, Join, JoinKind,
-    PlaceHolder, Query, Relation, SubLink, SubLinkKind, Var, WriteKind,
+    PlaceHolder, Query, Relation, SubLink, SubLinkKind, Target, Var, WriteKind,
 };
 use rupg_pgcatalog::builtin;
 use rupg_types::{Value, oid};
@@ -52,6 +52,7 @@ pub fn merge_from(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
     if query.write.is_some() {
         return;
     }
+    values_all(query);
     while let Some((r, top)) = candidate(query, barrier, true) {
         merge(query, r, top);
     }
@@ -369,6 +370,9 @@ fn pull_all(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
             false
         });
     }
+    if query.write.is_none() {
+        values_all(query);
+    }
     while let Some((r, top)) = candidate(query, barrier, false) {
         merge(query, r, top);
     }
@@ -378,6 +382,36 @@ fn pull_all(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
             merge(query, r, top);
         }
     }
+}
+
+/// [`values_subquery`] for each relation of `FROM` of the query.
+fn values_all(query: &mut Query) {
+    let mut rels = Vec::new();
+    for item in &query.from {
+        pushdown::rels(item, &mut rels);
+    }
+    for r in rels {
+        values_subquery(&mut query.relations[r]);
+    }
+}
+
+/// `pull_up_simple_values`: the parser of PostgreSQL makes a `VALUES` of `FROM` a subquery that reads the `VALUES`, and the planner replaces a `VALUES` of one row by a `Result` that computes the row, when `is_simple_values` lets it. The row has no volatile function and no function that gives a set. Here such a `VALUES` becomes a subquery with no `FROM` whose targets are the values of the row, and the subquery then merges as a simple subquery.
+fn values_subquery(relation: &mut Relation) {
+    let Some([row]) = relation.values.as_deref() else { return };
+    if row.iter().any(|e| exprs::volatile(e) || e.first_set_call().is_some()) {
+        return;
+    }
+    let targets = row
+        .iter()
+        .zip(&relation.columns)
+        .map(|(value, column)| {
+            let mut expr = value.clone();
+            expr.raise(1);
+            Target { name: column.name.clone(), expr, origin: None, junk: false }
+        })
+        .collect();
+    relation.values = None;
+    relation.subquery = Some(Box::new(Query { targets, ..Query::default() }));
 }
 
 /// `pull_up_sublinks`: each part of `WHERE` that is `EXISTS`, `NOT EXISTS` or `ANY` on a subquery becomes a semi join or an anti join of the items of `FROM` with the relations of the subquery. The joins come in the order of the parts, and each join has the join before it as its left side. True when a part became a join. `NOT IN` is an anti join only when no value of the test can be null. The planner does not convert a part of `ON` or an `ANY` on a correlated subquery yet.
