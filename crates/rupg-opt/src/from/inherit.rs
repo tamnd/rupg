@@ -111,6 +111,7 @@ pub(super) fn scan<'q>(
         let (pages, count) = cost::member_size(member);
         stats.columns.insert(r, Rc::new(statistics));
         stats.pages.insert(r, pages);
+        stats.all_visible.insert(r, cost::all_visible(member.size, pages));
         stats.ranges.retain(|&(at, _), _| at != r);
         for index in &indexes {
             if let ([key], true, false) = (index.keys.as_slice(), index.unique, index.partial)
@@ -215,6 +216,7 @@ pub(super) fn scan<'q>(
         inherited.into_iter().filter(|s| s.inherit).map(|s| (s.attnum, s)).collect();
     stats.columns.insert(r, Rc::new(inherited));
     stats.pages.remove(&r);
+    stats.all_visible.remove(&r);
     stats.ranges.retain(|&(at, _), _| at != r);
     stats.rows.insert(r, (tuples, rows));
     if rows > 0.0 {

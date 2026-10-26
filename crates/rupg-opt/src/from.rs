@@ -98,6 +98,8 @@ pub(crate) struct Stats {
     ranges: BTreeMap<(usize, i16), Option<(Value, Value)>>,
     /// `pages` of each table of the level, which the estimate of an inequality of `ctid` reads.
     pages: BTreeMap<usize, f64>,
+    /// `allvisfrac` of each table of the level, which the cost of an index only scan reads.
+    all_visible: BTreeMap<usize, f64>,
 }
 
 impl Stats {
@@ -920,6 +922,7 @@ impl<'q> Builder<'q> {
                     }
                     let (pages, tuples) = cost::table_size(relation, size);
                     stats.pages.insert(r, pages);
+                    stats.all_visible.insert(r, cost::all_visible(size, pages));
                     match &relation.tablesample {
                         // `set_tablesample_rel_size` and `cost_samplescan`: `SYSTEM` reads the fraction of the pages, each at the cost of a random page, and `BERNOULLI` reads each page in order. The fraction is a `real`, and a percent out of range is a tenth.
                         Some(sample) => {

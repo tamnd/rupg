@@ -161,7 +161,7 @@ impl<'q> BitmapIndex<'q> {
         costs: (f64, f64, f64),
         stats: &Stats,
     ) -> BitmapIndex<'q> {
-        let (_, path, _) = index_scan_cost(table, index, &clauses, costs, stats);
+        let (_, path, _) = index_scan_cost(table, index, &clauses, costs, false, stats);
         let (_, total, selectivity) = costs;
         let (rows, pages, outer) = (table.rows, index.pages, table.outer.clone());
         let predicate = predicate(index, table.r);
@@ -1127,7 +1127,7 @@ fn scan<'q>(
     order: Vec<OrderKey>,
     stats: &Stats,
 ) -> Rel<'q> {
-    let (startup, total, filter) = index_scan_cost(table, index, clauses, costs, stats);
+    let (startup, total, filter) = index_scan_cost(table, index, clauses, costs, only, stats);
     let cond = clauses.iter().map(|c| Item { expr: c.expr.clone(), below: false }).collect();
     let kind = Kind::IndexScan {
         relation: table.r,
@@ -1151,6 +1151,7 @@ fn index_scan_cost<'q>(
     index: &Index,
     clauses: &[Clause<'q>],
     costs: (f64, f64, f64),
+    only: bool,
     stats: &Stats,
 ) -> (f64, f64, Vec<Qual<'q>>) {
     // `extract_nonindex_conditions` of `indrestrictinfo`: a condition that the predicate of the index implies is not in the filter.
@@ -1172,14 +1173,19 @@ fn index_scan_cost<'q>(
     let mut startup = index_startup;
     let mut run = index_total - index_startup;
     let fetched = cost::clamp_rows(selectivity * table.tuples);
+    // An index only scan does not read the pages that the visibility map marks all visible.
+    let visible = if only { stats.all_visible.get(&table.r).copied().unwrap_or(0.0) } else { 0.0 };
+    let unseen = |pages: f64| if only { (pages * (1.0 - visible)).ceil() } else { pages };
     let min_pages = (selectivity * table.pages).ceil();
     // A scan in a nested loop reads the pages that the other scans read from the cache.
     let (max_io, min_io) = if table.loops > 1.0 {
         let pages = pages_fetched(fetched * table.loops, table.pages, index.pages, table.pages);
         let min = pages_fetched(min_pages * table.loops, table.pages, index.pages, table.pages);
+        let (pages, min) = (unseen(pages), unseen(min));
         (pages * cost::RANDOM_PAGE / table.loops, min * cost::RANDOM_PAGE / table.loops)
     } else {
-        let pages = pages_fetched(fetched, table.pages, index.pages, table.pages);
+        let pages = unseen(pages_fetched(fetched, table.pages, index.pages, table.pages));
+        let min_pages = unseen(min_pages);
         let min = if min_pages > 0.0 {
             cost::RANDOM_PAGE + (min_pages - 1.0).max(0.0) * cost::SEQ_PAGE
         } else {

@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- An index only scan now costs only the heap pages that the visibility map does not mark all visible, as `cost_index` does with `allvisfrac`, so the planner picks it where PostgreSQL does (#831).
 - The planner now knows the sizes, indexes and column statistics that the system catalogs have in a new database, so EXPLAIN of a catalog query gives the same plan and costs as PostgreSQL (#830).
 - A pattern with back references now looks for a match as `cfindloop` does, so `'a' ~ '$()|^\1'` is false and `'a' ~ '()*\1'` is true, as in PostgreSQL (#829).
 - The shortest text of a `float8` that is halfway between two texts of 17 digits takes the even digits, as Ryu does, also for 2 to the power -25 (#828)
