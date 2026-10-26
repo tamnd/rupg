@@ -120,7 +120,8 @@ impl Connection {
             rows?.into_iter().next().unwrap_or_default()
         };
         let reader = self.reader();
-        let plan = match &statement.plan {
+        let replanned = statement.replan(&reader)?;
+        let plan = match replanned.as_ref().or(statement.plan.as_ref()) {
             Some(plan) => {
                 let plan = plan.fold(Some(&params), &reader);
                 notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));

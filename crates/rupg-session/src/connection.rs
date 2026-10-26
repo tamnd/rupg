@@ -4888,6 +4888,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/row_security_system_columns.test")));
     }
 
+    /// A prepared statement on a table with row security, which gets the policies of the current role and of the current `row_security` at each run. `connection/row_security_prepared.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn row_security_prepared() {
+        big_stack(|| script(include_str!("connection/row_security_prepared.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

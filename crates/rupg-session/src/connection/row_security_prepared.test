@@ -1,0 +1,103 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE ROLE regress_rls_u8;
+CREATE ROLE
+> CREATE TABLE rls8_t (a int, b text);
+CREATE TABLE
+> GRANT ALL ON rls8_t TO regress_rls_u8;
+GRANT
+> INSERT INTO rls8_t SELECT g, 'v' || g FROM generate_series(1, 6) g;
+INSERT 0 6
+> ALTER TABLE rls8_t ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> CREATE POLICY p8 ON rls8_t USING (a % 2 = 0);
+CREATE POLICY
+> PREPARE q1(int) AS SELECT * FROM rls8_t WHERE a <= $1 ORDER BY a;
+PREPARE
+> PREPARE q2 AS SELECT count(*) FROM rls8_t;
+PREPARE
+> PREPARE w1(int) AS UPDATE rls8_t SET b = b || 'x' WHERE a = $1 RETURNING *;
+PREPARE
+> EXECUTE q1(4);
+fields a@rls8_t.1:23:4:-1,b@rls8_t.2:25:-1:-1
+row 1,v1
+row 2,v2
+row 3,v3
+row 4,v4
+SELECT 4
+> EXECUTE q2;
+fields count:20:8:-1
+row 6
+SELECT 1
+> SET SESSION AUTHORIZATION regress_rls_u8;
+SET
+session_authorization=regress_rls_u8
+is_superuser=off
+> EXECUTE q1(4);
+fields a@rls8_t.1:23:4:-1,b@rls8_t.2:25:-1:-1
+row 2,v2
+row 4,v4
+SELECT 2
+> EXECUTE q2;
+fields count:20:8:-1
+row 3
+SELECT 1
+> EXECUTE w1(3);
+fields a@rls8_t.1:23:4:-1,b@rls8_t.2:25:-1:-1
+UPDATE 0
+> EXECUTE w1(4);
+fields a@rls8_t.1:23:4:-1,b@rls8_t.2:25:-1:-1
+row 4,v4x
+UPDATE 1
+> PREPARE q3(int) AS SELECT * FROM rls8_t WHERE a >= $1 ORDER BY a;
+PREPARE
+> EXECUTE q3(3);
+fields a@rls8_t.1:23:4:-1,b@rls8_t.2:25:-1:-1
+row 4,v4x
+row 6,v6
+SELECT 2
+> SET row_security = off;
+SET
+> EXECUTE q3(3);
+ERROR 42501 query would be affected by row-level security policy for table "rls8_t"
+> EXECUTE q1(4);
+ERROR 42501 query would be affected by row-level security policy for table "rls8_t"
+> RESET row_security;
+RESET
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> EXECUTE q3(3);
+fields a@rls8_t.1:23:4:-1,b@rls8_t.2:25:-1:-1
+row 3,v3
+row 4,v4x
+row 5,v5
+row 6,v6
+SELECT 4
+> ALTER POLICY p8 ON rls8_t USING (a % 3 = 0);
+ALTER POLICY
+> SET SESSION AUTHORIZATION regress_rls_u8;
+SET
+session_authorization=regress_rls_u8
+is_superuser=off
+> EXECUTE q3(1);
+fields a@rls8_t.1:23:4:-1,b@rls8_t.2:25:-1:-1
+row 3,v3
+row 6,v6
+SELECT 2
+> EXECUTE q2;
+fields count:20:8:-1
+row 2
+SELECT 1
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> DEALLOCATE ALL;
+DEALLOCATE ALL
+> DROP TABLE rls8_t;
+DROP TABLE
+> DROP ROLE regress_rls_u8;
+DROP ROLE
