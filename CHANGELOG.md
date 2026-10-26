@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The sorted plan of `GROUP BY` can also put the keys of the groups in the order of its input first, as `get_useful_group_keys_orderings` does, so an index or a join in a part of that order needs no full sort. `enable_group_by_reordering` turns this off (#843).
 - `count` of an argument that cannot be null becomes `count(*)`, as `int8inc_support` does, so EXPLAIN VERBOSE shows `count(*)` like PostgreSQL (#842).
 - The input of an aggregate gets sorted on the keys that suit the most ordered aggregate calls, as PostgreSQL does in adjust_group_pathkeys_for_groupagg. It took the keys of the first call. A call with a volatile key, or with FILTER over an argument that is not a column or a constant, takes no part, and a sort on a column with a RelabelType shows the column (#841).
 - GROUP BY drops the columns that the primary key of a partitioned table decides, as PostgreSQL does. A parent of INHERITS still keeps all its columns (#840).

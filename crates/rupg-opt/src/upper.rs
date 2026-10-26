@@ -1206,31 +1206,64 @@ fn aggregate<'q>(
     let nkeys = group.len() as f64;
     let group_exprs: Vec<&Expr> = group.iter().map(|k| &*k.item.expr).collect();
     let groups = level.stats.groups(&group_exprs, n);
-    let keys: Vec<Item<'q>> = group.iter().map(|k| k.item.clone()).collect();
     let rows = cost::clamp_rows(groups * selectivity);
     let hashable = hashable && !group.is_empty() && !has_ordered;
-    // The sorted strategy: a `Sort` on the keys of the groups, and on the keys of an ordered call after them, as `adjust_group_pathkeys_for_groupagg`.
-    let ordered = if presort { ordered_keys(&aggs, &group, &level.stats) } else { Vec::new() };
-    let sort_keys = if ordered.is_empty() { group.clone() } else { ordered };
-    let (is_sorted, count) = presorted(order, &sort_keys);
+    // `cost_agg`: the transition cost, then the cost of the keys, which the rounding of the sums follows. `GROUP BY` with no aggregate is a `Group` node, which `cost_group` gives no cost for each group.
+    let group_node = aggs.is_empty();
+    // The sorted strategy: a `Sort` on the keys of the groups, and on the keys of an ordered call after them, as `adjust_group_pathkeys_for_groupagg`, with the start cost and the total cost of the sorted input and of the `Agg`, and the total cost with the sort of `ORDER BY` above it.
+    let sorted_plan = |group: Vec<SortKey<'q>>| {
+        let ordered = if presort { ordered_keys(&aggs, &group, &level.stats) } else { Vec::new() };
+        let sort_keys = if ordered.is_empty() { group.clone() } else { ordered };
+        let (is_sorted, count) = presorted(order, &sort_keys);
+        let (input, out_order) = if is_sorted {
+            (c, order.clone())
+        } else {
+            let (startup, total) = sort_cost(level, c, &sort_keys, count, None);
+            (Cost { startup, total, ..c }, sorted_order(&sort_keys))
+        };
+        let total = input.total
+            + cost::CPU_OPERATOR * units * n
+            + cost::CPU_OPERATOR * nkeys * n
+            + finals * groups
+            + if group_node { 0.0 } else { cost::CPU_TUPLE * groups }
+            + having_startup
+            + having_cost * groups;
+        let after = after_sort(
+            level,
+            &out_order[..out_order.len().min(group.len())],
+            input.startup,
+            total,
+            rows,
+            c.width,
+        );
+        SortedPlan { group, sort_keys, is_sorted, count, input, out_order, total, after }
+    };
+    // The hash table keeps the order of the keys of the query.
+    let hash_keys: Vec<Item<'q>> = group.iter().map(|k| k.item.clone()).collect();
+    let mut plan = sorted_plan(group);
+    // `get_useful_group_keys_orderings`: the keys of the groups also in the order of the input as far as it goes, as `group_keys_reorder_by_pathkeys` puts them, and the cheaper of the two orders wins.
+    if crate::enable().group_by_reordering
+        && let Some(other) = reorder(order, &plan.group, &plan.sort_keys)
+    {
+        let other = sorted_plan(other);
+        if other.after < plan.after && (!only || other.is_sorted || other.count > 0) {
+            plan = other;
+        }
+    }
+    let SortedPlan {
+        group,
+        sort_keys,
+        is_sorted,
+        count,
+        input: sorted_input,
+        out_order: sorted_order,
+        total: sorted_total,
+        ..
+    } = plan;
     if only && !is_sorted && count == 0 {
         return None;
     }
-    let (sorted_input, sorted_order) = if is_sorted {
-        (c, order.clone())
-    } else {
-        let (startup, total) = sort_cost(level, c, &sort_keys, count, None);
-        (Cost { startup, total, ..c }, sorted_order(&sort_keys))
-    };
-    // `cost_agg`: the transition cost, then the cost of the keys, which the rounding of the sums follows. `GROUP BY` with no aggregate is a `Group` node, which `cost_group` gives no cost for each group.
-    let group_node = aggs.is_empty();
-    let sorted_total = sorted_input.total
-        + cost::CPU_OPERATOR * units * n
-        + cost::CPU_OPERATOR * nkeys * n
-        + finals * groups
-        + if group_node { 0.0 } else { cost::CPU_TUPLE * groups }
-        + having_startup
-        + having_cost * groups;
+    let keys: Vec<Item<'q>> = group.iter().map(|k| k.item.clone()).collect();
     let hash_startup = c.total + cost::CPU_OPERATOR * units * n + cost::CPU_OPERATOR * nkeys * n;
     let hash_total = hash_startup
         + finals * groups
@@ -1259,7 +1292,7 @@ fn aggregate<'q>(
     };
     if !only && hashable && hash_wins {
         let mut node = Node::new(
-            Kind::Aggregate { strategy: Strategy::Hashed, keys, sets: Vec::new() },
+            Kind::Aggregate { strategy: Strategy::Hashed, keys: hash_keys, sets: Vec::new() },
             scope,
             vec![input],
         );
@@ -1282,6 +1315,80 @@ fn aggregate<'q>(
     let startup = sorted_input.startup + having_startup;
     node.cost = Cost { startup, total: sorted_total, rows, width: 0 };
     Some(node)
+}
+
+/// A plan of the sorted strategy of an `Agg` for one order of the keys of the groups.
+struct SortedPlan<'q> {
+    group: Vec<SortKey<'q>>,
+    sort_keys: Vec<SortKey<'q>>,
+    is_sorted: bool,
+    count: usize,
+    input: Cost,
+    out_order: Vec<OrderKey>,
+    total: f64,
+    after: f64,
+}
+
+/// The total cost of the groups with the sort of `ORDER BY` above them when the order of the groups is not its order, as `create_ordered_paths` adds it.
+fn after_sort(
+    level: &Level<'_>,
+    order: &[OrderKey],
+    startup: f64,
+    total: f64,
+    rows: f64,
+    width: i32,
+) -> f64 {
+    let query = level.query;
+    if query.sort.is_empty() {
+        return total;
+    }
+    let keys: Vec<SortKey<'_>> =
+        query.sort.iter().map(|s| sort_key(level.target(s.target), s)).collect();
+    let keys = level.stats.canonical(keys, |k| &*k.item.expr);
+    let (sorted, count) = presorted(order, &keys);
+    if sorted {
+        return total;
+    }
+    let (limit, offset) = limit_estimates(query);
+    let bound = (limit > 0.0 && offset >= 0.0).then_some(limit + offset);
+    let c = Cost { startup, total, rows, width };
+    sort_cost(level, c, &keys, count, bound).1
+}
+
+/// `group_keys_reorder_by_pathkeys`: the keys of the groups with the keys that the rows are in the order of first, in that order, and then the other keys, or `None` when no key is in the order of the rows, when the rows are in the order of the first keys already or when the order is the same. With `enable_incremental_sort` off, the rows must be in the order of all the keys.
+fn reorder<'q>(
+    order: &[OrderKey],
+    group: &[SortKey<'q>],
+    sort_keys: &[SortKey<'q>],
+) -> Option<Vec<SortKey<'q>>> {
+    if order.is_empty() || group.is_empty() {
+        return None;
+    }
+    // `pathkeys_contained_in`: the rows in the order of the first keys need no other order.
+    if order.len() <= sort_keys.len() && presorted(order, sort_keys).1 >= order.len() {
+        return None;
+    }
+    let mut taken: Vec<usize> = Vec::new();
+    for o in order.iter().take(group.len()) {
+        let Some(at) = group.iter().enumerate().position(|(i, k)| {
+            !taken.contains(&i) && k.using.is_none() && o.sorts(&k.item.expr, k.desc, k.nulls_first)
+        }) else {
+            break;
+        };
+        taken.push(at);
+    }
+    let n = taken.len();
+    if n == 0
+        || !crate::enable().incremental_sort && n < group.len()
+        || taken.iter().enumerate().all(|(i, &t)| i == t)
+    {
+        return None;
+    }
+    let mut out: Vec<SortKey<'q>> = taken.iter().map(|&i| group[i].clone()).collect();
+    out.extend(
+        group.iter().enumerate().filter(|(i, _)| !taken.contains(i)).map(|(_, k)| k.clone()),
+    );
+    Some(out)
 }
 
 /// The keys of `GROUP BY` as the keys of a sort, in the order of `ORDER BY` when its items are items of `GROUP BY`, as `preprocess_groupclause`, and true when a hash table can hold the groups. A column that the other columns of its relation give, as `remove_useless_groupby_columns` finds it, and a key that is redundant, as `make_pathkeys_for_sortclauses_extended` finds it, are not keys.
