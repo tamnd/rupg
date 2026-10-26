@@ -5006,6 +5006,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_btree_size.test")));
     }
 
+    /// A new unique index, primary key, check constraint, not-null constraint or foreign key on a table with rows checks the rows in place, so the pages and the `ctid` of the rows stay, and a duplicate key or a row that fails a check is an error. `connection/rows_stay_for_checks.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn rows_stay_for_checks() {
+        big_stack(|| script(include_str!("connection/rows_stay_for_checks.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

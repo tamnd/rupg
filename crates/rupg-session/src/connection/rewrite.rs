@@ -154,9 +154,12 @@ impl Connection {
         let command = self.command.get();
         for &table in tables {
             let Some(rel) = old.relation(table) else { continue };
+            let in_place = keeps_rows(&old, work, rel, transforms, fills);
             loop {
                 let view = View { xid: self.xid.get(), ..self.view() };
-                let Some(holder) = heap.truncate(table, &view) else { break };
+                let holder =
+                    if in_place { heap.holder(table, &view) } else { heap.truncate(table, &view) };
+                let Some(holder) = holder else { break };
                 self.reader().wait_xact(view.xid, holder, "")?;
             }
             // The rows that the truncate deleted stay visible to the command that deleted them.
@@ -178,20 +181,20 @@ impl Connection {
                 filled = Arc::new(catalog);
                 &filled
             };
-            self.rewrite_table(&old, rel, work, &view, rows, transforms)?;
+            self.rewrite_table(&old, rel, work, (&view, in_place), rows, transforms)?;
         }
         // A function in an index expression can end commands after the command of the rewrite.
         self.command.set(self.command.get().max(command + 1));
         Ok(())
     }
 
-    /// The new versions of the rows `rows` of the table `rel`, with the ID of the old version at the end of each row. The `INSERT` of the old columns gives the new columns their defaults, as the expressions of `ATRewriteTable` do. When a column has a new type or an expression of `transforms`, the `INSERT` reads the old values with their old types, and the expressions give the new values.
+    /// The new versions of the rows `rows` of the table `rel`, with the ID of the old version at the end of each row. The `INSERT` of the old columns gives the new columns their defaults, as the expressions of `ATRewriteTable` do. When a column has a new type or an expression of `transforms`, the `INSERT` reads the old values with their old types, and the expressions give the new values. With `in_place`, the rows stay and the statement only checks them, as `ATRewriteTable` does with no new file and as `index_build` checks the keys of a new unique index.
     fn rewrite_table(
         &self,
         old: &Catalog,
         rel: &Relation,
         work: &Arc<Catalog>,
-        view: &View,
+        (view, in_place): (&View, bool),
         rows: Vec<Vec<Value>>,
         transforms: &[Transform],
     ) -> Result<(), Error> {
@@ -360,6 +363,13 @@ impl Connection {
             .iter()
             .map(|u| rupg_analyze::Unique { deferrable: None, ..u.clone() })
             .collect();
+        if in_place {
+            self.check_keys_in_place(rel.oid, view, &info.unique, work)?;
+            if !checked.is_empty() {
+                self.fire(vec![Batch::new(info, &foreign, view.command, checked, Vec::new())])?;
+            }
+            return Ok(());
+        }
         // `ATRewriteTable` writes the rows with a `BulkInsertState`.
         heap.start_bulk(rel.oid, view);
         let mut kept = Vec::new();
@@ -375,26 +385,7 @@ impl Connection {
             )? {
                 Changed::Done(_) => break,
                 Changed::Duplicate { index, key } => {
-                    let Some(unique) = info.unique.get(index) else {
-                        return Err(Error::internal(
-                            "a duplicate key of an index that is not in the list",
-                        ));
-                    };
-                    let values = self.index_key_text(&unique.types, &key)?;
-                    let error = Error::new(
-                        SqlState::UNIQUE_VIOLATION,
-                        format!("could not create unique index \"{}\"", unique.name),
-                    )
-                    .with_detail(format!(
-                        "Key ({})=({values}) is duplicated.",
-                        self.key_shown(unique, Arc::clone(work))?
-                    ));
-                    return Err(rupg_func::with_table_constraint(
-                        error,
-                        rel.oid,
-                        &unique.name,
-                        &self.reader(),
-                    ));
+                    return Err(self.duplicated(rel.oid, info.unique.get(index), &key, work));
                 }
                 conflict => kept = self.key_conflict(info, view, conflict)?,
             }
@@ -404,6 +395,93 @@ impl Connection {
         }
         Ok(())
     }
+
+    /// `_bt_load` of the new unique indexes of the table `table` on the rows in place: the first duplicate key is an error, and a transaction in progress that holds a version with the key is a wait.
+    fn check_keys_in_place(
+        &self,
+        table: u32,
+        view: &View,
+        unique: &[rupg_analyze::Unique],
+        work: &Arc<Catalog>,
+    ) -> Result<(), Error> {
+        if unique.is_empty() {
+            return Ok(());
+        }
+        let checked: Vec<_> =
+            unique.iter().map(|u| rupg_analyze::Unique { deferrable: None, ..u.clone() }).collect();
+        let reader = self.reader_without_view(Arc::clone(work));
+        let derive = |d: &Derived, r: &[Value]| rupg_exec::index_key(d, r, &reader);
+        loop {
+            match self.store.heap().check_build(table, view, &checked, &derive)? {
+                Some(Changed::WaitKey { holder, .. }) => {
+                    self.reader().wait_xact(view.xid, holder, "")?;
+                }
+                Some(Changed::Duplicate { index, key }) => {
+                    return Err(self.duplicated(table, unique.get(index), &key, work));
+                }
+                _ => return Ok(()),
+            }
+        }
+    }
+
+    /// The error of `index_build` for the key `key` that two rows of the table `table` have in the new unique index `unique`.
+    fn duplicated(
+        &self,
+        table: u32,
+        unique: Option<&rupg_analyze::Unique>,
+        key: &[Value],
+        work: &Arc<Catalog>,
+    ) -> Error {
+        let Some(unique) = unique else {
+            return Error::internal("a duplicate key of an index that is not in the list");
+        };
+        let shown = self
+            .index_key_text(&unique.types, key)
+            .and_then(|values| Ok((self.key_shown(unique, Arc::clone(work))?, values)));
+        let (columns, values) = match shown {
+            Ok(shown) => shown,
+            Err(error) => return error,
+        };
+        let error = Error::new(
+            SqlState::UNIQUE_VIOLATION,
+            format!("could not create unique index \"{}\"", unique.name),
+        )
+        .with_detail(format!("Key ({columns})=({values}) is duplicated."));
+        rupg_func::with_table_constraint(error, table, &unique.name, &self.reader())
+    }
+}
+
+/// True if the rows of the table `rel` keep their values after the change of the catalog from `old` to `new`, so that the statement only checks them: no column gets a new type, a value or a new expression of a generated column, and no value of a row type gets a new shape.
+fn keeps_rows(
+    old: &Catalog,
+    new: &Catalog,
+    rel: &Relation,
+    transforms: &[Transform],
+    fills: &[Fill],
+) -> bool {
+    let Some(now) = new.relation(rel.oid) else {
+        return false;
+    };
+    if now.columns.len() != rel.columns.len()
+        || transforms.iter().any(|t| t.table == rel.oid)
+        || fills.iter().any(|f| f.table == rel.oid)
+    {
+        return false;
+    }
+    let reshaped = reshaped_row_types(old, new);
+    rel.columns.iter().zip(&now.columns).enumerate().all(|(i, (before, after))| {
+        let attnum = i16::try_from(i + 1).unwrap_or(i16::MAX);
+        before.dropped == after.dropped
+            && (before.dropped
+                || before.ty == after.ty
+                    && before.typmod == after.typmod
+                    && before.collation == after.collation
+                    && before.generated == after.generated
+                    && (after.generated == 0
+                        || old.default_of(rel.oid, attnum).map(|d| &d.expr)
+                            == new.default_of(rel.oid, attnum).map(|d| &d.expr))
+                    && (reshaped.is_empty() || !holds_row_type(old, before.ty, &reshaped, 0)))
+    })
 }
 
 /// True if the change of the catalog from `old` to `new` changes the rows of the table `rel`: a change of the type of a column, a new not-null constraint, a new column with a default, a not-null constraint or a domain with constraints, a new constraint that checks the rows of the table or one that becomes valid, or a new unique index or one that becomes ready. A dropped table and a new column with no default keep the rows.

@@ -418,6 +418,60 @@ impl Table {
         Ok(None)
     }
 
+    /// A transaction other than `xid` that is in progress and inserted or deleted a version of the table.
+    fn holder(&self, xid: u32, running: &BTreeSet<u32>) -> Option<u32> {
+        let other = |x: u32| x != 0 && x != xid && running.contains(&x);
+        self.versions.iter().find_map(|v| [v.xmin, v.xmax].into_iter().find(|&x| other(x)))
+    }
+
+    /// The first version that is not dead with the key of a version before it in the map `map` of the unique index at the place `index`, as [`Heap::check_build`] gives it.
+    fn first_duplicate(
+        &self,
+        index: usize,
+        map: &KeyMap,
+        (xid, running): (u32, &BTreeSet<u32>),
+    ) -> Result<Option<Changed>> {
+        for version in &self.versions {
+            let seen = dirty(version, xid, running);
+            if seen == Seen::Dead {
+                continue;
+            }
+            let Some(values) = map.key(version.tid, &version.values) else {
+                continue;
+            };
+            let Some(hash) = map.hash(values) else {
+                continue;
+            };
+            for &other in map.hashes.get(&hash).into_iter().flatten() {
+                if other >= version.tid {
+                    continue;
+                }
+                let Some(found) = self.find(other) else {
+                    continue;
+                };
+                let before = &self.versions[found];
+                let seen_before = dirty(before, xid, running);
+                if seen_before == Seen::Dead {
+                    continue;
+                }
+                match map.key(other, &before.values) {
+                    Some(other) if map.same(values, other)? => {}
+                    _ => continue,
+                }
+                return Ok(Some(match (seen_before, seen) {
+                    (Seen::Wait(holder), _) | (_, Seen::Wait(holder)) => {
+                        Changed::WaitKey { holder, index, used: vec![version.tid] }
+                    }
+                    _ => Changed::Duplicate {
+                        index,
+                        key: map.columns.iter().map(|&column| values[column].clone()).collect(),
+                    },
+                }));
+            }
+        }
+        Ok(None)
+    }
+
     /// Takes back the new versions `used` and the deletes of the versions `deleted`, after a write that must wait or that failed. The IDs stay used: after a wait the write makes its versions again with the same IDs, as the versions of PostgreSQL stay in place while it waits, and after a failure the versions of PostgreSQL stay in the heap until the end of the transaction.
     fn undo(&mut self, used: &[u64], deleted: &[u64]) {
         let mut used = used.to_vec();
@@ -990,11 +1044,8 @@ impl Heap {
         let mut state = self.state();
         let State { tables, running, truncating, .. } = &mut *state;
         let table = tables.get_mut(&(view.database, relation))?;
-        let other = |xid: u32| xid != 0 && xid != view.xid && running.contains(&xid);
-        for version in &table.versions {
-            if let Some(holder) = [version.xmin, version.xmax].into_iter().find(|&x| other(x)) {
-                return Some(holder);
-            }
+        if let Some(holder) = table.holder(view.xid, running) {
+            return Some(holder);
         }
         for version in table.versions.iter_mut().filter(|version| version.xmax == 0) {
             version.xmax = view.xid;
@@ -1392,6 +1443,38 @@ impl Heap {
         }
         let checked = (xid, &*running);
         table.check_keys((&places, &unique), &[recheck.tid], checked, &mut Vec::new())
+    }
+
+    /// A transaction other than the one of `view` that is in progress and wrote a version of the table `relation`, which a check of the rows in place waits for, as the lock of the table waits for it in PostgreSQL.
+    pub(crate) fn holder(&self, relation: u32, view: &View) -> Option<u32> {
+        let state = self.state();
+        state.tables.get(&(view.database, relation))?.holder(view.xid, &state.running)
+    }
+
+    /// `_bt_load` with `UNIQUE_CHECK_YES` of a new unique index on the versions that the table `relation` has, as `CREATE UNIQUE INDEX` and `ALTER TABLE ... ADD UNIQUE` check them. The versions stay in place. The result is the first live version, in the order of the IDs, with the key of a live version before it, or a transaction in progress to wait for.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the expressions of the index and of the equality of a key.
+    pub(crate) fn check_build(
+        &self,
+        relation: u32,
+        view: &View,
+        unique: &[Unique],
+        derive: Derive<'_>,
+    ) -> Result<Option<Changed>> {
+        let table = (view.database, relation);
+        let (state, places) = self.lock_keys(table, unique, derive)?;
+        let Some(rows) = state.tables.get(&table) else {
+            return Ok(None);
+        };
+        let checked = (view.xid, &state.running);
+        for (index, &place) in places.iter().enumerate() {
+            if let Some(changed) = rows.first_duplicate(index, &rows.keys[place], checked)? {
+                return Ok(Some(changed));
+            }
+        }
+        Ok(None)
     }
 
     /// Removes the rows of the tables of a database that `keep` does not keep, after a commit drops the tables.
