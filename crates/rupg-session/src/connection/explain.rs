@@ -6,7 +6,7 @@ use std::sync::Arc;
 use rupg_analyze::{BoolOp, Expr, ExprKind, Params, Query};
 use rupg_common::{Error, SqlState};
 use rupg_func::Session;
-use rupg_opt::{Enable, Index, Member};
+use rupg_opt::{Enable, Index, Member, Size};
 use rupg_pgcatalog::builtin;
 use rupg_plan::{Format, Options};
 use rupg_sql::nodes::{DefElem, ExecuteStmt, ExplainStmt, Node};
@@ -58,10 +58,20 @@ impl rupg_opt::Members for Members<'_, '_> {
                 let columns =
                     table.columns.iter().filter(|c| !c.dropped).map(|c| (c.ty, c.typmod)).collect();
                 let has_children = !catalog.all_inheritors(oid).is_empty();
-                Some(Member { oid, columns, has_children })
+                let size = rupg_opt::Members::size(self, oid);
+                Some(Member { oid, columns, has_children, size })
             })
             .collect();
         Some(members)
+    }
+
+    fn size(&self, table: u32) -> Size {
+        let size = self.heap.size(self.database, table);
+        Size {
+            blocks: f64::from(size.blocks),
+            relpages: f64::from(size.relpages),
+            reltuples: f64::from(size.reltuples),
+        }
     }
 
     fn indexes(&self, table: u32) -> Vec<Index> {

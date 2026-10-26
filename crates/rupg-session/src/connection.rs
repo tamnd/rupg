@@ -384,6 +384,8 @@ pub struct Connection {
     unnamed_portals: Cell<u32>,
     /// The OID of the materialized view that `CREATE MATERIALIZED VIEW` or `REFRESH MATERIALIZED VIEW` fills, or 0. [`rupg_analyze::Env::filling`] gives it.
     pub(crate) filling: Cell<u32>,
+    /// The OID of the table that `CREATE TABLE AS`, `SELECT INTO` or a materialized view fills with a `BulkInsertState`, or 0.
+    bulk: Cell<u32>,
     /// `xact_started` of `postgres.c`: a statement runs in the transaction, so `finish_xact_command` must end it.
     xact_started: bool,
     /// `XACT_FLAGS_PIPELINING`: an `Execute` completed in the transaction, so the next message starts an implicit block.
@@ -495,6 +497,7 @@ impl Connection {
             portals: RefCell::new(Portals::new()),
             unnamed_portals: Cell::new(0),
             filling: Cell::new(0),
+            bulk: Cell::new(0),
             xact_started: false,
             pipelining: false,
             cancel: Arc::new(AtomicBool::new(false)),
@@ -822,6 +825,9 @@ impl Connection {
                     new_rows.clone_from(&rows);
                 }
                 let inserted = rows.len();
+                if self.bulk.get() == info.table {
+                    heap.start_bulk(info.table, &view);
+                }
                 if info.unique.is_empty() {
                     heap.insert(
                         info.table,
@@ -1208,6 +1214,7 @@ impl Connection {
         match result {
             Ok(()) => {
                 let old = std::mem::replace(&mut lease.catalog, work);
+                self.index_stats(&old, &lease.catalog);
                 if !defined.grantors.is_empty() {
                     let mut roles = Roles::clone(&lease.roles);
                     roles.members.retain(|m| !defined.grantors.contains(&m.grantor));
@@ -1406,8 +1413,10 @@ impl Connection {
             rupg_func::Session::start_function_call(&self.reader(), &config, Some(owner))?;
             self.filling.set(table);
         }
+        self.bulk.set(table);
         let result =
             self.select(&Node::InsertStmt(Box::new(insert)), notices, &mut late, &mut described);
+        self.bulk.set(0);
         self.filling.set(0);
         if matview {
             rupg_func::Session::end_function_call(&self.reader());
@@ -4940,6 +4949,12 @@ mod tests {
     #[test]
     fn row_security_outer_join() {
         big_stack(|| script(include_str!("connection/row_security_outer_join.test")));
+    }
+
+    /// The pages of the heap that `pg_relation_size` gives, `relpages` and `reltuples` after `ANALYZE`, `VACUUM`, `CREATE INDEX` and `TRUNCATE`, and the sizes of the scans that `EXPLAIN` shows from them. `connection/heap_size.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn heap_size() {
+        big_stack(|| script(include_str!("connection/heap_size.test")));
     }
 
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.

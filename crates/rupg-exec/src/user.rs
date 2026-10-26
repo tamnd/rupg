@@ -228,7 +228,7 @@ pub(crate) fn rows(
 ) -> Result<Vec<Vec<Value>>> {
     let rows = match table.name {
         "pg_namespace" => namespaces(table, catalog),
-        "pg_class" => classes(table, catalog),
+        "pg_class" => classes(table, catalog, session),
         "pg_type" => types(table, catalog, session)?,
         "pg_attribute" => attributes(table, catalog, session)?,
         "pg_attrdef" => defaults(table, catalog),
@@ -490,13 +490,15 @@ fn namespaces<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
         .collect()
 }
 
-fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+fn classes<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) -> Vec<Row<'a>> {
     catalog
         .relations()
         .map(|rel| {
             let heap = matches!(rel.kind, RelKind::Table | RelKind::Toast | RelKind::MatView);
+            let stats = session.heap_size(rel.oid).map_or((0, -1.0), |s| (s.relpages, s.reltuples));
             let (am, pages, tuples) = match rel.kind {
-                RelKind::Table | RelKind::Toast | RelKind::MatView => (HEAP, 0, -1.0),
+                RelKind::Table | RelKind::Toast | RelKind::MatView => (HEAP, stats.0, stats.1),
+                RelKind::Partitioned => (0, stats.0, stats.1),
                 RelKind::Index => {
                     rel.index.as_ref().map_or((0, 1, 0.0), |i| (i.method, i.pages, 0.0))
                 }
@@ -504,7 +506,7 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                     rel.index.as_ref().map_or((0, 0, -1.0), |i| (i.method, 0, -1.0))
                 }
                 RelKind::Sequence => (0, 1, 1.0),
-                RelKind::View | RelKind::Composite | RelKind::Partitioned => (0, 0, -1.0),
+                RelKind::View | RelKind::Composite => (0, 0, -1.0),
             };
             let checks = catalog.constraints_of(rel.oid).filter(|c| c.kind == ConKind::Check);
             let mut row = Row::new(table);

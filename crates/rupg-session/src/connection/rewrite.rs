@@ -360,6 +360,8 @@ impl Connection {
             .iter()
             .map(|u| rupg_analyze::Unique { deferrable: None, ..u.clone() })
             .collect();
+        // `ATRewriteTable` writes the rows with a `BulkInsertState`.
+        heap.start_bulk(rel.oid, view);
         let mut kept = Vec::new();
         loop {
             match heap.insert(
