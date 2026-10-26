@@ -1,0 +1,31 @@
+> create table or_a (x int, y int, z int)
+CREATE TABLE
+> insert into or_a values (1, 2, 3), (4, 4, null), (null, null, null), (7, 1, 2)
+INSERT 0 4
+> create table or_b (k int, v text)
+CREATE TABLE
+> insert into or_b values (1, 'one'), (2, 'two'), (3, 'three'), (4, 'four'), (null, 'null'), (7, 'seven')
+INSERT 0 6
+> select a.x, a.y, a.z, b.k, b.v from or_a a, or_b b where b.k = a.x or b.k = a.y or b.k = a.z order by 1, 2, 3, 4
+fields x@or_a.1:23:4:-1,y@or_a.2:23:4:-1,z@or_a.3:23:4:-1,k@or_b.1:23:4:-1,v@or_b.2:25:-1:-1
+row 1,2,3,1,one
+row 1,2,3,2,two
+row 1,2,3,3,three
+row 4,4,NULL,4,four
+row 7,1,2,1,one
+row 7,1,2,2,two
+row 7,1,2,7,seven
+SELECT 7
+> select a.x, b.k from or_a a left join or_b b on b.k = a.x or b.k = a.y + 1 order by 1, 2
+fields x@or_a.1:23:4:-1,k@or_b.1:23:4:-1
+row 1,1
+row 1,3
+row 4,4
+row 7,2
+row 7,7
+row NULL,NULL
+SELECT 6
+> select count(*) from or_a a, or_b b where (b.k = a.x or b.k = a.y) and b.v <> 'one'
+fields count:20:8:-1
+row 3
+SELECT 1

@@ -3658,6 +3658,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/lateral_outer_cond.test")));
     }
 
+    /// A join whose condition is an `OR` of `=`s finds the rows of the inner side through an index for each arm, also in an outer join.
+    #[test]
+    fn join_or_index() {
+        big_stack(|| script(include_str!("connection/join_or_index.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

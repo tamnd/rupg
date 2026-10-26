@@ -1198,7 +1198,7 @@ enum Side<'q> {
     Expr(&'q Expr),
 }
 
-/// A join of two lists of tuples: a join through an index of the right side when the condition has an `=` that a hash can test, with a column or an expression of each side, or else a nested loop. The rows of an outer join that match no row get nulls for the other side.
+/// A join of two lists of tuples: a join through an index of the right side when the condition has an `=` that a hash can test, with a column or an expression of each side, or an `OR` of such `=`s, or else a nested loop. The rows of an outer join that match no row get nulls for the other side.
 fn join<'a>(input: JoinInput<'a>, tables: &Tables, test: &mut Test<'_>) -> Result<Vec<Vec<usize>>> {
     let JoinInput { left, right, on, kind, left_relations, right_relations } = input;
     let merge = |l: &[usize], r: &[usize]| -> Vec<usize> {
@@ -1219,24 +1219,35 @@ fn join<'a>(input: JoinInput<'a>, tables: &Tables, test: &mut Test<'_>) -> Resul
             }
         }
     };
-    let pairs: Vec<(Side<'a>, Side<'a>)> = on
-        .iter()
-        .filter_map(|expr| {
-            let ExprKind::Func(f) = &expr.kind else { return None };
-            if !HASH_EQUALS.contains(&f.oid) || f.args.len() != 2 {
-                return None;
-            }
-            let (a, b) = (&f.args[0], &f.args[1]);
-            match (side(a, left_relations), side(b, right_relations)) {
-                (Some(l), Some(r)) => Some((l, r)),
-                _ => Some((side(b, left_relations)?, side(a, right_relations)?)),
-            }
-        })
-        .collect();
+    let pair = |expr: &'a Expr| -> Option<(Side<'a>, Side<'a>)> {
+        let ExprKind::Func(f) = &expr.kind else { return None };
+        if !HASH_EQUALS.contains(&f.oid) || f.args.len() != 2 {
+            return None;
+        }
+        let (a, b) = (&f.args[0], &f.args[1]);
+        match (side(a, left_relations), side(b, right_relations)) {
+            (Some(l), Some(r)) => Some((l, r)),
+            _ => Some((side(b, left_relations)?, side(a, right_relations)?)),
+        }
+    };
+    let pairs: Vec<(Side<'a>, Side<'a>)> = on.iter().filter_map(|expr| pair(expr)).collect();
     let hash = pairs
         .iter()
         .find(|(l, r)| matches!((l, r), (Side::Var(_), Side::Var(_))))
         .or_else(|| pairs.first());
+    // With no such `=`, an `OR` of such `=`s gives the rows of the right side that match one of its arms, as a `BitmapOr` of index scans or an index scan with `= ANY` does.
+    let arms: Vec<(Side<'a>, Side<'a>)> = if hash.is_none() {
+        on.iter()
+            .find_map(|expr| match &expr.kind {
+                ExprKind::Bool(rupg_analyze::BoolOp::Or, args) => {
+                    args.iter().map(pair).collect::<Option<Vec<_>>>()
+                }
+                _ => None,
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let mut value = |tuple: &[usize], side: &Side<'_>| -> Result<Value> {
         match side {
             Side::Var(var) => Ok(tables.var(tuple, *var)),
@@ -1261,13 +1272,40 @@ fn join<'a>(input: JoinInput<'a>, tables: &Tables, test: &mut Test<'_>) -> Resul
             left_keys.push(key(value(tuple, l)?));
         }
     }
+    let mut arm_indexes: Vec<BTreeMap<Key, Vec<usize>>> = Vec::new();
+    let mut arm_keys: Vec<Vec<Option<Key>>> = Vec::new();
+    if !left.is_empty() {
+        for (l, r) in &arms {
+            let mut index: BTreeMap<Key, Vec<usize>> = BTreeMap::new();
+            for (i, tuple) in right.iter().enumerate() {
+                if let Some(k) = key(value(tuple, r)?) {
+                    index.entry(k).or_default().push(i);
+                }
+            }
+            let keys = left.iter().map(|tuple| Ok(key(value(tuple, l)?))).collect::<Result<_>>()?;
+            arm_indexes.push(index);
+            arm_keys.push(keys);
+        }
+    }
     let all: Vec<usize> = (0..right.len()).collect();
+    let mut union = Vec::new();
     for (n, l) in left.iter().enumerate() {
         let candidates: &[usize] = match hash {
             Some(_) => match &left_keys[n] {
                 Some(k) => index.get(k).map_or(&[], Vec::as_slice),
                 None => &[],
             },
+            None if !arm_indexes.is_empty() => {
+                union.clear();
+                for (index, keys) in arm_indexes.iter().zip(&arm_keys) {
+                    if let Some(rows) = keys[n].as_ref().and_then(|k| index.get(k)) {
+                        union.extend_from_slice(rows);
+                    }
+                }
+                union.sort_unstable();
+                union.dedup();
+                &union
+            }
             None => &all,
         };
         let mut matched = false;
