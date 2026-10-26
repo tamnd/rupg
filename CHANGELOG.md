@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.3.0 (2026-10-26)
+
 ### Added
 
 - `CREATE TYPE name` makes a shell type, as `TypeShellMake` does. `CREATE FUNCTION` gives the notices of PostgreSQL for a shell type in its arguments and its result, and a function in `internal` or C makes a shell type for a result type that does not exist. A shell type in a query is the error "is only a shell". (#824)
