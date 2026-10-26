@@ -1,0 +1,20 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> SELECT datfrozenxid, age(datfrozenxid) > 0 AS aged FROM pg_database WHERE datname = current_database();
+fields datfrozenxid@pg_database.10:28:4:-1,aged:16:1:-1
+row 654,t
+SELECT 1
+> SELECT x, pg_xact_status(x::text::xid8), txid_status(x) FROM (VALUES (1), (2), (3), (653), (654), (661)) v(x);
+fields x:23:4:-1,pg_xact_status:25:-1:-1,txid_status:25:-1:-1
+row 1,committed,committed
+row 2,committed,committed
+row 3,NULL,NULL
+row 653,NULL,NULL
+row 654,committed,committed
+row 661,committed,committed
+SELECT 6
+> SELECT pg_xact_status('0'::xid8);
+fields pg_xact_status:25:-1:-1
+row NULL
+SELECT 1

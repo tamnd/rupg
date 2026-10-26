@@ -5078,6 +5078,18 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_inherit_merge.test")));
     }
 
+    /// A cross join with a filter on one side, where the side with the filter has fewer rows and goes inside a `Materialize`. `connection/plan_cross_filter.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_cross_filter() {
+        big_stack(|| script(include_str!("connection/plan_cross_filter.test")));
+    }
+
+    /// The transactions of `initdb`: `datfrozenxid` of a new cluster, and `pg_xact_status` of the transaction IDs before `oldestClogXid`, which is NULL, and of the IDs after it. `connection/xact_status_initdb.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn xact_status_initdb() {
+        big_stack(|| script(include_str!("connection/xact_status_initdb.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

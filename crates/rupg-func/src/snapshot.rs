@@ -105,7 +105,7 @@ fn current_snapshot(call: &Call<'_>, _: &[Value]) -> Result<Value> {
     Ok(Value::Bytea(snapshot.to_bytes()))
 }
 
-/// `pg_xact_status` with the checks of `TransactionIdInRecentPast`: NULL for the ID 0 and for a transaction that the session does not know, `committed` for the IDs of the bootstrap and of the frozen rows, and an error for an ID in the future.
+/// `pg_xact_status` with the checks of `TransactionIdInRecentPast`: NULL for the ID 0, for a transaction before `oldestClogXid`, whose entry of `pg_xact` is gone, and for a transaction that the session does not know, `committed` for the IDs of the bootstrap and of the frozen rows, and an error for an ID in the future.
 fn xact_status(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let Some(Value::Int8(full)) = args.first() else { return Err(bad_value()) };
     let full = full.cast_unsigned();
@@ -121,6 +121,9 @@ fn xact_status(call: &Call<'_>, args: &[Value]) -> Result<Value> {
             SqlState::INVALID_PARAMETER_VALUE,
             format!("transaction ID {full} is in the future"),
         ));
+    }
+    if full < u64::from(rupg_catalog::database::INITDB_FROZEN_XID) {
+        return Ok(Value::Null);
     }
     Ok(match call.session.transaction_state(xid) {
         None => Value::Null,

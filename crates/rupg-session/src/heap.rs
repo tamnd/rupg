@@ -42,8 +42,8 @@ fn fresh(unique: &[Unique], values: &[Value], derive: Derive<'_>) -> Result<Fres
     Ok(keys)
 }
 
-/// `FirstNormalTransactionId`: the first transaction ID that a transaction gets.
-const FIRST_NORMAL_XID: u32 = 3;
+/// `nextXid` of a new cluster: `initdb` of PostgreSQL 19 uses the transaction IDs from `FirstNormalTransactionId` up to 661, so the first transaction gets 662.
+const INITDB_NEXT_XID: u32 = 662;
 
 /// The rows of the tables of all the databases, and the transactions that are in progress.
 #[derive(Debug, Default)]
@@ -701,7 +701,7 @@ impl Heap {
     /// `GetNewTransactionId`: a transaction ID for a transaction of the session `pid` that writes. The transaction is in progress until [`Heap::commit`] or [`Heap::abort`].
     pub(crate) fn begin(&self, pid: i32) -> u32 {
         let mut state = self.state();
-        let xid = state.next_xid.max(FIRST_NORMAL_XID);
+        let xid = state.next_xid.max(INITDB_NEXT_XID);
         state.next_xid = xid + 1;
         state.running.insert(xid);
         state.owners.insert(xid, pid);
@@ -710,7 +710,7 @@ impl Heap {
 
     /// `ReadNextFullTransactionId`: the transaction ID that the next transaction that writes gets.
     pub(crate) fn next_xid(&self) -> u32 {
-        self.state().next_xid.max(FIRST_NORMAL_XID)
+        self.state().next_xid.max(INITDB_NEXT_XID)
     }
 
     /// Sets the `xmin` of the session `pid` to the `xmin` of `snapshot` when the session holds no snapshot, as `GetSnapshotData` sets `MyProc->xmin`.
@@ -746,9 +746,9 @@ impl Heap {
     pub(crate) fn snapshot(&self) -> Snapshot {
         let state = self.state();
         Snapshot {
-            xmax: state.next_xid.max(FIRST_NORMAL_XID),
+            xmax: state.next_xid.max(INITDB_NEXT_XID),
             running: state.running.clone(),
-            completed: (state.latest_completed + 1).max(FIRST_NORMAL_XID),
+            completed: (state.latest_completed + 1).max(INITDB_NEXT_XID),
         }
     }
 
@@ -1185,7 +1185,7 @@ impl Heap {
             .copied()
             .into_iter()
             .chain(state.xmins.values().copied())
-            .fold((state.latest_completed + 1).max(FIRST_NORMAL_XID), u32::min);
+            .fold((state.latest_completed + 1).max(INITDB_NEXT_XID), u32::min);
         let dead =
             |v: &Version| v.xmax != 0 && !state.running.contains(&v.xmax) && v.xmax < horizon;
         let mut range: Option<(&Value, &Value)> = None;
@@ -1244,7 +1244,7 @@ impl Heap {
             .copied()
             .into_iter()
             .chain(xmins.iter().filter(|&(&other, _)| other != pid).map(|(_, &xmin)| xmin))
-            .fold((*latest_completed + 1).max(FIRST_NORMAL_XID), u32::min);
+            .fold((*latest_completed + 1).max(INITDB_NEXT_XID), u32::min);
         let Some(table) = tables.get_mut(&(database, relation)) else { return 0.0 };
         let generation = table.pages.generation;
         let scanned = table.pages.scanned(skip);
