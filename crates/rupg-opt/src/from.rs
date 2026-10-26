@@ -530,8 +530,7 @@ impl<'q> Builder<'q> {
             }
             // A volatile condition with no column runs once for each row of the join of all the relations, as `distribute_qual_to_rels`.
             let rels = if rels.is_empty() { all.clone() } else { rels };
-            let security = query.security.iter().find(|(e, _)| e == part).map(|&(_, level)| level);
-            quals.push(Qual { security, ..Qual::of(part, rels, false) });
+            quals.push(Qual::of(part, rels, false));
         }
         let mut nonnullable = BTreeSet::new();
         for qual in &quals {
@@ -558,6 +557,9 @@ impl<'q> Builder<'q> {
             place(&mut tree, qual);
         }
         place_on(&mut tree, &mut next);
+        if !query.security.is_empty() {
+            mark_security(&mut tree, &query.security);
+        }
         let mut found = classes::Found::default();
         if !classes::domain(&mut tree, true, &mut found) {
             return (
@@ -1536,6 +1538,25 @@ fn place_on<'q>(tree: &mut Tree<'q>, next: &mut usize) {
                 place(&mut join.right, Qual { order, ..Qual::of(part, rels, true) });
             }
             _ => join.quals.push(Qual { order, ..Qual::of(part, rels, false) }),
+        }
+    }
+}
+
+/// `security_level` of the conditions of the policies of row-level security in the tree, from [`Query::security`], also for those of `ON` of an outer join.
+fn mark_security(tree: &mut Tree<'_>, security: &[(Expr, usize)]) {
+    let mark = |quals: &mut Vec<Qual<'_>>| {
+        for qual in quals {
+            let found = security.iter().find(|(e, _)| *e == *qual.expr);
+            qual.security = found.map(|&(_, level)| level);
+        }
+    };
+    match tree {
+        Tree::Base { quals, .. } => mark(quals),
+        Tree::Join(join) => {
+            mark(&mut join.quals);
+            mark(&mut join.filter);
+            mark_security(&mut join.left, security);
+            mark_security(&mut join.right, security);
         }
     }
 }

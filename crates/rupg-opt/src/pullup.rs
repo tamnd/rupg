@@ -116,7 +116,8 @@ fn policies(query: &mut Query, r: usize) {
         && !sub.barrier.is_empty()
         && matches!(sub.from[..], [FromItem::Relation(0)])
         && matches!(&sub.relations[..], [inner] if inner.oid == relation.oid && inner.subquery.is_none());
-    if !wrapped {
+    // `securityQuals` of a table in a full join remove its rows before the join, which no condition of `ON` does.
+    if !wrapped || query.from.iter().any(|item| in_full(item, r)) {
         return;
     }
     let Some(mut sub) = relation.subquery.take().map(|sub| *sub) else { return };
@@ -134,7 +135,46 @@ fn policies(query: &mut Query, r: usize) {
         let level = levels.next().unwrap_or(sub.barrier.len());
         query.security.push((part.clone(), level));
     }
-    query.filter = Some(and(filter, query.filter.take()));
+    // On the nullable side of an outer join, the conditions remove the rows of the table before the join, as the condition of `ON` of the lowest such join does.
+    let mut filter = Some(filter);
+    for item in &mut query.from {
+        add_nullable_on(item, r, &mut filter);
+    }
+    if let Some(filter) = filter {
+        query.filter = Some(and(filter, query.filter.take()));
+    }
+}
+
+/// True when a full join of the item has the relation `r`.
+fn in_full(item: &FromItem, r: usize) -> bool {
+    let FromItem::Join(join) = item else { return false };
+    if join.kind == JoinKind::Full {
+        let mut rels = Vec::new();
+        pushdown::rels(item, &mut rels);
+        if rels.contains(&r) {
+            return true;
+        }
+    }
+    in_full(&join.left, r) || in_full(&join.right, r)
+}
+
+/// Puts `filter` in the condition of `ON` of the lowest left or right join of the item whose nullable side has the relation `r`.
+fn add_nullable_on(item: &mut FromItem, r: usize, filter: &mut Option<Expr>) {
+    let FromItem::Join(join) = item else { return };
+    add_nullable_on(&mut join.left, r, filter);
+    add_nullable_on(&mut join.right, r, filter);
+    let nullable = match join.kind {
+        JoinKind::Left => &join.right,
+        JoinKind::Right => &join.left,
+        _ => return,
+    };
+    let mut rels = Vec::new();
+    pushdown::rels(nullable, &mut rels);
+    if rels.contains(&r)
+        && let Some(filter) = filter.take()
+    {
+        join.on = Some(and(filter, join.on.take()));
+    }
 }
 
 /// `transform_MERGE_to_join`: the join of a `MERGE` has the target table on its left side and the source on its right side. With `NOT MATCHED BY SOURCE`, the executor of PostgreSQL tests the whole row of the source, so the plan does not read the one-row `VALUES` that marks the source rows here. A `MERGE` in `WITH` changes too.

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `EXPLAIN` of a query with a table whose policies apply on the nullable side of a left or right join shows an outer join with the conditions of the policies on the scan of the table, and a left join to such a table with a unique key leaves the plan (#785).
 - The detail of the error of a foreign key hides the key when the current user has no `SELECT` on the table or on each column of the key, or when the policies of row-level security of the table apply (#784).
 ## 0.2.1 (2026-10-26)
 
