@@ -4,7 +4,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
-## 0.3.0 (2026-10-26)
+## 0.3.1 (2026-10-27)
 
 ### Added
 
@@ -38,6 +38,11 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - The shortest text of a `float8` that is halfway between two texts of 17 digits takes the even digits, as Ryu does, also for 2 to the power -25 (#828)
 - `CREATE CAST` with a function, `WITH INOUT` and `WITHOUT FUNCTION`, with the checks of `CreateCast`, the dependencies of `CastCreate` and `DROP CAST`. A binary cast between an integer type and a float type keeps the bits of the value (#827)
 - `CREATE TYPE` makes a base type from a shell type, with the parameters and the checks of `DefineType`, the I/O function lookups, the array type and the dependencies. The values of a type whose input function is an internal function of a built-in type have the form of that type (#826)
+
+## 0.3.0 (2026-10-26)
+
+### Added
+
 - `CREATE TYPE name` makes a shell type, as `TypeShellMake` does. `CREATE FUNCTION` gives the notices of PostgreSQL for a shell type in its arguments and its result, and a function in `internal` or C makes a shell type for a result type that does not exist. A shell type in a query is the error "is only a shell". (#824)
 - The planner makes index scans and bitmap index scans of `hash` indexes for `=`, with the costs of `hashcostestimate` and the pages of the build of the index (#821).
 - `CREATE INDEX` and `REINDEX` give a new index of a table with rows its `relpages` and `reltuples` in `pg_class`, as `index_update_stats` does: the pages of a `btree` index and the rows that it has, and the buckets of a `hash` index for the rows that the stats of the table give (#820).
