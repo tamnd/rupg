@@ -895,6 +895,12 @@ impl Definer<'_, '_> {
         }
     }
 
+    /// `pg_class_aclcheck` of `ACL_TRUNCATE` for the current user on the table `oid`, as `truncate_check_perms` does it.
+    pub(super) fn may_truncate(&self, oid: u32) -> bool {
+        let roles = rupg_pgcatalog::roles::current();
+        self.pg_aclmask(&roles, Object::new(Kind::Table, oid), self.user, TRUNCATE) != 0
+    }
+
     /// `pg_aclmask` with `ACLMASK_ANY`: the privileges of the mask that the role has on the object. A superuser has all of them, and the privileges of the relation count for a column.
     fn pg_aclmask(&self, roles: &Roles, object: Object, role: u32, mask: u64) -> u64 {
         if roles.superuser(role) {

@@ -109,14 +109,14 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
-    /// `truncate_check_rel` and `truncate_check_perms`: the relation must be a table that is not a system catalog, and the role must own it. rupg has no `GRANT`, so the privilege `TRUNCATE` is the privilege of the owner.
+    /// `truncate_check_rel` and `truncate_check_perms`: the relation must be a table that is not a system catalog, and the role must have the privilege `TRUNCATE` on it.
     fn truncate_check(&self, found: Found, name: &str) -> Result<u32> {
         self.truncate_check_rel(found, name)?;
-        let owner = match found {
-            Found::User(oid) => self.catalog.relation(oid).map_or(0, |r| r.owner),
-            Found::Builtin(row) => row.owner,
+        let allowed = match found {
+            Found::User(oid) => self.may_truncate(oid),
+            Found::Builtin(row) => self.is_superuser() || row.owner == self.user,
         };
-        if !self.is_superuser() && owner != self.user {
+        if !allowed {
             return Err(Error::new(
                 SqlState::INSUFFICIENT_PRIVILEGE,
                 format!("permission denied for table {name}"),

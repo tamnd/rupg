@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The functions of the policies of row-level security send their notices when a `BEFORE` trigger, `COPY ... TO` or the check of the row of a conflict runs them, `INSERT ... ON CONFLICT DO UPDATE` with a `BEFORE` trigger checks the policies of `UPDATE` only on the row after the trigger, and `TRUNCATE` takes the privilege `TRUNCATE` from `GRANT` (#781).
 - `EXPLAIN` of a table with row security shows the scan of the table with the conditions of the policies first, in the order of their security levels, and not a `Subquery Scan` (#780).
 - `EXPLAIN` shows a `Result` above the `Append` of a table with children of `INHERITS` when the query computes its targets, such as `SELECT a + 1` or `UPDATE ... SET b = 'x'` (#779).
 - A prepared statement plans its query again after a change of the catalog, such as `ALTER TABLE` or `DROP TABLE`, and gives `0A000` "cached plan must not change result type" when the new plan gives other columns (#778).

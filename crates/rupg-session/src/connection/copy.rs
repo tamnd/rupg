@@ -244,6 +244,7 @@ impl Connection {
             let names: Arc<[String]> = selected.iter().map(|&i| columns[i].clone()).collect();
             let count = rows.len() as u64;
             let data = json_rows(options.force_array, &types, &names, rows, &reader)?;
+            notices.0.extend(reader.take_warnings().into_iter().map(Notice::of_function));
             return Ok(Done::Copy(CopyOut { binary, columns: width, data, rows: count, notices }));
         }
         let encode = |rows: Vec<Vec<Value>>| {
@@ -254,6 +255,8 @@ impl Connection {
             (None, Some(order)) => encode(by_partition(plan.run(&[], &reader)?, order)),
             (None, None) => query::run(&plan, &[], &reader, &formats),
         }?;
+        // The messages of `RAISE` of the functions of the query, such as the functions of the policies of the table, come before the rows.
+        notices.0.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         if let Some(writes) = writes {
             self.end_writes(writes, &[], Vec::new())?;
         }

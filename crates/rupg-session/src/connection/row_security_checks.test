@@ -1,0 +1,101 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE ROLE regress_ck_u;
+CREATE ROLE
+> CREATE TABLE ck_t (a int PRIMARY KEY, b text, c text);
+CREATE TABLE
+> ALTER TABLE ck_t ENABLE ROW LEVEL SECURITY;
+ALTER TABLE
+> GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ck_t TO public;
+GRANT
+> CREATE FUNCTION ck_fn(text, record) RETURNS bool AS $$ BEGIN RAISE NOTICE '%.%', $1, $2; RETURN true; END; $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> CREATE FUNCTION ck_set_c() RETURNS trigger AS $$ BEGIN new.c = upper(new.b); RETURN new; END; $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> CREATE TRIGGER ck_set_c BEFORE INSERT OR UPDATE ON ck_t FOR EACH ROW EXECUTE FUNCTION ck_set_c();
+CREATE TRIGGER
+> CREATE POLICY sel_pol ON ck_t FOR SELECT USING (ck_fn('SELECT USING', ck_t));
+CREATE POLICY
+> CREATE POLICY ins_pol ON ck_t FOR INSERT WITH CHECK (ck_fn('INSERT CHECK', ck_t));
+CREATE POLICY
+> CREATE POLICY upd_pol ON ck_t FOR UPDATE USING (ck_fn('UPDATE USING', ck_t)) WITH CHECK (ck_fn('UPDATE CHECK', ck_t));
+CREATE POLICY
+> CREATE POLICY del_pol ON ck_t FOR DELETE USING (ck_fn('DELETE USING', ck_t));
+CREATE POLICY
+> SET SESSION AUTHORIZATION regress_ck_u;
+SET
+session_authorization=regress_ck_u
+is_superuser=off
+> INSERT INTO ck_t VALUES (1, 'a');
+NOTICE 00000 INSERT CHECK.(1,a,A) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+INSERT 0 1
+> COPY ck_t TO stdout;
+copy out 0 0,0,0
+NOTICE 00000 SELECT USING.(1,a,A) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+data 1\ta\tA\n
+copy done
+COPY 1
+> TRUNCATE ck_t;
+TRUNCATE TABLE
+> INSERT INTO ck_t VALUES (1, 'a') RETURNING a, b, c;
+NOTICE 00000 INSERT CHECK.(1,a,A) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+NOTICE 00000 SELECT USING.(1,a,A) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+fields a@ck_t.1:23:4:-1,b@ck_t.2:25:-1:-1,c@ck_t.3:25:-1:-1
+row 1,a,A
+INSERT 0 1
+> UPDATE ck_t SET b = 'b';
+NOTICE 00000 UPDATE USING.(1,a,A) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+NOTICE 00000 UPDATE CHECK.(1,b,B) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+UPDATE 1
+> UPDATE ck_t SET b = 'c' WHERE a = 1;
+NOTICE 00000 UPDATE USING.(1,b,B) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+NOTICE 00000 SELECT USING.(1,b,B) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+NOTICE 00000 UPDATE CHECK.(1,c,C) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+NOTICE 00000 SELECT USING.(1,c,C) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+UPDATE 1
+> UPDATE ck_t SET b = 'd' RETURNING a, b, c;
+NOTICE 00000 UPDATE USING.(1,c,C) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+NOTICE 00000 SELECT USING.(1,c,C) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+NOTICE 00000 UPDATE CHECK.(1,d,D) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+NOTICE 00000 SELECT USING.(1,d,D) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+fields a@ck_t.1:23:4:-1,b@ck_t.2:25:-1:-1,c@ck_t.3:25:-1:-1
+row 1,d,D
+UPDATE 1
+> INSERT INTO ck_t VALUES (1, 'e') ON CONFLICT (a) DO NOTHING;
+NOTICE 00000 INSERT CHECK.(1,e,E) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+NOTICE 00000 SELECT USING.(1,e,E) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+INSERT 0 0
+> INSERT INTO ck_t VALUES (1, 'e') ON CONFLICT DO NOTHING;
+NOTICE 00000 INSERT CHECK.(1,e,E) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+INSERT 0 0
+> INSERT INTO ck_t VALUES (1, 'f') ON CONFLICT (a) DO UPDATE SET b = 'g';
+NOTICE 00000 INSERT CHECK.(1,f,F) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+NOTICE 00000 SELECT USING.(1,f,F) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+NOTICE 00000 UPDATE USING.(1,d,D) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+NOTICE 00000 SELECT USING.(1,d,D) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+NOTICE 00000 UPDATE CHECK.(1,g,G) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+NOTICE 00000 SELECT USING.(1,g,G) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+INSERT 0 1
+> INSERT INTO ck_t VALUES (2, 'h') ON CONFLICT (a) DO UPDATE SET b = 'i' RETURNING a, b, c;
+NOTICE 00000 INSERT CHECK.(2,h,H) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+NOTICE 00000 SELECT USING.(2,h,H) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+fields a@ck_t.1:23:4:-1,b@ck_t.2:25:-1:-1,c@ck_t.3:25:-1:-1
+row 2,h,H
+INSERT 0 1
+> DELETE FROM ck_t WHERE a = 2;
+NOTICE 00000 DELETE USING.(2,h,H) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+NOTICE 00000 SELECT USING.(2,h,H) (PL/pgSQL function ck_fn(text,record) line 1 at RAISE)
+DELETE 1
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> DROP TABLE ck_t;
+DROP TABLE
+> DROP FUNCTION ck_fn(text, record);
+DROP FUNCTION
+> DROP FUNCTION ck_set_c();
+DROP FUNCTION
+> DROP ROLE regress_ck_u;
+DROP ROLE
