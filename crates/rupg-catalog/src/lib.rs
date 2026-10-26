@@ -2969,6 +2969,60 @@ impl Catalog {
         Ok(oid)
     }
 
+    /// `TypeCreate` for the shell type `oid` that `DefineType` fills in, and for its array type. The type keeps its OID and gets the facts of `base` and the element type `element`, or 0. The array type gets a new OID and is part of the type. The type depends on its functions and on its element type, as `GenerateTypeDependencies` records them. The return value is the OID of the array type.
+    ///
+    /// # Errors
+    ///
+    /// An internal error when the catalog has no type with the OID.
+    pub fn define_base_type(&mut self, oid: u32, base: BaseType, element: u32) -> Result<u32> {
+        let (name, namespace, owner) = match self.types.get(&oid) {
+            Some(ty) => (ty.name.clone(), ty.namespace, ty.owner),
+            None => return Err(no_object("type", oid)),
+        };
+        let array = self.new_oid();
+        let array_name = self.array_type_name(&name, namespace);
+        let functions = [
+            base.input,
+            base.output,
+            base.receive,
+            base.send,
+            base.modin,
+            base.modout,
+            base.analyze,
+            base.subscript,
+        ];
+        if let Some(ty) = self.types.get_mut(&oid) {
+            ty.base = Some(base);
+            ty.element = element;
+            ty.array = array;
+        }
+        self.types.insert(
+            array,
+            Type {
+                oid: array,
+                name: array_name,
+                namespace,
+                owner,
+                relation: 0,
+                element: oid,
+                array: 0,
+                domain: None,
+                labels: None,
+                range: None,
+                base: None,
+            },
+        );
+        let me = ObjRef::new(PG_TYPE, oid);
+        for function in functions.into_iter().filter(|&f| f != 0) {
+            self.depend(me, ObjRef::new(PG_PROC, function), DepKind::Normal);
+        }
+        if element != 0 {
+            self.depend(me, ObjRef::new(PG_TYPE, element), DepKind::Normal);
+        }
+        self.depend(ObjRef::new(PG_TYPE, array), me, DepKind::Internal);
+        Ok(array)
+    }
+
     /// `DefineRange`: the range type, its multirange type, their array types, the constructors and the cast from the range type to the multirange type. The array type of the range type gets the first OID, then the multirange type, its array type and the range type. The constructors and the cast come after the types. The return value is the OID of the range type.
     ///
     /// # Errors
