@@ -270,6 +270,8 @@ pub enum Kind<'q> {
     Hash,
     /// `Material`: the rows of the node below, which the node keeps for the next scans.
     Materialize,
+    /// `Memoize`: the rows of the node below for each value of the parameters `keys`, which the node keeps in a cache for the next scans with the same values, as `create_memoize_plan` makes it from a `MemoizePath`. The estimates are `est_entries`, `est_unique_keys`, `est_calls` and `est_hit_ratio`.
+    Memoize(Box<Memoize<'q>>),
     /// `Agg`, with the keys of the groups. With grouping sets, each rollup has its sets, each set has its keys, and a set with no keys makes one group.
     Aggregate { strategy: Strategy, keys: Vec<Item<'q>>, sets: Vec<Rollup<'q>> },
     /// `Sort`.
@@ -302,6 +304,23 @@ pub enum Kind<'q> {
         conflict: Option<Conflict<'q>>,
         targets: Vec<usize>,
     },
+}
+
+/// The parts of a `Memoize` node.
+#[derive(Clone, Debug)]
+pub struct Memoize<'q> {
+    /// `param_exprs`: the values of the outer side that the parameters of the node below read.
+    pub keys: Vec<Item<'q>>,
+    /// `binary_mode`: true when an operator of a condition cannot use a hash table, so that the cache compares the values bit by bit.
+    pub binary: bool,
+    /// `est_entries`: the number of entries that the cache can hold.
+    pub capacity: u32,
+    /// `est_unique_keys`: the number of distinct values of the keys.
+    pub distinct: f64,
+    /// `est_calls`: the number of scans of the node.
+    pub lookups: f64,
+    /// `est_hit_ratio`: the fraction of the scans that find their rows in the cache.
+    pub hit: f64,
 }
 
 /// The relation or the node that a `Result` takes the place of, as `result_type`.

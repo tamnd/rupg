@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The planner makes a `Memoize` node over a parameterized scan of the inner side of a nested loop, and `EXPLAIN` shows its keys, its mode and its estimates (#793).
 - The planner reads the correlation of the first column of an index from the statistics for the cost of an index scan (#792).
 - The planner estimates the `=` conditions of the joins from the most common values and the number of distinct values of both sides, and the buckets of the hash joins from the most common value (#791).
 - The planner estimates `<`, `<=`, `>` and `>=` with a constant from the most common values and the histogram of a column, and from the real least and greatest values of an index (#790).

@@ -163,6 +163,7 @@ impl rupg_opt::Members for Members<'_, '_> {
             incremental_sort: on("enable_incremental_sort"),
             hashagg: on("enable_hashagg"),
             material: on("enable_material"),
+            memoize: on("enable_memoize"),
             presorted_aggregate: on("enable_presorted_aggregate"),
             nestloop: on("enable_nestloop"),
             mergejoin: on("enable_mergejoin"),
