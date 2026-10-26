@@ -72,7 +72,7 @@ impl<T> Paths<T> {
         self.add_param(cost, keys, BTreeSet::new(), 0.0, plan);
     }
 
-    /// `add_path`: adds a plan with the disabled nodes, the start cost and the total cost `cost` unless a plan of the list is as good, and takes away each plan of the list that the new plan is as good as. A plan is as good as another when it has fewer disabled nodes, or the same and it costs less or about the same, its order is as useful, it reads the values of fewer relations or the same relations and it gives no more rows.
+    /// `add_path`: adds a plan with the disabled nodes, the start cost and the total cost `cost` unless a plan of the list is as good, and takes away each plan of the list that the new plan is as good as. A plan is as good as another when it has fewer disabled nodes, or the same and it costs less or about the same, its order is as useful, with no order for a parameterized plan, it reads the values of fewer relations or the same relations and it gives no more rows.
     pub(super) fn add_param(
         &mut self,
         (disabled, startup, total): (u32, f64, f64),
@@ -97,7 +97,10 @@ impl<T> Paths<T> {
             };
             let mut remove = false;
             if costs != Compare::Different {
-                let order = compare_keys(&keys, &old.keys);
+                // The order of a parameterized plan does not count, as a nested loop above it does not keep it.
+                let new_keys = if outer.is_empty() { &keys[..] } else { &[] };
+                let old_keys = if old.outer.is_empty() { &old.keys[..] } else { &[] };
+                let order = compare_keys(new_keys, old_keys);
                 let o = compare_outer(&outer, &old.outer);
                 let first = matches!(o, Compare::Equal | Compare::Better1) && rows <= old.rows;
                 let second = matches!(o, Compare::Equal | Compare::Better2) && rows >= old.rows;
