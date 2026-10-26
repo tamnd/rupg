@@ -44,6 +44,8 @@ These questions came up while the documents were written. They are closed, and t
 
 **Q70. Crate names.** Closed at M1. The 42 crates of the workspace that have no `publish = false` are on crates.io at version 0.1.84, under the names of document 22. The publish runs in the order of the dependencies, with all crates at one version, and `cargo publish --locked`. #83 has the record.
 
+**Q38. 39-bit aarch64 hosts.** Closed after M1. The pool keeps the hash table form for a file that is larger than the window. `crates/rupg-buffer/examples/forms.rs` forces each form on one host, so it measures the table without a host with a 39-bit address space. The project has no such host, so the numbers come from hosts with a 48-bit address space. On Apple M aarch64 with 10 cores, a page hit costs 26.4 ns in the table and 19.6 ns in the window with one thread (1.35x), and 101.5 ns against 27.0 ns with 10 threads (3.8x), for optimistic reads. A shared latch costs 27.5 ns against 32.9 ns with one thread and 126.8 ns against 55.5 ns with 10 threads. A smoke run on server2, x86_64 with 6 cores, gives the same order: 1.32x with one thread and 1.72x with 6 threads. The cost is in the shards of the map, and a hit in the window has no lock. The fallback stays. On a 39-bit host it applies only to a file larger than 128 GiB, and such a file reads most of its pages from the disk, so the cost of a hit in the pool is a small part of the time. Section 8.8.4 of document 08 keeps the same form for WebAssembly and for a process with a `ulimit -v` limit. #773 has the program and the evidence.
+
 ## 24.3 The 10x targets
 
 **Q1. Do the ClickBench rules accept the summaries?** H1 to H6 build structures at load from the data, under the honesty rule of document 02 section 2.4.5. The ClickBench maintainers decide what the untuned category allows. Raised by documents 02 and 20. Closes before the first submission, after M8. Decided by a written answer from the maintainers. Until then, every published rupg row has a second row with `rupg.use_summaries = off`.
@@ -121,8 +123,6 @@ These questions came up while the documents were written. They are closed, and t
 **Q36. The mover policy.** The stable age (60 s by default, up to 24 h) and the minimum hot size of 64 MiB are budgets aimed at TPC-C `stock`. Raised by document 10. Closes at M8.
 
 **Q37. Data key rotation.** A new passphrase only rewraps the data key. A new data key means a rewrite of every page. Raised by document 08. Closes at M10, with backup.
-
-**Q38. 39-bit aarch64 hosts.** On hosts with a 39-bit virtual address space, each buffer window is limited to 128 GiB, so a larger file uses the hash table fallback. Its cost is not measured. Raised by document 08. Closes at M1. At the M1 close (#2) this is still open. The project has no aarch64 host with a 39-bit address space, so the fallback is not measured.
 
 **Q39. FSST with 12-bit codes.** The 17.0 percent gain needs a different decoder. Only the OptFSST trainer with the 8-bit decoder is adopted now. Raised by document 09. Closes at M8.
 
