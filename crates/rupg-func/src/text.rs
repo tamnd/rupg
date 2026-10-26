@@ -473,6 +473,25 @@ fn ilike(args: &[Value]) -> Result<bool> {
     like(&arg(args, 0)?.to_ascii_lowercase(), &arg(args, 1)?.to_ascii_lowercase())
 }
 
+/// The result of the pattern operator `op` of a value and a pattern that are not null, when `op` is `~~`, `~~*`, `~`, `~*` or `^@`. The selectivity functions of the planner call it on the values of the statistics, as `mcv_selectivity` and `histogram_selectivity` call the function of the operator. The result is `None` for another operator and for an error.
+#[must_use]
+pub fn pattern_match(op: u32, value: &Value, pattern: &Value) -> Option<bool> {
+    let name = rupg_pgcatalog::builtin::operator_by_oid(op)?.name;
+    if let (Value::Bytea(v), Value::Bytea(p)) = (value, pattern) {
+        return if name == "~~" { like_bytes(v, p).ok() } else { None };
+    }
+    let args = [value.clone(), pattern.clone()];
+    let result = match name {
+        "~~" => like(arg(&args, 0).ok()?, arg(&args, 1).ok()?),
+        "~~*" => ilike(&args),
+        "~" => crate::regex::regex_match(&args, false),
+        "~*" => crate::regex::regex_match(&args, true),
+        "^@" => Ok(arg(&args, 0).ok()?.starts_with(arg(&args, 1).ok()?)),
+        _ => return None,
+    };
+    result.ok()
+}
+
 fn texticlike(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Bool(ilike(args)?))
 }

@@ -62,6 +62,11 @@ pub trait Members: std::fmt::Debug {
         no_compare
     }
 
+    /// The result of a pattern operator of a value and a pattern, which `patternsel` gets from the function of the operator.
+    fn pattern_match(&self) -> PatternMatch {
+        no_pattern_match
+    }
+
     /// The `enable_*` settings of the session.
     fn enable(&self) -> Enable {
         Enable::default()
@@ -144,6 +149,21 @@ fn no_compare(_: u32, _: &Value, _: u32, _: &Value) -> Option<Ordering> {
 thread_local! {
     /// The comparison of the values of the plan that the planner makes now.
     static COMPARE: Cell<Compare> = Cell::new(no_compare);
+    /// The pattern operators of the plan that the planner makes now.
+    static PATTERN_MATCH: Cell<PatternMatch> = Cell::new(no_pattern_match);
+}
+
+/// The result of the positive pattern operator with the OID of the first argument, `~~`, `~~*`, `~`, `~*` or `^@`, of a value and a pattern that are not null, or `None` when it is not known.
+pub type PatternMatch = fn(u32, &Value, &Value) -> Option<bool>;
+
+/// The pattern operators when the planner has none: no result is known.
+fn no_pattern_match(_: u32, _: &Value, _: &Value) -> Option<bool> {
+    None
+}
+
+/// The result of a pattern operator, as [`Members::pattern_match`] gives it.
+pub(crate) fn pattern_match(op: u32, value: &Value, pattern: &Value) -> Option<bool> {
+    PATTERN_MATCH.with(Cell::get)(op, value, pattern)
 }
 
 /// The order of two values that are not null with their types, as [`Members::compare`] gives it.
@@ -247,7 +267,9 @@ pub fn plan<'q>(query: &'q Query, members: &'q dyn Members) -> Plan<'q> {
     query_statistics(query, members, &mut statistics);
     let saved_statistics = STATISTICS.with(|s| s.replace(statistics));
     let saved_compare = COMPARE.with(|c| c.replace(members.compare()));
+    let saved_match = PATTERN_MATCH.with(|c| c.replace(members.pattern_match()));
     let plan = plan_with(query, members);
+    PATTERN_MATCH.with(|c| c.set(saved_match));
     COMPARE.with(|c| c.set(saved_compare));
     ENABLE.with(|e| e.set(saved));
     STATISTICS.with(|s| s.replace(saved_statistics));

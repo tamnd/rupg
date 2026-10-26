@@ -1243,6 +1243,16 @@ impl cost::Estimate for ScanEstimate {
         let var = plain_var(expr).filter(|v| v.levels_up == 0 && v.relation == self.r)?;
         self.columns.get(&var.attnum)
     }
+
+    fn histogram_ineq(&self, column: &Expr, value: &Expr, op: cost::Inequality) -> Option<f64> {
+        let s = cost::Estimate::statistic(self, column)?;
+        let mcvs = s
+            .slots
+            .iter()
+            .find(|slot| slot.kind == STATISTIC_KIND_MCV)
+            .map_or(0, |slot| slot.numbers.as_deref().map_or(0, <[f32]>::len));
+        self.ineq_histogram(column, value, op, mcvs).flatten()
+    }
 }
 
 /// A table that a scan reads, with its estimates, its conditions and its indexes, which the parameterized scans of the table read, as the `RelOptInfo` of the table.
