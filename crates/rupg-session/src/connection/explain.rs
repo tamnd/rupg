@@ -1,6 +1,7 @@
 //! `EXPLAIN`, as `ExplainQuery` of `explain.c` runs it: the options, the plan of the query and the rows of its output. `EXPLAIN ANALYZE` is not supported yet.
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use rupg_analyze::{BoolOp, Expr, ExprKind, Params, Query};
@@ -20,6 +21,11 @@ use crate::heap::{BtreeSize, Heap, Shape};
 use crate::query::{self, Column, Reader};
 use crate::utility::Notice;
 
+/// `STATISTIC_KIND_MCELEM`: the most common elements of an array column.
+const STATISTIC_KIND_MCELEM: i16 = 4;
+/// `STATISTIC_KIND_DECHIST`: the histogram of the counts of the distinct elements of an array column.
+const STATISTIC_KIND_DECHIST: i16 = 5;
+
 /// The members of the inheritance trees of the relations of a plan, from the catalog of the statement. The first error of the pruning of the partitions is the error of the statement.
 #[derive(Debug)]
 struct Members<'r, 'a> {
@@ -30,7 +36,58 @@ struct Members<'r, 'a> {
     database: u32,
 }
 
+thread_local! {
+    /// The statistics of the system catalogs that [`Members::catalog_statistics`] read, by the OID of the catalog.
+    static CATALOG_STATISTICS: RefCell<BTreeMap<u32, Vec<rupg_func::Statistic>>> = const { RefCell::new(BTreeMap::new()) };
+}
+
 impl Members<'_, '_> {
+    /// The statistics of the system catalog `table` in a new database. The input function of the array type of the column reads the values of a slot, or the input function of the array type of the element type for a slot of the elements of an array.
+    fn catalog_statistics(&self, table: u32) -> Vec<rupg_func::Statistic> {
+        let Some(catalog) = rupg_pgcatalog::catalog_by_oid(table) else { return Vec::new() };
+        let slot = |ty: u32, slot: &builtin::CatalogSlot| {
+            let values = match slot.values {
+                None => None,
+                Some(text) => {
+                    let ty = if matches!(slot.kind, STATISTIC_KIND_MCELEM | STATISTIC_KIND_DECHIST)
+                    {
+                        rupg_analyze::types::element(ty)
+                    } else {
+                        ty
+                    };
+                    let array = rupg_analyze::types::array_of(ty);
+                    match rupg_func::input(array, text, -1, self.reader) {
+                        Ok(Value::Array(array)) => {
+                            Some(array.values.into_iter().flatten().collect())
+                        }
+                        _ => return None,
+                    }
+                }
+            };
+            Some(rupg_func::StatSlot {
+                kind: slot.kind,
+                operator: slot.operator,
+                collation: slot.collation,
+                numbers: slot.numbers.map(<[f32]>::to_vec),
+                values,
+            })
+        };
+        builtin::catalog_statistics(table)
+            .iter()
+            .filter_map(|row| {
+                let column = catalog.columns.get(usize::try_from(row.attnum - 1).ok()?)?;
+                Some(rupg_func::Statistic {
+                    attnum: row.attnum,
+                    inherit: row.inherit,
+                    null_frac: row.null_frac,
+                    width: row.width,
+                    distinct: row.distinct,
+                    slots: row.slots.iter().filter_map(|s| slot(column.type_oid, s)).collect(),
+                })
+            })
+            .collect()
+    }
+
     /// `RelationGetNumberOfBlocks` of an index of the table `table` with the pages `pages` of a new index: the first row of a `btree` adds its root page after the metapage, as `_bt_getroot` makes it.
     fn index_pages(&self, table: u32, method: u32, pages: i32) -> i32 {
         if method == rupg_catalog::BTREE && self.heap.has_rows(self.database, table) {
@@ -133,6 +190,12 @@ impl rupg_opt::Members for Members<'_, '_> {
     }
 
     fn size(&self, table: u32) -> Size {
+        if table < rupg_catalog::FIRST_NORMAL_OID
+            && let Some((pages, tuples)) = builtin::catalog_size(table)
+        {
+            let pages = f64::from(pages);
+            return Size { blocks: pages, relpages: pages, reltuples: f64::from(tuples) };
+        }
         let size = self.heap.size(self.database, table);
         Size {
             blocks: f64::from(size.blocks),
@@ -142,6 +205,11 @@ impl rupg_opt::Members for Members<'_, '_> {
     }
 
     fn statistics(&self, table: u32) -> Vec<rupg_func::Statistic> {
+        if table < rupg_catalog::FIRST_NORMAL_OID {
+            return CATALOG_STATISTICS.with_borrow_mut(|cache| {
+                cache.entry(table).or_insert_with(|| self.catalog_statistics(table)).clone()
+            });
+        }
         self.heap.statistics(self.database, table)
     }
 
@@ -178,6 +246,9 @@ impl rupg_opt::Members for Members<'_, '_> {
     }
 
     fn indexes(&self, table: u32) -> Vec<Index> {
+        if table < rupg_catalog::FIRST_NORMAL_OID {
+            return catalog_indexes(table);
+        }
         let Some(catalog) = self.reader.catalog() else { return Vec::new() };
         let columns = catalog.relation(table).map(|t| t.columns.as_slice()).unwrap_or_default();
         let mut out: Vec<Index> = catalog
@@ -260,6 +331,47 @@ impl rupg_opt::Members for Members<'_, '_> {
             hashjoin: on("enable_hashjoin"),
         }
     }
+}
+
+/// The indexes of the system catalog `table`, with the sizes of a new database. The root of an index with more pages than the metapage and one leaf is not a leaf.
+fn catalog_indexes(table: u32) -> Vec<Index> {
+    let Some(catalog) = rupg_pgcatalog::catalog_by_oid(table) else { return Vec::new() };
+    let class = |oid: &u32| builtin::opclasses().iter().find(|c| c.oid == *oid);
+    builtin::catalog_indexes(table)
+        .into_iter()
+        .map(|info| {
+            let pages = builtin::catalog_size(info.oid).map_or(1, |(pages, _)| pages);
+            let width = info
+                .keys
+                .iter()
+                .filter_map(|&attnum| catalog.columns.get(usize::try_from(attnum - 1).ok()?))
+                .map(|c| rupg_opt::type_width(c.type_oid, -1))
+                .sum();
+            Index {
+                oid: info.oid,
+                keys: info.keys.iter().take(info.key_count).copied().collect(),
+                unique: info.unique,
+                nulls_not_distinct: false,
+                immediate: true,
+                partial: false,
+                method: rupg_catalog::BTREE,
+                columns: info.keys.to_vec(),
+                families: info.classes.iter().map(|c| class(c).map_or(0, |c| c.family)).collect(),
+                default_class: info
+                    .classes
+                    .iter()
+                    .map(|c| class(c).is_some_and(|c| c.default))
+                    .collect(),
+                options: info.options.to_vec(),
+                collations: info.collations.to_vec(),
+                pages: f64::from(pages),
+                height: u32::from(pages > 2),
+                exprs: Vec::new(),
+                predicate: Vec::new(),
+                width,
+            }
+        })
+        .collect()
 }
 
 /// The order of the rows of the joins of `query`, from the plan that `EXPLAIN` shows for it, as [`rupg_opt::join_order`] gives it. `None` when the plan gives its rows in another order or the planner fails.
