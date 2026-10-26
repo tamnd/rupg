@@ -17,7 +17,7 @@ use rupg_pgcatalog::builtin;
 use rupg_plan::{Cost, Item, Kind, Node, Replaced, SortKey, Strategy};
 use rupg_types::{Value, oid};
 
-use crate::{Builder, Index, Level, Member, cost, exprs, pullup, upper};
+use crate::{Builder, Index, Level, Member, Size, cost, exprs, pullup, upper};
 use index::Param;
 use paths::{Paths, costs};
 
@@ -699,6 +699,7 @@ impl<'q> Builder<'q> {
         let mut quals = base.clone();
         stats.sort_quals(&mut quals);
         let mut indexes = Vec::new();
+        let mut size = Size::default();
         // `cost_seqscan` and the other scans: the start cost of the conditions, and their cost for each row.
         let (qual_startup, qual_cost) = stats.qual_costs(quals.iter().map(|q| &*q.expr));
         let qual_startup = qual_startup + once;
@@ -795,6 +796,7 @@ impl<'q> Builder<'q> {
                         return vec![members_scan(level, r, &quals, members, stats)];
                     }
                     indexes = self.members.map(|m| m.indexes(relation.oid)).unwrap_or_default();
+                    size = self.members.map_or_else(Size::default, |m| m.size(relation.oid));
                     for index in &indexes {
                         if let ([key], true, false) =
                             (index.keys.as_slice(), index.unique, index.partial)
@@ -818,7 +820,7 @@ impl<'q> Builder<'q> {
                             stats.distinct.entry(r).or_default().push(index.keys.clone());
                         }
                     }
-                    let (pages, tuples) = cost::table_size(relation);
+                    let (pages, tuples) = cost::table_size(relation, size);
                     match &relation.tablesample {
                         // `set_tablesample_rel_size` and `cost_samplescan`: `SYSTEM` reads the fraction of the pages, each at the cost of a random page, and `BERNOULLI` reads each page in order. The fraction is a `real`, and a percent out of range is a tenth.
                         Some(sample) => {
@@ -907,7 +909,7 @@ impl<'q> Builder<'q> {
         if indexes.is_empty() || !matches!(seq.node.kind, Kind::SeqScan(_)) {
             return vec![seq];
         }
-        let (pages, _) = cost::table_size(relation);
+        let (pages, _) = cost::table_size(relation, size);
         let quals = base.clone();
         let outer = BTreeSet::new();
         let table = index::Table { r, pages, tuples, rows, quals, eq: &eq, outer, loops: 1.0 };

@@ -192,6 +192,14 @@ pub struct AdvisoryLock {
     pub session: bool,
 }
 
+/// The size of the heap of a table, `RelationGetNumberOfBlocks`, and `relpages` and `reltuples` of the table, which `VACUUM`, `ANALYZE` and `CREATE INDEX` set.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HeapSize {
+    pub blocks: u32,
+    pub relpages: i32,
+    pub reltuples: f32,
+}
+
 /// The state of the session that the functions read.
 pub trait Session {
     /// The `DateStyle` setting.
@@ -472,6 +480,11 @@ pub trait Session {
     fn table_rows_with_xids(&self, relation: u32) -> Result<Vec<Vec<Value>>> {
         let _ = relation;
         Ok(Vec::new())
+    }
+    /// `RelationGetNumberOfBlocks` of the heap of a table of the database of the session, with `relpages` and `reltuples` of the table, or `None` when the session has no rows.
+    fn heap_size(&self, relation: u32) -> Option<HeapSize> {
+        let _ = relation;
+        None
     }
     /// `pgstat_fetch_stat_tabentry`: the counters of a relation of the database of the session, from the snapshot of the transaction, or `None` for a relation with no entry. The first call of a transaction takes the snapshot.
     fn relation_counts(&self, relation: u32) -> Option<RelationCounts> {

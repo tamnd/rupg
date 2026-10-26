@@ -40,9 +40,31 @@ pub trait Members: std::fmt::Debug {
     /// The valid indexes of the table with the OID `table`, in the order of their OIDs, as `get_relation_info` reads them from `RelationGetIndexList`.
     fn indexes(&self, table: u32) -> Vec<Index>;
 
+    /// The size of the heap of the table with the OID `table`: `RelationGetNumberOfBlocks`, and `relpages` and `reltuples` of `pg_class`.
+    fn size(&self, _table: u32) -> Size {
+        Size::default()
+    }
+
     /// The `enable_*` settings of the session.
     fn enable(&self) -> Enable {
         Enable::default()
+    }
+}
+
+/// The size of the heap of a table, as `table_block_relation_estimate_size` reads it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Size {
+    /// `RelationGetNumberOfBlocks`: the pages of the heap now.
+    pub blocks: f64,
+    /// `relpages` of `pg_class`, from the last `VACUUM`, `ANALYZE` or `CREATE INDEX`.
+    pub relpages: f64,
+    /// `reltuples` of `pg_class`, or -1 when the table was never vacuumed or analyzed.
+    pub reltuples: f64,
+}
+
+impl Default for Size {
+    fn default() -> Size {
+        Size { blocks: 0.0, relpages: 0.0, reltuples: -1.0 }
     }
 }
 
@@ -136,6 +158,8 @@ pub struct Member {
     pub columns: Vec<(u32, i32)>,
     /// `relhassubclass`: the table has children, so the planner takes no pages for it when it has none.
     pub has_children: bool,
+    /// The size of the heap of the table.
+    pub size: Size,
 }
 
 /// The plan of a query, with the members of the relations that `members` gives.

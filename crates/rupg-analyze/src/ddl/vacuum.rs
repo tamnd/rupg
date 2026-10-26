@@ -1,4 +1,4 @@
-//! The relations of `VACUUM` and `ANALYZE`, as `expand_vacuum_rel` and `vacuum_rel` of `vacuum.c` and `analyze_rel` of `analyze.c` check them. rupg keeps no dead row versions and no statistics yet, so the statement checks the names and changes nothing.
+//! The relations of `VACUUM` and `ANALYZE`, as `expand_vacuum_rel` and `vacuum_rel` of `vacuum.c` and `analyze_rel` of `analyze.c` check them. The checks give the relations that the statement processes.
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{List, Node};
@@ -10,7 +10,7 @@ use crate::{Analyzer, Env, Params};
 /// The OID of `pg_statistic`, which `analyze_rel` skips.
 const PG_STATISTIC: u32 = 2619;
 
-/// `vacuum` for the relations `rels` of a `VacuumStmt`, after `ExecVacuum` has read the options. `vacuum` is true for `VACUUM`, and `analyze` is true for `ANALYZE` or for `VACUUM` with the option `ANALYZE`. The warnings for the relations that the statement skips go to `warnings`, also when a later relation gives an error.
+/// `vacuum` for the relations `rels` of a `VacuumStmt`, after `ExecVacuum` has read the options. `vacuum` is true for `VACUUM`, and `analyze` is true for `ANALYZE` or for `VACUUM` with the option `ANALYZE`. The warnings for the relations that the statement skips go to `warnings`, also when a later relation gives an error. The result is the OIDs of the relations that the statement processes, in the order of the list.
 ///
 /// # Errors
 ///
@@ -21,10 +21,11 @@ pub fn vacuum_relations(
     vacuum: bool,
     analyze: bool,
     warnings: &mut Vec<Error>,
-) -> Result<()> {
+) -> Result<Vec<u32>> {
     let params = Params::default();
     let an = Analyzer::new(env, &params);
     let mut found = Vec::new();
+    let mut done = Vec::new();
     for node in rels.iter().flatten() {
         let Node::VacuumRelation(vrel) = node else { continue };
         let Some(rv) = &vrel.relation else { continue };
@@ -38,14 +39,17 @@ pub fn vacuum_relations(
             continue;
         }
         if !analyze || relid == PG_STATISTIC {
+            done.push(relid);
             continue;
         }
         check_columns(env, relid, &name, va_cols)?;
         if !vacuum && !matches!(kind, b'r' | b'm' | b'p') {
             warnings.push(skipping(&name, "analyze"));
+            continue;
         }
+        done.push(relid);
     }
-    Ok(())
+    Ok(done)
 }
 
 /// `validate_va_cols_list`: each name of the list is a user column of the relation, and no name comes twice.

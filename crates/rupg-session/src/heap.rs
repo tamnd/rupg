@@ -6,7 +6,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use rupg_analyze::{Derived, Unique};
 use rupg_common::{Error, Result, SqlState};
-use rupg_func::XactState;
+use rupg_func::{HeapSize, XactState};
 use rupg_types::{Value, oid};
 
 /// The key of a row in a unique index with an expression or a predicate, or `None` for a row that is not in the index, as [`rupg_exec::index_key`] gives it. A function in an expression can read and change the heap, so the heap calls it only when it is not locked.
@@ -38,6 +38,218 @@ const FIRST_NORMAL_XID: u32 = 3;
 
 /// `MaxHeapTuplesPerPage`: the most versions that a page of 8 kB has. The ID of a version gives its page and its place in the page as if each page had this number of versions.
 const TUPLES_PER_PAGE: u64 = 291;
+
+/// `BLCKSZ`.
+const PAGE_SIZE: u16 = 8192;
+
+/// `SizeOfPageHeaderData`.
+const PAGE_HEADER: u16 = 24;
+
+/// `sizeof(ItemIdData)`: the line pointer of a version in its page.
+const LINE_POINTER: u16 = 4;
+
+/// `SizeofHeapTupleHeader`.
+const TUPLE_HEADER: usize = 23;
+
+/// `MAX_BUFFERS_TO_EXTEND_BY`: the most pages that one extension of a bulk insert adds.
+const MAX_EXTEND: u32 = 64;
+
+/// `TOAST_TUPLE_THRESHOLD` and `TOAST_TUPLE_TARGET`: a version longer than this has its longest values in the TOAST table.
+const TOAST_THRESHOLD: usize = 2032;
+
+/// `TOAST_POINTER_SIZE`: the length of a value in the TOAST table in its version, with its header of one byte.
+const TOAST_POINTER: usize = 18;
+
+/// `MAXALIGN`.
+fn max_align(len: usize) -> usize {
+    (len + 7) & !7
+}
+
+/// `att_align_nominal`: `len` up to a multiple of `align`.
+fn align_to(len: usize, align: usize) -> usize {
+    len.div_ceil(align) * align
+}
+
+/// The storage of a value in a version: the length and the alignment of a value of fixed length, or the length of the data of a `varlena` value with the alignment of its type.
+#[derive(Clone, Copy)]
+enum Layout {
+    Fixed(usize, usize),
+    Varlena(usize, usize),
+}
+
+/// The storage of a value as the type of its variant stores it. `Text` has the storage of `text`, so a value of `name` takes less space than in PostgreSQL. The types whose storage the engine does not follow take 16 bytes of data.
+fn layout(value: &Value) -> Layout {
+    match value {
+        Value::Null => Layout::Fixed(0, 1),
+        Value::Bool(_) | Value::Char(_) => Layout::Fixed(1, 1),
+        Value::Int2(_) => Layout::Fixed(2, 2),
+        Value::Int4(_) | Value::Float4(_) | Value::Oid(_) | Value::Date(_) => Layout::Fixed(4, 4),
+        Value::Int8(_)
+        | Value::Float8(_)
+        | Value::Time(_)
+        | Value::Timestamp(_)
+        | Value::TimestampTz(_) => Layout::Fixed(8, 8),
+        Value::TimeTz(..) => Layout::Fixed(12, 8),
+        Value::Interval(_) => Layout::Fixed(16, 8),
+        Value::Uuid(_) => Layout::Fixed(16, 1),
+        Value::Text(text) => Layout::Varlena(text.len(), 4),
+        Value::Bytea(bytes) => Layout::Varlena(bytes.len(), 4),
+        // `make_result`: a header of two bytes when `NUMERIC_CAN_BE_SHORT`, and four bytes otherwise, then the digits.
+        Value::Numeric(n) => {
+            let short = n.dscale() <= 63 && (-64..=63).contains(&n.weight());
+            let header = if short || n.digits().is_empty() { 2 } else { 4 };
+            Layout::Varlena(header + 2 * n.digits().len(), 4)
+        }
+        Value::Inet(inet) => Layout::Varlena(2 + inet.family.size(), 4),
+        // `construct_md_array`: the header with the dimensions and the null bitmap, then each element at its alignment, a `varlena` element with a header of four bytes.
+        Value::Array(array) => {
+            let dims = 16 + 8 * array.dims.len();
+            let nulls = array.values.iter().any(Option::is_none);
+            let header =
+                max_align(if nulls { dims + array.values.len().div_ceil(8) } else { dims });
+            let (mut len, mut align) = (header, 4);
+            for value in array.values.iter().flatten() {
+                let (size, a) = match layout(value) {
+                    Layout::Fixed(size, a) => (size, a),
+                    Layout::Varlena(size, a) => (size + 4, a),
+                };
+                len = align_to(len, a) + size;
+                align = align.max(a);
+            }
+            Layout::Varlena(len - 4, align)
+        }
+        // A composite value is a `HeapTupleHeader` with its fields.
+        Value::Record(record) => Layout::Varlena(tuple_len(&record.values) - 4, 8),
+        _ => Layout::Varlena(16, 4),
+    }
+}
+
+/// `heap_compute_data_size`: the length of the data of a version with the values `layouts`. A `varlena` value of up to 126 bytes has a header of one byte and no alignment, as `VARATT_CAN_MAKE_SHORT` lets it.
+fn data_len(layouts: &[Layout]) -> usize {
+    layouts.iter().fold(0, |len, layout| match *layout {
+        Layout::Fixed(size, align) => align_to(len, align) + size,
+        Layout::Varlena(size, _) if size < 127 => len + size + 1,
+        Layout::Varlena(size, align) => align_to(len, align) + size + 4,
+    })
+}
+
+/// `t_len` of a version with the values `values`, from `heap_form_tuple`: the header with the null bitmap, then the data. A version longer than `TOAST_TUPLE_THRESHOLD` has its longest values in the TOAST table, as `heap_toast_insert_or_update` moves them while the data is too long. A value that the TOAST table takes is not compressed first, as the engine has no `pglz`.
+fn tuple_len(values: &[Value]) -> usize {
+    let nulls = values.iter().any(Value::is_null);
+    let header = max_align(TUPLE_HEADER + if nulls { values.len().div_ceil(8) } else { 0 });
+    let mut layouts: Vec<Layout> = values.iter().filter(|v| !v.is_null()).map(layout).collect();
+    let mut len = data_len(&layouts);
+    if header + len > TOAST_THRESHOLD {
+        while header + len > TOAST_THRESHOLD {
+            let longest = layouts
+                .iter()
+                .enumerate()
+                .filter_map(|(at, layout)| match *layout {
+                    Layout::Varlena(size, _) if size + 4 > max_align(TOAST_POINTER) => {
+                        Some((size, at))
+                    }
+                    _ => None,
+                })
+                .max_by_key(|&(size, at)| (size, std::cmp::Reverse(at)));
+            let Some((_, at)) = longest else { break };
+            layouts[at] = Layout::Fixed(TOAST_POINTER, 1);
+            len = data_len(&layouts);
+        }
+    }
+    header + len
+}
+
+/// A page of the heap of a table, as `pd_lower` and `pd_upper` of `PageHeaderData` give its free space.
+#[derive(Clone, Copy, Debug)]
+struct Page {
+    lower: u16,
+    upper: u16,
+}
+
+impl Page {
+    /// `PageInit`.
+    const NEW: Page = Page { lower: PAGE_HEADER, upper: PAGE_SIZE };
+
+    /// `PageGetHeapFreeSpace`: the space for one more version with its line pointer. A page with `MaxHeapTuplesPerPage` line pointers has none.
+    fn free(self) -> usize {
+        if u64::from((self.lower - PAGE_HEADER) / LINE_POINTER) >= TUPLES_PER_PAGE {
+            return 0;
+        }
+        usize::from(self.upper - self.lower).saturating_sub(LINE_POINTER.into())
+    }
+}
+
+/// The extension of the heap by a bulk insert, `BulkInsertStateData`: the statement of the insert, the pages of the last extension that no version took yet, and `already_extended_by`.
+#[derive(Clone, Copy, Debug)]
+struct Bulk {
+    made: (u32, u32),
+    free: (u32, u32),
+    extended_by: u32,
+}
+
+/// The pages of the heap of a table, as `RelationGetBufferForTuple` fills them, and `relpages` and `reltuples` of the table, which `vac_update_relstats` writes in place outside of the transactions.
+#[derive(Clone, Debug)]
+struct Pages {
+    pages: Vec<Page>,
+    /// `RelationGetTargetBlock`: the page of the last new version.
+    target: Option<u32>,
+    bulk: Option<Bulk>,
+    relpages: i32,
+    reltuples: f32,
+}
+
+impl Default for Pages {
+    fn default() -> Self {
+        Pages { pages: Vec::new(), target: None, bulk: None, relpages: 0, reltuples: -1.0 }
+    }
+}
+
+impl Pages {
+    /// `RelationGetBufferForTuple`: the page of a new version of `len` bytes. An update puts the new version in the page `old` of the version that it replaces when it fits, as `heap_update` does. Then the version goes to the target page, or to the next free page of the last extension of a bulk insert, or to the last page when it is empty, as the page of `RelationGetNumberOfBlocks` when the free space map has no page. Else the heap gets a new page. A bulk insert, the statement `bulk`, adds as many pages as it added before, up to `MAX_BUFFERS_TO_EXTEND_BY`.
+    fn place(&mut self, len: usize, old: Option<u32>, bulk: Option<(u32, u32)>) -> u32 {
+        let fits = |pages: &[Page], at: u32| {
+            usize::try_from(at).ok().and_then(|at| pages.get(at)).is_some_and(|p| p.free() >= len)
+        };
+        if self.bulk.is_some_and(|b| Some(b.made) != bulk) {
+            self.bulk = None;
+        }
+        let count = u32::try_from(self.pages.len()).unwrap_or(u32::MAX);
+        let last = count.checked_sub(1).filter(|&at| Some(at) != self.target);
+        let at = if let Some(at) = old.filter(|&at| fits(&self.pages, at)) {
+            at
+        } else if let Some(at) = self.target.filter(|&at| fits(&self.pages, at)) {
+            at
+        } else if let Some(b) = self.bulk.as_mut().filter(|b| b.free.0 <= b.free.1) {
+            b.free.0 += 1;
+            b.free.0 - 1
+        } else if let Some(at) = last.filter(|&at| self.pages[at as usize].lower == PAGE_HEADER) {
+            at
+        } else {
+            let by = match bulk {
+                Some(made) => {
+                    let b = self.bulk.get_or_insert(Bulk { made, free: (1, 0), extended_by: 0 });
+                    let by = b.extended_by.clamp(1, MAX_EXTEND);
+                    b.extended_by += by;
+                    b.free = (count + 1, count + by - 1);
+                    by
+                }
+                None => 1,
+            };
+            self.pages.extend((0..by).map(|_| Page::NEW));
+            count
+        };
+        let page = &mut self.pages[at as usize];
+        page.lower += LINE_POINTER;
+        page.upper -= u16::try_from(len).unwrap_or(page.upper).min(page.upper);
+        self.target = Some(at);
+        at
+    }
+
+    /// `RelationGetNumberOfBlocks`.
+    fn blocks(&self) -> u32 {
+        u32::try_from(self.pages.len()).unwrap_or(u32::MAX)
+    }
+}
 
 /// The rows of the tables of all the databases, and the transactions that are in progress.
 #[derive(Debug, Default)]
@@ -117,6 +329,11 @@ struct Table {
     last_tid: u64,
     /// The map of each unique key that a write checked. A map has the IDs of all the versions, live or not, with a key that has no null.
     keys: Vec<KeyMap>,
+    pages: Pages,
+    /// The transaction and the command of the statement that fills the table with a `BulkInsertState`, as `CREATE TABLE AS` does.
+    bulk: Option<(u32, u32)>,
+    /// The pages of the heap before a `TRUNCATE` of the transaction and the command, which a rollback brings back, as `RelationSetNewRelfilenumber` gives the table a new file.
+    truncated: Option<(u32, u32, Box<Pages>)>,
 }
 
 /// The versions of a table by the hash of their key, for one unique key, which takes the place of the btree of a unique index. The map can keep the ID of a version that went, which a check skips.
@@ -283,7 +500,16 @@ impl Table {
         (xmin, cmin): (u32, u32),
         values: Vec<Value>,
         (unique, fresh): (&[Unique], &[DerivedKey]),
+        old: Option<u32>,
     ) -> u64 {
+        // A write that waited makes its versions again in the place that the first try took.
+        let page = match kept {
+            Some(_) => self.pages.target.unwrap_or(0),
+            None => {
+                let bulk = self.bulk.filter(|&made| made == (xmin, cmin));
+                self.pages.place(max_align(tuple_len(&values)), old, bulk)
+            }
+        };
         let tid = kept.unwrap_or_else(|| {
             self.last_tid += 1;
             self.last_tid
@@ -301,7 +527,8 @@ impl Table {
             }
         }
         let values = values.into_boxed_slice();
-        let version = Version { tid, xmin, cmin, xmax: 0, cmax: 0, aborted: 0, next: 0, values };
+        let version =
+            Version { tid, xmin, cmin, xmax: 0, cmax: 0, aborted: 0, next: 0, page, values };
         if self.versions.last().is_none_or(|last| last.tid < tid) {
             self.versions.push(version);
         } else {
@@ -447,6 +674,8 @@ struct Version {
     aborted: u32,
     /// `t_ctid`: the ID of the version that an `UPDATE` made from this version, or 0.
     next: u64,
+    /// The page of the version in the heap of [`Pages`].
+    page: u32,
     values: Box<[Value]>,
 }
 
@@ -745,7 +974,7 @@ impl Heap {
             let mut state = self.state();
             let table = state.tables.entry((view.database, relation)).or_default();
             for values in rows {
-                table.add(None, made, values, (unique, &[]));
+                table.add(None, made, values, (unique, &[]), None);
             }
             return Ok(Changed::Done(count));
         }
@@ -760,7 +989,7 @@ impl Heap {
         let mut used = Vec::with_capacity(rows.len());
         let mut partial = Vec::new();
         for (values, keys) in rows.into_iter().zip(&keys) {
-            used.push(table.add(kept.next(), made, values, (unique, keys)));
+            used.push(table.add(kept.next(), made, values, (unique, keys), None));
             let checked = (view.xid, &*running);
             match table.check_keys((&places, unique), &used, checked, &mut partial) {
                 Ok(None) => {}
@@ -831,7 +1060,7 @@ impl Heap {
                 });
             }
         }
-        let used = [table.add(kept, (view.xid, view.command), values, (unique, &keys))];
+        let used = [table.add(kept, (view.xid, view.command), values, (unique, &keys), None)];
         let mut partial = Vec::new();
         let checked = (view.xid, &*running);
         match table.check_keys((&places, unique), &used, checked, &mut partial) {
@@ -908,7 +1137,8 @@ impl Heap {
         let mut partial = Vec::new();
         for (old, values, keys) in found {
             let made = (view.xid, view.command);
-            let next = values.map_or(0, |v| table.add(kept.next(), made, v, (unique, &keys)));
+            let page = table.find(old).map(|at| table.versions[at].page);
+            let next = values.map_or(0, |v| table.add(kept.next(), made, v, (unique, &keys), page));
             if let Some(at) = table.find(old) {
                 let version = &mut table.versions[at];
                 version.xmax = view.xid;
@@ -949,7 +1179,48 @@ impl Heap {
             version.xmax = view.xid;
             version.cmax = view.command;
         }
+        let old = std::mem::take(&mut table.pages);
+        if table.truncated.as_ref().is_none_or(|(xid, ..)| *xid != view.xid) {
+            table.truncated = Some((view.xid, view.command, Box::new(old)));
+        }
         None
+    }
+
+    /// Marks the statement of `view` as the bulk insert of `CREATE TABLE AS` into the table `relation`, which extends the heap by more pages at a time, as a `BulkInsertState` does.
+    pub(crate) fn start_bulk(&self, relation: u32, view: &View) {
+        let mut state = self.state();
+        let table = state.tables.entry((view.database, relation)).or_default();
+        table.bulk = Some((view.xid, view.command));
+    }
+
+    /// `RelationGetNumberOfBlocks` of the heap of a table, and `relpages` and `reltuples` of the table.
+    pub(crate) fn size(&self, database: u32, relation: u32) -> HeapSize {
+        let state = self.state();
+        let pages = state.tables.get(&(database, relation)).map(|table| &table.pages);
+        HeapSize {
+            blocks: pages.map_or(0, Pages::blocks),
+            relpages: pages.map_or(0, |p| p.relpages),
+            reltuples: pages.map_or(-1.0, |p| p.reltuples),
+        }
+    }
+
+    /// The number of live versions of a table for `ANALYZE` and `VACUUM`, as `heapam_scan_analyze_next_tuple` counts them for the transaction `xid`: the versions that a transaction that committed or `xid` inserted, and that no transaction deleted, or that a transaction in progress other than `xid` deletes.
+    pub(crate) fn live_count(&self, database: u32, relation: u32, xid: u32) -> u64 {
+        let state = self.state();
+        let Some(table) = state.tables.get(&(database, relation)) else { return 0 };
+        let done = |x: u32| x == xid || !state.running.contains(&x);
+        let live = |v: &&Version| {
+            done(v.xmin) && (v.xmax == 0 || (v.xmax != xid && state.running.contains(&v.xmax)))
+        };
+        table.versions.iter().filter(live).count() as u64
+    }
+
+    /// `vac_update_relstats`: sets `relpages` and `reltuples` of a table, outside of the transactions.
+    pub(crate) fn set_stats(&self, database: u32, relation: u32, relpages: i32, reltuples: f32) {
+        let mut state = self.state();
+        let pages = &mut state.tables.entry((database, relation)).or_default().pages;
+        pages.relpages = relpages;
+        pages.reltuples = reltuples;
     }
 
     /// Records that `xid` waits for `holder`, as `LockAcquire` adds an edge to the wait graph.
@@ -1024,6 +1295,9 @@ impl Heap {
     pub(crate) fn abort(&self, xid: u32) {
         let mut state = self.state();
         for table in state.tables.values_mut() {
+            if let Some((_, _, pages)) = table.truncated.take_if(|(x, ..)| *x == xid) {
+                table.pages = *pages;
+            }
             table.remove(|version| version.xmin == xid);
             for version in table.versions.iter_mut().filter(|version| version.xmax == xid) {
                 version.aborted = xid;
@@ -1045,6 +1319,10 @@ impl Heap {
         let mut state = self.state();
         state.rechecks.retain(|recheck| recheck.xid != xid || recheck.command < command);
         for table in state.tables.values_mut() {
+            let truncated = |(x, c, _): &mut (u32, u32, Box<Pages>)| *x == xid && *c >= command;
+            if let Some((_, _, pages)) = table.truncated.take_if(truncated) {
+                table.pages = *pages;
+            }
             table.remove(|version| version.xmin == xid && version.cmin >= command);
             let deleted = |version: &&mut Version| version.xmax == xid && version.cmax >= command;
             for version in table.versions.iter_mut().filter(deleted) {

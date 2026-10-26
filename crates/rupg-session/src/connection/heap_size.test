@@ -1,0 +1,162 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE hs_a (x int);
+CREATE TABLE
+> INSERT INTO hs_a SELECT generate_series(1, 10000);
+INSERT 0 10000
+> SELECT pg_relation_size('hs_a') / 8192 AS pages;
+fields pages:20:8:-1
+row 45
+SELECT 1
+> EXPLAIN SELECT * FROM hs_a;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on hs_a  (cost=0.00..159.75 rows=11475 width=4)
+EXPLAIN
+> SELECT relpages, reltuples FROM pg_class WHERE relname = 'hs_a';
+fields relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row 0,-1
+SELECT 1
+> ANALYZE hs_a;
+ANALYZE
+> SELECT relpages, reltuples FROM pg_class WHERE relname = 'hs_a';
+fields relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row 45,10000
+SELECT 1
+> EXPLAIN SELECT * FROM hs_a;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on hs_a  (cost=0.00..145.00 rows=10000 width=4)
+EXPLAIN
+> INSERT INTO hs_a SELECT generate_series(1, 5000);
+INSERT 0 5000
+> EXPLAIN SELECT * FROM hs_a;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on hs_a  (cost=0.00..215.89 rows=14889 width=4)
+EXPLAIN
+> CREATE TABLE hs_b (x int);
+CREATE TABLE
+> INSERT INTO hs_b SELECT generate_series(1, 100000);
+INSERT 0 100000
+> SELECT pg_relation_size('hs_b') / 8192 AS pages;
+fields pages:20:8:-1
+row 443
+SELECT 1
+> VACUUM hs_b;
+VACUUM
+> SELECT relpages, reltuples FROM pg_class WHERE relname = 'hs_b';
+fields relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row 443,100000
+SELECT 1
+> EXPLAIN SELECT * FROM hs_b;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on hs_b  (cost=0.00..1443.00 rows=100000 width=4)
+EXPLAIN
+> CREATE TABLE hs_c (x int);
+CREATE TABLE
+> INSERT INTO hs_c VALUES (1);
+INSERT 0 1
+> INSERT INTO hs_c VALUES (2);
+INSERT 0 1
+> SELECT pg_relation_size('hs_c') / 8192 AS pages;
+fields pages:20:8:-1
+row 1
+SELECT 1
+> EXPLAIN SELECT * FROM hs_c;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on hs_c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> CREATE TABLE hs_d AS SELECT g AS x, md5(g::text) AS t FROM generate_series(1, 10000) g;
+SELECT 10000
+> SELECT pg_relation_size('hs_d') / 8192 AS pages;
+fields pages:20:8:-1
+row 128
+SELECT 1
+> SELECT relpages, reltuples FROM pg_class WHERE relname = 'hs_d';
+fields relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row 0,-1
+SELECT 1
+> EXPLAIN SELECT * FROM hs_d;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on hs_d  (cost=0.00..290.56 rows=16256 width=36)
+EXPLAIN
+> CREATE INDEX ON hs_d (x);
+CREATE INDEX
+> SELECT relpages, reltuples FROM pg_class WHERE relname = 'hs_d';
+fields relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row 128,10000
+SELECT 1
+> EXPLAIN SELECT * FROM hs_d;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on hs_d  (cost=0.00..228.00 rows=10000 width=36)
+EXPLAIN
+> BEGIN;
+BEGIN
+> TRUNCATE hs_c;
+TRUNCATE TABLE
+> SELECT pg_relation_size('hs_c') / 8192 AS pages;
+fields pages:20:8:-1
+row 0
+SELECT 1
+> ROLLBACK;
+ROLLBACK
+> SELECT pg_relation_size('hs_c') / 8192 AS pages;
+fields pages:20:8:-1
+row 1
+SELECT 1
+> TRUNCATE hs_a;
+TRUNCATE TABLE
+> SELECT pg_relation_size('hs_a') / 8192 AS pages;
+fields pages:20:8:-1
+row 0
+SELECT 1
+> SELECT relpages, reltuples FROM pg_class WHERE relname = 'hs_a';
+fields relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row 0,-1
+SELECT 1
+> EXPLAIN SELECT * FROM hs_a;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on hs_a  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> CREATE TABLE hs_p (x int) PARTITION BY RANGE (x);
+CREATE TABLE
+> CREATE TABLE hs_p1 PARTITION OF hs_p FOR VALUES FROM (0) TO (1000);
+CREATE TABLE
+> CREATE TABLE hs_p2 PARTITION OF hs_p FOR VALUES FROM (1000) TO (3000);
+CREATE TABLE
+> INSERT INTO hs_p SELECT generate_series(0, 2999);
+INSERT 0 3000
+> EXPLAIN SELECT * FROM hs_p;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..96.50 rows=5100 width=4)
+row   ->  Seq Scan on hs_p1 hs_p_1  (cost=0.00..35.50 rows=2550 width=4)
+row   ->  Seq Scan on hs_p2 hs_p_2  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> ANALYZE hs_p;
+ANALYZE
+> SELECT relname, relpages, reltuples FROM pg_class WHERE relname LIKE 'hs_p%' ORDER BY relname;
+fields relname@pg_class.2:19:64:-1,relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row hs_p,-1,3000
+row hs_p1,5,1000
+row hs_p2,9,2000
+SELECT 3
+> EXPLAIN SELECT * FROM hs_p;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..59.00 rows=3000 width=4)
+row   ->  Seq Scan on hs_p1 hs_p_1  (cost=0.00..15.00 rows=1000 width=4)
+row   ->  Seq Scan on hs_p2 hs_p_2  (cost=0.00..29.00 rows=2000 width=4)
+EXPLAIN
+> CREATE TABLE hs_q (x int);
+CREATE TABLE
+> CREATE TABLE hs_q1 () INHERITS (hs_q);
+CREATE TABLE
+> INSERT INTO hs_q1 SELECT generate_series(1, 2000);
+INSERT 0 2000
+> EXPLAIN SELECT * FROM hs_q;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..48.26 rows=2551 width=4)
+row   ->  Seq Scan on hs_q hs_q_1  (cost=0.00..0.00 rows=1 width=4)
+row   ->  Seq Scan on hs_q1 hs_q_2  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> DROP TABLE hs_a, hs_b, hs_c, hs_d, hs_p, hs_q CASCADE;
+NOTICE 00000 drop cascades to table hs_q1
+DROP TABLE

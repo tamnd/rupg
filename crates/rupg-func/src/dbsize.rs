@@ -219,6 +219,9 @@ fn storage(relid: u32, call: &Call<'_>) -> Option<Storage> {
                 (i64::from(index.pages), fsm)
             }
             (RelKind::Sequence, _) => (1, 0),
+            (RelKind::Table | RelKind::Toast | RelKind::MatView, _) => {
+                (call.session.heap_size(rel.oid).map_or(0, |s| i64::from(s.blocks)), 0)
+            }
             _ => (0, 0),
         };
         let filenode = match (&rel.sequence, rel.kind) {

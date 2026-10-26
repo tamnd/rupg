@@ -1019,6 +1019,11 @@ impl rupg_func::Session for Reader<'_> {
         }
     }
 
+    fn heap_size(&self, relation: u32) -> Option<rupg_func::HeapSize> {
+        let (_, store) = self.activity?;
+        Some(store.heap().size(database_oid(store, self.database), relation))
+    }
+
     fn relation_counts(&self, relation: u32) -> Option<rupg_func::RelationCounts> {
         let (activity, store) = self.activity?;
         activity.relation_counts(store, relation)

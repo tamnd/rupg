@@ -4,7 +4,7 @@ use rupg_analyze::{BoolOp, BoolTest, Expr, ExprKind, Relation, SubLink, SubLinkK
 use rupg_pgcatalog::builtin;
 use rupg_types::{Value, oid};
 
-use crate::{Member, exprs};
+use crate::{Member, Size, exprs};
 
 /// `seq_page_cost`.
 pub(crate) const SEQ_PAGE: f64 = 1.0;
@@ -102,20 +102,32 @@ pub(crate) fn expr_width(expr: &Expr, relations: &[Relation]) -> i32 {
     }
 }
 
-/// `estimate_rel_size` for a table that has no pages yet: the pages and the rows.
-pub(crate) fn table_size(relation: &Relation) -> (f64, f64) {
-    let density = (PAGE_SPACE / (row_width(relation) + TUPLE_OVERHEAD)).max(1);
-    (DEFAULT_PAGES, DEFAULT_PAGES * f64::from(density))
+/// `estimate_rel_size` for a table: the pages and the rows.
+pub(crate) fn table_size(relation: &Relation, size: Size) -> (f64, f64) {
+    estimate_size(row_width(relation), size, false)
 }
 
-/// `estimate_rel_size` for a member of an inheritance tree that has no pages yet. A table with children has no pages, because `relhassubclass` keeps the planner from taking ten pages for it.
+/// `estimate_rel_size` for a member of an inheritance tree. `relhassubclass` keeps the planner from taking ten pages for a table with children that has no pages.
 pub(crate) fn member_size(member: &Member) -> (f64, f64) {
-    if member.has_children {
+    let width: i32 = member.columns.iter().map(|&(ty, typmod)| type_width(ty, typmod)).sum();
+    estimate_size(width, member.size, member.has_children)
+}
+
+/// `table_block_relation_estimate_size`: the pages of the heap, or ten pages for a table that has fewer and was never vacuumed or analyzed, and the rows from the density of `relpages` and `reltuples`, or from the width of a row when there is none.
+fn estimate_size(width: i32, size: Size, has_children: bool) -> (f64, f64) {
+    let mut pages = size.blocks;
+    if pages < DEFAULT_PAGES && size.reltuples < 0.0 && !has_children {
+        pages = DEFAULT_PAGES;
+    }
+    if pages == 0.0 {
         return (0.0, 0.0);
     }
-    let width: i32 = member.columns.iter().map(|&(ty, typmod)| type_width(ty, typmod)).sum();
-    let density = (PAGE_SPACE / (width + TUPLE_OVERHEAD)).max(1);
-    (DEFAULT_PAGES, DEFAULT_PAGES * f64::from(density))
+    let density = if size.reltuples >= 0.0 && size.relpages > 0.0 {
+        size.reltuples / size.relpages
+    } else {
+        f64::from((PAGE_SPACE / (width + TUPLE_OVERHEAD)).max(1))
+    };
+    (pages, (density * pages).round_ties_even())
 }
 
 /// `clamp_row_est`: a number of rows that is a whole number and at least 1. As `rint`, a half goes to the even number.
