@@ -84,7 +84,7 @@ The table is a budget, not a measurement. Each line has an owner who keeps it, a
 
 ### 6.4.3 The test
 
-`rupg-bench` runs the measurement of section 6.4.1 on Linux and macOS on every commit to `main` that touches `rupg-wire`, `rupg-session` or `rupg-server`, and nightly otherwise. It runs four variants: plain over a Unix socket, plain over TCP, TLS over TCP, and TLS with SCRAM after `DISCARD ALL`. The gate is the largest of the four. A debug assertion in `rupg-session` also adds the sizes of the parts above for each idle session, from the allocator, and fails a test when a part is over its budget. The TLS line is the most uncertain, because the size of the rustls state after the handshake is not measured yet. If it is above 24 KiB, the first remedy is to move the record layer into the kernel with kTLS on Linux, which document 24 records as open question 6.B.
+`rupg-bench` runs the measurement of section 6.4.1 on Linux and macOS on every commit to `main` that touches `rupg-wire`, `rupg-session` or `rupg-server`, and nightly otherwise. It runs four variants: plain over a Unix socket, plain over TCP, TLS over TCP, and TLS with SCRAM after `DISCARD ALL`. The gate is the largest of the four. A debug assertion in `rupg-session` also adds the sizes of the parts above for each idle session, from the allocator, and fails a test when a part is over its budget. The TLS line was the most uncertain. At M2 it measured 17.9 KiB on Linux with the release build, and the largest variant measured 59.3 KiB (document 24, Q46). If a later change takes it above 24 KiB, the first remedy is to move the record layer into the kernel with kTLS on Linux.
 
 ## 6.5 Startup and protocol negotiation
 
@@ -386,7 +386,7 @@ The connection rate target is a prediction based on the cost of a process fork i
 
 6.A. Should the server have a built-in pooler for client populations above `max_connections`? Section 6.14 says no until the idle session measurement exists.
 
-6.B. Is the TLS state after the handshake within 24 KiB? If it is not, should rupg use kTLS on Linux to move the record buffers into the kernel, and how does that interact with `io_uring` receives and `-PLUS` channel binding?
+6.B. Closed at M2. The TLS state after the handshake is 17.9 KiB, which is within 24 KiB, so rupg does not use kTLS. Document 24, Q46, has the measurement.
 
 6.C. Can a session move between workers often enough to balance load without breaking the per-ring receive buffers? Section 6.2 allows a move only at a statement boundary. A measurement under a mix of TPC-C and ClickBench sessions decides whether that is enough.
 
