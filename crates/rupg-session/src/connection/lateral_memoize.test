@@ -1,0 +1,154 @@
+> create table i8(q1 int8, q2 int8)
+CREATE TABLE
+> insert into i8 values (123, 456), (123, 4567890123456789), (4567890123456789, 123), (4567890123456789, 4567890123456789), (4567890123456789, -4567890123456789)
+INSERT 0 5
+> create table i4(f1 int4)
+CREATE TABLE
+> insert into i4 values (0), (123456), (-123456)
+INSERT 0 3
+> create table i2(f1 int2)
+CREATE TABLE
+> insert into i2 values (0), (1234)
+INSERT 0 2
+> analyze i8
+ANALYZE
+> analyze i4
+ANALYZE
+> analyze i2
+ANALYZE
+> explain (verbose, costs off) select * from i8 a left join lateral (select *, a.q2 as x from i8 b) ss on a.q2 = ss.q1
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join
+row   Output: a.q1, a.q2, b.q1, b.q2, (a.q2)
+row   ->  Seq Scan on public.i8 a
+row         Output: a.q1, a.q2
+row   ->  Memoize
+row         Output: b.q1, b.q2, (a.q2)
+row         Cache Key: a.q2
+row         Cache Mode: binary
+row         ->  Seq Scan on public.i8 b
+row               Output: b.q1, b.q2, a.q2
+row               Filter: (a.q2 = b.q1)
+EXPLAIN
+> select * from i8 a left join lateral (select *, a.q2 as x from i8 b) ss on a.q2 = ss.q1 order by 1, 2, 3, 4
+fields q1@i8.1:20:8:-1,q2@i8.2:20:8:-1,q1@i8.1:20:8:-1,q2@i8.2:20:8:-1,x@i8.2:20:8:-1
+row 123,456,NULL,NULL,NULL
+row 123,4567890123456789,4567890123456789,-4567890123456789,4567890123456789
+row 123,4567890123456789,4567890123456789,123,4567890123456789
+row 123,4567890123456789,4567890123456789,4567890123456789,4567890123456789
+row 4567890123456789,-4567890123456789,NULL,NULL,NULL
+row 4567890123456789,123,123,456,123
+row 4567890123456789,123,123,4567890123456789,123
+row 4567890123456789,4567890123456789,4567890123456789,-4567890123456789,4567890123456789
+row 4567890123456789,4567890123456789,4567890123456789,123,4567890123456789
+row 4567890123456789,4567890123456789,4567890123456789,4567890123456789,4567890123456789
+SELECT 10
+> explain (verbose, costs off) select * from i8 a left join lateral (select *, coalesce(a.q2, 42) as x from i8 b) ss on a.q2 = ss.q1
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join
+row   Output: a.q1, a.q2, b.q1, b.q2, (COALESCE(a.q2, '42'::bigint))
+row   ->  Seq Scan on public.i8 a
+row         Output: a.q1, a.q2
+row   ->  Memoize
+row         Output: b.q1, b.q2, (COALESCE(a.q2, '42'::bigint))
+row         Cache Key: a.q2, COALESCE(a.q2, '42'::bigint)
+row         Cache Mode: binary
+row         ->  Seq Scan on public.i8 b
+row               Output: b.q1, b.q2, COALESCE(a.q2, '42'::bigint)
+row               Filter: (a.q2 = b.q1)
+EXPLAIN
+> select * from i8 a left join lateral (select *, coalesce(a.q2, 42) as x from i8 b) ss on a.q2 = ss.q1 order by 1, 2, 3, 4
+fields q1@i8.1:20:8:-1,q2@i8.2:20:8:-1,q1@i8.1:20:8:-1,q2@i8.2:20:8:-1,x:20:8:-1
+row 123,456,NULL,NULL,NULL
+row 123,4567890123456789,4567890123456789,-4567890123456789,4567890123456789
+row 123,4567890123456789,4567890123456789,123,4567890123456789
+row 123,4567890123456789,4567890123456789,4567890123456789,4567890123456789
+row 4567890123456789,-4567890123456789,NULL,NULL,NULL
+row 4567890123456789,123,123,456,123
+row 4567890123456789,123,123,4567890123456789,123
+row 4567890123456789,4567890123456789,4567890123456789,-4567890123456789,4567890123456789
+row 4567890123456789,4567890123456789,4567890123456789,123,4567890123456789
+row 4567890123456789,4567890123456789,4567890123456789,4567890123456789,4567890123456789
+SELECT 10
+> explain (verbose, costs off) select * from i4 i left join lateral (select coalesce(i, i) from i2 j where i.f1 = j.f1) k on true
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join
+row   Output: i.f1, (COALESCE(i.*, i.*))
+row   ->  Seq Scan on public.i4 i
+row         Output: i.f1, i.*
+row   ->  Seq Scan on public.i2 j
+row         Output: j.f1, COALESCE(i.*, i.*)
+row         Filter: (i.f1 = j.f1)
+EXPLAIN
+> select i.f1, k.coalesce::text from i4 i left join lateral (select coalesce(i, i) from i2 j where i.f1 = j.f1) k on true order by 1
+fields f1@i4.1:23:4:-1,coalesce:25:-1:-1
+row -123456,NULL
+row 0,(0)
+row 123456,NULL
+SELECT 3
+> explain (verbose, costs off) select a.q1, ss.x from i8 a left join lateral (select a.q1 + 1 as x, b.f1 from i4 b) ss on ss.f1 = a.q2
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join
+row   Output: a.q1, ((a.q1 + 1))
+row   ->  Seq Scan on public.i8 a
+row         Output: a.q1, a.q2
+row   ->  Memoize
+row         Output: b.f1, ((a.q1 + 1))
+row         Cache Key: a.q2, (a.q1 + 1)
+row         Cache Mode: binary
+row         ->  Seq Scan on public.i4 b
+row               Output: b.f1, (a.q1 + 1)
+row               Filter: (b.f1 = a.q2)
+EXPLAIN
+> select a.q1, ss.x from i8 a left join lateral (select a.q1 + 1 as x, b.f1 from i4 b) ss on ss.f1 = a.q2 order by 1, 2
+fields q1@i8.1:20:8:-1,x:20:8:-1
+row 123,NULL
+row 123,NULL
+row 4567890123456789,NULL
+row 4567890123456789,NULL
+row 4567890123456789,NULL
+SELECT 5
+> create table tk(unique1 int, two int, ten int)
+CREATE TABLE
+> insert into tk select g, g%2, g%10 from generate_series(0,9999) g
+INSERT 0 10000
+> analyze tk
+ANALYZE
+> explain (costs off) select count(*) from tk a, lateral generate_series(1, two) g
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   ->  Nested Loop
+row         ->  Seq Scan on tk a
+row         ->  Memoize
+row               Cache Key: a.two
+row               Cache Mode: binary
+row               ->  Function Scan on generate_series g
+EXPLAIN
+> select count(*) from tk a, lateral generate_series(1, two) g
+fields count:20:8:-1
+row 5000
+SELECT 1
+> explain (costs off) select count(*) from tk a left join lateral (select a.ten + b.f1 as y from i4 b where b.f1 > a.two) ss on true
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   ->  Nested Loop Left Join
+row         Join Filter: (b.f1 > a.two)
+row         ->  Seq Scan on tk a
+row         ->  Materialize
+row               ->  Seq Scan on i4 b
+EXPLAIN
+> select count(*), sum(y) from tk a left join lateral (select a.ten + b.f1 as y from i4 b where b.f1 > a.two) ss on true
+fields count:20:8:-1,sum:20:8:-1
+row 10000,1234605000
+SELECT 1
+> explain (costs off) select count(*) from tk a left join lateral (select random() + a.ten as y from i4 b) ss on true
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   ->  Nested Loop Left Join
+row         ->  Seq Scan on tk a
+row         ->  Memoize
+row               Cache Key: a.ten
+row               Cache Mode: binary
+row               ->  Subquery Scan on ss
+row                     ->  Seq Scan on i4 b
+EXPLAIN
