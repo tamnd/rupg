@@ -1,0 +1,67 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE p (id integer, v text);
+CREATE TABLE
+> CREATE TABLE c1 () INHERITS (p);
+CREATE TABLE
+> CREATE TABLE c2 () INHERITS (p);
+CREATE TABLE
+> INSERT INTO c1 SELECT g, 'c' || g FROM generate_series(1, 5000) g;
+INSERT 0 5000
+> INSERT INTO c2 SELECT g, 'd' || g FROM generate_series(1, 10000) g;
+INSERT 0 10000
+> CREATE INDEX ON p (id);
+CREATE INDEX
+> CREATE INDEX ON c1 (id);
+CREATE INDEX
+> CREATE INDEX ON c2 (id);
+CREATE INDEX
+> ANALYZE p, c1, c2;
+ANALYZE
+> CREATE TABLE t (a integer, b integer);
+CREATE TABLE
+> INSERT INTO t SELECT g * 3, g % 7 FROM generate_series(1, 5) g;
+INSERT 0 5
+> ANALYZE t;
+ANALYZE
+> EXPLAIN SELECT * FROM t JOIN p ON p.id = t.a;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=1.82..3.45 rows=8 width=17)
+row   Merge Cond: (p.id = t.a)
+row   ->  Merge Append  (cost=0.72..690.62 rows=15001 width=9)
+row         Sort Key: p.id
+row         ->  Index Scan using p_id_idx on p p_1  (cost=0.12..8.14 rows=1 width=36)
+row         ->  Index Scan using c1_id_idx on c1 p_2  (cost=0.28..165.28 rows=5000 width=9)
+row         ->  Index Scan using c2_id_idx on c2 p_3  (cost=0.29..323.29 rows=10000 width=9)
+row   ->  Sort  (cost=1.11..1.12 rows=5 width=8)
+row         Sort Key: t.a
+row         ->  Seq Scan on t  (cost=0.00..1.05 rows=5 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM t LEFT JOIN p ON p.id = t.a;
+fields QUERY PLAN:25:-1:-1
+row Merge Right Join  (cost=1.82..3.45 rows=8 width=17)
+row   Merge Cond: (p.id = t.a)
+row   ->  Merge Append  (cost=0.72..690.62 rows=15001 width=9)
+row         Sort Key: p.id
+row         ->  Index Scan using p_id_idx on p p_1  (cost=0.12..8.14 rows=1 width=36)
+row         ->  Index Scan using c1_id_idx on c1 p_2  (cost=0.28..165.28 rows=5000 width=9)
+row         ->  Index Scan using c2_id_idx on c2 p_3  (cost=0.29..323.29 rows=10000 width=9)
+row   ->  Sort  (cost=1.11..1.12 rows=5 width=8)
+row         Sort Key: t.a
+row         ->  Seq Scan on t  (cost=0.00..1.05 rows=5 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM t JOIN p ON p.id = t.a WHERE t.b = 3;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=1.79..3.33 rows=2 width=17)
+row   Merge Cond: (p.id = t.a)
+row   ->  Merge Append  (cost=0.72..690.62 rows=15001 width=9)
+row         Sort Key: p.id
+row         ->  Index Scan using p_id_idx on p p_1  (cost=0.12..8.14 rows=1 width=36)
+row         ->  Index Scan using c1_id_idx on c1 p_2  (cost=0.28..165.28 rows=5000 width=9)
+row         ->  Index Scan using c2_id_idx on c2 p_3  (cost=0.29..323.29 rows=10000 width=9)
+row   ->  Sort  (cost=1.07..1.08 rows=1 width=8)
+row         Sort Key: t.a
+row         ->  Seq Scan on t  (cost=0.00..1.06 rows=1 width=8)
+row               Filter: (b = 3)
+EXPLAIN
