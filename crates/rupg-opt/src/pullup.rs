@@ -24,6 +24,7 @@ pub fn pull_up(query: &Query, barrier: &dyn Fn(u32) -> bool) -> Query {
     merge_join(&mut query);
     flatten(&mut query);
     pull_all(&mut query, barrier);
+    policies_all(&mut query);
     pushdown::push_all(&mut query, barrier);
     setcast::wrap_all(&mut query);
     exists::fill_all(&mut query);
@@ -80,6 +81,60 @@ fn merge_barrier(query: &mut Query) {
     levels.push(parts.len().saturating_sub(levels.iter().sum()));
     merge(query, r, true);
     query.barrier = levels;
+}
+
+/// The tables whose policies of row-level security apply, in the query and in its subqueries, as [`policies`] makes them.
+fn policies_all(query: &mut Query) {
+    for relation in &mut query.relations {
+        if let Some(sub) = &mut relation.subquery {
+            policies_all(sub);
+        }
+    }
+    for cte in &mut query.ctes {
+        policies_all(&mut cte.query);
+    }
+    for expr in query.exprs_mut() {
+        expr.each_mut(0, &mut |e, depth| {
+            if depth == 0
+                && let ExprKind::SubLink(link) = &mut e.kind
+            {
+                policies_all(&mut link.query);
+            }
+            false
+        });
+    }
+    for r in 0..query.relations.len() {
+        policies(query, r);
+    }
+}
+
+/// `securityQuals`: the analyzer makes a table whose policies apply a subquery that reads the table with the conditions of the policies, which the executor runs as a view with `security_barrier`. PostgreSQL keeps the table, and its scan tests the conditions of the policies before the other conditions, so here the relation `r` is the table again, and the conditions of the subquery come first in `WHERE` with their levels in [`Query::security`].
+fn policies(query: &mut Query, r: usize) {
+    let relation = &mut query.relations[r];
+    let Some(sub) = relation.subquery.as_deref() else { return };
+    let wrapped = relation.oid != 0
+        && !sub.barrier.is_empty()
+        && matches!(sub.from[..], [FromItem::Relation(0)])
+        && matches!(&sub.relations[..], [inner] if inner.oid == relation.oid && inner.subquery.is_none());
+    if !wrapped {
+        return;
+    }
+    let Some(mut sub) = relation.subquery.take().map(|sub| *sub) else { return };
+    let Some(mut inner) = sub.relations.pop() else { return };
+    inner.perm = relation.perm;
+    inner.lateral = relation.lateral;
+    *relation = inner;
+    let Some(mut filter) = sub.filter else { return };
+    filter.each_mut(0, &mut moved(r));
+    let mut parts = Vec::new();
+    exprs::and_parts(&filter, &mut parts);
+    let mut levels =
+        sub.barrier.iter().enumerate().flat_map(|(level, &n)| std::iter::repeat_n(level, n));
+    for part in parts {
+        let level = levels.next().unwrap_or(sub.barrier.len());
+        query.security.push((part.clone(), level));
+    }
+    query.filter = Some(and(filter, query.filter.take()));
 }
 
 /// `transform_MERGE_to_join`: the join of a `MERGE` has the target table on its left side and the source on its right side. With `NOT MATCHED BY SOURCE`, the executor of PostgreSQL tests the whole row of the source, so the plan does not read the one-row `VALUES` that marks the source rows here. A `MERGE` in `WITH` changes too.

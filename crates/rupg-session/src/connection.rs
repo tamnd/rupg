@@ -4912,6 +4912,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/explain_inheritance_result.test")));
     }
 
+    /// The plans of `EXPLAIN` for tables with row security, which scan the table with the conditions of the policies first and do not show a subquery. `connection/explain_row_security.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn explain_row_security() {
+        big_stack(|| script(include_str!("connection/explain_row_security.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {
