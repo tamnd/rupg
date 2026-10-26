@@ -73,6 +73,10 @@ impl Io for OsIo {
         fs::remove_file(path).map_err(|e| os_error(&e, "remove", path))
     }
 
+    fn rename(&self, from: &Path, to: &Path) -> Result<()> {
+        fs::rename(from, to).map_err(|e| os_error(&e, "rename", from))
+    }
+
     fn exists(&self, path: &Path) -> Result<bool> {
         path.try_exists().map_err(|e| os_error(&e, "stat", path))
     }

@@ -370,6 +370,13 @@ impl Transaction {
         Ok(id)
     }
 
+    /// Adds a row with the row id `id`. `rupg upgrade` uses it to keep the row ids of the old file.
+    pub(crate) fn insert_as(&mut self, table: &Table, id: RowId, values: &[Datum]) -> Result<()> {
+        self.check(table)?;
+        self.inner.insert_as(&table.inner, id, values)?;
+        self.inner.next_command()
+    }
+
     /// Sets the values of the row `id`. Gives false if the transaction sees no row `id`.
     pub fn update(&mut self, table: &Table, id: RowId, values: &[Datum]) -> Result<bool> {
         self.check(table)?;
