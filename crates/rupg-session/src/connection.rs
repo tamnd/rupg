@@ -4957,6 +4957,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/heap_size.test")));
     }
 
+    /// `VACUUM` removes the dead versions, gives their slots and their space back through the free space map, truncates the empty pages at the end of the heap, and sets `relallvisible` and `relallfrozen` from the visibility map. `connection/heap_vacuum.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn heap_vacuum() {
+        big_stack(|| script(include_str!("connection/heap_vacuum.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

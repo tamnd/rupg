@@ -1,4 +1,4 @@
-//! `VACUUM` and `ANALYZE`, as `ExecVacuum` and `vacuum` of `vacuum.c` run them: the options, the checks of the options and of the relations, and the warnings for the relations that the statement skips. The statement sets `relpages` and `reltuples` of each table. rupg keeps the dead row versions and no column statistics yet.
+//! `VACUUM` and `ANALYZE`, as `ExecVacuum` and `vacuum` of `vacuum.c` run them: the options, the checks of the options and of the relations, and the warnings for the relations that the statement skips. `VACUUM` removes the dead row versions of each table, and the statement sets `relpages`, `reltuples`, `relallvisible` and `relallfrozen` of each table. `VACUUM FULL` runs as a plain `VACUUM`, and rupg keeps no column statistics yet.
 
 use rupg_catalog::{Catalog, RelKind};
 
@@ -9,6 +9,7 @@ use rupg_wire::CommandTag;
 use super::copy::{def_boolean, def_string};
 use super::{Connection, Done};
 use crate::guc;
+use crate::heap::Skip;
 use crate::utility::Notice;
 
 /// `MIN_BAS_VAC_RING_SIZE_KB` and `MAX_BAS_VAC_RING_SIZE_KB`.
@@ -30,6 +31,8 @@ struct Parsed {
     other: bool,
     workers: i32,
     ring_size: Option<i32>,
+    /// `TRUNCATE`, or `None` for the reloption `vacuum_truncate`.
+    truncate: Option<bool>,
 }
 
 /// `defGetInt32`.
@@ -94,9 +97,7 @@ fn parse_options(stmt: &VacuumStmt) -> Result<Parsed, Error> {
                 def_boolean(def)?;
             }
             "process_toast" => parsed.process_toast = def_boolean(def)?,
-            "truncate" => {
-                def_boolean(def)?;
-            }
+            "truncate" => parsed.truncate = Some(def_boolean(def)?),
             "parallel" => {
                 let workers = def_int(def)?;
                 if !(0..=MAX_PARALLEL_WORKERS).contains(&workers) {
@@ -202,26 +203,34 @@ impl Connection {
         } else {
             relids
         };
+        let vacuum = stmt.is_vacuumcmd.then_some(&parsed);
         for relid in relids {
-            self.relation_stats(&catalog, relid, (stmt.is_vacuumcmd, analyze));
+            self.relation_stats(&catalog, relid, (vacuum, analyze));
         }
         Ok(Done::Tag(tag))
     }
 
-    /// `vac_update_relstats` of `lazy_vacuum_rel` and `do_analyze_rel` for the relation `relid`, with its TOAST table for `VACUUM`, and for each partition of a partitioned table, as `expand_vacuum_rel` adds them. `ANALYZE` of a partitioned table sets its `reltuples` to the rows of its partitions and its `relpages` to -1, as the table has no storage. The result is the live rows of the relation.
+    /// `heap_vacuum_rel` with the options `vacuum` and `do_analyze_rel` for the relation `relid`, with its TOAST table for `VACUUM`, and for each partition of a partitioned table, as `expand_vacuum_rel` adds them. `ANALYZE` of a partitioned table sets its `reltuples` to the rows of its partitions and its `relpages` to -1, as the table has no storage. The result is the live rows of the relation.
     fn relation_stats(
         &self,
         catalog: &Catalog,
         relid: u32,
-        (vacuum, analyze): (bool, bool),
+        (vacuum, analyze): (Option<&Parsed>, bool),
     ) -> f32 {
         let Some(rel) = catalog.relation(relid) else { return 0.0 };
         match rel.kind {
             RelKind::Table | RelKind::MatView | RelKind::Toast => {
-                if vacuum && rel.toast != 0 {
-                    self.update_relstats(rel.toast);
+                let mut rows = 0.0;
+                if let Some(parsed) = vacuum {
+                    if rel.toast != 0 && parsed.process_toast {
+                        self.vacuum_heap(catalog, rel.toast, parsed);
+                    }
+                    rows = self.vacuum_heap(catalog, relid, parsed);
                 }
-                self.update_relstats(relid)
+                if analyze || vacuum.is_none() {
+                    rows = self.update_relstats(relid);
+                }
+                rows
             }
             RelKind::Partitioned => {
                 let parts = catalog.children(relid);
@@ -236,6 +245,30 @@ impl Connection {
             }
             _ => 0.0,
         }
+    }
+
+    /// `heap_vacuum_rel` of the heap of `relid`: an aggressive `VACUUM` with `FREEZE`, which skips only the pages that are all frozen, no skipped pages with `DISABLE_PAGE_SKIPPING`, and the truncation of the empty pages at the end from `TRUNCATE` or the reloption `vacuum_truncate`. The result is `reltuples`.
+    fn vacuum_heap(&self, catalog: &Catalog, relid: u32, parsed: &Parsed) -> f32 {
+        let skip = if parsed.disable_page_skipping {
+            Skip::None
+        } else if parsed.freeze {
+            Skip::Frozen
+        } else {
+            Skip::Visible
+        };
+        let truncate = parsed.truncate.unwrap_or_else(|| {
+            let options = catalog.relation(relid).map(|r| r.options.as_slice()).unwrap_or_default();
+            !options.iter().any(|o| {
+                o.strip_prefix("vacuum_truncate=").is_some_and(|v| {
+                    matches!(v.to_ascii_lowercase().as_str(), "false" | "off" | "no" | "0")
+                })
+            })
+        });
+        let indexed = catalog.relations().any(|r| {
+            r.kind == RelKind::Index && r.index.as_ref().is_some_and(|i| i.table == relid)
+        });
+        let target = (self.database_oid, relid, self.pid);
+        self.heap().vacuum(target, skip, (indexed, parsed.freeze, truncate))
     }
 
     /// `index_update_stats` after a statement that built indexes, the indexes of `new` that are not in `old` or that have a new file: `relpages` and `reltuples` of the table of each index, while `autovacuum` is on and the table does not turn it off. A table with no rows that no `VACUUM` or `ANALYZE` counted keeps its `reltuples` of -1.

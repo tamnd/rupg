@@ -22,15 +22,14 @@ const XMIN_ATTNUM: i16 = -2;
 /// `SelfItemPointerAttributeNumber`: the attribute number of `ctid`.
 const CTID_ATTNUM: i16 = -1;
 
-/// `MaxHeapTuplesPerPage`: the number of items of a page of a table, which the ID of a version gives in its item pointer.
-const TUPLES_PER_PAGE: i64 = 291;
+/// The bits of the ID of a version that are its item pointer, `(page << 16) | item`. The bits above them are the generation of the heap of the table.
+const ITEM_POINTER_MASK: i64 = (1 << 48) - 1;
 
 /// `heap_getsysattr` for `ctid`: a column `ctid` of the type `tid` gives the item pointer of the ID of the version of the row, `(page,item)`, as `tidout` shows it. The plans of a write and of a cursor read the ID itself, as a `bigint`.
 pub(crate) fn item_pointer(value: Value, var: Var, ty: u32) -> Value {
     match value {
         Value::Int8(id) if var.attnum == CTID_ATTNUM && ty == oid::TID => {
-            let at = id.saturating_sub(1).max(0);
-            Value::Int8((at / TUPLES_PER_PAGE) << 16 | (at % TUPLES_PER_PAGE + 1))
+            Value::Int8(id & ITEM_POINTER_MASK)
         }
         value => value,
     }

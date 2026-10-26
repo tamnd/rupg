@@ -1,0 +1,226 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE hv_a (x int);
+CREATE TABLE
+> INSERT INTO hv_a SELECT generate_series(1, 10000);
+INSERT 0 10000
+> SELECT pg_relation_size('hv_a', 'fsm') AS fsm, pg_relation_size('hv_a', 'vm') AS vm, pg_table_size('hv_a') AS t;
+fields fsm:20:8:-1,vm:20:8:-1,t:20:8:-1
+row 24576,0,393216
+SELECT 1
+> CREATE TABLE hv_s (x int);
+CREATE TABLE
+> INSERT INTO hv_s VALUES (1);
+INSERT 0 1
+> SELECT pg_relation_size('hv_s', 'fsm') AS fsm, pg_table_size('hv_s') AS t;
+fields fsm:20:8:-1,t:20:8:-1
+row 0,8192
+SELECT 1
+> VACUUM hv_s;
+VACUUM
+> SELECT pg_relation_size('hv_s', 'fsm') AS fsm, pg_relation_size('hv_s', 'vm') AS vm, pg_table_size('hv_s') AS t;
+fields fsm:20:8:-1,vm:20:8:-1,t:20:8:-1
+row 24576,8192,40960
+SELECT 1
+> CREATE TABLE hv_d AS SELECT generate_series(1, 10000) AS x;
+SELECT 10000
+> SELECT pg_relation_size('hv_d', 'fsm') AS fsm, pg_table_size('hv_d') AS t;
+fields fsm:20:8:-1,t:20:8:-1
+row 0,524288
+SELECT 1
+> DELETE FROM hv_a WHERE x > 5000;
+DELETE 5000
+> VACUUM hv_a;
+VACUUM
+> SELECT pg_relation_size('hv_a') / 8192 AS pages, pg_relation_size('hv_a', 'fsm') AS fsm, pg_relation_size('hv_a', 'vm') AS vm;
+fields pages:20:8:-1,fsm:20:8:-1,vm:20:8:-1
+row 23,24576,8192
+SELECT 1
+> SELECT relpages, reltuples, relallvisible FROM pg_class WHERE relname = 'hv_a';
+fields relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1,relallvisible@pg_class.12:23:4:-1
+row 23,5000,23
+SELECT 1
+> DELETE FROM hv_a WHERE x % 2 = 0;
+DELETE 2500
+> VACUUM hv_a;
+VACUUM
+> SELECT pg_relation_size('hv_a') / 8192 AS pages;
+fields pages:20:8:-1
+row 23
+SELECT 1
+> SELECT relpages, reltuples, relallvisible FROM pg_class WHERE relname = 'hv_a';
+fields relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1,relallvisible@pg_class.12:23:4:-1
+row 23,2500,23
+SELECT 1
+> INSERT INTO hv_a SELECT generate_series(20001, 22000);
+INSERT 0 2000
+> SELECT pg_relation_size('hv_a') / 8192 AS pages;
+fields pages:20:8:-1
+row 23
+SELECT 1
+> SELECT ctid, x FROM hv_a WHERE x IN (20001, 20114, 20115, 20116, 21000, 22000) ORDER BY x;
+fields ctid@hv_a.-1:27:6:-1,x@hv_a.1:23:4:-1
+row (0,2),20001
+row (1,2),20114
+row (1,4),20115
+row (1,6),20116
+row (8,192),21000
+row (17,158),22000
+SELECT 6
+> CREATE TABLE hv_u (x int, y int);
+CREATE TABLE
+> INSERT INTO hv_u SELECT g, 0 FROM generate_series(1, 1000) g;
+INSERT 0 1000
+> UPDATE hv_u SET y = 1;
+UPDATE 1000
+> SELECT pg_relation_size('hv_u') / 8192 AS pages;
+fields pages:20:8:-1
+row 9
+SELECT 1
+> VACUUM hv_u;
+VACUUM
+> SELECT pg_relation_size('hv_u') / 8192 AS pages;
+fields pages:20:8:-1
+row 9
+SELECT 1
+> SELECT relpages, reltuples FROM pg_class WHERE relname = 'hv_u';
+fields relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row 9,1000
+SELECT 1
+> UPDATE hv_u SET y = 2;
+UPDATE 1000
+> SELECT pg_relation_size('hv_u') / 8192 AS pages;
+fields pages:20:8:-1
+row 9
+SELECT 1
+> SELECT min(ctid), max(ctid) FROM hv_u;
+fields min:27:6:-1,max:27:6:-1
+row (0,1),(8,226)
+SELECT 1
+> CREATE TABLE hv_e (x int);
+CREATE TABLE
+> INSERT INTO hv_e SELECT generate_series(1, 1000);
+INSERT 0 1000
+> DELETE FROM hv_e;
+DELETE 1000
+> VACUUM hv_e;
+VACUUM
+> SELECT pg_relation_size('hv_e') / 8192 AS pages;
+fields pages:20:8:-1
+row 0
+SELECT 1
+> SELECT relpages, reltuples FROM pg_class WHERE relname = 'hv_e';
+fields relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row 0,0
+SELECT 1
+> CREATE TABLE hv_t (x int) WITH (vacuum_truncate = false);
+CREATE TABLE
+> INSERT INTO hv_t SELECT generate_series(1, 1000);
+INSERT 0 1000
+> DELETE FROM hv_t;
+DELETE 1000
+> VACUUM hv_t;
+VACUUM
+> SELECT pg_relation_size('hv_t') / 8192 AS pages;
+fields pages:20:8:-1
+row 5
+SELECT 1
+> CREATE TABLE hw_e (x int);
+CREATE TABLE
+> INSERT INTO hw_e SELECT generate_series(1, 1000);
+INSERT 0 1000
+> DELETE FROM hw_e;
+DELETE 1000
+> VACUUM hw_e;
+VACUUM
+> SELECT pg_relation_size('hw_e') AS m, pg_relation_size('hw_e', 'fsm') AS fsm, pg_relation_size('hw_e', 'vm') AS vm;
+fields m:20:8:-1,fsm:20:8:-1,vm:20:8:-1
+row 0,16384,0
+SELECT 1
+> SELECT relpages, reltuples, relallvisible, relallfrozen FROM pg_class WHERE relname = 'hw_e';
+fields relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1,relallvisible@pg_class.12:23:4:-1,relallfrozen@pg_class.13:23:4:-1
+row 0,0,0,0
+SELECT 1
+> INSERT INTO hw_e VALUES (1);
+INSERT 0 1
+> SELECT ctid FROM hw_e;
+fields ctid@hw_e.-1:27:6:-1
+row (0,1)
+SELECT 1
+> CREATE TABLE hw_f (x int);
+CREATE TABLE
+> INSERT INTO hw_f SELECT generate_series(1, 1000);
+INSERT 0 1000
+> DELETE FROM hw_f WHERE x <= 500;
+DELETE 500
+> VACUUM hw_f;
+VACUUM
+> SELECT pg_relation_size('hw_f') / 8192 AS m, pg_relation_size('hw_f', 'fsm') AS fsm, pg_relation_size('hw_f', 'vm') AS vm;
+fields m:20:8:-1,fsm:20:8:-1,vm:20:8:-1
+row 5,24576,8192
+SELECT 1
+> SELECT relpages, reltuples, relallvisible, relallfrozen FROM pg_class WHERE relname = 'hw_f';
+fields relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1,relallvisible@pg_class.12:23:4:-1,relallfrozen@pg_class.13:23:4:-1
+row 5,500,5,2
+SELECT 1
+> INSERT INTO hw_f VALUES (1);
+INSERT 0 1
+> SELECT ctid FROM hw_f WHERE x = 1;
+fields ctid@hw_f.-1:27:6:-1
+row (0,1)
+SELECT 1
+> TRUNCATE hw_f;
+TRUNCATE TABLE
+> SELECT pg_relation_size('hw_f', 'fsm') AS fsm, pg_relation_size('hw_f', 'vm') AS vm;
+fields fsm:20:8:-1,vm:20:8:-1
+row 0,0
+SELECT 1
+> CREATE TABLE hw_g (x int);
+CREATE TABLE
+> INSERT INTO hw_g SELECT generate_series(1, 1000);
+INSERT 0 1000
+> DELETE FROM hw_g WHERE x > 900;
+DELETE 100
+> VACUUM (TRUNCATE false) hw_g;
+VACUUM
+> SELECT pg_relation_size('hw_g') / 8192 AS m;
+fields m:20:8:-1
+row 5
+SELECT 1
+> VACUUM hw_g;
+VACUUM
+> SELECT pg_relation_size('hw_g') / 8192 AS m;
+fields m:20:8:-1
+row 4
+SELECT 1
+> SELECT * FROM hw_g ORDER BY x DESC LIMIT 1;
+fields x@hw_g.1:23:4:-1
+row 900
+SELECT 1
+> BEGIN;
+BEGIN
+> INSERT INTO hw_g VALUES (5000);
+INSERT 0 1
+> SELECT ctid FROM hw_g WHERE x = 5000;
+fields ctid@hw_g.-1:27:6:-1
+row (3,223)
+SELECT 1
+> ROLLBACK;
+ROLLBACK
+> VACUUM hw_g;
+VACUUM
+> SELECT relpages, reltuples, relallvisible FROM pg_class WHERE relname = 'hw_g';
+fields relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1,relallvisible@pg_class.12:23:4:-1
+row 4,900,4
+SELECT 1
+> INSERT INTO hw_g VALUES (6000);
+INSERT 0 1
+> SELECT ctid FROM hw_g WHERE x = 6000;
+fields ctid@hw_g.-1:27:6:-1
+row (3,223)
+SELECT 1
+> DROP TABLE hv_a, hv_s, hv_d, hv_u, hv_e, hv_t;
+DROP TABLE
+> DROP TABLE hw_e, hw_f, hw_g;
+DROP TABLE

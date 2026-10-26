@@ -495,7 +495,10 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) -> Ve
         .relations()
         .map(|rel| {
             let heap = matches!(rel.kind, RelKind::Table | RelKind::Toast | RelKind::MatView);
-            let stats = session.heap_size(rel.oid).map_or((0, -1.0), |s| (s.relpages, s.reltuples));
+            let size = session.heap_size(rel.oid);
+            let stats = size.map_or((0, -1.0), |s| (s.relpages, s.reltuples));
+            let visible =
+                size.filter(|_| heap).map_or((0, 0), |s| (s.relallvisible, s.relallfrozen));
             let (am, pages, tuples) = match rel.kind {
                 RelKind::Table | RelKind::Toast | RelKind::MatView => (HEAP, stats.0, stats.1),
                 RelKind::Partitioned => (0, stats.0, stats.1),
@@ -534,8 +537,8 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) -> Ve
                 .set("reltablespace", oid(0))
                 .set("relpages", Value::Int4(pages))
                 .set("reltuples", Value::Float4(tuples))
-                .set("relallvisible", Value::Int4(0))
-                .set("relallfrozen", Value::Int4(0))
+                .set("relallvisible", Value::Int4(visible.0))
+                .set("relallfrozen", Value::Int4(visible.1))
                 .set("reltoastrelid", oid(rel.toast))
                 .set("relhasindex", Value::Bool(rel.has_index))
                 .set("relisshared", Value::Bool(false))
