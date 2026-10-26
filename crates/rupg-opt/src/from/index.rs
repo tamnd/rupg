@@ -1,4 +1,4 @@
-//! `create_index_paths` for one table: the scans of the table by its btree indexes, as `build_index_paths` makes them, with the costs of `btcostestimate`, `genericcostestimate` and `cost_index`. The correlation of the first column of an index comes from the statistics of the column.
+//! `create_index_paths` for one table: the scans of the table by its btree and hash indexes, as `build_index_paths` makes them, with the costs of `btcostestimate`, `genericcostestimate` and `cost_index`. The correlation of the first column of an index comes from the statistics of the column.
 
 use std::borrow::Cow;
 use std::collections::BTreeSet;
@@ -14,6 +14,14 @@ use crate::{Index, Level, cost, exprs};
 
 /// `BTREE_AM_OID`, the OID of the access method `btree`.
 pub(super) const BTREE_AM: u32 = 403;
+
+/// `HASH_AM_OID`, the OID of the access method `hash`.
+const HASH_AM: u32 = 405;
+
+/// True for an index of an access method whose scans the planner makes: `btree` and `hash`.
+fn scannable(index: &Index) -> bool {
+    matches!(index.method, BTREE_AM | HASH_AM)
+}
 /// `BTEqualStrategyNumber`.
 const EQUAL: i16 = 3;
 /// `TEXT_PATTERN_BTREE_FAM_OID`, the operator family `text_pattern_ops` of btree.
@@ -296,12 +304,13 @@ fn index_paths<'q>(
     let quals: Vec<&Expr> = table.quals.iter().map(|q| &*q.expr).collect();
     // `get_relation_info` puts each index first in `indexlist`, so the newest index comes first.
     for index in indexes.iter().rev() {
-        if index.method != BTREE_AM || !predicate_ok(index, table.r, &quals) {
+        if !scannable(index) || !predicate_ok(index, table.r, &quals) {
             continue;
         }
         let clauses = match_clauses(table.r, index, &restrict(index, table.r, &all));
-        let costs = btree_cost(table, index, &clauses, stats);
+        let costs = index_cost(table, index, &clauses, stats);
         let only = crate::enable().indexonlyscan
+            && index.method == BTREE_AM
             && read.iter().all(|a| *a > 0 && index.columns.contains(a));
         let forward = order(level, table.r, index, false, stats);
         let useful = stats.useful(&BTreeSet::from([table.r]), &forward);
@@ -342,7 +351,7 @@ pub(super) fn reparameterize<'q>(
                 .collect();
             let all: Vec<&Source<'q>> = sources.iter().collect();
             let clauses = match_clauses(plain.r, index, &restrict(index, plain.r, &all));
-            let costs = btree_cost(table, index, &clauses, stats);
+            let costs = index_cost(table, index, &clauses, stats);
             let order = Vec::new();
             Some(scan(level, table, index, &clauses, costs, *only, *backward, order, stats).node)
         }
@@ -422,7 +431,7 @@ pub(super) fn param_paths<'q>(
     let all_joins: Vec<&Source<'q>> = join_sources.iter().collect();
     let quals: Vec<&Expr> = table.quals.iter().map(|q| &*q.expr).collect();
     for index in indexes.iter().rev() {
-        if index.method != BTREE_AM || !predicate_ok(index, r, &quals) {
+        if !scannable(index) || !predicate_ok(index, r, &quals) {
             continue;
         }
         let rclauses = match_clauses(r, index, &restrict(index, r, &all));
@@ -495,6 +504,7 @@ pub(super) fn param_paths<'q>(
         }
         let read = read_columns(table, stats);
         let only = crate::enable().indexonlyscan
+            && index.method == BTREE_AM
             && read.iter().all(|a| *a > 0 && index.columns.contains(a));
         let forward = order(level, r, index, false, stats);
         let useful = stats.useful(&BTreeSet::from([r]), &forward);
@@ -515,7 +525,7 @@ pub(super) fn param_paths<'q>(
             outer.remove(&r);
             let t = ppi(&outer);
             reseat(&mut clauses, &t, base);
-            let costs = btree_cost(&t, index, &clauses, stats);
+            let costs = index_cost(&t, index, &clauses, stats);
             let indexed = indexed(&t, base, &clauses);
             let enforced = t.quals[base..].to_vec();
             if useful.is_empty() || costs.2 < 1.0 {
@@ -716,14 +726,14 @@ fn arm_paths<'q>(
     let mut out = Vec::new();
     let given: Vec<&Expr> = all.iter().map(|s| &*s.expr).collect();
     for index in indexes.iter().rev() {
-        if index.method != BTREE_AM
+        if !scannable(index)
             || !predicate_ok(index, table.r, &given)
             || match_clauses(table.r, index, &mine).is_empty()
         {
             continue;
         }
         let clauses = match_clauses(table.r, index, &restrict(index, table.r, &all));
-        let costs = btree_cost(table, index, &clauses, stats);
+        let costs = index_cost(table, index, &clauses, stats);
         out.push(Bitmap::Index(BitmapIndex::new(table, index, clauses, costs, stats)));
     }
     out
@@ -811,6 +821,10 @@ fn match_clauses<'q>(r: usize, index: &Index, sources: &[&Source<'q>]) -> Vec<Cl
             .map(|column| match_clause(r, index, column, source))
             .find(|c| !c.is_empty());
         out.extend(found.into_iter().flatten());
+    }
+    // `amsearcharray` and `amsearchnulls` of `hash` are false: only operators make its clauses.
+    if index.method == HASH_AM {
+        out.retain(|c| matches!(c.kind, ClauseKind::Op(_)));
     }
     out.sort_by_key(|c| c.column);
     out
@@ -1053,7 +1067,7 @@ fn strategy(op: u32, family: u32) -> Option<i16> {
         .map(|a| a.strategy)
 }
 
-/// `build_index_pathkeys`: the order of the rows of a scan of the index, forward or backward. A key that adds nothing after the keys before it, such as a column that a condition makes a constant, does not count, as `pathkey_is_redundant`. A column that is an expression gives the expression. The order stops at a column whose operator class is not the default class of its type.
+/// `build_index_pathkeys`: the order of the rows of a scan of the index, forward or backward. A key that adds nothing after the keys before it, such as a column that a condition makes a constant, does not count, as `pathkey_is_redundant`. A column that is an expression gives the expression. The order stops at a column whose operator class is not the default class of its type. An index of another access method has no order.
 fn order(
     level: &Level<'_>,
     r: usize,
@@ -1061,6 +1075,10 @@ fn order(
     backward: bool,
     stats: &Stats,
 ) -> Vec<OrderKey> {
+    // `amcanorder`: only a `btree` index gives its rows in an order.
+    if index.method != BTREE_AM {
+        return Vec::new();
+    }
     let relation = &level.query.relations[r];
     let mut out: Vec<OrderKey> = Vec::new();
     for (i, &attnum) in index.keys.iter().enumerate() {
@@ -1179,6 +1197,10 @@ fn index_scan_cost<'q>(
 
 /// `btcost_correlation`: the correlation of the order of the first key column of the index with the order of the rows of the table, from the statistics of the column when the index has the default operator class of the column. A `DESC` column turns it around, and an index with more key columns has 0.75 of it.
 fn correlation(r: usize, index: &Index, stats: &Stats) -> f64 {
+    // `genericcostestimate` gives the other access methods no correlation.
+    if index.method != BTREE_AM {
+        return 0.0;
+    }
     let (Some(&attnum), Some(true)) = (index.keys.first(), index.default_class.first().copied())
     else {
         return 0.0;
@@ -1498,6 +1520,54 @@ fn bitmap_heap_scan<'q>(
     node.cost = Cost { startup, total, rows: table.rows, width };
     node.disabled = !crate::enable().bitmapscan;
     Rel { node, rels: BTreeSet::from([table.r]), order: Vec::new() }
+}
+
+/// The costs of the scan of the index with the clauses, from the estimator of its access method.
+fn index_cost(
+    table: &Table<'_, '_>,
+    index: &Index,
+    clauses: &[Clause<'_>],
+    stats: &Stats,
+) -> (f64, f64, f64) {
+    if index.method == HASH_AM {
+        hash_cost(table, index, clauses, stats)
+    } else {
+        btree_cost(table, index, clauses, stats)
+    }
+}
+
+/// `hashcostestimate`: `genericcostestimate` with the metapage as the one page that is not a leaf page. The rows of the index that the scan reads are the rows of the table that the clauses and the parts of the predicate that they do not imply select, and the scan has no descent.
+fn hash_cost(
+    table: &Table<'_, '_>,
+    index: &Index,
+    clauses: &[Clause<'_>],
+    stats: &Stats,
+) -> (f64, f64, f64) {
+    let tuples = table.tuples;
+    let quals: Vec<&Expr> = clauses.iter().map(|c| &*c.expr).collect();
+    let given = and_of(&quals);
+    let parts = predicate(index, table.r);
+    let extra = parts.iter().filter(|p| !implied_by(&given, p)).cloned();
+    let all: Vec<Expr> = extra.chain(quals.into_iter().cloned()).collect();
+    let selectivity = cost::list_selectivity_by(&all, table.eq);
+    let index_tuples = (selectivity * tuples).round_ties_even().min(tuples).max(1.0);
+    let index_pages = if index.pages > 1.0 && tuples > 1.0 {
+        (index_tuples * (index.pages - 1.0) / tuples).ceil()
+    } else {
+        1.0
+    };
+    let mut total = if table.loops > 1.0 {
+        let all = index_pages * table.loops;
+        let fetched = pages_fetched(all, index.pages, index.pages, table.pages);
+        fetched * cost::RANDOM_PAGE / table.loops
+    } else {
+        index_pages * cost::RANDOM_PAGE
+    };
+    let others = clauses.iter().filter_map(Clause::other);
+    let qual_arg: f64 = others.map(|o| stats.qual_costs([o])).map(|(s, p)| s + p).sum();
+    let qual_op = cost::CPU_OPERATOR * clauses.len() as f64;
+    total += qual_arg + index_tuples * (cost::CPU_INDEX_TUPLE + qual_op);
+    (qual_arg, total, selectivity)
 }
 
 /// `btcostestimate` and `genericcostestimate`: the start cost and the total cost of the scan of the index, and the selectivity of its clauses. The rows of the index that the scan reads come from the clauses of the first columns: the clauses of each column up to the first column with no `=` clause, and the clauses of that column. A unique index with `=` on each key column reads one row. Each item of `ANY` is one more descent of the tree.

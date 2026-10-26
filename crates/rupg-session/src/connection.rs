@@ -5102,6 +5102,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/index_build_stats.test")));
     }
 
+    /// Index scans of a `hash` index for `=`, with the costs of `hashcostestimate`, next to `btree` indexes on the same column, from the `uuid` regression test. `connection/plan_index_hash.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_index_hash() {
+        big_stack(|| script(include_str!("connection/plan_index_hash.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {
