@@ -1,0 +1,113 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE ee_t (a int, b text);
+CREATE TABLE
+> INSERT INTO ee_t SELECT g, 'v' || g FROM generate_series(1, 10) g;
+INSERT 0 10
+> CREATE TABLE ee_c (c int) INHERITS (ee_t);
+CREATE TABLE
+> PREPARE e1(int) AS SELECT * FROM ee_t WHERE a <= $1;
+PREPARE
+> EXPLAIN (COSTS OFF) EXECUTE e1(2);
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on ee_t ee_t_1
+row         Filter: (a <= 2)
+row   ->  Seq Scan on ee_c ee_t_2
+row         Filter: (a <= 2)
+EXPLAIN
+> PREPARE e2 AS SELECT count(*) FROM ee_t WHERE b LIKE 'v%';
+PREPARE
+> EXPLAIN (COSTS OFF) EXECUTE e2;
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   ->  Append
+row         ->  Seq Scan on ee_t ee_t_1
+row               Filter: (b ~~ 'v%'::text)
+row         ->  Seq Scan on ee_c ee_t_2
+row               Filter: (b ~~ 'v%'::text)
+EXPLAIN
+> PREPARE e3(int, text) AS UPDATE ONLY ee_t SET b = $2 WHERE a = $1;
+PREPARE
+> EXPLAIN (COSTS OFF) EXECUTE e3(1, 'x');
+fields QUERY PLAN:25:-1:-1
+row Update on ee_t
+row   ->  Seq Scan on ee_t
+row         Filter: (a = 1)
+EXPLAIN
+> EXPLAIN (COSTS OFF) EXECUTE e3(1);
+ERROR 42601 wrong number of parameters for prepared statement "e3"
+DETAIL Expected 2 parameters but got 1.
+> EXPLAIN (COSTS OFF) EXECUTE nope(1);
+ERROR 26000 prepared statement "nope" does not exist
+> PREPARE e4(int) AS SELECT * FROM ee_t WHERE a = $1 + 1 ORDER BY b;
+PREPARE
+> EXPLAIN (COSTS OFF) EXECUTE e4(3);
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: ee_t.b
+row   ->  Append
+row         ->  Seq Scan on ee_t ee_t_1
+row               Filter: (a = 4)
+row         ->  Seq Scan on ee_c ee_t_2
+row               Filter: (a = 4)
+EXPLAIN
+> EXPLAIN (COSTS OFF, FORMAT JSON) EXECUTE e4(3);
+fields QUERY PLAN:114:-1:-1
+row [
+  {
+    "Plan": {
+      "Node Type": "Sort",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Disabled": false,
+      "Sort Key": ["ee_t.b"],
+      "Plans": [
+        {
+          "Node Type": "Append",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Disabled": false,
+          "Subplans Removed": 0,
+          "Plans": [
+            {
+              "Node Type": "Seq Scan",
+              "Parent Relationship": "Member",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Relation Name": "ee_t",
+              "Alias": "ee_t_1",
+              "Disabled": false,
+              "Filter": "(a = 4)"
+            },
+            {
+              "Node Type": "Seq Scan",
+              "Parent Relationship": "Member",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Relation Name": "ee_c",
+              "Alias": "ee_t_2",
+              "Disabled": false,
+              "Filter": "(a = 4)"
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
+EXPLAIN
+> SELECT name, generic_plans, custom_plans FROM pg_prepared_statements ORDER BY name;
+fields name@pg_prepared_statements.1:25:-1:-1,generic_plans@pg_prepared_statements.7:20:8:-1,custom_plans@pg_prepared_statements.8:20:8:-1
+row e1,0,1
+row e2,1,0
+row e3,0,1
+row e4,0,2
+SELECT 4
+> DEALLOCATE ALL;
+DEALLOCATE ALL
+> DROP TABLE ee_t CASCADE;
+NOTICE 00000 drop cascades to table ee_c
+DROP TABLE

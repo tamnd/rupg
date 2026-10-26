@@ -1,6 +1,7 @@
 //! `EXPLAIN`, as `ExplainQuery` of `explain.c` runs it: the options, the plan of the query and the rows of its output. `EXPLAIN ANALYZE` is not supported yet.
 
 use std::cell::RefCell;
+use std::sync::Arc;
 
 use rupg_analyze::{BoolOp, Expr, ExprKind, Params, Query};
 use rupg_common::{Error, SqlState};
@@ -8,8 +9,8 @@ use rupg_func::Session;
 use rupg_opt::{Enable, Index, Member};
 use rupg_pgcatalog::builtin;
 use rupg_plan::{Format, Options};
-use rupg_sql::nodes::{DefElem, ExplainStmt, Node};
-use rupg_types::oid;
+use rupg_sql::nodes::{DefElem, ExecuteStmt, ExplainStmt, Node};
+use rupg_types::{Value, oid};
 use rupg_wire::CommandTag;
 
 use super::copy::{def_boolean, def_string};
@@ -288,11 +289,7 @@ impl Connection {
         let inner = match node {
             Node::CreateTableAsStmt(s) => s.query.as_ref(),
             Node::DeclareCursorStmt(s) => s.query.as_ref(),
-            Node::ExecuteStmt(s) => {
-                let name = s.name.as_deref().unwrap_or("");
-                self.statements.get(name.as_bytes()).map_err(protocol_error)?;
-                return Err(not_yet("EXPLAIN EXECUTE"));
-            }
+            Node::ExecuteStmt(s) => return self.explain_execute(s, &parsed, notices),
             _ => Some(node),
         };
         let Some(inner) = inner.filter(|n| query::is_query(n)) else {
@@ -351,7 +348,43 @@ impl Connection {
         notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         let plan = plan?;
         notices.extend(plan.notices().iter().map(|error| Notice::warning(error.clone())));
-        let plan = plan.fold(None, reader);
+        self.explain_with(&plan, None, parsed, started, reader, notices)
+    }
+
+    /// `ExplainExecuteQuery`: the plan of a prepared statement with the values of the parameters of `EXECUTE`, as `GetCachedPlan` makes a custom plan with them.
+    fn explain_execute(
+        &self,
+        stmt: &ExecuteStmt,
+        parsed: &Parsed,
+        notices: &mut Vec<Notice>,
+    ) -> Result<Done, Error> {
+        let name = stmt.name.as_deref().unwrap_or("");
+        let statement = Arc::clone(self.statements.get(name.as_bytes()).map_err(protocol_error)?);
+        let started = self.clock.monotonic();
+        self.settings.borrow_mut().take_snapshot();
+        let params = self.execute_params(stmt, &statement, notices)?;
+        let reader = self.reader();
+        let replanned = statement.replan(&reader)?;
+        // `ExplainOneUtility` for a statement that the session runs.
+        let Some(plan) = replanned.as_ref().or(statement.plan.as_ref()) else {
+            return Err(not_yet("EXPLAIN EXECUTE of a utility statement"));
+        };
+        statement.count_plan(reader.settings().get("plan_cache_mode").as_deref());
+        let text = self.explain_with(plan, Some(&params), parsed, started, &reader, notices)?;
+        Ok(explain_rows(text, parsed.format))
+    }
+
+    /// The text of the plan `plan`, with the values `params` of its parameters for a custom plan.
+    fn explain_with(
+        &self,
+        plan: &rupg_exec::Plan,
+        params: Option<&[Value]>,
+        parsed: &Parsed,
+        started: std::time::Duration,
+        reader: &Reader<'_>,
+        notices: &mut Vec<Notice>,
+    ) -> Result<String, Error> {
+        let plan = plan.fold(params, reader);
         notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         let plan = plan?;
         let members = Members {

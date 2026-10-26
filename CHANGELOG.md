@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `EXPLAIN EXECUTE` shows the plan of a prepared statement with the values of its parameters, as a custom plan, and counts the plan in `pg_prepared_statements` (#777).
 - A prepared statement on a table with row security plans its query again at each run, so that it gets the policies of the current role and of the current `row_security`, and the changes of the policies after `PREPARE` (#776).
 - A query can read the system columns `tableoid` and `ctid` of a table that row-level security policies apply to, and a statement of `WITH` that changes data checks the policies of its target table, so that `WITH c AS (INSERT ... RETURNING *)` gives `42501` for a row that the policies do not let in (#775).
 - `COPY FROM` into a table that row-level security policies apply to gives `0A000` with the hint of PostgreSQL, and `42501` with `row_security = off`. `COPY TO` gives only the rows that the policies let through (#774).
