@@ -1065,23 +1065,95 @@ impl<'q> Builder<'q> {
     }
 }
 
-/// The ordered aggregate call whose keys the input of the `Agg` gets sorted on, as the presorted aggregates of `make_pathkeys_for_groupagg`: the first call with `ORDER BY` or `DISTINCT`.
-fn ordered_keys<'q>(aggs: &[&'q Aggref]) -> Vec<SortKey<'q>> {
-    let Some(agg) = aggs.iter().find(|a| !a.order.is_empty() || !a.distinct.is_empty()) else {
-        return Vec::new();
-    };
-    let items = if agg.distinct.is_empty() { &agg.order } else { &agg.distinct };
-    items.iter().filter_map(|s| agg.args.get(s.target).map(|e| sort_key(e, s))).collect()
+/// True when the aggregate call has `ORDER BY` or `DISTINCT`, as `numOrderedAggs` counts it.
+fn is_ordered(agg: &Aggref) -> bool {
+    !agg.order.is_empty() || !agg.distinct.is_empty()
 }
 
-/// The keys of the ordered aggregate call of the targets and of `HAVING` of a query, as [`ordered_keys`] finds them.
-pub(crate) fn aggregate_order(query: &Query) -> Vec<SortKey<'_>> {
+/// `adjust_group_pathkeys_for_groupagg`: the keys of the groups and then the keys that suit the most ordered aggregate calls, which the input of the `Agg` gets sorted on. A pass takes the keys of the first call that is left and the stronger keys of each call whose keys are a prefix of them or have them as a prefix. The pass covers these calls, and the next pass takes the calls that are left, while they are more than the calls of the best pass. A call of an ordered-set aggregate, a call with a key that is volatile and a call with `FILTER` whose arguments are not all columns or constants take no part. The result is empty when no call takes part.
+fn ordered_keys<'q>(
+    aggs: &[&'q Aggref],
+    group: &[SortKey<'q>],
+    stats: &from::Stats,
+) -> Vec<SortKey<'q>> {
+    let simple = |e: &Expr| {
+        let mut e = e;
+        while let ExprKind::Relabel(inner, _) = &e.kind {
+            e = inner;
+        }
+        matches!(e.kind, ExprKind::Var(_) | ExprKind::Const(_))
+    };
+    // `find_ec_member_matching_expr`: the `Sort` sorts on a column of its input whose type a `RelabelType` changes, and shows the column.
+    let column = |e: &'q Expr| {
+        let mut inner = e;
+        while let ExprKind::Relabel(arg, _) = &inner.kind {
+            inner = arg;
+        }
+        if matches!(inner.kind, ExprKind::Var(_)) { inner } else { e }
+    };
+    let mut seen: Vec<&Aggref> = Vec::new();
+    let mut candidates: Vec<Vec<SortKey<'q>>> = Vec::new();
+    for &agg in aggs {
+        if seen.contains(&agg) {
+            continue;
+        }
+        seen.push(agg);
+        if agg.kind != b'n' || !is_ordered(agg) {
+            continue;
+        }
+        if agg.filter.is_some() && !agg.args.iter().all(simple) {
+            continue;
+        }
+        let items = if agg.distinct.is_empty() { &agg.order } else { &agg.distinct };
+        let own: Vec<SortKey<'q>> = items
+            .iter()
+            .filter_map(|s| agg.args.get(s.target).map(|e| sort_key(column(e), s)))
+            .collect();
+        if own.iter().any(|k| exprs::volatile(&k.item.expr)) {
+            continue;
+        }
+        let mut keys = group.to_vec();
+        keys.extend(own);
+        candidates.push(stats.canonical(keys, |k| &*k.item.expr));
+    }
+    let same = |a: &SortKey<'_>, b: &SortKey<'_>| {
+        a.item.expr.same(&b.item.expr)
+            && a.desc == b.desc
+            && a.nulls_first == b.nulls_first
+            && a.using == b.using
+    };
+    let mut unprocessed: Vec<usize> = (0..candidates.len()).collect();
+    let mut best: (usize, Vec<SortKey<'q>>) = (0, Vec::new());
+    while unprocessed.len() > best.0 {
+        let mut current: Vec<SortKey<'q>> = Vec::new();
+        let mut covered = Vec::new();
+        for &at in &unprocessed {
+            let keys = &candidates[at];
+            // `compare_pathkeys`: the keys of the call suit the pass when one list is a prefix of the other.
+            let prefix = current.iter().zip(keys).all(|(a, b)| same(a, b));
+            if current.is_empty() || prefix {
+                if keys.len() > current.len() {
+                    current.clone_from(keys);
+                }
+                covered.push(at);
+            }
+        }
+        unprocessed.retain(|at| !covered.contains(at));
+        if covered.len() > best.0 {
+            best = (covered.len(), current);
+        }
+    }
+    best.1
+}
+
+/// The keys of the ordered aggregate calls of the targets and of `HAVING` of a query with no groups, as [`ordered_keys`] finds them.
+pub(crate) fn aggregate_order<'q>(query: &'q Query, stats: &from::Stats) -> Vec<SortKey<'q>> {
     let mut exprs_of: Vec<&Expr> = query.targets.iter().map(|t| &t.expr).collect();
     let (_, having) = having_split(query);
     exprs_of.extend(having.iter().copied());
     let mut aggs = Vec::new();
     exprs::aggregates(&exprs_of, &mut aggs);
-    ordered_keys(&aggs)
+    ordered_keys(&aggs, &[], stats)
 }
 
 /// The `Agg` node of a query with groups, with a `Sort` below it when the strategy needs one, as `add_paths_to_grouping_rel`. With `only`, the input is not the cheapest plan, so it gets only the sorted strategy, and only when its rows are in the order of the groups.
@@ -1101,9 +1173,8 @@ fn aggregate<'q>(
     let units = agg_units(&aggs);
     let finals = cost::CPU_OPERATOR * final_units(&aggs);
     // `make_pathkeys_for_groupagg`: with `enable_presorted_aggregate` off, the input of the `Agg` gets no sort for an ordered call, and the call sorts its own rows.
-    let ordered = ordered_keys(&aggs);
-    let has_ordered = !ordered.is_empty();
-    let ordered = if crate::enable().presorted_aggregate { ordered } else { Vec::new() };
+    let has_ordered = aggs.iter().any(|a| is_ordered(a));
+    let presort = crate::enable().presorted_aggregate;
     let selectivity = cost::list_selectivity(having.iter().copied());
     let (having_startup, having_cost) = level.stats.qual_costs(having.iter().copied());
     let filter: Vec<Item<'q>> = having.iter().map(|h| Item::of(h)).collect();
@@ -1114,7 +1185,7 @@ fn aggregate<'q>(
         return grouping_sets(level, input, order, costs, filter, has_ordered, only);
     }
     if query.group.is_empty() {
-        let ordered = level.stats.canonical(ordered, |k| &*k.item.expr);
+        let ordered = if presort { ordered_keys(&aggs, &[], &level.stats) } else { Vec::new() };
         let input = sort_if(level, input, ordered, order, None, only)?;
         let c = input.cost;
         // `cost_agg` adds the costs in this order, which the rounding of the sums follows.
@@ -1139,9 +1210,8 @@ fn aggregate<'q>(
     let rows = cost::clamp_rows(groups * selectivity);
     let hashable = hashable && !group.is_empty() && !has_ordered;
     // The sorted strategy: a `Sort` on the keys of the groups, and on the keys of an ordered call after them, as `adjust_group_pathkeys_for_groupagg`.
-    let mut sort_keys = group.clone();
-    sort_keys.extend(ordered);
-    let sort_keys = level.stats.canonical(sort_keys, |k| &*k.item.expr);
+    let ordered = if presort { ordered_keys(&aggs, &group, &level.stats) } else { Vec::new() };
+    let sort_keys = if ordered.is_empty() { group.clone() } else { ordered };
     let (is_sorted, count) = presorted(order, &sort_keys);
     if only && !is_sorted && count == 0 {
         return None;
