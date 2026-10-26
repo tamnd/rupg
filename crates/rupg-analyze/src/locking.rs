@@ -3,7 +3,7 @@
 //! rupg takes no lock on a row. No statement of rupg changes the rows of a table, so a lock on a row has no effect on another session. The analyzer gives the errors of PostgreSQL and keeps the row marks, which the planner and the executor check.
 
 use rupg_common::{Error, Result, SqlState};
-use rupg_sql::nodes::{LockClauseStrength, LockingClause, Node};
+use rupg_sql::nodes::{LockClauseStrength, LockWaitPolicy, LockingClause, Node};
 
 use crate::coerce::AtOpt;
 use crate::from::{FromItem, Join, Relation};
@@ -17,6 +17,18 @@ pub struct RowMark {
     /// The index of the relation in [`Query::relations`].
     pub relation: usize,
     pub strength: LockClauseStrength,
+    /// `waitPolicy`: `NOWAIT`, `SKIP LOCKED` or a wait for the lock.
+    pub wait: LockWaitPolicy,
+    /// `pushedDown`: the mark comes from a lock on a query outside, not from a clause of this query.
+    pub pushed: bool,
+}
+
+/// The lock of a locking clause on one relation: the strength, the wait policy and whether the lock comes from a query outside.
+#[derive(Clone, Copy)]
+struct Lock {
+    strength: LockClauseStrength,
+    wait: LockWaitPolicy,
+    pushed: bool,
 }
 
 /// An item of the range table of a query in the order of PostgreSQL: a relation of [`Query::relations`], or a join with the name that it has as a relation, which comes after its two sides.
@@ -103,37 +115,46 @@ fn has_aggs(query: &Query) -> bool {
         || query.having.as_ref().is_some_and(|h| h.first_agg().is_some())
 }
 
-/// `applyLockingClause`: the row mark of a relation. A relation with two marks keeps the strongest one.
-fn apply(query: &mut Query, relation: usize, strength: LockClauseStrength) {
+/// `applyLockingClause`: the row mark of a relation. A relation with two marks keeps the strongest strength and the strongest wait policy, and the mark is pushed down only when both locks are.
+fn apply(query: &mut Query, relation: usize, lock: Lock) {
     match query.row_marks.iter_mut().find(|mark| mark.relation == relation) {
         Some(mark) => {
-            if strength.0 > mark.strength.0 {
-                mark.strength = strength;
+            if lock.strength.0 > mark.strength.0 {
+                mark.strength = lock.strength;
             }
+            if lock.wait.0 > mark.wait.0 {
+                mark.wait = lock.wait;
+            }
+            mark.pushed &= lock.pushed;
         }
-        None => query.row_marks.push(RowMark { relation, strength }),
+        None => query.row_marks.push(RowMark {
+            relation,
+            strength: lock.strength,
+            wait: lock.wait,
+            pushed: lock.pushed,
+        }),
     }
 }
 
 /// The row mark of a table or a view. The rewriter puts the lock of a view on the relations of its query, as `markQueryForLocking` does, and the planner then checks the query of the view.
-fn apply_relation(query: &mut Query, relation: usize, strength: LockClauseStrength) -> Result<()> {
-    apply(query, relation, strength);
+fn apply_relation(query: &mut Query, relation: usize, lock: Lock) -> Result<()> {
+    apply(query, relation, lock);
     if let Some(view) = query.relations[relation].subquery.as_deref_mut() {
-        mark_for_locking(view, strength)?;
+        mark_for_locking(view, Lock { pushed: true, ..lock })?;
     }
     Ok(())
 }
 
 /// `markQueryForLocking` on the query of a view, then the check of `preprocess_rowmarks` when the query has a row mark.
-fn mark_for_locking(query: &mut Query, strength: LockClauseStrength) -> Result<()> {
+fn mark_for_locking(query: &mut Query, lock: Lock) -> Result<()> {
     for index in relation_entries(query) {
         let relation = &query.relations[index];
         if is_relation(relation) {
-            apply_relation(query, index, strength)?;
+            apply_relation(query, index, lock)?;
         } else if is_subquery(relation) {
-            apply(query, index, strength);
+            apply(query, index, lock);
             if let Some(sub) = query.relations[index].subquery.as_deref_mut() {
-                mark_for_locking(sub, strength)?;
+                mark_for_locking(sub, lock)?;
             }
         }
     }
@@ -145,11 +166,17 @@ fn mark_for_locking(query: &mut Query, strength: LockClauseStrength) -> Result<(
 
 /// `transformLockingClause`: the row marks of a locking clause of a query, on the relations that the clause names or on all the relations of `FROM`.
 pub(crate) fn transform_locking_clause(query: &mut Query, clause: &LockingClause) -> Result<()> {
+    transform_locking(query, clause, false)
+}
+
+/// `transformLockingClause` with `pushedDown`, which is true for the lock of a subquery that a lock outside it gives.
+fn transform_locking(query: &mut Query, clause: &LockingClause, pushed: bool) -> Result<()> {
     let strength = clause.strength;
+    let lock = Lock { strength, wait: clause.waitPolicy, pushed };
     check_select_locking(query, strength)?;
     if clause.lockedRels.is_empty() {
         for index in relation_entries(query) {
-            lock_relation(query, index, strength)?;
+            lock_relation(query, index, lock)?;
         }
         return Ok(());
     }
@@ -190,7 +217,7 @@ pub(crate) fn transform_locking_clause(query: &mut Query, clause: &LockingClause
             }
         });
         match found {
-            Some(Found::Relation(index)) => lock_relation(query, index, strength)?,
+            Some(Found::Relation(index)) => lock_relation(query, index, lock)?,
             Some(Found::Error(what)) => {
                 return Err(Error::new(
                     SqlState::FEATURE_NOT_SUPPORTED,
@@ -220,15 +247,19 @@ enum Found {
 }
 
 /// The lock of a relation of `FROM`: the row mark of a table or a view, or the row mark of a subquery and the lock of all the relations of the subquery. The other relations have no lock.
-fn lock_relation(query: &mut Query, index: usize, strength: LockClauseStrength) -> Result<()> {
+fn lock_relation(query: &mut Query, index: usize, lock: Lock) -> Result<()> {
     let relation = &query.relations[index];
     if is_relation(relation) {
-        apply_relation(query, index, strength)
+        apply_relation(query, index, lock)
     } else if is_subquery(relation) {
-        apply(query, index, strength);
-        let all = LockingClause { lockedRels: Vec::new(), strength, ..LockingClause::default() };
+        apply(query, index, lock);
+        let all = LockingClause {
+            lockedRels: Vec::new(),
+            strength: lock.strength,
+            waitPolicy: lock.wait,
+        };
         match query.relations[index].subquery.as_deref_mut() {
-            Some(sub) => transform_locking_clause(sub, &all),
+            Some(sub) => transform_locking(sub, &all, true),
             None => Ok(()),
         }
     } else {

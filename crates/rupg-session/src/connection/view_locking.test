@@ -1,0 +1,80 @@
+> create table vl_a (f1 int)
+CREATE TABLE
+> create table vl_b (q1 int, q2 int)
+CREATE TABLE
+> create view vl1 as select * from (select * from vl_a), vl_b as unnamed_subquery where f1 = q1 for update of unnamed_subquery
+CREATE VIEW
+> select pg_get_viewdef('vl1'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT unnamed_subquery.f1,
+    unnamed_subquery_1.q1,
+    unnamed_subquery_1.q2
+   FROM ( SELECT vl_a.f1
+           FROM vl_a) unnamed_subquery,
+    vl_b unnamed_subquery_1
+  WHERE (unnamed_subquery.f1 = unnamed_subquery_1.q1)
+ FOR UPDATE OF unnamed_subquery_1;
+SELECT 1
+> create view vl2 as select * from vl_a, vl_b for share
+CREATE VIEW
+> select pg_get_viewdef('vl2'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT vl_a.f1,
+    vl_b.q1,
+    vl_b.q2
+   FROM vl_a,
+    vl_b
+ FOR SHARE OF vl_a
+ FOR SHARE OF vl_b;
+SELECT 1
+> create view vl3 as select * from vl_a a, vl_b b for update of a nowait for key share of b skip locked
+CREATE VIEW
+> select pg_get_viewdef('vl3'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a.f1,
+    b.q1,
+    b.q2
+   FROM vl_a a,
+    vl_b b
+ FOR UPDATE OF a NOWAIT
+ FOR KEY SHARE OF b SKIP LOCKED;
+SELECT 1
+> create view vl4 as select * from (select * from vl_a) s for no key update
+CREATE VIEW
+> select pg_get_viewdef('vl4'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT f1
+   FROM ( SELECT vl_a.f1
+           FROM vl_a) s
+ FOR NO KEY UPDATE OF s;
+SELECT 1
+> create view vl5 as select * from vl1 for update
+CREATE VIEW
+> select pg_get_viewdef('vl5'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT f1,
+    q1,
+    q2
+   FROM vl1
+ FOR UPDATE OF vl1;
+SELECT 1
+> select pg_get_viewdef('vl3'::regclass, true)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a.f1,
+    b.q1,
+    b.q2
+   FROM vl_a a,
+    vl_b b
+ FOR UPDATE OF a NOWAIT
+ FOR KEY SHARE OF b SKIP LOCKED;
+SELECT 1
+> create view vl6 as select * from vl_a order by f1 limit 2 for update
+CREATE VIEW
+> select pg_get_viewdef('vl6'::regclass, true)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT f1
+   FROM vl_a
+  ORDER BY f1
+ LIMIT 2
+ FOR UPDATE OF vl_a;
+SELECT 1
