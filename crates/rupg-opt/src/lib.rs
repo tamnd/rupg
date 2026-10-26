@@ -24,8 +24,8 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use rupg_analyze::{
-    Cte, Expr, ExprKind, FromItem, JoinKind, Query, SubLink, SubLinkKind, TABLE_OID_ATTNUM, Var,
-    Write, WriteKind,
+    Cte, Expr, ExprKind, FromItem, JoinKind, Query, Relation, SubLink, SubLinkKind,
+    TABLE_OID_ATTNUM, Var, Write, WriteKind,
 };
 use rupg_plan::{Item, Kind, Label, Leaf, Node, Operation, Plan, Scope, Statistic, SubPlan};
 use rupg_types::{Value, oid};
@@ -186,6 +186,23 @@ pub(crate) fn statistics(table: u32) -> Rc<BTreeMap<i16, Statistic>> {
     STATISTICS.with(|s| s.borrow().get(&table).cloned().unwrap_or_default())
 }
 
+thread_local! {
+    /// The width of each column of each relation with members of an inheritance tree, by the address of the relation in its query, as `set_append_rel_size` sets `attr_widths` of the parent.
+    static WIDTHS: RefCell<BTreeMap<(usize, i16), i32>> = RefCell::default();
+}
+
+/// The width of the column `attnum` of a relation with members, which [`set_width`] set.
+pub(crate) fn width(relation: &Relation, attnum: i16) -> Option<i32> {
+    let at = std::ptr::from_ref(relation).addr();
+    WIDTHS.with(|w| w.borrow().get(&(at, attnum)).copied())
+}
+
+/// Sets the width of the column `attnum` of a relation with members.
+pub(crate) fn set_width(relation: &Relation, attnum: i16, width: i32) {
+    let at = std::ptr::from_ref(relation).addr();
+    WIDTHS.with(|w| w.borrow_mut().insert((at, attnum), width));
+}
+
 /// The statistics of the tables of the query and of the queries in it, from `members`.
 fn query_statistics(query: &Query, members: &dyn Members, out: &mut Statistics) {
     fn expr(e: &Expr, members: &dyn Members, out: &mut Statistics) {
@@ -272,7 +289,9 @@ pub fn plan<'q>(query: &'q Query, members: &'q dyn Members) -> Plan<'q> {
     let saved_statistics = STATISTICS.with(|s| s.replace(statistics));
     let saved_compare = COMPARE.with(|c| c.replace(members.compare()));
     let saved_match = PATTERN_MATCH.with(|c| c.replace(members.pattern_match()));
+    let saved_widths = WIDTHS.with(|w| w.take());
     let plan = plan_with(query, members);
+    WIDTHS.with(|w| w.replace(saved_widths));
     PATTERN_MATCH.with(|c| c.set(saved_match));
     COMPARE.with(|c| c.set(saved_compare));
     ENABLE.with(|e| e.set(saved));

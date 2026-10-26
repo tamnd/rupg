@@ -5042,6 +5042,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_inherit_scan.test")));
     }
 
+    /// A relation with the members of an inheritance tree has the statistics of its table with `stainherit` true, which the estimates of joins and of groups read, and the width of each of its columns is the mean of the widths in its members. `connection/plan_inherit_stats.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_inherit_stats() {
+        big_stack(|| script(include_str!("connection/plan_inherit_stats.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

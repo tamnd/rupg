@@ -1,0 +1,130 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE p (id integer, v text);
+CREATE TABLE
+> CREATE TABLE c1 () INHERITS (p);
+CREATE TABLE
+> CREATE TABLE c2 (extra integer) INHERITS (p);
+CREATE TABLE
+> INSERT INTO p SELECT g, 'p' || g FROM generate_series(1, 100) g;
+INSERT 0 100
+> INSERT INTO c1 SELECT g % 50, 'c' || g FROM generate_series(1, 1000) g;
+INSERT 0 1000
+> INSERT INTO c2 SELECT g, 'd' || g, g FROM generate_series(1, 3000) g;
+INSERT 0 3000
+> ANALYZE p, c1, c2;
+ANALYZE
+> CREATE TABLE t (a integer, b text);
+CREATE TABLE
+> INSERT INTO t SELECT g, 'long text value ' || g FROM generate_series(1, 10) g;
+INSERT 0 10
+> ANALYZE t;
+ANALYZE
+> EXPLAIN SELECT * FROM t JOIN p ON p.id = t.a;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=1.23..102.24 rows=14 width=31)
+row   Hash Cond: (p.id = t.a)
+row   ->  Append  (cost=0.00..85.50 rows=4100 width=9)
+row         ->  Seq Scan on p p_1  (cost=0.00..2.00 rows=100 width=7)
+row         ->  Seq Scan on c1 p_2  (cost=0.00..16.00 rows=1000 width=8)
+row         ->  Seq Scan on c2 p_3  (cost=0.00..47.00 rows=3000 width=9)
+row   ->  Hash  (cost=1.10..1.10 rows=10 width=22)
+row         ->  Seq Scan on t  (cost=0.00..1.10 rows=10 width=22)
+EXPLAIN
+> EXPLAIN SELECT p.v, t.b FROM t JOIN p ON p.id = t.a WHERE t.a < 3;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=1.14..102.02 rows=1 width=23)
+row   Hash Cond: (p.id = t.a)
+row   ->  Append  (cost=0.00..85.50 rows=4100 width=9)
+row         ->  Seq Scan on p p_1  (cost=0.00..2.00 rows=100 width=7)
+row         ->  Seq Scan on c1 p_2  (cost=0.00..16.00 rows=1000 width=8)
+row         ->  Seq Scan on c2 p_3  (cost=0.00..47.00 rows=3000 width=9)
+row   ->  Hash  (cost=1.12..1.12 rows=1 width=22)
+row         ->  Seq Scan on t  (cost=0.00..1.12 rows=1 width=22)
+row               Filter: (a < 3)
+EXPLAIN
+> EXPLAIN SELECT id, count(*) FROM p GROUP BY id;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=106.00..136.01 rows=3001 width=12)
+row   Group Key: p.id
+row   ->  Append  (cost=0.00..85.50 rows=4100 width=4)
+row         ->  Seq Scan on p p_1  (cost=0.00..2.00 rows=100 width=4)
+row         ->  Seq Scan on c1 p_2  (cost=0.00..16.00 rows=1000 width=4)
+row         ->  Seq Scan on c2 p_3  (cost=0.00..47.00 rows=3000 width=4)
+EXPLAIN
+> EXPLAIN SELECT DISTINCT v FROM p;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=95.75..136.75 rows=4100 width=5)
+row   Group Key: p.v
+row   ->  Append  (cost=0.00..85.50 rows=4100 width=5)
+row         ->  Seq Scan on p p_1  (cost=0.00..2.00 rows=100 width=3)
+row         ->  Seq Scan on c1 p_2  (cost=0.00..16.00 rows=1000 width=4)
+row         ->  Seq Scan on c2 p_3  (cost=0.00..47.00 rows=3000 width=5)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE id = 5;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..75.36 rows=22 width=8)
+row   ->  Seq Scan on p p_1  (cost=0.00..2.25 rows=1 width=7)
+row         Filter: (id = 5)
+row   ->  Seq Scan on c1 p_2  (cost=0.00..18.50 rows=20 width=8)
+row         Filter: (id = 5)
+row   ->  Seq Scan on c2 p_3  (cost=0.00..54.50 rows=1 width=9)
+row         Filter: (id = 5)
+EXPLAIN
+> EXPLAIN SELECT * FROM ONLY p JOIN t ON p.id = t.a;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=1.23..3.70 rows=10 width=29)
+row   Hash Cond: (p.id = t.a)
+row   ->  Seq Scan on p  (cost=0.00..2.00 rows=100 width=7)
+row   ->  Hash  (cost=1.10..1.10 rows=10 width=22)
+row         ->  Seq Scan on t  (cost=0.00..1.10 rows=10 width=22)
+EXPLAIN
+> CREATE TABLE q (k integer, w text) PARTITION BY RANGE (k);
+CREATE TABLE
+> CREATE TABLE q1 PARTITION OF q FOR VALUES FROM (0) TO (1000);
+CREATE TABLE
+> CREATE TABLE q2 PARTITION OF q FOR VALUES FROM (1000) TO (5000);
+CREATE TABLE
+> INSERT INTO q SELECT g, 'q' || g FROM generate_series(0, 4999) g;
+INSERT 0 5000
+> ANALYZE q;
+ANALYZE
+> EXPLAIN SELECT * FROM t JOIN q ON q.k = t.a;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=1.23..123.07 rows=10 width=32)
+row   Hash Cond: (q.k = t.a)
+row   ->  Append  (cost=0.00..103.00 rows=5000 width=10)
+row         ->  Seq Scan on q1 q_1  (cost=0.00..16.00 rows=1000 width=8)
+row         ->  Seq Scan on q2 q_2  (cost=0.00..62.00 rows=4000 width=10)
+row   ->  Hash  (cost=1.10..1.10 rows=10 width=22)
+row         ->  Seq Scan on t  (cost=0.00..1.10 rows=10 width=22)
+EXPLAIN
+> EXPLAIN SELECT q.w FROM q JOIN t ON q.k = t.a WHERE q.w LIKE 'q1%';
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=1.23..101.55 rows=2 width=6)
+row   Hash Cond: (q.k = t.a)
+row   ->  Append  (cost=0.00..96.11 rows=1121 width=10)
+row         ->  Seq Scan on q1 q_1  (cost=0.00..18.50 rows=111 width=8)
+row               Filter: (w ~~ 'q1%'::text)
+row         ->  Seq Scan on q2 q_2  (cost=0.00..72.00 rows=1010 width=10)
+row               Filter: (w ~~ 'q1%'::text)
+row   ->  Hash  (cost=1.10..1.10 rows=10 width=4)
+row         ->  Seq Scan on t  (cost=0.00..1.10 rows=10 width=4)
+EXPLAIN
+> EXPLAIN SELECT k % 10, count(*) FROM q GROUP BY 1;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=140.50..203.00 rows=5000 width=12)
+row   Group Key: ((q.k % 10))
+row   ->  Append  (cost=0.00..115.50 rows=5000 width=4)
+row         ->  Seq Scan on q1 q_1  (cost=0.00..18.50 rows=1000 width=4)
+row         ->  Seq Scan on q2 q_2  (cost=0.00..72.00 rows=4000 width=4)
+EXPLAIN
+> EXPLAIN SELECT w, count(*) FROM q GROUP BY w;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=128.00..178.00 rows=5000 width=14)
+row   Group Key: q.w
+row   ->  Append  (cost=0.00..103.00 rows=5000 width=6)
+row         ->  Seq Scan on q1 q_1  (cost=0.00..16.00 rows=1000 width=4)
+row         ->  Seq Scan on q2 q_2  (cost=0.00..62.00 rows=4000 width=6)
+EXPLAIN

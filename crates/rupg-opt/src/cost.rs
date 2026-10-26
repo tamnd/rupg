@@ -84,7 +84,7 @@ pub(crate) fn column_width(relation: &Relation, attnum: i16) -> i32 {
         -1 => 6,
         a if a < 0 => 4,
         a => {
-            let analyzed = analyzed_width(relation, a);
+            let analyzed = crate::width(relation, a).or_else(|| analyzed_width(relation, a));
             analyzed.unwrap_or_else(|| {
                 relation
                     .columns

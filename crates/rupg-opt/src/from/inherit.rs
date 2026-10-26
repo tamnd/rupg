@@ -168,13 +168,19 @@ pub(super) fn scan<'q>(
         children.push(node);
         stats.unique.columns.clone_from(&unique);
     }
-    stats.columns.remove(&r);
+    // `examine_simple_variable`: the relation has the statistics with `stainherit` true of its table.
+    let inherited = hooks.map(|m| m.statistics(relation.oid)).unwrap_or_default();
+    let inherited: BTreeMap<i16, Statistic> =
+        inherited.into_iter().filter(|s| s.inherit).map(|s| (s.attnum, s)).collect();
+    stats.columns.insert(r, Rc::new(inherited));
     stats.pages.remove(&r);
     stats.ranges.retain(|&(at, _), _| at != r);
     stats.rows.insert(r, (tuples, rows));
     if rows > 0.0 {
         for (attnum, s) in &sizes {
-            stats.set_width(r, *attnum, (s / rows).round_ties_even() as i32);
+            let width = (s / rows).round_ties_even() as i32;
+            stats.set_width(r, *attnum, width);
+            crate::set_width(relation, *attnum, width);
         }
     }
     let rels = BTreeSet::from([r]);

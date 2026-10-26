@@ -12,6 +12,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A table with inheritance children or partitions has the statistics with `stainherit` true in the estimates of joins and groups, and each of its columns has the mean width of the column in its members (#808).
 - Each member of an inheritance tree and each partition gets its own scan, with its own statistics, indexes and width, as `set_append_rel_pathlist` does. A member can now use an `Index Scan`, an `Index Only Scan`, a `Bitmap Heap Scan` or a `Tid Scan` (#803).
 - The planner makes `Tid Scan` and `Tid Range Scan` plans for conditions on `ctid`, as `create_tidscan_paths` does. This includes `= ANY`, `OR` lists, `CURRENT OF` and conditions from joins (#801).
 - The planner estimates `LIKE`, `ILIKE`, regular expressions and `^@` of an analyzed column from its statistics, as `patternsel_common` does. It tests the pattern on the most common values and on the histogram, and it estimates the fixed prefix of the pattern from the histogram, as `prefix_selectivity` (#800).
