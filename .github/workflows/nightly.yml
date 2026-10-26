@@ -177,7 +177,7 @@ jobs:
         run: python3 tests/dumprt/roundtrip.py --pg-bin "$RUNNER_TEMP/pg/bin" --rupg target/debug/rupg --work "$RUNNER_TEMP/dumprt"
       - name: upload the dumps and the logs
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dumprt
           path: ${{ runner.temp }}/dumprt/
@@ -197,7 +197,7 @@ jobs:
           persist-credentials: false
       - name: install nightly
         run: rustup toolchain install nightly --profile minimal
-      - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-fuzz
       # The binary of cargo-fuzz from install-action is built for musl, and cargo-fuzz uses its own target when no target is given. The nightly toolchain has only the gnu target, so each command names it.
@@ -214,7 +214,7 @@ jobs:
           cargo +nightly fuzz run -O -s none --target x86_64-unknown-linux-gnu "$TARGET" "$@" -- -max_total_time=1200 -timeout=1 -rss_limit_mb=2048
       - name: upload the failing input
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fuzz-${{ matrix.target }}
           path: fuzz/artifacts/
