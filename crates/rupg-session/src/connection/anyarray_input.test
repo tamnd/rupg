@@ -1,0 +1,45 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE s (a integer, b text);
+CREATE TABLE
+> INSERT INTO s SELECT g % 3, 'x' || (g % 2) FROM generate_series(1, 300) g;
+INSERT 0 300
+> ANALYZE s;
+ANALYZE
+> SELECT attname, array_length(most_common_vals, 1) AS l, array_ndims(most_common_vals) AS n, array_dims(most_common_vals) AS d, cardinality(most_common_vals) AS c, array_lower(most_common_vals, 1) AS lo, array_upper(most_common_vals, 1) AS hi FROM pg_stats WHERE tablename = 's' ORDER BY 1;
+fields attname@pg_stats.4:19:64:-1,l:23:4:-1,n:23:4:-1,d:25:-1:-1,c:23:4:-1,lo:23:4:-1,hi:23:4:-1
+row a,3,1,[1:3],3,1,3
+row b,2,1,[1:2],2,1,2
+SELECT 2
+> SELECT attname, array_to_string(most_common_vals, ',') AS s, most_common_vals::text AS t FROM pg_stats WHERE tablename = 's' ORDER BY 1;
+fields attname@pg_stats.4:19:64:-1,s:25:-1:-1,t:25:-1:-1
+row a,0,1,2,{0,1,2}
+row b,x0,x1,{x0,x1}
+SELECT 2
+> SELECT pg_typeof(most_common_vals) FROM pg_stats WHERE tablename = 's' AND attname = 'a';
+fields pg_typeof:2206:4:-1
+row anyarray
+SELECT 1
+> SELECT unnest(most_common_vals) FROM pg_stats WHERE tablename = 's' AND attname = 'a';
+ERROR 42804 cannot determine element type of "anyarray" argument
+> SELECT most_common_vals[1] FROM pg_stats WHERE tablename = 's' AND attname = 'a';
+ERROR 42804 cannot subscript type anyarray because it does not support subscripting at 8
+> SELECT array_append(most_common_vals, 1) FROM pg_stats WHERE tablename = 's' AND attname = 'a';
+ERROR 42883 function array_append(anyarray, integer) does not exist at 8
+DETAIL No function of that name accepts the given argument types.
+HINT You might need to add explicit type casts.
+> SELECT array_cat(most_common_vals, most_common_vals) FROM pg_stats WHERE tablename = 's' AND attname = 'a';
+ERROR 42883 function array_cat(anyarray, anyarray) does not exist at 8
+DETAIL No function of that name accepts the given argument types.
+HINT You might need to add explicit type casts.
+> SELECT array_position(most_common_vals, 1) FROM pg_stats WHERE tablename = 's' AND attname = 'a';
+ERROR 42883 function array_position(anyarray, integer) does not exist at 8
+DETAIL No function of that name accepts the given argument types.
+HINT You might need to add explicit type casts.
+> SELECT stavalues1 = stavalues1 AS e FROM pg_statistic WHERE starelid = 's'::regclass AND staattnum = 1;
+ERROR 42804 cannot determine element type of "anyarray" argument
+> SELECT array_length(stavalues1, 1) AS l FROM pg_statistic WHERE starelid = 's'::regclass AND staattnum = 1;
+fields l:23:4:-1
+row 3
+SELECT 1
