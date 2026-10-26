@@ -22,6 +22,11 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - The pages of the heap, `relpages` and `reltuples` from `ANALYZE`, `VACUUM` and `CREATE INDEX`, and the sizes of the planner from them (#786).
 - `EXPLAIN` of a query with a table whose policies apply on the nullable side of a left or right join shows an outer join with the conditions of the policies on the scan of the table, and a left join to such a table with a unique key leaves the plan (#785).
 - The detail of the error of a foreign key hides the key when the current user has no `SELECT` on the table or on each column of the key, or when the policies of row-level security of the table apply (#784).
+
+### Changed
+
+- rupg builds with Rust 1.99.1, and the minimum supported Rust version is 1.98.0, not 1.88.0. The dependencies are at their newest versions (#802).
+
 ## 0.2.1 (2026-10-26)
 
 ### Added
