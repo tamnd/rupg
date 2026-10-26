@@ -6,7 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- A table with inheritance children or partitions can be the inner side of a nested loop, as a parameterized `Append` of the scans of its members (#NNN).
+- A table with inheritance children or partitions can be the inner side of a nested loop, as a parameterized `Append` of the scans of its members (#812).
 
 ## 0.2.3 (2026-10-26)
 
