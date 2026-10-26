@@ -1,0 +1,166 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE p (id integer, v text);
+CREATE TABLE
+> CREATE TABLE c1 () INHERITS (p);
+CREATE TABLE
+> CREATE TABLE c2 () INHERITS (p);
+CREATE TABLE
+> CREATE TABLE c3 () INHERITS (p);
+CREATE TABLE
+> INSERT INTO c1 SELECT g, 'c' || (g % 1000) FROM generate_series(1, 10000) g;
+INSERT 0 10000
+> INSERT INTO c2 SELECT g, 'd' || (g % 1000) FROM generate_series(1, 20000) g;
+INSERT 0 20000
+> INSERT INTO c3 SELECT g, 'e' || lpad((g / 10)::text, 4, '0') FROM generate_series(1, 10000) g;
+INSERT 0 10000
+> CREATE INDEX ON c1 (v);
+CREATE INDEX
+> CREATE INDEX ON c2 (id);
+CREATE INDEX
+> CREATE INDEX ON c3 (v);
+CREATE INDEX
+> ANALYZE p, c1, c2, c3;
+ANALYZE
+> CREATE TABLE t (a integer, b integer);
+CREATE TABLE
+> INSERT INTO t SELECT g * 3, g % 7 FROM generate_series(1, 5) g;
+INSERT 0 5
+> ANALYZE t;
+ANALYZE
+> SET enable_mergejoin = off;
+SET
+> SET enable_hashjoin = off;
+SET
+> EXPLAIN SELECT * FROM t JOIN p ON p.id = t.a WHERE p.v = 'c5';
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..243.33 rows=1 width=17)
+row   ->  Seq Scan on t  (cost=0.00..1.05 rows=5 width=8)
+row   ->  Append  (cost=0.00..48.42 rows=4 width=9)
+row         ->  Seq Scan on p p_1  (cost=0.00..0.00 rows=1 width=36)
+row               Filter: ((v = 'c5'::text) AND (t.a = id))
+row         ->  Bitmap Heap Scan on c1 p_2  (cost=4.36..31.60 rows=1 width=8)
+row               Recheck Cond: (v = 'c5'::text)
+row               Filter: (t.a = id)
+row               ->  Bitmap Index Scan on c1_v_idx  (cost=0.00..4.36 rows=10 width=0)
+row                     Index Cond: (v = 'c5'::text)
+row         ->  Index Scan using c2_id_idx on c2 p_3  (cost=0.29..8.31 rows=1 width=8)
+row               Index Cond: (id = t.a)
+row               Filter: (v = 'c5'::text)
+row         ->  Index Scan using c3_v_idx on c3 p_4  (cost=0.29..8.48 rows=1 width=10)
+row               Index Cond: (v = 'c5'::text)
+row               Filter: (t.a = id)
+EXPLAIN
+> EXPLAIN SELECT * FROM t JOIN p ON p.id = t.a WHERE p.v = 'e0005';
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..243.33 rows=1 width=17)
+row   ->  Seq Scan on t  (cost=0.00..1.05 rows=5 width=8)
+row   ->  Append  (cost=0.00..48.42 rows=4 width=9)
+row         ->  Seq Scan on p p_1  (cost=0.00..0.00 rows=1 width=36)
+row               Filter: ((v = 'e0005'::text) AND (t.a = id))
+row         ->  Bitmap Heap Scan on c1 p_2  (cost=4.36..31.60 rows=1 width=8)
+row               Recheck Cond: (v = 'e0005'::text)
+row               Filter: (t.a = id)
+row               ->  Bitmap Index Scan on c1_v_idx  (cost=0.00..4.36 rows=10 width=0)
+row                     Index Cond: (v = 'e0005'::text)
+row         ->  Index Scan using c2_id_idx on c2 p_3  (cost=0.29..8.31 rows=1 width=8)
+row               Index Cond: (id = t.a)
+row               Filter: (v = 'e0005'::text)
+row         ->  Index Scan using c3_v_idx on c3 p_4  (cost=0.29..8.48 rows=1 width=10)
+row               Index Cond: (v = 'e0005'::text)
+row               Filter: (t.a = id)
+EXPLAIN
+> EXPLAIN SELECT * FROM t JOIN p ON p.id = t.a WHERE p.v IN ('c5', 'c6', 'e0001');
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..438.04 rows=1 width=17)
+row   ->  Seq Scan on t  (cost=0.00..1.05 rows=5 width=8)
+row   ->  Append  (cost=0.00..87.36 rows=4 width=9)
+row         ->  Seq Scan on p p_1  (cost=0.00..0.00 rows=1 width=36)
+row               Filter: ((t.a = id) AND (v = ANY ('{c5,c6,e0001}'::text[])))
+row         ->  Bitmap Heap Scan on c1 p_2  (cost=13.09..61.57 rows=1 width=8)
+row               Recheck Cond: (v = ANY ('{c5,c6,e0001}'::text[]))
+row               Filter: (t.a = id)
+row               ->  Bitmap Index Scan on c1_v_idx  (cost=0.00..13.08 rows=30 width=0)
+row                     Index Cond: (v = ANY ('{c5,c6,e0001}'::text[]))
+row         ->  Index Scan using c2_id_idx on c2 p_3  (cost=0.29..8.31 rows=1 width=8)
+row               Index Cond: (id = t.a)
+row               Filter: (v = ANY ('{c5,c6,e0001}'::text[]))
+row         ->  Index Scan using c3_v_idx on c3 p_4  (cost=0.29..17.46 rows=1 width=10)
+row               Index Cond: (v = ANY ('{c5,c6,e0001}'::text[]))
+row               Filter: (t.a = id)
+EXPLAIN
+> EXPLAIN SELECT * FROM t JOIN p ON p.id = t.a WHERE p.v = 'c5' OR p.v = 'e0009';
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..350.05 rows=1 width=17)
+row   ->  Seq Scan on t  (cost=0.00..1.05 rows=5 width=8)
+row   ->  Append  (cost=0.00..69.76 rows=4 width=9)
+row         ->  Seq Scan on p p_1  (cost=0.00..0.00 rows=1 width=36)
+row               Filter: ((t.a = id) AND ((v = 'c5'::text) OR (v = 'e0009'::text)))
+row         ->  Bitmap Heap Scan on c1 p_2  (cost=8.73..48.46 rows=1 width=8)
+row               Recheck Cond: ((v = 'c5'::text) OR (v = 'e0009'::text))
+row               Filter: (t.a = id)
+row               ->  Bitmap Index Scan on c1_v_idx  (cost=0.00..8.72 rows=20 width=0)
+row                     Index Cond: (v = ANY ('{c5,e0009}'::text[]))
+row         ->  Index Scan using c2_id_idx on c2 p_3  (cost=0.29..8.31 rows=1 width=8)
+row               Index Cond: (id = t.a)
+row               Filter: ((v = 'c5'::text) OR (v = 'e0009'::text))
+row         ->  Index Scan using c3_v_idx on c3 p_4  (cost=0.29..12.97 rows=1 width=10)
+row               Index Cond: (v = ANY ('{c5,e0009}'::text[]))
+row               Filter: (t.a = id)
+EXPLAIN
+> EXPLAIN SELECT * FROM t JOIN p ON p.id = t.a WHERE p.v > 'e0995';
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..134.70 rows=1 width=18)
+row   ->  Seq Scan on t  (cost=0.00..1.05 rows=5 width=8)
+row   ->  Append  (cost=0.00..26.69 rows=4 width=10)
+row         ->  Seq Scan on p p_1  (cost=0.00..0.00 rows=1 width=36)
+row               Filter: ((v > 'e0995'::text) AND (t.a = id))
+row         ->  Index Scan using c1_v_idx on c1 p_2  (cost=0.29..8.28 rows=1 width=8)
+row               Index Cond: (v > 'e0995'::text)
+row               Filter: (t.a = id)
+row         ->  Index Scan using c2_id_idx on c2 p_3  (cost=0.29..8.31 rows=1 width=8)
+row               Index Cond: (id = t.a)
+row               Filter: (v > 'e0995'::text)
+row         ->  Index Scan using c3_v_idx on c3 p_4  (cost=0.29..10.09 rows=1 width=10)
+row               Index Cond: (v > 'e0995'::text)
+row               Filter: (t.a = id)
+EXPLAIN
+> EXPLAIN SELECT * FROM t LEFT JOIN p ON p.id = t.a AND p.v < 'c2' WHERE t.b < 3;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join  (cost=0.00..204.21 rows=2 width=16)
+row   ->  Seq Scan on t  (cost=0.00..1.06 rows=2 width=8)
+row         Filter: (b < 3)
+row   ->  Append  (cost=0.00..101.54 rows=4 width=8)
+row         ->  Seq Scan on p p_1  (cost=0.00..0.00 rows=1 width=36)
+row               Filter: ((v < 'c2'::text) AND (id = t.a))
+row         ->  Bitmap Heap Scan on c1 p_2  (cost=17.35..88.90 rows=1 width=8)
+row               Recheck Cond: (v < 'c2'::text)
+row               Filter: (id = t.a)
+row               ->  Bitmap Index Scan on c1_v_idx  (cost=0.00..17.06 rows=1170 width=0)
+row                     Index Cond: (v < 'c2'::text)
+row         ->  Index Scan using c2_id_idx on c2 p_3  (cost=0.29..8.31 rows=1 width=8)
+row               Index Cond: (id = t.a)
+row               Filter: (v < 'c2'::text)
+row         ->  Index Scan using c3_v_idx on c3 p_4  (cost=0.29..4.31 rows=1 width=10)
+row               Index Cond: (v < 'c2'::text)
+row               Filter: (id = t.a)
+EXPLAIN
+> SELECT * FROM t JOIN p ON p.id = t.a WHERE p.v IN ('c3', 'c6', 'd9', 'd12', 'e0001') ORDER BY 1, 3, 4;
+fields a@t.1:23:4:-1,b@t.2:23:4:-1,id@p.1:23:4:-1,v@p.2:25:-1:-1
+row 3,1,3,c3
+row 6,2,6,c6
+row 9,3,9,d9
+row 12,4,12,d12
+row 12,4,12,e0001
+row 15,5,15,e0001
+SELECT 6
+> SELECT count(*) FROM t JOIN p ON p.id = t.a WHERE p.v > 'e0001';
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT * FROM t LEFT JOIN p ON p.id = t.a AND p.v < 'c2' WHERE t.b < 3 ORDER BY 1, 3, 4;
+fields a@t.1:23:4:-1,b@t.2:23:4:-1,id@p.1:23:4:-1,v@p.2:25:-1:-1
+row 3,1,NULL,NULL
+row 6,2,NULL,NULL
+SELECT 2

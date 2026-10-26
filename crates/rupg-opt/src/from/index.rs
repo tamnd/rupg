@@ -323,6 +323,41 @@ fn index_paths<'q>(
     (out, bitmaps)
 }
 
+/// `reparameterize_path` of a scan of the table `plain` with no parameters, for the parameterized table `table`: an index scan keeps its index and its clauses and gets the costs of `cost_index` again, and a bitmap heap scan keeps its bitmap, as `create_bitmap_heap_path` does. The conditions of the joins go into the filter, and the rows are the rows of the parameterization. Other scans give `None`.
+pub(super) fn reparameterize<'q>(
+    level: &Level<'q>,
+    (plain, table): (&Table<'_, 'q>, &Table<'_, 'q>),
+    indexes: &[Index],
+    node: &Node<'q>,
+    stats: &Stats,
+) -> Option<Node<'q>> {
+    match &node.kind {
+        Kind::IndexScan { index, only, backward, .. } => {
+            let index = indexes.iter().find(|i| i.oid == *index)?;
+            let sources: Vec<Source<'q>> = plain
+                .quals
+                .iter()
+                .enumerate()
+                .map(|(at, q)| Source { expr: q.expr.clone(), at: Some(at), class: q.class })
+                .collect();
+            let all: Vec<&Source<'q>> = sources.iter().collect();
+            let clauses = match_clauses(plain.r, index, &restrict(index, plain.r, &all));
+            let costs = btree_cost(table, index, &clauses, stats);
+            let order = Vec::new();
+            Some(scan(level, table, index, &clauses, costs, *only, *backward, order, stats).node)
+        }
+        Kind::BitmapHeapScan { .. } => {
+            let (_, bitmaps) = index_paths(level, plain, indexes, stats);
+            if bitmaps.is_empty() {
+                return None;
+            }
+            let chosen = choose_bitmap_and(plain, bitmaps, None, stats);
+            Some(bitmap_heap_scan(level, table, &chosen, stats).node)
+        }
+        _ => None,
+    }
+}
+
 /// A parameterized scan of a table for the inner side of a nested loop, as an `IndexPath` or a `BitmapHeapPath` with a `param_info`.
 #[derive(Debug)]
 pub(super) struct Param<'q> {
