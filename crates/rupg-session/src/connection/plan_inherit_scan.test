@@ -1,0 +1,146 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE p (id integer, v text);
+CREATE TABLE
+> CREATE TABLE c1 () INHERITS (p);
+CREATE TABLE
+> CREATE TABLE c2 (extra integer) INHERITS (p);
+CREATE TABLE
+> INSERT INTO p SELECT g, 'p' || g FROM generate_series(1, 100) g;
+INSERT 0 100
+> INSERT INTO c1 SELECT g, 'c' || g FROM generate_series(1, 1000) g;
+INSERT 0 1000
+> INSERT INTO c2 SELECT g, 'd' || g, g FROM generate_series(1, 3000) g;
+INSERT 0 3000
+> CREATE INDEX ON c1 (id);
+CREATE INDEX
+> CREATE INDEX ON c2 (id);
+CREATE INDEX
+> ANALYZE p, c1, c2;
+ANALYZE
+> EXPLAIN SELECT * FROM p;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..85.50 rows=4100 width=9)
+row   ->  Seq Scan on p p_1  (cost=0.00..2.00 rows=100 width=7)
+row   ->  Seq Scan on c1 p_2  (cost=0.00..16.00 rows=1000 width=8)
+row   ->  Seq Scan on c2 p_3  (cost=0.00..47.00 rows=3000 width=9)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE id = 5;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..18.86 rows=3 width=8)
+row   ->  Seq Scan on p p_1  (cost=0.00..2.25 rows=1 width=7)
+row         Filter: (id = 5)
+row   ->  Index Scan using c1_id_idx on c1 p_2  (cost=0.28..8.29 rows=1 width=8)
+row         Index Cond: (id = 5)
+row   ->  Index Scan using c2_id_idx on c2 p_3  (cost=0.28..8.30 rows=1 width=9)
+row         Index Cond: (id = 5)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE id < 50;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..21.25 rows=146 width=8)
+row   ->  Seq Scan on p p_1  (cost=0.00..2.25 rows=48 width=7)
+row         Filter: (id < 50)
+row   ->  Index Scan using c1_id_idx on c1 p_2  (cost=0.28..9.13 rows=49 width=8)
+row         Index Cond: (id < 50)
+row   ->  Index Scan using c2_id_idx on c2 p_3  (cost=0.28..9.14 rows=49 width=9)
+row         Index Cond: (id < 50)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE v = 'c5';
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..75.27 rows=3 width=8)
+row   ->  Seq Scan on p p_1  (cost=0.00..2.25 rows=1 width=7)
+row         Filter: (v = 'c5'::text)
+row   ->  Seq Scan on c1 p_2  (cost=0.00..18.50 rows=1 width=8)
+row         Filter: (v = 'c5'::text)
+row   ->  Seq Scan on c2 p_3  (cost=0.00..54.50 rows=1 width=9)
+row         Filter: (v = 'c5'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE id > 2900;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..17.08 rows=102 width=9)
+row   ->  Seq Scan on p p_1  (cost=0.00..2.25 rows=1 width=7)
+row         Filter: (id > 2900)
+row   ->  Index Scan using c1_id_idx on c1 p_2  (cost=0.28..4.29 rows=1 width=8)
+row         Index Cond: (id > 2900)
+row   ->  Index Scan using c2_id_idx on c2 p_3  (cost=0.28..10.03 rows=100 width=9)
+row         Index Cond: (id > 2900)
+EXPLAIN
+> EXPLAIN SELECT * FROM ONLY p WHERE id = 5;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..2.25 rows=1 width=7)
+row   Filter: (id = 5)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE ctid = '(0,1)';
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..10.29 rows=3 width=8)
+row   ->  Seq Scan on p p_1  (cost=0.00..2.25 rows=1 width=7)
+row         Filter: (ctid = '(0,1)'::tid)
+row   ->  Tid Scan on c1 p_2  (cost=0.00..4.01 rows=1 width=8)
+row         TID Cond: (ctid = '(0,1)'::tid)
+row   ->  Tid Scan on c2 p_3  (cost=0.00..4.01 rows=1 width=9)
+row         TID Cond: (ctid = '(0,1)'::tid)
+EXPLAIN
+> EXPLAIN SELECT * FROM c2 WHERE id = 7;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using c2_id_idx on c2  (cost=0.28..8.30 rows=1 width=13)
+row   Index Cond: (id = 7)
+EXPLAIN
+> EXPLAIN SELECT count(*) FROM p WHERE id BETWEEN 10 AND 20;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=19.74..19.75 rows=1 width=8)
+row   ->  Append  (cost=0.00..19.66 rows=33 width=0)
+row         ->  Seq Scan on p p_1  (cost=0.00..2.50 rows=11 width=0)
+row               Filter: ((id >= 10) AND (id <= 20))
+row         ->  Index Only Scan using c1_id_idx on c1 p_2  (cost=0.28..8.49 rows=11 width=0)
+row               Index Cond: ((id >= 10) AND (id <= 20))
+row         ->  Index Only Scan using c2_id_idx on c2 p_3  (cost=0.28..8.50 rows=11 width=0)
+row               Index Cond: ((id >= 10) AND (id <= 20))
+EXPLAIN
+> CREATE TABLE q (k integer, w text) PARTITION BY RANGE (k);
+CREATE TABLE
+> CREATE TABLE q1 PARTITION OF q FOR VALUES FROM (0) TO (1000);
+CREATE TABLE
+> CREATE TABLE q2 PARTITION OF q FOR VALUES FROM (1000) TO (5000);
+CREATE TABLE
+> INSERT INTO q SELECT g, 'q' || g FROM generate_series(0, 4999) g;
+INSERT 0 5000
+> CREATE INDEX ON q (k);
+CREATE INDEX
+> ANALYZE q;
+ANALYZE
+> EXPLAIN SELECT * FROM q;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..103.00 rows=5000 width=10)
+row   ->  Seq Scan on q1 q_1  (cost=0.00..16.00 rows=1000 width=8)
+row   ->  Seq Scan on q2 q_2  (cost=0.00..62.00 rows=4000 width=10)
+EXPLAIN
+> EXPLAIN SELECT * FROM q WHERE k = 5;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using q1_k_idx on q1 q  (cost=0.28..8.29 rows=1 width=8)
+row   Index Cond: (k = 5)
+EXPLAIN
+> EXPLAIN SELECT * FROM q WHERE k < 1200;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..37.28 rows=1200 width=8)
+row   ->  Seq Scan on q1 q_1  (cost=0.00..18.50 rows=1000 width=8)
+row         Filter: (k < 1200)
+row   ->  Index Scan using q2_k_idx on q2 q_2  (cost=0.28..12.78 rows=200 width=10)
+row         Index Cond: (k < 1200)
+EXPLAIN
+> EXPLAIN SELECT * FROM q WHERE w = 'q7';
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..90.51 rows=2 width=9)
+row   ->  Seq Scan on q1 q_1  (cost=0.00..18.50 rows=1 width=8)
+row         Filter: (w = 'q7'::text)
+row   ->  Seq Scan on q2 q_2  (cost=0.00..72.00 rows=1 width=10)
+row         Filter: (w = 'q7'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM q WHERE k > 10 AND w LIKE 'q1%';
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..108.60 rows=1120 width=10)
+row   ->  Seq Scan on q1 q_1  (cost=0.00..21.00 rows=110 width=8)
+row         Filter: ((k > 10) AND (w ~~ 'q1%'::text))
+row   ->  Seq Scan on q2 q_2  (cost=0.00..82.00 rows=1010 width=10)
+row         Filter: ((k > 10) AND (w ~~ 'q1%'::text))
+EXPLAIN

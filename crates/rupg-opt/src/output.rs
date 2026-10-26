@@ -89,7 +89,11 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             for child in &mut node.children {
                 set(level, child, want.clone(), false);
             }
-            node.cost.width = node.children.first().map_or(0, |c| c.cost.width);
+            // `set_append_rel_size`: the width of the relation is the mean of the widths of its members, by their rows.
+            let rows: f64 = node.children.iter().map(|c| c.cost.rows).sum();
+            let size: f64 =
+                node.children.iter().map(|c| f64::from(c.cost.width) * c.cost.rows).sum();
+            node.cost.width = if rows > 0.0 { (size / rows).round_ties_even() as i32 } else { 0 };
         }
         Kind::Append | Kind::MergeAppend(_) | Kind::RecursiveUnion => {}
         Kind::SetOp { .. } => node.output = want.iter().map(Item::passed).collect(),
@@ -280,7 +284,10 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
         | Kind::CteScan(r)
         | Kind::WorkTableScan(r) => {
             let r = *r;
-            node.cost.width = width(level, node.scope, &want);
+            // The scan of a member has the widths of the columns of the member.
+            if node.member.is_none() || !want.iter().all(|w| is_var(&w.expr)) {
+                node.cost.width = width(level, node.scope, &want);
+            }
             if let Some(output) = simple_values(level, node, r, &want) {
                 node.kind = Kind::Result { replaces: None, one_time: Vec::new() };
                 node.cost.startup = 0.0;

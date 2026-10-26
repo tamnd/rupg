@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Each member of an inheritance tree and each partition gets its own scan, with its own statistics, indexes and width, as `set_append_rel_pathlist` does. A member can now use an `Index Scan`, an `Index Only Scan`, a `Bitmap Heap Scan` or a `Tid Scan` (#NNN).
 - The planner makes `Tid Scan` and `Tid Range Scan` plans for conditions on `ctid`, as `create_tidscan_paths` does. This includes `= ANY`, `OR` lists, `CURRENT OF` and conditions from joins (#801).
 - The planner estimates `LIKE`, `ILIKE`, regular expressions and `^@` of an analyzed column from its statistics, as `patternsel_common` does. It tests the pattern on the most common values and on the histogram, and it estimates the fixed prefix of the pattern from the histogram, as `prefix_selectivity` (#800).
 - A merge join uses the clauses whose values are in the first keys of the order of its outer side, and it tests the other clauses as conditions of the join, as `find_mergeclauses_for_outer_pathkeys`. The planner also tries the inner plans that are in the order of only the first keys, as `generate_mergejoin_paths` (#799).
