@@ -15,7 +15,7 @@ use rupg_sql::nodes::{
     FRAMEOPTION_EXCLUDE_CURRENT_ROW, FRAMEOPTION_EXCLUDE_GROUP, FRAMEOPTION_EXCLUDE_TIES,
     FRAMEOPTION_NONDEFAULT, FRAMEOPTION_RANGE, FRAMEOPTION_ROWS, FRAMEOPTION_START_CURRENT_ROW,
     FRAMEOPTION_START_OFFSET_PRECEDING, FRAMEOPTION_START_UNBOUNDED_PRECEDING, LockClauseStrength,
-    OverridingKind,
+    LockWaitPolicy, OverridingKind,
 };
 use rupg_types::qualified_name_list;
 
@@ -857,7 +857,7 @@ impl Deparser<'_> {
         None
     }
 
-    /// `get_select_query_def`: the query, then `ORDER BY`, `OFFSET` and `LIMIT`.
+    /// `get_select_query_def`: the query, then `ORDER BY`, `OFFSET`, `LIMIT` and the locking clauses.
     fn select_query(&mut self, query: &Query, result: Option<&[String]>) -> Result<()> {
         self.with_clause(query)?;
         let force = match &query.set_op {
@@ -891,6 +891,18 @@ impl Deparser<'_> {
                     ExprKind::Const(value) if value.is_null() => self.buf.push_str("ALL"),
                     _ => self.expr(limit, false)?,
                 }
+            }
+        }
+        for mark in query.row_marks.iter().filter(|mark| !mark.pushed) {
+            let word = format!(" {}", rupg_analyze::strength_name(mark.strength));
+            self.keyword(&word, -INDENT_STD, INDENT_STD, 0);
+            let name = self.namespaces.last().and_then(|space| space.names.get(mark.relation));
+            self.buf
+                .push_str(&format!(" OF {}", quote_identifier(name.map_or("", String::as_str))));
+            if mark.wait == LockWaitPolicy::LockWaitError {
+                self.buf.push_str(" NOWAIT");
+            } else if mark.wait == LockWaitPolicy::LockWaitSkip {
+                self.buf.push_str(" SKIP LOCKED");
             }
         }
         Ok(())

@@ -3664,6 +3664,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/join_or_index.test")));
     }
 
+    /// The locking clauses of a view in `pg_get_viewdef`, as `get_select_query_def` shows them: one clause for each relation, `NOWAIT` and `SKIP LOCKED`, and no clause for the locks that a lock outside pushes into a subquery. `connection/view_locking.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn view_locking() {
+        big_stack(|| script(include_str!("connection/view_locking.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {
