@@ -21,7 +21,7 @@ const ARRAY_EQ_OP: u32 = 1070;
 const ARRAY_LT_OP: u32 = 1072;
 const ARRAY_GT_OP: u32 = 1073;
 /// `RECORD_EQ_OP`.
-const RECORD_EQ_OP: u32 = 2988;
+pub(crate) const RECORD_EQ_OP: u32 = 2988;
 
 /// The `<`, `=` and `>` operators of a type, or 0 for an operator that the type does not have.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -4,8 +4,8 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 
 use rupg_analyze::{
-    Aggref, Expr, ExprKind, MinMax, Query, SetKind, SetOp, SetTree, SortGroup, SubLink, WindowFunc,
-    Write, WriteKind, expand_grouping_sets,
+    Aggref, Expr, ExprKind, FuncForm, MinMax, Query, SetKind, SetOp, SetTree, SortGroup, SubLink,
+    WindowFunc, Write, WriteKind, expand_grouping_sets,
 };
 use rupg_pgcatalog::builtin;
 use rupg_plan::{
@@ -46,7 +46,8 @@ pub(crate) fn having_split(query: &Query) -> (Vec<&Expr>, Vec<&Expr>) {
             || has_grouping(part)
             || exprs::volatile(part)
             || has_sublink(part)
-            || !query.grouping_sets.is_empty();
+            || !query.grouping_sets.is_empty()
+            || grouping_conflict(query, part);
         if stays {
             keep.push(part);
         } else if !query.group.is_empty() {
@@ -58,6 +59,97 @@ pub(crate) fn having_split(query: &Query) -> (Vec<&Expr>, Vec<&Expr>) {
     }
     (to_where, keep)
 }
+
+/// `find_having_conflicts`: true when the condition compares an item of `GROUP BY` with an operator whose equality is not the equality of the group, as `expression_has_grouping_conflict` finds it. In `WHERE`, such a condition removes rows that the group puts with rows that pass, and so it changes the aggregates. An expression has no collation, so the checks of a nondeterministic collation are not done.
+fn grouping_conflict(query: &Query, expr: &Expr) -> bool {
+    let groups: Vec<(&Expr, u32)> =
+        query.group.iter().map(|g| (&query.targets[g.target].expr, g.equal)).collect();
+    !groups.is_empty() && conflict_walk(&groups, None, expr)
+}
+
+/// `grouping_conflict_walker`: the walk of [`grouping_conflict`]. An operator of a btree or a hash family checks its operands, and a simple `CASE` on an item of `GROUP BY` checks the item where each `WHEN` compares it. Any other use of an item is safe.
+fn conflict_walk(groups: &[(&Expr, u32)], case_arg: Option<&Expr>, expr: &Expr) -> bool {
+    let walk = |e: &Expr| conflict_walk(groups, case_arg, e);
+    match &expr.kind {
+        ExprKind::Func(f) => match f.form {
+            FuncForm::Operator(op) if index_member(op) => {
+                f.args.iter().any(|a| conflict_operand(groups, case_arg, op, a))
+            }
+            _ => f.args.iter().any(walk),
+        },
+        ExprKind::ScalarArrayOp { func, args, .. } => {
+            let element = |a: &Expr| builtin::type_by_oid(a.ty).map_or(0, |t| t.elem);
+            let op = match args.as_slice() {
+                [left, array] => {
+                    cost::array_operator(*func, left.ty, element(array)).map(|o| o.oid)
+                }
+                _ => None,
+            };
+            match op.filter(|&op| index_member(op)) {
+                Some(op) => args.iter().any(|a| conflict_operand(groups, case_arg, op, a)),
+                None => args.iter().any(walk),
+            }
+        }
+        ExprKind::Case(c) if c.arg.is_some() => {
+            let arg = strip_relabel(c.arg.as_deref().unwrap_or(expr));
+            let inner = if groups.iter().any(|(g, _)| g.same(arg)) {
+                Some(arg)
+            } else if conflict_walk(groups, case_arg, arg) {
+                return true;
+            } else {
+                None
+            };
+            c.whens.iter().any(|(when, _)| conflict_walk(groups, inner, when))
+                || c.whens.iter().any(|(_, then)| walk(then))
+                || walk(&c.default)
+        }
+        _ => expr.children().into_iter().any(walk),
+    }
+}
+
+/// `grouping_check_operand`: true when the operand is an item of `GROUP BY` and the operator is not in a family with the `=` operator of the group, as `equality_ops_are_compatible`. Any other operand is walked.
+fn conflict_operand(groups: &[(&Expr, u32)], case_arg: Option<&Expr>, op: u32, arg: &Expr) -> bool {
+    let mut node = strip_relabel(arg);
+    if matches!(node.kind, ExprKind::CaseTest) {
+        match case_arg {
+            Some(a) => node = a,
+            None => return false,
+        }
+    }
+    match groups.iter().find(|(g, _)| g.same(node)) {
+        Some(&(_, equal)) => !equality_compatible(op, equal),
+        None => conflict_walk(groups, case_arg, arg),
+    }
+}
+
+/// The expression under its `RelabelType` nodes.
+fn strip_relabel(mut expr: &Expr) -> &Expr {
+    while let ExprKind::Relabel(inner, _) = &expr.kind {
+        expr = inner;
+    }
+    expr
+}
+
+/// `op_is_safe_index_member`: true when the operator is in a btree or a hash family.
+fn index_member(op: u32) -> bool {
+    builtin::amops_of_operator(op).any(|a| matches!(a.method, BTREE_AM | HASH_AM))
+}
+
+/// `equality_ops_are_compatible`: true when the operator is the `=` operator whose function is `equal`, or when a btree or a hash family has both of them. When no built-in operator has the function, the operator counts as compatible.
+fn equality_compatible(op: u32, equal: u32) -> bool {
+    let eqops: Vec<u32> =
+        builtin::operators().iter().filter(|o| o.code == equal).map(|o| o.oid).collect();
+    eqops.is_empty()
+        || eqops.contains(&op)
+        || builtin::amops_of_operator(op).filter(|a| matches!(a.method, BTREE_AM | HASH_AM)).any(
+            |a| eqops.iter().any(|&e| builtin::amops_of_operator(e).any(|b| b.family == a.family)),
+        )
+}
+
+/// `BTREE_AM_OID`.
+const BTREE_AM: u32 = 403;
+/// `HASH_AM_OID`.
+const HASH_AM: u32 = 405;
 
 /// True when the expression calls `GROUPING` of the query.
 fn has_grouping(expr: &Expr) -> bool {

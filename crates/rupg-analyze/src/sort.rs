@@ -583,13 +583,26 @@ impl Analyzer<'_> {
                 sort: function_of(sort_op),
                 equal: function_of(eq_op),
                 nulls_first,
-                hashable: typcache::hashable(eq_op, ty),
+                hashable: self.hashable(eq_op, ty),
             });
         }
         Ok(())
     }
 
     /// The operator of `ORDER BY ... USING op`, its `=` operator and true when it sorts in descending order.
+    /// `op_hashjoinable`, with `record_fields_have_hashing` for the `=` of a composite type: it can use a hash table when each field of the type can, as `cache_record_field_properties` finds it. The fields of `record` are not known, so its `=` cannot.
+    fn hashable(&self, eq: u32, ty: u32) -> bool {
+        if eq != typcache::RECORD_EQ_OP {
+            return typcache::hashable(eq, ty);
+        }
+        self.row_columns(types::base(ty)).is_some_and(|columns| {
+            columns.iter().all(|c| {
+                let eq = typcache::operators(c.ty).eq;
+                eq != 0 && self.hashable(eq, c.ty)
+            })
+        })
+    }
+
     fn using_operator(&self, names: &List, ty: u32, at: Option<usize>) -> Result<(u32, u32, bool)> {
         let names: Vec<&str> = names
             .iter()
@@ -648,7 +661,7 @@ impl Analyzer<'_> {
             sort: function_of(ops.lt),
             equal: function_of(ops.eq),
             nulls_first: false,
-            hashable: typcache::hashable(ops.eq, ty),
+            hashable: self.hashable(ops.eq, ty),
         });
         Ok(())
     }

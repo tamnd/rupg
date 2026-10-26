@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A condition of `HAVING` that compares an item of `GROUP BY` with an operator outside the family of the `=` of the group, such as `*=`, stays in `HAVING` as `find_having_conflicts` keeps it, and a composite type whose fields can be hashed groups with a hash table (#846).
 - The `record_image_ops` operators `*=`, `*<>`, `*<`, `*<=`, `*>` and `*>=` work, and `btrecordimagecmp` compares the bytes of the columns as `record_image_cmp` does, so `row(1.0)` and `row(1.00)` are different (#845).
 - `float8_combine`, the combine function of the `float8` variance aggregates, can be called as a function (#844).
 - The sorted plan of `GROUP BY` can also put the keys of the groups in the order of its input first, as `get_useful_group_keys_orderings` does, so an index or a join in a part of that order needs no full sort. `enable_group_by_reordering` turns this off (#843).
