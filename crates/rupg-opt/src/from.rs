@@ -1956,6 +1956,7 @@ fn restrictions(quals: Vec<Qual<'_>>) -> Vec<Qual<'_>> {
 }
 
 /// A condition of a join that tests a value of the outer side and a value of the inner side with an operator, with the outer value on the left.
+#[derive(Clone)]
 struct Clause<'q> {
     item: Item<'q>,
     outer: Expr,
@@ -3385,8 +3386,8 @@ fn merge_order(input: &Input<'_, '_>, join: JoinKind, clauses: &[Clause<'_>]) ->
     out
 }
 
-/// `find_mergeclauses_for_outer_pathkeys`: the keys of a merge join in the order of the rows of the outer side, when that order has the value of each clause.
-fn outer_order(order: &[OrderKey], clauses: &[Clause<'_>]) -> Option<Vec<MergeKey>> {
+/// `find_mergeclauses_for_outer_pathkeys`: the keys of a merge join in the order of the rows of the outer side, from the clauses whose values are in the first keys of that order. The other clauses are conditions of the join. With `all`, the order must have the value of each clause.
+fn outer_order(order: &[OrderKey], clauses: &[Clause<'_>], all: bool) -> Option<Vec<MergeKey>> {
     let mut used = vec![false; clauses.len()];
     let mut out = Vec::new();
     for k in order {
@@ -3401,7 +3402,7 @@ fn outer_order(order: &[OrderKey], clauses: &[Clause<'_>]) -> Option<Vec<MergeKe
             break;
         }
     }
-    (out.len() == clauses.len()).then_some(out)
+    (!out.is_empty() && (!all || out.len() == clauses.len())).then_some(out)
 }
 
 /// `sort_inner_and_outer`: the merge join of the cheapest plans of the two sides in the order of `merge_order`.
@@ -3414,7 +3415,7 @@ fn sorted_merge<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'
     merge_join(input, join, keys)
 }
 
-/// `generate_mergejoin_paths`: the merge joins of a plan of the outer side in the order of its rows, when that order has the value of each condition. The cheapest plan of the inner side gets a `Sort` when it is not in that order. When it is not, the inner plans in that order with the lowest total cost and with the lowest start cost are inner sides too.
+/// `generate_mergejoin_paths`: the merge joins of a plan of the outer side in the order of its rows, with the clauses whose values are in the first keys of that order. The cheapest plan of the inner side gets a `Sort` when it is not in that order. Then, for the keys and for each shorter list of their first keys, the inner plans in that order with the lowest total cost and with the lowest start cost are inner sides too, when they cost less than the inner sides of the longer lists. A right join, a right anti join and a full join use all their clauses.
 fn presorted_merges<'q>(
     input: &Input<'_, 'q>,
     inners: &[Rel<'q>],
@@ -3424,11 +3425,9 @@ fn presorted_merges<'q>(
     if clauses.is_empty() {
         return Vec::new();
     }
-    let Some(keys) = outer_order(&input.outer.order, &clauses) else { return Vec::new() };
+    let all = matches!(join, JoinKind::Right | JoinKind::RightAnti | JoinKind::Full);
+    let Some(keys) = outer_order(&input.outer.order, &clauses, all) else { return Vec::new() };
     let mut out: Vec<Candidate<'q>> = merge_join(input, join, keys.clone()).into_iter().collect();
-    let sorted: Vec<usize> = (0..inners.len())
-        .filter(|&j| ordered(&inners[j].order, &keys, |c| clauses[c].inner.clone()))
-        .collect();
     let costs = |j: usize| (inners[j].node.cost.startup, inners[j].node.cost.total);
     let by = |a: usize, b: usize, total: bool| {
         let ((sa, ta), (sb, tb)) = (costs(a), costs(b));
@@ -3438,27 +3437,40 @@ fn presorted_merges<'q>(
             sa.total_cmp(&sb).then(ta.total_cmp(&tb))
         }
     };
-    // `get_cheapest_path_for_pathkeys` and `compare_path_costs`: the first plan with the lowest cost.
-    let best = |total: bool| sorted.iter().copied().min_by(|&a, &b| by(a, b, total));
-    let presorted = sorted.first() == Some(&0);
-    let mut total = None;
-    if let Some(j) = best(true)
-        && (!presorted || by(j, 0, true).is_lt())
-    {
-        total = Some(j);
-    }
-    let mut startup = None;
-    if let Some(j) = best(false)
-        && (!presorted || by(j, 0, false).is_lt())
-        && j != total.unwrap_or(0)
-    {
-        startup = Some(j);
-    }
-    for j in total.into_iter().chain(startup) {
-        let input = Input { inner: &inners[j], ..*input };
-        out.extend(
-            merge_join(&input, join, keys.clone()).map(|c| Candidate { paths: (0, j), ..c }),
-        );
+    // The cheapest inner plan needs no `Sort` when it is in the order of all the keys, and then a sorted plan must cost less.
+    let presorted = ordered(&inners[0].order, &keys, |c| clauses[c].inner.clone());
+    let (mut total, mut startup) = if presorted { (Some(0), Some(0)) } else { (None, None) };
+    for count in (1..=keys.len()).rev() {
+        let trial = &keys[..count];
+        let sorted: Vec<usize> = (0..inners.len())
+            .filter(|&j| ordered(&inners[j].order, trial, |c| clauses[c].inner.clone()))
+            .collect();
+        // `get_cheapest_path_for_pathkeys` and `compare_path_costs`: the first plan with the lowest cost.
+        let best = |total: bool| sorted.iter().copied().min_by(|&a, &b| by(a, b, total));
+        let mut each = Vec::new();
+        if let Some(j) = best(true)
+            && total.is_none_or(|t| by(j, t, true).is_lt())
+        {
+            each.push(j);
+            total = Some(j);
+        }
+        if let Some(j) = best(false)
+            && startup.is_none_or(|t| by(j, t, false).is_lt())
+        {
+            if total != Some(j) {
+                each.push(j);
+            }
+            startup = Some(j);
+        }
+        for j in each {
+            let input = Input { inner: &inners[j], ..*input };
+            out.extend(
+                merge_join(&input, join, trial.to_vec()).map(|c| Candidate { paths: (0, j), ..c }),
+            );
+        }
+        if all {
+            break;
+        }
     }
     out
 }
@@ -3476,6 +3488,8 @@ fn merge_join<'q>(
     if clauses.is_empty() || all && !other.is_empty() {
         return None;
     }
+    let other = merge_other(input.quals, &input.outer.rels, &input.inner.rels, &keys);
+    let used: Vec<Clause<'_>> = keys.iter().map(|&(c, _, _)| clauses[c].clone()).collect();
     let sort_outer = !ordered(&input.outer.order, &keys, |c| clauses[c].outer.clone());
     let sort_inner = !ordered(&input.inner.order, &keys, |c| clauses[c].inner.clone());
     let side = |rel: &Rel<'_>, sorted: bool| {
@@ -3509,7 +3523,7 @@ fn merge_join<'q>(
     // The fractions follow the rounding of the rows, which matters for a side with few rows.
     let (outer_start, outer_end) = (outer_skip / outer_path_rows, outer_rows / outer_path_rows);
     let (inner_start, inner_end) = (inner_skip / inner_path_rows, inner_rows / inner_path_rows);
-    let tuples = tuple_count(input, &clauses);
+    let tuples = tuple_count(input, &used);
     // `skip_mark_restore`: when the inner side is unique and the join has no other condition, the join never goes back to an inner row. With the unique rows of a semi join as the outer side, no outer row has the value of the row before it.
     let skip_mark_restore = input.unique.is_some() && other.is_empty() && !input.filtered;
     let rescanned =
@@ -3538,7 +3552,7 @@ fn merge_join<'q>(
                 )
             || allowed && sort_inner && spills);
     run += if materialize { material } else { bare };
-    let merge_qual = cost::qual_cost(clauses.iter().map(|c| &*c.item.expr));
+    let merge_qual = cost::qual_cost(used.iter().map(|c| &*c.item.expr));
     startup += merge_qual * (outer_skip + inner_skip * ratio);
     run += merge_qual * ((outer_rows - outer_skip) + (inner_rows - inner_skip) * ratio);
     // The start cost of the conditions that are not the clauses of the join counts in the start cost of the join.
@@ -3574,6 +3588,27 @@ fn merge_keys<'q>(values: Vec<(Expr, bool, bool)>) -> Vec<SortKey<'q>> {
             nulls_first,
         })
         .collect()
+}
+
+/// The conditions of a merge join that are not its merge clauses, in the order of the conditions.
+fn merge_other<'q>(
+    quals: &[Qual<'q>],
+    outer: &BTreeSet<usize>,
+    inner: &BTreeSet<usize>,
+    keys: &[MergeKey],
+) -> Vec<Qual<'q>> {
+    let mut index = 0;
+    let mut other = Vec::new();
+    for qual in quals {
+        if clause(qual, outer, inner, exprs::can_merge).is_some() {
+            index += 1;
+            if keys.iter().any(|&(c, _, _)| c == index - 1) {
+                continue;
+            }
+        }
+        other.push(qual.clone());
+    }
+    other
 }
 
 /// The clauses of a merge join in the order of its keys, each with the directions of its key.
@@ -3644,7 +3679,8 @@ impl<'q> Candidate<'q> {
                 )
             }
             Method::Merge => {
-                let (clauses, other) = split(quals, &outer.rels, &inner.rels, exprs::can_merge);
+                let clauses = split(quals, &outer.rels, &inner.rels, exprs::can_merge).0;
+                let other = merge_other(quals, &outer.rels, &inner.rels, &self.keys);
                 let clauses = merge_clauses(clauses, &self.keys);
                 let outer_values =
                     clauses.iter().map(|(c, d, n)| (c.outer.clone(), *d, *n)).collect();

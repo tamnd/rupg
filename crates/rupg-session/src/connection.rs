@@ -5018,6 +5018,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_merge_scansel.test")));
     }
 
+    /// Merge joins with more than one clause whose sides are in the order of the first clauses only: the join uses those clauses and tests the others as conditions of the join, with inner, left, right, full and semi joins. `connection/plan_merge_prefix.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_merge_prefix() {
+        big_stack(|| script(include_str!("connection/plan_merge_prefix.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {
