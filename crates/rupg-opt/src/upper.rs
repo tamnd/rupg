@@ -606,11 +606,11 @@ impl<'q> Builder<'q> {
         let query = level.query;
         let scope = level.display;
         let costs = target_costs(level).unwrap_or_default();
-        // `apply_scanjoin_target_to_paths`: an `Append` does not compute targets, so a `Result` above it computes the targets that are not its columns, as `create_projection_path`.
+        // `apply_scanjoin_target_to_paths`: an `Append` of a `UNION ALL` or of a table with children of `INHERITS` does not compute targets, so a `Result` above it computes the targets that are not its columns, as `create_projection_path`.
         let computed = !query.grouped
             && query.windows.is_empty()
             && query.targets.iter().any(|t| !matches!(t.expr.kind, ExprKind::Var(_)));
-        if computed && from::append_rel(query, &node) {
+        if computed && (from::append_rel(query, &node) || from::inheritance_append(query, &node)) {
             let c = node.cost;
             let (startup, per_row) = costs.scan;
             node =

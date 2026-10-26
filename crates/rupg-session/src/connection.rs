@@ -4906,6 +4906,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/prepared_statements_replan.test")));
     }
 
+    /// The `Result` above the `Append` of a table with children of `INHERITS` that computes the targets of a `SELECT` and the new values of an `UPDATE`, and the plans of a partitioned table, of `ONLY` and of a `DELETE`, which have no such `Result`. `connection/explain_inheritance_result.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn explain_inheritance_result() {
+        big_stack(|| script(include_str!("connection/explain_inheritance_result.test")));
+    }
+
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
     #[test]
     fn notify_other_sessions() {

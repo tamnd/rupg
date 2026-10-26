@@ -1,0 +1,110 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE ir_t (a int, b text);
+CREATE TABLE
+> CREATE TABLE ir_c (c int) INHERITS (ir_t);
+CREATE TABLE
+> CREATE TABLE ir_p (a int, b text) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE ir_p1 PARTITION OF ir_p FOR VALUES FROM (0) TO (5);
+CREATE TABLE
+> CREATE TABLE ir_p2 PARTITION OF ir_p FOR VALUES FROM (5) TO (10);
+CREATE TABLE
+> EXPLAIN (COSTS OFF) SELECT a + 1 FROM ir_t;
+fields QUERY PLAN:25:-1:-1
+row Result
+row   ->  Append
+row         ->  Seq Scan on ir_t ir_t_1
+row         ->  Seq Scan on ir_c ir_t_2
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT a, 'x' FROM ir_t WHERE a = 1;
+fields QUERY PLAN:25:-1:-1
+row Result
+row   ->  Append
+row         ->  Seq Scan on ir_t ir_t_1
+row               Filter: (a = 1)
+row         ->  Seq Scan on ir_c ir_t_2
+row               Filter: (a = 1)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT a + 1 FROM ir_p;
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on ir_p1 ir_p_1
+row   ->  Seq Scan on ir_p2 ir_p_2
+EXPLAIN
+> EXPLAIN (COSTS OFF) UPDATE ir_t SET b = 'x' WHERE a = 1;
+fields QUERY PLAN:25:-1:-1
+row Update on ir_t
+row   Update on ir_t ir_t_1
+row   Update on ir_c ir_t_2
+row   ->  Result
+row         ->  Append
+row               ->  Seq Scan on ir_t ir_t_1
+row                     Filter: (a = 1)
+row               ->  Seq Scan on ir_c ir_t_2
+row                     Filter: (a = 1)
+EXPLAIN
+> EXPLAIN (COSTS OFF) UPDATE ir_t SET b = b || 'x';
+fields QUERY PLAN:25:-1:-1
+row Update on ir_t
+row   Update on ir_t ir_t_1
+row   Update on ir_c ir_t_2
+row   ->  Result
+row         ->  Append
+row               ->  Seq Scan on ir_t ir_t_1
+row               ->  Seq Scan on ir_c ir_t_2
+EXPLAIN
+> EXPLAIN (COSTS OFF) UPDATE ir_t SET a = a;
+fields QUERY PLAN:25:-1:-1
+row Update on ir_t
+row   Update on ir_t ir_t_1
+row   Update on ir_c ir_t_2
+row   ->  Append
+row         ->  Seq Scan on ir_t ir_t_1
+row         ->  Seq Scan on ir_c ir_t_2
+EXPLAIN
+> EXPLAIN (COSTS OFF) UPDATE ir_p SET b = 'x';
+fields QUERY PLAN:25:-1:-1
+row Update on ir_p
+row   Update on ir_p1 ir_p_1
+row   Update on ir_p2 ir_p_2
+row   ->  Append
+row         ->  Seq Scan on ir_p1 ir_p_1
+row         ->  Seq Scan on ir_p2 ir_p_2
+EXPLAIN
+> EXPLAIN (COSTS OFF) DELETE FROM ir_t WHERE a = 1;
+fields QUERY PLAN:25:-1:-1
+row Delete on ir_t
+row   Delete on ir_t ir_t_1
+row   Delete on ir_c ir_t_2
+row   ->  Append
+row         ->  Seq Scan on ir_t ir_t_1
+row               Filter: (a = 1)
+row         ->  Seq Scan on ir_c ir_t_2
+row               Filter: (a = 1)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ir_t ORDER BY a + 1;
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: ((ir_t.a + 1))
+row   ->  Result
+row         ->  Append
+row               ->  Seq Scan on ir_t ir_t_1
+row               ->  Seq Scan on ir_c ir_t_2
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT a + 1 FROM ir_t LIMIT 1;
+fields QUERY PLAN:25:-1:-1
+row Limit
+row   ->  Result
+row         ->  Append
+row               ->  Seq Scan on ir_t ir_t_1
+row               ->  Seq Scan on ir_c ir_t_2
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT a + 1 FROM ONLY ir_t;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ir_t
+EXPLAIN
+> DROP TABLE ir_t, ir_p CASCADE;
+NOTICE 00000 drop cascades to table ir_c
+DROP TABLE

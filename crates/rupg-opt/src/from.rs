@@ -1006,6 +1006,15 @@ pub(crate) fn append_rel(query: &Query, node: &Node<'_>) -> bool {
     node.filter.is_empty() && sub.is_some_and(simple_union_all)
 }
 
+/// True when the node is the `Append` of the members of a table with children of `INHERITS`, which has the table itself as a member. `apply_scanjoin_target_to_paths` gives the targets to the members of a partitioned table, but not to the members of such a table.
+pub(crate) fn inheritance_append(query: &Query, node: &Node<'_>) -> bool {
+    let Some(Kind::SeqScan(r)) = node.children.first().map(|c| &c.kind) else { return false };
+    let Some(oid) = query.relations.get(*r).map(|rel| rel.oid) else { return false };
+    matches!(node.kind, Kind::Append)
+        && node.children.iter().all(|c| c.member.is_some())
+        && node.children.iter().any(|c| c.member == Some(oid))
+}
+
 /// The parts of the conditions of the joins of an item of `FROM`, the joins below first.
 pub(crate) fn join_conditions<'q>(item: &'q FromItem, out: &mut Vec<&'q Expr>) {
     let FromItem::Join(join) = item else { return };
