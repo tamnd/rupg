@@ -1,0 +1,56 @@
+> create table gq (a int, b int, c int)
+CREATE TABLE
+> insert into gq values (1, 1, 10), (1, 2, 20), (2, 1, 30), (0, 1, 40)
+INSERT 0 4
+> explain (verbose, costs off) select sum(c), b + 1 from gq group by a, b + 1
+fields QUERY PLAN:25:-1:-1
+row HashAggregate
+row   Output: sum(c), ((b + 1)), a
+row   Group Key: gq.a, (gq.b + 1)
+row   ->  Seq Scan on public.gq
+row         Output: (b + 1), a, c
+EXPLAIN
+> select sum(c), b + 1 from gq group by a, b + 1 order by 1
+fields sum:20:8:-1,?column?:23:4:-1
+row 10,2
+row 20,3
+row 30,2
+row 40,2
+SELECT 4
+> explain (verbose, costs off) select c from gq where (a, b) in (select a + 1, b from gq)
+fields QUERY PLAN:25:-1:-1
+row Hash Join
+row   Output: gq.c
+row   Inner Unique: true
+row   Hash Cond: ((gq.a = (gq_1.a + 1)) AND (gq.b = gq_1.b))
+row   ->  Seq Scan on public.gq
+row         Output: gq.a, gq.b, gq.c
+row   ->  Hash
+row         Output: gq_1.a, gq_1.b
+row         ->  HashAggregate
+row               Output: gq_1.a, gq_1.b
+row               Group Key: (gq_1.a + 1), gq_1.b
+row               ->  Seq Scan on public.gq gq_1
+row                     Output: gq_1.a, gq_1.b, (gq_1.a + 1)
+EXPLAIN
+> select c from gq where (a, b) in (select a + 1, b from gq) order by 1
+fields c@gq.3:23:4:-1
+row 10
+row 30
+SELECT 2
+> explain (verbose, costs off) select g.c from gq g, gq g2 where g.a = g2.a + 1 and g.b = g2.b
+fields QUERY PLAN:25:-1:-1
+row Merge Join
+row   Output: g.c
+row   Merge Cond: ((g.a = ((g2.a + 1))) AND (g.b = g2.b))
+row   ->  Sort
+row         Output: g.c, g.a, g.b
+row         Sort Key: g.a, g.b
+row         ->  Seq Scan on public.gq g
+row               Output: g.c, g.a, g.b
+row   ->  Sort
+row         Output: g2.a, g2.b, ((g2.a + 1))
+row         Sort Key: ((g2.a + 1)), g2.b
+row         ->  Seq Scan on public.gq g2
+row               Output: g2.a, g2.b, (g2.a + 1)
+EXPLAIN

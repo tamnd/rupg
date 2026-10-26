@@ -275,7 +275,9 @@ pub enum Kind<'q> {
     /// `Memoize`: the rows of the node below for each value of the parameters `keys`, which the node keeps in a cache for the next scans with the same values, as `create_memoize_plan` makes it from a `MemoizePath`. The estimates are `est_entries`, `est_unique_keys`, `est_calls` and `est_hit_ratio`.
     Memoize(Box<Memoize<'q>>),
     /// `Agg`, with the keys of the groups. With grouping sets, each rollup has its sets, each set has its keys, and a set with no keys makes one group.
-    Aggregate { strategy: Strategy, keys: Vec<Item<'q>>, sets: Vec<Rollup<'q>> },
+    ///
+    /// `unique` is true for the `Agg` that `create_final_unique_paths` makes to remove the duplicate rows of the inner side of a semi join.
+    Aggregate { strategy: Strategy, keys: Vec<Item<'q>>, sets: Vec<Rollup<'q>>, unique: bool },
     /// `Sort`.
     Sort(Vec<SortKey<'q>>),
     /// `IncrementalSort`: a sort of rows whose first `presorted` keys are in order already.

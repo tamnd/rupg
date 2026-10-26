@@ -209,11 +209,26 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
         | Kind::BitmapIndexScan { .. }
         | Kind::BitmapAnd
         | Kind::BitmapOr => {}
-        Kind::Aggregate { keys, .. } => {
+        Kind::Aggregate { keys, unique, .. } => {
+            let unique = *unique;
             let keys: Vec<Expr> = keys.iter().map(|k| k.expr.as_ref().clone()).collect();
             let vars = keys.iter().all(is_var)
                 && keys.iter().enumerate().all(|(i, k)| !keys[..i].iter().any(|o| o.same(k)));
-            grouped(level, node, want, &keys, vars);
+            if unique {
+                // `create_final_unique_paths`: the input is the target of the side, then each key that is not in it.
+                let mut below = want.clone();
+                for key in &keys {
+                    if !below.iter().any(|b| b.expr.same(key)) {
+                        below.push(item(key.clone()));
+                    }
+                }
+                if let Some(child) = node.children.first_mut() {
+                    set(level, child, below, vars);
+                }
+                node.output = want;
+            } else {
+                grouped(level, node, want, &keys, vars);
+            }
             keys_below(node);
         }
         Kind::WindowAgg { .. } => {
@@ -657,8 +672,10 @@ fn grouped<'q>(
     keys: &[Expr],
     physical: bool,
 ) {
+    // `make_group_input_target`: the keys come first, in the order of the target list, then the keys that are not in it.
     let mut below: Vec<Item<'q>> = Vec::new();
-    for key in keys {
+    let in_want = want.iter().map(|w| &*w.expr).filter(|w| keys.iter().any(|k| k.same(w)));
+    for key in in_want.chain(keys) {
         if !below.iter().any(|b| b.expr.same(key)) {
             below.push(item(key.clone()));
         }
