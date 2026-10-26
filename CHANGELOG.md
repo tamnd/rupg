@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- GROUP BY drops the columns that the primary key of a partitioned table decides, as PostgreSQL does. A parent of INHERITS still keeps all its columns (#840).
 - regr_r2 gives NaN for a NaN input, as PostgreSQL does. It gave 1, because `f64::min` ignores NaN (#839).
 - The planner takes min and max from an index for a query with DISTINCT, ORDER BY, LIMIT or OFFSET. It plans these steps above the Result that replaces the aggregate, as PostgreSQL does, and the keys show the subqueries, for example `Sort Key: ((InitPlan minmax_1).col1)` (#838).
 - EXPLAIN VERBOSE names the temporary schema of the session `pg_temp`, as `get_namespace_name_or_temp`, and not `pg_temp_N` (#837).
