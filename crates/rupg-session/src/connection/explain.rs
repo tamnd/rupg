@@ -306,6 +306,15 @@ impl rupg_opt::Members for Members<'_, '_> {
                         .collect(),
                     options: info.options.clone(),
                     collations: info.collations.clone(),
+                    column_collations: info
+                        .keys
+                        .iter()
+                        .take(count)
+                        .map(|&attnum| match usize::try_from(attnum) {
+                            Ok(n @ 1..) => columns.get(n - 1).map_or(0, |c| c.collation),
+                            _ => 0,
+                        })
+                        .collect(),
                     pages: f64::from(size.blocks),
                     height: size.height,
                     exprs,
@@ -371,6 +380,7 @@ fn catalog_indexes(table: u32) -> Vec<Index> {
                     .collect(),
                 options: info.options.to_vec(),
                 collations: info.collations.to_vec(),
+                column_collations: info.collations.to_vec(),
                 pages: f64::from(pages),
                 height: u32::from(pages > 2),
                 exprs: Vec::new(),

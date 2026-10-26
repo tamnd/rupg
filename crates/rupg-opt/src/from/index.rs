@@ -947,14 +947,19 @@ fn match_one<'q>(
     }
 }
 
-/// `match_index_to_operand` for the key column `column` of the index: the test of an expression that is the column, or `None` when no condition can use the column. A key column that is an expression matches the same expression. The collation `C` of a column of `name` is the collation of each condition of the column.
+/// `match_index_to_operand` for the key column `column` of the index: the test of an expression that is the column, or `None` when no condition can use the column. A key column that is an expression matches the same expression. The collation `C` of a column of `name` is the collation of each condition of the column. As `IndexCollMatchesExprColl`, the collation of the index must be the collation of the condition, which is the collation of the column of the table, or the default collation for an expression.
 fn key_test(r: usize, index: &Index, column: usize) -> Option<impl Fn(&Expr) -> bool> {
     let attnum = *index.keys.get(column)?;
     let family = *index.families.get(column)?;
-    let name_collation = index.collations.get(column) == Some(&C_COLLATION);
+    let collation = index.collations.get(column).copied().unwrap_or(0);
+    let name_collation = collation == C_COLLATION;
+    let expected = index.column_collations.get(column).copied().filter(|&c| c != 0);
     if attnum < 0
         || family == 0
-        || !(name_collation || matches!(index.collations.get(column), Some(0 | 100) | None))
+        || !match expected {
+            Some(expected) => collation == 0 || collation == expected,
+            None => name_collation || matches!(collation, 0 | 100),
+        }
     {
         return None;
     }
@@ -965,7 +970,9 @@ fn key_test(r: usize, index: &Index, column: usize) -> Option<impl Fn(&Expr) -> 
             None => plain_var(e)
                 .is_some_and(|v| v.relation == r && v.attnum == attnum && v.levels_up == 0),
         };
-        found && (!name_collation || e.ty == oid::NAME)
+        // A column of `name` as `text` is a call of `text(name)` in PostgreSQL, with the default collation.
+        let renamed = matches!(&e.kind, ExprKind::Relabel(arg, _) if arg.ty == oid::NAME);
+        found && !(name_collation && renamed && e.ty != oid::NAME)
     })
 }
 
