@@ -1024,6 +1024,11 @@ impl rupg_func::Session for Reader<'_> {
         Some(store.heap().size(database_oid(store, self.database), relation))
     }
 
+    fn statistics(&self, relation: u32) -> Vec<rupg_func::Statistic> {
+        let Some((_, store)) = self.activity else { return Vec::new() };
+        store.heap().statistics(database_oid(store, self.database), relation)
+    }
+
     fn relation_counts(&self, relation: u32) -> Option<rupg_func::RelationCounts> {
         let (activity, store) = self.activity?;
         activity.relation_counts(store, relation)

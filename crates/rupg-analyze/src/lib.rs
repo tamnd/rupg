@@ -106,7 +106,10 @@ pub use searchcycle::{CycleClause, SearchClause};
 pub use select::{MinMax, Query, Target};
 pub use setop::{SetKind, SetOp, SetTree, select_into, strength_name, without_into};
 pub use sort::{GroupingSet, SortGroup, expand_grouping_sets};
-pub use typcache::{default_opclass, equality_for_ordering, is_binary_coercible, sort_operators};
+pub use typcache::{
+    default_opclass, equality_for_ordering, is_binary_coercible, sort_group_operators,
+    sort_operators,
+};
 pub use typename::parse_type;
 pub use virtual_columns::{expand_virtual, expand_virtual_body};
 pub use window::{

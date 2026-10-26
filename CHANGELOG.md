@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `ANALYZE` computes the statistics of the columns and writes them to `pg_statistic`, which `pg_stats` shows (#788).
 - `VACUUM` removes the dead row versions, gives their slots and space back through a free space map, truncates the empty pages at the end of the heap, and sets `relallvisible` and `relallfrozen`. The `ctid` of a row is now its real page and slot (#787).
 - The pages of the heap, `relpages` and `reltuples` from `ANALYZE`, `VACUUM` and `CREATE INDEX`, and the sizes of the planner from them (#786).
 - `EXPLAIN` of a query with a table whose policies apply on the nullable side of a left or right join shows an outer join with the conditions of the policies on the scan of the table, and a left join to such a table with a unique key leaves the plan (#785).

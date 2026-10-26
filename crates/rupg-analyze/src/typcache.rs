@@ -96,6 +96,12 @@ pub fn sort_operators(ty: u32) -> (u32, u32) {
     (ops.lt, ops.gt)
 }
 
+/// `get_sort_group_operators`: the `<` and the `=` operators of the type, or 0 for an operator that the type does not have. `std_typanalyze` chooses the statistics of a column from them.
+pub fn sort_group_operators(ty: u32) -> (u32, u32) {
+    let ops = operators(ty);
+    (ops.lt, ops.eq)
+}
+
 /// The operators of the type, as `lookup_type_cache` gives `lt_opr`, `eq_opr` and `gt_opr`. An array has the operators only when its element type has them. An anonymous record has the operators, as in PostgreSQL, because the type does not tell the columns.
 pub(crate) fn operators(ty: u32) -> Operators {
     let btree = default_opclass(ty, BTREE);

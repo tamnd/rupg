@@ -1,4 +1,4 @@
-//! `VACUUM` and `ANALYZE`, as `ExecVacuum` and `vacuum` of `vacuum.c` run them: the options, the checks of the options and of the relations, and the warnings for the relations that the statement skips. `VACUUM` removes the dead row versions of each table, and the statement sets `relpages`, `reltuples`, `relallvisible` and `relallfrozen` of each table. `VACUUM FULL` runs as a plain `VACUUM`, and rupg keeps no column statistics yet.
+//! `VACUUM` and `ANALYZE`, as `ExecVacuum` and `vacuum` of `vacuum.c` run them: the options, the checks of the options and of the relations, and the warnings for the relations that the statement skips. `VACUUM` removes the dead row versions of each table, and the statement sets `relpages`, `reltuples`, `relallvisible` and `relallfrozen` of each table. `ANALYZE` writes the statistics of the columns to `pg_statistic`. `VACUUM FULL` runs as a plain `VACUUM`.
 
 use rupg_catalog::{Catalog, RelKind};
 
@@ -10,6 +10,9 @@ use super::copy::{def_boolean, def_string};
 use super::{Connection, Done};
 use crate::guc;
 use crate::heap::Skip;
+use rupg_types::Value;
+
+use super::analyze;
 use crate::utility::Notice;
 
 /// `MIN_BAS_VAC_RING_SIZE_KB` and `MAX_BAS_VAC_RING_SIZE_KB`.
@@ -34,6 +37,9 @@ struct Parsed {
     /// `TRUNCATE`, or `None` for the reloption `vacuum_truncate`.
     truncate: Option<bool>,
 }
+
+/// A row of the sample of `ANALYZE`: its values, and the widths of each value that `stored_widths` gives.
+type SampleRow = (Vec<Value>, Vec<(usize, usize)>);
 
 /// `defGetInt32`.
 fn def_int(def: &DefElem) -> Result<i32, Error> {
@@ -199,23 +205,35 @@ impl Connection {
             let kinds = |r: &&rupg_catalog::Relation| {
                 matches!(r.kind, RelKind::Table | RelKind::MatView | RelKind::Partitioned)
             };
-            catalog.relations().filter(kinds).map(|r| r.oid).collect()
+            catalog.relations().filter(kinds).map(|r| (r.oid, Vec::new())).collect()
         } else {
-            relids
+            // `expand_vacuum_rel`: with no `ONLY`, the partitions and the inheritance children of the relation come after it, with its column list.
+            let mut all = Vec::new();
+            for (relid, columns, inh) in relids {
+                if inh {
+                    let children = catalog.all_inheritors(relid);
+                    all.push((relid, columns.clone()));
+                    all.extend(children.into_iter().map(|child| (child, columns.clone())));
+                } else {
+                    all.push((relid, columns));
+                }
+            }
+            all
         };
         let vacuum = stmt.is_vacuumcmd.then_some(&parsed);
-        for relid in relids {
+        for (relid, columns) in relids {
+            let analyze = analyze.then_some(columns.as_slice());
             self.relation_stats(&catalog, relid, (vacuum, analyze));
         }
         Ok(Done::Tag(tag))
     }
 
-    /// `heap_vacuum_rel` with the options `vacuum` and `do_analyze_rel` for the relation `relid`, with its TOAST table for `VACUUM`, and for each partition of a partitioned table, as `expand_vacuum_rel` adds them. `ANALYZE` of a partitioned table sets its `reltuples` to the rows of its partitions and its `relpages` to -1, as the table has no storage. The result is the live rows of the relation.
+    /// `heap_vacuum_rel` with the options `vacuum` and `do_analyze_rel` for the relation `relid`, with its TOAST table for `VACUUM`. `analyze` has the columns of the column list of `ANALYZE`, or no columns for all of them. `ANALYZE` of a partitioned table sets its `reltuples` to the live rows of its partitions and its `relpages` to -1, as the table has no storage. The result is the live rows of the relation.
     fn relation_stats(
         &self,
         catalog: &Catalog,
         relid: u32,
-        (vacuum, analyze): (Option<&Parsed>, bool),
+        (vacuum, analyze): (Option<&Parsed>, Option<&[String]>),
     ) -> f32 {
         let Some(rel) = catalog.relation(relid) else { return 0.0 };
         match rel.kind {
@@ -227,24 +245,119 @@ impl Connection {
                     }
                     rows = self.vacuum_heap(catalog, relid, parsed);
                 }
-                if analyze || vacuum.is_none() {
+                if let Some(columns) = analyze {
                     rows = self.update_relstats(relid);
+                    if rel.kind != RelKind::Toast {
+                        self.analyze_rel(catalog, relid, columns, false);
+                        self.analyze_rel(catalog, relid, columns, true);
+                    }
                 }
                 rows
             }
             RelKind::Partitioned => {
-                let parts = catalog.children(relid);
-                let rows = parts
-                    .iter()
-                    .map(|p| self.relation_stats(catalog, p.oid, (vacuum, analyze)))
+                let heap = self.heap();
+                let rows = catalog
+                    .all_inheritors(relid)
+                    .into_iter()
+                    .map(|part| heap.live_count(self.database_oid, part, self.xid.get()) as f32)
                     .sum();
-                if analyze {
+                if let Some(columns) = analyze {
                     self.heap().set_stats(self.database_oid, relid, -1, rows);
+                    self.analyze_rel(catalog, relid, columns, true);
                 }
                 rows
             }
             _ => 0.0,
         }
+    }
+
+    /// `do_analyze_rel` of the table `relid` for the columns `columns`, or for each column when the list is empty: the sample of the rows of the table, or of the rows of the table and of its inheritance children for `inherit`, and the statistics of each column in `pg_statistic`. The sample of the tree takes from each table a part of the rows in proportion to its pages, as `acquire_inherited_sample_rows` does, and the values of each column of a child come from its column with the same name. A tree with no children, or with no table with rows, gets no statistics.
+    fn analyze_rel(&self, catalog: &Catalog, relid: u32, columns: &[String], inherit: bool) {
+        let Some(rel) = catalog.relation(relid) else { return };
+        let default_target = self
+            .settings
+            .borrow()
+            .get("default_statistics_target")
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(100);
+        let targets: Vec<analyze::Target> = rel
+            .columns
+            .iter()
+            .zip(1i16..)
+            .filter(|(c, _)| columns.is_empty() || columns.contains(&c.name))
+            .filter_map(|(c, attnum)| analyze::examine(c, attnum, default_target))
+            .collect();
+        let targrows = analyze::sample_rows(&targets);
+        let heap = self.heap();
+        let xid = self.xid.get();
+        let tables: Vec<u32> = if inherit {
+            let all = catalog.all_inheritors(relid);
+            if all.is_empty() {
+                return;
+            }
+            std::iter::once(relid).chain(all).collect()
+        } else {
+            vec![relid]
+        };
+        let tables: Vec<(&rupg_catalog::Relation, f64)> = tables
+            .iter()
+            .filter_map(|&oid| catalog.relation(oid))
+            .filter(|r| matches!(r.kind, RelKind::Table | RelKind::MatView))
+            .map(|r| (r, f64::from(heap.size(self.database_oid, r.oid).blocks)))
+            .collect();
+        let totalblocks: f64 = tables.iter().map(|t| t.1).sum();
+        // The values of each row of the sample in the order of the columns of `rel`, with their widths in the versions.
+        let mut rows: Vec<SampleRow> = Vec::new();
+        let mut totalrows = 0.0;
+        for (table, blocks) in tables {
+            let target = if inherit {
+                if blocks <= 0.0 {
+                    continue;
+                }
+                let share = (targrows as f64 * blocks / totalblocks).round_ties_even() as usize;
+                share.min(targrows - rows.len())
+            } else {
+                targrows
+            };
+            if target == 0 {
+                continue;
+            }
+            let (sample, total) = heap.sample(self.database_oid, table.oid, xid, target);
+            totalrows += total;
+            let map: Vec<Option<usize>> = rel
+                .columns
+                .iter()
+                .enumerate()
+                .map(|(at, c)| {
+                    if table.oid == relid {
+                        return Some(at);
+                    }
+                    table.columns.iter().position(|t| !t.dropped && !c.dropped && t.name == c.name)
+                })
+                .collect();
+            for row in sample {
+                let widths = crate::heap::stored_widths(&row);
+                let pick =
+                    |at: Option<usize>| at.and_then(|at| Some((row.get(at)?.clone(), widths[at])));
+                let (values, widths) =
+                    map.iter().map(|&at| pick(at).unwrap_or((Value::Null, (0, 0)))).unzip();
+                rows.push((values, widths));
+            }
+        }
+        if rows.is_empty() {
+            return;
+        }
+        let reader = self.reader();
+        let mut stats = Vec::new();
+        for target in &targets {
+            let at = usize::try_from(target.attnum - 1).unwrap_or(0);
+            let sample: Vec<analyze::Sampled<'_>> =
+                rows.iter().map(|(values, widths)| (&values[at], widths[at])).collect();
+            if let Ok(Some(stat)) = target.compute(&sample, totalrows, inherit, &reader) {
+                stats.push(stat);
+            }
+        }
+        heap.set_statistics(self.database_oid, relid, stats);
     }
 
     /// `heap_vacuum_rel` of the heap of `relid`: an aggressive `VACUUM` with `FREEZE`, which skips only the pages that are all frozen, no skipped pages with `DISABLE_PAGE_SKIPPING`, and the truncation of the empty pages at the end from `TRUNCATE` or the reloption `vacuum_truncate`. The result is `reltuples`.

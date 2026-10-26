@@ -255,6 +255,7 @@ pub(crate) fn rows(
         "pg_ts_config" => ts_configs(table, catalog),
         "pg_ts_config_map" => ts_mappings(table, catalog),
         "pg_statistic_ext" => statistic_exts(table, catalog),
+        "pg_statistic" => statistics(table, catalog, session),
         "pg_default_acl" => default_acls(table, catalog),
         "pg_collation" => collations(table, catalog),
         "pg_enum" => enum_labels(table, catalog),
@@ -1272,6 +1273,60 @@ fn statistic_exts<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
             row
         })
         .collect()
+}
+
+/// The rows of `pg_statistic` that `ANALYZE` wrote for the tables of the catalog, as `update_attstats` forms them, with no slot after the slots that have a kind. `stavaluesN` is an `anyarray`, which keeps the text that `array_out` gives with the output function of the type of the column, as the array keeps its element type.
+fn statistics<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) -> Vec<Row<'a>> {
+    let kinds =
+        |r: &&Relation| matches!(r.kind, RelKind::Table | RelKind::MatView | RelKind::Partitioned);
+    let mut rows = Vec::new();
+    for rel in catalog.relations().filter(kinds) {
+        for stat in session.statistics(rel.oid) {
+            let at = usize::try_from(stat.attnum - 1).unwrap_or(usize::MAX);
+            let Some(column) = rel.columns.get(at) else { continue };
+            let mut row = Row::new(table);
+            row.set("starelid", oid(rel.oid))
+                .set("staattnum", Value::Int2(stat.attnum))
+                .set("stainherit", Value::Bool(stat.inherit))
+                .set("stanullfrac", Value::Float4(stat.null_frac))
+                .set("stawidth", Value::Int4(stat.width))
+                .set("stadistinct", Value::Float4(stat.distinct));
+            for n in 1..=5 {
+                let slot = stat.slots.get(n - 1);
+                let numbers =
+                    slot.and_then(|s| s.numbers.as_ref()).map_or(Value::Null, |numbers| {
+                        let items = numbers.iter().map(|&f| Some(Value::Float4(f))).collect();
+                        Value::Array(Box::new(Array::one(items)))
+                    });
+                let values = slot
+                    .and_then(|s| s.values.as_ref())
+                    .and_then(|values| anyarray_text(column.ty, values, session))
+                    .map_or(Value::Null, Value::Text);
+                row.set(&format!("stakind{n}"), Value::Int2(slot.map_or(0, |s| s.kind)))
+                    .set(&format!("staop{n}"), oid(slot.map_or(0, |s| s.operator)))
+                    .set(&format!("stacoll{n}"), oid(slot.map_or(0, |s| s.collation)))
+                    .set(&format!("stanumbers{n}"), numbers)
+                    .set(&format!("stavalues{n}"), values);
+            }
+            rows.push(row);
+        }
+    }
+    rows
+}
+
+/// `array_out` of a one-dimensional array of the values `values` of the type `ty`, or `None` when the output function of a value fails.
+fn anyarray_text(ty: u32, values: &[Value], session: &dyn Session) -> Option<String> {
+    let delim = builtin::type_by_oid(rupg_func::base_type(ty)).map_or(b',', |t| t.delim);
+    let array = Array::one(values.iter().cloned().map(Some).collect());
+    let mut out = Vec::new();
+    let mut failed = false;
+    rupg_types::array_out(&array, delim, &mut out, |item, out| {
+        failed |= rupg_func::output(ty, item, session, out).is_err();
+    });
+    if failed {
+        return None;
+    }
+    String::from_utf8(out).ok()
 }
 
 /// The rows of `pg_default_acl` that `ALTER DEFAULT PRIVILEGES` adds.
