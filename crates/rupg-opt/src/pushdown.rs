@@ -59,17 +59,17 @@ fn push(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
         .map(|part| {
             let rels = exprs::relations(part);
             // `distribute_qual_to_rels`: a volatile condition that reads no relation is a condition of the relations of its level.
-            let r = match (rels.len(), query.from.as_slice()) {
-                (1, _) => *rels.first()?,
-                (0, [FromItem::Relation(r)]) if exprs::volatile(part) => *r,
-                _ => return None,
+            let (r, outer) = match (rels.len(), query.from.as_slice()) {
+                (1, _) => (*rels.first()?, BTreeSet::new()),
+                (0, [FromItem::Relation(r)]) if exprs::volatile(part) => (*r, BTreeSet::new()),
+                _ => lateral_union(query, &rels)?,
             };
             let relation = query.relations.get(r)?;
             let view = relation.oid != 0 && (!barrier(relation.oid) || !part.leaky());
             let plain =
                 (relation.oid == 0 || view) && relation.cte.is_none() && !nullable.contains(&r);
             let sub = relation.subquery.as_deref().filter(|_| plain)?;
-            pushable(sub, part, r).then_some(r)
+            pushable(sub, part, r, &outer).then_some(r)
         })
         .collect();
     if to.iter().all(Option::is_none) {
@@ -110,7 +110,10 @@ pub(crate) fn push_barrier(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
                 && relation.oid != 0
                 && barrier(relation.oid)
                 && !part.leaky()
-                && relation.subquery.as_deref().is_some_and(|sub| pushable(sub, &part, r))
+                && relation
+                    .subquery
+                    .as_deref()
+                    .is_some_and(|sub| pushable(sub, &part, r, &BTreeSet::new()))
         });
         match to.and_then(|r| query.relations[r].subquery.as_deref_mut().map(|sub| (r, sub))) {
             Some((r, sub)) => push_qual(sub, r, part),
@@ -259,9 +262,9 @@ pub(crate) fn owned_parts(expr: Expr, out: &mut Vec<Expr>) {
 }
 
 /// True when the condition `part`, which reads the subquery `r`, can move into the subquery. A `UNION ALL` that `pull_up_simple_union_all` makes an append relation gives the condition to each member, as `set_append_rel_size`: a member that `pull_up_simple_subquery` merges takes it as it is, and another member takes it when `set_subquery_pathlist` lets it. The planner does not give the condition to only some members.
-fn pushable(sub: &Query, part: &Expr, r: usize) -> bool {
+fn pushable(sub: &Query, part: &Expr, r: usize, outer: &BTreeSet<usize>) -> bool {
     let fits = |q: &Query| {
-        safety(q).is_some_and(|(columns, volatile)| safe(part, r, &columns, volatile))
+        safety(q).is_some_and(|(columns, volatile)| safe(part, r, outer, &columns, volatile))
             && !grouping_conflict(q, part, r)
     };
     let Some(op) = sub.set_op.as_ref().filter(|_| from::simple_union_all(sub)) else {
@@ -274,7 +277,7 @@ fn pushable(sub: &Query, part: &Expr, r: usize) -> bool {
             return;
         };
         all &= if pullup::member(leaf) {
-            safe(part, r, &vec![false; leaf.targets.len()], false)
+            safe(part, r, outer, &vec![false; leaf.targets.len()], false)
         } else {
             fits(leaf)
         };
@@ -282,6 +285,26 @@ fn pushable(sub: &Query, part: &Expr, r: usize) -> bool {
     op.left.each_leaf(&mut each);
     op.right.each_leaf(&mut each);
     all
+}
+
+/// `get_baserel_parampathinfo` and `set_append_rel_size`: for a part of `WHERE` that reads more than one relation, the `UNION ALL` subquery with `LATERAL` that the part reads, with the other relations that the part reads, when the subquery reads all of them. The planner joins such a subquery as the inner side of a nested loop, and each member of its append relation tests the part with the columns of the outer side as parameters.
+fn lateral_union(query: &Query, rels: &BTreeSet<usize>) -> Option<(usize, BTreeSet<usize>)> {
+    let mut found = rels.iter().filter_map(|&r| {
+        let relation = query.relations.get(r)?;
+        let sub = relation
+            .subquery
+            .as_deref()
+            .filter(|s| relation.lateral && from::simple_union_all(s))?;
+        let mut reads = BTreeSet::new();
+        for (expr, depth) in sub.all_exprs(1) {
+            reads.extend(exprs::relations_at(expr, depth));
+        }
+        let mut outer = rels.clone();
+        outer.remove(&r);
+        outer.is_subset(&reads).then_some((r, outer))
+    });
+    let one = found.next()?;
+    found.next().is_none().then_some(one)
 }
 
 /// `subquery_is_pushdown_safe` and `check_output_expressions`: `None` for a subquery that takes no condition, or for each column of the subquery true when a condition that reads it stays outside, with true when a condition that calls a volatile function stays outside. The subquery has no `LIMIT`, no `OFFSET` and no grouping sets with `GROUP BY`. For a set operation, each `SELECT` must take the condition. A condition stays outside when it reads a column that calls a function that gives a set or a volatile function, a column that is not an item of `DISTINCT ON`, or a column that is not an item of `PARTITION BY` of each window, which a run condition of the window could use.
@@ -385,8 +408,14 @@ fn has_except(op: &SetOp) -> bool {
         || [&op.left, &op.right].into_iter().any(|t| matches!(t, SetTree::Op(o) if has_except(o)))
 }
 
-/// `qual_is_pushdown_safe`: true when the condition `part`, which reads the subquery `r`, can move into the subquery. It has no subquery, it calls no volatile function when `volatile` is true, and each column of the subquery that it reads is a column that `unsafe_columns` lets a condition read. It reads no whole row of the subquery.
-fn safe(part: &Expr, r: usize, unsafe_columns: &[bool], volatile: bool) -> bool {
+/// `qual_is_pushdown_safe`: true when the condition `part`, which reads the subquery `r`, can move into the subquery. It has no subquery, it calls no volatile function when `volatile` is true, and each column of the subquery that it reads is a column that `unsafe_columns` lets a condition read. It reads no whole row of the subquery. The other relations of the query that it reads are in `outer`.
+fn safe(
+    part: &Expr,
+    r: usize,
+    outer: &BTreeSet<usize>,
+    unsafe_columns: &[bool],
+    volatile: bool,
+) -> bool {
     if volatile && exprs::volatile(part) {
         return false;
     }
@@ -398,7 +427,11 @@ fn safe(part: &Expr, r: usize, unsafe_columns: &[bool], volatile: bool) -> bool 
         ExprKind::SubLink(_) | ExprKind::Agg(_) | ExprKind::Grouping(_) | ExprKind::Window(_) => {
             Some(())
         }
-        ExprKind::Var(v) if v.levels_up == depth && (v.relation != r || blocked(v.attnum)) => {
+        ExprKind::Var(v)
+            if v.levels_up == depth
+                && (v.relation != r && !outer.contains(&v.relation)
+                    || v.relation == r && blocked(v.attnum)) =>
+        {
             Some(())
         }
         _ => None,
@@ -406,7 +439,7 @@ fn safe(part: &Expr, r: usize, unsafe_columns: &[bool], volatile: bool) -> bool 
     .is_none()
 }
 
-/// `subquery_push_qual`: the condition reads the targets of the subquery in place of its columns, as `ReplaceVarsFromTargetList`, and a column of a query outside is one more level up. It joins `HAVING` when the subquery makes groups, or `WHERE`.
+/// `subquery_push_qual`: the condition reads the targets of the subquery in place of its columns, as `ReplaceVarsFromTargetList`, and a column of a query outside or of another relation of the query is one more level up. It joins `HAVING` when the subquery makes groups, or `WHERE`.
 fn push_qual(sub: &mut Query, r: usize, mut qual: Expr) {
     // `recurse_push_qual`: each `SELECT` of a set operation takes the condition, one level further down.
     if let Some(op) = &sub.set_op {
@@ -415,7 +448,7 @@ fn push_qual(sub: &mut Query, r: usize, mut qual: Expr) {
         op.right.each_leaf(&mut |at| leaves.push(at));
         qual.each_mut(0, &mut |e, depth| {
             if let ExprKind::Var(v) = &mut e.kind
-                && v.levels_up > depth
+                && (v.levels_up > depth || v.levels_up == depth && v.relation != r)
             {
                 v.levels_up += 1;
             }
@@ -440,6 +473,8 @@ fn push_qual(sub: &mut Query, r: usize, mut qual: Expr) {
                 *e = new;
                 return true;
             }
+        } else if v.levels_up == depth {
+            v.levels_up += 1;
         }
         false
     });

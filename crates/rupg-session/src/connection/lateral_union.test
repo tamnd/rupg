@@ -1,0 +1,97 @@
+> create table x8(q1 int8, q2 int8)
+CREATE TABLE
+> insert into x8 values (123, 456), (123, 4567890123456789), (4567890123456789, 123), (4567890123456789, 4567890123456789), (4567890123456789, -4567890123456789)
+INSERT 0 5
+> analyze x8
+ANALYZE
+> explain (costs off) select * from x8 x, lateral (select x.q1 as v union all select x.q2) ss where x.q2 = ss.v
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Seq Scan on x8 x
+row   ->  Append
+row         ->  Result
+row               One-Time Filter: (x.q2 = x.q1)
+row         ->  Result
+row               One-Time Filter: (x.q2 = x.q2)
+EXPLAIN
+> select * from x8 x, lateral (select x.q1 as v union all select x.q2) ss where x.q2 = ss.v order by 1, 2, 3
+fields q1@x8.1:20:8:-1,q2@x8.2:20:8:-1,v:20:8:-1
+row 123,456,456
+row 123,4567890123456789,4567890123456789
+row 4567890123456789,-4567890123456789,-4567890123456789
+row 4567890123456789,123,123
+row 4567890123456789,4567890123456789,4567890123456789
+row 4567890123456789,4567890123456789,4567890123456789
+SELECT 6
+> explain (costs off) select * from x8 x left join x8 y on x.q2 = y.q1, lateral (select x.q1 as v union all select x.q1 + y.q2) ss where x.q2 = ss.v
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Hash Right Join
+row         Hash Cond: (y.q1 = x.q2)
+row         ->  Seq Scan on x8 y
+row         ->  Hash
+row               ->  Seq Scan on x8 x
+row   ->  Append
+row         ->  Result
+row               One-Time Filter: (x.q2 = x.q1)
+row         ->  Result
+row               One-Time Filter: (x.q2 = (x.q1 + y.q2))
+EXPLAIN
+> select * from x8 x left join x8 y on x.q2 = y.q1, lateral (select x.q1 as v union all select x.q1 + y.q2) ss where x.q2 = ss.v order by 1, 2, 3, 4, 5
+fields q1@x8.1:20:8:-1,q2@x8.2:20:8:-1,q1@x8.1:20:8:-1,q2@x8.2:20:8:-1,v:20:8:-1
+row 4567890123456789,4567890123456789,4567890123456789,-4567890123456789,4567890123456789
+row 4567890123456789,4567890123456789,4567890123456789,123,4567890123456789
+row 4567890123456789,4567890123456789,4567890123456789,4567890123456789,4567890123456789
+SELECT 3
+> explain (costs off) select * from x8 x, lateral (select y.q1 + x.q1 as v from x8 y union all select q2 from x8 z) ss where x.q2 = ss.v
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Seq Scan on x8 x
+row   ->  Memoize
+row         Cache Key: x.q2, x.q1
+row         Cache Mode: binary
+row         ->  Append
+row               ->  Seq Scan on x8 y
+row                     Filter: (x.q2 = (q1 + x.q1))
+row               ->  Seq Scan on x8 z
+row                     Filter: (x.q2 = q2)
+EXPLAIN
+> select * from x8 x, lateral (select y.q1 - x.q1 as v from x8 y union all select q2 from x8 z) ss where x.q2 = ss.v order by 1, 2, 3
+fields q1@x8.1:20:8:-1,q2@x8.2:20:8:-1,v:20:8:-1
+row 123,456,456
+row 123,4567890123456789,4567890123456789
+row 123,4567890123456789,4567890123456789
+row 4567890123456789,-4567890123456789,-4567890123456789
+row 4567890123456789,123,123
+row 4567890123456789,4567890123456789,4567890123456789
+row 4567890123456789,4567890123456789,4567890123456789
+SELECT 7
+> explain (costs off) select * from x8 x left join lateral (select x.q1 as v union all select x.q2) ss on true where x.q2 = ss.v
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Seq Scan on x8 x
+row   ->  Append
+row         ->  Result
+row               One-Time Filter: (x.q2 = x.q1)
+row         ->  Result
+row               One-Time Filter: (x.q2 = x.q2)
+EXPLAIN
+> select * from x8 x left join lateral (select x.q1 as v union all select x.q2) ss on x.q1 = ss.v where coalesce(ss.v, 0) = x.q1 order by 1, 2, 3
+fields q1@x8.1:20:8:-1,q2@x8.2:20:8:-1,v:20:8:-1
+row 123,456,123
+row 123,4567890123456789,123
+row 4567890123456789,-4567890123456789,4567890123456789
+row 4567890123456789,123,4567890123456789
+row 4567890123456789,4567890123456789,4567890123456789
+row 4567890123456789,4567890123456789,4567890123456789
+SELECT 6
+> explain (costs off) select * from x8 x, lateral (select x.q1 as v union all select x.q2) ss where x.q2 = ss.v + random()
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Seq Scan on x8 x
+row   ->  Append
+row         ->  Result
+row               One-Time Filter: ((x.q2)::double precision = ((x.q1)::double precision + random()))
+row         ->  Result
+row               One-Time Filter: ((x.q2)::double precision = ((x.q2)::double precision + random()))
+EXPLAIN
