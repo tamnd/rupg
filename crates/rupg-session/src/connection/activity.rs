@@ -405,6 +405,7 @@ impl Connection {
 
     /// The end of a transaction at a commit or at an abort: the session releases its advisory locks of the transaction level, `AtEOXact_PgStat` drops the snapshots, and `pgstat_report_stat` reports the scans of the transaction. A scan counts also after an abort, as in PostgreSQL.
     pub(super) fn transaction_ended(&self) {
+        self.large_objects.borrow_mut().clear();
         self.store.locks().release_all(self.pid, false);
         self.activity.clear();
         let scans = self.activity.scans.take();

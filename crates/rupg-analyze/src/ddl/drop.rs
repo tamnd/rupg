@@ -2,8 +2,8 @@
 
 use rupg_catalog::{
     FIRST_NORMAL_OID, ObjRef, PG_AMOP, PG_AMPROC, PG_ATTRDEF, PG_CAST, PG_CLASS, PG_COLLATION,
-    PG_CONSTRAINT, PG_CONVERSION, PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_NAMESPACE,
-    PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_POLICY, PG_PROC, PG_PUBLICATION,
+    PG_CONSTRAINT, PG_CONVERSION, PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_LARGEOBJECT,
+    PG_NAMESPACE, PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_POLICY, PG_PROC, PG_PUBLICATION,
     PG_PUBLICATION_NAMESPACE, PG_PUBLICATION_REL, PG_REWRITE, PG_STATISTIC_EXT, PG_TRIGGER,
     PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, PG_TYPE, PG_USER_MAPPING, PUBLIC,
     Refusal, RelKind, Target, flag, is_pinned,
@@ -539,6 +539,7 @@ impl Definer<'_, '_> {
             PG_STATISTIC_EXT => self.describe_stats(object.oid),
             PG_COLLATION => self.describe_collation(object.oid),
             PG_CONVERSION => self.describe_conversion(object.oid),
+            PG_LARGEOBJECT => format!("large object {}", object.oid),
             PG_FOREIGN_DATA_WRAPPER | PG_FOREIGN_SERVER | PG_USER_MAPPING => {
                 self.describe_foreign(object)
             }

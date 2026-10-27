@@ -1,4 +1,4 @@
-//! `SAVEPOINT`, `RELEASE SAVEPOINT` and `ROLLBACK TO SAVEPOINT`, as `DefineSavepoint`, `ReleaseSavepoint` and `RollbackToSavepoint` of `xact.c` run them. A subtransaction has no transaction ID of its own. Each savepoint keeps the state of the transaction at its start, and a rollback of the subtransaction brings that state back: the rows that the later commands wrote, the catalog, the settings, the queue of the deferred triggers, the modes of `SET CONSTRAINTS`, the advisory locks of the transaction level, the counts of the rows that the transaction wrote, its `LISTEN`, `UNLISTEN` and `NOTIFY`, and the portals of the subtransaction.
+//! `SAVEPOINT`, `RELEASE SAVEPOINT` and `ROLLBACK TO SAVEPOINT`, as `DefineSavepoint`, `ReleaseSavepoint` and `RollbackToSavepoint` of `xact.c` run them. A subtransaction has no transaction ID of its own. Each savepoint keeps the state of the transaction at its start, and a rollback of the subtransaction brings that state back: the rows that the later commands wrote, the catalog, the settings, the queue of the deferred triggers, the modes of `SET CONSTRAINTS`, the advisory locks of the transaction level, the counts of the rows that the transaction wrote, its `LISTEN`, `UNLISTEN` and `NOTIFY`, and the portals and the descriptors of the large objects of the subtransaction.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -36,6 +36,8 @@ pub(super) struct Mark {
     writes: BTreeMap<u32, Pending>,
     /// The `LISTEN`, `UNLISTEN` and `NOTIFY` of the transaction.
     notify: crate::notify::Pending,
+    /// The number of the next open of a large object, so that a rollback closes the descriptors that the subtransaction opened.
+    large_objects: u64,
 }
 
 impl Connection {
@@ -88,6 +90,7 @@ impl Connection {
             locks: self.store.locks().xact_holds(self.pid),
             writes: self.activity.writes(),
             notify: self.notify.borrow().clone(),
+            large_objects: self.large_objects.borrow().serial(),
         }
     }
 
@@ -145,5 +148,6 @@ impl Connection {
         self.store.locks().release_since(self.pid, &mark.locks);
         self.activity.roll_back_writes(&mark.writes);
         self.notify.borrow_mut().clone_from(&mark.notify);
+        self.large_objects.borrow_mut().close_since(mark.large_objects);
     }
 }

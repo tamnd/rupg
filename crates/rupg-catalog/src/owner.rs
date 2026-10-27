@@ -7,8 +7,8 @@ use rupg_common::Result;
 use super::{Catalog, no_object};
 use crate::{
     ObjRef, PG_COLLATION, PG_CONVERSION, PG_EXTENSION, PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER,
-    PG_LANGUAGE, PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_PROC, PG_PUBLICATION, PG_STATISTIC_EXT,
-    PG_TS_CONFIG, PG_TS_DICT, PG_TYPE,
+    PG_LANGUAGE, PG_LARGEOBJECT, PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_PROC, PG_PUBLICATION,
+    PG_STATISTIC_EXT, PG_TS_CONFIG, PG_TS_DICT, PG_TYPE,
 };
 
 /// `ACL_ALL_RIGHTS_STR`: the letter of each privilege, in the order of its bit.
@@ -139,7 +139,7 @@ impl Catalog {
         Ok(())
     }
 
-    /// The change of `AlterObjectOwner_internal` for a function, a collation, a language, an extension, an operator, an operator class, an operator family, a statistics object, a text search dictionary and a text search configuration, and of `AlterTypeOwnerInternal` for the ACL of a type. The owner column changes, and the ACL that `GRANT` gave gets `aclnewowner`. The caller changes the owner of a type with [`Catalog::set_type_owner`] first. `old` and `new` are the names of the two roles, for the items of the ACL.
+    /// The change of `AlterObjectOwner_internal` for a function, a collation, a language, an extension, an operator, an operator class, an operator family, a statistics object, a text search dictionary, a text search configuration and a large object, and of `AlterTypeOwnerInternal` for the ACL of a type. The owner column changes, and the ACL that `GRANT` gave gets `aclnewowner`. The caller changes the owner of a type with [`Catalog::set_type_owner`] first. `old` and `new` are the names of the two roles, for the items of the ACL.
     ///
     /// # Errors
     ///
@@ -185,6 +185,7 @@ impl Catalog {
             PG_PUBLICATION => {
                 self.publications.get_mut(&object.oid).map(|p| p.owner = owner).is_some()
             }
+            PG_LARGEOBJECT => self.large_object_mut(object.oid).map(|l| l.owner = owner).is_some(),
             _ => false,
         };
         if !found {

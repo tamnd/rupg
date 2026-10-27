@@ -8,10 +8,10 @@ use rupg_common::{Error, Result};
 use super::{
     Catalog, Column, ConKind, DepKind, FIRST_NORMAL_OID, ObjRef, PG_AMOP, PG_AMPROC, PG_ATTRDEF,
     PG_CAST, PG_CLASS, PG_COLLATION, PG_CONSTRAINT, PG_CONVERSION, PG_DEFAULT_ACL,
-    PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_NAMESPACE, PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY,
-    PG_POLICY, PG_PROC, PG_PUBLICATION, PG_PUBLICATION_NAMESPACE, PG_PUBLICATION_REL, PG_REWRITE,
-    PG_STATISTIC_EXT, PG_TRIGGER, PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, PG_TYPE,
-    PG_USER_MAPPING, is_pinned,
+    PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_LARGEOBJECT, PG_NAMESPACE, PG_OPCLASS,
+    PG_OPERATOR, PG_OPFAMILY, PG_POLICY, PG_PROC, PG_PUBLICATION, PG_PUBLICATION_NAMESPACE,
+    PG_PUBLICATION_REL, PG_REWRITE, PG_STATISTIC_EXT, PG_TRIGGER, PG_TS_CONFIG, PG_TS_DICT,
+    PG_TS_PARSER, PG_TS_TEMPLATE, PG_TYPE, PG_USER_MAPPING, is_pinned,
 };
 
 /// The reasons that the walk reached an object, the bits `DEPFLAG_*` of `dependency.c`.
@@ -348,6 +348,9 @@ impl Catalog {
             }
             PG_COLLATION => {
                 Arc::make_mut(&mut self.collations).remove(&object.oid);
+            }
+            PG_LARGEOBJECT => {
+                Arc::make_mut(&mut self.large_objects).remove(&object.oid);
             }
             PG_FOREIGN_DATA_WRAPPER => {
                 self.fdws.remove(&object.oid);

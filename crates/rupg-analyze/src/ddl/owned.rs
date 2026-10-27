@@ -2,9 +2,9 @@
 
 use rupg_catalog::{
     Catalog, ObjRef, PG_CLASS, PG_COLLATION, PG_CONVERSION, PG_DEFAULT_ACL, PG_EXTENSION,
-    PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_LANGUAGE, PG_NAMESPACE, PG_OPCLASS, PG_OPERATOR,
-    PG_OPFAMILY, PG_PROC, PG_PUBLICATION, PG_STATISTIC_EXT, PG_TS_CONFIG, PG_TS_DICT, PG_TYPE,
-    PG_USER_MAPPING, RangePart, RelKind,
+    PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_LANGUAGE, PG_LARGEOBJECT, PG_NAMESPACE,
+    PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_PROC, PG_PUBLICATION, PG_STATISTIC_EXT, PG_TS_CONFIG,
+    PG_TS_DICT, PG_TYPE, PG_USER_MAPPING, RangePart, RelKind,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{DropBehavior, DropOwnedStmt, List, Node, ReassignOwnedStmt};
@@ -64,6 +64,9 @@ pub fn owned_objects(catalog: &Catalog, role: u32) -> Vec<ObjRef> {
     }
     for c in catalog.conversions() {
         add(PG_CONVERSION, c.oid, c.owner);
+    }
+    for l in catalog.large_objects() {
+        add(PG_LARGEOBJECT, l.oid, l.owner);
     }
     for f in catalog.fdws() {
         add(PG_FOREIGN_DATA_WRAPPER, f.oid, f.owner);

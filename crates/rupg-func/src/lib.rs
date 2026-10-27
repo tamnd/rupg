@@ -39,6 +39,7 @@ mod json;
 mod jsonbuild;
 mod jsonedit;
 mod jsonpath;
+mod large_object;
 mod lsn;
 mod mac;
 mod math;
@@ -120,6 +121,7 @@ pub use jsonbuild::{
 };
 pub use jsonedit::jsonb_subscript_assign;
 pub use jsonpath::{PathVar, SqlJsonItem, sql_json_path};
+pub use large_object::Descriptors as LoDescriptors;
 pub use multirange::range_agg;
 pub use random::Randomness;
 pub use reg::ts_config_setting;
@@ -453,6 +455,44 @@ pub trait Session {
     fn catalog(&self) -> Option<&rupg_catalog::Catalog> {
         None
     }
+    /// The catalog of the transaction now, with the changes of the functions of the statement that ran before, such as `lowrite`, or `None` when it is the same as [`Session::catalog`].
+    fn latest_catalog(&self) -> Option<Arc<rupg_catalog::Catalog>> {
+        None
+    }
+    /// A change of the catalog of the transaction by a function, such as `lo_create`, as the change of a row of a catalog table. A rollback of the transaction or of the subtransaction undoes it.
+    ///
+    /// # Errors
+    ///
+    /// The error of `change`, the errors of the lock of the catalog, and `0A000` for a session with no server.
+    fn change_catalog(
+        &self,
+        change: &mut dyn FnMut(&mut rupg_catalog::Catalog) -> Result<()>,
+    ) -> Result<()> {
+        let _ = change;
+        Err(not_yet("a change of a large object in a session with no server"))
+    }
+    /// The bytes of the file `name` of the server, for `lo_import`. A relative name is in the data directory.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the file system, and `0A000` for a session with no server.
+    fn read_server_file(&self, name: &str) -> Result<Vec<u8>> {
+        let _ = name;
+        Err(not_yet("a file of the server in a session with no server"))
+    }
+    /// Writes `bytes` to the file `name` of the server, which it makes or empties first, for `lo_export`.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the file system, and `0A000` for a session with no server.
+    fn write_server_file(&self, name: &str, bytes: &[u8]) -> Result<()> {
+        let _ = (name, bytes);
+        Err(not_yet("a file of the server in a session with no server"))
+    }
+    /// The descriptors of the large objects that the transaction opened, or `None` for a session with no server.
+    fn large_object_descriptors(&self) -> Option<&std::cell::RefCell<LoDescriptors>> {
+        None
+    }
     /// The rows of the transition table `name` of the trigger that runs, which a scan of a `NamedTuplestoreScan` reads, or `None` when the trigger has no such table.
     fn transition_rows(&self, name: &str) -> Option<Rc<Vec<Vec<Value>>>> {
         let _ = name;
@@ -780,6 +820,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| text::by_src(src))
         .or_else(|| unicode::by_src(src))
         .or_else(|| misc::by_src(src))
+        .or_else(|| large_object::by_src(src))
         .or_else(|| encoding::by_src(src))
         .or_else(|| cash::by_src(src))
         .or_else(|| mac::by_src(src))

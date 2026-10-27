@@ -6,8 +6,8 @@ use std::collections::BTreeSet;
 
 use rupg_analyze::{PermInfo, RlsStatus, RowSecurity};
 use rupg_catalog::{
-    ObjRef, PG_CLASS, PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_LANGUAGE, PG_NAMESPACE,
-    PG_PROC, PG_TYPE, RelKind,
+    ObjRef, PG_CLASS, PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_LANGUAGE, PG_LARGEOBJECT,
+    PG_NAMESPACE, PG_PROC, PG_TYPE, RelKind,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Owned};
@@ -195,7 +195,7 @@ fn get_role_oid_or_public(name: &str, session: &dyn Session) -> Result<u32> {
 }
 
 /// `GetUserId`: the OID of the current user.
-fn current_user(session: &dyn Session) -> u32 {
+pub(crate) fn current_user(session: &dyn Session) -> u32 {
     role_oid(&session.user(), session).unwrap_or(BOOTSTRAP_SUPERUSER)
 }
 
@@ -678,6 +678,7 @@ fn owned_class(kind: Owned) -> Option<u32> {
         Owned::Language => Some(PG_LANGUAGE),
         Owned::ForeignDataWrapper => Some(PG_FOREIGN_DATA_WRAPPER),
         Owned::ForeignServer => Some(PG_FOREIGN_SERVER),
+        Owned::LargeObject => Some(PG_LARGEOBJECT),
         _ => None,
     }
 }
@@ -715,6 +716,13 @@ fn session_object(kind: Owned, oid: u32, session: &dyn Session) -> Result<Option
             Some(server) => (None, server.owner),
             None => return Ok(None),
         },
+        Owned::LargeObject => {
+            let latest = session.latest_catalog();
+            match latest.as_deref().unwrap_or(catalog).large_object(oid) {
+                Some(object) => (None, object.owner),
+                None => return Ok(None),
+            }
+        }
         Owned::Tablespace => {
             let created = session.tablespaces();
             let Some(tablespace) = created.iter().find(|t| t.oid == oid) else { return Ok(None) };
@@ -1212,10 +1220,35 @@ fn has_largeobject_privilege(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let at = usize::from(with_role);
     let oid = args[at].as_oid().ok_or_else(bad_value)?;
     let mask = privileges(text(args, at + 1)?, LARGEOBJECT_PRIVS)?;
-    if builtin::owned_by_oid(Owned::LargeObject, oid).is_none() {
+    if builtin::owned_by_oid(Owned::LargeObject, oid).is_none()
+        && !large_object_exists(oid, call.session)
+    {
         return Ok(Value::Null);
     }
     Ok(result(object_check(Owned::LargeObject, oid, role, mask, call.session)?))
+}
+
+/// `LargeObjectExists` in the latest catalog of the transaction.
+fn large_object_exists(oid: u32, session: &dyn Session) -> bool {
+    match session.latest_catalog() {
+        Some(catalog) => catalog.large_object(oid).is_some(),
+        None => session.catalog().is_some_and(|c| c.large_object(oid).is_some()),
+    }
+}
+
+/// `pg_largeobject_aclcheck_snapshot` of `inv_open` for the current user: `SELECT` on the large object `oid`, and also `UPDATE` when `write` is true.
+pub(crate) fn large_object_allowed(oid: u32, write: bool, session: &dyn Session) -> Result<bool> {
+    let role = current_user(session);
+    let read = object_check(Owned::LargeObject, oid, role, ACL_SELECT, session)? == Some(true);
+    Ok(read
+        && (!write
+            || object_check(Owned::LargeObject, oid, role, ACL_UPDATE, session)? == Some(true)))
+}
+
+/// `object_ownercheck` for the current user: true when the user has the privileges of `owner` or is a superuser.
+pub(crate) fn owns(owner: u32, session: &dyn Session) -> bool {
+    let role = current_user(session);
+    superuser(role) || has_privs_of_role(role, owner)
 }
 
 /// `has_parameter_privilege`: the privileges come before the role.
