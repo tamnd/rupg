@@ -41,6 +41,10 @@ ERROR XX000 libnuma initialization failed or NUMA is not supported on this platf
 > SELECT * FROM pg_get_shmem_allocations_numa()
 fields name:25:-1:-1,numa_node:23:4:-1,size:20:8:-1
 ERROR XX000 libnuma initialization failed or NUMA is not supported on this platform
+> SELECT pg_numa_available()
+fields pg_numa_available:16:1:-1
+row f
+SELECT 1
 > SELECT * FROM pg_publication_tables
 fields pubname@pg_publication_tables.1:19:64:-1,schemaname@pg_publication_tables.2:19:64:-1,tablename@pg_publication_tables.3:19:64:-1,attnames@pg_publication_tables.4:1003:-1:-1,rowfilter@pg_publication_tables.5:25:-1:-1
 SELECT 0

@@ -477,6 +477,8 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_client_encoding" => pg_client_encoding,
         "getdatabaseencoding" => getdatabaseencoding,
         "pg_is_in_recovery" => pg_is_in_recovery,
+        // rupg has no NUMA support, as a PostgreSQL build without libnuma.
+        "pg_numa_available" => |_, _| Ok(Value::Bool(false)),
         "pg_is_wal_replay_paused"
         | "pg_get_wal_replay_pause_state"
         | "pg_wal_replay_pause"
