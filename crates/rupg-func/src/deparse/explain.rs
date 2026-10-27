@@ -5,7 +5,7 @@ use std::ptr;
 use std::rc::Rc;
 
 use rupg_analyze::{Expr, FromItem, SortGroup, SubLink, SubLinkKind};
-use rupg_plan::{Kind, Node, Plan, TARGET, Texts};
+use rupg_plan::{Kind, Node, Plan, Replaced, TARGET, Texts};
 use rupg_sql::nodes::FRAMEOPTION_NONDEFAULT;
 
 use super::{Deparser, Error, Namespace, Removed, Result, SubName, builtin, quote_identifier, reg};
@@ -185,11 +185,15 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
     }
 }
 
-/// `set_rtable_names` with the `rels_used` of `ExplainPreScanNode`: the subqueries of `FROM` of the scope `s` whose `Subquery Scan` the plan does not keep, as `trivial_subqueryscan` takes it out, take no name, because no node of the plan scans them. `kept` has the scope and the relation of each `Subquery Scan`. A subquery of a set operation, and a subquery that is a set operation, keep their names.
+/// `set_rtable_names` with the `rels_used` of `ExplainPreScanNode`: the subqueries of `FROM` of the scope `s` whose `Subquery Scan` the plan does not keep, as `trivial_subqueryscan` takes it out, take no name, because no node of the plan scans them. `kept` has the scope and the relation of each `Subquery Scan`. A subquery that is a set operation keeps its name. A `SELECT` of a set operation takes a name only when a `Subquery Scan` scans it or a `Result` takes its place.
 fn unscanned(plan: &Plan<'_>, s: usize, kept: &[(usize, usize)]) -> Vec<usize> {
     let outer = plan.scopes[s].query;
     if outer.set_op.is_some() {
-        return Vec::new();
+        let mut used = Vec::new();
+        replaced(&plan.root, s, &mut used);
+        return (0..outer.relations.len())
+            .filter(|r| !kept.contains(&(s, *r)) && !used.contains(r))
+            .collect();
     }
     plan.scopes
         .iter()
@@ -246,6 +250,25 @@ fn removed_scans(plan: &Plan<'_>, spaces: &mut [Namespace]) {
         let namespaces = chain(s).into_iter().map(|at| spaces[at].clone()).collect();
         let targets = query.targets.iter().map(|t| t.expr.clone()).collect();
         spaces[parent].removed.push((r, Rc::new(Removed { namespaces, targets })));
+    }
+}
+
+/// The relations of the scope `s` that a `Result` of the plan takes the place of, as `ExplainPreScanNode` adds the `relids` of a `Result`.
+fn replaced(node: &Node<'_>, s: usize, out: &mut Vec<usize>) {
+    if let Kind::Result { replaces: Some(replaces), .. } = &node.kind
+        && node.scope == s
+    {
+        match replaces {
+            Replaced::Scan(r, _) => out.push(*r),
+            Replaced::Join(rs) | Replaced::Upper(rs) => out.extend(rs),
+            Replaced::MinMax => {}
+        }
+    }
+    for child in &node.children {
+        replaced(child, s, out);
+    }
+    for sub in node.init_plans.iter().chain(&node.sub_plans) {
+        replaced(&sub.plan, s, out);
     }
 }
 

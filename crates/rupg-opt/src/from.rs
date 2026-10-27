@@ -26,7 +26,7 @@ use rupg_plan::{
 };
 use rupg_types::{Value, oid};
 
-use crate::{Builder, Index, Level, Size, cost, exprs, pullup, upper};
+use crate::{Builder, Index, Level, Size, cost, exprs, pullup, setop, upper};
 use index::Param;
 use memoize::Memo;
 use paths::{Paths, costs};
@@ -675,7 +675,7 @@ impl<'q> Builder<'q> {
             && stats.query.is_empty()
             && level.query.windows.is_empty()
         {
-            let keys = crate::setop::keys(level.query, leaf.op, &stats);
+            let keys = setop::keys(level.query, leaf.op, &stats);
             stats.query.clone_from(&keys);
             stats.sort = keys;
         }
@@ -824,9 +824,20 @@ impl<'q> Builder<'q> {
                     });
                     self.paths = rel.is_none();
                     let outer = std::mem::replace(&mut self.append, rel);
+                    let start = self.current.len();
                     let child = self.query(sub, Some(level.scope));
                     appended = std::mem::replace(&mut self.append, outer);
                     sub_paths = self.sub_paths.take();
+                    // `set_subquery_pathlist`: a set operation whose result is empty makes the relation dummy, and its relations take no names. The other subqueries that are empty here are those that `pull_up_subqueries` merges into the query.
+                    if sub.set_op.is_some() && setop::is_dummy(&child) {
+                        self.current.truncate(start);
+                        let rels = BTreeSet::from([r]);
+                        return vec![Rel {
+                            node: dummy(level.scope, &rels, false),
+                            rels,
+                            order: Vec::new(),
+                        }];
+                    }
                     let c = child.cost;
                     children.push(child);
                     // `cost_subqueryscan`: a scan with no condition that gives the columns of its subquery as they are costs its subquery, because `setrefs.c` takes it out of the plan.

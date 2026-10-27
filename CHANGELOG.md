@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Prune the empty inputs of a set operation as PostgreSQL 19 does. A `UNION` leaves out each `SELECT` that is empty, and the plan of an operation whose inputs are all empty is a `Result` that replaces the operation. `INTERSECT` with an empty side and `EXCEPT` with an empty left side are empty, and `EXCEPT ALL` with an empty right side reads only its left side. The `SELECT` parts of a set operation now have the name `unnamed_subquery`. (#870)
 - A `UNION` with no column puts no `Sort` below its `Unique`, as PostgreSQL does. Before, `EXPLAIN` showed a `Sort` with an empty `Sort Key`. (#868)
 - The plan of `INTERSECT` or `EXCEPT` counts its disabled nodes, as `create_setop_path` does. With `enable_sort` off, a `HashSetOp` wins over a disabled `Sort`. With `enable_hashagg` off, `EXPLAIN` shows the `HashSetOp` as disabled. (#867)
 - `EXPLAIN` shows the subplan name in a node above the node that runs a subquery, as PostgreSQL does. Before, the node above showed the text of the subquery. (#866)
