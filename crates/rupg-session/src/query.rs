@@ -237,6 +237,7 @@ fn use_types(catalog: &Catalog) {
                     array_name: array.name.clone(),
                     namespace: ty.namespace,
                     relation: ty.relation,
+                    parents: row_parents(catalog, ty.relation),
                 }));
             }
             if let Some(RangePart::Range(info)) = &ty.range {
@@ -718,6 +719,35 @@ impl<'a> Reader<'a> {
 }
 
 /// The OID of a database, or 0 for a name that is not a database. The name of a database does not change while a session uses it.
+/// The row types that the row type of `relation` can take: the row types of all the ancestors of the relation in `pg_inherits`, as `typeInheritsFrom` walks them, and `reloftype`, as `typeIsOfTypedTable` reads it.
+fn row_parents(catalog: &Catalog, relation: u32) -> Vec<u32> {
+    let mut parents = Vec::new();
+    let mut seen = vec![relation];
+    let mut queue = vec![relation];
+    while let Some(oid) = queue.pop() {
+        let Some(rel) = catalog.relation(oid) else {
+            continue;
+        };
+        if oid == relation && rel.of_type != 0 {
+            parents.push(rel.of_type);
+        }
+        let partition = rel.partition_of.as_ref().map(|p| p.parent);
+        for parent in rel.inherits.iter().copied().chain(partition) {
+            if parent == 0 || seen.contains(&parent) {
+                continue;
+            }
+            seen.push(parent);
+            queue.push(parent);
+            if let Some(row) = catalog.relation(parent).map(|r| r.row_type)
+                && row != 0
+            {
+                parents.push(row);
+            }
+        }
+    }
+    parents
+}
+
 fn database_oid(store: &Store, name: &str) -> u32 {
     store.database(name).map_or(0, |db| db.oid)
 }

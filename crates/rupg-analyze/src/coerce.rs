@@ -144,6 +144,10 @@ pub fn can_coerce(inputs: &[u32], targets: &[u32], context: Context) -> bool {
         if find_path(target, input, context) != Path::None {
             continue;
         }
+        // A row of a table that inherits from the table of the target, or of a typed table of the target.
+        if builtin::row_inherits(types::base(input), target) {
+            continue;
+        }
         return false;
     }
     !generic || crate::poly::consistent(inputs, targets)
@@ -213,6 +217,45 @@ impl Analyzer<'_> {
             hide_cast(arg);
         }
         Ok(Some(expr))
+    }
+
+    /// The `ConvertRowtypeExpr` of `coerce_type`: the row of a child table or of a typed table as a row of the type `target`. A domain over the row type is first relabeled to its base type.
+    fn convert_row(&mut self, expr: Expr, target: u32, form: CastForm) -> Result<Expr> {
+        let base = types::base(expr.ty);
+        let location = expr.location;
+        let arg = if base == expr.ty {
+            expr
+        } else {
+            Expr {
+                kind: ExprKind::Relabel(Box::new(expr), CastForm::Implicit),
+                ty: base,
+                typmod: -1,
+                location,
+            }
+        };
+        let error = || {
+            Error::new(
+                SqlState::DATATYPE_MISMATCH,
+                format!(
+                    "could not convert row type {} to {}",
+                    types::name(base),
+                    types::name(target)
+                ),
+            )
+        };
+        let from = self.row_columns(base).ok_or_else(error)?;
+        let to = self.row_columns(target).ok_or_else(error)?;
+        let fields = to
+            .iter()
+            .map(|c| from.iter().position(|f| f.name == c.name))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(error)?;
+        Ok(Expr {
+            kind: ExprKind::ConvertRow { arg: Box::new(arg), fields, form },
+            ty: target,
+            typmod: -1,
+            location,
+        })
     }
 
     /// `coerce_type`: the expression cast to the type. The caller has checked that the cast exists.
@@ -290,6 +333,9 @@ impl Analyzer<'_> {
         // A cast to a domain casts to the base type, then checks the constraints of the domain.
         let (base, base_typmod) = types::base_typmod(target, typmod);
         match find_path(target, input, context) {
+            Path::None if builtin::row_inherits(types::base(input), target) => {
+                self.convert_row(expr, target, cast)
+            }
             Path::None => Err(Error::internal(format!(
                 "failed to find conversion function from {} to {}",
                 types::name(input),

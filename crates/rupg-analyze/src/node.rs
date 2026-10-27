@@ -206,6 +206,7 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
         ExprKind::Const(_) => "CONST",
         ExprKind::Func(_) => "FUNC",
         ExprKind::Relabel(..) => "RELABEL",
+        ExprKind::ConvertRow { .. } => "CONVERTROWTYPE",
         ExprKind::Collate(..) => "COLLATE",
         ExprKind::CoerceViaIo(..) => "COERCEVIAIO",
         ExprKind::ArrayCoerce { .. } => "ARRAYCOERCE",
@@ -276,6 +277,15 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
                 CastForm::Explicit => " :form explicit",
                 CastForm::Implicit => " :form implicit",
             });
+            write_field("arg", arg, out)?;
+        }
+        ExprKind::ConvertRow { arg, fields, form } => {
+            out.push_str(match form {
+                CastForm::Explicit => " :form explicit",
+                CastForm::Implicit => " :form implicit",
+            });
+            let fields = fields.iter().map(usize::to_string).collect::<Vec<_>>().join(" ");
+            out.push_str(&format!(" :fieldnums ({fields})"));
             write_field("arg", arg, out)?;
         }
         ExprKind::Collate(arg, collation) => {
@@ -1062,6 +1072,14 @@ fn expr_of(item: &Item) -> Result<Expr> {
             })
         }
         "RELABEL" => ExprKind::Relabel(f.expr("arg")?, cast_form(&f)?),
+        "CONVERTROWTYPE" => ExprKind::ConvertRow {
+            arg: f.expr("arg")?,
+            fields: list(f.get("fieldnums")?)?
+                .iter()
+                .map(|n| number(atom(n)?))
+                .collect::<Result<_>>()?,
+            form: cast_form(&f)?,
+        },
         "COLLATE" => ExprKind::Collate(f.expr("arg")?, f.number("collation")?),
         "COERCEVIAIO" => ExprKind::CoerceViaIo(f.expr("arg")?, cast_form(&f)?),
         "COERCETODOMAIN" => ExprKind::CoerceToDomain(f.expr("arg")?, cast_form(&f)?),

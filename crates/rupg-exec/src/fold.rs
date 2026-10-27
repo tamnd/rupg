@@ -168,6 +168,7 @@ fn cast_arg_mut(expr: &mut Expr) -> Option<&mut Expr> {
         ExprKind::Relabel(arg, CastForm::Implicit)
         | ExprKind::CoerceViaIo(arg, CastForm::Implicit)
         | ExprKind::CoerceToDomain(arg, CastForm::Implicit)
+        | ExprKind::ConvertRow { arg, form: CastForm::Implicit, .. }
         | ExprKind::ArrayCoerce { arg, form: CastForm::Implicit, .. } => Some(arg),
         _ => None,
     }
@@ -700,6 +701,7 @@ impl<'a> Fold<'a> {
             | ExprKind::CoerceToDomain(arg, _)
             | ExprKind::NullTest(arg, _)
             | ExprKind::BooleanTest(arg, _)
+            | ExprKind::ConvertRow { arg, .. }
             | ExprKind::FieldSelect(arg, _) => self.subqueries(arg),
             ExprKind::ArrayCoerce { arg, element, .. } => {
                 self.subqueries(arg)?;
@@ -843,6 +845,11 @@ impl<'a> Fold<'a> {
             ExprKind::CoerceViaIo(arg, form) => {
                 let arg = self.expr(arg)?;
                 self.coerce(with(expr, ExprKind::CoerceViaIo(Box::new(arg), *form)))
+            }
+            // `eval_const_expressions` keeps a `ConvertRowtypeExpr` and folds its argument.
+            ExprKind::ConvertRow { arg, fields, form } => {
+                let arg = Box::new(self.expr(arg)?);
+                Ok(with(expr, ExprKind::ConvertRow { arg, fields: fields.clone(), form: *form }))
             }
             // A domain with no constraint is a relabel of the value. The checks of any other domain run with the query, as in PostgreSQL.
             ExprKind::CoerceToDomain(arg, form) => {

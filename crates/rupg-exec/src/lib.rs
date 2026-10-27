@@ -227,6 +227,7 @@ fn check(expr: &Expr) -> Result<()> {
         | ExprKind::CoerceToDomain(arg, _)
         | ExprKind::NullTest(arg, _)
         | ExprKind::BooleanTest(arg, _)
+        | ExprKind::ConvertRow { arg, .. }
         | ExprKind::FieldSelect(arg, _) => check(arg)?,
         ExprKind::CoerceViaIo(arg, _) => {
             if !rupg_func::output_supported(arg.ty) {
@@ -2311,6 +2312,17 @@ impl<'a> Eval<'a> {
             ExprKind::NamedArg(na) => self.eval(&na.arg),
             ExprKind::Relabel(arg, _) => Ok(relabel(self.eval(arg)?, expr.ty)),
             ExprKind::Collate(arg, _) => self.eval(arg),
+            // `ExecEvalConvertRowtype`: the fields of the row in the order of the fields of the type.
+            ExprKind::ConvertRow { arg, fields, .. } => Ok(match self.eval(arg)? {
+                Value::Record(record) => {
+                    let types = fields.iter().map(|&i| record.types.get(i).copied().unwrap_or(0));
+                    let values = fields
+                        .iter()
+                        .map(|&i| record.values.get(i).cloned().unwrap_or(Value::Null));
+                    Value::Record(Box::new(Record::new(types.collect(), values.collect())))
+                }
+                _ => Value::Null,
+            }),
             ExprKind::CoerceViaIo(arg, _) => {
                 let value = self.eval(arg)?;
                 if value.is_null() {
