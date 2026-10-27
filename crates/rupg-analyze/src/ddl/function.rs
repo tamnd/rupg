@@ -1111,14 +1111,15 @@ impl Definer<'_, '_> {
                 FunctionParameterMode::FUNC_PARAM_VARIADIC => b'v',
                 _ => b'i',
             };
-            let ty = param.argType.as_deref().ok_or_else(|| Error::internal("an argument type"))?;
-            if ty.setof && procedure {
+            let type_name =
+                param.argType.as_deref().ok_or_else(|| Error::internal("an argument type"))?;
+            let ty = self.argument_type(type_name, options.language)?;
+            if type_name.setof && procedure {
                 return bad("procedures cannot accept set arguments", at);
             }
-            if ty.setof {
+            if type_name.setof {
                 return bad("functions cannot accept set arguments", at);
             }
-            let ty = self.argument_type(ty, options.language)?;
             let input = matches!(mode, b'i' | b'b' | b'v');
             if input && argmodes.contains(&b'v') {
                 return bad("VARIADIC parameter must be the last input parameter", at);
@@ -1193,6 +1194,7 @@ impl Definer<'_, '_> {
             (_, required) if procedure => (required.unwrap_or(oid::VOID), false),
             (Some(ret), _) => {
                 let rettype = self.return_type(ret, options.language)?;
+                self.check_type_usage(rettype)?;
                 if let Some(required) = required.filter(|&r| r != rettype) {
                     return Err(Error::new(
                         SqlState::INVALID_FUNCTION_DEFINITION,
@@ -1387,7 +1389,7 @@ impl Definer<'_, '_> {
     }
 
     /// `ProcedureCreate`: the validator of the language runs with the settings of the function, which `ProcessGUCArray` gives with `GUC_ACTION_SAVE`, and the settings go back after it.
-    /// The type of an argument, as `interpret_function_parameter_list` looks it up: a shell type gives a notice, and in a function in SQL an error.
+    /// The type of an argument, as `interpret_function_parameter_list` looks it up: a shell type gives a notice, and in a function in SQL an error. The user must have `USAGE` on the type.
     fn argument_type(&mut self, name: &TypeName, language: u32) -> Result<u32> {
         let at = place(name.location);
         let Some((ty, _, defined)) = self.an.lookup_type_mod(name)? else {
@@ -1414,6 +1416,7 @@ impl Definer<'_, '_> {
                 .as_notice(),
             );
         }
+        self.check_type_usage(ty)?;
         Ok(ty)
     }
 

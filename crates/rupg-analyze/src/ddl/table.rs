@@ -903,6 +903,7 @@ impl Definer<'_, '_> {
             let mut type_name = def.typeName.as_deref().cloned().unwrap_or_default();
             type_name.location = -1;
             let (ty, typmod) = self.an.type_name(&type_name)?;
+            self.check_type_usage(ty)?;
             let collation = match def.collClause.as_deref() {
                 Some(coll) => {
                     let collation = self.an.collation_oid(&coll.collname, None)?;
@@ -977,7 +978,7 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
-    /// `BuildDescForRelation` for one column: its type, its type modifier, its collation and the number of its array dimensions.
+    /// `BuildDescForRelation` for one column: its type, its type modifier, its collation and the number of its array dimensions. The user must have `USAGE` on the type.
     fn catalog_column(&mut self, column: &NewColumn) -> Result<Column> {
         if let Some(parent) = &column.inherited {
             let mut new =
@@ -989,11 +990,13 @@ impl Definer<'_, '_> {
             new.generated = parent.generated;
             new.local = parent.local;
             new.inhcount = parent.inhcount;
+            self.check_type_usage(new.ty)?;
             return Ok(new);
         }
         let mut type_name = column.type_name.clone();
         type_name.location = -1;
         let (ty, typmod) = self.an.type_name(&type_name)?;
+        self.check_type_usage(ty)?;
         if type_name.setof {
             return Err(Error::new(
                 SqlState::INVALID_TABLE_DEFINITION,

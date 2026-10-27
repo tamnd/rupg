@@ -1,0 +1,175 @@
+> create type textrange1 as range(subtype=text, multirange_type_name=multitextrange1, collation="C");
+CREATE TYPE
+> create role regress_multirange_owner;
+CREATE ROLE
+> alter type multitextrange1 owner to regress_multirange_owner;
+ERROR 42809 cannot alter multirange type multitextrange1
+> alter type textrange1 owner to regress_multirange_owner;
+ALTER TYPE
+> select typname, typowner::regrole from pg_type where typname like '%textrange1' order by 1;
+fields typname@pg_type.2:19:64:-1,typowner:4096:4:-1
+row _multitextrange1,regress_multirange_owner
+row _textrange1,regress_multirange_owner
+row multitextrange1,regress_multirange_owner
+row textrange1,regress_multirange_owner
+SELECT 4
+> set role regress_multirange_owner;
+SET
+is_superuser=off
+> revoke usage on type multitextrange1 from public;
+ERROR 0LP01 cannot set privileges of multirange types
+> revoke usage on type textrange1 from public;
+REVOKE
+> create temp table test1(f1 multitextrange1[]);
+CREATE TABLE
+> revoke usage on type textrange1 from regress_multirange_owner;
+REVOKE
+> select typname, typacl from pg_type where typname like '%textrange1' order by 1;
+fields typname@pg_type.2:19:64:-1,typacl@pg_type.32:1034:-1:-1
+row _multitextrange1,NULL
+row _textrange1,NULL
+row multitextrange1,NULL
+row textrange1,{}
+SELECT 4
+> create temp table test2(f1 multitextrange1[]);
+ERROR 42501 permission denied for type multitextrange1
+> create temp table test3(f1 textrange1);
+ERROR 42501 permission denied for type textrange1
+> create temp table test4(f1 multitextrange1);
+ERROR 42501 permission denied for type multitextrange1
+> drop table test1;
+DROP TABLE
+> drop type textrange1;
+DROP TYPE
+> reset role;
+RESET
+is_superuser=on
+> drop role regress_multirange_owner;
+DROP ROLE
+> create type two_ints as (a int, b int);
+CREATE TYPE
+> create type two_ints_range as range (subtype = two_ints);
+CREATE TYPE
+> alter type two_ints add attribute c two_ints_multirange;
+ERROR 42P16 composite type two_ints cannot be made a member of itself
+> alter type two_ints add attribute c two_ints_range;
+ERROR 42P16 composite type two_ints cannot be made a member of itself
+> drop type two_ints cascade;
+NOTICE 00000 drop cascades to type two_ints_range
+DROP TYPE
+> create role regress_tu_owner;
+CREATE ROLE
+> create role regress_tu_user;
+CREATE ROLE
+> create domain tu_dom as int;
+CREATE DOMAIN
+> create type tu_row as (a int, b int);
+CREATE TYPE
+> alter domain tu_dom owner to regress_tu_owner;
+ALTER DOMAIN
+> alter type tu_row owner to regress_tu_owner;
+ALTER TYPE
+> revoke usage on domain tu_dom from public;
+REVOKE
+> revoke usage on type tu_row from public;
+REVOKE
+> select typname, typacl from pg_type where typname in ('tu_dom', 'tu_row') order by 1;
+fields typname@pg_type.2:19:64:-1,typacl@pg_type.32:1034:-1:-1
+row tu_dom,{regress_tu_owner=U/regress_tu_owner}
+row tu_row,{regress_tu_owner=U/regress_tu_owner}
+SELECT 2
+> set role regress_tu_owner;
+SET
+is_superuser=off
+> revoke usage on type tu_row from regress_tu_owner;
+REVOKE
+> reset role;
+RESET
+is_superuser=on
+> select typname, typacl from pg_type where typname in ('tu_dom', 'tu_row') order by 1;
+fields typname@pg_type.2:19:64:-1,typacl@pg_type.32:1034:-1:-1
+row tu_dom,{regress_tu_owner=U/regress_tu_owner}
+row tu_row,{}
+SELECT 2
+> select has_type_privilege('regress_tu_owner', 'tu_row', 'usage'), has_type_privilege('regress_tu_user', 'tu_dom', 'usage');
+fields has_type_privilege:16:1:-1,has_type_privilege:16:1:-1
+row f,f
+SELECT 1
+> grant create on schema public to regress_tu_user;
+GRANT
+> set role regress_tu_user;
+SET
+is_superuser=off
+> create aggregate tu_agg1(tu_dom) (sfunc = int4_sum, stype = bigint);
+ERROR 42501 permission denied for type tu_dom
+> create aggregate tu_agg2(int) (sfunc = int4_sum, stype = tu_dom);
+ERROR 42804 function int4_sum(bigint, integer) requires run-time type coercion
+> create domain tu_dom2 as tu_dom;
+ERROR 42501 permission denied for type tu_dom
+> create function tu_f1(a tu_dom) returns int language sql as $$ select $1 $$;
+ERROR 42501 permission denied for type tu_dom
+> create function tu_f2(b int) returns tu_dom language sql as $$ select $1::tu_dom $$;
+ERROR 42501 permission denied for type tu_dom
+> create function tu_f3(b int) returns setof tu_dom language sql as $$ select $1::tu_dom $$;
+ERROR 42501 permission denied for type tu_dom
+> create function tu_f4(out b tu_dom) language sql as $$ select 1::tu_dom $$;
+ERROR 42501 permission denied for type tu_dom
+> create procedure tu_p1(a tu_dom) language sql as $$ select $1 $$;
+ERROR 42501 permission denied for type tu_dom
+> create operator !+! (procedure = int4pl, leftarg = tu_dom, rightarg = tu_dom);
+ERROR 42501 permission denied for type tu_dom
+> create table tu_t1 (a int, b tu_dom);
+ERROR 42501 permission denied for type tu_dom
+> create table tu_t2 of tu_row;
+ERROR 42501 permission denied for type tu_row
+> create table tu_t3 (a int, b int);
+CREATE TABLE
+> alter table tu_t3 of tu_row;
+ERROR 42501 permission denied for type tu_row
+> create table tu_t4 (a int[], b tu_row[]);
+ERROR 42501 permission denied for type tu_row
+> create table tu_t5 (a int, b int);
+CREATE TABLE
+> alter table tu_t5 add column c tu_dom;
+ERROR 42501 permission denied for type tu_dom
+> alter table tu_t5 alter column b type tu_dom;
+ERROR 42501 permission denied for type tu_dom
+> create type tu_c1 as (a int, b tu_dom);
+ERROR 42501 permission denied for type tu_dom
+> create type tu_c2 as (a int, b int);
+CREATE TYPE
+> alter type tu_c2 add attribute c tu_dom;
+ERROR 42501 permission denied for type tu_dom
+> alter type tu_c2 alter attribute b type tu_dom;
+ERROR 42501 permission denied for type tu_dom
+> create type tu_range as range (subtype = tu_dom);
+ERROR 42501 permission denied for type tu_dom
+> create table tu_t6 (a int) partition by list (a);
+CREATE TABLE
+> reset role;
+RESET
+is_superuser=on
+> create table tu_parent (a int, b tu_dom);
+CREATE TABLE
+> set role regress_tu_user;
+SET
+is_superuser=off
+> create table tu_child () inherits (tu_parent);
+ERROR 42501 must be owner of table tu_parent
+> reset role;
+RESET
+is_superuser=on
+> drop table tu_parent, tu_t3, tu_t5, tu_t6;
+DROP TABLE
+> drop type tu_c2;
+DROP TYPE
+> revoke create on schema public from regress_tu_user;
+REVOKE
+> drop domain tu_dom;
+DROP DOMAIN
+> drop type tu_row;
+DROP TYPE
+> drop role regress_tu_owner;
+DROP ROLE
+> drop role regress_tu_user;
+DROP ROLE

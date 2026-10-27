@@ -277,21 +277,22 @@ impl Definer<'_, '_> {
                 for param in params.iter().flatten() {
                     let Node::FunctionParameter(param) = param else { continue };
                     let at = place(param.location);
-                    let ty = param
+                    let type_name = param
                         .argType
                         .as_deref()
                         .ok_or_else(|| Error::internal("an argument type"))?;
-                    if ty.setof {
-                        return Err(invalid("aggregates cannot accept set arguments").at_opt(at));
-                    }
                     // `interpret_function_parameter_list` gives the name of a type that does not exist without quotes.
-                    let Some(ty) = self.an.lookup_type_name(ty)? else {
+                    let Some(ty) = self.an.lookup_type_name(type_name)? else {
                         return Err(Error::new(
                             SqlState::UNDEFINED_OBJECT,
-                            format!("type {} does not exist", type_name_text(ty)),
+                            format!("type {} does not exist", type_name_text(type_name)),
                         )
-                        .at_opt(place(ty.location)));
+                        .at_opt(place(type_name.location)));
                     };
+                    self.check_type_usage(ty)?;
+                    if type_name.setof {
+                        return Err(invalid("aggregates cannot accept set arguments").at_opt(at));
+                    }
                     if variadic != 0 {
                         return Err(invalid("VARIADIC parameter must be the last input parameter")
                             .at_opt(at));
@@ -600,6 +601,15 @@ impl Definer<'_, '_> {
             }
             support = found;
         }
+        // The checks of `USAGE` on the types that the aggregate uses.
+        for &ty in &argtypes {
+            self.check_type_usage(ty)?;
+        }
+        self.check_type_usage(transtype)?;
+        if mtranstype != 0 {
+            self.check_type_usage(mtranstype)?;
+        }
+        self.check_type_usage(finaltype)?;
 
         // `ProcedureCreate`.
         let named = argnames.iter().any(|n| !n.is_empty());

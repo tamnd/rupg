@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A column, a typed table, a function, an aggregate, a domain and a range need `USAGE` on their types, as `object_aclcheck` checks it. `ALTER TYPE ... OWNER TO` of a multirange type gives the error of `AlterTypeOwner`, a composite type cannot hold itself through a range or a multirange, and an ACL that `REVOKE` makes empty shows as `{}` (#961).
 - A rule whose actions write depends on the target columns of `INSERT` and `UPDATE` and on the columns that its values, conditions and `RETURNING` read, and not on the columns that the rewrite copies, so `DROP COLUMN ... CASCADE` drops the same rules as PostgreSQL (#960).
 - `pg_get_functiondef` of a body in SQL shows an expression of `RETURNING` with no `AS "?column?"`, and the columns of an `INSERT` with the name of the table (#959).
 - `ctid` in `RETURNING` of a partitioned table and of a table with children of `INHERITS` gives the version in the leaf, for routed inserts, updates in a leaf and across leaves, and `ON CONFLICT` (#958).

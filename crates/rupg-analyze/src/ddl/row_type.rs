@@ -1,6 +1,6 @@
 //! The checks of a row type that a column holds: `CheckAttributeType` for a composite type that would hold itself, and `find_composite_type_dependencies` for a change of the columns of a row type that a stored value holds.
 
-use rupg_catalog::{Catalog, RelKind, Relation};
+use rupg_catalog::{Catalog, RangePart, RelKind, Relation};
 use rupg_common::{Error, Result, SqlState};
 use rupg_types::Value;
 
@@ -132,7 +132,7 @@ impl Definer<'_, '_> {
         None
     }
 
-    /// True when the type `ty` is the type `target`, or a domain or an array of a type that holds it. With `fields`, the columns of a composite type count too.
+    /// True when the type `ty` is the type `target`, or a domain, an array, a range or a multirange of a type that holds it. With `fields`, the columns of a composite type count too.
     fn holds_type(&self, ty: u32, target: u32, fields: bool, depth: usize) -> bool {
         if ty == target {
             return true;
@@ -145,6 +145,14 @@ impl Definer<'_, '_> {
         }
         if found.element != 0 {
             return self.holds_type(found.element, target, fields, depth + 1);
+        }
+        let inner = match &found.range {
+            Some(RangePart::Range(_)) => crate::types::range_subtype(ty),
+            Some(RangePart::Multirange(_)) => crate::types::multirange_range(ty),
+            None => 0,
+        };
+        if inner != 0 {
+            return self.holds_type(inner, target, fields, depth + 1);
         }
         fields
             && self.catalog.relation(found.relation).is_some_and(|rel| {

@@ -124,6 +124,7 @@ impl Definer<'_, '_> {
         }
         let type_name = def.typeName.as_deref().cloned().unwrap_or_default();
         let (ty, typmod) = self.an.type_name(&type_name)?;
+        self.check_type_usage(ty)?;
         let collation = match def.collClause.as_deref() {
             Some(coll) => {
                 let at = place(coll.location);

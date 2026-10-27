@@ -10,7 +10,7 @@ use super::{NewColumn, Plan};
 use crate::types;
 
 impl Definer<'_, '_> {
-    /// `typenameType` and `check_of_type`: the OID of the type, which must be a composite type of `CREATE TYPE ... AS` and not the row type of a table.
+    /// `typenameType` and `check_of_type`: the OID of the type, which must be a composite type of `CREATE TYPE ... AS` and not the row type of a table. The user must have `USAGE` on the type.
     pub(in crate::ddl) fn of_type(&mut self, name: &TypeName) -> Result<u32> {
         let (ty, _) = self.an.type_name(name)?;
         let standalone = match self.catalog.type_by_oid(ty) {
@@ -22,7 +22,7 @@ impl Definer<'_, '_> {
             None => types::row(ty).filter(|row| row.kind == b'c').map(|_| false),
         };
         match standalone {
-            Some(true) => Ok(ty),
+            Some(true) => self.check_type_usage(ty).map(|()| ty),
             Some(false) => Err(Error::new(
                 SqlState::WRONG_OBJECT_TYPE,
                 format!("type {} is the row type of another table", self.type_text(ty)),

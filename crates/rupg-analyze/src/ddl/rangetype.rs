@@ -109,6 +109,7 @@ impl Definer<'_, '_> {
                 format!("range subtype cannot be {}", types::name(subtype)),
             ));
         }
+        self.check_type_usage(subtype)?;
         let subopc = self.range_opclass(options.opclass, subtype)?;
         let collation = match options.collation {
             Some(def) if types::collatable(subtype) => {
