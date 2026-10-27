@@ -1,0 +1,60 @@
+> create table pt (a int primary key, b text) partition by list (a);
+CREATE TABLE
+> create table pt1 partition of pt for values in (1, 2, 3);
+CREATE TABLE
+> create table pt2 partition of pt for values in (4, 5, 6);
+CREATE TABLE
+> insert into pt values (1, 'x'), (4, 'y'), (2, 'z') returning tableoid::regclass, ctid, new.ctid, *;
+fields tableoid:2205:4:-1,ctid@pt.-1:27:6:-1,ctid@pt.-1:27:6:-1,a@pt.1:23:4:-1,b@pt.2:25:-1:-1
+row pt1,(0,1),(0,1),1,x
+row pt2,(0,1),(0,1),4,y
+row pt1,(0,2),(0,2),2,z
+INSERT 0 3
+> update pt set b = b || '!' where a = 1 returning old.tableoid::regclass, old.ctid, new.tableoid::regclass, new.ctid, ctid;
+fields tableoid:2205:4:-1,ctid@pt.-1:27:6:-1,tableoid:2205:4:-1,ctid@pt.-1:27:6:-1,ctid@pt.-1:27:6:-1
+row pt1,(0,1),pt1,(0,3),(0,3)
+UPDATE 1
+> update pt set a = 5 where a = 2 returning old.tableoid::regclass, old.ctid, new.tableoid::regclass, new.ctid, *;
+fields tableoid:2205:4:-1,ctid@pt.-1:27:6:-1,tableoid:2205:4:-1,ctid@pt.-1:27:6:-1,a@pt.1:23:4:-1,b@pt.2:25:-1:-1
+row pt1,(0,2),pt2,(0,2),5,z
+UPDATE 1
+> update pt set a = a + 1 where a in (4, 5) returning old.ctid, new.ctid, new.tableoid::regclass, *;
+ERROR 23505 duplicate key value violates unique constraint "pt2_pkey"
+> delete from pt where a = 6 returning old.ctid, new.ctid, ctid, *;
+fields ctid@pt.-1:27:6:-1,ctid@pt.-1:27:6:-1,ctid@pt.-1:27:6:-1,a@pt.1:23:4:-1,b@pt.2:25:-1:-1
+DELETE 0
+> insert into pt values (1, 'c') on conflict (a) do update set b = excluded.b returning old.ctid, new.ctid, ctid, *;
+fields ctid@pt.-1:27:6:-1,ctid@pt.-1:27:6:-1,ctid@pt.-1:27:6:-1,a@pt.1:23:4:-1,b@pt.2:25:-1:-1
+row (0,3),(0,4),(0,4),1,c
+INSERT 0 1
+> insert into pt values (3, 'n') on conflict (a) do update set b = excluded.b returning old.ctid, new.ctid, ctid, *;
+fields ctid@pt.-1:27:6:-1,ctid@pt.-1:27:6:-1,ctid@pt.-1:27:6:-1,a@pt.1:23:4:-1,b@pt.2:25:-1:-1
+row NULL,(0,5),(0,5),3,n
+INSERT 0 1
+> insert into pt values (3, 'n') on conflict (a) do nothing returning ctid;
+fields ctid@pt.-1:27:6:-1
+INSERT 0 0
+> select tableoid::regclass, ctid, * from pt order by a;
+fields tableoid:2205:4:-1,ctid@pt.-1:27:6:-1,a@pt.1:23:4:-1,b@pt.2:25:-1:-1
+row pt1,(0,4),1,c
+row pt1,(0,5),3,n
+row pt2,(0,1),4,y
+row pt2,(0,2),5,z
+SELECT 4
+> create table ip (a int, b text);
+CREATE TABLE
+> create table ic (c int) inherits (ip);
+CREATE TABLE
+> insert into ip values (1, 'p');
+INSERT 0 1
+> insert into ic values (2, 'c', 9);
+INSERT 0 1
+> update ip set b = b || '+' returning tableoid::regclass, old.ctid, new.ctid, *;
+fields tableoid:2205:4:-1,ctid@ip.-1:27:6:-1,ctid@ip.-1:27:6:-1,a@ip.1:23:4:-1,b@ip.2:25:-1:-1
+row ip,(0,1),(0,2),1,p+
+row ic,(0,1),(0,2),2,c+
+UPDATE 2
+> delete from ip where a = 2 returning tableoid::regclass, ctid, *;
+fields tableoid:2205:4:-1,ctid@ip.-1:27:6:-1,a@ip.1:23:4:-1,b@ip.2:25:-1:-1
+row ic,(0,2),2,c+
+DELETE 1

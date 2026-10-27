@@ -424,7 +424,7 @@ impl Connection {
                 inserts.push((item.seq, to, checked));
             }
         }
-        let batches = self.insert_moved(&mut routing, &view, inserts, after, &info.updated)?;
+        let (batches, _) = self.insert_moved(&mut routing, &view, inserts, after, &info.updated)?;
         let mut done = Vec::new();
         let mut oids = Vec::new();
         // The actions for the transition tables: a row that moves is a delete and an insert.

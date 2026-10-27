@@ -211,13 +211,16 @@ impl Connection {
                     kept,
                 )?;
                 match result {
-                    Speculative::Inserted(_) => {
+                    Speculative::Inserted(id) => {
                         done.count += 1;
                         self.count_inserts(oid, 1);
                         if info.keeps_written() {
                             let mut written = routing.to_root(at, &checked, info.width);
                             written.push(Value::Oid(oid));
                             written.resize(info.width + 1 + conflict.carried, Value::Null);
+                            if let Some(at) = info.returning_tid {
+                                put_tids(std::slice::from_mut(&mut written), at, &[id]);
+                            }
                             done.written.push(written);
                         }
                         if keep {
@@ -292,6 +295,9 @@ impl Connection {
                 if info.keeps_written() {
                     new.push(Value::Oid(routing.oid(at)));
                     new.extend(carried);
+                    if let Some(at) = info.returning_tid {
+                        put_tids(std::slice::from_mut(&mut new), at, &[tid]);
+                    }
                     done.written.push(new);
                 }
                 return Ok(true);
@@ -351,6 +357,10 @@ impl Connection {
             let mut written = routing.to_root(at, &checked, info.width);
             written.push(Value::Oid(oid));
             written.extend(carried);
+            if let Some(tid_at) = info.returning_tid {
+                let next = heap.next_versions(view.database, oid, &[tid]);
+                put_tids(std::slice::from_mut(&mut written), tid_at, &next);
+            }
             done.written.push(written);
         }
         if keep {

@@ -280,10 +280,9 @@ impl Analyzer<'_> {
         let partition_at = if kind == WriteKind::Merge { 3 * width + 2 } else { width + 1 };
         let partition_attnum = i16::try_from(partition_at).unwrap_or(i16::MAX);
         let mut carried: Vec<Expr> = Vec::new();
-        // `ctid` of the new row of a table, which the write gives. A partitioned table and a view have no such place.
+        // `ctid` of the new row of a table or of a leaf, which the write gives. A view has no such place.
         let new_tid = new_tid
             && matches!(kind, WriteKind::Insert | WriteKind::Update)
-            && !partitioned
             && self.auto_view.is_none();
         let mut tid_at = None;
         let mut change = |expr: &mut Expr, depth: usize| {

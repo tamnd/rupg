@@ -4123,6 +4123,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/rule_returning_old_new.test")));
     }
 
+    /// `ctid` of the old and the new rows in `RETURNING` of a partitioned table and of a table with children of `INHERITS`: the rows that `INSERT` routes, an `UPDATE` in a leaf and across leaves, `DELETE` and `ON CONFLICT`. `connection/returning_ctid_partitioned.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn returning_ctid_partitioned() {
+        big_stack(|| script(include_str!("connection/returning_ctid_partitioned.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {
