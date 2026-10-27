@@ -2,7 +2,7 @@
 
 use rupg_catalog::{
     FIRST_NORMAL_OID, ObjRef, PG_CAST, PG_COLLATION, PG_CONVERSION, PG_EXTENSION,
-    PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_LANGUAGE, is_pinned,
+    PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_LANGUAGE, PG_PUBLICATION, is_pinned,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named, Owned};
@@ -39,7 +39,11 @@ impl Definer<'_, '_> {
             let Some(found) = found else { continue };
             let made = matches!(
                 found.object.class,
-                PG_CAST | PG_CONVERSION | PG_FOREIGN_DATA_WRAPPER | PG_FOREIGN_SERVER
+                PG_CAST
+                    | PG_CONVERSION
+                    | PG_FOREIGN_DATA_WRAPPER
+                    | PG_FOREIGN_SERVER
+                    | PG_PUBLICATION
             );
             if found.object.oid >= FIRST_NORMAL_OID && made {
                 objects.push(found.object);
@@ -106,7 +110,11 @@ impl Definer<'_, '_> {
                 ("server", found.map(|s| (PG_FOREIGN_SERVER, s.oid)))
             }
             ObjectType::OBJECT_EVENT_TRIGGER => ("event trigger", None),
-            ObjectType::OBJECT_PUBLICATION => ("publication", None),
+            ObjectType::OBJECT_PUBLICATION => {
+                let found = self.catalog.publication_by_name(name);
+                owner = found.map(|p| p.owner);
+                ("publication", found.map(|p| (PG_PUBLICATION, p.oid)))
+            }
             _ => return Err(not_yet("DROP of this kind of object", None)),
         };
         let Some((class, oid)) = found else {

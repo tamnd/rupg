@@ -42,6 +42,7 @@ mod partition_alter;
 mod partition_attach;
 mod partition_index;
 mod policy;
+mod publication;
 mod rangetype;
 mod reindex;
 mod relation_options;
@@ -231,6 +232,8 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::AlterFdwStmt(_)
             | Node::CreateForeignServerStmt(_)
             | Node::AlterForeignServerStmt(_)
+            | Node::CreatePublicationStmt(_)
+            | Node::AlterPublicationStmt(_)
             | Node::CreateUserMappingStmt(_)
             | Node::ImportForeignSchemaStmt(_)
             | Node::AlterUserMappingStmt(_)
@@ -239,7 +242,7 @@ pub fn is_definition(stmt: &Node) -> bool {
         || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
         || matches!(stmt, Node::DiscardStmt(discard) if discard.target == DiscardMode::DISCARD_TEMP)
         || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype) || alter.objtype == ObjectType::OBJECT_TYPE)
-        || matches!(stmt, Node::AlterOwnerStmt(alter) if matches!(alter.objectType, ObjectType::OBJECT_SCHEMA | ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT | ObjectType::OBJECT_CONVERSION | ObjectType::OBJECT_TSDICTIONARY | ObjectType::OBJECT_TSCONFIGURATION | ObjectType::OBJECT_FDW | ObjectType::OBJECT_FOREIGN_SERVER) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
+        || matches!(stmt, Node::AlterOwnerStmt(alter) if matches!(alter.objectType, ObjectType::OBJECT_SCHEMA | ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT | ObjectType::OBJECT_CONVERSION | ObjectType::OBJECT_TSDICTIONARY | ObjectType::OBJECT_TSCONFIGURATION | ObjectType::OBJECT_FDW | ObjectType::OBJECT_FOREIGN_SERVER | ObjectType::OBJECT_PUBLICATION) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
         || matches!(stmt, Node::RenameStmt(rename) if rename::is_rename_kind(rename.renameType))
         || matches!(stmt, Node::AlterObjectSchemaStmt(alter) if is_alter_kind(alter.objectType) || matches!(alter.objectType, ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT | ObjectType::OBJECT_CONVERSION) || tsearch::is_ts_kind(alter.objectType) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
         || matches!(stmt, Node::SelectStmt(select) if crate::select_into(select).is_some())
@@ -402,6 +405,8 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::AlterFdwStmt(stmt) => definer.alter_fdw(stmt),
         Node::CreateForeignServerStmt(stmt) => definer.create_server(stmt),
         Node::AlterForeignServerStmt(stmt) => definer.alter_server(stmt),
+        Node::CreatePublicationStmt(stmt) => definer.create_publication(stmt),
+        Node::AlterPublicationStmt(stmt) => definer.alter_publication(stmt),
         Node::CreateUserMappingStmt(stmt) => definer.create_user_mapping(stmt),
         Node::ImportForeignSchemaStmt(stmt) => definer.import_foreign_schema(stmt),
         Node::AlterUserMappingStmt(stmt) => definer.alter_user_mapping(stmt),

@@ -24,6 +24,7 @@ mod foreign;
 mod opclass;
 mod operator;
 mod owner;
+mod publication;
 mod sequence;
 mod set_schema;
 mod stats;
@@ -42,6 +43,10 @@ pub use opclass::{
 };
 pub use operator::{Operator, PG_OPERATOR};
 pub use owner::acl_new_owner;
+pub use publication::{
+    PG_PUBLICATION, PG_PUBLICATION_NAMESPACE, PG_PUBLICATION_REL, Publication,
+    PublicationNamespace, PublicationRel,
+};
 pub use sequence::SequenceData;
 pub use stats::{PG_STATISTIC_EXT, StatExt};
 pub use tsearch::{
@@ -1307,6 +1312,9 @@ pub struct Catalog {
     fdws: BTreeMap<u32, ForeignDataWrapper>,
     servers: BTreeMap<u32, ForeignServer>,
     user_mappings: BTreeMap<u32, UserMapping>,
+    publications: BTreeMap<u32, Publication>,
+    publication_rels: BTreeMap<u32, PublicationRel>,
+    publication_namespaces: BTreeMap<u32, PublicationNamespace>,
     depends: Vec<Depend>,
     descriptions: Arc<BTreeMap<ObjRef, String>>,
     /// The ACLs that `GRANT` and `REVOKE` gave to the functions, the types, the languages and the columns, and to the objects of `initdb`. The relations and the schemas of the session keep their ACL in their own rows.
@@ -1425,6 +1433,9 @@ impl Catalog {
             fdws: BTreeMap::new(),
             servers: BTreeMap::new(),
             user_mappings: BTreeMap::new(),
+            publications: BTreeMap::new(),
+            publication_rels: BTreeMap::new(),
+            publication_namespaces: BTreeMap::new(),
             depends: Vec::new(),
             descriptions: Arc::default(),
             acls: Arc::default(),

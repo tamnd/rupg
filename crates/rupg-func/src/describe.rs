@@ -143,6 +143,25 @@ pub fn describe(object: ObjRef, session: &dyn Session) -> Result<Option<String>>
         rupg_catalog::PG_FOREIGN_SERVER => {
             catalog.and_then(|c| c.server(oid)).map(|s| format!("server {}", s.name))
         }
+        rupg_catalog::PG_PUBLICATION => {
+            catalog.and_then(|c| c.publication(oid)).map(|p| format!("publication {}", p.name))
+        }
+        rupg_catalog::PG_PUBLICATION_REL => catalog.and_then(|c| {
+            let row = c.publication_rel(oid)?;
+            let publication = c.publication(row.publication)?;
+            let relation = relation_text(row.relation, session)?;
+            Some(if row.except {
+                format!("exclusion of {relation} from publication {}", publication.name)
+            } else {
+                format!("publication of {relation} in publication {}", publication.name)
+            })
+        }),
+        rupg_catalog::PG_PUBLICATION_NAMESPACE => catalog.and_then(|c| {
+            let row = c.publication_namespace(oid)?;
+            let publication = c.publication(row.publication)?;
+            let schema = reg::namespace_name(row.schema, session)?;
+            Some(format!("publication of schema {schema} in publication {}", publication.name))
+        }),
         rupg_catalog::PG_USER_MAPPING => catalog.and_then(|c| {
             let mapping = c.user_mapping(oid)?;
             let server = c.server(mapping.server)?;

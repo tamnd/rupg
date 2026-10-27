@@ -1377,6 +1377,9 @@ impl Definer<'_, '_> {
         if matches!(stmt.objectType, ObjectType::OBJECT_FDW | ObjectType::OBJECT_FOREIGN_SERVER) {
             return self.alter_foreign_owner(stmt.objectType == ObjectType::OBJECT_FDW, stmt);
         }
+        if stmt.objectType == ObjectType::OBJECT_PUBLICATION {
+            return self.alter_publication_owner(stmt);
+        }
         if super::tsearch::is_ts_kind(stmt.objectType) {
             return self.alter_ts_owner(stmt);
         }

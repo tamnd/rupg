@@ -1328,6 +1328,8 @@ impl Connection {
                     Node::AlterFdwStmt(_) => CommandTag::AlterForeignDataWrapper,
                     Node::CreateForeignServerStmt(_) => CommandTag::CreateServer,
                     Node::AlterForeignServerStmt(_) => CommandTag::AlterServer,
+                    Node::CreatePublicationStmt(_) => CommandTag::CreatePublication,
+                    Node::AlterPublicationStmt(_) => CommandTag::AlterPublication,
                     Node::CreateUserMappingStmt(_) => CommandTag::CreateUserMapping,
                     Node::ImportForeignSchemaStmt(_) => CommandTag::ImportForeignSchema,
                     Node::AlterUserMappingStmt(_) => CommandTag::AlterUserMapping,
@@ -2450,6 +2452,7 @@ fn alter_tag(kind: ObjectType) -> CommandTag {
         ObjectType::OBJECT_TSCONFIGURATION => CommandTag::AlterTextSearchConfiguration,
         ObjectType::OBJECT_FDW => CommandTag::AlterForeignDataWrapper,
         ObjectType::OBJECT_FOREIGN_SERVER => CommandTag::AlterServer,
+        ObjectType::OBJECT_PUBLICATION => CommandTag::AlterPublication,
         _ => CommandTag::AlterTable,
     }
 }
@@ -4225,6 +4228,13 @@ mod tests {
     #[test]
     fn foreign_partition() {
         big_stack(|| script(include_str!("connection/foreign_partition.test")));
+    }
+
+    /// `CREATE`, `ALTER`, `COMMENT` and `DROP PUBLICATION`, with the errors for options, `WHERE` clauses and column lists, and the publication catalogs, views and partition tree functions. `connection/publication.test` is the output of PostgreSQL 19
+    /// for the same script in a new database.
+    #[test]
+    fn publication() {
+        big_stack(|| script(include_str!("connection/publication.test")));
     }
 
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.

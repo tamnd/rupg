@@ -1,11 +1,11 @@
-//! The functions of the views of the parts of the server that rupg does not have: asynchronous I/O, the registry of dynamic shared memory, the NUMA nodes, the replication origins, recovery, the publications, the cursors of `DECLARE`, the lists of the most common values of the extended statistics, the extensions other than `plpgsql`, the configuration file and the install tree of a C build.
+//! The functions of the views of the parts of the server that rupg does not have: asynchronous I/O, the registry of dynamic shared memory, the NUMA nodes, the replication origins, recovery, the cursors of `DECLARE`, the lists of the most common values of the extended statistics, the extensions other than `plpgsql`, the configuration file and the install tree of a C build.
 //!
-//! These functions give what PostgreSQL gives on a primary server with none of these objects and with no contrib modules: no rows, the row of `plpgsql` for the extensions, one row of nulls for `pg_stat_get_recovery`, and the error of a build with no NUMA support for `pg_get_shmem_allocations_numa`. A publication name is always unknown, because rupg has no publications. `pg_config` gives its 23 names, with `not recorded` for each value that rupg does not have.
+//! These functions give what PostgreSQL gives on a primary server with none of these objects and with no contrib modules: no rows, the row of `plpgsql` for the extensions, one row of nulls for `pg_stat_get_recovery`, and the error of a build with no NUMA support for `pg_get_shmem_allocations_numa`. `pg_config` gives its 23 names, with `not recorded` for each value that rupg does not have.
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_types::Value;
 
-use crate::{Call, bad_value};
+use crate::Call;
 
 /// The 9 columns of `pg_stat_get_recovery`.
 const RECOVERY_COLUMNS: usize = 9;
@@ -104,37 +104,4 @@ pub(crate) fn shmem_numa(_: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
 /// `pg_mcv_list_items`: rupg has no extended statistics, so no `pg_mcv_list` value exists. The function is strict, so a null list gives no rows with no call.
 pub(crate) fn mcv_list_items(_: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
     Err(Error::internal("pg_mcv_list_items got a value, but no pg_mcv_list value can exist"))
-}
-
-/// The error of `GetPublicationByName` for a name that is not a publication.
-fn no_publication(name: &str) -> Error {
-    Error::new(SqlState::UNDEFINED_OBJECT, format!("publication \"{name}\" does not exist"))
-}
-
-/// `pg_get_publication_tables` with the `VARIADIC` array of names: the error for the first name, as no publication exists. An empty array gives no rows, and a null element is an error.
-pub(crate) fn publication_tables(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
-    let names: Vec<Option<&Value>> = match args {
-        [Value::Array(array)] => array.values.iter().map(Option::as_ref).collect(),
-        _ => args.iter().map(Some).collect(),
-    };
-    match names.first() {
-        None => Ok(Vec::new()),
-        Some(Some(Value::Text(name))) => Err(no_publication(name)),
-        Some(Some(_)) => Err(bad_value()),
-        Some(None) => Err(Error::new(
-            SqlState::NULL_VALUE_NOT_ALLOWED,
-            "null array element not allowed in this context",
-        )),
-    }
-}
-
-/// `pg_get_publication_tables` with a table: no rows, as no publication that the array names exists and this form skips the names that are not publications.
-pub(crate) fn publication_tables_of(_: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
-    Ok(Vec::new())
-}
-
-/// `pg_get_publication_sequences`: the error for the name, as no publication exists.
-pub(crate) fn publication_sequences(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
-    let Some(Value::Text(name)) = args.first() else { return Err(bad_value()) };
-    Err(no_publication(name))
 }

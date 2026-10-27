@@ -142,6 +142,12 @@ fn type_description(object: ObjRef, session: &dyn Session) -> Result<String> {
             }
             None => "constraint",
         },
+        rupg_catalog::PG_PUBLICATION_REL => {
+            match session.catalog().and_then(|c| c.publication_rel(object.oid)) {
+                Some(row) if row.except => "publication excluded relation",
+                _ => "publication relation",
+            }
+        }
         PG_CONVERSION => "conversion",
         PG_ATTRDEF => "default value",
         PG_LANGUAGE => "language",
@@ -312,6 +318,25 @@ fn parts(object: ObjRef, session: &dyn Session) -> Option<Parts> {
             .map(Parts::named),
         rupg_catalog::PG_FOREIGN_DATA_WRAPPER => catalog?.fdw(oid).map(|f| Parts::named(&f.name)),
         rupg_catalog::PG_FOREIGN_SERVER => catalog?.server(oid).map(|s| Parts::named(&s.name)),
+        rupg_catalog::PG_PUBLICATION => catalog?.publication(oid).map(|p| Parts::named(&p.name)),
+        rupg_catalog::PG_PUBLICATION_REL => {
+            let row = catalog?.publication_rel(oid)?;
+            let publication = catalog?.publication(row.publication)?;
+            let (relation, names) = relation_parts(row.relation, session)?;
+            let word = if row.except { "excluded from" } else { "in" };
+            let identity = format!("{relation} {word} publication {}", publication.name);
+            Some(Parts::identity(identity).with(names, vec![publication.name.clone()]))
+        }
+        rupg_catalog::PG_PUBLICATION_NAMESPACE => {
+            let row = catalog?.publication_namespace(oid)?;
+            let publication = catalog?.publication(row.publication)?;
+            let schema = reg::namespace_name(row.schema, session)?;
+            let identity = format!("{schema} in publication {}", publication.name);
+            Some(
+                Parts::identity(identity)
+                    .with(vec![schema.to_string()], vec![publication.name.clone()]),
+            )
+        }
         rupg_catalog::PG_USER_MAPPING => {
             let mapping = catalog?.user_mapping(oid)?;
             let server = catalog?.server(mapping.server)?;

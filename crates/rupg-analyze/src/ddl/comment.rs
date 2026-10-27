@@ -88,6 +88,7 @@ impl Definer<'_, '_> {
             ObjectType::OBJECT_CONVERSION => self.comment_conversion(object)?,
             ObjectType::OBJECT_FDW => self.comment_foreign(true, object)?,
             ObjectType::OBJECT_FOREIGN_SERVER => self.comment_foreign(false, object)?,
+            ObjectType::OBJECT_PUBLICATION => self.comment_publication(object)?,
             ObjectType::OBJECT_FUNCTION
             | ObjectType::OBJECT_PROCEDURE
             | ObjectType::OBJECT_ROUTINE
