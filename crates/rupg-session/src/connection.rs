@@ -3862,6 +3862,13 @@ mod tests {
         big_stack(|| script(include_str!("connection/inline_from.test")));
     }
 
+    /// A call of a window function with a subquery in its arguments gets no run condition, as `contain_subplans` in `find_window_run_conditions` says, but a subquery that came from a column of a subquery of the subquery does, because the planner merges that subquery later.
+    /// `connection/run_condition_sublink.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn run_condition_sublink() {
+        big_stack(|| script(include_str!("connection/run_condition_sublink.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

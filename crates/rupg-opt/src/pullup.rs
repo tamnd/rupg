@@ -1084,6 +1084,12 @@ fn merge(query: &mut Query, r: usize, top: bool) {
                     new = Expr::new(ExprKind::PlaceHolder(Box::new(p)), ty);
                     new.typmod = typmod;
                 }
+                new.each_mut(0, &mut |e, _| {
+                    if let ExprKind::SubLink(link) = &mut e.kind {
+                        link.pulled = true;
+                    }
+                    false
+                });
                 new.raise(depth);
                 *e = new;
                 return true;

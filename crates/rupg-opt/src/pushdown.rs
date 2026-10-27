@@ -195,7 +195,9 @@ fn window_run_condition(
     wfunc_left: bool,
 ) -> Option<(usize, Expr, bool)> {
     let ExprKind::Func(op) = &part.kind else { return None };
-    if call.find(0, &mut |e, _| matches!(e.kind, ExprKind::SubLink(_)).then_some(())).is_some() {
+    // `contain_subplans`: a link that came from a subquery of the subquery is still a column there.
+    let mut link = |e: &Expr, _| matches!(&e.kind, ExprKind::SubLink(l) if !l.pulled).then_some(());
+    if call.find(0, &mut link).is_some() {
         return None;
     }
     // `is_pseudo_constant_clause`: the other side reads no column and calls no volatile function.

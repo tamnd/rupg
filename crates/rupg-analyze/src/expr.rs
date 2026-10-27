@@ -170,6 +170,8 @@ pub struct SubLink {
     pub alternative: Option<Box<SubLink>>,
     /// True when the test called a volatile function before the fold. `pull_up_sublinks` runs before `preprocess_expression`, so a test with a call of a volatile SQL function that the fold puts in the query does not make a join.
     pub volatile: bool,
+    /// True when the link came into the query from a subquery of `FROM` that merged into it. `find_window_run_conditions` runs before the planner merges the subqueries of a subquery, so it sees such a link as a column of the subquery.
+    pub pulled: bool,
 }
 
 /// The comparison of two rows with an ordering operator, as `RowCompareExpr`.
