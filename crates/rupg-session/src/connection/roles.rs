@@ -172,8 +172,9 @@ enum Recurse {
     Privs,
 }
 
-/// `roles_is_member_of`: the roles that `role` is a member of, directly or indirectly, with `role` first, and the first role of the walk that has the admin option on `admin_of`. As in `rupg-func`, the bootstrap superuser owns each database, so it is a member of `pg_database_owner`.
+/// `roles_is_member_of`: the roles that `role` is a member of, directly or indirectly, with `role` first, and the first role of the walk that has the admin option on `admin_of`. As in `rupg-func`, the owner of the current database is a member of `pg_database_owner`.
 fn member_of(roles: &Roles, role: u32, how: Recurse, admin_of: u32) -> (Vec<u32>, Option<u32>) {
+    let owner = roles.database_owner();
     let mut reached = vec![role];
     let mut admin = None;
     let mut at = 0;
@@ -190,7 +191,7 @@ fn member_of(roles: &Roles, role: u32, how: Recurse, admin_of: u32) -> (Vec<u32>
                 reached.push(edge.role);
             }
         }
-        if member == BOOTSTRAP_SUPERUSER && !reached.contains(&PG_DATABASE_OWNER) {
+        if member == owner && !reached.contains(&PG_DATABASE_OWNER) {
             reached.push(PG_DATABASE_OWNER);
         }
     }
@@ -198,7 +199,7 @@ fn member_of(roles: &Roles, role: u32, how: Recurse, admin_of: u32) -> (Vec<u32>
 }
 
 /// `has_privs_of_role`.
-fn has_privs_of_role(roles: &Roles, member: u32, role: u32) -> bool {
+pub(super) fn has_privs_of_role(roles: &Roles, member: u32, role: u32) -> bool {
     member == role
         || roles.superuser(member)
         || member_of(roles, member, Recurse::Privs, 0).0.contains(&role)
@@ -298,7 +299,7 @@ fn role_oid(roles: &Roles, name: &str) -> Result<u32, Error> {
 }
 
 /// The name of a role. A role that does not exist has its OID as its name.
-fn role_name(roles: &Roles, oid: u32) -> String {
+pub(super) fn role_name(roles: &Roles, oid: u32) -> String {
     roles.name(oid).map_or_else(|| oid.to_string(), str::to_owned)
 }
 
@@ -409,7 +410,7 @@ impl Connection {
     }
 
     /// `get_rolespec_oid`.
-    fn spec_oid(&self, roles: &Roles, spec: &RoleSpec) -> Result<u32, Error> {
+    pub(super) fn spec_oid(&self, roles: &Roles, spec: &RoleSpec) -> Result<u32, Error> {
         match spec.roletype {
             RoleSpecType::ROLESPEC_CSTRING => {
                 role_oid(roles, spec.rolename.as_deref().unwrap_or_default())

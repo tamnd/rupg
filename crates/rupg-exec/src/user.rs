@@ -4,9 +4,9 @@
 
 use rupg_analyze::node;
 use rupg_catalog::{
-    BaseType, Catalog, ConKind, Constraint, Function, ObjRef, PG_CLASS, PG_FOREIGN_DATA_WRAPPER,
-    PG_FOREIGN_SERVER, PG_LANGUAGE, PG_LARGEOBJECT, PG_NAMESPACE, PG_PROC, PG_TYPE, PartitionBound,
-    RangePart, RelKind, Relation, Type,
+    BaseType, Catalog, ConKind, Constraint, FIRST_NORMAL_OID, Function, ObjRef, PG_CLASS,
+    PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_LANGUAGE, PG_LARGEOBJECT, PG_NAMESPACE, PG_PROC,
+    PG_TYPE, PartitionBound, RangePart, RelKind, Relation, Type,
 };
 use rupg_common::{Error, Result};
 use rupg_func::Session;
@@ -157,7 +157,7 @@ pub(crate) fn grant_static(
     Ok(())
 }
 
-/// Takes out the static rows of the objects of `initdb` that `DROP` removed: the row of `pg_namespace`, and the rows of `pg_description` and `pg_init_privs` for the object.
+/// Takes out the static rows of the objects of `initdb` that `DROP` removed: the row of `pg_namespace`, and the rows of `pg_description` and `pg_init_privs` for the object. A static row of `pg_database` also goes when `ALTER DATABASE` changed the database, because the rows of the store have the new row.
 ///
 /// # Errors
 ///
@@ -168,6 +168,21 @@ pub(crate) fn drop_static(
     catalog: &Catalog,
     session: &dyn Session,
 ) -> Result<()> {
+    if table.name == "pg_database" {
+        let changed = session.databases();
+        if changed.iter().any(|d| d.oid < FIRST_NORMAL_OID) {
+            let mut kept = Vec::with_capacity(rows.len());
+            for (row, values) in std::mem::take(rows).into_iter().enumerate() {
+                let replaced = row < table.len
+                    && matches!(cell(table, row, "oid", session)?, Value::Oid(oid) if changed.iter().any(|d| d.oid == oid));
+                if !replaced {
+                    kept.push(values);
+                }
+            }
+            *rows = kept;
+        }
+        return Ok(());
+    }
     let (oid, class) = match table.name {
         "pg_namespace" => ("oid", None),
         "pg_description" | "pg_init_privs" => ("objoid", Some("classoid")),
@@ -291,9 +306,8 @@ fn init_privs<'a>(
     catalog: &Catalog,
     session: &dyn Session,
 ) -> Result<Vec<Row<'a>>> {
-    let limit = catalog
-        .schema_by_name("information_schema")
-        .map_or(rupg_catalog::FIRST_NORMAL_OID, |schema| schema.oid);
+    let limit =
+        catalog.schema_by_name("information_schema").map_or(FIRST_NORMAL_OID, |schema| schema.oid);
     let mut rows = Vec::new();
     let mut add = |object: u32, class: u32, sub: i32, acl: Value| {
         // `DROP` of a built-in object, for example `DROP SCHEMA public`, also removes its rows from `pg_init_privs`.

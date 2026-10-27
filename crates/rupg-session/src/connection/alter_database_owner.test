@@ -1,0 +1,164 @@
+> CREATE ROLE regress_ado_a
+CREATE ROLE
+> CREATE ROLE regress_ado_b CREATEDB
+CREATE ROLE
+> CREATE ROLE regress_ado_c
+CREATE ROLE
+> GRANT regress_ado_a TO regress_ado_b
+GRANT ROLE
+> CREATE DATABASE regress_ado_db
+CREATE DATABASE
+> SELECT datdba::regrole, datacl FROM pg_database WHERE datname = 'regress_ado_db'
+fields datdba:4096:4:-1,datacl@pg_database.18:1034:-1:-1
+row postgres,NULL
+SELECT 1
+> ALTER DATABASE regress_ado_nope OWNER TO regress_ado_a
+ERROR 3D000 database "regress_ado_nope" does not exist
+> ALTER DATABASE regress_ado_db OWNER TO regress_ado_nope
+ERROR 42704 role "regress_ado_nope" does not exist
+> ALTER DATABASE regress_ado_db OWNER TO regress_ado_a
+ALTER DATABASE
+> SELECT datdba::regrole, datacl FROM pg_database WHERE datname = 'regress_ado_db'
+fields datdba:4096:4:-1,datacl@pg_database.18:1034:-1:-1
+row regress_ado_a,NULL
+SELECT 1
+> BEGIN
+BEGIN
+> ALTER DATABASE regress_ado_db OWNER TO regress_ado_c
+ALTER DATABASE
+> SELECT datdba::regrole FROM pg_database WHERE datname = 'regress_ado_db'
+fields datdba:4096:4:-1
+row regress_ado_c
+SELECT 1
+> SAVEPOINT s
+SAVEPOINT
+> ALTER DATABASE regress_ado_db OWNER TO regress_ado_b
+ALTER DATABASE
+> SELECT datdba::regrole FROM pg_database WHERE datname = 'regress_ado_db'
+fields datdba:4096:4:-1
+row regress_ado_b
+SELECT 1
+> ROLLBACK TO s
+ROLLBACK
+> SELECT datdba::regrole FROM pg_database WHERE datname = 'regress_ado_db'
+fields datdba:4096:4:-1
+row regress_ado_c
+SELECT 1
+> ROLLBACK
+ROLLBACK
+> SELECT datdba::regrole FROM pg_database WHERE datname = 'regress_ado_db'
+fields datdba:4096:4:-1
+row regress_ado_a
+SELECT 1
+> SET ROLE regress_ado_c
+SET
+is_superuser=off
+> ALTER DATABASE regress_ado_db OWNER TO regress_ado_c
+ERROR 42501 must be owner of database regress_ado_db
+> RESET ROLE
+RESET
+is_superuser=on
+> SET ROLE regress_ado_a
+SET
+is_superuser=off
+> ALTER DATABASE regress_ado_db OWNER TO regress_ado_c
+ERROR 42501 must be able to SET ROLE "regress_ado_c"
+> ALTER DATABASE regress_ado_db OWNER TO regress_ado_a
+ALTER DATABASE
+> RESET ROLE
+RESET
+is_superuser=on
+> SET ROLE regress_ado_b
+SET
+is_superuser=off
+> ALTER DATABASE regress_ado_db OWNER TO regress_ado_c
+ERROR 42501 must be able to SET ROLE "regress_ado_c"
+> ALTER DATABASE regress_ado_db OWNER TO regress_ado_b
+ALTER DATABASE
+> SELECT datdba::regrole FROM pg_database WHERE datname = 'regress_ado_db'
+fields datdba:4096:4:-1
+row regress_ado_b
+SELECT 1
+> RESET ROLE
+RESET
+is_superuser=on
+> ALTER DATABASE regress_ado_db OWNER TO regress_ado_a
+ALTER DATABASE
+> SELECT datdba::regrole, datacl FROM pg_database WHERE datname = 'regress_ado_db'
+fields datdba:4096:4:-1,datacl@pg_database.18:1034:-1:-1
+row regress_ado_a,NULL
+SELECT 1
+> SELECT has_database_privilege('regress_ado_a', 'regress_ado_db', 'CREATE'), has_database_privilege('regress_ado_b', 'regress_ado_db', 'CREATE')
+fields has_database_privilege:16:1:-1,has_database_privilege:16:1:-1
+row t,t
+SELECT 1
+> BEGIN
+BEGIN
+> ALTER DATABASE postgres OWNER TO regress_ado_a
+ALTER DATABASE
+> SELECT datname, datdba::regrole FROM pg_database WHERE datname IN ('postgres', 'template1') ORDER BY 1
+fields datname@pg_database.2:19:64:-1,datdba:4096:4:-1
+row postgres,regress_ado_a
+row template1,postgres
+SELECT 2
+> SELECT has_database_privilege('regress_ado_a', 'postgres', 'CREATE')
+fields has_database_privilege:16:1:-1
+row t
+SELECT 1
+> ALTER DATABASE template1 OWNER TO regress_ado_b
+ALTER DATABASE
+> SELECT datname, datdba::regrole, datacl FROM pg_database WHERE datname IN ('postgres', 'template1') ORDER BY 1
+fields datname@pg_database.2:19:64:-1,datdba:4096:4:-1,datacl@pg_database.18:1034:-1:-1
+row postgres,regress_ado_a,NULL
+row template1,regress_ado_b,{=c/regress_ado_b,regress_ado_b=CTc/regress_ado_b}
+SELECT 2
+> SELECT has_database_privilege('regress_ado_b', 'template1', 'CREATE WITH GRANT OPTION'), has_database_privilege('regress_ado_c', 'template1', 'CONNECT'), has_database_privilege('regress_ado_c', 'template1', 'CREATE')
+fields has_database_privilege:16:1:-1,has_database_privilege:16:1:-1,has_database_privilege:16:1:-1
+row t,t,f
+SELECT 1
+> ROLLBACK
+ROLLBACK
+> SELECT datname, datdba::regrole, datacl FROM pg_database WHERE datname IN ('postgres', 'template1') ORDER BY 1
+fields datname@pg_database.2:19:64:-1,datdba:4096:4:-1,datacl@pg_database.18:1034:-1:-1
+row postgres,postgres,NULL
+row template1,postgres,{=c/postgres,postgres=CTc/postgres}
+SELECT 2
+> SELECT datname, datdba::regrole FROM pg_database WHERE datname IN ('postgres', 'template1') ORDER BY 1
+fields datname@pg_database.2:19:64:-1,datdba:4096:4:-1
+row postgres,postgres
+row template1,postgres
+SELECT 2
+> BEGIN
+BEGIN
+> DO $$BEGIN EXECUTE format('ALTER DATABASE %I OWNER TO regress_ado_a', current_catalog); END$$
+DO
+> SELECT pg_has_role('regress_ado_a', 'pg_database_owner', 'USAGE'), pg_has_role('regress_ado_b', 'pg_database_owner', 'MEMBER'), pg_has_role('regress_ado_c', 'pg_database_owner', 'MEMBER')
+fields pg_has_role:16:1:-1,pg_has_role:16:1:-1,pg_has_role:16:1:-1
+row t,t,f
+SELECT 1
+> SET ROLE regress_ado_b
+SET
+is_superuser=off
+> SELECT role_name FROM information_schema.enabled_roles ORDER BY role_name COLLATE "C"
+fields role_name@information_schema.enabled_roles.1:19:64:-1
+row pg_database_owner
+row regress_ado_a
+row regress_ado_b
+SELECT 3
+> ROLLBACK
+ROLLBACK
+is_superuser=on
+> SELECT pg_has_role('regress_ado_a', 'pg_database_owner', 'USAGE')
+fields pg_has_role:16:1:-1
+row f
+SELECT 1
+> ALTER DATABASE regress_ado_db OWNER TO CURRENT_USER
+ALTER DATABASE
+> SELECT datdba::regrole FROM pg_database WHERE datname = 'regress_ado_db'
+fields datdba:4096:4:-1
+row postgres
+SELECT 1
+> DROP DATABASE regress_ado_db
+DROP DATABASE
+> DROP ROLE regress_ado_a, regress_ado_b, regress_ado_c
+DROP ROLE

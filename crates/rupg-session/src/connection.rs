@@ -619,6 +619,8 @@ impl Connection {
     /// A reader that does not see the rows of the tables, for the expressions of an index: they are `IMMUTABLE` and run while the heap is locked, so they must not take a snapshot.
     fn reader_without_view(&self, catalog: Arc<Catalog>) -> Reader<'_> {
         rupg_pgcatalog::roles::use_roles(self.roles());
+        let owner = self.store.database_owner(self.database_oid);
+        rupg_pgcatalog::roles::use_database(self.database_oid, owner);
         Reader::new(
             &self.settings,
             &self.current_user,
@@ -1285,6 +1287,11 @@ impl Connection {
         }
         // A change of the catalog writes rows of the catalog, so the transaction gets an ID.
         self.transaction_id(true);
+        if let Node::AlterOwnerStmt(stmt) = node
+            && stmt.objectType == ObjectType::OBJECT_DATABASE
+        {
+            return self.alter_database_owner(stmt, role);
+        }
         let mut work = Catalog::clone(&self.catalog());
         let mut defined = rupg_analyze::define(node, text, &self.reader(), &mut work, role);
         if let Some(top) = &defined.top_level
@@ -5931,6 +5938,12 @@ mod tests {
     #[test]
     fn alter_database_set() {
         big_stack(|| script(include_str!("connection/alter_database_set.test")));
+    }
+
+    /// `ALTER DATABASE ... OWNER TO`: the errors, the checks of the owner, of `SET ROLE` and of `CREATEDB`, `datacl` with the new owner, a rollback and a savepoint, a database of `initdb`, and `pg_database_owner` for the new owner. `connection/alter_database_owner.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn alter_database_owner() {
+        big_stack(|| script(include_str!("connection/alter_database_owner.test")));
     }
 
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.

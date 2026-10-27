@@ -1,6 +1,6 @@
 //! The roles that `CREATE ROLE` made and the memberships that `GRANT` made, with the lookups that see them together with the roles of `initdb`. The store of the server keeps them, and a session gives them to the thread of a statement with [`use_roles`], as it gives its types with [`crate::builtin::use_session_types`].
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
 use crate::builtin::{self, MemberRow};
@@ -73,16 +73,32 @@ pub struct Member {
     pub set: bool,
 }
 
-/// The roles and the memberships that the statements made, in the order that they were made.
+/// A row of `pg_database` that `ALTER DATABASE ... OWNER TO` changed in a transaction: `datdba`, and `datacl` with the new owner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DatabaseChange {
+    pub oid: u32,
+    pub owner: u32,
+    pub acl: Option<Vec<String>>,
+}
+
+/// The roles and the memberships that the statements made, in the order that they were made, and the rows of `pg_database` that the transaction changed. The commit of the transaction moves the changes of the rows to the store, so the roles of a commit have no changes of rows.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Roles {
     pub roles: Vec<Role>,
     pub members: Vec<Member>,
+    pub databases: Vec<DatabaseChange>,
 }
 
 thread_local! {
     /// A session runs each statement on one thread, so the roles that the statement sees are the roles of the thread.
     static CURRENT: RefCell<Arc<Roles>> = RefCell::new(Arc::default());
+    /// The OID of the database of the session of the thread and its owner at the last commit. A thread with no session has the owner of the databases of `initdb`.
+    static DATABASE: Cell<(u32, u32)> = const { Cell::new((0, BOOTSTRAP_SUPERUSER)) };
+}
+
+/// Gives the database of the session and its owner at the last commit to the thread, for [`Roles::database_owner`].
+pub fn use_database(oid: u32, owner: u32) {
+    DATABASE.set((oid, owner));
 }
 
 /// Gives the roles that a session sees to the thread, for [`current`].
@@ -96,6 +112,12 @@ pub fn current() -> Arc<Roles> {
 }
 
 impl Roles {
+    /// `datdba` of the database of the session: the owner that the transaction gave it, or its owner at the last commit. This role is a member of `pg_database_owner`.
+    pub fn database_owner(&self) -> u32 {
+        let (oid, owner) = DATABASE.get();
+        self.databases.iter().find(|d| d.oid == oid).map_or(owner, |d| d.owner)
+    }
+
     /// The role that `CREATE ROLE` made with this OID.
     pub fn created(&self, oid: u32) -> Option<&Role> {
         self.roles.iter().find(|r| r.oid == oid)
@@ -141,11 +163,12 @@ impl Roles {
         }))
     }
 
-    /// `member_can_set_role`: a superuser can become any role, and another role can become a role that it reaches through memberships with `set_option`. The bootstrap superuser owns each database, so it is a member of `pg_database_owner`.
+    /// `member_can_set_role`: a superuser can become any role, and another role can become a role that it reaches through memberships with `set_option`. The owner of the database of the session is a member of `pg_database_owner`.
     pub fn can_set_role(&self, member: u32, role: u32) -> bool {
         if self.superuser(member) {
             return true;
         }
+        let owner = self.database_owner();
         let mut reached = vec![member];
         let mut at = 0;
         while let Some(&next) = reached.get(at) {
@@ -155,15 +178,16 @@ impl Roles {
                     reached.push(edge.role);
                 }
             }
-            if next == BOOTSTRAP_SUPERUSER && !reached.contains(&PG_DATABASE_OWNER) {
+            if next == owner && !reached.contains(&PG_DATABASE_OWNER) {
                 reached.push(PG_DATABASE_OWNER);
             }
         }
         reached.contains(&role)
     }
 
-    /// `roles_is_member_of` with `ROLERECURSE_PRIVS`: `role` and the roles that it reaches through memberships with `inherit_option`, in the order of the walk. The bootstrap superuser owns each database, so it reaches `pg_database_owner`.
+    /// `roles_is_member_of` with `ROLERECURSE_PRIVS`: `role` and the roles that it reaches through memberships with `inherit_option`, in the order of the walk. The owner of the database of the session reaches `pg_database_owner`.
     pub fn privs_of(&self, role: u32) -> Vec<u32> {
+        let owner = self.database_owner();
         let mut reached = vec![role];
         let mut at = 0;
         while let Some(&next) = reached.get(at) {
@@ -173,7 +197,7 @@ impl Roles {
                     reached.push(edge.role);
                 }
             }
-            if next == BOOTSTRAP_SUPERUSER && !reached.contains(&PG_DATABASE_OWNER) {
+            if next == owner && !reached.contains(&PG_DATABASE_OWNER) {
                 reached.push(PG_DATABASE_OWNER);
             }
         }

@@ -215,9 +215,10 @@ enum Recurse {
     SetRole,
 }
 
-/// `roles_is_member_of`: the roles that `role` is a member of, directly or indirectly, with `role` first. The owner of the current database is a member of `pg_database_owner`, and `initdb` makes the bootstrap superuser the owner of each database. The second value is true when a role of the walk has the admin option on `admin_of`.
+/// `roles_is_member_of`: the roles that `role` is a member of, directly or indirectly, with `role` first. The owner of the current database is a member of `pg_database_owner`. The second value is true when a role of the walk has the admin option on `admin_of`.
 fn roles_of(role: u32, how: Recurse, admin_of: Option<u32>) -> (Vec<u32>, bool) {
     let created = rupg_pgcatalog::roles::current();
+    let owner = created.database_owner();
     let mut roles = vec![role];
     let mut admin = false;
     let mut at = 0;
@@ -234,7 +235,7 @@ fn roles_of(role: u32, how: Recurse, admin_of: Option<u32>) -> (Vec<u32>, bool) 
                 roles.push(edge.role);
             }
         }
-        if member == BOOTSTRAP_SUPERUSER && !roles.contains(&PG_DATABASE_OWNER) {
+        if member == owner && !roles.contains(&PG_DATABASE_OWNER) {
             roles.push(PG_DATABASE_OWNER);
         }
     }
@@ -638,13 +639,15 @@ fn column_check(relid: u32, attnum: i16, role: u32, mask: u32, session: &dyn Ses
     class_check(relid, role, mask, session)
 }
 
-/// The privileges and the owner of a database: a static row, or a database that `CREATE DATABASE` made.
+/// The privileges and the owner of a database: a database that `CREATE DATABASE` made or that a statement changed, or a static row.
 fn database_acl(oid: u32, session: &dyn Session) -> Result<Option<Privileges>> {
-    if let Some(row) = builtin::owned_by_oid(Owned::Database, oid) {
-        return Ok(Some((acl_of(row.acl, AclKind::Database, row.owner)?, row.owner)));
-    }
     let created = session.databases();
-    let Some(database) = created.iter().find(|d| d.oid == oid) else { return Ok(None) };
+    let Some(database) = created.iter().find(|d| d.oid == oid) else {
+        return match builtin::owned_by_oid(Owned::Database, oid) {
+            Some(row) => Ok(Some((acl_of(row.acl, AclKind::Database, row.owner)?, row.owner))),
+            None => Ok(None),
+        };
+    };
     let acl = match &database.acl {
         Some(items) => parse_acl(&items.iter().map(String::as_str).collect::<Vec<_>>())?,
         None => acl_default(AclKind::Database, database.owner),
@@ -1712,9 +1715,11 @@ fn pg_get_acl(call: &Call<'_>, args: &[Value]) -> Result<Value> {
         PG_TYPE => owned(Owned::Type),
         PG_PROC => owned(Owned::Function),
         PG_LANGUAGE => owned(Owned::Language),
-        PG_DATABASE => match builtin::owned_by_oid(Owned::Database, oid) {
-            Some(row) => row.acl.map(|acl| acl.iter().map(|s| (*s).to_string()).collect()),
-            None => session.databases().iter().find(|d| d.oid == oid).and_then(|d| d.acl.clone()),
+        PG_DATABASE => match session.databases().iter().find(|d| d.oid == oid) {
+            Some(database) => database.acl.clone(),
+            None => builtin::owned_by_oid(Owned::Database, oid)
+                .and_then(|row| row.acl)
+                .map(|acl| acl.iter().map(|s| (*s).to_string()).collect()),
         },
         PG_TABLESPACE => match builtin::owned_by_oid(Owned::Tablespace, oid) {
             Some(row) => row.acl.map(|acl| acl.iter().map(|s| (*s).to_string()).collect()),

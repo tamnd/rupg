@@ -71,7 +71,7 @@ impl Connection {
         }
         let roles = self.roles();
         let role = self.current_role();
-        let owner = self.store.database(&self.database).map(|row| row.owner);
+        let owner = self.database_row(&self.database).map(|row| row.owner);
         if !owner.is_some_and(|owner| roles.has_privs_of_role(role, owner))
             && !roles.has_privs_of_role(role, PG_MAINTAIN)
         {
