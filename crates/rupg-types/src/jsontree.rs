@@ -433,6 +433,17 @@ impl<'a> JsonTree<'a> {
         match self.item(at) {
             JsonItem::Object(fields) => self.set_object(fields, step, path, level, new, op, out),
             JsonItem::Array(items) => self.set_array(items, step, path, level, new, op, out),
+            _ if op == PathOp::Subscript => {
+                let mut error = TypeError::new(
+                    SqlState::INVALID_PARAMETER_VALUE,
+                    "cannot replace existing key".to_string(),
+                );
+                error.detail = Some(
+                    "The path assumes key is a composite object, but it is a scalar value."
+                        .to_string(),
+                );
+                Err(error)
+            }
             _ => {
                 out.push_str(self.text(at));
                 Ok(())
@@ -483,11 +494,15 @@ impl<'a> JsonTree<'a> {
             }
             put_field(out, &mut first, name, self.text(*value));
         }
+        if !done && op == PathOp::Subscript && !last {
+            put_key(out, &mut first, step);
+            push_path(path, level, new, out);
+        }
         out.push('}');
         Ok(())
     }
 
-    /// `setPathArray`. An index before the first element puts a new element at the start.
+    /// `setPathArray`. An index before the first element puts a new element at the start, except for [`PathOp::Subscript`], which puts nulls before an index after the last element.
     #[allow(clippy::too_many_arguments)]
     fn set_array(
         &self,
@@ -510,18 +525,29 @@ impl<'a> JsonTree<'a> {
         // True for the index `INT_MIN` of `setPathArray`, which is before the first element.
         let mut front = false;
         if index < 0 {
-            if -index > count {
+            if -index > count && op == PathOp::Subscript {
+                return Err(TypeError::new(
+                    SqlState::INVALID_PARAMETER_VALUE,
+                    format!("path element at position {} is out of range: {index}", level + 1),
+                ));
+            } else if -index > count {
                 front = true;
             } else {
                 index += count;
             }
         }
-        index = index.min(count);
+        let fill = op == PathOp::Subscript;
+        if !fill {
+            index = index.min(count);
+        }
         let last = level + 1 == path.len();
         let mut first = true;
         let mut done = false;
         out.push('[');
         if (front || items.is_empty()) && last && op.creates() {
+            if fill {
+                put_nulls(out, &mut first, index);
+            }
             put_element(out, &mut first, new);
             done = true;
         }
@@ -536,7 +562,7 @@ impl<'a> JsonTree<'a> {
                 self.set_at(item, path, level + 1, new, op, out)?;
                 continue;
             }
-            if matches!(op, PathOp::InsertBefore | PathOp::Create) {
+            if matches!(op, PathOp::InsertBefore | PathOp::Create | PathOp::Subscript) {
                 put_element(out, &mut first, new);
             }
             if op.inserts() {
@@ -547,7 +573,16 @@ impl<'a> JsonTree<'a> {
             }
         }
         if op.creates() && !done && last {
+            if fill {
+                put_nulls(out, &mut first, index - count);
+            }
             put_element(out, &mut first, new);
+            done = true;
+        }
+        if !done && fill && !last {
+            put_nulls(out, &mut first, index - count);
+            put_element(out, &mut first, "");
+            push_path(path, level, new, out);
         }
         out.push(']');
         Ok(())
@@ -706,12 +741,17 @@ pub enum PathOp {
     InsertBefore,
     /// `jsonb_insert` after the element.
     InsertAfter,
+    /// The assignment to a subscript of a `jsonb` value, as `jsonb_set_element` makes it with `JB_PATH_FILL_GAPS` and `JB_PATH_CONSISTENT_POSITION`: replace or add the part, put nulls before an index after the last element, and make the containers of the path that the value does not have. A scalar on the path is an error.
+    Subscript,
 }
 
 impl PathOp {
     /// `JB_PATH_CREATE_OR_INSERT`.
     fn creates(self) -> bool {
-        matches!(self, PathOp::Create | PathOp::InsertBefore | PathOp::InsertAfter)
+        matches!(
+            self,
+            PathOp::Create | PathOp::InsertBefore | PathOp::InsertAfter | PathOp::Subscript
+        )
     }
 
     fn inserts(self) -> bool {
@@ -747,6 +787,36 @@ fn put_key(out: &mut String, first: &mut bool, name: &str) {
     put_comma(out, first);
     escape(name, out);
     out.push_str(": ");
+}
+
+/// `push_null_elements`: puts `count` null elements. A count below one puts nothing.
+fn put_nulls(out: &mut String, first: &mut bool, count: i64) {
+    for _ in 0..count.max(0) {
+        put_element(out, first, "null");
+    }
+}
+
+/// `push_path`: puts the containers of the steps of `path` after `level` and the new value in the last one. A step that is an integer is an array with that number of nulls before the value, and another step is an object with that key.
+fn push_path(path: &[Option<&str>], level: usize, new: &str, out: &mut String) {
+    let mut ends = Vec::with_capacity(path.len());
+    for step in &path[level + 1..] {
+        let Some(step) = step else { break };
+        let mut first = true;
+        if let Some(count) = json_index(step) {
+            out.push('[');
+            put_nulls(out, &mut first, i64::from(count));
+            put_comma(out, &mut first);
+            ends.push(']');
+        } else {
+            out.push('{');
+            put_key(out, &mut first, step);
+            ends.push('}');
+        }
+    }
+    out.push_str(new);
+    while let Some(end) = ends.pop() {
+        out.push(end);
+    }
 }
 
 /// Puts the separator and a field.

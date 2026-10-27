@@ -108,10 +108,12 @@ pub use io::{
     base_type, input, input_soft, input_supported, is_row_type, output, output_supported, receive,
     send, to_text,
 };
+pub use json::jsonb_subscript_fetch;
 pub use jsonbuild::{
     is_json, json_ctor_array, json_ctor_object, json_ctor_parse, json_ctor_scalar, json_structured,
     json_value,
 };
+pub use jsonedit::jsonb_subscript_assign;
 pub use jsonpath::{PathVar, SqlJsonItem, sql_json_path};
 pub use multirange::range_agg;
 pub use random::Randomness;

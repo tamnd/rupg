@@ -229,6 +229,17 @@ fn set_path(
     finish(&tree.set_path(path, new, op).map_err(type_error)?)
 }
 
+/// `jsonb_subscript_assign` and `jsonb_set_element`: the `jsonb` value with the text `new` at the subscripts `path`.
+///
+/// # Errors
+///
+/// A scalar on the path, a negative index before the first element of an array, and an index that is not an integer where the value has an array.
+pub fn jsonb_subscript_assign(source: &str, path: &[&str], new: &str) -> Result<Value> {
+    let tree = JsonTree::parse(source).map_err(type_error)?;
+    let path: Vec<Option<&str>> = path.iter().copied().map(Some).collect();
+    set_path(&tree, &path, new, JsonPathOp::Subscript)
+}
+
 /// `jsonb_set` with the text of the new value.
 fn set(args: &[Value], new: &str) -> Result<Value> {
     let path = path(args, 1)?;

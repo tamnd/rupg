@@ -274,6 +274,16 @@ fn jsonb_path(tree: &JsonTree<'_>, path: &[&str]) -> Option<usize> {
     Some(node)
 }
 
+/// `jsonb_subscript_fetch`: the part of the `jsonb` value at the subscripts `path`, as `jsonb_get_element` finds it, or null.
+///
+/// # Errors
+///
+/// A value that is not valid `jsonb`.
+pub fn jsonb_subscript_fetch(source: &str, path: &[&str]) -> Result<Value> {
+    let tree = JsonTree::parse(source).map_err(type_error)?;
+    Ok(jsonb_path(&tree, path).map_or(Value::Null, |at| Value::text(tree.text(at))))
+}
+
 /// `jsonb_extract_path` and `jsonb_extract_path_text`.
 fn jsonb_extract(args: &[Value], as_text: bool) -> Result<Value> {
     let Some(path) = path(args, 1)? else { return Ok(Value::Null) };

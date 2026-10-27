@@ -5,14 +5,17 @@ use rupg_sql::nodes::{A_Indices, A_Indirection, Node};
 use rupg_types::{MAXDIM, Value, oid};
 
 use crate::Analyzer;
-use crate::coerce::{AtOpt, Context};
+use crate::coerce::{AtOpt, Context, can_coerce};
 use crate::expr::{Expr, ExprKind, FieldStore, Subscript};
+use crate::sort::raw_location;
 use crate::types;
 
 /// `array_subscript_handler`, the `typsubscript` of a true array type.
 const ARRAY_SUBSCRIPT_HANDLER: u32 = 6179;
 /// `raw_array_subscript_handler`, the `typsubscript` of a type of fixed length that is an array of its elements: `name`, `point`, `lseg`, `box` and `line`.
 const RAW_ARRAY_SUBSCRIPT_HANDLER: u32 = 6180;
+/// `jsonb_subscript_handler`, the `typsubscript` of `jsonb`.
+const JSONB_SUBSCRIPT_HANDLER: u32 = 6098;
 
 impl Analyzer<'_> {
     /// `transformIndirection`: the subscripts and the field selections after an expression. The subscripts before a field apply first. `.*` is not supported here.
@@ -202,6 +205,9 @@ impl Analyzer<'_> {
         let element = match row {
             Some(row) if row.subscript == ARRAY_SUBSCRIPT_HANDLER && row.elem != 0 => row.elem,
             Some(row) if row.subscript == RAW_ARRAY_SUBSCRIPT_HANDLER && row.elem != 0 => row.elem,
+            Some(row) if row.subscript == JSONB_SUBSCRIPT_HANDLER => {
+                return self.jsonb_subscripts(container, subscripts);
+            }
             Some(row) if row.subscript != 0 => {
                 return Err(Error::new(
                     SqlState::FEATURE_NOT_SUPPORTED,
@@ -422,6 +428,60 @@ impl Analyzer<'_> {
             )
             .at_opt(assigning.at)
         })
+    }
+
+    /// `jsonb_subscript_transform`: the subscripts of a `jsonb` value, each one cast to `int4` or to `text` as an implicit cast. A subscript of type `unknown` is `text`. The result is `jsonb`, and a slice is an error.
+    fn jsonb_subscripts(&mut self, container: Expr, subscripts: &[&A_Indices]) -> Result<Expr> {
+        let mut upper = Vec::with_capacity(subscripts.len());
+        for indices in subscripts {
+            if subscripts.iter().any(|s| s.is_slice) || indices.uidx.is_none() {
+                let node = indices.uidx.as_ref().or(indices.lidx.as_ref());
+                return Err(Error::new(
+                    SqlState::DATATYPE_MISMATCH,
+                    "jsonb subscript does not support slices",
+                )
+                .at_opt(raw_location(node)));
+            }
+            let expr = self.transform(indices.uidx.as_ref())?;
+            let at = expr.place();
+            let target = if expr.ty == oid::UNKNOWN {
+                oid::TEXT
+            } else {
+                let mut found = None;
+                for target in [oid::INT4, oid::TEXT] {
+                    if !can_coerce(&[expr.ty], &[target], Context::Implicit) {
+                        continue;
+                    }
+                    if found.is_some() {
+                        return Err(Error::new(
+                            SqlState::DATATYPE_MISMATCH,
+                            format!("subscript type {} is not supported", types::name(expr.ty)),
+                        )
+                        .with_hint(
+                            "jsonb subscript must be coercible to only one type, integer or text.",
+                        )
+                        .at_opt(at));
+                    }
+                    found = Some(target);
+                }
+                found.ok_or_else(|| {
+                    Error::new(
+                        SqlState::DATATYPE_MISMATCH,
+                        format!("subscript type {} is not supported", types::name(expr.ty)),
+                    )
+                    .with_hint("jsonb subscript must be coercible to either integer or text.")
+                    .at_opt(at)
+                })?
+            };
+            upper.push(Some(self.coerce(expr, target, -1, Context::Implicit, None)?));
+        }
+        let kind = ExprKind::Subscript(Box::new(Subscript {
+            container,
+            upper,
+            lower: None,
+            assign: None,
+        }));
+        Ok(Expr { kind, ty: oid::JSONB, typmod: -1, location: None })
     }
 
     /// A subscript, cast to `int4` as an assignment cast.

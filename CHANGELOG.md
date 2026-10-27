@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Subscripts of a `jsonb` value, such as `j['a'][0]`, read and assign a part of the value as PostgreSQL does. An assignment fills the gaps of an array with nulls and makes the objects and the arrays of a path that the value does not have (#953).
 - A composite type has `=` only when each field has `=`, and an order only when each field has an order, as in `cache_record_field_properties`, so `ORDER BY` and `DISTINCT` of such a type give the errors of PostgreSQL when the query is analyzed. `ALTER TABLE ... ADD COLUMN` with a default gives an error when a column of another table holds the row type of the table (#952).
 - `ROW(...) IN (ROW(...), ...)` compares the rows field by field, so fields of different types such as `int` and `bigint` can be compared. A function in SQL reads `arg.*` and `function.arg.*` of a composite argument, and the whole row of a function of a composite type in `FROM` has that type, so it can be the argument of a function of that type (#951).
 - A function of one row argument can be called with the column syntax, as `t.f` for `f(t)`, and a field of a row can be selected with the function syntax, as `a(t)` for `t.a`. A field of an anonymous `ROW(...)` has the name `f1`, `f2` and so on, as in PostgreSQL. The CHANGELOG entry of `COPY ... TO` a file now has the right number (#950).
