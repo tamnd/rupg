@@ -422,7 +422,7 @@ impl Texts for PlanTexts<'_, '_> {
                 if i > 0 {
                     d.buf.push_str(", ");
                 }
-                d.expr(target(item.target)?, false)?;
+                d.expr(target(item.target)?, true)?;
             }
         }
         if !clause.order.is_empty() {
@@ -434,8 +434,8 @@ impl Texts for PlanTexts<'_, '_> {
                 if i > 0 {
                     d.buf.push_str(", ");
                 }
-                // `show_window_keys` shows only the expression of each key, with no direction.
-                d.expr(target(item.target)?, false)?;
+                // `show_window_keys` shows only the expression of each key, with no direction, and with its casts.
+                d.expr(target(item.target)?, true)?;
             }
         }
         let space = !items.is_empty() || !clause.order.is_empty();

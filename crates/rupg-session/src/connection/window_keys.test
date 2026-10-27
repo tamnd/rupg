@@ -1,0 +1,34 @@
+> CREATE TABLE emp (depname varchar, empno int, salary int)
+CREATE TABLE
+> EXPLAIN (COSTS OFF) SELECT rank() OVER (PARTITION BY depname || 'A') FROM emp
+fields QUERY PLAN:25:-1:-1
+row WindowAgg
+row   Window: w1 AS (PARTITION BY (((depname)::text || 'A'::text)) ROWS UNBOUNDED PRECEDING)
+row   ->  Sort
+row         Sort Key: (((depname)::text || 'A'::text))
+row         ->  Seq Scan on emp
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT rank() OVER (ORDER BY salary % 7, empno) FROM emp
+fields QUERY PLAN:25:-1:-1
+row WindowAgg
+row   Window: w1 AS (ORDER BY ((salary % 7)), empno ROWS UNBOUNDED PRECEDING)
+row   ->  Sort
+row         Sort Key: ((salary % 7)), empno
+row         ->  Seq Scan on emp
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT sum(salary) OVER (PARTITION BY depname::text ORDER BY empno + 1) FROM emp
+fields QUERY PLAN:25:-1:-1
+row WindowAgg
+row   Window: w1 AS (PARTITION BY ((depname)::text) ORDER BY ((empno + 1)))
+row   ->  Sort
+row         Sort Key: ((depname)::text), ((empno + 1))
+row         ->  Seq Scan on emp
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT count(*) OVER (PARTITION BY s % 2) FROM generate_series(1, 4) s
+fields QUERY PLAN:25:-1:-1
+row WindowAgg
+row   Window: w1 AS (PARTITION BY ((s % 2)))
+row   ->  Sort
+row         Sort Key: ((s % 2))
+row         ->  Function Scan on generate_series s
+EXPLAIN
