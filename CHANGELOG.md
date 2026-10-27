@@ -16,6 +16,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Fixed
 
+- `SET seed` now seeds the generator of `random`, as `setseed` does, and `SHOW seed` gives `unavailable`, as in PostgreSQL. (#884)
 - Two sequences in two databases no longer share their state when they have the same `relfilenode`. Before, `nextval` of a new sequence could start at the last value of a sequence of another database. (#879)
 
 ## 0.3.2 (2026-10-27)

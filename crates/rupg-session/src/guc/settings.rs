@@ -285,6 +285,8 @@ pub struct Settings {
     subtransaction: bool,
     /// The values that the system gave to the TCP options of the socket of the session, in the order of [`TcpOption::ALL`], with -1 for a value that the system did not give. `None` for a Unix socket and for a session with no socket.
     socket: Option<[i32; 4]>,
+    /// The value of a `SET seed` that `random` did not use yet. `assign_random_seed` calls `setseed` once for each value that a statement sets, and a rollback does not undo the seed.
+    seed: Option<f64>,
 }
 
 impl Settings {
@@ -304,6 +306,7 @@ impl Settings {
             snapshot: false,
             subtransaction: false,
             socket: None,
+            seed: None,
         }
     }
 
@@ -610,6 +613,9 @@ impl Settings {
         match origin {
             Origin::Startup => self.store_reset(parameter, value),
             Origin::Statement => {
+                if let (Setting::Real(seed), "seed") = (&value.setting, parameter.name) {
+                    self.seed = Some(*seed);
+                }
                 self.slot(&key, Some(parameter), parameter.name);
                 self.assign(&key, value, action);
                 // `set_config_with_handle`: a change of `session_authorization` does `SET ROLE NONE`, or `RESET ROLE` for a reset, with the same action, so the two changes end together.
@@ -1001,6 +1007,11 @@ impl Settings {
             .map_or_else(|| parameter.boot(), |slot| slot.current.setting.clone())
     }
 
+    /// Takes the value of the last `SET seed` that `random` did not use yet.
+    pub fn take_seed(&mut self) -> Option<f64> {
+        self.seed.take()
+    }
+
     /// `SHOW name`: the name of the column and the value.
     ///
     /// # Errors
@@ -1078,6 +1089,7 @@ impl Settings {
                 "(disabled)".to_owned()
             }
             "timing_clock_source" if value == "auto" => "auto (system)".to_owned(),
+            "seed" => "unavailable".to_owned(),
             _ => value,
         }
     }

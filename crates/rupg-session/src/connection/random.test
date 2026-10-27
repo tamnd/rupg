@@ -143,3 +143,37 @@ ERROR 22008 timestamp out of range for UUID version 7
 fields pg_typeof:2206:4:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
 row smallint,integer,bigint,numeric,void
 SELECT 1
+> SET seed = 0.5
+SET
+> SELECT random()
+fields random:701:8:-1
+row 0.9851677175347999
+SELECT 1
+> SHOW seed
+fields seed:25:-1:-1
+row unavailable
+SHOW
+> SELECT current_setting('seed')
+fields current_setting:25:-1:-1
+row unavailable
+SELECT 1
+> BEGIN
+BEGIN
+> SET LOCAL seed = -0.25
+SET
+> ROLLBACK
+ROLLBACK
+> SELECT random()
+fields random:701:8:-1
+row 0.5553213340039351
+SELECT 1
+> SELECT set_config('seed', '1', false)
+fields set_config:25:-1:-1
+row unavailable
+SELECT 1
+> SELECT random()
+fields random:701:8:-1
+row 0.3978842227698167
+SELECT 1
+> SET seed = 2
+ERROR 22023 2 is outside the valid range for parameter "seed" (-1 .. 1)

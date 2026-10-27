@@ -32,6 +32,13 @@ pub struct Randomness {
     previous_ns: i64,
 }
 
+impl Randomness {
+    /// `setseed`: starts the generator of `random` again from the seed `seed`, in the range -1 to 1.
+    pub fn set_seed(&mut self, seed: f64) {
+        self.prng = Some(Prng::fseed(seed));
+    }
+}
+
 thread_local! {
     /// The state of a session with no server.
     static LOCAL: RefCell<Randomness> = RefCell::new(Randomness::default());
@@ -103,7 +110,7 @@ fn setseed(call: &Call<'_>, args: &[Value]) -> Result<Value> {
             format_g(seed)
         )));
     }
-    with_state(call.session, |state| state.prng = Some(Prng::fseed(seed)));
+    with_state(call.session, |state| state.set_seed(seed));
     Ok(Value::Text(String::new()))
 }
 

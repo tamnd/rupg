@@ -898,7 +898,12 @@ impl rupg_func::Session for Reader<'_> {
     }
 
     fn randomness(&self) -> Option<&RefCell<Randomness>> {
-        self.randomness
+        let randomness = self.randomness?;
+        // `assign_random_seed`: a `SET seed` seeds the generator before its next number.
+        if let Some(seed) = self.settings.try_borrow_mut().ok().and_then(|mut s| s.take_seed()) {
+            randomness.borrow_mut().set_seed(seed);
+        }
+        Some(randomness)
     }
 
     fn strong_random(&self, buf: &mut [u8]) {
