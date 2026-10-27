@@ -129,7 +129,7 @@ struct Deparser<'a> {
     /// The expressions of the targets of the query, which the items of the windows name.
     window_targets: Vec<Expr>,
     /// For `EXPLAIN`, the subplans of the subqueries in the expressions. A subquery shows the name of its subplan, as `get_rule_expr` shows a `SubPlan`.
-    subplans: Vec<SubName>,
+    subplans: Vec<SubName<'a>>,
     /// For `EXPLAIN`, the subplan whose columns the test of `ANY` or `ALL` reads now, as `(SubPlan any_1)`.
     subplan: Option<String>,
     /// For `EXPLAIN`, the name of each window of the query by its number, which a call of a window function shows after `OVER`.
@@ -147,9 +147,9 @@ struct Deparser<'a> {
 
 /// The name of the subplan of a subquery in an expression, for `EXPLAIN`.
 #[derive(Clone, Debug)]
-struct SubName {
-    /// The subquery. The deparse only compares the address.
-    link: *const SubLink,
+struct SubName<'a> {
+    /// The subquery.
+    link: &'a SubLink,
     name: String,
     /// The subplan is an `InitPlan`.
     init: bool,
@@ -643,8 +643,10 @@ impl<'a> Deparser<'a> {
             }
             ExprKind::Window(w) => self.window_func(w)?,
             ExprKind::SubLink(sub) => {
-                let link = ptr::from_ref(sub.as_ref());
-                match self.subplans.iter().find(|s| s.link == link).cloned() {
+                // A node above the node that runs the subplan shows a copy of the expression of the node below, as `get_special_variable` shows it, so a subquery that is not one of the plan shows the subplan of the same subquery.
+                let named = self.subplans.iter().find(|s| ptr::eq(s.link, sub.as_ref()));
+                let named = named.or_else(|| self.subplans.iter().find(|s| *s.link == **sub));
+                match named.cloned() {
                     Some(name) => self.subplan_link(sub, &name)?,
                     None => self.sublink(sub)?,
                 }

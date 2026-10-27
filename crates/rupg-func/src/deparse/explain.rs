@@ -35,7 +35,7 @@ struct PlanTexts<'a, 'q> {
     targets: Vec<Option<String>>,
     /// The name of each window of each scope, as `WindowAgg.winname`.
     windows: Vec<Vec<Option<String>>>,
-    subplans: Vec<SubName>,
+    subplans: Vec<SubName<'a>>,
     /// The expressions of the targets of the nodes below the join whose conditions the texts show now.
     computed: Vec<Expr>,
 }
@@ -149,7 +149,7 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
             .sublinks
             .iter()
             .map(|l| SubName {
-                link: ptr::from_ref(l.link),
+                link: l.link,
                 name: l.name.clone(),
                 init: l.init,
                 hashed: l.hashed,
@@ -413,7 +413,7 @@ impl Texts for PlanTexts<'_, '_> {
 
 impl Deparser<'_> {
     /// `get_rule_expr` for a `SubPlan`: the name of the subplan of a subquery, or of the `ANY` that runs in the place of `EXISTS`, with the test of `ANY`, `ALL` or a comparison of rows, where each column of the subquery shows as `(SubPlan any_1).col1`. A column of `SET (a, b) = (SELECT ...)` shows as `(SubPlan multiexpr_1).col1` or `(InitPlan multiexpr_1).col1`. The value of an `InitPlan` shows as `(InitPlan expr_1).col1`, as `get_parameter` shows the parameter that the `InitPlan` sets.
-    pub(super) fn subplan_link(&mut self, sub: &SubLink, name: &SubName) -> Result<()> {
+    pub(super) fn subplan_link(&mut self, sub: &SubLink, name: &SubName<'_>) -> Result<()> {
         let sub = match &sub.alternative {
             Some(any) if name.alternative => &**any,
             _ => sub,
