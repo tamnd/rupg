@@ -1,0 +1,33 @@
+> CREATE TABLE emp (depname varchar, empno int, salary int)
+CREATE TABLE
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT depname, sum(salary) OVER (PARTITION BY depname) s, min(salary) OVER (PARTITION BY depname || 'A', depname) m FROM emp) e WHERE depname = 'sales'
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on e
+row   ->  WindowAgg
+row         Window: w2 AS ()
+row         ->  WindowAgg
+row               Window: w1 AS (PARTITION BY (((emp.depname)::text || 'A'::text)))
+row               ->  Sort
+row                     Sort Key: (((emp.depname)::text || 'A'::text))
+row                     ->  Seq Scan on emp
+row                           Filter: ((depname)::text = 'sales'::text)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT depname, sum(salary) OVER (PARTITION BY depname ORDER BY empno) s, min(salary) OVER (PARTITION BY depname, empno ORDER BY salary) m FROM emp) e WHERE depname = 'sales'
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on e
+row   ->  WindowAgg
+row         Window: w2 AS (ORDER BY emp.empno)
+row         ->  WindowAgg
+row               Window: w1 AS (PARTITION BY emp.empno ORDER BY emp.salary)
+row               ->  Sort
+row                     Sort Key: emp.empno, emp.salary
+row                     ->  Seq Scan on emp
+row                           Filter: ((depname)::text = 'sales'::text)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT depname, empno FROM emp WHERE depname = 'x' ORDER BY depname, empno
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: empno
+row   ->  Seq Scan on emp
+row         Filter: ((depname)::text = 'x'::text)
+EXPLAIN

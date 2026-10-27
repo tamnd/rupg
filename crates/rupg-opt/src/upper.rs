@@ -125,7 +125,7 @@ fn conflict_operand(groups: &GroupEqual<'_>, case_arg: Option<&Expr>, op: u32, a
 }
 
 /// The expression under its `RelabelType` nodes.
-fn strip_relabel(mut expr: &Expr) -> &Expr {
+pub(crate) fn strip_relabel(mut expr: &Expr) -> &Expr {
     while let ExprKind::Relabel(inner, _) = &expr.kind {
         expr = inner;
     }
