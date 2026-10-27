@@ -70,9 +70,9 @@ pub use ddl::{
     REGRESS_SYMBOLS, ReindexOptions, RuleTree, SchemaElements, Script, SqlBody, Take, TopLevel,
     Transform, acl_dependents, acl_roles, attnums, copy_filter, copy_insert, copy_relation,
     copy_target, define, find_library, function_body, function_body_for, function_script,
-    function_sqlbody, inline_body, is_definition, lock_table, owned_objects, policy_targets,
-    policy_tree, reindex_options, rewrite_insert, rule_tree, tablespace_options, trigger_when,
-    vacuum_relations,
+    function_sqlbody, inline_body, is_definition, lock_table, object_address, owned_objects,
+    policy_targets, policy_tree, reindex_options, rewrite_insert, rule_tree, tablespace_options,
+    trigger_when, vacuum_relations,
 };
 pub use expr::{
     Aggref, BoolOp, BoolTest, Case, CastForm, CurrentOf, Expr, ExprKind, FieldStore, Func,

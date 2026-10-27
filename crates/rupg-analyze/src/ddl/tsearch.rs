@@ -191,6 +191,14 @@ impl Definer<'_, '_> {
         Ok(found)
     }
 
+    /// `get_object_address` for an object of text search.
+    pub(super) fn ts_address(&self, objtype: ObjectType, list: &[&str]) -> Result<ObjRef> {
+        let Some(kind) = Kind::of(objtype) else {
+            return Err(Error::internal("not an object of text search"));
+        };
+        Ok(ObjRef::new(kind.class(), self.ts_oid(kind, list)?))
+    }
+
     /// `get_ts_*_oid` with `missing_ok` false.
     fn ts_oid(&self, kind: Kind, list: &[&str]) -> Result<u32> {
         Ok(self.ts_lookup(kind, list, false)?.unwrap_or_default())
