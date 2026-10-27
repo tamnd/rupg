@@ -3848,6 +3848,13 @@ mod tests {
         big_stack(|| script(include_str!("connection/window_constant_key.test")));
     }
 
+    /// With `IGNORE NULLS`, an argument that calls a volatile function or has a subquery runs again on each row that the search for a value that is not null reads, as `notnull_info_cacheable`.
+    /// `connection/volatile_ignore_nulls.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn volatile_ignore_nulls() {
+        big_stack(|| script(include_str!("connection/volatile_ignore_nulls.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

@@ -366,17 +366,38 @@ fn partition_values(
             format!("function {name} does not allow RESPECT/IGNORE NULLS"),
         ));
     }
-    // With `IGNORE NULLS`, the value of the argument on each row of the partition, which the search for the rows that are not null reads.
-    let values = if call.nulls == NullTreatment::Ignore {
+    let ignore = call.nulls == NullTreatment::Ignore;
+    // With `IGNORE NULLS`, the value of the argument on each row of the partition, which the search for the rows that are not null reads. An argument that `notnull_info_cacheable` rejects runs again on each row that the search reads.
+    let cached = ignore && call.args.first().is_some_and(cacheable);
+    let values = if cached {
         part.iter().map(|&row| arg(eval, call, 0, input, row)).collect::<Result<Vec<_>>>()?
     } else {
         Vec::new()
     };
-    let ignore = !values.is_empty();
-    // The `count`-th row of `rows` where the argument is not null, from 1, as `ignorenulls_getfuncarginframe`.
-    let nth_not_null = |rows: &mut dyn Iterator<Item = usize>, count: usize| {
-        rows.filter(|&at| !values[at].is_null()).nth(count - 1).map(|at| values[at].clone())
-    };
+    // The value on the `count`-th row of `rows` where the argument is not null, from 1, as `ignorenulls_getfuncarginframe` and `WinGetFuncArgInPartition`.
+    let nth_not_null =
+        |rows: &mut dyn Iterator<Item = usize>, count: usize| -> Result<Option<Value>> {
+            let mut seen = 0;
+            for at in rows {
+                let value = if cached {
+                    if values[at].is_null() {
+                        continue;
+                    }
+                    values[at].clone()
+                } else {
+                    let value = arg(eval, call, 0, input, part[at])?;
+                    if value.is_null() {
+                        continue;
+                    }
+                    value
+                };
+                seen += 1;
+                if seen == count {
+                    return Ok(Some(value));
+                }
+            }
+            Ok(None)
+        };
     match method {
         Method::RowNumber => out.extend((1..=n).map(int8)),
         Method::Rank => out.extend(groups.iter().map(|g| int8(g.0 + 1))),
@@ -459,9 +480,9 @@ fn partition_values(
                     let ahead = forward == (offset > 0);
                     let count = usize::try_from(offset.unsigned_abs()).unwrap_or(usize::MAX);
                     let found = if ahead {
-                        nth_not_null(&mut (i + 1..n), count)
+                        nth_not_null(&mut (i + 1..n), count)?
                     } else {
-                        nth_not_null(&mut (0..i).rev(), count)
+                        nth_not_null(&mut (0..i).rev(), count)?
                     };
                     out.push(match found {
                         Some(value) => value,
@@ -482,13 +503,13 @@ fn partition_values(
         }
         Method::FirstValue if ignore => {
             for bounds in frames {
-                out.push(nth_not_null(&mut bounds.rows(), 1).unwrap_or(Value::Null));
+                out.push(nth_not_null(&mut bounds.rows(), 1)?.unwrap_or(Value::Null));
             }
         }
         Method::LastValue if ignore => {
             for bounds in frames {
                 let rows: Vec<usize> = bounds.rows().collect();
-                out.push(nth_not_null(&mut rows.into_iter().rev(), 1).unwrap_or(Value::Null));
+                out.push(nth_not_null(&mut rows.into_iter().rev(), 1)?.unwrap_or(Value::Null));
             }
         }
         Method::FirstValue => {
@@ -521,7 +542,7 @@ fn partition_values(
                 }
                 let at = usize::try_from(nth - 1).unwrap_or(usize::MAX);
                 if ignore {
-                    out.push(nth_not_null(&mut bounds.rows(), at + 1).unwrap_or(Value::Null));
+                    out.push(nth_not_null(&mut bounds.rows(), at + 1)?.unwrap_or(Value::Null));
                     continue;
                 }
                 out.push(match bounds.rows().nth(at) {
@@ -532,6 +553,24 @@ fn partition_values(
         }
     }
     Ok(out)
+}
+
+/// `notnull_info_cacheable`: the nullness of an argument on a row can stay known when the argument calls no volatile function and has no subquery. A function that is not built in counts as volatile.
+fn cacheable(expr: &Expr) -> bool {
+    let volatile = |func: u32| builtin::proc_by_oid(func).is_none_or(|p| p.volatile == b'v');
+    expr.find(0, &mut |e, _| match &e.kind {
+        ExprKind::Func(f) if volatile(f.oid) => Some(()),
+        ExprKind::NullIf { equal: func, .. }
+        | ExprKind::Distinct { equal: func, .. }
+        | ExprKind::ScalarArrayOp { func, .. }
+            if volatile(*func) =>
+        {
+            Some(())
+        }
+        ExprKind::SubLink(_) => Some(()),
+        _ => None,
+    })
+    .is_none()
 }
 
 /// The rows of the frame of a row, as indexes in the partition: the rows from `head` to `tail` that the clause `EXCLUDE` does not remove.

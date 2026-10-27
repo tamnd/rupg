@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- With `IGNORE NULLS`, a window function runs an argument that calls a volatile function or has a subquery again on each row that it reads, as PostgreSQL does when `notnull_info_cacheable` is false. Before, rupg evaluated such an argument once for each row, so `nextval` and the results did not match PostgreSQL. (#903)
 - EXPLAIN drops a key of a sort or of a window that a filter makes a constant also when the filter reads the column through a cast that changes no bits, such as `(depname)::text = 'sales'` on a `varchar` column, as `pathkey_is_redundant` does. (#901)
 - EXPLAIN shows a key of a window in parentheses when the child of the WindowAgg reads it from below, as `show_window_keys` does, and it shows the casts of the key. For example `PARTITION BY (((depname)::text || 'A'::text))`. (#899)
 - EXPLAIN now shows the run conditions of a WindowAgg. A filter on a monotonic window function, such as `rn < 3` on `row_number()`, becomes a "Run Condition" as in PostgreSQL, and the filter of the subquery scan stays only when PostgreSQL keeps it. (#895)
