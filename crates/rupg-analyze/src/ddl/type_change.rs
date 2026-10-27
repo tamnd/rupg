@@ -124,6 +124,7 @@ impl Definer<'_, '_> {
         self.check_domain(&facts, stmt.objectType)?;
         self.check_not_table_row(&facts)?;
         self.check_not_array(&facts)?;
+        self.check_not_multirange(&facts)?;
         if facts.owner == new {
             return Ok(());
         }
@@ -260,6 +261,25 @@ impl Definer<'_, '_> {
         .with_hint(format!(
             "You can alter type {}, which will alter the array type as well.",
             self.type_text(facts.element)
+        )))
+    }
+
+    /// A multirange type changes owner with its range type, as `AlterTypeOwner` gives it.
+    fn check_not_multirange(&self, facts: &Facts) -> Result<()> {
+        if facts.kind != b'm' {
+            return Ok(());
+        }
+        let range = crate::types::multirange_range(facts.oid);
+        let error = Error::new(
+            SqlState::WRONG_OBJECT_TYPE,
+            format!("cannot alter multirange type {}", self.type_text(facts.oid)),
+        );
+        if range == 0 {
+            return Err(error);
+        }
+        Err(error.with_hint(format!(
+            "You can alter type {}, which will alter the multirange type as well.",
+            self.type_text(range)
         )))
     }
 

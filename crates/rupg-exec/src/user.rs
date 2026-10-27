@@ -102,10 +102,10 @@ fn text_array(values: &[String]) -> Value {
     )))
 }
 
-/// The ACL that `GRANT` gave to an object, or null. An empty ACL is null, as it is for a column.
+/// The ACL that `GRANT` gave to an object, or null. The empty ACL of a column is null.
 fn granted(catalog: &Catalog, object: ObjRef) -> Value {
     match catalog.object_acl(object) {
-        Some(acl) if !acl.is_empty() => text_array(acl),
+        Some(acl) if !acl.is_empty() || object.sub == 0 => text_array(acl),
         _ => Value::Null,
     }
 }
@@ -150,7 +150,7 @@ pub(crate) fn grant_static(
         if let Value::Oid(owner) = owner
             && let Some(acl) = changed.get(&(owner, sub))
         {
-            values[at] = if acl.is_empty() { Value::Null } else { text_array(acl) };
+            values[at] = if acl.is_empty() && attribute { Value::Null } else { text_array(acl) };
         }
     }
     Ok(())

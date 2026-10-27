@@ -4141,6 +4141,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/rule_write_depends.test")));
     }
 
+    /// `USAGE` on a type, as `object_aclcheck` and `pg_type_aclmask` check it: a column, a typed table, a function, an aggregate, an operator, a domain and a range need it, an array and a multirange use the privileges of their element and range types, a multirange changes owner only with its range, and a composite type cannot hold itself through a multirange. `connection/type_usage.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn type_usage() {
+        big_stack(|| script(include_str!("connection/type_usage.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

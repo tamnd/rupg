@@ -50,6 +50,7 @@ impl Definer<'_, '_> {
             )
             .at_opt(type_at));
         }
+        self.check_type_usage(base)?;
         let base_collation = row.map_or(0, |t| t.collation);
         let collation = match &stmt.collClause {
             Some(clause) => self.an.collation_oid(&clause.collname, place(clause.location))?,
