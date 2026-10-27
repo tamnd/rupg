@@ -982,7 +982,7 @@ impl Deparser<'_> {
         if let Some(rows) = simple_values(query, result) {
             return self.values(rows);
         }
-        self.buf.push_str("SELECT");
+        self.buf.push_str(if query.is_return { "RETURN" } else { "SELECT" });
         if !query.distinct.is_empty() {
             if query.distinct_on {
                 self.buf.push_str(" DISTINCT ON (");
@@ -1275,7 +1275,8 @@ impl Deparser<'_> {
                 }
             };
             let colname = result.and_then(|r| r.get(i)).unwrap_or(&target.name);
-            if attname.as_deref() != Some(colname.as_str()) {
+            // The column of a `RETURN` has no name.
+            if !query.is_return && attname.as_deref() != Some(colname.as_str()) {
                 self.buf.push_str(&format!(" AS {}", quote_identifier(colname)));
             }
             let item = std::mem::replace(&mut self.buf, outer);

@@ -85,5 +85,6 @@ pub fn execute_params(exprs: &List, types: &[u32], env: &dyn Env) -> Result<Quer
         perms: Vec::new(),
         funcs: Vec::new(),
         notify: None,
+        is_return: false,
     })
 }

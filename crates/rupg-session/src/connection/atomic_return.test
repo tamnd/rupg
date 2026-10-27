@@ -1,0 +1,73 @@
+> CREATE FUNCTION ra1() RETURNS boolean BEGIN ATOMIC ;;RETURN false;; END;
+CREATE FUNCTION
+> SELECT ra1();
+fields ra1:16:1:-1
+row f
+SELECT 1
+> SELECT pg_get_functiondef('ra1'::regproc);
+fields pg_get_functiondef:25:-1:-1
+row CREATE OR REPLACE FUNCTION public.ra1()
+ RETURNS boolean
+ LANGUAGE sql
+BEGIN ATOMIC
+ RETURN false;
+END
+
+SELECT 1
+> CREATE FUNCTION ra2(a int) RETURNS int BEGIN ATOMIC SELECT 1; RETURN a + 1; END;
+CREATE FUNCTION
+> SELECT ra2(4);
+fields ra2:23:4:-1
+row 5
+SELECT 1
+> SELECT pg_get_functiondef('ra2'::regproc);
+fields pg_get_functiondef:25:-1:-1
+row CREATE OR REPLACE FUNCTION public.ra2(a integer)
+ RETURNS integer
+ LANGUAGE sql
+BEGIN ATOMIC
+ SELECT 1;
+ RETURN (a + 1);
+END
+
+SELECT 1
+> CREATE FUNCTION ra3() RETURNS text BEGIN ATOMIC RETURN 'abc'; END;
+CREATE FUNCTION
+> SELECT ra3(), pg_typeof(ra3());
+fields ra3:25:-1:-1,pg_typeof:2206:4:-1
+row abc,text
+SELECT 1
+> SELECT pg_get_function_sqlbody('ra3'::regproc);
+fields pg_get_function_sqlbody:25:-1:-1
+row BEGIN ATOMIC
+ RETURN 'abc'::text;
+END
+SELECT 1
+> CREATE FUNCTION ra4() RETURNS SETOF int BEGIN ATOMIC RETURN 5; END;
+CREATE FUNCTION
+> SELECT * FROM ra4();
+fields ra4:23:4:-1
+row 5
+SELECT 1
+> CREATE FUNCTION ra5() RETURNS int BEGIN ATOMIC RETURN 'x'; END;
+ERROR 42P13 return type mismatch in function declared to return integer (SQL function "ra5")
+> CREATE FUNCTION ra6(t int) RETURNS bigint BEGIN ATOMIC RETURN (SELECT count(*) FROM pg_class WHERE oid < t); END;
+CREATE FUNCTION
+> SELECT ra6(0);
+fields ra6:20:8:-1
+row 0
+SELECT 1
+> SELECT pg_get_functiondef('ra6'::regproc);
+fields pg_get_functiondef:25:-1:-1
+row CREATE OR REPLACE FUNCTION public.ra6(t integer)
+ RETURNS bigint
+ LANGUAGE sql
+BEGIN ATOMIC
+ RETURN ( SELECT count(*) AS count
+            FROM pg_class
+           WHERE (pg_class.oid < (ra6.t)::oid));
+END
+
+SELECT 1
+> DROP FUNCTION ra1, ra2, ra3, ra4, ra6;
+DROP FUNCTION

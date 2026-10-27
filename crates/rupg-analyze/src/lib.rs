@@ -504,11 +504,25 @@ impl Analyzer<'_> {
             Node::DeleteStmt(delete) => self.delete(delete),
             Node::MergeStmt(merge) => self.merge(merge),
             Node::CallStmt(call) => self.call(call),
+            Node::ReturnStmt(ret) => self.return_stmt(ret),
             _ => Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
                 "this statement is not supported yet",
             )),
         }
+    }
+
+    /// `transformReturnStmt`: a query with the one column of the value and no name, as for a `SELECT` of the value.
+    fn return_stmt(&mut self, ret: &rupg_sql::nodes::ReturnStmt) -> Result<Query> {
+        let target =
+            rupg_sql::nodes::ResTarget { val: ret.returnval.clone(), ..Default::default() };
+        let select = rupg_sql::nodes::SelectStmt {
+            targetList: vec![Some(Node::ResTarget(Box::new(target)))],
+            ..Default::default()
+        };
+        let mut query = self.select(&select)?;
+        query.is_return = true;
+        Ok(query)
     }
 
     /// The end of the analysis of a statement: the query gets the types of the parameters, the notices, the privileges and the functions that the analysis found.
