@@ -1,0 +1,76 @@
+> SELECT POSITION(convert_from('\xbcf6c7d0', 'EUC_KR') IN convert_from('\xb0fac7d02c20bcf6c7d02c20b1e2bcfa2c20bbee', 'EUC_KR'))
+fields position:23:4:-1
+row 5
+SELECT 1
+> SELECT convert_from('\xb0fac7d02c20bcf6c7d0', 'EUC_KR')
+fields convert_from:25:-1:-1
+row 과학, 수학
+SELECT 1
+> SELECT convert_to('과학, 수학 abc', 'EUC_KR')
+fields convert_to:17:-1:-1
+row \xb0fac7d02c20bcf6c7d020616263
+SELECT 1
+> SELECT convert_to('€®㉾', 'euckr')
+fields convert_to:17:-1:-1
+row \xa2e6a2e7a2e8
+SELECT 1
+> SELECT convert('\xb0fa41', 'EUC_KR', 'UTF8')
+fields convert:17:-1:-1
+row \xeab3bc41
+SELECT 1
+> SELECT convert('\xe0b8', 'UTF8', 'EUC_KR')
+fields convert:17:-1:-1
+ERROR 22021 invalid byte sequence for encoding "UTF8": 0xe0 0xb8
+> SELECT convert_to('ÿ', 'EUC_KR')
+fields convert_to:17:-1:-1
+ERROR 22P05 character with byte sequence 0xc3 0xbf in encoding "UTF8" has no equivalent in encoding "EUC_KR"
+> SELECT convert_to('Ā', 'EUC_KR')
+fields convert_to:17:-1:-1
+ERROR 22P05 character with byte sequence 0xc4 0x80 in encoding "UTF8" has no equivalent in encoding "EUC_KR"
+> SELECT convert_from('\xa1', 'EUC_KR')
+fields convert_from:25:-1:-1
+ERROR 22021 invalid byte sequence for encoding "EUC_KR": 0xa1
+> SELECT convert_from('\xb041', 'EUC_KR')
+fields convert_from:25:-1:-1
+ERROR 22021 invalid byte sequence for encoding "EUC_KR": 0xb0 0x41
+> SELECT convert_from('\x8ea1', 'EUC_KR')
+fields convert_from:25:-1:-1
+ERROR 22021 invalid byte sequence for encoding "EUC_KR": 0x8e 0xa1
+> SELECT convert_from('\xa2e9', 'EUC_KR')
+fields convert_from:25:-1:-1
+ERROR 22P05 character with byte sequence 0xa2 0xe9 in encoding "EUC_KR" has no equivalent in encoding "UTF8"
+> SELECT convert_from('\xc9a1', 'EUC_KR')
+fields convert_from:25:-1:-1
+ERROR 22P05 character with byte sequence 0xc9 0xa1 in encoding "EUC_KR" has no equivalent in encoding "UTF8"
+> SELECT convert_from('\xb000', 'EUC_KR')
+fields convert_from:25:-1:-1
+ERROR 22021 invalid byte sequence for encoding "EUC_KR": 0xb0 0x00
+> SELECT convert_from('\x41004', 'EUC_KR')
+ERROR 22023 invalid hexadecimal data: odd number of digits at 21
+> SELECT length('\xb0fac7d041'::bytea, 'EUC_KR')
+fields length:23:4:-1
+row 3
+SELECT 1
+> SELECT length('\xb0fac7'::bytea, 'EUC_KR')
+fields length:23:4:-1
+ERROR 22021 invalid byte sequence for encoding "EUC_KR": 0xc7
+> SELECT convert('\xb0fa', 'EUC_KR', 'LATIN1')
+fields convert:17:-1:-1
+ERROR 42883 default conversion function for encoding "EUC_KR" to "LATIN1" does not exist
+> SELECT convert('\xb0fa', 'EUC_KR', 'SQL_ASCII')
+fields convert:17:-1:-1
+row \xb0fa
+SELECT 1
+> SELECT convert('abc', 'LATIN1', 'EUC_KR')
+fields convert:17:-1:-1
+ERROR 42883 default conversion function for encoding "LATIN1" to "EUC_KR" does not exist
+> SELECT convert('\xe9', 'LATIN1', 'EUC_KR')
+fields convert:17:-1:-1
+ERROR 42883 default conversion function for encoding "LATIN1" to "EUC_KR" does not exist
+> SELECT convert('\xb0fa', 'SQL_ASCII', 'EUC_KR')
+fields convert:17:-1:-1
+row \xb0fa
+SELECT 1
+> SELECT convert('\xb0', 'SQL_ASCII', 'EUC_KR')
+fields convert:17:-1:-1
+ERROR 22021 invalid byte sequence for encoding "EUC_KR": 0xb0

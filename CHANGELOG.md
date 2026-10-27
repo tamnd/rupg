@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `convert_from`, `convert_to`, `convert` and `length(bytea, name)` now support EUC_KR. The check of the bytes follows `pg_euckr_verifychar`, and the conversion to and from UTF8 uses the map `euc_kr_to_utf8.map` of PostgreSQL, which `cargo xtask encodings` now reads. euc_kr.out now matches. (#878)
 - A row of a typed table is now a value of its type, and a row of a child table is a value of the row type of each ancestor table. rupg adds a `ConvertRowtypeExpr` that maps the fields by name, as `coerce_type` does, so `namelen(persons)`, `c::p` and `pf(c)` work. typed_table.out now matches. (#877)
 - `ATTACH PARTITION` and `ALTER TABLE ... INHERIT` now fail when a generated column of the table has another kind than the generated column of the parent, as `MergeAttributesIntoExisting` does. (#876)
 - A row that goes to a leaf partition through its partitioned table now meets the check constraints of the leaf after a trigger `BEFORE INSERT ... FOR EACH ROW` of the leaf changes it. Before, the leaf did not check such a row. (#875)

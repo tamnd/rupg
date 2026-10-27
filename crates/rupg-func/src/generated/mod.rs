@@ -7,3 +7,7 @@ pub(crate) mod wait_events;
 // `cargo xtask encodings` makes this file from the maps in `vendor/postgres-19/src/backend/utils/mb/Unicode`.
 #[rustfmt::skip]
 pub(crate) mod single_byte;
+
+// `cargo xtask encodings` makes this file from the maps in `vendor/postgres-19/src/backend/utils/mb/Unicode`.
+#[rustfmt::skip]
+pub(crate) mod double_byte;
