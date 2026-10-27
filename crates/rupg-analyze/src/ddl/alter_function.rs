@@ -88,7 +88,7 @@ impl Definer<'_, '_> {
         item: &ObjectWithArgs,
         found: &Candidate,
     ) -> Result<()> {
-        if !self.is_superuser() && found.owner != self.user {
+        if !self.is_superuser() && !self.owns(found.owner) {
             return Err(not_owner(owner_word(kind), &names(&item.objname).join(".")));
         }
         Ok(())

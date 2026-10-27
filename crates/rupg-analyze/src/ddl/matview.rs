@@ -32,7 +32,7 @@ impl Definer<'_, '_> {
             return Err(Error::internal(format!("cache lookup failed for relation {oid}")));
         };
         // `RangeVarCallbackMaintainsTable`: rupg has no `MAINTAIN` privilege, so only the owner can refresh.
-        if !self.is_superuser() && rel.owner != self.user {
+        if !self.is_superuser() && !self.owns(rel.owner) {
             return Err(not_owner(owner_word(kind), name));
         }
         if rel.kind != RelKind::MatView {

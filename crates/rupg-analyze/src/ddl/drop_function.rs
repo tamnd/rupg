@@ -61,7 +61,7 @@ impl Definer<'_, '_> {
                 )
                 .with_hint("Use DROP AGGREGATE to drop aggregate functions."));
             }
-            if !self.is_superuser() && found.owner != self.user {
+            if !self.is_superuser() && !self.owns(found.owner) {
                 return Err(not_owner(routine_word(stmt.removeType), &name));
             }
             let object = ObjRef::new(PG_PROC, found.oid);

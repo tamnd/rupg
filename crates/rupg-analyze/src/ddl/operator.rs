@@ -520,7 +520,7 @@ impl Definer<'_, '_> {
             };
             let namespace = self.operator_namespace(found.oid);
             if !self.is_superuser()
-                && self.schema_owner(namespace) != Some(self.user)
+                && !self.schema_owner(namespace).is_some_and(|o| self.owns(o))
                 && !self.owns(found.owner)
             {
                 return Err(not_owner("operator", &list.join(".")));

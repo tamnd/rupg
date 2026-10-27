@@ -59,7 +59,7 @@ impl Definer<'_, '_> {
             Found::Builtin(row) => row.owner,
         };
         let name = super::relname(&rv).to_string();
-        if !self.is_superuser() && owner != self.user {
+        if !self.is_superuser() && !self.owns(owner) {
             let what = match kind {
                 b'i' => "index",
                 b'S' => "sequence",

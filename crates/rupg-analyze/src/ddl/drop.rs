@@ -225,8 +225,8 @@ impl Definer<'_, '_> {
                 Found::Builtin(row) => (row.owner, row.namespace),
             };
             if !self.is_superuser()
-                && owner != self.user
-                && self.schema_owner(namespace) != Some(self.user)
+                && !self.owns(owner)
+                && !self.schema_owner(namespace).is_some_and(|o| self.owns(o))
             {
                 return Err(not_owner(owner_word(code), name));
             }
@@ -301,7 +301,7 @@ impl Definer<'_, '_> {
                 self.notice(SqlState::SUCCESSFUL_COMPLETION, format!("{message}, skipping"));
                 continue;
             };
-            if !self.is_superuser() && self.schema_owner(oid) != Some(self.user) {
+            if !self.is_superuser() && !self.schema_owner(oid).is_some_and(|o| self.owns(o)) {
                 return Err(not_owner("schema", name));
             }
             let object = ObjRef::new(PG_NAMESPACE, oid);
@@ -353,7 +353,7 @@ impl Definer<'_, '_> {
                     format!("\"{}\" is not a domain", type_name_text(name)),
                 ));
             }
-            if !self.is_superuser() && owner != self.user {
+            if !self.is_superuser() && !self.owns(owner) {
                 let word = if kind == b'd' { "domain" } else { "type" };
                 return Err(not_owner(word, &self.type_text(oid)));
             }

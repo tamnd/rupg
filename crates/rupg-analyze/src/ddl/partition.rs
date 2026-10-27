@@ -344,7 +344,7 @@ impl Definer<'_, '_> {
             };
             return Err(Error::new(SqlState::WRONG_OBJECT_TYPE, message));
         }
-        if !self.is_superuser() && owner != self.user {
+        if !self.is_superuser() && !self.owns(owner) {
             return Err(Error::new(
                 SqlState::INSUFFICIENT_PRIVILEGE,
                 format!("must be owner of table {name}"),

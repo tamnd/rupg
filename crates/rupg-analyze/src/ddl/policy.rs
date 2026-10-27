@@ -165,7 +165,7 @@ impl Definer<'_, '_> {
             Found::User(oid) => self.catalog.relation(oid).map_or(0, |r| r.owner),
             Found::Builtin(row) => row.owner,
         };
-        if !self.is_superuser() && owner != self.user {
+        if !self.is_superuser() && !self.owns(owner) {
             return Err(not_owner(owner_word(code), &name));
         }
         if self.is_system(found) && !self.an.env.allow_system_table_mods() {
@@ -370,7 +370,7 @@ impl Definer<'_, '_> {
             }
             return Err(no_policy(policy, &relation_name));
         };
-        if !self.is_superuser() && owner != self.user {
+        if !self.is_superuser() && !self.owns(owner) {
             return Err(not_owner("relation", &relation_name));
         }
         Ok(Some(oid))

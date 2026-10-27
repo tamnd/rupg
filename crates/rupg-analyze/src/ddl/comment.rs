@@ -99,7 +99,7 @@ impl Definer<'_, '_> {
     fn owned_relation(&self, found: Found, word: &str, name: &str) -> Result<u32> {
         let Found::User(oid) = found else { return Err(builtin_object()) };
         let owner = self.catalog.relation(oid).map(|r| r.owner);
-        if !self.is_superuser() && owner != Some(self.user) {
+        if !self.is_superuser() && !owner.is_some_and(|o| self.owns(o)) {
             return Err(not_owner(word, name));
         }
         Ok(oid)
@@ -113,7 +113,7 @@ impl Definer<'_, '_> {
         let found = self
             .find_function(objtype, item, false)?
             .ok_or_else(|| Error::internal("a function that the lookup did not find"))?;
-        if !self.is_superuser() && found.owner != self.user {
+        if !self.is_superuser() && !self.owns(found.owner) {
             return Err(not_owner(routine_word(objtype), &names(&item.objname).join(".")));
         }
         if found.oid < FIRST_NORMAL_OID {
@@ -129,7 +129,7 @@ impl Definer<'_, '_> {
             _ => "",
         };
         if let Some(schema) = self.catalog.schema_by_name(name) {
-            if !self.is_superuser() && schema.owner != self.user {
+            if !self.is_superuser() && !self.owns(schema.owner) {
                 return Err(not_owner("schema", name));
             }
             return Ok(ObjRef::new(PG_NAMESPACE, schema.oid));
@@ -239,7 +239,7 @@ impl Definer<'_, '_> {
             ));
         }
         let Some(ty) = ty else { return Err(builtin_object()) };
-        if !self.is_superuser() && ty.owner != self.user {
+        if !self.is_superuser() && !self.owns(ty.owner) {
             return Err(not_owner("type", &type_name_text(name)));
         }
         Ok(ObjRef::new(PG_TYPE, oid))

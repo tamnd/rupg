@@ -148,7 +148,7 @@ impl Definer<'_, '_> {
         };
         // rupg has no `GRANT`, so the privilege `TRIGGER` is the privilege of the owner.
         let owner = self.catalog.relation(oid).map_or(0, |r| r.owner);
-        if !self.is_superuser() && owner != self.user {
+        if !self.is_superuser() && !self.owns(owner) {
             return Err(Error::new(
                 SqlState::INSUFFICIENT_PRIVILEGE,
                 format!("permission denied for {} {name}", owner_word(code)),
@@ -527,7 +527,7 @@ impl Definer<'_, '_> {
     fn check_trigger_owner(&self, relation: u32) -> Result<()> {
         let rel = self.catalog.relation(relation);
         let owner = rel.map_or(0, |r| r.owner);
-        if !self.is_superuser() && owner != self.user {
+        if !self.is_superuser() && !self.owns(owner) {
             return Err(not_owner("relation", rel.map_or("", |r| r.name.as_str())));
         }
         Ok(())
@@ -583,7 +583,7 @@ impl Definer<'_, '_> {
             Found::User(oid) => self.catalog.relation(oid).map_or(0, |r| r.owner),
             Found::Builtin(row) => row.owner,
         };
-        if !self.is_superuser() && owner != self.user {
+        if !self.is_superuser() && !self.owns(owner) {
             return Err(not_owner(owner_word(code), &name));
         }
         if self.is_system(found) && !self.an.env.allow_system_table_mods() {

@@ -224,7 +224,7 @@ impl Definer<'_, '_> {
             Found::User(oid) => self.catalog.relation(oid).map_or(0, |r| r.owner),
             Found::Builtin(row) => row.owner,
         };
-        if !self.is_superuser() && owner != self.user {
+        if !self.is_superuser() && !self.owns(owner) {
             return Err(not_owner(owner_word(code), &name));
         }
         let rulename = stmt.rulename.as_deref().unwrap_or_default();
@@ -464,7 +464,7 @@ impl Definer<'_, '_> {
                     format!("rule \"{rulename}\" for relation \"{relation_name}\" does not exist"),
                 ));
             };
-            if !self.is_superuser() && owner != self.user {
+            if !self.is_superuser() && !self.owns(owner) {
                 return Err(not_owner("relation", &relation_name));
             }
             objects.push(ObjRef::new(PG_REWRITE, rule));
@@ -497,7 +497,7 @@ impl Definer<'_, '_> {
                 format!("rule \"{rulename}\" for relation \"{relation_name}\" does not exist"),
             ));
         };
-        if !self.is_superuser() && owner != self.user {
+        if !self.is_superuser() && !self.owns(owner) {
             return Err(not_owner("relation", &relation_name));
         }
         Ok(ObjRef::new(PG_REWRITE, rule))
@@ -527,7 +527,7 @@ impl Definer<'_, '_> {
         };
         let rel = self.catalog.relation(relation);
         let owner = rel.map_or(0, |r| r.owner);
-        if !self.is_superuser() && owner != self.user {
+        if !self.is_superuser() && !self.owns(owner) {
             return Err(not_owner(owner_word(code), &name));
         }
         let relation_name = rel.map_or(String::new(), |r| r.name.clone());

@@ -1647,7 +1647,7 @@ impl Definer<'_, '_> {
 
     /// The checks of `ProcedureCreate` for `CREATE OR REPLACE FUNCTION` of the function `old`: the owner, the kind, the result type, the row type of the `OUT` parameters, the names of the input arguments and the defaults do not change. New defaults can be added before the old ones.
     pub(super) fn check_replace(&self, old: &Function, new: &Function) -> Result<()> {
-        if !self.is_superuser() && old.owner != self.user {
+        if !self.is_superuser() && !self.owns(old.owner) {
             return Err(super::comment::not_owner("function", &old.name));
         }
         if old.kind != new.kind {

@@ -219,7 +219,7 @@ impl Definer<'_, '_> {
 
     /// `object_ownercheck` of the type, with the error of `aclcheck_error_type`.
     fn check_type_owner(&self, facts: &Facts) -> Result<()> {
-        if self.is_superuser() || facts.owner == self.user {
+        if self.is_superuser() || self.owns(facts.owner) {
             return Ok(());
         }
         Err(not_owner("type", &self.type_text(facts.oid)))
