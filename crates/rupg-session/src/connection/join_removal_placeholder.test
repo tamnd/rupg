@@ -1,0 +1,60 @@
+> create temp table t (a int unique);
+CREATE TABLE
+> insert into t values (1);
+INSERT 0 1
+> explain (costs off) select 1 from t t1 left join (select 2 as c from t t2 left join t t3 on t2.a = t3.a) s on true where t1.a = s.c;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join
+row   Filter: (t1.a = (2))
+row   ->  Seq Scan on t t1
+row   ->  Materialize
+row         ->  Seq Scan on t t2
+EXPLAIN
+> select 1 from t t1 left join (select 2 as c from t t2 left join t t3 on t2.a = t3.a) s on true where t1.a = s.c;
+fields ?column?:23:4:-1
+SELECT 0
+> create temp table items (id text, owner text);
+CREATE TABLE
+> insert into items values ('item1', 'alice'), ('item2', 'bob');
+INSERT 0 2
+> explain (costs off) select count(*) from items left join (select 'bob' as id) v on true where items.owner = v.id;
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   ->  Seq Scan on items
+row         Filter: (owner = 'bob'::text)
+EXPLAIN
+> select count(*) from items left join (select 'bob' as id) v on true where items.owner = v.id;
+fields count:20:8:-1
+row 1
+SELECT 1
+> explain (costs off) select * from items left join (select 'bob' as id) v on true;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on items
+EXPLAIN
+> select * from items left join (select 'bob' as id) v on true;
+fields id@items.1:25:-1:-1,owner@items.2:25:-1:-1,id:25:-1:-1
+row item1,alice,bob
+row item2,bob,bob
+SELECT 2
+> explain (costs off) select * from items left join (select 'bob' as id) v on items.owner = v.id;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join
+row   Join Filter: (items.owner = 'bob'::text)
+row   ->  Seq Scan on items
+row   ->  Materialize
+row         ->  Result
+EXPLAIN
+> select * from items left join (select 'bob' as id) v on items.owner = v.id;
+fields id@items.1:25:-1:-1,owner@items.2:25:-1:-1,id:25:-1:-1
+row item1,alice,NULL
+row item2,bob,bob
+SELECT 2
+> explain (costs off) select * from (select 1 as x) v right join items on true;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on items
+EXPLAIN
+> select * from (select 1 as x) v right join items on true;
+fields x:23:4:-1,id@items.1:25:-1:-1,owner@items.2:25:-1:-1
+row 1,item1,alice
+row 1,item2,bob
+SELECT 2

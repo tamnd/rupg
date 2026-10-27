@@ -36,6 +36,19 @@ pub fn remove_joins(query: &mut Query, members: &dyn Members) {
                 break;
             }
         }
+        // `remove_rel_from_query`: a `PlaceHolderVar` that another relation of its subquery can give no longer reads `k`.
+        query.each_expr_mut(0, &mut |expr, depth| {
+            expr.each_mut(depth, &mut |e, depth| {
+                if let ExprKind::PlaceHolder(p) = &mut e.kind
+                    && p.levels_up == depth
+                    && p.relations.contains(&k)
+                {
+                    p.relations.retain(|r| *r != k);
+                    p.removed = true;
+                }
+                false
+            });
+        });
     }
 }
 
@@ -116,13 +129,17 @@ fn join_is_removable(
     })
 }
 
-/// The number of columns of the relation `k` and of `PlaceHolderVar`s of `k` that the expression at the depth `depth` reads, also in its subqueries.
+/// The number of columns of the relation `k` and of `PlaceHolderVar`s that only `k` can give that the expression at the depth `depth` reads, also in its subqueries.
 fn reads(expr: &Expr, depth: usize, k: usize) -> usize {
     let mut n = 0;
     expr.find(depth, &mut |e, depth| {
         match &e.kind {
             ExprKind::Var(var) if var.levels_up == depth && var.relation == k => n += 1,
-            ExprKind::PlaceHolder(p) if p.levels_up == depth && p.relations.contains(&k) => n += 1,
+            ExprKind::PlaceHolder(p)
+                if p.levels_up == depth && p.relations.iter().all(|r| *r == k) =>
+            {
+                n += 1;
+            }
             _ => {}
         }
         None::<()>
