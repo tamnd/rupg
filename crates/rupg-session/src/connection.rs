@@ -4041,6 +4041,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/ts_alter.test")));
     }
 
+    /// `GROUP BY` on a type that has no order, with an aggregate call with `ORDER BY` or `DISTINCT`: a hash table cannot hold the groups, so the planner of `create_ordinary_grouping_paths` finds no plan. With grouping sets only a set with such a type needs a hash table. `connection/grouping_ordered_agg.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn grouping_ordered_agg() {
+        big_stack(|| script(include_str!("connection/grouping_ordered_agg.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

@@ -1,0 +1,67 @@
+> create temp table gstest4(id integer, v integer, unhashable_col bit(4), unsortable_col xid);
+CREATE TABLE
+> insert into gstest4 values (1,1,b'0000','1'), (2,2,b'0001','1'), (3,4,b'0010','2'), (4,8,b'0011','2'), (5,16,b'0000','2'), (6,32,b'0001','2'), (7,64,b'0010','1'), (8,128,b'0011','1');
+INSERT 0 8
+> set enable_hashagg = true;
+SET
+> select array_agg(v order by v) from gstest4 group by grouping sets ((id,unsortable_col),(id));
+ERROR 0A000 could not implement GROUP BY
+> explain (costs off) select array_agg(v order by v) from gstest4 group by grouping sets ((id,unsortable_col),(id));
+ERROR 0A000 could not implement GROUP BY
+> select array_agg(v order by v) from gstest4 group by unsortable_col;
+ERROR 0A000 could not implement GROUP BY
+> select count(distinct v) from gstest4 group by unsortable_col;
+ERROR 0A000 could not implement GROUP BY
+> select array_agg(v order by v) from gstest4 group by id;
+fields array_agg:1007:-1:-1
+row {1}
+row {2}
+row {4}
+row {8}
+row {16}
+row {32}
+row {64}
+row {128}
+SELECT 8
+> select array_agg(v order by v) from gstest4 group by grouping sets ((id),(v)) order by 1;
+fields array_agg:1007:-1:-1
+row {1}
+row {1}
+row {2}
+row {2}
+row {4}
+row {4}
+row {8}
+row {8}
+row {16}
+row {16}
+row {32}
+row {32}
+row {64}
+row {64}
+row {128}
+row {128}
+SELECT 16
+> select count(*) from gstest4 group by grouping sets ((id,unsortable_col),(id)) order by 1;
+fields count:20:8:-1
+row 1
+row 1
+row 1
+row 1
+row 1
+row 1
+row 1
+row 1
+row 1
+row 1
+row 1
+row 1
+row 1
+row 1
+row 1
+row 1
+SELECT 16
+> select string_agg(v::text, ',' order by v) from gstest4 group by grouping sets ((unsortable_col)) having count(*) > 0;
+ERROR 0A000 could not implement GROUP BY
+> select (select array_agg(v order by v)) from gstest4 group by unsortable_col;
+ERROR 0A000 could not implement GROUP BY
