@@ -1,0 +1,31 @@
+!details
+> create function polyf(x anyelement) returns anyelement as $$ select x + 1 $$ language sql
+CREATE FUNCTION
+> select polyf(point(3,4))
+ERROR 42883 operator does not exist: point + integer (SQL function "polyf" during inlining)
+DETAIL No operator of that name accepts the given argument types.
+HINT You might need to add explicit type casts.
+QUERY  select x + 1  at 11
+> create function polyg(x anyarray) returns anyarray as $$ select x $$ language sql
+CREATE FUNCTION
+> select polyg(stavalues1) from pg_statistic
+ERROR 42P13 return type anyarray is not supported for SQL functions (SQL function "polyg" during inlining)
+> set check_function_bodies = off
+SET
+> create function polyh(anyelement) returns anyarray language sql as ''
+CREATE FUNCTION
+> select polyh(0)
+fields polyh:1007:-1:-1
+ERROR 42P13 return type mismatch in function declared to return integer[] (SQL function "polyh" during startup)
+DETAIL Function's final statement must be SELECT or INSERT/UPDATE/DELETE/MERGE RETURNING.
+> create function polyi(int) returns int language sql as 'select 1; select $1 + 1'
+CREATE FUNCTION
+> select polyi(1)
+fields polyi:23:4:-1
+row 2
+SELECT 1
+> create function polyj(int) returns int language sql as 'select $1 +'
+CREATE FUNCTION
+> select polyj(1)
+ERROR 42601 syntax error at end of input (SQL function "polyj" during inlining)
+QUERY select $1 + at 12
