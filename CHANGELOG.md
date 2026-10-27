@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `ATTACH PARTITION` and `ALTER TABLE ... INHERIT` now fail when a generated column of the table has another kind than the generated column of the parent, as `MergeAttributesIntoExisting` does. (#876)
 - A row that goes to a leaf partition through its partitioned table now meets the check constraints of the leaf after a trigger `BEFORE INSERT ... FOR EACH ROW` of the leaf changes it. Before, the leaf did not check such a row. (#875)
 
 ## 0.3.2 (2026-10-27)

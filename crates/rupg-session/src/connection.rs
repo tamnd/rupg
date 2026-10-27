@@ -3748,6 +3748,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/route_trigger_checks.test")));
     }
 
+    /// `ATTACH PARTITION` and `INHERIT` of a table whose generated column has another kind than the generated column of the parent give the error of `MergeAttributesIntoExisting`. `connection/attach_generated_kind.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn attach_generated_kind() {
+        big_stack(|| script(include_str!("connection/attach_generated_kind.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

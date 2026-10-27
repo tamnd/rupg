@@ -1,0 +1,28 @@
+> CREATE TABLE gtest_parent (f1 date NOT NULL, f2 bigint, f3 bigint GENERATED ALWAYS AS (f2 * 2) STORED) PARTITION BY RANGE (f1)
+CREATE TABLE
+> CREATE TABLE gtest_child3 (f1 date NOT NULL, f2 bigint, f3 bigint GENERATED ALWAYS AS (f2 * 33) VIRTUAL)
+CREATE TABLE
+> ALTER TABLE gtest_parent ATTACH PARTITION gtest_child3 FOR VALUES FROM ('2016-09-01') TO ('2016-10-01')
+ERROR 42804 column "f3" inherits from generated column of different kind
+> DROP TABLE gtest_child3
+DROP TABLE
+> CREATE TABLE gtest_child3 (f1 date NOT NULL, f2 bigint, f3 bigint GENERATED ALWAYS AS (f2 * 33) STORED)
+CREATE TABLE
+> ALTER TABLE gtest_parent ATTACH PARTITION gtest_child3 FOR VALUES FROM ('2016-09-01') TO ('2016-10-01')
+ALTER TABLE
+> CREATE TABLE gp (a int, b int GENERATED ALWAYS AS (a * 2) VIRTUAL)
+CREATE TABLE
+> CREATE TABLE gc (a int, b int GENERATED ALWAYS AS (a * 3) STORED)
+CREATE TABLE
+> ALTER TABLE gc INHERIT gp
+ERROR 42804 column "b" inherits from generated column of different kind
+> CREATE TABLE gc2 (a int, b int GENERATED ALWAYS AS (a * 3) VIRTUAL)
+CREATE TABLE
+> ALTER TABLE gc2 INHERIT gp
+ALTER TABLE
+> INSERT INTO gc2 VALUES (1)
+INSERT 0 1
+> SELECT * FROM gp
+fields a@gp.1:23:4:-1,b@gp.2:23:4:-1
+row 1,2
+SELECT 1
