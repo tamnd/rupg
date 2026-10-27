@@ -75,6 +75,29 @@ impl Definer<'_, '_> {
                 "cannot attach a typed table as partition",
             ));
         }
+        // `GetRelationExcludedPublications`: a change of the tree of partitions could change what the publications publish.
+        let excluded: Vec<String> = self
+            .catalog
+            .publication_rels()
+            .filter(|r| r.relation == child && r.except)
+            .filter_map(|r| self.catalog.publication(r.publication))
+            .map(|p| format!("\"{}\"", p.name))
+            .collect();
+        if !excluded.is_empty() {
+            let word = if excluded.len() == 1 { "publication" } else { "publications" };
+            return Err(Error::new(
+                SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
+                format!(
+                    "cannot attach table \"{}\" as partition because it is referenced in {word} {} EXCEPT clause",
+                    rel.name,
+                    excluded.join(", ")
+                ),
+            )
+            .with_detail("The publication EXCEPT clause cannot contain tables that are partitions.")
+            .with_hint(
+                "Change the publication's EXCEPT clause using ALTER PUBLICATION ... SET ALL TABLES.",
+            ));
+        }
         // A table of `INHERITS` cannot be a partition, and a table with children of `INHERITS` cannot either.
         if !rel.inherits.is_empty() {
             return Err(Error::new(

@@ -225,14 +225,65 @@ impl Definer<'_, '_> {
                         format!("schema \"{schema}\" does not exist"),
                     ));
                 }
-                Err(no_publication(string(item(object, 1))?))
+                let name = string(item(object, 1))?;
+                let publication =
+                    self.catalog.publication_by_name(name).ok_or_else(|| no_publication(name))?;
+                // `get_object_address_publication_schema`.
+                let schema_oid = self.namespace_oid(schema).unwrap_or_default();
+                let row = self
+                    .catalog
+                    .publication_namespaces()
+                    .find(|n| n.publication == publication.oid && n.schema == schema_oid)
+                    .ok_or_else(|| {
+                        Error::new(
+                            SqlState::UNDEFINED_OBJECT,
+                            format!(
+                                "publication schema \"{schema}\" in publication \"{name}\" does not exist"
+                            ),
+                        )
+                    })?;
+                Ok(ObjRef::new(rupg_catalog::PG_PUBLICATION_NAMESPACE, row.oid))
             }
             ObjectType::OBJECT_PUBLICATION_REL | ObjectType::OBJECT_PUBLICATION_EXCLUDED_REL => {
                 let Some(relation) = item(object, 0) else {
                     return Err(Error::internal("the name of a relation"));
                 };
-                self.lookup_relation(&range_var(&strings(relation))?)?;
-                Err(no_publication(string(item(object, 1))?))
+                let found = self.lookup_relation(&range_var(&strings(relation))?)?;
+                let oid = found_oid(found);
+                let name = string(item(object, 1))?;
+                let publication =
+                    self.catalog.publication_by_name(name).ok_or_else(|| no_publication(name))?;
+                // `get_object_address_publication_rel`: the pair of the relation and the publication is a published relation or an excluded relation, and the kind must be the kind that the call asks for.
+                let rel_name = self.catalog.relation(oid).map_or("", |r| r.name.as_str());
+                let excluded = objtype == ObjectType::OBJECT_PUBLICATION_EXCLUDED_REL;
+                let Some(row) = self.catalog.publication_rel_of(publication.oid, oid) else {
+                    let what = if excluded {
+                        "publication excluded relation"
+                    } else {
+                        "publication relation"
+                    };
+                    return Err(Error::new(
+                        SqlState::UNDEFINED_OBJECT,
+                        format!("{what} \"{rel_name}\" in publication \"{name}\" does not exist"),
+                    ));
+                };
+                if excluded && !row.except {
+                    return Err(Error::new(
+                        SqlState::WRONG_OBJECT_TYPE,
+                        format!(
+                            "\"{rel_name}\" is not an excluded relation of publication \"{name}\""
+                        ),
+                    ));
+                }
+                if !excluded && row.except {
+                    return Err(Error::new(
+                        SqlState::WRONG_OBJECT_TYPE,
+                        format!(
+                            "\"{rel_name}\" is not a published relation of publication \"{name}\""
+                        ),
+                    ));
+                }
+                Ok(ObjRef::new(rupg_catalog::PG_PUBLICATION_REL, row.oid))
             }
             ObjectType::OBJECT_DEFACL => self.defacl_address(object),
             _ => Err(Error::internal(format!("unrecognized object type: {}", objtype.0))),
