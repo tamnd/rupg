@@ -1,0 +1,24 @@
+> create table int8_tbl (q1 int8, q2 int8)
+CREATE TABLE
+> insert into int8_tbl values (123, 456), (4567890123456789, 123)
+INSERT 0 2
+> SELECT q1 FROM int8_tbl EXCEPT SELECT q2 FROM int8_tbl ORDER BY q2 LIMIT 1
+ERROR 42703 column "q2" does not exist at 65
+> SELECT q1 FROM int8_tbl UNION SELECT q2 FROM int8_tbl ORDER BY q1
+fields q1:20:8:-1
+row 123
+row 456
+row 4567890123456789
+SELECT 3
+> SELECT q1 FROM int8_tbl UNION SELECT q1 FROM int8_tbl ORDER BY q2
+ERROR 42703 column "q2" does not exist at 64
+> SELECT q1 AS a FROM int8_tbl UNION SELECT q2 FROM int8_tbl ORDER BY q1
+ERROR 42703 column "q1" does not exist at 69
+> SELECT q1 FROM int8_tbl UNION SELECT q2 FROM int8_tbl ORDER BY int8_tbl.q1
+ERROR 42P01 missing FROM-clause entry for table "int8_tbl" at 64
+> SELECT q1 FROM int8_tbl UNION SELECT q2 FROM int8_tbl ORDER BY unnamed_subquery.q1
+ERROR 42P01 invalid reference to FROM-clause entry for table "unnamed_subquery" at 64
+> SELECT q1 FROM int8_tbl UNION SELECT q2 FROM int8_tbl ORDER BY qq
+ERROR 42703 column "qq" does not exist at 64
+> SELECT q1, q2 FROM int8_tbl UNION SELECT q2, q1 FROM int8_tbl ORDER BY q3
+ERROR 42703 column "q3" does not exist at 72

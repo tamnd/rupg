@@ -1242,6 +1242,22 @@ impl Analyzer<'_> {
         before
     }
 
+    /// `addRangeTableEntryForSubquery` of `transformSetOperationTree` for each `SELECT` of a set operation, with no item of the namespace: `ORDER BY` cannot use its columns, and the error of a missing column names it.
+    pub(crate) fn add_leaf_entries(&mut self) {
+        for (index, relation) in self.scope.relations.iter().enumerate() {
+            if relation.subquery.is_none() {
+                continue;
+            }
+            self.scope.entries.push(Entry {
+                name: relation.name.clone(),
+                aliased: false,
+                columns: relation.columns.iter().map(|c| c.name.clone()).collect(),
+                relation: Some(index),
+                oid: 0,
+            });
+        }
+    }
+
     /// Removes the entry and the item that [`Analyzer::add_columns`] added.
     pub(crate) fn remove_columns(&mut self, (entries, items): (usize, usize)) {
         self.scope.entries.truncate(entries);

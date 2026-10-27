@@ -158,6 +158,7 @@ impl Analyzer<'_> {
         // The names of the columns are visible to `ORDER BY`, which cannot add a junk column.
         let columns = targets.iter().map(|t| (t.name.clone(), t.expr.clone())).collect();
         let saved = self.add_columns(columns);
+        self.add_leaf_entries();
         let width = targets.len();
         let sort = self.sort_clause(&s.sortClause, &mut targets);
         self.remove_columns(saved);

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A name in `ORDER BY` of a set operation that is not a column of the operation now gives the detail and the hint that name the `SELECT` with the column, `unnamed_subquery`, as PostgreSQL does. (#873)
 - Fold a condition that moves into a `SELECT` of a set operation or into a subquery. A constant condition now takes out the `SELECT` or becomes a `One-Time Filter`, and a `UNION` with one `SELECT` left shows the names and keys of that `SELECT`. (#872)
 - Prune the empty inputs of a set operation as PostgreSQL 19 does. A `UNION` leaves out each `SELECT` that is empty, and the plan of an operation whose inputs are all empty is a `Result` that replaces the operation. `INTERSECT` with an empty side and `EXCEPT` with an empty left side are empty, and `EXCEPT ALL` with an empty right side reads only its left side. The `SELECT` parts of a set operation now have the name `unnamed_subquery`. (#870)
 - A `UNION` with no column puts no `Sort` below its `Unique`, as PostgreSQL does. Before, `EXPLAIN` showed a `Sort` with an empty `Sort Key`. (#868)
