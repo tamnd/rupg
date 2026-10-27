@@ -3957,6 +3957,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_setop_sort.test")));
     }
 
+    /// The plan of a set operation below another set operation shows the columns of its leftmost `SELECT` in the `Output` of its nodes.
+    #[test]
+    fn plan_setop_nested() {
+        big_stack(|| script(include_str!("connection/plan_setop_nested.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {
