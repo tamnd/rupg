@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.3.7 (2026-10-27)
+
 ### Added
 
 - `GROUPING` in a subquery now matches an argument that is not a plain column with the items of the query that groups, EXPLAIN no longer shows the subplans in the arguments of `GROUPING`, and a query with `GROUPING` and no aggregate is a `GroupAggregate`, as in PostgreSQL (#936).
