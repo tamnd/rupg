@@ -994,6 +994,28 @@ impl Expr {
 
     /// `equal` of PostgreSQL: true when the two expressions are the same apart from their locations.
     pub fn same(&self, other: &Expr) -> bool {
+        // The planner compares many expressions, and most pairs are not the same. These checks do not copy the expressions.
+        if self.ty != other.ty
+            || self.typmod != other.typmod
+            || std::mem::discriminant(&self.kind) != std::mem::discriminant(&other.kind)
+        {
+            return false;
+        }
+        match (&self.kind, &other.kind) {
+            (ExprKind::Var(a), ExprKind::Var(b)) => return a == b,
+            (ExprKind::Const(a), ExprKind::Const(b)) => return a == b,
+            (ExprKind::Param(a), ExprKind::Param(b)) => return a == b,
+            (ExprKind::Func(a), ExprKind::Func(b)) => {
+                return a.oid == b.oid
+                    && a.form == b.form
+                    && a.variadic == b.variadic
+                    && a.retset == b.retset
+                    && a.args.len() == b.args.len()
+                    && a.args.iter().zip(&b.args).all(|(x, y)| x.same(y));
+            }
+            (ExprKind::Relabel(a, af), ExprKind::Relabel(b, bf)) => return af == bf && a.same(b),
+            _ => {}
+        }
         fn strip(expr: &mut Expr) {
             expr.location = None;
             for child in expr.children_mut() {

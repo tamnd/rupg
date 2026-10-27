@@ -17,9 +17,9 @@ mod setcast;
 mod setop;
 mod upper;
 
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -506,6 +506,8 @@ pub(crate) struct Level<'q> {
     pub(crate) write: Option<&'q Write>,
     /// True for a subquery of [`Query::minmax`]: only a plan of `FROM` whose rows are in the order of `ORDER BY` is a plan of the query.
     pub(crate) presorted: bool,
+    /// [`from::lateral_rels`] of each relation of the query. The join search reads them for each pair of relations that it tries, so the planner finds them once.
+    pub(crate) lateral: OnceCell<Vec<BTreeSet<usize>>>,
 }
 
 impl<'q> Level<'q> {
@@ -587,6 +589,7 @@ impl<'q> Builder<'q> {
             marks,
             write,
             presorted,
+            lateral: OnceCell::new(),
         };
         let depth = self.ctes.len();
         if !std::ptr::eq(outer, query) {

@@ -2498,13 +2498,20 @@ fn lateral(level: &Level<'_>, rels: &BTreeSet<usize>, other: &BTreeSet<usize>) -
 }
 
 /// The relations of the query that the expressions of a relation of `FROM` read: its function, its `VALUES` lists or the columns of the query in its subquery.
-pub(crate) fn lateral_rels(level: &Level<'_>, r: usize) -> BTreeSet<usize> {
-    let mut out = BTreeSet::new();
-    for expr in lateral_exprs_at(level.query, r) {
-        out.extend(exprs::relations_at(expr.0, expr.1));
-    }
-    out.remove(&r);
-    out
+pub(crate) fn lateral_rels<'a>(level: &'a Level<'_>, r: usize) -> &'a BTreeSet<usize> {
+    let all = level.lateral.get_or_init(|| {
+        (0..level.query.relations.len())
+            .map(|r| {
+                let mut out = BTreeSet::new();
+                for expr in lateral_exprs_at(level.query, r) {
+                    out.extend(exprs::relations_at(expr.0, expr.1));
+                }
+                out.remove(&r);
+                out
+            })
+            .collect()
+    });
+    &all[r]
 }
 
 /// [`lateral_exprs`] of the relation `r` of the query, with the expressions of the `PlaceHolderVar`s that the scan of `r` computes, whose columns of the other relations are its `ph_lateral`.
@@ -3054,7 +3061,8 @@ fn movable<'q>(
     if inner.len() != 1 || !lateral(level, inner, outer) {
         return None;
     }
-    let mut reach: BTreeSet<usize> = inner.iter().flat_map(|r| lateral_rels(level, *r)).collect();
+    let mut reach: BTreeSet<usize> =
+        inner.iter().flat_map(|r| lateral_rels(level, *r).iter().copied()).collect();
     reach.extend(inner.iter().copied());
     Some(
         quals.iter().cloned().partition(|q| q.rels.is_subset(&reach) && !q.rels.is_disjoint(inner)),
