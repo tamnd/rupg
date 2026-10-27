@@ -1,10 +1,13 @@
-//! The names and the numbers of the encodings, as `encnames.c` gives them: `pg_char_to_encoding` and `pg_encoding_to_char`, and the SQL functions with these names. The conversions of `mbutils.c` and `conv.c` between UTF8 and the single-byte encodings: `convert`, `convert_from`, `convert_to` and `length(bytea, name)`. The function `to_ascii` of `ascii.c`.
+//! The names and the numbers of the encodings, as `encnames.c` gives them: `pg_char_to_encoding` and `pg_encoding_to_char`, and the SQL functions with these names. The conversions of `mbutils.c` and `conv.c` between UTF8 and the single-byte encodings, and between UTF8 and EUC_KR: `convert`, `convert_from`, `convert_to` and `length(bytea, name)`. The function `to_ascii` of `ascii.c`.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_types::Value;
 
+use crate::generated::double_byte::{DoubleByte, TABLES as DOUBLE_BYTE};
 use crate::generated::single_byte::TABLES;
 use crate::{Call, Kernel, bad_value, not_yet};
 
@@ -195,6 +198,50 @@ fn table(encoding: &str) -> Option<&'static [u16; 128]> {
     TABLES.iter().find(|(name, _)| *name == encoding).map(|(_, table)| table)
 }
 
+/// `pg_euckr_verifychar`: the length of the EUC_KR character at the start of `rest`, or None for a bad character. A character with the high bit is two bytes from 0xA1 to 0xFE.
+fn euc_kr_length(rest: &[u8]) -> Option<usize> {
+    let valid = |b: &u8| (0xa1..=0xfe).contains(b);
+    match rest {
+        [0, ..] | [] => None,
+        [b, ..] if *b < 0x80 => Some(1),
+        [a, b, ..] if valid(a) && valid(b) => Some(2),
+        _ => None,
+    }
+}
+
+/// The map of EUC_KR.
+fn euc_kr_map() -> &'static DoubleByte {
+    DOUBLE_BYTE.iter().find(|m| m.name == "EUC_KR").expect("the map of EUC_KR")
+}
+
+/// The code point of the pair of bytes `a` and `b` in EUC_KR, as `pg_mb_radix_conv` finds it in `euc_kr_to_unicode_tree`, or None for a pair with no character.
+fn euc_kr_decode(a: u8, b: u8) -> Option<char> {
+    let DoubleByte { first, second, table, .. } = euc_kr_map();
+    if !(first.0..=first.1).contains(&a) || !(second.0..=second.1).contains(&b) {
+        return None;
+    }
+    let width = usize::from(second.1 - second.0) + 1;
+    let c = table[usize::from(a - first.0) * width + usize::from(b - second.0)];
+    if c == 0 { None } else { char::from_u32(u32::from(c)) }
+}
+
+/// The pair of bytes of a character in EUC_KR, as `euc_kr_from_unicode_tree` gives it, or None for a character that EUC_KR does not have. The map from UTF-8 is the inverse of the map to UTF-8.
+fn euc_kr_encode(c: char) -> Option<[u8; 2]> {
+    static INVERSE: OnceLock<HashMap<u16, [u8; 2]>> = OnceLock::new();
+    let inverse = INVERSE.get_or_init(|| {
+        let DoubleByte { first, second, table, .. } = euc_kr_map();
+        let width = usize::from(second.1 - second.0) + 1;
+        let mut inverse = HashMap::new();
+        for (n, c) in table.iter().enumerate().filter(|(_, c)| **c != 0) {
+            let (a, b) = (n / width, n % width);
+            let pair = [first.0 + a as u8, second.0 + b as u8];
+            inverse.entry(*c).or_insert(pair);
+        }
+        inverse
+    });
+    inverse.get(&u16::try_from(u32::from(c)).ok()?).copied()
+}
+
 /// True for an encoding in which each character is one byte.
 fn single_byte(encoding: &str) -> bool {
     matches!(encoding, "SQL_ASCII" | "LATIN1") || table(encoding).is_some()
@@ -239,7 +286,11 @@ fn byte_text(bytes: &[u8]) -> String {
 
 /// The length of the character at the start of `rest` in an encoding, as `pg_encoding_mblen_or_incomplete` gives it, but not more than the bytes in `rest`.
 fn char_length(encoding: &str, rest: &[u8]) -> usize {
-    let length = if encoding == "UTF8" { rest.first().map_or(1, |b| utf8_length(*b)) } else { 1 };
+    let length = match (encoding, rest.first()) {
+        ("UTF8", Some(b)) => utf8_length(*b),
+        ("EUC_KR", Some(b)) if *b >= 0x80 => 2,
+        _ => 1,
+    };
     length.min(rest.len())
 }
 
@@ -282,6 +333,14 @@ fn verify(encoding: &str, bytes: &[u8]) -> Result<usize> {
         }
         return Ok(bytes.iter().filter(|b| (**b & 0xc0) != 0x80).count());
     }
+    if encoding == "EUC_KR" {
+        let (mut at, mut count) = (0, 0);
+        while at < bytes.len() {
+            at += euc_kr_length(&bytes[at..]).ok_or_else(|| invalid(encoding, &bytes[at..]))?;
+            count += 1;
+        }
+        return Ok(count);
+    }
     // Each encoding has the ASCII characters as single bytes.
     if !single_byte(encoding) && !bytes.is_ascii() {
         return Err(not_yet(format_args!("a string in the encoding {encoding}")));
@@ -315,6 +374,34 @@ fn conversion<'a>(bytes: &'a [u8], from: &str, to: &str) -> Result<Cow<'a, [u8]>
             out.push(decode_byte(from, *b).ok_or_else(|| untranslatable(from, to, &bytes[at..]))?);
         }
         return Ok(Cow::Owned(out.into_bytes()));
+    }
+    // `euc_kr_to_utf8` and `utf8_to_euc_kr`: `LocalToUtf` and `UtfToLocal` with the maps of EUC_KR. The ASCII characters stay as they are.
+    if from == "EUC_KR" && to == "UTF8" {
+        let mut out = String::with_capacity(bytes.len() * 3 / 2);
+        let mut at = 0;
+        while at < bytes.len() {
+            if bytes[at] < 0x80 {
+                out.push(char::from(bytes[at]));
+                at += 1;
+                continue;
+            }
+            let c = bytes.get(at + 1).and_then(|b| euc_kr_decode(bytes[at], *b));
+            out.push(c.ok_or_else(|| untranslatable(from, to, &bytes[at..]))?);
+            at += 2;
+        }
+        return Ok(Cow::Owned(out.into_bytes()));
+    }
+    if from == "UTF8" && to == "EUC_KR" {
+        let text = std::str::from_utf8(bytes).map_err(|_| invalid(from, bytes))?;
+        let mut out = Vec::with_capacity(bytes.len());
+        for (at, c) in text.char_indices() {
+            if c.is_ascii() {
+                out.push(c as u8);
+                continue;
+            }
+            out.extend(euc_kr_encode(c).ok_or_else(|| untranslatable(from, to, &bytes[at..]))?);
+        }
+        return Ok(Cow::Owned(out));
     }
     let direct = DIRECT.iter().any(|&(a, b)| (a, b) == (from, to) || (b, a) == (from, to));
     if direct || from == "UTF8" || to == "UTF8" {
@@ -481,6 +568,21 @@ mod tests {
         for (number, name) in NAMES.iter().enumerate().filter(|(_, n)| !n.is_empty()) {
             assert_eq!(usize::try_from(char_to_encoding(name)).ok(), Some(number));
         }
+    }
+
+    #[test]
+    fn euc_kr_table() {
+        let mut count = 0;
+        for a in 0xa1..=0xfe {
+            for b in 0xa1..=0xfe {
+                if let Some(c) = euc_kr_decode(a, b) {
+                    assert_eq!(euc_kr_encode(c), Some([a, b]), "{c}");
+                    count += 1;
+                }
+            }
+        }
+        assert!(count > 8000, "{count}");
+        assert_eq!(euc_kr_decode(0xb0, 0xa1), Some('가'));
     }
 
     #[test]
