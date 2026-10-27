@@ -198,18 +198,24 @@ impl Definer<'_, '_> {
                 let user = string(item(object, 0))?;
                 let server = string(item(object, 1))?;
                 let roles = rupg_pgcatalog::roles::current();
-                if user != "public" && roles.oid(user).is_none() {
-                    return Err(Error::new(
+                let missing = || {
+                    Error::new(
                         SqlState::UNDEFINED_OBJECT,
                         format!(
                             "user mapping for user \"{user}\" on server \"{server}\" does not exist"
                         ),
-                    ));
-                }
-                Err(Error::new(
-                    SqlState::UNDEFINED_OBJECT,
-                    format!("server \"{server}\" does not exist"),
-                ))
+                    )
+                };
+                let role =
+                    if user == "public" { 0 } else { roles.oid(user).ok_or_else(missing)? };
+                let found = self.catalog.server_by_name(server).ok_or_else(|| {
+                    Error::new(
+                        SqlState::UNDEFINED_OBJECT,
+                        format!("server \"{server}\" does not exist"),
+                    )
+                })?;
+                let mapping = self.catalog.user_mapping_for(role, found.oid).ok_or_else(missing)?;
+                Ok(ObjRef::new(rupg_catalog::PG_USER_MAPPING, mapping.oid))
             }
             ObjectType::OBJECT_PUBLICATION_NAMESPACE => {
                 let schema = string(item(object, 0))?;

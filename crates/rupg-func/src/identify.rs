@@ -312,6 +312,13 @@ fn parts(object: ObjRef, session: &dyn Session) -> Option<Parts> {
             .map(Parts::named),
         rupg_catalog::PG_FOREIGN_DATA_WRAPPER => catalog?.fdw(oid).map(|f| Parts::named(&f.name)),
         rupg_catalog::PG_FOREIGN_SERVER => catalog?.server(oid).map(|s| Parts::named(&s.name)),
+        rupg_catalog::PG_USER_MAPPING => {
+            let mapping = catalog?.user_mapping(oid)?;
+            let server = catalog?.server(mapping.server)?;
+            let user = crate::describe::mapping_user(mapping.user);
+            let identity = format!("{} on server {}", quote_identifier(&user), server.name);
+            Some(Parts::identity(identity).with(vec![user], vec![server.name.clone()]))
+        }
         PG_LARGEOBJECT => builtin::owned_by_oid(Owned::LargeObject, oid)
             .map(|_| Parts::identity(oid.to_string()).with(vec![oid.to_string()], Vec::new())),
         PG_OPERATOR => {

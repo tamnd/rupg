@@ -265,6 +265,7 @@ pub(crate) fn rows(
         "pg_conversion" => conversions(table, catalog),
         "pg_foreign_data_wrapper" => fdws(table, catalog),
         "pg_foreign_server" => servers(table, catalog),
+        "pg_user_mapping" => user_mappings(table, catalog),
         "pg_operator" => operators(table, catalog),
         "pg_aggregate" => aggregates(table, catalog),
         "pg_opfamily" => opfamilies(table, catalog),
@@ -1337,6 +1338,20 @@ fn servers<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("srvversion", text(&s.version))
                 .set("srvacl", granted(catalog, ObjRef::new(PG_FOREIGN_SERVER, s.oid)))
                 .set("srvoptions", options(&s.options));
+            row
+        })
+        .collect()
+}
+
+fn user_mappings<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .user_mappings()
+        .map(|m| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(m.oid))
+                .set("umuser", oid(m.user))
+                .set("umserver", oid(m.server))
+                .set("umoptions", options(&m.options));
             row
         })
         .collect()

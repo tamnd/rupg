@@ -1,0 +1,280 @@
+> CREATE ROLE tsstat_um_user LOGIN SUPERUSER;
+CREATE ROLE
+> SET SESSION AUTHORIZATION 'tsstat_um_user';
+SET
+session_authorization=tsstat_um_user
+> CREATE ROLE tsstat_um_role;
+CREATE ROLE
+> CREATE ROLE tsstat_um_role2;
+CREATE ROLE
+> CREATE ROLE tsstat_um_unpriv;
+CREATE ROLE
+> GRANT tsstat_um_role TO tsstat_um_unpriv;
+GRANT ROLE
+> CREATE FOREIGN DATA WRAPPER foo;
+CREATE FOREIGN DATA WRAPPER
+> CREATE FOREIGN DATA WRAPPER postgresql VALIDATOR postgresql_fdw_validator;
+CREATE FOREIGN DATA WRAPPER
+> GRANT USAGE ON FOREIGN DATA WRAPPER foo TO tsstat_um_role;
+GRANT
+> GRANT SELECT ON FOREIGN DATA WRAPPER foo TO tsstat_um_role;
+ERROR 0LP01 invalid privilege type SELECT for foreign-data wrapper
+> GRANT ALL ON FOREIGN DATA WRAPPER nope TO tsstat_um_role;
+ERROR 42704 foreign-data wrapper "nope" does not exist
+> SELECT fdwname, fdwacl FROM pg_foreign_data_wrapper ORDER BY 1;
+fields fdwname@pg_foreign_data_wrapper.2:19:64:-1,fdwacl@pg_foreign_data_wrapper.7:1034:-1:-1
+row foo,{tsstat_um_user=U/tsstat_um_user,tsstat_um_role=U/tsstat_um_user}
+row postgresql,NULL
+SELECT 2
+> SET ROLE tsstat_um_unpriv;
+SET
+is_superuser=off
+> CREATE SERVER s1 FOREIGN DATA WRAPPER foo;
+CREATE SERVER
+> CREATE SERVER s2 FOREIGN DATA WRAPPER postgresql;
+ERROR 42501 permission denied for foreign-data wrapper postgresql
+> RESET ROLE;
+RESET
+is_superuser=on
+> SELECT srvname, srvowner::regrole FROM pg_foreign_server ORDER BY 1;
+fields srvname@pg_foreign_server.2:19:64:-1,srvowner:4096:4:-1
+row s1,tsstat_um_unpriv
+SELECT 1
+> GRANT USAGE ON FOREIGN DATA WRAPPER postgresql TO PUBLIC;
+GRANT
+> CREATE SERVER s2 FOREIGN DATA WRAPPER postgresql;
+CREATE SERVER
+> GRANT USAGE ON FOREIGN DATA WRAPPER foo TO tsstat_um_role2 WITH GRANT OPTION;
+GRANT
+> SET ROLE tsstat_um_role2;
+SET
+is_superuser=off
+> GRANT USAGE ON FOREIGN DATA WRAPPER foo TO tsstat_um_unpriv;
+GRANT
+> GRANT USAGE ON FOREIGN DATA WRAPPER postgresql TO tsstat_um_unpriv;
+WARNING 01007 no privileges were granted for "postgresql"
+GRANT
+> RESET ROLE;
+RESET
+is_superuser=on
+> SELECT fdwname, fdwacl FROM pg_foreign_data_wrapper ORDER BY 1;
+fields fdwname@pg_foreign_data_wrapper.2:19:64:-1,fdwacl@pg_foreign_data_wrapper.7:1034:-1:-1
+row foo,{tsstat_um_user=U/tsstat_um_user,tsstat_um_role=U/tsstat_um_user,tsstat_um_role2=U*/tsstat_um_user,tsstat_um_unpriv=U/tsstat_um_role2}
+row postgresql,{tsstat_um_user=U/tsstat_um_user,=U/tsstat_um_user}
+SELECT 2
+> REVOKE USAGE ON FOREIGN DATA WRAPPER foo FROM tsstat_um_role2;
+ERROR 2BP01 dependent privileges exist
+> REVOKE USAGE ON FOREIGN DATA WRAPPER foo FROM tsstat_um_role2 CASCADE;
+REVOKE
+> SELECT fdwname, fdwacl FROM pg_foreign_data_wrapper ORDER BY 1;
+fields fdwname@pg_foreign_data_wrapper.2:19:64:-1,fdwacl@pg_foreign_data_wrapper.7:1034:-1:-1
+row foo,{tsstat_um_user=U/tsstat_um_user,tsstat_um_role=U/tsstat_um_user}
+row postgresql,{tsstat_um_user=U/tsstat_um_user,=U/tsstat_um_user}
+SELECT 2
+> CREATE SERVER s3 FOREIGN DATA WRAPPER foo;
+CREATE SERVER
+> GRANT USAGE ON FOREIGN SERVER s3 TO tsstat_um_role2;
+GRANT
+> GRANT USAGE, SELECT ON FOREIGN SERVER s3 TO tsstat_um_role2;
+ERROR 0LP01 invalid privilege type SELECT for foreign server
+> GRANT ALL ON FOREIGN SERVER nope TO tsstat_um_role2;
+ERROR 42704 server "nope" does not exist
+> SELECT srvname, srvacl FROM pg_foreign_server ORDER BY 1;
+fields srvname@pg_foreign_server.2:19:64:-1,srvacl@pg_foreign_server.7:1034:-1:-1
+row s1,NULL
+row s2,NULL
+row s3,{tsstat_um_user=U/tsstat_um_user,tsstat_um_role2=U/tsstat_um_user}
+SELECT 3
+> SELECT has_server_privilege('tsstat_um_role2', 's3', 'USAGE'), has_server_privilege('tsstat_um_unpriv', 's3', 'USAGE'), has_foreign_data_wrapper_privilege('tsstat_um_role', 'foo', 'USAGE'), has_foreign_data_wrapper_privilege('tsstat_um_role2', 'foo', 'USAGE');
+fields has_server_privilege:16:1:-1,has_server_privilege:16:1:-1,has_foreign_data_wrapper_privilege:16:1:-1,has_foreign_data_wrapper_privilege:16:1:-1
+row t,f,t,f
+SELECT 1
+> CREATE USER MAPPING FOR tsstat_um_role SERVER s1;
+CREATE USER MAPPING
+> CREATE USER MAPPING FOR tsstat_um_role SERVER s1;
+ERROR 42710 user mapping for "tsstat_um_role" already exists for server "s1"
+> CREATE USER MAPPING IF NOT EXISTS FOR tsstat_um_role SERVER s1;
+NOTICE 42710 user mapping for "tsstat_um_role" already exists for server "s1", skipping
+CREATE USER MAPPING
+> CREATE USER MAPPING FOR nosuch SERVER s1;
+ERROR 42704 role "nosuch" does not exist
+> CREATE USER MAPPING FOR tsstat_um_role SERVER nosuch;
+ERROR 42704 server "nosuch" does not exist
+> CREATE USER MAPPING FOR current_user SERVER s1 OPTIONS (user 'a', password 'b');
+CREATE USER MAPPING
+> CREATE USER MAPPING FOR PUBLIC SERVER s1 OPTIONS (x '1');
+CREATE USER MAPPING
+> CREATE USER MAPPING FOR PUBLIC SERVER s2 OPTIONS (host 'h');
+ERROR 42601 invalid option "host"
+> CREATE USER MAPPING FOR PUBLIC SERVER s2 OPTIONS (user 'u');
+CREATE USER MAPPING
+> CREATE USER MAPPING FOR tsstat_um_role2 SERVER s3 OPTIONS (a '1');
+CREATE USER MAPPING
+> SELECT srvname, usename, umoptions FROM pg_user_mappings ORDER BY 1, 2;
+fields srvname@pg_user_mappings.3:19:64:-1,usename@pg_user_mappings.5:19:64:-1,umoptions@pg_user_mappings.6:1009:-1:-1
+row s1,public,{x=1}
+row s1,tsstat_um_role,NULL
+row s1,tsstat_um_user,{user=a,password=b}
+row s2,public,{user=u}
+row s3,tsstat_um_role2,{a=1}
+SELECT 5
+> SELECT umuser::regrole, (SELECT srvname FROM pg_foreign_server s WHERE s.oid = umserver), umoptions FROM pg_user_mapping ORDER BY 2, 1;
+fields umuser:4096:4:-1,srvname:19:64:-1,umoptions@pg_user_mapping.4:1009:-1:-1
+row -,s1,{x=1}
+row tsstat_um_user,s1,{user=a,password=b}
+row tsstat_um_role,s1,NULL
+row -,s2,{user=u}
+row tsstat_um_role2,s3,{a=1}
+SELECT 5
+> ALTER USER MAPPING FOR tsstat_um_role SERVER s1 OPTIONS (ADD k 'v');
+ALTER USER MAPPING
+> ALTER USER MAPPING FOR tsstat_um_role SERVER s1 OPTIONS (SET k 'w', ADD j '1');
+ALTER USER MAPPING
+> ALTER USER MAPPING FOR tsstat_um_role SERVER s1 OPTIONS (DROP nope);
+ERROR 42704 option "nope" not found
+> ALTER USER MAPPING FOR PUBLIC SERVER s2 OPTIONS (ADD host 'h');
+ERROR 42601 invalid option "host"
+> ALTER USER MAPPING FOR PUBLIC SERVER s2 OPTIONS (ADD password 'p');
+ALTER USER MAPPING
+> ALTER USER MAPPING FOR tsstat_um_role2 SERVER s1 OPTIONS (a '1');
+ERROR 42704 user mapping for "tsstat_um_role2" does not exist for server "s1"
+> ALTER USER MAPPING FOR nosuch SERVER s1 OPTIONS (a '1');
+ERROR 42704 role "nosuch" does not exist
+> ALTER USER MAPPING FOR tsstat_um_role SERVER nosuch OPTIONS (a '1');
+ERROR 42704 server "nosuch" does not exist
+> SELECT srvname, usename, umoptions FROM pg_user_mappings ORDER BY 1, 2;
+fields srvname@pg_user_mappings.3:19:64:-1,usename@pg_user_mappings.5:19:64:-1,umoptions@pg_user_mappings.6:1009:-1:-1
+row s1,public,{x=1}
+row s1,tsstat_um_role,{k=w,j=1}
+row s1,tsstat_um_user,{user=a,password=b}
+row s2,public,{user=u,password=p}
+row s3,tsstat_um_role2,{a=1}
+SELECT 5
+> SET ROLE tsstat_um_role2;
+SET
+is_superuser=off
+> SELECT srvname, usename, umoptions FROM pg_user_mappings ORDER BY 1, 2;
+fields srvname@pg_user_mappings.3:19:64:-1,usename@pg_user_mappings.5:19:64:-1,umoptions@pg_user_mappings.6:1009:-1:-1
+row s1,public,NULL
+row s1,tsstat_um_role,NULL
+row s1,tsstat_um_user,NULL
+row s2,public,NULL
+row s3,tsstat_um_role2,{a=1}
+SELECT 5
+> ALTER USER MAPPING FOR tsstat_um_role2 SERVER s3 OPTIONS (SET a '2');
+ALTER USER MAPPING
+> ALTER USER MAPPING FOR tsstat_um_role SERVER s1 OPTIONS (ADD z '1');
+ERROR 42501 must be owner of foreign server s1
+> CREATE USER MAPPING FOR tsstat_um_role2 SERVER s1;
+ERROR 42501 permission denied for foreign server s1
+> CREATE USER MAPPING FOR current_user SERVER s3;
+ERROR 42710 user mapping for "tsstat_um_role2" already exists for server "s3"
+> DROP USER MAPPING FOR tsstat_um_role SERVER s1;
+ERROR 42501 must be owner of foreign server s1
+> RESET ROLE;
+RESET
+is_superuser=on
+> SET ROLE tsstat_um_unpriv;
+SET
+is_superuser=off
+> CREATE USER MAPPING FOR tsstat_um_unpriv SERVER s3;
+ERROR 42501 permission denied for foreign server s3
+> DROP USER MAPPING FOR tsstat_um_role SERVER s1;
+DROP USER MAPPING
+> RESET ROLE;
+RESET
+is_superuser=on
+> SELECT pg_describe_object(classid, objid, objsubid) AS obj, pg_describe_object(refclassid, refobjid, refobjsubid) AS ref, deptype FROM pg_depend WHERE classid = 'pg_user_mapping'::regclass ORDER BY 1, 2;
+fields obj:25:-1:-1,ref:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row user mapping for public on server s1,server s1,n
+row user mapping for public on server s2,server s2,n
+row user mapping for tsstat_um_role2 on server s3,server s3,n
+row user mapping for tsstat_um_user on server s1,server s1,n
+SELECT 4
+> SELECT (pg_identify_object('pg_user_mapping'::regclass, oid, 0)).*, pg_identify_object_as_address('pg_user_mapping'::regclass, oid, 0) FROM pg_user_mapping ORDER BY 3;
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1,pg_identify_object_as_address:2249:-1:-1
+row user mapping,NULL,NULL,tsstat_um_user on server s1,("user mapping",{tsstat_um_user},{s1})
+row user mapping,NULL,NULL,public on server s1,("user mapping",{public},{s1})
+row user mapping,NULL,NULL,public on server s2,("user mapping",{public},{s2})
+row user mapping,NULL,NULL,tsstat_um_role2 on server s3,("user mapping",{tsstat_um_role2},{s3})
+SELECT 4
+> SELECT pg_describe_object(a.classid, a.objid, a.objsubid) FROM pg_get_object_address('user mapping', '{tsstat_um_role}', '{s1}') a;
+fields pg_describe_object:25:-1:-1
+ERROR 42704 user mapping for user "tsstat_um_role" on server "s1" does not exist
+> SELECT pg_describe_object(a.classid, a.objid, a.objsubid) FROM pg_get_object_address('user mapping', '{public}', '{s2}') a;
+fields pg_describe_object:25:-1:-1
+row user mapping for public on server s2
+SELECT 1
+> SELECT pg_describe_object(a.classid, a.objid, a.objsubid) FROM pg_get_object_address('user mapping', '{tsstat_um_role2}', '{s2}') a;
+fields pg_describe_object:25:-1:-1
+ERROR 42704 user mapping for user "tsstat_um_role2" on server "s2" does not exist
+> SELECT pg_describe_object(a.classid, a.objid, a.objsubid) FROM pg_get_object_address('user mapping', '{nosuch}', '{s2}') a;
+fields pg_describe_object:25:-1:-1
+ERROR 42704 user mapping for user "nosuch" on server "s2" does not exist
+> SELECT pg_describe_object(a.classid, a.objid, a.objsubid) FROM pg_get_object_address('user mapping', '{public}', '{nosuch}') a;
+fields pg_describe_object:25:-1:-1
+ERROR 42704 server "nosuch" does not exist
+> DROP ROLE tsstat_um_role2;
+ERROR 2BP01 role "tsstat_um_role2" cannot be dropped because some objects depend on it
+> DROP SERVER s3;
+ERROR 2BP01 cannot drop server s3 because other objects depend on it
+> DROP USER MAPPING FOR nosuch SERVER s1;
+ERROR 42704 role "nosuch" does not exist
+> DROP USER MAPPING IF EXISTS FOR nosuch SERVER s1;
+NOTICE 00000 role "nosuch" does not exist, skipping
+DROP USER MAPPING
+> DROP USER MAPPING FOR tsstat_um_role SERVER nosuch;
+ERROR 42704 server "nosuch" does not exist
+> DROP USER MAPPING IF EXISTS FOR tsstat_um_role SERVER nosuch;
+NOTICE 00000 server "nosuch" does not exist, skipping
+DROP USER MAPPING
+> DROP USER MAPPING FOR tsstat_um_role2 SERVER s1;
+ERROR 42704 user mapping for "tsstat_um_role2" does not exist for server "s1"
+> DROP USER MAPPING IF EXISTS FOR tsstat_um_role2 SERVER s1;
+NOTICE 00000 user mapping for "tsstat_um_role2" does not exist for server "s1", skipping
+DROP USER MAPPING
+> DROP USER MAPPING FOR PUBLIC SERVER s1;
+DROP USER MAPPING
+> DROP USER MAPPING IF EXISTS FOR PUBLIC SERVER s1;
+NOTICE 00000 user mapping for "public" does not exist for server "s1", skipping
+DROP USER MAPPING
+> DROP USER MAPPING FOR tsstat_um_role SERVER s1;
+ERROR 42704 user mapping for "tsstat_um_role" does not exist for server "s1"
+> REASSIGN OWNED BY tsstat_um_role2 TO tsstat_um_role;
+REASSIGN OWNED
+> SELECT srvname, usename FROM pg_user_mappings ORDER BY 1, 2;
+fields srvname@pg_user_mappings.3:19:64:-1,usename@pg_user_mappings.5:19:64:-1
+row s1,tsstat_um_user
+row s2,public
+row s3,tsstat_um_role2
+SELECT 3
+> DROP OWNED BY tsstat_um_role2;
+DROP OWNED
+> SELECT srvname, usename FROM pg_user_mappings ORDER BY 1, 2;
+fields srvname@pg_user_mappings.3:19:64:-1,usename@pg_user_mappings.5:19:64:-1
+row s1,tsstat_um_user
+row s2,public
+SELECT 2
+> SELECT srvname, srvacl FROM pg_foreign_server ORDER BY 1;
+fields srvname@pg_foreign_server.2:19:64:-1,srvacl@pg_foreign_server.7:1034:-1:-1
+row s1,NULL
+row s2,NULL
+row s3,{tsstat_um_user=U/tsstat_um_user}
+SELECT 3
+> DROP SERVER s2 CASCADE;
+NOTICE 00000 drop cascades to user mapping for public on server s2
+DROP SERVER
+> DROP FOREIGN DATA WRAPPER foo CASCADE;
+NOTICE 00000 drop cascades to 3 other objects
+DROP FOREIGN DATA WRAPPER
+> DROP FOREIGN DATA WRAPPER postgresql CASCADE;
+DROP FOREIGN DATA WRAPPER
+> SELECT count(*) FROM pg_user_mapping;
+fields count:20:8:-1
+row 0
+SELECT 1
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+> DROP ROLE tsstat_um_unpriv, tsstat_um_role, tsstat_um_role2, tsstat_um_user;
+DROP ROLE

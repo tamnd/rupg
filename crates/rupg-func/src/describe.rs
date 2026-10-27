@@ -73,6 +73,14 @@ pub(crate) const NO_OBJECTS: [u32; 13] =
 /// The names of the system columns, from `ctid` with the number -1.
 pub(crate) const SYSTEM_COLUMNS: [&str; 6] = ["ctid", "xmin", "cmin", "xmax", "cmax", "tableoid"];
 
+/// `MappingUserName`: the name of the role of a user mapping, or `public` for 0.
+pub(crate) fn mapping_user(role: u32) -> String {
+    if role == 0 {
+        return "public".to_string();
+    }
+    rupg_pgcatalog::roles::current().name(role).map_or_else(|| role.to_string(), str::to_string)
+}
+
 /// The OID argument at `index`.
 pub(crate) fn oid_arg(args: &[Value], index: usize) -> Result<u32> {
     args.get(index).and_then(Value::as_oid).ok_or_else(bad_value)
@@ -135,6 +143,15 @@ pub fn describe(object: ObjRef, session: &dyn Session) -> Result<Option<String>>
         rupg_catalog::PG_FOREIGN_SERVER => {
             catalog.and_then(|c| c.server(oid)).map(|s| format!("server {}", s.name))
         }
+        rupg_catalog::PG_USER_MAPPING => catalog.and_then(|c| {
+            let mapping = c.user_mapping(oid)?;
+            let server = c.server(mapping.server)?;
+            Some(format!(
+                "user mapping for {} on server {}",
+                mapping_user(mapping.user),
+                server.name
+            ))
+        }),
         PG_OPERATOR => {
             reg::name_of(RegKind::Operator, oid, session).map(|o| format!("operator {o}"))
         }

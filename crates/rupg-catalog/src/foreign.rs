@@ -1,4 +1,4 @@
-//! The foreign-data wrappers of `pg_foreign_data_wrapper` and the foreign servers of `pg_foreign_server`. They change as `CreateForeignDataWrapper`, `AlterForeignDataWrapper`, `CreateForeignServer` and `AlterForeignServer` of `foreigncmds.c` change them, with the same rows of `pg_depend`.
+//! The foreign-data wrappers of `pg_foreign_data_wrapper`, the foreign servers of `pg_foreign_server` and the user mappings of `pg_user_mapping`. They change as `CreateForeignDataWrapper`, `AlterForeignDataWrapper`, `CreateForeignServer`, `AlterForeignServer`, `CreateUserMapping` and `AlterUserMapping` of `foreigncmds.c` change them, with the same rows of `pg_depend`.
 
 use super::{Catalog, DepKind, ObjRef, PG_PROC};
 
@@ -6,6 +6,8 @@ use super::{Catalog, DepKind, ObjRef, PG_PROC};
 pub const PG_FOREIGN_DATA_WRAPPER: u32 = 2328;
 /// The OID of `pg_foreign_server`.
 pub const PG_FOREIGN_SERVER: u32 = 1417;
+/// The OID of `pg_user_mapping`.
+pub const PG_USER_MAPPING: u32 = 1418;
 
 /// A foreign-data wrapper, one row of `pg_foreign_data_wrapper`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,6 +44,19 @@ pub struct ForeignServer {
     /// `srvversion`: the version, or null.
     pub version: Option<String>,
     /// `srvoptions`: the options as `name=value`. No options give a null array.
+    pub options: Vec<String>,
+}
+
+/// A user mapping, one row of `pg_user_mapping`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UserMapping {
+    /// The OID. [`Catalog::create_user_mapping`] sets it.
+    pub oid: u32,
+    /// `umuser`: the OID of the role, or 0 for `PUBLIC`.
+    pub user: u32,
+    /// `umserver`: the OID of the foreign server.
+    pub server: u32,
+    /// `umoptions`: the options as `name=value`. No options give a null array.
     pub options: Vec<String>,
 }
 
@@ -124,6 +139,38 @@ impl Catalog {
     pub fn alter_server(&mut self, oid: u32, change: impl FnOnce(&mut ForeignServer)) {
         if let Some(server) = self.servers.get_mut(&oid) {
             change(server);
+        }
+    }
+
+    /// `CreateUserMapping`: a new user mapping, which gets the next OID. It depends on its server. The analyzer checks that the role has no mapping for the server first. The return value is the OID of the mapping.
+    pub fn create_user_mapping(&mut self, mut new: UserMapping) -> u32 {
+        let oid = self.new_oid();
+        new.oid = oid;
+        let me = ObjRef::new(PG_USER_MAPPING, oid);
+        self.depend(me, ObjRef::new(PG_FOREIGN_SERVER, new.server), DepKind::Normal);
+        self.user_mappings.insert(oid, new);
+        oid
+    }
+
+    /// The user mappings, in the order of their OIDs.
+    pub fn user_mappings(&self) -> impl Iterator<Item = &UserMapping> {
+        self.user_mappings.values()
+    }
+
+    /// The user mapping with the OID.
+    pub fn user_mapping(&self, oid: u32) -> Option<&UserMapping> {
+        self.user_mappings.get(&oid)
+    }
+
+    /// The syscache `USERMAPPINGUSERSERVER`: the mapping of the role, or of `PUBLIC` for 0, for the server.
+    pub fn user_mapping_for(&self, user: u32, server: u32) -> Option<&UserMapping> {
+        self.user_mappings.values().find(|m| m.user == user && m.server == server)
+    }
+
+    /// Changes the options of the user mapping.
+    pub fn set_user_mapping_options(&mut self, oid: u32, options: Vec<String>) {
+        if let Some(mapping) = self.user_mappings.get_mut(&oid) {
+            mapping.options = options;
         }
     }
 }

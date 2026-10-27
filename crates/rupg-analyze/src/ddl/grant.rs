@@ -1,8 +1,11 @@
-//! `ExecuteGrantStmt`: `GRANT` and `REVOKE` on the tables, the views, the sequences, the columns, the schemas, the functions, the procedures, the types, the domains and the languages, as `aclchk.c` runs them, with the ACL functions of `acl.c`. An ACL is a list of `aclitem` texts. A relation or a schema of the catalog keeps its ACL in the catalog, and the other objects keep the ACL that `GRANT` gives them in [`Catalog::set_object_acl`](rupg_catalog::Catalog::set_object_acl).
+//! `ExecuteGrantStmt`: `GRANT` and `REVOKE` on the tables, the views, the sequences, the columns, the schemas, the functions, the procedures, the types, the domains, the languages, the foreign-data wrappers and the foreign servers, as `aclchk.c` runs them, with the ACL functions of `acl.c`. An ACL is a list of `aclitem` texts. A relation or a schema of the catalog keeps its ACL in the catalog, and the other objects keep the ACL that `GRANT` gives them in [`Catalog::set_object_acl`](rupg_catalog::Catalog::set_object_acl).
 
 use std::collections::BTreeMap;
 
-use rupg_catalog::{ObjRef, PG_CLASS, PG_LANGUAGE, PG_NAMESPACE, PG_PROC, PG_TYPE, RangePart};
+use rupg_catalog::{
+    ObjRef, PG_CLASS, PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_LANGUAGE, PG_NAMESPACE,
+    PG_PROC, PG_TYPE, RangePart,
+};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named, Owned};
 use rupg_pgcatalog::roles::Roles;
@@ -48,6 +51,10 @@ const ALL_LANGUAGE: u64 = USAGE;
 const ALL_SCHEMA: u64 = USAGE | CREATE;
 /// `ACL_ALL_RIGHTS_TYPE`.
 const ALL_TYPE: u64 = USAGE;
+/// `ACL_ALL_RIGHTS_FDW`.
+const ALL_FDW: u64 = USAGE;
+/// `ACL_ALL_RIGHTS_FOREIGN_SERVER`.
+const ALL_FOREIGN_SERVER: u64 = USAGE;
 
 /// The bits of the grant options of an `aclitem`.
 const GOPTION_BITS: u64 = 0xFFFF_FFFF << 32;
@@ -197,6 +204,8 @@ enum Kind {
     Function,
     Type,
     Language,
+    Fdw,
+    Server,
 }
 
 impl Kind {
@@ -210,6 +219,8 @@ impl Kind {
             Kind::Function => ALL_FUNCTION,
             Kind::Type => ALL_TYPE,
             Kind::Language => ALL_LANGUAGE,
+            Kind::Fdw => ALL_FDW,
+            Kind::Server => ALL_FOREIGN_SERVER,
         }
     }
 
@@ -223,6 +234,8 @@ impl Kind {
             Kind::Function => (EXECUTE, ALL_FUNCTION),
             Kind::Type => (USAGE, ALL_TYPE),
             Kind::Language => (USAGE, ALL_LANGUAGE),
+            Kind::Fdw => (0, ALL_FDW),
+            Kind::Server => (0, ALL_FOREIGN_SERVER),
         };
         let mut acl = Vec::new();
         if world != 0 {
@@ -244,6 +257,8 @@ impl Kind {
             Kind::Function => "function",
             Kind::Type => "type",
             Kind::Language => "language",
+            Kind::Fdw => "foreign-data wrapper",
+            Kind::Server => "foreign server",
         }
     }
 }
@@ -533,6 +548,8 @@ impl Definer<'_, '_> {
             ObjectType::OBJECT_DOMAIN => (ALL_TYPE, "domain"),
             ObjectType::OBJECT_FUNCTION => (ALL_FUNCTION, "function"),
             ObjectType::OBJECT_LANGUAGE => (ALL_LANGUAGE, "language"),
+            ObjectType::OBJECT_FDW => (ALL_FDW, "foreign-data wrapper"),
+            ObjectType::OBJECT_FOREIGN_SERVER => (ALL_FOREIGN_SERVER, "foreign server"),
             ObjectType::OBJECT_SCHEMA => (ALL_SCHEMA, "schema"),
             ObjectType::OBJECT_PROCEDURE => (ALL_FUNCTION, "procedure"),
             ObjectType::OBJECT_ROUTINE => (ALL_FUNCTION, "routine"),
@@ -594,6 +611,8 @@ impl Definer<'_, '_> {
             PG_PROC => (ObjectType::OBJECT_ROUTINE, Kind::Function),
             PG_TYPE => (ObjectType::OBJECT_TYPE, Kind::Type),
             PG_LANGUAGE => (ObjectType::OBJECT_LANGUAGE, Kind::Language),
+            PG_FOREIGN_DATA_WRAPPER => (ObjectType::OBJECT_FDW, Kind::Fdw),
+            PG_FOREIGN_SERVER => (ObjectType::OBJECT_FOREIGN_SERVER, Kind::Server),
             rupg_catalog::PG_DEFAULT_ACL => {
                 return self.remove_role_from_default_acl(role, object.oid);
             }
@@ -687,6 +706,26 @@ impl Definer<'_, '_> {
                             )
                         })?;
                     Object::new(Kind::Language, oid)
+                }
+                (ObjectType::OBJECT_FDW, Node::String(name)) => {
+                    let name: &str = name;
+                    let fdw = self.catalog.fdw_by_name(name).ok_or_else(|| {
+                        Error::new(
+                            SqlState::UNDEFINED_OBJECT,
+                            format!("foreign-data wrapper \"{name}\" does not exist"),
+                        )
+                    })?;
+                    Object::new(Kind::Fdw, fdw.oid)
+                }
+                (ObjectType::OBJECT_FOREIGN_SERVER, Node::String(name)) => {
+                    let name: &str = name;
+                    let server = self.catalog.server_by_name(name).ok_or_else(|| {
+                        Error::new(
+                            SqlState::UNDEFINED_OBJECT,
+                            format!("server \"{name}\" does not exist"),
+                        )
+                    })?;
+                    Object::new(Kind::Server, server.oid)
                 }
                 _ => return Err(not_yet("GRANT on this kind of object", None)),
             };
@@ -783,6 +822,8 @@ impl Definer<'_, '_> {
                 Some(language) => language.name.clone(),
                 None => text(builtin::owned_by_oid(Owned::Language, object.oid).map(|l| l.name)),
             },
+            Kind::Fdw => text(self.catalog.fdw(object.oid).map(|f| f.name.as_str())),
+            Kind::Server => text(self.catalog.server(object.oid).map(|s| s.name.as_str())),
         }
     }
 
@@ -849,6 +890,13 @@ impl Definer<'_, '_> {
                     (owner, stored(PG_LANGUAGE).or(acl))
                 }
             },
+            Kind::Fdw => (
+                self.catalog.fdw(object.oid).map_or(0, |f| f.owner),
+                stored(PG_FOREIGN_DATA_WRAPPER),
+            ),
+            Kind::Server => {
+                (self.catalog.server(object.oid).map_or(0, |s| s.owner), stored(PG_FOREIGN_SERVER))
+            }
         }
     }
 
@@ -887,6 +935,8 @@ impl Definer<'_, '_> {
                     Kind::Schema => PG_NAMESPACE,
                     Kind::Function => PG_PROC,
                     Kind::Type => PG_TYPE,
+                    Kind::Fdw => PG_FOREIGN_DATA_WRAPPER,
+                    Kind::Server => PG_FOREIGN_SERVER,
                     _ => PG_LANGUAGE,
                 };
                 self.catalog.set_object_acl(ObjRef::new(class, object.oid), Some(texts));
@@ -962,6 +1012,13 @@ impl Definer<'_, '_> {
                 aclmask(roles, &acl, role, owner, mask, How::Any)
             }
         }
+    }
+
+    /// `object_aclcheck` of `USAGE` on a foreign-data wrapper, or on a foreign server when `fdw` is false: true when the role may use it.
+    pub(super) fn foreign_usage_allowed(&self, fdw: bool, oid: u32, role: u32) -> bool {
+        let roles = rupg_pgcatalog::roles::current();
+        let kind = if fdw { Kind::Fdw } else { Kind::Server };
+        self.pg_aclmask(&roles, Object::new(kind, oid), role, USAGE) != 0
     }
 
     /// `object_aclcheck` of `CREATE` on a schema: true when the role may create objects in it.
