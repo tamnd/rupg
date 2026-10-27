@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `pg_identify_object_as_address` gives the type of an object and the names and the arguments that `pg_get_object_address` takes to find it again, and `pg_identify_object` knows default ACLs (#969).
 - `pg_get_object_address` gives the catalog, the OID and the column number of an object from its kind and its names, with the errors of PostgreSQL for bad lists and missing objects (#968).
 - `INSERT`, `UPDATE` and `DELETE` of a system catalog or a TOAST table by a role that is not a superuser give "permission denied for table", as `ExecCheckPermissions` gives it (#967).
 

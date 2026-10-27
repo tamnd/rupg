@@ -1,0 +1,103 @@
+> CREATE SCHEMA addr_nsp;
+CREATE SCHEMA
+> SET search_path TO 'addr_nsp';
+SET
+search_path=addr_nsp
+> CREATE TEXT SEARCH DICTIONARY addr_ts_dict (template=simple);
+CREATE TEXT SEARCH DICTIONARY
+> CREATE TEXT SEARCH CONFIGURATION addr_ts_conf (copy=english);
+CREATE TEXT SEARCH CONFIGURATION
+> CREATE TEXT SEARCH TEMPLATE addr_ts_temp (lexize=dsimple_lexize);
+CREATE TEXT SEARCH TEMPLATE
+> CREATE TEXT SEARCH PARSER addr_ts_prs (start = prsd_start, gettoken = prsd_nexttoken, end = prsd_end, lextypes = prsd_lextype);
+CREATE TEXT SEARCH PARSER
+> CREATE TABLE addr_nsp.gentable ( a serial primary key CONSTRAINT a_chk CHECK (a > 0), b text DEFAULT 'hello' );
+CREATE TABLE
+> CREATE TABLE addr_nsp.parttable ( a int PRIMARY KEY ) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE VIEW addr_nsp.genview AS SELECT * from addr_nsp.gentable;
+CREATE VIEW
+> CREATE MATERIALIZED VIEW addr_nsp.genmatview AS SELECT * FROM addr_nsp.gentable;
+SELECT 0
+> CREATE TYPE addr_nsp.gencomptype AS (a int);
+CREATE TYPE
+> CREATE TYPE addr_nsp.genenum AS ENUM ('one', 'two');
+CREATE TYPE
+> CREATE AGGREGATE addr_nsp.genaggr(int4) (sfunc = int4pl, stype = int4);
+CREATE AGGREGATE
+> CREATE DOMAIN addr_nsp.gendomain AS int4 CONSTRAINT domconstr CHECK (value > 0);
+CREATE DOMAIN
+> CREATE FUNCTION addr_nsp.trig() RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN END; $$;
+CREATE FUNCTION
+> CREATE TRIGGER t BEFORE INSERT ON addr_nsp.gentable FOR EACH ROW EXECUTE PROCEDURE addr_nsp.trig();
+CREATE TRIGGER
+> CREATE POLICY genpol ON addr_nsp.gentable;
+CREATE POLICY
+> CREATE STATISTICS addr_nsp.gentable_stat ON a, b FROM addr_nsp.gentable;
+CREATE STATISTICS
+> CREATE PROCEDURE addr_nsp.proc(int4) LANGUAGE SQL AS $$ $$;
+CREATE PROCEDURE
+> CREATE ROLE tsstat_oa_user;
+CREATE ROLE
+> ALTER DEFAULT PRIVILEGES FOR ROLE tsstat_oa_user IN SCHEMA public GRANT ALL ON TABLES TO tsstat_oa_user;
+ALTER DEFAULT PRIVILEGES
+> ALTER DEFAULT PRIVILEGES FOR ROLE tsstat_oa_user REVOKE DELETE ON TABLES FROM tsstat_oa_user;
+ALTER DEFAULT PRIVILEGES
+> WITH objects (type, name, args) AS (VALUES ('table', '{addr_nsp, gentable}'::text[], '{}'::text[]), ('table', '{addr_nsp, parttable}'::text[], '{}'::text[]), ('index', '{addr_nsp, gentable_pkey}', '{}'), ('index', '{addr_nsp, parttable_pkey}', '{}'), ('sequence', '{addr_nsp, gentable_a_seq}', '{}'), ('view', '{addr_nsp, genview}', '{}'), ('materialized view', '{addr_nsp, genmatview}', '{}'), ('table column', '{addr_nsp, gentable, b}', '{}'), ('aggregate', '{addr_nsp, genaggr}', '{int4}'), ('function', '{pg_catalog, pg_identify_object}', '{pg_catalog.oid, pg_catalog.oid, int4}'), ('procedure', '{addr_nsp, proc}', '{int4}'), ('type', '{pg_catalog._int4}', '{}'), ('type', '{addr_nsp.gendomain}', '{}'), ('type', '{addr_nsp.gencomptype}', '{}'), ('type', '{addr_nsp.genenum}', '{}'), ('cast', '{int8}', '{int4}'), ('collation', '{default}', '{}'), ('table constraint', '{addr_nsp, gentable, a_chk}', '{}'), ('domain constraint', '{addr_nsp.gendomain}', '{domconstr}'), ('conversion', '{pg_catalog, koi8_r_to_utf8}', '{}'), ('default value', '{addr_nsp, gentable, b}', '{}'), ('language', '{plpgsql}', '{}'), ('operator', '{+}', '{int4, int4}'), ('operator class', '{btree, int4_ops}', '{}'), ('operator family', '{btree, integer_ops}', '{}'), ('operator of access method', '{btree,integer_ops,1}', '{integer,integer}'), ('function of access method', '{btree,integer_ops,2}', '{integer,integer}'), ('rule', '{addr_nsp, genview, _RETURN}', '{}'), ('trigger', '{addr_nsp, gentable, t}', '{}'), ('schema', '{addr_nsp}', '{}'), ('text search parser', '{addr_ts_prs}', '{}'), ('text search dictionary', '{addr_ts_dict}', '{}'), ('text search template', '{addr_ts_temp}', '{}'), ('text search configuration', '{addr_ts_conf}', '{}'), ('role', '{tsstat_oa_user}', '{}'), ('default acl', '{tsstat_oa_user,public}', '{r}'), ('default acl', '{tsstat_oa_user}', '{r}'), ('policy', '{addr_nsp, gentable, genpol}', '{}'), ('access method', '{btree}', '{}'), ('statistics object', '{addr_nsp, gentable_stat}', '{}')) SELECT (pg_identify_object(addr1.classid, addr1.objid, addr1.objsubid)).*, ioa.nms, ioa.args, ROW(pg_identify_object(addr1.classid, addr1.objid, addr1.objsubid)) = ROW(pg_identify_object(addr2.classid, addr2.objid, addr2.objsubid)) AS roundtrip FROM objects, pg_get_object_address(type, name, args) AS addr1, pg_identify_object_as_address(classid, objid, objsubid) AS ioa (typ, nms, args), pg_get_object_address(typ, nms, ioa.args) AS addr2 ORDER BY 1, 4;
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1,nms:1009:-1:-1,args:1009:-1:-1,roundtrip:16:1:-1
+row access method,NULL,btree,btree,{btree},{},t
+row aggregate,addr_nsp,NULL,addr_nsp.genaggr(integer),{addr_nsp,genaggr},{integer},t
+row cast,NULL,NULL,(bigint AS integer),{bigint},{integer},t
+row collation,pg_catalog,"default",pg_catalog."default",{pg_catalog,default},{},t
+row conversion,pg_catalog,koi8_r_to_utf8,pg_catalog.koi8_r_to_utf8,{pg_catalog,koi8_r_to_utf8},{},t
+row default acl,NULL,NULL,for role tsstat_oa_user in schema public on tables,{tsstat_oa_user,public},{r},t
+row default acl,NULL,NULL,for role tsstat_oa_user on tables,{tsstat_oa_user},{r},t
+row default value,NULL,NULL,for addr_nsp.gentable.b,{addr_nsp,gentable,b},{},t
+row domain constraint,addr_nsp,NULL,domconstr on addr_nsp.gendomain,{addr_nsp.gendomain},{domconstr},t
+row function,pg_catalog,NULL,pg_catalog.pg_identify_object(pg_catalog.oid,pg_catalog.oid,integer),{pg_catalog,pg_identify_object},{pg_catalog.oid,pg_catalog.oid,integer},t
+row function of access method,NULL,NULL,function 2 (integer, integer) of pg_catalog.integer_ops USING btree,{btree,pg_catalog,integer_ops,2},{integer,integer},t
+row index,addr_nsp,gentable_pkey,addr_nsp.gentable_pkey,{addr_nsp,gentable_pkey},{},t
+row index,addr_nsp,parttable_pkey,addr_nsp.parttable_pkey,{addr_nsp,parttable_pkey},{},t
+row language,NULL,plpgsql,plpgsql,{plpgsql},{},t
+row materialized view,addr_nsp,genmatview,addr_nsp.genmatview,{addr_nsp,genmatview},{},t
+row operator,pg_catalog,NULL,pg_catalog.+(integer,integer),{pg_catalog,+},{integer,integer},t
+row operator class,pg_catalog,int4_ops,pg_catalog.int4_ops USING btree,{btree,pg_catalog,int4_ops},{},t
+row operator family,pg_catalog,integer_ops,pg_catalog.integer_ops USING btree,{btree,pg_catalog,integer_ops},{},t
+row operator of access method,NULL,NULL,operator 1 (integer, integer) of pg_catalog.integer_ops USING btree,{btree,pg_catalog,integer_ops,1},{integer,integer},t
+row policy,NULL,NULL,genpol on addr_nsp.gentable,{addr_nsp,gentable,genpol},{},t
+row procedure,addr_nsp,NULL,addr_nsp.proc(integer),{addr_nsp,proc},{integer},t
+row role,NULL,tsstat_oa_user,tsstat_oa_user,{tsstat_oa_user},{},t
+row rule,NULL,NULL,"_RETURN" on addr_nsp.genview,{addr_nsp,genview,_RETURN},{},t
+row schema,NULL,addr_nsp,addr_nsp,{addr_nsp},{},t
+row sequence,addr_nsp,gentable_a_seq,addr_nsp.gentable_a_seq,{addr_nsp,gentable_a_seq},{},t
+row statistics object,addr_nsp,gentable_stat,addr_nsp.gentable_stat,{addr_nsp,gentable_stat},{},t
+row table,addr_nsp,gentable,addr_nsp.gentable,{addr_nsp,gentable},{},t
+row table,addr_nsp,parttable,addr_nsp.parttable,{addr_nsp,parttable},{},t
+row table column,addr_nsp,gentable,addr_nsp.gentable.b,{addr_nsp,gentable,b},{},t
+row table constraint,addr_nsp,NULL,a_chk on addr_nsp.gentable,{addr_nsp,gentable,a_chk},{},t
+row text search configuration,addr_nsp,addr_ts_conf,addr_nsp.addr_ts_conf,{addr_nsp,addr_ts_conf},{},t
+row text search dictionary,addr_nsp,addr_ts_dict,addr_nsp.addr_ts_dict,{addr_nsp,addr_ts_dict},{},t
+row text search parser,addr_nsp,addr_ts_prs,addr_nsp.addr_ts_prs,{addr_nsp,addr_ts_prs},{},t
+row text search template,addr_nsp,addr_ts_temp,addr_nsp.addr_ts_temp,{addr_nsp,addr_ts_temp},{},t
+row trigger,NULL,NULL,t on addr_nsp.gentable,{addr_nsp,gentable,t},{},t
+row type,addr_nsp,gencomptype,addr_nsp.gencomptype,{addr_nsp.gencomptype},{},t
+row type,addr_nsp,gendomain,addr_nsp.gendomain,{addr_nsp.gendomain},{},t
+row type,addr_nsp,genenum,addr_nsp.genenum,{addr_nsp.genenum},{},t
+row type,pg_catalog,_int4,integer[],{integer[]},{},t
+row view,addr_nsp,genview,addr_nsp.genview,{addr_nsp,genview},{},t
+SELECT 40
+> SELECT pg_identify_object_as_address('pg_class'::regclass, 0, 0), pg_identify_object_as_address('pg_proc'::regclass, 0, 0), pg_identify_object_as_address('pg_type'::regclass, 0, 0);
+fields pg_identify_object_as_address:2249:-1:-1,pg_identify_object_as_address:2249:-1:-1,pg_identify_object_as_address:2249:-1:-1
+row (relation,,),(routine,,),(type,,)
+SELECT 1
+> SELECT pg_identify_object_as_address('pg_class'::regclass, 'addr_nsp.gentable'::regclass, 9);
+fields pg_identify_object_as_address:2249:-1:-1
+row ("table column",,)
+SELECT 1
+> DROP SCHEMA addr_nsp CASCADE;
+NOTICE 00000 drop cascades to 14 other objects
+DROP SCHEMA
+> DROP OWNED BY tsstat_oa_user;
+DROP OWNED
+> DROP ROLE tsstat_oa_user;
+DROP ROLE
