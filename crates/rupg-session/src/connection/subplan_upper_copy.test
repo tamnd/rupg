@@ -1,0 +1,63 @@
+> create table sl_o (unique1 int primary key, hundred int, ten int)
+CREATE TABLE
+> create table sl_i (f1 int)
+CREATE TABLE
+> insert into sl_o select g, g % 100, g % 10 from generate_series(1, 50) g
+INSERT 0 50
+> insert into sl_i values (1), (5)
+INSERT 0 2
+> analyze sl_o
+ANALYZE
+> analyze sl_i
+ANALYZE
+> explain (verbose, costs off) select sum(ss.tst::int) from sl_o o cross join lateral (select i.ten in (select f1 from sl_i where f1 <= o.hundred) as tst, random() as r from sl_o i where i.unique1 = o.unique1) ss where o.ten = 0
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   Output: sum((((ANY (i.ten = (hashed SubPlan any_1).col1))))::integer)
+row   ->  Nested Loop
+row         Output: ((ANY (i.ten = (hashed SubPlan any_1).col1)))
+row         ->  Seq Scan on public.sl_o o
+row               Output: o.unique1, o.hundred, o.ten
+row               Filter: (o.ten = 0)
+row         ->  Seq Scan on public.sl_o i
+row               Output: (ANY (i.ten = (hashed SubPlan any_1).col1)), random()
+row               Filter: (i.unique1 = o.unique1)
+row               SubPlan any_1
+row                 ->  Seq Scan on public.sl_i
+row                       Output: sl_i.f1
+row                       Filter: (sl_i.f1 <= o.hundred)
+EXPLAIN
+> select sum(ss.tst::int) from sl_o o cross join lateral (select i.ten in (select f1 from sl_i where f1 <= o.hundred) as tst, random() as r from sl_o i where i.unique1 = o.unique1) ss where o.ten = 0
+fields sum:20:8:-1
+row 0
+SELECT 1
+> explain (verbose, costs off) select x, x from (select (select max(f1) from sl_i where f1 > o.ten) as x, random() from sl_o o) s order by 1
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Output: s.x, s.x
+row   Sort Key: s.x
+row   ->  Subquery Scan on s
+row         Output: s.x, s.x
+row         ->  Seq Scan on public.sl_o o
+row               Output: (SubPlan expr_1), random()
+row               SubPlan expr_1
+row                 ->  Aggregate
+row                       Output: max(sl_i.f1)
+row                       ->  Seq Scan on public.sl_i
+row                             Output: sl_i.f1
+row                             Filter: (sl_i.f1 > o.ten)
+EXPLAIN
+> explain (verbose, costs off) select (f1 in (select ten from sl_o)) as a, (f1 in (select ten from sl_o)) as b from sl_i order by 1
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Output: ((ANY (sl_i.f1 = (hashed SubPlan any_1).col1))), ((ANY (sl_i.f1 = (hashed SubPlan any_2).col1)))
+row   Sort Key: ((ANY (sl_i.f1 = (hashed SubPlan any_1).col1)))
+row   ->  Seq Scan on public.sl_i
+row         Output: (ANY (sl_i.f1 = (hashed SubPlan any_1).col1)), (ANY (sl_i.f1 = (hashed SubPlan any_2).col1))
+row         SubPlan any_1
+row           ->  Seq Scan on public.sl_o
+row                 Output: sl_o.ten
+row         SubPlan any_2
+row           ->  Seq Scan on public.sl_o sl_o_1
+row                 Output: sl_o_1.ten
+EXPLAIN
