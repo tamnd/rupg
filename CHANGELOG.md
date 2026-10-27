@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.3.2 (2026-10-27)
+
 ### Added
 
 - A name in `ORDER BY` of a set operation that is not a column of the operation now gives the detail and the hint that name the `SELECT` with the column, `unnamed_subquery`, as PostgreSQL does. (#873)
