@@ -4153,6 +4153,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/type_usage_exprs.test")));
     }
 
+    /// `pg_get_acl`: the ACL of a relation, a column, a schema, a type, a function, a language and a tablespace, built in or made by the user, and null for the default privileges, for a catalog with no ACL and for an object that is not there. `connection/get_acl.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn get_acl() {
+        big_stack(|| script(include_str!("connection/get_acl.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

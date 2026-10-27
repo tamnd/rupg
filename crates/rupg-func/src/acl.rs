@@ -1593,6 +1593,66 @@ fn acldefault(_call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Array(Box::new(rupg_types::Array::one(items))))
 }
 
+/// `DatabaseRelationId` and `TableSpaceRelationId`.
+const PG_DATABASE: u32 = 1262;
+const PG_TABLESPACE: u32 = 1213;
+
+/// `pg_get_acl(classid, objid, objsubid)`: the ACL of an object as its catalog keeps it, or null for a catalog with no ACL, an object that is not there or an object with the default privileges. An `objsubid` that is not zero picks a column of a relation.
+fn pg_get_acl(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let (Some(Value::Oid(class)), Some(Value::Oid(oid)), Some(sub)) =
+        (args.first(), args.get(1), args.get(2).and_then(Value::as_i64))
+    else {
+        return Err(bad_value());
+    };
+    let (class, oid) = (*class, *oid);
+    let session = call.session;
+    let owned = |kind: Owned| -> Option<Vec<String>> {
+        if let Some(row) = builtin::owned_by_oid(kind, oid) {
+            let acl = granted_object(kind, oid, session).or_else(|| row.acl.map(<[&str]>::to_vec));
+            return acl.map(|acl| acl.iter().map(|s| (*s).to_string()).collect());
+        }
+        let catalog = session.catalog()?;
+        let made = match kind {
+            Owned::Namespace => catalog.schema(oid).map(|s| s.acl.clone()),
+            Owned::Type => catalog.type_by_oid(oid).map(|_| None),
+            Owned::Function => catalog.function(oid).map(|_| None),
+            Owned::Language => catalog.languages().find(|l| l.oid == oid).map(|_| None),
+            _ => None,
+        }?;
+        granted_object(kind, oid, session)
+            .map(|acl| acl.iter().map(|s| (*s).to_string()).collect())
+            .or(made)
+    };
+    let acl: Option<Vec<String>> = match class {
+        PG_CLASS if sub == 0 => class_of(oid, session)
+            .and_then(|c| c.acl)
+            .map(|acl| acl.iter().map(|s| (*s).to_string()).collect()),
+        PG_CLASS => attributes_of(oid, session)
+            .into_iter()
+            .find(|a| i64::from(a.num) == sub)
+            .and_then(|a| a.acl)
+            .map(|acl| acl.iter().map(|s| (*s).to_string()).collect()),
+        PG_NAMESPACE => owned(Owned::Namespace),
+        PG_TYPE => owned(Owned::Type),
+        PG_PROC => owned(Owned::Function),
+        PG_LANGUAGE => owned(Owned::Language),
+        PG_DATABASE => match builtin::owned_by_oid(Owned::Database, oid) {
+            Some(row) => row.acl.map(|acl| acl.iter().map(|s| (*s).to_string()).collect()),
+            None => session.databases().iter().find(|d| d.oid == oid).and_then(|d| d.acl.clone()),
+        },
+        PG_TABLESPACE => match builtin::owned_by_oid(Owned::Tablespace, oid) {
+            Some(row) => row.acl.map(|acl| acl.iter().map(|s| (*s).to_string()).collect()),
+            None => session.tablespaces().iter().find(|t| t.oid == oid).and_then(|t| t.acl.clone()),
+        },
+        _ => None,
+    };
+    Ok(acl.map_or(Value::Null, |acl| {
+        Value::Array(Box::new(rupg_types::Array::one(
+            acl.into_iter().map(|item| Some(Value::text(item))).collect(),
+        )))
+    }))
+}
+
 /// `FirstNormalObjectId`: a relation with a lower OID is built in and has no row security.
 const FIRST_NORMAL_OBJECT_ID: u32 = 16384;
 
@@ -1718,6 +1778,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "hash_aclitem_extended" => hash_aclitem_extended,
         "aclinsert" => aclinsert,
         "aclremove" => aclremove,
+        "pg_get_acl" => pg_get_acl,
         _ => return privilege_kernel(src),
     };
     Some(kernel)
