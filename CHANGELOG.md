@@ -16,6 +16,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Fixed
 
+- The built-in statistics of `pg_class` and `pg_database` now agree with a new database of PostgreSQL 19. The rows of `relpages`, `reltuples`, `relallvisible`, `relallfrozen` and `relfrozenxid`, and the rows of `pg_database`, came from an `ANALYZE` after a `VACUUM`. Now they come from the `ANALYZE` of `initdb`, when `pg_database` has one row. (#915)
 - An error or a notice now sends its fields in the order of PostgreSQL. The context and the names of the objects come before the position in the query. Before, the position came first, so the bytes of an error with a context and a position were different from PostgreSQL. (#909)
 
 ## 0.3.4 (2026-10-27)
