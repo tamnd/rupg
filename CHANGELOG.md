@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A function in SQL that returns a set is now inlined in `FROM`, as `inline_function_in_from` does, so EXPLAIN shows the plan of its body. A subquery scan that only returns the columns and the junk columns of its subquery is now removed. (#905)
 - With `IGNORE NULLS`, a window function runs an argument that calls a volatile function or has a subquery again on each row that it reads, as PostgreSQL does when `notnull_info_cacheable` is false. Before, rupg evaluated such an argument once for each row, so `nextval` and the results did not match PostgreSQL. (#903)
 - EXPLAIN drops a key of a sort or of a window that a filter makes a constant also when the filter reads the column through a cast that changes no bits, such as `(depname)::text = 'sales'` on a `varchar` column, as `pathkey_is_redundant` does. (#901)
 - EXPLAIN shows a key of a window in parentheses when the child of the WindowAgg reads it from below, as `show_window_keys` does, and it shows the casts of the key. For example `PARTITION BY (((depname)::text || 'A'::text))`. (#899)

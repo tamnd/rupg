@@ -3855,6 +3855,13 @@ mod tests {
         big_stack(|| script(include_str!("connection/volatile_ignore_nulls.test")));
     }
 
+    /// A function in SQL that returns a set becomes the query of its body in `FROM`, as `inline_function_in_from`, and a subquery scan with the physical target list of a subquery with junk columns goes, as `trivial_subqueryscan`.
+    /// `connection/inline_from.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn inline_from() {
+        big_stack(|| script(include_str!("connection/inline_from.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

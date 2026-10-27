@@ -1,0 +1,120 @@
+> CREATE TABLE t (a int, b text)
+CREATE TABLE
+> INSERT INTO t VALUES (1,'x'),(2,'y'),(3,'z')
+INSERT 0 3
+> CREATE FUNCTION f(group_size bigint) RETURNS SETOF integer[] AS $$ SELECT array_agg(s) OVER w FROM generate_series(1,5) s WINDOW w AS (ORDER BY s ROWS BETWEEN CURRENT ROW AND group_size FOLLOWING) $$ LANGUAGE SQL STABLE
+CREATE FUNCTION
+> EXPLAIN (COSTS OFF) SELECT * FROM f(2)
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on f
+row   ->  WindowAgg
+row         Window: w AS (ORDER BY s.s ROWS BETWEEN CURRENT ROW AND '2'::bigint FOLLOWING)
+row         ->  Sort
+row               Sort Key: s.s
+row               ->  Function Scan on generate_series s
+EXPLAIN
+> SELECT * FROM f(2)
+fields f:1007:-1:-1
+row {1,2,3}
+row {2,3,4}
+row {3,4,5}
+row {4,5}
+row {5}
+SELECT 5
+> CREATE FUNCTION g(int) RETURNS SETOF t AS $$ SELECT * FROM t WHERE a > $1 $$ LANGUAGE SQL STABLE
+CREATE FUNCTION
+> EXPLAIN (COSTS OFF) SELECT * FROM g(1)
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t
+row   Filter: (a > 1)
+EXPLAIN
+> SELECT * FROM g(1) ORDER BY a
+fields a:23:4:-1,b:25:-1:-1
+row 2,y
+row 3,z
+SELECT 2
+> EXPLAIN (COSTS OFF) SELECT * FROM g(1) WITH ORDINALITY
+fields QUERY PLAN:25:-1:-1
+row Function Scan on g
+EXPLAIN
+> CREATE FUNCTION h(int) RETURNS SETOF int AS $$ SELECT a FROM t WHERE a > $1 ORDER BY b DESC $$ LANGUAGE SQL IMMUTABLE
+CREATE FUNCTION
+> EXPLAIN (COSTS OFF) SELECT * FROM h(1) x JOIN t ON t.a = x
+fields QUERY PLAN:25:-1:-1
+row Hash Join
+row   Hash Cond: (t.a = x.x)
+row   ->  Seq Scan on t
+row   ->  Hash
+row         ->  Subquery Scan on x
+row               ->  Sort
+row                     Sort Key: t_1.b DESC
+row                     ->  Seq Scan on t t_1
+row                           Filter: (a > 1)
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM t, LATERAL h(t.a)
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   Output: t.a, t.b, t_1.a
+row   ->  Seq Scan on public.t
+row         Output: t.a, t.b
+row   ->  Sort
+row         Output: t_1.a, t_1.b
+row         Sort Key: t_1.b DESC
+row         ->  Seq Scan on public.t t_1
+row               Output: t_1.a, t_1.b
+row               Filter: (t_1.a > t.a)
+EXPLAIN
+> SELECT * FROM t, LATERAL h(t.a) ORDER BY 1, 3
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,h:23:4:-1
+row 1,x,2
+row 1,x,3
+row 2,y,3
+SELECT 3
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM t, LATERAL (SELECT a FROM t t2 WHERE t2.a > t.a ORDER BY b DESC) s
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   Output: t.a, t.b, t2.a
+row   ->  Seq Scan on public.t
+row         Output: t.a, t.b
+row   ->  Sort
+row         Output: t2.a, t2.b
+row         Sort Key: t2.b DESC
+row         ->  Seq Scan on public.t t2
+row               Output: t2.a, t2.b
+row               Filter: (t2.a > t.a)
+EXPLAIN
+> SELECT * FROM t WHERE a IN (SELECT * FROM h(t.a - 2)) ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+row 1,x
+row 2,y
+row 3,z
+SELECT 3
+> CREATE FUNCTION k(int) RETURNS SETOF int AS $$ SELECT a FROM t WHERE a > $1 $$ LANGUAGE SQL STRICT STABLE
+CREATE FUNCTION
+> EXPLAIN (COSTS OFF) SELECT * FROM k(1)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on k
+EXPLAIN
+> CREATE FUNCTION v(int) RETURNS SETOF int AS $$ SELECT a FROM t WHERE a > $1 $$ LANGUAGE SQL VOLATILE
+CREATE FUNCTION
+> EXPLAIN (COSTS OFF) SELECT * FROM v(1)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on v
+EXPLAIN
+> CREATE FUNCTION m(int, out p int, out q text) RETURNS SETOF record AS $$ SELECT a, b FROM t WHERE a > $1 $$ LANGUAGE SQL STABLE
+CREATE FUNCTION
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM m(1)
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.t
+row   Output: t.a, t.b
+row   Filter: (t.a > 1)
+EXPLAIN
+> SELECT * FROM m(1) ORDER BY p
+fields p:23:4:-1,q:25:-1:-1
+row 2,y
+row 3,z
+SELECT 2
+> EXPLAIN (COSTS OFF) SELECT * FROM h(random()::int)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on h
+EXPLAIN
