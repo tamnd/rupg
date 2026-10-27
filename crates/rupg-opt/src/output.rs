@@ -82,6 +82,26 @@ fn width(level: &Level<'_>, scope: usize, items: &[Item<'_>]) -> i32 {
     items.iter().map(|i| cost::expr_width(&i.expr, &query.relations)).sum()
 }
 
+/// The targets of the plan of a set operation below another set operation, which reads the columns of its leftmost `SELECT` as `generate_setop_tlist` gives them: the `Sort`, `Unique`, `Agg` and `SetOp` nodes down to the `Append` of its members. The plans of the members have their targets already.
+pub(crate) fn nested<'q>(node: &mut Node<'q>, items: &[Item<'q>]) {
+    let down = match node.kind {
+        Kind::Sort(_)
+        | Kind::IncrementalSort { .. }
+        | Kind::Unique
+        | Kind::Limit
+        | Kind::Materialize
+        | Kind::Aggregate { .. } => true,
+        Kind::SetOp { .. } => false,
+        _ => return,
+    };
+    if node.output.is_empty() {
+        node.output = items.iter().map(|w| Item { below: true, ..w.clone() }).collect();
+    }
+    if down && let Some(child) = node.children.first_mut() {
+        nested(child, items);
+    }
+}
+
 /// True when the nodes below the node do not project down to the `Append`, the `SetOp` or the `Agg` of a set operation. `generate_append_tlist` gives that `Append` a target list of columns, so the nodes above it read each item as a value of the node below, and `get_special_variable` shows an item that is not a column in parentheses.
 fn reads_append(node: &Node<'_>) -> bool {
     let mut at = node;

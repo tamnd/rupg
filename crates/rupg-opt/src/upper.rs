@@ -15,7 +15,7 @@ use rupg_plan::{
 
 use crate::from::paths::{Paths, costs};
 use crate::from::{self, OrderKey, sort};
-use crate::{Builder, Level, cost, exprs, setop};
+use crate::{Builder, Level, cost, exprs, output, setop};
 
 /// `FRAMEOPTION_ROWS`.
 const FRAME_ROWS: i32 = 0x4;
@@ -952,10 +952,15 @@ impl<'q> Builder<'q> {
                     ),
                 }
             }
-            SetTree::Op(op) if op.project.is_empty() => self.set_node(level, op),
+            SetTree::Op(op) if op.project.is_empty() => {
+                let mut node = self.set_node(level, op);
+                output::nested(&mut node, &self.leaf_items(level, op));
+                node
+            }
             SetTree::Op(op) => {
                 // `recurse_set_operations`: a `Result` above the plan casts the columns to the types of the operation above it. `is_dummy_rel` finds the operation empty through the projection.
-                let child = self.set_node(level, op);
+                let mut child = self.set_node(level, op);
+                output::nested(&mut child, &self.leaf_items(level, op));
                 if setop::is_dummy(&child) {
                     return child;
                 }

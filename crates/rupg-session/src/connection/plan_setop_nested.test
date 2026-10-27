@@ -1,0 +1,68 @@
+> explain (verbose, costs off) select 1 union select 2 union all select 3;
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Unique
+row         Output: (1)
+row         ->  Sort
+row               Output: (1)
+row               Sort Key: (1)
+row               ->  Append
+row                     ->  Result
+row                           Output: 1
+row                     ->  Result
+row                           Output: 2
+row   ->  Result
+row         Output: 3
+EXPLAIN
+> explain (verbose, costs off) (select 1 intersect select 2) union all select 3;
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  SetOp Intersect
+row         Output: (1)
+row         ->  Result
+row               Output: 1
+row         ->  Result
+row               Output: 2
+row   ->  Result
+row         Output: 3
+EXPLAIN
+> explain (verbose, costs off) (select relname from pg_class union select 'a') except select 'b';
+fields QUERY PLAN:25:-1:-1
+row HashSetOp Except
+row   Output: pg_class.relname
+row   ->  HashAggregate
+row         Output: pg_class.relname
+row         Group Key: pg_class.relname
+row         ->  Append
+row               ->  Seq Scan on pg_catalog.pg_class
+row                     Output: pg_class.relname
+row               ->  Result
+row                     Output: 'a'::name
+row   ->  Result
+row         Output: 'b'::name
+EXPLAIN
+> explain (verbose, costs off) (select 1 union select 2) intersect (select 3 union select 4);
+fields QUERY PLAN:25:-1:-1
+row SetOp Intersect
+row   Output: (1)
+row   ->  Unique
+row         Output: (1)
+row         ->  Sort
+row               Output: (1)
+row               Sort Key: (1)
+row               ->  Append
+row                     ->  Result
+row                           Output: 1
+row                     ->  Result
+row                           Output: 2
+row   ->  Unique
+row         Output: (3)
+row         ->  Sort
+row               Output: (3)
+row               Sort Key: (3)
+row               ->  Append
+row                     ->  Result
+row                           Output: 3
+row                     ->  Result
+row                           Output: 4
+EXPLAIN

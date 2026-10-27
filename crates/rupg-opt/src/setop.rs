@@ -7,7 +7,7 @@ use rupg_types::{Value, oid};
 
 use crate::from::paths::{Paths, costs};
 use crate::from::{self, OrderKey, Stats};
-use crate::{Builder, Level, cost, pullup, upper};
+use crate::{Builder, Level, cost, output, pullup, upper};
 
 /// The plan of a side of a set operation in the order of all its columns, which the `SetOp` with the sorted strategy reads.
 #[derive(Debug)]
@@ -464,6 +464,8 @@ impl<'q> Builder<'q> {
                     };
                     (node, sorted)
                 };
+                let mut node = node;
+                output::nested(&mut node, &self.leaf_items(level, inner));
                 let scope = match node.kind {
                     Kind::SetOp { .. } => node.scope,
                     _ => self.leftmost_scope(level, inner).unwrap_or(level.scope),
