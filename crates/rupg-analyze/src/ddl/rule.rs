@@ -264,6 +264,9 @@ impl Definer<'_, '_> {
             let context = tree.actions.first().filter(|a| a.write.is_none()).unwrap_or(&tree.base);
             expr_references(self.catalog, expr, &[context], &mut qual);
         }
+        // `InsertRule`.
+        self.check_usage_on_types(&actions)?;
+        self.check_usage_on_types(&qual)?;
         let new = NewRule {
             name: rulename.to_string(),
             relation: oid,

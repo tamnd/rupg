@@ -1385,6 +1385,7 @@ impl Definer<'_, '_> {
                 eliminate_duplicates(&refs)
             }
         };
+        self.check_usage_on_types(&refs)?;
         self.store_function(old, function, &defaults, support, refs)
     }
 
@@ -1580,7 +1581,9 @@ impl Definer<'_, '_> {
             refs.push(ObjRef::new(PG_PROC, support));
         }
         for default in defaults {
-            for found in body_references(self.catalog, default)? {
+            let found = body_references(self.catalog, default)?;
+            self.check_usage_on_types(&found)?;
+            for found in found {
                 if !refs.contains(&found) {
                     refs.push(found);
                 }

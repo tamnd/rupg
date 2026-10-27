@@ -851,7 +851,7 @@ impl Definer<'_, '_> {
                     self.table_scope(target.oid);
                     // `ATAddCheckNNConstraint` gives no query text to `AddRelationNewConstraints`, so the errors of the expression have no place.
                     let added = self
-                        .add_checks(target.oid, std::slice::from_ref(&con))
+                        .add_checks(target.oid, std::slice::from_ref(&con), false)
                         .map_err(|e| e.with_position(None))?;
                     // A `NOT VALID` constraint does not check the rows that the table has.
                     let valid = con.initially_valid || !con.is_enforced;
@@ -1071,6 +1071,7 @@ impl Definer<'_, '_> {
             return Ok(());
         }
         let refs = references(self.catalog, target.oid, &[&expr])?;
+        self.check_usage_on_types(&refs)?;
         self.catalog.add_default(target.oid, number, crate::node::write(&expr)?, &refs)?;
         Ok(())
     }

@@ -196,6 +196,7 @@ impl Definer<'_, '_> {
             .map_err(|error| error.with_position(None))?;
         let mut refs = Vec::new();
         expr_references(self.catalog, &expr, &[&base], &mut refs);
+        self.check_usage_on_types(&refs)?;
         Ok(refs)
     }
 

@@ -260,6 +260,15 @@ impl Definer<'_, '_> {
         if exprs.is_empty() && predicate.is_none() {
             refs.clear();
         }
+        // `DefineIndex` checks `USAGE` with the search path that `RestrictSearchPath` sets, so the error names the type with its schema.
+        let restricted = [crate::PG_CATALOG_NAMESPACE]
+            .into_iter()
+            .chain((self.an.temp != 0).then_some(self.an.temp))
+            .collect();
+        let path = std::mem::replace(&mut self.an.temp_path, restricted);
+        let usage = self.check_usage_on_types(&refs);
+        self.an.temp_path = path;
+        usage?;
         let pages = self.index_pages(table, method);
         let new = NewIndex {
             table,

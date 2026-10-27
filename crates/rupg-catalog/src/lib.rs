@@ -3667,6 +3667,10 @@ impl Catalog {
         let relation = constraint.relation;
         let keys = constraint.keys.clone();
         self.constraints.insert(constraint.oid, constraint);
+        // `CreateConstraintEntry`: a constraint of a relation with no columns depends on the whole relation.
+        if keys.is_empty() && relation != 0 {
+            self.depend(me, ObjRef::new(PG_CLASS, relation), DepKind::Auto);
+        }
         for key in keys {
             self.depend(me, ObjRef::column(relation, key), DepKind::Auto);
         }

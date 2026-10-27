@@ -93,6 +93,7 @@ impl Definer<'_, '_> {
         }
         let mut refs = Vec::new();
         query_references(self.catalog, &query, &[], &mut refs);
+        self.check_usage_on_types(&refs)?;
         // `isQueryUsingTempRelation`: a view of a temporary relation is a temporary view.
         let temp = refs.iter().copied().find(|r| {
             r.class == PG_CLASS
