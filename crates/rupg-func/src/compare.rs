@@ -108,7 +108,12 @@ fn family(ty: u32) -> Option<Family> {
 
 /// True when one of the two types is an enum type or `anyenum`, so that two OIDs are labels of an enum type.
 fn is_enum_pair(left: u32, right: u32) -> bool {
-    family(left) == Some(Family::Enum) || family(right) == Some(Family::Enum)
+    // No built-in type is an enum type or a domain over one, so a built-in type other than `anyenum` needs no lookup. The OIDs of the catalogs are often odd, and the planner compares many of them.
+    let enum_type = |ty: u32| {
+        (ty == oid::ANYENUM || ty >= rupg_catalog::FIRST_NORMAL_OID)
+            && family(ty) == Some(Family::Enum)
+    };
+    enum_type(left) || enum_type(right)
 }
 
 /// `enum_cmp_internal` with an odd OID: the order of the places of the two labels in the sort order of their type.

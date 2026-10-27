@@ -405,11 +405,11 @@ struct Builtin {
     casts: Vec<CastRow>,
     opclasses: Vec<OpclassRow>,
     amops: Vec<AmopRow>,
-    type_oid: HashMap<u32, usize>,
+    type_oid: OidIndex,
     type_name: HashMap<&'static str, Vec<usize>>,
-    proc_oid: HashMap<u32, usize>,
+    proc_oid: OidIndex,
     proc_name: HashMap<&'static str, Vec<usize>>,
-    operator_oid: HashMap<u32, usize>,
+    operator_oid: OidIndex,
     operator_name: HashMap<&'static str, Vec<usize>>,
     cast_pair: HashMap<(u32, u32), usize>,
     amop_member: HashMap<(u32, u32, u32, i16), usize>,
@@ -417,14 +417,14 @@ struct Builtin {
     /// The rows of `pg_amproc` by the family and the left type.
     amprocs: HashMap<(u32, u32), Vec<AmprocRow>>,
     aggregates: Vec<AggregateRow>,
-    aggregate_fn: HashMap<u32, usize>,
+    aggregate_fn: OidIndex,
     primary_keys: HashMap<u32, Vec<i16>>,
     named: HashMap<Named, Vec<NamedRow>>,
     descriptions: Vec<DescriptionRow>,
     description_key: HashMap<(u32, u32, i32), usize>,
     shared_descriptions: Vec<DescriptionRow>,
     classes: Vec<ClassRow>,
-    class_oid: HashMap<u32, usize>,
+    class_oid: OidIndex,
     attributes: HashMap<u32, Vec<AttributeRow>>,
     owned: HashMap<Owned, Vec<OwnedRow>>,
     owned_oid: HashMap<(Owned, u32), usize>,
@@ -436,6 +436,48 @@ struct Builtin {
 }
 
 static BUILTIN: LazyLock<Builtin> = LazyLock::new(Builtin::load);
+
+/// The places of the built-in rows of a catalog by OID. The built-in OIDs are less than `FIRST_NORMAL_OID`, so a table with one slot for each OID finds a row without a hash. The planner and the executor look up types and functions for each value that they compare, so this lookup must be fast.
+#[derive(Debug)]
+struct OidIndex {
+    slots: Vec<u32>,
+    /// The rows with an OID that is too large for a slot.
+    large: HashMap<u32, usize>,
+}
+
+impl OidIndex {
+    const EMPTY: u32 = u32::MAX;
+    /// `FirstNormalObjectId`.
+    const SLOTS: u32 = 16384;
+
+    /// The index of a list of OIDs. When two rows have the same OID, the index keeps the last, as a `HashMap` does.
+    fn new(oids: impl Iterator<Item = u32>) -> OidIndex {
+        let mut index = OidIndex { slots: Vec::new(), large: HashMap::new() };
+        for (i, oid) in oids.enumerate() {
+            match u32::try_from(i) {
+                Ok(place) if oid < Self::SLOTS && place != Self::EMPTY => {
+                    let slot = oid as usize;
+                    if index.slots.len() <= slot {
+                        index.slots.resize(slot + 1, Self::EMPTY);
+                    }
+                    index.slots[slot] = place;
+                }
+                _ => {
+                    index.large.insert(oid, i);
+                }
+            }
+        }
+        index
+    }
+
+    fn get(&self, oid: u32) -> Option<usize> {
+        match self.slots.get(oid as usize) {
+            Some(&place) if place != Self::EMPTY => Some(place as usize),
+            Some(_) => None,
+            None => self.large.get(&oid).copied(),
+        }
+    }
+}
 
 /// The columns of one catalog, read by name.
 struct Rows {
@@ -550,17 +592,17 @@ impl Builtin {
             operator_name.entry(o.name).or_default().push(i);
         }
         Builtin {
-            type_oid: types.iter().enumerate().map(|(i, t)| (t.oid, i)).collect(),
+            type_oid: OidIndex::new(types.iter().map(|t| t.oid)),
             type_name,
-            proc_oid: procs.iter().enumerate().map(|(i, p)| (p.oid, i)).collect(),
+            proc_oid: OidIndex::new(procs.iter().map(|p| p.oid)),
             proc_name,
-            operator_oid: operators.iter().enumerate().map(|(i, o)| (o.oid, i)).collect(),
+            operator_oid: OidIndex::new(operators.iter().map(|o| o.oid)),
             operator_name,
             cast_pair: casts.iter().enumerate().map(|(i, c)| ((c.source, c.target), i)).collect(),
             amop_member,
             amop_operator,
             amprocs: load_amprocs(),
-            aggregate_fn: aggregates.iter().enumerate().map(|(i, a)| (a.fnoid, i)).collect(),
+            aggregate_fn: OidIndex::new(aggregates.iter().map(|a| a.fnoid)),
             aggregates,
             primary_keys: load_primary_keys(),
             named: Named::ALL.into_iter().map(|kind| (kind, load_named(kind))).collect(),
@@ -571,7 +613,7 @@ impl Builtin {
                 .collect(),
             descriptions,
             shared_descriptions: load_descriptions("pg_shdescription"),
-            class_oid: classes.iter().enumerate().map(|(i, c)| (c.oid, i)).collect(),
+            class_oid: OidIndex::new(classes.iter().map(|c| c.oid)),
             classes,
             attributes: load_attributes(),
             owned_oid: owned
@@ -1019,8 +1061,8 @@ pub fn types() -> &'static [TypeRow] {
 pub fn type_by_oid(oid: u32) -> Option<&'static TypeRow> {
     BUILTIN
         .type_oid
-        .get(&oid)
-        .map(|&i| &BUILTIN.types[i])
+        .get(oid)
+        .map(|i| &BUILTIN.types[i])
         .or_else(|| system().types.iter().copied().find(|t| t.oid == oid))
         .or_else(|| SESSION.with_borrow(|s| s.types.iter().copied().find(|t| t.oid == oid)))
 }
@@ -1104,7 +1146,7 @@ pub fn add_system_proc(row: ProcRow) {
 
 /// True for a function that [`add_system_proc`] added. Such a function is in SQL, and the engine runs its body.
 pub fn is_system_proc(oid: u32) -> bool {
-    !BUILTIN.proc_oid.contains_key(&oid) && system().procs.iter().any(|p| p.oid == oid)
+    BUILTIN.proc_oid.get(oid).is_none() && system().procs.iter().any(|p| p.oid == oid)
 }
 
 /// The constraints of a domain that [`add_system_domain`] added, or of a domain that [`use_session_types`] gave to the thread.
@@ -1812,15 +1854,15 @@ pub fn procs() -> &'static [ProcRow] {
 
 /// The number of the static row of `pg_proc` of the built-in function with this OID, or `None` for a function that is not in `pg_proc.dat`. The columns that [`ProcRow`] does not have, such as `procost`, are in the batches of [`catalog`] at this row.
 pub fn proc_row(oid: u32) -> Option<usize> {
-    BUILTIN.proc_oid.get(&oid).copied()
+    BUILTIN.proc_oid.get(oid)
 }
 
 /// The built-in function with this OID, a function that [`add_system_proc`] added, or a function of a type that [`use_session_types`] gave to the thread.
 pub fn proc_by_oid(oid: u32) -> Option<&'static ProcRow> {
     BUILTIN
         .proc_oid
-        .get(&oid)
-        .map(|&i| &BUILTIN.procs[i])
+        .get(oid)
+        .map(|i| &BUILTIN.procs[i])
         .or_else(|| system().procs.iter().copied().find(|p| p.oid == oid))
         .or_else(|| SESSION.with_borrow(|s| s.procs.iter().copied().find(|p| p.oid == oid)))
 }
@@ -1843,8 +1885,8 @@ pub fn operators() -> &'static [OperatorRow] {
 pub fn operator_by_oid(oid: u32) -> Option<&'static OperatorRow> {
     BUILTIN
         .operator_oid
-        .get(&oid)
-        .map(|&i| &BUILTIN.operators[i])
+        .get(oid)
+        .map(|i| &BUILTIN.operators[i])
         .or_else(|| SESSION.with_borrow(|s| s.operators.iter().copied().find(|o| o.oid == oid)))
 }
 
@@ -2223,7 +2265,7 @@ pub fn access_method_oid(name: &str) -> Option<u32> {
 
 /// The row of `pg_aggregate` of the aggregate function with this OID.
 pub fn aggregate(fnoid: u32) -> Option<&'static AggregateRow> {
-    BUILTIN.aggregate_fn.get(&fnoid).map(|&i| &BUILTIN.aggregates[i]).or_else(|| {
+    BUILTIN.aggregate_fn.get(fnoid).map(|i| &BUILTIN.aggregates[i]).or_else(|| {
         SESSION.with_borrow(|s| s.aggregates.iter().copied().find(|a| a.fnoid == fnoid))
     })
 }
@@ -2272,7 +2314,7 @@ pub fn classes() -> &'static [ClassRow] {
 
 /// The relation with this OID.
 pub fn class_by_oid(oid: u32) -> Option<&'static ClassRow> {
-    BUILTIN.class_oid.get(&oid).map(|&i| &BUILTIN.classes[i])
+    BUILTIN.class_oid.get(oid).map(|i| &BUILTIN.classes[i])
 }
 
 /// The columns of a relation, with the system columns, in the order of the catalog.
