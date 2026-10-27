@@ -42,8 +42,8 @@ pub struct Store {
     password: Option<String>,
     /// The advisory locks of the sessions.
     locks: Locks,
-    /// The rows of the files of the sequences that the sessions changed, by the number of the file. The rows are not in a transaction, so a rollback does not undo a change, as in PostgreSQL.
-    sequences: Mutex<HashMap<u32, SequenceData>>,
+    /// The rows of the files of the sequences that the sessions changed, by the OID of the database and the number of the file. A number of a file is unique only in its database, as in PostgreSQL. The rows are not in a transaction, so a rollback does not undo a change, as in PostgreSQL.
+    sequences: Mutex<HashMap<(u32, u32), SequenceData>>,
     /// The counters of the relations in the cumulative statistics, by the OID of the database and the OID of the relation.
     relations: Mutex<HashMap<(u32, u32), RelationCounts>>,
     /// The rows of the tables.
@@ -483,22 +483,27 @@ impl Store {
         &self.listeners
     }
 
-    /// The row of the file of a sequence, or `None` when no session changed it.
-    pub(crate) fn sequence_row(&self, file: u32) -> Option<SequenceData> {
-        self.sequences.lock().unwrap_or_else(PoisonError::into_inner).get(&file).copied()
+    /// The row of the file of a sequence in a database, or `None` when no session changed it.
+    pub(crate) fn sequence_row(&self, database: u32, file: u32) -> Option<SequenceData> {
+        self.sequences
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&(database, file))
+            .copied()
     }
 
     /// `read_seq_tuple` and the change of the row under the lock of the buffer: the row of the file of a sequence changes only when `change` gives no error. `initial` is the row when no session changed it yet.
     pub(crate) fn change_sequence(
         &self,
+        database: u32,
         file: u32,
         initial: SequenceData,
         change: &mut dyn FnMut(&mut SequenceData) -> Result<()>,
     ) -> Result<()> {
         let mut rows = self.sequences.lock().unwrap_or_else(PoisonError::into_inner);
-        let mut row = rows.get(&file).copied().unwrap_or(initial);
+        let mut row = rows.get(&(database, file)).copied().unwrap_or(initial);
         change(&mut row)?;
-        rows.insert(file, row);
+        rows.insert((database, file), row);
         Ok(())
     }
 

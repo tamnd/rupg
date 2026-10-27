@@ -5394,6 +5394,29 @@ mod tests {
         });
     }
 
+    /// Two databases can give the same number to the files of two sequences, because the transactions of two databases take OIDs at the same time. Each sequence has its own row, as in PostgreSQL, where the number of a file is unique only in its database.
+    #[test]
+    fn sequences_of_two_databases() {
+        big_stack(|| {
+            let store = Arc::new(Store::new());
+            let (mut a, _) = connect_to(&store, 1234);
+            line_of(&mut a, "CREATE DATABASE x", "CREATE");
+            let mut b = connect_database(&store, 1235, "x");
+            line_of(&mut a, "BEGIN", "BEGIN");
+            line_of(&mut a, "CREATE SEQUENCE t", "CREATE");
+            line_of(&mut b, "CREATE SEQUENCE s", "CREATE");
+            let file = "SELECT relfilenode FROM pg_class WHERE relkind = 'S'";
+            assert_eq!(line_of(&mut a, file, "row"), line_of(&mut b, file, "row"));
+            for want in ["row 1", "row 2", "row 3"] {
+                assert_eq!(line_of(&mut b, "SELECT nextval('s')", "row"), want);
+            }
+            assert_eq!(line_of(&mut a, "SELECT nextval('t')", "row"), "row 1");
+            line_of(&mut a, "COMMIT", "COMMIT");
+            assert_eq!(line_of(&mut a, "SELECT nextval('t')", "row"), "row 2");
+            assert_eq!(line_of(&mut b, "SELECT nextval('s')", "row"), "row 4");
+        });
+    }
+
     /// A session of a database other than `postgres`, with the settings of `ALTER DATABASE ... SET` for the database.
     fn connect_database(store: &Arc<Store>, pid: i32, database: &str) -> Connection {
         let start = Start { database: database.into(), ..start(None, &[]) };
