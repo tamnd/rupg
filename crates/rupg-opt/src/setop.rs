@@ -205,6 +205,15 @@ impl<'q> Side<'q> {
         }
     }
 
+    /// The disabled nodes of [`Self::sorted_plan`]: a `Sort` with `enable_sort` off is one more.
+    fn sorted_disabled(&self) -> u32 {
+        match &self.sorted {
+            Sorted::Cheapest => self.node.disabled_nodes(),
+            Sorted::Plan(node) => node.disabled_nodes(),
+            Sorted::Sort(_) => self.node.disabled_nodes() + u32::from(!crate::enable().sort),
+        }
+    }
+
     /// The plan of the side in the order of its columns.
     fn sorted_plan(&self) -> Node<'q> {
         match &self.sorted {
@@ -251,7 +260,7 @@ impl<'q> Builder<'q> {
         let columns = op.columns.len() as f64;
         let sortable = op.groups.iter().all(|g| g.operator != 0);
         let hashable = op.groups.iter().all(|g| g.hashable);
-        // `create_setop_path`: a hash table that does not fit in `hash_mem` disables the hashed strategy.
+        // `create_setop_path`: a hash table that does not fit in `hash_mem` is a disabled node.
         let fits = hash_space(groups, l.width) < cost::HASH_MEM;
         let startup = l.total + r.total + cost::CPU_OPERATOR * (l.rows + r.rows) * columns;
         let hashed =
@@ -269,11 +278,15 @@ impl<'q> Builder<'q> {
         // `add_path`: the hashed plan comes first, and the sorted plan with about the same costs wins with the order of its rows.
         let order = order(level.query, op);
         let mut paths = Paths::new(top && level.fraction > 0.0);
-        if hashable && (fits || !sortable) {
-            paths.add((0, hashed.startup, hashed.total), Vec::new(), false);
+        // `create_setop_path`: the disabled nodes of the sides, and one more for a hash table with `enable_hashagg` off or that does not fit.
+        let below = left.node.disabled_nodes() + right.node.disabled_nodes();
+        let hash_disabled = below + u32::from(!crate::enable().hashagg) + u32::from(!fits);
+        let sort_disabled = left.sorted_disabled() + right.sorted_disabled();
+        if hashable {
+            paths.add((hash_disabled, hashed.startup, hashed.total), Vec::new(), false);
         }
         if sortable || !hashable {
-            paths.add((0, sorted.startup, sorted.total), order, true);
+            paths.add((sort_disabled, sorted.startup, sorted.total), order, true);
         }
         let scope = left.scope;
         let make = |sorted_strategy: bool, children: Vec<Node<'q>>, c: Cost| {
@@ -289,7 +302,9 @@ impl<'q> Builder<'q> {
                 let node = if s {
                     make(true, vec![left.sorted_plan(), right.sorted_plan()], sorted)
                 } else {
-                    make(false, vec![left.node.clone(), right.node.clone()], hashed)
+                    let mut node = make(false, vec![left.node.clone(), right.node.clone()], hashed);
+                    node.disabled = hash_disabled > below;
+                    node
                 };
                 (node, s)
             })
