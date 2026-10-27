@@ -9,6 +9,7 @@ use rupg_pgcatalog::builtin::{self, ProcRow};
 use rupg_types::{Array, Value, oid};
 
 use crate::expr::{Expr, ExprKind, Func, WindowFunc};
+use crate::types;
 
 /// `JB_FOBJECT` and `JB_FARRAY`: the flags of the root container of a `jsonb` value. The low bits hold the number of the items.
 const JSONB_OBJECT: u32 = 0x2000_0000;
@@ -139,6 +140,7 @@ pub(crate) fn expand<'a>(args: &'a [Expr], proc: &ProcRow) -> Result<Cow<'a, [Ex
             .ok_or_else(|| Error::internal("not enough default arguments"))?;
         let mut args = args.to_vec();
         args.extend(defaults.into_iter().skip(skip));
+        cast_defaults(&mut args, proc);
         return Ok(Cow::Owned(args));
     }
     // reorder_function_arguments: each argument at its number, then the defaults in the gaps.
@@ -163,9 +165,32 @@ pub(crate) fn expand<'a>(args: &'a [Expr], proc: &ProcRow) -> Result<Cow<'a, [Ex
             }
         }
     }
-    let args = slots
+    let mut args = slots
         .into_iter()
         .map(|slot| slot.ok_or_else(|| Error::internal("an argument with no value")))
         .collect::<Result<Vec<Expr>>>()?;
+    cast_defaults(&mut args, proc);
     Ok(Cow::Owned(args))
+}
+
+/// `recheck_cast_function_args`: a default `NULL` of type `unknown` for a polymorphic argument takes the actual type that the arguments of the call give to that argument, as `make_fn_arguments` casts it.
+fn cast_defaults(args: &mut [Expr], proc: &ProcRow) {
+    if args.len() != proc.argtypes.len()
+        || !proc.argtypes.iter().any(|&ty| types::is_polymorphic(ty))
+    {
+        return;
+    }
+    let inputs: Vec<u32> = args.iter().map(|a| a.ty).collect();
+    let mut declared = proc.argtypes.to_vec();
+    if crate::poly::resolve(&inputs, &mut declared, proc.rettype).is_err() {
+        return;
+    }
+    for (arg, ty) in args.iter_mut().zip(declared) {
+        if arg.ty == oid::UNKNOWN
+            && matches!(arg.kind, ExprKind::Const(Value::Null))
+            && !types::is_polymorphic(ty)
+        {
+            arg.ty = ty;
+        }
+    }
 }
