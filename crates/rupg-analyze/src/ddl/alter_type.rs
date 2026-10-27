@@ -144,8 +144,14 @@ impl Definer<'_, '_> {
         self.check_member_of_itself(ty, row_type)?;
         let mut new = Column::new(column.clone(), ty, typmod, collation);
         new.ndims = i16::try_from(type_name.arrayBounds.len()).unwrap_or(i16::MAX);
-        // A composite type has no rows, so the old values need no expression, but a stored value of the type keeps its fields.
-        if target.kind == b'c' {
+        // A composite type and a foreign table have no rows, so the old values need no expression, but a stored value of the row type keeps its fields.
+        if matches!(target.kind, b'c' | b'f') {
+            if using.is_some() {
+                return Err(Error::new(
+                    SqlState::WRONG_OBJECT_TYPE,
+                    format!("\"{}\" is not a table", target.name),
+                ));
+            }
             self.check_row_type_users(target)?;
             return Ok(TypeCmd { column, new });
         }

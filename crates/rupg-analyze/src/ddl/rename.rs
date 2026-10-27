@@ -21,6 +21,7 @@ pub(super) fn is_rename_kind(kind: ObjectType) -> bool {
         ObjectType::OBJECT_TABLE
             | ObjectType::OBJECT_VIEW
             | ObjectType::OBJECT_MATVIEW
+            | ObjectType::OBJECT_FOREIGN_TABLE
             | ObjectType::OBJECT_INDEX
             | ObjectType::OBJECT_SEQUENCE
             | ObjectType::OBJECT_COLUMN

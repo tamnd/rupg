@@ -1,0 +1,215 @@
+> CREATE ROLE tsstat_aft_u;
+CREATE ROLE
+> CREATE FOREIGN DATA WRAPPER dummy;
+CREATE FOREIGN DATA WRAPPER
+> CREATE SERVER s0 FOREIGN DATA WRAPPER dummy;
+CREATE SERVER
+> CREATE SCHEMA foreign_schema;
+CREATE SCHEMA
+> CREATE FOREIGN TABLE ft1 (c1 integer OPTIONS ("param 1" 'val1') NOT NULL, c2 text OPTIONS (param2 'val2', param3 'val3') CHECK (c2 <> ''), c3 date, CHECK (c3 BETWEEN '1994-01-01'::date AND '1994-01-31'::date)) SERVER s0 OPTIONS (delimiter ',', quote '"', "be quoted" 'value');
+CREATE FOREIGN TABLE
+> COMMENT ON FOREIGN TABLE ft1 IS 'foreign table';
+COMMENT
+> COMMENT ON FOREIGN TABLE ft1 IS NULL;
+COMMENT
+> COMMENT ON COLUMN ft1.c1 IS 'foreign column';
+COMMENT
+> COMMENT ON COLUMN ft1.c1 IS NULL;
+COMMENT
+> ALTER FOREIGN TABLE ft1 ADD COLUMN c4 integer;
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 ADD COLUMN c5 integer DEFAULT 0;
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 ADD COLUMN c6 integer;
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 ADD COLUMN IF NOT EXISTS c6 integer;
+NOTICE 42701 column "c6" of relation "ft1" already exists, skipping
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 ADD COLUMN c7 integer NOT NULL;
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 ADD COLUMN c8 integer;
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 ADD COLUMN c9 integer;
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 ADD COLUMN c10 integer OPTIONS (p1 'v1');
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 ADD c11 integer;
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 ALTER COLUMN c4 SET DEFAULT 0;
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 ALTER COLUMN c5 DROP DEFAULT;
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 ALTER COLUMN c6 SET NOT NULL;
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 ALTER COLUMN c7 DROP NOT NULL;
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 ALTER COLUMN c8 TYPE char(10) USING '0';
+ERROR 42809 "ft1" is not a table
+> ALTER FOREIGN TABLE ft1 ALTER COLUMN c8 TYPE char(10);
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 ALTER COLUMN c8 SET DATA TYPE text;
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 ALTER COLUMN xmin OPTIONS (ADD p1 'v1');
+ERROR 0A000 cannot alter system column "xmin"
+> ALTER FOREIGN TABLE ft1 ALTER COLUMN c7 OPTIONS (ADD p1 'v1', ADD p2 'v2'), ALTER COLUMN c8 OPTIONS (ADD p1 'v1', ADD p2 'v2');
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 ALTER COLUMN c8 OPTIONS (SET p2 'V2', DROP p1);
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 ALTER COLUMN c8 OPTIONS (SET p9 'V2');
+ERROR 42704 option "p9" not found
+> ALTER FOREIGN TABLE ft1 ALTER COLUMN c8 OPTIONS (ADD p2 'V2');
+ERROR 42710 option "p2" provided more than once
+> ALTER FOREIGN TABLE ft1 ALTER COLUMN nope OPTIONS (ADD p2 'V2');
+ERROR 42703 column "nope" of relation "ft1" does not exist
+> ALTER FOREIGN TABLE ft1 ALTER COLUMN c1 SET STATISTICS 10000;
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 ALTER COLUMN c1 SET (n_distinct = 100);
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 ALTER COLUMN c8 SET STATISTICS -1;
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 ALTER COLUMN c8 SET STORAGE PLAIN;
+ALTER FOREIGN TABLE
+> SELECT attname, attnum, atttypid::regtype, attnotnull, attstattarget, attstorage, attoptions, attfdwoptions FROM pg_attribute WHERE attrelid = 'ft1'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,attnum@pg_attribute.5:21:2:-1,atttypid:2206:4:-1,attnotnull@pg_attribute.12:16:1:-1,attstattarget@pg_attribute.21:21:2:-1,attstorage@pg_attribute.10:18:1:-1,attoptions@pg_attribute.23:1009:-1:-1,attfdwoptions@pg_attribute.24:1009:-1:-1
+row c1,1,integer,t,10000,p,{n_distinct=100},{"param 1=val1"}
+row c2,2,text,f,NULL,x,NULL,{param2=val2,param3=val3}
+row c3,3,date,f,NULL,p,NULL,NULL
+row c4,4,integer,f,NULL,p,NULL,NULL
+row c5,5,integer,f,NULL,p,NULL,NULL
+row c6,6,integer,t,NULL,p,NULL,NULL
+row c7,7,integer,f,NULL,p,NULL,{p1=v1,p2=v2}
+row c8,8,text,f,NULL,p,NULL,{p2=V2}
+row c9,9,integer,f,NULL,p,NULL,NULL
+row c10,10,integer,f,NULL,p,NULL,{p1=v1}
+row c11,11,integer,f,NULL,p,NULL,NULL
+SELECT 11
+> CREATE TABLE use_ft1_column_type (x ft1);
+CREATE TABLE
+> ALTER FOREIGN TABLE ft1 ALTER COLUMN c8 SET DATA TYPE integer;
+ERROR 0A000 cannot alter foreign table "ft1" because column "use_ft1_column_type.x" uses its row type
+> DROP TABLE use_ft1_column_type;
+DROP TABLE
+> ALTER FOREIGN TABLE ft1 ADD PRIMARY KEY (c7);
+ERROR 0A000 primary key constraints are not supported on foreign tables at 29
+> ALTER FOREIGN TABLE ft1 ADD CONSTRAINT ft1_c9_check CHECK (c9 < 0) NOT VALID;
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 ALTER CONSTRAINT ft1_c9_check DEFERRABLE;
+ERROR 42809 ALTER action ALTER CONSTRAINT cannot be performed on relation "ft1"
+> ALTER FOREIGN TABLE ft1 DROP CONSTRAINT ft1_c9_check;
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 DROP CONSTRAINT no_const;
+ERROR 42704 constraint "no_const" of relation "ft1" does not exist
+> ALTER FOREIGN TABLE ft1 DROP CONSTRAINT IF EXISTS no_const;
+NOTICE 00000 constraint "no_const" of relation "ft1" does not exist, skipping
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 OWNER TO tsstat_aft_u;
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 OPTIONS (DROP delimiter, SET quote '~', ADD escape '@');
+ALTER FOREIGN TABLE
+> SELECT ftoptions FROM pg_foreign_table WHERE ftrelid = 'ft1'::regclass;
+fields ftoptions@pg_foreign_table.3:1009:-1:-1
+row {quote=~,"be quoted=value",escape=@}
+SELECT 1
+> ALTER FOREIGN TABLE ft1 OPTIONS (DROP nope);
+ERROR 42704 option "nope" not found
+> ALTER FOREIGN TABLE ft1 OPTIONS (ADD escape '#');
+ERROR 42710 option "escape" provided more than once
+> ALTER FOREIGN TABLE ft1 DROP COLUMN no_column;
+ERROR 42703 column "no_column" of relation "ft1" does not exist
+> ALTER FOREIGN TABLE ft1 DROP COLUMN IF EXISTS no_column;
+NOTICE 00000 column "no_column" of relation "ft1" does not exist, skipping
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 DROP COLUMN c9;
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 DROP c11;
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 ADD COLUMN c11 serial;
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 SET SCHEMA foreign_schema;
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE ft1 SET TABLESPACE ts;
+ERROR 42P01 relation "ft1" does not exist
+> ALTER SEQUENCE foreign_schema.ft1_c11_seq SET SCHEMA public;
+ERROR 0A000 cannot move an owned sequence into another schema
+> ALTER FOREIGN TABLE foreign_schema.ft1 RENAME c1 TO foreign_column_1;
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE foreign_schema.ft1 RENAME TO foreign_table_1;
+ALTER FOREIGN TABLE
+> CREATE TABLE plain (a int);
+CREATE TABLE
+> ALTER TABLE plain OPTIONS (ADD a '1');
+ERROR 42809 ALTER action OPTIONS cannot be performed on relation "plain"
+> ALTER TABLE plain ALTER COLUMN a OPTIONS (ADD a '1');
+ERROR 42809 ALTER action ALTER COLUMN ... OPTIONS cannot be performed on relation "plain"
+> ALTER TABLE foreign_schema.foreign_table_1 ALTER COLUMN c8 OPTIONS (DROP p2);
+ALTER TABLE
+> DROP TABLE plain;
+DROP TABLE
+> ALTER FOREIGN TABLE IF EXISTS doesnt_exist_ft1 ADD COLUMN c4 integer;
+NOTICE 00000 relation "doesnt_exist_ft1" does not exist, skipping
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE IF EXISTS doesnt_exist_ft1 ADD COLUMN IF NOT EXISTS c6 integer;
+NOTICE 00000 relation "doesnt_exist_ft1" does not exist, skipping
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE IF EXISTS doesnt_exist_ft1 ADD COLUMN c10 integer OPTIONS (p1 'v1');
+NOTICE 00000 relation "doesnt_exist_ft1" does not exist, skipping
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE IF EXISTS doesnt_exist_ft1 ALTER COLUMN c6 SET NOT NULL;
+NOTICE 00000 relation "doesnt_exist_ft1" does not exist, skipping
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE IF EXISTS doesnt_exist_ft1 ALTER COLUMN c8 TYPE char(10);
+NOTICE 00000 relation "doesnt_exist_ft1" does not exist, skipping
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE IF EXISTS doesnt_exist_ft1 ALTER COLUMN c7 OPTIONS (ADD p1 'v1', ADD p2 'v2'), ALTER COLUMN c8 OPTIONS (ADD p1 'v1', ADD p2 'v2');
+NOTICE 00000 relation "doesnt_exist_ft1" does not exist, skipping
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE IF EXISTS doesnt_exist_ft1 DROP CONSTRAINT ft1_c1_check;
+NOTICE 00000 relation "doesnt_exist_ft1" does not exist, skipping
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE IF EXISTS doesnt_exist_ft1 OWNER TO tsstat_aft_u;
+NOTICE 00000 relation "doesnt_exist_ft1" does not exist, skipping
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE IF EXISTS doesnt_exist_ft1 OPTIONS (DROP delimiter, SET quote '~', ADD escape '@');
+NOTICE 00000 relation "doesnt_exist_ft1" does not exist, skipping
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE IF EXISTS doesnt_exist_ft1 DROP COLUMN IF EXISTS no_column;
+NOTICE 00000 relation "doesnt_exist_ft1" does not exist, skipping
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE IF EXISTS doesnt_exist_ft1 SET SCHEMA foreign_schema;
+NOTICE 00000 relation "doesnt_exist_ft1" does not exist, skipping
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE IF EXISTS doesnt_exist_ft1 RENAME c1 TO foreign_column_1;
+NOTICE 00000 relation "doesnt_exist_ft1" does not exist, skipping
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE IF EXISTS doesnt_exist_ft1 RENAME TO foreign_table_1;
+NOTICE 00000 relation "doesnt_exist_ft1" does not exist, skipping
+ALTER FOREIGN TABLE
+> ALTER FOREIGN TABLE doesnt_exist_ft1 RENAME TO foreign_table_1;
+ERROR 42P01 relation "doesnt_exist_ft1" does not exist
+> SELECT attname, attfdwoptions FROM pg_attribute WHERE attrelid = 'foreign_schema.foreign_table_1'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,attfdwoptions@pg_attribute.24:1009:-1:-1
+row foreign_column_1,{"param 1=val1"}
+row c2,{param2=val2,param3=val3}
+row c3,NULL
+row c4,NULL
+row c5,NULL
+row c6,NULL
+row c7,{p1=v1,p2=v2}
+row c8,NULL
+row c10,{p1=v1}
+row c11,NULL
+SELECT 10
+> SELECT relname, ftoptions FROM pg_foreign_table JOIN pg_class ON oid = ftrelid;
+fields relname@pg_class.2:19:64:-1,ftoptions@pg_foreign_table.3:1009:-1:-1
+row foreign_table_1,{quote=~,"be quoted=value",escape=@}
+SELECT 1
+> DROP FOREIGN TABLE foreign_schema.foreign_table_1;
+DROP FOREIGN TABLE
+> DROP SCHEMA foreign_schema CASCADE;
+DROP SCHEMA
+> DROP SERVER s0;
+DROP SERVER
+> DROP FOREIGN DATA WRAPPER dummy;
+DROP FOREIGN DATA WRAPPER
+> DROP ROLE tsstat_aft_u;
+DROP ROLE

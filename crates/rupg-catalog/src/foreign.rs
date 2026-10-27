@@ -210,6 +210,18 @@ impl Catalog {
         Ok(())
     }
 
+    /// `ATExecGenericOptions`: the new `ftoptions` of the foreign table.
+    ///
+    /// # Errors
+    ///
+    /// An internal error for a relation that is not in the catalog.
+    pub fn set_foreign_table_options(&mut self, table: u32, options: Vec<String>) -> Result<()> {
+        if let Some(foreign) = &mut self.relation_mut(table)?.foreign {
+            foreign.options = options;
+        }
+        Ok(())
+    }
+
     /// `ATExecAlterColumnGenericOptions`: the options of the column `column`, from 0, of the foreign table.
     ///
     /// # Errors
