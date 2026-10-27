@@ -264,6 +264,7 @@ impl Catalog {
                         options: Vec::new(),
                         local: column.local,
                         inhcount: column.inhcount,
+                        fdw_options: Vec::new(),
                     };
                 }
             }

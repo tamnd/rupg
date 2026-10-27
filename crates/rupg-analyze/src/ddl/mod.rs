@@ -194,6 +194,7 @@ pub fn is_definition(stmt: &Node) -> bool {
     matches!(
         stmt,
         Node::CreateStmt(_)
+            | Node::CreateForeignTableStmt(_)
             | Node::CreateTableAsStmt(_)
             | Node::IndexStmt(_)
             | Node::CreateSchemaStmt(_)
@@ -326,6 +327,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
     let mut filled = None;
     let result = match stmt {
         Node::CreateStmt(create) => definer.create_table(create),
+        Node::CreateForeignTableStmt(create) => definer.create_foreign_table(create),
         Node::CreateTableAsStmt(ctas) => {
             definer.create_table_as(ctas, text).map(|table| filled = table)
         }
@@ -1015,6 +1017,7 @@ impl Definer<'_, '_> {
                 Some(RelKind::Partitioned) => b'p',
                 Some(RelKind::PartitionedIndex) => b'I',
                 Some(RelKind::MatView) => b'm',
+                Some(RelKind::Foreign) => b'f',
                 _ => b'r',
             },
             Found::Builtin(row) => row.kind,

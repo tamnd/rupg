@@ -589,6 +589,7 @@ impl Definer<'_, '_> {
                     RelKind::Table => b'r',
                     RelKind::Partitioned => b'p',
                     RelKind::MatView => b'm',
+                    RelKind::Foreign => b'f',
                 };
                 (code, rel.namespace, rel.name.as_str())
             }

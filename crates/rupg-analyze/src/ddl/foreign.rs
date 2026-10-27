@@ -1,21 +1,22 @@
-//! `CREATE FOREIGN DATA WRAPPER`, `ALTER FOREIGN DATA WRAPPER`, `CREATE SERVER`, `ALTER SERVER` and `CREATE`, `ALTER` and `DROP USER MAPPING`, as `CreateForeignDataWrapper`, `AlterForeignDataWrapper`, `CreateForeignServer`, `AlterForeignServer`, `CreateUserMapping`, `AlterUserMapping` and `RemoveUserMapping` of `foreigncmds.c` run them, with `RENAME TO` and `OWNER TO` as `AlterObjectRename_internal`, `AlterForeignDataWrapperOwner_internal` and `AlterForeignServerOwner_internal` run them.
+//! `CREATE FOREIGN DATA WRAPPER`, `ALTER FOREIGN DATA WRAPPER`, `CREATE SERVER`, `ALTER SERVER`, `CREATE`, `ALTER` and `DROP USER MAPPING` and the part of `CREATE FOREIGN TABLE` after its relation, as `CreateForeignDataWrapper`, `AlterForeignDataWrapper`, `CreateForeignServer`, `AlterForeignServer`, `CreateUserMapping`, `AlterUserMapping`, `RemoveUserMapping` and `CreateForeignTable` of `foreigncmds.c` run them, with `RENAME TO` and `OWNER TO` as `AlterObjectRename_internal`, `AlterForeignDataWrapperOwner_internal` and `AlterForeignServerOwner_internal` run them.
 
 use rupg_catalog::{
     ForeignDataWrapper, ForeignServer, ObjRef, PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER,
-    PG_USER_MAPPING, UserMapping,
+    PG_FOREIGN_TABLE, PG_USER_MAPPING, UserMapping,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{
     AlterFdwStmt, AlterForeignServerStmt, AlterOwnerStmt, AlterUserMappingStmt, CreateFdwStmt,
-    CreateForeignServerStmt, CreateUserMappingStmt, DefElem, DefElemAction, DropUserMappingStmt,
-    List, Node, RenameStmt, RoleSpec, RoleSpecType,
+    CreateForeignServerStmt, CreateForeignTableStmt, CreateUserMappingStmt, DefElem, DefElemAction,
+    DropUserMappingStmt, List, Node, RenameStmt, RoleSpec, RoleSpecType,
 };
 use rupg_types::oid;
 
 use super::Definer;
 use super::comment::not_owner;
 use super::sequence::conflicting;
+use super::table::SYSTEM_COLUMNS;
 use super::tsearch::def_string;
 use crate::from::levenshtein;
 use crate::typename::names;
@@ -38,6 +39,9 @@ const CONNINFO_OPTIONS: [(&str, u32); 15] = [
     ("gsslib", PG_FOREIGN_SERVER),
     ("gssdelegation", PG_FOREIGN_SERVER),
 ];
+
+/// The OID of `pg_attribute`, the catalog of the options of a column of a foreign table.
+const PG_ATTRIBUTE: u32 = 1249;
 
 /// The name of a `DefElem`.
 fn def_name(def: &DefElem) -> &str {
@@ -334,6 +338,17 @@ impl Definer<'_, '_> {
         ))
     }
 
+    /// `object_aclcheck` of `USAGE` on a server for the role, with the error of `aclcheck_error`.
+    fn check_server_usage(&self, server: &ForeignServer, role: u32) -> Result<()> {
+        if self.foreign_usage_allowed(false, server.oid, role) {
+            return Ok(());
+        }
+        Err(Error::new(
+            SqlState::INSUFFICIENT_PRIVILEGE,
+            format!("permission denied for foreign server {}", server.name),
+        ))
+    }
+
     /// `CreateForeignServer`. With `IF NOT EXISTS`, a server that exists gives a notice.
     pub(super) fn create_server(&mut self, stmt: &CreateForeignServerStmt) -> Result<()> {
         let name = stmt.servername.as_deref().unwrap_or_default();
@@ -523,13 +538,7 @@ impl Definer<'_, '_> {
         if user != self.user {
             return Err(not_owner("foreign server", &server.name));
         }
-        if self.foreign_usage_allowed(false, server.oid, self.user) {
-            return Ok(());
-        }
-        Err(Error::new(
-            SqlState::INSUFFICIENT_PRIVILEGE,
-            format!("permission denied for foreign server {}", server.name),
-        ))
+        self.check_server_usage(server, self.user)
     }
 
     /// `CreateUserMapping`. With `IF NOT EXISTS`, a mapping that exists gives a notice.
@@ -622,5 +631,57 @@ impl Definer<'_, '_> {
         };
         self.user_mapping_check(user, &server)?;
         self.perform(&[ObjRef::new(PG_USER_MAPPING, mapping.oid)], true)
+    }
+
+    /// `CreateForeignTable`: the server must exist and the user must have `USAGE` on it. The options go through the validator of the foreign-data wrapper of the server.
+    pub(super) fn store_foreign_table(
+        &mut self,
+        table: u32,
+        stmt: &CreateForeignTableStmt,
+    ) -> Result<()> {
+        let name = stmt.servername.as_deref().unwrap_or_default();
+        let server = self.catalog.server_by_name(name).cloned().ok_or_else(|| no_server(name))?;
+        self.check_server_usage(&server, self.user)?;
+        let validator = self.catalog.fdw(server.fdw).map_or(0, |f| f.validator);
+        let options = self.generic_options(PG_FOREIGN_TABLE, &[], &stmt.options, validator)?;
+        self.catalog.set_foreign_table(table, server.oid, options)
+    }
+
+    /// `ATExecAlterColumnGenericOptions`: the options of the column of the foreign table after the changes of the list. The options go through the validator of the foreign-data wrapper of the server of the table.
+    pub(super) fn alter_column_fdw_options(
+        &mut self,
+        table: u32,
+        column: &str,
+        list: &List,
+    ) -> Result<()> {
+        if list.is_empty() {
+            return Ok(());
+        }
+        let Some(rel) = self.catalog.relation(table) else {
+            return Err(Error::internal(format!("cache lookup failed for relation {table}")));
+        };
+        let Some(foreign) = &rel.foreign else {
+            return Err(Error::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!("foreign table \"{}\" does not exist", rel.name),
+            ));
+        };
+        let server = self.catalog.server(foreign.server);
+        let validator = server.and_then(|s| self.catalog.fdw(s.fdw)).map_or(0, |f| f.validator);
+        let Some(at) = rel.columns.iter().position(|c| !c.dropped && c.name == column) else {
+            if SYSTEM_COLUMNS.contains(&column) {
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    format!("cannot alter system column \"{column}\""),
+                ));
+            }
+            return Err(Error::new(
+                SqlState::UNDEFINED_COLUMN,
+                format!("column \"{column}\" of relation \"{}\" does not exist", rel.name),
+            ));
+        };
+        let old = rel.columns[at].fdw_options.clone();
+        let options = self.generic_options(PG_ATTRIBUTE, &old, list, validator)?;
+        self.catalog.set_column_fdw_options(table, at, options)
     }
 }

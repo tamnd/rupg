@@ -49,6 +49,7 @@ fn owner_word(objtype: ObjectType) -> &'static str {
         ObjectType::OBJECT_TABLE => "table",
         ObjectType::OBJECT_VIEW => "view",
         ObjectType::OBJECT_MATVIEW => "materialized view",
+        ObjectType::OBJECT_FOREIGN_TABLE => "foreign table",
         _ => "relation",
     }
 }
@@ -68,7 +69,8 @@ impl Definer<'_, '_> {
             | ObjectType::OBJECT_VIEW
             | ObjectType::OBJECT_MATVIEW
             | ObjectType::OBJECT_INDEX
-            | ObjectType::OBJECT_SEQUENCE => self.comment_relation(stmt.objtype, object)?,
+            | ObjectType::OBJECT_SEQUENCE
+            | ObjectType::OBJECT_FOREIGN_TABLE => self.comment_relation(stmt.objtype, object)?,
             ObjectType::OBJECT_COLUMN => self.comment_column(object)?,
             ObjectType::OBJECT_TABCONSTRAINT => self.comment_constraint(object)?,
             ObjectType::OBJECT_TRIGGER => self.comment_trigger(object)?,
@@ -142,7 +144,7 @@ impl Definer<'_, '_> {
         Err(Error::new(SqlState::UNDEFINED_SCHEMA, format!("schema \"{name}\" does not exist")))
     }
 
-    /// A table, a view, a materialized view, an index or a sequence, by `get_relation_by_qualified_name`.
+    /// A table, a view, a materialized view, an index, a sequence or a foreign table, by `get_relation_by_qualified_name`.
     fn comment_relation(&self, objtype: ObjectType, object: Option<&Node>) -> Result<ObjRef> {
         let rv = range_var(&name_list(object))?;
         let found = self.lookup_relation(&rv)?;
@@ -152,6 +154,7 @@ impl Definer<'_, '_> {
             ObjectType::OBJECT_SEQUENCE => (kind == b'S', "a sequence"),
             ObjectType::OBJECT_TABLE => (matches!(kind, b'r' | b'p'), "a table"),
             ObjectType::OBJECT_MATVIEW => (kind == b'm', "a materialized view"),
+            ObjectType::OBJECT_FOREIGN_TABLE => (kind == b'f', "a foreign table"),
             _ => (kind == b'v', "a view"),
         };
         let name = relname(&rv);

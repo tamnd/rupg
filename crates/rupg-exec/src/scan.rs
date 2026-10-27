@@ -565,6 +565,57 @@ fn check_populated(relation: &rupg_catalog::Relation) -> Result<()> {
     Ok(())
 }
 
+/// `GetFdwRoutineByRelId` for a foreign table: the foreign-data wrapper of its server must have a handler. rupg has no handler, so a scan or a write of a foreign table gives an error.
+fn check_handler(relation: &rupg_catalog::Relation, session: &dyn Session) -> Result<()> {
+    let Some(foreign) = &relation.foreign else { return Ok(()) };
+    let catalog = session.catalog();
+    let server = catalog.and_then(|c| c.server(foreign.server));
+    let Some(fdw) = server.and_then(|s| catalog.and_then(|c| c.fdw(s.fdw))) else {
+        return Err(Error::internal(format!(
+            "cache lookup failed for foreign server {}",
+            foreign.server
+        )));
+    };
+    if fdw.handler == 0 {
+        return Err(Error::new(
+            SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
+            format!("foreign-data wrapper \"{}\" has no handler", fdw.name),
+        ));
+    }
+    Err(Error::new(
+        SqlState::FEATURE_NOT_SUPPORTED,
+        "a scan of a foreign table is not supported yet",
+    ))
+}
+
+/// The check of `get_relation_info` and `make_modifytable` of the planner: each foreign table that the query reads or writes, also in its subqueries, its queries of `WITH` and its sublinks, has a handler, as [`check_handler`] checks it.
+pub(crate) fn check_foreign(query: &Query, session: &dyn Session) -> Result<()> {
+    let Some(catalog) = session.catalog() else { return Ok(()) };
+    if let Some(rel) = query.write.as_ref().and_then(|w| catalog.relation(w.table)) {
+        check_handler(rel, session)?;
+    }
+    for relation in &query.relations {
+        if let Some(sub) = relation.subquery.as_deref() {
+            check_foreign(sub, session)?;
+        } else if let Some(rel) = catalog.relation(relation.oid) {
+            check_handler(rel, session)?;
+        }
+    }
+    for cte in &query.ctes {
+        check_foreign(&cte.query, session)?;
+    }
+    for expr in query.exprs() {
+        let error = expr.find(0, &mut |e, _| match &e.kind {
+            ExprKind::SubLink(sub) => check_foreign(&sub.query, session).err(),
+            _ => None,
+        });
+        if let Some(error) = error {
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
 /// `ExecCheckRelationsScannable`: the materialized views that the query reads, also in its subqueries, its queries of `WITH` and its sublinks, are populated. The executor checks them when it starts, before the description of the rows.
 pub(crate) fn check_scannable(query: &Query, session: &dyn Session) -> Result<()> {
     for relation in &query.relations {

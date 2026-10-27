@@ -496,7 +496,8 @@ fn attributes_of(relid: u32, session: &dyn Session) -> Vec<Attribute<'_>> {
         | RelKind::Sequence
         | RelKind::Toast
         | RelKind::Partitioned
-        | RelKind::MatView => &SYSTEM_COLUMNS,
+        | RelKind::MatView
+        | RelKind::Foreign => &SYSTEM_COLUMNS,
         RelKind::Index | RelKind::PartitionedIndex | RelKind::View | RelKind::Composite => &[],
     };
     let system = system.iter().map(|&(name, num)| Attribute {

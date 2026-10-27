@@ -197,6 +197,7 @@ pub(crate) fn relkind(env: &dyn Env, relid: u32) -> u8 {
             RelKind::Partitioned => b'p',
             RelKind::PartitionedIndex => b'I',
             RelKind::MatView => b'm',
+            RelKind::Foreign => b'f',
         },
         None => builtin::class_by_oid(relid).map_or(0, |row| row.kind),
     }

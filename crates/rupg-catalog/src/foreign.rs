@@ -1,6 +1,8 @@
-//! The foreign-data wrappers of `pg_foreign_data_wrapper`, the foreign servers of `pg_foreign_server` and the user mappings of `pg_user_mapping`. They change as `CreateForeignDataWrapper`, `AlterForeignDataWrapper`, `CreateForeignServer`, `AlterForeignServer`, `CreateUserMapping` and `AlterUserMapping` of `foreigncmds.c` change them, with the same rows of `pg_depend`.
+//! The foreign-data wrappers of `pg_foreign_data_wrapper`, the foreign servers of `pg_foreign_server`, the user mappings of `pg_user_mapping` and the foreign tables of `pg_foreign_table`. They change as `CreateForeignDataWrapper`, `AlterForeignDataWrapper`, `CreateForeignServer`, `AlterForeignServer`, `CreateUserMapping`, `AlterUserMapping` and `CreateForeignTable` of `foreigncmds.c` change them, with the same rows of `pg_depend`.
 
-use super::{Catalog, DepKind, ObjRef, PG_PROC};
+use rupg_common::Result;
+
+use super::{Catalog, DepKind, NewRelation, ObjRef, PG_CLASS, PG_PROC, RelKind, no_object};
 
 /// The OID of `pg_foreign_data_wrapper`.
 pub const PG_FOREIGN_DATA_WRAPPER: u32 = 2328;
@@ -8,6 +10,8 @@ pub const PG_FOREIGN_DATA_WRAPPER: u32 = 2328;
 pub const PG_FOREIGN_SERVER: u32 = 1417;
 /// The OID of `pg_user_mapping`.
 pub const PG_USER_MAPPING: u32 = 1418;
+/// The OID of `pg_foreign_table`.
+pub const PG_FOREIGN_TABLE: u32 = 3118;
 
 /// A foreign-data wrapper, one row of `pg_foreign_data_wrapper`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,6 +61,15 @@ pub struct UserMapping {
     /// `umserver`: the OID of the foreign server.
     pub server: u32,
     /// `umoptions`: the options as `name=value`. No options give a null array.
+    pub options: Vec<String>,
+}
+
+/// The row of `pg_foreign_table` of a foreign table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ForeignTable {
+    /// `ftserver`: the OID of the foreign server.
+    pub server: u32,
+    /// `ftoptions`: the options as `name=value`. No options give a null array.
     pub options: Vec<String>,
 }
 
@@ -172,5 +185,47 @@ impl Catalog {
         if let Some(mapping) = self.user_mappings.get_mut(&oid) {
             mapping.options = options;
         }
+    }
+
+    /// `heap_create_with_catalog` for a foreign table. The relation has no storage. [`Catalog::set_foreign_table`] then gives its row of `pg_foreign_table`.
+    pub fn create_foreign_table(&mut self, new: NewRelation) -> Result<u32> {
+        let oid = self.create_relation(new, RelKind::Foreign)?;
+        self.relation_mut(oid)?.file = 0;
+        Ok(oid)
+    }
+
+    /// `CreateForeignTable`: the row of `pg_foreign_table`, and the normal dependency of the table on its server.
+    pub fn set_foreign_table(
+        &mut self,
+        table: u32,
+        server: u32,
+        options: Vec<String>,
+    ) -> Result<()> {
+        self.relation_mut(table)?.foreign = Some(ForeignTable { server, options });
+        self.depend(
+            ObjRef::new(PG_CLASS, table),
+            ObjRef::new(PG_FOREIGN_SERVER, server),
+            DepKind::Normal,
+        );
+        Ok(())
+    }
+
+    /// `ATExecAlterColumnGenericOptions`: the options of the column `column`, from 0, of the foreign table.
+    ///
+    /// # Errors
+    ///
+    /// An internal error for a relation or a column that is not in the catalog.
+    pub fn set_column_fdw_options(
+        &mut self,
+        table: u32,
+        column: usize,
+        options: Vec<String>,
+    ) -> Result<()> {
+        let rel = self.relation_mut(table)?;
+        let Some(found) = rel.columns.get_mut(column) else {
+            return Err(no_object(&format!("column {column} of relation"), table));
+        };
+        found.fdw_options = options;
+        Ok(())
     }
 }

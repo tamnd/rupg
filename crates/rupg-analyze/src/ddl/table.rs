@@ -8,9 +8,9 @@ use rupg_catalog::{
 use rupg_common::{Error, Object, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{
-    CollateClause, ColumnDef, CompositeTypeStmt, ConstrType, Constraint, CreateStmt, DefElem,
-    Equal, IndexElem, IndexStmt, Node, OnCommitAction, PartitionBoundSpec, PartitionSpec, RangeVar,
-    TypeName,
+    CollateClause, ColumnDef, CompositeTypeStmt, ConstrType, Constraint, CreateForeignTableStmt,
+    CreateStmt, DefElem, Equal, IndexElem, IndexStmt, Node, OnCommitAction, PartitionBoundSpec,
+    PartitionSpec, RangeVar, TypeName,
 };
 use rupg_types::{Value, oid};
 
@@ -110,6 +110,8 @@ struct Plan {
     inherits: Vec<u32>,
     /// `ofType`: true for a table of `OF type`.
     typed: bool,
+    /// `isforeign`: true for `CREATE FOREIGN TABLE`.
+    foreign_table: bool,
 }
 
 /// `makeNotNullConstraint`: an unnamed not-null constraint on the column.
@@ -262,6 +264,20 @@ impl Definer<'_, '_> {
 
     /// `transformCreateStmt`, then `DefineRelation` and the statements that it adds.
     pub(super) fn create_table(&mut self, stmt: &CreateStmt) -> Result<()> {
+        self.define_table(stmt, None)
+    }
+
+    /// `transformCreateStmt` for `CREATE FOREIGN TABLE`, then `DefineRelation`, `CreateForeignTable` and the statements that `transformCreateStmt` adds.
+    pub(super) fn create_foreign_table(&mut self, stmt: &CreateForeignTableStmt) -> Result<()> {
+        self.define_table(&stmt.base, Some(stmt))
+    }
+
+    /// [`Definer::create_table`] and [`Definer::create_foreign_table`].
+    fn define_table(
+        &mut self,
+        stmt: &CreateStmt,
+        foreign: Option<&CreateForeignTableStmt>,
+    ) -> Result<()> {
         let rv = stmt.relation.as_deref().cloned().unwrap_or_default();
         let at = place(rv.location);
         if stmt.partspec.is_some() && rv.relpersistence == b'u' {
@@ -308,6 +324,7 @@ impl Definer<'_, '_> {
             parent: None,
             inherits: Vec::new(),
             typed: stmt.ofTypename.is_some(),
+            foreign_table: foreign.is_some(),
         };
         // The table constraints of a partition come after the columns of the parent table, as `transformIndexConstraint` finds the key columns of a partition in its parent table.
         let mut partition_constraints = Vec::new();
@@ -368,6 +385,9 @@ impl Definer<'_, '_> {
         }
         self.check_on_commit(stmt.oncommit, namespace)?;
         let table = self.define_relation(&plan)?;
+        if let Some(foreign) = foreign {
+            self.store_foreign_table(table, foreign)?;
+        }
         if let Some(ty) = of_type {
             self.catalog.set_of_type(table, ty)?;
         }
@@ -383,6 +403,22 @@ impl Definer<'_, '_> {
             self.clone_foreign_keys(parent, table)?;
         }
         self.create_toast_options(table, &stmt.options)?;
+        // `transformColumnDefinition` adds `ALTER FOREIGN TABLE ... ALTER COLUMN ... OPTIONS` for the options of a column.
+        for element in stmt.tableElts.iter().flatten() {
+            let Node::ColumnDef(def) = element else { continue };
+            if def.fdwoptions.is_empty() {
+                continue;
+            }
+            // `RangeVarCallbackForAlterRelation` of `ALTER FOREIGN TABLE`.
+            if foreign.is_none() {
+                return Err(Error::new(
+                    SqlState::WRONG_OBJECT_TYPE,
+                    format!("\"{}\" is not a foreign table", plan.relname),
+                ));
+            }
+            let column = def.colname.as_deref().unwrap_or_default();
+            self.alter_column_fdw_options(table, column, &def.fdwoptions)?;
+        }
         for index in &indexes {
             self.create_index(index, false)?;
         }
@@ -561,6 +597,7 @@ impl Definer<'_, '_> {
             parent: None,
             inherits: Vec::new(),
             typed: false,
+            foreign_table: false,
         };
         let table = self.define_relation(&plan)?;
         if !options.is_empty() {
@@ -571,11 +608,7 @@ impl Definer<'_, '_> {
     }
 
     fn column_definition(&mut self, plan: &mut Plan, def: &ColumnDef) -> Result<()> {
-        let at = place(def.location);
         let name = def.colname.as_deref().unwrap_or_default().to_string();
-        if !def.fdwoptions.is_empty() {
-            return Err(not_yet("OPTIONS", at));
-        }
         let mut type_name = def.typeName.as_deref().cloned().unwrap_or_default();
         let mut serial = None;
         if type_name.names.len() == 1 && !type_name.pct_type {
@@ -823,10 +856,16 @@ impl Definer<'_, '_> {
                         }
                         need_notnull = true;
                     }
+                    if plan.foreign_table {
+                        return Err(not_on_foreign(&con));
+                    }
                     if con.keys.is_empty() {
                         con.keys = vec![Some(Node::String(name.as_str().into()))];
                     }
                     new_indexes.push(con);
+                }
+                ConstrType::CONSTR_FOREIGN if plan.foreign_table => {
+                    return Err(not_on_foreign(&con));
                 }
                 ConstrType::CONSTR_FOREIGN => {
                     con.fk_attrs = vec![Some(Node::String(name.as_str().into()))];
@@ -1091,6 +1130,7 @@ impl Definer<'_, '_> {
             parent: None,
             inherits: Vec::new(),
             typed: false,
+            foreign_table: false,
         };
         self.column_definition(&mut plan, def)?;
         let Some(column) = plan.columns.first() else {
@@ -1240,7 +1280,9 @@ impl Definer<'_, '_> {
             owner: self.user,
             columns,
         };
-        let table = if plan.partspec.is_some() {
+        let table = if plan.foreign_table {
+            self.catalog.create_foreign_table(new)?
+        } else if plan.partspec.is_some() {
             self.catalog.create_partitioned_table(new)?
         } else {
             self.catalog.create_table(new)?
@@ -1314,7 +1356,7 @@ impl Definer<'_, '_> {
             self.inherit_not_nulls(table, &[parent])?;
         }
         self.inherit_not_nulls(table, &plan.inherits)?;
-        if plan.partspec.is_none() && needs_toast(&shapes) {
+        if plan.partspec.is_none() && !plan.foreign_table && needs_toast(&shapes) {
             self.catalog.create_toast(table)?;
         }
         Ok(table)
@@ -1645,9 +1687,35 @@ fn no_inherit_not_null() -> Error {
     )
 }
 
+/// The error of `transformColumnDefinition` and `transformTableConstraint` for a constraint that a foreign table cannot have.
+fn not_on_foreign(con: &Constraint) -> Error {
+    let what = match con.contype {
+        ConstrType::CONSTR_PRIMARY => "primary key",
+        ConstrType::CONSTR_UNIQUE => "unique",
+        ConstrType::CONSTR_EXCLUSION => "exclusion",
+        _ => "foreign key",
+    };
+    Error::new(
+        SqlState::FEATURE_NOT_SUPPORTED,
+        format!("{what} constraints are not supported on foreign tables"),
+    )
+    .at_opt(place(con.location))
+}
+
 /// `transformTableConstraint`.
 fn table_constraint(plan: &mut Plan, con: &Constraint) -> Result<()> {
     let con = con.clone();
+    if plan.foreign_table
+        && matches!(
+            con.contype,
+            ConstrType::CONSTR_PRIMARY
+                | ConstrType::CONSTR_UNIQUE
+                | ConstrType::CONSTR_EXCLUSION
+                | ConstrType::CONSTR_FOREIGN
+        )
+    {
+        return Err(not_on_foreign(&con));
+    }
     match con.contype {
         ConstrType::CONSTR_PRIMARY | ConstrType::CONSTR_UNIQUE => plan.indexes.push(con),
         ConstrType::CONSTR_EXCLUSION => {

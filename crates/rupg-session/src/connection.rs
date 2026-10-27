@@ -1415,6 +1415,7 @@ impl Connection {
                     Node::ReassignOwnedStmt(_) => CommandTag::ReassignOwned,
                     Node::ReindexStmt(_) => CommandTag::Reindex,
                     Node::DiscardStmt(_) => CommandTag::DiscardTemp,
+                    Node::CreateForeignTableStmt(_) => CommandTag::CreateForeignTable,
                     _ => CommandTag::CreateTable,
                 }))
             }
@@ -4205,6 +4206,12 @@ mod tests {
     #[test]
     fn user_mapping() {
         big_stack(|| script(include_str!("connection/user_mapping.test")));
+    }
+
+    /// `CREATE FOREIGN TABLE` with its checks, options and constraints, `pg_foreign_table`, `attfdwoptions`, `COMMENT ON FOREIGN TABLE`, the object address functions, the error of a scan or a write of a foreign table with no handler, and `DROP FOREIGN TABLE`. `connection/foreign_table.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn foreign_table() {
+        big_stack(|| script(include_str!("connection/foreign_table.test")));
     }
 
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
