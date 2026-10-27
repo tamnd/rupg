@@ -1,0 +1,34 @@
+> create function dfunc(a anyelement, b anyelement = null, flag bool = true) returns anyelement as $$ select case when $3 then $1 else $2 end; $$ language sql
+CREATE FUNCTION
+> select dfunc('a'::text)
+fields dfunc:25:-1:-1
+row a
+SELECT 1
+> select dfunc(a := 'a'::text, flag := true)
+fields dfunc:25:-1:-1
+row a
+SELECT 1
+> select dfunc(a := 'a'::text, flag := false)
+fields dfunc:25:-1:-1
+row NULL
+SELECT 1
+> select dfunc(1)
+fields dfunc:23:4:-1
+row 1
+SELECT 1
+> select dfunc(a => -1)
+fields dfunc:23:4:-1
+row -1
+SELECT 1
+> select dfunc(1, flag => false)
+fields dfunc:23:4:-1
+row NULL
+SELECT 1
+> create function dfunc2(a anyelement, b anyarray = null) returns int as $$ select coalesce(array_length($2, 1), 0) + $1 $$ language sql
+CREATE FUNCTION
+> select dfunc2(5)
+ERROR 42804 cannot determine element type of "anyarray" argument
+> select dfunc2(5, array[1,2])
+fields dfunc2:23:4:-1
+row 7
+SELECT 1

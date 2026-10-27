@@ -3914,6 +3914,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/json_populate.test")));
     }
 
+    /// `recheck_cast_function_args`: a default `NULL` for an argument of type `anyelement` takes the type that the other arguments give, also in a call with named arguments. `connection/polymorphic_defaults.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn polymorphic_defaults() {
+        big_stack(|| script(include_str!("connection/polymorphic_defaults.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {
