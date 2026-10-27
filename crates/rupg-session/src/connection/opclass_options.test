@@ -1,0 +1,26 @@
+> create table oo (id int, t text)
+CREATE TABLE
+> create index on oo (id int4_ops(foo=1))
+ERROR 22023 operator class int4_ops has no options
+> create index on oo (t text_pattern_ops(a=1, b=2))
+ERROR 22023 operator class text_pattern_ops has no options
+> create index on oo using hash (id int4_ops(foo=1))
+ERROR 22023 operator class int4_ops has no options
+> create index on oo (id pg_catalog.int4_ops(foo=1))
+ERROR 22023 operator class int4_ops has no options
+> create schema oos
+CREATE SCHEMA
+> create operator class oos.my_ops for type int using btree as operator 1 <, operator 2 <=, operator 3 =, operator 4 >=, operator 5 >, function 1 btint4cmp(int, int)
+CREATE OPERATOR CLASS
+> create index on oo (id oos.my_ops(x=1))
+ERROR 22023 operator class oos.my_ops has no options
+> set search_path = oos, public
+SET
+search_path=oos, public
+> create index on oo (id my_ops(x=1))
+ERROR 22023 operator class oos.my_ops has no options
+> reset search_path
+RESET
+search_path="$user", public
+> create index on oo (id int4_ops)
+CREATE INDEX

@@ -332,6 +332,47 @@ impl Definer<'_, '_> {
         Ok(found)
     }
 
+    /// The error of `index_opclass_options` for options of a class whose family has no options procedure, `amoptsprocnum`, of the access method for the type of the class. The class is named as `generate_opclass_name` names it. `None` when the class has the procedure.
+    pub(super) fn opclass_without_options(&self, class: u32) -> Option<Error> {
+        let (family, intype) = match self.catalog.opclass(class) {
+            Some(c) => (c.family, c.intype),
+            None => builtin::opclasses()
+                .iter()
+                .find(|c| c.oid == class)
+                .map(|c| (c.family, c.intype))?,
+        };
+        let (namespace, name, method, _) = self.opcf_row(false, class)?;
+        let method = METHODS.iter().find(|m| m.oid == method)?;
+        let number = i16::try_from(method.options).ok().filter(|n| *n != 0);
+        let has = number.is_some_and(|number| {
+            let is =
+                |left: u32, right: u32, n: i16| left == intype && right == intype && n == number;
+            builtin::amprocs(family, intype).iter().any(|a| is(a.left, a.right, a.number))
+                || self
+                    .catalog
+                    .amprocs()
+                    .any(|a| a.family == family && is(a.left, a.right, a.number))
+        });
+        if has {
+            return None;
+        }
+        // The build of an index runs with the search path `pg_catalog, pg_temp`, as `RestrictSearchPath` sets it, so only a class of `pg_catalog` is visible.
+        let visible = namespace == crate::PG_CATALOG_NAMESPACE;
+        let shown = if visible {
+            quote_identifier(&name)
+        } else {
+            format!(
+                "{}.{}",
+                quote_identifier(&self.schema_name(namespace)),
+                quote_identifier(&name)
+            )
+        };
+        Some(Error::new(
+            SqlState::INVALID_PARAMETER_VALUE,
+            format!("operator class {shown} has no options"),
+        ))
+    }
+
     /// `OpclassnameGetOpcid` and `get_opclass_oid` of `ResolveOpClass`: the class of the access method that the name gives, of the catalog or built in, and the type that it indexes.
     pub(super) fn opclass_by_name(&self, method: u32, list: &[&str]) -> Result<(u32, u32)> {
         let Some(method) = METHODS.iter().find(|m| m.oid == method) else {
