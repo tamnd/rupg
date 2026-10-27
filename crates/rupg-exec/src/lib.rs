@@ -89,7 +89,7 @@ fn set_kernel(func: u32, location: Option<usize>) -> Result<rupg_func::SetKernel
 const SQL_LANGUAGE: u32 = 14;
 
 /// The OID of the language `plpgsql`.
-const PLPGSQL_LANGUAGE: u32 = 13708;
+const PLPGSQL_LANGUAGE: u32 = 13674;
 
 /// The depth of the calls of functions in SQL in the bodies of functions in SQL that a run takes before it stops with the error of `check_stack_depth`, as a function that calls itself with no end does.
 const MAX_SQL_DEPTH: usize = 100;

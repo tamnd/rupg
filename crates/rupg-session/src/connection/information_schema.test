@@ -148,15 +148,15 @@ row 696,0da401f51c1504cc5907b2c79adb619a
 SELECT 1
 > SELECT count(*), md5(string_agg(concat_ws(' ', t.oid, typname, typlen, typbyval, typtype, typcategory, typrelid, typelem, typarray, typinput, typoutput, typalign, typstorage, typbasetype, typtypmod, typcollation), ',' ORDER BY t.oid)) FROM pg_type t WHERE typnamespace = 'information_schema'::regnamespace
 fields count:20:8:-1,md5:25:-1:-1
-row 148,a4caeb3d3b4a4eb0266f2c06851efde3
+row 148,df17c0cbf46fd80d5d4f760ba35be86c
 SELECT 1
 > SELECT count(*), md5(string_agg(concat_ws(' ', oid, rulename, ev_class, ev_type, ev_enabled, is_instead), ',' ORDER BY oid)) FROM pg_rewrite WHERE ev_class IN (SELECT oid FROM pg_class WHERE relnamespace = 'information_schema'::regnamespace)
 fields count:20:8:-1,md5:25:-1:-1
-row 65,082086ac059d42a2123c85bf331db1b3
+row 65,a96a1ced9a5f9794c70fa9e155297127
 SELECT 1
 > SELECT count(*), md5(string_agg(concat_ws(' ', classid, objid, objsubid, refclassid, refobjid, refobjsubid, deptype), ',' ORDER BY classid, objid, objsubid, refclassid, refobjid, refobjsubid)) FROM pg_depend WHERE objid BETWEEN 13350 AND 13703
 fields count:20:8:-1,md5:25:-1:-1
-row 1252,a916a9f4b965dfcc76d972a8fb93b9f0
+row 1219,ea2b37707b15ce9c9c96f82074845e5c
 SELECT 1
 > SELECT count(*), md5(string_agg(c.relname || ' ' || pg_get_viewdef(c.oid), ',' ORDER BY c.oid)) FROM pg_class c WHERE c.relnamespace = 'information_schema'::regnamespace AND c.relkind = 'v'
 fields count:20:8:-1,md5:25:-1:-1

@@ -1,37 +1,37 @@
 > SELECT * FROM pg_extension
 fields oid@pg_extension.1:26:4:-1,extname@pg_extension.2:19:64:-1,extowner@pg_extension.3:26:4:-1,extnamespace@pg_extension.4:26:4:-1,extrelocatable@pg_extension.5:16:1:-1,extversion@pg_extension.6:25:-1:-1,extconfig@pg_extension.7:1028:-1:-1,extcondition@pg_extension.8:1009:-1:-1
-row 13704,plpgsql,10,11,f,1.0,NULL,NULL
+row 13670,plpgsql,10,11,f,1.0,NULL,NULL
 SELECT 1
 > SELECT * FROM pg_language ORDER BY oid
 fields oid@pg_language.1:26:4:-1,lanname@pg_language.2:19:64:-1,lanowner@pg_language.3:26:4:-1,lanispl@pg_language.4:16:1:-1,lanpltrusted@pg_language.5:16:1:-1,lanplcallfoid@pg_language.6:26:4:-1,laninline@pg_language.7:26:4:-1,lanvalidator@pg_language.8:26:4:-1,lanacl@pg_language.9:1034:-1:-1
 row 12,internal,10,f,f,0,0,2246,NULL
 row 13,c,10,f,f,0,0,2247,NULL
 row 14,sql,10,f,t,0,0,2248,NULL
-row 13708,plpgsql,10,t,t,13705,13706,13707,NULL
+row 13674,plpgsql,10,t,t,13671,13672,13673,NULL
 SELECT 4
-> SELECT oid, proname, pronamespace, proowner, prolang, procost, prorows, prokind, proisstrict, proretset, provolatile, proparallel, pronargs, prorettype, proargtypes, proargnames, prosrc, probin, prosqlbody, proacl FROM pg_proc WHERE oid >= 13704 AND oid < 16384 ORDER BY oid
+> SELECT oid, proname, pronamespace, proowner, prolang, procost, prorows, prokind, proisstrict, proretset, provolatile, proparallel, pronargs, prorettype, proargtypes, proargnames, prosrc, probin, prosqlbody, proacl FROM pg_proc WHERE oid >= 13670 AND oid < 16384 ORDER BY oid
 fields oid@pg_proc.1:26:4:-1,proname@pg_proc.2:19:64:-1,pronamespace@pg_proc.3:26:4:-1,proowner@pg_proc.4:26:4:-1,prolang@pg_proc.5:26:4:-1,procost@pg_proc.6:700:4:-1,prorows@pg_proc.7:700:4:-1,prokind@pg_proc.10:18:1:-1,proisstrict@pg_proc.13:16:1:-1,proretset@pg_proc.14:16:1:-1,provolatile@pg_proc.15:18:1:-1,proparallel@pg_proc.16:18:1:-1,pronargs@pg_proc.17:21:2:-1,prorettype@pg_proc.19:26:4:-1,proargtypes@pg_proc.20:30:-1:-1,proargnames@pg_proc.23:1009:-1:-1,prosrc@pg_proc.26:25:-1:-1,probin@pg_proc.27:25:-1:-1,prosqlbody@pg_proc.28:194:-1:-1,proacl@pg_proc.30:1034:-1:-1
-row 13705,plpgsql_call_handler,11,10,13,1,0,f,f,f,v,u,0,2280,,NULL,plpgsql_call_handler,$libdir/plpgsql,NULL,NULL
-row 13706,plpgsql_inline_handler,11,10,13,1,0,f,t,f,v,u,1,2278,2281,NULL,plpgsql_inline_handler,$libdir/plpgsql,NULL,NULL
-row 13707,plpgsql_validator,11,10,13,1,0,f,t,f,v,u,1,2278,26,NULL,plpgsql_validator,$libdir/plpgsql,NULL,NULL
+row 13671,plpgsql_call_handler,11,10,13,1,0,f,f,f,v,u,0,2280,,NULL,plpgsql_call_handler,$libdir/plpgsql,NULL,NULL
+row 13672,plpgsql_inline_handler,11,10,13,1,0,f,t,f,v,u,1,2278,2281,NULL,plpgsql_inline_handler,$libdir/plpgsql,NULL,NULL
+row 13673,plpgsql_validator,11,10,13,1,0,f,t,f,v,u,1,2278,26,NULL,plpgsql_validator,$libdir/plpgsql,NULL,NULL
 SELECT 3
 > SELECT * FROM pg_depend WHERE classid IN (2612, 3079) OR refclassid IN (2612, 3079) ORDER BY 1, 2, 3, 4, 5, 6
 fields classid@pg_depend.1:26:4:-1,objid@pg_depend.2:26:4:-1,objsubid@pg_depend.3:23:4:-1,refclassid@pg_depend.4:26:4:-1,refobjid@pg_depend.5:26:4:-1,refobjsubid@pg_depend.6:23:4:-1,deptype@pg_depend.7:18:1:-1
-row 1255,13705,0,3079,13704,0,e
-row 1255,13706,0,3079,13704,0,e
-row 1255,13707,0,3079,13704,0,e
-row 2612,13708,0,1255,13705,0,n
-row 2612,13708,0,1255,13706,0,n
-row 2612,13708,0,1255,13707,0,n
-row 2612,13708,0,3079,13704,0,e
+row 1255,13671,0,3079,13670,0,e
+row 1255,13672,0,3079,13670,0,e
+row 1255,13673,0,3079,13670,0,e
+row 2612,13674,0,1255,13671,0,n
+row 2612,13674,0,1255,13672,0,n
+row 2612,13674,0,1255,13673,0,n
+row 2612,13674,0,3079,13670,0,e
 SELECT 7
 > SELECT * FROM pg_description WHERE classoid IN (2612, 3079) ORDER BY 1
 fields objoid@pg_description.1:26:4:-1,classoid@pg_description.2:26:4:-1,objsubid@pg_description.3:23:4:-1,description@pg_description.4:25:-1:-1
 row 12,2612,0,built-in functions
 row 13,2612,0,dynamically-loaded C functions
 row 14,2612,0,SQL-language functions
-row 13704,3079,0,PL/pgSQL procedural language
-row 13708,2612,0,PL/pgSQL procedural language
+row 13670,3079,0,PL/pgSQL procedural language
+row 13674,2612,0,PL/pgSQL procedural language
 SELECT 5
 > SELECT e.extname AS "Name", e.extversion AS "Version", n.nspname AS "Schema", c.description AS "Description" FROM pg_catalog.pg_extension e LEFT JOIN pg_catalog.pg_namespace n ON n.oid = e.extnamespace LEFT JOIN pg_catalog.pg_description c ON c.objoid = e.oid AND c.classoid = 'pg_catalog.pg_extension'::pg_catalog.regclass ORDER BY 1
 fields Name@pg_extension.2:19:64:-1,Version@pg_extension.6:25:-1:-1,Schema@pg_namespace.2:19:64:-1,Description@pg_description.4:25:-1:-1
@@ -45,7 +45,7 @@ SELECT 1
 fields lanname@pg_language.2:19:64:-1,lanplcallfoid:24:4:-1,laninline:2202:4:-1,lanvalidator:2202:4:-1
 row plpgsql,plpgsql_call_handler,plpgsql_inline_handler(internal),plpgsql_validator(oid)
 SELECT 1
-> SELECT count(*) FROM pg_init_privs WHERE classoid IN (2612, 3079) OR objoid BETWEEN 13704 AND 13708
+> SELECT count(*) FROM pg_init_privs WHERE classoid IN (2612, 3079) OR objoid BETWEEN 13670 AND 13674
 fields count:20:8:-1
 row 0
 SELECT 1

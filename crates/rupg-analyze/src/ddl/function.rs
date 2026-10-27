@@ -25,7 +25,7 @@ use crate::{Analyzer, Env, Params, node, poly, types};
 /// The OID of the language `sql`.
 const SQL_LANGUAGE: u32 = 14;
 /// The OID of the language `plpgsql`, which the extension `plpgsql` of a new cluster makes.
-const PLPGSQL_LANGUAGE: u32 = 13708;
+const PLPGSQL_LANGUAGE: u32 = 13674;
 /// The OID of the language `internal`, the built-in functions.
 const INTERNAL_LANGUAGE: u32 = 12;
 /// The OID of the language `c`, the functions of a library.

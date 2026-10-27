@@ -45,7 +45,7 @@ const SCHEMAS: [(&str, u32); 3] = [("pg_catalog", 11), ("pg_toast", 99), ("publi
 /// The OID of the language `sql`.
 const SQL_LANGUAGE: u32 = 14;
 /// The OID of the language `plpgsql`.
-const PLPGSQL_LANGUAGE: u32 = 13708;
+const PLPGSQL_LANGUAGE: u32 = 13674;
 /// The OID of the language `internal`.
 const INTERNAL_LANGUAGE: u32 = 12;
 /// The OID of the language `c`.
