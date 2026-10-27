@@ -112,7 +112,15 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
         Kind::Append | Kind::MergeAppend(_) | Kind::RecursiveUnion => {}
         Kind::SetOp { .. } => node.output = want.iter().map(Item::passed).collect(),
         Kind::Aggregate { .. } if set_op => {
-            node.output = want.iter().map(Item::passed).collect();
+            // With one member left, the node reads the targets of the plan of the member, which show as values of the node below, as `get_special_variable`.
+            let single = node
+                .children
+                .first()
+                .is_some_and(|c| !matches!(c.kind, Kind::Append | Kind::MergeAppend(_)));
+            node.output = want
+                .iter()
+                .map(|w| if single { Item { below: true, ..w.clone() } } else { w.passed() })
+                .collect();
             node.cost.width = node.children.first().map_or(0, |c| c.cost.width);
         }
         Kind::Modify { operation, .. } => {

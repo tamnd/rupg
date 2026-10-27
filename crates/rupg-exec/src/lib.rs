@@ -325,6 +325,11 @@ fn check_join(item: &FromItem) -> Result<()> {
 const MIXED_KEYS: &str =
     "Some of the datatypes only support hashing, while others only support sorting.";
 
+/// `preprocess_expression` for a condition that `subquery_push_qual` moves into the subquery `query`: the condition folds and becomes canonical, as the planner of the subquery makes it. The condition stays as it is when the fold fails.
+pub fn fold_qual(query: &Query, qual: Expr, session: &dyn Session) -> Expr {
+    fold::qual(query, &qual, session).unwrap_or(qual)
+}
+
 /// Checks a query and makes the plan to run it. The plan reads the generation expression of each virtual generated column in place of the column, as `expand_virtual_generated_columns` puts it in the query.
 ///
 /// # Errors

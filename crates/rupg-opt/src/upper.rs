@@ -1067,7 +1067,8 @@ impl<'q> Builder<'q> {
         let width = if rows > 0.0 { (size / rows).round_ties_even() as i32 } else { 0 };
         let total: f64 =
             members.iter().map(|m| m.cost.total).sum::<f64>() + 0.5 * cost::CPU_TUPLE * rows;
-        let append = if members.len() == 1 {
+        let single = members.len() == 1;
+        let append = if single {
             members.remove(0)
         } else {
             let mut append = Node::new(Kind::Append, scope, members);
@@ -1167,12 +1168,13 @@ impl<'q> Builder<'q> {
             match kept {
                 0 => {
                     let strategy = Strategy::Hashed;
-                    let kind = Kind::Aggregate {
-                        strategy,
-                        keys: keys.clone(),
-                        sets: Vec::new(),
-                        unique: false,
+                    // `show_agg_keys` shows the keys as the targets of the plan below, which is the plan of the member when one is left.
+                    let keys = if single {
+                        keys.iter().map(|k| Item { below: false, ..k.clone() }).collect()
+                    } else {
+                        keys.clone()
                     };
+                    let kind = Kind::Aggregate { strategy, keys, sets: Vec::new(), unique: false };
                     let mut node = Node::new(kind, scope, vec![append.clone()]);
                     node.cost = Cost { startup: hash_startup, total: hash_total, rows, width };
                     node.disabled = !enable.hashagg;

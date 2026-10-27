@@ -3730,6 +3730,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/setop_empty_inputs.test")));
     }
 
+    /// A condition that moves into a `SELECT` of a set operation or into a subquery gets folded there, so that a constant condition takes out the `SELECT` or turns into a `One-Time Filter`, and a `UNION` with one `SELECT` left shows that `SELECT`. `connection/fold_pushed_quals.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn fold_pushed_quals() {
+        big_stack(|| script(include_str!("connection/fold_pushed_quals.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

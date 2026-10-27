@@ -18,14 +18,18 @@ use rupg_types::{Value, oid};
 
 use crate::{exists, exprs, minmax, pushdown, setcast};
 
-/// The query with each simple subquery and each simple view in `FROM` merged into the query above it, also in the subqueries of the query, and with the conditions of `WHERE` that the planner moves into the other subqueries of `FROM`. `barrier` is true for a view with `security_barrier`, which does not merge and takes only the leakproof conditions.
-pub fn pull_up(query: &Query, barrier: &dyn Fn(u32) -> bool) -> Query {
+/// The query with each simple subquery and each simple view in `FROM` merged into the query above it, also in the subqueries of the query, and with the conditions of `WHERE` that the planner moves into the other subqueries of `FROM`. `barrier` is true for a view with `security_barrier`, which does not merge and takes only the leakproof conditions. `fold` folds a condition in the subquery that it moves into.
+pub fn pull_up(
+    query: &Query,
+    barrier: &dyn Fn(u32) -> bool,
+    fold: pushdown::FoldQual<'_>,
+) -> Query {
     let mut query = query.clone();
     merge_join(&mut query);
     flatten(&mut query);
     pull_all(&mut query, barrier);
     policies_all(&mut query);
-    pushdown::push_all(&mut query, barrier);
+    pushdown::push_all(&mut query, barrier, fold);
     setcast::wrap_all(&mut query);
     exists::fill_all(&mut query);
     minmax::fill_all(&mut query);
