@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A rule whose actions write depends on the target columns of `INSERT` and `UPDATE` and on the columns that its values, conditions and `RETURNING` read, and not on the columns that the rewrite copies, so `DROP COLUMN ... CASCADE` drops the same rules as PostgreSQL (#960).
 - `pg_get_functiondef` of a body in SQL shows an expression of `RETURNING` with no `AS "?column?"`, and the columns of an `INSERT` with the name of the table (#959).
 - `ctid` in `RETURNING` of a partitioned table and of a table with children of `INHERITS` gives the version in the leaf, for routed inserts, updates in a leaf and across leaves, and `ON CONFLICT` (#958).
 - `old` and `new` in `RETURNING` of a statement that a rule rewrites take the rows of the rule action, with the aliases of `WITH (OLD AS ..., NEW AS ...)`, and `EXPLAIN` shows them in `Output` (#957).

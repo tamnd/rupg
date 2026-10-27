@@ -1,0 +1,60 @@
+> create table rd (f1 int, f2 text, f3 int, f4 bigint);
+CREATE TABLE
+> create view rdv as select f1, f2 from rd;
+CREATE VIEW
+> create rule rdv_i as on insert to rdv do instead insert into rd values (new.*, 57) returning f1, f2;
+CREATE RULE
+> create rule rdv_u as on update to rdv do instead update rd set f1 = new.f1, f2 = new.f2 where f1 = old.f1 returning f1, f2;
+CREATE RULE
+> create rule rdv_d as on delete to rdv do instead delete from rd where f1 = old.f1 returning f1, f2;
+CREATE RULE
+> create rule rd_del as on delete to rd do instead update rd set f2 = f2 || ' (deleted)', f3 = -1, f4 = -1 where f1 = old.f1 returning *;
+CREATE RULE
+> create table rl (a int, b int, c int);
+CREATE TABLE
+> create rule rl_r as on insert to rl do instead insert into rd (f1, f4) select new.a, new.c returning f1, f1 + 1, f1 + 2;
+CREATE RULE
+> create rule rl_u as on update to rl do also update rd set f2 = 'x' from rl r2 where r2.b = rd.f3 and rd.f1 = new.a;
+CREATE RULE
+> select pg_describe_object(classid, objid, objsubid) as obj, pg_describe_object(refclassid, refobjid, refobjsubid) as ref, deptype from pg_depend where classid = 'pg_rewrite'::regclass and objid >= 16384 and refobjsubid <> 0 order by 1, 2;
+fields obj:25:-1:-1,ref:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row rule _RETURN on view rdv,column f1 of table rd,n
+row rule _RETURN on view rdv,column f2 of table rd,n
+row rule rd_del on table rd,column f1 of table rd,n
+row rule rd_del on table rd,column f2 of table rd,n
+row rule rd_del on table rd,column f3 of table rd,n
+row rule rd_del on table rd,column f4 of table rd,n
+row rule rdv_d on view rdv,column f1 of table rd,n
+row rule rdv_d on view rdv,column f1 of view rdv,n
+row rule rdv_d on view rdv,column f2 of table rd,n
+row rule rdv_i on view rdv,column f1 of table rd,n
+row rule rdv_i on view rdv,column f1 of view rdv,n
+row rule rdv_i on view rdv,column f2 of table rd,n
+row rule rdv_i on view rdv,column f2 of view rdv,n
+row rule rdv_i on view rdv,column f3 of table rd,n
+row rule rdv_u on view rdv,column f1 of table rd,n
+row rule rdv_u on view rdv,column f1 of view rdv,n
+row rule rdv_u on view rdv,column f2 of table rd,n
+row rule rdv_u on view rdv,column f2 of view rdv,n
+row rule rl_r on table rl,column a of table rl,n
+row rule rl_r on table rl,column c of table rl,n
+row rule rl_r on table rl,column f1 of table rd,n
+row rule rl_r on table rl,column f4 of table rd,n
+row rule rl_u on table rl,column a of table rl,n
+row rule rl_u on table rl,column b of table rl,n
+row rule rl_u on table rl,column f1 of table rd,n
+row rule rl_u on table rl,column f2 of table rd,n
+row rule rl_u on table rl,column f3 of table rd,n
+SELECT 27
+> alter table rd drop column f3 cascade;
+NOTICE 00000 drop cascades to 3 other objects
+ALTER TABLE
+> alter table rl drop column b cascade;
+ALTER TABLE
+> select rulename from pg_rewrite where ev_class in ('rd'::regclass, 'rdv'::regclass, 'rl'::regclass) order by 1;
+fields rulename@pg_rewrite.2:19:64:-1
+row _RETURN
+row rdv_d
+row rdv_u
+row rl_r
+SELECT 4
