@@ -3736,6 +3736,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/fold_pushed_quals.test")));
     }
 
+    /// A name in `ORDER BY` of a set operation that is not a column of the operation gives an error that names a `SELECT` of the operation with the column, as `errorMissingColumn` searches its range table. `connection/setop_order_missing_column.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn setop_order_missing_column() {
+        big_stack(|| script(include_str!("connection/setop_order_missing_column.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {
