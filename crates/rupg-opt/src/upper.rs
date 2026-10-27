@@ -1393,8 +1393,10 @@ fn aggregate<'q>(
     let groups = level.stats.groups(&group_exprs, n);
     let rows = cost::clamp_rows(groups * selectivity);
     let hashable = hashable && !group.is_empty() && !has_ordered;
-    // `cost_agg`: the transition cost, then the cost of the keys, which the rounding of the sums follows. `GROUP BY` with no aggregate is a `Group` node, which `cost_group` gives no cost for each group.
-    let group_node = aggs.is_empty();
+    // `cost_agg`: the transition cost, then the cost of the keys, which the rounding of the sums follows. `GROUP BY` with no aggregate is a `Group` node, which `cost_group` gives no cost for each group. A `GROUPING` call sets `hasAggs`, and so the node is an `Agg`.
+    let group_node = aggs.is_empty()
+        && !level.query.targets.iter().any(|t| has_grouping(&t.expr))
+        && !level.query.having.as_ref().is_some_and(has_grouping);
     // The sorted strategy: a `Sort` on the keys of the groups, and on the keys of an ordered call after them, as `adjust_group_pathkeys_for_groupagg`, with the start cost and the total cost of the sorted input and of the `Agg`, and the total cost with the sort of `ORDER BY` above it.
     let sorted_plan = |group: Vec<SortKey<'q>>| {
         let ordered = if presort { ordered_keys(&aggs, &group, &level.stats) } else { Vec::new() };

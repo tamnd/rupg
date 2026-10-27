@@ -450,6 +450,8 @@ struct Pending<'q> {
     sub: SubPlan<'q>,
     /// The subplan of [`SubLink::alternative`], of which the plan keeps one with `sub`.
     alternative: Option<Alternative<'q>>,
+    /// The groups of scopes of `sub`.
+    groups: Range<usize>,
 }
 
 /// The subplan of the `ANY` of a correlated `EXISTS`, which `make_subplan` puts with the subplan of `EXISTS` in an `AlternativeSubPlan`.
@@ -946,11 +948,11 @@ impl<'q> Builder<'q> {
             let sub = SubPlan { name: format!("SubPlan {name}"), plan };
             let alternative = match &link.alternative {
                 Some(any) if correlated => {
-                    self.alternative(any, scope, (startup, per_call), groups)
+                    self.alternative(any, scope, (startup, per_call), groups.clone())
                 }
                 _ => None,
             };
-            self.pending.push(Pending { link, sub, alternative });
+            self.pending.push(Pending { link, sub, alternative, groups });
         }
     }
 
@@ -1119,10 +1121,23 @@ fn preprocess_order(query: &Query) -> Vec<&Expr> {
 fn attach<'q>(node: &mut Node<'q>, pending: &mut Vec<Pending<'q>>, chosen: &mut Chosen<'_, 'q>) {
     if !pending.is_empty() {
         let mut found: Vec<(*const SubLink, f64)> = Vec::new();
+        let mut unused = Vec::new();
         for (item, num_exec) in own_items(node) {
             let mut links = Vec::new();
             sublinks(&item.expr, &mut links);
             found.extend(links.into_iter().map(|l| (std::ptr::from_ref(l), num_exec)));
+            grouping_sublinks(&item.expr, &mut unused);
+        }
+        // `ExecInitExpr` does not start the arguments of `GROUPING`, so their subplans are in no node, and their relations take no names.
+        for link in unused {
+            if let Some(at) = pending.iter().position(|p| std::ptr::eq(p.link, link)) {
+                let mut item = pending.remove(at);
+                chosen.dropped.push(item.groups.clone());
+                if let Some(alt) = &item.alternative {
+                    chosen.dropped.push(alt.groups[1].clone());
+                }
+                attach(&mut item.sub.plan, pending, chosen);
+            }
         }
         for (link, num_exec) in found {
             if let Some(at) = pending.iter().position(|p| std::ptr::eq(p.link, link)) {
@@ -1140,13 +1155,34 @@ fn attach<'q>(node: &mut Node<'q>, pending: &mut Vec<Pending<'q>>, chosen: &mut 
     }
 }
 
-/// The subqueries of an expression outside the queries of other subqueries, in the order of the text.
+/// The subqueries of an expression outside the queries of other subqueries and outside the arguments of `GROUPING`, in the order of the text.
 fn sublinks<'e>(expr: &'e Expr, out: &mut Vec<&'e SubLink>) {
+    if let ExprKind::Grouping(_) = &expr.kind {
+        return;
+    }
     for child in expr.children() {
         sublinks(child, out);
     }
     if let ExprKind::SubLink(link) = &expr.kind {
         out.push(link);
+    }
+}
+
+/// The subqueries in the arguments of each `GROUPING` of an expression, outside the queries of other subqueries.
+fn grouping_sublinks<'e>(expr: &'e Expr, out: &mut Vec<&'e SubLink>) {
+    if let ExprKind::Grouping(grouping) = &expr.kind {
+        for arg in &grouping.args {
+            arg.find(0, &mut |e, depth| {
+                if let (ExprKind::SubLink(link), 0) = (&e.kind, depth) {
+                    out.push(link);
+                }
+                None::<()>
+            });
+        }
+        return;
+    }
+    for child in expr.children() {
+        grouping_sublinks(child, out);
     }
 }
 
