@@ -13,7 +13,7 @@ use rupg_analyze::{
     Aggref, Body, BoolOp, BoolTest, Case, Column, CurrentOf, Expr, ExprKind, FieldStore,
     FromFunction, FromItem, Func, FuncForm, IsJson, JsonCtor, JsonCtorKind, JsonFormatKind, Query,
     RowCompare, SetKind, SetOp, SetTree, SortGroup, SqlValue, SubLink, SubLinkKind, Subscript,
-    TableSample, Target, WindowFunc,
+    TableSample, Target, WindowFunc, expand_grouping_sets,
 };
 use rupg_catalog::FIRST_NORMAL_OID;
 use rupg_common::{Error, Result, SqlState};
@@ -469,8 +469,19 @@ fn read_writes(query: &Query, out: &mut Vec<usize>) {
 
 /// Checks that the engine can run a query or a subquery. With `output`, it also checks that the engine has the output function of each column.
 fn check_query(query: &Query, output: bool) -> Result<()> {
-    // `create_ordinary_grouping_paths`: a `GROUP BY` sorts the rows when every type has an order, or else uses a hash table. The planner gives this error before the engine checks its functions.
-    if !query.group.iter().all(|g| g.sort != 0) && !query.group.iter().all(|g| g.hashable) {
+    // `create_ordinary_grouping_paths`: a `GROUP BY` sorts the rows when every type has an order, or else uses a hash table. An aggregate call with `ORDER BY` or `DISTINCT` cannot use a hash table, and with grouping sets a set with a type that has no order needs one. The planner gives this error before the engine checks its functions.
+    let unsortable_set = || {
+        let sets = expand_grouping_sets(&query.grouping_sets, query.group_distinct, usize::MAX);
+        sets.unwrap_or_default()
+            .iter()
+            .flatten()
+            .any(|t| query.group.iter().find(|g| g.target == *t).is_none_or(|g| g.sort == 0))
+    };
+    if !query.group.iter().all(|g| g.sort != 0)
+        && (!query.group.iter().all(|g| g.hashable)
+            || (has_ordered_aggregate(query)
+                && (query.grouping_sets.is_empty() || unsortable_set())))
+    {
         return Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "could not implement GROUP BY")
             .with_detail(MIXED_KEYS));
     }
@@ -542,6 +553,24 @@ fn check_query(query: &Query, output: bool) -> Result<()> {
         check_set_op(op)?;
     }
     Ok(())
+}
+
+/// True when the query has an aggregate call with `ORDER BY` or `DISTINCT`, which `preprocess_aggrefs` counts in `numOrderedAggs`.
+fn has_ordered_aggregate(query: &Query) -> bool {
+    let mut ordered = |e: &Expr, depth: usize| match &e.kind {
+        ExprKind::Agg(agg)
+            if agg.levels_up == depth && (!agg.order.is_empty() || !agg.distinct.is_empty()) =>
+        {
+            Some(())
+        }
+        _ => None,
+    };
+    query
+        .targets
+        .iter()
+        .map(|t| &t.expr)
+        .chain(&query.having)
+        .any(|e| e.find(0, &mut ordered).is_some())
 }
 
 /// Checks the operators of each operation of a set operation. As for `DISTINCT`, the planner sorts the rows or uses a hash table, and gives an error when it can do neither.
