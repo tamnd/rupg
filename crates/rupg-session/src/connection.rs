@@ -5234,6 +5234,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/catalog_statistics.test")));
     }
 
+    /// `pg_shmem_allocations` gives the allocations of the shared memory of PostgreSQL 19 with the default configuration, and only a member of `pg_read_all_stats` can read it. `connection/shmem_allocations.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn shmem_allocations() {
+        big_stack(|| script(include_str!("connection/shmem_allocations.test")));
+    }
+
     /// `EXPLAIN` of the scans of tables after `ANALYZE`: the rows of `=`, `<>`, `IS NULL` and the tests of a `boolean` come from the most common values, the null fraction and the number of distinct values in `pg_statistic`, and the widths of the columns come from `stawidth`. `connection/plan_statistics.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_statistics() {

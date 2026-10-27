@@ -78,6 +78,7 @@ pub fn set_kernel(func: u32) -> Option<SetKernel> {
         "show_all_file_settings" => file_settings,
         "pg_config" => crate::absent::config,
         "pg_stat_get_recovery" => crate::absent::recovery,
+        "pg_get_shmem_allocations" => crate::shmem::allocations,
         "pg_get_shmem_allocations_numa" => crate::absent::shmem_numa,
         "pg_stats_ext_mcvlist_items" => crate::absent::mcv_list_items,
         "pg_get_publication_tables_a" => crate::absent::publication_tables,

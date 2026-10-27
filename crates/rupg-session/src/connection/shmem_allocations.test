@@ -1,0 +1,42 @@
+> SELECT count(*), count(name), count(off), count(*) FILTER (WHERE size <= allocated_size) FROM pg_shmem_allocations;
+fields count:20:8:-1,count:20:8:-1,count:20:8:-1,count:20:8:-1
+row 79,78,78,79
+SELECT 1
+> SELECT name FROM pg_shmem_allocations WHERE name LIKE 'Buffer%' ORDER BY name;
+fields name@pg_shmem_allocations.1:25:-1:-1
+row Buffer Blocks
+row Buffer Descriptors
+row Buffer IO Condition Variables
+row Buffer Strategy Status
+SELECT 4
+> SELECT name, off FROM pg_shmem_allocations WHERE name IS NULL OR off IS NULL ORDER BY name;
+fields name@pg_shmem_allocations.1:25:-1:-1,off@pg_shmem_allocations.2:20:8:-1
+row <anonymous>,NULL
+row NULL,160350748
+SELECT 2
+> CREATE ROLE shm_r;
+CREATE ROLE
+> SET ROLE shm_r;
+SET
+is_superuser=off
+> SELECT count(*) FROM pg_shmem_allocations;
+ERROR 42501 permission denied for view pg_shmem_allocations
+> SELECT count(*) FROM pg_get_shmem_allocations();
+ERROR 42501 permission denied for function pg_get_shmem_allocations
+> RESET ROLE;
+RESET
+is_superuser=on
+> GRANT pg_read_all_stats TO shm_r;
+GRANT ROLE
+> SET ROLE shm_r;
+SET
+is_superuser=off
+> SELECT count(*) FROM pg_shmem_allocations;
+fields count:20:8:-1
+row 79
+SELECT 1
+> RESET ROLE;
+RESET
+is_superuser=on
+> DROP ROLE shm_r;
+DROP ROLE
