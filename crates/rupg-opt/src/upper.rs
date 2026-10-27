@@ -1058,7 +1058,13 @@ impl<'q> Builder<'q> {
         let per_row = cost::CPU_OPERATOR * columns as f64;
         let hash_startup = c.total + per_row * c.rows;
         let hash_total = hash_startup + cost::CPU_TUPLE * rows;
-        let (sort_startup, sort_total) = cost::sort((c.startup, c.total), c.rows, c.width, None);
+        // With no column, the rows of the `Append` are in the order of the keys, which are none, as `pathkeys_contained_in` finds, so the `Unique` needs no `Sort`.
+        let presorted = op.groups.is_empty();
+        let (sort_startup, sort_total) = if presorted {
+            (c.startup, c.total)
+        } else {
+            cost::sort((c.startup, c.total), c.rows, c.width, None)
+        };
         let unique_total = sort_total + per_row * c.rows;
         let keys = self.leaf_items(level, op);
         // The keys show with the names of the leftmost `SELECT`.
@@ -1086,7 +1092,7 @@ impl<'q> Builder<'q> {
         }
         if sortable || !hashable {
             paths.add(
-                (below + u32::from(!enable.sort), sort_startup, unique_total),
+                (below + u32::from(!enable.sort && !presorted), sort_startup, unique_total),
                 order.clone(),
                 1,
             );
@@ -1134,10 +1140,15 @@ impl<'q> Builder<'q> {
                     out.push((node, false));
                 }
                 1 => {
-                    let mut sorted =
-                        Node::new(Kind::Sort(sort_keys.clone()), scope, vec![append.clone()]);
-                    sorted.cost = Cost { startup: sort_startup, total: sort_total, ..c };
-                    sorted.disabled = !enable.sort;
+                    let sorted = if presorted {
+                        append.clone()
+                    } else {
+                        let mut sorted =
+                            Node::new(Kind::Sort(sort_keys.clone()), scope, vec![append.clone()]);
+                        sorted.cost = Cost { startup: sort_startup, total: sort_total, ..c };
+                        sorted.disabled = !enable.sort;
+                        sorted
+                    };
                     let mut node = Node::new(Kind::Unique, scope, vec![sorted]);
                     node.cost = Cost { startup: sort_startup, total: unique_total, rows, width };
                     out.push((node, true));
