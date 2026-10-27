@@ -2398,7 +2398,6 @@ impl Catalog {
         con.parent = parent;
         con.local = false;
         con.inhcount = con.inhcount.saturating_add(1);
-        con.no_inherit = false;
         let table = con.relation;
         let me = ObjRef::new(PG_CONSTRAINT, constraint);
         self.depend(me, ObjRef::new(PG_CONSTRAINT, parent), DepKind::PartitionPri);

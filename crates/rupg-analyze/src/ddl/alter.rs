@@ -678,7 +678,7 @@ impl Definer<'_, '_> {
         Ok(recurse)
     }
 
-    /// `ATPrepAddPrimaryKey`: a not-null constraint for each column of the key that has none. A column with a not-null constraint that is `NO INHERIT` or `NOT VALID` cannot be in a primary key.
+    /// `ATPrepAddPrimaryKey`: a not-null constraint for each column of the key that has none. A column with a not-null constraint that is `NO INHERIT` or `NOT VALID` cannot be in a primary key. With `ONLY`, each child table must already have a not-null constraint on a column that has none.
     fn prep_primary_key(
         &self,
         target: &Target,
@@ -691,27 +691,22 @@ impl Definer<'_, '_> {
         };
         for key in using.iter().map(String::as_str) {
             let column = self.catalog.relation(target.oid).and_then(|r| r.column_number(key));
-            let existing = column.and_then(|n| self.not_null_of(target.oid, n));
-            if let Some((name, no_inherit, validated)) = existing {
-                let (mark, hint) = if no_inherit {
-                    (
-                        "NO INHERIT",
-                        "make the existing constraint inheritable using ALTER TABLE ... ALTER CONSTRAINT ... INHERIT",
-                    )
-                } else if !validated {
-                    ("NOT VALID", "validate it using ALTER TABLE ... VALIDATE CONSTRAINT")
-                } else {
-                    continue;
-                };
-                return Err(Error::new(
-                    SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
-                    format!("cannot create primary key on column \"{key}\""),
-                )
-                .with_detail(format!(
-                    "The constraint \"{name}\" on column \"{key}\" of table \"{}\", marked {mark}, is incompatible with a primary key.",
-                    target.name
-                ))
-                .with_hint(format!("You might need to {hint}.")));
+            if let Some(existing) = column.and_then(|n| self.not_null_of(target.oid, n)) {
+                not_null_pk_compatible(key, &target.name, existing)?;
+                continue;
+            }
+            if !passes.recurse {
+                for child in self.catalog.children(target.oid) {
+                    let existing =
+                        child.column_number(key).and_then(|n| self.not_null_of(child.oid, n));
+                    let Some(existing) = existing else {
+                        return Err(Error::internal(format!(
+                            "column \"{key}\" of table \"{}\" is not marked NOT NULL",
+                            child.name
+                        )));
+                    };
+                    not_null_pk_compatible(key, &child.name, existing)?;
+                }
             }
             passes.constraints.push((make_not_null(key), Origin::PrimaryKey));
         }
@@ -792,10 +787,11 @@ impl Definer<'_, '_> {
         let mut indexes = Vec::new();
         let mut existing = Vec::new();
         let mut others: Vec<Other> = Vec::new();
+        // `transformIndexConstraints` gives the index the relation of the statement, so `ONLY` makes the index of a partitioned table on that table alone.
         let rv = RangeVar {
             schemaname: Some(self.schema_name(target.namespace).into()),
             relname: Some(target.name.as_str().into()),
-            inh: true,
+            inh: passes.recurse,
             location: -1,
             ..RangeVar::default()
         };
@@ -1446,4 +1442,30 @@ fn alter_index_constraint(con: &Constraint, rv: &RangeVar) -> Result<IndexStmt> 
         }
     }
     Ok(constraint_index(con, rv, &keys, &names(&con.including)))
+}
+
+/// `verifyNotNullPKCompatible`: a not-null constraint, given as its name, `connoinherit` and `convalidated`, that is `NO INHERIT` or `NOT VALID` cannot be in a primary key.
+fn not_null_pk_compatible(
+    key: &str,
+    table: &str,
+    (name, no_inherit, validated): (String, bool, bool),
+) -> Result<()> {
+    let (mark, hint) = if no_inherit {
+        (
+            "NO INHERIT",
+            "make the existing constraint inheritable using ALTER TABLE ... ALTER CONSTRAINT ... INHERIT",
+        )
+    } else if !validated {
+        ("NOT VALID", "validate it using ALTER TABLE ... VALIDATE CONSTRAINT")
+    } else {
+        return Ok(());
+    };
+    Err(Error::new(
+        SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
+        format!("cannot create primary key on column \"{key}\""),
+    )
+    .with_detail(format!(
+        "The constraint \"{name}\" on column \"{key}\" of table \"{table}\", marked {mark}, is incompatible with a primary key."
+    ))
+    .with_hint(format!("You might need to {hint}.")))
 }

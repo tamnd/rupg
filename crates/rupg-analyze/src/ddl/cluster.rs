@@ -1,6 +1,6 @@
 //! `CLUSTER ON`, `SET WITHOUT CLUSTER` and `REPLICA IDENTITY` of `ALTER TABLE`, as `ATExecClusterOn`, `ATExecDropCluster` and `ATExecReplicaIdentity` run them. They change `indisclustered`, `indisreplident` and `relreplident` only. rupg does not yet run the statement `CLUSTER`.
 
-use rupg_catalog::{IndexInfo, RelKind};
+use rupg_catalog::{ConKind, IndexInfo, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{REPLICA_IDENTITY_INDEX, ReplicaIdentityStmt};
 
@@ -11,7 +11,7 @@ use super::{Definer, Found};
 const CLUSTERABLE: &[u32] = &[403, 783];
 
 impl Definer<'_, '_> {
-    /// The index with this name in the schema of the table, as `get_relname_relid` and `index_open` find it, with the check that it is an index of the table.
+    /// The index with this name in the schema of the table, as `get_relname_relid` and `index_open` find it, with the check that it is an index of the table. `index_open` accepts the index of a partitioned table too.
     fn table_index(&self, target: &Target, name: &str) -> Result<(u32, &IndexInfo)> {
         let not_index =
             || Error::new(SqlState::WRONG_OBJECT_TYPE, format!("\"{name}\" is not an index"));
@@ -30,7 +30,10 @@ impl Definer<'_, '_> {
                 Err(if row.kind == b'i' { not_for_table() } else { not_index() })
             }
             Some(Found::User(oid)) => {
-                let rel = self.catalog.relation(oid).filter(|r| r.kind == RelKind::Index);
+                let rel = self
+                    .catalog
+                    .relation(oid)
+                    .filter(|r| matches!(r.kind, RelKind::Index | RelKind::PartitionedIndex));
                 let info = rel.and_then(|r| r.index.as_ref()).ok_or_else(not_index)?;
                 if info.table == target.oid { Ok((oid, info)) } else { Err(not_for_table()) }
             }
@@ -63,7 +66,7 @@ impl Definer<'_, '_> {
         self.catalog.set_clustered(target.oid, None);
     }
 
-    /// `ATExecReplicaIdentity`: `DEFAULT`, `FULL` and `NOTHING` set `relreplident`. `USING INDEX` checks that the index is unique, immediate, with no expression and no predicate, and that each key column is not null.
+    /// `ATExecReplicaIdentity`: `DEFAULT`, `FULL` and `NOTHING` set `relreplident`. `USING INDEX` checks that the index is unique, immediate, with no expression and no predicate, and that each key column has a valid not-null constraint.
     pub(super) fn replica_identity(
         &mut self,
         target: &Target,
@@ -105,6 +108,22 @@ impl Definer<'_, '_> {
                         "index \"{name}\" cannot be used as replica identity because column \"{}\" is nullable",
                         column.name
                     ),
+                ));
+            }
+            let invalid = self.catalog.constraints_of(target.oid).find(|c| {
+                c.kind == ConKind::NotNull && c.keys.first() == Some(&key) && !c.validated
+            });
+            if let (Some(con), Some(column)) = (invalid, rel.and_then(|r| r.column(key))) {
+                return Err(Error::new(
+                    SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
+                    format!("cannot use index \"{name}\" as replica identity"),
+                )
+                .with_detail(format!(
+                    "The constraint \"{}\" on column \"{}\" is marked NOT VALID.",
+                    con.name, column.name
+                ))
+                .with_hint(
+                    "You might need to validate it using ALTER TABLE ... VALIDATE CONSTRAINT.",
                 ));
             }
         }

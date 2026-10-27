@@ -1,0 +1,111 @@
+> CREATE TABLE ri4(id integer NOT NULL) PARTITION BY LIST (id)
+CREATE TABLE
+> CREATE TABLE ri4_1(id integer NOT NULL)
+CREATE TABLE
+> ALTER TABLE ONLY ri4 ATTACH PARTITION ri4_1 FOR VALUES IN (1)
+ALTER TABLE
+> ALTER TABLE ONLY ri4 ADD CONSTRAINT ri4_pkey PRIMARY KEY (id)
+ALTER TABLE
+> SELECT c.relname, c.relkind, i.indisvalid, i.indisreplident FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname LIKE 'ri4%' ORDER BY 1
+fields relname@pg_class.2:19:64:-1,relkind@pg_class.18:18:1:-1,indisvalid@pg_index.11:16:1:-1,indisreplident@pg_index.15:16:1:-1
+row ri4_pkey,I,f,f
+SELECT 1
+> ALTER TABLE ONLY ri4 REPLICA IDENTITY USING INDEX ri4_pkey
+ALTER TABLE
+> ALTER TABLE ONLY ri4_1 ADD CONSTRAINT ri4_1_pkey PRIMARY KEY (id)
+ALTER TABLE
+> SELECT c.relname, c.relkind, i.indisvalid, i.indisreplident FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname LIKE 'ri4%' ORDER BY 1
+fields relname@pg_class.2:19:64:-1,relkind@pg_class.18:18:1:-1,indisvalid@pg_index.11:16:1:-1,indisreplident@pg_index.15:16:1:-1
+row ri4_1_pkey,i,t,f
+row ri4_pkey,I,f,t
+SELECT 2
+> ALTER INDEX ri4_pkey ATTACH PARTITION ri4_1_pkey
+ALTER INDEX
+> SELECT c.relname, c.relkind, i.indisvalid, i.indisreplident FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname LIKE 'ri4%' ORDER BY 1
+fields relname@pg_class.2:19:64:-1,relkind@pg_class.18:18:1:-1,indisvalid@pg_index.11:16:1:-1,indisreplident@pg_index.15:16:1:-1
+row ri4_1_pkey,i,t,f
+row ri4_pkey,I,t,t
+SELECT 2
+> SELECT relname, relreplident FROM pg_class WHERE relname LIKE 'ri4%' ORDER BY 1
+fields relname@pg_class.2:19:64:-1,relreplident@pg_class.27:18:1:-1
+row ri4,i
+row ri4_1,d
+row ri4_1_pkey,n
+row ri4_pkey,n
+SELECT 4
+> CREATE TABLE ri6 (id int)
+CREATE TABLE
+> INSERT INTO ri6 VALUES (1), (NULL)
+INSERT 0 2
+> ALTER TABLE ri6 ADD CONSTRAINT id_nn NOT NULL id NOT VALID
+ALTER TABLE
+> CREATE UNIQUE INDEX ri6_idx ON ri6 (id)
+CREATE INDEX
+> ALTER TABLE ri6 REPLICA IDENTITY USING INDEX ri6_idx
+ERROR 55000 cannot use index "ri6_idx" as replica identity
+> DELETE FROM ri6 WHERE id IS NULL
+DELETE 1
+> ALTER TABLE ri6 VALIDATE CONSTRAINT id_nn
+ALTER TABLE
+> ALTER TABLE ri6 REPLICA IDENTITY USING INDEX ri6_idx
+ALTER TABLE
+> SELECT relreplident FROM pg_class WHERE oid = 'ri6'::regclass
+fields relreplident@pg_class.27:18:1:-1
+row i
+SELECT 1
+> CREATE TABLE ip (a int) PARTITION BY RANGE (a)
+CREATE TABLE
+> CREATE TABLE ip0 (LIKE ip)
+CREATE TABLE
+> ALTER TABLE ip0 ADD PRIMARY KEY (a)
+ALTER TABLE
+> ALTER TABLE ip ATTACH PARTITION ip0 FOR VALUES FROM (0) TO (1000)
+ALTER TABLE
+> ALTER TABLE ONLY ip ADD PRIMARY KEY (a)
+ALTER TABLE
+> SELECT indrelid::regclass::text, indexrelid::regclass::text, indisvalid, conname, conislocal, coninhcount, connoinherit FROM pg_index idx LEFT JOIN pg_constraint con ON idx.indexrelid = con.conindid WHERE indrelid::regclass::text LIKE 'ip%' ORDER BY 2
+fields indrelid:25:-1:-1,indexrelid:25:-1:-1,indisvalid@pg_index.11:16:1:-1,conname@pg_constraint.2:19:64:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1
+row ip0,ip0_pkey,t,ip0_pkey,t,0,t
+row ip,ip_pkey,f,ip_pkey,t,0,t
+SELECT 2
+> ALTER INDEX ip_pkey ATTACH PARTITION ip0_pkey
+ALTER INDEX
+> SELECT indrelid::regclass::text, indexrelid::regclass::text, indisvalid, conname, conislocal, coninhcount, connoinherit FROM pg_index idx LEFT JOIN pg_constraint con ON idx.indexrelid = con.conindid WHERE indrelid::regclass::text LIKE 'ip%' ORDER BY 2
+fields indrelid:25:-1:-1,indexrelid:25:-1:-1,indisvalid@pg_index.11:16:1:-1,conname@pg_constraint.2:19:64:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1
+row ip0,ip0_pkey,t,ip0_pkey,f,1,t
+row ip,ip_pkey,t,ip_pkey,t,0,t
+SELECT 2
+> DROP TABLE ip
+DROP TABLE
+> CREATE TABLE ip (a int) PARTITION BY RANGE (a)
+CREATE TABLE
+> CREATE TABLE ip0 (LIKE ip)
+CREATE TABLE
+> ALTER TABLE ip0 ADD UNIQUE (a)
+ALTER TABLE
+> ALTER TABLE ip ATTACH PARTITION ip0 DEFAULT
+ALTER TABLE
+> ALTER TABLE ONLY ip ADD PRIMARY KEY (a)
+ERROR XX000 column "a" of table "ip0" is not marked NOT NULL
+> ALTER TABLE ip0 ALTER COLUMN a SET NOT NULL
+ALTER TABLE
+> ALTER TABLE ONLY ip ADD PRIMARY KEY (a)
+ALTER TABLE
+> ALTER INDEX ip_pkey ATTACH PARTITION ip0_a_key
+ALTER INDEX
+> DROP TABLE ip
+DROP TABLE
+> CREATE TABLE pn (a int) PARTITION BY LIST (a)
+CREATE TABLE
+> CREATE TABLE pn_1 PARTITION OF pn FOR VALUES IN (1)
+CREATE TABLE
+> ALTER TABLE pn_1 ADD CONSTRAINT nn NOT NULL a NOT VALID
+ALTER TABLE
+> ALTER TABLE ONLY pn ADD PRIMARY KEY (a)
+ERROR 55000 cannot create primary key on column "a"
+> ALTER TABLE pn_1 VALIDATE CONSTRAINT nn
+ALTER TABLE
+> ALTER TABLE pn_1 ALTER CONSTRAINT nn NO INHERIT
+ALTER TABLE
+> ALTER TABLE ONLY pn ADD PRIMARY KEY (a)
+ERROR 55000 cannot create primary key on column "a"
