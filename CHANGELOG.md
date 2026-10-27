@@ -18,6 +18,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Fixed
 
 - `pg_statistic` and `pg_stats` now show the rows of the system catalogs that the `ANALYZE` of `initdb` wrote, as in a new PostgreSQL database. Before, they showed only the rows of user tables. (#886)
+- `pg_statistic` and `pg_stats` now also show the 21 rows of the tables `sql_features`, `sql_implementation_info`, `sql_parts` and `sql_sizing` of `information_schema`, and the planner uses them. (#887)
 - `SET seed` now seeds the generator of `random`, as `setseed` does, and `SHOW seed` gives `unavailable`, as in PostgreSQL. (#884)
 - Two sequences in two databases no longer share their state when they have the same `relfilenode`. Before, `nextval` of a new sequence could start at the last value of a sequence of another database. (#879)
 

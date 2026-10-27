@@ -16,3 +16,15 @@ row amname,0,-1,NULL,{brin,btree,gin,gist,hash,heap,spgist},-0.25
 row amtype,0,-0.2857143,{i},NULL,0.25
 row oid,0,-1,NULL,{2,403,405,783,2742,3580,4000},0.96428573
 SELECT 4
+> SELECT count(*) FROM pg_stats WHERE schemaname = 'information_schema';
+fields count:20:8:-1
+row 21
+SELECT 1
+> SELECT attname, null_frac, avg_width, n_distinct, most_common_vals, most_common_freqs, histogram_bounds, correlation FROM pg_stats WHERE tablename = 'sql_parts' ORDER BY attname;
+fields attname@pg_stats.4:19:64:-1,null_frac@pg_stats.7:700:4:-1,avg_width@pg_stats.8:23:4:-1,n_distinct@pg_stats.9:700:4:-1,most_common_vals@pg_stats.10:2277:-1:-1,most_common_freqs@pg_stats.11:1021:-1:-1,histogram_bounds@pg_stats.12:2277:-1:-1,correlation@pg_stats.13:700:4:-1
+row comments,0,1,1,{""},{1},NULL,1
+row feature_id,0,2,-1,NULL,NULL,{1,10,11,13,14,15,16,2,3,4,9},-0.09090909
+row feature_name,0,37,-1,NULL,NULL,{"Call-Level Interface (SQL/CLI)","Foundation (SQL/Foundation)","Framework (SQL/Framework)","Information and Definition Schema (SQL/Schemata)","Management of External Data (SQL/MED)","Multi-Dimensional Arrays (SQL/MDA)","Object Language Bindings (SQL/OLB)","Persistent Stored Modules (SQL/PSM)","Property Graph Queries (SQL/PGQ)","Routines and Types Using the Java Programming Language (SQL/JRT)","XML-Related Specifications (SQL/XML)"},0.7181818
+row is_supported,0,3,1,{NO},{1},NULL,1
+row is_verified_by,1,0,0,NULL,NULL,NULL,NULL
+SELECT 5

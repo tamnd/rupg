@@ -2059,7 +2059,7 @@ pub fn catalog_statistics(table: u32) -> &'static [CatalogStatistic] {
     &rows[start..end]
 }
 
-/// The rows of `pg_statistic` of every system catalog in a new database, in the order of `starelid`.
+/// The rows of `pg_statistic` of every system catalog and of the tables of `information_schema` in a new database, in the order of `starelid`.
 pub fn all_catalog_statistics() -> &'static [CatalogStatistic] {
     &crate::catalog_stats::ROWS
 }
