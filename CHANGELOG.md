@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.3.6 (2026-10-27)
+
 ### Added
 
 - DISCARD TEMP now drops the temporary objects of the session and the objects that depend on them. CREATE FUNCTION gives the NOTICE "function ... will be effectively temporary" for a function that depends on a temporary object. A BEGIN ATOMIC body now depends on the table that it writes. (#925)
