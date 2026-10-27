@@ -1,0 +1,240 @@
+> CREATE FOREIGN DATA WRAPPER dummy;
+CREATE FOREIGN DATA WRAPPER
+> CREATE FOREIGN DATA WRAPPER pgw VALIDATOR postgresql_fdw_validator;
+CREATE FOREIGN DATA WRAPPER
+> CREATE SERVER s0 FOREIGN DATA WRAPPER dummy;
+CREATE SERVER
+> CREATE SERVER sp FOREIGN DATA WRAPPER pgw;
+CREATE SERVER
+> CREATE SCHEMA foreign_schema;
+CREATE SCHEMA
+> CREATE FOREIGN TABLE ft1 () SERVER no_server;
+ERROR 42704 server "no_server" does not exist
+> CREATE FOREIGN TABLE ft1 (c1 integer OPTIONS ("param 1" 'val1') PRIMARY KEY, c2 text OPTIONS (param2 'val2', param3 'val3'), c3 date) SERVER s0 OPTIONS (delimiter ',', quote '"', "be quoted" 'value');
+ERROR 0A000 primary key constraints are not supported on foreign tables at 65
+> CREATE TABLE ref_table (id integer PRIMARY KEY);
+CREATE TABLE
+> CREATE FOREIGN TABLE ft1 (c1 integer OPTIONS ("param 1" 'val1') REFERENCES ref_table (id), c2 text, c3 date) SERVER s0;
+ERROR 0A000 foreign key constraints are not supported on foreign tables at 65
+> CREATE FOREIGN TABLE ft1 (c1 integer, c2 text, FOREIGN KEY (c1) REFERENCES ref_table (id)) SERVER s0;
+ERROR 0A000 foreign key constraints are not supported on foreign tables at 48
+> DROP TABLE ref_table;
+DROP TABLE
+> CREATE FOREIGN TABLE ft1 (c1 integer NOT NULL, c2 text, c3 date, UNIQUE (c3)) SERVER s0;
+ERROR 0A000 unique constraints are not supported on foreign tables at 66
+> CREATE FOREIGN TABLE ft1 (c1 integer UNIQUE) SERVER s0;
+ERROR 0A000 unique constraints are not supported on foreign tables at 38
+> CREATE FOREIGN TABLE ft1 (c1 integer, PRIMARY KEY (c1)) SERVER s0;
+ERROR 0A000 primary key constraints are not supported on foreign tables at 39
+> CREATE FOREIGN TABLE ft1 (c1 integer OPTIONS ("param 1" 'val1') NOT NULL, c2 text OPTIONS (param2 'val2', param3 'val3') CHECK (c2 <> ''), c3 date, CHECK (c3 BETWEEN '1994-01-01'::date AND '1994-01-31'::date)) SERVER s0 OPTIONS (delimiter ',', quote '"', "be quoted" 'value');
+CREATE FOREIGN TABLE
+> CREATE FOREIGN TABLE ft1 (a int) SERVER s0;
+ERROR 42P07 relation "ft1" already exists
+> CREATE FOREIGN TABLE IF NOT EXISTS ft1 (a int) SERVER s0;
+NOTICE 42P07 relation "ft1" already exists, skipping
+CREATE FOREIGN TABLE
+> COMMENT ON FOREIGN TABLE ft1 IS 'ft1';
+COMMENT
+> COMMENT ON COLUMN ft1.c1 IS 'ft1.c1';
+COMMENT
+> COMMENT ON TABLE ft1 IS 'x';
+ERROR 42809 "ft1" is not a table
+> COMMENT ON FOREIGN TABLE no_table IS 'x';
+ERROR 42P01 relation "no_table" does not exist
+> SELECT relname, relkind, relam, relfilenode, relpages, reltuples, reltoastrelid, relhasindex, relpersistence, relnatts, relchecks, relreplident FROM pg_class WHERE relname = 'ft1';
+fields relname@pg_class.2:19:64:-1,relkind@pg_class.18:18:1:-1,relam@pg_class.7:26:4:-1,relfilenode@pg_class.8:26:4:-1,relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1,reltoastrelid@pg_class.14:26:4:-1,relhasindex@pg_class.15:16:1:-1,relpersistence@pg_class.17:18:1:-1,relnatts@pg_class.19:21:2:-1,relchecks@pg_class.20:21:2:-1,relreplident@pg_class.27:18:1:-1
+row ft1,f,0,0,0,-1,0,f,p,3,2,n
+SELECT 1
+> SELECT (SELECT srvname FROM pg_foreign_server s WHERE s.oid = ftserver), ftoptions FROM pg_foreign_table WHERE ftrelid = 'ft1'::regclass;
+fields srvname:19:64:-1,ftoptions@pg_foreign_table.3:1009:-1:-1
+row s0,{"delimiter=,","quote=\"","be quoted=value"}
+SELECT 1
+> SELECT attname, attnum, attnotnull, attfdwoptions FROM pg_attribute WHERE attrelid = 'ft1'::regclass ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,attnum@pg_attribute.5:21:2:-1,attnotnull@pg_attribute.12:16:1:-1,attfdwoptions@pg_attribute.24:1009:-1:-1
+row tableoid,-6,t,NULL
+row cmax,-5,t,NULL
+row xmax,-4,t,NULL
+row cmin,-3,t,NULL
+row xmin,-2,t,NULL
+row ctid,-1,t,NULL
+row c1,1,t,{"param 1=val1"}
+row c2,2,f,{param2=val2,param3=val3}
+row c3,3,f,NULL
+SELECT 9
+> SELECT conname, contype, convalidated, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'ft1'::regclass ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,convalidated@pg_constraint.8:16:1:-1,pg_get_constraintdef:25:-1:-1
+row ft1_c1_not_null,n,t,NOT NULL c1
+row ft1_c2_check,c,t,CHECK ((c2 <> ''::text))
+row ft1_c3_check,c,t,CHECK (((c3 >= '1994-01-01'::date) AND (c3 <= '1994-01-31'::date)))
+SELECT 3
+> SELECT obj_description('ft1'::regclass, 'pg_class'), col_description('ft1'::regclass, 1);
+fields obj_description:25:-1:-1,col_description:25:-1:-1
+row ft1,ft1.c1
+SELECT 1
+> SELECT pg_describe_object('pg_class'::regclass, 'ft1'::regclass, 0), pg_describe_object('pg_class'::regclass, 'ft1'::regclass, 1);
+fields pg_describe_object:25:-1:-1,pg_describe_object:25:-1:-1
+row foreign table ft1,column c1 of foreign table ft1
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_class'::regclass, 'ft1'::regclass, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row foreign table,public,ft1,public.ft1
+SELECT 1
+> SELECT * FROM pg_identify_object_as_address('pg_class'::regclass, 'ft1'::regclass, 0);
+fields type:25:-1:-1,object_names:1009:-1:-1,object_args:1009:-1:-1
+row foreign table,{public,ft1},{}
+SELECT 1
+> SELECT pg_describe_object(classid, objid, objsubid) FROM pg_get_object_address('foreign table', '{ft1}', '{}');
+fields pg_describe_object:25:-1:-1
+row foreign table ft1
+SELECT 1
+> SELECT pg_describe_object(classid, objid, objsubid), pg_describe_object(refclassid, refobjid, refobjsubid), deptype FROM pg_depend WHERE objid = 'ft1'::regclass AND refclassid = 'pg_foreign_server'::regclass;
+fields pg_describe_object:25:-1:-1,pg_describe_object:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row foreign table ft1,server s0,n
+SELECT 1
+> SELECT s.srvname, pg_catalog.array_to_string(ARRAY(SELECT pg_catalog.quote_ident(option_name) || ' ' || pg_catalog.quote_literal(option_value) FROM pg_catalog.pg_options_to_table(ftoptions)), ', ') FROM pg_catalog.pg_foreign_table f, pg_catalog.pg_foreign_server s WHERE f.ftrelid = 'ft1'::regclass AND s.oid = f.ftserver;
+fields srvname@pg_foreign_server.2:19:64:-1,array_to_string:25:-1:-1
+row s0,delimiter ',', quote '"', "be quoted" 'value'
+SELECT 1
+> SELECT pg_relation_size('ft1'), pg_table_size('ft1'), pg_total_relation_size('ft1');
+fields pg_relation_size:20:8:-1,pg_table_size:20:8:-1,pg_total_relation_size:20:8:-1
+row 0,0,0
+SELECT 1
+> CREATE INDEX id_ft1_c2 ON ft1 (c2);
+ERROR 42809 cannot create index on relation "ft1"
+> SELECT * FROM ft1;
+ERROR 55000 foreign-data wrapper "dummy" has no handler
+> EXPLAIN SELECT * FROM ft1;
+ERROR 55000 foreign-data wrapper "dummy" has no handler
+> SELECT count(*) FROM (SELECT 1 FROM ft1) s;
+ERROR 55000 foreign-data wrapper "dummy" has no handler
+> SELECT 1 WHERE EXISTS (SELECT 1 FROM ft1);
+ERROR 55000 foreign-data wrapper "dummy" has no handler
+> INSERT INTO ft1 VALUES (1, 'a', '1994-01-02');
+ERROR 55000 foreign-data wrapper "dummy" has no handler
+> UPDATE ft1 SET c2 = 'b';
+ERROR 55000 foreign-data wrapper "dummy" has no handler
+> DELETE FROM ft1;
+ERROR 55000 foreign-data wrapper "dummy" has no handler
+> CREATE VIEW ftv AS SELECT * FROM ft1;
+CREATE VIEW
+> SELECT * FROM ftv;
+ERROR 55000 foreign-data wrapper "dummy" has no handler
+> DROP VIEW ftv;
+DROP VIEW
+> CREATE TABLE use_ft1_column_type (x ft1);
+CREATE TABLE
+> DROP TABLE use_ft1_column_type;
+DROP TABLE
+> CREATE FOREIGN TABLE ft2 (a int OPTIONS (host 'x')) SERVER sp;
+ERROR 42601 invalid option "host"
+> CREATE FOREIGN TABLE ft2 (a int) SERVER sp OPTIONS (host 'x');
+ERROR 42601 invalid option "host"
+> CREATE FOREIGN TABLE ft2 (a int) SERVER s0 OPTIONS (a '1', a '2');
+ERROR 42710 option "a" provided more than once
+> CREATE FOREIGN TABLE ft2 (a int OPTIONS (a '1', a '2')) SERVER s0;
+ERROR 42710 option "a" provided more than once
+> CREATE FOREIGN TABLE ft2 (a int OPTIONS ("a=b" '1')) SERVER s0;
+ERROR 22023 invalid option name "a=b": must not contain "="
+> CREATE FOREIGN TABLE ft2 (a serial, b int DEFAULT 5, c int GENERATED ALWAYS AS (b * 2) STORED) SERVER s0;
+CREATE FOREIGN TABLE
+> SELECT attname, pg_get_expr(adbin, adrelid) FROM pg_attrdef JOIN pg_attribute ON attrelid = adrelid AND attnum = adnum WHERE adrelid = 'ft2'::regclass ORDER BY 1;
+fields attname@pg_attribute.2:19:64:-1,pg_get_expr:25:-1:-1
+row a,nextval('ft2_a_seq'::regclass)
+row b,5
+row c,(b * 2)
+SELECT 3
+> SELECT relname, relkind FROM pg_class WHERE relname LIKE 'ft2%' ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,relkind@pg_class.18:18:1:-1
+row ft2,f
+row ft2_a_seq,S
+SELECT 2
+> CREATE FOREIGN TABLE foreign_schema.ft3 (a int) SERVER s0;
+CREATE FOREIGN TABLE
+> CREATE TABLE t1 (a int OPTIONS (x 'y'));
+ERROR 42809 "t1" is not a foreign table
+> DROP TABLE ft1;
+ERROR 42809 "ft1" is not a table
+> DROP VIEW ft1;
+ERROR 42809 "ft1" is not a view
+> DROP FOREIGN TABLE ref_t;
+ERROR 42704 foreign table "ref_t" does not exist
+> DROP FOREIGN TABLE IF EXISTS no_table;
+NOTICE 00000 foreign table "no_table" does not exist, skipping
+DROP FOREIGN TABLE
+> DROP SERVER s0;
+ERROR 2BP01 cannot drop server s0 because other objects depend on it
+> CREATE TABLE plain (a int);
+CREATE TABLE
+> DROP FOREIGN TABLE plain;
+ERROR 42809 "plain" is not a foreign table
+> DROP TABLE plain;
+DROP TABLE
+> CREATE ROLE tsstat_ft_u;
+CREATE ROLE
+> SET ROLE tsstat_ft_u;
+SET
+is_superuser=off
+> CREATE FOREIGN TABLE public.ft4 (a int) SERVER s0;
+ERROR 42501 permission denied for schema public at 22
+> RESET ROLE;
+RESET
+is_superuser=on
+> GRANT CREATE ON SCHEMA public TO tsstat_ft_u;
+GRANT
+> SET ROLE tsstat_ft_u;
+SET
+is_superuser=off
+> CREATE FOREIGN TABLE ft4 (a int) SERVER s0;
+ERROR 42501 permission denied for foreign server s0
+> RESET ROLE;
+RESET
+is_superuser=on
+> GRANT USAGE ON FOREIGN SERVER s0 TO tsstat_ft_u;
+GRANT
+> SET ROLE tsstat_ft_u;
+SET
+is_superuser=off
+> CREATE FOREIGN TABLE ft4 (a int) SERVER s0;
+CREATE FOREIGN TABLE
+> SELECT * FROM ft4;
+ERROR 55000 foreign-data wrapper "dummy" has no handler
+> RESET ROLE;
+RESET
+is_superuser=on
+> GRANT SELECT ON ft1 TO tsstat_ft_u;
+GRANT
+> SELECT relname, relacl FROM pg_class WHERE relname = 'ft1';
+fields relname@pg_class.2:19:64:-1,relacl@pg_class.32:1034:-1:-1
+row ft1,{postgres=arwdDxtm/postgres,tsstat_ft_u=r/postgres}
+SELECT 1
+> SELECT has_table_privilege('tsstat_ft_u', 'ft1', 'SELECT');
+fields has_table_privilege:16:1:-1
+row t
+SELECT 1
+> SELECT table_name, table_type FROM information_schema.tables WHERE table_name LIKE 'ft%' ORDER BY 1;
+fields table_name@information_schema.tables.3:19:64:-1,table_type@information_schema.tables.4:1043:-1:-1
+row ft1,FOREIGN
+row ft2,FOREIGN
+row ft3,FOREIGN
+row ft4,FOREIGN
+SELECT 4
+> DROP OWNED BY tsstat_ft_u;
+DROP OWNED
+> REVOKE CREATE ON SCHEMA public FROM tsstat_ft_u;
+REVOKE
+> DROP SERVER s0 CASCADE;
+NOTICE 00000 drop cascades to 3 other objects
+DROP SERVER
+> DROP SERVER sp CASCADE;
+DROP SERVER
+> SELECT relname FROM pg_class WHERE relkind = 'f';
+fields relname@pg_class.2:19:64:-1
+SELECT 0
+> DROP SCHEMA foreign_schema;
+DROP SCHEMA
+> DROP FOREIGN DATA WRAPPER dummy;
+DROP FOREIGN DATA WRAPPER
+> DROP FOREIGN DATA WRAPPER pgw;
+DROP FOREIGN DATA WRAPPER
+> DROP ROLE tsstat_ft_u;
+DROP ROLE

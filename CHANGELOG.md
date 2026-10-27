@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `CREATE FOREIGN TABLE` and `DROP FOREIGN TABLE` work, with `pg_foreign_table`, the options of the columns in `attfdwoptions` and `COMMENT ON FOREIGN TABLE`. A scan or a write of a foreign table gives the error of PostgreSQL for a foreign-data wrapper with no handler (#974).
 - `GRANT` and `REVOKE` work on foreign-data wrappers and foreign servers. `CREATE`, `ALTER` and `DROP USER MAPPING` work, with `pg_user_mapping`, the object address functions, `DROP OWNED` and the `DROP ROLE` checks (#971).
 - `CREATE`, `ALTER` and `DROP FOREIGN DATA WRAPPER` and `SERVER` now work, with `OPTIONS`, `HANDLER`, `VALIDATOR`, `postgresql_fdw_validator`, `COMMENT ON`, `RENAME`, `OWNER TO`, `DROP OWNED` and the catalogs `pg_foreign_data_wrapper` and `pg_foreign_server`. `is_superuser` now changes only when `role` or `session_authorization` gets a value, as in PostgreSQL, and not after `ALTER ROLE` (#970).
 - `pg_identify_object_as_address` gives the type of an object and the names and the arguments that `pg_get_object_address` takes to find it again, and `pg_identify_object` knows default ACLs (#969).

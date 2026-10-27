@@ -34,8 +34,8 @@ pub use conversion::{Conversion, PG_CONVERSION};
 pub use default_acl::{DefaultAcl, PG_DEFAULT_ACL};
 pub use drop::{Refusal, Target, flag};
 pub use foreign::{
-    ForeignDataWrapper, ForeignServer, PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_USER_MAPPING,
-    UserMapping,
+    ForeignDataWrapper, ForeignServer, ForeignTable, PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER,
+    PG_FOREIGN_TABLE, PG_USER_MAPPING, UserMapping,
 };
 pub use opclass::{
     AmOp, AmProc, MemberLink, OpClass, OpFamily, PG_AM, PG_AMOP, PG_AMPROC, PG_OPFAMILY,
@@ -173,6 +173,8 @@ pub enum RelKind {
     PartitionedIndex,
     /// A materialized view, `m`. It keeps the rows of its query in a heap as a table does, and it has a `_RETURN` rule as a view does.
     MatView,
+    /// A foreign table, `f`. It has no storage. Its rows come from the foreign-data wrapper of its server.
+    Foreign,
 }
 
 impl RelKind {
@@ -188,6 +190,7 @@ impl RelKind {
             RelKind::Partitioned => 'p',
             RelKind::PartitionedIndex => 'I',
             RelKind::MatView => 'm',
+            RelKind::Foreign => 'f',
         }
     }
 }
@@ -229,6 +232,8 @@ pub struct Column {
     pub local: bool,
     /// `attinhcount`: the number of parent tables that give the column.
     pub inhcount: i16,
+    /// `attfdwoptions`: the options of the column of a foreign table as `name=value`.
+    pub fdw_options: Vec<String>,
 }
 
 impl Column {
@@ -252,6 +257,7 @@ impl Column {
             options: Vec::new(),
             local: true,
             inhcount: 0,
+            fdw_options: Vec::new(),
         }
     }
 }
@@ -373,6 +379,8 @@ pub struct Relation {
     pub row_security: bool,
     /// `relforcerowsecurity`: true after `FORCE ROW LEVEL SECURITY`.
     pub force_row_security: bool,
+    /// The row of `pg_foreign_table` of a foreign table.
+    pub foreign: Option<ForeignTable>,
 }
 
 /// The strategy of a partition key, `partstrat`.
@@ -2642,6 +2650,7 @@ impl Catalog {
                 of_type: 0,
                 row_security: false,
                 force_row_security: false,
+                foreign: None,
                 unlogged: false,
             },
         );
@@ -3452,6 +3461,7 @@ impl Catalog {
                 of_type: 0,
                 row_security: false,
                 force_row_security: false,
+                foreign: None,
                 unlogged: false,
             },
         );
@@ -3893,6 +3903,7 @@ impl Catalog {
                 of_type: 0,
                 row_security: false,
                 force_row_security: false,
+                foreign: None,
                 unlogged,
             },
         );
@@ -4217,6 +4228,7 @@ impl Catalog {
                 of_type: 0,
                 row_security: false,
                 force_row_security: false,
+                foreign: None,
                 unlogged,
             },
         );
@@ -4267,6 +4279,7 @@ impl Catalog {
                 of_type: 0,
                 row_security: false,
                 force_row_security: false,
+                foreign: None,
                 unlogged,
             },
         );

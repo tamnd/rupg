@@ -266,6 +266,7 @@ pub(crate) fn rows(
         "pg_foreign_data_wrapper" => fdws(table, catalog),
         "pg_foreign_server" => servers(table, catalog),
         "pg_user_mapping" => user_mappings(table, catalog),
+        "pg_foreign_table" => foreign_tables(table, catalog),
         "pg_operator" => operators(table, catalog),
         "pg_aggregate" => aggregates(table, catalog),
         "pg_opfamily" => opfamilies(table, catalog),
@@ -517,7 +518,7 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) -> Ve
                     rel.index.as_ref().map_or((0, 0, -1.0), |i| (i.method, 0, -1.0))
                 }
                 RelKind::Sequence => (0, 1, 1.0),
-                RelKind::View | RelKind::Composite => (0, 0, -1.0),
+                RelKind::View | RelKind::Composite | RelKind::Foreign => (0, 0, -1.0),
             };
             let checks = catalog.constraints_of(rel.oid).filter(|c| c.kind == ConKind::Check);
             let mut row = Row::new(table);
@@ -879,7 +880,8 @@ fn attribute<'a>(
         .set(
             "attoptions",
             if column.options.is_empty() { Value::Null } else { text_array(&column.options) },
-        );
+        )
+        .set("attfdwoptions", options(&column.fdw_options));
     row
 }
 
@@ -1353,6 +1355,20 @@ fn user_mappings<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("umserver", oid(m.server))
                 .set("umoptions", options(&m.options));
             row
+        })
+        .collect()
+}
+
+fn foreign_tables<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .relations()
+        .filter_map(|rel| {
+            let foreign = rel.foreign.as_ref()?;
+            let mut row = Row::new(table);
+            row.set("ftrelid", oid(rel.oid))
+                .set("ftserver", oid(foreign.server))
+                .set("ftoptions", options(&foreign.options));
+            Some(row)
         })
         .collect()
 }

@@ -65,6 +65,7 @@ impl Definer<'_, '_> {
                 b'S' => "sequence",
                 b'v' => "view",
                 b'm' => "materialized view",
+                b'f' => "foreign table",
                 _ => "table",
             };
             return Err(Error::new(

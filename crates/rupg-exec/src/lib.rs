@@ -403,6 +403,7 @@ pub fn prepare(mut query: Query, session: &dyn Session) -> Result<Plan> {
     rupg_analyze::check_outer_joins(&query)?;
     check_query(&query, query.write.is_none())?;
     check_write(&query)?;
+    scan::check_foreign(&query, session)?;
     let perms = std::mem::take(&mut query.perms);
     fill_modified(query.write.as_mut(), &perms);
     for cte in &mut query.ctes {

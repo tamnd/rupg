@@ -1049,6 +1049,8 @@ impl Analyzer<'_> {
             // `rewriteTargetView` writes the base relation of the view.
             RelKind::View => {}
             RelKind::Partitioned => {}
+            // `CheckValidResultRel`: the foreign-data wrapper of the table does the write.
+            RelKind::Foreign => {}
             RelKind::MatView if self.env.filling() == oid => {}
             RelKind::MatView => {
                 return Err(Error::new(
