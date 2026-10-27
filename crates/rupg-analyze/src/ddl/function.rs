@@ -658,6 +658,13 @@ impl Analyzer<'_> {
         if rettype == oid::VOID {
             return Ok(());
         }
+        // `check_sql_stmt_retval`: a polymorphic result that the arguments of the call do not resolve, such as `anyarray` for an argument of type `anyarray`.
+        if types::is_polymorphic(rettype) {
+            return Err(Error::new(
+                SqlState::INVALID_FUNCTION_DEFINITION,
+                format!("return type {} is not supported for SQL functions", types::name(rettype)),
+            ));
+        }
         let query = if query.write.is_some() {
             let returning = query.write.as_mut().and_then(|w| w.returning.as_deref_mut());
             returning.ok_or_else(|| no_final_query(rettype))?
@@ -1170,6 +1177,27 @@ impl Definer<'_, '_> {
             None => 0,
         };
         let (src, bin) = interpret_as(stmt, &options, name)?;
+        // `ProcedureCreate`: a polymorphic result and an `internal` result need an input that gives the type, also for each output parameter.
+        let outputs =
+            allargtypes.iter().zip(&argmodes).filter(|(_, mode)| !matches!(mode, b'i' | b'v'));
+        for ty in std::iter::once(rettype).chain(outputs.map(|(&ty, _)| ty)) {
+            if let Some(detail) = super::aggregate::polymorphic_detail(ty, &argtypes) {
+                return Err(Error::new(
+                    SqlState::INVALID_FUNCTION_DEFINITION,
+                    "cannot determine result data type",
+                )
+                .with_detail(detail));
+            }
+            if ty == oid::INTERNAL && !argtypes.contains(&oid::INTERNAL) {
+                return Err(Error::new(
+                    SqlState::INVALID_FUNCTION_DEFINITION,
+                    "unsafe use of pseudo-type \"internal\"",
+                )
+                .with_detail(
+                    "A result of type internal requires at least one input of type internal.",
+                ));
+            }
+        }
         let function = Function {
             oid: 0,
             name: name.to_string(),
