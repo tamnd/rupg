@@ -524,6 +524,7 @@ impl Analyzer<'_> {
                             test: None,
                             query: query.clone(),
                             alternative: None,
+                            volatile: false,
                         };
                         Some(Item::Expr(Expr {
                             kind: ExprKind::SubLink(Box::new(sub)),
