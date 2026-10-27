@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `CREATE FUNCTION` now gives the error "cannot determine result data type" when the result or an output parameter has a polymorphic type and no input gives that type, and "unsafe use of pseudo-type \"internal\"" when the result is `internal` and no input is `internal`. A call of a SQL function whose polymorphic result stays polymorphic, such as `anyarray` for an argument of type `anyarray`, now gives "return type anyarray is not supported for SQL functions". (#919)
+
 ## 0.3.5 (2026-10-27)
 
 ### Added

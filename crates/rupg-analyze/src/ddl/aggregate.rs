@@ -118,7 +118,7 @@ fn family2(ty: u32) -> bool {
 }
 
 /// `check_valid_polymorphic_signature`: the detail of the error when a polymorphic result has no input that tells its type.
-fn polymorphic_detail(ret: u32, args: &[u32]) -> Option<String> {
+pub(super) fn polymorphic_detail(ret: u32, args: &[u32]) -> Option<String> {
     let (ok, inputs): (fn(u32) -> bool, &str) = match ret {
         oid::ANYRANGE | oid::ANYMULTIRANGE => {
             (|t| matches!(t, oid::ANYRANGE | oid::ANYMULTIRANGE), "anyrange or anymultirange")
