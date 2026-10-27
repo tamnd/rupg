@@ -4077,6 +4077,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/jsonb_subscript.test")));
     }
 
+    /// `pg_column_size` of values of fixed length, text, `numeric`, `jsonb`, arrays, rows and `inet`, in memory and as a table keeps them. `connection/column_size.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn column_size() {
+        big_stack(|| script(include_str!("connection/column_size.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

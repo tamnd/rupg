@@ -461,6 +461,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "statement_timestamp" => statement_timestamp,
         "clock_timestamp" => clock_timestamp,
         "pg_typeof" => pg_typeof,
+        "pg_column_size" => crate::datumsize::pg_column_size,
         "tid_block" => tid_block,
         "tid_offset" => tid_offset,
         "pg_backend_pid" => pg_backend_pid,

@@ -3164,6 +3164,14 @@ impl<'a> Eval<'a> {
         let exprs = rupg_analyze::expand_arguments(f)?;
         let args = exprs.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>>>()?;
         let types: Vec<u32> = exprs.iter().map(|a| a.ty).collect();
+        // `pg_column_size` of a column reads the value as the table keeps it, where a short value has a header of 1 byte.
+        if f.oid == PG_COLUMN_SIZE
+            && let ([arg], [value]) = (&exprs[..], &args[..])
+            && matches!(&arg.kind, ExprKind::Var(var) if var.attnum > 0)
+            && !value.is_null()
+        {
+            return rupg_func::column_size(arg.ty, value, true);
+        }
         if matches!(f.form, FuncForm::ExplicitCast | FuncForm::ImplicitCast)
             && let Some(ret) = cast_result(f.oid, expr.ty)
         {
@@ -4036,6 +4044,9 @@ pub use user::variadic_type;
 mod tests;
 
 /// Whether `ty` is `point`, `lseg`, `box` or `line`, or a domain over one of them: a type of fixed length whose subscripts `raw_array_subscript_handler` reads.
+/// The OID of `pg_column_size`.
+const PG_COLUMN_SIZE: u32 = 1269;
+
 fn is_geo(ty: u32) -> bool {
     matches!(base_type(ty), oid::POINT | oid::LSEG | oid::BOX | oid::LINE)
 }
