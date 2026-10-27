@@ -4135,6 +4135,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/sqlbody_returning_names.test")));
     }
 
+    /// The dependencies of a rule whose actions write: the target columns of `INSERT` and `UPDATE`, the columns that the values, the conditions and `RETURNING` read, and not the columns that the rewrite copies from the old row, so `ALTER TABLE ... DROP COLUMN ... CASCADE` drops the same rules. `connection/rule_write_depends.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn rule_write_depends() {
+        big_stack(|| script(include_str!("connection/rule_write_depends.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

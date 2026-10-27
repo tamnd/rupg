@@ -15,9 +15,11 @@ use super::reloptions;
 use super::{Definer, Found, Message, check_attribute_type, not_yet, relname};
 use crate::collate::target_collation;
 use crate::expr::{Expr, ExprKind};
+use crate::returning::{RETURNING_NEW, RETURNING_OLD};
 use crate::select::Query;
 use crate::typename::{names, type_name_text};
 use crate::types;
+use crate::{InsertSource, WriteKind};
 
 impl Definer<'_, '_> {
     /// `DefineView` and `DefineVirtualRelation`. `text` is the text of the statement, which the catalog keeps.
@@ -293,13 +295,67 @@ pub(super) fn query_references(
             query_references(catalog, sub, &levels, refs);
         }
     }
-    for expr in query.exprs() {
-        expr_references(catalog, expr, &levels, refs);
+    if !write_references(catalog, query, &levels, refs) {
+        for expr in query.exprs() {
+            expr_references(catalog, expr, &levels, refs);
+        }
     }
     for cte in &query.ctes {
         query_references(catalog, &cte.query, &levels, refs);
     }
     refs.extend(query.constraint_deps.iter().map(|&c| ObjRef::new(PG_CONSTRAINT, c)));
+}
+
+/// The part of `find_expr_references_walker` for a write in the form of the statement, which the analysis keeps for a deparse: each target column of an `INSERT` or an `UPDATE`, the values of these columns, the other expressions of the query and the list of `RETURNING`. The columns that the rewrite copies from the old row and the values that the query carries for `RETURNING` do not count. `levels` holds `query` and the queries outside it. False when the write has no such form.
+fn write_references(
+    catalog: &Catalog,
+    query: &Query,
+    levels: &[&Query],
+    refs: &mut Vec<ObjRef>,
+) -> bool {
+    let Some(write) = &query.write else { return false };
+    let kept = match write.returning.as_deref() {
+        Some(returning) => match returning.shown.as_ref().and_then(|s| s.kept.as_ref()) {
+            Some(kept) => kept.iter().map(|t| &t.expr).collect(),
+            None => return false,
+        },
+        None => Vec::new(),
+    };
+    let column = |n: &i16| ObjRef::column(write.table, *n);
+    match (write.kind, &write.insert_def, &write.set_def) {
+        (WriteKind::Insert, Some(def), _) if def.conflict.is_none() => {
+            // The statement reads the target table, as the range table of `get_insert_query_def` has it.
+            let target = Query { relations: vec![def.target.clone()], ..Query::default() };
+            let mut inner = vec![&target];
+            inner.extend_from_slice(&levels[1..]);
+            refs.extend(def.columns.iter().map(column));
+            let values: Vec<&Expr> = match &def.source {
+                InsertSource::Default => Vec::new(),
+                InsertSource::Row(row) => row.iter().flatten().collect(),
+                InsertSource::Values(rows) => rows.iter().flatten().flatten().collect(),
+                InsertSource::Select(sub, parts) => {
+                    query_references(catalog, sub, &inner, refs);
+                    parts.iter().flatten().collect()
+                }
+            };
+            for expr in values.into_iter().chain(kept) {
+                expr_references(catalog, expr, &inner, refs);
+            }
+        }
+        (WriteKind::Update | WriteKind::Delete, _, Some(set)) => {
+            if write.kind == WriteKind::Update {
+                refs.extend(set.iter().map(|(n, _)| column(n)));
+            }
+            // The first expressions of the query are its targets, the new row and the carried values.
+            let others = query.exprs().into_iter().skip(query.targets.len());
+            let values = set.iter().filter_map(|(_, value)| value.as_ref());
+            for expr in values.chain(others).chain(kept) {
+                expr_references(catalog, expr, levels, refs);
+            }
+        }
+        _ => return false,
+    }
+    true
 }
 
 /// `process_function_rte_ref`: the column of the relation of the composite type that a call of a function in `FROM` gives for the column `attnum` of the relation of the call. The row type has no field for a dropped column, so the column is the live column of the same place.
@@ -336,6 +392,13 @@ pub(super) fn expr_references(
     match (&expr.kind, expr.ty) {
         (ExprKind::Var(var), _) if var.attnum != 0 => {
             let relation = levels.get(var.levels_up).and_then(|q| q.relations.get(var.relation));
+            // A column of the old or the new row of `RETURNING` is a column of the target table.
+            let relation = match var.relation {
+                RETURNING_OLD | RETURNING_NEW => {
+                    levels.get(var.levels_up).and_then(|q| q.relations.first())
+                }
+                _ => relation,
+            };
             if let Some(relation) = relation
                 && relation.oid != 0
             {

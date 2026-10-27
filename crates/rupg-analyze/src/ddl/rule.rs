@@ -206,7 +206,11 @@ impl Definer<'_, '_> {
                 "rules on materialized views are not supported",
             ));
         }
-        let tree = self.an.rule_tree(stmt, oid, &name)?;
+        // The form of each write of the actions gives the references of the rule.
+        let keep = std::mem::replace(&mut self.an.keep_source, true);
+        let tree = self.an.rule_tree(stmt, oid, &name);
+        self.an.keep_source = keep;
+        let tree = tree?;
         if !matches!(code, b'r' | b'm' | b'v' | b'p') {
             return Err(Error::new(
                 SqlState::WRONG_OBJECT_TYPE,
