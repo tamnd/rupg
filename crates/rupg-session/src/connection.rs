@@ -3718,6 +3718,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/setop_disabled.test")));
     }
 
+    /// `generate_union_paths` for a `UNION` with no column: the rows of the `Append` are in the order of the keys, which are none, so the `Unique` reads the `Append` with no `Sort`, also with `enable_sort` off. `connection/union_no_columns.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn union_no_columns() {
+        big_stack(|| script(include_str!("connection/union_no_columns.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

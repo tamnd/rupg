@@ -1,0 +1,48 @@
+> set enable_hashagg = false
+SET
+> explain (costs off) select from generate_series(1,5) union select from generate_series(1,3)
+fields QUERY PLAN:25:-1:-1
+row Unique
+row   ->  Append
+row         ->  Function Scan on generate_series
+row         ->  Function Scan on generate_series generate_series_1
+EXPLAIN
+> select from generate_series(1,5) union select from generate_series(1,3)
+fields 
+row 
+SELECT 1
+> set enable_sort = false
+SET
+> explain (costs off) select from generate_series(1,5) union select from generate_series(1,3)
+fields QUERY PLAN:25:-1:-1
+row Unique
+row   ->  Append
+row         ->  Function Scan on generate_series
+row         ->  Function Scan on generate_series generate_series_1
+EXPLAIN
+> reset enable_sort
+RESET
+> explain (costs off) select from generate_series(1,5) intersect select from generate_series(1,3)
+fields QUERY PLAN:25:-1:-1
+row SetOp Intersect
+row   ->  Function Scan on generate_series
+row   ->  Function Scan on generate_series generate_series_1
+EXPLAIN
+> explain (costs off) select 1 from generate_series(1,5) union select 2 from generate_series(1,3)
+fields QUERY PLAN:25:-1:-1
+row Unique
+row   ->  Sort
+row         Sort Key: (1)
+row         ->  Append
+row               ->  Function Scan on generate_series
+row               ->  Function Scan on generate_series generate_series_1
+EXPLAIN
+> reset enable_hashagg
+RESET
+> explain (costs off) select from generate_series(1,5) union select from generate_series(1,3)
+fields QUERY PLAN:25:-1:-1
+row Unique
+row   ->  Append
+row         ->  Function Scan on generate_series
+row         ->  Function Scan on generate_series generate_series_1
+EXPLAIN
