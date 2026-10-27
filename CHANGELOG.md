@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.3.5 (2026-10-27)
+
 ### Added
 
 - Run `json_populate_record`, `json_populate_recordset`, `json_to_record`, `json_to_recordset` and the `jsonb` functions with these names, also `jsonb_populate_record_valid`. A key of the object gives the column with the same name, and a nested object gives a composite column. A SQL/JSON function can now return a composite type. The detail of a row with 1 field now says "1 attribute". (#917)
