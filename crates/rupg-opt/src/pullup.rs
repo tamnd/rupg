@@ -1135,6 +1135,39 @@ fn merge(query: &mut Query, r: usize, top: bool) {
     if let Some(filter) = sub.filter {
         query.filter = Some(and(filter, query.filter.take()));
     }
+    field_vars(query);
+}
+
+/// `eval_const_expressions` of the query after `pull_up_subqueries`: a field of a whole-row `Var` of the query, which a target of the subquery can give, is the `Var` of the column when the type of the field is the type of the column. A reference from a subquery to a relation of the query stays, as `eval_const_expressions` does not change a `Var` of an upper level.
+fn field_vars(query: &mut Query) {
+    let columns: Vec<Vec<(usize, u32, i32)>> = query
+        .relations
+        .iter()
+        .map(|r| {
+            let live = r.columns.iter().enumerate().filter(|(_, c)| !c.is_dropped());
+            live.map(|(at, c)| (at, c.ty, c.typmod)).collect()
+        })
+        .collect();
+    query.each_expr_mut(0, &mut |e, depth| {
+        if depth != 0 {
+            return;
+        }
+        e.each_mut(0, &mut |e, depth| {
+            let ExprKind::FieldSelect(arg, field) = &e.kind else { return false };
+            let ExprKind::Var(var) = &arg.kind else { return false };
+            if depth != 0 || var.attnum != 0 || var.levels_up != 0 {
+                return false;
+            }
+            let column = columns.get(var.relation).and_then(|c| c.get(*field));
+            let Some(&(at, ty, typmod)) = column else { return false };
+            if ty != e.ty || typmod != e.typmod {
+                return false;
+            }
+            let attnum = i16::try_from(at + 1).unwrap_or(i16::MAX);
+            e.kind = ExprKind::Var(Var { attnum, ..*var });
+            true
+        });
+    });
 }
 
 /// The conditions of `ON` that read the values of the relation `r` with no outer join between them that gives nulls for it: the `ON` of each join of `r` with no outer join below it that gives nulls for `r`, as the `varnullingrels` of the columns of `r` in the condition are empty. Gives true when an outer join in the item gives nulls for `r`, or `None` when the item does not have `r`.

@@ -125,6 +125,51 @@ fn procedural(func: u32) -> bool {
     builtin::proc_by_oid(func).is_some_and(|p| p.lang == PLPGSQL_LANGUAGE)
 }
 
+/// `ExecMakeTableFunctionResult` for a function that gives one row value for each row, as a function in SQL with `OUT` parameters does with `SELECT (1, 2.1)`: the fields of each value are the columns of the row, and `tupledesc_match` checks that the fields have the types of the columns. A null value gives a row of nulls.
+fn row_fields(set: Rows, columns: &[Column]) -> Result<Rows> {
+    if columns.len() < 2 {
+        return Ok(set);
+    }
+    let mismatch = |detail: String| {
+        Error::new(
+            SqlState::DATATYPE_MISMATCH,
+            "function return row and query-specified return row do not match",
+        )
+        .with_detail(detail)
+    };
+    set.into_iter()
+        .map(|row| {
+            if row.len() != 1 {
+                return Ok(row);
+            }
+            match row.into_iter().next() {
+                Some(Value::Record(record)) => {
+                    if record.values.len() != columns.len() {
+                        return Err(mismatch(format!(
+                            "Returned row contains {} attributes, but query expects {}.",
+                            record.values.len(),
+                            columns.len()
+                        )));
+                    }
+                    for (i, (&ty, column)) in record.types.iter().zip(columns).enumerate() {
+                        if ty != column.ty {
+                            return Err(mismatch(format!(
+                                "Returned type {} at ordinal position {}, but query expects {}.",
+                                format_type(ty),
+                                i + 1,
+                                format_type(column.ty)
+                            )));
+                        }
+                    }
+                    Ok(record.values)
+                }
+                Some(Value::Null) => Ok(vec![Value::Null; columns.len()]),
+                value => Ok(value.into_iter().collect()),
+            }
+        })
+        .collect()
+}
+
 /// The types of the columns that the query of a function gives: the columns of `RETURNING` for a query that writes, as `check_sql_stmt_retval` reads them.
 fn shown_types(query: &Query) -> Vec<u32> {
     let returning = query.write.as_ref().and_then(|w| w.returning.as_deref());
@@ -2141,9 +2186,9 @@ impl<'a> Eval<'a> {
         let mut sets = Vec::with_capacity(function.calls.len());
         let mut first = 0;
         for (k, (call, width)) in function.calls.iter().enumerate() {
+            let list = columns.get(first..first + width).unwrap_or_default();
             // The columns of the column definition list of the call.
             let defined: Vec<(u32, i32)> = if function.coldefs.get(k) == Some(&true) {
-                let list = columns.get(first..first + width).unwrap_or_default();
                 list.iter().map(|c| (c.ty, c.typmod)).collect()
             } else {
                 Vec::new()
@@ -2151,14 +2196,16 @@ impl<'a> Eval<'a> {
             first += width;
             let keep = kept.as_deref_mut().filter(|_| call.first_var().is_none());
             let Some(kept) = keep else {
-                sets.push(self.function_set(call, *width, &defined, None)?);
+                let set = self.function_set(call, *width, &defined, None)?;
+                sets.push(row_fields(set, list)?);
                 continue;
             };
             if kept.len() <= k {
                 kept.resize(k + 1, None);
             }
             if kept[k].is_none() {
-                kept[k] = Some(self.function_set(call, *width, &defined, None)?);
+                let set = self.function_set(call, *width, &defined, None)?;
+                kept[k] = Some(row_fields(set, list)?);
             }
             sets.push(kept[k].clone().unwrap_or_default());
         }
