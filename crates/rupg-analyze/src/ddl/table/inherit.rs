@@ -141,7 +141,7 @@ impl Definer<'_, '_> {
         if temp && rel.namespace != self.an.temp {
             return Err(wrong("cannot inherit from temporary relation of another session".into()));
         }
-        if !self.is_superuser() && rel.owner != self.user {
+        if !self.is_superuser() && !self.owns(rel.owner) {
             return Err(Error::new(
                 SqlState::INSUFFICIENT_PRIVILEGE,
                 format!("must be owner of table {name}"),

@@ -176,7 +176,7 @@ impl Definer<'_, '_> {
         };
         let target = Target { oid, kind, name: name.to_string(), namespace };
         self.simple_permissions(&target, cmd, b"rpf")?;
-        if !self.is_superuser() && owner != self.user {
+        if !self.is_superuser() && !self.owns(owner) {
             return Err(not_owner(owner_word(kind), name));
         }
         if self.is_system(found) && !self.an.env.allow_system_table_mods() {

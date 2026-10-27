@@ -587,7 +587,7 @@ impl Definer<'_, '_> {
             if matches!(kind, Kind::Template | Kind::Parser) {
                 return Err(Error::new(SqlState::INSUFFICIENT_PRIVILEGE, "must be superuser"));
             }
-            if owner != Some(self.user) {
+            if !owner.is_some_and(|o| self.owns(o)) {
                 return Err(not_owner(kind.word(), shown));
             }
         }
@@ -644,11 +644,11 @@ impl Definer<'_, '_> {
                 continue;
             };
             let (namespace, _, owner) = self.ts_row(kind, found).unwrap_or_default();
-            if !self.is_superuser() && self.schema_owner(namespace) != Some(self.user) {
+            if !self.is_superuser() && !self.schema_owner(namespace).is_some_and(|o| self.owns(o)) {
                 if matches!(kind, Kind::Template | Kind::Parser) {
                     return Err(Error::new(SqlState::INSUFFICIENT_PRIVILEGE, "must be superuser"));
                 }
-                if owner != self.user {
+                if !self.owns(owner) {
                     return Err(not_owner(kind.word(), &list.join(".")));
                 }
             }

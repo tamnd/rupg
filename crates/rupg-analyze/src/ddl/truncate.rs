@@ -77,7 +77,7 @@ impl Definer<'_, '_> {
                 for sequence in self.catalog.owned_sequences(table) {
                     let rel = self.catalog.relation(sequence);
                     let owner = rel.map_or(0, |r| r.owner);
-                    if !self.is_superuser() && owner != self.user {
+                    if !self.is_superuser() && !self.owns(owner) {
                         let name = rel.map(|r| r.name.clone()).unwrap_or_default();
                         return Err(not_owner("sequence", &name));
                     }
@@ -114,7 +114,7 @@ impl Definer<'_, '_> {
         self.truncate_check_rel(found, name)?;
         let allowed = match found {
             Found::User(oid) => self.may_truncate(oid),
-            Found::Builtin(row) => self.is_superuser() || row.owner == self.user,
+            Found::Builtin(row) => self.is_superuser() || self.owns(row.owner),
         };
         if !allowed {
             return Err(Error::new(

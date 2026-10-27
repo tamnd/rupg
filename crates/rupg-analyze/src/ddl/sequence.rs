@@ -142,7 +142,7 @@ impl Definer<'_, '_> {
             Found::User(oid) => self.catalog.relation(oid).map_or(0, |r| r.owner),
             Found::Builtin(row) => row.owner,
         };
-        if !self.is_superuser() && owner != self.user {
+        if !self.is_superuser() && !self.owns(owner) {
             return Err(not_owner(owner_word(kind), relname(&rv)));
         }
         let sequence = match found {

@@ -26,7 +26,7 @@ impl Definer<'_, '_> {
             ));
         };
         let labels: Vec<String> = labels.iter().map(|l| l.label.clone()).collect();
-        if !self.is_superuser() && owner != self.user {
+        if !self.is_superuser() && !self.owns(owner) {
             return Err(not_owner("type", &self.type_text(ty)));
         }
         let new = stmt.newVal.as_deref().unwrap_or_default();
