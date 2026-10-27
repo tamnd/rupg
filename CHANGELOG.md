@@ -9,6 +9,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - A call that leaves out an argument of a polymorphic type whose default is `NULL`, such as `b anyelement = null`, now gives the default the type of the other arguments. Before, the call failed with "failed to find conversion function from unknown to text". (#920)
 - `CREATE FUNCTION` now gives the error "cannot determine result data type" when the result or an output parameter has a polymorphic type and no input gives that type, and "unsafe use of pseudo-type \"internal\"" when the result is `internal` and no input is `internal`. A call of a SQL function whose polymorphic result stays polymorphic, such as `anyarray` for an argument of type `anyarray`, now gives "return type anyarray is not supported for SQL functions". (#919)
 
+### Fixed
+
+- The statistics of `pg_collation` in `pg_statistic` and `pg_stats` are now equal to a clean `initdb` of PostgreSQL 19, with its 862 collations. (#921)
+
 ## 0.3.5 (2026-10-27)
 
 ### Added
