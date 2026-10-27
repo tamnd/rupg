@@ -532,7 +532,12 @@ fn finalize_grouping(
                         grouped.iter().find(|(_, e)| matches!(e.kind, ExprKind::Var(v) if v == var))
                     }
                     ExprKind::Var(_) => None,
-                    _ if non_var && depth == 0 => grouped.iter().find(|(_, e)| e.same(arg)),
+                    // In a subquery the items have the columns of the query `depth` levels up, as `groupClauseSubLevels` has them.
+                    _ if non_var => grouped.iter().find(|(_, e)| {
+                        let mut e = e.clone();
+                        e.raise(depth);
+                        e.same(arg)
+                    }),
                     _ => None,
                 };
                 let Some(&(target, _)) = found else {

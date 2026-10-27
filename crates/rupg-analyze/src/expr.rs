@@ -1024,6 +1024,8 @@ impl Expr {
                 strip(child);
             }
             if let ExprKind::SubLink(sub) = &mut expr.kind {
+                // Each subquery of PostgreSQL has its own `rteperminfos`, and here the indexes are in the privileges of the statement.
+                crate::perm::forget(&mut sub.query);
                 sub.query.each_expr_mut(0, &mut |e, _| strip(e));
             }
         }

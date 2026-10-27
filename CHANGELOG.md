@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `GROUPING` in a subquery now matches an argument that is not a plain column with the items of the query that groups, EXPLAIN no longer shows the subplans in the arguments of `GROUPING`, and a query with `GROUPING` and no aggregate is a `GroupAggregate`, as in PostgreSQL (#936).
 - `UPDATE pg_class` that sets `reltuples` and `relpages` sets the statistics that the planner reads, as the regression tests of PostgreSQL do it. A role that is not a superuser gets "permission denied for table pg_class" (#935).
 - `DISCARD ALL` drops the objects of the temporary schema, stops all the listens and releases the advisory locks of the session level, as `DiscardAll` does. `DISCARD TEMP` and `DISCARD ALL` keep the temporary schema itself, as `RemoveTempRelations` does (#933).
 - The planner makes a condition `X = X` with a strict operator into `X IS NOT NULL`, as `process_equivalence` does, which gives the selectivity of the null fraction (#932).

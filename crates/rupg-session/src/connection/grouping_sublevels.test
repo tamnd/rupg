@@ -1,0 +1,96 @@
+> create temp table gt (a int, b int, v int);
+CREATE TABLE
+> insert into gt values (1, 1, 10), (1, 2, 20), (2, 2, 30), (3, null, 40);
+INSERT 0 4
+> create temp table gu (a int, b int, c int);
+CREATE TABLE
+> insert into gu values (1, 1, 5), (2, 3, 6);
+INSERT 0 2
+> select (select a), (select b), (select grouping(a, b)), (select sum(t1.v)), (select max(t2.c)) from gt t1 full join gu t2 using (a, b) group by grouping sets ((a, b), ()) order by 1, 2, 3;
+fields a:23:4:-1,b:23:4:-1,grouping:23:4:-1,sum:20:8:-1,max:23:4:-1
+row 1,1,0,10,5
+row 1,2,0,20,NULL
+row 2,2,0,30,NULL
+row 2,3,0,NULL,6
+row 3,NULL,0,40,NULL
+row NULL,NULL,3,100,6
+SELECT 6
+> select a, (select grouping(a, b) from (values (1)) v(x)) from gt group by rollup(a, b) order by 1, 2;
+fields a@gt.1:23:4:-1,grouping:23:4:-1
+row 1,0
+row 1,0
+row 1,1
+row 2,0
+row 2,1
+row 3,0
+row 3,1
+row NULL,3
+SELECT 8
+> select (select grouping(a+1)) from gt group by grouping sets (a+1, ()) order by 1;
+fields grouping:23:4:-1
+row 0
+row 0
+row 0
+row 1
+SELECT 4
+> select (select (select grouping(a+1))) from gt group by grouping sets (a+1, ()) order by 1;
+fields grouping:23:4:-1
+row 0
+row 0
+row 0
+row 1
+SELECT 4
+> select (select grouping(a)) from gt group by grouping sets (a+1, ());
+ERROR 42803 arguments to GROUPING must be grouping expressions of the associated query level at 25
+> create temp table g5(id integer primary key, v integer);
+CREATE TABLE
+> insert into g5 select i, i from generate_series(1,5)i;
+INSERT 0 5
+> select (select t1.v from g5 t2 where id = t1.id) from g5 t1 group by (select t1.v from g5 t2 where id = t1.id) order by 1;
+fields v:23:4:-1
+row 1
+row 2
+row 3
+row 4
+row 5
+SELECT 5
+> select grouping((select t1.v from g5 t2 where id = t1.id)) from g5 t1 group by (select t1.v from g5 t2 where id = t1.id);
+fields grouping:23:4:-1
+row 0
+row 0
+row 0
+row 0
+row 0
+SELECT 5
+> select grouping((select t1.v from g5 t2 where id = t1.id)) g, (select t1.v from g5 t2 where id = t1.id) s from g5 t1 group by rollup((select t1.v from g5 t2 where id = t1.id)) order by 2;
+fields g:23:4:-1,s:23:4:-1
+row 0,1
+row 0,2
+row 0,3
+row 0,4
+row 0,5
+row 1,NULL
+SELECT 6
+> select grouping((select t1.v)) g from g5 t1 group by rollup((select t1.v)) order by 1;
+fields g:23:4:-1
+row 0
+row 0
+row 0
+row 0
+row 0
+row 1
+SELECT 6
+> select grouping((select 1)) from g5 t1 group by rollup((select 1)) order by 1;
+fields grouping:23:4:-1
+row 0
+row 1
+SELECT 2
+> explain (costs off) select grouping((select 1)) from g5 t1 group by (select 1);
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate
+row   InitPlan expr_1
+row     ->  Result
+row   InitPlan expr_2
+row     ->  Result
+row   ->  Seq Scan on g5 t1
+EXPLAIN
