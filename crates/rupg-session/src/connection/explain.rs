@@ -403,7 +403,8 @@ pub(crate) fn join_order(
     let barrier = |view: u32| {
         reader.catalog().and_then(|c| c.relation(view)).is_some_and(rupg_analyze::security_barrier)
     };
-    let mut query = rupg_opt::pull_up(query, &barrier);
+    let fold = |sub: &Query, qual| rupg_exec::fold_qual(sub, qual, reader);
+    let mut query = rupg_opt::pull_up(query, &barrier, &fold);
     rupg_opt::remove_joins(&mut query, &members);
     let tree = rupg_opt::plan(&query, &members);
     if members.error.take().is_some() {
@@ -646,7 +647,8 @@ impl Connection {
                 .and_then(|c| c.relation(view))
                 .is_some_and(rupg_analyze::security_barrier)
         };
-        let mut query = rupg_opt::pull_up(plan.query(), &barrier);
+        let fold = |sub: &Query, qual| rupg_exec::fold_qual(sub, qual, reader);
+        let mut query = rupg_opt::pull_up(plan.query(), &barrier, &fold);
         rupg_opt::remove_joins(&mut query, &members);
         let tree = rupg_opt::plan(&query, &members);
         if let Some(error) = members.error.take() {

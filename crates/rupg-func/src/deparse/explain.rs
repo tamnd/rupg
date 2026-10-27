@@ -240,11 +240,19 @@ fn removed_scans(plan: &Plan<'_>, spaces: &mut [Namespace]) {
         if kept.contains(&(parent, r)) {
             continue;
         }
-        // `set_deparse_plan`: the columns of a set operation show as the targets of its leftmost `SELECT`, which is the first member of its `Append`.
+        // `set_deparse_plan`: the columns of a set operation show as the targets of its leftmost `SELECT` that the plan keeps, which is the first member of its `Append`. An empty `SELECT` that `generate_union_paths` leaves out has no node in the plan, and with all of them empty the leftmost `SELECT` gives the names.
         let leftmost = scope.query.set_op.as_ref().and_then(|op| {
-            let leaf = scope.query.relations.get(op.left.leftmost())?.subquery.as_deref()?;
-            let at = plan.scopes.iter().position(|q| ptr::eq(q.query, leaf))?;
-            Some((at, leaf))
+            let mut leaves = Vec::new();
+            op.left.each_leaf(&mut |at| leaves.push(at));
+            op.right.each_leaf(&mut |at| leaves.push(at));
+            let found = leaves.iter().filter_map(|&at| {
+                let leaf = scope.query.relations.get(at)?.subquery.as_deref()?;
+                let at = plan.scopes.iter().position(|q| ptr::eq(q.query, leaf))?;
+                Some((at, leaf))
+            });
+            let mut found = found.peekable();
+            let first = found.peek().copied();
+            found.find(|&(at, _)| has_scope(&plan.root, at)).or(first)
         });
         let (s, query) = leftmost.unwrap_or((s, scope.query));
         let namespaces = chain(s).into_iter().map(|at| spaces[at].clone()).collect();
@@ -270,6 +278,13 @@ fn replaced(node: &Node<'_>, s: usize, out: &mut Vec<usize>) {
     for sub in node.init_plans.iter().chain(&node.sub_plans) {
         replaced(&sub.plan, s, out);
     }
+}
+
+/// True when the node or a node below it is of the scope `s`.
+fn has_scope(node: &Node<'_>, s: usize) -> bool {
+    node.scope == s
+        || node.children.iter().any(|c| has_scope(c, s))
+        || node.init_plans.iter().chain(&node.sub_plans).any(|sub| has_scope(&sub.plan, s))
 }
 
 /// The scope and the relation of each `Subquery Scan` of the plan.

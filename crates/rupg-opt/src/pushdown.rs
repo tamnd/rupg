@@ -11,12 +11,15 @@ use rupg_types::oid;
 
 use crate::{exprs, from, pullup, upper};
 
-/// Moves the conditions of `WHERE` that the planner can move into the subqueries of `FROM`, then does the same in each subquery, also in the subqueries of the expressions.
-pub(crate) fn push_all(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
-    push(query, barrier);
+/// `preprocess_expression` for a condition that moves into a subquery: the subquery folds its conditions when the planner plans it.
+pub type FoldQual<'a> = &'a dyn Fn(&Query, Expr) -> Expr;
+
+/// Moves the conditions of `WHERE` that the planner can move into the subqueries of `FROM`, then does the same in each subquery, also in the subqueries of the expressions. `fold` folds a condition in the subquery that it moves into.
+pub(crate) fn push_all(query: &mut Query, barrier: &dyn Fn(u32) -> bool, fold: FoldQual<'_>) {
+    push(query, barrier, fold);
     for relation in &mut query.relations {
         if let Some(sub) = &mut relation.subquery {
-            push_all(sub, barrier);
+            push_all(sub, barrier, fold);
         }
     }
     for expr in query.exprs_mut() {
@@ -24,7 +27,7 @@ pub(crate) fn push_all(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
             if depth == 0
                 && let ExprKind::SubLink(link) = &mut e.kind
             {
-                push_all(&mut link.query, barrier);
+                push_all(&mut link.query, barrier, fold);
             }
             false
         });
@@ -32,7 +35,7 @@ pub(crate) fn push_all(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
 }
 
 /// Reduces the outer joins of `FROM` and removes the tests of `IS NULL` that an anti join makes redundant, then moves each part of `WHERE` that reads one subquery of `FROM` into the subquery, when `qual_is_pushdown_safe` lets it. The subquery is not on the side of an outer join that can give nulls, where the condition tests the rows of the join. Only a leakproof condition moves into a view with `security_barrier`, for which `barrier` is true. The planner does not move a condition into a query of `WITH` yet.
-fn push(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
+fn push(query: &mut Query, barrier: &dyn Fn(u32) -> bool, fold: FoldQual<'_>) {
     let mut above = BTreeSet::new();
     for part in query.filter.iter().chain(upper::having_split(query).0) {
         above.extend(from::nonnullable_rels(part, true));
@@ -81,7 +84,7 @@ fn push(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
     let mut keep = Vec::new();
     for (part, to) in owned.into_iter().zip(to) {
         match to.and_then(|r| query.relations[r].subquery.as_deref_mut().map(|sub| (r, sub))) {
-            Some((r, sub)) => push_qual(sub, r, part),
+            Some((r, sub)) => push_qual(sub, r, part, Some(fold)),
             None => keep.push(part),
         }
     }
@@ -116,7 +119,7 @@ pub(crate) fn push_barrier(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
                     .is_some_and(|sub| pushable(sub, &part, r, &BTreeSet::new()))
         });
         match to.and_then(|r| query.relations[r].subquery.as_deref_mut().map(|sub| (r, sub))) {
-            Some((r, sub)) => push_qual(sub, r, part),
+            Some((r, sub)) => push_qual(sub, r, part, None),
             None => keep.push(part),
         }
     }
@@ -439,8 +442,8 @@ fn safe(
     .is_none()
 }
 
-/// `subquery_push_qual`: the condition reads the targets of the subquery in place of its columns, as `ReplaceVarsFromTargetList`, and a column of a query outside or of another relation of the query is one more level up. It joins `HAVING` when the subquery makes groups, or `WHERE`.
-fn push_qual(sub: &mut Query, r: usize, mut qual: Expr) {
+/// `subquery_push_qual`: the condition reads the targets of the subquery in place of its columns, as `ReplaceVarsFromTargetList`, and a column of a query outside or of another relation of the query is one more level up. It joins `HAVING` when the subquery makes groups, or `WHERE`. With `fold`, the condition folds in the subquery, as `subquery_planner` folds the conditions of the subquery: a condition that is true does not join, and one that is false takes the place of the others.
+fn push_qual(sub: &mut Query, r: usize, mut qual: Expr, fold: Option<FoldQual<'_>>) {
     // `recurse_push_qual`: each `SELECT` of a set operation takes the condition, one level further down.
     if let Some(op) = &sub.set_op {
         let mut leaves = Vec::new();
@@ -456,7 +459,7 @@ fn push_qual(sub: &mut Query, r: usize, mut qual: Expr) {
         });
         for at in leaves {
             if let Some(leaf) = sub.relations.get_mut(at).and_then(|l| l.subquery.as_deref_mut()) {
-                push_qual(leaf, r, qual.clone());
+                push_qual(leaf, r, qual.clone(), fold);
             }
         }
         return;
@@ -478,6 +481,12 @@ fn push_qual(sub: &mut Query, r: usize, mut qual: Expr) {
         }
         false
     });
+    if let Some(fold) = fold {
+        qual = fold(sub, qual);
+        if exprs::is_true(&qual) {
+            return;
+        }
+    }
     let place = if sub.grouped || !sub.grouping_sets.is_empty() {
         &mut sub.having
     } else {
@@ -487,6 +496,7 @@ fn push_qual(sub: &mut Query, r: usize, mut qual: Expr) {
         &mut sub.filter
     };
     *place = Some(match place.take() {
+        Some(_) if exprs::is_false(&qual) => qual,
         Some(old) => pullup::and(old, Some(qual)),
         None => qual,
     });

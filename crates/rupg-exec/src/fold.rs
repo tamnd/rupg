@@ -28,6 +28,12 @@ pub(crate) fn query(
     plan(query, params, session, false)
 }
 
+/// Folds a condition of a query and makes it canonical, as `preprocess_expression` folds the conditions of `WHERE`.
+pub(crate) fn qual(query: &Query, qual: &Expr, session: &dyn Session) -> Result<Expr> {
+    let mut fold = Fold::new(query, None, session);
+    Ok(fold.one(Some(qual))?.map_or_else(|| qual.clone(), prepqual::canonicalize))
+}
+
 /// Folds a query or a subquery. For the subquery of `EXISTS`, `simplify_EXISTS_query` drops the target list and a constant `LIMIT` first when it can. A subquery in `FROM` that the planner pulls up folds where the query reads its columns, then each subquery in `FROM` folds after the query, with null for each column that the query does not read.
 fn plan(
     query: &Query,

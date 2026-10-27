@@ -1,0 +1,105 @@
+> create table tenk1 (unique1 int, two int, four int, ten int)
+CREATE TABLE
+> insert into tenk1 select g, g%2, g%4, g%10 from generate_series(0,999) g
+INSERT 0 1000
+> analyze tenk1
+ANALYZE
+> create table int8_tbl (q1 int8, q2 int8)
+CREATE TABLE
+> insert into int8_tbl values (123, 456), (123, 4567890123456789), (4567890123456789, 123), (4567890123456789, 4567890123456789), (4567890123456789, -4567890123456789)
+INSERT 0 5
+> analyze int8_tbl
+ANALYZE
+> explain (costs off) SELECT * FROM (SELECT 1 AS t, * FROM tenk1 a UNION ALL SELECT 2 AS t, * FROM tenk1 b) c WHERE t = 2
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on tenk1 b
+EXPLAIN
+> explain (costs off) SELECT * FROM (SELECT 1 AS t, 2 AS x UNION SELECT 2 AS t, 4 AS x) ss WHERE x < 4 ORDER BY x
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: (2)
+row   ->  Unique
+row         ->  Sort
+row               Sort Key: (1), (2)
+row               ->  Append
+row                     ->  Result
+row                     ->  Result
+row                           One-Time Filter: false
+EXPLAIN
+> SELECT * FROM (SELECT 1 AS t, 2 AS x UNION SELECT 2 AS t, 4 AS x) ss WHERE x < 4 ORDER BY x
+fields t:23:4:-1,x:23:4:-1
+row 1,2
+SELECT 1
+> explain (costs off) select * from (select *, 0 as x from int8_tbl a union all select *, 1 as x from int8_tbl b) ss where (x = 0) or (q1 >= q2 and q1 <= q2)
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on int8_tbl a
+row   ->  Seq Scan on int8_tbl b
+row         Filter: ((q1 >= q2) AND (q1 <= q2))
+EXPLAIN
+> explain (costs off) SELECT * FROM (SELECT 1 AS t, * FROM tenk1 a UNION ALL SELECT 2 AS t, * FROM tenk1 b UNION ALL SELECT 3 AS t, * FROM tenk1 c) c WHERE t >= 2
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on tenk1 b
+row   ->  Seq Scan on tenk1 c_1
+EXPLAIN
+> explain (costs off) SELECT * FROM (SELECT 1 AS t, * FROM tenk1 a UNION ALL SELECT 2 AS t, * FROM tenk1 b) c WHERE t = 3
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Scan on c
+row   One-Time Filter: false
+EXPLAIN
+> explain (costs off) SELECT * FROM (SELECT 1 AS t, two FROM tenk1 a UNION SELECT 2 AS t, four FROM tenk1 b) c WHERE t = 2
+fields QUERY PLAN:25:-1:-1
+row HashAggregate
+row   Group Key: 2, b.four
+row   ->  Seq Scan on tenk1 b
+EXPLAIN
+> explain (costs off) select * from (select 1 as k, two from tenk1 group by two) s where k = 2
+fields QUERY PLAN:25:-1:-1
+row HashAggregate
+row   Group Key: tenk1.two
+row   ->  Result
+row         Replaces: Scan on tenk1
+row         One-Time Filter: false
+EXPLAIN
+> explain (costs off) select * from (select two, 5 as k from tenk1 offset 0) s where k > 3 and two = 1
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on s
+row   Filter: ((s.k > 3) AND (s.two = 1))
+row   ->  Seq Scan on tenk1
+EXPLAIN
+> explain (costs off, verbose) SELECT * FROM (SELECT 1 AS t, two FROM tenk1 a UNION SELECT 2 AS t, four+1 FROM tenk1 b) c WHERE t = 2
+fields QUERY PLAN:25:-1:-1
+row HashAggregate
+row   Output: (2), ((b.four + 1))
+row   Group Key: 2, (b.four + 1)
+row   ->  Seq Scan on public.tenk1 b
+row         Output: 2, (b.four + 1)
+EXPLAIN
+> explain (costs off, verbose) SELECT * FROM (SELECT 1 AS t, two FROM tenk1 a UNION SELECT 2 AS t, four+1 FROM tenk1 b) c WHERE t = 2 order by 2
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Output: (2), ((b.four + 1))
+row   Sort Key: ((b.four + 1))
+row   ->  HashAggregate
+row         Output: (2), ((b.four + 1))
+row         Group Key: 2, (b.four + 1)
+row         ->  Seq Scan on public.tenk1 b
+row               Output: 2, (b.four + 1)
+EXPLAIN
+> explain (costs off, verbose) SELECT * FROM (SELECT 1 AS t, two FROM tenk1 a UNION ALL SELECT 2 AS t, four+1 FROM tenk1 b) c WHERE t = 2 order by 2
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Output: (2), ((b.four + 1))
+row   Sort Key: ((b.four + 1))
+row   ->  Seq Scan on public.tenk1 b
+row         Output: 2, (b.four + 1)
+EXPLAIN
+> SELECT * FROM (SELECT 1 AS t, two FROM tenk1 a UNION SELECT 2 AS t, four+1 FROM tenk1 b) c WHERE t = 2 order by 2
+fields t:23:4:-1,two:23:4:-1
+row 2,1
+row 2,2
+row 2,3
+row 2,4
+SELECT 4

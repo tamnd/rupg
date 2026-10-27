@@ -34,6 +34,7 @@ pub use cost::{node_cost, type_width};
 pub use exprs::nonstrict;
 pub use joinrm::remove_joins;
 pub use pullup::{merge_from, pull_up};
+pub use pushdown::FoldQual;
 
 /// The tables of the inheritance trees of the relations of the queries, their indexes and the settings of the session, which the planner has no catalog for.
 pub trait Members: std::fmt::Debug {
