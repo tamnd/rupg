@@ -8,6 +8,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - The planner uses a partial index when the conditions imply its predicate by the operators of a B-tree family, as `x < 4` implies `x < 5`, also when no condition is a clause of the index. A hash index keeps the conditions that its predicate implies, and a SQL function with an argument that reads the value of a `CASE` does not inline (#938).
 
+### Fixed
+
+- `GROUP BY`, `DISTINCT`, `UNION`, `INTERSECT` and `EXCEPT` give their groups in the order of the PostgreSQL hash table when the plan hashes them. The executor uses a copy of `simplehash` with the number of groups that the planner estimates, so the rows come in the same order as in PostgreSQL (#939).
+
 ## 0.3.7 (2026-10-27)
 
 ### Added

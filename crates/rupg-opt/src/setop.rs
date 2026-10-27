@@ -2,7 +2,7 @@
 
 use rupg_analyze::{Expr, ExprKind, Query, SetKind, SetOp, SetTree, Var};
 use rupg_pgcatalog::builtin;
-use rupg_plan::{Cost, Item, Kind, Node, Replaced, SortKey};
+use rupg_plan::{Cost, Grouped, Item, Kind, Node, Replaced, SortKey, Table};
 use rupg_types::{Value, oid};
 
 use crate::from::paths::{Paths, costs};
@@ -319,7 +319,8 @@ impl<'q> Builder<'q> {
             }
         }
         // `INTERSECT` reads first the side with fewer groups. Its relations then take their names first, as `set_rtable_names` names them in the order of the plan.
-        if op.kind == SetKind::Intersect && left.groups > right.groups {
+        let swapped = op.kind == SetKind::Intersect && left.groups > right.groups;
+        if swapped {
             std::mem::swap(&mut left, &mut right);
             if start <= middle && middle <= self.current.len() {
                 self.current[start..].rotate_left(middle - start);
@@ -365,7 +366,13 @@ impl<'q> Builder<'q> {
         }
         let scope = left.scope;
         let make = |sorted_strategy: bool, children: Vec<Node<'q>>, c: Cost| {
-            let kind = Kind::SetOp { except, all: op.all, sorted: sorted_strategy };
+            // The hash table has the rows of the side that the node reads first.
+            let table = (!sorted_strategy).then(|| Table {
+                of: Grouped::SetOp(op, swapped),
+                groups,
+                keys: (0..op.columns.len()).collect(),
+            });
+            let kind = Kind::SetOp { except, all: op.all, sorted: sorted_strategy, table };
             let mut node = Node::new(kind, scope, children);
             node.cost = c;
             node

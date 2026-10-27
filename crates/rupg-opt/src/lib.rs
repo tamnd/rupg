@@ -24,10 +24,13 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use rupg_analyze::{
-    Cte, Expr, ExprKind, FromItem, JoinKind, Query, Relation, SubLink, SubLinkKind,
+    Cte, Expr, ExprKind, FromItem, JoinKind, Query, Relation, SetOp, SetTree, SubLink, SubLinkKind,
     TABLE_OID_ATTNUM, Var, Write, WriteKind,
 };
-use rupg_plan::{Item, Kind, Label, Leaf, Node, Operation, Plan, Scope, Statistic, SubPlan};
+use rupg_plan::{
+    Grouped, HashTable, HashTables, Item, Kind, Label, Leaf, Node, Operation, Plan, Scope,
+    Statistic, SubPlan,
+};
 use rupg_types::{Value, oid};
 
 pub use cost::{node_cost, type_width};
@@ -343,6 +346,54 @@ pub fn join_order(plan: &Plan<'_>) -> Option<Vec<(usize, bool)>> {
     }
     let mut out = Vec::new();
     loop_order(node, false, &mut out).then_some(out)
+}
+
+/// The hash tables of the plan `plan` of `query` for `GROUP BY`, `DISTINCT` and the set operations of `query`, whose groups come in the order of the table. A table of a subquery or of a subplan is not in the list.
+pub fn hash_tables(plan: &Plan<'_>, query: &Query) -> HashTables {
+    let mut out = HashTables::default();
+    let mut nodes = vec![&plan.root];
+    while let Some(node) = nodes.pop() {
+        nodes.extend(&node.children);
+        nodes.extend(node.init_plans.iter().chain(&node.sub_plans).map(|s| &s.plan));
+        let table = match &node.kind {
+            Kind::Aggregate { table: Some(table), .. } | Kind::SetOp { table: Some(table), .. } => {
+                table
+            }
+            _ => continue,
+        };
+        let hash = |right| HashTable { groups: table.groups, keys: table.keys.clone(), right };
+        match table.of {
+            Grouped::Group(q) if std::ptr::eq(q, query) => out.group = Some(hash(false)),
+            Grouped::Distinct(q) if std::ptr::eq(q, query) => out.distinct = Some(hash(false)),
+            Grouped::SetOp(op, right) => {
+                let mut path = Vec::new();
+                if let Some(top) = &query.set_op
+                    && op_path(top, op, &mut path)
+                {
+                    out.set_ops.push((path, hash(right)));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// True when `op` is `top` or an operation in it, with the sides from `top` down to it in `path`.
+fn op_path(top: &SetOp, op: &SetOp, path: &mut Vec<bool>) -> bool {
+    if std::ptr::eq(top, op) {
+        return true;
+    }
+    for (right, side) in [(false, &top.left), (true, &top.right)] {
+        if let SetTree::Op(inner) = side {
+            path.push(right);
+            if op_path(inner, op, path) {
+                return true;
+            }
+            path.pop();
+        }
+    }
+    false
 }
 
 /// The relations of the join tree `node` for [`join_order`], with `reverse` for the rows of an inner side of a hash join.

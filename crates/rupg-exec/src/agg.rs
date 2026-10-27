@@ -1,6 +1,6 @@
 //! `GROUP BY`, `HAVING` and the aggregate functions, as `nodeAgg.c` computes them.
 //!
-//! The rows of each group come in the order of the scan, as with the hash table of `HashAggregate`. When every key of `GROUP BY` has an order, the groups come in the order of the keys. Else they come in the order of their first rows. A query with no `GROUP BY` has one group, also when it has no rows.
+//! The rows of each group come in the order of the scan, as with the hash table of `HashAggregate`. When the plan has a `HashAggregate` for `GROUP BY`, the groups come in the order of its hash table. Else, when every key of `GROUP BY` has an order, the groups come in the order of the keys, and else in the order of their first rows. A query with no `GROUP BY` has one group, also when it has no rows.
 
 use std::collections::HashSet;
 
@@ -12,7 +12,7 @@ use rupg_func::{Call, Kernel};
 use rupg_pgcatalog::builtin;
 use rupg_types::{Array, ArrayDim, MAXDIM, Numeric, NumericSign, Range, Value, oid};
 
-use crate::{Eval, Group, kernel, not_yet, signature, sort, strict, window};
+use crate::{Eval, Group, hashed, kernel, not_yet, signature, sort, strict, window};
 
 /// The way the engine computes an aggregate.
 pub(crate) enum Method {
@@ -1262,6 +1262,9 @@ fn groups<'a>(
         items.iter().enumerate().map(|(i, g)| SortGroup { target: i, ..(*g).clone() }).collect();
     let types: Vec<u32> = exprs.iter().map(|e| e.ty).collect();
     let keys_of = sort::Keys::new(&list, &types, eval.session)?;
+    if let Some(groups) = hashed_groups(eval, query, &items, &types, &keys, &keys_of)? {
+        return Ok(groups);
+    }
     let mut groups: Vec<Vec<usize>> = Vec::new();
     if list.iter().all(|g| g.sort != 0) {
         let mut order: Vec<usize> = (0..tuples.len()).collect();
@@ -1290,6 +1293,40 @@ fn groups<'a>(
         }
     }
     Ok(groups)
+}
+
+/// The groups of the rows in the order of the hash table of the `HashAggregate` of the plan, or `None` when the plan sorts the rows for the groups, has grouping sets, or hashes a key whose type has no hash function. `keys` has the values of `items` for each row.
+fn hashed_groups(
+    eval: &Eval<'_>,
+    query: &Query,
+    items: &[&SortGroup],
+    types: &[u32],
+    keys: &[Vec<Value>],
+    keys_of: &sort::Keys<'_>,
+) -> Result<Option<Vec<Vec<usize>>>> {
+    if !query.grouping_sets.is_empty() {
+        return Ok(None);
+    }
+    let Some(table) = eval.session.hash_tables(query).and_then(|t| t.group.clone()) else {
+        return Ok(None);
+    };
+    // The places in `items` of the keys of the table.
+    let Some(places) = table
+        .keys
+        .iter()
+        .map(|t| items.iter().position(|g| g.target == *t))
+        .collect::<Option<Vec<usize>>>()
+    else {
+        return Ok(None);
+    };
+    let mut hash = |row: usize| hashed::hash(places.iter().map(|&p| (types[p], &keys[row][p])));
+    if keys.first().is_some_and(|_| hash(0).is_err()) {
+        return Ok(None);
+    }
+    let groups = hashed::groups(keys.len(), table.groups, &mut hash, &mut |a, b| {
+        keys_of.equal(&keys[a], &keys[b])
+    })?;
+    Ok(Some(groups))
 }
 
 /// The expressions of the select list and of `HAVING` that are items of `GROUP BY`, also in the subqueries, each with the target of its item, as `substitute_grouped_columns` finds them. They are null in the groups of a grouping set that does not have the item.

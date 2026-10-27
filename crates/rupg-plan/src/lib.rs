@@ -10,7 +10,7 @@ mod statistic;
 
 use std::borrow::Cow;
 
-use rupg_analyze::{Expr, ExprKind, JoinKind, Query, SubLink, Write};
+use rupg_analyze::{Expr, ExprKind, JoinKind, Query, SetOp, SubLink, Write};
 use rupg_common::Result;
 
 pub use explain::{Format, Options, explain};
@@ -277,8 +277,14 @@ pub enum Kind<'q> {
     Memoize(Box<Memoize<'q>>),
     /// `Agg`, with the keys of the groups. With grouping sets, each rollup has its sets, each set has its keys, and a set with no keys makes one group.
     ///
-    /// `unique` is true for the `Agg` that `create_final_unique_paths` makes to remove the duplicate rows of the inner side of a semi join.
-    Aggregate { strategy: Strategy, keys: Vec<Item<'q>>, sets: Vec<Rollup<'q>>, unique: bool },
+    /// `unique` is true for the `Agg` that `create_final_unique_paths` makes to remove the duplicate rows of the inner side of a semi join. `table` is the hash table of `GROUP BY`, `DISTINCT` or `UNION`.
+    Aggregate {
+        strategy: Strategy,
+        keys: Vec<Item<'q>>,
+        sets: Vec<Rollup<'q>>,
+        unique: bool,
+        table: Option<Table<'q>>,
+    },
     /// `Sort`.
     Sort(Vec<SortKey<'q>>),
     /// `IncrementalSort`: a sort of rows whose first `presorted` keys are in order already.
@@ -291,8 +297,8 @@ pub enum Kind<'q> {
     Append,
     /// `MergeAppend`: the rows of the members, which are each in the order of the keys, merged in that order.
     MergeAppend(Vec<SortKey<'q>>),
-    /// `SetOp`: `INTERSECT` or `EXCEPT`, with a hash table or, with `sorted`, with the rows of both sides in the order of their columns.
-    SetOp { except: bool, all: bool, sorted: bool },
+    /// `SetOp`: `INTERSECT` or `EXCEPT`, with the hash table `table` or, with `sorted`, with the rows of both sides in the order of their columns.
+    SetOp { except: bool, all: bool, sorted: bool, table: Option<Table<'q>> },
     /// `RecursiveUnion`.
     RecursiveUnion,
     /// `WindowAgg`, with the name of the window, its index in the windows of the query, and the places of the items of its `PARTITION BY` that are not redundant, as `make_pathkeys_for_window` keeps them. `merged` has the other windows of the query whose calls the node computes, because `optimize_window_clauses` made them the same as this window. `run` has the run conditions of the calls, as `runConditionOrig`.
@@ -346,6 +352,44 @@ pub enum Replaced {
     Upper(Vec<usize>),
     /// `RESULT_TYPE_MINMAX`: the `Agg` node of a query whose aggregate calls are each `min` or `max`, which reads their values from its `InitPlan` subplans.
     MinMax,
+}
+
+/// The rows that a hash table of an `Agg` or of a `SetOp` puts in groups.
+#[derive(Clone, Copy, Debug)]
+pub enum Grouped<'q> {
+    /// The rows of `GROUP BY` of the query.
+    Group(&'q Query),
+    /// The rows of `DISTINCT` of the query.
+    Distinct(&'q Query),
+    /// The rows of a set operation. For `INTERSECT` and `EXCEPT`, true when the table has the rows of the right side, as the planner puts first the side of `INTERSECT` with fewer groups.
+    SetOp(&'q SetOp, bool),
+}
+
+/// A hash table of an `Agg` or of a `SetOp`: the rows that it puts in groups, `numGroups`, which gives the size of the table, and the targets of the keys of the table in the order of the hash.
+#[derive(Clone, Debug)]
+pub struct Table<'q> {
+    pub of: Grouped<'q>,
+    pub groups: f64,
+    pub keys: Vec<usize>,
+}
+
+/// A hash table of a query for the executor, which gives the groups in the order of the table, from [`Table`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct HashTable {
+    /// `numGroups`.
+    pub groups: f64,
+    /// The targets of the keys in the order of the hash. For a set operation, the columns.
+    pub keys: Vec<usize>,
+    /// For `INTERSECT` and `EXCEPT`, true when the table has the rows of the right side.
+    pub right: bool,
+}
+
+/// The hash tables of the plan of a query, for the executor. A set operation is at a path from the top operation of the query: false for the left side and true for the right side.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HashTables {
+    pub group: Option<HashTable>,
+    pub distinct: Option<HashTable>,
+    pub set_ops: Vec<(Vec<bool>, HashTable)>,
 }
 
 /// The strategy of an `Agg`, as `AggStrategy`.

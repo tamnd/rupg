@@ -19,6 +19,7 @@ use rupg_catalog::FIRST_NORMAL_OID;
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Call, Kernel, Session, base_type};
 use rupg_pgcatalog::builtin;
+use rupg_plan::{HashTable, HashTables};
 use rupg_types::{Array, ArrayDim, MAXDIM, NAME_MAX_BYTES, Record, Value, format_type, oid};
 
 /// A query that the engine can run.
@@ -583,11 +584,105 @@ fn check_set_op(op: &SetOp) -> Result<()> {
 /// The rows of the `SELECT` of a set operation with this index.
 type Leaf<'a> = dyn FnMut(usize) -> Result<Rows> + 'a;
 
-/// The rows of a part of a set operation. A `SELECT` gives the rows that `leaf` gives for it.
-fn part_rows(part: &SetTree, leaf: &mut Leaf<'_>, session: &dyn Session) -> Result<Rows> {
+/// The rows of a part of a set operation. A `SELECT` gives the rows that `leaf` gives for it. `tables` has the hash tables of the plan of the query, and `path` has the sides from the top operation down to the part.
+fn part_rows(
+    part: &SetTree,
+    leaf: &mut Leaf<'_>,
+    session: &dyn Session,
+    tables: Option<&HashTables>,
+    path: &[bool],
+) -> Result<Rows> {
     match part {
         SetTree::Leaf(index) => leaf(*index),
-        SetTree::Op(op) => set_rows(op, leaf, session),
+        SetTree::Op(op) => set_rows(op, leaf, session, tables, path),
+    }
+}
+
+/// The path of a side of the operation at `path`.
+fn side_path(path: &[bool], right: bool) -> Vec<bool> {
+    let mut side = path.to_vec();
+    side.push(right);
+    side
+}
+
+/// The rows of the members of a `UNION` without `ALL` that hashes its rows, which `recurse_union_children` puts in one `Append`: the rows of each `SELECT`, and of each `UNION` in it with the same types of columns.
+fn union_members(
+    top: &SetOp,
+    part: &SetTree,
+    leaf: &mut Leaf<'_>,
+    session: &dyn Session,
+    tables: Option<&HashTables>,
+    path: &[bool],
+    rows: &mut Rows,
+) -> Result<()> {
+    match part {
+        SetTree::Op(op)
+            if op.kind == SetKind::Union
+                && op.work.is_none()
+                && op.columns.iter().map(|c| c.0).eq(top.columns.iter().map(|c| c.0)) =>
+        {
+            for (right, side) in [(false, &op.left), (true, &op.right)] {
+                union_members(top, side, leaf, session, tables, &side_path(path, right), rows)?;
+            }
+        }
+        _ => rows.extend(part_rows(part, leaf, session, tables, path)?),
+    }
+    Ok(())
+}
+
+/// The rows of a set operation with the hash table `table`, in the order of the table, as `HashAggregate` gives them for `UNION` and `SetOp` gives them for `INTERSECT` and `EXCEPT`. The rows of one side go into the table, and the rows of the other side only find their groups in it. `None` when a type of a column has no hash function.
+fn hashed_set_rows(
+    op: &SetOp,
+    table: &HashTable,
+    left: Rows,
+    right: Rows,
+    session: &dyn Session,
+) -> Result<Option<Rows>> {
+    let types: Vec<u32> = op.columns.iter().map(|(ty, _)| *ty).collect();
+    let keys = sort::Keys::new(&op.groups, &types, session)?;
+    let hash = |row: &[Value]| hashed::hash(table.keys.iter().map(|&k| (types[k], &row[k])));
+    let (first, second) = if table.right { (right, left) } else { (left, right) };
+    if first.iter().chain(&second).next().is_some_and(|row| hash(row).is_err()) {
+        return Ok(None);
+    }
+    let mut hashes = hashed::Table::new(hashed::buckets(table.groups));
+    // Each group is its first row with the number of copies in the first side and in the second side.
+    let mut groups: Vec<(usize, usize, usize)> = Vec::new();
+    for (i, row) in first.iter().enumerate() {
+        let (entry, old) =
+            hashes.insert(hash(row)?, &mut |e| keys.equal(&first[groups[e as usize].0], row))?;
+        if old {
+            groups[entry as usize].1 += 1;
+        } else {
+            groups.push((i, 1, 0));
+        }
+    }
+    for row in &second {
+        let found =
+            hashes.find(hash(row)?, &mut |e| keys.equal(&first[groups[e as usize].0], row))?;
+        if let Some(entry) = found {
+            groups[entry as usize].2 += 1;
+        }
+    }
+    let mut rows = Vec::new();
+    for entry in hashes.order() {
+        let (row, a, b) = groups[entry as usize];
+        let (left, right) = if table.right { (b, a) } else { (a, b) };
+        for _ in 0..copies(op, left, right) {
+            rows.push(first[row].clone());
+        }
+    }
+    Ok(Some(rows))
+}
+
+/// The number of copies of a row of a set operation with `left` copies in the left side and `right` copies in the right side.
+fn copies(op: &SetOp, left: usize, right: usize) -> usize {
+    match (op.kind, op.all) {
+        (SetKind::Union, _) => 1,
+        (SetKind::Intersect, true) => left.min(right),
+        (SetKind::Intersect, false) => usize::from(left > 0 && right > 0),
+        (SetKind::Except, true) => left.saturating_sub(right),
+        (SetKind::Except, false) => usize::from(left > 0 && right == 0),
     }
 }
 
@@ -623,7 +718,7 @@ fn recursive_rows(
     let keys = sort::Keys::new(&op.groups, &types, run.session)?;
     let mut seen = Vec::new();
     let mut leaf = |i: usize| Ok((*tables.rows[i]).clone());
-    let mut step = part_rows(&op.left, &mut leaf, run.session)?;
+    let mut step = part_rows(&op.left, &mut leaf, run.session, None, &[])?;
     if !op.all {
         step = new_rows(&keys, &mut seen, step)?;
     }
@@ -650,7 +745,7 @@ fn recursive_rows(
             }
             run_query(sub, run.params, run.session, run.cache, &frames, false)
         };
-        let next = part_rows(&op.right, &mut leaf, run.session);
+        let next = part_rows(&op.right, &mut leaf, run.session, None, &[]);
         run.cache.work.borrow_mut().pop();
         step = next?;
         if !op.all {
@@ -668,13 +763,37 @@ struct Run<'r, 'f> {
     outer: &'r [Frame<'f>],
 }
 
-/// The rows of an operation of a set operation, as `Append`, `Unique` and `SetOp` give them. `UNION ALL` gives the rows of the left part, then the rows of the right part. The other operations make groups of equal rows: they sort the rows when every type has an order, or else keep the groups in the order of the rows, as a hash table does. For each group, `UNION` gives one row, `INTERSECT` gives one row when both parts have the row, and `EXCEPT` gives one row when only the left part has it. With `ALL`, `INTERSECT` gives the row as many times as the part with fewer copies has it, and `EXCEPT` gives it as many times as the left part has more copies than the right part.
-fn set_rows(op: &SetOp, leaf: &mut Leaf<'_>, session: &dyn Session) -> Result<Rows> {
-    let left = part_rows(&op.left, leaf, session)?;
-    let right = part_rows(&op.right, leaf, session)?;
+/// The rows of an operation of a set operation, as `Append`, `Unique` and `SetOp` give them. `UNION ALL` gives the rows of the left part, then the rows of the right part. The other operations make groups of equal rows. When the plan of the operation hashes the rows, the groups come in the order of the hash table. Else they sort the rows when every type has an order, or else keep the groups in the order of the rows. For each group, `UNION` gives one row, `INTERSECT` gives one row when both parts have the row, and `EXCEPT` gives one row when only the left part has it. With `ALL`, `INTERSECT` gives the row as many times as the part with fewer copies has it, and `EXCEPT` gives it as many times as the left part has more copies than the right part.
+fn set_rows(
+    op: &SetOp,
+    leaf: &mut Leaf<'_>,
+    session: &dyn Session,
+    tables: Option<&HashTables>,
+    path: &[bool],
+) -> Result<Rows> {
+    let table = tables
+        .and_then(|t| t.set_ops.iter().find(|(p, _)| p == path))
+        .map(|(_, table)| table)
+        .filter(|_| !(op.kind == SetKind::Union && op.all));
+    let (left, right) = if op.kind == SetKind::Union && table.is_some() {
+        let mut rows = Vec::new();
+        for (right, side) in [(false, &op.left), (true, &op.right)] {
+            union_members(op, side, leaf, session, tables, &side_path(path, right), &mut rows)?;
+        }
+        (rows, Vec::new())
+    } else {
+        let left = part_rows(&op.left, leaf, session, tables, &side_path(path, false))?;
+        let right = part_rows(&op.right, leaf, session, tables, &side_path(path, true))?;
+        (left, right)
+    };
     if op.kind == SetKind::Union && op.all {
         let mut rows = left;
         rows.extend(right);
+        return Ok(rows);
+    }
+    if let Some(table) = table
+        && let Some(rows) = hashed_set_rows(op, table, left.clone(), right.clone(), session)?
+    {
         return Ok(rows);
     }
     let types: Vec<u32> = op.columns.iter().map(|(ty, _)| *ty).collect();
@@ -718,14 +837,7 @@ fn set_rows(op: &SetOp, leaf: &mut Leaf<'_>, session: &dyn Session) -> Result<Ro
     }
     let mut rows = Vec::new();
     for (row, left, right) in groups {
-        let copies = match (op.kind, op.all) {
-            (SetKind::Union, _) => 1,
-            (SetKind::Intersect, true) => left.min(right),
-            (SetKind::Intersect, false) => usize::from(left > 0 && right > 0),
-            (SetKind::Except, true) => left.saturating_sub(right),
-            (SetKind::Except, false) => usize::from(left > 0 && right == 0),
-        };
-        for _ in 0..copies {
+        for _ in 0..copies(op, left, right) {
             rows.push(row.clone());
         }
     }
@@ -1272,7 +1384,11 @@ fn run_query(
                 let run = Run { params, session, cache, outer };
                 recursive_rows(query, op, work, &tables, &run, want)?
             }
-            None => set_rows(op, &mut |i| Ok((*tables.rows[i]).clone()), session)?,
+            None => {
+                let hashes = session.hash_tables(query);
+                let leaf = &mut |i: usize| Ok((*tables.rows[i]).clone());
+                set_rows(op, leaf, session, hashes.as_deref(), &[])?
+            }
         };
         let leftmost = op.left.leftmost();
         set_tuples = (0..rows.len())
@@ -2015,7 +2131,24 @@ fn order(
     let mut sorted = query.sort.is_empty();
     if !query.distinct.is_empty() {
         let equal = sort::Keys::new(&query.distinct, types, session)?;
-        if query.distinct.iter().all(|g| g.sort != 0) {
+        let table = session.hash_tables(query).and_then(|t| t.distinct.clone());
+        let hash = |row: &[Value]| {
+            let keys = table.as_ref().map_or(&[][..], |t| &t.keys[..]);
+            hashed::hash(keys.iter().map(|&k| (types[k], &row[k])))
+        };
+        if let Some(table) = &table
+            && rows.first().is_none_or(|row| hash(row).is_ok())
+        {
+            // `HashAggregate` gives the first row of each group in the order of its hash table.
+            let groups = hashed::groups(
+                rows.len(),
+                table.groups,
+                &mut |row| hash(&rows[row]),
+                &mut |a, b| equal.equal(&rows[a], &rows[b]),
+            )?;
+            let mut slots: Vec<Option<Vec<Value>>> = rows.into_iter().map(Some).collect();
+            rows = groups.iter().filter_map(|group| slots[group[0]].take()).collect();
+        } else if query.distinct.iter().all(|g| g.sort != 0) {
             // The items of `DISTINCT ON` come first in `ORDER BY`, so the longer list sorts for both.
             let list: &[SortGroup] =
                 if query.sort.len() > query.distinct.len() { &query.sort } else { &query.distinct };
@@ -3773,6 +3906,7 @@ fn relabel(value: Value, ty: u32) -> Value {
 mod agg;
 mod cursor;
 mod fold;
+mod hashed;
 mod insert;
 mod jsonexpr;
 mod jsontable;

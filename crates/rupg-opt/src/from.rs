@@ -2768,6 +2768,7 @@ fn unique_rels<'q>(semi: &Semi<'q>, side: &[Rel<'q>], stats: &Stats) -> Option<V
             keys: items,
             sets: Vec::new(),
             unique: true,
+            table: None,
         };
         // The target of the `Agg` is the target of the side without the new items, as `create_final_unique_paths` gives it.
         let width = cheapest.node.cost.width;

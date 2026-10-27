@@ -63,7 +63,7 @@ mod writes;
 
 pub(crate) use activity::{Activity, Pending};
 use copy_from::Begin;
-pub(crate) use explain::join_order;
+pub(crate) use explain::planned;
 use extended::Failed;
 pub(crate) use extended::{Portal, Prepared};
 use writes::Writes;

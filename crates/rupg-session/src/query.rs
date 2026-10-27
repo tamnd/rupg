@@ -39,6 +39,9 @@ use crate::utility;
 /// The relations of a join in the order of its plan, each with true when its rows come in reverse.
 type JoinOrder = Vec<(usize, bool)>;
 
+/// What the executor reads of the plan of a query: the order of its joins and its hash tables.
+type Planned = Option<(Option<JoinOrder>, Rc<rupg_plan::HashTables>)>;
+
 /// The schemas of a new database, from `pg_namespace.dat`.
 const SCHEMAS: [(&str, u32); 3] = [("pg_catalog", 11), ("pg_toast", 99), ("public", 2200)];
 
@@ -183,8 +186,8 @@ pub(crate) struct Reader<'a> {
     conn: Option<&'a Connection>,
     /// The transition tables of the trigger whose function runs, which the queries of the function read by their names.
     transition: Option<Transition>,
-    /// The order of the rows of the joins of each query that the statement ran, by the address of the query, so that a subquery that runs for each row of the query outside it plans its joins once.
-    join_orders: RefCell<BTreeMap<usize, Option<JoinOrder>>>,
+    /// The order of the rows of the joins and the hash tables of each query that the statement ran, by the address of the query, so that a subquery that runs for each row of the query outside it is planned once.
+    plans: RefCell<BTreeMap<usize, Planned>>,
 }
 
 /// The zone of a `TimeZone` value, or the value if it is not a zone.
@@ -437,7 +440,7 @@ impl<'a> Reader<'a> {
             view: None,
             conn: None,
             transition: None,
-            join_orders: RefCell::new(BTreeMap::new()),
+            plans: RefCell::new(BTreeMap::new()),
         }
     }
 
@@ -818,17 +821,29 @@ fn date_format(text: &str) -> DateFormat {
     DateFormat { style, order }
 }
 
-impl rupg_func::Session for Reader<'_> {
-    fn join_order(&self, query: &rupg_analyze::Query) -> Option<Vec<(usize, bool)>> {
+impl Reader<'_> {
+    /// The order of the joins and the hash tables of the plan of `query`, which the statement plans once. `None` when the reader is not a session or the planner fails.
+    fn planned(&self, query: &rupg_analyze::Query) -> Planned {
         let (_, store) = self.activity?;
         let address = std::ptr::from_ref(query) as usize;
-        if let Some(order) = self.join_orders.borrow().get(&address) {
-            return order.clone();
+        if let Some(planned) = self.plans.borrow().get(&address) {
+            return planned.clone();
         }
         let database = database_oid(store, self.database);
-        let order = crate::connection::join_order(self, store.heap(), database, query);
-        self.join_orders.borrow_mut().insert(address, order.clone());
-        order
+        let planned = crate::connection::planned(self, store.heap(), database, query)
+            .map(|(order, tables)| (order, Rc::new(tables)));
+        self.plans.borrow_mut().insert(address, planned.clone());
+        planned
+    }
+}
+
+impl rupg_func::Session for Reader<'_> {
+    fn join_order(&self, query: &rupg_analyze::Query) -> Option<Vec<(usize, bool)>> {
+        self.planned(query).and_then(|(order, _)| order)
+    }
+
+    fn hash_tables(&self, query: &rupg_analyze::Query) -> Option<Rc<rupg_plan::HashTables>> {
+        self.planned(query).map(|(_, tables)| tables)
     }
 
     fn interrupted(&self) -> Result<()> {
