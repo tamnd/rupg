@@ -1,0 +1,67 @@
+> CREATE TEMPORARY SEQUENCE rngfunc_rescan_seq1
+CREATE SEQUENCE
+> CREATE TEMPORARY SEQUENCE rngfunc_rescan_seq2
+CREATE SEQUENCE
+> CREATE TYPE rngfunc_rescan_t AS (i integer, s bigint)
+CREATE TYPE
+> CREATE FUNCTION rngfunc_sql(int,int) RETURNS setof rngfunc_rescan_t AS 'SELECT i, nextval(''rngfunc_rescan_seq1'') FROM generate_series($1,$2) i;' LANGUAGE SQL
+CREATE FUNCTION
+> CREATE FUNCTION rngfunc_mat(int,int) RETURNS setof rngfunc_rescan_t AS 'begin for i in $1..$2 loop return next (i, nextval(''rngfunc_rescan_seq2'')); end loop; end;' LANGUAGE plpgsql
+CREATE FUNCTION
+> SELECT * FROM (VALUES (1),(2),(3)) v(r), ROWS FROM( rngfunc_sql(11,11), rngfunc_mat(10+r,13) )
+fields r:23:4:-1,i:23:4:-1,s:20:8:-1,i:23:4:-1,s:20:8:-1
+row 1,11,1,11,1
+row 1,NULL,NULL,12,2
+row 1,NULL,NULL,13,3
+row 2,11,1,12,4
+row 2,NULL,NULL,13,5
+row 3,11,1,13,6
+SELECT 6
+> SELECT setval('rngfunc_rescan_seq1',1,false),setval('rngfunc_rescan_seq2',1,false)
+fields setval:20:8:-1,setval:20:8:-1
+row 1,1
+SELECT 1
+> SELECT * FROM (VALUES (1),(2),(3)) v(r), ROWS FROM( rngfunc_sql(10+r,13), rngfunc_mat(11,11) )
+fields r:23:4:-1,i:23:4:-1,s:20:8:-1,i:23:4:-1,s:20:8:-1
+row 1,11,1,11,1
+row 1,12,2,NULL,NULL
+row 1,13,3,NULL,NULL
+row 2,12,4,11,1
+row 2,13,5,NULL,NULL
+row 3,13,6,11,1
+SELECT 6
+> SELECT setval('rngfunc_rescan_seq1',1,false),setval('rngfunc_rescan_seq2',1,false)
+fields setval:20:8:-1,setval:20:8:-1
+row 1,1
+SELECT 1
+> SELECT * FROM (VALUES (1),(2),(3)) v(r), ROWS FROM( rngfunc_sql(10+r,13), rngfunc_mat(10+r,13) )
+fields r:23:4:-1,i:23:4:-1,s:20:8:-1,i:23:4:-1,s:20:8:-1
+row 1,11,1,11,1
+row 1,12,2,12,2
+row 1,13,3,13,3
+row 2,12,4,12,4
+row 2,13,5,13,5
+row 3,13,6,13,6
+SELECT 6
+> SELECT setval('rngfunc_rescan_seq1',1,false),setval('rngfunc_rescan_seq2',1,false)
+fields setval:20:8:-1,setval:20:8:-1
+row 1,1
+SELECT 1
+> SELECT setval('rngfunc_rescan_seq1',1,false),setval('rngfunc_rescan_seq2',1,false)
+fields setval:20:8:-1,setval:20:8:-1
+row 1,1
+SELECT 1
+> SELECT * FROM (VALUES (1),(2),(3)) v(r), ROWS FROM( rngfunc_sql(11,12), generate_series(1, r) ) WITH ORDINALITY
+fields r:23:4:-1,i:23:4:-1,s:20:8:-1,generate_series:23:4:-1,ordinality:20:8:-1
+row 1,11,1,1,1
+row 1,12,2,NULL,2
+row 2,11,1,1,1
+row 2,12,2,2,2
+row 3,11,1,1,1
+row 3,12,2,2,2
+row 3,NULL,NULL,3,3
+SELECT 7
+> SELECT setval('rngfunc_rescan_seq1',1,false)
+fields setval:20:8:-1
+row 1
+SELECT 1

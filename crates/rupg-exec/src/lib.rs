@@ -1211,12 +1211,14 @@ fn run_query(
     let tuples = if query.set_op.is_some() {
         set_tuples
     } else if open {
+        // `ExecReScanFunctionScan`: the rows of each call of a function in `FROM` that reads no relation of the query, which a new scan reads again.
+        let mut kept: Vec<Vec<Option<Rows>>> = vec![Vec::new(); query.relations.len()];
         let mut source = |index: usize, tuple: &[usize]| {
             let relation = &query.relations[index];
             if let Some(function) = &relation.function {
                 let mut eval = Eval::new(params, session, tables, cache, outer);
                 eval.tuple = tuple;
-                return eval.function_rows(function);
+                return eval.function_rows_kept(function, Some(&mut kept[index]));
             }
             if let Some(rows) = &relation.values {
                 let mut eval = Eval::new(params, session, tables, cache, outer);
@@ -2096,9 +2098,29 @@ impl<'a> Eval<'a> {
 
     /// `ExecFunctionScan`: the rows of a function in `FROM`. The rows of the calls of `ROWS FROM` go side by side, and a call with fewer rows gives nulls. With ordinality, the last column is the number of the row.
     fn function_rows(&mut self, function: &FromFunction) -> Result<Rows> {
+        self.function_rows_kept(function, None)
+    }
+
+    /// [`Eval::function_rows`] for a new scan of a function in `FROM` that reads the other relations. A call that reads none of them gives the rows in `kept` from the first scan, as `ExecReScanFunctionScan` runs again only the calls whose arguments read a changed parameter.
+    fn function_rows_kept(
+        &mut self,
+        function: &FromFunction,
+        mut kept: Option<&mut Vec<Option<Rows>>>,
+    ) -> Result<Rows> {
         let mut sets = Vec::with_capacity(function.calls.len());
-        for (call, width) in &function.calls {
-            sets.push(self.function_set(call, *width, None)?);
+        for (k, (call, width)) in function.calls.iter().enumerate() {
+            let keep = kept.as_deref_mut().filter(|_| call.first_var().is_none());
+            let Some(kept) = keep else {
+                sets.push(self.function_set(call, *width, None)?);
+                continue;
+            };
+            if kept.len() <= k {
+                kept.resize(k + 1, None);
+            }
+            if kept[k].is_none() {
+                kept[k] = Some(self.function_set(call, *width, None)?);
+            }
+            sets.push(kept[k].clone().unwrap_or_default());
         }
         let count = sets.iter().map(Vec::len).max().unwrap_or(0);
         let mut rows = Vec::with_capacity(count);
