@@ -158,6 +158,8 @@ The 48 clients of `../2140/compat/postgres/13-clients-and-tools.md` each have a 
 1. `oracle-fail.txt` lists the tests that fail against the oracle. They are not counted.
 2. `expected-fail.txt` lists the tests that pass against the oracle and fail against rupg. Each line has the cause and the milestone that will fix it. The file may only become shorter. A test that starts to pass is removed from it in the same change.
 
+**Tools that cannot run in CI.** Six of the 48 clients are closed source or run only as a hosted service: DataGrip, TablePlus, Postico 2, Tableau, Power BI and Looker. CI cannot run them. So L1 counts each of them through the driver that it uses: DataGrip and Looker through pgjdbc, Power BI through Npgsql, Tableau through psqlODBC, and TablePlus and Postico 2 through libpq. When a person records a trace of one of these tools on a desktop through the proxy of `rupg-compat`, that trace replaces the driver trace. DBeaver and Beekeeper Studio are open source, but they have no headless mode. So their traces send the queries of their PostgreSQL code at the pinned release through the driver that each one uses, pgjdbc for DBeaver and node-postgres for Beekeeper Studio. The owner made this decision at M2.
+
 Gate G1 at M2 needs 7 clients to connect and show the schema. The seven are psql, pgAdmin 4, DBeaver (through pgjdbc), psycopg 3, node-postgres, pgx and asyncpg. "Show the schema" means the client's own object browser or describe command lists the tables, the columns, the types, the indexes and the constraints of the gate schema, and the list is equal to the list that the same client shows against the oracle. Document 02 does not name the seven, so this choice is an open question for document 24.
 
 ### 21.4.3 Hermitage
@@ -403,7 +405,7 @@ Each nightly run writes `rupg-compat/reports/<date>/` with one table for each le
 
 | Level | Number published |
 |---|---|
-| L1 Connect | the share of trace messages equal to the oracle, for each of the 48 clients and for `libpq_pipeline` |
+| L1 Connect | the share of trace messages equal to the oracle, for each of the 48 clients and for `libpq_pipeline`. A tool that cannot run in CI shows the share of its driver (section 21.4.2) |
 | L2 Introspect | the share of rows equal to the oracle, for each of the 64 catalogs, 86 system views and 65 `information_schema` views |
 | L3 Query | the pass count of the 239 regression tests and the count of differential cases equal to the oracle |
 | L4 Behave | the pass count of the 135 isolation specs and of the Hermitage cases |
