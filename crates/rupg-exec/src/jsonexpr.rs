@@ -8,10 +8,10 @@ use rupg_func::{Call, PathVar, SqlJsonItem, base_type};
 use rupg_pgcatalog::builtin;
 use rupg_types::{Array, ArrayDim, JsonItem, JsonTree, Value, oid};
 
-use crate::{Eval, not_yet, relabel};
+use crate::{Eval, relabel};
 
 /// A result whose inner error is soft. `ON ERROR` handles a soft error when its behavior is not `ERROR`.
-type Soft<T> = Result<std::result::Result<T, Error>>;
+pub(crate) type Soft<T> = Result<std::result::Result<T, Error>>;
 
 /// The flags `error` and `empty` of a `JsonExprState`. The path sets them. A null context item or a null path skips the path, and then the steps after it read the flags of the evaluation before, as PostgreSQL does.
 #[derive(Clone, Copy, Debug, Default)]
@@ -42,7 +42,7 @@ enum Outcome {
 
 /// `JsValue` for a `jsonb` value: the part of a value that `json_populate_type` casts.
 #[derive(Clone, Copy)]
-enum Js<'t> {
+pub(crate) enum Js<'t> {
     /// A SQL null, or a JSON null in an array.
     Null,
     /// The text of the value with no quotes, for `OMIT QUOTES`.
@@ -51,6 +51,8 @@ enum Js<'t> {
     Root(&'t JsonTree<'t>),
     /// An element of an array.
     Element(&'t JsonTree<'t>, usize),
+    /// A part of a `json` value, whose text keeps the form of the input.
+    Json(&'t JsonTree<'t>, usize),
 }
 
 impl Js<'_> {
@@ -58,8 +60,28 @@ impl Js<'_> {
     fn is_string(&self) -> bool {
         match self {
             Js::Unquoted(_) => true,
-            Js::Element(tree, at) => matches!(tree.item(*at), JsonItem::String(_)),
+            Js::Element(tree, at) | Js::Json(tree, at) => {
+                matches!(tree.item(*at), JsonItem::String(_))
+            }
             Js::Null | Js::Root(_) => false,
+        }
+    }
+}
+
+/// A JSON value that a function of `json_populate_record` reads: the tree, and true for a `json` value, whose text keeps the form of the input.
+#[derive(Clone, Copy)]
+pub(crate) struct Part<'t> {
+    pub(crate) tree: &'t JsonTree<'t>,
+    pub(crate) json: bool,
+}
+
+impl<'t> Part<'t> {
+    /// The value of the node `at`: a JSON null is a SQL null.
+    pub(crate) fn js(self, at: usize) -> Js<'t> {
+        match self.tree.item(at) {
+            JsonItem::Null => Js::Null,
+            _ if self.json => Js::Json(self.tree, at),
+            _ => Js::Element(self.tree, at),
         }
     }
 }
@@ -74,17 +96,23 @@ struct Dims {
     /// The number of elements of each dimension that the walk has seen.
     sizes: Vec<i32>,
     values: Vec<Option<Value>>,
+    /// The key of the field of a record that the array is for.
+    colname: Option<String>,
 }
 
 impl Dims {
     /// `populate_array_report_expected_array`.
     fn expected(&self, ndim: usize) -> Error {
         let error = Error::new(SqlState::INVALID_TEXT_REPRESENTATION, "expected JSON array");
-        if ndim == 0 {
-            return error;
-        }
         let indices: String = self.sizes[..ndim].iter().map(|size| format!("[{size}]")).collect();
-        error.with_hint(format!("See the array element {indices}."))
+        match (&self.colname, ndim) {
+            (None, 0) => error,
+            (Some(key), 0) => error.with_hint(format!("See the value of key \"{key}\".")),
+            (None, _) => error.with_hint(format!("See the array element {indices}.")),
+            (Some(key), _) => {
+                error.with_hint(format!("See the array element {indices} of key \"{key}\"."))
+            }
+        }
     }
 
     /// `populate_array_assign_ndims`.
@@ -125,7 +153,7 @@ fn datetime_type(value: &Value) -> u32 {
 }
 
 /// `getBaseTypeAndTypmod`: the base type of a domain and the type modifier of the domain nearest to the base.
-fn base_and_typmod(ty: u32, typmod: i32) -> (u32, i32) {
+pub(crate) fn base_and_typmod(ty: u32, typmod: i32) -> (u32, i32) {
     let (mut ty, mut typmod) = (ty, typmod);
     while let Some(row) = builtin::type_by_oid(ty)
         && row.kind == b'd'
@@ -385,6 +413,18 @@ impl Eval<'_> {
 
     /// `populate_record_field`.
     fn populate_field(&mut self, js: Js<'_>, ty: u32, typmod: i32) -> Soft<Value> {
+        self.populate_field_with(js, ty, typmod, None, None)
+    }
+
+    /// `populate_record_field` with `defaultval`, the value of the field in the base record, which a composite type reads for the keys that the object does not have, and `colname`, the key of the field, which the errors of an array name.
+    pub(crate) fn populate_field_with(
+        &mut self,
+        js: Js<'_>,
+        ty: u32,
+        typmod: i32,
+        default: Option<&Value>,
+        colname: Option<&str>,
+    ) -> Soft<Value> {
         let row = builtin::type_by_oid(ty);
         let domain = row.is_some_and(|row| row.kind == b'd');
         let composite = ty == oid::RECORD || row.is_some_and(|row| row.kind == b'c');
@@ -397,13 +437,10 @@ impl Eval<'_> {
         }
         if domain {
             let (base, base_typmod) = base_and_typmod(ty, typmod);
-            if builtin::type_by_oid(base).is_some_and(|row| row.kind == b'c') {
-                return Err(not_yet("a SQL/JSON cast to a domain over a composite type"));
-            }
             let value = if matches!(js, Js::Null) {
                 Value::Null
             } else {
-                match self.populate_field(js, base, base_typmod)? {
+                match self.populate_field_with(js, base, base_typmod, default, colname)? {
                     Ok(value) => relabel(value, ty),
                     Err(error) => return Ok(Err(error)),
                 }
@@ -414,10 +451,10 @@ impl Eval<'_> {
             });
         }
         if composite {
-            return Err(not_yet("a SQL/JSON cast to a composite type"));
+            return self.populate_composite(js, ty, default);
         }
         if let (true, Some(row)) = (array, row) {
-            return self.populate_array(js, row.elem, typmod);
+            return self.populate_array(js, row.elem, typmod, colname);
         }
         self.populate_scalar(js, ty, typmod)
     }
@@ -438,19 +475,37 @@ impl Eval<'_> {
                 JsonItem::String(s) if ty != oid::JSON => s,
                 _ => tree.text(at),
             },
+            // A string of a `json` value goes to `json` and `jsonb` with the quotes and the escapes again.
+            Js::Json(tree, at) => match tree.item(at) {
+                JsonItem::String(s) if ty == oid::JSON || ty == oid::JSONB => {
+                    let mut quoted = String::new();
+                    rupg_types::json_escape(s, &mut quoted);
+                    return rupg_func::input_soft(ty, &quoted, typmod, self.session);
+                }
+                JsonItem::String(s) => s,
+                _ => tree.text(at),
+            },
         };
         rupg_func::input_soft(ty, text, typmod, self.session)
     }
 
     /// `populate_array`: an array of the elements of a JSON array. The lower bounds are 1.
-    fn populate_array(&mut self, js: Js<'_>, element: u32, typmod: i32) -> Soft<Value> {
-        let mut dims = Dims::default();
-        let (tree, at) = match js {
-            Js::Root(tree) => (tree, 0),
-            Js::Element(tree, at) => (tree, at),
+    fn populate_array(
+        &mut self,
+        js: Js<'_>,
+        element: u32,
+        typmod: i32,
+        colname: Option<&str>,
+    ) -> Soft<Value> {
+        let mut dims = Dims { colname: colname.map(str::to_owned), ..Dims::default() };
+        let (tree, at, json) = match js {
+            Js::Root(tree) => (tree, 0, false),
+            Js::Element(tree, at) => (tree, at, false),
+            Js::Json(tree, at) => (tree, at, true),
             Js::Null | Js::Unquoted(_) => return Ok(Err(dims.expected(0))),
         };
-        if let Err(error) = self.populate_dim(&mut dims, tree, at, 1, element, typmod)? {
+        let part = Part { tree, json };
+        if let Err(error) = self.populate_dim(&mut dims, part, at, 1, element, typmod)? {
             return Ok(Err(error));
         }
         dims.dims[0] = dims.sizes[0];
@@ -461,16 +516,17 @@ impl Eval<'_> {
         Ok(Ok(Value::Array(Box::new(Array { dims: dims_out, values: dims.values }))))
     }
 
-    /// `populate_array_dim_jsonb`: the elements of a sub-array at the dimension `ndim`, which counts from 1.
+    /// `populate_array_dim_jsonb` and `populate_array_json`: the elements of a sub-array at the dimension `ndim`, which counts from 1.
     fn populate_dim(
         &mut self,
         dims: &mut Dims,
-        tree: &JsonTree<'_>,
+        part: Part<'_>,
         at: usize,
         ndim: usize,
         element: u32,
         typmod: i32,
     ) -> Soft<()> {
+        let tree = part.tree;
         let items = match tree.item(at) {
             JsonItem::Array(items) => items,
             _ => return Ok(Err(dims.expected(ndim - 1))),
@@ -482,10 +538,7 @@ impl Eval<'_> {
         }
         for &child in items {
             if dims.ndims > 0 && ndim >= dims.ndims {
-                let js = match tree.item(child) {
-                    JsonItem::Null => Js::Null,
-                    _ => Js::Element(tree, child),
-                };
+                let js = part.js(child);
                 match self.populate_field(js, element, typmod)? {
                     Ok(value) => dims.values.push((!value.is_null()).then_some(value)),
                     Err(error) => return Ok(Err(error)),
@@ -493,7 +546,7 @@ impl Eval<'_> {
                 dims.sizes[ndim - 1] += 1;
             } else {
                 if let Err(error) =
-                    self.populate_dim(dims, tree, child, ndim + 1, element, typmod)?
+                    self.populate_dim(dims, part, child, ndim + 1, element, typmod)?
                 {
                     return Ok(Err(error));
                 }

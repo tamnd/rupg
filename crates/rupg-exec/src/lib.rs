@@ -103,6 +103,11 @@ fn runs_body(func: u32) -> bool {
             && rupg_func::set_kernel(func).is_none()
 }
 
+/// True for a function of `json_populate_record`, which [`Eval::populate_call`] runs with no kernel.
+fn populates(func: u32) -> bool {
+    populate::populate_function(func).is_some()
+}
+
 /// `fmgr_security_definer` for a function with settings or with `SECURITY DEFINER`: `f` runs as the owner of a `SECURITY DEFINER` function and with the settings of `proconfig` of the function, which go back after it, also after an error. Another function runs `f` alone.
 fn with_settings<T>(session: &dyn Session, func: u32, f: impl FnOnce() -> Result<T>) -> Result<T> {
     if func < FIRST_NORMAL_OID {
@@ -145,9 +150,10 @@ fn row_fields(set: Rows, columns: &[Column]) -> Result<Rows> {
             match row.into_iter().next() {
                 Some(Value::Record(record)) => {
                     if record.values.len() != columns.len() {
+                        let count = record.values.len();
+                        let plural = if count == 1 { "" } else { "s" };
                         return Err(mismatch(format!(
-                            "Returned row contains {} attributes, but query expects {}.",
-                            record.values.len(),
+                            "Returned row contains {count} attribute{plural}, but query expects {}.",
                             columns.len()
                         )));
                     }
@@ -261,14 +267,14 @@ fn check(expr: &Expr) -> Result<()> {
             check_query(&sub.query, false)?;
         }
         ExprKind::Func(f) if f.retset => {
-            if !builtin::is_system_proc(f.oid) && !runs_body(f.oid) {
+            if !builtin::is_system_proc(f.oid) && !runs_body(f.oid) && !populates(f.oid) {
                 set_kernel(f.oid, expr.location)?;
             }
             f.args.iter().try_for_each(check)?;
         }
         ExprKind::Func(f) => {
             // The engine runs the body of a function in SQL, so such a function needs no kernel.
-            if !builtin::is_system_proc(f.oid) && !runs_body(f.oid) {
+            if !builtin::is_system_proc(f.oid) && !runs_body(f.oid) && !populates(f.oid) {
                 kernel(f.oid, expr.location)?;
             }
             f.args.iter().try_for_each(check)?;
@@ -503,7 +509,10 @@ fn check_query(query: &Query, output: bool) -> Result<()> {
         for (call, width) in relation.function.iter().flat_map(|f| &f.calls) {
             match &call.kind {
                 ExprKind::Func(f) if table_function(f.oid, *width) => {
-                    if !builtin::is_system_proc(f.oid) && !runs_body(f.oid) && !row_function(f.oid)
+                    if !builtin::is_system_proc(f.oid)
+                        && !runs_body(f.oid)
+                        && !populates(f.oid)
+                        && !row_function(f.oid)
                     {
                         set_kernel(f.oid, call.location)?;
                     }
@@ -2196,7 +2205,7 @@ impl<'a> Eval<'a> {
             first += width;
             let keep = kept.as_deref_mut().filter(|_| call.first_var().is_none());
             let Some(kept) = keep else {
-                let set = self.function_set(call, *width, &defined, None)?;
+                let set = self.call_rows(call, *width, &defined, list)?;
                 sets.push(row_fields(set, list)?);
                 continue;
             };
@@ -2204,7 +2213,7 @@ impl<'a> Eval<'a> {
                 kept.resize(k + 1, None);
             }
             if kept[k].is_none() {
-                let set = self.function_set(call, *width, &defined, None)?;
+                let set = self.call_rows(call, *width, &defined, list)?;
                 kept[k] = Some(row_fields(set, list)?);
             }
             sets.push(kept[k].clone().unwrap_or_default());
@@ -2225,6 +2234,35 @@ impl<'a> Eval<'a> {
             rows.push(row);
         }
         Ok(rows)
+    }
+
+    /// [`Eval::function_set`] for a call in `FROM`. A function of `json_populate_record` reads the names of the columns of the column definition list `list`.
+    fn call_rows(
+        &mut self,
+        call: &Expr,
+        width: usize,
+        defined: &[(u32, i32)],
+        list: &[Column],
+    ) -> Result<Rows> {
+        if let ExprKind::Func(f) = &call.kind
+            && let Some(p) = populate::populate_function(f.oid)
+        {
+            let list = if defined.is_empty() { &[] } else { list };
+            let values = self.populate_call(f, p, list)?;
+            if list.len() > 1 {
+                // `tupledesc_match`: the record of a base record of type `record` can have other fields than the list.
+                return Ok(values.into_iter().map(|value| vec![value]).collect());
+            }
+            return Ok(values
+                .into_iter()
+                .map(|value| match value {
+                    Value::Record(record) => record.values,
+                    Value::Null => vec![Value::Null; width],
+                    value => vec![value],
+                })
+                .collect());
+        }
+        self.function_set(call, width, defined, None)
     }
 
     /// `ExecMakeTableFunctionResult`: the rows of one call of a function in `FROM`. A strict function with a null argument gives no rows when it gives a set, and else one row of nulls. Another expression gives one row with its value. `want` is the number of rows that the caller reads, which a set kernel can stop after.
@@ -2382,6 +2420,9 @@ impl<'a> Eval<'a> {
         };
         if procedural(f.oid) {
             return self.procedural_set(f, call.ty);
+        }
+        if let Some(p) = populate::populate_function(f.oid) {
+            return self.populate_call(f, p, &[]);
         }
         let mut shown = Vec::new();
         let rows = self.function_set_rows(call, 1, &[], want, &mut shown)?;
@@ -2953,6 +2994,9 @@ impl<'a> Eval<'a> {
     }
 
     fn func(&mut self, f: &Func, expr: &Expr) -> Result<Value> {
+        if let Some(p) = populate::populate_function(f.oid) {
+            return Ok(self.populate_call(f, p, &[])?.pop().unwrap_or(Value::Null));
+        }
         // The planner adds the defaults, so this is for an expression that the planner did not see.
         let exprs = rupg_analyze::expand_arguments(f)?;
         let args = exprs.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>>>()?;
@@ -3733,6 +3777,7 @@ mod insert;
 mod jsonexpr;
 mod jsontable;
 mod partition;
+mod populate;
 mod scan;
 mod sort;
 mod user;
