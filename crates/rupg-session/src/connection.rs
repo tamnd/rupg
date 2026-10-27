@@ -4059,6 +4059,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/column_function.test")));
     }
 
+    /// `IN` compares a `ROW(...)` with each `ROW(...)` of the list field by field, a function in SQL reads `arg.*` and `function.arg.*` of a composite argument, and the whole row of a function of a composite type has that type. `connection/row_arguments.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn row_arguments() {
+        big_stack(|| script(include_str!("connection/row_arguments.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

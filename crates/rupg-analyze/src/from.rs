@@ -1860,6 +1860,9 @@ impl Analyzer<'_> {
             }
             [Some(table), None] => {
                 let Some((level, item)) = self.item_by_name(None, table, at)? else {
+                    if let Some(expr) = self.function_argument(&names[..1], at)? {
+                        return Ok(expr);
+                    }
                     return Err(self.missing_entry(None, table, at));
                 };
                 return self.whole_row(level, &item, at);
@@ -1887,6 +1890,11 @@ impl Analyzer<'_> {
                 (Some(*schema), *table, *column)
             }
             [.., None] if names.len() <= 4 => {
+                if names.len() == 3
+                    && let Some(expr) = self.function_argument(&names[..2], at)?
+                {
+                    return Ok(expr);
+                }
                 return Err(Error::new(
                     SqlState::FEATURE_NOT_SUPPORTED,
                     "a row expansion with * is supported only in the target list",
@@ -1984,7 +1992,7 @@ impl Analyzer<'_> {
             return Ok(Expr::new(ExprKind::JoinRow(Box::new(row)), oid::RECORD).at(at));
         };
         let ty = match entry.oid {
-            0 => oid::RECORD,
+            0 => self.function_row_type(&self.level(level).relations[relation]),
             // The table of a generation expression is new, and `check_nested_generated` gives the error for its whole row.
             _ if self.kind == Kind::Generated => oid::RECORD,
             rel => self
@@ -1993,6 +2001,21 @@ impl Analyzer<'_> {
         };
         let var = Var { relation, attnum: 0, levels_up: level };
         Ok(Expr::new(ExprKind::Var(var), ty).at(at))
+    }
+
+    /// `makeWholeRowVar`: the whole row of one function of a composite type with no `WITH ORDINALITY` has the type of the function, and the whole row of another relation that is not a table is a `record`.
+    fn function_row_type(&self, relation: &Relation) -> u32 {
+        match &relation.function {
+            Some(f) if !f.ordinality && f.calls.len() == 1 => {
+                let ty = f.calls[0].0.ty;
+                if ty != oid::RECORD && self.row_columns(types::base(ty)).is_some() {
+                    ty
+                } else {
+                    oid::RECORD
+                }
+            }
+            _ => oid::RECORD,
+        }
     }
 
     /// `get_rel_type_id`: the row type of a relation, or `None`.
@@ -2447,15 +2470,22 @@ impl Analyzer<'_> {
                         }
                         vec![(level, item)]
                     }
-                    None if schema.is_none() && qualifier.len() == 1 => {
+                    None => {
                         // `plpgsql_post_column_ref`: `r.*` of a variable of a composite type gives the fields of the variable.
-                        if let Some(variable) = self.composite_variable(&[*table], at)? {
+                        if schema.is_none()
+                            && let Some(variable) = self.composite_variable(&[*table], at)?
+                        {
                             let expr = self.variable_param(variable, at);
+                            return self.composite_fields(expr).map(Some);
+                        }
+                        // `sql_fn_post_column_ref`: `arg.*` and `function.arg.*` of an argument of a function in SQL give the fields of the argument.
+                        if qualifier.len() <= 2
+                            && let Some(expr) = self.function_argument(qualifier, at)?
+                        {
                             return self.composite_fields(expr).map(Some);
                         }
                         return Err(self.missing_entry(schema, table, at));
                     }
-                    None => return Err(self.missing_entry(schema, table, at)),
                 }
             }
             _ => return Ok(None),
