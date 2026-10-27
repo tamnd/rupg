@@ -1,0 +1,18 @@
+> SELECT count(*) FROM pg_statistic WHERE starelid < 10000;
+fields count:20:8:-1
+row 396
+SELECT 1
+> SELECT staattnum, stanullfrac, stawidth, stadistinct, stakind1, staop1, stacoll1, stanumbers1, stavalues1 FROM pg_statistic WHERE starelid = 'pg_am'::regclass ORDER BY staattnum;
+fields staattnum@pg_statistic.2:21:2:-1,stanullfrac@pg_statistic.4:700:4:-1,stawidth@pg_statistic.5:23:4:-1,stadistinct@pg_statistic.6:700:4:-1,stakind1@pg_statistic.7:21:2:-1,staop1@pg_statistic.12:26:4:-1,stacoll1@pg_statistic.17:26:4:-1,stanumbers1@pg_statistic.22:1021:-1:-1,stavalues1@pg_statistic.27:2277:-1:-1
+row 1,0,4,-1,2,609,0,NULL,{2,403,405,783,2742,3580,4000}
+row 2,0,64,-1,2,660,950,NULL,{brin,btree,gin,gist,hash,heap,spgist}
+row 3,0,4,-1,2,609,0,NULL,{heap_tableam_handler,bthandler,hashhandler,gisthandler,ginhandler,spghandler,brinhandler}
+row 4,0,1,-0.2857143,1,92,0,{0.85714287},{i}
+SELECT 4
+> SELECT attname, null_frac, n_distinct, most_common_vals, histogram_bounds, correlation FROM pg_stats WHERE tablename = 'pg_am' ORDER BY attname;
+fields attname@pg_stats.4:19:64:-1,null_frac@pg_stats.7:700:4:-1,n_distinct@pg_stats.9:700:4:-1,most_common_vals@pg_stats.10:2277:-1:-1,histogram_bounds@pg_stats.12:2277:-1:-1,correlation@pg_stats.13:700:4:-1
+row amhandler,0,-1,NULL,{heap_tableam_handler,bthandler,hashhandler,gisthandler,ginhandler,spghandler,brinhandler},1
+row amname,0,-1,NULL,{brin,btree,gin,gist,hash,heap,spgist},-0.25
+row amtype,0,-0.2857143,{i},NULL,0.25
+row oid,0,-1,NULL,{2,403,405,783,2742,3580,4000},0.96428573
+SELECT 4

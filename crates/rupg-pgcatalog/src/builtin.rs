@@ -2059,6 +2059,11 @@ pub fn catalog_statistics(table: u32) -> &'static [CatalogStatistic] {
     &rows[start..end]
 }
 
+/// The rows of `pg_statistic` of every system catalog in a new database, in the order of `starelid`.
+pub fn all_catalog_statistics() -> &'static [CatalogStatistic] {
+    &crate::catalog_stats::ROWS
+}
+
 /// An index of a system catalog, from the static rows of `pg_index`. Each one is a `btree` index on columns.
 #[derive(Debug)]
 pub struct CatalogIndex {
