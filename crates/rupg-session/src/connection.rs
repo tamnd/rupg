@@ -6394,6 +6394,44 @@ mod tests {
         });
     }
 
+    /// `COPY ... TO` a file of the server: the file gets the rows in the format of the copy and loses what it had, a relative name is an error, and a role with no privileges of `pg_write_server_files` cannot write a file.
+    #[test]
+    fn copy_to_file() {
+        use rupg_platform::{OpenMode, sim::SimIo};
+        big_stack(|| {
+            let (mut c, _) = connect();
+            let io = Arc::new(SimIo::new(1));
+            let old = io.open(std::path::Path::new("/data/out.data"), OpenMode::Create).unwrap();
+            old.write_at(0, b"old rows that are longer than the new ones\n").unwrap();
+            c.set_io(io.clone());
+            for (sql, want) in [
+                ("CREATE TABLE t (a int, b text)", "CREATE TABLE"),
+                ("INSERT INTO t VALUES (1, 'one'), (2, NULL)", "INSERT 0 2"),
+                ("COPY t TO '/data/out.data'", "COPY 2"),
+            ] {
+                assert_eq!(script_lines(&mut c, &format!("> {sql}")), [want], "{sql}");
+            }
+            let read = |name: &str| io.read_file(std::path::Path::new(name)).unwrap();
+            assert_eq!(read("/data/out.data"), b"1\tone\n2\t\\N\n");
+            assert_eq!(
+                script_lines(&mut c, "> COPY (SELECT b, a FROM t) TO '/data/q.csv' (FORMAT csv)"),
+                ["COPY 2"]
+            );
+            assert_eq!(read("/data/q.csv"), b"one,1\n,2\n");
+            assert_eq!(
+                script_lines(&mut c, "> COPY t TO 'out.data'"),
+                ["ERROR 42602 relative path not allowed for COPY to file"]
+            );
+            for sql in ["CREATE ROLE regress_copy", "SET ROLE regress_copy"] {
+                script_lines(&mut c, &format!("> {sql}"));
+            }
+            assert_eq!(
+                script_lines(&mut c, "> COPY t TO '/data/out.data'"),
+                ["ERROR 42501 permission denied to COPY to a file"]
+            );
+        });
+    }
+
     /// `COPY FROM` a program, an encoding other than `UTF8` and `COPY TO` a file or a program give `0A000`.
     #[test]
     fn copy_not_supported() {
@@ -6406,7 +6444,10 @@ mod tests {
                     "COPY t TO stdout (ENCODING 'latin1')",
                     "COPY with ENCODING LATIN1 is not supported yet",
                 ),
-                ("COPY t TO '/tmp/rupg-copy.txt'", "COPY to a file is not supported yet"),
+                (
+                    "COPY t TO '/tmp/rupg-copy.txt'",
+                    "COPY TO a file in a session with no server is not supported yet",
+                ),
                 ("COPY t TO PROGRAM 'cat'", "COPY to a program is not supported yet"),
             ] {
                 let want = format!("ERROR 0A000 {error}");
