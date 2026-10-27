@@ -1,0 +1,94 @@
+> create function array_to_set(anyarray) returns setof record as $$   select i AS "index", $1[i] AS "value" from generate_subscripts($1, 1) i $$ language sql strict immutable
+CREATE FUNCTION
+> select array_to_set(array['one', 'two'])
+fields array_to_set:2249:-1:-1
+row (1,one)
+row (2,two)
+SELECT 2
+> select * from array_to_set(array['one', 'two']) as t(f1 int,f2 text)
+fields f1:23:4:-1,f2:25:-1:-1
+row 1,one
+row 2,two
+SELECT 2
+> select * from array_to_set(array['one', 'two']) as t(f1 numeric(4,2),f2 text)
+fields f1:1700:-1:262150,f2:25:-1:-1
+row 1.00,one
+row 2.00,two
+SELECT 2
+> select * from array_to_set(array['one', 'two']) as t(f1 point,f2 text)
+fields f1:600:16:-1,f2:25:-1:-1
+ERROR 42P13 return type mismatch in function declared to return record (SQL function "array_to_set" statement 1)
+> select * from array_to_set(array['one', 'two']) as t(f1 int8,f2 varchar(2))
+fields f1:20:8:-1,f2:1043:-1:6
+ERROR 22001 value too long for type character varying(2) (SQL function "array_to_set" statement 1)
+> explain (verbose, costs off) select * from array_to_set(array['one', 'two']) as t(f1 numeric(4,2),f2 text)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on public.array_to_set t
+row   Output: f1, f2
+row   Function Call: array_to_set('{one,two}'::text[])
+EXPLAIN
+> create or replace function array_to_set(anyarray) returns setof record as $$   select i AS "index", $1[i] AS "value" from generate_subscripts($1, 1) i $$ language sql immutable
+CREATE FUNCTION
+> select array_to_set(array['one', 'two'])
+fields array_to_set:2249:-1:-1
+row (1,one)
+row (2,two)
+SELECT 2
+> select * from array_to_set(array['one', 'two']) as t(f1 int,f2 text)
+fields f1:23:4:-1,f2:25:-1:-1
+row 1,one
+row 2,two
+SELECT 2
+> select * from array_to_set(array['one', 'two']) as t(f1 numeric(4,2),f2 text)
+fields f1:1700:-1:262150,f2:25:-1:-1
+row 1.00,one
+row 2.00,two
+SELECT 2
+> select * from array_to_set(array['one', 'two']) as t(f1 point,f2 text)
+ERROR 42P13 return type mismatch in function declared to return record (SQL function "array_to_set" during inlining)
+> select * from array_to_set(array['one', 'two']) as t(f1 int8,f2 varchar(2))
+fields f1:20:8:-1,f2:1043:-1:6
+ERROR 22001 value too long for type character varying(2)
+> explain (verbose, costs off) select * from array_to_set(array['one', 'two']) as t(f1 numeric(4,2),f2 text)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on pg_catalog.generate_subscripts i
+row   Output: i.i, ('{one,two}'::text[])[i.i]
+row   Function Call: generate_subscripts('{one,two}'::text[], 1)
+EXPLAIN
+> explain (verbose, costs off) select * from array_to_set(array['one', 'two']) as t(f1 int,f2 text)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on pg_catalog.generate_subscripts i
+row   Output: i.i, ('{one,two}'::text[])[i.i]
+row   Function Call: generate_subscripts('{one,two}'::text[], 1)
+EXPLAIN
+> select * from array_to_set(array['one', 'two']) as t(f1 int,f2 text, f3 int)
+ERROR 42P13 return type mismatch in function declared to return record (SQL function "array_to_set" during inlining)
+> select * from ROWS FROM (array_to_set(array['one', 'two']) as (f1 numeric(4,2),f2 text), generate_series(1,3)) t
+fields f1:1700:-1:262150,f2:25:-1:-1,generate_series:23:4:-1
+row 1.00,one,1
+row 2.00,two,2
+row NULL,NULL,3
+SELECT 3
+> create function rec2() returns setof record as $$ select 1.5::numeric, 'abc'::text union all select 2.25, 'de' $$ language sql stable
+CREATE FUNCTION
+> select * from rec2() as t(a numeric(3,1), b varchar(2))
+fields a:1700:-1:196613,b:1043:-1:6
+ERROR 22001 value too long for type character varying(2)
+> select * from rec2() as t(a int, b text)
+fields a:23:4:-1,b:25:-1:-1
+row 2,abc
+row 2,de
+SELECT 2
+> create function f0(int) returns setof int as $$ select 1/$1 $$ language sql strict
+CREATE FUNCTION
+> select * from f0(0)
+fields f0:23:4:-1
+ERROR 22012 division by zero (SQL function "f0" statement 1)
+> select f0(0)
+fields f0:23:4:-1
+ERROR 22012 division by zero (SQL function "f0" statement 1)
+> create function f1(int) returns setof record as $$ select 1/$1, 2 $$ language sql strict
+CREATE FUNCTION
+> select * from f1(0) as t(a int, b int)
+fields a:23:4:-1,b:23:4:-1
+ERROR 22012 division by zero (SQL function "f1" statement 1)

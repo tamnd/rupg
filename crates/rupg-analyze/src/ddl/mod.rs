@@ -68,8 +68,8 @@ pub use copy::{
 };
 pub(crate) use drop::quote_identifier;
 pub use function::{
-    Body, REGRESS_SYMBOLS, Script, SqlBody, find_library, function_body, function_script,
-    function_sqlbody,
+    Body, REGRESS_SYMBOLS, Script, SqlBody, find_library, function_body, function_body_for,
+    function_script, function_sqlbody,
 };
 pub use grant::acl_roles;
 pub(crate) use lock::relkind;

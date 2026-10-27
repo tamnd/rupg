@@ -10,10 +10,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use rupg_analyze::{
-    Aggref, Body, BoolOp, BoolTest, Case, CurrentOf, Expr, ExprKind, FieldStore, FromFunction,
-    FromItem, Func, FuncForm, IsJson, JsonCtor, JsonCtorKind, JsonFormatKind, Query, RowCompare,
-    SetKind, SetOp, SetTree, SortGroup, SqlValue, SubLink, SubLinkKind, Subscript, TableSample,
-    Target, WindowFunc,
+    Aggref, Body, BoolOp, BoolTest, Case, Column, CurrentOf, Expr, ExprKind, FieldStore,
+    FromFunction, FromItem, Func, FuncForm, IsJson, JsonCtor, JsonCtorKind, JsonFormatKind, Query,
+    RowCompare, SetKind, SetOp, SetTree, SortGroup, SqlValue, SubLink, SubLinkKind, Subscript,
+    TableSample, Target, WindowFunc,
 };
 use rupg_catalog::FIRST_NORMAL_OID;
 use rupg_common::{Error, Result, SqlState};
@@ -698,8 +698,11 @@ pub(crate) fn has_domain_constraints(domain: u32) -> bool {
         .any(|row| row.not_null || !row.checks.is_empty())
 }
 
-/// The body of each function in SQL, by the OID of the function and the types of the arguments of the call, or `None` for a function of the catalog that is not in SQL.
-type Bodies = Rc<RefCell<Vec<((u32, Vec<u32>), Option<Rc<Body>>)>>>;
+/// The body of each function in SQL, by the OID of the function, the types of the arguments of the call and the types of the column definition list of a call in `FROM`, or `None` for a function of the catalog that is not in SQL.
+type Bodies = Rc<RefCell<Vec<(BodyKey, Option<Rc<Body>>)>>>;
+
+/// The OID of a function, the types of the arguments of a call and the type and the type modifier of each column of its column definition list.
+type BodyKey = (u32, Vec<u32>, Vec<(u32, i32)>);
 
 /// The state of a run that the query and its subqueries share.
 #[derive(Default)]
@@ -765,6 +768,17 @@ impl Cache {
 
     /// The body of a function in SQL of the catalog of the session, or of a built-in function that [`runs_body`], for a call with arguments of the types `inputs`, which the analyzer reads once for each run, or `None` for another function.
     fn body(&self, func: u32, inputs: &[u32], session: &dyn Session) -> Result<Option<Rc<Body>>> {
+        self.body_for(func, inputs, &[], session)
+    }
+
+    /// [`Cache::body`] for a call in `FROM` with the column definition list `columns`, or with none when `columns` is empty.
+    fn body_for(
+        &self,
+        func: u32,
+        inputs: &[u32],
+        columns: &[(u32, i32)],
+        session: &dyn Session,
+    ) -> Result<Option<Rc<Body>>> {
         if session.catalog().and_then(|c| c.function(func)).is_none() && !runs_body(func) {
             return Ok(None);
         }
@@ -772,13 +786,18 @@ impl Cache {
             .bodies
             .borrow()
             .iter()
-            .find(|((f, t), _)| *f == func && t == inputs)
+            .find(|((f, t, c), _)| *f == func && t == inputs && c == columns)
             .map(|(_, body)| body.clone());
         if let Some(body) = kept {
             return Ok(body);
         }
-        let body = rupg_func::function_body(func, inputs, session)?.map(Rc::new);
-        self.bodies.borrow_mut().push(((func, inputs.to_vec()), body.clone()));
+        let body = if columns.is_empty() {
+            rupg_func::function_body(func, inputs, session)?
+        } else {
+            rupg_func::function_body_for(func, inputs, columns, session)?
+        };
+        let body = body.map(Rc::new);
+        self.bodies.borrow_mut().push(((func, inputs.to_vec(), columns.to_vec()), body.clone()));
         Ok(body)
     }
 
@@ -1078,7 +1097,7 @@ fn with_subqueries(
             && tables.needs[i].is_empty()
         {
             let mut eval = Eval::new(params, session, base, cache, outer);
-            tables.rows[i] = Rc::new(eval.function_rows(function)?);
+            tables.rows[i] = Rc::new(eval.function_rows(function, &relation.columns)?);
         }
         if let Some(rows) = &relation.values
             && tables.needs[i].is_empty()
@@ -1218,7 +1237,11 @@ fn run_query(
             if let Some(function) = &relation.function {
                 let mut eval = Eval::new(params, session, tables, cache, outer);
                 eval.tuple = tuple;
-                return eval.function_rows_kept(function, Some(&mut kept[index]));
+                return eval.function_rows_kept(
+                    function,
+                    &relation.columns,
+                    Some(&mut kept[index]),
+                );
             }
             if let Some(rows) = &relation.values {
                 let mut eval = Eval::new(params, session, tables, cache, outer);
@@ -2097,28 +2120,38 @@ impl<'a> Eval<'a> {
     }
 
     /// `ExecFunctionScan`: the rows of a function in `FROM`. The rows of the calls of `ROWS FROM` go side by side, and a call with fewer rows gives nulls. With ordinality, the last column is the number of the row.
-    fn function_rows(&mut self, function: &FromFunction) -> Result<Rows> {
-        self.function_rows_kept(function, None)
+    fn function_rows(&mut self, function: &FromFunction, columns: &[Column]) -> Result<Rows> {
+        self.function_rows_kept(function, columns, None)
     }
 
     /// [`Eval::function_rows`] for a new scan of a function in `FROM` that reads the other relations. A call that reads none of them gives the rows in `kept` from the first scan, as `ExecReScanFunctionScan` runs again only the calls whose arguments read a changed parameter.
     fn function_rows_kept(
         &mut self,
         function: &FromFunction,
+        columns: &[Column],
         mut kept: Option<&mut Vec<Option<Rows>>>,
     ) -> Result<Rows> {
         let mut sets = Vec::with_capacity(function.calls.len());
+        let mut first = 0;
         for (k, (call, width)) in function.calls.iter().enumerate() {
+            // The columns of the column definition list of the call.
+            let defined: Vec<(u32, i32)> = if function.coldefs.get(k) == Some(&true) {
+                let list = columns.get(first..first + width).unwrap_or_default();
+                list.iter().map(|c| (c.ty, c.typmod)).collect()
+            } else {
+                Vec::new()
+            };
+            first += width;
             let keep = kept.as_deref_mut().filter(|_| call.first_var().is_none());
             let Some(kept) = keep else {
-                sets.push(self.function_set(call, *width, None)?);
+                sets.push(self.function_set(call, *width, &defined, None)?);
                 continue;
             };
             if kept.len() <= k {
                 kept.resize(k + 1, None);
             }
             if kept[k].is_none() {
-                kept[k] = Some(self.function_set(call, *width, None)?);
+                kept[k] = Some(self.function_set(call, *width, &defined, None)?);
             }
             sets.push(kept[k].clone().unwrap_or_default());
         }
@@ -2141,7 +2174,13 @@ impl<'a> Eval<'a> {
     }
 
     /// `ExecMakeTableFunctionResult`: the rows of one call of a function in `FROM`. A strict function with a null argument gives no rows when it gives a set, and else one row of nulls. Another expression gives one row with its value. `want` is the number of rows that the caller reads, which a set kernel can stop after.
-    fn function_set(&mut self, call: &Expr, width: usize, want: Option<usize>) -> Result<Rows> {
+    fn function_set(
+        &mut self,
+        call: &Expr,
+        width: usize,
+        defined: &[(u32, i32)],
+        want: Option<usize>,
+    ) -> Result<Rows> {
         if let ExprKind::JsonTable(table) = &call.kind {
             return self.json_table(table);
         }
@@ -2174,11 +2213,24 @@ impl<'a> Eval<'a> {
                 .collect());
         }
         let rows = with_settings(session, f.oid, || {
-            let Some(body) = self.cache.body(f.oid, &types, session)? else { return Ok(None) };
+            let body = self.cache.body_for(f.oid, &types, defined, session).map_err(|e| {
+                // `sql_compile_error_callback`: the error of the check of the result of the body.
+                match session.catalog().and_then(|c| c.function(f.oid)) {
+                    Some(function) if !defined.is_empty() => {
+                        e.with_context(format!("SQL function \"{}\" statement 1", function.name))
+                    }
+                    _ => e,
+                }
+            })?;
+            let Some(body) = body else { return Ok(None) };
             match &*body {
                 Body::Query(query) => {
                     let cache = self.cache.nested()?;
-                    run_query(query, &args, session, &cache, &[], false).map(Some)
+                    // `sql_exec_error_callback`: a function that gives a set is not inlined here, so its error has the line of the function.
+                    run_query(query, &args, session, &cache, &[], false).map(Some).map_err(|e| {
+                        let name = builtin::proc_by_oid(f.oid).map_or("", |p| p.name);
+                        e.with_context(format!("SQL function \"{name}\" statement 1"))
+                    })
                 }
                 Body::Statements(_) => {
                     session.call_sql_function(f.oid, &types, &args).map(|(_, rows)| Some(rows))
@@ -2263,7 +2315,7 @@ impl<'a> Eval<'a> {
         if procedural(f.oid) {
             return self.procedural_set(f, call.ty);
         }
-        let rows = self.function_set(call, 1, want)?;
+        let rows = self.function_set(call, 1, &[], want)?;
         // The types of the `OUT` parameters, with the actual types of the call for a polymorphic type.
         let columns = rupg_analyze::out_columns(f)?.unwrap_or_default();
         let mut types: Vec<u32> = columns.iter().map(|c| c.ty).collect();

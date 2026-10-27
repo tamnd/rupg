@@ -643,10 +643,18 @@ impl Analyzer<'_> {
             let what = if width > columns.len() { "many" } else { "few" };
             return Err(mismatch(rettype, format!("Final statement returns too {what} columns.")));
         }
+        // `coerce_fn_result_column`: a column of the list with a type modifier takes a cast to it too.
+        let typmods: Vec<i32> = match &self.coldefs {
+            Some(given) if rettype == oid::RECORD && columns.len() == given.len() => {
+                given.iter().map(|c| c.1).collect()
+            }
+            _ => Vec::new(),
+        };
         for (i, &ty) in columns.iter().enumerate() {
             let target = &mut query.targets[i];
             let actual = target.expr.ty;
-            if actual == ty {
+            let typmod = typmods.get(i).copied().unwrap_or(-1);
+            if actual == ty && (typmod == -1 || typmod == target.expr.typmod) {
                 continue;
             }
             let sorted = query.sort.iter().chain(&query.group).chain(&query.distinct);
@@ -654,7 +662,7 @@ impl Analyzer<'_> {
                 return Err(not_yet("a cast of a sorted column of the result of a function", None));
             }
             let cast =
-                self.coerce_to_target(target.expr.clone(), ty, -1, Context::Assignment, None)?;
+                self.coerce_to_target(target.expr.clone(), ty, typmod, Context::Assignment, None)?;
             target.expr = cast.ok_or_else(|| {
                 mismatch(
                     rettype,
@@ -674,6 +682,11 @@ impl Analyzer<'_> {
     fn result_shape(&self, function: &Function, inputs: &[u32]) -> Result<(u32, Vec<u32>)> {
         let mut columns = result_types(function, inputs)?;
         let rettype = result_type(function, &columns);
+        if rettype == oid::RECORD
+            && let Some(given) = &self.coldefs
+        {
+            columns = given.iter().map(|c| c.0).collect();
+        }
         if rettype != oid::RECORD
             && let Some(fields) = self.row_columns(rettype)
         {
@@ -731,6 +744,20 @@ impl Analyzer<'_> {
 ///
 /// The errors of the analysis of the body.
 pub fn function_body(env: &dyn Env, oid: u32, inputs: &[u32]) -> Result<Option<Body>> {
+    function_body_for(env, oid, inputs, None)
+}
+
+/// [`function_body`] for a call in `FROM` with a column definition list. `columns` has the type and the type modifier of each column of the list, which the result of a function that returns `record` takes with assignment casts, as `check_sql_fn_retval` does with the `rettupdesc` of `BuildDescFromLists`.
+///
+/// # Errors
+///
+/// As [`function_body`], and the error of a column of the result that has no assignment cast to its type in the list.
+pub fn function_body_for(
+    env: &dyn Env,
+    oid: u32,
+    inputs: &[u32],
+    columns: Option<&[(u32, i32)]>,
+) -> Result<Option<Body>> {
     with_statement(env, oid, |function, body, stmt| {
         let src = (!function.src.is_empty()).then_some(function.src.as_str());
         let stmts = statements(stmt, src)?;
@@ -741,6 +768,7 @@ pub fn function_body(env: &dyn Env, oid: u32, inputs: &[u32]) -> Result<Option<B
             an.set_path(&body.path);
         }
         an.sql_function = Some((function.name.clone(), input_names(function)));
+        an.coldefs = columns.map(<[_]>::to_vec);
         let mut body = an.body(function, &stmts, inputs)?;
         if let Some(catalog) = env.catalog() {
             crate::expand_virtual_body(&mut body, catalog)?;
