@@ -180,7 +180,7 @@ row english
 SELECT 1
 > SELECT get_current_ts_config()::oid
 fields get_current_ts_config:26:4:-1
-row 13301
+row 13267
 SELECT 1
 > SET default_text_search_config TO 'simple'
 SET

@@ -18,9 +18,9 @@ row t
 SELECT 1
 > SELECT dictname, dicttemplate::regproc, dictinitoption FROM pg_ts_dict WHERE dictname IN ('simple', 'english_stem', 'russian_stem', 'dutch_stem') ORDER BY 1
 fields dictname@pg_ts_dict.2:19:64:-1,dicttemplate:24:4:-1,dictinitoption@pg_ts_dict.6:25:-1:-1
-row dutch_stem,13287,language = 'dutch', stopwords = 'dutch'
-row english_stem,13287,language = 'english', stopwords = 'english'
-row russian_stem,13287,language = 'russian', stopwords = 'russian'
+row dutch_stem,13253,language = 'dutch', stopwords = 'dutch'
+row english_stem,13253,language = 'english', stopwords = 'english'
+row russian_stem,13253,language = 'russian', stopwords = 'russian'
 row simple,3727,NULL
 SELECT 4
 > SELECT tmplname, tmplinit, tmpllexize FROM pg_ts_template ORDER BY oid

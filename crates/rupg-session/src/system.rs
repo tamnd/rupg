@@ -43,10 +43,10 @@ const BOOTSTRAP_SUPERUSER: u32 = 10;
 const RIGHTS: &str = "arwdDxtm";
 
 /// The OID of the extension `plpgsql` in PostgreSQL 19. Its three functions and its language take the next four OIDs.
-const PLPGSQL: u32 = 13704;
+const PLPGSQL: u32 = 13670;
 
 /// The OID of `dsnowball_init`, the first object of `snowball_create.sql` in PostgreSQL 19. The objects of the script take the next OIDs in order.
-const SNOWBALL: u32 = 13285;
+const SNOWBALL: u32 = 13251;
 
 /// The languages of `snowball_create.pl` whose words in ASCII go to the dictionary of another language, and that language.
 const ASCII_LANGUAGES: [(&str, &str); 2] = [("hindi", "english"), ("russian", "english")];
@@ -259,103 +259,103 @@ const VIEW_OIDS: [(&str, u32); 86] = [
 ];
 
 /// The OID of the schema `information_schema` in PostgreSQL 19.
-const INFORMATION_SCHEMA: u32 = 13350;
+const INFORMATION_SCHEMA: u32 = 13316;
 
 /// The OID of each view and each table of `information_schema` in PostgreSQL 19, in the order of the script. The array type takes the next OID, the row type the OID after that, and then the `_RETURN` rule of a view or the TOAST table and its index of a table. Most views use one more OID after their rule, because PostgreSQL keeps the long query tree of the rule in TOAST, and each value in TOAST takes an OID.
 const INFORMATION_SCHEMA_OIDS: [(&str, u32); 69] = [
-    ("information_schema_catalog_name", 13370),
-    ("applicable_roles", 13379),
-    ("administrable_role_authorizations", 13384),
-    ("attributes", 13388),
-    ("character_sets", 13393),
-    ("check_constraint_routine_usage", 13398),
-    ("check_constraints", 13403),
-    ("collations", 13408),
-    ("collation_character_set_applicability", 13413),
-    ("column_column_usage", 13418),
-    ("column_domain_usage", 13423),
-    ("column_privileges", 13428),
-    ("column_udt_usage", 13433),
-    ("columns", 13438),
-    ("constraint_column_usage", 13443),
-    ("constraint_table_usage", 13448),
-    ("domain_constraints", 13453),
-    ("domain_udt_usage", 13458),
-    ("domains", 13463),
-    ("enabled_roles", 13468),
-    ("key_column_usage", 13472),
-    ("parameters", 13477),
-    ("referential_constraints", 13482),
-    ("role_column_grants", 13487),
-    ("routine_column_usage", 13491),
-    ("routine_privileges", 13496),
-    ("role_routine_grants", 13501),
-    ("routine_routine_usage", 13505),
-    ("routine_sequence_usage", 13510),
-    ("routine_table_usage", 13515),
-    ("routines", 13520),
-    ("schemata", 13525),
-    ("sequences", 13530),
-    ("sql_features", 13535),
-    ("sql_implementation_info", 13540),
-    ("sql_parts", 13545),
-    ("sql_sizing", 13550),
-    ("table_constraints", 13555),
-    ("table_privileges", 13560),
-    ("role_table_grants", 13565),
-    ("tables", 13569),
-    ("transforms", 13574),
-    ("triggered_update_columns", 13579),
-    ("triggers", 13584),
-    ("udt_privileges", 13589),
-    ("role_udt_grants", 13594),
-    ("usage_privileges", 13598),
-    ("role_usage_grants", 13603),
-    ("user_defined_types", 13607),
-    ("view_column_usage", 13612),
-    ("view_routine_usage", 13617),
-    ("view_table_usage", 13622),
-    ("views", 13627),
-    ("data_type_privileges", 13632),
-    ("element_types", 13637),
-    ("_pg_foreign_table_columns", 13642),
-    ("column_options", 13647),
-    ("_pg_foreign_data_wrappers", 13651),
-    ("foreign_data_wrapper_options", 13656),
-    ("foreign_data_wrappers", 13660),
-    ("_pg_foreign_servers", 13664),
-    ("foreign_server_options", 13669),
-    ("foreign_servers", 13673),
-    ("_pg_foreign_tables", 13677),
-    ("foreign_table_options", 13682),
-    ("foreign_tables", 13686),
-    ("_pg_user_mappings", 13690),
-    ("user_mapping_options", 13695),
-    ("user_mappings", 13700),
+    ("information_schema_catalog_name", 13336),
+    ("applicable_roles", 13345),
+    ("administrable_role_authorizations", 13350),
+    ("attributes", 13354),
+    ("character_sets", 13359),
+    ("check_constraint_routine_usage", 13364),
+    ("check_constraints", 13369),
+    ("collations", 13374),
+    ("collation_character_set_applicability", 13379),
+    ("column_column_usage", 13384),
+    ("column_domain_usage", 13389),
+    ("column_privileges", 13394),
+    ("column_udt_usage", 13399),
+    ("columns", 13404),
+    ("constraint_column_usage", 13409),
+    ("constraint_table_usage", 13414),
+    ("domain_constraints", 13419),
+    ("domain_udt_usage", 13424),
+    ("domains", 13429),
+    ("enabled_roles", 13434),
+    ("key_column_usage", 13438),
+    ("parameters", 13443),
+    ("referential_constraints", 13448),
+    ("role_column_grants", 13453),
+    ("routine_column_usage", 13457),
+    ("routine_privileges", 13462),
+    ("role_routine_grants", 13467),
+    ("routine_routine_usage", 13471),
+    ("routine_sequence_usage", 13476),
+    ("routine_table_usage", 13481),
+    ("routines", 13486),
+    ("schemata", 13491),
+    ("sequences", 13496),
+    ("sql_features", 13501),
+    ("sql_implementation_info", 13506),
+    ("sql_parts", 13511),
+    ("sql_sizing", 13516),
+    ("table_constraints", 13521),
+    ("table_privileges", 13526),
+    ("role_table_grants", 13531),
+    ("tables", 13535),
+    ("transforms", 13540),
+    ("triggered_update_columns", 13545),
+    ("triggers", 13550),
+    ("udt_privileges", 13555),
+    ("role_udt_grants", 13560),
+    ("usage_privileges", 13564),
+    ("role_usage_grants", 13569),
+    ("user_defined_types", 13573),
+    ("view_column_usage", 13578),
+    ("view_routine_usage", 13583),
+    ("view_table_usage", 13588),
+    ("views", 13593),
+    ("data_type_privileges", 13598),
+    ("element_types", 13603),
+    ("_pg_foreign_table_columns", 13608),
+    ("column_options", 13613),
+    ("_pg_foreign_data_wrappers", 13617),
+    ("foreign_data_wrapper_options", 13622),
+    ("foreign_data_wrappers", 13626),
+    ("_pg_foreign_servers", 13630),
+    ("foreign_server_options", 13635),
+    ("foreign_servers", 13639),
+    ("_pg_foreign_tables", 13643),
+    ("foreign_table_options", 13648),
+    ("foreign_tables", 13652),
+    ("_pg_user_mappings", 13656),
+    ("user_mapping_options", 13661),
+    ("user_mappings", 13666),
 ];
 
 /// The OID of the array type of each domain of `information_schema` in PostgreSQL 19. The domain takes the next OID, and its check constraint the OID after that.
 const DOMAIN_OIDS: [(&str, u32); 5] = [
-    ("cardinal_number", 13363),
-    ("character_data", 13366),
-    ("sql_identifier", 13368),
-    ("time_stamp", 13374),
-    ("yes_or_no", 13376),
+    ("cardinal_number", 13329),
+    ("character_data", 13332),
+    ("sql_identifier", 13334),
+    ("time_stamp", 13340),
+    ("yes_or_no", 13342),
 ];
 
-/// The OID of each function of `information_schema` in PostgreSQL 19. The OID 13357 is the TOAST value of the long body of `_pg_char_octet_length`.
+/// The OID of each function of `information_schema` in PostgreSQL 19. The OID 13323 is the TOAST value of the long body of `_pg_char_octet_length`.
 const FUNCTION_OIDS: [(&str, u32); 11] = [
-    ("_pg_expandarray", 13351),
-    ("_pg_index_position", 13352),
-    ("_pg_truetypid", 13353),
-    ("_pg_truetypmod", 13354),
-    ("_pg_char_max_length", 13355),
-    ("_pg_char_octet_length", 13356),
-    ("_pg_numeric_precision", 13358),
-    ("_pg_numeric_precision_radix", 13359),
-    ("_pg_numeric_scale", 13360),
-    ("_pg_datetime_precision", 13361),
-    ("_pg_interval_type", 13362),
+    ("_pg_expandarray", 13317),
+    ("_pg_index_position", 13318),
+    ("_pg_truetypid", 13319),
+    ("_pg_truetypmod", 13320),
+    ("_pg_char_max_length", 13321),
+    ("_pg_char_octet_length", 13322),
+    ("_pg_numeric_precision", 13324),
+    ("_pg_numeric_precision_radix", 13325),
+    ("_pg_numeric_scale", 13326),
+    ("_pg_datetime_precision", 13327),
+    ("_pg_interval_type", 13328),
 ];
 
 /// The catalog of a new cluster: the objects that `initdb` makes with SQL. The first call makes it on a thread with a large stack, because the queries of some views are deep.
@@ -1066,10 +1066,10 @@ mod tests {
         assert_eq!(relations, INFORMATION_SCHEMA_OIDS);
         let dicts: Vec<(&str, u32)> =
             catalog.ts_dictionaries().map(|d| (d.name.as_str(), d.oid)).take(2).collect();
-        assert_eq!(dicts, [("arabic_stem", 13288), ("armenian_stem", 13290)]);
+        assert_eq!(dicts, [("arabic_stem", 13254), ("armenian_stem", 13256)]);
         assert_eq!(
             catalog.ts_configs().last().map(|c| (c.name.as_str(), c.oid)),
-            Some(("yiddish", 13349))
+            Some(("yiddish", 13315))
         );
         assert_eq!(catalog.ts_mappings().len(), 31 * 19);
     }

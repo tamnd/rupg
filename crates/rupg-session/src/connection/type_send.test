@@ -422,11 +422,11 @@ row \x000000010000000100000e1f00000002000000010000001000000003020201000062000100
 SELECT 1
 > SELECT regconfigsend('english'::regconfig)
 fields regconfigsend:17:-1:-1
-row \x000033f5
+row \x000033d3
 SELECT 1
 > SELECT array_send(ARRAY['english'::regconfig, NULL])
 fields array_send:17:-1:-1
-row \x000000010000000100000e96000000020000000100000004000033f5ffffffff
+row \x000000010000000100000e96000000020000000100000004000033d3ffffffff
 SELECT 1
 > SELECT regdictionarysend('simple'::regdictionary)
 fields regdictionarysend:17:-1:-1

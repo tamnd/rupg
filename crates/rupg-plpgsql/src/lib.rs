@@ -28,7 +28,7 @@ use crate::compile::{Arg, Signature, compile};
 use crate::exec::{Compiled, Frame};
 
 /// The OID of the language `plpgsql`.
-pub const PLPGSQL_LANGUAGE: u32 = 13708;
+pub const PLPGSQL_LANGUAGE: u32 = 13674;
 
 /// What a function in PL/pgSQL needs of the session, as SPI gives it to PostgreSQL: the catalog, the run of a plan and the subtransactions of the blocks with `EXCEPTION`.
 pub trait Spi {
