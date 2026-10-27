@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.3.8 (2026-10-27)
+
 ### Added
 
 - A removed left join keeps the placeholder of a subquery that another relation of the subquery gives, so the outer join above it is no longer turned into an inner join, and an outer join `ON TRUE` with a subquery that has no `FROM` is now removed, as in PostgreSQL (#947).
