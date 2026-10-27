@@ -392,8 +392,8 @@ fn catalog_indexes(table: u32) -> Vec<Index> {
         .collect()
 }
 
-/// The relations of a join in the order of its plan, each with true when its rows come in reverse.
-type JoinOrder = Vec<(usize, bool)>;
+/// The relations of a join in the order of its plan, each with true when its rows come in reverse and with the keys of its index scan.
+type JoinOrder = Vec<rupg_plan::Scanned>;
 
 /// The order of the rows of the joins of `query` and its hash tables, from the plan that `EXPLAIN` shows for it, as [`rupg_opt::join_order`] and [`rupg_opt::hash_tables`] give them. The order is `None` when the plan gives its rows in another order. `None` when the planner fails.
 pub(crate) fn planned(
@@ -413,7 +413,7 @@ pub(crate) fn planned(
     if members.error.take().is_some() {
         return None;
     }
-    Some((rupg_opt::join_order(&tree), rupg_opt::hash_tables(&tree, &query)))
+    Some((rupg_opt::join_order(&tree, &query, &members), rupg_opt::hash_tables(&tree, &query)))
 }
 
 /// The options of `EXPLAIN`, as `ParseExplainOptionList` reads them.

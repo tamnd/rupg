@@ -260,8 +260,8 @@ pub trait Session {
     fn trigger_depth(&self) -> i32 {
         0
     }
-    /// The order of the rows of the joins of the plan of `query`, as `rupg_opt::join_order` gives it: the relations from the outermost loop to the innermost one, each with true when its rows come in the reverse order of the scan. `None` when the plan gives its rows in another order or the session has no planner.
-    fn join_order(&self, query: &rupg_analyze::Query) -> Option<Vec<(usize, bool)>> {
+    /// The order of the rows of the joins of the plan of `query`, as `rupg_opt::join_order` gives it: the relations from the outermost loop to the innermost one, each with true when its rows come in the reverse order of the scan and with the keys of the index of an index scan. `None` when the plan gives its rows in another order or the session has no planner.
+    fn join_order(&self, query: &rupg_analyze::Query) -> Option<Vec<rupg_plan::Scanned>> {
         let _ = query;
         None
     }

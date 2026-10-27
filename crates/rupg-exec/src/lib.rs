@@ -1430,10 +1430,11 @@ fn run_query(
             frames.push(Frame { tables, tuple, group: None });
             run_query(sub, params, session, cache, &frames, false)
         };
-        // A join gives its rows in the order of the plan, which a query with no `ORDER BY` shows.
-        let planned = (query.relations.len() > 1).then(|| session.join_order(query)).flatten();
+        // A join and an index scan give their rows in the order of the plan, which a query with no `ORDER BY` shows.
+        let planned = session.join_order(query);
         let test: &mut scan::Test<'_> = &mut |expr, tuple| eval.at(tuple).eval(expr);
-        scan::tuples(query, tables, test, &mut source, planned.as_deref())?
+        let planned = planned.as_deref().map(|p| (p, session));
+        scan::tuples(query, tables, test, &mut source, planned)?
     } else {
         Vec::new()
     };

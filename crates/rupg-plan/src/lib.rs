@@ -10,7 +10,7 @@ mod statistic;
 
 use std::borrow::Cow;
 
-use rupg_analyze::{Expr, ExprKind, JoinKind, Query, SetOp, SubLink, Write};
+use rupg_analyze::{Expr, ExprKind, JoinKind, Query, SetOp, SortGroup, SubLink, Write};
 use rupg_common::Result;
 
 pub use explain::{Format, Options, explain};
@@ -382,6 +382,16 @@ pub struct HashTable {
     pub keys: Vec<usize>,
     /// For `INTERSECT` and `EXCEPT`, true when the table has the rows of the right side.
     pub right: bool,
+}
+
+/// A relation of the joins of the plan of a query, for the executor, in the order of the loops of the joins.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Scanned {
+    pub relation: usize,
+    /// True when the rows come in the reverse order of the scan, as the inner side of a hash join gives them.
+    pub reverse: bool,
+    /// The keys of the index of an index scan, by the columns of the relation, in the order that the scan gives the rows. A scan of the heap has no keys.
+    pub keys: Vec<SortGroup>,
 }
 
 /// The hash tables of the plan of a query, for the executor. A set operation is at a path from the top operation of the query: false for the left side and true for the right side.

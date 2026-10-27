@@ -36,8 +36,8 @@ use crate::param::type_error;
 use crate::store::Store;
 use crate::utility;
 
-/// The relations of a join in the order of its plan, each with true when its rows come in reverse.
-type JoinOrder = Vec<(usize, bool)>;
+/// The relations of a join in the order of its plan, each with true when its rows come in reverse and with the keys of its index scan.
+type JoinOrder = Vec<rupg_plan::Scanned>;
 
 /// What the executor reads of the plan of a query: the order of its joins and its hash tables.
 type Planned = Option<(Option<JoinOrder>, Rc<rupg_plan::HashTables>)>;
@@ -838,7 +838,7 @@ impl Reader<'_> {
 }
 
 impl rupg_func::Session for Reader<'_> {
-    fn join_order(&self, query: &rupg_analyze::Query) -> Option<Vec<(usize, bool)>> {
+    fn join_order(&self, query: &rupg_analyze::Query) -> Option<Vec<rupg_plan::Scanned>> {
         self.planned(query).and_then(|(order, _)| order)
     }
 
