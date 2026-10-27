@@ -295,8 +295,14 @@ pub enum Kind<'q> {
     SetOp { except: bool, all: bool, sorted: bool },
     /// `RecursiveUnion`.
     RecursiveUnion,
-    /// `WindowAgg`, with the name of the window, its index in the windows of the query, and the places of the items of its `PARTITION BY` that are not redundant, as `make_pathkeys_for_window` keeps them.
-    WindowAgg { name: String, window: usize, rows_frame: bool, partition: Vec<usize> },
+    /// `WindowAgg`, with the name of the window, its index in the windows of the query, and the places of the items of its `PARTITION BY` that are not redundant, as `make_pathkeys_for_window` keeps them. `merged` has the other windows of the query whose calls the node computes, because `optimize_window_clauses` made them the same as this window.
+    WindowAgg {
+        name: String,
+        window: usize,
+        rows_frame: bool,
+        partition: Vec<usize>,
+        merged: Vec<usize>,
+    },
     /// `ProjectSet`: a target list with functions that give sets.
     ProjectSet,
     /// `LockRows`: `FOR UPDATE` and the other locks of rows.

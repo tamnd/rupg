@@ -317,10 +317,14 @@ fn conflict_scopes(node: &Node<'_>, out: &mut Vec<(usize, usize)>) {
 }
 
 fn window_names(node: &Node<'_>, out: &mut [Vec<Option<String>>]) {
-    if let Kind::WindowAgg { name, window, .. } = &node.kind
-        && let Some(slot) = out.get_mut(node.scope).and_then(|w| w.get_mut(*window))
+    if let Kind::WindowAgg { name, window, merged, .. } = &node.kind
+        && let Some(names) = out.get_mut(node.scope)
     {
-        *slot = Some(name.clone());
+        for w in std::iter::once(window).chain(merged) {
+            if let Some(slot) = names.get_mut(*w) {
+                *slot = Some(name.clone());
+            }
+        }
     }
     for child in &node.children {
         window_names(child, out);
@@ -343,6 +347,8 @@ impl Texts for PlanTexts<'_, '_> {
 
     fn below_expr(&mut self, scope: usize, expr: &Expr, prefix: bool) -> Result<String> {
         let mut d = self.deparser(scope, prefix)?;
+        // The whole expression comes from below, so no part of it needs its own parentheses.
+        d.computed.clear();
         d.expr(expr, true)?;
         Ok(d.buf)
     }

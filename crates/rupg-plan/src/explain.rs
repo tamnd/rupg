@@ -295,7 +295,16 @@ impl Explainer<'_, '_> {
             self.w.boolean("Disabled", node.disabled);
         }
         if self.options.verbose && !node.output.is_empty() {
-            let output = self.items(node.scope, &node.output, self.many)?;
+            // The calls of a window below are columns of the input of a `WindowAgg`.
+            let window = matches!(node.kind, Kind::WindowAgg { .. });
+            if window {
+                self.texts.below(computed(node));
+            }
+            let output = self.items(node.scope, &node.output, self.many);
+            if window {
+                self.texts.below(Vec::new());
+            }
+            let output = output?;
             self.w.list("Output", &output);
         }
         if matches!(
@@ -584,7 +593,7 @@ impl Explainer<'_, '_> {
                     self.w.integer("Subplans Removed", None, 0);
                 }
             }
-            Kind::WindowAgg { name, window, rows_frame, partition } => {
+            Kind::WindowAgg { name, window, rows_frame, partition, .. } => {
                 let spec = self.texts.window(scope, *window, *rows_frame, partition, upper)?;
                 self.w.text("Window", &format!("{} AS {spec}", self.texts.quote(name)));
             }

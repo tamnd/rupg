@@ -694,23 +694,25 @@ fn grouped<'q>(
             output.push(Item { expr: w.expr.clone(), below: !is_var(&w.expr) });
             continue;
         }
-        if let Kind::WindowAgg { .. } = node.kind {
+        let mut from_below = false;
+        if let Kind::WindowAgg { window, merged, .. } = &node.kind {
             // The window calls of the windows below this one come from below.
             let mut calls = Vec::new();
-            exprs::window_calls(&w.expr, &mut calls);
-            if let Kind::WindowAgg { window, .. } = node.kind {
-                for call in calls {
-                    if call.winref != window + 1 {
-                        let expr = Expr::new(ExprKind::Window(Box::new(call.clone())), w.expr.ty);
-                        if !below.iter().any(|b| b.expr.same(&expr)) {
-                            below.push(item(expr));
-                        }
+            exprs::window_exprs(&w.expr, &mut calls);
+            for call in calls {
+                let ExprKind::Window(f) = &call.kind else { continue };
+                let at = f.winref.wrapping_sub(1);
+                if at != *window && !merged.contains(&at) {
+                    // A target that is only the call reads the column of the node below.
+                    from_below |= std::ptr::eq(call, &*w.expr);
+                    if !below.iter().any(|b| b.expr.same(call)) {
+                        below.push(item(call.clone()));
                     }
                 }
             }
         }
         add_columns(&w.expr, 0, &mut below);
-        output.push(w.clone());
+        output.push(Item { expr: w.expr.clone(), below: w.below || from_below });
     }
     for f in &node.filter {
         add_columns(&f.expr, 0, &mut below);
