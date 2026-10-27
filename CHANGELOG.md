@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- CREATE FUNCTION with an unquoted SQL body now rejects polymorphic arguments, as PG does. A cast failure of a scalar SQL function result now gives the detail "Actual return type is ...". A SQL function that returns SETOF void now gives no rows in FROM. (#923)
 - An error in the body of a SQL function while rupg inlines a call now has the body as the internal query and the context "SQL function \"f\" during inlining", as in PostgreSQL. A body with no statement or with more than one statement is not inlined. A call of a function whose body is an empty string now gives the error of PostgreSQL with the actual result type, and `CREATE FUNCTION` does not parse a body in a string when `check_function_bodies` is off. (#922)
 - A call that leaves out an argument of a polymorphic type whose default is `NULL`, such as `b anyelement = null`, now gives the default the type of the other arguments. Before, the call failed with "failed to find conversion function from unknown to text". (#920)
 - `CREATE FUNCTION` now gives the error "cannot determine result data type" when the result or an output parameter has a polymorphic type and no input gives that type, and "unsafe use of pseudo-type \"internal\"" when the result is `internal` and no input is `internal`. A call of a SQL function whose polymorphic result stays polymorphic, such as `anyarray` for an argument of type `anyarray`, now gives "return type anyarray is not supported for SQL functions". (#919)
