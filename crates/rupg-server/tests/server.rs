@@ -180,6 +180,39 @@ fn an_idle_session() {
 }
 
 #[test]
+fn answers_before_sync() {
+    // PostgreSQL sends the answers of the extended query protocol at `Sync` or `Flush`, and a notice at once. The test `pipelined_insert` of `libpq_pipeline` loops forever when all the answers come before it sends more statements.
+    let server = server();
+    let (mut stream, _) = connect(&server, &[("user", "postgres"), ("database", "postgres")]);
+    let statement = |sql: &str| {
+        [
+            message(b'P', format!("\0{sql}\0\0\0").as_bytes()),
+            message(b'B', &[0; 8]),
+            message(b'E', &[0; 5]),
+        ]
+        .concat()
+    };
+    let waiting = |stream: &mut Box<dyn Stream>| {
+        stream.set_read_timeout(Some(Duration::from_millis(300))).unwrap();
+        let mut buf = [0; 64];
+        let read = stream.read(&mut buf);
+        stream.set_read_timeout(None).unwrap();
+        read.unwrap_or(0)
+    };
+    stream.write_all(&statement("SELECT 1")).unwrap();
+    assert_eq!(waiting(&mut stream), 0);
+    stream.write_all(&message(b'S', b"")).unwrap();
+    assert_eq!(
+        read(&mut *stream),
+        ["ParseComplete", "BindComplete", "row 1", "SELECT 1", "ready I"]
+    );
+    stream.write_all(&statement("DROP TABLE IF EXISTS t")).unwrap();
+    assert!(waiting(&mut stream) > 0);
+    drop(stream);
+    server.stop().unwrap();
+}
+
+#[test]
 fn refused_connections() {
     let server = server();
     let cases = [
