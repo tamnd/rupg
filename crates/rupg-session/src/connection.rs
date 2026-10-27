@@ -4047,6 +4047,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/grouping_ordered_agg.test")));
     }
 
+    /// A removed join leaves the `PlaceHolderVar` of a subquery that another relation of the subquery gives, and the outer join above it stays. An outer join `ON TRUE` with a subquery that has no `FROM` gives the rows of its other side. `connection/join_removal_placeholder.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn join_removal_placeholder() {
+        big_stack(|| script(include_str!("connection/join_removal_placeholder.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

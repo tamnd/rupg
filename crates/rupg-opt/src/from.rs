@@ -1908,7 +1908,9 @@ pub(crate) fn nonnullable_rels(expr: &Expr, top: bool) -> BTreeSet<usize> {
         // A `PlaceHolderVar` of one relation is null when the relation gives nulls, as its column is.
         ExprKind::PlaceHolder(p) if p.levels_up == 0 => {
             let mut out = nonnullable_rels(&p.expr, top);
-            if let [r] = p.relations[..] {
+            if let [r] = p.relations[..]
+                && !p.removed
+            {
                 out.insert(r);
             }
             out

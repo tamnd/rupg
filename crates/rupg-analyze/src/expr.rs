@@ -337,6 +337,8 @@ pub struct PlaceHolder {
     pub relations: Vec<usize>,
     /// `phlevelsup`: 0 for the query of the expression, 1 for the query outside it, and so on.
     pub levels_up: usize,
+    /// True when `remove_rel_from_query` took a relation of a removed join out of `relations`. Outer join reduction then sees the relations of the subquery as they were before the removal.
+    pub removed: bool,
 }
 
 /// `JsonFormatType`: the format of a `FORMAT` clause.

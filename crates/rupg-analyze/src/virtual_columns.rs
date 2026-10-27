@@ -360,7 +360,12 @@ impl<'a> Expand<'a> {
             return Some(new);
         }
         let (ty, typmod, location) = (new.ty, new.typmod, new.location);
-        let p = PlaceHolder { expr: new, relations: vec![var.relation], levels_up: var.levels_up };
+        let p = PlaceHolder {
+            expr: new,
+            relations: vec![var.relation],
+            levels_up: var.levels_up,
+            removed: false,
+        };
         Some(Expr { kind: ExprKind::PlaceHolder(Box::new(p)), ty, typmod, location })
     }
 }

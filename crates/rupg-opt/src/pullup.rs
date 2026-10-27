@@ -57,6 +57,8 @@ pub fn merge_from(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
         return;
     }
     values_all(query);
+    let relations = &query.relations;
+    query.from.iter_mut().for_each(|item| one_row_joins(item, relations));
     while let Some((r, top)) = candidate(query, barrier, true) {
         merge(query, r, top);
     }
@@ -288,7 +290,8 @@ fn view_rows(query: &mut Query) {
             && v.levels_up == depth
         {
             let value = Expr::new(ExprKind::Const(Value::Int8(0)), oid::INT8);
-            let p = PlaceHolder { expr: value, relations: vec![0], levels_up: depth };
+            let p =
+                PlaceHolder { expr: value, relations: vec![0], levels_up: depth, removed: false };
             *e = Expr::new(ExprKind::PlaceHolder(Box::new(p)), oid::INT8);
             return true;
         }
@@ -377,6 +380,8 @@ fn pull_all(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
     if query.write.is_none() {
         values_all(query);
     }
+    let relations = &query.relations;
+    query.from.iter_mut().for_each(|item| one_row_joins(item, relations));
     while let Some((r, top)) = candidate(query, barrier, false) {
         merge(query, r, top);
     }
@@ -1010,6 +1015,31 @@ fn take_place(items: &mut [FromItem], r: usize, with: &mut Option<FromItem>) {
     }
 }
 
+/// `remove_useless_results_recurse`: an outer join `ON TRUE` whose side that can give nulls is a simple subquery with no `FROM` and no `WHERE` always finds the one row of the subquery, so that it is an inner join, which [`merge`] then drops. PostgreSQL drops the outer join itself and evaluates the `PlaceHolderVar`s of the subquery at the other side.
+fn one_row_joins(item: &mut FromItem, relations: &[Relation]) {
+    let FromItem::Join(join) = item else { return };
+    let join = &mut **join;
+    one_row_joins(&mut join.left, relations);
+    one_row_joins(&mut join.right, relations);
+    let inner = match join.kind {
+        JoinKind::Left => &join.right,
+        JoinKind::Right => &join.left,
+        _ => return,
+    };
+    let FromItem::Relation(r) = *inner else { return };
+    let one_row = relations.get(r).is_some_and(|relation| {
+        relation.cte.is_none()
+            && !relation.lateral
+            && relation
+                .subquery
+                .as_ref()
+                .is_some_and(|sub| sub.from.is_empty() && sub.filter.is_none() && simple(sub))
+    });
+    if one_row && join.on.as_ref().is_none_or(exprs::is_true) {
+        join.kind = JoinKind::Inner;
+    }
+}
+
 /// `pull_up_simple_subquery`: merges the subquery of the relation `r` into the query.
 fn merge(query: &mut Query, r: usize, top: bool) {
     let mut nullable = Vec::new();
@@ -1080,7 +1110,12 @@ fn merge(query: &mut Query, r: usize, top: bool) {
                 let mut new = target.clone();
                 if wrap.get() && at.is_some_and(|at| placeholders[at]) {
                     let (ty, typmod) = (new.ty, new.typmod);
-                    let p = PlaceHolder { expr: new, relations: inside.clone(), levels_up: 0 };
+                    let p = PlaceHolder {
+                        expr: new,
+                        relations: inside.clone(),
+                        levels_up: 0,
+                        removed: false,
+                    };
                     new = Expr::new(ExprKind::PlaceHolder(Box::new(p)), ty);
                     new.typmod = typmod;
                 }
