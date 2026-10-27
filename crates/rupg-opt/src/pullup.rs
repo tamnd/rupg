@@ -509,6 +509,7 @@ fn any_join(query: &mut Query, link: &SubLink) -> Option<(JoinKind, FromItem, Ex
     if lateral && !(simple(sub) && sub.from.len() == 1 && lateral_fits(sub, None))
         || exprs::relations(test).is_empty()
         || exprs::volatile(test)
+        || link.volatile
         || sublink.is_some()
         || sub.targets.iter().any(|t| t.junk)
     {

@@ -101,7 +101,7 @@ pub(crate) fn is_placeholder(expr: &Expr) -> bool {
 }
 
 /// `contain_nonstrict_functions`: true when the expression can give a value that is not null for a null input. A call of a function that is not strict, an aggregate call, a window call, `AND`, `OR`, a subquery, `CASE`, `COALESCE`, a row, an array and the tests of nulls can.
-pub(crate) fn nonstrict(expr: &Expr) -> bool {
+pub fn nonstrict(expr: &Expr) -> bool {
     let strict = |func: u32| builtin::proc_by_oid(func).is_some_and(|p| p.strict);
     match &expr.kind {
         ExprKind::Agg(_)

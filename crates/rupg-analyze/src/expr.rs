@@ -166,6 +166,8 @@ pub struct SubLink {
     pub query: Query,
     /// For a correlated `EXISTS`, the same test as `ANY` on a subquery that reads no column of the query, as `convert_EXISTS_to_ANY` makes it. The planner fills it and runs the subquery that costs less, as an `AlternativeSubPlan`.
     pub alternative: Option<Box<SubLink>>,
+    /// True when the test called a volatile function before the fold. `pull_up_sublinks` runs before `preprocess_expression`, so a test with a call of a volatile SQL function that the fold puts in the query does not make a join.
+    pub volatile: bool,
 }
 
 /// The comparison of two rows with an ordering operator, as `RowCompareExpr`.

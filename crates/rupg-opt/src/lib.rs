@@ -31,6 +31,7 @@ use rupg_plan::{Item, Kind, Label, Leaf, Node, Operation, Plan, Scope, Statistic
 use rupg_types::{Value, oid};
 
 pub use cost::{node_cost, type_width};
+pub use exprs::nonstrict;
 pub use joinrm::remove_joins;
 pub use pullup::{merge_from, pull_up};
 

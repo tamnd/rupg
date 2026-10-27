@@ -390,6 +390,8 @@ struct Fold<'a> {
     values: bool,
     /// `case_val`: the argument of each open `CASE` when it is a constant.
     case: Vec<Option<Expr>>,
+    /// `active_fns`: the SQL functions whose bodies the fold puts in the query now, so that a function that calls itself does not go in again.
+    inlining: Vec<u32>,
 }
 
 /// An expression with the type, the typmod and the place of another.
@@ -488,6 +490,49 @@ fn inlined_body(func: u32) -> Option<(u32, Option<u32>, usize)> {
     }
 }
 
+/// The expression of the body of a function in SQL that `inline_function` can put in a query: a `SELECT` of one column with no other clause.
+fn simple_body(query: &Query) -> Option<&Expr> {
+    let simple = query.relations.is_empty()
+        && query.from.is_empty()
+        && query.filter.is_none()
+        && !query.grouped
+        && query.group.is_empty()
+        && query.grouping_sets.is_empty()
+        && query.having.is_none()
+        && query.sort.is_empty()
+        && query.distinct.is_empty()
+        && query.offset.is_none()
+        && query.limit.is_none()
+        && query.set_op.is_none()
+        && query.windows.is_empty()
+        && query.ctes.is_empty()
+        && query.row_marks.is_empty()
+        && query.write.is_none()
+        && !query.has_target_srfs()
+        && agg::calls(query).is_empty();
+    match query.targets.as_slice() {
+        [target] if simple && !target.junk => Some(&target.expr),
+        _ => None,
+    }
+}
+
+/// `contain_context_dependent_node`: true when the expression reads the value of a `CASE` around it. The conditions of a `CASE` with an argument read the argument of that `CASE`.
+fn context_dependent(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::CaseTest => true,
+        ExprKind::Case(case) if case.arg.is_some() => {
+            case.arg.as_deref().is_some_and(context_dependent)
+                || case.whens.iter().any(|(_, then)| context_dependent(then))
+                || context_dependent(&case.default)
+        }
+        ExprKind::ArrayCoerce { arg, .. } => context_dependent(arg),
+        _ => expr.children().into_iter().any(context_dependent),
+    }
+}
+
+/// The OID of the language `sql`.
+const SQL_LANGUAGE: u32 = 14;
+
 /// `textcat`.
 const TEXTCAT: u32 = 1258;
 /// The operator `||` of `text` and `text`.
@@ -528,6 +573,7 @@ impl<'a> Fold<'a> {
             pulled,
             values,
             case: Vec::new(),
+            inlining: Vec::new(),
         }
     }
 
@@ -1109,16 +1155,22 @@ impl<'a> Fold<'a> {
                 Ok(with(expr, ExprKind::Window(w)))
             }
             ExprKind::SubLink(sub) => {
+                let volatile = sub.volatile || sub.test.as_ref().is_some_and(volatile);
                 let test = sub.test.as_ref().map(|t| self.expr(t)).transpose()?;
-                let sub =
-                    SubLink { kind: sub.kind, test, query: sub.query.clone(), alternative: None };
+                let sub = SubLink {
+                    kind: sub.kind,
+                    test,
+                    query: sub.query.clone(),
+                    alternative: None,
+                    volatile,
+                };
                 Ok(with(expr, ExprKind::SubLink(Box::new(sub))))
             }
         }
     }
 
     /// `simplify_function` and `evaluate_function`: a strict function with a null constant argument is null, and an immutable function with constant arguments is its value.
-    fn function(&self, expr: Expr) -> Result<Expr> {
+    fn function(&mut self, expr: Expr) -> Result<Expr> {
         let ExprKind::Func(f) = &expr.kind else { return Ok(expr) };
         let Some(proc) = builtin::proc_by_oid(f.oid) else { return Ok(expr) };
         if proc.retset || proc.rettype == oid::RECORD {
@@ -1132,13 +1184,110 @@ impl<'a> Fold<'a> {
             return Ok(inlined);
         }
         if values.iter().any(Option::is_none) || proc.volatile != b'i' {
-            return Ok(expr);
+            let f = f.clone();
+            return Ok(self.inline_sql(&expr, &f, proc)?.unwrap_or(expr));
         }
         self.evaluate(expr)
     }
 
+    /// `inline_function` for a function in SQL of the catalog: the body takes the place of the call, with the arguments in the places of its parameters, and then the body folds. The function must not be `SECURITY DEFINER`, have no settings, and its body must be one `SELECT` of one expression with no `FROM` and no other clause, with no aggregate, no subquery and no function that gives a set. The body of an immutable function must call only immutable functions, and the body of a stable function no volatile function. The body of a strict function must give null for a null argument, so it must use each parameter and have no part that can give a value for a null. An argument that the body uses more than one time must have no subquery, no volatile function and a cost of no more than 10 operators. The body must not read the value of a `CASE` around it.
+    fn inline_sql(
+        &mut self,
+        expr: &Expr,
+        f: &Func,
+        proc: &builtin::ProcRow,
+    ) -> Result<Option<Expr>> {
+        if proc.oid < rupg_catalog::FIRST_NORMAL_OID
+            || proc.lang != SQL_LANGUAGE
+            || proc.kind != b'f'
+            || f.args.len() != usize::try_from(proc.nargs).unwrap_or(usize::MAX)
+            || self.inlining.contains(&f.oid)
+        {
+            return Ok(None);
+        }
+        let catalog = self.session.catalog();
+        if catalog
+            .and_then(|c| c.function(f.oid))
+            .is_none_or(|function| function.secdef || !function.config.is_empty())
+        {
+            return Ok(None);
+        }
+        let inputs: Vec<u32> = f.args.iter().map(|a| a.ty).collect();
+        let Ok(Some(body)) = rupg_func::function_body(f.oid, &inputs, self.session) else {
+            return Ok(None);
+        };
+        let mut body = match body {
+            rupg_analyze::Body::Value(body) => body,
+            rupg_analyze::Body::Query(query) => match simple_body(&query) {
+                Some(body) => body.clone(),
+                None => return Ok(None),
+            },
+            rupg_analyze::Body::Statements(_) => return Ok(None),
+        };
+        let unsafe_body = match proc.volatile {
+            b'i' => mutable(&body),
+            b's' => volatile(&body),
+            _ => false,
+        };
+        if body.ty != expr.ty
+            || unsafe_body
+            || (proc.strict && rupg_opt::nonstrict(&body))
+            || context_dependent(&body)
+            || body.first_agg().is_some()
+            || body.first_window().is_some()
+            || body.first_set_call().is_some()
+            || body
+                .find(0, &mut |e, _| matches!(e.kind, ExprKind::SubLink(_)).then_some(()))
+                .is_some()
+        {
+            return Ok(None);
+        }
+        let mut uses = vec![0usize; f.args.len()];
+        body.find(0, &mut |e, _| {
+            if let ExprKind::Param(n) = e.kind
+                && let Some(count) = n.checked_sub(1).and_then(|i| uses.get_mut(i))
+            {
+                *count += 1;
+            }
+            None::<()>
+        });
+        for (arg, &count) in f.args.iter().zip(&uses) {
+            if count == 0 && proc.strict {
+                return Ok(None);
+            }
+            if count > 1 {
+                let mut cost = 0.0;
+                let subplan = arg
+                    .find(0, &mut |e, _| {
+                        cost += e.own_cost();
+                        matches!(e.kind, ExprKind::SubLink(_)).then_some(())
+                    })
+                    .is_some();
+                if subplan || cost > 10.0 || volatile(arg) {
+                    return Ok(None);
+                }
+            }
+        }
+        body.each_mut(0, &mut |e, _| {
+            let ExprKind::Param(n) = e.kind else { return false };
+            if let Some(arg) = n.checked_sub(1).and_then(|i| f.args.get(i)) {
+                *e = arg.clone();
+            }
+            true
+        });
+        body.location = expr.location;
+        self.inlining.push(f.oid);
+        let folded = self.expr(&body);
+        self.inlining.pop();
+        let name =
+            catalog.and_then(|c| c.function(f.oid)).map_or_else(String::new, |c| c.name.clone());
+        folded
+            .map(Some)
+            .map_err(|e| e.with_context(format!("SQL function \"{name}\" during inlining")))
+    }
+
     /// `inline_function` for the SQL functions of [`inlined_body`]: the body takes the place of the call, with the argument of any type cast to `text`, and then the cast and the call of the body fold. The body must call no volatile function, and the argument must not read the value of a `CASE` around it, as `contain_context_dependent_node` tests it.
-    fn inline(&self, expr: &Expr, f: &Func) -> Result<Option<Expr>> {
+    fn inline(&mut self, expr: &Expr, f: &Func) -> Result<Option<Expr>> {
         let Some((func, op, at)) = inlined_body(f.oid) else { return Ok(None) };
         let Some(arg) = f.args.get(at) else { return Ok(None) };
         let dependent = arg

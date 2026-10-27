@@ -113,6 +113,7 @@ fn minmax(query: &Query) -> Option<MinMax> {
             test: None,
             query: aggs[at][0].clone(),
             alternative: None,
+            volatile: false,
         };
         Expr::new(ExprKind::SubLink(Box::new(link)), calls[at].ty)
     };

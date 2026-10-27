@@ -92,7 +92,7 @@ fn alternative(query: &Query) -> Option<SubLink> {
         1 => tests.pop(),
         _ => Some(Expr::new(ExprKind::Bool(BoolOp::And, tests), oid::BOOL)),
     };
-    Some(SubLink { kind: SubLinkKind::Any, test, query: sub, alternative: None })
+    Some(SubLink { kind: SubLinkKind::Any, test, query: sub, alternative: None, volatile: false })
 }
 
 /// `simplify_EXISTS_query`: the subquery of `EXISTS` with no targets, `GROUP BY`, window, `DISTINCT`, `ORDER BY` or `LIMIT`, which do not change whether the subquery gives a row. It is none for a subquery with a set operation, an aggregate, grouping sets, a window function, a function that gives a set in its targets, a query of `WITH` that writes, `HAVING`, `OFFSET`, a row lock or a `LIMIT` that is not a positive constant or null.

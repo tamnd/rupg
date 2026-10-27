@@ -3700,6 +3700,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/subplan_hash_types.test")));
     }
 
+    /// `inline_function`: a call of a function in SQL whose body is one expression takes the place of the body, with the arguments in the places of the parameters, so that `EXPLAIN` shows the body. A strict function needs a body that gives null for a null argument, the body of an immutable function calls only immutable functions, an argument that the body uses two times must be cheap, and a function that calls itself, a `SECURITY DEFINER` function and a function with a volatile body when it is not volatile stay calls. A test of `IN` with a volatile SQL operator does not make a join, but the body of the operator can hash. `connection/sql_function_inline.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn sql_function_inline() {
+        big_stack(|| script(include_str!("connection/sql_function_inline.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

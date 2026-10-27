@@ -1,0 +1,127 @@
+> create table il_t (q1 int8, q2 int8, s text)
+CREATE TABLE
+> insert into il_t values (1, 2, 'a'), (3, null, 'b')
+INSERT 0 2
+> create table il_inner (c1 text)
+CREATE TABLE
+> insert into il_inner values ('1'), ('9')
+INSERT 0 2
+> create function il_eq(int8, text) returns boolean language sql as 'select $1::text = $2'
+CREATE FUNCTION
+> create operator = (procedure = il_eq, leftarg = int8, rightarg = text)
+CREATE OPERATOR
+> explain (costs off) select * from il_t where q1 in (select c1 from il_inner)
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on il_t
+row   Filter: (ANY ((q1)::text = (hashed SubPlan any_1).col1))
+row   SubPlan any_1
+row     ->  Seq Scan on il_inner
+EXPLAIN
+> select * from il_t where q1 in (select c1 from il_inner)
+fields q1@il_t.1:20:8:-1,q2@il_t.2:20:8:-1,s@il_t.3:25:-1:-1
+row 1,2,a
+SELECT 1
+> create function il_add(int8, int8) returns int8 language sql immutable as 'select $1 + $2'
+CREATE FUNCTION
+> explain (verbose, costs off) select il_add(q1, q2) from il_t
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.il_t
+row   Output: (q1 + q2)
+EXPLAIN
+> select il_add(q1, q2) from il_t
+fields il_add:20:8:-1
+row 3
+row NULL
+SELECT 2
+> create function il_twice(int8) returns int8 language sql immutable strict as 'select $1 + $1'
+CREATE FUNCTION
+> explain (verbose, costs off) select il_twice(q1 * 2) from il_t
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.il_t
+row   Output: ((q1 * 2) + (q1 * 2))
+EXPLAIN
+> explain (verbose, costs off) select il_twice(il_add(q1, q2)) from il_t
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.il_t
+row   Output: ((q1 + q2) + (q1 + q2))
+EXPLAIN
+> create function il_first(int8, int8) returns int8 language sql strict as 'select $1'
+CREATE FUNCTION
+> explain (verbose, costs off) select il_first(q1, q2) from il_t
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.il_t
+row   Output: il_first(q1, q2)
+EXPLAIN
+> create function il_coal(int8) returns int8 language sql strict as 'select coalesce($1, 0)'
+CREATE FUNCTION
+> explain (verbose, costs off) select il_coal(q2) from il_t
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.il_t
+row   Output: il_coal(q2)
+EXPLAIN
+> create function il_ret(int8) returns int8 language sql immutable return $1 * 10
+CREATE FUNCTION
+> explain (verbose, costs off) select il_ret(q1) from il_t where il_ret(q2) > 5
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.il_t
+row   Output: (q1 * 10)
+row   Filter: ((il_t.q2 * 10) > 5)
+EXPLAIN
+> create function il_rand(int8) returns float8 language sql immutable as 'select $1 * random()'
+CREATE FUNCTION
+> explain (verbose, costs off) select il_rand(q1) from il_t
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.il_t
+row   Output: il_rand(q1)
+EXPLAIN
+> create function il_now(int8) returns boolean language sql stable as 'select $1 > 0 and now() > now()'
+CREATE FUNCTION
+> explain (verbose, costs off) select il_now(q1) from il_t
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.il_t
+row   Output: ((q1 > 0) AND (now() > now()))
+EXPLAIN
+> create function il_case(text) returns int language sql as 'select case $1 when ''a'' then 1 else 2 end'
+CREATE FUNCTION
+> explain (verbose, costs off) select il_case(s) from il_t
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.il_t
+row   Output: CASE s WHEN 'a'::text THEN 1 ELSE 2 END
+EXPLAIN
+> select il_case(s) from il_t
+fields il_case:23:4:-1
+row 1
+row 2
+SELECT 2
+> create function il_div(int) returns int language sql stable as 'select 1 / $1'
+CREATE FUNCTION
+> select il_div(0) from il_t
+ERROR 22012 division by zero (SQL function "il_div" during inlining)
+> create function il_rec(int) returns int language sql as 'select il_rec($1)'
+CREATE FUNCTION
+> explain (verbose, costs off) select il_rec(1)
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Output: il_rec(1)
+EXPLAIN
+> create function il_def(a int8, b int8 default 5) returns int8 language sql as 'select a * b'
+CREATE FUNCTION
+> explain (verbose, costs off) select il_def(q1) from il_t
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.il_t
+row   Output: (q1 * '5'::bigint)
+EXPLAIN
+> create function il_sdef(int8) returns int8 language sql security definer as 'select $1'
+CREATE FUNCTION
+> explain (verbose, costs off) select il_sdef(q1) from il_t
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.il_t
+row   Output: il_sdef(q1)
+EXPLAIN
+> create function il_cast(int) returns numeric language sql as 'select $1'
+CREATE FUNCTION
+> explain (verbose, costs off) select il_cast(1), il_cast(q1::int) from il_t
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.il_t
+row   Output: '1'::numeric, (q1)::integer
+EXPLAIN
