@@ -1090,6 +1090,12 @@ mod tests {
                     7,
                 ),
                 (
+                    "SELECT rank() OVER (ORDER BY 1), count(*) FROM pg_class GROUP BY 1",
+                    "42P20",
+                    "window functions are not allowed in GROUP BY",
+                    7,
+                ),
+                (
                     "SELECT n.nspname, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace GROUP BY n.oid",
                     "42803",
                     "column \"c.relname\" must appear in the GROUP BY clause or be used in an aggregate function",

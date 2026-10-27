@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A position in `GROUP BY` that names a window function call of the select list now gives the error "window functions are not allowed in GROUP BY" of PostgreSQL at parse time, in place of an internal error at run time. (#891)
 - An aggregate of `CREATE AGGREGATE` with `msfunc` and `minvfunc` now uses the moving-aggregate mode with `OVER` when the start of the frame moves. The rows that leave the frame go through the inverse transition function, the aggregate starts again when that function gives null, and a moving transition function that gives null gives the error of PostgreSQL. (#890)
 - The references to a query of `WITH` read the rows of one run of the query, so they see the same values of `random` and `nextval`, as the `CteScan` nodes of PostgreSQL read one tuplestore (#888).
 - `pg_shmem_allocations` and `pg_get_shmem_allocations` now give the 79 rows of PostgreSQL 19 with the default configuration: the named allocations in the order of `ShmemIndex`, the row `<anonymous>` and the row of the free space. Only a member of `pg_read_all_stats` can read them. (#889)

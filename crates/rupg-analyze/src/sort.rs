@@ -313,7 +313,7 @@ impl Analyzer<'_> {
         self.target_sql99(node, targets, kind)
     }
 
-    /// `checkTargetlistEntrySQL92`: an item of `GROUP BY` that names a column of the select list cannot name an aggregate call.
+    /// `checkTargetlistEntrySQL92`: an item of `GROUP BY` that names a column of the select list cannot name an aggregate call or a window function call.
     fn check_sql92(&self, target: &Target, kind: Kind) -> Result<()> {
         if kind == Kind::GroupBy
             && self.has_aggs
@@ -323,6 +323,16 @@ impl Analyzer<'_> {
                 format!("aggregate functions are not allowed in {}", kind.name()),
                 agg.location,
             ));
+        }
+        if kind == Kind::GroupBy
+            && self.has_windows
+            && let Some(call) = target.expr.first_window()
+        {
+            return Err(Error::new(
+                SqlState::WINDOWING_ERROR,
+                format!("window functions are not allowed in {}", kind.name()),
+            )
+            .at_opt(call.location));
         }
         Ok(())
     }
