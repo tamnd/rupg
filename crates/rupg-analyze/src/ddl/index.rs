@@ -489,6 +489,9 @@ impl Definer<'_, '_> {
             }
         }
         if !elem.opclassopts.is_empty() {
+            if let Some(error) = self.opclass_without_options(class) {
+                return Err(error);
+            }
             return Err(not_yet("operator class options", at));
         }
         Ok(NewIndexColumn { name: column_name, key, ty, typmod, collation, class, option })
