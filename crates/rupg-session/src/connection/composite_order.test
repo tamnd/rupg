@@ -1,0 +1,61 @@
+> create type cantcompare as (p point, r float8);
+CREATE TYPE
+> create table cc (f1 cantcompare);
+CREATE TABLE
+> insert into cc values('("(1,2)",3)');
+INSERT 0 1
+> insert into cc values('("(4,5)",6)');
+INSERT 0 1
+> select * from cc order by f1;
+ERROR 42883 could not identify an ordering operator for type cantcompare at 27
+> select distinct f1 from cc;
+ERROR 42883 could not identify an equality operator for type cantcompare at 17
+> select * from cc order by f1 desc;
+ERROR 42883 could not identify an ordering operator for type cantcompare at 27
+> create type cancompare as (p int, r float8);
+CREATE TYPE
+> create table cc2 (f1 cancompare, f2 cantcompare[], f3 cancompare[]);
+CREATE TABLE
+> insert into cc2 values ('(1,2)', null, '{"(1,2)"}');
+INSERT 0 1
+> select f1::text from cc2 order by f1;
+fields f1:25:-1:-1
+row (1,2)
+SELECT 1
+> select f2 from cc2 order by f2;
+ERROR 42883 could not identify an ordering operator for type cantcompare[] at 29
+> select f3::text from cc2 order by f3;
+fields f3:25:-1:-1
+row {"(1,2)"}
+SELECT 1
+> select count(*) from (select distinct f3 from cc2) s;
+fields count:20:8:-1
+row 1
+SELECT 1
+> select array_agg(distinct f1) from cc;
+ERROR 42883 could not identify an equality operator for type cantcompare at 27
+> create table fullname (first text, last text);
+CREATE TABLE
+> create table people (fn fullname, bd date);
+CREATE TABLE
+> insert into people values ('(Joe,Blow)', '1984-01-10');
+INSERT 0 1
+> alter table fullname add column suffix text default '';
+ERROR 0A000 cannot alter table "fullname" because column "people.fn" uses its row type
+> alter table fullname add column suffix text default null;
+ALTER TABLE
+> select fn::text, bd from people;
+fields fn:25:-1:-1,bd@people.2:1082:4:-1
+row (Joe,Blow,),1984-01-10
+SELECT 1
+> alter table fullname add column s2 int default 1;
+ERROR 0A000 cannot alter table "fullname" because column "people.fn" uses its row type
+> alter table fullname add column s3 serial;
+ERROR 0A000 cannot alter table "fullname" because column "people.fn" uses its row type
+> drop table people;
+DROP TABLE
+> alter table fullname add column s2 int default 1;
+ALTER TABLE
+> select * from fullname;
+fields first@fullname.1:25:-1:-1,last@fullname.2:25:-1:-1,suffix@fullname.3:25:-1:-1,s2@fullname.4:23:4:-1
+SELECT 0

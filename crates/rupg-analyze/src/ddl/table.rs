@@ -1160,6 +1160,10 @@ impl Definer<'_, '_> {
             b'v' => None,
             _ => self.catalog.default_of(table, number).map(|d| d.expr.clone()),
         };
+        // `ATRewriteTables`: a default puts the new values of the column in `newvals`, and a stored value of the row type would not get them.
+        if target.kind == b'r' && column.generated == 0 && default.is_some() {
+            self.check_row_type_users(target)?;
+        }
         self.added.push(Fill { table, column: number, default });
         self.add_not_nulls(table, &plan)?;
         for serial in &plan.serials {
