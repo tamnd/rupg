@@ -4,6 +4,19 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.4.0 (2026-10-28)
+
+This release closes milestone M2, connect and introspect (#3). The nightly run of tamnd/rupg-compat now publishes one page for each tested commit of main, with the L1 to L5 numbers for 19, the resources of each server and the failing items.
+
+### Fixed
+
+- Two sessions could hold the lock of the catalog of a database at the same time, so the commit of one transaction could discard the tables and the types that another transaction committed. A session that waited for the lock now takes it before it reports the end of the wait. The regression tests that pass went from 62 to 89 of 239 (#972).
+- `timing_clock_source` shows `auto (tsc)` when PostgreSQL 19 uses the TSC on the host, and `auto (system)` when it does not (#964).
+
+### Changed
+
+- Item 10 of the closed list of spec/05 now has the clock source in parentheses in the value of `timing_clock_source` (#973). Spec/24 has Q75 on the ratchet rows of the shared catalogs (#954).
+
 ## 0.3.10 (2026-10-27)
 
 ### Added
