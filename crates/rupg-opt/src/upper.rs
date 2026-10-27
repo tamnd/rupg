@@ -299,7 +299,18 @@ fn steps<'q>(
     if !query.sort.is_empty() {
         let keys: Vec<SortKey<'q>> =
             query.sort.iter().map(|s| sort_key(level.target(s.target), s)).collect();
-        let keys = level.stats.canonical(keys, |k| &*k.item.expr);
+        // A column of a set operation is a column of its subquery and never a constant, even when the leftmost `SELECT` gives a constant, so only a key that is the same as a key before it is redundant.
+        let keys = if query.set_op.is_some() {
+            let mut out: Vec<SortKey<'q>> = Vec::new();
+            for key in keys {
+                if !out.iter().any(|k| k.item.expr.same(&key.item.expr)) {
+                    out.push(key);
+                }
+            }
+            out
+        } else {
+            level.stats.canonical(keys, |k| &*k.item.expr)
+        };
         let bound = (count > 0.0 && offset >= 0.0).then_some(count + offset);
         node = sort_if(level, node, keys, order, bound, only)?;
         if costs.late {
@@ -917,7 +928,11 @@ impl<'q> Builder<'q> {
             query = level.display_query;
         }
         // The `Unique` of a sort or of a `Merge Append` of a `UNION`, and the `SetOp` with the sorted strategy, give the rows in the order of the columns, in the expressions of the `SELECT` that gives the names, as the keys of `ORDER BY` of the set operation.
-        let order = setop::order(query, op);
+        let mut order = setop::order(query, op);
+        // `create_setop_path`: the `SetOp` has the order of its outer side, whose `setop_pathkeys` have no key for a constant column.
+        if op.work.is_none() && op.kind != SetKind::Union {
+            order.retain(|k| !k.exprs.iter().any(setop::is_const));
+        }
         plans
             .into_iter()
             .map(|(node, sorted)| (node, if sorted { order.clone() } else { Vec::new() }))
