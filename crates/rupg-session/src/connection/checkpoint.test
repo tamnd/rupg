@@ -1,0 +1,52 @@
+> CHECKPOINT
+CHECKPOINT
+> CHECKPOINT (MODE FAST)
+CHECKPOINT
+> CHECKPOINT (mode spread, flush_unlogged)
+CHECKPOINT
+> CHECKPOINT (flush_unlogged false)
+CHECKPOINT
+> CHECKPOINT (mode 'fast')
+CHECKPOINT
+> CHECKPOINT (mode slow)
+ERROR 42601 unrecognized value for CHECKPOINT option "mode": "slow" at 13
+> CHECKPOINT (foo)
+ERROR 42601 unrecognized CHECKPOINT option "foo" at 13
+> CHECKPOINT (flush_unlogged 'maybe')
+ERROR 42601 flush_unlogged requires a Boolean value
+> CHECKPOINT (mode)
+ERROR 42601 mode requires a parameter
+> BEGIN
+BEGIN
+> CHECKPOINT
+CHECKPOINT
+> COMMIT
+COMMIT
+> CREATE ROLE regress_cp_user
+CREATE ROLE
+> CREATE ROLE regress_cp_member
+CREATE ROLE
+> GRANT pg_checkpoint TO regress_cp_member
+GRANT ROLE
+> SET ROLE regress_cp_user
+SET
+is_superuser=off
+> CHECKPOINT
+ERROR 42501 permission denied to execute CHECKPOINT command
+> CHECKPOINT (foo)
+ERROR 42601 unrecognized CHECKPOINT option "foo" at 13
+> RESET ROLE
+RESET
+is_superuser=on
+> SET ROLE regress_cp_member
+SET
+is_superuser=off
+> CHECKPOINT
+CHECKPOINT
+> RESET ROLE
+RESET
+is_superuser=on
+> DROP ROLE regress_cp_user
+DROP ROLE
+> DROP ROLE regress_cp_member
+DROP ROLE

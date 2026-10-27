@@ -111,7 +111,8 @@ pub fn check(node: &Node, text: &str) -> Result<(), Error> {
         | Node::CreateTableSpaceStmt(_)
         | Node::DropTableSpaceStmt(_)
         | Node::ReindexStmt(_)
-        | Node::VacuumStmt(_) => Ok(()),
+        | Node::VacuumStmt(_)
+        | Node::CheckPointStmt(_) => Ok(()),
         _ => Err(not_supported(text)),
     }
 }

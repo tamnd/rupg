@@ -1932,6 +1932,9 @@ impl Connection {
             } else if let Node::VacuumStmt(stmt) = node {
                 drop(self.portals.get_mut().close(b""));
                 self.vacuum(stmt, &mut notices)
+            } else if let Node::CheckPointStmt(stmt) = node {
+                drop(self.portals.get_mut().close(b""));
+                self.checkpoint(stmt)
             } else if let Node::ReindexStmt(stmt) = node {
                 drop(self.portals.get_mut().close(b""));
                 self.reindex(node, stmt, statement, &mut notices, false)
@@ -3764,6 +3767,12 @@ mod tests {
     #[test]
     fn euc_kr() {
         big_stack(|| script(include_str!("connection/euc_kr.test")));
+    }
+
+    /// `CHECKPOINT` with its options, in a transaction block, and for a role with and without the privileges of `pg_checkpoint`. `connection/checkpoint.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn checkpoint() {
+        big_stack(|| script(include_str!("connection/checkpoint.test")));
     }
 
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
