@@ -277,6 +277,7 @@ dependencies = [
  "rupg-catalog",
  "rupg-common",
  "rupg-pgcatalog",
+ "rupg-platform",
  "rupg-snowball",
  "rupg-sql",
  "rupg-types",

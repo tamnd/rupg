@@ -781,6 +781,15 @@ fn object_check(kind: Owned, oid: u32, role: u32, mask: u32, session: &dyn Sessi
     {
         result |= ACL_USAGE;
     }
+    // `pg_largeobject_aclmask_snapshot`: `pg_read_all_data` reads each large object, and `pg_write_all_data` writes each one.
+    if kind == Owned::LargeObject {
+        if mask & ACL_SELECT != 0 && has_privs_of_role(role, PG_READ_ALL_DATA) {
+            result |= ACL_SELECT;
+        }
+        if mask & ACL_UPDATE != 0 && has_privs_of_role(role, PG_WRITE_ALL_DATA) {
+            result |= ACL_UPDATE;
+        }
+    }
     Ok(Some(result != 0))
 }
 
@@ -1224,6 +1233,10 @@ fn has_largeobject_privilege(call: &Call<'_>, args: &[Value]) -> Result<Value> {
         && !large_object_exists(oid, call.session)
     {
         return Ok(Value::Null);
+    }
+    // `has_lo_priv_byid`: with `lo_compat_privileges` on, each role has each privilege.
+    if call.session.setting("lo_compat_privileges").as_deref() == Some("on") {
+        return Ok(Value::Bool(true));
     }
     Ok(result(object_check(Owned::LargeObject, oid, role, mask, call.session)?))
 }

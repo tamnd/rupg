@@ -169,6 +169,10 @@ pub trait Env {
     fn check_function_bodies(&self) -> bool {
         true
     }
+    /// The `lo_compat_privileges` setting, which turns off the checks of the owner of a large object.
+    fn lo_compat_privileges(&self) -> bool {
+        false
+    }
     /// `restrict_nonsystem_relation_kind` has `view`: a query cannot read or write a view of the user.
     fn restrict_views(&self) -> bool {
         false

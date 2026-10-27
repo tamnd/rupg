@@ -1,7 +1,8 @@
 //! `CommentObject`: `COMMENT ON`, as `comment.c` runs it, with the lookup of `get_object_address` and the checks of `check_object_ownership`. The objects are the schemas, the tables, the views, the indexes, the sequences, the columns, the constraints of the tables, the triggers, the types, the functions, the operators and the objects of text search of the catalog. A comment on a built-in object or on an object of another kind gives `0A000`.
 
 use rupg_catalog::{
-    FIRST_NORMAL_OID, ObjRef, PG_CLASS, PG_CONSTRAINT, PG_NAMESPACE, PG_PROC, PG_TYPE,
+    FIRST_NORMAL_OID, ObjRef, PG_CLASS, PG_CONSTRAINT, PG_LARGEOBJECT, PG_NAMESPACE, PG_PROC,
+    PG_TYPE,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{CommentStmt, Node, ObjectType, RangeVar};
@@ -93,11 +94,26 @@ impl Definer<'_, '_> {
             | ObjectType::OBJECT_PROCEDURE
             | ObjectType::OBJECT_ROUTINE
             | ObjectType::OBJECT_AGGREGATE => self.comment_function(stmt.objtype, object)?,
+            ObjectType::OBJECT_LARGEOBJECT => {
+                let Some(object) = object else { return Err(Error::internal("a number")) };
+                let oid = self.owned_large_object(object)?;
+                ObjRef::new(PG_LARGEOBJECT, oid)
+            }
             _ => return Err(not_yet("COMMENT on this kind of object", None)),
         };
         let text = stmt.comment.as_deref().filter(|c| !c.is_empty()).map(str::to_string);
         self.catalog.set_description(target, text);
         Ok(())
+    }
+
+    /// The OID of a large object after the check of its owner, as `check_object_ownership` does it. With `lo_compat_privileges` on, each role may change each large object.
+    pub(super) fn owned_large_object(&self, object: &Node) -> Result<u32> {
+        let oid = self.large_object_oid(object)?;
+        let owner = self.catalog.large_object(oid).map_or(0, |l| l.owner);
+        if !self.an.env.lo_compat_privileges() && !self.is_superuser() && !self.owns(owner) {
+            return Err(not_owner("large object", &oid.to_string()));
+        }
+        Ok(oid)
     }
 
     /// The OID of a relation of the catalog after the check of its owner.

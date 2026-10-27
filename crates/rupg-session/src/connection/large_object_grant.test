@@ -1,0 +1,137 @@
+> CREATE USER regress_lg_u1
+CREATE ROLE
+> CREATE USER regress_lg_u2
+CREATE ROLE
+> CREATE USER regress_lg_u3
+CREATE ROLE
+> SELECT lo_create(5101)
+fields lo_create:26:4:-1
+row 5101
+SELECT 1
+> SELECT lo_create(5102)
+fields lo_create:26:4:-1
+row 5102
+SELECT 1
+> SELECT lo_create(5103)
+fields lo_create:26:4:-1
+row 5103
+SELECT 1
+> GRANT SELECT ON LARGE OBJECT 5101 TO regress_lg_u1
+GRANT
+> GRANT SELECT, UPDATE ON LARGE OBJECT 5102 TO regress_lg_u1 WITH GRANT OPTION
+GRANT
+> GRANT INSERT ON LARGE OBJECT 5101 TO regress_lg_u1
+ERROR 0LP01 invalid privilege type INSERT for large object
+> GRANT SELECT ON LARGE OBJECT 5999 TO regress_lg_u1
+ERROR 42704 large object 5999 does not exist
+> GRANT ALL ON LARGE OBJECT 5103 TO public
+GRANT
+> SELECT oid, pg_get_userbyid(lomowner) <> '' AS owned, lomacl FROM pg_largeobject_metadata WHERE oid BETWEEN 5100 AND 5199 ORDER BY oid
+fields oid@pg_largeobject_metadata.1:26:4:-1,owned:16:1:-1,lomacl@pg_largeobject_metadata.3:1034:-1:-1
+row 5101,t,{postgres=rw/postgres,regress_lg_u1=r/postgres}
+row 5102,t,{postgres=rw/postgres,regress_lg_u1=r*w*/postgres}
+row 5103,t,{postgres=rw/postgres,=rw/postgres}
+SELECT 3
+> COMMENT ON LARGE OBJECT 5101 IS 'first'
+COMMENT
+> COMMENT ON LARGE OBJECT 5999 IS 'none'
+ERROR 42704 large object 5999 does not exist
+> SELECT obj_description(5101, 'pg_largeobject')
+fields obj_description:25:-1:-1
+row first
+SELECT 1
+> ALTER LARGE OBJECT 5101 OWNER TO regress_lg_u1
+ALTER LARGE OBJECT
+> ALTER LARGE OBJECT 5999 OWNER TO regress_lg_u1
+ERROR 42704 large object 5999 does not exist
+> SELECT oid, pg_get_userbyid(lomowner), lomacl FROM pg_largeobject_metadata WHERE oid = 5101
+fields oid@pg_largeobject_metadata.1:26:4:-1,pg_get_userbyid:19:64:-1,lomacl@pg_largeobject_metadata.3:1034:-1:-1
+row 5101,regress_lg_u1,{regress_lg_u1=rw/regress_lg_u1}
+SELECT 1
+> SET SESSION AUTHORIZATION regress_lg_u2
+SET
+session_authorization=regress_lg_u2
+is_superuser=off
+> SELECT loread(lo_open(5101, x'40000'::int), 4)
+fields loread:17:-1:-1
+ERROR 42501 permission denied for large object 5101
+> SELECT has_largeobject_privilege(5101, 'SELECT'), has_largeobject_privilege(5103, 'UPDATE')
+fields has_largeobject_privilege:16:1:-1,has_largeobject_privilege:16:1:-1
+row f,t
+SELECT 1
+> COMMENT ON LARGE OBJECT 5102 IS 'not mine'
+ERROR 42501 must be owner of large object 5102
+> ALTER LARGE OBJECT 5102 OWNER TO regress_lg_u2
+ERROR 42501 must be owner of large object 5102
+> GRANT SELECT ON LARGE OBJECT 5102 TO regress_lg_u3
+ERROR 42501 permission denied for large object large object 5102
+> SET lo_compat_privileges = on
+ERROR 42501 permission denied to set parameter "lo_compat_privileges"
+> SELECT has_largeobject_privilege(5101, 'UPDATE')
+fields has_largeobject_privilege:16:1:-1
+row f
+SELECT 1
+> COMMENT ON LARGE OBJECT 5102 IS 'compat'
+ERROR 42501 must be owner of large object 5102
+> RESET lo_compat_privileges
+ERROR 42501 permission denied to set parameter "lo_compat_privileges"
+> RESET SESSION AUTHORIZATION
+RESET
+session_authorization=postgres
+is_superuser=on
+> SET SESSION AUTHORIZATION regress_lg_u1
+SET
+session_authorization=regress_lg_u1
+is_superuser=off
+> GRANT SELECT ON LARGE OBJECT 5102 TO regress_lg_u3
+GRANT
+> SELECT lo_get(5101)
+fields lo_get:17:-1:-1
+row \x
+SELECT 1
+> ALTER DEFAULT PRIVILEGES GRANT SELECT ON LARGE OBJECTS TO regress_lg_u3
+ALTER DEFAULT PRIVILEGES
+> SELECT lo_create(5104)
+fields lo_create:26:4:-1
+row 5104
+SELECT 1
+> SELECT lomacl FROM pg_largeobject_metadata WHERE oid = 5104
+fields lomacl@pg_largeobject_metadata.3:1034:-1:-1
+row {regress_lg_u1=rw/regress_lg_u1,regress_lg_u3=r/regress_lg_u1}
+SELECT 1
+> ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON LARGE OBJECTS TO public
+ERROR 0LP01 cannot use IN SCHEMA clause when using GRANT/REVOKE ON LARGE OBJECTS
+> RESET SESSION AUTHORIZATION
+RESET
+session_authorization=postgres
+is_superuser=on
+> SELECT oid, lomacl FROM pg_largeobject_metadata WHERE oid BETWEEN 5100 AND 5199 ORDER BY oid
+fields oid@pg_largeobject_metadata.1:26:4:-1,lomacl@pg_largeobject_metadata.3:1034:-1:-1
+row 5101,{regress_lg_u1=rw/regress_lg_u1}
+row 5102,{postgres=rw/postgres,regress_lg_u1=r*w*/postgres,regress_lg_u3=r/regress_lg_u1}
+row 5103,{postgres=rw/postgres,=rw/postgres}
+row 5104,{regress_lg_u1=rw/regress_lg_u1,regress_lg_u3=r/regress_lg_u1}
+SELECT 4
+> REVOKE ALL ON LARGE OBJECT 5102 FROM regress_lg_u1 CASCADE
+REVOKE
+> SELECT oid, lomacl FROM pg_largeobject_metadata WHERE oid = 5102
+fields oid@pg_largeobject_metadata.1:26:4:-1,lomacl@pg_largeobject_metadata.3:1034:-1:-1
+row 5102,{postgres=rw/postgres}
+SELECT 1
+> DROP OWNED BY regress_lg_u1
+DROP OWNED
+> SELECT oid FROM pg_largeobject_metadata WHERE oid BETWEEN 5100 AND 5199 ORDER BY oid
+fields oid@pg_largeobject_metadata.1:26:4:-1
+row 5102
+row 5103
+SELECT 2
+> SELECT lo_unlink(5102), lo_unlink(5103)
+fields lo_unlink:23:4:-1,lo_unlink:23:4:-1
+row 1,1
+SELECT 1
+> DROP USER regress_lg_u1
+DROP ROLE
+> DROP USER regress_lg_u2
+DROP ROLE
+> DROP USER regress_lg_u3
+DROP ROLE

@@ -107,7 +107,7 @@ pub struct LargeObject {
 }
 
 impl Catalog {
-    /// `LargeObjectCreate`: a new large object with no data. An OID of 0 takes the next OID that no large object has.
+    /// `LargeObjectCreate`: a new large object with no data and the default privileges of its owner. An OID of 0 takes the next OID that no large object has.
     ///
     /// # Errors
     ///
@@ -133,6 +133,11 @@ impl Catalog {
         }
         let new = LargeObject { oid, owner, data: LargeObjectData::default() };
         Arc::make_mut(&mut self.large_objects).insert(oid, new);
+        // `get_user_default_acl`: the default privileges of the owner for large objects, which have no schema.
+        if let Some(entry) = self.find_default_acl(owner, 0, b'L') {
+            let acl = entry.acl.clone();
+            self.set_object_acl(ObjRef::new(PG_LARGEOBJECT, oid), Some(acl));
+        }
         Ok(oid)
     }
 
