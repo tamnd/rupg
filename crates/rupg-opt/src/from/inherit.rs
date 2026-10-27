@@ -242,6 +242,7 @@ pub(super) fn scan<'q>(
     let oids: Vec<u32> = members.iter().map(|m| m.oid).collect();
     crate::set_member_places(&oids);
     let partition = hooks.and_then(|m| m.ordered_partitions(relation.oid, &oids));
+    let partition = partition.map(|keys| sort_keys(r, relation, base, keys, stats));
     let ordered = Ordered { level, r, lists: &lists, partition: partition.as_deref(), width };
     for rel in ordered.plans(stats) {
         paths.add(costs(&rel.node), rel.order.clone(), rel);
@@ -435,6 +436,35 @@ fn merge_append<'q>(
     node.cost =
         Cost { startup: first + input_startup, total: first + run + input_total, rows, width };
     node
+}
+
+/// `build_partition_pathkeys`: the columns of the key of the partitions with no column that `partkey_is_bool_constant_for_query` makes a constant. Such a column is a `boolean` column in no equivalence class of the query, and the condition of the table is the column or `NOT` of the column, as `matches_boolean_partition_clause`.
+fn sort_keys(
+    r: usize,
+    relation: &rupg_analyze::Relation,
+    base: &[Qual<'_>],
+    keys: Vec<i16>,
+    stats: &Stats,
+) -> Vec<i16> {
+    let constant = |attnum: i16| {
+        let column = usize::try_from(attnum - 1).ok().and_then(|c| relation.columns.get(c));
+        if column.is_none_or(|c| c.ty != rupg_types::oid::BOOL) {
+            return false;
+        }
+        let var = |e: &Expr| matches!(e.kind, ExprKind::Var(v) if v.relation == r && v.levels_up == 0 && v.attnum == attnum);
+        let Some(key) = base.iter().map(|q| &*q.expr).find_map(|e| match &e.kind {
+            _ if var(e) => Some(e),
+            ExprKind::Bool(rupg_analyze::BoolOp::Not, args) => match args.as_slice() {
+                [arg] if var(arg) => Some(arg),
+                _ => None,
+            },
+            _ => None,
+        }) else {
+            return false;
+        };
+        !stats.has_class(key)
+    };
+    keys.into_iter().filter(|&k| !constant(k)).collect()
 }
 
 /// True when the two orders have the same keys.

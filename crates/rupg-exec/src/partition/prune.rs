@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 
-use rupg_analyze::{BoolOp, Expr, ExprKind};
+use rupg_analyze::{BoolOp, BoolTest, Expr, ExprKind};
 use rupg_catalog::{PartStrategy, RelKind, Relation};
 use rupg_common::Result;
 use rupg_func::Session;
@@ -20,6 +20,9 @@ const LESS_EQUAL: i16 = 2;
 const EQUAL: i16 = 3;
 const GREATER_EQUAL: i16 = 4;
 const GREATER: i16 = 5;
+
+/// `BooleanEqualOperator`, `=` of `boolean`.
+const BOOLEAN_EQUAL: u32 = 91;
 
 /// The strategy number of `=` in a hash operator family.
 const HASH_EQUAL: i16 = 1;
@@ -132,6 +135,19 @@ fn prune(
 
 /// The condition `expr` when it compares a column of the relation `index` with a constant that is not null, or when it is `IS NULL` of the column and the relation is not `nullable`.
 fn clause(expr: &Expr, index: usize, nullable: bool) -> Option<Clause> {
+    if let Some((key, value)) = boolean_test(expr)
+        && key.ty == oid::BOOL
+        && let Some(attnum) = column(key, index)
+    {
+        return Some(Clause {
+            attnum,
+            operator: BOOLEAN_EQUAL,
+            commuted: false,
+            any: false,
+            values: vec![Value::Bool(value)],
+            ty: oid::BOOL,
+        });
+    }
     match &expr.kind {
         ExprKind::NullTest(arg, true) if !nullable => Some(Clause {
             attnum: column(arg, index)?,
@@ -173,6 +189,21 @@ fn clause(expr: &Expr, index: usize, nullable: bool) -> Option<Clause> {
             };
             let operator = operator(*func, args[0].ty, element)?;
             Some(Clause { attnum, operator, commuted: false, any: true, values, ty: element })
+        }
+        _ => None,
+    }
+}
+
+/// `match_boolean_partition_clause`: the column and its value when the condition is a boolean column, `NOT` of it, or `IS TRUE` or `IS FALSE` of it, which compare the column with a constant by `=`.
+fn boolean_test(expr: &Expr) -> Option<(&Expr, bool)> {
+    match &expr.kind {
+        ExprKind::Var(_) => Some((expr, true)),
+        ExprKind::Bool(BoolOp::Not, args) => match args.as_slice() {
+            [arg @ Expr { kind: ExprKind::Var(_), .. }] => Some((arg, false)),
+            _ => None,
+        },
+        ExprKind::BooleanTest(arg, test @ (BoolTest::IsTrue | BoolTest::IsFalse)) => {
+            Some((arg, matches!(test, BoolTest::IsTrue)))
         }
         _ => None,
     }

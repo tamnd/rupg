@@ -3,7 +3,9 @@
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 
-use rupg_analyze::{BoolOp, Expr, ExprKind, FuncForm, RowCompare, RowCompareKind, Var, types};
+use rupg_analyze::{
+    BoolOp, BoolTest, Expr, ExprKind, Func, FuncForm, RowCompare, RowCompareKind, Var, types,
+};
 use rupg_pgcatalog::builtin;
 use rupg_plan::{Cost, Item, Kind, Node, STATISTIC_KIND_CORRELATION};
 use rupg_types::{Array, Inet, Value, oid};
@@ -315,7 +317,7 @@ fn index_paths<'q>(
         let only = crate::enable().indexonlyscan
             && index.method == BTREE_AM
             && read.iter().all(|a| *a > 0 && index.columns.contains(a));
-        let forward = order(level, table.r, index, false, stats);
+        let forward = order(level, table.r, index, &quals, false, stats);
         let useful = stats.useful(&BTreeSet::from([table.r]), &forward);
         // `useful_predicate`: the conditions imply the predicate of a partial index, so its scan is a path also with no clause.
         if !clauses.is_empty() || !useful.is_empty() || only || !index.predicate.is_empty() {
@@ -326,7 +328,7 @@ fn index_paths<'q>(
             }
             out.push(scan(level, table, index, &clauses, costs, only, false, useful, stats));
         }
-        let backward = order(level, table.r, index, true, stats);
+        let backward = order(level, table.r, index, &quals, true, stats);
         let useful = stats.useful(&BTreeSet::from([table.r]), &backward);
         if !useful.is_empty() {
             out.push(scan(level, table, index, &clauses, costs, only, true, useful, stats));
@@ -510,9 +512,9 @@ pub(super) fn param_paths<'q>(
         let only = crate::enable().indexonlyscan
             && index.method == BTREE_AM
             && read.iter().all(|a| *a > 0 && index.columns.contains(a));
-        let forward = order(level, r, index, false, stats);
+        let forward = order(level, r, index, &quals, false, stats);
         let useful = stats.useful(&BTreeSet::from([r]), &forward);
-        let backward = order(level, r, index, true, stats);
+        let backward = order(level, r, index, &quals, true, stats);
         let useful_backward = stats.useful(&BTreeSet::from([r]), &backward);
         // `get_join_index_paths`: for each column, the conditions of joins of the set, the first condition of a class of the set, and the conditions of the table.
         for set in &considered {
@@ -863,6 +865,10 @@ fn match_one<'q>(
     let clause = |expr: Cow<'q, Expr>, kind| {
         vec![Clause { expr, column, orig: orig.clone(), at, class, kind, lossy: false }]
     };
+    if let Some((key, value)) = boolean_key(family, expr, &is_column) {
+        let s = strategy(BOOLEAN_EQUAL, family)?;
+        return Some(clause(Cow::Owned(boolean_equal(key, value)), ClauseKind::Op(s)));
+    }
     match &expr.kind {
         ExprKind::RowCompare(rc) => row_compare(r, index, column, rc, source).map(|c| vec![c]),
         ExprKind::ScalarArrayOp { func, any: true, args } => {
@@ -950,6 +956,51 @@ fn match_one<'q>(
             None
         }
     }
+}
+
+/// `BOOL_BTREE_FAM_OID`.
+const BOOL_BTREE_FAMILY: u32 = 424;
+/// `BOOL_HASH_FAM_OID`.
+const BOOL_HASH_FAMILY: u32 = 2222;
+/// `BooleanEqualOperator`, `=` of `boolean`.
+const BOOLEAN_EQUAL: u32 = 91;
+
+/// `match_boolean_index_clause`: for a key column of a boolean family, the column and its value when the condition is the column, `NOT` of the column, or `IS TRUE` or `IS FALSE` of the column.
+fn boolean_key<'e>(
+    family: u32,
+    expr: &'e Expr,
+    is_column: &impl Fn(&Expr) -> bool,
+) -> Option<(&'e Expr, bool)> {
+    if !matches!(family, BOOL_BTREE_FAMILY | BOOL_HASH_FAMILY) {
+        return None;
+    }
+    match &expr.kind {
+        _ if is_column(expr) => Some((expr, true)),
+        ExprKind::Bool(BoolOp::Not, args) => match args.as_slice() {
+            [arg] if is_column(arg) => Some((arg, false)),
+            _ => None,
+        },
+        ExprKind::BooleanTest(arg, test @ (BoolTest::IsTrue | BoolTest::IsFalse))
+            if is_column(arg) =>
+        {
+            Some((arg, matches!(test, BoolTest::IsTrue)))
+        }
+        _ => None,
+    }
+}
+
+/// The index clause `key = value` of a condition of [`boolean_key`].
+fn boolean_equal(key: &Expr, value: bool) -> Expr {
+    let code = builtin::operator_by_oid(BOOLEAN_EQUAL).map_or(0, |o| o.code);
+    let args = vec![key.clone(), Expr::new(ExprKind::Const(Value::Bool(value)), oid::BOOL)];
+    let call = Func {
+        oid: code,
+        args,
+        form: FuncForm::Operator(BOOLEAN_EQUAL),
+        variadic: false,
+        retset: false,
+    };
+    Expr::new(ExprKind::Func(call), oid::BOOL)
 }
 
 /// `match_index_to_operand` for the key column `column` of the index: the test of an expression that is the column, or `None` when no condition can use the column. A key column that is an expression matches the same expression. The collation `C` of a column of `name` is the collation of each condition of the column. As `IndexCollMatchesExprColl`, the collation of the index must be the collation of the condition, which is the collation of the column of the table, or the default collation for an expression.
@@ -1177,6 +1228,7 @@ fn order(
     level: &Level<'_>,
     r: usize,
     index: &Index,
+    quals: &[&Expr],
     backward: bool,
     stats: &Stats,
 ) -> Vec<OrderKey> {
@@ -1202,7 +1254,9 @@ fn order(
             break;
         };
         let before: Vec<&Expr> = out.iter().map(|k| &k.exprs[0]).collect();
-        if stats.redundant(&expr, &before) {
+        if stats.redundant(&expr, &before)
+            || (!stats.has_class(&expr) && bool_constant(r, index, i, quals))
+        {
             continue;
         }
         let option = index.options.get(i).copied().unwrap_or(0);
@@ -1211,6 +1265,15 @@ fn order(
         out.push(stats.order_key(&expr, desc, nulls_first));
     }
     out
+}
+
+/// `indexcol_is_bool_constant_for_query`: true when a condition of the table makes the key column of a boolean family a constant, as `b` or `NOT b`. `build_index_pathkeys` skips such a column when it is in no equivalence class.
+fn bool_constant(r: usize, index: &Index, column: usize, quals: &[&Expr]) -> bool {
+    let (Some(family), Some(is_column)) = (index.families.get(column), key_test(r, index, column))
+    else {
+        return false;
+    };
+    quals.iter().any(|q| boolean_key(*family, q, &is_column).is_some())
 }
 
 /// The scan of the table by the index with the clauses, as `create_index_path` and `create_indexscan_plan` make it. The conditions of the scan that are not clauses of the index are the filter, in the order of `order_qual_clauses`.

@@ -501,6 +501,23 @@ fn with(expr: &Expr, kind: ExprKind) -> Expr {
     Expr { kind, ty: expr.ty, typmod: expr.typmod, location: expr.location }
 }
 
+/// `BooleanEqualOperator`, `=` of `boolean`.
+const BOOLEAN_EQUAL: u32 = 91;
+/// `BooleanNotEqualOperator`, `<>` of `boolean`.
+const BOOLEAN_NOT_EQUAL: u32 = 85;
+
+/// `simplify_boolean_equality`: `x = true` and `x <> false` are `x`, and `x = false` and `x <> true` are `NOT x`, with the constant on either side. A null constant does not change the call.
+fn boolean_equality(expr: &Expr, f: &Func) -> Option<Expr> {
+    let FuncForm::Operator(op @ (BOOLEAN_EQUAL | BOOLEAN_NOT_EQUAL)) = f.form else { return None };
+    let [left, right] = f.args.as_slice() else { return None };
+    let (arg, value) = match (&left.kind, &right.kind) {
+        (_, ExprKind::Const(Value::Bool(value))) => (left, *value),
+        (ExprKind::Const(Value::Bool(value)), _) => (right, *value),
+        _ => return None,
+    };
+    Some(if value == (op == BOOLEAN_EQUAL) { arg.clone() } else { negate(expr, arg) })
+}
+
 /// `negate_clause` of `prepqual.c`: the expression that is true when `arg` is false, which is the `NOT` of `not`. An operator with a negator, also of `ANY` or `ALL`, becomes the call of its negator, `AND` and `OR` change places with the negation of each argument, as the laws of De Morgan, `NOT` drops, and `IS NULL` and the tests of `IS TRUE` and the others take the opposite test. A test of `IS NULL` of a row does not change, because a row with some null fields is not null and not `IS NOT NULL`. The other expressions keep the `NOT`.
 fn negate(not: &Expr, arg: &Expr) -> Expr {
     let keep = || with(not, ExprKind::Bool(BoolOp::Not, vec![arg.clone()]));
@@ -1316,6 +1333,9 @@ impl<'a> Fold<'a> {
         let values: Vec<Option<&Value>> = f.args.iter().map(value).collect();
         if proc.strict && values.iter().flatten().any(|v| v.is_null()) {
             return Ok(with(&expr, ExprKind::Const(Value::Null)));
+        }
+        if let Some(simplified) = boolean_equality(&expr, f) {
+            return Ok(simplified);
         }
         if let Some(inlined) = self.inline(&expr, f)? {
             return Ok(inlined);
