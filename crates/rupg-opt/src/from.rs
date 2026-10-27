@@ -260,11 +260,13 @@ impl Stats {
         if exprs::pseudo_constant(expr) {
             return true;
         }
-        match self.equal.iter().find(|(members, _)| members.iter().any(|m| m.same(expr))) {
+        // `canonicalize_ec_expression` gives a key and a member of a class the same `RelabelType`, so the comparison ignores it.
+        let same = |a: &Expr, b: &Expr| upper::strip_relabel(a).same(upper::strip_relabel(b));
+        match self.equal.iter().find(|(members, _)| members.iter().any(|m| same(m, expr))) {
             Some((members, constant)) => {
-                *constant || before.iter().any(|b| members.iter().any(|m| m.same(b)))
+                *constant || before.iter().any(|b| members.iter().any(|m| same(m, b)))
             }
-            None => before.iter().any(|b| b.same(expr)),
+            None => before.iter().any(|b| same(b, expr)),
         }
     }
 
