@@ -1313,29 +1313,55 @@ fn statistic_exts<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
         .collect()
 }
 
-/// The rows of `pg_statistic` that `ANALYZE` wrote for the tables of the catalog, as `update_attstats` forms them, with no slot after the slots that have a kind. `stavaluesN` is an `anyarray`, which keeps the text that `array_out` gives with the output function of the type of the column, as the array keeps its element type.
+/// The rows of `pg_statistic`: the rows of the system catalogs that the `ANALYZE` of `initdb` wrote, then the rows that `ANALYZE` wrote for the tables of the catalog, as `update_attstats` forms them, with no slot after the slots that have a kind. `stavaluesN` is an `anyarray`, which keeps the text that `array_out` gives with the output function of the type of the column, as the array keeps its element type.
 fn statistics<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) -> Vec<Row<'a>> {
+    let numbers_value = |numbers: Option<&[f32]>| {
+        numbers.map_or(Value::Null, |numbers| {
+            let items = numbers.iter().map(|&f| Some(Value::Float4(f))).collect();
+            Value::Array(Box::new(Array::one(items)))
+        })
+    };
+    let start = |relid: u32, attnum: i16, inherit: bool, null_frac, width, distinct| {
+        let mut row = Row::new(table);
+        row.set("starelid", oid(relid))
+            .set("staattnum", Value::Int2(attnum))
+            .set("stainherit", Value::Bool(inherit))
+            .set("stanullfrac", Value::Float4(null_frac))
+            .set("stawidth", Value::Int4(width))
+            .set("stadistinct", Value::Float4(distinct));
+        row
+    };
+    let mut rows = Vec::new();
+    for stat in builtin::all_catalog_statistics() {
+        let mut row =
+            start(stat.table, stat.attnum, stat.inherit, stat.null_frac, stat.width, stat.distinct);
+        for n in 1..=5 {
+            let slot = stat.slots.get(n - 1);
+            let values = slot.and_then(|s| s.values).map_or(Value::Null, Value::text);
+            row.set(&format!("stakind{n}"), Value::Int2(slot.map_or(0, |s| s.kind)))
+                .set(&format!("staop{n}"), oid(slot.map_or(0, |s| s.operator)))
+                .set(&format!("stacoll{n}"), oid(slot.map_or(0, |s| s.collation)))
+                .set(&format!("stanumbers{n}"), numbers_value(slot.and_then(|s| s.numbers)))
+                .set(&format!("stavalues{n}"), values);
+        }
+        rows.push(row);
+    }
     let kinds =
         |r: &&Relation| matches!(r.kind, RelKind::Table | RelKind::MatView | RelKind::Partitioned);
-    let mut rows = Vec::new();
     for rel in catalog.relations().filter(kinds) {
         for stat in session.statistics(rel.oid) {
             let at = usize::try_from(stat.attnum - 1).unwrap_or(usize::MAX);
             let Some(column) = rel.columns.get(at) else { continue };
-            let mut row = Row::new(table);
-            row.set("starelid", oid(rel.oid))
-                .set("staattnum", Value::Int2(stat.attnum))
-                .set("stainherit", Value::Bool(stat.inherit))
-                .set("stanullfrac", Value::Float4(stat.null_frac))
-                .set("stawidth", Value::Int4(stat.width))
-                .set("stadistinct", Value::Float4(stat.distinct));
+            let mut row = start(
+                rel.oid,
+                stat.attnum,
+                stat.inherit,
+                stat.null_frac,
+                stat.width,
+                stat.distinct,
+            );
             for n in 1..=5 {
                 let slot = stat.slots.get(n - 1);
-                let numbers =
-                    slot.and_then(|s| s.numbers.as_ref()).map_or(Value::Null, |numbers| {
-                        let items = numbers.iter().map(|&f| Some(Value::Float4(f))).collect();
-                        Value::Array(Box::new(Array::one(items)))
-                    });
                 let values = slot
                     .and_then(|s| s.values.as_ref())
                     .and_then(|values| anyarray_text(column.ty, values, session))
@@ -1343,7 +1369,10 @@ fn statistics<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) ->
                 row.set(&format!("stakind{n}"), Value::Int2(slot.map_or(0, |s| s.kind)))
                     .set(&format!("staop{n}"), oid(slot.map_or(0, |s| s.operator)))
                     .set(&format!("stacoll{n}"), oid(slot.map_or(0, |s| s.collation)))
-                    .set(&format!("stanumbers{n}"), numbers)
+                    .set(
+                        &format!("stanumbers{n}"),
+                        numbers_value(slot.and_then(|s| s.numbers.as_deref())),
+                    )
                     .set(&format!("stavalues{n}"), values);
             }
             rows.push(row);

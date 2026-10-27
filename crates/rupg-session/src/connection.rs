@@ -5222,6 +5222,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/analyze_stats.test")));
     }
 
+    /// `pg_statistic` and `pg_stats` show the rows of the system catalogs that the `ANALYZE` of `initdb` wrote. `connection/catalog_statistics.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn catalog_statistics() {
+        big_stack(|| script(include_str!("connection/catalog_statistics.test")));
+    }
+
     /// `EXPLAIN` of the scans of tables after `ANALYZE`: the rows of `=`, `<>`, `IS NULL` and the tests of a `boolean` come from the most common values, the null fraction and the number of distinct values in `pg_statistic`, and the widths of the columns come from `stawidth`. `connection/plan_statistics.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_statistics() {
