@@ -4,8 +4,9 @@
 
 use rupg_analyze::node;
 use rupg_catalog::{
-    BaseType, Catalog, ConKind, Constraint, Function, ObjRef, PG_CLASS, PG_LANGUAGE, PG_NAMESPACE,
-    PG_PROC, PG_TYPE, PartitionBound, RangePart, RelKind, Relation, Type,
+    BaseType, Catalog, ConKind, Constraint, Function, ObjRef, PG_CLASS, PG_FOREIGN_DATA_WRAPPER,
+    PG_FOREIGN_SERVER, PG_LANGUAGE, PG_NAMESPACE, PG_PROC, PG_TYPE, PartitionBound, RangePart,
+    RelKind, Relation, Type,
 };
 use rupg_common::{Error, Result};
 use rupg_func::Session;
@@ -262,6 +263,8 @@ pub(crate) fn rows(
         "pg_range" => ranges(table, catalog),
         "pg_cast" => casts(table, catalog),
         "pg_conversion" => conversions(table, catalog),
+        "pg_foreign_data_wrapper" => fdws(table, catalog),
+        "pg_foreign_server" => servers(table, catalog),
         "pg_operator" => operators(table, catalog),
         "pg_aggregate" => aggregates(table, catalog),
         "pg_opfamily" => opfamilies(table, catalog),
@@ -1292,6 +1295,48 @@ fn conversions<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("contoencoding", Value::Int4(c.to))
                 .set("conproc", oid(c.proc))
                 .set("condefault", Value::Bool(c.default));
+            row
+        })
+        .collect()
+}
+
+/// The options of a foreign-data wrapper or a server: a `text[]`, or null for no options.
+fn options(options: &[String]) -> Value {
+    if options.is_empty() { Value::Null } else { text_array(options) }
+}
+
+fn fdws<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .fdws()
+        .map(|f| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(f.oid))
+                .set("fdwname", Value::text(f.name.clone()))
+                .set("fdwowner", oid(f.owner))
+                .set("fdwhandler", oid(f.handler))
+                .set("fdwvalidator", oid(f.validator))
+                .set("fdwconnection", oid(f.connection))
+                .set("fdwacl", granted(catalog, ObjRef::new(PG_FOREIGN_DATA_WRAPPER, f.oid)))
+                .set("fdwoptions", options(&f.options));
+            row
+        })
+        .collect()
+}
+
+fn servers<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .servers()
+        .map(|s| {
+            let text = |v: &Option<String>| v.clone().map_or(Value::Null, Value::text);
+            let mut row = Row::new(table);
+            row.set("oid", oid(s.oid))
+                .set("srvname", Value::text(s.name.clone()))
+                .set("srvowner", oid(s.owner))
+                .set("srvfdw", oid(s.fdw))
+                .set("srvtype", text(&s.kind))
+                .set("srvversion", text(&s.version))
+                .set("srvacl", granted(catalog, ObjRef::new(PG_FOREIGN_SERVER, s.oid)))
+                .set("srvoptions", options(&s.options));
             row
         })
         .collect()

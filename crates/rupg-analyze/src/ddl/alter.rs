@@ -1326,7 +1326,7 @@ impl Definer<'_, '_> {
         ))
     }
 
-    /// `ExecAlterOwnerStmt` for a schema, `AlterSchemaOwner`, for a type or a domain, for a function, for an operator, for an operator class or an operator family, and for a statistics object, for a conversion and for a text search dictionary or configuration.
+    /// `ExecAlterOwnerStmt` for a schema, `AlterSchemaOwner`, for a type or a domain, for a function, for an operator, for an operator class or an operator family, and for a statistics object, for a conversion, for a text search dictionary or configuration, and for a foreign-data wrapper or a server.
     pub(super) fn alter_owner(&mut self, stmt: &AlterOwnerStmt) -> Result<()> {
         if matches!(stmt.objectType, ObjectType::OBJECT_TYPE | ObjectType::OBJECT_DOMAIN) {
             return self.alter_type_owner(stmt);
@@ -1345,6 +1345,9 @@ impl Definer<'_, '_> {
         }
         if stmt.objectType == ObjectType::OBJECT_CONVERSION {
             return self.alter_conversion_owner(stmt);
+        }
+        if matches!(stmt.objectType, ObjectType::OBJECT_FDW | ObjectType::OBJECT_FOREIGN_SERVER) {
+            return self.alter_foreign_owner(stmt.objectType == ObjectType::OBJECT_FDW, stmt);
         }
         if super::tsearch::is_ts_kind(stmt.objectType) {
             return self.alter_ts_owner(stmt);

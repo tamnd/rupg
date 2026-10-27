@@ -129,6 +129,12 @@ pub fn describe(object: ObjRef, session: &dyn Session) -> Result<Option<String>>
         PG_LARGEOBJECT => {
             builtin::owned_by_oid(Owned::LargeObject, oid).map(|_| format!("large object {oid}"))
         }
+        rupg_catalog::PG_FOREIGN_DATA_WRAPPER => {
+            catalog.and_then(|c| c.fdw(oid)).map(|f| format!("foreign-data wrapper {}", f.name))
+        }
+        rupg_catalog::PG_FOREIGN_SERVER => {
+            catalog.and_then(|c| c.server(oid)).map(|s| format!("server {}", s.name))
+        }
         PG_OPERATOR => {
             reg::name_of(RegKind::Operator, oid, session).map(|o| format!("operator {o}"))
         }

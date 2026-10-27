@@ -25,6 +25,7 @@ mod enum_label;
 mod enumtype;
 mod fkey;
 mod fkey_partition;
+mod foreign;
 mod function;
 mod generated;
 mod grant;
@@ -225,11 +226,15 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::AlterDefaultPrivilegesStmt(_)
             | Node::CreateCastStmt(_)
             | Node::CreateConversionStmt(_)
+            | Node::CreateFdwStmt(_)
+            | Node::AlterFdwStmt(_)
+            | Node::CreateForeignServerStmt(_)
+            | Node::AlterForeignServerStmt(_)
     ) || matches!(stmt, Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) || matches!(define.kind, ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_AGGREGATE | ObjectType::OBJECT_TYPE))
         || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
         || matches!(stmt, Node::DiscardStmt(discard) if discard.target == DiscardMode::DISCARD_TEMP)
         || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype) || alter.objtype == ObjectType::OBJECT_TYPE)
-        || matches!(stmt, Node::AlterOwnerStmt(alter) if matches!(alter.objectType, ObjectType::OBJECT_SCHEMA | ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT | ObjectType::OBJECT_CONVERSION | ObjectType::OBJECT_TSDICTIONARY | ObjectType::OBJECT_TSCONFIGURATION) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
+        || matches!(stmt, Node::AlterOwnerStmt(alter) if matches!(alter.objectType, ObjectType::OBJECT_SCHEMA | ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT | ObjectType::OBJECT_CONVERSION | ObjectType::OBJECT_TSDICTIONARY | ObjectType::OBJECT_TSCONFIGURATION | ObjectType::OBJECT_FDW | ObjectType::OBJECT_FOREIGN_SERVER) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
         || matches!(stmt, Node::RenameStmt(rename) if rename::is_rename_kind(rename.renameType))
         || matches!(stmt, Node::AlterObjectSchemaStmt(alter) if is_alter_kind(alter.objectType) || matches!(alter.objectType, ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT | ObjectType::OBJECT_CONVERSION) || tsearch::is_ts_kind(alter.objectType) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
         || matches!(stmt, Node::SelectStmt(select) if crate::select_into(select).is_some())
@@ -387,6 +392,10 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         }
         Node::CreateCastStmt(stmt) => definer.create_cast(stmt),
         Node::CreateConversionStmt(stmt) => definer.create_conversion(stmt),
+        Node::CreateFdwStmt(stmt) => definer.create_fdw(stmt),
+        Node::AlterFdwStmt(stmt) => definer.alter_fdw(stmt),
+        Node::CreateForeignServerStmt(stmt) => definer.create_server(stmt),
+        Node::AlterForeignServerStmt(stmt) => definer.alter_server(stmt),
         Node::AlterOperatorStmt(alter) => definer.alter_operator(alter),
         Node::CreateOpFamilyStmt(create) => definer.create_opfamily(create),
         Node::CreateOpClassStmt(create) => definer.create_opclass(create),

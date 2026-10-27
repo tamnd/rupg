@@ -287,8 +287,14 @@ pub struct Settings {
     socket: Option<[i32; 4]>,
     /// The value of a `SET seed` that `random` did not use yet. `assign_random_seed` calls `setseed` once for each value that a statement sets, and a rollback does not undo the seed.
     seed: Option<f64>,
+    /// A statement, a rollback or the end of a transaction gave a value to `role` or `session_authorization`, so their assign hooks run and set `is_superuser` again.
+    roles_set: bool,
 }
 
+/// Whether the key is the key of `role` or `session_authorization`.
+fn is_role_key(key: &str) -> bool {
+    matches!(key, "role" | "session_authorization")
+}
 impl Settings {
     /// The boot values, for a session of a superuser or of another user.
     #[must_use]
@@ -307,6 +313,7 @@ impl Settings {
             subtransaction: false,
             socket: None,
             seed: None,
+            roles_set: false,
         }
     }
 
@@ -785,6 +792,7 @@ impl Settings {
 
     /// Sets the current value in the current transaction, with the save of `push_old_value`.
     fn assign(&mut self, key: &str, value: Value, action: Action) {
+        self.roles_set |= is_role_key(key);
         let slot = owned(&mut self.slots, &self.base, key).expect("the caller made the slot");
         match (&mut slot.save, action) {
             (None, _) => {
@@ -946,6 +954,7 @@ impl Settings {
         let keys = std::mem::replace(&mut self.saved, savepoint.saved.clone());
         self.generation += 1;
         for key in keys {
+            self.roles_set |= is_role_key(&key);
             let Some(slot) = now.get(&key) else { continue };
             if self.find_slot(&key).is_none_or(|old| old.current != slot.current) {
                 self.changed(slot.parameter);
@@ -968,6 +977,7 @@ impl Settings {
     /// The end of a transaction: keeps or restores the values that it changed.
     pub fn end(&mut self, commit: bool) {
         for key in std::mem::take(&mut self.saved) {
+            self.roles_set |= is_role_key(&key);
             let Some(slot) = owned(&mut self.slots, &self.base, &key) else { continue };
             let Some(save) = slot.save.take() else { continue };
             let restore = match save.state {
@@ -983,6 +993,11 @@ impl Settings {
                 self.changed(parameter);
             }
         }
+    }
+
+    /// Whether `role` or `session_authorization` got a value since the last call. The call clears it.
+    pub fn take_roles_set(&mut self) -> bool {
+        std::mem::take(&mut self.roles_set)
     }
 
     /// The current value of a parameter as `SHOW` gives it, or `None` if there is no parameter or placeholder with this name.

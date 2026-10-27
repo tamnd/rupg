@@ -2,9 +2,10 @@
 
 use rupg_catalog::{
     FIRST_NORMAL_OID, ObjRef, PG_AMOP, PG_AMPROC, PG_ATTRDEF, PG_CAST, PG_CLASS, PG_CONSTRAINT,
-    PG_CONVERSION, PG_NAMESPACE, PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_POLICY, PG_PROC,
-    PG_REWRITE, PG_STATISTIC_EXT, PG_TRIGGER, PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER,
-    PG_TS_TEMPLATE, PG_TYPE, PUBLIC, Refusal, RelKind, Target, flag, is_pinned,
+    PG_CONVERSION, PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_NAMESPACE, PG_OPCLASS,
+    PG_OPERATOR, PG_OPFAMILY, PG_POLICY, PG_PROC, PG_REWRITE, PG_STATISTIC_EXT, PG_TRIGGER,
+    PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, PG_TYPE, PUBLIC, Refusal, RelKind,
+    Target, flag, is_pinned,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
@@ -536,6 +537,7 @@ impl Definer<'_, '_> {
             PG_OPERATOR => self.describe_operator(object.oid),
             PG_STATISTIC_EXT => self.describe_stats(object.oid),
             PG_CONVERSION => self.describe_conversion(object.oid),
+            PG_FOREIGN_DATA_WRAPPER | PG_FOREIGN_SERVER => self.describe_foreign(object),
             PG_OPCLASS | PG_OPFAMILY | PG_AMOP | PG_AMPROC => self.describe_opcf(object),
             PG_PROC => match self.catalog.function(object.oid) {
                 Some(function) => {

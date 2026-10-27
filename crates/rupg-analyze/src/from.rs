@@ -320,7 +320,7 @@ fn check_lateral_ok(item: &Item, ok: bool, at: Option<usize>) -> Result<()> {
 }
 
 /// `varstr_levenshtein` with costs of 1: the edit distance of two names, by characters.
-fn levenshtein(a: &str, b: &str) -> usize {
+pub(crate) fn levenshtein(a: &str, b: &str) -> usize {
     let b: Vec<char> = b.chars().collect();
     let mut row: Vec<usize> = (0..=b.len()).collect();
     for (i, ca) in a.chars().enumerate() {
