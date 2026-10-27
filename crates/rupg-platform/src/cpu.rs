@@ -133,6 +133,33 @@ impl CpuFeatures {
     }
 }
 
+/// True when PostgreSQL 19 uses the TSC for `timing_clock_source = auto`, so that `SHOW timing_clock_source` gives `auto (tsc)`. This is `tsc_use_by_default` of `src/common/instr_time.c`: the CPU has RDTSCP and an invariant TSC, and it has TSC_ADJUST or the kernel uses the TSC as its clock source. PostgreSQL also needs a TSC frequency, which it calibrates when CPUID does not give it, so this function does not check the frequency.
+pub fn tsc_is_default() -> bool {
+    static TSC: OnceLock<bool> = OnceLock::new();
+    *TSC.get_or_init(read_tsc)
+}
+
+#[cfg(target_arch = "x86_64")]
+fn read_tsc() -> bool {
+    use std::arch::x86_64::{__cpuid, __cpuid_count};
+    let (max, max_extended) = (__cpuid(0).eax, __cpuid(0x8000_0000).eax);
+    if max_extended < 0x8000_0007 {
+        return false;
+    }
+    let rdtscp = __cpuid(0x8000_0001).edx >> 27 & 1 == 1;
+    let invariant = __cpuid(0x8000_0007).edx >> 8 & 1 == 1;
+    if !rdtscp || !invariant {
+        return false;
+    }
+    let adjust = max >= 7 && __cpuid_count(7, 0).ebx >> 1 & 1 == 1;
+    adjust || crate::os::kernel_clock_source().as_deref() == Some("tsc\n")
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn read_tsc() -> bool {
+    false
+}
+
 /// The size of the physical memory in bytes, if the platform tells it.
 #[cfg(unix)]
 pub fn physical_memory() -> Option<u64> {

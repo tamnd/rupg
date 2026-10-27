@@ -24,9 +24,9 @@ row unix_socket_permissions,0777,NULL,Connections and Authentication / Connectio
 row vacuum_cost_delay,0,ms,Vacuuming / Cost-Based Vacuum Delay,Vacuum cost delay in milliseconds.,NULL,user,real,default,0,100,NULL,0,0,NULL,NULL,f
 row work_mem,4096,kB,Resource Usage / Memory,Sets the maximum memory to be used for query workspaces.,This much memory can be used by each internal sort operation and hash table before switching to temporary disk files.,user,integer,default,64,2147483647,NULL,4096,4096,NULL,NULL,f
 SELECT 19
-> SELECT name, setting, boot_val, reset_val, enumvals[1:2] AS enumvals FROM pg_settings WHERE name = 'timing_clock_source'
-fields name@pg_settings.1:25:-1:-1,setting@pg_settings.2:25:-1:-1,boot_val@pg_settings.13:25:-1:-1,reset_val@pg_settings.14:25:-1:-1,enumvals:1009:-1:-1
-row timing_clock_source,auto (system),auto,auto,{auto,system}
+> SELECT name, setting IN ('auto (system)', 'auto (tsc)') AS shown, boot_val, reset_val, enumvals[1:2] AS enumvals FROM pg_settings WHERE name = 'timing_clock_source'
+fields name@pg_settings.1:25:-1:-1,shown:16:1:-1,boot_val@pg_settings.13:25:-1:-1,reset_val@pg_settings.14:25:-1:-1,enumvals:1009:-1:-1
+row timing_clock_source,t,auto,auto,{auto,system}
 SELECT 1
 > SELECT * FROM pg_show_all_settings() WHERE name = 'work_mem'
 fields name:25:-1:-1,setting:25:-1:-1,unit:25:-1:-1,category:25:-1:-1,short_desc:25:-1:-1,extra_desc:25:-1:-1,context:25:-1:-1,vartype:25:-1:-1,source:25:-1:-1,min_val:25:-1:-1,max_val:25:-1:-1,enumvals:1009:-1:-1,boot_val:25:-1:-1,reset_val:25:-1:-1,sourcefile:25:-1:-1,sourceline:23:4:-1,pending_restart:16:1:-1
