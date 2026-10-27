@@ -1265,6 +1265,7 @@ impl<'a> Fold<'a> {
                     query: sub.query.clone(),
                     alternative: None,
                     volatile,
+                    pulled: sub.pulled,
                 };
                 Ok(with(expr, ExprKind::SubLink(Box::new(sub))))
             }

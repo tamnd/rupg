@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- A call of a window function gets a run condition when its argument is a subquery that came from a column of a merged subquery, as in PostgreSQL, where `find_window_run_conditions` runs before the planner merges that subquery. (#906)
+
 ## 0.3.4 (2026-10-27)
 
 ### Added
