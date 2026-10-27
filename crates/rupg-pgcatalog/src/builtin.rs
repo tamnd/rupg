@@ -994,6 +994,15 @@ pub fn type_by_oid(oid: u32) -> Option<&'static TypeRow> {
         .or_else(|| SESSION.with_borrow(|s| s.types.iter().copied().find(|t| t.oid == oid)))
 }
 
+/// `typeInheritsFrom` and `typeIsOfTypedTable`: true when the row type `sub` of a relation of the session has the row type `sup` in [`SessionRowType::parents`].
+pub fn row_inherits(sub: u32, sup: u32) -> bool {
+    SESSION.with_borrow(|s| {
+        s.given
+            .iter()
+            .any(|t| matches!(t, SessionType::Row(r) if r.oid == sub && r.parents.contains(&sup)))
+    })
+}
+
 /// The built-in type with this name in this schema, a type that [`add_system_type`] added, or a type that [`use_session_types`] gave to the thread.
 pub fn type_by_name(namespace: u32, name: &str) -> Option<&'static TypeRow> {
     let b = &*BUILTIN;
@@ -1098,6 +1107,8 @@ pub struct SessionRowType {
     pub namespace: u32,
     /// `typrelid`: the relation of the row type.
     pub relation: u32,
+    /// The row types of the ancestors of the relation in `pg_inherits` and the type of a typed table, `reloftype`, which the row type can take, as `typeInheritsFrom` and `typeIsOfTypedTable` find them.
+    pub parents: Vec<u32>,
 }
 
 /// An enum type of the catalog of a session, for [`use_session_types`].

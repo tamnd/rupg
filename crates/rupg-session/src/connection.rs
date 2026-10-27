@@ -3754,6 +3754,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/attach_generated_kind.test")));
     }
 
+    /// A row of a typed table is a value of its type, and a row of a child table is a value of the row type of each ancestor table, by a `ConvertRowtypeExpr` that maps the fields by name, in calls, casts, views and `EXPLAIN`. `connection/convert_row_type.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn convert_row_type() {
+        big_stack(|| script(include_str!("connection/convert_row_type.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

@@ -1,0 +1,65 @@
+> CREATE TYPE person_type AS (id int, name text)
+CREATE TYPE
+> CREATE TABLE persons OF person_type
+CREATE TABLE
+> INSERT INTO persons VALUES (1, 'test')
+INSERT 0 1
+> CREATE FUNCTION namelen(person_type) RETURNS int LANGUAGE SQL AS $$ SELECT length($1.name) $$
+CREATE FUNCTION
+> SELECT id, namelen(persons) FROM persons
+fields id@persons.1:23:4:-1,namelen:23:4:-1
+row 1,4
+SELECT 1
+> SELECT persons::person_type::text FROM persons
+fields persons:25:-1:-1
+row (1,test)
+SELECT 1
+> SELECT pg_typeof(persons::person_type) FROM persons
+fields pg_typeof:2206:4:-1
+row person_type
+SELECT 1
+> create table p (a int, b text); create table c (x int, b2 int) inherits (p)
+CREATE TABLE
+CREATE TABLE
+> alter table p add column d int
+ALTER TABLE
+> insert into c values (1, 'a', 2, 3, 4)
+INSERT 0 1
+> create function pf(p) returns text language sql as $$ select $1.b || $1.a || coalesce($1.d, 0) $$
+CREATE FUNCTION
+> select pf(c) from c
+fields pf:25:-1:-1
+row a14
+SELECT 1
+> create view v as select pf(c), c::p::text as r, (c::p).d from c
+CREATE VIEW
+> select * from v
+fields pf@v.1:25:-1:-1,r@v.2:25:-1:-1,d@v.3:23:4:-1
+row a14,(1,a,4),4
+SELECT 1
+> explain (verbose, costs off) select pf(c), c::p::text from c
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.c
+row   Output: ((((c.*)::p).b || (((c.*)::p).a)::text) || (COALESCE(((c.*)::p).d, 0))::text), ((c.*)::p)::text
+EXPLAIN
+> select (null::c)::p is null
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> select pf(null::c)
+fields pf:25:-1:-1
+row NULL
+SELECT 1
+> create table c2 () inherits (c)
+CREATE TABLE
+> insert into c2 values (5, 'e', 6, 7, 8)
+INSERT 0 1
+> select c2::p::text, pf(c2) from c2
+fields c2:25:-1:-1,pf:25:-1:-1
+row (5,e,8),e58
+SELECT 1
+> select p::text from p
+fields p:25:-1:-1
+row (1,a,4)
+row (5,e,8)
+SELECT 2

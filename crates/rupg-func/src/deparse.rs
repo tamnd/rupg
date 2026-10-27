@@ -477,7 +477,9 @@ impl<'a> Deparser<'a> {
                 self.buf.push_str(&collation_name(*collation, self.session)?);
                 self.close();
             }
-            ExprKind::CoerceViaIo(arg, form) => self.cast_node(e, arg, *form, -1, implicit)?,
+            ExprKind::CoerceViaIo(arg, form) | ExprKind::ConvertRow { arg, form, .. } => {
+                self.cast_node(e, arg, *form, -1, implicit)?;
+            }
             ExprKind::ArrayCoerce { arg, form, .. } => {
                 self.cast_node(e, arg, *form, e.typmod, implicit)?;
             }
@@ -1397,6 +1399,7 @@ fn is_simple(e: &Expr, parent: &Expr, paren: bool) -> bool {
         ExprKind::JsonValue(v) => is_simple(&v.raw, e, paren),
         ExprKind::Relabel(arg, _)
         | ExprKind::CoerceViaIo(arg, _)
+        | ExprKind::ConvertRow { arg, .. }
         | ExprKind::ArrayCoerce { arg, .. }
         | ExprKind::CoerceToDomain(arg, _) => is_simple(arg, e, paren),
         ExprKind::Func(f) => {

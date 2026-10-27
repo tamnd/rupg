@@ -30,6 +30,8 @@ pub enum ExprKind {
     NamedArg(Box<NamedArg>),
     /// `RelabelType`: the value of the argument with another type that has the same binary form.
     Relabel(Box<Expr>, CastForm),
+    /// `ConvertRowtypeExpr`: the row of the argument, of the row type of a table that inherits from the table of the type of the expression or that is a typed table of the type, with the fields of the type of the expression. `fields` has the field of the argument for each field of the type, as `build_attrmap_by_name` maps them.
+    ConvertRow { arg: Box<Expr>, fields: Vec<usize>, form: CastForm },
     /// `CollateExpr`: the value of the argument with the collation of this OID, from a `COLLATE` clause.
     Collate(Box<Expr>, u32),
     /// `CoerceViaIO`: the output function of the type of the argument, then the input function of the type of the expression.
@@ -882,6 +884,7 @@ impl Expr {
             | ExprKind::NullTest(arg, _)
             | ExprKind::BooleanTest(arg, _)
             | ExprKind::FieldSelect(arg, _) => vec![&**arg],
+            ExprKind::ConvertRow { arg, .. } => vec![&**arg],
             ExprKind::ArrayCoerce { arg, element, .. } => vec![&**arg, &**element],
             ExprKind::Subscript(sub) => {
                 sub.bounds().chain([&sub.container]).chain(&sub.assign).collect()
@@ -947,6 +950,7 @@ impl Expr {
             | ExprKind::NullTest(arg, _)
             | ExprKind::BooleanTest(arg, _)
             | ExprKind::FieldSelect(arg, _) => vec![&mut **arg],
+            ExprKind::ConvertRow { arg, .. } => vec![&mut **arg],
             ExprKind::ArrayCoerce { arg, element, .. } => vec![&mut **arg, &mut **element],
             ExprKind::Subscript(sub) => {
                 let Subscript { container, upper, lower, assign } = &mut **sub;
@@ -1138,7 +1142,8 @@ impl Expr {
             ExprKind::Relabel(arg, CastForm::Implicit)
             | ExprKind::CoerceViaIo(arg, CastForm::Implicit)
             | ExprKind::CoerceToDomain(arg, CastForm::Implicit)
-            | ExprKind::ArrayCoerce { arg, form: CastForm::Implicit, .. } => arg.strip_implicit(),
+            | ExprKind::ArrayCoerce { arg, form: CastForm::Implicit, .. }
+            | ExprKind::ConvertRow { arg, form: CastForm::Implicit, .. } => arg.strip_implicit(),
             _ => self,
         }
     }
@@ -1156,6 +1161,7 @@ impl Expr {
             | ExprKind::CoerceViaIo(arg, _)
             | ExprKind::CoerceToDomain(arg, _)
             | ExprKind::ArrayCoerce { arg, .. }
+            | ExprKind::ConvertRow { arg, .. }
             | ExprKind::NullTest(arg, _)
             | ExprKind::BooleanTest(arg, _)
             | ExprKind::FieldSelect(arg, _) => Some(&**arg),
