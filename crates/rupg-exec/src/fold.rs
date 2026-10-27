@@ -1327,7 +1327,7 @@ impl<'a> Fold<'a> {
         self.evaluate(expr)
     }
 
-    /// `inline_function` for a function in SQL of the catalog: the body takes the place of the call, with the arguments in the places of its parameters, and then the body folds. The function must not be `SECURITY DEFINER`, have no settings, and its body must be one `SELECT` of one expression with no `FROM` and no other clause, with no aggregate, no subquery and no function that gives a set. The body of an immutable function must call only immutable functions, and the body of a stable function no volatile function. The body of a strict function must give null for a null argument, so it must use each parameter and have no part that can give a value for a null. An argument that the body uses more than one time must have no subquery, no volatile function and a cost of no more than 10 operators. The body must not read the value of a `CASE` around it.
+    /// `inline_function` for a function in SQL of the catalog: the body takes the place of the call, with the arguments in the places of its parameters, and then the body folds. The function must not be `SECURITY DEFINER`, have no settings, and its body must be one `SELECT` of one expression with no `FROM` and no other clause, with no aggregate, no subquery and no function that gives a set. The body of an immutable function must call only immutable functions, and the body of a stable function no volatile function. The body of a strict function must give null for a null argument, so it must use each parameter and have no part that can give a value for a null. An argument that the body uses more than one time must have no subquery, no volatile function and a cost of no more than 10 operators. The body and the arguments must not read the value of a `CASE` around them.
     fn inline_sql(
         &mut self,
         expr: &Expr,
@@ -1386,6 +1386,7 @@ impl<'a> Fold<'a> {
             || unsafe_body
             || (proc.strict && rupg_opt::nonstrict(&body))
             || context_dependent(&body)
+            || f.args.iter().any(context_dependent)
             || body.first_agg().is_some()
             || body.first_window().is_some()
             || body.first_set_call().is_some()

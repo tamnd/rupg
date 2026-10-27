@@ -317,7 +317,8 @@ fn index_paths<'q>(
             && read.iter().all(|a| *a > 0 && index.columns.contains(a));
         let forward = order(level, table.r, index, false, stats);
         let useful = stats.useful(&BTreeSet::from([table.r]), &forward);
-        if !clauses.is_empty() || !useful.is_empty() || only {
+        // `useful_predicate`: the conditions imply the predicate of a partial index, so its scan is a path also with no clause.
+        if !clauses.is_empty() || !useful.is_empty() || only || !index.predicate.is_empty() {
             // A backward scan has the clauses and the costs of the forward scan, so `choose_bitmap_and` keeps the forward scan.
             if useful.is_empty() || costs.2 < 1.0 {
                 let path = BitmapIndex::new(table, index, clauses.clone(), costs, stats);
@@ -805,15 +806,19 @@ fn predicate_ok(index: &Index, r: usize, given: &[&Expr]) -> bool {
     predicate(index, r).iter().all(|p| implied_by(&given, p))
 }
 
-/// `indrestrictinfo`: the conditions of the table that the predicate of the index does not imply. A condition that the predicate implies is true for each row of the index, so the scan does not test it.
+/// `indrestrictinfo`: the conditions of the table that the predicate of the index does not imply. A condition that the predicate implies is true for each row of the index, so the scan does not test it. A condition that calls a mutable function stays. `amoptionalkey` of `hash` is false, so its index keeps all the conditions, which can be the only clauses of its first key.
 fn restrict<'s, 'q>(index: &Index, r: usize, sources: &[&'s Source<'q>]) -> Vec<&'s Source<'q>> {
     let parts = predicate(index, r);
-    if parts.is_empty() {
+    if parts.is_empty() || index.method == HASH_AM {
         return sources.to_vec();
     }
     let refs: Vec<&Expr> = parts.iter().collect();
     let pred = and_of(&refs);
-    sources.iter().copied().filter(|s| !implied_by(&pred, &s.expr)).collect()
+    sources
+        .iter()
+        .copied()
+        .filter(|s| crate::minmax::mutable(&s.expr) || !implied_by(&pred, &s.expr))
+        .collect()
 }
 
 /// `match_clauses_to_index`: the conditions that a key column of the index can test, each with the first column that can, as `match_clause_to_index`. The list is in the order of the columns, then in the order of the conditions, as `build_index_paths` makes `indexclauses`.
@@ -1552,7 +1557,7 @@ fn bool_items(expr: &Expr) -> Option<(BoolOp, &[Expr])> {
     }
 }
 
-/// `predicate_implied_by_recurse` with no proofs of operators and no items of `ANY`: true when the condition `clause` makes the condition `pred` true by the form of the `AND` and the `OR` in them. A condition that is not an `AND` or an `OR` proves an equal condition.
+/// `predicate_implied_by_recurse` with no items of `ANY`: true when the condition `clause` makes the condition `pred` true by the form of the `AND` and the `OR` in them. A condition that is not an `AND` or an `OR` proves another such condition as `predicate_implied_by_simple_clause`.
 fn implied_by(clause: &Expr, pred: &Expr) -> bool {
     match (bool_items(clause), bool_items(pred)) {
         (Some((BoolOp::And, _)), Some((BoolOp::And, p))) | (None, Some((BoolOp::And, p))) => {
@@ -1567,7 +1572,7 @@ fn implied_by(clause: &Expr, pred: &Expr) -> bool {
         }
         (Some((_, c)), _) => c.iter().all(|c| implied_by(c, pred)),
         (None, Some((_, p))) => p.iter().any(|p| implied_by(clause, p)),
-        (None, None) => clause.same(pred),
+        (None, None) => super::predtest::implied(pred, clause),
     }
 }
 

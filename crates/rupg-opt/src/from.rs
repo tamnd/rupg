@@ -6,6 +6,7 @@ mod index;
 mod inherit;
 mod memoize;
 pub(crate) mod paths;
+mod predtest;
 mod scansel;
 mod search;
 mod tid;
