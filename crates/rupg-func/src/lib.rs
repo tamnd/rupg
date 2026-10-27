@@ -265,6 +265,11 @@ pub trait Session {
         let _ = query;
         None
     }
+    /// The hash tables of the plan of `query`, as `rupg_opt::hash_tables` gives them, whose groups come in the order of the table. `None` when the session has no planner.
+    fn hash_tables(&self, query: &rupg_analyze::Query) -> Option<Rc<rupg_plan::HashTables>> {
+        let _ = query;
+        None
+    }
     /// The ID of the transaction: `GetTopFullTransactionId` when `assign` is true, which gives an ID to a transaction that has none, and `GetTopFullTransactionIdIfAny` when it is false. `None` when the transaction has no ID or the session has no server.
     fn transaction_id(&self, assign: bool) -> Option<u64> {
         let _ = assign;

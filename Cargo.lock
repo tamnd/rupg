@@ -358,6 +358,7 @@ dependencies = [
  "rupg-func",
  "rupg-opt",
  "rupg-pgcatalog",
+ "rupg-plan",
  "rupg-sql",
  "rupg-types",
 ]

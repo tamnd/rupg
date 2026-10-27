@@ -9,8 +9,8 @@ use rupg_analyze::{
 };
 use rupg_pgcatalog::builtin;
 use rupg_plan::{
-    Conflict, Cost, Item, Kind, Label, Node, Operation, Replaced, Rollup, SortKey, Strategy,
-    SubPlan, TARGET,
+    Conflict, Cost, Grouped, Item, Kind, Label, Node, Operation, Replaced, Rollup, SortKey,
+    Strategy, SubPlan, TARGET, Table,
 };
 
 use crate::from::paths::{Paths, costs};
@@ -1192,7 +1192,18 @@ impl<'q> Builder<'q> {
                     } else {
                         keys.clone()
                     };
-                    let kind = Kind::Aggregate { strategy, keys, sets: Vec::new(), unique: false };
+                    let table = Table {
+                        of: Grouped::SetOp(op, false),
+                        groups: rows,
+                        keys: (0..columns).collect(),
+                    };
+                    let kind = Kind::Aggregate {
+                        strategy,
+                        keys,
+                        sets: Vec::new(),
+                        unique: false,
+                        table: Some(table),
+                    };
                     let mut node = Node::new(kind, scope, vec![append.clone()]);
                     node.cost = Cost { startup: hash_startup, total: hash_total, rows, width };
                     node.disabled = !enable.hashagg;
@@ -1377,6 +1388,7 @@ fn aggregate<'q>(
                 keys: Vec::new(),
                 sets: Vec::new(),
                 unique: false,
+                table: None,
             },
             scope,
             vec![input],
@@ -1387,7 +1399,7 @@ fn aggregate<'q>(
         order.clear();
         return Some(node);
     }
-    let (group, hashable) = group_keys(level);
+    let (group, hashable, targets) = group_keys(level);
     let nkeys = group.len() as f64;
     let group_exprs: Vec<&Expr> = group.iter().map(|k| &*k.item.expr).collect();
     let groups = level.stats.groups(&group_exprs, n);
@@ -1484,6 +1496,7 @@ fn aggregate<'q>(
                 keys: hash_keys,
                 sets: Vec::new(),
                 unique: false,
+                table: Some(Table { of: Grouped::Group(query), groups, keys: targets }),
             },
             scope,
             vec![input],
@@ -1502,7 +1515,7 @@ fn aggregate<'q>(
     order.truncate(group.len());
     let strategy = if group_node { Strategy::Group } else { Strategy::Sorted };
     let mut node = Node::new(
-        Kind::Aggregate { strategy, keys, sets: Vec::new(), unique: false },
+        Kind::Aggregate { strategy, keys, sets: Vec::new(), unique: false, table: None },
         scope,
         vec![input],
     );
@@ -1587,7 +1600,7 @@ fn reorder<'q>(
 }
 
 /// The keys of `GROUP BY` as the keys of a sort, in the order of `ORDER BY` when its items are items of `GROUP BY`, as `preprocess_groupclause`, and true when a hash table can hold the groups. A column that the other columns of its relation give, as `remove_useless_groupby_columns` finds it, and a key that is redundant, as `make_pathkeys_for_sortclauses_extended` finds it, are not keys.
-fn group_keys<'q>(level: &Level<'q>) -> (Vec<SortKey<'q>>, bool) {
+fn group_keys<'q>(level: &Level<'q>) -> (Vec<SortKey<'q>>, bool, Vec<usize>) {
     let query = level.query;
     let mut items: Vec<&SortGroup> = Vec::new();
     let in_group = |s: &SortGroup| query.group.iter().find(|g| g.target == s.target);
@@ -1605,7 +1618,8 @@ fn group_keys<'q>(level: &Level<'q>) -> (Vec<SortKey<'q>>, bool) {
         items.into_iter().zip(surplus).filter(|(_, surplus)| !surplus).map(|(s, _)| s).collect();
     let items = level.stats.canonical(items, |s| level.target(s.target));
     let hashable = items.iter().all(|s| in_group(s).is_some_and(|g| g.hashable));
-    (items.into_iter().map(|s| sort_key(level.target(s.target), s)).collect(), hashable)
+    let targets = items.iter().map(|s| s.target).collect();
+    (items.into_iter().map(|s| sort_key(level.target(s.target), s)).collect(), hashable, targets)
 }
 
 /// The costs of the aggregate calls and of `HAVING` of a query with grouping sets, as `cost_agg` reads them.
@@ -2042,7 +2056,7 @@ fn grouping_sets<'q>(
     }
     order.clear();
     let mut node = Node::new(
-        Kind::Aggregate { strategy, keys, sets: plan_rollups, unique: false },
+        Kind::Aggregate { strategy, keys, sets: plan_rollups, unique: false, table: None },
         level.scope,
         vec![input],
     );
@@ -2392,6 +2406,11 @@ fn distinct<'q>(
                 keys: items,
                 sets: Vec::new(),
                 unique: false,
+                table: Some(Table {
+                    of: Grouped::Distinct(query),
+                    groups,
+                    keys: processed.iter().map(|d| d.target).collect(),
+                }),
             },
             scope,
             vec![input],

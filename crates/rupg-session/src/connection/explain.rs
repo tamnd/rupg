@@ -9,7 +9,7 @@ use rupg_common::{Error, SqlState};
 use rupg_func::Session;
 use rupg_opt::{Enable, Index, Member, Size};
 use rupg_pgcatalog::builtin;
-use rupg_plan::{Format, Options};
+use rupg_plan::{Format, HashTables, Options};
 use rupg_sql::nodes::{DefElem, ExecuteStmt, ExplainStmt, Node};
 use rupg_types::{Value, oid};
 use rupg_wire::CommandTag;
@@ -392,13 +392,16 @@ fn catalog_indexes(table: u32) -> Vec<Index> {
         .collect()
 }
 
-/// The order of the rows of the joins of `query`, from the plan that `EXPLAIN` shows for it, as [`rupg_opt::join_order`] gives it. `None` when the plan gives its rows in another order or the planner fails.
-pub(crate) fn join_order(
+/// The relations of a join in the order of its plan, each with true when its rows come in reverse.
+type JoinOrder = Vec<(usize, bool)>;
+
+/// The order of the rows of the joins of `query` and its hash tables, from the plan that `EXPLAIN` shows for it, as [`rupg_opt::join_order`] and [`rupg_opt::hash_tables`] give them. The order is `None` when the plan gives its rows in another order. `None` when the planner fails.
+pub(crate) fn planned(
     reader: &Reader<'_>,
     heap: &Heap,
     database: u32,
     query: &Query,
-) -> Option<Vec<(usize, bool)>> {
+) -> Option<(Option<JoinOrder>, HashTables)> {
     let members = Members { reader, error: RefCell::new(None), heap, database };
     let barrier = |view: u32| {
         reader.catalog().and_then(|c| c.relation(view)).is_some_and(rupg_analyze::security_barrier)
@@ -410,7 +413,7 @@ pub(crate) fn join_order(
     if members.error.take().is_some() {
         return None;
     }
-    rupg_opt::join_order(&tree)
+    Some((rupg_opt::join_order(&tree), rupg_opt::hash_tables(&tree, &query)))
 }
 
 /// The options of `EXPLAIN`, as `ParseExplainOptionList` reads them.
