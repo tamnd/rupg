@@ -2353,6 +2353,9 @@ impl<'a> Eval<'a> {
                 if rows.is_empty() {
                     rows.push(vec![Value::Null; width]);
                 }
+            } else if call.ty == oid::VOID {
+                // `fmgr_sql`: a function that gives a set of `void` runs its last query and gives no row.
+                rows.clear();
             }
             return Ok(rows);
         }

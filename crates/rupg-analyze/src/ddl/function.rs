@@ -732,16 +732,19 @@ impl Analyzer<'_> {
             }
             let cast =
                 self.coerce_to_target(target.expr.clone(), ty, typmod, Context::Assignment, None)?;
+            // A scalar result gives the detail of the one column, and a row the detail of the field.
             target.expr = cast.ok_or_else(|| {
-                mismatch(
-                    rettype,
+                let detail = if row {
                     format!(
                         "Final statement returns {} instead of {} at column {}.",
                         types::name(actual),
                         types::name(ty),
                         i + 1
-                    ),
-                )
+                    )
+                } else {
+                    format!("Actual return type is {}.", types::name(actual))
+                };
+                mismatch(rettype, detail)
             })?;
         }
         Ok(())
@@ -1219,6 +1222,13 @@ impl Definer<'_, '_> {
             None => 0,
         };
         let (src, bin) = interpret_as(stmt, &options, name)?;
+        // `interpret_AS_clause`: the arguments of a body in SQL have their declared types.
+        if stmt.sql_body.is_some() && argtypes.iter().any(|&ty| types::is_polymorphic(ty)) {
+            return Err(Error::new(
+                SqlState::INVALID_FUNCTION_DEFINITION,
+                "SQL function with unquoted function body cannot have polymorphic arguments",
+            ));
+        }
         // `ProcedureCreate`: a polymorphic result and an `internal` result need an input that gives the type, also for each output parameter.
         let outputs =
             allargtypes.iter().zip(&argmodes).filter(|(_, mode)| !matches!(mode, b'i' | b'v'));
@@ -1335,7 +1345,10 @@ impl Definer<'_, '_> {
             ));
         }
         // `fmgr_sql_validator` parses a body in a string only when `check_function_bodies` is on.
-        let stmts = if stmt.sql_body.is_none() && !self.an.env.check_function_bodies() {
+        let stmts = if stmt.sql_body.is_none()
+            && options.src.is_some()
+            && !self.an.env.check_function_bodies()
+        {
             Statements::String(Vec::new())
         } else {
             statements(stmt, options.src.as_deref()).map_err(transpose)?
