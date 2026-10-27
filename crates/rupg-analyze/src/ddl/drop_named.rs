@@ -40,6 +40,7 @@ impl Definer<'_, '_> {
             let made = matches!(
                 found.object.class,
                 PG_CAST
+                    | PG_COLLATION
                     | PG_CONVERSION
                     | PG_FOREIGN_DATA_WRAPPER
                     | PG_FOREIGN_SERVER
@@ -176,8 +177,11 @@ impl Definer<'_, '_> {
             return Err(Error::new(SqlState::UNDEFINED_OBJECT, message));
         };
         // `RemoveObjects`: the owner of the schema or of the object can drop it.
-        let owner = if collation { None } else { self.catalog.conversion(oid) };
-        let owner = owner.map(|c| (c.namespace, c.owner));
+        let owner = if collation {
+            self.catalog.collation(oid).map(|c| (c.namespace, c.owner))
+        } else {
+            self.catalog.conversion(oid).map(|c| (c.namespace, c.owner))
+        };
         let owns = owner.is_some_and(|(namespace, owner)| {
             self.owns(owner) || self.schema_owner(namespace).is_some_and(|o| self.owns(o))
         });

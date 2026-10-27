@@ -1,12 +1,12 @@
 //! `DROP TABLE`, `DROP VIEW`, `DROP INDEX`, `DROP SEQUENCE`, `DROP SCHEMA`, `DROP TYPE`, `DROP DOMAIN`, `DROP FUNCTION`, `DROP TEXT SEARCH`, `DROP OPERATOR` and `DROP STATISTICS`, as `RemoveRelations` and `RemoveObjects` run them. The statement finds all its objects first, then [`Catalog::deletions`] finds the objects that depend on them, and the report of `reportDependentObjects` names these objects as `getObjectDescription` does. A built-in object that is not pinned, such as the schema `public` or a view of `information_schema`, gives `0A000`.
 
 use rupg_catalog::{
-    FIRST_NORMAL_OID, ObjRef, PG_AMOP, PG_AMPROC, PG_ATTRDEF, PG_CAST, PG_CLASS, PG_CONSTRAINT,
-    PG_CONVERSION, PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_NAMESPACE, PG_OPCLASS,
-    PG_OPERATOR, PG_OPFAMILY, PG_POLICY, PG_PROC, PG_PUBLICATION, PG_PUBLICATION_NAMESPACE,
-    PG_PUBLICATION_REL, PG_REWRITE, PG_STATISTIC_EXT, PG_TRIGGER, PG_TS_CONFIG, PG_TS_DICT,
-    PG_TS_PARSER, PG_TS_TEMPLATE, PG_TYPE, PG_USER_MAPPING, PUBLIC, Refusal, RelKind, Target, flag,
-    is_pinned,
+    FIRST_NORMAL_OID, ObjRef, PG_AMOP, PG_AMPROC, PG_ATTRDEF, PG_CAST, PG_CLASS, PG_COLLATION,
+    PG_CONSTRAINT, PG_CONVERSION, PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_NAMESPACE,
+    PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_POLICY, PG_PROC, PG_PUBLICATION,
+    PG_PUBLICATION_NAMESPACE, PG_PUBLICATION_REL, PG_REWRITE, PG_STATISTIC_EXT, PG_TRIGGER,
+    PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, PG_TYPE, PG_USER_MAPPING, PUBLIC,
+    Refusal, RelKind, Target, flag, is_pinned,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
@@ -537,6 +537,7 @@ impl Definer<'_, '_> {
             PG_TS_PARSER | PG_TS_DICT | PG_TS_TEMPLATE | PG_TS_CONFIG => self.describe_ts(object),
             PG_OPERATOR => self.describe_operator(object.oid),
             PG_STATISTIC_EXT => self.describe_stats(object.oid),
+            PG_COLLATION => self.describe_collation(object.oid),
             PG_CONVERSION => self.describe_conversion(object.oid),
             PG_FOREIGN_DATA_WRAPPER | PG_FOREIGN_SERVER | PG_USER_MAPPING => {
                 self.describe_foreign(object)

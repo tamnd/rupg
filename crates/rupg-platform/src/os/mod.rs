@@ -11,7 +11,7 @@ mod tasks;
 #[cfg(unix)]
 mod unix;
 
-pub use locale::{libc_version, locale_codeset, system_locales};
+pub use locale::{libc_version, locale_codeset, locale_encoding, system_locales};
 pub use net::OsNet;
 pub use tasks::{OsTasks, STACK_SIZE};
 

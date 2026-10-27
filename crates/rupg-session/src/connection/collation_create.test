@@ -1,0 +1,52 @@
+> CREATE COLLATION c1 (provider = libc, locale = 'C')
+CREATE COLLATION
+> CREATE COLLATION c2 FROM "C"
+CREATE COLLATION
+> CREATE COLLATION c2 FROM "C"
+ERROR 42710 collation "c2" already exists
+> CREATE COLLATION IF NOT EXISTS c2 FROM "C"
+NOTICE 42710 collation "c2" already exists, skipping
+CREATE COLLATION
+> CREATE COLLATION b1 (provider = builtin, locale = 'C.UTF-8')
+CREATE COLLATION
+> CREATE COLLATION b2 (provider = builtin, locale = 'xx')
+ERROR 42809 invalid locale name "xx" for builtin provider
+> CREATE COLLATION x1 (provider = libc)
+ERROR 42P17 parameter "lc_collate" must be specified
+> CREATE COLLATION x2 (provider = nope, locale = 'C')
+ERROR 42P17 unrecognized collation provider: nope
+> CREATE COLLATION x3 (locale = 'C', bogus = 1)
+ERROR 42601 collation attribute "bogus" not recognized at 36
+> CREATE COLLATION x4 (locale = 'C', lc_collate = 'C')
+ERROR 42601 conflicting or redundant options
+> CREATE COLLATION x5 FROM "default"
+ERROR 42P17 collation "default" cannot be copied
+> CREATE COLLATION x6 (locale = 'no_such_locale')
+ERROR 22023 could not create locale "no_such_locale": No such file or directory
+> SELECT collname, collprovider, collisdeterministic, collcollate, collctype, colllocale, collversion FROM pg_collation WHERE collname IN ('c1', 'c2', 'b1') ORDER BY 1
+fields collname@pg_collation.2:19:64:-1,collprovider@pg_collation.5:18:1:-1,collisdeterministic@pg_collation.6:16:1:-1,collcollate@pg_collation.8:25:-1:-1,collctype@pg_collation.9:25:-1:-1,colllocale@pg_collation.10:25:-1:-1,collversion@pg_collation.12:25:-1:-1
+row b1,b,t,NULL,NULL,C.UTF-8,1
+row c1,c,t,C,C,NULL,NULL
+row c2,c,t,C,C,NULL,NULL
+SELECT 3
+> CREATE TABLE t (a text COLLATE c1)
+CREATE TABLE
+> INSERT INTO t VALUES ('b'), ('a'), ('B')
+INSERT 0 3
+> SELECT a FROM t ORDER BY a
+fields a@t.1:25:-1:-1
+row B
+row a
+row b
+SELECT 3
+> DROP COLLATION c1
+ERROR 2BP01 cannot drop collation c1 because other objects depend on it
+> DROP TABLE t
+DROP TABLE
+> DROP COLLATION c1
+DROP COLLATION
+> DROP COLLATION c2, b1
+DROP COLLATION
+> DROP COLLATION IF EXISTS c1
+NOTICE 00000 collation "c1" does not exist, skipping
+DROP COLLATION
