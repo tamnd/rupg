@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The result of a function in SQL that returns a composite type now takes the type modifiers of the fields of the type, so a field of type `numeric(35,2)` gives `7.14`. When a column that needs a cast is a column of a set operation or a sorted column, the query now goes in a subquery, as `check_sql_stmt_retval` does, and does not give an error. A function that returns `setof record` with an `INSERT ... RETURNING` body now gives its rows in the target list, and not empty rows. (#913)
 - A function that returns `record` in `FROM` with a column definition list now casts its result to the types of the list, as `check_sql_fn_retval` does. A column of the list with a type modifier, such as `numeric(4,2)`, now gets that modifier, and a type that has no assignment cast now gives the error "return type mismatch". An inlinable function with a column definition list is now inlined, and its error has the context "during inlining". An error in a SQL function that gives a set in `FROM` now has the context "statement 1". (#911)
 - A new scan of `ROWS FROM` on the inner side of a join now runs again only the calls that read the other relations, as `ExecReScanFunctionScan` does. The other calls give the rows of the first scan. (#910)
 - A function in SQL in `FROM` that does not return a set now gives only the first row of its last query, or a row of nulls when the query gives no row. It gave all the rows before. (#908)
