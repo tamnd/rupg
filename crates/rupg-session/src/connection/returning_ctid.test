@@ -1,0 +1,173 @@
+> create temp table foo (f1 int primary key, f2 text);
+CREATE TABLE
+> insert into foo values (1, 'a') returning ctid, *;
+fields ctid@foo.-1:27:6:-1,f1@foo.1:23:4:-1,f2@foo.2:25:-1:-1
+row (0,1),1,a
+INSERT 0 1
+> insert into foo values (2, 'b') returning old.ctid, new.ctid, old.tableoid::regclass, new.tableoid::regclass;
+fields ctid@foo.-1:27:6:-1,ctid@foo.-1:27:6:-1,tableoid:2205:4:-1,tableoid:2205:4:-1
+row NULL,(0,2),NULL,foo
+INSERT 0 1
+> update foo set f2 = 'c' where f1 = 1 returning old.ctid, new.ctid, ctid;
+fields ctid@foo.-1:27:6:-1,ctid@foo.-1:27:6:-1,ctid@foo.-1:27:6:-1
+row (0,1),(0,3),(0,3)
+UPDATE 1
+> delete from foo where f1 = 2 returning old.ctid, new.ctid, ctid;
+fields ctid@foo.-1:27:6:-1,ctid@foo.-1:27:6:-1,ctid@foo.-1:27:6:-1
+row (0,2),NULL,(0,2)
+DELETE 1
+> insert into foo values (1, 'z') on conflict (f1) do update set f2 = 'conflict' returning old.ctid, new.ctid, ctid, old.*, new.*;
+fields ctid@foo.-1:27:6:-1,ctid@foo.-1:27:6:-1,ctid@foo.-1:27:6:-1,f1@foo.1:23:4:-1,f2@foo.2:25:-1:-1,f1@foo.1:23:4:-1,f2@foo.2:25:-1:-1
+row (0,3),(0,4),(0,4),1,c,1,conflict
+INSERT 0 1
+> select ctid, * from foo;
+fields ctid@foo.-1:27:6:-1,f1@foo.1:23:4:-1,f2@foo.2:25:-1:-1
+row (0,4),1,conflict
+SELECT 1
+> drop table foo;
+DROP TABLE
+> create temp table foo (f1 int primary key, f2 text);
+CREATE TABLE
+> insert into foo values (1, 'a'), (2, 'b');
+INSERT 0 2
+> update foo set f2 = 'c' where f1 = 1 returning old.ctid;
+fields ctid@foo.-1:27:6:-1
+row (0,1)
+UPDATE 1
+> update foo set f2 = 'd' where f1 = 1 returning new.ctid;
+fields ctid@foo.-1:27:6:-1
+row (0,4)
+UPDATE 1
+> update foo set f2 = 'e' where f1 = 1 returning ctid;
+fields ctid@foo.-1:27:6:-1
+row (0,5)
+UPDATE 1
+> delete from foo where f1 = 2 returning old.ctid, ctid;
+fields ctid@foo.-1:27:6:-1,ctid@foo.-1:27:6:-1
+row (0,2),(0,2)
+DELETE 1
+> delete from foo where f1 = 1 returning new.ctid;
+fields ctid@foo.-1:27:6:-1
+row NULL
+DELETE 1
+> insert into foo values (3, 'x') returning new.tableoid::regclass, old.tableoid::regclass, tableoid::regclass;
+fields tableoid:2205:4:-1,tableoid:2205:4:-1,tableoid:2205:4:-1
+row foo,NULL,foo
+INSERT 0 1
+> drop table foo;
+DROP TABLE
+> create temp table foo (f1 int primary key, f2 text);
+CREATE TABLE
+> insert into foo values (1, 'a'), (2, 'b') returning ctid, new.ctid, old.ctid;
+fields ctid@foo.-1:27:6:-1,ctid@foo.-1:27:6:-1,ctid@foo.-1:27:6:-1
+row (0,1),(0,1),NULL
+row (0,2),(0,2),NULL
+INSERT 0 2
+> insert into foo values (1, 'z'), (3, 'c') on conflict (f1) do update set f2 = 'u' returning old.ctid, new.ctid, ctid, f1;
+fields ctid@foo.-1:27:6:-1,ctid@foo.-1:27:6:-1,ctid@foo.-1:27:6:-1,f1@foo.1:23:4:-1
+row (0,1),(0,3),(0,3),1
+row NULL,(0,4),(0,4),3
+INSERT 0 2
+> insert into foo values (2, 'z') on conflict (f1) do nothing returning ctid;
+fields ctid@foo.-1:27:6:-1
+INSERT 0 0
+> insert into foo values (4, 'z') on conflict (f1) do nothing returning ctid;
+fields ctid@foo.-1:27:6:-1
+row (0,5)
+INSERT 0 1
+> insert into foo values (2, 'z') on conflict (f1) do select returning ctid, old.ctid, new.ctid, f2;
+fields ctid@foo.-1:27:6:-1,ctid@foo.-1:27:6:-1,ctid@foo.-1:27:6:-1,f2@foo.2:25:-1:-1
+row (0,2),(0,2),(0,2),b
+INSERT 0 1
+> with w as (update foo set f2 = 'w' where f1 = 2 returning ctid, old.ctid as o) select * from w;
+fields ctid@foo.-1:27:6:-1,o@foo.-1:27:6:-1
+row (0,6),(0,2)
+SELECT 1
+> update foo set f2 = f2 || 'x' returning old.ctid, new.ctid, f1;
+fields ctid@foo.-1:27:6:-1,ctid@foo.-1:27:6:-1,f1@foo.1:23:4:-1
+row (0,3),(0,7),1
+row (0,4),(0,8),3
+row (0,5),(0,9),4
+row (0,6),(0,10),2
+UPDATE 4
+> create temp table bar (b int);
+CREATE TABLE
+> insert into bar select g from generate_series(1,3) g returning ctid, b;
+fields ctid@bar.-1:27:6:-1,b@bar.1:23:4:-1
+row (0,1),1
+row (0,2),2
+row (0,3),3
+INSERT 0 3
+> update bar set b = b + 10 from foo where foo.f1 = bar.b returning bar.ctid, foo.ctid, b;
+fields ctid@bar.-1:27:6:-1,ctid@foo.-1:27:6:-1,b@bar.1:23:4:-1
+row (0,4),(0,7),11
+row (0,5),(0,10),12
+row (0,6),(0,8),13
+UPDATE 3
+> delete from bar returning ctid, old.ctid, new.ctid;
+fields ctid@bar.-1:27:6:-1,ctid@bar.-1:27:6:-1,ctid@bar.-1:27:6:-1
+row (0,4),(0,4),NULL
+row (0,5),(0,5),NULL
+row (0,6),(0,6),NULL
+DELETE 3
+> explain (verbose, costs off) update foo set f2 = 'q' returning ctid, old.ctid;
+fields QUERY PLAN:25:-1:-1
+row Update on pg_temp.foo
+row   Output: ctid, old.ctid
+row   ->  Seq Scan on pg_temp.foo
+row         Output: 'q'::text, ctid
+EXPLAIN
+> explain (verbose, costs off) insert into foo values (9, 'q') returning ctid;
+fields QUERY PLAN:25:-1:-1
+row Insert on pg_temp.foo
+row   Output: foo.ctid
+row   ->  Result
+row         Output: 9, 'q'::text
+EXPLAIN
+> select ctid, * from foo order by f1;
+fields ctid@foo.-1:27:6:-1,f1@foo.1:23:4:-1,f2@foo.2:25:-1:-1
+row (0,7),1,ux
+row (0,10),2,wx
+row (0,8),3,cx
+row (0,9),4,zx
+SELECT 4
+> drop table foo; drop table bar;
+DROP TABLE
+DROP TABLE
+> create temp table foo (f1 int primary key, f2 text);
+CREATE TABLE
+> explain (verbose, costs off) update foo set f2 = 'q' returning f1, old.f2;
+fields QUERY PLAN:25:-1:-1
+row Update on pg_temp.foo
+row   Output: f1, old.f2
+row   ->  Seq Scan on pg_temp.foo
+row         Output: 'q'::text, ctid
+EXPLAIN
+> explain (verbose, costs off) update foo set f2 = 'q' returning tableoid::regclass;
+fields QUERY PLAN:25:-1:-1
+row Update on pg_temp.foo
+row   Output: (tableoid)::regclass
+row   ->  Seq Scan on pg_temp.foo
+row         Output: 'q'::text, ctid
+EXPLAIN
+> explain (verbose, costs off) delete from foo returning ctid;
+fields QUERY PLAN:25:-1:-1
+row Delete on pg_temp.foo
+row   Output: ctid
+row   ->  Seq Scan on pg_temp.foo
+row         Output: ctid
+EXPLAIN
+> explain (verbose, costs off) insert into foo values (9, 'q') returning ctid, tableoid::regclass, xmin <> '0';
+fields QUERY PLAN:25:-1:-1
+row Insert on pg_temp.foo
+row   Output: foo.ctid, (foo.tableoid)::regclass, (foo.xmin <> '0'::xid)
+row   ->  Result
+row         Output: 9, 'q'::text
+EXPLAIN
+> explain (verbose, costs off) update foo set f2 = 'q' returning ctid, old.ctid, new.tableoid;
+fields QUERY PLAN:25:-1:-1
+row Update on pg_temp.foo
+row   Output: ctid, old.ctid, new.tableoid
+row   ->  Seq Scan on pg_temp.foo
+row         Output: 'q'::text, ctid
+EXPLAIN

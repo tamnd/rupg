@@ -196,6 +196,9 @@ const AUXILIARY_PROCS: i64 = 6 + 32;
 /// `GUC_SAFE_SEARCH_PATH`: the `search_path` that `RestrictSearchPath` sets for a maintenance command.
 const SAFE_SEARCH_PATH: &str = "pg_catalog, pg_temp";
 
+/// The bits of the ID of a version that are its page and its slot. The bits above them are the generation of the heap of the table.
+const ITEM_POINTER_MASK: u64 = (1 << 48) - 1;
+
 /// `InitializeShmemGUCs` for `num_os_semaphores`, after the configuration file: `ProcGlobalSemas`, which is one semaphore for each backend that `InitializeMaxBackends` counts and one for each auxiliary process. rupg uses no semaphores, but it gives the number that PostgreSQL uses. The sizes of the shared memory stay 0, because rupg does not have the shared memory of PostgreSQL.
 ///
 /// # Errors
@@ -455,6 +458,16 @@ pub struct Connection {
     transition: RefCell<Option<Transition>>,
     /// `MyTriggerDepth`: the number of the trigger functions that run, one in the other.
     trigger_depth: Cell<i32>,
+}
+
+/// Puts the ID of the new version of each row at the place `at` of the row that `RETURNING` reads, as the item pointer that `ctid` gives.
+pub(super) fn put_tids(written: &mut [Vec<Value>], at: usize, ids: &[u64]) {
+    for (row, &id) in written.iter_mut().zip(ids) {
+        if row.len() <= at {
+            row.resize(at + 1, Value::Null);
+        }
+        row[at] = Value::Int8((id & ITEM_POINTER_MASK).cast_signed());
+    }
 }
 
 /// The changes of the rows of an `UPDATE` or a `DELETE`: the ID of the version at the end of each row, and the new row of an `UPDATE`.
@@ -831,28 +844,34 @@ impl Connection {
                 if self.bulk.get() == info.table {
                     heap.start_bulk(info.table, &view);
                 }
+                let mut ids = Vec::new();
                 if info.unique.is_empty() {
-                    heap.insert(
+                    heap.insert_ids(
                         info.table,
                         &view,
                         rows,
                         (&[], &|d: &Derived, r: &[Value]| self.index_key(d, r)),
                         &[],
+                        &mut ids,
                     )?;
                 } else {
                     let mut kept = Vec::new();
                     loop {
-                        match heap.insert(
+                        match heap.insert_ids(
                             info.table,
                             &view,
                             rows.clone(),
                             (&info.unique, &|d: &Derived, r: &[Value]| self.index_key(d, r)),
                             &kept,
+                            &mut ids,
                         )? {
                             Changed::Done(_) => break,
                             conflict => kept = self.key_conflict(info, &view, conflict)?,
                         }
                     }
+                }
+                if let Some(at) = info.returning_tid {
+                    put_tids(&mut written, at, &ids);
                 }
                 self.count_inserts(info.table, inserted);
                 (CommandTag::Insert, count)
@@ -909,6 +928,15 @@ impl Connection {
                         .iter()
                         .filter_map(|&at| given.get_mut(at).and_then(Option::take))
                         .collect();
+                    if let Some(at) = info.returning_tid {
+                        let old: Vec<u64> =
+                            applied.iter().filter_map(|&at| changes.get(at).map(|c| c.0)).collect();
+                        put_tids(
+                            &mut written,
+                            at,
+                            &heap.next_versions(view.database, info.table, &old),
+                        );
+                    }
                 }
                 (if update { CommandTag::Update } else { CommandTag::Delete }, count)
             }
@@ -4081,6 +4109,12 @@ mod tests {
     #[test]
     fn column_size() {
         big_stack(|| script(include_str!("connection/column_size.test")));
+    }
+
+    /// `ctid` of the old and the new rows in `RETURNING` of `INSERT`, `UPDATE`, `DELETE` and `ON CONFLICT`, and the `Output` of `EXPLAIN` for system columns of `RETURNING`. `connection/returning_ctid.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn returning_ctid() {
+        big_stack(|| script(include_str!("connection/returning_ctid.test")));
     }
 
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.

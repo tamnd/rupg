@@ -23,6 +23,9 @@ pub const RETURNING_NEW: usize = usize::MAX - 2;
 /// The relation of `merge_action()` in [`Shown::targets`], as a `MergeSupportFunc`.
 pub const MERGE_ACTION: usize = usize::MAX - 3;
 
+/// `SelfItemPointerAttributeNumber`: the attribute number of `ctid`.
+const CTID_ATTNUM: i16 = -1;
+
 /// The list of `RETURNING` as `EXPLAIN` shows it in the `Output` of a `ModifyTable`. A column of `old` or `new` reads [`RETURNING_OLD`] or [`RETURNING_NEW`] with the number of the column in the table, and `merge_action()` reads [`MERGE_ACTION`]. The other columns are as in the targets of the query.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shown {
@@ -47,7 +50,7 @@ enum Source {
 }
 
 impl Analyzer<'_> {
-    /// `transformReturningClause`: the query of `RETURNING` and the values that the query of the statement must carry for it. The first relation of the scope is the target table, and the other relations are the relations of `FROM` or `USING`. The names `old` and `new` stay in the scope only while the analysis reads the list.
+    /// `transformReturningClause`: the query of `RETURNING`, the values that the query of the statement must carry for it, and the place in each written row of the ID of the new version, which `ctid` of the new row reads. With `new_tid`, the caller puts the ID of the new version at that place after the write, and the query of the statement carries a null for it. The first relation of the scope is the target table, and the other relations are the relations of `FROM` or `USING`. The names `old` and `new` stay in the scope only while the analysis reads the list.
     ///
     /// # Errors
     ///
@@ -56,7 +59,8 @@ impl Analyzer<'_> {
         &mut self,
         clause: &ReturningClause,
         kind: WriteKind,
-    ) -> Result<(Query, Vec<Expr>)> {
+        new_tid: bool,
+    ) -> Result<(Query, Vec<Expr>, Option<usize>)> {
         let size = self.scope_size();
         // `merge_action()` reads the relation of the action, which no name can find.
         if kind == WriteKind::Merge {
@@ -69,7 +73,7 @@ impl Analyzer<'_> {
             self.scope.merge_action = Some(self.scope.relations.len());
             self.scope.relations.push(Relation::new(0, vec![column], None, None, None));
         }
-        let result = self.returning_list(clause, kind);
+        let result = self.returning_list(clause, kind, new_tid);
         self.scope.merge_action = None;
         self.truncate_scope(size);
         result
@@ -80,7 +84,8 @@ impl Analyzer<'_> {
         &mut self,
         clause: &ReturningClause,
         kind: WriteKind,
-    ) -> Result<(Query, Vec<Expr>)> {
+        new_tid: bool,
+    ) -> Result<(Query, Vec<Expr>, Option<usize>)> {
         let mut names: [Option<(String, Option<usize>)>; 2] = [None, None];
         for node in &clause.options {
             let Some(Node::ReturningOption(option)) = node else {
@@ -265,6 +270,12 @@ impl Analyzer<'_> {
         let partition_at = if kind == WriteKind::Merge { 3 * width + 2 } else { width + 1 };
         let partition_attnum = i16::try_from(partition_at).unwrap_or(i16::MAX);
         let mut carried: Vec<Expr> = Vec::new();
+        // `ctid` of the new row of a table, which the write gives. A partitioned table and a view have no such place.
+        let new_tid = new_tid
+            && matches!(kind, WriteKind::Insert | WriteKind::Update)
+            && !partitioned
+            && self.auto_view.is_none();
+        let mut tid_at = None;
         let mut change = |expr: &mut Expr, depth: usize| {
             let ExprKind::Var(var) = expr.kind else { return };
             if var.levels_up != depth {
@@ -277,6 +288,20 @@ impl Analyzer<'_> {
                         attnum: partition_attnum,
                         levels_up: depth,
                     });
+                }
+                // `ctid` of the old row of a `DELETE` is the ID of the version that the query of the statement reads.
+                Source::Row if var.attnum == CTID_ATTNUM && kind == WriteKind::Delete => {
+                    let at = carry(&mut carried, 0, var.attnum, expr);
+                    let attnum = i16::try_from(base + 1 + at).unwrap_or(i16::MAX);
+                    expr.kind = ExprKind::Var(Var { relation: 0, attnum, levels_up: depth });
+                }
+                Source::Row if var.attnum == CTID_ATTNUM && new_tid => {
+                    let at = *tid_at.get_or_insert_with(|| {
+                        carried.push(Expr::new(ExprKind::Const(Value::Null), expr.ty));
+                        carried.len() - 1
+                    });
+                    let attnum = i16::try_from(base + 1 + at).unwrap_or(i16::MAX);
+                    expr.kind = ExprKind::Var(Var { relation: 0, attnum, levels_up: depth });
                 }
                 Source::Row => expr.kind = ExprKind::Var(Var { relation: 0, ..var }),
                 Source::Null => expr.kind = ExprKind::Const(Value::Null),
@@ -345,7 +370,7 @@ impl Analyzer<'_> {
             shown: Some(Box::new(Shown { targets: shown, old, new, kept })),
             ..Query::default()
         };
-        Ok((query, carried))
+        Ok((query, carried, tid_at.map(|at| base + at)))
     }
 
     /// `ReplaceVarsFromTargetList` for `rewriteRuleAction`: the list of `RETURNING` of the statement of the user, which reads the relation `oid` with the name `refname`, with the values of `row` in place of the columns of the relation.

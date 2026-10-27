@@ -9,9 +9,9 @@ use rupg_exec::Plan;
 use rupg_func::Writes;
 use rupg_types::Value;
 
-use super::Connection;
 use super::route::{self, Routing};
 use super::trigger::{RowPair, Triggers};
+use super::{Connection, put_tids};
 use crate::heap::{Changed, Speculative, View, tid_text};
 
 /// The rows that `INSERT ... ON CONFLICT` wrote.
@@ -106,12 +106,15 @@ impl Connection {
                     kept,
                 )?;
                 match result {
-                    Speculative::Inserted => {
+                    Speculative::Inserted(id) => {
                         done.count += 1;
                         self.count_inserts(info.table, 1);
                         if info.keeps_written() {
                             let mut written = row.clone();
                             written.resize(row.len() + conflict.carried, Value::Null);
+                            if let Some(at) = info.returning_tid {
+                                put_tids(std::slice::from_mut(&mut written), at, &[id]);
+                            }
                             done.written.push(written);
                         }
                         if keep || !info.foreign.is_empty() {
@@ -208,7 +211,7 @@ impl Connection {
                     kept,
                 )?;
                 match result {
-                    Speculative::Inserted => {
+                    Speculative::Inserted(_) => {
                         done.count += 1;
                         self.count_inserts(oid, 1);
                         if info.keeps_written() {
@@ -389,6 +392,9 @@ impl Connection {
         if info.on_conflict.as_ref().is_some_and(|c| c.select.is_some()) {
             done.count += 1;
             if info.keeps_written() {
+                if let Some(at) = info.returning_tid {
+                    put_tids(std::slice::from_mut(&mut new), at, &[tid]);
+                }
                 done.written.push(new);
             }
             return Ok(true);
@@ -438,6 +444,10 @@ impl Connection {
         if info.keeps_written() {
             let mut written = new.clone();
             written.extend(carried);
+            if let Some(at) = info.returning_tid {
+                let next = heap.next_versions(view.database, info.table, &[tid]);
+                put_tids(std::slice::from_mut(&mut written), at, &next);
+            }
             done.written.push(written);
         }
         if foreign {
