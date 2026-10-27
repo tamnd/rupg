@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The plan of `INTERSECT` or `EXCEPT` counts its disabled nodes, as `create_setop_path` does. With `enable_sort` off, a `HashSetOp` wins over a disabled `Sort`. With `enable_hashagg` off, `EXPLAIN` shows the `HashSetOp` as disabled. (#867)
 - `EXPLAIN` shows the subplan name in a node above the node that runs a subquery, as PostgreSQL does. Before, the node above showed the text of the subquery. (#866)
 - The planner puts the body of a simple SQL function in the query in place of the call, as `inline_function` does in PostgreSQL. `EXPLAIN` now shows the body, and a test of `IN` that uses such a function can use a hashed subplan. (#865)
 - A subplan of `= ANY` uses a hash table only when the type of the values has a hash function, a constant in the targets of a `Material` shows with no parentheses, and a row cast to a composite type on the left of `= ANY` is a list of values, as PostgreSQL does (#864).

@@ -3712,6 +3712,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/subplan_upper_copy.test")));
     }
 
+    /// `create_setop_path`: the plan of `INTERSECT` or `EXCEPT` with fewer disabled nodes wins. A `Sort` with `enable_sort` off is a disabled node, and a `HashSetOp` with `enable_hashagg` off or with a hash table that does not fit in `hash_mem` is one too. `connection/setop_disabled.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn setop_disabled() {
+        big_stack(|| script(include_str!("connection/setop_disabled.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

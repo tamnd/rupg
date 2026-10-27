@@ -1,0 +1,80 @@
+> create table so_t (a int, b text, c name)
+CREATE TABLE
+> insert into so_t select g, g::text, g::text from generate_series(1, 100) g
+INSERT 0 100
+> analyze so_t
+ANALYZE
+> create table so_u (u int)
+CREATE TABLE
+> insert into so_u values (1), (2)
+INSERT 0 2
+> begin
+BEGIN
+> set local enable_sort = off
+SET
+> explain (costs off) select count(*) from so_u cross join lateral (select * from so_t t1 where t1.a = so_u.u except select * from so_t t2 where t2.a = so_u.u + 1) ss
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   ->  Nested Loop
+row         ->  Seq Scan on so_u
+row         ->  HashSetOp Except
+row               ->  Seq Scan on so_t t1
+row                     Filter: (a = so_u.u)
+row               ->  Seq Scan on so_t t2
+row                     Filter: (a = (so_u.u + 1))
+EXPLAIN
+> select count(*) from so_u cross join lateral (select * from so_t t1 where t1.a = so_u.u except select * from so_t t2 where t2.a = so_u.u + 1) ss
+fields count:20:8:-1
+row 2
+SELECT 1
+> explain (costs off) select a from so_t intersect select u from so_u
+fields QUERY PLAN:25:-1:-1
+row HashSetOp Intersect
+row   ->  Seq Scan on so_t
+row   ->  Seq Scan on so_u
+EXPLAIN
+> rollback
+ROLLBACK
+> begin
+BEGIN
+> set local enable_hashagg = off
+SET
+> explain (costs off) select a from so_t except select u from so_u
+fields QUERY PLAN:25:-1:-1
+row SetOp Except
+row   ->  Sort
+row         Sort Key: so_t.a
+row         ->  Seq Scan on so_t
+row   ->  Sort
+row         Sort Key: so_u.u
+row         ->  Seq Scan on so_u
+EXPLAIN
+> set local enable_sort = off
+SET
+> explain (costs off) select a from so_t except select u from so_u
+fields QUERY PLAN:25:-1:-1
+row HashSetOp Except
+row   Disabled: true
+row   ->  Seq Scan on so_t
+row   ->  Seq Scan on so_u
+EXPLAIN
+> rollback
+ROLLBACK
+> begin
+BEGIN
+> set local work_mem = '64kB'
+SET
+> explain (costs off) select a, b from so_t except select u, 'x' from so_u
+fields QUERY PLAN:25:-1:-1
+row HashSetOp Except
+row   ->  Seq Scan on so_t
+row   ->  Seq Scan on so_u
+EXPLAIN
+> rollback
+ROLLBACK
+> explain (costs off) select a from so_t except all select u from so_u
+fields QUERY PLAN:25:-1:-1
+row HashSetOp Except All
+row   ->  Seq Scan on so_t
+row   ->  Seq Scan on so_u
+EXPLAIN
