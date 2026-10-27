@@ -3834,6 +3834,13 @@ mod tests {
         big_stack(|| script(include_str!("connection/run_condition.test")));
     }
 
+    /// The keys of a window in EXPLAIN: a key that the child of the WindowAgg reads from below is in parentheses, as `show_window_keys`.
+    /// `connection/window_keys.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn window_keys() {
+        big_stack(|| script(include_str!("connection/window_keys.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

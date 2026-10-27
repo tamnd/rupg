@@ -594,7 +594,11 @@ impl Explainer<'_, '_> {
                 }
             }
             Kind::WindowAgg { name, window, rows_frame, partition, run, .. } => {
-                let spec = self.texts.window(scope, *window, *rows_frame, partition, upper)?;
+                // `show_window_keys` shows the keys as the child shows them: a key that the child reads from below is in parentheses.
+                self.texts.below(passed(node));
+                let spec = self.texts.window(scope, *window, *rows_frame, partition, upper);
+                self.texts.below(Vec::new());
+                let spec = spec?;
                 self.w.text("Window", &format!("{} AS {spec}", self.texts.quote(name)));
                 let run: Vec<Item<'_>> = run.iter().map(Item::of).collect();
                 self.qual("Run Condition", scope, &run, upper)?;
@@ -835,6 +839,16 @@ impl Explainer<'_, '_> {
         }
         Ok(())
     }
+}
+
+/// The expressions of the targets of the children of a node that are not columns and that the children read from below.
+fn passed(node: &Node<'_>) -> Vec<Expr> {
+    node.children
+        .iter()
+        .flat_map(|child| &child.output)
+        .filter(|item| item.below && !matches!(item.expr.kind, ExprKind::Var(_)))
+        .map(|item| item.expr.as_ref().clone())
+        .collect()
 }
 
 /// The expressions of the targets of the two sides of a join that are not columns, which a condition of the join reads from the side as `fix_join_expr` finds them in its target list.
