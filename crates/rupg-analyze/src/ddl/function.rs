@@ -473,7 +473,8 @@ fn planned(node: &Node) -> bool {
         | Node::UpdateStmt(_)
         | Node::DeleteStmt(_)
         | Node::MergeStmt(_)
-        | Node::CallStmt(_) => true,
+        | Node::CallStmt(_)
+        | Node::ReturnStmt(_) => true,
         _ => false,
     }
 }

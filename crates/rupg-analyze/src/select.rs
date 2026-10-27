@@ -85,6 +85,8 @@ pub struct Query {
     pub funcs: Vec<u32>,
     /// `utilityStmt` of an action `NOTIFY` of a rule: the channel and the payload. The query has nothing else.
     pub notify: Option<(String, Option<String>)>,
+    /// `isReturn`: the query of a `RETURN` statement in a `BEGIN ATOMIC` body. It shows as `RETURN` and not as `SELECT`.
+    pub is_return: bool,
 }
 
 /// `MinMaxAggInfo`: the form of a query whose aggregate calls are each `min` or `max`, with a subquery for each aggregate call that reads the first value in the order of its sort operator.
@@ -412,6 +414,7 @@ impl Analyzer<'_> {
             perms: Vec::new(),
             funcs: Vec::new(),
             notify: None,
+            is_return: false,
         };
         for clause in s.lockingClause.iter().flatten() {
             if let Node::LockingClause(clause) = clause {

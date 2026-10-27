@@ -142,6 +142,7 @@ impl Analyzer<'_> {
             perms: Vec::new(),
             funcs: Vec::new(),
             notify: None,
+            is_return: false,
         })
     }
 }
