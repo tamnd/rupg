@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The references to a query of `WITH` read the rows of one run of the query, so they see the same values of `random` and `nextval`, as the `CteScan` nodes of PostgreSQL read one tuplestore (#888).
 - `ALTER TABLE ONLY ... ADD PRIMARY KEY` on a partitioned table makes the index on that table alone and checks the not-null constraints of the partitions. `REPLICA IDENTITY USING INDEX` accepts the index of a partitioned table and rejects a column with a `NOT VALID` not-null constraint (#885).
 - `COPY ... FROM` now accepts `FREEZE`, with the checks of `CopyFrom`: the table must not be partitioned or foreign, and the current subtransaction must have created or truncated it. `TRUNCATE` now gives each table, its TOAST table and their indexes a new `relfilenode`, as `ExecuteTruncateGuts` does, unless the current subtransaction created the table. `pgbench -i` now runs. (#881)
 - Give the error "operator class ... has no options" when an index sets options for an operator class whose access method has no options support function (#882).

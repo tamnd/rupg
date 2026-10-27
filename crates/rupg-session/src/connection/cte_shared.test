@@ -1,0 +1,62 @@
+> WITH vs AS (SELECT i, (random() * 100)::int4 AS v FROM generate_series(1, 5) AS i) SELECT count(*) FROM vs a JOIN vs b ON a.i = b.i AND a.v = b.v
+fields count:20:8:-1
+row 5
+SELECT 1
+> WITH vs AS MATERIALIZED (SELECT i, (random() * 100)::int4 AS v FROM generate_series(1, 5) AS i) SELECT count(*) FROM vs a JOIN vs b ON a.i = b.i AND a.v = b.v
+fields count:20:8:-1
+row 5
+SELECT 1
+> WITH vs AS NOT MATERIALIZED (SELECT i, (random() * 1000000)::int4 AS v FROM generate_series(1, 5) AS i) SELECT count(*) < 5 FROM vs a JOIN vs b ON a.i = b.i AND a.v = b.v
+fields ?column?:16:1:-1
+row f
+SELECT 1
+> CREATE TEMP SEQUENCE cs_seq
+CREATE SEQUENCE
+> WITH s AS (SELECT nextval('cs_seq') AS n FROM generate_series(1, 3)) SELECT (SELECT sum(n) FROM s), (SELECT max(n) FROM s), (SELECT count(*) FROM s)
+fields sum:1700:-1:-1,max:20:8:-1,count:20:8:-1
+row 6,3,3
+SELECT 1
+> SELECT last_value FROM cs_seq
+fields last_value@cs_seq.1:20:8:-1
+row 3
+SELECT 1
+> WITH s AS NOT MATERIALIZED (SELECT nextval('cs_seq') AS n FROM generate_series(1, 3)) SELECT (SELECT sum(n) FROM s), (SELECT max(n) FROM s)
+fields sum:1700:-1:-1,max:20:8:-1
+row 15,6
+SELECT 1
+> SELECT last_value FROM cs_seq
+fields last_value@cs_seq.1:20:8:-1
+row 6
+SELECT 1
+> WITH RECURSIVE r(n) AS (SELECT nextval('cs_seq') UNION ALL SELECT n + 1 FROM r WHERE n < 22) SELECT a.n, b.n FROM r a JOIN r b USING (n) ORDER BY 1
+fields n:20:8:-1,n:20:8:-1
+row 7,7
+row 8,8
+row 9,9
+row 10,10
+row 11,11
+row 12,12
+row 13,13
+row 14,14
+row 15,15
+row 16,16
+row 17,17
+row 18,18
+row 19,19
+row 20,20
+row 21,21
+row 22,22
+SELECT 16
+> SELECT last_value FROM cs_seq
+fields last_value@cs_seq.1:20:8:-1
+row 7
+SELECT 1
+> WITH vs AS (SELECT i, (random() * 100)::int4 AS v FROM generate_series(1, 100) AS i),  sf AS (SELECT i, sum(v) OVER (ORDER BY i DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS s FROM vs) SELECT DISTINCT sf.s = sum(v) OVER fwd FROM vs JOIN sf ON sf.i = vs.i WINDOW fwd AS (ORDER BY vs.i ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT x, (WITH w AS (SELECT nextval('cs_seq') AS n) SELECT a.n = b.n FROM w a, w b) FROM generate_series(1, 2) x
+fields x:23:4:-1,?column?:16:1:-1
+row 1,t
+row 2,t
+SELECT 2
