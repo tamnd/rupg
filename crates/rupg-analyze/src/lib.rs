@@ -150,6 +150,11 @@ pub trait Env {
         let _ = namespace;
         true
     }
+    /// `pg_class_aclcheck` of the bits of `mask` on a relation for the current user. A session with no roles has each privilege.
+    fn relation_allowed(&self, relid: u32, mask: u32) -> bool {
+        let _ = (relid, mask);
+        true
+    }
     /// The `allow_system_table_mods` setting, which lets a statement make a relation in a system schema. `initdb` turns it on.
     fn allow_system_table_mods(&self) -> bool {
         false

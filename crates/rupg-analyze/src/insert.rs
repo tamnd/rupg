@@ -1013,6 +1013,23 @@ impl Analyzer<'_> {
         };
         let rel = self.env.catalog().and_then(|c| c.relation(oid));
         let Some(rel) = rel else {
+            // `ExecCheckPermissions`: only a superuser can write a system catalog.
+            let need = match kind {
+                WriteKind::Insert => ACL_INSERT,
+                WriteKind::Update => ACL_UPDATE,
+                WriteKind::Delete => ACL_DELETE,
+                WriteKind::Merge => 0,
+            };
+            if let Some(class) = builtin::class_by_oid(oid)
+                && matches!(class.kind, b'r' | b't')
+                && need != 0
+                && !self.env.relation_allowed(oid, need)
+            {
+                return Err(Error::new(
+                    SqlState::INSUFFICIENT_PRIVILEGE,
+                    format!("permission denied for table {}", class.name),
+                ));
+            }
             return Err(not_yet(&format!("{what} a system catalog")));
         };
         match rel.kind {

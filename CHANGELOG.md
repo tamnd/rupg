@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `INSERT`, `UPDATE` and `DELETE` of a system catalog or a TOAST table by a role that is not a superuser give "permission denied for table", as `ExecCheckPermissions` gives it (#967).
+
 ## 0.3.9 (2026-10-27)
 
 ### Added

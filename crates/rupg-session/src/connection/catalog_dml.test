@@ -1,0 +1,25 @@
+> CREATE ROLE tsstat_sc1;
+CREATE ROLE
+> SET SESSION AUTHORIZATION tsstat_sc1;
+SET
+session_authorization=tsstat_sc1
+is_superuser=off
+> UPDATE pg_catalog.pg_class SET relname = '123';
+ERROR 42501 permission denied for table pg_class
+> DELETE FROM pg_catalog.pg_class;
+ERROR 42501 permission denied for table pg_class
+> UPDATE pg_toast.pg_toast_1213 SET chunk_id = 1;
+ERROR 42501 permission denied for schema pg_toast at 8
+> INSERT INTO pg_class DEFAULT VALUES;
+ERROR 42501 permission denied for table pg_class
+> DELETE FROM pg_roles;
+ERROR 55000 cannot delete from view "pg_roles"
+> UPDATE pg_settings SET setting = 'x' WHERE name = 'foo';
+fields set_config:25:-1:-1
+UPDATE 0
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> DROP ROLE tsstat_sc1;
+DROP ROLE
