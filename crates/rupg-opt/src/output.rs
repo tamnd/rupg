@@ -342,14 +342,15 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
                 want.iter().all(|w| matches!(w.expr.kind, ExprKind::Var(v) if v.attnum > 0));
             let physical = physical && node.member.is_none();
             // `create_scan_plan`: the physical target list of an index only scan is the columns of the index.
+            let full = physical && plain;
             node.output = match &node.kind {
-                _ if !(physical && plain) => want,
+                _ if !full => want,
                 Kind::IndexScan { only: true, columns, .. } => {
                     index_columns(level, r, columns).unwrap_or(want)
                 }
                 _ => all_columns(level, r),
             };
-            if matches!(node.kind, Kind::SubqueryScan(_)) && trivial(level, node, r) {
+            if matches!(node.kind, Kind::SubqueryScan(_)) && trivial(level, node, r, full) {
                 let child = node.children.pop();
                 if let Some(child) = child {
                     *node = child;
@@ -654,18 +655,21 @@ fn append_rel<'q>(level: &Level<'q>, node: &mut Node<'q>, r: usize, want: &[Item
     true
 }
 
-/// True when a `SubqueryScan` gives the rows of its subquery as they are, so that `trivial_subqueryscan` takes it out of the plan. The subquery gives only the columns of the scan.
-fn trivial(level: &Level<'_>, node: &Node<'_>, r: usize) -> bool {
+/// True when a `SubqueryScan` gives the rows of its subquery as they are, so that `trivial_subqueryscan` takes it out of the plan. The subquery gives only the columns of the scan. With `physical` the scan has the physical target list, which has the junk columns of the subquery too, as `build_physical_tlist`.
+fn trivial(level: &Level<'_>, node: &Node<'_>, r: usize, physical: bool) -> bool {
     let columns = level.query.relations[r].columns.len();
-    // A junk column of the subquery, such as a key of its `ORDER BY`, makes its target list longer than the target list of the scan.
-    let set_op = level.query.relations[r].subquery.as_deref().is_some_and(|s| s.set_op.is_some());
+    let sub = level.query.relations[r].subquery.as_deref();
+    // A junk column of the subquery, such as a key of its `ORDER BY`, makes its target list longer than the target list of the scan, unless the scan has the junk columns too.
+    let junk =
+        if physical { sub.map_or(0, |s| s.targets.iter().filter(|t| t.junk).count()) } else { 0 };
+    let set_op = sub.is_some_and(|s| s.set_op.is_some());
     // The `Append` of a set operation gives the columns of the operation.
     let child = node.children.first().map(|c| match c.kind {
         Kind::Append | Kind::MergeAppend(_) if set_op && c.output.is_empty() => columns,
         _ => c.output.len(),
     });
     node.filter.is_empty()
-        && child.is_none_or(|n| n == columns)
+        && child.is_none_or(|n| n == columns || junk > 0 && n == columns + junk)
         && node.output.len() == columns
         && node.output.iter().enumerate().all(|(i, o)| {
             matches!(o.expr.kind, ExprKind::Var(v) if v.relation == r && usize::try_from(v.attnum).ok() == Some(i + 1))

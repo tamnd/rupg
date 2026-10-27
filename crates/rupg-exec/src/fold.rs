@@ -68,6 +68,18 @@ fn plan(
             *call = fold.clause(&[&*call])?.pop().unwrap_or_else(|| call.clone());
         }
     }
+    // `inline_function_in_from`: a call of a function in SQL that gives a set becomes the query of its body, which the planner can pull up.
+    for relation in &mut out.relations {
+        let lateral = relation.function.iter().flat_map(|f| &f.calls).any(|(call, _)| {
+            call.find(0, &mut |e, _| matches!(e.kind, ExprKind::Var(_)).then_some(())).is_some()
+        });
+        if let Some(body) = inline_from(relation, session)? {
+            relation.subquery = Some(Box::new(body));
+            relation.function = None;
+            // The body reads the columns of the relations before it that the arguments read.
+            relation.lateral |= lateral;
+        }
+    }
     if simple {
         out.limit = None;
     } else {
@@ -126,6 +138,83 @@ fn plan(
         }
     }
     Ok(out)
+}
+
+/// `inline_function_in_from` and `inline_sql_function_in_from`: the query of the body of the one function of a relation in `FROM`, with the arguments in the places of its parameters, or `None` when the function cannot be inlined. The relation must have no `WITH ORDINALITY` and no column definition list. The arguments must have no volatile function and no subquery. The function must be in SQL, return a set and not `void`, and must not be strict, volatile or `SECURITY DEFINER` or have settings. Its body must be one `SELECT` with no `WITH`, whose columns have the types of the columns of the relation.
+fn inline_from(relation: &Relation, session: &dyn Session) -> Result<Option<Query>> {
+    let Some(function) = &relation.function else { return Ok(None) };
+    let ([(call, _)], [false]) = (function.calls.as_slice(), function.coldefs.as_slice()) else {
+        return Ok(None);
+    };
+    let ExprKind::Func(f) = &call.kind else { return Ok(None) };
+    if function.ordinality || !f.retset {
+        return Ok(None);
+    }
+    let volatile = |func: u32| builtin::proc_by_oid(func).is_none_or(|p| p.volatile == b'v');
+    let unsafe_arg = f.args.iter().any(|arg| {
+        arg.find(0, &mut |e, _| match &e.kind {
+            ExprKind::Func(g) if volatile(g.oid) => Some(()),
+            ExprKind::NullIf { equal: func, .. }
+            | ExprKind::Distinct { equal: func, .. }
+            | ExprKind::ScalarArrayOp { func, .. }
+                if volatile(*func) =>
+            {
+                Some(())
+            }
+            ExprKind::SubLink(_) => Some(()),
+            _ => None,
+        })
+        .is_some()
+    });
+    let Some(proc) = builtin::proc_by_oid(f.oid) else { return Ok(None) };
+    if unsafe_arg
+        || proc.oid < rupg_catalog::FIRST_NORMAL_OID
+        || proc.lang != SQL_LANGUAGE
+        || proc.kind != b'f'
+        || proc.strict
+        || proc.volatile == b'v'
+        || proc.rettype == oid::VOID
+        || !proc.retset
+        || f.args.len() != usize::try_from(proc.nargs).unwrap_or(usize::MAX)
+    {
+        return Ok(None);
+    }
+    if session
+        .catalog()
+        .and_then(|c| c.function(f.oid))
+        .is_none_or(|function| function.secdef || !function.config.is_empty())
+    {
+        return Ok(None);
+    }
+    let inputs: Vec<u32> = f.args.iter().map(|a| a.ty).collect();
+    let Ok(Some(rupg_analyze::Body::Query(mut body))) =
+        rupg_func::function_body(f.oid, &inputs, session)
+    else {
+        return Ok(None);
+    };
+    let columns: Vec<(u32, i32)> =
+        body.targets.iter().filter(|t| !t.junk).map(|t| (t.expr.ty, t.expr.typmod)).collect();
+    let wanted: Vec<(u32, i32)> = relation.columns.iter().map(|c| (c.ty, c.typmod)).collect();
+    if body.write.is_some()
+        || !body.ctes.is_empty()
+        || columns.len() != wanted.len()
+        || columns.iter().zip(&wanted).any(|(a, b)| a.0 != b.0)
+    {
+        return Ok(None);
+    }
+    // `substitute_actual_parameters_in_from`: each parameter takes the value of its argument, whose columns are one level up more in the body.
+    body.each_expr_mut(0, &mut |e, top| {
+        e.each_mut(top, &mut |e, depth| {
+            let ExprKind::Param(n) = e.kind else { return false };
+            if let Some(arg) = n.checked_sub(1).and_then(|i| f.args.get(i)) {
+                let mut arg = arg.clone();
+                arg.raise(depth + 1);
+                *e = arg;
+            }
+            true
+        });
+    });
+    Ok(Some(*body))
 }
 
 /// Folds a `SELECT` of a set operation. `transformSetOperationTree` does not cast the columns of a `SELECT` to the types of the operation: `generate_setop_tlist` adds the casts above the `SELECT` after `subquery_planner` folds it. So the fold here folds the argument of the cast of each column and keeps the casts, also for a constant.
