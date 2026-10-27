@@ -2,7 +2,7 @@
 //!
 //! The query of the statement gives all the new rows before the first row goes in, so the checks of the constraints of the new rows come before the writes, and a function of the query does not see the rows that the statement wrote. The triggers `BEFORE ... FOR EACH ROW` fire for each row in turn, as `ExecInsert` fires them: the triggers `INSERT` before the row goes in, and the triggers `UPDATE` before `DO UPDATE` changes the row of the table.
 
-use rupg_analyze::{Derived, OnConflict, Unique, Write};
+use rupg_analyze::{Derived, OnConflict, Unique, Write, WriteKind};
 use rupg_catalog::{Catalog, TRIGGER_INSERT, TRIGGER_UPDATE};
 use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
@@ -190,6 +190,10 @@ impl Connection {
             };
             if at == arbiters.len() {
                 let oid = routing.oid(at);
+                // `ExecInitPartitionInfo` checks the leaf of `DO UPDATE` with `CheckValidResultRel`.
+                if conflict.update.is_some() {
+                    rupg_analyze::check_cmd_replica_identity(&catalog, oid, WriteKind::Update)?;
+                }
                 if route::has_foreign(&catalog, oid) {
                     return Err(route::not_yet(
                         "ON CONFLICT on a partitioned table with foreign keys",

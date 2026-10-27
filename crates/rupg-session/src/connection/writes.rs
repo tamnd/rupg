@@ -2,6 +2,7 @@
 //!
 //! The statements and the main query run in one command with one snapshot, so that no part sees the changes of another part. A statement whose rows the main query or another statement reads runs before the main query, and the references read the rows of its `RETURNING`. A statement that no part reads runs after the main query, as `ExecPostprocessPlan` runs it to its end. A row that the command changed before stays as it is, so of two parts that change one row, the first part changes it.
 
+use rupg_analyze::{MergeCommand, Write, WriteKind};
 use rupg_common::Error;
 use rupg_exec::Plan;
 use rupg_types::Value;
@@ -81,6 +82,47 @@ impl Connection {
         }
         self.recheck_unique(view.command)?;
         self.fire_events(0)
+    }
+
+    /// `CheckValidResultRel` for each result relation of the write, as `ExecInitModifyTable` opens them: the target table, and each child table that the plan keeps. Each one checks its replica identity for the actions of the write.
+    ///
+    /// # Errors
+    ///
+    /// The errors of `CheckCmdReplicaIdentity`.
+    pub(super) fn check_result_relations(&self, info: &Write) -> Result<(), Error> {
+        let mut actions = Vec::new();
+        match info.kind {
+            WriteKind::Update | WriteKind::Delete => actions.push(info.kind),
+            WriteKind::Merge => {
+                for clause in info.merge.iter().flat_map(|m| &m.clauses) {
+                    match clause.command {
+                        MergeCommand::Update => actions.push(WriteKind::Update),
+                        MergeCommand::Delete => actions.push(WriteKind::Delete),
+                        _ => {}
+                    }
+                }
+            }
+            // `INSERT ... ON CONFLICT DO UPDATE` also checks `UPDATE`.
+            WriteKind::Insert => {
+                if info.on_conflict.as_ref().is_some_and(|c| c.update.is_some()) {
+                    actions.push(WriteKind::Update);
+                }
+            }
+        }
+        if actions.is_empty() || info.instead {
+            return Ok(());
+        }
+        let catalog = self.catalog();
+        let mut tables = vec![info.table];
+        if !info.pruned && info.kind != WriteKind::Insert {
+            tables.extend(catalog.all_inheritors(info.table));
+        }
+        for table in tables {
+            for &action in &actions {
+                rupg_analyze::check_cmd_replica_identity(&catalog, table, action)?;
+            }
+        }
+        Ok(())
     }
 
     /// Runs one statement of `WITH` that changes data in the command of the view, and gives the rows of its `RETURNING`.

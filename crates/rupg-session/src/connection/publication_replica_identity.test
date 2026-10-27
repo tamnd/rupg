@@ -1,0 +1,180 @@
+> CREATE TABLE ri_nopk (a int, b int);
+CREATE TABLE
+> CREATE TABLE ri_pk (a int PRIMARY KEY, b int, c int);
+CREATE TABLE
+> CREATE TABLE ri_gen (a int, b int GENERATED ALWAYS AS (a + 1) STORED NOT NULL, c int);
+CREATE TABLE
+> CREATE UNIQUE INDEX ri_gen_b ON ri_gen (b);
+CREATE INDEX
+> ALTER TABLE ri_gen REPLICA IDENTITY USING INDEX ri_gen_b;
+ALTER TABLE
+> CREATE TABLE ri_parted (a int PRIMARY KEY, b int) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE ri_part1 PARTITION OF ri_parted FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> CREATE TABLE ri_part2 (b int, a int NOT NULL);
+CREATE TABLE
+> ALTER TABLE ri_parted ATTACH PARTITION ri_part2 FOR VALUES FROM (10) TO (20);
+ALTER TABLE
+> CREATE TABLE ri_inh (a int, b int);
+CREATE TABLE
+> CREATE TABLE ri_inh_child () INHERITS (ri_inh);
+CREATE TABLE
+> INSERT INTO ri_nopk VALUES (1, 1);
+INSERT 0 1
+> INSERT INTO ri_pk VALUES (1, 1, 1);
+INSERT 0 1
+> CREATE PUBLICATION ri_pub1 FOR TABLE ri_nopk, ri_pk WITH (publish = 'insert');
+CREATE PUBLICATION
+> UPDATE ri_nopk SET b = 2;
+UPDATE 1
+> DELETE FROM ri_nopk;
+DELETE 1
+> ALTER PUBLICATION ri_pub1 SET (publish = 'insert, update');
+ALTER PUBLICATION
+> UPDATE ri_nopk SET b = 2;
+ERROR 55000 cannot update table "ri_nopk" because it does not have a replica identity and publishes updates
+> UPDATE ri_nopk SET b = 2 WHERE false;
+ERROR 55000 cannot update table "ri_nopk" because it does not have a replica identity and publishes updates
+> DELETE FROM ri_nopk WHERE a = 5;
+DELETE 0
+> INSERT INTO ri_nopk VALUES (2, 2);
+INSERT 0 1
+> ALTER PUBLICATION ri_pub1 SET (publish = 'delete');
+ALTER PUBLICATION
+> UPDATE ri_nopk SET b = 3;
+UPDATE 1
+> DELETE FROM ri_nopk WHERE a = 5;
+ERROR 55000 cannot delete from table "ri_nopk" because it does not have a replica identity and publishes deletes
+> EXPLAIN (COSTS OFF) DELETE FROM ri_nopk;
+ERROR 55000 cannot delete from table "ri_nopk" because it does not have a replica identity and publishes deletes
+> ALTER TABLE ri_nopk REPLICA IDENTITY FULL;
+ALTER TABLE
+> DELETE FROM ri_nopk WHERE a = 5;
+DELETE 0
+> ALTER TABLE ri_pk REPLICA IDENTITY NOTHING;
+ALTER TABLE
+> DELETE FROM ri_pk WHERE a = 5;
+ERROR 55000 cannot delete from table "ri_pk" because it does not have a replica identity and publishes deletes
+> ALTER TABLE ri_pk REPLICA IDENTITY DEFAULT;
+ALTER TABLE
+> DELETE FROM ri_pk WHERE a = 5;
+DELETE 0
+> ALTER PUBLICATION ri_pub1 SET (publish = 'update, delete');
+ALTER PUBLICATION
+> ALTER PUBLICATION ri_pub1 SET TABLE ri_pk WHERE (b > 1);
+ALTER PUBLICATION
+> UPDATE ri_pk SET c = 2;
+ERROR 42P10 cannot update table "ri_pk"
+> DELETE FROM ri_pk;
+ERROR 42P10 cannot delete from table "ri_pk"
+> ALTER PUBLICATION ri_pub1 SET TABLE ri_pk WHERE (a > 1);
+ALTER PUBLICATION
+> UPDATE ri_pk SET c = 2;
+UPDATE 1
+> ALTER PUBLICATION ri_pub1 SET TABLE ri_pk (b, c);
+ALTER PUBLICATION
+> UPDATE ri_pk SET c = 3;
+ERROR 42P10 cannot update table "ri_pk"
+> DELETE FROM ri_pk;
+ERROR 42P10 cannot delete from table "ri_pk"
+> ALTER PUBLICATION ri_pub1 SET TABLE ri_pk (a, c);
+ALTER PUBLICATION
+> UPDATE ri_pk SET c = 3;
+UPDATE 1
+> ALTER TABLE ri_pk REPLICA IDENTITY FULL;
+ALTER TABLE
+> UPDATE ri_pk SET c = 4;
+ERROR 42P10 cannot update table "ri_pk"
+> ALTER PUBLICATION ri_pub1 SET TABLE ri_pk WHERE (b > 1);
+ALTER PUBLICATION
+> UPDATE ri_pk SET c = 4;
+UPDATE 1
+> ALTER PUBLICATION ri_pub1 SET TABLE ri_gen;
+ALTER PUBLICATION
+> UPDATE ri_gen SET c = 1;
+ERROR 42P10 cannot update table "ri_gen"
+> ALTER PUBLICATION ri_pub1 SET (publish_generated_columns = stored);
+ALTER PUBLICATION
+> UPDATE ri_gen SET c = 1;
+UPDATE 0
+> ALTER PUBLICATION ri_pub1 SET TABLE ri_parted;
+ALTER PUBLICATION
+> UPDATE ri_parted SET b = 1;
+UPDATE 0
+> UPDATE ri_parted SET b = 1 WHERE false;
+UPDATE 0
+> UPDATE ONLY ri_parted SET b = 1;
+UPDATE 0
+> UPDATE ri_part2 SET b = 1;
+UPDATE 0
+> ALTER PUBLICATION ri_pub1 SET TABLE ri_parted WHERE (b > 0) WITH (publish_via_partition_root = true);
+ERROR 42601 syntax error at or near "WITH" at 61
+> UPDATE ri_part1 SET b = 1;
+UPDATE 0
+> DELETE FROM ri_parted;
+DELETE 0
+> ALTER PUBLICATION ri_pub1 SET TABLE ri_parted (b) WITH (publish_via_partition_root = false);
+ERROR 42601 syntax error at or near "WITH" at 51
+> UPDATE ri_part1 SET b = 1;
+UPDATE 0
+> ALTER PUBLICATION ri_pub1 SET TABLE ri_parted (b) WITH (publish_via_partition_root = true);
+ERROR 42601 syntax error at or near "WITH" at 51
+> UPDATE ri_part1 SET b = 1;
+UPDATE 0
+> INSERT INTO ri_parted VALUES (1, 1) ON CONFLICT (a) DO UPDATE SET b = 2;
+INSERT 0 1
+> INSERT INTO ri_parted VALUES (1, 1) ON CONFLICT DO NOTHING;
+INSERT 0 0
+> ALTER PUBLICATION ri_pub1 SET TABLE ri_inh;
+ALTER PUBLICATION
+> UPDATE ri_inh SET b = 1;
+ERROR 55000 cannot update table "ri_inh" because it does not have a replica identity and publishes updates
+> UPDATE ONLY ri_inh SET b = 1;
+ERROR 55000 cannot update table "ri_inh" because it does not have a replica identity and publishes updates
+> UPDATE ri_inh_child SET b = 1;
+ERROR 55000 cannot update table "ri_inh_child" because it does not have a replica identity and publishes updates
+> DROP PUBLICATION ri_pub1;
+DROP PUBLICATION
+> CREATE PUBLICATION ri_all FOR ALL TABLES EXCEPT (TABLE ri_inh);
+CREATE PUBLICATION
+> UPDATE ri_inh SET b = 1;
+UPDATE 0
+> UPDATE ri_inh_child SET b = 1;
+UPDATE 0
+> INSERT INTO ri_nopk VALUES (1, 1);
+INSERT 0 1
+> ALTER TABLE ri_nopk REPLICA IDENTITY DEFAULT;
+ALTER TABLE
+> INSERT INTO ri_nopk VALUES (1, 1) ON CONFLICT DO NOTHING;
+INSERT 0 1
+> MERGE INTO ri_nopk t USING (SELECT 1 AS a) s ON t.a = s.a WHEN NOT MATCHED THEN INSERT VALUES (s.a, 1);
+MERGE 0
+> MERGE INTO ri_nopk t USING (SELECT 1 AS a) s ON t.a = s.a WHEN MATCHED THEN DELETE;
+ERROR 55000 cannot delete from table "ri_nopk" because it does not have a replica identity and publishes deletes
+> MERGE INTO ri_nopk t USING (SELECT 1 AS a) s ON t.a = s.a WHEN MATCHED THEN UPDATE SET b = 2;
+ERROR 55000 cannot update table "ri_nopk" because it does not have a replica identity and publishes updates
+> CREATE TEMP TABLE ri_temp (a int);
+CREATE TABLE
+> UPDATE ri_temp SET a = 1;
+UPDATE 0
+> CREATE UNLOGGED TABLE ri_unlogged (a int);
+CREATE TABLE
+> UPDATE ri_unlogged SET a = 1;
+UPDATE 0
+> WITH d AS (DELETE FROM ri_nopk RETURNING a) SELECT count(*) FROM d;
+ERROR 55000 cannot delete from table "ri_nopk" because it does not have a replica identity and publishes deletes
+> CREATE FUNCTION ri_f() RETURNS void LANGUAGE sql AS 'UPDATE ri_nopk SET b = 1';
+CREATE FUNCTION
+> SELECT ri_f();
+fields ri_f:2278:4:-1
+ERROR 55000 cannot update table "ri_nopk" because it does not have a replica identity and publishes updates (SQL function "ri_f" statement 1)
+> DROP FUNCTION ri_f();
+DROP FUNCTION
+> DROP PUBLICATION ri_all;
+DROP PUBLICATION
+> UPDATE ri_nopk SET b = 1;
+UPDATE 3
+> DROP TABLE ri_nopk, ri_pk, ri_gen, ri_parted, ri_inh CASCADE;
+NOTICE 00000 drop cascades to table ri_inh_child
+DROP TABLE

@@ -92,6 +92,8 @@ pub struct Write {
     pub insert_def: Option<Box<InsertDef>>,
     /// The items of `SET` of an `UPDATE` before the rewrite, or no items for a `DELETE`, when the analysis keeps the form for a deparse. Each item has the number of its column from 1, and its value, or `None` for `DEFAULT`. The value for a part of a column is the assignment to the part of the old value.
     pub set_def: Option<Vec<(i16, Option<Expr>)>>,
+    /// True when the plan has no child table of the target as a result relation: for `ONLY`, and for a `WHERE` of the constant false, which prunes each child. Each other child is a result relation that `CheckValidResultRel` checks.
+    pub pruned: bool,
 }
 
 /// An `INSERT` as `transformInsertStmt` gives it, before `rewriteTargetListIU` adds the defaults of the other columns, which `get_insert_query_def` shows.
@@ -636,6 +638,7 @@ impl Analyzer<'_> {
             modified: Vec::new(),
             insert_def,
             set_def: None,
+            pruned: true,
         });
         self.end_write_with(&mut query, s.withClause.as_deref())?;
         Ok(query)
