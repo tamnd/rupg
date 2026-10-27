@@ -1,0 +1,63 @@
+> CREATE TABLE rngfunc (rngfuncid int, rngfuncsubid int, rngfuncname text)
+CREATE TABLE
+> INSERT INTO rngfunc VALUES (1,1,'Joe'),(1,2,'Ed'),(2,1,'Mary')
+INSERT 0 3
+> CREATE FUNCTION getrngfunc4(int) RETURNS rngfunc AS 'SELECT * FROM rngfunc WHERE rngfuncid = $1;' LANGUAGE SQL
+CREATE FUNCTION
+> SELECT * FROM getrngfunc4(1) AS t1
+fields rngfuncid:23:4:-1,rngfuncsubid:23:4:-1,rngfuncname:25:-1:-1
+row 1,1,Joe
+SELECT 1
+> SELECT getrngfunc4(1)::text
+fields getrngfunc4:25:-1:-1
+row (1,1,Joe)
+SELECT 1
+> SELECT * FROM getrngfunc4(1) WITH ORDINALITY AS t1(a,b,c,o)
+fields a:23:4:-1,b:23:4:-1,c:25:-1:-1,o:20:8:-1
+row 1,1,Joe,1
+SELECT 1
+> CREATE FUNCTION g5(int) RETURNS int AS 'SELECT rngfuncsubid FROM rngfunc WHERE rngfuncid = $1;' LANGUAGE SQL
+CREATE FUNCTION
+> SELECT * FROM g5(1)
+fields g5:23:4:-1
+row 1
+SELECT 1
+> SELECT g5(1)
+fields g5:23:4:-1
+row 1
+SELECT 1
+> SELECT * FROM getrngfunc4(9) AS t1
+fields rngfuncid:23:4:-1,rngfuncsubid:23:4:-1,rngfuncname:25:-1:-1
+row NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM getrngfunc4(9) WITH ORDINALITY AS t1(a,b,c,o)
+fields a:23:4:-1,b:23:4:-1,c:25:-1:-1,o:20:8:-1
+row NULL,NULL,NULL,1
+SELECT 1
+> SELECT * FROM g5(9)
+fields g5:23:4:-1
+row NULL
+SELECT 1
+> SELECT * FROM ROWS FROM (getrngfunc4(1), generate_series(1,3))
+fields rngfuncid:23:4:-1,rngfuncsubid:23:4:-1,rngfuncname:25:-1:-1,generate_series:23:4:-1
+row 1,1,Joe,1
+row NULL,NULL,NULL,2
+row NULL,NULL,NULL,3
+SELECT 3
+> CREATE FUNCTION g6(int) RETURNS rngfunc AS 'INSERT INTO rngfunc VALUES ($1, 5, ''x''), ($1, 6, ''y'') RETURNING *;' LANGUAGE SQL
+CREATE FUNCTION
+> SELECT * FROM g6(7)
+fields rngfuncid:23:4:-1,rngfuncsubid:23:4:-1,rngfuncname:25:-1:-1
+row 7,5,x
+SELECT 1
+> SELECT * FROM rngfunc WHERE rngfuncid = 7
+fields rngfuncid@rngfunc.1:23:4:-1,rngfuncsubid@rngfunc.2:23:4:-1,rngfuncname@rngfunc.3:25:-1:-1
+row 7,5,x
+row 7,6,y
+SELECT 2
+> CREATE FUNCTION g7(out a int, out b text) AS 'SELECT rngfuncsubid, rngfuncname FROM rngfunc ORDER BY 1 DESC' LANGUAGE SQL
+CREATE FUNCTION
+> SELECT * FROM g7()
+fields a:23:4:-1,b:25:-1:-1
+row 6,y
+SELECT 1

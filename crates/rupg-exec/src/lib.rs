@@ -2166,7 +2166,14 @@ impl<'a> Eval<'a> {
                 }
             }
         })?;
-        if let Some(rows) = rows {
+        if let Some(mut rows) = rows {
+            // `fmgr_sql`: a function that does not give a set gives the first row of its last query, or a row of nulls when the query gives no row.
+            if builtin::proc_by_oid(f.oid).is_some_and(|p| !p.retset) {
+                rows.truncate(1);
+                if rows.is_empty() {
+                    rows.push(vec![Value::Null; width]);
+                }
+            }
             return Ok(rows);
         }
         if row_function(f.oid) {
