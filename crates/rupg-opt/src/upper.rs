@@ -17,8 +17,6 @@ use crate::from::paths::{Paths, costs};
 use crate::from::{self, OrderKey, sort};
 use crate::{Builder, Level, cost, exprs, setop};
 
-/// `FRAMEOPTION_DEFAULTS`: `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`.
-const FRAME_DEFAULTS: i32 = 0x422;
 /// `FRAMEOPTION_ROWS`.
 const FRAME_ROWS: i32 = 0x4;
 /// `FRAMEOPTION_NONDEFAULT | FRAMEOPTION_ROWS | FRAMEOPTION_START_UNBOUNDED_PRECEDING | FRAMEOPTION_END_CURRENT_ROW`: the frame that the support function of `row_number` and the other functions of the rank of a row gives.
@@ -2032,8 +2030,66 @@ fn grouping_sets<'q>(
     Some(node)
 }
 
-/// The window calls of the query for each window, by `winref`.
+/// The window calls of the query for each window, by `winref`, after `optimize_window_clauses`.
 fn window_calls(query: &Query) -> Vec<Vec<&WindowFunc>> {
+    optimize_windows(query).calls
+}
+
+/// The windows of a query after `optimize_window_clauses`.
+struct Windows<'q> {
+    /// The calls of each window.
+    calls: Vec<Vec<&'q WindowFunc>>,
+    /// `frameOptions` of each window.
+    options: Vec<i32>,
+    /// For each window, the other windows whose calls it took.
+    merged: Vec<Vec<usize>>,
+}
+
+/// `optimize_window_clauses`: the support functions of `row_number` and the other functions of the rank of a row give the frame `ROWS UNBOUNDED PRECEDING` to a window when all its calls are of these functions. When the new frame makes the window the same as another window, the calls of the window go to the other window.
+fn optimize_windows(query: &Query) -> Windows<'_> {
+    let mut calls = query_window_calls(query);
+    let mut options: Vec<i32> = query.windows.iter().map(|w| w.frame.options).collect();
+    let mut merged = vec![Vec::new(); query.windows.len()];
+    let rank = |f: &&WindowFunc| {
+        builtin::proc_by_oid(f.oid).is_some_and(|p| {
+            matches!(
+                p.name,
+                "row_number" | "rank" | "dense_rank" | "percent_rank" | "ntile" | "cume_dist"
+            )
+        })
+    };
+    let same_offset = |a: &Option<Expr>, b: &Option<Expr>| match (a, b) {
+        (Some(a), Some(b)) => a.same(b),
+        (a, b) => a.is_none() && b.is_none(),
+    };
+    for w in 0..query.windows.len() {
+        if calls[w].is_empty() || !calls[w].iter().all(rank) || options[w] == FRAME_ROWS_CURRENT {
+            continue;
+        }
+        options[w] = FRAME_ROWS_CURRENT;
+        let clause = &query.windows[w];
+        let existing = (0..query.windows.len()).find(|&e| {
+            let other = &query.windows[e];
+            e != w
+                && other.partition == clause.partition
+                && other.order == clause.order
+                && options[e] == options[w]
+                && same_offset(&other.frame.start, &clause.frame.start)
+                && same_offset(&other.frame.end, &clause.frame.end)
+        });
+        if let Some(e) = existing {
+            let moved = std::mem::take(&mut calls[w]);
+            calls[e].extend(moved);
+            let moved = std::mem::take(&mut merged[w]);
+            merged[e].push(w);
+            merged[e].extend(moved);
+        }
+    }
+    Windows { calls, options, merged }
+}
+
+/// The window calls of the query for each window, by `winref`.
+fn query_window_calls(query: &Query) -> Vec<Vec<&WindowFunc>> {
     let mut out = vec![Vec::new(); query.windows.len()];
     for target in &query.targets {
         let mut calls = Vec::new();
@@ -2177,7 +2233,7 @@ fn windows<'q>(
     only: bool,
     targets: TargetCosts,
 ) -> Option<Node<'q>> {
-    let calls = window_calls(level.query);
+    let Windows { calls, options, mut merged } = optimize_windows(level.query);
     let active = active_windows(level, &calls);
     let mut number = 0;
     let count = active.len();
@@ -2194,22 +2250,8 @@ fn windows<'q>(
         }
         let nkeys = (partition.len() + clause.order.len()) as f64;
         total += cost::CPU_OPERATOR * nkeys * c.rows + cost::CPU_TUPLE * c.rows;
-        let rows_frame = clause.frame.options == FRAME_DEFAULTS
-            && calls[window].iter().all(|f| {
-                builtin::proc_by_oid(f.oid).is_some_and(|p| {
-                    matches!(
-                        p.name,
-                        "row_number"
-                            | "rank"
-                            | "dense_rank"
-                            | "percent_rank"
-                            | "ntile"
-                            | "cume_dist"
-                    )
-                })
-            });
-        // `optimize_window_clauses`: the support functions of these calls give the frame `ROWS UNBOUNDED PRECEDING`.
-        let options = if rows_frame { FRAME_ROWS_CURRENT } else { clause.frame.options };
+        let options = options[window];
+        let rows_frame = options != clause.frame.options;
         let mut startup = c.startup;
         let tuples = startup_tuples(level, window, &partition, c.rows, options);
         if tuples > 1.0 && c.rows > 0.0 {
@@ -2224,7 +2266,8 @@ fn windows<'q>(
                 }
             }
         });
-        let kind = Kind::WindowAgg { name, window, rows_frame, partition };
+        let merged = std::mem::take(&mut merged[window]);
+        let kind = Kind::WindowAgg { name, window, rows_frame, partition, merged };
         node = Node::new(kind, level.scope, vec![node]);
         node.cost = Cost { startup, total, ..c };
         // `create_windowagg_path` adds the cost of the targets, which are the targets before the sort at the last window.

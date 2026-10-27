@@ -287,14 +287,24 @@ pub(crate) fn aggregates<'q>(exprs: &[&'q Expr], out: &mut Vec<&'q Aggref>) {
 
 /// The window function calls in an expression, outside its subqueries.
 pub(crate) fn window_calls<'q>(expr: &'q Expr, out: &mut Vec<&'q WindowFunc>) {
-    if let ExprKind::Window(w) = &expr.kind {
-        out.push(w);
+    let mut calls = Vec::new();
+    window_exprs(expr, &mut calls);
+    out.extend(calls.into_iter().filter_map(|e| match &e.kind {
+        ExprKind::Window(w) => Some(&**w),
+        _ => None,
+    }));
+}
+
+/// The expressions of the window function calls in an expression, outside its subqueries.
+pub(crate) fn window_exprs<'q>(expr: &'q Expr, out: &mut Vec<&'q Expr>) {
+    if let ExprKind::Window(_) = &expr.kind {
+        out.push(expr);
     }
     if matches!(expr.kind, ExprKind::SubLink(_)) {
         return;
     }
     for child in expr.children() {
-        window_calls(child, out);
+        window_exprs(child, out);
     }
 }
 
