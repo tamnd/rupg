@@ -283,6 +283,21 @@ impl Definer<'_, '_> {
                     ),
                 ));
             }
+            if column.generated != 0 && own.generated != 0 && column.generated != own.generated {
+                let kind = |g: u8| if g == b's' { "STORED" } else { "VIRTUAL" };
+                return Err(Error::new(
+                    SqlState::DATATYPE_MISMATCH,
+                    format!(
+                        "column \"{}\" inherits from generated column of different kind",
+                        column.name
+                    ),
+                )
+                .with_detail(format!(
+                    "Parent column is {}, child column is {}.",
+                    kind(column.generated),
+                    kind(own.generated)
+                )));
+            }
             let inhcount = own.inhcount.checked_add(1).ok_or_else(too_many_parents)?;
             merged.push((number, parent_number, own.local, inhcount));
         }
