@@ -16,8 +16,9 @@ use rupg_types::oid;
 use super::{Definer, not_yet};
 use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
-use crate::expr::Expr;
-use crate::select::Query;
+use crate::expr::{Expr, ExprKind, Var};
+use crate::from::{Column, FromItem, Relation};
+use crate::select::{Query, Target};
 use crate::typename::{names, place, type_name_text};
 use crate::{Analyzer, Env, Params, node, poly, types};
 
@@ -586,6 +587,44 @@ fn body_references(catalog: &Catalog, body: &Expr) -> Result<Vec<ObjRef>> {
     Ok(eliminate_duplicates(&refs))
 }
 
+/// `check_sql_stmt_retval`: the query becomes a subquery named `unnamed_subquery` in the `FROM` of a new query that gives each column of the result.
+fn wrap_in_subquery(query: &mut Query) {
+    let sub = std::mem::take(query);
+    let shown: Vec<&Target> = sub.targets.iter().filter(|t| !t.junk).collect();
+    let columns = shown
+        .iter()
+        .map(|t| Column {
+            name: t.name.clone(),
+            ty: t.expr.ty,
+            typmod: t.expr.typmod,
+            not_null: false,
+        })
+        .collect();
+    let targets = shown
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let attnum = i16::try_from(i + 1).unwrap_or(i16::MAX);
+            let var = Var { relation: 0, attnum, levels_up: 0 };
+            let expr = Expr {
+                kind: ExprKind::Var(var),
+                ty: t.expr.ty,
+                typmod: t.expr.typmod,
+                location: None,
+            };
+            Target { name: t.name.clone(), expr, origin: None, junk: false }
+        })
+        .collect();
+    let mut relation = Relation::new(0, columns, Some(Box::new(sub)), None, None);
+    relation.name = "unnamed_subquery".to_string();
+    *query = Query {
+        relations: vec![relation],
+        from: vec![FromItem::Relation(0)],
+        targets,
+        ..Query::default()
+    };
+}
+
 impl Analyzer<'_> {
     /// `transformReturnStmt` and `check_sql_fn_retval`: the `RETURN` expression, as a value of the result type. A value of type `unknown` becomes `text` first, and then the cast to the result type is an assignment cast.
     fn return_body(&mut self, value: Option<&Node>, rettype: u32) -> Result<Expr> {
@@ -643,23 +682,38 @@ impl Analyzer<'_> {
             let what = if width > columns.len() { "many" } else { "few" };
             return Err(mismatch(rettype, format!("Final statement returns too {what} columns.")));
         }
-        // `coerce_fn_result_column`: a column of the list with a type modifier takes a cast to it too.
+        // `coerce_fn_result_column`: a column of the list or a field of the row type with a type modifier takes a cast to it too.
         let typmods: Vec<i32> = match &self.coldefs {
             Some(given) if rettype == oid::RECORD && columns.len() == given.len() => {
                 given.iter().map(|c| c.1).collect()
             }
+            _ if rettype != oid::RECORD && columns != [rettype] => self
+                .row_columns(rettype)
+                .filter(|fields| fields.len() == columns.len())
+                .map(|fields| fields.iter().map(|c| c.typmod).collect())
+                .unwrap_or_default(),
             _ => Vec::new(),
         };
+        let needs_cast = |i: usize, target: &Target| {
+            let typmod = typmods.get(i).copied().unwrap_or(-1);
+            target.expr.ty != columns[i] || typmod != -1 && typmod != target.expr.typmod
+        };
+        // `check_sql_stmt_retval`: when a column that needs a cast is a column of a set operation or a sorted column, the query goes in a subquery, and the cast is in the query that reads it.
+        let fixed = (0..columns.len()).any(|i| {
+            needs_cast(i, &query.targets[i]) && {
+                let sorted = query.sort.iter().chain(&query.group).chain(&query.distinct);
+                query.set_op.is_some() || sorted.into_iter().any(|s| s.target == i)
+            }
+        });
+        if fixed {
+            wrap_in_subquery(query);
+        }
         for (i, &ty) in columns.iter().enumerate() {
             let target = &mut query.targets[i];
             let actual = target.expr.ty;
             let typmod = typmods.get(i).copied().unwrap_or(-1);
-            if actual == ty && (typmod == -1 || typmod == target.expr.typmod) {
+            if !needs_cast(i, target) {
                 continue;
-            }
-            let sorted = query.sort.iter().chain(&query.group).chain(&query.distinct);
-            if sorted.into_iter().any(|s| s.target == i) {
-                return Err(not_yet("a cast of a sorted column of the result of a function", None));
             }
             let cast =
                 self.coerce_to_target(target.expr.clone(), ty, typmod, Context::Assignment, None)?;

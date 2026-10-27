@@ -1,0 +1,121 @@
+> create type rngfunc_type as (f1 numeric(35,6), f2 numeric(35,2))
+CREATE TYPE
+> create function testrngfunc() returns rngfunc_type as $$ select 7.136178319899999964, 7.136178319899999964 $$ language sql immutable
+CREATE FUNCTION
+> explain (verbose, costs off) select testrngfunc()
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Output: '(7.136178,7.14)'::rngfunc_type
+EXPLAIN
+> select testrngfunc()::text
+fields testrngfunc:25:-1:-1
+row (7.136178,7.14)
+SELECT 1
+> select * from testrngfunc()
+fields f1:1700:-1:2293770,f2:1700:-1:2293766
+row 7.136178,7.14
+SELECT 1
+> create or replace function testrngfunc() returns rngfunc_type as $$ select 7.136178319899999964, 7.136178319899999964 $$ language sql volatile
+CREATE FUNCTION
+> explain (verbose, costs off) select testrngfunc()
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Output: testrngfunc()
+EXPLAIN
+> select testrngfunc()::text
+fields testrngfunc:25:-1:-1
+row (7.136178,7.14)
+SELECT 1
+> select * from testrngfunc()
+fields f1:1700:-1:2293770,f2:1700:-1:2293766
+row 7.136178,7.14
+SELECT 1
+> drop function testrngfunc()
+DROP FUNCTION
+> create function testrngfunc() returns setof rngfunc_type as $$ select 7.136178319899999964, 7.136178319899999964 $$ language sql immutable
+CREATE FUNCTION
+> explain (verbose, costs off) select testrngfunc()
+fields QUERY PLAN:25:-1:-1
+row ProjectSet
+row   Output: testrngfunc()
+row   ->  Result
+EXPLAIN
+> select testrngfunc()::text
+fields testrngfunc:25:-1:-1
+row (7.136178,7.14)
+SELECT 1
+> select * from testrngfunc()
+fields f1:1700:-1:2293770,f2:1700:-1:2293766
+row 7.136178,7.14
+SELECT 1
+> create or replace function testrngfunc() returns setof rngfunc_type as $$ select 7.136178319899999964, 7.136178319899999964 $$ language sql volatile
+CREATE FUNCTION
+> select testrngfunc()::text
+fields testrngfunc:25:-1:-1
+row (7.136178,7.14)
+SELECT 1
+> select * from testrngfunc()
+fields f1:1700:-1:2293770,f2:1700:-1:2293766
+row 7.136178,7.14
+SELECT 1
+> create or replace function testrngfunc() returns setof rngfunc_type as $$ select 1, 2 union select 3, 4 order by 1 $$ language sql immutable
+CREATE FUNCTION
+> explain (verbose, costs off) select testrngfunc()
+fields QUERY PLAN:25:-1:-1
+row ProjectSet
+row   Output: testrngfunc()
+row   ->  Result
+EXPLAIN
+> select testrngfunc()::text
+fields testrngfunc:25:-1:-1
+row (1.000000,2.00)
+row (3.000000,4.00)
+SELECT 2
+> select * from testrngfunc()
+fields f1:1700:-1:2293770,f2:1700:-1:2293766
+row 1.000000,2.00
+row 3.000000,4.00
+SELECT 2
+> create or replace function testrngfunc() returns setof rngfunc_type as $$ select 3, 4 union all select 1, 2 order by 1 desc $$ language sql volatile
+CREATE FUNCTION
+> select testrngfunc()::text
+fields testrngfunc:25:-1:-1
+row (3.000000,4.00)
+row (1.000000,2.00)
+SELECT 2
+> select * from testrngfunc()
+fields f1:1700:-1:2293770,f2:1700:-1:2293766
+row 3.000000,4.00
+row 1.000000,2.00
+SELECT 2
+> create or replace function testrngfunc() returns setof rngfunc_type as $$ select distinct x, 2 from (values (1.5),(1.5),(2)) v(x) order by 1 $$ language sql stable
+CREATE FUNCTION
+> select * from testrngfunc()
+fields f1:1700:-1:2293770,f2:1700:-1:2293766
+row 1.500000,2.00
+row 2.000000,2.00
+SELECT 2
+> create table rngfunc(f1 int8, f2 int8)
+CREATE TABLE
+> create function testrngfunc2() returns setof record as $$ insert into rngfunc values (1,2), (3,4) returning * $$ language sql
+CREATE FUNCTION
+> select testrngfunc2()::text
+fields testrngfunc2:25:-1:-1
+row (1,2)
+row (3,4)
+SELECT 2
+> select * from testrngfunc2() as t(f1 int8,f2 int8)
+fields f1:20:8:-1,f2:20:8:-1
+row 1,2
+row 3,4
+SELECT 2
+> create function testrngfunc3() returns record as $$ insert into rngfunc values (1,2) returning * $$ language sql
+CREATE FUNCTION
+> select testrngfunc3()::text
+fields testrngfunc3:25:-1:-1
+row (1,2)
+SELECT 1
+> select * from testrngfunc3() as t(f1 int8,f2 int8)
+fields f1:20:8:-1,f2:20:8:-1
+row 1,2
+SELECT 1

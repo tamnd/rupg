@@ -125,6 +125,13 @@ fn procedural(func: u32) -> bool {
     builtin::proc_by_oid(func).is_some_and(|p| p.lang == PLPGSQL_LANGUAGE)
 }
 
+/// The types of the columns that the query of a function gives: the columns of `RETURNING` for a query that writes, as `check_sql_stmt_retval` reads them.
+fn shown_types(query: &Query) -> Vec<u32> {
+    let returning = query.write.as_ref().and_then(|w| w.returning.as_deref());
+    let targets = &returning.unwrap_or(query).targets;
+    targets.iter().filter(|t| !t.junk).map(|t| t.expr.ty).collect()
+}
+
 /// `fmgr_sql` for a function that does not return a set and whose last statement gave the rows `rows` with columns of the types `types`: the first column of the first row, or null. The columns of a function that returns a row make a row value. A function that returns `void` gives null.
 fn sql_result(ret: u32, rows: Rows, types: Vec<u32>) -> Value {
     if ret == oid::VOID {
@@ -2181,6 +2188,18 @@ impl<'a> Eval<'a> {
         defined: &[(u32, i32)],
         want: Option<usize>,
     ) -> Result<Rows> {
+        self.function_set_rows(call, width, defined, want, &mut Vec::new())
+    }
+
+    /// [`Eval::function_set`], which also puts in `shown` the types of the columns of the last statement of a body that [`Body::Statements`] runs.
+    fn function_set_rows(
+        &mut self,
+        call: &Expr,
+        width: usize,
+        defined: &[(u32, i32)],
+        want: Option<usize>,
+        shown: &mut Vec<u32>,
+    ) -> Result<Rows> {
         if let ExprKind::JsonTable(table) = &call.kind {
             return self.json_table(table);
         }
@@ -2233,7 +2252,9 @@ impl<'a> Eval<'a> {
                     })
                 }
                 Body::Statements(_) => {
-                    session.call_sql_function(f.oid, &types, &args).map(|(_, rows)| Some(rows))
+                    let (columns, rows) = session.call_sql_function(f.oid, &types, &args)?;
+                    *shown = columns;
+                    Ok(Some(rows))
                 }
                 Body::Value(_) => {
                     Err(Error::internal("a function that returns a set with no query"))
@@ -2315,7 +2336,8 @@ impl<'a> Eval<'a> {
         if procedural(f.oid) {
             return self.procedural_set(f, call.ty);
         }
-        let rows = self.function_set(call, 1, &[], want)?;
+        let mut shown = Vec::new();
+        let rows = self.function_set_rows(call, 1, &[], want, &mut shown)?;
         // The types of the `OUT` parameters, with the actual types of the call for a polymorphic type.
         let columns = rupg_analyze::out_columns(f)?.unwrap_or_default();
         let mut types: Vec<u32> = columns.iter().map(|c| c.ty).collect();
@@ -2324,8 +2346,9 @@ impl<'a> Eval<'a> {
             let args: Vec<u32> = rupg_analyze::expand_arguments(f)?.iter().map(|a| a.ty).collect();
             match self.cache.body(f.oid, &args, self.session)?.as_deref() {
                 Some(Body::Query(query)) => {
-                    types = query.targets.iter().filter(|t| !t.junk).map(|t| t.expr.ty).collect();
+                    types = shown_types(query);
                 }
+                Some(Body::Statements(columns)) if columns.is_empty() => types = shown,
                 Some(Body::Statements(columns)) => types.clone_from(columns),
                 _ => {}
             }
@@ -2869,8 +2892,7 @@ impl<'a> Eval<'a> {
                         let name = builtin::proc_by_oid(func).map_or("", |p| p.name);
                         error.with_context(format!("SQL function \"{name}\" statement 1"))
                     })?;
-                    let types = query.targets.iter().filter(|t| !t.junk).map(|t| t.expr.ty);
-                    Ok(sql_result(ret, rows, types.collect()))
+                    Ok(sql_result(ret, rows, shown_types(query)))
                 }
                 Body::Statements(_) => {
                     let (columns, rows) = self.session.call_sql_function(func, types, args)?;
