@@ -43,6 +43,7 @@ pub(super) fn is_rename_kind(kind: ObjectType) -> bool {
             | ObjectType::OBJECT_CONVERSION
             | ObjectType::OBJECT_FDW
             | ObjectType::OBJECT_FOREIGN_SERVER
+            | ObjectType::OBJECT_PUBLICATION
             | ObjectType::OBJECT_TSPARSER
             | ObjectType::OBJECT_TSDICTIONARY
             | ObjectType::OBJECT_TSTEMPLATE
@@ -71,6 +72,7 @@ impl Definer<'_, '_> {
             ObjectType::OBJECT_CONVERSION => self.rename_conversion(stmt),
             ObjectType::OBJECT_FDW => self.rename_foreign(true, stmt),
             ObjectType::OBJECT_FOREIGN_SERVER => self.rename_foreign(false, stmt),
+            ObjectType::OBJECT_PUBLICATION => self.rename_publication(stmt),
             ObjectType::OBJECT_TSPARSER
             | ObjectType::OBJECT_TSDICTIONARY
             | ObjectType::OBJECT_TSTEMPLATE

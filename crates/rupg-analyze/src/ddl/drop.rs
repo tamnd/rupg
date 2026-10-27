@@ -3,9 +3,10 @@
 use rupg_catalog::{
     FIRST_NORMAL_OID, ObjRef, PG_AMOP, PG_AMPROC, PG_ATTRDEF, PG_CAST, PG_CLASS, PG_CONSTRAINT,
     PG_CONVERSION, PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_NAMESPACE, PG_OPCLASS,
-    PG_OPERATOR, PG_OPFAMILY, PG_POLICY, PG_PROC, PG_REWRITE, PG_STATISTIC_EXT, PG_TRIGGER,
-    PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, PG_TYPE, PG_USER_MAPPING, PUBLIC,
-    Refusal, RelKind, Target, flag, is_pinned,
+    PG_OPERATOR, PG_OPFAMILY, PG_POLICY, PG_PROC, PG_PUBLICATION, PG_PUBLICATION_NAMESPACE,
+    PG_PUBLICATION_REL, PG_REWRITE, PG_STATISTIC_EXT, PG_TRIGGER, PG_TS_CONFIG, PG_TS_DICT,
+    PG_TS_PARSER, PG_TS_TEMPLATE, PG_TYPE, PG_USER_MAPPING, PUBLIC, Refusal, RelKind, Target, flag,
+    is_pinned,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
@@ -541,6 +542,9 @@ impl Definer<'_, '_> {
                 self.describe_foreign(object)
             }
             PG_OPCLASS | PG_OPFAMILY | PG_AMOP | PG_AMPROC => self.describe_opcf(object),
+            PG_PUBLICATION | PG_PUBLICATION_REL | PG_PUBLICATION_NAMESPACE => {
+                self.describe_publication(object)
+            }
             PG_PROC => match self.catalog.function(object.oid) {
                 Some(function) => {
                     let args: Vec<String> =
@@ -577,7 +581,7 @@ impl Definer<'_, '_> {
     }
 
     /// `getRelationDescription`: the kind and the name, with the schema when the search path does not find the relation by its name.
-    fn describe_relation(&self, oid: u32) -> String {
+    pub(super) fn describe_relation(&self, oid: u32) -> String {
         let (code, namespace, name) = match self.catalog.relation(oid) {
             Some(rel) => {
                 let code = match rel.kind {

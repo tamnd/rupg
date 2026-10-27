@@ -262,7 +262,7 @@ impl Definer<'_, '_> {
     }
 
     /// The name of a relation that a lookup found.
-    fn found_name(&self, found: Found) -> String {
+    pub(super) fn found_name(&self, found: Found) -> String {
         match found {
             Found::User(oid) => {
                 self.catalog.relation(oid).map_or_else(String::new, |r| r.name.clone())
@@ -546,7 +546,7 @@ impl Definer<'_, '_> {
     }
 
     /// `get_namespace_oid` with `missing_ok`.
-    fn namespace_oid(&self, name: &str) -> Option<u32> {
+    pub(super) fn namespace_oid(&self, name: &str) -> Option<u32> {
         self.catalog
             .schema_by_name(name)
             .map(|s| s.oid)
@@ -563,7 +563,7 @@ impl Definer<'_, '_> {
 }
 
 /// The OID of a relation that a lookup found.
-fn found_oid(found: Found) -> u32 {
+pub(super) fn found_oid(found: Found) -> u32 {
     match found {
         Found::User(oid) => oid,
         Found::Builtin(row) => row.oid,

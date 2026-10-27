@@ -369,3 +369,29 @@ impl<'a> Expand<'a> {
         Some(Expr { kind: ExprKind::PlaceHolder(Box::new(p)), ty, typmod, location })
     }
 }
+
+/// The expression with the generation expression of each virtual generated column of the table `table` in the place of the column, for an expression that reads only the table as the relation 0, as `expand_generated_columns_in_expr` does it for the row filter of a publication.
+///
+/// # Errors
+///
+/// The error of a generation expression that the catalog keeps in a form that the analyzer cannot read.
+pub(crate) fn expand_virtual_expr(expr: &mut Expr, table: u32, catalog: &Catalog) -> Result<()> {
+    fn walk(expr: &mut Expr, table: &Table) {
+        if let ExprKind::Var(var) = &expr.kind
+            && var.levels_up == 0
+            && var.relation == 0
+            && let Some(Some(generated)) =
+                usize::try_from(var.attnum - 1).ok().and_then(|i| table.exprs.get(i))
+        {
+            *expr = generated.clone();
+            return;
+        }
+        for child in expr.children_mut() {
+            walk(child, table);
+        }
+    }
+    if let Some(found) = Expand::new(catalog).table(table)? {
+        walk(expr, &found);
+    }
+    Ok(())
+}

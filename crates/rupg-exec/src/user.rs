@@ -266,6 +266,9 @@ pub(crate) fn rows(
         "pg_foreign_data_wrapper" => fdws(table, catalog),
         "pg_foreign_server" => servers(table, catalog),
         "pg_user_mapping" => user_mappings(table, catalog),
+        "pg_publication" => publications(table, catalog),
+        "pg_publication_rel" => publication_rels(table, catalog),
+        "pg_publication_namespace" => publication_namespaces(table, catalog),
         "pg_foreign_table" => foreign_tables(table, catalog),
         "pg_operator" => operators(table, catalog),
         "pg_aggregate" => aggregates(table, catalog),
@@ -1340,6 +1343,59 @@ fn servers<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("srvversion", text(&s.version))
                 .set("srvacl", granted(catalog, ObjRef::new(PG_FOREIGN_SERVER, s.oid)))
                 .set("srvoptions", options(&s.options));
+            row
+        })
+        .collect()
+}
+
+/// The rows of `pg_publication`.
+fn publications<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .publications()
+        .map(|p| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(p.oid))
+                .set("pubname", Value::text(p.name.as_str()))
+                .set("pubowner", oid(p.owner))
+                .set("puballtables", Value::Bool(p.all_tables))
+                .set("puballsequences", Value::Bool(p.all_sequences))
+                .set("pubinsert", Value::Bool(p.insert))
+                .set("pubupdate", Value::Bool(p.update))
+                .set("pubdelete", Value::Bool(p.delete))
+                .set("pubtruncate", Value::Bool(p.truncate))
+                .set("pubviaroot", Value::Bool(p.via_root))
+                .set("pubgencols", code(char::from(p.gencols)));
+            row
+        })
+        .collect()
+}
+
+/// The rows of `pg_publication_rel`.
+fn publication_rels<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .publication_rels()
+        .map(|r| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(r.oid))
+                .set("prpubid", oid(r.publication))
+                .set("prrelid", oid(r.relation))
+                .set("prexcept", Value::Bool(r.except))
+                .set("prqual", tree(r.qual.as_ref()))
+                .set("prattrs", r.attrs.as_deref().map_or(Value::Null, int2_vector));
+            row
+        })
+        .collect()
+}
+
+/// The rows of `pg_publication_namespace`.
+fn publication_namespaces<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .publication_namespaces()
+        .map(|n| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(n.oid))
+                .set("pnpubid", oid(n.publication))
+                .set("pnnspid", oid(n.schema));
             row
         })
         .collect()

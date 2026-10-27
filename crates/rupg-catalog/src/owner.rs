@@ -7,8 +7,8 @@ use rupg_common::Result;
 use super::{Catalog, no_object};
 use crate::{
     ObjRef, PG_COLLATION, PG_CONVERSION, PG_EXTENSION, PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER,
-    PG_LANGUAGE, PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_PROC, PG_STATISTIC_EXT, PG_TS_CONFIG,
-    PG_TS_DICT, PG_TYPE,
+    PG_LANGUAGE, PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_PROC, PG_PUBLICATION, PG_STATISTIC_EXT,
+    PG_TS_CONFIG, PG_TS_DICT, PG_TYPE,
 };
 
 /// `ACL_ALL_RIGHTS_STR`: the letter of each privilege, in the order of its bit.
@@ -181,6 +181,9 @@ impl Catalog {
             }
             PG_FOREIGN_SERVER => {
                 self.servers.get_mut(&object.oid).map(|s| s.owner = owner).is_some()
+            }
+            PG_PUBLICATION => {
+                self.publications.get_mut(&object.oid).map(|p| p.owner = owner).is_some()
             }
             _ => false,
         };

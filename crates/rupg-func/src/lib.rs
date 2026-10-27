@@ -47,6 +47,7 @@ mod multirange;
 mod network;
 mod numformat;
 mod objaddr;
+mod publication;
 mod random;
 mod range;
 mod reg;

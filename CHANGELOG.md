@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `CREATE PUBLICATION`, `ALTER PUBLICATION`, `COMMENT ON PUBLICATION` and `DROP PUBLICATION` work, with the options, the `WHERE` clauses, the column lists, `TABLES IN SCHEMA` and `ALL TABLES EXCEPT`, and the errors of PostgreSQL. The catalogs `pg_publication`, `pg_publication_rel` and `pg_publication_namespace`, the view `pg_publication_tables`, and the functions `pg_get_publication_tables`, `pg_partition_tree`, `pg_partition_ancestors` and `pg_partition_root` give real rows (#979).
+
 ## 0.4.0 (2026-10-28)
 
 This release closes milestone M2, connect and introspect (#3). The nightly run of tamnd/rupg-compat now publishes one page for each tested commit of main, with the L1 to L5 numbers for 19, the resources of each server and the failing items.

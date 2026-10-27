@@ -1,0 +1,233 @@
+> CREATE ROLE regress_pub_user;
+CREATE ROLE
+> CREATE TABLE pt1 (a int PRIMARY KEY, b text, c int GENERATED ALWAYS AS (a * 2) STORED, d int GENERATED ALWAYS AS (a + 1) VIRTUAL);
+CREATE TABLE
+> CREATE TABLE pt2 (x int, y text);
+CREATE TABLE
+> CREATE SCHEMA pubs;
+CREATE SCHEMA
+> CREATE TABLE pubs.st (k int);
+CREATE TABLE
+> CREATE TABLE root (a int) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE root_1 PARTITION OF root FOR VALUES FROM (0) TO (100);
+CREATE TABLE
+> CREATE UNLOGGED TABLE ul (a int);
+CREATE TABLE
+> CREATE VIEW pv AS SELECT 1 AS one;
+CREATE VIEW
+> CREATE PUBLICATION p_bad WITH (publish = 'insert, foo');
+ERROR 42601 unrecognized value for publication option "publish": "foo"
+> CREATE PUBLICATION p_bad WITH (publish_generated_columns = maybe);
+ERROR 42601 invalid value for publication parameter "publish_generated_columns": "maybe"
+> CREATE PUBLICATION p_bad WITH (nonsense = true);
+ERROR 42601 unrecognized publication parameter: "nonsense"
+> CREATE PUBLICATION p_bad WITH (publish = 'insert', publish = 'update');
+ERROR 42601 conflicting or redundant options at 52
+> CREATE PUBLICATION p1 FOR TABLE pt1, pt2 WITH (publish = 'insert, update');
+CREATE PUBLICATION
+> CREATE PUBLICATION p1;
+ERROR 42710 publication "p1" already exists
+> CREATE PUBLICATION p2 FOR TABLE pt1 WHERE (a > 10), TABLE pt2 (x);
+CREATE PUBLICATION
+> CREATE PUBLICATION p3 FOR TABLES IN SCHEMA pubs;
+CREATE PUBLICATION
+> CREATE PUBLICATION p4 FOR ALL TABLES EXCEPT (TABLE pt2);
+CREATE PUBLICATION
+> CREATE PUBLICATION p5 FOR TABLE root WHERE (a > 1);
+ERROR 22023 cannot use publication WHERE clause for relation "root"
+> CREATE PUBLICATION p5 FOR TABLE root WITH (publish_via_partition_root = true);
+CREATE PUBLICATION
+> CREATE PUBLICATION p6 FOR TABLE ul;
+ERROR 22023 cannot add relation "ul" to publication
+> CREATE PUBLICATION p6 FOR TABLE pv;
+ERROR 22023 cannot add relation "pv" to publication
+> CREATE PUBLICATION p6 FOR TABLE pg_class;
+ERROR 22023 cannot add relation "pg_class" to publication
+> CREATE PUBLICATION p6 FOR TABLE pt1 WHERE (random() > 0.5);
+ERROR 0A000 invalid publication WHERE expression at 44
+> CREATE PUBLICATION p6 FOR TABLE pt1 WHERE (ctid IS NOT NULL);
+ERROR 0A000 invalid publication WHERE expression at 44
+> CREATE PUBLICATION p6 FOR TABLE pt1 WHERE (a IN (SELECT 1));
+ERROR 0A000 invalid publication WHERE expression at 44
+> CREATE PUBLICATION p6 FOR TABLE pt1 (a, a);
+ERROR 42710 duplicate column "a" in publication column list
+> CREATE PUBLICATION p6 FOR TABLE pt1 (d);
+ERROR 42P10 cannot use virtual generated column "d" in publication column list
+> CREATE PUBLICATION p6 FOR TABLE pt1 (xmin);
+ERROR 42P10 cannot use system column "xmin" in publication column list
+> CREATE PUBLICATION p6 FOR TABLE pt1 (zz);
+ERROR 42703 column "zz" of relation "pt1" does not exist
+> CREATE PUBLICATION p6 FOR TABLE pt1, pt1 WHERE (a > 1);
+ERROR 42710 conflicting or redundant WHERE clauses for table "pt1"
+> CREATE PUBLICATION p6 FOR TABLE pt1 (a), TABLES IN SCHEMA pubs;
+ERROR 22023 cannot use column list for relation "public.pt1" in publication "p6"
+> SELECT pubname, puballtables, pubinsert, pubupdate, pubdelete, pubtruncate, pubviaroot, pubgencols FROM pg_publication ORDER BY 1;
+fields pubname@pg_publication.2:19:64:-1,puballtables@pg_publication.4:16:1:-1,pubinsert@pg_publication.6:16:1:-1,pubupdate@pg_publication.7:16:1:-1,pubdelete@pg_publication.8:16:1:-1,pubtruncate@pg_publication.9:16:1:-1,pubviaroot@pg_publication.10:16:1:-1,pubgencols@pg_publication.11:18:1:-1
+row p1,f,t,t,f,f,f,n
+row p2,f,t,t,t,t,f,n
+row p3,f,t,t,t,t,f,n
+row p4,t,t,t,t,t,f,n
+row p5,f,t,t,t,t,t,n
+SELECT 5
+> SELECT p.pubname, pr.prrelid::regclass, pr.prexcept, pg_get_expr(pr.prqual, pr.prrelid), pr.prattrs FROM pg_publication_rel pr JOIN pg_publication p ON p.oid = pr.prpubid ORDER BY 1, 2;
+fields pubname@pg_publication.2:19:64:-1,prrelid:2205:4:-1,prexcept@pg_publication_rel.4:16:1:-1,pg_get_expr:25:-1:-1,prattrs@pg_publication_rel.6:22:-1:-1
+row p1,pt1,f,NULL,NULL
+row p1,pt2,f,NULL,NULL
+row p2,pt1,f,(a > 10),NULL
+row p2,pt2,f,NULL,1
+row p4,pt2,t,NULL,NULL
+row p5,root,f,NULL,NULL
+SELECT 6
+> SELECT p.pubname, pn.pnnspid::regnamespace FROM pg_publication_namespace pn JOIN pg_publication p ON p.oid = pn.pnpubid;
+fields pubname@pg_publication.2:19:64:-1,pnnspid:4089:4:-1
+row p3,pubs
+SELECT 1
+> SELECT * FROM pg_publication_tables ORDER BY 1, 2, 3;
+fields pubname@pg_publication_tables.1:19:64:-1,schemaname@pg_publication_tables.2:19:64:-1,tablename@pg_publication_tables.3:19:64:-1,attnames@pg_publication_tables.4:1003:-1:-1,rowfilter@pg_publication_tables.5:25:-1:-1
+row p1,public,pt1,{a,b},NULL
+row p1,public,pt2,{x,y},NULL
+row p2,public,pt1,{a,b},(a > 10)
+row p2,public,pt2,{x},NULL
+row p3,pubs,st,{k},NULL
+row p4,public,pt1,{a,b},NULL
+row p4,public,root_1,{a},NULL
+row p4,pubs,st,{k},NULL
+row p5,public,root,{a},NULL
+SELECT 9
+> SELECT pg_describe_object(classid, objid, objsubid) AS obj, pg_describe_object(refclassid, refobjid, refobjsubid) AS ref, deptype FROM pg_depend WHERE classid IN ('pg_publication_rel'::regclass, 'pg_publication_namespace'::regclass) ORDER BY 1, 2;
+fields obj:25:-1:-1,ref:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row exclusion of table pt2 from publication p4,publication p4,a
+row exclusion of table pt2 from publication p4,table pt2,a
+row publication of schema pubs in publication p3,publication p3,a
+row publication of schema pubs in publication p3,schema pubs,a
+row publication of table pt1 in publication p1,publication p1,a
+row publication of table pt1 in publication p1,table pt1,a
+row publication of table pt1 in publication p2,column a of table pt1,n
+row publication of table pt1 in publication p2,publication p2,a
+row publication of table pt1 in publication p2,table pt1,a
+row publication of table pt2 in publication p1,publication p1,a
+row publication of table pt2 in publication p1,table pt2,a
+row publication of table pt2 in publication p2,column x of table pt2,n
+row publication of table pt2 in publication p2,publication p2,a
+row publication of table pt2 in publication p2,table pt2,a
+row publication of table root in publication p5,publication p5,a
+row publication of table root in publication p5,table root,a
+SELECT 16
+> SELECT (pg_identify_object(classid, objid, 0)).* FROM pg_depend WHERE classid = 'pg_publication_rel'::regclass AND refclassid = 'pg_publication'::regclass ORDER BY 3;
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row publication relation,NULL,NULL,public.pt1 in publication p1
+row publication relation,NULL,NULL,public.pt2 in publication p1
+row publication relation,NULL,NULL,public.pt1 in publication p2
+row publication relation,NULL,NULL,public.pt2 in publication p2
+row publication excluded relation,NULL,NULL,public.pt2 excluded from publication p4
+row publication relation,NULL,NULL,public.root in publication p5
+SELECT 6
+> ALTER PUBLICATION p1 ADD TABLE pt1;
+ERROR 42710 relation "pt1" is already member of publication "p1"
+> ALTER PUBLICATION p1 DROP TABLE root;
+ERROR 42704 relation "root" is not part of the publication
+> ALTER PUBLICATION p1 DROP TABLE pt2 WHERE (x > 1);
+ERROR 42601 cannot use a WHERE clause when removing a table from a publication
+> ALTER PUBLICATION p1 SET TABLE pt2 (y);
+ALTER PUBLICATION
+> ALTER PUBLICATION p1 ADD TABLES IN SCHEMA pubs;
+ERROR 22023 cannot add schema to publication "p1"
+> ALTER PUBLICATION p1 SET (publish = 'delete', publish_generated_columns = stored);
+ALTER PUBLICATION
+> ALTER PUBLICATION p4 ADD TABLE pt1;
+ERROR 55000 publication "p4" is defined as FOR ALL TABLES
+> ALTER PUBLICATION p4 ADD TABLES IN SCHEMA pubs;
+ERROR 55000 publication "p4" is defined as FOR ALL TABLES
+> ALTER PUBLICATION p4 SET ALL TABLES EXCEPT (TABLE pt1);
+ALTER PUBLICATION
+> ALTER PUBLICATION p3 SET ALL TABLES;
+ERROR 55000 publication "p3" does not support ALL TABLES operations
+> ALTER PUBLICATION p3 DROP TABLES IN SCHEMA public;
+ERROR 42704 tables from schema "public" are not part of the publication
+> ALTER PUBLICATION p3 SET TABLES IN SCHEMA public;
+ALTER PUBLICATION
+> ALTER PUBLICATION p5 SET (publish_via_partition_root = false);
+ALTER PUBLICATION
+> ALTER PUBLICATION nope ADD TABLE pt1;
+ERROR 42704 publication "nope" does not exist
+> ALTER PUBLICATION p2 RENAME TO p1;
+ERROR 42710 publication "p1" already exists
+> ALTER PUBLICATION p2 RENAME TO p2r;
+ALTER PUBLICATION
+> ALTER PUBLICATION p2r OWNER TO regress_pub_user;
+ALTER PUBLICATION
+> ALTER PUBLICATION p3 OWNER TO regress_pub_user;
+ALTER PUBLICATION
+> COMMENT ON PUBLICATION p2r IS 'a publication';
+COMMENT
+> SELECT obj_description(oid, 'pg_publication') FROM pg_publication WHERE pubname = 'p2r';
+fields obj_description:25:-1:-1
+row a publication
+SELECT 1
+> SELECT pubname, pubowner::regrole, pubinsert, pubupdate, pubdelete, pubgencols FROM pg_publication ORDER BY 1;
+fields pubname@pg_publication.2:19:64:-1,pubowner:4096:4:-1,pubinsert@pg_publication.6:16:1:-1,pubupdate@pg_publication.7:16:1:-1,pubdelete@pg_publication.8:16:1:-1,pubgencols@pg_publication.11:18:1:-1
+row p1,postgres,f,f,t,s
+row p2r,regress_pub_user,t,t,t,n
+row p3,regress_pub_user,t,t,t,n
+row p4,postgres,t,t,t,n
+row p5,postgres,t,t,t,n
+SELECT 5
+> SELECT * FROM pg_publication_tables ORDER BY 1, 2, 3;
+fields pubname@pg_publication_tables.1:19:64:-1,schemaname@pg_publication_tables.2:19:64:-1,tablename@pg_publication_tables.3:19:64:-1,attnames@pg_publication_tables.4:1003:-1:-1,rowfilter@pg_publication_tables.5:25:-1:-1
+row p1,public,pt2,{y},NULL
+row p2r,public,pt1,{a,b},(a > 10)
+row p2r,public,pt2,{x},NULL
+row p3,public,pt1,{a,b},NULL
+row p3,public,pt2,{x,y},NULL
+row p3,public,root_1,{a},NULL
+row p4,public,pt2,{x,y},NULL
+row p4,public,root_1,{a},NULL
+row p4,pubs,st,{k},NULL
+row p5,public,root_1,{a},NULL
+SELECT 10
+> SELECT pubid = (SELECT oid FROM pg_publication WHERE pubname = 'p1'), relid::regclass, attrs, qual FROM pg_get_publication_tables(ARRAY['p1', 'nope'], 'pt2'::regclass);
+fields ?column?:16:1:-1,relid:2205:4:-1,attrs:22:-1:-1,qual:194:-1:-1
+row t,pt2,2,NULL
+SELECT 1
+> SELECT * FROM pg_get_publication_tables('nope');
+fields pubid:26:4:-1,relid:26:4:-1,attrs:22:-1:-1,qual:194:-1:-1
+ERROR 42704 publication "nope" does not exist
+> SELECT relid::regclass, parentrelid::regclass, isleaf, level FROM pg_partition_tree('root');
+fields relid:2205:4:-1,parentrelid:2205:4:-1,isleaf:16:1:-1,level:23:4:-1
+row root,NULL,f,0
+row root_1,root,t,1
+SELECT 2
+> SELECT relid::regclass FROM pg_partition_ancestors('root_1');
+fields relid:2205:4:-1
+row root_1
+row root
+SELECT 2
+> SELECT pg_partition_root('root_1')::regclass, pg_partition_root('pt1'), pg_relation_is_publishable('pt1'), pg_relation_is_publishable('ul');
+fields pg_partition_root:2205:4:-1,pg_partition_root:2205:4:-1,pg_relation_is_publishable:16:1:-1,pg_relation_is_publishable:16:1:-1
+row root,NULL,t,f
+SELECT 1
+> DROP TABLE pt2;
+DROP TABLE
+> SELECT p.pubname, pr.prrelid::regclass FROM pg_publication_rel pr JOIN pg_publication p ON p.oid = pr.prpubid ORDER BY 1, 2;
+fields pubname@pg_publication.2:19:64:-1,prrelid:2205:4:-1
+row p2r,pt1
+row p4,pt1
+row p5,root
+SELECT 3
+> DROP SCHEMA pubs CASCADE;
+NOTICE 00000 drop cascades to table pubs.st
+DROP SCHEMA
+> DROP PUBLICATION nope;
+ERROR 42704 publication "nope" does not exist
+> DROP PUBLICATION IF EXISTS nope;
+NOTICE 00000 publication "nope" does not exist, skipping
+DROP PUBLICATION
+> DROP PUBLICATION p1, p2r, p3, p4, p5;
+DROP PUBLICATION
+> SELECT count(*) FROM pg_publication;
+fields count:20:8:-1
+row 0
+SELECT 1
+> DROP ROLE regress_pub_user;
+DROP ROLE

@@ -2,7 +2,7 @@
 //!
 //! The visibility functions are a port of the `*IsVisible` functions of `namespace.c`. Each one gives null for an OID that no object has, as the `is_missing` form of PostgreSQL does.
 
-use rupg_catalog::{DepKind, ObjRef, RelKind};
+use rupg_catalog::{Catalog, DepKind, FIRST_NORMAL_OID, ObjRef, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_types::{Record, Value, oid, qualified_name_list};
@@ -156,24 +156,98 @@ fn get_sequence_data(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Record(Box::new(Record::new(vec![oid::INT8, oid::BOOL, oid::PG_LSN], values))))
 }
 
-/// `pg_partition_root(regclass)`: the top parent of the partition tree of a relation. rupg has no partitioned tables yet, so `check_rel_can_be_partition` is false for each relation, and the result is null.
-fn partition_root(_: &Call<'_>, _: &[Value]) -> Result<Value> {
-    Ok(Value::Null)
+/// `get_partition_parent`: the parent of a partition or of an index of a partition, or `None` when `relispartition` is false.
+fn partition_parent(catalog: &Catalog, relid: u32) -> Option<u32> {
+    let rel = catalog.relation(relid)?;
+    match (&rel.partition_of, &rel.index) {
+        (Some(of), _) => Some(of.parent),
+        (None, Some(info)) if info.parent != 0 => Some(info.parent),
+        _ => None,
+    }
 }
 
-/// `pg_partition_tree(regclass)` and `pg_partition_ancestors(regclass)`: the members of the partition tree of a relation. rupg has no partitioned tables yet, so the result has no rows, as for a relation that is not in a partition tree.
-pub(crate) fn partition_members(_: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
-    Ok(Vec::new())
+/// `get_partition_ancestors`: the parent of a partition, then its parent, up to the root.
+fn partition_ancestors(catalog: &Catalog, relid: u32) -> Vec<u32> {
+    let mut out = Vec::new();
+    let mut at = relid;
+    while let Some(parent) = partition_parent(catalog, at) {
+        out.push(parent);
+        at = parent;
+    }
+    out
 }
 
-/// `pg_relation_is_publishable(regclass)`: `is_publishable_class`, true for a permanent table or sequence that is not a part of the catalog. Each relation of the catalog of the session has an OID from `FirstNormalObjectId` and is permanent, so a table or a sequence of the catalog is publishable, and a built-in relation is not. The result is null for an OID that no relation has.
+/// `check_rel_can_be_partition`: the catalog of a relation that can be in a partition tree, a partitioned table or index or a partition.
+fn tree_catalog<'s>(call: &Call<'s>, relid: u32) -> Option<&'s Catalog> {
+    let catalog = call.session.catalog()?;
+    let rel = catalog.relation(relid)?;
+    let partitioned = matches!(rel.kind, RelKind::Partitioned | RelKind::PartitionedIndex);
+    (partitioned || partition_parent(catalog, relid).is_some()).then_some(catalog)
+}
+
+/// `pg_partition_root(regclass)`: the top parent of the partition tree of a relation, or the relation when it has no parent. The result is null for a relation that cannot be in a partition tree.
+fn partition_root(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let relid = oid_arg(args, 0)?;
+    let Some(catalog) = tree_catalog(call, relid) else { return Ok(Value::Null) };
+    Ok(Value::Oid(partition_ancestors(catalog, relid).last().copied().unwrap_or(relid)))
+}
+
+/// `pg_partition_tree(regclass)`: the relation and the members of the partition tree below it, in the order of `find_all_inheritors`, with the parent of each member, true for a member that is not partitioned, and the number of levels between the member and the relation.
+pub(crate) fn partition_tree(call: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
+    let relid = oid_arg(args, 0)?;
+    let Some(catalog) = tree_catalog(call, relid) else { return Ok(Vec::new()) };
+    let mut members = vec![relid];
+    let mut at = 0;
+    while let Some(&parent) = members.get(at) {
+        for rel in catalog.relations() {
+            if partition_parent(catalog, rel.oid) == Some(parent) && !members.contains(&rel.oid) {
+                members.push(rel.oid);
+            }
+        }
+        at += 1;
+    }
+    let rows = members
+        .into_iter()
+        .map(|member| {
+            let parent = partition_parent(catalog, member).map_or(Value::Null, Value::Oid);
+            let leaf = catalog.relation(member).is_some_and(|r| {
+                !matches!(r.kind, RelKind::Partitioned | RelKind::PartitionedIndex)
+            });
+            let level = if member == relid {
+                0
+            } else {
+                let ancestors = partition_ancestors(catalog, member);
+                ancestors.iter().position(|&a| a == relid).map_or(ancestors.len(), |i| i + 1)
+            };
+            vec![
+                Value::Oid(member),
+                parent,
+                Value::Bool(leaf),
+                Value::Int4(i32::try_from(level).unwrap_or(i32::MAX)),
+            ]
+        })
+        .collect();
+    Ok(rows)
+}
+
+/// `pg_partition_ancestors(regclass)`: the relation, then its parent, up to the root of its partition tree.
+pub(crate) fn partition_ancestor_rows(call: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
+    let relid = oid_arg(args, 0)?;
+    let Some(catalog) = tree_catalog(call, relid) else { return Ok(Vec::new()) };
+    let mut rows = vec![vec![Value::Oid(relid)]];
+    rows.extend(partition_ancestors(catalog, relid).into_iter().map(|a| vec![Value::Oid(a)]));
+    Ok(rows)
+}
+
+/// `pg_relation_is_publishable(regclass)`: `is_publishable_class`, true for a permanent table or sequence with an OID from `FirstNormalObjectId`. A built-in relation and a relation of `information_schema` are not publishable. The result is null for an OID that no relation has.
 fn relation_is_publishable(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let relid = oid_arg(args, 0)?;
     if reg::class_name(relid, call.session).is_none() {
         return Ok(Value::Null);
     }
-    let kind = call.session.catalog().and_then(|c| c.relation(relid)).map(|r| r.kind);
-    Ok(Value::Bool(matches!(kind, Some(RelKind::Table | RelKind::Partitioned | RelKind::Sequence))))
+    let catalog = call.session.catalog();
+    let rel = catalog.and_then(|c| Some((c, c.relation(relid)?)));
+    Ok(Value::Bool(rel.is_some_and(|(c, r)| r.oid >= FIRST_NORMAL_OID && c.is_publishable(r))))
 }
 
 /// `pg_get_serial_sequence(text, text)`: the sequence of a serial or identity column, with its schema. The table is a name that `search_path` finds, and the column is a name as it is. A sequence of a serial column has an automatic dependency on the column, and a sequence of an identity column has an internal one. The result is null for a column without a sequence.
