@@ -1,13 +1,15 @@
-//! `CREATE FOREIGN DATA WRAPPER`, `ALTER FOREIGN DATA WRAPPER`, `CREATE SERVER` and `ALTER SERVER`, as `CreateForeignDataWrapper`, `AlterForeignDataWrapper`, `CreateForeignServer` and `AlterForeignServer` of `foreigncmds.c` run them, with `RENAME TO` and `OWNER TO` as `AlterObjectRename_internal`, `AlterForeignDataWrapperOwner_internal` and `AlterForeignServerOwner_internal` run them.
+//! `CREATE FOREIGN DATA WRAPPER`, `ALTER FOREIGN DATA WRAPPER`, `CREATE SERVER`, `ALTER SERVER` and `CREATE`, `ALTER` and `DROP USER MAPPING`, as `CreateForeignDataWrapper`, `AlterForeignDataWrapper`, `CreateForeignServer`, `AlterForeignServer`, `CreateUserMapping`, `AlterUserMapping` and `RemoveUserMapping` of `foreigncmds.c` run them, with `RENAME TO` and `OWNER TO` as `AlterObjectRename_internal`, `AlterForeignDataWrapperOwner_internal` and `AlterForeignServerOwner_internal` run them.
 
 use rupg_catalog::{
     ForeignDataWrapper, ForeignServer, ObjRef, PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER,
+    PG_USER_MAPPING, UserMapping,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{
-    AlterFdwStmt, AlterForeignServerStmt, AlterOwnerStmt, CreateFdwStmt, CreateForeignServerStmt,
-    DefElem, DefElemAction, List, Node, RenameStmt,
+    AlterFdwStmt, AlterForeignServerStmt, AlterOwnerStmt, AlterUserMappingStmt, CreateFdwStmt,
+    CreateForeignServerStmt, CreateUserMappingStmt, DefElem, DefElemAction, DropUserMappingStmt,
+    List, Node, RenameStmt, RoleSpec, RoleSpecType,
 };
 use rupg_types::oid;
 
@@ -17,9 +19,6 @@ use super::sequence::conflicting;
 use super::tsearch::def_string;
 use crate::from::levenshtein;
 use crate::typename::names;
-
-/// `UserMappingRelationId`: the catalog of the options of a user mapping.
-const PG_USER_MAPPING: u32 = 1418;
 
 /// `libpq_conninfo_options` of `foreign.c`: the options that `postgresql_fdw_validator` takes, with the catalog that each one is for.
 const CONNINFO_OPTIONS: [(&str, u32); 15] = [
@@ -64,6 +63,14 @@ fn no_fdw(name: &str) -> Error {
 /// The error of a missing server.
 fn no_server(name: &str) -> Error {
     Error::new(SqlState::UNDEFINED_OBJECT, format!("server \"{name}\" does not exist"))
+}
+
+/// `MappingUserName`: the name of the role of a user mapping, or `public` for 0.
+fn mapping_user(role: u32) -> String {
+    if role == 0 {
+        return "public".to_string();
+    }
+    rupg_pgcatalog::roles::current().name(role).unwrap_or_default().to_string()
 }
 
 /// `untransformRelOptions`: the name of an option of the form `name=value`.
@@ -316,10 +323,9 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
-    /// `object_aclcheck` of `USAGE` on a foreign-data wrapper for the role, with the error of `aclcheck_error`. rupg has no `GRANT` on a foreign-data wrapper, so only a superuser and a role with the privileges of the owner pass.
+    /// `object_aclcheck` of `USAGE` on a foreign-data wrapper for the role, with the error of `aclcheck_error`.
     fn check_fdw_usage(&self, fdw: &ForeignDataWrapper, role: u32) -> Result<()> {
-        let roles = rupg_pgcatalog::roles::current();
-        if roles.superuser(role) || roles.has_privs_of_role(role, fdw.owner) {
+        if self.foreign_usage_allowed(true, fdw.oid, role) {
             return Ok(());
         }
         Err(Error::new(
@@ -481,6 +487,13 @@ impl Definer<'_, '_> {
 
     /// `getObjectDescription` for a foreign-data wrapper or a server.
     pub(super) fn describe_foreign(&self, object: ObjRef) -> String {
+        if object.class == PG_USER_MAPPING {
+            let Some(mapping) = self.catalog.user_mapping(object.oid) else {
+                return format!("user mapping {}", object.oid);
+            };
+            let server = self.catalog.server(mapping.server).map_or("", |s| s.name.as_str());
+            return format!("user mapping for {} on server {server}", mapping_user(mapping.user));
+        }
         if object.class == PG_FOREIGN_DATA_WRAPPER {
             return match self.catalog.fdw(object.oid) {
                 Some(fdw) => format!("foreign-data wrapper {}", fdw.name),
@@ -491,5 +504,123 @@ impl Definer<'_, '_> {
             Some(server) => format!("server {}", server.name),
             None => format!("server {}", object.oid),
         }
+    }
+
+    /// The role of a user mapping: 0 for `PUBLIC`, as `CreateUserMapping` takes it.
+    fn mapping_role(&self, user: Option<&RoleSpec>) -> Result<u32> {
+        let spec = user.cloned().unwrap_or_default();
+        if spec.roletype == RoleSpecType::ROLESPEC_PUBLIC {
+            return Ok(0);
+        }
+        self.role_oid(&spec)
+    }
+
+    /// `user_mapping_ddl_aclcheck`: the owner of the server may change any of its mappings, and a role with `USAGE` on the server may change its own mapping.
+    fn user_mapping_check(&self, user: u32, server: &ForeignServer) -> Result<()> {
+        if self.is_superuser() || self.owns(server.owner) {
+            return Ok(());
+        }
+        if user != self.user {
+            return Err(not_owner("foreign server", &server.name));
+        }
+        if self.foreign_usage_allowed(false, server.oid, self.user) {
+            return Ok(());
+        }
+        Err(Error::new(
+            SqlState::INSUFFICIENT_PRIVILEGE,
+            format!("permission denied for foreign server {}", server.name),
+        ))
+    }
+
+    /// `CreateUserMapping`. With `IF NOT EXISTS`, a mapping that exists gives a notice.
+    pub(super) fn create_user_mapping(&mut self, stmt: &CreateUserMappingStmt) -> Result<()> {
+        let user = self.mapping_role(stmt.user.as_deref())?;
+        let name = stmt.servername.as_deref().unwrap_or_default();
+        let server = self.catalog.server_by_name(name).cloned().ok_or_else(|| no_server(name))?;
+        self.user_mapping_check(user, &server)?;
+        if self.catalog.user_mapping_for(user, server.oid).is_some() {
+            let message = format!(
+                "user mapping for \"{}\" already exists for server \"{name}\"",
+                mapping_user(user)
+            );
+            if stmt.if_not_exists {
+                self.notice(SqlState::DUPLICATE_OBJECT, format!("{message}, skipping"));
+                return Ok(());
+            }
+            return Err(Error::new(SqlState::DUPLICATE_OBJECT, message));
+        }
+        let validator = self.catalog.fdw(server.fdw).map_or(0, |f| f.validator);
+        let options = self.generic_options(PG_USER_MAPPING, &[], &stmt.options, validator)?;
+        self.catalog.create_user_mapping(UserMapping { oid: 0, user, server: server.oid, options });
+        Ok(())
+    }
+
+    /// `AlterUserMapping`: the new options of a mapping.
+    pub(super) fn alter_user_mapping(&mut self, stmt: &AlterUserMappingStmt) -> Result<()> {
+        let user = self.mapping_role(stmt.user.as_deref())?;
+        let name = stmt.servername.as_deref().unwrap_or_default();
+        let server = self.catalog.server_by_name(name).cloned().ok_or_else(|| no_server(name))?;
+        let Some(mapping) = self.catalog.user_mapping_for(user, server.oid).cloned() else {
+            return Err(Error::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!(
+                    "user mapping for \"{}\" does not exist for server \"{name}\"",
+                    mapping_user(user)
+                ),
+            ));
+        };
+        self.user_mapping_check(user, &server)?;
+        if !stmt.options.is_empty() {
+            let validator = self.catalog.fdw(server.fdw).map_or(0, |f| f.validator);
+            let options =
+                self.generic_options(PG_USER_MAPPING, &mapping.options, &stmt.options, validator)?;
+            self.catalog.set_user_mapping_options(mapping.oid, options);
+        }
+        Ok(())
+    }
+
+    /// `RemoveUserMapping`. With `IF EXISTS`, a role, a server or a mapping that does not exist gives a notice.
+    pub(super) fn drop_user_mapping(&mut self, stmt: &DropUserMappingStmt) -> Result<()> {
+        let spec = stmt.user.as_deref().cloned().unwrap_or_default();
+        let user = if spec.roletype == RoleSpecType::ROLESPEC_PUBLIC {
+            0
+        } else {
+            match self.role_oid(&spec) {
+                Ok(user) => user,
+                Err(_) if stmt.missing_ok => {
+                    let role = spec.rolename.as_deref().unwrap_or_default();
+                    self.notice(
+                        SqlState::SUCCESSFUL_COMPLETION,
+                        format!("role \"{role}\" does not exist, skipping"),
+                    );
+                    return Ok(());
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        let name = stmt.servername.as_deref().unwrap_or_default();
+        let Some(server) = self.catalog.server_by_name(name).cloned() else {
+            if !stmt.missing_ok {
+                return Err(no_server(name));
+            }
+            self.notice(
+                SqlState::SUCCESSFUL_COMPLETION,
+                format!("server \"{name}\" does not exist, skipping"),
+            );
+            return Ok(());
+        };
+        let Some(mapping) = self.catalog.user_mapping_for(user, server.oid).cloned() else {
+            let message = format!(
+                "user mapping for \"{}\" does not exist for server \"{name}\"",
+                mapping_user(user)
+            );
+            if !stmt.missing_ok {
+                return Err(Error::new(SqlState::UNDEFINED_OBJECT, message));
+            }
+            self.notice(SqlState::SUCCESSFUL_COMPLETION, format!("{message}, skipping"));
+            return Ok(());
+        };
+        self.user_mapping_check(user, &server)?;
+        self.perform(&[ObjRef::new(PG_USER_MAPPING, mapping.oid)], true)
     }
 }

@@ -1328,6 +1328,9 @@ impl Connection {
                     Node::AlterFdwStmt(_) => CommandTag::AlterForeignDataWrapper,
                     Node::CreateForeignServerStmt(_) => CommandTag::CreateServer,
                     Node::AlterForeignServerStmt(_) => CommandTag::AlterServer,
+                    Node::CreateUserMappingStmt(_) => CommandTag::CreateUserMapping,
+                    Node::AlterUserMappingStmt(_) => CommandTag::AlterUserMapping,
+                    Node::DropUserMappingStmt(_) => CommandTag::DropUserMapping,
                     Node::CreatePolicyStmt(_) => CommandTag::CreatePolicy,
                     Node::AlterPolicyStmt(_) => CommandTag::AlterPolicy,
                     Node::CreateTrigStmt(_) => CommandTag::CreateTrigger,
@@ -4196,6 +4199,12 @@ mod tests {
     #[test]
     fn foreign_data_wrapper() {
         big_stack(|| script(include_str!("connection/foreign_data_wrapper.test")));
+    }
+
+    /// `GRANT` and `REVOKE` on foreign-data wrappers and foreign servers, and `CREATE`, `ALTER` and `DROP USER MAPPING` with their checks, options, notices and errors, `pg_user_mapping`, `pg_user_mappings`, the object address functions, `DROP ROLE`, `DROP OWNED` and `REASSIGN OWNED`. `connection/user_mapping.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn user_mapping() {
+        big_stack(|| script(include_str!("connection/user_mapping.test")));
     }
 
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.

@@ -3,7 +3,8 @@
 use rupg_catalog::{
     Catalog, ObjRef, PG_CLASS, PG_COLLATION, PG_CONVERSION, PG_DEFAULT_ACL, PG_EXTENSION,
     PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_LANGUAGE, PG_NAMESPACE, PG_OPCLASS, PG_OPERATOR,
-    PG_OPFAMILY, PG_PROC, PG_STATISTIC_EXT, PG_TS_CONFIG, PG_TS_DICT, PG_TYPE, RangePart, RelKind,
+    PG_OPFAMILY, PG_PROC, PG_STATISTIC_EXT, PG_TS_CONFIG, PG_TS_DICT, PG_TYPE, PG_USER_MAPPING,
+    RangePart, RelKind,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{DropBehavior, DropOwnedStmt, List, Node, ReassignOwnedStmt};
@@ -69,6 +70,9 @@ pub fn owned_objects(catalog: &Catalog, role: u32) -> Vec<ObjRef> {
     }
     for s in catalog.servers() {
         add(PG_FOREIGN_SERVER, s.oid, s.owner);
+    }
+    for m in catalog.user_mappings() {
+        add(PG_USER_MAPPING, m.oid, m.user);
     }
     for o in catalog.operators() {
         add(PG_OPERATOR, o.oid, o.owner);
@@ -262,8 +266,8 @@ impl Definer<'_, '_> {
                 }
                 self.catalog.set_schema_owner(object.oid, new, &old_name, &new_name)
             }
-            // `DROP OWNED` removes the default privileges, and `REASSIGN OWNED` leaves them.
-            PG_DEFAULT_ACL => Ok(()),
+            // `DROP OWNED` removes the default privileges and the user mappings, and `REASSIGN OWNED` leaves them.
+            PG_DEFAULT_ACL | PG_USER_MAPPING => Ok(()),
             PG_TYPE => {
                 let Some(ty) = self.catalog.type_by_oid(object.oid) else { return Ok(()) };
                 if ty.owner != old {

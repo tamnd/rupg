@@ -230,6 +230,9 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::AlterFdwStmt(_)
             | Node::CreateForeignServerStmt(_)
             | Node::AlterForeignServerStmt(_)
+            | Node::CreateUserMappingStmt(_)
+            | Node::AlterUserMappingStmt(_)
+            | Node::DropUserMappingStmt(_)
     ) || matches!(stmt, Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) || matches!(define.kind, ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_AGGREGATE | ObjectType::OBJECT_TYPE))
         || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
         || matches!(stmt, Node::DiscardStmt(discard) if discard.target == DiscardMode::DISCARD_TEMP)
@@ -396,6 +399,9 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::AlterFdwStmt(stmt) => definer.alter_fdw(stmt),
         Node::CreateForeignServerStmt(stmt) => definer.create_server(stmt),
         Node::AlterForeignServerStmt(stmt) => definer.alter_server(stmt),
+        Node::CreateUserMappingStmt(stmt) => definer.create_user_mapping(stmt),
+        Node::AlterUserMappingStmt(stmt) => definer.alter_user_mapping(stmt),
+        Node::DropUserMappingStmt(stmt) => definer.drop_user_mapping(stmt),
         Node::AlterOperatorStmt(alter) => definer.alter_operator(alter),
         Node::CreateOpFamilyStmt(create) => definer.create_opfamily(create),
         Node::CreateOpClassStmt(create) => definer.create_opclass(create),
