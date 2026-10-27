@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.3.8 (2026-10-27)
+
 ### Added
 
 - A composite type has `=` only when each field has `=`, and an order only when each field has an order, as in `cache_record_field_properties`, so `ORDER BY` and `DISTINCT` of such a type give the errors of PostgreSQL when the query is analyzed. `ALTER TABLE ... ADD COLUMN` with a default gives an error when a column of another table holds the row type of the table (#952).
