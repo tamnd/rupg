@@ -2,7 +2,7 @@
 //!
 //! The kernel turns the lists into the nodes that `get_object_address` takes and checks their lengths. The analyzer looks up the objects in the schemas, and the kernel looks up the databases, the tablespaces, the roles and the other objects that have one name.
 
-use rupg_catalog::{Catalog, ObjRef};
+use rupg_catalog::{Catalog, ObjRef, PG_PUBLICATION};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Owned};
 use rupg_sql::nodes::{List, Node, ObjectType, ObjectWithArgs};
@@ -312,7 +312,10 @@ fn unqualified(objtype: ObjectType, name: &str, session: &dyn Session) -> Result
             (PG_AM, builtin::access_method_oid(name).ok_or_else(|| missing("access method"))?)
         }
         ObjectType::OBJECT_EVENT_TRIGGER => return Err(missing("event trigger")),
-        ObjectType::OBJECT_PUBLICATION => return Err(missing("publication")),
+        ObjectType::OBJECT_PUBLICATION => {
+            let found = session.catalog().and_then(|c| c.publication_by_name(name));
+            (PG_PUBLICATION, found.map(|p| p.oid).ok_or_else(|| missing("publication"))?)
+        }
         _ => return Err(missing("subscription")),
     };
     Ok(ObjRef::new(class, oid))

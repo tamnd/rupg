@@ -51,6 +51,19 @@ impl Definer<'_, '_> {
         if generated == 0 {
             return Err(not_generated(column, &target.name));
         }
+        // A new expression could change a row filter, and it could have what a row filter cannot have.
+        if generated == b'v'
+            && self.catalog.publication_rels().any(|r| r.relation == table && !r.except)
+        {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "ALTER TABLE / SET EXPRESSION is not supported for virtual generated columns in tables that are part of a publication",
+            )
+            .with_detail(format!(
+                "Column \"{column}\" of relation \"{}\" is a virtual generated column.",
+                target.name
+            )));
+        }
         // `RememberAllDependentForRebuilding` and `RememberWholeRowDependentForRebuilding`.
         let mut checks = Vec::new();
         for con in self.catalog.constraints_of(table).filter(|c| c.kind == ConKind::Check) {

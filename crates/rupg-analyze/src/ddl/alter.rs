@@ -978,6 +978,20 @@ impl Definer<'_, '_> {
             b'p' if !unlogged => return Ok(false),
             _ => {}
         }
+        // `RelationHasPublication`: an unlogged table cannot be published or be in an `EXCEPT` clause.
+        if unlogged && self.catalog.publication_rels().any(|r| r.relation == target.oid) {
+            return Err(Error::new(
+                SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
+                format!(
+                    "cannot change table \"{}\" to unlogged because it is referenced by a publication",
+                    target.name
+                ),
+            )
+            .with_detail("Unlogged relations cannot be published or excluded via an EXCEPT clause.")
+            .with_hint(
+                "Drop the table from the publication, or remove it from the publication's EXCEPT clause, first.",
+            ));
+        }
         for con in self.catalog.constraints() {
             let Some(fk) = &con.foreign else { continue };
             if con.relation == target.oid && fk.table == target.oid {
