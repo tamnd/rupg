@@ -206,11 +206,7 @@ fn print_function_sqlbody(proc: &ProcRow, session: &dyn Session) -> Result<Optio
         SqlBody::Atomic(queries) => {
             d.buf.push_str("BEGIN ATOMIC\n");
             for query in &queries {
-                if query.write.is_some() {
-                    d.write_def(query, 1)?;
-                } else {
-                    d.query_def(query, None, false, 1)?;
-                }
+                d.query_def(query, None, false, 1)?;
                 d.buf.push_str(";\n");
             }
             d.buf.push_str("END");

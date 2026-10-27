@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `pg_get_functiondef` of a body in SQL shows an expression of `RETURNING` with no `AS "?column?"`, and the columns of an `INSERT` with the name of the table (#959).
 - `ctid` in `RETURNING` of a partitioned table and of a table with children of `INHERITS` gives the version in the leaf, for routed inserts, updates in a leaf and across leaves, and `ON CONFLICT` (#958).
 - `old` and `new` in `RETURNING` of a statement that a rule rewrites take the rows of the rule action, with the aliases of `WITH (OLD AS ..., NEW AS ...)`, and `EXPLAIN` shows them in `Output` (#957).
 - `ctid` of the old and the new rows in `RETURNING` of `INSERT`, `UPDATE`, `DELETE` and `ON CONFLICT` gives the item pointer of the version, as PostgreSQL gives it, and `EXPLAIN VERBOSE` shows the `Output` of a `RETURNING` list with a system column (#956).

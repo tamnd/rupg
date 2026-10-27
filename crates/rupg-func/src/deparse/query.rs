@@ -47,7 +47,10 @@ impl Deparser<'_> {
     ) -> Result<()> {
         // A query of `WITH` can be a write.
         if query.write.is_some() {
-            return self.write_def(query, indent);
+            let saved_visible = std::mem::replace(&mut self.names_visible, names_visible);
+            let done = self.write_def(query, indent);
+            self.names_visible = saved_visible;
+            return done;
         }
         let space = self.namespace(query);
         let joins: usize = query.from.iter().map(join_count).sum();
@@ -119,6 +122,9 @@ impl Deparser<'_> {
         };
         let space = self.namespace(&target);
         let refname = space.names.first().cloned().unwrap_or_default();
+        // The body of a function in SQL has the namespace of the function outside the query.
+        let prefix = self.prefix || !self.namespaces.is_empty() || self.function.is_some();
+        let saved_prefix = std::mem::replace(&mut self.prefix, prefix);
         let saved_indent = std::mem::replace(&mut self.indent, indent);
         self.namespaces.push(space);
         let done = self
@@ -128,6 +134,7 @@ impl Deparser<'_> {
             .and_then(|()| self.returning_clause(query));
         self.namespaces.pop();
         self.indent = saved_indent;
+        self.prefix = saved_prefix;
         done
     }
 
