@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.3.4 (2026-10-27)
+
 ### Added
 
 - With `IGNORE NULLS`, a window function runs an argument that calls a volatile function or has a subquery again on each row that it reads, as PostgreSQL does when `notnull_info_cacheable` is false. Before, rupg evaluated such an argument once for each row, so `nextval` and the results did not match PostgreSQL. (#903)
