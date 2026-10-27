@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.3.10 (2026-10-27)
+
 ### Added
 
 - A partitioned table with foreign partitions gives the errors of PostgreSQL for unique indexes, a foreign partition gets no copies of the indexes of its parent, and `IMPORT FOREIGN SCHEMA` checks the server, the schema and the handler of the wrapper. The foreign_data regression test now passes (#976).
