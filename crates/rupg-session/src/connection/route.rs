@@ -12,9 +12,9 @@ use std::rc::Rc;
 /// The row security check of a partitioned root, with the name of the root table.
 type RootPolicy = Rc<(rupg_analyze::PolicyCheck, String)>;
 
-use super::Connection;
 use super::foreign::Batch;
 use super::trigger::{RowPair, Triggers, armed};
+use super::{Connection, put_tids};
 use crate::heap::{Change, Changed, View, tid_text};
 use crate::query::{self, Reader};
 
@@ -33,6 +33,8 @@ struct Leaf {
     rows: Vec<Vec<Value>>,
     /// The line of each row of a `COPY FROM`.
     lines: Vec<u64>,
+    /// The ID of the version of each row of the last write of `rows`, for `ctid` of `RETURNING`.
+    ids: Vec<u64>,
     /// The triggers `FOR EACH ROW` of the leaf for the event of the statement.
     fire: Triggers,
     /// The event of `fire`.
@@ -285,6 +287,8 @@ impl Connection {
         let (mut written, mut inserted) = (Vec::new(), Vec::new());
         // The new rows of the leaves with triggers `AFTER ... FOR EACH ROW`.
         let mut after = Vec::new();
+        // The leaf and the place in the rows of the leaf of each row of `written`.
+        let mut places = Vec::new();
         let mut count = 0;
         for row in rows {
             let fired = routing.route_fired(self, (info.table, row), &catalog, &reader)?;
@@ -298,6 +302,7 @@ impl Connection {
                 if info.keeps_written() {
                     shown.push(Value::Oid(routing.oid(at)));
                     written.push(shown);
+                    places.push((at, routing.leaves[at].rows.len()));
                 }
             }
             if routing.leaves[at].fire.after_rows() {
@@ -307,6 +312,12 @@ impl Connection {
         }
         drop(reader);
         let batches = self.insert_leaves(&mut routing, view, None)?;
+        if let Some(tid_at) = info.returning_tid {
+            for (row, (at, place)) in written.iter_mut().zip(places) {
+                let id = routing.leaves[at].ids.get(place).copied().unwrap_or(0);
+                put_tids(std::slice::from_mut(row), tid_at, &[id]);
+            }
+        }
         for (at, row) in after {
             let leaf = &routing.leaves[at];
             self.leaf_after((&leaf.fire, (&[], leaf.up.len())), &[(None, Some(row))])?;
@@ -336,12 +347,13 @@ impl Connection {
             self.heap_layout(leaf.oid);
             let mut kept = Vec::new();
             loop {
-                match heap.insert(
+                match heap.insert_ids(
                     leaf.oid,
                     view,
                     rows.clone(),
                     (&leaf_info.unique, &|d: &Derived, r: &[Value]| self.index_key(d, r)),
                     &kept,
+                    &mut leaf.ids,
                 )? {
                     Changed::Done(_) => break,
                     Changed::Duplicate { index, key } if copy.is_some() => {
@@ -456,6 +468,9 @@ impl Connection {
         // The old and the new rows of the leaves for the triggers of the foreign keys, for each leaf and change, and the rows that move with the columns of the partitioned table.
         let mut changes: Vec<FkRows> = Vec::new();
         let (mut moved_new, mut moved_old) = (Vec::new(), Vec::new());
+        // The place in `written` and in the statement of each row that moves, for `ctid` of `RETURNING`.
+        let mut moved_shown = Vec::new();
+        let heap = self.store.heap();
         for (at, item, old) in applied {
             let leaf = &routing.leaves[at];
             if !item.moves || item.to.is_some() {
@@ -482,7 +497,17 @@ impl Connection {
                     moved_new.push(up(&routing.leaves[*to], checked, width));
                 }
             }
-            done.written.extend(item.shown.clone());
+            if let Some(mut shown) = item.shown.clone() {
+                if let Some(tid_at) = info.returning_tid {
+                    if item.moves {
+                        moved_shown.push((done.written.len(), item.seq));
+                    } else {
+                        let next = heap.next_versions(view.database, leaf.oid, &[item.tid]);
+                        put_tids(std::slice::from_mut(&mut shown), tid_at, &next);
+                    }
+                }
+                done.written.push(shown);
+            }
             if keep && let Some(old) = &old {
                 old_rows.push((item.seq, up(leaf, old, width)));
                 if let Some(new) = &item.new {
@@ -517,8 +542,17 @@ impl Connection {
             }
         }
         drop(reader);
-        let batches = self.insert_moved(&mut routing, &done.view, moved, after, &info.updated)?;
+        let (batches, ids) =
+            self.insert_moved(&mut routing, &done.view, moved, after, &info.updated)?;
         done.batches.extend(batches);
+        if let Some(tid_at) = info.returning_tid {
+            for (place, seq) in moved_shown {
+                let id = ids.iter().find(|row| row.0 == seq).map_or(0, |row| row.1);
+                if let Some(row) = done.written.get_mut(place) {
+                    put_tids(std::slice::from_mut(row), tid_at, &[id]);
+                }
+            }
+        }
         let keys: Vec<Foreign> = info.foreign.iter().filter(|f| !f.cloned).cloned().collect();
         if !keys.is_empty() && !moved_old.is_empty() {
             done.batches.push(Batch::new(info, &keys, done.view.command, moved_new, moved_old));
@@ -707,7 +741,7 @@ impl Connection {
         Ok(false)
     }
 
-    /// `ExecInsert` of the rows `rows` in their leaves after the changes of a statement, each with its place in the statement and the index of its leaf, with the checks of the unique keys of the leaves. Then the events `after` of the triggers `AFTER ... FOR EACH ROW` of the changes and the events of the triggers `AFTER INSERT ... FOR EACH ROW` of the new rows go in the queue in the order of the rows. The statement sets the columns `updated` of the partitioned table. The result has the new rows that the foreign keys of the leaves check.
+    /// `ExecInsert` of the rows `rows` in their leaves after the changes of a statement, each with its place in the statement and the index of its leaf, with the checks of the unique keys of the leaves. Then the events `after` of the triggers `AFTER ... FOR EACH ROW` of the changes and the events of the triggers `AFTER INSERT ... FOR EACH ROW` of the new rows go in the queue in the order of the rows. The statement sets the columns `updated` of the partitioned table. The result has the new rows that the foreign keys of the leaves check, and the ID of the new version of each row with its place in the statement.
     ///
     /// # Errors
     ///
@@ -719,23 +753,29 @@ impl Connection {
         rows: Vec<(usize, usize, Vec<Value>)>,
         mut after: Vec<AfterRow>,
         updated: &[i16],
-    ) -> Result<Vec<Batch>, Error> {
+    ) -> Result<(Vec<Batch>, Vec<NewId>), Error> {
         // Each leaf writes its new rows in the order of the statement.
         let mut rows = rows;
         rows.sort_by_key(|row| row.0);
+        let mut places = Vec::with_capacity(rows.len());
         for (seq, to, row) in rows {
             if routing.leaves[to].fire_of(TRIGGER_INSERT).is_some_and(Triggers::after_rows) {
                 after.push((seq, to, TRIGGER_INSERT, (None, Some(row.clone()))));
             }
+            places.push((seq, to, routing.leaves[to].rows.len()));
             routing.leaves[to].rows.push(row);
         }
         let batches = self.insert_leaves(routing, view, None)?;
+        let ids = places
+            .into_iter()
+            .map(|(seq, to, place)| (seq, routing.leaves[to].ids.get(place).copied().unwrap_or(0)))
+            .collect();
         // A sort that keeps the order of the events of a row: the event of the old leaf, then the event of the new leaf.
         after.sort_by_key(|event| event.0);
         for (_, at, event, rows) in after {
             routing.after_leaf(self, (at, event), &[rows], updated)?;
         }
-        Ok(batches)
+        Ok((batches, ids))
     }
 }
 
@@ -794,6 +834,9 @@ impl Moved {
         if self.update && !self.moves { TRIGGER_UPDATE } else { TRIGGER_DELETE }
     }
 }
+
+/// The place of a row in the statement and the ID of its new version.
+type NewId = (usize, u64);
 
 /// The changes of the rows of one leaf, with the index of the leaf, in the order of the rows.
 pub(super) type Group = (usize, Vec<Moved>);
@@ -993,6 +1036,7 @@ fn leaf(
         up,
         rows: Vec::new(),
         lines: Vec::new(),
+        ids: Vec::new(),
         fire,
         event,
         armed: Vec::new(),
