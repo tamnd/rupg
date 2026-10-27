@@ -113,8 +113,18 @@ impl Analyzer<'_> {
             }
         }
         let mut relations = [None, None];
+        // `rewriteRuleAction` gives the old and the new rows of the action to `old` and `new` of the list of the user, also when the action has no such names.
+        let user = self.outer.is_empty() && self.rule.returning.is_some();
         for ((index, slot), old) in relations.iter_mut().zip(&names).zip([true, false]) {
-            let Some((name, at)) = slot else { continue };
+            let Some((name, at)) = slot else {
+                if user {
+                    // No name of the statement finds the row.
+                    *index = Some(self.add_returning_item("", old, kind)?);
+                    let (_, entries, items) = self.scope_size();
+                    self.remove_columns((entries, items - 1));
+                }
+                continue;
+            };
             if self.has_refname(name)? {
                 return Err(Error::new(
                     SqlState::DUPLICATE_ALIAS,
@@ -142,7 +152,7 @@ impl Analyzer<'_> {
         if self.outer.is_empty()
             && let Some((refname, clause, oid)) = self.rule.returning.take()
         {
-            targets = self.user_returning(&refname, &clause, oid, &targets)?;
+            targets = self.user_returning(&refname, &clause, oid, (&targets, relations))?;
         }
         // `resolveTargetListUnknowns`: a column of type `unknown` becomes `text`.
         for target in &mut targets {
@@ -362,7 +372,9 @@ impl Analyzer<'_> {
                 change(e, depth);
             });
         }
-        let [old, new] = names.map(|n| n.map(|(name, _)| name).unwrap_or_default());
+        // `EXPLAIN` shows the rows of an action of a rule with no names as `old` and `new`.
+        let [old, new] = [(0, "old"), (1, "new")]
+            .map(|(slot, name)| names[slot].take().map_or_else(|| name.to_string(), |(n, _)| n));
         let query = Query {
             relations: vec![relation],
             from: vec![FromItem::Relation(0)],
@@ -373,28 +385,55 @@ impl Analyzer<'_> {
         Ok((query, carried, tid_at.map(|at| base + at)))
     }
 
-    /// `ReplaceVarsFromTargetList` for `rewriteRuleAction`: the list of `RETURNING` of the statement of the user, which reads the relation `oid` with the name `refname`, with the values of `row` in place of the columns of the relation.
+    /// `ReplaceVarsFromTargetList` for `rewriteRuleAction`: the list of `RETURNING` of the statement of the user, which reads the relation `oid` with the name `refname`, with the values of `row` in place of the columns of the relation. A column of `old` or `new` of the list of the user is the value of `row` for the old or the new row of the action, which are the relations `action` of the action, as `varreturningtype` of the replaced columns gives it.
     fn user_returning(
         &mut self,
         refname: &str,
         clause: &ReturningClause,
         oid: u32,
-        row: &[crate::select::Target],
+        (row, action): (&[crate::select::Target], [Option<usize>; 2]),
     ) -> Result<Vec<crate::select::Target>> {
         let columns = self.open_relation(oid, refname, None)?;
-        let action = std::mem::take(&mut self.scope);
+        let scope = std::mem::take(&mut self.scope);
+        // The names `old` and `new` of the user read the table of the rule, not a view of the action.
+        let auto_view = self.auto_view.take();
         let result = self.user_returning_in(refname, clause, oid, columns);
-        self.scope = action;
-        let mut targets = result?;
+        self.auto_view = auto_view;
+        self.scope = scope;
+        let (mut targets, user) = result?;
         let row: Vec<Expr> = row.iter().map(|t| t.expr.clone()).collect();
         // The whole row of the relation is a row of the values.
         let mut replace = |e: &mut Expr, depth: usize| {
             let ExprKind::Var(var) = e.kind else { return false };
-            if var.levels_up != depth || var.relation != 0 {
+            if var.levels_up != depth {
                 return false;
             }
+            // The relation of the action that the values read in place of its target table.
+            let to = if var.relation == 0 {
+                0
+            } else if let Some(at) = user.iter().position(|&u| u == Some(var.relation)) {
+                match action[at] {
+                    Some(to) => to,
+                    None => {
+                        *e = Expr::new(ExprKind::Const(Value::Null), e.ty);
+                        return true;
+                    }
+                }
+            } else {
+                return false;
+            };
             let raised = |value: &Expr| {
                 let mut value = value.clone();
+                if to != 0 {
+                    rewrite(&mut value, 0, &mut |e: &mut Expr, d| {
+                        if let ExprKind::Var(v) = &mut e.kind
+                            && v.levels_up == d
+                            && v.relation == 0
+                        {
+                            v.relation = to;
+                        }
+                    });
+                }
                 value.raise(depth);
                 value
             };
@@ -419,13 +458,26 @@ impl Analyzer<'_> {
         clause: &ReturningClause,
         oid: u32,
         columns: Vec<Column>,
-    ) -> Result<Vec<crate::select::Target>> {
+    ) -> Result<(Vec<crate::select::Target>, [Option<usize>; 2])> {
         let relation = Relation::new(oid, columns, None, None, None);
         let item = self.add_relation(relation, refname.to_string(), None)?;
         self.push_item(item);
+        // The names `old` and `new` of the list of the user, as `addNSItemForReturning` adds them.
+        let mut names: [Option<Box<str>>; 2] = [Some("old".into()), Some("new".into())];
+        for node in &clause.options {
+            if let Some(Node::ReturningOption(option)) = node {
+                let slot = usize::from(option.option != ReturningOptionKind::RETURNING_OPTION_OLD);
+                names[slot] = option.value.clone();
+            }
+        }
+        let mut user = [None, None];
+        for ((slot, name), old) in user.iter_mut().zip(names).zip([true, false]) {
+            let Some(name) = name.filter(|name| **name != *refname) else { continue };
+            *slot = Some(self.add_returning_item(&name, old, WriteKind::Update)?);
+        }
         let mut targets = self.target_list(&clause.exprs, Kind::Returning)?;
         self.mark_origins(&mut targets);
-        Ok(targets)
+        Ok((targets, user))
     }
 }
 

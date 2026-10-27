@@ -4117,6 +4117,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/returning_ctid.test")));
     }
 
+    /// `old` and `new` in `RETURNING` of a statement that a rule rewrites: a `DELETE` rule that does an `UPDATE`, an `UPDATE` rule of a view over a join and an `INSERT` rule, with the aliases of `WITH (OLD AS ..., NEW AS ...)`. `connection/rule_returning_old_new.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn rule_returning_old_new() {
+        big_stack(|| script(include_str!("connection/rule_returning_old_new.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {
