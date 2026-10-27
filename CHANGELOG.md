@@ -10,7 +10,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Changed
 
-- The planner is faster for queries that join many catalog tables, such as the `information_schema` queries of drizzle-kit. A built-in type, function, operator or class is found by its OID in a table with no hash. The planner finds the lateral references of each relation once for each query, and it compares two expressions without a copy of them. The server CPU time of the drizzle-kit queries is approximately 40% less. (#PR)
+- The planner is faster for queries that join many catalog tables, such as the `information_schema` queries of drizzle-kit. A built-in type, function, operator or class is found by its OID in a table with no hash. The planner finds the lateral references of each relation once for each query, and it compares two expressions without a copy of them. The server CPU time of the drizzle-kit queries is approximately 40% less. (#896)
 
 ## 0.3.3 (2026-10-27)
 
