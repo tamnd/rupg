@@ -89,7 +89,7 @@ use std::cell::RefCell;
 use rupg_catalog::{Catalog, ObjRef, PG_CLASS, PG_NAMESPACE, PG_PROC, PG_TYPE, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, ClassRow, Named, NamedRow, Owned};
-use rupg_sql::nodes::{CreateSchemaStmt, GrantTargetType, Node, ObjectType, RangeVar};
+use rupg_sql::nodes::{CreateSchemaStmt, DiscardMode, GrantTargetType, Node, ObjectType, RangeVar};
 use rupg_types::{Value, oid};
 
 use crate::coerce::AtOpt;
@@ -223,6 +223,7 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::CreateCastStmt(_)
     ) || matches!(stmt, Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) || matches!(define.kind, ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_AGGREGATE | ObjectType::OBJECT_TYPE))
         || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
+        || matches!(stmt, Node::DiscardStmt(discard) if discard.target == DiscardMode::DISCARD_TEMP)
         || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype) || alter.objtype == ObjectType::OBJECT_TYPE)
         || matches!(stmt, Node::AlterOwnerStmt(alter) if matches!(alter.objectType, ObjectType::OBJECT_SCHEMA | ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
         || matches!(stmt, Node::RenameStmt(rename) if rename::is_rename_kind(rename.renameType))
@@ -336,6 +337,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::AlterFunctionStmt(alter) => definer.alter_function(alter),
         Node::CommentStmt(comment) => definer.comment(comment),
         Node::DropStmt(drop) => definer.drop(drop),
+        Node::DiscardStmt(_) => definer.discard_temp(),
         Node::AlterTableStmt(alter) => definer.alter_table(alter),
         Node::AlterOwnerStmt(alter) => definer.alter_owner(alter),
         Node::RenameStmt(rename) => definer.rename(rename),
