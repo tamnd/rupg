@@ -907,7 +907,7 @@ impl Analyzer<'_> {
             self.check_srf_placement(&signature(&name, &inputs, &argnames), at)?;
         }
         let over = parts.as_ref().is_some_and(|p| p.over.is_some());
-        if over && !argnames.is_empty() {
+        if over && aggregate.is_some() && !argnames.is_empty() {
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
                 "a window function call with named arguments is not supported yet",

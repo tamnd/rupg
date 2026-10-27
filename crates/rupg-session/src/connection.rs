@@ -3869,6 +3869,13 @@ mod tests {
         big_stack(|| script(include_str!("connection/run_condition_sublink.test")));
     }
 
+    /// `CREATE FUNCTION` with `WINDOW` makes a window function, and a call of a window function takes named arguments and defaults, which `eval_const_expressions` expands.
+    /// `connection/window_function_option.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn window_function_option() {
+        big_stack(|| script(include_str!("connection/window_function_option.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

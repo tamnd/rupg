@@ -1250,7 +1250,7 @@ impl<'a> Fold<'a> {
             }
             ExprKind::Window(w) => {
                 let mut w = w.clone();
-                w.args = self.list(&w.args)?;
+                w.args = self.list(&rupg_analyze::expand_window_arguments(&w)?)?;
                 if let Some(filter) = &w.filter {
                     w.filter = Some(Box::new(self.expr(filter)?));
                 }

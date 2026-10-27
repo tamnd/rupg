@@ -8,7 +8,7 @@ use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, ProcRow};
 use rupg_types::{Array, Value, oid};
 
-use crate::expr::{Expr, ExprKind, Func};
+use crate::expr::{Expr, ExprKind, Func, WindowFunc};
 
 /// `JB_FOBJECT` and `JB_FARRAY`: the flags of the root container of a `jsonb` value. The low bits hold the number of the items.
 const JSONB_OBJECT: u32 = 0x2000_0000;
@@ -105,6 +105,16 @@ fn const_value(ty: u32, bytes: &[u8]) -> Result<Value> {
 pub fn expand_arguments(f: &Func) -> Result<Cow<'_, [Expr]>> {
     let Some(proc) = builtin::proc_by_oid(f.oid) else { return Ok(Cow::Borrowed(&f.args)) };
     expand(&f.args, proc)
+}
+
+/// `expand_function_arguments` for a call of a window function, which `eval_const_expressions` applies to a `WindowFunc`.
+///
+/// # Errors
+///
+/// An internal error when the call does not fit the function, which the analyzer prevents.
+pub fn expand_window_arguments(w: &WindowFunc) -> Result<Cow<'_, [Expr]>> {
+    let Some(proc) = builtin::proc_by_oid(w.oid) else { return Ok(Cow::Borrowed(&w.args)) };
+    expand(&w.args, proc)
 }
 
 /// The row of a procedure as `expand_function_arguments` reads it with `include_out_arguments`: the arguments are all the arguments, so that the arguments of a `CALL` take the output arguments too.

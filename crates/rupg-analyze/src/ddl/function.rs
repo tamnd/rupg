@@ -129,6 +129,8 @@ struct Options {
     config: Vec<String>,
     /// True for `SECURITY DEFINER`.
     secdef: bool,
+    /// True for `WINDOW`, which makes a window function, `PROKIND_WINDOW`.
+    window: bool,
 }
 
 /// `update_proconfig_value`: the settings of a function after a clause `SET` or `RESET`. `GUCArrayAdd` puts a new value in place of the value of the same parameter, and `GUCArrayDelete` and `RESET ALL` remove values.
@@ -204,6 +206,7 @@ fn options(stmt: &CreateFunctionStmt, env: &dyn Env) -> Result<Options> {
         src_at: None,
         config: Vec::new(),
         secdef: false,
+        window: false,
     };
     for def in stmt.options.iter().flatten() {
         let Node::DefElem(def) = def else { continue };
@@ -260,6 +263,7 @@ fn options(stmt: &CreateFunctionStmt, env: &dyn Env) -> Result<Options> {
                 _ => return Err(bad()),
             },
             ("security", _) => out.secdef = matches!(def.arg, Some(Node::Boolean(true))),
+            ("window", _) => out.window = matches!(def.arg, Some(Node::Boolean(true))),
             ("as", _) => match option_list(def).as_deref() {
                 // The grammar gives one item, or two for a function in C.
                 Some([src, rest @ ..]) if rest.len() < 2 => {
@@ -1093,7 +1097,13 @@ impl Definer<'_, '_> {
             cost: options.cost.unwrap_or(if untrusted { 1.0 } else { DEFAULT_COST }),
             rows: if retset { options.rows.unwrap_or(DEFAULT_ROWS) } else { 0 },
             support,
-            kind: if stmt.is_procedure { b'p' } else { b'f' },
+            kind: if stmt.is_procedure {
+                b'p'
+            } else if options.window {
+                b'w'
+            } else {
+                b'f'
+            },
             strict: options.strict,
             leakproof: options.leakproof,
             volatile: options.volatile,
