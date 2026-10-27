@@ -889,8 +889,9 @@ fn leaf_row_with(
     let params: Vec<Value> =
         leaf.live.iter().map(|&i| values.get(i).cloned().unwrap_or(Value::Null)).collect();
     let checked = leaf.plan.run_unchecked(&params, reader)?;
+    // The row comes after the triggers of the leaf, so the checks run also for a leaf with triggers `BEFORE ... FOR EACH ROW`, which [`Plan::check`] leaves to [`Plan::recheck`].
     let mut rows =
-        leaf.plan.check(checked, reader).map_err(|e| root_detail(leaf, values, e, reader))?;
+        leaf.plan.check_rows(checked, reader).map_err(|e| root_detail(leaf, values, e, reader))?;
     rows.pop().ok_or_else(|| Error::internal("a check of a row with no row"))
 }
 
