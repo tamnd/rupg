@@ -1,9 +1,9 @@
 //! `DROP OWNED` and `REASSIGN OWNED`, as `DropOwnedObjects`, `ReassignOwnedObjects`, `shdepDropOwned` and `shdepReassignOwned` run them. rupg keeps no `pg_shdepend`, so the objects of a role are the objects with the role as their owner and the objects with an ACL that names the role.
 
 use rupg_catalog::{
-    Catalog, ObjRef, PG_CLASS, PG_COLLATION, PG_DEFAULT_ACL, PG_EXTENSION, PG_LANGUAGE,
-    PG_NAMESPACE, PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_PROC, PG_STATISTIC_EXT, PG_TS_CONFIG,
-    PG_TS_DICT, PG_TYPE, RangePart, RelKind,
+    Catalog, ObjRef, PG_CLASS, PG_COLLATION, PG_CONVERSION, PG_DEFAULT_ACL, PG_EXTENSION,
+    PG_LANGUAGE, PG_NAMESPACE, PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_PROC, PG_STATISTIC_EXT,
+    PG_TS_CONFIG, PG_TS_DICT, PG_TYPE, RangePart, RelKind,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{DropBehavior, DropOwnedStmt, List, Node, ReassignOwnedStmt};
@@ -60,6 +60,9 @@ pub fn owned_objects(catalog: &Catalog, role: u32) -> Vec<ObjRef> {
     }
     for s in catalog.stat_exts() {
         add(PG_STATISTIC_EXT, s.oid, s.owner);
+    }
+    for c in catalog.conversions() {
+        add(PG_CONVERSION, c.oid, c.owner);
     }
     for o in catalog.operators() {
         add(PG_OPERATOR, o.oid, o.owner);
@@ -299,6 +302,7 @@ impl Definer<'_, '_> {
             PG_STATISTIC_EXT => catalog.stat_exts().find(|s| s.oid == oid).map(|s| s.namespace),
             PG_TS_DICT => catalog.ts_dictionaries().find(|d| d.oid == oid).map(|d| d.namespace),
             PG_TS_CONFIG => catalog.ts_configs().find(|c| c.oid == oid).map(|c| c.namespace),
+            PG_CONVERSION => catalog.conversion(oid).map(|c| c.namespace),
             _ => None,
         }
     }

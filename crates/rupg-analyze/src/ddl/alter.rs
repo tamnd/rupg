@@ -1325,7 +1325,7 @@ impl Definer<'_, '_> {
         ))
     }
 
-    /// `ExecAlterOwnerStmt` for a schema, `AlterSchemaOwner`, for a type or a domain, for a function, for an operator, for an operator class or an operator family, and for a statistics object.
+    /// `ExecAlterOwnerStmt` for a schema, `AlterSchemaOwner`, for a type or a domain, for a function, for an operator, for an operator class or an operator family, and for a statistics object and for a conversion.
     pub(super) fn alter_owner(&mut self, stmt: &AlterOwnerStmt) -> Result<()> {
         if matches!(stmt.objectType, ObjectType::OBJECT_TYPE | ObjectType::OBJECT_DOMAIN) {
             return self.alter_type_owner(stmt);
@@ -1341,6 +1341,9 @@ impl Definer<'_, '_> {
         }
         if stmt.objectType == ObjectType::OBJECT_STATISTIC_EXT {
             return self.alter_stats_owner(stmt);
+        }
+        if stmt.objectType == ObjectType::OBJECT_CONVERSION {
+            return self.alter_conversion_owner(stmt);
         }
         if stmt.objectType != ObjectType::OBJECT_SCHEMA {
             return Err(not_yet("this form of ALTER OWNER", None));

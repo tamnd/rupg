@@ -248,6 +248,7 @@ pub(crate) fn catalog_name(kind: Named, oid: u32, session: &dyn Session) -> Opti
         Named::Dictionary => catalog.ts_dictionary(oid).map(|d| pair(&d.name, d.namespace)),
         Named::Config => catalog.ts_config(oid).map(|c| pair(&c.name, c.namespace)),
         Named::Collation => catalog.collation(oid).map(|c| pair(&c.name, c.namespace)),
+        Named::Conversion => catalog.conversion(oid).map(|c| pair(&c.name, c.namespace)),
         _ => None,
     }
 }
@@ -262,6 +263,7 @@ fn catalog_find(kind: Named, spaces: &[u32], name: &str, session: &dyn Session) 
             Named::Dictionary => catalog?.ts_dictionary_by_name(ns, name).map(|d| d.oid),
             Named::Config => catalog?.ts_config_by_name(ns, name).map(|c| c.oid),
             Named::Collation => catalog?.collation_by_name(ns, name).map(|c| c.oid),
+            Named::Conversion => catalog?.conversion_by_name(ns, name).map(|c| c.oid),
             _ => None,
         })
     })

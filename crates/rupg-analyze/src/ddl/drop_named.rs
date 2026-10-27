@@ -1,7 +1,8 @@
-//! `DROP ACCESS METHOD`, `DROP CAST`, `DROP COLLATION`, `DROP CONVERSION`, `DROP EXTENSION`, `DROP LANGUAGE`, `DROP FOREIGN DATA WRAPPER`, `DROP SERVER`, `DROP EVENT TRIGGER` and `DROP PUBLICATION`: the lookups of `get_object_address` and the notices of `does_not_exist_skipping`. rupg cannot make these objects, so a name finds a built-in object or nothing. A pinned object gives the error of `findDependentObjects`, and another built-in object gives `0A000`.
+//! `DROP ACCESS METHOD`, `DROP CAST`, `DROP COLLATION`, `DROP CONVERSION`, `DROP EXTENSION`, `DROP LANGUAGE`, `DROP FOREIGN DATA WRAPPER`, `DROP SERVER`, `DROP EVENT TRIGGER` and `DROP PUBLICATION`: the lookups of `get_object_address` and the notices of `does_not_exist_skipping`. rupg can make only the casts and the conversions of these objects, which go away with their dependents. Another name finds a built-in object or nothing. A pinned object gives the error of `findDependentObjects`, and another built-in object gives `0A000`.
 
 use rupg_catalog::{
-    FIRST_NORMAL_OID, ObjRef, PG_CAST, PG_COLLATION, PG_EXTENSION, PG_LANGUAGE, is_pinned,
+    FIRST_NORMAL_OID, ObjRef, PG_CAST, PG_COLLATION, PG_CONVERSION, PG_EXTENSION, PG_LANGUAGE,
+    is_pinned,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named, Owned};
@@ -14,8 +15,6 @@ use crate::typename::{names, type_name_text};
 
 /// `AccessMethodRelationId`.
 const PG_AM: u32 = 2601;
-/// `ConversionRelationId`.
-const PG_CONVERSION: u32 = 2607;
 /// `PG_UTF8`: the encoding of the databases of rupg.
 const UTF8: i32 = 6;
 
@@ -38,7 +37,8 @@ impl Definer<'_, '_> {
                 kind => self.find_by_name(kind, item, stmt.missing_ok)?,
             };
             let Some(found) = found else { continue };
-            if found.object.oid >= FIRST_NORMAL_OID && found.object.class == PG_CAST {
+            let made = matches!(found.object.class, PG_CAST | PG_CONVERSION);
+            if found.object.oid >= FIRST_NORMAL_OID && made {
                 objects.push(found.object);
                 continue;
             }
@@ -143,10 +143,7 @@ impl Definer<'_, '_> {
                     rows.find(|r| r.encoding == UTF8 || r.encoding == -1).map(|r| r.oid)
                 })
             } else {
-                builtin::named(Named::Conversion)
-                    .iter()
-                    .find(|r| r.namespace == namespace && r.name == name)
-                    .map(|r| r.oid)
+                self.conversion_in(namespace, name)
             }
         });
         let word = if collation { "collation" } else { "conversion" };
@@ -161,7 +158,13 @@ impl Definer<'_, '_> {
             };
             return Err(Error::new(SqlState::UNDEFINED_OBJECT, message));
         };
-        if !self.is_superuser() {
+        // `RemoveObjects`: the owner of the schema or of the object can drop it.
+        let owner = if collation { None } else { self.catalog.conversion(oid) };
+        let owner = owner.map(|c| (c.namespace, c.owner));
+        let owns = owner.is_some_and(|(namespace, owner)| {
+            self.owns(owner) || self.schema_owner(namespace).is_some_and(|o| self.owns(o))
+        });
+        if !self.is_superuser() && !owns {
             return Err(not_owner(word, &shown));
         }
         let class = if collation { PG_COLLATION } else { PG_CONVERSION };

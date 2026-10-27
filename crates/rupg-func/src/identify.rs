@@ -233,10 +233,13 @@ fn parts(object: ObjRef, session: &dyn Session) -> Option<Parts> {
                 identity: format!("{} on {on}", quote_identifier(&con.name)),
             })
         }
-        PG_CONVERSION => {
-            let row = builtin::named_by_oid(Named::Conversion, oid)?;
-            Parts::in_schema(row.namespace, row.name, session)
-        }
+        PG_CONVERSION => match builtin::named_by_oid(Named::Conversion, oid) {
+            Some(row) => Parts::in_schema(row.namespace, row.name, session),
+            None => {
+                let conversion = catalog?.conversion(oid)?;
+                Parts::in_schema(conversion.namespace, &conversion.name, session)
+            }
+        },
         PG_ATTRDEF => {
             let default = catalog?.defaults().find(|d| d.oid == oid)?;
             let column = column_name(default.relation, i32::from(default.column), session)?;

@@ -1,0 +1,133 @@
+> CREATE ROLE regress_cv1; CREATE ROLE regress_cv2; CREATE ROLE regress_cv3;
+CREATE ROLE
+CREATE ROLE
+CREATE ROLE
+> GRANT regress_cv3 TO regress_cv1;
+GRANT ROLE
+> CREATE SCHEMA cv_nsp1; CREATE SCHEMA cv_nsp2;
+CREATE SCHEMA
+CREATE SCHEMA
+> GRANT ALL ON SCHEMA cv_nsp1 TO PUBLIC; GRANT ALL ON SCHEMA cv_nsp2 TO PUBLIC;
+GRANT
+GRANT
+> DROP CONVERSION cv_missing;
+ERROR 42704 conversion "cv_missing" does not exist
+> DROP CONVERSION IF EXISTS cv_missing;
+NOTICE 00000 conversion "cv_missing" does not exist, skipping
+DROP CONVERSION
+> DROP CONVERSION IF EXISTS no_such_schema.foo;
+NOTICE 00000 schema "no_such_schema" does not exist, skipping
+DROP CONVERSION
+> CREATE CONVERSION cv_bad FOR 'LATINX' TO 'UTF8' FROM iso8859_1_to_utf8;
+ERROR 42704 source encoding "LATINX" does not exist
+> CREATE CONVERSION cv_bad FOR 'LATIN1' TO 'UTFX' FROM iso8859_1_to_utf8;
+ERROR 42704 destination encoding "UTFX" does not exist
+> CREATE CONVERSION cv_bad FOR 'SQL_ASCII' TO 'UTF8' FROM iso8859_1_to_utf8;
+ERROR 42P17 encoding conversion to or from "SQL_ASCII" is not supported
+> CREATE CONVERSION cv_bad FOR 'LATIN1' TO 'UTF8' FROM no_such_func;
+ERROR 42883 function no_such_func(integer, integer, cstring, internal, integer, boolean) does not exist
+> CREATE CONVERSION cv_bad FOR 'LATIN1' TO 'UTF8' FROM lower;
+ERROR 42883 function lower(integer, integer, cstring, internal, integer, boolean) does not exist
+> SET search_path = cv_nsp1, public;
+SET
+search_path=cv_nsp1, public
+> SET SESSION AUTHORIZATION regress_cv1;
+SET
+session_authorization=regress_cv1
+is_superuser=off
+> CREATE CONVERSION cv1 FOR 'LATIN1' TO 'UTF8' FROM iso8859_1_to_utf8;
+CREATE CONVERSION
+> CREATE CONVERSION cv1 FOR 'LATIN1' TO 'UTF8' FROM iso8859_1_to_utf8;
+ERROR 42710 conversion "cv1" already exists
+> CREATE CONVERSION cv2 FOR 'latin-1' TO 'unicode' FROM pg_catalog.iso8859_1_to_utf8;
+CREATE CONVERSION
+> CREATE DEFAULT CONVERSION cv_nsp1.cvdef FOR 'LATIN1' TO 'UTF8' FROM iso8859_1_to_utf8;
+CREATE CONVERSION
+> CREATE DEFAULT CONVERSION cv_nsp1.cvdef2 FOR 'LATIN1' TO 'UTF8' FROM iso8859_1_to_utf8;
+ERROR 42710 default conversion for LATIN1 to UTF8 already exists
+> COMMENT ON CONVERSION cv_bad IS 'foo';
+ERROR 42704 conversion "cv_bad" does not exist
+> COMMENT ON CONVERSION cv1 IS 'bar';
+COMMENT
+> SELECT obj_description(oid, 'pg_conversion') FROM pg_conversion WHERE conname = 'cv1';
+fields obj_description:25:-1:-1
+row bar
+SELECT 1
+> COMMENT ON CONVERSION cv1 IS NULL;
+COMMENT
+> ALTER CONVERSION cv1 RENAME TO cv2;
+ERROR 42710 conversion "cv2" already exists in schema "cv_nsp1"
+> ALTER CONVERSION cv1 RENAME TO cv3;
+ALTER CONVERSION
+> ALTER CONVERSION cv2 OWNER TO regress_cv2;
+ERROR 42501 must be able to SET ROLE "regress_cv2"
+> ALTER CONVERSION cv2 OWNER TO regress_cv3;
+ALTER CONVERSION
+> ALTER CONVERSION cv2 SET SCHEMA cv_nsp2;
+ALTER CONVERSION
+> ALTER CONVERSION cv_missing RENAME TO x;
+ERROR 42704 conversion "cv_missing" does not exist
+> ALTER CONVERSION koi8_r_to_utf8 RENAME TO x;
+ERROR 42501 must be owner of conversion koi8_r_to_utf8
+> SET SESSION AUTHORIZATION regress_cv2;
+SET
+session_authorization=regress_cv2
+> CREATE CONVERSION cv1 FOR 'LATIN1' TO 'UTF8' FROM iso8859_1_to_utf8;
+CREATE CONVERSION
+> CREATE CONVERSION cv2 FOR 'LATIN1' TO 'UTF8' FROM iso8859_1_to_utf8;
+CREATE CONVERSION
+> ALTER CONVERSION cv3 RENAME TO cv4;
+ERROR 42501 must be owner of conversion cv3
+> ALTER CONVERSION cv1 RENAME TO cv4;
+ALTER CONVERSION
+> ALTER CONVERSION cv3 OWNER TO regress_cv2;
+ERROR 42501 must be owner of conversion cv3
+> ALTER CONVERSION cv2 OWNER TO regress_cv3;
+ERROR 42501 must be able to SET ROLE "regress_cv3"
+> ALTER CONVERSION cv3 SET SCHEMA cv_nsp2;
+ERROR 42501 must be owner of conversion cv3
+> ALTER CONVERSION cv2 SET SCHEMA cv_nsp2;
+ERROR 42710 conversion "cv2" already exists in schema "cv_nsp2"
+> DROP CONVERSION cv3;
+ERROR 42501 must be owner of conversion cv3
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> SELECT n.nspname, c.conname, a.rolname, pg_encoding_to_char(c.conforencoding) AS f, pg_encoding_to_char(c.contoencoding) AS t, c.conproc, c.condefault, pg_conversion_is_visible(c.oid) AS vis FROM pg_conversion c, pg_namespace n, pg_authid a WHERE c.connamespace = n.oid AND c.conowner = a.oid AND n.nspname LIKE 'cv_nsp%' ORDER BY nspname, conname;
+fields nspname@pg_namespace.2:19:64:-1,conname@pg_conversion.2:19:64:-1,rolname@pg_authid.2:19:64:-1,f:19:64:-1,t:19:64:-1,conproc@pg_conversion.7:24:4:-1,condefault@pg_conversion.8:16:1:-1,vis:16:1:-1
+row cv_nsp1,cv2,regress_cv2,LATIN1,UTF8,iso8859_1_to_utf8,f,t
+row cv_nsp1,cv3,regress_cv1,LATIN1,UTF8,iso8859_1_to_utf8,f,t
+row cv_nsp1,cv4,regress_cv2,LATIN1,UTF8,iso8859_1_to_utf8,f,t
+row cv_nsp1,cvdef,regress_cv1,LATIN1,UTF8,iso8859_1_to_utf8,t,t
+row cv_nsp2,cv2,regress_cv3,LATIN1,UTF8,iso8859_1_to_utf8,f,f
+SELECT 5
+> SELECT pg_describe_object(classid, objid, objsubid) AS obj, pg_describe_object(refclassid, refobjid, refobjsubid) AS ref, deptype FROM pg_depend WHERE classid = 'pg_conversion'::regclass AND objid >= 16384 ORDER BY 1, 2;
+fields obj:25:-1:-1,ref:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row conversion cv2,schema cv_nsp1,n
+row conversion cv3,schema cv_nsp1,n
+row conversion cv4,schema cv_nsp1,n
+row conversion cv_nsp2.cv2,schema cv_nsp2,n
+row conversion cvdef,schema cv_nsp1,n
+SELECT 5
+> SELECT (pg_identify_object('pg_conversion'::regclass, oid, 0)).* FROM pg_conversion WHERE conname = 'cvdef';
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row conversion,cv_nsp1,cvdef,cv_nsp1.cvdef
+SELECT 1
+> SELECT count(*) FROM pg_conversion;
+fields count:20:8:-1
+row 103
+SELECT 1
+> DROP CONVERSION cv_nsp1.cv2;
+DROP CONVERSION
+> DROP SCHEMA cv_nsp1, cv_nsp2 CASCADE;
+NOTICE 00000 drop cascades to 4 other objects
+DROP SCHEMA
+> SELECT count(*) FROM pg_conversion;
+fields count:20:8:-1
+row 98
+SELECT 1
+> DROP ROLE regress_cv1; DROP ROLE regress_cv2; DROP ROLE regress_cv3;
+DROP ROLE
+DROP ROLE
+DROP ROLE
