@@ -136,12 +136,7 @@ impl Definer<'_, '_> {
         let collation = kind == ObjectType::OBJECT_COLLATION;
         let found = path.iter().find_map(|&namespace| {
             if collation {
-                let user = self.catalog.collation_by_name(namespace, name).map(|c| c.oid);
-                user.or_else(|| {
-                    let rows = builtin::named(Named::Collation).iter();
-                    let mut rows = rows.filter(|r| r.namespace == namespace && r.name == name);
-                    rows.find(|r| r.encoding == UTF8 || r.encoding == -1).map(|r| r.oid)
-                })
+                self.collation_in(namespace, name)
             } else {
                 self.conversion_in(namespace, name)
             }
@@ -170,6 +165,16 @@ impl Definer<'_, '_> {
         let class = if collation { PG_COLLATION } else { PG_CONVERSION };
         let description = format!("{word} {}", quote_identifier(name));
         Ok(Some(Removable { object: ObjRef::new(class, oid), description }))
+    }
+
+    /// The collation with the name in the schema for the encoding of the database or for any encoding, of the catalog or built in.
+    pub(super) fn collation_in(&self, namespace: u32, name: &str) -> Option<u32> {
+        let user = self.catalog.collation_by_name(namespace, name).map(|c| c.oid);
+        user.or_else(|| {
+            let rows = builtin::named(Named::Collation).iter();
+            let mut rows = rows.filter(|r| r.namespace == namespace && r.name == name);
+            rows.find(|r| r.encoding == UTF8 || r.encoding == -1).map(|r| r.oid)
+        })
     }
 
     /// `get_object_address` for `OBJECT_CAST`: the cast from the first type to the second type, with the check of `check_object_ownership`, which needs the owner of one of the types.

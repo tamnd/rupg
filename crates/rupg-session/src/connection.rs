@@ -4171,6 +4171,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/catalog_dml.test")));
     }
 
+    /// `pg_get_object_address` finds the address of each kind of object from its names, and gives the errors of PostgreSQL for the kinds without an address, the lists of the wrong length and the objects that do not exist. `connection/object_address.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn object_address() {
+        big_stack(|| script(include_str!("connection/object_address.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

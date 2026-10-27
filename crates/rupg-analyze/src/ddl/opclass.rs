@@ -38,7 +38,7 @@ const BRIN_AM: u32 = 3580;
 
 /// The facts of the `IndexAmRoutine` of an index access method that the commands read.
 #[derive(Debug)]
-struct Method {
+pub(super) struct Method {
     oid: u32,
     name: &'static str,
     /// `amstrategies`, or 0 when the operators have no fixed numbers.
@@ -128,7 +128,7 @@ static METHODS: [Method; 6] = [
 ];
 
 /// `get_index_am_oid` and `GetIndexAmRoutineByAmId`: the index access method of the name. The table access method `heap` is not an index access method.
-fn index_method(name: &str) -> Result<&'static Method> {
+pub(super) fn index_method(name: &str) -> Result<&'static Method> {
     if let Some(method) = METHODS.iter().find(|m| m.name == name) {
         return Ok(method);
     }
@@ -293,7 +293,7 @@ impl Definer<'_, '_> {
     }
 
     /// `OpFamilyCacheLookup` and `OpClassCacheLookup`: the family or the class of the method that a name gives, in the schema of the name or in the first schema of the search path that has it. With `missing_ok`, a name that gives no object, or a schema that does not exist, is `None`.
-    fn opcf_lookup(
+    pub(super) fn opcf_lookup(
         &self,
         family: bool,
         method: &Method,
@@ -1303,7 +1303,7 @@ impl Definer<'_, '_> {
     }
 
     /// `getOpFamilyDescription`.
-    fn opfamily_description(&self, family: u32) -> String {
+    pub(super) fn opfamily_description(&self, family: u32) -> String {
         format!("operator family {}", self.opcf_text(true, family))
     }
 

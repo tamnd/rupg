@@ -382,6 +382,11 @@ impl Definer<'_, '_> {
         Ok(found.map(|s| s.oid))
     }
 
+    /// `get_statistics_object_oid` with `missing_ok` false.
+    pub(super) fn stats_oid(&self, list: &[&str]) -> Result<u32> {
+        Ok(self.stats_lookup(list, false)?.unwrap_or_default())
+    }
+
     /// The row of the statistics object that a name gives, which must exist.
     fn stats_row(&self, object: Option<&Node>) -> Result<StatExt> {
         let list = name_list(object);

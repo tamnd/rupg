@@ -46,6 +46,7 @@ mod misc;
 mod multirange;
 mod network;
 mod numformat;
+mod objaddr;
 mod random;
 mod range;
 mod reg;
@@ -790,6 +791,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| catinfo::by_src(src))
         .or_else(|| describe::by_src(src))
         .or_else(|| identify::by_src(src))
+        .or_else(|| objaddr::by_src(src))
         .or_else(|| acl::by_src(src))
         .or_else(|| updatable::by_src(src))
         .or_else(|| amutils::by_src(src))
