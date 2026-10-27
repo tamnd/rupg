@@ -25,7 +25,12 @@ fn named_visible(kind: Named, call: &Call<'_>, args: &[Value]) -> Result<Value> 
     let oid = oid_arg(args, 0)?;
     if matches!(
         kind,
-        Named::Collation | Named::Config | Named::Dictionary | Named::Parser | Named::Template
+        Named::Collation
+            | Named::Config
+            | Named::Conversion
+            | Named::Dictionary
+            | Named::Parser
+            | Named::Template
     ) {
         return Ok(reg::catalog_visible(kind, oid, call.session).map_or(Value::Null, Value::Bool));
     }

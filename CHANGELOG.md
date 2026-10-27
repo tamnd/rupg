@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `CREATE [DEFAULT] CONVERSION`, `ALTER CONVERSION` with `RENAME TO`, `OWNER TO` and `SET SCHEMA`, `COMMENT ON CONVERSION` and `DROP CONVERSION` now work for the conversions of a session, with the rows of `pg_conversion` and `pg_depend` and the checks and errors of PostgreSQL (#942).
 - A query with no `ORDER BY` gives the rows of an index scan in the order of the keys of the index, forward or backward, and the rows with equal keys in the order of the heap, as a `btree` index gives them. The order holds for a query of one table and for the sides of a nested loop and of a hash join (#941).
 - The planner turns `b = true` into `b` and `b = false` into `NOT b`, as `simplify_boolean_equality` does. A boolean index and a boolean partition key match these conditions, as `match_boolean_index_clause` and `match_boolean_partition_clause` do. A key column that such a condition makes a constant is not in the order of an index or of the partitions, unless the query sorts by it (#940).
 - The planner uses a partial index when the conditions imply its predicate by the operators of a B-tree family, as `x < 4` implies `x < 5`, also when no condition is a clause of the index. A hash index keeps the conditions that its predicate implies, and a SQL function with an argument that reads the value of a `CASE` does not inline (#938).

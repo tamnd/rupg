@@ -261,6 +261,7 @@ pub(crate) fn rows(
         "pg_enum" => enum_labels(table, catalog),
         "pg_range" => ranges(table, catalog),
         "pg_cast" => casts(table, catalog),
+        "pg_conversion" => conversions(table, catalog),
         "pg_operator" => operators(table, catalog),
         "pg_aggregate" => aggregates(table, catalog),
         "pg_opfamily" => opfamilies(table, catalog),
@@ -1273,6 +1274,24 @@ fn ts_dictionaries<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("dictowner", oid(d.owner))
                 .set("dicttemplate", oid(d.template))
                 .set("dictinitoption", d.options.clone().map_or(Value::Null, Value::text));
+            row
+        })
+        .collect()
+}
+
+fn conversions<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .conversions()
+        .map(|c| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(c.oid))
+                .set("conname", Value::text(c.name.clone()))
+                .set("connamespace", oid(c.namespace))
+                .set("conowner", oid(c.owner))
+                .set("conforencoding", Value::Int4(c.from))
+                .set("contoencoding", Value::Int4(c.to))
+                .set("conproc", oid(c.proc))
+                .set("condefault", Value::Bool(c.default));
             row
         })
         .collect()

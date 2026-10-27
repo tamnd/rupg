@@ -13,6 +13,7 @@ mod cast;
 mod cluster;
 mod cmdtag;
 mod comment;
+mod conversion;
 mod copy;
 mod create_table_as;
 mod domain;
@@ -221,13 +222,14 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::ReassignOwnedStmt(_)
             | Node::AlterDefaultPrivilegesStmt(_)
             | Node::CreateCastStmt(_)
+            | Node::CreateConversionStmt(_)
     ) || matches!(stmt, Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) || matches!(define.kind, ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_AGGREGATE | ObjectType::OBJECT_TYPE))
         || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
         || matches!(stmt, Node::DiscardStmt(discard) if discard.target == DiscardMode::DISCARD_TEMP)
         || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype) || alter.objtype == ObjectType::OBJECT_TYPE)
-        || matches!(stmt, Node::AlterOwnerStmt(alter) if matches!(alter.objectType, ObjectType::OBJECT_SCHEMA | ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
+        || matches!(stmt, Node::AlterOwnerStmt(alter) if matches!(alter.objectType, ObjectType::OBJECT_SCHEMA | ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT | ObjectType::OBJECT_CONVERSION) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
         || matches!(stmt, Node::RenameStmt(rename) if rename::is_rename_kind(rename.renameType))
-        || matches!(stmt, Node::AlterObjectSchemaStmt(alter) if is_alter_kind(alter.objectType) || matches!(alter.objectType, ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
+        || matches!(stmt, Node::AlterObjectSchemaStmt(alter) if is_alter_kind(alter.objectType) || matches!(alter.objectType, ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT | ObjectType::OBJECT_CONVERSION) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
         || matches!(stmt, Node::SelectStmt(select) if crate::select_into(select).is_some())
         || matches!(stmt, Node::GrantStmt(grant) if grant.targtype != GrantTargetType::ACL_TARGET_DEFAULTS)
 }
@@ -360,6 +362,9 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         {
             definer.alter_stats_schema(alter)
         }
+        Node::AlterObjectSchemaStmt(alter) if alter.objectType == ObjectType::OBJECT_CONVERSION => {
+            definer.alter_conversion_schema(alter)
+        }
         Node::AlterObjectSchemaStmt(alter) => definer.alter_relation_schema(alter),
         Node::CreateStatsStmt(create) => definer.create_statistics(create),
         Node::AlterStatsStmt(alter) => definer.alter_statistics(alter),
@@ -376,6 +381,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
             definer.define_type(define)
         }
         Node::CreateCastStmt(stmt) => definer.create_cast(stmt),
+        Node::CreateConversionStmt(stmt) => definer.create_conversion(stmt),
         Node::AlterOperatorStmt(alter) => definer.alter_operator(alter),
         Node::CreateOpFamilyStmt(create) => definer.create_opfamily(create),
         Node::CreateOpClassStmt(create) => definer.create_opclass(create),

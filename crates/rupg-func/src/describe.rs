@@ -116,7 +116,7 @@ pub fn describe(object: ObjRef, session: &dyn Session) -> Result<Option<String>>
             Some(format!("constraint {} on {}", con.name, relation_text(con.relation, session)?))
         }),
         PG_CONVERSION => {
-            named_text(Named::Conversion, oid, session).map(|c| format!("conversion {c}"))
+            reg::catalog_text(Named::Conversion, oid, session).map(|c| format!("conversion {c}"))
         }
         PG_ATTRDEF => catalog
             .and_then(|c| c.defaults().find(|d| d.oid == oid))
@@ -334,17 +334,6 @@ fn cast_text(oid: u32, session: &dyn Session) -> Option<String> {
         reg::type_text(source, None, session).ok()?,
         reg::type_text(target, None, session).ok()?
     ))
-}
-
-/// The name of a built-in object of a kind that has only built-in objects, with its schema when it is not visible.
-fn named_text(kind: Named, oid: u32, session: &dyn Session) -> Option<String> {
-    let row = builtin::named_by_oid(kind, oid)?;
-    let schema = if reg::visible(kind, row, session) {
-        None
-    } else {
-        reg::namespace_name(row.namespace, session)
-    };
-    Some(reg::qualified(schema, row.name))
 }
 
 /// The name of an operator class or an operator family and its access method.

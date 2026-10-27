@@ -6,8 +6,8 @@ use rupg_common::Result;
 
 use super::{Catalog, no_object};
 use crate::{
-    ObjRef, PG_COLLATION, PG_EXTENSION, PG_LANGUAGE, PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_PROC,
-    PG_STATISTIC_EXT, PG_TS_CONFIG, PG_TS_DICT, PG_TYPE,
+    ObjRef, PG_COLLATION, PG_CONVERSION, PG_EXTENSION, PG_LANGUAGE, PG_OPCLASS, PG_OPERATOR,
+    PG_OPFAMILY, PG_PROC, PG_STATISTIC_EXT, PG_TS_CONFIG, PG_TS_DICT, PG_TYPE,
 };
 
 /// `ACL_ALL_RIGHTS_STR`: the letter of each privilege, in the order of its bit.
@@ -172,6 +172,9 @@ impl Catalog {
                 self.ts_dictionaries.get_mut(&object.oid).map(|d| d.owner = owner).is_some()
             }
             PG_TS_CONFIG => self.ts_configs.get_mut(&object.oid).map(|c| c.owner = owner).is_some(),
+            PG_CONVERSION => {
+                self.conversions.get_mut(&object.oid).map(|c| c.owner = owner).is_some()
+            }
             _ => false,
         };
         if !found {

@@ -1290,6 +1290,7 @@ impl Connection {
                     | Node::CreateRangeStmt(_) => CommandTag::CreateType,
                     Node::AlterEnumStmt(_) => CommandTag::AlterType,
                     Node::CreateCastStmt(_) => CommandTag::CreateCast,
+                    Node::CreateConversionStmt(_) => CommandTag::CreateConversion,
                     Node::ViewStmt(_) => CommandTag::CreateView,
                     Node::RuleStmt(_) => CommandTag::CreateRule,
                     Node::CreatePolicyStmt(_) => CommandTag::CreatePolicy,
@@ -2402,6 +2403,7 @@ fn alter_tag(kind: ObjectType) -> CommandTag {
         ObjectType::OBJECT_OPCLASS => CommandTag::AlterOperatorClass,
         ObjectType::OBJECT_OPFAMILY => CommandTag::AlterOperatorFamily,
         ObjectType::OBJECT_STATISTIC_EXT => CommandTag::AlterStatistics,
+        ObjectType::OBJECT_CONVERSION => CommandTag::AlterConversion,
         _ => CommandTag::AlterTable,
     }
 }
@@ -4021,6 +4023,12 @@ mod tests {
     #[test]
     fn index_order() {
         big_stack(|| script(include_str!("connection/index_order.test")));
+    }
+
+    /// `CREATE CONVERSION` with the checks of `CreateConversionCommand` and `ConversionCreate`, `ALTER CONVERSION` with `RENAME TO`, `OWNER TO` and `SET SCHEMA`, `COMMENT ON CONVERSION`, `DROP CONVERSION`, the rows of `pg_conversion` and `pg_depend`, and the drop with the schema. `connection/conversion_create.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn conversion_create() {
+        big_stack(|| script(include_str!("connection/conversion_create.test")));
     }
 
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.

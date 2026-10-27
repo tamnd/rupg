@@ -16,6 +16,7 @@ pub mod toast;
 
 mod aggregate;
 mod alter_type;
+mod conversion;
 mod default_acl;
 mod drop;
 mod enum_label;
@@ -28,6 +29,7 @@ mod stats;
 mod tsearch;
 
 pub use aggregate::{Aggregate, PG_AGGREGATE};
+pub use conversion::{Conversion, PG_CONVERSION};
 pub use default_acl::{DefaultAcl, PG_DEFAULT_ACL};
 pub use drop::{Refusal, Target, flag};
 pub use opclass::{
@@ -1288,6 +1290,7 @@ pub struct Catalog {
     ts_configs: BTreeMap<u32, TsConfig>,
     ts_mappings: Vec<TsMapping>,
     stat_exts: BTreeMap<u32, StatExt>,
+    conversions: BTreeMap<u32, Conversion>,
     depends: Vec<Depend>,
     descriptions: Arc<BTreeMap<ObjRef, String>>,
     /// The ACLs that `GRANT` and `REVOKE` gave to the functions, the types, the languages and the columns, and to the objects of `initdb`. The relations and the schemas of the session keep their ACL in their own rows.
@@ -1402,6 +1405,7 @@ impl Catalog {
             ts_configs: BTreeMap::new(),
             ts_mappings: Vec::new(),
             stat_exts: BTreeMap::new(),
+            conversions: BTreeMap::new(),
             depends: Vec::new(),
             descriptions: Arc::default(),
             acls: Arc::default(),
