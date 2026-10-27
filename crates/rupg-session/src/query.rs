@@ -874,7 +874,8 @@ impl rupg_func::Session for Reader<'_> {
     }
 
     fn sequence_row(&self, file: u32) -> Option<SequenceData> {
-        self.activity.and_then(|(_, store)| store.sequence_row(file))
+        self.activity
+            .and_then(|(_, store)| store.sequence_row(database_oid(store, self.database), file))
     }
 
     fn change_sequence(
@@ -889,7 +890,7 @@ impl rupg_func::Session for Reader<'_> {
                 "a sequence in a session with no server is not supported yet",
             ));
         };
-        store.change_sequence(file, initial, change)
+        store.change_sequence(database_oid(store, self.database), file, initial, change)
     }
 
     fn local_sequences(&self) -> Option<&RefCell<Sequences>> {
