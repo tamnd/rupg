@@ -1,0 +1,111 @@
+> create table cf_p (name text, age int);
+CREATE TABLE
+> insert into cf_p values ('a', 1), ('b', 2);
+INSERT 0 2
+> create function cf_double(cf_p) returns int language sql as 'select $1.age * 2';
+CREATE FUNCTION
+> create function cf_set(cf_p) returns setof cf_p language sql as 'select * from cf_p where name = $1.name';
+CREATE FUNCTION
+> select p.cf_double from cf_p p;
+fields cf_double:23:4:-1
+row 2
+row 4
+SELECT 2
+> select name(p) from cf_p p;
+fields name@cf_p.1:25:-1:-1
+row a
+row b
+SELECT 2
+> select age(p) from cf_p p;
+fields age@cf_p.2:23:4:-1
+row 1
+row 2
+SELECT 2
+> select p.name, name(p.cf_set) from cf_p p;
+fields name@cf_p.1:25:-1:-1,name:25:-1:-1
+row a,a
+row b,b
+SELECT 2
+> select (p.cf_set).age from cf_p p;
+fields age:23:4:-1
+row 1
+row 2
+SELECT 2
+> select cf_p.cf_double from cf_p;
+fields cf_double:23:4:-1
+row 2
+row 4
+SELECT 2
+> select p.nosuch from cf_p p;
+ERROR 42703 column p.nosuch does not exist at 8
+> select nosuch(p) from cf_p p;
+ERROR 42883 function nosuch(cf_p) does not exist at 8
+> select (1).text;
+fields text:25:-1:-1
+row 1
+SELECT 1
+> select ('abc'::text).length;
+fields length:23:4:-1
+row 3
+SELECT 1
+> create temp table zz (a int, b text);
+CREATE TABLE
+> insert into zz values (1,'x');
+INSERT 0 1
+> select z.text from zz z;
+ERROR 42703 column z.text does not exist at 8
+> select (z).b, (z.*).a from zz z;
+fields b@zz.2:25:-1:-1,a@zz.1:23:4:-1
+row x,1
+SELECT 1
+> select z.count from zz z;
+fields count:20:8:-1
+row 1
+SELECT 1
+> select (row(1,2)).f1;
+fields f1:23:4:-1
+row 1
+SELECT 1
+> select (row(1,2)).nosuch;
+ERROR 42703 could not identify column "nosuch" in record data type at 9
+> select (1).nosuch;
+ERROR 42809 column notation .nosuch applied to type integer, which is not a composite type at 9
+> select a(z), b(z) from zz z;
+fields a@zz.1:23:4:-1,b@zz.2:25:-1:-1
+row 1,x
+SELECT 1
+> select zz.a(zz) from zz;
+ERROR 3F000 schema "zz" does not exist at 8
+> select sum(z) from zz z;
+ERROR 42883 function sum(zz) does not exist at 8
+> select (z).nosuch from zz z;
+ERROR 42703 column z.nosuch does not exist at 9
+> select j.a from (zz z1 join zz z2 using (a)) j;
+fields a@zz.1:23:4:-1
+row 1
+SELECT 1
+> select j.nosuch from (zz z1 join zz z2 using (a)) j;
+ERROR 42703 column j.nosuch does not exist at 8
+> select (select z.b from (select 1) s) from zz z;
+fields b:25:-1:-1
+row x
+SELECT 1
+> create function zz_f(zz) returns text language sql as 'select $1.b || $1.a';
+NOTICE 00000 function "zz_f" will be effectively temporary
+CREATE FUNCTION
+> select z.zz_f, zz_f(z), (z).zz_f from zz z;
+fields zz_f:25:-1:-1,zz_f:25:-1:-1,zz_f:25:-1:-1
+row x1,x1,x1
+SELECT 1
+> select zz_f from zz z;
+ERROR 42703 column "zz_f" does not exist at 8
+> select z.zz_f from zz z where z.zz_f = 'x1';
+fields zz_f:25:-1:-1
+row x1
+SELECT 1
+> select (row(1,'a')).f2, (row(1,2)).*;
+ERROR XX000 failed to find conversion function from unknown to text
+> select (r).f1 from (select row(1,2) as r) s;
+fields f1:23:4:-1
+row 1
+SELECT 1

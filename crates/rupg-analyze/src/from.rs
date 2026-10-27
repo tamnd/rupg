@@ -1908,12 +1908,19 @@ impl Analyzer<'_> {
             }
             return Err(self.missing_entry(schema, table, at));
         };
-        match self.column_in(level, &item, column, at)? {
+        if let Some(expr) = self.column_in(level, &item, column, at)? {
+            return Ok(expr);
+        }
+        if let Some(expr) = self.function_argument(&names, at)? {
+            return Ok(expr);
+        }
+        // `transformColumnRef`: a name that is no column of the relation can be a function of its whole row.
+        let Ok(row) = self.whole_row(level, &item, at) else {
+            return Err(self.missing_column(Some(table), column, at));
+        };
+        match self.column_func(column, row, at)? {
             Some(expr) => Ok(expr),
-            None => match self.function_argument(&names, at)? {
-                Some(expr) => Ok(expr),
-                None => Err(self.missing_column(Some(table), column, at)),
-            },
+            None => Err(self.missing_column(Some(table), column, at)),
         }
     }
 
@@ -2012,8 +2019,13 @@ impl Analyzer<'_> {
         Some(columns)
     }
 
-    /// `scanNSItemForColumn` for a field of a whole-row `Var`: the column of the relation with the name, as `(t).a` is `t.a`. The error names the relation by its alias.
-    pub(crate) fn whole_row_field(&self, var: Var, name: &str, at: Option<usize>) -> Result<Expr> {
+    /// `scanNSItemForColumn` for a field of a whole-row `Var`: the column of the relation with the name, as `(t).a` is `t.a`, or `None` when the relation has no column of that name.
+    pub(crate) fn whole_row_field(
+        &self,
+        var: Var,
+        name: &str,
+        at: Option<usize>,
+    ) -> Result<Option<Expr>> {
         let scope = self.level(var.levels_up);
         let entry = scope
             .entries
@@ -2024,18 +2036,26 @@ impl Analyzer<'_> {
             let column = scope.relations.get(var.relation)?.columns.get(i)?;
             Some((i, column))
         });
-        let Some((i, column)) = column else {
-            return Err(Error::new(
-                SqlState::UNDEFINED_COLUMN,
-                format!("column {}.{name} does not exist", entry.name),
-            )
-            .at_opt(at));
-        };
+        let Some((i, column)) = column else { return Ok(None) };
         let attnum = i16::try_from(i + 1).map_err(|_| Error::internal("too many columns"))?;
         let var = Var { attnum, ..var };
         let mut expr = Expr::new(ExprKind::Var(var), column.ty).at(at);
         expr.typmod = column.typmod;
-        Ok(expr)
+        Ok(Some(expr))
+    }
+
+    /// `unknown_attribute` for a whole-row reference: the error for a name that is no column of the relation.
+    pub(crate) fn whole_row_missing(&self, var: Var, name: &str, at: Option<usize>) -> Error {
+        let scope = self.level(var.levels_up);
+        let entry = scope.entries.iter().find(|e| e.relation == Some(var.relation));
+        let Some(entry) = entry else {
+            return Error::internal("a whole-row reference has no entry");
+        };
+        Error::new(
+            SqlState::UNDEFINED_COLUMN,
+            format!("column {}.{name} does not exist", entry.name),
+        )
+        .at_opt(at)
     }
 
     /// `ExpandRowReference` of a whole-row reference: the columns of the relation, as for `t.*`.

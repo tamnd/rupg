@@ -34,7 +34,7 @@ pub fn out_columns(func: &Func) -> Result<Option<Vec<Column>>> {
     Ok((columns.len() > 1 || procedure).then_some(columns))
 }
 
-/// `get_expr_result_tupdesc` and `expandRecordVariable`: the fields of an expression of type `record`. A call of a function gives its `OUT` parameters. The whole row of a join gives the columns of the join. A column of a subquery in `FROM` gives the fields of its expression in the subquery, also through more subqueries. `levels` has the relations of the query of the expression, then the relations of each query outside it. `None` when the fields are not known before the query runs.
+/// `get_expr_result_tupdesc` and `expandRecordVariable`: the fields of an expression of type `record`. A call of a function gives its `OUT` parameters. A `ROW` gives the fields `f1`, `f2` and so on. The whole row of a join gives the columns of the join. A column of a subquery in `FROM` gives the fields of its expression in the subquery, also through more subqueries. `levels` has the relations of the query of the expression, then the relations of each query outside it. `None` when the fields are not known before the query runs.
 ///
 /// # Errors
 ///
@@ -78,6 +78,19 @@ pub fn record_fields(expr: &Expr, levels: &[&[Relation]]) -> Result<Option<Vec<C
             inner.extend_from_slice(&levels[var.levels_up..]);
             record_fields(&target.expr, &inner)
         }
+        // `transformRowExpr` names the fields of a `ROW` of type `record` `f1`, `f2` and so on.
+        ExprKind::Row(fields, _) => Ok(Some(
+            fields
+                .iter()
+                .enumerate()
+                .map(|(i, field)| Column {
+                    name: format!("f{}", i + 1),
+                    ty: field.ty,
+                    typmod: field.typmod,
+                    not_null: false,
+                })
+                .collect(),
+        )),
         _ => Ok(None),
     }
 }

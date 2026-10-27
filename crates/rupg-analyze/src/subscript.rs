@@ -112,50 +112,35 @@ impl Analyzer<'_> {
         Ok(result)
     }
 
-    /// `ParseComplexProjection` and `unknown_attribute`: the field of a row value with the name. A field of the whole row of a relation is the column of the relation. A value of type `record` has the fields that [`crate::record_fields`] finds. A name that is no field can be a function in the functional notation, which rupg does not have yet.
+    /// `ParseFuncOrColumn` with the column syntax `arg.name` and `unknown_attribute`: the field of a row value with the name, as [`Analyzer::complex_projection`] finds it, or else the call of the function `name` with the one argument `arg`, as [`Analyzer::column_func`] finds it.
     pub(crate) fn field_select(
         &mut self,
         arg: Expr,
         name: &str,
         at: Option<usize>,
     ) -> Result<Expr> {
+        if let Some(expr) = self.complex_projection(&arg, name, at)? {
+            return Ok(expr);
+        }
+        if let Some(expr) = self.column_func(name, arg.clone(), at)? {
+            return Ok(expr);
+        }
         if let ExprKind::Var(var) = arg.kind
             && var.attnum == 0
         {
-            return self.whole_row_field(var, name, at);
+            return Err(self.whole_row_missing(var, name, at));
         }
         if let ExprKind::JoinRow(row) = &arg.kind
             && let Some(alias) = &row.alias
         {
-            let Some(i) = row.names.iter().position(|n| n == name) else {
-                return Err(Error::new(
-                    SqlState::UNDEFINED_COLUMN,
-                    format!("column {alias}.{name} does not exist"),
-                )
-                .at_opt(at));
-            };
-            return Ok(row.fields[i].clone().at(at));
-        }
-        let ty = arg.ty;
-        let columns = if ty == oid::RECORD {
-            self.record_columns(&arg)?
-        } else {
-            self.row_columns(types::base(ty))
-        };
-        if let Some(columns) = &columns
-            && let Some(i) = columns.iter().position(|c| c.name == name)
-        {
-            let mut expr = Expr::new(ExprKind::FieldSelect(Box::new(arg), i), columns[i].ty);
-            expr.typmod = columns[i].typmod;
-            return Ok(expr);
-        }
-        if rupg_pgcatalog::builtin::procs_named(name).any(|p| p.nargs == 1) {
             return Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                format!("the call of the function {name} as a field is not supported yet"),
+                SqlState::UNDEFINED_COLUMN,
+                format!("column {alias}.{name} does not exist"),
             )
             .at_opt(at));
         }
+        let ty = arg.ty;
+        let columns = if ty == oid::RECORD { None } else { self.row_columns(types::base(ty)) };
         let (state, message) = match (columns, ty) {
             (_, oid::RECORD) => (
                 SqlState::UNDEFINED_COLUMN,
@@ -174,6 +159,40 @@ impl Analyzer<'_> {
             ),
         };
         Err(Error::new(state, message).at_opt(at))
+    }
+
+    /// `ParseComplexProjection`: the field of a row value with the name, or `None` when the value is not a row or has no field of that name. A field of the whole row of a relation is the column of the relation. A value of type `record` has the fields that [`crate::record_fields`] finds.
+    pub(crate) fn complex_projection(
+        &mut self,
+        arg: &Expr,
+        name: &str,
+        at: Option<usize>,
+    ) -> Result<Option<Expr>> {
+        if let ExprKind::Var(var) = arg.kind
+            && var.attnum == 0
+        {
+            return self.whole_row_field(var, name, at);
+        }
+        if let ExprKind::JoinRow(row) = &arg.kind
+            && row.alias.is_some()
+        {
+            return Ok(row
+                .names
+                .iter()
+                .position(|n| n == name)
+                .map(|i| row.fields[i].clone().at(at)));
+        }
+        let ty = arg.ty;
+        let columns = if ty == oid::RECORD {
+            self.record_columns(arg)?
+        } else {
+            self.row_columns(types::base(ty))
+        };
+        let Some(columns) = columns else { return Ok(None) };
+        let Some(i) = columns.iter().position(|c| c.name == name) else { return Ok(None) };
+        let mut expr = Expr::new(ExprKind::FieldSelect(Box::new(arg.clone()), i), columns[i].ty);
+        expr.typmod = columns[i].typmod;
+        Ok(Some(expr))
     }
 
     /// `transformContainerSubscripts` for a fetch. A domain over an array subscripts its base type, and `int2vector` and `oidvector` are `int2[]` and `oid[]`. A `name` is an array of `"char"`, a `point` and a `line` are arrays of `float8`, and an `lseg` and a `box` are arrays of `point`. The result is the element, or an array for a slice, with the typmod of the container.

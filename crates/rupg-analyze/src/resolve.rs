@@ -666,6 +666,34 @@ impl Analyzer<'_> {
         })
     }
 
+    /// `ParseFuncOrColumn` with the column syntax `arg.name`: the call of the function `name` with the one argument `arg`, or `None` when no function or more than one function takes it.
+    pub(crate) fn column_func(
+        &mut self,
+        name: &str,
+        arg: Expr,
+        at: Option<usize>,
+    ) -> Result<Option<Expr>> {
+        let inputs = [arg.ty];
+        let args = [arg];
+        let (detail, _) = self.func_detail(&[name], &args, &inputs, &[], true, false, at)?;
+        if matches!(detail, Detail::NotFound | Detail::Multiple) {
+            return Ok(None);
+        }
+        let [arg] = args;
+        let order = Vec::new();
+        let parts = Parts {
+            star: false,
+            distinct: false,
+            within_group: false,
+            order: &order,
+            filter: None,
+            over: None,
+            nulls: NullTreatment::None,
+            srfs: self.srfs.0,
+        };
+        self.make_func(&[name], vec![arg], false, Some(parts), false, at).map(Some)
+    }
+
     /// `ParseFuncOrColumn` for a call of a function. The named arguments come after the positional arguments. `proc_call` is true for the call of a `CALL`, which must find a procedure, and whose arguments are all the arguments of the procedure, also the output arguments.
     pub(crate) fn make_func(
         &mut self,
@@ -756,6 +784,25 @@ impl Analyzer<'_> {
                 .at_opt(at));
             }
             Detail::NotFound => {
+                // `could_be_projection`: `f(x)` with one argument of a row type and no decoration is the field `f` of `x` when no function `f` takes `x`.
+                let could_be_projection = !proc_call
+                    && names.len() == 1
+                    && argnames.is_empty()
+                    && !variadic_keyword
+                    && parts.as_ref().is_none_or(|p| {
+                        p.order.is_empty()
+                            && p.filter.is_none()
+                            && !p.star
+                            && !p.distinct
+                            && p.over.is_none()
+                    });
+                if could_be_projection
+                    && let [arg] = args.as_slice()
+                    && (arg.ty == oid::RECORD || self.row_columns(types::base(arg.ty)).is_some())
+                    && let Some(expr) = self.complex_projection(arg, names[0], at)?
+                {
+                    return Ok(expr);
+                }
                 if let Some(parts) = &parts
                     && parts.order.len() > 1
                     && !parts.within_group

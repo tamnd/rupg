@@ -4053,6 +4053,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/join_removal_placeholder.test")));
     }
 
+    /// A function of one row argument can be called with the column syntax, and a field of a row can be selected with the function syntax. `connection/column_function.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn column_function() {
+        big_stack(|| script(include_str!("connection/column_function.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

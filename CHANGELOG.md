@@ -6,7 +6,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- `COPY ... TO` a file of the server writes the rows to the file, for a role with the privileges of `pg_write_server_files`, with the errors of PostgreSQL for a relative name, a directory and a file that cannot be opened (#948).
+- A function of one row argument can be called with the column syntax, as `t.f` for `f(t)`, and a field of a row can be selected with the function syntax, as `a(t)` for `t.a`. A field of an anonymous `ROW(...)` has the name `f1`, `f2` and so on, as in PostgreSQL. The CHANGELOG entry of `COPY ... TO` a file now has the right number (#950).
+- `COPY ... TO` a file of the server writes the rows to the file, for a role with the privileges of `pg_write_server_files`, with the errors of PostgreSQL for a relative name, a directory and a file that cannot be opened (#949).
 - A removed left join keeps the placeholder of a subquery that another relation of the subquery gives, so the outer join above it is no longer turned into an inner join, and an outer join `ON TRUE` with a subquery that has no `FROM` is now removed, as in PostgreSQL (#947).
 - GROUP BY on a type with no sort order, together with an aggregate call with ORDER BY or DISTINCT, now gives the "could not implement GROUP BY" error of PG. Before, the planner panicked when this happened with grouping sets (#945).
 - ALTER TEXT SEARCH TEMPLATE, PARSER, DICTIONARY and CONFIGURATION with RENAME TO, OWNER TO and SET SCHEMA, with the checks of PG (#944).
