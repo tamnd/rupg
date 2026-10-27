@@ -1442,6 +1442,10 @@ impl Env for Reader<'_> {
         rupg_func::schema_usage(namespace, self)
     }
 
+    fn relation_allowed(&self, relid: u32, mask: u32) -> bool {
+        rupg_func::relation_allowed(relid, mask, self)
+    }
+
     fn temp_number(&self) -> Option<i32> {
         self.activity.and_then(|(activity, _)| activity.number())
     }

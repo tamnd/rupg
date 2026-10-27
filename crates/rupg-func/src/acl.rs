@@ -274,6 +274,11 @@ pub fn schema_usage(namespace: u32, session: &dyn Session) -> bool {
     current_user_has(Owned::Namespace, namespace, ACL_USAGE, session).unwrap_or(false)
 }
 
+/// `pg_class_aclcheck` of the bits of `mask` on a relation for the current user, as `ExecCheckPermissions` checks a table that a statement writes. Only a superuser can write a system catalog.
+pub fn relation_allowed(relid: u32, mask: u32, session: &dyn Session) -> bool {
+    matches!(class_check(relid, current_user(session), mask, session), Ok(Some(true) | None))
+}
+
 /// `is_admin_of_role`: true when `member` is a superuser, or when a role that `member` is a member of has the admin option on `role`. A role is not an admin of itself.
 fn is_admin_of_role(member: u32, role: u32) -> bool {
     if superuser(member) {
