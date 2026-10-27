@@ -9,15 +9,15 @@ use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{
     AlterFdwStmt, AlterForeignServerStmt, AlterOwnerStmt, AlterUserMappingStmt, CreateFdwStmt,
     CreateForeignServerStmt, CreateForeignTableStmt, CreateUserMappingStmt, DefElem, DefElemAction,
-    DropUserMappingStmt, List, Node, RenameStmt, RoleSpec, RoleSpecType,
+    DropUserMappingStmt, ImportForeignSchemaStmt, List, Node, RenameStmt, RoleSpec, RoleSpecType,
 };
 use rupg_types::oid;
 
-use super::Definer;
 use super::comment::not_owner;
 use super::sequence::conflicting;
 use super::table::SYSTEM_COLUMNS;
 use super::tsearch::def_string;
+use super::{Definer, not_yet};
 use crate::from::levenshtein;
 use crate::typename::names;
 
@@ -347,6 +347,27 @@ impl Definer<'_, '_> {
             SqlState::INSUFFICIENT_PRIVILEGE,
             format!("permission denied for foreign server {}", server.name),
         ))
+    }
+
+    /// `ImportForeignSchema`: the checks of the server, of the schema and of the handler of the foreign-data wrapper. rupg cannot call a handler, so a wrapper with a handler gives an error too.
+    pub(super) fn import_foreign_schema(&mut self, stmt: &ImportForeignSchemaStmt) -> Result<()> {
+        let name = stmt.server_name.as_deref().unwrap_or_default();
+        let server = self.catalog.server_by_name(name).cloned().ok_or_else(|| no_server(name))?;
+        self.check_server_usage(&server, self.user)?;
+        self.lookup_creation_namespace(stmt.local_schema.as_deref().unwrap_or_default())?;
+        let Some(fdw) = self.catalog.fdw(server.fdw) else {
+            return Err(Error::internal(format!(
+                "cache lookup failed for foreign-data wrapper {}",
+                server.fdw
+            )));
+        };
+        if fdw.handler == 0 {
+            return Err(Error::new(
+                SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
+                format!("foreign-data wrapper \"{}\" has no handler", fdw.name),
+            ));
+        }
+        Err(not_yet("IMPORT FOREIGN SCHEMA with a handler", None))
     }
 
     /// `CreateForeignServer`. With `IF NOT EXISTS`, a server that exists gives a notice.

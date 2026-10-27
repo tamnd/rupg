@@ -1329,6 +1329,7 @@ impl Connection {
                     Node::CreateForeignServerStmt(_) => CommandTag::CreateServer,
                     Node::AlterForeignServerStmt(_) => CommandTag::AlterServer,
                     Node::CreateUserMappingStmt(_) => CommandTag::CreateUserMapping,
+                    Node::ImportForeignSchemaStmt(_) => CommandTag::ImportForeignSchema,
                     Node::AlterUserMappingStmt(_) => CommandTag::AlterUserMapping,
                     Node::DropUserMappingStmt(_) => CommandTag::DropUserMapping,
                     Node::CreatePolicyStmt(_) => CommandTag::CreatePolicy,
@@ -4218,6 +4219,12 @@ mod tests {
     #[test]
     fn alter_foreign_table() {
         big_stack(|| script(include_str!("connection/alter_foreign_table.test")));
+    }
+
+    /// The errors for unique indexes of a partitioned table with foreign partitions, from `CREATE INDEX`, `ADD PRIMARY KEY`, `CREATE FOREIGN TABLE ... PARTITION OF` and `ATTACH PARTITION`, and the checks of `IMPORT FOREIGN SCHEMA`. `connection/foreign_partition.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn foreign_partition() {
+        big_stack(|| script(include_str!("connection/foreign_partition.test")));
     }
 
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.

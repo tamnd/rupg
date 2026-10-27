@@ -84,6 +84,20 @@ impl Definer<'_, '_> {
         let children: Vec<u32> = self.catalog.partitions(table).iter().map(|r| r.oid).collect();
         let mut valid = true;
         for child in children {
+            // A foreign table has no indexes.
+            if self.catalog.relation(child).is_some_and(|r| r.kind == RelKind::Foreign) {
+                if self.is_unique_index(index) {
+                    let name = self.catalog.relation(table).map_or("", |r| r.name.as_str());
+                    return Err(Error::new(
+                        SqlState::WRONG_OBJECT_TYPE,
+                        format!("cannot create unique index on partitioned table \"{name}\""),
+                    )
+                    .with_detail(format!(
+                        "Table \"{name}\" contains partitions that are foreign tables."
+                    )));
+                }
+                continue;
+            }
             match self.matching_index(child, index, constraint, false) {
                 Some((found, found_constraint, found_valid)) => {
                     self.catalog.set_index_parent(found, index)?;
@@ -237,6 +251,14 @@ impl Definer<'_, '_> {
         Ok((index, child_constraint))
     }
 
+    /// `indisunique` or `indisprimary` of the index.
+    pub(super) fn is_unique_index(&self, index: u32) -> bool {
+        self.catalog
+            .relation(index)
+            .and_then(|r| r.index.as_ref())
+            .is_some_and(|i| i.unique || i.primary)
+    }
+
     /// The part of `DefineRelation` for a new partition of a partitioned table: the partition gets an index for each index of the parent table, in the order of their OIDs, with the constraint of the index.
     pub(super) fn clone_partition_indexes(&mut self, child: u32, parent: u32) -> Result<()> {
         let indexes: Vec<u32> = self
@@ -245,6 +267,17 @@ impl Definer<'_, '_> {
             .filter(|r| r.index.as_ref().is_some_and(|i| i.table == parent))
             .map(|r| r.oid)
             .collect();
+        if self.catalog.relation(child).is_some_and(|r| r.kind == RelKind::Foreign) {
+            if indexes.iter().any(|&index| self.is_unique_index(index)) {
+                let name = self.catalog.relation(parent).map_or("", |r| r.name.as_str());
+                return Err(Error::new(
+                    SqlState::WRONG_OBJECT_TYPE,
+                    format!("cannot create foreign partition of partitioned table \"{name}\""),
+                )
+                .with_detail(format!("Table \"{name}\" contains indexes that are unique.")));
+            }
+            return Ok(());
+        }
         for index in indexes {
             let constraint = self
                 .catalog
