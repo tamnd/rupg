@@ -97,6 +97,8 @@ pub fn output_supported(ty: u32) -> bool {
             | oid::PG_MCV_LIST
             | oid::ACLITEM
             | oid::ANYARRAY
+            | oid::ANYRANGE
+            | oid::ANYMULTIRANGE
             | oid::PG_LSN
             | oid::VOID
             | oid::TRIGGER
@@ -188,7 +190,7 @@ pub fn input_supported(ty: u32) -> bool {
     if let Some(range) = builtin::multirange_range(ty) {
         return input_supported(range);
     }
-    output_supported(ty) && ty != oid::ANYARRAY && ty != oid::RECORD
+    output_supported(ty) && ty != oid::ANYARRAY
 }
 
 /// The name of a type for an error. A type of the catalog of the session has its name in its row.
@@ -1132,6 +1134,37 @@ pub(crate) fn input_kernel(call: &Call<'_>, args: &[Value]) -> Result<Value> {
         _ => -1,
     };
     input(call.ret, text, typmod, call.session)
+}
+
+/// `array_in(cstring, oid, integer)` called from SQL: the array of the element type of the second argument, with the type modifier of the third. The result has the type `anyarray`, whose value is the text of the array, as for a column of `pg_stats`.
+pub(crate) fn array_in_kernel(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let text = args.first().and_then(Value::as_str).ok_or_else(bad_value)?;
+    let elem = match args.get(1) {
+        Some(Value::Oid(elem)) => *elem,
+        _ => return Err(bad_value()),
+    };
+    let typmod = match args.get(2) {
+        Some(Value::Int4(typmod)) => *typmod,
+        _ => -1,
+    };
+    let array = builtin::type_by_oid(elem).map_or(0, |row| row.array);
+    if array == 0 {
+        return Err(not_yet(format!("array_in of the element type {}", type_name(elem))));
+    }
+    let value = input(array, text, typmod, call.session)?;
+    let mut out = Vec::new();
+    output(array, &value, call.session, &mut out)?;
+    Ok(Value::text(String::from_utf8(out).map_err(|_| bad_value())?))
+}
+
+/// `PSEUDOTYPE_DUMMY_INPUT_FUNC`: the input function of a pseudo-type such as `anyrange_in` cannot give a value.
+pub(crate) fn pseudo_input_kernel(call: &Call<'_>, _: &[Value]) -> Result<Value> {
+    let name = builtin::type_by_oid(call.ret)
+        .map_or_else(|| type_name(call.ret), |row| row.name.to_owned());
+    Err(Error::new(
+        SqlState::FEATURE_NOT_SUPPORTED,
+        format!("cannot accept a value of type {name}"),
+    ))
 }
 
 /// The kernel of each text output function of a type, such as `int4out` or `array_out`, called from SQL: the text of the value for the type of the argument.

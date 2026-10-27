@@ -695,6 +695,33 @@ pub fn kernel(func: u32) -> Option<Kernel> {
     }
     // The functions of the types for input and output. An input function with a pseudo-type as its result, such as `array_in`, needs the type of the value from its arguments, which the engine does not have yet.
     let pseudo = builtin::type_by_oid(proc.rettype).is_none_or(|row| row.kind == b'p');
+    match proc.src {
+        "array_in" => return Some(io::array_in_kernel),
+        // `pseudotypes.c`: the pseudo-types whose input function gives an error.
+        "anyarray_in"
+        | "anycompatiblearray_in"
+        | "anyenum_in"
+        | "anyrange_in"
+        | "anycompatiblerange_in"
+        | "anymultirange_in"
+        | "anycompatiblemultirange_in"
+        | "pg_node_tree_in"
+        | "pg_ddl_command_in"
+        | "any_in"
+        | "trigger_in"
+        | "event_trigger_in"
+        | "language_handler_in"
+        | "fdw_handler_in"
+        | "table_am_handler_in"
+        | "index_am_handler_in"
+        | "tsm_handler_in"
+        | "internal_in"
+        | "anyelement_in"
+        | "anynonarray_in"
+        | "anycompatible_in"
+        | "anycompatiblenonarray_in" => return Some(io::pseudo_input_kernel),
+        _ => {}
+    }
     for row in builtin::types() {
         if row.send == func {
             return Some(io::send_kernel);
