@@ -84,7 +84,7 @@ pub use expr::{
 pub use from::{
     Column, FromFunction, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM, TableSample,
 };
-pub use funcargs::{arg_defaults, expand_arguments};
+pub use funcargs::{arg_defaults, expand_arguments, expand_window_arguments};
 pub use insert::{
     Action, ConflictDef, Deferrable, Derived, Foreign, InsertDef, InsertSource, OnConflict,
     PolicyCheck, PolicyKind, Unique, ViewCheck, Write, WriteKind,

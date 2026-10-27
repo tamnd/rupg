@@ -1,0 +1,89 @@
+> CREATE TABLE t (ten int, four int)
+CREATE TABLE
+> INSERT INTO t VALUES (0,0),(0,0),(4,0),(1,1),(1,1),(7,1),(9,1),(0,2),(1,3),(3,3)
+INSERT 0 10
+> CREATE FUNCTION nth_value_def(val anyelement, n integer = 1) RETURNS anyelement LANGUAGE internal WINDOW IMMUTABLE STRICT AS 'window_nth_value'
+CREATE FUNCTION
+> SELECT prokind, proiswindow FROM pg_proc WHERE proname = 'nth_value_def'
+ERROR 42703 column "proiswindow" does not exist at 17
+> SELECT prokind FROM pg_proc WHERE proname = 'nth_value_def'
+fields prokind@pg_proc.10:18:1:-1
+row w
+SELECT 1
+> SELECT nth_value_def(n := 2, val := ten) OVER (PARTITION BY four), ten, four FROM (SELECT * FROM t ORDER BY four, ten) s
+fields nth_value_def:23:4:-1,ten@t.1:23:4:-1,four@t.2:23:4:-1
+row 0,0,0
+row 0,0,0
+row 0,4,0
+row 1,1,1
+row 1,1,1
+row 1,7,1
+row 1,9,1
+row NULL,0,2
+row 3,1,3
+row 3,3,3
+SELECT 10
+> SELECT nth_value_def(ten) OVER (PARTITION BY four), ten, four FROM (SELECT * FROM t ORDER BY four, ten) s
+fields nth_value_def:23:4:-1,ten@t.1:23:4:-1,four@t.2:23:4:-1
+row 0,0,0
+row 0,0,0
+row 0,4,0
+row 1,1,1
+row 1,1,1
+row 1,7,1
+row 1,9,1
+row 0,0,2
+row 1,1,3
+row 1,3,3
+SELECT 10
+> SELECT nth_value_def(ten) FROM t
+ERROR 42809 window function nth_value_def requires an OVER clause at 8
+> SELECT nth_value_def(ten ORDER BY ten) OVER () FROM t
+ERROR 0A000 aggregate ORDER BY is not implemented for window functions at 8
+> SELECT nth_value_def(DISTINCT ten) OVER () FROM t
+ERROR 0A000 DISTINCT is not implemented for window functions at 8
+> SELECT nth_value_def(ten) FILTER (WHERE ten > 0) OVER () FROM t
+ERROR 0A000 FILTER is not implemented for non-aggregate window functions at 8
+> SELECT nth_value_def(ten) WITHIN GROUP (ORDER BY ten) FROM t
+ERROR 42809 window function nth_value_def requires an OVER clause at 8
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT nth_value_def(ten, 3) OVER (ORDER BY ten) FROM t
+fields QUERY PLAN:25:-1:-1
+row WindowAgg
+row   Output: nth_value_def(ten, 3) OVER w1, ten
+row   Window: w1 AS (ORDER BY t.ten)
+row   ->  Sort
+row         Output: ten
+row         Sort Key: t.ten
+row         ->  Seq Scan on public.t
+row               Output: ten
+EXPLAIN
+> CREATE FUNCTION w2(int) RETURNS int LANGUAGE sql WINDOW AS 'select 1'
+CREATE FUNCTION
+> CREATE PROCEDURE w3() LANGUAGE sql WINDOW AS 'select 1'
+ERROR 42P13 invalid attribute in procedure definition at 36
+> SELECT pg_get_functiondef('nth_value_def'::regproc)
+fields pg_get_functiondef:25:-1:-1
+row CREATE OR REPLACE FUNCTION public.nth_value_def(val anyelement, n integer DEFAULT 1)
+ RETURNS anyelement
+ LANGUAGE internal
+ WINDOW IMMUTABLE STRICT
+AS $function$window_nth_value$function$
+
+SELECT 1
+> ALTER FUNCTION nth_value_def(anyelement, integer) RENAME TO nvd
+ALTER FUNCTION
+> DROP FUNCTION nvd(anyelement, integer)
+DROP FUNCTION
+> SELECT * FROM nth_value_def(1)
+ERROR 42883 function nth_value_def(integer) does not exist at 15
+> SELECT nth_value_def(val := ten) OVER (ORDER BY ten), lag(ten) OVER (ORDER BY ten) FROM t
+ERROR 42883 function nth_value_def(val => integer) does not exist at 8
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT nth_value_def(n := 2, val := ten) OVER (ORDER BY ten) FROM t
+ERROR 42883 function nth_value_def(n => integer, val => integer) does not exist at 37
+> CREATE VIEW v AS SELECT nth_value_def(n := 2, val := ten) OVER (ORDER BY ten), nth_value_def(ten) OVER () AS b FROM t
+ERROR 42883 function nth_value_def(n => integer, val => integer) does not exist at 25
+> SELECT pg_get_viewdef('v')
+fields pg_get_viewdef:25:-1:-1
+ERROR 42P01 relation "v" does not exist
+> SELECT * FROM v
+ERROR 42P01 relation "v" does not exist at 15
