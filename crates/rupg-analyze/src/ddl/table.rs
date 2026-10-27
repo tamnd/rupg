@@ -1130,7 +1130,7 @@ impl Definer<'_, '_> {
             parent: None,
             inherits: Vec::new(),
             typed: false,
-            foreign_table: false,
+            foreign_table: target.kind == b'f',
         };
         self.column_definition(&mut plan, def)?;
         let Some(column) = plan.columns.first() else {
@@ -1209,6 +1209,16 @@ impl Definer<'_, '_> {
         }
         self.added.push(Fill { table, column: number, default });
         self.add_not_nulls(table, &plan)?;
+        // `transformColumnDefinition` adds `ALTER FOREIGN TABLE ... ALTER COLUMN ... OPTIONS` for the options of the column.
+        if !def.fdwoptions.is_empty() {
+            if target.kind != b'f' {
+                return Err(Error::new(
+                    SqlState::WRONG_OBJECT_TYPE,
+                    format!("\"{}\" is not a foreign table", target.name),
+                ));
+            }
+            self.alter_column_fdw_options(table, &column.name.clone(), &def.fdwoptions)?;
+        }
         for serial in &plan.serials {
             if serial.identity.is_some() {
                 let owner = (table, plan.namespace, plan.relname.as_str());
@@ -1688,7 +1698,7 @@ fn no_inherit_not_null() -> Error {
 }
 
 /// The error of `transformColumnDefinition` and `transformTableConstraint` for a constraint that a foreign table cannot have.
-fn not_on_foreign(con: &Constraint) -> Error {
+pub(super) fn not_on_foreign(con: &Constraint) -> Error {
     let what = match con.contype {
         ConstrType::CONSTR_PRIMARY => "primary key",
         ConstrType::CONSTR_UNIQUE => "unique",

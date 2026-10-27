@@ -647,6 +647,20 @@ impl Definer<'_, '_> {
         self.catalog.set_foreign_table(table, server.oid, options)
     }
 
+    /// `ATExecGenericOptions`: the options of the foreign table after the changes of the list. The options go through the validator of the foreign-data wrapper of the server of the table.
+    pub(super) fn alter_fdw_options(&mut self, table: u32, list: &List) -> Result<()> {
+        if list.is_empty() {
+            return Ok(());
+        }
+        let Some(foreign) = self.catalog.relation(table).and_then(|r| r.foreign.clone()) else {
+            return Err(Error::internal(format!("cache lookup failed for foreign table {table}")));
+        };
+        let server = self.catalog.server(foreign.server);
+        let validator = server.and_then(|s| self.catalog.fdw(s.fdw)).map_or(0, |f| f.validator);
+        let options = self.generic_options(PG_FOREIGN_TABLE, &foreign.options, list, validator)?;
+        self.catalog.set_foreign_table_options(table, options)
+    }
+
     /// `ATExecAlterColumnGenericOptions`: the options of the column of the foreign table after the changes of the list. The options go through the validator of the foreign-data wrapper of the server of the table.
     pub(super) fn alter_column_fdw_options(
         &mut self,

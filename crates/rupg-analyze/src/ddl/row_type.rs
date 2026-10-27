@@ -73,6 +73,11 @@ impl Definer<'_, '_> {
                 "cannot alter type \"{}\" because column \"{table}.{column}\" uses it",
                 target.name
             )
+        } else if target.kind == b'f' {
+            format!(
+                "cannot alter foreign table \"{}\" because column \"{table}.{column}\" uses its row type",
+                target.name
+            )
         } else {
             format!(
                 "cannot alter table \"{}\" because column \"{table}.{column}\" uses its row type",

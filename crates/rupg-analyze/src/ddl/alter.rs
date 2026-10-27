@@ -18,7 +18,9 @@ use super::alter_column::ColumnCmd;
 use super::alter_type::{Changed, TypeCmd};
 use super::comment::not_owner;
 use super::drop::owner_word;
-use super::table::{SYSTEM_COLUMNS, constraint_index, make_not_null, not_null_column};
+use super::table::{
+    SYSTEM_COLUMNS, constraint_index, make_not_null, not_null_column, not_on_foreign,
+};
 use super::{Definer, Found, Message, not_yet, references, relkind_detail, relname};
 use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
@@ -190,6 +192,8 @@ enum MiscCmd {
     AlterConstraint(Box<ATAlterConstraint>),
     /// `ENABLE ROW LEVEL SECURITY` and `DISABLE ROW LEVEL SECURITY`, or with the first flag `FORCE ROW LEVEL SECURITY` and `NO FORCE ROW LEVEL SECURITY`. The second flag is true for `ENABLE` and `FORCE`.
     RowSecurity(bool, bool),
+    /// `OPTIONS (...)` of the foreign table, or of the named column with `ALTER COLUMN ... OPTIONS`.
+    GenericOptions(Option<String>, Vec<Option<Node>>),
 }
 
 /// The subcommand that gives a constraint of `AT_PASS_ADD_CONSTR`.
@@ -479,6 +483,16 @@ impl Definer<'_, '_> {
                 let Some(Node::Constraint(con)) = &cmd.def else {
                     return Err(Error::internal("ADD CONSTRAINT without a constraint"));
                 };
+                let keyed = matches!(
+                    con.contype,
+                    ConstrType::CONSTR_PRIMARY
+                        | ConstrType::CONSTR_UNIQUE
+                        | ConstrType::CONSTR_EXCLUSION
+                        | ConstrType::CONSTR_FOREIGN
+                );
+                if target.kind == b'f' && keyed {
+                    return Err(not_on_foreign(con));
+                }
                 if con.contype == ConstrType::CONSTR_PRIMARY {
                     self.prep_primary_key(target, con, passes)?;
                 } else if con.indexname.is_some() {
@@ -667,6 +681,16 @@ impl Definer<'_, '_> {
                 };
                 passes.misc.push(MiscCmd::RowSecurity(force, on));
             }
+            AlterTableType::AT_GenericOptions | AlterTableType::AT_AlterColumnGenericOptions => {
+                self.simple_permissions(target, cmd, b"f")?;
+                let options = match &cmd.def {
+                    Some(Node::List(list)) => list.clone(),
+                    _ => Vec::new(),
+                };
+                let column = (cmd.subtype == AlterTableType::AT_AlterColumnGenericOptions)
+                    .then(|| cmd.name.as_deref().unwrap_or_default().to_string());
+                passes.misc.push(MiscCmd::GenericOptions(column, options));
+            }
             // A table has no OIDs, so `SET WITHOUT OIDS` has no work.
             AlterTableType::AT_DropOids => self.simple_permissions(target, cmd, TABLE)?,
             other => {
@@ -822,8 +846,8 @@ impl Definer<'_, '_> {
                 }
             }
         }
-        // `ATRewriteTables` scans the table once to write the rows with their new types and to check the new not-null and check constraints. A composite type has no rows.
-        let mut verify = !passes.types.is_empty() && target.kind != b'c';
+        // `ATRewriteTables` scans the table once to write the rows with their new types and to check the new not-null and check constraints. A composite type and a foreign table have no rows.
+        let mut verify = !passes.types.is_empty() && !matches!(target.kind, b'c' | b'f');
         if verify {
             self.check_row_type_users(target)?;
         }
@@ -926,6 +950,10 @@ impl Definer<'_, '_> {
                 MiscCmd::AlterConstraint(alter) => {
                     self.alter_constraint(target, alter, passes.recurse)?;
                 }
+                MiscCmd::GenericOptions(Some(column), list) => {
+                    self.alter_column_fdw_options(target.oid, column, list)?;
+                }
+                MiscCmd::GenericOptions(None, list) => self.alter_fdw_options(target.oid, list)?,
             }
         }
         if let Some(unlogged) = passes.persistence {
