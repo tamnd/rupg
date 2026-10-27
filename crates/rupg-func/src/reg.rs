@@ -39,6 +39,10 @@ impl Env for SessionEnv<'_> {
         namespace_oid(name, self.0)
     }
 
+    fn namespace_usage(&self, namespace: u32) -> bool {
+        crate::acl::schema_usage(namespace, self.0)
+    }
+
     fn database(&self) -> String {
         self.0.database().to_string()
     }
@@ -174,11 +178,33 @@ fn deconstruct<'n>(
 }
 
 /// The schemas that a name searches: the schema that the name gives, or none when it does not exist, as the lookups with `missing_ok` give. A name without a schema searches the path.
-fn spaces(schema: Option<&str>, session: &dyn Session) -> Vec<u32> {
+///
+/// # Errors
+///
+/// `42501` for a schema on which the user has no `USAGE`.
+fn spaces(schema: Option<&str>, session: &dyn Session) -> Result<Vec<u32>> {
     match schema {
-        Some(schema) => namespace_oid(schema, session).into_iter().collect(),
-        None => path(session),
+        Some(schema) => match namespace_oid(schema, session) {
+            Some(ns) => Ok(vec![usage(ns, schema, session)?]),
+            None => Ok(Vec::new()),
+        },
+        None => Ok(path(session)),
     }
+}
+
+/// The check of `LookupExplicitNamespace`: the user must have `USAGE` on a schema that a name gives, but not on the temporary schema of the session.
+///
+/// # Errors
+///
+/// `42501` for a schema on which the user has no `USAGE`.
+fn usage(ns: u32, schema: &str, session: &dyn Session) -> Result<u32> {
+    if ns == temp_namespace(session) || crate::acl::schema_usage(ns, session) {
+        return Ok(ns);
+    }
+    Err(Error::new(
+        SqlState::INSUFFICIENT_PRIVILEGE,
+        format!("permission denied for schema {schema}"),
+    ))
 }
 
 /// The object of a kind with a name in the first schema of `spaces` that has one. An operator class or an operator family must have the access method `method`, which is 0 for the other kinds. A collation of the encoding of the database comes before a collation of any encoding in the same schema, as `lookup_collation` finds it.
@@ -298,7 +324,7 @@ pub(crate) fn ts_parser_oid(text: &str, session: &dyn Session) -> Result<u32> {
             format!("schema \"{schema}\" does not exist"),
         ));
     }
-    catalog_find(Named::Parser, &spaces(schema, session), name, session).ok_or_else(|| {
+    catalog_find(Named::Parser, &spaces(schema, session)?, name, session).ok_or_else(|| {
         Error::new(
             SqlState::UNDEFINED_OBJECT,
             format!("text search parser \"{}\" does not exist", name_list(&names)),
@@ -694,7 +720,7 @@ fn name_in(kind: RegKind, text: &str, names: &[Cow<'_, str>], session: &dyn Sess
     }
     let catalog_in = |named: Named, state: SqlState, message: String| {
         let (schema, name) = deconstruct(names, session)?;
-        match catalog_find(named, &spaces(schema, session), name, session) {
+        match catalog_find(named, &spaces(schema, session)?, name, session) {
             Some(oid) => Ok(Ok(oid)),
             None => soft(state, message),
         }
@@ -729,7 +755,7 @@ fn name_in(kind: RegKind, text: &str, names: &[Cow<'_, str>], session: &dyn Sess
         ),
         RegKind::Proc => {
             let (schema, name) = deconstruct(names, session)?;
-            match functions(&spaces(schema, session), name, None)[..] {
+            match functions(&spaces(schema, session)?, name, None)[..] {
                 [] => soft(
                     SqlState::UNDEFINED_FUNCTION,
                     format!("function \"{text}\" does not exist"),
@@ -743,7 +769,7 @@ fn name_in(kind: RegKind, text: &str, names: &[Cow<'_, str>], session: &dyn Sess
         }
         RegKind::Oper => {
             let (schema, name) = deconstruct(names, session)?;
-            match operators(&spaces(schema, session), name)[..] {
+            match operators(&spaces(schema, session)?, name)[..] {
                 [] => {
                     soft(SqlState::UNDEFINED_FUNCTION, format!("operator does not exist: {text}"))
                 }
@@ -785,7 +811,7 @@ fn class_in(names: &[Cow<'_, str>], session: &dyn Session, strict: bool) -> Soft
     };
     let spaces = match schema {
         Some(schema) => match namespace_oid(schema, session) {
-            Some(ns) => vec![ns],
+            Some(ns) => vec![usage(ns, schema, session)?],
             None if strict => {
                 return Err(Error::new(
                     SqlState::UNDEFINED_SCHEMA,
@@ -913,7 +939,7 @@ fn procedure_in(text: &str, session: &dyn Session) -> Soft<u32> {
         Err(e) => return Ok(Err(e)),
     };
     let (schema, name) = deconstruct(&names, session)?;
-    match functions(&spaces(schema, session), name, Some(args.len()))
+    match functions(&spaces(schema, session)?, name, Some(args.len()))
         .iter()
         .find(|f| f.argtypes == args.as_slice())
     {
@@ -939,7 +965,7 @@ fn operator_in(text: &str, session: &dyn Session) -> Soft<u32> {
         return Ok(Err(error));
     };
     let (schema, name) = deconstruct(&names, session)?;
-    let found = spaces(schema, session).into_iter().find_map(|ns| {
+    let found = spaces(schema, session)?.into_iter().find_map(|ns| {
         builtin::operators_named(name)
             .find(|op| op.namespace == ns && op.left == left && op.right == right)
     });

@@ -4159,6 +4159,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/get_acl.test")));
     }
 
+    /// A name that gives a schema needs `USAGE` on the schema, as `LookupExplicitNamespace` checks it, and the search path leaves out the schemas without `USAGE`, as `recomputeNamespacePath` does. A view, a rule and the body of a function that a user stored do not check it again. `connection/schema_usage.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn schema_usage() {
+        big_stack(|| script(include_str!("connection/schema_usage.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

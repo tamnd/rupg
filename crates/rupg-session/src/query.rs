@@ -692,16 +692,18 @@ impl<'a> Reader<'a> {
         let text = self.settings().get("search_path").unwrap_or_default();
         let mut path: Vec<(String, u32)> = Vec::new();
         for name in guc::split_identifiers(&text, ',').unwrap_or_default() {
-            let name = match name.as_str() {
-                "$user" => self.current_user().into_owned(),
+            // `recomputeNamespacePath`: a schema that the current user has no `USAGE` on is not in the path. The temporary schema needs no check.
+            let (name, check) = match name.as_str() {
+                "$user" => (self.current_user().into_owned(), true),
                 "pg_temp" => match self.temp_name() {
-                    Some(temp) => temp,
+                    Some(temp) => (temp, false),
                     None => continue,
                 },
-                _ => name,
+                _ => (name, true),
             };
             if let Some(oid) = self.schema(&name)
                 && !path.iter().any(|&(_, o)| o == oid)
+                && (!check || rupg_func::schema_usage(oid, self))
             {
                 path.push((name, oid));
             }
@@ -1434,6 +1436,10 @@ impl Env for Reader<'_> {
 
     fn namespace(&self, name: &str) -> Option<u32> {
         self.schema(name)
+    }
+
+    fn namespace_usage(&self, namespace: u32) -> bool {
+        rupg_func::schema_usage(namespace, self)
     }
 
     fn temp_number(&self) -> Option<i32> {

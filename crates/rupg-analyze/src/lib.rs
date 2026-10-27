@@ -145,6 +145,11 @@ pub trait Env {
         let _ = name;
         None
     }
+    /// `object_aclcheck` of `USAGE` on a schema for the current user. A session with no roles has each privilege.
+    fn namespace_usage(&self, namespace: u32) -> bool {
+        let _ = namespace;
+        true
+    }
     /// The `allow_system_table_mods` setting, which lets a statement make a relation in a system schema. `initdb` turns it on.
     fn allow_system_table_mods(&self) -> bool {
         false
@@ -282,6 +287,8 @@ pub(crate) struct Analyzer<'a> {
     temp_path: Vec<u32>,
     /// The temporary schema of the session, or 0 when it has none yet.
     temp: u32,
+    /// True when the analyzer reads the text of a view, a rule, a policy or a function that the catalog keeps. PostgreSQL keeps the trees of these objects, so a qualified name in them needs no `USAGE` on its schema.
+    stored: bool,
     params: Vec<u32>,
     variable: bool,
     /// The warnings and notices of the analysis, such as a precision that is too large.
@@ -348,6 +355,7 @@ impl<'a> Analyzer<'a> {
     /// Sets the search path that a view, a rule or a function kept. The temporary schema of the session comes first in the path of the lookups of relations and types.
     fn set_path(&mut self, path: &[u32]) {
         let temp = self.temp;
+        self.stored = true;
         self.path = path.iter().copied().filter(|&ns| temp == 0 || ns != temp).collect();
         self.temp_path.clone_from(&self.path);
         if temp != 0 {
@@ -373,6 +381,7 @@ impl<'a> Analyzer<'a> {
             path,
             temp_path,
             temp,
+            stored: false,
             params: params.types.clone(),
             variable: params.variable,
             notices: Vec::new(),

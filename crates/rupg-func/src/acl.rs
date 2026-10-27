@@ -269,6 +269,11 @@ pub(crate) fn current_user_has(
     Ok(object_check(kind, oid, current_user(session), mask, session)?.unwrap_or(false))
 }
 
+/// `object_aclcheck` of `USAGE` on a schema for the current user.
+pub fn schema_usage(namespace: u32, session: &dyn Session) -> bool {
+    current_user_has(Owned::Namespace, namespace, ACL_USAGE, session).unwrap_or(false)
+}
+
 /// `is_admin_of_role`: true when `member` is a superuser, or when a role that `member` is a member of has the admin option on `role`. A role is not an admin of itself.
 fn is_admin_of_role(member: u32, role: u32) -> bool {
     if superuser(member) {
