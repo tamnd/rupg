@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use rupg_func::{Backend, BackendState, Client, RelationCounts, Ssl, Writes};
+use rupg_func::{Backend, BackendState, Client, Process, RelationCounts, Ssl, Writes};
 use rupg_wire::TransactionStatus;
 
 use super::Connection;
@@ -31,6 +31,71 @@ pub(crate) struct Pending {
     pub(crate) aborted: Writes,
     /// All the writes that did not roll back, which tell the writes of a subtransaction from the writes before it.
     all: Writes,
+}
+
+/// The process ID of the first process of the server. The process IDs of the sessions start at 1001.
+const FIRST_SERVER_PID: i32 = 100;
+
+/// The bootstrap superuser, the role of the logical replication launcher.
+const BOOTSTRAP_SUPERUSER: u32 = 10;
+
+/// The processes of the server that the postmaster of PostgreSQL starts with these settings, after the sessions, as `pg_stat_activity` shows them on a server with no work to do. Each one waits for work with the wait event of its main loop.
+///
+/// rupg has none of these processes. The rows tell a client which processes a server of PostgreSQL has. The numbers are the `ProcNumber` of each process on PostgreSQL: the autovacuum launcher has the first slot after the sessions, the logical replication launcher has a slot of the background workers, and the auxiliary processes come after `MaxBackends`. Each process started with the first session.
+fn server_processes(settings: &Settings, start: i64) -> Vec<Backend> {
+    let int = |name| settings.get(name).and_then(|v| v.parse::<i32>().ok()).unwrap_or(0);
+    let on = |name| settings.get(name).as_deref() == Some("on");
+    let connections = int("max_connections");
+    let autovacuum = int("autovacuum_worker_slots");
+    let max_backends =
+        connections + autovacuum + 1 + int("max_worker_processes") + int("max_wal_senders");
+    let mut processes: Vec<(i32, u32, &'static str, &'static str)> = Vec::new();
+    if on("autovacuum") {
+        processes.push((connections, 0, "autovacuum launcher", "AutovacuumMain"));
+    }
+    if int("max_logical_replication_workers") > 0 {
+        processes.push((
+            connections + autovacuum + 2,
+            BOOTSTRAP_SUPERUSER,
+            "logical replication launcher",
+            "LogicalLauncherMain",
+        ));
+    }
+    let io_workers = if settings.get("io_method").as_deref() == Some("worker") {
+        int("io_min_workers")
+    } else {
+        0
+    };
+    let mut auxiliary = Vec::new();
+    if io_workers > 0 {
+        auxiliary.push(("io worker", "IoWorkerMain"));
+    }
+    auxiliary.push(("background writer", "BgwriterMain"));
+    auxiliary.extend((1..io_workers).map(|_| ("io worker", "IoWorkerMain")));
+    auxiliary.push(("checkpointer", "CheckpointerMain"));
+    auxiliary.push(("walwriter", "WalWriterMain"));
+    if settings.get("archive_mode").as_deref() != Some("off") {
+        auxiliary.push(("archiver", "ArchiverMain"));
+    }
+    if on("summarize_wal") {
+        auxiliary.push(("walsummarizer", "WalSummarizerWal"));
+    }
+    processes.extend(
+        (max_backends + 1..).zip(auxiliary).map(|(number, (name, event))| (number, 0, name, event)),
+    );
+    (FIRST_SERVER_PID..)
+        .zip(processes)
+        .map(|(pid, (number, role, name, event))| Backend {
+            number,
+            pid,
+            role,
+            process: Process::Server(name),
+            state: BackendState::Undefined,
+            backend_start: start,
+            waiting: Some(("Activity", event)),
+            ..Backend::default()
+        })
+        .collect()
 }
 
 /// What a session knows of the table of the sessions.
@@ -75,7 +140,9 @@ impl Activity {
             let application = application_name(settings);
             store.report(number, |backend| backend.application = application);
         }
-        let rows = store.backends();
+        let mut rows = store.backends().to_vec();
+        rows.extend(server_processes(settings, store.stats_reset()));
+        let rows: Arc<[Backend]> = rows.into();
         *snapshot = Some(Arc::clone(&rows));
         rows
     }

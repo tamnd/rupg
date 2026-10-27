@@ -5234,6 +5234,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/analyze_stats.test")));
     }
 
+    /// `pg_stat_activity` shows the processes of the server that PostgreSQL starts with the default configuration, after the session. `connection/server_processes.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn server_processes() {
+        big_stack(|| script(include_str!("connection/server_processes.test")));
+    }
+
     /// `pg_statistic` and `pg_stats` show the rows of the system catalogs that the `ANALYZE` of `initdb` wrote. `connection/catalog_statistics.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn catalog_statistics() {
