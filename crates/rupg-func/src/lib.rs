@@ -92,7 +92,7 @@ pub use acl::{
     apply_row_security, check_execute, check_permissions, copy_from_row_security, current_user_oid,
     insert_allowed, key_shown, lock_table_allowed, row_security_hides, shown_columns,
 };
-pub use activity::{Backend, BackendState, Client, Ssl};
+pub use activity::{Backend, BackendState, Client, Process, Ssl};
 pub use agg::check_percentile;
 pub use cast::local_time;
 pub use compare::{compare, equal};

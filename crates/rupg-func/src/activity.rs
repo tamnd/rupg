@@ -14,6 +14,16 @@ use crate::{Call, Kernel, Session, acl, bad_value, type_error};
 /// `GetBackendTypeDesc(B_BACKEND)`. Each session of rupg is a client backend.
 const CLIENT_BACKEND: &str = "client backend";
 
+/// The type of the process of a row, `BackendType`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Process {
+    /// A session of a client, `B_BACKEND`.
+    #[default]
+    Client,
+    /// A process of the server that has no client, by the text of `GetBackendTypeDesc`, for example `checkpointer`.
+    Server(&'static str),
+}
+
 /// The text of the functions of one session for a number that has no session.
 const NOT_AVAILABLE: &str = "<backend information not available>";
 
@@ -36,19 +46,22 @@ pub enum BackendState {
     IdleInTransactionAborted,
     /// `track_activities` is off, so the session does not report its state.
     Disabled,
+    /// `STATE_UNDEFINED`: a process of the server that reports no state, whose column `state` is null.
+    Undefined,
 }
 
 impl BackendState {
     /// The text of the column `state`.
-    fn text(self) -> &'static str {
-        match self {
+    fn text(self) -> Option<&'static str> {
+        Some(match self {
             BackendState::Starting => "starting",
             BackendState::Idle => "idle",
             BackendState::Running => "active",
             BackendState::IdleInTransaction => "idle in transaction",
             BackendState::IdleInTransactionAborted => "idle in transaction (aborted)",
             BackendState::Disabled => "disabled",
-        }
+            BackendState::Undefined => return None,
+        })
     }
 }
 
@@ -115,6 +128,7 @@ pub struct Backend {
     pub database: u32,
     /// The OID of the role of the session.
     pub role: u32,
+    pub process: Process,
     pub application: String,
     pub state: BackendState,
     /// The text of the last statement, as at most `track_activity_query_size - 1` bytes.
@@ -183,7 +197,7 @@ fn activity_row(session: &dyn Session, backend: &Backend) -> Result<Vec<Value>> 
         row[5] = Value::text(INSUFFICIENT);
         return Ok(row);
     }
-    row[4] = Value::text(backend.state.text());
+    row[4] = text(backend.state.text());
     row[5] = Value::text(&backend.query);
     let (kind, event) = wait_event(backend);
     row[6] = text(kind);
@@ -194,7 +208,10 @@ fn activity_row(session: &dyn Session, backend: &Backend) -> Result<Vec<Value>> 
     row[11] = time(backend.state_change);
     row[12] = backend.client.addr()?;
     row[14] = backend.client.shown_port();
-    row[17] = Value::text(CLIENT_BACKEND);
+    row[17] = Value::text(match backend.process {
+        Process::Client => CLIENT_BACKEND,
+        Process::Server(name) => name,
+    });
     row[18] = Value::Bool(backend.ssl.is_some());
     if let Some(ssl) = &backend.ssl {
         row[19] = Value::text(&ssl.version);
