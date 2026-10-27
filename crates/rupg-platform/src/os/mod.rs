@@ -27,6 +27,11 @@ use crate::{Clock, Entropy, File, FileMode, Io, OpenMode};
 #[cfg(test)]
 use crate::{Net, Tasks};
 
+/// The text of the clock source of the kernel, as `/sys/devices/system/clocksource/clocksource0/current_clocksource` gives it with the end of line. None when the file is not there, for example on a kernel that is not Linux.
+pub fn kernel_clock_source() -> Option<String> {
+    fs::read_to_string("/sys/devices/system/clocksource/clocksource0/current_clocksource").ok()
+}
+
 /// Converts an error of the operating system. The SQLSTATE is the one that PostgreSQL gives for the same cause.
 fn os_error(e: &io::Error, action: &str, path: &Path) -> Error {
     let state = match e.kind() {

@@ -1088,7 +1088,10 @@ impl Settings {
             "archive_command" if self.get("archive_mode").as_deref() == Some("off") => {
                 "(disabled)".to_owned()
             }
-            "timing_clock_source" if value == "auto" => "auto (system)".to_owned(),
+            "timing_clock_source" if value == "auto" => {
+                if rupg_platform::tsc_is_default() { "auto (tsc)" } else { "auto (system)" }
+                    .to_owned()
+            }
             "seed" => "unavailable".to_owned(),
             _ => value,
         }

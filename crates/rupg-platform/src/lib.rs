@@ -20,7 +20,7 @@ pub mod sim;
 mod tasks;
 
 pub use clock::Clock;
-pub use cpu::{CpuFeatures, CpuLevel, physical_memory};
+pub use cpu::{CpuFeatures, CpuLevel, physical_memory, tsc_is_default};
 pub use entropy::Entropy;
 pub use io::{File, FileMode, Io, OpenMode};
 pub use memory::{MemoryPool, Reclaimer, Reservation};
