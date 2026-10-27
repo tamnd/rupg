@@ -17,29 +17,47 @@ use crate::describe::{
 use crate::text::quote_identifier;
 use crate::{Call, Kernel, Session, bad_value, reg};
 
-/// The parts of an object that exists: the OID of its schema, its name and its identity.
+/// The parts of an object that exists: the OID of its schema, its name, its identity, and the names and the arguments that `pg_get_object_address` takes to find it again.
 struct Parts {
     schema: Option<u32>,
     name: Option<String>,
     identity: String,
+    names: Vec<String>,
+    args: Vec<String>,
 }
 
 impl Parts {
     /// The parts of an object without a schema and without a unique name.
     fn identity(identity: String) -> Self {
-        Self { schema: None, name: None, identity }
+        Self { schema: None, name: None, identity, names: Vec::new(), args: Vec::new() }
     }
 
     /// The parts of an object whose name is unique in the schema `schema`, and whose identity is the name with the schema.
     fn in_schema(schema: u32, name: &str, session: &dyn Session) -> Option<Self> {
-        let identity = reg::qualified(Some(reg::namespace_name(schema, session)?), name);
-        Some(Self { schema: Some(schema), name: Some(quote_identifier(name)), identity })
+        let schema_name = reg::namespace_name(schema, session)?;
+        let identity = reg::qualified(Some(schema_name), name);
+        let names = vec![schema_name.to_string(), name.to_string()];
+        Some(Self {
+            schema: Some(schema),
+            name: Some(quote_identifier(name)),
+            identity,
+            names,
+            args: Vec::new(),
+        })
     }
 
     /// The parts of an object without a schema whose name is unique.
     fn named(name: &str) -> Self {
+        let names = vec![name.to_string()];
         let name = quote_identifier(name);
-        Self { schema: None, identity: name.clone(), name: Some(name) }
+        Self { schema: None, identity: name.clone(), name: Some(name), names, args: Vec::new() }
+    }
+
+    /// The parts with the names and the arguments `names` and `args`.
+    fn with(mut self, names: Vec<String>, args: Vec<String>) -> Self {
+        self.names = names;
+        self.args = args;
+        self
     }
 }
 
@@ -61,6 +79,32 @@ fn identify_object(call: &Call<'_>, args: &[Value]) -> Result<Value> {
         values[3] = Value::Text(parts.identity);
     }
     Ok(Value::Record(Box::new(Record::new(vec![oid::TEXT; 4], values))))
+}
+
+/// `pg_identify_object_as_address(oid, oid, integer)`: the type of the object, and the names and the arguments that `pg_get_object_address` takes to find it.
+fn identify_object_as_address(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let (class, oid) = (oid_arg(args, 0)?, oid_arg(args, 1)?);
+    let sub = args
+        .get(2)
+        .and_then(Value::as_i64)
+        .and_then(|n| i32::try_from(n).ok())
+        .ok_or_else(bad_value)?;
+    let object = ObjRef { class, oid, sub };
+    let kind = type_description(object, call.session)?;
+    let mut values = vec![Value::Text(kind), Value::Null, Value::Null];
+    if let Some(parts) = parts(object, call.session) {
+        let array = |list: Vec<String>| {
+            Value::Array(Box::new(rupg_types::Array::one(
+                list.into_iter().map(|s| Some(Value::Text(s))).collect(),
+            )))
+        };
+        values[1] = array(parts.names);
+        values[2] = array(parts.args);
+    }
+    Ok(Value::Record(Box::new(Record::new(
+        vec![oid::TEXT, oid::TEXT_ARRAY, oid::TEXT_ARRAY],
+        values,
+    ))))
 }
 
 /// `getObjectTypeDescription` with `missing_ok`: the kind of the object.
@@ -187,6 +231,7 @@ fn parts(object: ObjRef, session: &dyn Session) -> Option<Parts> {
             if object.sub != 0 {
                 let column = column_name(oid, object.sub, session)?;
                 parts.identity = format!("{}.{}", parts.identity, quote_identifier(column));
+                parts.names.push(column.to_string());
             }
             Some(parts)
         }
@@ -195,14 +240,18 @@ fn parts(object: ObjRef, session: &dyn Session) -> Option<Parts> {
                 Some(proc) => proc.namespace,
                 None => catalog?.function(oid)?.namespace,
             };
-            Some(Parts { schema: Some(namespace), name: None, identity: procedure(oid, session)? })
+            let (identity, names, args) = procedure(oid, session)?;
+            Some(Parts { schema: Some(namespace), name: None, identity, names, args })
         }
         PG_TYPE => {
             let (name, namespace) = reg::type_name(oid, session)?;
+            let identity = reg::type_text_qualified(oid, session)?;
             Some(Parts {
                 schema: Some(namespace),
                 name: Some(quote_identifier(name)),
-                identity: reg::type_text_qualified(oid, session)?,
+                names: vec![identity.clone()],
+                identity,
+                args: Vec::new(),
             })
         }
         PG_CAST => {
@@ -213,24 +262,31 @@ fn parts(object: ObjRef, session: &dyn Session) -> Option<Parts> {
                     (cast.source, cast.target)
                 }
             };
-            Some(Parts::identity(format!(
-                "({} AS {})",
+            let (source, target) = (
                 reg::type_text_qualified(source, session)?,
-                reg::type_text_qualified(target, session)?
-            )))
+                reg::type_text_qualified(target, session)?,
+            );
+            Some(
+                Parts::identity(format!("({source} AS {target})")).with(vec![source], vec![target]),
+            )
         }
         PG_COLLATION => in_catalog(Named::Collation, oid, session),
         PG_CONSTRAINT => {
             let con = catalog?.constraint(oid)?;
-            let on = if con.relation != 0 {
-                relation(con.relation, session)?
+            let (on, names, args) = if con.relation != 0 {
+                let (on, mut names) = relation_parts(con.relation, session)?;
+                names.push(con.name.clone());
+                (on, names, Vec::new())
             } else {
-                reg::type_text_qualified(con.domain, session)?
+                let on = reg::type_text_qualified(con.domain, session)?;
+                (on.clone(), vec![on], vec![con.name.clone()])
             };
             Some(Parts {
                 schema: Some(con.namespace),
                 name: None,
                 identity: format!("{} on {on}", quote_identifier(&con.name)),
+                names,
+                args,
             })
         }
         PG_CONVERSION => match builtin::named_by_oid(Named::Conversion, oid) {
@@ -243,19 +299,19 @@ fn parts(object: ObjRef, session: &dyn Session) -> Option<Parts> {
         PG_ATTRDEF => {
             let default = catalog?.defaults().find(|d| d.oid == oid)?;
             let column = column_name(default.relation, i32::from(default.column), session)?;
-            Some(Parts::identity(format!(
-                "for {}.{}",
-                relation(default.relation, session)?,
-                quote_identifier(column)
-            )))
+            let (on, mut names) = relation_parts(default.relation, session)?;
+            names.push(column.to_string());
+            Some(
+                Parts::identity(format!("for {on}.{}", quote_identifier(column)))
+                    .with(names, Vec::new()),
+            )
         }
         PG_LANGUAGE => builtin::owned_by_oid(Owned::Language, oid)
             .map(|l| l.name)
             .or_else(|| catalog?.languages().find(|l| l.oid == oid).map(|l| l.name.as_str()))
             .map(Parts::named),
-        PG_LARGEOBJECT => {
-            builtin::owned_by_oid(Owned::LargeObject, oid).map(|_| Parts::identity(oid.to_string()))
-        }
+        PG_LARGEOBJECT => builtin::owned_by_oid(Owned::LargeObject, oid)
+            .map(|_| Parts::identity(oid.to_string()).with(vec![oid.to_string()], Vec::new())),
         PG_OPERATOR => {
             let op = builtin::operator_by_oid(oid)?;
             let arg = |ty: u32| {
@@ -265,33 +321,41 @@ fn parts(object: ObjRef, session: &dyn Session) -> Option<Parts> {
                     reg::type_text_qualified(ty, session)
                 }
             };
-            let identity = format!(
-                "{}.{}({},{})",
-                quote_identifier(reg::namespace_name(op.namespace, session)?),
-                op.name,
-                arg(op.left)?,
-                arg(op.right)?
-            );
-            Some(Parts { schema: Some(op.namespace), name: None, identity })
+            let schema = reg::namespace_name(op.namespace, session)?;
+            let (left, right) = (arg(op.left)?, arg(op.right)?);
+            let identity = format!("{}.{}({left},{right})", quote_identifier(schema), op.name);
+            let names = vec![schema.to_string(), op.name.to_string()];
+            let args = [(op.left, left), (op.right, right)]
+                .into_iter()
+                .filter(|(ty, _)| *ty != 0)
+                .map(|(_, t)| t)
+                .collect();
+            Some(Parts { schema: Some(op.namespace), name: None, identity, names, args })
         }
         PG_OPCLASS => method_parts(Named::Opclass, oid, session),
         PG_OPFAMILY => method_parts(Named::Opfamily, oid, session),
         PG_AM => builtin::access_method_name(oid).map(Parts::named),
         PG_AMOP => amop_parts(oid, session).and_then(|(family, left, right, n, _)| {
-            Some(Parts::identity(format!(
-                "operator {n} ({}, {}) of {}",
+            let (left, right) = (
                 reg::type_text_qualified(left, session)?,
                 reg::type_text_qualified(right, session)?,
-                method_parts(Named::Opfamily, family, session)?.identity
-            )))
+            );
+            let family = method_parts(Named::Opfamily, family, session)?;
+            let identity = format!("operator {n} ({left}, {right}) of {}", family.identity);
+            let mut names = family.names;
+            names.push(n.to_string());
+            Some(Parts::identity(identity).with(names, vec![left, right]))
         }),
         PG_AMPROC => amproc_parts(oid, session).and_then(|(family, left, right, n, _)| {
-            Some(Parts::identity(format!(
-                "function {n} ({}, {}) of {}",
+            let (left, right) = (
                 reg::type_text_qualified(left, session)?,
                 reg::type_text_qualified(right, session)?,
-                method_parts(Named::Opfamily, family, session)?.identity
-            )))
+            );
+            let family = method_parts(Named::Opfamily, family, session)?;
+            let identity = format!("function {n} ({left}, {right}) of {}", family.identity);
+            let mut names = family.names;
+            names.push(n.to_string());
+            Some(Parts::identity(identity).with(names, vec![left, right]))
         }),
         PG_REWRITE => {
             let catalog = catalog?;
@@ -302,27 +366,15 @@ fn parts(object: ObjRef, session: &dyn Session) -> Option<Parts> {
                     (rule.name.as_str(), rule.relation)
                 }
             };
-            Some(Parts::identity(format!(
-                "{} on {}",
-                quote_identifier(name),
-                relation(on, session)?
-            )))
+            Some(named_on(name, on, session)?)
         }
         rupg_catalog::PG_POLICY => {
             let policy = catalog?.policy(oid)?;
-            Some(Parts::identity(format!(
-                "{} on {}",
-                quote_identifier(&policy.name),
-                relation(policy.relation, session)?
-            )))
+            named_on(&policy.name, policy.relation, session)
         }
         PG_TRIGGER => {
             let trigger = catalog?.trigger(oid)?;
-            Some(Parts::identity(format!(
-                "{} on {}",
-                quote_identifier(&trigger.name),
-                relation(trigger.relation, session)?
-            )))
+            named_on(&trigger.name, trigger.relation, session)
         }
         PG_NAMESPACE => reg::namespace_name(oid, session).map(Parts::named),
         PG_TS_PARSER => in_catalog(Named::Parser, oid, session),
@@ -344,18 +396,47 @@ fn parts(object: ObjRef, session: &dyn Session) -> Option<Parts> {
             let stat = catalog?.stat_ext(oid)?;
             Parts::in_schema(stat.namespace, &stat.name, session)
         }
+        rupg_catalog::PG_DEFAULT_ACL => {
+            let acl = catalog?.default_acl(oid)?;
+            let role = rupg_pgcatalog::roles::current().name(acl.role)?.to_string();
+            let mut identity = format!("for role {}", quote_identifier(&role));
+            let mut names = vec![role];
+            if acl.namespace != 0 {
+                let schema = reg::namespace_name(acl.namespace, session)?;
+                identity.push_str(&format!(" in schema {}", quote_identifier(schema)));
+                names.push(schema.to_string());
+            }
+            let kind = match acl.objtype {
+                b'r' => "tables",
+                b'S' => "sequences",
+                b'f' => "functions",
+                b'T' => "types",
+                b'n' => "schemas",
+                _ => "large objects",
+            };
+            identity.push_str(&format!(" on {kind}"));
+            Some(Parts::identity(identity).with(names, vec![char::from(acl.objtype).to_string()]))
+        }
         _ => None,
     }
 }
 
-/// `getRelationIdentity`: the name of the relation with its schema.
-fn relation(oid: u32, session: &dyn Session) -> Option<String> {
+/// `getRelationIdentity`: the name of the relation with its schema, and the schema and the name as a list.
+fn relation_parts(oid: u32, session: &dyn Session) -> Option<(String, Vec<String>)> {
     let (name, namespace) = reg::class_name(oid, session)?;
-    Some(reg::qualified(Some(reg::namespace_name(namespace, session)?), name))
+    let schema = reg::namespace_name(namespace, session)?;
+    Some((reg::qualified(Some(schema), name), vec![schema.to_string(), name.to_string()]))
 }
 
-/// `format_procedure_qualified`: the name of the function with its schema, and the types of its arguments with their schemas.
-fn procedure(oid: u32, session: &dyn Session) -> Option<String> {
+/// The parts of a rule, a trigger or a policy `name` on the relation `on`.
+fn named_on(name: &str, on: u32, session: &dyn Session) -> Option<Parts> {
+    let (on, mut names) = relation_parts(on, session)?;
+    names.push(name.to_string());
+    Some(Parts::identity(format!("{} on {on}", quote_identifier(name))).with(names, Vec::new()))
+}
+
+/// `format_procedure_qualified` and `format_procedure_parts`: the name of the function with its schema and the types of its arguments with their schemas, and the schema, the name and the types as lists.
+fn procedure(oid: u32, session: &dyn Session) -> Option<(String, Vec<String>, Vec<String>)> {
     let (name, namespace, args) = match builtin::proc_by_oid(oid) {
         Some(proc) => (proc.name, proc.namespace, proc.argtypes),
         None => {
@@ -365,8 +446,13 @@ fn procedure(oid: u32, session: &dyn Session) -> Option<String> {
     };
     let args: Vec<String> =
         args.iter().map(|&ty| reg::type_text_qualified(ty, session)).collect::<Option<_>>()?;
-    let name = reg::qualified(Some(reg::namespace_name(namespace, session)?), name);
-    Some(format!("{name}({})", args.join(",")))
+    let schema = reg::namespace_name(namespace, session)?;
+    let qualified = reg::qualified(Some(schema), name);
+    Some((
+        format!("{qualified}({})", args.join(",")),
+        vec![schema.to_string(), name.to_string()],
+        args,
+    ))
 }
 
 /// The parts of a collation or an object of text search, built in or of the catalog.
@@ -381,6 +467,7 @@ fn method_parts(kind: Named, oid: u32, session: &dyn Session) -> Option<Parts> {
     let mut parts = Parts::in_schema(namespace, &name, session)?;
     let method = builtin::access_method_name(method)?;
     parts.identity = format!("{} USING {}", parts.identity, quote_identifier(method));
+    parts.names.insert(0, method.to_string());
     Some(parts)
 }
 
@@ -388,6 +475,7 @@ fn method_parts(kind: Named, oid: u32, session: &dyn Session) -> Option<Parts> {
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     let kernel: Kernel = match src {
         "pg_identify_object" => identify_object,
+        "pg_identify_object_as_address" => identify_object_as_address,
         _ => return None,
     };
     Some(kernel)

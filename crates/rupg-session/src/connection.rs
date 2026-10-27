@@ -4177,6 +4177,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/object_address.test")));
     }
 
+    /// `pg_identify_object_as_address` gives the names and the arguments that `pg_get_object_address` takes to find each kind of object again, and null lists for an object that does not exist. `connection/identify_as_address.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn identify_as_address() {
+        big_stack(|| script(include_str!("connection/identify_as_address.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {
