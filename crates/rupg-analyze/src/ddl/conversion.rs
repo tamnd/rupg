@@ -11,7 +11,7 @@ use rupg_types::oid;
 
 use super::comment::{name_list, not_owner};
 use super::drop::quote_identifier;
-use super::{Definer, PG_TOAST_NAMESPACE, not_yet};
+use super::{Definer, not_yet};
 use crate::typename::names;
 
 /// `PG_SQL_ASCII`: the number of the encoding `SQL_ASCII`.
@@ -216,26 +216,11 @@ impl Definer<'_, '_> {
     pub(super) fn alter_conversion_schema(&mut self, stmt: &AlterObjectSchemaStmt) -> Result<()> {
         let conversion = self.conversion_row(stmt.object.as_ref())?;
         let schema = stmt.newschema.as_deref().unwrap_or_default();
-        let namespace = self.an.schema(schema).ok_or_else(|| {
-            Error::new(SqlState::UNDEFINED_SCHEMA, format!("schema \"{schema}\" does not exist"))
-        })?;
-        self.check_create_in(namespace, None)?;
+        let namespace = self.lookup_creation_namespace(schema)?;
         if conversion.namespace == namespace {
             return Ok(());
         }
-        let temp = |ns: u32| self.catalog.is_temp_schema(ns);
-        if temp(namespace) || temp(conversion.namespace) {
-            return Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                "cannot move objects into or out of temporary schemas",
-            ));
-        }
-        if namespace == PG_TOAST_NAMESPACE || conversion.namespace == PG_TOAST_NAMESPACE {
-            return Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                "cannot move objects into or out of TOAST schema",
-            ));
-        }
+        self.check_set_namespace(conversion.namespace, namespace)?;
         if !self.is_superuser() && !self.owns(conversion.owner) {
             return Err(not_owner("conversion", &conversion.name));
         }
