@@ -14,6 +14,7 @@ use rupg_analyze::{
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::Session;
 use rupg_pgcatalog::{Batch, Values};
+use rupg_plan::Scanned;
 use rupg_types::{Array, Record, Value, oid};
 
 /// The attribute number of the system column `xmin`.
@@ -892,7 +893,7 @@ fn bound(context: &[usize], own: &[usize]) -> Vec<usize> {
     (0..context.len()).filter(|r| context[*r] != NONE && !own.contains(r)).collect()
 }
 
-/// The tuples of the query before the target list: the parts of `FROM` joined with a cross join, and the `WHERE` condition. Each part of `WHERE` that `AND` joins goes down to the smallest part of `FROM` that has its relations, where the query can test it on fewer rows. `test` gives true when a condition is true for a tuple. The tuples come in the order `planned` of the joins of the plan, which [`rupg_opt::join_order`] gives, when it has each relation of `FROM`.
+/// The tuples of the query before the target list: the parts of `FROM` joined with a cross join, and the `WHERE` condition. Each part of `WHERE` that `AND` joins goes down to the smallest part of `FROM` that has its relations, where the query can test it on fewer rows. `test` gives true when a condition is true for a tuple. The tuples come in the order `planned` of the joins of the plan, which [`rupg_opt::join_order`] gives, when it has each relation of `FROM`. The rows of a relation of an index scan come in the order of the keys of the index, and the rows with the same keys in the order of the heap, as a `btree` index keeps them.
 ///
 /// # Errors
 ///
@@ -902,7 +903,7 @@ pub(crate) fn tuples(
     tables: &Tables,
     test: &mut Test<'_>,
     source: &mut Source<'_>,
-    planned: Option<&[(usize, bool)]>,
+    planned: Option<(&[Scanned], &dyn Session)>,
 ) -> Result<Vec<Vec<usize>>> {
     let width = query.relations.len();
     let mut scan = Scan { tables, width, test, source };
@@ -969,16 +970,32 @@ pub(crate) fn tuples(
     let mut acc = keep(acc, &rest, scan.test)?;
     let mut all: Vec<usize> = items.iter().flat_map(|(_, r)| r.iter().copied()).collect();
     all.sort_unstable();
-    let planned = planned.filter(|planned| {
-        let mut relations: Vec<usize> = planned.iter().map(|&(r, _)| r).collect();
+    let planned = planned.filter(|(planned, _)| {
+        let mut relations: Vec<usize> = planned.iter().map(|s| s.relation).collect();
         relations.sort_unstable();
         relations == all
     });
-    if let Some(planned) = planned {
+    if let Some((planned, session)) = planned {
+        let mut ranks = Vec::with_capacity(planned.len());
+        for s in planned {
+            ranks.push(if s.keys.is_empty() {
+                None
+            } else {
+                Some(index_ranks(tables, s, &acc, session)?)
+            });
+        }
         let cmp = |a: &Vec<usize>, b: &Vec<usize>| {
             planned
                 .iter()
-                .map(|&(r, reverse)| if reverse { b[r].cmp(&a[r]) } else { a[r].cmp(&b[r]) })
+                .zip(&ranks)
+                .map(|(s, rank)| {
+                    let at = |row: usize| match rank {
+                        Some(rank) => rank.get(&row).copied().unwrap_or(row),
+                        None => row,
+                    };
+                    let (x, y) = (at(a[s.relation]), at(b[s.relation]));
+                    if s.reverse { y.cmp(&x) } else { x.cmp(&y) }
+                })
                 .find(|o| o.is_ne())
                 .unwrap_or(Ordering::Equal)
         };
@@ -991,6 +1008,33 @@ pub(crate) fn tuples(
         acc.sort_by(|a, b| columns.iter().map(|&c| a[c]).cmp(columns.iter().map(|&c| b[c])));
     }
     Ok(acc)
+}
+
+/// The place of each row of the relation of the index scan `scanned` in the tuples `acc`, in the order of the keys of the index and then of the heap. A null row of an outer join keeps its number, after the others.
+fn index_ranks(
+    tables: &Tables,
+    scanned: &Scanned,
+    acc: &[Vec<usize>],
+    session: &dyn Session,
+) -> Result<BTreeMap<usize, usize>> {
+    let r = scanned.relation;
+    let rows = &tables.rows[r];
+    let mut ids: Vec<usize> = acc.iter().map(|t| t[r]).filter(|&row| row < rows.len()).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    let keys = crate::sort::Keys::new(&scanned.keys, &tables.types[r], session)?;
+    let mut error = None;
+    ids.sort_by(|&x, &y| {
+        let order = keys.compare(&rows[x], &rows[y]).unwrap_or_else(|e| {
+            error.get_or_insert(e);
+            Ordering::Equal
+        });
+        order.then(x.cmp(&y))
+    });
+    if let Some(error) = error {
+        return Err(error);
+    }
+    Ok(ids.into_iter().enumerate().map(|(rank, row)| (row, rank)).collect())
 }
 
 /// The order of the parts of `FROM` for the joins of [`tuples`], as `join_search_one_level` makes a join with no condition only when no other join has one: the written order, but when the next part has no `=` with the parts before it that a hash join can test, the first later part that has one comes first, so that the join does not make all the tuples of a cross join. `None` when the order is the written one. The parts keep the written order when a part reads other relations, as `LATERAL` lets it, or when the condition of a join in a part reads other parts.

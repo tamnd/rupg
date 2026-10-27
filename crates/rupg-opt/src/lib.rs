@@ -24,11 +24,11 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use rupg_analyze::{
-    Cte, Expr, ExprKind, FromItem, JoinKind, Query, Relation, SetOp, SetTree, SubLink, SubLinkKind,
-    TABLE_OID_ATTNUM, Var, Write, WriteKind,
+    Cte, Expr, ExprKind, FromItem, JoinKind, Query, Relation, SetOp, SetTree, SortGroup, SubLink,
+    SubLinkKind, TABLE_OID_ATTNUM, Var, Write, WriteKind,
 };
 use rupg_plan::{
-    Grouped, HashTable, HashTables, Item, Kind, Label, Leaf, Node, Operation, Plan, Scope,
+    Grouped, HashTable, HashTables, Item, Kind, Label, Leaf, Node, Operation, Plan, Scanned, Scope,
     Statistic, SubPlan,
 };
 use rupg_types::{Value, oid};
@@ -332,8 +332,8 @@ pub fn plan<'q>(query: &'q Query, members: &'q dyn Members) -> Plan<'q> {
     plan
 }
 
-/// The order of the rows of the joins of the plan `plan` of a query, as `ExecNestLoop` and `ExecHashJoin` give them: the relations of the query from the outermost loop to the innermost one, each with true when its rows come in the reverse order of the scan. A nested loop gives the rows of its inner side for each row of its outer side, and a hash join gives the rows of its inner side in the reverse order, as `ExecHashTableInsert` puts each row at the head of its bucket. `None` when the plan has a node that gives its rows in another order, such as a sort, an index scan or a merge join.
-pub fn join_order(plan: &Plan<'_>) -> Option<Vec<(usize, bool)>> {
+/// The order of the rows of the joins of the plan `plan` of `query`, as `ExecNestLoop` and `ExecHashJoin` give them: the relations of the query from the outermost loop to the innermost one, each with true when its rows come in the reverse order of the scan. A nested loop gives the rows of its inner side for each row of its outer side, and a hash join gives the rows of its inner side in the reverse order, as `ExecHashTableInsert` puts each row at the head of its bucket. An index scan gives the rows in the order of the keys of its index, which `members` gives, and a bitmap heap scan gives them in the order of the heap. `None` when the plan has a node that gives its rows in another order, such as a sort or a merge join, or an index scan of an index with an expression or an operator class that is not the default one.
+pub fn join_order(plan: &Plan<'_>, query: &Query, members: &dyn Members) -> Option<Vec<Scanned>> {
     let mut node = &plan.root;
     loop {
         match &node.kind {
@@ -345,7 +345,46 @@ pub fn join_order(plan: &Plan<'_>) -> Option<Vec<(usize, bool)>> {
         node = node.children.first()?;
     }
     let mut out = Vec::new();
-    loop_order(node, false, &mut out).then_some(out)
+    loop_order(node, false, &mut |relation, reverse, index| {
+        let keys = match index {
+            Some((index, backward)) => index_keys(query, members, relation, index, backward)?,
+            None => Vec::new(),
+        };
+        out.push(Scanned { relation, reverse, keys });
+        Some(())
+    })
+    .then_some(out)
+}
+
+/// The keys of the order of the rows of an index scan of the relation `r` by the index `index`, as `build_index_pathkeys` gives them, or the other order when `backward`. `None` when the index has an expression, or an operator class that is not the default class of the type of its column, or the relation is a catalog, whose rows have only the columns that the query reads.
+fn index_keys(
+    query: &Query,
+    members: &dyn Members,
+    r: usize,
+    index: u32,
+    backward: bool,
+) -> Option<Vec<SortGroup>> {
+    let relation = query.relations.get(r)?;
+    if rupg_pgcatalog::catalog_by_oid(relation.oid).is_some() {
+        return None;
+    }
+    let index = members.indexes(relation.oid).into_iter().find(|i| i.oid == index)?;
+    let mut out = Vec::with_capacity(index.keys.len());
+    for (i, &attnum) in index.keys.iter().enumerate() {
+        let target = usize::try_from(attnum).ok()?.checked_sub(1)?;
+        if !index.default_class.get(i).copied().unwrap_or(false) {
+            return None;
+        }
+        let ty = relation.columns.get(target)?.ty;
+        let option = index.options.get(i).copied().unwrap_or(0);
+        let desc = (option & 1 != 0) != backward;
+        let nulls_first = (option & 2 != 0) != backward;
+        let (lt, gt) = rupg_analyze::sort_operators(ty);
+        let operator = if desc { gt } else { lt };
+        let sort = rupg_pgcatalog::builtin::operator_by_oid(operator)?.code;
+        out.push(SortGroup { target, operator, sort, equal: 0, nulls_first, hashable: false });
+    }
+    Some(out)
 }
 
 /// The hash tables of the plan `plan` of `query` for `GROUP BY`, `DISTINCT` and the set operations of `query`, whose groups come in the order of the table. A table of a subquery or of a subplan is not in the list.
@@ -396,13 +435,21 @@ fn op_path(top: &SetOp, op: &SetOp, path: &mut Vec<bool>) -> bool {
     false
 }
 
-/// The relations of the join tree `node` for [`join_order`], with `reverse` for the rows of an inner side of a hash join.
-fn loop_order(node: &Node<'_>, reverse: bool, out: &mut Vec<(usize, bool)>) -> bool {
+/// The relations of the join tree `node` for [`join_order`], with `reverse` for the rows of an inner side of a hash join. `out` takes each relation with `reverse`, and with its index and true for a backward scan for an index scan.
+fn loop_order(
+    node: &Node<'_>,
+    reverse: bool,
+    out: &mut impl FnMut(usize, bool, Option<(u32, bool)>) -> Option<()>,
+) -> bool {
     let inner_or_left = |join: &JoinKind| matches!(join, JoinKind::Inner | JoinKind::Left);
+    let base = node.scope == 0 && node.member.is_none();
     match (&node.kind, node.children.as_slice()) {
-        (Kind::SeqScan(relation), []) if node.scope == 0 && node.member.is_none() => {
-            out.push((*relation, reverse));
-            true
+        (Kind::SeqScan(relation), []) if base => out(*relation, reverse, None).is_some(),
+        (Kind::BitmapHeapScan { relation, .. }, [_]) if base => {
+            out(*relation, reverse, None).is_some()
+        }
+        (Kind::IndexScan { relation, index, backward, .. }, []) if base => {
+            out(*relation, reverse, Some((*index, *backward))).is_some()
         }
         (Kind::Materialize | Kind::Memoize(_), [child]) => loop_order(child, reverse, out),
         (Kind::NestedLoop { join, .. }, [outer, inner]) if inner_or_left(join) => {

@@ -1,0 +1,154 @@
+> create table t (a int, b int, c text);
+CREATE TABLE
+> insert into t select (i * 7) % 10, i, 'x' || (i % 3) from generate_series(1, 40) i;
+INSERT 0 40
+> create index t_a_b on t (a, b);
+CREATE INDEX
+> create index t_c on t (c desc);
+CREATE INDEX
+> analyze t;
+ANALYZE
+> set enable_seqscan = off;
+SET
+> set enable_bitmapscan = off;
+SET
+> explain (costs off) select a, b from t where a in (3, 1) and b > 10;
+fields QUERY PLAN:25:-1:-1
+row Index Only Scan using t_a_b on t
+row   Index Cond: ((a = ANY ('{3,1}'::integer[])) AND (b > 10))
+EXPLAIN
+> select a, b from t where a in (3, 1) and b > 10;
+fields a@t.1:23:4:-1,b@t.2:23:4:-1
+row 1,13
+row 1,23
+row 1,33
+row 3,19
+row 3,29
+row 3,39
+SELECT 6
+> select * from t where a = 4;
+fields a@t.1:23:4:-1,b@t.2:23:4:-1,c@t.3:25:-1:-1
+row 4,2,x2
+row 4,12,x0
+row 4,22,x1
+row 4,32,x2
+SELECT 4
+> select * from t where a < 3 and b < 20;
+fields a@t.1:23:4:-1,b@t.2:23:4:-1,c@t.3:25:-1:-1
+row 0,10,x1
+row 1,3,x0
+row 1,13,x1
+row 2,6,x0
+row 2,16,x1
+SELECT 5
+> explain (costs off) select c, b from t where c > 'x0';
+fields QUERY PLAN:25:-1:-1
+row Index Scan using t_c on t
+row   Index Cond: (c > 'x0'::text)
+EXPLAIN
+> select c, b from t where c > 'x0' limit 8;
+fields c@t.3:25:-1:-1,b@t.2:23:4:-1
+row x2,2
+row x2,5
+row x2,8
+row x2,11
+row x2,14
+row x2,17
+row x2,20
+row x2,23
+SELECT 8
+> explain (costs off) select * from t where a = 2 order by a desc, b desc;
+fields QUERY PLAN:25:-1:-1
+row Index Scan Backward using t_a_b on t
+row   Index Cond: (a = 2)
+EXPLAIN
+> select * from t where a = 2 order by a desc, b desc;
+fields a@t.1:23:4:-1,b@t.2:23:4:-1,c@t.3:25:-1:-1
+row 2,36,x0
+row 2,26,x2
+row 2,16,x1
+row 2,6,x0
+SELECT 4
+> create table u (k int, v text);
+CREATE TABLE
+> insert into u select i, 'v' || i from generate_series(0, 9) i;
+INSERT 0 10
+> reset enable_seqscan;
+RESET
+> explain (costs off) select t.a, t.b, u.v from u join t on t.a = u.k where u.k < 3;
+fields QUERY PLAN:25:-1:-1
+row Hash Join
+row   Hash Cond: (u.k = t.a)
+row   ->  Seq Scan on u
+row         Filter: (k < 3)
+row   ->  Hash
+row         ->  Seq Scan on t
+EXPLAIN
+> select t.a, t.b, u.v from u join t on t.a = u.k where u.k < 3;
+fields a@t.1:23:4:-1,b@t.2:23:4:-1,v@u.2:25:-1:-1
+row 0,40,v0
+row 0,30,v0
+row 0,20,v0
+row 0,10,v0
+row 1,33,v1
+row 1,23,v1
+row 1,13,v1
+row 1,3,v1
+row 2,36,v2
+row 2,26,v2
+row 2,16,v2
+row 2,6,v2
+SELECT 12
+> set enable_hashjoin = off;
+SET
+> set enable_mergejoin = off;
+SET
+> explain (costs off) select t.a, t.b, u.v from u join t on t.a = u.k where u.k < 3;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Seq Scan on u
+row         Filter: (k < 3)
+row   ->  Index Only Scan using t_a_b on t
+row         Index Cond: (a = u.k)
+EXPLAIN
+> select t.a, t.b, u.v from u join t on t.a = u.k where u.k < 3;
+fields a@t.1:23:4:-1,b@t.2:23:4:-1,v@u.2:25:-1:-1
+row 0,10,v0
+row 0,20,v0
+row 0,30,v0
+row 0,40,v0
+row 1,3,v1
+row 1,13,v1
+row 1,23,v1
+row 1,33,v1
+row 2,6,v2
+row 2,16,v2
+row 2,26,v2
+row 2,36,v2
+SELECT 12
+> reset enable_hashjoin;
+RESET
+> reset enable_mergejoin;
+RESET
+> set enable_bitmapscan = on;
+SET
+> set enable_seqscan = off;
+SET
+> set enable_indexscan = off;
+SET
+> explain (costs off) select a, b from t where a = 5;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on t
+row   Recheck Cond: (a = 5)
+row   ->  Bitmap Index Scan on t_a_b
+row         Index Cond: (a = 5)
+EXPLAIN
+> select a, b from t where a = 5;
+fields a@t.1:23:4:-1,b@t.2:23:4:-1
+row 5,5
+row 5,15
+row 5,25
+row 5,35
+SELECT 4
+> drop table t, u;
+DROP TABLE

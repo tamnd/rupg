@@ -4017,6 +4017,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/boolean_equality.test")));
     }
 
+    /// The order of the rows of an index scan with no `ORDER BY`: the order of the keys of the index, forward or backward, and of the heap for equal keys, with `= ANY` of an array, a `DESC` key, the inner side of a nested loop and a bitmap heap scan. `connection/index_order.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn index_order() {
+        big_stack(|| script(include_str!("connection/index_order.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {
