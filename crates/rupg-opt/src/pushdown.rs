@@ -5,8 +5,10 @@
 use std::collections::BTreeSet;
 
 use rupg_analyze::{
-    BoolOp, BoolTest, Expr, ExprKind, FromItem, JoinKind, Query, Relation, SetKind, SetOp, SetTree,
+    BoolOp, BoolTest, Expr, ExprKind, FromItem, FuncForm, JoinKind, Query, Relation, SetKind,
+    SetOp, SetTree, WindowFunc,
 };
+use rupg_pgcatalog::builtin;
 use rupg_types::oid;
 
 use crate::{exprs, from, pullup, upper};
@@ -75,7 +77,9 @@ fn push(query: &mut Query, barrier: &dyn Fn(u32) -> bool, fold: FoldQual<'_>) {
             pushable(sub, part, r, &outer).then_some(r)
         })
         .collect();
-    if to.iter().all(Option::is_none) {
+    let windows =
+        query.relations.iter().any(|r| r.subquery.as_ref().is_some_and(|s| !s.windows.is_empty()));
+    if to.iter().all(Option::is_none) && !windows {
         query.filter = Some(filter);
         return;
     }
@@ -83,13 +87,160 @@ fn push(query: &mut Query, barrier: &dyn Fn(u32) -> bool, fold: FoldQual<'_>) {
     owned_parts(filter, &mut owned);
     let mut keep = Vec::new();
     for (part, to) in owned.into_iter().zip(to) {
-        match to.and_then(|r| query.relations[r].subquery.as_deref_mut().map(|sub| (r, sub))) {
-            Some((r, sub)) => push_qual(sub, r, part, Some(fold)),
-            None => keep.push(part),
+        if let Some(r) = to
+            && let Some(sub) = query.relations[r].subquery.as_deref_mut()
+        {
+            push_qual(sub, r, part, Some(fold));
+        } else if !push_run_condition(query, &part, &nullable) {
+            keep.push(part);
         }
     }
     query.filter = and_all(keep);
 }
+
+/// The case `PUSHDOWN_WINDOWCLAUSE_RUNCOND` of `set_subquery_pathlist`: a part of `WHERE` that cannot move into the subquery that it reads, because it reads a call of a window function, can be a run condition of the window of the call. The result is true when the run condition does all the work of the part, so that the query does not test the part again.
+fn push_run_condition(query: &mut Query, part: &Expr, nullable: &[usize]) -> bool {
+    let rels = exprs::relations(part);
+    let [r] = rels.iter().copied().collect::<Vec<_>>()[..] else { return false };
+    let Some(relation) = query.relations.get_mut(r) else { return false };
+    if relation.cte.is_some() || nullable.contains(&r) {
+        return false;
+    }
+    let Some(sub) = relation.subquery.as_deref_mut() else { return false };
+    if sub.windows.is_empty() || sub.set_op.is_some() {
+        return false;
+    }
+    // `qual_is_pushdown_safe` gives `PUSHDOWN_WINDOWCLAUSE_RUNCOND` only when a column that is not an item of `PARTITION BY` is the reason that the part stays above.
+    let Some((columns, volatile)) = safety_of(sub, false) else { return false };
+    if !safe(part, r, &BTreeSet::new(), &columns, volatile) {
+        return false;
+    }
+    match run_condition(sub, part, r) {
+        Some((window, condition, keep)) => {
+            sub.windows[window].run.push(condition);
+            !keep
+        }
+        None => false,
+    }
+}
+
+/// `check_and_push_window_quals` and `find_window_run_conditions`: for a strict operator of two arguments, one a column of the subquery `r` that is a call of a window function and the other a value that does not change in the partition, the window of the call, the run condition, and true when the query must also test the part. The support function of the window function says that the value of the call only goes up or only goes down in a partition. A condition `<` or `<=` on a value that goes up, or `>` or `>=` on a value that goes down, is true for the first rows of the partition and then false, so it does all the work of the part. An equality on a value that goes in one direction gives a condition `<=` or `>=`, and the query still tests the equality.
+fn run_condition(sub: &Query, part: &Expr, r: usize) -> Option<(usize, Expr, bool)> {
+    let ExprKind::Func(op) = &part.kind else { return None };
+    let FuncForm::Operator(opno) = op.form else { return None };
+    if op.args.len() != 2 || !builtin::proc_by_oid(op.oid).is_some_and(|p| p.strict) {
+        return None;
+    }
+    for (side, wfunc_left) in [(0, true), (1, false)] {
+        let ExprKind::Var(v) = &op.args[side].kind else { continue };
+        if v.levels_up != 0 || v.relation != r || v.attnum <= 0 {
+            continue;
+        }
+        let target = usize::try_from(v.attnum - 1).ok().and_then(|at| sub.targets.get(at))?;
+        let mut call = &target.expr;
+        while let ExprKind::Relabel(inner, _) = &call.kind {
+            call = inner;
+        }
+        let ExprKind::Window(w) = &call.kind else { continue };
+        if let Some(found) = window_run_condition(sub, call, w, part, opno, wfunc_left) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// `MONOTONICFUNC_INCREASING`.
+const INCREASING: u8 = 1;
+/// `MONOTONICFUNC_DECREASING`.
+const DECREASING: u8 = 2;
+
+/// `SupportRequestWFuncMonotonic`: the directions in which the value of a call of a window function can go in a partition, as the support functions of `row_number` and the other functions of the rank of a row, and `int8inc_support` for `count`, give them. `None` for a function with no support function.
+fn monotonic(w: &WindowFunc, frame: i32, ordered: bool) -> Option<u8> {
+    let proc = builtin::proc_by_oid(w.oid)?;
+    match proc.name {
+        "row_number" | "rank" | "dense_rank" | "percent_rank" | "cume_dist" | "ntile" => {
+            Some(INCREASING)
+        }
+        "count" if w.agg => {
+            // `FRAMEOPTION_EXCLUSION`: only `EXCLUDE CURRENT ROW` of `count(*)` with no filter keeps the direction.
+            if frame & 0x38000 != 0
+                && (frame & 0x8000 == 0 || !w.args.is_empty() || w.filter.is_some())
+            {
+                return Some(0);
+            }
+            // With no `ORDER BY` in `RANGE` mode all rows are peers.
+            if !ordered && frame & 0x2 != 0 {
+                return Some(INCREASING | DECREASING);
+            }
+            let mut out = 0;
+            if frame & 0x20 != 0 {
+                out |= INCREASING;
+            }
+            if frame & 0x100 != 0 {
+                out |= DECREASING;
+            }
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
+/// `find_window_run_conditions` for the call `call` of the window function `w`: the window of the call, the run condition, and true when the query must also test the part.
+fn window_run_condition(
+    sub: &Query,
+    call: &Expr,
+    w: &WindowFunc,
+    part: &Expr,
+    opno: u32,
+    wfunc_left: bool,
+) -> Option<(usize, Expr, bool)> {
+    let ExprKind::Func(op) = &part.kind else { return None };
+    if call.find(0, &mut |e, _| matches!(e.kind, ExprKind::SubLink(_)).then_some(())).is_some() {
+        return None;
+    }
+    // `is_pseudo_constant_clause`: the other side reads no column and calls no volatile function.
+    let other = &op.args[usize::from(wfunc_left)];
+    let reads_column = other
+        .find(0, &mut |e, _| {
+            matches!(e.kind, ExprKind::Var(_) | ExprKind::SubLink(_)).then_some(())
+        })
+        .is_some();
+    if reads_column || exprs::volatile(other) {
+        return None;
+    }
+    let window = w.winref.checked_sub(1)?;
+    let clause = sub.windows.get(window)?;
+    let monotonic = monotonic(w, clause.frame.options, !clause.order.is_empty())?;
+    if monotonic == 0 {
+        return None;
+    }
+    // `get_op_index_interpretation`: the strategy of the operator in its first family of `btree`.
+    let amop =
+        builtin::amops_of_operator(opno).find(|a| a.method == BTREE_AM && a.purpose == b's')?;
+    let (up, down) = (monotonic & INCREASING != 0, monotonic & DECREASING != 0);
+    let (operator, keep) = match amop.strategy {
+        1 | 2 if (wfunc_left && up) || (!wfunc_left && down) => (opno, false),
+        4 | 5 if (wfunc_left && down) || (!wfunc_left && up) => (opno, false),
+        3 if up && down => (opno, false),
+        3 => {
+            let strategy = if up == wfunc_left { 2 } else { 4 };
+            let operator = builtin::opfamily_member(amop.family, amop.left, amop.right, strategy)?;
+            (operator, true)
+        }
+        _ => return None,
+    };
+    let code = builtin::operator_by_oid(operator)?.code;
+    let mut args = op.args.clone();
+    args[usize::from(!wfunc_left)] = call.clone();
+    let mut func = op.clone();
+    func.oid = code;
+    func.form = FuncForm::Operator(operator);
+    func.args = args;
+    Some((window, Expr::new(ExprKind::Func(func), part.ty), keep))
+}
+
+/// `BTREE_AM_OID`.
+const BTREE_AM: u32 = 403;
 
 /// `set_subquery_pathlist` for the executor: each part of `WHERE` that reads only a view with `security_barrier` of the list of `FROM`, or a volatile part that reads no relation when the view is the only item of `FROM`, moves into the view when it is leakproof, as `qual_is_pushdown_safe` lets such a condition pass the barrier. `barrier` is true for a view with `security_barrier`. The other parts stay above the view.
 pub(crate) fn push_barrier(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
@@ -312,6 +463,11 @@ fn lateral_union(query: &Query, rels: &BTreeSet<usize>) -> Option<(usize, BTreeS
 
 /// `subquery_is_pushdown_safe` and `check_output_expressions`: `None` for a subquery that takes no condition, or for each column of the subquery true when a condition that reads it stays outside, with true when a condition that calls a volatile function stays outside. The subquery has no `LIMIT`, no `OFFSET` and no grouping sets with `GROUP BY`. For a set operation, each `SELECT` must take the condition. A condition stays outside when it reads a column that calls a function that gives a set or a volatile function, a column that is not an item of `DISTINCT ON`, or a column that is not an item of `PARTITION BY` of each window, which a run condition of the window could use.
 fn safety(sub: &Query) -> Option<(Vec<bool>, bool)> {
+    safety_of(sub, true)
+}
+
+/// [`safety`], where a column that is not an item of `PARTITION BY` of each window keeps a condition outside only when `windows` is true.
+fn safety_of(sub: &Query, windows: bool) -> Option<(Vec<bool>, bool)> {
     if sub.limit.is_some()
         || sub.offset.is_some()
         || !sub.group.is_empty() && !sub.grouping_sets.is_empty()
@@ -330,7 +486,8 @@ fn safety(sub: &Query) -> Option<(Vec<bool>, bool)> {
                     || srfs && t.expr.first_set_call().is_some()
                     || exprs::volatile(&t.expr)
                     || sub.distinct_on && !sub.distinct.iter().any(|d| d.target == at)
-                    || sub.windows.iter().any(|w| !w.partition.iter().any(|p| p.target == at))
+                    || windows
+                        && sub.windows.iter().any(|w| !w.partition.iter().any(|p| p.target == at))
             })
             .collect();
         return Some((columns, volatile));

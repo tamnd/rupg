@@ -593,9 +593,16 @@ impl Explainer<'_, '_> {
                     self.w.integer("Subplans Removed", None, 0);
                 }
             }
-            Kind::WindowAgg { name, window, rows_frame, partition, .. } => {
+            Kind::WindowAgg { name, window, rows_frame, partition, run, .. } => {
                 let spec = self.texts.window(scope, *window, *rows_frame, partition, upper)?;
                 self.w.text("Window", &format!("{} AS {spec}", self.texts.quote(name)));
+                let run: Vec<Item<'_>> = run.iter().map(Item::of).collect();
+                self.qual("Run Condition", scope, &run, upper)?;
+                // The calls of the windows below are columns of the input.
+                self.texts.below(computed(node));
+                let filter = self.qual("Filter", scope, &node.filter, upper);
+                self.texts.below(Vec::new());
+                filter?;
             }
             Kind::Modify { operation, targets, conflict, .. } => {
                 self.modify_targets(node, operation.name(), targets);

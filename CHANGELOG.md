@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- EXPLAIN now shows the run conditions of a WindowAgg. A filter on a monotonic window function, such as `rn < 3` on `row_number()`, becomes a "Run Condition" as in PostgreSQL, and the filter of the subquery scan stays only when PostgreSQL keeps it. (#895)
+
 ## 0.3.3 (2026-10-27)
 
 ### Added
