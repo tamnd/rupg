@@ -6,7 +6,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- A new scan of `ROWS FROM` on the inner side of a join now runs again only the calls that read the other relations, as `ExecReScanFunctionScan` does. The other calls give the rows of the first scan. (#909)
+- A function that returns `record` in `FROM` with a column definition list now casts its result to the types of the list, as `check_sql_fn_retval` does. A column of the list with a type modifier, such as `numeric(4,2)`, now gets that modifier, and a type that has no assignment cast now gives the error "return type mismatch". An inlinable function with a column definition list is now inlined, and its error has the context "during inlining". An error in a SQL function that gives a set in `FROM` now has the context "statement 1". (#911)
+- A new scan of `ROWS FROM` on the inner side of a join now runs again only the calls that read the other relations, as `ExecReScanFunctionScan` does. The other calls give the rows of the first scan. (#910)
 - A function in SQL in `FROM` that does not return a set now gives only the first row of its last query, or a row of nulls when the query gives no row. It gave all the rows before. (#908)
 - `CREATE FUNCTION` now takes the option `WINDOW`, which makes a window function. A call of a window function now takes named arguments and the defaults of its arguments, which the planner expands as `eval_const_expressions` does. (#907)
 - A call of a window function gets a run condition when its argument is a subquery that came from a column of a merged subquery, as in PostgreSQL, where `find_window_run_conditions` runs before the planner merges that subquery. (#906)

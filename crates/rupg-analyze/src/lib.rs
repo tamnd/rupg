@@ -69,9 +69,9 @@ pub use ddl::{
     Allowed, Body, CopyRelation, CopyTarget, Defined, Fill, Message, PartitionCheck,
     REGRESS_SYMBOLS, ReindexOptions, RuleTree, SchemaElements, Script, SqlBody, Take, TopLevel,
     Transform, acl_dependents, acl_roles, attnums, copy_filter, copy_insert, copy_relation,
-    copy_target, define, find_library, function_body, function_script, function_sqlbody,
-    is_definition, lock_table, owned_objects, policy_targets, policy_tree, reindex_options,
-    rewrite_insert, rule_tree, tablespace_options, trigger_when, vacuum_relations,
+    copy_target, define, find_library, function_body, function_body_for, function_script,
+    function_sqlbody, is_definition, lock_table, owned_objects, policy_targets, policy_tree,
+    reindex_options, rewrite_insert, rule_tree, tablespace_options, trigger_when, vacuum_relations,
 };
 pub use expr::{
     Aggref, BoolOp, BoolTest, Case, CastForm, CurrentOf, Expr, ExprKind, FieldStore, Func,
@@ -313,6 +313,8 @@ pub(crate) struct Analyzer<'a> {
     domain_value: Option<(u32, i32)>,
     /// The name of the function in SQL whose body the analyzer reads now, and the names of its input arguments, or `None`. A name that is no column can then be an argument, as `sql_fn_post_column_ref` finds it.
     sql_function: Option<(String, Vec<String>)>,
+    /// For the body of a function that returns `record` in `FROM` with a column definition list, the type and the type modifier of each column of the list, which the result of the body must have, as the `rettupdesc` that `check_sql_fn_retval` takes.
+    coldefs: Option<Vec<(u32, i32)>>,
     /// The number of the calls of functions that give a set that the analysis of the query has made, and the place of the last one. It takes the place of `p_last_srf`: `CASE` and `COALESCE` compare the number before and after their arguments.
     srfs: (usize, Option<usize>),
     /// `p_parent_cte`: the slot of the query of `WITH` in the scope of the query outside, while the analyzer starts the query of that query of `WITH`. The next `SELECT` takes it.
@@ -387,6 +389,7 @@ impl<'a> Analyzer<'a> {
             views: Vec::new(),
             domain_value: None,
             sql_function: None,
+            coldefs: None,
             srfs: (0, None),
             parent_cte: None,
             works: 0,

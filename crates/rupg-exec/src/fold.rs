@@ -143,7 +143,7 @@ fn plan(
 /// `inline_function_in_from` and `inline_sql_function_in_from`: the query of the body of the one function of a relation in `FROM`, with the arguments in the places of its parameters, or `None` when the function cannot be inlined. The relation must have no `WITH ORDINALITY` and no column definition list. The arguments must have no volatile function and no subquery. The function must be in SQL, return a set and not `void`, and must not be strict, volatile or `SECURITY DEFINER` or have settings. Its body must be one `SELECT` with no `WITH`, whose columns have the types of the columns of the relation.
 fn inline_from(relation: &Relation, session: &dyn Session) -> Result<Option<Query>> {
     let Some(function) = &relation.function else { return Ok(None) };
-    let ([(call, _)], [false]) = (function.calls.as_slice(), function.coldefs.as_slice()) else {
+    let ([(call, _)], [defined]) = (function.calls.as_slice(), function.coldefs.as_slice()) else {
         return Ok(None);
     };
     let ExprKind::Func(f) = &call.kind else { return Ok(None) };
@@ -187,14 +187,20 @@ fn inline_from(relation: &Relation, session: &dyn Session) -> Result<Option<Quer
         return Ok(None);
     }
     let inputs: Vec<u32> = f.args.iter().map(|a| a.ty).collect();
-    let Ok(Some(rupg_analyze::Body::Query(mut body))) =
-        rupg_func::function_body(f.oid, &inputs, session)
-    else {
+    let wanted: Vec<(u32, i32)> = relation.columns.iter().map(|c| (c.ty, c.typmod)).collect();
+    // With a column definition list, `check_sql_fn_retval` casts the result to the types of the list, and its error is an error of the query.
+    let body = if *defined {
+        let name = builtin::proc_by_oid(f.oid).map_or("", |p| p.name);
+        rupg_func::function_body_for(f.oid, &inputs, &wanted, session)
+            .map_err(|e| e.with_context(format!("SQL function \"{name}\" during inlining")))?
+    } else {
+        rupg_func::function_body(f.oid, &inputs, session).ok().flatten()
+    };
+    let Some(rupg_analyze::Body::Query(mut body)) = body else {
         return Ok(None);
     };
     let columns: Vec<(u32, i32)> =
         body.targets.iter().filter(|t| !t.junk).map(|t| (t.expr.ty, t.expr.typmod)).collect();
-    let wanted: Vec<(u32, i32)> = relation.columns.iter().map(|c| (c.ty, c.typmod)).collect();
     if body.write.is_some()
         || !body.ctes.is_empty()
         || columns.len() != wanted.len()

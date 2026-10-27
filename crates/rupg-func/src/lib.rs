@@ -651,6 +651,16 @@ pub fn function_body(
     rupg_analyze::function_body(&reg::SessionEnv(session), func, inputs)
 }
 
+/// [`function_body`] for a call in `FROM` with a column definition list, with the type and the type modifier of each column of the list.
+pub fn function_body_for(
+    func: u32,
+    inputs: &[u32],
+    columns: &[(u32, i32)],
+    session: &dyn Session,
+) -> Result<Option<rupg_analyze::Body>> {
+    rupg_analyze::function_body_for(&reg::SessionEnv(session), func, inputs, Some(columns))
+}
+
 /// The kernel of the function with this `pg_proc` OID, or `None` if the engine does not have it.
 pub fn kernel(func: u32) -> Option<Kernel> {
     let proc = builtin::proc_by_oid(func)?;
