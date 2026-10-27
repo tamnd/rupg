@@ -3808,6 +3808,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/replica_identity_only.test")));
     }
 
+    /// The references to a query of `WITH` read the rows of one run of the query, so they see the same values of `random` and `nextval`, also with `NOT MATERIALIZED`, which `inline_cte` ignores for a query with a volatile function, and for a recursive query. `connection/cte_shared.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn cte_shared() {
+        big_stack(|| script(include_str!("connection/cte_shared.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

@@ -710,6 +710,8 @@ struct Cache {
     rows: RefCell<Vec<(*const Query, Rc<Rows>)>>,
     /// The hash table of each such subquery of `ANY`, as a hashed `SubPlan` keeps it, or `None` when a value of the subquery has no key.
     hashed: RefCell<Vec<(*const Query, Kept)>>,
+    /// The rows of each query of `WITH`, by its name and its query, as the tuplestore of its `CteScan` nodes keeps them. The query runs once, when a reference first needs it, so that the references read the same values of its volatile functions.
+    ctes: RefCell<Vec<KeptCte>>,
     /// The name and the expression of each check constraint of a domain, by the OID of the domain, as the type cache keeps them.
     domains: RefCell<Vec<(u32, Checks)>>,
     /// The body of each function in SQL that the run calls. The run of a body shares them.
@@ -791,6 +793,33 @@ impl Cache {
         Ok(tables)
     }
 
+    /// The rows of a reference to a query of `WITH`, from [`Self::rows`] for the first reference. Each copy of the query in a reference has the same expressions, so a reference finds the rows of another reference by its name and its query.
+    fn cte_rows(
+        &self,
+        name: &str,
+        query: &Query,
+        run: impl FnOnce() -> Result<Rc<Rows>>,
+    ) -> Result<Rc<Rows>> {
+        let kept = self
+            .ctes
+            .borrow()
+            .iter()
+            .find(|(n, q, _)| n == name && **q == *query)
+            .map(|(_, _, rows)| Rc::clone(rows));
+        if let Some(rows) = kept {
+            return Ok(rows);
+        }
+        let rows = run()?;
+        if !correlated(query) && free_work(query).is_empty() {
+            self.ctes.borrow_mut().push((
+                name.to_string(),
+                Rc::new(query.clone()),
+                Rc::clone(&rows),
+            ));
+        }
+        Ok(rows)
+    }
+
     /// The rows of a subquery: the rows that the cache keeps for a subquery that reads no column of an outer query, or else the rows of a new run.
     fn rows(&self, query: &Query, run: impl FnOnce() -> Result<Rows>) -> Result<Rc<Rows>> {
         let kept = self
@@ -809,6 +838,9 @@ impl Cache {
         Ok(rows)
     }
 }
+
+/// The name of a query of `WITH`, its query and its rows, as [`Cache`] keeps them.
+type KeptCte = (String, Rc<Query>, Rc<Rows>);
 
 /// The hash table of a subquery of `ANY`, or `None` when a value of the subquery has no key.
 type Kept = Option<Rc<Hashed>>;
@@ -1031,7 +1063,14 @@ fn with_subqueries(
                     Rc::new(run_query(sub, params, session, cache, &frames, false)?)
                 }
                 None => {
-                    cache.rows(sub, || run_query(sub, params, session, cache, &frames, false))?
+                    let run = || {
+                        cache.rows(sub, || run_query(sub, params, session, cache, &frames, false))
+                    };
+                    // `inline_cte` puts a query of `WITH` into each reference only when it has no volatile function, so each reference can read the rows of the first one.
+                    match &relation.cte {
+                        Some(cte) => cache.cte_rows(&cte.name, sub, run)?,
+                        None => run()?,
+                    }
                 }
             };
         }
