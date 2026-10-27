@@ -1,0 +1,62 @@
+> select ROW(1,2) in (ROW(3,4), ROW(1,2::int8));
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> select ROW(1,2::int8) in (ROW(3,4), ROW(1,2));
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> create table compos (f1 int, f2 text);
+CREATE TABLE
+> create function fcompos1(v compos) returns void as $$ insert into compos values (v.*) $$ language sql;
+CREATE FUNCTION
+> create function fcompos2(v compos) returns void as $$ select fcompos1(v) $$ language sql;
+CREATE FUNCTION
+> create function fcompos3(v compos) returns void as $$ select fcompos1(fcompos3.v.*) $$ language sql;
+CREATE FUNCTION
+> select fcompos1(row(1,'one'));
+fields fcompos1:2278:4:-1
+row NULL
+SELECT 1
+> select fcompos2(row(2,'two'));
+fields fcompos2:2278:4:-1
+row NULL
+SELECT 1
+> select fcompos3(row(3,'three'));
+fields fcompos3:2278:4:-1
+row NULL
+SELECT 1
+> select * from compos;
+fields f1@compos.1:23:4:-1,f2@compos.2:25:-1:-1
+row 1,one
+row 2,two
+row 3,three
+SELECT 3
+> create table price (id int, active boolean, price numeric);
+CREATE TABLE
+> create type price_input as (id int, price numeric);
+CREATE TYPE
+> create type price_key as (id int);
+CREATE TYPE
+> create function price_key_from_table(price) returns price_key as $$ select $1.id $$ language sql;
+CREATE FUNCTION
+> create function price_key_from_input(price_input) returns price_key as $$ select $1.id $$ language sql;
+CREATE FUNCTION
+> insert into price values (1,false,42), (10,false,100), (11,true,17.99);
+INSERT 0 3
+> update price set active = true, price = input_prices.price from unnest(ARRAY[(10, 123.00), (11, 99.99)]::price_input[]) input_prices where price_key_from_table(price.*) = price_key_from_input(input_prices.*);
+UPDATE 2
+> select * from price order by id;
+fields id@price.1:23:4:-1,active@price.2:16:1:-1,price@price.3:1700:-1:-1
+row 1,f,42
+row 10,t,123.00
+row 11,t,99.99
+SELECT 3
+> select (price_key_from_input(i.*)).id from unnest(ARRAY[(10, 123.00)]::price_input[]) i;
+fields id:23:4:-1
+row 10
+SELECT 1
+> select (price_key_from_input(i)).id from unnest(ARRAY[(10, 123.00)]::price_input[]) i;
+fields id:23:4:-1
+row 10
+SELECT 1

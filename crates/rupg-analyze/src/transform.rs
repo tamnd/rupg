@@ -723,7 +723,15 @@ impl Analyzer<'_> {
             }
         }
         for value in values {
-            let cmp = self.make_op(op_names, Some(left.clone()), value, at)?;
+            let cmp = match (&left.kind, value.kind) {
+                (ExprKind::Row(l, _), ExprKind::Row(r, _)) => {
+                    self.row_comparison(op_names, l.clone(), r, at)?
+                }
+                (_, kind) => {
+                    let value = Expr { kind, ..value };
+                    self.make_op(op_names, Some(left.clone()), value, at)?
+                }
+            };
             let cmp = self.coerce_to_boolean(cmp, "IN")?;
             result = Some(match result {
                 None => cmp,
