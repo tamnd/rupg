@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `pg_get_acl` gives the ACL of a relation, a column, a schema, a type, a function, a language, a database and a tablespace, as PostgreSQL does (#963).
 - A new default, check, generated column, partition key, index, statistics object, function body or parameter default, view, materialized view, rule, policy, trigger condition and domain default or check now needs `USAGE` on the types that it names, as `CheckUsageOnTypesInExpr` checks it. A constraint that `ALTER COLUMN TYPE` makes again needs no check. A check constraint that names no column now goes with its table (#962).
 - A column, a typed table, a function, an aggregate, a domain and a range need `USAGE` on their types, as `object_aclcheck` checks it. `ALTER TYPE ... OWNER TO` of a multirange type gives the error of `AlterTypeOwner`, a composite type cannot hold itself through a range or a multirange, and an ACL that `REVOKE` makes empty shows as `{}` (#961).
 - A rule whose actions write depends on the target columns of `INSERT` and `UPDATE` and on the columns that its values, conditions and `RETURNING` read, and not on the columns that the rewrite copies, so `DROP COLUMN ... CASCADE` drops the same rules as PostgreSQL (#960).
