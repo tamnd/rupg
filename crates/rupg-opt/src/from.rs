@@ -1251,7 +1251,9 @@ impl ScanEstimate {
         let Some(hist) = s.slots.iter().find(|slot| slot.kind == STATISTIC_KIND_HISTOGRAM) else {
             return Some(None);
         };
-        let mut values: Vec<Value> = hist.values.clone().unwrap_or_default();
+        // The values are borrowed. The search copies them only when it puts the known range of the column in place of an end.
+        let mut values: Cow<'_, [Value]> =
+            Cow::Borrowed(hist.values.as_deref().unwrap_or_default());
         let nvalues = values.len();
         if nvalues <= 1 {
             return Some(None);
@@ -1260,7 +1262,7 @@ impl ScanEstimate {
         let cutoff = 0.01 / (nvalues - 1) as f64;
         if !op.sorted {
             let mut nmatch = 0;
-            for v in &values {
+            for v in values.iter() {
                 if test(v)? {
                     nmatch += 1;
                 }
@@ -1274,7 +1276,7 @@ impl ScanEstimate {
         if nvalues == 2
             && let Some((min, max)) = range.clone()
         {
-            values = vec![min, max];
+            values = Cow::Owned(vec![min, max]);
             have_end = true;
         }
         let (mut lobound, mut hibound) = (0, nvalues);
@@ -1283,7 +1285,7 @@ impl ScanEstimate {
             if nvalues > 2 && (probe == 0 || probe == nvalues - 1) {
                 have_end = range.is_some();
                 if let Some((min, max)) = &range {
-                    values[probe] = if probe == 0 { min.clone() } else { max.clone() };
+                    values.to_mut()[probe] = if probe == 0 { min.clone() } else { max.clone() };
                 }
             }
             let mut ltcmp = test(&values[probe])?;
