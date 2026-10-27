@@ -14,6 +14,9 @@ use rupg_types::oid;
 
 use crate::{Level, cost, exprs, from, upper};
 
+/// `SelfItemPointerAttributeNumber`: the attribute number of `ctid`.
+const CTID_ATTNUM: i16 = -1;
+
 /// Sets the target lists and the widths of the nodes of the plan of a query level.
 pub(crate) fn level<'q>(level: &Level<'q>, node: &mut Node<'q>) {
     let want = if level.no_targets {
@@ -471,15 +474,25 @@ fn returning_output<'q>(level: &Level<'q>, operation: Operation) -> Option<Vec<I
         }
     };
     let relation = if operation == Operation::Insert { TARGET } else { 0 };
+    let var = |attnum| Expr::new(ExprKind::Var(Var { relation, attnum, levels_up: 0 }), 0);
     let map = |attnum: i16| -> Option<Expr> {
+        // A system column, as `ctid`, is a column of the target table.
+        if attnum < 0 {
+            return Some(var(attnum));
+        }
         let at = usize::try_from(attnum).ok()?;
         if (1..=width).contains(&at) {
-            return Some(Expr::new(ExprKind::Var(Var { relation, attnum, levels_up: 0 }), 0));
+            return Some(var(attnum));
+        }
+        // The write puts the ID of the new version in its place, which `ctid` reads.
+        if write.returning_tid.is_some() && write.returning_tid == at.checked_sub(1) {
+            return Some(var(CTID_ATTNUM));
         }
         let value = &carried.get(at.checked_sub(base + 1)?)?.expr;
-        // A carried column of the target table is a column of the old row of an `UPDATE`.
+        // A carried column of the target table is a column of the old row of an `UPDATE`, and a carried system column of the relation 0 is `ctid` of the old row of a `DELETE`.
         match value.kind {
             ExprKind::Var(v) if v.relation != 0 && v.levels_up == 0 => Some(value.clone()),
+            ExprKind::Var(v) if v.attnum < 0 && v.levels_up == 0 => Some(var(v.attnum)),
             _ => None,
         }
     };

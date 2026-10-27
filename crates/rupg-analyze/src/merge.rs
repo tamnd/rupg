@@ -193,7 +193,7 @@ impl Analyzer<'_> {
         let (returning, mut carried) = match s.returningClause.as_deref() {
             None => (None, Vec::new()),
             Some(clause) => {
-                let (query, carried) = self.returning(clause, WriteKind::Merge)?;
+                let (query, carried, _) = self.returning(clause, WriteKind::Merge, false)?;
                 (Some(Box::new(query)), carried)
             }
         };
@@ -408,6 +408,7 @@ impl Analyzer<'_> {
                 checks: names,
                 unique,
                 returning,
+                returning_tid: None,
                 foreign: Vec::new(),
                 on_conflict: None,
                 merge: Some(Merge {

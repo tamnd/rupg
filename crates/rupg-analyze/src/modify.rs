@@ -126,7 +126,7 @@ impl Analyzer<'_> {
             self.rule.columns = columns;
             return Ok(query);
         }
-        let (returning, carried) =
+        let (returning, carried, returning_tid) =
             self.write_returning(s.returningClause.as_deref(), WriteKind::Update)?;
         let tail = tail_columns(&carried);
         let inherit = self.inherits_target(WriteKind::Update);
@@ -190,6 +190,7 @@ impl Analyzer<'_> {
             checks: names,
             unique,
             returning,
+            returning_tid,
             foreign,
             on_conflict: None,
             merge: None,
@@ -338,7 +339,7 @@ impl Analyzer<'_> {
             let quals = self.inverted_quals(&inverted, Some(old), None)?;
             filter = crate::rules::and_filter(filter, quals);
         }
-        let (returning, carried) =
+        let (returning, carried, _) =
             self.write_returning(s.returningClause.as_deref(), WriteKind::Delete)?;
         // With `RETURNING`, each row gives the old row and the carried values before the ID of its version.
         let mut targets = Vec::new();
@@ -370,6 +371,7 @@ impl Analyzer<'_> {
                 checks: Vec::new(),
                 unique: Vec::new(),
                 returning,
+                returning_tid: None,
                 foreign,
                 on_conflict: None,
                 merge: None,
@@ -396,12 +398,12 @@ impl Analyzer<'_> {
         &mut self,
         clause: Option<&ReturningClause>,
         kind: WriteKind,
-    ) -> Result<(Option<Box<Query>>, Vec<Expr>)> {
+    ) -> Result<WriteReturning> {
         match clause {
-            None => Ok((None, Vec::new())),
+            None => Ok((None, Vec::new(), None)),
             Some(clause) => {
-                let (query, carried) = self.returning(clause, kind)?;
-                Ok((Some(Box::new(query)), carried))
+                let (query, carried, tid) = self.returning(clause, kind, true)?;
+                Ok((Some(Box::new(query)), carried, tid))
             }
         }
     }
@@ -567,6 +569,9 @@ impl Analyzer<'_> {
         }
     }
 }
+
+/// The query of `RETURNING` of a write, the values that the query of the write carries for it, and the place of the ID of the new version in each written row.
+type WriteReturning = (Option<Box<Query>>, Vec<Expr>, Option<usize>);
 
 /// The targets of the values that the query of an `UPDATE` or a `DELETE` carries for `RETURNING`.
 pub(crate) fn carried_targets(carried: Vec<Expr>) -> impl Iterator<Item = Target> {

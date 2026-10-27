@@ -616,8 +616,8 @@ pub(crate) enum Changed {
 /// The result of [`Heap::speculative`] for one row of `INSERT ... ON CONFLICT`.
 #[derive(Debug, PartialEq)]
 pub(crate) enum Speculative {
-    /// The row went in.
-    Inserted,
+    /// The row went in, as the version with this ID.
+    Inserted(u64),
     /// A live version has the key of the row in an arbiter index: the ID of the version and its values. `own` is true when the transaction of the view made the version, `command` is true when the command of the view made it, and `visible` is true when the snapshot of the view sees it.
     Conflict { tid: u64, values: Vec<Value>, own: bool, command: bool, visible: bool },
     /// The transaction `holder` is in progress and inserted or deleted the version `tid` with the key of the row in an arbiter index. The statement must wait for its end and check the row again.
@@ -840,16 +840,34 @@ impl Heap {
         relation: u32,
         view: &View,
         rows: Vec<Vec<Value>>,
-        (unique, derive): (&[Unique], Derive<'_>),
+        unique: (&[Unique], Derive<'_>),
         kept: &[u64],
     ) -> Result<Changed> {
+        self.insert_ids(relation, view, rows, unique, kept, &mut Vec::new())
+    }
+
+    /// [`Heap::insert`] that gives in `ids` the ID of the new version of each row, for `ctid` of `RETURNING`.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the equality of a key.
+    pub(crate) fn insert_ids(
+        &self,
+        relation: u32,
+        view: &View,
+        rows: Vec<Vec<Value>>,
+        (unique, derive): (&[Unique], Derive<'_>),
+        kept: &[u64],
+        ids: &mut Vec<u64>,
+    ) -> Result<Changed> {
+        ids.clear();
         let count = rows.len() as u64;
         let made = (view.xid, view.command);
         if unique.is_empty() {
             let mut state = self.state();
             let table = state.tables.entry((view.database, relation)).or_default();
             for values in rows {
-                table.add(None, made, values, (unique, &[]), None);
+                ids.push(table.add(None, made, values, (unique, &[]), None));
             }
             return Ok(Changed::Done(count));
         }
@@ -875,7 +893,17 @@ impl Heap {
             }
         }
         pending.extend(rechecks(view, relation, unique, partial));
+        *ids = used;
         Ok(Changed::Done(count))
+    }
+
+    /// The ID of the version after each version of `tids`, which an `UPDATE` made, or 0 for a version with no next version.
+    pub(crate) fn next_versions(&self, database: u32, relation: u32, tids: &[u64]) -> Vec<u64> {
+        let state = self.state();
+        let Some(table) = state.tables.get(&(database, relation)) else {
+            return vec![0; tids.len()];
+        };
+        tids.iter().map(|&tid| table.find(tid).map_or(0, |at| table.versions[at].next)).collect()
     }
 
     /// `ExecCheckIndexConstraints` and the speculative insertion of `ExecInsert` for one row of `INSERT ... ON CONFLICT`. The row goes in when no version that a dirty snapshot sees has its key in an arbiter index, the indexes at the places `arbiters` of `unique`. The check and the insertion hold the lock of the heap, so no other write can come between them. `kept` is the ID of the version of an earlier try that waited.
@@ -941,7 +969,7 @@ impl Heap {
         match table.check_keys((&places, unique), &used, checked, &mut partial) {
             Ok(None) => {
                 pending.extend(rechecks(view, relation, unique, partial));
-                Ok(Speculative::Inserted)
+                Ok(Speculative::Inserted(used[0]))
             }
             result => {
                 table.undo(&used, &[]);

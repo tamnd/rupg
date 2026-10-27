@@ -64,6 +64,8 @@ pub struct Write {
     pub unique: Vec<Unique>,
     /// The query of `RETURNING`, which reads one relation: the rows that the statement writes. Each row has the columns of the table, then the values that the query of the statement carries for it. For an `UPDATE` and a `DELETE` the carried values come after the columns and the conditions in each row of the query of the statement, before the ID of the version.
     pub returning: Option<Box<Query>>,
+    /// The place in each row that `RETURNING` reads of the ID of the new version of an `INSERT` or an `UPDATE`, which `ctid` of the new row reads. The write puts the ID there.
+    pub returning_tid: Option<usize>,
     /// The foreign keys that the write checks after the statement, in the order of the names of their triggers.
     pub foreign: Vec<Foreign>,
     /// The `ON CONFLICT` clause of an `INSERT`.
@@ -582,14 +584,15 @@ impl Analyzer<'_> {
         let width = columns.len();
         let unique = self.unique_keys(table, &columns)?;
         let foreign = self.foreign_keys(table, WriteKind::Insert, &columns)?;
-        let (mut on_conflict, mut returning, mut conflict) = (None, None, None);
+        let (mut on_conflict, mut returning, mut conflict, mut returning_tid) =
+            (None, None, None, None);
         if s.onConflictClause.is_some() || s.returningClause.is_some() {
             let outer = std::mem::take(&mut self.scope);
             // `ON CONFLICT` and `RETURNING` can read the queries of `WITH`.
             self.scope.ctes.clone_from(&outer.ctes);
             let result = self.insert_clauses(s, rv, table, &name, &columns, &unique);
             self.scope = outer;
-            (on_conflict, returning, conflict) = result?;
+            (on_conflict, returning, conflict, returning_tid) = result?;
         }
         let alias = rv.alias.as_ref().and_then(|a| a.aliasname.as_ref()).map(ToString::to_string);
         let insert_def = kept.map(|source| {
@@ -619,6 +622,7 @@ impl Analyzer<'_> {
             checks: names,
             unique,
             returning,
+            returning_tid,
             foreign,
             on_conflict,
             merge: None,
@@ -669,11 +673,11 @@ impl Analyzer<'_> {
         // With `DO UPDATE`, the old row of `RETURNING` is the row that the statement updates, as for an `UPDATE`. With `DO SELECT`, the old and the new rows are the row that the table has.
         let update = on_conflict.as_ref().is_some_and(|c| c.update.is_some());
         let kind = if update { WriteKind::Update } else { WriteKind::Insert };
-        let (returning, carried) = match s.returningClause.as_deref() {
-            None => (None, Vec::new()),
+        let (returning, carried, returning_tid) = match s.returningClause.as_deref() {
+            None => (None, Vec::new(), None),
             Some(clause) => {
-                let (query, carried) = self.returning(clause, kind)?;
-                (Some(Box::new(query)), carried)
+                let (query, carried, tid) = self.returning(clause, kind, true)?;
+                (Some(Box::new(query)), carried, tid)
             }
         };
         if let Some(conflict) = &mut on_conflict
@@ -705,7 +709,7 @@ impl Analyzer<'_> {
             conflict.all = matches!(inference, Inference::All);
             conflict.arbiters = arbiters(inference, unique, self.env.catalog())?;
         }
-        Ok((on_conflict, returning, def))
+        Ok((on_conflict, returning, def, returning_tid))
     }
 
     /// `transformOnConflictClause`: the inference of the arbiter indexes, and the query of `DO UPDATE` with the new row. `SET` and `WHERE` see the target table and `EXCLUDED`, and the clauses after them see only the target table.
@@ -1916,7 +1920,7 @@ enum Inference {
 }
 
 /// `ON CONFLICT` and `RETURNING` of an `INSERT`, and `ON CONFLICT` in the form that [`ConflictDef`] keeps.
-type InsertClauses = (Option<OnConflict>, Option<Box<Query>>, Option<ConflictDef>);
+type InsertClauses = (Option<OnConflict>, Option<Box<Query>>, Option<ConflictDef>, Option<usize>);
 
 /// The relations of the query of `DO UPDATE` or of `DO SELECT` for [`ConflictDef::relations`], where the relation at `excluded` has the name `excluded`, as its entry has the alias.
 fn excluded_named(relations: &[Relation], excluded: usize) -> Vec<Relation> {
