@@ -207,7 +207,7 @@ fn subquery(query: &Query, arg: &Expr, sortop: u32, eq: u32, nulls_first: bool) 
 }
 
 /// `contain_mutable_functions`: true when the expression calls a function that is not immutable, or reads a value of the session such as `CURRENT_DATE`. A conversion through text counts as mutable, as the planner does not know the volatility of the input and output functions of each type.
-fn mutable(expr: &Expr) -> bool {
+pub(crate) fn mutable(expr: &Expr) -> bool {
     let mutable = |func: u32| builtin::proc_by_oid(func).is_none_or(|p| p.volatile != b'i');
     expr.find(0, &mut |e, _| match &e.kind {
         ExprKind::Func(f) if mutable(f.oid) => Some(()),

@@ -1,0 +1,111 @@
+> CREATE FUNCTION volfoo(text) returns text as 'begin return $1; end' language plpgsql volatile;
+CREATE FUNCTION
+> CREATE DOMAIN foodomain AS text;
+CREATE DOMAIN
+> CREATE FUNCTION volfood(text) returns foodomain as 'begin return $1::foodomain; end' language plpgsql volatile;
+CREATE FUNCTION
+> CREATE FUNCTION inline_eq(foodomain, foodomain) returns boolean as 'SELECT CASE $2::text WHEN $1::text THEN true ELSE false END' language sql;
+CREATE FUNCTION
+> CREATE OPERATOR = (procedure = inline_eq, leftarg = foodomain, rightarg = foodomain);
+CREATE OPERATOR
+> SELECT CASE volfood('bar') WHEN 'foo'::foodomain THEN 'is foo' ELSE 'is not foo' END;
+fields case:25:-1:-1
+row is not foo
+SELECT 1
+> SELECT CASE volfood('foo') WHEN 'foo'::foodomain THEN 'is foo' ELSE 'is not foo' END;
+fields case:25:-1:-1
+row is foo
+SELECT 1
+> create table pt (a int, b int, c text, d bool);
+CREATE TABLE
+> insert into pt select g, g % 100, 'v' || g, g % 2 = 0 from generate_series(1, 10000) g;
+INSERT 0 10000
+> create index pt_hash on pt using hash (a) where a = 9999;
+CREATE INDEX
+> create index pt_lt on pt (b) where b < 5;
+CREATE INDEX
+> create index pt_nn on pt (a) where c is not null and a > 9000;
+CREATE INDEX
+> create index pt_ne on pt (a) where b <> 7 and a < 10;
+CREATE INDEX
+> create index pt_bool on pt (b) where d and a > 9990;
+CREATE INDEX
+> analyze pt;
+ANALYZE
+> explain (costs off) select * from pt where a = 9999;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using pt_hash on pt
+row   Index Cond: (a = 9999)
+EXPLAIN
+> select * from pt where a = 9999;
+fields a@pt.1:23:4:-1,b@pt.2:23:4:-1,c@pt.3:25:-1:-1,d@pt.4:16:1:-1
+row 9999,99,v9999,f
+SELECT 1
+> explain (costs off) select * from pt where b < 4;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on pt
+row   Recheck Cond: (b < 4)
+row   ->  Bitmap Index Scan on pt_lt
+row         Index Cond: (b < 4)
+EXPLAIN
+> explain (costs off) select * from pt where 3 > b;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on pt
+row   Recheck Cond: (3 > b)
+row   ->  Bitmap Index Scan on pt_lt
+row         Index Cond: (b < 3)
+EXPLAIN
+> explain (costs off) select * from pt where b < 5;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on pt
+row   Recheck Cond: (b < 5)
+row   ->  Bitmap Index Scan on pt_lt
+EXPLAIN
+> explain (costs off) select * from pt where b < 6;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pt
+row   Filter: (b < 6)
+EXPLAIN
+> explain (costs off) select * from pt where b = 2;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on pt
+row   Recheck Cond: (b = 2)
+row   ->  Bitmap Index Scan on pt_lt
+row         Index Cond: (b = 2)
+EXPLAIN
+> explain (costs off) select * from pt where a > 9500 and c = 'v9600';
+fields QUERY PLAN:25:-1:-1
+row Index Scan using pt_nn on pt
+row   Index Cond: (a > 9500)
+row   Filter: (c = 'v9600'::text)
+EXPLAIN
+> explain (costs off) select * from pt where a < 5 and b = 3;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using pt_ne on pt
+row   Index Cond: (a < 5)
+row   Filter: (b = 3)
+EXPLAIN
+> explain (costs off) select * from pt where a < 5 and b = 7;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pt
+row   Filter: ((a < 5) AND (b = 7))
+EXPLAIN
+> explain (costs off) select * from pt where d and a > 9995;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on pt
+row   Recheck Cond: (d AND (a > 9990))
+row   Filter: (a > 9995)
+row   ->  Bitmap Index Scan on pt_bool
+EXPLAIN
+> explain (costs off) select * from pt where b < 4 and random() < 2;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on pt
+row   Recheck Cond: (b < 4)
+row   Filter: (random() < '2'::double precision)
+row   ->  Bitmap Index Scan on pt_lt
+row         Index Cond: (b < 4)
+EXPLAIN
+> select count(*) from pt where b < 4;
+fields count:20:8:-1
+row 400
+SELECT 1

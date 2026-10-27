@@ -4005,6 +4005,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/grouping_sublevels.test")));
     }
 
+    /// A partial index whose predicate the conditions imply by the operators of a B-tree family, as `predicate_implied_by` proves it, and a SQL function with an argument that reads the value of a `CASE`, which does not inline.
+    #[test]
+    fn partial_index_proof() {
+        big_stack(|| script(include_str!("connection/partial_index_proof.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {
