@@ -2975,11 +2975,8 @@ impl<'a> Eval<'a> {
                 }
                 Body::Query(query) => {
                     let rows = run_query(query, args, self.session, &cache, &[], false);
-                    // `sql_exec_error_callback`: a body that reads a relation is not inlined, so its error has the line of the function. A body with no `FROM` is inlined in PostgreSQL when it can be, and its error has no such line.
+                    // `sql_exec_error_callback`: a call that runs here is not inlined, so its error has the line of the function.
                     let rows = rows.map_err(|error| {
-                        if query.relations.is_empty() {
-                            return error;
-                        }
                         let name = builtin::proc_by_oid(func).map_or("", |p| p.name);
                         error.with_context(format!("SQL function \"{name}\" statement 1"))
                     })?;
