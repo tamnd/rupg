@@ -566,7 +566,7 @@ impl Analyzer<'_> {
             SortByDir::SORTBY_USING => self.using_operator(&by.useOp, ty, at)?,
             dir => {
                 let reverse = dir == SortByDir::SORTBY_DESC;
-                let ops = typcache::operators(ty);
+                let ops = self.type_operators(ty);
                 let sort_op = if reverse { ops.gt } else { ops.lt };
                 if sort_op == 0 {
                     return Err(no_ordering(ty, at));
@@ -597,6 +597,33 @@ impl Analyzer<'_> {
             });
         }
         Ok(())
+    }
+
+    /// `lookup_type_cache` with `cache_record_field_properties` and `cache_array_element_properties`: the operators of the type, where a composite type has `=` only when each field has `=`, and `<` and `>` only when each field has `<`. An array of a composite type has the operators of its element type.
+    pub(crate) fn type_operators(&self, ty: u32) -> typcache::Operators {
+        let mut ops = typcache::operators(ty);
+        let base = types::base(ty);
+        let element = types::element(base);
+        let fields = if element != 0 {
+            vec![element]
+        } else if base != oid::RECORD
+            && let Some(columns) = self.row_columns(base)
+        {
+            columns.iter().filter(|c| !c.is_dropped()).map(|c| c.ty).collect()
+        } else {
+            Vec::new()
+        };
+        for field in fields {
+            let field = self.type_operators(field);
+            if field.eq == 0 {
+                ops.eq = 0;
+            }
+            if field.lt == 0 {
+                ops.lt = 0;
+                ops.gt = 0;
+            }
+        }
+        ops
     }
 
     /// The operator of `ORDER BY ... USING op`, its `=` operator and true when it sorts in descending order.
@@ -661,7 +688,7 @@ impl Analyzer<'_> {
             return Ok(());
         }
         let ty = targets[target].expr.ty;
-        let ops = typcache::operators(ty);
+        let ops = self.type_operators(ty);
         if ops.eq == 0 {
             return Err(no_equality(ty, at));
         }
