@@ -15,7 +15,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Fixed
 
-- The server keeps the answers of the extended query protocol until `Sync` or `Flush`, as PostgreSQL does. It sends them before that only when 8192 bytes or more wait, or after a notice, an error, a notification or `CopyInResponse`. Before, the server sent all the answers before it waited for input. Then the test `pipelined_insert` of `libpq_pipeline` sometimes got all the answers before it sent more statements, and it looped forever. (#PR)
+- The server keeps the answers of the extended query protocol until `Sync` or `Flush`, as PostgreSQL does. It sends them before that only when 8192 bytes or more wait, or after a notice, an error, a notification or `CopyInResponse`. Before, the server sent all the answers before it waited for input. Then the test `pipelined_insert` of `libpq_pipeline` sometimes got all the answers before it sent more statements, and it looped forever. (#900)
 
 ## 0.3.3 (2026-10-27)
 
