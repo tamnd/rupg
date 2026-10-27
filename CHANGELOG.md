@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `array_in` called from SQL gives the array of the element type in its second argument, the input functions of the pseudo types give "cannot accept a value of type X", and `record` and `record[]` take text input with the errors that PostgreSQL gives (#928).
 - An error in a SQL function body that rupg does not inline now has the context "SQL function ... statement 1" also when the body has no FROM, as PG gives it. (#927)
 
 ## 0.3.6 (2026-10-27)

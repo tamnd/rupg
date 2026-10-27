@@ -1,0 +1,44 @@
+> SELECT '{}'::record[];
+fields record:2287:-1:-1
+row {}
+SELECT 1
+> SELECT '{"(1,2)"}'::record[];
+ERROR 0A000 input of anonymous composite types is not implemented at 8
+> SELECT '(1,2)'::record;
+ERROR 0A000 input of anonymous composite types is not implemented at 8
+> SELECT array_larger(ARRAY[row(1,2)], ARRAY[row(3,4)]);
+fields array_larger:2287:-1:-1
+row {"(3,4)"}
+SELECT 1
+> select array_in('{1,2,3}','int4'::regtype,-1);
+fields array_in:2277:-1:-1
+row {1,2,3}
+SELECT 1
+> select pg_typeof(array_in('{1,2,3}','int4'::regtype,-1));
+fields pg_typeof:2206:4:-1
+row anyarray
+SELECT 1
+> select anyrange_in('[10,20)','int4range'::regtype,-1);
+fields anyrange_in:3831:-1:-1
+ERROR 0A000 cannot accept a value of type anyrange
+> select anyarray_in('{1}');
+ERROR 0A000 cannot accept a value of type anyarray
+> CREATE AGGREGATE yl_accum (anyarray) (sfunc = array_larger, stype = anyarray, initcond = '{}');
+CREATE AGGREGATE
+> SELECT yl_accum(i) FROM (VALUES (ARRAY[row(1,2),row(3,4)]), (ARRAY[row(5,6),row(7,8)])) as t(i);
+fields yl_accum:2287:-1:-1
+row {"(5,6)","(7,8)"}
+SELECT 1
+> SELECT yl_accum(i) FROM (VALUES (ARRAY[1,2]), (ARRAY[3,4])) as t(i);
+fields yl_accum:1007:-1:-1
+row {3,4}
+SELECT 1
+> select array_in('{a,b}', 'text'::regtype, -1), array_in('{1.5}', 'numeric'::regtype, -1);
+fields array_in:2277:-1:-1,array_in:2277:-1:-1
+row {a,b},{1.5}
+SELECT 1
+> select '(1,2)'::text::record;
+fields record:2249:-1:-1
+ERROR 0A000 input of anonymous composite types is not implemented
+> DROP AGGREGATE yl_accum(anyarray);
+DROP AGGREGATE
