@@ -4,7 +4,9 @@
 
 use std::collections::HashSet;
 
-use rupg_analyze::{Aggref, Expr, ExprKind, Query, SortGroup, WindowFunc, expand_grouping_sets};
+use rupg_analyze::{
+    Aggref, Expr, ExprKind, Frame, FrameBound, Query, SortGroup, WindowFunc, expand_grouping_sets,
+};
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Call, Kernel};
 use rupg_pgcatalog::builtin;
@@ -939,23 +941,88 @@ pub(crate) fn window_aggref(call: &WindowFunc) -> Aggref {
     }
 }
 
-/// `eval_windowaggregates`: the value of an aggregate function with `OVER` for each row of one partition, which is the result of the rows of the frame of the row. `frames` has the frame of each row.
+/// `initialize_peragg`: the method of the moving-aggregate mode of an aggregate call with `OVER`, with its inverse transition function and true when that function is strict, when the window uses the mode. It uses the mode when the aggregate has an inverse transition function and the start of the frame can move, or when only the final function of the mode leaves the state as it is, and the arguments and the filter of the call have no volatile function and no subquery. The engine runs the mode for an aggregate of `CREATE AGGREGATE` with a function of the catalog, which it calls by its OID. A built-in aggregate gives the same results in both modes.
+fn moving_method(
+    call: &WindowFunc,
+    aggref: &Aggref,
+    ty: u32,
+    frame: &Frame,
+) -> Result<Option<(Method, u32, bool)>> {
+    let Some(row) = builtin::aggregate(call.oid) else { return Ok(None) };
+    if row.minvtransfn == 0 {
+        return Ok(None);
+    }
+    let forced = row.mfinalmodify == b'r' && row.finalmodify != b'r';
+    let unsafe_expr = |e: &Expr| {
+        crate::volatile(e)
+            || e.find(0, &mut |e, _| matches!(e.kind, ExprKind::SubLink(_)).then_some(())).is_some()
+    };
+    let moves = frame.start_bound() != FrameBound::UnboundedPreceding
+        && !call.args.iter().chain(call.filter.as_deref()).any(unsafe_expr);
+    if !forced && !moves {
+        return Ok(None);
+    }
+    let user = |f: u32| f >= rupg_catalog::FIRST_NORMAL_OID;
+    if ![row.mtransfn, row.minvtransfn, row.mfinalfn].into_iter().any(user) {
+        return Ok(None);
+    }
+    let unsupported = || not_yet(format!("aggregate function {}", signature(call.oid)));
+    let callable = |f: u32| user(f) || rupg_func::kernel(f).is_some();
+    if !callable(row.mtransfn)
+        || !callable(row.minvtransfn)
+        || (row.mfinalfn != 0 && !callable(row.mfinalfn))
+    {
+        return Err(unsupported());
+    }
+    let state = if !polymorphic(row.mtranstype) {
+        row.mtranstype
+    } else if row.mfinalfn == 0 {
+        ty
+    } else {
+        transtype(aggref, row.mtranstype).ok_or_else(unsupported)?
+    };
+    if state == oid::INTERNAL
+        || polymorphic(state)
+        || (row.minitval.is_some() && !rupg_func::input_supported(state))
+    {
+        return Err(unsupported());
+    }
+    let method = Method::Function {
+        trans: row.mtransfn,
+        trans_strict: strict(row.mtransfn),
+        state,
+        init: row.minitval,
+        last: (row.mfinalfn != 0).then(|| (row.mfinalfn, strict(row.mfinalfn), row.mfinalextra)),
+    };
+    Ok(Some((method, row.minvtransfn, strict(row.minvtransfn))))
+}
+
+/// `eval_windowaggregates`: the value of an aggregate function with `OVER` for each row of one partition, which is the result of the rows of the frame of the row. `frames` has the frame of each row, and `frame` is the clause of the window.
 pub(crate) fn window_values(
     eval: &Eval<'_>,
     call: &WindowFunc,
     ty: u32,
     part: &[usize],
     frames: &[window::Bounds],
+    frame: &Frame,
     input: window::Input<'_>,
 ) -> Result<Vec<Value>> {
     let aggref = window_aggref(call);
+    let moving = moving_method(call, &aggref, ty, frame)?;
+    let (method, inverse) = match moving {
+        Some((method, inv, inv_strict)) => (method, Some((inv, inv_strict))),
+        None => (method(&aggref, ty, None)?, None),
+    };
     let agg = Agg {
         agg: &aggref,
         key: std::ptr::from_ref(&aggref),
         ty,
-        method: method(&aggref, ty, None)?,
+        method,
         types: aggref.args.iter().map(|a| a.ty).collect(),
     };
+    if let Some(inverse) = inverse {
+        return moving_values(eval, call, &agg, inverse, part, frames, input);
+    }
     let feed = |state: &mut State, at: usize| -> Result<()> {
         // The arguments of the call, and not their copies in `aggref`, have the aggregate calls that the group computed.
         let mut e = input.at(eval, part[at]);
@@ -999,6 +1066,114 @@ pub(crate) fn window_values(
             agg.finish(state.clone(), eval)?
         };
         out.push(value);
+    }
+    Ok(out)
+}
+
+/// `eval_windowaggregates` in the moving-aggregate mode: when the start of the frame moves, `advance_windowaggregate_base` removes each row that leaves the frame with the inverse transition function `inverse`, and the aggregate starts again when that function gives null. The state of the mode is never null after a row, so a transition function that gives null is an error. The state keeps the count of its rows, and the removal of the last row starts the aggregate again in place of a call of the inverse function.
+fn moving_values(
+    eval: &Eval<'_>,
+    call: &WindowFunc,
+    agg: &Agg<'_>,
+    (inverse, inverse_strict): (u32, bool),
+    part: &[usize],
+    frames: &[window::Bounds],
+    input: window::Input<'_>,
+) -> Result<Vec<Value>> {
+    let Method::Function { trans_strict, state: state_ty, .. } = agg.method else {
+        return Err(Error::internal("a moving aggregate with no function"));
+    };
+    let nargs = agg.agg.nargs;
+    // The arguments of the call on a row of the partition, or `None` when the filter of the call skips the row.
+    let args_at = |at: usize| -> Result<Option<Vec<Value>>> {
+        let mut e = input.at(eval, part[at]);
+        if let Some(filter) = &call.filter
+            && e.eval(filter)? != Value::Bool(true)
+        {
+            return Ok(None);
+        }
+        call.args.iter().map(|a| e.eval(a)).collect::<Result<Vec<_>>>().map(Some)
+    };
+    let add = |state: &mut State, count: &mut usize, at: usize| -> Result<()> {
+        let Some(args) = args_at(at)? else { return Ok(()) };
+        if trans_strict && args[..nargs].iter().any(Value::is_null) {
+            return Ok(());
+        }
+        agg.advance(state, &args, eval)?;
+        if let State::Value { value: Value::Null, .. } = state {
+            return Err(Error::new(
+                SqlState::NULL_VALUE_NOT_ALLOWED,
+                "moving-aggregate transition function must not return null",
+            ));
+        }
+        *count += 1;
+        Ok(())
+    };
+    // `advance_windowaggregate_base`: false when the inverse function gives null.
+    let remove = |state: &mut State, count: &mut usize, at: usize| -> Result<bool> {
+        let Some(args) = args_at(at)? else { return Ok(true) };
+        let args = &args[..nargs];
+        if inverse_strict && args.iter().any(Value::is_null) {
+            return Ok(true);
+        }
+        let State::Value { value, .. } = state else {
+            return Err(Error::internal("a moving aggregate with no value"));
+        };
+        if value.is_null() {
+            return Err(Error::internal(
+                "aggregate transition value is NULL before inverse transition",
+            ));
+        }
+        if *count == 1 {
+            *state = agg.start(eval)?;
+            *count = 0;
+            return Ok(true);
+        }
+        let mut types = Vec::with_capacity(args.len() + 1);
+        types.push(state_ty);
+        types.extend(&agg.types);
+        let mut values = Vec::with_capacity(args.len() + 1);
+        values.push(value.clone());
+        values.extend_from_slice(args);
+        let result = eval.call(inverse, &types, state_ty, false, &values)?;
+        if result.is_null() {
+            return Ok(false);
+        }
+        *value = result;
+        *count -= 1;
+        Ok(true)
+    };
+    let mut state = agg.start(eval)?;
+    let mut count = 0;
+    let (mut base, mut upto) = (0, 0);
+    let mut out: Vec<Value> = Vec::with_capacity(part.len());
+    let mut last: Option<&window::Bounds> = None;
+    for (row, bounds) in frames.iter().enumerate() {
+        if let (Some(previous), Some(value)) = (last, out.last())
+            && previous == bounds
+            && !bounds.excludes()
+        {
+            out.push(value.clone());
+            continue;
+        }
+        last = Some(bounds);
+        let mut restart =
+            row == 0 || bounds.excludes() || upto <= bounds.head || bounds.tail < upto;
+        while !restart && base < bounds.head {
+            restart = !remove(&mut state, &mut count, base)?;
+            base += 1;
+        }
+        base = bounds.head;
+        if restart {
+            state = agg.start(eval)?;
+            count = 0;
+            upto = bounds.head;
+        }
+        for at in bounds.rows().filter(|&at| at >= upto) {
+            add(&mut state, &mut count, at)?;
+        }
+        upto = upto.max(bounds.tail);
+        out.push(agg.finish(state.clone(), eval)?);
     }
     Ok(out)
 }

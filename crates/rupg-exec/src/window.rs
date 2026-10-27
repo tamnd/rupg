@@ -294,7 +294,7 @@ pub(crate) fn compute(
             };
             for &(call, ty) in &mine {
                 let results = if call.agg {
-                    agg::window_values(eval, call, ty, part, &bounds, input)?
+                    agg::window_values(eval, call, ty, part, &bounds, &window.frame, input)?
                 } else {
                     let method = method(call.oid, None)?;
                     partition_values(eval, call, method, part, &groups, &bounds, input)?

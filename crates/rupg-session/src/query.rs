@@ -389,6 +389,14 @@ fn use_types(catalog: &Catalog) {
             sortop: a.sortop,
             transtype: a.transtype,
             initval: a.initval.clone(),
+            mtransfn: a.mtransfn,
+            minvtransfn: a.minvtransfn,
+            mfinalfn: a.mfinalfn,
+            mfinalextra: a.mfinalextra,
+            finalmodify: a.finalmodify,
+            mfinalmodify: a.mfinalmodify,
+            mtranstype: a.mtranstype,
+            minitval: a.minitval.clone(),
         })
     }));
     builtin::use_session_types(types);

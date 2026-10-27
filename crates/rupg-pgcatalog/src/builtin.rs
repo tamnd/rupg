@@ -179,6 +179,22 @@ pub struct AggregateRow {
     pub transtype: u32,
     /// `agginitval`: the text of the first state, or `None` when the first state is null.
     pub initval: Option<&'static str>,
+    /// `aggmtransfn`: the forward transition function of the moving-aggregate mode, or 0.
+    pub mtransfn: u32,
+    /// `aggminvtransfn`: the inverse transition function of the moving-aggregate mode, or 0.
+    pub minvtransfn: u32,
+    /// `aggmfinalfn`: the final function of the moving-aggregate mode, or 0.
+    pub mfinalfn: u32,
+    /// `aggmfinalextra`: [`AggregateRow::finalextra`] of the moving-aggregate mode.
+    pub mfinalextra: bool,
+    /// `aggfinalmodify`: `r` when the final function does not change the state.
+    pub finalmodify: u8,
+    /// `aggmfinalmodify`: [`AggregateRow::finalmodify`] of the moving-aggregate mode.
+    pub mfinalmodify: u8,
+    /// `aggmtranstype`: the type of the state of the moving-aggregate mode, or 0.
+    pub mtranstype: u32,
+    /// `aggminitval`: the text of the first state of the moving-aggregate mode, or `None` when it is null.
+    pub minitval: Option<&'static str>,
 }
 
 /// A built-in object that has a name, of a kind that an OID alias type or a function such as `pg_opclass_is_visible` reads.
@@ -783,6 +799,10 @@ fn load_aggregates() -> Vec<AggregateRow> {
     let (transfn, finalfn, finalextra) =
         (r.oid("aggtransfn"), r.oid("aggfinalfn"), r.bool("aggfinalextra"));
     let (sortop, transtype) = (r.oid("aggsortop"), r.oid("aggtranstype"));
+    let (mtransfn, minvtransfn, mfinalfn) =
+        (r.oid("aggmtransfn"), r.oid("aggminvtransfn"), r.oid("aggmfinalfn"));
+    let (mfinalextra, mtranstype) = (r.bool("aggmfinalextra"), r.oid("aggmtranstype"));
+    let (finalmodify, mfinalmodify) = (r.char("aggfinalmodify"), r.char("aggmfinalmodify"));
     (0..r.catalog.len)
         .map(|i| AggregateRow {
             fnoid: fnoid[i],
@@ -794,6 +814,17 @@ fn load_aggregates() -> Vec<AggregateRow> {
             sortop: sortop[i],
             transtype: transtype[i],
             initval: r.optional("agginitval", i, |v| match v {
+                Values::Text(v) => Some(*v),
+                _ => None,
+            }),
+            mtransfn: mtransfn[i],
+            minvtransfn: minvtransfn[i],
+            mfinalfn: mfinalfn[i],
+            mfinalextra: mfinalextra[i],
+            finalmodify: finalmodify[i],
+            mfinalmodify: mfinalmodify[i],
+            mtranstype: mtranstype[i],
+            minitval: r.optional("aggminitval", i, |v| match v {
                 Values::Text(v) => Some(*v),
                 _ => None,
             }),
@@ -1263,6 +1294,14 @@ pub struct SessionAggregate {
     pub sortop: u32,
     pub transtype: u32,
     pub initval: Option<String>,
+    pub mtransfn: u32,
+    pub minvtransfn: u32,
+    pub mfinalfn: u32,
+    pub mfinalextra: bool,
+    pub finalmodify: u8,
+    pub mfinalmodify: u8,
+    pub mtranstype: u32,
+    pub minitval: Option<String>,
 }
 
 /// An object of the catalog of a session that has rows in the overlay of the thread: a type, a function, an aggregate or an operator.
@@ -1376,6 +1415,14 @@ fn session_rows(ty: &SessionType) -> Option<Interned> {
                 sortop: new.sortop,
                 transtype: new.transtype,
                 initval: new.initval.clone().map(|text| &*text.leak()),
+                mtransfn: new.mtransfn,
+                minvtransfn: new.minvtransfn,
+                mfinalfn: new.mfinalfn,
+                mfinalextra: new.mfinalextra,
+                finalmodify: new.finalmodify,
+                mfinalmodify: new.mfinalmodify,
+                mtranstype: new.mtranstype,
+                minitval: new.minitval.clone().map(|text| &*text.leak()),
             };
             Interned { aggregate: Some(Box::leak(Box::new(row))), ..Interned::default() }
         }

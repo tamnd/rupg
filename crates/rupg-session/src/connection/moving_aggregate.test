@@ -1,0 +1,159 @@
+> CREATE FUNCTION logging_sfunc_nonstrict(text, anyelement) RETURNS text AS $$ SELECT COALESCE($1, '') || '*' || quote_nullable($2) $$ LANGUAGE SQL IMMUTABLE
+CREATE FUNCTION
+> CREATE FUNCTION logging_msfunc_nonstrict(text, anyelement) RETURNS text AS $$ SELECT COALESCE($1, '') || '+' || quote_nullable($2) $$ LANGUAGE SQL IMMUTABLE
+CREATE FUNCTION
+> CREATE FUNCTION logging_minvfunc_nonstrict(text, anyelement) RETURNS text AS $$ SELECT $1 || '-' || quote_nullable($2) $$ LANGUAGE SQL IMMUTABLE
+CREATE FUNCTION
+> CREATE AGGREGATE logging_agg_nonstrict (anyelement) ( stype = text, sfunc = logging_sfunc_nonstrict, mstype = text, msfunc = logging_msfunc_nonstrict, minvfunc = logging_minvfunc_nonstrict )
+CREATE AGGREGATE
+> CREATE AGGREGATE logging_agg_nonstrict_initcond (anyelement) ( stype = text, sfunc = logging_sfunc_nonstrict, mstype = text, msfunc = logging_msfunc_nonstrict, minvfunc = logging_minvfunc_nonstrict, initcond = 'I', minitcond = 'MI' )
+CREATE AGGREGATE
+> CREATE FUNCTION logging_sfunc_strict(text, anyelement) RETURNS text AS $$ SELECT $1 || '*' || quote_nullable($2) $$ LANGUAGE SQL STRICT IMMUTABLE
+CREATE FUNCTION
+> CREATE FUNCTION logging_msfunc_strict(text, anyelement) RETURNS text AS $$ SELECT $1 || '+' || quote_nullable($2) $$ LANGUAGE SQL STRICT IMMUTABLE
+CREATE FUNCTION
+> CREATE FUNCTION logging_minvfunc_strict(text, anyelement) RETURNS text AS $$ SELECT $1 || '-' || quote_nullable($2) $$ LANGUAGE SQL STRICT IMMUTABLE
+CREATE FUNCTION
+> CREATE AGGREGATE logging_agg_strict (text) ( stype = text, sfunc = logging_sfunc_strict, mstype = text, msfunc = logging_msfunc_strict, minvfunc = logging_minvfunc_strict )
+CREATE AGGREGATE
+> CREATE AGGREGATE logging_agg_strict_initcond (anyelement) ( stype = text, sfunc = logging_sfunc_strict, mstype = text, msfunc = logging_msfunc_strict, minvfunc = logging_minvfunc_strict, initcond = 'I', minitcond = 'MI' )
+CREATE AGGREGATE
+> SELECT p::text || ',' || i::text || ':' || COALESCE(v::text, 'NULL') AS row, logging_agg_nonstrict(v) over wnd as nstrict, logging_agg_nonstrict_initcond(v) over wnd as nstrict_init, logging_agg_strict(v::text) over wnd as strict, logging_agg_strict_initcond(v) over wnd as strict_init FROM (VALUES (1, 1, NULL), (1, 2, 'a'), (1, 3, 'b'), (1, 4, NULL), (1, 5, NULL), (1, 6, 'c'), (2, 1, NULL), (2, 2, 'x'), (3, 1, 'z') ) AS t(p, i, v) WINDOW wnd AS (PARTITION BY P ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) ORDER BY p, i
+fields row:25:-1:-1,nstrict:25:-1:-1,nstrict_init:25:-1:-1,strict:25:-1:-1,strict_init:25:-1:-1
+row 1,1:NULL,+NULL,MI+NULL,NULL,MI
+row 1,2:a,+NULL+'a',MI+NULL+'a',a,MI+'a'
+row 1,3:b,+NULL+'a'-NULL+'b',MI+NULL+'a'-NULL+'b',a+'b',MI+'a'+'b'
+row 1,4:NULL,+NULL+'a'-NULL+'b'-'a'+NULL,MI+NULL+'a'-NULL+'b'-'a'+NULL,a+'b'-'a',MI+'a'+'b'-'a'
+row 1,5:NULL,+NULL+'a'-NULL+'b'-'a'+NULL-'b'+NULL,MI+NULL+'a'-NULL+'b'-'a'+NULL-'b'+NULL,NULL,MI
+row 1,6:c,+NULL+'a'-NULL+'b'-'a'+NULL-'b'+NULL-NULL+'c',MI+NULL+'a'-NULL+'b'-'a'+NULL-'b'+NULL-NULL+'c',c,MI+'c'
+row 2,1:NULL,+NULL,MI+NULL,NULL,MI
+row 2,2:x,+NULL+'x',MI+NULL+'x',x,MI+'x'
+row 3,1:z,+'z',MI+'z',z,MI+'z'
+SELECT 9
+> SELECT p::text || ',' || i::text || ':' || CASE WHEN f THEN COALESCE(v::text, 'NULL') ELSE '-' END as row, logging_agg_nonstrict(v) filter(where f) over wnd as nstrict_filt, logging_agg_nonstrict_initcond(v) filter(where f) over wnd as nstrict_init_filt, logging_agg_strict(v::text) filter(where f) over wnd as strict_filt, logging_agg_strict_initcond(v) filter(where f) over wnd as strict_init_filt FROM (VALUES (1, 1, true, NULL), (1, 2, false, 'a'), (1, 3, true, 'b'), (1, 4, false, NULL), (1, 5, false, NULL), (1, 6, false, 'c'), (2, 1, false, NULL), (2, 2, true, 'x'), (3, 1, true, 'z') ) AS t(p, i, f, v) WINDOW wnd AS (PARTITION BY p ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) ORDER BY p, i
+fields row:25:-1:-1,nstrict_filt:25:-1:-1,nstrict_init_filt:25:-1:-1,strict_filt:25:-1:-1,strict_init_filt:25:-1:-1
+row 1,1:NULL,+NULL,MI+NULL,NULL,MI
+row 1,2:-,+NULL,MI+NULL,NULL,MI
+row 1,3:b,+'b',MI+'b',b,MI+'b'
+row 1,4:-,+'b',MI+'b',b,MI+'b'
+row 1,5:-,NULL,MI,NULL,MI
+row 1,6:-,NULL,MI,NULL,MI
+row 2,1:-,NULL,MI,NULL,MI
+row 2,2:x,+'x',MI+'x',x,MI+'x'
+row 3,1:z,+'z',MI+'z',z,MI+'z'
+SELECT 9
+> SELECT i::text || ':' || COALESCE(v::text, 'NULL') as row, logging_agg_strict(v::text) over wnd as inverse, logging_agg_strict(v::text || CASE WHEN random() < 0 then '?' ELSE '' END) over wnd as noinverse FROM (VALUES (1, 'a'), (2, 'b'), (3, 'c') ) AS t(i, v) WINDOW wnd AS (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) ORDER BY i
+fields row:25:-1:-1,inverse:25:-1:-1,noinverse:25:-1:-1
+row 1:a,a,a
+row 2:b,a+'b',a*'b'
+row 3:c,a+'b'-'a'+'c',b*'c'
+SELECT 3
+> SELECT i::text || ':' || COALESCE(v::text, 'NULL') as row, logging_agg_strict(v::text) filter(where true) over wnd as inverse, logging_agg_strict(v::text) filter(where random() >= 0) over wnd as noinverse FROM (VALUES (1, 'a'), (2, 'b'), (3, 'c') ) AS t(i, v) WINDOW wnd AS (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) ORDER BY i
+fields row:25:-1:-1,inverse:25:-1:-1,noinverse:25:-1:-1
+row 1:a,a,a
+row 2:b,a+'b',a*'b'
+row 3:c,a+'b'-'a'+'c',b*'c'
+SELECT 3
+> SELECT logging_agg_strict(v::text) OVER wnd FROM (VALUES (1, 'a'), (2, 'b'), (3, 'c') ) AS t(i, v) WINDOW wnd AS (ORDER BY i ROWS BETWEEN CURRENT ROW AND CURRENT ROW) ORDER BY i
+fields logging_agg_strict:25:-1:-1
+row a
+row b
+row c
+SELECT 3
+> CREATE FUNCTION sum_int_randrestart_minvfunc(int4, int4) RETURNS int4 AS $$ SELECT CASE WHEN random() < 0.2 THEN NULL ELSE $1 - $2 END $$ LANGUAGE SQL STRICT
+CREATE FUNCTION
+> CREATE AGGREGATE sum_int_randomrestart (int4) ( stype = int4, sfunc = int4pl, mstype = int4, msfunc = int4pl, minvfunc = sum_int_randrestart_minvfunc )
+CREATE AGGREGATE
+> WITH vs AS ( SELECT i, (random() * 100)::int4 AS v FROM generate_series(1, 100) AS i ), sum_following AS ( SELECT i, SUM(v) OVER (ORDER BY i DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS s FROM vs ) SELECT DISTINCT sum_following.s = sum_int_randomrestart(v) OVER fwd AS eq1, -sum_following.s = sum_int_randomrestart(-v) OVER fwd AS eq2, 100*3+(vs.i-1)*3 = length(logging_agg_nonstrict(''::text) OVER fwd) AS eq3 FROM vs JOIN sum_following ON sum_following.i = vs.i WINDOW fwd AS ( ORDER BY vs.i ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING )
+fields eq1:16:1:-1,eq2:16:1:-1,eq3:16:1:-1
+row t,t,t
+SELECT 1
+> CREATE FUNCTION ma_s(int, int) RETURNS int AS $$ SELECT $1 + $2 $$ LANGUAGE SQL IMMUTABLE STRICT
+CREATE FUNCTION
+> CREATE FUNCTION ma_i(int, int) RETURNS int AS $$ SELECT CASE WHEN $2 = 3 THEN NULL ELSE $1 - $2 END $$ LANGUAGE SQL IMMUTABLE STRICT
+CREATE FUNCTION
+> CREATE AGGREGATE ma_sum(int) (stype = int, sfunc = int4pl, mstype = int, msfunc = ma_s, minvfunc = ma_i)
+CREATE AGGREGATE
+> CREATE FUNCTION ma_n(text, int) RETURNS text AS $$ SELECT CASE WHEN $2 = 4 THEN NULL ELSE coalesce($1, '') || $2 END $$ LANGUAGE SQL IMMUTABLE
+CREATE FUNCTION
+> CREATE FUNCTION ma_ni(text, int) RETURNS text AS $$ SELECT $1 || '-' || $2 $$ LANGUAGE SQL IMMUTABLE
+CREATE FUNCTION
+> CREATE AGGREGATE ma_log(int) (stype = text, sfunc = ma_n, mstype = text, msfunc = ma_n, minvfunc = ma_ni)
+CREATE AGGREGATE
+> CREATE TABLE ma_t (i int, v int)
+CREATE TABLE
+> INSERT INTO ma_t VALUES (1, 1), (2, 2), (3, 3), (4, NULL), (5, 5), (6, 6), (7, 7)
+INSERT 0 7
+> SELECT i, ma_sum(v) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM ma_t ORDER BY i
+fields i@ma_t.1:23:4:-1,ma_sum:23:4:-1
+row 1,3
+row 2,6
+row 3,5
+row 4,8
+row 5,11
+row 6,18
+row 7,13
+SELECT 7
+> SELECT i, ma_sum(v) OVER (ORDER BY i ROWS BETWEEN 2 PRECEDING AND CURRENT ROW EXCLUDE CURRENT ROW) FROM ma_t ORDER BY i
+fields i@ma_t.1:23:4:-1,ma_sum:23:4:-1
+row 1,NULL
+row 2,1
+row 3,3
+row 4,5
+row 5,3
+row 6,5
+row 7,11
+SELECT 7
+> SELECT i, ma_sum(v) FILTER (WHERE v <> 5) OVER (ORDER BY i ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) FROM ma_t ORDER BY i
+fields i@ma_t.1:23:4:-1,ma_sum:23:4:-1
+row 1,1
+row 2,3
+row 3,6
+row 4,5
+row 5,3
+row 6,6
+row 7,13
+SELECT 7
+> SELECT i, ma_sum(v) OVER (ORDER BY i RANGE BETWEEN 2 PRECEDING AND 1 PRECEDING) FROM ma_t ORDER BY i
+fields i@ma_t.1:23:4:-1,ma_sum:23:4:-1
+row 1,NULL
+row 2,1
+row 3,3
+row 4,5
+row 5,3
+row 6,5
+row 7,11
+SELECT 7
+> SELECT i, ma_sum(v) OVER (ORDER BY i ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM ma_t ORDER BY i
+fields i@ma_t.1:23:4:-1,ma_sum:23:4:-1
+row 1,1
+row 2,3
+row 3,6
+row 4,6
+row 5,11
+row 6,17
+row 7,24
+SELECT 7
+> SELECT i, ma_sum(v) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) FROM ma_t ORDER BY i
+fields i@ma_t.1:23:4:-1,ma_sum:23:4:-1
+row 1,24
+row 2,23
+row 3,21
+row 4,18
+row 5,18
+row 6,13
+row 7,7
+SELECT 7
+> SELECT i, ma_log(i) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM ma_t WHERE i < 4 ORDER BY i
+fields i@ma_t.1:23:4:-1,ma_log:25:-1:-1
+row 1,1
+row 2,12
+row 3,12-13
+SELECT 3
+> SELECT max(l) FROM (SELECT ma_log(i) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS l FROM ma_t) s
+fields max:25:-1:-1
+ERROR 22004 moving-aggregate transition function must not return null
+> SELECT ma_log(i) FROM ma_t
+fields ma_log:25:-1:-1
+row 567
+SELECT 1

@@ -3814,6 +3814,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/cte_shared.test")));
     }
 
+    /// The moving-aggregate mode of an aggregate of `CREATE AGGREGATE` with `OVER`: the rows that leave the frame go through the inverse transition function, the aggregate starts again when that function gives null, and a transition function that gives null is an error. `connection/moving_aggregate.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn moving_aggregate() {
+        big_stack(|| script(include_str!("connection/moving_aggregate.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {
