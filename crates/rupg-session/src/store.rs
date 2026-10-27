@@ -318,22 +318,24 @@ impl Store {
         };
         if waited {
             state.waiting.remove(&pid);
-            drop(state);
+        }
+        // The session takes the lock before it releases the mutex for the report of the end of the wait. Else another session can take the lock in the gap, and the commit of one transaction discards the changes of the other.
+        let lease = result.map(|()| {
+            let next = state.next_oid;
+            let roles = Arc::clone(&state.roles);
+            let db = state.databases.get_mut(&database).expect("the loop found the database");
+            db.locked = Some(pid);
+            let mut catalog = Arc::clone(&db.committed);
+            if catalog.next_oid() < next {
+                Arc::make_mut(&mut catalog).advance_oid(next);
+            }
+            Lease { store: Arc::clone(self), database, catalog, base: Arc::clone(&roles), roles }
+        });
+        drop(state);
+        if waited {
             report(false);
-            state = self.state();
         }
-        result?;
-        let next = state.next_oid;
-        let Some(db) = state.databases.get_mut(&database) else {
-            return Err(Error::internal("the database is gone"));
-        };
-        db.locked = Some(pid);
-        let mut catalog = Arc::clone(&db.committed);
-        if catalog.next_oid() < next {
-            Arc::make_mut(&mut catalog).advance_oid(next);
-        }
-        let roles = Arc::clone(&state.roles);
-        Ok(Lease { store: Arc::clone(self), database, catalog, base: Arc::clone(&roles), roles })
+        lease
     }
 
     /// The session whose transaction holds the lock of the database that the session `pid` waits for.
@@ -810,5 +812,23 @@ mod tests {
         *holder.0.lock().unwrap() = Some(held);
         assert!(store.lease(POSTGRES, 2, &AtomicBool::new(false), &|_| {}).is_ok());
         assert!(holder.0.lock().unwrap().is_none());
+    }
+
+    /// A session that waited holds the lock when it reports the end of the wait, so no other session can take the lock in the gap and lose the changes of one of the two transactions.
+    #[test]
+    fn the_waiter_holds_the_lock_at_the_end_of_the_wait() {
+        let holder = Arc::new(Holder::default());
+        let store = Arc::new(Store::with_tasks(holder.clone()));
+        let held = store.lease(POSTGRES, 1, &AtomicBool::new(false), &|_| {}).unwrap();
+        *holder.0.lock().unwrap() = Some(held);
+        let locked = Mutex::new(None);
+        let report = |waits: bool| {
+            if !waits {
+                *locked.lock().unwrap() = store.state().databases[&POSTGRES].locked;
+            }
+        };
+        let lease = store.lease(POSTGRES, 2, &AtomicBool::new(false), &report).unwrap();
+        assert_eq!(*locked.lock().unwrap(), Some(2));
+        drop(lease);
     }
 }
