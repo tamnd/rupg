@@ -573,7 +573,7 @@ impl Connection {
         self.statement_start = query::now(&*self.clock);
     }
 
-    /// `SetSessionAuthorization` and `SetCurrentRoleId`: the session user from `session_authorization`, the current user from `role`, or the session user when `role` is `none`, and `is_superuser` from the current user. A rollback and `RESET` change the settings too, so the session reads them again before each statement and before `ReadyForQuery`.
+    /// `SetSessionAuthorization` and `SetCurrentRoleId`: the session user from `session_authorization`, the current user from `role`, or the session user when `role` is `none`, and `is_superuser` from the current user. A rollback and `RESET` change the settings too, so the session reads them again before each statement and before `ReadyForQuery`. As in PostgreSQL, `is_superuser` changes only when `role` or `session_authorization` gets a value, not when `ALTER ROLE` changes the current user.
     fn sync_role(&mut self) {
         let roles = self.roles();
         let settings = self.settings.get_mut();
@@ -582,7 +582,10 @@ impl Connection {
             settings.get("role").filter(|role| role != "none").unwrap_or_else(|| session.clone());
         let role = utility::role_oid(&roles, &current, &self.user).unwrap_or(BOOTSTRAP_SUPERUSER);
         let superuser = if roles.superuser(role) { "on" } else { "off" };
-        if settings.get("is_superuser").as_deref() != Some(superuser) {
+        let changed = settings.take_roles_set()
+            || session != self.session_user
+            || current != self.current_user;
+        if changed && settings.get("is_superuser").as_deref() != Some(superuser) {
             drop(settings.set_internal("is_superuser", superuser));
         }
         self.session_role =
@@ -1321,6 +1324,10 @@ impl Connection {
                     Node::CreateConversionStmt(_) => CommandTag::CreateConversion,
                     Node::ViewStmt(_) => CommandTag::CreateView,
                     Node::RuleStmt(_) => CommandTag::CreateRule,
+                    Node::CreateFdwStmt(_) => CommandTag::CreateForeignDataWrapper,
+                    Node::AlterFdwStmt(_) => CommandTag::AlterForeignDataWrapper,
+                    Node::CreateForeignServerStmt(_) => CommandTag::CreateServer,
+                    Node::AlterForeignServerStmt(_) => CommandTag::AlterServer,
                     Node::CreatePolicyStmt(_) => CommandTag::CreatePolicy,
                     Node::AlterPolicyStmt(_) => CommandTag::AlterPolicy,
                     Node::CreateTrigStmt(_) => CommandTag::CreateTrigger,
@@ -2436,6 +2443,8 @@ fn alter_tag(kind: ObjectType) -> CommandTag {
         ObjectType::OBJECT_TSDICTIONARY => CommandTag::AlterTextSearchDictionary,
         ObjectType::OBJECT_TSTEMPLATE => CommandTag::AlterTextSearchTemplate,
         ObjectType::OBJECT_TSCONFIGURATION => CommandTag::AlterTextSearchConfiguration,
+        ObjectType::OBJECT_FDW => CommandTag::AlterForeignDataWrapper,
+        ObjectType::OBJECT_FOREIGN_SERVER => CommandTag::AlterServer,
         _ => CommandTag::AlterTable,
     }
 }
@@ -4181,6 +4190,12 @@ mod tests {
     #[test]
     fn identify_as_address() {
         big_stack(|| script(include_str!("connection/identify_as_address.test")));
+    }
+
+    /// `CREATE`, `ALTER`, `DROP`, `COMMENT ON`, `RENAME` and `OWNER TO` of foreign-data wrappers and foreign servers, with their options, `postgresql_fdw_validator`, the checks of the superuser and of the owner, `IF NOT EXISTS`, `CASCADE`, `pg_foreign_data_wrapper`, `pg_foreign_server` and the object address functions. `connection/foreign_data_wrapper.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn foreign_data_wrapper() {
+        big_stack(|| script(include_str!("connection/foreign_data_wrapper.test")));
     }
 
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.

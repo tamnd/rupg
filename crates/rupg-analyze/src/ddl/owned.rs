@@ -2,8 +2,8 @@
 
 use rupg_catalog::{
     Catalog, ObjRef, PG_CLASS, PG_COLLATION, PG_CONVERSION, PG_DEFAULT_ACL, PG_EXTENSION,
-    PG_LANGUAGE, PG_NAMESPACE, PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_PROC, PG_STATISTIC_EXT,
-    PG_TS_CONFIG, PG_TS_DICT, PG_TYPE, RangePart, RelKind,
+    PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_LANGUAGE, PG_NAMESPACE, PG_OPCLASS, PG_OPERATOR,
+    PG_OPFAMILY, PG_PROC, PG_STATISTIC_EXT, PG_TS_CONFIG, PG_TS_DICT, PG_TYPE, RangePart, RelKind,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{DropBehavior, DropOwnedStmt, List, Node, ReassignOwnedStmt};
@@ -64,6 +64,12 @@ pub fn owned_objects(catalog: &Catalog, role: u32) -> Vec<ObjRef> {
     for c in catalog.conversions() {
         add(PG_CONVERSION, c.oid, c.owner);
     }
+    for f in catalog.fdws() {
+        add(PG_FOREIGN_DATA_WRAPPER, f.oid, f.owner);
+    }
+    for s in catalog.servers() {
+        add(PG_FOREIGN_SERVER, s.oid, s.owner);
+    }
     for o in catalog.operators() {
         add(PG_OPERATOR, o.oid, o.owner);
     }
@@ -123,6 +129,8 @@ fn acl_owner(catalog: &Catalog, object: ObjRef) -> u32 {
         PG_TYPE => catalog.type_by_oid(object.oid).map(|t| t.owner),
         PG_PROC => catalog.function(object.oid).map(|f| f.owner),
         PG_LANGUAGE => catalog.languages().find(|l| l.oid == object.oid).map(|l| l.owner),
+        PG_FOREIGN_DATA_WRAPPER => catalog.fdw(object.oid).map(|f| f.owner),
+        PG_FOREIGN_SERVER => catalog.server(object.oid).map(|s| s.owner),
         _ => None,
     };
     owner.unwrap_or(rupg_catalog::BOOTSTRAP_SUPERUSER)

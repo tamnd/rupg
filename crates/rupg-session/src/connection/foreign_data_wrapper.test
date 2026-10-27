@@ -1,0 +1,406 @@
+> CREATE ROLE tsstat_fdw_user LOGIN SUPERUSER;
+CREATE ROLE
+> SET SESSION AUTHORIZATION 'tsstat_fdw_user';
+SET
+session_authorization=tsstat_fdw_user
+> CREATE ROLE tsstat_fdw_role;
+CREATE ROLE
+> CREATE ROLE tsstat_fdw_role2;
+CREATE ROLE
+> CREATE ROLE tsstat_fdw_super SUPERUSER;
+CREATE ROLE
+> CREATE FOREIGN DATA WRAPPER dummy;
+CREATE FOREIGN DATA WRAPPER
+> COMMENT ON FOREIGN DATA WRAPPER dummy IS 'useless';
+COMMENT
+> CREATE FOREIGN DATA WRAPPER postgresql VALIDATOR postgresql_fdw_validator;
+CREATE FOREIGN DATA WRAPPER
+> SELECT fdwname, fdwhandler::regproc, fdwvalidator::regproc, fdwoptions FROM pg_foreign_data_wrapper ORDER BY 1, 2, 3;
+fields fdwname@pg_foreign_data_wrapper.2:19:64:-1,fdwhandler:24:4:-1,fdwvalidator:24:4:-1,fdwoptions@pg_foreign_data_wrapper.8:1009:-1:-1
+row dummy,-,-,NULL
+row postgresql,-,postgresql_fdw_validator,NULL
+SELECT 2
+> SELECT srvname, srvoptions FROM pg_foreign_server;
+fields srvname@pg_foreign_server.2:19:64:-1,srvoptions@pg_foreign_server.8:1009:-1:-1
+SELECT 0
+> CREATE FOREIGN DATA WRAPPER foo VALIDATOR bar;
+ERROR 42883 function bar(text[], oid) does not exist
+> CREATE FOREIGN DATA WRAPPER foo;
+CREATE FOREIGN DATA WRAPPER
+> CREATE FOREIGN DATA WRAPPER foo;
+ERROR 42710 foreign-data wrapper "foo" already exists
+> DROP FOREIGN DATA WRAPPER foo;
+DROP FOREIGN DATA WRAPPER
+> CREATE FOREIGN DATA WRAPPER foo OPTIONS (testing '1');
+CREATE FOREIGN DATA WRAPPER
+> SELECT fdwname, fdwoptions FROM pg_foreign_data_wrapper ORDER BY 1;
+fields fdwname@pg_foreign_data_wrapper.2:19:64:-1,fdwoptions@pg_foreign_data_wrapper.8:1009:-1:-1
+row dummy,NULL
+row foo,{testing=1}
+row postgresql,NULL
+SELECT 3
+> DROP FOREIGN DATA WRAPPER foo;
+DROP FOREIGN DATA WRAPPER
+> CREATE FOREIGN DATA WRAPPER foo OPTIONS (testing '1', testing '2');
+ERROR 42710 option "testing" provided more than once
+> CREATE FOREIGN DATA WRAPPER foo OPTIONS (testing '1', another '2');
+CREATE FOREIGN DATA WRAPPER
+> SELECT fdwname, fdwoptions FROM pg_foreign_data_wrapper ORDER BY 1;
+fields fdwname@pg_foreign_data_wrapper.2:19:64:-1,fdwoptions@pg_foreign_data_wrapper.8:1009:-1:-1
+row dummy,NULL
+row foo,{testing=1,another=2}
+row postgresql,NULL
+SELECT 3
+> DROP FOREIGN DATA WRAPPER foo;
+DROP FOREIGN DATA WRAPPER
+> SET ROLE tsstat_fdw_role;
+SET
+is_superuser=off
+> CREATE FOREIGN DATA WRAPPER foo;
+ERROR 42501 permission denied to create foreign-data wrapper "foo"
+> RESET ROLE;
+RESET
+is_superuser=on
+> CREATE FOREIGN DATA WRAPPER foo VALIDATOR postgresql_fdw_validator;
+CREATE FOREIGN DATA WRAPPER
+> CREATE FUNCTION invalid_fdw_handler() RETURNS int LANGUAGE SQL AS 'SELECT 1;';
+CREATE FUNCTION
+> CREATE FOREIGN DATA WRAPPER test_fdw HANDLER invalid_fdw_handler;
+ERROR 42809 function invalid_fdw_handler must return type fdw_handler
+> CREATE FOREIGN DATA WRAPPER test_fdw VALIDATOR postgresql_fdw_validator VALIDATOR postgresql_fdw_validator;
+ERROR 42601 conflicting or redundant options at 73
+> ALTER FOREIGN DATA WRAPPER foo OPTIONS (nonexistent 'fdw');
+ERROR 42601 invalid option "nonexistent"
+> ALTER FOREIGN DATA WRAPPER foo VALIDATOR bar;
+ERROR 42883 function bar(text[], oid) does not exist
+> ALTER FOREIGN DATA WRAPPER foo NO VALIDATOR;
+ALTER FOREIGN DATA WRAPPER
+> SELECT fdwname, fdwvalidator::regproc, fdwoptions FROM pg_foreign_data_wrapper ORDER BY 1;
+fields fdwname@pg_foreign_data_wrapper.2:19:64:-1,fdwvalidator:24:4:-1,fdwoptions@pg_foreign_data_wrapper.8:1009:-1:-1
+row dummy,-,NULL
+row foo,-,NULL
+row postgresql,postgresql_fdw_validator,NULL
+SELECT 3
+> ALTER FOREIGN DATA WRAPPER foo OPTIONS (a '1', b '2');
+ALTER FOREIGN DATA WRAPPER
+> ALTER FOREIGN DATA WRAPPER foo OPTIONS (SET c '4');
+ERROR 42704 option "c" not found
+> ALTER FOREIGN DATA WRAPPER foo OPTIONS (DROP c);
+ERROR 42704 option "c" not found
+> ALTER FOREIGN DATA WRAPPER foo OPTIONS (ADD x '1', DROP x);
+ALTER FOREIGN DATA WRAPPER
+> SELECT fdwname, fdwoptions FROM pg_foreign_data_wrapper ORDER BY 1;
+fields fdwname@pg_foreign_data_wrapper.2:19:64:-1,fdwoptions@pg_foreign_data_wrapper.8:1009:-1:-1
+row dummy,NULL
+row foo,{a=1,b=2}
+row postgresql,NULL
+SELECT 3
+> ALTER FOREIGN DATA WRAPPER foo OPTIONS (DROP a, SET b '3', ADD c '4');
+ALTER FOREIGN DATA WRAPPER
+> SELECT fdwname, fdwoptions FROM pg_foreign_data_wrapper ORDER BY 1;
+fields fdwname@pg_foreign_data_wrapper.2:19:64:-1,fdwoptions@pg_foreign_data_wrapper.8:1009:-1:-1
+row dummy,NULL
+row foo,{b=3,c=4}
+row postgresql,NULL
+SELECT 3
+> ALTER FOREIGN DATA WRAPPER foo OPTIONS (a '2');
+ALTER FOREIGN DATA WRAPPER
+> ALTER FOREIGN DATA WRAPPER foo OPTIONS (b '4');
+ERROR 42710 option "b" provided more than once
+> ALTER FOREIGN DATA WRAPPER foo OPTIONS ("x=y" '4');
+ERROR 22023 invalid option name "x=y": must not contain "="
+> SELECT fdwname, fdwoptions FROM pg_foreign_data_wrapper ORDER BY 1;
+fields fdwname@pg_foreign_data_wrapper.2:19:64:-1,fdwoptions@pg_foreign_data_wrapper.8:1009:-1:-1
+row dummy,NULL
+row foo,{b=3,c=4,a=2}
+row postgresql,NULL
+SELECT 3
+> SET ROLE tsstat_fdw_role;
+SET
+is_superuser=off
+> ALTER FOREIGN DATA WRAPPER foo OPTIONS (ADD d '5');
+ERROR 42501 permission denied to alter foreign-data wrapper "foo"
+> SET ROLE tsstat_fdw_super;
+SET
+is_superuser=on
+> ALTER FOREIGN DATA WRAPPER foo OPTIONS (ADD d '5');
+ALTER FOREIGN DATA WRAPPER
+> ALTER FOREIGN DATA WRAPPER foo OWNER TO tsstat_fdw_role;
+ERROR 42501 permission denied to change owner of foreign-data wrapper "foo"
+> ALTER FOREIGN DATA WRAPPER foo OWNER TO tsstat_fdw_super;
+ALTER FOREIGN DATA WRAPPER
+> ALTER ROLE tsstat_fdw_super NOSUPERUSER;
+ALTER ROLE
+> SET ROLE tsstat_fdw_super;
+SET
+is_superuser=off
+> ALTER FOREIGN DATA WRAPPER foo OPTIONS (ADD e '6');
+ERROR 42501 permission denied to alter foreign-data wrapper "foo"
+> RESET ROLE;
+RESET
+is_superuser=on
+> SELECT fdwname, fdwowner::regrole, fdwoptions FROM pg_foreign_data_wrapper ORDER BY 1;
+fields fdwname@pg_foreign_data_wrapper.2:19:64:-1,fdwowner:4096:4:-1,fdwoptions@pg_foreign_data_wrapper.8:1009:-1:-1
+row dummy,tsstat_fdw_user,NULL
+row foo,tsstat_fdw_super,{b=3,c=4,a=2,d=5}
+row postgresql,tsstat_fdw_user,NULL
+SELECT 3
+> ALTER FOREIGN DATA WRAPPER foo RENAME TO foo1;
+ALTER FOREIGN DATA WRAPPER
+> ALTER FOREIGN DATA WRAPPER foo1 RENAME TO dummy;
+ERROR 42710 foreign-data wrapper "dummy" already exists
+> SELECT fdwname FROM pg_foreign_data_wrapper ORDER BY 1;
+fields fdwname@pg_foreign_data_wrapper.2:19:64:-1
+row dummy
+row foo1
+row postgresql
+SELECT 3
+> ALTER FOREIGN DATA WRAPPER foo1 RENAME TO foo;
+ALTER FOREIGN DATA WRAPPER
+> ALTER FOREIGN DATA WRAPPER foo HANDLER invalid_fdw_handler;
+ERROR 42809 function invalid_fdw_handler must return type fdw_handler
+> ALTER FOREIGN DATA WRAPPER foo VALIDATOR postgresql_fdw_validator;
+WARNING 01000 changing the foreign-data wrapper validator can cause the options for dependent objects to become invalid
+ALTER FOREIGN DATA WRAPPER
+> ALTER FOREIGN DATA WRAPPER foo NO HANDLER;
+WARNING 01000 changing the foreign-data wrapper handler can change behavior of existing foreign tables
+ALTER FOREIGN DATA WRAPPER
+> DROP FUNCTION invalid_fdw_handler();
+DROP FUNCTION
+> DROP FOREIGN DATA WRAPPER nonexistent;
+ERROR 42704 foreign-data wrapper "nonexistent" does not exist
+> DROP FOREIGN DATA WRAPPER IF EXISTS nonexistent;
+NOTICE 00000 foreign-data wrapper "nonexistent" does not exist, skipping
+DROP FOREIGN DATA WRAPPER
+> DROP ROLE tsstat_fdw_super;
+ERROR 2BP01 role "tsstat_fdw_super" cannot be dropped because some objects depend on it
+> SET ROLE tsstat_fdw_super;
+SET
+is_superuser=off
+> DROP FOREIGN DATA WRAPPER foo;
+DROP FOREIGN DATA WRAPPER
+> RESET ROLE;
+RESET
+is_superuser=on
+> DROP ROLE tsstat_fdw_super;
+DROP ROLE
+> CREATE FOREIGN DATA WRAPPER foo;
+CREATE FOREIGN DATA WRAPPER
+> CREATE SERVER s1 FOREIGN DATA WRAPPER foo;
+CREATE SERVER
+> COMMENT ON SERVER s1 IS 'foreign server';
+COMMENT
+> SELECT obj_description(oid, 'pg_foreign_server') FROM pg_foreign_server;
+fields obj_description:25:-1:-1
+row foreign server
+SELECT 1
+> SELECT obj_description(oid, 'pg_foreign_data_wrapper') FROM pg_foreign_data_wrapper ORDER BY 1;
+fields obj_description:25:-1:-1
+row useless
+row NULL
+row NULL
+SELECT 3
+> DROP FOREIGN DATA WRAPPER foo;
+ERROR 2BP01 cannot drop foreign-data wrapper foo because other objects depend on it
+> SET ROLE tsstat_fdw_role;
+SET
+is_superuser=off
+> DROP FOREIGN DATA WRAPPER foo CASCADE;
+ERROR 42501 must be owner of foreign-data wrapper foo
+> RESET ROLE;
+RESET
+is_superuser=on
+> DROP FOREIGN DATA WRAPPER foo CASCADE;
+NOTICE 00000 drop cascades to server s1
+DROP FOREIGN DATA WRAPPER
+> SELECT fdwname FROM pg_foreign_data_wrapper ORDER BY 1;
+fields fdwname@pg_foreign_data_wrapper.2:19:64:-1
+row dummy
+row postgresql
+SELECT 2
+> SELECT srvname FROM pg_foreign_server;
+fields srvname@pg_foreign_server.2:19:64:-1
+SELECT 0
+> CREATE FOREIGN DATA WRAPPER foo OPTIONS ("test wrapper" 'true');
+CREATE FOREIGN DATA WRAPPER
+> CREATE SERVER s1 FOREIGN DATA WRAPPER foo;
+CREATE SERVER
+> CREATE SERVER s1 FOREIGN DATA WRAPPER foo;
+ERROR 42710 server "s1" already exists
+> CREATE SERVER IF NOT EXISTS s1 FOREIGN DATA WRAPPER foo;
+NOTICE 42710 server "s1" already exists, skipping
+CREATE SERVER
+> CREATE SERVER s2 FOREIGN DATA WRAPPER foo OPTIONS (host 'a', dbname 'b');
+CREATE SERVER
+> CREATE SERVER s3 TYPE 'oracle' FOREIGN DATA WRAPPER foo;
+CREATE SERVER
+> CREATE SERVER s4 TYPE 'oracle' FOREIGN DATA WRAPPER foo OPTIONS (host 'a', dbname 'b');
+CREATE SERVER
+> CREATE SERVER s5 VERSION '15.0' FOREIGN DATA WRAPPER foo;
+CREATE SERVER
+> CREATE SERVER s6 VERSION '16.0' FOREIGN DATA WRAPPER foo OPTIONS (host 'a', dbname 'b');
+CREATE SERVER
+> CREATE SERVER s7 TYPE 'oracle' VERSION '17.0' FOREIGN DATA WRAPPER foo OPTIONS (host 'a', dbname 'b');
+CREATE SERVER
+> CREATE SERVER s8 FOREIGN DATA WRAPPER postgresql OPTIONS (foo '1');
+ERROR 42601 invalid option "foo"
+> CREATE SERVER s8 FOREIGN DATA WRAPPER postgresql OPTIONS (host 'localhost', dbname 's8db');
+CREATE SERVER
+> CREATE SERVER s8x FOREIGN DATA WRAPPER postgresql OPTIONS (hots 'localhost');
+ERROR 42601 invalid option "hots"
+> CREATE SERVER s8y FOREIGN DATA WRAPPER postgresql OPTIONS (user 'x');
+ERROR 42601 invalid option "user"
+> CREATE SERVER s9 FOREIGN DATA WRAPPER nope;
+ERROR 42704 foreign-data wrapper "nope" does not exist
+> SET ROLE tsstat_fdw_role;
+SET
+is_superuser=off
+> CREATE SERVER t1 FOREIGN DATA WRAPPER foo;
+ERROR 42501 permission denied for foreign-data wrapper foo
+> RESET ROLE;
+RESET
+is_superuser=on
+> SELECT srvname, srvowner::regrole, (SELECT fdwname FROM pg_foreign_data_wrapper w WHERE w.oid = srvfdw), srvtype, srvversion, srvacl, srvoptions FROM pg_foreign_server ORDER BY 1;
+fields srvname@pg_foreign_server.2:19:64:-1,srvowner:4096:4:-1,fdwname:19:64:-1,srvtype@pg_foreign_server.5:25:-1:-1,srvversion@pg_foreign_server.6:25:-1:-1,srvacl@pg_foreign_server.7:1034:-1:-1,srvoptions@pg_foreign_server.8:1009:-1:-1
+row s1,tsstat_fdw_user,foo,NULL,NULL,NULL,NULL
+row s2,tsstat_fdw_user,foo,NULL,NULL,NULL,{host=a,dbname=b}
+row s3,tsstat_fdw_user,foo,oracle,NULL,NULL,NULL
+row s4,tsstat_fdw_user,foo,oracle,NULL,NULL,{host=a,dbname=b}
+row s5,tsstat_fdw_user,foo,NULL,15.0,NULL,NULL
+row s6,tsstat_fdw_user,foo,NULL,16.0,NULL,{host=a,dbname=b}
+row s7,tsstat_fdw_user,foo,oracle,17.0,NULL,{host=a,dbname=b}
+row s8,tsstat_fdw_user,postgresql,NULL,NULL,NULL,{host=localhost,dbname=s8db}
+SELECT 8
+> ALTER SERVER s0;
+ERROR 42601 syntax error at or near ";" at 16
+> ALTER SERVER s0 OPTIONS (a '1');
+ERROR 42704 server "s0" does not exist
+> ALTER SERVER s1 VERSION '1.0' OPTIONS (servername 's1');
+ALTER SERVER
+> ALTER SERVER s2 VERSION '1.1';
+ALTER SERVER
+> ALTER SERVER s3 OPTIONS ("tns name" 'orcl', port '1521');
+ALTER SERVER
+> ALTER SERVER s8 OPTIONS (foo '1');
+ERROR 42601 invalid option "foo"
+> ALTER SERVER s8 OPTIONS (connect_timeout '30', SET dbname 'db1', DROP host);
+ALTER SERVER
+> ALTER SERVER s2 NO VERSION;
+ERROR 42601 syntax error at or near "NO" at 17
+> SET ROLE tsstat_fdw_role;
+SET
+is_superuser=off
+> ALTER SERVER s1 VERSION '1.1';
+ERROR 42501 must be owner of foreign server s1
+> ALTER SERVER s1 OWNER TO tsstat_fdw_role;
+ERROR 42501 must be owner of foreign server s1
+> RESET ROLE;
+RESET
+is_superuser=on
+> ALTER SERVER s1 OWNER TO tsstat_fdw_role;
+ALTER SERVER
+> SET ROLE tsstat_fdw_role;
+SET
+is_superuser=off
+> ALTER SERVER s1 VERSION '1.1';
+ALTER SERVER
+> ALTER SERVER s1 OWNER TO tsstat_fdw_role2;
+ERROR 42501 must be able to SET ROLE "tsstat_fdw_role2"
+> RESET ROLE;
+RESET
+is_superuser=on
+> SELECT srvname, srvowner::regrole, srvtype, srvversion, srvoptions FROM pg_foreign_server ORDER BY 1;
+fields srvname@pg_foreign_server.2:19:64:-1,srvowner:4096:4:-1,srvtype@pg_foreign_server.5:25:-1:-1,srvversion@pg_foreign_server.6:25:-1:-1,srvoptions@pg_foreign_server.8:1009:-1:-1
+row s1,tsstat_fdw_role,NULL,1.1,{servername=s1}
+row s2,tsstat_fdw_user,NULL,1.1,{host=a,dbname=b}
+row s3,tsstat_fdw_user,oracle,NULL,{"tns name=orcl",port=1521}
+row s4,tsstat_fdw_user,oracle,NULL,{host=a,dbname=b}
+row s5,tsstat_fdw_user,NULL,15.0,NULL
+row s6,tsstat_fdw_user,NULL,16.0,{host=a,dbname=b}
+row s7,tsstat_fdw_user,oracle,17.0,{host=a,dbname=b}
+row s8,tsstat_fdw_user,NULL,NULL,{dbname=db1,connect_timeout=30}
+SELECT 8
+> ALTER SERVER s8 RENAME to s8new;
+ALTER SERVER
+> ALTER SERVER s8new RENAME to s2;
+ERROR 42710 server "s2" already exists
+> SELECT srvname FROM pg_foreign_server ORDER BY 1;
+fields srvname@pg_foreign_server.2:19:64:-1
+row s1
+row s2
+row s3
+row s4
+row s5
+row s6
+row s7
+row s8new
+SELECT 8
+> SELECT pg_describe_object(classid, objid, objsubid) AS obj, pg_describe_object(refclassid, refobjid, refobjsubid) AS ref, deptype FROM pg_depend WHERE classid IN ('pg_foreign_server'::regclass, 'pg_foreign_data_wrapper'::regclass) ORDER BY 1, 2;
+fields obj:25:-1:-1,ref:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row server s1,foreign-data wrapper foo,n
+row server s2,foreign-data wrapper foo,n
+row server s3,foreign-data wrapper foo,n
+row server s4,foreign-data wrapper foo,n
+row server s5,foreign-data wrapper foo,n
+row server s6,foreign-data wrapper foo,n
+row server s7,foreign-data wrapper foo,n
+row server s8new,foreign-data wrapper postgresql,n
+SELECT 8
+> SELECT (pg_identify_object(c, o, 0)).*, pg_identify_object_as_address(c, o, 0) FROM (SELECT 'pg_foreign_server'::regclass, oid FROM pg_foreign_server WHERE srvname IN ('s1','s8new') UNION ALL SELECT 'pg_foreign_data_wrapper'::regclass, oid FROM pg_foreign_data_wrapper) v(c, o) ORDER BY 3, 4;
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1,pg_identify_object_as_address:2249:-1:-1
+row foreign-data wrapper,NULL,dummy,dummy,("foreign-data wrapper",{dummy},{})
+row foreign-data wrapper,NULL,foo,foo,("foreign-data wrapper",{foo},{})
+row foreign-data wrapper,NULL,postgresql,postgresql,("foreign-data wrapper",{postgresql},{})
+row server,NULL,s1,s1,(server,{s1},{})
+row server,NULL,s8new,s8new,(server,{s8new},{})
+SELECT 5
+> SELECT pg_describe_object(a.classid, a.objid, a.objsubid) FROM pg_get_object_address('server', '{s1}', '{}') a;
+fields pg_describe_object:25:-1:-1
+row server s1
+SELECT 1
+> SELECT pg_describe_object(a.classid, a.objid, a.objsubid) FROM pg_get_object_address('foreign-data wrapper', '{foo}', '{}') a;
+fields pg_describe_object:25:-1:-1
+row foreign-data wrapper foo
+SELECT 1
+> SELECT has_server_privilege('tsstat_fdw_role2', 's1', 'USAGE'), has_server_privilege('tsstat_fdw_role', 's1', 'USAGE'), has_foreign_data_wrapper_privilege('tsstat_fdw_role', 'foo', 'USAGE'), has_foreign_data_wrapper_privilege('tsstat_fdw_user', 'foo', 'USAGE');
+fields has_server_privilege:16:1:-1,has_server_privilege:16:1:-1,has_foreign_data_wrapper_privilege:16:1:-1,has_foreign_data_wrapper_privilege:16:1:-1
+row f,t,f,t
+SELECT 1
+> DROP ROLE tsstat_fdw_role;
+ERROR 2BP01 role "tsstat_fdw_role" cannot be dropped because some objects depend on it
+> DROP SERVER nonexistent;
+ERROR 42704 server "nonexistent" does not exist
+> DROP SERVER IF EXISTS nonexistent;
+NOTICE 00000 server "nonexistent" does not exist, skipping
+DROP SERVER
+> SET ROLE tsstat_fdw_role;
+SET
+is_superuser=off
+> DROP SERVER s2;
+ERROR 42501 must be owner of foreign server s2
+> RESET ROLE;
+RESET
+is_superuser=on
+> DROP SERVER s3, s4;
+DROP SERVER
+> DROP FOREIGN DATA WRAPPER foo CASCADE;
+NOTICE 00000 drop cascades to 5 other objects
+DROP FOREIGN DATA WRAPPER
+> DROP FOREIGN DATA WRAPPER postgresql CASCADE;
+NOTICE 00000 drop cascades to server s8new
+DROP FOREIGN DATA WRAPPER
+> DROP FOREIGN DATA WRAPPER dummy;
+DROP FOREIGN DATA WRAPPER
+> SELECT count(*) FROM pg_foreign_data_wrapper;
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM pg_foreign_server;
+fields count:20:8:-1
+row 0
+SELECT 1
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+> DROP ROLE tsstat_fdw_role, tsstat_fdw_role2, tsstat_fdw_user;
+DROP ROLE

@@ -5,7 +5,10 @@
 use std::collections::BTreeSet;
 
 use rupg_analyze::{PermInfo, RlsStatus, RowSecurity};
-use rupg_catalog::{ObjRef, PG_CLASS, PG_LANGUAGE, PG_NAMESPACE, PG_PROC, PG_TYPE, RelKind};
+use rupg_catalog::{
+    ObjRef, PG_CLASS, PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_LANGUAGE, PG_NAMESPACE,
+    PG_PROC, PG_TYPE, RelKind,
+};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Owned};
 use rupg_types::{RegKind, Value, qualified_name_list};
@@ -672,6 +675,8 @@ fn owned_class(kind: Owned) -> Option<u32> {
         Owned::Type => Some(PG_TYPE),
         Owned::Function => Some(PG_PROC),
         Owned::Language => Some(PG_LANGUAGE),
+        Owned::ForeignDataWrapper => Some(PG_FOREIGN_DATA_WRAPPER),
+        Owned::ForeignServer => Some(PG_FOREIGN_SERVER),
         _ => None,
     }
 }
@@ -681,7 +686,7 @@ fn granted_object(kind: Owned, oid: u32, session: &dyn Session) -> Option<Vec<&s
     granted(ObjRef::new(owned_class(kind)?, oid), session)
 }
 
-/// The privileges and the owner of a schema, a type, a function or a language of the catalog of the session, or `None` when the catalog has no such object.
+/// The privileges and the owner of a schema, a type, a function, a language, a foreign-data wrapper or a server of the catalog of the session, or `None` when the catalog has no such object.
 fn session_object(kind: Owned, oid: u32, session: &dyn Session) -> Result<Option<Privileges>> {
     let Some(catalog) = session.catalog() else { return Ok(None) };
     let (acl, owner) = match kind {
@@ -699,6 +704,14 @@ fn session_object(kind: Owned, oid: u32, session: &dyn Session) -> Result<Option
         },
         Owned::Language => match catalog.languages().find(|l| l.oid == oid) {
             Some(language) => (None, language.owner),
+            None => return Ok(None),
+        },
+        Owned::ForeignDataWrapper => match catalog.fdw(oid) {
+            Some(fdw) => (None, fdw.owner),
+            None => return Ok(None),
+        },
+        Owned::ForeignServer => match catalog.server(oid) {
+            Some(server) => (None, server.owner),
             None => return Ok(None),
         },
         Owned::Tablespace => {
@@ -825,6 +838,12 @@ pub(crate) fn simple_name(kind: Owned, name: &str, session: &dyn Session) -> Res
     }
     if found.is_none() && kind == Owned::Tablespace {
         found = session.tablespaces().iter().find(|t| t.name == name).map(|t| t.oid);
+    }
+    if found.is_none() && kind == Owned::ForeignDataWrapper {
+        found = session.catalog().and_then(|c| c.fdw_by_name(name)).map(|f| f.oid);
+    }
+    if found.is_none() && kind == Owned::ForeignServer {
+        found = session.catalog().and_then(|c| c.server_by_name(name)).map(|s| s.oid);
     }
     found.ok_or_else(|| {
         let (state, what) = match kind {

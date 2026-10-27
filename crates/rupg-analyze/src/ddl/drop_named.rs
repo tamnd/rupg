@@ -1,8 +1,8 @@
-//! `DROP ACCESS METHOD`, `DROP CAST`, `DROP COLLATION`, `DROP CONVERSION`, `DROP EXTENSION`, `DROP LANGUAGE`, `DROP FOREIGN DATA WRAPPER`, `DROP SERVER`, `DROP EVENT TRIGGER` and `DROP PUBLICATION`: the lookups of `get_object_address` and the notices of `does_not_exist_skipping`. rupg can make only the casts and the conversions of these objects, which go away with their dependents. Another name finds a built-in object or nothing. A pinned object gives the error of `findDependentObjects`, and another built-in object gives `0A000`.
+//! `DROP ACCESS METHOD`, `DROP CAST`, `DROP COLLATION`, `DROP CONVERSION`, `DROP EXTENSION`, `DROP LANGUAGE`, `DROP FOREIGN DATA WRAPPER`, `DROP SERVER`, `DROP EVENT TRIGGER` and `DROP PUBLICATION`: the lookups of `get_object_address` and the notices of `does_not_exist_skipping`. rupg can make only the casts, the conversions, the foreign-data wrappers and the servers of these objects, which go away with their dependents. Another name finds a built-in object or nothing. A pinned object gives the error of `findDependentObjects`, and another built-in object gives `0A000`.
 
 use rupg_catalog::{
-    FIRST_NORMAL_OID, ObjRef, PG_CAST, PG_COLLATION, PG_CONVERSION, PG_EXTENSION, PG_LANGUAGE,
-    is_pinned,
+    FIRST_NORMAL_OID, ObjRef, PG_CAST, PG_COLLATION, PG_CONVERSION, PG_EXTENSION,
+    PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_LANGUAGE, is_pinned,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named, Owned};
@@ -37,7 +37,10 @@ impl Definer<'_, '_> {
                 kind => self.find_by_name(kind, item, stmt.missing_ok)?,
             };
             let Some(found) = found else { continue };
-            let made = matches!(found.object.class, PG_CAST | PG_CONVERSION);
+            let made = matches!(
+                found.object.class,
+                PG_CAST | PG_CONVERSION | PG_FOREIGN_DATA_WRAPPER | PG_FOREIGN_SERVER
+            );
             if found.object.oid >= FIRST_NORMAL_OID && made {
                 objects.push(found.object);
                 continue;
@@ -76,6 +79,7 @@ impl Definer<'_, '_> {
             Node::String(name) => &**name,
             _ => return Err(Error::internal("the name of an object")),
         };
+        let mut owner = None;
         let (word, found) = match kind {
             ObjectType::OBJECT_ACCESS_METHOD => {
                 ("access method", builtin::access_method_oid(name).map(|oid| (PG_AM, oid)))
@@ -91,8 +95,16 @@ impl Definer<'_, '_> {
                 });
                 ("language", found.map(|oid| (PG_LANGUAGE, oid)))
             }
-            ObjectType::OBJECT_FDW => ("foreign-data wrapper", None),
-            ObjectType::OBJECT_FOREIGN_SERVER => ("server", None),
+            ObjectType::OBJECT_FDW => {
+                let found = self.catalog.fdw_by_name(name);
+                owner = found.map(|f| f.owner);
+                ("foreign-data wrapper", found.map(|f| (PG_FOREIGN_DATA_WRAPPER, f.oid)))
+            }
+            ObjectType::OBJECT_FOREIGN_SERVER => {
+                let found = self.catalog.server_by_name(name);
+                owner = found.map(|s| s.owner);
+                ("server", found.map(|s| (PG_FOREIGN_SERVER, s.oid)))
+            }
             ObjectType::OBJECT_EVENT_TRIGGER => ("event trigger", None),
             ObjectType::OBJECT_PUBLICATION => ("publication", None),
             _ => return Err(not_yet("DROP of this kind of object", None)),
@@ -104,10 +116,12 @@ impl Definer<'_, '_> {
             }
             return Err(Error::new(SqlState::UNDEFINED_OBJECT, message));
         };
-        if !self.is_superuser() {
+        if !self.is_superuser() && !owner.is_some_and(|o| self.owns(o)) {
             if kind == ObjectType::OBJECT_ACCESS_METHOD {
                 return Err(Error::new(SqlState::INSUFFICIENT_PRIVILEGE, "must be superuser"));
             }
+            let word =
+                if kind == ObjectType::OBJECT_FOREIGN_SERVER { "foreign server" } else { word };
             return Err(not_owner(word, name));
         }
         Ok(Some(Removable {

@@ -20,6 +20,7 @@ mod conversion;
 mod default_acl;
 mod drop;
 mod enum_label;
+mod foreign;
 mod opclass;
 mod operator;
 mod owner;
@@ -32,6 +33,7 @@ pub use aggregate::{Aggregate, PG_AGGREGATE};
 pub use conversion::{Conversion, PG_CONVERSION};
 pub use default_acl::{DefaultAcl, PG_DEFAULT_ACL};
 pub use drop::{Refusal, Target, flag};
+pub use foreign::{ForeignDataWrapper, ForeignServer, PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER};
 pub use opclass::{
     AmOp, AmProc, MemberLink, OpClass, OpFamily, PG_AM, PG_AMOP, PG_AMPROC, PG_OPFAMILY,
 };
@@ -1291,6 +1293,8 @@ pub struct Catalog {
     ts_mappings: Vec<TsMapping>,
     stat_exts: BTreeMap<u32, StatExt>,
     conversions: BTreeMap<u32, Conversion>,
+    fdws: BTreeMap<u32, ForeignDataWrapper>,
+    servers: BTreeMap<u32, ForeignServer>,
     depends: Vec<Depend>,
     descriptions: Arc<BTreeMap<ObjRef, String>>,
     /// The ACLs that `GRANT` and `REVOKE` gave to the functions, the types, the languages and the columns, and to the objects of `initdb`. The relations and the schemas of the session keep their ACL in their own rows.
@@ -1406,6 +1410,8 @@ impl Catalog {
             ts_mappings: Vec::new(),
             stat_exts: BTreeMap::new(),
             conversions: BTreeMap::new(),
+            fdws: BTreeMap::new(),
+            servers: BTreeMap::new(),
             depends: Vec::new(),
             descriptions: Arc::default(),
             acls: Arc::default(),

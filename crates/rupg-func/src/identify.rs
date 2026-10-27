@@ -310,6 +310,8 @@ fn parts(object: ObjRef, session: &dyn Session) -> Option<Parts> {
             .map(|l| l.name)
             .or_else(|| catalog?.languages().find(|l| l.oid == oid).map(|l| l.name.as_str()))
             .map(Parts::named),
+        rupg_catalog::PG_FOREIGN_DATA_WRAPPER => catalog?.fdw(oid).map(|f| Parts::named(&f.name)),
+        rupg_catalog::PG_FOREIGN_SERVER => catalog?.server(oid).map(|s| Parts::named(&s.name)),
         PG_LARGEOBJECT => builtin::owned_by_oid(Owned::LargeObject, oid)
             .map(|_| Parts::identity(oid.to_string()).with(vec![oid.to_string()], Vec::new())),
         PG_OPERATOR => {
