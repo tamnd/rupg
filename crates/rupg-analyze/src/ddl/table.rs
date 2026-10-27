@@ -1286,6 +1286,12 @@ impl Definer<'_, '_> {
                 continue;
             }
             let refs = references(self.catalog, table, &[&expr])?;
+            // `AddRelationNewConstraints` checks a new default and `StoreAttrDefault` of `LIKE` checks a copied one, but an inherited default needs no check.
+            let inherited = matches!(default, RawDefault::Cooked(_, parent)
+                if plan.parent == Some(*parent) || plan.inherits.contains(parent));
+            if !inherited {
+                self.check_usage_on_types(&refs)?;
+            }
             let attnum = i16::try_from(i + 1).unwrap_or(i16::MAX);
             self.catalog.add_default(table, attnum, crate::node::write(&expr)?, &refs)?;
         }
@@ -1302,7 +1308,7 @@ impl Definer<'_, '_> {
             let partkey = self.partition_key(table, &plan.relname, spec)?;
             self.catalog.set_partition_key(table, partkey)?;
         }
-        self.add_checks(table, &plan.checks)?;
+        self.add_checks(table, &plan.checks, false)?;
         self.add_not_nulls(table, plan)?;
         if let Some(parent) = plan.parent {
             self.inherit_not_nulls(table, &[parent])?;
@@ -1408,12 +1414,18 @@ impl Definer<'_, '_> {
             .with_hint("You will need to rewrite or cast the expression."));
         };
         let refs = references(self.catalog, table, &[&expr])?;
+        self.check_usage_on_types(&refs)?;
         self.catalog.add_default(table, number, crate::node::write(&expr)?, &refs)?;
         Ok(())
     }
 
-    /// The check constraints of `AddRelationNewConstraints`. The result is the OIDs of the new constraints.
-    pub(super) fn add_checks(&mut self, table: u32, checks: &[Constraint]) -> Result<Vec<u32>> {
+    /// The check constraints of `AddRelationNewConstraints`. The result is the OIDs of the new constraints. A constraint that is not `internal` needs `USAGE` on the types that it names.
+    pub(super) fn add_checks(
+        &mut self,
+        table: u32,
+        checks: &[Constraint],
+        internal: bool,
+    ) -> Result<Vec<u32>> {
         let mut names: Vec<String> = Vec::new();
         let mut added = Vec::new();
         for con in checks {
@@ -1436,6 +1448,9 @@ impl Definer<'_, '_> {
             }
             let keys = super::column_numbers(&[&expr]);
             let refs = references(self.catalog, table, &[&expr])?;
+            if !internal {
+                self.check_usage_on_types(&refs)?;
+            }
             let text = crate::node::write(&expr)?;
             if let Some(name) = con.conname.as_deref()
                 && let Some(oid) =
@@ -1807,7 +1822,7 @@ pub(super) fn constraint_index(
 }
 
 /// The first OID that `initdb` does not pin, `FirstUnpinnedObjectId`. A function or a type with a lower OID is built in.
-const FIRST_UNPINNED_OID: u32 = 12000;
+pub(super) const FIRST_UNPINNED_OID: u32 = 12000;
 
 /// `check_virtual_generated_security`: the generation expression of a virtual generated column calls only built-in functions and gives only built-in types, at each node of the expression.
 fn check_virtual_security(expr: &Expr) -> Result<()> {

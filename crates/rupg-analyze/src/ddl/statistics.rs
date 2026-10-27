@@ -274,6 +274,7 @@ impl Definer<'_, '_> {
         } else {
             references(self.catalog, table, &exprs.iter().collect::<Vec<_>>())?
         };
+        self.check_usage_on_types(&refs)?;
         let text = if exprs.is_empty() { None } else { Some(crate::node::write_list(&exprs)?) };
         let new = StatExt {
             oid: 0,

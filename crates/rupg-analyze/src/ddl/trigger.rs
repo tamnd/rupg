@@ -191,6 +191,7 @@ impl Definer<'_, '_> {
                 .unwrap_or_default();
             check_when_vars(&expr, kind, &generated)?;
             expr_references(self.catalog, &expr, &[&base], &mut qual_refs);
+            self.check_usage_on_types(&qual_refs)?;
             qual = Some(crate::node::write(&expr)?);
         }
         let function = self.trigger_function(stmt)?;

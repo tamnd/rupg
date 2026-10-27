@@ -85,6 +85,7 @@ impl Definer<'_, '_> {
                     saw_default = true;
                     if let Some(expr) = self.domain_default(con, base, typmod, name)? {
                         default_refs = references(self.catalog, 0, &[&expr])?;
+                        self.check_usage_on_types(&default_refs)?;
                         default = Some(crate::node::write(&expr)?);
                     }
                 }
@@ -185,7 +186,9 @@ impl Definer<'_, '_> {
         self.apply_default_acl(ObjRef::new(PG_TYPE, domain))?;
         for con in &constraints {
             match con.contype {
-                ConstrType::CONSTR_CHECK => self.add_domain_check(domain, con, (base, typmod))?,
+                ConstrType::CONSTR_CHECK => {
+                    self.add_domain_check(domain, con, (base, typmod), false)?;
+                }
                 ConstrType::CONSTR_NOTNULL => {
                     self.catalog.add_domain_not_null(domain, con.conname.as_deref())?;
                 }
@@ -228,12 +231,13 @@ impl Definer<'_, '_> {
         Ok(Some(expr))
     }
 
-    /// `domainAddCheckConstraint`: the check of a domain, where `value` is the value of the base type that the domain checks.
+    /// `domainAddCheckConstraint`: the check of a domain, where `value` is the value of the base type that the domain checks. `readd` is true for a check that `ATPostAlterTypeParse` makes again, which needs no `USAGE` check.
     pub(super) fn add_domain_check(
         &mut self,
         domain: u32,
         con: &Constraint,
         (base, typmod): (u32, i32),
+        readd: bool,
     ) -> Result<()> {
         let old = self.an.domain_value.replace((base, typmod));
         let expr = self.an.with_kind(Kind::Check, |an| an.transform(con.raw_expr.as_ref()));
@@ -244,6 +248,9 @@ impl Definer<'_, '_> {
             .coerce_to_boolean(expr.map_err(|e| e.with_position(None))?, "CHECK")
             .map_err(|e| e.with_position(None))?;
         let refs = references(self.catalog, 0, &[&expr])?;
+        if !readd {
+            self.check_usage_on_types(&refs)?;
+        }
         let text = crate::node::write(&expr)?;
         self.catalog.add_domain_check(domain, con.conname.as_deref(), text, &refs)?;
         Ok(())

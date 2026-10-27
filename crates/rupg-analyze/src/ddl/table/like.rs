@@ -248,7 +248,7 @@ impl Definer<'_, '_> {
                     ..Constraint::default()
                 });
             }
-            let added = self.add_checks(table, &cooked)?;
+            let added = self.add_checks(table, &cooked, false)?;
             if comments {
                 for ((name, ..), new) in checks.iter().zip(added) {
                     let old = self

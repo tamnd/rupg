@@ -507,7 +507,7 @@ impl Definer<'_, '_> {
                     con.domain
                 )));
             };
-            return self.add_domain_check(con.domain, &check, base);
+            return self.add_domain_check(con.domain, &check, base, true);
         }
         let check = Constraint {
             contype: ConstrType::CONSTR_CHECK,
@@ -521,7 +521,7 @@ impl Definer<'_, '_> {
         };
         self.table_scope(con.relation);
         let added = self
-            .add_checks(con.relation, std::slice::from_ref(&check))
+            .add_checks(con.relation, std::slice::from_ref(&check), true)
             .map_err(|e| e.with_position(None))?;
         // The new constraint of a partition keeps the count of its parent table, and a `NOT VALID` or `NOT ENFORCED` constraint stays not valid.
         for oid in added {

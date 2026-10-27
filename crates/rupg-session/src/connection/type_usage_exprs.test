@@ -1,0 +1,197 @@
+> CREATE ROLE tsstat_tue1;
+CREATE ROLE
+> CREATE ROLE tsstat_tue2;
+CREATE ROLE
+> GRANT CREATE ON SCHEMA public TO tsstat_tue1, tsstat_tue2;
+GRANT
+> CREATE TYPE priv_testtype1 AS (a int, b text);
+CREATE TYPE
+> REVOKE USAGE ON TYPE priv_testtype1 FROM PUBLIC;
+REVOKE
+> GRANT USAGE ON TYPE priv_testtype1 TO tsstat_tue2;
+GRANT
+> CREATE DOMAIN priv_testdomain1 AS int;
+CREATE DOMAIN
+> REVOKE USAGE on DOMAIN priv_testdomain1 FROM PUBLIC;
+REVOKE
+> GRANT USAGE ON DOMAIN priv_testdomain1 TO tsstat_tue2;
+GRANT
+> SET SESSION AUTHORIZATION tsstat_tue1;
+SET
+session_authorization=tsstat_tue1
+is_superuser=off
+> CREATE DOMAIN priv_testdomain4a AS int CHECK (VALUE > ('(0,1)'::priv_testtype1).a);
+ERROR 42501 permission denied for type priv_testtype1
+> CREATE DOMAIN priv_testdomain6a AS int DEFAULT ('(0,1)'::priv_testtype1).a;
+ERROR 42501 permission denied for type priv_testtype1
+> CREATE FUNCTION priv_testfunc7a(a int DEFAULT ('(0,1)'::priv_testtype1).a) RETURNS int LANGUAGE SQL AS $$ SELECT $1 $$;
+ERROR 42501 permission denied for type priv_testtype1
+> CREATE FUNCTION priv_testfunc8a() RETURNS int LANGUAGE SQL RETURN ('(0,1)'::priv_testtype1).a;
+ERROR 42501 permission denied for type priv_testtype1
+> CREATE FUNCTION priv_testfunc9a() RETURNS int LANGUAGE SQL BEGIN ATOMIC SELECT ('(0,1)'::priv_testtype1).a; END;
+ERROR 42501 permission denied for type priv_testtype1
+> CREATE TABLE test9a (a int, b int);
+CREATE TABLE
+> CREATE INDEX ON test9a ((a::priv_testdomain1));
+ERROR 42501 permission denied for type public.priv_testdomain1
+> CREATE INDEX ON test9a (a) WHERE ('(0,1)'::priv_testtype1).a > 0;
+ERROR 42501 permission denied for type public.priv_testtype1
+> CREATE TYPE test8a AS (a int, b int);
+CREATE TYPE
+> CREATE DOMAIN priv_testdomain5a AS test8a CHECK ((VALUE).a > 0 AND ('(0,1)'::priv_testtype1).a >= 0);
+ERROR 42501 permission denied for type priv_testtype1
+> CREATE TABLE test11a AS (SELECT 1::priv_testdomain1 AS a);
+ERROR 42501 permission denied for type priv_testdomain1
+> CREATE MATERIALIZED VIEW test18a AS SELECT ('(0,1)'::priv_testtype1).a;
+ERROR 42501 permission denied for type priv_testtype1
+> CREATE VIEW test16a AS SELECT ('(0,1)'::priv_testtype1).a;
+ERROR 42501 permission denied for type priv_testtype1
+> CREATE TABLE test17a (a int) PARTITION BY RANGE ((a + ('(0,1)'::priv_testtype1).a));
+ERROR 42501 permission denied for type priv_testtype1
+> CREATE POLICY priv_testpolicy1a ON test9a USING (('(0,1)'::priv_testtype1).a > 0);
+ERROR 42501 permission denied for type priv_testtype1
+> CREATE STATISTICS test9a_stat ON (a::priv_testdomain1) FROM test9a;
+ERROR 42501 permission denied for type priv_testdomain1
+> CREATE STATISTICS test9a_stat2 ON (a + ('(0,1)'::priv_testtype1).a), b FROM test9a;
+ERROR 42501 permission denied for type priv_testtype1
+> CREATE RULE test9a_rule AS ON INSERT TO test9a WHERE ('(0,1)'::priv_testtype1).a > 0 DO ALSO NOTIFY test9a;
+ERROR 42P17 rules with WHERE conditions can only have SELECT, INSERT, UPDATE, or DELETE actions
+> CREATE RULE test9a_rule2 AS ON INSERT TO test9a DO ALSO SELECT ('(0,1)'::priv_testtype1).a;
+ERROR 42501 permission denied for type priv_testtype1
+> CREATE FUNCTION trigf() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+CREATE FUNCTION
+> CREATE TRIGGER test9a_trig BEFORE INSERT ON test9a FOR EACH ROW WHEN (('(0,1)'::priv_testtype1).a > 0) EXECUTE FUNCTION trigf();
+ERROR 42501 permission denied for type priv_testtype1
+> CREATE TABLE test12a (c int DEFAULT 0 CHECK (c > 0 AND '(0,1)'::priv_testtype1 IS NOT NULL));
+ERROR 42501 permission denied for type priv_testtype1
+> CREATE TABLE test13a (c int DEFAULT ('(0,1)'::priv_testtype1).a);
+ERROR 42501 permission denied for type priv_testtype1
+> CREATE TABLE test19a (c int GENERATED ALWAYS AS (('(0,1)'::priv_testtype1).a) STORED);
+ERROR 42501 permission denied for type priv_testtype1
+> ALTER TABLE test9a ADD CONSTRAINT test9a_chk CHECK (('(0,1)'::priv_testtype1).a >= 0);
+ERROR 42501 permission denied for type priv_testtype1
+> ALTER TABLE test9a ALTER COLUMN b SET DEFAULT ('(0,1)'::priv_testtype1).a;
+ERROR 42501 permission denied for type priv_testtype1
+> SET SESSION AUTHORIZATION tsstat_tue2;
+SET
+session_authorization=tsstat_tue2
+> CREATE DOMAIN priv_testdomain4b AS int CHECK (VALUE > ('(0,1)'::priv_testtype1).a);
+CREATE DOMAIN
+> CREATE DOMAIN priv_testdomain6b AS int DEFAULT ('(0,1)'::priv_testtype1).a;
+CREATE DOMAIN
+> CREATE FUNCTION priv_testfunc7b(a int DEFAULT ('(0,1)'::priv_testtype1).a) RETURNS int LANGUAGE SQL AS $$ SELECT $1 $$;
+CREATE FUNCTION
+> CREATE FUNCTION priv_testfunc8b() RETURNS int LANGUAGE SQL RETURN ('(0,1)'::priv_testtype1).a;
+CREATE FUNCTION
+> CREATE TABLE test9b (a int, b int);
+CREATE TABLE
+> CREATE INDEX ON test9b ((a::priv_testdomain1));
+CREATE INDEX
+> CREATE TYPE test8b AS (a int, b int);
+CREATE TYPE
+> CREATE DOMAIN priv_testdomain5b AS test8b CHECK ((VALUE).a > 0 AND ('(0,1)'::priv_testtype1).a >= 0);
+CREATE DOMAIN
+> CREATE VIEW test16b AS SELECT ('(0,1)'::priv_testtype1).a;
+CREATE VIEW
+> CREATE TABLE test17b (a int) PARTITION BY RANGE ((a + ('(0,1)'::priv_testtype1).a));
+CREATE TABLE
+> CREATE POLICY priv_testpolicy1b ON test9b USING (('(0,1)'::priv_testtype1).a > 0);
+CREATE POLICY
+> CREATE TABLE test12 (c int DEFAULT 0 CHECK (c > 0 AND '(0,1)'::priv_testtype1 IS NOT NULL));
+CREATE TABLE
+> CREATE TABLE test13 (c int DEFAULT ('(0,1)'::priv_testtype1).a);
+CREATE TABLE
+> CREATE TABLE test20 (c int) PARTITION BY LIST (c);
+CREATE TABLE
+> ALTER TABLE test20 ADD CONSTRAINT test20_chk CHECK (('(0,1)'::priv_testtype1).a >= 0);
+ALTER TABLE
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> REVOKE USAGE ON TYPE priv_testtype1 FROM tsstat_tue2;
+REVOKE
+> SET SESSION AUTHORIZATION tsstat_tue2;
+SET
+session_authorization=tsstat_tue2
+is_superuser=off
+> ALTER TABLE test12 ALTER COLUMN c TYPE bigint;
+ALTER TABLE
+> ALTER TYPE test8b ALTER ATTRIBUTE a TYPE bigint CASCADE;
+ALTER TYPE
+> ALTER TABLE test12 ALTER COLUMN c SET DEFAULT ('(0,1)'::priv_testtype1).a;
+ERROR 42501 permission denied for type priv_testtype1
+> CREATE TABLE test14 (LIKE test12 INCLUDING CONSTRAINTS);
+ERROR 42501 permission denied for type priv_testtype1
+> CREATE TABLE test15 (LIKE test13 INCLUDING DEFAULTS);
+ERROR 42501 permission denied for type priv_testtype1
+> CREATE TABLE test20_1 PARTITION OF test20 FOR VALUES IN (1);
+CREATE TABLE
+> CREATE TABLE test21 (c int CHECK (('(0,1)'::priv_testtype1).a >= 0)) INHERITS (test12);
+NOTICE 00000 merging column "c" with inherited definition
+ERROR 42804 column "c" has a type conflict
+> CREATE TABLE test22 () INHERITS (test12);
+CREATE TABLE
+> SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid IN ('test12'::regclass, 'test20_1'::regclass, 'test22'::regclass) ORDER BY 1;
+fields conname@pg_constraint.2:19:64:-1,pg_get_constraintdef:25:-1:-1
+row test12_c_check,CHECK (((c > 0) AND ('(0,1)'::priv_testtype1 IS NOT NULL)))
+row test12_c_check,CHECK (((c > 0) AND ('(0,1)'::priv_testtype1 IS NOT NULL)))
+row test20_chk,CHECK ((('(0,1)'::priv_testtype1).a >= 0))
+SELECT 3
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> DROP OWNED BY tsstat_tue1, tsstat_tue2 CASCADE;
+DROP OWNED
+> DROP TYPE priv_testtype1;
+DROP TYPE
+> DROP DOMAIN priv_testdomain1;
+DROP DOMAIN
+> DROP ROLE tsstat_tue1;
+DROP ROLE
+> DROP ROLE tsstat_tue2;
+DROP ROLE
+> CREATE TYPE tt2 AS (a int);
+CREATE TYPE
+> CREATE TABLE q (c int) PARTITION BY LIST (c);
+CREATE TABLE
+> ALTER TABLE q ADD CONSTRAINT q_chk CHECK (c >= 0);
+ALTER TABLE
+> CREATE TABLE q1 PARTITION OF q FOR VALUES IN (1);
+CREATE TABLE
+> DROP TABLE q;
+DROP TABLE
+> SELECT conname FROM pg_constraint WHERE conname = 'q_chk';
+fields conname@pg_constraint.2:19:64:-1
+SELECT 0
+> CREATE TABLE r (c int) PARTITION BY LIST (c);
+CREATE TABLE
+> ALTER TABLE r ADD CONSTRAINT r_chk CHECK (('(0)'::tt2).a >= 0);
+ALTER TABLE
+> DROP TABLE r;
+DROP TABLE
+> SELECT conname FROM pg_constraint WHERE conname = 'r_chk';
+fields conname@pg_constraint.2:19:64:-1
+SELECT 0
+> CREATE TABLE s (c int);
+CREATE TABLE
+> ALTER TABLE s ADD CONSTRAINT s_chk CHECK (('(0)'::tt2).a >= 0);
+ALTER TABLE
+> CREATE TABLE s1 () INHERITS (s);
+CREATE TABLE
+> DROP TABLE s CASCADE;
+NOTICE 00000 drop cascades to table s1
+DROP TABLE
+> SELECT conname, conrelid FROM pg_constraint WHERE conname = 's_chk';
+fields conname@pg_constraint.2:19:64:-1,conrelid@pg_constraint.9:26:4:-1
+SELECT 0
+> CREATE TABLE t (c int, CHECK (1 > 0), CHECK (('(0)'::tt2).a >= 0));
+CREATE TABLE
+> SELECT pg_describe_object(classid, objid, objsubid) AS obj, pg_describe_object(refclassid, refobjid, refobjsubid) AS ref, deptype FROM pg_depend WHERE classid = 'pg_constraint'::regclass AND objid IN (SELECT oid FROM pg_constraint WHERE conrelid = 't'::regclass) ORDER BY 1, 2;
+fields obj:25:-1:-1,ref:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row constraint t_check on table t,table t,a
+row constraint t_check1 on table t,column a of composite type tt2,n
+row constraint t_check1 on table t,table t,a
+row constraint t_check1 on table t,type tt2,n
+SELECT 4

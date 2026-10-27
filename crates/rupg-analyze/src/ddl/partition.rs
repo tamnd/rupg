@@ -297,6 +297,11 @@ impl Definer<'_, '_> {
             partkey.classes.push(class);
         }
         if !exprs.is_empty() {
+            self.check_usage_on_types(&references(
+                self.catalog,
+                table,
+                &exprs.iter().collect::<Vec<_>>(),
+            )?)?;
             partkey.exprs = Some(node::write_list(&exprs)?);
         }
         Ok(partkey)

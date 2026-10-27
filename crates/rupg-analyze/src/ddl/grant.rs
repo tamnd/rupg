@@ -986,6 +986,16 @@ impl Definer<'_, '_> {
         ))
     }
 
+    /// `check_usage_on_types`: `USAGE` on each type that the references of a stored expression name, as `CheckUsageOnTypesInExpr` and `CheckUsageOnTypesInSingleRelExpr` check it. A pinned type needs no check.
+    pub(super) fn check_usage_on_types(&self, refs: &[ObjRef]) -> Result<()> {
+        for found in refs {
+            if found.class == PG_TYPE && found.oid >= super::table::FIRST_UNPINNED_OID {
+                self.check_type_usage(found.oid)?;
+            }
+        }
+        Ok(())
+    }
+
     /// `pg_class_aclcheck` of `SELECT` on a relation of the kind `kind`, with `aclcheck_error` for the object type of `get_relkind_objtype`.
     pub(super) fn check_relation_select(&self, relation: u32, kind: u8, name: &str) -> Result<()> {
         let roles = rupg_pgcatalog::roles::current();

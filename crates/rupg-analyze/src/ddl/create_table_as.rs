@@ -68,6 +68,7 @@ impl Definer<'_, '_> {
         let mut refs = Vec::new();
         if matview.is_some() {
             query_references(self.catalog, &query, &[], &mut refs);
+            self.check_usage_on_types(&refs)?;
             // `query_uses_temp_object`.
             let temp = refs.iter().copied().find(|r| {
                 r.class == PG_CLASS
