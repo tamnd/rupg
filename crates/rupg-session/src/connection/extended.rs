@@ -738,6 +738,11 @@ impl Connection {
                     position: error.position().map(|at| character_position(&statement.text, at)),
                     error,
                 })?
+            } else if let Node::CheckPointStmt(stmt) = node {
+                self.checkpoint(stmt).map_err(|error| Failed {
+                    position: error.position().map(|at| character_position(&statement.text, at)),
+                    error,
+                })?
             } else if let Node::VacuumStmt(stmt) = node {
                 let mut notices = Vec::new();
                 let result = self.vacuum(stmt, &mut notices);

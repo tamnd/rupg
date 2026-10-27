@@ -4,10 +4,13 @@ use rupg_catalog::size::{empty_index_pages, new_table_tuples};
 use rupg_catalog::{Catalog, RelKind, Relation};
 
 use rupg_common::{Error, SqlState};
-use rupg_sql::nodes::{DefElem, Node, VacuumStmt};
+use rupg_sql::nodes::{CheckPointStmt, DefElem, Node, VacuumStmt};
 use rupg_wire::CommandTag;
 
 use super::copy::{def_boolean, def_string};
+
+/// `ROLE_PG_CHECKPOINT`.
+const PG_CHECKPOINT: u32 = 4544;
 use super::{Connection, Done};
 use crate::guc;
 use crate::heap::Skip;
@@ -233,6 +236,48 @@ impl Connection {
             self.relation_stats(&catalog, relid, (vacuum, analyze));
         }
         Ok(Done::Tag(tag))
+    }
+
+    /// `ExecCheckpoint`: the checks of the options and of the role. Each commit of rupg is in its log before the commit returns, so the checkpoint has no more work to do.
+    pub(super) fn checkpoint(&self, stmt: &CheckPointStmt) -> Result<Done, Error> {
+        for def in stmt.options.iter().flatten() {
+            let Node::DefElem(def) = def else { continue };
+            let at = usize::try_from(def.location).ok();
+            match def.defname.as_deref().unwrap_or_default() {
+                "mode" => {
+                    let mode = def_string(def)?;
+                    if mode != "spread" && mode != "fast" {
+                        return Err(Error::new(
+                            SqlState::SYNTAX_ERROR,
+                            format!(
+                                "unrecognized value for CHECKPOINT option \"mode\": \"{mode}\""
+                            ),
+                        )
+                        .with_position(at));
+                    }
+                }
+                "flush_unlogged" => {
+                    def_boolean(def)?;
+                }
+                other => {
+                    return Err(Error::new(
+                        SqlState::SYNTAX_ERROR,
+                        format!("unrecognized CHECKPOINT option \"{other}\""),
+                    )
+                    .with_position(at));
+                }
+            }
+        }
+        if !self.roles().has_privs_of_role(self.current_role(), PG_CHECKPOINT) {
+            return Err(Error::new(
+                SqlState::INSUFFICIENT_PRIVILEGE,
+                "permission denied to execute CHECKPOINT command",
+            )
+            .with_detail(
+                "Only roles with privileges of the \"pg_checkpoint\" role may execute this command.",
+            ));
+        }
+        Ok(Done::Tag(CommandTag::Checkpoint))
     }
 
     /// `heap_vacuum_rel` with the options `vacuum` and `do_analyze_rel` for the relation `relid`, with its TOAST table for `VACUUM`. `analyze` has the columns of the column list of `ANALYZE`, or no columns for all of them. `ANALYZE` of a partitioned table sets its `reltuples` to the live rows of its partitions and its `relpages` to -1, as the table has no storage. The result is the live rows of the relation.
