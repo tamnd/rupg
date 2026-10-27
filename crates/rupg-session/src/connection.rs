@@ -4129,6 +4129,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/returning_ctid_partitioned.test")));
     }
 
+    /// `pg_get_functiondef` of a body in SQL with `INSERT` and `UPDATE ... RETURNING`: an expression of `RETURNING` shows no `AS "?column?"`, and a column has the name of its table, as `print_function_sqlbody` gives them. `connection/sqlbody_returning_names.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn sqlbody_returning_names() {
+        big_stack(|| script(include_str!("connection/sqlbody_returning_names.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

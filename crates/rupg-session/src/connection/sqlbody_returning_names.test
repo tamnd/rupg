@@ -1,0 +1,43 @@
+> create table fv (a int, b text);
+CREATE TABLE
+> create function fv_f() returns void language sql begin atomic with w as (update fv set a = a + 1 returning a + 1, b || 'x', a) update fv set a = 2 returning a + 1, b, (select 1), old.a = new.a; end;
+CREATE FUNCTION
+> select pg_get_functiondef('fv_f'::regproc);
+fields pg_get_functiondef:25:-1:-1
+row CREATE OR REPLACE FUNCTION public.fv_f()
+ RETURNS void
+ LANGUAGE sql
+BEGIN ATOMIC
+ WITH w AS (
+          UPDATE fv fv_1 SET a = (fv_1.a + 1)
+           RETURNING (fv_1.a + 1) AS "?column?",
+             (fv_1.b || 'x'::text) AS "?column?",
+             fv_1.a
+         )
+  UPDATE fv SET a = 2
+   RETURNING (fv.a + 1),
+     fv.b,
+     ( SELECT 1),
+     (old.a = new.a);
+END
+
+SELECT 1
+> create function fv_g() returns setof int language sql begin atomic insert into fv values (1, 'q') returning a * 2; end;
+CREATE FUNCTION
+> select pg_get_functiondef('fv_g'::regproc);
+fields pg_get_functiondef:25:-1:-1
+row CREATE OR REPLACE FUNCTION public.fv_g()
+ RETURNS SETOF integer
+ LANGUAGE sql
+BEGIN ATOMIC
+ INSERT INTO fv (a, b)
+   VALUES (1, 'q'::text)
+   RETURNING (fv.a * 2);
+END
+
+SELECT 1
+> create rule fv_r as on insert to fv where new.a < 0 do instead insert into fv values (0, 'n') returning a + 1, b;
+ERROR 0A000 RETURNING lists are not supported in conditional rules
+> select pg_get_ruledef(oid) from pg_rewrite where rulename = 'fv_r';
+fields pg_get_ruledef:25:-1:-1
+SELECT 0
