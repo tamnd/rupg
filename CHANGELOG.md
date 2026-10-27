@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.3.3 (2026-10-27)
+
 ### Added
 
 - `EXPLAIN` now follows `optimize_window_clauses` for all frames: a window whose calls are all of `row_number` and the other functions of the rank of a row gets the frame `ROWS UNBOUNDED PRECEDING`, and its calls go to another window that is then the same, so the plan has one `WindowAgg` for them. In VERBOSE output, a call of a window below is in parentheses. (#893)
