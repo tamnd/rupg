@@ -166,6 +166,8 @@ pub struct WindowClause {
     pub copied_order: bool,
     /// The frame of the window.
     pub frame: Frame,
+    /// `runCondition` of the calls of the window: the conditions on a call that the planner takes from `WHERE` of the query above, as `find_window_run_conditions` makes them. The window stops when a condition is false.
+    pub run: Vec<Expr>,
 }
 
 /// An error with the SQLSTATE `42P20`.
@@ -358,6 +360,7 @@ impl Analyzer<'_> {
                 order,
                 copied_order: false,
                 frame: Frame::default(),
+                run: Vec::new(),
             };
             if let Some(base) = base {
                 let refname = &base.name.unwrap_or_default();

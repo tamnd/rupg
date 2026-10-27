@@ -1,0 +1,96 @@
+> CREATE TABLE emp (depname text, empno int, salary int)
+CREATE TABLE
+> INSERT INTO emp VALUES ('develop',10,5200),('sales',1,5000),('personnel',5,3500),('sales',4,4800),('personnel',2,3900),('develop',7,4200),('develop',9,4500),('sales',3,4800),('develop',8,6000),('develop',11,5200)
+INSERT 0 10
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT empno, row_number() OVER (ORDER BY empno) rn FROM emp) e WHERE rn < 3
+fields QUERY PLAN:25:-1:-1
+row WindowAgg
+row   Window: w1 AS (ORDER BY emp.empno ROWS UNBOUNDED PRECEDING)
+row   Run Condition: (row_number() OVER w1 < 3)
+row   ->  Sort
+row         Sort Key: emp.empno
+row         ->  Seq Scan on emp
+EXPLAIN
+> SELECT * FROM (SELECT empno, row_number() OVER (ORDER BY empno) rn FROM emp) e WHERE rn < 3
+fields empno@emp.2:23:4:-1,rn:20:8:-1
+row 1,1
+row 2,2
+SELECT 2
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT empno, dense_rank() OVER (ORDER BY salary DESC) dr FROM emp) e WHERE dr = 1
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on e
+row   Filter: (e.dr = 1)
+row   ->  WindowAgg
+row         Window: w1 AS (ORDER BY emp.salary ROWS UNBOUNDED PRECEDING)
+row         Run Condition: (dense_rank() OVER w1 <= 1)
+row         ->  Sort
+row               Sort Key: emp.salary DESC
+row               ->  Seq Scan on emp
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT empno, count(*) OVER (ORDER BY salary DESC) c FROM emp) e WHERE 11 <= c
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on e
+row   Filter: (11 <= e.c)
+row   ->  WindowAgg
+row         Window: w1 AS (ORDER BY emp.salary)
+row         ->  Sort
+row               Sort Key: emp.salary DESC
+row               ->  Seq Scan on emp
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT empno, count(*) OVER (ORDER BY salary DESC) c FROM emp) e WHERE 3 <= c
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on e
+row   Filter: (3 <= e.c)
+row   ->  WindowAgg
+row         Window: w1 AS (ORDER BY emp.salary)
+row         ->  Sort
+row               Sort Key: emp.salary DESC
+row               ->  Seq Scan on emp
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT empno, count(*) OVER (ORDER BY salary DESC ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) c FROM emp) e WHERE c <= 3
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on e
+row   Filter: (e.c <= 3)
+row   ->  WindowAgg
+row         Window: w1 AS (ORDER BY emp.salary ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+row         ->  Sort
+row               Sort Key: emp.salary DESC
+row               ->  Seq Scan on emp
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT empno, count(*) OVER () c FROM emp) e WHERE c = 10
+fields QUERY PLAN:25:-1:-1
+row WindowAgg
+row   Window: w1 AS ()
+row   Run Condition: (count(*) OVER w1 = 10)
+row   ->  Seq Scan on emp
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT empno, salary, row_number() OVER (ORDER BY empno) rn, rank() OVER (PARTITION BY depname ORDER BY salary) r FROM emp) e WHERE rn <= 2 AND r < 3
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on e
+row   ->  WindowAgg
+row         Window: w2 AS (ORDER BY emp.empno ROWS UNBOUNDED PRECEDING)
+row         Run Condition: (row_number() OVER w2 <= 2)
+row         Filter: ((rank() OVER w1) < 3)
+row         ->  Sort
+row               Sort Key: emp.empno
+row               ->  WindowAgg
+row                     Window: w1 AS (PARTITION BY emp.depname ORDER BY emp.salary ROWS UNBOUNDED PRECEDING)
+row                     Run Condition: (rank() OVER w1 < 3)
+row                     ->  Sort
+row                           Sort Key: emp.depname, emp.salary
+row                           ->  Seq Scan on emp
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT empno, row_number() OVER (ORDER BY empno) rn FROM emp) e WHERE rn < random()
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on e
+row   Filter: ((e.rn)::double precision < random())
+row   ->  WindowAgg
+row         Window: w1 AS (ORDER BY emp.empno ROWS UNBOUNDED PRECEDING)
+row         ->  Sort
+row               Sort Key: emp.empno
+row               ->  Seq Scan on emp
+EXPLAIN
+> SELECT * FROM (SELECT empno, salary, dense_rank() OVER (ORDER BY salary DESC) dr FROM emp) e WHERE dr = 1 ORDER BY empno
+fields empno@emp.2:23:4:-1,salary@emp.3:23:4:-1,dr:20:8:-1
+row 8,6000,1
+SELECT 1

@@ -2235,6 +2235,8 @@ fn windows<'q>(
 ) -> Option<Node<'q>> {
     let Windows { calls, options, mut merged } = optimize_windows(level.query);
     let active = active_windows(level, &calls);
+    // `create_one_window_path`: the run conditions of the windows below the top window are the conditions of the top window.
+    let mut top_filter: Vec<&'q Expr> = Vec::new();
     let mut number = 0;
     let count = active.len();
     for (at, window) in active.into_iter().enumerate() {
@@ -2267,8 +2269,20 @@ fn windows<'q>(
             }
         });
         let merged = std::mem::take(&mut merged[window]);
-        let kind = Kind::WindowAgg { name, window, rows_frame, partition, merged };
+        let run: Vec<&'q Expr> = std::iter::once(window)
+            .chain(merged.iter().copied())
+            .flat_map(|w| &level.query.windows[w].run)
+            .collect();
+        let top = at + 1 == count;
+        if !top {
+            top_filter.extend(&run);
+        }
+        let run = run.into_iter().cloned().collect();
+        let kind = Kind::WindowAgg { name, window, rows_frame, partition, merged, run };
         node = Node::new(kind, level.scope, vec![node]);
+        if top {
+            node.filter = top_filter.drain(..).map(Item::of).collect();
+        }
         node.cost = Cost { startup, total, ..c };
         // `create_windowagg_path` adds the cost of the targets, which are the targets before the sort at the last window.
         let (target_startup, per_row) = if at + 1 == count { targets.last } else { targets.window };
