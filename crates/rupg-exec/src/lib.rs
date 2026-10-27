@@ -3258,6 +3258,9 @@ impl<'a> Eval<'a> {
         if let Some(assign) = &sub.assign {
             return self.subscript_assign(sub, assign);
         }
+        if base_type(sub.container.ty) == oid::JSONB {
+            return self.jsonb_subscript(sub);
+        }
         let array = match self.eval(&sub.container)? {
             Value::Null => return Ok(Value::Null),
             Value::Array(array) => array,
@@ -3282,6 +3285,9 @@ impl<'a> Eval<'a> {
 
     /// `ExecEvalSubscriptingRef` for an assignment to an element or a slice of an array: the array with the new value. A null array is the empty array, and a null subscript is an error. A null value for a slice leaves the array as it is.
     fn subscript_assign(&mut self, sub: &Subscript, assign: &Expr) -> Result<Value> {
+        if base_type(sub.container.ty) == oid::JSONB {
+            return self.jsonb_subscript_assign(sub, assign);
+        }
         let array = match self.eval(&sub.container)? {
             Value::Null if is_geo(sub.container.ty) => {
                 // `array_subscript_assign`: a null of a fixed-length type stays null.
@@ -3329,6 +3335,80 @@ impl<'a> Eval<'a> {
             }
         };
         Ok(Value::Array(Box::new(array)))
+    }
+
+    /// `jsonb_subscript_fetch`: the part of a `jsonb` value at the subscripts. A null value gives null before the subscripts run, and a null subscript gives null.
+    fn jsonb_subscript(&mut self, sub: &Subscript) -> Result<Value> {
+        let source = match self.eval(&sub.container)? {
+            Value::Null => return Ok(Value::Null),
+            Value::Text(source) => source,
+            _ => return Err(Error::internal("the container of a jsonb subscript is not jsonb")),
+        };
+        let Some(path) = self.jsonb_subscript_path(sub, false)? else { return Ok(Value::Null) };
+        let path: Vec<&str> = path.iter().map(String::as_str).collect();
+        rupg_func::jsonb_subscript_fetch(&source, &path)
+    }
+
+    /// `jsonb_subscript_assign`: the `jsonb` value with the new value at the subscripts. A null value is an empty array when the first subscript is an `int4` and an empty object when it is not. A null new value is the JSON `null`.
+    fn jsonb_subscript_assign(&mut self, sub: &Subscript, assign: &Expr) -> Result<Value> {
+        let source = match self.eval(&sub.container)? {
+            Value::Null => None,
+            Value::Text(source) => Some(source),
+            _ => return Err(Error::internal("the container of a jsonb subscript is not jsonb")),
+        };
+        let path = self.jsonb_subscript_path(sub, true)?.unwrap_or_default();
+        let path: Vec<&str> = path.iter().map(String::as_str).collect();
+        let value = if is_indirection(assign) {
+            // `jsonb_subscript_fetch_old`: the new value reads the old part as `CaseTest`.
+            let old = match &source {
+                Some(source) => rupg_func::jsonb_subscript_fetch(source, &path)?,
+                None => Value::Null,
+            };
+            self.case.push(old);
+            let value = self.eval(assign);
+            self.case.pop();
+            value?
+        } else {
+            self.eval(assign)?
+        };
+        let new = match &value {
+            Value::Null => "null",
+            value => value.as_str().ok_or_else(|| {
+                Error::internal("the new value of a jsonb subscript is not jsonb")
+            })?,
+        };
+        let array = matches!(sub.upper.first(), Some(Some(first)) if first.ty == oid::INT4);
+        let source = source.as_deref().unwrap_or(if array { "[]" } else { "{}" });
+        rupg_func::jsonb_subscript_assign(source, &path, new)
+    }
+
+    /// `jsonb_subscript_check_subscripts`: the subscripts of a `jsonb` value as text, or `None` when one of them is null. A null subscript in an assignment is an error.
+    fn jsonb_subscript_path(
+        &mut self,
+        sub: &Subscript,
+        assign: bool,
+    ) -> Result<Option<Vec<String>>> {
+        let mut path = Vec::with_capacity(sub.upper.len());
+        for item in &sub.upper {
+            let Some(expr) = item else {
+                return Err(Error::internal("a jsonb subscript with no upper bound"));
+            };
+            path.push(match self.eval(expr)? {
+                Value::Int4(n) => n.to_string(),
+                Value::Null if assign => {
+                    return Err(Error::new(
+                        SqlState::NULL_VALUE_NOT_ALLOWED,
+                        "jsonb subscript in assignment must not be null",
+                    ));
+                }
+                Value::Null => return Ok(None),
+                value => value
+                    .as_str()
+                    .ok_or_else(|| Error::internal("a jsonb subscript is not an int4 or a text"))?
+                    .to_owned(),
+            });
+        }
+        Ok(Some(path))
     }
 
     /// `ExecEvalFieldStoreDeForm` and `ExecEvalFieldStoreForm`: the row with the new values of its fields. Each new value reads the old value of its field as `CaseTest`. A null row is a row whose fields are all null.

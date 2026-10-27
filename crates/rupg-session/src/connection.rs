@@ -4071,6 +4071,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/composite_order.test")));
     }
 
+    /// Subscripts of a `jsonb` value: a fetch, an assignment in `UPDATE` and in PL/pgSQL, the nulls that fill the gaps of an array, the containers that an assignment makes, the errors, and the deparsed view. `connection/jsonb_subscript.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn jsonb_subscript() {
+        big_stack(|| script(include_str!("connection/jsonb_subscript.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

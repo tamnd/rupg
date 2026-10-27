@@ -1,0 +1,453 @@
+> select ('123'::jsonb)['a'];
+fields jsonb:3802:-1:-1
+row NULL
+SELECT 1
+> select ('123'::jsonb)[0];
+fields jsonb:3802:-1:-1
+row NULL
+SELECT 1
+> select ('123'::jsonb)[NULL];
+fields jsonb:3802:-1:-1
+row NULL
+SELECT 1
+> select ('{"a": 1}'::jsonb)['a'];
+fields jsonb:3802:-1:-1
+row 1
+SELECT 1
+> select ('{"a": 1}'::jsonb)[0];
+fields jsonb:3802:-1:-1
+row NULL
+SELECT 1
+> select ('{"a": 1}'::jsonb)['not_exist'];
+fields jsonb:3802:-1:-1
+row NULL
+SELECT 1
+> select ('{"a": 1}'::jsonb)[NULL];
+fields jsonb:3802:-1:-1
+row NULL
+SELECT 1
+> select ('[1, "2", null]'::jsonb)['a'];
+fields jsonb:3802:-1:-1
+row NULL
+SELECT 1
+> select ('[1, "2", null]'::jsonb)[0];
+fields jsonb:3802:-1:-1
+row 1
+SELECT 1
+> select ('[1, "2", null]'::jsonb)['1'];
+fields jsonb:3802:-1:-1
+row "2"
+SELECT 1
+> select ('[1, "2", null]'::jsonb)[1.0];
+ERROR 42804 subscript type numeric is not supported at 34
+> select ('[1, "2", null]'::jsonb)[2];
+fields jsonb:3802:-1:-1
+row null
+SELECT 1
+> select ('[1, "2", null]'::jsonb)[3];
+fields jsonb:3802:-1:-1
+row NULL
+SELECT 1
+> select ('[1, "2", null]'::jsonb)[-2];
+fields jsonb:3802:-1:-1
+row "2"
+SELECT 1
+> select ('[1, "2", null]'::jsonb)[1]['a'];
+fields jsonb:3802:-1:-1
+row NULL
+SELECT 1
+> select ('[1, "2", null]'::jsonb)[1][0];
+fields jsonb:3802:-1:-1
+row NULL
+SELECT 1
+> select ('{"a": 1, "b": "c", "d": [1, 2, 3]}'::jsonb)['b'];
+fields jsonb:3802:-1:-1
+row "c"
+SELECT 1
+> select ('{"a": 1, "b": "c", "d": [1, 2, 3]}'::jsonb)['d'];
+fields jsonb:3802:-1:-1
+row [1, 2, 3]
+SELECT 1
+> select ('{"a": 1, "b": "c", "d": [1, 2, 3]}'::jsonb)['d'][1];
+fields jsonb:3802:-1:-1
+row 2
+SELECT 1
+> select ('{"a": 1, "b": "c", "d": [1, 2, 3]}'::jsonb)['d']['a'];
+fields jsonb:3802:-1:-1
+row NULL
+SELECT 1
+> select ('{"a": {"a1": {"a2": "aaa"}}, "b": "bbb", "c": "ccc"}'::jsonb)['a']['a1'];
+fields jsonb:3802:-1:-1
+row {"a2": "aaa"}
+SELECT 1
+> select ('{"a": {"a1": {"a2": "aaa"}}, "b": "bbb", "c": "ccc"}'::jsonb)['a']['a1']['a2'];
+fields jsonb:3802:-1:-1
+row "aaa"
+SELECT 1
+> select ('{"a": {"a1": {"a2": "aaa"}}, "b": "bbb", "c": "ccc"}'::jsonb)['a']['a1']['a2']['a3'];
+fields jsonb:3802:-1:-1
+row NULL
+SELECT 1
+> select ('{"a": ["a1", {"b1": ["aaa", "bbb", "ccc"]}], "b": "bb"}'::jsonb)['a'][1]['b1'];
+fields jsonb:3802:-1:-1
+row ["aaa", "bbb", "ccc"]
+SELECT 1
+> select ('{"a": ["a1", {"b1": ["aaa", "bbb", "ccc"]}], "b": "bb"}'::jsonb)['a'][1]['b1'][2];
+fields jsonb:3802:-1:-1
+row "ccc"
+SELECT 1
+> select ('{"a": 1}'::jsonb)['a':'b'];
+ERROR 42804 jsonb subscript does not support slices at 32
+> select ('[1, "2", null]'::jsonb)[1:2];
+ERROR 42804 jsonb subscript does not support slices at 36
+> select ('[1, "2", null]'::jsonb)[:2];
+ERROR 42804 jsonb subscript does not support slices at 35
+> select ('[1, "2", null]'::jsonb)[1:];
+ERROR 42804 jsonb subscript does not support slices at 34
+> select ('[1, "2", null]'::jsonb)[:];
+ERROR 42804 jsonb subscript does not support slices
+> create TEMP TABLE test_jsonb_subscript ( id int, test_json jsonb );
+CREATE TABLE
+> insert into test_jsonb_subscript values (1, '{}'), -- empty jsonb (2, '{"key": "value"}'); -- jsonb with data
+ERROR 42601 syntax error at end of input at 110
+> update test_jsonb_subscript set test_json['a'] = '1' where id = 1;
+UPDATE 0
+> select * from test_jsonb_subscript;
+fields id@test_jsonb_subscript.1:23:4:-1,test_json@test_jsonb_subscript.2:3802:-1:-1
+SELECT 0
+> update test_jsonb_subscript set test_json['a'] = '1' where id = 2;
+UPDATE 0
+> select * from test_jsonb_subscript;
+fields id@test_jsonb_subscript.1:23:4:-1,test_json@test_jsonb_subscript.2:3802:-1:-1
+SELECT 0
+> update test_jsonb_subscript set test_json['a'] = '"test"';
+UPDATE 0
+> select * from test_jsonb_subscript;
+fields id@test_jsonb_subscript.1:23:4:-1,test_json@test_jsonb_subscript.2:3802:-1:-1
+SELECT 0
+> update test_jsonb_subscript set test_json['a'] = '{"b": 1}'::jsonb;
+UPDATE 0
+> select * from test_jsonb_subscript;
+fields id@test_jsonb_subscript.1:23:4:-1,test_json@test_jsonb_subscript.2:3802:-1:-1
+SELECT 0
+> update test_jsonb_subscript set test_json['a'] = '[1, 2, 3]'::jsonb;
+UPDATE 0
+> select * from test_jsonb_subscript;
+fields id@test_jsonb_subscript.1:23:4:-1,test_json@test_jsonb_subscript.2:3802:-1:-1
+SELECT 0
+> select * from test_jsonb_subscript where test_json['key'] = '"value"';
+fields id@test_jsonb_subscript.1:23:4:-1,test_json@test_jsonb_subscript.2:3802:-1:-1
+SELECT 0
+> select * from test_jsonb_subscript where test_json['key_doesnt_exists'] = '"value"';
+fields id@test_jsonb_subscript.1:23:4:-1,test_json@test_jsonb_subscript.2:3802:-1:-1
+SELECT 0
+> select * from test_jsonb_subscript where test_json['key'] = '"wrong_value"';
+fields id@test_jsonb_subscript.1:23:4:-1,test_json@test_jsonb_subscript.2:3802:-1:-1
+SELECT 0
+> update test_jsonb_subscript set test_json[NULL] = '1';
+UPDATE 0
+> update test_jsonb_subscript set test_json['another_key'] = NULL;
+UPDATE 0
+> select * from test_jsonb_subscript;
+fields id@test_jsonb_subscript.1:23:4:-1,test_json@test_jsonb_subscript.2:3802:-1:-1
+SELECT 0
+> insert into test_jsonb_subscript values (3, NULL);
+INSERT 0 1
+> update test_jsonb_subscript set test_json['a'] = '1' where id = 3;
+UPDATE 1
+> select * from test_jsonb_subscript;
+fields id@test_jsonb_subscript.1:23:4:-1,test_json@test_jsonb_subscript.2:3802:-1:-1
+row 3,{"a": 1}
+SELECT 1
+> update test_jsonb_subscript set test_json = NULL where id = 3;
+UPDATE 1
+> update test_jsonb_subscript set test_json[0] = '1';
+UPDATE 1
+> select * from test_jsonb_subscript;
+fields id@test_jsonb_subscript.1:23:4:-1,test_json@test_jsonb_subscript.2:3802:-1:-1
+row 3,[1]
+SELECT 1
+> delete from test_jsonb_subscript;
+DELETE 1
+> insert into test_jsonb_subscript values (1, '[0]');
+INSERT 0 1
+> update test_jsonb_subscript set test_json[5] = '1';
+UPDATE 1
+> select * from test_jsonb_subscript;
+fields id@test_jsonb_subscript.1:23:4:-1,test_json@test_jsonb_subscript.2:3802:-1:-1
+row 1,[0, null, null, null, null, 1]
+SELECT 1
+> update test_jsonb_subscript set test_json[-4] = '1';
+UPDATE 1
+> select * from test_jsonb_subscript;
+fields id@test_jsonb_subscript.1:23:4:-1,test_json@test_jsonb_subscript.2:3802:-1:-1
+row 1,[0, null, 1, null, null, 1]
+SELECT 1
+> update test_jsonb_subscript set test_json[-8] = '1';
+ERROR 22023 path element at position 1 is out of range: -8
+> select * from test_jsonb_subscript;
+fields id@test_jsonb_subscript.1:23:4:-1,test_json@test_jsonb_subscript.2:3802:-1:-1
+row 1,[0, null, 1, null, null, 1]
+SELECT 1
+> delete from test_jsonb_subscript;
+DELETE 1
+> insert into test_jsonb_subscript values (1, '[]');
+INSERT 0 1
+> update test_jsonb_subscript set test_json[5] = '1';
+UPDATE 1
+> select * from test_jsonb_subscript;
+fields id@test_jsonb_subscript.1:23:4:-1,test_json@test_jsonb_subscript.2:3802:-1:-1
+row 1,[null, null, null, null, null, 1]
+SELECT 1
+> delete from test_jsonb_subscript;
+DELETE 1
+> insert into test_jsonb_subscript values (1, '{}');
+INSERT 0 1
+> update test_jsonb_subscript set test_json['a'][0]['b'][0]['c'] = '1';
+UPDATE 1
+> select * from test_jsonb_subscript;
+fields id@test_jsonb_subscript.1:23:4:-1,test_json@test_jsonb_subscript.2:3802:-1:-1
+row 1,{"a": [{"b": [{"c": 1}]}]}
+SELECT 1
+> delete from test_jsonb_subscript;
+DELETE 1
+> insert into test_jsonb_subscript values (1, '{}');
+INSERT 0 1
+> update test_jsonb_subscript set test_json['a'][2]['b'][2]['c'][2] = '1';
+UPDATE 1
+> select * from test_jsonb_subscript;
+fields id@test_jsonb_subscript.1:23:4:-1,test_json@test_jsonb_subscript.2:3802:-1:-1
+row 1,{"a": [null, null, {"b": [null, null, {"c": [null, null, 1]}]}]}
+SELECT 1
+> delete from test_jsonb_subscript;
+DELETE 1
+> insert into test_jsonb_subscript values (1, '{"b": 1}');
+INSERT 0 1
+> update test_jsonb_subscript set test_json['a'][0] = '2';
+UPDATE 1
+> select * from test_jsonb_subscript;
+fields id@test_jsonb_subscript.1:23:4:-1,test_json@test_jsonb_subscript.2:3802:-1:-1
+row 1,{"a": [2], "b": 1}
+SELECT 1
+> delete from test_jsonb_subscript;
+DELETE 1
+> insert into test_jsonb_subscript values (1, '{}');
+INSERT 0 1
+> update test_jsonb_subscript set test_json[0]['a'] = '1';
+UPDATE 1
+> select * from test_jsonb_subscript;
+fields id@test_jsonb_subscript.1:23:4:-1,test_json@test_jsonb_subscript.2:3802:-1:-1
+row 1,{"0": {"a": 1}}
+SELECT 1
+> delete from test_jsonb_subscript;
+DELETE 1
+> insert into test_jsonb_subscript values (1, '[]');
+INSERT 0 1
+> update test_jsonb_subscript set test_json[0]['a'] = '1';
+UPDATE 1
+> update test_jsonb_subscript set test_json[2]['b'] = '2';
+UPDATE 1
+> select * from test_jsonb_subscript;
+fields id@test_jsonb_subscript.1:23:4:-1,test_json@test_jsonb_subscript.2:3802:-1:-1
+row 1,[{"a": 1}, null, {"b": 2}]
+SELECT 1
+> delete from test_jsonb_subscript;
+DELETE 1
+> insert into test_jsonb_subscript values (1, '{}');
+INSERT 0 1
+> update test_jsonb_subscript set test_json['a']['b'][1] = '1';
+UPDATE 1
+> update test_jsonb_subscript set test_json['a']['b'][10] = '1';
+UPDATE 1
+> select * from test_jsonb_subscript;
+fields id@test_jsonb_subscript.1:23:4:-1,test_json@test_jsonb_subscript.2:3802:-1:-1
+row 1,{"a": {"b": [null, 1, null, null, null, null, null, null, null, null, 1]}}
+SELECT 1
+> delete from test_jsonb_subscript;
+DELETE 1
+> insert into test_jsonb_subscript values (1, '[]');
+INSERT 0 1
+> update test_jsonb_subscript set test_json[0][0][0] = '1';
+UPDATE 1
+> update test_jsonb_subscript set test_json[0][0][1] = '1';
+UPDATE 1
+> select * from test_jsonb_subscript;
+fields id@test_jsonb_subscript.1:23:4:-1,test_json@test_jsonb_subscript.2:3802:-1:-1
+row 1,[[[1, 1]]]
+SELECT 1
+> delete from test_jsonb_subscript;
+DELETE 1
+> insert into test_jsonb_subscript values (1, '{}');
+INSERT 0 1
+> update test_jsonb_subscript set test_json['a']['b'][10] = '1';
+UPDATE 1
+> update test_jsonb_subscript set test_json['a'][10][10] = '1';
+UPDATE 1
+> select * from test_jsonb_subscript;
+fields id@test_jsonb_subscript.1:23:4:-1,test_json@test_jsonb_subscript.2:3802:-1:-1
+row 1,{"a": {"b": [null, null, null, null, null, null, null, null, null, null, 1], "10": [null, null, null, null, null, null, null, null, null, null, 1]}}
+SELECT 1
+> delete from test_jsonb_subscript;
+DELETE 1
+> insert into test_jsonb_subscript values (1, '{"a": {}}');
+INSERT 0 1
+> update test_jsonb_subscript set test_json['a']['b']['c'][2] = '1';
+UPDATE 1
+> select * from test_jsonb_subscript;
+fields id@test_jsonb_subscript.1:23:4:-1,test_json@test_jsonb_subscript.2:3802:-1:-1
+row 1,{"a": {"b": {"c": [null, null, 1]}}}
+SELECT 1
+> delete from test_jsonb_subscript;
+DELETE 1
+> insert into test_jsonb_subscript values (1, '{"a": []}');
+INSERT 0 1
+> update test_jsonb_subscript set test_json['a'][1]['c'][2] = '1';
+UPDATE 1
+> select * from test_jsonb_subscript;
+fields id@test_jsonb_subscript.1:23:4:-1,test_json@test_jsonb_subscript.2:3802:-1:-1
+row 1,{"a": [null, {"c": [null, null, 1]}]}
+SELECT 1
+> delete from test_jsonb_subscript;
+DELETE 1
+> insert into test_jsonb_subscript values (1, '{"a": 1}');
+INSERT 0 1
+> update test_jsonb_subscript set test_json['a']['b'] = '1';
+ERROR 22023 cannot replace existing key
+> update test_jsonb_subscript set test_json['a']['b']['c'] = '1';
+ERROR 22023 cannot replace existing key
+> update test_jsonb_subscript set test_json['a'][0] = '1';
+ERROR 22023 cannot replace existing key
+> update test_jsonb_subscript set test_json['a'][0]['c'] = '1';
+ERROR 22023 cannot replace existing key
+> update test_jsonb_subscript set test_json['a'][0][0] = '1';
+ERROR 22023 cannot replace existing key
+> delete from test_jsonb_subscript;
+DELETE 1
+> insert into test_jsonb_subscript values (1, 'null');
+INSERT 0 1
+> update test_jsonb_subscript set test_json[0] = '1';
+ERROR 22023 cannot replace existing key
+> update test_jsonb_subscript set test_json[0][0] = '1';
+ERROR 22023 cannot replace existing key
+> drop table test_jsonb_subscript;
+DROP TABLE
+> create temp table test_jsonb_subscript ( id text, test_json jsonb );
+CREATE TABLE
+> insert into test_jsonb_subscript values('foo', '{"foo": "bar"}');
+INSERT 0 1
+> insert into test_jsonb_subscript select s, ('{"' || s || '": "bar"}')::jsonb from repeat('xyzzy', 500) s;
+INSERT 0 1
+> select length(id), test_json[id] from test_jsonb_subscript;
+fields length:23:4:-1,test_json:3802:-1:-1
+row 3,"bar"
+row 2500,"bar"
+SELECT 2
+> update test_jsonb_subscript set test_json[id] = '"baz"';
+UPDATE 2
+> select length(id), test_json[id] from test_jsonb_subscript;
+fields length:23:4:-1,test_json:3802:-1:-1
+row 3,"baz"
+row 2500,"baz"
+SELECT 2
+> \x table test_jsonb_subscript;
+ERROR 42601 syntax error at or near "\" at 1
+> create table jt (id int, j jsonb);
+CREATE TABLE
+> insert into jt values (1, '{"a": [1, {"b": 2}]}'), (2, null);
+INSERT 0 2
+> create view jv as select j['a'][1]['b'] as x, j['a']['0'] as y, j[id] as z from jt;
+CREATE VIEW
+> select pg_get_viewdef('jv'::regclass);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT j['a'::text][1]['b'::text] AS x,
+    j['a'::text]['0'::text] AS y,
+    j[id] AS z
+   FROM jt;
+SELECT 1
+> select * from jv order by x;
+fields x@jv.1:3802:-1:-1,y@jv.2:3802:-1:-1,z@jv.3:3802:-1:-1
+row 2,1,NULL
+row NULL,NULL,NULL
+SELECT 2
+> explain (verbose, costs off) select j['a'][id - 1] from jt;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.jt
+row   Output: j['a'::text][(id - 1)]
+EXPLAIN
+> select j['a'][id::int8] from jt;
+ERROR 42804 subscript type bigint is not supported at 15
+> select j['a'][1.5] from jt;
+ERROR 42804 subscript type numeric is not supported at 15
+> select j[1:2] from jt;
+ERROR 42804 jsonb subscript does not support slices at 12
+> select j[:2] from jt;
+ERROR 42804 jsonb subscript does not support slices at 11
+> select j[now()] from jt;
+ERROR 42804 subscript type timestamp with time zone is not supported at 10
+> update jt set j['a'][1]['c'] = to_jsonb(id) where id = 1;
+UPDATE 1
+> update jt set j[3] = '"x"' where id = 2;
+UPDATE 1
+> select * from jt order by id;
+fields id@jt.1:23:4:-1,j@jt.2:3802:-1:-1
+row 1,{"a": [1, {"b": 2, "c": 1}]}
+row 2,[null, null, null, "x"]
+SELECT 2
+> update jt set j['a'][1] = 5 where id = 1;
+ERROR 42804 subscripted assignment to "j" requires type jsonb but expression is of type integer at 15
+> update jt set j['a'][-10] = '5' where id = 1;
+ERROR 22023 path element at position 2 is out of range: -10
+> update jt set j['a'][0]['q'] = '5' where id = 1;
+ERROR 22023 cannot replace existing key
+> update jt set j['a'][5]['q'][2]['r'] = '5' where id = 1;
+UPDATE 1
+> update jt set j['n'][-1] = '7' where id = 1;
+UPDATE 1
+> select j from jt where id = 1;
+fields j@jt.2:3802:-1:-1
+row {"a": [1, {"b": 2, "c": 1}, null, null, null, {"q": [null, null, {"r": 5}]}], "n": [7]}
+SELECT 1
+> update jt set j[null] = '1';
+ERROR 22004 jsonb subscript in assignment must not be null
+> update jt set j['a'] = null where id = 1;
+UPDATE 1
+> select j from jt where id = 1;
+fields j@jt.2:3802:-1:-1
+row {"a": null, "n": [7]}
+SELECT 1
+> create domain jd as jsonb check (value <> '{"bad": 1}');
+CREATE DOMAIN
+> create table jdt (d jd);
+CREATE TABLE
+> insert into jdt values ('{}');
+INSERT 0 1
+> update jdt set d['bad'] = '1';
+ERROR 23514 value for domain jd violates check constraint "jd_check"
+> update jdt set d['ok'] = '1';
+UPDATE 1
+> select d, d['ok'] from jdt;
+fields d@jdt.1:3802:-1:-1,d:3802:-1:-1
+row {"ok": 1},1
+SELECT 1
+> do $$ declare v jsonb := '{}'; begin v['x'] := '1'; v['y']['z'] := '[2]'; raise notice '%', v; v[0] := '1'; end $$;
+NOTICE 00000 {"x": 1, "y": {"z": [2]}} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> select ('[1,2,3]'::jsonb)[-1], ('[1,2,3]'::jsonb)[-4], ('{"a":1}'::jsonb)[1];
+fields jsonb:3802:-1:-1,jsonb:3802:-1:-1,jsonb:3802:-1:-1
+row 3,NULL,NULL
+SELECT 1
+> select ('"s"'::jsonb)['a'];
+fields jsonb:3802:-1:-1
+row NULL
+SELECT 1
+> update jt set j = '"s"' where id = 2;
+UPDATE 1
+> update jt set j['a'] = '1' where id = 2;
+ERROR 22023 cannot replace existing key
+> update jt set j[0] = '1' where id = 2;
+ERROR 22023 cannot replace existing key
+> drop table jt cascade; drop table jdt; drop domain jd;
+NOTICE 00000 drop cascades to view jv
+DROP TABLE
+DROP TABLE
+DROP DOMAIN
