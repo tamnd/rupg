@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `old` and `new` in `RETURNING` of a statement that a rule rewrites take the rows of the rule action, with the aliases of `WITH (OLD AS ..., NEW AS ...)`, and `EXPLAIN` shows them in `Output` (#957).
 - `ctid` of the old and the new rows in `RETURNING` of `INSERT`, `UPDATE`, `DELETE` and `ON CONFLICT` gives the item pointer of the version, as PostgreSQL gives it, and `EXPLAIN VERBOSE` shows the `Output` of a `RETURNING` list with a system column (#956).
 - `pg_column_size` gives the size of a value as PostgreSQL forms it, for the types of fixed length, the text types, `bytea`, `numeric`, `jsonb`, `inet`, arrays and rows. A column of a table has the header of 1 byte of a short value (#955).
 - Subscripts of a `jsonb` value, such as `j['a'][0]`, read and assign a part of the value as PostgreSQL does. An assignment fills the gaps of an array with nulls and makes the objects and the arrays of a path that the value does not have (#953).
