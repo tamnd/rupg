@@ -1,0 +1,218 @@
+> SET bytea_output TO escape
+SET
+> SELECT lo_create(4242)
+fields lo_create:26:4:-1
+row 4242
+SELECT 1
+> SELECT lo_create(4242)
+fields lo_create:26:4:-1
+ERROR 23505 duplicate key value violates unique constraint "pg_largeobject_metadata_oid_index"
+> SELECT count(*) FROM pg_largeobject_metadata WHERE oid = 4242
+fields count:20:8:-1
+row 1
+SELECT 1
+> BEGIN
+BEGIN
+> SELECT lo_open(4242, 131072)
+fields lo_open:23:4:-1
+row 0
+SELECT 1
+> SELECT lowrite(0, 'hello large object')
+fields lowrite:23:4:-1
+row 18
+SELECT 1
+> SELECT lo_tell(0), lo_tell64(0)
+fields lo_tell:23:4:-1,lo_tell64:20:8:-1
+row 18,18
+SELECT 1
+> SELECT lo_lseek(0, 6, 0)
+fields lo_lseek:23:4:-1
+row 6
+SELECT 1
+> SELECT loread(0, 5)
+fields loread:17:-1:-1
+row large
+SELECT 1
+> SELECT lo_lseek(0, -2, 1), lo_lseek64(0, 0, 2)
+fields lo_lseek:23:4:-1,lo_lseek64:20:8:-1
+row 9,18
+SELECT 1
+> SELECT lo_lseek(0, 0, 3)
+fields lo_lseek:23:4:-1
+ERROR 22023 invalid whence setting: 3
+> ROLLBACK
+ROLLBACK
+> SELECT lo_get(4242)
+fields lo_get:17:-1:-1
+row 
+SELECT 1
+> BEGIN
+BEGIN
+> SELECT lo_open(4242, 393216)
+fields lo_open:23:4:-1
+row 0
+SELECT 1
+> SELECT lowrite(0, 'hello large object')
+fields lowrite:23:4:-1
+row 18
+SELECT 1
+> SELECT lo_open(4242, 262144)
+fields lo_open:23:4:-1
+row 1
+SELECT 1
+> SELECT lowrite(1, 'x')
+fields lowrite:23:4:-1
+ERROR 55000 large object descriptor 1 was not opened for writing
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> SELECT lo_open(4242, 262144)
+fields lo_open:23:4:-1
+row 0
+SELECT 1
+> SELECT lo_open(4242, 131072)
+fields lo_open:23:4:-1
+row 1
+SELECT 1
+> SELECT lowrite(1, 'abc'), loread(0, 10)
+fields lowrite:23:4:-1,loread:17:-1:-1
+row 3,
+SELECT 1
+> SELECT lo_close(0), lo_close(0)
+fields lo_close:23:4:-1,lo_close:23:4:-1
+ERROR 42704 invalid large-object descriptor: 0
+> ROLLBACK
+ROLLBACK
+> SELECT lo_open(4242, 0)
+fields lo_open:23:4:-1
+ERROR 22023 invalid flags for opening a large object: 0
+> SELECT loread(5, 1)
+fields loread:17:-1:-1
+ERROR 42704 invalid large-object descriptor: 5
+> SELECT lo_open(99999, 262144)
+fields lo_open:23:4:-1
+ERROR 42704 large object 99999 does not exist
+> SELECT lo_put(4242, 2048, 'tail'), lo_put(4242, 2, 'mid')
+fields lo_put:2278:4:-1,lo_put:2278:4:-1
+row ,
+SELECT 1
+> SELECT length(lo_get(4242)), lo_get(4242, 0, 6), lo_get(4242, 2050, 10)
+fields length:23:4:-1,lo_get:17:-1:-1,lo_get:17:-1:-1
+row 2052,\000\000mid\000,il
+SELECT 1
+> SELECT pageno, length(data) FROM pg_largeobject WHERE loid = 4242 ORDER BY pageno
+fields pageno@pg_largeobject.2:23:4:-1,length:23:4:-1
+row 0,5
+row 1,4
+SELECT 2
+> SELECT lo_get(4242, 0, -1)
+fields lo_get:17:-1:-1
+ERROR 22023 requested length cannot be negative
+> SELECT lo_get(4242, 5000, 10)
+fields lo_get:17:-1:-1
+row 
+SELECT 1
+> BEGIN
+BEGIN
+> SELECT lo_open(4242, 131072)
+fields lo_open:23:4:-1
+row 0
+SELECT 1
+> SELECT lo_truncate(0, 3000)
+fields lo_truncate:23:4:-1
+row 0
+SELECT 1
+> SELECT lo_lseek(0, 0, 2)
+fields lo_lseek:23:4:-1
+row 3000
+SELECT 1
+> SELECT lo_truncate(0, -1)
+fields lo_truncate:23:4:-1
+ERROR 22023 invalid large object truncation target: -1
+> SELECT lo_truncate64(0, 4096)
+ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block
+> SELECT pageno, length(data) FROM pg_largeobject WHERE loid = 4242 ORDER BY pageno
+ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block
+> COMMIT
+ROLLBACK
+> BEGIN
+BEGIN
+> SAVEPOINT a
+SAVEPOINT
+> SELECT lo_open(4242, 262144)
+fields lo_open:23:4:-1
+row 0
+SELECT 1
+> ROLLBACK TO a
+ROLLBACK
+> SELECT lo_tell(0)
+fields lo_tell:23:4:-1
+ERROR 42704 invalid large-object descriptor: 0
+> ROLLBACK
+ROLLBACK
+> SELECT lo_from_bytea(4243, '\xdeadbeef'::bytea)
+fields lo_from_bytea:26:4:-1
+row 4243
+SELECT 1
+> SELECT lo_get(4243)
+fields lo_get:17:-1:-1
+row \336\255\276\357
+SELECT 1
+> SELECT has_largeobject_privilege(4243, 'SELECT'), has_largeobject_privilege(4244, 'SELECT')
+fields has_largeobject_privilege:16:1:-1,has_largeobject_privilege:16:1:-1
+row t,NULL
+SELECT 1
+> SELECT pg_describe_object('pg_largeobject'::regclass, 4243, 0)
+fields pg_describe_object:25:-1:-1
+row large object 4243
+SELECT 1
+> CREATE ROLE regress_lo_r
+CREATE ROLE
+> SET ROLE regress_lo_r
+SET
+is_superuser=off
+> SELECT lo_get(4243)
+fields lo_get:17:-1:-1
+ERROR 42501 permission denied for large object 4243
+> SELECT lo_unlink(4243)
+fields lo_unlink:23:4:-1
+ERROR 42501 must be owner of large object 4243
+> SELECT has_largeobject_privilege(4243, 'SELECT')
+fields has_largeobject_privilege:16:1:-1
+row f
+SELECT 1
+> RESET ROLE
+RESET
+is_superuser=on
+> DROP ROLE regress_lo_r
+DROP ROLE
+> START TRANSACTION READ ONLY
+START TRANSACTION
+> SELECT lo_open(4243, 262144)
+fields lo_open:23:4:-1
+row 0
+SELECT 1
+> SELECT lo_open(4243, 131072)
+fields lo_open:23:4:-1
+ERROR 25006 cannot execute lo_open(INV_WRITE) in a read-only transaction
+> ROLLBACK
+ROLLBACK
+> START TRANSACTION READ ONLY
+START TRANSACTION
+> SELECT lo_put(4243, 0, 'x')
+fields lo_put:2278:4:-1
+ERROR 25006 cannot execute lo_put() in a read-only transaction
+> ROLLBACK
+ROLLBACK
+> SELECT lo_unlink(4243), lo_unlink(4242)
+fields lo_unlink:23:4:-1,lo_unlink:23:4:-1
+row 1,1
+SELECT 1
+> SELECT lo_unlink(4242)
+fields lo_unlink:23:4:-1
+ERROR 42704 large object 4242 does not exist
+> SELECT count(*) FROM pg_largeobject
+fields count:20:8:-1
+row 0
+SELECT 1

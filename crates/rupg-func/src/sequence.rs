@@ -102,8 +102,8 @@ fn check(relid: u32, name: &str, mask: u32, session: &dyn Session) -> Result<()>
     ))
 }
 
-/// `PreventCommandIfReadOnly`: a read-only transaction cannot change a sequence.
-fn check_writable(command: &str, session: &dyn Session) -> Result<()> {
+/// `PreventCommandIfReadOnly`: a read-only transaction cannot change a sequence or a large object.
+pub(crate) fn check_writable(command: &str, session: &dyn Session) -> Result<()> {
     if session.setting("transaction_read_only").as_deref() == Some("on") {
         return Err(Error::new(
             SqlState::READ_ONLY_SQL_TRANSACTION,

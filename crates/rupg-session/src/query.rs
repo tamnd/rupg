@@ -20,7 +20,7 @@ use rupg_exec::Plan;
 use rupg_func::{AdvisoryLock, Backend, Client, Randomness, Sequences};
 use rupg_pgcatalog::builtin;
 use rupg_platform::os::OsEntropy;
-use rupg_platform::{Clock, Entropy};
+use rupg_platform::{Clock, Entropy, Io, OpenMode};
 use rupg_sql::nodes::{Node, VariableSetKind, VariableSetStmt};
 use rupg_types::{
     Array, ByteaOutput, DateFormat, DateOrder, DateStyle, IntervalStyle, Recv, TimeZone, Value,
@@ -493,6 +493,16 @@ impl<'a> Reader<'a> {
     pub(crate) fn with_portals(mut self, portals: &'a RefCell<Portals<Portal>>) -> Reader<'a> {
         self.portals = Some(portals);
         self
+    }
+
+    /// The file system of the server, for `lo_import` and `lo_export`.
+    fn server_io(&self) -> Result<&'a Arc<dyn Io>> {
+        self.conn.and_then(Connection::server_io).ok_or_else(|| {
+            Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "a file of the server in a session with no server is not supported yet",
+            )
+        })
     }
 
     /// The reader of the session `conn`, which can run a function in PL/pgSQL.
@@ -1013,6 +1023,34 @@ impl rupg_func::Session for Reader<'_> {
 
     fn catalog(&self) -> Option<&Catalog> {
         Some(&self.catalog)
+    }
+
+    fn latest_catalog(&self) -> Option<Arc<Catalog>> {
+        self.conn.map(Connection::latest_catalog)
+    }
+
+    fn change_catalog(&self, change: &mut dyn FnMut(&mut Catalog) -> Result<()>) -> Result<()> {
+        let Some(conn) = self.conn else {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "a change of a large object in a session with no server is not supported yet",
+            ));
+        };
+        conn.change_catalog(change)
+    }
+
+    fn read_server_file(&self, name: &str) -> Result<Vec<u8>> {
+        self.server_io()?.read_file(std::path::Path::new(name))
+    }
+
+    fn write_server_file(&self, name: &str, bytes: &[u8]) -> Result<()> {
+        let file = self.server_io()?.open(std::path::Path::new(name), OpenMode::Create)?;
+        file.set_size(0)?;
+        file.write_at(0, bytes)
+    }
+
+    fn large_object_descriptors(&self) -> Option<&RefCell<rupg_func::LoDescriptors>> {
+        self.conn.map(Connection::large_objects)
     }
 
     fn transition_rows(&self, name: &str) -> Option<Rc<Vec<Vec<Value>>>> {

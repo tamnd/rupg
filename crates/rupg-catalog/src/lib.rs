@@ -21,6 +21,7 @@ mod default_acl;
 mod drop;
 mod enum_label;
 mod foreign;
+mod large_object;
 mod opclass;
 mod operator;
 mod owner;
@@ -37,6 +38,9 @@ pub use drop::{Refusal, Target, flag};
 pub use foreign::{
     ForeignDataWrapper, ForeignServer, ForeignTable, PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER,
     PG_FOREIGN_TABLE, PG_USER_MAPPING, UserMapping,
+};
+pub use large_object::{
+    LOBLKSIZE, LargeObject, LargeObjectData, MAX_LARGE_OBJECT_SIZE, PG_LARGEOBJECT_METADATA,
 };
 pub use opclass::{
     AmOp, AmProc, MemberLink, OpClass, OpFamily, PG_AM, PG_AMOP, PG_AMPROC, PG_OPFAMILY,
@@ -1315,6 +1319,8 @@ pub struct Catalog {
     ts_mappings: Vec<TsMapping>,
     stat_exts: BTreeMap<u32, StatExt>,
     conversions: BTreeMap<u32, Conversion>,
+    /// The large objects of `pg_largeobject_metadata`, with their data.
+    large_objects: Arc<BTreeMap<u32, LargeObject>>,
     fdws: BTreeMap<u32, ForeignDataWrapper>,
     servers: BTreeMap<u32, ForeignServer>,
     user_mappings: BTreeMap<u32, UserMapping>,
@@ -1436,6 +1442,7 @@ impl Catalog {
             ts_mappings: Vec::new(),
             stat_exts: BTreeMap::new(),
             conversions: BTreeMap::new(),
+            large_objects: Arc::default(),
             fdws: BTreeMap::new(),
             servers: BTreeMap::new(),
             user_mappings: BTreeMap::new(),

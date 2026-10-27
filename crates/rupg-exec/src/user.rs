@@ -5,8 +5,8 @@
 use rupg_analyze::node;
 use rupg_catalog::{
     BaseType, Catalog, ConKind, Constraint, Function, ObjRef, PG_CLASS, PG_FOREIGN_DATA_WRAPPER,
-    PG_FOREIGN_SERVER, PG_LANGUAGE, PG_NAMESPACE, PG_PROC, PG_TYPE, PartitionBound, RangePart,
-    RelKind, Relation, Type,
+    PG_FOREIGN_SERVER, PG_LANGUAGE, PG_LARGEOBJECT, PG_NAMESPACE, PG_PROC, PG_TYPE, PartitionBound,
+    RangePart, RelKind, Relation, Type,
 };
 use rupg_common::{Error, Result};
 use rupg_func::Session;
@@ -263,6 +263,8 @@ pub(crate) fn rows(
         "pg_range" => ranges(table, catalog),
         "pg_cast" => casts(table, catalog),
         "pg_conversion" => conversions(table, catalog),
+        "pg_largeobject_metadata" => large_objects(table, catalog),
+        "pg_largeobject" => large_object_pages(table, catalog),
         "pg_foreign_data_wrapper" => fdws(table, catalog),
         "pg_foreign_server" => servers(table, catalog),
         "pg_user_mapping" => user_mappings(table, catalog),
@@ -1304,6 +1306,35 @@ fn conversions<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
             row
         })
         .collect()
+}
+
+/// The rows of `pg_largeobject_metadata`. `lomacl` is null until a `GRANT` gives the large object an ACL.
+fn large_objects<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .large_objects()
+        .map(|l| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(l.oid))
+                .set("lomowner", oid(l.owner))
+                .set("lomacl", granted(catalog, ObjRef::new(PG_LARGEOBJECT, l.oid)));
+            row
+        })
+        .collect()
+}
+
+/// The rows of `pg_largeobject`: a row for each page of each large object, by `loid` and `pageno`.
+fn large_object_pages<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    let mut rows = Vec::new();
+    for object in catalog.large_objects() {
+        for (pageno, data) in object.data.pages() {
+            let mut row = Row::new(table);
+            row.set("loid", oid(object.oid))
+                .set("pageno", Value::Int4(pageno))
+                .set("data", Value::Bytea(data.to_vec()));
+            rows.push(row);
+        }
+    }
+    rows
 }
 
 /// The options of a foreign-data wrapper or a server: a `text[]`, or null for no options.

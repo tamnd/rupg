@@ -422,6 +422,8 @@ pub struct Connection {
     activity: Activity,
     /// The cache of the sequences of the session, with the state of `currval` and `lastval`.
     sequences: RefCell<Sequences>,
+    /// The descriptors of the large objects that the transaction opened.
+    large_objects: RefCell<rupg_func::LoDescriptors>,
     /// The state of `random` and `uuidv7`, which lasts as long as the session.
     randomness: RefCell<Randomness>,
     /// The `COPY ... FROM STDIN` that reads its data.
@@ -528,6 +530,7 @@ impl Connection {
             lease: RefCell::new(None),
             activity: Activity::default(),
             sequences: RefCell::new(Sequences::default()),
+            large_objects: RefCell::default(),
             randomness: RefCell::new(Randomness::default()),
             copy_in: None,
             xid: Cell::new(0),
@@ -1121,6 +1124,41 @@ impl Connection {
             Some(lease) => Arc::clone(&lease.catalog),
             None => self.store.committed(self.database_oid),
         }
+    }
+
+    /// The catalog of the transaction now, for [`rupg_func::Session::latest_catalog`].
+    pub(crate) fn latest_catalog(&self) -> Arc<Catalog> {
+        self.catalog()
+    }
+
+    /// [`rupg_func::Session::change_catalog`]: the transaction takes the lock of the catalog and gets an ID, as for a statement that changes the catalog, then `change` changes its copy of the catalog.
+    pub(crate) fn change_catalog(
+        &self,
+        change: &mut dyn FnMut(&mut Catalog) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        if self.lease.borrow().is_none() {
+            let lease = self.lease_catalog()?;
+            *self.lease.borrow_mut() = Some(lease);
+        }
+        self.transaction_id(true);
+        let mut held = self
+            .lease
+            .try_borrow_mut()
+            .map_err(|_| Error::internal("the catalog is in use by the statement"))?;
+        let Some(lease) = held.as_mut() else {
+            return Err(Error::internal("the lock of the catalog is gone"));
+        };
+        change(Arc::make_mut(&mut lease.catalog))
+    }
+
+    /// The file system of the server, or `None` for a session with no server.
+    pub(crate) fn server_io(&self) -> Option<&Arc<dyn Io>> {
+        self.io.as_ref()
+    }
+
+    /// The descriptors of the large objects of the transaction.
+    pub(crate) fn large_objects(&self) -> &RefCell<rupg_func::LoDescriptors> {
+        &self.large_objects
     }
 
     /// Gives the heap `attlen` and `attalign` of the columns of the table `table` with a built-in type of fixed length, so that a version of the table takes the bytes of its version in PostgreSQL, as `heap_compute_data_size` stores it.
@@ -4080,6 +4118,12 @@ mod tests {
     #[test]
     fn collation_create() {
         big_stack(|| script(include_str!("connection/collation_create.test")));
+    }
+
+    /// The large object functions: `lo_create` with an OID that a large object has, reads, writes and seeks through descriptors, a descriptor that only reads and keeps the data of its open, the errors of the descriptors, holes, `lo_put` and `lo_get`, the rows of `pg_largeobject`, truncation, the close of the descriptors of a subtransaction at its rollback, the privileges of a role that is not the owner, read-only transactions and `lo_unlink`. `connection/large_object.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn large_object() {
+        big_stack(|| script(include_str!("connection/large_object.test")));
     }
 
     /// `CREATE CONVERSION` with the checks of `CreateConversionCommand` and `ConversionCreate`, `ALTER CONVERSION` with `RENAME TO`, `OWNER TO` and `SET SCHEMA`, `COMMENT ON CONVERSION`, `DROP CONVERSION`, the rows of `pg_conversion` and `pg_depend`, and the drop with the schema. `connection/conversion_create.test` is the output of PostgreSQL 19 for the same script in a new database.
