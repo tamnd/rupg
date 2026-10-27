@@ -1,0 +1,118 @@
+> create function rngfuncbar(out integer, out numeric) as $$ select (1, 2.1) $$ language sql
+CREATE FUNCTION
+> select * from rngfuncbar()
+fields column1:23:4:-1,column2:1700:-1:-1
+row 1,2.1
+SELECT 1
+> select rngfuncbar()::text
+fields rngfuncbar:25:-1:-1
+row (1,2.1)
+SELECT 1
+> create or replace function rngfuncbar(out integer, out numeric) as $$ select (1, 2) $$ language sql
+CREATE FUNCTION
+> select * from rngfuncbar()
+fields column1:23:4:-1,column2:1700:-1:-1
+ERROR 42804 function return row and query-specified return row do not match
+> create or replace function rngfuncbar(out integer, out numeric) as $$ select (1, 2.1, 3) $$ language sql
+CREATE FUNCTION
+> select * from rngfuncbar()
+fields column1:23:4:-1,column2:1700:-1:-1
+ERROR 42804 function return row and query-specified return row do not match
+> drop function rngfuncbar()
+DROP FUNCTION
+> create function rf2(out a integer, out b text) returns setof record as $$ select (1, 'x'::text) union all select null::record $$ language sql
+CREATE FUNCTION
+> select * from rf2()
+fields a:23:4:-1,b:25:-1:-1
+row 1,x
+row NULL,NULL
+SELECT 2
+> create type rngfunc2 as (a integer, b text)
+CREATE TYPE
+> select *, row_to_json(u)::text from unnest(array[(1,'foo')::rngfunc2, null::rngfunc2]) u
+fields a:23:4:-1,b:25:-1:-1,row_to_json:25:-1:-1
+row 1,foo,{"a":1,"b":"foo"}
+row NULL,NULL,{"a":null,"b":null}
+SELECT 2
+> select * from unnest(array[(1,'foo')::rngfunc2]) with ordinality u
+fields a:23:4:-1,b:25:-1:-1,ordinality:20:8:-1
+row 1,foo,1
+SELECT 1
+> select u::text from unnest(array[(1,'foo')::rngfunc2]) u
+fields u:25:-1:-1
+row (1,foo)
+SELECT 1
+> create table int8_tbl(q1 int8, q2 int8)
+CREATE TABLE
+> insert into int8_tbl values (1, 2), (3, 4)
+INSERT 0 2
+> create function extractq2(t int8_tbl) returns int8 as $$ select t.q2 $$ language sql immutable
+CREATE FUNCTION
+> explain (verbose, costs off) select x from int8_tbl, extractq2(int8_tbl) f(x)
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   Output: f.x
+row   ->  Seq Scan on public.int8_tbl
+row         Output: int8_tbl.q1, int8_tbl.q2
+row   ->  Function Scan on f
+row         Output: f.x
+row         Function Call: int8_tbl.q2
+EXPLAIN
+> select x from int8_tbl, extractq2(int8_tbl) f(x)
+fields x:20:8:-1
+row 2
+row 4
+SELECT 2
+> create function extractq2_2(t int8_tbl) returns table(ret1 int8) as $$ select extractq2(t) offset 0 $$ language sql immutable
+CREATE FUNCTION
+> explain (verbose, costs off) select x from int8_tbl, extractq2_2(int8_tbl) f(x)
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   Output: ((int8_tbl.*).q2)
+row   ->  Seq Scan on public.int8_tbl
+row         Output: int8_tbl.*
+row   ->  Result
+row         Output: (int8_tbl.*).q2
+EXPLAIN
+> select x from int8_tbl, extractq2_2(int8_tbl) f(x)
+fields x:20:8:-1
+row 2
+row 4
+SELECT 2
+> create function extractq2_2_opt(t int8_tbl) returns table(ret1 int8) as $$ select extractq2(t) $$ language sql immutable
+CREATE FUNCTION
+> explain (verbose, costs off) select x from int8_tbl, extractq2_2_opt(int8_tbl) f(x)
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.int8_tbl
+row   Output: int8_tbl.q2
+EXPLAIN
+> select x from int8_tbl, extractq2_2_opt(int8_tbl) f(x)
+fields x:20:8:-1
+row 2
+row 4
+SELECT 2
+> create table dropt(a int, b int, c text)
+CREATE TABLE
+> alter table dropt drop column b
+ALTER TABLE
+> insert into dropt values (1, 'one')
+INSERT 0 1
+> create function getc(t dropt) returns text as $$ select t.c $$ language sql immutable
+CREATE FUNCTION
+> explain (verbose, costs off) select getc(dropt) from dropt
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.dropt
+row   Output: c
+EXPLAIN
+> select getc(dropt) from dropt
+fields getc:25:-1:-1
+row one
+SELECT 1
+> select getc(d), d.c from (values (2)) v(x) left join dropt d on d.a = v.x
+fields getc:25:-1:-1,c@dropt.3:25:-1:-1
+row NULL,NULL
+SELECT 1
+> select (row(1, 'a'::text)::rngfunc2).b
+fields b:25:-1:-1
+row a
+SELECT 1

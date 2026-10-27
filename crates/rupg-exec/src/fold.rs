@@ -960,6 +960,34 @@ impl<'a> Fold<'a> {
             ExprKind::DomainValue => Ok(expr.clone()),
             ExprKind::FieldSelect(arg, field) => {
                 let arg = self.expr(arg)?;
+                // `eval_const_expressions`: a field of a whole-row `Var` of this level is the `Var` of the column, and a field of a `ROW` is its argument, when the type of the field is the type of the result.
+                match &arg.kind {
+                    ExprKind::Var(var) if var.attnum == 0 && var.levels_up == 0 => {
+                        let columns = self.relations.get(var.relation).map(|r| &r.columns);
+                        let column = columns.and_then(|columns| {
+                            let mut live =
+                                columns.iter().enumerate().filter(|(_, c)| !c.is_dropped());
+                            live.nth(*field)
+                        });
+                        if let Some((at, column)) = column
+                            && column.ty == expr.ty
+                            && column.typmod == expr.typmod
+                        {
+                            let attnum = i16::try_from(at + 1).unwrap_or(i16::MAX);
+                            let var = Var { attnum, ..*var };
+                            return Ok(with(expr, ExprKind::Var(var)));
+                        }
+                    }
+                    ExprKind::Row(args, _) => {
+                        if let Some(field) = args.get(*field)
+                            && field.ty == expr.ty
+                            && field.typmod == expr.typmod
+                        {
+                            return Ok(field.clone());
+                        }
+                    }
+                    _ => {}
+                }
                 Ok(match value(&arg) {
                     Some(Value::Record(record)) => {
                         let v = record.values.get(*field).cloned().unwrap_or(Value::Null);

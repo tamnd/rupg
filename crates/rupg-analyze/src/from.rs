@@ -170,7 +170,7 @@ pub struct Column {
 
 impl Column {
     /// True for a dropped column of a table, which keeps its place with no name and the type 0.
-    pub(crate) fn is_dropped(&self) -> bool {
+    pub fn is_dropped(&self) -> bool {
         self.ty == 0 && self.name.is_empty()
     }
 }
