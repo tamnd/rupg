@@ -189,18 +189,7 @@ impl Connection {
                 "COPY FROM a program is not supported yet",
             ));
         }
-        if !self.superuser() {
-            return Err(Error::new(
-                SqlState::INSUFFICIENT_PRIVILEGE,
-                "permission denied to COPY from a file",
-            )
-            .with_detail(
-                "Only roles with privileges of the \"pg_read_server_files\" role may COPY from a file.",
-            )
-            .with_hint(
-                "Anyone can COPY to stdout or from stdin. psql's \\copy command also works for anyone.",
-            ));
-        }
+        self.server_file_privilege(true)?;
         let name = stmt.filename.as_deref().unwrap_or_default();
         let mut bytes = Vec::new();
         let mut copy = self.copy_from(stmt, Begin::File(name, &mut bytes))?;

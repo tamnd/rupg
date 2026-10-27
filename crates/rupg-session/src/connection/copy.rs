@@ -1,11 +1,13 @@
 //! `COPY ... TO STDOUT`, as `DoCopy`, `ProcessCopyOptions`, `BeginCopyTo` and `DoCopyTo` in `copy.c` and `copyto.c` run it. The rows go to the client in the text, CSV, binary or JSON format. A file and a program give `0A000`. `COPY FROM` of the extended protocol gives `0A000` too.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::Arc;
 
 use rupg_analyze::Params;
 use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
+use rupg_platform::{File, OpenMode};
 use rupg_sql::nodes::{CopyStmt, DefElem, Node};
 use rupg_types::{Record, Value, oid};
 use rupg_wire::{CommandTag, OutBuf};
@@ -14,6 +16,11 @@ use super::{Applied, Connection, Done};
 use crate::guc::encoding;
 use crate::query::{self, Reader};
 use crate::utility::Notice;
+
+/// `ROLE_PG_READ_SERVER_FILES`.
+const PG_READ_SERVER_FILES: u32 = 4569;
+/// `ROLE_PG_WRITE_SERVER_FILES`.
+const PG_WRITE_SERVER_FILES: u32 = 4570;
 
 /// `PGCOPY\n\377\r\n\0`, the signature of the binary format.
 pub(super) const BINARY_SIGNATURE: &[u8; 11] = b"PGCOPY\n\xff\r\n\0";
@@ -146,6 +153,9 @@ impl Connection {
                 "COPY FROM is not supported yet",
             ));
         }
+        if stmt.filename.is_some() && !stmt.is_program {
+            self.server_file_privilege(false)?;
+        }
         self.settings.borrow_mut().take_snapshot();
         let reader = self.reader();
         let mut partitions = None;
@@ -198,16 +208,15 @@ impl Connection {
                     "relative path not allowed for COPY to file",
                 ));
             }
-            return Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                "COPY to a file is not supported yet",
-            ));
         }
+        let file = stmt.filename.as_deref().map(|name| self.write_server_file(name)).transpose()?;
         let binary = options.format == Format::Binary;
         let formats = vec![i16::from(binary); selected.len()];
         let json = options.format == Format::Json;
         let width = if json { 1 } else { selected.len() };
-        *started = Some((binary, width));
+        if file.is_none() {
+            *started = Some((binary, width));
+        }
         let view = reader.view().cloned().unwrap_or_default();
         if plan.write().is_some() {
             plan.start(&reader)?;
@@ -245,6 +254,9 @@ impl Connection {
             let count = rows.len() as u64;
             let data = json_rows(options.force_array, &types, &names, rows, &reader)?;
             notices.0.extend(reader.take_warnings().into_iter().map(Notice::of_function));
+            if let Some(file) = file {
+                return write_file(&*file, &data, count);
+            }
             return Ok(Done::Copy(CopyOut { binary, columns: width, data, rows: count, notices }));
         }
         let encode = |rows: Vec<Vec<Value>>| {
@@ -264,8 +276,62 @@ impl Connection {
         let data =
             if binary { binary_rows(&rows) } else { text_rows(&options, &names, &force, &rows) };
         let rows = rows.len() as u64;
+        if let Some(file) = file {
+            return write_file(&*file, &data, rows);
+        }
         Ok(Done::Copy(CopyOut { binary, columns: selected.len(), data, rows, notices }))
     }
+
+    /// The check of `DoCopy` for a file of the server: the current role has the privileges of `pg_read_server_files` for `COPY ... FROM` and of `pg_write_server_files` for `COPY ... TO`.
+    pub(super) fn server_file_privilege(&self, is_from: bool) -> Result<(), Error> {
+        let (role, name, text) = if is_from {
+            (PG_READ_SERVER_FILES, "pg_read_server_files", "COPY from a file")
+        } else {
+            (PG_WRITE_SERVER_FILES, "pg_write_server_files", "COPY to a file")
+        };
+        if self.roles().has_privs_of_role(self.current_role(), role) {
+            return Ok(());
+        }
+        Err(Error::new(SqlState::INSUFFICIENT_PRIVILEGE, format!("permission denied to {text}"))
+            .with_detail(format!("Only roles with privileges of the \"{name}\" role may {text}."))
+            .with_hint(
+                "Anyone can COPY to stdout or from stdin. psql's \\copy command also works for anyone.",
+            ))
+    }
+
+    /// `AllocateFile` of `BeginCopyTo`: the file of the server that the copy writes, empty. A relative name is in the data directory, which is the working directory of the server.
+    fn write_server_file(&self, name: &str) -> Result<Arc<dyn File>, Error> {
+        let Some(io) = &self.io else {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "COPY TO a file in a session with no server is not supported yet",
+            ));
+        };
+        let writing = |error: Error| {
+            let prefix = format!("could not open file \"{name}\": ");
+            let text = error.message().strip_prefix(&prefix).unwrap_or(error.message()).to_owned();
+            let hint = matches!(text.as_str(), "No such file or directory" | "Permission denied");
+            let error = Error::new(
+                error.state(),
+                format!("could not open file \"{name}\" for writing: {text}"),
+            );
+            if hint {
+                error.with_hint("COPY TO instructs the PostgreSQL server process to write a file. You may want a client-side facility such as psql's \\copy.")
+            } else {
+                error
+            }
+        };
+        let file = io.open(Path::new(name), OpenMode::Create).map_err(writing)?;
+        file.set_size(0)?;
+        Ok(file)
+    }
+}
+
+/// `CopySendEndOfRow` to a file: the bytes of the rows go to the file, and the result is the number of rows.
+fn write_file(file: &dyn File, data: &[Vec<u8>], rows: u64) -> Result<Done, Error> {
+    let bytes = data.concat();
+    file.write_at(0, &bytes)?;
+    Ok(Done::Count(CommandTag::Copy, rows))
 }
 
 /// `BeginCopyTo` for the query of `COPY` that is an `INSERT`, an `UPDATE`, a `DELETE` or a `MERGE`: the plan of the statement, or of the one statement of the rewrite by a rule `DO INSTEAD`. The statement must have `RETURNING`.
