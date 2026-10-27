@@ -116,6 +116,8 @@ These questions came up while the documents were written. They are closed, and t
 
 **Q29. Restarts from clock uncertainty.** In a cluster, a `REPEATABLE READ` statement that must restart after it returned rows fails with `40001`, which PostgreSQL never does. The default of 250 ms for `rupg.max_clock_offset` is a budget. Raised by document 18. Closes at M11, from the client suites on a cluster.
 
+**Q75. Ratchet rows of shared catalogs.** The rows of `pg_database`, `pg_db_role_setting`, `pg_stat_database` and `pg_stat_database_conflicts` count the databases of the cluster, not the tests that pass. The report of 2026-10-25 ran on an oracle and a server that kept the databases of earlier runs and had 10 rows. The report of 2026-10-27 ran on a fresh oracle and a fresh server and had 5 or 6 rows, with no difference on all of them. The ratchet of these 8 rows goes down to the numbers of the fresh run. The options are a fixed set of databases before the catalog suites, or rows that count the columns of each row. Raised by document 21. Closes at M3.
+
 ## 24.5 The file, storage and compression
 
 **Q32. Dictionary leftovers.** Strings from deleted rows and aborted transactions stay in the dictionary until `REPACK` or `VACUUM FULL`. A user who deletes data for privacy expects it to be gone. Raised by document 09. Closes at M4. The choice is between a scrub in compaction and a documented rule.
