@@ -11,7 +11,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Fixed
 
-- An error or a notice now sends its fields in the order of PostgreSQL. The context and the names of the objects come before the position in the query. Before, the position came first, so the bytes of an error with a context and a position were different from PostgreSQL. (#PR)
+- An error or a notice now sends its fields in the order of PostgreSQL. The context and the names of the objects come before the position in the query. Before, the position came first, so the bytes of an error with a context and a position were different from PostgreSQL. (#909)
 
 ## 0.3.4 (2026-10-27)
 
