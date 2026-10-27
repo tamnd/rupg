@@ -6,12 +6,17 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `COPY ... FROM` now accepts `FREEZE`, with the checks of `CopyFrom`: the table must not be partitioned or foreign, and the current subtransaction must have created or truncated it. `TRUNCATE` now gives each table, its TOAST table and their indexes a new `relfilenode`, as `ExecuteTruncateGuts` does, unless the current subtransaction created the table. `pgbench -i` now runs. (#881)
 - Give the error "operator class ... has no options" when an index sets options for an operator class whose access method has no options support function (#882).
 - `CHECKPOINT` now runs. It checks the options `MODE` and `FLUSH_UNLOGGED` and the privileges of `pg_checkpoint`, as `ExecCheckpoint` does. Each commit of rupg is in its log before the commit returns, so the command has no more work to do. (#880)
 - `convert_from`, `convert_to`, `convert` and `length(bytea, name)` now support EUC_KR. The check of the bytes follows `pg_euckr_verifychar`, and the conversion to and from UTF8 uses the map `euc_kr_to_utf8.map` of PostgreSQL, which `cargo xtask encodings` now reads. euc_kr.out now matches. (#878)
 - A row of a typed table is now a value of its type, and a row of a child table is a value of the row type of each ancestor table. rupg adds a `ConvertRowtypeExpr` that maps the fields by name, as `coerce_type` does, so `namelen(persons)`, `c::p` and `pf(c)` work. typed_table.out now matches. (#877)
 - `ATTACH PARTITION` and `ALTER TABLE ... INHERIT` now fail when a generated column of the table has another kind than the generated column of the parent, as `MergeAttributesIntoExisting` does. (#876)
 - A row that goes to a leaf partition through its partitioned table now meets the check constraints of the leaf after a trigger `BEFORE INSERT ... FOR EACH ROW` of the leaf changes it. Before, the leaf did not check such a row. (#875)
+
+### Fixed
+
+- Two sequences in two databases no longer share their state when they have the same `relfilenode`. Before, `nextval` of a new sequence could start at the last value of a sequence of another database. (#879)
 
 ## 0.3.2 (2026-10-27)
 
