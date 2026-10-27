@@ -290,7 +290,7 @@ impl Analyzer<'_> {
         match names {
             [name] => Ok(self.temp_path.iter().find_map(|&ns| self.type_in(ns, name))),
             [schema, name] => {
-                let ns = self.schema(schema).ok_or_else(|| {
+                let ns = self.explicit_schema(schema, at)?.ok_or_else(|| {
                     Error::new(
                         SqlState::UNDEFINED_SCHEMA,
                         format!("schema \"{schema}\" does not exist"),

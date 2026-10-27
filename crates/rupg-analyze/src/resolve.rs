@@ -325,6 +325,19 @@ impl Analyzer<'_> {
         self.env.namespace(name)
     }
 
+    /// `LookupExplicitNamespace`: the schema that a qualified name gives, or `None` when it does not exist. The current user needs `USAGE` on it, except on the temporary schema of the session and in the text of an object that the catalog keeps.
+    pub(crate) fn explicit_schema(&self, name: &str, at: Option<usize>) -> Result<Option<u32>> {
+        let Some(namespace) = self.schema(name) else { return Ok(None) };
+        if namespace == self.temp || self.stored || self.env.namespace_usage(namespace) {
+            return Ok(Some(namespace));
+        }
+        Err(Error::new(
+            SqlState::INSUFFICIENT_PRIVILEGE,
+            format!("permission denied for schema {name}"),
+        )
+        .at_opt(at))
+    }
+
     /// The position of the schema in the search path, or `None` when it is not in the path.
     fn path_position(&self, namespace: u32) -> Option<usize> {
         self.path.iter().position(|&ns| ns == namespace)
@@ -339,7 +352,7 @@ impl Analyzer<'_> {
         match names {
             [name] => Ok((None, name)),
             [schema, name] => {
-                let ns = self.schema(schema).ok_or_else(|| {
+                let ns = self.explicit_schema(schema, at)?.ok_or_else(|| {
                     Error::new(
                         SqlState::UNDEFINED_SCHEMA,
                         format!("schema \"{schema}\" does not exist"),

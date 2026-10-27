@@ -258,7 +258,9 @@ impl Definer<'_, '_> {
         }
         let name = relname(rv);
         Ok(match rv.schemaname.as_deref() {
-            Some(schema) => self.an.schema(schema).and_then(|ns| self.relation_in(ns, name)),
+            Some(schema) => {
+                self.an.explicit_schema(schema, None)?.and_then(|ns| self.relation_in(ns, name))
+            }
             None => self.an.temp_path.iter().find_map(|&ns| self.relation_in(ns, name)),
         })
     }

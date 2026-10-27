@@ -474,6 +474,10 @@ impl Env for SchemaEnv<'_> {
             .or_else(|| self.env.namespace(name))
     }
 
+    fn namespace_usage(&self, namespace: u32) -> bool {
+        self.env.namespace_usage(namespace)
+    }
+
     fn database(&self) -> String {
         self.env.database()
     }
@@ -953,7 +957,7 @@ impl Definer<'_, '_> {
         }
         let found = match rv.schemaname.as_deref() {
             Some(schema) => {
-                let namespace = self.an.schema(schema).ok_or_else(|| {
+                let namespace = self.an.explicit_schema(schema, None)?.ok_or_else(|| {
                     Error::new(
                         SqlState::UNDEFINED_SCHEMA,
                         format!("schema \"{schema}\" does not exist"),
