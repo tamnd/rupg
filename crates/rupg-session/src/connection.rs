@@ -3963,6 +3963,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_setop_nested.test")));
     }
 
+    /// A condition `X = X` with a strict operator is `X IS NOT NULL`, as `process_equivalence` makes it, also in `ON` of an outer join that reads only the nullable side.
+    #[test]
+    fn plan_self_equal() {
+        big_stack(|| script(include_str!("connection/plan_self_equal.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

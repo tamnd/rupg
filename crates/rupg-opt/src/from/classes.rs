@@ -246,6 +246,41 @@ fn sources<'q>(tree: &Tree<'q>, out: &mut Vec<(usize, &'q Expr)>) {
     }
 }
 
+/// `process_equivalence`: a condition `X = X` of a join domain, which cannot make a class, is `X IS NOT NULL` when its operator is strict, which gets a better selectivity. A condition with a security level above 0 needs a leakproof operator. `rls` is true when the query has conditions of row-level security, which put the conditions of the query above level 0.
+pub(super) fn not_null(tree: &mut Tree<'_>, rls: bool) {
+    let (quals, base) = match tree {
+        Tree::Base { quals, .. } => (quals, true),
+        Tree::Join(join) => {
+            not_null(&mut join.left, rls);
+            not_null(&mut join.right, rls);
+            if !matches!(join.kind, JoinKind::Inner | JoinKind::Semi) {
+                return;
+            }
+            (&mut join.quals, false)
+        }
+    };
+    for qual in quals.iter_mut() {
+        // A condition of `ON` of an outer join that reads only the nullable side goes down to its scan, and `distribute_qual_to_rels` lets it make an equivalence there.
+        if qual.order.is_none() || (qual.outer && !base) || exprs::volatile(&qual.expr) {
+            continue;
+        }
+        let ExprKind::Func(f) = &qual.expr.kind else { continue };
+        let Some((op, left, right)) = exprs::binary(&qual.expr) else { continue };
+        let Some(proc) = builtin::proc_by_oid(f.oid) else { continue };
+        let level = qual.security.map_or(rls, |l| l > 0);
+        if !left.same(right)
+            || !exprs::can_merge(op)
+            || families(op).is_empty()
+            || !proc.strict
+            || (level && !proc.leakproof)
+        {
+            continue;
+        }
+        let test = Expr::new(ExprKind::NullTest(Box::new(left.clone()), false), oid::BOOL);
+        qual.expr = Cow::Owned(test);
+    }
+}
+
 /// The relations of a join domain, outside the nullable sides of its outer joins.
 fn own_rels(tree: &Tree<'_>, out: &mut BTreeSet<usize>) {
     match tree {

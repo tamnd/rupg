@@ -1,0 +1,72 @@
+> create table i8 (q1 int8, q2 int8);
+CREATE TABLE
+> insert into i8 values (1, 2), (3, null);
+INSERT 0 2
+> explain (costs off) select * from i8 where q2 = q2;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on i8
+row   Filter: (q2 IS NOT NULL)
+EXPLAIN
+> explain select * from i8 where q2 = q2;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on i8  (cost=0.00..28.50 rows=1841 width=16)
+row   Filter: (q2 IS NOT NULL)
+EXPLAIN
+> explain (costs off) select * from (select distinct * from i8) s where q2 = q2;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate
+row   Group Key: i8.q1, i8.q2
+row   ->  Seq Scan on i8
+row         Filter: (q2 IS NOT NULL)
+EXPLAIN
+> explain (costs off) select * from i8 a join i8 b on a.q1 = a.q1 and b.q2 = b.q2 where a.q1 = b.q1;
+fields QUERY PLAN:25:-1:-1
+row Merge Join
+row   Merge Cond: (a.q1 = b.q1)
+row   ->  Sort
+row         Sort Key: a.q1
+row         ->  Seq Scan on i8 a
+row               Filter: (q1 IS NOT NULL)
+row   ->  Sort
+row         Sort Key: b.q1
+row         ->  Seq Scan on i8 b
+row               Filter: (q2 IS NOT NULL)
+EXPLAIN
+> explain (costs off) select * from i8 a left join i8 b on b.q1 = b.q1;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join
+row   ->  Seq Scan on i8 a
+row   ->  Materialize
+row         ->  Seq Scan on i8 b
+row               Filter: (q1 IS NOT NULL)
+EXPLAIN
+> explain (costs off) select * from i8 a left join i8 b on a.q1 = a.q1;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join
+row   Join Filter: (a.q1 = a.q1)
+row   ->  Seq Scan on i8 a
+row   ->  Materialize
+row         ->  Seq Scan on i8 b
+EXPLAIN
+> explain (costs off) select * from i8 a left join i8 b on true where b.q1 = b.q1;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Seq Scan on i8 a
+row   ->  Materialize
+row         ->  Seq Scan on i8 b
+row               Filter: (q1 IS NOT NULL)
+EXPLAIN
+> explain (costs off) select * from i8 where row(q1) = row(q1);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on i8
+row   Filter: (q1 IS NOT NULL)
+EXPLAIN
+> explain (costs off) select * from i8 where q1 + 1 = q1 + 1;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on i8
+row   Filter: ((q1 + 1) IS NOT NULL)
+EXPLAIN
+> select * from i8 where q2 = q2;
+fields q1@i8.1:20:8:-1,q2@i8.2:20:8:-1
+row 1,2
+SELECT 1

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The planner makes a condition `X = X` with a strict operator into `X IS NOT NULL`, as `process_equivalence` does, which gives the selectivity of the null fraction (#932).
 - EXPLAIN VERBOSE shows the `Output` of the nodes of a set operation below another set operation, with the columns of its leftmost `SELECT` (#931).
 - `ORDER BY` of a set operation sorts on a column that is a constant in the leftmost `SELECT`, and a sorted `SetOp` has no order for such a column, so EXPLAIN shows the `Sort` that PostgreSQL plans (#930).
 - EXPLAIN VERBOSE shows a constant of a set operation member in parentheses in the `Output` of the nodes above the `Append`, the `SetOp` or the `Agg` of the set operation (#929).
