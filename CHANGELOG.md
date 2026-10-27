@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `DISCARD ALL` drops the objects of the temporary schema, stops all the listens and releases the advisory locks of the session level, as `DiscardAll` does. `DISCARD TEMP` and `DISCARD ALL` keep the temporary schema itself, as `RemoveTempRelations` does (#933).
 - The planner makes a condition `X = X` with a strict operator into `X IS NOT NULL`, as `process_equivalence` does, which gives the selectivity of the null fraction (#932).
 - EXPLAIN VERBOSE shows the `Output` of the nodes of a set operation below another set operation, with the columns of its leftmost `SELECT` (#931).
 - `ORDER BY` of a set operation sorts on a column that is a constant in the leftmost `SELECT`, and a sorted `SetOp` has no order for such a column, so EXPLAIN shows the `Sort` that PostgreSQL plans (#930).

@@ -18,8 +18,8 @@ use rupg_platform::os::OsClock;
 use rupg_platform::{Clock, Io};
 use rupg_sql::Severity;
 use rupg_sql::nodes::{
-    A_Star, AlterTableType, ColumnRef, InsertStmt, LockStmt, Node, ObjectType, RangeVar, ResTarget,
-    SelectStmt,
+    A_Star, AlterTableType, ColumnRef, DiscardMode, DiscardStmt, InsertStmt, LockStmt, Node,
+    ObjectType, RangeVar, ResTarget, SelectStmt,
 };
 use rupg_types::Value;
 use rupg_wire::{
@@ -1156,6 +1156,18 @@ impl Connection {
         self.define_with(node, text, notices, self.current_role(), false)
     }
 
+    /// The steps of `DiscardAll` after the reset of the settings, which the session holds and not [`utility::run`]: `DropAllPreparedStatements`, the close of all the portals, `Async_UnlistenAll`, `LockReleaseAll` for the advisory locks of the session level, `ResetTempTableNamespace` and `ResetSequenceCaches`.
+    fn discard_all(&mut self, notices: &mut Vec<Notice>) -> Result<(), Error> {
+        self.statements.deallocate_all();
+        self.portals.get_mut().clear();
+        self.notify.borrow_mut().unlisten(None);
+        self.store.locks().release_all(self.pid, true);
+        let temp = Node::DiscardStmt(Box::new(DiscardStmt { target: DiscardMode::DISCARD_TEMP }));
+        self.define(&temp, "DISCARD TEMP", notices)?;
+        self.sequences.get_mut().discard();
+        Ok(())
+    }
+
     /// [`Connection::define`] as the role `role`, which owns the new objects. `call` is true for a statement that is not at the top level, a statement of a function or a procedure or an element of `CREATE SCHEMA`, for `PreventInTransactionBlock` of the statements with `CONCURRENTLY` and the check of [`rupg_analyze::Defined::top_level`]. After a failure of the build of `CREATE INDEX CONCURRENTLY` the index stays, as [`rupg_analyze::Defined::concurrent`] tells.
     fn define_with(
         &self,
@@ -1993,6 +2005,12 @@ impl Connection {
                     Err(error) => Err(error),
                 }
             };
+            let result = match result {
+                Ok(Done::Tag(CommandTag::DiscardAll)) => {
+                    self.discard_all(&mut notices).map(|()| Done::Tag(CommandTag::DiscardAll))
+                }
+                result => result,
+            };
             self.notices(&mut notices, text, &[], out);
             let outcome = match result {
                 Ok(outcome) => outcome,
@@ -2016,11 +2034,7 @@ impl Connection {
                     return true;
                 }
             };
-            if matches!(outcome, Done::Tag(CommandTag::DiscardAll)) {
-                self.statements.deallocate_all();
-                self.portals.get_mut().clear();
-            }
-            if matches!(outcome, Done::Tag(CommandTag::DiscardAll | CommandTag::DiscardSequences)) {
+            if matches!(outcome, Done::Tag(CommandTag::DiscardSequences)) {
                 self.sequences.get_mut().discard();
             }
             let last = i + 1 == statements.len();
@@ -3967,6 +3981,12 @@ mod tests {
     #[test]
     fn plan_self_equal() {
         big_stack(|| script(include_str!("connection/plan_self_equal.test")));
+    }
+
+    /// `DISCARD ALL` drops the objects of the temporary schema, the prepared statements and the cursors, stops the listens, releases the advisory locks of the session level and resets the sequences and the settings. `DISCARD TEMP` keeps the temporary schema. `connection/discard_all.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn discard_all() {
+        big_stack(|| script(include_str!("connection/discard_all.test")));
     }
 
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
