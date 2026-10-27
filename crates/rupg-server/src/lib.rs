@@ -660,8 +660,10 @@ impl Wire {
                 {
                     self.input.truncate(len);
                     self.input.shrink_to_fit();
-                    // The output was sent before the wait.
-                    self.out = OutBuf::new();
+                    // Output that waits for `Sync` or `Flush` stays.
+                    if self.out.is_empty() {
+                        self.out = OutBuf::new();
+                    }
                     tasks.trim_stack();
                     self.timed = self.stream.set_read_timeout(None).is_err();
                     // A small buffer for the wait, so that an idle session holds less memory.
@@ -999,7 +1001,7 @@ fn session(shared: &Shared, wire: &mut Wire, start: &Start, protocol: u32) {
         let going = match step.next {
             Next::Continue => wire.out.len() < FLUSH_AT || wire.flush(),
             Next::Flush => wire.flush(),
-            Next::Read => wire.flush() && wire.wait(&*shared.tasks),
+            Next::Read => (!wire.out.must_send() || wire.flush()) && wire.wait(&*shared.tasks),
             Next::Close => {
                 wire.flush();
                 false

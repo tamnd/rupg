@@ -55,7 +55,12 @@ pub struct Mark(usize);
 #[derive(Debug, Default)]
 pub struct OutBuf {
     bytes: Vec<u8>,
+    /// The bytes before this place hold a message that PostgreSQL sends at once: a notice, an error, a notification, or the start of a copy from the client.
+    urgent: usize,
 }
+
+/// `PQ_SEND_BUFFER_SIZE`: PostgreSQL sends the output when its buffer has this number of bytes.
+const SEND_BUFFER: usize = 8192;
 
 impl OutBuf {
     pub fn new() -> OutBuf {
@@ -80,9 +85,20 @@ impl OutBuf {
         self.bytes.is_empty()
     }
 
+    /// True when the server must send the output before it waits for more input. `postgres.c` keeps the answers of the extended query protocol until `Sync` or `Flush`. Before that, it sends them only when its buffer is full or when a message must go at once. A client in pipeline mode can depend on this, because it reads the answers while it sends more statements.
+    pub fn must_send(&self) -> bool {
+        self.urgent > 0 || self.bytes.len() >= SEND_BUFFER
+    }
+
+    /// Marks the output until now as output that the server must send before it waits for input.
+    fn send_soon(&mut self) {
+        self.urgent = self.bytes.len();
+    }
+
     /// Removes the first `n` bytes, after the transport sent them. The capacity stays, so the buffer does not allocate again for the next result of the same size.
     pub fn consume(&mut self, n: usize) {
         self.bytes.drain(..n.min(self.bytes.len()));
+        self.urgent = self.urgent.saturating_sub(n);
     }
 
     /// Starts a message of type `tag`. The body follows with the `put_` methods, and [`OutBuf::finish`] ends it.
@@ -316,6 +332,7 @@ impl OutBuf {
             self.bytes.extend_from_slice(b":  ");
             self.bytes.extend_from_slice(error.message.as_bytes());
             self.bytes.extend_from_slice(b"\n\0");
+            self.send_soon();
             return;
         }
         let mut fields = vec![
@@ -352,6 +369,8 @@ impl OutBuf {
         }
         self.put_u8(0);
         self.finish(mark);
+        // `send_message_to_frontend` flushes after each notice and error.
+        self.send_soon();
     }
 
     pub fn notification_response(&mut self, pid: i32, channel: &[u8], payload: &[u8]) {
@@ -360,11 +379,14 @@ impl OutBuf {
         self.put_string(channel);
         self.put_string(payload);
         self.finish(mark);
+        self.send_soon();
     }
 
     /// `CopyInResponse`. `format` is 0 for text and 1 for binary, and `columns` has the format of each column.
     pub fn copy_in_response(&mut self, format: i8, columns: &[i16]) {
+        // `ReceiveCopyBegin` flushes, because the client must see the response before it sends the data.
         self.copy_response(b'G', format, columns);
+        self.send_soon();
     }
 
     pub fn copy_out_response(&mut self, format: i8, columns: &[i16]) {
@@ -373,6 +395,7 @@ impl OutBuf {
 
     pub fn copy_both_response(&mut self, format: i8, columns: &[i16]) {
         self.copy_response(b'W', format, columns);
+        self.send_soon();
     }
 
     fn copy_response(&mut self, tag: u8, format: i8, columns: &[i16]) {

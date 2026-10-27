@@ -354,7 +354,7 @@ pub enum Next {
     Continue,
     /// Send the output, then call `step` again.
     Flush,
-    /// Read more input, then call `step` again. The server sends the output first if the client could wait for it.
+    /// Read more input, then call `step` again. The server sends the output first when [`OutBuf::must_send`] is true, as PostgreSQL does: a client can send more statements before `Sync` and wait for their answers only after `Sync` or `Flush`.
     Read,
     /// Send the output and close the connection.
     Close,
