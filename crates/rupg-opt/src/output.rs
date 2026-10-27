@@ -82,6 +82,25 @@ fn width(level: &Level<'_>, scope: usize, items: &[Item<'_>]) -> i32 {
     items.iter().map(|i| cost::expr_width(&i.expr, &query.relations)).sum()
 }
 
+/// True when the nodes below the node do not project down to the `Append`, the `SetOp` or the `Agg` of a set operation. `generate_append_tlist` gives that `Append` a target list of columns, so the nodes above it read each item as a value of the node below, and `get_special_variable` shows an item that is not a column in parentheses.
+fn reads_append(node: &Node<'_>) -> bool {
+    let mut at = node;
+    while let Some(child) = at.children.first() {
+        match child.kind {
+            Kind::Append | Kind::MergeAppend(_) => return !from::members_append(child),
+            Kind::Aggregate { .. } | Kind::SetOp { .. } => return true,
+            Kind::Sort(_)
+            | Kind::IncrementalSort { .. }
+            | Kind::Limit
+            | Kind::Unique
+            | Kind::LockRows
+            | Kind::Materialize => at = child,
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// True when the expression is a column of the query.
 fn is_var(expr: &Expr) -> bool {
     matches!(expr.kind, ExprKind::Var(_))
@@ -110,17 +129,13 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             node.cost.width = if rows > 0.0 { (size / rows).round_ties_even() as i32 } else { 0 };
         }
         Kind::Append | Kind::MergeAppend(_) | Kind::RecursiveUnion => {}
-        Kind::SetOp { .. } => node.output = want.iter().map(Item::passed).collect(),
+        // The `SetOp` reads the columns of the plans of its members.
+        Kind::SetOp { .. } => {
+            node.output = want.iter().map(|w| Item { below: true, ..w.clone() }).collect();
+        }
         Kind::Aggregate { .. } if set_op => {
-            // With one member left, the node reads the targets of the plan of the member, which show as values of the node below, as `get_special_variable`.
-            let single = node
-                .children
-                .first()
-                .is_some_and(|c| !matches!(c.kind, Kind::Append | Kind::MergeAppend(_)));
-            node.output = want
-                .iter()
-                .map(|w| if single { Item { below: true, ..w.clone() } } else { w.passed() })
-                .collect();
+            // The node reads the targets of the plan of the member that is left, or the columns of the `Append`, which show as values of the node below, as `get_special_variable`.
+            node.output = want.iter().map(|w| Item { below: true, ..w.clone() }).collect();
             node.cost.width = node.children.first().map_or(0, |c| c.cost.width);
         }
         Kind::Modify { operation, .. } => {
@@ -197,7 +212,17 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
                 }
             }
             // The node does not project, so its target is the target of the node below with the keys that it computes for the sort.
-            node.output = below.iter().map(Item::passed).collect();
+            let append = set_op && reads_append(node);
+            node.output = below
+                .iter()
+                .map(|w| {
+                    if append && !is_var(&w.expr) {
+                        Item { below: true, ..w.clone() }
+                    } else {
+                        w.passed()
+                    }
+                })
+                .collect();
             if let Some(child) = node.children.first_mut() {
                 // `prepare_sort_from_pathkeys`: a key that the node below computes for the sort does not count in its width.
                 let added = width(level, child.scope, &below[want.len()..]);

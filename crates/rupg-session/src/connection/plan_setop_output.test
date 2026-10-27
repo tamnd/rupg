@@ -1,0 +1,63 @@
+> explain (verbose, costs off) select 1,2 union select 3,4;
+fields QUERY PLAN:25:-1:-1
+row Unique
+row   Output: (1), (2)
+row   ->  Sort
+row         Output: (1), (2)
+row         Sort Key: (1), (2)
+row         ->  Append
+row               ->  Result
+row                     Output: 1, 2
+row               ->  Result
+row                     Output: 3, 4
+EXPLAIN
+> explain (verbose, costs off) select 1 union all select 2 limit 1;
+fields QUERY PLAN:25:-1:-1
+row Limit
+row   Output: (1)
+row   ->  Append
+row         ->  Result
+row               Output: 1
+row         ->  Result
+row               Output: 2
+EXPLAIN
+> explain (verbose, costs off) select 1 union select 2 limit 1;
+fields QUERY PLAN:25:-1:-1
+row Limit
+row   Output: (1)
+row   ->  HashAggregate
+row         Output: (1)
+row         Group Key: (1)
+row         ->  Append
+row               ->  Result
+row                     Output: 1
+row               ->  Result
+row                     Output: 2
+EXPLAIN
+> explain (verbose, costs off) select 1 except all select 2;
+fields QUERY PLAN:25:-1:-1
+row SetOp Except All
+row   Output: (1)
+row   ->  Result
+row         Output: 1
+row   ->  Result
+row         Output: 2
+EXPLAIN
+> explain (verbose, costs off) select x, x+1 from (select 1 union select 2) s(x) order by 2;
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Output: s.x, ((s.x + 1))
+row   Sort Key: ((s.x + 1))
+row   ->  Subquery Scan on s
+row         Output: s.x, (s.x + 1)
+row         ->  Unique
+row               Output: (1)
+row               ->  Sort
+row                     Output: (1)
+row                     Sort Key: (1)
+row                     ->  Append
+row                           ->  Result
+row                                 Output: 1
+row                           ->  Result
+row                                 Output: 2
+EXPLAIN
