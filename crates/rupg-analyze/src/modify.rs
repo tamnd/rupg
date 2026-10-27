@@ -76,6 +76,11 @@ pub(crate) fn unknown_set_column(rv: &RangeVar, name: &str, rt: &ResTarget) -> E
     error.at_opt(at)
 }
 
+/// True for a `WHERE` that is the constant false, for which the planner prunes each child table of the target.
+fn is_false(filter: Option<&Expr>) -> bool {
+    filter.is_some_and(|f| matches!(f.kind, ExprKind::Const(Value::Bool(false))))
+}
+
 impl Analyzer<'_> {
     /// `transformUpdateStmt`: the query tree of an `UPDATE`.
     pub(crate) fn update(&mut self, s: &UpdateStmt) -> Result<Query> {
@@ -130,6 +135,7 @@ impl Analyzer<'_> {
             self.write_returning(s.returningClause.as_deref(), WriteKind::Update)?;
         let tail = tail_columns(&carried);
         let inherit = self.inherits_target(WriteKind::Update);
+        let pruned = !rv.inh || is_false(filter.as_ref());
         let mut query = Query {
             relations: std::mem::take(&mut self.scope.relations),
             from,
@@ -204,6 +210,7 @@ impl Analyzer<'_> {
             modified: Vec::new(),
             insert_def: None,
             set_def,
+            pruned,
         });
         self.end_write_with(&mut query, s.withClause.as_deref())?;
         Ok(query)
@@ -339,6 +346,7 @@ impl Analyzer<'_> {
             let quals = self.inverted_quals(&inverted, Some(old), None)?;
             filter = crate::rules::and_filter(filter, quals);
         }
+        let pruned = !rv.inh || is_false(filter.as_ref());
         let (returning, carried, _) =
             self.write_returning(s.returningClause.as_deref(), WriteKind::Delete)?;
         // With `RETURNING`, each row gives the old row and the carried values before the ID of its version.
@@ -386,6 +394,7 @@ impl Analyzer<'_> {
                 insert_def: None,
                 set_def: (self.keep_source && self.auto_view.is_none() && inverted.is_empty())
                     .then(Vec::new),
+                pruned,
             }),
             ..Query::default()
         };

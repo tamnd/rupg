@@ -246,7 +246,7 @@ impl Catalog {
     }
 
     /// The partitions above a table, from its parent up, as `get_partition_ancestors`.
-    fn partition_ancestors(&self, relation: u32) -> Vec<u32> {
+    pub fn partition_ancestors(&self, relation: u32) -> Vec<u32> {
         let mut out = Vec::new();
         let mut at = relation;
         while let Some(parent) =

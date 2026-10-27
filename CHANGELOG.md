@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- An `UPDATE`, a `DELETE`, a `MERGE` and an `INSERT ... ON CONFLICT DO UPDATE` of a table that a publication publishes check the replica identity of each result relation as PostgreSQL does, with the row filters, the column lists and the generated columns of the publications. The diff of the publication regression test goes from 222 lines to 66 lines (#980).
 - `CREATE PUBLICATION`, `ALTER PUBLICATION`, `COMMENT ON PUBLICATION` and `DROP PUBLICATION` work, with the options, the `WHERE` clauses, the column lists, `TABLES IN SCHEMA` and `ALL TABLES EXCEPT`, and the errors of PostgreSQL. The catalogs `pg_publication`, `pg_publication_rel` and `pg_publication_namespace`, the view `pg_publication_tables`, and the functions `pg_get_publication_tables`, `pg_partition_tree`, `pg_partition_ancestors` and `pg_partition_root` give real rows (#979).
 
 ## 0.4.0 (2026-10-28)

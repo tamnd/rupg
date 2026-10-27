@@ -697,6 +697,7 @@ impl Connection {
         let Some(info) = plan.write() else {
             return Err(Error::internal("a plan that does not write"));
         };
+        self.check_result_relations(info)?;
         let mut triggers = self.write_triggers(info)?;
         if info.instead && info.kind == WriteKind::Merge {
             let Some(merge) = info.merge.as_ref() else {
@@ -4235,6 +4236,12 @@ mod tests {
     #[test]
     fn publication() {
         big_stack(|| script(include_str!("connection/publication.test")));
+    }
+
+    /// The checks of the replica identity of `UPDATE`, `DELETE`, `MERGE` and `INSERT ... ON CONFLICT DO UPDATE` of a table that a publication publishes: no replica identity, `REPLICA IDENTITY FULL` and `NOTHING`, row filters, column lists, generated columns, partitions with and without `publish_via_partition_root`, `ONLY`, a `WHERE` of the constant false, children of `INHERITS`, `EXCEPT` and `EXPLAIN`. `connection/publication_replica_identity.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn publication_replica_identity() {
+        big_stack(|| script(include_str!("connection/publication_replica_identity.test")));
     }
 
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.

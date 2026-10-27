@@ -638,6 +638,10 @@ impl Connection {
         let plan = plan.fold(params, reader);
         notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         let plan = plan?;
+        // `ExecutorStart` opens the result relations of the write with `CheckValidResultRel`.
+        if let Some(info) = plan.write() {
+            self.check_result_relations(info)?;
+        }
         let members = Members {
             reader,
             error: RefCell::new(None),

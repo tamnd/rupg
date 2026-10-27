@@ -30,6 +30,7 @@ mod plpgsql;
 mod poly;
 mod prepare;
 mod record;
+mod replident;
 mod resolve;
 mod returning;
 mod rowsecurity;
@@ -100,6 +101,7 @@ pub use plpgsql::{
 pub use poly::resolve as resolve_polymorphic;
 pub use prepare::{execute_params, param_types};
 pub use record::{out_columns, record_fields};
+pub use replident::check_cmd_replica_identity;
 pub use returning::{MERGE_ACTION, RETURNING_NEW, RETURNING_OLD, Shown};
 pub use rowsecurity::{RlsStatus, RowSecurity, apply_row_security};
 pub use rules::{Product, analyze_product, copy_rules_error, query_rewrite};

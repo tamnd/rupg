@@ -432,6 +432,7 @@ impl Analyzer<'_> {
                 modified: Vec::new(),
                 insert_def: None,
                 set_def: None,
+                pruned: !rv.inh,
             }),
             ..Query::default()
         };
