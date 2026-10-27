@@ -159,6 +159,11 @@ impl Catalog {
             && !self.is_temp_schema(rel.namespace)
     }
 
+    /// `is_publishable_table`: the relation `relid` is a table that a publication can have.
+    pub fn is_publishable_table(&self, relid: u32) -> bool {
+        self.relation(relid).is_some_and(|r| r.kind != RelKind::Sequence && self.is_publishable(r))
+    }
+
     /// `GetPubPartitionOptionRelations`: the table, or the leaf partitions of a partitioned table when `leaf` is true.
     fn partition_option(&self, out: &mut Vec<u32>, relation: u32, leaf: bool) {
         let partitioned = self.relation(relation).is_some_and(|r| r.kind == RelKind::Partitioned);
@@ -297,9 +302,7 @@ impl Catalog {
         target: Option<u32>,
     ) -> Result<Vec<(u32, u32)>, String> {
         if let Some(target) = target
-            && !self
-                .relation(target)
-                .is_some_and(|r| r.kind != RelKind::Sequence && self.is_publishable(r))
+            && !self.is_publishable_table(target)
         {
             return Ok(Vec::new());
         }

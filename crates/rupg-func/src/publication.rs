@@ -85,11 +85,14 @@ pub(crate) fn publication_tables(call: &Call<'_>, args: &[Value]) -> Result<Vec<
     Ok(rows(catalog, pairs))
 }
 
-/// `pg_get_publication_tables_b`: the rows of the table in the publications of the array. This form skips the names that are not publications.
+/// `pg_get_publication_tables_b`: the rows of the table in the publications of the array. This form skips the names that are not publications. As in `pg_get_publication_tables`, a table that a publication cannot have gives no rows before the check of the names.
 pub(crate) fn publication_tables_of(call: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
-    let names = names(args.first())?;
     let Some(Value::Oid(target)) = args.get(1) else { return Err(bad_value()) };
     let Some(catalog) = call.session.catalog() else { return Ok(Vec::new()) };
+    if !catalog.is_publishable_table(*target) {
+        return Ok(Vec::new());
+    }
+    let names = names(args.first())?;
     let pairs =
         catalog.publication_tables(&names, Some(*target)).map_err(|name| no_publication(&name))?;
     Ok(rows(catalog, pairs))

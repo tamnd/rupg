@@ -1397,6 +1397,9 @@ impl Definer<'_, '_> {
         if super::tsearch::is_ts_kind(stmt.objectType) {
             return self.alter_ts_owner(stmt);
         }
+        if stmt.objectType == ObjectType::OBJECT_LARGEOBJECT {
+            return self.alter_large_object_owner(stmt);
+        }
         if stmt.objectType != ObjectType::OBJECT_SCHEMA {
             return Err(not_yet("this form of ALTER OWNER", None));
         }
@@ -1435,6 +1438,24 @@ impl Definer<'_, '_> {
         }
         self.catalog.set_schema_owner(oid, new, &role_name(old), &role_name(new))?;
         Ok(())
+    }
+
+    /// `AlterObjectOwner_internal` for `ALTER LARGE OBJECT ... OWNER TO`. A user who is not a superuser must own the large object, unless `lo_compat_privileges` is on, and must be able to become the new owner.
+    fn alter_large_object_owner(&mut self, stmt: &AlterOwnerStmt) -> Result<()> {
+        let role = stmt.newowner.as_deref().cloned().unwrap_or_default();
+        let new = self.role_oid(&role)?;
+        let Some(object) = stmt.object.as_ref() else { return Err(Error::internal("a number")) };
+        let oid = self.large_object_oid(object)?;
+        let old = self.catalog.large_object(oid).map_or(0, |l| l.owner);
+        if old == new {
+            return Ok(());
+        }
+        if !self.is_superuser() {
+            self.owned_large_object(object)?;
+            self.check_can_set_role(new)?;
+        }
+        let object = rupg_catalog::ObjRef::new(rupg_catalog::PG_LARGEOBJECT, oid);
+        self.catalog.set_object_owner(object, new, &role_name(old), &role_name(new))
     }
 
     /// `get_rolespec_oid`: the OID of the role that a `RoleSpec` names.

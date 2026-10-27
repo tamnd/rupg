@@ -1533,6 +1533,10 @@ impl Env for Reader<'_> {
         self.settings().get("check_function_bodies").as_deref() != Some("off")
     }
 
+    fn lo_compat_privileges(&self) -> bool {
+        self.settings().get("lo_compat_privileges").as_deref() == Some("on")
+    }
+
     fn filling(&self) -> u32 {
         self.conn.map_or(0, |conn| conn.filling.get())
     }

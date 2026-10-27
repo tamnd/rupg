@@ -45,6 +45,7 @@ mod databases;
 mod deferred;
 mod explain;
 mod extended;
+mod fastpath;
 mod foreign;
 mod listen;
 mod merge;
@@ -591,6 +592,8 @@ impl Connection {
         if changed && settings.get("is_superuser").as_deref() != Some(superuser) {
             drop(settings.set_internal("is_superuser", superuser));
         }
+        // `superuser()` in `set_config_with_handle` is the check of the current user.
+        settings.set_superuser(roles.superuser(role));
         self.session_role =
             utility::role_oid(&roles, &session, &self.user).unwrap_or(BOOTSTRAP_SUPERUSER);
         self.role = role;
@@ -1781,14 +1784,23 @@ impl Connection {
             }
             Some(Ok(Frontend::Flush)) => Next::Flush,
             Some(Ok(Frontend::Terminate)) => Next::Close,
-            Some(Ok(_)) => {
+            Some(Ok(Frontend::FunctionCall(call))) => {
+                let result = self.function_call(call, out);
+                let failed = result.is_err();
+                match result {
+                    Ok(()) => self.finish_xact(),
+                    Err(failed) => self.fail(&failed.error, None, out),
+                }
+                self.after_query(failed, out)
+            }
+            Some(Ok(message)) => {
                 let error = ProtocolError::new(
-                    Level::Error,
-                    "0A000",
-                    "the function call protocol is not supported yet",
+                    Level::Fatal,
+                    "08P01",
+                    format!("invalid frontend message type {}", message.tag()),
                 );
                 out.protocol_error(&error, self.protocol);
-                self.recover(out)
+                Next::Close
             }
         };
         Step { used, next }
@@ -2492,6 +2504,7 @@ fn alter_tag(kind: ObjectType) -> CommandTag {
         ObjectType::OBJECT_TSCONFIGURATION => CommandTag::AlterTextSearchConfiguration,
         ObjectType::OBJECT_FDW => CommandTag::AlterForeignDataWrapper,
         ObjectType::OBJECT_FOREIGN_SERVER => CommandTag::AlterServer,
+        ObjectType::OBJECT_LARGEOBJECT => CommandTag::AlterLargeObject,
         ObjectType::OBJECT_PUBLICATION => CommandTag::AlterPublication,
         _ => CommandTag::AlterTable,
     }
@@ -4124,6 +4137,12 @@ mod tests {
     #[test]
     fn large_object() {
         big_stack(|| script(include_str!("connection/large_object.test")));
+    }
+
+    /// `GRANT`, `REVOKE`, `COMMENT ON` and `ALTER ... OWNER TO` on large objects, the checks of the owner, `has_largeobject_privilege`, the default privileges for large objects and `DROP OWNED`. `connection/large_object_grant.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn large_object_grant() {
+        big_stack(|| script(include_str!("connection/large_object_grant.test")));
     }
 
     /// `CREATE CONVERSION` with the checks of `CreateConversionCommand` and `ConversionCreate`, `ALTER CONVERSION` with `RENAME TO`, `OWNER TO` and `SET SCHEMA`, `COMMENT ON CONVERSION`, `DROP CONVERSION`, the rows of `pg_conversion` and `pg_depend`, and the drop with the schema. `connection/conversion_create.test` is the output of PostgreSQL 19 for the same script in a new database.

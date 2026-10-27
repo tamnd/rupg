@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use rupg_catalog::{
-    ObjRef, PG_CLASS, PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_LANGUAGE, PG_NAMESPACE,
-    PG_PROC, PG_TYPE, RangePart,
+    ObjRef, PG_CLASS, PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_LANGUAGE, PG_LARGEOBJECT,
+    PG_NAMESPACE, PG_PROC, PG_TYPE, RangePart,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named, Owned};
@@ -55,6 +55,8 @@ const ALL_TYPE: u64 = USAGE;
 const ALL_FDW: u64 = USAGE;
 /// `ACL_ALL_RIGHTS_FOREIGN_SERVER`.
 const ALL_FOREIGN_SERVER: u64 = USAGE;
+/// `ACL_ALL_RIGHTS_LARGEOBJECT`.
+const ALL_LARGEOBJECT: u64 = SELECT | UPDATE;
 
 /// The bits of the grant options of an `aclitem`.
 const GOPTION_BITS: u64 = 0xFFFF_FFFF << 32;
@@ -206,6 +208,7 @@ enum Kind {
     Language,
     Fdw,
     Server,
+    LargeObject,
 }
 
 impl Kind {
@@ -221,6 +224,7 @@ impl Kind {
             Kind::Language => ALL_LANGUAGE,
             Kind::Fdw => ALL_FDW,
             Kind::Server => ALL_FOREIGN_SERVER,
+            Kind::LargeObject => ALL_LARGEOBJECT,
         }
     }
 
@@ -236,6 +240,7 @@ impl Kind {
             Kind::Language => (USAGE, ALL_LANGUAGE),
             Kind::Fdw => (0, ALL_FDW),
             Kind::Server => (0, ALL_FOREIGN_SERVER),
+            Kind::LargeObject => (0, ALL_LARGEOBJECT),
         };
         let mut acl = Vec::new();
         if world != 0 {
@@ -259,6 +264,7 @@ impl Kind {
             Kind::Language => "language",
             Kind::Fdw => "foreign-data wrapper",
             Kind::Server => "foreign server",
+            Kind::LargeObject => "large object",
         }
     }
 }
@@ -553,6 +559,7 @@ impl Definer<'_, '_> {
             ObjectType::OBJECT_SCHEMA => (ALL_SCHEMA, "schema"),
             ObjectType::OBJECT_PROCEDURE => (ALL_FUNCTION, "procedure"),
             ObjectType::OBJECT_ROUTINE => (ALL_FUNCTION, "routine"),
+            ObjectType::OBJECT_LARGEOBJECT => (ALL_LARGEOBJECT, "large object"),
             _ => (ALL_TYPE, "type"),
         };
         let mut grant = Grant {
@@ -613,6 +620,7 @@ impl Definer<'_, '_> {
             PG_LANGUAGE => (ObjectType::OBJECT_LANGUAGE, Kind::Language),
             PG_FOREIGN_DATA_WRAPPER => (ObjectType::OBJECT_FDW, Kind::Fdw),
             PG_FOREIGN_SERVER => (ObjectType::OBJECT_FOREIGN_SERVER, Kind::Server),
+            PG_LARGEOBJECT => (ObjectType::OBJECT_LARGEOBJECT, Kind::LargeObject),
             rupg_catalog::PG_DEFAULT_ACL => {
                 return self.remove_role_from_default_acl(role, object.oid);
             }
@@ -727,11 +735,35 @@ impl Definer<'_, '_> {
                     })?;
                     Object::new(Kind::Server, server.oid)
                 }
+                (ObjectType::OBJECT_LARGEOBJECT, item) => {
+                    Object::new(Kind::LargeObject, self.large_object_oid(item)?)
+                }
                 _ => return Err(not_yet("GRANT on this kind of object", None)),
             };
             objects.push(object);
         }
         Ok(objects)
+    }
+
+    /// `oidparse` of the number of a large object, then the check of `LargeObjectExists`.
+    pub(super) fn large_object_oid(&self, node: &Node) -> Result<u32> {
+        let oid = match node {
+            Node::Integer(n) => *n as u32,
+            Node::Float(text) => text.parse::<u32>().map_err(|_| {
+                Error::new(
+                    SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
+                    format!("value \"{text}\" is out of range for type oid"),
+                )
+            })?,
+            _ => return Err(Error::internal("a number")),
+        };
+        if self.catalog.large_object(oid).is_none() {
+            return Err(Error::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!("large object {oid} does not exist"),
+            ));
+        }
+        Ok(oid)
     }
 
     /// `objectsInSchemaToOids`: the relations, the sequences or the routines of the schemas, after the check of `USAGE` on each schema.
@@ -824,6 +856,7 @@ impl Definer<'_, '_> {
             },
             Kind::Fdw => text(self.catalog.fdw(object.oid).map(|f| f.name.as_str())),
             Kind::Server => text(self.catalog.server(object.oid).map(|s| s.name.as_str())),
+            Kind::LargeObject => format!("large object {}", object.oid),
         }
     }
 
@@ -897,6 +930,10 @@ impl Definer<'_, '_> {
             Kind::Server => {
                 (self.catalog.server(object.oid).map_or(0, |s| s.owner), stored(PG_FOREIGN_SERVER))
             }
+            Kind::LargeObject => (
+                self.catalog.large_object(object.oid).map_or(0, |l| l.owner),
+                stored(PG_LARGEOBJECT),
+            ),
         }
     }
 
@@ -937,6 +974,7 @@ impl Definer<'_, '_> {
                     Kind::Type => PG_TYPE,
                     Kind::Fdw => PG_FOREIGN_DATA_WRAPPER,
                     Kind::Server => PG_FOREIGN_SERVER,
+                    Kind::LargeObject => PG_LARGEOBJECT,
                     _ => PG_LANGUAGE,
                 };
                 self.catalog.set_object_acl(ObjRef::new(class, object.oid), Some(texts));

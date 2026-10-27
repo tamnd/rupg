@@ -10,13 +10,10 @@ use rupg_sql::nodes::{
 use super::super::Definer;
 use super::super::sequence::conflicting;
 use super::{
-    ALL_FUNCTION, ALL_RELATION, ALL_SCHEMA, ALL_SEQUENCE, ALL_TYPE, AclItem, Grant, Kind, Object,
-    PUBLIC, SELECT, UPDATE, acl_texts, parse_acl, privilege_to_string, string_to_privilege,
+    ALL_FUNCTION, ALL_LARGEOBJECT, ALL_RELATION, ALL_SCHEMA, ALL_SEQUENCE, ALL_TYPE, AclItem,
+    Grant, Kind, Object, PUBLIC, acl_texts, parse_acl, privilege_to_string, string_to_privilege,
 };
 use crate::typename::names;
-
-/// `ACL_ALL_RIGHTS_LARGEOBJECT`.
-const ALL_LARGEOBJECT: u64 = SELECT | UPDATE;
 
 /// `DEFACLOBJ_RELATION`.
 const RELATION: u8 = b'r';
