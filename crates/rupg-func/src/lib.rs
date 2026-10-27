@@ -53,6 +53,7 @@ mod regress;
 mod replication;
 mod sequence;
 mod shared;
+mod shmem;
 mod snapshot;
 mod special;
 mod srf;
