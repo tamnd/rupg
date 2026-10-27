@@ -1,0 +1,69 @@
+> explain (verbose, costs off) select 1 union select 2 order by 1 desc;
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Output: (1)
+row   Sort Key: (1) DESC
+row   ->  Unique
+row         Output: (1)
+row         ->  Sort
+row               Output: (1)
+row               Sort Key: (1)
+row               ->  Append
+row                     ->  Result
+row                           Output: 1
+row                     ->  Result
+row                           Output: 2
+EXPLAIN
+> explain (verbose, costs off) select 1 as a, 2 as b union select 3, 4 order by 2 desc, 1;
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Output: (1), (2)
+row   Sort Key: (2) DESC, (1)
+row   ->  Unique
+row         Output: (1), (2)
+row         ->  Sort
+row               Output: (1), (2)
+row               Sort Key: (1), (2)
+row               ->  Append
+row                     ->  Result
+row                           Output: 1, 2
+row                     ->  Result
+row                           Output: 3, 4
+EXPLAIN
+> select 1 union select 2 order by 1 desc;
+fields ?column?:23:4:-1
+row 2
+row 1
+SELECT 2
+> explain (verbose, costs off) select 1 intersect select 2 order by 1;
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Output: (1)
+row   Sort Key: (1)
+row   ->  SetOp Intersect
+row         Output: (1)
+row         ->  Result
+row               Output: 1
+row         ->  Result
+row               Output: 2
+EXPLAIN
+> explain (costs off) select 1, relname from pg_class intersect select 2, 'x' order by 2;
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: ('x'::name)
+row   ->  HashSetOp Intersect
+row         ->  Result
+row         ->  Seq Scan on pg_class
+EXPLAIN
+> explain (costs off) select 1, relname from pg_class intersect select 2, 'x' order by 1, 2;
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: (2), ('x'::name)
+row   ->  HashSetOp Intersect
+row         ->  Result
+row         ->  Seq Scan on pg_class
+EXPLAIN
+> select 3 intersect select 3 order by 1;
+fields ?column?:23:4:-1
+row 3
+SELECT 1

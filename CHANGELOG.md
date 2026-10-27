@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `ORDER BY` of a set operation sorts on a column that is a constant in the leftmost `SELECT`, and a sorted `SetOp` has no order for such a column, so EXPLAIN shows the `Sort` that PostgreSQL plans (#930).
 - EXPLAIN VERBOSE shows a constant of a set operation member in parentheses in the `Output` of the nodes above the `Append`, the `SetOp` or the `Agg` of the set operation (#929).
 - `array_in` called from SQL gives the array of the element type in its second argument, the input functions of the pseudo types give "cannot accept a value of type X", and `record` and `record[]` take text input with the errors that PostgreSQL gives (#928).
 - An error in a SQL function body that rupg does not inline now has the context "SQL function ... statement 1" also when the body has no FROM, as PG gives it. (#927)
