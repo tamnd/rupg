@@ -366,23 +366,18 @@ impl Definer<'_, '_> {
         Ok(objects)
     }
 
-    /// `DISCARD TEMP`, as `ResetTempTableNamespace` runs it: the objects of the temporary schema of the session go, with the objects that depend on them, and with no notice. Here the temporary schema and its TOAST schema go too, and the next temporary object makes them again.
+    /// `DISCARD TEMP`, as `ResetTempTableNamespace` runs it: the objects of the temporary schema of the session go, with the objects that depend on them, and with no notice. The schema stays, as `RemoveTempRelations` skips the original object, and the TOAST tables go with their tables.
     pub(super) fn discard_temp(&mut self) -> Result<()> {
         let Some(n) = self.an.env.temp_number() else { return Ok(()) };
-        let objects: Vec<ObjRef> = [format!("pg_temp_{n}"), format!("pg_toast_temp_{n}")]
-            .iter()
-            .filter_map(|name| self.catalog.schema_by_name(name))
-            .map(|schema| ObjRef::new(PG_NAMESPACE, schema.oid))
-            .collect();
-        if objects.is_empty() {
+        let Some(schema) = self.catalog.schema_by_name(&format!("pg_temp_{n}")) else {
             return Ok(());
-        }
-        let targets = self
+        };
+        let schema = ObjRef::new(PG_NAMESPACE, schema.oid);
+        let mut targets = self
             .catalog
-            .deletions(&objects)
+            .deletions(&[schema])
             .map_err(|_| Error::internal("the temporary schema has an object that cannot go"))?;
-        self.an.temp = 0;
-        self.an.temp_path.retain(|&ns| !objects.iter().any(|object| object.oid == ns));
+        targets.retain(|target| target.object != schema);
         self.catalog.remove(&targets)
     }
 

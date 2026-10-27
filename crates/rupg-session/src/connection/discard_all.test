@@ -1,0 +1,109 @@
+> create temp table tt(a int);
+CREATE TABLE
+> create temp view tv as select * from tt;
+CREATE VIEW
+> create function pg_temp.tf() returns int language sql as 'select 1';
+CREATE FUNCTION
+> prepare p as select 1;
+PREPARE
+> create temp sequence s;
+CREATE SEQUENCE
+> select nextval('s');
+fields nextval:20:8:-1
+row 1
+SELECT 1
+> create sequence s2;
+CREATE SEQUENCE
+> select nextval('s2');
+fields nextval:20:8:-1
+row 1
+SELECT 1
+> listen foo;
+LISTEN
+> select pg_listening_channels();
+fields pg_listening_channels:25:-1:-1
+row foo
+SELECT 1
+> begin;
+BEGIN
+> declare c cursor with hold for select 1;
+DECLARE CURSOR
+> commit;
+COMMIT
+> select pg_advisory_lock(5);
+fields pg_advisory_lock:2278:4:-1
+row 
+SELECT 1
+> set work_mem = '1MB';
+SET
+> DISCARD ALL;
+DISCARD ALL
+> select * from tt;
+ERROR 42P01 relation "tt" does not exist at 15
+> select * from tv;
+ERROR 42P01 relation "tv" does not exist at 15
+> select pg_temp.tf();
+ERROR 42883 function pg_temp.tf() does not exist at 8
+> execute p;
+ERROR 26000 prepared statement "p" does not exist
+> select currval('s');
+ERROR 42P01 relation "s" does not exist at 16
+> select currval('s2');
+fields currval:20:8:-1
+ERROR 55000 currval of sequence "s2" is not yet defined in this session
+> select pg_listening_channels();
+fields pg_listening_channels:25:-1:-1
+SELECT 0
+> fetch c;
+ERROR 34000 cursor "c" does not exist
+> select pg_advisory_unlock(5);
+fields pg_advisory_unlock:16:1:-1
+WARNING 01000 you don't own a lock of type ExclusiveLock
+row f
+SELECT 1
+> select count(*) from pg_prepared_statements;
+fields count:20:8:-1
+row 0
+SELECT 1
+> select count(*) from pg_cursors;
+fields count:20:8:-1
+row 0
+SELECT 1
+> show work_mem;
+fields work_mem:25:-1:-1
+row 4MB
+SHOW
+> create temp table tt(a int);
+CREATE TABLE
+> insert into tt values (1);
+INSERT 0 1
+> select * from tt;
+fields a@tt.1:23:4:-1
+row 1
+SELECT 1
+> DISCARD ALL;
+DISCARD ALL
+> select * from tt;
+ERROR 42P01 relation "tt" does not exist at 15
+> create temp table tt(a int);
+CREATE TABLE
+> select count(*) from pg_namespace where nspname like 'pg%temp%';
+fields count:20:8:-1
+row 2
+SELECT 1
+> discard temp;
+DISCARD TEMP
+> select count(*) from pg_namespace where nspname like 'pg%temp%';
+fields count:20:8:-1
+row 2
+SELECT 1
+> select pg_temp.f();
+ERROR 42883 function pg_temp.f() does not exist at 8
+> select * from pg_temp.tt;
+ERROR 42P01 relation "pg_temp.tt" does not exist at 15
+> create temp table tt(a int);
+CREATE TABLE
+> select count(*) from pg_namespace where nspname like 'pg%temp%';
+fields count:20:8:-1
+row 2
+SELECT 1

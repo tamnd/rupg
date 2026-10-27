@@ -766,20 +766,25 @@ impl Connection {
                     ts_config,
                     top_level: true,
                 };
-                let result = utility::run(node, &statement.text, &mut cx);
+                let result = utility::run(node, &statement.text, &mut cx).map(Done::from);
                 immediate_commit = cx.immediate_commit;
+                let result = match result {
+                    Ok(Done::Tag(CommandTag::DiscardAll)) => {
+                        self.discard_all(&mut notices).map(|()| Done::Tag(CommandTag::DiscardAll))
+                    }
+                    result => result,
+                };
                 self.notices(&mut notices, &statement.text, &[], out);
-                result?.into()
+                result?
             };
             match done {
                 Done::Tag(done) => {
-                    if matches!(done, CommandTag::DiscardAll | CommandTag::DiscardSequences) {
+                    if done == CommandTag::DiscardSequences {
                         self.sequences.get_mut().discard();
                     }
-                    if done == CommandTag::DiscardAll {
-                        self.statements.deallocate_all();
-                        self.portals.get_mut().clear();
-                    } else if let Some(portal) = self.portals.get_mut().find_mut(name) {
+                    if done != CommandTag::DiscardAll
+                        && let Some(portal) = self.portals.get_mut().find_mut(name)
+                    {
                         portal.run = Run::Done;
                     }
                     tag = Some((done, 0));
