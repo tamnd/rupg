@@ -1,0 +1,50 @@
+> create table bt (a int, b int);
+CREATE TABLE
+> insert into bt select g, g from generate_series(1,1000) g;
+INSERT 0 1000
+> analyze bt;
+ANALYZE
+> select relpages, reltuples from pg_class where relname = 'bt';
+fields relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row 5,1000
+SELECT 1
+> update pg_class set reltuples = 10 where relname = 'bt';
+UPDATE 1
+> select relpages, reltuples from pg_class where relname = 'bt';
+fields relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row 5,10
+SELECT 1
+> explain select * from bt;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on bt  (cost=0.00..5.10 rows=10 width=8)
+EXPLAIN
+> update pg_class set reltuples = 2, relpages = pg_relation_size('bt') / 8192 where relname = 'bt';
+UPDATE 1
+> select relpages, reltuples from pg_class where relname = 'bt';
+fields relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row 5,2
+SELECT 1
+> explain select * from bt;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on bt  (cost=0.00..5.02 rows=2 width=8)
+EXPLAIN
+> update pg_class set reltuples = 5 where relname = 'nothing';
+UPDATE 0
+> update pg_catalog.pg_class set relpages = '3' where oid = 'bt'::regclass;
+UPDATE 1
+> explain select * from bt;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on bt  (cost=0.00..5.03 rows=3 width=8)
+EXPLAIN
+> create role regress_cu;
+CREATE ROLE
+> set role regress_cu;
+SET
+is_superuser=off
+> update pg_class set reltuples = 5 where relname = 'bt';
+ERROR 42501 permission denied for table pg_class
+> reset role;
+RESET
+is_superuser=on
+> drop role regress_cu;
+DROP ROLE

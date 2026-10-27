@@ -37,6 +37,7 @@ use foreign::Batch;
 
 mod activity;
 mod analyze;
+mod catalog_update;
 mod copy;
 mod copy_from;
 mod cursor;
@@ -2106,6 +2107,9 @@ impl Connection {
         late: &mut Vec<Notice>,
         described: &mut Option<(Vec<Column>, Vec<Row>)>,
     ) -> Result<Done, Error> {
+        if let Some(done) = self.update_statistics(node, notices) {
+            return done;
+        }
         self.settings.borrow_mut().take_snapshot();
         if let Some(products) = rupg_analyze::query_rewrite(node, &self.reader())? {
             return self.run_products(node, &products, notices, late);
@@ -3987,6 +3991,12 @@ mod tests {
     #[test]
     fn discard_all() {
         big_stack(|| script(include_str!("connection/discard_all.test")));
+    }
+
+    /// `UPDATE pg_class` of `reltuples` and `relpages` sets the statistics that the planner reads, and a role that is not a superuser cannot update `pg_class`. `connection/update_relstats.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn update_relstats() {
+        big_stack(|| script(include_str!("connection/update_relstats.test")));
     }
 
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
