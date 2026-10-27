@@ -3920,6 +3920,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/polymorphic_defaults.test")));
     }
 
+    /// `sql_inline_error_callback`: an error of the analysis of the one statement of a SQL function during `inline_function` has the body as the internal query, and a body with no statement or with more than one statement is not inlined. `connection/sql_inline_errors.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn sql_inline_errors() {
+        big_stack(|| script(include_str!("connection/sql_inline_errors.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

@@ -387,6 +387,14 @@ fn statements<'s>(stmt: &'s CreateFunctionStmt, src: Option<&str>) -> Result<Sta
     }
 }
 
+/// The body of the statement for a call, where a body in an empty string has no statements.
+fn call_statements<'s>(stmt: &'s CreateFunctionStmt, src: &str) -> Result<Statements<'s>> {
+    if stmt.sql_body.is_none() && src.is_empty() {
+        return Ok(Statements::String(Vec::new()));
+    }
+    statements(stmt, (!src.is_empty()).then_some(src))
+}
+
 /// The types of the columns of the result of a function: the `OUT` parameters of a function that returns `record`, or else the result type. A polymorphic type takes the actual type that `inputs`, the types of the arguments of a call, give. A function that returns `record` with no `OUT` parameter has no known columns.
 fn result_types(function: &Function, inputs: &[u32]) -> Result<Vec<u32>> {
     let declared: Vec<u32> = if function.rettype == oid::RECORD {
@@ -819,9 +827,36 @@ pub fn function_body_for(
     inputs: &[u32],
     columns: Option<&[(u32, i32)]>,
 ) -> Result<Option<Body>> {
+    body_of(env, oid, inputs, columns, false)
+}
+
+/// [`function_body`] for `inline_function`, which gives up with no error on a body that does not have exactly one statement. `None` for such a body.
+///
+/// # Errors
+///
+/// As [`function_body`].
+pub fn inline_body(env: &dyn Env, oid: u32, inputs: &[u32]) -> Result<Option<Body>> {
+    body_of(env, oid, inputs, None, true)
+}
+
+/// [`function_body_for`], and [`inline_body`] when `inline` is true.
+fn body_of(
+    env: &dyn Env,
+    oid: u32,
+    inputs: &[u32],
+    columns: Option<&[(u32, i32)]>,
+    inline: bool,
+) -> Result<Option<Body>> {
     with_statement(env, oid, |function, body, stmt| {
-        let src = (!function.src.is_empty()).then_some(function.src.as_str());
-        let stmts = statements(stmt, src)?;
+        let stmts = call_statements(stmt, &function.src)?;
+        let count = match &stmts {
+            Statements::Return(_) => 1,
+            Statements::Atomic(list) => list.len(),
+            Statements::String(list) => list.len(),
+        };
+        if inline && count != 1 {
+            return Ok(None);
+        }
         let params = Params { types: inputs.to_vec(), variable: false };
         let mut an = Analyzer::new(env, &params);
         // A body in a string of a function that sets `search_path` takes the current path, which the settings of the call gave.
@@ -830,6 +865,14 @@ pub fn function_body_for(
         }
         an.sql_function = Some((function.name.clone(), input_names(function)));
         an.coldefs = columns.map(<[_]>::to_vec);
+        // `init_sql_fcache`: a body with no statement must be the body of a function that returns `void`, with the actual result type in the error.
+        if count == 0 {
+            let (rettype, _) = an.result_shape(function, inputs)?;
+            if rettype != oid::VOID {
+                return Err(no_final_query(rettype)
+                    .with_context(format!("SQL function \"{}\" during startup", function.name)));
+            }
+        }
         let mut body = an.body(function, &stmts, inputs)?;
         if let Some(catalog) = env.catalog() {
             crate::expand_virtual_body(&mut body, catalog)?;
@@ -888,8 +931,7 @@ impl Script {
 /// The errors of the parse of the body, and `42P13` for a body with no statement in a function that does not return `void`.
 pub fn function_script(env: &dyn Env, oid: u32) -> Result<Option<Script>> {
     with_statement(env, oid, |function, body, stmt| {
-        let src = (!function.src.is_empty()).then_some(function.src.as_str());
-        let statements = match statements(stmt, src)? {
+        let statements = match call_statements(stmt, &function.src)? {
             Statements::Return(_) => return Ok(None),
             Statements::Atomic(list) => {
                 list.into_iter().map(|node| (node.clone(), String::new())).collect()
@@ -1292,7 +1334,12 @@ impl Definer<'_, '_> {
                 format!("SQL functions cannot have arguments of type {}", types::name(ty)),
             ));
         }
-        let stmts = statements(stmt, options.src.as_deref()).map_err(transpose)?;
+        // `fmgr_sql_validator` parses a body in a string only when `check_function_bodies` is on.
+        let stmts = if stmt.sql_body.is_none() && !self.an.env.check_function_bodies() {
+            Statements::String(Vec::new())
+        } else {
+            statements(stmt, options.src.as_deref()).map_err(transpose)?
+        };
         if let Statements::Atomic(list) = &stmts {
             check_atomic(self.an.env, &function, Some(&self.an.path), list)?;
         }

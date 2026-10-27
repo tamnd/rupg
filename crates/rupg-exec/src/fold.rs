@@ -1337,6 +1337,8 @@ impl<'a> Fold<'a> {
         if proc.oid < rupg_catalog::FIRST_NORMAL_OID
             || proc.lang != SQL_LANGUAGE
             || proc.kind != b'f'
+            || proc.retset
+            || proc.rettype == oid::RECORD
             || f.args.len() != usize::try_from(proc.nargs).unwrap_or(usize::MAX)
             || self.inlining.contains(&f.oid)
         {
@@ -1350,8 +1352,22 @@ impl<'a> Fold<'a> {
             return Ok(None);
         }
         let inputs: Vec<u32> = f.args.iter().map(|a| a.ty).collect();
-        let Ok(Some(body)) = rupg_func::function_body(f.oid, &inputs, self.session) else {
-            return Ok(None);
+        let body = match rupg_func::inline_body(f.oid, &inputs, self.session) {
+            Ok(Some(body)) => body,
+            Ok(None) => return Ok(None),
+            // `sql_inline_error_callback`: the position of an error is in the body, which is the internal query.
+            Err(e) => {
+                let function = catalog.and_then(|c| c.function(f.oid));
+                let src = function.map_or("", |function| function.src.as_str());
+                let e = match e.position() {
+                    Some(at) if !src.is_empty() => {
+                        e.with_position(None).with_internal(src, Some(at))
+                    }
+                    _ => e.with_position(None),
+                };
+                let name = function.map_or("", |function| function.name.as_str());
+                return Err(e.with_context(format!("SQL function \"{name}\" during inlining")));
+            }
         };
         let mut body = match body {
             rupg_analyze::Body::Value(body) => body,

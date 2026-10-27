@@ -651,6 +651,19 @@ pub fn function_body(
     rupg_analyze::function_body(&reg::SessionEnv(session), func, inputs)
 }
 
+/// [`function_body`] for `inline_function`, which gives `None` for a body that does not have exactly one statement.
+///
+/// # Errors
+///
+/// As [`function_body`].
+pub fn inline_body(
+    func: u32,
+    inputs: &[u32],
+    session: &dyn Session,
+) -> Result<Option<rupg_analyze::Body>> {
+    rupg_analyze::inline_body(&reg::SessionEnv(session), func, inputs)
+}
+
 /// [`function_body`] for a call in `FROM` with a column definition list, with the type and the type modifier of each column of the list.
 pub fn function_body_for(
     func: u32,
