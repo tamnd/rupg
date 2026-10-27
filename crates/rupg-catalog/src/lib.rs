@@ -1028,14 +1028,20 @@ pub struct Collation {
     pub namespace: u32,
     /// The OID of the owner.
     pub owner: u32,
-    /// `collprovider`: `c` for the C library and `i` for ICU.
+    /// `collprovider`: `b` for the built-in provider, `c` for the C library and `i` for ICU.
     pub provider: u8,
+    /// `collisdeterministic`.
+    pub deterministic: bool,
     /// `collencoding`: the encoding, or -1 for any encoding.
     pub encoding: i32,
-    /// `collcollate` and `collctype`: the locale of the C library, or `None` for ICU.
+    /// `collcollate`: the `LC_COLLATE` locale of the C library, or `None` for another provider.
     pub libc_locale: Option<String>,
-    /// `colllocale`: the locale of ICU, or `None` for the C library.
+    /// `collctype`: the `LC_CTYPE` locale of the C library, or `None` for another provider.
+    pub ctype: Option<String>,
+    /// `colllocale`: the locale of the built-in provider or of ICU, or `None` for the C library.
     pub locale: Option<String>,
+    /// `collicurules`, or `None`.
+    pub icu_rules: Option<String>,
     /// `collversion`, or `None`.
     pub version: Option<String>,
 }
@@ -2812,6 +2818,15 @@ impl Catalog {
             self.set_description(ObjRef::new(PG_COLLATION, oid), Some(comment.to_string()));
         }
         Some(oid)
+    }
+
+    /// `CollationCreate` for `CREATE COLLATION`: a new collation, which gets the next OID and depends on its schema. The analyzer checks the name first. The return value is the OID.
+    pub fn create_user_collation(&mut self, collation: Collation) -> u32 {
+        let oid = self.new_oid();
+        let me = ObjRef::new(PG_COLLATION, oid);
+        self.depend(me, ObjRef::new(PG_NAMESPACE, collation.namespace), DepKind::Normal);
+        Arc::make_mut(&mut self.collations).insert(oid, Collation { oid, ..collation });
+        oid
     }
 
     /// The dependencies of the `_RETURN` rule of a view, as `InsertRule` and `recordDependencyOnExpr` record them. The rule is part of the view, and it depends on each object that the query reads. The objects come in the order of `eliminate_duplicate_dependencies`, from the highest OID down, and a column takes the place of its whole relation.

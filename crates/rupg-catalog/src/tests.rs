@@ -599,9 +599,12 @@ fn import_collations() {
         namespace: 11,
         owner: 10,
         provider: b'c',
+        deterministic: true,
         encoding,
         libc_locale: Some(format!("{name}.utf8")),
+        ctype: Some(format!("{name}.utf8")),
         locale: None,
+        icu_rules: None,
         version: Some("2.39".to_string()),
     };
     assert_eq!(cat.create_collation(libc("en_US", 6), None), Some(12396));
@@ -612,6 +615,7 @@ fn import_collations() {
         provider: b'i',
         encoding: -1,
         libc_locale: None,
+        ctype: None,
         locale: Some("und".to_string()),
         ..libc("und-x-icu", -1)
     };

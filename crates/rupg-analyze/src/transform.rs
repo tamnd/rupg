@@ -23,6 +23,16 @@ const C_COLLATIONS: [&str; 5] = ["default", "C", "POSIX", "ucs_basic", "pg_c_utf
 /// The collations of PostgreSQL that need another order.
 const OTHER_COLLATIONS: [&str; 2] = ["pg_unicode_fast", "unicode"];
 
+/// True for a collation of the catalog that compares as the bytes of the string and has the character classes of `C`: a collation of the C library for `C` or `POSIX`, or one of the built-in provider for `C` or `C.UTF-8`.
+fn bytewise(collation: &rupg_catalog::Collation) -> bool {
+    let c = |locale: &Option<String>| matches!(locale.as_deref(), Some("C" | "POSIX"));
+    match collation.provider {
+        b'c' => c(&collation.libc_locale) && c(&collation.ctype),
+        b'b' => matches!(collation.locale.as_deref(), Some("C" | "C.UTF-8")),
+        _ => false,
+    }
+}
+
 /// An error for an expression that the analyzer does not take yet.
 fn not_yet(what: &str, at: Option<usize>) -> Error {
     Error::new(SqlState::FEATURE_NOT_SUPPORTED, format!("{what} is not supported yet")).at_opt(at)
@@ -231,22 +241,29 @@ impl Analyzer<'_> {
         }
     }
 
-    /// `LookupCollation`: the OID of the collation that a name gives. Only the collations that compare as the bytes of the string are supported.
+    /// `LookupCollation` and `get_collation_oid`: the OID of the collation that a name gives, in the schema of the name or in the first schema of the path that has one. Only the collations that compare as the bytes of the string are supported.
     pub(crate) fn collation_oid(&self, list: &[Option<Node>], at: Option<usize>) -> Result<u32> {
         let parts = names(list);
         let (schema, name) = self.split_name(&parts, at)?;
-        let in_catalog = schema.is_none_or(|ns| ns == crate::PG_CATALOG_NAMESPACE);
-        if in_catalog && C_COLLATIONS.contains(&name) {
-            let row = rupg_pgcatalog::builtin::named(rupg_pgcatalog::builtin::Named::Collation)
-                .iter()
-                .find(|r| r.name == name && (r.encoding == -1 || r.encoding == 6));
-            return row.map(|r| r.oid).ok_or_else(|| Error::internal("a built-in collation"));
-        }
-        let imported = || {
-            self.env.catalog().and_then(|c| c.collation_by_name(crate::PG_CATALOG_NAMESPACE, name))
-        };
-        if in_catalog && (OTHER_COLLATIONS.contains(&name) || imported().is_some()) {
-            return Err(not_yet(&format!("collation \"{name}\""), at));
+        let path = schema.map_or_else(|| self.path.clone(), |schema| vec![schema]);
+        for namespace in path {
+            if namespace == crate::PG_CATALOG_NAMESPACE && C_COLLATIONS.contains(&name) {
+                let row = rupg_pgcatalog::builtin::named(rupg_pgcatalog::builtin::Named::Collation)
+                    .iter()
+                    .find(|r| r.name == name && (r.encoding == -1 || r.encoding == 6));
+                return row.map(|r| r.oid).ok_or_else(|| Error::internal("a built-in collation"));
+            }
+            if namespace == crate::PG_CATALOG_NAMESPACE && OTHER_COLLATIONS.contains(&name) {
+                return Err(not_yet(&format!("collation \"{name}\""), at));
+            }
+            if let Some(found) =
+                self.env.catalog().and_then(|c| c.collation_by_name(namespace, name))
+            {
+                if bytewise(found) {
+                    return Ok(found.oid);
+                }
+                return Err(not_yet(&format!("collation \"{name}\""), at));
+            }
         }
         Err(Error::new(
             SqlState::UNDEFINED_OBJECT,

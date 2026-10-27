@@ -69,102 +69,6 @@ const SQL_ASCII: i32 = 0;
 /// `KOI8U`, the last encoding that a server can use, `PG_ENCODING_BE_LAST`.
 const LAST_SERVER_ENCODING: i32 = 34;
 
-/// `encoding_match_list` of `chklocale.c`: the names of the codesets of the C library, with the encoding of each. The codesets of the encodings that only a client can use are not here, because `pg_import_system_collations` skips their locales.
-const CODESETS: [(&str, &str); 92] = [
-    ("EUC-JP", "EUC_JP"),
-    ("eucJP", "EUC_JP"),
-    ("IBM-eucJP", "EUC_JP"),
-    ("sdeckanji", "EUC_JP"),
-    ("CP20932", "EUC_JP"),
-    ("EUC-CN", "EUC_CN"),
-    ("eucCN", "EUC_CN"),
-    ("IBM-eucCN", "EUC_CN"),
-    ("GB2312", "EUC_CN"),
-    ("dechanzi", "EUC_CN"),
-    ("CP20936", "EUC_CN"),
-    ("EUC-KR", "EUC_KR"),
-    ("eucKR", "EUC_KR"),
-    ("IBM-eucKR", "EUC_KR"),
-    ("deckorean", "EUC_KR"),
-    ("5601", "EUC_KR"),
-    ("CP51949", "EUC_KR"),
-    ("EUC-TW", "EUC_TW"),
-    ("eucTW", "EUC_TW"),
-    ("IBM-eucTW", "EUC_TW"),
-    ("cns11643", "EUC_TW"),
-    ("UTF-8", "UTF8"),
-    ("utf8", "UTF8"),
-    ("CP65001", "UTF8"),
-    ("ISO-8859-1", "LATIN1"),
-    ("ISO8859-1", "LATIN1"),
-    ("iso88591", "LATIN1"),
-    ("CP28591", "LATIN1"),
-    ("ISO-8859-2", "LATIN2"),
-    ("ISO8859-2", "LATIN2"),
-    ("iso88592", "LATIN2"),
-    ("CP28592", "LATIN2"),
-    ("ISO-8859-3", "LATIN3"),
-    ("ISO8859-3", "LATIN3"),
-    ("iso88593", "LATIN3"),
-    ("CP28593", "LATIN3"),
-    ("ISO-8859-4", "LATIN4"),
-    ("ISO8859-4", "LATIN4"),
-    ("iso88594", "LATIN4"),
-    ("CP28594", "LATIN4"),
-    ("ISO-8859-9", "LATIN5"),
-    ("ISO8859-9", "LATIN5"),
-    ("iso88599", "LATIN5"),
-    ("CP28599", "LATIN5"),
-    ("ISO-8859-10", "LATIN6"),
-    ("ISO8859-10", "LATIN6"),
-    ("iso885910", "LATIN6"),
-    ("ISO-8859-13", "LATIN7"),
-    ("ISO8859-13", "LATIN7"),
-    ("iso885913", "LATIN7"),
-    ("ISO-8859-14", "LATIN8"),
-    ("ISO8859-14", "LATIN8"),
-    ("iso885914", "LATIN8"),
-    ("ISO-8859-15", "LATIN9"),
-    ("ISO8859-15", "LATIN9"),
-    ("iso885915", "LATIN9"),
-    ("CP28605", "LATIN9"),
-    ("ISO-8859-16", "LATIN10"),
-    ("ISO8859-16", "LATIN10"),
-    ("iso885916", "LATIN10"),
-    ("KOI8-R", "KOI8R"),
-    ("CP20866", "KOI8R"),
-    ("KOI8-U", "KOI8U"),
-    ("CP21866", "KOI8U"),
-    ("CP866", "WIN866"),
-    ("CP874", "WIN874"),
-    ("CP1250", "WIN1250"),
-    ("CP1251", "WIN1251"),
-    ("ansi-1251", "WIN1251"),
-    ("CP1252", "WIN1252"),
-    ("CP1253", "WIN1253"),
-    ("CP1254", "WIN1254"),
-    ("CP1255", "WIN1255"),
-    ("CP1256", "WIN1256"),
-    ("CP1257", "WIN1257"),
-    ("CP1258", "WIN1258"),
-    ("ISO-8859-5", "ISO_8859_5"),
-    ("ISO8859-5", "ISO_8859_5"),
-    ("iso88595", "ISO_8859_5"),
-    ("CP28595", "ISO_8859_5"),
-    ("ISO-8859-6", "ISO_8859_6"),
-    ("ISO8859-6", "ISO_8859_6"),
-    ("iso88596", "ISO_8859_6"),
-    ("CP28596", "ISO_8859_6"),
-    ("ISO-8859-7", "ISO_8859_7"),
-    ("ISO8859-7", "ISO_8859_7"),
-    ("iso88597", "ISO_8859_7"),
-    ("CP28597", "ISO_8859_7"),
-    ("ISO-8859-8", "ISO_8859_8"),
-    ("ISO8859-8", "ISO_8859_8"),
-    ("iso88598", "ISO_8859_8"),
-    ("CP28598", "ISO_8859_8"),
-];
-
 /// The first rule of the script and its OID in PostgreSQL 19. The view `pg_settings` takes the four OIDs before it, and the rule `pg_settings_n` takes the next OID.
 const RULE_OID: (&str, u32) = ("pg_settings_u", 12114);
 
@@ -480,16 +384,6 @@ fn without_encoding(name: &str) -> Option<String> {
     Some(out)
 }
 
-/// `pg_get_encoding_from_locale`: the encoding of a locale of the C library. `None` when the locale does not exist or its codeset is not in [`CODESETS`].
-fn locale_encoding(name: &str) -> Option<i32> {
-    if name.eq_ignore_ascii_case("C") || name.eq_ignore_ascii_case("POSIX") {
-        return Some(SQL_ASCII);
-    }
-    let codeset = rupg_platform::os::locale_codeset(name)?;
-    let (_, encoding) = CODESETS.iter().find(|(c, _)| c.eq_ignore_ascii_case(&codeset))?;
-    Some(rupg_func::char_to_encoding(encoding))
-}
-
 /// `pg_import_system_collations('pg_catalog')`, which `setup_collation` of `initdb` runs. Each locale of `locale -a` with an ASCII name and an encoding that a server can use gets a collation of the C library. `C`, `POSIX` and the other locales of `SQL_ASCII` get none, because the static rows have `C` and `POSIX`. A name with an encoding tag also gives an alias without the tag, after all the names, in the order of the locale names. Last, each locale of ICU gets a collation for any encoding, with its comment. A name that the schema has already for the encoding makes no collation.
 fn collations(catalog: &mut Catalog) {
     catalog.set_next_oid(COLLATION_OID);
@@ -505,9 +399,12 @@ fn collations(catalog: &mut Catalog) {
             namespace: PG_CATALOG,
             owner: BOOTSTRAP_SUPERUSER,
             provider: b'c',
+            deterministic: true,
             encoding,
             libc_locale: Some(locale.to_string()),
+            ctype: Some(locale.to_string()),
             locale: None,
+            icu_rules: None,
             version: if plain { None } else { version.clone() },
         }
     };
@@ -527,7 +424,7 @@ fn collations(catalog: &mut Catalog) {
         if !locale.is_ascii() {
             continue;
         }
-        let Some(encoding) = locale_encoding(&locale) else { continue };
+        let Some(encoding) = rupg_platform::os::locale_encoding(&locale) else { continue };
         if !(SQL_ASCII + 1..=LAST_SERVER_ENCODING).contains(&encoding) {
             continue;
         }
@@ -547,9 +444,12 @@ fn collations(catalog: &mut Catalog) {
             namespace: PG_CATALOG,
             owner: BOOTSTRAP_SUPERUSER,
             provider: b'i',
+            deterministic: true,
             encoding: -1,
             libc_locale: None,
+            ctype: None,
             locale: Some(icu.tag.to_string()),
+            icu_rules: None,
             version: Some(icu.version.to_string()),
         };
         create(catalog, collation, icu.comment);

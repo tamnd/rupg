@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- CREATE COLLATION works for the libc and builtin providers and for FROM, with the checks of DefineCollation. DROP COLLATION removes a user collation and gives the dependency error, and COLLATE can name a user collation that compares bytes. (#984).
+
 ## 0.4.1 (2026-10-28)
 
 ### Added

@@ -1575,11 +1575,12 @@ fn collations<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("collnamespace", oid(c.namespace))
                 .set("collowner", oid(c.owner))
                 .set("collprovider", Value::Char(c.provider))
-                .set("collisdeterministic", Value::Bool(true))
+                .set("collisdeterministic", Value::Bool(c.deterministic))
                 .set("collencoding", Value::Int4(c.encoding))
                 .set("collcollate", text(&c.libc_locale))
-                .set("collctype", text(&c.libc_locale))
+                .set("collctype", text(&c.ctype))
                 .set("colllocale", text(&c.locale))
+                .set("collicurules", text(&c.icu_rules))
                 .set("collversion", text(&c.version));
             row
         })

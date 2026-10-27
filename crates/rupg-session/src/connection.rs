@@ -1398,6 +1398,7 @@ impl Connection {
                         ObjectType::OBJECT_OPERATOR => CommandTag::CreateOperator,
                         ObjectType::OBJECT_AGGREGATE => CommandTag::CreateAggregate,
                         ObjectType::OBJECT_TYPE => CommandTag::CreateType,
+                        ObjectType::OBJECT_COLLATION => CommandTag::CreateCollation,
                         ObjectType::OBJECT_TSPARSER => CommandTag::CreateTextSearchParser,
                         ObjectType::OBJECT_TSDICTIONARY => CommandTag::CreateTextSearchDictionary,
                         ObjectType::OBJECT_TSTEMPLATE => CommandTag::CreateTextSearchTemplate,
@@ -4073,6 +4074,12 @@ mod tests {
     #[test]
     fn index_order() {
         big_stack(|| script(include_str!("connection/index_order.test")));
+    }
+
+    /// `CREATE COLLATION` with the libc and builtin providers, `FROM`, the checks of `DefineCollation`, the rows of `pg_collation`, a column with the collation, and `DROP COLLATION` with a dependent table. `connection/collation_create.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn collation_create() {
+        big_stack(|| script(include_str!("connection/collation_create.test")));
     }
 
     /// `CREATE CONVERSION` with the checks of `CreateConversionCommand` and `ConversionCreate`, `ALTER CONVERSION` with `RENAME TO`, `OWNER TO` and `SET SCHEMA`, `COMMENT ON CONVERSION`, `DROP CONVERSION`, the rows of `pg_conversion` and `pg_depend`, and the drop with the schema. `connection/conversion_create.test` is the output of PostgreSQL 19 for the same script in a new database.
