@@ -1227,6 +1227,7 @@ impl Connection {
         let analyzed = defined.result.is_ok();
         let rewrite = defined
             .result
+            .and_then(|()| self.truncate_files(&defined.truncated, &mut work))
             .and_then(|()| self.check_detached(&defined.detached))
             .and_then(|()| self.rows_to_rewrite(node, &work, transforms, fills));
         let mut work = Arc::new(work);
@@ -1499,6 +1500,26 @@ impl Connection {
         let catalog = Arc::make_mut(work);
         for (oid, text) in texts {
             catalog.set_view_text(oid, text, path.clone())?;
+        }
+        Ok(())
+    }
+
+    /// The new files of the tables of `TRUNCATE`, as `ExecuteTruncateGuts` gives them: each table, its TOAST table and their indexes get a new file. A table that was created or got a new file in the current subtransaction keeps its file, as `heap_truncate_one_rel` truncates it in place.
+    fn truncate_files(&self, tables: &[u32], work: &mut Catalog) -> Result<(), Error> {
+        for &table in tables {
+            let Some(rel) = work.relation(table) else { continue };
+            if rel.file == 0 || self.new_in_subtransaction(work, table) {
+                continue;
+            }
+            let heaps = [table, rel.toast];
+            let indexes: Vec<u32> = work
+                .relations()
+                .filter(|r| r.index.as_ref().is_some_and(|i| heaps.contains(&i.table)))
+                .map(|r| r.oid)
+                .collect();
+            for oid in heaps.into_iter().filter(|&oid| oid != 0).chain(indexes) {
+                work.set_new_file(oid)?;
+            }
         }
         Ok(())
     }
@@ -6613,6 +6634,12 @@ mod tests {
     #[test]
     fn copy_from_rows() {
         big_stack(|| script(include_str!("connection/copy_from_rows.test")));
+    }
+
+    /// `COPY ... FROM STDIN` with `FREEZE`: the error for a table from an earlier transaction or an earlier subtransaction, a table that `TRUNCATE` gave a new file in the transaction and in a savepoint, a table that the transaction created and truncated in place, and a partitioned table. `connection/copy_freeze.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn copy_freeze() {
+        big_stack(|| script(include_str!("connection/copy_freeze.test")));
     }
 
     /// `COPY ... FROM STDIN` with `DEFAULT`, `ON_ERROR IGNORE` and `ON_ERROR SET_NULL`, `REJECT_LIMIT` and `LOG_VERBOSITY`, and the checks of domains in the input of the fields. `connection/copy_from_options.test` is the output of PostgreSQL 19 for the same script in a new database.

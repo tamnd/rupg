@@ -4,7 +4,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use rupg_analyze::{CopyTarget, Derived, Params};
-use rupg_catalog::TRIGGER_INSERT;
+use rupg_catalog::{Catalog, TRIGGER_INSERT};
 use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
 use rupg_pgcatalog::builtin;
@@ -237,6 +237,28 @@ impl Connection {
         io.read_file(path).map_err(reading)
     }
 
+    /// The checks of `COPY FREEZE` in `CopyFrom`: the table is not partitioned or foreign, and the current subtransaction created it or gave it a new file, as `TRUNCATE` does. The rows of rupg have no frozen state, so the option changes nothing else.
+    fn check_freeze(&self, catalog: &Catalog, relid: u32, kind: u8) -> Result<(), Error> {
+        let unsupported = |what: &str| {
+            Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                format!("cannot perform COPY FREEZE on a {what}"),
+            ))
+        };
+        match kind {
+            b'p' => return unsupported("partitioned table"),
+            b'f' => return unsupported("foreign table"),
+            _ => {}
+        }
+        if !self.new_in_subtransaction(catalog, relid) {
+            return Err(Error::new(
+                SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
+                "cannot perform COPY FREEZE because the table was not created or truncated in the current subtransaction",
+            ));
+        }
+        Ok(())
+    }
+
     /// The checks of `DoCopy` and `BeginCopyFrom` for `COPY ... FROM STDIN` or a file, then `CopyInResponse` or the read of the file, and the checks of `CopyFrom`. The caller starts the copy with the state that this gives.
     pub(super) fn copy_from(&self, stmt: &CopyStmt, begin: Begin<'_>) -> Result<CopyIn, Error> {
         if stmt.filename.is_some() && matches!(begin, Begin::Client(_)) {
@@ -364,10 +386,7 @@ impl Connection {
             _ => return Err(wrong(format!("cannot copy to non-table relation \"{name}\""))),
         }
         if options.freeze {
-            return Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                "COPY FREEZE is not supported yet",
-            ));
+            self.check_freeze(&catalog, target.relid, target.kind)?;
         }
         let plan = match rel {
             Some(_) => Some(Rc::new(insert_plan(&target, rv, &[], &reader)?)),

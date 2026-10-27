@@ -1,0 +1,77 @@
+> CREATE TABLE f (a int, b text)
+CREATE TABLE
+> CREATE INDEX fi ON f (a)
+CREATE INDEX
+> COPY f FROM STDIN WITH (FREEZE)
+< 1	x
+<done
+copy in 0 0,0
+ERROR 55000 cannot perform COPY FREEZE because the table was not created or truncated in the current subtransaction
+> BEGIN
+BEGIN
+> TRUNCATE f
+TRUNCATE TABLE
+> SELECT relname, relfilenode = oid AS same FROM pg_class WHERE relname IN ('f', 'fi') ORDER BY relname
+fields relname@pg_class.2:19:64:-1,same:16:1:-1
+row f,f
+row fi,f
+SELECT 2
+> COPY f FROM STDIN WITH (FREEZE)
+< 1	x
+<done
+copy in 0 0,0
+COPY 1
+> SAVEPOINT s
+SAVEPOINT
+> COPY f FROM STDIN WITH (FREEZE)
+< 2	y
+<done
+copy in 0 0,0
+ERROR 55000 cannot perform COPY FREEZE because the table was not created or truncated in the current subtransaction
+> ROLLBACK TO s
+ROLLBACK
+> TRUNCATE f
+TRUNCATE TABLE
+> COPY f FROM STDIN WITH (FREEZE)
+< 3	z
+<done
+copy in 0 0,0
+COPY 1
+> COMMIT
+COMMIT
+> SELECT * FROM f ORDER BY a
+fields a@f.1:23:4:-1,b@f.2:25:-1:-1
+row 3,z
+SELECT 1
+> BEGIN
+BEGIN
+> CREATE TABLE g (a int)
+CREATE TABLE
+> TRUNCATE g
+TRUNCATE TABLE
+> SELECT relfilenode = oid AS same FROM pg_class WHERE relname = 'g'
+fields same:16:1:-1
+row t
+SELECT 1
+> COPY g FROM STDIN WITH (FREEZE)
+< 4
+<done
+copy in 0 0
+COPY 1
+> COMMIT
+COMMIT
+> SELECT * FROM g
+fields a@g.1:23:4:-1
+row 4
+SELECT 1
+> CREATE TABLE p (a int) PARTITION BY RANGE (a)
+CREATE TABLE
+> BEGIN
+BEGIN
+> COPY p FROM STDIN WITH (FREEZE)
+< 5
+<done
+copy in 0 0
+ERROR 0A000 cannot perform COPY FREEZE on a partitioned table
+> ROLLBACK
+ROLLBACK

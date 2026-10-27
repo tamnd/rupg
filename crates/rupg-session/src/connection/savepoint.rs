@@ -91,6 +91,20 @@ impl Connection {
         }
     }
 
+    /// The catalog at the start of the current subtransaction: the catalog of the innermost savepoint, or the committed catalog when the transaction has no savepoint or did not hold the lock of the catalog at the savepoint. A relation whose file is not in this catalog was created or got a new file in the current subtransaction, as `rd_createSubid` and `rd_newRelfilelocatorSubid` show in PostgreSQL.
+    pub(super) fn subtransaction_start(&self) -> Arc<Catalog> {
+        self.marks.last().and_then(|mark| mark.catalog.as_ref()).map_or_else(
+            || self.store.committed(self.database_oid),
+            |(catalog, _)| Arc::clone(catalog),
+        )
+    }
+
+    /// True when the relation `relid` of `catalog` was created or got a new file in the current subtransaction.
+    pub(super) fn new_in_subtransaction(&self, catalog: &Catalog, relid: u32) -> bool {
+        let file = catalog.relation(relid).map(|r| r.file);
+        self.subtransaction_start().relation(relid).map(|r| r.file) != file
+    }
+
     /// `CommitSubTransaction`: the settings of the subtransaction that ends at the mark `mark` go to the level that stays.
     pub(super) fn release(&self, mark: &Mark) {
         self.settings.borrow_mut().release(&mark.settings);
