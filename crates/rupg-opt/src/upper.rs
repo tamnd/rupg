@@ -897,7 +897,13 @@ impl<'q> Builder<'q> {
         op: &'q SetOp,
     ) -> Vec<(Node<'q>, Vec<OrderKey>)> {
         let (plans, scope) = if op.work.is_none() && op.kind == SetKind::Union && !op.all {
-            (self.union_paths(level, op, true), self.leftmost_scope(level, op))
+            let (plans, named) = self.union_paths(level, op, true);
+            // The empty result shows the columns of the operation.
+            let scope = match named {
+                Some(leaf) => self.leaf_scope(level, leaf),
+                None => Some(level.scope),
+            };
+            (plans, scope)
         } else if op.work.is_none() && op.kind != SetKind::Union {
             // Its outer side, which `INTERSECT` can swap, gives the names.
             let plans = self.nonunion(level, op, true);
@@ -935,8 +941,11 @@ impl<'q> Builder<'q> {
             }
             SetTree::Op(op) if op.project.is_empty() => self.set_node(level, op),
             SetTree::Op(op) => {
-                // `recurse_set_operations`: a `Result` above the plan casts the columns to the types of the operation above it.
+                // `recurse_set_operations`: a `Result` above the plan casts the columns to the types of the operation above it. `is_dummy_rel` finds the operation empty through the projection.
                 let child = self.set_node(level, op);
+                if setop::is_dummy(&child) {
+                    return child;
+                }
                 let c = child.cost;
                 let width = op.project.iter().map(|e| cost::type_width(e.ty, e.typmod)).sum();
                 let total =
@@ -953,13 +962,14 @@ impl<'q> Builder<'q> {
         }
     }
 
-    /// The members of a `UNION`, with the members of each `UNION` below it that PostgreSQL makes one `Append` with, as `recurse_union_children`.
+    /// The members of a `UNION`, with the members of each `UNION` below it that PostgreSQL makes one `Append` with, as `recurse_union_children`. `named` gets the `SELECT` that gives the names of each member, with the number of groups of the rows of a `SELECT`. `generate_union_paths` leaves out a member that is empty, as `is_dummy_rel` finds it, and its relations then take no names.
     fn union_members(
         &mut self,
         level: &Level<'q>,
         top: &'q SetOp,
         tree: &'q SetTree,
         out: &mut Vec<Node<'q>>,
+        named: &mut Vec<(usize, Option<f64>)>,
         ordered: &mut Option<Vec<Node<'q>>>,
     ) {
         if let SetTree::Op(op) = tree
@@ -968,22 +978,28 @@ impl<'q> Builder<'q> {
             && (op.all == top.all || op.all)
             && op.columns == top.columns
         {
-            self.union_members(level, top, &op.left, out, ordered);
-            self.union_members(level, top, &op.right, out, ordered);
+            self.union_members(level, top, &op.left, out, named, ordered);
+            self.union_members(level, top, &op.right, out, named, ordered);
             return;
         }
+        let start = self.current.len();
         // `build_setop_child_paths` adds the plans in the order of the columns only for a `SELECT` of `UNION` without `ALL`.
-        if top.all || !matches!(tree, SetTree::Leaf(_)) {
-            *ordered = None;
-            out.push(self.set_tree(level, tree));
+        let (node, sorted, groups) = if top.all || !matches!(tree, SetTree::Leaf(_)) {
+            (self.set_tree(level, tree), None, None)
+        } else {
+            let (node, sorted, groups) = self.union_leaf(level, top, tree);
+            (node, Some(sorted), Some(groups))
+        };
+        if setop::is_dummy(&node) {
+            self.current.truncate(start);
             return;
         }
-        let (node, sorted) = self.union_leaf(level, top, tree);
-        match (ordered.as_mut(), sorted) {
+        match (ordered.as_mut(), sorted.flatten()) {
             (Some(list), Some(sorted)) => list.push(sorted),
             _ => *ordered = None,
         }
         out.push(node);
+        named.push((tree.leftmost(), groups));
     }
 
     pub(crate) fn set_node(&mut self, level: &Level<'q>, op: &'q SetOp) -> Node<'q> {
@@ -1005,7 +1021,7 @@ impl<'q> Builder<'q> {
             return node;
         }
         match op.kind {
-            SetKind::Union => match self.union_paths(level, op, false).into_iter().next() {
+            SetKind::Union => match self.union_paths(level, op, false).0.into_iter().next() {
                 Some((node, _)) => node,
                 None => unreachable!("a set operation has a plan"),
             },
@@ -1018,19 +1034,23 @@ impl<'q> Builder<'q> {
         }
     }
 
-    /// `generate_union_paths`: the plans of a `UNION` that `add_path` keeps, the cheapest first. `UNION ALL` is an `Append` of the plans of its members. `UNION` hashes the rows of the `Append`, or sorts them for a `Unique`, or, with true, reads the plans of its members in the order of the columns with a `Merge Append` below the `Unique`. The two plans with the `Unique` give the rows in the order of the columns.
+    /// `generate_union_paths`: the plans of a `UNION` that `add_path` keeps, the cheapest first, and the `SELECT` that gives the names of the columns, the first member that is not empty. `UNION ALL` is an `Append` of the plans of its members. `UNION` hashes the rows of the `Append`, or sorts them for a `Unique`, or, with true, reads the plans of its members in the order of the columns with a `Merge Append` below the `Unique`. The two plans with the `Unique` give the rows in the order of the columns. With all the members empty, the plan is an empty `Result` and no `SELECT` gives the names. `set_plan_refs` takes out an `Append` with one member.
     fn union_paths(
         &mut self,
         level: &Level<'q>,
         op: &'q SetOp,
         top: bool,
-    ) -> Vec<(Node<'q>, bool)> {
+    ) -> (Vec<(Node<'q>, bool)>, Option<usize>) {
         let scope = level.scope;
         let columns = op.columns.len();
         let mut members = Vec::new();
+        let mut named = Vec::new();
         let mut ordered = Some(Vec::new());
-        self.union_members(level, op, &op.left, &mut members, &mut ordered);
-        self.union_members(level, op, &op.right, &mut members, &mut ordered);
+        self.union_members(level, op, &op.left, &mut members, &mut named, &mut ordered);
+        self.union_members(level, op, &op.right, &mut members, &mut named, &mut ordered);
+        let Some(&(first, first_groups)) = named.first() else {
+            return (vec![(setop::dummy_op(level, op), false)], None);
+        };
         let startup = members.first().map_or(0.0, |m| m.cost.startup);
         let rows: f64 = members.iter().map(|m| m.cost.rows).sum();
         // `create_setop_pathtarget`: the average width of the members, with the width of the rows of a member below the `Result` that casts its columns.
@@ -1047,12 +1067,22 @@ impl<'q> Builder<'q> {
         let width = if rows > 0.0 { (size / rows).round_ties_even() as i32 } else { 0 };
         let total: f64 =
             members.iter().map(|m| m.cost.total).sum::<f64>() + 0.5 * cost::CPU_TUPLE * rows;
-        let mut append = Node::new(Kind::Append, scope, members);
-        append.cost = Cost { startup, total, rows, width };
+        let append = if members.len() == 1 {
+            members.remove(0)
+        } else {
+            let mut append = Node::new(Kind::Append, scope, members);
+            append.cost = Cost { startup, total, rows, width };
+            append
+        };
         if op.all {
-            return vec![(append, false)];
+            return (vec![(append, false)], Some(first));
         }
         let c = append.cost;
+        // The number of groups is the number of rows, the worst case, unless one `SELECT` is left, whose groups `estimate_num_groups` finds.
+        let rows = match (named.as_slice(), first_groups) {
+            ([_], Some(groups)) => groups,
+            _ => rows,
+        };
         let hashable = op.groups.iter().all(|g| g.hashable);
         let sortable = op.groups.iter().all(|g| g.operator != 0);
         let per_row = cost::CPU_OPERATOR * columns as f64;
@@ -1066,9 +1096,9 @@ impl<'q> Builder<'q> {
             cost::sort((c.startup, c.total), c.rows, c.width, None)
         };
         let unique_total = sort_total + per_row * c.rows;
-        let keys = self.leaf_items(level, op);
-        // The keys show with the names of the leftmost `SELECT`.
-        let scope = self.leftmost_scope(level, op).unwrap_or(scope);
+        let keys = self.leaf_items_of(level, first);
+        // The keys show with the names of the first `SELECT`.
+        let scope = self.leaf_scope(level, first).unwrap_or(scope);
         let sort_keys: Vec<SortKey<'q>> = keys
             .iter()
             .zip(&op.groups)
@@ -1107,6 +1137,15 @@ impl<'q> Builder<'q> {
             let run = tuples * comparison * log_n + cost::CPU_TUPLE * cost::APPEND_CPU * tuples;
             let input_startup: f64 = list.iter().map(|m| m.cost.startup).sum();
             let input_total: f64 = list.iter().map(|m| m.cost.total).sum();
+            let mut list = list;
+            if list.len() == 1 {
+                let only = list.remove(0);
+                let o = only.cost;
+                let mut node = Node::new(Kind::Unique, scope, vec![only]);
+                node.cost =
+                    Cost { startup: o.startup, total: o.total + per_row * tuples, rows, width };
+                return node;
+            }
             let mut merge = Node::new(Kind::MergeAppend(sort_keys.clone()), scope, list);
             merge.cost = Cost {
                 startup: first + input_startup,
@@ -1156,19 +1195,28 @@ impl<'q> Builder<'q> {
                 _ => out.extend(merged.take().map(|node| (node, true))),
             }
         }
-        out
+        (out, Some(first))
     }
 
     /// The scope of the leftmost `SELECT` of a set operation.
     pub(crate) fn leftmost_scope(&self, level: &Level<'q>, op: &'q SetOp) -> Option<usize> {
-        let sub = level.query.relations.get(op.left.leftmost())?.subquery.as_deref()?;
+        self.leaf_scope(level, op.left.leftmost())
+    }
+
+    /// The scope of the `SELECT` with this index.
+    fn leaf_scope(&self, level: &Level<'q>, leaf: usize) -> Option<usize> {
+        let sub = level.query.relations.get(leaf)?.subquery.as_deref()?;
         self.scopes.iter().position(|s| std::ptr::eq(s.query, sub))
     }
 
     /// The columns of the leftmost `SELECT` of a set operation, as the keys of the node that finds the equal rows.
     pub(crate) fn leaf_items(&self, level: &Level<'q>, op: &'q SetOp) -> Vec<Item<'q>> {
-        let leftmost = op.left.leftmost();
-        match level.query.relations.get(leftmost).and_then(|r| r.subquery.as_deref()) {
+        self.leaf_items_of(level, op.left.leftmost())
+    }
+
+    /// The columns of the `SELECT` with this index.
+    fn leaf_items_of(&self, level: &Level<'q>, leaf: usize) -> Vec<Item<'q>> {
+        match level.query.relations.get(leaf).and_then(|r| r.subquery.as_deref()) {
             Some(sub) => {
                 sub.targets.iter().filter(|t| !t.junk).map(|t| Item::below(&t.expr)).collect()
             }

@@ -3724,6 +3724,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/union_no_columns.test")));
     }
 
+    /// `generate_union_paths` leaves out a `SELECT` of `UNION` that is empty, and the plan of an operation whose inputs are all empty is a `Result` in the place of the operation. `INTERSECT` with an empty side and `EXCEPT` with an empty left side are empty, and `EXCEPT ALL` with an empty right side reads only its left side. `connection/setop_empty_inputs.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn setop_empty_inputs() {
+        big_stack(|| script(include_str!("connection/setop_empty_inputs.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

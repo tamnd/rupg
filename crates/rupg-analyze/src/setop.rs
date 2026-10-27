@@ -263,7 +263,7 @@ impl Analyzer<'_> {
             let index = self.scope.relations.len();
             let subquery = Some(Box::new(query));
             let mut relation = Relation::new(0, columns, subquery, None, None);
-            relation.name = format!("*SELECT* {}", index + 1);
+            relation.name = "unnamed_subquery".to_string();
             self.scope.relations.push(relation);
             return Ok((SetTree::Leaf(index), exprs));
         }

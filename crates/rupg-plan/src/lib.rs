@@ -335,6 +335,8 @@ pub enum Replaced {
     Scan(usize, bool),
     /// A join of the relations of the scope with a condition that is never true.
     Join(Vec<usize>),
+    /// `RESULT_TYPE_UPPER`: a set operation whose result `generate_union_paths` or `generate_nonunion_paths` finds empty, with the `SELECT` relations of the operation.
+    Upper(Vec<usize>),
     /// `RESULT_TYPE_MINMAX`: the `Agg` node of a query whose aggregate calls are each `min` or `max`, which reads their values from its `InitPlan` subplans.
     MinMax,
 }

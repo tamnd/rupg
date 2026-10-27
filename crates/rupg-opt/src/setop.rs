@@ -1,8 +1,9 @@
 //! The plans of the sides of `INTERSECT` and `EXCEPT`, as `build_setop_child_paths` and `generate_nonunion_paths` make them.
 
-use rupg_analyze::{Expr, ExprKind, Query, SetKind, SetOp, SetTree};
+use rupg_analyze::{Expr, ExprKind, Query, SetKind, SetOp, SetTree, Var};
 use rupg_pgcatalog::builtin;
-use rupg_plan::{Cost, Item, Kind, Node, SortKey};
+use rupg_plan::{Cost, Item, Kind, Node, Replaced, SortKey};
+use rupg_types::{Value, oid};
 
 use crate::from::paths::{Paths, costs};
 use crate::from::{self, OrderKey, Stats};
@@ -181,6 +182,64 @@ pub(crate) fn has_member(node: &Node<'_>) -> bool {
     node.member.is_some() || node.children.iter().any(has_member)
 }
 
+/// `is_dummy_rel`: the plan of a `SELECT` or of a set operation is a `Result` with no rows in the place of its relations.
+pub(crate) fn is_dummy(node: &Node<'_>) -> bool {
+    let replaced = matches!(
+        &node.kind,
+        Kind::Result {
+            replaces: Some(Replaced::Scan(..) | Replaced::Join(_) | Replaced::Upper(_)),
+            ..
+        }
+    );
+    replaced && node.children.is_empty()
+}
+
+/// The empty result of a set operation, as `mark_dummy_rel` makes it for the relation of the operation, which has the relations of all its `SELECT` parts. It gives the columns of the leftmost `SELECT`.
+pub(crate) fn dummy_op<'q>(level: &Level<'q>, op: &'q SetOp) -> Node<'q> {
+    let mut leaves = Vec::new();
+    op.left.each_leaf(&mut |at| leaves.push(at));
+    op.right.each_leaf(&mut |at| leaves.push(at));
+    leaves.sort_unstable();
+    let mut node = dummy(level, Replaced::Upper(leaves));
+    node.output = columns(op.left.leftmost(), &op.columns);
+    node.cost.width = op.columns.iter().map(|&(ty, typmod)| cost::type_width(ty, typmod)).sum();
+    node
+}
+
+/// The empty `SELECT` with this index, as `set_subquery_pathlist` marks the relation of the `SELECT` dummy when the plan of the `SELECT` is empty.
+fn dummy_leaf<'q>(level: &Level<'q>, leaf: usize) -> Node<'q> {
+    let mut node = dummy(level, Replaced::Scan(leaf, false));
+    if let Some(rel) = level.query.relations.get(leaf) {
+        let types: Vec<(u32, i32)> = rel.columns.iter().map(|c| (c.ty, c.typmod)).collect();
+        node.output = columns(leaf, &types);
+    }
+    node
+}
+
+/// A `Result` with no rows in the scope of the set operation.
+fn dummy<'q>(level: &Level<'q>, replaced: Replaced) -> Node<'q> {
+    let never = Expr::new(ExprKind::Const(Value::Bool(false)), oid::BOOL);
+    let kind = Kind::Result { replaces: Some(replaced), one_time: vec![Item::owned(never)] };
+    let mut node = Node::new(kind, level.scope, Vec::new());
+    node.cost = Cost { startup: 0.0, total: 0.0, rows: 0.0, width: 0 };
+    node
+}
+
+/// The columns of the relation with this index.
+fn columns<'q>(relation: usize, types: &[(u32, i32)]) -> Vec<Item<'q>> {
+    types
+        .iter()
+        .enumerate()
+        .map(|(at, &(ty, typmod))| {
+            let attnum = i16::try_from(at + 1).unwrap_or(i16::MAX);
+            let var = Var { relation, attnum, levels_up: 0 };
+            let mut expr = Expr::new(ExprKind::Var(var), ty);
+            expr.typmod = typmod;
+            Item::owned(expr)
+        })
+        .collect()
+}
+
 /// A side of `INTERSECT` or `EXCEPT`: its cheapest plan, the number of groups of its rows, its plan in the order of its columns, and the keys and the scope of a sort of its rows.
 struct Side<'q> {
     node: Node<'q>,
@@ -242,6 +301,23 @@ impl<'q> Builder<'q> {
         let mut left = self.side(level, op, &op.left);
         let middle = self.current.len();
         let mut right = self.side(level, op, &op.right);
+        // `generate_nonunion_paths`: the result is empty when the left side is empty, or a side of `INTERSECT`. `EXCEPT ALL` with an empty right side gives the rows of the left side.
+        let except = op.kind == SetKind::Except;
+        let empty = (is_dummy(&left.node), is_dummy(&right.node));
+        if empty.0 || (empty.1 && !except) {
+            self.current.truncate(start);
+            return vec![(dummy_op(level, op), false)];
+        }
+        if empty.1 {
+            self.current.truncate(middle);
+            if op.all {
+                return vec![(left.node, false)];
+            }
+            if let SetTree::Leaf(at) = op.right {
+                right.node = dummy_leaf(level, at);
+                right.scope = level.scope;
+            }
+        }
         // `INTERSECT` reads first the side with fewer groups. Its relations then take their names first, as `set_rtable_names` names them in the order of the plan.
         if op.kind == SetKind::Intersect && left.groups > right.groups {
             std::mem::swap(&mut left, &mut right);
@@ -249,7 +325,6 @@ impl<'q> Builder<'q> {
                 self.current[start..].rotate_left(middle - start);
             }
         }
-        let except = op.kind == SetKind::Except;
         let (l, r) = (left.node.cost, right.node.cost);
         let groups = left.groups;
         let rows = match (except, op.all) {
@@ -317,10 +392,10 @@ impl<'q> Builder<'q> {
         level: &Level<'q>,
         op: &'q SetOp,
         tree: &'q SetTree,
-    ) -> (Node<'q>, Option<Node<'q>>) {
+    ) -> (Node<'q>, Option<Node<'q>>, f64) {
         let side = self.side(level, op, tree);
         let ordered = side.complete.then(|| side.sorted_plan());
-        (side.node, ordered)
+        (side.node, ordered, side.groups)
     }
 
     /// The plan of a side of `INTERSECT` or `EXCEPT`. The planner plans a `SELECT` with the set operation as its `setops`.

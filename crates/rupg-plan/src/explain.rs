@@ -456,6 +456,12 @@ impl Explainer<'_, '_> {
                                 rs.iter().map(|r| self.texts.refname(scope, *r)).collect();
                             format!("Join on {}", names.join(", "))
                         }
+                        // `show_result_replacement_info` shows `RESULT_TYPE_UPPER` as an aggregate.
+                        Replaced::Upper(rs) => {
+                            let names: Vec<String> =
+                                rs.iter().map(|r| self.texts.refname(scope, *r)).collect();
+                            format!("Aggregate on {}", names.join(", "))
+                        }
                         Replaced::MinMax => "MinMaxAggregate".to_string(),
                     };
                     self.w.text("Replaces", &text);

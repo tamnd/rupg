@@ -1,0 +1,147 @@
+> create table tenk1 (unique1 int, two int, four int, ten int)
+CREATE TABLE
+> insert into tenk1 select g, g%2, g%4, g%10 from generate_series(0,9999) g
+INSERT 0 10000
+> analyze tenk1
+ANALYZE
+> EXPLAIN (COSTS OFF, VERBOSE) SELECT two FROM tenk1 WHERE 1=2 UNION SELECT four FROM tenk1 ORDER BY 1
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Output: tenk1.four
+row   Sort Key: tenk1.four
+row   ->  HashAggregate
+row         Output: tenk1.four
+row         Group Key: tenk1.four
+row         ->  Seq Scan on public.tenk1
+row               Output: tenk1.four
+EXPLAIN
+> SELECT two FROM tenk1 WHERE 1=2 UNION SELECT four FROM tenk1 ORDER BY 1
+fields two:23:4:-1
+row 0
+row 1
+row 2
+row 3
+SELECT 4
+> EXPLAIN (COSTS OFF, VERBOSE) SELECT two FROM tenk1 WHERE 1=2 UNION SELECT four FROM tenk1 WHERE 1=2 UNION SELECT ten FROM tenk1 WHERE 1=2 ORDER BY 1
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Output: unnamed_subquery.two
+row   Sort Key: unnamed_subquery.two
+row   ->  Result
+row         Output: unnamed_subquery.two
+row         Replaces: Aggregate on unnamed_subquery, unnamed_subquery_1, unnamed_subquery_2
+row         One-Time Filter: false
+EXPLAIN
+> SELECT two FROM tenk1 WHERE 1=2 UNION SELECT four FROM tenk1 WHERE 1=2 UNION SELECT ten FROM tenk1 WHERE 1=2 ORDER BY 1
+fields two:23:4:-1
+SELECT 0
+> EXPLAIN (COSTS OFF, VERBOSE) SELECT two FROM tenk1 WHERE 1=2 INTERSECT SELECT four FROM tenk1 ORDER BY 1
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Output: unnamed_subquery.two
+row   Sort Key: unnamed_subquery.two
+row   ->  Result
+row         Output: unnamed_subquery.two
+row         Replaces: Aggregate on unnamed_subquery, unnamed_subquery_1
+row         One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF, VERBOSE) SELECT four FROM tenk1 INTERSECT SELECT two FROM tenk1 WHERE 1=2 ORDER BY 1
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Output: unnamed_subquery.four
+row   Sort Key: unnamed_subquery.four
+row   ->  Result
+row         Output: unnamed_subquery.four
+row         Replaces: Aggregate on unnamed_subquery, unnamed_subquery_1
+row         One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF, VERBOSE) SELECT four FROM tenk1 WHERE 1=2 INTERSECT SELECT two FROM tenk1 WHERE 1=2 ORDER BY 1
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Output: unnamed_subquery.four
+row   Sort Key: unnamed_subquery.four
+row   ->  Result
+row         Output: unnamed_subquery.four
+row         Replaces: Aggregate on unnamed_subquery, unnamed_subquery_1
+row         One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF, VERBOSE) SELECT two FROM tenk1 WHERE 1=2 EXCEPT SELECT four FROM tenk1 ORDER BY 1
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Output: unnamed_subquery.two
+row   Sort Key: unnamed_subquery.two
+row   ->  Result
+row         Output: unnamed_subquery.two
+row         Replaces: Aggregate on unnamed_subquery, unnamed_subquery_1
+row         One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF, VERBOSE) SELECT two FROM tenk1 EXCEPT ALL SELECT four FROM tenk1 WHERE 1=2 ORDER BY 1
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Output: tenk1.two
+row   Sort Key: tenk1.two
+row   ->  Seq Scan on public.tenk1
+row         Output: tenk1.two
+EXPLAIN
+> SELECT two FROM tenk1 EXCEPT ALL SELECT four FROM tenk1 WHERE 1=2 ORDER BY 1 limit 3
+fields two:23:4:-1
+row 0
+row 0
+row 0
+SELECT 3
+> EXPLAIN (COSTS OFF, VERBOSE) SELECT two FROM tenk1 EXCEPT SELECT four FROM tenk1 WHERE 1=2 ORDER BY 1
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Output: tenk1.two
+row   Sort Key: tenk1.two
+row   ->  HashSetOp Except
+row         Output: tenk1.two
+row         ->  Seq Scan on public.tenk1
+row               Output: tenk1.two
+row         ->  Result
+row               Output: unnamed_subquery.four
+row               Replaces: Scan on unnamed_subquery
+row               One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF, VERBOSE) SELECT two FROM tenk1 t1 EXCEPT SELECT four FROM tenk1 t2 UNION SELECT ten FROM tenk1 dummy WHERE 1=2
+fields QUERY PLAN:25:-1:-1
+row Unique
+row   Output: t1.two
+row   ->  Sort
+row         Output: t1.two
+row         Sort Key: t1.two
+row         ->  HashSetOp Except
+row               Output: t1.two
+row               ->  Seq Scan on public.tenk1 t1
+row                     Output: t1.two
+row               ->  Seq Scan on public.tenk1 t2
+row                     Output: t2.four
+EXPLAIN
+> SELECT two FROM tenk1 t1 EXCEPT SELECT four FROM tenk1 t2 UNION SELECT ten FROM tenk1 dummy WHERE 1=2
+fields two:23:4:-1
+SELECT 0
+> EXPLAIN (COSTS OFF, VERBOSE) SELECT two FROM tenk1 WHERE 1=2 UNION SELECT four FROM tenk1 UNION SELECT ten FROM tenk1
+fields QUERY PLAN:25:-1:-1
+row HashAggregate
+row   Output: tenk1.four
+row   Group Key: tenk1.four
+row   ->  Append
+row         ->  Seq Scan on public.tenk1
+row               Output: tenk1.four
+row         ->  Seq Scan on public.tenk1 tenk1_1
+row               Output: tenk1_1.ten
+EXPLAIN
+> EXPLAIN (COSTS OFF, VERBOSE) SELECT two FROM tenk1 WHERE 1=2 UNION ALL SELECT four FROM tenk1
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.tenk1
+row   Output: tenk1.four
+EXPLAIN
+> EXPLAIN (COSTS OFF) select * from (SELECT two FROM tenk1 WHERE 1=2 UNION SELECT four FROM tenk1 WHERE false) s
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Scan on s
+row   One-Time Filter: false
+EXPLAIN
+> SELECT * FROM (SELECT two FROM tenk1 WHERE 1=2 INTERSECT SELECT four FROM tenk1) s
+fields two:23:4:-1
+SELECT 0
