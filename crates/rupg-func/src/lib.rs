@@ -21,6 +21,7 @@ mod cast;
 mod catinfo;
 mod compare;
 mod datetime;
+mod datumsize;
 mod dbsize;
 mod deparse;
 mod describe;
@@ -97,6 +98,7 @@ pub use agg::check_percentile;
 pub use cast::local_time;
 pub use compare::{compare, equal};
 pub use datetime::{IntervalSum, interval_lerp};
+pub use datumsize::column_size;
 pub use deparse::{
     deparse_constant, deparse_expression, deparse_relation_expression, explain, index_key_columns,
     partition_key_columns, view_statement,

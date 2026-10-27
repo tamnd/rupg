@@ -1,0 +1,71 @@
+> select pg_column_size(1::int2), pg_column_size(1), pg_column_size(1::int8), pg_column_size(now()), pg_column_size('abc'), pg_column_size('abc'::text), pg_column_size('abc'::name), pg_column_size('abc'::char(5)), pg_column_size('\x0102'::bytea);
+fields pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1
+row 2,4,8,8,4,7,64,9,6
+SELECT 1
+> select pg_column_size(0::numeric), pg_column_size(1::numeric), pg_column_size(12345.678::numeric), pg_column_size('NaN'::numeric), pg_column_size(1e200::numeric), pg_column_size(1e-300::numeric), pg_column_size(0.1234567890123456789012345678901234567890123456789012345678901234567::numeric);
+fields pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1
+row 6,8,12,6,8,10,42
+SELECT 1
+> select pg_column_size('{}'::jsonb), pg_column_size('[]'::jsonb), pg_column_size('1'::jsonb), pg_column_size('"abc"'::jsonb), pg_column_size('null'::jsonb), pg_column_size('{"a":1}'::jsonb), pg_column_size('{"aa":1, "b":2}'::jsonb), pg_column_size('[1, "x", true, null, {"k": [2.5, "yy"]}]'::jsonb), pg_column_size('{"a": "x", "b": 1, "c": {"d": 1.5}}'::jsonb);
+fields pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1
+row 8,8,20,15,12,28,44,80,70
+SELECT 1
+> select pg_column_size(array[1,2,3]), pg_column_size(array[1,null,3]), pg_column_size('{}'::int[]), pg_column_size(array['a','bb']), pg_column_size(array[[1,2],[3,4]]), pg_column_size(array[1::int8, 2]), pg_column_size(array[1.5, 2]);
+fields pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1
+row 36,40,16,40,48,40,44
+SELECT 1
+> select pg_column_size(row(1, 'abc', 2::int8)), pg_column_size(row(1, null, 'x')), pg_column_size(row(1::int2, 1::int8));
+fields pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1
+row 40,30,40
+SELECT 1
+> create table cs (a int, t text, j jsonb, n numeric, b bytea, arr int[], l text);
+CREATE TABLE
+> insert into cs values (1, 'hello', '{"a": [1, 2]}', 3.14, '\x00ff', '{1,2}', repeat('x', 200)), (2, null, null, null, null, null, null);
+INSERT 0 2
+> select a, pg_column_size(a), pg_column_size(t), pg_column_size(j), pg_column_size(n), pg_column_size(b), pg_column_size(arr), pg_column_size(l), pg_column_size(t || ''), pg_column_size(cs.*) from cs order by a;
+fields a@cs.1:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1
+row 1,4,6,45,7,3,29,204,9,324
+row 2,4,NULL,NULL,NULL,NULL,NULL,NULL,NULL,28
+SELECT 2
+> select pg_column_size(t) from (select t from cs where a = 1) s;
+fields pg_column_size:23:4:-1
+row 6
+SELECT 1
+> select pg_column_size(x) from (values ('abc'::text)) v(x);
+fields pg_column_size:23:4:-1
+row 7
+SELECT 1
+> select pg_column_size('{}'::jsonb || '{}'::jsonb) = pg_column_size('{}'::jsonb), pg_column_size('{"a":1 , "b":2, "c":3}'::jsonb - 'b') = pg_column_size('{"a":1, "b":2}'::jsonb);
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,t
+SELECT 1
+> select pg_column_size(null::int);
+fields pg_column_size:23:4:-1
+row NULL
+SELECT 1
+> drop table cs;
+DROP TABLE
+> select pg_column_size(array['a','bb','ccc']), pg_column_size(array[1::int2, 2::int2, 3::int2]), pg_column_size(array[true]), pg_column_size(array['{"a":1}'::jsonb]), pg_column_size(array[row(1,'a')]);
+fields pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1
+row 48,30,25,52,56
+SELECT 1
+> select pg_column_size(row(row(1, 'a'), 'b')), pg_column_size(row('x'::char(3), 1::int8, 'y'));
+fields pg_column_size:23:4:-1,pg_column_size:23:4:-1
+row 53,42
+SELECT 1
+> select pg_column_size(repeat('x', 3000)), pg_column_size('{}'::jsonb || jsonb_build_object('k', repeat('y', 10)));
+fields pg_column_size:23:4:-1,pg_column_size:23:4:-1
+row 3004,27
+SELECT 1
+> select pg_column_size('1.0'::jsonb), pg_column_size('[1.00, 100, -0.5]'::jsonb), pg_column_size('{"k": [], "l": {}}'::jsonb);
+fields pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1
+row 20,44,36
+SELECT 1
+> select pg_column_size('192.168.0.1'::inet);
+fields pg_column_size:23:4:-1
+row 10
+SELECT 1
+> select pg_column_size('::1'::inet), pg_column_size('10.0.0.0/8'::cidr), pg_column_size(array['1.2.3.4'::inet]);
+fields pg_column_size:23:4:-1,pg_column_size:23:4:-1,pg_column_size:23:4:-1
+row 22,10,36
+SELECT 1
