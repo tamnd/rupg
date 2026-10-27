@@ -232,6 +232,7 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::CreateForeignServerStmt(_)
             | Node::AlterForeignServerStmt(_)
             | Node::CreateUserMappingStmt(_)
+            | Node::ImportForeignSchemaStmt(_)
             | Node::AlterUserMappingStmt(_)
             | Node::DropUserMappingStmt(_)
     ) || matches!(stmt, Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) || matches!(define.kind, ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_AGGREGATE | ObjectType::OBJECT_TYPE))
@@ -402,6 +403,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::CreateForeignServerStmt(stmt) => definer.create_server(stmt),
         Node::AlterForeignServerStmt(stmt) => definer.alter_server(stmt),
         Node::CreateUserMappingStmt(stmt) => definer.create_user_mapping(stmt),
+        Node::ImportForeignSchemaStmt(stmt) => definer.import_foreign_schema(stmt),
         Node::AlterUserMappingStmt(stmt) => definer.alter_user_mapping(stmt),
         Node::DropUserMappingStmt(stmt) => definer.drop_user_mapping(stmt),
         Node::AlterOperatorStmt(alter) => definer.alter_operator(alter),

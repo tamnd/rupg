@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A partitioned table with foreign partitions gives the errors of PostgreSQL for unique indexes, a foreign partition gets no copies of the indexes of its parent, and `IMPORT FOREIGN SCHEMA` checks the server, the schema and the handler of the wrapper. The foreign_data regression test now passes (#976).
 - ALTER FOREIGN TABLE now runs `OPTIONS` on the table and `ALTER COLUMN ... OPTIONS`, adds a column with its `OPTIONS`, changes a column type, renames a foreign table, and gives the errors of PostgreSQL for `USING`, for key constraints and for a row type that a table uses (#975).
 - `CREATE FOREIGN TABLE` and `DROP FOREIGN TABLE` work, with `pg_foreign_table`, the options of the columns in `attfdwoptions` and `COMMENT ON FOREIGN TABLE`. A scan or a write of a foreign table gives the error of PostgreSQL for a foreign-data wrapper with no handler (#974).
 - `GRANT` and `REVOKE` work on foreign-data wrappers and foreign servers. `CREATE`, `ALTER` and `DROP USER MAPPING` work, with `pg_user_mapping`, the object address functions, `DROP OWNED` and the `DROP ROLE` checks (#971).

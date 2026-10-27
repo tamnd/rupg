@@ -404,6 +404,23 @@ impl Definer<'_, '_> {
             .filter(|r| r.index.as_ref().is_some_and(|i| i.table == parent.oid))
             .map(|r| r.oid)
             .collect();
+        // A foreign table has no indexes, so the parent can have no unique index.
+        if rel.kind == RelKind::Foreign {
+            if indexes.iter().any(|&index| self.is_unique_index(index)) {
+                return Err(Error::new(
+                    SqlState::WRONG_OBJECT_TYPE,
+                    format!(
+                        "cannot attach foreign table \"{}\" as partition of partitioned table \"{}\"",
+                        rel.name, parent.name
+                    ),
+                )
+                .with_detail(format!(
+                    "Partitioned table \"{}\" contains unique indexes.",
+                    parent.name
+                )));
+            }
+            return Ok(());
+        }
         for index in indexes {
             let constraint = self
                 .catalog

@@ -79,6 +79,29 @@ impl Definer<'_, '_> {
                 format!("permission denied: \"{name}\" is a system catalog"),
             ));
         }
+        // `ProcessUtilitySlow` checks each partition of a partitioned table before `DefineIndex`.
+        if let Found::User(oid) = found
+            && !alter
+            && rv.inh
+            && kind == b'p'
+            && (stmt.unique || stmt.primary)
+        {
+            let catalog = &*self.catalog;
+            let foreign = catalog
+                .all_inheritors(oid)
+                .into_iter()
+                .any(|child| catalog.relation(child).is_some_and(|r| r.kind == RelKind::Foreign));
+            if foreign {
+                let relname = rv.relname.as_deref().unwrap_or_default();
+                return Err(Error::new(
+                    SqlState::WRONG_OBJECT_TYPE,
+                    format!("cannot create unique index on partitioned table \"{relname}\""),
+                )
+                .with_detail(format!(
+                    "Table \"{relname}\" contains partitions that are foreign tables."
+                )));
+            }
+        }
         let elements: Vec<&IndexElem> = elems(&stmt.indexParams);
         let including: Vec<&IndexElem> = elems(&stmt.indexIncludingParams);
         let has_exprs = elements.iter().chain(&including).any(|e| e.expr.is_some());

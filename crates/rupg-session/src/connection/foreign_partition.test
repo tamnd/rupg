@@ -1,0 +1,100 @@
+> CREATE FOREIGN DATA WRAPPER dummy;
+CREATE FOREIGN DATA WRAPPER
+> CREATE SERVER s0 FOREIGN DATA WRAPPER dummy;
+CREATE SERVER
+> CREATE TABLE lt1 (a INT) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE UNIQUE INDEX ON lt1 (a);
+CREATE INDEX
+> CREATE FOREIGN TABLE ft_part1 PARTITION OF lt1 FOR VALUES FROM (0) TO (1000) SERVER s0;
+ERROR 42809 cannot create foreign partition of partitioned table "lt1"
+> CREATE FOREIGN TABLE ft_part2 (a INT NOT NULL) SERVER s0;
+CREATE FOREIGN TABLE
+> ALTER TABLE lt1 ATTACH PARTITION ft_part2 FOR VALUES FROM (1000) TO (2000);
+ERROR 42809 cannot attach foreign table "ft_part2" as partition of partitioned table "lt1"
+> DROP TABLE lt1;
+DROP TABLE
+> DROP FOREIGN TABLE ft_part2;
+DROP FOREIGN TABLE
+> CREATE TABLE lt1 (a INT) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE INDEX lt1_a ON lt1 (a);
+CREATE INDEX
+> CREATE TABLE lt1_part1 PARTITION OF lt1 FOR VALUES FROM (0) TO (1000) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE FOREIGN TABLE ft_part_1_1 PARTITION OF lt1_part1 FOR VALUES FROM (0) TO (100) SERVER s0;
+CREATE FOREIGN TABLE
+> CREATE FOREIGN TABLE ft_part_1_2 (a INT) SERVER s0;
+CREATE FOREIGN TABLE
+> ALTER TABLE lt1_part1 ATTACH PARTITION ft_part_1_2 FOR VALUES FROM (100) TO (200);
+ALTER TABLE
+> SELECT c.relname, i.relname AS index FROM pg_index x JOIN pg_class c ON c.oid = x.indrelid JOIN pg_class i ON i.oid = x.indexrelid WHERE c.relname LIKE '%part%' OR c.relname = 'lt1' ORDER BY 1, 2;
+fields relname@pg_class.2:19:64:-1,index@pg_class.2:19:64:-1
+row lt1,lt1_a
+row lt1_part1,lt1_part1_a_idx
+row pg_partitioned_table,pg_partitioned_table_partrelid_index
+SELECT 3
+> CREATE UNIQUE INDEX ON lt1 (a);
+ERROR 42809 cannot create unique index on partitioned table "lt1"
+> CREATE UNIQUE INDEX ON ONLY lt1 (a);
+CREATE INDEX
+> ALTER TABLE lt1 ADD PRIMARY KEY (a);
+ERROR 42809 cannot create unique index on partitioned table "lt1_part1"
+> ALTER TABLE lt1 ADD UNIQUE (a);
+ERROR 42809 cannot create unique index on partitioned table "lt1_part1"
+> DROP FOREIGN TABLE ft_part_1_1, ft_part_1_2;
+DROP FOREIGN TABLE
+> CREATE UNIQUE INDEX ON lt1 (a);
+CREATE INDEX
+> ALTER TABLE lt1 ADD PRIMARY KEY (a);
+ALTER TABLE
+> CREATE FOREIGN TABLE ft_part_1_1 PARTITION OF lt1_part1 FOR VALUES FROM (0) TO (100) SERVER s0;
+ERROR 42809 cannot create foreign partition of partitioned table "lt1_part1"
+> CREATE FOREIGN TABLE ft_part_1_2 (a INT NOT NULL) SERVER s0;
+CREATE FOREIGN TABLE
+> ALTER TABLE lt1_part1 ATTACH PARTITION ft_part_1_2 FOR VALUES FROM (100) TO (200);
+ERROR 42809 cannot attach foreign table "ft_part_1_2" as partition of partitioned table "lt1_part1"
+> DROP TABLE lt1;
+DROP TABLE
+> DROP FOREIGN TABLE ft_part_1_2;
+DROP FOREIGN TABLE
+> CREATE SCHEMA imp;
+CREATE SCHEMA
+> IMPORT FOREIGN SCHEMA s1 FROM SERVER s9 INTO public;
+ERROR 42704 server "s9" does not exist
+> IMPORT FOREIGN SCHEMA s1 FROM SERVER s0 INTO nope;
+ERROR 3F000 schema "nope" does not exist
+> IMPORT FOREIGN SCHEMA s1 FROM SERVER s0 INTO imp;
+ERROR 55000 foreign-data wrapper "dummy" has no handler
+> IMPORT FOREIGN SCHEMA s1 LIMIT TO (t1) FROM SERVER s0 INTO public;
+ERROR 55000 foreign-data wrapper "dummy" has no handler
+> IMPORT FOREIGN SCHEMA s1 EXCEPT (t1, t2) FROM SERVER s0 INTO public OPTIONS (option1 'value1', option2 'value2');
+ERROR 55000 foreign-data wrapper "dummy" has no handler
+> CREATE ROLE tsstat_fp_u;
+CREATE ROLE
+> SET ROLE tsstat_fp_u;
+SET
+is_superuser=off
+> IMPORT FOREIGN SCHEMA s1 FROM SERVER s0 INTO imp;
+ERROR 42501 permission denied for foreign server s0
+> RESET ROLE;
+RESET
+is_superuser=on
+> GRANT USAGE ON FOREIGN SERVER s0 TO tsstat_fp_u;
+GRANT
+> SET ROLE tsstat_fp_u;
+SET
+is_superuser=off
+> IMPORT FOREIGN SCHEMA s1 FROM SERVER s0 INTO imp;
+ERROR 42501 permission denied for schema imp
+> RESET ROLE;
+RESET
+is_superuser=on
+> DROP SCHEMA imp;
+DROP SCHEMA
+> DROP SERVER s0;
+DROP SERVER
+> DROP FOREIGN DATA WRAPPER dummy;
+DROP FOREIGN DATA WRAPPER
+> DROP ROLE tsstat_fp_u;
+DROP ROLE
