@@ -296,7 +296,7 @@ pub fn session_settings(
     Ok(settings)
 }
 
-/// Writes an `ErrorResponse` or a `NoticeResponse` with the severity, the SQLSTATE, the message, the detail, the hint, the position in the query, the context and the place in the source.
+/// Writes an `ErrorResponse` or a `NoticeResponse` with the severity, the SQLSTATE, the message, the detail, the hint, the context, the names of the objects, the position in the query and the place in the source. The fields come in the order of PostgreSQL.
 pub fn write_error(
     out: &mut OutBuf,
     severity: &str,
@@ -318,6 +318,14 @@ pub fn write_error(
     if let Some(hint) = error.hint() {
         fields.push((b'H', hint.as_bytes()));
     }
+    if let Some(context) = error.context() {
+        fields.push((b'W', context.as_bytes()));
+    }
+    for object in Object::ALL {
+        if let Some(name) = error.object(object) {
+            fields.push((object.code(), name.as_bytes()));
+        }
+    }
     if let Some(position) = &position {
         fields.push((b'P', position.as_bytes()));
     }
@@ -329,14 +337,6 @@ pub fn write_error(
     }
     if let Some((query, _)) = internal {
         fields.push((b'q', query.as_bytes()));
-    }
-    if let Some(context) = error.context() {
-        fields.push((b'W', context.as_bytes()));
-    }
-    for object in Object::ALL {
-        if let Some(name) = error.object(object) {
-            fields.push((object.code(), name.as_bytes()));
-        }
     }
     let (file, line, routine) = source_fields(error.place());
     fields.extend([(b'F', file.as_bytes()), (b'L', line.as_bytes()), (b'R', routine.as_bytes())]);
@@ -8022,5 +8022,21 @@ mod tests {
         assert_eq!(render(&out, false), ["ERROR 57014 canceling statement due to user request"]);
         assert_eq!(send(&mut c, &[execute("p", 0), sync()].concat()), ["ready I"]);
         assert!(!flag.load(Ordering::Relaxed));
+    }
+
+    /// The fields of an error come in the order of PostgreSQL: the context and the names of the objects come before the position in the query. A client that compares the bytes of the messages sees no difference.
+    #[test]
+    fn error_field_order() {
+        let error = Error::new(SqlState::INVALID_TEXT_REPRESENTATION, "bad")
+            .with_context("JSON data, line 1: [1,")
+            .with_object(Object::Table, "t");
+        let mut out = OutBuf::new();
+        write_error(&mut out, "ERROR", &error, Some(8), false);
+        let Some((Backend::ErrorResponse(fields), _)) = Backend::decode(out.as_bytes()).unwrap()
+        else {
+            panic!("no error");
+        };
+        let codes: Vec<u8> = fields.iter().map(|(code, _)| *code).collect();
+        assert_eq!(codes, b"SVCMWtPFLR");
     }
 }
