@@ -227,9 +227,9 @@ pub fn is_definition(stmt: &Node) -> bool {
         || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
         || matches!(stmt, Node::DiscardStmt(discard) if discard.target == DiscardMode::DISCARD_TEMP)
         || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype) || alter.objtype == ObjectType::OBJECT_TYPE)
-        || matches!(stmt, Node::AlterOwnerStmt(alter) if matches!(alter.objectType, ObjectType::OBJECT_SCHEMA | ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT | ObjectType::OBJECT_CONVERSION) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
+        || matches!(stmt, Node::AlterOwnerStmt(alter) if matches!(alter.objectType, ObjectType::OBJECT_SCHEMA | ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT | ObjectType::OBJECT_CONVERSION | ObjectType::OBJECT_TSDICTIONARY | ObjectType::OBJECT_TSCONFIGURATION) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
         || matches!(stmt, Node::RenameStmt(rename) if rename::is_rename_kind(rename.renameType))
-        || matches!(stmt, Node::AlterObjectSchemaStmt(alter) if is_alter_kind(alter.objectType) || matches!(alter.objectType, ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT | ObjectType::OBJECT_CONVERSION) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
+        || matches!(stmt, Node::AlterObjectSchemaStmt(alter) if is_alter_kind(alter.objectType) || matches!(alter.objectType, ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT | ObjectType::OBJECT_CONVERSION) || tsearch::is_ts_kind(alter.objectType) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
         || matches!(stmt, Node::SelectStmt(select) if crate::select_into(select).is_some())
         || matches!(stmt, Node::GrantStmt(grant) if grant.targtype != GrantTargetType::ACL_TARGET_DEFAULTS)
 }
@@ -364,6 +364,9 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         }
         Node::AlterObjectSchemaStmt(alter) if alter.objectType == ObjectType::OBJECT_CONVERSION => {
             definer.alter_conversion_schema(alter)
+        }
+        Node::AlterObjectSchemaStmt(alter) if tsearch::is_ts_kind(alter.objectType) => {
+            definer.alter_ts_schema(alter)
         }
         Node::AlterObjectSchemaStmt(alter) => definer.alter_relation_schema(alter),
         Node::CreateStatsStmt(create) => definer.create_statistics(create),
@@ -785,6 +788,39 @@ impl Definer<'_, '_> {
         rupg_pgcatalog::roles::current().superuser(role)
             || self.schema_owner(namespace) == Some(role)
             || self.schema_create_allowed(namespace, role)
+    }
+
+    /// `LookupCreationNamespace` for `SET SCHEMA`: the schema of the name, after the check of `CREATE` on it. `pg_temp` is the temporary schema of the session, which this makes when it does not exist.
+    fn lookup_creation_namespace(&mut self, schema: &str) -> Result<u32> {
+        let namespace = if schema == "pg_temp" {
+            self.temp_namespace()?
+        } else {
+            self.an.schema(schema).ok_or_else(|| {
+                Error::new(
+                    SqlState::UNDEFINED_SCHEMA,
+                    format!("schema \"{schema}\" does not exist"),
+                )
+            })?
+        };
+        self.check_create_in(namespace, None)?;
+        Ok(namespace)
+    }
+
+    /// `CheckSetNamespace`: an object cannot move into or out of a temporary schema or the TOAST schema.
+    fn check_set_namespace(&self, old: u32, new: u32) -> Result<()> {
+        if self.catalog.is_temp_schema(old) || self.catalog.is_temp_schema(new) {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "cannot move objects into or out of temporary schemas",
+            ));
+        }
+        if old == PG_TOAST_NAMESPACE || new == PG_TOAST_NAMESPACE {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "cannot move objects into or out of TOAST schema",
+            ));
+        }
+        Ok(())
     }
 
     /// The check of `CREATE` on a schema for the role of the statement.

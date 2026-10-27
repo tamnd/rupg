@@ -320,4 +320,35 @@ impl Catalog {
     pub fn ts_mappings(&self) -> &[TsMapping] {
         &self.ts_mappings
     }
+
+    /// The name and the schema of the object of text search of the class `class`, for a change.
+    fn ts_name_namespace(&mut self, class: u32, oid: u32) -> Option<(&mut String, &mut u32)> {
+        match class {
+            PG_TS_TEMPLATE => {
+                self.ts_templates.get_mut(&oid).map(|t| (&mut t.name, &mut t.namespace))
+            }
+            PG_TS_PARSER => self.ts_parsers.get_mut(&oid).map(|p| (&mut p.name, &mut p.namespace)),
+            PG_TS_DICT => {
+                self.ts_dictionaries.get_mut(&oid).map(|d| (&mut d.name, &mut d.namespace))
+            }
+            PG_TS_CONFIG => self.ts_configs.get_mut(&oid).map(|c| (&mut c.name, &mut c.namespace)),
+            _ => None,
+        }
+    }
+
+    /// `AlterObjectRename_internal` for an object of text search: the new name of the object of the class `class`.
+    pub fn rename_ts(&mut self, class: u32, oid: u32, name: &str) {
+        if let Some((old, _)) = self.ts_name_namespace(class, oid) {
+            *old = name.to_string();
+        }
+    }
+
+    /// `AlterObjectNamespace_internal` for an object of text search: the new schema of the object of the class `class`, and the dependency on the new schema.
+    pub fn set_ts_namespace(&mut self, class: u32, oid: u32, namespace: u32) {
+        let old =
+            self.ts_name_namespace(class, oid).map(|(_, ns)| std::mem::replace(ns, namespace));
+        if let Some(old) = old {
+            self.change_namespace_dependency(ObjRef::new(class, oid), old, namespace);
+        }
+    }
 }

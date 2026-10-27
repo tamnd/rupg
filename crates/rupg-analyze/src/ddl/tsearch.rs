@@ -1,4 +1,4 @@
-//! The commands of text search of `tsearchcmds.c`: `CREATE TEXT SEARCH TEMPLATE`, `CREATE TEXT SEARCH PARSER`, `CREATE TEXT SEARCH DICTIONARY`, `CREATE TEXT SEARCH CONFIGURATION`, `ALTER TEXT SEARCH CONFIGURATION`, and `COMMENT ON` and `DROP` for these objects. The objects are found by name as `get_ts_template_oid`, `get_ts_parser_oid`, `get_ts_dict_oid` and `get_ts_config_oid` of `namespace.c` find them, in the catalog and in the built-in rows.
+//! The commands of text search of `tsearchcmds.c`: `CREATE TEXT SEARCH TEMPLATE`, `CREATE TEXT SEARCH PARSER`, `CREATE TEXT SEARCH DICTIONARY`, `CREATE TEXT SEARCH CONFIGURATION`, `ALTER TEXT SEARCH CONFIGURATION`, `ALTER TEXT SEARCH` with `RENAME TO`, `OWNER TO` and `SET SCHEMA`, and `COMMENT ON` and `DROP` for these objects. The objects are found by name as `get_ts_template_oid`, `get_ts_parser_oid`, `get_ts_dict_oid` and `get_ts_config_oid` of `namespace.c` find them, in the catalog and in the built-in rows.
 //!
 //! `CREATE TEXT SEARCH DICTIONARY` runs the init function of the template on the options, as `verify_dictoptions` does. rupg has the init functions of the templates `simple` and `snowball`. A dictionary of another template gives `0A000`.
 
@@ -10,7 +10,8 @@ use rupg_common::{Error, Object, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_sql::nodes::ObjectType;
 use rupg_sql::nodes::{
-    AlterTSConfigType, AlterTSConfigurationStmt, DefElem, DefineStmt, DropStmt, Node,
+    AlterObjectSchemaStmt, AlterOwnerStmt, AlterTSConfigType, AlterTSConfigurationStmt, DefElem,
+    DefineStmt, DropStmt, Node, RenameStmt,
 };
 use rupg_types::format_type;
 use rupg_types::oid::{self, INTERNAL};
@@ -677,6 +678,122 @@ impl Definer<'_, '_> {
             }
             None => format!("{} {}", kind.word(), object.oid),
         }
+    }
+
+    /// The object of an `ALTER TEXT SEARCH` statement, as `get_object_address` finds it: the kind, the OID, the schema, the name and the owner.
+    fn ts_target(
+        &self,
+        objtype: ObjectType,
+        object: Option<&Node>,
+    ) -> Result<(Kind, u32, u32, String, u32)> {
+        let Some(kind) = Kind::of(objtype) else {
+            return Err(Error::internal("not an object of text search"));
+        };
+        let found = self.ts_oid(kind, &name_list(object))?;
+        let (namespace, name, owner) = self.ts_row(kind, found).unwrap_or_default();
+        Ok((kind, found, namespace, name, owner))
+    }
+
+    /// The error of a change of a built-in object of text search, which rupg cannot change.
+    fn check_ts_builtin(object: u32) -> Result<()> {
+        if object < FIRST_NORMAL_OID {
+            return Err(not_yet("a change of a built-in object of text search", None));
+        }
+        Ok(())
+    }
+
+    /// The error of `AlterObjectRename_internal` and `AlterObjectNamespace_internal` for a template or a parser, which has no owner, when the user is not a superuser. `action` is the words of the change.
+    fn ts_superuser(&self, kind: Kind, object: u32, action: &str) -> Error {
+        let shown = self.describe_ts(ObjRef::new(kind.class(), object));
+        Error::new(
+            SqlState::INSUFFICIENT_PRIVILEGE,
+            format!("must be superuser to {action} {shown}"),
+        )
+    }
+
+    /// `AlterObjectRename_internal` for `ALTER TEXT SEARCH ... RENAME TO`. A user who is not a superuser must own the object and be able to create in its schema. A template and a parser need a superuser.
+    pub(super) fn rename_ts(&mut self, stmt: &RenameStmt) -> Result<()> {
+        let newname = stmt.newname.as_deref().unwrap_or_default();
+        let (kind, found, namespace, name, owner) =
+            self.ts_target(stmt.renameType, stmt.object.as_ref())?;
+        if !self.is_superuser() {
+            if matches!(kind, Kind::Template | Kind::Parser) {
+                return Err(self.ts_superuser(kind, found, "rename"));
+            }
+            if !self.owns(owner) {
+                return Err(not_owner(kind.word(), &name));
+            }
+            self.check_create_in(namespace, None)?;
+        }
+        if self.ts_in(kind, namespace, newname).is_some() {
+            return Err(self.ts_conflict(kind, newname, namespace));
+        }
+        Self::check_ts_builtin(found)?;
+        self.catalog.rename_ts(kind.class(), found, newname);
+        Ok(())
+    }
+
+    /// `AlterObjectOwner_internal` for `ALTER TEXT SEARCH DICTIONARY` and `ALTER TEXT SEARCH CONFIGURATION` with `OWNER TO`. A user who is not a superuser must own the object and be able to become the new owner, and the new owner must be able to create in the schema of the object.
+    pub(super) fn alter_ts_owner(&mut self, stmt: &AlterOwnerStmt) -> Result<()> {
+        let role = stmt.newowner.as_deref().cloned().unwrap_or_default();
+        let new = self.role_oid(&role)?;
+        let (kind, found, namespace, name, owner) =
+            self.ts_target(stmt.objectType, stmt.object.as_ref())?;
+        if owner == new {
+            return Ok(());
+        }
+        if !self.is_superuser() {
+            if !self.owns(owner) {
+                return Err(not_owner(kind.word(), &name));
+            }
+            self.check_can_set_role(new)?;
+            if !self.may_create_in(namespace, new) {
+                return Err(Error::new(
+                    SqlState::INSUFFICIENT_PRIVILEGE,
+                    format!("permission denied for schema {}", self.schema_name(namespace)),
+                ));
+            }
+        }
+        Self::check_ts_builtin(found)?;
+        self.catalog.set_object_owner(ObjRef::new(kind.class(), found), new, "", "")
+    }
+
+    /// `ExecAlterObjectSchemaStmt` and `AlterObjectNamespace_internal` for `ALTER TEXT SEARCH ... SET SCHEMA`: `LookupCreationNamespace` for the new schema, then `CheckSetNamespace`, the checks of the owner and of the name, and the move. An object that is in the schema already needs no change. A template and a parser need a superuser.
+    pub(super) fn alter_ts_schema(&mut self, stmt: &AlterObjectSchemaStmt) -> Result<()> {
+        let (kind, found, old, name, owner) =
+            self.ts_target(stmt.objectType, stmt.object.as_ref())?;
+        let schema = stmt.newschema.as_deref().unwrap_or_default();
+        let namespace = self.lookup_creation_namespace(schema)?;
+        if old == namespace {
+            return Ok(());
+        }
+        self.check_set_namespace(old, namespace)?;
+        if !self.is_superuser() {
+            if matches!(kind, Kind::Template | Kind::Parser) {
+                return Err(self.ts_superuser(kind, found, "set schema of"));
+            }
+            if !self.owns(owner) {
+                return Err(not_owner(kind.word(), &name));
+            }
+        }
+        if self.ts_in(kind, namespace, &name).is_some() {
+            return Err(self.ts_conflict(kind, &name, namespace));
+        }
+        Self::check_ts_builtin(found)?;
+        self.catalog.set_ts_namespace(kind.class(), found, namespace);
+        Ok(())
+    }
+
+    /// `report_namespace_conflict` for an object of text search.
+    fn ts_conflict(&self, kind: Kind, name: &str, namespace: u32) -> Error {
+        Error::new(
+            SqlState::DUPLICATE_OBJECT,
+            format!(
+                "{} \"{name}\" already exists in schema \"{}\"",
+                kind.word(),
+                self.schema_name(namespace)
+            ),
+        )
     }
 
     /// The object of `COMMENT ON TEXT SEARCH`, after the check of its owner.

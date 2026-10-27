@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- ALTER TEXT SEARCH TEMPLATE, PARSER, DICTIONARY and CONFIGURATION with RENAME TO, OWNER TO and SET SCHEMA, with the checks of PG (#944).
 - DDL ownership checks now accept a member of the owner role, as PG's has_privs_of_role does. For example, ALTER FUNCTION ... SET SCHEMA works after OWNER TO a role that the current user is a member of (#943).
 - `CREATE [DEFAULT] CONVERSION`, `ALTER CONVERSION` with `RENAME TO`, `OWNER TO` and `SET SCHEMA`, `COMMENT ON CONVERSION` and `DROP CONVERSION` now work for the conversions of a session, with the rows of `pg_conversion` and `pg_depend` and the checks and errors of PostgreSQL (#942).
 - A query with no `ORDER BY` gives the rows of an index scan in the order of the keys of the index, forward or backward, and the rows with equal keys in the order of the heap, as a `btree` index gives them. The order holds for a query of one table and for the sides of a nested loop and of a hash join (#941).

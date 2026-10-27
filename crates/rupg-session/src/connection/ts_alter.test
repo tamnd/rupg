@@ -1,0 +1,188 @@
+> CREATE ROLE regress_ts1; CREATE ROLE regress_ts2; CREATE ROLE regress_ts3;
+CREATE ROLE
+CREATE ROLE
+CREATE ROLE
+> GRANT regress_ts3 TO regress_ts1;
+GRANT ROLE
+> CREATE SCHEMA ts_nsp1; CREATE SCHEMA ts_nsp2;
+CREATE SCHEMA
+CREATE SCHEMA
+> GRANT ALL ON SCHEMA ts_nsp1 TO PUBLIC; GRANT ALL ON SCHEMA ts_nsp2 TO PUBLIC;
+GRANT
+GRANT
+> SET search_path = ts_nsp1, public;
+SET
+search_path=ts_nsp1, public
+> CREATE TEXT SEARCH TEMPLATE ts_temp1 (lexize=dsimple_lexize);
+CREATE TEXT SEARCH TEMPLATE
+> CREATE TEXT SEARCH TEMPLATE ts_temp2 (lexize=dsimple_lexize);
+CREATE TEXT SEARCH TEMPLATE
+> CREATE TEXT SEARCH PARSER ts_prs1 (start=prsd_start, gettoken=prsd_nexttoken, end=prsd_end, lextypes=prsd_lextype);
+CREATE TEXT SEARCH PARSER
+> CREATE TEXT SEARCH PARSER ts_prs2 (start=prsd_start, gettoken=prsd_nexttoken, end=prsd_end, lextypes=prsd_lextype);
+CREATE TEXT SEARCH PARSER
+> ALTER TEXT SEARCH TEMPLATE ts_temp1 RENAME TO ts_temp2;
+ERROR 42710 text search template "ts_temp2" already exists in schema "ts_nsp1"
+> ALTER TEXT SEARCH TEMPLATE ts_temp1 RENAME TO ts_temp3;
+ALTER TEXT SEARCH TEMPLATE
+> ALTER TEXT SEARCH TEMPLATE ts_temp2 SET SCHEMA ts_nsp2;
+ALTER TEXT SEARCH TEMPLATE
+> ALTER TEXT SEARCH TEMPLATE ts_temp2 SET SCHEMA ts_nsp2;
+ERROR 42704 text search template "ts_temp2" does not exist
+> ALTER TEXT SEARCH TEMPLATE ts_nsp2.ts_temp2 SET SCHEMA ts_nsp2;
+ALTER TEXT SEARCH TEMPLATE
+> ALTER TEXT SEARCH TEMPLATE ts_missing RENAME TO x;
+ERROR 42704 text search template "ts_missing" does not exist
+> ALTER TEXT SEARCH PARSER ts_prs1 RENAME TO ts_prs2;
+ERROR 42710 text search parser "ts_prs2" already exists in schema "ts_nsp1"
+> ALTER TEXT SEARCH PARSER ts_prs1 RENAME TO ts_prs3;
+ALTER TEXT SEARCH PARSER
+> ALTER TEXT SEARCH PARSER ts_prs2 SET SCHEMA ts_nsp2;
+ALTER TEXT SEARCH PARSER
+> ALTER TEXT SEARCH PARSER ts_prs3 SET SCHEMA no_such_schema;
+ERROR 3F000 schema "no_such_schema" does not exist
+> ALTER TEXT SEARCH PARSER ts_prs3 SET SCHEMA pg_temp;
+ERROR 0A000 cannot move objects into or out of temporary schemas
+> CREATE TEMP TABLE ts_t (a int);
+CREATE TABLE
+> ALTER TEXT SEARCH PARSER ts_prs3 SET SCHEMA pg_temp;
+ERROR 0A000 cannot move objects into or out of temporary schemas
+> DROP TABLE ts_t;
+DROP TABLE
+> SET SESSION AUTHORIZATION regress_ts1;
+SET
+session_authorization=regress_ts1
+is_superuser=off
+> ALTER TEXT SEARCH TEMPLATE ts_temp3 RENAME TO ts_temp4;
+ERROR 42501 must be superuser to rename text search template ts_temp3
+> ALTER TEXT SEARCH TEMPLATE ts_temp3 SET SCHEMA ts_nsp2;
+ERROR 42501 must be superuser to set schema of text search template ts_temp3
+> ALTER TEXT SEARCH PARSER ts_prs3 RENAME TO ts_prs4;
+ERROR 42501 must be superuser to rename text search parser ts_prs3
+> ALTER TEXT SEARCH PARSER ts_prs3 SET SCHEMA ts_nsp2;
+ERROR 42501 must be superuser to set schema of text search parser ts_prs3
+> CREATE TEXT SEARCH DICTIONARY ts_dict1 (template=simple);
+CREATE TEXT SEARCH DICTIONARY
+> CREATE TEXT SEARCH DICTIONARY ts_dict2 (template=simple);
+CREATE TEXT SEARCH DICTIONARY
+> CREATE TEXT SEARCH CONFIGURATION ts_conf1 (copy=english);
+CREATE TEXT SEARCH CONFIGURATION
+> CREATE TEXT SEARCH CONFIGURATION ts_conf2 (copy=english);
+CREATE TEXT SEARCH CONFIGURATION
+> ALTER TEXT SEARCH DICTIONARY ts_dict1 RENAME TO ts_dict2;
+ERROR 42710 text search dictionary "ts_dict2" already exists in schema "ts_nsp1"
+> ALTER TEXT SEARCH DICTIONARY ts_dict1 RENAME TO ts_dict3;
+ALTER TEXT SEARCH DICTIONARY
+> ALTER TEXT SEARCH DICTIONARY ts_dict2 OWNER TO regress_ts2;
+ERROR 42501 must be able to SET ROLE "regress_ts2"
+> ALTER TEXT SEARCH DICTIONARY ts_dict2 OWNER TO regress_ts3;
+ALTER TEXT SEARCH DICTIONARY
+> ALTER TEXT SEARCH DICTIONARY ts_dict2 OWNER TO no_such_role;
+ERROR 42704 role "no_such_role" does not exist
+> ALTER TEXT SEARCH DICTIONARY ts_dict2 SET SCHEMA ts_nsp2;
+ALTER TEXT SEARCH DICTIONARY
+> ALTER TEXT SEARCH DICTIONARY ts_nsp2.ts_dict2 RENAME TO ts_dict5;
+ALTER TEXT SEARCH DICTIONARY
+> ALTER TEXT SEARCH DICTIONARY simple RENAME TO x;
+ERROR 42501 must be owner of text search dictionary simple
+> ALTER TEXT SEARCH DICTIONARY simple OWNER TO regress_ts1;
+ERROR 42501 must be owner of text search dictionary simple
+> ALTER TEXT SEARCH CONFIGURATION ts_conf1 RENAME TO ts_conf2;
+ERROR 42710 text search configuration "ts_conf2" already exists in schema "ts_nsp1"
+> ALTER TEXT SEARCH CONFIGURATION ts_conf1 RENAME TO ts_conf3;
+ALTER TEXT SEARCH CONFIGURATION
+> ALTER TEXT SEARCH CONFIGURATION ts_conf2 OWNER TO regress_ts2;
+ERROR 42501 must be able to SET ROLE "regress_ts2"
+> ALTER TEXT SEARCH CONFIGURATION ts_conf2 OWNER TO regress_ts3;
+ALTER TEXT SEARCH CONFIGURATION
+> ALTER TEXT SEARCH CONFIGURATION ts_conf2 SET SCHEMA ts_nsp2;
+ALTER TEXT SEARCH CONFIGURATION
+> ALTER TEXT SEARCH CONFIGURATION english SET SCHEMA ts_nsp2;
+ERROR 42501 must be owner of text search configuration english
+> SET SESSION AUTHORIZATION regress_ts2;
+SET
+session_authorization=regress_ts2
+> CREATE TEXT SEARCH DICTIONARY ts_dict1 (template=simple);
+CREATE TEXT SEARCH DICTIONARY
+> CREATE TEXT SEARCH DICTIONARY ts_dict2 (template=simple);
+CREATE TEXT SEARCH DICTIONARY
+> CREATE TEXT SEARCH CONFIGURATION ts_conf1 (copy=english);
+CREATE TEXT SEARCH CONFIGURATION
+> CREATE TEXT SEARCH CONFIGURATION ts_conf2 (copy=english);
+CREATE TEXT SEARCH CONFIGURATION
+> ALTER TEXT SEARCH DICTIONARY ts_dict3 RENAME TO ts_dict4;
+ERROR 42501 must be owner of text search dictionary ts_dict3
+> ALTER TEXT SEARCH DICTIONARY ts_dict1 RENAME TO ts_dict4;
+ALTER TEXT SEARCH DICTIONARY
+> ALTER TEXT SEARCH DICTIONARY ts_dict3 OWNER TO regress_ts2;
+ERROR 42501 must be owner of text search dictionary ts_dict3
+> ALTER TEXT SEARCH DICTIONARY ts_dict2 OWNER TO regress_ts3;
+ERROR 42501 must be able to SET ROLE "regress_ts3"
+> ALTER TEXT SEARCH DICTIONARY ts_dict3 SET SCHEMA ts_nsp2;
+ERROR 42501 must be owner of text search dictionary ts_dict3
+> ALTER TEXT SEARCH DICTIONARY ts_dict2 SET SCHEMA ts_nsp2;
+ALTER TEXT SEARCH DICTIONARY
+> ALTER TEXT SEARCH CONFIGURATION ts_conf3 RENAME TO ts_conf4;
+ERROR 42501 must be owner of text search configuration ts_conf3
+> ALTER TEXT SEARCH CONFIGURATION ts_conf1 RENAME TO ts_conf4;
+ALTER TEXT SEARCH CONFIGURATION
+> ALTER TEXT SEARCH CONFIGURATION ts_conf3 OWNER TO regress_ts2;
+ERROR 42501 must be owner of text search configuration ts_conf3
+> ALTER TEXT SEARCH CONFIGURATION ts_conf3 SET SCHEMA ts_nsp2;
+ERROR 42501 must be owner of text search configuration ts_conf3
+> ALTER TEXT SEARCH CONFIGURATION ts_conf2 SET SCHEMA ts_nsp2;
+ERROR 42710 text search configuration "ts_conf2" already exists in schema "ts_nsp2"
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+is_superuser=on
+> SELECT nspname, prsname FROM pg_ts_parser t, pg_namespace n WHERE t.prsnamespace = n.oid AND nspname LIKE 'ts_nsp%' ORDER BY 1, 2;
+fields nspname@pg_namespace.2:19:64:-1,prsname@pg_ts_parser.2:19:64:-1
+row ts_nsp1,ts_prs3
+row ts_nsp2,ts_prs2
+SELECT 2
+> SELECT nspname, tmplname FROM pg_ts_template t, pg_namespace n WHERE t.tmplnamespace = n.oid AND nspname LIKE 'ts_nsp%' ORDER BY 1, 2;
+fields nspname@pg_namespace.2:19:64:-1,tmplname@pg_ts_template.2:19:64:-1
+row ts_nsp1,ts_temp3
+row ts_nsp2,ts_temp2
+SELECT 2
+> SELECT nspname, dictname, rolname FROM pg_ts_dict t, pg_namespace n, pg_authid a WHERE t.dictnamespace = n.oid AND t.dictowner = a.oid AND nspname LIKE 'ts_nsp%' ORDER BY 1, 2;
+fields nspname@pg_namespace.2:19:64:-1,dictname@pg_ts_dict.2:19:64:-1,rolname@pg_authid.2:19:64:-1
+row ts_nsp1,ts_dict3,regress_ts1
+row ts_nsp1,ts_dict4,regress_ts2
+row ts_nsp2,ts_dict2,regress_ts2
+row ts_nsp2,ts_dict5,regress_ts3
+SELECT 4
+> SELECT nspname, cfgname, rolname FROM pg_ts_config t, pg_namespace n, pg_authid a WHERE t.cfgnamespace = n.oid AND t.cfgowner = a.oid AND nspname LIKE 'ts_nsp%' ORDER BY 1, 2;
+fields nspname@pg_namespace.2:19:64:-1,cfgname@pg_ts_config.2:19:64:-1,rolname@pg_authid.2:19:64:-1
+row ts_nsp1,ts_conf2,regress_ts2
+row ts_nsp1,ts_conf3,regress_ts1
+row ts_nsp1,ts_conf4,regress_ts2
+row ts_nsp2,ts_conf2,regress_ts3
+SELECT 4
+> SELECT pg_describe_object(classid, objid, objsubid) AS obj, pg_describe_object(refclassid, refobjid, refobjsubid) AS ref, deptype FROM pg_depend WHERE classid IN ('pg_ts_dict'::regclass, 'pg_ts_config'::regclass, 'pg_ts_parser'::regclass, 'pg_ts_template'::regclass) AND objid >= 16384 AND refclassid = 'pg_namespace'::regclass ORDER BY 1, 2;
+fields obj:25:-1:-1,ref:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row text search configuration ts_conf2,schema ts_nsp1,n
+row text search configuration ts_conf3,schema ts_nsp1,n
+row text search configuration ts_conf4,schema ts_nsp1,n
+row text search configuration ts_nsp2.ts_conf2,schema ts_nsp2,n
+row text search dictionary ts_dict3,schema ts_nsp1,n
+row text search dictionary ts_dict4,schema ts_nsp1,n
+row text search dictionary ts_nsp2.ts_dict2,schema ts_nsp2,n
+row text search dictionary ts_nsp2.ts_dict5,schema ts_nsp2,n
+row text search parser ts_nsp2.ts_prs2,schema ts_nsp2,n
+row text search parser ts_prs3,schema ts_nsp1,n
+row text search template ts_nsp2.ts_temp2,schema ts_nsp2,n
+row text search template ts_temp3,schema ts_nsp1,n
+SELECT 12
+> SELECT to_tsvector('ts_nsp2.ts_conf2', 'The cats');
+fields to_tsvector:3614:-1:-1
+row 'cat':2
+SELECT 1
+> DROP SCHEMA ts_nsp1, ts_nsp2 CASCADE;
+NOTICE 00000 drop cascades to 12 other objects
+DROP SCHEMA
+> DROP ROLE regress_ts1; DROP ROLE regress_ts2; DROP ROLE regress_ts3;
+DROP ROLE
+DROP ROLE
+DROP ROLE

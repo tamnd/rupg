@@ -2382,7 +2382,7 @@ impl Connection {
     }
 }
 
-/// `AlterObjectTypeCommandTag` for the kinds of relations, of types, of functions, of operators, of operator classes and families, and of statistics objects: the tag of `ALTER TABLE` and of `ALTER ... RENAME` for the kind of the object.
+/// `AlterObjectTypeCommandTag` for the kinds of relations, of types, of functions, of operators, of operator classes and families, of statistics objects, of conversions and of objects of text search: the tag of `ALTER TABLE` and of `ALTER ... RENAME` for the kind of the object.
 fn alter_tag(kind: ObjectType) -> CommandTag {
     match kind {
         ObjectType::OBJECT_INDEX => CommandTag::AlterIndex,
@@ -2404,6 +2404,10 @@ fn alter_tag(kind: ObjectType) -> CommandTag {
         ObjectType::OBJECT_OPFAMILY => CommandTag::AlterOperatorFamily,
         ObjectType::OBJECT_STATISTIC_EXT => CommandTag::AlterStatistics,
         ObjectType::OBJECT_CONVERSION => CommandTag::AlterConversion,
+        ObjectType::OBJECT_TSPARSER => CommandTag::AlterTextSearchParser,
+        ObjectType::OBJECT_TSDICTIONARY => CommandTag::AlterTextSearchDictionary,
+        ObjectType::OBJECT_TSTEMPLATE => CommandTag::AlterTextSearchTemplate,
+        ObjectType::OBJECT_TSCONFIGURATION => CommandTag::AlterTextSearchConfiguration,
         _ => CommandTag::AlterTable,
     }
 }
@@ -4029,6 +4033,12 @@ mod tests {
     #[test]
     fn conversion_create() {
         big_stack(|| script(include_str!("connection/conversion_create.test")));
+    }
+
+    /// `ALTER TEXT SEARCH` for templates, parsers, dictionaries and configurations with `RENAME TO`, `OWNER TO` and `SET SCHEMA`, with the checks of `AlterObjectRename_internal`, `AlterObjectOwner_internal` and `AlterObjectNamespace_internal`: the owner, a member of the owner role, a superuser for a template or a parser, the name in the schema, and the temporary schema. `connection/ts_alter.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn ts_alter() {
+        big_stack(|| script(include_str!("connection/ts_alter.test")));
     }
 
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
