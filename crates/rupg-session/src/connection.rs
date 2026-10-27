@@ -3802,6 +3802,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/opclass_options.test")));
     }
 
+    /// `ALTER TABLE ONLY ... ADD PRIMARY KEY` on a partitioned table makes an index that is not valid on that table alone, and checks that each partition has a valid and inheritable not-null constraint. `REPLICA IDENTITY USING INDEX` accepts that index and rejects an index on a column with a not-null constraint that is `NOT VALID`. `connection/replica_identity_only.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn replica_identity_only() {
+        big_stack(|| script(include_str!("connection/replica_identity_only.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {
