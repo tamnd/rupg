@@ -8,7 +8,7 @@ use std::time::Duration;
 use rupg_catalog::{Catalog, Database, SequenceData, Tablespace};
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Backend, RelationCounts};
-use rupg_pgcatalog::roles::Roles;
+use rupg_pgcatalog::roles::{DatabaseChange, Roles};
 use rupg_platform::Tasks;
 
 use crate::advisory::Locks;
@@ -182,15 +182,41 @@ impl Store {
         self.state().databases.values().find(|db| db.row.name == name).map(|db| db.row.clone())
     }
 
-    /// The rows of `pg_database` of the databases that `CREATE DATABASE` made, in the order of their OIDs. The rows of `initdb` are static rows.
+    /// The rows of `pg_database` of the databases that `CREATE DATABASE` made, and the rows of `initdb` that a statement changed, in the order of their OIDs. The other rows of `initdb` are static rows.
     pub fn created(&self) -> Arc<[Database]> {
         let initdb = Database::initdb();
         self.state()
             .databases
             .values()
-            .filter(|db| initdb.iter().all(|row| row.oid != db.row.oid))
+            .filter(|db| initdb.iter().all(|row| *row != db.row))
             .map(|db| db.row.clone())
             .collect()
+    }
+
+    /// [`Store::created`] with the rows that a transaction changed and did not commit yet.
+    pub(crate) fn databases_with(&self, changes: &[DatabaseChange]) -> Arc<[Database]> {
+        if changes.is_empty() {
+            return self.created();
+        }
+        let initdb = Database::initdb();
+        self.state()
+            .databases
+            .values()
+            .map(|db| {
+                let mut row = db.row.clone();
+                if let Some(change) = changes.iter().find(|c| c.oid == row.oid) {
+                    row.owner = change.owner;
+                    row.acl.clone_from(&change.acl);
+                }
+                row
+            })
+            .filter(|row| initdb.iter().all(|i| i != row))
+            .collect()
+    }
+
+    /// `datdba` of a database at the last commit, or the bootstrap superuser for a database that does not exist.
+    pub(crate) fn database_owner(&self, oid: u32) -> u32 {
+        self.state().databases.get(&oid).map_or(10, |db| db.row.owner)
     }
 
     /// The rows of `pg_tablespace` of the tablespaces that `CREATE TABLESPACE` made, in the order of their OIDs.
@@ -657,15 +683,26 @@ pub(crate) struct Lease {
 }
 
 impl Lease {
-    /// Makes the changes of the transaction the catalog of the last commit, and releases the lock. After the commit the new labels of the enum types are safe to use.
+    /// Makes the changes of the transaction the catalog of the last commit, and releases the lock. After the commit the new labels of the enum types are safe to use. The rows of `pg_database` that the transaction changed go to the store.
     pub(crate) fn commit(mut self) {
         let mut catalog = std::mem::take(&mut self.catalog);
         if catalog.has_uncommitted_enums() {
             Arc::make_mut(&mut catalog).commit_enums();
         }
+        let changes = if self.roles.databases.is_empty() {
+            Vec::new()
+        } else {
+            std::mem::take(&mut Arc::make_mut(&mut self.roles).databases)
+        };
         let mut state = self.store.state();
         if let Some(db) = state.databases.get_mut(&self.database) {
             db.committed = catalog;
+        }
+        for change in changes {
+            if let Some(db) = state.databases.get_mut(&change.oid) {
+                db.row.owner = change.owner;
+                db.row.acl = change.acl;
+            }
         }
         if !Arc::ptr_eq(&self.base, &self.roles) {
             state.roles = if Arc::ptr_eq(&state.roles, &self.base) {
@@ -717,7 +754,7 @@ fn rebase(now: &Roles, base: &Roles, work: &Roles) -> Roles {
             None => {}
         }
     }
-    Roles { roles, members }
+    Roles { roles, members, databases: Vec::new() }
 }
 
 impl Drop for Lease {

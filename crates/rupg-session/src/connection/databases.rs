@@ -1,15 +1,19 @@
-//! `CREATE DATABASE`, `ALTER DATABASE ... SET` and `DROP DATABASE`: the checks of `createdb` and `dropdb` in the order of PostgreSQL, on the rows of `pg_database` that the store keeps. The engine has the encoding `UTF8` and the locale `C` only, so a new database must have them. The checks of PostgreSQL come first, and then the error `0A000` for an encoding or a locale that the engine does not have.
+//! `CREATE DATABASE`, `ALTER DATABASE ... SET`, `ALTER DATABASE ... OWNER TO` and `DROP DATABASE`: the checks of `createdb` and `dropdb` in the order of PostgreSQL, on the rows of `pg_database` that the store keeps. The engine has the encoding `UTF8` and the locale `C` only, so a new database must have them. The checks of PostgreSQL come first, and then the error `0A000` for an encoding or a locale that the engine does not have.
+
+use std::sync::Arc;
 
 use rupg_catalog::Database;
 use rupg_common::{Error, SqlState};
 use rupg_func::{char_to_encoding, encoding_to_char};
+use rupg_pgcatalog::roles::{DatabaseChange, Roles};
 use rupg_sql::Severity;
 use rupg_sql::nodes::{
-    AlterDatabaseSetStmt, CreatedbStmt, DefElem, DropdbStmt, Node, VariableSetKind,
+    AlterDatabaseSetStmt, AlterOwnerStmt, CreatedbStmt, DefElem, DropdbStmt, Node, VariableSetKind,
 };
 use rupg_wire::CommandTag;
 
 use super::copy::{def_boolean, def_string};
+use super::roles::{has_privs_of_role, role_name};
 use super::{Connection, Done};
 use crate::store::{Lease, NewDatabase};
 use crate::utility::{self, Notice};
@@ -281,6 +285,73 @@ impl Connection {
         utility::role_oid(&self.roles(), name, &self.user).ok_or_else(|| {
             Error::new(SqlState::UNDEFINED_OBJECT, format!("role \"{name}\" does not exist"))
         })
+    }
+
+    /// The row of `pg_database` of a database, with the changes of the transaction.
+    pub(super) fn database_row(&self, name: &str) -> Option<Database> {
+        let mut row = self.store.database(name)?;
+        if let Some(change) = self.roles().databases.iter().find(|c| c.oid == row.oid) {
+            row.owner = change.owner;
+            row.acl.clone_from(&change.acl);
+        }
+        Some(row)
+    }
+
+    /// `AlterDatabaseOwner`: the checks of the owner, of `check_can_set_role` and of `have_createdb_privilege`, and the change of `datdba` and of `datacl` with `aclnewowner`. The change is a change of the roles of the transaction, so a rollback discards it.
+    pub(super) fn alter_database_owner(
+        &self,
+        stmt: &AlterOwnerStmt,
+        me: u32,
+    ) -> Result<Done, Error> {
+        let roles = self.roles();
+        let new = match &stmt.newowner {
+            Some(spec) => self.spec_oid(&roles, spec)?,
+            None => return Err(Error::internal("ALTER DATABASE OWNER with no owner")),
+        };
+        let name = match &stmt.object {
+            Some(Node::String(name)) => &**name,
+            _ => return Err(Error::internal("ALTER DATABASE OWNER with no name")),
+        };
+        let Some(row) = self.database_row(name) else {
+            return Err(Error::new(
+                SqlState::UNDEFINED_DATABASE,
+                format!("database \"{name}\" does not exist"),
+            ));
+        };
+        if row.owner == new {
+            return Ok(Done::Tag(CommandTag::AlterDatabase));
+        }
+        let superuser = roles.superuser(me);
+        if !superuser && !has_privs_of_role(&roles, me, row.owner) {
+            return Err(Error::new(
+                SqlState::INSUFFICIENT_PRIVILEGE,
+                format!("must be owner of database {name}"),
+            ));
+        }
+        if !roles.can_set_role(me, new) {
+            return Err(Error::new(
+                SqlState::INSUFFICIENT_PRIVILEGE,
+                format!("must be able to SET ROLE \"{}\"", role_name(&roles, new)),
+            ));
+        }
+        if !superuser && !roles.attrs(me).is_some_and(|a| a.createdb) {
+            return Err(Error::new(
+                SqlState::INSUFFICIENT_PRIVILEGE,
+                "permission denied to change owner of database",
+            ));
+        }
+        let acl = row.acl.as_deref().map(|acl| {
+            rupg_catalog::acl_new_owner(acl, &role_name(&roles, row.owner), &role_name(&roles, new))
+        });
+        let mut held = self.lease.borrow_mut();
+        let Some(lease) = held.as_mut() else {
+            return Err(Error::internal("the lock of the catalog is gone"));
+        };
+        let mut work = Roles::clone(&lease.roles);
+        work.databases.retain(|c| c.oid != row.oid);
+        work.databases.push(DatabaseChange { oid: row.oid, owner: new, acl });
+        lease.roles = Arc::new(work);
+        Ok(Done::Tag(CommandTag::AlterDatabase))
     }
 
     /// `createdb`.
@@ -698,7 +769,7 @@ impl Connection {
         stmt: &AlterDatabaseSetStmt,
     ) -> Result<Done, Error> {
         let name = stmt.dbname.as_deref().unwrap_or_default();
-        let Some(row) = self.store.database(name) else {
+        let Some(row) = self.database_row(name) else {
             return Err(Error::new(
                 SqlState::UNDEFINED_DATABASE,
                 format!("database \"{name}\" does not exist"),

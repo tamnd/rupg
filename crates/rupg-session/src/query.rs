@@ -1097,7 +1097,7 @@ impl rupg_func::Session for Reader<'_> {
 
     fn databases(&self) -> Arc<[rupg_catalog::Database]> {
         match self.activity {
-            Some((_, store)) => store.created(),
+            Some((_, store)) => store.databases_with(&rupg_pgcatalog::roles::current().databases),
             None => Arc::from(Vec::new()),
         }
     }
