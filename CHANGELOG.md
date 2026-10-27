@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- DISCARD TEMP now drops the temporary objects of the session and the objects that depend on them. CREATE FUNCTION gives the NOTICE "function ... will be effectively temporary" for a function that depends on a temporary object. A BEGIN ATOMIC body now depends on the table that it writes. (#925)
 - A RETURN statement in a BEGIN ATOMIC body of a SQL function now works. It gives the value of the function, and pg_get_functiondef shows it as RETURN. (#924)
 - CREATE FUNCTION with an unquoted SQL body now rejects polymorphic arguments, as PG does. A cast failure of a scalar SQL function result now gives the detail "Actual return type is ...". A SQL function that returns SETOF void now gives no rows in FROM. (#923)
 - An error in the body of a SQL function while rupg inlines a call now has the body as the internal query and the context "SQL function \"f\" during inlining", as in PostgreSQL. A body with no statement or with more than one statement is not inlined. A call of a function whose body is an empty string now gives the error of PostgreSQL with the actual result type, and `CREATE FUNCTION` does not parse a body in a string when `check_function_bodies` is off. (#922)

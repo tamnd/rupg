@@ -526,7 +526,7 @@ fn transaction(stmt: &TransactionStmt, cx: &mut Context<'_>) -> Result<CommandTa
     }
 }
 
-/// `DISCARD ALL`, `DISCARD PLANS`, `DISCARD SEQUENCES` and `DISCARD TEMP`. The session has no plans, sequences or temporary tables yet, so only `DISCARD ALL` changes something: it resets the session authorization and all the settings.
+/// `DISCARD ALL`, `DISCARD PLANS` and `DISCARD SEQUENCES`. The session has no plans or sequence caches yet, so only `DISCARD ALL` changes something: it resets the session authorization and all the settings. `DISCARD TEMP` runs as a definition, as it drops the objects of the temporary schema.
 fn discard(stmt: &DiscardStmt, cx: &mut Context<'_>) -> Result<CommandTag, Error> {
     Ok(match stmt.target {
         DiscardMode::DISCARD_ALL => {

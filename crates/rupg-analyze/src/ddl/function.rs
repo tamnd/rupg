@@ -3,7 +3,7 @@
 //! The catalog keeps the text of the statement and the schemas of `search_path`, and the analyzer reads the body again each time a query calls the function, as it reads the query of a view. The analysis of a call uses the types of the arguments of the call, so a polymorphic argument has its actual type. The setup of a new cluster runs `CREATE FUNCTION` for the functions of `information_schema` too.
 
 use rupg_catalog::{
-    Catalog, Function, FunctionBody, ObjRef, PG_PROC, PG_TYPE, eliminate_duplicates,
+    Catalog, Function, FunctionBody, ObjRef, PG_CLASS, PG_PROC, PG_TYPE, eliminate_duplicates,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
@@ -1526,6 +1526,7 @@ impl Definer<'_, '_> {
         refs: Vec<ObjRef>,
     ) -> Result<u32> {
         let refs = self.function_refs(&function, defaults, support, refs)?;
+        self.temp_notice(&function, &refs);
         match old {
             Some(old) => self.catalog.replace_function(old.oid, function, &refs).map(|()| old.oid),
             None => {
@@ -1534,6 +1535,34 @@ impl Definer<'_, '_> {
                 Ok(oid)
             }
         }
+    }
+
+    /// `ProcedureCreate`: a function that depends on a temporary object goes away with it, and the notice tells so. A function in the temporary schema can depend on the objects of that schema. The types come first, as `ProcedureCreate` collects them first.
+    fn temp_notice(&mut self, function: &Function, refs: &[ObjRef]) {
+        if self.catalog.is_temp_schema(function.namespace) {
+            return;
+        }
+        let catalog = &*self.catalog;
+        let namespace = |object: &ObjRef| match object.class {
+            PG_TYPE => catalog.type_by_oid(object.oid).map(|t| t.namespace),
+            PG_CLASS => catalog.relation(object.oid).map(|r| r.namespace),
+            PG_PROC => catalog.function(object.oid).map(|f| f.namespace),
+            _ => None,
+        };
+        let temp = |object: &&ObjRef| namespace(object).is_some_and(|n| catalog.is_temp_schema(n));
+        let (types, others): (Vec<&ObjRef>, Vec<&ObjRef>) =
+            refs.iter().partition(|object| object.class == PG_TYPE);
+        let Some(&found) = types.iter().chain(&others).find(|object| temp(object)) else { return };
+        let found = ObjRef { sub: 0, ..*found };
+        let detail = format!("It depends on temporary {}.", self.describe(found));
+        self.an.notices.push(
+            Error::new(
+                SqlState::SUCCESSFUL_COMPLETION,
+                format!("function \"{}\" will be effectively temporary", function.name),
+            )
+            .with_detail(detail)
+            .as_notice(),
+        );
     }
 
     /// The dependencies of `ProcedureCreate` for a function: `refs`, then its support function, its defaults and its types.

@@ -259,9 +259,12 @@ fn check_view_columns(new: &[Column], old: &[Column]) -> Result<()> {
     Ok(())
 }
 
-/// The objects that a query in the body of a function refers to, as for a view, each one once.
+/// The objects that a query in the body of a function refers to, as for a view, each one once. The table that the query writes comes first, as the first entry of the range table.
 pub(super) fn function_references(catalog: &Catalog, query: &Query) -> Vec<ObjRef> {
     let mut found = Vec::new();
+    if let Some(write) = &query.write {
+        found.push(ObjRef::new(PG_CLASS, write.table));
+    }
     query_references(catalog, query, &[], &mut found);
     let mut refs = Vec::new();
     for object in found {

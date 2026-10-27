@@ -1,0 +1,70 @@
+> CREATE TABLE tq1 (i int, j int);
+CREATE TABLE
+> CREATE FUNCTION tq_ins(a int, b int) RETURNS void BEGIN ATOMIC INSERT INTO tq1 (i) SELECT a + b; END;
+CREATE FUNCTION
+> SELECT tq_ins(1, 2);
+fields tq_ins:2278:4:-1
+row NULL
+SELECT 1
+> SELECT * FROM tq1;
+fields i@tq1.1:23:4:-1,j@tq1.2:23:4:-1
+row 3,NULL
+SELECT 1
+> DROP TABLE tq1;
+ERROR 2BP01 cannot drop table tq1 because other objects depend on it
+> DROP TABLE tq1 CASCADE;
+NOTICE 00000 drop cascades to function tq_ins(integer,integer)
+DROP TABLE
+> CREATE TEMP SEQUENCE tqseq;
+CREATE SEQUENCE
+> CREATE FUNCTION tq_seq() RETURNS int RETURN nextval('tqseq');
+NOTICE 00000 function "tq_seq" will be effectively temporary
+CREATE FUNCTION
+> CREATE FUNCTION pg_temp.tq_seq2() RETURNS int RETURN nextval('tqseq');
+CREATE FUNCTION
+> CREATE TEMP TABLE tqt (a int);
+CREATE TABLE
+> CREATE FUNCTION tq_row(x tqt) RETURNS int LANGUAGE sql AS 'SELECT 1';
+NOTICE 00000 function "tq_row" will be effectively temporary
+CREATE FUNCTION
+> CREATE FUNCTION tq_def(x int DEFAULT nextval('tqseq')) RETURNS int LANGUAGE sql AS 'SELECT x';
+NOTICE 00000 function "tq_def" will be effectively temporary
+CREATE FUNCTION
+> CREATE OR REPLACE FUNCTION tq_seq() RETURNS int RETURN nextval('tqseq');
+NOTICE 00000 function "tq_seq" will be effectively temporary
+CREATE FUNCTION
+> DISCARD TEMP;
+DISCARD TEMP
+> SELECT proname FROM pg_proc WHERE proname LIKE 'tq%' ORDER BY 1;
+fields proname@pg_proc.2:19:64:-1
+SELECT 0
+> CREATE TEMP TABLE tqa (a int);
+CREATE TABLE
+> INSERT INTO tqa VALUES (1);
+INSERT 0 1
+> BEGIN;
+BEGIN
+> DISCARD TEMP;
+DISCARD TEMP
+> SELECT * FROM tqa;
+ERROR 42P01 relation "tqa" does not exist at 15
+> ROLLBACK;
+ROLLBACK
+> SELECT * FROM tqa;
+fields a@tqa.1:23:4:-1
+row 1
+SELECT 1
+> DISCARD TEMP;
+DISCARD TEMP
+> SELECT * FROM tqa;
+ERROR 42P01 relation "tqa" does not exist at 15
+> CREATE TEMP TABLE tqa (a int);
+CREATE TABLE
+> SELECT count(*) FROM tqa;
+fields count:20:8:-1
+row 0
+SELECT 1
+> DISCARD TEMP;
+DISCARD TEMP
+> DISCARD TEMP;
+DISCARD TEMP
