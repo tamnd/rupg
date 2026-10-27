@@ -4011,6 +4011,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/partial_index_proof.test")));
     }
 
+    /// `simplify_boolean_equality` turns `b = true` into `b` and `b = false` into `NOT b`, and `match_boolean_index_clause` and `match_boolean_partition_clause` match these conditions to a boolean index or partition key. A key column that such a condition makes a constant is not in the order of an index or of the partitions, unless the query sorts by it.
+    #[test]
+    fn boolean_equality() {
+        big_stack(|| script(include_str!("connection/boolean_equality.test")));
+    }
+
     /// `var_pop`, `var_samp`, `stddev_pop`, `stddev_samp`, `variance` and `stddev` of `smallint`, `integer`, `bigint` and `numeric`, with no rows, one row, equal values, `NaN`, the infinities, the limits of the integer types, sums that do not fit in 128 bits and the scales of `numeric`. `connection/variance_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn variance_aggregates() {

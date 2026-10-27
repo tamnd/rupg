@@ -271,6 +271,15 @@ impl Stats {
         }
     }
 
+    /// True when the expression is in an equivalence class of the query, as `make_pathkey_from_sortinfo` finds one with no `create_it`: a member of a class of `=`, an item of `ORDER BY`, of a window, of `GROUP BY` or of `DISTINCT`, or a side of a condition of a merge join.
+    fn has_class(&self, expr: &Expr) -> bool {
+        let same = |a: &Expr| upper::strip_relabel(a).same(upper::strip_relabel(expr));
+        self.equal.iter().any(|(members, _)| members.iter().any(same))
+            || self.sort.iter().chain(&self.window).any(|(e, _, _)| same(e))
+            || self.groups.iter().flatten().any(|(e, _, _)| same(e))
+            || self.joins.iter().flatten().any(|(e, _)| same(e))
+    }
+
     /// `make_canonical_pathkey`: the key of an order by the expression, with the other members of its equivalence class.
     pub(crate) fn order_key(&self, expr: &Expr, desc: bool, nulls_first: bool) -> OrderKey {
         let mut exprs = vec![expr.clone()];

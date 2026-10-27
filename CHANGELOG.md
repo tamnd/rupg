@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The planner turns `b = true` into `b` and `b = false` into `NOT b`, as `simplify_boolean_equality` does. A boolean index and a boolean partition key match these conditions, as `match_boolean_index_clause` and `match_boolean_partition_clause` do. A key column that such a condition makes a constant is not in the order of an index or of the partitions, unless the query sorts by it (#940).
 - The planner uses a partial index when the conditions imply its predicate by the operators of a B-tree family, as `x < 4` implies `x < 5`, also when no condition is a clause of the index. A hash index keeps the conditions that its predicate implies, and a SQL function with an argument that reads the value of a `CASE` does not inline (#938).
 
 ### Fixed
