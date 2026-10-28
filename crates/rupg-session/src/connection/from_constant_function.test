@@ -1,0 +1,83 @@
+!details
+> create table qcf (a int, t text)
+CREATE TABLE
+> insert into qcf values (1, 'x'), (2, 'y')
+INSERT 0 2
+> explain (costs off) select * from qcf, abs(-2) q where a = q
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on qcf
+row   Filter: (a = 2)
+EXPLAIN
+> select * from qcf, abs(-2) q where a = q
+fields a@qcf.1:23:4:-1,t@qcf.2:25:-1:-1,q:23:4:-1
+row 2,y,2
+SELECT 1
+> explain (costs off) select * from qcf, upper('y') q where t = lower(q)
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on qcf
+row   Filter: (t = 'y'::text)
+EXPLAIN
+> select q, a from qcf, upper('y') q where t = lower(q)
+fields q:25:-1:-1,a@qcf.1:23:4:-1
+row Y,2
+SELECT 1
+> explain (costs off) select * from qcf, random() q where a < q
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   Join Filter: ((qcf.a)::double precision < q.q)
+row   ->  Function Scan on random q
+row   ->  Seq Scan on qcf
+EXPLAIN
+> explain (costs off) select * from qcf left join abs(-1) q on a = q
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join
+row   Join Filter: (qcf.a = 1)
+row   ->  Seq Scan on qcf
+row   ->  Materialize
+row         ->  Result
+EXPLAIN
+> select * from qcf left join abs(-1) q on a = q order by a
+fields a@qcf.1:23:4:-1,t@qcf.2:25:-1:-1,q:23:4:-1
+row 1,x,1
+row 2,y,NULL
+SELECT 2
+> explain (costs off) select * from qcf, lateral abs(-1) q
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on qcf
+EXPLAIN
+> explain (costs off) select * from qcf, abs(-1) with ordinality q
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Function Scan on q
+row   ->  Seq Scan on qcf
+EXPLAIN
+> explain (costs off) select * from qcf, generate_series(1, 1) q
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Function Scan on generate_series q
+row   ->  Seq Scan on qcf
+EXPLAIN
+> explain (verbose, costs off) select q, a from qcf, abs(-2) q
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.qcf
+row   Output: 2, qcf.a
+EXPLAIN
+> select q from abs(-3) q
+fields q:23:4:-1
+row 3
+SELECT 1
+> explain (costs off) select q from abs(-3) q
+fields QUERY PLAN:25:-1:-1
+row Result
+EXPLAIN
+> select q.* from abs(null::int) q
+fields q:23:4:-1
+row NULL
+SELECT 1
+> select count(*) from qcf, abs(-1) q group by rollup (q)
+fields count:20:8:-1
+row 2
+row 2
+SELECT 2
+> drop table qcf
+DROP TABLE

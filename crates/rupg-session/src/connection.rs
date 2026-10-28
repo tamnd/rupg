@@ -6619,6 +6619,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/alter_type_domain_check.test")));
     }
 
+    /// A function in `FROM` whose call folds to a constant of a scalar type gives the constant in the places of its column, and the plan has no scan of the function. A volatile function, `WITH ORDINALITY` and a function that gives a set keep the scan.
+    #[test]
+    fn from_constant_function() {
+        big_stack(|| script(include_str!("connection/from_constant_function.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

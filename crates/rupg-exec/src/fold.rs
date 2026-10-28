@@ -81,6 +81,11 @@ fn plan(
             relation.lateral |= lateral;
         }
     }
+    if query.write.is_none() && query.set_op.is_none() {
+        for relation in &mut out.relations {
+            constant_function(relation);
+        }
+    }
     if simple {
         out.limit = None;
     } else {
@@ -198,6 +203,35 @@ fn wrap_groups(expr: &Expr, groups: &[Expr]) -> Expr {
         true
     });
     expr
+}
+
+/// `pull_up_constant_function`: a function in `FROM` with no `WITH ORDINALITY` whose one call folds to a constant of a scalar type becomes a subquery with no `FROM` that gives the constant, and the subquery then merges into the query, as the planner replaces the references to the function by the constant. A call with a column definition list, or of a composite type, stays.
+fn constant_function(relation: &mut Relation) {
+    let Some(call) = scalar_call(relation) else { return };
+    if !matches!(call.kind, ExprKind::Const(_)) {
+        return;
+    }
+    let Some(column) = relation.columns.first() else { return };
+    let target = rupg_analyze::Target {
+        name: column.name.clone(),
+        expr: call.clone(),
+        origin: None,
+        junk: false,
+    };
+    relation.function = None;
+    relation.lateral = false;
+    relation.subquery = Some(Box::new(Query { targets: vec![target], ..Query::default() }));
+}
+
+/// The one call of a function in `FROM` with no `WITH ORDINALITY` and no column definition list, of a scalar type, which [`constant_function`] pulls up when it folds to a constant.
+fn scalar_call(relation: &Relation) -> Option<&Expr> {
+    let function = relation.function.as_ref()?;
+    let ([(call, 1)], [false]) = (function.calls.as_slice(), function.coldefs.as_slice()) else {
+        return None;
+    };
+    let base = rupg_analyze::types::base(call.ty);
+    (!function.ordinality && base != oid::RECORD && !rupg_analyze::types::is_complex(base))
+        .then_some(call)
 }
 
 /// `inline_function_in_from` and `inline_sql_function_in_from`: the query of the body of the one function of a relation in `FROM`, with the arguments in the places of its parameters, or `None` when the function cannot be inlined. The relation must have no `WITH ORDINALITY` and no column definition list. The arguments must have no volatile function and no subquery. The function must be in SQL, return a set and not `void`, and must not be strict, volatile or `SECURITY DEFINER` or have settings. Its body must be one `SELECT` with no `WITH`, whose columns have the types of the columns of the relation.
@@ -764,7 +798,12 @@ impl<'a> Fold<'a> {
         if !self.values {
             return None;
         }
-        let [row] = self.relations.get(var.relation)?.values.as_deref()? else { return None };
+        let relation = self.relations.get(var.relation)?;
+        // `pull_up_constant_function`: the call of a function folds first, and only a constant takes the place of the column.
+        if let Some(call) = scalar_call(relation) {
+            return (var.attnum == 1).then_some(call);
+        }
+        let [row] = relation.values.as_deref()? else { return None };
         if row.iter().any(|e| volatile(e) || e.first_set_call().is_some()) {
             return None;
         }
