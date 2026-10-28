@@ -1017,6 +1017,9 @@ fn constraint<'a>(table: &'a Table, con: &Constraint) -> Row<'a> {
             .set("conpfeqop", oid_array(&f.pf_eq))
             .set("conppeqop", oid_array(&f.pp_eq))
             .set("conffeqop", oid_array(&f.ff_eq));
+        if !f.del_set_cols.is_empty() {
+            row.set("confdelsetcols", int2_array(&f.del_set_cols));
+        }
     }
     if con.is_exclusion() {
         row.set("conexclop", oid_array(&con.exclusion_ops));

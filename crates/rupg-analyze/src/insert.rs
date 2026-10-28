@@ -344,7 +344,7 @@ fn quote_one(name: &str) -> String {
 fn action_query(
     (action, kind): (Action, WriteKind),
     (table, only): (&str, bool),
-    names: &[&str],
+    (names, set): (&[&str], &[&str]),
     foreign: &Foreign,
 ) -> String {
     let columns: Vec<String> = names.iter().map(|name| quote_one(name)).collect();
@@ -359,7 +359,8 @@ fn action_query(
         }
         _ => {
             let value = if action == Action::SetNull { "NULL" } else { "DEFAULT" };
-            let set: Vec<String> = columns.iter().map(|c| format!(" {c} = {value}")).collect();
+            let set: Vec<String> =
+                set.iter().map(|c| format!(" {} = {value}", quote_one(c))).collect();
             format!("UPDATE {only}{table} SET{}", set.join(","))
         }
     };
@@ -1312,9 +1313,23 @@ impl Analyzer<'_> {
                     None => builtin::named_by_oid(Named::Namespace, other_rel.namespace)
                         .map_or_else(String::new, |n| n.name.to_string()),
                 };
+                // `ri_set` for a delete: the columns of `confdelsetcols`, or else all the referencing columns.
+                let set: Vec<&str> =
+                    if kind == WriteKind::Delete && !foreign.del_set_cols.is_empty() {
+                        foreign
+                            .del_set_cols
+                            .iter()
+                            .filter_map(|&attnum| {
+                                place(attnum).and_then(|at| other_rel.columns.get(at))
+                            })
+                            .map(|c| c.name.as_str())
+                            .collect()
+                    } else {
+                        names.clone()
+                    };
                 let table = format!("{}.{}", quote_one(&schema), quote_one(&other_rel.name));
                 let only = other_rel.kind != RelKind::Partitioned;
-                check.query = action_query((action, kind), (&table, only), &names, &check);
+                check.query = action_query((action, kind), (&table, only), (&names, &set), &check);
             }
             list.push(check);
         }

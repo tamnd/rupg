@@ -124,6 +124,7 @@ fn foreign_key(
             pp_eq: vec![96],
             ff_eq: vec![96],
             period: false,
+            del_set_cols: Vec::new(),
         },
     }
 }

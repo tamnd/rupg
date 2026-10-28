@@ -98,9 +98,6 @@ impl Definer<'_, '_> {
             ),
         };
         let at = place(con.location);
-        if !con.fk_del_set_cols.is_empty() {
-            return Err(not_yet("a column list for ON DELETE SET", at));
-        }
         let rv = con.pktable.as_deref().cloned().unwrap_or_default();
         let found = self.lookup_relation(&rv)?;
         let pk_name = relname(&rv).to_string();
@@ -136,6 +133,7 @@ impl Definer<'_, '_> {
                     .into(),
             ));
         }
+        let del_set_cols = self.del_set_columns(table, &fk_keys, &names(&con.fk_del_set_cols))?;
         let mut pk_names: Vec<String> =
             names(&con.pk_attrs).iter().map(|s| s.to_string()).collect();
         let (pk_keys, index, classes) = if pk_names.is_empty() {
@@ -214,6 +212,7 @@ impl Definer<'_, '_> {
             pp_eq,
             ff_eq,
             period,
+            del_set_cols,
         };
         let new = NewForeignKey {
             table,
@@ -376,6 +375,26 @@ impl Definer<'_, '_> {
         .with_detail(format!(
             "Could not translate compare type {compare} for operator family \"{family_name}\" of access method \"{method_name}\"."
         ))
+    }
+
+    /// `validateFkOnDeleteSetColumns`: the columns of `ON DELETE SET NULL` or `ON DELETE SET DEFAULT`, which must be referencing columns `keys`, with no column twice.
+    fn del_set_columns(&self, table: u32, keys: &[i16], list: &[&str]) -> Result<Vec<i16>> {
+        let columns = self.column_list(table, list)?;
+        let mut out: Vec<i16> = Vec::with_capacity(columns.len());
+        for (column, name) in columns.into_iter().zip(list) {
+            if !keys.contains(&column) {
+                return Err(Error::new(
+                    SqlState::INVALID_COLUMN_REFERENCE,
+                    format!(
+                        "column \"{name}\" referenced in ON DELETE SET action must be part of foreign key"
+                    ),
+                ));
+            }
+            if !out.contains(&column) {
+                out.push(column);
+            }
+        }
+        Ok(out)
     }
 
     /// `transformColumnNameList`: the numbers of the columns of a foreign key.
