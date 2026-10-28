@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Move a condition of `HAVING` to `WHERE` with grouping sets when it reads no item that a set does not have, and keep a copy in `HAVING` with an empty grouping set, as `subquery_planner` does (#1059).
 - Allow grouping sets where one set has a type with no order and another set has a type with no hash. The error comes only when one set needs both, as `preprocess_grouping_sets` gives it (#1058).
 - Give the groups of grouping sets in the order of the `Agg` of the plan: a pass over sorted rows gives each group of its largest set and then the groups of its smaller sets that end with the same row, and the hash tables of an `AGG_MIXED` come after the passes, each in the order of the table (#1057).
 - A grouping set makes null a constant column of a subquery that the planner pulls up, and a target that is an item of `GROUP BY` is the column of its own item when another item has the same expression (#1056).

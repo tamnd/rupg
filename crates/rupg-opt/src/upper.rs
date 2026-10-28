@@ -30,12 +30,32 @@ const FRAME_END_OFFSET_FOLLOWING: i32 = 0x4000;
 /// The most grouping sets that the planner expands, as the limit of `expand_grouping_sets` in `subquery_planner`.
 const MAX_SETS: usize = 4096;
 
-/// The conditions of `HAVING` that go to `WHERE`, and the conditions that stay in `HAVING`, as `subquery_planner` divides them. A condition with no aggregate goes to `WHERE`, but with no `GROUP BY` it also stays, because the group is there also when no row passes.
+/// The conditions of `HAVING` that go to `WHERE`, and the conditions that stay in `HAVING`, as `subquery_planner` divides them. A condition with no aggregate goes to `WHERE`, but with no `GROUP BY` or with an empty grouping set it also stays, because the group is there also when no row passes. With grouping sets, a condition that reads an item that a set does not have stays, because the item is null only in the groups.
 pub(crate) fn having_split(query: &Query) -> (Vec<&Expr>, Vec<&Expr>) {
     let mut parts = Vec::new();
     if let Some(having) = &query.having {
         exprs::and_parts(having, &mut parts);
     }
+    // `mark_nullable_by_grouping`: the items that are not in all the sets.
+    let (nullable, empty_set) = if query.grouping_sets.is_empty() {
+        (Vec::new(), false)
+    } else {
+        let sets = expand_grouping_sets(&query.grouping_sets, query.group_distinct, MAX_SETS)
+            .unwrap_or_default();
+        let nullable: Vec<&Expr> = query
+            .group
+            .iter()
+            .filter(|g| !sets.iter().all(|s| s.contains(&g.target)))
+            .map(|g| &query.targets[g.target].expr)
+            .collect();
+        (nullable, sets.iter().any(Vec::is_empty))
+    };
+    let reads_nullable = |part: &Expr| {
+        part.find(0, &mut |e, depth| {
+            (depth == 0 && nullable.iter().any(|n| n.same(e))).then_some(())
+        })
+        .is_some()
+    };
     let (mut to_where, mut keep) = (Vec::new(), Vec::new());
     for part in parts {
         let mut aggs = Vec::new();
@@ -44,11 +64,11 @@ pub(crate) fn having_split(query: &Query) -> (Vec<&Expr>, Vec<&Expr>) {
             || has_grouping(part)
             || exprs::volatile(part)
             || has_sublink(part)
-            || !query.grouping_sets.is_empty()
+            || reads_nullable(part)
             || grouping_conflict(query, part);
         if stays {
             keep.push(part);
-        } else if !query.group.is_empty() {
+        } else if !query.group.is_empty() && !empty_set {
             to_where.push(part);
         } else {
             to_where.push(part);

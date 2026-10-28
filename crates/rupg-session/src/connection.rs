@@ -6460,6 +6460,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/grouping_set_hash.test")));
     }
 
+    /// With grouping sets, a condition of `HAVING` with no aggregate goes to `WHERE` when it reads no item that a set does not have, as `subquery_planner` moves it. With an empty grouping set, a condition with no column also stays in `HAVING`. `connection/grouping_set_having.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn grouping_set_having() {
+        big_stack(|| script(include_str!("connection/grouping_set_having.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
