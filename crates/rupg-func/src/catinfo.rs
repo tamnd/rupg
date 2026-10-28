@@ -126,7 +126,12 @@ fn col_description(call: &Call<'_>, args: &[Value]) -> Result<Value> {
 /// `shobj_description(oid, name)`: the comment of a shared object of the catalog with the name.
 fn shobj_description(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     let oid = oid_arg(args, 0)?;
-    Ok(comment(catalog_oid(args)?.and_then(|class| builtin::shared_description(oid, class))))
+    let Some(class) = catalog_oid(args)? else { return Ok(Value::Null) };
+    let roles = rupg_pgcatalog::roles::current();
+    Ok(comment(match roles.shared_comment(class, oid) {
+        Some(text) => text,
+        None => builtin::shared_description(oid, class),
+    }))
 }
 
 /// `pg_is_other_temp_schema(oid)`: `isOtherTempNamespace`, true for a temporary schema of another session.

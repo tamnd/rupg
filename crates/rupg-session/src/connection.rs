@@ -6322,6 +6322,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/alter_database.test")));
     }
 
+    /// `COMMENT ON ROLE`, `COMMENT ON DATABASE` and `COMMENT ON TABLESPACE` give the comments of `shobj_description` and `pg_shdescription`, with the checks of `check_object_ownership`, and a rollback discards them. `connection/comment_shared.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn comment_shared() {
+        big_stack(|| script(include_str!("connection/comment_shared.test")));
+    }
+
     /// An index depends once on each column of its keys, as `record_object_address_dependencies` records them, and its expressions add their own dependencies. `connection/index_depend.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn index_depend() {

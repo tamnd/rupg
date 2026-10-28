@@ -5,11 +5,11 @@ use std::sync::Arc;
 use rupg_catalog::{Catalog, ObjRef};
 use rupg_common::{Error, SqlState};
 use rupg_func::Session;
-use rupg_pgcatalog::roles::{Attrs, Member, Role, Roles};
+use rupg_pgcatalog::roles::{Attrs, Member, PG_AUTHID, Role, Roles};
 use rupg_sql::Severity;
 use rupg_sql::nodes::{
-    AlterRoleStmt, CreateRoleStmt, DefElem, DropBehavior, DropRoleStmt, GrantRoleStmt, Node,
-    ObjectType, RenameStmt, RoleSpec, RoleSpecType, RoleStmtType,
+    AlterRoleStmt, CommentStmt, CreateRoleStmt, DefElem, DropBehavior, DropRoleStmt, GrantRoleStmt,
+    Node, ObjectType, RenameStmt, RoleSpec, RoleSpecType, RoleStmtType,
 };
 use rupg_types::{Value, oid};
 use rupg_wire::{
@@ -47,6 +47,10 @@ pub(crate) fn is_role_statement(node: &Node) -> bool {
         | Node::DropRoleStmt(_)
         | Node::GrantRoleStmt(_) => true,
         Node::RenameStmt(stmt) => stmt.renameType == ObjectType::OBJECT_ROLE,
+        Node::CommentStmt(stmt) => matches!(
+            stmt.objtype,
+            ObjectType::OBJECT_ROLE | ObjectType::OBJECT_DATABASE | ObjectType::OBJECT_TABLESPACE
+        ),
         _ => false,
     }
 }
@@ -392,6 +396,10 @@ impl Connection {
             Node::RenameStmt(stmt) => {
                 self.rename_role(&mut work, stmt, notices)?;
                 CommandTag::AlterRole
+            }
+            Node::CommentStmt(stmt) => {
+                self.comment_shared(&mut work, stmt, notices)?;
+                CommandTag::Comment
             }
             _ => return Err(Error::internal("not a statement of roles")),
         };
@@ -948,7 +956,86 @@ impl Connection {
                 .with_detail(detail));
             }
             work.roles.retain(|r| r.oid != roleid);
+            // `deleteSharedDependencyRecordsFor` and `DeleteSharedComments`.
+            if work.shared_comment(PG_AUTHID, roleid).is_some() {
+                work.set_shared_comment(PG_AUTHID, roleid, None);
+            }
         }
+        Ok(())
+    }
+
+    /// `CommentObject` for a role, a database or a tablespace, with the checks of `check_object_ownership`. A database that does not exist gives a warning, as for `pg_restore`. An empty comment removes the comment.
+    fn comment_shared(
+        &self,
+        work: &mut Roles,
+        stmt: &CommentStmt,
+        notices: &mut Vec<Notice>,
+    ) -> Result<(), Error> {
+        let Some(Node::String(name)) = &stmt.object else {
+            return Err(Error::internal("COMMENT ON with no name"));
+        };
+        let me = self.current_role();
+        let (class, oid) = match stmt.objtype {
+            ObjectType::OBJECT_DATABASE => {
+                let Some(row) = self.database_row(name) else {
+                    notices.push(Notice {
+                        severity: Severity::Warning,
+                        error: Error::new(
+                            SqlState::UNDEFINED_DATABASE,
+                            format!("database \"{name}\" does not exist"),
+                        ),
+                    });
+                    return Ok(());
+                };
+                if !has_privs_of_role(work, me, row.owner) {
+                    return Err(Error::new(
+                        SqlState::INSUFFICIENT_PRIVILEGE,
+                        format!("must be owner of database {name}"),
+                    ));
+                }
+                (rupg_catalog::PG_DATABASE, row.oid)
+            }
+            ObjectType::OBJECT_TABLESPACE => {
+                let Some((oid, owner)) = self.tablespace_oid(name) else {
+                    return Err(Error::new(
+                        SqlState::UNDEFINED_OBJECT,
+                        format!("tablespace \"{name}\" does not exist"),
+                    ));
+                };
+                if !has_privs_of_role(work, me, owner) {
+                    return Err(Error::new(
+                        SqlState::INSUFFICIENT_PRIVILEGE,
+                        format!("must be owner of tablespace {name}"),
+                    ));
+                }
+                (rupg_catalog::PG_TABLESPACE, oid)
+            }
+            _ => {
+                let roleid = role_oid(work, name)?;
+                let denied = |detail: String| {
+                    Error::new(SqlState::INSUFFICIENT_PRIVILEGE, "permission denied")
+                        .with_detail(detail)
+                };
+                if work.superuser(roleid) {
+                    if !work.superuser(me) {
+                        return Err(denied(
+                            "The current user must have the SUPERUSER attribute.".into(),
+                        ));
+                    }
+                } else if !self.createrole(work) {
+                    return Err(denied(
+                        "The current user must have the CREATEROLE attribute.".into(),
+                    ));
+                } else if !is_admin_of_role(work, me, roleid) {
+                    return Err(denied(format!(
+                        "The current user must have the ADMIN option on role \"{name}\"."
+                    )));
+                }
+                (PG_AUTHID, roleid)
+            }
+        };
+        let text = stmt.comment.as_deref().filter(|text| !text.is_empty()).map(str::to_owned);
+        work.set_shared_comment(class, oid, text);
         Ok(())
     }
 
