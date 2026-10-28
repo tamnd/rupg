@@ -6199,6 +6199,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/index_only_returnable.test")));
     }
 
+    /// A `gist` or `spgist` index gives the order of `ORDER BY` of a distance from the column, with the ordering operator in `Order By`, as `match_pathkeys_to_index` finds it. A key in descending order needs a sort, and a scan that gives the first key of the order goes under an incremental sort. `connection/index_order_by.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn index_order_by() {
+        big_stack(|| script(include_str!("connection/index_order_by.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

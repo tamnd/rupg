@@ -349,10 +349,14 @@ fn index_paths<'q>(
             continue;
         }
         let clauses = match_clauses(table.r, index, &restrict(index, table.r, &all));
-        let costs = index_cost(table, index, &clauses, stats);
         let only = index_only(index, &read);
         let forward = order(level, table.r, index, &quals, false, stats);
-        let useful = stats.useful(&BTreeSet::from([table.r]), &forward);
+        let mut useful = stats.useful(&BTreeSet::from([table.r]), &forward);
+        let (order_by, ordered) = order_by(table.r, index, stats);
+        if !ordered.is_empty() {
+            useful = ordered;
+        }
+        let costs = ordered_cost(table, index, &clauses, &order_by, stats);
         // `useful_predicate`: the conditions imply the predicate of a partial index, so its scan is a path also with no clause.
         if !clauses.is_empty() || !useful.is_empty() || only || !index.predicate.is_empty() {
             // A backward scan has the clauses and the costs of the forward scan, so `choose_bitmap_and` keeps the forward scan.
@@ -361,13 +365,14 @@ fn index_paths<'q>(
                 bitmaps.push(Bitmap::Index(path));
             }
             if gettuple(index) {
-                out.push(scan(level, table, index, &clauses, costs, only, false, useful, stats));
+                let ordered = (&order_by[..], useful);
+                out.push(scan(level, table, index, &clauses, costs, only, false, ordered, stats));
             }
         }
         let backward = order(level, table.r, index, &quals, true, stats);
         let useful = stats.useful(&BTreeSet::from([table.r]), &backward);
         if !useful.is_empty() {
-            out.push(scan(level, table, index, &clauses, costs, only, true, useful, stats));
+            out.push(scan(level, table, index, &clauses, costs, only, true, (&[], useful), stats));
         }
         // `skip_nonnative_saop`: with `ANY` the index gives one more bitmap.
         if index.method != BTREE_AM {
@@ -392,8 +397,9 @@ pub(super) fn reparameterize<'q>(
     stats: &Stats,
 ) -> Option<Node<'q>> {
     match &node.kind {
-        Kind::IndexScan { index, only, backward, .. } => {
+        Kind::IndexScan { index, only, backward, order_by, .. } => {
             let index = indexes.iter().find(|i| i.oid == *index)?;
+            let order_by: Vec<Expr> = order_by.iter().map(|i| i.expr.as_ref().clone()).collect();
             let sources: Vec<Source<'q>> = plain
                 .quals
                 .iter()
@@ -402,8 +408,8 @@ pub(super) fn reparameterize<'q>(
                 .collect();
             let all: Vec<&Source<'q>> = sources.iter().collect();
             let clauses = match_clauses(plain.r, index, &restrict(index, plain.r, &all));
-            let costs = index_cost(table, index, &clauses, stats);
-            let order = Vec::new();
+            let costs = ordered_cost(table, index, &clauses, &order_by, stats);
+            let order = (&order_by[..], Vec::new());
             Some(scan(level, table, index, &clauses, costs, *only, *backward, order, stats).node)
         }
         Kind::BitmapHeapScan { .. } => {
@@ -556,7 +562,11 @@ pub(super) fn param_paths<'q>(
         let read = read_columns(table, stats);
         let only = index_only(index, &read);
         let forward = order(level, r, index, &quals, false, stats);
-        let useful = stats.useful(&BTreeSet::from([r]), &forward);
+        let mut useful = stats.useful(&BTreeSet::from([r]), &forward);
+        let (order_by, ordered) = order_by(r, index, stats);
+        if !ordered.is_empty() {
+            useful = ordered;
+        }
         let backward = order(level, r, index, &quals, true, stats);
         let useful_backward = stats.useful(&BTreeSet::from([r]), &backward);
         // `get_join_index_paths`: for each column, the conditions of joins of the set, the first condition of a class of the set, and the conditions of the table.
@@ -574,7 +584,7 @@ pub(super) fn param_paths<'q>(
             outer.remove(&r);
             let t = ppi(&outer);
             reseat(&mut clauses, &t, base);
-            let costs = index_cost(&t, index, &clauses, stats);
+            let costs = ordered_cost(&t, index, &clauses, &order_by, stats);
             let indexed = indexed(&t, base, &clauses);
             let enforced = t.quals[base..].to_vec();
             if useful.is_empty() || costs.2 < 1.0 {
@@ -582,12 +592,12 @@ pub(super) fn param_paths<'q>(
                 bitjoin.push(Bitmap::Index(path));
             }
             if gettuple(index) {
-                let o = useful.clone();
+                let o = (&order_by[..], useful.clone());
                 let rel = scan(level, &t, index, &clauses, costs, only, false, o, stats);
                 out.push(Param { rel, outer: outer.clone(), enforced: enforced.clone(), indexed });
             }
             if !useful_backward.is_empty() {
-                let o = useful_backward.clone();
+                let o = (&[][..], useful_backward.clone());
                 let rel = scan(level, &t, index, &clauses, costs, only, true, o, stats);
                 out.push(Param { rel, outer: outer.clone(), enforced, indexed });
             }
@@ -1323,6 +1333,49 @@ fn order(
     out
 }
 
+/// `match_pathkeys_to_index`: the ordering operators of the index that give the order of the first keys of `query_pathkeys`, and the order that the scan gives with them. Only `gist` and `spgist` have `amcanorderbyop`. A key must be ascending with the nulls last, and an expression of the key that reads only the table must be an ordering operator of a key column and a value, as `match_clause_to_ordering_op` finds it.
+fn order_by(r: usize, index: &Index, stats: &Stats) -> (Vec<Expr>, Vec<OrderKey>) {
+    let mut exprs = Vec::new();
+    let mut keys = Vec::new();
+    if !matches!(index.method, GIST_AM | SPGIST_AM) {
+        return (exprs, keys);
+    }
+    for (expr, desc, nulls_first) in &stats.query {
+        if *desc || *nulls_first {
+            break;
+        }
+        let key = stats.order_key(expr, false, false);
+        let found =
+            key.exprs.iter().filter(|m| exprs::relations(m) == BTreeSet::from([r])).find_map(|m| {
+                (0..index.keys.len()).find_map(|column| ordering_op(r, index, column, m))
+            });
+        let Some(found) = found else { break };
+        exprs.push(found);
+        keys.push(key);
+    }
+    (exprs, keys)
+}
+
+/// `match_clause_to_ordering_op`: the expression as an ordering operator of the key column `column` of the index, with the column on the left. The other side reads no column of the query and calls no volatile function. With the column on the right, the expression is the call of the commutator. The ordering operator must give the order of the default btree family of its type, `amopsortfamily`.
+fn ordering_op(r: usize, index: &Index, column: usize, expr: &Expr) -> Option<Expr> {
+    let family = *index.families.get(column)?;
+    let is_column = key_test(r, index, column)?;
+    let (op, left, right) = exprs::binary(expr)?;
+    let other_ok = |e: &Expr| exprs::relations(e).is_empty() && !exprs::volatile(e);
+    let (op, commuted) = if is_column(left) && other_ok(right) {
+        (op, false)
+    } else if is_column(right) && other_ok(left) {
+        (builtin::operator_by_oid(op)?.commutator, true)
+    } else {
+        return None;
+    };
+    let sort_family = rupg_analyze::default_opclass(expr.ty, BTREE_AM)?.family;
+    builtin::amops_of_operator(op)
+        .any(|a| a.family == family && a.purpose == b'o' && a.sort_family == sort_family)
+        .then_some(())?;
+    if commuted { exprs::commute(expr) } else { Some(expr.clone()) }
+}
+
 /// `indexcol_is_bool_constant_for_query`: true when a condition of the table makes the key column of a boolean family a constant, as `b` or `NOT b`. `build_index_pathkeys` skips such a column when it is in no equivalence class.
 fn bool_constant(r: usize, index: &Index, column: usize, quals: &[&Expr]) -> bool {
     let (Some(family), Some(is_column)) = (index.families.get(column), key_test(r, index, column))
@@ -1342,17 +1395,20 @@ fn scan<'q>(
     costs: (f64, f64, f64),
     only: bool,
     backward: bool,
-    order: Vec<OrderKey>,
+    (order_by, order): (&[Expr], Vec<OrderKey>),
     stats: &Stats,
 ) -> Rel<'q> {
     let (startup, total, filter) = index_scan_cost(table, index, clauses, costs, only, stats);
     let cond = clauses.iter().map(|c| Item { expr: c.expr.clone(), below: false }).collect();
+    let order_by =
+        order_by.iter().map(|e| Item { expr: Cow::Owned(e.clone()), below: false }).collect();
     let kind = Kind::IndexScan {
         relation: table.r,
         index: index.oid,
         only,
         backward,
         cond,
+        order_by,
         columns: index.columns.clone(),
     };
     let mut node = Node::new(kind, level.scope, Vec::new());
@@ -1753,10 +1809,21 @@ fn index_cost(
     clauses: &[Clause<'_>],
     stats: &Stats,
 ) -> (f64, f64, f64) {
+    ordered_cost(table, index, clauses, &[], stats)
+}
+
+/// [`index_cost`] of a scan with the ordering operators `order_by`, which `genericcostestimate` counts as operators of each row of the index, with the cost of their other side.
+fn ordered_cost(
+    table: &Table<'_, '_>,
+    index: &Index,
+    clauses: &[Clause<'_>],
+    order_by: &[Expr],
+    stats: &Stats,
+) -> (f64, f64, f64) {
     match index.method {
         HASH_AM => hash_cost(table, index, clauses, stats),
-        GIST_AM => tree_cost(table, index, clauses, stats, 0.0),
-        SPGIST_AM => tree_cost(table, index, clauses, stats, 1.0),
+        GIST_AM => tree_cost(table, index, (clauses, order_by), stats, 0.0),
+        SPGIST_AM => tree_cost(table, index, (clauses, order_by), stats, 1.0),
         BRIN_AM => brin_cost(table, index, clauses, stats),
         _ => btree_cost(table, index, clauses, stats),
     }
@@ -1775,13 +1842,13 @@ fn index_rows(table: &Table<'_, '_>, index: &Index) -> f64 {
 fn tree_cost(
     table: &Table<'_, '_>,
     index: &Index,
-    clauses: &[Clause<'_>],
+    (clauses, order_by): (&[Clause<'_>], &[Expr]),
     stats: &Stats,
     non_leaf: f64,
 ) -> (f64, f64, f64) {
     let rows = index_rows(table, index);
     let (mut startup, mut total, selectivity, scans) =
-        generic_cost(table, index, clauses, stats, non_leaf);
+        generic_cost(table, index, (clauses, order_by), stats, non_leaf);
     let height = if index.pages > 1.0 { (index.pages.ln() / 100.0_f64.ln()).trunc() } else { 0.0 };
     if rows > 1.0 {
         let descent = rows.ln().ceil() * cost::CPU_OPERATOR;
@@ -1835,7 +1902,7 @@ fn hash_cost(
     clauses: &[Clause<'_>],
     stats: &Stats,
 ) -> (f64, f64, f64) {
-    let (startup, total, selectivity, _) = generic_cost(table, index, clauses, stats, 1.0);
+    let (startup, total, selectivity, _) = generic_cost(table, index, (clauses, &[]), stats, 1.0);
     (startup, total, selectivity)
 }
 
@@ -1843,7 +1910,7 @@ fn hash_cost(
 fn generic_cost(
     table: &Table<'_, '_>,
     index: &Index,
-    clauses: &[Clause<'_>],
+    (clauses, order_by): (&[Clause<'_>], &[Expr]),
     stats: &Stats,
     non_leaf: f64,
 ) -> (f64, f64, f64, f64) {
@@ -1875,8 +1942,11 @@ fn generic_cost(
         index_pages * cost::RANDOM_PAGE
     };
     let others = clauses.iter().flat_map(Clause::other);
-    let qual_arg: f64 = others.map(|o| stats.qual_costs([o])).map(|(s, p)| s + p).sum();
-    let qual_op = cost::CPU_OPERATOR * clauses.len() as f64;
+    // `index_other_operands_eval_cost` of the ordering operators: the side that is not the column.
+    let ordered = order_by.iter().filter_map(|e| exprs::binary(e).map(|(_, _, other)| other));
+    let qual_arg: f64 =
+        others.chain(ordered).map(|o| stats.qual_costs([o])).map(|(s, p)| s + p).sum();
+    let qual_op = cost::CPU_OPERATOR * (clauses.len() + order_by.len()) as f64;
     total += qual_arg + index_tuples * scans * (cost::CPU_INDEX_TUPLE + qual_op);
     (qual_arg, total, selectivity, scans)
 }

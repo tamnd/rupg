@@ -145,6 +145,8 @@ pub struct AmopRow {
     pub purpose: u8,
     pub operator: u32,
     pub method: u32,
+    /// `amopsortfamily`: the btree operator family of the order that an ordering operator gives, or 0 for a search operator.
+    pub sort_family: u32,
 }
 
 /// A row of `pg_amproc`.
@@ -804,6 +806,7 @@ fn load_amops() -> Vec<AmopRow> {
         (r.oid("amopfamily"), r.oid("amoplefttype"), r.oid("amoprighttype"));
     let (strategy, purpose) = (r.int2("amopstrategy"), r.char("amoppurpose"));
     let (operator, method) = (r.oid("amopopr"), r.oid("amopmethod"));
+    let sort_family = r.oid("amopsortfamily");
     (0..r.catalog.len)
         .map(|i| AmopRow {
             oid: oid[i],
@@ -814,6 +817,7 @@ fn load_amops() -> Vec<AmopRow> {
             purpose: purpose[i],
             operator: operator[i],
             method: method[i],
+            sort_family: sort_family[i],
         })
         .collect()
 }

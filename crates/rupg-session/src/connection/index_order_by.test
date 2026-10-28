@@ -1,0 +1,89 @@
+!details
+> create table kn (a int, p point, b box, q point)
+CREATE TABLE
+> create index kn_p on kn using gist (p)
+CREATE INDEX
+> create index kn_b on kn using gist (b)
+CREATE INDEX
+> create index kn_q on kn using spgist (q)
+CREATE INDEX
+> set enable_seqscan = off
+SET
+> explain (costs off) select p from kn order by p <-> point '(0,0)'
+fields QUERY PLAN:25:-1:-1
+row Index Only Scan using kn_p on kn
+row   Order By: (p <-> '(0,0)'::point)
+EXPLAIN
+> explain (costs off) select p from kn order by point '(0,0)' <-> p
+fields QUERY PLAN:25:-1:-1
+row Index Only Scan using kn_p on kn
+row   Order By: (p <-> '(0,0)'::point)
+EXPLAIN
+> explain (costs off) select a from kn where p <@ box '(0,0),(5,5)' order by p <-> point '(1,1)' limit 3
+fields QUERY PLAN:25:-1:-1
+row Limit
+row   ->  Index Scan using kn_p on kn
+row         Index Cond: (p <@ '(5,5),(0,0)'::box)
+row         Order By: (p <-> '(1,1)'::point)
+EXPLAIN
+> explain (costs off) select b from kn order by b <-> point '(1,1)'
+fields QUERY PLAN:25:-1:-1
+row Index Only Scan using kn_b on kn
+row   Order By: (b <-> '(1,1)'::point)
+EXPLAIN
+> explain (costs off) select q from kn order by q <-> point '(2,2)'
+fields QUERY PLAN:25:-1:-1
+row Index Only Scan using kn_q on kn
+row   Order By: (q <-> '(2,2)'::point)
+EXPLAIN
+> explain (costs off) select p from kn order by p <-> point '(0,0)' desc
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: ((p <-> '(0,0)'::point)) DESC
+row   ->  Bitmap Heap Scan on kn
+row         ->  Bitmap Index Scan on kn_p
+EXPLAIN
+> explain (costs off) select p from kn order by p <-> point '(0,0)', a
+fields QUERY PLAN:25:-1:-1
+row Incremental Sort
+row   Sort Key: ((p <-> '(0,0)'::point)), a
+row   Presorted Key: ((p <-> '(0,0)'::point))
+row   ->  Index Scan using kn_p on kn
+row         Order By: (p <-> '(0,0)'::point)
+EXPLAIN
+> explain (costs off) select p, row_number() over (order by p <-> point '(0,0)') from kn
+fields QUERY PLAN:25:-1:-1
+row WindowAgg
+row   Window: w1 AS (ORDER BY (p <-> '(0,0)'::point) ROWS UNBOUNDED PRECEDING)
+row   ->  Index Only Scan using kn_p on kn
+row         Order By: (p <-> '(0,0)'::point)
+EXPLAIN
+> explain select p from kn order by p <-> point '(0,0)'
+fields QUERY PLAN:25:-1:-1
+row Index Only Scan using kn_p on kn  (cost=0.14..61.14 rows=850 width=24)
+row   Order By: (p <-> '(0,0)'::point)
+EXPLAIN
+> explain select q from kn where q <@ box '(0,0),(5,5)' order by q <-> point '(2,2)'
+fields QUERY PLAN:25:-1:-1
+row Index Only Scan using kn_q on kn  (cost=0.14..8.16 rows=1 width=24)
+row   Index Cond: (q <@ '(5,5),(0,0)'::box)
+row   Order By: (q <-> '(2,2)'::point)
+EXPLAIN
+> insert into kn select g, point(g, g), box(point(g, g), point(g + 1, g + 1)), point(g, -g) from generate_series(1, 200) g
+INSERT 0 200
+> select p from kn order by p <-> point '(10,10.2)' limit 3
+fields p@kn.2:600:16:-1
+row (10,10)
+row (11,11)
+row (9,9)
+SELECT 3
+> select a from kn where p <@ box '(0,0),(50,50)' order by p <-> point '(20,21)' limit 2
+fields a@kn.1:23:4:-1
+row 20
+row 21
+SELECT 2
+> select q from kn order by q <-> point '(5.2,-5)' limit 2
+fields q@kn.4:600:16:-1
+row (5,-5)
+row (6,-6)
+SELECT 2

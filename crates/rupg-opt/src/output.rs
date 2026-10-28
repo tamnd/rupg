@@ -933,8 +933,8 @@ fn placeholders(level: &Level<'_>, node: &mut Node<'_>) {
 fn items_mut<'n, 'q>(node: &'n mut Node<'q>) -> Vec<&'n mut Item<'q>> {
     let mut out: Vec<&mut Item<'q>> = node.output.iter_mut().chain(&mut node.filter).collect();
     match &mut node.kind {
+        Kind::IndexScan { cond, order_by, .. } => out.extend(cond.iter_mut().chain(order_by)),
         Kind::Result { one_time: items, .. }
-        | Kind::IndexScan { cond: items, .. }
         | Kind::TidScan { cond: items, .. }
         | Kind::BitmapHeapScan { recheck: items, .. }
         | Kind::BitmapIndexScan { cond: items, .. }
