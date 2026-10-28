@@ -6436,6 +6436,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/spgist_prefix.test")));
     }
 
+    /// `EXPLAIN` shows the collation of a key of a sort after the key when it is not the collation of the type of the key, as `show_sortorder_options` writes it: a column of `COLLATE "C"`, a `COLLATE` in `ORDER BY`, and a `name` as `text`. `connection/sort_collation.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn sort_collation() {
+        big_stack(|| script(include_str!("connection/sort_collation.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

@@ -416,6 +416,7 @@ impl<'q> Builder<'q> {
                     desc: false,
                     using: None,
                     nulls_first: g.nulls_first,
+                    collation: 0,
                 })
                 .collect()
         };

@@ -249,6 +249,7 @@ impl<'q> AppendRel<'q> {
                     desc,
                     using: None,
                     nulls_first,
+                    collation: 0,
                 })
                 .collect()
         };

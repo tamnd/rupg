@@ -563,6 +563,7 @@ impl<'q> Ordered<'_, 'q> {
                     desc: k.desc,
                     using: None,
                     nulls_first: k.nulls_first,
+                    collation: 0,
                 })
             })
             .collect();

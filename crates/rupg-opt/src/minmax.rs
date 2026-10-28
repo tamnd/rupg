@@ -199,6 +199,7 @@ fn subquery(query: &Query, arg: &Expr, sortop: u32, eq: u32, nulls_first: bool) 
         equal: function(eq),
         nulls_first,
         hashable: false,
+        collation: 0,
     }];
     sub.offset = None;
     sub.limit = Some(Expr::new(ExprKind::Const(Value::Int8(1)), oid::INT8));
