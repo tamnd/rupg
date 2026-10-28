@@ -1,0 +1,104 @@
+!details
+> create table cm1 (a int, b text collate "C")
+CREATE TABLE
+> create table cm2 (a int, b text collate "POSIX")
+CREATE TABLE
+> insert into cm1 values (1, 'abc'), (2, 'Abc')
+INSERT 0 2
+> insert into cm2 values (1, 'abc'), (3, 'bbc')
+INSERT 0 2
+> select * from cm1 where b collate "C" >= 'bbc' collate "POSIX"
+ERROR 42P21 collation mismatch between explicit collations "C" and "POSIX" at 48
+> select string_agg(b collate "C", b collate "POSIX") from cm1
+ERROR 42P21 collation mismatch between explicit collations "C" and "POSIX" at 36
+> select a from cm1 where b collate "C" = 'abc' collate "C"
+fields a@cm1.1:23:4:-1
+row 1
+SELECT 1
+> select cm1.b || cm2.b from cm1, cm2 order by 1
+ERROR 42P21 collation mismatch between implicit collations "C" and "POSIX" at 17
+HINT You can choose the collation by applying the COLLATE clause to one or both expressions.
+> select cm1.b || cm2.b from cm1, cm2 order by cm1.b || cm2.b
+ERROR 42P21 collation mismatch between implicit collations "C" and "POSIX" at 17
+HINT You can choose the collation by applying the COLLATE clause to one or both expressions.
+> select length(cm1.b || cm2.b) from cm1, cm2 order by 1
+fields length:23:4:-1
+row 6
+row 6
+row 6
+row 6
+SELECT 4
+> select (cm1.b || cm2.b) collate "C" from cm1, cm2 order by 1
+fields ?column?:25:-1:-1
+row Abcabc
+row Abcbbc
+row abcabc
+row abcbbc
+SELECT 4
+> select array_agg(cm1.a order by cm1.b || cm2.b) from cm1, cm2
+ERROR 42P21 collation mismatch between implicit collations "C" and "POSIX" at 42
+HINT You can choose the collation by applying the COLLATE clause to one or both expressions.
+> select array_agg(cm1.b || cm2.b) from cm1, cm2
+fields array_agg:1009:-1:-1
+row {abcabc,abcbbc,Abcabc,Abcbbc}
+SELECT 1
+> select b from cm1 union select b from cm2
+ERROR 42P21 collation mismatch between implicit collations "C" and "POSIX" at 32
+HINT You can choose the collation by applying the COLLATE clause to one or both expressions.
+> select b from cm1 intersect select b from cm2
+ERROR 42P21 collation mismatch between implicit collations "C" and "POSIX" at 36
+HINT You can choose the collation by applying the COLLATE clause to one or both expressions.
+> select b from cm1 except select b from cm2
+ERROR 42P21 collation mismatch between implicit collations "C" and "POSIX" at 33
+HINT You can choose the collation by applying the COLLATE clause to one or both expressions.
+> select b from cm1 union all select b from cm2
+fields b:25:-1:-1
+row abc
+row Abc
+row abc
+row bbc
+SELECT 4
+> create table cm3 as select b from cm1 union all select b from cm2
+ERROR 42P22 no collation was derived for column "b" with collatable type text
+HINT Use the COLLATE clause to set the collation explicitly.
+> select 'a' union select 'b' order by 1
+fields ?column?:25:-1:-1
+row a
+row b
+SELECT 2
+> create table cm4 as select 'a' as x union select 'b'
+SELECT 2
+> select attname, attcollation::regcollation from pg_attribute where attrelid = 'cm4'::regclass and attnum > 0
+fields attname@pg_attribute.2:19:64:-1,attcollation:4191:4:-1
+row x,"default"
+SELECT 1
+> select b collate "POSIX" from cm1 union select b from cm2 order by 1
+fields b:25:-1:-1
+row Abc
+row abc
+row bbc
+SELECT 3
+> select row(b collate "C", b collate "POSIX") from cm1 order by 1
+fields row:2249:-1:-1
+row (Abc,Abc)
+row (abc,abc)
+SELECT 2
+> select case when b collate "C" < 'x' collate "POSIX" then 1 end from cm1
+ERROR 42P21 collation mismatch between explicit collations "C" and "POSIX" at 38
+> with recursive foo(x) as (select x from (values('a' collate "C"),('b')) t(x) union all select (x || 'c') collate "POSIX" from foo where length(x) < 3) select * from foo
+ERROR 42P21 recursive query "foo" column 1 has collation "C" in non-recursive term but collation "POSIX" overall at 34
+HINT Use the COLLATE clause to set the collation of the non-recursive term.
+> with recursive foo(x) as (select 'a' union all select x || 'c' from foo where length(x) < 3) select * from foo
+fields x:25:-1:-1
+row a
+row ac
+row acc
+SELECT 3
+> select b from cm1 group by b order by b
+fields b@cm1.2:25:-1:-1
+row Abc
+row abc
+SELECT 2
+> select cm1.b || cm2.b from cm1, cm2 group by 1
+ERROR 42P21 collation mismatch between implicit collations "C" and "POSIX" at 17
+HINT You can choose the collation by applying the COLLATE clause to one or both expressions.

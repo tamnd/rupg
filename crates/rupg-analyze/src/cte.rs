@@ -9,6 +9,7 @@ use rupg_types::oid;
 
 use crate::Analyzer;
 use crate::coerce::AtOpt;
+use crate::collate::target_collation;
 use crate::expr::Expr;
 use crate::from::{Column, Item, Relation};
 use crate::searchcycle::{self, CycleClause, SearchClause};
@@ -69,6 +70,8 @@ pub(crate) struct CteItem {
     visible: bool,
     /// The columns, after the analysis of the query, or after the non-recursive term of a recursive query.
     columns: Option<Vec<Column>>,
+    /// `ctecolcollations` of a recursive query: the collation of each column of the non-recursive term.
+    collations: Vec<u32>,
     /// The query, after its analysis, and after the rewrite of `SEARCH` and `CYCLE`.
     query: Option<Box<Query>>,
     /// The query before the rewrite of `SEARCH` and `CYCLE`.
@@ -100,6 +103,7 @@ impl CteItem {
             materialized,
             visible,
             columns: None,
+            collations: Vec::new(),
             query: None,
             written: None,
             work: None,
@@ -612,6 +616,23 @@ impl Analyzer<'_> {
                     .with_hint("Cast the output of the non-recursive term to the correct type.")
                     .at_opt(expr.place()));
                 }
+                let first = item.collations.get(i).copied().unwrap_or(0);
+                let overall = target_collation(expr, &query, self.env.catalog());
+                if first != overall {
+                    let name = |c| crate::collate::collation_name(c, self.env.catalog());
+                    return Err(Error::new(
+                        SqlState::COLLATION_MISMATCH,
+                        format!(
+                            "recursive query \"{}\" column {} has collation \"{}\" in non-recursive term but collation \"{}\" overall",
+                            item.name,
+                            i + 1,
+                            name(first),
+                            name(overall)
+                        ),
+                    )
+                    .with_hint("Use the COLLATE clause to set the collation of the non-recursive term.")
+                    .at_opt(expr.place()));
+                }
             }
         } else {
             let shown = shown.map(|t| (t.name.clone(), t.expr.ty, t.expr.typmod)).collect();
@@ -679,6 +700,7 @@ impl Analyzer<'_> {
         parent: usize,
         leftmost: usize,
         exprs: &[Expr],
+        collations: Vec<u32>,
     ) -> Result<()> {
         let Some(query) = self.scope.relations[leftmost].subquery.as_deref() else {
             return Err(Error::internal("a set operation with no leftmost SELECT"));
@@ -689,6 +711,7 @@ impl Analyzer<'_> {
             return Err(Error::internal("a recursive query that is not in the scope"));
         };
         item.columns = Some(item.columns(shown)?);
+        item.collations = collations;
         Ok(())
     }
 
