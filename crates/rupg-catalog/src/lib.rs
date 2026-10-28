@@ -15,6 +15,7 @@ pub mod tablespace;
 pub mod toast;
 
 mod aggregate;
+mod alter_domain;
 mod alter_type;
 mod conversion;
 mod default_acl;
@@ -3047,16 +3048,8 @@ impl Catalog {
                 base: None,
             },
         );
-        // `record_object_address_dependencies` sorts the objects by the OID of their catalog.
         let me = ObjRef::new(PG_TYPE, oid);
-        self.depend(me, ObjRef::new(PG_TYPE, base), DepKind::Normal);
-        self.depend(me, ObjRef::new(PG_NAMESPACE, new.namespace), DepKind::Normal);
-        if collation != 0 {
-            self.depend(me, ObjRef::new(PG_COLLATION, collation), DepKind::Normal);
-        }
-        for &referenced in refs {
-            self.depend(me, referenced, DepKind::Normal);
-        }
+        self.domain_depends(me, (base, new.namespace, collation), refs);
         self.depend(ObjRef::new(PG_TYPE, array), me, DepKind::Internal);
         Ok(oid)
     }

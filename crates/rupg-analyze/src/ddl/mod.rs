@@ -4,6 +4,7 @@ mod aggregate;
 mod alter;
 mod alter_column;
 mod alter_constraint;
+mod alter_domain;
 mod alter_function;
 mod alter_inherit;
 mod alter_type;
@@ -142,6 +143,8 @@ pub struct Defined {
     pub views: Vec<u32>,
     /// The partitions of `ATTACH PARTITION` whose rows the caller checks against their new partition constraints after the statement, as `QueuePartitionConstraintValidation` queues them.
     pub checks: Vec<PartitionCheck>,
+    /// The tables whose rows the caller checks against the new constraint of `ALTER DOMAIN`, as `validateDomainCheckConstraint` and `validateDomainNotNullConstraint` check them.
+    pub domain_checks: Vec<DomainCheck>,
     /// The partitions of `DETACH PARTITION` whose keys a foreign key refers to through the parent. Before the statement the caller checks that no row of a referencing table has a key of the partition, as `ATDetachCheckNoForeignKeyRefs` checks it, with the catalog before the statement.
     pub detached: Vec<u32>,
     /// The roles of `DROP OWNED`. The caller removes the grants of membership that these roles made, as `shdepDropOwned` drops the rows of `pg_auth_members` with the role as the grantor.
@@ -167,6 +170,17 @@ pub struct TopLevel {
     pub statement: &'static str,
     /// The context of the error, such as the partitioned table of `REINDEX`.
     pub context: String,
+}
+
+/// A table with columns of a domain whose rows must satisfy a new constraint of the domain, one entry of the list of `get_rels_with_domain`.
+#[derive(Clone, Debug)]
+pub struct DomainCheck {
+    /// The OID of the table or of the materialized view.
+    pub table: u32,
+    /// The numbers of the columns that have the domain as their type, in their order.
+    pub columns: Vec<i16>,
+    /// The expression of the check constraint, which reads the value of a column as `VALUE`, or `None` for the not-null constraint.
+    pub check: Option<Expr>,
 }
 
 /// A partition whose rows must satisfy its partition constraint, one entry of `tab->partition_constraint`.
@@ -211,6 +225,7 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::IndexStmt(_)
             | Node::CreateSchemaStmt(_)
             | Node::CreateDomainStmt(_)
+            | Node::AlterDomainStmt(_)
             | Node::CompositeTypeStmt(_)
             | Node::CreateEnumStmt(_)
             | Node::AlterEnumStmt(_)
@@ -334,6 +349,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         added: Vec::new(),
         views: Vec::new(),
         checks: Vec::new(),
+        domain_checks: Vec::new(),
         detached: Vec::new(),
         grantors: Vec::new(),
         databases: Vec::new(),
@@ -362,6 +378,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::AlterPolicyStmt(policy) => definer.alter_policy(policy, text),
         Node::CreateTrigStmt(trigger) => definer.create_trigger(trigger),
         Node::CreateDomainStmt(domain) => definer.create_domain(domain).map(|_| ()),
+        Node::AlterDomainStmt(stmt) => definer.alter_domain(stmt),
         Node::CompositeTypeStmt(stmt) => definer.create_composite_type(stmt),
         Node::CreateEnumStmt(stmt) => definer.create_enum(stmt),
         Node::AlterEnumStmt(stmt) => definer.alter_enum(stmt),
@@ -469,6 +486,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         filled,
         views: definer.views,
         checks: definer.checks,
+        domain_checks: definer.domain_checks,
         detached: definer.detached,
         grantors: definer.grantors,
         databases: definer.databases,
@@ -656,6 +674,8 @@ pub(crate) struct Definer<'a, 'c> {
     views: Vec<u32>,
     /// The partitions of [`Defined::checks`].
     checks: Vec<PartitionCheck>,
+    /// The tables of [`Defined::domain_checks`].
+    domain_checks: Vec<DomainCheck>,
     /// The partitions of [`Defined::detached`].
     detached: Vec<u32>,
     /// The roles of [`Defined::grantors`].

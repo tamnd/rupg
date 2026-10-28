@@ -4,7 +4,9 @@
 
 use std::sync::Arc;
 
-use rupg_analyze::{CopyTarget, Derived, Fill, Params, PartitionCheck, Repack, Transform};
+use rupg_analyze::{
+    CopyTarget, Derived, DomainCheck, Fill, Params, PartitionCheck, Repack, Transform,
+};
 use rupg_catalog::{Catalog, ConKind, FIRST_NORMAL_OID, RelKind, Relation};
 use rupg_common::{Error, Level, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
@@ -29,7 +31,7 @@ impl Connection {
     ///
     /// # Errors
     ///
-    /// `0A000` for a change that the rows cannot get yet: `ALTER DOMAIN` on a table with rows, and a change of the type of a column by a statement that is not `ALTER TABLE`.
+    /// `0A000` for a change that the rows cannot get yet: a change of the type of a column by a statement that is not `ALTER TABLE`.
     pub(super) fn rows_to_rewrite(
         &self,
         node: &Node,
@@ -53,11 +55,9 @@ impl Connection {
                 format!("{statement} on a table with rows is not supported yet"),
             )
         };
+        // `ALTER DOMAIN` checks the rows against a new constraint in `check_domain_rows`, and it writes no row.
         if matches!(node, Node::AlterDomainStmt(_)) {
-            return match tables.first() {
-                Some(_) => Err(not_yet("ALTER DOMAIN")),
-                None => Ok(Vec::new()),
-            };
+            return Ok(Vec::new());
         }
         // A value of a row type keeps a field for each column of its relation, so a table with such values in its rows gets them again when the relation gets or loses a column.
         let reshaped = reshaped_row_types(&old, work);
@@ -138,6 +138,54 @@ impl Connection {
                     };
                     let error = Error::new(SqlState::CHECK_VIOLATION, message);
                     return Err(rupg_func::with_table(error, leaf, &self.reader()));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `validateDomainCheckConstraint` and `validateDomainNotNullConstraint` for the tables of `ALTER DOMAIN`: each value of each column of the domain must pass the new constraint. A check that gives null passes.
+    ///
+    /// # Errors
+    ///
+    /// `23502` for a null value, `23514` for a value that the check rejects, and the errors of the check.
+    pub(super) fn check_domain_rows(
+        &self,
+        checks: &[DomainCheck],
+        work: &Arc<Catalog>,
+    ) -> Result<(), Error> {
+        if checks.is_empty() {
+            return Ok(());
+        }
+        let heap = self.store.heap();
+        let reader = self.reader_on(Arc::clone(work));
+        let view = View { xid: self.xid.get(), ..self.view() };
+        for check in checks {
+            let Some(rel) = work.relation(check.table) else { continue };
+            for row in heap.rows(check.table, &view) {
+                // A row from before an `ADD COLUMN` has no value for the new columns, and the ID of the version is at the end of the row.
+                let stored = row.len().saturating_sub(1);
+                for &number in &check.columns {
+                    let at = usize::try_from(number - 1).unwrap_or(usize::MAX);
+                    let value = if at < stored { &row[at] } else { &Value::Null };
+                    let failed = match &check.check {
+                        None if value.is_null() => {
+                            Some((SqlState::NOT_NULL_VIOLATION, "contains null values"))
+                        }
+                        None => None,
+                        Some(expr) => {
+                            let result = rupg_exec::evaluate_domain_check(expr, value, &reader)?;
+                            (result.as_bool() == Some(false)).then_some((
+                                SqlState::CHECK_VIOLATION,
+                                "contains values that violate the new constraint",
+                            ))
+                        }
+                    };
+                    let Some((state, what)) = failed else { continue };
+                    let column = rel.column(number).map_or("", |c| c.name.as_str());
+                    let message = format!("column \"{column}\" of table \"{}\" {what}", rel.name);
+                    let error = Error::new(state, message);
+                    return Err(rupg_func::with_table_column(error, rel.oid, column, &reader));
                 }
             }
         }

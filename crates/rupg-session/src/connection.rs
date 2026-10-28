@@ -1418,6 +1418,7 @@ impl Connection {
             .and_then(|tables| self.rewrite_rows(&tables, &work, transforms, fills))
             .and_then(|()| self.repack_rows(&defined.repacked, &work, notices))
             .and_then(|()| self.check_partitions(&defined.checks, &work))
+            .and_then(|()| self.check_domain_rows(&defined.domain_checks, &work))
             .and_then(|()| self.truncate_rows(&defined.truncated, &work))
             .and_then(|()| self.view_texts(&defined.views, &mut work));
         let mut held = self.lease.borrow_mut();
@@ -1490,6 +1491,7 @@ impl Connection {
                     | Node::CreateEnumStmt(_)
                     | Node::CreateRangeStmt(_) => CommandTag::CreateType,
                     Node::AlterEnumStmt(_) => CommandTag::AlterType,
+                    Node::AlterDomainStmt(_) => CommandTag::AlterDomain,
                     Node::CreateCastStmt(_) => CommandTag::CreateCast,
                     Node::CreateConversionStmt(_) => CommandTag::CreateConversion,
                     Node::ViewStmt(_) => CommandTag::CreateView,
@@ -2635,7 +2637,7 @@ fn alter_tag(kind: ObjectType) -> CommandTag {
         ObjectType::OBJECT_MATVIEW => CommandTag::AlterMaterializedView,
         ObjectType::OBJECT_FOREIGN_TABLE => CommandTag::AlterForeignTable,
         ObjectType::OBJECT_TYPE => CommandTag::AlterType,
-        ObjectType::OBJECT_DOMAIN => CommandTag::AlterDomain,
+        ObjectType::OBJECT_DOMAIN | ObjectType::OBJECT_DOMCONSTRAINT => CommandTag::AlterDomain,
         ObjectType::OBJECT_FUNCTION => CommandTag::AlterFunction,
         ObjectType::OBJECT_ROUTINE => CommandTag::AlterRoutine,
         ObjectType::OBJECT_PROCEDURE => CommandTag::AlterProcedure,
@@ -6573,6 +6575,12 @@ mod tests {
     #[test]
     fn trigger_internal() {
         big_stack(|| script(include_str!("connection/trigger_internal.test")));
+    }
+
+    /// `ALTER DOMAIN` with `SET DEFAULT`, `DROP DEFAULT`, `SET NOT NULL`, `DROP NOT NULL`, `ADD CONSTRAINT` with and without `NOT VALID`, `DROP CONSTRAINT` and `VALIDATE CONSTRAINT`: the checks of the rows of the tables and materialized views with columns of the domain and of its domains, the errors for arrays, ranges and composite types that hold the domain, and the rows of `pg_type` and `pg_constraint`.
+    #[test]
+    fn alter_domain() {
+        big_stack(|| script(include_str!("connection/alter_domain.test")));
     }
 
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.

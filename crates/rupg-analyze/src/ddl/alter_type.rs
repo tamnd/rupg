@@ -598,7 +598,7 @@ impl Definer<'_, '_> {
                     con.domain
                 )));
             };
-            return self.add_domain_check(con.domain, &check, base, true);
+            return self.add_domain_check(con.domain, &check, base, true).map(|_| ());
         }
         let check = Constraint {
             contype: ConstrType::CONSTR_CHECK,
