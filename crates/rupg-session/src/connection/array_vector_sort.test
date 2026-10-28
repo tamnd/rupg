@@ -1,0 +1,83 @@
+!details
+> select array[]::oidvector
+fields array:30:-1:-1
+ERROR 42804 array is not a valid oidvector
+> select array[]::int2vector
+fields array:22:-1:-1
+ERROR 42804 array is not a valid int2vector
+> select '{{1,2},{3,4}}'::oid[]::oidvector
+ERROR 42846 cannot cast type oid[] to oidvector at 30
+> select '{1,null}'::int2[]::int2vector
+ERROR 42846 cannot cast type smallint[] to int2vector at 26
+> select array[]::oidvector is null as n
+fields n:16:1:-1
+row f
+SELECT 1
+> select ''::oidvector as e, ''::int2vector as f
+fields e:30:-1:-1,f:22:-1:-1
+row ,
+SELECT 1
+> select array_dims(''::oidvector), array_length(''::oidvector, 1), cardinality(''::oidvector)
+fields array_dims:25:-1:-1,array_length:23:4:-1,cardinality:23:4:-1
+row [0:-1],0,0
+SELECT 1
+> select ''::oidvector::oid[]
+fields oid:1028:-1:-1
+row {}
+SELECT 1
+> select '1 2'::oidvector::oid[]::oidvector
+ERROR 42846 cannot cast type oid[] to oidvector at 31
+> select '[5:6]={7,8}'::oid[]::oidvector
+ERROR 42846 cannot cast type oid[] to oidvector at 28
+> select array_sort('{1}'::xid[])
+fields array_sort:1011:-1:-1
+row {1}
+SELECT 1
+> select array_sort('{1,2,3}'::xid[])
+ERROR 0A000 could not identify a comparison function for type xid
+> select array_sort('{{1,2,3},{2,3,4}}'::xid[])
+ERROR 42883 could not identify a comparison function for type xid
+> select array_sort('{1,2}'::cid[])
+ERROR 0A000 could not identify a comparison function for type cid
+> select array_sort(array['(1,2)'::point, '(0,0)'])
+ERROR 0A000 could not identify a comparison function for type point
+> select array_sort(array['b'::varchar, 'a'])
+fields array_sort:1015:-1:-1
+row {a,b}
+SELECT 1
+> select array_sort(array['10.0.0.2'::cidr, '10.0.0.1'])
+fields array_sort:651:-1:-1
+row {10.0.0.1/32,10.0.0.2/32}
+SELECT 1
+> select array_sort(array['{"b":1}'::jsonb, '{"a":1}'])
+fields array_sort:3807:-1:-1
+row {"{\"a\": 1}","{\"b\": 1}"}
+SELECT 1
+> select array_sort(array[2::money, 1::money])
+fields array_sort:791:-1:-1
+row {$1.00,$2.00}
+SELECT 1
+> select array_sort(array['b'::name, 'a'])
+fields array_sort:1003:-1:-1
+row {a,b}
+SELECT 1
+> select array_sort(array['b'::bpchar, 'a'])
+fields array_sort:1014:-1:-1
+row {a,b}
+SELECT 1
+> select array_sort(array['2'::xid8, '1'])
+fields array_sort:271:-1:-1
+row {1,2}
+SELECT 1
+> select array_sort(array[3::int2, 1])
+fields array_sort:1007:-1:-1
+row {1,3}
+SELECT 1
+> select array_sort(array['1 2'::int2vector, '1 1'])
+fields array_sort:1006:-1:-1
+row {"1 1","1 2"}
+SELECT 1
+> select proname, proargtypes from pg_proc where oid = 'now'::regproc
+fields proname@pg_proc.2:19:64:-1,proargtypes@pg_proc.20:30:-1:-1
+row now,
+SELECT 1

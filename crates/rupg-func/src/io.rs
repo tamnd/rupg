@@ -326,6 +326,7 @@ pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) 
         }
         (_, Value::Interval(v)) => types::interval_out(v, session.interval_style(), out),
         (oid::INT2VECTOR, Value::Array(array)) => {
+            check_vector(array, "int2vector")?;
             let values = vector(array, |v| match v {
                 Value::Int2(n) => Some(*n),
                 _ => None,
@@ -333,6 +334,7 @@ pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) 
             types::int2vector_out(&values, out);
         }
         (oid::OIDVECTOR, Value::Array(array)) => {
+            check_vector(array, "oidvector")?;
             let values = vector(array, Value::as_oid)?;
             types::oidvector_out(&values, out);
         }
@@ -577,6 +579,17 @@ fn record_send(record: &Record, out: &mut Vec<u8>) -> Result<()> {
 }
 
 /// The elements of an `int2vector` or an `oidvector`, which have no null element.
+/// The check of `check_valid_oidvector` and `check_valid_int2vector`: a cast from an array can give a value that has no dimension, more than one dimension or a null element.
+fn check_vector(array: &Array<Value>, name: &str) -> Result<()> {
+    if array.dims.len() != 1 || array.values.iter().any(Option::is_none) {
+        return Err(Error::new(
+            SqlState::DATATYPE_MISMATCH,
+            format!("array is not a valid {name}"),
+        ));
+    }
+    Ok(())
+}
+
 fn vector<T>(array: &Array<Value>, get: impl Fn(&Value) -> Option<T>) -> Result<Vec<T>> {
     array.values.iter().map(|v| v.as_ref().and_then(&get).ok_or_else(bad_value)).collect()
 }

@@ -4,7 +4,7 @@ use std::borrow::Cow;
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
-use rupg_types::{Array, ArrayDim, MAX_ARRAY_SIZE, MAXDIM, Value, array_in};
+use rupg_types::{Array, ArrayDim, MAX_ARRAY_SIZE, MAXDIM, Value, array_in, format_type};
 
 use crate::io::{base_type, output};
 use crate::{Call, Kernel, bad_value};
@@ -624,6 +624,20 @@ fn array_sort(call: &Call<'_>, args: &[Value]) -> Result<Value> {
         return Ok(value(array.clone()));
     }
     let ty = call.args.first().copied().unwrap_or(0);
+    if let Ok(element) = element_type(ty)
+        && !has_order(element)
+    {
+        // `array_sort_internal` fails for the elements, and `array_lt` fails for the sub-arrays.
+        let code = if array.dims.len() == 1 {
+            SqlState::FEATURE_NOT_SUPPORTED
+        } else {
+            SqlState::UNDEFINED_FUNCTION
+        };
+        return Err(Error::new(
+            code,
+            format!("could not identify a comparison function for type {}", format_type(element)),
+        ));
+    }
     let mut items: Vec<Option<Value>> = if array.dims.len() == 1 {
         array.values.clone()
     } else {
@@ -666,6 +680,19 @@ fn array_sort(call: &Call<'_>, args: &[Value]) -> Result<Value> {
             .collect()
     };
     Ok(value(Array { dims: array.dims.clone(), values }))
+}
+
+/// False for a built-in base type that has no `<` operator for `lookup_type_cache` to find: no btree class takes the type or a type that it has a binary cast to, as for `xid` and `point`.
+fn has_order(ty: u32) -> bool {
+    const BTREE: u32 = 403;
+    let ty = base_type(ty);
+    let Some(row) = builtin::type_by_oid(ty) else { return true };
+    if row.kind != b'b' || row.category == b'A' {
+        return true;
+    }
+    builtin::opclasses().iter().filter(|c| c.method == BTREE).any(|c| {
+        c.intype == ty || builtin::cast(ty, c.intype).is_some_and(|cast| cast.method == b'b')
+    })
 }
 
 /// `trim_array`: the array without the last `n` indexes of the first dimension. The result is a slice, so each lower bound is 1.

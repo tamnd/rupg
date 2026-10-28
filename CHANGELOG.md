@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The output of an `oidvector` or an `int2vector` from an array with no dimension or a null element fails with `array is not a valid oidvector`, as `check_valid_oidvector` does, and an empty value has one dimension, so `array_dims` gives `[0:-1]`. `array_sort` fails for an element type with no `<` operator, such as `xid`, when it has two or more items to sort (#1076).
 - Above the `Agg` of grouping sets, the sort of a window keeps a nullable item as a key, and a nullable constant key of an `Agg` over a node that projects shows as `1`, not `(1)`, as in PG (#1075).
 - Above the `Agg` of grouping sets, an item that a set does not have is not redundant with a key that `WHERE` makes equal to it, so `ORDER BY` and `DISTINCT` keep it as a key, as in PG (#1074).
 - With grouping sets, `HAVING` keeps an item of `GROUP BY` that a set does not have as one expression, as the `PlaceHolderVar` of `flatten_group_exprs` does in PG. `having not not a` over `rollup(not a)` gave a row for the empty set, and an `AND` that is an item went to `WHERE`. The `Filter` of an `Agg` shows a key that the node below computes in parentheses (#1073).
