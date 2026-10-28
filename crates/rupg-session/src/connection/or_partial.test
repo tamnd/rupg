@@ -1,0 +1,60 @@
+!details
+> CREATE TABLE bso (a int NOT NULL, b int NOT NULL, c int NOT NULL)
+CREATE TABLE
+> INSERT INTO bso (SELECT 1, 1, i FROM generate_series(1, 1000) i)
+INSERT 0 1000
+> INSERT INTO bso (select i, 2, 2 FROM generate_series(1, 1000) i)
+INSERT 0 1000
+> VACUUM ANALYZE bso
+VACUUM
+> CREATE INDEX bso_p1 ON bso (b) WHERE a = 1
+CREATE INDEX
+> CREATE INDEX bso_p2 ON bso (b) WHERE a = 2
+CREATE INDEX
+> EXPLAIN (COSTS OFF) SELECT * FROM bso WHERE (a = 1 OR a = 2) AND b = 2
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on bso
+row   Recheck Cond: (((b = 2) AND (a = 1)) OR ((b = 2) AND (a = 2)))
+row   ->  BitmapOr
+row         ->  Bitmap Index Scan on bso_p1
+row               Index Cond: (b = 2)
+row         ->  Bitmap Index Scan on bso_p2
+row               Index Cond: (b = 2)
+EXPLAIN
+> SELECT count(*) FROM bso WHERE (a = 1 OR a = 2) AND b = 2
+fields count:20:8:-1
+row 2
+SELECT 1
+> EXPLAIN (COSTS OFF) SELECT * FROM bso WHERE (a = 1 OR a = 3) AND b = 2
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on bso
+row   Filter: ((b = 2) AND ((a = 1) OR (a = 3)))
+EXPLAIN
+> CREATE INDEX bso_p3 ON bso (c) WHERE a = 3
+CREATE INDEX
+> EXPLAIN (COSTS OFF) SELECT * FROM bso WHERE (a = 1 OR a = 3) AND b = 2
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on bso
+row   Recheck Cond: (((b = 2) AND (a = 1)) OR (a = 3))
+row   Filter: (b = 2)
+row   ->  BitmapOr
+row         ->  Bitmap Index Scan on bso_p1
+row               Index Cond: (b = 2)
+row         ->  Bitmap Index Scan on bso_p3
+EXPLAIN
+> SET enable_seqscan = off
+SET
+> EXPLAIN (COSTS OFF) SELECT * FROM bso WHERE (a = 1 OR a = 3) AND b = 2
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on bso
+row   Recheck Cond: (((b = 2) AND (a = 1)) OR (a = 3))
+row   Filter: (b = 2)
+row   ->  BitmapOr
+row         ->  Bitmap Index Scan on bso_p1
+row               Index Cond: (b = 2)
+row         ->  Bitmap Index Scan on bso_p3
+EXPLAIN
+> SELECT count(*) FROM bso WHERE (a = 1 OR a = 3) AND b = 2
+fields count:20:8:-1
+row 2
+SELECT 1
