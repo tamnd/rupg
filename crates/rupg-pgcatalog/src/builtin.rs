@@ -101,6 +101,8 @@ pub struct OperatorRow {
     pub negator: u32,
     /// `oprcode`: the function that implements the operator.
     pub code: u32,
+    /// `oprrest`: the estimator of the selectivity of the operator, or 0 for none.
+    pub rest: u32,
 }
 
 /// A row of `pg_cast`.
@@ -742,6 +744,7 @@ fn load_operators() -> Vec<OperatorRow> {
     let (can_merge, can_hash) = (r.bool("oprcanmerge"), r.bool("oprcanhash"));
     let (left, right, result) = (r.oid("oprleft"), r.oid("oprright"), r.oid("oprresult"));
     let (commutator, negator, code) = (r.oid("oprcom"), r.oid("oprnegate"), r.oid("oprcode"));
+    let rest = r.oid("oprrest");
     (0..r.catalog.len)
         .map(|i| OperatorRow {
             oid: oid[i],
@@ -756,6 +759,7 @@ fn load_operators() -> Vec<OperatorRow> {
             commutator: commutator[i],
             negator: negator[i],
             code: code[i],
+            rest: rest[i],
         })
         .collect()
 }
@@ -1482,6 +1486,7 @@ fn session_rows(ty: &SessionType) -> Option<Interned> {
                 commutator: new.commutator,
                 negator: new.negator,
                 code: new.code,
+                rest: 0,
             };
             Interned { operator: Some(Box::leak(Box::new(row))), ..Interned::default() }
         }

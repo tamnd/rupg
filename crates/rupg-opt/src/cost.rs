@@ -732,9 +732,48 @@ pub(crate) fn range_bound(expr: &Expr) -> Option<(&Expr, bool)> {
     }
 }
 
+/// The OID of `areasel`.
+const AREASEL: u32 = 139;
+/// The OID of `positionsel`.
+const POSITIONSEL: u32 = 1300;
+/// The OID of `contsel`.
+const CONTSEL: u32 = 1302;
+/// The OID of `rangesel`.
+const RANGESEL: u32 = 3169;
+/// The OID of `multirangesel`.
+const MULTIRANGESEL: u32 = 4243;
+/// The OID of `tsmatchsel`.
+const TSMATCHSEL: u32 = 3686;
+/// The OID of `arraycontsel`.
+const ARRAYCONTSEL: u32 = 3817;
+/// The OID of `matchingsel`.
+const MATCHINGSEL: u32 = 5040;
+
 /// The selectivity of the estimator of an operator, `oprrest`, with no statistics.
 fn operator_selectivity(op: u32) -> f64 {
     let Some(row) = builtin::operator_by_oid(op) else { return INEQ_SEL };
+    match row.rest {
+        // `areasel`, `positionsel` and `contsel` of `geo_selfuncs.c`.
+        AREASEL => return 0.005,
+        POSITIONSEL => return 0.1,
+        CONTSEL => return 0.001,
+        // `default_range_selectivity` and `default_multirange_selectivity`.
+        RANGESEL | MULTIRANGESEL => {
+            return match row.name {
+                "&&" => 0.01,
+                "@>" | "<@" => RANGE_INEQ_SEL,
+                "<" | "<=" | ">" | ">=" | "<<" | ">>" | "&<" | "&>" => INEQ_SEL,
+                _ => 0.01,
+            };
+        }
+        // `DEFAULT_TS_MATCH_SEL`.
+        TSMATCHSEL => return 0.005,
+        // `DEFAULT_OVERLAP_SEL` and `DEFAULT_CONTAIN_SEL` of `array_selfuncs.c`.
+        ARRAYCONTSEL => return if row.name == "&&" { 0.01 } else { 0.005 },
+        // `DEFAULT_MATCHING_SEL` of `matchingsel`.
+        MATCHINGSEL => return 0.01,
+        _ => {}
+    }
     match row.name {
         "=" => EQ_SEL,
         "<>" => 1.0 - EQ_SEL,
