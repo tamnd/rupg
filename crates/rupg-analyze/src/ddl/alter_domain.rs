@@ -122,7 +122,7 @@ impl Definer<'_, '_> {
     fn alter_domain_default(&mut self, target: &Target, raw: Option<&Node>) -> Result<()> {
         let name =
             self.catalog.type_by_oid(target.oid).map_or_else(String::new, |t| t.name.clone());
-        let expr = self.domain_default(raw, (target.base, target.typmod), &name)?;
+        let expr = self.domain_default(raw, (target.base, target.typmod), &name, false)?;
         let (default, refs) = match expr {
             Some(expr) => {
                 let refs = references(self.catalog, 0, &[&expr])?;
