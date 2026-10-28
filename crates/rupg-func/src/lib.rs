@@ -20,6 +20,7 @@ mod cash;
 mod cast;
 mod catinfo;
 mod compare;
+mod currtid;
 mod datetime;
 mod datumsize;
 mod dbsize;
@@ -557,6 +558,11 @@ pub trait Session {
         let _ = relation;
         None
     }
+    /// `heap_get_latest_tid` with the latest snapshot: the last version of the chain of updates from the version `tid` of the table `relation`.
+    fn latest_tid(&self, relation: u32, tid: i64) -> i64 {
+        let _ = relation;
+        tid
+    }
     /// The rows of `pg_statistic` of a table of the database of the session, in the order of `staattnum` and `stainherit`.
     fn statistics(&self, relation: u32) -> Vec<Statistic> {
         let _ = relation;
@@ -815,6 +821,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| formatting::by_src(src))
         .or_else(|| numformat::by_src(src))
         .or_else(|| dbsize::by_src(src))
+        .or_else(|| currtid::by_src(src))
         .or_else(|| hash::by_src(src))
         .or_else(|| inrange::by_src(src))
         .or_else(|| timezone::by_src(src))

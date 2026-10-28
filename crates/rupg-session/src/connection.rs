@@ -6290,6 +6290,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/create_table_as_execute.test")));
     }
 
+    /// `currtid2` gives the latest version of a tid of a table, or of a view whose `ctid` column is the `ctid` of a table, with the errors of PostgreSQL. `connection/currtid.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn currtid() {
+        big_stack(|| script(include_str!("connection/currtid.test")));
+    }
+
     /// An index depends once on each column of its keys, as `record_object_address_dependencies` records them, and its expressions add their own dependencies. `connection/index_depend.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn index_depend() {
