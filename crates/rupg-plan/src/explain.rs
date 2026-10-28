@@ -489,9 +489,10 @@ impl Explainer<'_, '_> {
                 let own = Some(*r);
                 self.scan_qual("Filter", scope, &node.filter, self.options.verbose, own)?;
             }
-            Kind::IndexScan { cond, relation, .. } => {
+            Kind::IndexScan { cond, order_by, relation, .. } => {
                 let own = Some(*relation);
                 self.scan_qual("Index Cond", scope, cond, self.options.verbose, own)?;
+                self.scan_qual("Order By", scope, order_by, self.options.verbose, own)?;
                 self.scan_qual("Filter", scope, &node.filter, self.options.verbose, own)?;
             }
             Kind::TidScan { cond, relation, .. } => {
