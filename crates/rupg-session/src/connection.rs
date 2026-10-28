@@ -6145,6 +6145,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/foreign_key_functions.test")));
     }
 
+    /// `ri_KeysEqual` compares the old and the new keys of the referenced table by their bytes, so an update of `-0` to `0` goes to the referencing rows, and `RESTRICT` fails for it. `connection/foreign_key_image.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn foreign_key_image() {
+        big_stack(|| script(include_str!("connection/foreign_key_image.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
