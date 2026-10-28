@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The update of a key of a referenced table compares the old and the new key by their bytes, as `ri_KeysEqual` does. An update of `-0` to `0` now goes to the referencing rows with `ON UPDATE CASCADE`, and `RESTRICT` fails for it (#1009).
 - The check of a new foreign key needs `EXECUTE` on the function of the equality operator and on the cast function of the user, as the owner of the referenced table. For a partitioned referenced table the error has the query of the check as its context. A unique index of a partitioned table matches a partition key with an operator class of the user (#1008).
 - The checks of foreign keys use the privileges of PostgreSQL. A new foreign key needs `REFERENCES` on the referenced table or on its key columns, not the ownership of the table. The query of a check runs as the owner of the table that it reads, and needs `USAGE` on the schema, `SELECT` on the table or on each key column, and `UPDATE` on any column, as `ri_CheckPermissions` asks. The validation of a foreign key reads the rows as the current user when the user can see them, and else checks each row, as `RI_Initial_Check` does (#1007).
 - `ALTER TABLE` and `TRUNCATE` fail with `55006` on a table that has deferred trigger events in the transaction, as `CheckAlterTableIsSafe` and `AfterTriggerPendingOnRel` do. The drop of a foreign key checks the referenced table, and a command on a partitioned table checks each partition (#1007).

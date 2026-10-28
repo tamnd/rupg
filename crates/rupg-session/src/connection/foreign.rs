@@ -199,6 +199,15 @@ fn hash_key(key: &[Value], types: &[u32]) -> u64 {
     hasher.finish()
 }
 
+/// `datum_image_eq`: the two values have the same bytes. `ri_KeysEqual` compares the keys of the referenced table in this way, because an update to an equal key with other bytes, as `-0` to `0`, must go to the referencing rows.
+fn same_image(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Float8(x), Value::Float8(y)) => x.to_bits() == y.to_bits(),
+        (Value::Float4(x), Value::Float4(y)) => x.to_bits() == y.to_bits(),
+        _ => a == b,
+    }
+}
+
 /// A value of the type `from` as a value of the type `to` of the referenced column. When the two types have no equality operator, `ATAddForeignKeyConstraint` casts the referencing value to the type of the referenced column, and the check compares the values after the cast.
 fn key_value(value: &Value, from: u32, to: u32) -> Value {
     let to = rupg_func::base_type(to);
@@ -289,11 +298,9 @@ impl Connection {
                 }
                 let after = batch.new.get(at);
                 if let Some(after) = after
-                    && foreign
-                        .columns
-                        .iter()
-                        .zip(&key)
-                        .all(|(&column, &value)| after.get(column) == Some(value))
+                    && foreign.columns.iter().zip(&key).all(|(&column, &value)| {
+                        after.get(column).is_some_and(|v| same_image(v, value))
+                    })
                 {
                     continue;
                 }

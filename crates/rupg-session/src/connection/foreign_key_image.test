@@ -1,0 +1,58 @@
+!details
+> CREATE TABLE pk (a float8, b float8, PRIMARY KEY (a, b))
+CREATE TABLE
+> CREATE TABLE fk (x float8, y float8, FOREIGN KEY (x, y) REFERENCES pk (a, b) ON UPDATE CASCADE)
+CREATE TABLE
+> INSERT INTO pk VALUES ('-0', '-0')
+INSERT 0 1
+> INSERT INTO fk VALUES ('-0', '-0')
+INSERT 0 1
+> UPDATE pk SET a = '0' WHERE a = '-0'
+UPDATE 1
+> SELECT * FROM pk
+fields a@pk.1:701:8:-1,b@pk.2:701:8:-1
+row 0,-0
+SELECT 1
+> SELECT * FROM fk
+fields x@fk.1:701:8:-1,y@fk.2:701:8:-1
+row 0,-0
+SELECT 1
+> UPDATE pk SET a = '0'
+UPDATE 1
+> SELECT * FROM fk
+fields x@fk.1:701:8:-1,y@fk.2:701:8:-1
+row 0,-0
+SELECT 1
+> CREATE TABLE pk2 (a float8 PRIMARY KEY)
+CREATE TABLE
+> CREATE TABLE fk2 (x float8 REFERENCES pk2)
+CREATE TABLE
+> INSERT INTO pk2 VALUES ('-0')
+INSERT 0 1
+> INSERT INTO fk2 VALUES ('0')
+INSERT 0 1
+> UPDATE pk2 SET a = '0'
+UPDATE 1
+> SELECT * FROM pk2
+fields a@pk2.1:701:8:-1
+row 0
+SELECT 1
+> SELECT * FROM fk2
+fields x@fk2.1:701:8:-1
+row 0
+SELECT 1
+> CREATE TABLE pk3 (a float8 PRIMARY KEY)
+CREATE TABLE
+> CREATE TABLE fk3 (x float8 REFERENCES pk3 ON UPDATE RESTRICT)
+CREATE TABLE
+> INSERT INTO pk3 VALUES ('-0')
+INSERT 0 1
+> INSERT INTO fk3 VALUES ('0')
+INSERT 0 1
+> UPDATE pk3 SET a = '0'
+ERROR 23001 update or delete on table "pk3" violates RESTRICT setting of foreign key constraint "fk3_x_fkey" on table "fk3"
+DETAIL Key (a)=(-0) is referenced from table "fk3".
+> SELECT * FROM pk3
+fields a@pk3.1:701:8:-1
+row -0
+SELECT 1
