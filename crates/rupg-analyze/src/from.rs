@@ -76,6 +76,8 @@ pub struct Relation {
     pub only: bool,
     /// `perminfoindex`: the index of the privileges of a table or a view in the privileges of the statement while the analyzer reads the statement, or `None` for a relation that needs no privileges.
     pub perm: Option<usize>,
+    /// True for `EXCLUDED` of `ON CONFLICT`, which `transformOnConflictClause` marks with the kind `RELKIND_COMPOSITE_TYPE`: it has the privileges of the target table, but no row-level security policy limits it.
+    pub excluded: bool,
 }
 
 impl Relation {
@@ -100,6 +102,7 @@ impl Relation {
             tablesample: None,
             only: false,
             perm: None,
+            excluded: false,
         }
     }
 
@@ -1294,7 +1297,10 @@ impl Analyzer<'_> {
             .relations
             .first()
             .ok_or_else(|| Error::internal("ON CONFLICT with no table"))?;
-        let relation = Relation::new(target.oid, target.columns.clone(), None, None, None);
+        let mut relation = Relation::new(target.oid, target.columns.clone(), None, None, None);
+        // `addRangeTableEntryForRelation` gives `EXCLUDED` its own privileges: `SELECT` on the target, with the columns that the statement reads.
+        relation.perm = Some(self.add_perm(relation.oid, ACL_SELECT));
+        relation.excluded = true;
         let index = self.scope.relations.len();
         let mut item = self.add_relation(relation, "excluded".to_string(), None)?;
         // `EXCLUDED` of an updatable view has the columns of the view.

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A column of `EXCLUDED` in `ON CONFLICT DO UPDATE` needs `SELECT` on the column of the target table, as in PostgreSQL. Before, `SET three = EXCLUDED.three` worked without the privilege (#994).
 - The detail of a duplicate key shows the key only to a role that can read the table or each column of the key (#993).
 - CREATE FUNCTION checks USAGE on a trusted language, and a cast checks EXECUTE on its function, also for each element of an array (#992).
 - VACUUM, ANALYZE and REFRESH MATERIALIZED VIEW check the MAINTAIN privilege. VACUUM and ANALYZE skip a relation or a partition without it, with a warning, and the fill of a materialized view does not check INSERT (#991).

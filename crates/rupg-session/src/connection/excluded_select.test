@@ -1,0 +1,36 @@
+> CREATE ROLE regress_ex_a
+CREATE ROLE
+> CREATE TABLE ex1 (one int, two int UNIQUE, three int, four int)
+CREATE TABLE
+> INSERT INTO ex1 VALUES (1, 2, 3, 4)
+INSERT 0 1
+> GRANT SELECT (one, two), INSERT (two, three), UPDATE (three) ON ex1 TO regress_ex_a
+GRANT
+> SET SESSION AUTHORIZATION regress_ex_a
+SET
+session_authorization=regress_ex_a
+is_superuser=off
+> INSERT INTO ex1 (two) VALUES (2) ON CONFLICT (two) DO UPDATE SET three = 10
+INSERT 0 1
+> INSERT INTO ex1 (two) VALUES (2) ON CONFLICT (two) DO UPDATE SET three = EXCLUDED.one
+INSERT 0 1
+> INSERT INTO ex1 (two) VALUES (2) ON CONFLICT (two) DO UPDATE SET three = EXCLUDED.three
+ERROR 42501 permission denied for table ex1
+> INSERT INTO ex1 (two) VALUES (2) ON CONFLICT (two) DO UPDATE SET three = 5 WHERE EXCLUDED.four = 1
+ERROR 42501 permission denied for table ex1
+> INSERT INTO ex1 (two) VALUES (2) ON CONFLICT (two) DO UPDATE SET three = 6 WHERE EXCLUDED.two = 2
+INSERT 0 1
+> INSERT INTO ex1 (two) VALUES (2) ON CONFLICT (two) DO UPDATE SET three = EXCLUDED.three + 1 WHERE ex1.one = 1
+ERROR 42501 permission denied for table ex1
+> RESET SESSION AUTHORIZATION
+RESET
+session_authorization=postgres
+is_superuser=on
+> SELECT * FROM ex1
+fields one@ex1.1:23:4:-1,two@ex1.2:23:4:-1,three@ex1.3:23:4:-1,four@ex1.4:23:4:-1
+row 1,2,6,4
+SELECT 1
+> DROP TABLE ex1
+DROP TABLE
+> DROP ROLE regress_ex_a
+DROP ROLE

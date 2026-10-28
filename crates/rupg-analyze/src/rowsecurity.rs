@@ -134,7 +134,11 @@ impl Walk<'_> {
                 continue;
             }
             let relation = &query.relations[index];
-            if relation.function.is_some() || relation.values.is_some() || relation.cte.is_some() {
+            if relation.function.is_some()
+                || relation.values.is_some()
+                || relation.cte.is_some()
+                || relation.excluded
+            {
                 continue;
             }
             if relation.perm.is_some() && relation.perm == self.target {

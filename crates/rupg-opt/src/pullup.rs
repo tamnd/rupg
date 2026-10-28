@@ -356,6 +356,7 @@ fn flatten(query: &mut Query) {
         tablesample: None,
         only: false,
         perm: None,
+        excluded: false,
     }];
     query.from = vec![FromItem::Relation(0)];
 }
@@ -558,6 +559,7 @@ fn any_join(query: &mut Query, link: &SubLink) -> Option<(JoinKind, FromItem, Ex
         tablesample: None,
         only: false,
         perm: None,
+        excluded: false,
     });
     Some((JoinKind::Semi, FromItem::Relation(r), on))
 }
