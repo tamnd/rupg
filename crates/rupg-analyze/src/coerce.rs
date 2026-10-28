@@ -360,6 +360,8 @@ impl Analyzer<'_> {
                 Ok(coerce_to_domain(expr, target, context, location, true))
             }
             Path::Func(func) => {
+                // `ExecInitFunc` checks `EXECUTE` on the function of the cast as on a call.
+                self.funcs.push(func);
                 let expr = build_cast(expr, func, base, base_typmod, context, form, location);
                 Ok(coerce_to_domain(expr, target, context, location, true))
             }
