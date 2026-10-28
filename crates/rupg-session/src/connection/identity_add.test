@@ -1,0 +1,26 @@
+> create table i7d (a int not null)
+CREATE TABLE
+> create table i7e () inherits (i7d)
+CREATE TABLE
+> alter table i7d add column b int generated always as identity
+ERROR 42P16 cannot recursively add identity column to table that has child tables
+> alter table only i7d add column c int generated always as identity
+ERROR 42P16 column must be added to child tables too
+> create type it as (f1 integer, f2 text)
+CREATE TYPE
+> create table i12 of it (f1 with options generated always as identity)
+ERROR 0A000 identity columns are not supported on typed tables
+> create table pi (f1 date not null, f2 text, f3 int generated always as identity) partition by range (f1)
+CREATE TABLE
+> create table pi1 partition of pi for values from ('2016-07-01') to ('2016-08-01')
+CREATE TABLE
+> insert into pi (f1, f2) values ('2016-07-02', 'from pi')
+INSERT 0 1
+> create table pi1_like (like pi1 including identity)
+CREATE TABLE
+> insert into pi1_like (f1, f2) values ('2016-07-02', 'from pi1_like')
+INSERT 0 1
+> select f2, f3 from pi1_like
+fields f2@pi1_like.2:25:-1:-1,f3@pi1_like.3:23:4:-1
+row from pi1_like,1
+SELECT 1

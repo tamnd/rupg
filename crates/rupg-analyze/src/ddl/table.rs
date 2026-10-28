@@ -790,6 +790,12 @@ impl Definer<'_, '_> {
                     saw_default = true;
                 }
                 ConstrType::CONSTR_IDENTITY => {
+                    if plan.typed {
+                        return Err(Error::new(
+                            SqlState::FEATURE_NOT_SUPPORTED,
+                            "identity columns are not supported on typed tables",
+                        ));
+                    }
                     if plan.partbound.is_some() {
                         return Err(Error::new(
                             SqlState::FEATURE_NOT_SUPPORTED,

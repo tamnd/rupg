@@ -6270,6 +6270,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/hash_satisfies.test")));
     }
 
+    /// `ADD COLUMN` of an identity column fails on a table with inheritance children and on a typed table, and `LIKE ... INCLUDING IDENTITY` of a partition takes the sequence of the partitioned table. `connection/identity_add.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn identity_add() {
+        big_stack(|| script(include_str!("connection/identity_add.test")));
+    }
+
     /// An index depends once on each column of its keys, as `record_object_address_dependencies` records them, and its expressions add their own dependencies. `connection/index_depend.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn index_depend() {
