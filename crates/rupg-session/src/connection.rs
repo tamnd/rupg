@@ -6398,6 +6398,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/always_true.test")));
     }
 
+    /// A lateral subquery with `TABLESAMPLE` whose arguments read a relation of the query is the inner side of a nested loop, as `extract_lateral_references` finds the columns of the arguments and of `REPEATABLE`. `connection/lateral_sample.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn lateral_sample() {
+        big_stack(|| script(include_str!("connection/lateral_sample.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
