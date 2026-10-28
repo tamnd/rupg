@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A `gist` or `spgist` index now gives an `Index Only Scan` when each column that the query reads can come from the index, as `gistcanreturn` and `spgcanreturn` find. (#1017)
 - The planner now scans `gist`, `spgist` and `brin` indexes, with the costs of `gistcostestimate`, `spgcostestimate` and `brincostestimate`. A `brin` index gives only a bitmap, and `ANY` is a clause only of a bitmap of these indexes. The operators with the estimators `contsel`, `areasel`, `positionsel`, `rangesel`, `multirangesel`, `tsmatchsel`, `arraycontsel` and `matchingsel` now get the default selectivities of PostgreSQL. (#1016)
 - `ALTER INDEX ... ATTACH PARTITION` now fails with "The index definitions do not match." when the exclusion constraints of the two indexes have different operators, or when only one of the indexes has an exclusion constraint. A new exclusion constraint on a partitioned table no longer takes such an index of a partition, and makes a new index instead. (#1015)
 - `DROP INDEX CONCURRENTLY` of a partitioned index now fails with "cannot drop partitioned index ... concurrently", unless the index is temporary. `CREATE TABLE ... PARTITION OF` with its own primary key now fails when the parent table has one. The clone of a primary key or a unique constraint on a new partition now has `connoinherit` false, as in PostgreSQL. (#1014)

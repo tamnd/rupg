@@ -38,6 +38,28 @@ const REVMAP_PAGE_MAXITEMS: f64 = 1360.0;
 fn gettuple(index: &Index) -> bool {
     index.method != BRIN_AM
 }
+
+/// `amcanreturn`: the index gives the value of its column `column`, so an index only scan can read it. A `btree` index gives each column, and an `INCLUDE` column of a `gist` or `spgist` index is always given. A key column of `gist` is given when its operator class has a `fetch` function or no `compress` function, as `gistcanreturn` finds, and a key column of `spgist` when `canReturnData` of the `config` of its operator class is true, as `spgcanreturn` finds.
+fn can_return(index: &Index, column: usize) -> bool {
+    let key = column < index.keys.len();
+    let family = index.families.get(column).copied().unwrap_or(0);
+    match index.method {
+        BTREE_AM => true,
+        // `point_ops`, `box_ops`, `network_ops` and `range_ops`.
+        GIST_AM => !key || matches!(family, 1029 | 2593 | 3550 | 3919),
+        // Each class but `poly_ops`, whose leaf is the box of the polygon.
+        SPGIST_AM => !key || (family != 0 && family != 5008),
+        _ => false,
+    }
+}
+
+/// `check_index_only`: the index gives each column of the table in `read`.
+fn index_only(index: &Index, read: &BTreeSet<i16>) -> bool {
+    crate::enable().indexonlyscan
+        && read.iter().all(|a| {
+            *a > 0 && index.columns.iter().enumerate().any(|(i, c)| c == a && can_return(index, i))
+        })
+}
 /// `BTEqualStrategyNumber`.
 const EQUAL: i16 = 3;
 /// `TEXT_PATTERN_BTREE_FAM_OID`, the operator family `text_pattern_ops` of btree.
@@ -328,9 +350,7 @@ fn index_paths<'q>(
         }
         let clauses = match_clauses(table.r, index, &restrict(index, table.r, &all));
         let costs = index_cost(table, index, &clauses, stats);
-        let only = crate::enable().indexonlyscan
-            && index.method == BTREE_AM
-            && read.iter().all(|a| *a > 0 && index.columns.contains(a));
+        let only = index_only(index, &read);
         let forward = order(level, table.r, index, &quals, false, stats);
         let useful = stats.useful(&BTreeSet::from([table.r]), &forward);
         // `useful_predicate`: the conditions imply the predicate of a partial index, so its scan is a path also with no clause.
@@ -534,9 +554,7 @@ pub(super) fn param_paths<'q>(
             }
         }
         let read = read_columns(table, stats);
-        let only = crate::enable().indexonlyscan
-            && index.method == BTREE_AM
-            && read.iter().all(|a| *a > 0 && index.columns.contains(a));
+        let only = index_only(index, &read);
         let forward = order(level, r, index, &quals, false, stats);
         let useful = stats.useful(&BTreeSet::from([r]), &forward);
         let backward = order(level, r, index, &quals, true, stats);
