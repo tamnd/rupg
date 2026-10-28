@@ -1,0 +1,95 @@
+!details
+> CREATE TEMP TABLE oc_d (a int) ON COMMIT DELETE ROWS;
+CREATE TABLE
+> INSERT INTO oc_d VALUES (1);
+INSERT 0 1
+> SELECT count(*) FROM oc_d;
+fields count:20:8:-1
+row 0
+SELECT 1
+> BEGIN;
+BEGIN
+> INSERT INTO oc_d VALUES (2);
+INSERT 0 1
+> SELECT count(*) FROM oc_d;
+fields count:20:8:-1
+row 1
+SELECT 1
+> COMMIT;
+COMMIT
+> SELECT count(*) FROM oc_d;
+fields count:20:8:-1
+row 0
+SELECT 1
+> BEGIN;
+BEGIN
+> CREATE TEMP TABLE oc_x (a int) ON COMMIT DROP;
+CREATE TABLE
+> INSERT INTO oc_x VALUES (1);
+INSERT 0 1
+> SELECT count(*) FROM oc_x;
+fields count:20:8:-1
+row 1
+SELECT 1
+> COMMIT;
+COMMIT
+> SELECT count(*) FROM oc_x;
+ERROR 42P01 relation "oc_x" does not exist at 22
+> CREATE TEMP TABLE oc_y ON COMMIT DROP AS SELECT 1 AS a;
+SELECT 1
+> SELECT * FROM oc_y;
+ERROR 42P01 relation "oc_y" does not exist at 15
+> BEGIN;
+BEGIN
+> CREATE TEMP TABLE oc_p (a int PRIMARY KEY) ON COMMIT DELETE ROWS;
+CREATE TABLE
+> CREATE TEMP TABLE oc_f (a int REFERENCES oc_p);
+CREATE TABLE
+> INSERT INTO oc_p VALUES (1);
+INSERT 0 1
+> COMMIT;
+ERROR 0A000 unsupported ON COMMIT and foreign key combination
+DETAIL Table "oc_f" references "oc_p", but they do not have the same ON COMMIT setting.
+> DROP TABLE oc_f;
+ERROR 42P01 table "oc_f" does not exist
+> BEGIN;
+BEGIN
+> INSERT INTO oc_p VALUES (1);
+ERROR 42P01 relation "oc_p" does not exist at 13
+> COMMIT;
+ROLLBACK
+> SELECT count(*) FROM oc_p;
+ERROR 42P01 relation "oc_p" does not exist at 22
+> CREATE TABLE oc_n (a int) ON COMMIT DELETE ROWS;
+ERROR 42P16 ON COMMIT can only be used on temporary tables
+> BEGIN;
+BEGIN
+> SELECT count(*) FROM oc_d;
+fields count:20:8:-1
+row 0
+SELECT 1
+> PREPARE TRANSACTION 'oc_1';
+ERROR 0A000 cannot PREPARE a transaction that has operated on temporary objects
+> BEGIN;
+BEGIN
+> SELECT 1;
+fields ?column?:23:4:-1
+row 1
+SELECT 1
+> PREPARE TRANSACTION 'oc_2';
+ERROR 55000 prepared transactions are disabled
+HINT Set "max_prepared_transactions" to a nonzero value.
+> COMMIT PREPARED 'oc_3';
+ERROR 42704 prepared transaction with identifier "oc_3" does not exist
+> ROLLBACK PREPARED 'oc_3';
+ERROR 42704 prepared transaction with identifier "oc_3" does not exist
+> BEGIN;
+BEGIN
+> DROP TABLE oc_d;
+DROP TABLE
+> PREPARE TRANSACTION 'oc_4';
+ERROR 0A000 cannot PREPARE a transaction that has operated on temporary objects
+> SELECT count(*) FROM oc_d;
+fields count:20:8:-1
+row 0
+SELECT 1

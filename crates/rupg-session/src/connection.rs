@@ -49,6 +49,7 @@ mod fastpath;
 mod foreign;
 mod listen;
 mod merge;
+mod oncommit;
 mod plpgsql;
 mod prepare;
 mod reindex;
@@ -447,6 +448,8 @@ pub struct Connection {
     deferred_unique: RefCell<Vec<Recheck>>,
     /// The modes that `SET CONSTRAINTS` gave in the transaction.
     modes: RefCell<deferred::Modes>,
+    /// The tables with `ON COMMIT DELETE ROWS` or `ON COMMIT DROP`, the last one first.
+    on_commits: RefCell<Vec<oncommit::OnCommit>>,
     /// The state of the transaction at each savepoint, the outermost first, as the names of the savepoints in [`Transaction`].
     marks: Vec<savepoint::Mark>,
     /// The functions in PL/pgSQL that the session compiled, and the calls that run.
@@ -543,6 +546,7 @@ impl Connection {
             deferred_events: RefCell::new(Vec::new()),
             deferred_unique: RefCell::new(Vec::new()),
             modes: RefCell::new(deferred::Modes::default()),
+            on_commits: RefCell::new(Vec::new()),
             marks: Vec::new(),
             plpgsql: rupg_plpgsql::Cache::default(),
             calls: plpgsql::Calls::default(),
@@ -1095,6 +1099,11 @@ impl Connection {
         self.stable_xid.get()
     }
 
+    /// `XACT_FLAGS_ACCESSEDTEMPNAMESPACE` for the transaction, as [`rupg_analyze::Env::access_temp`] sets it.
+    pub(crate) fn access_temp(&self) {
+        self.transaction.access_temp();
+    }
+
     /// The rows of the tables and the transactions in progress.
     pub(crate) fn heap(&self) -> &Heap {
         self.store.heap()
@@ -1355,6 +1364,7 @@ impl Connection {
             Ok(()) => {
                 let old = std::mem::replace(&mut lease.catalog, work);
                 self.index_stats(&old, &lease.catalog);
+                self.register_on_commit(&defined.on_commit);
                 if !defined.grantors.is_empty() || !defined.databases.is_empty() {
                     let mut roles = Roles::clone(&lease.roles);
                     roles.members.retain(|m| !defined.grantors.contains(&m.grantor));
@@ -6039,6 +6049,12 @@ mod tests {
     #[test]
     fn cluster() {
         big_stack(|| script(include_str!("connection/cluster.test")));
+    }
+
+    /// `ON COMMIT DELETE ROWS` empties a temporary table at each commit and `ON COMMIT DROP` drops it, a foreign key from a table without the same action fails the commit, and `PREPARE TRANSACTION` fails after a use of a temporary object. `connection/oncommit.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn on_commit() {
+        big_stack(|| script(include_str!("connection/oncommit.test")));
     }
 
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.

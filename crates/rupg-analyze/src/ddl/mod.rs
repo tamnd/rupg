@@ -96,7 +96,9 @@ use std::cell::RefCell;
 use rupg_catalog::{Catalog, ObjRef, PG_CLASS, PG_NAMESPACE, PG_PROC, PG_TYPE, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, ClassRow, Named, NamedRow, Owned};
-use rupg_sql::nodes::{CreateSchemaStmt, DiscardMode, GrantTargetType, Node, ObjectType, RangeVar};
+use rupg_sql::nodes::{
+    CreateSchemaStmt, DiscardMode, GrantTargetType, Node, ObjectType, OnCommitAction, RangeVar,
+};
 use rupg_types::{Value, oid};
 
 use crate::coerce::AtOpt;
@@ -154,6 +156,8 @@ pub struct Defined {
     pub concurrent: Option<u32>,
     /// The tables of `CLUSTER` and `REPACK`, whose rows the caller writes again to their new files.
     pub repacked: Vec<Repack>,
+    /// The new tables with `ON COMMIT DELETE ROWS` or `ON COMMIT DROP`, as `register_on_commit_action` keeps them. The caller does the action at each commit while the table exists.
+    pub on_commit: Vec<(u32, OnCommitAction)>,
 }
 
 /// A statement that cannot run inside a transaction block or in a function, as `PreventInTransactionBlock` checks it.
@@ -336,6 +340,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         top_level: None,
         concurrent: None,
         repacked: Vec::new(),
+        on_commit: Vec::new(),
     };
     let mut filled = None;
     let result = match stmt {
@@ -470,6 +475,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         top_level: definer.top_level,
         concurrent: definer.concurrent,
         repacked: definer.repacked,
+        on_commit: definer.on_commit,
     }
 }
 
@@ -568,6 +574,10 @@ impl Env for SchemaEnv<'_> {
         self.env.temp_number()
     }
 
+    fn access_temp(&self) {
+        self.env.access_temp();
+    }
+
     fn check_function(&self, function: &rupg_catalog::Function) -> Result<()> {
         self.env.check_function(function)
     }
@@ -651,6 +661,8 @@ pub(crate) struct Definer<'a, 'c> {
     concurrent: Option<u32>,
     /// The tables of [`Defined::repacked`].
     repacked: Vec<Repack>,
+    /// The tables of [`Defined::on_commit`].
+    on_commit: Vec<(u32, OnCommitAction)>,
 }
 
 /// An error for a part of a statement that rupg does not support yet.
@@ -965,6 +977,7 @@ impl Definer<'_, '_> {
 
     /// `AccessTempTableNamespace` and `InitTempTableNamespace`: the temporary schema `pg_temp_N` of the session. The first temporary object of the session makes it and its TOAST schema `pg_toast_temp_N`, which the bootstrap superuser owns.
     fn temp_namespace(&mut self) -> Result<u32> {
+        self.an.env.access_temp();
         if self.an.temp != 0 {
             return Ok(self.an.temp);
         }
@@ -1021,7 +1034,11 @@ impl Definer<'_, '_> {
                 })?;
                 self.relation_in(namespace, name)
             }
-            None => self.an.temp_path.iter().find_map(|&ns| self.relation_in(ns, name)),
+            None => self
+                .an
+                .temp_path
+                .iter()
+                .find_map(|&ns| self.relation_in(ns, name).inspect(|_| self.an.note_temp(ns))),
         };
         found.ok_or_else(|| {
             let shown = match rv.schemaname.as_deref() {

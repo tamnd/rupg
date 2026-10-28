@@ -206,6 +206,8 @@ pub trait Env {
     fn temp_number(&self) -> Option<i32> {
         None
     }
+    /// `MyXactFlags |= XACT_FLAGS_ACCESSEDTEMPNAMESPACE`: the statement uses the temporary schema of the session, so the transaction cannot be prepared. A session with no transactions does nothing.
+    fn access_temp(&self) {}
     /// `CommandCounterIncrement`: the lookups of the types and the functions by name and by OID see the objects of `catalog`, which the statement changed. A session with no catalog of its own does nothing.
     fn command_counter_increment(&self, catalog: &rupg_catalog::Catalog) {
         let _ = catalog;

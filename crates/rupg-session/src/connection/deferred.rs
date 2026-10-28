@@ -158,25 +158,28 @@ impl Connection {
         Ok(())
     }
 
-    /// `AfterTriggerFireDeferred`: before a commit, all the deferred triggers fire. It does nothing when the end of the statement does not commit.
+    /// `AfterTriggerFireDeferred`: before a commit, all the deferred triggers fire, then the actions of `ON COMMIT` run. It does nothing when the end of the statement does not commit.
     ///
     /// # Errors
     ///
-    /// The errors of the triggers.
+    /// The errors of the triggers and of the actions of `ON COMMIT`.
     pub(super) fn pre_commit(&self) -> Result<(), Error> {
-        if !self.transaction.commits()
-            || (self.deferred.borrow().is_empty()
-                && self.deferred_events.borrow().is_empty()
-                && self.deferred_unique.borrow().is_empty())
-        {
+        if !self.transaction.commits() {
             return Ok(());
         }
+        if !self.deferred.borrow().is_empty()
+            || !self.deferred_events.borrow().is_empty()
+            || !self.deferred_unique.borrow().is_empty()
         {
-            let mut modes = self.modes.borrow_mut();
-            modes.all = Some(false);
-            modes.each.clear();
+            {
+                let mut modes = self.modes.borrow_mut();
+                modes.all = Some(false);
+                modes.each.clear();
+            }
+            self.fire_deferred()?;
         }
-        self.fire_deferred()
+        // `PreCommit_on_commit_actions` comes after `AfterTriggerFireDeferred` in `CommitTransaction`.
+        self.on_commit_actions()
     }
 
     /// The end of a transaction: the queue and the modes go.

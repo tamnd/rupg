@@ -12,7 +12,7 @@ use rupg_wire::CommandTag;
 
 use rupg_pgcatalog::roles::Roles;
 
-use crate::block::Transaction;
+use crate::block::{Block, Transaction};
 use crate::guc::{self, Action, Arg, Origin, Settings};
 
 /// `BOOTSTRAP_SUPERUSERID`.
@@ -519,11 +519,45 @@ fn transaction(stmt: &TransactionStmt, cx: &mut Context<'_>) -> Result<CommandTa
             cx.settings.set_subtransaction(cx.transaction.depth() > 0);
             Ok(tag)
         }
-        _ => Err(Error::new(
-            SqlState::FEATURE_NOT_SUPPORTED,
-            "prepared transactions are not supported yet",
-        )),
+        TransactionStmtKind::TRANS_STMT_PREPARE => prepare_transaction(cx),
+        _ => {
+            let statement = if stmt.kind == TransactionStmtKind::TRANS_STMT_COMMIT_PREPARED {
+                "COMMIT PREPARED"
+            } else {
+                "ROLLBACK PREPARED"
+            };
+            prevent_block(cx, statement)?;
+            // `LockGXact`: the server has no prepared transactions, as `max_prepared_transactions` is 0.
+            Err(Error::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!(
+                    "prepared transaction with identifier \"{}\" does not exist",
+                    stmt.gid.as_deref().unwrap_or_default()
+                ),
+            ))
+        }
     }
+}
+
+/// `PrepareTransactionBlock`: `EndTransactionBlock`, then `PrepareTransaction` at the end of the statement. Outside of a block and in a failed block the statement gives the tag `ROLLBACK`. In a block, `PrepareTransaction` fails, and the error ends the block: a transaction that used the temporary schema cannot be prepared, and `MarkAsPreparing` refuses the rest, as `max_prepared_transactions` is 0.
+fn prepare_transaction(cx: &mut Context<'_>) -> Result<CommandTag, Error> {
+    let block = cx.transaction.block();
+    let (commits, warning) = cx.transaction.commit(false)?;
+    if let Some(warning) = warning {
+        cx.notices.push(Notice::warning(warning));
+    }
+    if !commits || matches!(block, Block::Started | Block::Implicit) {
+        return Ok(CommandTag::Rollback);
+    }
+    Err(if cx.transaction.accessed_temp() {
+        Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            "cannot PREPARE a transaction that has operated on temporary objects",
+        )
+    } else {
+        Error::new(SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE, "prepared transactions are disabled")
+            .with_hint("Set \"max_prepared_transactions\" to a nonzero value.")
+    })
 }
 
 /// `DISCARD ALL`, `DISCARD PLANS` and `DISCARD SEQUENCES`. The session has no plans or sequence caches yet, so only `DISCARD ALL` changes something: it resets the session authorization and all the settings. `DISCARD TEMP` runs as a definition, as it drops the objects of the temporary schema.

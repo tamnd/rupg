@@ -128,6 +128,7 @@ impl Definer<'_, '_> {
         }
         self.check_on_commit(into.onCommit, namespace)?;
         let table = self.create_query_table(namespace, &name, columns, &into.options)?;
+        self.register_on_commit(table, into.onCommit);
         if rv.relpersistence == b'u' {
             self.catalog.set_unlogged(table, true)?;
         }

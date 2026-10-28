@@ -255,10 +255,13 @@ impl Definer<'_, '_> {
                 "ON COMMIT can only be used on temporary tables",
             ));
         }
-        match action {
-            OnCommitAction::ONCOMMIT_DELETE_ROWS => Err(not_yet("ON COMMIT DELETE ROWS", None)),
-            OnCommitAction::ONCOMMIT_DROP => Err(not_yet("ON COMMIT DROP", None)),
-            _ => Ok(()),
+        Ok(())
+    }
+
+    /// `register_on_commit_action`: a new table with `ON COMMIT DELETE ROWS` or `ON COMMIT DROP` goes to [`Defined::on_commit`].
+    pub(super) fn register_on_commit(&mut self, table: u32, action: OnCommitAction) {
+        if matches!(action, OnCommitAction::ONCOMMIT_DELETE_ROWS | OnCommitAction::ONCOMMIT_DROP) {
+            self.on_commit.push((table, action));
         }
     }
 
@@ -385,6 +388,7 @@ impl Definer<'_, '_> {
         }
         self.check_on_commit(stmt.oncommit, namespace)?;
         let table = self.define_relation(&plan)?;
+        self.register_on_commit(table, stmt.oncommit);
         if let Some(foreign) = foreign {
             self.store_foreign_table(table, foreign)?;
         }
