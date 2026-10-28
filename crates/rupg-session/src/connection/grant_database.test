@@ -1,0 +1,126 @@
+> CREATE ROLE regress_gdb_a
+CREATE ROLE
+> CREATE ROLE regress_gdb_b
+CREATE ROLE
+> CREATE DATABASE regress_gdb_db OWNER regress_gdb_a
+CREATE DATABASE
+> GRANT CONNECT ON DATABASE regress_gdb_nope TO regress_gdb_b
+ERROR 3D000 database "regress_gdb_nope" does not exist
+> GRANT SELECT ON DATABASE regress_gdb_db TO regress_gdb_b
+ERROR 0LP01 invalid privilege type SELECT for database
+> GRANT CONNECT, TEMP ON DATABASE regress_gdb_db TO regress_gdb_b
+GRANT
+> SELECT datacl FROM pg_database WHERE datname = 'regress_gdb_db'
+fields datacl@pg_database.18:1034:-1:-1
+row {=Tc/regress_gdb_a,regress_gdb_a=CTc/regress_gdb_a,regress_gdb_b=Tc/regress_gdb_a}
+SELECT 1
+> GRANT CREATE ON DATABASE regress_gdb_db TO regress_gdb_b WITH GRANT OPTION
+GRANT
+> SELECT datacl FROM pg_database WHERE datname = 'regress_gdb_db'
+fields datacl@pg_database.18:1034:-1:-1
+row {=Tc/regress_gdb_a,regress_gdb_a=CTc/regress_gdb_a,regress_gdb_b=C*Tc/regress_gdb_a}
+SELECT 1
+> SELECT has_database_privilege('regress_gdb_b', 'regress_gdb_db', 'CREATE WITH GRANT OPTION'), has_database_privilege('regress_gdb_b', 'regress_gdb_db', 'TEMP WITH GRANT OPTION')
+fields has_database_privilege:16:1:-1,has_database_privilege:16:1:-1
+row t,f
+SELECT 1
+> REVOKE TEMP ON DATABASE regress_gdb_db FROM regress_gdb_b
+REVOKE
+> SELECT datacl FROM pg_database WHERE datname = 'regress_gdb_db'
+fields datacl@pg_database.18:1034:-1:-1
+row {=Tc/regress_gdb_a,regress_gdb_a=CTc/regress_gdb_a,regress_gdb_b=C*c/regress_gdb_a}
+SELECT 1
+> REVOKE CONNECT, TEMP ON DATABASE regress_gdb_db FROM PUBLIC
+REVOKE
+> SELECT datacl FROM pg_database WHERE datname = 'regress_gdb_db'
+fields datacl@pg_database.18:1034:-1:-1
+row {regress_gdb_a=CTc/regress_gdb_a,regress_gdb_b=C*c/regress_gdb_a}
+SELECT 1
+> SELECT has_database_privilege('regress_gdb_b', 'regress_gdb_db', 'CONNECT'), has_database_privilege('public', 'regress_gdb_db', 'TEMP')
+fields has_database_privilege:16:1:-1,has_database_privilege:16:1:-1
+row t,f
+SELECT 1
+> BEGIN
+BEGIN
+> GRANT ALL ON DATABASE regress_gdb_db TO PUBLIC
+GRANT
+> SELECT datacl FROM pg_database WHERE datname = 'regress_gdb_db'
+fields datacl@pg_database.18:1034:-1:-1
+row {regress_gdb_a=CTc/regress_gdb_a,regress_gdb_b=C*c/regress_gdb_a,=CTc/regress_gdb_a}
+SELECT 1
+> ROLLBACK
+ROLLBACK
+> SELECT datacl FROM pg_database WHERE datname = 'regress_gdb_db'
+fields datacl@pg_database.18:1034:-1:-1
+row {regress_gdb_a=CTc/regress_gdb_a,regress_gdb_b=C*c/regress_gdb_a}
+SELECT 1
+> SET ROLE regress_gdb_b
+SET
+is_superuser=off
+> GRANT CONNECT ON DATABASE regress_gdb_db TO regress_gdb_a
+WARNING 01007 no privileges were granted for "regress_gdb_db"
+GRANT
+> GRANT CREATE ON DATABASE regress_gdb_db TO PUBLIC
+GRANT
+> GRANT TEMP ON DATABASE regress_gdb_db TO PUBLIC
+WARNING 01007 no privileges were granted for "regress_gdb_db"
+GRANT
+> RESET ROLE
+RESET
+is_superuser=on
+> SELECT datacl FROM pg_database WHERE datname = 'regress_gdb_db'
+fields datacl@pg_database.18:1034:-1:-1
+row {regress_gdb_a=CTc/regress_gdb_a,regress_gdb_b=C*c/regress_gdb_a,=C/regress_gdb_b}
+SELECT 1
+> REVOKE CREATE ON DATABASE regress_gdb_db FROM regress_gdb_b
+ERROR 2BP01 dependent privileges exist
+> REVOKE CREATE ON DATABASE regress_gdb_db FROM regress_gdb_b CASCADE
+REVOKE
+> SELECT datacl FROM pg_database WHERE datname = 'regress_gdb_db'
+fields datacl@pg_database.18:1034:-1:-1
+row {regress_gdb_a=CTc/regress_gdb_a,regress_gdb_b=c/regress_gdb_a}
+SELECT 1
+> BEGIN
+BEGIN
+> GRANT CREATE ON DATABASE template1 TO regress_gdb_b
+GRANT
+> SELECT datname, datacl FROM pg_database WHERE datname IN ('template1', 'postgres') ORDER BY 1
+fields datname@pg_database.2:19:64:-1,datacl@pg_database.18:1034:-1:-1
+row postgres,NULL
+row template1,{=c/postgres,postgres=CTc/postgres,regress_gdb_b=C/postgres}
+SELECT 2
+> SELECT has_database_privilege('regress_gdb_b', 'template1', 'CREATE')
+fields has_database_privilege:16:1:-1
+row t
+SELECT 1
+> SAVEPOINT s
+SAVEPOINT
+> REVOKE ALL ON DATABASE template1 FROM PUBLIC
+REVOKE
+> SELECT datname, datacl FROM pg_database WHERE datname IN ('template1', 'postgres') ORDER BY 1
+fields datname@pg_database.2:19:64:-1,datacl@pg_database.18:1034:-1:-1
+row postgres,NULL
+row template1,{postgres=CTc/postgres,regress_gdb_b=C/postgres}
+SELECT 2
+> ROLLBACK TO s
+ROLLBACK
+> SELECT datname, datacl FROM pg_database WHERE datname IN ('template1', 'postgres') ORDER BY 1
+fields datname@pg_database.2:19:64:-1,datacl@pg_database.18:1034:-1:-1
+row postgres,NULL
+row template1,{=c/postgres,postgres=CTc/postgres,regress_gdb_b=C/postgres}
+SELECT 2
+> ROLLBACK
+ROLLBACK
+> SELECT datname, datacl FROM pg_database WHERE datname IN ('template1', 'postgres') ORDER BY 1
+fields datname@pg_database.2:19:64:-1,datacl@pg_database.18:1034:-1:-1
+row postgres,NULL
+row template1,{=c/postgres,postgres=CTc/postgres}
+SELECT 2
+> GRANT CONNECT ON DATABASE regress_gdb_db TO regress_gdb_nope
+ERROR 42704 role "regress_gdb_nope" does not exist
+> GRANT CONNECT ON DATABASE regress_gdb_db, regress_gdb_nope TO regress_gdb_b
+ERROR 3D000 database "regress_gdb_nope" does not exist
+> DROP DATABASE regress_gdb_db
+DROP DATABASE
+> DROP ROLE regress_gdb_a, regress_gdb_b
+DROP ROLE

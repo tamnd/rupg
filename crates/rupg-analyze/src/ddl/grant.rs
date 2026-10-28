@@ -1,4 +1,4 @@
-//! `ExecuteGrantStmt`: `GRANT` and `REVOKE` on the tables, the views, the sequences, the columns, the schemas, the functions, the procedures, the types, the domains, the languages, the foreign-data wrappers and the foreign servers, as `aclchk.c` runs them, with the ACL functions of `acl.c`. An ACL is a list of `aclitem` texts. A relation or a schema of the catalog keeps its ACL in the catalog, and the other objects keep the ACL that `GRANT` gives them in [`Catalog::set_object_acl`](rupg_catalog::Catalog::set_object_acl).
+//! `ExecuteGrantStmt`: `GRANT` and `REVOKE` on the tables, the views, the sequences, the columns, the schemas, the functions, the procedures, the types, the domains, the languages, the foreign-data wrappers, the foreign servers, the large objects and the databases, as `aclchk.c` runs them, with the ACL functions of `acl.c`. An ACL is a list of `aclitem` texts. A relation or a schema of the catalog keeps its ACL in the catalog, a database keeps its ACL in its row of `pg_database`, which the caller keeps, and the other objects keep the ACL that `GRANT` gives them in [`Catalog::set_object_acl`](rupg_catalog::Catalog::set_object_acl).
 
 use std::collections::BTreeMap;
 
@@ -57,6 +57,8 @@ const ALL_FDW: u64 = USAGE;
 const ALL_FOREIGN_SERVER: u64 = USAGE;
 /// `ACL_ALL_RIGHTS_LARGEOBJECT`.
 const ALL_LARGEOBJECT: u64 = SELECT | UPDATE;
+/// `ACL_ALL_RIGHTS_DATABASE`.
+const ALL_DATABASE: u64 = CREATE | TEMP | CONNECT;
 
 /// The bits of the grant options of an `aclitem`.
 const GOPTION_BITS: u64 = 0xFFFF_FFFF << 32;
@@ -209,6 +211,7 @@ enum Kind {
     Fdw,
     Server,
     LargeObject,
+    Database,
 }
 
 impl Kind {
@@ -225,6 +228,7 @@ impl Kind {
             Kind::Fdw => ALL_FDW,
             Kind::Server => ALL_FOREIGN_SERVER,
             Kind::LargeObject => ALL_LARGEOBJECT,
+            Kind::Database => ALL_DATABASE,
         }
     }
 
@@ -241,6 +245,7 @@ impl Kind {
             Kind::Fdw => (0, ALL_FDW),
             Kind::Server => (0, ALL_FOREIGN_SERVER),
             Kind::LargeObject => (0, ALL_LARGEOBJECT),
+            Kind::Database => (TEMP | CONNECT, ALL_DATABASE),
         };
         let mut acl = Vec::new();
         if world != 0 {
@@ -265,6 +270,7 @@ impl Kind {
             Kind::Fdw => "foreign-data wrapper",
             Kind::Server => "foreign server",
             Kind::LargeObject => "large object",
+            Kind::Database => "database",
         }
     }
 }
@@ -560,6 +566,7 @@ impl Definer<'_, '_> {
             ObjectType::OBJECT_PROCEDURE => (ALL_FUNCTION, "procedure"),
             ObjectType::OBJECT_ROUTINE => (ALL_FUNCTION, "routine"),
             ObjectType::OBJECT_LARGEOBJECT => (ALL_LARGEOBJECT, "large object"),
+            ObjectType::OBJECT_DATABASE => (ALL_DATABASE, "database"),
             _ => (ALL_TYPE, "type"),
         };
         let mut grant = Grant {
@@ -738,6 +745,17 @@ impl Definer<'_, '_> {
                 (ObjectType::OBJECT_LARGEOBJECT, item) => {
                     Object::new(Kind::LargeObject, self.large_object_oid(item)?)
                 }
+                (ObjectType::OBJECT_DATABASE, Node::String(name)) => {
+                    let name: &str = name;
+                    let oid = self.database_row(|row| row.name == name).map(|row| row.oid);
+                    let oid = oid.ok_or_else(|| {
+                        Error::new(
+                            SqlState::UNDEFINED_DATABASE,
+                            format!("database \"{name}\" does not exist"),
+                        )
+                    })?;
+                    Object::new(Kind::Database, oid)
+                }
                 _ => return Err(not_yet("GRANT on this kind of object", None)),
             };
             objects.push(object);
@@ -764,6 +782,25 @@ impl Definer<'_, '_> {
             ));
         }
         Ok(oid)
+    }
+
+    /// The first row of `pg_database` for which `wanted` is true, with the changes of the statement and of the transaction: the row of a database that `CREATE DATABASE` made or that a statement changed, or a static row of `initdb`.
+    fn database_row(
+        &self,
+        wanted: impl Fn(&rupg_catalog::Database) -> bool,
+    ) -> Option<rupg_catalog::Database> {
+        let databases = self.an.env.databases();
+        let mut row = match databases.iter().find(|row| wanted(row)) {
+            Some(row) => row.clone(),
+            None => rupg_catalog::Database::initdb()
+                .into_iter()
+                .find(|row| databases.iter().all(|d| d.oid != row.oid) && wanted(row))?,
+        };
+        if let Some(change) = self.databases.iter().find(|c| c.oid == row.oid) {
+            row.owner = change.owner;
+            row.acl.clone_from(&change.acl);
+        }
+        Some(row)
     }
 
     /// `objectsInSchemaToOids`: the relations, the sequences or the routines of the schemas, after the check of `USAGE` on each schema.
@@ -857,6 +894,10 @@ impl Definer<'_, '_> {
             Kind::Fdw => text(self.catalog.fdw(object.oid).map(|f| f.name.as_str())),
             Kind::Server => text(self.catalog.server(object.oid).map(|s| s.name.as_str())),
             Kind::LargeObject => format!("large object {}", object.oid),
+            Kind::Database => self
+                .database_row(|row| row.oid == object.oid)
+                .map(|row| row.name)
+                .unwrap_or_default(),
         }
     }
 
@@ -934,6 +975,10 @@ impl Definer<'_, '_> {
                 self.catalog.large_object(object.oid).map_or(0, |l| l.owner),
                 stored(PG_LARGEOBJECT),
             ),
+            Kind::Database => match self.database_row(|row| row.oid == object.oid) {
+                Some(row) => (row.owner, row.acl.as_ref().map(|acl| parse_acl(roles, acl))),
+                None => (0, None),
+            },
         }
     }
 
@@ -948,6 +993,17 @@ impl Definer<'_, '_> {
             _ => false,
         };
         match object.kind {
+            Kind::Database => {
+                let owner =
+                    self.database_row(|row| row.oid == object.oid).map_or(0, |row| row.owner);
+                self.databases.retain(|c| c.oid != object.oid);
+                self.databases.push(rupg_pgcatalog::roles::DatabaseChange {
+                    oid: object.oid,
+                    owner,
+                    acl: Some(texts),
+                });
+                Ok(())
+            }
             Kind::Table | Kind::Sequence if user => self.catalog.set_acl(object.oid, Some(texts)),
             Kind::Schema if user => self.catalog.set_schema_acl(object.oid, Some(texts)),
             Kind::Column => {

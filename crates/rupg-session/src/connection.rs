@@ -1337,9 +1337,13 @@ impl Connection {
             Ok(()) => {
                 let old = std::mem::replace(&mut lease.catalog, work);
                 self.index_stats(&old, &lease.catalog);
-                if !defined.grantors.is_empty() {
+                if !defined.grantors.is_empty() || !defined.databases.is_empty() {
                     let mut roles = Roles::clone(&lease.roles);
                     roles.members.retain(|m| !defined.grantors.contains(&m.grantor));
+                    for change in defined.databases {
+                        roles.databases.retain(|c| c.oid != change.oid);
+                        roles.databases.push(change);
+                    }
                     lease.roles = Arc::new(roles);
                 }
                 if let Some(table) = defined.filled {
@@ -5944,6 +5948,12 @@ mod tests {
     #[test]
     fn alter_database_owner() {
         big_stack(|| script(include_str!("connection/alter_database_owner.test")));
+    }
+
+    /// `GRANT` and `REVOKE` on a database: the errors, the grant option, `PUBLIC`, a grantor that is not the owner, `CASCADE`, a rollback, a savepoint and a database of `initdb`. `connection/grant_database.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn grant_database() {
+        big_stack(|| script(include_str!("connection/grant_database.test")));
     }
 
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
