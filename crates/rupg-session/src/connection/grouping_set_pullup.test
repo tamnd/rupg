@@ -1,0 +1,36 @@
+!details
+> create temp view gsv(a,b,v) as values (1,1,10),(1,2,11),(2,2,12),(2,3,13)
+CREATE VIEW
+> explain (costs off) select a, b, sum(v) from gsv group by grouping sets ((a),(b)) order by 1, 2
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: "*VALUES*".column1, "*VALUES*".column2
+row   ->  HashAggregate
+row         Hash Key: "*VALUES*".column1
+row         Hash Key: "*VALUES*".column2
+row         ->  Values Scan on "*VALUES*"
+EXPLAIN
+> select a, b, sum(v) from gsv group by grouping sets ((a),(b)) order by 1, 2
+fields a@gsv.1:23:4:-1,b@gsv.2:23:4:-1,sum:20:8:-1
+row 1,NULL,21
+row 2,NULL,25
+row NULL,1,10
+row NULL,2,23
+row NULL,3,13
+SELECT 5
+> explain (costs off) select a, sum(v) from (select a, v from gsv where b > 1) s group by rollup (a) order by 1
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: "*VALUES*".column1
+row   ->  MixedAggregate
+row         Hash Key: "*VALUES*".column1
+row         Group Key: ()
+row         ->  Values Scan on "*VALUES*"
+row               Filter: (column2 > 1)
+EXPLAIN
+> select a, sum(v) from (select a, v from gsv where b > 1) s group by rollup (a) order by 1
+fields a@gsv.1:23:4:-1,sum:20:8:-1
+row 1,11
+row 2,25
+row NULL,36
+SELECT 3

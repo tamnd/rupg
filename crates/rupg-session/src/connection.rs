@@ -6466,6 +6466,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/grouping_set_having.test")));
     }
 
+    /// `pull_up_simple_subquery` merges a view over `VALUES` into a query with grouping sets when the query reads distinct columns of it, so the plan scans the `VALUES` with no `Subquery Scan`.
+    #[test]
+    fn grouping_set_pullup() {
+        big_stack(|| script(include_str!("connection/grouping_set_pullup.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
