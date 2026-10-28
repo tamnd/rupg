@@ -1017,8 +1017,21 @@ impl Connection {
             SqlState::UNIQUE_VIOLATION,
             format!("duplicate key value violates unique constraint \"{}\"", unique.name),
         );
-        if !rupg_func::row_security_hides(table, &self.reader()) {
-            error = error.with_detail(format!("Key ({columns})=({values}) already exists."));
+        // `BuildIndexValueDescription`: the detail needs `SELECT` on the table or on each key column, and no policy of row security for the role.
+        let attrs: Vec<i16> =
+            match self.catalog().relation(unique.oid).and_then(|r| r.index.as_ref()) {
+                Some(index) => {
+                    let count = usize::try_from(index.key_count).unwrap_or(0);
+                    index.keys.iter().take(count).copied().collect()
+                }
+                None => unique.columns.iter().map(|&c| i16::try_from(c + 1).unwrap_or(0)).collect(),
+            };
+        match rupg_func::key_shown(table, &attrs, &self.reader()) {
+            Ok(true) => {
+                error = error.with_detail(format!("Key ({columns})=({values}) already exists."));
+            }
+            Ok(false) => {}
+            Err(error) => return error,
         }
         rupg_func::with_table_constraint(error, table, &unique.name, &self.reader())
     }
@@ -5972,6 +5985,12 @@ mod tests {
     #[test]
     fn language_usage() {
         big_stack(|| script(include_str!("connection/language_usage.test")));
+    }
+
+    /// The detail of a duplicate key shows the key only to a role with `SELECT` on the table or on each column of the key, as `BuildIndexValueDescription` checks it. A key with an expression needs `SELECT` on the table. `connection/key_detail.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn key_detail() {
+        big_stack(|| script(include_str!("connection/key_detail.test")));
     }
 
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
