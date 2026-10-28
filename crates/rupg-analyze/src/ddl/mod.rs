@@ -143,6 +143,8 @@ pub struct Defined {
     pub detached: Vec<u32>,
     /// The roles of `DROP OWNED`. The caller removes the grants of membership that these roles made, as `shdepDropOwned` drops the rows of `pg_auth_members` with the role as the grantor.
     pub grantors: Vec<u32>,
+    /// The rows of `pg_database` that `GRANT` and `REVOKE` changed, which the caller keeps in the roles of the transaction.
+    pub databases: Vec<rupg_pgcatalog::roles::DatabaseChange>,
     /// The elements of `CREATE SCHEMA`, which the caller runs after it keeps the new schema, or `None`.
     pub schema: Option<SchemaElements>,
     /// The check of `PreventInTransactionBlock` that the statement needs after it found its relations, such as `REINDEX` of a partitioned table, or `None`. The caller runs the check before it keeps the changes, and after an error the messages of the statement go.
@@ -325,6 +327,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         checks: Vec::new(),
         detached: Vec::new(),
         grantors: Vec::new(),
+        databases: Vec::new(),
         schema: None,
         top_level: None,
         concurrent: None,
@@ -456,6 +459,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         checks: definer.checks,
         detached: definer.detached,
         grantors: definer.grantors,
+        databases: definer.databases,
         schema: definer.schema,
         top_level: definer.top_level,
         concurrent: definer.concurrent,
@@ -527,6 +531,14 @@ impl Env for SchemaEnv<'_> {
 
     fn allow_system_table_mods(&self) -> bool {
         self.env.allow_system_table_mods()
+    }
+
+    fn lo_compat_privileges(&self) -> bool {
+        self.env.lo_compat_privileges()
+    }
+
+    fn databases(&self) -> std::sync::Arc<[rupg_catalog::Database]> {
+        self.env.databases()
     }
 
     fn replica(&self) -> bool {
@@ -622,6 +634,8 @@ pub(crate) struct Definer<'a, 'c> {
     detached: Vec<u32>,
     /// The roles of [`Defined::grantors`].
     grantors: Vec<u32>,
+    /// The rows of [`Defined::databases`].
+    databases: Vec<rupg_pgcatalog::roles::DatabaseChange>,
     /// The elements of [`Defined::schema`].
     schema: Option<SchemaElements>,
     /// The check of [`Defined::top_level`].

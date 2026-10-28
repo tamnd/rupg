@@ -43,6 +43,7 @@ pub fn object_address(
         checks: Vec::new(),
         detached: Vec::new(),
         grantors: Vec::new(),
+        databases: Vec::new(),
         schema: None,
         top_level: None,
         concurrent: None,

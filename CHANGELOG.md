@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Add GRANT and REVOKE ON DATABASE, with the grant option, the warnings of a grantor that has no grant option, and CASCADE (#989).
 - Add ALTER DATABASE ... OWNER TO. The change is part of the transaction, and the new owner is a member of pg_database_owner (#988).
 - Add GRANT, REVOKE, COMMENT ON and ALTER OWNER for large objects, their default privileges, lo_compat_privileges and the function call protocol (#987).
 - Large objects: `lo_create`, `lo_creat`, `lo_open`, `lo_close`, `loread`, `lowrite`, `lo_lseek`, `lo_tell`, `lo_truncate` and their 64-bit forms, `lo_get`, `lo_put`, `lo_from_bytea`, `lo_import`, `lo_export` and `lo_unlink`, with the rows of `pg_largeobject_metadata` and `pg_largeobject`. The data is in the catalog of the transaction, so a rollback undoes a write, and the descriptors of a subtransaction close at its rollback (#985).

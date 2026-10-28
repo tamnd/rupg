@@ -173,6 +173,10 @@ pub trait Env {
     fn lo_compat_privileges(&self) -> bool {
         false
     }
+    /// The rows of `pg_database` of the databases that `CREATE DATABASE` made and of the databases that a statement changed, with the changes of the transaction. The other databases of `initdb` have their static rows.
+    fn databases(&self) -> std::sync::Arc<[rupg_catalog::Database]> {
+        std::sync::Arc::from(Vec::new())
+    }
     /// `restrict_nonsystem_relation_kind` has `view`: a query cannot read or write a view of the user.
     fn restrict_views(&self) -> bool {
         false

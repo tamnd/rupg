@@ -1537,6 +1537,10 @@ impl Env for Reader<'_> {
         self.settings().get("lo_compat_privileges").as_deref() == Some("on")
     }
 
+    fn databases(&self) -> Arc<[rupg_catalog::Database]> {
+        rupg_func::Session::databases(self)
+    }
+
     fn filling(&self) -> u32 {
         self.conn.map_or(0, |conn| conn.filling.get())
     }
