@@ -6589,6 +6589,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/pg_basetype.test")));
     }
 
+    /// `EXPLAIN VERBOSE` of an `UPDATE` that sets fields and parts of arrays of a column shows a `FieldStore` as the new values in `ROW`, and an assignment to a part of an array with the subscripts and the fields of the parts below it.
+    #[test]
+    fn explain_field_store() {
+        big_stack(|| script(include_str!("connection/explain_field_store.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

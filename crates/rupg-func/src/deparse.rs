@@ -497,8 +497,30 @@ impl<'a> Deparser<'a> {
             }
             ExprKind::CoerceToDomain(arg, _) => self.coercion(arg, e.ty, e.typmod, e)?,
             ExprKind::DomainValue => self.buf.push_str("VALUE"),
-            // `processIndirection` shows an assignment to a field as the target of `SET`, so a `FieldStore` does not come here.
-            ExprKind::FieldStore(_) => return Err(Error::internal("unexpected FieldStore")),
+            // A statement shows an assignment to a field as the target of `SET`, so only `EXPLAIN` comes here. It shows the new values with no names of the fields, in `ROW` for more than one.
+            ExprKind::FieldStore(store) => {
+                let row = store.fields.len() != 1;
+                if row {
+                    self.buf.push_str("ROW(");
+                }
+                for (i, (_, value)) in store.fields.iter().enumerate() {
+                    if i > 0 {
+                        self.buf.push_str(", ");
+                    }
+                    self.expr(value, implicit)?;
+                }
+                if row {
+                    self.buf.push(')');
+                }
+            }
+            // An assignment to an element of an array in a field shows only its new value, as the `FieldStore` above it shows no field.
+            ExprKind::Subscript(sub)
+                if matches!(sub.container.kind, ExprKind::CaseTest) && sub.assign.is_some() =>
+            {
+                if let Some(assign) = &sub.assign {
+                    self.expr(assign, implicit)?;
+                }
+            }
             ExprKind::Subscript(sub) => {
                 // The array needs parentheses unless it is a column or a field, also when it is another subscript.
                 let parens =
@@ -510,11 +532,13 @@ impl<'a> Deparser<'a> {
                 if parens {
                     self.buf.push(')');
                 }
-                self.subscripts(sub)?;
-                // An assignment shows its new value after the subscripts.
-                if let Some(assign) = &sub.assign {
+                // An assignment shows the subscripts and the fields of the parts below it, then its new value, as `processIndirection` gives them.
+                if sub.assign.is_some() {
+                    let value = self.indirection(e)?;
                     self.buf.push_str(" := ");
-                    self.expr(assign, false)?;
+                    self.expr(value, implicit)?;
+                } else {
+                    self.subscripts(sub)?;
                 }
             }
             ExprKind::Bool(op, args) => {
