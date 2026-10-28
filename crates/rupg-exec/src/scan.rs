@@ -1061,7 +1061,7 @@ pub(crate) fn tuples(
     Ok(acc)
 }
 
-/// The place of each row of the relation of the index scan `scanned` in the tuples `acc`, in the order of the keys of the index and then of the heap. A null row of an outer join keeps its number, after the others.
+/// The place of each row of the relation of the index scan `scanned` in the tuples `acc`, in the order of the keys of the index and then of the heap, or the reverse order of the heap for a backward scan. A null row of an outer join keeps its number, after the others.
 fn index_ranks(
     tables: &Tables,
     scanned: &Scanned,
@@ -1080,7 +1080,7 @@ fn index_ranks(
             error.get_or_insert(e);
             Ordering::Equal
         });
-        order.then(x.cmp(&y))
+        if scanned.backward { order.then(y.cmp(&x)) } else { order.then(x.cmp(&y)) }
     });
     if let Some(error) = error {
         return Err(error);

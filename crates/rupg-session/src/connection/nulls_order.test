@@ -1,0 +1,70 @@
+!details
+> create table on1 (unique1 int, unique2 int)
+CREATE TABLE
+> insert into on1 select g, 1000 - g from generate_series(0, 999) g
+INSERT 0 1000
+> insert into on1 values (null, -1), (null, 2147483647), (null, null), (100, null), (500, null)
+INSERT 0 5
+> create unique index on1_i on on1 (unique2)
+CREATE INDEX
+> set enable_seqscan = off
+SET
+> set enable_bitmapscan = off
+SET
+> select unique1, unique2 from on1 order by unique2 desc limit 5
+fields unique1@on1.1:23:4:-1,unique2@on1.2:23:4:-1
+row 500,NULL
+row 100,NULL
+row NULL,NULL
+row NULL,2147483647
+row 0,1000
+SELECT 5
+> select unique1, unique2 from on1 order by unique2 limit 2
+fields unique1@on1.1:23:4:-1,unique2@on1.2:23:4:-1
+row NULL,-1
+row 999,1
+SELECT 2
+> select unique1, unique2 from on1 order by unique2 nulls first limit 4
+fields unique1@on1.1:23:4:-1,unique2@on1.2:23:4:-1
+row 500,NULL
+row NULL,NULL
+row 100,NULL
+row NULL,-1
+SELECT 4
+> select unique1, unique2 from on1 order by unique2 desc nulls last offset 999
+fields unique1@on1.1:23:4:-1,unique2@on1.2:23:4:-1
+row 998,2
+row 999,1
+row NULL,-1
+row NULL,NULL
+row 100,NULL
+row 500,NULL
+SELECT 6
+> create table d1 (a int, b int)
+CREATE TABLE
+> insert into d1 values (2, 1), (1, 2), (2, 3), (1, 4), (2, 5)
+INSERT 0 5
+> create index d1_a on d1 (a)
+CREATE INDEX
+> select * from d1 order by a
+fields a@d1.1:23:4:-1,b@d1.2:23:4:-1
+row 1,2
+row 1,4
+row 2,1
+row 2,3
+row 2,5
+SELECT 5
+> select * from d1 order by a desc
+fields a@d1.1:23:4:-1,b@d1.2:23:4:-1
+row 2,5
+row 2,3
+row 2,1
+row 1,4
+row 1,2
+SELECT 5
+> select * from d1 where a = 2
+fields a@d1.1:23:4:-1,b@d1.2:23:4:-1
+row 2,1
+row 2,3
+row 2,5
+SELECT 3

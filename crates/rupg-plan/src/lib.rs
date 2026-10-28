@@ -393,6 +393,8 @@ pub struct Scanned {
     pub reverse: bool,
     /// The keys of the index of an index scan, by the columns of the relation, in the order that the scan gives the rows. A scan of the heap has no keys.
     pub keys: Vec<SortGroup>,
+    /// True when the index scan goes backward, so that the rows with equal keys come in the reverse order of the heap. The heap TID is the last key of a `btree` index.
+    pub backward: bool,
 }
 
 /// The hash tables of the plan of a query, for the executor. A set operation is at a path from the top operation of the query: false for the left side and true for the right side.

@@ -2160,7 +2160,7 @@ fn backward(query: &Query) -> bool {
     }
 }
 
-/// `DISTINCT`, `ORDER BY`, `OFFSET` and `LIMIT`. A `DISTINCT` sorts the rows on the items of `DISTINCT` and keeps the first row of each group, as `Sort` and `Unique` do. When a type of `DISTINCT` has no order, it keeps the first row of each group in the order of the rows and then sorts for `ORDER BY`. A `Sort` below `Limit` keeps only the first `OFFSET` + `LIMIT` rows, as `tuplesort_set_bound` does.
+/// `DISTINCT`, `ORDER BY`, `OFFSET` and `LIMIT`. A `DISTINCT` sorts the rows on the items of `DISTINCT` and keeps the first row of each group, as `Sort` and `Unique` do. When a type of `DISTINCT` has no order, it keeps the first row of each group in the order of the rows and then sorts for `ORDER BY`. A `Sort` below `Limit` keeps only the first `OFFSET` + `LIMIT` rows, as `tuplesort_set_bound` does. When the plan has no `Sort` and scans an index in the order of its keys, the rows with equal keys keep the order of the scans.
 fn order(
     query: &Query,
     mut rows: Vec<Vec<Value>>,
@@ -2233,6 +2233,17 @@ fn order(
             _ => None,
         };
         match bound {
+            // A plan with no `Sort` gives the rows in the order of its scans, which `ORDER BY` keeps for equal keys. The order of a scan by distance of a `gist` index is not known.
+            _ if session
+                .join_order(query)
+                .is_some_and(|order| order.iter().any(|s| !s.keys.is_empty())) =>
+            {
+                let mut tagged: Vec<(usize, Vec<Value>)> = rows.into_iter().enumerate().collect();
+                sort::qsort(&mut tagged, &mut |a, b| {
+                    Ok(keys.compare(&a.1, &b.1)?.then(a.0.cmp(&b.0)))
+                })?;
+                rows = tagged.into_iter().map(|(_, row)| row).collect();
+            }
             Some(bound) if rows.len() > bound * 2 => {
                 rows = sort::bounded(rows, bound, &mut |a, b| keys.compare(a, b))?;
             }

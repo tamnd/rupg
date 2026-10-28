@@ -348,11 +348,13 @@ pub fn join_order(plan: &Plan<'_>, query: &Query, members: &dyn Members) -> Opti
     }
     let mut out = Vec::new();
     loop_order(node, false, &mut |relation, reverse, index| {
-        let keys = match index {
-            Some((index, backward)) => index_keys(query, members, relation, index, backward)?,
-            None => Vec::new(),
+        let (keys, backward) = match index {
+            Some((index, backward)) => {
+                (index_keys(query, members, relation, index, backward)?, backward)
+            }
+            None => (Vec::new(), false),
         };
-        out.push(Scanned { relation, reverse, keys });
+        out.push(Scanned { relation, reverse, keys, backward });
         Some(())
     })
     .then_some(out)
