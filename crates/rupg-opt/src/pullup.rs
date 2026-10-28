@@ -863,6 +863,7 @@ fn candidate(
             || used_from(query, r, 1).iter().all(column)
                 && (!sub.from.is_empty() && used.iter().all(wrappable) || used.iter().all(column));
         let fits = top
+            || sub.from.len() > 1
             || sub.from.len() == 1 && (sub.filter.is_none() || on)
             || sub.from.is_empty() && query.from.iter().any(|item| removable(item, r));
         (simple(sub) && columns && fits && !used.contains(&0)).then_some((r, top))
@@ -1160,6 +1161,17 @@ fn merge(query: &mut Query, r: usize, top: bool) {
                 break;
             }
         }
+    } else if sub.from.len() > 1 {
+        // A list of items in a join is a `FromExpr` that `deconstruct_jointree` flattens: here it is an inner join of the items, with the `WHERE` of the subquery as its condition.
+        let mut items = std::mem::take(&mut sub.from).into_iter();
+        let first = items.next();
+        let mut chain = items.fold(first, |left, right| {
+            left.map(|left| join_item(JoinKind::Inner, left, right, None))
+        });
+        if let Some(FromItem::Join(join)) = &mut chain {
+            join.on = sub.filter.take();
+        }
+        take_place(&mut query.from, gone, &mut chain);
     } else {
         add_on(&mut query.from, gone, &mut sub.filter);
         take_place(&mut query.from, gone, &mut sub.from.pop());

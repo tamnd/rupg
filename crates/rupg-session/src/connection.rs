@@ -6404,6 +6404,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/lateral_sample.test")));
     }
 
+    /// A subquery with more than one item in `FROM` that is a side of a join merges into the query, as `deconstruct_jointree` flattens its `FromExpr`, so that the planner can join its relations with the relations of the query in any order and a self-join through the subquery goes. `connection/from_list_join.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn from_list_join() {
+        big_stack(|| script(include_str!("connection/from_list_join.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A subquery with more than one item in `FROM` that is a side of a join merges into the query, as `deconstruct_jointree` flattens its `FromExpr`. The planner can now join its relations with the other relations of the query in any order, and a self-join through such a subquery goes (#1050).
 - `DROP ROLE` of a role with privileges on a database or a tablespace gives the error and the detail of PostgreSQL. (#1048)
 - `CREATE TYPE ... AS RANGE` with a `multirange_type_name` in a schema needs only `CREATE` on the schema, as in PostgreSQL. (#1047)
 - `currtid2` runs. It gives the latest version of a tid of a table, or of a view on a table, with the errors of PostgreSQL. (#1046)
