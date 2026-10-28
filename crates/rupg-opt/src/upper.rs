@@ -2061,7 +2061,10 @@ fn grouping_sets<'q>(
             matches!(k.item.expr.kind, ExprKind::Const(_)) && !all_sets().all(|s| s.contains(t))
         },
     );
+    // `create_groupingsets_path`: with one rollup over sorted rows, the rows come out in the order of `group_pathkeys`. Above the `Agg`, a key that a set does not have is a column with `varnullingrels`, so the order holds only up to the first such key.
+    let stable = first_keys.iter().take_while(|(t, _)| all_sets().all(|s| s.contains(t))).count();
     let first_keys: Vec<SortKey<'q>> = first_keys.into_iter().map(|(_, k)| k).collect();
+    let group_order = sorted_order(&first_keys[..stable]);
     let (is_sorted, count) = presorted(order, &first_keys);
     let any_hashable = rollups.iter().any(|r| r.hashable) || !hash_sets.is_empty();
     let can_hash = !has_ordered && any_hashable;
@@ -2210,7 +2213,11 @@ fn grouping_sets<'q>(
             groups: rollup.groups.clone(),
         });
     }
-    order.clear();
+    *order = if matches!(strategy, Strategy::Sorted) && plan_rollups.len() == 1 {
+        group_order
+    } else {
+        Vec::new()
+    };
     let mut node = Node::new(
         Kind::Aggregate {
             strategy,

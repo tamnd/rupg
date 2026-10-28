@@ -6488,6 +6488,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/grouping_set_nullable_const.test")));
     }
 
+    /// `create_groupingsets_path`: one rollup over sorted rows gives the rows in the order of its keys up to the first key that a set does not have, so `ORDER BY` takes an `Incremental Sort` on that prefix, or no sort.
+    #[test]
+    fn grouping_set_output_order() {
+        big_stack(|| script(include_str!("connection/grouping_set_output_order.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
