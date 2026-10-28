@@ -6264,6 +6264,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/catalog_ctid.test")));
     }
 
+    /// `satisfies_hash_partition` gives the hash partition of the key values, with the checks of its arguments, also with `VARIADIC` and with an operator class in SQL. `connection/hash_satisfies.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn hash_satisfies() {
+        big_stack(|| script(include_str!("connection/hash_satisfies.test")));
+    }
+
     /// An index depends once on each column of its keys, as `record_object_address_dependencies` records them, and its expressions add their own dependencies. `connection/index_depend.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn index_depend() {

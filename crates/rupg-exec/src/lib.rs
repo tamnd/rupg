@@ -106,7 +106,7 @@ fn runs_body(func: u32) -> bool {
 
 /// True for a function of `json_populate_record`, which [`Eval::populate_call`] runs with no kernel.
 fn populates(func: u32) -> bool {
-    populate::populate_function(func).is_some()
+    populate::populate_function(func).is_some() || func == SATISFIES_HASH_PARTITION
 }
 
 /// `fmgr_security_definer` for a function with settings or with `SECURITY DEFINER`: `f` runs as the owner of a `SECURITY DEFINER` function and with the settings of `proconfig` of the function, which go back after it, also after an error. Another function runs `f` alone.
@@ -3186,6 +3186,9 @@ impl<'a> Eval<'a> {
         let exprs = rupg_analyze::expand_arguments(f)?;
         let args = exprs.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>>>()?;
         let types: Vec<u32> = exprs.iter().map(|a| a.ty).collect();
+        if f.oid == SATISFIES_HASH_PARTITION {
+            return partition::satisfies_hash_partition(&types, f.variadic, &args, self.session);
+        }
         // `pg_column_size` of a column reads the value as the table keeps it, where a short value has a header of 1 byte.
         if f.oid == PG_COLUMN_SIZE
             && let ([arg], [value]) = (&exprs[..], &args[..])
@@ -4128,6 +4131,9 @@ mod tests;
 /// Whether `ty` is `point`, `lseg`, `box` or `line`, or a domain over one of them: a type of fixed length whose subscripts `raw_array_subscript_handler` reads.
 /// The OID of `pg_column_size`.
 const PG_COLUMN_SIZE: u32 = 1269;
+
+/// The OID of `satisfies_hash_partition`, which reads the partition key of the table. [`partition::satisfies_hash_partition`] runs it with no kernel.
+const SATISFIES_HASH_PARTITION: u32 = 5028;
 
 fn is_geo(ty: u32) -> bool {
     matches!(base_type(ty), oid::POINT | oid::LSEG | oid::BOX | oid::LINE)

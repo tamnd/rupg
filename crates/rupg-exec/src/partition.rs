@@ -279,29 +279,33 @@ impl Dispatch {
     /// `compute_partition_hash_value`: the hash of the values of the key. A support function of the catalog gets the value and the seed, as `FunctionCall2Coll` gives them.
     fn hash(&self, values: &[Value], session: &dyn Session) -> Result<u64> {
         let mut row = 0;
-        for ((value, &ty), hasher) in values.iter().zip(&self.types).zip(&self.hashers) {
-            if value.is_null() {
-                continue;
+        for (at, value) in values.iter().enumerate().take(self.types.len()) {
+            if !value.is_null() {
+                row = rupg_func::hash_combine64(row, self.hash_one(at, value, session)?);
             }
-            let seed = rupg_func::HASH_PARTITION_SEED;
-            let Some((function, intype)) = *hasher else {
-                row = rupg_func::hash_combine64(row, rupg_func::extended_hash(ty, value, seed)?);
-                continue;
-            };
-            let args = vec![
-                Expr::constant(value.clone(), intype, -1, None),
-                Expr::constant(Value::Int8(seed.cast_signed()), oid::INT8, -1, None),
-            ];
-            let call =
-                Func { oid: function, args, form: FuncForm::Call, variadic: false, retset: false };
-            let call = Expr::new(ExprKind::Func(call), oid::INT8);
-            let one = crate::evaluate_row(&[call], self.oid, &[], &[], session)?;
-            let Some(Value::Int8(one)) = one.first() else {
-                return Err(Error::internal(format!("function {function} returned NULL")));
-            };
-            row = rupg_func::hash_combine64(row, one.cast_unsigned());
         }
         Ok(row)
+    }
+
+    /// The hash of a value that is not null by the support function of the key column `at`.
+    fn hash_one(&self, at: usize, value: &Value, session: &dyn Session) -> Result<u64> {
+        let seed = rupg_func::HASH_PARTITION_SEED;
+        let Some((function, intype)) = self.hashers.get(at).copied().flatten() else {
+            let ty = self.types.get(at).copied().unwrap_or_default();
+            return rupg_func::extended_hash(ty, value, seed);
+        };
+        let args = vec![
+            Expr::constant(value.clone(), intype, -1, None),
+            Expr::constant(Value::Int8(seed.cast_signed()), oid::INT8, -1, None),
+        ];
+        let call =
+            Func { oid: function, args, form: FuncForm::Call, variadic: false, retset: false };
+        let call = Expr::new(ExprKind::Func(call), oid::INT8);
+        let one = crate::evaluate_row(&[call], self.oid, &[], &[], session)?;
+        let Some(Value::Int8(one)) = one.first() else {
+            return Err(Error::internal(format!("function {function} returned NULL")));
+        };
+        Ok(one.cast_unsigned())
     }
 
     /// `get_partition_for_tuple`: the partition whose bound takes the values of the key, or else the default partition.
@@ -504,6 +508,96 @@ fn constant(text: &str) -> Result<Value> {
         ExprKind::Const(value) => Ok(value),
         _ => Err(Error::internal("a partition bound that is not a constant")),
     }
+}
+
+/// `satisfies_hash_partition`: true when the hash of the key values `args[3..]` of the hash partitioned table `args[0]` gives the remainder `args[2]` for the modulus `args[1]`. With `VARIADIC`, the values are the elements of the array `args[3]`. The result is never null, because the check of a constraint takes null as a pass.
+pub(crate) fn satisfies_hash_partition(
+    types: &[u32],
+    variadic: bool,
+    args: &[Value],
+    session: &dyn Session,
+) -> Result<Value> {
+    let int = |v: Option<&Value>| match v {
+        Some(Value::Int4(n)) => Some(*n),
+        _ => None,
+    };
+    let parent = args.first().and_then(Value::as_oid);
+    let (Some(parent), Some(modulus), Some(remainder)) =
+        (parent, int(args.get(1)), int(args.get(2)))
+    else {
+        return Ok(Value::Bool(false));
+    };
+    let invalid = |message: String| Error::new(SqlState::INVALID_PARAMETER_VALUE, message);
+    if modulus <= 0 {
+        return Err(invalid(
+            "modulus for hash partition must be an integer value greater than zero".into(),
+        ));
+    }
+    if remainder < 0 {
+        return Err(invalid(
+            "remainder for hash partition must be an integer value greater than or equal to zero"
+                .into(),
+        ));
+    }
+    if remainder >= modulus {
+        return Err(invalid("remainder for hash partition must be less than modulus".into()));
+    }
+    let catalog = catalog(session)?;
+    let Some(rel) = catalog.relation(parent) else {
+        return Err(Error::internal(format!("could not open relation with OID {parent}")));
+    };
+    if rel.partition_key.as_ref().is_none_or(|k| k.strategy != PartStrategy::Hash) {
+        return Err(invalid(format!("\"{}\" is not a hash partitioned table", rel.name)));
+    }
+    let d = Dispatch::new(rel, session)?;
+    let keys = args.get(3..).unwrap_or_default();
+    let key_types = types.get(3..).unwrap_or_default();
+    let count = |provided: usize| {
+        invalid(format!(
+            "number of partitioning columns ({}) does not match number of partition keys provided ({provided})",
+            d.types.len()
+        ))
+    };
+    let mut row = 0;
+    if variadic {
+        let Some(Value::Array(array)) = keys.first() else { return Ok(Value::Bool(false)) };
+        let ty = key_types.first().copied().unwrap_or_default();
+        let element =
+            rupg_pgcatalog::builtin::type_by_oid(rupg_func::base_type(ty)).map_or(0, |t| t.elem);
+        for (j, &want) in d.types.iter().enumerate() {
+            if want != element {
+                return Err(invalid(format!(
+                    "column {} of the partition key has type \"{}\", but supplied value is of type \"{}\"",
+                    j + 1,
+                    rupg_types::format_type(want),
+                    rupg_types::format_type(element)
+                )));
+            }
+        }
+        if array.values.len() != d.types.len() {
+            return Err(count(array.values.len()));
+        }
+        for value in array.values.iter().flatten() {
+            row = rupg_func::hash_combine64(row, d.hash_one(0, value, session)?);
+        }
+    } else {
+        if keys.len() != d.types.len() {
+            return Err(count(keys.len()));
+        }
+        for (j, (&ty, &want)) in key_types.iter().zip(&d.types).enumerate() {
+            if ty != want && !rupg_analyze::is_binary_coercible(ty, want) {
+                return Err(invalid(format!(
+                    "column {} of the partition key has type {}, but supplied value is of type {}",
+                    j + 1,
+                    rupg_types::format_type(want),
+                    rupg_types::format_type(ty)
+                )));
+            }
+        }
+        row = d.hash(keys, session)?;
+    }
+    let (modulus, remainder) = (modulus.unsigned_abs(), remainder.unsigned_abs());
+    Ok(Value::Bool(row % u64::from(modulus) == u64::from(remainder)))
 }
 
 /// The catalog of the user.

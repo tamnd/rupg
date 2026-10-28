@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `satisfies_hash_partition` runs, with the checks and the errors of PostgreSQL. It gives the hash of the key values by the support functions of the partition key, also with `VARIADIC` and with an operator class in SQL. (#1041)
 - A row of a system catalog has a `ctid`, so a query such as `SELECT ctid, oprcom FROM pg_operator` runs. Each row of a catalog table has a different `ctid`. The drop_operator regression test passes. (#1040)
 - `pg_locks` shows the advisory locks, the locks of `LOCK TABLE`, the virtual transaction IDs and the transaction IDs of the sessions (#1039)
 - The `USING` expressions of `ALTER COLUMN TYPE` read the old row, so they can use a column that the same statement drops or changes (#1038)
