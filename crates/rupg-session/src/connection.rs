@@ -6506,6 +6506,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/grouping_set_nullable_order.test")));
     }
 
+    /// `check_valid_oidvector` and `check_valid_int2vector`: the output of an `oidvector` or an `int2vector` from an array with no dimension fails, and an empty value has one dimension. `array_sort_internal` fails for an element type with no `<` operator when it has two or more items to sort.
+    #[test]
+    fn array_vector_sort() {
+        big_stack(|| script(include_str!("connection/array_vector_sort.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
