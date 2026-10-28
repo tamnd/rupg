@@ -6085,6 +6085,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/without_overlaps.test")));
     }
 
+    /// Temporal foreign keys with `PERIOD`: the errors of the definition, `conperiod` and `pg_get_constraintdef`, the check of a new key that the periods of the referenced keys cover, the check of `NO ACTION` for an old key of the referenced table, ranges and multiranges, and the check of `ALTER TABLE ... ADD`. `connection/temporal_foreign_key.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn temporal_foreign_key() {
+        big_stack(|| script(include_str!("connection/temporal_foreign_key.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

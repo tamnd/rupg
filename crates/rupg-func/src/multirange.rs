@@ -67,6 +67,83 @@ pub fn range_agg(multirange: u32, ranges: Vec<Range>) -> Result<Value> {
     Ok(Value::Multirange(make_multirange(range_of(multirange), ranges)?))
 }
 
+/// The range type and the ranges with values of a value of the range or multirange type `ty`, for the checks of a temporal foreign key in `ri_triggers.c`.
+fn period_ranges(ty: u32, value: &Value) -> (u32, Vec<Range>) {
+    let range = match range_of(ty) {
+        0 => base_type(ty),
+        range => range,
+    };
+    let ranges = match value {
+        Value::Range(r) if !r.is_empty() => vec![(**r).clone()],
+        Value::Multirange(list) => list.clone(),
+        _ => Vec::new(),
+    };
+    (range, ranges)
+}
+
+/// `&&` of two values of the range or multirange type `ty` of the period of a temporal foreign key.
+///
+/// # Errors
+///
+/// The errors of the comparison of the bounds.
+pub fn period_overlaps(ty: u32, a: &Value, b: &Value) -> Result<bool> {
+    let (range, a) = period_ranges(ty, a);
+    let (_, b) = period_ranges(ty, b);
+    for x in &a {
+        for y in &b {
+            if overlaps(range, x, y)? {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// `value <@ range_agg(periods)` of `RI_FKey_check` for a temporal foreign key, with the intersection `value * with` of `ri_restrict` when `with` is a value. No period gives null, which is false.
+///
+/// # Errors
+///
+/// The errors of the comparison of the bounds.
+pub fn period_covered(
+    ty: u32,
+    value: &Value,
+    with: Option<&Value>,
+    periods: &[&Value],
+) -> Result<bool> {
+    if periods.is_empty() {
+        return Ok(false);
+    }
+    let (range, mut ranges) = period_ranges(ty, value);
+    if let Some(with) = with {
+        let (_, with) = period_ranges(ty, with);
+        let mut parts = Vec::new();
+        for x in &ranges {
+            for y in &with {
+                let part = intersect(range, x, y)?;
+                if !part.is_empty() {
+                    parts.push(part);
+                }
+            }
+        }
+        ranges = parts;
+    }
+    let all = periods.iter().flat_map(|period| period_ranges(ty, period).1).collect();
+    let union = make_multirange(range, all)?;
+    for x in &ranges {
+        let mut covered = false;
+        for u in &union {
+            if contains(range, u, x)? {
+                covered = true;
+                break;
+            }
+        }
+        if !covered {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// `multirange_cmp`: the order of the ranges one by one, and a multirange with fewer ranges is first when its ranges are the first ranges of the other. `sub` is the subtype.
 pub(crate) fn multirange_order(sub: u32, a: &[Range], b: &[Range]) -> Result<Ordering> {
     for (x, y) in a.iter().zip(b) {

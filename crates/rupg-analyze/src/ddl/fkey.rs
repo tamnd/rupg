@@ -11,8 +11,17 @@ use crate::coerce::{Context, can_coerce};
 use crate::typename::{names, place};
 use crate::types;
 
-/// The strategy number of the equality operator of a btree operator family.
+/// `BTEqualStrategyNumber`, the strategy number of the equality operator of a btree operator family.
 const EQUAL_STRATEGY: i16 = 3;
+/// `RTEqualStrategyNumber`, the strategy number of the equality operator of a gist operator family.
+const GIST_EQUAL_STRATEGY: i16 = 18;
+/// `RTOverlapStrategyNumber`, the strategy number of `&&` of a gist operator family.
+const GIST_OVERLAP_STRATEGY: i16 = 3;
+/// `GIST_AM_OID`.
+const GIST_AM: u32 = 783;
+/// `COMPARE_EQ` and `COMPARE_OVERLAP` of `CompareType`, for the detail of the error of `IndexAmTranslateCompareType`.
+const COMPARE_EQ: i32 = 3;
+const COMPARE_OVERLAP: i32 = 7;
 /// The most columns of a foreign key, `INDEX_MAX_KEYS`.
 const MAX_KEYS: usize = 32;
 
@@ -33,6 +42,8 @@ pub(super) struct Keys<'a> {
     pub(super) pk_keys: &'a [i16],
     /// The operator class of the index for each referenced column.
     pub(super) classes: &'a [u32],
+    /// `PERIOD`: the last columns are the periods of a temporal foreign key.
+    pub(super) period: bool,
 }
 
 impl Definer<'_, '_> {
@@ -87,9 +98,6 @@ impl Definer<'_, '_> {
             ),
         };
         let at = place(con.location);
-        if con.fk_with_period || con.pk_with_period {
-            return Err(not_yet("PERIOD", at));
-        }
         if !con.fk_del_set_cols.is_empty() {
             return Err(not_yet("a column list for ON DELETE SET", at));
         }
@@ -121,10 +129,24 @@ impl Definer<'_, '_> {
         };
         self.check_fk_persistence(table, pk)?;
         let fk_keys = self.column_list(table, &fk_names)?;
+        let period = con.fk_with_period || con.pk_with_period;
+        if period && !con.fk_with_period {
+            return Err(invalid(
+                "foreign key uses PERIOD on the referenced table but not the referencing table"
+                    .into(),
+            ));
+        }
         let mut pk_names: Vec<String> =
             names(&con.pk_attrs).iter().map(|s| s.to_string()).collect();
         let (pk_keys, index, classes) = if pk_names.is_empty() {
             let (index, keys, classes) = self.primary_key(pk, &pk_name)?;
+            // A primary key `WITHOUT OVERLAPS` needs `PERIOD`.
+            if self.index_is_exclusion(index) && !con.fk_with_period {
+                return Err(invalid(
+                    "foreign key uses PERIOD on the referenced table but not the referencing table"
+                        .into(),
+                ));
+            }
             let rel = self.catalog.relation(pk);
             pk_names = keys
                 .iter()
@@ -136,9 +158,21 @@ impl Definer<'_, '_> {
         } else {
             let list: Vec<&str> = pk_names.iter().map(String::as_str).collect();
             let keys = self.column_list(pk, &list)?;
-            let (index, classes) = self.unique_index(pk, &keys, &pk_name)?;
+            if period && !con.pk_with_period {
+                return Err(invalid(
+                    "foreign key uses PERIOD on the referencing table but not the referenced table"
+                        .into(),
+                ));
+            }
+            let (index, classes) = self.unique_index(pk, &keys, &pk_name, period)?;
             (keys, index, classes)
         };
+        if self.index_is_exclusion(index) && !period {
+            return Err(invalid(
+                "foreign key must use PERIOD when referencing a primary key using WITHOUT OVERLAPS"
+                    .into(),
+            ));
+        }
         let pk_owner = self.catalog.relation(pk).map_or(0, |r| r.owner);
         if !self.is_superuser() && !self.owns(pk_owner) {
             return Err(Error::new(
@@ -147,12 +181,27 @@ impl Definer<'_, '_> {
             ));
         }
         self.check_generated_keys(table, &fk_keys, con)?;
+        // The actions that a foreign key with `PERIOD` does not support yet.
+        if con.fk_with_period {
+            for (action, what) in
+                [(con.fk_upd_action, "ON UPDATE"), (con.fk_del_action, "ON DELETE")]
+            {
+                if matches!(action, b'r' | b'c' | b'n' | b'd') {
+                    return Err(Error::new(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        format!(
+                            "unsupported {what} action for foreign key constraint using PERIOD"
+                        ),
+                    ));
+                }
+            }
+        }
         if fk_keys.len() != pk_keys.len() {
             return Err(invalid(
                 "number of referencing and referenced columns for foreign key disagree".into(),
             ));
         }
-        let keys = Keys { table, fk: &fk_keys, pk, pk_keys: &pk_keys, classes: &classes };
+        let keys = Keys { table, fk: &fk_keys, pk, pk_keys: &pk_keys, classes: &classes, period };
         let names = (fk_names.as_slice(), pk_names.as_slice());
         let (pf_eq, pp_eq, ff_eq) = self.foreign_operators(&name, &keys, names)?;
         let foreign = ForeignKey {
@@ -164,6 +213,7 @@ impl Definer<'_, '_> {
             pf_eq,
             pp_eq,
             ff_eq,
+            period,
         };
         let new = NewForeignKey {
             table,
@@ -234,25 +284,40 @@ impl Definer<'_, '_> {
         for i in 0..keys.fk.len() {
             let fk_type = self.column_type(keys.table, keys.fk[i]);
             let pk_type = self.column_type(keys.pk, keys.pk_keys[i]);
-            let class = builtin::opclasses().iter().find(|c| c.oid == keys.classes[i]);
-            let Some(class) = class else {
+            let class = match self.catalog.opclass(keys.classes[i]) {
+                Some(class) => Some((class.method, class.family, class.intype)),
+                None => builtin::opclasses()
+                    .iter()
+                    .find(|c| c.oid == keys.classes[i])
+                    .map(|c| (c.method, c.family, c.intype)),
+            };
+            let Some((method, family, intype)) = class else {
                 return Err(Error::internal(format!(
                     "cache lookup failed for opclass {}",
                     keys.classes[i]
                 )));
             };
-            let (family, intype) = (class.family, class.intype);
-            let pp = builtin::opfamily_member(family, intype, intype, EQUAL_STRATEGY).ok_or_else(
-                || {
-                    Error::internal(format!(
-                        "missing operator {EQUAL_STRATEGY}({intype},{intype}) in opfamily {family}"
-                    ))
-                },
-            )?;
+            // `IndexAmTranslateCompareType`: the overlaps operator for the period, and the equality operator for the other columns.
+            let overlaps = keys.period && i == keys.fk.len() - 1;
+            let strategy = match (method == GIST_AM, overlaps) {
+                (true, true) => Some(GIST_OVERLAP_STRATEGY),
+                (true, false) => Some(GIST_EQUAL_STRATEGY),
+                (false, false) => Some(EQUAL_STRATEGY),
+                (false, true) => None,
+            };
+            let Some(strategy) = strategy else {
+                return Err(self.no_compare_type(overlaps, family, method));
+            };
+            let member =
+                |left: u32, right: u32| self.opfamily_member(family, left, right, strategy);
+            let pp = member(intype, intype).ok_or_else(|| {
+                Error::internal(format!(
+                    "missing operator {strategy}({intype},{intype}) in opfamily {family}"
+                ))
+            })?;
             let fk_base = types::base(fk_type);
-            let mut pf = builtin::opfamily_member(family, intype, fk_base, EQUAL_STRATEGY);
-            let mut ff =
-                pf.and_then(|_| builtin::opfamily_member(family, fk_base, fk_base, EQUAL_STRATEGY));
+            let mut pf = member(intype, fk_base);
+            let mut ff = pf.and_then(|_| member(fk_base, fk_base));
             if !(pf.is_some() && ff.is_some())
                 && can_coerce(&[pk_type, fk_type], &[intype, intype], Context::Implicit)
             {
@@ -277,6 +342,40 @@ impl Definer<'_, '_> {
             ff_eq.push(ff.unwrap_or(0));
         }
         Ok((pf_eq, pp_eq, ff_eq))
+    }
+
+    /// `get_opfamily_member`, from the built-in operators and the operators of the catalog.
+    fn opfamily_member(&self, family: u32, left: u32, right: u32, strategy: i16) -> Option<u32> {
+        builtin::opfamily_member(family, left, right, strategy).or_else(|| {
+            self.catalog
+                .amops()
+                .find(|a| {
+                    a.family == family
+                        && a.left == left
+                        && a.right == right
+                        && a.strategy == strategy
+                })
+                .map(|a| a.operator)
+        })
+    }
+
+    /// The error of `ATAddForeignKeyConstraint` when `IndexAmTranslateCompareType` gives no strategy for the operator family `family` of the access method `method`.
+    fn no_compare_type(&self, overlaps: bool, family: u32, method: u32) -> Error {
+        let family_name = match self.catalog.opfamily(family) {
+            Some(f) => f.name.clone(),
+            None => builtin::named_by_oid(builtin::Named::Opfamily, family)
+                .map_or_else(String::new, |f| f.name.to_string()),
+        };
+        let method_name = builtin::access_method_name(method).unwrap_or_default();
+        let (what, compare) =
+            if overlaps { ("an overlaps", COMPARE_OVERLAP) } else { ("an equality", COMPARE_EQ) };
+        Error::new(
+            SqlState::UNDEFINED_OBJECT,
+            format!("could not identify {what} operator for foreign key"),
+        )
+        .with_detail(format!(
+            "Could not translate compare type {compare} for operator family \"{family_name}\" of access method \"{method_name}\"."
+        ))
     }
 
     /// `transformColumnNameList`: the numbers of the columns of a foreign key.
@@ -341,8 +440,19 @@ impl Definer<'_, '_> {
         Ok((index, info.keys[..count].to_vec(), info.classes[..count].to_vec()))
     }
 
-    /// `transformFkeyCheckAttrs`: the first unique index, in OID order, on exactly the columns. The operator classes follow the order of the columns.
-    fn unique_index(&self, table: u32, keys: &[i16], name: &str) -> Result<(u32, Vec<u32>)> {
+    /// `indisexclusion`: the index of an exclusion constraint or of a constraint `WITHOUT OVERLAPS`.
+    fn index_is_exclusion(&self, index: u32) -> bool {
+        self.catalog.constraints().any(|c| c.index == index && c.is_exclusion())
+    }
+
+    /// `transformFkeyCheckAttrs`: the first unique index, in OID order, on exactly the columns. The operator classes follow the order of the columns. With `PERIOD` the index is the index of an exclusion constraint, and its last column is the period.
+    fn unique_index(
+        &self,
+        table: u32,
+        keys: &[i16],
+        name: &str,
+        period: bool,
+    ) -> Result<(u32, Vec<u32>)> {
         for (i, key) in keys.iter().enumerate() {
             if keys[..i].contains(key) {
                 return Err(invalid(
@@ -355,7 +465,7 @@ impl Definer<'_, '_> {
             let Some(info) = rel.index.as_ref() else { continue };
             if !matches!(rel.kind, RelKind::Index | RelKind::PartitionedIndex)
                 || info.table != table
-                || !info.unique
+                || (if period { !self.index_is_exclusion(rel.oid) } else { !info.unique })
                 || usize::try_from(info.key_count).ok() != Some(keys.len())
                 || info.exprs.is_some()
                 || info.predicate.is_some()
@@ -369,7 +479,9 @@ impl Definer<'_, '_> {
                     None => break,
                 }
             }
-            if classes.len() != keys.len() {
+            if classes.len() != keys.len()
+                || (period && keys.last() != info.keys.get(keys.len() - 1))
+            {
                 continue;
             }
             if !info.immediate {

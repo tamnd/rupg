@@ -1168,6 +1168,7 @@ fn user_rows_have_the_column_types() {
         pf_eq: vec![96],
         pp_eq: vec![96],
         ff_eq: vec![96],
+        period: false,
     };
     let fkey = NewForeignKey {
         table: t,

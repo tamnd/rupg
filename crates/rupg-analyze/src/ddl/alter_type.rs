@@ -572,6 +572,7 @@ impl Definer<'_, '_> {
             pk: foreign.table,
             pk_keys: &foreign.keys,
             classes: &classes,
+            period: foreign.period,
         };
         let (pf_eq, pp_eq, ff_eq) =
             self.foreign_operators(&con.name, &keys, (fk_names.as_slice(), pk_names.as_slice()))?;

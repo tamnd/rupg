@@ -821,6 +821,8 @@ pub struct ForeignKey {
     pub pp_eq: Vec<u32>,
     /// `conffeqop`.
     pub ff_eq: Vec<u32>,
+    /// `conperiod`: the last columns of the two tables are the periods of a temporal foreign key, `PERIOD`.
+    pub period: bool,
 }
 
 /// A constraint, one row of `pg_constraint`.
@@ -872,9 +874,12 @@ impl Constraint {
         !self.exclusion_ops.is_empty()
     }
 
-    /// `conperiod`: a primary key or a unique constraint `WITHOUT OVERLAPS`.
+    /// `conperiod`: a primary key or a unique constraint `WITHOUT OVERLAPS`, or a foreign key with `PERIOD`.
     pub fn period(&self) -> bool {
-        matches!(self.kind, ConKind::Primary | ConKind::Unique) && self.is_exclusion()
+        match &self.foreign {
+            Some(foreign) => foreign.period,
+            None => matches!(self.kind, ConKind::Primary | ConKind::Unique) && self.is_exclusion(),
+        }
     }
 }
 

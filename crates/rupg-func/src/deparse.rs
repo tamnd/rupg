@@ -1798,11 +1798,25 @@ fn constraint_def(con: &Constraint, paren: bool, session: &dyn Session) -> Resul
             let target = catalog.relation(fk.table).ok_or_else(|| {
                 Error::internal(format!("cache lookup failed for relation {}", fk.table))
             })?;
+            // `decompile_column_index_array` with `withPeriod`: the last column is the period.
+            let columns = |rel: &Relation, keys: &[i16]| -> Result<String> {
+                match keys.split_last() {
+                    Some((last, [])) if fk.period => {
+                        Ok(format!("PERIOD {}", column_list(rel, &[*last])?))
+                    }
+                    Some((last, rest)) if fk.period => Ok(format!(
+                        "{}, PERIOD {}",
+                        column_list(rel, rest)?,
+                        column_list(rel, &[*last])?
+                    )),
+                    _ => column_list(rel, keys),
+                }
+            };
             out.push_str(&format!(
                 "FOREIGN KEY ({}) REFERENCES {}({})",
-                column_list(relation()?, &con.keys)?,
+                columns(relation()?, &con.keys)?,
                 relation_name(fk.table, session)?,
-                column_list(target, &fk.keys)?
+                columns(target, &fk.keys)?
             ));
             out.push_str(match fk.match_type {
                 'f' => " MATCH FULL",

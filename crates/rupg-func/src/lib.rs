@@ -122,7 +122,7 @@ pub use jsonbuild::{
 pub use jsonedit::jsonb_subscript_assign;
 pub use jsonpath::{PathVar, SqlJsonItem, sql_json_path};
 pub use large_object::Descriptors as LoDescriptors;
-pub use multirange::range_agg;
+pub use multirange::{period_covered, period_overlaps, range_agg};
 pub use random::Randomness;
 pub use reg::ts_config_setting;
 pub use regex::{AuthMatch, auth_compile, auth_search};
