@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- EXPLAIN checks the privileges on the relations and the functions of the statement, as `ExecutorStart` does (#990).
 - Add GRANT and REVOKE ON DATABASE, with the grant option, the warnings of a grantor that has no grant option, and CASCADE (#989).
 - Add ALTER DATABASE ... OWNER TO. The change is part of the transaction, and the new owner is a member of pg_database_owner (#988).
 - Add GRANT, REVOKE, COMMENT ON and ALTER OWNER for large objects, their default privileges, lo_compat_privileges and the function call protocol (#987).
