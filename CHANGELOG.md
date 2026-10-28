@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- The planner makes bitmap scans of `gin` indexes for the operators of `array_ops`, `tsvector_ops`, `jsonb_ops` and `jsonb_path_ops`, with the costs of `gincostestimate` from the entries of the query. (#1020)
+
 ## 0.4.3 (2026-10-28)
 
 ### Added

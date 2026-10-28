@@ -6205,6 +6205,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/index_order_by.test")));
     }
 
+    /// A `gin` index gives a bitmap scan of the operators of its operator class, `@>`, `<@`, `&&` and `=` of `array_ops`, `@@` of `tsvector_ops`, and `@>`, `?`, `?|` and `?&` of `jsonb_ops`, with the costs of `gincostestimate`. It has no index scan and cannot test `IS NULL`. `connection/gin_paths.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn gin_paths() {
+        big_stack(|| script(include_str!("connection/gin_paths.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

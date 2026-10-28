@@ -1,0 +1,136 @@
+!details
+> create table gt (a int, i int[], t tsvector, j jsonb)
+CREATE TABLE
+> create index gt_i on gt using gin (i)
+CREATE INDEX
+> create index gt_t on gt using gin (t)
+CREATE INDEX
+> create index gt_j on gt using gin (j)
+CREATE INDEX
+> create index gt_jp on gt using gin (j jsonb_path_ops)
+CREATE INDEX
+> explain (costs off) select * from gt where i @> '{1}'
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on gt
+row   Recheck Cond: (i @> '{1}'::integer[])
+row   ->  Bitmap Index Scan on gt_i
+row         Index Cond: (i @> '{1}'::integer[])
+EXPLAIN
+> set enable_seqscan = off
+SET
+> explain (costs off) select * from gt where i @> '{1,2}'
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on gt
+row   Recheck Cond: (i @> '{1,2}'::integer[])
+row   ->  Bitmap Index Scan on gt_i
+row         Index Cond: (i @> '{1,2}'::integer[])
+EXPLAIN
+> explain (costs off) select * from gt where '{3}' <@ i
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on gt
+row   Recheck Cond: ('{3}'::integer[] <@ i)
+row   ->  Bitmap Index Scan on gt_i
+row         Index Cond: (i @> '{3}'::integer[])
+EXPLAIN
+> explain (costs off) select * from gt where i <@ '{1,2}'
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on gt
+row   Recheck Cond: (i <@ '{1,2}'::integer[])
+row   ->  Bitmap Index Scan on gt_i
+row         Index Cond: (i <@ '{1,2}'::integer[])
+EXPLAIN
+> explain (costs off) select * from gt where i && '{4}' and a > 2
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on gt
+row   Recheck Cond: (i && '{4}'::integer[])
+row   Filter: (a > 2)
+row   ->  Bitmap Index Scan on gt_i
+row         Index Cond: (i && '{4}'::integer[])
+EXPLAIN
+> explain (costs off) select * from gt where t @@ 'a & b:*'
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on gt
+row   Recheck Cond: (t @@ '''a'' & ''b'':*'::tsquery)
+row   ->  Bitmap Index Scan on gt_t
+row         Index Cond: (t @@ '''a'' & ''b'':*'::tsquery)
+EXPLAIN
+> explain (costs off) select * from gt where j ? 'k'
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on gt
+row   Recheck Cond: (j ? 'k'::text)
+row   ->  Bitmap Index Scan on gt_j
+row         Index Cond: (j ? 'k'::text)
+EXPLAIN
+> explain (costs off) select * from gt where j ?| '{k,l}'
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on gt
+row   Recheck Cond: (j ?| '{k,l}'::text[])
+row   ->  Bitmap Index Scan on gt_j
+row         Index Cond: (j ?| '{k,l}'::text[])
+EXPLAIN
+> explain (costs off) select * from gt where j @> '{"k": 1}'
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on gt
+row   Recheck Cond: (j @> '{"k": 1}'::jsonb)
+row   ->  Bitmap Index Scan on gt_jp
+row         Index Cond: (j @> '{"k": 1}'::jsonb)
+EXPLAIN
+> explain (costs off) select * from gt where i @> any (array['{1}'::int[], '{2}'::int[]])
+ERROR 42883 operator does not exist: integer[] @> integer at 46
+DETAIL No operator of that name accepts the given argument types.
+HINT You might need to add explicit type casts.
+> explain (costs off) select * from gt where i is null
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on gt
+row   Disabled: true
+row   Filter: (i IS NULL)
+EXPLAIN
+> explain select * from gt where i @> '{1}'
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on gt  (cost=8.57..15.68 rows=3 width=100)
+row   Recheck Cond: (i @> '{1}'::integer[])
+row   ->  Bitmap Index Scan on gt_i  (cost=0.00..8.57 rows=3 width=0)
+row         Index Cond: (i @> '{1}'::integer[])
+EXPLAIN
+> explain select * from gt where t @@ 'a & !b'
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on gt  (cost=13.00..20.10 rows=3 width=100)
+row   Recheck Cond: (t @@ '''a'' & !''b'''::tsquery)
+row   ->  Bitmap Index Scan on gt_t  (cost=0.00..13.00 rows=3 width=0)
+row         Index Cond: (t @@ '''a'' & !''b'''::tsquery)
+EXPLAIN
+> insert into gt select g, array[g % 10, g % 7], to_tsvector('simple', 'w' || g % 5), jsonb_build_object('k', g % 3) from generate_series(1, 500) g
+INSERT 0 500
+> select count(*) from gt where i @> '{3,4}'
+fields count:20:8:-1
+row 14
+SELECT 1
+> select count(*) from gt where t @@ 'w2'
+fields count:20:8:-1
+row 100
+SELECT 1
+> select count(*) from gt where j @> '{"k": 1}'
+fields count:20:8:-1
+row 167
+SELECT 1
+> select a from gt where i @> '{1,1}' and a < 80 order by a
+fields a@gt.1:23:4:-1
+row 1
+row 8
+row 11
+row 15
+row 21
+row 22
+row 29
+row 31
+row 36
+row 41
+row 43
+row 50
+row 51
+row 57
+row 61
+row 64
+row 71
+row 78
+SELECT 18
