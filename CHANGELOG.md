@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- CREATE FUNCTION checks USAGE on a trusted language, and a cast checks EXECUTE on its function, also for each element of an array (#992).
 - VACUUM, ANALYZE and REFRESH MATERIALIZED VIEW check the MAINTAIN privilege. VACUUM and ANALYZE skip a relation or a partition without it, with a warning, and the fill of a materialized view does not check INSERT (#991).
 - EXPLAIN checks the privileges on the relations and the functions of the statement, as `ExecutorStart` does (#990).
 - Add GRANT and REVOKE ON DATABASE, with the grant option, the warnings of a grantor that has no grant option, and CASCADE (#989).

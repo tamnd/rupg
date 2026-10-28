@@ -1115,6 +1115,12 @@ impl Definer<'_, '_> {
         self.pg_aclmask(&roles, Object::new(kind, oid), role, USAGE) != 0
     }
 
+    /// `object_aclcheck` of `USAGE` on a language for the role of the statement.
+    pub(super) fn language_usage_allowed(&self, language: u32) -> bool {
+        let roles = rupg_pgcatalog::roles::current();
+        self.pg_aclmask(&roles, Object::new(Kind::Language, language), self.user, USAGE) != 0
+    }
+
     /// `object_aclcheck` of `CREATE` on a schema: true when the role may create objects in it.
     pub(super) fn schema_create_allowed(&self, namespace: u32, role: u32) -> bool {
         let roles = rupg_pgcatalog::roles::current();

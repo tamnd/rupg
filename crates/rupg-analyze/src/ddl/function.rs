@@ -1080,9 +1080,14 @@ impl Definer<'_, '_> {
         };
         self.check_create_in(namespace, None)?;
         let options = options(stmt, self.an.env)?;
-        // A function in C or in `internal` runs code that the database does not check, so these languages are not trusted.
+        // A function in C or in `internal` runs code that the database does not check, so these languages are not trusted. A trusted language needs `USAGE`.
         let untrusted = matches!(options.language, INTERNAL_LANGUAGE | C_LANGUAGE);
-        if untrusted && !self.is_superuser() {
+        let allowed = if untrusted {
+            self.is_superuser()
+        } else {
+            self.language_usage_allowed(options.language)
+        };
+        if !allowed {
             return Err(Error::new(
                 SqlState::INSUFFICIENT_PRIVILEGE,
                 format!("permission denied for language {}", options.language_name),

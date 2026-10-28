@@ -5968,6 +5968,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/maintain_privilege.test")));
     }
 
+    /// `CreateFunction` needs `USAGE` on a trusted language and a superuser for an untrusted one, and a cast or an array cast needs `EXECUTE` on its function. `connection/language_usage.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn language_usage() {
+        big_stack(|| script(include_str!("connection/language_usage.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

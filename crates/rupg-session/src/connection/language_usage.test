@@ -1,0 +1,112 @@
+> CREATE ROLE regress_lu_a
+CREATE ROLE
+> CREATE ROLE regress_lu_b
+CREATE ROLE
+> GRANT CREATE ON SCHEMA public TO regress_lu_a, regress_lu_b
+GRANT
+> REVOKE ALL PRIVILEGES ON LANGUAGE sql FROM PUBLIC
+REVOKE
+> GRANT USAGE ON LANGUAGE sql TO regress_lu_a
+GRANT
+> SELECT lanacl FROM pg_language WHERE lanname = 'sql'
+fields lanacl@pg_language.9:1034:-1:-1
+row {postgres=U/postgres,regress_lu_a=U/postgres}
+SELECT 1
+> SET ROLE regress_lu_a
+SET
+is_superuser=off
+> CREATE FUNCTION lu_f1(int) RETURNS int AS 'select 2 * $1' LANGUAGE sql
+CREATE FUNCTION
+> CREATE PROCEDURE lu_p1(int) AS 'select $1' LANGUAGE sql
+CREATE PROCEDURE
+> CREATE FUNCTION lu_c(int) RETURNS int AS 'lu_c' LANGUAGE c
+ERROR 42501 permission denied for language c
+> CREATE FUNCTION lu_i(int) RETURNS int AS 'int4abs' LANGUAGE internal
+ERROR 42501 permission denied for language internal
+> RESET ROLE
+RESET
+is_superuser=on
+> SET ROLE regress_lu_b
+SET
+is_superuser=off
+> CREATE FUNCTION lu_f2(int) RETURNS int AS 'select 2 * $1' LANGUAGE sql
+ERROR 42501 permission denied for language sql
+> CREATE FUNCTION lu_f3(int) RETURNS int LANGUAGE sql RETURN $1
+ERROR 42501 permission denied for language sql
+> CREATE PROCEDURE lu_p2(int) AS 'select $1' LANGUAGE sql
+ERROR 42501 permission denied for language sql
+> CREATE FUNCTION lu_g(int) RETURNS int AS 'begin return $1; end' LANGUAGE plpgsql
+CREATE FUNCTION
+> CREATE OR REPLACE FUNCTION lu_f1(int) RETURNS int AS 'select 3 * $1' LANGUAGE sql
+ERROR 42501 permission denied for language sql
+> SELECT lu_f1(2)
+fields lu_f1:23:4:-1
+row 4
+SELECT 1
+> RESET ROLE
+RESET
+is_superuser=on
+> GRANT ALL PRIVILEGES ON LANGUAGE sql TO PUBLIC
+GRANT
+> SELECT lanacl FROM pg_language WHERE lanname = 'sql'
+fields lanacl@pg_language.9:1034:-1:-1
+row {postgres=U/postgres,regress_lu_a=U/postgres,=U/postgres}
+SELECT 1
+> BEGIN
+BEGIN
+> REVOKE ALL ON FUNCTION int8(integer) FROM PUBLIC
+REVOKE
+> SELECT '{1}'::int4[]::int8[]
+fields int8:1016:-1:-1
+row {1}
+SELECT 1
+> SET ROLE regress_lu_b
+SET
+is_superuser=off
+> SELECT '{1}'::int4[]::int8[]
+ERROR 42501 permission denied for function int8
+is_superuser=on
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> REVOKE ALL ON FUNCTION int8(integer) FROM PUBLIC
+REVOKE
+> SET ROLE regress_lu_b
+SET
+is_superuser=off
+> SELECT 1::int8
+ERROR 42501 permission denied for function int8
+is_superuser=on
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> REVOKE ALL ON FUNCTION int8(integer) FROM PUBLIC
+REVOKE
+> SET ROLE regress_lu_b
+SET
+is_superuser=off
+> SELECT int8(1)
+ERROR 42501 permission denied for function int8
+is_superuser=on
+> ROLLBACK
+ROLLBACK
+> DROP FUNCTION lu_f1(int)
+DROP FUNCTION
+> DROP PROCEDURE lu_p1(int)
+DROP PROCEDURE
+> DROP FUNCTION lu_g(int)
+DROP FUNCTION
+> REVOKE CREATE ON SCHEMA public FROM regress_lu_a, regress_lu_b
+REVOKE
+> REVOKE USAGE ON LANGUAGE sql FROM regress_lu_a
+REVOKE
+> SELECT lanacl FROM pg_language WHERE lanname = 'sql'
+fields lanacl@pg_language.9:1034:-1:-1
+row {postgres=U/postgres,=U/postgres}
+SELECT 1
+> DROP ROLE regress_lu_a
+DROP ROLE
+> DROP ROLE regress_lu_b
+DROP ROLE
