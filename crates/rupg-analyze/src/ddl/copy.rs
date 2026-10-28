@@ -271,9 +271,14 @@ pub fn copy_filter(target: &CopyTarget, rv: &RangeVar, condition: &Node) -> Node
     select.into()
 }
 
-/// The `INSERT` that writes a row of a table again after `ALTER COLUMN ... TYPE`, as `ATRewriteTable` evaluates `tab->newvals`: the parameter `$n` is the old value of the selected column `n`, and `transforms` gives the expression of `USING` of a selected column, or `None` for a column that keeps its old value. The expressions refer to the columns by their names, through `FROM (VALUES ($1, ...)) AS relname(columns)`. The other columns get their defaults.
+/// The `INSERT` that writes a row of a table again after `ALTER COLUMN ... TYPE`, as `ATRewriteTable` evaluates `tab->newvals`: the parameter `$n` is the old value of the selected column `n`, and `transforms` gives the expression of `USING` of a selected column, or `None` for a column that keeps its old value. The expressions refer to the columns by their names, through `FROM (VALUES ($1, ...)) AS relname(columns)`. The other columns get their defaults. `others` are the names of the old columns that the new row does not keep, such as a column that the same statement drops, with the parameters after the ones of the selected columns: the expressions can read them, because `ATRewriteTable` evaluates the expressions on the old row.
 #[must_use]
-pub fn rewrite_insert(target: &CopyTarget, rv: &RangeVar, transforms: &[Option<&Node>]) -> Node {
+pub fn rewrite_insert(
+    target: &CopyTarget,
+    rv: &RangeVar,
+    transforms: &[Option<&Node>],
+    others: &[&str],
+) -> Node {
     let names: Vec<&str> = target.selected.iter().map(|&i| target.columns[i].as_str()).collect();
     let cols = names
         .iter()
@@ -295,11 +300,12 @@ pub fn rewrite_insert(target: &CopyTarget, rv: &RangeVar, transforms: &[Option<&
             Some(ResTarget { val: Some(value), location: -1, ..Default::default() }.into())
         })
         .collect();
-    let colnames = names.iter().map(|&name| Some(Node::String(name.into()))).collect();
+    let colnames =
+        names.iter().chain(others).map(|&name| Some(Node::String(name.into()))).collect();
     let alias = Alias { aliasname: rv.relname.clone(), colnames };
     let from = RangeSubselect {
         lateral: false,
-        subquery: Some(values(names.len()).into()),
+        subquery: Some(values(names.len() + others.len()).into()),
         alias: Some(Box::new(alias)),
     };
     let select = SelectStmt {

@@ -1,0 +1,29 @@
+!details
+> create table another (f1 int, f2 text, f3 text)
+CREATE TABLE
+> insert into another values (1, 'one', 'uno'), (2, 'two', 'due'), (3, 'three', 'tre')
+INSERT 0 3
+> alter table another alter f1 type text using f2 || ' and ' || f3 || ' more', alter f2 type bigint using f1 * 10, drop column f3
+ALTER TABLE
+> select * from another order by f2
+fields f1@another.1:25:-1:-1,f2@another.2:20:8:-1
+row one and uno more,10
+row two and due more,20
+row three and tre more,30
+SELECT 3
+> create table another2 (a int, b int, c int)
+CREATE TABLE
+> insert into another2 values (1, 2, 3)
+INSERT 0 1
+> alter table another2 drop column c, alter a type bigint using a + c, add column c int default 7
+ALTER TABLE
+> select * from another2
+fields a@another2.1:20:8:-1,b@another2.2:23:4:-1,c@another2.4:23:4:-1
+row 4,2,7
+SELECT 1
+> alter table another2 alter a type int using b + 100, drop column b
+ALTER TABLE
+> select * from another2
+fields a@another2.1:23:4:-1,c@another2.4:23:4:-1
+row 102,7
+SELECT 1
