@@ -582,6 +582,8 @@ impl Definer<'_, '_> {
         };
         let raw = self.reparse(con.expr.as_deref().unwrap_or_default(), con.relation)?;
         let object = ObjRef::new(PG_CONSTRAINT, oid);
+        // `RebuildConstraintComment`: the new constraint gets the comment of the old one.
+        let comment = self.catalog.description(object).map(str::to_owned);
         self.catalog.remove(&[DropTarget { object, flags: flag::ORIGINAL, dependee: None }])?;
         if con.domain != 0 {
             let check = Constraint {
@@ -598,7 +600,11 @@ impl Definer<'_, '_> {
                     con.domain
                 )));
             };
-            return self.add_domain_check(con.domain, &check, base, true).map(|_| ());
+            // `CommandCounterIncrement` of `ATRewriteCatalogs`: the check sees the new types of the fields.
+            self.an.env.command_counter_increment(self.catalog);
+            let (new, _) = self.add_domain_check(con.domain, &check, base, true)?;
+            self.catalog.set_description(ObjRef::new(PG_CONSTRAINT, new), comment);
+            return Ok(());
         }
         let check = Constraint {
             contype: ConstrType::CONSTR_CHECK,
@@ -618,6 +624,7 @@ impl Definer<'_, '_> {
         for oid in added {
             self.catalog.set_constraint_inherited(oid, con.local, con.inhcount)?;
             self.catalog.set_constraint_validated(oid, con.validated)?;
+            self.catalog.set_description(ObjRef::new(PG_CONSTRAINT, oid), comment.clone());
         }
         Ok(())
     }

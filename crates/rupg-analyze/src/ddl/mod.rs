@@ -504,12 +504,19 @@ struct SchemaEnv<'e> {
     schemas: Vec<(String, u32)>,
     /// The relations that the statement added before the last [`Env::command_counter_increment`], which the session does not have: the schema, the name and the OID.
     relations: RefCell<Vec<(u32, String, u32)>>,
+    /// The relations of the session whose columns the statement changed before the last [`Env::command_counter_increment`], with their new columns.
+    columns: RefCell<Vec<(u32, Vec<rupg_catalog::Column>)>>,
 }
 
 impl<'e> SchemaEnv<'e> {
     fn new(env: &'e dyn Env, catalog: &Catalog) -> SchemaEnv<'e> {
         let schemas = catalog.schemas().map(|s| (s.name.clone(), s.oid)).collect();
-        SchemaEnv { env, schemas, relations: RefCell::new(Vec::new()) }
+        SchemaEnv {
+            env,
+            schemas,
+            relations: RefCell::new(Vec::new()),
+            columns: RefCell::new(Vec::new()),
+        }
     }
 
     /// The OID of a relation that the statement added, for the input `text` of `regclass`, as `regclassin` finds it after `CommandCounterIncrement`.
@@ -559,6 +566,11 @@ impl Env for SchemaEnv<'_> {
 
     fn catalog(&self) -> Option<&Catalog> {
         self.env.catalog()
+    }
+
+    fn changed_columns(&self, oid: u32) -> Option<Vec<rupg_catalog::Column>> {
+        let columns = self.columns.borrow();
+        columns.iter().find(|(r, _)| *r == oid).map(|(_, c)| c.clone())
     }
 
     fn allow_system_table_mods(&self) -> bool {
@@ -630,6 +642,13 @@ impl Env for SchemaEnv<'_> {
             .relations()
             .filter(|r| session.is_none_or(|s| s.relation(r.oid).is_none()))
             .map(|r| (r.namespace, r.name.clone(), r.oid))
+            .collect();
+        *self.columns.borrow_mut() = catalog
+            .relations()
+            .filter(|r| {
+                session.and_then(|s| s.relation(r.oid)).is_some_and(|s| s.columns != r.columns)
+            })
+            .map(|r| (r.oid, r.columns.clone()))
             .collect();
         self.env.command_counter_increment(catalog);
     }

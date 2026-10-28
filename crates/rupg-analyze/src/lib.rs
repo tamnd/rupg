@@ -145,6 +145,11 @@ pub trait Env {
     fn catalog(&self) -> Option<&rupg_catalog::Catalog> {
         None
     }
+    /// The columns of the relation `oid` after the last [`Env::command_counter_increment`] of the statement, when the statement changed them, or `None` when the relation has the columns of [`Env::catalog`].
+    fn changed_columns(&self, oid: u32) -> Option<Vec<rupg_catalog::Column>> {
+        let _ = oid;
+        None
+    }
     /// `get_visible_ENR_by_name`: the OID of the table of the trigger when `name` is a transition table of the trigger that runs, as `SPI_register_trigger_data` registers them.
     fn transition_table(&self, name: &str) -> Option<u32> {
         let _ = name;
