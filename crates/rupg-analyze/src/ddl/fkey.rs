@@ -343,7 +343,13 @@ impl Definer<'_, '_> {
     }
 
     /// `get_opfamily_member`, from the built-in operators and the operators of the catalog.
-    fn opfamily_member(&self, family: u32, left: u32, right: u32, strategy: i16) -> Option<u32> {
+    pub(super) fn opfamily_member(
+        &self,
+        family: u32,
+        left: u32,
+        right: u32,
+        strategy: i16,
+    ) -> Option<u32> {
         builtin::opfamily_member(family, left, right, strategy).or_else(|| {
             self.catalog
                 .amops()

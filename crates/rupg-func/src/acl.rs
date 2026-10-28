@@ -1161,7 +1161,15 @@ pub fn check_execute(funcs: &[u32], session: &dyn Session) -> Result<()> {
     if funcs.is_empty() {
         return Ok(());
     }
-    let role = current_user(session);
+    check_execute_as(funcs, current_user(session), session)
+}
+
+/// [`check_execute`] as the role `role`, as the check of a foreign key calls the functions of its query as the owner of the referenced table.
+///
+/// # Errors
+///
+/// `permission denied` for the function or the aggregate.
+pub fn check_execute_as(funcs: &[u32], role: u32, session: &dyn Session) -> Result<()> {
     if superuser(role) {
         return Ok(());
     }

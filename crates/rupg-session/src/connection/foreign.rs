@@ -378,10 +378,22 @@ impl Connection {
             let reader = self.reader();
             let pk = (foreign.other, attnums(&foreign.other_columns));
             let fk = (batch.table, attnums(&foreign.columns));
+            let owner = self.owner_of(pk.0);
             if !batch.validation
                 || !rupg_func::ri_initial_permitted((pk.0, &pk.1), (fk.0, &fk.1), &reader)?
             {
-                rupg_func::ri_check_permissions(pk.0, &pk.1, self.owner_of(pk.0), &reader)?;
+                rupg_func::ri_check_permissions(pk.0, &pk.1, owner, &reader)?;
+                rupg_func::check_execute_as(&foreign.functions, owner, &reader).map_err(
+                    |error| {
+                        if foreign.check.is_empty() {
+                            error
+                        } else {
+                            query::inner_error(error, &foreign.check)
+                        }
+                    },
+                )?;
+            } else {
+                rupg_func::check_execute(&foreign.functions, &reader)?;
             }
             state.permitted = true;
         }

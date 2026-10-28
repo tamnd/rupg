@@ -284,6 +284,10 @@ pub struct Foreign {
     pub referencing_types: Vec<u32>,
     /// For each key column, the query `SELECT $1::type` of the cast of a referencing value to the type of the equality operator when a function of the user does the cast, or else nothing. `ri_GenerateQual` puts the cast in the query of the check, so the function runs for each key that the check looks up.
     pub casts: Vec<String>,
+    /// The functions that the check of a new key calls on the referencing values, as the owner of the referenced table: the function of each equality operator and the cast functions of the user. `ExecInitFunc` and the fast path of the check ask for `EXECUTE` on them.
+    pub functions: Vec<u32>,
+    /// The query of the check of a new key, `SELECT 1 FROM table x WHERE key OPERATOR(op) $1 FOR KEY SHARE OF x`, when the referenced table is partitioned, as `RI_FKey_check` runs it through SPI. An error of the query has its text as the context. The check of another table takes the fast path, with no context.
+    pub check: String,
     /// The OID of the constraint, which `SET CONSTRAINTS` names.
     pub constraint: u32,
     /// `tgdeferrable`: `SET CONSTRAINTS` can defer the trigger. The trigger of an action is not deferrable.
@@ -1291,13 +1295,16 @@ impl Analyzer<'_> {
                 types: Vec::with_capacity(mine.len()),
                 referencing_types: Vec::with_capacity(mine.len()),
                 casts: Vec::with_capacity(mine.len()),
+                functions: Vec::new(),
+                check: String::new(),
                 constraint: constraint.oid,
                 deferrable: trigger.deferrable,
                 deferred: trigger.deferred,
                 cloned: trigger.parent != 0,
                 period: foreign.period,
             };
-            for (&attnum, &other_attnum) in mine.iter().zip(theirs) {
+            let mut quals = Vec::with_capacity(mine.len());
+            for (i, (&attnum, &other_attnum)) in mine.iter().zip(theirs).enumerate() {
                 let column = place(attnum).and_then(|at| columns.get(at).map(|c| (at, c)));
                 let other_column =
                     place(other_attnum).and_then(|at| other_rel.columns.get(at).map(|c| (at, c)));
@@ -1326,6 +1333,47 @@ impl Analyzer<'_> {
                 } else {
                     String::new()
                 });
+                if referencing {
+                    let op = foreign.pf_eq.get(i).copied().unwrap_or_default();
+                    let (code, op_name, op_right) = match catalog.operator(op) {
+                        Some(o) => {
+                            let schema = match catalog.schema(o.namespace) {
+                                Some(schema) => crate::ddl::quote_identifier(&schema.name),
+                                None => builtin::named_by_oid(Named::Namespace, o.namespace)
+                                    .map_or_else(String::new, |n| {
+                                        crate::ddl::quote_identifier(n.name)
+                                    }),
+                            };
+                            (o.code, format!("{schema}.{}", o.name), o.right)
+                        }
+                        None => builtin::operator_by_oid(op).map_or_else(
+                            || (0, "pg_catalog.=".to_string(), right),
+                            |o| (o.code, format!("pg_catalog.{}", o.name), o.right),
+                        ),
+                    };
+                    if code != 0 {
+                        check.functions.push(code);
+                    }
+                    if user_cast {
+                        let cast = catalog
+                            .casts()
+                            .find(|cast| cast.source == referencing_key && cast.target == right);
+                        check.functions.extend(cast.map(|cast| cast.func));
+                    }
+                    // `ri_GenerateQual`: the referencing value gets a cast to the right input of the operator.
+                    let cast = if op_right != referencing_key
+                        && builtin::type_by_oid(op_right).is_some()
+                    {
+                        cast_to(op_right)
+                    } else {
+                        String::new()
+                    };
+                    quals.push(format!(
+                        "{} OPERATOR({op_name}) ${}{cast}",
+                        quote_one(&other_column.name),
+                        i + 1
+                    ));
+                }
             }
             let names: Vec<&str> =
                 check.other_columns.iter().map(|&at| other_rel.columns[at].name.as_str()).collect();
@@ -1336,6 +1384,12 @@ impl Analyzer<'_> {
             };
             let table = format!("{}.{}", quote_one(&schema), quote_one(&other_rel.name));
             let only = other_rel.kind != RelKind::Partitioned;
+            if referencing && !only && !foreign.period {
+                check.check = format!(
+                    "SELECT 1 FROM {table} x WHERE {} FOR KEY SHARE OF x",
+                    quals.join(" AND ")
+                );
+            }
             if !referencing && !foreign.period {
                 let only = if only { "ONLY " } else { "" };
                 check.restrict = format!(

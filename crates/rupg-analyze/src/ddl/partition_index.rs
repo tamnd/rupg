@@ -13,18 +13,32 @@ const BTREE_EQUAL: i16 = 3;
 /// `HTEqualStrategyNumber`.
 const HASH_EQUAL: i16 = 1;
 
-/// The equality operator of the family of the operator class for its input type, as `get_opfamily_member` gives it.
-fn equality_operator(class: u32, strategy: i16) -> Option<u32> {
-    let row = builtin::opclasses().iter().find(|c| c.oid == class)?;
-    builtin::opfamily_member(row.family, row.intype, row.intype, strategy)
-}
-
 /// The operator family of an operator class.
 fn family(class: u32) -> u32 {
     builtin::opclasses().iter().find(|c| c.oid == class).map_or(class, |c| c.family)
 }
 
 impl Definer<'_, '_> {
+    /// The equality operator of the family of the operator class `class` for its input type, as `get_opfamily_member` gives it, for a built-in class and for a class of the catalog.
+    fn equality_operator(&self, class: u32, strategy: i16) -> Option<u32> {
+        let (family, intype) = match self.catalog.opclass(class) {
+            Some(row) => (row.family, row.intype),
+            None => {
+                let row = builtin::opclasses().iter().find(|c| c.oid == class)?;
+                (row.family, row.intype)
+            }
+        };
+        self.opfamily_member(family, intype, intype, strategy)
+    }
+
+    /// The access method of the operator class `class`.
+    fn class_method(&self, class: u32) -> u32 {
+        match self.catalog.opclass(class) {
+            Some(row) => row.method,
+            None => family_method(class),
+        }
+    }
+
     /// The check of `DefineIndex` for a unique index or an exclusion constraint of a partitioned table: each column of the partition key must be a key column of the index, with the same collation and the same equality operator. The operator of an exclusion constraint, `exclusion`, must be the equality operator of the partition key. A partition key with an expression cannot have a unique index.
     pub(super) fn check_partition_key(
         &self,
@@ -40,7 +54,7 @@ impl Definer<'_, '_> {
         for (i, &attr) in partkey.attrs.iter().enumerate() {
             let class = partkey.classes.get(i).copied().unwrap_or_default();
             let collation = partkey.collations.get(i).copied().unwrap_or_default();
-            let operator = equality_operator(class, strategy);
+            let operator = self.equality_operator(class, strategy);
             if attr == 0 {
                 return Err(Error::new(
                     SqlState::FEATURE_NOT_SUPPORTED,
@@ -56,9 +70,14 @@ impl Definer<'_, '_> {
                     continue;
                 }
                 let Some(&op) = exclusion.get(j) else {
-                    let method =
-                        if family_method(column.class) == HASH { HASH_EQUAL } else { BTREE_EQUAL };
-                    if operator.is_some() && equality_operator(column.class, method) == operator {
+                    let method = if self.class_method(column.class) == HASH {
+                        HASH_EQUAL
+                    } else {
+                        BTREE_EQUAL
+                    };
+                    if operator.is_some()
+                        && self.equality_operator(column.class, method) == operator
+                    {
                         found = true;
                         break;
                     }

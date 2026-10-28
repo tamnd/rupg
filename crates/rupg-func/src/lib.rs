@@ -93,9 +93,10 @@ pub use rupg_plan::{
 use rupg_types::{ByteaOutput, DateFormat, IntervalStyle, TimeZone, TypeError, Value};
 
 pub use acl::{
-    apply_row_security, check_execute, check_permissions, copy_from_row_security, current_user_oid,
-    insert_allowed, key_shown, lock_table_allowed, relation_allowed, ri_check_permissions,
-    ri_initial_permitted, row_security_hides, schema_usage, shown_columns, vacuum_permitted,
+    apply_row_security, check_execute, check_execute_as, check_permissions, copy_from_row_security,
+    current_user_oid, insert_allowed, key_shown, lock_table_allowed, relation_allowed,
+    ri_check_permissions, ri_initial_permitted, row_security_hides, schema_usage, shown_columns,
+    vacuum_permitted,
 };
 pub use activity::{Backend, BackendState, Client, Process, Ssl};
 pub use agg::check_percentile;
