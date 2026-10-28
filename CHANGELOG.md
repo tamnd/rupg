@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `EXPLAIN` shows no `X IS NOT NULL` for a condition `X = X` on a column with a not-null constraint, in a scan and after a self-join goes, as `restriction_is_always_true` finds it always true (#1044).
 - `ADD COLUMN` of an identity column gives the error of PostgreSQL on a table with inheritance children, an identity column on a typed table gives `0A000`, and `LIKE ... INCLUDING IDENTITY` of a partition takes the options of the sequence of the partitioned table. (#1042)
 - `satisfies_hash_partition` runs, with the checks and the errors of PostgreSQL. It gives the hash of the key values by the support functions of the partition key, also with `VARIADIC` and with an operator class in SQL. (#1041)
 - A row of a system catalog has a `ctid`, so a query such as `SELECT ctid, oprcom FROM pg_operator` runs. Each row of a catalog table has a different `ctid`. The drop_operator regression test passes. (#1040)

@@ -8,7 +8,7 @@ use rupg_analyze::{
 use rupg_pgcatalog::builtin;
 use rupg_types::oid;
 
-use crate::{Members, exprs, from, pushdown};
+use crate::{Members, exprs, from, pullup, pushdown};
 
 /// `remove_useless_self_joins`: the self-joins of the query and of the queries in it that the relations can leave, as `remove_self_joins_one_group` finds them. The removed relation stays in the list of relations, and no item of `FROM` reads it. A removal can make another removal possible, so the search starts again after each removal, as `query_planner` does it.
 pub fn remove_self_joins(query: &mut Query, members: &dyn Members) {
@@ -479,8 +479,12 @@ fn remove(query: &Query, r: usize, k: usize) -> Option<Query> {
     }
     let mut hoist = Vec::new();
     let mut found = false;
+    let not_null: Vec<i16> = (1..=query.relations[k].columns.len())
+        .filter_map(|at| i16::try_from(at).ok())
+        .filter(|&at| pullup::column_not_null(&query.relations, k, at))
+        .collect();
     for item in &mut query.from {
-        found |= fixup(item, k, &mut hoist)?;
+        found |= fixup(item, k, &not_null, &mut hoist)?;
     }
     if !found {
         return None;
@@ -488,7 +492,7 @@ fn remove(query: &Query, r: usize, k: usize) -> Option<Query> {
     if let Some(filter) = query.filter.take() {
         pushdown::owned_parts(filter, &mut hoist);
     }
-    query.filter = pushdown::and_all(fixup_quals(hoist, k));
+    query.filter = pushdown::and_all(fixup_quals(hoist, k, &not_null));
     Some(query)
 }
 
@@ -593,14 +597,14 @@ fn mentions(expr: &Expr, k: usize) -> bool {
 }
 
 /// `fixup_selfjoin_jointree`: a condition that reads `k` in a join that does not have `k` goes up to the first join that has it, before the conditions of that join, and each list of conditions gets the changes of [`fixup_quals`]. True when the item has `k`. `None` when a condition would go up from a join that is not an inner join.
-fn fixup(item: &mut FromItem, k: usize, hoist: &mut Vec<Expr>) -> Option<bool> {
+fn fixup(item: &mut FromItem, k: usize, not_null: &[i16], hoist: &mut Vec<Expr>) -> Option<bool> {
     let join = match item {
         FromItem::Relation(x) => return Some(*x == k),
         FromItem::Join(join) => join,
     };
     let mut sub = Vec::new();
-    let found_left = fixup(&mut join.left, k, &mut sub)?;
-    let found_right = fixup(&mut join.right, k, &mut sub)?;
+    let found_left = fixup(&mut join.left, k, not_null, &mut sub)?;
+    let found_right = fixup(&mut join.right, k, not_null, &mut sub)?;
     let found = found_left || found_right;
     let mut parts = Vec::new();
     if let Some(on) = join.on.take() {
@@ -619,17 +623,19 @@ fn fixup(item: &mut FromItem, k: usize, hoist: &mut Vec<Expr>) -> Option<bool> {
         sub.append(hoist);
         *hoist = sub;
     }
-    join.on = pushdown::and_all(fixup_quals(parts, k));
+    join.on = pushdown::and_all(fixup_quals(parts, k, not_null));
     Some(found)
 }
 
-/// `fixup_selfjoin_quals`: each part that reads `k` and is `X = X` with a strict mergejoinable operator becomes `X IS NOT NULL`, and a part that reads `k` and is the same as a part before it goes.
-fn fixup_quals(parts: Vec<Expr>, k: usize) -> Vec<Expr> {
+/// `fixup_selfjoin_quals`: each part that reads `k` and is `X = X` with a strict mergejoinable operator becomes `X IS NOT NULL`, and a part that reads `k` and is the same as a part before it goes. `X IS NOT NULL` for a column of `k` in `not_null` goes too, as `restriction_is_always_true` finds it always true.
+fn fixup_quals(parts: Vec<Expr>, k: usize, not_null: &[i16]) -> Vec<Expr> {
     let mut out: Vec<Expr> = Vec::new();
     for part in parts {
         let part = if mentions(&part, k) {
             let part = replace_selfjoin_qual(part);
-            if out.iter().any(|o| o.same(&part)) {
+            let always = matches!(&part.kind, ExprKind::NullTest(arg, false)
+                if matches!(&arg.kind, ExprKind::Var(v) if v.levels_up == 0 && v.relation == k && not_null.contains(&v.attnum)));
+            if always || out.iter().any(|o| o.same(&part)) {
                 continue;
             }
             part

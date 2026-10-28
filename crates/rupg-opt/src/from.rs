@@ -672,7 +672,7 @@ impl<'q> Builder<'q> {
         if !query.security.is_empty() {
             mark_security(&mut tree, &query.security);
         }
-        classes::not_null(&mut tree, !query.security.is_empty());
+        classes::not_null(&mut tree, !query.security.is_empty(), &query.relations);
         let mut found = classes::Found::default();
         if !classes::domain(&mut tree, true, &mut found) {
             return (

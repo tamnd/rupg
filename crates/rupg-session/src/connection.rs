@@ -6360,6 +6360,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/self_join.test")));
     }
 
+    /// `EXPLAIN` shows no `X IS NOT NULL` for a condition `X = X` on a column with a not-null constraint, in a scan and after a self-join goes, as `restriction_is_always_true` finds it always true. A column with no not-null constraint keeps the test. `connection/always_true.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn always_true() {
+        big_stack(|| script(include_str!("connection/always_true.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
