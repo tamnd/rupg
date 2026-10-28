@@ -1,0 +1,49 @@
+!details
+> create domain cdd as int constraint cdc check (value > 0)
+CREATE DOMAIN
+> comment on constraint cdc on domain cdd is 'a note'
+COMMENT
+> select conname, obj_description(oid, 'pg_constraint') from pg_constraint where contypid = 'cdd'::regtype
+fields conname@pg_constraint.2:19:64:-1,obj_description:25:-1:-1
+row cdc,a note
+SELECT 1
+> comment on constraint cdc on domain cdd is ''
+COMMENT
+> select conname, obj_description(oid, 'pg_constraint') from pg_constraint where contypid = 'cdd'::regtype
+fields conname@pg_constraint.2:19:64:-1,obj_description:25:-1:-1
+row cdc,NULL
+SELECT 1
+> comment on constraint nope on domain cdd is 'x'
+ERROR 42704 constraint "nope" for domain cdd does not exist
+> comment on constraint cdc on domain int4 is 'x'
+ERROR 42809 "int4" is not a domain
+> comment on constraint cdc on domain nosuch is 'x'
+ERROR 42704 type "nosuch" does not exist
+> create table cdt (a int, constraint cdc check (a > 0))
+CREATE TABLE
+> comment on constraint cdc on domain cdt is 'x'
+ERROR 42809 "cdt" is not a domain
+> create role cd_role
+CREATE ROLE
+> set role cd_role
+SET
+is_superuser=off
+> comment on constraint cdc on domain cdd is 'x'
+ERROR 42501 must be owner of type cdd
+> comment on constraint nope on domain cdd is 'x'
+ERROR 42704 constraint "nope" for domain cdd does not exist
+> reset role
+RESET
+is_superuser=on
+> drop role cd_role
+DROP ROLE
+> comment on constraint cdc on domain cdd is 'again'
+COMMENT
+> drop domain cdd
+DROP DOMAIN
+> select count(*) from pg_description where objoid not in (select oid from pg_constraint) and classoid = 'pg_constraint'::regclass
+fields count:20:8:-1
+row 0
+SELECT 1
+> drop table cdt
+DROP TABLE
