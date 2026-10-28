@@ -112,6 +112,7 @@ pub fn check(node: &Node, text: &str) -> Result<(), Error> {
         | Node::DropTableSpaceStmt(_)
         | Node::ReindexStmt(_)
         | Node::VacuumStmt(_)
+        | Node::SecLabelStmt(_)
         | Node::CheckPointStmt(_) => Ok(()),
         _ => Err(not_supported(text)),
     }
@@ -149,8 +150,18 @@ pub fn run(node: &Node, text: &str, cx: &mut Context<'_>) -> Result<Outcome, Err
             rupg_analyze::find_library(stmt.filename.as_deref().unwrap_or_default())?;
             Ok(Outcome::Tag(CommandTag::Load))
         }
+        Node::SecLabelStmt(stmt) => Err(security_label(stmt)),
         _ => Err(not_supported(text)),
     }
+}
+
+/// `ExecSecLabelStmt`: rupg loads no security label provider, so each label fails before the object is looked up.
+fn security_label(stmt: &rupg_sql::nodes::SecLabelStmt) -> Error {
+    let message = match stmt.provider.as_deref() {
+        None => "no security label providers have been loaded".to_owned(),
+        Some(name) => format!("security label provider \"{name}\" is not loaded"),
+    };
+    Error::new(SqlState::INVALID_PARAMETER_VALUE, message)
 }
 
 /// The error for a statement that the session cannot run yet, with the first word of the statement.

@@ -6245,6 +6245,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/nulls_order.test")));
     }
 
+    /// An index of a partitioned table that is not valid is not an arbiter of `ON CONFLICT`, and `SECURITY LABEL` fails because rupg loads no label provider. `connection/arbiter_valid.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn arbiter_valid() {
+        big_stack(|| script(include_str!("connection/arbiter_valid.test")));
+    }
+
     /// An index depends once on each column of its keys, as `record_object_address_dependencies` records them, and its expressions add their own dependencies. `connection/index_depend.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn index_depend() {

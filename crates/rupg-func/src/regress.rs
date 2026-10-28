@@ -14,6 +14,7 @@ const TEXT_UNIQUE_INDEXES: [u32; 4] = [6246, 6002, 3597, 3593];
 pub(crate) fn by_symbol(symbol: &str) -> Option<Kernel> {
     let kernel: Kernel = match symbol {
         "interpt_pp" => interpt_pp,
+        "overpaid" => overpaid,
         "reverse_name" => reverse_name,
         "test_canonicalize_path" => |_, a| Ok(Value::text(canonicalize_path(text(a)?))),
         "test_atomic_ops" => |_, _| Ok(Value::Bool(true)),
@@ -42,6 +43,26 @@ fn text(args: &[Value]) -> Result<&str> {
     match args.first() {
         Some(Value::Text(text)) => Ok(text),
         _ => Err(bad_value()),
+    }
+}
+
+/// `overpaid`: true when the field `salary` of the row is more than 699, and null when it is null.
+fn overpaid(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let Some(Value::Record(record)) = args.first() else { return Err(bad_value()) };
+    let ty = call.args.first().copied().unwrap_or_default();
+    let names = match &record.names {
+        Some(names) => names.to_vec(),
+        None => crate::deparse::row_names(ty, call.session).unwrap_or_default(),
+    };
+    let at = names.iter().position(|n| n == "salary");
+    match at.and_then(|at| record.values.get(at)) {
+        Some(Value::Int4(salary)) => Ok(Value::Bool(*salary > 699)),
+        Some(Value::Null) => Ok(Value::Null),
+        Some(_) => Err(bad_value()),
+        None => Err(rupg_common::Error::new(
+            rupg_common::SqlState::UNDEFINED_COLUMN,
+            "attribute \"salary\" does not exist",
+        )),
     }
 }
 
