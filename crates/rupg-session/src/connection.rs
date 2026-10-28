@@ -5999,6 +5999,14 @@ mod tests {
         big_stack(|| script(include_str!("connection/excluded_select.test")));
     }
 
+    /// `object_ownercheck` in `ALTER ... OWNER TO` passes for a role with the privileges of the owner, and `CREATE SCHEMA`, `ALTER SCHEMA ... RENAME TO` and `ALTER SCHEMA ... OWNER TO` need `CREATE` on the database. `connection/schema_owner.test` is the output of PostgreSQL 19 for the same script in a new database, `tsstat_ow1`, which is `postgres` here.
+    #[test]
+    fn schema_owner() {
+        big_stack(|| {
+            script(&include_str!("connection/schema_owner.test").replace("tsstat_ow1", "postgres"));
+        });
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

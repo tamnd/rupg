@@ -1127,6 +1127,14 @@ impl Definer<'_, '_> {
         self.pg_aclmask(&roles, Object::new(Kind::Schema, namespace), role, CREATE) != 0
     }
 
+    /// `object_aclcheck` of `CREATE` on the current database for the role, as `CREATE SCHEMA`, `ALTER SCHEMA ... OWNER TO` and `CREATE PUBLICATION` check it.
+    pub(super) fn database_create_allowed(&self, role: u32) -> bool {
+        let database = self.an.env.database();
+        let Some(row) = self.database_row(|row| row.name == database) else { return false };
+        let roles = rupg_pgcatalog::roles::current();
+        self.pg_aclmask(&roles, Object::new(Kind::Database, row.oid), role, CREATE) != 0
+    }
+
     /// `object_aclcheck` of `USAGE` on a type, with `pg_type_aclmask` and `aclcheck_error_type`. An array type has the privileges of its element type, and a multirange type has the privileges of its range type.
     pub(super) fn check_type_usage(&self, ty: u32) -> Result<()> {
         let element = crate::types::element(ty);

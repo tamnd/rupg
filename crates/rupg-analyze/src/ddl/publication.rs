@@ -722,7 +722,7 @@ impl<'s> Definer<'_, '_> {
 
     /// `CreatePublication`.
     pub(super) fn create_publication(&mut self, stmt: &'s CreatePublicationStmt) -> Result<()> {
-        if !self.is_superuser() {
+        if !self.database_create_allowed(self.user) {
             return Err(Error::new(
                 SqlState::INSUFFICIENT_PRIVILEGE,
                 format!("permission denied for database {}", self.an.env.database()),
@@ -1109,10 +1109,12 @@ impl<'s> Definer<'_, '_> {
                     "The owner of a FOR ALL TABLES or ALL SEQUENCES or TABLES IN SCHEMA publication must be a superuser.",
                 ));
             }
-            return Err(Error::new(
-                SqlState::INSUFFICIENT_PRIVILEGE,
-                format!("permission denied for database {}", self.an.env.database()),
-            ));
+            if !self.database_create_allowed(new) {
+                return Err(Error::new(
+                    SqlState::INSUFFICIENT_PRIVILEGE,
+                    format!("permission denied for database {}", self.an.env.database()),
+                ));
+            }
         }
         let (old, new_name) = (
             roles.name(publication.owner).unwrap_or_default().to_string(),

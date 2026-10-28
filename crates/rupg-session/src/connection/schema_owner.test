@@ -1,0 +1,85 @@
+> CREATE ROLE regress_ow_donor
+CREATE ROLE
+> CREATE ROLE regress_ow_prot
+CREATE ROLE
+> CREATE ROLE regress_ow_other
+CREATE ROLE
+> GRANT regress_ow_donor TO regress_ow_prot WITH INHERIT TRUE, SET FALSE
+GRANT ROLE
+> GRANT CREATE ON SCHEMA public TO PUBLIC
+GRANT
+> SET SESSION AUTHORIZATION regress_ow_donor
+SET
+session_authorization=regress_ow_donor
+is_superuser=off
+> CREATE TABLE ow_t (a int)
+CREATE TABLE
+> SET SESSION AUTHORIZATION regress_ow_prot
+SET
+session_authorization=regress_ow_prot
+> ALTER TABLE ow_t OWNER TO regress_ow_prot
+ALTER TABLE
+> SELECT tableowner FROM pg_tables WHERE tablename = 'ow_t'
+fields tableowner@pg_tables.3:19:64:-1
+row regress_ow_prot
+SELECT 1
+> CREATE SCHEMA ow_s1
+ERROR 42501 permission denied for database tsstat_ow1
+> RESET SESSION AUTHORIZATION
+RESET
+session_authorization=postgres
+is_superuser=on
+> SELECT current_database() = 'tsstat_ow1' AS ok
+fields ok:16:1:-1
+row t
+SELECT 1
+> GRANT CREATE ON DATABASE tsstat_ow1 TO regress_ow_prot
+GRANT
+> SET SESSION AUTHORIZATION regress_ow_prot
+SET
+session_authorization=regress_ow_prot
+is_superuser=off
+> CREATE SCHEMA ow_s1
+CREATE SCHEMA
+> CREATE SCHEMA ow_s2 AUTHORIZATION regress_ow_other
+ERROR 42501 must be able to SET ROLE "regress_ow_other"
+> CREATE SCHEMA ow_s3 AUTHORIZATION regress_ow_donor
+ERROR 42501 must be able to SET ROLE "regress_ow_donor"
+> ALTER SCHEMA ow_s1 RENAME TO ow_s4
+ALTER SCHEMA
+> ALTER SCHEMA ow_s4 OWNER TO regress_ow_prot
+ALTER SCHEMA
+> SELECT nspname, nspowner::regrole FROM pg_namespace WHERE nspname LIKE 'ow\_%' ORDER BY 1
+fields nspname@pg_namespace.2:19:64:-1,nspowner:4096:4:-1
+row ow_s4,regress_ow_prot
+SELECT 1
+> RESET SESSION AUTHORIZATION
+RESET
+session_authorization=postgres
+is_superuser=on
+> REVOKE CREATE ON DATABASE tsstat_ow1 FROM regress_ow_prot
+REVOKE
+> SET SESSION AUTHORIZATION regress_ow_prot
+SET
+session_authorization=regress_ow_prot
+is_superuser=off
+> ALTER SCHEMA ow_s4 RENAME TO ow_s5
+ERROR 42501 permission denied for database tsstat_ow1
+> CREATE SCHEMA ow_s6
+ERROR 42501 permission denied for database tsstat_ow1
+> RESET SESSION AUTHORIZATION
+RESET
+session_authorization=postgres
+is_superuser=on
+> DROP SCHEMA ow_s4
+DROP SCHEMA
+> DROP TABLE ow_t
+DROP TABLE
+> REVOKE CREATE ON SCHEMA public FROM PUBLIC
+REVOKE
+> DROP ROLE regress_ow_prot
+DROP ROLE
+> DROP ROLE regress_ow_donor
+DROP ROLE
+> DROP ROLE regress_ow_other
+DROP ROLE
