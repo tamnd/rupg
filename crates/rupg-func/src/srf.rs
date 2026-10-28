@@ -58,6 +58,7 @@ pub fn set_kernel(func: u32) -> Option<SetKernel> {
         "show_all_settings" => all_settings,
         "pg_prepared_statement" => prepared_statements,
         "pg_cursor" => cursors,
+        "pg_lock_status" => locks,
         "pg_listening_channels" => listening_channels,
         "pg_hba_file_rules" => hba_rules,
         "pg_ident_file_mappings" => ident_mappings,
@@ -203,6 +204,11 @@ fn prepared_statements(call: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> 
 /// `pg_cursor`: the open cursors of the session, which the view `pg_cursors` reads.
 fn cursors(call: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
     Ok(call.session.cursors())
+}
+
+/// `pg_lock_status`: the locks of the sessions, which the view `pg_locks` reads.
+fn locks(call: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
+    Ok(call.session.locks())
 }
 
 /// `pg_listening_channels`: the channels that the session listens on.

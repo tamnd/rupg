@@ -6330,6 +6330,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/using_old_row.test")));
     }
 
+    /// `pg_locks` shows the advisory locks, the locks of `LOCK TABLE`, the virtual transaction ID of each session in a transaction and the ID of its transaction when it has one, as `pg_lock_status` does. `connection/lock_status.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn lock_status() {
+        big_stack(|| script(include_str!("connection/lock_status.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
