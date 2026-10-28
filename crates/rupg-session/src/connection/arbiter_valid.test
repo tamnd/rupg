@@ -1,0 +1,28 @@
+> create table pt (a int primary key) partition by range (a)
+CREATE TABLE
+> create table p1 partition of pt for values from (1) to (2) partition by range (a)
+CREATE TABLE
+> create table p1_1 partition of p1 for values from (1) to (2)
+CREATE TABLE
+> create unique index on only p1 (a)
+CREATE INDEX
+> insert into p1 values (1) on conflict (a) do nothing
+INSERT 0 1
+> insert into p1 values (1) on conflict (a) do nothing
+INSERT 0 0
+> select count(*) from pt
+fields count:20:8:-1
+row 1
+SELECT 1
+> create table q (a int) partition by range (a)
+CREATE TABLE
+> create table q1 partition of q for values from (1) to (2)
+CREATE TABLE
+> create unique index on only q (a)
+CREATE INDEX
+> insert into q values (1) on conflict (a) do nothing
+ERROR 42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification
+> security label on table pt is 'classified'
+ERROR 22023 no security label providers have been loaded
+> security label for 'dummy' on role postgres is 'classified'
+ERROR 22023 security label provider "dummy" is not loaded

@@ -808,7 +808,8 @@ impl Analyzer<'_> {
             {
                 conflict.exclusion = index;
             }
-            conflict.arbiters = arbiters(inference, unique, self.env.catalog())?;
+            conflict.arbiters =
+                arbiters(inference, unique, self.env.catalog(), self.is_partitioned(table))?;
         }
         Ok((on_conflict, returning, def, returning_tid))
     }
@@ -2191,12 +2192,17 @@ fn exact_match(
     false
 }
 
-/// `infer_arbiter_indexes`: the places in `unique` of the arbiter indexes. An inference takes each unique index whose key has the same set of columns.
+/// `infer_arbiter_indexes`: the places in `unique` of the arbiter indexes. An inference takes each unique index whose key has the same set of columns. An index that is not ready is not an arbiter, and an index of a partitioned table that is not valid is not an arbiter, because a partition can be without it.
 fn arbiters(
     inference: Inference,
     unique: &[Unique],
     catalog: Option<&rupg_catalog::Catalog>,
+    partitioned: bool,
 ) -> Result<Vec<usize>> {
+    let usable = |key: &Unique| {
+        let info = catalog.and_then(|c| c.relation(key.oid)).and_then(|rel| rel.index.as_ref());
+        info.is_none_or(|i| i.ready && (i.valid || !partitioned))
+    };
     let places: Vec<usize> = match inference {
         Inference::All => return Ok((0..unique.len()).collect()),
         Inference::Constraint(0) => {
@@ -2218,6 +2224,7 @@ fn arbiters(
         Inference::Columns { columns: set, exprs, predicate, exact } => unique
             .iter()
             .enumerate()
+            .filter(|(_, key)| usable(key))
             .filter(|(_, key)| exact.iter().all(|e| exact_match(e, &exprs, key, catalog)))
             .filter(|(_, key)| {
                 let Some(derived) = &key.derived else {
@@ -2252,7 +2259,13 @@ fn arbiters(
             .map(|(at, _)| at)
             .collect(),
     };
-    if places.is_empty() {
+    // At least one arbiter must be valid, because an index that is not valid can be without some rows.
+    let valid = |at: &usize| {
+        let info =
+            catalog.and_then(|c| c.relation(unique[*at].oid)).and_then(|rel| rel.index.as_ref());
+        info.is_none_or(|i| i.valid)
+    };
+    if !places.iter().any(valid) {
         return Err(Error::new(
             SqlState::INVALID_COLUMN_REFERENCE,
             "there is no unique or exclusion constraint matching the ON CONFLICT specification",
