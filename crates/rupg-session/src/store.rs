@@ -199,19 +199,38 @@ impl Store {
             return self.created();
         }
         let initdb = Database::initdb();
+        self.rows_with(changes).into_iter().filter(|row| initdb.iter().all(|i| i != row)).collect()
+    }
+
+    /// The rows of `pg_database` of all databases with the rows that a transaction changed and did not commit yet, in the order of their OIDs.
+    pub(crate) fn rows_with(&self, changes: &[DatabaseChange]) -> Vec<Database> {
         self.state()
             .databases
             .values()
             .map(|db| {
                 let mut row = db.row.clone();
                 if let Some(change) = changes.iter().find(|c| c.oid == row.oid) {
-                    row.owner = change.owner;
-                    row.acl.clone_from(&change.acl);
+                    rupg_analyze::apply_database_change(change, &mut row);
                 }
                 row
             })
-            .filter(|row| initdb.iter().all(|i| i != row))
             .collect()
+    }
+
+    /// `CountOtherDBBackends` for `RenameDatabase` and `movedb`.
+    ///
+    /// # Errors
+    ///
+    /// `55006` while other sessions use the database.
+    pub(crate) fn check_unused(&self, row: &Database, me: Option<i32>) -> Result<()> {
+        let others = self.others(row.oid, me);
+        if others > 0 {
+            return Err(busy(
+                format!("database \"{}\" is being accessed by other users", row.name),
+                others,
+            ));
+        }
+        Ok(())
     }
 
     /// `datdba` of a database at the last commit, or the bootstrap superuser for a database that does not exist.
@@ -700,8 +719,7 @@ impl Lease {
         }
         for change in changes {
             if let Some(db) = state.databases.get_mut(&change.oid) {
-                db.row.owner = change.owner;
-                db.row.acl = change.acl;
+                rupg_analyze::apply_database_change(&change, &mut db.row);
             }
         }
         if !Arc::ptr_eq(&self.base, &self.roles) {

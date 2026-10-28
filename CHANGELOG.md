@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `ALTER DATABASE ... RENAME TO` runs, and `ALTER DATABASE` takes the options `CONNECTION LIMIT`, `ALLOW_CONNECTIONS`, `IS_TEMPLATE` and `TABLESPACE`, with the checks and the errors of PostgreSQL. A rollback discards the changes. (#1052)
+
 ## 0.4.5 (2026-10-29)
 
 ### Added

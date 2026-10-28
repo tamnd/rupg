@@ -1341,6 +1341,14 @@ impl Connection {
         {
             return self.alter_database_owner(stmt, role);
         }
+        if let Node::RenameStmt(stmt) = node
+            && stmt.renameType == ObjectType::OBJECT_DATABASE
+        {
+            return self.rename_database(stmt, role);
+        }
+        if let Node::AlterDatabaseStmt(stmt) = node {
+            return self.alter_database(stmt, role);
+        }
         let mut work = Catalog::clone(&self.catalog());
         let mut defined = rupg_analyze::define(node, text, &self.reader(), &mut work, role);
         if let Some(top) = &defined.top_level
@@ -6306,6 +6314,12 @@ mod tests {
     #[test]
     fn drop_role_database_acl() {
         big_stack(|| script(include_str!("connection/drop_role_database_acl.test")));
+    }
+
+    /// `ALTER DATABASE ... RENAME TO`, `ALTER DATABASE` with `CONNECTION LIMIT`, `ALLOW_CONNECTIONS` and `IS_TEMPLATE`, and `ALTER DATABASE ... SET TABLESPACE` give the changes and the errors of PostgreSQL, and a rollback discards the changes. `connection/alter_database.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn alter_database() {
+        big_stack(|| script(include_str!("connection/alter_database.test")));
     }
 
     /// An index depends once on each column of its keys, as `record_object_address_dependencies` records them, and its expressions add their own dependencies. `connection/index_depend.test` is the output of PostgreSQL 19 for the same script in a new database.

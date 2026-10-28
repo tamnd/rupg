@@ -73,12 +73,17 @@ pub struct Member {
     pub set: bool,
 }
 
-/// A row of `pg_database` that `ALTER DATABASE ... OWNER TO` changed in a transaction: `datdba`, and `datacl` with the new owner.
+/// A row of `pg_database` that a transaction changed: `datdba` and `datacl` of `ALTER DATABASE ... OWNER TO` and `GRANT`, `datname` of `ALTER DATABASE ... RENAME TO`, and the options of `ALTER DATABASE`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DatabaseChange {
     pub oid: u32,
+    pub name: String,
     pub owner: u32,
     pub acl: Option<Vec<String>>,
+    pub is_template: bool,
+    pub allow_connections: bool,
+    pub connection_limit: i32,
+    pub tablespace: u32,
 }
 
 /// The roles and the memberships that the statements made, in the order that they were made, and the rows of `pg_database` that the transaction changed. The commit of the transaction moves the changes of the rows to the store, so the roles of a commit have no changes of rows.
