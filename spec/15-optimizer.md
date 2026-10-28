@@ -28,7 +28,7 @@ PostgreSQL applies some rewrites in the analyzer and the rewriter, before the pl
 | outer join reduction | a left join becomes inner when a filter above rejects nulls of the right side |
 | filter and projection pushdown | down to the scan, where the filter becomes a summary test (document 12 section 12.6) |
 | `OR` to `= ANY` | the rewrite of PostgreSQL 18, so an index and a code set can serve the list |
-| self-join elimination | on unique keys, controlled by `enable_self_join_elimination`; the release that added it to PostgreSQL must be confirmed at M3 |
+| self-join elimination | on unique keys, controlled by `enable_self_join_elimination`; added to PostgreSQL in release 18 (commit `fc069a3a6`) |
 | distinct elimination | when a unique key or an aggregate below already makes the rows distinct |
 | aggregate pushdown below joins | when functional dependencies allow it |
 | limit pushdown | into sorts, which become top-N, and into scans, which stop early |
