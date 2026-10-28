@@ -1,0 +1,50 @@
+!details
+> create table sj (a int unique, b int, c int unique)
+CREATE TABLE
+> insert into sj values (1, null, 2), (null, 2, null), (2, 1, 1)
+INSERT 0 3
+> analyze sj
+ANALYZE
+> set enable_hashjoin to off
+SET
+> set enable_mergejoin to off
+SET
+> explain (costs off) select * from sj t1 join lateral (select * from sj tablesample system(t1.b)) s on t1.a = s.a
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Seq Scan on sj t1
+row   ->  Memoize
+row         Cache Key: t1.a, t1.b
+row         Cache Mode: binary
+row         ->  Sample Scan on sj
+row               Sampling: system (t1.b)
+row               Filter: (t1.a = a)
+EXPLAIN
+> select * from sj t1 join lateral (select * from sj tablesample system(t1.b * 100)) s on t1.a = s.a
+fields a@sj.1:23:4:-1,b@sj.2:23:4:-1,c@sj.3:23:4:-1,a@sj.1:23:4:-1,b@sj.2:23:4:-1,c@sj.3:23:4:-1
+ERROR 2202H TABLESAMPLE parameter cannot be null
+> explain (costs off) select * from sj t1 join lateral (select * from sj tablesample bernoulli(100) repeatable (t1.a)) s on true
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Seq Scan on sj t1
+row   ->  Memoize
+row         Cache Key: t1.a
+row         Cache Mode: binary
+row         ->  Sample Scan on sj
+row               Sampling: bernoulli ('100'::real) REPEATABLE (t1.a)
+EXPLAIN
+> select * from sj t1 join lateral (select * from sj tablesample bernoulli(100) repeatable (t1.a)) s on true order by 1, 4
+fields a@sj.1:23:4:-1,b@sj.2:23:4:-1,c@sj.3:23:4:-1,a@sj.1:23:4:-1,b@sj.2:23:4:-1,c@sj.3:23:4:-1
+ERROR 2202G TABLESAMPLE REPEATABLE parameter cannot be null
+> select t1.a, s.a from sj t1 join lateral (select * from sj tablesample system(t1.b * 100)) s on t1.a = s.a where t1.b is not null order by 1
+fields a@sj.1:23:4:-1,a@sj.1:23:4:-1
+ERROR 2202H sample percentage must be between 0 and 100
+> select t1.a, s.a from sj t1 join lateral (select * from sj tablesample bernoulli(100) repeatable (t1.b)) s on true where t1.b is not null order by 1, 2
+fields a@sj.1:23:4:-1,a@sj.1:23:4:-1
+row 2,1
+row 2,2
+row 2,NULL
+row NULL,1
+row NULL,2
+row NULL,NULL
+SELECT 6

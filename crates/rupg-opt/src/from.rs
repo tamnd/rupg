@@ -2664,9 +2664,12 @@ pub(crate) fn node_rels(node: &Node<'_>) -> BTreeSet<usize> {
     out
 }
 
-/// The expressions of a relation of `FROM` that can read the other relations of the query, each with its depth below the query.
+/// The expressions of a relation of `FROM` that can read the other relations of the query, each with its depth below the query, as `extract_lateral_references` finds them. The arguments of `TABLESAMPLE` of a table count too.
 pub(crate) fn lateral_exprs(relation: &Relation) -> Vec<(&Expr, usize)> {
     let mut out = Vec::new();
+    if let Some(sample) = &relation.tablesample {
+        out.extend(sample.args.iter().chain(&sample.repeatable).map(|e| (e, 0)));
+    }
     if let Some(function) = &relation.function {
         out.extend(function.calls.iter().map(|(call, _)| (call, 0)));
     }

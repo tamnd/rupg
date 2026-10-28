@@ -10,6 +10,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - `CREATE TYPE ... AS RANGE` with a `multirange_type_name` in a schema needs only `CREATE` on the schema, as in PostgreSQL. (#1047)
 - `currtid2` runs. It gives the latest version of a tid of a table, or of a view on a table, with the errors of PostgreSQL. (#1046)
 - `CREATE TABLE AS EXECUTE` runs, with `WITH NO DATA` and `IF NOT EXISTS`, and `pg_prepared_statements` shows the statements in the same order as PostgreSQL. (#1045)
+- A lateral subquery with `TABLESAMPLE` whose arguments read another relation of the query is the inner side of a nested loop, as `extract_lateral_references` finds the columns of the arguments and of `REPEATABLE`. Before, the plan could scan the sample before the relation that it reads (#1049).
 - `EXPLAIN` shows no `X IS NOT NULL` for a condition `X = X` on a column with a not-null constraint, in a scan and after a self-join goes, as `restriction_is_always_true` finds it always true (#1044).
 - `ADD COLUMN` of an identity column gives the error of PostgreSQL on a table with inheritance children, an identity column on a typed table gives `0A000`, and `LIKE ... INCLUDING IDENTITY` of a partition takes the options of the sequence of the partitioned table. (#1042)
 - `satisfies_hash_partition` runs, with the checks and the errors of PostgreSQL. It gives the hash of the key values by the support functions of the partition key, also with `VARIADIC` and with an operator class in SQL. (#1041)
