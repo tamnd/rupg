@@ -958,9 +958,16 @@ impl Connection {
         let mut objects: Vec<(u32, u32, i32, u8, String)> = Vec::new();
         let mut remote = Vec::new();
         let local = self.catalog();
+        // A role in the ACL of an object that it does not own has a `SHARED_DEPENDENCY_ACL`.
+        let in_acl = |owner: u32, acl: Option<&[String]>| {
+            owner != roleid && acl.is_some_and(|acl| rupg_analyze::acl_roles(acl).contains(&roleid))
+        };
         for (row, catalog) in self.store.catalogs() {
             if row.owner == roleid {
                 objects.push((row.oid, PG_DATABASE, 0, b'o', format!("database {}", row.name)));
+            }
+            if in_acl(row.owner, row.acl.as_deref()) {
+                objects.push((row.oid, PG_DATABASE, 0, b'a', format!("database {}", row.name)));
             }
             if row.oid == self.database_oid {
                 continue;
@@ -970,8 +977,13 @@ impl Connection {
                 remote.push((row.name, count));
             }
         }
-        for row in self.store.tablespaces().iter().filter(|row| row.owner == roleid) {
-            objects.push((row.oid, PG_TABLESPACE, 0, b'o', format!("tablespace {}", row.name)));
+        for row in self.store.tablespaces().iter() {
+            if row.owner == roleid {
+                objects.push((row.oid, PG_TABLESPACE, 0, b'o', format!("tablespace {}", row.name)));
+            }
+            if in_acl(row.owner, row.acl.as_deref()) {
+                objects.push((row.oid, PG_TABLESPACE, 0, b'a', format!("tablespace {}", row.name)));
+            }
         }
         let reader = self.reader();
         for object in rupg_analyze::owned_objects(&local, roleid) {

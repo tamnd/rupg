@@ -1,0 +1,26 @@
+!details
+> create database dep_db
+CREATE DATABASE
+> create user dep_u1
+CREATE ROLE
+> create table dep_t (a int)
+CREATE TABLE
+> grant all on dep_t to dep_u1
+GRANT
+> grant create on database dep_db to dep_u1
+GRANT
+> drop user dep_u1
+ERROR 2BP01 role "dep_u1" cannot be dropped because some objects depend on it
+DETAIL privileges for database dep_db
+privileges for table dep_t
+> revoke create on database dep_db from dep_u1
+REVOKE
+> drop user dep_u1
+ERROR 2BP01 role "dep_u1" cannot be dropped because some objects depend on it
+DETAIL privileges for table dep_t
+> drop owned by dep_u1
+DROP OWNED
+> drop user dep_u1
+DROP ROLE
+> drop database dep_db
+DROP DATABASE
