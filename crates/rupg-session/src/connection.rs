@@ -6211,6 +6211,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/gin_paths.test")));
     }
 
+    /// A key column of an index has the `opckeytype` of its operator class in `pg_attribute`, with the length, alignment and storage of that type and no typmod, as `ConstructTupleDescriptor` gives it. `array_ops` of `gin` has the element type of the array. `connection/index_key_type.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn index_key_type() {
+        big_stack(|| script(include_str!("connection/index_key_type.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
