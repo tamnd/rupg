@@ -30,11 +30,22 @@ fn show(name: &[u8]) -> std::borrow::Cow<'_, str> {
 pub struct Statements<S> {
     unnamed: Option<S>,
     named: HashMap<Box<[u8]>, S>,
+    /// The insert number of each named statement. In one bucket of the hash table, the older entry comes first.
+    born: HashMap<Box<[u8]>, u64>,
+    inserts: u64,
+    /// The `max_bucket` of the hash table of `prepare.c`, which starts with 32 buckets. Each `HASH_ENTER` on a table with more entries than `max_bucket` adds one bucket, and the table never gets smaller.
+    max_bucket: u32,
 }
 
 impl<S> Default for Statements<S> {
     fn default() -> Statements<S> {
-        Statements { unnamed: None, named: HashMap::new() }
+        Statements {
+            unnamed: None,
+            named: HashMap::new(),
+            born: HashMap::new(),
+            inserts: 0,
+            max_bucket: 31,
+        }
     }
 }
 
@@ -62,6 +73,9 @@ impl<S> Statements<S> {
             self.unnamed = Some(statement);
             return Ok(());
         }
+        if self.named.len() > self.max_bucket as usize {
+            self.max_bucket += 1;
+        }
         if self.named.contains_key(key(name)) {
             return Err(ProtocolError::new(
                 Level::Error,
@@ -70,6 +84,8 @@ impl<S> Statements<S> {
             ));
         }
         self.named.insert(key(name).into(), statement);
+        self.born.insert(key(name).into(), self.inserts);
+        self.inserts += 1;
         Ok(())
     }
 
@@ -96,7 +112,11 @@ impl<S> Statements<S> {
 
     /// The `Close` of a statement. A name that is not there is not an error.
     pub fn close(&mut self, name: &[u8]) -> Option<S> {
-        if name.is_empty() { self.unnamed.take() } else { self.named.remove(key(name)) }
+        if name.is_empty() {
+            return self.unnamed.take();
+        }
+        self.born.remove(key(name));
+        self.named.remove(key(name))
     }
 
     /// `DEALLOCATE name`. It does not see the unnamed statement.
@@ -105,17 +125,35 @@ impl<S> Statements<S> {
     ///
     /// SQLSTATE `26000` when there is no such statement.
     pub fn deallocate(&mut self, name: &[u8]) -> Result<S, ProtocolError> {
+        self.born.remove(key(name));
         self.named.remove(key(name)).ok_or_else(|| missing_statement(name))
     }
 
     /// `DEALLOCATE ALL`, which keeps the unnamed statement.
     pub fn deallocate_all(&mut self) {
         self.named.clear();
+        self.born.clear();
     }
 
     /// The named statements, with the names cut to 63 bytes, as `pg_prepared_statements` shows them. The order is not defined.
     pub fn iter(&self) -> impl Iterator<Item = (&[u8], &S)> {
         self.named.iter().map(|(name, statement)| (&name[..], statement))
+    }
+
+    /// The named statements in the order of `hash_seq_search` on the hash table of `prepare.c`: by bucket, then by insert in one bucket. `hash` is the `string_hash` of a name, which is `hash_bytes` of the first 63 bytes.
+    pub fn scan(&self, hash: impl Fn(&[u8]) -> u32) -> Vec<(&[u8], &S)> {
+        let high = (self.max_bucket + 1).next_power_of_two() - 1;
+        let bucket = |name: &[u8]| {
+            let h = hash(name);
+            if h & high > self.max_bucket { h & (high >> 1) } else { h & high }
+        };
+        let mut list: Vec<_> = self
+            .named
+            .iter()
+            .map(|(name, statement)| ((bucket(name), self.born[name]), (&name[..], statement)))
+            .collect();
+        list.sort_unstable_by_key(|(at, _)| *at);
+        list.into_iter().map(|(_, entry)| entry).collect()
     }
 
     /// The number of named statements.

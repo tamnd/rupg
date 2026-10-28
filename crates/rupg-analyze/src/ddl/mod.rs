@@ -566,6 +566,10 @@ impl Env for SchemaEnv<'_> {
         self.env.sequence_row(file)
     }
 
+    fn bound_param(&self, number: usize) -> Option<(u32, Value)> {
+        self.env.bound_param(number)
+    }
+
     fn deparse(&self, text: &str, relation: u32) -> Result<String> {
         self.env.deparse(text, relation)
     }

@@ -392,6 +392,8 @@ pub struct Connection {
     unnamed_portals: Cell<u32>,
     /// The OID of the materialized view that `CREATE MATERIALIZED VIEW` or `REFRESH MATERIALIZED VIEW` fills, or 0. [`rupg_analyze::Env::filling`] gives it.
     pub(crate) filling: Cell<u32>,
+    /// The types and the values of the parameters of `CREATE TABLE AS EXECUTE` while it runs. [`rupg_analyze::Env::bound_param`] gives them.
+    pub(crate) bound: RefCell<Vec<(u32, Value)>>,
     /// The OID of the table that `CREATE TABLE AS`, `SELECT INTO` or a materialized view fills with a `BulkInsertState`, or 0.
     bulk: Cell<u32>,
     /// The catalog before the statement of `CREATE TABLE AS` or `SELECT INTO` whose query fills its table, which the scans of the system catalogs of the query read, or `None`.
@@ -523,6 +525,7 @@ impl Connection {
             portals: RefCell::new(Portals::new()),
             unnamed_portals: Cell::new(0),
             filling: Cell::new(0),
+            bound: RefCell::new(Vec::new()),
             bulk: Cell::new(0),
             before_fill: RefCell::new(None),
             xact_started: false,
@@ -1294,6 +1297,11 @@ impl Connection {
         role: u32,
         call: bool,
     ) -> Result<Done, Error> {
+        if let Node::CreateTableAsStmt(stmt) = node
+            && let Some(Node::ExecuteStmt(execute)) = &stmt.query
+        {
+            return self.create_table_as_execute(stmt, execute, text, notices, role, call);
+        }
         // `PreventInTransactionBlock` of the statements with `CONCURRENTLY`.
         let concurrent = match node {
             Node::IndexStmt(stmt) if stmt.concurrent => Some("CREATE INDEX CONCURRENTLY"),
@@ -6274,6 +6282,12 @@ mod tests {
     #[test]
     fn identity_add() {
         big_stack(|| script(include_str!("connection/identity_add.test")));
+    }
+
+    /// `CREATE TABLE AS EXECUTE` makes a table from a prepared `SELECT` with its parameters, with `WITH NO DATA` and `IF NOT EXISTS`, and `pg_prepared_statements` shows the statements in the order of its hash table. `connection/create_table_as_execute.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn create_table_as_execute() {
+        big_stack(|| script(include_str!("connection/create_table_as_execute.test")));
     }
 
     /// An index depends once on each column of its keys, as `record_object_address_dependencies` records them, and its expressions add their own dependencies. `connection/index_depend.test` is the output of PostgreSQL 19 for the same script in a new database.
