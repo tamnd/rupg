@@ -335,7 +335,7 @@ fn classes<'q>(found: &[(usize, &'q Expr)]) -> Vec<Class<'q>> {
 }
 
 /// `get_mergejoin_opfamilies`: the btree families that have the operator as their `=`.
-fn families(op: u32) -> Vec<u32> {
+pub(crate) fn families(op: u32) -> Vec<u32> {
     let mut out: Vec<u32> = builtin::amops_of_operator(op)
         .filter(|a| a.method == BTREE && a.strategy == EQUAL && a.purpose == b's')
         .map(|a| a.family)
@@ -401,7 +401,7 @@ fn unequal(a: &Expr, b: &Expr) -> Option<bool> {
 }
 
 /// `select_equality_operator` and `build_implied_join_equality`: the condition `left = right` with the `=` of the first family of the class for the two types.
-fn equality(families: &[u32], left: &Expr, right: &Expr) -> Option<Expr> {
+pub(crate) fn equality(families: &[u32], left: &Expr, right: &Expr) -> Option<Expr> {
     let op =
         families.iter().find_map(|&f| builtin::opfamily_member(f, left.ty, right.ty, EQUAL))?;
     let row = builtin::operator_by_oid(op)?;

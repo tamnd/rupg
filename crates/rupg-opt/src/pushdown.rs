@@ -280,7 +280,7 @@ pub(crate) fn push_barrier(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {
 }
 
 /// The `AND` of the conditions, or `None` when there is no condition.
-fn and_all(mut parts: Vec<Expr>) -> Option<Expr> {
+pub(crate) fn and_all(mut parts: Vec<Expr>) -> Option<Expr> {
     match parts.len() {
         0 => None,
         1 => parts.pop(),
