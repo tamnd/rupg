@@ -5,6 +5,7 @@ use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 
 use super::index::HASH;
+use super::partition_attach::without_locations;
 use super::{Definer, references};
 use crate::expr::Expr;
 
@@ -343,7 +344,7 @@ fn family_method(class: u32) -> u32 {
     builtin::opclasses().iter().find(|c| c.oid == class).map_or(0, |c| c.method)
 }
 
-/// `CompareIndexInfo`: two indexes with the same kind of uniqueness, the same access method, the same columns with the same collations and operator families, and the same expressions and predicate.
+/// `CompareIndexInfo`: two indexes with the same kind of uniqueness, the same access method, the same columns with the same collations and operator families, and the same expressions and predicate, as `equal` compares the nodes with no locations.
 pub(super) fn same_definition(a: &IndexInfo, b: &IndexInfo) -> bool {
     a.unique == b.unique
         && a.nulls_not_distinct == b.nulls_not_distinct
@@ -353,6 +354,6 @@ pub(super) fn same_definition(a: &IndexInfo, b: &IndexInfo) -> bool {
         && a.collations == b.collations
         && a.classes.len() == b.classes.len()
         && a.classes.iter().zip(&b.classes).all(|(&x, &y)| family(x) == family(y))
-        && a.exprs == b.exprs
-        && a.predicate == b.predicate
+        && without_locations(a.exprs.as_deref()) == without_locations(b.exprs.as_deref())
+        && without_locations(a.predicate.as_deref()) == without_locations(b.predicate.as_deref())
 }
