@@ -502,6 +502,7 @@ dependencies = [
  "rupg-analyze",
  "rupg-catalog",
  "rupg-common",
+ "rupg-encode",
  "rupg-exec",
  "rupg-func",
  "rupg-opt",
