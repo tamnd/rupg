@@ -1,0 +1,49 @@
+!details
+> create type fcc as (r float8, i float8)
+CREATE TYPE
+> create domain fcd as fcc check ((value).r > 0)
+CREATE DOMAIN
+> create function mkfcd(r float8, i float8) returns fcd as 'select row(r, i)' language sql
+CREATE FUNCTION
+> select mkfcd(1,2)::text
+fields mkfcd:25:-1:-1
+row (1,2)
+SELECT 1
+> select mkfcd(-1,2)::text
+fields mkfcd:25:-1:-1
+ERROR 23514 value for domain fcd violates check constraint "fcd_check"
+> select * from mkfcd(1,2) m
+fields r:701:8:-1,i:701:8:-1
+row 1,2
+SELECT 1
+> select m::text, m is not null, (m).i from mkfcd(1,2) m
+fields m:25:-1:-1,?column?:16:1:-1,i:701:8:-1
+row (1,2),t,2
+SELECT 1
+> select m.r from mkfcd(3,4) m
+fields r:701:8:-1
+row 3
+SELECT 1
+> select * from mkfcd(1,2) as m(a, b)
+fields a:701:8:-1,b:701:8:-1
+row 1,2
+SELECT 1
+> select * from mkfcd(1,2) as m(a float8, b float8)
+ERROR 42601 a column definition list is redundant for a function returning a named composite type at 31
+> select * from mkfcd(-1,2) m
+fields r:701:8:-1,i:701:8:-1
+ERROR 23514 value for domain fcd violates check constraint "fcd_check"
+> select * from rows from (mkfcd(1,2), mkfcd(5,6)) m
+fields r:701:8:-1,i:701:8:-1,r:701:8:-1,i:701:8:-1
+row 1,2,5,6
+SELECT 1
+> select pg_typeof(m) from mkfcd(1,2) m
+fields pg_typeof:2206:4:-1
+row fcd
+SELECT 1
+> drop function mkfcd(float8, float8)
+DROP FUNCTION
+> drop domain fcd
+DROP DOMAIN
+> drop type fcc
+DROP TYPE
