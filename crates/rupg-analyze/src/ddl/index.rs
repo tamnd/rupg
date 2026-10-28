@@ -259,6 +259,14 @@ impl Definer<'_, '_> {
             }
             columns.push(column);
         }
+        // ConstructTupleDescriptor checks the type of each expression column under its final name.
+        let names =
+            rupg_catalog::names::index_column_names(columns.iter().map(|c| c.name.as_str()));
+        for (column, name) in columns.iter().zip(&names) {
+            if column.key == 0 {
+                super::check_attribute_type(name, column.ty, false)?;
+            }
+        }
         let mut exclusion_ops = Vec::with_capacity(stmt.excludeOpNames.len());
         for ((name, column), element) in stmt.excludeOpNames.iter().zip(&columns).zip(&all) {
             exclusion_ops.push(self.exclusion_operator(name.as_ref(), column, &element.elem)?);

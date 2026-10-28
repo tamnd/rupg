@@ -6223,6 +6223,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/saop_paths.test")));
     }
 
+    /// An expression column of an index may not have a pseudo-type, so `row(f1, f2)` fails with its name `row`. The check uses the final name of the column. `connection/index_expr_type.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn index_expr_type() {
+        big_stack(|| script(include_str!("connection/index_expr_type.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
