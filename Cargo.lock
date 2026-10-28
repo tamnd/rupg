@@ -257,7 +257,7 @@ dependencies = [
 
 [[package]]
 name = "rupg"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "rupg-buffer",
  "rupg-common",
@@ -272,7 +272,7 @@ dependencies = [
 
 [[package]]
 name = "rupg-analyze"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "rupg-catalog",
  "rupg-common",
@@ -285,11 +285,11 @@ dependencies = [
 
 [[package]]
 name = "rupg-ann"
-version = "0.4.5"
+version = "0.4.6"
 
 [[package]]
 name = "rupg-buffer"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "loom",
  "rupg-common",
@@ -299,41 +299,41 @@ dependencies = [
 
 [[package]]
 name = "rupg-capi"
-version = "0.4.5"
+version = "0.4.6"
 
 [[package]]
 name = "rupg-catalog"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "rupg-common",
 ]
 
 [[package]]
 name = "rupg-cli"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "rupg",
 ]
 
 [[package]]
 name = "rupg-cluster"
-version = "0.4.5"
+version = "0.4.6"
 
 [[package]]
 name = "rupg-column"
-version = "0.4.5"
+version = "0.4.6"
 
 [[package]]
 name = "rupg-common"
-version = "0.4.5"
+version = "0.4.6"
 
 [[package]]
 name = "rupg-contrib"
-version = "0.4.5"
+version = "0.4.6"
 
 [[package]]
 name = "rupg-crash"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "rupg",
  "rupg-common",
@@ -343,15 +343,15 @@ dependencies = [
 
 [[package]]
 name = "rupg-encode"
-version = "0.4.5"
+version = "0.4.6"
 
 [[package]]
 name = "rupg-exchange"
-version = "0.4.5"
+version = "0.4.6"
 
 [[package]]
 name = "rupg-exec"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "rupg-analyze",
  "rupg-catalog",
@@ -366,11 +366,11 @@ dependencies = [
 
 [[package]]
 name = "rupg-ext"
-version = "0.4.5"
+version = "0.4.6"
 
 [[package]]
 name = "rupg-file"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "rupg-common",
  "rupg-platform",
@@ -378,7 +378,7 @@ dependencies = [
 
 [[package]]
 name = "rupg-func"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "md-5",
  "rupg-analyze",
@@ -393,11 +393,11 @@ dependencies = [
 
 [[package]]
 name = "rupg-graph"
-version = "0.4.5"
+version = "0.4.6"
 
 [[package]]
 name = "rupg-hot"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "rupg-buffer",
  "rupg-common",
@@ -408,23 +408,23 @@ dependencies = [
 
 [[package]]
 name = "rupg-import"
-version = "0.4.5"
+version = "0.4.6"
 
 [[package]]
 name = "rupg-index"
-version = "0.4.5"
+version = "0.4.6"
 
 [[package]]
 name = "rupg-jit"
-version = "0.4.5"
+version = "0.4.6"
 
 [[package]]
 name = "rupg-kernels"
-version = "0.4.5"
+version = "0.4.6"
 
 [[package]]
 name = "rupg-log"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "loom",
  "rupg-buffer",
@@ -436,7 +436,7 @@ dependencies = [
 
 [[package]]
 name = "rupg-opt"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "rupg-analyze",
  "rupg-pgcatalog",
@@ -446,11 +446,11 @@ dependencies = [
 
 [[package]]
 name = "rupg-pgcatalog"
-version = "0.4.5"
+version = "0.4.6"
 
 [[package]]
 name = "rupg-plan"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "rupg-analyze",
  "rupg-common",
@@ -459,7 +459,7 @@ dependencies = [
 
 [[package]]
 name = "rupg-platform"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "libc",
  "rupg-common",
@@ -467,7 +467,7 @@ dependencies = [
 
 [[package]]
 name = "rupg-plpgsql"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "rupg-analyze",
  "rupg-catalog",
@@ -480,11 +480,11 @@ dependencies = [
 
 [[package]]
 name = "rupg-raft"
-version = "0.4.5"
+version = "0.4.6"
 
 [[package]]
 name = "rupg-server"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "ring",
  "rupg-common",
@@ -496,7 +496,7 @@ dependencies = [
 
 [[package]]
 name = "rupg-session"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "rupg-analyze",
  "rupg-catalog",
@@ -516,26 +516,26 @@ dependencies = [
 
 [[package]]
 name = "rupg-shim"
-version = "0.4.5"
+version = "0.4.6"
 
 [[package]]
 name = "rupg-snowball"
-version = "0.4.5"
+version = "0.4.6"
 
 [[package]]
 name = "rupg-sql"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "rupg-common",
 ]
 
 [[package]]
 name = "rupg-summary"
-version = "0.4.5"
+version = "0.4.6"
 
 [[package]]
 name = "rupg-table"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "rupg-common",
  "rupg-file",
@@ -546,7 +546,7 @@ dependencies = [
 
 [[package]]
 name = "rupg-tree"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "rupg-buffer",
  "rupg-common",
@@ -556,7 +556,7 @@ dependencies = [
 
 [[package]]
 name = "rupg-txn"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "rupg-buffer",
  "rupg-common",
@@ -571,18 +571,18 @@ dependencies = [
 
 [[package]]
 name = "rupg-types"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "rupg-common",
 ]
 
 [[package]]
 name = "rupg-wasm"
-version = "0.4.5"
+version = "0.4.6"
 
 [[package]]
 name = "rupg-wire"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "hmac",
  "md-5",
@@ -856,7 +856,7 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[package]]
 name = "xtask"
-version = "0.4.5"
+version = "0.4.6"
 
 [[package]]
 name = "zeroize"
