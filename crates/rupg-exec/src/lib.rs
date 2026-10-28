@@ -4042,9 +4042,20 @@ pub fn check_input(ty: u32, value: &Value, session: &dyn Session) -> Result<()> 
 /// The errors of the check expressions.
 pub fn input_failure(ty: u32, value: &Value, session: &dyn Session) -> Result<Option<Error>> {
     let element = builtin::type_by_oid(ty).map_or(0, |row| row.elem);
+    // `range_in` calls the input function of the subtype for each bound that is not infinite, and `multirange_in` calls `range_in` for each range.
+    fn bounds(range: &rupg_types::Range) -> impl Iterator<Item = &Value> {
+        [&range.lower, &range.upper].into_iter().filter(|v| !v.is_null())
+    }
+    let range_sub = builtin::range_subtype(ty)
+        .or_else(|| builtin::multirange_range(ty).and_then(builtin::range_subtype))
+        .filter(|&sub| builtin::domain_by_oid(sub).is_some());
     let (domain, values) = match value {
         Value::Array(array) if builtin::domain_by_oid(element).is_some() => {
             (element, array.values.iter().flatten().collect())
+        }
+        Value::Range(range) if let Some(sub) = range_sub => (sub, bounds(range).collect()),
+        Value::Multirange(ranges) if let Some(sub) = range_sub => {
+            (sub, ranges.iter().flat_map(bounds).collect())
         }
         value if builtin::domain_by_oid(ty).is_some() => (ty, vec![value]),
         _ => return Ok(None),
