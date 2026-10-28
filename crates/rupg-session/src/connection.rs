@@ -6229,6 +6229,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/index_expr_type.test")));
     }
 
+    /// A `btree` index orders equal keys by the heap TID, so a backward index scan gives the rows with equal keys, such as the nulls of a unique index, in the reverse order of the heap. `ORDER BY` that the index scan gives with no `Sort` keeps that order. `connection/nulls_order.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn nulls_order() {
+        big_stack(|| script(include_str!("connection/nulls_order.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
