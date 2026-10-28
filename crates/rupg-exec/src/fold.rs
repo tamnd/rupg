@@ -1129,7 +1129,10 @@ impl<'a> Fold<'a> {
                 let element = self.expr(element);
                 self.case.pop();
                 let element = element?;
-                let fold = value(&arg).is_some() && !mutable(&element);
+                // A check of a domain on each element does not fold, as `contain_mutable_functions` takes `CoerceToDomain` as immutable only for history.
+                let fold = value(&arg).is_some()
+                    && !matches!(element.kind, ExprKind::CoerceToDomain(..))
+                    && !mutable(&element);
                 let kind = ExprKind::ArrayCoerce {
                     arg: Box::new(arg),
                     element: Box::new(element),

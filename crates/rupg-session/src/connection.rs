@@ -6607,6 +6607,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/comment_domain_constraint.test")));
     }
 
+    /// A coercion to an array of a domain, or to a domain over an array, checks the constraints of the domain for each element, and an assignment to an element of such an array checks the new element.
+    #[test]
+    fn array_domain() {
+        big_stack(|| script(include_str!("connection/array_domain.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

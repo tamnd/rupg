@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A coercion to an array of a domain, or to a domain over an array, checks the constraints of the domain for each element, as in PostgreSQL (#1089).
 - `COMMENT ON CONSTRAINT ... ON DOMAIN` sets the comment of a constraint of a domain, as in PostgreSQL (#1088).
 - A function in `FROM` that gives a domain over a composite type gives a column for each field of the composite type, as in PostgreSQL (#1087).
 - An error in the default of `CREATE DOMAIN` shows its place in the statement, and an error in the default of `ALTER DOMAIN ... SET DEFAULT` shows no place, as in PostgreSQL (#1086).
