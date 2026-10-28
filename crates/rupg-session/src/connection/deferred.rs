@@ -106,6 +106,15 @@ impl Connection {
     ///
     /// The duplicate keys, and the errors of a wait.
     pub(super) fn recheck_unique(&self, command: u32) -> Result<(), Error> {
+        self.recheck_unique_from(command, command)
+    }
+
+    /// [`Connection::recheck_unique`] when the exclusion constraints that are not deferrable checked the commands before `immediate`.
+    ///
+    /// # Errors
+    ///
+    /// The duplicate keys, and the errors of a wait.
+    pub(super) fn recheck_unique_from(&self, command: u32, immediate: u32) -> Result<(), Error> {
         let xid = self.xid.get();
         if xid == 0 {
             return Ok(());
@@ -115,7 +124,7 @@ impl Connection {
             let now = self.defer_unique(rechecks);
             self.check_unique(&now)?;
         }
-        self.check_exclusions(command)
+        self.check_exclusions(command, immediate, true)
     }
 
     /// The rechecks of a deferred constraint go to the queue of the transaction. The result is the other rechecks.

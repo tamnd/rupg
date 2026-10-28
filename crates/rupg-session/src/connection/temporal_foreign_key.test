@@ -1,0 +1,127 @@
+!details
+> CREATE TABLE p (id int4range, valid_at daterange, name text, CONSTRAINT p_pk PRIMARY KEY (id, valid_at WITHOUT OVERLAPS))
+CREATE TABLE
+> CREATE TABLE f (id int4range, valid_at daterange, parent_id int4range, CONSTRAINT f_fk FOREIGN KEY (parent_id, PERIOD valid_at) REFERENCES p (id, PERIOD valid_at))
+CREATE TABLE
+> SELECT conname, conperiod, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'f'::regclass
+fields conname@pg_constraint.2:19:64:-1,conperiod@pg_constraint.20:16:1:-1,pg_get_constraintdef:25:-1:-1
+row f_fk,t,FOREIGN KEY (parent_id, PERIOD valid_at) REFERENCES p(id, PERIOD valid_at)
+SELECT 1
+> CREATE TABLE f2 (id int4range, valid_at daterange, parent_id int4range, CONSTRAINT f2_fk FOREIGN KEY (parent_id, valid_at) REFERENCES p)
+ERROR 42830 foreign key uses PERIOD on the referenced table but not the referencing table
+> CREATE TABLE f2 (id int4range, valid_at daterange, parent_id int4range, CONSTRAINT f2_fk FOREIGN KEY (parent_id, valid_at) REFERENCES p (id, PERIOD valid_at))
+ERROR 42830 foreign key uses PERIOD on the referenced table but not the referencing table
+> CREATE TABLE f2 (id int4range, valid_at daterange, parent_id int4range, CONSTRAINT f2_fk FOREIGN KEY (parent_id, PERIOD valid_at) REFERENCES p (id, valid_at))
+ERROR 42830 foreign key uses PERIOD on the referencing table but not the referenced table
+> CREATE TABLE f2 (id int4range, valid_at daterange, parent_id int4range, CONSTRAINT f2_fk FOREIGN KEY (parent_id, valid_at) REFERENCES p (id, valid_at))
+ERROR 42830 foreign key must use PERIOD when referencing a primary key using WITHOUT OVERLAPS
+> CREATE TABLE f2 (id int4range, valid_at daterange, parent_id int4range, CONSTRAINT f2_fk FOREIGN KEY (parent_id, PERIOD valid_at) REFERENCES p (id, PERIOD id))
+ERROR 42830 foreign key referenced-columns list must not contain duplicates
+> CREATE TABLE f2 (id int4range, valid_at daterange, parent_id int4range, CONSTRAINT f2_fk FOREIGN KEY (parent_id, PERIOD valid_at) REFERENCES p (id, PERIOD valid_at) ON DELETE CASCADE)
+ERROR 0A000 unsupported ON DELETE action for foreign key constraint using PERIOD
+> CREATE TABLE f2 (id int4range, valid_at daterange, parent_id int4range, CONSTRAINT f2_fk FOREIGN KEY (parent_id, PERIOD valid_at) REFERENCES p (id, PERIOD valid_at) ON UPDATE RESTRICT)
+ERROR 0A000 unsupported ON UPDATE action for foreign key constraint using PERIOD
+> CREATE TABLE f2 (id int4range, valid_at int4range, parent_id int4range, CONSTRAINT f2_fk FOREIGN KEY (parent_id, PERIOD valid_at) REFERENCES p (id, PERIOD valid_at))
+ERROR 42804 foreign key constraint "f2_fk" cannot be implemented
+DETAIL Key columns "valid_at" of the referencing table and "valid_at" of the referenced table are of incompatible types: int4range and daterange.
+> CREATE TABLE f2 (id int4range, valid_at daterange, parent_id int4range, CONSTRAINT f2_fk FOREIGN KEY (parent_id, PERIOD valid_at) REFERENCES p)
+CREATE TABLE
+> SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'f2_fk'
+fields pg_get_constraintdef:25:-1:-1
+row FOREIGN KEY (parent_id, PERIOD valid_at) REFERENCES p(id, PERIOD valid_at)
+SELECT 1
+> DROP TABLE f2
+DROP TABLE
+> INSERT INTO p VALUES ('[1,2)', '[2018-01-02,2018-02-03)', 'a'), ('[1,2)', '[2018-03-03,2018-04-04)', 'b'), ('[2,3)', '[2018-01-01,2018-01-05)', 'c'), ('[3,4)', '[2018-01-01,)', 'd')
+INSERT 0 4
+> INSERT INTO f VALUES ('[1,2)', '[2018-01-02,2018-02-01)', '[1,2)')
+INSERT 0 1
+> INSERT INTO f VALUES ('[2,3)', '[2018-01-02,2018-04-01)', '[1,2)')
+ERROR 23503 insert or update on table "f" violates foreign key constraint "f_fk"
+DETAIL Key (parent_id, valid_at)=([1,2), [2018-01-02,2018-04-01)) is not present in table "p".
+> INSERT INTO p VALUES ('[1,2)', '[2018-02-03,2018-03-03)', 'a2')
+INSERT 0 1
+> INSERT INTO f VALUES ('[2,3)', '[2018-01-02,2018-04-01)', '[1,2)')
+INSERT 0 1
+> INSERT INTO f VALUES ('[3,4)', '[2018-01-02,)', '[3,4)')
+INSERT 0 1
+> INSERT INTO f VALUES ('[4,5)', 'empty', '[3,4)')
+ERROR 23503 insert or update on table "f" violates foreign key constraint "f_fk"
+DETAIL Key (parent_id, valid_at)=([3,4), empty) is not present in table "p".
+> INSERT INTO f VALUES ('[5,6)', NULL, '[3,4)')
+INSERT 0 1
+> INSERT INTO f VALUES ('[6,7)', '[2018-01-02,2018-01-03)', '[9,10)')
+ERROR 23503 insert or update on table "f" violates foreign key constraint "f_fk"
+DETAIL Key (parent_id, valid_at)=([9,10), [2018-01-02,2018-01-03)) is not present in table "p".
+> UPDATE f SET valid_at = '[2018-01-03,2018-01-20)' WHERE id = '[1,2)'
+UPDATE 1
+> UPDATE f SET valid_at = '[2017-01-03,2018-01-20)' WHERE id = '[1,2)'
+ERROR 23503 insert or update on table "f" violates foreign key constraint "f_fk"
+DETAIL Key (parent_id, valid_at)=([1,2), [2017-01-03,2018-01-20)) is not present in table "p".
+> UPDATE p SET valid_at = '[2018-01-02,2018-02-04)' WHERE name = 'a'
+ERROR 23P01 conflicting key value violates exclusion constraint "p_pk"
+DETAIL Key (id, valid_at)=([1,2), [2018-01-02,2018-02-04)) conflicts with existing key (id, valid_at)=([1,2), [2018-02-03,2018-03-03)).
+> UPDATE p SET valid_at = '[2018-01-05,2018-02-04)' WHERE name = 'a'
+ERROR 23P01 conflicting key value violates exclusion constraint "p_pk"
+DETAIL Key (id, valid_at)=([1,2), [2018-01-05,2018-02-04)) conflicts with existing key (id, valid_at)=([1,2), [2018-02-03,2018-03-03)).
+> DELETE FROM p WHERE name = 'a2'
+ERROR 23503 update or delete on table "p" violates foreign key constraint "f_fk" on table "f"
+DETAIL Key (id, valid_at)=([1,2), [2018-02-03,2018-03-03)) is still referenced from table "f".
+> DELETE FROM p WHERE name = 'c'
+DELETE 1
+> BEGIN
+BEGIN
+> DELETE FROM p WHERE name = 'a'
+ERROR 23503 update or delete on table "p" violates foreign key constraint "f_fk" on table "f"
+DETAIL Key (id, valid_at)=([1,2), [2018-01-02,2018-02-03)) is still referenced from table "f".
+> INSERT INTO p VALUES ('[1,2)', '[2018-01-01,2018-02-04)', 'a3')
+ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block
+> COMMIT
+ROLLBACK
+> SELECT * FROM p ORDER BY id, valid_at
+fields id@p.1:3904:-1:-1,valid_at@p.2:3912:-1:-1,name@p.3:25:-1:-1
+row [1,2),[2018-01-02,2018-02-03),a
+row [1,2),[2018-02-03,2018-03-03),a2
+row [1,2),[2018-03-03,2018-04-04),b
+row [3,4),[2018-01-01,),d
+SELECT 4
+> SELECT * FROM f ORDER BY id, valid_at
+fields id@f.1:3904:-1:-1,valid_at@f.2:3912:-1:-1,parent_id@f.3:3904:-1:-1
+row [1,2),[2018-01-03,2018-01-20),[1,2)
+row [2,3),[2018-01-02,2018-04-01),[1,2)
+row [3,4),[2018-01-02,),[3,4)
+row [5,6),NULL,[3,4)
+SELECT 4
+> ALTER TABLE f DROP CONSTRAINT f_fk
+ALTER TABLE
+> INSERT INTO f VALUES ('[7,8)', '[2018-01-02,2018-01-03)', '[9,10)')
+INSERT 0 1
+> ALTER TABLE f ADD CONSTRAINT f_fk FOREIGN KEY (parent_id, PERIOD valid_at) REFERENCES p (id, PERIOD valid_at)
+ERROR 23503 insert or update on table "f" violates foreign key constraint "f_fk"
+DETAIL Key (parent_id, valid_at)=([9,10), [2018-01-02,2018-01-03)) is not present in table "p".
+> DELETE FROM f WHERE id = '[7,8)'
+DELETE 1
+> ALTER TABLE f ADD CONSTRAINT f_fk FOREIGN KEY (parent_id, PERIOD valid_at) REFERENCES p (id, PERIOD valid_at)
+ALTER TABLE
+> CREATE TABLE pm (id int4range, valid_at datemultirange, CONSTRAINT pm_pk PRIMARY KEY (id, valid_at WITHOUT OVERLAPS))
+CREATE TABLE
+> CREATE TABLE fm (id int4range, valid_at datemultirange, parent_id int4range, CONSTRAINT fm_fk FOREIGN KEY (parent_id, PERIOD valid_at) REFERENCES pm (id, PERIOD valid_at))
+CREATE TABLE
+> INSERT INTO pm VALUES ('[1,2)', '{[2018-01-01,2018-02-01)}'), ('[1,2)', '{[2018-02-01,2018-03-01), [2018-04-01,2018-05-01)}')
+INSERT 0 2
+> INSERT INTO fm VALUES ('[1,2)', '{[2018-01-15,2018-02-15)}', '[1,2)')
+INSERT 0 1
+> INSERT INTO fm VALUES ('[2,3)', '{[2018-01-15,2018-02-15), [2018-04-02,2018-04-03)}', '[1,2)')
+INSERT 0 1
+> INSERT INTO fm VALUES ('[3,4)', '{[2018-02-15,2018-04-15)}', '[1,2)')
+ERROR 23503 insert or update on table "fm" violates foreign key constraint "fm_fk"
+DETAIL Key (parent_id, valid_at)=([1,2), {[2018-02-15,2018-04-15)}) is not present in table "pm".
+> DELETE FROM pm WHERE valid_at = '{[2018-01-01,2018-02-01)}'
+ERROR 23503 update or delete on table "pm" violates foreign key constraint "fm_fk" on table "fm"
+DETAIL Key (id, valid_at)=([1,2), {[2018-01-01,2018-02-01)}) is still referenced from table "fm".
+> CREATE TABLE pu (id int4range, valid_at daterange, CONSTRAINT pu_pk PRIMARY KEY (id))
+CREATE TABLE
+> CREATE TABLE fu (id int4range, valid_at daterange, parent_id int4range, CONSTRAINT fu_fk FOREIGN KEY (parent_id, PERIOD valid_at) REFERENCES pu (id, PERIOD valid_at))
+ERROR 42830 there is no unique constraint matching given keys for referenced table "pu"
+> CREATE TABLE fu (id int4range, valid_at daterange, parent_id int4range, CONSTRAINT fu_fk FOREIGN KEY (parent_id, PERIOD valid_at) REFERENCES pu)
+ERROR 42830 number of referencing and referenced columns for foreign key disagree

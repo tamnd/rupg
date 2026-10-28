@@ -77,10 +77,15 @@ impl Connection {
             let cte = cte.with_written(written.clone());
             self.write_cte(&cte, params, &view, &mut batches)?;
         }
+        // The exclusion constraints that are not deferrable check the rows before their triggers fire.
+        let immediate = self.command.get().max(view.command);
+        if self.xid.get() != 0 {
+            self.check_exclusions(view.command, view.command, false)?;
+        }
         if !batches.is_empty() {
             self.fire(batches)?;
         }
-        self.recheck_unique(view.command)?;
+        self.recheck_unique_from(view.command, immediate)?;
         self.fire_events(0)
     }
 

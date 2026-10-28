@@ -24,12 +24,17 @@ enum Pass {
 }
 
 impl Connection {
-    /// The end of a statement: the exclusion constraints of the tables that the commands from `command` on wrote. The constraints that are deferred go to the queue of the transaction.
+    /// The end of a statement: the exclusion constraints of the tables that the commands from `command` on wrote, and from `immediate` on for a constraint that is not deferrable. The constraints that are deferred go to the queue of the transaction. With `deferrable` false only the constraints that are not deferrable are checked, as `ExecInsertIndexTuples` checks them before the triggers of the rows fire.
     ///
     /// # Errors
     ///
     /// A conflict, and the errors of a wait and of the operators.
-    pub(super) fn check_exclusions(&self, command: u32) -> Result<(), Error> {
+    pub(super) fn check_exclusions(
+        &self,
+        command: u32,
+        immediate: u32,
+        deferrable: bool,
+    ) -> Result<(), Error> {
         let catalog = self.catalog();
         let mut tables: Vec<u32> =
             catalog.constraints().filter(|c| c.is_exclusion()).map(|c| c.relation).collect();
@@ -41,6 +46,7 @@ impl Connection {
         for table in tables {
             for exclusion in rupg_analyze::exclusions(&catalog, table)? {
                 match exclusion.deferrable {
+                    Some(_) if !deferrable => {}
                     Some(mode)
                         if self.modes.borrow().state(mode.constraint, true, mode.deferred) =>
                     {
@@ -52,7 +58,9 @@ impl Connection {
                     Some(_) => {
                         self.check_exclusion(table, &exclusion, Some(command), Pass::Recheck)?
                     }
-                    None => self.check_exclusion(table, &exclusion, Some(command), Pass::Insert)?,
+                    None => {
+                        self.check_exclusion(table, &exclusion, Some(immediate), Pass::Insert)?;
+                    }
                 }
             }
         }

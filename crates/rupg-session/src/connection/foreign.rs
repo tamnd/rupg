@@ -78,16 +78,25 @@ struct State {
     plan: Option<Plan>,
 }
 
-/// The keys with no null of the rows of a table for one foreign key, as values of the types of the referenced key, by their hash.
+/// The keys with no null of the rows of a table for one foreign key, as values of the types of the referenced key, by the hash of the columns that the equality compares.
 struct Keys {
     keys: Vec<Vec<Value>>,
     hashes: HashMap<u64, Vec<usize>>,
+    /// The number of the columns of the equality: all the columns, or the columns before the period of a temporal foreign key.
+    equal: usize,
 }
 
 impl Keys {
-    /// The keys of the columns `columns` of the rows, with the values of the types `from` as values of the types `to`.
-    fn of(rows: Vec<Vec<Value>>, columns: &[usize], from: &[u32], to: &[u32]) -> Keys {
-        let mut keys = Keys { keys: Vec::with_capacity(rows.len()), hashes: HashMap::new() };
+    /// The keys of the columns `columns` of the rows, with the values of the types `from` as values of the types `to`. `period` is true for a temporal foreign key.
+    fn of(
+        rows: Vec<Vec<Value>>,
+        columns: &[usize],
+        from: &[u32],
+        to: &[u32],
+        period: bool,
+    ) -> Keys {
+        let equal = columns.len() - usize::from(period);
+        let mut keys = Keys { keys: Vec::with_capacity(rows.len()), hashes: HashMap::new(), equal };
         for row in rows {
             let key: Option<Vec<Value>> = columns
                 .iter()
@@ -97,20 +106,50 @@ impl Keys {
                 })
                 .collect();
             let Some(key) = key else { continue };
-            keys.hashes.entry(hash_key(&key, to)).or_default().push(keys.keys.len());
+            keys.hashes.entry(hash_key(&key[..equal], to)).or_default().push(keys.keys.len());
             keys.keys.push(key);
         }
         keys
     }
 
-    /// True if a row has the key, with the equality of the types `types`.
+    /// True if a row has the key, with the equality of the types `types`. For a temporal foreign key the other columns are equal and the periods overlap, as the operator `&&` of `conpfeqop` compares them.
     fn has(&self, key: &[Value], types: &[u32]) -> Result<bool, Error> {
-        for &at in self.hashes.get(&hash_key(key, types)).into_iter().flatten() {
-            if same(&self.keys[at], key, types)? {
+        for other in self.matching(key, types)? {
+            if self.equal == key.len()
+                || rupg_func::period_overlaps(
+                    types[self.equal],
+                    &other[self.equal],
+                    &key[self.equal],
+                )?
+            {
                 return Ok(true);
             }
         }
         Ok(false)
+    }
+
+    /// The periods of the keys of a temporal foreign key with the other columns equal to those of `key` and a period that overlaps the period of `key`.
+    fn periods(&self, key: &[Value], types: &[u32]) -> Result<Vec<&Value>, Error> {
+        let (ty, period) = (types[self.equal], &key[self.equal]);
+        let mut periods = Vec::new();
+        for other in self.matching(key, types)? {
+            if rupg_func::period_overlaps(ty, &other[self.equal], period)? {
+                periods.push(&other[self.equal]);
+            }
+        }
+        Ok(periods)
+    }
+
+    /// The keys with the columns of the equality equal to those of `key`.
+    fn matching(&self, key: &[Value], types: &[u32]) -> Result<Vec<&[Value]>, Error> {
+        let equal = self.equal;
+        let mut found = Vec::new();
+        for &at in self.hashes.get(&hash_key(&key[..equal], types)).into_iter().flatten() {
+            if same(&self.keys[at][..equal], &key[..equal], types)? {
+                found.push(self.keys[at].as_slice());
+            }
+        }
+        Ok(found)
     }
 }
 
@@ -275,11 +314,18 @@ impl Connection {
         }
         if let Some(before) = before {
             let mut unchanged = true;
-            for ((&column, value), &ty) in
-                foreign.columns.iter().zip(key).zip(&foreign.referencing_types)
+            let last = key.len() - 1;
+            for (i, ((&column, value), &ty)) in
+                foreign.columns.iter().zip(key).zip(&foreign.referencing_types).enumerate()
             {
                 let was = before.get(column).unwrap_or(&Value::Null);
-                if was.is_null() || !rupg_func::equal(ty, was, ty, value)? {
+                // `ri_KeysEqual`: a period that stays the same or gets smaller needs no check.
+                let same = if foreign.period && i == last {
+                    !was.is_null() && rupg_func::period_covered(ty, value, None, &[was])?
+                } else {
+                    !was.is_null() && rupg_func::equal(ty, was, ty, value)?
+                };
+                if !same {
                     unchanged = false;
                     break;
                 }
@@ -296,9 +342,17 @@ impl Connection {
         let keys = state.other.get_or_insert_with(|| {
             // The check sees the rows of the statement, as the command counter goes up before the triggers fire.
             let rows = self.table_rows(foreign.other);
-            Keys::of(rows, &foreign.other_columns, &foreign.types, &foreign.types)
+            Keys::of(rows, &foreign.other_columns, &foreign.types, &foreign.types, foreign.period)
         });
-        if !keys.has(&probe, &foreign.types)? {
+        // For a temporal foreign key, `HAVING $n <@ range_agg(x1.r)`: the periods of the keys that overlap the period of the new key cover it.
+        let present = if foreign.period {
+            let last = probe.len() - 1;
+            let periods = keys.periods(&probe, &foreign.types)?;
+            rupg_func::period_covered(foreign.types[last], &probe[last], None, &periods)?
+        } else {
+            keys.has(&probe, &foreign.types)?
+        };
+        if !present {
             let shown = self.key_text(batch, foreign, key, &foreign.referencing_types)?;
             return Err(violation(batch, foreign, &self.reader()).with_detail(format!(
                 "Key{shown} is not present in table \"{}\".",
@@ -318,11 +372,14 @@ impl Connection {
     ) -> Result<(), Error> {
         let restrict = foreign.action == Action::Restrict;
         let probe: Vec<Value> = key.iter().map(|&value| value.clone()).collect();
+        if foreign.period {
+            return self.check_period_references(batch, foreign, key, &probe, state);
+        }
         // `ri_Check_Pk_Match`: for `NO ACTION`, another row with the old key keeps the references.
         if !restrict {
             let keys = state.own.get_or_insert_with(|| {
                 let rows = self.table_rows(batch.table);
-                Keys::of(rows, &foreign.columns, &foreign.types, &foreign.types)
+                Keys::of(rows, &foreign.columns, &foreign.types, &foreign.types, false)
             });
             if keys.has(&probe, &foreign.types)? {
                 return Ok(());
@@ -330,13 +387,54 @@ impl Connection {
         }
         let keys = state.other.get_or_insert_with(|| {
             let rows = self.table_rows(foreign.other);
-            Keys::of(rows, &foreign.other_columns, &foreign.referencing_types, &foreign.types)
+            Keys::of(
+                rows,
+                &foreign.other_columns,
+                &foreign.referencing_types,
+                &foreign.types,
+                false,
+            )
         });
         if keys.has(&probe, &foreign.types)? {
             let shown = self.key_text(batch, foreign, key, &foreign.types)?;
             let still = if restrict { "" } else { "still " };
             return Err(violation(batch, foreign, &self.reader()).with_detail(format!(
                 "Key{shown} is {still}referenced from table \"{}\".",
+                foreign.other_name
+            )));
+        }
+        Ok(())
+    }
+
+    /// `ri_restrict` for `NO ACTION` of a temporal foreign key: a row of the referencing table with the other columns of the old key and a period that overlaps the old period is an error, unless the periods of the rows of the referenced table with the other columns of the old key, which overlap the old period, cover the part of its period in the old period.
+    fn check_period_references(
+        &self,
+        batch: &Batch,
+        foreign: &Foreign,
+        key: &[&Value],
+        probe: &[Value],
+        state: &mut State,
+    ) -> Result<(), Error> {
+        let last = probe.len() - 1;
+        let ty = foreign.types[last];
+        let own = state.own.get_or_insert_with(|| {
+            let rows = self.table_rows(batch.table);
+            Keys::of(rows, &foreign.columns, &foreign.types, &foreign.types, true)
+        });
+        let replacements: Vec<Value> =
+            own.periods(probe, &foreign.types)?.into_iter().cloned().collect();
+        let replacements: Vec<&Value> = replacements.iter().collect();
+        let others = state.other.get_or_insert_with(|| {
+            let rows = self.table_rows(foreign.other);
+            Keys::of(rows, &foreign.other_columns, &foreign.referencing_types, &foreign.types, true)
+        });
+        for period in others.periods(probe, &foreign.types)? {
+            if rupg_func::period_covered(ty, period, Some(&probe[last]), &replacements)? {
+                continue;
+            }
+            let shown = self.key_text(batch, foreign, key, &foreign.types)?;
+            return Err(violation(batch, foreign, &self.reader()).with_detail(format!(
+                "Key{shown} is still referenced from table \"{}\".",
                 foreign.other_name
             )));
         }
@@ -361,6 +459,7 @@ impl Connection {
                     &foreign.other_columns,
                     &foreign.referencing_types,
                     &foreign.types,
+                    foreign.period,
                 );
                 for row in self.table_rows(partition) {
                     let key: Vec<&Value> = foreign

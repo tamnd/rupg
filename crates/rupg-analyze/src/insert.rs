@@ -288,6 +288,8 @@ pub struct Foreign {
     pub deferred: bool,
     /// `tgisclone`: the trigger is a clone of a trigger of the parent table. The delete of a row that an `UPDATE` moves to another partition skips such a trigger of the referenced table, because the event of the update of the partitioned table does its work.
     pub cloned: bool,
+    /// `riinfo->hasperiod`: the last key columns are the periods of a temporal foreign key. A key of the referencing table needs keys of the referenced table with the other columns equal whose periods together cover its period.
+    pub period: bool,
 }
 
 /// A unique index of the target table, which `_bt_check_unique` checks for each new version of a row.
@@ -1278,6 +1280,7 @@ impl Analyzer<'_> {
                 deferrable: trigger.deferrable,
                 deferred: trigger.deferred,
                 cloned: trigger.parent != 0,
+                period: foreign.period,
             };
             for (&attnum, &other_attnum) in mine.iter().zip(theirs) {
                 let column = place(attnum).and_then(|at| columns.get(at).map(|c| (at, c)));

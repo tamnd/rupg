@@ -123,6 +123,7 @@ fn foreign_key(
             pf_eq: vec![96],
             pp_eq: vec![96],
             ff_eq: vec![96],
+            period: false,
         },
     }
 }
