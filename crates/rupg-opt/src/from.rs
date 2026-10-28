@@ -95,6 +95,8 @@ pub(crate) struct Stats {
     gated: BTreeSet<usize>,
     /// The statistics of the columns of each table of the level, by column number, from `pg_statistic` with `stainherit` false.
     columns: BTreeMap<usize, Rc<BTreeMap<i16, Statistic>>>,
+    /// The statistics of the expression columns of the indexes of each table of the level, as [`index_statistics`] reads them.
+    exprs: BTreeMap<usize, Rc<Vec<(Expr, Statistic)>>>,
     /// `get_actual_variable_range`: the least and the greatest value of the columns of the relations that a `btree` index reads in order, which the conditions of the scans compare with a constant.
     ranges: BTreeMap<(usize, i16), Option<(Value, Value)>>,
     /// `pages` of each table of the level, which the estimate of an inequality of `ctid` reads.
@@ -110,7 +112,8 @@ impl Stats {
         let ranges = self.ranges.range((r, i16::MIN)..=(r, i16::MAX));
         let ranges = ranges.map(|(&(_, attnum), range)| (attnum, range.clone())).collect();
         let pages = self.pages.get(&r).copied();
-        ScanEstimate { r, tuples, pages, unique: self.unique.clone(), columns, ranges }
+        let exprs = self.exprs.get(&r).cloned().unwrap_or_default();
+        ScanEstimate { r, tuples, pages, unique: self.unique.clone(), columns, exprs, ranges }
     }
 
     /// The columns of the members of the equivalence classes that a node of the join of `rels` gives: each column of the relations whose class has a relation that is not in `rels`.
@@ -164,7 +167,7 @@ impl Stats {
         });
     }
 
-    /// `estimate_num_groups` with no statistics: the number of groups of rows by the values of the expressions. A `boolean` expression has 2 values, and each other expression has the values of its columns. Two columns that are equal or that an equivalence class makes equal count once. The columns of each relation have the product of their numbers of distinct values, at most a tenth of the tuples of the relation, or the largest number of one column when it is more. A relation with fewer rows after its conditions than its tuples has fewer values, as the formula of Yao. A column of a relation that the level does not know has 200 values.
+    /// `estimate_num_groups` with no statistics: the number of groups of rows by the values of the expressions. A `boolean` expression has 2 values, an expression of one relation with the statistics of an index or a unique index counts as one column, and each other expression has the values of its columns. Two columns that are equal or that an equivalence class makes equal count once. The columns of each relation have the product of their numbers of distinct values, at most a tenth of the tuples of the relation, or the largest number of one column when it is more. A relation with fewer rows after its conditions than its tuples has fewer values, as the formula of Yao. A column of a relation that the level does not know has 200 values.
     pub(crate) fn groups(&self, exprs: &[&Expr], input_rows: f64) -> f64 {
         self.groups_estimated(exprs, input_rows).0
     }
@@ -182,6 +185,14 @@ impl Stats {
         for &expr in exprs {
             if expr.ty == oid::BOOL {
                 numdistinct *= 2.0;
+                continue;
+            }
+            // `examine_variable` finds the statistics of an index expression, or a unique index on it, and the expression counts as one column.
+            if plain_var(expr).is_none()
+                && exprs::relations(expr).len() == 1
+                && (column_statistic(expr, self).is_some() || self.unique.has(expr))
+            {
+                self.add_group_var(&mut infos, expr.clone());
                 continue;
             }
             let mut columns = Vec::new();
@@ -226,9 +237,15 @@ impl Stats {
         (numdistinct.ceil().min(input_rows).max(1.0), used_default)
     }
 
-    /// `add_unique_group_var`: adds a column to the columns of the groups, when it is not there. Of two columns of different relations that an equivalence class makes equal, the column with fewer distinct values stays.
+    /// `add_unique_group_var`: adds a column, or an expression of one relation, to the columns of the groups, when it is not there. Of two columns of different relations that an equivalence class makes equal, the column with fewer distinct values stays.
     fn add_group_var(&self, infos: &mut Vec<(Expr, usize, f64, bool)>, column: Expr) {
-        let ExprKind::Var(var) = column.kind else { return };
+        let relation = match &column.kind {
+            ExprKind::Var(var) => var.relation,
+            _ => match exprs::relations(&column).first() {
+                Some(&r) => r,
+                None => return,
+            },
+        };
         let (nd, default, _) = numdistinct(&column, self);
         let mut i = 0;
         while i < infos.len() {
@@ -236,7 +253,7 @@ impl Stats {
             if other.same(&column) {
                 return;
             }
-            if *rel != var.relation && self.known_equal(other, &column) {
+            if *rel != relation && self.known_equal(other, &column) {
                 if *other_nd <= nd {
                     return;
                 }
@@ -245,7 +262,7 @@ impl Stats {
             }
             i += 1;
         }
-        infos.push((column, var.relation, nd, default));
+        infos.push((column, relation, nd, default));
     }
 
     /// `exprs_known_equal`: true when an equivalence class has the two expressions.
@@ -923,6 +940,10 @@ impl<'q> Builder<'q> {
                     indexes = self.members.map(|m| m.indexes(relation.oid)).unwrap_or_default();
                     size = self.members.map_or_else(Size::default, |m| m.size(relation.oid));
                     stats.columns.insert(r, crate::statistics(relation.oid));
+                    let exprs = index_statistics(self.members, r, &indexes);
+                    if !exprs.is_empty() {
+                        stats.exprs.insert(r, Rc::new(exprs));
+                    }
                     for q in &quals {
                         variable_ranges(self.members, &q.expr, (r, relation.oid), &indexes, stats);
                     }
@@ -1106,7 +1127,7 @@ fn sub_order(
 }
 
 /// `var_eq_const` and `var_eq_non_const`: `=` of a unique column or a unique expression of the table `r` of `tuples` rows and a value that reads no column of the table passes one row.
-/// The estimates of the conditions of the relation `r` of `tuples` tuples, as `examine_variable` finds the columns of the relation: `isunique` for a unique column, and the statistics of `pg_statistic` for a column of a table.
+/// The estimates of the conditions of the relation `r` of `tuples` tuples, as `examine_variable` finds the columns of the relation: `isunique` for a unique column, and the statistics of `pg_statistic` for a column of a table and for an expression of an index of the table.
 #[derive(Debug)]
 pub(crate) struct ScanEstimate {
     r: usize,
@@ -1115,6 +1136,7 @@ pub(crate) struct ScanEstimate {
     pages: Option<f64>,
     unique: Unique,
     columns: Rc<BTreeMap<i16, Statistic>>,
+    exprs: Rc<Vec<(Expr, Statistic)>>,
     ranges: BTreeMap<i16, Option<(Value, Value)>>,
 }
 
@@ -1380,6 +1402,11 @@ impl cost::Estimate for ScanEstimate {
     }
 
     fn statistic(&self, expr: &Expr) -> Option<&Statistic> {
+        if plain_var(expr).is_none() {
+            return (exprs::relations(expr) == BTreeSet::from([self.r]))
+                .then(|| expr_statistic(&self.exprs, expr))
+                .flatten();
+        }
         let var = plain_var(expr).filter(|v| v.levels_up == 0 && v.relation == self.r)?;
         self.columns.get(&var.attnum)
     }
@@ -2167,8 +2194,48 @@ fn numdistinct(expr: &Expr, stats: &Stats) -> (f64, bool, Option<(f64, f64)>) {
     (nd, default, rel)
 }
 
-/// The statistics of a column of a table of the level, or of the column under a `RelabelType`, as `examine_variable` finds them for a `Var`.
+/// The statistics of the expression columns of the indexes `indexes` of the relation `r` that have no predicate, from `pg_statistic` of each index, each with its expression with no `RelabelType` above it, in the order of the indexes. `examine_variable` takes no statistics from a partial index, as they are not the statistics of all the rows.
+fn index_statistics(
+    members: Option<&dyn crate::Members>,
+    r: usize,
+    indexes: &[Index],
+) -> Vec<(Expr, Statistic)> {
+    let Some(members) = members else { return Vec::new() };
+    let mut out = Vec::new();
+    for index in indexes.iter().filter(|i| !i.partial && !i.exprs.is_empty()) {
+        let statistics = members.statistics(index.oid);
+        for (column, _) in index.keys.iter().enumerate().filter(|(_, key)| **key == 0) {
+            let attnum = i16::try_from(column + 1).unwrap_or(i16::MAX);
+            let found = statistics.iter().find(|s| s.attnum == attnum && !s.inherit);
+            let (Some(statistic), Some(mut expr)) = (found, index::key_expr(index, r, column))
+            else {
+                continue;
+            };
+            if let ExprKind::Relabel(arg, _) = expr.kind {
+                expr = *arg;
+            }
+            out.push((expr, statistic.clone()));
+        }
+    }
+    out
+}
+
+/// The statistics of an expression of one relation that is not a column, as `examine_variable` finds them: the statistics of the first expression column of an index of the relation whose expression is the expression with no `RelabelType` above it.
+fn expr_statistic<'s>(exprs: &'s [(Expr, Statistic)], expr: &Expr) -> Option<&'s Statistic> {
+    let base = match &expr.kind {
+        ExprKind::Relabel(arg, _) => &**arg,
+        _ => expr,
+    };
+    exprs.iter().find(|(e, _)| e.same(base)).map(|(_, statistic)| statistic)
+}
+
+/// The statistics of a column of a table of the level, or of the column under a `RelabelType`, as `examine_variable` finds them for a `Var`, or of an expression of one relation of the level, from its indexes.
 fn column_statistic<'s>(expr: &Expr, stats: &'s Stats) -> Option<&'s Statistic> {
+    if plain_var(expr).is_none() {
+        let rels = exprs::relations(expr);
+        let r = rels.first().filter(|_| rels.len() == 1)?;
+        return expr_statistic(stats.exprs.get(r)?, expr);
+    }
     let var = plain_var(expr).filter(|v| v.levels_up == 0)?;
     stats.columns.get(&var.relation)?.get(&var.attnum)
 }

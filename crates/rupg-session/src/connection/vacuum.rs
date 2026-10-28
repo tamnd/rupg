@@ -2,7 +2,7 @@
 
 use rupg_analyze::{Repack, VacuumRel};
 use rupg_catalog::size::{empty_index_pages, new_table_tuples};
-use rupg_catalog::{Catalog, RelKind, Relation};
+use rupg_catalog::{Catalog, Column, RelKind, Relation};
 
 use rupg_common::{Error, SqlState};
 use rupg_sql::nodes::{CheckPointStmt, DefElem, Node, VacuumStmt};
@@ -23,6 +23,45 @@ use crate::utility::Notice;
 
 /// The OID of the access method `hash`.
 const HASH: u32 = 405;
+
+/// An index of a table with expressions, `AnlIndexData`: the key of the index for the rows of the sample and the expression columns that `ANALYZE` computes statistics for.
+struct IndexTargets {
+    oid: u32,
+    derived: rupg_analyze::Derived,
+    targets: Vec<analyze::Target>,
+}
+
+/// The indexes of the table `rel` that have expressions, as `do_analyze_rel` finds them with `vac_open_indexes`: each index that is ready, with `examine_attribute` for each of its expression columns. A column has the type of its expression and the collation of the index column, which `DefineIndex` sets for each expression of a collatable type.
+fn index_targets(catalog: &Catalog, rel: &Relation, default_target: i32) -> Vec<IndexTargets> {
+    let columns: Vec<(u32, i32)> = rel.columns.iter().map(|c| (c.ty, c.typmod)).collect();
+    catalog
+        .relations()
+        .filter(|r| r.kind == RelKind::Index)
+        .filter_map(|index| {
+            let info = index.index.as_ref()?;
+            if info.table != rel.oid || info.exprs.is_none() || !info.ready {
+                return None;
+            }
+            let derived = rupg_analyze::index_derived(info, rel.oid, &columns).ok()?;
+            let targets = info
+                .keys
+                .iter()
+                .zip(&derived.exprs)
+                .zip(&index.columns)
+                .zip(1i16..)
+                .filter(|(((key, _), _), _)| **key == 0)
+                .filter_map(|(((_, expr), column), attnum)| {
+                    let at = usize::try_from(attnum - 1).ok()?;
+                    let collation = info.collations.get(at).copied().unwrap_or(0);
+                    let column =
+                        Column { ty: expr.ty, typmod: expr.typmod, collation, ..column.clone() };
+                    analyze::examine(&column, attnum, default_target)
+                })
+                .collect();
+            Some(IndexTargets { oid: index.oid, derived, targets })
+        })
+        .collect()
+}
 
 /// `hashm_ffactor` of a new `hash` index: the rows of a bucket before a split, for the fill factor 75 and the width of an item with its line pointer, as `_hash_init` finds it.
 const HASH_BUCKET_ROWS: f64 = 307.0;
@@ -345,7 +384,7 @@ impl Connection {
         }
     }
 
-    /// `do_analyze_rel` of the table `relid` for the columns `columns`, or for each column when the list is empty: the sample of the rows of the table, or of the rows of the table and of its inheritance children for `inherit`, and the statistics of each column in `pg_statistic`. The sample of the tree takes from each table a part of the rows in proportion to its pages, as `acquire_inherited_sample_rows` does, and the values of each column of a child come from its column with the same name. A tree with no children, or with no table with rows, gets no statistics.
+    /// `do_analyze_rel` of the table `relid` for the columns `columns`, or for each column when the list is empty: the sample of the rows of the table, or of the rows of the table and of its inheritance children for `inherit`, and the statistics of each column in `pg_statistic`. The sample of the tree takes from each table a part of the rows in proportion to its pages, as `acquire_inherited_sample_rows` does, and the values of each column of a child come from its column with the same name. A tree with no children, or with no table with rows, gets no statistics. With no column list and no `inherit`, the statement also computes the statistics of the expression columns of each index of the table, as `compute_index_stats` does, from the keys of the rows of the sample that pass the predicate of the index, for the rows of the table in that proportion.
     fn analyze_rel(&self, catalog: &Catalog, relid: u32, columns: &[String], inherit: bool) {
         let Some(rel) = catalog.relation(relid) else { return };
         let default_target = self
@@ -361,7 +400,13 @@ impl Connection {
             .filter(|(c, _)| columns.is_empty() || columns.contains(&c.name))
             .filter_map(|(c, attnum)| analyze::examine(c, attnum, default_target))
             .collect();
-        let targrows = analyze::sample_rows(&targets);
+        let indexes = if inherit || !columns.is_empty() {
+            Vec::new()
+        } else {
+            index_targets(catalog, rel, default_target)
+        };
+        let targrows =
+            analyze::sample_rows(targets.iter().chain(indexes.iter().flat_map(|i| &i.targets)));
         let heap = self.heap();
         let xid = self.xid.get();
         let tables: Vec<u32> = if inherit {
@@ -432,6 +477,32 @@ impl Connection {
             }
         }
         heap.set_statistics(self.database_oid, relid, stats);
+        for index in &indexes {
+            let keys: Result<Vec<_>, _> = rows
+                .iter()
+                .filter_map(|(values, _)| {
+                    rupg_exec::index_key(&index.derived, values, &reader).transpose()
+                })
+                .collect();
+            let Ok(keys) = keys else { continue };
+            if keys.is_empty() {
+                continue;
+            }
+            let totalindexrows = (keys.len() as f64 / rows.len() as f64 * totalrows).ceil();
+            let mut stats = Vec::new();
+            for target in &index.targets {
+                let at = usize::try_from(target.attnum - 1).unwrap_or(0);
+                let sample: Vec<analyze::Sampled<'_>> = keys
+                    .iter()
+                    .filter_map(|key| key.get(at))
+                    .map(|value| (value, crate::heap::datum_width(value)))
+                    .collect();
+                if let Ok(Some(stat)) = target.compute(&sample, totalindexrows, false, &reader) {
+                    stats.push(stat);
+                }
+            }
+            heap.set_statistics(self.database_oid, index.oid, stats);
+        }
     }
 
     /// `heap_vacuum_rel` of the heap of `relid`: an aggressive `VACUUM` with `FREEZE`, which skips only the pages that are all frozen, no skipped pages with `DISABLE_PAGE_SKIPPING`, and the truncation of the empty pages at the end from `TRUNCATE` or the reloption `vacuum_truncate`. The result is `reltuples`.

@@ -11,7 +11,7 @@ use rupg_func::{HeapSize, Statistic, XactState};
 use rupg_types::{Value, oid};
 
 pub(crate) use btree::{Shape, Size as BtreeSize};
-pub(crate) use pages::{Fixed, Skip, stored_widths};
+pub(crate) use pages::{Fixed, Skip, datum_width, stored_widths};
 use pages::{Pages, Pruned, generation_of, max_align, page_of, slot_of, tuple_len};
 
 mod btree;

@@ -1,0 +1,116 @@
+!details
+> CREATE TABLE ixs (a int, b text, c float8)
+CREATE TABLE
+> INSERT INTO ixs SELECT i, 'v' || (i % 37), i / 3.0 FROM generate_series(1, 2000) i
+INSERT 0 2000
+> CREATE INDEX ixs_e ON ixs ((a % 10))
+CREATE INDEX
+> CREATE INDEX ixs_u ON ixs (upper(b))
+CREATE INDEX
+> CREATE INDEX ixs_p ON ixs ((a + 1)) WHERE a > 1500
+CREATE INDEX
+> CREATE INDEX ixs_m ON ixs (a, (c * 2), b)
+CREATE INDEX
+> CREATE INDEX ixs_plain ON ixs (a)
+CREATE INDEX
+> ANALYZE ixs
+ANALYZE
+> SELECT c.relname, s.staattnum, s.stainherit, s.stanullfrac, s.stawidth, s.stadistinct, s.stakind1, s.stakind2, s.stakind3, s.stacoll1, s.stacoll2 FROM pg_statistic s JOIN pg_class c ON c.oid = s.starelid WHERE c.relname LIKE 'ixs%' ORDER BY 1, 2
+fields relname@pg_class.2:19:64:-1,staattnum@pg_statistic.2:21:2:-1,stainherit@pg_statistic.3:16:1:-1,stanullfrac@pg_statistic.4:700:4:-1,stawidth@pg_statistic.5:23:4:-1,stadistinct@pg_statistic.6:700:4:-1,stakind1@pg_statistic.7:21:2:-1,stakind2@pg_statistic.8:21:2:-1,stakind3@pg_statistic.9:21:2:-1,stacoll1@pg_statistic.17:26:4:-1,stacoll2@pg_statistic.18:26:4:-1
+row ixs,1,f,0,4,-1,2,3,0,0,0
+row ixs,2,f,0,3,37,1,3,0,100,100
+row ixs,3,f,0,8,-1,2,3,0,0,0
+row ixs_e,1,f,0,4,10,1,3,0,0,0
+row ixs_m,2,f,0,8,-1,2,3,0,0,0
+row ixs_p,1,f,0,4,-1,2,3,0,0,0
+row ixs_u,1,f,0,6,37,1,3,0,100,100
+SELECT 7
+> SELECT tablename, attname, n_distinct, most_common_vals, histogram_bounds IS NOT NULL AS h, correlation FROM pg_stats WHERE tablename LIKE 'ixs_%' ORDER BY 1, 2
+fields tablename@pg_stats.2:19:64:-1,attname@pg_stats.4:19:64:-1,n_distinct@pg_stats.9:700:4:-1,most_common_vals@pg_stats.10:2277:-1:-1,h:16:1:-1,correlation@pg_stats.13:700:4:-1
+row ixs_e,expr,10,{0,1,2,3,4,5,6,7,8,9},f,0.10224753
+row ixs_m,expr,-1,NULL,t,1
+row ixs_p,expr,-1,NULL,t,1
+row ixs_u,upper,37,{V1,V2,V0,V10,V11,V12,V13,V14,V15,V16,V17,V18,V19,V20,V21,V22,V23,V24,V25,V26,V27,V28,V29,V3,V30,V31,V32,V33,V34,V35,V36,V4,V5,V6,V7,V8,V9},f,0.027014837
+SELECT 4
+> EXPLAIN SELECT * FROM ixs WHERE a % 10 = 3
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on ixs  (cost=5.83..19.83 rows=200 width=15)
+row   Recheck Cond: ((a % 10) = 3)
+row   ->  Bitmap Index Scan on ixs_e  (cost=0.00..5.78 rows=200 width=0)
+row         Index Cond: ((a % 10) = 3)
+EXPLAIN
+> EXPLAIN SELECT * FROM ixs WHERE upper(b) = 'V3'
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on ixs  (cost=4.70..16.51 rows=54 width=15)
+row   Recheck Cond: (upper(b) = 'V3'::text)
+row   ->  Bitmap Index Scan on ixs_u  (cost=0.00..4.68 rows=54 width=0)
+row         Index Cond: (upper(b) = 'V3'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM ixs WHERE upper(b) < 'V2'
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on ixs  (cost=9.31..30.04 rows=649 width=15)
+row   Recheck Cond: (upper(b) < 'V2'::text)
+row   ->  Bitmap Index Scan on ixs_u  (cost=0.00..9.14 rows=649 width=0)
+row         Index Cond: (upper(b) < 'V2'::text)
+EXPLAIN
+> EXPLAIN SELECT a % 10, count(*) FROM ixs GROUP BY 1
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=46.00..46.12 rows=10 width=12)
+row   Group Key: (a % 10)
+row   ->  Seq Scan on ixs  (cost=0.00..36.00 rows=2000 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM ixs WHERE a + 1 = 1600
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ixs  (cost=0.00..41.00 rows=10 width=15)
+row   Filter: ((a + 1) = 1600)
+EXPLAIN
+> ALTER INDEX ixs_e ALTER COLUMN 1 SET STATISTICS 0
+ALTER INDEX
+> ANALYZE ixs
+ANALYZE
+> SELECT c.relname, s.staattnum FROM pg_statistic s JOIN pg_class c ON c.oid = s.starelid WHERE c.relname LIKE 'ixs_%' ORDER BY 1, 2
+fields relname@pg_class.2:19:64:-1,staattnum@pg_statistic.2:21:2:-1
+row ixs_e,1
+row ixs_m,2
+row ixs_p,1
+row ixs_u,1
+SELECT 4
+> ANALYZE ixs (a)
+ANALYZE
+> DROP INDEX ixs_u
+DROP INDEX
+> SELECT c.relname, s.staattnum FROM pg_statistic s JOIN pg_class c ON c.oid = s.starelid WHERE c.relname LIKE 'ixs_%' ORDER BY 1, 2
+fields relname@pg_class.2:19:64:-1,staattnum@pg_statistic.2:21:2:-1
+row ixs_e,1
+row ixs_m,2
+row ixs_p,1
+SELECT 3
+> CREATE TABLE ixs2 (a int)
+CREATE TABLE
+> INSERT INTO ixs2 SELECT i FROM generate_series(1, 500) i
+INSERT 0 500
+> CREATE UNIQUE INDEX ixs2_u ON ixs2 ((a * 2))
+CREATE INDEX
+> ANALYZE ixs2
+ANALYZE
+> EXPLAIN SELECT a * 2, count(*) FROM ixs2 GROUP BY 1
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=11.75..18.00 rows=500 width=12)
+row   Group Key: (a * 2)
+row   ->  Seq Scan on ixs2  (cost=0.00..9.25 rows=500 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM ixs2 WHERE a * 2 = 10
+fields QUERY PLAN:25:-1:-1
+row Index Scan using ixs2_u on ixs2  (cost=0.27..8.29 rows=1 width=4)
+row   Index Cond: ((a * 2) = 10)
+EXPLAIN
+> SELECT relname, reltuples FROM pg_class WHERE relname LIKE 'ixs%' ORDER BY 1
+fields relname@pg_class.2:19:64:-1,reltuples@pg_class.11:700:4:-1
+row ixs,2000
+row ixs2,500
+row ixs2_u,500
+row ixs_e,2000
+row ixs_m,2000
+row ixs_p,500
+row ixs_plain,2000
+SELECT 7

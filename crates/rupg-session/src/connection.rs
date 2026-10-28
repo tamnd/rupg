@@ -6281,6 +6281,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/index_expr_stats.test")));
     }
 
+    /// `compute_index_stats` of `ANALYZE`: the statistics of the expression columns of the indexes of a table in `pg_statistic`, from the rows of the sample that pass the predicate of each index, and none for an `ANALYZE` with a column list. `examine_variable` reads the statistics of an expression of an index with no predicate for the estimates of the conditions and of the groups. `connection/index_expr_analyze.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn index_expr_analyze() {
+        big_stack(|| script(include_str!("connection/index_expr_analyze.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
