@@ -1993,7 +1993,7 @@ impl Deparser<'_> {
                 }
                 self.buf.push_str(" NORMALIZED)");
             }
-            ("pg_collation_for", [value]) => {
+            ("pg_collation_for", [value, ..]) => {
                 self.buf.push_str("COLLATION FOR (");
                 self.expr(value, false)?;
                 self.buf.push(')');

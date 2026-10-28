@@ -5,6 +5,7 @@
 use rupg_catalog::Catalog;
 
 use crate::expr::{Expr, ExprKind, SubLinkKind};
+use crate::from::Relation;
 use crate::select::Query;
 use crate::types;
 
@@ -49,7 +50,16 @@ impl State {
 
 /// The collation of an expression of the result of `query`, or 0 for a type that is not collatable and for a conflict. `catalog` gives the collations of the columns of the user tables.
 pub(crate) fn target_collation(expr: &Expr, query: &Query, catalog: Option<&Catalog>) -> u32 {
-    state(expr, &[query], catalog).oid()
+    state(expr, &[&query.relations], catalog).oid()
+}
+
+/// `exprCollation` of an expression that the analyzer reads now. `levels` holds the relations of the query of the expression first, then those of the queries outside it.
+pub(crate) fn expr_collation(
+    expr: &Expr,
+    levels: &[&[Relation]],
+    catalog: Option<&Catalog>,
+) -> u32 {
+    state(expr, levels, catalog).oid()
 }
 
 /// `get_typcollation`.
@@ -58,7 +68,7 @@ fn type_collation(ty: u32) -> u32 {
 }
 
 /// The collation state of an expression. `levels` holds the query of the expression first, then the queries outside it.
-fn state(expr: &Expr, levels: &[&Query], catalog: Option<&Catalog>) -> State {
+fn state(expr: &Expr, levels: &[&[Relation]], catalog: Option<&Catalog>) -> State {
     let own = type_collation(expr.ty);
     if own == 0 {
         return State::None;
@@ -77,7 +87,7 @@ fn state(expr: &Expr, levels: &[&Query], catalog: Option<&Catalog>) -> State {
                 SubLinkKind::Multi { column, .. } => column,
                 _ => return State::None,
             };
-            let mut inner = vec![&sub.query];
+            let mut inner = vec![&sub.query.relations[..]];
             inner.extend_from_slice(levels);
             let target = sub.query.targets.iter().filter(|t| !t.junk).nth(column);
             return State::Implicit(target.map_or(0, |t| state(&t.expr, &inner, catalog).oid()));
@@ -104,9 +114,13 @@ fn state(expr: &Expr, levels: &[&Query], catalog: Option<&Catalog>) -> State {
 }
 
 /// The collation of a column of a relation of a query in `levels`.
-fn column_collation(var: crate::expr::Var, levels: &[&Query], catalog: Option<&Catalog>) -> u32 {
-    let Some(query) = levels.get(var.levels_up) else { return 0 };
-    let Some(relation) = query.relations.get(var.relation) else { return 0 };
+fn column_collation(
+    var: crate::expr::Var,
+    levels: &[&[Relation]],
+    catalog: Option<&Catalog>,
+) -> u32 {
+    let Some(relations) = levels.get(var.levels_up) else { return 0 };
+    let Some(relation) = relations.get(var.relation) else { return 0 };
     let Ok(index) = usize::try_from(var.attnum - 1) else { return 0 };
     if relation.oid != 0 {
         if let Some(rel) = catalog.and_then(|c| c.relation(relation.oid)) {
@@ -118,7 +132,7 @@ fn column_collation(var: crate::expr::Var, levels: &[&Query], catalog: Option<&C
     }
     let outer = &levels[var.levels_up..];
     if let Some(sub) = &relation.subquery {
-        let mut inner = vec![&**sub];
+        let mut inner = vec![&sub.relations[..]];
         inner.extend_from_slice(outer);
         let target = sub.targets.iter().filter(|t| !t.junk).nth(index);
         return target.map_or(0, |t| state(&t.expr, &inner, catalog).oid());

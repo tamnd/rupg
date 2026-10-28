@@ -18,6 +18,9 @@ use crate::expr::{
 use crate::typename::{names, place};
 use crate::types;
 
+/// The OID of `pg_collation_for` in `pg_proc`.
+const PG_COLLATION_FOR: u32 = 3162;
+
 /// The collations that compare as the bytes of the string, which is the only order rupg has.
 const C_COLLATIONS: [&str; 5] = ["default", "C", "POSIX", "ucs_basic", "pg_c_utf8"];
 /// The collations of PostgreSQL that need another order.
@@ -207,10 +210,6 @@ impl Analyzer<'_> {
                     .at_opt(at));
                 }
                 let collation = self.collation_oid(&c.collname, at)?;
-                // A literal of no type yet keeps its form, so that the coercion of the literal still applies to it.
-                if arg.ty == oid::UNKNOWN {
-                    return Ok(arg);
-                }
                 let (ty, typmod) = (arg.ty, arg.typmod);
                 let mut expr = Expr::new(ExprKind::Collate(Box::new(arg), collation), ty).at(at);
                 expr.typmod = typmod;
@@ -821,7 +820,35 @@ impl Analyzer<'_> {
         {
             func.form = FuncForm::SqlSyntax;
         }
+        if let ExprKind::Func(func) = &mut call.kind
+            && func.oid == PG_COLLATION_FOR
+            && let [arg] = &func.args[..]
+        {
+            let collation = self.collation_for(arg)?;
+            func.args.push(collation);
+        }
         Ok(call)
+    }
+
+    /// The collation of the argument of `pg_collation_for`, which the executor does not keep: an `oid` constant with the collation that `exprCollation` gives. An argument of the type `unknown` has only the collation of a `COLLATE` clause at its top. As `pg_collation_for`, another type without collations gives an error.
+    fn collation_for(&self, arg: &Expr) -> Result<Expr> {
+        if arg.ty == oid::UNKNOWN {
+            let collation = match &arg.kind {
+                ExprKind::Collate(_, collation) => *collation,
+                _ => 0,
+            };
+            return Ok(Expr::constant(Value::Oid(collation), oid::OID, -1, None));
+        }
+        if !types::collatable(arg.ty) {
+            return Err(Error::new(
+                SqlState::DATATYPE_MISMATCH,
+                format!("collations are not supported by type {}", types::name(arg.ty)),
+            ));
+        }
+        let mut levels = vec![&self.scope.relations[..]];
+        levels.extend(self.outer.iter().rev().map(|s| &s.relations[..]));
+        let collation = crate::collate::expr_collation(arg, &levels, self.env.catalog());
+        Ok(Expr::constant(Value::Oid(collation), oid::OID, -1, None))
     }
 
     /// `transformTypeCast`: `x::type` and `CAST(x AS type)`.
