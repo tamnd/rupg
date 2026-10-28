@@ -50,3 +50,39 @@ row 1,1
 row 1,NULL
 row NULL,NULL
 SELECT 3
+> explain (costs off) select a, b, row_number() over (order by a, b nulls first) from gn where a = b group by grouping sets((a, b), (a))
+fields QUERY PLAN:25:-1:-1
+row WindowAgg
+row   Window: w1 AS (ORDER BY a, b ROWS UNBOUNDED PRECEDING)
+row   ->  Incremental Sort
+row         Sort Key: a, b NULLS FIRST
+row         Presorted Key: a
+row         ->  GroupAggregate
+row               Group Key: a, b
+row               Group Key: a
+row               ->  Sort
+row                     Sort Key: a
+row                     ->  Seq Scan on gn
+row                           Filter: (a = b)
+EXPLAIN
+> select a, b, row_number() over (order by a, b nulls first) from gn where a = b group by grouping sets((a, b), (a))
+fields a@gn.1:23:4:-1,b@gn.2:23:4:-1,row_number:20:8:-1
+row 1,NULL,1
+row 1,1,2
+row 2,NULL,3
+row 2,2,4
+SELECT 4
+> explain (costs off) select 1 as one group by rollup(one) order by one nulls first
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: (1) NULLS FIRST
+row   ->  MixedAggregate
+row         Hash Key: 1
+row         Group Key: ()
+row         ->  Result
+EXPLAIN
+> select 1 as one group by rollup(one) order by one nulls first
+fields one:23:4:-1
+row NULL
+row 1
+SELECT 2

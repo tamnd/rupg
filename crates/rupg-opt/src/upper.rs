@@ -2351,7 +2351,7 @@ fn query_window_calls(query: &Query) -> Vec<Vec<&WindowFunc>> {
 fn window_partition(level: &Level<'_>, window: usize) -> Vec<usize> {
     let clause = &level.query.windows[window];
     let items = clause.partition.iter().enumerate().collect();
-    let items = level.stats.canonical(items, |(_, item)| level.target(item.target));
+    let items = upper_canonical(level, items, |(_, item)| level.target(item.target));
     items.into_iter().map(|(i, _)| i).collect()
 }
 
@@ -2360,7 +2360,7 @@ fn window_keys<'q>(level: &Level<'q>, window: usize, partition: &[usize]) -> Vec
     let clause = &level.query.windows[window];
     let items = partition.iter().map(|&i| &clause.partition[i]).chain(&clause.order);
     let keys = items.map(|item| sort_key(level.target(item.target), item)).collect();
-    level.stats.canonical(keys, |k| &*k.item.expr)
+    upper_canonical(level, keys, |k| &*k.item.expr)
 }
 
 /// `get_windowclause_startup_tuples`: the rows that a window reads before its first row, for the options of its frame after `optimize_window_clauses`.
