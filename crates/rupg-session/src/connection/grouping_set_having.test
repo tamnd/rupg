@@ -1,0 +1,50 @@
+!details
+> create table g2 (a int, b int)
+CREATE TABLE
+> insert into g2 values (1,1),(1,2),(2,2),(2,3),(3,3)
+INSERT 0 5
+> explain (costs off) select a, b, count(*) from g2 group by grouping sets ((a, b), (a)) having a > 1 and b > 1
+fields QUERY PLAN:25:-1:-1
+row HashAggregate
+row   Hash Key: a, b
+row   Hash Key: a
+row   Filter: (b > 1)
+row   ->  Seq Scan on g2
+row         Filter: (a > 1)
+EXPLAIN
+> select a, b, count(*) from g2 group by grouping sets ((a, b), (a)) having a > 1 and b > 1 order by 1, 2
+fields a@g2.1:23:4:-1,b@g2.2:23:4:-1,count:20:8:-1
+row 2,2,1
+row 2,3,1
+row 3,3,1
+SELECT 3
+> explain (costs off) select a, b, count(*) from g2 group by rollup(a), b having b > 1
+fields QUERY PLAN:25:-1:-1
+row HashAggregate
+row   Hash Key: b, a
+row   Hash Key: b
+row   ->  Seq Scan on g2
+row         Filter: (b > 1)
+EXPLAIN
+> explain (costs off) select a, count(*) from g2 group by grouping sets ((a), ()) having 1 = 2
+fields QUERY PLAN:25:-1:-1
+row MixedAggregate
+row   Hash Key: a
+row   Group Key: ()
+row   Filter: false
+row   ->  Result
+row         Replaces: Scan on g2
+row         One-Time Filter: false
+EXPLAIN
+> select a, count(*) from g2 group by grouping sets ((a), ()) having 1 = 2
+fields a@g2.1:23:4:-1,count:20:8:-1
+SELECT 0
+> explain (costs off) select a, count(*) from g2 group by grouping sets ((a), (b)) having 1 = 2
+fields QUERY PLAN:25:-1:-1
+row HashAggregate
+row   Hash Key: a
+row   Hash Key: b
+row   ->  Result
+row         Replaces: Scan on g2
+row         One-Time Filter: false
+EXPLAIN
