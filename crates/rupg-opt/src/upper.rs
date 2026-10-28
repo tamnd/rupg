@@ -32,19 +32,12 @@ const MAX_SETS: usize = 4096;
 
 /// The conditions of `HAVING` that go to `WHERE`, and the conditions that stay in `HAVING`, as `subquery_planner` divides them. A condition with no aggregate goes to `WHERE`, but with no `GROUP BY` or with an empty grouping set it also stays, because the group is there also when no row passes. With grouping sets, a condition that reads an item that a set does not have stays, because the item is null only in the groups.
 pub(crate) fn having_split(query: &Query) -> (Vec<&Expr>, Vec<&Expr>) {
-    let (nullable, empty_set) = if query.grouping_sets.is_empty() {
-        (Vec::new(), false)
-    } else {
-        let sets = expand_grouping_sets(&query.grouping_sets, query.group_distinct, MAX_SETS)
-            .unwrap_or_default();
-        let nullable: Vec<&Expr> = query
-            .group
+    let nullable = nullable_items(query);
+    let empty_set = !query.grouping_sets.is_empty()
+        && expand_grouping_sets(&query.grouping_sets, query.group_distinct, MAX_SETS)
+            .unwrap_or_default()
             .iter()
-            .filter(|g| !sets.iter().all(|s| s.contains(&g.target)))
-            .map(|g| &query.targets[g.target].expr)
-            .collect();
-        (nullable, sets.iter().any(Vec::is_empty))
-    };
+            .any(Vec::is_empty);
     // `flatten_group_exprs`: an `AND` that is an item that a set does not have is in a `PlaceHolderVar`, so it is one condition.
     fn split<'e>(expr: &'e Expr, nullable: &[&Expr], out: &mut Vec<&'e Expr>) {
         match &expr.kind {
@@ -84,6 +77,44 @@ pub(crate) fn having_split(query: &Query) -> (Vec<&Expr>, Vec<&Expr>) {
         }
     }
     (to_where, keep)
+}
+
+/// `mark_nullable_by_grouping`: the items of `GROUP BY` that a grouping set does not have.
+pub(crate) fn nullable_items(query: &Query) -> Vec<&Expr> {
+    if query.grouping_sets.is_empty() {
+        return Vec::new();
+    }
+    let sets = expand_grouping_sets(&query.grouping_sets, query.group_distinct, MAX_SETS)
+        .unwrap_or_default();
+    query
+        .group
+        .iter()
+        .filter(|g| !sets.iter().all(|s| s.contains(&g.target)))
+        .map(|g| &query.targets[g.target].expr)
+        .collect()
+}
+
+/// `Stats::canonical` for the keys of a node above the `Agg` of grouping sets. An item that a set does not have reads the output of the `Agg`, with `varnullingrels` or in a `PlaceHolderVar`, so it is not a member of the equivalence classes of the rows below. It is redundant only after the same item, and it makes no other item redundant.
+fn upper_canonical<T>(level: &Level<'_>, items: Vec<T>, expr: impl Fn(&T) -> &Expr) -> Vec<T> {
+    let nullable = nullable_items(level.query);
+    if nullable.is_empty() {
+        return level.stats.canonical(items, expr);
+    }
+    let is_nullable = |e: &Expr| nullable.iter().any(|n| n.same(e));
+    let mut out: Vec<T> = Vec::new();
+    for item in items {
+        let e = expr(&item);
+        let kept = if is_nullable(e) {
+            !out.iter().any(|o| expr(o).same(e))
+        } else {
+            let before: Vec<&Expr> = out.iter().map(&expr).filter(|b| !is_nullable(b)).collect();
+            !level.stats.redundant(e, &before)
+        };
+        if kept {
+            out.push(item);
+        }
+    }
+    out
 }
 
 /// `find_having_conflicts`: true when the condition compares an item of `GROUP BY` with an operator whose equality is not the equality of the group, as `expression_has_grouping_conflict` finds it. In `WHERE`, such a condition removes rows that the group puts with rows that pass, and so it changes the aggregates. An expression has no collation, so the checks of a nondeterministic collation are not done.
@@ -338,7 +369,7 @@ fn steps<'q>(
             }
             out
         } else {
-            level.stats.canonical(keys, |k| &*k.item.expr)
+            upper_canonical(level, keys, |k| &*k.item.expr)
         };
         let bound = (count > 0.0 && offset >= 0.0).then_some(count + offset);
         node = sort_if(level, node, keys, order, bound, only)?;
@@ -2517,7 +2548,7 @@ fn distinct<'q>(
     let c = input.cost;
     // `processed_distinctClause`: the items whose keys are not redundant.
     let processed =
-        level.stats.canonical(query.distinct.iter().collect(), |d| level.target(d.target));
+        upper_canonical(level, query.distinct.iter().collect(), |d| level.target(d.target));
     let ncols = processed.len();
     let distinct_exprs: Vec<&Expr> = processed.iter().map(|d| level.target(d.target)).collect();
     let groups = level.stats.groups(&distinct_exprs, c.rows);
@@ -2533,12 +2564,12 @@ fn distinct<'q>(
             keys.push(key);
         }
     }
-    let mut keys = level.stats.canonical(keys, |k| &*k.item.expr);
+    let mut keys = upper_canonical(level, keys, |k| &*k.item.expr);
     // `DISTINCT ON` sorts on all the items of `ORDER BY` when it has more keys, as `create_final_distinct_paths`.
     if query.distinct_on {
         let sort: Vec<SortKey<'q>> =
             query.sort.iter().map(|s| sort_key(level.target(s.target), s)).collect();
-        let sort = level.stats.canonical(sort, |k| &*k.item.expr);
+        let sort = upper_canonical(level, sort, |k| &*k.item.expr);
         if sort.len() > keys.len() {
             keys = sort;
         }

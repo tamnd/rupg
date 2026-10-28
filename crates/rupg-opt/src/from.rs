@@ -320,7 +320,7 @@ impl Stats {
     }
 
     /// `pathkey_is_redundant`: true when a key of a sort on the expression adds nothing after the keys on the expressions `before`. The expression is a constant, an equivalence class with a constant has it, or an earlier key is the expression or is in its class. A volatile expression has a class of its own.
-    fn redundant(&self, expr: &Expr, before: &[&Expr]) -> bool {
+    pub(crate) fn redundant(&self, expr: &Expr, before: &[&Expr]) -> bool {
         if exprs::volatile(expr) {
             return false;
         }

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Above the `Agg` of grouping sets, an item that a set does not have is not redundant with a key that `WHERE` makes equal to it, so `ORDER BY` and `DISTINCT` keep it as a key, as in PG (#1074).
 - With grouping sets, `HAVING` keeps an item of `GROUP BY` that a set does not have as one expression, as the `PlaceHolderVar` of `flatten_group_exprs` does in PG. `having not not a` over `rollup(not a)` gave a row for the empty set, and an `AND` that is an item went to `WHERE`. The `Filter` of an `Agg` shows a key that the node below computes in parentheses (#1073).
 - The `lz4` and `pglz` compressors of TOAST in `rupg-encode`. Their output is the same as that of PostgreSQL 19, byte for byte (#1072).
 - With one rollup over sorted rows, the rows of a query with grouping sets keep the order of its keys up to the first key that a set does not have, so `ORDER BY` can take an `Incremental Sort` or no sort, as in PG (#1071).
