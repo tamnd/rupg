@@ -6163,6 +6163,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/partition_move_keys.test")));
     }
 
+    /// A trigger `AFTER ... FOR EACH ROW` whose name sorts before `RI_ConstraintTrigger` fires before the check of a foreign key, and can add the referenced row. `connection/foreign_key_trigger_order.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn foreign_key_trigger_order() {
+        big_stack(|| script(include_str!("connection/foreign_key_trigger_order.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
