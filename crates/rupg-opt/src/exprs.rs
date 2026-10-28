@@ -205,6 +205,13 @@ pub(crate) fn binary(expr: &Expr) -> Option<(u32, &Expr, &Expr)> {
     }
 }
 
+/// True when [`commute`] gives the condition with its arguments in the other order.
+pub(crate) fn can_commute(expr: &Expr) -> bool {
+    let Some((op, _, _)) = binary(expr) else { return false };
+    let row = builtin::operator_by_oid(op).and_then(|o| builtin::operator_by_oid(o.commutator));
+    row.is_some() && matches!(expr.kind, ExprKind::Func(_))
+}
+
 /// The call of the commutator of an operator, with the arguments in the other order, as `commute_op_clause`.
 pub(crate) fn commute(expr: &Expr) -> Option<Expr> {
     let (op, left, right) = binary(expr)?;

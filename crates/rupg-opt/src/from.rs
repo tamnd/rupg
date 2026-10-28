@@ -12,6 +12,7 @@ mod search;
 mod tid;
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -104,9 +105,56 @@ pub(crate) struct Stats {
     pages: BTreeMap<usize, f64>,
     /// `allvisfrac` of each table of the level, which the cost of an index only scan reads.
     all_visible: BTreeMap<usize, f64>,
+    /// The estimates of the clauses of the joins that the join search finds again for each pair of sides.
+    cache: RefCell<Cache>,
 }
 
+/// The estimates of the clauses of the joins of a level, as a `RestrictInfo` keeps `norm_selec` and `scansel_cache`. The join search reads them for each pair of sides and each kept path, so it computes each of them once.
+#[derive(Clone, Debug, Default)]
+struct Cache {
+    /// `eqjoinsel_inner` of the two values of an `=`.
+    eqjoinsel: Vec<(Expr, Expr, f64)>,
+    /// `mergejoinscansel` of the two values of an `=` with the directions of the key.
+    scansel: Vec<(Expr, Expr, bool, bool, ScanSels)>,
+}
+
+/// The `mergejoinscansel` results of the two sides of a merge key.
+type ScanSels = (scansel::ScanSel, scansel::ScanSel);
+
 impl Stats {
+    /// `eqjoinsel_inner` of `left = right`, which the cache keeps.
+    fn eqjoinsel(&self, left: &Expr, right: &Expr) -> f64 {
+        let found = self.cache.borrow().eqjoinsel.iter().find_map(|(l, r, selectivity)| {
+            (l.same(left) && r.same(right)).then_some(*selectivity)
+        });
+        if let Some(selectivity) = found {
+            return selectivity;
+        }
+        let selectivity = eqjoinsel_inner(&JoinVar::new(left, self), &JoinVar::new(right, self));
+        self.cache.borrow_mut().eqjoinsel.push((left.clone(), right.clone(), selectivity));
+        selectivity
+    }
+
+    /// `mergejoinscansel` of `left = right` in the order `desc` with the nulls first when `nulls_first`, which the cache keeps.
+    fn scansel(
+        &self,
+        left: &Expr,
+        right: &Expr,
+        desc: bool,
+        nulls_first: bool,
+    ) -> (scansel::ScanSel, scansel::ScanSel) {
+        let found = self.cache.borrow().scansel.iter().find_map(|(l, r, d, n, found)| {
+            (*d == desc && *n == nulls_first && l.same(left) && r.same(right)).then_some(*found)
+        });
+        if let Some(found) = found {
+            return found;
+        }
+        let found = scansel::mergejoinscansel(self, left, right, desc, nulls_first);
+        let key = (left.clone(), right.clone(), desc, nulls_first, found);
+        self.cache.borrow_mut().scansel.push(key);
+        found
+    }
+
     /// The estimates of the conditions of the relation `r` with `tuples` tuples.
     fn estimate(&self, r: usize, tuples: f64) -> ScanEstimate {
         let columns = self.columns.get(&r).cloned().unwrap_or_default();
@@ -1012,6 +1060,7 @@ impl<'q> Builder<'q> {
         let selectivity = cost::list_selectivity_by(quals.iter().map(|q| &*q.expr), &eq);
         let rows = cost::clamp_rows(tuples * selectivity);
         stats.rows.insert(r, (tuples, rows));
+        stats.cache.take();
         let mut node = Node::new(kind, level.scope, children);
         node.filter = quals.iter().map(|q| q.item()).collect();
         let width = stats.width(&BTreeSet::from([r]));
@@ -2133,21 +2182,33 @@ fn restrictions(quals: Vec<Qual<'_>>) -> Vec<Qual<'_>> {
     out
 }
 
-/// A condition of a join that tests a value of the outer side and a value of the inner side with an operator, with the outer value on the left.
-#[derive(Clone)]
-struct Clause<'q> {
-    item: Item<'q>,
-    outer: Expr,
-    inner: Expr,
+/// A condition of a join that tests a value of the outer side and a value of the inner side with an operator. The values borrow the condition, so the join search makes no copy of them for each pair of sides.
+#[derive(Clone, Copy)]
+struct Clause<'a, 'q> {
+    qual: &'a Qual<'q>,
+    /// True when the condition has the value of the inner side on the left, so that the join tests the commuted condition.
+    commuted: bool,
+    outer: &'a Expr,
+    inner: &'a Expr,
+}
+
+impl<'q> Clause<'_, 'q> {
+    /// The condition with the value of the outer side on the left, which the plan of the join shows.
+    fn item(&self) -> Item<'q> {
+        match self.commuted.then(|| exprs::commute(&self.qual.expr)).flatten() {
+            Some(commuted) => Item::owned(commuted),
+            None => self.qual.item(),
+        }
+    }
 }
 
 /// The condition with the value of `outer` on the left, when the condition compares a value of each side with an operator that `usable` accepts.
-fn clause<'q>(
-    qual: &Qual<'q>,
+fn clause<'a, 'q>(
+    qual: &'a Qual<'q>,
     outer: &BTreeSet<usize>,
     inner: &BTreeSet<usize>,
     usable: fn(u32) -> bool,
-) -> Option<Clause<'q>> {
+) -> Option<Clause<'a, 'q>> {
     let (op, left, right) = exprs::binary(&qual.expr)?;
     if !usable(op) || exprs::volatile(&qual.expr) {
         return None;
@@ -2157,15 +2218,10 @@ fn clause<'q>(
         return None;
     }
     if l.is_subset(outer) && r.is_subset(inner) {
-        return Some(Clause { item: qual.item(), outer: left.clone(), inner: right.clone() });
+        return Some(Clause { qual, commuted: false, outer: left, inner: right });
     }
-    if l.is_subset(inner) && r.is_subset(outer) {
-        let commuted = exprs::commute(&qual.expr)?;
-        return Some(Clause {
-            item: Item::owned(commuted),
-            outer: right.clone(),
-            inner: left.clone(),
-        });
+    if l.is_subset(inner) && r.is_subset(outer) && exprs::can_commute(&qual.expr) {
+        return Some(Clause { qual, commuted: true, outer: right, inner: left });
     }
     None
 }
@@ -2386,7 +2442,7 @@ fn eqjoinsel_semi(v1: &JoinVar<'_>, v2: &JoinVar<'_>, inner_rows: f64) -> f64 {
 fn join_selectivity(qual: &Qual<'_>, stats: &Stats) -> f64 {
     let eq = |left: &Expr, right: &Expr| {
         if exprs::reads_columns(left) && exprs::reads_columns(right) {
-            return Some(eqjoinsel_inner(&JoinVar::new(left, stats), &JoinVar::new(right, stats)));
+            return Some(stats.eqjoinsel(left, right));
         }
         [(left, right), (right, left)].into_iter().find_map(|(column, value)| {
             let rels = exprs::relations(column);
@@ -3304,7 +3360,7 @@ fn semifactors(
     let (clauses, _) = split(quals, outer, &inner.rels, exprs::can_merge);
     let columns: BTreeSet<i16> = clauses
         .iter()
-        .filter_map(|c| plain_var(&c.inner))
+        .filter_map(|c| plain_var(c.inner))
         .filter(|v| v.levels_up == 0 && v.relation == r)
         .map(|v| v.attnum)
         .collect();
@@ -3370,18 +3426,18 @@ enum Method {
 }
 
 /// The conditions of a join that a kind of join tests itself, with the outer value on the left, and the other conditions.
-fn split<'q>(
-    quals: &[Qual<'q>],
+fn split<'a, 'q>(
+    quals: &'a [Qual<'q>],
     outer: &BTreeSet<usize>,
     inner: &BTreeSet<usize>,
     usable: fn(u32) -> bool,
-) -> (Vec<Clause<'q>>, Vec<Qual<'q>>) {
+) -> (Vec<Clause<'a, 'q>>, Vec<&'a Qual<'q>>) {
     let mut clauses = Vec::new();
     let mut other = Vec::new();
     for qual in quals {
         match clause(qual, outer, inner, usable) {
             Some(c) => clauses.push(((qual.class.is_none(), qual.class, qual.order), c)),
-            None => other.push(qual.clone()),
+            None => other.push(qual),
         }
     }
     // `build_joinrel_restrictlist`: the conditions of the equivalence classes come first, in the order of the classes, then the other conditions in the order of `deconstruct_jointree`.
@@ -3390,13 +3446,10 @@ fn split<'q>(
 }
 
 /// The number of rows of the join that pass the conditions, as `approx_tuple_count`.
-fn tuple_count(input: &Input<'_, '_>, clauses: &[Clause<'_>]) -> f64 {
+fn tuple_count(input: &Input<'_, '_>, clauses: &[Clause<'_, '_>]) -> f64 {
     let mut selectivity = 1.0;
     for c in clauses {
-        selectivity *= eqjoinsel_inner(
-            &JoinVar::new(&c.outer, input.stats),
-            &JoinVar::new(&c.inner, input.stats),
-        );
+        selectivity *= input.stats.eqjoinsel(c.outer, c.inner);
     }
     cost::clamp_rows(input.outer.node.cost.rows * input.inner.node.cost.rows * selectivity)
 }
@@ -3604,7 +3657,7 @@ fn hash_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>>
     let (bucket, mcv_freq) = if input.made.1 {
         (1.0 / virtual_buckets, 0.0)
     } else {
-        clauses.iter().map(|c| bucket_stats(&c.inner, virtual_buckets, input.stats)).fold(
+        clauses.iter().map(|c| bucket_stats(c.inner, virtual_buckets, input.stats)).fold(
             (1.0_f64, 1.0_f64),
             |(bucket, freq), (this_bucket, this_freq)| {
                 // A frequency of 0 is not known.
@@ -3620,7 +3673,7 @@ fn hash_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>>
         startup += cost::DISABLE;
     }
     // The conditions of the hash cost as `cost_qual_eval` finds them for each row that a bucket has.
-    let qual_cost = cost::qual_cost(clauses.iter().map(|c| &*c.item.expr));
+    let qual_cost = cost::qual_cost(clauses.iter().map(|c| &*c.qual.expr));
     let tuples = match input.unique {
         // The scan of a bucket stops at the first match. An outer row with no match scans a bucket of the average size, and most of its rows fail the hash values first.
         Some((fraction, matches)) => {
@@ -3659,17 +3712,17 @@ fn hash_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>>
 }
 
 /// True when the order of the rows of a plan is the order of the keys of a merge join, from the first key. `value` gives the value of the side for a clause.
-fn ordered(order: &[OrderKey], keys: &[MergeKey], value: impl Fn(usize) -> Expr) -> bool {
+fn ordered<'e>(order: &[OrderKey], keys: &[MergeKey], value: impl Fn(usize) -> &'e Expr) -> bool {
     keys.len() <= order.len()
         && keys
             .iter()
             .zip(order)
-            .all(|(&(c, desc, nulls_first), k)| k.sorts(&value(c), desc, nulls_first))
+            .all(|(&(c, desc, nulls_first), k)| k.sorts(value(c), desc, nulls_first))
 }
 
 /// `select_outer_pathkeys_for_merge`: the order of the keys of a merge join that sorts its sides. The keys of the query come first, in its directions, when the conditions have all of them. The condition of an outer join has only the value of its outer side, and only when that side is not the side that gets nulls. When the conditions are all keys of the query, they are the keys. The other keys follow in ascending order, first the keys with more expressions of relations outside the join that a condition makes equal to them.
-fn merge_order(input: &Input<'_, '_>, join: JoinKind, clauses: &[Clause<'_>]) -> Vec<MergeKey> {
-    let has = |c: &Clause<'_>, e: &Expr| match join {
+fn merge_order(input: &Input<'_, '_>, join: JoinKind, clauses: &[Clause<'_, '_>]) -> Vec<MergeKey> {
+    let has = |c: &Clause<'_, '_>, e: &Expr| match join {
         JoinKind::Inner | JoinKind::Semi => c.outer.same(e) || c.inner.same(e),
         JoinKind::Left | JoinKind::Anti => c.outer.same(e),
         JoinKind::Right | JoinKind::Full | JoinKind::RightSemi | JoinKind::RightAnti => false,
@@ -3691,7 +3744,7 @@ fn merge_order(input: &Input<'_, '_>, join: JoinKind, clauses: &[Clause<'_>]) ->
     }
     let mut rels = input.outer.rels.clone();
     rels.extend(input.inner.rels.iter().copied());
-    let score = |c: &Clause<'_>| {
+    let score = |c: &Clause<'_, '_>| {
         let mut partners: Vec<&Expr> = Vec::new();
         for sides in &input.stats.joins {
             for ((e, _), (other, other_rels)) in sides.iter().zip(sides.iter().rev()) {
@@ -3719,13 +3772,13 @@ fn merge_order(input: &Input<'_, '_>, join: JoinKind, clauses: &[Clause<'_>]) ->
 }
 
 /// `find_mergeclauses_for_outer_pathkeys`: the keys of a merge join in the order of the rows of the outer side, from the clauses whose values are in the first keys of that order. The other clauses are conditions of the join. With `all`, the order must have the value of each clause.
-fn outer_order(order: &[OrderKey], clauses: &[Clause<'_>], all: bool) -> Option<Vec<MergeKey>> {
+fn outer_order(order: &[OrderKey], clauses: &[Clause<'_, '_>], all: bool) -> Option<Vec<MergeKey>> {
     let mut used = vec![false; clauses.len()];
     let mut out = Vec::new();
     for k in order {
         let before = out.len();
         for (i, c) in clauses.iter().enumerate() {
-            if !used[i] && k.sorts(&c.outer, k.desc, k.nulls_first) {
+            if !used[i] && k.sorts(c.outer, k.desc, k.nulls_first) {
                 used[i] = true;
                 out.push((i, k.desc, k.nulls_first));
             }
@@ -3770,12 +3823,12 @@ fn presorted_merges<'q>(
         }
     };
     // The cheapest inner plan needs no `Sort` when it is in the order of all the keys, and then a sorted plan must cost less.
-    let presorted = ordered(&inners[0].order, &keys, |c| clauses[c].inner.clone());
+    let presorted = ordered(&inners[0].order, &keys, |c| clauses[c].inner);
     let (mut total, mut startup) = if presorted { (Some(0), Some(0)) } else { (None, None) };
     for count in (1..=keys.len()).rev() {
         let trial = &keys[..count];
         let sorted: Vec<usize> = (0..inners.len())
-            .filter(|&j| ordered(&inners[j].order, trial, |c| clauses[c].inner.clone()))
+            .filter(|&j| ordered(&inners[j].order, trial, |c| clauses[c].inner))
             .collect();
         // `get_cheapest_path_for_pathkeys` and `compare_path_costs`: the first plan with the lowest cost.
         let best = |total: bool| sorted.iter().copied().min_by(|&a, &b| by(a, b, total));
@@ -3821,9 +3874,9 @@ fn merge_join<'q>(
         return None;
     }
     let other = merge_other(input.quals, &input.outer.rels, &input.inner.rels, &keys);
-    let used: Vec<Clause<'_>> = keys.iter().map(|&(c, _, _)| clauses[c].clone()).collect();
-    let sort_outer = !ordered(&input.outer.order, &keys, |c| clauses[c].outer.clone());
-    let sort_inner = !ordered(&input.inner.order, &keys, |c| clauses[c].inner.clone());
+    let used: Vec<Clause<'_, '_>> = keys.iter().map(|&(c, _, _)| clauses[c]).collect();
+    let sort_outer = !ordered(&input.outer.order, &keys, |c| clauses[c].outer);
+    let sort_inner = !ordered(&input.inner.order, &keys, |c| clauses[c].inner);
     let side = |rel: &Rel<'_>, sorted: bool| {
         let c = rel.node.cost;
         if sorted {
@@ -3839,7 +3892,7 @@ fn merge_join<'q>(
     let (mut outer_sel, mut inner_sel) = match keys.first() {
         Some(&(c, desc, nulls_first)) if join != JoinKind::Full => {
             let clause = &clauses[c];
-            scansel::mergejoinscansel(input.stats, &clause.outer, &clause.inner, desc, nulls_first)
+            input.stats.scansel(clause.outer, clause.inner, desc, nulls_first)
         }
         _ => (scansel::ALL, scansel::ALL),
     };
@@ -3884,7 +3937,7 @@ fn merge_join<'q>(
                 )
             || allowed && sort_inner && spills);
     run += if materialize { material } else { bare };
-    let merge_qual = cost::qual_cost(used.iter().map(|c| &*c.item.expr));
+    let merge_qual = cost::qual_cost(used.iter().map(|c| &*c.qual.expr));
     startup += merge_qual * (outer_skip + inner_skip * ratio);
     run += merge_qual * ((outer_rows - outer_skip) + (inner_rows - inner_skip) * ratio);
     // The start cost of the conditions that are not the clauses of the join counts in the start cost of the join.
@@ -3924,12 +3977,12 @@ fn merge_keys<'q>(values: Vec<(Expr, bool, bool)>) -> Vec<SortKey<'q>> {
 }
 
 /// The conditions of a merge join that are not its merge clauses, in the order of the conditions.
-fn merge_other<'q>(
-    quals: &[Qual<'q>],
+fn merge_other<'a, 'q>(
+    quals: &'a [Qual<'q>],
     outer: &BTreeSet<usize>,
     inner: &BTreeSet<usize>,
     keys: &[MergeKey],
-) -> Vec<Qual<'q>> {
+) -> Vec<&'a Qual<'q>> {
     let mut index = 0;
     let mut other = Vec::new();
     for qual in quals {
@@ -3939,14 +3992,17 @@ fn merge_other<'q>(
                 continue;
             }
         }
-        other.push(qual.clone());
+        other.push(qual);
     }
     other
 }
 
 /// The clauses of a merge join in the order of its keys, each with the directions of its key.
-fn merge_clauses<'q>(clauses: Vec<Clause<'q>>, keys: &[MergeKey]) -> Vec<(Clause<'q>, bool, bool)> {
-    let mut slots: Vec<Option<Clause<'q>>> = clauses.into_iter().map(Some).collect();
+fn merge_clauses<'a, 'q>(
+    clauses: Vec<Clause<'a, 'q>>,
+    keys: &[MergeKey],
+) -> Vec<(Clause<'a, 'q>, bool, bool)> {
+    let mut slots: Vec<Option<Clause<'a, 'q>>> = clauses.into_iter().map(Some).collect();
     keys.iter()
         .filter_map(|&(c, desc, nulls_first)| Some((slots[c].take()?, desc, nulls_first)))
         .collect()
@@ -3964,7 +4020,7 @@ impl<'q> Candidate<'q> {
                 let mut order: Vec<OrderKey> = merge_clauses(clauses, &self.keys)
                     .into_iter()
                     .map(|(c, desc, nulls_first)| OrderKey {
-                        exprs: vec![c.outer, c.inner],
+                        exprs: vec![c.outer.clone(), c.inner.clone()],
                         desc,
                         nulls_first,
                     })
@@ -4007,7 +4063,7 @@ impl<'q> Candidate<'q> {
                 let c = inner.node.cost;
                 let mut hash = Node::new(Kind::Hash, scope, vec![inner.node]);
                 hash.cost = Cost { startup: c.total, ..c };
-                let cond = clauses.into_iter().map(|c| c.item).collect();
+                let cond = clauses.into_iter().map(|c| c.item()).collect();
                 let join_filter = other.iter().map(|q| q.item()).collect();
                 Node::new(
                     Kind::HashJoin { join: self.join, cond, join_filter },
@@ -4036,7 +4092,7 @@ impl<'q> Candidate<'q> {
                 if self.materialize {
                     inner_node = merge_materialize(inner_node);
                 }
-                let cond = clauses.into_iter().map(|(c, _, _)| c.item).collect();
+                let cond = clauses.into_iter().map(|(c, _, _)| c.item()).collect();
                 let join_filter = other.iter().map(|q| q.item()).collect();
                 Node::new(
                     Kind::MergeJoin { join: self.join, cond, join_filter },

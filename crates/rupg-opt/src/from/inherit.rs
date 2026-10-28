@@ -219,6 +219,7 @@ pub(super) fn scan<'q>(
     stats.all_visible.remove(&r);
     stats.ranges.retain(|&(at, _), _| at != r);
     stats.rows.insert(r, (tuples, rows));
+    stats.cache.take();
     if rows > 0.0 {
         for (attnum, s) in &sizes {
             let width = (s / rows).round_ties_even() as i32;
@@ -263,6 +264,7 @@ pub(super) fn param_scans<'q>(
     let mut outers: Vec<BTreeSet<usize>> = Vec::new();
     for m in &parent.members {
         let mut s = stats.clone();
+        s.cache.take();
         s.columns.insert(r, m.columns.clone());
         s.pages.insert(r, m.base.pages);
         s.ranges.retain(|&(at, _), _| at != r);
