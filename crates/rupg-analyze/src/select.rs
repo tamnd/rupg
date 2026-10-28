@@ -315,6 +315,45 @@ impl Analyzer<'_> {
         result
     }
 
+    /// `assign_query_collations`: the errors of the collations of the expressions of a `SELECT`. A target of `ORDER BY`, `GROUP BY`, `DISTINCT` or a window must not have a conflict of implicit collations.
+    fn query_collations(
+        &self,
+        targets: &[Target],
+        from: &[FromItem],
+        sorts: [&[SortGroup]; 3],
+        windows: &[WindowClause],
+        exprs: [&Option<Expr>; 4],
+    ) -> Result<()> {
+        fn joins<'a>(item: &'a FromItem, out: &mut Vec<&'a Expr>) {
+            if let FromItem::Join(j) = item {
+                joins(&j.left, out);
+                joins(&j.right, out);
+                out.extend(&j.on);
+            }
+        }
+        let mut levels = vec![&self.scope.relations[..]];
+        levels.extend(self.outer.iter().rev().map(|s| &s.relations[..]));
+        let catalog = self.env.catalog();
+        let windows = windows.iter().flat_map(|w| w.partition.iter().chain(&w.order));
+        let sorted: Vec<usize> =
+            sorts.into_iter().flatten().chain(windows).map(|s| s.target).collect();
+        for (i, target) in targets.iter().enumerate() {
+            let state = crate::collate::state(&target.expr, &levels, catalog)?;
+            if sorted.contains(&i) {
+                state.check(catalog)?;
+            }
+        }
+        let mut rest = Vec::new();
+        for item in from {
+            joins(item, &mut rest);
+        }
+        rest.extend(exprs.into_iter().flatten());
+        for expr in rest {
+            crate::collate::state(expr, &levels, catalog)?;
+        }
+        Ok(())
+    }
+
     /// The query tree of a `SELECT` that is not a set operation or a `VALUES` list.
     fn plain_select(&mut self, s: &SelectStmt, keep_unknowns: bool) -> Result<Query> {
         // The subqueries of the query are not the value of the assignment.
@@ -365,6 +404,13 @@ impl Analyzer<'_> {
                 target.expr = self.coerce(expr, oid::TEXT, -1, Context::Implicit, None)?;
             }
         }
+        self.query_collations(
+            &targets,
+            &from,
+            [&sort, &group, &distinct],
+            &windows,
+            [&filter, &having, &offset, &limit],
+        )?;
         let group_distinct = s.groupDistinct;
         let grouped =
             self.has_aggs || !group.is_empty() || !grouping_sets.is_empty() || having.is_some();

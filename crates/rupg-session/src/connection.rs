@@ -6253,6 +6253,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/collate_literal.test")));
     }
 
+    /// Two different explicit collations give an error, and so does a conflict of implicit collations in an item of `ORDER BY` or `GROUP BY`, in a set operation but `UNION ALL`, and in the items of `ORDER BY` of an aggregate call, as `assign_collations_walker` and `select_common_collation` give them. A recursive query must have the same collations in its non-recursive term as overall. `connection/collate_conflict.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn collate_conflict() {
+        big_stack(|| script(include_str!("connection/collate_conflict.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

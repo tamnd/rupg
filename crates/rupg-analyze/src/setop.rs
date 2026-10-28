@@ -9,6 +9,7 @@ use rupg_types::oid;
 use crate::Analyzer;
 use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
+use crate::collate::State;
 use crate::expr::{Expr, ExprKind, Var};
 use crate::from::{Column, Relation};
 use crate::select::{Query, Target, into_not_allowed};
@@ -43,6 +44,8 @@ pub struct SetOp {
     pub right: SetTree,
     /// The type and the typmod of each column of the result.
     pub columns: Vec<(u32, i32)>,
+    /// `colCollations`: the collation of each column of the result, or 0 for none.
+    pub collations: Vec<u32>,
     /// The operators that find the equal rows, one for each column, as `groupClauses`. `UNION ALL` has none.
     pub groups: Vec<SortGroup>,
     /// For the `UNION` of a recursive query of `WITH`, as `RecursiveUnion`, the number of the work table that the reference of the recursive term reads. The right side runs again with the rows of the last step in the work table until it gives no new rows.
@@ -138,7 +141,7 @@ impl Analyzer<'_> {
         if let Some(into) = &leftmost.intoClause {
             return Err(into_not_allowed(into));
         }
-        let (tree, _) = self.set_tree(s, true, std::ptr::from_ref(leftmost), parent)?;
+        let (tree, _, _) = self.set_tree(s, true, std::ptr::from_ref(leftmost), parent)?;
         let SetTree::Op(op) = tree else {
             return Err(Error::internal("a set operation with no operation"));
         };
@@ -229,7 +232,7 @@ impl Analyzer<'_> {
         top: bool,
         leftmost: *const SelectStmt,
         parent: Option<usize>,
-    ) -> Result<(SetTree, Vec<Expr>)> {
+    ) -> Result<(SetTree, Vec<Expr>, Vec<State>)> {
         if let Some(into) = &s.intoClause
             && !std::ptr::eq(s, leftmost)
         {
@@ -254,6 +257,13 @@ impl Analyzer<'_> {
             let query = self.sub_select(s, false)?;
             let shown = query.targets.iter().filter(|t| !t.junk);
             let exprs: Vec<Expr> = shown.clone().map(|t| t.expr.clone()).collect();
+            let mut levels = vec![&query.relations[..], &self.scope.relations[..]];
+            levels.extend(self.outer.iter().rev().map(|s| &s.relations[..]));
+            let catalog = self.env.catalog();
+            let states = exprs
+                .iter()
+                .map(|e| crate::collate::state(e, &levels, catalog))
+                .collect::<Result<Vec<_>>>()?;
             let columns = shown
                 .map(|t| Column {
                     name: t.name.clone(),
@@ -267,7 +277,7 @@ impl Analyzer<'_> {
             let mut relation = Relation::new(0, columns, subquery, None, None);
             relation.name = "unnamed_subquery".to_string();
             self.scope.relations.push(relation);
-            return Ok((SetTree::Leaf(index), exprs));
+            return Ok((SetTree::Leaf(index), exprs, states));
         }
         let (kind, context) = match s.op {
             SetOperation::SETOP_UNION => (SetKind::Union, "UNION"),
@@ -277,16 +287,22 @@ impl Analyzer<'_> {
         let (Some(larg), Some(rarg)) = (s.larg.as_deref(), s.rarg.as_deref()) else {
             return Err(Error::internal("a set operation with no arguments"));
         };
-        let (left, lexprs) = self.set_tree(larg, false, leftmost, parent)?;
+        let (left, lexprs, lstates) = self.set_tree(larg, false, leftmost, parent)?;
         // `determineRecursiveColTypes`: the recursive term reads the columns that the non-recursive term gives.
         let recursive = self.recursive_parent(parent).is_some();
         if top
             && recursive
             && let Some(slot) = parent
         {
-            self.recursive_columns(slot, left.leftmost(), &lexprs)?;
+            let ty = |e: &Expr| if e.ty == oid::UNKNOWN { oid::TEXT } else { e.ty };
+            self.recursive_columns(
+                slot,
+                left.leftmost(),
+                &lexprs,
+                lexprs.iter().zip(&lstates).map(|(e, s)| s.coerced(ty(e), None).oid()).collect(),
+            )?;
         }
-        let (right, rexprs) = self.set_tree(rarg, false, leftmost, parent)?;
+        let (right, rexprs, rstates) = self.set_tree(rarg, false, leftmost, parent)?;
         if lexprs.len() != rexprs.len() {
             return Err(Error::new(
                 SqlState::SYNTAX_ERROR,
@@ -297,9 +313,19 @@ impl Analyzer<'_> {
         let mut columns = Vec::with_capacity(lexprs.len());
         let mut groups = Vec::new();
         let mut exprs = Vec::with_capacity(lexprs.len());
+        let mut collations = Vec::with_capacity(lexprs.len());
+        let mut states = Vec::with_capacity(lexprs.len());
+        let catalog = self.env.catalog();
         for (i, (l, r)) in lexprs.into_iter().zip(rexprs).enumerate() {
             let ty = self.common_type(&[l.clone(), r.clone()], context)?;
             let at = best([&l, &r], ty);
+            // `select_common_collation`: each operation but `UNION ALL` needs a common collation.
+            let (left_state, right_state) =
+                (lstates[i].coerced(ty, l.place()), rstates[i].coerced(ty, r.place()));
+            let mut state = left_state.merge(right_state, catalog)?;
+            if kind != SetKind::Union || !s.all {
+                state = state.check(catalog)?;
+            }
             let l = self.set_column(&left, i, l, ty, context)?;
             let r = self.set_column(&right, i, r, ty, context)?;
             // select_common_typmod: the typmod of the columns when they have the type and the same typmod.
@@ -315,12 +341,24 @@ impl Analyzer<'_> {
                 groups.push(group);
             }
             columns.push((ty, typmod));
+            let collation = state.oid();
+            collations.push(collation);
+            states.push(if collation == 0 { State::None } else { State::Implicit(collation, at) });
             exprs.push(Expr { kind: ExprKind::CaseTest, ty, typmod, location: at });
         }
         let work = if top { self.work_table(parent) } else { None };
-        let op =
-            SetOp { kind, all: s.all, left, right, columns, groups, work, project: Vec::new() };
-        Ok((SetTree::Op(Box::new(op)), exprs))
+        let op = SetOp {
+            kind,
+            all: s.all,
+            left,
+            right,
+            columns,
+            collations,
+            groups,
+            work,
+            project: Vec::new(),
+        };
+        Ok((SetTree::Op(Box::new(op)), exprs, states))
     }
 
     /// `coerce_to_common_type` for a column of a part of a set operation. A constant or a parameter of type `unknown` in a `SELECT` gets the type, so that an error of its input points at it. The other columns of each `SELECT` of the part get a cast to the type, as `generate_setop_tlist` adds it.
