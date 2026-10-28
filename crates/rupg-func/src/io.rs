@@ -579,6 +579,20 @@ fn record_send(record: &Record, out: &mut Vec<u8>) -> Result<()> {
 }
 
 /// The elements of an `int2vector` or an `oidvector`, which have no null element.
+/// `max_stack_depth` in kilobytes, from its text with a unit such as `2MB` or `100kB`.
+fn max_stack_depth(session: &dyn Session) -> Option<u32> {
+    let text = session.setting("max_stack_depth")?;
+    let digits = text.find(|c: char| !c.is_ascii_digit()).unwrap_or(text.len());
+    let n: u32 = text[..digits].parse().ok()?;
+    let scale = match text[digits..].trim() {
+        "" | "kB" => 1,
+        "MB" => 1024,
+        "GB" => 1024 * 1024,
+        _ => return None,
+    };
+    n.checked_mul(scale)
+}
+
 /// The check of `check_valid_oidvector` and `check_valid_int2vector`: a cast from an array can give a value that has no dimension, more than one dimension or a null element.
 fn check_vector(array: &Array<Value>, name: &str) -> Result<()> {
     if array.dims.len() != 1 || array.values.iter().any(Option::is_none) {
@@ -824,8 +838,8 @@ fn input_value(
         oid::VOID => Value::Text(String::new()),
         oid::VARCHAR => Value::text(types::varchar_in(text, typmod)?),
         oid::BPCHAR => Value::text(types::bpchar_in(text, typmod)?),
-        oid::JSON => Value::text(types::json_in(text)?),
-        oid::JSONB => Value::Text(types::jsonb_in(text)?),
+        oid::JSON => Value::text(types::json_in_within(text, max_stack_depth(session))?),
+        oid::JSONB => Value::Text(types::jsonb_in_within(text, max_stack_depth(session))?),
         oid::FLOAT4 => Value::Float4(types::float4_in(text)?),
         oid::FLOAT8 => Value::Float8(types::float8_in(text)?),
         oid::NUMERIC => Value::Numeric(types::numeric_in(text, typmod)?),

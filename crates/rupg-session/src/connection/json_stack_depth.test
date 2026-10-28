@@ -1,0 +1,79 @@
+!details
+> select length(repeat('[', 16321)::json::text)
+ERROR 22P02 invalid input syntax for type json (JSON data, line 1: ...[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[)
+DETAIL The input string ended unexpectedly.
+> select length(repeat('[', 16322)::json::text)
+ERROR 54001 stack depth limit exceeded
+HINT Increase the configuration parameter "max_stack_depth" (currently 2048kB), after ensuring the platform's stack depth limit is adequate.
+> set max_stack_depth = '100kB'
+SET
+> select repeat('[', 10000)::json
+ERROR 54001 stack depth limit exceeded
+HINT Increase the configuration parameter "max_stack_depth" (currently 100kB), after ensuring the platform's stack depth limit is adequate.
+> select repeat('{"a":', 10000)::json
+ERROR 54001 stack depth limit exceeded
+HINT Increase the configuration parameter "max_stack_depth" (currently 100kB), after ensuring the platform's stack depth limit is adequate.
+> select repeat('[', 10000)::jsonb
+ERROR 54001 stack depth limit exceeded
+HINT Increase the configuration parameter "max_stack_depth" (currently 100kB), after ensuring the platform's stack depth limit is adequate.
+> select repeat('{"a":', 10000)::jsonb
+ERROR 54001 stack depth limit exceeded
+HINT Increase the configuration parameter "max_stack_depth" (currently 100kB), after ensuring the platform's stack depth limit is adequate.
+> select length(repeat('[', 737)::json::text)
+ERROR 22P02 invalid input syntax for type json (JSON data, line 1: ...[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[)
+DETAIL The input string ended unexpectedly.
+> select length(repeat('[', 738)::json::text)
+ERROR 54001 stack depth limit exceeded
+HINT Increase the configuration parameter "max_stack_depth" (currently 100kB), after ensuring the platform's stack depth limit is adequate.
+> select length(repeat('{"a":', 981)::jsonb::text)
+ERROR 22P02 invalid input syntax for type json (JSON data, line 1: ..."a":{"a":{"a":{"a":{"a":{"a":{"a":{"a":{"a":{"a":)
+DETAIL The input string ended unexpectedly.
+> select length(repeat('{"a":', 982)::jsonb::text)
+ERROR 54001 stack depth limit exceeded
+HINT Increase the configuration parameter "max_stack_depth" (currently 100kB), after ensuring the platform's stack depth limit is adequate.
+> select (repeat('[', 700) || repeat(']', 700))::jsonb = (repeat('[', 700) || repeat(']', 700))::jsonb
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> select length((repeat('[[],', 700) || '1' || repeat(']', 700))::json::text)
+fields length:23:4:-1
+row 3501
+SELECT 1
+> set max_stack_depth = '1000kB'
+SET
+> select length(repeat('[', 7937)::json::text)
+ERROR 22P02 invalid input syntax for type json (JSON data, line 1: ...[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[)
+DETAIL The input string ended unexpectedly.
+> select length(repeat('[', 7938)::json::text)
+ERROR 54001 stack depth limit exceeded
+HINT Increase the configuration parameter "max_stack_depth" (currently 1000kB), after ensuring the platform's stack depth limit is adequate.
+> reset max_stack_depth
+RESET
+> select '[[1,2],{"a":[3]}]'::jsonb
+fields jsonb:3802:-1:-1
+row [[1, 2], {"a": [3]}]
+SELECT 1
+> set max_stack_depth = '100kB'
+SET
+> select length(repeat('[', 736)::jsonb::text)
+ERROR 22P02 invalid input syntax for type json (JSON data, line 1: ...[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[)
+DETAIL The input string ended unexpectedly.
+> select length(repeat('[', 737)::jsonb::text)
+ERROR 54001 stack depth limit exceeded
+HINT Increase the configuration parameter "max_stack_depth" (currently 100kB), after ensuring the platform's stack depth limit is adequate.
+> select length(repeat('{"a":', 982)::json::text)
+ERROR 22P02 invalid input syntax for type json (JSON data, line 1: ..."a":{"a":{"a":{"a":{"a":{"a":{"a":{"a":{"a":{"a":)
+DETAIL The input string ended unexpectedly.
+> select length(repeat('{"a":', 983)::json::text)
+ERROR 54001 stack depth limit exceeded
+HINT Increase the configuration parameter "max_stack_depth" (currently 100kB), after ensuring the platform's stack depth limit is adequate.
+> select length(('[' || repeat('{"a":[', 400))::json::text)
+ERROR 22P02 invalid input syntax for type json (JSON data, line 1: ...[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[)
+DETAIL The input string ended unexpectedly.
+> select length(('[' || repeat('{"a":[', 420))::json::text)
+ERROR 22P02 invalid input syntax for type json (JSON data, line 1: ...[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[{"a":[)
+DETAIL The input string ended unexpectedly.
+> show max_stack_depth
+fields max_stack_depth:25:-1:-1
+row 100kB
+SHOW

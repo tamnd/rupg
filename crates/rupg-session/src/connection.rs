@@ -6551,6 +6551,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/array_vector_sort.test")));
     }
 
+    /// `check_stack_depth` in `parse_array` and `parse_object`: the input of `json` and `jsonb` fails with `stack depth limit exceeded` when the levels of the value need more stack than `max_stack_depth`, and the hint shows the setting.
+    #[test]
+    fn json_stack_depth() {
+        big_stack(|| script(include_str!("connection/json_stack_depth.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

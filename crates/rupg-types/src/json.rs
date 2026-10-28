@@ -417,6 +417,46 @@ impl Sink for Check {
 
 /// `pg_parse_json`, which gives each event to `sink`. With `escapes` set, the lexer decodes the strings and refuses the escapes that do not make text.
 pub(crate) fn parse(input: &str, escapes: bool, sink: &mut impl Sink) -> Result<(), Stop> {
+    parse_within(input, escapes, None, 0, sink)
+}
+
+/// The stack that the parse of PostgreSQL uses before the first level for `json_in` and for `jsonb_in`, and for each level of an array and of an object. `parse_array` and `parse_object` call `check_stack_depth`, so a value fails when its levels need more stack than `max_stack_depth`.
+pub(crate) const JSON_STACK: usize = 8050;
+pub(crate) const JSONB_STACK: usize = 8150;
+
+fn frame(open: Open) -> usize {
+    match open {
+        Open::Array => 128,
+        Open::Object => 96,
+    }
+}
+
+/// The error of `check_stack_depth` with the value of `max_stack_depth` in kilobytes.
+pub(crate) fn stack_too_deep(kb: u32) -> TypeError {
+    let mut error =
+        TypeError::new(SqlState::STATEMENT_TOO_COMPLEX, "stack depth limit exceeded".to_string());
+    error.hint = Some(format!(
+        "Increase the configuration parameter \"max_stack_depth\" (currently {kb}kB), after ensuring the platform's stack depth limit is adequate."
+    ));
+    error
+}
+
+/// [`parse`] with the limit of `max_stack_depth` in kilobytes, as `check_stack_depth` gives it to the parse of PostgreSQL.
+pub(crate) fn parse_within(
+    input: &str,
+    escapes: bool,
+    stack_kb: Option<u32>,
+    base: usize,
+    sink: &mut impl Sink,
+) -> Result<(), Stop> {
+    let limit = stack_kb.map_or(usize::MAX, |kb| (kb as usize).saturating_mul(1024));
+    let mut used = base;
+    let deep = |used: usize, open: Open| -> Result<(), Stop> {
+        match stack_kb {
+            Some(kb) if used + frame(open) > limit => Err(Stop::Action(stack_too_deep(kb))),
+            _ => Ok(()),
+        }
+    };
     let text = |token: Token| &input[token.start..token.end];
     let input = input.as_bytes();
     let mut lexer = Lexer { input, at: 0, escapes, text: String::new() };
@@ -435,6 +475,8 @@ pub(crate) fn parse(input: &str, escapes: bool, sink: &mut impl Sink) -> Result<
                 }
                 match token.kind {
                     Kind::ObjectStart => {
+                        deep(used, Open::Object)?;
+                        used += frame(Open::Object);
                         stack.push(Open::Object);
                         sink.open_at(Open::Object, token.start).map_err(Stop::Action)?;
                         token = lexer.next()?;
@@ -442,6 +484,7 @@ pub(crate) fn parse(input: &str, escapes: bool, sink: &mut impl Sink) -> Result<
                             Kind::String => Step::Field,
                             Kind::ObjectEnd => {
                                 stack.pop();
+                                used -= frame(Open::Object);
                                 let end = token.end;
                                 token = lexer.next()?;
                                 sink.close_at(Open::Object, end).map_err(Stop::Action)?;
@@ -451,6 +494,7 @@ pub(crate) fn parse(input: &str, escapes: bool, sink: &mut impl Sink) -> Result<
                         }
                     }
                     Kind::ArrayStart => {
+                        deep(used, Open::Array)?;
                         sink.open_at(Open::Array, token.start).map_err(Stop::Action)?;
                         token = lexer.next()?;
                         if token.kind == Kind::ArrayEnd {
@@ -459,6 +503,7 @@ pub(crate) fn parse(input: &str, escapes: bool, sink: &mut impl Sink) -> Result<
                             sink.close_at(Open::Array, end).map_err(Stop::Action)?;
                             Step::After
                         } else {
+                            used += frame(Open::Array);
                             stack.push(Open::Array);
                             Step::Value
                         }
@@ -505,6 +550,7 @@ pub(crate) fn parse(input: &str, escapes: bool, sink: &mut impl Sink) -> Result<
                     next
                 } else if token.kind == close {
                     stack.pop();
+                    used -= frame(open);
                     let end = token.end;
                     token = lexer.next()?;
                     sink.close_at(open, end).map_err(Stop::Action)?;
@@ -519,7 +565,12 @@ pub(crate) fn parse(input: &str, escapes: bool, sink: &mut impl Sink) -> Result<
 
 /// The text input of `json`: the string, after a check of the syntax.
 pub fn json_in(s: &str) -> Result<&str, TypeError> {
-    match parse(s, false, &mut Check) {
+    json_in_within(s, None)
+}
+
+/// [`json_in`] with the limit of `max_stack_depth` in kilobytes.
+pub fn json_in_within(s: &str, stack_kb: Option<u32>) -> Result<&str, TypeError> {
+    match parse_within(s, false, stack_kb, JSON_STACK, &mut Check) {
         Ok(()) => Ok(s),
         Err(Stop::Syntax(fail)) => Err(syntax(s, fail)),
         Err(Stop::Action(error)) => Err(error),
