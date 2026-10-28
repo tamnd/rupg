@@ -377,41 +377,45 @@ impl Analyzer<'_> {
                 let expr = build_cast(expr, func, base, base_typmod, context, form, location);
                 Ok(coerce_to_domain(expr, target, context, location, true))
             }
-            // ArrayCoerceExpr with a relabel of each element: the array keeps its values.
-            Path::ArrayCoerce
-                if find_path(types::element(target), types::element(input), context)
-                    == Path::Relabel =>
-            {
-                Ok(Expr {
-                    kind: ExprKind::Relabel(Box::new(expr), cast),
-                    ty: target,
-                    typmod: -1,
-                    location,
-                })
-            }
+            // The ArrayCoerceExpr gives the base type of a domain over an array, and the domain checks the result.
             Path::ArrayCoerce => {
-                let test = Expr {
-                    kind: ExprKind::CaseTest,
-                    ty: types::element(input),
-                    typmod: expr.typmod,
-                    location: None,
+                let (target_element, input_element) =
+                    (types::element(base), types::element(types::base(input)));
+                // A relabel of each element keeps the values of the array, unless the element type is a domain, which checks each element.
+                let coerced = if find_path(target_element, input_element, context) == Path::Relabel
+                    && types::base(target_element) == target_element
+                {
+                    Expr {
+                        kind: ExprKind::Relabel(Box::new(expr), cast),
+                        ty: base,
+                        typmod: -1,
+                        location,
+                    }
+                } else {
+                    let test = Expr {
+                        kind: ExprKind::CaseTest,
+                        ty: input_element,
+                        typmod: expr.typmod,
+                        location: None,
+                    };
+                    let element = self
+                        .coerce_to_target(test, target_element, base_typmod, context, location)?
+                        .ok_or_else(|| {
+                            Error::internal("failed to coerce array element type as expected")
+                        })?;
+                    let typmod = element.typmod;
+                    Expr {
+                        kind: ExprKind::ArrayCoerce {
+                            arg: Box::new(expr),
+                            element: Box::new(element),
+                            form: cast,
+                        },
+                        ty: base,
+                        typmod,
+                        location,
+                    }
                 };
-                let element = self
-                    .coerce_to_target(test, types::element(target), typmod, context, location)?
-                    .ok_or_else(|| {
-                        Error::internal("failed to coerce array element type as expected")
-                    })?;
-                let typmod = element.typmod;
-                Ok(Expr {
-                    kind: ExprKind::ArrayCoerce {
-                        arg: Box::new(expr),
-                        element: Box::new(element),
-                        form: cast,
-                    },
-                    ty: target,
-                    typmod,
-                    location,
-                })
+                Ok(coerce_to_domain(coerced, target, context, location, true))
             }
         }
     }

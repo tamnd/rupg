@@ -1,0 +1,107 @@
+!details
+> create domain apos as int check (value > 0)
+CREATE DOMAIN
+> create table apt (f1 apos[])
+CREATE TABLE
+> insert into apt values(array[42])
+INSERT 0 1
+> insert into apt values(array[-1])
+ERROR 23514 value for domain apos violates check constraint "apos_check"
+> insert into apt values('{0}')
+ERROR 23514 value for domain apos violates check constraint "apos_check" at 24
+> update apt set f1[1] = f1[1] + 1
+UPDATE 1
+> update apt set f1[1] = 0
+ERROR 23514 value for domain apos violates check constraint "apos_check"
+> select f1::text from apt
+fields f1:25:-1:-1
+row {43}
+SELECT 1
+> explain (verbose, costs off) insert into apt values(array[-1])
+fields QUERY PLAN:25:-1:-1
+row Insert on public.apt
+row   ->  Result
+row         Output: '{-1}'::integer[]
+EXPLAIN
+> select (array[-1]::apos[])::text
+fields array:25:-1:-1
+ERROR 23514 value for domain apos violates check constraint "apos_check"
+> drop table apt
+DROP TABLE
+> create domain avc4 as varchar(4)
+CREATE DOMAIN
+> create table avt (f1 avc4[])
+CREATE TABLE
+> insert into avt values(array['too long'])
+ERROR 22001 value too long for type character varying(4)
+> insert into avt values(array['too long']::avc4[])
+INSERT 0 1
+> select f1::text from avt
+fields f1:25:-1:-1
+row {"too "}
+SELECT 1
+> drop table avt
+DROP TABLE
+> drop domain avc4
+DROP DOMAIN
+> drop domain apos
+DROP DOMAIN
+> create domain qpos as int check (value > 0)
+CREATE DOMAIN
+> create domain qposa as qpos[]
+CREATE DOMAIN
+> create table qt (f1 qposa[])
+CREATE TABLE
+> insert into qt values(array[array[42]])
+ERROR 42804 column "f1" is of type qposa[] but expression is of type integer[] at 23
+HINT You will need to rewrite or cast the expression.
+> insert into qt values(array[array[42]::qpos[]])
+ERROR 42804 column "f1" is of type qposa[] but expression is of type qpos[] at 23
+HINT You will need to rewrite or cast the expression.
+> insert into qt values(array[array[42]::qposa])
+INSERT 0 1
+> update qt set f1[2] = array[99]
+UPDATE 1
+> select f1::text, f1[1]::text, (f1[2])[1] from qt
+fields f1:25:-1:-1,f1:25:-1:-1,f1:23:4:-1
+row {"{42}","{99}"},{42},99
+SELECT 1
+> update qt set f1[2] = array[-1]
+ERROR 23514 value for domain qpos violates check constraint "qpos_check"
+> update qt set f1[2][1] = array[97]
+ERROR 2202E wrong number of array subscripts
+> select (array[1,2]::qposa)::text
+fields array:25:-1:-1
+row {1,2}
+SELECT 1
+> select (array[1,-2]::qposa)::text
+fields array:25:-1:-1
+ERROR 23514 value for domain qpos violates check constraint "qpos_check"
+> select ('{3}'::int[]::qposa)::text
+fields text:25:-1:-1
+row {3}
+SELECT 1
+> create domain qia as int[] check (cardinality(value) < 3)
+CREATE DOMAIN
+> select array[1,2]::qia
+fields array:1007:-1:-1
+row {1,2}
+SELECT 1
+> select array[1,2,3]::qia
+fields array:1007:-1:-1
+ERROR 23514 value for domain qia violates check constraint "qia_check"
+> select array[1.5]::qia
+fields array:1007:-1:-1
+row {2}
+SELECT 1
+> select array[1.5, 2, 3]::qia
+fields array:1007:-1:-1
+ERROR 23514 value for domain qia violates check constraint "qia_check"
+> drop domain qia
+DROP DOMAIN
+> drop table qt
+DROP TABLE
+> drop domain qposa
+DROP DOMAIN
+> drop domain qpos
+DROP DOMAIN
