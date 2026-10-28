@@ -70,6 +70,8 @@ const EQUAL: i16 = 3;
 const TEXT_PATTERN_FAMILY: u32 = 2095;
 /// `BPCHAR_PATTERN_BTREE_FAM_OID`, the operator family `bpchar_pattern_ops` of btree.
 const BPCHAR_PATTERN_FAMILY: u32 = 2097;
+/// `TEXT_SPGIST_FAM_OID`, the operator family `text_ops` of spgist, which has the pattern operators and `^@`.
+const TEXT_SPGIST_FAMILY: u32 = 4017;
 /// `C_COLLATION_OID`, the collation of the type `name`.
 const C_COLLATION: u32 = 950;
 /// `INDOPTION_DESC`.
@@ -924,7 +926,7 @@ fn bitmap_clauses<'q>(r: usize, index: &Index, sources: &[&Source<'q>]) -> Vec<C
     out
 }
 
-/// `match_clause_to_indexcol`: the condition as clauses of the key column of the index, when the column can test it. An operator of the operator family of the column must have the column on one side and on the other side a value that reads no column of the table and calls no volatile function. With the column on the right, the commutator of the operator must be in the family, and the clause is the condition with the commutator, as `commute_op_clause`. `x op ANY (array)` and `IS NULL` and `IS NOT NULL` of the column are clauses too. A pattern operator with the column on the left gives the lossy clauses of the fixed prefix of the pattern, as `match_pattern_prefix`. A network operator `<<`, `<<=`, `>>` or `>>=` with a constant network gives the lossy clauses of the range of the network, as `network_subset_support`.
+/// `match_clause_to_indexcol`: the condition as clauses of the key column of the index, when the column can test it. An operator of the operator family of the column must have the column on one side and on the other side a value that reads no column of the table and calls no volatile function. With the column on the right, the commutator of the operator must be in the family, and the clause is the condition with the commutator, as `commute_op_clause`. `x op ANY (array)` and `IS NULL` and `IS NOT NULL` of the column are clauses too. A pattern operator with the column on the left gives the lossy clauses of the fixed prefix of the pattern, as `match_pattern_prefix`, and so does `starts_with` of the column, as `textstarts_with_support`. A network operator `<<`, `<<=`, `>>` or `>>=` with a constant network gives the lossy clauses of the range of the network, as `network_subset_support`.
 fn match_clause<'q>(
     r: usize,
     index: &Index,
@@ -1011,6 +1013,29 @@ fn match_one<'q>(
             let args = vec![index_expr.clone(), array];
             let expr = Expr::new(ExprKind::ScalarArrayOp { func, any: true, args }, oid::BOOL);
             Some(clause(Cow::Owned(expr), kind))
+        }
+        // `textstarts_with_support`: `starts_with(column, prefix)` gives the clauses of `column ^@ prefix`.
+        ExprKind::Func(f)
+            if !matches!(f.form, FuncForm::Operator(_))
+                && let [left, right] = f.args.as_slice()
+                && let Some(prefix) = prefix_operator(f.oid)
+                && is_column(left)
+                && other_ok(right) =>
+        {
+            let mut func = f.clone();
+            func.form = FuncForm::Operator(prefix);
+            let as_op = Expr::new(ExprKind::Func(func), oid::BOOL);
+            let derived = prefix_clauses(&as_op, family)?;
+            let lossy = |(expr, s)| Clause {
+                expr: Cow::Owned(expr),
+                column,
+                orig: orig.clone(),
+                at,
+                class,
+                kind: ClauseKind::Op(s),
+                lossy: true,
+            };
+            Some(derived.into_iter().map(lossy).collect())
         }
         _ => {
             let (op, left, right) = exprs::binary(expr)?;
@@ -1229,7 +1254,9 @@ fn array_of_values(element: u32, values: Vec<&Expr>) -> Expr {
 fn prefix_clauses(expr: &Expr, family: u32) -> Option<Vec<(Expr, i16)>> {
     let (op, left, right) = exprs::binary(expr)?;
     let (prefix, exact) = cost::operator_prefix(op, right)?;
-    let pattern = family == TEXT_PATTERN_FAMILY || family == BPCHAR_PATTERN_FAMILY;
+    let pattern = family == TEXT_PATTERN_FAMILY
+        || family == BPCHAR_PATTERN_FAMILY
+        || family == TEXT_SPGIST_FAMILY && left.ty == oid::TEXT;
     let (less, greater_equal) = if pattern { ("~<~", "~>=~") } else { ("<", ">=") };
     let (left_ty, right_ty) = match left.ty {
         oid::TEXT if family != BPCHAR_PATTERN_FAMILY => (oid::TEXT, oid::TEXT),
@@ -1257,6 +1284,10 @@ fn prefix_clauses(expr: &Expr, family: u32) -> Option<Vec<(Expr, i16)>> {
     if exact {
         return Some(vec![make("=", &prefix)?]);
     }
+    // The spgist family of `text` tests a prefix with `^@`.
+    if family == TEXT_SPGIST_FAMILY && left_ty == oid::TEXT {
+        return Some(vec![make("^@", &prefix)?]);
+    }
     let mut out = vec![make(greater_equal, &prefix)?];
     if let Some(greater) = cost::greater_bytes(&prefix, right_ty == oid::BYTEA)
         && let Some(clause) = make(less, &greater)
@@ -1264,6 +1295,13 @@ fn prefix_clauses(expr: &Expr, family: u32) -> Option<Vec<(Expr, i16)>> {
         out.push(clause);
     }
     Some(out)
+}
+
+/// The operator `^@` of `text` when `proc` is its function `starts_with`, which `textstarts_with_support` makes index clauses for.
+fn prefix_operator(proc: u32) -> Option<u32> {
+    builtin::operators_named("^@")
+        .find(|o| o.left == oid::TEXT && o.right == oid::TEXT && o.code == proc)
+        .map(|o| o.oid)
 }
 
 /// `network_subset_support` and `match_network_subset`: the clauses of the column for `column << value` and `column <<= value` of `inet` when `left` is true, and for `value >> column` and `value >>= column` when it is false, with their strategies. The value must be a constant that is not NULL. The clauses are `>` of `network_scan_first` of the value, or `>=` for `<<=` and `>>=`, and `<=` of `network_scan_last`: the network of the value, and its broadcast address with the whole mask. Each operator must be in the family of the column.

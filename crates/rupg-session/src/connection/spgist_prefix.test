@@ -1,0 +1,66 @@
+!details
+> create table rt (t text, b bytea)
+CREATE TABLE
+> insert into rt select 'Worth' || g, null from generate_series(1, 50) g
+INSERT 0 50
+> insert into rt select md5(g::text), null from generate_series(1, 500) g
+INSERT 0 500
+> create index rt_sp on rt using spgist (t)
+CREATE INDEX
+> analyze rt
+ANALYZE
+> set enable_seqscan = off
+SET
+> explain (costs off) select count(*) from rt where starts_with(t, 'Worth')
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   ->  Bitmap Heap Scan on rt
+row         Filter: starts_with(t, 'Worth'::text)
+row         ->  Bitmap Index Scan on rt_sp
+row               Index Cond: (t ^@ 'Worth'::text)
+EXPLAIN
+> select count(*) from rt where starts_with(t, 'Worth')
+fields count:20:8:-1
+row 50
+SELECT 1
+> explain (costs off) select count(*) from rt where t like 'Worth1%'
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   ->  Bitmap Heap Scan on rt
+row         Filter: (t ~~ 'Worth1%'::text)
+row         ->  Bitmap Index Scan on rt_sp
+row               Index Cond: (t ^@ 'Worth1'::text)
+EXPLAIN
+> select count(*) from rt where t like 'Worth1%'
+fields count:20:8:-1
+row 11
+SELECT 1
+> explain (costs off) select count(*) from rt where t like 'Worth1'
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   ->  Index Only Scan using rt_sp on rt
+row         Index Cond: (t = 'Worth1'::text)
+row         Filter: (t ~~ 'Worth1'::text)
+EXPLAIN
+> explain (costs off) select count(*) from rt where t ~ '^Worth2'
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   ->  Bitmap Heap Scan on rt
+row         Filter: (t ~ '^Worth2'::text)
+row         ->  Bitmap Index Scan on rt_sp
+row               Index Cond: (t ^@ 'Worth2'::text)
+EXPLAIN
+> select count(*) from rt where t ~ '^Worth2'
+fields count:20:8:-1
+row 11
+SELECT 1
+> explain (costs off) select count(*) from rt where t ^@ 'Worth3'
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   ->  Bitmap Heap Scan on rt
+row         Recheck Cond: (t ^@ 'Worth3'::text)
+row         ->  Bitmap Index Scan on rt_sp
+row               Index Cond: (t ^@ 'Worth3'::text)
+EXPLAIN
+> set enable_indexonlyscan = off
+SET
