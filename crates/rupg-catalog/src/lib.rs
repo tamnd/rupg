@@ -2326,8 +2326,13 @@ impl Catalog {
         self.create_relation(new, RelKind::Partitioned)
     }
 
-    /// `StorePartitionKey`: the row of `pg_partitioned_table`. The table depends on the operator class and the collation of each key column.
-    pub fn set_partition_key(&mut self, table: u32, key: PartitionKey) -> Result<()> {
+    /// `StorePartitionKey`: the row of `pg_partitioned_table`. The table depends on the operator class and the collation of each key column. Each column of the key, and each column that `refs` of the expressions of the key has, depends internally on the table, so that the column goes only with the table. The table depends on the other objects of `refs`.
+    pub fn set_partition_key(
+        &mut self,
+        table: u32,
+        key: PartitionKey,
+        refs: &[ObjRef],
+    ) -> Result<()> {
         // `DEFAULT_COLLATION_OID`: the table does not depend on it.
         const DEFAULT_COLLATION: u32 = 100;
         let class = ObjRef::new(PG_CLASS, table);
@@ -2337,13 +2342,32 @@ impl Catalog {
             .iter()
             .filter(|&&c| c != 0 && c != DEFAULT_COLLATION)
             .map(|&c| ObjRef::new(PG_COLLATION, c));
-        let refs: Vec<ObjRef> = classes.chain(collations).collect();
+        let mut found: Vec<ObjRef> = classes.chain(collations).collect();
+        found.sort_unstable();
+        found.dedup();
+        let columns: Vec<i16> = key.attrs.iter().copied().filter(|&a| a != 0).collect();
         let Some(rel) = self.relations.get_mut(&table) else {
             return Err(no_object("relation", table));
         };
         rel.partition_key = Some(key);
-        for found in refs {
-            self.depend(class, found, DepKind::Normal);
+        for object in found {
+            self.depend(class, object, DepKind::Normal);
+        }
+        for column in columns {
+            self.depend(ObjRef::column(table, column), class, DepKind::Internal);
+        }
+        // `recordDependencyOnSingleRelExpr` with the self-dependencies reversed.
+        let mut refs = refs.to_vec();
+        refs.sort_unstable();
+        refs.dedup();
+        for object in refs {
+            if object.class == PG_CLASS && object.oid == table {
+                if object.sub != 0 {
+                    self.depend(object, class, DepKind::Internal);
+                }
+            } else {
+                self.depend(class, object, DepKind::Normal);
+            }
         }
         Ok(())
     }
@@ -3899,12 +3923,15 @@ impl Catalog {
         let keys: Vec<i16> = new.columns.iter().map(|c| c.key).collect();
         let key_columns = &new.columns[..new.key_count.min(new.columns.len())];
         // `index_create`: the index depends on the collation of each key column that is not the default and on the operator class of each key column.
-        let column_refs: Vec<ObjRef> = key_columns
+        let mut column_refs: Vec<ObjRef> = key_columns
             .iter()
             .filter(|c| c.collation != 0)
             .map(|c| ObjRef::new(PG_COLLATION, c.collation))
             .chain(key_columns.iter().map(|c| ObjRef::new(PG_OPCLASS, c.class)))
             .collect();
+        // `record_object_address_dependencies` records each object once, as `eliminate_duplicate_dependencies` leaves it.
+        column_refs.sort_unstable();
+        column_refs.dedup();
         let info = IndexInfo {
             table: new.table,
             keys: keys.clone(),
@@ -3986,7 +4013,9 @@ impl Catalog {
             }
             constraint_oid = Some(made);
         } else {
-            let simple: Vec<i16> = keys.iter().copied().filter(|&k| k != 0).collect();
+            let mut simple: Vec<i16> = keys.iter().copied().filter(|&k| k != 0).collect();
+            simple.sort_unstable();
+            simple.dedup();
             if simple.is_empty() {
                 self.depend(me, ObjRef::new(PG_CLASS, new.table), DepKind::Auto);
             }
