@@ -36,6 +36,7 @@ pub fn object_address(
         user,
         messages: Vec::new(),
         scans: Vec::new(),
+        repacked: Vec::new(),
         truncated: Vec::new(),
         transforms: Vec::new(),
         added: Vec::new(),

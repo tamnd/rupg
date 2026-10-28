@@ -67,6 +67,7 @@ mod vacuum;
 mod validate;
 mod view;
 
+pub use cluster::{Order, Repack};
 pub use copy::{
     CopyRelation, CopyTarget, attnums, copy_filter, copy_insert, copy_relation, copy_target,
     rewrite_insert,
@@ -151,6 +152,8 @@ pub struct Defined {
     pub top_level: Option<TopLevel>,
     /// The new index of `CREATE INDEX CONCURRENTLY` on a table that is not temporary, or `None`. The first transaction of `DefineIndex` commits the index before the build, so after a failure of the build the caller keeps the index with `indisvalid` and `indisready` false.
     pub concurrent: Option<u32>,
+    /// The tables of `CLUSTER` and `REPACK`, whose rows the caller writes again to their new files.
+    pub repacked: Vec<Repack>,
 }
 
 /// A statement that cannot run inside a transaction block or in a function, as `PreventInTransactionBlock` checks it.
@@ -198,6 +201,7 @@ pub fn is_definition(stmt: &Node) -> bool {
     matches!(
         stmt,
         Node::CreateStmt(_)
+            | Node::RepackStmt(_)
             | Node::CreateForeignTableStmt(_)
             | Node::CreateTableAsStmt(_)
             | Node::IndexStmt(_)
@@ -331,6 +335,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         schema: None,
         top_level: None,
         concurrent: None,
+        repacked: Vec::new(),
     };
     let mut filled = None;
     let result = match stmt {
@@ -429,6 +434,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::AlterDefaultPrivilegesStmt(stmt) => definer.alter_default_privileges(stmt),
         Node::ReassignOwnedStmt(stmt) => definer.reassign_owned(stmt),
         Node::ReindexStmt(stmt) => definer.reindex(stmt),
+        Node::RepackStmt(stmt) => definer.repack(stmt),
         _ => {
             Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "this statement is not supported yet"))
         }
@@ -463,6 +469,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         schema: definer.schema,
         top_level: definer.top_level,
         concurrent: definer.concurrent,
+        repacked: definer.repacked,
     }
 }
 
@@ -642,6 +649,8 @@ pub(crate) struct Definer<'a, 'c> {
     top_level: Option<TopLevel>,
     /// The index of [`Defined::concurrent`].
     concurrent: Option<u32>,
+    /// The tables of [`Defined::repacked`].
+    repacked: Vec<Repack>,
 }
 
 /// An error for a part of a statement that rupg does not support yet.
@@ -833,7 +842,10 @@ impl Definer<'_, '_> {
 
     /// `object_aclcheck` of `CREATE` on a schema for a role: a superuser, the owner of the schema and a role that `nspacl` grants `CREATE` can create objects in it.
     fn may_create_in(&self, namespace: u32, role: u32) -> bool {
-        rupg_pgcatalog::roles::current().superuser(role)
+        // `pg_namespace_aclmask`: the temporary schema of the session gives all rights, as `InitTempTableNamespace` checked `TEMP` on the database when it made the schema.
+        (namespace != 0 && namespace == self.an.temp)
+            || self.is_own_toast_temp(namespace)
+            || rupg_pgcatalog::roles::current().superuser(role)
             || self.schema_owner(namespace) == Some(role)
             || self.schema_create_allowed(namespace, role)
     }

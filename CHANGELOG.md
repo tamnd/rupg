@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `CLUSTER` and `REPACK` rewrite the table in the order of the index, or in the physical order with no index, with the checks, messages and `VERBOSE` output of PostgreSQL. `REPACK (ANALYZE)` collects the statistics, and an index on a temporary table of another role can be created (#997).
 - `ALTER ... OWNER TO` accepts a role that has the privileges of the owner through an inherited membership, as `object_ownercheck` does. `CREATE SCHEMA`, `ALTER SCHEMA ... RENAME TO`, `ALTER SCHEMA ... OWNER TO`, `REASSIGN OWNED` of a schema and the publication commands check `CREATE` on the database, so a role that is not a superuser can use them after `GRANT CREATE ON DATABASE` (#995).
 - A column of `EXCLUDED` in `ON CONFLICT DO UPDATE` needs `SELECT` on the column of the target table, as in PostgreSQL. Before, `SET three = EXCLUDED.three` worked without the privilege (#994).
 - The detail of a duplicate key shows the key only to a role that can read the table or each column of the key (#993).

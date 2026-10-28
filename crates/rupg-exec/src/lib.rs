@@ -3919,6 +3919,32 @@ pub fn index_key(
     evaluate_row(&derived.exprs, table, types, row, session).map(Some)
 }
 
+/// The sort of `copy_table_data` for `CLUSTER` and `REPACK` on a `btree` index: the rows of the table in the order of the keys of the index, as `tuplesort_begin_cluster` sorts them. Each row has the ID of its version at the end, and a row from before an `ADD COLUMN` has no value for the new columns, which are null in the keys. Rows with equal keys keep their physical order, as the scan of the index gives them.
+///
+/// # Errors
+///
+/// The error of a function of an expression of the index or of a comparison.
+pub fn cluster_order(
+    order: &rupg_analyze::Order,
+    rows: Vec<Vec<Value>>,
+    session: &dyn Session,
+) -> Result<Vec<Vec<Value>>> {
+    let derived = &order.keys;
+    let width = derived.types.len();
+    let mut keyed = Vec::with_capacity(rows.len());
+    for (at, row) in rows.into_iter().enumerate() {
+        let stored = row.len().saturating_sub(1).min(width);
+        let mut values = row[..stored].to_vec();
+        values.resize(width, Value::Null);
+        let key = evaluate_row(&derived.exprs, derived.table, &derived.types, &values, session)?;
+        keyed.push((key, at, row));
+    }
+    let types: Vec<u32> = derived.exprs.iter().map(|e| e.ty).collect();
+    let keys = sort::Keys::new(&order.sort, &types, session)?;
+    sort::qsort(&mut keyed, &mut |a, b| Ok(keys.compare(&a.0, &b.0)?.then(a.1.cmp(&b.1))))?;
+    Ok(keyed.into_iter().map(|(_, _, row)| row).collect())
+}
+
 /// The values of expressions for one row of the relation `oid`, whose columns have the types `types`, such as the expressions of a partition key. A variable of an expression reads the column of the row.
 pub(crate) fn evaluate_row(
     exprs: &[Expr],

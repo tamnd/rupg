@@ -1,6 +1,6 @@
 //! `VACUUM` and `ANALYZE`, as `ExecVacuum` and `vacuum` of `vacuum.c` run them: the options, the checks of the options and of the relations, and the warnings for the relations that the statement skips. `VACUUM` removes the dead row versions of each table, and the statement sets `relpages`, `reltuples`, `relallvisible` and `relallfrozen` of each table. `ANALYZE` writes the statistics of the columns to `pg_statistic`. `VACUUM FULL` runs as a plain `VACUUM`.
 
-use rupg_analyze::VacuumRel;
+use rupg_analyze::{Repack, VacuumRel};
 use rupg_catalog::size::{empty_index_pages, new_table_tuples};
 use rupg_catalog::{Catalog, RelKind, Relation};
 
@@ -541,6 +541,16 @@ impl Connection {
                 heap.set_stats(self.database_oid, index.oid, pages, live as f32);
             }
             None => heap.set_stats(self.database_oid, index.oid, 0, -1.0),
+        }
+    }
+
+    /// The statistics of the tables of `CLUSTER` and `REPACK` after the rewrite: `relpages` and `reltuples`, as `copy_table_data` sets them, and the statistics of the columns of `REPACK (ANALYZE)`, as `analyze_rel` writes them after the commit of the rewrite.
+    pub(super) fn repacked_stats(&self, catalog: &Catalog, repacked: &[Repack]) {
+        for repack in repacked {
+            self.update_relstats(repack.table);
+            if let Some(columns) = &repack.analyze {
+                self.relation_stats(catalog, repack.table, (None, Some(columns)));
+            }
         }
     }
 
