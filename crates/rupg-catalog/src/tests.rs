@@ -630,3 +630,21 @@ fn import_collations() {
     assert_eq!(cat.description(ObjRef::new(PG_COLLATION, 12398)), Some("Unknown language"));
     assert_eq!(cat.collations().count(), 3);
 }
+
+#[test]
+fn toast_moves_long_values() {
+    let mut state = 1u64;
+    let noise: Vec<u8> = (0..9000)
+        .map(|_| {
+            state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            b"abcdefghijklmnopqrstuvwxyz"[(state >> 59) as usize % 26]
+        })
+        .collect();
+    let method = rupg_encode::Method::Lz4;
+    // A short row does not go to the toaster.
+    assert_eq!(toast::moved(32, 136, &[b"select 1"], method), [false]);
+    // A long value that compresses well stays in the row.
+    assert_eq!(toast::moved(32, 136, &[&[b'x'; 9000][..]], method), [false]);
+    // A long value that does not compress moves, and a short value stays.
+    assert_eq!(toast::moved(32, 136, &[b"", &noise[..]], method), [false, true]);
+}
