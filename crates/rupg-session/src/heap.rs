@@ -689,7 +689,7 @@ impl Heap {
                     .versions
                     .iter()
                     .filter(|v| seen.get(&v.tid) != Some(&(v.values.as_ptr() as usize)))
-                    .map(|v| (v.tid, v.values.as_ptr() as usize, v.values.clone()))
+                    .map(|v| (v.tid, v.values.as_ptr() as usize, v.values.clone(), v.xmax != 0))
                     .collect();
                 if versions.is_empty() {
                     let (_, map, _) = made.swap_remove(at);
@@ -708,8 +708,12 @@ impl Heap {
                     continue;
                 };
                 let Some(derived) = map.derived.clone() else { continue };
-                for (tid, address, values) in versions {
-                    let key = derive(&derived, &values)?.map(Vec::into_boxed_slice);
+                for (tid, address, values, deleted) in versions {
+                    // A version that a rewrite of the table deleted has the values of the old types of the columns, which the expressions of the new index can not take. The version is not in the index.
+                    let key = match derive(&derived, &values) {
+                        Err(_) if deleted => None,
+                        key => key?.map(Vec::into_boxed_slice),
+                    };
                     map.add(tid, &values, key);
                     seen.insert(tid, address);
                 }

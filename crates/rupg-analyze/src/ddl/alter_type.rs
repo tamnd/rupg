@@ -17,11 +17,12 @@ use rupg_sql::nodes::{
 
 use super::alter::Target;
 use super::fkey::Keys;
-use super::index::no_default_opclass;
+use super::index::{columns_collation, index_references, no_default_opclass, strip_collate};
 use super::table::{SYSTEM_COLUMNS, check_attribute_type};
 use super::{Definer, Transform, not_yet, quote_identifier, references};
 use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
+use crate::expr::ExprKind;
 use crate::typcache::{default_opclass, is_binary_coercible};
 use crate::typename::place;
 use crate::types;
@@ -415,15 +416,67 @@ impl Definer<'_, '_> {
         let Some(info) = self.catalog.relation(index).and_then(|r| r.index.clone()) else {
             return Err(Error::internal(format!("cache lookup failed for index {index}")));
         };
-        if info.exprs.is_some() || info.predicate.is_some() {
-            return Err(not_yet(
-                "ALTER COLUMN ... TYPE of a column of an index with expressions or a predicate",
-                None,
-            ));
+        let old_exprs = match &info.exprs {
+            Some(text) => crate::node::read_list(text)?,
+            None => Vec::new(),
+        };
+        self.table_scope(info.table);
+        // `transformIndexStmt` takes the predicate before the expressions.
+        let predicate = match &info.predicate {
+            Some(text) => {
+                let raw = self.reparse(text, info.table)?;
+                let expr =
+                    self.an.with_kind(Kind::IndexPredicate, |an| an.transform(Some(&raw)))?;
+                Some(self.an.coerce_to_boolean(expr, "WHERE")?)
+            }
+            None => None,
+        };
+        let mut exprs = Vec::with_capacity(old_exprs.len());
+        for old in &old_exprs {
+            let raw = self.reparse(&crate::node::write(old)?, info.table)?;
+            let expr = self.an.with_kind(Kind::IndexExpression, |an| an.transform(Some(&raw)))?;
+            exprs.push(strip_collate(&expr).clone());
         }
+        let index_columns =
+            self.catalog.relation(index).map(|r| r.columns.clone()).unwrap_or_default();
+        let mut next = old_exprs.iter().zip(&exprs);
+        // `DefineIndex` takes an expression that is a column as a key column.
+        let mut keys = info.keys.clone();
+        let mut kept = Vec::with_capacity(exprs.len());
         for (i, &key) in info.keys.iter().enumerate() {
             let at = usize::try_from(key).ok().and_then(|k| k.checked_sub(1));
-            let Some(at) = at else { continue };
+            let Some(at) = at else {
+                // `pg_get_indexdef` gives `COLLATE` for an expression only for a collation that is not the collation of the expression.
+                let (Some((old, expr)), Some(column)) = (next.next(), index_columns.get(i)) else {
+                    continue;
+                };
+                match &expr.kind {
+                    ExprKind::Var(var) if var.attnum > 0 => keys[i] = var.attnum,
+                    _ => kept.push(expr.clone()),
+                }
+                let (Some(&class), Some(&collation)) =
+                    (info.classes.get(i), info.collations.get(i))
+                else {
+                    continue;
+                };
+                if expr.ty == column.ty && expr.typmod == column.typmod {
+                    continue;
+                }
+                let now = Column::new(column.name.clone(), expr.ty, expr.typmod, 0);
+                let class = self.class_after_alter_type(class, column.ty, now.ty, info.method)?;
+                let collation = if collation == columns_collation(original, old) {
+                    self.expr_collation(info.table, None, expr)?
+                } else if !types::collatable(now.ty) {
+                    return Err(Error::new(
+                        SqlState::DATATYPE_MISMATCH,
+                        format!("collations are not supported by type {}", types::name(now.ty)),
+                    ));
+                } else {
+                    collation
+                };
+                self.catalog.set_index_column(index, i, class, collation, &now)?;
+                continue;
+            };
             let now = self.catalog.relation(info.table).and_then(|r| r.columns.get(at)).cloned();
             let (Some(now), Some(old)) = (now, original.get(at)) else { continue };
             if now.ty == old.ty && now.typmod == old.typmod && now.collation == old.collation {
@@ -435,29 +488,7 @@ impl Definer<'_, '_> {
                 self.catalog.set_index_column(index, i, 0, 0, &now)?;
                 continue;
             };
-            let class = if default_opclass(old.ty, info.method).is_some_and(|c| c.oid == class) {
-                default_opclass(now.ty, info.method)
-                    .map(|c| c.oid)
-                    .ok_or_else(|| no_default_opclass(now.ty, info.method))?
-            } else {
-                let row = builtin::opclasses().iter().find(|c| c.oid == class);
-                let Some(row) = row else {
-                    return Err(Error::internal(format!(
-                        "cache lookup failed for opclass {class}"
-                    )));
-                };
-                if !is_binary_coercible(now.ty, row.intype) {
-                    return Err(Error::new(
-                        SqlState::DATATYPE_MISMATCH,
-                        format!(
-                            "operator class \"{}\" does not accept data type {}",
-                            row.name,
-                            types::name(now.ty)
-                        ),
-                    ));
-                }
-                class
-            };
+            let class = self.class_after_alter_type(class, old.ty, now.ty, info.method)?;
             // The definition gives `COLLATE` only for a collation that is not the collation of the column.
             let collation = if collation == old.collation {
                 now.collation
@@ -471,15 +502,39 @@ impl Definer<'_, '_> {
             };
             self.catalog.set_index_column(index, i, class, collation, &now)?;
         }
-        Ok(())
+        let exprs_text = if kept.is_empty() { None } else { Some(crate::node::write_list(&kept)?) };
+        let predicate_text = predicate.as_ref().map(crate::node::write).transpose()?;
+        let refs = index_references(self.catalog, info.table, &kept, predicate.as_ref())?;
+        self.catalog.set_index_exprs(index, keys, exprs_text, predicate_text, &refs)
     }
 
-    /// The check constraint that `ATPostAlterTypeParse` makes again from its text, with the same name. The new constraint has a new OID, so the session checks the rows against it. The check of a domain over a composite type whose field gets a new type is made again as `AlterDomainAddConstraint` makes it.
-    fn recook_check(&mut self, oid: u32) -> Result<()> {
-        let Some(con) = self.catalog.constraint(oid).cloned() else {
-            return Err(Error::internal(format!("cache lookup failed for constraint {oid}")));
+    /// The operator class of an index column whose type changes from `old` to `new`: the default operator class of `new` for the default operator class of `old`, else the same operator class, which must accept `new`.
+    fn class_after_alter_type(&self, class: u32, old: u32, new: u32, method: u32) -> Result<u32> {
+        if default_opclass(old, method).is_some_and(|c| c.oid == class) {
+            return default_opclass(new, method)
+                .map(|c| c.oid)
+                .ok_or_else(|| no_default_opclass(new, method));
+        }
+        let row = builtin::opclasses().iter().find(|c| c.oid == class);
+        let Some(row) = row else {
+            return Err(Error::internal(format!("cache lookup failed for opclass {class}")));
         };
-        let text = self.an.env.deparse(con.expr.as_deref().unwrap_or_default(), con.relation)?;
+        if !is_binary_coercible(new, row.intype) {
+            return Err(Error::new(
+                SqlState::DATATYPE_MISMATCH,
+                format!(
+                    "operator class \"{}\" does not accept data type {}",
+                    row.name,
+                    types::name(new)
+                ),
+            ));
+        }
+        Ok(class)
+    }
+
+    /// The expression that the text of a stored expression of `relation` gives when the parser reads it again, as `ATPostAlterTypeParse` reads the definition again.
+    fn reparse(&self, text: &str, relation: u32) -> Result<Node> {
+        let text = self.an.env.deparse(text, relation)?;
         let (list, _) = rupg_sql::parse(&format!("SELECT {text}")).map_err(Error::from)?;
         let raw = list.into_iter().flatten().find_map(|node| match node {
             Node::RawStmt(raw) => match raw.stmt {
@@ -493,9 +548,15 @@ impl Definer<'_, '_> {
             },
             _ => None,
         });
-        let Some(raw) = raw else {
-            return Err(Error::internal("the text of a check constraint is not an expression"));
+        raw.ok_or_else(|| Error::internal("the text of a stored expression is not an expression"))
+    }
+
+    /// The check constraint that `ATPostAlterTypeParse` makes again from its text, with the same name. The new constraint has a new OID, so the session checks the rows against it. The check of a domain over a composite type whose field gets a new type is made again as `AlterDomainAddConstraint` makes it.
+    fn recook_check(&mut self, oid: u32) -> Result<()> {
+        let Some(con) = self.catalog.constraint(oid).cloned() else {
+            return Err(Error::internal(format!("cache lookup failed for constraint {oid}")));
         };
+        let raw = self.reparse(con.expr.as_deref().unwrap_or_default(), con.relation)?;
         let object = ObjRef::new(PG_CONSTRAINT, oid);
         self.catalog.remove(&[DropTarget { object, flags: flag::ORIGINAL, dependee: None }])?;
         if con.domain != 0 {
