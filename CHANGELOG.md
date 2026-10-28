@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A function in `FROM` that gives a domain over a composite type gives a column for each field of the composite type, as in PostgreSQL (#1087).
 - An error in the default of `CREATE DOMAIN` shows its place in the statement, and an error in the default of `ALTER DOMAIN ... SET DEFAULT` shows no place, as in PostgreSQL (#1086).
 - `EXPLAIN VERBOSE` of an `UPDATE` that sets fields of a column shows the new values of the `FieldStore`, in `ROW` for more than one, and an assignment to a part of an array shows the subscripts and the fields of the parts below it, as `processIndirection` gives them (#1085).
 - `pg_basetype` gives the bottom base type of a stack of domains, the type itself for a type that is not a domain, and a null for a type that does not exist (#1084).

@@ -6595,6 +6595,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/explain_field_store.test")));
     }
 
+    /// A function in `FROM` that gives a domain over a composite type gives a column for each field of the composite type, takes aliases for them, and does not take a column definition list. The whole row has the type of the domain.
+    #[test]
+    fn from_function_domain() {
+        big_stack(|| script(include_str!("connection/from_function_domain.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

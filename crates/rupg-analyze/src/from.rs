@@ -1055,6 +1055,8 @@ impl Analyzer<'_> {
             }
         }
         let row = types::row(expr.ty);
+        // `TYPEFUNC_COMPOSITE_DOMAIN`: a domain over a composite type gives the columns of the composite type.
+        let base = types::base(expr.ty);
         if expr.ty == oid::RECORD {
             if coldefs.is_empty() {
                 return Err(Error::new(
@@ -1065,7 +1067,7 @@ impl Analyzer<'_> {
             }
             return self.column_definitions(coldefs);
         }
-        if row.is_some_and(|r| r.kind == b'c') {
+        if types::is_complex(base) {
             if !coldefs.is_empty() {
                 return Err(Error::new(
                     SqlState::SYNTAX_ERROR,
@@ -1075,7 +1077,7 @@ impl Analyzer<'_> {
             }
             // `TYPEFUNC_COMPOSITE`: a column for each attribute of the type.
             return self
-                .row_columns(expr.ty)
+                .row_columns(base)
                 .ok_or_else(|| Error::internal("a composite type with no relation"));
         }
         if !coldefs.is_empty() {
