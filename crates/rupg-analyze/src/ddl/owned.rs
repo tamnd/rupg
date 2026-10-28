@@ -266,10 +266,12 @@ impl Definer<'_, '_> {
             PG_NAMESPACE => {
                 if !self.is_superuser() {
                     self.check_can_set_role(new)?;
-                    return Err(Error::new(
-                        SqlState::INSUFFICIENT_PRIVILEGE,
-                        format!("permission denied for database {}", self.an.env.database()),
-                    ));
+                    if !self.database_create_allowed(self.user) {
+                        return Err(Error::new(
+                            SqlState::INSUFFICIENT_PRIVILEGE,
+                            format!("permission denied for database {}", self.an.env.database()),
+                        ));
+                    }
                 }
                 self.catalog.set_schema_owner(object.oid, new, &old_name, &new_name)
             }

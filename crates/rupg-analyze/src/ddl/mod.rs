@@ -1061,11 +1061,14 @@ impl Definer<'_, '_> {
             Some(name) => name.to_string(),
             None => owner_name.unwrap_or_default().to_string(),
         };
-        if !self.is_superuser() {
+        if !self.database_create_allowed(self.user) {
             return Err(Error::new(
                 SqlState::INSUFFICIENT_PRIVILEGE,
                 format!("permission denied for database {}", self.an.env.database()),
             ));
+        }
+        if owner != self.user {
+            self.check_can_set_role(owner)?;
         }
         if name.starts_with("pg_") {
             return Err(Error::new(

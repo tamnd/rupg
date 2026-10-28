@@ -1293,7 +1293,7 @@ impl Definer<'_, '_> {
             return Ok(());
         }
         if !recursing && !self.is_superuser() {
-            if old != self.user {
+            if !self.owns(old) {
                 return Err(not_owner(owner_word(kind), &name));
             }
             self.check_can_set_role(new)?;
@@ -1427,14 +1427,16 @@ impl Definer<'_, '_> {
             return Ok(());
         }
         if !self.is_superuser() {
-            if old != self.user {
+            if !self.owns(old) {
                 return Err(not_owner("schema", &name));
             }
             self.check_can_set_role(new)?;
-            return Err(Error::new(
-                SqlState::INSUFFICIENT_PRIVILEGE,
-                format!("permission denied for database {}", self.an.env.database()),
-            ));
+            if !self.database_create_allowed(self.user) {
+                return Err(Error::new(
+                    SqlState::INSUFFICIENT_PRIVILEGE,
+                    format!("permission denied for database {}", self.an.env.database()),
+                ));
+            }
         }
         self.catalog.set_schema_owner(oid, new, &role_name(old), &role_name(new))?;
         Ok(())

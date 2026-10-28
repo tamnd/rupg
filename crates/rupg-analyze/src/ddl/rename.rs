@@ -338,6 +338,12 @@ impl Definer<'_, '_> {
         if !self.is_superuser() && !self.owns(owner) {
             return Err(not_owner("schema", name));
         }
+        if !self.database_create_allowed(self.user) {
+            return Err(Error::new(
+                SqlState::INSUFFICIENT_PRIVILEGE,
+                format!("permission denied for database {}", self.an.env.database()),
+            ));
+        }
         if newname.starts_with("pg_") && !self.an.env.allow_system_table_mods() {
             return Err(Error::new(
                 SqlState::RESERVED_NAME,
