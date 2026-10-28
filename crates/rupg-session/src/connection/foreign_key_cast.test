@@ -1,0 +1,88 @@
+!details
+> CREATE TABLE fk_defer_t2_pk (id int PRIMARY KEY)
+CREATE TABLE
+> CREATE TABLE fk_defer_t2 (a int REFERENCES fk_defer_t2_pk(id) DEFERRABLE INITIALLY DEFERRED)
+CREATE TABLE
+> CREATE TYPE fk_defer_vch AS (v int)
+CREATE TYPE
+> CREATE FUNCTION fk_defer_cast(fk_defer_vch) RETURNS int LANGUAGE plpgsql AS $$ BEGIN INSERT INTO fk_defer_t2 VALUES (999); RETURN $1.v; END$$
+CREATE FUNCTION
+> CREATE CAST (fk_defer_vch AS int) WITH FUNCTION fk_defer_cast(fk_defer_vch) AS IMPLICIT
+CREATE CAST
+> CREATE TABLE fk_defer_main_pk (id int PRIMARY KEY)
+CREATE TABLE
+> INSERT INTO fk_defer_main_pk VALUES (1)
+INSERT 0 1
+> CREATE TABLE fk_defer_main (a fk_defer_vch REFERENCES fk_defer_main_pk(id) DEFERRABLE INITIALLY DEFERRED)
+CREATE TABLE
+> BEGIN
+BEGIN
+> INSERT INTO fk_defer_main VALUES (row(1)::fk_defer_vch)
+INSERT 0 1
+> COMMIT
+ERROR 23503 insert or update on table "fk_defer_t2" violates foreign key constraint "fk_defer_t2_a_fkey"
+DETAIL Key (a)=(999) is not present in table "fk_defer_t2_pk".
+> INSERT INTO fk_defer_t2_pk VALUES (999)
+INSERT 0 1
+> BEGIN
+BEGIN
+> INSERT INTO fk_defer_main VALUES (row(1)::fk_defer_vch)
+INSERT 0 1
+> COMMIT
+COMMIT
+> SELECT * FROM fk_defer_t2
+fields a@fk_defer_t2.1:23:4:-1
+row 999
+SELECT 1
+> BEGIN
+BEGIN
+> INSERT INTO fk_defer_main VALUES (row(2)::fk_defer_vch)
+INSERT 0 1
+> SET CONSTRAINTS ALL IMMEDIATE
+ERROR 23503 insert or update on table "fk_defer_main" violates foreign key constraint "fk_defer_main_a_fkey"
+DETAIL Key (a)=((2)) is not present in table "fk_defer_main_pk".
+> COMMIT
+ROLLBACK
+> CREATE TABLE ct (a int)
+CREATE TABLE
+> CREATE FUNCTION ctf() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE NOTICE 'ct %', NEW.a; IF NEW.a < 3 THEN INSERT INTO ct VALUES (NEW.a + 1); END IF; RETURN NULL; END $$
+CREATE FUNCTION
+> CREATE CONSTRAINT TRIGGER ctt AFTER INSERT ON ct DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION ctf()
+CREATE TRIGGER
+> BEGIN
+BEGIN
+> INSERT INTO ct VALUES (1)
+INSERT 0 1
+> COMMIT
+NOTICE 00000 ct 1 (PL/pgSQL function ctf() line 1 at RAISE)
+NOTICE 00000 ct 2 (PL/pgSQL function ctf() line 1 at RAISE)
+NOTICE 00000 ct 3 (PL/pgSQL function ctf() line 1 at RAISE)
+COMMIT
+> SELECT * FROM ct
+fields a@ct.1:23:4:-1
+row 1
+row 2
+row 3
+SELECT 3
+> CREATE TABLE fp_reentry_pk (id int PRIMARY KEY)
+CREATE TABLE
+> INSERT INTO fp_reentry_pk VALUES (1), (2)
+INSERT 0 2
+> CREATE TYPE fp_vch AS (v int)
+CREATE TYPE
+> CREATE FUNCTION fp_vcast(fp_vch) RETURNS int LANGUAGE plpgsql AS $$ BEGIN IF $1.v = 1 THEN INSERT INTO fp_reentry_fk VALUES (row(2)::fp_vch); END IF; RETURN $1.v; END$$
+CREATE FUNCTION
+> CREATE CAST (fp_vch AS int) WITH FUNCTION fp_vcast(fp_vch) AS IMPLICIT
+CREATE CAST
+> CREATE TABLE fp_reentry_fk (a fp_vch REFERENCES fp_reentry_pk (id))
+CREATE TABLE
+> INSERT INTO fp_reentry_fk SELECT row(1)::fp_vch FROM generate_series(1, 2)
+INSERT 0 2
+> SELECT a::text, count(*) FROM fp_reentry_fk GROUP BY a ORDER BY a
+fields a:25:-1:-1,count:20:8:-1
+row (1),2
+row (2),2
+SELECT 2
+> INSERT INTO fp_reentry_fk VALUES (row(3)::fp_vch)
+ERROR 23503 insert or update on table "fp_reentry_fk" violates foreign key constraint "fp_reentry_fk_a_fkey"
+DETAIL Key (a)=((3)) is not present in table "fp_reentry_pk".

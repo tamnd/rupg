@@ -64,6 +64,7 @@ impl Definer<'_, '_> {
             .find(|c| c.kind == ConKind::NotNull && c.keys == [number] && !c.no_inherit)
             .map(|c| c.name.clone());
         for child in self.child_targets(parent) {
+            self.check_not_in_use(child.oid, "ALTER TABLE")?;
             let rel = self.catalog.relation(child.oid);
             let own = rel.and_then(|r| r.column_number(&column.name));
             if let Some(own) = own {

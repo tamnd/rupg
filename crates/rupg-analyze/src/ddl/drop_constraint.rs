@@ -63,6 +63,12 @@ impl Definer<'_, '_> {
             }
             _ => None,
         };
+        // The drop of a foreign key removes the triggers of the referenced table, which must have no pending events.
+        if let Some(foreign) = &con.foreign
+            && foreign.table != target.oid
+        {
+            self.check_not_in_use(foreign.table, "ALTER TABLE")?;
+        }
         self.perform(&[ObjRef::new(PG_CONSTRAINT, oid)], cascade)?;
         if !matches!(con.kind, ConKind::Check | ConKind::NotNull) && target.kind == b'p' {
             return Ok(());
@@ -71,6 +77,7 @@ impl Definer<'_, '_> {
             return Ok(());
         }
         for child in self.child_targets(target.oid) {
+            self.check_not_in_use(child.oid, "ALTER TABLE")?;
             let found = match &column {
                 Some(column) => {
                     let rel = self.catalog.relation(child.oid);

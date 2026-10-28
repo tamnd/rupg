@@ -6121,6 +6121,24 @@ mod tests {
         big_stack(|| script(include_str!("connection/foreign_key_own_update.test")));
     }
 
+    /// The privileges of the checks of foreign keys: the query of a check reads the referenced table as its owner with `SELECT` on the key columns and `UPDATE` on any column, the check of `NO ACTION` reads the referencing table as its owner, `USAGE` on the schema, `REFERENCES` on the table or on the key columns for a new foreign key, and the validation that reads the rows as the current user when it can see them, or else checks each row. `connection/foreign_key_privileges.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn foreign_key_privileges() {
+        big_stack(|| script(include_str!("connection/foreign_key_privileges.test")));
+    }
+
+    /// `AfterTriggerPendingOnRel`: `ALTER TABLE` and `TRUNCATE` fail on a table with deferred events of the transaction, the drop of a foreign key checks the referenced table too, and the command on a partitioned table checks each partition. `connection/pending_trigger_events.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn pending_trigger_events() {
+        big_stack(|| script(include_str!("connection/pending_trigger_events.test")));
+    }
+
+    /// `ri_GenerateQual` with `ri_add_cast_to`: the check of a foreign key casts the referencing value with the function of the user, for each row. The statements of the function can queue a deferred check, which fires at the commit as `AfterTriggerFireDeferred` repeats until the queue is empty. `connection/foreign_key_cast.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn foreign_key_cast() {
+        big_stack(|| script(include_str!("connection/foreign_key_cast.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

@@ -26,6 +26,7 @@ impl Definer<'_, '_> {
                     for child in self.catalog.children(tables[at]) {
                         if !tables.contains(&child.oid) {
                             self.truncate_check_rel(Found::User(child.oid), &child.name)?;
+                            self.check_not_in_use(child.oid, "TRUNCATE")?;
                             tables.push(child.oid);
                         }
                     }
@@ -109,7 +110,7 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
-    /// `truncate_check_rel` and `truncate_check_perms`: the relation must be a table that is not a system catalog, and the role must have the privilege `TRUNCATE` on it.
+    /// `truncate_check_rel`, `truncate_check_perms` and `truncate_check_activity`: the relation must be a table that is not a system catalog with no pending events of its triggers, and the role must have the privilege `TRUNCATE` on it.
     fn truncate_check(&self, found: Found, name: &str) -> Result<u32> {
         self.truncate_check_rel(found, name)?;
         let allowed = match found {
@@ -123,7 +124,10 @@ impl Definer<'_, '_> {
             ));
         }
         match found {
-            Found::User(oid) => Ok(oid),
+            Found::User(oid) => {
+                self.check_not_in_use(oid, "TRUNCATE")?;
+                Ok(oid)
+            }
             Found::Builtin(_) => Err(not_yet("TRUNCATE of a built-in table", None)),
         }
     }

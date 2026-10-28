@@ -1045,6 +1045,15 @@ impl Definer<'_, '_> {
         self.pg_aclmask(&roles, Object::new(Kind::Table, oid), self.user, TRUNCATE) != 0
     }
 
+    /// `checkFkeyPermissions`: true when the current user has `REFERENCES` on the table `oid`, or on each of the columns `attnums`.
+    pub(super) fn may_reference(&self, oid: u32, attnums: &[i16]) -> bool {
+        let roles = rupg_pgcatalog::roles::current();
+        attnums.iter().all(|&column| {
+            let object = Object { kind: Kind::Column, oid, column };
+            self.pg_aclmask(&roles, object, self.user, REFERENCES) != 0
+        })
+    }
+
     /// `pg_aclmask` with `ACLMASK_ANY`: the privileges of the mask that the role has on the object. A superuser has all of them, and the privileges of the relation count for a column.
     fn pg_aclmask(&self, roles: &Roles, object: Object, role: u32, mask: u64) -> u64 {
         if roles.superuser(role) {

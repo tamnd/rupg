@@ -429,7 +429,9 @@ impl Connection {
             self.check_keys_in_place(rel.oid, view, &info.unique, work)?;
             self.check_exclusion_build(old, rel.oid, view, work)?;
             if !checked.is_empty() {
-                self.fire(vec![Batch::new(info, &foreign, view.command, checked, Vec::new())])?;
+                self.fire(vec![
+                    Batch::new(info, &foreign, view.command, checked, Vec::new()).validating(),
+                ])?;
             }
             return Ok(());
         }
@@ -458,7 +460,9 @@ impl Connection {
         }
         self.check_exclusion_build(old, rel.oid, view, work)?;
         if !checked.is_empty() {
-            self.fire(vec![Batch::new(info, &foreign, view.command, checked, Vec::new())])?;
+            self.fire(vec![
+                Batch::new(info, &foreign, view.command, checked, Vec::new()).validating(),
+            ])?;
         }
         Ok(())
     }

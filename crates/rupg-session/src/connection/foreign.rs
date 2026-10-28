@@ -36,6 +36,8 @@ pub(super) struct Batch {
     old: Vec<Vec<Value>>,
     /// For each old row of an `UPDATE`, true when the transaction of the write inserted it, as `slot_is_current_xact_tuple` tells. Empty when the write does not know.
     own: Vec<bool>,
+    /// True for the rows of the validation of a foreign key, which `RI_Initial_Check` reads as the current user when it can.
+    validation: bool,
 }
 
 impl Batch {
@@ -55,7 +57,18 @@ impl Batch {
             new,
             old,
             own: Vec::new(),
+            validation: false,
         }
+    }
+
+    /// The OID of the table of the write.
+    pub(super) fn table(&self) -> u32 {
+        self.table
+    }
+
+    /// The batch of the validation of a foreign key.
+    pub(super) fn validating(self) -> Batch {
+        Batch { validation: true, ..self }
     }
 
     /// The batch with `own` for its old rows.
@@ -84,6 +97,12 @@ struct State {
     other: Option<Keys>,
     own: Option<Keys>,
     plan: Option<Plan>,
+    /// The plans of [`Foreign::casts`], one for each key column with a cast.
+    casts: Vec<Option<Plan>>,
+    /// True after the check of the privileges of the query on the other table.
+    permitted: bool,
+    /// True after the check of the privileges of the query of `ri_Check_Pk_Match` on the table of the batch.
+    own_permitted: bool,
 }
 
 /// The keys with no null of the rows of a table for one foreign key, as values of the types of the referenced key, by the hash of the columns that the equality compares.
@@ -205,8 +224,18 @@ impl Connection {
     ///
     /// `23503` for a key that the referenced table does not have, for a key of `MATCH FULL` with nulls and values, and for an old key that a row of the referencing table still has. `23001` for an old key of `RESTRICT` that a row of the referencing table has. The errors of the statement of an action, with the statement in their context.
     pub(super) fn fire(&self, batches: Vec<Batch>) -> Result<(), Error> {
+        self.fire_forced(batches, 0)
+    }
+
+    /// [`Connection::fire`] where the first `forced` batches fire even when their triggers are deferred, as `AfterTriggerFireDeferred` fires the queue of the transaction.
+    pub(super) fn fire_forced(&self, batches: Vec<Batch>, mut forced: usize) -> Result<(), Error> {
         let mut queue = VecDeque::from(batches);
         while let Some(batch) = queue.pop_front() {
+            if forced > 0 {
+                forced -= 1;
+                self.fire_batch(&batch, &mut queue)?;
+                continue;
+            }
             let (now, later) = batch.split(&self.modes.borrow());
             if let Some(later) = later {
                 self.deferred.borrow_mut().push(later);
@@ -345,11 +374,26 @@ impl Connection {
                 return Ok(());
             }
         }
-        let probe: Vec<Value> = key
-            .iter()
-            .zip(foreign.referencing_types.iter().zip(&foreign.types))
-            .map(|(value, (&from, &to))| key_value(value, from, to))
-            .collect();
+        if !state.permitted {
+            let reader = self.reader();
+            let pk = (foreign.other, attnums(&foreign.other_columns));
+            let fk = (batch.table, attnums(&foreign.columns));
+            if !batch.validation
+                || !rupg_func::ri_initial_permitted((pk.0, &pk.1), (fk.0, &fk.1), &reader)?
+            {
+                rupg_func::ri_check_permissions(pk.0, &pk.1, self.owner_of(pk.0), &reader)?;
+            }
+            state.permitted = true;
+        }
+        let mut probe = Vec::with_capacity(key.len());
+        for (at, (value, (&from, &to))) in
+            key.iter().zip(foreign.referencing_types.iter().zip(&foreign.types)).enumerate()
+        {
+            probe.push(match foreign.casts.get(at).filter(|cast| !cast.is_empty()) {
+                Some(cast) => self.cast_key(cast, from, value, at, state)?,
+                None => key_value(value, from, to),
+            });
+        }
         let keys = state.other.get_or_insert_with(|| {
             // The check sees the rows of the statement, as the command counter goes up before the triggers fire.
             let rows = self.table_rows(foreign.other);
@@ -386,8 +430,14 @@ impl Connection {
         if foreign.period {
             return self.check_period_references(batch, foreign, key, &probe, state);
         }
-        // `ri_Check_Pk_Match`: for `NO ACTION`, another row with the old key keeps the references.
+        // `ri_Check_Pk_Match`: for `NO ACTION`, another row with the old key keeps the references. Its query reads the referenced table as the owner of the table.
         if !restrict {
+            if !state.own_permitted {
+                let own = attnums(&foreign.columns);
+                let owner = self.owner_of(batch.table);
+                rupg_func::ri_check_permissions(batch.table, &own, owner, &self.reader())?;
+                state.own_permitted = true;
+            }
             let keys = state.own.get_or_insert_with(|| {
                 let rows = self.table_rows(batch.table);
                 Keys::of(rows, &foreign.columns, &foreign.types, &foreign.types, false)
@@ -395,6 +445,18 @@ impl Connection {
             if keys.has(&probe, &foreign.types)? {
                 return Ok(());
             }
+        }
+        // The query of `ri_restrict` reads the referencing table as the owner of the table.
+        if !state.permitted {
+            let other = attnums(&foreign.other_columns);
+            let owner = self.owner_of(foreign.other);
+            rupg_func::ri_check_permissions(foreign.other, &other, owner, &self.reader()).map_err(
+                |error| match foreign.restrict.as_str() {
+                    "" => error,
+                    text => query::inner_error(error, text),
+                },
+            )?;
+            state.permitted = true;
         }
         let keys = state.other.get_or_insert_with(|| {
             let rows = self.table_rows(foreign.other);
@@ -606,6 +668,44 @@ impl Connection {
         self.apply_write(plan, params, &view, rows)
     }
 
+    /// `ri_add_cast_to`: the value `value` of the type `from` after the cast of the query `cast`, which calls a function of the user. The plan is made one time for each batch.
+    fn cast_key(
+        &self,
+        cast: &str,
+        from: u32,
+        value: &Value,
+        at: usize,
+        state: &mut State,
+    ) -> Result<Value, Error> {
+        if state.casts.len() <= at {
+            state.casts.resize_with(at + 1, || None);
+        }
+        let reader = self.reader();
+        if state.casts[at].is_none() {
+            let (list, _) = rupg_sql::parse(cast)?;
+            let node = list.iter().flatten().find_map(|node| match node {
+                Node::RawStmt(raw) => raw.stmt.as_ref(),
+                _ => None,
+            });
+            let Some(node) = node else {
+                return Err(Error::internal("a cast of a foreign key with no statement"));
+            };
+            let params = Params { types: vec![from], variable: false };
+            state.casts[at] =
+                Some(query::plan_internal(node, &reader, &params)?.fold(None, &reader)?);
+        }
+        let Some(plan) = state.casts[at].as_ref() else {
+            return Err(Error::internal("a cast of a foreign key with no plan"));
+        };
+        let rows = plan.run(std::slice::from_ref(value), &reader)?;
+        Ok(rows.into_iter().next().and_then(|row| row.into_iter().next()).unwrap_or(Value::Null))
+    }
+
+    /// The owner of the table `table`, as whom `ri_PerformCheck` runs the query on the table.
+    fn owner_of(&self, table: u32) -> u32 {
+        self.catalog().relation(table).map_or(0, |rel| rel.owner)
+    }
+
     /// `ri_ReportViolation`: the key of the row of `batch` with its columns, as ` (a, b)=(1, 2)`, or nothing when the current user may not see it, as the policies of the table or the privileges of the user hide it.
     fn key_text(
         &self,
@@ -623,6 +723,11 @@ impl Connection {
         let values = key_values(key, types, &reader)?;
         Ok(format!(" ({})=({values})", foreign.names.join(", ")))
     }
+}
+
+/// The numbers of the columns at the places `columns`.
+fn attnums(columns: &[usize]) -> Vec<i16> {
+    columns.iter().map(|&c| i16::try_from(c + 1).unwrap_or(0)).collect()
 }
 
 /// The values of a key as the detail of an error shows them, with `null` for a null value.

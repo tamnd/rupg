@@ -32,6 +32,13 @@ pub(super) struct Event {
     transition: Option<Transition>,
 }
 
+impl Event {
+    /// The OID of the table of the trigger.
+    pub(super) fn table(&self) -> u32 {
+        self.trigger.relation
+    }
+}
+
 /// A trigger that fires for a write, with its condition of `WHEN`.
 #[derive(Debug)]
 pub(super) struct Armed {
@@ -857,16 +864,16 @@ impl Connection {
         }
     }
 
-    /// `afterTriggerInvokeEvents` for the queue of the deferred constraint triggers: the events whose triggers are no longer deferred fire in order, and the other events stay in the queue.
+    /// `afterTriggerInvokeEvents` for the queue of the deferred constraint triggers: the events whose triggers are no longer deferred fire in order, and the other events stay in the queue. With `all`, all the events of the queue fire.
     ///
     /// # Errors
     ///
     /// The errors of the triggers.
-    pub(super) fn fire_deferred_events(&self) -> Result<(), Error> {
+    pub(super) fn fire_deferred_events(&self, all: bool) -> Result<(), Error> {
         let events = std::mem::take(&mut *self.deferred_events.borrow_mut());
         let (later, now): (Vec<Event>, Vec<Event>) = {
             let modes = self.modes.borrow();
-            events.into_iter().partition(|e| modes.trigger_deferred(&e.trigger))
+            events.into_iter().partition(|e| !all && modes.trigger_deferred(&e.trigger))
         };
         self.deferred_events.borrow_mut().extend(later);
         for event in now {

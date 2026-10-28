@@ -1083,6 +1083,75 @@ pub fn check_permissions(perms: &[PermInfo], session: &dyn Session) -> Result<()
     Ok(())
 }
 
+/// `ri_CheckPermissions`: the privileges of the query `SELECT ... FOR KEY SHARE` of a check of a foreign key, as `role`, the owner of the referenced table `relid`. The role needs `USAGE` on the schema of the table, `SELECT` on the table or on each column of the key `attnums`, and `UPDATE` on the table or on any column, which `FOR KEY SHARE` needs.
+///
+/// # Errors
+///
+/// `permission denied` for the schema or the table, or the error of an ACL that is not correct.
+pub fn ri_check_permissions(
+    relid: u32,
+    attnums: &[i16],
+    role: u32,
+    session: &dyn Session,
+) -> Result<()> {
+    let Some(class) = class_of(relid, session) else { return Ok(()) };
+    if !object_check(Owned::Namespace, class.namespace, role, ACL_USAGE, session)?.unwrap_or(false)
+    {
+        let name = reg::namespace_name(class.namespace, session).unwrap_or_default();
+        return Err(Error::new(
+            SqlState::INSUFFICIENT_PRIVILEGE,
+            format!("permission denied for schema {name}"),
+        ));
+    }
+    let perm = PermInfo {
+        relid,
+        check_as: role,
+        required: ACL_SELECT | ACL_UPDATE,
+        selected: attnums.iter().copied().collect(),
+        ..PermInfo::default()
+    };
+    check_permissions(&[perm], session)
+}
+
+/// The first checks of `RI_Initial_Check`: true when the current user can read the columns of the key on the referenced table `pk` and on the referencing table `fk`, and the policies of row security of neither table apply. Else the validation of a foreign key checks each row as the owner of the referenced table.
+///
+/// # Errors
+///
+/// The error of an ACL that is not correct.
+pub fn ri_initial_permitted(
+    pk: (u32, &[i16]),
+    fk: (u32, &[i16]),
+    session: &dyn Session,
+) -> Result<bool> {
+    let role = current_user(session);
+    if !superuser(role) {
+        for (relid, attnums) in [pk, fk] {
+            let perm = PermInfo {
+                relid,
+                check_as: role,
+                required: ACL_SELECT,
+                selected: attnums.iter().copied().collect(),
+                ..PermInfo::default()
+            };
+            if !one_relation_allowed(&perm, role, session)? {
+                return Ok(false);
+            }
+        }
+    }
+    let roles = rupg_pgcatalog::roles::current();
+    if roles.superuser(role) || roles.attrs(role).is_some_and(|a| a.bypassrls) {
+        return Ok(true);
+    }
+    let catalog = session.catalog();
+    for relid in [pk.0, fk.0] {
+        let Some(rel) = catalog.and_then(|c| c.relation(relid)) else { continue };
+        if rel.row_security && !has_privs_of_role(role, rel.owner) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// The `EXECUTE` checks of `ExecInitFunc` and `ExecInitAgg`: an error for the first function that the current user cannot call. A superuser can call each function, and a function that does not exist is not checked.
 ///
 /// # Errors

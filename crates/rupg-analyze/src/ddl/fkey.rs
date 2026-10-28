@@ -171,8 +171,7 @@ impl Definer<'_, '_> {
                     .into(),
             ));
         }
-        let pk_owner = self.catalog.relation(pk).map_or(0, |r| r.owner);
-        if !self.is_superuser() && !self.owns(pk_owner) {
+        if !self.may_reference(pk, &pk_keys) {
             return Err(Error::new(
                 SqlState::INSUFFICIENT_PRIVILEGE,
                 format!("permission denied for table {pk_name}"),
