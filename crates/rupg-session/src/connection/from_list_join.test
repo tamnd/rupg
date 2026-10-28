@@ -1,0 +1,74 @@
+!details
+> create table sj (a int unique, b int, c int unique)
+CREATE TABLE
+> insert into sj values (1, null, 2), (null, 2, null), (2, 1, 1), (3, 1, 3)
+INSERT 0 4
+> analyze sj
+ANALYZE
+> set enable_hashjoin to off
+SET
+> set enable_mergejoin to off
+SET
+> explain (costs off) select t4.* from (select t1.*, t2.a as a1 from sj t1, sj t2 where t1.b = t2.b) as t3 join sj t4 on t4.a = t3.a where t3.a1 = 3
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   Join Filter: (t1.b = t2.b)
+row   ->  Seq Scan on sj t2
+row         Filter: (a = 3)
+row   ->  Seq Scan on sj t1
+row         Filter: (a IS NOT NULL)
+EXPLAIN
+> select t4.* from (select t1.*, t2.a as a1 from sj t1, sj t2 where t1.b = t2.b) as t3 join sj t4 on t4.a = t3.a where t3.a1 = 3 order by 1
+fields a@sj.1:23:4:-1,b@sj.2:23:4:-1,c@sj.3:23:4:-1
+row 2,1,1
+row 3,1,3
+SELECT 2
+> explain (costs off) select * from sj x left join (select p.a, q.c from sj p, sj q where p.b = q.b) s on x.a = s.a
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join
+row   Join Filter: (x.a = p.a)
+row   ->  Seq Scan on sj x
+row   ->  Materialize
+row         ->  Nested Loop
+row               Join Filter: (p.b = q.b)
+row               ->  Seq Scan on sj p
+row               ->  Materialize
+row                     ->  Seq Scan on sj q
+EXPLAIN
+> select * from sj x left join (select p.a, q.c from sj p, sj q where p.b = q.b) s on x.a = s.a order by 1, 2, 3, 4, 5
+fields a@sj.1:23:4:-1,b@sj.2:23:4:-1,c@sj.3:23:4:-1,a@sj.1:23:4:-1,c@sj.3:23:4:-1
+row 1,NULL,2,NULL,NULL
+row 2,1,1,2,1
+row 2,1,1,2,3
+row 3,1,3,3,1
+row 3,1,3,3,3
+row NULL,2,NULL,NULL,NULL
+SELECT 6
+> explain (costs off) select * from (select p.a, q.c from sj p, sj q where p.b = q.b) s left join sj x on x.a = s.c
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   Join Filter: (p.b = q.b)
+row   ->  Nested Loop Left Join
+row         Join Filter: (x.a = q.c)
+row         ->  Seq Scan on sj q
+row         ->  Materialize
+row               ->  Seq Scan on sj x
+row   ->  Materialize
+row         ->  Seq Scan on sj p
+EXPLAIN
+> select * from (select p.a, q.c from sj p, sj q where p.b = q.b) s left join sj x on x.a = s.c order by 1, 2, 3, 4, 5
+fields a@sj.1:23:4:-1,c@sj.3:23:4:-1,a@sj.1:23:4:-1,b@sj.2:23:4:-1,c@sj.3:23:4:-1
+row 2,1,1,NULL,2
+row 2,3,3,1,3
+row 3,1,1,NULL,2
+row 3,3,3,1,3
+row NULL,NULL,NULL,NULL,NULL
+SELECT 5
+> select * from sj x full join (select p.a, q.c from sj p, sj q where p.b = q.b and p.a < 3) s on x.a = s.a order by 1, 2, 3, 4, 5
+fields a@sj.1:23:4:-1,b@sj.2:23:4:-1,c@sj.3:23:4:-1,a@sj.1:23:4:-1,c@sj.3:23:4:-1
+row 1,NULL,2,NULL,NULL
+row 2,1,1,2,1
+row 2,1,1,2,3
+row 3,1,3,NULL,NULL
+row NULL,2,NULL,NULL,NULL
+SELECT 5
