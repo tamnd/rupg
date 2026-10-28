@@ -133,22 +133,32 @@ pub(super) fn btree_shape(
         .collect();
     let places = places?;
     let types = places.iter().map(|&p| columns.get(p).map(|c| c.ty)).collect::<Option<_>>()?;
+    Some(shape_of(index, places, types))
+}
+
+/// The shape of the `btree` index `index` with the columns at `places` of the types `types`.
+pub(super) fn shape_of(
+    index: &rupg_catalog::Relation,
+    places: Vec<usize>,
+    types: Vec<u32>,
+) -> Shape {
+    let info = index.index.as_ref();
     let option = |name: &str| {
         index.options.iter().find_map(|text| {
             let (found, value) = text.split_once('=')?;
             (found == name).then(|| value.to_ascii_lowercase())
         })
     };
-    Some(Shape {
+    Shape {
         columns: places,
         types,
-        key_count: usize::try_from(info.key_count).unwrap_or(0),
-        options: info.options.clone(),
-        unique: info.unique,
+        key_count: info.map_or(0, |i| usize::try_from(i.key_count).unwrap_or(0)),
+        options: info.map(|i| i.options.clone()).unwrap_or_default(),
+        unique: info.is_some_and(|i| i.unique),
         fillfactor: option("fillfactor").and_then(|v| v.parse().ok()).unwrap_or(90),
         deduplicate: option("deduplicate_items")
             .is_none_or(|v| !matches!(v.as_str(), "off" | "of" | "false" | "f" | "no" | "n" | "0")),
-    })
+    }
 }
 
 impl rupg_opt::Members for Members<'_, '_> {

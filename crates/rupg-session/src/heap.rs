@@ -1197,6 +1197,12 @@ impl Heap {
         size
     }
 
+    /// The size of a `btree` index whose build put `entries` in it, the keys of an index with expressions or a predicate. The columns of `shape` are places in the entries.
+    pub(crate) fn btree_size_of(entries: Vec<Box<[Value]>>, shape: &Shape) -> BtreeSize {
+        let total = entries.len();
+        btree::size(entries, total, shape)
+    }
+
     /// The number of live versions of a table for `ANALYZE` and `VACUUM`, as `heapam_scan_analyze_next_tuple` counts them for the transaction `xid`: the versions that a transaction that committed or `xid` inserted, and that no transaction deleted, or that a transaction in progress other than `xid` deletes.
     pub(crate) fn live_count(&self, database: u32, relation: u32, xid: u32) -> u64 {
         let state = self.state();
