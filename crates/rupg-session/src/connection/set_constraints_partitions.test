@@ -1,0 +1,61 @@
+!details
+> CREATE TABLE sc_pk (a int PRIMARY KEY) PARTITION BY LIST (a)
+CREATE TABLE
+> CREATE TABLE sc_pk1 PARTITION OF sc_pk FOR VALUES IN (1, 2) PARTITION BY LIST (a)
+CREATE TABLE
+> CREATE TABLE sc_pk11 PARTITION OF sc_pk1 FOR VALUES IN (1)
+CREATE TABLE
+> CREATE TABLE sc_pk3 PARTITION OF sc_pk FOR VALUES IN (3)
+CREATE TABLE
+> CREATE TABLE sc_fk (a int REFERENCES sc_pk DEFERRABLE INITIALLY IMMEDIATE)
+CREATE TABLE
+> INSERT INTO sc_pk VALUES (1), (3)
+INSERT 0 2
+> INSERT INTO sc_fk VALUES (1), (3)
+INSERT 0 2
+> BEGIN
+BEGIN
+> SET CONSTRAINTS sc_fk_a_fkey DEFERRED
+SET CONSTRAINTS
+> DELETE FROM sc_pk WHERE a = 1
+DELETE 1
+> DELETE FROM sc_fk WHERE a = 1
+DELETE 1
+> COMMIT
+COMMIT
+> BEGIN
+BEGIN
+> SET CONSTRAINTS sc_fk_a_fkey DEFERRED
+SET CONSTRAINTS
+> DELETE FROM sc_pk WHERE a = 3
+DELETE 1
+> COMMIT
+ERROR 23503 update or delete on table "sc_pk3" violates foreign key constraint "sc_fk_a_fkey_3" on table "sc_fk"
+DETAIL Key (a)=(3) is still referenced from table "sc_fk".
+> BEGIN
+BEGIN
+> SET CONSTRAINTS sc_fk_a_fkey DEFERRED
+SET CONSTRAINTS
+> DELETE FROM sc_pk WHERE a = 3
+DELETE 1
+> SET CONSTRAINTS sc_fk_a_fkey IMMEDIATE
+ERROR 23503 update or delete on table "sc_pk3" violates foreign key constraint "sc_fk_a_fkey_3" on table "sc_fk"
+DETAIL Key (a)=(3) is still referenced from table "sc_fk".
+> ROLLBACK
+ROLLBACK
+> SELECT a FROM sc_pk ORDER BY a
+fields a@sc_pk.1:23:4:-1
+row 3
+SELECT 1
+> CREATE TABLE sc_rp (a int PRIMARY KEY) PARTITION BY LIST (a)
+CREATE TABLE
+> CREATE TABLE sc_rp1 PARTITION OF sc_rp FOR VALUES IN (1)
+CREATE TABLE
+> CREATE TABLE sc_rf (a int REFERENCES sc_rp1) PARTITION BY LIST (a)
+CREATE TABLE
+> ALTER TABLE sc_rf ATTACH PARTITION sc_rp FOR VALUES IN (1)
+ERROR 55006 cannot ALTER TABLE "sc_rp1" because it is being used by active queries in this session
+> SELECT count(*) FROM pg_inherits WHERE inhparent = 'sc_rf'::regclass
+fields count:20:8:-1
+row 0
+SELECT 1

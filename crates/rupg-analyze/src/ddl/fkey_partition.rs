@@ -63,6 +63,18 @@ impl Definer<'_, '_> {
             return Ok(());
         }
         for partition in self.partdesc(con.relation)? {
+            // `CheckAlterTableIsSafe`: the referenced table is open, so a partition that is the referenced table is in use.
+            if partition == foreign.table {
+                let name =
+                    self.catalog.relation(partition).map(|r| r.name.clone()).unwrap_or_default();
+                return Err(Error::new(
+                    SqlState::OBJECT_IN_USE,
+                    format!(
+                        "cannot ALTER TABLE \"{name}\" because it is being used by active queries in this session"
+                    ),
+                ));
+            }
+            self.check_not_in_use(partition, "ALTER TABLE")?;
             let keys = self.map_keys(con.relation, partition, &con.keys)?;
             if self.try_attach_foreign_key(partition, &con, &keys, triggers)? {
                 continue;
