@@ -1,0 +1,17 @@
+!details
+> create domain pbd1 as int
+CREATE DOMAIN
+> create domain pbd2 as pbd1
+CREATE DOMAIN
+> select pg_basetype('pbd2'::regtype), pg_basetype('pbd1'::regtype), pg_basetype('int4'::regtype), pg_basetype(0::regtype), pg_basetype(123456::regtype), pg_basetype('information_schema.cardinal_number'::regtype), pg_basetype(null)
+fields pg_basetype:2206:4:-1,pg_basetype:2206:4:-1,pg_basetype:2206:4:-1,pg_basetype:2206:4:-1,pg_basetype:2206:4:-1,pg_basetype:2206:4:-1,pg_basetype:2206:4:-1
+row integer,integer,integer,NULL,NULL,integer,NULL
+SELECT 1
+> select pg_basetype('pbd2'::regtype)::text
+fields pg_basetype:25:-1:-1
+row integer
+SELECT 1
+> drop domain pbd2
+DROP DOMAIN
+> drop domain pbd1
+DROP DOMAIN

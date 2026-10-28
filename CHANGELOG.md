@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `pg_basetype` gives the bottom base type of a stack of domains, the type itself for a type that is not a domain, and a null for a type that does not exist (#1084).
 - A function with a long body, or with long defaults, takes one OID for each value of its pg_proc row that moves to the TOAST table, as in PostgreSQL. CREATE OR REPLACE FUNCTION and ALTER FUNCTION move the values again with new OIDs (#1082).
 - `ALTER DOMAIN` runs with `SET DEFAULT`, `DROP DEFAULT`, `SET NOT NULL`, `DROP NOT NULL`, `ADD CONSTRAINT` with and without `NOT VALID`, `DROP CONSTRAINT`, `VALIDATE CONSTRAINT` and `RENAME CONSTRAINT`. A new constraint checks the rows of the tables and materialized views with columns of the domain, and the errors of PostgreSQL come for arrays, ranges and composite types that hold the domain (#1083).
 - The trigger functions in C `tsvector_update_trigger`, `tsvector_update_trigger_column` and `suppress_redundant_updates_trigger` run, with the errors of PostgreSQL, also from a function in `internal` with the same `prosrc`, and so does `trigger_return_old` of the library of the regression tests (#1081).
