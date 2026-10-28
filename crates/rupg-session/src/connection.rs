@@ -6302,6 +6302,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/multirange_schema.test")));
     }
 
+    /// `DROP ROLE` of a role with privileges on a database gives the database in the detail of the error. `connection/drop_role_database_acl.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn drop_role_database_acl() {
+        big_stack(|| script(include_str!("connection/drop_role_database_acl.test")));
+    }
+
     /// An index depends once on each column of its keys, as `record_object_address_dependencies` records them, and its expressions add their own dependencies. `connection/index_depend.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn index_depend() {
