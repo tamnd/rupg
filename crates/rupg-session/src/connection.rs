@@ -6583,6 +6583,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/alter_domain.test")));
     }
 
+    /// `pg_basetype` gives the bottom base type of a stack of domains, the type itself for a type that is not a domain, and a null for a type that does not exist.
+    #[test]
+    fn pg_basetype() {
+        big_stack(|| script(include_str!("connection/pg_basetype.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

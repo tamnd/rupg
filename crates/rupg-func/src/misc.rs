@@ -91,6 +91,27 @@ fn pg_collation_for(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     }
 }
 
+/// `pg_basetype(regtype)`: the bottom base type of a stack of domains, or the type itself when it is not a domain. A type that does not exist gives a null.
+fn pg_basetype(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [Value::Oid(ty)] = args else { return Err(bad_value()) };
+    let catalog = call.session.catalog();
+    let mut ty = *ty;
+    for _ in 0..1000 {
+        let base = match catalog.and_then(|c| c.type_by_oid(ty)) {
+            Some(user) => user.domain.as_ref().map(|d| d.base),
+            None => match rupg_pgcatalog::builtin::type_by_oid(ty) {
+                Some(row) => (row.kind == b'd').then_some(row.base),
+                None => return Ok(Value::Null),
+            },
+        };
+        match base {
+            Some(base) => ty = base,
+            None => return Ok(Value::Oid(ty)),
+        }
+    }
+    Err(bad_value())
+}
+
 /// `pg_notify(text, text)`: `Async_Notify` with the channel and the payload. It is not strict, and a null is an empty string.
 fn pg_notify(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let text = |at: usize| args.get(at).and_then(Value::as_str).unwrap_or_default();
@@ -477,6 +498,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "clock_timestamp" => clock_timestamp,
         "pg_typeof" => pg_typeof,
         "pg_collation_for" => pg_collation_for,
+        "pg_basetype" => pg_basetype,
         "pg_column_size" => crate::datumsize::pg_column_size,
         "tid_block" => tid_block,
         "tid_offset" => tid_offset,
