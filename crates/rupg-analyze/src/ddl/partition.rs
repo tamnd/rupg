@@ -47,6 +47,18 @@ struct RangeBound {
     part: usize,
 }
 
+/// A partition with the keys of its place in [`Definer::partdesc`].
+struct Placed {
+    oid: u32,
+    bound: PartitionBound,
+    /// 0 for a bound with values, 1 for the partition of only the null value and 2 for the default.
+    rank: u8,
+    /// The least value of a list partition.
+    least: Option<Value>,
+    /// The lower bound of a range partition.
+    lower: Option<RangeBound>,
+}
+
 /// An existing partition of the parent: its name and its bound.
 struct Part {
     name: String,
@@ -749,6 +761,77 @@ impl Definer<'_, '_> {
             Ordering::Less => -colnum,
             Ordering::Greater => colnum,
         })
+    }
+
+    /// `RelationGetPartitionDesc`: the partitions of the partitioned table `table` in the canonical order of `partition_bounds_create`. Hash partitions go by modulus and remainder, list partitions by their least value with the partition of only the null value after them, and range partitions by their lower bound. The default partition comes last. Two partitions that compare equal keep the order of their OIDs.
+    pub(super) fn partdesc(&self, table: u32) -> Result<Vec<u32>> {
+        let mut parts: Vec<(u32, PartitionBound)> = self
+            .catalog
+            .partitions(table)
+            .iter()
+            .filter_map(|r| r.partition_of.as_ref().map(|p| (r.oid, p.bound.clone())))
+            .collect();
+        let key = self.catalog.relation(table).and_then(|r| r.partition_key.clone());
+        let Some(key) = key.filter(|_| parts.len() > 1) else {
+            return Ok(parts.into_iter().map(|(oid, _)| oid).collect());
+        };
+        parts.sort_by_key(|(oid, _)| *oid);
+        let types: Vec<u32> = self.key_columns(table, &key)?.iter().map(|c| c.ty).collect();
+        let ty = types.first().copied().unwrap_or(0);
+        let mut keyed = Vec::with_capacity(parts.len());
+        for (oid, bound) in parts {
+            let (rank, least, lower) = match &bound {
+                PartitionBound::Default => (2, None, None),
+                PartitionBound::Hash { .. } => (0, None, None),
+                PartitionBound::List(values) => {
+                    let mut least: Option<Value> = None;
+                    for text in values.iter().flatten() {
+                        let value = stored_value(text)?;
+                        let less = match &least {
+                            None => true,
+                            Some(l) => self.an.env.compare(ty, &value, l)? == Ordering::Less,
+                        };
+                        if less {
+                            least = Some(value);
+                        }
+                    }
+                    (u8::from(least.is_none()), least, None)
+                }
+                PartitionBound::Range { lower, .. } => {
+                    (0, None, Some(stored_bound(lower, true, 0)?))
+                }
+            };
+            keyed.push(Placed { oid, bound, rank, least, lower });
+        }
+        let mut sorted: Vec<Placed> = Vec::with_capacity(keyed.len());
+        // An insertion sort, as the comparison can fail; it keeps equal partitions in their order.
+        for item in keyed {
+            let mut at = sorted.len();
+            while at > 0 {
+                let prev = &sorted[at - 1];
+                let order = match (prev.rank.cmp(&item.rank), &prev.bound, &item.bound) {
+                    (Ordering::Equal, _, _) if item.rank != 0 => Ordering::Equal,
+                    (Ordering::Equal, a, b) => match (a, b) {
+                        (
+                            PartitionBound::Hash { modulus: ma, remainder: ra },
+                            PartitionBound::Hash { modulus: mb, remainder: rb },
+                        ) => (ma, ra).cmp(&(mb, rb)),
+                        _ => match (&prev.least, &item.least, &prev.lower, &item.lower) {
+                            (Some(a), Some(b), _, _) => self.an.env.compare(ty, a, b)?,
+                            (_, _, Some(a), Some(b)) => self.rbound_cmp(&types, a, b)?.cmp(&0),
+                            _ => Ordering::Equal,
+                        },
+                    },
+                    (order, _, _) => order,
+                };
+                if order != Ordering::Greater {
+                    break;
+                }
+                at -= 1;
+            }
+            sorted.insert(at, item);
+        }
+        Ok(sorted.into_iter().map(|p| p.oid).collect())
     }
 
     /// A merge sort of the bounds with `qsort_partition_rbound_cmp`. The comparison can fail, so the sort of the standard library does not fit.

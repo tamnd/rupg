@@ -248,7 +248,7 @@ impl Definer<'_, '_> {
         };
         let trigger = self.catalog.create_trigger(new, stmt.replace, &qual_refs)?;
         if code == b'p' && row {
-            let children: Vec<u32> = self.catalog.partitions(oid).iter().map(|r| r.oid).collect();
+            let children = self.partdesc(oid)?;
             for child in children {
                 self.clone_trigger(trigger, child, stmt.replace)?;
             }
@@ -285,7 +285,7 @@ impl Definer<'_, '_> {
         };
         let trigger = self.catalog.create_trigger(new, replace, &[])?;
         if self.catalog.relation(child).is_some_and(|r| r.kind == RelKind::Partitioned) {
-            let children: Vec<u32> = self.catalog.partitions(child).iter().map(|r| r.oid).collect();
+            let children = self.partdesc(child)?;
             for grandchild in children {
                 self.clone_trigger(trigger, grandchild, replace)?;
             }

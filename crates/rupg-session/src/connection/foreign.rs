@@ -449,10 +449,15 @@ impl Connection {
     pub(super) fn check_detached(&self, partitions: &[u32]) -> Result<(), Error> {
         let reader = self.reader();
         for &partition in partitions {
-            let Some(name) = self.catalog().relation(partition).map(|r| r.name.clone()) else {
+            let Some((name, kind)) =
+                self.catalog().relation(partition).map(|r| (r.name.clone(), r.kind))
+            else {
                 continue;
             };
-            let foreign = rupg_analyze::foreign_keys(&reader, partition, WriteKind::Delete)?;
+            // A partitioned table fires no triggers for a `DELETE`, so its keys come from the triggers of an `UPDATE`, which are for the same constraints.
+            let write =
+                if kind == RelKind::Partitioned { WriteKind::Update } else { WriteKind::Delete };
+            let foreign = rupg_analyze::foreign_keys(&reader, partition, write)?;
             for foreign in foreign.iter().filter(|f| !f.referencing && f.cloned) {
                 let others = Keys::of(
                     self.table_rows(foreign.other),
@@ -508,13 +513,22 @@ impl Connection {
             return heap.rows(table, &view);
         };
         let mut rows = Vec::new();
-        let mut pending: Vec<u32> = catalog.partitions(table).iter().map(|p| p.oid).collect();
-        while let Some(oid) = pending.pop() {
-            let Some(part) = catalog.relation(oid) else { continue };
-            if part.kind == RelKind::Partitioned {
-                pending.extend(catalog.partitions(oid).iter().map(|p| p.oid));
-                continue;
+        // The leaves in the order of a scan, or in the order of their OIDs when a compare of the bounds fails.
+        let leaves = rupg_exec::partition_leaves(table, &self.reader()).unwrap_or_else(|_| {
+            let mut leaves = Vec::new();
+            let mut pending: Vec<u32> = catalog.partitions(table).iter().map(|p| p.oid).collect();
+            while let Some(oid) = pending.pop() {
+                if catalog.relation(oid).is_some_and(|r| r.kind == RelKind::Partitioned) {
+                    pending.extend(catalog.partitions(oid).iter().map(|p| p.oid));
+                } else {
+                    leaves.push(oid);
+                }
             }
+            leaves.sort_unstable();
+            leaves
+        });
+        for oid in leaves {
+            let Some(part) = catalog.relation(oid) else { continue };
             let places: Vec<Option<usize>> = rel
                 .columns
                 .iter()

@@ -103,7 +103,7 @@ impl Definer<'_, '_> {
         constraint: Option<u32>,
         alter: bool,
     ) -> Result<bool> {
-        let children: Vec<u32> = self.catalog.partitions(table).iter().map(|r| r.oid).collect();
+        let children = self.partdesc(table)?;
         let mut valid = true;
         for child in children {
             // A foreign table has no indexes.

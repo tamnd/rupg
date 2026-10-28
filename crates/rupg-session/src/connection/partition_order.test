@@ -1,0 +1,75 @@
+!details
+> CREATE TABLE droppk (a int PRIMARY KEY) PARTITION BY RANGE (a)
+CREATE TABLE
+> CREATE TABLE droppk_d PARTITION OF droppk DEFAULT
+CREATE TABLE
+> CREATE TABLE droppk2 PARTITION OF droppk FOR VALUES FROM (1000) TO (2000) PARTITION BY RANGE (a)
+CREATE TABLE
+> CREATE TABLE droppk1 PARTITION OF droppk FOR VALUES FROM (0) TO (1000)
+CREATE TABLE
+> CREATE TABLE droppk2_d PARTITION OF droppk2 DEFAULT
+CREATE TABLE
+> CREATE TABLE droppk21 PARTITION OF droppk2 FOR VALUES FROM (1000) TO (1400)
+CREATE TABLE
+> INSERT INTO droppk VALUES (1), (1000), (1500), (2000)
+INSERT 0 4
+> CREATE TABLE dropfk (a int REFERENCES droppk)
+CREATE TABLE
+> INSERT INTO dropfk VALUES (1), (1000), (1500), (2000)
+INSERT 0 4
+> SELECT conname, confrelid::regclass FROM pg_constraint WHERE conrelid = 'dropfk'::regclass ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1,confrelid:2205:4:-1
+row dropfk_a_fkey,droppk
+row dropfk_a_fkey_1,droppk1
+row dropfk_a_fkey_2,droppk2
+row dropfk_a_fkey_3,droppk21
+row dropfk_a_fkey_4,droppk2_d
+row dropfk_a_fkey_5,droppk_d
+SELECT 6
+> ALTER TABLE droppk DETACH PARTITION droppk2
+ERROR 23503 removing partition "droppk2" violates foreign key constraint "dropfk_a_fkey_2"
+DETAIL Key (a)=(1000) is still referenced from table "dropfk".
+> ALTER TABLE droppk2 DETACH PARTITION droppk21
+ERROR 23503 removing partition "droppk21" violates foreign key constraint "dropfk_a_fkey_3"
+DETAIL Key (a)=(1000) is still referenced from table "dropfk".
+> DELETE FROM dropfk WHERE a >= 1000 AND a < 1400
+DELETE 1
+> ALTER TABLE droppk DETACH PARTITION droppk2
+ERROR 23503 removing partition "droppk2" violates foreign key constraint "dropfk_a_fkey_2"
+DETAIL Key (a)=(1500) is still referenced from table "dropfk".
+> CREATE TABLE lp (a int PRIMARY KEY) PARTITION BY LIST (a)
+CREATE TABLE
+> CREATE TABLE lp_d PARTITION OF lp DEFAULT
+CREATE TABLE
+> CREATE TABLE lp_null PARTITION OF lp FOR VALUES IN (NULL)
+CREATE TABLE
+> CREATE TABLE lp_9 PARTITION OF lp FOR VALUES IN (9, 3)
+CREATE TABLE
+> CREATE TABLE lp_1 PARTITION OF lp FOR VALUES IN (5, 1)
+CREATE TABLE
+> CREATE TABLE lf (a int REFERENCES lp)
+CREATE TABLE
+> SELECT conname, confrelid::regclass FROM pg_constraint WHERE conrelid = 'lf'::regclass ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1,confrelid:2205:4:-1
+row lf_a_fkey,lp
+row lf_a_fkey_1,lp_1
+row lf_a_fkey_2,lp_9
+row lf_a_fkey_3,lp_null
+row lf_a_fkey_4,lp_d
+SELECT 5
+> CREATE TABLE hp (a int PRIMARY KEY) PARTITION BY HASH (a)
+CREATE TABLE
+> CREATE TABLE hp_3 PARTITION OF hp FOR VALUES WITH (MODULUS 4, REMAINDER 3)
+CREATE TABLE
+> CREATE TABLE hp_1 PARTITION OF hp FOR VALUES WITH (MODULUS 2, REMAINDER 1)
+ERROR 42P17 partition "hp_1" would overlap partition "hp_3" at 46
+> CREATE TABLE hp_0 PARTITION OF hp FOR VALUES WITH (MODULUS 4, REMAINDER 0)
+CREATE TABLE
+> CREATE TABLE hf (a int REFERENCES hp)
+CREATE TABLE
+> SELECT conname, confrelid::regclass FROM pg_constraint WHERE conrelid = 'hf'::regclass ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1,confrelid:2205:4:-1
+row hf_a_fkey,hp
+row hf_a_fkey_1,hp_0
+row hf_a_fkey_2,hp_3
+SELECT 3
