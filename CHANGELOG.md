@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- With grouping sets, a constant key that a set does not have stays a key of the sort of the sets, and the `Sort` output and the `Group Key` show it as `(1)`, as in PG (#1066).
+
 ## 0.4.6 (2026-10-29)
 
 ### Added
