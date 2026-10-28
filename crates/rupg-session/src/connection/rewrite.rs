@@ -323,6 +323,19 @@ impl Connection {
                 || before.collation != after.collation
         });
         let own: Vec<&Transform> = transforms.iter().filter(|t| t.table == rel.oid).collect();
+        // The old columns that the new rows do not keep, which the expressions of `USING` can still read.
+        let others: Vec<usize> = if own.is_empty() {
+            Vec::new()
+        } else {
+            (0..width)
+                .filter(|&i| {
+                    let name = &rel.columns[i].name;
+                    !rel.columns[i].dropped
+                        && !live.contains(&i)
+                        && live.iter().all(|&k| now.columns[k].name != *name)
+                })
+                .collect()
+        };
         let (node, types) = if !live.is_empty() && (changed || !own.is_empty()) {
             // The last expression for a column wins, as the last entry of `tab->newvals` does.
             let exprs: Vec<Option<&Node>> = live
@@ -332,8 +345,9 @@ impl Connection {
                     own.iter().rev().find(|t| t.column == *name).map(|t| &t.expr)
                 })
                 .collect();
-            let types = live.iter().map(|&i| rel.columns[i].ty).collect();
-            (rupg_analyze::rewrite_insert(&target, &rv, &exprs), types)
+            let types = live.iter().chain(&others).map(|&i| rel.columns[i].ty).collect();
+            let names: Vec<&str> = others.iter().map(|&i| rel.columns[i].name.as_str()).collect();
+            (rupg_analyze::rewrite_insert(&target, &rv, &exprs, &names), types)
         } else {
             (rupg_analyze::copy_insert(&target, &rv, &[]), vec![0; live.len()])
         };
@@ -377,6 +391,7 @@ impl Connection {
             let row: Vec<Value> = live
                 .iter()
                 .zip(&reshape)
+                .chain(others.iter().map(|i| (i, &false)))
                 .map(|(&i, &reshape)| {
                     let value = if i < stored { row[i].clone() } else { Value::Null };
                     if reshape {
