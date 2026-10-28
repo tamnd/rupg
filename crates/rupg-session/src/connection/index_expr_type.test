@@ -1,0 +1,23 @@
+!details
+> create table fx (f1 text, f2 text, n int)
+CREATE TABLE
+> create index on fx ((f1 || f2), (row(f1, f2)))
+ERROR 42P16 column "row" has pseudo-type record
+> create index on fx ((row(f1, n)))
+ERROR 42P16 column "row" has pseudo-type record
+> create index fx_r on fx using hash ((row(f1, f2)))
+ERROR 42P16 column "row" has pseudo-type record
+> create index on fx ((f1 || f2), (f2 || f1))
+CREATE INDEX
+> select attname, atttypid::regtype from pg_attribute where attrelid = 'fx_expr_expr1_idx'::regclass order by attnum
+fields attname@pg_attribute.2:19:64:-1,atttypid:2206:4:-1
+row expr,text
+row expr1,text
+SELECT 2
+> create index fx_n on fx ((n + 1)) include (f1)
+CREATE INDEX
+> select indexrelid::regclass from pg_index where indrelid = 'fx'::regclass order by 1
+fields indexrelid:2205:4:-1
+row fx_expr_expr1_idx
+row fx_n
+SELECT 2
