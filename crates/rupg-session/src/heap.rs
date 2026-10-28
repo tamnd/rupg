@@ -11,8 +11,8 @@ use rupg_func::{HeapSize, Statistic, XactState};
 use rupg_types::{Value, oid};
 
 pub(crate) use btree::{Shape, Size as BtreeSize};
-pub(crate) use pages::{Fixed, Skip, datum_width, stored_widths};
-use pages::{Pages, Pruned, generation_of, max_align, page_of, slot_of, tuple_len};
+pub(crate) use pages::{Fixed, Skip, Storage, datum_width, stored_widths};
+use pages::{Pages, Pruned, generation_of, max_align, page_of, slot_of, toast};
 
 mod btree;
 mod fsm;
@@ -73,6 +73,8 @@ struct State {
     waits: HashMap<u32, u32>,
     /// The new versions of the transactions in progress whose keys a deferrable unique index must check again.
     rechecks: Vec<Recheck>,
+    /// The number of the values that the writes moved to the TOAST tables, whose OIDs the counter did not give yet.
+    toast_oids: u32,
 }
 
 /// A new version with the key of a live version, or of a version of a transaction in progress, in a deferrable unique index, as `UNIQUE_CHECK_PARTIAL` finds it. The key is checked again after the statement or at the commit, as the event of `unique_key_recheck` does it.
@@ -136,6 +138,8 @@ struct Table {
     btree_sizes: BTreeMap<u32, btree::Cached>,
     /// The storage of each column with a type of fixed length, which the new versions take in their pages.
     fixed: Vec<Fixed>,
+    /// `attstorage` of each column, with the method that compresses its values.
+    storage: Vec<Storage>,
 }
 
 /// The versions of a table by the hash of their key, for one unique key, which takes the place of the btree of a unique index. The map can keep the ID of a version that went, which a check skips.
@@ -302,13 +306,19 @@ impl Table {
         (xmin, cmin): (u32, u32),
         values: Vec<Value>,
         (unique, fresh): (&[Unique], &[DerivedKey]),
-        old: Option<u32>,
+        old: Option<u64>,
+        moved: &mut u32,
     ) -> u64 {
-        // A write that waited makes its versions again in the place that the first try took.
-        let len = max_align(tuple_len(&values, &self.fixed));
+        let prior = old.and_then(|old| self.find(old)).map(|at| &*self.versions[at].values);
+        let toasted = toast(&values, &self.fixed, &self.storage, prior);
+        // A write that waited makes its versions again in the place that the first try took. The first try took the OIDs of the TOAST values.
+        if kept.is_none() {
+            *moved += toasted.moved;
+        }
+        let len = max_align(toasted.len);
         let tid = kept.unwrap_or_else(|| {
             let bulk = self.bulk.filter(|&made| made == (xmin, cmin));
-            let (page, slot) = self.pages.place(len, old, bulk);
+            let (page, slot) = self.pages.place(len, old.map(page_of), bulk);
             pages::tid(self.pages.generation, page, slot)
         });
         self.made += 1;
@@ -886,9 +896,10 @@ impl Heap {
         let made = (view.xid, view.command);
         if unique.is_empty() {
             let mut state = self.state();
-            let table = state.tables.entry((view.database, relation)).or_default();
+            let State { tables, toast_oids, .. } = &mut *state;
+            let table = tables.entry((view.database, relation)).or_default();
             for values in rows {
-                ids.push(table.add(None, made, values, (unique, &[]), None));
+                ids.push(table.add(None, made, values, (unique, &[]), None, toast_oids));
             }
             return Ok(Changed::Done(count));
         }
@@ -897,13 +908,13 @@ impl Heap {
             keys.push(fresh(unique, values, derive)?);
         }
         let (mut state, places) = self.lock_keys((view.database, relation), unique, derive)?;
-        let State { tables, running, rechecks: pending, .. } = &mut *state;
+        let State { tables, running, rechecks: pending, toast_oids, .. } = &mut *state;
         let table = tables.entry((view.database, relation)).or_default();
         let mut kept = kept.iter().copied();
         let mut used = Vec::with_capacity(rows.len());
         let mut partial = Vec::new();
         for (values, keys) in rows.into_iter().zip(&keys) {
-            used.push(table.add(kept.next(), made, values, (unique, keys), None));
+            used.push(table.add(kept.next(), made, values, (unique, keys), None, toast_oids));
             let checked = (view.xid, &*running);
             match table.check_keys((&places, unique), &used, checked, &mut partial) {
                 Ok(None) => {}
@@ -960,7 +971,7 @@ impl Heap {
     ) -> Result<Speculative> {
         let keys = fresh(unique, &values, derive)?;
         let (mut state, places) = self.lock_keys((view.database, relation), unique, derive)?;
-        let State { tables, running, rechecks: pending, .. } = &mut *state;
+        let State { tables, running, rechecks: pending, toast_oids, .. } = &mut *state;
         let table = tables.entry((view.database, relation)).or_default();
         for &arbiter in arbiters {
             let Some(&place) = places.get(arbiter) else { continue };
@@ -1001,7 +1012,8 @@ impl Heap {
                 });
             }
         }
-        let used = [table.add(kept, (view.xid, view.command), values, (unique, &keys), None)];
+        let used =
+            [table.add(kept, (view.xid, view.command), values, (unique, &keys), None, toast_oids)];
         let mut partial = Vec::new();
         let checked = (view.xid, &*running);
         match table.check_keys((&places, unique), &used, checked, &mut partial) {
@@ -1039,7 +1051,7 @@ impl Heap {
             });
         }
         let (mut state, places) = self.lock_keys((view.database, relation), unique, derive)?;
-        let State { tables, running, rechecks: pending, .. } = &mut *state;
+        let State { tables, running, rechecks: pending, toast_oids, .. } = &mut *state;
         let Some(table) = tables.get_mut(&(view.database, relation)) else {
             return Ok(Changed::Done(0));
         };
@@ -1078,10 +1090,10 @@ impl Heap {
         let mut partial = Vec::new();
         for (old, values, keys) in found {
             let made = (view.xid, view.command);
-            let page = page_of(old);
-            table.pages.touch(page);
-            let page = Some(page);
-            let next = values.map_or(0, |v| table.add(kept.next(), made, v, (unique, &keys), page));
+            table.pages.touch(page_of(old));
+            let next = values.map_or(0, |v| {
+                table.add(kept.next(), made, v, (unique, &keys), Some(old), toast_oids)
+            });
             if let Some(at) = table.find(old) {
                 let version = &mut table.versions[at];
                 version.xmax = view.xid;
@@ -1298,12 +1310,35 @@ impl Heap {
     }
 
     /// Sets `attlen` and `attalign` of the columns of the table `relation` with a type of fixed length, which the new versions take in their pages, as `heap_compute_data_size` stores them.
-    pub(crate) fn set_layout(&self, database: u32, relation: u32, fixed: Vec<Fixed>) {
+    pub(crate) fn set_layout(
+        &self,
+        database: u32,
+        relation: u32,
+        (fixed, storage): (Vec<Fixed>, Vec<Storage>),
+    ) {
         let mut state = self.state();
         let table = state.tables.entry((database, relation)).or_default();
         if table.fixed != fixed {
             table.fixed = fixed;
         }
+        if table.storage != storage {
+            table.storage = storage;
+        }
+    }
+
+    /// The storage of the columns of the table `relation` that [`Heap::set_layout`] set, for the widths of the values of `ANALYZE`.
+    pub(crate) fn layout(&self, database: u32, relation: u32) -> (Vec<Fixed>, Vec<Storage>) {
+        let state = self.state();
+        state
+            .tables
+            .get(&(database, relation))
+            .map(|table| (table.fixed.clone(), table.storage.clone()))
+            .unwrap_or_default()
+    }
+
+    /// Takes the number of the values that the writes moved to the TOAST tables since the last call. Each one used an OID of the counter of the cluster, as `toast_save_datum` gives it.
+    pub(crate) fn take_toast_oids(&self) -> u32 {
+        std::mem::take(&mut self.state().toast_oids)
     }
 
     /// `vac_update_relstats`: sets `relpages` and `reltuples` of a table, outside of the transactions.

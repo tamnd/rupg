@@ -1,5 +1,6 @@
 //! The pages of the heap of a table: the storage of a version in a page, the free space of each page as `RelationGetBufferForTuple` fills them, the free space map and the visibility map, and `relpages` and `reltuples` of the table.
 
+use rupg_encode::Method;
 use rupg_types::Value;
 
 use super::fsm::Fsm;
@@ -87,7 +88,7 @@ fn layout(value: &Value) -> Layout {
             Layout::Varlena(len - 4, align)
         }
         // A composite value is a `HeapTupleHeader` with its fields.
-        Value::Record(record) => Layout::Varlena(tuple_len(&record.values, &[]) - 4, 8),
+        Value::Record(record) => Layout::Varlena(record_len(&record.values) - 4, 8),
         _ => Layout::Varlena(16, 4),
     }
 }
@@ -104,38 +105,236 @@ fn data_len(layouts: &[Layout]) -> usize {
 /// `attlen` and `attalign` of a column with a type of fixed length, as bytes, or `None` for a column whose values have the storage of their variants.
 pub(crate) type Fixed = Option<(usize, usize)>;
 
-/// `t_len` of a version with the values `values`, from `heap_form_tuple`: the header with the null bitmap, then the data. A value of a column with a type of fixed length in `fixed` has the length and the alignment of the type. A version longer than `TOAST_TUPLE_THRESHOLD` has its longest values in the TOAST table, as `heap_toast_insert_or_update` moves them while the data is too long. A value that the TOAST table takes is not compressed first, as the engine has no `pglz`.
-pub(super) fn tuple_len(values: &[Value], fixed: &[Fixed]) -> usize {
-    let nulls = values.iter().any(Value::is_null);
-    let header = max_align(TUPLE_HEADER + if nulls { values.len().div_ceil(8) } else { 0 });
-    let mut layouts: Vec<Layout> = values
-        .iter()
-        .enumerate()
-        .filter(|(_, v)| !v.is_null())
-        .map(|(at, v)| match fixed.get(at).copied().flatten() {
-            Some((len, align)) => Layout::Fixed(len, align),
-            None => layout(v),
-        })
-        .collect();
-    let mut len = data_len(&layouts);
-    if header + len > TOAST_THRESHOLD {
-        while header + len > TOAST_THRESHOLD {
-            let longest = layouts
-                .iter()
-                .enumerate()
-                .filter_map(|(at, layout)| match *layout {
-                    Layout::Varlena(size, _) if size + 4 > max_align(TOAST_POINTER) => {
-                        Some((size, at))
-                    }
-                    _ => None,
-                })
-                .max_by_key(|&(size, at)| (size, std::cmp::Reverse(at)));
-            let Some((_, at)) = longest else { break };
-            layouts[at] = Layout::Fixed(TOAST_POINTER, 1);
-            len = data_len(&layouts);
+/// `attstorage` of a column, with the method that compresses its values, as `heap_toast_insert_or_update` reads them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Storage {
+    /// `p`: the value stays in the version as it is, with a header of four bytes.
+    Plain,
+    /// `m`: the value is compressed, and goes to the TOAST table only when the version is longer than `TOAST_TUPLE_TARGET_MAIN`.
+    Main(Method),
+    /// `e`: the value goes to the TOAST table, and is not compressed.
+    External,
+    /// `x`: the value is compressed, and then goes to the TOAST table when the version is still too long.
+    Extended(Method),
+}
+
+/// The storage of a column that the heap has no storage for: `text` with `lz4`, the default of `default_toast_compression`.
+const DEFAULT_STORAGE: Storage = Storage::Extended(Method::Lz4);
+
+/// `TOAST_TUPLE_TARGET_MAIN`, `MaxHeapTupleSize`: the length of a version up to which a value with the storage `m` stays in the version.
+const TARGET_MAIN: usize = PAGE_SIZE as usize - 32;
+
+/// The form of a `varlena` value in a version, `tai_colflags` and the value of `ToastAttrInfo`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Held {
+    /// As it is, with a header of one byte when the column can take it.
+    Raw,
+    /// Compressed, with a header of eight bytes.
+    Compressed,
+    /// In the TOAST table, with a pointer of `TOAST_POINTER_SIZE` bytes in the version.
+    External,
+}
+
+/// A value of a version in the TOAST model.
+#[derive(Clone, Copy)]
+enum Slot {
+    Null,
+    Fixed(usize, usize),
+    Varlena {
+        /// `tai_size`: `VARSIZE_ANY` of the value in its form.
+        size: usize,
+        /// The length of the value with a header of four bytes, `toast_raw_datum_size`.
+        raw: usize,
+        align: usize,
+        held: Held,
+        /// `TOASTCOL_INCOMPRESSIBLE`.
+        incompressible: bool,
+        /// `TOASTCOL_IGNORE`: the value of a `p` column, or a value in the TOAST table that the update keeps.
+        ignore: bool,
+    },
+}
+
+/// The values of a version after `heap_toast_insert_or_update`.
+pub(super) struct Toasted {
+    /// `t_len`.
+    pub(super) len: usize,
+    /// The number of values that `toast_save_datum` writes to the TOAST table, each with a new OID from `GetNewOidWithIndex`.
+    pub(super) moved: u32,
+    slots: Vec<Slot>,
+}
+
+impl Toasted {
+    /// True when the value at `at` is in the TOAST table.
+    fn external(&self, at: usize) -> bool {
+        matches!(self.slots.get(at), Some(Slot::Varlena { held: Held::External, .. }))
+    }
+}
+
+/// `heap_compute_data_size` of the values in `slots`.
+fn slots_len(slots: &[Slot]) -> usize {
+    slots.iter().fold(0, |len, slot| match *slot {
+        Slot::Null => len,
+        Slot::Fixed(size, align) => align_to(len, align) + size,
+        Slot::Varlena { size, held: Held::External, .. } => len + size,
+        Slot::Varlena { size, raw, held: Held::Raw, .. } if size < raw => len + size,
+        Slot::Varlena { size, align, .. } => align_to(len, align) + size,
+    })
+}
+
+/// The bytes of a value that the engine can compress as PostgreSQL does: the text of `text` and the bytes of `bytea`. The other types are not compressed, as if each one were incompressible.
+fn plain_bytes(value: &Value) -> Option<&[u8]> {
+    match value {
+        Value::Text(text) => Some(text.as_bytes()),
+        Value::Bytea(bytes) => Some(bytes),
+        _ => None,
+    }
+}
+
+/// `toast_tuple_find_biggest_attribute`: the longest value that a round of the toaster can take, with `tai_size` more than `MAXALIGN(TOAST_POINTER_SIZE)`. The first one wins a tie.
+fn biggest(slots: &[Slot], storage: &[Storage], compress: bool, main: bool) -> Option<usize> {
+    let mut best = None;
+    let mut best_size = max_align(TOAST_POINTER);
+    for (at, slot) in slots.iter().enumerate() {
+        let Slot::Varlena { size, held, incompressible, ignore, .. } = *slot else { continue };
+        if ignore || held == Held::External || (compress && (incompressible || held != Held::Raw)) {
+            continue;
+        }
+        let kind = storage.get(at).copied().unwrap_or(DEFAULT_STORAGE);
+        let wanted = if main {
+            matches!(kind, Storage::Main(_))
+        } else {
+            matches!(kind, Storage::Extended(_) | Storage::External)
+        };
+        if wanted && size > best_size {
+            best = Some(at);
+            best_size = size;
         }
     }
-    header + len
+    best
+}
+
+/// `toast_tuple_try_compression`.
+fn try_compress(slot: &mut Slot, value: &Value, method: Method) {
+    let Slot::Varlena { size, held, incompressible, .. } = slot else { return };
+    match plain_bytes(value).and_then(|bytes| rupg_encode::toast_compress(method, bytes)) {
+        Some(compressed) => {
+            *size = compressed;
+            *held = Held::Compressed;
+        }
+        None => *incompressible = true,
+    }
+}
+
+/// `toast_tuple_externalize`.
+fn externalize(slot: &mut Slot, moved: &mut u32) {
+    if let Slot::Varlena { size, held, .. } = slot {
+        *size = TOAST_POINTER;
+        *held = Held::External;
+        *moved += 1;
+    }
+}
+
+/// `heap_form_tuple` and then `heap_toast_insert_or_update` of a version with the values `values`: the header with the null bitmap, then the data. A value of a column with a type of fixed length in `fixed` has the length and the alignment of the type. When the version is longer than `TOAST_TUPLE_THRESHOLD`, the toaster compresses its longest values and moves them to the TOAST table in four rounds, with the storage of each column in `storage`. `prior` has the values of the version that an update replaces: a value that is the same as a value of `prior` in the TOAST table stays there, and takes no new OID.
+pub(super) fn toast(
+    values: &[Value],
+    fixed: &[Fixed],
+    storage: &[Storage],
+    prior: Option<&[Value]>,
+) -> Toasted {
+    let nulls = values.iter().any(Value::is_null);
+    let header = max_align(TUPLE_HEADER + if nulls { values.len().div_ceil(8) } else { 0 });
+    let kept = prior.map(|prior| (toast(prior, fixed, storage, None), prior));
+    let mut slots: Vec<Slot> = values
+        .iter()
+        .enumerate()
+        .map(|(at, value)| {
+            if value.is_null() {
+                return Slot::Null;
+            }
+            let (data, align) = match fixed
+                .get(at)
+                .copied()
+                .flatten()
+                .map_or_else(|| layout(value), |(len, align)| Layout::Fixed(len, align))
+            {
+                Layout::Fixed(len, align) => return Slot::Fixed(len, align),
+                Layout::Varlena(data, align) => (data, align),
+            };
+            let kind = storage.get(at).copied().unwrap_or(DEFAULT_STORAGE);
+            let same = kept.as_ref().is_some_and(|(old, prior)| {
+                old.external(at) && prior.get(at).is_some_and(|p| p == value)
+            });
+            let short = kind != Storage::Plain && data < 127;
+            Slot::Varlena {
+                size: if same {
+                    TOAST_POINTER
+                } else if short {
+                    data + 1
+                } else {
+                    data + 4
+                },
+                raw: data + 4,
+                align,
+                held: if same { Held::External } else { Held::Raw },
+                incompressible: false,
+                ignore: same || kind == Storage::Plain,
+            }
+        })
+        .collect();
+    let mut moved = 0;
+    let has_external =
+        slots.iter().any(|s| matches!(s, Slot::Varlena { held: Held::External, .. }));
+    if header + slots_len(&slots) <= TOAST_THRESHOLD && !has_external {
+        return Toasted { len: header + slots_len(&slots), moved, slots };
+    }
+    let target = TOAST_THRESHOLD - header;
+    let method = |at: usize| match storage.get(at).copied().unwrap_or(DEFAULT_STORAGE) {
+        Storage::Main(method) | Storage::Extended(method) => Some(method),
+        Storage::Plain | Storage::External => None,
+    };
+    // Round 1: compress each value with the storage `x`, the longest first, and move a value that is still longer than the target.
+    while slots_len(&slots) > target {
+        let Some(at) = biggest(&slots, storage, true, false) else { break };
+        match method(at) {
+            Some(m) => try_compress(&mut slots[at], &values[at], m),
+            None => {
+                if let Slot::Varlena { incompressible, .. } = &mut slots[at] {
+                    *incompressible = true;
+                }
+            }
+        }
+        if let Slot::Varlena { size, .. } = slots[at]
+            && size > target
+        {
+            externalize(&mut slots[at], &mut moved);
+        }
+    }
+    // Round 2: move the values with the storage `x` and `e` that are still in the version.
+    while slots_len(&slots) > target {
+        let Some(at) = biggest(&slots, storage, false, false) else { break };
+        externalize(&mut slots[at], &mut moved);
+    }
+    // Round 3: compress the values with the storage `m`.
+    while slots_len(&slots) > target {
+        let Some(at) = biggest(&slots, storage, true, true) else { break };
+        if let Some(m) = method(at) {
+            try_compress(&mut slots[at], &values[at], m);
+        }
+    }
+    // Round 4: move the values with the storage `m` only when the version does not fit in a page.
+    while slots_len(&slots) > TARGET_MAIN - header {
+        let Some(at) = biggest(&slots, storage, false, true) else { break };
+        externalize(&mut slots[at], &mut moved);
+    }
+    Toasted { len: header + slots_len(&slots), moved, slots }
+}
+
+/// The length of a composite value, a `HeapTupleHeader` with its fields, which `heap_form_tuple` makes with no TOAST.
+fn record_len(values: &[Value]) -> usize {
+    let nulls = values.iter().any(Value::is_null);
+    let header = max_align(TUPLE_HEADER + if nulls { values.len().div_ceil(8) } else { 0 });
+    let layouts: Vec<Layout> = values.iter().filter(|v| !v.is_null()).map(layout).collect();
+    header + data_len(&layouts)
 }
 
 /// `IndexTupleSize` of an index tuple with the values `values`, from `index_form_tuple`: the header of 8 bytes, with the null bitmap of 4 bytes up to a multiple of 8 when a value is null, and then the data, up to a multiple of 8. The values are not compressed.
@@ -153,48 +352,17 @@ pub(crate) fn datum_width(value: &Value) -> (usize, usize) {
     }
 }
 
-/// The lengths of the values `values` of a version, as `ANALYZE` reads them: `VARSIZE_ANY` of the value in the version, which is the length of the TOAST pointer for a value that [`tuple_len`] moves to the TOAST table, and `toast_raw_datum_size`, the length of the value with a header of four bytes. A null value and a value of fixed length give 0 for both.
-pub(crate) fn stored_widths(values: &[Value]) -> Vec<(usize, usize)> {
-    let nulls = values.iter().any(Value::is_null);
-    let header = max_align(TUPLE_HEADER + if nulls { values.len().div_ceil(8) } else { 0 });
-    let mut layouts: Vec<Layout> = values.iter().map(layout).collect();
-    let mut toasted = vec![false; values.len()];
-    let present = |layouts: &[Layout]| {
-        let kept: Vec<Layout> = layouts
-            .iter()
-            .zip(values)
-            .filter(|(_, v)| !v.is_null())
-            .map(|(layout, _)| *layout)
-            .collect();
-        data_len(&kept)
-    };
-    while header + present(&layouts) > TOAST_THRESHOLD {
-        let longest = layouts
-            .iter()
-            .enumerate()
-            .filter(|&(at, _)| !values[at].is_null())
-            .filter_map(|(at, layout)| match *layout {
-                Layout::Varlena(size, _) if size + 4 > max_align(TOAST_POINTER) => Some((size, at)),
-                _ => None,
-            })
-            .max_by_key(|&(size, at)| (size, std::cmp::Reverse(at)));
-        let Some((_, at)) = longest else { break };
-        layouts[at] = Layout::Fixed(TOAST_POINTER, 1);
-        toasted[at] = true;
-    }
-    values
-        .iter()
-        .zip(layouts)
-        .zip(toasted)
-        .map(|((value, layout), toasted)| match layout {
-            _ if value.is_null() => (0, 0),
-            Layout::Fixed(..) if toasted => {
-                let Layout::Varlena(size, _) = self::layout(value) else { return (0, 0) };
-                (TOAST_POINTER, size + 4)
-            }
-            Layout::Fixed(..) => (0, 0),
-            Layout::Varlena(size, _) if size < 127 => (size + 1, size + 4),
-            Layout::Varlena(size, _) => (size + 4, size + 4),
+/// The lengths of the values `values` of a version, as `ANALYZE` reads them: `VARSIZE_ANY` of the value in the version, which is the length of the compressed value or of the TOAST pointer for a value that [`toast`] compresses or moves, and `toast_raw_datum_size`, the length of the value with a header of four bytes. A null value and a value of fixed length give 0 for both.
+pub(crate) fn stored_widths(
+    values: &[Value],
+    fixed: &[Fixed],
+    storage: &[Storage],
+) -> Vec<(usize, usize)> {
+    let toasted = toast(values, fixed, storage, None);
+    (0..values.len())
+        .map(|at| match toasted.slots.get(at) {
+            Some(&Slot::Varlena { size, raw, .. }) => (size, raw),
+            _ => (0, 0),
         })
         .collect()
 }
@@ -535,5 +703,40 @@ impl Pages {
         self.relallvisible = visible.min(self.relpages);
         self.relallfrozen = frozen.min(self.relpages);
         self.reltuples
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Hex digits of a linear congruential generator, which the compressors cannot make shorter.
+    fn noise(len: usize) -> String {
+        let mut state = 1u64;
+        (0..len)
+            .map(|_| {
+                state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                char::from(b"0123456789abcdef"[(state >> 60) as usize])
+            })
+            .collect()
+    }
+
+    #[test]
+    fn toast_rounds() {
+        let text = |text: String| [Value::Text(text)];
+        let lz4 = [Storage::Extended(Method::Lz4)];
+        // A value that does not compress moves to the TOAST table, and the tuple keeps a pointer of 18 bytes.
+        let moved = toast(&text(noise(3200)), &[None], &lz4, None);
+        assert_eq!((moved.moved, moved.len), (1, 24 + 18));
+        // A value that compresses stays in the tuple with a header of 8 bytes.
+        let compressed = toast(&text("ab".repeat(3000)), &[None], &lz4, None);
+        assert_eq!((compressed.moved, compressed.len), (0, 24 + 43));
+        // `main` keeps the value in the tuple while the tuple is shorter than a page.
+        let main = toast(&text(noise(3200)), &[None], &[Storage::Main(Method::Lz4)], None);
+        assert_eq!((main.moved, main.len), (0, 24 + 3204));
+        // An update that keeps a value that is in the TOAST table uses no new OID.
+        let old = text(noise(3200));
+        let kept = toast(&old, &[None], &lz4, Some(&old));
+        assert_eq!((kept.moved, kept.len), (0, 24 + 18));
     }
 }

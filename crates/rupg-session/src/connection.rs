@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use rupg_analyze::{Derived, Message, Params, SchemaElements, Write, WriteKind};
 use rupg_catalog::{Catalog, database};
 use rupg_common::{Error, Level as ErrorLevel, Object, SqlState};
+use rupg_encode::Method;
 use rupg_exec::Plan;
 use rupg_func::{BackendState, Randomness, Sequences};
 pub use rupg_func::{Client, Ssl};
@@ -29,7 +30,7 @@ use rupg_wire::{
 
 use crate::block::{Block, Ending, Transaction};
 use crate::guc::{Action, Origin, Settings};
-use crate::heap::{Change, Changed, Heap, Recheck, Snapshot, View, tid_text};
+use crate::heap::{Change, Changed, Heap, Recheck, Snapshot, Storage, View, tid_text};
 use crate::query::{self, Column, Reader, Row, Transition};
 use crate::store::{Lease, Store};
 use crate::utility::{self, Context, Notice, Outcome};
@@ -1217,8 +1218,33 @@ impl Connection {
         }
     }
 
-    /// [`Self::heap_layout`] for the columns of the relation `relation`.
+    /// [`Self::heap_layout`] for the columns of the relation `relation`, with `attstorage` of each column and the method of `attcompression` or else of `default_toast_compression`.
     fn relation_layout(&self, relation: &rupg_catalog::Relation) {
+        let default = match self.settings().get("default_toast_compression").as_deref() {
+            Some("pglz") => Method::Pglz,
+            _ => Method::Lz4,
+        };
+        let storage = relation
+            .columns
+            .iter()
+            .map(|column| {
+                let kind = match column.storage {
+                    0 => builtin::type_by_oid(column.ty).map_or(b'x', |ty| ty.storage),
+                    kind => kind,
+                };
+                let method = match column.compression {
+                    b'p' => Method::Pglz,
+                    b'l' => Method::Lz4,
+                    _ => default,
+                };
+                match kind {
+                    b'p' => Storage::Plain,
+                    b'e' => Storage::External,
+                    b'm' => Storage::Main(method),
+                    _ => Storage::Extended(method),
+                }
+            })
+            .collect();
         let fixed = relation
             .columns
             .iter()
@@ -1233,7 +1259,7 @@ impl Connection {
                 (ty.len > 0).then(|| (usize::from(ty.len.unsigned_abs()), align))
             })
             .collect();
-        self.store.heap().set_layout(self.database_oid, relation.oid, fixed);
+        self.store.heap().set_layout(self.database_oid, relation.oid, (fixed, storage));
     }
 
     /// Runs the elements of `CREATE SCHEMA` after the statement made the schema, as `CreateSchemaCommand` runs them: as the owner of the schema and with the schema first in `search_path`. The settings of the session come back after the elements, also after an error.
@@ -2481,11 +2507,24 @@ impl Connection {
         }
     }
 
+    /// `toast_save_datum` takes an OID of the counter for each value that a write moves to a TOAST table. The heap counts the values, and at the end of the statement the counter of the lease, or else the counter of the cluster, gives their OIDs.
+    fn toast_oids(&mut self) {
+        let count = self.store.heap().take_toast_oids();
+        if count == 0 {
+            return;
+        }
+        match self.lease.get_mut() {
+            Some(lease) => Arc::make_mut(&mut lease.catalog).skip_oids(count),
+            None => self.store.skip_oids(count),
+        }
+    }
+
     /// `finish_xact_command`: the end of a statement, and the end or the chained start of its transaction. It does nothing when no statement runs.
     fn finish_xact(&mut self) {
         if !self.xact_started {
             return;
         }
+        self.toast_oids();
         self.xact_started = false;
         let (ending, chained) = self.transaction.finish_command();
         let kept = chained.then(|| self.settings.get_mut().characteristics());

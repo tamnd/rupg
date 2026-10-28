@@ -454,8 +454,9 @@ impl Connection {
                     table.columns.iter().position(|t| !t.dropped && !c.dropped && t.name == c.name)
                 })
                 .collect();
+            let (fixed, storage) = heap.layout(self.database_oid, table.oid);
             for row in sample {
-                let widths = crate::heap::stored_widths(&row);
+                let widths = crate::heap::stored_widths(&row, &fixed, &storage);
                 let pick =
                     |at: Option<usize>| at.and_then(|at| Some((row.get(at)?.clone(), widths[at])));
                 let (values, widths) =

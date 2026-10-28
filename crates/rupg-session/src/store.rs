@@ -521,6 +521,12 @@ impl Store {
     }
 
     /// The rows of the tables.
+    /// Uses `count` OIDs of the counter of the cluster, as the values that the writes moved to the TOAST tables use them.
+    pub(crate) fn skip_oids(&self, count: u32) {
+        let mut state = self.state();
+        state.next_oid = state.next_oid.saturating_add(count);
+    }
+
     pub(crate) fn heap(&self) -> &Heap {
         &self.heap
     }

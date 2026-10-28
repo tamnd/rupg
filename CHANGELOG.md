@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The heap stores each row as the TOAST code of PostgreSQL does. A long value is compressed with lz4 or pglz, as attstorage, attcompression and default_toast_compression tell, or moves to the TOAST table. Each moved value takes one OID, so the OIDs of the objects that come after it are the same as in PostgreSQL (#1077).
 - The output of an `oidvector` or an `int2vector` from an array with no dimension or a null element fails with `array is not a valid oidvector`, as `check_valid_oidvector` does, and an empty value has one dimension, so `array_dims` gives `[0:-1]`. `array_sort` fails for an element type with no `<` operator, such as `xid`, when it has two or more items to sort (#1076).
 - Above the `Agg` of grouping sets, the sort of a window keeps a nullable item as a key, and a nullable constant key of an `Agg` over a node that projects shows as `1`, not `(1)`, as in PG (#1075).
 - Above the `Agg` of grouping sets, an item that a set does not have is not redundant with a key that `WHERE` makes equal to it, so `ORDER BY` and `DISTINCT` keep it as a key, as in PG (#1074).
