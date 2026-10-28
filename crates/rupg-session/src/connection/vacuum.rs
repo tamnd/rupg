@@ -1,5 +1,6 @@
 //! `VACUUM` and `ANALYZE`, as `ExecVacuum` and `vacuum` of `vacuum.c` run them: the options, the checks of the options and of the relations, and the warnings for the relations that the statement skips. `VACUUM` removes the dead row versions of each table, and the statement sets `relpages`, `reltuples`, `relallvisible` and `relallfrozen` of each table. `ANALYZE` writes the statistics of the columns to `pg_statistic`. `VACUUM FULL` runs as a plain `VACUUM`.
 
+use rupg_analyze::VacuumRel;
 use rupg_catalog::size::{empty_index_pages, new_table_tuples};
 use rupg_catalog::{Catalog, RelKind, Relation};
 
@@ -181,7 +182,7 @@ fn check_options(stmt: &VacuumStmt, parsed: &Parsed) -> Result<(), Error> {
 }
 
 impl Connection {
-    /// `ExecVacuum`, then `vacuum`: `PreventInTransactionBlock` for `VACUUM`, and the checks of [`rupg_analyze::vacuum_relations`] on each relation of the statement. The session has only a superuser role, so the check of `vacuum_is_permitted_for_relation` always passes.
+    /// `ExecVacuum`, then `vacuum`: `PreventInTransactionBlock` for `VACUUM`, and the checks of [`rupg_analyze::vacuum_relations`] on each relation of the statement. `vacuum_is_permitted_for_relation` skips a relation that the role cannot maintain, with a warning.
     pub(super) fn vacuum(
         &self,
         stmt: &VacuumStmt,
@@ -198,16 +199,28 @@ impl Connection {
         let analyze = parsed.analyze || !stmt.is_vacuumcmd;
         let reader = self.reader();
         let mut warnings = Vec::new();
+        let permitted = |relid| rupg_func::vacuum_permitted(relid, &reader);
         let result = rupg_analyze::vacuum_relations(
             &stmt.rels,
             &reader,
             stmt.is_vacuumcmd,
             analyze,
+            &permitted,
             &mut warnings,
         );
         notices.extend(warnings.into_iter().map(Notice::warning));
         let relids = result?;
         let catalog = self.catalog();
+        // `get_all_vacuum_rels` and `vacuum_rel` check each relation of the list and each partition again.
+        let mut permitted_or_warn = |relid: u32| {
+            if permitted(relid) {
+                return true;
+            }
+            let name = catalog.relation(relid).map_or("", |r| r.name.as_str());
+            let warning = rupg_analyze::vacuum_denied(name, stmt.is_vacuumcmd);
+            notices.push(Notice::warning(warning));
+            false
+        };
         // `get_all_vacuum_rels`: with no list, each table, materialized view and partitioned table.
         let relids = if parsed.only_database_stats {
             Vec::new()
@@ -215,16 +228,24 @@ impl Connection {
             let kinds = |r: &&Relation| {
                 matches!(r.kind, RelKind::Table | RelKind::MatView | RelKind::Partitioned)
             };
-            catalog.relations().filter(kinds).map(|r| (r.oid, Vec::new())).collect()
+            let rels: Vec<u32> = catalog.relations().filter(kinds).map(|r| r.oid).collect();
+            rels.into_iter().filter(|&r| permitted_or_warn(r)).map(|r| (r, Vec::new())).collect()
         } else {
             // `expand_vacuum_rel`: with no `ONLY`, the partitions and the inheritance children of the relation come after it, with its column list.
             let mut all = Vec::new();
-            for (relid, columns, inh) in relids {
+            for VacuumRel { relid, columns, inh, permitted } in relids {
                 if inh {
                     let children = catalog.all_inheritors(relid);
-                    all.push((relid, columns.clone()));
-                    all.extend(children.into_iter().map(|child| (child, columns.clone())));
-                } else {
+                    if permitted {
+                        all.push((relid, columns.clone()));
+                    }
+                    all.extend(
+                        children
+                            .into_iter()
+                            .filter(|&child| permitted_or_warn(child))
+                            .map(|child| (child, columns.clone())),
+                    );
+                } else if permitted {
                     all.push((relid, columns));
                 }
             }

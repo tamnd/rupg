@@ -283,6 +283,13 @@ pub fn relation_allowed(relid: u32, mask: u32, session: &dyn Session) -> bool {
     matches!(class_check(relid, current_user(session), mask, session), Ok(Some(true) | None))
 }
 
+/// `vacuum_is_permitted_for_relation`: true when the current user owns the database and the relation is not shared, or has `MAINTAIN` on the relation.
+pub fn vacuum_permitted(relid: u32, session: &dyn Session) -> bool {
+    let shared = builtin::class_by_oid(relid).is_some_and(|row| row.shared);
+    (!shared && owns(rupg_pgcatalog::roles::current().database_owner(), session))
+        || relation_allowed(relid, ACL_MAINTAIN, session)
+}
+
 /// `is_admin_of_role`: true when `member` is a superuser, or when a role that `member` is a member of has the admin option on `role`. A role is not an admin of itself.
 fn is_admin_of_role(member: u32, role: u32) -> bool {
     if superuser(member) {

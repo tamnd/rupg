@@ -4,7 +4,6 @@ use rupg_catalog::{IndexInfo, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::RefreshMatViewStmt;
 
-use super::comment::not_owner;
 use super::drop::{owner_word, quote_identifier};
 use super::{Definer, Found, not_yet, relname};
 
@@ -31,9 +30,18 @@ impl Definer<'_, '_> {
         let Some(rel) = self.catalog.relation(oid).cloned() else {
             return Err(Error::internal(format!("cache lookup failed for relation {oid}")));
         };
-        // `RangeVarCallbackMaintainsTable`: rupg has no `MAINTAIN` privilege, so only the owner can refresh.
-        if !self.is_superuser() && !self.owns(rel.owner) {
-            return Err(not_owner(owner_word(kind), name));
+        // `RangeVarCallbackMaintainsTable`: a table or a materialized view, and the `MAINTAIN` privilege on it.
+        if !matches!(kind, b'r' | b't' | b'm' | b'p') {
+            return Err(Error::new(
+                SqlState::WRONG_OBJECT_TYPE,
+                format!("\"{name}\" is not a table or materialized view"),
+            ));
+        }
+        if !self.may_maintain(oid) {
+            return Err(Error::new(
+                SqlState::INSUFFICIENT_PRIVILEGE,
+                format!("permission denied for {} {name}", owner_word(kind)),
+            ));
         }
         if rel.kind != RelKind::MatView {
             return Err(Error::new(

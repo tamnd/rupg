@@ -1,0 +1,194 @@
+> CREATE ROLE regress_mt_no
+CREATE ROLE
+> CREATE ROLE regress_mt_yes
+CREATE ROLE
+> CREATE ROLE regress_mt_all IN ROLE pg_maintain
+CREATE ROLE
+> CREATE TABLE mt_t (a int)
+CREATE TABLE
+> GRANT MAINTAIN ON mt_t TO regress_mt_yes
+GRANT
+> CREATE MATERIALIZED VIEW mt_mv AS SELECT 1 AS x
+SELECT 1
+> GRANT MAINTAIN ON mt_mv TO regress_mt_yes
+GRANT
+> CREATE VIEW mt_v AS SELECT 1 AS x
+CREATE VIEW
+> CREATE TABLE mt_p (a int) PARTITION BY LIST (a)
+CREATE TABLE
+> CREATE TABLE mt_p1 PARTITION OF mt_p FOR VALUES IN (1)
+CREATE TABLE
+> CREATE TABLE mt_p2 PARTITION OF mt_p FOR VALUES IN (2)
+CREATE TABLE
+> GRANT MAINTAIN ON mt_p, mt_p1 TO regress_mt_yes
+GRANT
+> SET ROLE regress_mt_no
+SET
+is_superuser=off
+> VACUUM mt_t
+WARNING 01000 permission denied to vacuum "mt_t", skipping it
+VACUUM
+> ANALYZE mt_t
+WARNING 01000 permission denied to analyze "mt_t", skipping it
+ANALYZE
+> VACUUM (ANALYZE) mt_t
+WARNING 01000 permission denied to vacuum "mt_t", skipping it
+VACUUM
+> VACUUM mt_t, mt_mv
+WARNING 01000 permission denied to vacuum "mt_t", skipping it
+WARNING 01000 permission denied to vacuum "mt_mv", skipping it
+VACUUM
+> ANALYZE mt_t (a)
+WARNING 01000 permission denied to analyze "mt_t", skipping it
+ANALYZE
+> ANALYZE mt_t (nope)
+WARNING 01000 permission denied to analyze "mt_t", skipping it
+ANALYZE
+> REFRESH MATERIALIZED VIEW mt_mv
+ERROR 42501 permission denied for materialized view mt_mv
+> REFRESH MATERIALIZED VIEW mt_v
+ERROR 42809 "mt_v" is not a table or materialized view
+> REFRESH MATERIALIZED VIEW mt_t
+ERROR 42501 permission denied for table mt_t
+> VACUUM pg_class
+WARNING 01000 permission denied to vacuum "pg_class", skipping it
+VACUUM
+> VACUUM pg_database
+WARNING 01000 permission denied to vacuum "pg_database", skipping it
+VACUUM
+> RESET ROLE
+RESET
+is_superuser=on
+> SET ROLE regress_mt_yes
+SET
+is_superuser=off
+> VACUUM mt_t
+VACUUM
+> ANALYZE mt_t
+ANALYZE
+> VACUUM (ANALYZE) mt_t
+VACUUM
+> REFRESH MATERIALIZED VIEW mt_mv
+REFRESH MATERIALIZED VIEW
+> REFRESH MATERIALIZED VIEW mt_t
+ERROR 0A000 "mt_t" is not a materialized view
+> VACUUM mt_p
+WARNING 01000 permission denied to vacuum "mt_p2", skipping it
+VACUUM
+> ANALYZE mt_p
+WARNING 01000 permission denied to analyze "mt_p2", skipping it
+ANALYZE
+> VACUUM ONLY mt_p
+WARNING 01000 VACUUM ONLY of partitioned table "mt_p" has no effect
+VACUUM
+> VACUUM mt_p2
+WARNING 01000 permission denied to vacuum "mt_p2", skipping it
+VACUUM
+> RESET ROLE
+RESET
+is_superuser=on
+> SET ROLE regress_mt_all
+SET
+is_superuser=off
+> VACUUM mt_t
+VACUUM
+> ANALYZE mt_p
+ANALYZE
+> REFRESH MATERIALIZED VIEW mt_mv
+REFRESH MATERIALIZED VIEW
+> VACUUM pg_database
+VACUUM
+> RESET ROLE
+RESET
+is_superuser=on
+> DROP TABLE mt_p
+DROP TABLE
+> DROP VIEW mt_v
+DROP VIEW
+> DROP MATERIALIZED VIEW mt_mv
+DROP MATERIALIZED VIEW
+> DROP TABLE mt_t
+DROP TABLE
+> CREATE ROLE regress_mt_u
+CREATE ROLE
+> ALTER DEFAULT PRIVILEGES FOR ROLE regress_mt_u REVOKE INSERT ON TABLES FROM regress_mt_u
+ALTER DEFAULT PRIVILEGES
+> GRANT CREATE ON SCHEMA public TO regress_mt_u
+GRANT
+> SET SESSION AUTHORIZATION regress_mt_u
+SET
+session_authorization=regress_mt_u
+is_superuser=off
+> CREATE MATERIALIZED VIEW mt_mv2 (a) AS SELECT generate_series(1, 3) WITH DATA
+SELECT 3
+> SELECT count(*) FROM mt_mv2
+fields count:20:8:-1
+row 3
+SELECT 1
+> REFRESH MATERIALIZED VIEW mt_mv2
+REFRESH MATERIALIZED VIEW
+> SELECT relacl FROM pg_class WHERE relname = 'mt_mv2'
+fields relacl@pg_class.32:1034:-1:-1
+row {regress_mt_u=rwdDxtm/regress_mt_u}
+SELECT 1
+> INSERT INTO mt_mv2 VALUES (4)
+ERROR 42501 permission denied for materialized view mt_mv2
+> RESET SESSION AUTHORIZATION
+RESET
+session_authorization=postgres
+is_superuser=on
+> DROP MATERIALIZED VIEW mt_mv2
+DROP MATERIALIZED VIEW
+> REVOKE CREATE ON SCHEMA public FROM regress_mt_u
+REVOKE
+> ALTER DEFAULT PRIVILEGES FOR ROLE regress_mt_u GRANT INSERT ON TABLES TO regress_mt_u
+ALTER DEFAULT PRIVILEGES
+> DROP ROLE regress_mt_u
+DROP ROLE
+> CREATE TABLE mt_q (a int) PARTITION BY LIST (a)
+CREATE TABLE
+> CREATE TABLE mt_q1 PARTITION OF mt_q FOR VALUES IN (1)
+CREATE TABLE
+> GRANT MAINTAIN ON mt_q1 TO regress_mt_yes
+GRANT
+> SET ROLE regress_mt_yes
+SET
+is_superuser=off
+> VACUUM mt_q
+WARNING 01000 permission denied to vacuum "mt_q", skipping it
+VACUUM
+> ANALYZE mt_q
+WARNING 01000 permission denied to analyze "mt_q", skipping it
+ANALYZE
+> VACUUM (ANALYZE) mt_q
+WARNING 01000 permission denied to vacuum "mt_q", skipping it
+VACUUM
+> RESET ROLE
+RESET
+is_superuser=on
+> DROP TABLE mt_q
+DROP TABLE
+> CREATE SEQUENCE mt_s
+CREATE SEQUENCE
+> SET ROLE regress_mt_no
+SET
+is_superuser=off
+> INSERT INTO mt_s VALUES (1, 1, false)
+ERROR 42501 permission denied for sequence mt_s
+> UPDATE mt_s SET last_value = 1
+ERROR 42501 permission denied for sequence mt_s
+> DELETE FROM mt_s
+ERROR 42501 permission denied for sequence mt_s
+> RESET ROLE
+RESET
+is_superuser=on
+> INSERT INTO mt_s VALUES (1, 1, false)
+ERROR 42809 cannot change sequence "mt_s"
+> DROP SEQUENCE mt_s
+DROP SEQUENCE
+> DROP ROLE regress_mt_no
+DROP ROLE
+> DROP ROLE regress_mt_yes
+DROP ROLE
+> DROP ROLE regress_mt_all
+DROP ROLE

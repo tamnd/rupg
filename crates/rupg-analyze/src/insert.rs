@@ -1014,15 +1014,15 @@ impl Analyzer<'_> {
             )
             .at_opt(at));
         };
+        let need = match kind {
+            WriteKind::Insert => ACL_INSERT,
+            WriteKind::Update => ACL_UPDATE,
+            WriteKind::Delete => ACL_DELETE,
+            WriteKind::Merge => 0,
+        };
         let rel = self.env.catalog().and_then(|c| c.relation(oid));
         let Some(rel) = rel else {
             // `ExecCheckPermissions`: only a superuser can write a system catalog.
-            let need = match kind {
-                WriteKind::Insert => ACL_INSERT,
-                WriteKind::Update => ACL_UPDATE,
-                WriteKind::Delete => ACL_DELETE,
-                WriteKind::Merge => 0,
-            };
             if let Some(class) = builtin::class_by_oid(oid)
                 && matches!(class.kind, b'r' | b't')
                 && need != 0
@@ -1035,6 +1035,19 @@ impl Analyzer<'_> {
             }
             return Err(not_yet(&format!("{what} a system catalog")));
         };
+        // `ExecCheckPermissions` comes before `CheckValidResultRel`.
+        if matches!(rel.kind, RelKind::Sequence | RelKind::MatView)
+            && self.env.filling() != oid
+            && need != 0
+            && !self.env.relation_allowed(oid, need)
+        {
+            let shown =
+                if rel.kind == RelKind::Sequence { "sequence" } else { "materialized view" };
+            return Err(Error::new(
+                SqlState::INSUFFICIENT_PRIVILEGE,
+                format!("permission denied for {shown} {}", rel.name),
+            ));
+        }
         match rel.kind {
             RelKind::Table => {}
             RelKind::Sequence => {
@@ -1096,6 +1109,8 @@ impl Analyzer<'_> {
         let columns = write_columns(rel);
         let name = rel.name.clone();
         let required = match kind {
+            // `refresh_matview_datafill` and `intorel_receive` write the rows with no check of `INSERT`.
+            WriteKind::Insert if self.env.filling() == oid => 0,
             WriteKind::Insert => ACL_INSERT,
             WriteKind::Update => ACL_UPDATE,
             WriteKind::Delete => ACL_DELETE,
