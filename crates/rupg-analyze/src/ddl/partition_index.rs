@@ -157,6 +157,23 @@ impl Definer<'_, '_> {
         Ok(valid)
     }
 
+    /// The part of `CompareIndexInfo` that compares `ii_ExclusionOps`: the indexes match when neither one has an exclusion constraint, or when both have one with the same operators.
+    pub(super) fn same_exclusion(
+        &self,
+        table: u32,
+        index: u32,
+        other_table: u32,
+        other: u32,
+    ) -> bool {
+        let ops = |table: u32, index: u32| {
+            self.catalog
+                .constraints_of(table)
+                .find(|c| c.index == index && c.is_exclusion())
+                .map(|c| c.exclusion_ops.clone())
+        };
+        ops(table, index) == ops(other_table, other)
+    }
+
     /// `CompareIndexInfo` of the indexes of the partition `child` with the index `parent` of its parent table: the first index in the order of the OIDs with no parent index, the same kind of uniqueness, the same access method, the same columns with the same collations and operator families, and the same expressions and predicate. The result is the index, its constraint and its `indisvalid`. For `attach`, as `AttachPartitionEnsureIndexes` does, an index that is not valid does not match, and the constraint of the index must be of the same kind.
     pub(super) fn matching_index(
         &self,
@@ -166,6 +183,7 @@ impl Definer<'_, '_> {
         attach: bool,
     ) -> Option<(u32, Option<u32>, bool)> {
         let wanted = self.catalog.relation(parent)?.index.as_ref()?;
+        let parent_table = wanted.table;
         let wanted = self.att_map(wanted.table, child).ok()?.index(wanted).ok()?;
         let wanted_kind = constraint.and_then(|oid| self.catalog.constraint(oid)).map(|c| c.kind);
         for rel in self.catalog.relations() {
@@ -176,7 +194,9 @@ impl Definer<'_, '_> {
             else {
                 continue;
             };
-            if !same_definition(info, &wanted) {
+            if !same_definition(info, &wanted)
+                || !self.same_exclusion(child, rel.oid, parent_table, parent)
+            {
                 continue;
             }
             let found_constraint = match constraint {
