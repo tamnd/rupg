@@ -1,0 +1,50 @@
+!details
+> create type qct as (r float8, i float8)
+CREATE TYPE
+> create domain qdct as qct
+CREATE DOMAIN
+> alter domain qdct add constraint c1 check ((value).r > 0)
+ALTER DOMAIN
+> comment on constraint c1 on domain qdct is 'random commentary'
+COMMENT
+> select (row(0,1)::qdct)::text
+fields row:25:-1:-1
+ERROR 23514 value for domain qdct violates check constraint "c1"
+> alter type qct alter attribute r type varchar
+ERROR 42883 operator does not exist: character varying > double precision
+DETAIL No operator of that name accepts the given argument types.
+HINT You might need to add explicit type casts.
+> alter type qct alter attribute r type bigint
+ALTER TYPE
+> select pg_get_constraintdef(oid) from pg_constraint where contypid = 'qdct'::regtype
+fields pg_get_constraintdef:25:-1:-1
+row CHECK ((((VALUE).r)::double precision > (0)::double precision))
+SELECT 1
+> alter type qct drop attribute r
+ERROR 2BP01 cannot drop column r of composite type qct because other objects depend on it
+DETAIL constraint c1 depends on column r of composite type qct
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> alter type qct drop attribute i
+ALTER TYPE
+> select conname, obj_description(oid, 'pg_constraint') from pg_constraint where contypid = 'qdct'::regtype
+fields conname@pg_constraint.2:19:64:-1,obj_description:25:-1:-1
+row c1,random commentary
+SELECT 1
+> select (row(0)::qdct)::text
+fields row:25:-1:-1
+ERROR 23514 value for domain qdct violates check constraint "c1"
+> drop type qct cascade
+NOTICE 00000 drop cascades to type qdct
+DROP TYPE
+> create table qtc (a int, constraint qtc_a check (a > 0))
+CREATE TABLE
+> comment on constraint qtc_a on qtc is 'table note'
+COMMENT
+> alter table qtc alter column a type bigint
+ALTER TABLE
+> select conname, obj_description(oid, 'pg_constraint') from pg_constraint where conrelid = 'qtc'::regclass
+fields conname@pg_constraint.2:19:64:-1,obj_description:25:-1:-1
+row qtc_a,table note
+SELECT 1
+> drop table qtc
+DROP TABLE

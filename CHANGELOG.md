@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A change of the type of a field of a composite type makes the checks of the domains over the type again with the new type of the field, and a check that is made again keeps its comment, as in PostgreSQL (#1090).
 - A coercion to an array of a domain, or to a domain over an array, checks the constraints of the domain for each element, as in PostgreSQL (#1089).
 - `COMMENT ON CONSTRAINT ... ON DOMAIN` sets the comment of a constraint of a domain, as in PostgreSQL (#1088).
 - A function in `FROM` that gives a domain over a composite type gives a column for each field of the composite type, as in PostgreSQL (#1087).

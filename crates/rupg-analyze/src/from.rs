@@ -1553,8 +1553,10 @@ impl Analyzer<'_> {
             if matches!(rel.kind, RelKind::Index | RelKind::PartitionedIndex) {
                 return Err(index_error());
             }
-            return Ok(rel
-                .columns
+            let changed = self.env.changed_columns(oid);
+            return Ok(changed
+                .as_deref()
+                .unwrap_or(&rel.columns)
                 .iter()
                 // A dropped column keeps its place with no name and the type 0.
                 .map(|c| Column {

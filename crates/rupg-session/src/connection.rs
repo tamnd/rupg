@@ -6613,6 +6613,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/array_domain.test")));
     }
 
+    /// A change of the type of a field of a composite type makes the checks of the domains over the type again with the new type of the field, and a check that the new type does not take stops the statement. A check that is made again keeps its comment, also on a table.
+    #[test]
+    fn alter_type_domain_check() {
+        big_stack(|| script(include_str!("connection/alter_type_domain_check.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
