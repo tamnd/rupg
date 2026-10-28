@@ -6187,6 +6187,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/exclusion_index_attach.test")));
     }
 
+    /// The planner scans `brin`, `spgist` and `gist` indexes, with the costs of `brincostestimate`, `spgcostestimate` and `gistcostestimate`. A `brin` index gives only a bitmap, and `ANY` is not a clause of these indexes. `connection/index_am_paths.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn index_am_paths() {
+        big_stack(|| script(include_str!("connection/index_am_paths.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

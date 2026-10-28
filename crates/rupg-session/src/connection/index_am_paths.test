@@ -1,0 +1,99 @@
+!details
+> create table gp (a int, b text, p point, r int4range)
+CREATE TABLE
+> create index gp_brin on gp using brin (a)
+CREATE INDEX
+> create index gp_sp on gp using spgist (b)
+CREATE INDEX
+> create index gp_gist on gp using gist (p)
+CREATE INDEX
+> create index gp_rg on gp using gist (r)
+CREATE INDEX
+> explain (costs off) select * from gp where a = 1
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on gp
+row   Filter: (a = 1)
+EXPLAIN
+> explain (costs off) select * from gp where b = 'x'
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on gp
+row   Recheck Cond: (b = 'x'::text)
+row   ->  Bitmap Index Scan on gp_sp
+row         Index Cond: (b = 'x'::text)
+EXPLAIN
+> explain (costs off) select * from gp where p <@ box '(0,0),(1,1)'
+fields QUERY PLAN:25:-1:-1
+row Index Scan using gp_gist on gp
+row   Index Cond: (p <@ '(1,1),(0,0)'::box)
+EXPLAIN
+> explain (costs off) select * from gp where r && int4range(1, 5)
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on gp
+row   Recheck Cond: (r && '[1,5)'::int4range)
+row   ->  Bitmap Index Scan on gp_rg
+row         Index Cond: (r && '[1,5)'::int4range)
+EXPLAIN
+> explain (costs off) select * from gp where r @> 3 and a < 10
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on gp
+row   Recheck Cond: (r @> 3)
+row   Filter: (a < 10)
+row   ->  Bitmap Index Scan on gp_rg
+row         Index Cond: (r @> 3)
+EXPLAIN
+> explain (costs off) select * from gp where p is null
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on gp
+row   Recheck Cond: (p IS NULL)
+row   ->  Bitmap Index Scan on gp_gist
+row         Index Cond: (p IS NULL)
+EXPLAIN
+> set enable_seqscan = off
+SET
+> explain (costs off) select * from gp where a = 1
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on gp
+row   Recheck Cond: (a = 1)
+row   ->  Bitmap Index Scan on gp_brin
+row         Index Cond: (a = 1)
+EXPLAIN
+> explain (costs off) select * from gp where b in ('x', 'y')
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on gp
+row   Recheck Cond: (b = ANY ('{x,y}'::text[]))
+row   ->  Bitmap Index Scan on gp_sp
+row         Index Cond: (b = ANY ('{x,y}'::text[]))
+EXPLAIN
+> explain select * from gp where p <@ box '(0,0),(1,1)'
+fields QUERY PLAN:25:-1:-1
+row Index Scan using gp_gist on gp  (cost=0.14..8.16 rows=1 width=84)
+row   Index Cond: (p <@ '(1,1),(0,0)'::box)
+EXPLAIN
+> explain select * from gp where a > 5
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on gp  (cost=12.09..31.09 rows=240 width=84)
+row   Recheck Cond: (a > 5)
+row   ->  Bitmap Index Scan on gp_brin  (cost=0.00..12.03 rows=720 width=0)
+row         Index Cond: (a > 5)
+EXPLAIN
+> insert into gp select g, g::text, point(g, g), int4range(g, g + 3) from generate_series(1, 2000) g
+INSERT 0 2000
+> select a, b from gp where r @> 100 order by a
+fields a@gp.1:23:4:-1,b@gp.2:25:-1:-1
+row 98,98
+row 99,99
+row 100,100
+SELECT 3
+> select count(*) from gp where p <@ box '(0,0),(10,10)'
+fields count:20:8:-1
+row 10
+SELECT 1
+> select a, b from gp where b in ('42', '43') order by a
+fields a@gp.1:23:4:-1,b@gp.2:25:-1:-1
+row 42,42
+row 43,43
+SELECT 2
+> select count(*) from gp where a between 10 and 20
+fields count:20:8:-1
+row 11
+SELECT 1

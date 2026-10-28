@@ -296,6 +296,8 @@ pub struct Index {
     pub predicate: Vec<Expr>,
     /// `get_rel_data_width` of the index: the sum of the average widths of the types of its columns.
     pub width: i32,
+    /// `pagesPerRange` of a `brin` index, from its option `pages_per_range`, and 0 for another index.
+    pub pages_per_range: u32,
 }
 
 /// A table of an inheritance tree that a scan reads.
@@ -369,6 +371,10 @@ fn index_keys(
         return None;
     }
     let index = members.indexes(relation.oid).into_iter().find(|i| i.oid == index)?;
+    // `amcanorder` of `gist` and `spgist` is false: the scan gives the rows in no order. The OIDs are `BTREE_AM_OID` and `HASH_AM_OID`.
+    if !matches!(index.method, 403 | 405) {
+        return Some(Vec::new());
+    }
     let mut out = Vec::with_capacity(index.keys.len());
     for (i, &attnum) in index.keys.iter().enumerate() {
         let target = usize::try_from(attnum).ok()?.checked_sub(1)?;

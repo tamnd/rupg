@@ -320,6 +320,7 @@ impl rupg_opt::Members for Members<'_, '_> {
                     exprs,
                     predicate,
                     width,
+                    pages_per_range: pages_per_range(rel),
                 })
             })
             .collect();
@@ -349,6 +350,21 @@ impl rupg_opt::Members for Members<'_, '_> {
         }
     }
 }
+
+/// `BrinGetPagesPerRange`: the option `pages_per_range` of a `brin` index, `BRIN_DEFAULT_PAGES_PER_RANGE` when it has none, and 0 for another index.
+fn pages_per_range(index: &rupg_catalog::Relation) -> u32 {
+    if index.index.as_ref().is_none_or(|i| i.method != BRIN_AM) {
+        return 0;
+    }
+    let option = index.options.iter().find_map(|text| {
+        let (name, value) = text.split_once('=')?;
+        (name == "pages_per_range").then(|| value.parse().ok()).flatten()
+    });
+    option.unwrap_or(128)
+}
+
+/// `BRIN_AM_OID`.
+const BRIN_AM: u32 = 3580;
 
 /// The indexes of the system catalog `table`, with the sizes of a new database. The root of an index with more pages than the metapage and one leaf is not a leaf.
 fn catalog_indexes(table: u32) -> Vec<Index> {
@@ -387,6 +403,7 @@ fn catalog_indexes(table: u32) -> Vec<Index> {
                 exprs: Vec::new(),
                 predicate: Vec::new(),
                 width,
+                pages_per_range: 0,
             }
         })
         .collect()

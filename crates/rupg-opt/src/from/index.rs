@@ -22,7 +22,21 @@ const HASH_AM: u32 = 405;
 
 /// True for an index of an access method whose scans the planner makes: `btree` and `hash`.
 fn scannable(index: &Index) -> bool {
-    matches!(index.method, BTREE_AM | HASH_AM)
+    matches!(index.method, BTREE_AM | HASH_AM | GIST_AM | SPGIST_AM | BRIN_AM)
+}
+
+/// `GIST_AM_OID`.
+const GIST_AM: u32 = 783;
+/// `SPGIST_AM_OID`.
+const SPGIST_AM: u32 = 4000;
+/// `BRIN_AM_OID`.
+const BRIN_AM: u32 = 3580;
+/// `REVMAP_PAGE_MAXITEMS`: the places of ranges in a page of the range map of `brin`.
+const REVMAP_PAGE_MAXITEMS: f64 = 1360.0;
+
+/// `amgettuple`: the access method gives the rows one by one, so an index scan can use it. A `brin` index only gives a bitmap.
+fn gettuple(index: &Index) -> bool {
+    index.method != BRIN_AM
 }
 /// `BTEqualStrategyNumber`.
 const EQUAL: i16 = 3;
@@ -326,12 +340,23 @@ fn index_paths<'q>(
                 let path = BitmapIndex::new(table, index, clauses.clone(), costs, stats);
                 bitmaps.push(Bitmap::Index(path));
             }
-            out.push(scan(level, table, index, &clauses, costs, only, false, useful, stats));
+            if gettuple(index) {
+                out.push(scan(level, table, index, &clauses, costs, only, false, useful, stats));
+            }
         }
         let backward = order(level, table.r, index, &quals, true, stats);
         let useful = stats.useful(&BTreeSet::from([table.r]), &backward);
         if !useful.is_empty() {
             out.push(scan(level, table, index, &clauses, costs, only, true, useful, stats));
+        }
+        // `skip_nonnative_saop`: with `ANY` the index gives one more bitmap.
+        if index.method != BTREE_AM {
+            let with_any = bitmap_clauses(table.r, index, &restrict(index, table.r, &all));
+            if with_any.len() > clauses.len() {
+                let costs = index_cost(table, index, &with_any, stats);
+                let path = BitmapIndex::new(table, index, with_any, costs, stats);
+                bitmaps.push(Bitmap::Index(path));
+            }
         }
     }
     bitmaps.extend(or_paths(table, indexes, &sources, &[], stats));
@@ -538,8 +563,11 @@ pub(super) fn param_paths<'q>(
                 let path = BitmapIndex::new(&t, index, clauses.clone(), costs, stats);
                 bitjoin.push(Bitmap::Index(path));
             }
-            let rel = scan(level, &t, index, &clauses, costs, only, false, useful.clone(), stats);
-            out.push(Param { rel, outer: outer.clone(), enforced: enforced.clone(), indexed });
+            if gettuple(index) {
+                let o = useful.clone();
+                let rel = scan(level, &t, index, &clauses, costs, only, false, o, stats);
+                out.push(Param { rel, outer: outer.clone(), enforced: enforced.clone(), indexed });
+            }
             if !useful_backward.is_empty() {
                 let o = useful_backward.clone();
                 let rel = scan(level, &t, index, &clauses, costs, only, true, o, stats);
@@ -825,6 +853,16 @@ fn restrict<'s, 'q>(index: &Index, r: usize, sources: &[&'s Source<'q>]) -> Vec<
 
 /// `match_clauses_to_index`: the conditions that a key column of the index can test, each with the first column that can, as `match_clause_to_index`. The list is in the order of the columns, then in the order of the conditions, as `build_index_paths` makes `indexclauses`.
 fn match_clauses<'q>(r: usize, index: &Index, sources: &[&Source<'q>]) -> Vec<Clause<'q>> {
+    let mut out = bitmap_clauses(r, index, sources);
+    // `amsearcharray` of `gist`, `spgist` and `brin` is false: `ANY` is a clause only of a bitmap.
+    if index.method != BTREE_AM {
+        out.retain(|c| !matches!(c.kind, ClauseKind::Array(..)));
+    }
+    out
+}
+
+/// The clauses of [`match_clauses`] for a scan of the index that gives a bitmap, as `build_index_paths` makes them with `ST_BITMAPSCAN`: `ANY` is a clause also of an index whose access method has not `amsearcharray`.
+fn bitmap_clauses<'q>(r: usize, index: &Index, sources: &[&Source<'q>]) -> Vec<Clause<'q>> {
     let mut out: Vec<Clause<'q>> = Vec::new();
     for source in sources {
         let found = (0..index.keys.len())
@@ -832,9 +870,9 @@ fn match_clauses<'q>(r: usize, index: &Index, sources: &[&Source<'q>]) -> Vec<Cl
             .find(|c| !c.is_empty());
         out.extend(found.into_iter().flatten());
     }
-    // `amsearcharray` and `amsearchnulls` of `hash` are false: only operators make its clauses.
+    // `amsearchnulls` of `hash` is false.
     if index.method == HASH_AM {
-        out.retain(|c| matches!(c.kind, ClauseKind::Op(_)));
+        out.retain(|c| !matches!(c.kind, ClauseKind::Null(_)));
     }
     out.sort_by_key(|c| c.column);
     out
@@ -1697,11 +1735,79 @@ fn index_cost(
     clauses: &[Clause<'_>],
     stats: &Stats,
 ) -> (f64, f64, f64) {
-    if index.method == HASH_AM {
-        hash_cost(table, index, clauses, stats)
-    } else {
-        btree_cost(table, index, clauses, stats)
+    match index.method {
+        HASH_AM => hash_cost(table, index, clauses, stats),
+        GIST_AM => tree_cost(table, index, clauses, stats, 0.0),
+        SPGIST_AM => tree_cost(table, index, clauses, stats, 1.0),
+        BRIN_AM => brin_cost(table, index, clauses, stats),
+        _ => btree_cost(table, index, clauses, stats),
     }
+}
+
+/// `index->tuples` of `get_relation_info`: the rows of the table, and for a partial index the rows that fill its pages after the metapage, at most the rows of the table. Each row has the header of a heap row and its line pointer.
+fn index_rows(table: &Table<'_, '_>, index: &Index) -> f64 {
+    if index.predicate.is_empty() {
+        return table.tuples;
+    }
+    let density = f64::from((8192 - 24) / (index.width + 24 + 4).max(1));
+    (density * (index.pages - 1.0).max(0.0)).round_ties_even().min(table.tuples)
+}
+
+/// `gistcostestimate` and `spgcostestimate`: `genericcostestimate` with `non_leaf` pages that are not leaf pages, no pages for `gist` and the metapage for `spgist`, and the costs of the descent. The height of the tree is the logarithm of the pages to the base 100, and the descent costs `cpu_operator_cost` for the natural logarithm of the rows of the index and 50 times `cpu_operator_cost` for each page from the root down to a leaf.
+fn tree_cost(
+    table: &Table<'_, '_>,
+    index: &Index,
+    clauses: &[Clause<'_>],
+    stats: &Stats,
+    non_leaf: f64,
+) -> (f64, f64, f64) {
+    let rows = index_rows(table, index);
+    let (mut startup, mut total, selectivity, scans) =
+        generic_cost(table, index, clauses, stats, non_leaf);
+    let height = if index.pages > 1.0 { (index.pages.ln() / 100.0_f64.ln()).trunc() } else { 0.0 };
+    if rows > 1.0 {
+        let descent = rows.ln().ceil() * cost::CPU_OPERATOR;
+        startup += descent;
+        total += scans * descent;
+    }
+    let descent = (height + 1.0) * PAGE_CPU_MULTIPLIER * cost::CPU_OPERATOR;
+    (startup + descent, total + scans * descent, selectivity)
+}
+
+/// `brincostestimate`: the scan reads the pages of `brinGetStats` of the range map in order and then the rest of the index at random. The selectivity is the fraction of the ranges of the table that the scan visits: the ranges that the selectivity of the clauses gives, divided by the largest absolute correlation of the key columns of the clauses, at most all the ranges. Each page of a visited range costs a tenth of `cpu_operator_cost`.
+fn brin_cost(
+    table: &Table<'_, '_>,
+    index: &Index,
+    clauses: &[Clause<'_>],
+    stats: &Stats,
+) -> (f64, f64, f64) {
+    let per_range = f64::from(index.pages_per_range.max(1));
+    let ranges = (table.pages / per_range).ceil().max(1.0);
+    // `brinGetStats`: `lastRevmapPage - 1`, one less than the pages of the range map.
+    let revmap = (ranges / REVMAP_PAGE_MAXITEMS).ceil().max(1.0) - 1.0;
+    let mut correlation: f64 = 0.0;
+    for clause in clauses {
+        let Some(&attnum) = index.keys.get(clause.column).filter(|a| **a > 0) else { continue };
+        let statistic = stats.columns.get(&table.r).and_then(|columns| columns.get(&attnum));
+        let slot =
+            statistic.and_then(|s| s.slots.iter().find(|s| s.kind == STATISTIC_KIND_CORRELATION));
+        if let Some(&number) = slot.and_then(|s| s.numbers.as_deref()).and_then(<[f32]>::first) {
+            correlation = correlation.max(f64::from(number).abs());
+        }
+    }
+    let quals: Vec<Expr> = clauses.iter().map(|c| c.expr.clone().into_owned()).collect();
+    let selectivity = cost::list_selectivity_by(&quals, table.eq);
+    let minimal = (ranges * selectivity).ceil();
+    let estimated =
+        if correlation < 1.0e-10 { ranges } else { (minimal / correlation).min(ranges) };
+    let selectivity = (estimated / ranges).clamp(0.0, 1.0);
+    let others = clauses.iter().flat_map(Clause::other);
+    let qual_arg: f64 = others.map(|o| stats.qual_costs([o])).map(|(s, p)| s + p).sum();
+    let startup = cost::SEQ_PAGE * revmap * table.loops + qual_arg;
+    let total = startup
+        + cost::RANDOM_PAGE * (index.pages - revmap) * table.loops
+        + 0.1 * cost::CPU_OPERATOR * estimated * per_range;
+    (startup, total, selectivity)
 }
 
 /// `hashcostestimate`: `genericcostestimate` with the metapage as the one page that is not a leaf page. The rows of the index that the scan reads are the rows of the table that the clauses and the parts of the predicate that they do not imply select, and the scan has no descent.
@@ -1711,21 +1817,40 @@ fn hash_cost(
     clauses: &[Clause<'_>],
     stats: &Stats,
 ) -> (f64, f64, f64) {
-    let tuples = table.tuples;
+    let (startup, total, selectivity, _) = generic_cost(table, index, clauses, stats, 1.0);
+    (startup, total, selectivity)
+}
+
+/// `genericcostestimate` with `non_leaf` pages that are not leaf pages: the start cost, the total cost, the selectivity and `num_sa_scans`, the scans of the index for the items of the `ANY` clauses. The rows of the index that the scan reads are the rows of the table that the clauses and the parts of the predicate that they do not imply select, shared by the scans.
+fn generic_cost(
+    table: &Table<'_, '_>,
+    index: &Index,
+    clauses: &[Clause<'_>],
+    stats: &Stats,
+    non_leaf: f64,
+) -> (f64, f64, f64, f64) {
+    let rows = index_rows(table, index);
     let quals: Vec<&Expr> = clauses.iter().map(|c| &*c.expr).collect();
     let given = and_of(&quals);
     let parts = predicate(index, table.r);
     let extra = parts.iter().filter(|p| !implied_by(&given, p)).cloned();
     let all: Vec<Expr> = extra.chain(quals.into_iter().cloned()).collect();
     let selectivity = cost::list_selectivity_by(&all, table.eq);
-    let index_tuples = (selectivity * tuples).round_ties_even().min(tuples).max(1.0);
-    let index_pages = if index.pages > 1.0 && tuples > 1.0 {
-        (index_tuples * (index.pages - 1.0) / tuples).ceil()
+    let scans: f64 = clauses
+        .iter()
+        .map(|c| match c.kind {
+            ClauseKind::Array(_, items) if items > 1.0 => items,
+            _ => 1.0,
+        })
+        .product();
+    let index_tuples = (selectivity * table.tuples / scans).round_ties_even().min(rows).max(1.0);
+    let index_pages = if index.pages > non_leaf && rows > 1.0 {
+        (index_tuples * (index.pages - non_leaf) / rows).ceil()
     } else {
         1.0
     };
-    let mut total = if table.loops > 1.0 {
-        let all = index_pages * table.loops;
+    let mut total = if scans * table.loops > 1.0 {
+        let all = index_pages * scans * table.loops;
         let fetched = pages_fetched(all, index.pages, index.pages, table.pages);
         fetched * cost::RANDOM_PAGE / table.loops
     } else {
@@ -1734,8 +1859,8 @@ fn hash_cost(
     let others = clauses.iter().flat_map(Clause::other);
     let qual_arg: f64 = others.map(|o| stats.qual_costs([o])).map(|(s, p)| s + p).sum();
     let qual_op = cost::CPU_OPERATOR * clauses.len() as f64;
-    total += qual_arg + index_tuples * (cost::CPU_INDEX_TUPLE + qual_op);
-    (qual_arg, total, selectivity)
+    total += qual_arg + index_tuples * scans * (cost::CPU_INDEX_TUPLE + qual_op);
+    (qual_arg, total, selectivity, scans)
 }
 
 /// `btcostestimate` and `genericcostestimate`: the start cost and the total cost of the scan of the index, and the selectivity of its clauses. The rows of the index that the scan reads come from the clauses of the first columns: the clauses of each column up to the first column with no `=` clause, and the clauses of that column. A unique index with `=` on each key column reads one row. Each item of `ANY` is one more descent of the tree.
