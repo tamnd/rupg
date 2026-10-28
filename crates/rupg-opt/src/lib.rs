@@ -29,8 +29,8 @@ use rupg_analyze::{
     SubLinkKind, TABLE_OID_ATTNUM, Var, Write, WriteKind,
 };
 use rupg_plan::{
-    Grouped, HashTable, HashTables, Item, Kind, Label, Leaf, Node, Operation, Plan, Scanned, Scope,
-    Statistic, SubPlan,
+    Grouped, HashTable, HashTables, Item, Kind, Label, Leaf, Node, Operation, Pass, Plan, Scanned,
+    Scope, Statistic, SubPlan, Table,
 };
 use rupg_types::{Value, oid};
 
@@ -420,6 +420,21 @@ pub fn hash_tables(plan: &Plan<'_>, query: &Query) -> HashTables {
         nodes.extend(&node.children);
         nodes.extend(node.init_plans.iter().chain(&node.sub_plans).map(|s| &s.plan));
         let table = match &node.kind {
+            // `agg_retrieve_direct`: an `AGG_MIXED` gives the groups of its hash tables after the passes over sorted rows.
+            Kind::Aggregate { table: Some(Table { of: Grouped::Group(q), .. }), sets, .. }
+                if !sets.is_empty() =>
+            {
+                if std::ptr::eq(*q, query) {
+                    let pass = |r: &rupg_plan::Rollup<'_>| Pass {
+                        hashed: r.hashed,
+                        sets: r.targets.clone(),
+                        groups: r.groups.clone(),
+                    };
+                    out.passes = sets.iter().filter(|r| !r.hashed).map(pass).collect();
+                    out.passes.extend(sets.iter().filter(|r| r.hashed).map(pass));
+                }
+                continue;
+            }
             Kind::Aggregate { table: Some(table), .. } | Kind::SetOp { table: Some(table), .. } => {
                 table
             }

@@ -179,6 +179,10 @@ pub struct Rollup<'q> {
     pub sort: Vec<SortKey<'q>>,
     /// The grouping sets, the largest first, each with its keys.
     pub sets: Vec<Vec<Item<'q>>>,
+    /// The targets of the keys of each set, in the order of `sets`.
+    pub targets: Vec<Vec<usize>>,
+    /// The groups of each set, as `get_number_of_groups` estimates them.
+    pub groups: Vec<f64>,
 }
 
 /// An expression of a node.
@@ -405,6 +409,18 @@ pub struct HashTables {
     pub group: Option<HashTable>,
     pub distinct: Option<HashTable>,
     pub set_ops: Vec<(Vec<bool>, HashTable)>,
+    /// The passes of the `Agg` of the grouping sets of the query, in the order that the node gives their groups.
+    pub passes: Vec<Pass>,
+}
+
+/// A pass of an `Agg` with grouping sets for the executor: a hash table for one set, or one pass over rows in the order of the keys of the first set, where each set is the first keys of the set before it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pass {
+    pub hashed: bool,
+    /// The targets of the keys of each set, the largest set first.
+    pub sets: Vec<Vec<usize>>,
+    /// `numGroups` of each set.
+    pub groups: Vec<f64>,
 }
 
 /// The strategy of an `Agg`, as `AggStrategy`.

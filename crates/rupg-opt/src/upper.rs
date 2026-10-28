@@ -2055,11 +2055,23 @@ fn grouping_sets<'q>(
         if i > 0 && !rollup.hashed {
             first_sort = false;
         }
-        plan_rollups.push(Rollup { hashed: rollup.hashed, sort, sets });
+        plan_rollups.push(Rollup {
+            hashed: rollup.hashed,
+            sort,
+            sets,
+            targets: rollup.sets.clone(),
+            groups: rollup.groups.clone(),
+        });
     }
     order.clear();
     let mut node = Node::new(
-        Kind::Aggregate { strategy, keys, sets: plan_rollups, unique: false, table: None },
+        Kind::Aggregate {
+            strategy,
+            keys,
+            sets: plan_rollups,
+            unique: false,
+            table: Some(Table { of: Grouped::Group(query), groups: cost.rows, keys: Vec::new() }),
+        },
         level.scope,
         vec![input],
     );

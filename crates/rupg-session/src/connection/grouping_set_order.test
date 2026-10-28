@@ -1,0 +1,61 @@
+!details
+> create table g1 (a int, b int, v int)
+CREATE TABLE
+> insert into g1 values (1,1,10),(1,2,20),(2,1,30),(2,2,40),(3,1,50),(1,1,60)
+INSERT 0 6
+> analyze g1
+ANALYZE
+> select a, b, sum(v) from g1 group by rollup (a, b)
+fields a@g1.1:23:4:-1,b@g1.2:23:4:-1,sum:20:8:-1
+row NULL,NULL,210
+row 2,2,40
+row 3,1,50
+row 2,1,30
+row 1,2,20
+row 1,1,70
+row 1,NULL,90
+row 3,NULL,50
+row 2,NULL,70
+SELECT 9
+> select a, b, sum(v) from g1 group by cube (a, b)
+fields a@g1.1:23:4:-1,b@g1.2:23:4:-1,sum:20:8:-1
+row NULL,NULL,210
+row 2,2,40
+row 3,1,50
+row 2,1,30
+row 1,2,20
+row 1,1,70
+row 1,NULL,90
+row 3,NULL,50
+row 2,NULL,70
+row NULL,1,150
+row NULL,2,60
+SELECT 11
+> select a, b, count(*) from g1 group by grouping sets ((a), (b), ())
+fields a@g1.1:23:4:-1,b@g1.2:23:4:-1,count:20:8:-1
+row NULL,NULL,6
+row 1,NULL,3
+row 3,NULL,1
+row 2,NULL,2
+row NULL,1,4
+row NULL,2,2
+SELECT 6
+> set enable_hashagg = off
+SET
+> select a, b, sum(v) from g1 group by grouping sets ((a, b), (b), ())
+fields a@g1.1:23:4:-1,b@g1.2:23:4:-1,sum:20:8:-1
+row 1,1,70
+row 2,1,30
+row 3,1,50
+row NULL,1,150
+row 1,2,20
+row 2,2,40
+row NULL,2,60
+row NULL,NULL,210
+SELECT 8
+> reset enable_hashagg
+RESET
+> select a, sum(v) from g1 where false group by rollup (a)
+fields a@g1.1:23:4:-1,sum:20:8:-1
+row NULL,NULL
+SELECT 1

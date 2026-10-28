@@ -1295,6 +1295,152 @@ fn groups<'a>(
     Ok(groups)
 }
 
+/// The groups of grouping sets, each with the place of its set.
+type SetGroups = Vec<(usize, Vec<usize>)>;
+
+/// The sets of the passes of the `Agg` of the grouping sets of the plan, and the groups of each set with the place of its set, in the order that the node gives them: the passes over sorted rows, then the hash tables. `None` when the plan has no such `Agg`, when its sets are not `sets`, or when a pass needs a sort or a hash that a key has no function for.
+fn passes<'a>(
+    eval: &mut Eval<'a>,
+    query: &Query,
+    sets: &[Vec<usize>],
+    tuples: &'a [Vec<usize>],
+) -> Result<Option<(Vec<Vec<usize>>, SetGroups)>> {
+    if query.grouping_sets.is_empty() {
+        return Ok(None);
+    }
+    let Some(tables) = eval.session.hash_tables(query) else {
+        return Ok(None);
+    };
+    let sorted = |s: &Vec<usize>| {
+        let mut s = s.clone();
+        s.sort_unstable();
+        s
+    };
+    let mut wanted: Vec<Vec<usize>> = sets.iter().map(sorted).collect();
+    let mut found: Vec<Vec<usize>> =
+        tables.passes.iter().flat_map(|p| p.sets.iter().map(sorted)).collect();
+    wanted.sort();
+    found.sort();
+    if wanted.is_empty() || wanted != found {
+        return Ok(None);
+    }
+    let mut all_sets = Vec::new();
+    let mut out = Vec::new();
+    for pass in &tables.passes {
+        let base = all_sets.len();
+        let groups = if pass.hashed {
+            let ([set], [groups]) = (&pass.sets[..], &pass.groups[..]) else {
+                return Ok(None);
+            };
+            hashed_pass(eval, query, set, *groups, tuples)?
+                .map(|g| g.into_iter().map(|g| (0, g)).collect())
+        } else {
+            sorted_pass(eval, query, &pass.sets, tuples)?
+        };
+        let Some(groups) = groups else {
+            return Ok(None);
+        };
+        out.extend(groups.into_iter().map(|(s, g)| (base + s, g)));
+        all_sets.extend(pass.sets.iter().cloned());
+    }
+    Ok(Some((all_sets, out)))
+}
+
+/// The keys of `GROUP BY` of the targets `set` and their values for each row, or `None` when a target is not an item of `GROUP BY`.
+#[allow(clippy::type_complexity)]
+fn set_keys<'a>(
+    eval: &mut Eval<'a>,
+    query: &Query,
+    set: &[usize],
+    tuples: &'a [Vec<usize>],
+) -> Result<Option<(Vec<SortGroup>, Vec<u32>, Vec<Vec<Value>>)>> {
+    let Some(items) =
+        set.iter().map(|t| query.group.iter().find(|g| g.target == *t)).collect::<Option<Vec<_>>>()
+    else {
+        return Ok(None);
+    };
+    let exprs: Vec<&Expr> = items.iter().map(|g| &query.targets[g.target].expr).collect();
+    let mut keys = Vec::with_capacity(tuples.len());
+    for tuple in tuples {
+        eval.tuple = tuple;
+        keys.push(exprs.iter().map(|e| eval.eval(e)).collect::<Result<Vec<_>>>()?);
+    }
+    let list =
+        items.iter().enumerate().map(|(i, g)| SortGroup { target: i, ..(*g).clone() }).collect();
+    Ok(Some((list, exprs.iter().map(|e| e.ty).collect(), keys)))
+}
+
+/// The groups of a pass over the rows in the order of the keys of the first set, as `agg_retrieve_direct` gives them: at the end of each group of the first set, that group and then the group of each smaller set that ends with the same row. The groups of the sets with no keys end with the last row, and they come also when there are no rows. `None` when a set is not the first keys of the set before it or a key has no sort operator.
+fn sorted_pass<'a>(
+    eval: &mut Eval<'a>,
+    query: &Query,
+    sets: &[Vec<usize>],
+    tuples: &'a [Vec<usize>],
+) -> Result<Option<SetGroups>> {
+    let first = &sets[0];
+    if sets.iter().any(|s| s.len() > first.len() || s[..] != first[..s.len()]) {
+        return Ok(None);
+    }
+    let Some((list, types, keys)) = set_keys(eval, query, first, tuples)? else {
+        return Ok(None);
+    };
+    if list.iter().any(|g| g.sort == 0) {
+        return Ok(None);
+    }
+    let keys_of = sort::Keys::new(&list, &types, eval.session)?;
+    // The keys of the first items of the list, by the number of the items.
+    let prefixes = (0..=list.len())
+        .map(|n| sort::Keys::new(&list[..n], &types, eval.session))
+        .collect::<Result<Vec<_>>>()?;
+    let mut order: Vec<usize> = (0..tuples.len()).collect();
+    sort::qsort(&mut order, &mut |a, b| Ok(keys_of.compare(&keys[*a], &keys[*b])?.then(a.cmp(b))))?;
+    let mut out = Vec::new();
+    let mut open: Vec<Vec<usize>> = vec![Vec::new(); sets.len()];
+    for (n, &row) in order.iter().enumerate() {
+        for group in &mut open {
+            group.push(row);
+        }
+        let next = order.get(n + 1);
+        for (s, set) in sets.iter().enumerate() {
+            let ends = match next {
+                None => true,
+                Some(&next) => !prefixes[set.len()].equal(&keys[row], &keys[next])?,
+            };
+            if ends {
+                out.push((s, std::mem::take(&mut open[s])));
+            }
+        }
+    }
+    if tuples.is_empty() {
+        out.extend(
+            sets.iter().enumerate().filter(|(_, s)| s.is_empty()).map(|(s, _)| (s, Vec::new())),
+        );
+    }
+    Ok(Some(out))
+}
+
+/// The groups of the hash table of a set of an `Agg` with grouping sets for `groups` groups, in the order of the table, or `None` when a key has no hash function.
+fn hashed_pass<'a>(
+    eval: &mut Eval<'a>,
+    query: &Query,
+    set: &[usize],
+    groups: f64,
+    tuples: &'a [Vec<usize>],
+) -> Result<Option<Vec<Vec<usize>>>> {
+    let Some((list, types, keys)) = set_keys(eval, query, set, tuples)? else {
+        return Ok(None);
+    };
+    let keys_of = sort::Keys::new(&list, &types, eval.session)?;
+    let mut hash = |row: usize| hashed::hash(types.iter().copied().zip(&keys[row]));
+    if keys.first().is_some_and(|_| hash(0).is_err()) {
+        return Ok(None);
+    }
+    let groups = hashed::groups(keys.len(), groups, &mut hash, &mut |a, b| {
+        keys_of.equal(&keys[a], &keys[b])
+    })?;
+    Ok(Some(groups))
+}
+
 /// The groups of the rows in the order of the hash table of the `HashAggregate` of the plan, or `None` when the plan sorts the rows for the groups, has grouping sets, or hashes a key whose type has no hash function. `keys` has the values of `items` for each row.
 fn hashed_groups(
     eval: &Eval<'_>,
@@ -1401,7 +1547,7 @@ fn grouped_exprs(query: &Query) -> Vec<(*const Expr, usize)> {
     out
 }
 
-/// The rows of a query with `GROUP BY`, `HAVING` or an aggregate call: one row for each group that `HAVING` keeps, with all the items of the select list. With grouping sets, each set makes its own groups, and the sets with more items come first.
+/// The rows of a query with `GROUP BY`, `HAVING` or an aggregate call: one row for each group that `HAVING` keeps, with all the items of the select list. With grouping sets, each set makes its own groups, in the order that the `Agg` of the plan gives them, and else with the sets with more items first.
 pub(crate) fn rows<'a>(
     eval: &mut Eval<'a>,
     query: &'a Query,
@@ -1452,29 +1598,45 @@ pub(crate) fn rows<'a>(
         (sets, grouped_exprs(query))
     };
     let inherited = std::mem::take(&mut eval.group.nulled);
+    eval.group = Group { nulled: inherited.clone(), ..Group::default() };
+    let (sets, ordered) = match passes(eval, query, &sets, tuples)? {
+        Some(passes) => passes,
+        None => {
+            let mut ordered = Vec::new();
+            for (s, set) in sets.iter().enumerate() {
+                ordered.extend(groups(eval, query, set, tuples)?.into_iter().map(|g| (s, g)));
+            }
+            (sets, ordered)
+        }
+    };
+    // The items that each set does not have, and the expressions that are null in its groups.
+    let nulls: Vec<(Vec<usize>, Vec<*const Expr>)> = sets
+        .iter()
+        .map(|set| {
+            let out: Vec<usize> = all_items.iter().copied().filter(|t| !set.contains(t)).collect();
+            let mut nulled = inherited.clone();
+            nulled.extend(grouped.iter().filter(|(_, t)| out.contains(t)).map(|(e, _)| *e));
+            (out, nulled)
+        })
+        .collect();
     // With window function calls, the windows read the groups that `HAVING` keeps: the first row of each group and the results of its aggregate calls.
     let mut kept: Vec<(&[usize], Group)> = Vec::new();
     let mut rows = Vec::new();
-    for set in &sets {
-        let out: Vec<usize> = all_items.iter().copied().filter(|t| !set.contains(t)).collect();
-        let mut nulled = inherited.clone();
-        nulled.extend(grouped.iter().filter(|(_, t)| out.contains(t)).map(|(e, _)| *e));
-        eval.group = Group { nulled: inherited.clone(), ..Group::default() };
-        for group in groups(eval, query, set, tuples)? {
-            rows_of_group(
-                eval,
-                query,
-                &aggs,
-                &group,
-                tuples,
-                none,
-                Group { aggs: Vec::new(), out: out.clone(), nulled: nulled.clone() },
-                &levels,
-                !calls.is_empty(),
-                &mut kept,
-                &mut rows,
-            )?;
-        }
+    for (s, group) in ordered {
+        let (out, nulled) = &nulls[s];
+        rows_of_group(
+            eval,
+            query,
+            &aggs,
+            &group,
+            tuples,
+            none,
+            Group { aggs: Vec::new(), out: out.clone(), nulled: nulled.clone() },
+            &levels,
+            !calls.is_empty(),
+            &mut kept,
+            &mut rows,
+        )?;
     }
     if !calls.is_empty() {
         let (firsts, mut groups): (Vec<&[usize]>, Vec<_>) = kept.into_iter().unzip();
