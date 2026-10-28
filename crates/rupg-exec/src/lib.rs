@@ -3915,6 +3915,32 @@ pub fn evaluate(expr: &Expr, session: &dyn Session) -> Result<Value> {
     eval.eval(expr)
 }
 
+/// The value of the check expression `expr` of a domain for the value `value` of a column, as `validateDomainCheckConstraint` sets `domainValue_datum` for each row.
+///
+/// # Errors
+///
+/// The error of a function of the expression.
+pub fn evaluate_domain_check(expr: &Expr, value: &Value, session: &dyn Session) -> Result<Value> {
+    let tables = scan::Tables::default();
+    let cache = Cache::default();
+    let mut eval = Eval {
+        params: &[],
+        session,
+        case: Vec::new(),
+        tables: &tables,
+        tuple: &[],
+        group: Group::default(),
+        cache: &cache,
+        outer: &[],
+        sub: Vec::new(),
+        domain_value: vec![value.clone()],
+        sets: Vec::new(),
+        windows: Vec::new(),
+        multi: Vec::new(),
+    };
+    eval.eval(expr)
+}
+
 /// `FormIndexDatum` for a unique index with an expression or a predicate: the values of the key columns of a row of the table, or `None` when the row does not pass the predicate and is not in the index, as `ExecInsertIndexTuples` checks it.
 ///
 /// # Errors

@@ -68,9 +68,9 @@ pub use colname::figure_colname;
 pub use constraints_set::set_constraints;
 pub use cte::{Cte, CteRef};
 pub use ddl::{
-    Allowed, Body, CopyRelation, CopyTarget, Defined, Fill, Message, Order, PartitionCheck,
-    REGRESS_SYMBOLS, ReindexOptions, Repack, RuleTree, SchemaElements, Script, SqlBody, Take,
-    TopLevel, Transform, VacuumRel, acl_allows_create, acl_dependents, acl_roles,
+    Allowed, Body, CopyRelation, CopyTarget, Defined, DomainCheck, Fill, Message, Order,
+    PartitionCheck, REGRESS_SYMBOLS, ReindexOptions, Repack, RuleTree, SchemaElements, Script,
+    SqlBody, Take, TopLevel, Transform, VacuumRel, acl_allows_create, acl_dependents, acl_roles,
     apply_database_change, attnums, copy_filter, copy_insert, copy_relation, copy_target,
     database_change, define, find_library, function_body, function_body_for, function_script,
     function_sqlbody, inline_body, is_definition, lock_table, object_address, owned_objects,

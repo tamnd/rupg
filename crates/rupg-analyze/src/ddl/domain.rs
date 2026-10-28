@@ -83,7 +83,9 @@ impl Definer<'_, '_> {
                         return Err(syntax_error("multiple default expressions", con.location));
                     }
                     saw_default = true;
-                    if let Some(expr) = self.domain_default(con, base, typmod, name)? {
+                    if let Some(expr) =
+                        self.domain_default(con.raw_expr.as_ref(), (base, typmod), name)?
+                    {
                         default_refs = references(self.catalog, 0, &[&expr])?;
                         self.check_usage_on_types(&default_refs)?;
                         default = Some(crate::node::write(&expr)?);
@@ -199,22 +201,21 @@ impl Definer<'_, '_> {
     }
 
     /// `cookDefault` of the default of a domain: the expression cast to the base type, or `None` for a null default.
-    fn domain_default(
+    pub(super) fn domain_default(
         &mut self,
-        con: &Constraint,
-        base: u32,
-        typmod: i32,
+        raw: Option<&Node>,
+        (base, typmod): (u32, i32),
         domain: &str,
     ) -> Result<Option<Expr>> {
-        let Some(raw) = con.raw_expr.as_ref() else { return Ok(None) };
+        let Some(raw) = raw else { return Ok(None) };
         // `DefineDomain` makes the parse state with no query text, so the errors have no place.
         let expr = self
             .an
             .with_kind(Kind::ColumnDefault, |an| an.transform(Some(raw)))
             .map_err(|e| e.with_position(None))?;
         let from = expr.ty;
-        let Some(expr) = self.an.coerce_to_target(expr, base, typmod, Context::Assignment, None)?
-        else {
+        let coerced = self.an.coerce_to_target(expr, base, typmod, Context::Assignment, None);
+        let Some(expr) = coerced.map_err(|e| e.with_position(None))? else {
             return Err(Error::new(
                 SqlState::DATATYPE_MISMATCH,
                 format!(
@@ -231,14 +232,14 @@ impl Definer<'_, '_> {
         Ok(Some(expr))
     }
 
-    /// `domainAddCheckConstraint`: the check of a domain, where `value` is the value of the base type that the domain checks. `readd` is true for a check that `ATPostAlterTypeParse` makes again, which needs no `USAGE` check.
+    /// `domainAddCheckConstraint`: the check of a domain, where `value` is the value of the base type that the domain checks. `readd` is true for a check that `ATPostAlterTypeParse` makes again, which needs no `USAGE` check. The return value is the OID of the constraint and its expression.
     pub(super) fn add_domain_check(
         &mut self,
         domain: u32,
         con: &Constraint,
         (base, typmod): (u32, i32),
         readd: bool,
-    ) -> Result<()> {
+    ) -> Result<(u32, Expr)> {
         let old = self.an.domain_value.replace((base, typmod));
         let expr = self.an.with_kind(Kind::Check, |an| an.transform(con.raw_expr.as_ref()));
         self.an.domain_value = old;
@@ -252,7 +253,7 @@ impl Definer<'_, '_> {
             self.check_usage_on_types(&refs)?;
         }
         let text = crate::node::write(&expr)?;
-        self.catalog.add_domain_check(domain, con.conname.as_deref(), text, &refs)?;
-        Ok(())
+        let oid = self.catalog.add_domain_check(domain, con.conname.as_deref(), text, &refs)?;
+        Ok((oid, expr))
     }
 }

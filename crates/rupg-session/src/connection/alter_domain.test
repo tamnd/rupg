@@ -1,0 +1,339 @@
+!details
+> create domain dnn as int
+CREATE DOMAIN
+> create table tnn (a dnn, b dnn, c int)
+CREATE TABLE
+> insert into tnn values (1, null, 3)
+INSERT 0 1
+> alter domain dnn set not null
+ERROR 23502 column "b" of table "tnn" contains null values
+> update tnn set b = 2
+UPDATE 1
+> alter domain dnn set not null
+ALTER DOMAIN
+> alter domain dnn set not null
+ALTER DOMAIN
+> select typnotnull from pg_type where typname = 'dnn'
+fields typnotnull@pg_type.25:16:1:-1
+row t
+SELECT 1
+> select conname, contype, convalidated from pg_constraint where contypid = 'dnn'::regtype order by conname
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,convalidated@pg_constraint.8:16:1:-1
+row dnn_not_null,n,t
+SELECT 1
+> insert into tnn values (null, 1, 1)
+ERROR 23502 domain dnn does not allow null values
+> alter domain dnn drop not null
+ALTER DOMAIN
+> alter domain dnn drop not null
+ALTER DOMAIN
+> select typnotnull from pg_type where typname = 'dnn'
+fields typnotnull@pg_type.25:16:1:-1
+row f
+SELECT 1
+> insert into tnn values (null, 1, 1)
+INSERT 0 1
+> alter domain dnn add constraint dnn_nn not null
+ERROR 23502 column "a" of table "tnn" contains null values
+> delete from tnn where a is null
+DELETE 1
+> alter domain dnn add constraint dnn_nn not null
+ALTER DOMAIN
+> alter domain dnn add constraint dnn_nn2 not null
+ALTER DOMAIN
+> select conname, contype from pg_constraint where contypid = 'dnn'::regtype order by conname
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1
+row dnn_nn,n
+SELECT 1
+> alter domain dnn drop constraint dnn_nn
+ALTER DOMAIN
+> select typnotnull from pg_type where typname = 'dnn'
+fields typnotnull@pg_type.25:16:1:-1
+row f
+SELECT 1
+> alter domain dnn add constraint c1 check (value < 2)
+ERROR 23514 column "b" of table "tnn" contains values that violate the new constraint
+> alter domain dnn add constraint c1 check (value < 3)
+ALTER DOMAIN
+> alter domain dnn add check (value > 0)
+ALTER DOMAIN
+> select conname, pg_get_constraintdef(oid), convalidated from pg_constraint where contypid = 'dnn'::regtype order by conname
+fields conname@pg_constraint.2:19:64:-1,pg_get_constraintdef:25:-1:-1,convalidated@pg_constraint.8:16:1:-1
+row c1,CHECK ((VALUE < 3)),t
+row dnn_check,CHECK ((VALUE > 0)),t
+SELECT 2
+> alter domain dnn add constraint c1 check (value < 3)
+ERROR 42710 constraint "c1" for domain "dnn" already exists
+> insert into tnn values (5, 1, 1)
+ERROR 23514 value for domain dnn violates check constraint "c1"
+> alter domain dnn add constraint c2 check (value < 2) not valid
+ALTER DOMAIN
+> select conname, convalidated from pg_constraint where contypid = 'dnn'::regtype order by conname
+fields conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1
+row c1,t
+row c2,f
+row dnn_check,t
+SELECT 3
+> alter domain dnn validate constraint c2
+ERROR 23514 column "b" of table "tnn" contains values that violate the new constraint
+> update tnn set a = 1
+UPDATE 1
+> alter domain dnn validate constraint c2
+ERROR 23514 column "b" of table "tnn" contains values that violate the new constraint
+> alter domain dnn validate constraint c2
+ERROR 23514 column "b" of table "tnn" contains values that violate the new constraint
+> select conname, convalidated from pg_constraint where contypid = 'dnn'::regtype order by conname
+fields conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1
+row c1,t
+row c2,f
+row dnn_check,t
+SELECT 3
+> alter domain dnn validate constraint nope
+ERROR 42704 constraint "nope" of domain "dnn" does not exist
+> alter domain dnn add constraint nn3 not null
+ALTER DOMAIN
+> alter domain dnn validate constraint nn3
+ERROR 42809 constraint "nn3" of domain "dnn" is not a check constraint
+> alter domain dnn drop constraint nope
+ERROR 42704 constraint "nope" of domain "dnn" does not exist
+> alter domain dnn drop constraint if exists nope
+NOTICE 00000 constraint "nope" of domain "dnn" does not exist, skipping
+ALTER DOMAIN
+> alter domain public.dnn drop constraint nope
+ERROR 42704 constraint "nope" of domain "public.dnn" does not exist
+> alter domain dnn drop constraint c2 restrict
+ALTER DOMAIN
+> alter domain dnn set default 7
+ALTER DOMAIN
+> select typdefault from pg_type where typname = 'dnn'
+fields typdefault@pg_type.31:25:-1:-1
+row 7
+SELECT 1
+> insert into tnn (c) values (9)
+ERROR 23514 value for domain dnn violates check constraint "c1"
+> select * from tnn order by c
+fields a@tnn.1:23:4:-1,b@tnn.2:23:4:-1,c@tnn.3:23:4:-1
+row 1,2,3
+SELECT 1
+> alter domain dnn set default null
+ALTER DOMAIN
+> select typdefault from pg_type where typname = 'dnn'
+fields typdefault@pg_type.31:25:-1:-1
+row NULL
+SELECT 1
+> alter domain dnn set default 'x'
+ERROR 22P02 invalid input syntax for type integer: "x"
+> alter domain dnn set default 8
+ALTER DOMAIN
+> alter domain dnn drop default
+ALTER DOMAIN
+> select typdefault from pg_type where typname = 'dnn'
+fields typdefault@pg_type.31:25:-1:-1
+row NULL
+SELECT 1
+> alter domain int4 set not null
+ERROR 42809 integer is not a domain
+> alter domain nosuch set not null
+ERROR 42704 type "nosuch" does not exist
+> create domain dp as int
+CREATE DOMAIN
+> create domain dsub as dp
+CREATE DOMAIN
+> create table tsub (x dsub)
+CREATE TABLE
+> insert into tsub values (-1)
+INSERT 0 1
+> alter domain dp add constraint pos1 check (value >= 0)
+ERROR 23514 column "x" of table "tsub" contains values that violate the new constraint
+> drop table tsub
+DROP TABLE
+> create table tarr (x dp[])
+CREATE TABLE
+> alter domain dp add constraint pos2 check (value >= 0)
+ERROR 0A000 cannot alter type "dp" because column "tarr.x" uses it
+> drop table tarr
+DROP TABLE
+> create type rdp as range (subtype = dp)
+CREATE TYPE
+> create table tr (x rdp)
+CREATE TABLE
+> alter domain dp add constraint pos3 check (value >= 0)
+ERROR 0A000 cannot alter type "dp" because column "tr.x" uses it
+> drop table tr
+DROP TABLE
+> drop type rdp
+DROP TYPE
+> create type cdp as (f dp)
+CREATE TYPE
+> alter domain dp add constraint pos4 check (value >= 0)
+ALTER DOMAIN
+> alter domain dp drop constraint pos4
+ALTER DOMAIN
+> create table tc (x cdp)
+CREATE TABLE
+> alter domain dp add constraint pos5 check (value >= 0)
+ERROR 0A000 cannot alter type "dp" because column "tc.x" uses it
+> drop table tc
+DROP TABLE
+> create table tc (x cdp[])
+CREATE TABLE
+> alter domain dp add constraint pos6 check (value >= 0)
+ERROR 0A000 cannot alter type "dp" because column "tc.x" uses it
+> drop table tc
+DROP TABLE
+> drop type cdp
+DROP TYPE
+> create domain dsub2 as dp[]
+CREATE DOMAIN
+> alter domain dp add constraint pos7 check (value >= 0)
+ALTER DOMAIN
+> alter domain dp drop constraint pos7
+ALTER DOMAIN
+> drop domain dsub2
+DROP DOMAIN
+> create table tp1 (z int, x dp, y dsub)
+CREATE TABLE
+> create table tp2 (x dp)
+CREATE TABLE
+> insert into tp1 values (1, 5, 6), (2, 7, -6)
+INSERT 0 2
+> insert into tp2 values (-1)
+INSERT 0 1
+> insert into tp1 values (3, -1, 4)
+INSERT 0 1
+> create materialized view mv as select x from tp2
+SELECT 1
+> create view vv as select x from tp2
+CREATE VIEW
+> alter domain dp add constraint pos8 check (value >= 0)
+ERROR 23514 column "y" of table "tp1" contains values that violate the new constraint
+> delete from tp2
+DELETE 1
+> alter domain dp add constraint pos9 check (value >= 0)
+ERROR 23514 column "y" of table "tp1" contains values that violate the new constraint
+> refresh materialized view mv
+REFRESH MATERIALIZED VIEW
+> alter domain dp add constraint pos10 check (value >= 0)
+ERROR 23514 column "y" of table "tp1" contains values that violate the new constraint
+> update tp1 set y = 6
+UPDATE 3
+> alter domain dp add constraint pos11 check (value >= 0)
+ERROR 23514 column "x" of table "tp1" contains values that violate the new constraint
+> update tp1 set x = 1
+UPDATE 3
+> insert into tp2 values (-3)
+INSERT 0 1
+> refresh materialized view mv
+REFRESH MATERIALIZED VIEW
+> delete from tp2
+DELETE 1
+> alter domain dp add constraint pos12 check (value >= 0)
+ERROR 23514 column "x" of table "mv" contains values that violate the new constraint
+> refresh materialized view mv
+REFRESH MATERIALIZED VIEW
+> alter domain dp add constraint pos13 check (value >= 0)
+ALTER DOMAIN
+> select conname, convalidated from pg_constraint where contypid = 'dp'::regtype
+fields conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1
+row pos13,t
+SELECT 1
+> drop view vv
+DROP VIEW
+> drop materialized view mv
+DROP MATERIALIZED VIEW
+> drop table tp1, tp2
+DROP TABLE
+> drop domain dsub
+DROP DOMAIN
+> drop domain dp
+DROP DOMAIN
+> create role ad_r
+CREATE ROLE
+> set role ad_r
+SET
+is_superuser=off
+> alter domain dnn drop default
+ERROR 42501 must be owner of type dnn
+> reset role
+RESET
+is_superuser=on
+> drop role ad_r
+DROP ROLE
+> alter domain dnn add constraint e check (value > 0) enforced
+ERROR 0A000 CHECK constraints cannot be marked ENFORCED at 53
+> alter domain dnn add constraint e check (value > 0) not enforced
+ERROR 0A000 CHECK constraints cannot be marked NOT ENFORCED at 53
+> alter domain dnn add constraint e not null not valid
+ERROR 0A000 NOT NULL constraints cannot be marked NOT VALID at 44
+> begin
+BEGIN
+> alter domain dnn add constraint c9 check (value > 1000) not valid
+ALTER DOMAIN
+> rollback
+ROLLBACK
+> select conname from pg_constraint where contypid = 'dnn'::regtype order by conname
+fields conname@pg_constraint.2:19:64:-1
+row c1
+row dnn_check
+row nn3
+SELECT 3
+> create domain dtxt as text
+CREATE DOMAIN
+> create table ttxt (t dtxt)
+CREATE TABLE
+> insert into ttxt values ('abc'), (null)
+INSERT 0 2
+> alter domain dtxt add constraint len check (length(value) < 3)
+ERROR 23514 column "t" of table "ttxt" contains values that violate the new constraint
+> alter domain dtxt add constraint len check (length(value) < 4)
+ALTER DOMAIN
+> alter domain dtxt set not null
+ERROR 23502 column "t" of table "ttxt" contains null values
+> create function f_dnn(dnn) returns int as 'select $1' language sql
+CREATE FUNCTION
+> select f_dnn(1)
+fields f_dnn:23:4:-1
+row 1
+SELECT 1
+> alter domain dnn add constraint c10 check (value <> 1) not valid
+ALTER DOMAIN
+> select 1::dnn
+fields dnn:23:4:-1
+ERROR 23514 value for domain dnn violates check constraint "c10"
+> alter domain dnn drop constraint c10
+ALTER DOMAIN
+> select 1::dnn
+fields dnn:23:4:-1
+row 1
+SELECT 1
+> drop function f_dnn(dnn)
+DROP FUNCTION
+> drop table ttxt
+DROP TABLE
+> drop domain dtxt
+DROP DOMAIN
+> drop table tnn
+DROP TABLE
+> drop domain dnn
+DROP DOMAIN
+> create domain rnd as int constraint rc1 check (value > 0) constraint rc2 check (value < 100)
+CREATE DOMAIN
+> alter domain rnd rename constraint rc1 to rc3
+ALTER DOMAIN
+> alter domain rnd rename constraint rc1 to rc4
+ERROR 42704 constraint "rc1" for domain rnd does not exist
+> alter domain rnd rename constraint rc3 to rc2
+ERROR 42710 constraint "rc2" for domain rnd already exists
+> alter domain rnd rename constraint rc3 to rc3
+ERROR 42710 constraint "rc3" for domain rnd already exists
+> alter domain nosuchdom rename constraint rc3 to rc5
+ERROR 42704 type "nosuchdom" does not exist
+> alter domain int4 rename constraint rc3 to rc5
+ERROR 42809 integer is not a domain
+> select conname from pg_constraint where contypid = 'rnd'::regtype order by 1
+fields conname@pg_constraint.2:19:64:-1
+row rc2
+row rc3
+SELECT 2
+> drop domain rnd
+DROP DOMAIN

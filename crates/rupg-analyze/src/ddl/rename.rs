@@ -27,6 +27,7 @@ pub(super) fn is_rename_kind(kind: ObjectType) -> bool {
             | ObjectType::OBJECT_COLUMN
             | ObjectType::OBJECT_ATTRIBUTE
             | ObjectType::OBJECT_TABCONSTRAINT
+            | ObjectType::OBJECT_DOMCONSTRAINT
             | ObjectType::OBJECT_SCHEMA
             | ObjectType::OBJECT_TYPE
             | ObjectType::OBJECT_DOMAIN
@@ -63,6 +64,11 @@ impl Definer<'_, '_> {
                 self.rename_column(stmt, newname)
             }
             ObjectType::OBJECT_TABCONSTRAINT => self.rename_table_constraint(stmt, newname),
+            ObjectType::OBJECT_DOMCONSTRAINT => self.rename_domain_constraint(
+                stmt.object.as_ref(),
+                stmt.subname.as_deref().unwrap_or_default(),
+                newname,
+            ),
             ObjectType::OBJECT_TYPE | ObjectType::OBJECT_DOMAIN => self.rename_type(stmt),
             ObjectType::OBJECT_TRIGGER => self.rename_trigger(stmt, newname),
             ObjectType::OBJECT_RULE => self.rename_rule(stmt, newname),
