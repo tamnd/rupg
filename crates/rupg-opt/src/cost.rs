@@ -563,7 +563,7 @@ fn array_selectivity(func: u32, any: bool, args: &[Expr], est: &dyn Estimate) ->
         let known = match op.name {
             "=" => est.eq(left, value),
             "<>" => est.neq(left, value),
-            _ => None,
+            _ => scalar_inequality(op.oid).and_then(|i| est.ineq(left, value, i)),
         };
         known.unwrap_or_else(|| {
             pattern_selectivity(op.oid, left, value, est)

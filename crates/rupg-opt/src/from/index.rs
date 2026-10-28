@@ -955,8 +955,11 @@ fn match_one<'q>(
         ExprKind::NullTest(arg, is_null) => {
             is_column(arg).then(|| clause(orig.clone(), ClauseKind::Null(*is_null)))
         }
-        // `match_orclause_to_indexcol`: each arm compares the column with one operator of the family and a value of one type.
+        // `match_orclause_to_indexcol`: each arm compares the column with one operator of the family and a value of one type. Only `btree` has `amsearcharray`.
         ExprKind::Bool(BoolOp::Or, arms) => {
+            if index.method != BTREE_AM {
+                return None;
+            }
             let mut first: Option<(u32, u32)> = None;
             let mut index_expr = None;
             let mut values = Vec::new();
@@ -1728,15 +1731,45 @@ fn subplan<'q>(
     }
 }
 
-/// The items of an `AND` or an `OR`, as `predicate_classify`, or `None` for another condition.
-fn bool_items(expr: &Expr) -> Option<(BoolOp, &[Expr])> {
+/// The items of an `AND` or an `OR`, as `predicate_classify`, or `None` for another condition. `x op ANY (array)` of a constant array or a list of `ARRAY[...]` with at most 100 items is the `OR` of `x op item` for each item, and `x op ALL (array)` is their `AND`.
+fn bool_items(expr: &Expr) -> Option<(BoolOp, Cow<'_, [Expr]>)> {
     match &expr.kind {
-        ExprKind::Bool(op @ (BoolOp::And | BoolOp::Or), args) => Some((*op, args)),
+        ExprKind::Bool(op @ (BoolOp::And | BoolOp::Or), args) => {
+            Some((*op, Cow::Borrowed(args.as_slice())))
+        }
+        ExprKind::ScalarArrayOp { func, any, args } => {
+            let [left, array] = args.as_slice() else { return None };
+            let element = builtin::type_by_oid(array.ty).map_or(0, |t| t.elem);
+            let values: Vec<Expr> = match &array.kind {
+                ExprKind::Const(Value::Array(a)) => a
+                    .values
+                    .iter()
+                    .map(|v| Expr::new(ExprKind::Const(v.clone().unwrap_or(Value::Null)), element))
+                    .collect(),
+                ExprKind::Array { multidims: false, elements, .. } => elements.clone(),
+                _ => return None,
+            };
+            if values.len() > MAX_SAOP_ARRAY_SIZE {
+                return None;
+            }
+            let op = cost::array_operator(*func, left.ty, element)?.oid;
+            let item = |value| {
+                let args = vec![left.clone(), value];
+                let form = FuncForm::Operator(op);
+                let call = Func { oid: *func, args, form, variadic: false, retset: false };
+                Expr::new(ExprKind::Func(call), oid::BOOL)
+            };
+            let op = if *any { BoolOp::Or } else { BoolOp::And };
+            Some((op, Cow::Owned(values.into_iter().map(item).collect())))
+        }
         _ => None,
     }
 }
 
-/// `predicate_implied_by_recurse` with no items of `ANY`: true when the condition `clause` makes the condition `pred` true by the form of the `AND` and the `OR` in them. A condition that is not an `AND` or an `OR` proves another such condition as `predicate_implied_by_simple_clause`.
+/// `MAX_SAOP_ARRAY_SIZE`: the most items of an array that `predicate_classify` takes apart.
+const MAX_SAOP_ARRAY_SIZE: usize = 100;
+
+/// `predicate_implied_by_recurse`: true when the condition `clause` makes the condition `pred` true by the form of the `AND` and the `OR` in them. A condition that is not an `AND` or an `OR` proves another such condition as `predicate_implied_by_simple_clause`.
 fn implied_by(clause: &Expr, pred: &Expr) -> bool {
     match (bool_items(clause), bool_items(pred)) {
         (Some((BoolOp::And, _)), Some((BoolOp::And, p))) | (None, Some((BoolOp::And, p))) => {

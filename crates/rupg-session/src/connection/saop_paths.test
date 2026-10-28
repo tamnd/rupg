@@ -1,0 +1,83 @@
+!details
+> create table sa (a int, b int, c text)
+CREATE TABLE
+> insert into sa select g % 1000, g % 37, md5(g::text) from generate_series(1, 20000) g
+INSERT 0 20000
+> create index sa_ab on sa (a, b)
+CREATE INDEX
+> create index sa_h on sa using hash (c)
+CREATE INDEX
+> analyze sa
+ANALYZE
+> explain select * from sa where a < any (array[40, 95])
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on sa  (cost=54.37..276.52 rows=2812 width=41)
+row   Recheck Cond: (a < ANY ('{40,95}'::integer[]))
+row   ->  Bitmap Index Scan on sa_ab  (cost=0.00..53.67 rows=2812 width=0)
+row         Index Cond: (a < ANY ('{40,95}'::integer[]))
+EXPLAIN
+> explain select * from sa where a > any ('{990,995}'::int[])
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on sa  (cost=10.59..210.57 rows=259 width=41)
+row   Recheck Cond: (a > ANY ('{990,995}'::integer[]))
+row   ->  Bitmap Index Scan on sa_ab  (cost=0.00..10.52 rows=259 width=0)
+row         Index Cond: (a > ANY ('{990,995}'::integer[]))
+EXPLAIN
+> explain select * from sa where a < 40 or a < 95
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on sa  (cost=54.37..283.55 rows=2812 width=41)
+row   Recheck Cond: ((a < 40) OR (a < 95))
+row   ->  Bitmap Index Scan on sa_ab  (cost=0.00..53.67 rows=2812 width=0)
+row         Index Cond: (a < ANY ('{40,95}'::integer[]))
+EXPLAIN
+> set enable_seqscan = off
+SET
+> explain (costs off) select * from sa where c = 'x' or c = 'y'
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on sa
+row   Recheck Cond: ((c = 'x'::text) OR (c = 'y'::text))
+row   ->  BitmapOr
+row         ->  Bitmap Index Scan on sa_h
+row               Index Cond: (c = 'x'::text)
+row         ->  Bitmap Index Scan on sa_h
+row               Index Cond: (c = 'y'::text)
+EXPLAIN
+> explain (costs off) select * from sa where a = 42 and (b = 1 or b = 3) or a = 41
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on sa
+row   Recheck Cond: (((a = 42) AND ((b = 1) OR (b = 3))) OR (a = 41))
+row   ->  BitmapOr
+row         ->  Bitmap Index Scan on sa_ab
+row               Index Cond: ((a = 42) AND (b = ANY ('{1,3}'::integer[])))
+row         ->  Bitmap Index Scan on sa_ab
+row               Index Cond: (a = 41)
+EXPLAIN
+> explain (costs off) select * from sa where a = 7 and b = any ('{1,3}') or a = 8
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on sa
+row   Recheck Cond: (((a = 7) AND (b = ANY ('{1,3}'::integer[]))) OR (a = 8))
+row   ->  BitmapOr
+row         ->  Bitmap Index Scan on sa_ab
+row               Index Cond: ((a = 7) AND (b = ANY ('{1,3}'::integer[])))
+row         ->  Bitmap Index Scan on sa_ab
+row               Index Cond: (a = 8)
+EXPLAIN
+> explain (costs off) select * from sa where (a = 5 and b = all ('{2}')) or a = 6
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on sa
+row   Recheck Cond: ((a = 5) OR (a = 6))
+row   Filter: (((a = 5) AND (b = ALL ('{2}'::integer[]))) OR (a = 6))
+row   ->  BitmapOr
+row         ->  Bitmap Index Scan on sa_ab
+row               Index Cond: (a = 5)
+row         ->  Bitmap Index Scan on sa_ab
+row               Index Cond: (a = 6)
+EXPLAIN
+> select count(*) from sa where a = 42 and (b = 1 or b = 3) or a = 41
+fields count:20:8:-1
+row 20
+SELECT 1
+> select count(*) from sa where a < any (array[40, 95])
+fields count:20:8:-1
+row 1900
+SELECT 1
