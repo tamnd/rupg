@@ -1,0 +1,117 @@
+!details
+> CREATE TABLE cl_t (a int PRIMARY KEY, b text)
+CREATE TABLE
+> CREATE INDEX cl_t_b ON cl_t (b DESC)
+CREATE INDEX
+> INSERT INTO cl_t VALUES (3, 'c'), (1, 'a'), (2, 'b'), (4, NULL)
+INSERT 0 4
+> CLUSTER cl_t USING cl_t_b
+CLUSTER
+> SELECT a, b FROM cl_t
+fields a@cl_t.1:23:4:-1,b@cl_t.2:25:-1:-1
+row 4,NULL
+row 3,c
+row 2,b
+row 1,a
+SELECT 4
+> SELECT indexrelid::regclass, indisclustered FROM pg_index WHERE indrelid = 'cl_t'::regclass ORDER BY 1
+fields indexrelid:2205:4:-1,indisclustered@pg_index.10:16:1:-1
+row cl_t_pkey,f
+row cl_t_b,t
+SELECT 2
+> CLUSTER cl_t
+CLUSTER
+> SELECT a, b FROM cl_t
+fields a@cl_t.1:23:4:-1,b@cl_t.2:25:-1:-1
+row 4,NULL
+row 3,c
+row 2,b
+row 1,a
+SELECT 4
+> REPACK cl_t USING INDEX cl_t_pkey
+REPACK
+> SELECT a, b FROM cl_t
+fields a@cl_t.1:23:4:-1,b@cl_t.2:25:-1:-1
+row 1,a
+row 2,b
+row 3,c
+row 4,NULL
+SELECT 4
+> SELECT relpages > 0, reltuples FROM pg_class WHERE relname = 'cl_t'
+fields ?column?:16:1:-1,reltuples@pg_class.11:700:4:-1
+row t,4
+SELECT 1
+> CLUSTER cl_nope
+ERROR 42P01 relation "cl_nope" does not exist
+> CLUSTER cl_t USING cl_nope
+ERROR 42704 index "cl_nope" for table "cl_t" does not exist
+> CREATE TABLE cl_u (a int)
+CREATE TABLE
+> CLUSTER cl_u
+ERROR 42704 there is no previously clustered index for table "cl_u"
+> CREATE INDEX cl_u_h ON cl_u USING hash (a)
+CREATE INDEX
+> CLUSTER cl_u USING cl_u_h
+ERROR 0A000 cannot cluster on index "cl_u_h" because access method does not support clustering
+> CREATE INDEX cl_u_p ON cl_u (a) WHERE a > 0
+CREATE INDEX
+> CLUSTER cl_u USING cl_u_p
+ERROR 0A000 cannot cluster on partial index "cl_u_p"
+> BEGIN
+BEGIN
+> CLUSTER cl_t
+CLUSTER
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> REPACK (ANALYZE) cl_t
+ERROR 25001 REPACK (ANALYZE) cannot run inside a transaction block
+> ROLLBACK
+ROLLBACK
+> REPACK (VERBOSE) cl_t
+INFO 00000 repacking "public.cl_t" in physical order
+INFO 00000 "public.cl_t": found 0 removable, 4 nonremovable row versions in 1 pages
+DETAIL 0 dead row versions cannot be removed yet.
+CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s.
+REPACK
+> CLUSTER (VERBOSE) cl_t
+INFO 00000 repacking "public.cl_t" using sequential scan and sort
+INFO 00000 "public.cl_t": found 0 removable, 4 nonremovable row versions in 1 pages
+DETAIL 0 dead row versions cannot be removed yet.
+CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s.
+CLUSTER
+> CLUSTER
+CLUSTER
+> REPACK pg_class USING INDEX pg_class_oid_index
+ERROR 42501 permission denied: "pg_class" is a system catalog
+DETAIL System catalogs can only be clustered by the index they're already clustered on, if any, unless "allow_system_table_mods" is enabled.
+> CREATE ROLE regress_cl_r
+CREATE ROLE
+> SET SESSION AUTHORIZATION regress_cl_r
+SET
+session_authorization=regress_cl_r
+is_superuser=off
+> CLUSTER cl_t
+ERROR 42501 permission denied for table cl_t
+> CREATE TEMP TABLE cl_temp (a int PRIMARY KEY, b text)
+CREATE TABLE
+> INSERT INTO cl_temp VALUES (2, 'two'), (1, 'one')
+INSERT 0 2
+> CLUSTER cl_temp USING cl_temp_pkey
+CLUSTER
+> SELECT * FROM cl_temp
+fields a@cl_temp.1:23:4:-1,b@cl_temp.2:25:-1:-1
+row 1,one
+row 2,two
+SELECT 2
+> DROP TABLE cl_temp
+DROP TABLE
+> RESET SESSION AUTHORIZATION
+RESET
+session_authorization=postgres
+is_superuser=on
+> DROP TABLE cl_t, cl_u
+DROP TABLE
+> DROP ROLE regress_cl_r
+DROP ROLE

@@ -1,7 +1,8 @@
 //! `CreateCommandTag`: the name of the command tag of a statement, for the errors that name a statement.
 
 use rupg_sql::nodes::{
-    CreateTableAsStmt, DiscardMode, Node, ObjectType, TransactionStmtKind, VariableSetKind,
+    CreateTableAsStmt, DiscardMode, Node, ObjectType, RepackCommand, TransactionStmtKind,
+    VariableSetKind,
 };
 
 /// `CMDTAG_UNKNOWN`.
@@ -130,6 +131,11 @@ pub(crate) fn command_tag(node: &Node) -> String {
         Node::ConstraintsSetStmt(_) => "SET CONSTRAINTS",
         Node::CheckPointStmt(_) => "CHECKPOINT",
         Node::ReindexStmt(_) => "REINDEX",
+        Node::RepackStmt(stmt) => match stmt.command {
+            RepackCommand::REPACK_COMMAND_CLUSTER => "CLUSTER",
+            RepackCommand::REPACK_COMMAND_REPACK => "REPACK",
+            _ => "VACUUM",
+        },
         Node::CreateConversionStmt(_) => "CREATE CONVERSION",
         Node::CreateCastStmt(_) => "CREATE CAST",
         Node::CreateOpClassStmt(_) => "CREATE OPERATOR CLASS",

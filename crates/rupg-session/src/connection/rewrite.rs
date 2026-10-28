@@ -4,10 +4,11 @@
 
 use std::sync::Arc;
 
-use rupg_analyze::{CopyTarget, Derived, Fill, Params, PartitionCheck, Transform};
+use rupg_analyze::{CopyTarget, Derived, Fill, Params, PartitionCheck, Repack, Transform};
 use rupg_catalog::{Catalog, ConKind, FIRST_NORMAL_OID, RelKind, Relation};
-use rupg_common::{Error, SqlState};
+use rupg_common::{Error, Level, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
+use rupg_sql::Severity;
 use rupg_sql::nodes::{Node, RangeVar};
 use rupg_types::{Record, Value};
 
@@ -15,6 +16,13 @@ use super::Connection;
 use super::foreign::Batch;
 use crate::heap::{Changed, View};
 use crate::query;
+use crate::utility::Notice;
+
+/// An `INFO` of `VERBOSE`.
+fn info(message: String) -> Notice {
+    let error = Error::new(SqlState::SUCCESSFUL_COMPLETION, message).with_level(Level::Info);
+    Notice { severity: Severity::Notice, error }
+}
 
 impl Connection {
     /// The tables and the materialized views whose rows the statement `node` changes, from the catalog before the statement to `work`. A table with no rows needs no change. A table with an expression of `transforms` or a default of `fills` always gets its rows again.
@@ -184,6 +192,60 @@ impl Connection {
             self.rewrite_table(&old, rel, work, (&view, in_place), rows, transforms)?;
         }
         // A function in an index expression can end commands after the command of the rewrite.
+        self.command.set(self.command.get().max(command + 1));
+        Ok(())
+    }
+
+    /// `copy_table_data` of `CLUSTER` and `REPACK`: the rows of each table of `repacked` go again into the table, in the order of the keys of the index or in their physical order, with the messages of `VERBOSE`. rupg removes no dead row version, as each one is gone already or visible to a transaction.
+    pub(super) fn repack_rows(
+        &self,
+        repacked: &[Repack],
+        work: &Arc<Catalog>,
+        notices: &mut Vec<Notice>,
+    ) -> Result<(), Error> {
+        if repacked.is_empty() {
+            return Ok(());
+        }
+        let heap = self.store.heap();
+        if self.xid.get() == 0 {
+            self.xid.set(heap.begin(self.pid));
+        }
+        let old = self.catalog();
+        let command = self.command.get();
+        for repack in repacked {
+            let table = repack.table;
+            let Some(rel) = old.relation(table) else { continue };
+            let pages = heap.size(self.database_oid, table).blocks;
+            loop {
+                let view = View { xid: self.xid.get(), ..self.view() };
+                let Some(holder) = heap.truncate(table, &view) else { break };
+                self.reader().wait_xact(view.xid, holder, "")?;
+            }
+            let view = View { xid: self.xid.get(), ..self.view() };
+            let mut rows = heap.rows(table, &view);
+            if let Some(order) = &repack.order {
+                rows = rupg_exec::cluster_order(
+                    order,
+                    rows,
+                    &self.reader_without_view(Arc::clone(work)),
+                )?;
+            }
+            let count = rows.len();
+            if let Some(message) = &repack.verbose {
+                notices.push(info(message.clone()));
+            }
+            self.rewrite_table(&old, rel, work, (&view, false), rows, &[])?;
+            if repack.verbose.is_some() {
+                let mut notice = info(format!(
+                    "\"{}\": found 0 removable, {count} nonremovable row versions in {pages} pages",
+                    repack.shown
+                ));
+                notice.error = notice.error.with_detail(
+                    "0 dead row versions cannot be removed yet.\nCPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s.",
+                );
+                notices.push(notice);
+            }
+        }
         self.command.set(self.command.get().max(command + 1));
         Ok(())
     }

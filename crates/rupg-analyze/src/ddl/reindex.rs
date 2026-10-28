@@ -350,7 +350,7 @@ impl Definer<'_, '_> {
     }
 
     /// The new file of an index that the statement builds again. An index of a failed `CREATE INDEX CONCURRENTLY` becomes valid and ready, as `reindex_index` marks it, and the caller checks the keys of the rows of its table.
-    fn rebuild(&mut self, index: u32) -> Result<()> {
+    pub(super) fn rebuild(&mut self, index: u32) -> Result<()> {
         self.catalog.set_new_file(index)?;
         self.catalog.set_index_valid(index, true)?;
         self.catalog.set_index_ready(index, true)
@@ -367,7 +367,7 @@ impl Definer<'_, '_> {
     }
 
     /// `RelationGetIndexList`: the indexes of a table in the order of their OIDs.
-    fn indexes_on(&self, table: u32) -> Vec<u32> {
+    pub(super) fn indexes_on(&self, table: u32) -> Vec<u32> {
         self.catalog
             .relations()
             .filter(|r| r.kind == RelKind::Index)
@@ -377,7 +377,7 @@ impl Definer<'_, '_> {
     }
 
     /// `find_all_inheritors` of a partitioned index, with only the indexes that have storage.
-    fn leaf_indexes(&self, index: u32) -> Vec<u32> {
+    pub(super) fn leaf_indexes(&self, index: u32) -> Vec<u32> {
         let mut out = Vec::new();
         let mut parents = vec![index];
         while let Some(parent) = parents.pop() {
@@ -395,7 +395,7 @@ impl Definer<'_, '_> {
     }
 
     /// `IndexGetRelation`: the table of an index of the catalog.
-    fn index_table(&self, index: u32) -> Option<u32> {
+    pub(super) fn index_table(&self, index: u32) -> Option<u32> {
         self.catalog.relation(index).and_then(|r| r.index.as_ref()).map(|i| i.table)
     }
 
@@ -405,7 +405,7 @@ impl Definer<'_, '_> {
     }
 
     /// True for a temporary schema of another session, as `isTempNamespace` is false for it.
-    fn other_temp(&self, namespace: u32) -> bool {
+    pub(super) fn other_temp(&self, namespace: u32) -> bool {
         if !self.catalog.is_temp_schema(namespace) {
             return false;
         }
@@ -415,7 +415,7 @@ impl Definer<'_, '_> {
     }
 
     /// The name of a relation of the catalog with the name of its schema.
-    fn qualified_relation(&self, oid: u32) -> String {
+    pub(super) fn qualified_relation(&self, oid: u32) -> String {
         match self.catalog.relation(oid) {
             Some(rel) => format!("{}.{}", self.schema_name(rel.namespace), rel.name),
             None => String::new(),

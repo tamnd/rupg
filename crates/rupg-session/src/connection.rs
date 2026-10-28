@@ -19,7 +19,7 @@ use rupg_platform::{Clock, Io};
 use rupg_sql::Severity;
 use rupg_sql::nodes::{
     A_Star, AlterTableType, ColumnRef, DiscardMode, DiscardStmt, InsertStmt, LockStmt, Node,
-    ObjectType, RangeVar, ResTarget, SelectStmt,
+    ObjectType, RangeVar, RepackCommand, ResTarget, SelectStmt,
 };
 use rupg_types::Value;
 use rupg_wire::{
@@ -1317,7 +1317,11 @@ impl Connection {
             };
             if let Err(error) = checked {
                 defined.messages.clear();
-                defined.result = Err(error.with_context(top.context.clone()));
+                defined.result = Err(if top.context.is_empty() {
+                    error
+                } else {
+                    error.with_context(top.context.clone())
+                });
             }
         }
         if self.settings.borrow().get("track_counts").as_deref() != Some("off") {
@@ -1339,6 +1343,7 @@ impl Connection {
         let mut work = Arc::new(work);
         let result = rewrite
             .and_then(|tables| self.rewrite_rows(&tables, &work, transforms, fills))
+            .and_then(|()| self.repack_rows(&defined.repacked, &work, notices))
             .and_then(|()| self.check_partitions(&defined.checks, &work))
             .and_then(|()| self.truncate_rows(&defined.truncated, &work))
             .and_then(|()| self.view_texts(&defined.views, &mut work));
@@ -1358,6 +1363,24 @@ impl Connection {
                         roles.databases.push(change);
                     }
                     lease.roles = Arc::new(roles);
+                }
+                if !defined.repacked.is_empty() {
+                    let catalog = Arc::clone(&lease.catalog);
+                    drop(held);
+                    self.repacked_stats(&catalog, &defined.repacked);
+                    return Ok(Done::Tag(match node {
+                        Node::RepackStmt(stmt)
+                            if stmt.command == RepackCommand::REPACK_COMMAND_CLUSTER =>
+                        {
+                            CommandTag::Cluster
+                        }
+                        Node::RepackStmt(stmt)
+                            if stmt.command == RepackCommand::REPACK_COMMAND_REPACK =>
+                        {
+                            CommandTag::Repack
+                        }
+                        _ => CommandTag::Vacuum,
+                    }));
                 }
                 if let Some(table) = defined.filled {
                     drop(held);
@@ -1484,6 +1507,11 @@ impl Connection {
                     Node::AlterDefaultPrivilegesStmt(_) => CommandTag::AlterDefaultPrivileges,
                     Node::ReassignOwnedStmt(_) => CommandTag::ReassignOwned,
                     Node::ReindexStmt(_) => CommandTag::Reindex,
+                    Node::RepackStmt(stmt) => match stmt.command {
+                        RepackCommand::REPACK_COMMAND_CLUSTER => CommandTag::Cluster,
+                        RepackCommand::REPACK_COMMAND_REPACK => CommandTag::Repack,
+                        _ => CommandTag::Vacuum,
+                    },
                     Node::DiscardStmt(_) => CommandTag::DiscardTemp,
                     Node::CreateForeignTableStmt(_) => CommandTag::CreateForeignTable,
                     _ => CommandTag::CreateTable,
@@ -6005,6 +6033,12 @@ mod tests {
         big_stack(|| {
             script(&include_str!("connection/schema_owner.test").replace("tsstat_ow1", "postgres"));
         });
+    }
+
+    /// `CLUSTER` and `REPACK` sort the rows of a table by an index, or keep the physical order with no index, and set `indisclustered`, `relpages` and `reltuples`. `VERBOSE` gives the messages of `copy_table_data`, and a temporary table of another role can be clustered. `connection/cluster.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn cluster() {
+        big_stack(|| script(include_str!("connection/cluster.test")));
     }
 
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
