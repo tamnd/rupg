@@ -325,6 +325,18 @@ impl Analyzer<'_> {
                 });
             }
         }
+        // `coerce_type` pushes the coercion under a `COLLATE` clause, and drops the clause when the target type has no collations.
+        if let ExprKind::Collate(arg, collation) = expr.kind {
+            let inner = self.coerce(*arg, target, typmod, context, location)?;
+            if !types::collatable(target) {
+                return Ok(inner);
+            }
+            let (ty, typmod) = (inner.ty, inner.typmod);
+            let mut collated =
+                Expr::new(ExprKind::Collate(Box::new(inner), collation), ty).at(expr.location);
+            collated.typmod = typmod;
+            return Ok(collated);
+        }
         let (form, cast) = if context == Context::Explicit {
             (FuncForm::ExplicitCast, CastForm::Explicit)
         } else {

@@ -76,6 +76,21 @@ fn pg_typeof(call: &Call<'_>, _: &[Value]) -> Result<Value> {
     Ok(Value::Oid(call.args.first().copied().ok_or_else(bad_value)?))
 }
 
+/// `pg_collation_for`: the name of the collation of the argument, as `generate_collation_name` gives it. The analyzer gives the collation as a second argument, null for no collation. It is not strict.
+fn pg_collation_for(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    match args.get(1) {
+        Some(Value::Oid(collation)) if *collation != 0 => {
+            let name = crate::reg::catalog_text(
+                rupg_pgcatalog::builtin::Named::Collation,
+                *collation,
+                call.session,
+            );
+            Ok(name.map_or(Value::Null, Value::Text))
+        }
+        _ => Ok(Value::Null),
+    }
+}
+
 /// `pg_notify(text, text)`: `Async_Notify` with the channel and the payload. It is not strict, and a null is an empty string.
 fn pg_notify(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let text = |at: usize| args.get(at).and_then(Value::as_str).unwrap_or_default();
@@ -461,6 +476,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "statement_timestamp" => statement_timestamp,
         "clock_timestamp" => clock_timestamp,
         "pg_typeof" => pg_typeof,
+        "pg_collation_for" => pg_collation_for,
         "pg_column_size" => crate::datumsize::pg_column_size,
         "tid_block" => tid_block,
         "tid_offset" => tid_offset,

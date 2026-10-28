@@ -1,0 +1,51 @@
+!details
+> select pg_collation_for('x' collate "C"), pg_collation_for('x' collate "POSIX")
+fields pg_collation_for:25:-1:-1,pg_collation_for:25:-1:-1
+row "C","POSIX"
+SELECT 1
+> select 'a' collate "C" < 'B', 'a' < 'B' collate "POSIX"
+fields ?column?:16:1:-1,?column?:16:1:-1
+row f,f
+SELECT 1
+> select ('a' collate "C")::varchar(3) || 'b'
+fields ?column?:25:-1:-1
+row ab
+SELECT 1
+> create table cu (c2 text)
+CREATE TABLE
+> create view cu_v as select c2 || 'x' collate "C" as a, 'y' collate "C" as b, c2 from cu where c2 > 'q' collate "POSIX"
+CREATE VIEW
+> select pg_get_viewdef('cu_v'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT (c2 || ('x'::text COLLATE "C")) AS a,
+    ('y'::text COLLATE "C") AS b,
+    c2
+   FROM cu
+  WHERE (c2 > ('q'::text COLLATE "POSIX"));
+SELECT 1
+> select attname, attcollation::regcollation from pg_attribute where attrelid = 'cu_v'::regclass and attnum > 0 order by attnum
+fields attname@pg_attribute.2:19:64:-1,attcollation:4191:4:-1
+row a,"C"
+row b,"C"
+row c2,"default"
+SELECT 3
+> create index cu_i on cu ((c2 || 'x' collate "C"))
+CREATE INDEX
+> select pg_get_indexdef('cu_i'::regclass)
+fields pg_get_indexdef:25:-1:-1
+row CREATE INDEX cu_i ON public.cu USING btree (((c2 || ('x'::text COLLATE "C"))))
+SELECT 1
+> select 'a' collate "C" collate "POSIX"
+fields ?column?:25:-1:-1
+row a
+SELECT 1
+> select pg_collation_for(1::text collate "C")
+fields pg_collation_for:25:-1:-1
+row "C"
+SELECT 1
+> select 1 collate "C"
+ERROR 42804 collations are not supported by type integer at 10
+> select '1' collate "C" + 1
+fields ?column?:23:4:-1
+row 2
+SELECT 1

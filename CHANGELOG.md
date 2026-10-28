@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A `COLLATE` clause on a literal of the type `unknown` stays on the literal, and a coercion goes under the clause as `coerce_type` does. `pg_collation_for` and `COLLATION FOR` give the collation of the argument. (#1027)
 - `CREATE INDEX` strips the top `COLLATE` clauses of an index expression as `ComputeIndexAttrs` does, so `((c1::text COLLATE "C"))` shows its collation once in `pg_get_indexdef`, `(c2 COLLATE "C")` is a simple column, and `ANALYZE` gives statistics to the expression. (#1026)
 - An index depends once on each column of its keys, and the columns of a partition key depend internally on their table, as `index_create` and `StorePartitionKey` record them in `pg_depend`. A partitioned table depends on the functions of the expressions of its key. (#1025)
 - A backward `btree` index scan gives the rows with equal keys in the reverse order of the heap, and `ORDER BY` that an index scan gives with no `Sort` keeps the order of the scan, so `ORDER BY unique2 DESC LIMIT 5` on a unique index with nulls gives the rows in the PostgreSQL order. (#1024)

@@ -6247,6 +6247,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/index_collate_expr.test")));
     }
 
+    /// `COLLATE` on a literal of no type yet keeps its `CollateExpr`, and `coerce_type` pushes the coercion of the literal under it, or drops it when the new type has no collations. So the collation applies to the literal, and `pg_get_viewdef` and `pg_get_indexdef` show `('x'::text COLLATE "C")`. `connection/collate_literal.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn collate_literal() {
+        big_stack(|| script(include_str!("connection/collate_literal.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
