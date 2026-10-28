@@ -6430,6 +6430,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/from_list_join.test")));
     }
 
+    /// An spgist index of `text` tests the fixed prefix of `LIKE`, of a regular expression and of `starts_with` with `^@`, as `match_pattern_prefix` makes the clause for the family `text_ops` of spgist and `textstarts_with_support` makes it for `starts_with`. `connection/spgist_prefix.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn spgist_prefix() {
+        big_stack(|| script(include_str!("connection/spgist_prefix.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
