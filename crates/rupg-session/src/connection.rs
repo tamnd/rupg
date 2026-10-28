@@ -6103,6 +6103,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/self_foreign_key.test")));
     }
 
+    /// The order of the partitions of `RelationGetPartitionDesc` for the clones of a foreign key: range, list and hash partitions in the order of their bounds with the default partition last, whatever the order in which they were made, and the check of the detach of a partitioned partition, which reads its leaves in that order. `connection/partition_order.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn partition_order() {
+        big_stack(|| script(include_str!("connection/partition_order.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

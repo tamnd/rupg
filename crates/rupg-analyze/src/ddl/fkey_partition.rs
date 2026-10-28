@@ -28,7 +28,7 @@ impl Definer<'_, '_> {
         if !self.is_partitioned(foreign.table) {
             return Ok(());
         }
-        for partition in self.partition_oids(foreign.table) {
+        for partition in self.partdesc(foreign.table)? {
             let index = self.partition_index(partition, con.index)?;
             let keys = self.map_keys(foreign.table, partition, &foreign.keys)?;
             let new = NewForeignKey {
@@ -62,7 +62,7 @@ impl Definer<'_, '_> {
         if !self.is_partitioned(con.relation) {
             return Ok(());
         }
-        for partition in self.partition_oids(con.relation) {
+        for partition in self.partdesc(con.relation)? {
             let keys = self.map_keys(con.relation, partition, &con.keys)?;
             if self.try_attach_foreign_key(partition, &con, &keys, triggers)? {
                 continue;
@@ -325,11 +325,6 @@ impl Definer<'_, '_> {
     /// True for a partitioned table.
     fn is_partitioned(&self, table: u32) -> bool {
         self.catalog.relation(table).is_some_and(|r| r.kind == RelKind::Partitioned)
-    }
-
-    /// The partitions of a partitioned table.
-    fn partition_oids(&self, table: u32) -> Vec<u32> {
-        self.catalog.partitions(table).iter().map(|r| r.oid).collect()
     }
 
     /// `index_get_partition`: the index of the partition that is a partition of the index `index`.
