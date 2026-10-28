@@ -6448,6 +6448,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/grouping_set_nulls.test")));
     }
 
+    /// The groups of grouping sets come in the order of the `Agg` of the plan: a pass over sorted rows gives each group of its largest set and then the groups of its smaller sets that end with the same row, and the hash tables of an `AGG_MIXED` come after the passes, each in the order of the table. `connection/grouping_set_order.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn grouping_set_order() {
+        big_stack(|| script(include_str!("connection/grouping_set_order.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
