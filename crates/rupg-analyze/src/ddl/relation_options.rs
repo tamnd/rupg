@@ -12,10 +12,25 @@ const HEAP_NAMESPACES: &[&str] = &["toast"];
 
 /// The OID of the access method `hash`.
 const HASH: u32 = 405;
+/// The OID of the access method `gist`.
+const GIST: u32 = 783;
+/// The OID of the access method `gin`.
+const GIN: u32 = 2742;
+/// The OID of the access method `spgist`.
+const SPGIST: u32 = 4000;
+/// The OID of the access method `brin`.
+const BRIN: u32 = 3580;
 
 /// `amoptions`: the options that an index of the access method accepts.
 fn index_options(method: u32) -> &'static [Opt] {
-    if method == HASH { reloptions::HASH } else { reloptions::BTREE }
+    match method {
+        HASH => reloptions::HASH,
+        GIST => reloptions::GIST,
+        GIN => reloptions::GIN,
+        SPGIST => reloptions::SPGIST,
+        BRIN => reloptions::BRIN,
+        _ => reloptions::BTREE,
+    }
 }
 
 impl Definer<'_, '_> {

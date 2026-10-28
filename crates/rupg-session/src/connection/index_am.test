@@ -1,0 +1,130 @@
+!details
+> CREATE TABLE gi (a int, r int4range, b box, t tsvector, arr int[], p point, s text);
+CREATE TABLE
+> INSERT INTO gi SELECT g, int4range(g, g+10), box(point(g,g), point(g+1,g+1)), to_tsvector('simple', 'w' || g), ARRAY[g, g+1], point(g, g), 'x' || g FROM generate_series(1, 50) g;
+INSERT 0 50
+> CREATE INDEX gi_r ON gi USING gist (r);
+CREATE INDEX
+> CREATE INDEX gi_b ON gi USING gist (b) WITH (fillfactor = 50, buffering = auto);
+CREATE INDEX
+> CREATE INDEX gi_t ON gi USING gin (t);
+CREATE INDEX
+> CREATE INDEX gi_arr ON gi USING gin (arr) WITH (fastupdate = off);
+CREATE INDEX
+> CREATE INDEX gi_p ON gi USING spgist (p);
+CREATE INDEX
+> CREATE INDEX gi_a ON gi USING brin (a) WITH (pages_per_range = 16);
+CREATE INDEX
+> CREATE INDEX gi_rt ON gi USING rtree (b);
+NOTICE 00000 substituting access method "gist" for obsolete method "rtree"
+CREATE INDEX
+> CREATE INDEX gi_rp ON gi USING gist (r, b) INCLUDE (a);
+CREATE INDEX
+> CREATE INDEX gi_s ON gi USING spgist (s);
+CREATE INDEX
+> CREATE UNIQUE INDEX ON gi USING gist (r);
+ERROR 0A000 access method "gist" does not support unique indexes
+> CREATE INDEX ON gi USING gin (arr) INCLUDE (a);
+ERROR 0A000 access method "gin" does not support included columns
+> CREATE INDEX ON gi USING spgist (p, s);
+ERROR 0A000 access method "spgist" does not support multicolumn indexes
+> CREATE INDEX ON gi USING brin (a DESC);
+ERROR 0A000 access method "brin" does not support ASC/DESC options at 32
+> CREATE INDEX ON gi USING gist (a);
+ERROR 42704 data type integer has no default operator class for access method "gist"
+HINT You must specify an operator class for the index or define a default operator class for the data type.
+> CREATE INDEX ON gi USING gin (a);
+ERROR 42704 data type integer has no default operator class for access method "gin"
+HINT You must specify an operator class for the index or define a default operator class for the data type.
+> CREATE INDEX ON gi USING gist (b) WITH (buffering = maybe);
+ERROR 22023 invalid value for enum option "buffering": maybe
+DETAIL Valid values are "on", "off", and "auto".
+> CREATE INDEX ON gi USING gin (t) WITH (fillfactor = 50);
+ERROR 22023 unrecognized parameter "fillfactor"
+> CREATE INDEX ON gi USING brin (a) WITH (pages_per_range = 0);
+ERROR 22023 value 0 out of bounds for option "pages_per_range"
+DETAIL Valid values are between "1" and "131072".
+> CREATE INDEX ON gi USING gist (r range_ops);
+CREATE INDEX
+> CREATE INDEX ON gi USING gist (b int4_ops);
+ERROR 42704 operator class "int4_ops" does not exist for access method "gist"
+> SELECT c.relname, a.amname, c.relpages, c.reloptions FROM pg_class c JOIN pg_am a ON a.oid = c.relam WHERE c.relname LIKE 'gi\_%' ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,amname@pg_am.2:19:64:-1,relpages@pg_class.10:23:4:-1,reloptions@pg_class.33:1009:-1:-1
+row gi_a,brin,3,{pages_per_range=16}
+row gi_arr,gin,2,{fastupdate=off}
+row gi_b,gist,1,{fillfactor=50,buffering=auto}
+row gi_p,spgist,3,NULL
+row gi_r,gist,1,NULL
+row gi_r_idx,gist,1,NULL
+row gi_rp,gist,1,NULL
+row gi_rt,gist,1,NULL
+row gi_s,spgist,3,NULL
+row gi_t,gin,2,NULL
+SELECT 10
+> SELECT indexrelid::regclass, pg_get_indexdef(indexrelid) FROM pg_index WHERE indrelid = 'gi'::regclass ORDER BY 1;
+fields indexrelid:2205:4:-1,pg_get_indexdef:25:-1:-1
+row gi_r,CREATE INDEX gi_r ON public.gi USING gist (r)
+row gi_b,CREATE INDEX gi_b ON public.gi USING gist (b) WITH (fillfactor='50', buffering=auto)
+row gi_t,CREATE INDEX gi_t ON public.gi USING gin (t)
+row gi_arr,CREATE INDEX gi_arr ON public.gi USING gin (arr) WITH (fastupdate=off)
+row gi_p,CREATE INDEX gi_p ON public.gi USING spgist (p)
+row gi_a,CREATE INDEX gi_a ON public.gi USING brin (a) WITH (pages_per_range='16')
+row gi_rt,CREATE INDEX gi_rt ON public.gi USING gist (b)
+row gi_rp,CREATE INDEX gi_rp ON public.gi USING gist (r, b) INCLUDE (a)
+row gi_s,CREATE INDEX gi_s ON public.gi USING spgist (s)
+row gi_r_idx,CREATE INDEX gi_r_idx ON public.gi USING gist (r)
+SELECT 10
+> SELECT i.indexrelid::regclass, o.opcname FROM pg_index i, unnest(i.indclass) WITH ORDINALITY u(c, n) JOIN pg_opclass o ON o.oid = u.c WHERE i.indrelid = 'gi'::regclass ORDER BY 1, u.n;
+fields indexrelid:2205:4:-1,opcname@pg_opclass.3:19:64:-1
+row gi_r,range_ops
+row gi_b,box_ops
+row gi_t,tsvector_ops
+row gi_arr,array_ops
+row gi_p,quad_point_ops
+row gi_a,int4_minmax_ops
+row gi_rt,box_ops
+row gi_rp,range_ops
+row gi_rp,box_ops
+row gi_s,text_ops
+row gi_r_idx,range_ops
+SELECT 11
+> SELECT count(*) FROM gi WHERE r @> 5;
+fields count:20:8:-1
+row 5
+SELECT 1
+> SELECT count(*) FROM gi WHERE t @@ 'w7'::tsquery;
+fields count:20:8:-1
+row 1
+SELECT 1
+> SELECT count(*) FROM gi WHERE arr @> ARRAY[3];
+fields count:20:8:-1
+row 2
+SELECT 1
+> INSERT INTO gi VALUES (51, '[51,60)', '(1,1),(0,0)', 'w51', '{51}', '(51,51)', 'x51');
+INSERT 0 1
+> UPDATE gi SET r = '[1,2)' WHERE a = 1;
+UPDATE 1
+> DELETE FROM gi WHERE a = 2;
+DELETE 1
+> SELECT count(*) FROM gi WHERE r && '[1,3)';
+fields count:20:8:-1
+row 1
+SELECT 1
+> REINDEX INDEX gi_r;
+REINDEX
+> REINDEX TABLE gi;
+REINDEX
+> ALTER INDEX gi_b SET (buffering = off);
+ALTER INDEX
+> ALTER INDEX gi_t SET (gin_pending_list_limit = 128);
+ALTER INDEX
+> ALTER INDEX gi_t SET (fillfactor = 10);
+ERROR 22023 unrecognized parameter "fillfactor"
+> VACUUM ANALYZE gi;
+VACUUM
+> CLUSTER gi USING gi_t;
+ERROR 0A000 cannot cluster on index "gi_t" because access method does not support clustering
+> DROP INDEX gi_r, gi_t;
+DROP INDEX
+> DROP TABLE gi;
+DROP TABLE

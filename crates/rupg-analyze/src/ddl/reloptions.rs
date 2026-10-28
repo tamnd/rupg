@@ -103,6 +103,32 @@ pub(super) const BTREE: &[Opt] = &[
 pub(super) const HASH: &[Opt] =
     &[Opt { name: "fillfactor", kind: Kind::Int(10, 100), toast: false }];
 
+/// `gistoptions`: the options of a gist index.
+pub(super) const GIST: &[Opt] = &[
+    Opt { name: "fillfactor", kind: Kind::Int(10, 100), toast: false },
+    Opt {
+        name: "buffering",
+        kind: Kind::Enum(&["on", "off", "auto"], "Valid values are \"on\", \"off\", and \"auto\"."),
+        toast: false,
+    },
+];
+
+/// `ginoptions`: the options of a gin index. `MAX_KILOBYTES` is `INT_MAX / 1024`.
+pub(super) const GIN: &[Opt] = &[
+    Opt { name: "fastupdate", kind: Kind::Bool, toast: false },
+    Opt { name: "gin_pending_list_limit", kind: Kind::Int(64, i32::MAX / 1024), toast: false },
+];
+
+/// `spgoptions`: the options of an spgist index.
+pub(super) const SPGIST: &[Opt] =
+    &[Opt { name: "fillfactor", kind: Kind::Int(10, 100), toast: false }];
+
+/// `brinoptions`: the options of a brin index. `BRIN_MAX_PAGES_PER_RANGE` is 131072.
+pub(super) const BRIN: &[Opt] = &[
+    Opt { name: "pages_per_range", kind: Kind::Int(1, 131_072), toast: false },
+    Opt { name: "autosummarize", kind: Kind::Bool, toast: false },
+];
+
 /// `spc_relopt_tab`: the options of a tablespace. `MAX_IO_CONCURRENCY` is 1000.
 const TABLESPACE: &[Opt] = &[
     Opt { name: "random_page_cost", kind: Kind::Real(0.0, f64::MAX), toast: false },
