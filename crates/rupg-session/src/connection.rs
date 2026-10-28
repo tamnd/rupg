@@ -6494,6 +6494,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/grouping_set_output_order.test")));
     }
 
+    /// `flatten_group_exprs`: with grouping sets, an item of `GROUP BY` that a set does not have is in a `PlaceHolderVar` where `HAVING` reads it, so the fold does not take `NOT (NOT a)` apart, an `AND` that is an item is one condition, and the condition stays in `HAVING`. The `Filter` of the `Agg` shows a key that the node below computes in parentheses.
+    #[test]
+    fn grouping_set_nullable_having() {
+        big_stack(|| script(include_str!("connection/grouping_set_nullable_having.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
