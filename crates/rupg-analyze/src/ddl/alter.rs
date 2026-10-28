@@ -791,6 +791,20 @@ impl Definer<'_, '_> {
                     "cannot add column to a partition",
                 ));
             }
+            // `ATExecAddColumn`: an identity column of a child table would need a sequence of its own, so a table with inheritance children gets no new identity column. A partition uses the sequence of its parent.
+            let identity = def.constraints.iter().any(
+                |c| matches!(c, Some(Node::Constraint(c)) if c.contype == ConstrType::CONSTR_IDENTITY),
+            );
+            if identity
+                && passes.recurse
+                && target.kind != b'p'
+                && !self.catalog.children(target.oid).is_empty()
+            {
+                return Err(Error::new(
+                    SqlState::INVALID_TABLE_DEFINITION,
+                    "cannot recursively add identity column to table that has child tables",
+                ));
+            }
             if let Some(rest) = self.add_column(target, def, *if_not_exists)? {
                 let name = def.colname.as_deref().unwrap_or_default();
                 let rel = self.catalog.relation(target.oid);

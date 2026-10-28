@@ -123,7 +123,7 @@ impl Definer<'_, '_> {
             if c.identity != 0 && options & IDENTITY != 0 {
                 let info = self
                     .catalog
-                    .identity_sequence(oid, attnum)
+                    .root_identity_sequence(oid, attnum)
                     .and_then(|seq| self.catalog.relation(seq))
                     .and_then(|r| r.sequence.clone())
                     .ok_or_else(|| {
