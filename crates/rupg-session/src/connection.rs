@@ -6500,6 +6500,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/grouping_set_nullable_having.test")));
     }
 
+    /// `mark_nullable_by_grouping`: above the `Agg` of grouping sets, an item that a set does not have is not a member of the equivalence classes of `WHERE`, so `ORDER BY a, b` and `DISTINCT ON (a, b)` keep `b` as a key after `where a = b`.
+    #[test]
+    fn grouping_set_nullable_order() {
+        big_stack(|| script(include_str!("connection/grouping_set_nullable_order.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

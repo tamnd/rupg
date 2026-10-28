@@ -1,0 +1,52 @@
+!details
+> create temp table gn(a int, b int)
+CREATE TABLE
+> insert into gn values (1, 1), (2, 2), (3, 4)
+INSERT 0 3
+> explain (costs off) select distinct on (a, b) a, b from gn where a = b group by grouping sets((a, b), (a)) order by a, b
+fields QUERY PLAN:25:-1:-1
+row Unique
+row   ->  Incremental Sort
+row         Sort Key: a, b
+row         Presorted Key: a
+row         ->  GroupAggregate
+row               Group Key: a, b
+row               Group Key: a
+row               ->  Sort
+row                     Sort Key: a
+row                     ->  Seq Scan on gn
+row                           Filter: (a = b)
+EXPLAIN
+> select distinct on (a, b) a, b from gn where a = b group by grouping sets((a, b), (a)) order by a, b
+fields a@gn.1:23:4:-1,b@gn.2:23:4:-1
+row 1,1
+row 1,NULL
+row 2,2
+row 2,NULL
+SELECT 4
+> explain (costs off) select a, b from gn where a = b group by grouping sets((a, b), (a)) order by a, b nulls first
+fields QUERY PLAN:25:-1:-1
+row Incremental Sort
+row   Sort Key: a, b NULLS FIRST
+row   Presorted Key: a
+row   ->  GroupAggregate
+row         Group Key: a, b
+row         Group Key: a
+row         ->  Sort
+row               Sort Key: a
+row               ->  Seq Scan on gn
+row                     Filter: (a = b)
+EXPLAIN
+> select a, b from gn where a = b group by grouping sets((a, b), (a)) order by a, b nulls first
+fields a@gn.1:23:4:-1,b@gn.2:23:4:-1
+row 1,NULL
+row 1,1
+row 2,NULL
+row 2,2
+SELECT 4
+> select a, b from gn where b = 1 group by rollup(a, b) order by b, a
+fields a@gn.1:23:4:-1,b@gn.2:23:4:-1
+row 1,1
+row 1,NULL
+row NULL,NULL
+SELECT 3
