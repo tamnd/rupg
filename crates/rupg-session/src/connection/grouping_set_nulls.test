@@ -1,0 +1,47 @@
+!details
+> create table t4 (four int, ten int)
+CREATE TABLE
+> insert into t4 select g % 4, g % 10 from generate_series(1, 20) g
+INSERT 0 20
+> select four, x from (select four, ten, 'foo'::text as x from t4) as t group by grouping sets (four, x) having x = 'foo'
+fields four@t4.1:23:4:-1,x:25:-1:-1
+row NULL,foo
+SELECT 1
+> select four, x || 'x' from (select four, ten, 'foo'::text as x from t4) as t group by grouping sets (four, x) order by four
+fields four@t4.1:23:4:-1,?column?:25:-1:-1
+row 0,NULL
+row 1,NULL
+row 2,NULL
+row 3,NULL
+row NULL,foox
+SELECT 5
+> select four, x from (select four, ten, 'foo'::text as x from t4) as t group by grouping sets (four, x) order by four
+fields four@t4.1:23:4:-1,x:25:-1:-1
+row 0,NULL
+row 1,NULL
+row 2,NULL
+row 3,NULL
+row NULL,foo
+SELECT 5
+> select four, x from (select four, ten, 'foo'::text as x from t4 offset 0) as t group by grouping sets (four, x) having x = 'foo'
+fields four@t4.1:23:4:-1,x:25:-1:-1
+row NULL,foo
+SELECT 1
+> select g as alias1, g as alias2 from generate_series(1,3) g group by alias1, rollup(alias2) order by 1, 2
+fields alias1:23:4:-1,alias2:23:4:-1
+row 1,1
+row 1,NULL
+row 2,2
+row 2,NULL
+row 3,3
+row 3,NULL
+SELECT 6
+> select g as alias1, g as alias2, g + 0 as e from generate_series(1,3) g group by alias1, rollup(alias2) order by 1, 2
+fields alias1:23:4:-1,alias2:23:4:-1,e:23:4:-1
+row 1,1,1
+row 1,NULL,1
+row 2,2,2
+row 2,NULL,2
+row 3,3,3
+row 3,NULL,3
+SELECT 6

@@ -490,6 +490,8 @@ struct Fold<'a> {
     pulled: Vec<bool>,
     /// True when the planner pulls up a `VALUES` of one row, which it does not in the query of a write.
     values: bool,
+    /// `REPLACE_WRAP_ALL`: the query has grouping sets, so a column of a subquery that the planner pulls up keeps its place, and a grouping set can make it null.
+    wrap_all: bool,
     /// `case_val`: the argument of each open `CASE` when it is a constant.
     case: Vec<Option<Expr>>,
     /// `active_fns`: the SQL functions whose bodies the fold puts in the query now, so that a function that calls itself does not go in again.
@@ -691,6 +693,7 @@ impl<'a> Fold<'a> {
             nulled,
             pulled,
             values,
+            wrap_all: !query.grouping_sets.is_empty(),
             case: Vec::new(),
             inlining: Vec::new(),
         }
@@ -717,12 +720,14 @@ impl<'a> Fold<'a> {
         relations.get(relation)?.subquery.as_deref()
     }
 
-    /// `pull_up_simple_subquery`: a column of a subquery that the planner pulls up is the expression of the subquery, which folds where the query reads the column. A constant takes the place of the column, unless an outer join can make the column null, where a `PlaceHolderVar` keeps it. A column of a `VALUES` of one row is the value of the row, as `pull_up_simple_values` pulls it up when `is_simple_values` lets it.
+    /// `pull_up_simple_subquery`: a column of a subquery that the planner pulls up is the expression of the subquery, which folds where the query reads the column. A constant takes the place of the column, unless an outer join or a grouping set can make the column null, where a `PlaceHolderVar` keeps it. A column of a `VALUES` of one row is the value of the row, as `pull_up_simple_values` pulls it up when `is_simple_values` lets it.
     fn var(&mut self, expr: &Expr, var: Var) -> Result<Expr> {
         if let Some(value) = (var.levels_up == 0).then(|| self.values_row(var)).flatten() {
             let folded = self.expr(value)?;
             return Ok(match folded.kind {
-                ExprKind::Const(v) if !self.nulled[var.relation] => with(expr, ExprKind::Const(v)),
+                ExprKind::Const(v) if !self.wrap_all && !self.nulled[var.relation] => {
+                    with(expr, ExprKind::Const(v))
+                }
                 _ => expr.clone(),
             });
         }
@@ -732,7 +737,9 @@ impl<'a> Fold<'a> {
         let (Some(sub), Some(target)) = (sub, target) else { return Ok(expr.clone()) };
         let folded = Fold::new(sub, self.params, self.session).expr(&target.expr)?;
         Ok(match folded.kind {
-            ExprKind::Const(v) if !self.nulled[var.relation] => with(expr, ExprKind::Const(v)),
+            ExprKind::Const(v) if !self.wrap_all && !self.nulled[var.relation] => {
+                with(expr, ExprKind::Const(v))
+            }
             _ => expr.clone(),
         })
     }
