@@ -4,7 +4,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
-## 0.4.2 (2026-10-28)
+## 0.4.3 (2026-10-28)
 
 ### Added
 
@@ -32,6 +32,11 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - `CREATE INDEX` makes indexes of the access methods `gist`, `gin`, `spgist` and `brin`, and `rtree` gives `gist` with a notice. Each method checks its options and gives the errors of `DefineIndex` for unique, included and multicolumn indexes that it does not support. `pg_get_indexdef` shows the options of an index. The plans use no index of these methods yet (#999).
 - `ON COMMIT DELETE ROWS` empties a temporary table at each commit and `ON COMMIT DROP` drops it, as `PreCommit_on_commit_actions` does. A foreign key from a table without the same action fails the commit with `0A000`. `PREPARE TRANSACTION` fails with `0A000` after a use of a temporary object, and with `55000` otherwise, as `max_prepared_transactions` is 0. `COMMIT PREPARED` and `ROLLBACK PREPARED` give `42704` (#998).
 - `CLUSTER` and `REPACK` rewrite the table in the order of the index, or in the physical order with no index, with the checks, messages and `VERBOSE` output of PostgreSQL. `REPACK (ANALYZE)` collects the statistics, and an index on a temporary table of another role can be created (#997).
+
+## 0.4.2 (2026-10-28)
+
+### Added
+
 - `ALTER ... OWNER TO` accepts a role that has the privileges of the owner through an inherited membership, as `object_ownercheck` does. `CREATE SCHEMA`, `ALTER SCHEMA ... RENAME TO`, `ALTER SCHEMA ... OWNER TO`, `REASSIGN OWNED` of a schema and the publication commands check `CREATE` on the database, so a role that is not a superuser can use them after `GRANT CREATE ON DATABASE` (#995).
 - A column of `EXCLUDED` in `ON CONFLICT DO UPDATE` needs `SELECT` on the column of the target table, as in PostgreSQL. Before, `SET three = EXCLUDED.three` worked without the privilege (#994).
 - The detail of a duplicate key shows the key only to a role that can read the table or each column of the key (#993).
