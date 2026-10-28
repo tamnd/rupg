@@ -89,7 +89,7 @@ struct Namespace {
 #[derive(Debug)]
 struct Removed {
     /// The names of the subquery and of the queries outside it, the query outside first.
-    namespaces: Vec<Namespace>,
+    namespaces: Vec<Rc<Namespace>>,
     /// The targets of the subquery.
     targets: Vec<Expr>,
 }
@@ -114,8 +114,8 @@ struct JoinNames {
 /// A deparse of an expression or of a query, as `deparse_context`. Each form of the functions sets `PRETTYFLAG_INDENT`, so a `CASE` always takes more than one line. `EXPLAIN` does not set it.
 struct Deparser<'a> {
     session: &'a dyn Session,
-    /// The names of the queries that have the expression, the outermost query first. A `Var` finds its relation in the namespace of its level.
-    namespaces: Vec<Namespace>,
+    /// The names of the queries that have the expression, the outermost query first. A `Var` finds its relation in the namespace of its level. The plan of `EXPLAIN` shares the namespaces of its scopes with each deparse of an expression.
+    namespaces: Vec<Rc<Namespace>>,
     /// `PRETTYFLAG_PAREN`: add parentheses only where the syntax needs them.
     paren: bool,
     /// `indentLevel`.
@@ -176,7 +176,7 @@ impl<'a> Deparser<'a> {
         paren: bool,
     ) -> Deparser<'a> {
         let mut d = Deparser::new(session, paren, 0);
-        d.namespaces.push(Namespace {
+        d.namespaces.push(Rc::new(Namespace {
             names: vec![name.to_string()],
             columns: vec![columns],
             print_aliases: vec![false],
@@ -187,7 +187,7 @@ impl<'a> Deparser<'a> {
             removed: Vec::new(),
             target: None,
             returning: None,
-        });
+        }));
         d
     }
 

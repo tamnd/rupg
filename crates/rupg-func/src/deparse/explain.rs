@@ -30,7 +30,7 @@ struct PlanTexts<'a, 'q> {
     session: &'a dyn Session,
     plan: &'a Plan<'q>,
     /// The names of each scope of the plan.
-    spaces: Vec<Namespace>,
+    spaces: Vec<Rc<Namespace>>,
     /// The name of the target table of each scope of an `INSERT`.
     targets: Vec<Option<String>>,
     /// The name of each window of each scope, as `WindowAgg.winname`.
@@ -156,6 +156,7 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
                 alternative: l.alternative,
             })
             .collect();
+        let spaces = spaces.into_iter().map(Rc::new).collect();
         PlanTexts { session, plan, spaces, targets, windows, subplans, computed: Vec::new() }
     }
 
@@ -255,7 +256,7 @@ fn removed_scans(plan: &Plan<'_>, spaces: &mut [Namespace]) {
             found.find(|&(at, _)| has_scope(&plan.root, at)).or(first)
         });
         let (s, query) = leftmost.unwrap_or((s, scope.query));
-        let namespaces = chain(s).into_iter().map(|at| spaces[at].clone()).collect();
+        let namespaces = chain(s).into_iter().map(|at| Rc::new(spaces[at].clone())).collect();
         let targets = query.targets.iter().map(|t| t.expr.clone()).collect();
         spaces[parent].removed.push((r, Rc::new(Removed { namespaces, targets })));
     }

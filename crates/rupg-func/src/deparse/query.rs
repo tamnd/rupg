@@ -3,6 +3,7 @@
 //! rupg keeps the text of the statement that made a view, not its query tree. So `pg_get_viewdef` analyzes the text again, with the `search_path` that the statement had, and shows the query as PostgreSQL shows the query tree that it keeps.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use rupg_analyze::{
     Column, ConflictDef, Cte, FRAMEOPTION_END_OFFSET, FRAMEOPTION_END_UNBOUNDED_FOLLOWING,
@@ -80,7 +81,7 @@ impl Deparser<'_> {
         let saved_windows = std::mem::replace(&mut self.windows, query.windows.clone());
         let targets = query.targets.iter().map(|t| t.expr.clone()).collect();
         let saved_targets = std::mem::replace(&mut self.window_targets, targets);
-        self.namespaces.push(space);
+        self.namespaces.push(Rc::new(space));
         let done = self.select_query(query, result);
         self.namespaces.pop();
         self.windows = saved_windows;
@@ -126,7 +127,7 @@ impl Deparser<'_> {
         let prefix = self.prefix || !self.namespaces.is_empty() || self.function.is_some();
         let saved_prefix = std::mem::replace(&mut self.prefix, prefix);
         let saved_indent = std::mem::replace(&mut self.indent, indent);
-        self.namespaces.push(space);
+        self.namespaces.push(Rc::new(space));
         let done = self
             .with_clause(query)
             .and_then(|()| self.insert_body(def, &refname))
@@ -150,7 +151,7 @@ impl Deparser<'_> {
         // The range table has the target table and the source.
         let saved_prefix = std::mem::replace(&mut self.prefix, true);
         let saved_indent = std::mem::replace(&mut self.indent, indent);
-        self.namespaces.push(space);
+        self.namespaces.push(Rc::new(space));
         let done = self
             .with_clause(query)
             .and_then(|()| self.merge_body(&shown, def, &refname))
@@ -289,7 +290,7 @@ impl Deparser<'_> {
         let outer = self.namespaces.pop();
         let space = self.namespace(&query);
         let saved_prefix = std::mem::replace(&mut self.prefix, true);
-        self.namespaces.push(space);
+        self.namespaces.push(Rc::new(space));
         let done = self.conflict_action(conflict);
         self.namespaces.pop();
         self.namespaces.extend(outer);
@@ -360,7 +361,7 @@ impl Deparser<'_> {
             !self.namespaces.is_empty() || self.function.is_some() || query.relations.len() != 1;
         let saved_prefix = std::mem::replace(&mut self.prefix, prefix);
         let saved_indent = std::mem::replace(&mut self.indent, indent);
-        self.namespaces.push(space);
+        self.namespaces.push(Rc::new(space));
         let done = self
             .with_clause(query)
             .and_then(|()| self.change_body(query, set, &refname))
@@ -434,11 +435,12 @@ impl Deparser<'_> {
         let space = self
             .namespaces
             .last_mut()
+            .map(Rc::make_mut)
             .ok_or_else(|| Error::internal("RETURNING with no namespace"))?;
         let outer = space.returning.replace(names);
         let list = Query { targets: kept.clone(), ..Query::default() };
         let done = self.target_list(&list, None);
-        if let Some(space) = self.namespaces.last_mut() {
+        if let Some(space) = self.namespaces.last_mut().map(Rc::make_mut) {
             space.returning = outer;
         }
         done
@@ -513,7 +515,7 @@ impl Deparser<'_> {
         // The range table of the action has `old`, `new` and the target table, so the columns show the names of their tables.
         let space = self.namespace(base);
         let saved_prefix = std::mem::replace(&mut self.prefix, true);
-        self.namespaces.push(space);
+        self.namespaces.push(Rc::new(space));
         let done = self.write_def(action, 0);
         self.namespaces.pop();
         self.prefix = saved_prefix;
@@ -1538,11 +1540,11 @@ impl Deparser<'_> {
         if parens {
             self.buf.push('(');
         }
-        if let Some(space) = self.namespaces.last_mut() {
+        if let Some(space) = self.namespaces.last_mut().map(Rc::make_mut) {
             space.inside.push(k);
         }
         let done = self.join_body(join, query, paren_right, &using);
-        if let Some(space) = self.namespaces.last_mut() {
+        if let Some(space) = self.namespaces.last_mut().map(Rc::make_mut) {
             space.inside.pop();
         }
         done?;
@@ -1866,7 +1868,7 @@ impl Deparser<'_> {
         self.buf.push_str("JSON_ARRAY(");
         // The subquery is one level below the query of `SELECT JSON_ARRAYAGG`, whose names the subquery does not see.
         let names = vec![String::new(); wrapper.relations.len()];
-        self.namespaces.push(Namespace { names, ..Default::default() });
+        self.namespaces.push(Rc::new(Namespace { names, ..Default::default() }));
         let done = self.query_def(query, None, false, self.indent);
         self.namespaces.pop();
         done?;
@@ -2470,7 +2472,7 @@ pub(super) fn policy_expr(
     };
     let mut d = Deparser::new(session, paren, 0);
     let space = d.namespace(&base);
-    d.namespaces.push(space);
+    d.namespaces.push(Rc::new(space));
     d.expr(&qual, false)?;
     Ok(Some(d.buf))
 }
@@ -2499,7 +2501,7 @@ fn ruledef(rule: &rupg_catalog::Rule, pretty: bool, session: &dyn Session) -> Re
         let space = d.namespace(context);
         d.prefix = context.relations.len() != 1;
         d.indent = INDENT_STD;
-        d.namespaces.push(space);
+        d.namespaces.push(Rc::new(space));
         d.expr(qual, false)?;
         d.namespaces.pop();
         d.indent = 0;
@@ -2610,7 +2612,7 @@ pub(super) fn get_triggerdef(call: &Call<'_>, args: &[Value]) -> Result<Value> {
         let space = d.namespace(&base);
         d.prefix = true;
         d.indent = INDENT_STD;
-        d.namespaces.push(space);
+        d.namespaces.push(Rc::new(space));
         d.expr(&qual, false)?;
         d.namespaces.pop();
         d.indent = 0;
