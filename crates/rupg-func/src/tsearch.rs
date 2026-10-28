@@ -97,6 +97,36 @@ pub(crate) fn current_config(session: &dyn Session) -> Result<u32> {
     reg::input(RegKind::Config, &name, session)?
 }
 
+/// `tsvector_update_trigger`: the configuration that a trigger argument names. The name must have a schema, so that the result does not depend on `search_path`.
+///
+/// # Errors
+///
+/// `22023` for a name with no schema, and the errors of `get_ts_config_oid`.
+pub fn ts_config_qualified(session: &dyn Session, name: &str) -> Result<u32> {
+    let names = rupg_types::qualified_name_list(name).map_err(crate::type_error)?;
+    if names.len() < 2 {
+        return Err(Error::new(
+            SqlState::INVALID_PARAMETER_VALUE,
+            format!("text search configuration name \"{name}\" must be schema-qualified"),
+        ));
+    }
+    reg::input(RegKind::Config, name, session)?
+}
+
+/// `tsvector_update_trigger`: the lexemes of the texts with the configuration `config`. Each text goes through `parsetext` into the same `ParsedText`, so the positions go on from one text to the next.
+///
+/// # Errors
+///
+/// The errors of the configuration and of `make_tsvector`.
+pub fn tsvector_of_texts(session: &dyn Session, config: u32, texts: &[&str]) -> Result<Value> {
+    let config = tsdict::config(session.catalog(), config)?;
+    let mut parsed = Parsed::default();
+    for text in texts {
+        parse_text(session, &config, text, &mut parsed);
+    }
+    Ok(Value::TsVector(make_tsvector(parsed)?))
+}
+
 /// `to_tsvector_byid`: the lexemes of a text with a configuration.
 fn to_tsvector_with(session: &dyn Session, config: u32, text: &str) -> Result<Value> {
     let config = tsdict::config(session.catalog(), config)?;

@@ -6569,6 +6569,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/foreign_table_like.test")));
     }
 
+    /// The trigger functions in C `tsvector_update_trigger`, `tsvector_update_trigger_column`, `suppress_redundant_updates_trigger` and `trigger_return_old` of `regress.c` run with their errors, also from a function in `internal` that a user makes.
+    #[test]
+    fn trigger_internal() {
+        big_stack(|| script(include_str!("connection/trigger_internal.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The trigger functions in C `tsvector_update_trigger`, `tsvector_update_trigger_column` and `suppress_redundant_updates_trigger` run, with the errors of PostgreSQL, also from a function in `internal` with the same `prosrc`, and so does `trigger_return_old` of the library of the regression tests (#1081).
 - `CREATE FOREIGN TABLE ... (LIKE ... INCLUDING ALL)` copies no storage, no compression, no identity and no indexes, as a foreign table has no storage, the same as `transformTableLikeClause` and `expandTableLikeClause` (#1080).
 - The input of a range or a multirange over a domain checks the domain for each bound that is not infinite, as `range_in` calls `domain_in`, so a bad bound also fails an `INSERT` into a key `WITHOUT OVERLAPS` (#1079).
 - The input of `json` and `jsonb` fails with `stack depth limit exceeded` when the levels of the value need more stack than `max_stack_depth` in the parse of PostgreSQL, and the hint shows the current setting (#1078).

@@ -1,6 +1,6 @@
 //! The triggers of `CREATE TRIGGER` on the writes of a table, as `trigger.c` fires them: the triggers `BEFORE` before the write, and the queue of the triggers `AFTER`, which fire at the end of the statement, as `AfterTriggerEndQuery` fires them.
 //!
-//! The triggers `BEFORE ... FOR EACH STATEMENT` fire after the query of the write gives its rows. The triggers `BEFORE ... FOR EACH ROW` fire for all the rows before the first row goes into the heap, so a trigger does not see the rows that its statement wrote before. `INSERT ... ON CONFLICT` fires them for each row in turn, as `upsert.rs` tells, and `MERGE` fires them for each action, as `merge.rs` tells. Only a trigger function in PL/pgSQL can fire yet.
+//! The triggers `BEFORE ... FOR EACH STATEMENT` fire after the query of the write gives its rows. The triggers `BEFORE ... FOR EACH ROW` fire for all the rows before the first row goes into the heap, so a trigger does not see the rows that its statement wrote before. `INSERT ... ON CONFLICT` fires them for each row in turn, as `upsert.rs` tells, and `MERGE` fires them for each action, as `merge.rs` tells. Only a trigger function in PL/pgSQL, and the trigger functions in C of `internal.rs`, can fire yet.
 
 use std::rc::Rc;
 
@@ -11,6 +11,10 @@ use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
 use rupg_pgcatalog::builtin::Named;
 use rupg_types::Value;
+
+mod internal;
+
+use internal::Internal;
 
 use super::Connection;
 use super::merge::Action;
@@ -305,15 +309,34 @@ impl Connection {
         rupg_exec::trigger_when(base, qual, old, new, &reader)
     }
 
-    /// A call of the trigger function of `trigger` for the event `event`, with the transition tables `transition`. It gives the row that the function returns.
+    /// A call of the trigger function of `trigger` for the event `event`, with the transition tables `transition` and the columns `updated` of an `UPDATE`, as `tg_updatedcols`. It gives the row that the function returns.
     fn call_trigger(
         &self,
         trigger: &Trigger,
         event: i16,
         (old, new): (Option<Vec<Value>>, Option<Vec<Value>>),
         transition: Option<Transition>,
+        updated: &[i16],
     ) -> Result<Option<Vec<Value>>, Error> {
         let catalog = self.catalog();
+        match internal::internal(&catalog, trigger.function) {
+            Some(kind @ (Internal::TsvectorById | Internal::TsvectorByColumn)) => {
+                let by_column = matches!(kind, Internal::TsvectorByColumn);
+                return self.tsvector_update_trigger(
+                    (trigger, by_column),
+                    event,
+                    (old, new),
+                    updated,
+                );
+            }
+            Some(Internal::SuppressRedundant) => {
+                return self.suppress_redundant_updates_trigger(trigger, event, (old, new));
+            }
+            Some(Internal::ReturnOld) => {
+                return Ok(internal::trigger_return_old(event, (old, new)));
+            }
+            None => {}
+        }
         let function = catalog.function(trigger.function);
         if function.is_none_or(|f| f.lang != rupg_plpgsql::PLPGSQL_LANGUAGE) {
             return Err(Error::new(
@@ -367,7 +390,7 @@ impl Connection {
     pub(super) fn before_statement(&self, triggers: &Triggers, info: &Write) -> Result<(), Error> {
         for armed in triggers.of(false, true) {
             if self.enabled((armed, triggers.event), info, None, None)? {
-                self.call_trigger(&armed.trigger, triggers.event, (None, None), None)?;
+                self.call_trigger(&armed.trigger, triggers.event, (None, None), None, &[])?;
             }
         }
         Ok(())
@@ -428,6 +451,7 @@ impl Connection {
                                 triggers.event,
                                 (old.clone(), None),
                                 None,
+                                &[],
                             )?
                             .is_none()
                     {
@@ -453,6 +477,7 @@ impl Connection {
                     triggers.event,
                     (old.clone(), Some(passed)),
                     None,
+                    &info.updated,
                 )?;
                 let Some(returned) = returned else { continue 'rows };
                 new = returned;
@@ -521,7 +546,8 @@ impl Connection {
         let instead = triggers.list.iter().filter(|t| t.trigger.kind & INSTEAD_ROW == INSTEAD_ROW);
         for armed in instead {
             let rows = (old.clone(), new.clone());
-            let Some(returned) = self.call_trigger(&armed.trigger, triggers.event, rows, None)?
+            let Some(returned) =
+                self.call_trigger(&armed.trigger, triggers.event, rows, None, &[])?
             else {
                 return Ok(None);
             };
@@ -681,7 +707,8 @@ impl Connection {
             let passed =
                 if old.is_some() { without_generated(&new, &generated) } else { new.clone() };
             let rows = (old.clone(), Some(passed));
-            let Some(returned) = self.call_trigger(&armed.trigger, triggers.event, rows, None)?
+            let Some(returned) =
+                self.call_trigger(&armed.trigger, triggers.event, rows, None, &info.updated)?
             else {
                 return Ok(None);
             };
@@ -716,7 +743,13 @@ impl Connection {
         for armed in triggers.of(true, true) {
             if self.enabled((armed, triggers.event), info, Some(&old), None)?
                 && self
-                    .call_trigger(&armed.trigger, triggers.event, (Some(old.clone()), None), None)?
+                    .call_trigger(
+                        &armed.trigger,
+                        triggers.event,
+                        (Some(old.clone()), None),
+                        None,
+                        &[],
+                    )?
                     .is_none()
             {
                 return Ok(false);
@@ -786,7 +819,8 @@ impl Connection {
                 continue;
             }
             let rows = (old.clone(), new.clone());
-            let Some(returned) = self.call_trigger(&armed.trigger, triggers.event, rows, None)?
+            let Some(returned) =
+                self.call_trigger(&armed.trigger, triggers.event, rows, None, shape.0)?
             else {
                 return Ok(None);
             };
@@ -855,7 +889,8 @@ impl Connection {
                     continue;
                 }
                 let rows = (event.old, event.new);
-                let fired = self.call_trigger(&event.trigger, event.event, rows, event.transition);
+                let fired =
+                    self.call_trigger(&event.trigger, event.event, rows, event.transition, &[]);
                 if let Err(error) = fired {
                     self.events.borrow_mut().truncate(mark);
                     return Err(error);
@@ -889,7 +924,7 @@ impl Connection {
         };
         for event in events {
             let rows = (event.old, event.new);
-            self.call_trigger(&event.trigger, event.event, rows, event.transition)?;
+            self.call_trigger(&event.trigger, event.event, rows, event.transition, &[])?;
         }
         Ok(())
     }
@@ -908,7 +943,7 @@ impl Connection {
         self.deferred_events.borrow_mut().extend(later);
         for event in now {
             let rows = (event.old, event.new);
-            self.call_trigger(&event.trigger, event.event, rows, event.transition)?;
+            self.call_trigger(&event.trigger, event.event, rows, event.transition, &[])?;
         }
         Ok(())
     }

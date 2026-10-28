@@ -1,0 +1,189 @@
+!details
+> CREATE TABLE tt (id int, a tsvector, t text, u varchar, cfg regconfig, n int)
+CREATE TABLE
+> CREATE TRIGGER tt_a BEFORE INSERT OR UPDATE ON tt FOR EACH ROW EXECUTE PROCEDURE tsvector_update_trigger(a, 'pg_catalog.english', t, u)
+CREATE TRIGGER
+> INSERT INTO tt (id, t, u) VALUES (1, 'The quick brown foxes', 'jumped over dogs')
+INSERT 0 1
+> INSERT INTO tt (id, t) VALUES (2, NULL)
+INSERT 0 1
+> SELECT id, a::text FROM tt ORDER BY id
+fields id@tt.1:23:4:-1,a:25:-1:-1
+row 1,'brown':3 'dog':7 'fox':4 'jump':5 'quick':2
+row 2,
+SELECT 2
+> UPDATE tt SET t = 'lazy cats' WHERE id = 1
+UPDATE 1
+> SELECT id, a::text FROM tt ORDER BY id
+fields id@tt.1:23:4:-1,a:25:-1:-1
+row 1,'cat':2 'dog':5 'jump':3 'lazi':1
+row 2,
+SELECT 2
+> UPDATE tt SET a = NULL, n = 1 WHERE id = 1
+UPDATE 1
+> SELECT id, a::text FROM tt ORDER BY id
+fields id@tt.1:23:4:-1,a:25:-1:-1
+row 1,NULL
+row 2,
+SELECT 2
+> UPDATE tt SET u = 'running' WHERE id = 2
+UPDATE 1
+> SELECT id, a::text FROM tt ORDER BY id
+fields id@tt.1:23:4:-1,a:25:-1:-1
+row 1,NULL
+row 2,'run':1
+SELECT 2
+> DROP TRIGGER tt_a ON tt
+DROP TRIGGER
+> CREATE TRIGGER tt_b BEFORE INSERT ON tt FOR EACH ROW EXECUTE PROCEDURE tsvector_update_trigger(a, english, t)
+CREATE TRIGGER
+> INSERT INTO tt (id, t) VALUES (3, 'x')
+ERROR 22023 text search configuration name "english" must be schema-qualified
+> DROP TRIGGER tt_b ON tt
+DROP TRIGGER
+> CREATE TRIGGER tt_c BEFORE INSERT ON tt FOR EACH ROW EXECUTE PROCEDURE tsvector_update_trigger(nope, 'pg_catalog.english', t)
+CREATE TRIGGER
+> INSERT INTO tt (id, t) VALUES (3, 'x')
+ERROR 42703 tsvector column "nope" does not exist
+> DROP TRIGGER tt_c ON tt
+DROP TRIGGER
+> CREATE TRIGGER tt_d BEFORE INSERT ON tt FOR EACH ROW EXECUTE PROCEDURE tsvector_update_trigger(t, 'pg_catalog.english', t)
+CREATE TRIGGER
+> INSERT INTO tt (id, t) VALUES (3, 'x')
+ERROR 42804 column "t" is not of tsvector type
+> DROP TRIGGER tt_d ON tt
+DROP TRIGGER
+> CREATE TRIGGER tt_e BEFORE INSERT ON tt FOR EACH ROW EXECUTE PROCEDURE tsvector_update_trigger(a, 'pg_catalog.english', n)
+CREATE TRIGGER
+> INSERT INTO tt (id, n) VALUES (3, 1)
+ERROR 42804 column "n" is not of a character type
+> DROP TRIGGER tt_e ON tt
+DROP TRIGGER
+> CREATE TRIGGER tt_f BEFORE INSERT ON tt FOR EACH ROW EXECUTE PROCEDURE tsvector_update_trigger(a, 'pg_catalog.english', zz)
+CREATE TRIGGER
+> INSERT INTO tt (id, n) VALUES (3, 1)
+ERROR 42703 column "zz" does not exist
+> DROP TRIGGER tt_f ON tt
+DROP TRIGGER
+> CREATE TRIGGER tt_g BEFORE INSERT ON tt FOR EACH ROW EXECUTE PROCEDURE tsvector_update_trigger(a, 'pg_catalog.english')
+CREATE TRIGGER
+> INSERT INTO tt (id, n) VALUES (3, 1)
+ERROR XX000 tsvector_update_trigger: arguments must be tsvector_field, ts_config, text_field1, ...)
+> DROP TRIGGER tt_g ON tt
+DROP TRIGGER
+> CREATE TRIGGER tt_h AFTER INSERT ON tt FOR EACH ROW EXECUTE PROCEDURE tsvector_update_trigger(a, 'pg_catalog.english', t)
+CREATE TRIGGER
+> INSERT INTO tt (id, n) VALUES (3, 1)
+ERROR XX000 tsvector_update_trigger: must be fired BEFORE event
+> DROP TRIGGER tt_h ON tt
+DROP TRIGGER
+> CREATE TRIGGER tt_i BEFORE INSERT ON tt FOR EACH STATEMENT EXECUTE PROCEDURE tsvector_update_trigger(a, 'pg_catalog.english', t)
+CREATE TRIGGER
+> INSERT INTO tt (id, n) VALUES (3, 1)
+ERROR XX000 tsvector_update_trigger: must be fired for row
+> DROP TRIGGER tt_i ON tt
+DROP TRIGGER
+> CREATE TRIGGER tt_j BEFORE INSERT OR UPDATE ON tt FOR EACH ROW EXECUTE PROCEDURE tsvector_update_trigger_column(a, cfg, t)
+CREATE TRIGGER
+> INSERT INTO tt (id, t, cfg) VALUES (4, 'Running fast', 'simple')
+INSERT 0 1
+> INSERT INTO tt (id, t) VALUES (5, 'Running fast')
+ERROR 22004 configuration column "cfg" must not be null
+> SELECT id, a::text FROM tt WHERE id >= 4 ORDER BY id
+fields id@tt.1:23:4:-1,a:25:-1:-1
+row 4,'fast':2 'running':1
+SELECT 1
+> DROP TRIGGER tt_j ON tt
+DROP TRIGGER
+> CREATE TRIGGER tt_k BEFORE INSERT ON tt FOR EACH ROW EXECUTE PROCEDURE tsvector_update_trigger_column(a, nocol, t)
+CREATE TRIGGER
+> INSERT INTO tt (id, t) VALUES (6, 'x')
+ERROR 42703 configuration column "nocol" does not exist
+> DROP TRIGGER tt_k ON tt
+DROP TRIGGER
+> CREATE TRIGGER tt_l BEFORE INSERT ON tt FOR EACH ROW EXECUTE PROCEDURE tsvector_update_trigger_column(a, t, t)
+CREATE TRIGGER
+> INSERT INTO tt (id, t) VALUES (6, 'x')
+ERROR 42804 column "t" is not of regconfig type
+> DROP TRIGGER tt_l ON tt
+DROP TRIGGER
+> CREATE TABLE su (f1 int, f2 text, f3 float8)
+CREATE TABLE
+> INSERT INTO su VALUES (1, 'a', 1.5), (2, 'b', NULL)
+INSERT 0 2
+> CREATE TRIGGER su_t BEFORE UPDATE ON su FOR EACH ROW EXECUTE PROCEDURE suppress_redundant_updates_trigger()
+CREATE TRIGGER
+> UPDATE su SET f1 = f1
+UPDATE 0
+> UPDATE su SET f3 = 2 WHERE f3 IS NULL
+UPDATE 1
+> UPDATE su SET f2 = 'a' WHERE f1 = 1
+UPDATE 0
+> UPDATE su SET f2 = 'c' WHERE f1 = 1
+UPDATE 1
+> SELECT * FROM su ORDER BY f1
+fields f1@su.1:23:4:-1,f2@su.2:25:-1:-1,f3@su.3:701:8:-1
+row 1,c,1.5
+row 2,b,2
+SELECT 2
+> CREATE TRIGGER su_u BEFORE INSERT ON su FOR EACH ROW EXECUTE PROCEDURE suppress_redundant_updates_trigger()
+CREATE TRIGGER
+> INSERT INTO su VALUES (3, 'c', 0)
+ERROR 39P01 suppress_redundant_updates_trigger: must be called on update
+> DROP TRIGGER su_u ON su
+DROP TRIGGER
+> CREATE TRIGGER su_v AFTER UPDATE ON su FOR EACH ROW EXECUTE PROCEDURE suppress_redundant_updates_trigger()
+CREATE TRIGGER
+> UPDATE su SET f1 = f1
+UPDATE 0
+> DROP TRIGGER su_v ON su
+DROP TRIGGER
+> CREATE TRIGGER su_w BEFORE UPDATE ON su FOR EACH STATEMENT EXECUTE PROCEDURE suppress_redundant_updates_trigger()
+CREATE TRIGGER
+> UPDATE su SET f1 = f1
+ERROR 39P01 suppress_redundant_updates_trigger: must be called for each row
+> CREATE FUNCTION trigger_return_old() RETURNS trigger AS '/home/tam/work/rupg-compat-work/oracle/19/src/src/test/regress/regress.so' LANGUAGE C
+CREATE FUNCTION
+> CREATE TABLE ro (f1 int, f2 text)
+CREATE TABLE
+> CREATE TRIGGER ro_t BEFORE INSERT OR DELETE OR UPDATE ON ro FOR EACH ROW EXECUTE PROCEDURE trigger_return_old()
+CREATE TRIGGER
+> INSERT INTO ro VALUES (1, 'foo')
+INSERT 0 1
+> SELECT * FROM ro
+fields f1@ro.1:23:4:-1,f2@ro.2:25:-1:-1
+row 1,foo
+SELECT 1
+> UPDATE ro SET f2 = f2 || 'bar'
+UPDATE 1
+> SELECT * FROM ro
+fields f1@ro.1:23:4:-1,f2@ro.2:25:-1:-1
+row 1,foo
+SELECT 1
+> DELETE FROM ro
+DELETE 1
+> SELECT * FROM ro
+fields f1@ro.1:23:4:-1,f2@ro.2:25:-1:-1
+SELECT 0
+> ALTER TABLE ro ADD COLUMN f3 text
+ALTER TABLE
+> INSERT INTO ro VALUES (2, 'x', 'y')
+INSERT 0 1
+> UPDATE ro SET f3 = 'z'
+UPDATE 1
+> SELECT * FROM ro
+fields f1@ro.1:23:4:-1,f2@ro.2:25:-1:-1,f3@ro.3:25:-1:-1
+row 2,x,y
+SELECT 1
+> CREATE FUNCTION my_tsv() RETURNS trigger LANGUAGE internal AS 'tsvector_update_trigger_byid'
+CREATE FUNCTION
+> CREATE TABLE mt (a tsvector, t text)
+CREATE TABLE
+> CREATE TRIGGER mt_t BEFORE INSERT ON mt FOR EACH ROW EXECUTE PROCEDURE my_tsv(a, 'pg_catalog.simple', t)
+CREATE TRIGGER
+> INSERT INTO mt (t) VALUES ('Hello World')
+INSERT 0 1
+> SELECT a::text FROM mt
+fields a:25:-1:-1
+row 'hello':1 'world':2
+SELECT 1

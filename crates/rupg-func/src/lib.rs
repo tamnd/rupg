@@ -133,6 +133,7 @@ pub use snapshot::XactState;
 pub use srf::{SetKernel, set_kernel};
 pub use stat::{RelationCounts, Writes};
 pub use text::{pattern_match, quote_identifier};
+pub use tsearch::{ts_config_qualified, tsvector_of_texts};
 pub use tsm::sample_rows;
 pub use xml::{xml_expr, xml_value};
 
