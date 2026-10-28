@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.4.6 (2026-10-29)
+
 ### Added
 
 - The planner merges a subquery into a query with grouping sets when the query reads distinct columns of it, as pull_up_simple_subquery does. A view over VALUES is then a Values Scan with no Subquery Scan (#1064).
