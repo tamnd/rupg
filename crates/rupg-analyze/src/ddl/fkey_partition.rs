@@ -65,6 +65,7 @@ impl Definer<'_, '_> {
             if self.try_attach_foreign_key(partition, &con, &keys, triggers)? {
                 continue;
             }
+            let del_set_cols = self.map_keys(con.relation, partition, &foreign.del_set_cols)?;
             let new = NewForeignKey {
                 table: partition,
                 name: Some(con.name.clone()),
@@ -72,7 +73,7 @@ impl Definer<'_, '_> {
                 index: con.index,
                 deferrable: con.deferrable,
                 deferred: con.deferred,
-                foreign: foreign.clone(),
+                foreign: rupg_catalog::ForeignKey { del_set_cols, ..foreign.clone() },
             };
             let clone = self.catalog.add_fk_constraint(new, constraint, FkSide::Referencing)?;
             self.fk_recurse_referencing(clone, Some(triggers))?;
@@ -97,6 +98,7 @@ impl Definer<'_, '_> {
             if self.try_attach_foreign_key(partition, con, &keys, triggers)? {
                 continue;
             }
+            let del_set_cols = self.map_keys(parent, partition, &foreign.del_set_cols)?;
             let new = NewForeignKey {
                 table: partition,
                 name: Some(con.name.clone()),
@@ -104,7 +106,7 @@ impl Definer<'_, '_> {
                 index: con.index,
                 deferrable: con.deferrable,
                 deferred: con.deferred,
-                foreign,
+                foreign: rupg_catalog::ForeignKey { del_set_cols, ..foreign },
             };
             let clone = self.catalog.add_fk_constraint(new, con.oid, FkSide::Referencing)?;
             self.fk_recurse_referencing(clone, Some(triggers))?;

@@ -1829,6 +1829,9 @@ fn constraint_def(con: &Constraint, paren: bool, session: &dyn Session) -> Resul
             if let Some(delete) = action(fk.delete) {
                 out.push_str(&format!(" ON DELETE {delete}"));
             }
+            if !fk.del_set_cols.is_empty() {
+                out.push_str(&format!(" ({})", column_list(relation()?, &fk.del_set_cols)?));
+            }
         }
         ConKind::Primary | ConKind::Unique => {
             let index = catalog.relation(con.index).and_then(|r| r.index.as_ref());

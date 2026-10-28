@@ -1,0 +1,61 @@
+!details
+> CREATE TABLE pk (tid int, id int, PRIMARY KEY (tid, id))
+CREATE TABLE
+> CREATE TABLE fk (tid int, id int, foo int, FOREIGN KEY (tid, id) REFERENCES pk ON DELETE SET NULL (bar))
+ERROR 42703 column "bar" referenced in foreign key constraint does not exist
+> CREATE TABLE fk (tid int, id int, foo int, FOREIGN KEY (tid, id) REFERENCES pk ON DELETE SET NULL (foo))
+ERROR 42P10 column "foo" referenced in ON DELETE SET action must be part of foreign key
+> CREATE TABLE fk (tid int, id int, foo int, FOREIGN KEY (tid, foo) REFERENCES pk ON UPDATE SET NULL (foo))
+ERROR 0A000 a column list with SET NULL is only supported for ON DELETE actions at 81
+> CREATE TABLE fk (tid int, a int, b int DEFAULT 0, FOREIGN KEY (tid, a) REFERENCES pk ON DELETE SET NULL (a), FOREIGN KEY (tid, b) REFERENCES pk ON DELETE SET DEFAULT (b, b))
+CREATE TABLE
+> SELECT conname, confdelsetcols, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'fk'::regclass ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1,confdelsetcols@pg_constraint.26:1005:-1:-1,pg_get_constraintdef:25:-1:-1
+row fk_tid_a_fkey,{2},FOREIGN KEY (tid, a) REFERENCES pk(tid, id) ON DELETE SET NULL (a)
+row fk_tid_b_fkey,{3},FOREIGN KEY (tid, b) REFERENCES pk(tid, id) ON DELETE SET DEFAULT (b)
+SELECT 2
+> INSERT INTO pk VALUES (1, 1), (1, 2), (1, 0)
+INSERT 0 3
+> INSERT INTO fk VALUES (1, 1, 2)
+INSERT 0 1
+> DELETE FROM pk WHERE id = 1
+DELETE 1
+> SELECT * FROM fk
+fields tid@fk.1:23:4:-1,a@fk.2:23:4:-1,b@fk.3:23:4:-1
+row 1,NULL,2
+SELECT 1
+> DELETE FROM pk WHERE id = 2
+DELETE 1
+> SELECT * FROM fk
+fields tid@fk.1:23:4:-1,a@fk.2:23:4:-1,b@fk.3:23:4:-1
+row 1,NULL,0
+SELECT 1
+> CREATE TABLE pp (a int, b int, PRIMARY KEY (a, b))
+CREATE TABLE
+> CREATE TABLE fp (a int DEFAULT 5, b int, x int) PARTITION BY LIST (x)
+CREATE TABLE
+> CREATE TABLE fp1 (x int, b int, a int DEFAULT 6)
+CREATE TABLE
+> ALTER TABLE fp ATTACH PARTITION fp1 FOR VALUES IN (1)
+ALTER TABLE
+> CREATE TABLE fp2 PARTITION OF fp FOR VALUES IN (2)
+CREATE TABLE
+> ALTER TABLE fp ADD FOREIGN KEY (a, b) REFERENCES pp ON DELETE SET NULL (b)
+ALTER TABLE
+> SELECT conrelid::regclass, confdelsetcols, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid::regclass::text LIKE 'fp%' AND contype = 'f' ORDER BY 1
+fields conrelid:2205:4:-1,confdelsetcols@pg_constraint.26:1005:-1:-1,pg_get_constraintdef:25:-1:-1
+row fp,{2},FOREIGN KEY (a, b) REFERENCES pp(a, b) ON DELETE SET NULL (b)
+row fp1,{2},FOREIGN KEY (a, b) REFERENCES pp(a, b) ON DELETE SET NULL (b)
+row fp2,{2},FOREIGN KEY (a, b) REFERENCES pp(a, b) ON DELETE SET NULL (b)
+SELECT 3
+> INSERT INTO pp VALUES (1, 1), (2, 2)
+INSERT 0 2
+> INSERT INTO fp VALUES (1, 1, 1), (2, 2, 2)
+INSERT 0 2
+> DELETE FROM pp
+DELETE 2
+> SELECT * FROM fp ORDER BY x
+fields a@fp.1:23:4:-1,b@fp.2:23:4:-1,x@fp.3:23:4:-1
+row 1,NULL,1
+row 2,NULL,2
+SELECT 2

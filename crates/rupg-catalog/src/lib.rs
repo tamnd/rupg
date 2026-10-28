@@ -823,6 +823,8 @@ pub struct ForeignKey {
     pub ff_eq: Vec<u32>,
     /// `conperiod`: the last columns of the two tables are the periods of a temporal foreign key, `PERIOD`.
     pub period: bool,
+    /// `confdelsetcols`: the referencing columns that `ON DELETE SET NULL` or `ON DELETE SET DEFAULT` sets, or empty for all of them.
+    pub del_set_cols: Vec<i16>,
 }
 
 /// A constraint, one row of `pg_constraint`.

@@ -6091,6 +6091,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/temporal_foreign_key.test")));
     }
 
+    /// The column lists of `ON DELETE SET NULL` and `ON DELETE SET DEFAULT`: the errors of the definition, `confdelsetcols` and `pg_get_constraintdef`, the delete that sets only the listed columns, and the clones on the partitions of a partitioned table with other column numbers. `connection/delete_set_columns.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn delete_set_columns() {
+        big_stack(|| script(include_str!("connection/delete_set_columns.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

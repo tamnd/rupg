@@ -1169,6 +1169,7 @@ fn user_rows_have_the_column_types() {
         pp_eq: vec![96],
         ff_eq: vec![96],
         period: false,
+        del_set_cols: Vec::new(),
     };
     let fkey = NewForeignKey {
         table: t,
