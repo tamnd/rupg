@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `CREATE FOREIGN TABLE ... (LIKE ... INCLUDING ALL)` copies no storage, no compression, no identity and no indexes, as a foreign table has no storage, the same as `transformTableLikeClause` and `expandTableLikeClause` (#1080).
 - The input of a range or a multirange over a domain checks the domain for each bound that is not infinite, as `range_in` calls `domain_in`, so a bad bound also fails an `INSERT` into a key `WITHOUT OVERLAPS` (#1079).
 - The input of `json` and `jsonb` fails with `stack depth limit exceeded` when the levels of the value need more stack than `max_stack_depth` in the parse of PostgreSQL, and the hint shows the current setting (#1078).
 - The heap stores each row as the TOAST code of PostgreSQL does. A long value is compressed with lz4 or pglz, as attstorage, attcompression and default_toast_compression tell, or moves to the TOAST table. Each moved value takes one OID, so the OIDs of the objects that come after it are the same as in PostgreSQL (#1077).
