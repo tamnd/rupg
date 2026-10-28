@@ -1,0 +1,55 @@
+!details
+> create temp table hv(a int, b int)
+CREATE TABLE
+> explain (costs off) select a+1 from hv group by a+1 having a+1 > count(*)
+fields QUERY PLAN:25:-1:-1
+row HashAggregate
+row   Group Key: (a + 1)
+row   Filter: (((a + 1)) > count(*))
+row   ->  Seq Scan on hv
+EXPLAIN
+> explain (costs off) select a+1 from hv group by rollup(a+1) having a+1 > 2
+fields QUERY PLAN:25:-1:-1
+row MixedAggregate
+row   Hash Key: (a + 1)
+row   Group Key: ()
+row   Filter: (((a + 1)) > 2)
+row   ->  Seq Scan on hv
+EXPLAIN
+> explain (costs off) select not (a > 1) from hv group by rollup(not (a > 1)) having not not (a > 1)
+fields QUERY PLAN:25:-1:-1
+row MixedAggregate
+row   Hash Key: (a <= 1)
+row   Group Key: ()
+row   Filter: (NOT ((a <= 1)))
+row   ->  Seq Scan on hv
+EXPLAIN
+> explain (costs off) select a > 1 and b < 3 from hv group by rollup(a > 1 and b < 3) having a > 1 and b < 3
+fields QUERY PLAN:25:-1:-1
+row MixedAggregate
+row   Hash Key: ((a > 1) AND (b < 3))
+row   Group Key: ()
+row   Filter: (((a > 1) AND (b < 3)))
+row   ->  Seq Scan on hv
+EXPLAIN
+> explain (costs off) select a > 1 and b < 3 from hv group by grouping sets ((a > 1 and b < 3)) having a > 1 and b < 3
+fields QUERY PLAN:25:-1:-1
+row HashAggregate
+row   Group Key: ((a > 1) AND (b < 3))
+row   ->  Seq Scan on hv
+row         Filter: ((a > 1) AND (b < 3))
+EXPLAIN
+> insert into hv values (0, 0), (2, 1), (2, 5), (null, 1)
+INSERT 0 4
+> select not (a > 1) as x, count(*) from hv group by rollup(not (a > 1)) having not not (a > 1) order by 1
+fields x:16:1:-1,count:20:8:-1
+row f,2
+SELECT 1
+> select a > 1 and b < 3 as x, count(*) from hv group by rollup(a > 1 and b < 3) having a > 1 and b < 3 order by 1
+fields x:16:1:-1,count:20:8:-1
+row t,1
+SELECT 1
+> select not a from (values(true)) t(a) group by rollup(not a) having not not a
+fields ?column?:16:1:-1
+row f
+SELECT 1

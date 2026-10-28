@@ -562,7 +562,11 @@ impl Explainer<'_, '_> {
                 } else {
                     self.grouping_sets(scope, sets, upper)?;
                 }
-                self.qual("Filter", scope, &node.filter, upper)?;
+                // `show_upper_qual`: a key that the node below computes is a column of its output, so it shows in parentheses.
+                self.texts.below(computed(node));
+                let filter = self.qual("Filter", scope, &node.filter, upper);
+                self.texts.below(Vec::new());
+                filter?;
                 if matches!(strategy, Strategy::Hashed | Strategy::Mixed)
                     && self.options.costs
                     && self.w.format != Format::Text

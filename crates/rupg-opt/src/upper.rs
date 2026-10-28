@@ -4,8 +4,8 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 
 use rupg_analyze::{
-    Aggref, Expr, ExprKind, FuncForm, MinMax, Query, SetKind, SetOp, SetTree, SortGroup, SubLink,
-    WindowFunc, Write, WriteKind, expand_grouping_sets,
+    Aggref, BoolOp, Expr, ExprKind, FuncForm, MinMax, Query, SetKind, SetOp, SetTree, SortGroup,
+    SubLink, WindowFunc, Write, WriteKind, expand_grouping_sets,
 };
 use rupg_pgcatalog::builtin;
 use rupg_plan::{
@@ -32,11 +32,6 @@ const MAX_SETS: usize = 4096;
 
 /// The conditions of `HAVING` that go to `WHERE`, and the conditions that stay in `HAVING`, as `subquery_planner` divides them. A condition with no aggregate goes to `WHERE`, but with no `GROUP BY` or with an empty grouping set it also stays, because the group is there also when no row passes. With grouping sets, a condition that reads an item that a set does not have stays, because the item is null only in the groups.
 pub(crate) fn having_split(query: &Query) -> (Vec<&Expr>, Vec<&Expr>) {
-    let mut parts = Vec::new();
-    if let Some(having) = &query.having {
-        exprs::and_parts(having, &mut parts);
-    }
-    // `mark_nullable_by_grouping`: the items that are not in all the sets.
     let (nullable, empty_set) = if query.grouping_sets.is_empty() {
         (Vec::new(), false)
     } else {
@@ -50,6 +45,19 @@ pub(crate) fn having_split(query: &Query) -> (Vec<&Expr>, Vec<&Expr>) {
             .collect();
         (nullable, sets.iter().any(Vec::is_empty))
     };
+    // `flatten_group_exprs`: an `AND` that is an item that a set does not have is in a `PlaceHolderVar`, so it is one condition.
+    fn split<'e>(expr: &'e Expr, nullable: &[&Expr], out: &mut Vec<&'e Expr>) {
+        match &expr.kind {
+            ExprKind::Bool(BoolOp::And, args) if !nullable.iter().any(|n| n.same(expr)) => {
+                args.iter().for_each(|a| split(a, nullable, out));
+            }
+            _ => out.push(expr),
+        }
+    }
+    let mut parts = Vec::new();
+    if let Some(having) = &query.having {
+        split(having, &nullable, &mut parts);
+    }
     let reads_nullable = |part: &Expr| {
         part.find(0, &mut |e, depth| {
             (depth == 0 && nullable.iter().any(|n| n.same(e))).then_some(())

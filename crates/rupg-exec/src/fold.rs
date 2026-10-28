@@ -2,8 +2,8 @@
 
 use rupg_analyze::{
     BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, FieldStore, FromItem, Func, FuncForm, IsJson,
-    Join, JoinKind, JoinRow, JsonCtor, JsonCtorKind, JsonValue, NamedArg, Query, Relation,
-    RowCompare, SubLink, SubLinkKind, Subscript, Var, XmlOp,
+    Join, JoinKind, JoinRow, JsonCtor, JsonCtorKind, JsonValue, NamedArg, PlaceHolder, Query,
+    Relation, RowCompare, SubLink, SubLinkKind, Subscript, Var, XmlOp, expand_grouping_sets,
 };
 use rupg_common::{Error, Result};
 use rupg_func::Session;
@@ -46,6 +46,7 @@ fn plan(
     let mut fold = Fold::new(query, params, session);
     let mut out = query.clone();
     let mut simple = false;
+    let groups = nullable_groups(query);
     if exists
         && query.set_op.is_none()
         && agg::calls(query).is_empty()
@@ -83,8 +84,14 @@ fn plan(
     if simple {
         out.limit = None;
     } else {
-        let targets: Vec<&Expr> = query.targets.iter().map(|t| &t.expr).collect();
-        for (target, expr) in out.targets.iter_mut().zip(fold.clause(&targets)?) {
+        let wrapped: Vec<Expr> =
+            query.targets.iter().map(|t| wrap_groups(&t.expr, &groups)).collect();
+        let targets: Vec<&Expr> = wrapped.iter().collect();
+        let mut folded = fold.clause(&targets)?;
+        for expr in &mut folded {
+            fold.unwrap_groups(expr, &groups)?;
+        }
+        for (target, expr) in out.targets.iter_mut().zip(folded) {
             // The description of the rows keeps the type and the typmod of the analysis.
             target.expr = Expr { ty: target.expr.ty, typmod: target.expr.typmod, ..expr };
         }
@@ -92,7 +99,12 @@ fn plan(
     out.from = query.from.iter().map(|item| fold.join(item)).collect::<Result<_>>()?;
     // `preprocess_expression` makes each condition canonical after it folds, as `canonicalize_qual`.
     out.filter = fold.one(query.filter.as_ref())?.map(prepqual::canonicalize);
-    out.having = fold.one(query.having.as_ref())?.map(prepqual::canonicalize);
+    let having = query.having.as_ref().map(|h| wrap_groups(h, &groups));
+    out.having = fold.one(having.as_ref())?;
+    if let Some(having) = &mut out.having {
+        fold.unwrap_groups(having, &groups)?;
+    }
+    out.having = out.having.map(prepqual::canonicalize);
     out.offset = fold.one(query.offset.as_ref())?;
     if !simple {
         out.limit = fold.one(query.limit.as_ref())?;
@@ -138,6 +150,54 @@ fn plan(
         }
     }
     Ok(out)
+}
+
+/// `mark_nullable_by_grouping`: the items of `GROUP BY` that a grouping set does not have and that are not columns. `flatten_group_exprs` puts each in a `PlaceHolderVar` where the targets and `HAVING` read it.
+fn nullable_groups(query: &Query) -> Vec<Expr> {
+    if query.grouping_sets.is_empty() {
+        return Vec::new();
+    }
+    let sets = expand_grouping_sets(&query.grouping_sets, query.group_distinct, usize::MAX)
+        .unwrap_or_default();
+    let mut out: Vec<Expr> = Vec::new();
+    for g in &query.group {
+        let expr = &query.targets[g.target].expr;
+        if !matches!(expr.kind, ExprKind::Var(_))
+            && !sets.iter().all(|s| s.contains(&g.target))
+            && !out.iter().any(|o| o.same(expr))
+        {
+            out.push(expr.clone());
+        }
+    }
+    out
+}
+
+/// The expression with each item of `groups` that it reads outside an aggregate call in a `PlaceHolderVar`, so that the fold of the expression around the item does not take it apart, as `NOT (NOT a)` stays when `NOT a` is an item.
+fn wrap_groups(expr: &Expr, groups: &[Expr]) -> Expr {
+    let mut expr = expr.clone();
+    if groups.is_empty() {
+        return expr;
+    }
+    expr.each_mut(0, &mut |e, depth| {
+        if depth > 0 || matches!(e.kind, ExprKind::Agg(_)) {
+            return true;
+        }
+        if !groups.iter().any(|g| g.same(e)) {
+            return false;
+        }
+        let inner = e.clone();
+        *e = with(
+            &inner,
+            ExprKind::PlaceHolder(Box::new(PlaceHolder {
+                expr: inner.clone(),
+                relations: Vec::new(),
+                levels_up: 0,
+                removed: false,
+            })),
+        );
+        true
+    });
+    expr
 }
 
 /// `inline_function_in_from` and `inline_sql_function_in_from`: the query of the body of the one function of a relation in `FROM`, with the arguments in the places of its parameters, or `None` when the function cannot be inlined. The relation must have no `WITH ORDINALITY` and no column definition list. The arguments must have no volatile function and no subquery. The function must be in SQL, return a set and not `void`, and must not be strict, volatile or `SECURITY DEFINER` or have settings. Its body must be one `SELECT` with no `WITH`, whose columns have the types of the columns of the relation.
@@ -742,6 +802,47 @@ impl<'a> Fold<'a> {
             }
             _ => expr.clone(),
         })
+    }
+
+    /// The expression with each `PlaceHolderVar` of [`wrap_groups`] in place of the folded item in it.
+    fn unwrap_groups(&mut self, expr: &mut Expr, groups: &[Expr]) -> Result<()> {
+        if groups.is_empty() {
+            return Ok(());
+        }
+        let mut items = Vec::new();
+        expr.each_mut(0, &mut |e, depth| {
+            if depth > 0 {
+                return true;
+            }
+            match &e.kind {
+                ExprKind::PlaceHolder(p)
+                    if p.relations.is_empty() && groups.iter().any(|g| g.same(&p.expr)) =>
+                {
+                    items.push(p.expr.clone());
+                    true
+                }
+                _ => false,
+            }
+        });
+        let mut folded =
+            items.iter().map(|i| self.expr(i)).collect::<Result<Vec<_>>>()?.into_iter();
+        expr.each_mut(0, &mut |e, depth| {
+            if depth > 0 {
+                return true;
+            }
+            match &e.kind {
+                ExprKind::PlaceHolder(p)
+                    if p.relations.is_empty() && groups.iter().any(|g| g.same(&p.expr)) =>
+                {
+                    if let Some(item) = folded.next() {
+                        *e = item;
+                    }
+                    true
+                }
+                _ => false,
+            }
+        });
+        Ok(())
     }
 
     /// `preprocess_expression`: folds the expressions of a clause, then the subqueries that the folded expressions still have.
