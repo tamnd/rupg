@@ -6151,6 +6151,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/foreign_key_image.test")));
     }
 
+    /// `SET CONSTRAINTS` on a foreign key to a partitioned table also sets its clones on the partitions, and a table that a foreign key of the table references can not become its partition. `connection/set_constraints_partitions.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn set_constraints_partitions() {
+        big_stack(|| script(include_str!("connection/set_constraints_partitions.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

@@ -63,5 +63,17 @@ pub fn set_constraints(stmt: &ConstraintsSetStmt, env: &dyn Env) -> Result<Optio
             ));
         }
     }
+    // The descendants of the constraints, as the clones of a foreign key on the partitions, which `conparentid` links to their parents.
+    if let Some(catalog) = env.catalog() {
+        let mut at = 0;
+        while at < oids.len() {
+            let parent = oids[at];
+            let mut children: Vec<u32> =
+                catalog.constraints().filter(|c| c.parent == parent).map(|c| c.oid).collect();
+            children.sort_unstable();
+            oids.extend(children);
+            at += 1;
+        }
+    }
     Ok(Some(oids))
 }
