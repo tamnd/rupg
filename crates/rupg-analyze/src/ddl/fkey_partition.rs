@@ -10,13 +10,15 @@ use rupg_common::{Error, Result, SqlState};
 use super::Definer;
 
 impl Definer<'_, '_> {
-    /// `addFkRecurseReferenced`: the action triggers of the foreign key `constraint` on its referenced table, as clones of `parents` when it has them. A foreign key that is `NOT ENFORCED` has no triggers. For a partitioned referenced table, each partition gets a clone of the constraint, which goes on to the partitions of the partition.
+    /// `addFkRecurseReferenced`: the action triggers of the foreign key `constraint` on its referenced table, as clones of `parents` when it has them. A foreign key that is `NOT ENFORCED` has no triggers. For a partitioned referenced table, each partition gets a clone of the constraint, which goes on to the partitions of the partition. Each clone takes `name`, or the name of `constraint` when `name` is `None`, as `fkconstraint->conname` stays the same through the recursion, and a suffix when the name is in use.
     pub(super) fn fk_recurse_referenced(
         &mut self,
         constraint: u32,
         parents: Option<(u32, u32)>,
+        name: Option<&str>,
     ) -> Result<()> {
         let con = self.foreign_constraint(constraint)?;
+        let name = name.unwrap_or(&con.name).to_owned();
         let triggers = if con.enforced {
             self.catalog.add_fk_action_triggers(constraint, parents)?
         } else {
@@ -31,7 +33,7 @@ impl Definer<'_, '_> {
             let keys = self.map_keys(foreign.table, partition, &foreign.keys)?;
             let new = NewForeignKey {
                 table: con.relation,
-                name: Some(con.name.clone()),
+                name: Some(name.clone()),
                 keys: con.keys.clone(),
                 index,
                 deferrable: con.deferrable,
@@ -39,7 +41,7 @@ impl Definer<'_, '_> {
                 foreign: rupg_catalog::ForeignKey { table: partition, keys, ..foreign.clone() },
             };
             let clone = self.catalog.add_fk_constraint(new, constraint, FkSide::Referenced)?;
-            self.fk_recurse_referenced(clone, Some(triggers))?;
+            self.fk_recurse_referenced(clone, Some(triggers), Some(&name))?;
         }
         Ok(())
     }
@@ -82,6 +84,10 @@ impl Definer<'_, '_> {
     }
 
     /// `CloneForeignKeyConstraints`: the new partition `partition` of `parent` gets the foreign keys of `parent`, then the clones of the foreign keys that refer to `parent`.
+    ///
+    /// # Errors
+    ///
+    /// `0A000` when a foreign key of `parent` refers to `partition`, as `CloneFkReferencing` refuses it.
     pub(super) fn clone_foreign_keys(&mut self, parent: u32, partition: u32) -> Result<()> {
         // `CloneFkReferencing`: a clone of a constraint whose parent is in the list comes with its parent.
         let own: Vec<Constraint> = self
@@ -90,6 +96,18 @@ impl Definer<'_, '_> {
             .filter(|c| c.kind == ConKind::Foreign)
             .cloned()
             .collect();
+        if let Some(con) =
+            own.iter().find(|c| c.foreign.as_ref().is_some_and(|f| f.table == partition))
+        {
+            let name = self.catalog.relation(partition).map(|r| r.name.clone()).unwrap_or_default();
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                format!(
+                    "cannot attach table \"{name}\" as a partition because it is referenced by foreign key \"{}\"",
+                    con.name
+                ),
+            ));
+        }
         let oids: Vec<u32> = own.iter().map(|c| c.oid).collect();
         for con in own.iter().filter(|c| !oids.contains(&c.parent)) {
             let Some(foreign) = con.foreign.clone() else { continue };
@@ -111,7 +129,7 @@ impl Definer<'_, '_> {
             let clone = self.catalog.add_fk_constraint(new, con.oid, FkSide::Referencing)?;
             self.fk_recurse_referencing(clone, Some(triggers))?;
         }
-        // `CloneFkReferenced`: a self-referencing foreign key gets no clone.
+        // `CloneFkReferenced`: a self-referencing foreign key gets a clone too, and the clone on `partition` that `CloneFkReferencing` just made has its parent in the list.
         let referring: Vec<Constraint> = self
             .catalog
             .constraints()
@@ -120,7 +138,7 @@ impl Definer<'_, '_> {
             .collect();
         let oids: Vec<u32> = referring.iter().map(|c| c.oid).collect();
         for con in &referring {
-            if oids.contains(&con.parent) || con.relation == parent || con.relation == partition {
+            if oids.contains(&con.parent) {
                 continue;
             }
             let Some(foreign) = con.foreign.clone() else { continue };
@@ -137,7 +155,7 @@ impl Definer<'_, '_> {
                 foreign: rupg_catalog::ForeignKey { table: partition, keys, ..foreign },
             };
             let clone = self.catalog.add_fk_constraint(new, con.oid, FkSide::Referenced)?;
-            self.fk_recurse_referenced(clone, Some(triggers))?;
+            self.fk_recurse_referenced(clone, Some(triggers), Some(&con.name))?;
         }
         Ok(())
     }
@@ -235,7 +253,7 @@ impl Definer<'_, '_> {
             let (insert, update) = self.fk_triggers(con.oid, partition, true);
             self.catalog.clear_trigger_parent(insert);
             self.catalog.clear_trigger_parent(update);
-            self.fk_recurse_referenced(con.oid, None)?;
+            self.fk_recurse_referenced(con.oid, None, None)?;
         }
         // `GetParentedForeignKeyRefs`: the partition is no longer a part of the key space of these constraints.
         for clone in self.parented_refs(partition) {
