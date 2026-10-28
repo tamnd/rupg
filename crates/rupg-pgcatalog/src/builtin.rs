@@ -131,6 +131,8 @@ pub struct OpclassRow {
     pub intype: u32,
     /// `opcdefault`: true for the default class of the type and the method.
     pub default: bool,
+    /// `opckeytype`: the type of the data in the index, or 0 for the type that the class indexes.
+    pub keytype: u32,
 }
 
 /// A row of `pg_amop`.
@@ -787,6 +789,7 @@ fn load_opclasses() -> Vec<OpclassRow> {
     let r = Rows::new("pg_opclass");
     let (oid, method, name) = (r.oid("oid"), r.oid("opcmethod"), r.text("opcname"));
     let (family, intype, default) = (r.oid("opcfamily"), r.oid("opcintype"), r.bool("opcdefault"));
+    let keytype = r.oid("opckeytype");
     (0..r.catalog.len)
         .map(|i| OpclassRow {
             oid: oid[i],
@@ -795,6 +798,7 @@ fn load_opclasses() -> Vec<OpclassRow> {
             family: family[i],
             intype: intype[i],
             default: default[i],
+            keytype: keytype[i],
         })
         .collect()
 }

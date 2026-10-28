@@ -849,12 +849,42 @@ fn attributes<'a>(
             }
         }
         for (i, column) in rel.columns.iter().enumerate() {
-            let mut row = attribute(table, rel, i, column);
+            let key = key_column(catalog, rel, i, column);
+            let mut row = attribute(table, rel, i, key.as_ref().unwrap_or(column));
             row.set("attacl", granted(catalog, ObjRef::column(rel.oid, number(i))));
             rows.push(row);
         }
     }
     Ok(rows)
+}
+
+/// `ConstructTupleDescriptor`: a key column of an index whose operator class has a `opckeytype` other than the type of the column has the key type, with no typmod. A class of `anyarray` with the key type `anyelement` has the element type of the column.
+fn key_column(
+    catalog: &Catalog,
+    rel: &Relation,
+    i: usize,
+    column: &rupg_catalog::Column,
+) -> Option<rupg_catalog::Column> {
+    let class = *rel.index.as_ref()?.classes.get(i)?;
+    let (intype, mut keytype) = match builtin::opclasses().iter().find(|c| c.oid == class) {
+        Some(c) => (c.intype, c.keytype),
+        None => catalog.opclass(class).map(|c| (c.intype, c.keytype))?,
+    };
+    if keytype == ANYELEMENT && intype == ANYARRAY {
+        keytype = match builtin::type_by_oid(column.ty) {
+            Some(t) => t.elem,
+            None => catalog.type_by_oid(column.ty)?.element,
+        };
+    }
+    if keytype == 0 || keytype == column.ty {
+        return None;
+    }
+    let mut key = column.clone();
+    key.ty = keytype;
+    key.typmod = -1;
+    key.storage = 0;
+    key.compression = 0;
+    Some(key)
 }
 
 /// The `pg_attribute` row of a column.

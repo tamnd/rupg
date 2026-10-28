@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A key column of an index has the `opckeytype` of its operator class in `pg_attribute`, as `ConstructTupleDescriptor` gives it, so `\d` of a `gin` index on an array shows the element type. (#1021)
 - The planner makes bitmap scans of `gin` indexes for the operators of `array_ops`, `tsvector_ops`, `jsonb_ops` and `jsonb_path_ops`, with the costs of `gincostestimate` from the entries of the query. (#1020)
 
 ## 0.4.3 (2026-10-28)

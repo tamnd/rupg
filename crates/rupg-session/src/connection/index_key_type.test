@@ -1,0 +1,31 @@
+!details
+> create table kt (a int[], t tsvector, j jsonb, n name, p polygon, v varchar(10)[])
+CREATE TABLE
+> create index kt_a on kt using gin (a)
+CREATE INDEX
+> create index kt_t on kt using gin (t)
+CREATE INDEX
+> create index kt_j on kt using gin (j)
+CREATE INDEX
+> create index kt_jp on kt using gin (j jsonb_path_ops)
+CREATE INDEX
+> create index kt_n on kt (n)
+CREATE INDEX
+> create index kt_p on kt using gist (p)
+CREATE INDEX
+> create index kt_v on kt using gin (v)
+CREATE INDEX
+> create index kt_tg on kt using gist (t) include (n)
+CREATE INDEX
+> select c.relname, a.attnum, a.atttypid::regtype, a.atttypmod, a.attlen, a.attbyval, a.attalign, a.attstorage from pg_attribute a join pg_class c on c.oid = a.attrelid where c.relname like 'kt\_%' order by 1, 2
+fields relname@pg_class.2:19:64:-1,attnum@pg_attribute.5:21:2:-1,atttypid:2206:4:-1,atttypmod@pg_attribute.6:23:4:-1,attlen@pg_attribute.4:21:2:-1,attbyval@pg_attribute.8:16:1:-1,attalign@pg_attribute.9:18:1:-1,attstorage@pg_attribute.10:18:1:-1
+row kt_a,1,integer,-1,4,t,i,p
+row kt_j,1,text,-1,-1,f,i,x
+row kt_jp,1,integer,-1,4,t,i,p
+row kt_n,1,cstring,-1,-2,f,c,p
+row kt_p,1,box,-1,32,f,d,p
+row kt_t,1,text,-1,-1,f,i,x
+row kt_tg,1,gtsvector,-1,-1,f,i,p
+row kt_tg,2,name,-1,64,f,c,p
+row kt_v,1,character varying,-1,-1,f,i,x
+SELECT 9
