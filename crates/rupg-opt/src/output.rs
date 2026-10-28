@@ -754,10 +754,15 @@ fn grouped<'q>(
 ) {
     // `make_group_input_target`: the keys come first, in the order of the target list, then the keys that are not in it.
     let mut below: Vec<Item<'q>> = Vec::new();
-    // `mark_nullable_by_grouping`: a constant key that a grouping set does not have is in a `PlaceHolderVar`, so a node below that does not project reads it from below.
+    // `mark_nullable_by_grouping`: a constant key that a grouping set does not have is in a `PlaceHolderVar`, so a `Sort` below, which does not project, reads it from below. A node below that projects computes it.
+    let sorted = node
+        .children
+        .first()
+        .is_some_and(|c| matches!(c.kind, Kind::Sort(_) | Kind::IncrementalSort { .. }));
     let nullable = |key: &Expr| {
         let Kind::Aggregate { sets, .. } = &node.kind else { return false };
-        matches!(key.kind, ExprKind::Const(_))
+        sorted
+            && matches!(key.kind, ExprKind::Const(_))
             && sets.iter().flat_map(|r| &r.sets).any(|s| !s.iter().any(|i| i.expr.same(key)))
     };
     let in_want = want.iter().map(|w| &*w.expr).filter(|w| keys.iter().any(|k| k.same(w)));
