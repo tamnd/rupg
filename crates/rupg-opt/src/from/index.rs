@@ -14,15 +14,17 @@ use super::classes::Joined;
 use super::{OrderKey, Qual, Rel, Stats, plain_var};
 use crate::{Index, Level, cost, exprs};
 
+mod gin;
+
 /// `BTREE_AM_OID`, the OID of the access method `btree`.
 pub(super) const BTREE_AM: u32 = 403;
 
 /// `HASH_AM_OID`, the OID of the access method `hash`.
 const HASH_AM: u32 = 405;
 
-/// True for an index of an access method whose scans the planner makes: `btree` and `hash`.
+/// True for an index of an access method whose scans the planner makes: `btree`, `hash`, `gist`, `spgist`, `brin` and `gin`.
 fn scannable(index: &Index) -> bool {
-    matches!(index.method, BTREE_AM | HASH_AM | GIST_AM | SPGIST_AM | BRIN_AM)
+    matches!(index.method, BTREE_AM | HASH_AM | GIST_AM | SPGIST_AM | BRIN_AM | GIN_AM)
 }
 
 /// `GIST_AM_OID`.
@@ -31,12 +33,14 @@ const GIST_AM: u32 = 783;
 const SPGIST_AM: u32 = 4000;
 /// `BRIN_AM_OID`.
 const BRIN_AM: u32 = 3580;
+/// `GIN_AM_OID`.
+const GIN_AM: u32 = 2742;
 /// `REVMAP_PAGE_MAXITEMS`: the places of ranges in a page of the range map of `brin`.
 const REVMAP_PAGE_MAXITEMS: f64 = 1360.0;
 
-/// `amgettuple`: the access method gives the rows one by one, so an index scan can use it. A `brin` index only gives a bitmap.
+/// `amgettuple`: the access method gives the rows one by one, so an index scan can use it. A `brin` or `gin` index only gives a bitmap.
 fn gettuple(index: &Index) -> bool {
-    index.method != BRIN_AM
+    !matches!(index.method, BRIN_AM | GIN_AM)
 }
 
 /// `amcanreturn`: the index gives the value of its column `column`, so an index only scan can read it. A `btree` index gives each column, and an `INCLUDE` column of a `gist` or `spgist` index is always given. A key column of `gist` is given when its operator class has a `fetch` function or no `compress` function, as `gistcanreturn` finds, and a key column of `spgist` when `canReturnData` of the `config` of its operator class is true, as `spgcanreturn` finds.
@@ -898,8 +902,8 @@ fn bitmap_clauses<'q>(r: usize, index: &Index, sources: &[&Source<'q>]) -> Vec<C
             .find(|c| !c.is_empty());
         out.extend(found.into_iter().flatten());
     }
-    // `amsearchnulls` of `hash` is false.
-    if index.method == HASH_AM {
+    // `amsearchnulls` of `hash` and `gin` is false.
+    if matches!(index.method, HASH_AM | GIN_AM) {
         out.retain(|c| !matches!(c.kind, ClauseKind::Null(_)));
     }
     out.sort_by_key(|c| c.column);
@@ -1825,6 +1829,7 @@ fn ordered_cost(
         GIST_AM => tree_cost(table, index, (clauses, order_by), stats, 0.0),
         SPGIST_AM => tree_cost(table, index, (clauses, order_by), stats, 1.0),
         BRIN_AM => brin_cost(table, index, clauses, stats),
+        GIN_AM => gin::gin_cost(table, index, clauses, stats),
         _ => btree_cost(table, index, clauses, stats),
     }
 }
