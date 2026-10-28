@@ -1327,6 +1327,15 @@ impl rupg_func::Session for Reader<'_> {
         self.settings().get(name)
     }
 
+    fn latest_tid(&self, relation: u32, tid: i64) -> i64 {
+        match (self.activity, &self.view) {
+            (Some((_, store)), Some(view)) => {
+                store.heap().latest_tid(view, relation, tid.cast_unsigned()).cast_signed()
+            }
+            _ => tid,
+        }
+    }
+
     fn prepared_statements(&self) -> Vec<Vec<Value>> {
         self.statements.map_or_else(Vec::new, |statements| {
             let hash = |name: &[u8]| {

@@ -1,0 +1,88 @@
+!details
+> create table tid_tab (a int)
+CREATE TABLE
+> select currtid2('tid_tab'::text, '(0,1)'::tid)
+fields currtid2:27:6:-1
+ERROR 22023 tid (0, 1) is not valid for relation "tid_tab"
+> insert into tid_tab values (1)
+INSERT 0 1
+> select currtid2('tid_tab'::text, '(0,1)'::tid)
+fields currtid2:27:6:-1
+row (0,1)
+SELECT 1
+> update tid_tab set a = 2
+UPDATE 1
+> select currtid2('tid_tab'::text, '(0,1)'::tid)
+fields currtid2:27:6:-1
+row (0,2)
+SELECT 1
+> select currtid2('tid_tab'::text, '(0,0)'::tid)
+fields currtid2:27:6:-1
+ERROR 22023 tid (0, 0) is not valid for relation "tid_tab"
+> select currtid2('tid_tab'::text, '(0,9)'::tid)
+fields currtid2:27:6:-1
+row (0,9)
+SELECT 1
+> select currtid2('nope'::text, '(0,1)'::tid)
+fields currtid2:27:6:-1
+ERROR 42P01 relation "nope" does not exist
+> create materialized view tid_matview as select a from tid_tab
+SELECT 1
+> select currtid2('tid_matview'::text, '(0,1)'::tid)
+fields currtid2:27:6:-1
+row (0,1)
+SELECT 1
+> create materialized view tid_matview2 as select a from tid_tab where false
+SELECT 0
+> select currtid2('tid_matview2'::text, '(0,1)'::tid)
+fields currtid2:27:6:-1
+ERROR 22023 tid (0, 1) is not valid for relation "tid_matview2"
+> create sequence tid_seq
+CREATE SEQUENCE
+> select currtid2('tid_seq'::text, '(0,1)'::tid)
+fields currtid2:27:6:-1
+row (0,1)
+SELECT 1
+> create index tid_ind on tid_tab(a)
+CREATE INDEX
+> select currtid2('tid_ind'::text, '(0,1)'::tid)
+fields currtid2:27:6:-1
+ERROR 42809 cannot open relation "tid_ind"
+DETAIL This operation is not supported for indexes.
+> create table tid_part (a int) partition by range (a)
+CREATE TABLE
+> select currtid2('tid_part'::text, '(0,1)'::tid)
+fields currtid2:27:6:-1
+ERROR 0A000 cannot look at latest visible tid for relation "public.tid_part"
+> create view tid_view_no_ctid as select a from tid_tab
+CREATE VIEW
+> select currtid2('tid_view_no_ctid'::text, '(0,1)'::tid)
+fields currtid2:27:6:-1
+ERROR 0A000 currtid cannot handle views with no CTID
+> create view tid_view_with_ctid as select ctid, a from tid_tab
+CREATE VIEW
+> select currtid2('tid_view_with_ctid'::text, '(0,1)'::tid)
+fields currtid2:27:6:-1
+row (0,2)
+SELECT 1
+> create view tid_view_fake_ctid as select 1 as ctid, 2 as a
+CREATE VIEW
+> select currtid2('tid_view_fake_ctid'::text, '(0,1)'::tid)
+fields currtid2:27:6:-1
+ERROR 0A000 ctid isn't of type TID
+> create view tid_view_expr as select ctid::text::tid as ctid from tid_tab
+CREATE VIEW
+> select currtid2('tid_view_expr'::text, '(0,1)'::tid)
+fields currtid2:27:6:-1
+ERROR XX000 currtid cannot handle this view
+> create role tid_user
+CREATE ROLE
+> set role tid_user
+SET
+is_superuser=off
+> select currtid2('public.tid_tab'::text, '(0,1)'::tid)
+fields currtid2:27:6:-1
+ERROR 42501 permission denied for table tid_tab
+> reset role
+RESET
+is_superuser=on

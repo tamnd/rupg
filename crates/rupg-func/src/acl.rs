@@ -835,7 +835,7 @@ fn role_arg(call: &Call<'_>, args: &[Value], with_role: bool, public: bool) -> R
 }
 
 /// `convert_table_name`: the relation of a qualified name, as `RangeVarGetRelid` finds it.
-fn table_name(text: &str, session: &dyn Session) -> Result<u32> {
+pub(crate) fn table_name(text: &str, session: &dyn Session) -> Result<u32> {
     let names = qualified_name_list(text).map_err(type_error)?;
     reg::relation_oid(&names, session)
 }
@@ -1201,6 +1201,7 @@ pub fn check_execute_as(funcs: &[u32], role: u32, session: &dyn Session) -> Resu
 pub(crate) const USAGE_UPDATE: u32 = ACL_USAGE | ACL_UPDATE;
 /// The privileges that `currval` and `lastval` need: `SELECT` or `USAGE`.
 pub(crate) const SELECT_USAGE: u32 = ACL_SELECT | ACL_USAGE;
+pub(crate) const SELECT: u32 = ACL_SELECT;
 /// The privilege that `setval` needs.
 pub(crate) const UPDATE: u32 = ACL_UPDATE;
 
