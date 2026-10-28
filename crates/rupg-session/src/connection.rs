@@ -6296,6 +6296,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/currtid.test")));
     }
 
+    /// The schema of `multirange_type_name` needs only `CREATE`, as `QualifiedNameGetCreationNamespace` checks it. `connection/multirange_schema.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn multirange_schema() {
+        big_stack(|| script(include_str!("connection/multirange_schema.test")));
+    }
+
     /// An index depends once on each column of its keys, as `record_object_address_dependencies` records them, and its expressions add their own dependencies. `connection/index_depend.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn index_depend() {

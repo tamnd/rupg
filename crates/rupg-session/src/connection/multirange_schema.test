@@ -1,0 +1,25 @@
+> grant all on schema public to public
+GRANT
+> create role regress_mr
+CREATE ROLE
+> create schema mr_sch
+CREATE SCHEMA
+> create schema mr_sch2
+CREATE SCHEMA
+> grant create on schema mr_sch to regress_mr
+GRANT
+> set role regress_mr
+SET
+is_superuser=off
+> create type mytype as range (subtype=int4, multirange_type_name=mr_sch.mr_type)
+CREATE TYPE
+> create type mytype2 as range (subtype=int4, multirange_type_name=mr_sch2.mr_type2)
+ERROR 42501 permission denied for schema mr_sch2
+> select typname, typnamespace::regnamespace::text from pg_type where typname in ('mytype', 'mr_type') order by 1
+fields typname@pg_type.2:19:64:-1,typnamespace:25:-1:-1
+row mr_type,mr_sch
+row mytype,public
+SELECT 2
+> reset role
+RESET
+is_superuser=on
