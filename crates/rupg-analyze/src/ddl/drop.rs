@@ -240,6 +240,17 @@ impl Definer<'_, '_> {
                     format!("permission denied: \"{name}\" is a system catalog"),
                 ));
             }
+            // `RemoveRelations`: the drop of a partitioned index can not be concurrent. The drop of a temporary index is never concurrent.
+            if stmt.concurrent
+                && !self.catalog.is_temp_schema(namespace)
+                && let Found::User(oid) = found
+                && self.catalog.relation(oid).is_some_and(|r| r.kind == RelKind::PartitionedIndex)
+            {
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    format!("cannot drop partitioned index \"{name}\" concurrently"),
+                ));
+            }
             match found {
                 Found::User(oid) if oid >= FIRST_NORMAL_OID => {
                     objects.push(ObjRef::new(PG_CLASS, oid));

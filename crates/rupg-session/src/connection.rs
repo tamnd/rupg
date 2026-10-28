@@ -6175,6 +6175,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/index_build_exprs.test")));
     }
 
+    /// `DROP INDEX CONCURRENTLY` of a partitioned index fails unless the index is temporary, a new partition can not have a second primary key, and the clone of a primary key on a new partition is not `connoinherit`. `connection/partitioned_index_drop.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn partitioned_index_drop() {
+        big_stack(|| script(include_str!("connection/partitioned_index_drop.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
