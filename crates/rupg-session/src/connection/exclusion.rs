@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use rupg_analyze::{Exclusion, OnConflict, Write};
-use rupg_catalog::{Catalog, ConKind};
+use rupg_catalog::Catalog;
 use rupg_common::{Error, SqlState};
 use rupg_types::Value;
 
@@ -31,11 +31,8 @@ impl Connection {
     /// A conflict, and the errors of a wait and of the operators.
     pub(super) fn check_exclusions(&self, command: u32) -> Result<(), Error> {
         let catalog = self.catalog();
-        let mut tables: Vec<u32> = catalog
-            .constraints()
-            .filter(|c| c.kind == ConKind::Exclusion)
-            .map(|c| c.relation)
-            .collect();
+        let mut tables: Vec<u32> =
+            catalog.constraints().filter(|c| c.is_exclusion()).map(|c| c.relation).collect();
         if tables.is_empty() {
             return Ok(());
         }
@@ -162,6 +159,7 @@ impl Connection {
                 checked.sort_by_key(|&i| rows[i].made);
             }
             for n in checked {
+                check_not_empty(exclusion, &rows[n].values, table, catalog)?;
                 let Some(new) = &keys[n] else { continue };
                 for (i, other) in rows.iter().enumerate() {
                     let Some(key) = &keys[i] else { continue };
@@ -232,6 +230,32 @@ impl Connection {
     }
 }
 
+/// `ExecWithoutOverlapsNotEmpty`: the column of `WITHOUT OVERLAPS` of the row `row` must not be an empty range or an empty multirange. A null passes.
+fn check_not_empty(
+    exclusion: &Exclusion,
+    row: &[Value],
+    table: u32,
+    catalog: &Catalog,
+) -> Result<(), Error> {
+    let Some((attnum, column)) = &exclusion.period else { return Ok(()) };
+    let value = usize::try_from(attnum - 1).ok().and_then(|at| row.get(at));
+    let empty = match value {
+        Some(Value::Range(range)) => range.is_empty(),
+        Some(Value::Multirange(ranges)) => ranges.is_empty(),
+        _ => false,
+    };
+    if !empty {
+        return Ok(());
+    }
+    let relation = catalog.relation(table).map(|r| r.name.as_str()).unwrap_or_default();
+    Err(Error::new(
+        SqlState::CHECK_VIOLATION,
+        format!(
+            "empty WITHOUT OVERLAPS value found in column \"{column}\" in relation \"{relation}\""
+        ),
+    ))
+}
+
 /// True when the check of the new version `new` sees the version `other`. At the insert of `new`, a version of the statement that came after it is not there yet, and an old version that the statement updated after it is still live.
 fn seen(pass: Pass, new: &Candidate, other: &Candidate) -> bool {
     let live = other.live || other.holder.is_some();
@@ -293,6 +317,7 @@ impl Connection {
         let heap = self.store.heap();
         let reader = self.reader_without_view(self.catalog());
         for exclusion in exclusions {
+            check_not_empty(exclusion, row, info.table, &self.catalog())?;
             let Some(new) = rupg_exec::index_key(&exclusion.keys, row, &reader)? else {
                 continue;
             };

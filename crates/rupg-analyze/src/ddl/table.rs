@@ -371,7 +371,8 @@ impl Definer<'_, '_> {
         } else {
             self.schema_name(namespace).into()
         });
-        let indexes = index_constraints(&mut plan, &table_rv)?;
+        let indexes =
+            index_constraints(&mut plan, &table_rv, &mut |name| Ok(self.an.type_name(name)?.0))?;
         let options = self.create_table_options(&stmt.options)?;
         if stmt.tablespacename.is_some() {
             return Err(not_yet("TABLESPACE", at));
@@ -1750,11 +1751,15 @@ fn table_constraint(plan: &mut Plan, con: &Constraint) -> Result<()> {
 }
 
 /// `transformIndexConstraints`: the index statements of the primary key and the unique constraints. The primary key comes first, and a constraint that is the same as an earlier one adds no index.
-fn index_constraints(plan: &mut Plan, rv: &RangeVar) -> Result<Vec<IndexStmt>> {
+fn index_constraints(
+    plan: &mut Plan,
+    rv: &RangeVar,
+    resolve: &mut dyn FnMut(&TypeName) -> Result<u32>,
+) -> Result<Vec<IndexStmt>> {
     let mut all = Vec::new();
     let mut pkey = None;
     for con in plan.indexes.clone() {
-        let index = index_constraint(plan, &con, rv)?;
+        let index = index_constraint(plan, &con, rv, resolve)?;
         if index.primary {
             pkey = Some(all.len());
         }
@@ -1791,8 +1796,13 @@ fn index_constraints(plan: &mut Plan, rv: &RangeVar) -> Result<Vec<IndexStmt>> {
     Ok(result)
 }
 
-/// `transformIndexConstraint` for a primary key or a unique constraint.
-fn index_constraint(plan: &mut Plan, con: &Constraint, rv: &RangeVar) -> Result<IndexStmt> {
+/// `transformIndexConstraint` for a primary key or a unique constraint. `resolve` gives the type of a column, for the column of `WITHOUT OVERLAPS`.
+fn index_constraint(
+    plan: &mut Plan,
+    con: &Constraint,
+    rv: &RangeVar,
+    resolve: &mut dyn FnMut(&TypeName) -> Result<u32>,
+) -> Result<IndexStmt> {
     let at = place(con.location);
     let primary = con.contype == ConstrType::CONSTR_PRIMARY;
     if primary {
@@ -1815,9 +1825,6 @@ fn index_constraint(plan: &mut Plan, con: &Constraint, rv: &RangeVar) -> Result<
     if con.contype == ConstrType::CONSTR_EXCLUSION {
         return exclusion_index(con, rv);
     }
-    if con.without_overlaps {
-        return Err(not_yet("WITHOUT OVERLAPS", at));
-    }
     let missing = |key: &str| {
         Error::new(
             SqlState::UNDEFINED_COLUMN,
@@ -1826,7 +1833,9 @@ fn index_constraint(plan: &mut Plan, con: &Constraint, rv: &RangeVar) -> Result<
         .at_opt(at)
     };
     let mut params: Vec<&str> = Vec::new();
-    for key in names(&con.keys) {
+    let keys = names(&con.keys);
+    for (i, &key) in keys.iter().enumerate() {
+        let mut period = None;
         let found = match plan.columns.iter_mut().find(|c| c.name == key) {
             Some(column) => {
                 if primary {
@@ -1845,6 +1854,12 @@ fn index_constraint(plan: &mut Plan, con: &Constraint, rv: &RangeVar) -> Result<
                         plan.not_nulls.push(make_not_null(key));
                     }
                 }
+                if con.without_overlaps && i + 1 == keys.len() {
+                    period = Some(match &column.inherited {
+                        Some(parent) => parent.ty,
+                        None => resolve(&column.type_name)?,
+                    });
+                }
                 true
             }
             None => SYSTEM_COLUMNS.contains(&key),
@@ -1860,6 +1875,9 @@ fn index_constraint(plan: &mut Plan, con: &Constraint, rv: &RangeVar) -> Result<
             )
             .at_opt(at));
         }
+        if con.without_overlaps && i + 1 == keys.len() {
+            check_without_overlaps(key, period.unwrap_or(0), at)?;
+        }
         params.push(key);
     }
     let including = names(&con.including);
@@ -1868,7 +1886,38 @@ fn index_constraint(plan: &mut Plan, con: &Constraint, rv: &RangeVar) -> Result<
             return Err(missing(key));
         }
     }
-    Ok(constraint_index(con, rv, &params, &including))
+    let mut index = constraint_index(con, rv, &params, &including);
+    without_overlaps(con, &mut index)?;
+    Ok(index)
+}
+
+/// `transformIndexConstraint`: the column of `WITHOUT OVERLAPS`, of the type `ty`, must have a range type or a multirange type, or a domain over one.
+pub(super) fn check_without_overlaps(key: &str, ty: u32, at: Option<usize>) -> Result<()> {
+    let base = types::base(ty);
+    if types::row(base).is_some_and(|t| matches!(t.kind, b'r' | b'm')) {
+        return Ok(());
+    }
+    Err(Error::new(
+        SqlState::DATATYPE_MISMATCH,
+        format!("column \"{key}\" in WITHOUT OVERLAPS is not a range or multirange type"),
+    )
+    .at_opt(at))
+}
+
+/// `transformIndexConstraint`: a constraint `WITHOUT OVERLAPS` has a column besides the column of `WITHOUT OVERLAPS`, and a `gist` index.
+pub(super) fn without_overlaps(con: &Constraint, index: &mut IndexStmt) -> Result<()> {
+    if !con.without_overlaps {
+        return Ok(());
+    }
+    if con.keys.len() < 2 {
+        return Err(Error::new(
+            SqlState::SYNTAX_ERROR,
+            "constraint using WITHOUT OVERLAPS needs at least two columns",
+        ));
+    }
+    index.accessMethod = Some("gist".into());
+    index.iswithoutoverlaps = true;
+    Ok(())
 }
 
 /// `transformIndexConstraint` for an exclusion constraint: the grammar gives pairs of an index element and an operator name, which become the elements of the index and `excludeOpNames`. `DefineIndex` finds the columns.

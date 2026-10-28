@@ -25,16 +25,16 @@ fn family(class: u32) -> u32 {
 }
 
 impl Definer<'_, '_> {
-    /// The check of `DefineIndex` for a unique index of a partitioned table: each column of the partition key must be a key column of the index, with the same collation and the same equality operator. A partition key with an expression cannot have a unique index.
+    /// The check of `DefineIndex` for a unique index or an exclusion constraint of a partitioned table: each column of the partition key must be a key column of the index, with the same collation and the same equality operator. The operator of an exclusion constraint, `exclusion`, must be the equality operator of the partition key. A partition key with an expression cannot have a unique index.
     pub(super) fn check_partition_key(
         &self,
         table: u32,
         keys: &[NewIndexColumn],
-        primary: bool,
+        what: &str,
+        exclusion: &[u32],
     ) -> Result<()> {
         let Some(rel) = self.catalog.relation(table) else { return Ok(()) };
         let Some(partkey) = &rel.partition_key else { return Ok(()) };
-        let what = if primary { "PRIMARY KEY" } else { "UNIQUE" };
         let strategy =
             if partkey.strategy == PartStrategy::Hash { HASH_EQUAL } else { BTREE_EQUAL };
         for (i, &attr) in partkey.attrs.iter().enumerate() {
@@ -50,14 +50,36 @@ impl Definer<'_, '_> {
                     "{what} constraints cannot be used when partition keys include expressions."
                 )));
             }
-            let found = keys.iter().any(|column| {
-                let method =
-                    if family_method(column.class) == HASH { HASH_EQUAL } else { BTREE_EQUAL };
-                column.key == attr
-                    && column.collation == collation
-                    && operator.is_some()
-                    && equality_operator(column.class, method) == operator
-            });
+            let mut found = false;
+            for (j, column) in keys.iter().enumerate() {
+                if column.key != attr || column.collation != collation {
+                    continue;
+                }
+                let Some(&op) = exclusion.get(j) else {
+                    let method =
+                        if family_method(column.class) == HASH { HASH_EQUAL } else { BTREE_EQUAL };
+                    if operator.is_some() && equality_operator(column.class, method) == operator {
+                        found = true;
+                        break;
+                    }
+                    continue;
+                };
+                if operator == Some(op) {
+                    found = true;
+                    break;
+                }
+                let name = builtin::operator_by_oid(op)
+                    .map(|o| o.name.to_string())
+                    .or_else(|| self.catalog.operator(op).map(|o| o.name.clone()))
+                    .unwrap_or_default();
+                let column = rel.column(attr).map_or("", |c| c.name.as_str());
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    format!(
+                        "cannot match partition key to index on column \"{column}\" using non-equal operator \"{name}\""
+                    ),
+                ));
+            }
             if !found {
                 let column = rel.column(attr).map_or("", |c| c.name.as_str());
                 return Err(Error::new(
@@ -213,8 +235,14 @@ impl Definer<'_, '_> {
         if info.primary {
             self.check_primary_key(child, &child_name, &columns[..key_count], alter)?;
         }
-        if partitioned && info.unique {
-            self.check_partition_key(child, &columns[..key_count], info.primary)?;
+        let exclusion = con.as_ref().map_or(&[][..], |c| c.exclusion_ops.as_slice());
+        if partitioned && (info.unique || !exclusion.is_empty()) {
+            let what = match con.as_ref().map(|c| c.kind) {
+                _ if info.primary => "PRIMARY KEY",
+                Some(ConKind::Exclusion) => "EXCLUDE",
+                _ => "UNIQUE",
+            };
+            self.check_partition_key(child, &columns[..key_count], what, exclusion)?;
         }
         let mut exprs: Vec<Expr> = match &info.exprs {
             Some(text) => crate::node::read_list(text)?,

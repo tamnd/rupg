@@ -1826,7 +1826,8 @@ fn constraint_def(con: &Constraint, paren: bool, session: &dyn Session) -> Resul
                 out.push_str("NULLS NOT DISTINCT ");
             }
             let rel = relation()?;
-            out.push_str(&format!("({})", column_list(rel, &con.keys)?));
+            let period = if con.period() { " WITHOUT OVERLAPS" } else { "" };
+            out.push_str(&format!("({}{period})", column_list(rel, &con.keys)?));
             if index.keys.len() > con.keys.len() {
                 out.push_str(&format!(
                     " INCLUDE ({})",
