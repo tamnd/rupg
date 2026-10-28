@@ -1,0 +1,135 @@
+!details
+> CREATE TABLE pk6 (a int PRIMARY KEY)
+CREATE TABLE
+> CREATE TABLE fk6 (a int REFERENCES pk6) PARTITION BY LIST (a)
+CREATE TABLE
+> ALTER TABLE fk6 ATTACH PARTITION pk6 FOR VALUES IN (1)
+ERROR 0A000 cannot attach table "pk6" as a partition because it is referenced by foreign key "fk6_a_fkey"
+> CREATE TABLE ps (id bigint NOT NULL PRIMARY KEY, id_abc bigint, FOREIGN KEY (id_abc) REFERENCES ps(id)) PARTITION BY RANGE (id)
+CREATE TABLE
+> CREATE TABLE ps1 (id bigint NOT NULL PRIMARY KEY, id_abc bigint)
+CREATE TABLE
+> ALTER TABLE ps ATTACH PARTITION ps1 FOR VALUES FROM (0) TO (10)
+ALTER TABLE
+> CREATE TABLE ps2 PARTITION OF ps FOR VALUES FROM (10) TO (20)
+CREATE TABLE
+> CREATE TABLE ps3 (id bigint NOT NULL PRIMARY KEY, id_abc bigint) PARTITION BY RANGE (id)
+CREATE TABLE
+> CREATE TABLE ps32 PARTITION OF ps3 FOR VALUES FROM (20) TO (30)
+CREATE TABLE
+> ALTER TABLE ps ATTACH PARTITION ps3 FOR VALUES FROM (20) TO (40)
+ALTER TABLE
+> CREATE TABLE ps33 (id bigint NOT NULL PRIMARY KEY, id_abc bigint)
+CREATE TABLE
+> ALTER TABLE ps3 ATTACH PARTITION ps33 FOR VALUES FROM (30) TO (40)
+ALTER TABLE
+> SELECT cr.relname, co.conname, co.convalidated, p.conname AS conparent, cf.relname AS foreignrel FROM pg_constraint co JOIN pg_class cr ON cr.oid = co.conrelid LEFT JOIN pg_class cf ON cf.oid = co.confrelid LEFT JOIN pg_constraint p ON p.oid = co.conparentid WHERE co.contype = 'f' AND cr.oid IN (SELECT relid FROM pg_partition_tree('ps')) ORDER BY cr.relname, co.conname, p.conname
+fields relname@pg_class.2:19:64:-1,conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1,conparent@pg_constraint.2:19:64:-1,foreignrel@pg_class.2:19:64:-1
+row ps,ps_id_abc_fkey,t,NULL,ps
+row ps,ps_id_abc_fkey_1,t,ps_id_abc_fkey,ps1
+row ps,ps_id_abc_fkey_2,t,ps_id_abc_fkey,ps2
+row ps,ps_id_abc_fkey_3,t,ps_id_abc_fkey,ps3
+row ps,ps_id_abc_fkey_3_1,t,ps_id_abc_fkey_3,ps33
+row ps,ps_id_abc_fkey_4,t,ps_id_abc_fkey_3,ps32
+row ps1,ps_id_abc_fkey,t,ps_id_abc_fkey,ps
+row ps2,ps_id_abc_fkey,t,ps_id_abc_fkey,ps
+row ps3,ps_id_abc_fkey,t,ps_id_abc_fkey,ps
+row ps32,ps_id_abc_fkey,t,ps_id_abc_fkey,ps
+row ps33,ps_id_abc_fkey,t,ps_id_abc_fkey,ps
+SELECT 11
+> INSERT INTO ps VALUES (1, NULL), (2, NULL), (3, NULL)
+INSERT 0 3
+> INSERT INTO ps VALUES (10, 1), (11, 2), (12, 3) RETURNING tableoid::regclass
+fields tableoid:2205:4:-1
+row ps2
+row ps2
+row ps2
+INSERT 0 3
+> INSERT INTO ps VALUES (4, 5)
+ERROR 23503 insert or update on table "ps1" violates foreign key constraint "ps_id_abc_fkey"
+DETAIL Key (id_abc)=(5) is not present in table "ps".
+> DELETE FROM ps WHERE id = 1 RETURNING *
+ERROR 23503 update or delete on table "ps1" violates foreign key constraint "ps_id_abc_fkey_1" on table "ps"
+DETAIL Key (id)=(1) is still referenced from table "ps".
+> ALTER TABLE ps DETACH PARTITION ps2
+ALTER TABLE
+> SELECT cr.relname, co.conname, p.conname AS conparent, cf.relname AS foreignrel FROM pg_constraint co JOIN pg_class cr ON cr.oid = co.conrelid LEFT JOIN pg_class cf ON cf.oid = co.confrelid LEFT JOIN pg_constraint p ON p.oid = co.conparentid WHERE co.contype = 'f' AND (cr.oid IN (SELECT relid FROM pg_partition_tree('ps')) OR cr.relname = 'ps2') ORDER BY cr.relname, co.conname, p.conname
+fields relname@pg_class.2:19:64:-1,conname@pg_constraint.2:19:64:-1,conparent@pg_constraint.2:19:64:-1,foreignrel@pg_class.2:19:64:-1
+row ps,ps_id_abc_fkey,NULL,ps
+row ps,ps_id_abc_fkey_1,ps_id_abc_fkey,ps1
+row ps,ps_id_abc_fkey_3,ps_id_abc_fkey,ps3
+row ps,ps_id_abc_fkey_3_1,ps_id_abc_fkey_3,ps33
+row ps,ps_id_abc_fkey_4,ps_id_abc_fkey_3,ps32
+row ps1,ps_id_abc_fkey,ps_id_abc_fkey,ps
+row ps2,ps_id_abc_fkey,NULL,ps
+row ps2,ps_id_abc_fkey_5,ps_id_abc_fkey,ps1
+row ps2,ps_id_abc_fkey_6,ps_id_abc_fkey,ps3
+row ps2,ps_id_abc_fkey_7,ps_id_abc_fkey_6,ps32
+row ps2,ps_id_abc_fkey_8,ps_id_abc_fkey_6,ps33
+row ps3,ps_id_abc_fkey,ps_id_abc_fkey,ps
+row ps32,ps_id_abc_fkey,ps_id_abc_fkey,ps
+row ps33,ps_id_abc_fkey,ps_id_abc_fkey,ps
+SELECT 14
+> DELETE FROM ps WHERE id = 2 RETURNING *
+ERROR 23503 update or delete on table "ps1" violates foreign key constraint "ps_id_abc_fkey_5" on table "ps2"
+DETAIL Key (id)=(2) is still referenced from table "ps2".
+> ALTER TABLE ps ATTACH PARTITION ps2 FOR VALUES FROM (10) TO (20)
+ALTER TABLE
+> INSERT INTO ps VALUES (16, 9)
+ERROR 23503 insert or update on table "ps2" violates foreign key constraint "ps_id_abc_fkey"
+DETAIL Key (id_abc)=(9) is not present in table "ps".
+> DELETE FROM ps WHERE id = 3 RETURNING *
+ERROR 23503 update or delete on table "ps1" violates foreign key constraint "ps_id_abc_fkey_1" on table "ps"
+DETAIL Key (id)=(3) is still referenced from table "ps".
+> ALTER TABLE ps DETACH PARTITION ps2
+ALTER TABLE
+> ALTER TABLE ps ATTACH PARTITION ps2 FOR VALUES FROM (10) TO (20)
+ALTER TABLE
+> ALTER TABLE ps DETACH PARTITION ps3
+ALTER TABLE
+> ALTER TABLE ps ATTACH PARTITION ps3 FOR VALUES FROM (30) TO (40)
+ALTER TABLE
+> SELECT cr.relname, co.conname, co.convalidated, p.conname AS conparent, cf.relname AS foreignrel FROM pg_constraint co JOIN pg_class cr ON cr.oid = co.conrelid LEFT JOIN pg_class cf ON cf.oid = co.confrelid LEFT JOIN pg_constraint p ON p.oid = co.conparentid WHERE co.contype = 'f' AND cr.oid IN (SELECT relid FROM pg_partition_tree('ps')) ORDER BY cr.relname, co.conname, p.conname
+fields relname@pg_class.2:19:64:-1,conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1,conparent@pg_constraint.2:19:64:-1,foreignrel@pg_class.2:19:64:-1
+row ps,ps_id_abc_fkey,t,NULL,ps
+row ps,ps_id_abc_fkey_1,t,ps_id_abc_fkey,ps1
+row ps,ps_id_abc_fkey_2,t,ps_id_abc_fkey,ps2
+row ps,ps_id_abc_fkey_3,t,ps_id_abc_fkey,ps3
+row ps,ps_id_abc_fkey_4,t,ps_id_abc_fkey_3,ps32
+row ps,ps_id_abc_fkey_5,t,ps_id_abc_fkey_3,ps33
+row ps1,ps_id_abc_fkey,t,ps_id_abc_fkey,ps
+row ps2,ps_id_abc_fkey,t,ps_id_abc_fkey,ps
+row ps3,ps_id_abc_fkey,t,ps_id_abc_fkey,ps
+row ps32,ps_id_abc_fkey,t,ps_id_abc_fkey,ps
+row ps33,ps_id_abc_fkey,t,ps_id_abc_fkey,ps
+SELECT 11
+> CREATE TABLE sp (a int, b int, PRIMARY KEY (a, b)) PARTITION BY RANGE (a, b)
+CREATE TABLE
+> CREATE TABLE sp1 PARTITION OF sp FOR VALUES FROM (0,0) TO (1000,1000)
+CREATE TABLE
+> CREATE TABLE sp2 PARTITION OF sp FOR VALUES FROM (1000,1000) TO (2000,2000)
+CREATE TABLE
+> ALTER TABLE sp ADD CONSTRAINT selffk FOREIGN KEY (a, b) REFERENCES sp NOT VALID
+ALTER TABLE
+> CREATE TABLE sp3 PARTITION OF sp FOR VALUES FROM (2000,2000) TO (3000,3000) PARTITION BY RANGE (a)
+CREATE TABLE
+> CREATE TABLE sp3_1 PARTITION OF sp3 FOR VALUES FROM (2000) TO (2100)
+CREATE TABLE
+> SELECT conname, conenforced, convalidated, confrelid::regclass FROM pg_constraint WHERE conrelid = 'sp'::regclass AND contype = 'f' ORDER BY conname COLLATE "C"
+fields conname@pg_constraint.2:19:64:-1,conenforced@pg_constraint.7:16:1:-1,convalidated@pg_constraint.8:16:1:-1,confrelid:2205:4:-1
+row selffk,t,f,sp
+row selffk_1,t,f,sp1
+row selffk_2,t,f,sp2
+row selffk_3,t,f,sp3
+row selffk_3_1,t,f,sp3_1
+SELECT 5
+> ALTER TABLE sp VALIDATE CONSTRAINT selffk
+ALTER TABLE
+> SELECT conname, convalidated FROM pg_constraint WHERE conrelid = 'sp'::regclass AND contype = 'f' ORDER BY conname COLLATE "C"
+fields conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1
+row selffk,t
+row selffk_1,t
+row selffk_2,t
+row selffk_3,t
+row selffk_3_1,t
+SELECT 5

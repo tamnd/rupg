@@ -232,7 +232,7 @@ impl Definer<'_, '_> {
         if !con.is_enforced {
             self.catalog.set_constraint_enforced(oid, false)?;
         }
-        self.fk_recurse_referenced(oid, None)?;
+        self.fk_recurse_referenced(oid, None, None)?;
         self.fk_recurse_referencing(oid, None)
     }
 
