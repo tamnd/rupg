@@ -183,6 +183,8 @@ pub struct AggregateRow {
     pub sortop: u32,
     /// `aggtranstype`: the type of the state.
     pub transtype: u32,
+    /// `aggtransspace`: the estimate of the size of the state, or 0.
+    pub transspace: i32,
     /// `agginitval`: the text of the first state, or `None` when the first state is null.
     pub initval: Option<&'static str>,
     /// `aggmtransfn`: the forward transition function of the moving-aggregate mode, or 0.
@@ -853,6 +855,7 @@ fn load_aggregates() -> Vec<AggregateRow> {
     let (transfn, finalfn, finalextra) =
         (r.oid("aggtransfn"), r.oid("aggfinalfn"), r.bool("aggfinalextra"));
     let (sortop, transtype) = (r.oid("aggsortop"), r.oid("aggtranstype"));
+    let transspace = r.int4("aggtransspace");
     let (mtransfn, minvtransfn, mfinalfn) =
         (r.oid("aggmtransfn"), r.oid("aggminvtransfn"), r.oid("aggmfinalfn"));
     let (mfinalextra, mtranstype) = (r.bool("aggmfinalextra"), r.oid("aggmtranstype"));
@@ -867,6 +870,7 @@ fn load_aggregates() -> Vec<AggregateRow> {
             finalextra: finalextra[i],
             sortop: sortop[i],
             transtype: transtype[i],
+            transspace: transspace[i],
             initval: r.optional("agginitval", i, |v| match v {
                 Values::Text(v) => Some(*v),
                 _ => None,
@@ -1347,6 +1351,7 @@ pub struct SessionAggregate {
     pub finalextra: bool,
     pub sortop: u32,
     pub transtype: u32,
+    pub transspace: i32,
     pub initval: Option<String>,
     pub mtransfn: u32,
     pub minvtransfn: u32,
@@ -1468,6 +1473,7 @@ fn session_rows(ty: &SessionType) -> Option<Interned> {
                 finalextra: new.finalextra,
                 sortop: new.sortop,
                 transtype: new.transtype,
+                transspace: new.transspace,
                 initval: new.initval.clone().map(|text| &*text.leak()),
                 mtransfn: new.mtransfn,
                 minvtransfn: new.minvtransfn,

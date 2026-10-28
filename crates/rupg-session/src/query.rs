@@ -393,6 +393,7 @@ fn use_types(catalog: &Catalog) {
             finalextra: a.finalextra,
             sortop: a.sortop,
             transtype: a.transtype,
+            transspace: a.transspace,
             initval: a.initval.clone(),
             mtransfn: a.mtransfn,
             minvtransfn: a.minvtransfn,

@@ -384,6 +384,51 @@ fn agg_units(aggs: &[&Aggref]) -> f64 {
         .sum()
 }
 
+/// `F_ARRAY_APPEND`: `array_append`, the transition function of an aggregate whose state is an expanded array.
+const ARRAY_APPEND: u32 = 378;
+
+/// The `numTrans` and the `transitionSpace` of the aggregate calls, as `preprocess_aggrefs` and `get_agg_clause_costs` find them. Two calls with the same inputs share a state when they are the same call, or when their aggregates have the same transition function, state type and first state and the final functions do not change the state. A state that is not passed by value adds the `aggtransspace` of its aggregate, `ALLOCSET_SMALL_INITSIZE` for `array_append` or the width of its type, and 16 bytes. An `internal` state adds the `aggtransspace` of its aggregate, or `ALLOCSET_DEFAULT_INITSIZE`.
+fn trans_space(aggs: &[&Aggref]) -> (usize, f64) {
+    let mut states: Vec<(&Aggref, &builtin::AggregateRow)> = Vec::new();
+    let mut space = 0.0;
+    for &a in aggs {
+        let Some(g) = builtin::aggregate(a.oid) else { continue };
+        let same_inputs = |b: &Aggref| {
+            b.args == a.args
+                && b.filter == a.filter
+                && b.order == a.order
+                && b.distinct == a.distinct
+        };
+        let shared = states.iter().any(|(b, h)| {
+            same_inputs(b)
+                && (b.oid == a.oid
+                    || h.transfn == g.transfn
+                        && h.transtype == g.transtype
+                        && h.initval == g.initval
+                        && h.finalmodify != b'w'
+                        && g.finalmodify != b'w')
+        });
+        if shared {
+            continue;
+        }
+        states.push((a, g));
+        let by_val = builtin::type_by_oid(g.transtype).is_none_or(|t| t.by_val);
+        if !by_val {
+            let width = if g.transspace > 0 {
+                g.transspace
+            } else if g.transfn == ARRAY_APPEND {
+                1024
+            } else {
+                cost::type_width(g.transtype, -1)
+            };
+            space += f64::from(cost::maxalign(width) + 16);
+        } else if g.transtype == rupg_types::oid::INTERNAL {
+            space += f64::from(if g.transspace > 0 { g.transspace } else { 8192 });
+        }
+    }
+    (states.len(), space)
+}
+
 /// The cost of the final functions of the aggregate calls for each group, in units of `cpu_operator_cost`, as the `finalCost` of `get_agg_clause_costs`: a call of the final function of each call that has one.
 fn final_units(aggs: &[&Aggref]) -> f64 {
     aggs.iter().filter(|a| builtin::aggregate(a.oid).is_some_and(|g| g.finalfn != 0)).count() as f64
@@ -1127,8 +1172,12 @@ impl<'q> Builder<'q> {
         let hashable = op.groups.iter().all(|g| g.hashable);
         let sortable = op.groups.iter().all(|g| g.operator != 0);
         let per_row = cost::CPU_OPERATOR * columns as f64;
+        // `cost_agg` of a set operation: the query of the operation has no aggregate calls.
+        let entry = cost::hashagg_entry_size(0, c.width, 0.0);
+        let (spill_startup, spill_total) = cost::hashagg_spill(rows, entry, c.rows, c.width);
         let hash_startup = c.total + per_row * c.rows;
-        let hash_total = hash_startup + cost::CPU_TUPLE * rows;
+        let hash_total = hash_startup + cost::CPU_TUPLE * rows + spill_total;
+        let hash_startup = hash_startup + spill_startup;
         // With no column, the rows of the `Append` are in the order of the keys, which are none, as `pathkeys_contained_in` finds, so the `Unique` needs no `Sort`.
         let presorted = op.groups.is_empty();
         let (sort_startup, sort_total) = if presorted {
@@ -1395,7 +1444,9 @@ fn aggregate<'q>(
     let c = input.cost;
     let n = c.rows;
     if !query.grouping_sets.is_empty() {
-        let costs = AggCosts { units, finals, having: (having_startup, having_cost), selectivity };
+        let (trans, space) = trans_space(&aggs);
+        let having = (having_startup, having_cost);
+        let costs = AggCosts { units, finals, having, selectivity, trans, space };
         return grouping_sets(level, input, order, costs, filter, has_ordered, only);
     }
     if query.group.is_empty() {
@@ -1486,12 +1537,13 @@ fn aggregate<'q>(
         return None;
     }
     let keys: Vec<Item<'q>> = group.iter().map(|k| k.item.clone()).collect();
+    let (trans, space) = trans_space(&aggs);
+    let entry = cost::hashagg_entry_size(trans, c.width, space);
+    let (spill_startup, spill_total) = cost::hashagg_spill(groups, entry, n, c.width);
     let hash_startup = c.total + cost::CPU_OPERATOR * units * n + cost::CPU_OPERATOR * nkeys * n;
-    let hash_total = hash_startup
-        + finals * groups
-        + cost::CPU_TUPLE * groups
-        + having_startup
-        + having_cost * groups;
+    let hash_total = hash_startup + finals * groups + cost::CPU_TUPLE * groups + spill_total;
+    let hash_startup = hash_startup + spill_startup;
+    let hash_total = hash_total + having_startup + having_cost * groups;
     // The hash table loses the order of the groups, so the sort of `ORDER BY` counts for it when the groups have the order of `ORDER BY`.
     let in_order = query.sort.iter().all(|s| query.group.iter().any(|g| g.target == s.target));
     let hash_after = if query.sort.is_empty() || !in_order {
@@ -1656,9 +1708,13 @@ struct AggCosts {
     having: (f64, f64),
     /// The selectivity of `HAVING`.
     selectivity: f64,
+    /// `numTrans`: the transition states of the calls.
+    trans: usize,
+    /// `transitionSpace`: the bytes of the states that are not passed by value.
+    space: f64,
 }
 
-/// `cost_agg`: the start cost, the total cost and the rows of an `Agg` of `strategy` with `cols` keys and `groups` groups, which reads `rows` rows with the start cost and the total cost `input`. `Mixed` has the costs of `Sorted`.
+/// `cost_agg`: the start cost, the total cost and the rows of an `Agg` of `strategy` with `cols` keys and `groups` groups, which reads `rows` rows of a width with the start cost and the total cost `input`. `Mixed` has the costs of `Sorted`. A hash table that does not fit in `hash_mem` adds the cost of the rows that go to disk and back.
 fn cost_agg(
     strategy: Strategy,
     costs: AggCosts,
@@ -1666,6 +1722,7 @@ fn cost_agg(
     groups: f64,
     input: (f64, f64),
     rows: f64,
+    width: i32,
 ) -> (f64, f64, f64) {
     let trans = cost::CPU_OPERATOR * costs.units * rows;
     let keys = cost::CPU_OPERATOR * cols as f64 * rows;
@@ -1683,6 +1740,12 @@ fn cost_agg(
             (input.0, total, groups)
         }
     };
+    if matches!(strategy, Strategy::Hashed | Strategy::Mixed) {
+        let entry = cost::hashagg_entry_size(costs.trans, width, costs.space);
+        let (spill_startup, spill_total) = cost::hashagg_spill(groups, entry, rows, width);
+        startup += spill_startup;
+        total += spill_total;
+    }
     let (having_startup, having_cost) = costs.having;
     startup += having_startup;
     total += having_startup + out * having_cost;
@@ -1897,6 +1960,28 @@ fn reorder_grouping_sets(sets: &[Vec<usize>], sort: &[usize]) -> Vec<Vec<usize>>
     result
 }
 
+/// `DiscreteKnapsack`: the items of `weights` that fit in `capacity` with the most items, as the dynamic program of `knapsack.c` picks them, each item of value 1.
+fn knapsack(capacity: usize, weights: &[usize]) -> Vec<bool> {
+    let mut values = vec![0.0; capacity + 1];
+    let mut sets = vec![vec![false; weights.len()]; capacity + 1];
+    for (i, &weight) in weights.iter().enumerate() {
+        if weight > capacity {
+            continue;
+        }
+        for j in (weight..=capacity).rev() {
+            let other = j - weight;
+            if values[j] <= values[other] + 1.0 {
+                if j != other {
+                    sets[j] = sets[other].clone();
+                }
+                sets[j][i] = true;
+                values[j] = values[other] + 1.0;
+            }
+        }
+    }
+    sets.swap_remove(capacity)
+}
+
 /// `create_groupingsets_path`: the strategy, the disabled nodes and the costs of an `Agg` of the rollups over rows with the costs `input`. A rollup after the first one that is not a hash table needs a sort of its own, except the first such rollup after a hash table.
 fn groupingsets_cost(
     strategy: Strategy,
@@ -1921,6 +2006,7 @@ fn groupingsets_cost(
         first.groups(),
         (input.startup, input.total),
         n,
+        input.width,
     );
     let mut first_sort = first.hashed;
     for rollup in &rollups[1..] {
@@ -1929,11 +2015,11 @@ fn groupingsets_cost(
             first_sort &= rollup.hashed;
             disabled += u32::from(rollup.hashed && !enable.hashagg);
             let strategy = if rollup.hashed { Strategy::Hashed } else { Strategy::Sorted };
-            cost_agg(strategy, costs, cols, rollup.groups(), (0.0, 0.0), n)
+            cost_agg(strategy, costs, cols, rollup.groups(), (0.0, 0.0), n, input.width)
         } else {
             disabled += u32::from(!enable.sort);
             let sort = cost::sort((0.0, 0.0), n, input.width, None);
-            cost_agg(Strategy::Sorted, costs, cols, rollup.groups(), sort, n)
+            cost_agg(Strategy::Sorted, costs, cols, rollup.groups(), sort, n, input.width)
         };
         total += t;
         rows += r;
@@ -1966,20 +2052,44 @@ fn grouping_sets<'q>(
     let (is_sorted, count) = presorted(order, &first_keys);
     let any_hashable = rollups.iter().any(|r| r.hashable) || !hash_sets.is_empty();
     let can_hash = !has_ordered && any_hashable;
+    // `estimate_hashagg_tablesize`: the bytes of the hash tables of a number of groups.
+    let entry = cost::hashagg_entry_size(costs.trans, c.width, costs.space);
+    let table_size = |groups: f64| entry * groups;
+    let hash_groups: f64 = hash_sets.iter().map(RollupSets::groups).sum();
+    let all_groups = hash_groups + rollups.iter().map(RollupSets::groups).sum::<f64>();
     // The candidates in the order that `add_paths_to_grouping_rel` adds them, with true when the input needs the order of the first rollup.
     let mut candidates: Vec<(Strategy, Vec<RollupSets>, bool)> = Vec::new();
     if !rollups.is_empty() && (is_sorted || !only || count > 0) {
         if can_hash {
             let mut out = Vec::new();
             let mut hashed = hash_sets.clone();
-            if rollups.len() > 1 && rollups[1..].iter().any(|r| r.hashable) {
-                out.push(rollups[0].clone());
-                for rollup in &rollups[1..] {
-                    if rollup.hashable {
-                        let sets = rollup.sets.iter().zip(&rollup.groups);
-                        hashed.extend(sets.map(|(s, g)| RollupSets::hash(s, *g)));
-                    } else {
-                        out.push(rollup.clone());
+            // The rollups after the first one that the knapsack of `hash_mem`, less the hash tables of the sets that have no sort, picks to hash. Each rollup has the same value, one sort less.
+            let space = cost::hash_mem() - table_size(hash_groups);
+            if space > 0.0 && rollups.len() > 1 {
+                let scale = (space / (20.0 * rollups.len() as f64)).max(1.0);
+                let capacity = (space / scale).floor();
+                let weights: Vec<usize> = rollups[1..]
+                    .iter()
+                    .filter(|r| r.hashable)
+                    .map(|r| (table_size(r.groups()) / scale).floor().min(capacity + 1.0) as usize)
+                    .collect();
+                let picked = if weights.is_empty() {
+                    Vec::new()
+                } else {
+                    knapsack(capacity as usize, &weights)
+                };
+                if picked.contains(&true) {
+                    out.push(rollups[0].clone());
+                    let mut at = 0;
+                    for rollup in &rollups[1..] {
+                        let pick = rollup.hashable && picked[at];
+                        at += usize::from(rollup.hashable);
+                        if pick {
+                            let sets = rollup.sets.iter().zip(&rollup.groups);
+                            hashed.extend(sets.map(|(s, g)| RollupSets::hash(s, *g)));
+                        } else {
+                            out.push(rollup.clone());
+                        }
                     }
                 }
             }
@@ -2003,7 +2113,11 @@ fn grouping_sets<'q>(
             Some((first, rest)) if is_sorted => (Some(first.clone()), rest),
             _ => (None, &rollups[..]),
         };
-        if rest.iter().all(|r| r.hashable) {
+        // The hash tables must fit in `hash_mem`, unless no set has a sort.
+        let exclude = unhashed.as_ref().map_or(0.0, RollupSets::groups);
+        let fits =
+            rollups.is_empty() || table_size(all_groups - exclude) <= cost::hash_mem().floor();
+        if fits && rest.iter().all(|r| r.hashable) {
             let mut out = Vec::new();
             let mut empty = 0;
             for rollup in hash_sets.iter().chain(rest) {
@@ -2420,9 +2534,17 @@ fn distinct<'q>(
     let hashable =
         !query.distinct_on && processed.iter().all(|d| d.hashable) && crate::enable().hashagg;
     // `create_agg_path` adds the cost of the targets to the hash table.
+    // `cost_agg` counts the transition states of the aggregate calls of the query, with no `transitionSpace`.
+    let mut exprs_of: Vec<&Expr> = query.targets.iter().map(|t| &t.expr).collect();
+    exprs_of.extend(query.having.as_ref());
+    let mut aggs = Vec::new();
+    exprs::aggregates(&exprs_of, &mut aggs);
+    let entry = cost::hashagg_entry_size(trans_space(&aggs).0, c.width, 0.0);
+    let (spill_startup, spill_total) = cost::hashagg_spill(groups, entry, c.rows, c.width);
     let hash_startup = c.total + cost::CPU_OPERATOR * c.rows * ncols as f64;
-    let hash_total = hash_startup + cost::CPU_TUPLE * groups + target.0 + target.1 * groups;
-    let hash_startup = hash_startup + target.0;
+    let hash_total =
+        hash_startup + cost::CPU_TUPLE * groups + spill_total + target.0 + target.1 * groups;
+    let hash_startup = hash_startup + spill_startup + target.0;
     // The hash table loses its order, so the sort of `ORDER BY` counts for it.
     let hash_after = if query.sort.is_empty() {
         hash_total

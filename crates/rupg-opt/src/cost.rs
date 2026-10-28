@@ -1502,6 +1502,47 @@ pub(crate) fn spill(rows: f64, width: i32) -> f64 {
     if byte_size(rows, width) > work_mem() { SEQ_PAGE * page_count(rows, width) } else { 0.0 }
 }
 
+/// `hash_agg_entry_size`: the bytes of a group of the hash table of an `Agg` with `trans` transition states of `space` bytes in all, for keys of a width. The entry has 16 bytes, the tuple of the keys has a header of 16 bytes, each state has 16 bytes, and the states that are not passed by value have the chunk header of 8 bytes and a power of two.
+pub(crate) fn hashagg_entry_size(trans: usize, width: i32, space: f64) -> f64 {
+    let tuple = f64::from(maxalign(16 + width));
+    let states = 16.0 * trans as f64;
+    let chunk = if space > 0.0 { 8.0 + space.log2().ceil().exp2() } else { 0.0 };
+    16.0 + tuple + states + chunk
+}
+
+/// The read buffer and the write buffer of a partition of a hash table that spills, `HASHAGG_READ_BUFFER_SIZE` and `HASHAGG_WRITE_BUFFER_SIZE`.
+const HASHAGG_BUFFER: f64 = BLOCK;
+
+/// `hash_choose_num_partitions`: the partitions of a hash table of `groups` groups of `entry` bytes that spills, as many as make each one fit in the memory, a power of two from 4 to 1024.
+fn hashagg_partitions(groups: f64, entry: f64) -> f64 {
+    let memory = hash_mem().floor();
+    let limit = (memory * 0.25 - HASHAGG_BUFFER) / HASHAGG_BUFFER;
+    let wanted = 1.5 * groups * entry;
+    let partitions = (1.0 + wanted / memory).min(limit).clamp(4.0, 1024.0).trunc();
+    partitions.log2().ceil().exp2()
+}
+
+/// The cost that `cost_agg` adds to the start cost and to the total cost of a hash table of `groups` groups of `entry` bytes that reads `rows` rows of a width, when the groups do not fit in `hash_mem` and the rows go to disk and back, as `hash_agg_set_limits` finds the batches.
+pub(crate) fn hashagg_spill(groups: f64, entry: f64, rows: f64, width: i32) -> (f64, f64) {
+    let memory = hash_mem().floor();
+    if groups * entry <= memory {
+        return (0.0, 0.0);
+    }
+    let partitions = hashagg_partitions(groups, entry);
+    let partition_memory = HASHAGG_BUFFER + HASHAGG_BUFFER * partitions;
+    let limit = if memory > 4.0 * partition_memory {
+        memory - partition_memory
+    } else {
+        (memory * 0.75).floor()
+    };
+    let groups_limit = if limit > entry { (limit / entry).floor() } else { 1.0 };
+    let batches = (groups * entry / limit).max(groups / groups_limit).ceil().max(1.0);
+    let depth = (batches.ln() / partitions.max(2.0).ln()).ceil();
+    let pages = byte_size(rows, width) / BLOCK * depth * 2.0;
+    let cpu = depth * rows * 2.0 * CPU_TUPLE;
+    (pages * RANDOM_PAGE + cpu, pages * RANDOM_PAGE + pages * SEQ_PAGE + cpu)
+}
+
 /// `cost_sort`: the costs of a sort of `rows` rows of a width that has the input costs `input`, with the number of rows of `LIMIT` when it has one.
 pub(crate) fn sort(input: (f64, f64), rows: f64, width: i32, bound: Option<f64>) -> (f64, f64) {
     let (startup, run) = tuplesort(rows, width, bound);
