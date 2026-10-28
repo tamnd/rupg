@@ -356,6 +356,9 @@ fn dgamma(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     if x == f64::NEG_INFINITY {
         return Err(overflow());
     }
+    #[cfg(any(unix, windows))]
+    let r = rupg_platform::cmath::tgamma(x);
+    #[cfg(not(any(unix, windows)))]
     let r = special::tgamma(x);
     if r.is_infinite() || r.is_nan() {
         return Err(overflow());

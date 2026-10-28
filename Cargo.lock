@@ -386,6 +386,7 @@ dependencies = [
  "rupg-common",
  "rupg-pgcatalog",
  "rupg-plan",
+ "rupg-platform",
  "rupg-sql",
  "rupg-types",
  "sha2",

@@ -6,7 +6,7 @@
 //!
 //! Developed at SunPro, a Sun Microsystems, Inc. business. Permission to use, copy, modify, and distribute this software is freely granted, provided that this notice is preserved.
 //!
-//! `tgamma` uses the Lanczos approximation of the `libm` crate. `sin`, `cos`, `exp`, `ln`, `ln_1p` and `powf` come from the standard library, which calls the C math library of the platform, as PostgreSQL does.
+//! `tgamma` uses the Lanczos approximation of the `libm` crate. It is used only on a platform with no C library, because `dgamma` calls `tgamma` of the C library elsewhere. `sin`, `cos`, `exp`, `ln`, `ln_1p` and `powf` come from the standard library, which calls the C math library of the platform, as PostgreSQL does.
 
 #![allow(
     clippy::unreadable_literal,
@@ -501,6 +501,7 @@ fn lanczos(x: f64) -> f64 {
 }
 
 /// `tgamma`: the gamma function. A pole gives NaN, and a value that is too large gives infinity.
+#[cfg_attr(any(unix, windows), allow(dead_code))]
 pub(crate) fn tgamma(x: f64) -> f64 {
     let ix = high(x) & 0x7fff_ffff;
     let negative = x.is_sign_negative();

@@ -325,9 +325,13 @@ fn float_sqrt(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(float_value(call.ret, x.sqrt()))
 }
 
-/// `dcbrt`.
+/// `dcbrt`. It calls `cbrt` of the C library, as `float.c` does, because `f64::cbrt` can give a different last bit.
 fn float_cbrt(call: &Call<'_>, args: &[Value]) -> Result<Value> {
-    float_fn(call, args, f64::cbrt)
+    #[cfg(any(unix, windows))]
+    let cbrt = rupg_platform::cmath::cbrt;
+    #[cfg(not(any(unix, windows)))]
+    let cbrt = f64::cbrt;
+    float_fn(call, args, cbrt)
 }
 
 /// `dpow`, with the special cases of `float.c` for NaN and the infinities.
