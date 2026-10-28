@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `ALTER COLUMN TYPE` of a key column of an exclusion constraint gives the index the operator class of the new type and gives the constraint the operator of the new type, as in PostgreSQL. (#1037)
 - `CREATE INDEX` accepts the option `siglen` of the operator class `tsvector_ops` of `gist`, and `pg_get_indexdef` shows it, as in PostgreSQL. (#1036)
 - An arm of `OR` can use a partial index whose predicate the arm implies, as in PostgreSQL. (#1035)
 - The query of `CREATE TABLE AS` and `SELECT INTO` does not see the rows of its new table in the system catalogs, as in PostgreSQL. (#1034)

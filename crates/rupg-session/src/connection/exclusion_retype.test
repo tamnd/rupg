@@ -1,0 +1,35 @@
+!details
+> create table at1(f1 int primary key, f2 int unique, f3 int, f4 int, f5 int)
+CREATE TABLE
+> alter table at1 add exclude using btree (f3 with =)
+ALTER TABLE
+> alter table at1 add exclude using btree (f4 with =) where (f5 > 0)
+ALTER TABLE
+> alter table at1 add exclude using hash (f5 with =)
+ALTER TABLE
+> insert into at1 values (1, 1, 1, 1, 1)
+INSERT 0 1
+> alter table at1 alter column f3 type bigint, alter column f4 type bigint
+ALTER TABLE
+> alter table at1 alter column f5 type bigint
+ALTER TABLE
+> select conname, pg_get_constraintdef(oid), conexclop::regoperator[] from pg_constraint where conrelid = 'at1'::regclass and contype = 'x' order by conname
+fields conname@pg_constraint.2:19:64:-1,pg_get_constraintdef:25:-1:-1,conexclop:2209:-1:-1
+row at1_f3_excl,EXCLUDE USING btree (f3 WITH =),{"=(bigint,bigint)"}
+row at1_f4_excl,EXCLUDE USING btree (f4 WITH =) WHERE ((f5 > 0)),{"=(bigint,bigint)"}
+row at1_f5_excl,EXCLUDE USING hash (f5 WITH =),{"=(bigint,bigint)"}
+SELECT 3
+> select c.relname, o.opcname from pg_index i join pg_class c on c.oid = i.indexrelid join pg_opclass o on o.oid = i.indclass[0] where indrelid = 'at1'::regclass order by 1
+fields relname@pg_class.2:19:64:-1,opcname@pg_opclass.3:19:64:-1
+row at1_f2_key,int4_ops
+row at1_f3_excl,int8_ops
+row at1_f4_excl,int8_ops
+row at1_f5_excl,int8_ops
+row at1_pkey,int4_ops
+SELECT 5
+> insert into at1 values (2, 2, 1, 2, 2)
+ERROR 23P01 conflicting key value violates exclusion constraint "at1_f3_excl"
+DETAIL Key (f3)=(1) conflicts with existing key (f3)=(1).
+> insert into at1 values (3, 3, 3, 3, 1)
+ERROR 23P01 conflicting key value violates exclusion constraint "at1_f5_excl"
+DETAIL Key (f5)=(1) conflicts with existing key (f5)=(1).

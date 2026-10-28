@@ -2620,6 +2620,17 @@ impl Catalog {
         Ok(())
     }
 
+    /// Sets the exclusion operator of the key column `column`, from 0, of an exclusion constraint, in `conexclop`.
+    pub fn set_exclusion_op(&mut self, constraint: u32, column: usize, op: u32) -> Result<()> {
+        let Some(con) = self.constraints.get_mut(&constraint) else {
+            return Err(no_object("constraint", constraint));
+        };
+        if let Some(at) = con.exclusion_ops.get_mut(column) {
+            *at = op;
+        }
+        Ok(())
+    }
+
     /// Sets `connoinherit` of a constraint.
     pub fn set_constraint_no_inherit(&mut self, constraint: u32, no_inherit: bool) -> Result<()> {
         let Some(con) = self.constraints.get_mut(&constraint) else {
