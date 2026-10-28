@@ -1,0 +1,86 @@
+!details
+> CREATE ROLE regress_kd_u
+CREATE ROLE
+> CREATE TABLE kd_t (c1 int, c2 int, c3 int, t text, PRIMARY KEY (c1, c2))
+CREATE TABLE
+> CREATE UNIQUE INDEX kd_t_c3 ON kd_t (c3)
+CREATE INDEX
+> CREATE UNIQUE INDEX kd_t_lower ON kd_t (lower(t))
+CREATE INDEX
+> ALTER TABLE kd_t ADD CONSTRAINT kd_t_d UNIQUE (c3) DEFERRABLE INITIALLY DEFERRED
+ALTER TABLE
+> INSERT INTO kd_t VALUES (1, 1, 1, 'a')
+INSERT 0 1
+> GRANT INSERT, UPDATE ON kd_t TO regress_kd_u
+GRANT
+> GRANT SELECT (c1) ON kd_t TO regress_kd_u
+GRANT
+> SET SESSION AUTHORIZATION regress_kd_u
+SET
+session_authorization=regress_kd_u
+is_superuser=off
+> INSERT INTO kd_t (c1, c2) VALUES (1, 1)
+ERROR 23505 duplicate key value violates unique constraint "kd_t_pkey"
+> INSERT INTO kd_t (c1, c2, c3) VALUES (2, 2, 1)
+ERROR 23505 duplicate key value violates unique constraint "kd_t_c3"
+> INSERT INTO kd_t (c1, c2, t) VALUES (3, 3, 'A')
+ERROR 23505 duplicate key value violates unique constraint "kd_t_lower"
+> UPDATE kd_t SET c2 = 1
+UPDATE 1
+> RESET SESSION AUTHORIZATION
+RESET
+session_authorization=postgres
+is_superuser=on
+> GRANT SELECT (c2, c3) ON kd_t TO regress_kd_u
+GRANT
+> SET SESSION AUTHORIZATION regress_kd_u
+SET
+session_authorization=regress_kd_u
+is_superuser=off
+> INSERT INTO kd_t (c1, c2) VALUES (1, 1)
+ERROR 23505 duplicate key value violates unique constraint "kd_t_pkey"
+DETAIL Key (c1, c2)=(1, 1) already exists.
+> INSERT INTO kd_t (c1, c2, c3) VALUES (2, 2, 1)
+ERROR 23505 duplicate key value violates unique constraint "kd_t_c3"
+DETAIL Key (c3)=(1) already exists.
+> INSERT INTO kd_t (c1, c2, t) VALUES (3, 3, 'A')
+ERROR 23505 duplicate key value violates unique constraint "kd_t_lower"
+> RESET SESSION AUTHORIZATION
+RESET
+session_authorization=postgres
+is_superuser=on
+> REVOKE SELECT (c3) ON kd_t FROM regress_kd_u
+REVOKE
+> DROP INDEX kd_t_c3
+DROP INDEX
+> SET SESSION AUTHORIZATION regress_kd_u
+SET
+session_authorization=regress_kd_u
+is_superuser=off
+> BEGIN
+BEGIN
+> INSERT INTO kd_t (c1, c2, c3) VALUES (4, 4, 1)
+INSERT 0 1
+> COMMIT
+ERROR 23505 duplicate key value violates unique constraint "kd_t_d"
+> RESET SESSION AUTHORIZATION
+RESET
+session_authorization=postgres
+is_superuser=on
+> GRANT SELECT ON kd_t TO regress_kd_u
+GRANT
+> SET SESSION AUTHORIZATION regress_kd_u
+SET
+session_authorization=regress_kd_u
+is_superuser=off
+> INSERT INTO kd_t (c1, c2, t) VALUES (3, 3, 'A')
+ERROR 23505 duplicate key value violates unique constraint "kd_t_lower"
+DETAIL Key (lower(t))=(a) already exists.
+> RESET SESSION AUTHORIZATION
+RESET
+session_authorization=postgres
+is_superuser=on
+> DROP TABLE kd_t
+DROP TABLE
+> DROP ROLE regress_kd_u
+DROP ROLE
