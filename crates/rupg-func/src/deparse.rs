@@ -2144,8 +2144,16 @@ fn index_def(
             if collation_used != 0 && collation_used != collation {
                 out.push_str(&format!(" COLLATE {}", collation_name(collation_used, session)?));
             }
+            // `get_attoptions`: a column with options shows its operator class and the options.
+            let options = index.columns.get(keyno).map_or(&[][..], |c| &c.options[..]);
             if let Some(&class) = info.classes.get(keyno) {
+                let ty = if options.is_empty() { ty } else { 0 };
                 out.push_str(&opclass_name(class, ty, session)?);
+            }
+            if !options.is_empty() {
+                out.push_str(" (");
+                get_reloptions(&mut out, options, session);
+                out.push(')');
             }
             if info.method == BTREE {
                 let option = info.options.get(keyno).copied().unwrap_or(0);

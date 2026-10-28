@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `CREATE INDEX` accepts the option `siglen` of the operator class `tsvector_ops` of `gist`, and `pg_get_indexdef` shows it, as in PostgreSQL. (#1036)
 - An arm of `OR` can use a partial index whose predicate the arm implies, as in PostgreSQL. (#1035)
 - The query of `CREATE TABLE AS` and `SELECT INTO` does not see the rows of its new table in the system catalogs, as in PostgreSQL. (#1034)
 - `ANALYZE` computes the statistics of the expression columns of the indexes of a table, as `compute_index_stats` does, and the planner reads them for the estimates of conditions and groups on those expressions. The root of a `btree` index with expressions is not a leaf when the index has more than two pages. (#1032)

@@ -614,6 +614,7 @@ impl Definer<'_, '_> {
                 collation: 0,
                 class: 0,
                 option: 0,
+                options: Vec::new(),
             });
         }
         if !elem.collation.is_empty() {
@@ -662,13 +663,15 @@ impl Definer<'_, '_> {
                 .at_opt(at));
             }
         }
+        let mut options = Vec::new();
         if !elem.opclassopts.is_empty() {
             if let Some(error) = self.opclass_without_options(class) {
                 return Err(error);
             }
-            return Err(not_yet("operator class options", at));
+            options = reloptions::transform(&[], &elem.opclassopts, None, &[], false)?;
+            reloptions::validate(&options, self.opclass_options(class, at)?, false)?;
         }
-        Ok(NewIndexColumn { name: column_name, key, ty, typmod, collation, class, option })
+        Ok(NewIndexColumn { name: column_name, key, ty, typmod, collation, class, option, options })
     }
 
     /// `exprCollation` of an index expression. An explicit `COLLATE` at the top gives its collation. Else the collation of the columns in the expression wins over the default collation, two different collations of columns give no collation, and an expression without columns has the default collation.

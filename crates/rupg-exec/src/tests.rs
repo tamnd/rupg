@@ -1140,6 +1140,7 @@ fn user_rows_have_the_column_types() {
         collation: 0,
         class: 1978,
         option: 0,
+        options: Vec::new(),
     };
     let index = NewIndex {
         table: t,
