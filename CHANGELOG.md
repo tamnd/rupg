@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.4.2 (2026-10-28)
+
 ### Added
 
 - `ALTER ... OWNER TO` accepts a role that has the privileges of the owner through an inherited membership, as `object_ownercheck` does. `CREATE SCHEMA`, `ALTER SCHEMA ... RENAME TO`, `ALTER SCHEMA ... OWNER TO`, `REASSIGN OWNED` of a schema and the publication commands check `CREATE` on the database, so a role that is not a superuser can use them after `GRANT CREATE ON DATABASE` (#995).
