@@ -1,0 +1,37 @@
+!details
+> create table ce (c1 int, c2 text, c3 boolean)
+CREATE TABLE
+> insert into ce select g, 'v' || g, g % 2 = 0 from generate_series(1, 50) g
+INSERT 0 50
+> create unique index ce_a on ce ((c1::text collate "C"))
+CREATE INDEX
+> create index ce_b on ce ((c2 collate "C"))
+CREATE INDEX
+> create index ce_c on ce (((c2 collate "POSIX")) collate "C")
+CREATE INDEX
+> select pg_get_indexdef('ce_a'::regclass)
+fields pg_get_indexdef:25:-1:-1
+row CREATE UNIQUE INDEX ce_a ON public.ce USING btree (((c1)::text) COLLATE "C")
+SELECT 1
+> select pg_get_indexdef('ce_b'::regclass)
+fields pg_get_indexdef:25:-1:-1
+row CREATE INDEX ce_b ON public.ce USING btree (c2 COLLATE "C")
+SELECT 1
+> select pg_get_indexdef('ce_c'::regclass)
+fields pg_get_indexdef:25:-1:-1
+row CREATE INDEX ce_c ON public.ce USING btree (c2 COLLATE "C")
+SELECT 1
+> select indexrelid::regclass, indkey, indcollation, indexprs is null as no_exprs from pg_index where indrelid = 'ce'::regclass order by 1
+fields indexrelid:2205:4:-1,indkey@pg_index.16:22:-1:-1,indcollation@pg_index.17:30:-1:-1,no_exprs:16:1:-1
+row ce_a,0,950,f
+row ce_b,2,950,t
+row ce_c,2,950,t
+SELECT 3
+> alter index ce_a alter column 1 set statistics 100
+ALTER INDEX
+> analyze ce
+ANALYZE
+> select c2 from ce where c2 collate "C" = 'v7'
+fields c2@ce.2:25:-1:-1
+row v7
+SELECT 1
