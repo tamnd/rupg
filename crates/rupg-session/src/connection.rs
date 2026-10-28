@@ -6193,6 +6193,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/index_am_paths.test")));
     }
 
+    /// A `gist` or `spgist` index gives an `Index Only Scan` when each column that the query reads can come from the index, as `gistcanreturn` and `spgcanreturn` find. The `gist` classes of `circle` and the `spgist` class of `polygon` cannot give the value. `connection/index_only_returnable.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn index_only_returnable() {
+        big_stack(|| script(include_str!("connection/index_only_returnable.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

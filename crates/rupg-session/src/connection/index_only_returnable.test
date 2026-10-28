@@ -1,0 +1,71 @@
+!details
+> create table gr (a int, p point, b box, g polygon, t text, c circle, r int4range)
+CREATE TABLE
+> create index gr_p on gr using gist (p)
+CREATE INDEX
+> create index gr_b on gr using gist (b) include (a)
+CREATE INDEX
+> create index gr_c on gr using gist (c)
+CREATE INDEX
+> create index gr_t on gr using spgist (t)
+CREATE INDEX
+> create index gr_g on gr using spgist (g)
+CREATE INDEX
+> create index gr_r on gr using spgist (r)
+CREATE INDEX
+> set enable_seqscan = off
+SET
+> set enable_bitmapscan = off
+SET
+> explain (costs off) select p from gr where p <@ box '(0,0),(1,1)'
+fields QUERY PLAN:25:-1:-1
+row Index Only Scan using gr_p on gr
+row   Index Cond: (p <@ '(1,1),(0,0)'::box)
+EXPLAIN
+> explain (costs off) select a, b from gr where b && box '(0,0),(1,1)'
+fields QUERY PLAN:25:-1:-1
+row Index Only Scan using gr_b on gr
+row   Index Cond: (b && '(1,1),(0,0)'::box)
+EXPLAIN
+> explain (costs off) select c from gr where c && circle '<(0,0),1>'
+fields QUERY PLAN:25:-1:-1
+row Index Scan using gr_c on gr
+row   Index Cond: (c && '<(0,0),1>'::circle)
+EXPLAIN
+> explain (costs off) select t from gr where t = 'x'
+fields QUERY PLAN:25:-1:-1
+row Index Only Scan using gr_t on gr
+row   Index Cond: (t = 'x'::text)
+EXPLAIN
+> explain (costs off) select g from gr where g && polygon '((0,0),(1,1),(1,0))'
+fields QUERY PLAN:25:-1:-1
+row Index Scan using gr_g on gr
+row   Index Cond: (g && '((0,0),(1,1),(1,0))'::polygon)
+EXPLAIN
+> explain (costs off) select r from gr where r && int4range(1, 5)
+fields QUERY PLAN:25:-1:-1
+row Index Only Scan using gr_r on gr
+row   Index Cond: (r && '[1,5)'::int4range)
+EXPLAIN
+> explain select p from gr where p <@ box '(0,0),(1,1)'
+fields QUERY PLAN:25:-1:-1
+row Index Only Scan using gr_p on gr  (cost=0.14..8.16 rows=1 width=16)
+row   Index Cond: (p <@ '(1,1),(0,0)'::box)
+EXPLAIN
+> insert into gr select g, point(g, g), box(point(g, g), point(g + 1, g + 1)), polygon(box(point(g, g), point(g + 1, g + 1))), g::text, circle(point(g, g), 1), int4range(g, g + 3) from generate_series(1, 500) g
+INSERT 0 500
+> select p from gr where p <@ box '(0,0),(3,3)' order by p[0]
+fields p@gr.2:600:16:-1
+row (1,1)
+row (2,2)
+row (3,3)
+SELECT 3
+> select a, b from gr where b && box '(0,0),(2,2)' order by a
+fields a@gr.1:23:4:-1,b@gr.3:603:32:-1
+row 1,(2,2),(1,1)
+row 2,(3,3),(2,2)
+SELECT 2
+> select t from gr where t = '42'
+fields t@gr.5:25:-1:-1
+row 42
+SELECT 1
