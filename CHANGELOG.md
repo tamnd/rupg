@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.4.5 (2026-10-29)
+
 ### Added
 
 - A subquery with more than one item in `FROM` that is a side of a join merges into the query, as `deconstruct_jointree` flattens its `FromExpr`. The planner can now join its relations with the other relations of the query in any order, and a self-join through such a subquery goes (#1050).
