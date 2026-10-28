@@ -1362,8 +1362,8 @@ impl Definer<'_, '_> {
             self.inherit_checks(table, &plan.inherits)?;
         }
         if let Some(spec) = &plan.partspec {
-            let partkey = self.partition_key(table, &plan.relname, spec)?;
-            self.catalog.set_partition_key(table, partkey)?;
+            let (partkey, refs) = self.partition_key(table, &plan.relname, spec)?;
+            self.catalog.set_partition_key(table, partkey, &refs)?;
         }
         self.add_checks(table, &plan.checks, false)?;
         self.add_not_nulls(table, plan)?;

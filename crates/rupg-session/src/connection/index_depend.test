@@ -1,0 +1,70 @@
+!details
+> create table dd (c1 int, c2 text collate "C", c3 text collate "C")
+CREATE TABLE
+> create index dd_i on dd (c1, c1, c2)
+CREATE INDEX
+> create index dd_j on dd (c2, c3, c2 text_pattern_ops)
+CREATE INDEX
+> create index dd_k on dd (c1, (c1 + 1), c1)
+CREATE INDEX
+> select pg_describe_object(classid, objid, objsubid) as obj, pg_describe_object(refclassid, refobjid, refobjsubid) as objref, deptype from pg_depend where classid = 'pg_class'::regclass and objid in ('dd_i'::regclass, 'dd_j'::regclass, 'dd_k'::regclass) order by 1, 2, 3
+fields obj:25:-1:-1,objref:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row index dd_i,column c1 of table dd,a
+row index dd_i,column c2 of table dd,a
+row index dd_j,column c2 of table dd,a
+row index dd_j,column c3 of table dd,a
+row index dd_k,column c1 of table dd,a
+row index dd_k,column c1 of table dd,a
+SELECT 6
+> create function pk_f(int) returns int language sql immutable as 'select $1 + 1'
+CREATE FUNCTION
+> create table pk1 (c1 int, c2 int, c3 text) partition by range (c1)
+CREATE TABLE
+> create table pk2 (c1 int, c2 int, c3 text) partition by list (c2)
+CREATE TABLE
+> create table pk2_1 partition of pk2 for values in (1) partition by hash (c1, c3)
+CREATE TABLE
+> create table pk3 (c1 int, c2 int, c3 text) partition by range ((c1 + c2), pk_f(c1), c3 collate "C")
+CREATE TABLE
+> create table pk4 (c1 int, c2 int) partition by range (c1, c1)
+CREATE TABLE
+> select pg_describe_object(classid, objid, objsubid) as obj, pg_describe_object(refclassid, refobjid, refobjsubid) as objref, deptype from pg_depend where (classid = 'pg_class'::regclass and objid in ('pk1'::regclass, 'pk2'::regclass, 'pk2_1'::regclass, 'pk3'::regclass, 'pk4'::regclass)) or (refclassid = 'pg_class'::regclass and refobjid in ('pk1'::regclass, 'pk2'::regclass, 'pk2_1'::regclass, 'pk3'::regclass, 'pk4'::regclass)) order by 1, 2, 3
+fields obj:25:-1:-1,objref:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row column c1 of table pk1,table pk1,i
+row column c1 of table pk2_1,table pk2_1,i
+row column c1 of table pk3,table pk3,i
+row column c1 of table pk4,table pk4,i
+row column c1 of table pk4,table pk4,i
+row column c2 of table pk2,table pk2,i
+row column c2 of table pk3,table pk3,i
+row column c3 of table pk2_1,table pk2_1,i
+row column c3 of table pk3,table pk3,i
+row table pk1,schema public,n
+row table pk2,schema public,n
+row table pk2_1,schema public,n
+row table pk2_1,table pk2,a
+row table pk3,function pk_f(integer),n
+row table pk3,schema public,n
+row table pk4,schema public,n
+row type pk1,table pk1,i
+row type pk2,table pk2,i
+row type pk2_1,table pk2_1,i
+row type pk3,table pk3,i
+row type pk4,table pk4,i
+SELECT 21
+> alter table pk3 drop column c2
+ERROR 42P16 cannot drop column "c2" because it is part of the partition key of relation "pk3"
+> alter table pk3 drop column c3
+ERROR 42P16 cannot drop column "c3" because it is part of the partition key of relation "pk3"
+> drop function pk_f(int)
+ERROR 2BP01 cannot drop function pk_f(integer) because other objects depend on it
+DETAIL table pk3 depends on function pk_f(integer)
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> alter table pk1 drop column c2
+ALTER TABLE
+> drop table pk1, pk2, pk3, pk4
+DROP TABLE
+> select count(*) from pg_depend where refclassid = 'pg_class'::regclass and refobjid not in (select oid from pg_class)
+fields count:20:8:-1
+row 0
+SELECT 1

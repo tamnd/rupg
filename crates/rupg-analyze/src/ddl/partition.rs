@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
-use rupg_catalog::{ConKind, PartStrategy, PartitionBound, PartitionKey, RangeDatum};
+use rupg_catalog::{ConKind, ObjRef, PartStrategy, PartitionBound, PartitionKey, RangeDatum};
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{Node, PartitionBoundSpec, PartitionElem, PartitionSpec, PartitionStrategy};
 use rupg_types::Value;
@@ -125,13 +125,13 @@ fn new_bound(datums: &[NewDatum], lower: bool) -> RangeBound {
 }
 
 impl Definer<'_, '_> {
-    /// `transformPartitionSpec` and `ComputePartitionAttrs`: the partition key of the new table `relname`.
+    /// `transformPartitionSpec` and `ComputePartitionAttrs`: the partition key of the new table `relname`, with the objects that its expressions read.
     pub(super) fn partition_key(
         &mut self,
         table: u32,
         relname: &str,
         spec: &PartitionSpec,
-    ) -> Result<PartitionKey> {
+    ) -> Result<(PartitionKey, Vec<ObjRef>)> {
         let strategy = match spec.strategy {
             PartitionStrategy::PARTITION_STRATEGY_LIST => PartStrategy::List,
             PartitionStrategy::PARTITION_STRATEGY_RANGE => PartStrategy::Range,
@@ -308,15 +308,13 @@ impl Definer<'_, '_> {
             };
             partkey.classes.push(class);
         }
+        let mut refs = Vec::new();
         if !exprs.is_empty() {
-            self.check_usage_on_types(&references(
-                self.catalog,
-                table,
-                &exprs.iter().collect::<Vec<_>>(),
-            )?)?;
+            refs = references(self.catalog, table, &exprs.iter().collect::<Vec<_>>())?;
+            self.check_usage_on_types(&refs)?;
             partkey.exprs = Some(node::write_list(&exprs)?);
         }
-        Ok(partkey)
+        Ok((partkey, refs))
     }
 
     /// The parent table of `PARTITION OF`, with the checks of `MergeAttributes` and of `DefineRelation`. `namespace` is the schema of the new partition.
