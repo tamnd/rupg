@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The update of a row that the transaction inserted checks its foreign keys also when the key stays the same, as `RI_FKey_fk_upd_check_required` does. Before, a deferred check of the insert saw no row at the commit, so a missing key went through (#1006).
 - The clones of foreign keys, indexes and row triggers go to the partitions in the order of their bounds, as `RelationGetPartitionDesc` gives them, with the default partition last. The names of the clones now match PostgreSQL when the partitions were made in another order. The detach of a partitioned partition checks the foreign keys that refer to it, and the check reads the leaves in the order of a scan (#1005).
 - A self-referencing foreign key of a partitioned table gets its clones for the referenced side when a partition is made or attached, so the delete of a referenced row in a partition is checked. The clones under a partitioned partition take the name of the top constraint with a suffix, as in PostgreSQL. The attach of a table that a foreign key of the parent refers to is an error (#1004).
 - Foreign keys accept a column list for `ON DELETE SET NULL` and `ON DELETE SET DEFAULT`. The delete sets only the listed columns, `confdelsetcols` keeps them, `pg_get_constraintdef` shows them, and the clones on the partitions get the column numbers of each partition. A listed column that is not part of the key is an error, as in PostgreSQL (#1003).

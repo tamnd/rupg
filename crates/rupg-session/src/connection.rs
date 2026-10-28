@@ -800,6 +800,7 @@ impl Connection {
         let foreign = !info.foreign.is_empty();
         let keep_rows = (foreign && !partitioned) || triggers.after_rows();
         let (mut new_rows, mut old_rows) = (Vec::new(), Vec::new());
+        let mut old_own = Vec::new();
         // The new and the old rows of `ON CONFLICT DO UPDATE`.
         let mut updated = (Vec::new(), Vec::new());
         let mut batches = Vec::new();
@@ -943,6 +944,9 @@ impl Connection {
                     let tids: Vec<u64> =
                         applied.iter().filter_map(|&at| changes.get(at).map(|c| c.0)).collect();
                     old_rows = heap.versions(view.database, info.table, &tids);
+                    if update {
+                        old_own = heap.made_by(view.database, info.table, &tids, view.xid);
+                    }
                     new_rows = applied
                         .iter()
                         .filter_map(|&at| changes.get(at).and_then(|c| c.1.clone()))
@@ -979,7 +983,9 @@ impl Connection {
         }
         // A partitioned table has its batches from the leaves.
         if foreign && !partitioned && (!new_rows.is_empty() || !old_rows.is_empty()) {
-            batches.push(Batch::new(info, &info.foreign, view.command, new_rows, old_rows));
+            batches.push(
+                Batch::new(info, &info.foreign, view.command, new_rows, old_rows).with_own(old_own),
+            );
         }
         if let Some(conflict) = upsert
             && !conflict.foreign.is_empty()
@@ -6107,6 +6113,12 @@ mod tests {
     #[test]
     fn partition_order() {
         big_stack(|| script(include_str!("connection/partition_order.test")));
+    }
+
+    /// The check of a foreign key for the update of a row that the transaction inserted, which runs also when the update keeps the key, as `RI_FKey_fk_upd_check_required` asks: with a deferred key, in a subtransaction, and after a rollback to a savepoint. `connection/foreign_key_own_update.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn foreign_key_own_update() {
+        big_stack(|| script(include_str!("connection/foreign_key_own_update.test")));
     }
 
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.

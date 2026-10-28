@@ -1,0 +1,81 @@
+!details
+> CREATE TABLE pktable (id int primary key, other int)
+CREATE TABLE
+> CREATE TABLE fktable (id int primary key, fk int references pktable deferrable initially deferred)
+CREATE TABLE
+> INSERT INTO pktable VALUES (5, 10)
+INSERT 0 1
+> BEGIN
+BEGIN
+> INSERT INTO fktable VALUES (0, 20)
+INSERT 0 1
+> UPDATE fktable SET id = id + 1
+UPDATE 1
+> COMMIT
+ERROR 23503 insert or update on table "fktable" violates foreign key constraint "fktable_fk_fkey"
+DETAIL Key (fk)=(20) is not present in table "pktable".
+> BEGIN
+BEGIN
+> INSERT INTO fktable VALUES (0, 20)
+INSERT 0 1
+> SAVEPOINT savept1
+SAVEPOINT
+> UPDATE fktable SET id = id + 1
+UPDATE 1
+> COMMIT
+ERROR 23503 insert or update on table "fktable" violates foreign key constraint "fktable_fk_fkey"
+DETAIL Key (fk)=(20) is not present in table "pktable".
+> BEGIN
+BEGIN
+> SAVEPOINT savept1
+SAVEPOINT
+> INSERT INTO fktable VALUES (0, 20)
+INSERT 0 1
+> RELEASE SAVEPOINT savept1
+RELEASE
+> UPDATE fktable SET id = id + 1
+UPDATE 1
+> COMMIT
+ERROR 23503 insert or update on table "fktable" violates foreign key constraint "fktable_fk_fkey"
+DETAIL Key (fk)=(20) is not present in table "pktable".
+> BEGIN
+BEGIN
+> INSERT INTO fktable VALUES (0, 20)
+INSERT 0 1
+> SAVEPOINT savept1
+SAVEPOINT
+> UPDATE fktable SET id = id + 1
+UPDATE 1
+> ROLLBACK TO savept1
+ROLLBACK
+> COMMIT
+ERROR 23503 insert or update on table "fktable" violates foreign key constraint "fktable_fk_fkey"
+DETAIL Key (fk)=(20) is not present in table "pktable".
+> INSERT INTO fktable VALUES (1, 5)
+INSERT 0 1
+> BEGIN
+BEGIN
+> UPDATE fktable SET id = 2
+UPDATE 1
+> UPDATE pktable SET other = 11
+UPDATE 1
+> COMMIT
+COMMIT
+> SELECT * FROM fktable
+fields id@fktable.1:23:4:-1,fk@fktable.2:23:4:-1
+row 2,5
+SELECT 1
+> CREATE TABLE fk2 (id int primary key, fk int references pktable)
+CREATE TABLE
+> BEGIN
+BEGIN
+> INSERT INTO fk2 VALUES (1, 5)
+INSERT 0 1
+> UPDATE fk2 SET id = 2
+UPDATE 1
+> COMMIT
+COMMIT
+> SELECT * FROM fk2
+fields id@fk2.1:23:4:-1,fk@fk2.2:23:4:-1
+row 2,5
+SELECT 1
