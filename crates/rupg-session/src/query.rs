@@ -1441,6 +1441,12 @@ impl rupg_func::Session for Reader<'_> {
 }
 
 impl Env for Reader<'_> {
+    fn access_temp(&self) {
+        if let Some(conn) = self.conn {
+            conn.access_temp();
+        }
+    }
+
     fn check_function(&self, function: &rupg_catalog::Function) -> Result<()> {
         rupg_plpgsql::validate(self, function)
     }

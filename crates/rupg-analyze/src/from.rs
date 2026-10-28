@@ -1516,7 +1516,10 @@ impl Analyzer<'_> {
         match &rv.schemaname {
             // A schema that does not exist has no relation, as RangeVarGetRelid with missing_ok gives.
             Some(schema) => Ok(self.explicit_schema(schema, at)?.and_then(in_schema)),
-            None => Ok(self.temp_path.iter().find_map(|&ns| in_schema(ns))),
+            None => Ok(self
+                .temp_path
+                .iter()
+                .find_map(|&ns| in_schema(ns).inspect(|_| self.note_temp(ns)))),
         }
     }
 

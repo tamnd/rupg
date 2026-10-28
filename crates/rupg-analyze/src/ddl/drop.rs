@@ -226,6 +226,8 @@ impl Definer<'_, '_> {
                 }
                 Found::Builtin(row) => (row.owner, row.namespace),
             };
+            // `RemoveRelations` marks a drop of a temporary table.
+            self.an.note_temp(namespace);
             if !self.is_superuser()
                 && !self.owns(owner)
                 && !self.schema_owner(namespace).is_some_and(|o| self.owns(o))

@@ -2,6 +2,8 @@
 //!
 //! The session has no transaction of the engine yet. The block decides what the client can see: the status byte of `ReadyForQuery`, the warnings and the tags of `BEGIN`, `COMMIT` and `ROLLBACK`, the error `25P02` in a failed block, and the end of each transaction, where the settings keep or restore the values that `SET` changed. Each method has the name of the function of `xact.c` that it follows.
 
+use std::cell::Cell;
+
 use rupg_common::{Error, SqlState};
 use rupg_wire::TransactionStatus;
 
@@ -41,17 +43,23 @@ pub enum Ending {
     Savepoint,
 }
 
-/// The transaction block, the `AND CHAIN` flag of the statement that ends it, and the names of the savepoints, the outermost first.
+/// The transaction block, the `AND CHAIN` flag of the statement that ends it, the names of the savepoints, the outermost first, and `XACT_FLAGS_ACCESSEDTEMPNAMESPACE`.
 #[derive(Clone, Debug)]
 pub struct Transaction {
     block: Block,
     chain: bool,
     savepoints: Vec<String>,
+    temp: Cell<bool>,
 }
 
 impl Default for Transaction {
     fn default() -> Transaction {
-        Transaction { block: Block::Default, chain: false, savepoints: Vec::new() }
+        Transaction {
+            block: Block::Default,
+            chain: false,
+            savepoints: Vec::new(),
+            temp: Cell::new(false),
+        }
     }
 }
 
@@ -101,6 +109,16 @@ impl Transaction {
     /// The number of savepoints, which is the nesting level of the current subtransaction. It is 0 outside of a subtransaction.
     pub fn depth(&self) -> usize {
         self.savepoints.len()
+    }
+
+    /// `XACT_FLAGS_ACCESSEDTEMPNAMESPACE`: the transaction used an object of the temporary schema of the session.
+    pub fn access_temp(&self) {
+        self.temp.set(true);
+    }
+
+    /// True when the transaction used an object of the temporary schema of the session.
+    pub fn accessed_temp(&self) -> bool {
+        self.temp.get()
     }
 
     /// True when the end of the current statement commits the transaction, as [`Transaction::finish_command`] decides.
@@ -267,6 +285,7 @@ impl Transaction {
         let chained = chain && next == Block::Default;
         if next == Block::Default {
             self.savepoints.clear();
+            self.temp.set(false);
         }
         self.block = if chained { Block::InProgress } else { next };
         (ending, chained)
@@ -284,6 +303,7 @@ impl Transaction {
         };
         if next == Block::Default {
             self.savepoints.clear();
+            self.temp.set(false);
         }
         self.block = next;
         ending

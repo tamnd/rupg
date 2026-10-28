@@ -320,9 +320,21 @@ impl Analyzer<'_> {
     /// The schema of a name, from the session. `pg_temp` names the temporary schema of the session, as `LookupExplicitNamespace` reads it.
     pub(crate) fn schema(&self, name: &str) -> Option<u32> {
         if name == "pg_temp" && self.temp != 0 {
+            self.env.access_temp();
             return Some(self.temp);
         }
-        self.env.namespace(name)
+        let namespace = self.env.namespace(name);
+        if let Some(namespace) = namespace {
+            self.note_temp(namespace);
+        }
+        namespace
+    }
+
+    /// `XACT_FLAGS_ACCESSEDTEMPNAMESPACE` for an object in the schema: the temporary schema of the session counts.
+    pub(crate) fn note_temp(&self, namespace: u32) {
+        if namespace != 0 && namespace == self.temp {
+            self.env.access_temp();
+        }
     }
 
     /// `LookupExplicitNamespace`: the schema that a qualified name gives, or `None` when it does not exist. The current user needs `USAGE` on it, except on the temporary schema of the session and in the text of an object that the catalog keeps.
