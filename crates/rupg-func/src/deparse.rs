@@ -1854,6 +1854,14 @@ fn constraint_def(con: &Constraint, paren: bool, session: &dyn Session) -> Resul
         // The `NOT NULL` constraint of a domain has no column.
         ConKind::NotNull if con.domain != 0 => out.push_str("NOT NULL"),
         ConKind::Trigger => out.push_str("TRIGGER"),
+        ConKind::Exclusion => {
+            let index = catalog.relation(con.index).and_then(|r| Some((r, r.index.as_ref()?)));
+            let (index, info) = index.ok_or_else(|| {
+                Error::internal(format!("cache lookup failed for index {}", con.index))
+            })?;
+            let exclude = Some(con.exclusion_ops.as_slice());
+            out.push_str(&index_def(index, (info, exclude), 0, paren, session)?);
+        }
         ConKind::NotNull => {
             out.push_str(&format!("NOT NULL {}", column_list(relation()?, &con.keys[..1])?));
             if con.no_inherit {
@@ -2033,7 +2041,7 @@ fn opclass_name(class: u32, ty: u32, session: &dyn Session) -> Result<String> {
 /// `pg_get_indexdef_worker` for an index of the user. `colno` 0 gives the whole statement, and another number gives only the text of that column.
 fn index_def(
     index: &Relation,
-    info: &IndexInfo,
+    (info, exclude): (&IndexInfo, Option<&[u32]>),
     colno: i32,
     paren: bool,
     session: &dyn Session,
@@ -2064,17 +2072,22 @@ fn index_def(
                 )));
             }
         };
+        if exclude.is_some() {
+            out.push_str(&format!("EXCLUDE USING {method} ("));
+        }
         let table = if paren {
             relation_name(info.table, session)?
         } else {
             qualified_relation_name(info.table, session)?
         };
-        out.push_str(&format!(
-            "CREATE {}INDEX {} ON {}{table} USING {method} (",
-            if info.unique { "UNIQUE " } else { "" },
-            quote_identifier(&index.name),
-            if index.kind == RelKind::PartitionedIndex { "ONLY " } else { "" }
-        ));
+        if exclude.is_none() {
+            out.push_str(&format!(
+                "CREATE {}INDEX {} ON {}{table} USING {method} (",
+                if info.unique { "UNIQUE " } else { "" },
+                quote_identifier(&index.name),
+                if index.kind == RelKind::PartitionedIndex { "ONLY " } else { "" }
+            ));
+        }
     }
     let key_count = usize::try_from(info.key_count).unwrap_or(0);
     for (keyno, &attnum) in info.keys.iter().enumerate() {
@@ -2127,6 +2140,12 @@ fn index_def(
                     out.push_str(" NULLS FIRST");
                 }
             }
+            if let Some(&op) = exclude.and_then(|ops| ops.get(keyno)) {
+                let name = builtin::operator_by_oid(op).map(|o| o.name).ok_or_else(|| {
+                    Error::internal(format!("cache lookup failed for operator {op}"))
+                })?;
+                out.push_str(&format!(" WITH {name}"));
+            }
         }
     }
     if whole {
@@ -2140,10 +2159,12 @@ fn index_def(
             out.push(')');
         }
         if let Some(text) = &info.predicate {
-            out.push_str(&format!(
-                " WHERE {}",
-                deparse(text, &rel.name, &columns, paren, session)?
-            ));
+            let predicate = deparse(text, &rel.name, &columns, paren, session)?;
+            if exclude.is_some() {
+                out.push_str(&format!(" WHERE ({predicate})"));
+            } else {
+                out.push_str(&format!(" WHERE {predicate}"));
+            }
         }
     }
     Ok(out)
@@ -2354,7 +2375,7 @@ pub fn index_key_columns(index: u32, session: &dyn Session) -> Result<String> {
         if colno > 1 {
             out.push_str(", ");
         }
-        out.push_str(&index_def(rel, info, i32::from(colno), true, session)?);
+        out.push_str(&index_def(rel, (info, None), i32::from(colno), true, session)?);
     }
     Ok(out)
 }
@@ -2411,7 +2432,9 @@ fn get_indexdef(call: &Call<'_>, args: &[Value]) -> Result<Value> {
         .and_then(|c| c.relation(oid))
         .and_then(|r| Some((r, r.index.as_ref()?)));
     match found {
-        Some((index, info)) => Ok(Value::text(index_def(index, info, colno, paren, call.session)?)),
+        Some((index, info)) => {
+            Ok(Value::text(index_def(index, (info, None), colno, paren, call.session)?))
+        }
         None if oid < FIRST_USER_OID => {
             Ok(builtin_index_def(oid, colno, paren, call.session)?.map_or(Value::Null, Value::text))
         }

@@ -427,6 +427,7 @@ impl Connection {
             .collect();
         if in_place {
             self.check_keys_in_place(rel.oid, view, &info.unique, work)?;
+            self.check_exclusion_build(old, rel.oid, view, work)?;
             if !checked.is_empty() {
                 self.fire(vec![Batch::new(info, &foreign, view.command, checked, Vec::new())])?;
             }
@@ -455,6 +456,7 @@ impl Connection {
                 conflict => kept = self.key_conflict(info, view, conflict)?,
             }
         }
+        self.check_exclusion_build(old, rel.oid, view, work)?;
         if !checked.is_empty() {
             self.fire(vec![Batch::new(info, &foreign, view.command, checked, Vec::new())])?;
         }

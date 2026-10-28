@@ -200,6 +200,8 @@ pub struct OnConflict {
     pub arbiters: Vec<usize>,
     /// True for a clause with no inference. Each unique index is then an arbiter, also an index of a partition that the partitioned table does not have.
     pub all: bool,
+    /// The OID of the index of the exclusion constraint of `ON CONSTRAINT`, or 0. Each exclusion constraint is an arbiter of a clause with no inference.
+    pub exclusion: u32,
     /// The query of `DO UPDATE`, or `None` for `DO NOTHING`. It reads two relations: the row that the table has, with the ID of its version at the end, and `EXCLUDED`, the row that the statement proposed. It gives the new row, then the conditions of the check constraints, then the values that `RETURNING` carries, or no row when the condition of `WHERE` is not true.
     pub update: Option<Box<Query>>,
     /// The strength of the lock of `DO SELECT`, or `None` for `DO UPDATE` and `DO NOTHING`. [`OnConflict::update`] is then the query of `DO SELECT`, which gives the row that the table has, and the statement writes no row.
@@ -710,6 +712,11 @@ impl Analyzer<'_> {
         // The planner matches the inference with the indexes after the analysis.
         if let Some(conflict) = &mut on_conflict {
             conflict.all = matches!(inference, Inference::All);
+            if let Inference::Constraint(index) = inference
+                && !unique.iter().any(|key| key.oid == index)
+            {
+                conflict.exclusion = index;
+            }
             conflict.arbiters = arbiters(inference, unique, self.env.catalog())?;
         }
         Ok((on_conflict, returning, def, returning_tid))
@@ -735,6 +742,7 @@ impl Analyzer<'_> {
         let mut on_conflict = OnConflict {
             arbiters: Vec::new(),
             all: false,
+            exclusion: 0,
             update: None,
             select,
             carried: 0,
@@ -837,6 +845,20 @@ impl Analyzer<'_> {
                     format!("constraint \"{conname}\" for table \"{name}\" does not exist"),
                 ));
             };
+            // `infer_arbiter_indexes`: an exclusion constraint is an arbiter only of `DO NOTHING`.
+            if constraint.kind == ConKind::Exclusion {
+                let action = match clause.action {
+                    OnConflictAction::ONCONFLICT_NOTHING => None,
+                    OnConflictAction::ONCONFLICT_UPDATE => Some("UPDATE"),
+                    _ => Some("SELECT"),
+                };
+                if let Some(action) = action {
+                    return Err(Error::new(
+                        SqlState::WRONG_OBJECT_TYPE,
+                        format!("ON CONFLICT DO {action} not supported with exclusion constraints"),
+                    ));
+                }
+            }
             // The columns of the constraint need `SELECT`.
             let keys = constraint.keys.clone();
             let index = constraint.index;
@@ -2046,9 +2068,7 @@ fn arbiters(
                 .filter(|(_, key)| key.oid == index)
                 .map(|(at, _)| at)
                 .collect();
-            if places.is_empty() {
-                return Err(not_yet("an exclusion constraint in ON CONFLICT"));
-            }
+            // An empty list is the index of an exclusion constraint.
             return Ok(places);
         }
         Inference::Columns { columns: set, exprs, predicate, exact } => unique

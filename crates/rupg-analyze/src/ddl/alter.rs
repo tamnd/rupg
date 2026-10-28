@@ -837,7 +837,7 @@ impl Definer<'_, '_> {
                     indexes.push(alter_index_constraint(&con, &rv)?);
                 }
                 ConstrType::CONSTR_EXCLUSION => {
-                    return Err(not_yet("an exclusion constraint", place(con.location)));
+                    indexes.push(super::table::exclusion_index(&con, &rv)?);
                 }
                 ConstrType::CONSTR_CHECK => others.push(Other::Check(con)),
                 ConstrType::CONSTR_FOREIGN => others.push(Other::Foreign(con, defaulted)),

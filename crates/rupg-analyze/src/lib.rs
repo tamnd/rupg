@@ -15,6 +15,7 @@ mod colname;
 mod constraints_set;
 mod cte;
 mod ddl;
+mod exclusion;
 mod expr;
 mod from;
 mod funcargs;
@@ -75,6 +76,7 @@ pub use ddl::{
     owned_objects, policy_targets, policy_tree, reindex_options, rewrite_insert, rule_tree,
     tablespace_options, trigger_when, vacuum_denied, vacuum_relations,
 };
+pub use exclusion::{Exclusion, exclusions};
 pub use expr::{
     Aggref, BoolOp, BoolTest, Case, CastForm, CurrentOf, Expr, ExprKind, FieldStore, Func,
     FuncForm, GroupingFunc, IsJson, JoinRow, JsonBehavior, JsonBehaviorKind, JsonCtor,

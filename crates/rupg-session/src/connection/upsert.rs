@@ -85,6 +85,7 @@ impl Connection {
         let mut done = Upserted::default();
         let keep = fire.after_rows();
         let before = !fire.insert.is_empty() || info.recheck.is_some();
+        let exclusions = self.exclusion_arbiters(info.table, conflict)?;
         for row in rows {
             let row = if before {
                 match self.before_rows(plan, info, &fire.insert, vec![row])?.pop() {
@@ -95,6 +96,9 @@ impl Connection {
                 row
             };
             self.deferrable_arbiter(info.table, &info.unique, &conflict.arbiters)?;
+            if self.excluded_row(info, &exclusions, view, &row)? {
+                continue;
+            }
             let mut kept = None;
             loop {
                 let result = heap.speculative(

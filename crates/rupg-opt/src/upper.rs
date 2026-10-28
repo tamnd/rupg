@@ -880,6 +880,7 @@ impl<'q> Builder<'q> {
                     .iter()
                     .filter_map(|i| write.unique.get(*i))
                     .map(|u| u.oid)
+                    .chain((c.exclusion != 0).then_some(c.exclusion))
                     .collect(),
                 filter,
                 scope,

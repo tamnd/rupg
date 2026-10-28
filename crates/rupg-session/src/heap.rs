@@ -626,6 +626,23 @@ pub(crate) enum Speculative {
     Key(Changed),
 }
 
+/// A version that an exclusion constraint checks, from [`Heap::exclusion_rows`].
+#[derive(Clone, Debug)]
+pub(crate) struct Candidate {
+    pub(crate) tid: u64,
+    /// The place of the version in the order of the inserts.
+    pub(crate) made: u64,
+    /// True when the commands that the check is for made the version.
+    pub(crate) new: bool,
+    /// The transaction in progress that inserted or deleted the version.
+    pub(crate) holder: Option<u32>,
+    /// True when the version is live for a dirty snapshot.
+    pub(crate) live: bool,
+    /// The place in the order of the inserts of the version that an `UPDATE` of the commands made from this version, or 0. The version was live until then.
+    pub(crate) replaced: u64,
+    pub(crate) values: Vec<Value>,
+}
+
 /// The text of the item pointer of a version, `(page,item)`, as `tidout` gives it.
 pub(crate) fn tid_text(tid: u64) -> String {
     format!("({},{})", page_of(tid), slot_of(tid))
@@ -1514,6 +1531,51 @@ impl Heap {
             }
         }
         Ok(None)
+    }
+
+    /// The versions of the table `relation` that an exclusion constraint checks for the transaction `xid`, as a scan of the index with `SnapshotDirty` finds them, in the order of the IDs. A version that went before the command `command` is not in the list. The result is empty when the commands of `xid` from `command` on made no version of the table. With no command, the list has the live versions, as the build of a new index sees them.
+    pub(crate) fn exclusion_rows(
+        &self,
+        database: u32,
+        relation: u32,
+        xid: u32,
+        command: Option<u32>,
+    ) -> Vec<Candidate> {
+        let state = self.state();
+        let Some(table) = state.tables.get(&(database, relation)) else {
+            return Vec::new();
+        };
+        let new = |v: &Version| command.is_some_and(|command| v.xmin == xid && v.cmin >= command);
+        if command.is_some() && !table.versions.iter().any(new) {
+            return Vec::new();
+        }
+        let command = command.unwrap_or(u32::MAX);
+        let mut list = Vec::new();
+        for version in &table.versions {
+            let seen = dirty(version, xid, &state.running);
+            let replaced = if version.xmax == xid && version.cmax >= command && version.next != 0 {
+                table.find(version.next).map_or(0, |at| table.versions[at].made)
+            } else {
+                0
+            };
+            let fresh = new(version);
+            if seen == Seen::Dead && replaced == 0 && !fresh {
+                continue;
+            }
+            list.push(Candidate {
+                tid: version.tid,
+                made: version.made,
+                new: fresh,
+                holder: match seen {
+                    Seen::Wait(holder) => Some(holder),
+                    _ => None,
+                },
+                live: seen == Seen::Live,
+                replaced,
+                values: version.values.to_vec(),
+            });
+        }
+        list
     }
 
     /// Removes the rows of the tables of a database that `keep` does not keep, after a commit drops the tables.
