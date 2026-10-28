@@ -5993,6 +5993,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/key_detail.test")));
     }
 
+    /// A column of `EXCLUDED` in `ON CONFLICT DO UPDATE` needs `SELECT` on the column of the target table, as the entry of `EXCLUDED` has its own privileges. `connection/excluded_select.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn excluded_select() {
+        big_stack(|| script(include_str!("connection/excluded_select.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
