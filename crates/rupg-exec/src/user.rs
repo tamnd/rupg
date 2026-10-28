@@ -1009,7 +1009,7 @@ fn constraint<'a>(table: &'a Table, con: &Constraint) -> Row<'a> {
         .set("conislocal", Value::Bool(con.local))
         .set("coninhcount", Value::Int2(con.inhcount))
         .set("connoinherit", Value::Bool(con.no_inherit))
-        .set("conperiod", Value::Bool(false))
+        .set("conperiod", Value::Bool(con.period()))
         .set("conkey", int2_array(&con.keys))
         .set("conbin", tree(con.expr.as_ref()));
     if let Some(f) = foreign {
@@ -1018,7 +1018,7 @@ fn constraint<'a>(table: &'a Table, con: &Constraint) -> Row<'a> {
             .set("conppeqop", oid_array(&f.pp_eq))
             .set("conffeqop", oid_array(&f.ff_eq));
     }
-    if con.kind == ConKind::Exclusion {
+    if con.is_exclusion() {
         row.set("conexclop", oid_array(&con.exclusion_ops));
     }
     row
@@ -1062,9 +1062,8 @@ fn indexes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
         .relations()
         .filter_map(|rel| {
             let info = rel.index.as_ref()?;
-            let exclusion = catalog
-                .constraints_of(info.table)
-                .any(|c| c.index == rel.oid && c.kind == ConKind::Exclusion);
+            let exclusion =
+                catalog.constraints_of(info.table).any(|c| c.index == rel.oid && c.is_exclusion());
             let mut row = Row::new(table);
             row.set("indexrelid", oid(rel.oid))
                 .set("indrelid", oid(info.table))

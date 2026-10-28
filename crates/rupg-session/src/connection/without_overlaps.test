@@ -1,0 +1,96 @@
+!details
+> CREATE TABLE t (valid_at daterange, PRIMARY KEY (valid_at WITHOUT OVERLAPS))
+ERROR 42601 constraint using WITHOUT OVERLAPS needs at least two columns
+> CREATE TABLE t (id int4range, valid_at text, PRIMARY KEY (id, valid_at WITHOUT OVERLAPS))
+ERROR 42804 column "valid_at" in WITHOUT OVERLAPS is not a range or multirange type at 46
+> CREATE TABLE t (id int4range, PRIMARY KEY (id, valid_at WITHOUT OVERLAPS))
+ERROR 42703 column "valid_at" named in key does not exist at 31
+> CREATE TABLE t (id int4range, valid_at daterange, CONSTRAINT t_pk PRIMARY KEY (id, valid_at WITHOUT OVERLAPS))
+CREATE TABLE
+> SELECT conname, contype, conperiod, conexclop::text, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 't'::regclass ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conperiod@pg_constraint.20:16:1:-1,conexclop:25:-1:-1,pg_get_constraintdef:25:-1:-1
+row t_id_not_null,n,f,NULL,NOT NULL id
+row t_pk,p,t,{3882,3888},PRIMARY KEY (id, valid_at WITHOUT OVERLAPS)
+row t_valid_at_not_null,n,f,NULL,NOT NULL valid_at
+SELECT 3
+> SELECT indisunique, indisprimary, indisexclusion, pg_get_indexdef(indexrelid) FROM pg_index WHERE indrelid = 't'::regclass
+fields indisunique@pg_index.5:16:1:-1,indisprimary@pg_index.7:16:1:-1,indisexclusion@pg_index.8:16:1:-1,pg_get_indexdef:25:-1:-1
+row t,t,t,CREATE UNIQUE INDEX t_pk ON public.t USING gist (id, valid_at)
+SELECT 1
+> INSERT INTO t VALUES ('[1,2)', '[2018-01-02,2018-02-03)'), ('[1,2)', '[2018-03-03,2018-04-04)'), ('[2,3)', '[2018-01-01,2018-01-05)')
+INSERT 0 3
+> INSERT INTO t VALUES ('[1,2)', '[2018-01-01,2018-01-05)')
+ERROR 23P01 conflicting key value violates exclusion constraint "t_pk"
+DETAIL Key (id, valid_at)=([1,2), [2018-01-01,2018-01-05)) conflicts with existing key (id, valid_at)=([1,2), [2018-01-02,2018-02-03)).
+> INSERT INTO t VALUES ('[3,4)', 'empty')
+ERROR 23514 empty WITHOUT OVERLAPS value found in column "valid_at" in relation "t"
+> INSERT INTO t VALUES ('[3,4)', NULL)
+ERROR 23502 null value in column "valid_at" of relation "t" violates not-null constraint
+DETAIL Failing row contains ([3,4), null).
+> INSERT INTO t VALUES ('[1,2)', '[2018-01-01,2018-01-05)') ON CONFLICT DO NOTHING
+INSERT 0 0
+> INSERT INTO t VALUES ('[1,2)', '[2018-01-01,2018-01-05)') ON CONFLICT ON CONSTRAINT t_pk DO NOTHING
+INSERT 0 0
+> INSERT INTO t VALUES ('[1,2)', '[2018-01-01,2018-01-05)') ON CONFLICT (id, valid_at) DO NOTHING
+ERROR 42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification
+> INSERT INTO t VALUES ('[1,2)', '[2018-01-01,2018-01-05)') ON CONFLICT ON CONSTRAINT t_pk DO UPDATE SET id = EXCLUDED.id
+ERROR 42809 ON CONFLICT DO UPDATE not supported with exclusion constraints
+> UPDATE t SET valid_at = '[2018-01-01,2018-03-01)' WHERE id = '[1,2)' AND valid_at @> '2018-01-10'::date
+UPDATE 1
+> SELECT * FROM t ORDER BY id, valid_at
+fields id@t.1:3904:-1:-1,valid_at@t.2:3912:-1:-1
+row [1,2),[2018-01-01,2018-03-01)
+row [1,2),[2018-03-03,2018-04-04)
+row [2,3),[2018-01-01,2018-01-05)
+SELECT 3
+> CREATE TABLE u (id int4range, valid_at datemultirange, CONSTRAINT u_uq UNIQUE (id, valid_at WITHOUT OVERLAPS))
+CREATE TABLE
+> INSERT INTO u VALUES ('[1,2)', '{[2018-01-02,2018-02-03)}'), (NULL, '{[2018-01-02,2018-02-03)}'), (NULL, '{[2018-01-02,2018-02-03)}'), ('[1,2)', NULL)
+INSERT 0 4
+> INSERT INTO u VALUES ('[1,2)', '{}')
+ERROR 23514 empty WITHOUT OVERLAPS value found in column "valid_at" in relation "u"
+> INSERT INTO u VALUES ('[1,2)', '{[2018-02-01,2018-02-05)}')
+ERROR 23P01 conflicting key value violates exclusion constraint "u_uq"
+DETAIL Key (id, valid_at)=([1,2), {[2018-02-01,2018-02-05)}) conflicts with existing key (id, valid_at)=([1,2), {[2018-01-02,2018-02-03)}).
+> SELECT pg_get_constraintdef(oid), conperiod FROM pg_constraint WHERE conname = 'u_uq'
+fields pg_get_constraintdef:25:-1:-1,conperiod@pg_constraint.20:16:1:-1
+row UNIQUE (id, valid_at WITHOUT OVERLAPS),t
+SELECT 1
+> ALTER TABLE u DROP CONSTRAINT u_uq
+ALTER TABLE
+> INSERT INTO u VALUES ('[1,2)', '{[2018-02-01,2018-02-05)}')
+INSERT 0 1
+> ALTER TABLE u ADD CONSTRAINT u_uq UNIQUE (id, valid_at WITHOUT OVERLAPS)
+ERROR 23P01 could not create exclusion constraint "u_uq"
+DETAIL Key (id, valid_at)=([1,2), {[2018-01-02,2018-02-03)}) conflicts with key (id, valid_at)=([1,2), {[2018-02-01,2018-02-05)}).
+> ALTER TABLE u ADD CONSTRAINT u_uq UNIQUE (id, id WITHOUT OVERLAPS)
+ERROR 42701 column "id" appears twice in unique constraint at 19
+> ALTER TABLE u ADD CONSTRAINT u_uq2 UNIQUE USING INDEX u_uq
+ERROR 42704 index "u_uq" does not exist at 19
+> CREATE TABLE p (id int4range, valid_at daterange, name text, CONSTRAINT p_pk PRIMARY KEY (id, valid_at WITHOUT OVERLAPS)) PARTITION BY LIST (id)
+CREATE TABLE
+> CREATE TABLE p1 PARTITION OF p FOR VALUES IN ('[1,2)', '[2,3)')
+CREATE TABLE
+> CREATE TABLE p2 PARTITION OF p FOR VALUES IN ('[3,4)', '[4,5)')
+CREATE TABLE
+> INSERT INTO p VALUES ('[1,2)', '[2000-01-01,2000-02-01)', 'one'), ('[3,4)', '[2000-01-01,2010-01-01)', 'three')
+INSERT 0 2
+> INSERT INTO p VALUES ('[1,2)', '[2000-01-15,2000-02-01)', 'bad')
+ERROR 23P01 conflicting key value violates exclusion constraint "p1_pkey"
+DETAIL Key (id, valid_at)=([1,2), [2000-01-15,2000-02-01)) conflicts with existing key (id, valid_at)=([1,2), [2000-01-01,2000-02-01)).
+> SELECT conrelid::regclass, conname, conperiod FROM pg_constraint WHERE conrelid IN ('p'::regclass, 'p1'::regclass, 'p2'::regclass) AND contype = 'p' ORDER BY 1
+fields conrelid:2205:4:-1,conname@pg_constraint.2:19:64:-1,conperiod@pg_constraint.20:16:1:-1
+row p,p_pk,t
+row p1,p1_pkey,t
+row p2,p2_pkey,t
+SELECT 3
+> CREATE TABLE q (id int4range, valid_at daterange, CONSTRAINT q_pk PRIMARY KEY (id, valid_at WITHOUT OVERLAPS)) PARTITION BY RANGE (valid_at)
+ERROR 0A000 cannot match partition key to index on column "valid_at" using non-equal operator "&&"
+> CREATE TABLE l (LIKE t INCLUDING ALL)
+CREATE TABLE
+> SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'l'::regclass AND contype = 'p'
+fields pg_get_constraintdef:25:-1:-1
+row PRIMARY KEY (id, valid_at WITHOUT OVERLAPS)
+SELECT 1
+> REINDEX TABLE t
+REINDEX

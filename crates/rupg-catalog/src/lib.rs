@@ -862,8 +862,20 @@ pub struct Constraint {
     pub expr: Option<String>,
     /// The facts of a foreign key.
     pub foreign: Option<ForeignKey>,
-    /// `conexclop`: the operator of each key column of an exclusion constraint, else empty.
+    /// `conexclop`: the operator of each key column of an exclusion constraint or of a constraint `WITHOUT OVERLAPS`, else empty.
     pub exclusion_ops: Vec<u32>,
+}
+
+impl Constraint {
+    /// `indisexclusion` of the index of the constraint: an exclusion constraint, or a primary key or a unique constraint `WITHOUT OVERLAPS`, which has an operator for each key column.
+    pub fn is_exclusion(&self) -> bool {
+        !self.exclusion_ops.is_empty()
+    }
+
+    /// `conperiod`: a primary key or a unique constraint `WITHOUT OVERLAPS`.
+    pub fn period(&self) -> bool {
+        matches!(self.kind, ConKind::Primary | ConKind::Unique) && self.is_exclusion()
+    }
 }
 
 /// A trigger, one row of `pg_trigger`: a trigger of `CREATE TRIGGER`, or an internal trigger of a foreign key.

@@ -207,7 +207,7 @@ impl Definer<'_, '_> {
             }
         };
         let method = am.oid;
-        let unsupported = if stmt.unique && !am.can_unique {
+        let unsupported = if stmt.unique && !stmt.iswithoutoverlaps && !am.can_unique {
             Some("unique indexes")
         } else if !including.is_empty() && !am.can_include {
             Some("included columns")
@@ -222,16 +222,22 @@ impl Definer<'_, '_> {
                 format!("access method \"{}\" does not support {what}", am.name),
             ));
         }
-        let exclusion = !stmt.excludeOpNames.is_empty();
+        if stmt.iswithoutoverlaps && am.name != "gist" {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                format!(
+                    "access method \"{}\" does not support WITHOUT OVERLAPS constraints",
+                    am.name
+                ),
+            ));
+        }
+        let exclusion = !stmt.excludeOpNames.is_empty() || stmt.iswithoutoverlaps;
         // `amgettuple`: `gin` and `brin` cannot give the rows that conflict.
         if exclusion && matches!(am.name, "gin" | "brin") {
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
                 format!("access method \"{}\" does not support exclusion constraints", am.name),
             ));
-        }
-        if exclusion && kind == b'p' {
-            return Err(not_yet("an exclusion constraint on a partitioned table", None));
         }
         let options = self.create_index_options(method, &stmt.options)?;
         if stmt.tableSpace.is_some() {
@@ -257,11 +263,24 @@ impl Definer<'_, '_> {
         for ((name, column), element) in stmt.excludeOpNames.iter().zip(&columns).zip(&all) {
             exclusion_ops.push(self.exclusion_operator(name.as_ref(), column, &element.elem)?);
         }
+        if stmt.iswithoutoverlaps {
+            for (i, column) in columns[..key_count].iter().enumerate() {
+                let overlap = i + 1 == key_count;
+                exclusion_ops.push(self.without_overlaps_operator(column, overlap)?);
+            }
+        }
         if stmt.primary {
             self.check_primary_key(table, &rel_name, &columns[..key_count], alter)?;
         }
-        if kind == b'p' && stmt.unique {
-            self.check_partition_key(table, &columns[..key_count], stmt.primary)?;
+        if kind == b'p' && (stmt.unique || exclusion) {
+            let what = if stmt.primary {
+                "PRIMARY KEY"
+            } else if stmt.unique {
+                "UNIQUE"
+            } else {
+                "EXCLUDE"
+            };
+            self.check_partition_key(table, &columns[..key_count], what, &exclusion_ops)?;
         }
         let system_var = |e: &Expr| {
             e.find(0, &mut |e, _| match &e.kind {
@@ -289,7 +308,7 @@ impl Definer<'_, '_> {
         let constraint = match (stmt.isconstraint, stmt.primary) {
             (false, _) => None,
             (true, true) => Some(ConKind::Primary),
-            (true, false) if exclusion => Some(ConKind::Exclusion),
+            (true, false) if !stmt.excludeOpNames.is_empty() => Some(ConKind::Exclusion),
             (true, false) => Some(ConKind::Unique),
         };
         let mut refs =
@@ -410,6 +429,47 @@ impl Definer<'_, '_> {
             .at_opt(at));
         }
         Ok(op.oid)
+    }
+
+    /// `GetOperatorFromCompareType` for a key column of a constraint `WITHOUT OVERLAPS`: the operator of `COMPARE_OVERLAP` for the last key column, else the operator of `COMPARE_EQ`. `gist` gives them as the strategies `RTOverlapStrategyNumber` and `RTEqualStrategyNumber`.
+    fn without_overlaps_operator(&self, column: &NewIndexColumn, overlap: bool) -> Result<u32> {
+        let (strategy, what) = if overlap { (3, "an overlaps") } else { (18, "an equality") };
+        let (family, intype) = match self.catalog.opclass(column.class) {
+            Some(class) => (class.family, class.intype),
+            None => rupg_pgcatalog::builtin::opclasses()
+                .iter()
+                .find(|c| c.oid == column.class)
+                .map_or((0, 0), |c| (c.family, c.intype)),
+        };
+        let found = rupg_pgcatalog::builtin::opfamily_member(family, intype, intype, strategy)
+            .or_else(|| {
+                self.catalog
+                    .amops()
+                    .find(|a| {
+                        a.family == family
+                            && a.left == intype
+                            && a.right == intype
+                            && a.strategy == strategy
+                    })
+                    .map(|a| a.operator)
+            });
+        found.ok_or_else(|| {
+            let family_name = match self.catalog.opfamily(family) {
+                Some(f) => f.name.clone(),
+                None => rupg_pgcatalog::builtin::named_by_oid(
+                    rupg_pgcatalog::builtin::Named::Opfamily,
+                    family,
+                )
+                .map_or_else(String::new, |f| f.name.to_string()),
+            };
+            Error::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!("could not identify {what} operator for type {}", types::name(intype)),
+            )
+            .with_detail(format!(
+                "There is no suitable operator in operator family \"{family_name}\" for access method \"gist\"."
+            ))
+        })
     }
 
     /// The pages of the main fork of a new index of the table, from [`empty_index_pages`]. The index of a partitioned table has no storage.

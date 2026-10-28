@@ -846,7 +846,7 @@ impl Analyzer<'_> {
                 ));
             };
             // `infer_arbiter_indexes`: an exclusion constraint is an arbiter only of `DO NOTHING`.
-            if constraint.kind == ConKind::Exclusion {
+            if constraint.is_exclusion() {
                 let action = match clause.action {
                     OnConflictAction::ONCONFLICT_NOTHING => None,
                     OnConflictAction::ONCONFLICT_UPDATE => Some("UPDATE"),
@@ -1318,7 +1318,7 @@ impl Analyzer<'_> {
         Ok(list)
     }
 
-    /// The unique indexes of a table in the order of their OIDs. The index of a partitioned table has no storage: the indexes of the partitions check the rows, and it is an arbiter of `ON CONFLICT`. An index that is not ready, from a failed `CREATE INDEX CONCURRENTLY`, checks no row.
+    /// The unique indexes of a table in the order of their OIDs. The index of a partitioned table has no storage: the indexes of the partitions check the rows, and it is an arbiter of `ON CONFLICT`. An index that is not ready, from a failed `CREATE INDEX CONCURRENTLY`, checks no row. The index of a constraint `WITHOUT OVERLAPS` is an exclusion constraint, which [`crate::exclusions`] gives.
     pub(crate) fn unique_keys(&self, table: u32, columns: &[Column]) -> Result<Vec<Unique>> {
         let Some(catalog) = self.env.catalog() else {
             return Ok(Vec::new());
@@ -1331,6 +1331,9 @@ impl Analyzer<'_> {
                     .as_ref()
                     .filter(|info| info.table == table && info.unique && info.ready)
                     .map(|info| (rel, info))
+            })
+            .filter(|(rel, _)| {
+                !catalog.constraints_of(table).any(|c| c.index == rel.oid && c.is_exclusion())
             })
             .collect();
         indexes.sort_by_key(|(rel, _)| rel.oid);

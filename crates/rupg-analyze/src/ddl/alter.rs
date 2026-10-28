@@ -834,7 +834,12 @@ impl Definer<'_, '_> {
                     existing.push(con);
                 }
                 ConstrType::CONSTR_PRIMARY | ConstrType::CONSTR_UNIQUE => {
-                    indexes.push(alter_index_constraint(&con, &rv)?);
+                    let catalog = &*self.catalog;
+                    let type_of = |key: &str| {
+                        let rel = catalog.relation(target.oid)?;
+                        rel.columns.iter().find(|c| !c.dropped && c.name == key).map(|c| c.ty)
+                    };
+                    indexes.push(alter_index_constraint(&con, &rv, &type_of)?);
                 }
                 ConstrType::CONSTR_EXCLUSION => {
                     indexes.push(super::table::exclusion_index(&con, &rv)?);
@@ -1501,12 +1506,13 @@ fn can_set_role(member: u32, role: u32) -> bool {
     reached.contains(&role)
 }
 
-/// `transformIndexConstraint` for `ALTER TABLE`: the index of a primary key or a unique constraint on the columns of the table. `DefineIndex` finds the columns, so a column that does not exist gives its error.
-fn alter_index_constraint(con: &Constraint, rv: &RangeVar) -> Result<IndexStmt> {
+/// `transformIndexConstraint` for `ALTER TABLE`: the index of a primary key or a unique constraint on the columns of the table. `DefineIndex` finds the columns, so a column that does not exist gives its error. `type_of` gives the type of a column of the table, for the column of `WITHOUT OVERLAPS`.
+fn alter_index_constraint(
+    con: &Constraint,
+    rv: &RangeVar,
+    type_of: &dyn Fn(&str) -> Option<u32>,
+) -> Result<IndexStmt> {
     let at = place(con.location);
-    if con.without_overlaps {
-        return Err(not_yet("WITHOUT OVERLAPS", at));
-    }
     let primary = con.contype == ConstrType::CONSTR_PRIMARY;
     let keys = names(&con.keys);
     for (i, key) in keys.iter().enumerate() {
@@ -1518,8 +1524,16 @@ fn alter_index_constraint(con: &Constraint, rv: &RangeVar) -> Result<IndexStmt> 
             )
             .at_opt(at));
         }
+        if con.without_overlaps
+            && i + 1 == keys.len()
+            && let Some(ty) = type_of(key)
+        {
+            super::table::check_without_overlaps(key, ty, at)?;
+        }
     }
-    Ok(constraint_index(con, rv, &keys, &names(&con.including)))
+    let mut index = constraint_index(con, rv, &keys, &names(&con.including));
+    super::table::without_overlaps(con, &mut index)?;
+    Ok(index)
 }
 
 /// `verifyNotNullPKCompatible`: a not-null constraint, given as its name, `connoinherit` and `convalidated`, that is `NO INHERIT` or `NOT VALID` cannot be in a primary key.

@@ -1,6 +1,6 @@
 //! The exclusion constraints of a table, which `check_exclusion_or_unique_constraint` checks for each new version of a row.
 
-use rupg_catalog::{Catalog, ConKind};
+use rupg_catalog::Catalog;
 use rupg_common::{Error, Result};
 use rupg_pgcatalog::builtin;
 
@@ -22,6 +22,8 @@ pub struct Exclusion {
     pub operators: Vec<u32>,
     /// `oprcode` of each operator.
     pub functions: Vec<u32>,
+    /// The column of `WITHOUT OVERLAPS`, the last key column, as its number and its name, for a primary key or a unique constraint `WITHOUT OVERLAPS`.
+    pub period: Option<(i16, String)>,
     /// The constraint of an index that is not `indimmediate`, or `None` for a constraint that checks each version at once.
     pub deferrable: Option<Deferrable>,
 }
@@ -32,10 +34,8 @@ pub struct Exclusion {
 ///
 /// An index key that is not a column or an expression.
 pub fn exclusions(catalog: &Catalog, table: u32) -> Result<Vec<Exclusion>> {
-    let mut constraints: Vec<_> = catalog
-        .constraints_of(table)
-        .filter(|c| c.kind == ConKind::Exclusion && c.relation == table)
-        .collect();
+    let mut constraints: Vec<_> =
+        catalog.constraints_of(table).filter(|c| c.is_exclusion() && c.relation == table).collect();
     if constraints.is_empty() {
         return Ok(Vec::new());
     }
@@ -88,6 +88,11 @@ pub fn exclusions(catalog: &Catalog, table: u32) -> Result<Vec<Exclusion>> {
                 None => catalog.operator(op).map_or(0, |o| o.code),
             })
             .collect();
+        let period =
+            con.period().then(|| info.keys.get(count.wrapping_sub(1))).flatten().map(|&attnum| {
+                let column = usize::try_from(attnum - 1).ok().and_then(|c| columns.get(c));
+                (attnum, column.map(|c| c.name.clone()).unwrap_or_default())
+            });
         let deferrable =
             (!info.immediate).then_some(Deferrable { constraint: con.oid, deferred: con.deferred });
         list.push(Exclusion {
@@ -97,6 +102,7 @@ pub fn exclusions(catalog: &Catalog, table: u32) -> Result<Vec<Exclusion>> {
             keys,
             operators: con.exclusion_ops.clone(),
             functions,
+            period,
             deferrable,
         });
     }

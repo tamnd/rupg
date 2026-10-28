@@ -771,7 +771,7 @@ impl Connection {
                     && self
                         .catalog()
                         .constraints_of(info.table)
-                        .any(|c| c.kind == rupg_catalog::ConKind::Exclusion)
+                        .any(rupg_catalog::Constraint::is_exclusion)
         });
         let mut fire = upsert::Upsert::default();
         let rows = if upsert.is_some() {
@@ -6077,6 +6077,12 @@ mod tests {
     #[test]
     fn exclusion() {
         big_stack(|| script(include_str!("connection/exclusion.test")));
+    }
+
+    /// Primary keys and unique constraints `WITHOUT OVERLAPS`: the errors of the definition, `conperiod`, `conexclop` and `indisexclusion`, `pg_get_constraintdef` and `pg_get_indexdef`, the conflict of a new row and of the rows of `ALTER TABLE ... ADD`, empty ranges and multiranges, `ON CONFLICT`, partitioned tables and `LIKE`. `connection/without_overlaps.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn without_overlaps() {
+        big_stack(|| script(include_str!("connection/without_overlaps.test")));
     }
 
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.

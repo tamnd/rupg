@@ -2,7 +2,7 @@
 //!
 //! The session runs the parts of `ExecReindex` and `ReindexMultipleTables` that read the state of the session before [`define`](super::define) runs the statement: [`reindex_options`], `PreventInTransactionBlock` of `CONCURRENTLY`, `SCHEMA`, `SYSTEM` and `DATABASE`, the tablespace of `TABLESPACE`, and the checks of the database of `SYSTEM` and `DATABASE`.
 
-use rupg_catalog::{ConKind, FIRST_UNPINNED_OID, RelKind};
+use rupg_catalog::{FIRST_UNPINNED_OID, RelKind};
 use rupg_common::{Error, Level, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{Node, RangeVar, ReindexObjectType, ReindexStmt};
@@ -353,7 +353,7 @@ impl Definer<'_, '_> {
     /// `indisexclusion`: the index is the index of an exclusion constraint.
     fn is_exclusion(&self, index: u32) -> bool {
         let table = self.index_table(index).unwrap_or_default();
-        self.catalog.constraints_of(table).any(|c| c.index == index && c.kind == ConKind::Exclusion)
+        self.catalog.constraints_of(table).any(|c| c.index == index && c.is_exclusion())
     }
 
     /// `ReindexRelationConcurrently` on the indexes: each one gets a new file. The messages of `VERBOSE` name each index with its schema. `alone` is true when the statement runs on the index itself, not on its table, and then the message of the index has the time. The caller of a table gives the time in the message of the table.
