@@ -84,7 +84,7 @@ impl Definer<'_, '_> {
                     }
                     saw_default = true;
                     if let Some(expr) =
-                        self.domain_default(con.raw_expr.as_ref(), (base, typmod), name)?
+                        self.domain_default(con.raw_expr.as_ref(), (base, typmod), name, true)?
                     {
                         default_refs = references(self.catalog, 0, &[&expr])?;
                         self.check_usage_on_types(&default_refs)?;
@@ -200,22 +200,21 @@ impl Definer<'_, '_> {
         Ok(domain)
     }
 
-    /// `cookDefault` of the default of a domain: the expression cast to the base type, or `None` for a null default.
+    /// `cookDefault` of the default of a domain: the expression cast to the base type, or `None` for a null default. `DefineDomain` takes the parse state of the statement, but `AlterDomainDefault` makes one with no query text, so with `placed` false the errors have no place.
     pub(super) fn domain_default(
         &mut self,
         raw: Option<&Node>,
         (base, typmod): (u32, i32),
         domain: &str,
+        placed: bool,
     ) -> Result<Option<Expr>> {
         let Some(raw) = raw else { return Ok(None) };
-        // `DefineDomain` makes the parse state with no query text, so the errors have no place.
-        let expr = self
-            .an
-            .with_kind(Kind::ColumnDefault, |an| an.transform(Some(raw)))
-            .map_err(|e| e.with_position(None))?;
+        let place = |e: Error| if placed { e } else { e.with_position(None) };
+        let expr =
+            self.an.with_kind(Kind::ColumnDefault, |an| an.transform(Some(raw))).map_err(place)?;
         let from = expr.ty;
         let coerced = self.an.coerce_to_target(expr, base, typmod, Context::Assignment, None);
-        let Some(expr) = coerced.map_err(|e| e.with_position(None))? else {
+        let Some(expr) = coerced.map_err(place)? else {
             return Err(Error::new(
                 SqlState::DATATYPE_MISMATCH,
                 format!(
