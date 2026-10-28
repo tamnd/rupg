@@ -488,7 +488,7 @@ impl Definer<'_, '_> {
         })
     }
 
-    /// `index_check_primary_key`: `ALTER TABLE` cannot add a second primary key, and the columns of a primary key must be not null.
+    /// `index_check_primary_key`: `ALTER TABLE` and `CREATE TABLE ... PARTITION OF` cannot add a second primary key, and the columns of a primary key must be not null.
     pub(super) fn check_primary_key(
         &self,
         table: u32,
@@ -497,7 +497,10 @@ impl Definer<'_, '_> {
         alter: bool,
     ) -> Result<()> {
         let invalid = |message: String| Error::new(SqlState::INVALID_TABLE_DEFINITION, message);
-        if alter && self.catalog.constraints_of(table).any(|c| c.kind == ConKind::Primary) {
+        let partition = self.catalog.relation(table).is_some_and(|r| r.partition_of.is_some());
+        if (alter || partition)
+            && self.catalog.constraints_of(table).any(|c| c.kind == ConKind::Primary)
+        {
             return Err(invalid(format!(
                 "multiple primary keys for table \"{name}\" are not allowed"
             )));

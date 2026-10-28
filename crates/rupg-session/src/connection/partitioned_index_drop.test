@@ -1,0 +1,39 @@
+!details
+> CREATE TABLE dp (a int, i int) PARTITION BY HASH (i)
+CREATE TABLE
+> CREATE INDEX dp_a ON dp (a)
+CREATE INDEX
+> DROP INDEX CONCURRENTLY dp_a
+ERROR 0A000 cannot drop partitioned index "dp_a" concurrently
+> CREATE TEMP TABLE dp_temp (a int) PARTITION BY RANGE (a)
+CREATE TABLE
+> CREATE INDEX dp_temp_a ON dp_temp (a)
+CREATE INDEX
+> DROP INDEX CONCURRENTLY dp_temp_a
+DROP INDEX
+> SELECT count(*) FROM pg_class WHERE relname = 'dp_temp_a'
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE TABLE dp0 PARTITION OF dp (i) FOR VALUES WITH (modulus 2, remainder 0)
+CREATE TABLE
+> CREATE TABLE dp1 PARTITION OF dp (i) FOR VALUES WITH (modulus 2, remainder 1)
+CREATE TABLE
+> ALTER TABLE dp0 ADD PRIMARY KEY (i)
+ALTER TABLE
+> ALTER TABLE dp ADD PRIMARY KEY (i)
+ALTER TABLE
+> SELECT conname, conislocal, coninhcount, connoinherit FROM pg_constraint WHERE conrelid::regclass::text LIKE 'dp%' AND contype = 'p' ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1
+row dp0_pkey,f,1,t
+row dp1_pkey,f,1,f
+row dp_pkey,t,0,t
+SELECT 3
+> CREATE TABLE dq (a int PRIMARY KEY, b int) PARTITION BY RANGE (a)
+CREATE TABLE
+> CREATE TABLE dq_fail PARTITION OF dq (b PRIMARY KEY) FOR VALUES FROM (0) TO (100)
+ERROR 42P16 multiple primary keys for table "dq_fail" are not allowed
+> SELECT count(*) FROM pg_class WHERE relname = 'dq_fail'
+fields count:20:8:-1
+row 0
+SELECT 1

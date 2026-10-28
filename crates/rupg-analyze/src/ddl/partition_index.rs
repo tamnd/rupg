@@ -208,6 +208,8 @@ impl Definer<'_, '_> {
         self.catalog.set_index_parent(index, parent)?;
         if let (Some(child_constraint), Some(constraint)) = (child_constraint, constraint) {
             self.catalog.set_constraint_parent(child_constraint, constraint)?;
+            // `index_constraint_create` with a parent constraint: the new constraint is not `connoinherit`.
+            self.catalog.set_constraint_no_inherit(child_constraint, false)?;
         }
         if self.catalog.relation(child).is_some_and(|r| r.kind == RelKind::Partitioned) {
             return self.index_partitions(child, index, child_constraint, alter);
