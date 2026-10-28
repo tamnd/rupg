@@ -255,7 +255,7 @@ impl Definer<'_, '_> {
             let column =
                 self.index_column(table, element, i >= key_count, method, stmt.isconstraint)?;
             if column.key == 0 {
-                exprs.extend(element.expr.clone());
+                exprs.extend(element.expr.as_ref().map(|e| strip_collate(e).clone()));
             }
             columns.push(column);
         }
@@ -577,7 +577,7 @@ impl Definer<'_, '_> {
             }
         };
         if let Some(expr) = &element.expr {
-            match &expr.kind {
+            match &strip_collate(expr).kind {
                 ExprKind::Var(var) if var.attnum != 0 => key = var.attnum,
                 _ if is_mutable(self.catalog, expr) => {
                     return Err(Error::new(
@@ -766,4 +766,12 @@ fn elems(list: &[Option<Node>]) -> Vec<&IndexElem> {
             _ => None,
         })
         .collect()
+}
+
+/// The index expression without its top `COLLATE` clauses, as `ComputeIndexAttrs` strips them, so that `x COLLATE y` and `(x COLLATE y)` are alike and `(column COLLATE y)` is a simple column.
+fn strip_collate(mut expr: &Expr) -> &Expr {
+    while let ExprKind::Collate(arg, _) = &expr.kind {
+        expr = arg;
+    }
+    expr
 }
