@@ -1,0 +1,110 @@
+!details
+> create table concur_exprs_tab (c1 int, c2 boolean)
+CREATE TABLE
+> insert into concur_exprs_tab (c1, c2) values (1369652450, false), (414515746, true), (897778963, false)
+INSERT 0 3
+> create unique index concur_exprs_index_expr on concur_exprs_tab ((c1::text collate "C"))
+CREATE INDEX
+> create unique index concur_exprs_index_pred on concur_exprs_tab (c1) where (c1::text > 500000000::text collate "C")
+CREATE INDEX
+> create unique index concur_exprs_index_pred_2 on concur_exprs_tab ((1 / c1)) where ('-H' >= (c2::text) collate "C")
+CREATE INDEX
+> alter table concur_exprs_tab alter c2 type text
+ALTER TABLE
+> select pg_get_indexdef('concur_exprs_index_expr'::regclass)
+fields pg_get_indexdef:25:-1:-1
+row CREATE UNIQUE INDEX concur_exprs_index_expr ON public.concur_exprs_tab USING btree (((c1)::text) COLLATE "C")
+SELECT 1
+> select pg_get_indexdef('concur_exprs_index_pred'::regclass)
+fields pg_get_indexdef:25:-1:-1
+row CREATE UNIQUE INDEX concur_exprs_index_pred ON public.concur_exprs_tab USING btree (c1) WHERE ((c1)::text > ((500000000)::text COLLATE "C"))
+SELECT 1
+> select pg_get_indexdef('concur_exprs_index_pred_2'::regclass)
+fields pg_get_indexdef:25:-1:-1
+row CREATE UNIQUE INDEX concur_exprs_index_pred_2 ON public.concur_exprs_tab USING btree (((1 / c1))) WHERE ('-H'::text >= (c2 COLLATE "C"))
+SELECT 1
+> create table ae (a int, b text, c varchar(10))
+CREATE TABLE
+> insert into ae select g, 'v' || g, 'w' || g from generate_series(1, 50) g
+INSERT 0 50
+> create index ae_lower on ae (lower(b))
+CREATE INDEX
+> create index ae_sum on ae ((a + 1)) where a > 10
+CREATE INDEX
+> create index ae_c on ae ((c || 'x'))
+CREATE INDEX
+> create index ae_cc on ae ((c::text) collate "C")
+CREATE INDEX
+> alter table ae alter a type bigint
+ALTER TABLE
+> select pg_get_indexdef('ae_sum'::regclass)
+fields pg_get_indexdef:25:-1:-1
+row CREATE INDEX ae_sum ON public.ae USING btree (((a + 1))) WHERE (a > 10)
+SELECT 1
+> select attname, atttypid::regtype, attcollation from pg_attribute where attrelid = 'ae_sum'::regclass and attnum > 0
+fields attname@pg_attribute.2:19:64:-1,atttypid:2206:4:-1,attcollation@pg_attribute.20:26:4:-1
+row expr,bigint,0
+SELECT 1
+> alter table ae alter c type text
+ALTER TABLE
+> select pg_get_indexdef('ae_c'::regclass)
+fields pg_get_indexdef:25:-1:-1
+row CREATE INDEX ae_c ON public.ae USING btree (((c || 'x'::text)))
+SELECT 1
+> select pg_get_indexdef('ae_cc'::regclass)
+fields pg_get_indexdef:25:-1:-1
+row CREATE INDEX ae_cc ON public.ae USING btree (c COLLATE "C")
+SELECT 1
+> select i.relname, a.attname, a.atttypid::regtype, a.attcollation from pg_class i join pg_attribute a on a.attrelid = i.oid where i.relname like 'ae\_%' and a.attnum > 0 order by 1, 2
+fields relname@pg_class.2:19:64:-1,attname@pg_attribute.2:19:64:-1,atttypid:2206:4:-1,attcollation@pg_attribute.20:26:4:-1
+row ae_c,expr,text,100
+row ae_cc,c,text,950
+row ae_lower,lower,text,100
+row ae_sum,expr,bigint,0
+SELECT 4
+> alter table ae alter b type varchar(20)
+ALTER TABLE
+> select pg_get_indexdef('ae_lower'::regclass)
+fields pg_get_indexdef:25:-1:-1
+row CREATE INDEX ae_lower ON public.ae USING btree (lower((b)::text))
+SELECT 1
+> set enable_seqscan = off
+SET
+> select a from ae where lower(b) = 'v7'
+fields a@ae.1:20:8:-1
+row 7
+SELECT 1
+> select a from ae where a + 1 = 20 and a > 10
+fields a@ae.1:20:8:-1
+row 19
+SELECT 1
+> select a from ae where c || 'x' = 'w9x'
+fields a@ae.1:20:8:-1
+row 9
+SELECT 1
+> reset enable_seqscan
+RESET
+> select pg_describe_object(classid, objid, objsubid) as obj, pg_describe_object(refclassid, refobjid, refobjsubid) as ref, deptype from pg_depend where objid in ('ae_lower'::regclass, 'ae_sum'::regclass, 'ae_c'::regclass) order by 1, 2
+fields obj:25:-1:-1,ref:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row index ae_c,column c of table ae,a
+row index ae_c,table ae,a
+row index ae_lower,column b of table ae,a
+row index ae_lower,table ae,a
+row index ae_sum,column a of table ae,a
+row index ae_sum,column a of table ae,a
+row index ae_sum,table ae,a
+SELECT 7
+> select pg_get_indexdef('ae_sum'::regclass)
+fields pg_get_indexdef:25:-1:-1
+row CREATE INDEX ae_sum ON public.ae USING btree (((a + 1))) WHERE (a > 10)
+SELECT 1
+> create table ae2 (a int, b int)
+CREATE TABLE
+> create index ae2_i on ae2 ((a * b)) where b > 0
+CREATE INDEX
+> alter table ae2 alter b type numeric
+ALTER TABLE
+> select pg_get_indexdef('ae2_i'::regclass)
+fields pg_get_indexdef:25:-1:-1
+row CREATE INDEX ae2_i ON public.ae2 USING btree ((((a)::numeric * b))) WHERE (b > (0)::numeric)
+SELECT 1

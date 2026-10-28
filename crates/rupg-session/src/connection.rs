@@ -6259,6 +6259,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/collate_conflict.test")));
     }
 
+    /// `ALTER COLUMN ... TYPE` reads the expressions and the predicate of an index on the column again, as `ATPostAlterTypeParse` reads the definition of the index again. An expression column gets the new type and collation of its expression and keeps a collation that the definition gave, and the index works after the rewrite of the table. `connection/alter_type_index_expr.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn alter_type_index_expr() {
+        big_stack(|| script(include_str!("connection/alter_type_index_expr.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

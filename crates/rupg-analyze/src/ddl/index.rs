@@ -1,7 +1,7 @@
 //! `CREATE INDEX`, as `transformIndexStmt`, `DefineIndex` and `ComputeIndexAttrs` run it.
 
 use rupg_catalog::size::{empty_index_pages, new_table_tuples, typavgwidth};
-use rupg_catalog::{ConKind, NewIndex, NewIndexColumn, RelKind};
+use rupg_catalog::{Catalog, Column, ConKind, NewIndex, NewIndexColumn, ObjRef, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{IndexElem, IndexStmt, Node, SortByDir, SortByNulls};
 use rupg_types::oid;
@@ -319,11 +319,7 @@ impl Definer<'_, '_> {
             (true, false) if !stmt.excludeOpNames.is_empty() => Some(ConKind::Exclusion),
             (true, false) => Some(ConKind::Unique),
         };
-        let mut refs =
-            references(self.catalog, table, &exprs.iter().chain(&predicate).collect::<Vec<_>>())?;
-        if exprs.is_empty() && predicate.is_none() {
-            refs.clear();
-        }
+        let refs = index_references(self.catalog, table, &exprs, predicate.as_ref())?;
         // `DefineIndex` checks `USAGE` with the search path that `RestrictSearchPath` sets, so the error names the type with its schema.
         let restricted = [crate::PG_CATALOG_NAMESPACE]
             .into_iter()
@@ -688,29 +684,8 @@ impl Definer<'_, '_> {
         if let Some(Node::CollateClause(clause)) = raw {
             return self.an.collation_oid(&clause.collname, place(clause.location));
         }
-        let rel = self.catalog.relation(table);
-        let mut found: Option<u32> = None;
-        let mut conflict = false;
-        expr.find(0, &mut |e, _| {
-            if let ExprKind::Var(var) = &e.kind
-                && let Some(c) = rel.and_then(|r| r.column(var.attnum))
-                && c.collation != 0
-            {
-                match found {
-                    None => found = Some(c.collation),
-                    Some(DEFAULT_COLLATION) => found = Some(c.collation),
-                    Some(f) if f != c.collation && c.collation != DEFAULT_COLLATION => {
-                        conflict = true;
-                    }
-                    Some(_) => {}
-                }
-            }
-            None::<()>
-        });
-        if conflict {
-            return Ok(0);
-        }
-        Ok(found.unwrap_or(DEFAULT_COLLATION))
+        let columns = self.catalog.relation(table).map_or(&[][..], |r| &r.columns[..]);
+        Ok(columns_collation(columns, expr))
     }
 
     /// `ResolveOpClass`.
@@ -769,9 +744,56 @@ fn elems(list: &[Option<Node>]) -> Vec<&IndexElem> {
 }
 
 /// The index expression without its top `COLLATE` clauses, as `ComputeIndexAttrs` strips them, so that `x COLLATE y` and `(x COLLATE y)` are alike and `(column COLLATE y)` is a simple column.
-fn strip_collate(mut expr: &Expr) -> &Expr {
+pub(super) fn strip_collate(mut expr: &Expr) -> &Expr {
     while let ExprKind::Collate(arg, _) = &expr.kind {
         expr = arg;
     }
     expr
+}
+
+/// The collation of an index expression without a `COLLATE` at the top, with `columns` as the columns of the table: the collation of the columns in the expression wins over the default collation, two different collations of columns give no collation, and an expression without columns has the default collation.
+pub(super) fn columns_collation(columns: &[Column], expr: &Expr) -> u32 {
+    if !types::collatable(expr.ty) {
+        return 0;
+    }
+    let mut found: Option<u32> = None;
+    let mut conflict = false;
+    expr.find(0, &mut |e, _| {
+        if let ExprKind::Var(var) = &e.kind
+            && let Some(c) =
+                usize::try_from(var.attnum).ok().and_then(|n| columns.get(n.checked_sub(1)?))
+            && c.collation != 0
+        {
+            match found {
+                None => found = Some(c.collation),
+                Some(DEFAULT_COLLATION) => found = Some(c.collation),
+                Some(f) if f != c.collation && c.collation != DEFAULT_COLLATION => {
+                    conflict = true;
+                }
+                Some(_) => {}
+            }
+        }
+        None::<()>
+    });
+    if conflict {
+        return 0;
+    }
+    found.unwrap_or(DEFAULT_COLLATION)
+}
+
+/// The objects that the expressions and the predicate of an index refer to. `index_create` records the dependencies of the expressions and then those of the predicate, so an object that both refer to is there two times.
+pub(super) fn index_references(
+    catalog: &Catalog,
+    table: u32,
+    exprs: &[Expr],
+    predicate: Option<&Expr>,
+) -> Result<Vec<ObjRef>> {
+    let mut refs = Vec::new();
+    if !exprs.is_empty() {
+        refs = references(catalog, table, &exprs.iter().collect::<Vec<_>>())?;
+    }
+    if let Some(predicate) = predicate {
+        refs.extend(references(catalog, table, &[predicate])?);
+    }
+    Ok(refs)
 }

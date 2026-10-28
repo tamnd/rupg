@@ -2294,6 +2294,68 @@ impl Catalog {
         found.ok_or_else(|| no_object(&format!("column {column} of index"), index))
     }
 
+    /// The key columns, the expressions and the predicate of an index after `ALTER COLUMN ... TYPE`, as the index that `ATPostAlterTypeParse` makes again from its definition has them. The dependencies of the index are recorded again as `index_create` records them, with `refs` as the objects of the expressions and the predicate. The dependencies on a constraint and on a parent index stay.
+    ///
+    /// # Errors
+    ///
+    /// An internal error for a relation that is not an index of the catalog.
+    pub fn set_index_exprs(
+        &mut self,
+        index: u32,
+        keys: Vec<i16>,
+        exprs: Option<String>,
+        predicate: Option<String>,
+        refs: &[ObjRef],
+    ) -> Result<()> {
+        let rel = self.relation_mut(index)?;
+        let Some(info) = rel.index.as_mut() else {
+            return Err(no_object("index", index));
+        };
+        info.keys = keys;
+        info.exprs = exprs;
+        info.predicate = predicate;
+        let info = info.clone();
+        let me = ObjRef::new(PG_CLASS, index);
+        let owned = self.depends.iter().any(|d| d.object == me && d.kind == DepKind::Internal);
+        self.depends.retain(|d| {
+            d.object != me
+                || matches!(
+                    d.kind,
+                    DepKind::Internal
+                        | DepKind::Extension
+                        | DepKind::PartitionPri
+                        | DepKind::PartitionSec
+                )
+        });
+        if !owned {
+            let mut simple: Vec<i16> = info.keys.iter().copied().filter(|&k| k != 0).collect();
+            simple.sort_unstable();
+            simple.dedup();
+            if simple.is_empty() {
+                self.depend(me, ObjRef::new(PG_CLASS, info.table), DepKind::Auto);
+            }
+            for key in simple {
+                self.depend(me, ObjRef::column(info.table, key), DepKind::Auto);
+            }
+        }
+        let mut column_refs: Vec<ObjRef> = info
+            .collations
+            .iter()
+            .filter(|&&c| c != 0)
+            .map(|&c| ObjRef::new(PG_COLLATION, c))
+            .chain(info.classes.iter().map(|&c| ObjRef::new(PG_OPCLASS, c)))
+            .collect();
+        column_refs.sort_unstable();
+        column_refs.dedup();
+        for referenced in column_refs {
+            self.depend(me, referenced, DepKind::Normal);
+        }
+        if info.exprs.is_some() || info.predicate.is_some() {
+            self.depend_on_expr(me, refs, info.table, DepKind::Auto);
+        }
+        Ok(())
+    }
+
     /// The equality operators of a foreign key, `conpfeqop`, `conppeqop` and `conffeqop`, after a change of the type of a key column, as the foreign key that `ATPostAlterTypeCleanup` makes again has them.
     ///
     /// # Errors
