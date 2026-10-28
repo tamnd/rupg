@@ -58,6 +58,14 @@ These questions came up while the documents were written. They are closed, and t
 
 **Q20. Math functions on other platforms.** Closed at M3. rupg does not ship correctly rounded functions. It calls the C math library of the platform, as PostgreSQL does, so it gets the same bits as the oracle on the same machine (document 05 section 5.2). glibc is not correctly rounded. In a sample of 20,000 arguments for each function on glibc 2.39, `cbrt` gave a value that is not correctly rounded for 9,812 arguments, `tanh` for 560 and `log10` for 335. So correctly rounded functions would differ from the oracle on Linux. The same sample on macOS gave a different result from glibc for 41 percent of the arguments of `tan` and 48 percent of `cbrt`, so one fixed implementation would differ from the oracle on one platform or the other. The standard library of Rust has no `tgamma`, and on Linux the `compiler_builtins` crate replaces the `cbrt` of glibc with its own code. So `rupg-platform` calls `tgamma` and `cbrt` of the C library, and on glibc it calls `cbrt` by its alias `cbrtf64`. With this, 31 float functions gave the same bits as PostgreSQL 19 for 5,400 arguments each. `erf`, `erfc`, `lgamma`, `asinh`, `acosh` and `atanh` are ports of fdlibm, and they gave the same bits as glibc in that run. On macOS and Windows they can differ from the oracle in the last bit, and a corpus run on those platforms must check them. WebAssembly has no oracle and no C library, so it uses the code of Rust.
 
+**Q12. `max_parallel_workers_per_gather`.** Closed at M3. rupg reports the PostgreSQL default of 2, and `SHOW` and `pg_settings` give the same value as PostgreSQL 19. The setting limits the workers of one query, as document 19 section 19.9.1 says. A run of document 20 that asks for all cores sets the value to the number of workers and prints it as a configuration line, and this is one of the settings that the gate row may have (document 20 section 20.1). The default does not change, because a different effective default would give a value that `SHOW` does not report.
+
+**Q13. Float aggregates in a different order.** Closed at M3. Document 05 section 5.3 adds item 17. When rupg runs the aggregate on one worker and reads no stored sums, it adds the values in the order of the scan, as PostgreSQL does, and the result must have the same bits. At M3 every aggregate runs this way: `sum`, `avg`, `stddev` and `variance` of 100,000 `float8` values and `sum` and `avg` of `float4` gave the same bytes as PostgreSQL 19. When rupg adds segment sums (document 09 section 9.7.2) or runs the aggregate on more than one worker, the last bits can differ. PostgreSQL also gives other last bits for a parallel plan than for a serial plan, and SQL gives no order to the input of an aggregate without `ORDER BY`. So rupg does not forbid parallel float sums, and item 17 accepts a small relative difference only in that case.
+
+**Q21. Hash values that users can see.** Closed at M3. The hash functions of the types are in `rupg-func/src/hash.rs`. They use `hash_bytes` and `hash_bytes_uint32` of PostgreSQL for a little-endian machine, and hash partitioning uses them with `hash_combine64`. On server2, `hashint4`, `hashint8`, `hashtext`, `hashfloat8`, `hash_numeric`, `hashbpchar`, `hash_array`, `hashint4extended` and `hashtextextended` gave the same values as PostgreSQL 19. 1,000 rows went to the same partitions of a table with 4 hash partitions on `int4` and of a table with 3 hash partitions on `text`. The hashes that `rupg-kernels` lifts from rudb are for joins and aggregation inside the engine, and users do not see them. So there are two sets, and a value that users can see always comes from `hash.rs`.
+
+**Q25. `relpages`.** Closed at M3. `relpages` is the number of pages that PostgreSQL would use for the same rows, and `pg_relation_size` is this number times 8,192. rupg computes the pages from the lengths that `heap_compute_data_size` gives and from the fill of a heap page. For 10,000 rows of an `int4` and a `text` of 100 bytes, rupg and PostgreSQL 19 both gave 173 pages after `ANALYZE` and 1,417,216 bytes. With this choice, size arithmetic is correct (`relpages` times the block size is the relation size), and the cost formulas of the planner and of external tools see the same numbers as on PostgreSQL. The bytes that rupg stores in its file are a different number, and document 05 item 5 excludes sizes from the comparison.
+
 ## 24.3 The 10x targets
 
 **Q1. Do the ClickBench rules accept the summaries?** H1 to H6 build structures at load from the data, under the honesty rule of document 02 section 2.4.5. The ClickBench maintainers decide what the untuned category allows. Raised by documents 02 and 20. Closes before the first submission, after M8. Decided by a written answer from the maintainers. Until then, every published rupg row has a second row with `rupg.use_summaries = off`.
@@ -82,11 +90,7 @@ These questions came up while the documents were written. They are closed, and t
 
 **Q11. Precomputed answers on the board.** One system reports 0.000 s for Q29, which is 90 full-table sums, so it probably computed the answer before the query. This changes how the Best column of document 03 must be read. Raised by document 03. Closes at M0. The default is to keep such rows in the table and leave them out of every ratio.
 
-**Q12. `max_parallel_workers_per_gather`.** PostgreSQL reports 2, and an analytic query on 2 of 16 cores is 8 times slower than it can be. The choices are an effective default that differs from the reported value, or a gate run that sets the value and prints it as a configuration line. Raised by document 19. Closes at M3.
-
 ## 24.4 Compatibility
-
-**Q13. Float aggregates in a different order.** A parallel or summary-based float sum can differ from the oracle's serial scan in the last bits. Either document 05 adds an exclusion for the last bits of `float4` and `float8` aggregates, or rupg matches PostgreSQL's serial order, which forbids parallel float sums. Raised by documents 09 and 21. Closes at M3.
 
 **Q14. ctid that does not change.** The ctid of document 10 section 10.11.1 is computed from the row id and stays the same across `UPDATE` and `VACUUM FULL`. A program that detects an update by a changed ctid, or that estimates bloat from ctid blocks, behaves differently. Raised by document 10. Closes at M7, from the count of regression and client tests that depend on it.
 
@@ -100,15 +104,11 @@ These questions came up while the documents were written. They are closed, and t
 
 **Q19. Server encodings.** rupg accepts UTF8 and SQL_ASCII and refuses the others with `0A000`. Raised by document 07. Closes at M7, from the client matrix.
 
-**Q21. Hash values that users can see.** `hashint4`, `hashtext` and hash partitioning must give PostgreSQL's values. The hashes lifted from rudb differ, so `rupg-kernels` keeps two sets. Raised by document 22. Closes at M3.
-
 **Q22. The TAP subset.** Most of the 294 TAP files test PostgreSQL's own programs and data directory. Document 05 must list the files that apply. Raised by document 21. Closes at M7.
 
 **Q23. `cmin`, `cmax` and the SSI expected files.** `cmin` and `cmax` show 0 for rows of other transactions. The isolation specs `predicate-gin`, `predicate-gist` and `predicate-hash` are expected to differ, because rupg's predicate locks are not page locks. The choice of victim in SSI may differ from PostgreSQL's in other specs. Raised by document 11. Closes at M5, when the real list is known.
 
 **Q24. The B-tree key limit.** PostgreSQL refuses keys over 2,704 bytes with `54000`. rupg's 16 KiB pages allow longer keys, but tools and tests may depend on the limit. Raised by document 12. Closes at M6. The default is PostgreSQL's limit.
-
-**Q25. `relpages`.** The choices are bytes divided by 8,192, which makes size arithmetic correct, or a page count chosen so that cost formulas in external tools behave as on PostgreSQL. Raised by document 15. Closes at M3.
 
 **Q26. The `pg_stat_statements` query ID.** PostgreSQL computes the ID by a walk of its query tree. rupg must reproduce the walk on its own tree for every statement, or the IDs differ. Raised by document 15. Closes at M7.
 

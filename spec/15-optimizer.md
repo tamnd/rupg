@@ -47,7 +47,7 @@ Tools read `pg_statistic` through the `pg_stats` view, and `pg_dump` in PostgreS
 
 `CREATE STATISTICS` with `ndistinct`, `dependencies`, `mcv` and expressions works, and `pg_stats_ext` shows the results. The restore functions of PostgreSQL 18 load values into the same tables. The planner uses them as PostgreSQL does, for the selectivity of conjunctions and for the group count of multi-column keys.
 
-**`pg_class.reltuples` and `relpages` are kept current.** PostgreSQL updates them at `VACUUM` and `ANALYZE`. Tools read them as a fast row count. rupg updates `reltuples` from the segment row counts and the hot store count, and `relpages` from the table's bytes divided by 8,192, so that a tool that multiplies `relpages` by the block size gets the real size.
+**`pg_class.reltuples` and `relpages` are kept current.** PostgreSQL updates them at `VACUUM` and `ANALYZE`. Tools read them as a fast row count. rupg updates `reltuples` from the segment row counts and the hot store count. `relpages` is the number of pages that PostgreSQL would use for the same rows, and `pg_relation_size` is `relpages` times 8,192, so size arithmetic is correct and cost formulas see the same numbers as on PostgreSQL (Q25).
 
 ### 15.3.2 rupg's own statistics
 
@@ -234,7 +234,6 @@ In a cluster (document 18), the optimizer adds exchange points to the physical p
 ## 15.14 Open questions
 
 1. Whether the default `rupg.join_dp_limit` of 14 keeps planning time for the largest JOB queries under 10 ms. The limit is a budget with no measurement (section 15.5).
-2. Whether `relpages` should report bytes divided by 8,192, which makes size arithmetic correct, or a page count that makes PostgreSQL's cost formulas in external tools behave as on PostgreSQL (section 15.3.1).
-3. Whether the `pg_stat_statements` query ID can match PostgreSQL's for every statement (section 15.9.3).
-4. Whether the three new `EXPLAIN` node names break a tool that matters, and whether `rupg.explain_names` should default to `postgres` for the wire server and `rupg` for the library (section 15.9.1).
-5. Whether the WCOJ factor of 4 is right (section 15.8).
+2. Whether the `pg_stat_statements` query ID can match PostgreSQL's for every statement (section 15.9.3).
+3. Whether the three new `EXPLAIN` node names break a tool that matters, and whether `rupg.explain_names` should default to `postgres` for the wire server and `rupg` for the library (section 15.9.1).
+4. Whether the WCOJ factor of 4 is right (section 15.8).

@@ -232,7 +232,7 @@ The result type of `sum` in PostgreSQL depends on the input type: `bigint` for `
 
 **Exact numerics are scaled integers.** For a `numeric` column stored as scaled integers (section 9.8), the sum is an i128 at the column scale when it fits, and a `numeric` value when it does not. Each segment records which form it used. A NaN in the segment sets a flag and the sum is NaN, as in PostgreSQL. Positive and negative infinity in the same segment give NaN, as PostgreSQL gives for `numeric` since version 14.
 
-**Float sums are stored in segment order.** A float sum depends on the order of the additions. The segment stores the f64 sum of its values added in row order. The table result adds segment sums, which is a different order from a serial scan. PostgreSQL also gives different last bits for different plans, for example a parallel plan against a serial one, and does not promise an order. rupg returns the sum of segment sums. Whether the compatibility suite accepts this is an open question in document 24.
+**Float sums are stored in segment order.** A float sum depends on the order of the additions. The segment stores the f64 sum of its values added in row order. The table result adds segment sums, which is a different order from a serial scan. PostgreSQL also gives different last bits for different plans, for example a parallel plan against a serial one, and does not promise an order. rupg returns the sum of segment sums. Document 05 section 5.3 item 17 accepts the difference in the last bits (Q13).
 
 **NaN orders above every number.** PostgreSQL orders NaN above all other `real` and `double precision` values. The summary's min and max follow that order. A segment with a NaN has max NaN, and the flag lets a query for `max` answer without a scan.
 
