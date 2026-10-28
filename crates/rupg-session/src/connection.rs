@@ -6557,6 +6557,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/json_stack_depth.test")));
     }
 
+    /// `range_in` and `multirange_in` call `domain_in` for each bound that is not infinite, so a bound that fails a check of the domain of the subtype fails the input, also in an `INSERT` into a key `WITHOUT OVERLAPS`.
+    #[test]
+    fn range_domain_bound() {
+        big_stack(|| script(include_str!("connection/range_domain_bound.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
