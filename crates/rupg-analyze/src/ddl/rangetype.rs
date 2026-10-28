@@ -139,12 +139,19 @@ impl Definer<'_, '_> {
         let (multirange_namespace, multirange_name) = match options.multirange {
             Some(def) => {
                 let parts = qualified_name(def)?;
-                let (schema, multirange) = self.an.split_name(&parts, None)?;
-                let multirange_namespace = match schema {
-                    Some(namespace) => namespace,
-                    None => self.first_schema()?,
+                // `LookupCreationNamespace` checks `CREATE` on the schema, and not `USAGE`.
+                let (multirange_namespace, multirange) = match parts[..] {
+                    [schema, multirange] => (self.lookup_creation_namespace(schema)?, multirange),
+                    _ => {
+                        let (schema, multirange) = self.an.split_name(&parts, None)?;
+                        let namespace = match schema {
+                            Some(namespace) => namespace,
+                            None => self.first_schema()?,
+                        };
+                        self.check_create_in(namespace, None)?;
+                        (namespace, multirange)
+                    }
                 };
-                self.check_create_in(multirange_namespace, None)?;
                 self.check_type_name(multirange_namespace, multirange)?;
                 (multirange_namespace, multirange.to_string())
             }
