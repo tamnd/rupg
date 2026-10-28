@@ -1150,6 +1150,7 @@ fn user_rows_have_the_column_types() {
         unique: true,
         nulls_not_distinct: false,
         constraint: Some(ConKind::Primary),
+        exclusion_ops: Vec::new(),
         deferrable: false,
         deferred: false,
         exprs: None,

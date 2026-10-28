@@ -783,6 +783,8 @@ pub enum ConKind {
     Foreign,
     /// The constraint of a constraint trigger, `t`.
     Trigger,
+    /// An exclusion constraint, `x`.
+    Exclusion,
 }
 
 impl ConKind {
@@ -795,6 +797,7 @@ impl ConKind {
             ConKind::Unique => 'u',
             ConKind::Foreign => 'f',
             ConKind::Trigger => 't',
+            ConKind::Exclusion => 'x',
         }
     }
 }
@@ -859,6 +862,8 @@ pub struct Constraint {
     pub expr: Option<String>,
     /// The facts of a foreign key.
     pub foreign: Option<ForeignKey>,
+    /// `conexclop`: the operator of each key column of an exclusion constraint, else empty.
+    pub exclusion_ops: Vec<u32>,
 }
 
 /// A trigger, one row of `pg_trigger`: a trigger of `CREATE TRIGGER`, or an internal trigger of a foreign key.
@@ -1243,8 +1248,10 @@ pub struct NewIndex {
     pub unique: bool,
     /// True for `NULLS NOT DISTINCT`.
     pub nulls_not_distinct: bool,
-    /// The constraint that the index is for: `Primary`, `Unique` or `None`.
+    /// The constraint that the index is for: `Primary`, `Unique`, `Exclusion` or `None`.
     pub constraint: Option<ConKind>,
+    /// The exclusion operator of each key column of an exclusion constraint, else empty.
+    pub exclusion_ops: Vec<u32>,
     /// True for a deferrable constraint.
     pub deferrable: bool,
     /// True for a constraint that is initially deferred.
@@ -3757,6 +3764,7 @@ impl Catalog {
             parent: 0,
             expr: None,
             foreign: None,
+            exclusion_ops: Vec::new(),
         }
     }
 
@@ -3844,6 +3852,13 @@ impl Catalog {
                     Some(ConKind::Primary) => {
                         self.choose_relation_name(&relname, None, "pkey", namespace, true)
                     }
+                    Some(ConKind::Exclusion) => self.choose_relation_name(
+                        &relname,
+                        Some(&addition),
+                        "excl",
+                        namespace,
+                        true,
+                    ),
                     Some(_) => {
                         self.choose_relation_name(&relname, Some(&addition), "key", namespace, true)
                     }
@@ -3946,7 +3961,11 @@ impl Catalog {
             let key_keys = keys[..new.key_count.min(keys.len())].to_vec();
             let made =
                 self.index_constraint(oid, name, kind, key_keys, (new.deferrable, new.deferred));
-            constraint_oid = Some(made?);
+            let made = made?;
+            if let Some(constraint) = self.constraints.get_mut(&made) {
+                constraint.exclusion_ops = new.exclusion_ops;
+            }
+            constraint_oid = Some(made);
         } else {
             let simple: Vec<i16> = keys.iter().copied().filter(|&k| k != 0).collect();
             if simple.is_empty() {

@@ -237,6 +237,7 @@ impl Definer<'_, '_> {
             unique: info.unique,
             nulls_not_distinct: info.nulls_not_distinct,
             constraint: con.as_ref().map(|c| c.kind),
+            exclusion_ops: con.as_ref().map(|c| c.exclusion_ops.clone()).unwrap_or_default(),
             deferrable: con.as_ref().is_some_and(|c| c.deferrable),
             deferred: con.as_ref().is_some_and(|c| c.deferred),
             exprs: info.exprs.clone(),

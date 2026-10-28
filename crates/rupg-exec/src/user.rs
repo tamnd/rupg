@@ -1018,6 +1018,9 @@ fn constraint<'a>(table: &'a Table, con: &Constraint) -> Row<'a> {
             .set("conppeqop", oid_array(&f.pp_eq))
             .set("conffeqop", oid_array(&f.ff_eq));
     }
+    if con.kind == ConKind::Exclusion {
+        row.set("conexclop", oid_array(&con.exclusion_ops));
+    }
     row
 }
 
@@ -1059,6 +1062,9 @@ fn indexes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
         .relations()
         .filter_map(|rel| {
             let info = rel.index.as_ref()?;
+            let exclusion = catalog
+                .constraints_of(info.table)
+                .any(|c| c.index == rel.oid && c.kind == ConKind::Exclusion);
             let mut row = Row::new(table);
             row.set("indexrelid", oid(rel.oid))
                 .set("indrelid", oid(info.table))
@@ -1067,7 +1073,7 @@ fn indexes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("indisunique", Value::Bool(info.unique))
                 .set("indnullsnotdistinct", Value::Bool(info.nulls_not_distinct))
                 .set("indisprimary", Value::Bool(info.primary))
-                .set("indisexclusion", Value::Bool(false))
+                .set("indisexclusion", Value::Bool(exclusion))
                 .set("indimmediate", Value::Bool(info.immediate))
                 .set("indisclustered", Value::Bool(info.clustered))
                 .set("indisvalid", Value::Bool(info.valid))

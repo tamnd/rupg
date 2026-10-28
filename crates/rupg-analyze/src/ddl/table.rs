@@ -1731,9 +1731,8 @@ fn table_constraint(plan: &mut Plan, con: &Constraint) -> Result<()> {
         return Err(not_on_foreign(&con));
     }
     match con.contype {
-        ConstrType::CONSTR_PRIMARY | ConstrType::CONSTR_UNIQUE => plan.indexes.push(con),
-        ConstrType::CONSTR_EXCLUSION => {
-            return Err(not_yet("an exclusion constraint", place(con.location)));
+        ConstrType::CONSTR_PRIMARY | ConstrType::CONSTR_UNIQUE | ConstrType::CONSTR_EXCLUSION => {
+            plan.indexes.push(con);
         }
         ConstrType::CONSTR_CHECK => plan.checks.push(con),
         ConstrType::CONSTR_NOTNULL => {
@@ -1775,6 +1774,7 @@ fn index_constraints(plan: &mut Plan, rv: &RangeVar) -> Result<Vec<IndexStmt>> {
                 && index.whereClause.equal(&prior.whereClause)
                 && index.accessMethod == prior.accessMethod
                 && index.nulls_not_distinct == prior.nulls_not_distinct
+                && index.excludeOpNames.equal(&prior.excludeOpNames)
                 && index.deferrable == prior.deferrable
                 && index.initdeferred == prior.initdeferred
         });
@@ -1811,6 +1811,9 @@ fn index_constraint(plan: &mut Plan, con: &Constraint, rv: &RangeVar) -> Result<
             "cannot use an existing index in CREATE TABLE",
         )
         .at_opt(at));
+    }
+    if con.contype == ConstrType::CONSTR_EXCLUSION {
+        return exclusion_index(con, rv);
     }
     if con.without_overlaps {
         return Err(not_yet("WITHOUT OVERLAPS", at));
@@ -1866,6 +1869,25 @@ fn index_constraint(plan: &mut Plan, con: &Constraint, rv: &RangeVar) -> Result<
         }
     }
     Ok(constraint_index(con, rv, &params, &including))
+}
+
+/// `transformIndexConstraint` for an exclusion constraint: the grammar gives pairs of an index element and an operator name, which become the elements of the index and `excludeOpNames`. `DefineIndex` finds the columns.
+pub(super) fn exclusion_index(con: &Constraint, rv: &RangeVar) -> Result<IndexStmt> {
+    let mut index = constraint_index(con, rv, &[], &names(&con.including));
+    index.unique = false;
+    for pair in &con.exclusions {
+        let Some(Node::List(pair)) = pair else {
+            return Err(Error::internal("an exclusion that is not a pair"));
+        };
+        let (Some(elem @ Some(Node::IndexElem(_))), Some(Some(Node::List(opname)))) =
+            (pair.first(), pair.get(1))
+        else {
+            return Err(Error::internal("an exclusion that is not an element and an operator"));
+        };
+        index.indexParams.push(elem.clone());
+        index.excludeOpNames.push(Some(Node::List(opname.clone())));
+    }
+    Ok(index)
 }
 
 /// The index statement of a primary key or a unique constraint on the key columns and the included columns.

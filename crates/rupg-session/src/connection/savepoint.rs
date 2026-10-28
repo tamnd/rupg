@@ -29,6 +29,7 @@ pub(super) struct Mark {
     deferred: Vec<Batch>,
     deferred_events: Vec<Event>,
     deferred_unique: Vec<Recheck>,
+    deferred_exclusions: Vec<(u32, u32)>,
     modes: Modes,
     /// The counts of the locks of the transaction level.
     locks: Vec<(Tag, Mode, u32)>,
@@ -86,6 +87,7 @@ impl Connection {
             deferred: self.deferred.borrow().clone(),
             deferred_events: self.deferred_events.borrow().clone(),
             deferred_unique: self.deferred_unique.borrow().clone(),
+            deferred_exclusions: self.deferred_exclusions.borrow().clone(),
             modes: self.modes.borrow().clone(),
             locks: self.store.locks().xact_holds(self.pid),
             writes: self.activity.writes(),
@@ -144,6 +146,7 @@ impl Connection {
         self.deferred.borrow_mut().clone_from(&mark.deferred);
         self.deferred_events.borrow_mut().clone_from(&mark.deferred_events);
         self.deferred_unique.borrow_mut().clone_from(&mark.deferred_unique);
+        self.deferred_exclusions.borrow_mut().clone_from(&mark.deferred_exclusions);
         self.modes.borrow_mut().clone_from(&mark.modes);
         self.store.locks().release_since(self.pid, &mark.locks);
         self.activity.roll_back_writes(&mark.writes);

@@ -90,6 +90,7 @@ fn index(
         unique: constraint.is_some(),
         nulls_not_distinct: false,
         constraint,
+        exclusion_ops: Vec::new(),
         deferrable: false,
         deferred: false,
         exprs: None,

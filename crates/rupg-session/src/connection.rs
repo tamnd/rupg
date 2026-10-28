@@ -43,6 +43,7 @@ mod copy_from;
 mod cursor;
 mod databases;
 mod deferred;
+mod exclusion;
 mod explain;
 mod extended;
 mod fastpath;
@@ -446,6 +447,8 @@ pub struct Connection {
     deferred_events: RefCell<Vec<trigger::Event>>,
     /// The new versions whose keys a deferred unique constraint checks at the commit, in the order of the writes.
     deferred_unique: RefCell<Vec<Recheck>>,
+    /// The deferred exclusion constraints that the transaction wrote rows for, by the OID of the table and of the constraint, which check the new versions of the transaction at the commit.
+    deferred_exclusions: RefCell<Vec<(u32, u32)>>,
     /// The modes that `SET CONSTRAINTS` gave in the transaction.
     modes: RefCell<deferred::Modes>,
     /// The tables with `ON COMMIT DELETE ROWS` or `ON COMMIT DROP`, the last one first.
@@ -545,6 +548,7 @@ impl Connection {
             notify: RefCell::default(),
             deferred_events: RefCell::new(Vec::new()),
             deferred_unique: RefCell::new(Vec::new()),
+            deferred_exclusions: RefCell::new(Vec::new()),
             modes: RefCell::new(deferred::Modes::default()),
             on_commits: RefCell::new(Vec::new()),
             marks: Vec::new(),
@@ -759,10 +763,16 @@ impl Connection {
             triggers.retain_statement();
         }
         // The leaves of a partitioned table can have unique keys that the table does not have.
-        let upsert = info
-            .on_conflict
-            .as_ref()
-            .filter(|conflict| partitioned || !conflict.arbiters.is_empty());
+        let upsert = info.on_conflict.as_ref().filter(|conflict| {
+            partitioned
+                || !conflict.arbiters.is_empty()
+                || conflict.exclusion != 0
+                || conflict.all
+                    && self
+                        .catalog()
+                        .constraints_of(info.table)
+                        .any(|c| c.kind == rupg_catalog::ConKind::Exclusion)
+        });
         let mut fire = upsert::Upsert::default();
         let rows = if upsert.is_some() {
             // `INSERT ... ON CONFLICT` fires the triggers `BEFORE ... FOR EACH ROW` for each row in turn, and the triggers `UPDATE` of `DO UPDATE` with the triggers `INSERT`.
@@ -6061,6 +6071,12 @@ mod tests {
     #[test]
     fn index_am() {
         big_stack(|| script(include_str!("connection/index_am.test")));
+    }
+
+    /// Exclusion constraints: the conflict of a new row, `ON CONFLICT DO NOTHING` with an exclusion arbiter and the errors of `DO UPDATE` and `DO SELECT`, the check of the rows of `ALTER TABLE ... ADD EXCLUDE`, `pg_constraint` and `pg_index`, deferrable and deferred constraints, the errors of an operator that is not in the family or not commutative and of a method with no exclusion, an `UPDATE` that checks each row in turn, nulls, and keys with an expression. `connection/exclusion.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn exclusion() {
+        big_stack(|| script(include_str!("connection/exclusion.test")));
     }
 
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.

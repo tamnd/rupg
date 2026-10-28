@@ -3919,6 +3919,40 @@ pub fn index_key(
     evaluate_row(&derived.exprs, table, types, row, session).map(Some)
 }
 
+/// The test of `check_exclusion_or_unique_constraint` for two keys of an exclusion constraint: the operator of each key column, with the key of the existing version on the left, gives true. A key with a null conflicts with no key.
+///
+/// # Errors
+///
+/// The error of an operator.
+pub fn exclusion_conflict(
+    exclusion: &rupg_analyze::Exclusion,
+    new: &[Value],
+    old: &[Value],
+    session: &dyn Session,
+) -> Result<bool> {
+    if new.iter().chain(old).any(|v| matches!(v, Value::Null)) {
+        return Ok(false);
+    }
+    let parts = exclusion.operators.iter().zip(&exclusion.functions).zip(&exclusion.keys.exprs);
+    for (((&op, &function), key), (new, old)) in parts.zip(new.iter().zip(old)) {
+        let arg = |value: &Value| Expr::constant(value.clone(), key.ty, key.typmod, None);
+        let call = Expr::new(
+            ExprKind::Func(Func {
+                oid: function,
+                args: vec![arg(old), arg(new)],
+                form: FuncForm::Operator(op),
+                variadic: false,
+                retset: false,
+            }),
+            oid::BOOL,
+        );
+        if !matches!(evaluate(&call, session)?, Value::Bool(true)) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// The sort of `copy_table_data` for `CLUSTER` and `REPACK` on a `btree` index: the rows of the table in the order of the keys of the index, as `tuplesort_begin_cluster` sorts them. Each row has the ID of its version at the end, and a row from before an `ADD COLUMN` has no value for the new columns, which are null in the keys. Rows with equal keys keep their physical order, as the scan of the index gives them.
 ///
 /// # Errors

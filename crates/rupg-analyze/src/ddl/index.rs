@@ -222,6 +222,17 @@ impl Definer<'_, '_> {
                 format!("access method \"{}\" does not support {what}", am.name),
             ));
         }
+        let exclusion = !stmt.excludeOpNames.is_empty();
+        // `amgettuple`: `gin` and `brin` cannot give the rows that conflict.
+        if exclusion && matches!(am.name, "gin" | "brin") {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                format!("access method \"{}\" does not support exclusion constraints", am.name),
+            ));
+        }
+        if exclusion && kind == b'p' {
+            return Err(not_yet("an exclusion constraint on a partitioned table", None));
+        }
         let options = self.create_index_options(method, &stmt.options)?;
         if stmt.tableSpace.is_some() {
             return Err(not_yet("TABLESPACE", None));
@@ -241,6 +252,10 @@ impl Definer<'_, '_> {
                 exprs.extend(element.expr.clone());
             }
             columns.push(column);
+        }
+        let mut exclusion_ops = Vec::with_capacity(stmt.excludeOpNames.len());
+        for ((name, column), element) in stmt.excludeOpNames.iter().zip(&columns).zip(&all) {
+            exclusion_ops.push(self.exclusion_operator(name.as_ref(), column, &element.elem)?);
         }
         if stmt.primary {
             self.check_primary_key(table, &rel_name, &columns[..key_count], alter)?;
@@ -274,6 +289,7 @@ impl Definer<'_, '_> {
         let constraint = match (stmt.isconstraint, stmt.primary) {
             (false, _) => None,
             (true, true) => Some(ConKind::Primary),
+            (true, false) if exclusion => Some(ConKind::Exclusion),
             (true, false) => Some(ConKind::Unique),
         };
         let mut refs =
@@ -300,6 +316,7 @@ impl Definer<'_, '_> {
             unique: stmt.unique,
             nulls_not_distinct: stmt.nulls_not_distinct,
             constraint,
+            exclusion_ops,
             deferrable: stmt.deferrable,
             deferred: stmt.initdeferred,
             exprs: if exprs.is_empty() { None } else { Some(crate::node::write_list(&exprs)?) },
@@ -334,6 +351,65 @@ impl Definer<'_, '_> {
             self.scans.push(table);
         }
         Ok(())
+    }
+
+    /// The exclusion operator of a key column of `ComputeIndexAttrs`: `compatible_oper_opid` with the type of the column for both inputs, which must be commutative and a member of the family of the operator class of the column.
+    fn exclusion_operator(
+        &self,
+        name: Option<&Node>,
+        column: &NewIndexColumn,
+        elem: &IndexElem,
+    ) -> Result<u32> {
+        let Some(Node::List(list)) = name else {
+            return Err(Error::internal("an exclusion operator name that is not a list"));
+        };
+        let list = names(list);
+        let at = place(elem.location);
+        let ty = column.ty;
+        let op = self.an.find_operator(&list, ty, ty, None)?;
+        if !is_binary_coercible(ty, op.left) || !is_binary_coercible(ty, op.right) {
+            let ty = types::name(ty);
+            return Err(Error::new(
+                SqlState::UNDEFINED_FUNCTION,
+                format!("operator requires run-time type coercion: {ty} {} {ty}", list.join(".")),
+            ));
+        }
+        let shown = self.describe_operator(op.oid);
+        let shown = shown.strip_prefix("operator ").unwrap_or(&shown).to_string();
+        if op.commutator != op.oid {
+            return Err(Error::new(
+                SqlState::WRONG_OBJECT_TYPE,
+                format!("operator {shown} is not commutative"),
+            )
+            .with_detail("Only commutative operators can be used in exclusion constraints.")
+            .at_opt(at));
+        }
+        let family = match self.catalog.opclass(column.class) {
+            Some(class) => class.family,
+            None => rupg_pgcatalog::builtin::opclasses()
+                .iter()
+                .find(|c| c.oid == column.class)
+                .map_or(0, |c| c.family),
+        };
+        let member = rupg_pgcatalog::builtin::amops_of_operator(op.oid).any(|a| a.family == family)
+            || self.catalog.amops().any(|a| a.family == family && a.operator == op.oid);
+        if !member {
+            let family_name = match self.catalog.opfamily(family) {
+                Some(f) => f.name.clone(),
+                None => rupg_pgcatalog::builtin::named_by_oid(
+                    rupg_pgcatalog::builtin::Named::Opfamily,
+                    family,
+                )
+                .map_or_else(String::new, |f| f.name.to_string()),
+            };
+            return Err(Error::new(
+                SqlState::WRONG_OBJECT_TYPE,
+                format!("operator {shown} is not a member of operator family \"{family_name}\""),
+            )
+            .with_detail("The exclusion operator must be related to the index operator class for the constraint.")
+            .at_opt(at));
+        }
+        Ok(op.oid)
     }
 
     /// The pages of the main fork of a new index of the table, from [`empty_index_pages`]. The index of a partitioned table has no storage.

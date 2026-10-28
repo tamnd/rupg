@@ -1,0 +1,174 @@
+!details
+> CREATE TABLE circles (c1 CIRCLE, c2 TEXT, EXCLUDE USING gist (c1 WITH &&, (c2::circle) WITH &&) WHERE (circle_center(c1) <> '(0,0)'));
+CREATE TABLE
+> INSERT INTO circles VALUES('<(0,0), 5>', '<(0,0), 5>');
+INSERT 0 1
+> INSERT INTO circles VALUES('<(0,0), 5>', '<(0,0), 4>');
+INSERT 0 1
+> INSERT INTO circles VALUES('<(10,10), 10>', '<(0,0), 5>');
+INSERT 0 1
+> INSERT INTO circles VALUES('<(20,20), 10>', '<(0,0), 4>');
+ERROR 23P01 conflicting key value violates exclusion constraint "circles_c1_c2_excl"
+DETAIL Key (c1, (c2::circle))=(<(20,20),10>, <(0,0),4>) conflicts with existing key (c1, (c2::circle))=(<(10,10),10>, <(0,0),5>).
+> INSERT INTO circles VALUES('<(20,20), 10>', '<(0,0), 4>') ON CONFLICT ON CONSTRAINT circles_c1_c2_excl DO NOTHING;
+INSERT 0 0
+> INSERT INTO circles VALUES('<(20,20), 10>', '<(0,0), 4>') ON CONFLICT ON CONSTRAINT circles_c1_c2_excl DO UPDATE SET c2 = EXCLUDED.c2;
+ERROR 42809 ON CONFLICT DO UPDATE not supported with exclusion constraints
+> INSERT INTO circles VALUES('<(20,20), 10>', '<(0,0), 4>') ON CONFLICT ON CONSTRAINT circles_c1_c2_excl DO SELECT RETURNING *;
+ERROR 42809 ON CONFLICT DO SELECT not supported with exclusion constraints
+> INSERT INTO circles VALUES('<(20,20), 1>', '<(0,0), 5>');
+INSERT 0 1
+> INSERT INTO circles VALUES('<(20,20), 10>', '<(10,10), 5>');
+INSERT 0 1
+> ALTER TABLE circles ADD EXCLUDE USING gist (c1 WITH &&, (c2::circle) WITH &&);
+ERROR 23P01 could not create exclusion constraint "circles_c1_c2_excl1"
+DETAIL Key (c1, (c2::circle))=(<(0,0),5>, <(0,0),5>) conflicts with key (c1, (c2::circle))=(<(0,0),5>, <(0,0),4>).
+> SELECT conname, contype, conkey, conexclop, condeferrable, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'circles'::regclass;
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conkey@pg_constraint.21:1005:-1:-1,conexclop@pg_constraint.27:1028:-1:-1,condeferrable@pg_constraint.5:16:1:-1,pg_get_constraintdef:25:-1:-1
+row circles_c1_c2_excl,x,{1,0},{1513,1513},f,EXCLUDE USING gist (c1 WITH &&, ((c2)::circle) WITH &&) WHERE ((circle_center(c1) <> '(0,0)'::point))
+SELECT 1
+> SELECT indexrelid::regclass, indisunique, indisexclusion, indimmediate, pg_get_indexdef(indexrelid) FROM pg_index WHERE indrelid = 'circles'::regclass;
+fields indexrelid:2205:4:-1,indisunique@pg_index.5:16:1:-1,indisexclusion@pg_index.8:16:1:-1,indimmediate@pg_index.9:16:1:-1,pg_get_indexdef:25:-1:-1
+row circles_c1_c2_excl,f,t,t,CREATE INDEX circles_c1_c2_excl ON public.circles USING gist (c1, ((c2)::circle)) WHERE (circle_center(c1) <> '(0,0)'::point)
+SELECT 1
+> DROP TABLE circles;
+DROP TABLE
+> CREATE TABLE deferred_excl (f1 int, f2 int, CONSTRAINT deferred_excl_con EXCLUDE (f1 WITH =) INITIALLY DEFERRED);
+CREATE TABLE
+> INSERT INTO deferred_excl VALUES(1);
+INSERT 0 1
+> INSERT INTO deferred_excl VALUES(2);
+INSERT 0 1
+> INSERT INTO deferred_excl VALUES(1);
+ERROR 23P01 conflicting key value violates exclusion constraint "deferred_excl_con"
+DETAIL Key (f1)=(1) conflicts with existing key (f1)=(1).
+> INSERT INTO deferred_excl VALUES(1) ON CONFLICT ON CONSTRAINT deferred_excl_con DO NOTHING;
+ERROR 55000 ON CONFLICT does not support deferrable unique constraints/exclusion constraints as arbiters
+> BEGIN;
+BEGIN
+> INSERT INTO deferred_excl VALUES(2);
+INSERT 0 1
+> COMMIT;
+ERROR 23P01 conflicting key value violates exclusion constraint "deferred_excl_con"
+DETAIL Key (f1)=(2) conflicts with existing key (f1)=(2).
+> BEGIN;
+BEGIN
+> INSERT INTO deferred_excl VALUES(3);
+INSERT 0 1
+> INSERT INTO deferred_excl VALUES(3);
+INSERT 0 1
+> COMMIT;
+ERROR 23P01 conflicting key value violates exclusion constraint "deferred_excl_con"
+DETAIL Key (f1)=(3) conflicts with existing key (f1)=(3).
+> BEGIN;
+BEGIN
+> INSERT INTO deferred_excl VALUES(2, 1);
+INSERT 0 1
+> DELETE FROM deferred_excl WHERE f1 = 2 AND f2 IS NULL;
+DELETE 1
+> UPDATE deferred_excl SET f2 = 2 WHERE f1 = 2;
+UPDATE 1
+> COMMIT;
+COMMIT
+> SELECT * FROM deferred_excl;
+fields f1@deferred_excl.1:23:4:-1,f2@deferred_excl.2:23:4:-1
+row 1,NULL
+row 2,2
+SELECT 2
+> SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'deferred_excl_con';
+fields pg_get_constraintdef:25:-1:-1
+row EXCLUDE USING btree (f1 WITH =) DEFERRABLE INITIALLY DEFERRED
+SELECT 1
+> ALTER TABLE deferred_excl DROP CONSTRAINT deferred_excl_con;
+ALTER TABLE
+> UPDATE deferred_excl SET f1 = 3;
+UPDATE 2
+> ALTER TABLE deferred_excl ADD EXCLUDE (f1 WITH =);
+ERROR 23P01 could not create exclusion constraint "deferred_excl_f1_excl"
+DETAIL Key (f1)=(3) conflicts with key (f1)=(3).
+> DROP TABLE deferred_excl;
+DROP TABLE
+> CREATE TABLE ex1 (a int, b int, EXCLUDE (a WITH =, b WITH <>));
+ERROR 42809 operator <>(integer,integer) is not a member of operator family "integer_ops" at 52
+DETAIL The exclusion operator must be related to the index operator class for the constraint.
+> CREATE TABLE ex1 (a int, EXCLUDE (a WITH <));
+ERROR 42809 operator <(integer,integer) is not commutative at 35
+DETAIL Only commutative operators can be used in exclusion constraints.
+> CREATE TABLE ex1 (a int, EXCLUDE USING gin (a WITH =));
+ERROR 0A000 access method "gin" does not support exclusion constraints
+> CREATE TABLE ex1 (a int, EXCLUDE USING hash (a WITH =));
+CREATE TABLE
+> INSERT INTO ex1 VALUES (1), (2), (1);
+ERROR 23P01 conflicting key value violates exclusion constraint "ex1_a_excl"
+DETAIL Key (a)=(1) conflicts with existing key (a)=(1).
+> INSERT INTO ex1 VALUES (3), (4);
+INSERT 0 2
+> UPDATE ex1 SET a = a + 1;
+ERROR 23P01 conflicting key value violates exclusion constraint "ex1_a_excl"
+DETAIL Key (a)=(4) conflicts with existing key (a)=(4).
+> UPDATE ex1 SET a = 10 WHERE a = 3;
+UPDATE 1
+> INSERT INTO ex1 VALUES (NULL), (NULL);
+INSERT 0 2
+> SELECT * FROM ex1 ORDER BY a;
+fields a@ex1.1:23:4:-1
+row 4
+row 10
+row NULL
+row NULL
+SELECT 4
+> CREATE TABLE ex2 (a int, EXCLUDE (a WITH =) DEFERRABLE);
+CREATE TABLE
+> INSERT INTO ex2 VALUES (1), (2);
+INSERT 0 2
+> UPDATE ex2 SET a = 3 - a;
+UPDATE 2
+> UPDATE ex2 SET a = 1;
+ERROR 23P01 conflicting key value violates exclusion constraint "ex2_a_excl"
+DETAIL Key (a)=(1) conflicts with existing key (a)=(1).
+> BEGIN;
+BEGIN
+> SET CONSTRAINTS ALL DEFERRED;
+SET CONSTRAINTS
+> INSERT INTO ex2 VALUES (1);
+INSERT 0 1
+> SET CONSTRAINTS ALL IMMEDIATE;
+ERROR 23P01 conflicting key value violates exclusion constraint "ex2_a_excl"
+DETAIL Key (a)=(1) conflicts with existing key (a)=(1).
+> ROLLBACK;
+ROLLBACK
+> CREATE TABLE ex3 (a int, b text, CONSTRAINT ex3_c EXCLUDE (a WITH =, lower(b) WITH =) WHERE (a > 0));
+CREATE TABLE
+> INSERT INTO ex3 VALUES (1, 'A'), (1, 'b'), (0, 'x'), (0, 'x');
+INSERT 0 4
+> INSERT INTO ex3 VALUES (1, 'a');
+ERROR 23P01 conflicting key value violates exclusion constraint "ex3_c"
+DETAIL Key (a, lower(b))=(1, a) conflicts with existing key (a, lower(b))=(1, a).
+> INSERT INTO ex3 VALUES (1, 'a') ON CONFLICT DO NOTHING;
+INSERT 0 0
+> INSERT INTO ex3 VALUES (1, 'a') ON CONFLICT ON CONSTRAINT ex3_c DO NOTHING;
+INSERT 0 0
+> SELECT conname, conkey, conexclop::regoper[], conindid::regclass, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'ex3'::regclass;
+fields conname@pg_constraint.2:19:64:-1,conkey@pg_constraint.21:1005:-1:-1,conexclop:2208:-1:-1,conindid:2205:4:-1,pg_get_constraintdef:25:-1:-1
+row ex3_c,{1,0},{pg_catalog.=,pg_catalog.=},ex3_c,EXCLUDE USING btree (a WITH =, lower(b) WITH =) WHERE ((a > 0))
+SELECT 1
+> ALTER TABLE ex3 ADD EXCLUDE (a WITH =);
+ERROR 23P01 could not create exclusion constraint "ex3_a_excl"
+DETAIL Key (a)=(1) conflicts with key (a)=(1).
+> ALTER TABLE ex3 ADD CONSTRAINT ex3_b EXCLUDE (b WITH =);
+ERROR 23P01 could not create exclusion constraint "ex3_b"
+DETAIL Key (b)=(x) conflicts with key (b)=(x).
+> DELETE FROM ex3 WHERE a = 0;
+DELETE 2
+> ALTER TABLE ex3 ADD CONSTRAINT ex3_b EXCLUDE (b WITH =);
+ALTER TABLE
+> INSERT INTO ex3 VALUES (5, 'A');
+ERROR 23P01 conflicting key value violates exclusion constraint "ex3_b"
+DETAIL Key (b)=(A) conflicts with existing key (b)=(A).
+> SELECT indexrelid::regclass, indisexclusion FROM pg_index WHERE indrelid = 'ex3'::regclass ORDER BY 1;
+fields indexrelid:2205:4:-1,indisexclusion@pg_index.8:16:1:-1
+row ex3_c,t
+row ex3_b,t
+SELECT 2
+> DROP TABLE ex1, ex2, ex3;
+DROP TABLE

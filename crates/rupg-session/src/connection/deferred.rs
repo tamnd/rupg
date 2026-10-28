@@ -34,7 +34,7 @@ impl Modes {
     }
 
     /// `afterTriggerCheckState`: the mode of the constraint with the OID `constraint`, which is `DEFERRABLE` when `deferrable` is true and `INITIALLY DEFERRED` when `deferred` is true.
-    fn state(&self, constraint: u32, deferrable: bool, deferred: bool) -> bool {
+    pub(super) fn state(&self, constraint: u32, deferrable: bool, deferred: bool) -> bool {
         if !deferrable {
             return false;
         }
@@ -96,10 +96,11 @@ impl Connection {
             let now = self.defer_unique(rechecks);
             self.check_unique(&now)?;
         }
+        self.fire_deferred_exclusions()?;
         self.fire_deferred_events()
     }
 
-    /// The end of a statement for the deferrable unique constraints: the new versions that the commands from `command` on wrote with the key of another version, as `unique_key_recheck` checks them when the constraint is immediate. The versions of a deferred constraint go to the queue of the transaction.
+    /// The end of a statement for the deferrable unique constraints and the exclusion constraints: the new versions that the commands from `command` on wrote with the key of another version, as `unique_key_recheck` checks them when the constraint is immediate. The versions of a deferred constraint go to the queue of the transaction.
     ///
     /// # Errors
     ///
@@ -110,11 +111,11 @@ impl Connection {
             return Ok(());
         }
         let rechecks = self.store.heap().take_rechecks(xid, command);
-        if rechecks.is_empty() {
-            return Ok(());
+        if !rechecks.is_empty() {
+            let now = self.defer_unique(rechecks);
+            self.check_unique(&now)?;
         }
-        let now = self.defer_unique(rechecks);
-        self.check_unique(&now)
+        self.check_exclusions(command)
     }
 
     /// The rechecks of a deferred constraint go to the queue of the transaction. The result is the other rechecks.
@@ -170,6 +171,7 @@ impl Connection {
         if !self.deferred.borrow().is_empty()
             || !self.deferred_events.borrow().is_empty()
             || !self.deferred_unique.borrow().is_empty()
+            || !self.deferred_exclusions.borrow().is_empty()
         {
             {
                 let mut modes = self.modes.borrow_mut();
@@ -187,6 +189,7 @@ impl Connection {
         self.deferred.borrow_mut().clear();
         self.deferred_events.borrow_mut().clear();
         self.deferred_unique.borrow_mut().clear();
+        self.deferred_exclusions.borrow_mut().clear();
         *self.modes.borrow_mut() = Modes::default();
     }
 }
