@@ -392,6 +392,10 @@ pub trait Session {
     fn prepared_statements(&self) -> Vec<Vec<Value>> {
         Vec::new()
     }
+    /// The rows of `pg_lock_status`, in the 16 columns of the function: the locks that the sessions hold or wait for. A session with no server has no locks.
+    fn locks(&self) -> Vec<Vec<Value>> {
+        Vec::new()
+    }
     /// The rows of `pg_cursor`, one for each cursor of `DECLARE` that is open in the session, in the 6 columns of the function. The order is not defined.
     fn cursors(&self) -> Vec<Vec<Value>> {
         Vec::new()

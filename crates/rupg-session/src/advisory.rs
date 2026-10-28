@@ -300,6 +300,17 @@ impl Locks {
         pids
     }
 
+    /// `GetLockStatusData`: each hold and each request in a queue, as the tag, the owner, the mode, and true for a hold.
+    pub(crate) fn status(&self) -> Vec<(Tag, i32, Mode, bool)> {
+        let table = self.table();
+        let mut rows = Vec::new();
+        for (tag, lock) in table.iter() {
+            rows.extend(lock.holds.iter().map(|hold| (*tag, hold.owner, hold.mode, true)));
+            rows.extend(lock.queue.iter().map(|wait| (*tag, wait.owner, wait.mode, false)));
+        }
+        rows
+    }
+
     /// `LockRelease` of a hold of the session level: false when the owner has no such hold.
     pub(crate) fn release(&self, tag: Tag, owner: i32, mode: Mode) -> bool {
         let mut table = self.table();

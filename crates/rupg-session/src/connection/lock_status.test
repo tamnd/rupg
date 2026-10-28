@@ -1,0 +1,67 @@
+!details
+> create table lk1 (a int)
+CREATE TABLE
+> create view lkv as select * from lk1
+CREATE VIEW
+> begin
+BEGIN
+> select pg_advisory_xact_lock(1), pg_advisory_xact_lock_shared(2), pg_advisory_xact_lock(1, 1), pg_advisory_xact_lock_shared(2, 2)
+fields pg_advisory_xact_lock:2278:4:-1,pg_advisory_xact_lock_shared:2278:4:-1,pg_advisory_xact_lock:2278:4:-1,pg_advisory_xact_lock_shared:2278:4:-1
+row ,,,
+SELECT 1
+> select locktype, classid, objid, objsubid, mode, granted from pg_locks where locktype = 'advisory' and database = (select oid from pg_database where datname = current_database()) order by classid, objid, objsubid
+fields locktype@pg_locks.1:25:-1:-1,classid@pg_locks.8:26:4:-1,objid@pg_locks.9:26:4:-1,objsubid@pg_locks.10:21:2:-1,mode@pg_locks.13:25:-1:-1,granted@pg_locks.14:16:1:-1
+row advisory,0,1,1,ExclusiveLock,t
+row advisory,0,2,1,ShareLock,t
+row advisory,1,1,2,ExclusiveLock,t
+row advisory,2,2,2,ShareLock,t
+SELECT 4
+> lock table lk1 in exclusive mode
+LOCK TABLE
+> select l.locktype, c.relname, l.mode, l.granted, l.pid = pg_backend_pid() as mine from pg_locks l join pg_class c on c.oid = l.relation where c.relname like 'lk%' order by 2
+fields locktype@pg_locks.1:25:-1:-1,relname@pg_class.2:19:64:-1,mode@pg_locks.13:25:-1:-1,granted@pg_locks.14:16:1:-1,mine:16:1:-1
+row relation,lk1,ExclusiveLock,t,t
+SELECT 1
+> select count(*) from pg_locks where locktype = 'virtualxid' and pid = pg_backend_pid()
+fields count:20:8:-1
+row 1
+SELECT 1
+> select count(*) from pg_locks where locktype = 'transactionid' and pid = pg_backend_pid()
+fields count:20:8:-1
+row 0
+SELECT 1
+> select pg_current_xact_id() is not null
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> select count(*) from pg_locks where transactionid = pg_current_xact_id()::xid and mode = 'ExclusiveLock' and granted
+fields count:20:8:-1
+row 1
+SELECT 1
+> select count(*) from pg_locks l where virtualtransaction = (select virtualtransaction from pg_locks where transactionid = pg_current_xact_id()::xid) and locktype = 'relation' and l.relation = 'lk1'::regclass
+fields count:20:8:-1
+row 1
+SELECT 1
+> commit
+COMMIT
+> select count(*) from pg_locks where locktype = 'advisory' and database = (select oid from pg_database where datname = current_database())
+fields count:20:8:-1
+row 0
+SELECT 1
+> select pg_advisory_lock(5), pg_advisory_lock(7, 8)
+fields pg_advisory_lock:2278:4:-1,pg_advisory_lock:2278:4:-1
+row ,
+SELECT 1
+> select classid, objid, objsubid, mode from pg_locks where locktype = 'advisory' order by 1, 2
+fields classid@pg_locks.8:26:4:-1,objid@pg_locks.9:26:4:-1,objsubid@pg_locks.10:21:2:-1,mode@pg_locks.13:25:-1:-1
+row 0,5,1,ExclusiveLock
+row 7,8,2,ExclusiveLock
+SELECT 2
+> select pg_advisory_unlock_all()
+fields pg_advisory_unlock_all:2278:4:-1
+row 
+SELECT 1
+> select count(*) > 0 as ok from pg_locks
+fields ok:16:1:-1
+row t
+SELECT 1

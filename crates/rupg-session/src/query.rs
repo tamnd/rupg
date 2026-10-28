@@ -1369,6 +1369,68 @@ impl rupg_func::Session for Reader<'_> {
         self.conn.map_or_else(Vec::new, Connection::listening_channels)
     }
 
+    /// `pg_lock_status`. Each session in a transaction holds `ExclusiveLock` on its virtual transaction ID, and on the ID of its transaction when it has one, as `VirtualXactLockTableInsert` and `XactLockTableInsert` take them. rupg keeps no local transaction IDs, so the local part of a virtual transaction ID is 1.
+    fn locks(&self) -> Vec<Vec<Value>> {
+        let Some((activity, store)) = self.activity else { return Vec::new() };
+        let backends = activity.backends(store, &self.settings());
+        let vxid = |pid: i32| {
+            backends
+                .iter()
+                .find(|b| b.pid == pid)
+                .map_or(Value::Null, |b| Value::text(format!("{}/1", b.number)))
+        };
+        let row = |locktype: &str, pid: i32, mode: Mode, granted: bool| {
+            let mut row = vec![Value::Null; 16];
+            row[0] = Value::text(locktype);
+            row[10] = vxid(pid);
+            row[11] = Value::Int4(pid);
+            row[12] = Value::text(mode_name(mode));
+            row[13] = Value::Bool(granted);
+            row[14] = Value::Bool(false);
+            row
+        };
+        let mut rows = Vec::new();
+        for backend in backends.iter() {
+            let (running, xid) = if backend.pid == self.pid {
+                (true, self.transaction_id(false).and_then(|x| u32::try_from(x).ok()).unwrap_or(0))
+            } else {
+                (backend.transaction_start.is_some(), backend.xid)
+            };
+            if !running {
+                continue;
+            }
+            let mut own = row("virtualxid", backend.pid, EXCLUSIVE, true);
+            own[5] = own[10].clone();
+            own[14] = Value::Bool(true);
+            rows.push(own);
+            if xid != 0 {
+                let mut own = row("transactionid", backend.pid, EXCLUSIVE, true);
+                own[6] = Value::Oid(xid);
+                rows.push(own);
+            }
+        }
+        for (tag, pid, mode, granted) in store.locks().status() {
+            let lock = match tag {
+                Tag::Relation { database, relation } => {
+                    let mut lock = row("relation", pid, mode, granted);
+                    lock[1] = Value::Oid(database);
+                    lock[2] = Value::Oid(relation);
+                    lock
+                }
+                Tag::Advisory { database, key } => {
+                    let mut lock = row("advisory", pid, mode, granted);
+                    lock[1] = Value::Oid(database);
+                    lock[7] = Value::Oid(key.high);
+                    lock[8] = Value::Oid(key.low);
+                    lock[9] = Value::Int2(key.kind.cast_signed());
+                    lock
+                }
+            };
+            rows.push(lock);
+        }
+        rows
+    }
+
     fn cursors(&self) -> Vec<Vec<Value>> {
         self.portals.map_or_else(Vec::new, |portals| {
             portals.borrow().iter().filter_map(|(name, portal)| portal.cursor_row(name)).collect()
