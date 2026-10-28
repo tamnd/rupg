@@ -399,7 +399,15 @@ fn index_keys(
         let (lt, gt) = rupg_analyze::sort_operators(ty);
         let operator = if desc { gt } else { lt };
         let sort = rupg_pgcatalog::builtin::operator_by_oid(operator)?.code;
-        out.push(SortGroup { target, operator, sort, equal: 0, nulls_first, hashable: false });
+        out.push(SortGroup {
+            target,
+            operator,
+            sort,
+            equal: 0,
+            nulls_first,
+            hashable: false,
+            collation: 0,
+        });
     }
     Some(out)
 }

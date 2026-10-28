@@ -2839,6 +2839,7 @@ fn unique_rels<'q>(semi: &Semi<'q>, side: &[Rel<'q>], stats: &Stats) -> Option<V
                         desc: false,
                         using: None,
                         nulls_first: false,
+                        collation: 0,
                     })
                     .collect();
                 input = sort(input, sort_keys, None);
@@ -3917,6 +3918,7 @@ fn merge_keys<'q>(values: Vec<(Expr, bool, bool)>) -> Vec<SortKey<'q>> {
             desc,
             using: None,
             nulls_first,
+            collation: 0,
         })
         .collect()
 }

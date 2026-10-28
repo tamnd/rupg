@@ -29,6 +29,8 @@ pub struct SortGroup {
     pub nulls_first: bool,
     /// True when the `=` operator can use a hash table, as `op_hashjoinable` gives it.
     pub hashable: bool,
+    /// The collation of the target, as `exprCollation` gives it to the `Sort` node of the item, or 0. A sort of `ORDER BY`, `GROUP BY` and `DISTINCT` has it.
+    pub collation: u32,
 }
 
 /// A grouping set of `GROUP BY`, as `GroupingSet` after `transformGroupClause`. A simple set names its items by the index of their targets in [`crate::Query::targets`].
@@ -594,9 +596,17 @@ impl Analyzer<'_> {
                 equal: function_of(eq_op),
                 nulls_first,
                 hashable: self.hashable(eq_op, ty),
+                collation: self.target_collation(&targets[target].expr),
             });
         }
         Ok(())
+    }
+
+    /// `exprCollation` of a target of the query that the analyzer reads now.
+    fn target_collation(&self, expr: &Expr) -> u32 {
+        let mut levels = vec![&self.scope.relations[..]];
+        levels.extend(self.outer.iter().rev().map(|s| &s.relations[..]));
+        crate::collate::expr_collation(expr, &levels, self.env.catalog())
     }
 
     /// `lookup_type_cache` with `cache_record_field_properties` and `cache_array_element_properties`: the operators of the type, where a composite type has `=` only when each field has `=`, and `<` and `>` only when each field has `<`. An array of a composite type has the operators of its element type.
@@ -699,6 +709,7 @@ impl Analyzer<'_> {
             equal: function_of(ops.eq),
             nulls_first: false,
             hashable: self.hashable(ops.eq, ty),
+            collation: self.target_collation(&targets[target].expr),
         });
         Ok(())
     }
@@ -835,6 +846,7 @@ pub(crate) fn set_group(target: usize, ty: u32, at: Option<usize>) -> Result<Sor
         equal: function_of(ops.eq),
         nulls_first: false,
         hashable: typcache::hashable(ops.eq, ty),
+        collation: 0,
     })
 }
 

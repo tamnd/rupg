@@ -754,6 +754,12 @@ impl Explainer<'_, '_> {
         let mut out = Vec::with_capacity(keys.len());
         for key in keys {
             let mut text = self.items(scope, std::slice::from_ref(&key.item), prefix)?.remove(0);
+            // `show_sortorder_options`: a collation that is not the collation of the type.
+            let own = rupg_analyze::types::row(key.item.expr.ty).map_or(0, |t| t.collation);
+            if key.collation != 0 && key.collation != own {
+                text.push_str(" COLLATE ");
+                text.push_str(&self.texts.quote(&self.texts.collation_name(key.collation)));
+            }
             let reverse = match &key.using {
                 Some(op) => {
                     text.push_str(" USING ");

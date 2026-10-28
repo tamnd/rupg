@@ -1,0 +1,35 @@
+!details
+> create table ct10 (a int, x text collate "C", y text collate "POSIX")
+CREATE TABLE
+> explain (costs off) select * from ct10 order by x, y
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: x COLLATE "C", y COLLATE "POSIX"
+row   ->  Seq Scan on ct10
+EXPLAIN
+> explain (costs off) select * from ct10 order by x desc, y collate "C" asc nulls first
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: x COLLATE "C" DESC, y COLLATE "C" NULLS FIRST
+row   ->  Seq Scan on ct10
+EXPLAIN
+> create table ct11 (a int, x text)
+CREATE TABLE
+> explain (costs off) select * from ct11 order by x collate "C"
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: x COLLATE "C"
+row   ->  Seq Scan on ct11
+EXPLAIN
+> explain (costs off) select * from ct11 order by x
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: x
+row   ->  Seq Scan on ct11
+EXPLAIN
+> explain (costs off) select relname::text from pg_class order by 1
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: ((relname)::text) COLLATE "C"
+row   ->  Seq Scan on pg_class
+EXPLAIN

@@ -180,6 +180,7 @@ fn sort_key<'q>(expr: &'q Expr, item: &SortGroup) -> SortKey<'q> {
         desc: name == ">",
         using: (name != "<" && name != ">").then(|| name.to_string()),
         nulls_first: item.nulls_first,
+        collation: item.collation,
     }
 }
 
@@ -1127,6 +1128,7 @@ impl<'q> Builder<'q> {
                 desc: false,
                 using: None,
                 nulls_first: g.nulls_first,
+                collation: 0,
             })
             .collect();
         let enable = crate::enable();

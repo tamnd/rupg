@@ -221,6 +221,8 @@ pub struct SortKey<'q> {
     /// The name of an operator of `USING` that is not the `<` or the `>` of the type.
     pub using: Option<String>,
     pub nulls_first: bool,
+    /// The collation of the sort, or 0.
+    pub collation: u32,
 }
 
 /// The kinds of node, with the parts that each kind shows.
@@ -492,6 +494,11 @@ pub trait Texts {
 
     /// The identifier in double quotes when it needs them, as `quote_identifier`.
     fn quote(&self, name: &str) -> String;
+
+    /// The name of a collation, as `get_collation_name`.
+    fn collation_name(&self, collation: u32) -> String {
+        collation.to_string()
+    }
 
     /// The name and the schema of a relation or of a function.
     fn object(&mut self, oid: u32, function: bool) -> (String, String);

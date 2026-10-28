@@ -371,6 +371,17 @@ impl Texts for PlanTexts<'_, '_> {
         quote_identifier(name)
     }
 
+    fn collation_name(&self, collation: u32) -> String {
+        match builtin::named_by_oid(builtin::Named::Collation, collation) {
+            Some(row) => row.name.to_string(),
+            None => self
+                .session
+                .catalog()
+                .and_then(|c| c.collation(collation))
+                .map_or_else(String::new, |c| c.name.clone()),
+        }
+    }
+
     fn object(&mut self, oid: u32, function: bool) -> (String, String) {
         let (name, namespace) = if function {
             match builtin::proc_by_oid(oid) {
