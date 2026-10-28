@@ -6454,6 +6454,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/grouping_set_order.test")));
     }
 
+    /// With grouping sets, a set with a type that has no order goes in a hash table, and a set with a type that has no hash goes in a pass over sorted rows. `preprocess_grouping_sets` gives the error only when one set needs both, or when an aggregate call with `ORDER BY` needs a sort for a set that cannot have one. `connection/grouping_set_hash.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn grouping_set_hash() {
+        big_stack(|| script(include_str!("connection/grouping_set_hash.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

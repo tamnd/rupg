@@ -470,19 +470,21 @@ fn read_writes(query: &Query, out: &mut Vec<usize>) {
 
 /// Checks that the engine can run a query or a subquery. With `output`, it also checks that the engine has the output function of each column.
 fn check_query(query: &Query, output: bool) -> Result<()> {
-    // `create_ordinary_grouping_paths`: a `GROUP BY` sorts the rows when every type has an order, or else uses a hash table. An aggregate call with `ORDER BY` or `DISTINCT` cannot use a hash table, and with grouping sets a set with a type that has no order needs one. The planner gives this error before the engine checks its functions.
-    let unsortable_set = || {
-        let sets = expand_grouping_sets(&query.grouping_sets, query.group_distinct, usize::MAX);
-        sets.unwrap_or_default()
-            .iter()
-            .flatten()
-            .any(|t| query.group.iter().find(|g| g.target == *t).is_none_or(|g| g.sort == 0))
+    // `create_ordinary_grouping_paths`: a `GROUP BY` sorts the rows when every type has an order, or else uses a hash table. An aggregate call with `ORDER BY` or `DISTINCT` cannot use a hash table. With grouping sets, each set with a type that has no order needs a hash table, and `preprocess_grouping_sets` gives the error when such a set also has a type with no hash. The planner gives this error before the engine checks its functions.
+    let item = |t: &usize| query.group.iter().find(|g| g.target == *t);
+    let unsortable = |t: &usize| item(t).is_none_or(|g| g.sort == 0);
+    let unhashable = |t: &usize| item(t).is_none_or(|g| !g.hashable);
+    let cannot = if query.grouping_sets.is_empty() {
+        !query.group.iter().all(|g| g.sort != 0)
+            && (!query.group.iter().all(|g| g.hashable) || has_ordered_aggregate(query))
+    } else {
+        let sets = expand_grouping_sets(&query.grouping_sets, query.group_distinct, usize::MAX)
+            .unwrap_or_default();
+        let unsortable_sets = sets.iter().filter(|s| s.iter().any(unsortable));
+        unsortable_sets.clone().any(|s| s.iter().any(unhashable))
+            || (has_ordered_aggregate(query) && unsortable_sets.count() > 0)
     };
-    if !query.group.iter().all(|g| g.sort != 0)
-        && (!query.group.iter().all(|g| g.hashable)
-            || (has_ordered_aggregate(query)
-                && (query.grouping_sets.is_empty() || unsortable_set())))
-    {
+    if cannot {
         return Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "could not implement GROUP BY")
             .with_detail(MIXED_KEYS));
     }
