@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.4.4 (2026-10-28)
+
 ### Added
 
 - Two different explicit collations give an error, and so does a conflict of implicit collations in an item of `ORDER BY` or `GROUP BY`, in a set operation but `UNION ALL`, and in the `ORDER BY` of an aggregate call. A set operation has the common collation of its columns, and a recursive query checks the collations of its non-recursive term. (#1028)
