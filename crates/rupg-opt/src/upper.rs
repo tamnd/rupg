@@ -2047,8 +2047,19 @@ fn grouping_sets<'q>(
             .filter_map(|&t| group_of(t).map(|g| sort_key(level.target(t), g)))
             .collect()
     };
-    let first_keys = rollups.first().map(group_keys).unwrap_or_default();
-    let first_keys = level.stats.canonical(first_keys, |k| &*k.item.expr);
+    // `mark_nullable_by_grouping`: an item that a set does not have is not redundant, as its `Var`s have `varnullingrels` or a constant is in a `PlaceHolderVar`, so the sort keeps it.
+    let all_sets = || rollups.iter().chain(&hash_sets).flat_map(|r| &r.sets);
+    let first_targets = rollups.first().map(|r| r.sets[0].clone()).unwrap_or_default();
+    let first_keys: Vec<(usize, SortKey<'q>)> = first_targets
+        .iter()
+        .filter_map(|&t| group_of(t).map(|g| (t, sort_key(level.target(t), g))))
+        .collect();
+    let first_keys = level.stats.canonical_keeping(
+        first_keys,
+        |(_, k)| &*k.item.expr,
+        |(t, _)| !all_sets().all(|s| s.contains(t)),
+    );
+    let first_keys: Vec<SortKey<'q>> = first_keys.into_iter().map(|(_, k)| k).collect();
     let (is_sorted, count) = presorted(order, &first_keys);
     let any_hashable = rollups.iter().any(|r| r.hashable) || !hash_sets.is_empty();
     let can_hash = !has_ordered && any_hashable;

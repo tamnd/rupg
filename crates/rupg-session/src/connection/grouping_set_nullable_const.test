@@ -1,0 +1,55 @@
+!details
+> create temp table i8(q1 int8, q2 int8)
+CREATE TABLE
+> insert into i8 values (123,456),(123,4567890123456789),(4567890123456789,123)
+INSERT 0 3
+> set enable_hashagg = off
+SET
+> explain (verbose, costs off) select * from (select 1 as x, q1, sum(q2) from i8 i1 group by grouping sets(1, 2)) ss where x = 1 and q1 = 123
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on ss
+row   Output: ss.x, ss.q1, ss.sum
+row   Filter: ((ss.x = 1) AND (ss.q1 = 123))
+row   ->  GroupAggregate
+row         Output: (1), i1.q1, sum(i1.q2)
+row         Group Key: (1)
+row         Sort Key: i1.q1
+row           Group Key: i1.q1
+row         ->  Sort
+row               Output: (1), i1.q1, i1.q2
+row               Sort Key: (1)
+row               ->  Seq Scan on pg_temp.i8 i1
+row                     Output: 1, i1.q1, i1.q2
+EXPLAIN
+> select * from (select 1 as x, q1, sum(q2) from i8 i1 group by grouping sets(1, 2)) ss where x = 1 and q1 = 123
+fields x:23:4:-1,q1@i8.1:20:8:-1,sum:1700:-1:-1
+SELECT 0
+> explain (costs off) select 1 as x, q1 from i8 group by grouping sets ((1, q1), (1)) order by 2
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: q1
+row   ->  GroupAggregate
+row         Group Key: 1, q1
+row         Group Key: 1
+row         ->  Sort
+row               Sort Key: q1
+row               ->  Seq Scan on i8
+EXPLAIN
+> explain (costs off) select 1 as x, q1 from i8 group by grouping sets ((1, q1), (1, q2)) order by 2
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: q1
+row   ->  GroupAggregate
+row         Group Key: 1, q1
+row         Sort Key: 1, q2
+row           Group Key: 1, q2
+row         ->  Sort
+row               Sort Key: q1
+row               ->  Seq Scan on i8
+EXPLAIN
+> select 1 as x, q1 from i8 group by grouping sets ((1, q1), (1)) order by 2
+fields x:23:4:-1,q1@i8.1:20:8:-1
+row 1,123
+row 1,4567890123456789
+row 1,NULL
+SELECT 3

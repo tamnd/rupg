@@ -358,10 +358,20 @@ impl Stats {
 
     /// `make_pathkeys_for_sortclauses_extended` with `remove_redundant`: the items of a list of keys without the items whose keys are redundant, as `pathkey_is_redundant` finds them.
     pub(crate) fn canonical<T>(&self, items: Vec<T>, expr: impl Fn(&T) -> &Expr) -> Vec<T> {
+        self.canonical_keeping(items, expr, |_| false)
+    }
+
+    /// [`Stats::canonical`] that keeps each item for which `keep` is true, as an item of grouping sets that a set does not have is not a member of an equivalence class.
+    pub(crate) fn canonical_keeping<T>(
+        &self,
+        items: Vec<T>,
+        expr: impl Fn(&T) -> &Expr,
+        keep: impl Fn(&T) -> bool,
+    ) -> Vec<T> {
         let mut out: Vec<T> = Vec::new();
         for item in items {
             let before: Vec<&Expr> = out.iter().map(&expr).collect();
-            if !self.redundant(expr(&item), &before) {
+            if keep(&item) || !self.redundant(expr(&item), &before) {
                 out.push(item);
             }
         }

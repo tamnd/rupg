@@ -129,6 +129,11 @@ fn is_var(expr: &Expr) -> bool {
     matches!(expr.kind, ExprKind::Var(_))
 }
 
+/// True when the expression is a constant.
+fn is_const(expr: &Expr) -> bool {
+    matches!(expr.kind, ExprKind::Const(_))
+}
+
 /// Sets the target list of a node, whose parent reads the items of `want`, and of the nodes below it in the query level. With `physical`, a scan gives all the columns of its relation.
 fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical: bool) {
     if node.scope != level.scope && node.scope != level.display {
@@ -239,7 +244,7 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             node.output = below
                 .iter()
                 .map(|w| {
-                    if append && !is_var(&w.expr) {
+                    if (append && !is_var(&w.expr)) || (w.below && is_const(&w.expr)) {
                         Item { below: true, ..w.clone() }
                     } else {
                         w.passed()
@@ -249,6 +254,11 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             if let Some(child) = node.children.first_mut() {
                 // `prepare_sort_from_pathkeys`: a key that the node below computes for the sort does not count in its width.
                 let added = width(level, child.scope, &below[want.len()..]);
+                // The node below computes the constant of a `PlaceHolderVar`.
+                let below = below
+                    .into_iter()
+                    .map(|w| if is_const(&w.expr) { Item { below: false, ..w } } else { w })
+                    .collect();
                 set(level, child, below, false);
                 child.cost.width -= added;
                 node.cost.width = child.cost.width;
@@ -744,10 +754,16 @@ fn grouped<'q>(
 ) {
     // `make_group_input_target`: the keys come first, in the order of the target list, then the keys that are not in it.
     let mut below: Vec<Item<'q>> = Vec::new();
+    // `mark_nullable_by_grouping`: a constant key that a grouping set does not have is in a `PlaceHolderVar`, so a node below that does not project reads it from below.
+    let nullable = |key: &Expr| {
+        let Kind::Aggregate { sets, .. } = &node.kind else { return false };
+        matches!(key.kind, ExprKind::Const(_))
+            && sets.iter().flat_map(|r| &r.sets).any(|s| !s.iter().any(|i| i.expr.same(key)))
+    };
     let in_want = want.iter().map(|w| &*w.expr).filter(|w| keys.iter().any(|k| k.same(w)));
     for key in in_want.chain(keys) {
         if !below.iter().any(|b| b.expr.same(key)) {
-            below.push(item(key.clone()));
+            below.push(Item { below: nullable(key), ..item(key.clone()) });
         }
     }
     let mut output = Vec::new();
