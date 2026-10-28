@@ -1,0 +1,105 @@
+> CREATE ROLE regress_ep_a
+CREATE ROLE
+> CREATE ROLE regress_ep_b
+CREATE ROLE
+> GRANT CREATE ON SCHEMA public TO regress_ep_a
+GRANT
+> CREATE TABLE ep_t (a int, b int)
+CREATE TABLE
+> ALTER TABLE ep_t OWNER TO regress_ep_a
+ALTER TABLE
+> CREATE FUNCTION ep_f(int) RETURNS int LANGUAGE sql AS 'SELECT $1'
+CREATE FUNCTION
+> REVOKE EXECUTE ON FUNCTION ep_f(int) FROM PUBLIC
+REVOKE
+> CREATE MATERIALIZED VIEW ep_mv AS SELECT 1 AS x WITH NO DATA
+CREATE MATERIALIZED VIEW
+> GRANT SELECT ON ep_mv TO regress_ep_b
+GRANT
+> SET ROLE regress_ep_a
+SET
+is_superuser=off
+> CREATE VIEW ep_v AS SELECT a FROM ep_t
+CREATE VIEW
+> CREATE VIEW ep_v2 AS SELECT a FROM ep_t
+CREATE VIEW
+> GRANT SELECT ON ep_v2 TO regress_ep_b
+GRANT
+> GRANT SELECT (a) ON ep_t TO regress_ep_b
+GRANT
+> RESET ROLE
+RESET
+is_superuser=on
+> SET ROLE regress_ep_b
+SET
+is_superuser=off
+> EXPLAIN (COSTS OFF) SELECT * FROM ep_t
+ERROR 42501 permission denied for table ep_t
+> EXPLAIN (COSTS OFF) SELECT a FROM ep_t
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ep_t
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT a FROM ep_t WHERE b = 1
+ERROR 42501 permission denied for table ep_t
+> EXPLAIN (COSTS OFF) SELECT * FROM ep_v
+ERROR 42501 permission denied for view ep_v
+> EXPLAIN (COSTS OFF) SELECT * FROM ep_v2
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ep_t
+EXPLAIN
+> EXPLAIN (COSTS OFF) INSERT INTO ep_t VALUES (1, 2)
+ERROR 42501 permission denied for table ep_t
+> EXPLAIN (COSTS OFF) UPDATE ep_t SET a = 1
+ERROR 42501 permission denied for table ep_t
+> EXPLAIN (COSTS OFF) DELETE FROM ep_t
+ERROR 42501 permission denied for table ep_t
+> EXPLAIN (COSTS OFF) SELECT ep_f(1)
+ERROR 42501 permission denied for function ep_f
+> EXPLAIN (COSTS OFF) SELECT * FROM ep_mv
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ep_mv
+EXPLAIN
+> SELECT * FROM ep_mv
+ERROR 55000 materialized view "ep_mv" has not been populated
+> RESET ROLE
+RESET
+is_superuser=on
+> GRANT INSERT ON ep_t TO regress_ep_b
+GRANT
+> SET ROLE regress_ep_b
+SET
+is_superuser=off
+> BEGIN READ ONLY
+BEGIN
+> EXPLAIN (COSTS OFF) INSERT INTO ep_t VALUES (1, 2)
+fields QUERY PLAN:25:-1:-1
+row Insert on ep_t
+row   ->  Result
+EXPLAIN
+> INSERT INTO ep_t VALUES (1, 2)
+ERROR 25006 cannot execute INSERT in a read-only transaction
+> ROLLBACK
+ROLLBACK
+> RESET ROLE
+RESET
+is_superuser=on
+> EXPLAIN (COSTS OFF) SELECT ep_f(1)
+fields QUERY PLAN:25:-1:-1
+row Result
+EXPLAIN
+> DROP VIEW ep_v
+DROP VIEW
+> DROP VIEW ep_v2
+DROP VIEW
+> DROP MATERIALIZED VIEW ep_mv
+DROP MATERIALIZED VIEW
+> DROP FUNCTION ep_f(int)
+DROP FUNCTION
+> DROP TABLE ep_t
+DROP TABLE
+> REVOKE CREATE ON SCHEMA public FROM regress_ep_a
+REVOKE
+> DROP ROLE regress_ep_a
+DROP ROLE
+> DROP ROLE regress_ep_b
+DROP ROLE

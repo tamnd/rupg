@@ -1850,6 +1850,16 @@ impl Plan {
         scan::check_scannable(&self.query, session)
     }
 
+    /// The checks of `ExecutorStart` with `EXEC_FLAG_EXPLAIN_ONLY`: `ExecCheckPermissions` and the checks of `EXECUTE` of `ExecInitFunc`, with no check of a read-only transaction or of a relation that has no data.
+    ///
+    /// # Errors
+    ///
+    /// `42501` for a relation or a function that the role cannot use.
+    pub fn start_explain(&self, session: &dyn Session) -> Result<()> {
+        rupg_func::check_permissions(&self.query.perms, session)?;
+        rupg_func::check_execute(&self.query.funcs, session)
+    }
+
     /// The plan with no checks of the privileges of the statement, for a query that the server makes for its own work, such as the checks of a foreign key and the insert into a partition.
     #[must_use]
     pub fn unchecked(mut self) -> Plan {
