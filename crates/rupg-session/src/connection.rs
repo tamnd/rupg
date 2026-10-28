@@ -6157,6 +6157,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/set_constraints_partitions.test")));
     }
 
+    /// A row that moves to another partition can not keep a foreign key that refers to a partition below the target table, and the foreign keys of a target partition, clones too, cascade for the rows that move. `connection/partition_move_keys.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn partition_move_keys() {
+        big_stack(|| script(include_str!("connection/partition_move_keys.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
