@@ -17,6 +17,7 @@ use rupg_wire::CommandTag;
 use super::copy::{def_boolean, def_string};
 use super::extended::protocol_error;
 use super::{Connection, Done};
+use crate::guc;
 use crate::heap::{BtreeSize, Heap, Shape};
 use crate::query::{self, Column, Reader};
 use crate::utility::Notice;
@@ -347,6 +348,12 @@ impl rupg_opt::Members for Members<'_, '_> {
     fn enable(&self) -> Enable {
         let settings = self.reader.settings();
         let on = |name: &str| settings.get(name).is_none_or(|v| v != "off");
+        let number = |name: &str| match guc::find(name).map(|p| settings.setting(p)) {
+            Some(guc::Setting::Int(value)) => Some(f64::from(value)),
+            Some(guc::Setting::Real(value)) => Some(value),
+            _ => None,
+        };
+        let work_mem = number("work_mem").unwrap_or(4096.0) * 1024.0;
         Enable {
             seqscan: on("enable_seqscan"),
             indexscan: on("enable_indexscan"),
@@ -364,6 +371,8 @@ impl rupg_opt::Members for Members<'_, '_> {
             mergejoin: on("enable_mergejoin"),
             hashjoin: on("enable_hashjoin"),
             self_join_elimination: on("enable_self_join_elimination"),
+            work_mem,
+            hash_mem: work_mem * number("hash_mem_multiplier").unwrap_or(2.0),
         }
     }
 }

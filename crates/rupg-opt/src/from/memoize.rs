@@ -216,7 +216,7 @@ fn rescan_cost<'q>(
     let calls = cost::clamp_rows(outer_rows);
     let mut entry_bytes = cost::byte_size(tuples, sub.width) + ENTRY_BYTES + TUPLE_BYTES * tuples;
     entry_bytes += keys.iter().map(|k| f64::from(stats.expr_width(k))).sum::<f64>();
-    let entries = (cost::HASH_MEM / entry_bytes).floor();
+    let entries = (cost::hash_mem() / entry_bytes).floor();
     let (mut distinct, default) = stats.groups_estimated(&keys, calls);
     if default {
         distinct = calls;
