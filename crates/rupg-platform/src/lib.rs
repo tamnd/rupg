@@ -9,6 +9,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod clock;
+pub mod cmath;
 mod cpu;
 mod entropy;
 mod io;

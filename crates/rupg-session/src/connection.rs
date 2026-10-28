@@ -6406,6 +6406,16 @@ mod tests {
         big_stack(|| script(include_str!("connection/lock_status.test")));
     }
 
+    /// `cbrt`, `||/` and `gamma` give the same bits as PostgreSQL, because they call `cbrt` and `tgamma` of the C library, as `float.c` does. The code of Rust for these functions gave a different last bit for about half of these rows. glibc gives `3.0000000000000004` for `cbrt(27)`, and so does PostgreSQL. `connection/cmath.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    #[cfg_attr(
+        not(target_os = "linux"),
+        ignore = "the C library of this platform can give a different last bit than glibc, see Q20 (#33)"
+    )]
+    fn cmath() {
+        big_stack(|| script(include_str!("connection/cmath.test")));
+    }
+
     /// `EXPLAIN` shows one scan for an inner join of a table with itself whose conditions match each row with the same row by a unique index, also for a semi join that a unique index makes an inner join, as `remove_useless_self_joins` removes it. A join of two rows that the constants of the conditions make different rows stays, and so does a join when `enable_self_join_elimination` is off. `connection/self_join.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn self_join() {

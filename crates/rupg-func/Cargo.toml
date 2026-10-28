@@ -18,6 +18,7 @@ rupg-analyze.workspace = true
 rupg-catalog.workspace = true
 rupg-common.workspace = true
 rupg-pgcatalog.workspace = true
+rupg-platform.workspace = true
 rupg-plan.workspace = true
 rupg-sql.workspace = true
 rupg-types.workspace = true
