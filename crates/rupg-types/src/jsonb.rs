@@ -171,8 +171,13 @@ pub fn escape(text: &str, out: &mut String) {
 
 /// The text input of `jsonb`: the text of the value in the one form that PostgreSQL prints.
 pub fn jsonb_in(s: &str) -> Result<String, TypeError> {
+    jsonb_in_within(s, None)
+}
+
+/// [`jsonb_in`] with the limit of `max_stack_depth` in kilobytes.
+pub fn jsonb_in_within(s: &str, stack_kb: Option<u32>) -> Result<String, TypeError> {
     let mut tree = Tree::default();
-    match json::parse(s, true, &mut tree) {
+    match json::parse_within(s, true, stack_kb, json::JSONB_STACK, &mut tree) {
         Ok(()) => {}
         Err(Stop::Syntax(fail)) => return Err(json::syntax(s, fail)),
         Err(Stop::Action(error)) => return Err(error),

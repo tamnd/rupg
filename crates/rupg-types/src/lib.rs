@@ -44,7 +44,7 @@
 //!
 //! [`pg_ndistinct_in`] and [`pg_dependencies_in`] read the JSON text of the types of the extended statistics with the details of the errors of PostgreSQL, and give the bytes of the value. [`pg_ndistinct_out`] and [`pg_dependencies_out`] write the text from the bytes.
 //!
-//! PostgreSQL parses `json` by recursion and stops a deep value with `stack depth limit exceeded` when it reaches `max_stack_depth`. [`json_in`] uses no recursion and takes a value at any depth. PostgreSQL stops a deep `tsquery` in the same way. [`tsquery_parse`] gives the same error for a query with 1000 levels, as the analyzer does for an expression. [`jsonpath_parse`] has the same limit for a path.
+//! PostgreSQL parses `json` by recursion and stops a deep value with `stack depth limit exceeded` when it reaches `max_stack_depth`. [`json_in_within`] uses no recursion, and it stops a value whose levels need more stack in PostgreSQL than `max_stack_depth`. PostgreSQL stops a deep `tsquery` in the same way. [`tsquery_parse`] gives the same error for a query with 1000 levels, as the analyzer does for an expression. [`jsonpath_parse`] has the same limit for a path.
 //!
 //! The text and binary forms are lifted from `crates/rudb-pgtypes` of tamnd/rudb at f5f7065a (spec/04 section 4.9). The `DataRow` encoder and the `Bind` decoder of that crate need the executor, so they come with rupg-server.
 
@@ -113,8 +113,8 @@ pub use error::TypeError;
 pub use float::{float4_in, float4_out, float8_in, float8_out};
 pub use generated::oids as oid;
 pub use geo::{GeoKind, geo_in, geo_out, geo_recv};
-pub use json::json_in;
-pub use jsonb::{escape as json_escape, jsonb_in, jsonb_recv, jsonb_send};
+pub use json::{json_in, json_in_within};
+pub use jsonb::{escape as json_escape, jsonb_in, jsonb_in_within, jsonb_recv, jsonb_send};
 pub use jsonpath::{
     Chain, JSONPATH_LAST, JSONPATH_REGEX_DOTALL, JSONPATH_REGEX_ICASE, JSONPATH_REGEX_MLINE,
     JSONPATH_REGEX_QUOTE, JSONPATH_REGEX_WSPACE, JsonPath, PathItem, PathOp, RegexCheck,
