@@ -144,6 +144,34 @@ impl Connection {
         Ok(())
     }
 
+    /// `finish_heap_swap` of a rewrite of `ALTER TABLE`: a table of `tables` whose rows get new values goes into a new heap with a new file, and each index of the table gets a new file, as `reindex_relation` builds it again. `index_update_stats` then gives the indexes and the table the stats of the build.
+    pub(super) fn rewrite_files(
+        &self,
+        tables: &[u32],
+        work: &mut Catalog,
+        transforms: &[Transform],
+        fills: &[Fill],
+    ) -> Result<(), Error> {
+        let old = self.catalog();
+        for &table in tables {
+            let Some(rel) = old.relation(table) else { continue };
+            if keeps_rows(&old, work, rel, transforms, fills) {
+                continue;
+            }
+            let Some(now) = work.relation(table) else { continue };
+            let heaps = [table, now.toast];
+            let indexes: Vec<u32> = work
+                .relations()
+                .filter(|r| r.index.as_ref().is_some_and(|i| heaps.contains(&i.table)))
+                .map(|r| r.oid)
+                .collect();
+            for oid in heaps.into_iter().filter(|&oid| oid != 0).chain(indexes) {
+                work.set_new_file(oid)?;
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn rewrite_rows(
         &self,
         tables: &[u32],

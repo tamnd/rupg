@@ -1364,7 +1364,10 @@ impl Connection {
             .result
             .and_then(|()| self.truncate_files(&defined.truncated, &mut work))
             .and_then(|()| self.check_detached(&defined.detached))
-            .and_then(|()| self.rows_to_rewrite(node, &work, transforms, fills));
+            .and_then(|()| self.rows_to_rewrite(node, &work, transforms, fills))
+            .and_then(|tables| {
+                self.rewrite_files(&tables, &mut work, transforms, fills).map(|()| tables)
+            });
         let mut work = Arc::new(work);
         let result = rewrite
             .and_then(|tables| self.rewrite_rows(&tables, &work, transforms, fills))
@@ -1379,7 +1382,14 @@ impl Connection {
         match result {
             Ok(()) => {
                 let old = std::mem::replace(&mut lease.catalog, work);
-                self.index_stats(&old, &lease.catalog);
+                // The expressions of an index read the roles of the lease.
+                let new = Arc::clone(&lease.catalog);
+                drop(held);
+                self.index_stats(&old, &new);
+                let mut held = self.lease.borrow_mut();
+                let Some(lease) = held.as_mut() else {
+                    return Err(Error::internal("the lock of the catalog is gone"));
+                };
                 self.register_on_commit(&defined.on_commit);
                 if !defined.grantors.is_empty() || !defined.databases.is_empty() {
                     let mut roles = Roles::clone(&lease.roles);
@@ -6263,6 +6273,12 @@ mod tests {
     #[test]
     fn alter_type_index_expr() {
         big_stack(|| script(include_str!("connection/alter_type_index_expr.test")));
+    }
+
+    /// `index_update_stats` of a `btree` index with expressions or a predicate: the pages of the keys of the rows that pass the predicate, and the number of those rows. A rewrite of `ALTER COLUMN ... TYPE` gives the table and its indexes new files, as `finish_heap_swap` does, and the build of the indexes gives the table and the indexes their stats again. `connection/index_expr_stats.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn index_expr_stats() {
+        big_stack(|| script(include_str!("connection/index_expr_stats.test")));
     }
 
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.

@@ -14,8 +14,9 @@ use super::copy::{def_boolean, def_string};
 const PG_CHECKPOINT: u32 = 4544;
 use super::{Connection, Done};
 use crate::guc;
-use crate::heap::Skip;
+use crate::heap::{Skip, View};
 use rupg_types::Value;
+use std::sync::Arc;
 
 use super::{analyze, explain};
 use crate::utility::Notice;
@@ -458,7 +459,7 @@ impl Connection {
     }
 
     /// `index_update_stats` after a statement that built indexes, the indexes of `new` that are not in `old` or that have a new file: `relpages` and `reltuples` of the table of each index, while `autovacuum` is on and the table does not turn it off. A table with no rows that no `VACUUM` or `ANALYZE` counted keeps its `reltuples` of -1.
-    pub(super) fn index_stats(&self, old: &Catalog, new: &Catalog) {
+    pub(super) fn index_stats(&self, old: &Catalog, new: &Arc<Catalog>) {
         let built: Vec<&Relation> = new
             .relations()
             .filter(|r| r.kind == RelKind::Index && r.index.is_some())
@@ -495,15 +496,30 @@ impl Connection {
         }
     }
 
-    /// `index_update_stats` of a new index: `relpages` from the pages of the index and `reltuples` from the rows that it has. A `btree` index has the pages that [`Heap::btree_size`] gives, and a `hash` index has the metapage, its buckets and the bitmap page, as `_hash_init` makes them for the rows that `estimate_rel_size` gives for the table, when its rows fill no bucket. An index with no rows keeps the pages of a new index and a `reltuples` of 0, as do a partial index and the indexes of other access methods.
-    fn built_index_stats(&self, catalog: &Catalog, index: &Relation) {
+    /// `index_update_stats` of a new index: `relpages` from the pages of the index and `reltuples` from the rows that it has. A `btree` index has the pages that [`Heap::btree_size`] gives, and a `hash` index has the metapage, its buckets and the bitmap page, as `_hash_init` makes them for the rows that `estimate_rel_size` gives for the table, when its rows fill no bucket. A `btree` index with expressions or a predicate has the pages of the keys of its build. An index with no rows keeps the pages of a new index and a `reltuples` of 0, as do the indexes of other access methods.
+    fn built_index_stats(&self, catalog: &Arc<Catalog>, index: &Relation) {
         let heap = self.heap();
         let Some(info) = &index.index else { return };
         let Some(table) = catalog.relation(info.table) else { return };
         let live = heap.live_count(self.database_oid, info.table, self.xid.get());
         let size = heap.size(self.database_oid, info.table);
         let pages = match info.method {
-            _ if live == 0 || info.predicate.is_some() || info.exprs.is_some() => None,
+            rupg_catalog::BTREE
+                if live > 0 && (info.predicate.is_some() || info.exprs.is_some()) =>
+            {
+                if let Some((pages, tuples)) = self.derived_btree_stats(catalog, index) {
+                    heap.set_stats(self.database_oid, index.oid, pages, tuples);
+                    return;
+                }
+                None
+            }
+            // The pages of a `hash` index come from the stats of the table, not from its keys.
+            _ if live == 0
+                || info.predicate.is_some()
+                || (info.exprs.is_some() && info.method != HASH) =>
+            {
+                None
+            }
             rupg_catalog::BTREE => explain::btree_shape(index, &table.columns).map(|shape| {
                 heap.btree_size(self.database_oid, info.table, index.oid, &shape).blocks
             }),
@@ -542,6 +558,32 @@ impl Connection {
             }
             None => heap.set_stats(self.database_oid, index.oid, 0, -1.0),
         }
+    }
+
+    /// `index_update_stats` of a new `btree` index with expressions or a predicate: the pages of the keys that the build computes for the rows of the table that pass the predicate, and the number of those rows. `None` for an index with `INCLUDE` columns or when an expression fails.
+    fn derived_btree_stats(&self, catalog: &Arc<Catalog>, index: &Relation) -> Option<(i32, f32)> {
+        let info = index.index.as_ref()?;
+        let table = catalog.relation(info.table)?;
+        let key_count = usize::try_from(info.key_count).ok()?;
+        if info.keys.len() != key_count {
+            return None;
+        }
+        let columns: Vec<(u32, i32)> = table.columns.iter().map(|c| (c.ty, c.typmod)).collect();
+        let derived = rupg_analyze::index_derived(info, info.table, &columns).ok()?;
+        let view = View { xid: self.xid.get(), ..self.view() };
+        let rows = self.heap().rows(info.table, &view);
+        let reader = self.reader_without_view(Arc::clone(catalog));
+        let mut entries = Vec::with_capacity(rows.len());
+        for row in &rows {
+            if let Some(key) = rupg_exec::index_key(&derived, row, &reader).ok()? {
+                entries.push(key.into_boxed_slice());
+            }
+        }
+        let tuples = entries.len() as f32;
+        let types = derived.exprs.iter().map(|e| e.ty).collect();
+        let shape = explain::shape_of(index, (0..key_count).collect(), types);
+        let size = crate::heap::Heap::btree_size_of(entries, &shape);
+        Some((i32::try_from(size.blocks).unwrap_or(i32::MAX), tuples))
     }
 
     /// The statistics of the tables of `CLUSTER` and `REPACK` after the rewrite: `relpages` and `reltuples`, as `copy_table_data` sets them, and the statistics of the columns of `REPACK (ANALYZE)`, as `analyze_rel` writes them after the commit of the rewrite.

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A `btree` index with expressions or a predicate gets the pages and the rows of its build in `pg_class`, and so does a `hash` index on an expression. A rewrite of `ALTER COLUMN ... TYPE` gives the table and its indexes new files, and the build of the indexes gives them their stats again. (#1031)
 - `ALTER COLUMN ... TYPE` works on a column of an index with expressions or a predicate. The expressions and the predicate get the new type, an expression column keeps a collation that the definition gave, and an expression that becomes a plain column becomes a key column. The dependencies of the index on the expressions and on the predicate are recorded separately, as `index_create` records them. (#1030)
 
 ## 0.4.4 (2026-10-28)

@@ -344,7 +344,11 @@ pub struct Derived {
 }
 
 /// The key of the index `info` of the table `table` for `FormIndexDatum`, with the type and the type modifier of each column of the table in `columns`.
-fn index_derived(
+///
+/// # Errors
+///
+/// The errors of the reading of the expressions.
+pub fn index_derived(
     info: &rupg_catalog::IndexInfo,
     table: u32,
     columns: &[(u32, i32)],
