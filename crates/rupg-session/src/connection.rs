@@ -6601,6 +6601,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/from_function_domain.test")));
     }
 
+    /// `COMMENT ON CONSTRAINT ... ON DOMAIN` sets and clears the comment of a constraint of a domain. A type that is not a domain, a constraint that is not there and a user who is not the owner give the errors of PostgreSQL.
+    #[test]
+    fn comment_domain_constraint() {
+        big_stack(|| script(include_str!("connection/comment_domain_constraint.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

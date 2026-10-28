@@ -74,6 +74,7 @@ impl Definer<'_, '_> {
             | ObjectType::OBJECT_FOREIGN_TABLE => self.comment_relation(stmt.objtype, object)?,
             ObjectType::OBJECT_COLUMN => self.comment_column(object)?,
             ObjectType::OBJECT_TABCONSTRAINT => self.comment_constraint(object)?,
+            ObjectType::OBJECT_DOMCONSTRAINT => self.comment_domain_constraint(object)?,
             ObjectType::OBJECT_TRIGGER => self.comment_trigger(object)?,
             ObjectType::OBJECT_RULE => self.comment_rule(object)?,
             ObjectType::OBJECT_POLICY => self.comment_policy(object)?,
@@ -244,6 +245,44 @@ impl Definer<'_, '_> {
             ));
         };
         self.owned_relation(Found::User(oid), "relation", name)?;
+        Ok(ObjRef::new(PG_CONSTRAINT, found))
+    }
+
+    /// A constraint of a domain, by `get_object_address` for `OBJECT_DOMCONSTRAINT` and `get_domain_constraint_oid`. The user must own the domain, as `check_object_ownership` checks it.
+    fn comment_domain_constraint(&mut self, object: Option<&Node>) -> Result<ObjRef> {
+        let Some(Node::List(list)) = object else {
+            return Err(Error::internal("a domain constraint with no name"));
+        };
+        let (Some(Some(Node::TypeName(name))), Some(Some(Node::String(constraint)))) =
+            (list.first(), list.get(1))
+        else {
+            return Err(Error::internal("a domain constraint with no name"));
+        };
+        let (oid, _) = self.an.type_name(name).map_err(|error| error.with_position(None))?;
+        let Some(ty) = self.catalog.type_by_oid(oid).filter(|t| t.domain.is_some()) else {
+            if rupg_pgcatalog::builtin::domain_by_oid(oid).is_some() {
+                return Err(builtin_object());
+            }
+            return Err(Error::new(
+                SqlState::WRONG_OBJECT_TYPE,
+                format!("\"{}\" is not a domain", type_name_text(name)),
+            ));
+        };
+        let owner = ty.owner;
+        let found = self.catalog.constraints_of_domain(oid).find(|c| c.name == **constraint);
+        let Some(found) = found.map(|c| c.oid) else {
+            return Err(Error::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!(
+                    "constraint \"{}\" for domain {} does not exist",
+                    &**constraint,
+                    self.type_text(oid)
+                ),
+            ));
+        };
+        if !self.is_superuser() && !self.owns(owner) {
+            return Err(not_owner("type", &self.type_text(oid)));
+        }
         Ok(ObjRef::new(PG_CONSTRAINT, found))
     }
 
