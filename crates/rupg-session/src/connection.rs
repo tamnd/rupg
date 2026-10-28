@@ -6181,6 +6181,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/partitioned_index_drop.test")));
     }
 
+    /// An index attaches to a partitioned index of an exclusion constraint only when it has an exclusion constraint with the same operators, and a new exclusion constraint on a partitioned table does not take an index of a partition with other operators. `connection/exclusion_index_attach.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn exclusion_index_attach() {
+        big_stack(|| script(include_str!("connection/exclusion_index_attach.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

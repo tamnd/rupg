@@ -1,0 +1,43 @@
+!details
+> create table ex (a int4range, b int4range) partition by list (a)
+CREATE TABLE
+> create table ex1 (a int4range, b int4range)
+CREATE TABLE
+> alter table only ex attach partition ex1 for values in ('[0,1)'::int4range)
+ALTER TABLE
+> alter table only ex add constraint ex_excl exclude using gist (a with =, b with &&)
+ALTER TABLE
+> alter table ex1 add constraint ex1_excl exclude using gist (a with &&, b with &&)
+ALTER TABLE
+> alter index ex_excl attach partition ex1_excl
+ERROR 42P17 cannot attach index "ex1_excl" as a partition of index "ex_excl"
+DETAIL The index definitions do not match.
+> create index ex1_plain on ex1 using gist (a, b)
+CREATE INDEX
+> alter index ex_excl attach partition ex1_plain
+ERROR 42P17 cannot attach index "ex1_plain" as a partition of index "ex_excl"
+DETAIL The index definitions do not match.
+> alter table ex1 drop constraint ex1_excl
+ALTER TABLE
+> alter table ex1 add constraint ex1_excl exclude using gist (a with =, b with &&)
+ALTER TABLE
+> alter index ex_excl attach partition ex1_excl
+ALTER INDEX
+> select c.relname, i.inhparent::regclass from pg_inherits i join pg_class c on c.oid = i.inhrelid where i.inhparent = 'ex_excl'::regclass
+fields relname@pg_class.2:19:64:-1,inhparent:2205:4:-1
+row ex1_excl,ex_excl
+SELECT 1
+> create table ey (a int4range, b int4range) partition by list (a)
+CREATE TABLE
+> create table ey1 partition of ey for values in ('[0,1)'::int4range)
+CREATE TABLE
+> alter table ey1 add constraint ey1_excl exclude using gist (a with &&, b with &&)
+ALTER TABLE
+> alter table ey add constraint ey_excl exclude using gist (a with =, b with &&)
+ALTER TABLE
+> select conname, conrelid::regclass, conparentid <> 0 as child from pg_constraint where conrelid in ('ey'::regclass, 'ey1'::regclass) order by conname
+fields conname@pg_constraint.2:19:64:-1,conrelid:2205:4:-1,child:16:1:-1
+row ey1_a_b_excl,ey1,t
+row ey1_excl,ey1,f
+row ey_excl,ey,f
+SELECT 3

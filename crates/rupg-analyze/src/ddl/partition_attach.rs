@@ -693,7 +693,9 @@ impl Definer<'_, '_> {
             .with_detail(detail)
         };
         let wanted = self.att_map(parent_table, table.oid)?.index(&parent)?;
-        if !same_definition(&info, &wanted) {
+        if !same_definition(&info, &wanted)
+            || !self.same_exclusion(table.oid, index, parent_table, target.oid)
+        {
             return Err(invalid("The index definitions do not match.".into()));
         }
         let index_constraint = |table: u32, index: u32| {
