@@ -1547,7 +1547,7 @@ fn statistic_exts<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
         .collect()
 }
 
-/// The rows of `pg_statistic`: the rows of the system catalogs that the `ANALYZE` of `initdb` wrote, then the rows that `ANALYZE` wrote for the tables of the catalog, as `update_attstats` forms them, with no slot after the slots that have a kind. `stavaluesN` is an `anyarray`, which keeps the text that `array_out` gives with the output function of the type of the column, as the array keeps its element type.
+/// The rows of `pg_statistic`: the rows of the system catalogs that the `ANALYZE` of `initdb` wrote, then the rows that `ANALYZE` wrote for the tables of the catalog and for the expression columns of their indexes, as `update_attstats` forms them, with no slot after the slots that have a kind. `stavaluesN` is an `anyarray`, which keeps the text that `array_out` gives with the output function of the type of the column, as the array keeps its element type.
 fn statistics<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) -> Vec<Row<'a>> {
     let numbers_value = |numbers: Option<&[f32]>| {
         numbers.map_or(Value::Null, |numbers| {
@@ -1580,8 +1580,9 @@ fn statistics<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) ->
         }
         rows.push(row);
     }
-    let kinds =
-        |r: &&Relation| matches!(r.kind, RelKind::Table | RelKind::MatView | RelKind::Partitioned);
+    let kinds = |r: &&Relation| {
+        matches!(r.kind, RelKind::Table | RelKind::MatView | RelKind::Partitioned | RelKind::Index)
+    };
     for rel in catalog.relations().filter(kinds) {
         for stat in session.statistics(rel.oid) {
             let at = usize::try_from(stat.attnum - 1).unwrap_or(usize::MAX);

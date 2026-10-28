@@ -80,9 +80,9 @@ pub(super) fn examine(column: &Column, attnum: i16, default_target: i32) -> Opti
     })
 }
 
-/// `targrows` of `do_analyze_rel`: the most of `minrows` of the columns, which is 300 times the statistics target, and 100.
-pub(super) fn sample_rows(targets: &[Target]) -> usize {
-    let most = targets.iter().map(|t| 300 * t.target.max(0)).max().unwrap_or(0);
+/// `targrows` of `do_analyze_rel`: the most of `minrows` of the columns of the table and of the expression columns of its indexes, which is 300 times the statistics target, and 100.
+pub(super) fn sample_rows<'a>(targets: impl Iterator<Item = &'a Target>) -> usize {
+    let most = targets.map(|t| 300 * t.target.max(0)).max().unwrap_or(0);
     usize::try_from(most.max(100)).unwrap_or(100)
 }
 

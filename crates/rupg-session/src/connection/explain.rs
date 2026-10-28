@@ -97,7 +97,7 @@ impl Members<'_, '_> {
         }
     }
 
-    /// The pages and the height of the index `index` of the table `table` with the columns `columns`. A `btree` index on columns of the table with no predicate has the size that [`Heap::btree_size`] gives from the versions of the table, and another index has the pages of [`Members::index_pages`] and a height of 0.
+    /// The pages and the height of the index `index` of the table `table` with the columns `columns`. A `btree` index on columns of the table with no predicate has the size that [`Heap::btree_size`] gives from the versions of the table, and another index has the pages of [`Members::index_pages`]. The root of such a `btree` index is not a leaf when the index has more pages than the metapage and one leaf, and another index has a height of 0.
     fn index_size(
         &self,
         table: u32,
@@ -109,7 +109,8 @@ impl Members<'_, '_> {
         let built = self.heap.size(self.database, index.oid);
         let pages = if built.reltuples >= 0.0 { built.relpages } else { info.pages };
         let pages = self.index_pages(table, info.method, pages);
-        let fallback = BtreeSize { blocks: u32::try_from(pages).unwrap_or(1), height: 0 };
+        let height = u32::from(info.method == rupg_catalog::BTREE && pages > 2);
+        let fallback = BtreeSize { blocks: u32::try_from(pages).unwrap_or(1), height };
         match btree_shape(index, columns) {
             Some(shape) => self.heap.btree_size(self.database, table, index.oid, &shape),
             None => fallback,

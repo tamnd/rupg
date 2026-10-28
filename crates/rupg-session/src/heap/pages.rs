@@ -145,6 +145,14 @@ pub(super) fn index_tuple_len(values: &[Value]) -> usize {
     max_align(header + data_len(&layouts))
 }
 
+/// The lengths of the value `value` that an expression gives, as `ANALYZE` reads them for an expression column of an index: `VARSIZE_ANY` and `toast_raw_datum_size` of a value with a header of four bytes, as the value is not in a version. A null value and a value of fixed length give 0 for both.
+pub(crate) fn datum_width(value: &Value) -> (usize, usize) {
+    match layout(value) {
+        Layout::Varlena(size, _) if !value.is_null() => (size + 4, size + 4),
+        _ => (0, 0),
+    }
+}
+
 /// The lengths of the values `values` of a version, as `ANALYZE` reads them: `VARSIZE_ANY` of the value in the version, which is the length of the TOAST pointer for a value that [`tuple_len`] moves to the TOAST table, and `toast_raw_datum_size`, the length of the value with a header of four bytes. A null value and a value of fixed length give 0 for both.
 pub(crate) fn stored_widths(values: &[Value]) -> Vec<(usize, usize)> {
     let nulls = values.iter().any(Value::is_null);
