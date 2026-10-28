@@ -197,6 +197,11 @@ impl Tables {
             if let Some(tid) = self.trailer(var.relation, row, width) {
                 return tid;
             }
+            // A row of the catalog has no version. Its `ctid` is its place in the catalog, with 32768 rows on a page, so that each row has a different `ctid`.
+            if self.oids[var.relation] < rupg_catalog::FIRST_NORMAL_OID {
+                let row = i64::try_from(row).unwrap_or_default();
+                return Value::Int8(((row >> 15) << 16) | ((row & 0x7fff) + 1));
+            }
         }
         if var.attnum < 0 {
             return Value::Oid(0);

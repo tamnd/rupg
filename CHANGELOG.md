@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A row of a system catalog has a `ctid`, so a query such as `SELECT ctid, oprcom FROM pg_operator` runs. Each row of a catalog table has a different `ctid`. The drop_operator regression test passes. (#1040)
 - `pg_locks` shows the advisory locks, the locks of `LOCK TABLE`, the virtual transaction IDs and the transaction IDs of the sessions (#1039)
 - The `USING` expressions of `ALTER COLUMN TYPE` read the old row, so they can use a column that the same statement drops or changes (#1038)
 - `ALTER COLUMN TYPE` of a key column of an exclusion constraint gives the index the operator class of the new type and gives the constraint the operator of the new type, as in PostgreSQL. (#1037)

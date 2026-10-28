@@ -927,10 +927,6 @@ mod tests {
                 error("SELECT oid FROM pg_am a, pg_am b"),
                 e("42702", "column reference \"oid\" is ambiguous", 7)
             );
-            assert_eq!(
-                error("SELECT ctid FROM pg_am"),
-                e("0A000", "the system column \"ctid\" is not supported yet", 7)
-            );
             let s = |v: [&str; 4]| v.map(str::to_string);
             assert_eq!(
                 full_error("SELECT amnam FROM pg_am"),

@@ -1,0 +1,10 @@
+> select count(distinct ctid) = count(*) as distinct from pg_operator
+fields distinct:16:1:-1
+row t
+SELECT 1
+> select ctid, oprcom from pg_catalog.pg_operator fk where oprcom != 0 and not exists (select 1 from pg_catalog.pg_operator pk where pk.oid = fk.oprcom)
+fields ctid@pg_operator.-1:27:6:-1,oprcom@pg_operator.11:26:4:-1
+SELECT 0
+> select ctid from pg_class where oid = 'pg_class'::regclass and ctid < '(0,0)'
+fields ctid@pg_class.-1:27:6:-1
+SELECT 0
