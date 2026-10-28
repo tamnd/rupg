@@ -1,0 +1,71 @@
+> create table mchash (a int, b text, c jsonb) partition by hash (a, b)
+CREATE TABLE
+> create table mchash1 partition of mchash for values with (modulus 4, remainder 0)
+CREATE TABLE
+> select satisfies_hash_partition(0, 4, 0, null)
+ERROR XX000 could not open relation with OID 0
+> select satisfies_hash_partition('mchash1'::regclass, 4, 0, null)
+ERROR 22023 "mchash1" is not a hash partitioned table
+> select satisfies_hash_partition('mchash'::regclass, 0, 0, null)
+ERROR 22023 modulus for hash partition must be an integer value greater than zero
+> select satisfies_hash_partition('mchash'::regclass, 1, -1, null)
+ERROR 22023 remainder for hash partition must be an integer value greater than or equal to zero
+> select satisfies_hash_partition('mchash'::regclass, 1, 1, null)
+ERROR 22023 remainder for hash partition must be less than modulus
+> select satisfies_hash_partition('mchash'::regclass, null, 0, null)
+fields satisfies_hash_partition:16:1:-1
+row f
+SELECT 1
+> select satisfies_hash_partition('mchash'::regclass, 4, 0, variadic null::int[])
+fields satisfies_hash_partition:16:1:-1
+row f
+SELECT 1
+> select satisfies_hash_partition('mchash'::regclass, 4, 0, null::int, null::text, null::json)
+ERROR 22023 number of partitioning columns (2) does not match number of partition keys provided (3)
+> select satisfies_hash_partition('mchash'::regclass, 2, 1, null::int, null::int)
+ERROR 22023 column 2 of the partition key has type text, but supplied value is of type integer
+> select satisfies_hash_partition('mchash'::regclass, 2, 1, variadic array[1, 2]::int[])
+ERROR 22023 column 2 of the partition key has type "text", but supplied value is of type "integer"
+> select satisfies_hash_partition('mchash'::regclass, 4, 0, 0, ''::text), satisfies_hash_partition('mchash'::regclass, 4, 0, 2, ''::text)
+fields satisfies_hash_partition:16:1:-1,satisfies_hash_partition:16:1:-1
+row f,f
+SELECT 1
+> create table t (a text) partition by hash (a)
+CREATE TABLE
+> create table t0 partition of t for values with (modulus 2, remainder 0)
+CREATE TABLE
+> create table t1 partition of t for values with (modulus 2, remainder 1)
+CREATE TABLE
+> insert into t values ('xxx'), ('yyy'), ('zzz'), ('a')
+INSERT 0 4
+> select tableoid::regclass::text, a, satisfies_hash_partition('t'::regclass, 2, 0, a) from t order by a
+fields tableoid:25:-1:-1,a@t.1:25:-1:-1,satisfies_hash_partition:16:1:-1
+row t0,a,t
+row t1,xxx,f
+row t0,yyy,t
+row t0,zzz,t
+SELECT 4
+> create table i (a int, b int) partition by hash (a, b)
+CREATE TABLE
+> select n, satisfies_hash_partition('i'::regclass, 4, n, variadic array[1, 2]) from generate_series(0, 3) n
+fields n:23:4:-1,satisfies_hash_partition:16:1:-1
+row 0,f
+row 1,t
+row 2,f
+row 3,f
+SELECT 4
+> select satisfies_hash_partition('i'::regclass, 4, 0, variadic array[]::int[])
+ERROR 22023 number of partitioning columns (2) does not match number of partition keys provided (0)
+> select satisfies_hash_partition('i'::regclass, 4, 0, variadic array[now(), now()])
+fields satisfies_hash_partition:16:1:-1
+ERROR 22023 column 1 of the partition key has type "integer", but supplied value is of type "timestamp with time zone"
+> create function hint4(int4, int8) returns int8 as 'select $1 + $2' language sql strict immutable
+CREATE FUNCTION
+> create operator class int4_ops_x for type int4 using hash as operator 1 =, function 2 hint4(int4, int8)
+CREATE OPERATOR CLASS
+> create table u (a int, b int) partition by hash (a int4_ops_x, b int4_ops_x)
+CREATE TABLE
+> select satisfies_hash_partition('u'::regclass, 4, 0, variadic array[0, 0]), satisfies_hash_partition('u'::regclass, 4, 0, variadic array[0, 1])
+fields satisfies_hash_partition:16:1:-1,satisfies_hash_partition:16:1:-1
+row f,t
+SELECT 1
