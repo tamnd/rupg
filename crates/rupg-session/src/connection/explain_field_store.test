@@ -1,0 +1,54 @@
+!details
+> create type fsc as (r float8, i float8)
+CREATE TYPE
+> create domain fsd as fsc check ((value).r > 0)
+CREATE DOMAIN
+> create table fst (d1 fsd, a fsc[], b fsd[])
+CREATE TABLE
+> explain (verbose, costs off) update fst set d1.r = (d1).r - 1, d1.i = (d1).i + 1 where (d1).i > 0
+fields QUERY PLAN:25:-1:-1
+row Update on public.fst
+row   ->  Seq Scan on public.fst
+row         Output: ROW(((d1).r - '1'::double precision), ((d1).i + '1'::double precision)), ctid
+row         Filter: ((fst.d1).i > '0'::double precision)
+EXPLAIN
+> explain (verbose, costs off) update fst set a[1].r = a[1].r - 1, a[1].i = a[1].i + 1 where a[1].i > 0
+fields QUERY PLAN:25:-1:-1
+row Update on public.fst
+row   ->  Seq Scan on public.fst
+row         Output: (a[1].r := (a[1].r - '1'::double precision))[1].i := (a[1].i + '1'::double precision), ctid
+row         Filter: (fst.a[1].i > '0'::double precision)
+EXPLAIN
+> explain (verbose, costs off) update fst set b[1].r = b[1].r - 1, b[1].i = b[1].i + 1 where b[1].i > 0
+fields QUERY PLAN:25:-1:-1
+row Update on public.fst
+row   ->  Seq Scan on public.fst
+row         Output: (b[1].r := (b[1].r - '1'::double precision))[1].i := (b[1].i + '1'::double precision), ctid
+row         Filter: (fst.b[1].i > '0'::double precision)
+EXPLAIN
+> explain (verbose, costs off) update fst set a[1] = row(1,2), a[2:3] = array[row(1,2)::fsc]
+fields QUERY PLAN:25:-1:-1
+row Update on public.fst
+row   ->  Seq Scan on public.fst
+row         Output: (a[1] := '(1,2)'::fsc)[2:3] := '{"(1,2)"}'::fsc[], ctid
+EXPLAIN
+> create type fsn as (x int, y int[])
+CREATE TYPE
+> create table fsn_t (c fsn)
+CREATE TABLE
+> explain (verbose, costs off) update fsn_t set c.y[2] = 5, c.x = 3
+fields QUERY PLAN:25:-1:-1
+row Update on public.fsn_t
+row   ->  Seq Scan on public.fsn_t
+row         Output: ROW(5, 3), ctid
+EXPLAIN
+> drop table fsn_t
+DROP TABLE
+> drop type fsn
+DROP TYPE
+> drop table fst
+DROP TABLE
+> drop domain fsd
+DROP DOMAIN
+> drop type fsc
+DROP TYPE
