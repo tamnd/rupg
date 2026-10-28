@@ -28,6 +28,7 @@ use rupg_plan::{
 use rupg_types::{Value, oid};
 
 use crate::{Builder, Index, Level, Size, cost, exprs, pullup, setop, upper};
+pub(crate) use classes::{equality, families};
 use index::Param;
 use memoize::Memo;
 use paths::{Paths, costs};

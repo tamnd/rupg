@@ -339,6 +339,11 @@ impl rupg_opt::Members for Members<'_, '_> {
         out
     }
 
+    fn is_table(&self, table: u32) -> bool {
+        let Some(catalog) = self.reader.catalog() else { return true };
+        catalog.relation(table).is_none_or(|t| t.kind == rupg_catalog::RelKind::Table)
+    }
+
     fn enable(&self) -> Enable {
         let settings = self.reader.settings();
         let on = |name: &str| settings.get(name).is_none_or(|v| v != "off");
@@ -358,6 +363,7 @@ impl rupg_opt::Members for Members<'_, '_> {
             nestloop: on("enable_nestloop"),
             mergejoin: on("enable_mergejoin"),
             hashjoin: on("enable_hashjoin"),
+            self_join_elimination: on("enable_self_join_elimination"),
         }
     }
 }
@@ -686,6 +692,7 @@ impl Connection {
         let fold = |sub: &Query, qual| rupg_exec::fold_qual(sub, qual, reader);
         let mut query = rupg_opt::pull_up(plan.query(), &barrier, &fold);
         rupg_opt::remove_joins(&mut query, &members);
+        rupg_opt::remove_self_joins(&mut query, &members);
         let tree = rupg_opt::plan(&query, &members);
         if let Some(error) = members.error.take() {
             return Err(error);

@@ -15,6 +15,7 @@ mod pullup;
 mod pushdown;
 mod setcast;
 mod setop;
+mod sje;
 mod upper;
 
 use std::cell::{Cell, OnceCell, RefCell};
@@ -38,6 +39,7 @@ pub use exprs::nonstrict;
 pub use joinrm::remove_joins;
 pub use pullup::{merge_from, pull_up};
 pub use pushdown::FoldQual;
+pub use sje::remove_self_joins;
 
 /// The tables of the inheritance trees of the relations of the queries, their indexes and the settings of the session, which the planner has no catalog for.
 pub trait Members: std::fmt::Debug {
@@ -46,6 +48,11 @@ pub trait Members: std::fmt::Debug {
 
     /// The valid indexes of the table with the OID `table`, in the order of their OIDs, as `get_relation_info` reads them from `RelationGetIndexList`.
     fn indexes(&self, table: u32) -> Vec<Index>;
+
+    /// True when the table with the OID `table` is an ordinary table, `RELKIND_RELATION`.
+    fn is_table(&self, _table: u32) -> bool {
+        true
+    }
 
     /// The size of the heap of the table with the OID `table`: `RelationGetNumberOfBlocks`, and `relpages` and `reltuples` of `pg_class`.
     fn size(&self, _table: u32) -> Size {
@@ -120,6 +127,7 @@ pub struct Enable {
     pub nestloop: bool,
     pub mergejoin: bool,
     pub hashjoin: bool,
+    pub self_join_elimination: bool,
 }
 
 impl Default for Enable {
@@ -140,6 +148,7 @@ impl Default for Enable {
             nestloop: true,
             mergejoin: true,
             hashjoin: true,
+            self_join_elimination: true,
         }
     }
 }
