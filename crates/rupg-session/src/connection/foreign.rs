@@ -34,6 +34,8 @@ pub(super) struct Batch {
     new: Vec<Vec<Value>>,
     /// The old rows of an `UPDATE` or a `DELETE`, in the order of the write.
     old: Vec<Vec<Value>>,
+    /// For each old row of an `UPDATE`, true when the transaction of the write inserted it, as `slot_is_current_xact_tuple` tells. Empty when the write does not know.
+    own: Vec<bool>,
 }
 
 impl Batch {
@@ -52,7 +54,13 @@ impl Batch {
             command,
             new,
             old,
+            own: Vec::new(),
         }
+    }
+
+    /// The batch with `own` for its old rows.
+    pub(super) fn with_own(self, own: Vec<bool>) -> Batch {
+        Batch { own, ..self }
     }
 
     /// The batch of the triggers that fire now and the batch of the triggers that `modes` defers to the commit, as `afterTriggerCheckState` decides for each trigger.
@@ -241,7 +249,9 @@ impl Connection {
                             continue;
                         }
                     }
-                    self.check_key(batch, foreign, &key, batch.old.get(at), state)?;
+                    let before =
+                        batch.old.get(at).map(|row| (row, batch.own.get(at) == Some(&true)));
+                    self.check_key(batch, foreign, &key, before, state)?;
                     continue;
                 }
                 // `RI_FKey_pk_upd_check_required`: an old key with a null has no reference, and an update that keeps the key needs no trigger.
@@ -290,13 +300,13 @@ impl Connection {
         Ok(())
     }
 
-    /// `RI_FKey_check`: the referenced table must have the new key of a row of the referencing table. `before` is the old row of an `UPDATE`.
+    /// `RI_FKey_check`: the referenced table must have the new key of a row of the referencing table. `before` is the old row of an `UPDATE`, with true when the transaction inserted that row.
     fn check_key(
         &self,
         batch: &Batch,
         foreign: &Foreign,
         key: &[&Value],
-        before: Option<&Vec<Value>>,
+        before: Option<(&Vec<Value>, bool)>,
         state: &mut State,
     ) -> Result<(), Error> {
         // `RI_FKey_fk_upd_check_required` and `ri_NullCheck`.
@@ -312,7 +322,8 @@ impl Connection {
             }
             return Ok(());
         }
-        if let Some(before) = before {
+        // An old row that the transaction inserted needs the check, as the update makes the check of the insert see no row.
+        if let Some((before, false)) = before {
             let mut unchanged = true;
             let last = key.len() - 1;
             for (i, ((&column, value), &ty)) in

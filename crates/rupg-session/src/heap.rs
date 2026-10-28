@@ -914,6 +914,23 @@ impl Heap {
         Ok(Changed::Done(count))
     }
 
+    /// For each version of `tids` that is in the table, in the order of [`Heap::versions`], true when the transaction `xid` inserted it, as `slot_is_current_xact_tuple` tells.
+    pub(crate) fn made_by(
+        &self,
+        database: u32,
+        relation: u32,
+        tids: &[u64],
+        xid: u32,
+    ) -> Vec<bool> {
+        let state = self.state();
+        let Some(table) = state.tables.get(&(database, relation)) else {
+            return Vec::new();
+        };
+        tids.iter()
+            .filter_map(|&tid| table.find(tid).map(|at| table.versions[at].xmin == xid))
+            .collect()
+    }
+
     /// The ID of the version after each version of `tids`, which an `UPDATE` made, or 0 for a version with no next version.
     pub(crate) fn next_versions(&self, database: u32, relation: u32, tids: &[u64]) -> Vec<u64> {
         let state = self.state();
