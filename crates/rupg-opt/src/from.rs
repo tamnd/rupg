@@ -3668,7 +3668,7 @@ fn hash_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>>
     };
     // The most common value of the inner side has the fraction `mcv_freq` of its rows, all of them with no statistics. The bucket of that value must fit in `hash_mem`, because more batches cannot split it. A hash join that does not fit costs `disable_cost` more, so that the planner uses it only when it has no other plan.
     if !input.made.1
-        && cost::byte_size(cost::clamp_rows(i.rows * mcv_freq), i.width) > cost::HASH_MEM
+        && cost::byte_size(cost::clamp_rows(i.rows * mcv_freq), i.width) > cost::hash_mem()
     {
         startup += cost::DISABLE;
     }
@@ -3924,7 +3924,7 @@ fn merge_join<'q>(
     // `enable_material` and `enable_mergejoin` allow a `Material` node that is not needed, as `PGS_MERGEJOIN_MATERIALIZE`.
     let enable = crate::enable();
     let allowed = enable.material && enable.mergejoin;
-    let spills = cost::byte_size(inner_cost.rows, inner_cost.width) > cost::WORK_MEM;
+    let spills = cost::byte_size(inner_cost.rows, inner_cost.width) > cost::work_mem();
     let materialize = !skip_mark_restore
         && (allowed && material < bare
             || !sort_inner

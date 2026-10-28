@@ -84,7 +84,7 @@ pub trait Members: std::fmt::Debug {
         no_pattern_match
     }
 
-    /// The `enable_*` settings of the session.
+    /// The `enable_*` settings and the memory settings of the session.
     fn enable(&self) -> Enable {
         Enable::default()
     }
@@ -109,7 +109,7 @@ impl Default for Size {
     }
 }
 
-/// The `enable_*` settings of the planner, as the variables of `costsize.c` keep them. A node of a kind that a setting turns off is a disabled node, and the planner takes a plan with more disabled nodes only when no plan has fewer, as `compare_path_costs` compares `disabled_nodes` first.
+/// The `enable_*` settings and the memory settings of the planner, as the variables of `costsize.c` keep them. A node of a kind that a setting turns off is a disabled node, and the planner takes a plan with more disabled nodes only when no plan has fewer, as `compare_path_costs` compares `disabled_nodes` first.
 #[derive(Clone, Copy, Debug)]
 pub struct Enable {
     pub seqscan: bool,
@@ -128,6 +128,10 @@ pub struct Enable {
     pub mergejoin: bool,
     pub hashjoin: bool,
     pub self_join_elimination: bool,
+    /// `work_mem`, in bytes.
+    pub work_mem: f64,
+    /// `get_hash_memory_limit`: `work_mem` times `hash_mem_multiplier`, in bytes.
+    pub hash_mem: f64,
 }
 
 impl Default for Enable {
@@ -149,6 +153,8 @@ impl Default for Enable {
             mergejoin: true,
             hashjoin: true,
             self_join_elimination: true,
+            work_mem: 4.0 * 1024.0 * 1024.0,
+            hash_mem: 8.0 * 1024.0 * 1024.0,
         }
     }
 }
@@ -1108,7 +1114,7 @@ impl<'q> Builder<'q> {
         let (first, waiting) = (self.groups.len(), self.pending.len());
         let plan = self.subplan(|b| b.query(&any.query, Some(scope)));
         let own = first..self.groups.len();
-        if cost::subplan_hash_space(plan.cost.rows, plan.cost.width) >= cost::HASH_MEM {
+        if cost::subplan_hash_space(plan.cost.rows, plan.cost.width) >= cost::hash_mem() {
             self.groups[own].iter_mut().for_each(Vec::clear);
             self.pending.truncate(waiting);
             return None;

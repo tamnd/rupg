@@ -39,18 +39,27 @@ pub(crate) const NUM_DISTINCT: f64 = 200.0;
 pub(crate) const DISABLE: f64 = 1.0e10;
 /// `random_page_cost`.
 pub(crate) const RANDOM_PAGE: f64 = 4.0;
-/// `work_mem`, in bytes.
-pub(crate) const WORK_MEM: f64 = 4.0 * 1024.0 * 1024.0;
-/// `get_hash_memory_limit`: `work_mem` times `hash_mem_multiplier`, in bytes.
-pub(crate) const HASH_MEM: f64 = 2.0 * WORK_MEM;
 /// `BLCKSZ`.
 const BLOCK: f64 = 8192.0;
 /// `MAXALIGN(SizeofHeapTupleHeader)`.
 const TUPLE_HEADER: i32 = 24;
 /// `sizeof(HashJoinTuple)`.
 const POINTER: f64 = 8.0;
-/// `tuplesort_merge_order(work_mem)`: the number of runs that a pass of a merge sort reads.
-const MERGE_ORDER: f64 = 15.0;
+
+/// `work_mem`, in bytes.
+pub(crate) fn work_mem() -> f64 {
+    crate::enable().work_mem
+}
+
+/// `get_hash_memory_limit`: `work_mem` times `hash_mem_multiplier`, in bytes.
+pub(crate) fn hash_mem() -> f64 {
+    crate::enable().hash_mem
+}
+
+/// `tuplesort_merge_order(work_mem)`: the number of runs that a pass of a merge sort reads, as many as the buffers of the tapes fit in the memory.
+fn merge_order(memory: f64) -> f64 {
+    (memory / (34.0 * BLOCK)).floor().clamp(6.0, 500.0)
+}
 
 /// `get_typavgwidth`: the average width of a value of a type with a typmod.
 pub fn type_width(ty: u32, typmod: i32) -> i32 {
@@ -1490,7 +1499,7 @@ pub(crate) fn maxalign(n: i32) -> i32 {
 
 /// The cost to write rows of a width to disk and to read them again when they do not fit in `work_mem`, as `cost_material` and `cost_rescan` find it.
 pub(crate) fn spill(rows: f64, width: i32) -> f64 {
-    if byte_size(rows, width) > WORK_MEM { SEQ_PAGE * page_count(rows, width) } else { 0.0 }
+    if byte_size(rows, width) > work_mem() { SEQ_PAGE * page_count(rows, width) } else { 0.0 }
 }
 
 /// `cost_sort`: the costs of a sort of `rows` rows of a width that has the input costs `input`, with the number of rows of `LIMIT` when it has one.
@@ -1535,14 +1544,16 @@ fn tuplesort(rows: f64, width: i32, bound: Option<f64>) -> (f64, f64) {
         Some(bound) if bound > 0.0 && bound < tuples => (bound, byte_size(bound, width)),
         _ => (tuples, input_bytes),
     };
-    let startup = if output_bytes > WORK_MEM {
+    let memory = work_mem();
+    let startup = if output_bytes > memory {
         let pages = (input_bytes / BLOCK).ceil();
-        let runs = input_bytes / WORK_MEM;
-        let log_runs = if runs > MERGE_ORDER { (runs.ln() / MERGE_ORDER.ln()).ceil() } else { 1.0 };
+        let runs = input_bytes / memory;
+        let order = merge_order(memory);
+        let log_runs = if runs > order { (runs.ln() / order.ln()).ceil() } else { 1.0 };
         // Each pass reads and writes each page, and a quarter of the reads are random.
         let accesses = 2.0 * pages * log_runs;
         comparison * tuples * log2(tuples) + accesses * (SEQ_PAGE * 0.75 + RANDOM_PAGE * 0.25)
-    } else if tuples > 2.0 * output || input_bytes > WORK_MEM {
+    } else if tuples > 2.0 * output || input_bytes > memory {
         comparison * tuples * log2(2.0 * output)
     } else {
         comparison * tuples * log2(tuples)
@@ -1556,7 +1567,7 @@ pub(crate) fn hash_table(rows: f64, width: i32) -> (f64, f64) {
     // `HJTUPLE_OVERHEAD` and `MAXALIGN(SizeofMinimalTupleHeader)`.
     let tuple = 32.0 + f64::from(maxalign(width));
     let bytes = rows * tuple;
-    let mut space = HASH_MEM;
+    let mut space = hash_mem();
     // The skew buckets take two percent of the space: a tuple, eight pointers, an `int` and the `HashSkewBucket` for each.
     let per_value = tuple + 64.0 + 4.0 + 16.0;
     space -= ((space / per_value).floor() * 2.0 / 100.0).floor() * per_value;

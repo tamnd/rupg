@@ -337,7 +337,7 @@ impl<'q> Builder<'q> {
         let sortable = op.groups.iter().all(|g| g.operator != 0);
         let hashable = op.groups.iter().all(|g| g.hashable);
         // `create_setop_path`: a hash table that does not fit in `hash_mem` is a disabled node.
-        let fits = hash_space(groups, l.width) < cost::HASH_MEM;
+        let fits = hash_space(groups, l.width) < cost::hash_mem();
         let startup = l.total + r.total + cost::CPU_OPERATOR * (l.rows + r.rows) * columns;
         let hashed =
             Cost { startup, total: startup + cost::CPU_OPERATOR * rows, rows, width: l.width };
