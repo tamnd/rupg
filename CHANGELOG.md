@@ -6,8 +6,9 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- With one rollup over sorted rows, the rows of a query with grouping sets keep the order of its keys up to the first key that a set does not have, so `ORDER BY` can take an `Incremental Sort` or no sort, as in PG (#1071).
 - Call `cbrt` and `tgamma` of the C library for `cbrt`, `||/` and `gamma`, as `float.c` does. The code of Rust gave a different last bit for about half of the arguments (#1067).
-- With grouping sets, the sort of the sets keeps only a nullable constant key, and drops a column key that is the same as another key, as in PG (#1067).
+- With grouping sets, the sort of the sets keeps only a nullable constant key, and drops a column key that is the same as another key, as in PG (#1069).
 - With grouping sets, a constant key that a set does not have stays a key of the sort of the sets, and the `Sort` output and the `Group Key` show it as `(1)`, as in PG (#1066).
 
 ## 0.4.6 (2026-10-29)

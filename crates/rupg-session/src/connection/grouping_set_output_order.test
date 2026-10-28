@@ -1,0 +1,62 @@
+!details
+> create temp table gi(a int, b int, v int)
+CREATE TABLE
+> insert into gi values (1,1,10),(1,2,11),(2,1,12),(2,2,13),(1,1,14)
+INSERT 0 5
+> set enable_hashagg = off
+SET
+> explain (costs off) select * from gi group by grouping sets((a,b,v),(v)) order by v,b,a
+fields QUERY PLAN:25:-1:-1
+row Incremental Sort
+row   Sort Key: v, b, a
+row   Presorted Key: v
+row   ->  GroupAggregate
+row         Group Key: v, b, a
+row         Group Key: v
+row         ->  Sort
+row               Sort Key: v, b, a
+row               ->  Seq Scan on gi
+EXPLAIN
+> select * from gi group by grouping sets((a,b,v),(v)) order by v,b,a
+fields a@gi.1:23:4:-1,b@gi.2:23:4:-1,v@gi.3:23:4:-1
+row 1,1,10
+row NULL,NULL,10
+row 1,2,11
+row NULL,NULL,11
+row 2,1,12
+row NULL,NULL,12
+row 2,2,13
+row NULL,NULL,13
+row 1,1,14
+row NULL,NULL,14
+SELECT 10
+> explain (costs off) select a, b, count(*) from gi group by grouping sets((a,b),(a)) order by a
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate
+row   Group Key: a, b
+row   Group Key: a
+row   ->  Sort
+row         Sort Key: a, b
+row         ->  Seq Scan on gi
+EXPLAIN
+> select a, b, count(*) from gi group by grouping sets((a,b),(a)) order by a, b
+fields a@gi.1:23:4:-1,b@gi.2:23:4:-1,count:20:8:-1
+row 1,1,2
+row 1,2,1
+row 1,NULL,3
+row 2,1,1
+row 2,2,1
+row 2,NULL,2
+SELECT 6
+> explain (costs off) select a, b, count(*) from gi group by rollup(a,b) order by a, b
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: a, b
+row   ->  GroupAggregate
+row         Group Key: a, b
+row         Group Key: a
+row         Group Key: ()
+row         ->  Sort
+row               Sort Key: a, b
+row               ->  Seq Scan on gi
+EXPLAIN
