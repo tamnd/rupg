@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A grouping set makes null a constant column of a subquery that the planner pulls up, and a target that is an item of `GROUP BY` is the column of its own item when another item has the same expression (#1056).
 - EXPLAIN shows the collation of a sort key after the key when it is not the collation of the type of the key, as `show_sortorder_options` writes it (#1055).
 - `COMMENT ON ROLE`, `COMMENT ON DATABASE` and `COMMENT ON TABLESPACE` run, with the checks and the errors of PostgreSQL. `shobj_description` and `pg_shdescription` show the comments, and a rollback discards them. (#1053)
 - `ALTER DATABASE ... RENAME TO` runs, and `ALTER DATABASE` takes the options `CONNECTION LIMIT`, `ALLOW_CONNECTIONS`, `IS_TEMPLATE` and `TABLESPACE`, with the checks and the errors of PostgreSQL. A rollback discards the changes. (#1052)

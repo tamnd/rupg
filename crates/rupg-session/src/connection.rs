@@ -6442,6 +6442,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/sort_collation.test")));
     }
 
+    /// A grouping set makes null the items that it does not have. A constant column of a subquery that the planner pulls up keeps its place in a query with grouping sets, as `REPLACE_WRAP_ALL` keeps it in a `PlaceHolderVar`, and a target that is an item is the column of its own item when another item has the same expression. `connection/grouping_set_nulls.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn grouping_set_nulls() {
+        big_stack(|| script(include_str!("connection/grouping_set_nulls.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

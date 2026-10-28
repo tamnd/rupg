@@ -1387,8 +1387,16 @@ fn grouped_exprs(query: &Query) -> Vec<(*const Expr, usize)> {
     let items = query.group.iter().map(|g| (g.target, &query.targets[g.target].expr)).collect();
     let mut items = Items { items, raised: Vec::new() };
     let mut out = Vec::new();
-    for expr in query.targets.iter().map(|t| &t.expr).chain(&query.having) {
-        items.walk(expr, 0, &mut out);
+    for (i, target) in query.targets.iter().enumerate() {
+        // A target that is an item is the column of its own item, as `ressortgroupref` finds it, also when another item has the same expression.
+        if query.group.iter().any(|g| g.target == i) {
+            out.push((std::ptr::from_ref(&target.expr), i));
+        } else {
+            items.walk(&target.expr, 0, &mut out);
+        }
+    }
+    if let Some(having) = &query.having {
+        items.walk(having, 0, &mut out);
     }
     out
 }
