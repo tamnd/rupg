@@ -1,0 +1,49 @@
+!details
+> CREATE TABLE ie_t (a int, b int)
+CREATE TABLE
+> INSERT INTO ie_t VALUES (1, 0), (2, 1)
+INSERT 0 2
+> CREATE INDEX ie_div ON ie_t ((a / b))
+ERROR 22012 division by zero
+> CREATE INDEX ie_part ON ie_t (a) WHERE a / b > 0
+ERROR 22012 division by zero
+> CREATE INDEX ie_ok ON ie_t ((a / b)) WHERE b <> 0
+CREATE INDEX
+> CREATE INDEX CONCURRENTLY ie_cic ON ie_t ((a / b))
+ERROR 22012 division by zero
+> SELECT c.relname, i.indisvalid, i.indisready FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indrelid = 'ie_t'::regclass ORDER BY 1
+fields relname@pg_class.2:19:64:-1,indisvalid@pg_index.11:16:1:-1,indisready@pg_index.13:16:1:-1
+row ie_cic,f,f
+row ie_ok,t,t
+SELECT 2
+> DELETE FROM ie_t WHERE b = 0
+DELETE 1
+> REINDEX INDEX CONCURRENTLY ie_cic
+REINDEX
+> SELECT c.relname, i.indisvalid, i.indisready FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indrelid = 'ie_t'::regclass ORDER BY 1
+fields relname@pg_class.2:19:64:-1,indisvalid@pg_index.11:16:1:-1,indisready@pg_index.13:16:1:-1
+row ie_cic,t,t
+row ie_ok,t,t
+SELECT 2
+> CREATE TABLE ie_p (a int, b int) PARTITION BY RANGE (a)
+CREATE TABLE
+> CREATE TABLE ie_p1 PARTITION OF ie_p FOR VALUES FROM (0) TO (10)
+CREATE TABLE
+> CREATE INDEX ie_pi ON ONLY ie_p ((a + b))
+CREATE INDEX
+> CREATE INDEX ie_p1i ON ie_p1 ((a + b))
+CREATE INDEX
+> ALTER INDEX ie_pi ATTACH PARTITION ie_p1i
+ALTER INDEX
+> CREATE INDEX ie_pj ON ie_p ((a - b)) WHERE b > 1
+CREATE INDEX
+> CREATE INDEX ie_p1j ON ie_p1 ((a - b)) WHERE b > 1
+CREATE INDEX
+> SELECT c.relname, i.inhparent::regclass::text FROM pg_class c LEFT JOIN pg_inherits i ON i.inhrelid = c.oid WHERE c.relname LIKE 'ie_p%' AND c.relkind IN ('i', 'I') ORDER BY 1
+fields relname@pg_class.2:19:64:-1,inhparent:25:-1:-1
+row ie_p1_expr_idx,ie_pj
+row ie_p1i,ie_pi
+row ie_p1j,NULL
+row ie_pi,NULL
+row ie_pj,NULL
+SELECT 5

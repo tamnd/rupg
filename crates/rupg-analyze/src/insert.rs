@@ -343,6 +343,74 @@ pub struct Derived {
     pub predicate: Vec<Expr>,
 }
 
+/// The key of the index `info` of the table `table` for `FormIndexDatum`, with the type and the type modifier of each column of the table in `columns`.
+fn index_derived(
+    info: &rupg_catalog::IndexInfo,
+    table: u32,
+    columns: &[(u32, i32)],
+) -> Result<Derived> {
+    let count = usize::try_from(info.key_count).unwrap_or_default();
+    let mut exprs = match &info.exprs {
+        Some(text) => crate::node::read_list(text)?,
+        None => Vec::new(),
+    }
+    .into_iter();
+    let mut derived = Derived {
+        table,
+        types: columns.iter().map(|c| c.0).collect(),
+        exprs: Vec::with_capacity(count),
+        predicate: match &info.predicate {
+            Some(text) => match crate::node::read(text)? {
+                Expr { kind: ExprKind::Bool(BoolOp::And, parts), .. } => parts,
+                part => vec![part],
+            },
+            None => Vec::new(),
+        },
+    };
+    for &attnum in info.keys.iter().take(count) {
+        let expr = if attnum == 0 {
+            exprs.next().ok_or_else(|| Error::internal("too few entries in indexprs"))?
+        } else {
+            let column = usize::try_from(attnum - 1).ok().and_then(|c| columns.get(c));
+            let Some(&(ty, typmod)) = column else {
+                return Err(Error::internal("an index with a key that is not a column"));
+            };
+            let var = Var { relation: 0, attnum, levels_up: 0 };
+            Expr { typmod, ..Expr::new(ExprKind::Var(var), ty) }
+        };
+        derived.exprs.push(expr);
+    }
+    Ok(derived)
+}
+
+/// The keys of the indexes with an expression or a predicate that the catalog `new` has ready on the table `table` and the catalog `old` does not, which `index_build` computes for each row of the table.
+///
+/// # Errors
+///
+/// The errors of the reading of the expressions.
+pub fn built_index_keys(
+    old: &rupg_catalog::Catalog,
+    new: &rupg_catalog::Catalog,
+    table: u32,
+) -> Result<Vec<Derived>> {
+    let Some(rel) = new.relation(table) else { return Ok(Vec::new()) };
+    let types: Vec<(u32, i32)> = rel.columns.iter().map(|c| (c.ty, c.typmod)).collect();
+    let mut indexes: Vec<_> = new
+        .relations()
+        .filter(|index| index.kind == RelKind::Index)
+        .filter_map(|index| Some((index.oid, index.index.as_ref()?)))
+        .filter(|(oid, info)| {
+            info.table == table
+                && info.ready
+                && !info.unique
+                && (info.exprs.is_some() || info.predicate.is_some())
+                && old.relation(*oid).and_then(|o| o.index.as_ref()).is_none_or(|o| !o.ready)
+        })
+        .collect();
+    indexes.sort_by_key(|(oid, _)| *oid);
+    indexes.into_iter().map(|(_, info)| index_derived(info, table, &types)).collect()
+}
+
 /// `quoteOneName` of `ri_triggers.c`: a name in double quotes, with each double quote doubled.
 fn quote_one(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
@@ -1458,42 +1526,10 @@ impl Analyzer<'_> {
                 deferrable,
             };
             if info.exprs.is_some() || info.predicate.is_some() {
-                let mut exprs = match &info.exprs {
-                    Some(text) => crate::node::read_list(text)?,
-                    None => Vec::new(),
-                }
-                .into_iter();
-                let mut derived = Derived {
-                    table,
-                    types: columns.iter().map(|c| c.ty).collect(),
-                    exprs: Vec::with_capacity(count),
-                    predicate: match &info.predicate {
-                        Some(text) => match crate::node::read(text)? {
-                            Expr { kind: ExprKind::Bool(BoolOp::And, parts), .. } => parts,
-                            part => vec![part],
-                        },
-                        None => Vec::new(),
-                    },
-                };
-                for (at, &attnum) in info.keys.iter().take(count).enumerate() {
-                    let expr = if attnum == 0 {
-                        exprs
-                            .next()
-                            .ok_or_else(|| Error::internal("too few entries in indexprs"))?
-                    } else {
-                        let column = usize::try_from(attnum - 1).ok().and_then(|c| columns.get(c));
-                        let Some(column) = column else {
-                            return Err(Error::internal(
-                                "a unique index with a key that is not a column",
-                            ));
-                        };
-                        let var = Var { relation: 0, attnum, levels_up: 0 };
-                        Expr { typmod: column.typmod, ..Expr::new(ExprKind::Var(var), column.ty) }
-                    };
-                    key.columns.push(at);
-                    key.types.push(expr.ty);
-                    derived.exprs.push(expr);
-                }
+                let types: Vec<(u32, i32)> = columns.iter().map(|c| (c.ty, c.typmod)).collect();
+                let derived = index_derived(info, table, &types)?;
+                key.columns = (0..derived.exprs.len()).collect();
+                key.types = derived.exprs.iter().map(|e| e.ty).collect();
                 key.derived = Some(Box::new(derived));
                 list.push(key);
                 continue;

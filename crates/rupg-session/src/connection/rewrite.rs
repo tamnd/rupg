@@ -425,6 +425,16 @@ impl Connection {
             .iter()
             .map(|u| rupg_analyze::Unique { deferrable: None, ..u.clone() })
             .collect();
+        // `index_build`: a new index with an expression or a predicate computes them for each row, so that their errors stop the build.
+        let built = rupg_analyze::built_index_keys(old, work, rel.oid)?;
+        if !built.is_empty() {
+            let reader = self.reader_without_view(Arc::clone(work));
+            for derived in &built {
+                for row in &new_rows {
+                    rupg_exec::index_key(derived, row, &reader)?;
+                }
+            }
+        }
         if in_place {
             self.check_keys_in_place(rel.oid, view, &info.unique, work)?;
             self.check_exclusion_build(old, rel.oid, view, work)?;
@@ -555,7 +565,7 @@ fn keeps_rows(
     })
 }
 
-/// True if the change of the catalog from `old` to `new` changes the rows of the table `rel`: a change of the type of a column, a new not-null constraint, a new column with a default, a not-null constraint or a domain with constraints, a new constraint that checks the rows of the table or one that becomes valid, or a new unique index or one that becomes ready. A dropped table and a new column with no default keep the rows.
+/// True if the change of the catalog from `old` to `new` changes the rows of the table `rel`: a change of the type of a column, a new not-null constraint, a new column with a default, a not-null constraint or a domain with constraints, a new constraint that checks the rows of the table or one that becomes valid, or a new index that is unique or has an expression or a predicate, or one that becomes ready. A dropped table and a new column with no default keep the rows.
 fn changes_rows(old: &Catalog, new: &Catalog, rel: &Relation) -> bool {
     let Some(now) = new.relation(rel.oid) else {
         return false;
@@ -595,14 +605,15 @@ fn changes_rows(old: &Catalog, new: &Catalog, rel: &Relation) -> bool {
             && (c.kind != ConKind::Foreign
                 || new.triggers_of(rel.oid).iter().any(|t| t.constraint == c.oid))
     });
-    // An index that `REINDEX` makes ready again checks the rows as a new index does.
+    // An index that `REINDEX` makes ready again checks the rows as a new index does. A new index with an expression or a predicate computes them for the rows.
     let index = new.relations().any(|index| {
         let was_ready = old.relation(index.oid).and_then(|o| o.index.as_ref()).map(|i| i.ready);
         was_ready != Some(true)
-            && index
-                .index
-                .as_ref()
-                .is_some_and(|info| info.table == rel.oid && info.unique && info.ready)
+            && index.index.as_ref().is_some_and(|info| {
+                info.table == rel.oid
+                    && info.ready
+                    && (info.unique || info.exprs.is_some() || info.predicate.is_some())
+            })
     });
     constraint || index
 }
