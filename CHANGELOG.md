@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The planner adds the cost of a hash aggregate that spills to disk, as cost_agg does, and picks the rollups of grouping sets to hash with the knapsack of consider_groupingsets_paths. With a small work_mem, a grouping sets query gets the MixedAggregate plan of PG (#1063).
 - Make the join search faster for joins of many catalog tables. The search keeps the selectivity of each join clause for its level, as `RestrictInfo` keeps `norm_selec` and `scansel_cache`, borrows the clauses of the joins, and `EXPLAIN` shares the names of its scopes between the deparses of its expressions. (#1061)
 - The planner reads the session's work_mem and hash_mem_multiplier for the costs of sorts, hash joins, memoize, set operations and hash aggregates, and for the merge order of a sort, as PG does. Before, it used fixed values of 4MB and 8MB (#1062).
 - Move a condition of `HAVING` to `WHERE` with grouping sets when it reads no item that a set does not have, and keep a copy in `HAVING` with an empty grouping set, as `subquery_planner` does (#1059).
