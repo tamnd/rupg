@@ -5962,6 +5962,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/explain_privileges.test")));
     }
 
+    /// `VACUUM`, `ANALYZE` and `REFRESH MATERIALIZED VIEW` need the `MAINTAIN` privilege, which a member of `pg_maintain` has on each relation. `VACUUM` and `ANALYZE` skip a relation or a partition without it, with a warning. `connection/maintain_privilege.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn maintain_privilege() {
+        big_stack(|| script(include_str!("connection/maintain_privilege.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

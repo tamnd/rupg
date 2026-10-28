@@ -88,7 +88,7 @@ pub use rule::{RuleTree, rule_tree};
 pub use schema_elements::SchemaElements;
 pub(crate) use table::check_attribute_type;
 pub use trigger::trigger_when;
-pub use vacuum::vacuum_relations;
+pub use vacuum::{VacuumRel, vacuum_denied, vacuum_relations};
 
 use std::cell::RefCell;
 
