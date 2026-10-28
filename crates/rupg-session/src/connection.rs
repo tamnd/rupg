@@ -6318,6 +6318,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/opclass_siglen.test")));
     }
 
+    /// `ALTER COLUMN TYPE` of a key column of an exclusion constraint rebuilds its index with the default operator class of the new type, and looks up the operator of the same name for the new type for `conexclop`, as `ATPostAlterTypeParse` does. `connection/exclusion_retype.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn exclusion_retype() {
+        big_stack(|| script(include_str!("connection/exclusion_retype.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

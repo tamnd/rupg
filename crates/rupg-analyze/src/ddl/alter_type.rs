@@ -341,8 +341,10 @@ impl Definer<'_, '_> {
                         Some((ConKind::Foreign, _)) => {
                             changed.foreign.insert(object.oid);
                         }
-                        // The index of a primary key or a unique constraint depends on the constraint, not on the column.
-                        Some((ConKind::Primary | ConKind::Unique, index)) if index != 0 => {
+                        // The index of a primary key, a unique constraint or an exclusion constraint depends on the constraint, not on the column.
+                        Some((ConKind::Primary | ConKind::Unique | ConKind::Exclusion, index))
+                            if index != 0 =>
+                        {
                             changed.indexes.insert(index);
                         }
                         // A not-null constraint needs no change.
@@ -439,6 +441,11 @@ impl Definer<'_, '_> {
         }
         let index_columns =
             self.catalog.relation(index).map(|r| r.columns.clone()).unwrap_or_default();
+        let exclusion = self
+            .catalog
+            .constraints()
+            .find(|c| c.index == index && c.kind == ConKind::Exclusion)
+            .map(|c| (c.oid, c.exclusion_ops.clone()));
         let mut next = old_exprs.iter().zip(&exprs);
         // `DefineIndex` takes an expression that is a column as a key column.
         let mut keys = info.keys.clone();
@@ -475,6 +482,7 @@ impl Definer<'_, '_> {
                     collation
                 };
                 self.catalog.set_index_column(index, i, class, collation, &now)?;
+                self.exclusion_after_alter_type(exclusion.as_ref(), i, now.ty)?;
                 continue;
             };
             let now = self.catalog.relation(info.table).and_then(|r| r.columns.get(at)).cloned();
@@ -501,11 +509,27 @@ impl Definer<'_, '_> {
                 collation
             };
             self.catalog.set_index_column(index, i, class, collation, &now)?;
+            self.exclusion_after_alter_type(exclusion.as_ref(), i, now.ty)?;
         }
         let exprs_text = if kept.is_empty() { None } else { Some(crate::node::write_list(&kept)?) };
         let predicate_text = predicate.as_ref().map(crate::node::write).transpose()?;
         let refs = index_references(self.catalog, info.table, &kept, predicate.as_ref())?;
         self.catalog.set_index_exprs(index, keys, exprs_text, predicate_text, &refs)
+    }
+
+    /// The exclusion operator of the key column `column` of an exclusion constraint after its type changes to `ty`: the operator of the same name for `ty` on both sides, as the constraint that `ATPostAlterTypeParse` makes again from its definition has it.
+    fn exclusion_after_alter_type(
+        &mut self,
+        exclusion: Option<&(u32, Vec<u32>)>,
+        column: usize,
+        ty: u32,
+    ) -> Result<()> {
+        let Some((constraint, ops)) = exclusion else { return Ok(()) };
+        let Some(old) = ops.get(column).and_then(|op| builtin::operator_by_oid(*op)) else {
+            return Ok(());
+        };
+        let op = self.an.find_operator(&[old.name], ty, ty, None)?;
+        self.catalog.set_exclusion_op(*constraint, column, op.oid)
     }
 
     /// The operator class of an index column whose type changes from `old` to `new`: the default operator class of `new` for the default operator class of `old`, else the same operator class, which must accept `new`.
