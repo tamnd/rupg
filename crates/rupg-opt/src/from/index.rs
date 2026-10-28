@@ -779,7 +779,7 @@ fn group_paths<'q>(
     }
 }
 
-/// `build_paths_for_OR`: the scans for a bitmap of the btree indexes with no predicate that can test one of the conditions, the newest index first. The scan of an index tests the conditions and each other condition that the index can test.
+/// `build_paths_for_OR`: the scans for a bitmap of the indexes that can test one of the conditions, the newest index first. The scan of an index tests the conditions and each other condition that the index can test. A partial index that the conditions of the table do not make usable is usable when the conditions and the other conditions imply its predicate. Its predicate is useful when the other conditions alone do not imply it, and then the index is usable even when it cannot test one of the conditions.
 fn arm_paths<'q>(
     table: &Table<'_, 'q>,
     indexes: &[Index],
@@ -791,14 +791,28 @@ fn arm_paths<'q>(
     let all: Vec<&Source<'q>> = clauses.iter().chain(other.iter().copied()).collect();
     let mut out = Vec::new();
     let given: Vec<&Expr> = all.iter().map(|s| &*s.expr).collect();
+    let others: Vec<&Expr> = other.iter().map(|s| &*s.expr).collect();
+    let quals: Vec<&Expr> = table.quals.iter().map(|q| &*q.expr).collect();
     for index in indexes.iter().rev() {
-        if !scannable(index)
-            || !predicate_ok(index, table.r, &given)
-            || match_clauses(table.r, index, &mine).is_empty()
-        {
+        if !scannable(index) {
+            continue;
+        }
+        // `predOK`: the conditions of the table make the index usable, so its predicate is not useful.
+        let mut useful = false;
+        if !index.predicate.is_empty() && !predicate_ok(index, table.r, &quals) {
+            if !predicate_ok(index, table.r, &given) {
+                continue;
+            }
+            useful = !predicate_ok(index, table.r, &others);
+        }
+        if !useful && match_clauses(table.r, index, &mine).is_empty() {
             continue;
         }
         let clauses = match_clauses(table.r, index, &restrict(index, table.r, &all));
+        // `amoptionalkey` of `hash` is false: its scan needs a clause.
+        if clauses.is_empty() && index.method == HASH_AM {
+            continue;
+        }
         let costs = index_cost(table, index, &clauses, stats);
         out.push(Bitmap::Index(BitmapIndex::new(table, index, clauses, costs, stats)));
     }

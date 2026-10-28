@@ -6306,6 +6306,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/ctas_own_rows.test")));
     }
 
+    /// An arm of an `OR` can use a partial index whose predicate the arm implies, with the other conditions as the clauses of the index, as `build_paths_for_OR` sets `useful_predicate`. `connection/or_partial.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn or_partial() {
+        big_stack(|| script(include_str!("connection/or_partial.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
