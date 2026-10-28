@@ -39,8 +39,8 @@ const BRIN_AM: u32 = 3580;
 /// The facts of the `IndexAmRoutine` of an index access method that the commands read.
 #[derive(Debug)]
 pub(super) struct Method {
-    oid: u32,
-    name: &'static str,
+    pub(super) oid: u32,
+    pub(super) name: &'static str,
     /// `amstrategies`, or 0 when the operators have no fixed numbers.
     strategies: i32,
     /// `amsupport`.
@@ -55,6 +55,12 @@ pub(super) struct Method {
     can_hash: bool,
     /// `amstorage`.
     storage: bool,
+    /// `amcanunique`.
+    pub(super) can_unique: bool,
+    /// `amcanmulticol`.
+    pub(super) can_multi_col: bool,
+    /// `amcaninclude`.
+    pub(super) can_include: bool,
 }
 
 /// The index access methods of `pg_am`, as `bthandler`, `hashhandler`, `gisthandler`, `ginhandler`, `spghandler` and `brinhandler` give them.
@@ -69,6 +75,9 @@ static METHODS: [Method; 6] = [
         can_order_by_op: false,
         can_hash: false,
         storage: false,
+        can_unique: true,
+        can_multi_col: true,
+        can_include: true,
     },
     Method {
         oid: HASH_AM,
@@ -80,6 +89,9 @@ static METHODS: [Method; 6] = [
         can_order_by_op: false,
         can_hash: true,
         storage: false,
+        can_unique: false,
+        can_multi_col: false,
+        can_include: false,
     },
     Method {
         oid: GIST_AM,
@@ -91,6 +103,9 @@ static METHODS: [Method; 6] = [
         can_order_by_op: true,
         can_hash: false,
         storage: true,
+        can_unique: false,
+        can_multi_col: true,
+        can_include: true,
     },
     Method {
         oid: GIN_AM,
@@ -102,6 +117,9 @@ static METHODS: [Method; 6] = [
         can_order_by_op: false,
         can_hash: false,
         storage: true,
+        can_unique: false,
+        can_multi_col: true,
+        can_include: false,
     },
     Method {
         oid: SPGIST_AM,
@@ -113,6 +131,9 @@ static METHODS: [Method; 6] = [
         can_order_by_op: true,
         can_hash: false,
         storage: true,
+        can_unique: false,
+        can_multi_col: false,
+        can_include: true,
     },
     Method {
         oid: BRIN_AM,
@@ -124,8 +145,16 @@ static METHODS: [Method; 6] = [
         can_order_by_op: false,
         can_hash: false,
         storage: true,
+        can_unique: false,
+        can_multi_col: true,
+        can_include: false,
     },
 ];
+
+/// `GetIndexAmRoutineByAmId`: the index access method of the OID.
+pub(super) fn method_of(oid: u32) -> Option<&'static Method> {
+    METHODS.iter().find(|m| m.oid == oid)
+}
 
 /// `get_index_am_oid` and `GetIndexAmRoutineByAmId`: the index access method of the name. The table access method `heap` is not an index access method.
 pub(super) fn index_method(name: &str) -> Result<&'static Method> {

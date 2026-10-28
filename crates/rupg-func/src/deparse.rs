@@ -45,6 +45,14 @@ const INDENT_LIMIT: i32 = 40;
 const BTREE: u32 = 403;
 /// The access method `hash`.
 const HASH: u32 = 405;
+/// The access method `gist`.
+const GIST: u32 = 783;
+/// The access method `gin`.
+const GIN: u32 = 2742;
+/// The access method `spgist`.
+const SPGIST: u32 = 4000;
+/// The access method `brin`.
+const BRIN: u32 = 3580;
 /// `INDOPTION_DESC`.
 const DESC: i16 = 1;
 /// `INDOPTION_NULLS_FIRST`.
@@ -2046,6 +2054,10 @@ fn index_def(
         let method = match info.method {
             BTREE => "btree",
             HASH => "hash",
+            GIST => "gist",
+            GIN => "gin",
+            SPGIST => "spgist",
+            BRIN => "brin",
             other => {
                 return Err(Error::internal(format!(
                     "cache lookup failed for access method {other}"
@@ -2122,6 +2134,11 @@ fn index_def(
         if info.nulls_not_distinct {
             out.push_str(" NULLS NOT DISTINCT");
         }
+        if !index.options.is_empty() {
+            out.push_str(" WITH (");
+            get_reloptions(&mut out, &index.options, session);
+            out.push(')');
+        }
         if let Some(text) = &info.predicate {
             out.push_str(&format!(
                 " WHERE {}",
@@ -2130,6 +2147,23 @@ fn index_def(
         }
     }
     Ok(out)
+}
+
+/// `get_reloptions`: the options as `name=value`, with the value in quotes unless it is an identifier that needs no quotes.
+fn get_reloptions(out: &mut String, options: &[String], session: &dyn Session) {
+    for (i, option) in options.iter().enumerate() {
+        let (name, value) = option.split_once('=').unwrap_or((option, ""));
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&quote_identifier(name));
+        out.push('=');
+        if quote_identifier(value) == value {
+            out.push_str(value);
+        } else {
+            function::simple_quote_literal(out, value, session);
+        }
+    }
 }
 
 /// `looks_like_function`: true for an index expression that the syntax of an index column takes without parentheses.

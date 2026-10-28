@@ -6057,6 +6057,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/oncommit.test")));
     }
 
+    /// Indexes of the access methods `gist`, `gin`, `spgist` and `brin`: the default operator classes, the options of each method, `rtree` as `gist`, the errors for a feature that a method does not have, and `pg_get_indexdef`. The queries scan the table, as the plans use no index of these methods. `connection/index_am.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn index_am() {
+        big_stack(|| script(include_str!("connection/index_am.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

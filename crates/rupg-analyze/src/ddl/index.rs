@@ -182,19 +182,17 @@ impl Definer<'_, '_> {
         };
         let (namespace, rel_name) = (rel.namespace, rel.name.clone());
         self.check_create_in(namespace, None)?;
-        let method_name = stmt.accessMethod.as_deref().unwrap_or("btree");
-        let method = match method_name {
-            "btree" => BTREE,
-            "hash" => HASH,
-            "gist" | "gin" | "spgist" | "brin" => {
-                return Err(not_yet(&format!("the access method {method_name}"), None));
-            }
-            "rtree" => {
-                self.notice(
-                    SqlState::SUCCESSFUL_COMPLETION,
-                    "substituting access method \"gist\" for obsolete method \"rtree\"".into(),
-                );
-                return Err(not_yet("the access method gist", None));
+        let mut method_name = stmt.accessMethod.as_deref().unwrap_or("btree");
+        if method_name == "rtree" {
+            self.notice(
+                SqlState::SUCCESSFUL_COMPLETION,
+                "substituting access method \"gist\" for obsolete method \"rtree\"".into(),
+            );
+            method_name = "gist";
+        }
+        let am = match method_name {
+            "btree" | "hash" | "gist" | "gin" | "spgist" | "brin" => {
+                super::opclass::index_method(method_name)?
             }
             "heap" => {
                 return Err(Error::internal(
@@ -208,22 +206,21 @@ impl Definer<'_, '_> {
                 ));
             }
         };
-        if method == HASH {
-            let unsupported = if stmt.unique {
-                Some("unique indexes")
-            } else if !including.is_empty() {
-                Some("included columns")
-            } else if key_count > 1 {
-                Some("multicolumn indexes")
-            } else {
-                None
-            };
-            if let Some(what) = unsupported {
-                return Err(Error::new(
-                    SqlState::FEATURE_NOT_SUPPORTED,
-                    format!("access method \"hash\" does not support {what}"),
-                ));
-            }
+        let method = am.oid;
+        let unsupported = if stmt.unique && !am.can_unique {
+            Some("unique indexes")
+        } else if !including.is_empty() && !am.can_include {
+            Some("included columns")
+        } else if key_count > 1 && !am.can_multi_col {
+            Some("multicolumn indexes")
+        } else {
+            None
+        };
+        if let Some(what) = unsupported {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                format!("access method \"{}\" does not support {what}", am.name),
+            ));
         }
         let options = self.create_index_options(method, &stmt.options)?;
         if stmt.tableSpace.is_some() {
@@ -517,8 +514,9 @@ impl Definer<'_, '_> {
             if let Some(what) = unsupported {
                 return Err(Error::new(
                     SqlState::FEATURE_NOT_SUPPORTED,
-                    format!("access method \"hash\" does not support {what}"),
-                ));
+                    format!("access method \"{}\" does not support {what}", method_name(method)),
+                )
+                .at_opt(at));
             }
         }
         if !elem.opclassopts.is_empty() {
@@ -596,7 +594,7 @@ impl Definer<'_, '_> {
 
 /// The error of `ResolveOpClass` for a type with no default operator class for the access method.
 pub(super) fn no_default_opclass(ty: u32, method: u32) -> Error {
-    let method_name = if method == HASH { "hash" } else { "btree" };
+    let method_name = method_name(method);
     Error::new(
         SqlState::UNDEFINED_OBJECT,
         format!(
@@ -605,6 +603,11 @@ pub(super) fn no_default_opclass(ty: u32, method: u32) -> Error {
         ),
     )
     .with_hint("You must specify an operator class for the index or define a default operator class for the data type.")
+}
+
+/// `amname`: the name of an index access method.
+pub(super) fn method_name(method: u32) -> &'static str {
+    super::opclass::method_of(method).map_or("btree", |m| m.name)
 }
 
 /// The index elements of a list.
