@@ -4,12 +4,12 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 
-use rupg_analyze::{Expr, ExprKind, Func, FuncForm, JoinKind};
+use rupg_analyze::{Expr, ExprKind, Func, FuncForm, JoinKind, Relation};
 use rupg_pgcatalog::builtin;
 use rupg_types::{Value, oid};
 
 use super::{JoinTree, Qual, Tree, equivalence, place};
-use crate::exprs;
+use crate::{exprs, pullup};
 
 /// The `amopmethod` of btree.
 const BTREE: u32 = 403;
@@ -246,22 +246,23 @@ fn sources<'q>(tree: &Tree<'q>, out: &mut Vec<(usize, &'q Expr)>) {
     }
 }
 
-/// `process_equivalence`: a condition `X = X` of a join domain, which cannot make a class, is `X IS NOT NULL` when its operator is strict, which gets a better selectivity. A condition with a security level above 0 needs a leakproof operator. `rls` is true when the query has conditions of row-level security, which put the conditions of the query above level 0.
-pub(super) fn not_null(tree: &mut Tree<'_>, rls: bool) {
+/// `process_equivalence`: a condition `X = X` of a join domain, which cannot make a class, is `X IS NOT NULL` when its operator is strict, which gets a better selectivity. A condition with a security level above 0 needs a leakproof operator. `rls` is true when the query has conditions of row-level security, which put the conditions of the query above level 0. In the conditions of a scan, `X IS NOT NULL` for a column of the relation with a not-null constraint goes, as `restriction_is_always_true` finds it always true.
+pub(super) fn not_null(tree: &mut Tree<'_>, rls: bool, relations: &[Relation]) {
     let (quals, base) = match tree {
-        Tree::Base { quals, .. } => (quals, true),
+        Tree::Base { relation, quals } => (quals, Some(*relation)),
         Tree::Join(join) => {
-            not_null(&mut join.left, rls);
-            not_null(&mut join.right, rls);
+            not_null(&mut join.left, rls, relations);
+            not_null(&mut join.right, rls, relations);
             if !matches!(join.kind, JoinKind::Inner | JoinKind::Semi) {
                 return;
             }
-            (&mut join.quals, false)
+            (&mut join.quals, None)
         }
     };
-    for qual in quals.iter_mut() {
+    let mut always = Vec::new();
+    for (at, qual) in quals.iter_mut().enumerate() {
         // A condition of `ON` of an outer join that reads only the nullable side goes down to its scan, and `distribute_qual_to_rels` lets it make an equivalence there.
-        if qual.order.is_none() || (qual.outer && !base) || exprs::volatile(&qual.expr) {
+        if qual.order.is_none() || (qual.outer && base.is_none()) || exprs::volatile(&qual.expr) {
             continue;
         }
         let ExprKind::Func(f) = &qual.expr.kind else { continue };
@@ -276,8 +277,19 @@ pub(super) fn not_null(tree: &mut Tree<'_>, rls: bool) {
         {
             continue;
         }
+        if let (Some(r), ExprKind::Var(v)) = (base, &left.kind)
+            && v.levels_up == 0
+            && v.relation == r
+            && pullup::column_not_null(relations, r, v.attnum)
+        {
+            always.push(at);
+            continue;
+        }
         let test = Expr::new(ExprKind::NullTest(Box::new(left.clone()), false), oid::BOOL);
         qual.expr = Cow::Owned(test);
+    }
+    for at in always.into_iter().rev() {
+        quals.remove(at);
     }
 }
 

@@ -1,0 +1,63 @@
+!details
+> create table nn(id int primary key, a int not null, b int)
+CREATE TABLE
+> explain (costs off) select * from nn where a = a
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on nn
+EXPLAIN
+> explain (costs off) select * from nn where b = b
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on nn
+row   Filter: (b IS NOT NULL)
+EXPLAIN
+> explain (costs off) select * from nn where id = id and b > 1
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on nn
+row   Filter: (b > 1)
+EXPLAIN
+> explain (costs off) select * from nn x left join nn y on x.b = y.b and y.a = y.a
+fields QUERY PLAN:25:-1:-1
+row Merge Left Join
+row   Merge Cond: (x.b = y.b)
+row   ->  Sort
+row         Sort Key: x.b
+row         ->  Seq Scan on nn x
+row   ->  Sort
+row         Sort Key: y.b
+row         ->  Seq Scan on nn y
+EXPLAIN
+> explain (costs off) select * from nn x left join nn y on x.b = y.b and y.b = y.b
+fields QUERY PLAN:25:-1:-1
+row Merge Right Join
+row   Merge Cond: (y.b = x.b)
+row   ->  Sort
+row         Sort Key: y.b
+row         ->  Seq Scan on nn y
+row               Filter: (b IS NOT NULL)
+row   ->  Sort
+row         Sort Key: x.b
+row         ->  Seq Scan on nn x
+EXPLAIN
+> explain (costs off) select * from nn x join nn y on x.id = y.id
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on nn y
+EXPLAIN
+> explain (costs off) select * from nn x join nn y on x.id = y.id where x.b > 0
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on nn y
+row   Filter: (b > 0)
+EXPLAIN
+> explain (costs off) select * from nn x join nn y on x.a = y.a and x.id = y.id
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on nn y
+EXPLAIN
+> explain (costs off) select * from nn x join nn y on x.b = y.b and x.id = y.id
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on nn y
+row   Filter: (b IS NOT NULL)
+EXPLAIN
+> explain (costs off) select * from nn x, nn y where x.id = y.id and x.a = y.a and x.b = y.b
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on nn y
+row   Filter: (b IS NOT NULL)
+EXPLAIN
