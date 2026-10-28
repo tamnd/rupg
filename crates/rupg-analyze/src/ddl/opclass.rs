@@ -17,8 +17,16 @@ use rupg_types::oid::{self, INTERNAL};
 
 use super::comment::{name_list, not_owner};
 use super::drop::{builtin_object, quote_identifier};
+use super::reloptions::{self, Kind};
 use super::{Definer, PG_TOAST_NAMESPACE, not_yet};
 use crate::typename::{names, type_name_text};
+
+/// The OID of the family `tsvector_ops` of `gist`.
+const GIST_TSVECTOR_OPS: u32 = 3655;
+
+/// `gtsvector_options`: `siglen`, the length of the signature in bytes, from 1 to `GISTMaxIndexKeySize`.
+const GTSVECTOR_OPTIONS: &[reloptions::Opt] =
+    &[reloptions::Opt { name: "siglen", kind: Kind::Int(1, 2024), toast: false }];
 
 /// `BOOTSTRAP_SUPERUSERID`: the owner of the built-in families and classes.
 const BOOTSTRAP_SUPERUSER: u32 = 10;
@@ -400,6 +408,22 @@ impl Definer<'_, '_> {
             SqlState::INVALID_PARAMETER_VALUE,
             format!("operator class {shown} has no options"),
         ))
+    }
+
+    /// The options that the options procedure of the family of the class accepts, as `index_opclass_options` gives them to it: `siglen` of `gtsvector_options` for the family `tsvector_ops` of `gist`. The options of the other families are not supported yet.
+    pub(super) fn opclass_options(
+        &self,
+        class: u32,
+        at: Option<usize>,
+    ) -> Result<&'static [reloptions::Opt]> {
+        let family = match self.catalog.opclass(class) {
+            Some(c) => c.family,
+            None => builtin::opclasses().iter().find(|c| c.oid == class).map_or(0, |c| c.family),
+        };
+        match family {
+            GIST_TSVECTOR_OPS => Ok(GTSVECTOR_OPTIONS),
+            _ => Err(not_yet("operator class options", at)),
+        }
     }
 
     /// `OpclassnameGetOpcid` and `get_opclass_oid` of `ResolveOpClass`: the class of the access method that the name gives, of the catalog or built in, and the type that it indexes.

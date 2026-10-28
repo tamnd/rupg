@@ -6312,6 +6312,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/or_partial.test")));
     }
 
+    /// `tsvector_ops` of `gist` takes the option `siglen` from 1 to 2024, as `gtsvector_options` checks it. The options go into `attoptions` of the index column, `pg_get_indexdef` shows them after the name of the class, and a partition and `LIKE ... INCLUDING INDEXES` copy them. `connection/opclass_siglen.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn opclass_siglen() {
+        big_stack(|| script(include_str!("connection/opclass_siglen.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

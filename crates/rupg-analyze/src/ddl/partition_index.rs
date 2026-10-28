@@ -266,6 +266,7 @@ impl Definer<'_, '_> {
                 collation: if i < key_count { column.collation } else { 0 },
                 class: info.classes.get(i).copied().unwrap_or_default(),
                 option: info.options.get(i).copied().unwrap_or_default(),
+                options: column.options.clone(),
             })
             .collect();
         let con = constraint.and_then(|oid| self.catalog.constraint(oid)).cloned();

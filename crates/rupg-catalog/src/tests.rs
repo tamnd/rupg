@@ -79,6 +79,7 @@ fn index(
             collation: if ty == TEXT { DEFAULT_COLLATION } else { 0 },
             class: if ty == TEXT { TEXT_OPS } else { INT4_OPS },
             option: 0,
+            options: Vec::new(),
         })
         .collect();
     NewIndex {

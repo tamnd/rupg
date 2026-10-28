@@ -1248,6 +1248,8 @@ pub struct NewIndexColumn {
     pub class: u32,
     /// The `indoption` bits.
     pub option: i16,
+    /// `attoptions`: the options of the operator class as `name=value`.
+    pub options: Vec<String>,
 }
 
 /// A new index before it has an OID.
@@ -4030,6 +4032,7 @@ impl Catalog {
                     column.storage = from.storage;
                     column.compression = from.compression;
                 }
+                column.options.clone_from(&c.options);
                 column
             })
             .collect();
