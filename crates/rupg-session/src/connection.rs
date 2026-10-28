@@ -6139,6 +6139,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/foreign_key_cast.test")));
     }
 
+    /// The check of a new key calls the function of the equality operator and the cast function of the user as the owner of the referenced table, which needs `EXECUTE` on them. A partitioned referenced table gives the query of the check as the context of the error. A unique index of a partitioned table matches a partition key with an operator class of the user. `connection/foreign_key_functions.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn foreign_key_functions() {
+        big_stack(|| script(include_str!("connection/foreign_key_functions.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

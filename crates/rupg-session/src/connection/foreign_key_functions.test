@@ -1,0 +1,128 @@
+!details
+> CREATE ROLE tsstat_fx_pk
+CREATE ROLE
+> CREATE ROLE tsstat_fx_fk
+CREATE ROLE
+> CREATE FUNCTION fx_int4eq(int4, int4) RETURNS bool AS 'int4eq' LANGUAGE internal IMMUTABLE STRICT
+CREATE FUNCTION
+> CREATE OPERATOR === (LEFTARG = int4, RIGHTARG = int4, FUNCTION = fx_int4eq, COMMUTATOR = ===, RESTRICT = eqsel, JOIN = eqjoinsel)
+CREATE OPERATOR
+> CREATE OPERATOR CLASS fx_int4_ops FOR TYPE int4 USING btree AS OPERATOR 1 <, OPERATOR 2 <=, OPERATOR 3 ===, OPERATOR 4 >=, OPERATOR 5 >, FUNCTION 1 btint4cmp(int4, int4)
+CREATE OPERATOR CLASS
+> REVOKE EXECUTE ON FUNCTION fx_int4eq(int4, int4) FROM PUBLIC
+REVOKE
+> GRANT EXECUTE ON FUNCTION fx_int4eq(int4, int4) TO tsstat_fx_fk
+GRANT
+> CREATE TYPE fxenum AS ENUM ('one')
+CREATE TYPE
+> CREATE FUNCTION fxenum_to_int4(fxenum) RETURNS int4 AS 'SELECT 1' LANGUAGE sql IMMUTABLE STRICT
+CREATE FUNCTION
+> CREATE CAST (fxenum AS int4) WITH FUNCTION fxenum_to_int4(fxenum) AS IMPLICIT
+CREATE CAST
+> REVOKE EXECUTE ON FUNCTION fxenum_to_int4(fxenum) FROM PUBLIC
+REVOKE
+> GRANT EXECUTE ON FUNCTION fxenum_to_int4(fxenum) TO tsstat_fx_fk
+GRANT
+> CREATE TABLE pk_op (a int4)
+CREATE TABLE
+> CREATE UNIQUE INDEX ON pk_op (a fx_int4_ops)
+CREATE INDEX
+> CREATE TABLE pk_cast (a int4 PRIMARY KEY)
+CREATE TABLE
+> CREATE TABLE pk_op_part (a int4) PARTITION BY LIST (a fx_int4_ops)
+CREATE TABLE
+> CREATE TABLE pk_op_part1 PARTITION OF pk_op_part DEFAULT
+CREATE TABLE
+> CREATE UNIQUE INDEX ON pk_op_part (a fx_int4_ops)
+CREATE INDEX
+> CREATE TABLE pk_cast_part (a int4 PRIMARY KEY) PARTITION BY LIST (a)
+CREATE TABLE
+> CREATE TABLE pk_bad_part (a int4) PARTITION BY LIST (a fx_int4_ops)
+CREATE TABLE
+> CREATE UNIQUE INDEX ON pk_bad_part (a)
+ERROR 0A000 UNIQUE constraint on partitioned table must include all partitioning columns
+DETAIL UNIQUE constraint on table "pk_bad_part" lacks column "a" which is part of the partition key.
+> INSERT INTO pk_op VALUES (1)
+INSERT 0 1
+> INSERT INTO pk_cast VALUES (1)
+INSERT 0 1
+> ALTER TABLE pk_op OWNER TO tsstat_fx_pk
+ALTER TABLE
+> ALTER TABLE pk_cast OWNER TO tsstat_fx_pk
+ALTER TABLE
+> ALTER TABLE pk_op_part OWNER TO tsstat_fx_pk
+ALTER TABLE
+> ALTER TABLE pk_cast_part OWNER TO tsstat_fx_pk
+ALTER TABLE
+> ALTER TABLE pk_op ENABLE ROW LEVEL SECURITY
+ALTER TABLE
+> ALTER TABLE pk_cast ENABLE ROW LEVEL SECURITY
+ALTER TABLE
+> ALTER TABLE pk_op_part ENABLE ROW LEVEL SECURITY
+ALTER TABLE
+> ALTER TABLE pk_cast_part ENABLE ROW LEVEL SECURITY
+ALTER TABLE
+> GRANT REFERENCES ON pk_op, pk_cast, pk_op_part, pk_cast_part TO tsstat_fx_fk
+GRANT
+> CREATE TABLE fk_op (a int4)
+CREATE TABLE
+> CREATE TABLE fk_cast (a fxenum)
+CREATE TABLE
+> INSERT INTO fk_op VALUES (1)
+INSERT 0 1
+> INSERT INTO fk_cast VALUES ('one')
+INSERT 0 1
+> ALTER TABLE fk_op OWNER TO tsstat_fx_fk
+ALTER TABLE
+> ALTER TABLE fk_cast OWNER TO tsstat_fx_fk
+ALTER TABLE
+> SET ROLE tsstat_fx_fk
+SET
+is_superuser=off
+> ALTER TABLE fk_op ADD FOREIGN KEY (a) REFERENCES pk_op (a)
+ERROR 42501 permission denied for function fx_int4eq
+> ALTER TABLE fk_cast ADD FOREIGN KEY (a) REFERENCES pk_cast (a)
+ERROR 42501 permission denied for function fxenum_to_int4
+> ALTER TABLE fk_op ADD FOREIGN KEY (a) REFERENCES pk_op_part (a)
+ERROR 42501 permission denied for function fx_int4eq (SQL statement "SELECT 1 FROM "public"."pk_op_part" x WHERE "a" OPERATOR(public.===) $1 FOR KEY SHARE OF x")
+> ALTER TABLE fk_cast ADD FOREIGN KEY (a) REFERENCES pk_cast_part (a)
+ERROR 42501 permission denied for function fxenum_to_int4 (SQL statement "SELECT 1 FROM "public"."pk_cast_part" x WHERE "a" OPERATOR(pg_catalog.=) $1::pg_catalog.int4 FOR KEY SHARE OF x")
+> RESET ROLE
+RESET
+is_superuser=on
+> ALTER TABLE pk_op DISABLE ROW LEVEL SECURITY
+ALTER TABLE
+> SET ROLE tsstat_fx_fk
+SET
+is_superuser=off
+> ALTER TABLE fk_op ADD FOREIGN KEY (a) REFERENCES pk_op (a)
+ERROR 42501 permission denied for function fx_int4eq
+> INSERT INTO fk_op VALUES (2)
+INSERT 0 1
+> RESET ROLE
+RESET
+is_superuser=on
+> GRANT EXECUTE ON FUNCTION fx_int4eq(int4, int4) TO tsstat_fx_pk
+GRANT
+> GRANT EXECUTE ON FUNCTION fxenum_to_int4(fxenum) TO tsstat_fx_pk
+GRANT
+> SET ROLE tsstat_fx_fk
+SET
+is_superuser=off
+> ALTER TABLE fk_cast ADD FOREIGN KEY (a) REFERENCES pk_cast (a)
+ALTER TABLE
+> INSERT INTO fk_op VALUES (2)
+INSERT 0 1
+> RESET ROLE
+RESET
+is_superuser=on
+> DROP TABLE fk_op, fk_cast, pk_op, pk_cast, pk_op_part, pk_cast_part, pk_bad_part
+DROP TABLE
+> DROP OWNED BY tsstat_fx_pk CASCADE
+DROP OWNED
+> DROP OWNED BY tsstat_fx_fk CASCADE
+DROP OWNED
+> DROP ROLE tsstat_fx_pk
+DROP ROLE
+> DROP ROLE tsstat_fx_fk
+DROP ROLE
