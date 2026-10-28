@@ -1,0 +1,35 @@
+!details
+> CREATE TABLE et_pk (a int PRIMARY KEY)
+CREATE TABLE
+> CREATE TABLE et_fk (a int REFERENCES et_pk)
+CREATE TABLE
+> CREATE FUNCTION et_auto() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE NOTICE 'auto %', NEW.a; INSERT INTO et_pk VALUES (NEW.a); RETURN NEW; END $$
+CREATE FUNCTION
+> CREATE FUNCTION et_late() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE NOTICE 'late %', NEW.a; RETURN NEW; END $$
+CREATE FUNCTION
+> CREATE TRIGGER "AAA_auto" AFTER INSERT ON et_fk FOR EACH ROW EXECUTE FUNCTION et_auto()
+CREATE TRIGGER
+> CREATE TRIGGER zzz_late AFTER INSERT ON et_fk FOR EACH ROW EXECUTE FUNCTION et_late()
+CREATE TRIGGER
+> INSERT INTO et_fk VALUES (1)
+NOTICE 00000 auto 1 (PL/pgSQL function et_auto() line 1 at RAISE)
+NOTICE 00000 late 1 (PL/pgSQL function et_late() line 1 at RAISE)
+INSERT 0 1
+> INSERT INTO et_fk VALUES (2)
+NOTICE 00000 auto 2 (PL/pgSQL function et_auto() line 1 at RAISE)
+NOTICE 00000 late 2 (PL/pgSQL function et_late() line 1 at RAISE)
+INSERT 0 1
+> SELECT a FROM et_pk ORDER BY a
+fields a@et_pk.1:23:4:-1
+row 1
+row 2
+SELECT 2
+> DROP TRIGGER "AAA_auto" ON et_fk
+DROP TRIGGER
+> INSERT INTO et_fk VALUES (3)
+ERROR 23503 insert or update on table "et_fk" violates foreign key constraint "et_fk_a_fkey"
+DETAIL Key (a)=(3) is not present in table "et_pk".
+> SELECT count(*) FROM et_fk
+fields count:20:8:-1
+row 2
+SELECT 1

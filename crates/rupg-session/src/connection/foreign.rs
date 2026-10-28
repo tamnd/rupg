@@ -233,6 +233,8 @@ impl Connection {
     ///
     /// `23503` for a key that the referenced table does not have, for a key of `MATCH FULL` with nulls and values, and for an old key that a row of the referencing table still has. `23001` for an old key of `RESTRICT` that a row of the referencing table has. The errors of the statement of an action, with the statement in their context.
     pub(super) fn fire(&self, batches: Vec<Batch>) -> Result<(), Error> {
+        let tables: Vec<u32> = batches.iter().map(|b| b.table).collect();
+        self.fire_early_events(&tables)?;
         self.fire_forced(batches, 0)
     }
 

@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A trigger `AFTER ... FOR EACH ROW` whose name sorts before `RI_ConstraintTrigger` now fires before the checks of the foreign keys of its table, as PostgreSQL fires the triggers of a row in the order of their names. Such a trigger can now add the referenced row before the check. The `foreign_key` regress test now passes. (#1012)
 - An `UPDATE` that moves a row to another partition now fails when a foreign key refers to a partition between the old leaf and the target table, as `ExecCrossPartitionUpdateForeignKey` does. When the target table is itself a partition, its cloned foreign keys now cascade for the rows that move. (#1011)
 - `SET CONSTRAINTS` on a foreign key to a partitioned table now also sets the clones of the key on the partitions, as `AfterTriggerSetState` follows `conparentid`. A deferred delete on a partition no longer fails at once. A partitioned table that a foreign key of the referencing table points to can no longer become a partition of that table: the attach now fails with "cannot ALTER TABLE ... because it is being used by active queries in this session", as in PostgreSQL. (#1010)
 - The update of a key of a referenced table compares the old and the new key by their bytes, as `ri_KeysEqual` does. An update of `-0` to `0` now goes to the referencing rows with `ON UPDATE CASCADE`, and `RESTRICT` fails for it (#1009).

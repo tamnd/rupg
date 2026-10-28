@@ -864,6 +864,36 @@ impl Connection {
         }
     }
 
+    /// The events of the triggers `AFTER ... FOR EACH ROW` of the tables `tables` whose names sort before `RI_ConstraintTrigger`, which fire before the triggers of the foreign keys, as `afterTriggerInvokeEvents` fires the triggers of each row in the order of their names. The other events stay in the queue in their order.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the triggers.
+    pub(super) fn fire_early_events(&self, tables: &[u32]) -> Result<(), Error> {
+        let early = |event: &Event| {
+            event.trigger.kind & TRIGGER_ROW != 0
+                && tables.contains(&event.trigger.relation)
+                && event.trigger.name.as_bytes() < b"RI_ConstraintTrigger".as_slice()
+                && !(event.trigger.deferrable
+                    && self.modes.borrow().trigger_deferred(&event.trigger))
+        };
+        let events = {
+            let mut queue = self.events.borrow_mut();
+            if !queue.iter().any(early) {
+                return Ok(());
+            }
+            let (now, later): (Vec<Event>, Vec<Event>) =
+                std::mem::take(&mut *queue).into_iter().partition(early);
+            *queue = later;
+            now
+        };
+        for event in events {
+            let rows = (event.old, event.new);
+            self.call_trigger(&event.trigger, event.event, rows, event.transition)?;
+        }
+        Ok(())
+    }
+
     /// `afterTriggerInvokeEvents` for the queue of the deferred constraint triggers: the events whose triggers are no longer deferred fire in order, and the other events stay in the queue. With `all`, all the events of the queue fire.
     ///
     /// # Errors
