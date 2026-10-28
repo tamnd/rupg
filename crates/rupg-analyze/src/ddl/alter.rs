@@ -244,6 +244,8 @@ impl Definer<'_, '_> {
             Err(e) => return Err(e),
         };
         let target = self.alter_target(stmt.objtype, found, relname(&rv))?;
+        // `CheckAlterTableIsSafe`.
+        self.check_not_in_use(target.oid, "ALTER TABLE")?;
         if let [Some(Node::AlterTableCmd(cmd))] = stmt.cmds.as_slice()
             && matches!(
                 cmd.subtype,
@@ -278,6 +280,7 @@ impl Definer<'_, '_> {
                 reached.extend(typed.into_iter().map(|t| (t, true)));
             }
             for (child, typed) in reached {
+                self.check_not_in_use(child.oid, "ALTER TABLE")?;
                 let at = match queue.iter().position(|(t, _)| t.oid == child.oid) {
                     Some(at) => at,
                     None => {
@@ -436,6 +439,12 @@ impl Definer<'_, '_> {
             }
             AlterTableType::AT_DropConstraint => {
                 self.simple_permissions(target, cmd, TABLE)?;
+                // `ATCheckPartitionsNotInUse`.
+                if target.kind == b'p' {
+                    for partition in self.all_inheritors(target.oid) {
+                        self.check_not_in_use(partition.oid, "ALTER TABLE")?;
+                    }
+                }
                 let name = cmd.name.as_deref().unwrap_or_default().to_string();
                 let cascade = cmd.behavior == DropBehavior::DROP_CASCADE;
                 passes.drops.push(DropCmd::Constraint(name, cmd.missing_ok, cascade));

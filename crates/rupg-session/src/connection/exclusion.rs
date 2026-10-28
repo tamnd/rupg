@@ -67,12 +67,12 @@ impl Connection {
         Ok(())
     }
 
-    /// The deferred exclusion constraints that are no longer deferred: the new versions of the transaction are checked with the live versions. The other constraints stay in the queue.
+    /// The deferred exclusion constraints that are no longer deferred: the new versions of the transaction are checked with the live versions. The other constraints stay in the queue. With `all`, all the constraints of the queue are checked.
     ///
     /// # Errors
     ///
     /// A conflict, and the errors of a wait and of the operators.
-    pub(super) fn fire_deferred_exclusions(&self) -> Result<(), Error> {
+    pub(super) fn fire_deferred_exclusions(&self, all: bool) -> Result<(), Error> {
         let queue = std::mem::take(&mut *self.deferred_exclusions.borrow_mut());
         if queue.is_empty() {
             return Ok(());
@@ -86,7 +86,7 @@ impl Connection {
                 let deferred = catalog
                     .constraint(constraint)
                     .is_some_and(|c| modes.state(c.oid, true, c.deferred));
-                if deferred {
+                if deferred && !all {
                     kept.push((table, constraint));
                 } else {
                     now.push((table, constraint));

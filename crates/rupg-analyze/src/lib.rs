@@ -204,6 +204,11 @@ pub trait Env {
             "the text of a stored expression is not supported here",
         ))
     }
+    /// `AfterTriggerPendingOnRel`: true when the transaction has events of `AFTER` triggers of the relation that did not fire yet, as the deferred checks of its foreign keys. A session with no transactions has none.
+    fn trigger_events_pending(&self, relid: u32) -> bool {
+        let _ = relid;
+        false
+    }
     /// The number of the session in the table of the sessions, which names its temporary schema `pg_temp_N`, or `None` for a session that cannot have temporary objects.
     fn temp_number(&self) -> Option<i32> {
         None

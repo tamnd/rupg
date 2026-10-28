@@ -1494,6 +1494,10 @@ impl Env for Reader<'_> {
         self.activity.and_then(|(activity, _)| activity.number())
     }
 
+    fn trigger_events_pending(&self, relid: u32) -> bool {
+        self.conn.is_some_and(|conn| conn.trigger_events_pending(relid))
+    }
+
     fn database(&self) -> String {
         self.database.to_owned()
     }

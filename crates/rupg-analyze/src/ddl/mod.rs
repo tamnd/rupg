@@ -574,6 +574,10 @@ impl Env for SchemaEnv<'_> {
         self.env.temp_number()
     }
 
+    fn trigger_events_pending(&self, relid: u32) -> bool {
+        self.env.trigger_events_pending(relid)
+    }
+
     fn access_temp(&self) {
         self.env.access_temp();
     }
@@ -819,6 +823,18 @@ impl Definer<'_, '_> {
     fn warning(&mut self, state: SqlState, message: String) {
         self.flush();
         self.messages.push(Message::Warning(Error::new(state, message)));
+    }
+
+    /// `CheckTableNotInUse` for the pending events of the triggers: the statement `stmt` cannot change the relation `oid` while the transaction has events of its `AFTER` triggers that did not fire yet.
+    fn check_not_in_use(&self, oid: u32, stmt: &str) -> Result<()> {
+        if !self.an.env.trigger_events_pending(oid) {
+            return Ok(());
+        }
+        let name = self.catalog.relation(oid).map(|r| r.name.clone()).unwrap_or_default();
+        Err(Error::new(
+            SqlState::OBJECT_IN_USE,
+            format!("cannot {stmt} \"{name}\" because it has pending trigger events"),
+        ))
     }
 
     /// True when the role of the statement is a superuser.

@@ -264,6 +264,8 @@ pub struct Foreign {
     pub action: Action,
     /// The statement of `CASCADE`, `SET NULL` or `SET DEFAULT` on the referencing table, as `ri_PlanCheck` makes it, or an empty text. Its parameters are the old key, or for `ON UPDATE CASCADE` the new key and then the old key, with the types of [`Foreign::types`].
     pub query: String,
+    /// The query of `ri_restrict` on the referencing table, `SELECT 1 ... FOR KEY SHARE OF x`, for the context of an error of its privileges, or an empty text for the referencing table and for a temporal foreign key.
+    pub restrict: String,
     /// `MATCH FULL`: a key with nulls and values is an error.
     pub full: bool,
     /// The OID of the other table.
@@ -280,6 +282,8 @@ pub struct Foreign {
     pub types: Vec<u32>,
     /// The type of each column of the key of the referencing table.
     pub referencing_types: Vec<u32>,
+    /// For each key column, the query `SELECT $1::type` of the cast of a referencing value to the type of the equality operator when a function of the user does the cast, or else nothing. `ri_GenerateQual` puts the cast in the query of the check, so the function runs for each key that the check looks up.
+    pub casts: Vec<String>,
     /// The OID of the constraint, which `SET CONSTRAINTS` names.
     pub constraint: u32,
     /// `tgdeferrable`: `SET CONSTRAINTS` can defer the trigger. The trigger of an action is not deferrable.
@@ -367,7 +371,15 @@ fn action_query(
     // The parameters of the old key come after the new key for `ON UPDATE CASCADE`.
     let first =
         if action == Action::Cascade && kind == WriteKind::Update { names.len() } else { 0 };
-    for (at, column) in columns.iter().enumerate() {
+    query.push_str(&key_quals(names, first, foreign));
+    query
+}
+
+/// `ri_GenerateQual` for each key column of the referencing table `names`: ` WHERE $n OPERATOR(pg_catalog.=) "a" AND ...`, with the parameters of the old key from `first + 1`.
+fn key_quals(names: &[&str], first: usize, foreign: &Foreign) -> String {
+    let mut query = String::new();
+    for (at, name) in names.iter().enumerate() {
+        let column = quote_one(name);
         let separator = if at == 0 { "WHERE" } else { "AND" };
         let (pk, fk) = (foreign.types[at], foreign.referencing_types[at]);
         let (left, right) = operator_types(pk, fk);
@@ -1269,6 +1281,7 @@ impl Analyzer<'_> {
                 referencing,
                 action,
                 query: String::new(),
+                restrict: String::new(),
                 full: foreign.match_type == 'f',
                 other,
                 other_name: other_rel.name.clone(),
@@ -1277,6 +1290,7 @@ impl Analyzer<'_> {
                 other_columns: Vec::with_capacity(mine.len()),
                 types: Vec::with_capacity(mine.len()),
                 referencing_types: Vec::with_capacity(mine.len()),
+                casts: Vec::with_capacity(mine.len()),
                 constraint: constraint.oid,
                 deferrable: trigger.deferrable,
                 deferred: trigger.deferred,
@@ -1301,18 +1315,35 @@ impl Analyzer<'_> {
                 };
                 check.types.push(key);
                 check.referencing_types.push(referencing_key);
+                let (_, right) = operator_types(key, referencing_key);
+                let user_cast = right != referencing_key
+                    && builtin::type_by_oid(right).is_some()
+                    && catalog.casts().any(|cast| {
+                        cast.source == referencing_key && cast.target == right && cast.func != 0
+                    });
+                check.casts.push(if user_cast {
+                    format!("SELECT $1{}", cast_to(right))
+                } else {
+                    String::new()
+                });
+            }
+            let names: Vec<&str> =
+                check.other_columns.iter().map(|&at| other_rel.columns[at].name.as_str()).collect();
+            let schema = match catalog.schema(other_rel.namespace) {
+                Some(schema) => schema.name.clone(),
+                None => builtin::named_by_oid(Named::Namespace, other_rel.namespace)
+                    .map_or_else(String::new, |n| n.name.to_string()),
+            };
+            let table = format!("{}.{}", quote_one(&schema), quote_one(&other_rel.name));
+            let only = other_rel.kind != RelKind::Partitioned;
+            if !referencing && !foreign.period {
+                let only = if only { "ONLY " } else { "" };
+                check.restrict = format!(
+                    "SELECT 1 FROM {only}{table} x{} FOR KEY SHARE OF x",
+                    key_quals(&names, 0, &check)
+                );
             }
             if matches!(action, Action::Cascade | Action::SetNull | Action::SetDefault) {
-                let names: Vec<&str> = check
-                    .other_columns
-                    .iter()
-                    .map(|&at| other_rel.columns[at].name.as_str())
-                    .collect();
-                let schema = match catalog.schema(other_rel.namespace) {
-                    Some(schema) => schema.name.clone(),
-                    None => builtin::named_by_oid(Named::Namespace, other_rel.namespace)
-                        .map_or_else(String::new, |n| n.name.to_string()),
-                };
                 // `ri_set` for a delete: the columns of `confdelsetcols`, or else all the referencing columns.
                 let set: Vec<&str> =
                     if kind == WriteKind::Delete && !foreign.del_set_cols.is_empty() {
@@ -1327,8 +1358,6 @@ impl Analyzer<'_> {
                     } else {
                         names.clone()
                     };
-                let table = format!("{}.{}", quote_one(&schema), quote_one(&other_rel.name));
-                let only = other_rel.kind != RelKind::Partitioned;
                 check.query = action_query((action, kind), (&table, only), (&names, &set), &check);
             }
             list.push(check);

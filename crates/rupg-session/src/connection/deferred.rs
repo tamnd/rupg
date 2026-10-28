@@ -78,26 +78,27 @@ impl Connection {
             }
         }
         if !stmt.deferred {
-            let fired = self.fire_deferred();
+            let fired = self.fire_deferred(false);
             notices.extend(self.trigger_notices());
             fired?;
         }
         Ok(Done::Tag(CommandTag::SetConstraints))
     }
 
-    /// The rows of the queue of the transaction whose triggers are no longer deferred, as `afterTriggerMarkEvents` and `afterTriggerInvokeEvents` fire them, first the rows of the foreign keys, then the checks of the unique constraints and then the events of the constraint triggers. The other rows stay in the queue.
-    fn fire_deferred(&self) -> Result<(), Error> {
+    /// The rows of the queue of the transaction whose triggers are no longer deferred, as `afterTriggerMarkEvents` and `afterTriggerInvokeEvents` fire them, first the rows of the foreign keys, then the checks of the unique constraints and then the events of the constraint triggers. The other rows stay in the queue. With `all`, as `AfterTriggerFireDeferred` fires them, all the rows of the queue fire, and the rows that the statements of the triggers queue follow the modes of `SET CONSTRAINTS`.
+    fn fire_deferred(&self, all: bool) -> Result<(), Error> {
         let pending = std::mem::take(&mut *self.deferred.borrow_mut());
         if !pending.is_empty() {
-            self.fire(pending)?;
+            let forced = if all { pending.len() } else { 0 };
+            self.fire_forced(pending, forced)?;
         }
         let rechecks = std::mem::take(&mut *self.deferred_unique.borrow_mut());
         if !rechecks.is_empty() {
-            let now = self.defer_unique(rechecks);
+            let now = if all { rechecks } else { self.defer_unique(rechecks) };
             self.check_unique(&now)?;
         }
-        self.fire_deferred_exclusions()?;
-        self.fire_deferred_events()
+        self.fire_deferred_exclusions(all)?;
+        self.fire_deferred_events(all)
     }
 
     /// The end of a statement for the deferrable unique constraints and the exclusion constraints: the new versions that the commands from `command` on wrote with the key of another version, as `unique_key_recheck` checks them when the constraint is immediate. The versions of a deferred constraint go to the queue of the transaction.
@@ -182,15 +183,25 @@ impl Connection {
             || !self.deferred_unique.borrow().is_empty()
             || !self.deferred_exclusions.borrow().is_empty()
         {
+            // `AfterTriggerFireDeferred` repeats until the statements of the triggers queue no more rows.
+            while !self.deferred.borrow().is_empty()
+                || !self.deferred_events.borrow().is_empty()
+                || !self.deferred_unique.borrow().is_empty()
+                || !self.deferred_exclusions.borrow().is_empty()
             {
-                let mut modes = self.modes.borrow_mut();
-                modes.all = Some(false);
-                modes.each.clear();
+                self.fire_deferred(true)?;
             }
-            self.fire_deferred()?;
         }
         // `PreCommit_on_commit_actions` comes after `AfterTriggerFireDeferred` in `CommitTransaction`.
         self.on_commit_actions()
+    }
+
+    /// `AfterTriggerPendingOnRel`: true when the queue of the transaction has rows of the triggers of the table `table`, as the deferred checks of its foreign keys and of its unique constraints and the events of its constraint triggers.
+    pub(crate) fn trigger_events_pending(&self, table: u32) -> bool {
+        self.deferred.borrow().iter().any(|batch| batch.table() == table)
+            || self.deferred_events.borrow().iter().any(|event| event.table() == table)
+            || self.deferred_unique.borrow().iter().any(|recheck| recheck.table == table)
+            || self.deferred_exclusions.borrow().iter().any(|&(t, _)| t == table)
     }
 
     /// The end of a transaction: the queue and the modes go.

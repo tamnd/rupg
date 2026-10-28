@@ -1,0 +1,249 @@
+!details
+> CREATE ROLE regress_ri_acl_user NOLOGIN
+CREATE ROLE
+> CREATE TABLE pk (a int PRIMARY KEY, b text)
+CREATE TABLE
+> CREATE TABLE fk (a int REFERENCES pk, c int)
+CREATE TABLE
+> INSERT INTO pk VALUES (1, 'x'), (2, 'y'), (3, 'z')
+INSERT 0 3
+> GRANT SELECT ON pk TO regress_ri_acl_user
+GRANT
+> ALTER TABLE pk OWNER TO regress_ri_acl_user
+ALTER TABLE
+> INSERT INTO fk VALUES (3, 1)
+INSERT 0 1
+> REVOKE SELECT ON pk FROM regress_ri_acl_user
+REVOKE
+> INSERT INTO fk VALUES (2, 1)
+ERROR 42501 permission denied for table pk
+> GRANT SELECT (a) ON pk TO regress_ri_acl_user
+GRANT
+> INSERT INTO fk VALUES (2, 2)
+INSERT 0 1
+> REVOKE SELECT (a) ON pk FROM regress_ri_acl_user
+REVOKE
+> GRANT SELECT (b) ON pk TO regress_ri_acl_user
+GRANT
+> INSERT INTO fk VALUES (2, 3)
+ERROR 42501 permission denied for table pk
+> INSERT INTO fk VALUES (NULL, 3)
+INSERT 0 1
+> GRANT SELECT (a) ON pk TO regress_ri_acl_user
+GRANT
+> REVOKE UPDATE ON pk FROM regress_ri_acl_user
+REVOKE
+> INSERT INTO fk VALUES (2, 4)
+ERROR 42501 permission denied for table pk
+> GRANT UPDATE (b) ON pk TO regress_ri_acl_user
+GRANT
+> INSERT INTO fk VALUES (2, 5)
+INSERT 0 1
+> REVOKE UPDATE (b) ON pk FROM regress_ri_acl_user
+REVOKE
+> UPDATE fk SET c = 6 WHERE a = 2
+UPDATE 2
+> UPDATE fk SET a = 1 WHERE c = 6
+ERROR 42501 permission denied for table pk
+> ALTER TABLE fk OWNER TO regress_ri_acl_user
+ALTER TABLE
+> GRANT UPDATE ON pk TO regress_ri_acl_user
+GRANT
+> REVOKE SELECT ON fk FROM regress_ri_acl_user
+REVOKE
+> DELETE FROM pk WHERE a = 3
+ERROR 42501 permission denied for table fk (SQL statement "SELECT 1 FROM ONLY "public"."fk" x WHERE $1 OPERATOR(pg_catalog.=) "a" FOR KEY SHARE OF x")
+> GRANT SELECT (a) ON fk TO regress_ri_acl_user
+GRANT
+> DELETE FROM pk WHERE a = 3
+ERROR 23503 update or delete on table "pk" violates foreign key constraint "fk_a_fkey" on table "fk"
+DETAIL Key (a)=(3) is still referenced from table "fk".
+> DELETE FROM pk WHERE a = 2
+ERROR 23503 update or delete on table "pk" violates foreign key constraint "fk_a_fkey" on table "fk"
+DETAIL Key (a)=(2) is still referenced from table "fk".
+> REVOKE UPDATE ON fk FROM regress_ri_acl_user
+REVOKE
+> DELETE FROM pk WHERE a = 1
+ERROR 42501 permission denied for table fk (SQL statement "SELECT 1 FROM ONLY "public"."fk" x WHERE $1 OPERATOR(pg_catalog.=) "a" FOR KEY SHARE OF x")
+> DELETE FROM pk WHERE a = 99
+DELETE 0
+> SELECT * FROM fk ORDER BY c
+fields a@fk.1:23:4:-1,c@fk.2:23:4:-1
+row 3,1
+row NULL,3
+row 2,6
+row 2,6
+SELECT 4
+> CREATE SCHEMA s
+CREATE SCHEMA
+> CREATE TABLE s.pk2 (a int PRIMARY KEY)
+CREATE TABLE
+> INSERT INTO s.pk2 VALUES (1)
+INSERT 0 1
+> CREATE TABLE fk2 (a int REFERENCES s.pk2)
+CREATE TABLE
+> GRANT ALL ON s.pk2 TO regress_ri_acl_user
+GRANT
+> ALTER TABLE s.pk2 OWNER TO regress_ri_acl_user
+ALTER TABLE
+> INSERT INTO fk2 VALUES (1)
+ERROR 42501 permission denied for schema s
+> REVOKE USAGE ON SCHEMA s FROM PUBLIC
+REVOKE
+> CREATE ROLE regress_ri_ref NOLOGIN
+CREATE ROLE
+> CREATE TABLE pk3 (a int PRIMARY KEY, b int)
+CREATE TABLE
+> INSERT INTO pk3 VALUES (1, 1)
+INSERT 0 1
+> CREATE TABLE fk3 (a int, b int)
+CREATE TABLE
+> INSERT INTO fk3 VALUES (1, 1), (2, 2)
+INSERT 0 2
+> ALTER TABLE fk3 OWNER TO regress_ri_ref
+ALTER TABLE
+> SET ROLE regress_ri_ref
+SET
+is_superuser=off
+> ALTER TABLE fk3 ADD FOREIGN KEY (a) REFERENCES pk3
+ERROR 42501 permission denied for table pk3
+> RESET ROLE
+RESET
+is_superuser=on
+> GRANT REFERENCES (b) ON pk3 TO regress_ri_ref
+GRANT
+> SET ROLE regress_ri_ref
+SET
+is_superuser=off
+> ALTER TABLE fk3 ADD FOREIGN KEY (a) REFERENCES pk3
+ERROR 42501 permission denied for table pk3
+> RESET ROLE
+RESET
+is_superuser=on
+> GRANT REFERENCES (a) ON pk3 TO regress_ri_ref
+GRANT
+> SET ROLE regress_ri_ref
+SET
+is_superuser=off
+> ALTER TABLE fk3 ADD FOREIGN KEY (a) REFERENCES pk3
+ERROR 23503 insert or update on table "fk3" violates foreign key constraint "fk3_a_fkey"
+DETAIL Key (a)=(2) is not present in table "pk3".
+> DELETE FROM fk3 WHERE a = 2
+DELETE 1
+> ALTER TABLE fk3 ADD FOREIGN KEY (a) REFERENCES pk3
+ALTER TABLE
+> INSERT INTO fk3 VALUES (5, 5)
+ERROR 23503 insert or update on table "fk3" violates foreign key constraint "fk3_a_fkey"
+DETAIL Key (a)=(5) is not present in table "pk3".
+> RESET ROLE
+RESET
+is_superuser=on
+> CREATE TABLE pk4 (a int PRIMARY KEY, b int)
+CREATE TABLE
+> CREATE TABLE fk4 (a int, b int)
+CREATE TABLE
+> INSERT INTO pk4 VALUES (1, 1), (2, 2)
+INSERT 0 2
+> INSERT INTO fk4 VALUES (1, 1), (2, 2)
+INSERT 0 2
+> ALTER TABLE fk4 ADD CONSTRAINT fk4_a FOREIGN KEY (a) REFERENCES pk4 NOT VALID
+ALTER TABLE
+> ALTER TABLE pk4 OWNER TO regress_ri_acl_user
+ALTER TABLE
+> ALTER TABLE fk4 OWNER TO regress_ri_acl_user
+ALTER TABLE
+> REVOKE SELECT ON pk4 FROM regress_ri_acl_user
+REVOKE
+> SET ROLE regress_ri_acl_user
+SET
+is_superuser=off
+> ALTER TABLE fk4 VALIDATE CONSTRAINT fk4_a
+ERROR 42501 permission denied for table pk4
+> RESET ROLE
+RESET
+is_superuser=on
+> GRANT SELECT (a) ON pk4 TO regress_ri_acl_user
+GRANT
+> REVOKE SELECT ON fk4 FROM regress_ri_acl_user
+REVOKE
+> REVOKE UPDATE ON pk4 FROM regress_ri_acl_user
+REVOKE
+> SET ROLE regress_ri_acl_user
+SET
+is_superuser=off
+> ALTER TABLE fk4 VALIDATE CONSTRAINT fk4_a
+ERROR 42501 permission denied for table pk4
+> RESET ROLE
+RESET
+is_superuser=on
+> GRANT UPDATE (b) ON pk4 TO regress_ri_acl_user
+GRANT
+> SET ROLE regress_ri_acl_user
+SET
+is_superuser=off
+> ALTER TABLE fk4 VALIDATE CONSTRAINT fk4_a
+ALTER TABLE
+> RESET ROLE
+RESET
+is_superuser=on
+> CREATE TABLE pk6 (a int PRIMARY KEY)
+CREATE TABLE
+> CREATE TABLE fk6 (a int)
+CREATE TABLE
+> INSERT INTO pk6 VALUES (1)
+INSERT 0 1
+> INSERT INTO fk6 VALUES (1)
+INSERT 0 1
+> ALTER TABLE fk6 ADD CONSTRAINT fk6_a FOREIGN KEY (a) REFERENCES pk6 NOT VALID
+ALTER TABLE
+> ALTER TABLE pk6 OWNER TO regress_ri_acl_user
+ALTER TABLE
+> ALTER TABLE fk6 OWNER TO regress_ri_acl_user
+ALTER TABLE
+> REVOKE UPDATE ON pk6 FROM regress_ri_acl_user
+REVOKE
+> SET ROLE regress_ri_acl_user
+SET
+is_superuser=off
+> ALTER TABLE fk6 VALIDATE CONSTRAINT fk6_a
+ALTER TABLE
+> RESET ROLE
+RESET
+is_superuser=on
+> INSERT INTO fk6 VALUES (1)
+ERROR 42501 permission denied for table pk6
+> SELECT conname, convalidated FROM pg_constraint WHERE conrelid IN ('fk4'::regclass, 'fk6'::regclass) ORDER BY 1
+fields conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1
+row fk4_a,t
+row fk6_a,t
+SELECT 2
+> CREATE TABLE pk5 (a int PRIMARY KEY)
+CREATE TABLE
+> INSERT INTO pk5 VALUES (1)
+INSERT 0 1
+> ALTER TABLE pk5 ENABLE ROW LEVEL SECURITY
+ALTER TABLE
+> CREATE TABLE fk5 (a int)
+CREATE TABLE
+> INSERT INTO fk5 VALUES (1), (2)
+INSERT 0 2
+> GRANT REFERENCES, SELECT ON pk5 TO regress_ri_ref
+GRANT
+> ALTER TABLE fk5 OWNER TO regress_ri_ref
+ALTER TABLE
+> SET ROLE regress_ri_ref
+SET
+is_superuser=off
+> ALTER TABLE fk5 ADD FOREIGN KEY (a) REFERENCES pk5
+ERROR 23503 insert or update on table "fk5" violates foreign key constraint "fk5_a_fkey"
+DETAIL Key (a)=(2) is not present in table "pk5".
+> RESET ROLE
+RESET
+is_superuser=on
+> DROP OWNED BY regress_ri_acl_user, regress_ri_ref CASCADE
+NOTICE 00000 drop cascades to constraint fk2_a_fkey on table fk2
+DROP OWNED
+> DROP ROLE regress_ri_acl_user
+DROP ROLE
+> DROP ROLE regress_ri_ref
+DROP ROLE
