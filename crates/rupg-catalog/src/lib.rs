@@ -3387,6 +3387,13 @@ impl Catalog {
         oid
     }
 
+    /// `toast_save_datum` for each value of the `pg_proc` row of `function` that moves to the TOAST table: each takes an OID. The syscache gives the row with its values out of the TOAST table, so each update of the row moves them again with new OIDs.
+    fn proc_toast_oids(&mut self, function: &Function) {
+        for _ in proc_toast(function).into_iter().filter(|&moved| moved) {
+            self.new_oid();
+        }
+    }
+
     /// `ProcedureCreate`: a new function, which gets the next OID. It depends on its schema and on the objects in `refs`, which are the objects that its body refers to.
     ///
     /// # Errors
@@ -3403,6 +3410,7 @@ impl Catalog {
         }
         let oid = self.new_oid();
         new.oid = oid;
+        self.proc_toast_oids(&new);
         let me = ObjRef::new(PG_PROC, oid);
         self.depend(me, ObjRef::new(PG_NAMESPACE, new.namespace), DepKind::Normal);
         for &referenced in refs {
@@ -3421,6 +3429,7 @@ impl Catalog {
         let old = self.functions.get(&oid).ok_or_else(|| no_object("function", oid))?;
         new.oid = oid;
         new.owner = old.owner;
+        self.proc_toast_oids(&new);
         let me = ObjRef::new(PG_PROC, oid);
         self.depends.retain(|d| d.object != me);
         self.depend(me, ObjRef::new(PG_NAMESPACE, new.namespace), DepKind::Normal);
@@ -3441,6 +3450,8 @@ impl Catalog {
         let old = function.namespace;
         change(function);
         let new = function.namespace;
+        let function = function.clone();
+        self.proc_toast_oids(&function);
         if old != new {
             self.change_namespace_dependency(ObjRef::new(PG_PROC, oid), old, new);
         }
@@ -4466,6 +4477,46 @@ impl Catalog {
         }
         Ok(oid)
     }
+}
+
+/// The values of a `pg_proc` row that can move to the TOAST table: `proargdefaults`, `prosrc`, `probin` and `prosqlbody`. An empty value is null, and `prosqlbody` is null when `prosrc` has the body. The length of `prosqlbody` is the length of the statement text, which is near the length of the node tree.
+fn proc_values(function: &Function) -> [&[u8]; 4] {
+    [
+        function.argdefaults.as_deref().unwrap_or_default().as_bytes(),
+        function.src.as_bytes(),
+        function.bin.as_bytes(),
+        function
+            .body
+            .as_ref()
+            .filter(|_| function.src.is_empty())
+            .map_or(&[][..], |body| body.text.as_bytes()),
+    ]
+}
+
+/// The values of [`proc_values`] that `heap_toast_insert_or_update` moves for the `pg_proc` row of `function`. The row has a null bitmap, so the header has 32 bytes. The fixed columns up to `prorettype` take 112 bytes, and the arrays of the arguments follow them.
+fn proc_toast(function: &Function) -> Vec<bool> {
+    let array = |len: usize| {
+        if len == 0 {
+            0
+        } else if len < 127 {
+            len + 1
+        } else {
+            len + 4
+        }
+    };
+    let names: usize =
+        function.argnames.iter().map(|name| (4 + name.len()).next_multiple_of(4)).sum();
+    let fixed = 112
+        + 24
+        + 4 * function.argtypes.len()
+        + array(if function.allargtypes.is_empty() {
+            0
+        } else {
+            20 + 4 * function.allargtypes.len()
+        })
+        + array(if function.argmodes.is_empty() { 0 } else { 20 + function.argmodes.len() })
+        + array(if function.argnames.is_empty() { 0 } else { 20 + names });
+    toast::moved(32, fixed, &proc_values(function), rupg_encode::Method::Lz4)
 }
 
 #[cfg(test)]

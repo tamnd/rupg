@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A function with a long body, or with long defaults, takes one OID for each value of its pg_proc row that moves to the TOAST table, as in PostgreSQL. CREATE OR REPLACE FUNCTION and ALTER FUNCTION move the values again with new OIDs (#1082).
 - The trigger functions in C `tsvector_update_trigger`, `tsvector_update_trigger_column` and `suppress_redundant_updates_trigger` run, with the errors of PostgreSQL, also from a function in `internal` with the same `prosrc`, and so does `trigger_return_old` of the library of the regression tests (#1081).
 - `CREATE FOREIGN TABLE ... (LIKE ... INCLUDING ALL)` copies no storage, no compression, no identity and no indexes, as a foreign table has no storage, the same as `transformTableLikeClause` and `expandTableLikeClause` (#1080).
 - The input of a range or a multirange over a domain checks the domain for each bound that is not infinite, as `range_in` calls `domain_in`, so a bad bound also fails an `INSERT` into a key `WITHOUT OVERLAPS` (#1079).
