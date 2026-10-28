@@ -1,0 +1,47 @@
+!details
+> CREATE TABLE mv_pk (a int PRIMARY KEY, b text) PARTITION BY LIST (a)
+CREATE TABLE
+> CREATE TABLE mv_pk1 PARTITION OF mv_pk FOR VALUES IN (1, 2) PARTITION BY LIST (a)
+CREATE TABLE
+> CREATE TABLE mv_pk11 PARTITION OF mv_pk1 FOR VALUES IN (1)
+CREATE TABLE
+> CREATE TABLE mv_pk12 PARTITION OF mv_pk1 FOR VALUES IN (2)
+CREATE TABLE
+> CREATE TABLE mv_pk3 PARTITION OF mv_pk FOR VALUES IN (3, 4)
+CREATE TABLE
+> CREATE TABLE mv_fp (a int PRIMARY KEY REFERENCES mv_pk ON UPDATE CASCADE ON DELETE CASCADE) PARTITION BY LIST (a)
+CREATE TABLE
+> CREATE TABLE mv_fp1 PARTITION OF mv_fp FOR VALUES IN (1, 2)
+CREATE TABLE
+> CREATE TABLE mv_fp3 PARTITION OF mv_fp FOR VALUES IN (3, 4)
+CREATE TABLE
+> CREATE TABLE mv_fk (a int REFERENCES mv_pk1 ON UPDATE CASCADE ON DELETE CASCADE)
+CREATE TABLE
+> INSERT INTO mv_pk VALUES (2, 'x'), (4, 'y')
+INSERT 0 2
+> INSERT INTO mv_fp VALUES (2), (4)
+INSERT 0 2
+> INSERT INTO mv_fk VALUES (2)
+INSERT 0 1
+> UPDATE mv_pk SET a = a - 1
+ERROR 0A000 cannot move tuple across partitions when a non-root ancestor of the source partition is directly referenced in a foreign key
+DETAIL A foreign key points to ancestor "mv_pk1" but not the root ancestor "mv_pk".
+HINT Consider defining the foreign key on table "mv_pk".
+> UPDATE mv_pk SET a = 3 WHERE a = 4
+UPDATE 1
+> UPDATE mv_pk1 SET a = a - 1
+UPDATE 1
+> SELECT tableoid::regclass::text, * FROM mv_pk ORDER BY a
+fields tableoid:25:-1:-1,a@mv_pk.1:23:4:-1,b@mv_pk.2:25:-1:-1
+row mv_pk11,1,x
+row mv_pk3,3,y
+SELECT 2
+> SELECT tableoid::regclass::text, * FROM mv_fp ORDER BY a
+fields tableoid:25:-1:-1,a@mv_fp.1:23:4:-1
+row mv_fp1,1
+row mv_fp3,3
+SELECT 2
+> SELECT tableoid::regclass::text, * FROM mv_fk ORDER BY a
+fields tableoid:25:-1:-1,a@mv_fk.1:23:4:-1
+row mv_fk,1
+SELECT 1

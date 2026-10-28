@@ -1,6 +1,6 @@
 //! `INSERT` into a partitioned table: `ExecFindPartition` routes each row to the leaf partition that takes it, and the leaf checks and writes the row.
 
-use rupg_analyze::{CopyTarget, Derived, Foreign, Params, Write, WriteKind};
+use rupg_analyze::{CopyTarget, Derived, Params, Write, WriteKind};
 use rupg_catalog::{Catalog, ConKind, TRIGGER_DELETE, TRIGGER_INSERT, TRIGGER_UPDATE};
 use rupg_common::{Error, SqlState};
 use rupg_exec::{Plan, Router};
@@ -473,6 +473,9 @@ impl Connection {
         let heap = self.store.heap();
         for (at, item, old) in applied {
             let leaf = &routing.leaves[at];
+            if update && item.to.is_some() {
+                check_ancestor_keys(&catalog, leaf.oid, info.table)?;
+            }
             if !item.moves || item.to.is_some() {
                 done.count += 1;
             }
@@ -553,9 +556,15 @@ impl Connection {
                 }
             }
         }
-        let keys: Vec<Foreign> = info.foreign.iter().filter(|f| !f.cloned).cloned().collect();
-        if !keys.is_empty() && !moved_old.is_empty() {
-            done.batches.push(Batch::new(info, &keys, done.view.command, moved_new, moved_old));
+        // `ExecARUpdateTriggers` of the target table: all its triggers fire for the rows that move, the clones too when the target is a partition.
+        if !info.foreign.is_empty() && !moved_old.is_empty() {
+            done.batches.push(Batch::new(
+                info,
+                &info.foreign,
+                done.view.command,
+                moved_new,
+                moved_old,
+            ));
         }
         old_rows.sort_by_key(|row| row.0);
         new_rows.sort_by_key(|row| row.0);
@@ -959,6 +968,34 @@ fn tree(catalog: &Catalog, table: u32) -> Vec<u32> {
     let mut tables = vec![table];
     tables.extend(catalog.all_inheritors(table));
     tables
+}
+
+/// `ExecCrossPartitionUpdateForeignKey`: a row that moves out of the leaf `leaf` can not keep a foreign key that refers to an ancestor of the leaf below the table `root` of the statement, unless the foreign key is a clone of one on a table above.
+///
+/// # Errors
+///
+/// `0A000` for the first such ancestor, from the parent of the leaf up.
+fn check_ancestor_keys(catalog: &Catalog, leaf: u32, root: u32) -> Result<(), Error> {
+    for ancestor in catalog.partition_ancestors(leaf).into_iter().take_while(|&a| a != root) {
+        if !catalog
+            .constraints()
+            .any(|c| c.parent == 0 && c.foreign.as_ref().is_some_and(|f| f.table == ancestor))
+        {
+            continue;
+        }
+        let name = |oid: u32| catalog.relation(oid).map(|r| r.name.clone()).unwrap_or_default();
+        return Err(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            "cannot move tuple across partitions when a non-root ancestor of the source partition is directly referenced in a foreign key",
+        )
+        .with_detail(format!(
+            "A foreign key points to ancestor \"{}\" but not the root ancestor \"{}\".",
+            name(ancestor),
+            name(root)
+        ))
+        .with_hint(format!("Consider defining the foreign key on table \"{}\".", name(root))));
+    }
+    Ok(())
 }
 
 /// True when a foreign key references the table `oid` or is a constraint of it.
