@@ -77,7 +77,7 @@ pub use function::{
     Body, REGRESS_SYMBOLS, Script, SqlBody, find_library, function_body, function_body_for,
     function_script, function_sqlbody, inline_body,
 };
-pub use grant::acl_roles;
+pub use grant::{acl_allows_create, acl_roles, apply_database_change, database_change};
 pub(crate) use lock::relkind;
 pub use lock::{Allowed, Take, lock_table};
 pub use objaddr::object_address;
@@ -254,7 +254,8 @@ pub fn is_definition(stmt: &Node) -> bool {
         || matches!(stmt, Node::DiscardStmt(discard) if discard.target == DiscardMode::DISCARD_TEMP)
         || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype) || alter.objtype == ObjectType::OBJECT_TYPE)
         || matches!(stmt, Node::AlterOwnerStmt(alter) if matches!(alter.objectType, ObjectType::OBJECT_SCHEMA | ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT | ObjectType::OBJECT_CONVERSION | ObjectType::OBJECT_TSDICTIONARY | ObjectType::OBJECT_TSCONFIGURATION | ObjectType::OBJECT_FDW | ObjectType::OBJECT_FOREIGN_SERVER | ObjectType::OBJECT_PUBLICATION | ObjectType::OBJECT_LARGEOBJECT | ObjectType::OBJECT_DATABASE) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
-        || matches!(stmt, Node::RenameStmt(rename) if rename::is_rename_kind(rename.renameType))
+        || matches!(stmt, Node::RenameStmt(rename) if rename::is_rename_kind(rename.renameType) || rename.renameType == ObjectType::OBJECT_DATABASE)
+        || matches!(stmt, Node::AlterDatabaseStmt(_))
         || matches!(stmt, Node::AlterObjectSchemaStmt(alter) if is_alter_kind(alter.objectType) || matches!(alter.objectType, ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT | ObjectType::OBJECT_CONVERSION) || tsearch::is_ts_kind(alter.objectType) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
         || matches!(stmt, Node::SelectStmt(select) if crate::select_into(select).is_some())
         || matches!(stmt, Node::GrantStmt(grant) if grant.targtype != GrantTargetType::ACL_TARGET_DEFAULTS)

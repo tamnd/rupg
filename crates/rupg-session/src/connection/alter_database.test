@@ -1,0 +1,111 @@
+> create database regression_tbd
+CREATE DATABASE
+> alter database regression_tbd rename to regression_utf8
+ALTER DATABASE
+> select datname, datconnlimit, datallowconn, datistemplate, dattablespace from pg_database where datname like 'regression%' order by 1
+fields datname@pg_database.2:19:64:-1,datconnlimit@pg_database.9:23:4:-1,datallowconn@pg_database.7:16:1:-1,datistemplate@pg_database.6:16:1:-1,dattablespace@pg_database.12:26:4:-1
+row regression_utf8,-1,t,f,1663
+SELECT 1
+> alter database regression_utf8 rename to regression_utf8
+ERROR 42P04 database "regression_utf8" already exists
+> alter database regression_none rename to regression_x
+ERROR 3D000 database "regression_none" does not exist
+> alter database regression_utf8 rename to U&"regression\000ax"
+ERROR 22023 database name "regression
+x" contains a newline or carriage return character
+> alter database regression_utf8 connection_limit 123
+ALTER DATABASE
+> alter database regression_utf8 with connection limit -2
+ERROR 22023 invalid connection limit: -2
+> alter database regression_utf8 allow_connections false is_template true
+ALTER DATABASE
+> select datname, datconnlimit, datallowconn, datistemplate from pg_database where datname like 'regression%' order by 1
+fields datname@pg_database.2:19:64:-1,datconnlimit@pg_database.9:23:4:-1,datallowconn@pg_database.7:16:1:-1,datistemplate@pg_database.6:16:1:-1
+row regression_utf8,123,f,t
+SELECT 1
+> alter database regression_utf8 connection limit default allow_connections default is_template default
+ALTER DATABASE
+> select datname, datconnlimit, datallowconn, datistemplate from pg_database where datname like 'regression%' order by 1
+fields datname@pg_database.2:19:64:-1,datconnlimit@pg_database.9:23:4:-1,datallowconn@pg_database.7:16:1:-1,datistemplate@pg_database.6:16:1:-1
+row regression_utf8,-1,t,f
+SELECT 1
+> alter database regression_utf8 is_template true allow_connections true
+ALTER DATABASE
+> alter database regression_utf8 connection_limit 1 connection_limit 2
+ERROR 42601 conflicting or redundant options at 51
+> alter database regression_utf8 foo 1
+ERROR 42601 option "foo" not recognized at 32
+> alter database regression_utf8 is_template 'maybe'
+ERROR 42601 is_template requires a Boolean value
+> alter database regression_none connection_limit 1
+ERROR 3D000 database "regression_none" does not exist
+> alter database regression_utf8 set tablespace pg_global
+ERROR 22023 pg_global cannot be used as default tablespace
+> alter database regression_utf8 set tablespace regress_none
+ERROR 42704 tablespace "regress_none" does not exist
+> alter database regression_utf8 set tablespace pg_default
+ALTER DATABASE
+> alter database regression_utf8 with tablespace pg_default connection_limit 3
+ERROR 0A000 option "tablespace" cannot be specified with other options at 37
+> alter database regression_none set tablespace pg_default
+ERROR 3D000 database "regression_none" does not exist
+> begin
+BEGIN
+> alter database regression_utf8 set tablespace pg_default
+ERROR 25001 ALTER DATABASE SET TABLESPACE cannot run inside a transaction block
+> rollback
+ROLLBACK
+> begin
+BEGIN
+> alter database regression_utf8 rename to regression_rb
+ALTER DATABASE
+> alter database regression_rb connection_limit 7
+ALTER DATABASE
+> select datname, datconnlimit from pg_database where datname like 'regression%' order by 1
+fields datname@pg_database.2:19:64:-1,datconnlimit@pg_database.9:23:4:-1
+row regression_rb,7
+SELECT 1
+> rollback
+ROLLBACK
+> select datname, datconnlimit, datallowconn, datistemplate from pg_database where datname like 'regression%' order by 1
+fields datname@pg_database.2:19:64:-1,datconnlimit@pg_database.9:23:4:-1,datallowconn@pg_database.7:16:1:-1,datistemplate@pg_database.6:16:1:-1
+row regression_utf8,-1,t,t
+SELECT 1
+> create role regress_db_nopriv
+CREATE ROLE
+> create role regress_db_owner
+CREATE ROLE
+> alter database regression_utf8 owner to regress_db_owner
+ALTER DATABASE
+> set role regress_db_nopriv
+SET
+is_superuser=off
+> alter database regression_utf8 rename to regression_x
+ERROR 42501 must be owner of database regression_utf8
+> alter database regression_utf8 connection_limit 5
+ERROR 42501 must be owner of database regression_utf8
+> alter database regression_utf8 set tablespace pg_default
+ERROR 42501 must be owner of database regression_utf8
+> reset role
+RESET
+is_superuser=on
+> set role regress_db_owner
+SET
+is_superuser=off
+> alter database regression_utf8 rename to regression_x
+ERROR 42501 permission denied to rename database
+> alter database regression_utf8 connection_limit 5
+ALTER DATABASE
+> alter database regression_utf8 set tablespace pg_default
+ERROR 42501 permission denied for tablespace pg_default
+> reset role
+RESET
+is_superuser=on
+> alter database regression_utf8 is_template false
+ALTER DATABASE
+> drop database regression_utf8
+DROP DATABASE
+> drop role regress_db_nopriv
+DROP ROLE
+> drop role regress_db_owner
+DROP ROLE

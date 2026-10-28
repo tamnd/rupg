@@ -185,6 +185,42 @@ fn acl_texts(roles: &Roles, acl: &[AclItem]) -> Vec<String> {
     acl.iter().map(|&item| item_text(roles, item)).collect()
 }
 
+/// The change of a row of `pg_database` in a transaction, with the values of the columns that `ALTER DATABASE` and `GRANT` change.
+pub fn database_change(row: &rupg_catalog::Database) -> rupg_pgcatalog::roles::DatabaseChange {
+    rupg_pgcatalog::roles::DatabaseChange {
+        oid: row.oid,
+        name: row.name.clone(),
+        owner: row.owner,
+        acl: row.acl.clone(),
+        is_template: row.is_template,
+        allow_connections: row.allow_connections,
+        connection_limit: row.connection_limit,
+        tablespace: row.tablespace,
+    }
+}
+
+/// Puts the values of a change of [`database_change`] in a row of `pg_database`.
+pub fn apply_database_change(
+    change: &rupg_pgcatalog::roles::DatabaseChange,
+    row: &mut rupg_catalog::Database,
+) {
+    row.name.clone_from(&change.name);
+    row.owner = change.owner;
+    row.acl.clone_from(&change.acl);
+    row.is_template = change.is_template;
+    row.allow_connections = change.allow_connections;
+    row.connection_limit = change.connection_limit;
+    row.tablespace = change.tablespace;
+}
+
+/// `object_aclcheck` of `CREATE` on the texts of an ACL: true when `PUBLIC` or a role for which `has` is true has the privilege. The caller checks the owner.
+pub fn acl_allows_create(texts: &[String], has: impl Fn(u32) -> bool) -> bool {
+    let roles = rupg_pgcatalog::roles::current();
+    parse_acl(&roles, texts)
+        .iter()
+        .any(|item| item.privs & CREATE != 0 && (item.grantee == PUBLIC || has(item.grantee)))
+}
+
 /// `aclmembers`: the grantees and the grantors of the texts of an ACL, without `PUBLIC`, in order and without duplicates.
 pub fn acl_roles(texts: &[String]) -> Vec<u32> {
     let roles = rupg_pgcatalog::roles::current();
@@ -797,8 +833,7 @@ impl Definer<'_, '_> {
                 .find(|row| databases.iter().all(|d| d.oid != row.oid) && wanted(row))?,
         };
         if let Some(change) = self.databases.iter().find(|c| c.oid == row.oid) {
-            row.owner = change.owner;
-            row.acl.clone_from(&change.acl);
+            apply_database_change(change, &mut row);
         }
         Some(row)
     }
@@ -994,14 +1029,11 @@ impl Definer<'_, '_> {
         };
         match object.kind {
             Kind::Database => {
-                let owner =
-                    self.database_row(|row| row.oid == object.oid).map_or(0, |row| row.owner);
-                self.databases.retain(|c| c.oid != object.oid);
-                self.databases.push(rupg_pgcatalog::roles::DatabaseChange {
-                    oid: object.oid,
-                    owner,
-                    acl: Some(texts),
-                });
+                if let Some(mut row) = self.database_row(|row| row.oid == object.oid) {
+                    row.acl = Some(texts);
+                    self.databases.retain(|c| c.oid != object.oid);
+                    self.databases.push(database_change(&row));
+                }
                 Ok(())
             }
             Kind::Table | Kind::Sequence if user => self.catalog.set_acl(object.oid, Some(texts)),

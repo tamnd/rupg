@@ -1,14 +1,15 @@
-//! `CREATE DATABASE`, `ALTER DATABASE ... SET`, `ALTER DATABASE ... OWNER TO` and `DROP DATABASE`: the checks of `createdb` and `dropdb` in the order of PostgreSQL, on the rows of `pg_database` that the store keeps. The engine has the encoding `UTF8` and the locale `C` only, so a new database must have them. The checks of PostgreSQL come first, and then the error `0A000` for an encoding or a locale that the engine does not have.
+//! `CREATE DATABASE`, `ALTER DATABASE`, `ALTER DATABASE ... SET`, `ALTER DATABASE ... OWNER TO`, `ALTER DATABASE ... RENAME TO` and `DROP DATABASE`: the checks of `createdb` and `dropdb` in the order of PostgreSQL, on the rows of `pg_database` that the store keeps. The engine has the encoding `UTF8` and the locale `C` only, so a new database must have them. The checks of PostgreSQL come first, and then the error `0A000` for an encoding or a locale that the engine does not have.
 
 use std::sync::Arc;
 
 use rupg_catalog::Database;
 use rupg_common::{Error, SqlState};
 use rupg_func::{char_to_encoding, encoding_to_char};
-use rupg_pgcatalog::roles::{DatabaseChange, Roles};
+use rupg_pgcatalog::roles::Roles;
 use rupg_sql::Severity;
 use rupg_sql::nodes::{
-    AlterDatabaseSetStmt, AlterOwnerStmt, CreatedbStmt, DefElem, DropdbStmt, Node, VariableSetKind,
+    AlterDatabaseSetStmt, AlterDatabaseStmt, AlterOwnerStmt, CreatedbStmt, DefElem, DropdbStmt,
+    Node, RenameStmt, VariableSetKind,
 };
 use rupg_wire::CommandTag;
 
@@ -289,12 +290,214 @@ impl Connection {
 
     /// The row of `pg_database` of a database, with the changes of the transaction.
     pub(super) fn database_row(&self, name: &str) -> Option<Database> {
-        let mut row = self.store.database(name)?;
-        if let Some(change) = self.roles().databases.iter().find(|c| c.oid == row.oid) {
-            row.owner = change.owner;
-            row.acl.clone_from(&change.acl);
+        let changes = &self.roles().databases;
+        if changes.is_empty() {
+            return self.store.database(name);
         }
-        Some(row)
+        self.store.rows_with(changes).into_iter().find(|row| row.name == name)
+    }
+
+    /// Puts a changed row of `pg_database` in the changes of the transaction. The commit of the transaction moves the row to the store, and a rollback discards it.
+    fn change_database(&self, row: &Database) -> Result<(), Error> {
+        let mut held = self.lease.borrow_mut();
+        let Some(lease) = held.as_mut() else {
+            return Err(Error::internal("the lock of the catalog is gone"));
+        };
+        let mut work = Roles::clone(&lease.roles);
+        work.databases.retain(|c| c.oid != row.oid);
+        work.databases.push(rupg_analyze::database_change(row));
+        lease.roles = Arc::new(work);
+        Ok(())
+    }
+
+    /// `object_ownercheck` of a database, with `aclcheck_error` for a role that does not have the privileges of the owner.
+    fn check_database_owner(&self, row: &Database, me: u32) -> Result<(), Error> {
+        let roles = self.roles();
+        if roles.superuser(me) || has_privs_of_role(&roles, me, row.owner) {
+            return Ok(());
+        }
+        Err(Error::new(
+            SqlState::INSUFFICIENT_PRIVILEGE,
+            format!("must be owner of database {}", row.name),
+        ))
+    }
+
+    /// `RenameDatabase`: the checks of the new name, of the owner, of `have_createdb_privilege` and of the sessions of the database, and the new `datname` in the changes of the transaction.
+    pub(super) fn rename_database(&self, stmt: &RenameStmt, me: u32) -> Result<Done, Error> {
+        let old = stmt.subname.as_deref().unwrap_or_default();
+        let new = stmt.newname.as_deref().unwrap_or_default();
+        if new.contains(['\n', '\r']) {
+            return Err(Error::new(
+                SqlState::INVALID_PARAMETER_VALUE,
+                format!("database name \"{new}\" contains a newline or carriage return character"),
+            ));
+        }
+        let Some(mut row) = self.database_row(old) else {
+            return Err(Error::new(
+                SqlState::UNDEFINED_DATABASE,
+                format!("database \"{old}\" does not exist"),
+            ));
+        };
+        self.check_database_owner(&row, me)?;
+        let roles = self.roles();
+        if !roles.superuser(me) && !roles.attrs(me).is_some_and(|a| a.createdb) {
+            return Err(Error::new(
+                SqlState::INSUFFICIENT_PRIVILEGE,
+                "permission denied to rename database",
+            ));
+        }
+        if self.database_row(new).is_some() {
+            return Err(Error::new(
+                SqlState::DUPLICATE_DATABASE,
+                format!("database \"{new}\" already exists"),
+            ));
+        }
+        if row.oid == self.database_oid {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "current database cannot be renamed",
+            ));
+        }
+        self.store.check_unused(&row, self.activity.number)?;
+        new.clone_into(&mut row.name);
+        self.change_database(&row)?;
+        Ok(Done::Tag(CommandTag::AlterDatabase))
+    }
+
+    /// `AlterDatabase`: the options `IS_TEMPLATE`, `ALLOW_CONNECTIONS` and `CONNECTION LIMIT` in the changes of the transaction, and `SET TABLESPACE` with `movedb`.
+    pub(super) fn alter_database(&self, stmt: &AlterDatabaseStmt, me: u32) -> Result<Done, Error> {
+        let mut template = None;
+        let mut allow = None;
+        let mut limit = None;
+        let mut tablespace = None;
+        for node in stmt.options.iter().flatten() {
+            let Node::DefElem(def) = node else { continue };
+            let at = usize::try_from(def.location).ok();
+            let slot = match def.defname.as_deref().unwrap_or_default() {
+                "is_template" => &mut template,
+                "allow_connections" => &mut allow,
+                "connection_limit" => &mut limit,
+                "tablespace" => &mut tablespace,
+                name => {
+                    return Err(Error::new(
+                        SqlState::SYNTAX_ERROR,
+                        format!("option \"{name}\" not recognized"),
+                    )
+                    .with_position(at));
+                }
+            };
+            if slot.is_some() {
+                return Err(Error::new(SqlState::SYNTAX_ERROR, "conflicting or redundant options")
+                    .with_position(at));
+            }
+            *slot = Some(def);
+        }
+        let name = stmt.dbname.as_deref().unwrap_or_default();
+        if let Some(def) = tablespace {
+            if stmt.options.len() != 1 {
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    "option \"tablespace\" cannot be specified with other options",
+                )
+                .with_position(usize::try_from(def.location).ok()));
+            }
+            self.prevent_block("ALTER DATABASE SET TABLESPACE")?;
+            return self.move_database(name, &def_string(def)?, me);
+        }
+        // An option with `DEFAULT` gives the value of a new database.
+        let flag = |def: &DefElem, default: bool| match &def.arg {
+            Some(_) => def_boolean(def),
+            None => Ok(default),
+        };
+        let is_template = template.map(|def| flag(def, false)).transpose()?;
+        let allow_connections = allow.map(|def| flag(def, true)).transpose()?;
+        let connection_limit = match limit {
+            Some(def) if def.arg.is_some() => Some(def_int32(def)?),
+            Some(_) => Some(rupg_catalog::database::UNLIMITED),
+            None => None,
+        };
+        if let Some(limit) = connection_limit
+            && limit < rupg_catalog::database::UNLIMITED
+        {
+            return Err(Error::new(
+                SqlState::INVALID_PARAMETER_VALUE,
+                format!("invalid connection limit: {limit}"),
+            ));
+        }
+        let Some(mut row) = self.database_row(name) else {
+            return Err(Error::new(
+                SqlState::UNDEFINED_DATABASE,
+                format!("database \"{name}\" does not exist"),
+            ));
+        };
+        self.check_database_owner(&row, me)?;
+        if allow_connections == Some(false) && row.oid == self.database_oid {
+            return Err(Error::new(
+                SqlState::INVALID_PARAMETER_VALUE,
+                "cannot disallow connections for current database",
+            ));
+        }
+        if let Some(value) = is_template {
+            row.is_template = value;
+        }
+        if let Some(value) = allow_connections {
+            row.allow_connections = value;
+        }
+        if let Some(value) = connection_limit {
+            row.connection_limit = value;
+        }
+        self.change_database(&row)?;
+        Ok(Done::Tag(CommandTag::AlterDatabase))
+    }
+
+    /// `movedb`: the checks of the owner, of the current database, of `CREATE` on the tablespace and of the sessions of the database. The files of a database do not depend on its tablespace, so the move changes only `dattablespace`.
+    fn move_database(&self, name: &str, tablespace: &str, me: u32) -> Result<Done, Error> {
+        let Some(mut row) = self.database_row(name) else {
+            return Err(Error::new(
+                SqlState::UNDEFINED_DATABASE,
+                format!("database \"{name}\" does not exist"),
+            ));
+        };
+        self.check_database_owner(&row, me)?;
+        if row.oid == self.database_oid {
+            return Err(Error::new(
+                SqlState::OBJECT_IN_USE,
+                "cannot change the tablespace of the currently open database",
+            ));
+        }
+        let Some((oid, owner)) = self.tablespace_oid(tablespace) else {
+            return Err(Error::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!("tablespace \"{tablespace}\" does not exist"),
+            ));
+        };
+        let roles = self.roles();
+        let allowed = roles.superuser(me)
+            || has_privs_of_role(&roles, me, owner)
+            || self.store.tablespaces().iter().find(|t| t.oid == oid).is_some_and(|t| {
+                t.acl.as_deref().is_some_and(|acl| {
+                    rupg_analyze::acl_allows_create(acl, |role| has_privs_of_role(&roles, me, role))
+                })
+            });
+        if !allowed {
+            return Err(Error::new(
+                SqlState::INSUFFICIENT_PRIVILEGE,
+                format!("permission denied for tablespace {tablespace}"),
+            ));
+        }
+        if oid == GLOBAL_TABLESPACE {
+            return Err(Error::new(
+                SqlState::INVALID_PARAMETER_VALUE,
+                "pg_global cannot be used as default tablespace",
+            ));
+        }
+        if row.tablespace == oid {
+            return Ok(Done::Tag(CommandTag::AlterDatabase));
+        }
+        self.store.check_unused(&row, self.activity.number)?;
+        row.tablespace = oid;
+        self.change_database(&row)?;
+        Ok(Done::Tag(CommandTag::AlterDatabase))
     }
 
     /// `AlterDatabaseOwner`: the checks of the owner, of `check_can_set_role` and of `have_createdb_privilege`, and the change of `datdba` and of `datacl` with `aclnewowner`. The change is a change of the roles of the transaction, so a rollback discards it.
@@ -343,14 +546,10 @@ impl Connection {
         let acl = row.acl.as_deref().map(|acl| {
             rupg_catalog::acl_new_owner(acl, &role_name(&roles, row.owner), &role_name(&roles, new))
         });
-        let mut held = self.lease.borrow_mut();
-        let Some(lease) = held.as_mut() else {
-            return Err(Error::internal("the lock of the catalog is gone"));
-        };
-        let mut work = Roles::clone(&lease.roles);
-        work.databases.retain(|c| c.oid != row.oid);
-        work.databases.push(DatabaseChange { oid: row.oid, owner: new, acl });
-        lease.roles = Arc::new(work);
+        let mut changed = row;
+        changed.owner = new;
+        changed.acl = acl;
+        self.change_database(&changed)?;
         Ok(Done::Tag(CommandTag::AlterDatabase))
     }
 
