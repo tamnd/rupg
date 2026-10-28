@@ -802,11 +802,7 @@ fn candidate(
     barrier: &dyn Fn(u32) -> bool,
     executor: bool,
 ) -> Option<(usize, bool)> {
-    if query.set_op.is_some()
-        || checks_wrapper(query)
-        || !query.row_marks.is_empty()
-        || !query.grouping_sets.is_empty()
-    {
+    if query.set_op.is_some() || checks_wrapper(query) || !query.row_marks.is_empty() {
         return None;
     }
     let mut found = Vec::new();
@@ -859,6 +855,23 @@ fn candidate(
                     .is_none()
             })
         };
+        // With grouping sets, `pull_up_simple_subquery` wraps each target in a `PlaceHolderVar` so that it keeps its identity as an item of a set. Here the subquery merges only when the query reads distinct columns of it, which need no wrap.
+        if !query.grouping_sets.is_empty() {
+            let mut attnums = used.clone();
+            attnums.sort_unstable();
+            attnums.dedup();
+            let mut vars = Vec::new();
+            for attnum in &attnums {
+                match target(*attnum).map(|t| &t.expr.kind) {
+                    Some(ExprKind::Var(v))
+                        if v.levels_up == 0 && !vars.contains(&(v.relation, v.attnum)) =>
+                    {
+                        vars.push((v.relation, v.attnum));
+                    }
+                    _ => return None,
+                }
+            }
+        }
         let columns = !nullable.contains(&r)
             || used_from(query, r, 1).iter().all(column)
                 && (!sub.from.is_empty() && used.iter().all(wrappable) || used.iter().all(column));
