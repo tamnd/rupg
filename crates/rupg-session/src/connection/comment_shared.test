@@ -1,0 +1,96 @@
+!details
+> create role regress_c1
+CREATE ROLE
+> create role regress_c2 createrole
+CREATE ROLE
+> create database regression_c
+CREATE DATABASE
+> comment on role regress_c1 is 'role one'
+COMMENT
+> comment on database regression_c is 'db c'
+COMMENT
+> comment on tablespace pg_default is 'the default'
+COMMENT
+> select shobj_description('regress_c1'::regrole, 'pg_authid'), shobj_description(oid, 'pg_database') from pg_database where datname = 'regression_c'
+fields shobj_description:25:-1:-1,shobj_description:25:-1:-1
+row role one,db c
+SELECT 1
+> select shobj_description(1663, 'pg_tablespace')
+fields shobj_description:25:-1:-1
+row the default
+SELECT 1
+> select d.description, c.relname from pg_shdescription d join pg_class c on c.oid = d.classoid where d.objoid in ('regress_c1'::regrole, 1663) order by 1
+fields description@pg_shdescription.3:25:-1:-1,relname@pg_class.2:19:64:-1
+row role one,pg_authid
+row the default,pg_tablespace
+SELECT 2
+> comment on database regression_none is 'x'
+WARNING 3D000 database "regression_none" does not exist
+COMMENT
+> comment on role regress_none is 'x'
+ERROR 42704 role "regress_none" does not exist
+> comment on tablespace regress_none is 'x'
+ERROR 42704 tablespace "regress_none" does not exist
+> set role regress_c2
+SET
+is_superuser=off
+> comment on role regress_c1 is 'by c2'
+ERROR 42501 permission denied
+DETAIL The current user must have the ADMIN option on role "regress_c1".
+> comment on database regression_c is 'by c2'
+ERROR 42501 must be owner of database regression_c
+> comment on tablespace pg_default is 'by c2'
+ERROR 42501 must be owner of tablespace pg_default
+> create role regress_c3
+CREATE ROLE
+> comment on role regress_c3 is 'made by c2'
+COMMENT
+> select shobj_description('regress_c3'::regrole, 'pg_authid')
+fields shobj_description:25:-1:-1
+row made by c2
+SELECT 1
+> reset role
+RESET
+is_superuser=on
+> begin
+BEGIN
+> comment on role regress_c1 is 'in a transaction'
+COMMENT
+> select shobj_description('regress_c1'::regrole, 'pg_authid')
+fields shobj_description:25:-1:-1
+row in a transaction
+SELECT 1
+> rollback
+ROLLBACK
+> select shobj_description('regress_c1'::regrole, 'pg_authid')
+fields shobj_description:25:-1:-1
+row role one
+SELECT 1
+> comment on role regress_c1 is ''
+COMMENT
+> select shobj_description('regress_c1'::regrole, 'pg_authid')
+fields shobj_description:25:-1:-1
+row NULL
+SELECT 1
+> comment on database template1 is null
+COMMENT
+> select shobj_description(1, 'pg_database')
+fields shobj_description:25:-1:-1
+row NULL
+SELECT 1
+> comment on database template1 is 'default template for new databases'
+COMMENT
+> comment on tablespace pg_default is null
+COMMENT
+> drop role regress_c3
+DROP ROLE
+> select count(*) from pg_shdescription where objoid = 'regress_c2'::regrole
+fields count:20:8:-1
+row 0
+SELECT 1
+> drop database regression_c
+DROP DATABASE
+> drop role regress_c1
+DROP ROLE
+> drop role regress_c2
+DROP ROLE

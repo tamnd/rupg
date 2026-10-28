@@ -714,6 +714,8 @@ impl Lease {
             std::mem::take(&mut Arc::make_mut(&mut self.roles).databases)
         };
         let mut state = self.store.state();
+        // `GetNewObjectId` takes the OIDs of the roles and of the databases from the same counter, so the counter of the cluster takes the counter of the catalog before the drop of the lease, which finds no catalog.
+        state.next_oid = state.next_oid.max(catalog.next_oid());
         if let Some(db) = state.databases.get_mut(&self.database) {
             db.committed = catalog;
         }
@@ -732,7 +734,7 @@ impl Lease {
     }
 }
 
-/// The changes from `base` to `work` on the roles of a commit that came after `base`: the roles and the memberships that `work` added, changed and removed.
+/// The changes from `base` to `work` on the roles of a commit that came after `base`: the roles and the memberships that `work` added, changed and removed, and the comments that `work` changed.
 fn rebase(now: &Roles, base: &Roles, work: &Roles) -> Roles {
     let mut roles: Vec<_> = now
         .roles
@@ -772,7 +774,16 @@ fn rebase(now: &Roles, base: &Roles, work: &Roles) -> Roles {
             None => {}
         }
     }
-    Roles { roles, members, databases: Vec::new() }
+    let mut comments = now.comments.clone();
+    for comment in &work.comments {
+        if !base.comments.contains(comment) {
+            match comments.iter_mut().find(|c| c.class == comment.class && c.oid == comment.oid) {
+                Some(c) => c.clone_from(comment),
+                None => comments.push(comment.clone()),
+            }
+        }
+    }
+    Roles { roles, members, databases: Vec::new(), comments }
 }
 
 impl Drop for Lease {

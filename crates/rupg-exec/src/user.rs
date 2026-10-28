@@ -157,7 +157,7 @@ pub(crate) fn grant_static(
     Ok(())
 }
 
-/// Takes out the static rows of the objects of `initdb` that `DROP` removed: the row of `pg_namespace`, and the rows of `pg_description` and `pg_init_privs` for the object. A static row of `pg_database` also goes when `ALTER DATABASE` changed the database, because the rows of the store have the new row.
+/// Takes out the static rows of the objects of `initdb` that `DROP` removed: the row of `pg_namespace`, and the rows of `pg_description` and `pg_init_privs` for the object. A static row of `pg_database` also goes when `ALTER DATABASE` changed the database, because the rows of the store have the new row, and a static row of `pg_shdescription` goes when `COMMENT ON` changed the comment.
 ///
 /// # Errors
 ///
@@ -175,6 +175,24 @@ pub(crate) fn drop_static(
             for (row, values) in std::mem::take(rows).into_iter().enumerate() {
                 let replaced = row < table.len
                     && matches!(cell(table, row, "oid", session)?, Value::Oid(oid) if changed.iter().any(|d| d.oid == oid));
+                if !replaced {
+                    kept.push(values);
+                }
+            }
+            *rows = kept;
+        }
+        return Ok(());
+    }
+    if table.name == "pg_shdescription" {
+        let roles = rupg_pgcatalog::roles::current();
+        if !roles.comments.is_empty() {
+            let mut kept = Vec::with_capacity(rows.len());
+            for (row, values) in std::mem::take(rows).into_iter().enumerate() {
+                let replaced = row < table.len
+                    && matches!(
+                        (cell(table, row, "objoid", session)?, cell(table, row, "classoid", session)?),
+                        (Value::Oid(object), Value::Oid(class)) if roles.shared_comment(class, object).is_some()
+                    );
                 if !replaced {
                     kept.push(values);
                 }
@@ -263,6 +281,7 @@ pub(crate) fn rows(
         "pg_database" => databases(table, session),
         "pg_authid" => authids(table),
         "pg_auth_members" => auth_members(table),
+        "pg_shdescription" => shared_descriptions(table),
         "pg_db_role_setting" => db_role_settings(table, session),
         "pg_tablespace" => tablespaces(table, session),
         "pg_ts_template" => ts_templates(table, catalog),
@@ -459,6 +478,23 @@ fn auth_members(table: &Table) -> Vec<Row<'_>> {
                 .set("inherit_option", Value::Bool(member.inherit))
                 .set("set_option", Value::Bool(member.set));
             row
+        })
+        .collect()
+}
+
+/// The rows of `pg_shdescription` of the comments that `COMMENT ON` gave to the roles, the databases and the tablespaces.
+fn shared_descriptions(table: &Table) -> Vec<Row<'_>> {
+    let roles = rupg_pgcatalog::roles::current();
+    roles
+        .comments
+        .iter()
+        .filter_map(|comment| {
+            let text = comment.text.as_deref()?;
+            let mut row = Row::new(table);
+            row.set("objoid", oid(comment.oid))
+                .set("classoid", oid(comment.class))
+                .set("description", Value::text(text));
+            Some(row)
         })
         .collect()
 }

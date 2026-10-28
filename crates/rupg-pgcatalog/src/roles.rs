@@ -86,12 +86,39 @@ pub struct DatabaseChange {
     pub tablespace: u32,
 }
 
-/// The roles and the memberships that the statements made, in the order that they were made, and the rows of `pg_database` that the transaction changed. The commit of the transaction moves the changes of the rows to the store, so the roles of a commit have no changes of rows.
+/// `pg_authid`, the catalog of the roles.
+pub const PG_AUTHID: u32 = 1260;
+
+/// A row of `pg_shdescription` that `COMMENT ON` a role, a database or a tablespace gave. `text` is `None` when the comment was removed, so a comment of `initdb` on the object also goes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SharedComment {
+    pub class: u32,
+    pub oid: u32,
+    pub text: Option<String>,
+}
+
+/// The roles and the memberships that the statements made, in the order that they were made, the comments on the shared objects, and the rows of `pg_database` that the transaction changed. The commit of the transaction moves the changes of the rows to the store, so the roles of a commit have no changes of rows.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Roles {
     pub roles: Vec<Role>,
     pub members: Vec<Member>,
     pub databases: Vec<DatabaseChange>,
+    pub comments: Vec<SharedComment>,
+}
+
+impl Roles {
+    /// The comment that `COMMENT ON` gave to the shared object, `Some(None)` when it removed the comment, or `None` when no statement gave a comment.
+    pub fn shared_comment(&self, class: u32, oid: u32) -> Option<Option<&str>> {
+        self.comments.iter().find(|c| c.class == class && c.oid == oid).map(|c| c.text.as_deref())
+    }
+
+    /// Sets the comment of the shared object. `None` removes it.
+    pub fn set_shared_comment(&mut self, class: u32, oid: u32, text: Option<String>) {
+        match self.comments.iter_mut().find(|c| c.class == class && c.oid == oid) {
+            Some(comment) => comment.text = text,
+            None => self.comments.push(SharedComment { class, oid, text }),
+        }
+    }
 }
 
 thread_local! {

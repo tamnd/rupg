@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `COMMENT ON ROLE`, `COMMENT ON DATABASE` and `COMMENT ON TABLESPACE` run, with the checks and the errors of PostgreSQL. `shobj_description` and `pg_shdescription` show the comments, and a rollback discards them. (#1053)
 - `ALTER DATABASE ... RENAME TO` runs, and `ALTER DATABASE` takes the options `CONNECTION LIMIT`, `ALLOW_CONNECTIONS`, `IS_TEMPLATE` and `TABLESPACE`, with the checks and the errors of PostgreSQL. A rollback discards the changes. (#1052)
 
 ## 0.4.5 (2026-10-29)
