@@ -328,6 +328,14 @@ impl Analyzer<'_> {
     /// `$n`.
     pub(crate) fn transform_param(&mut self, number: i32, at: Option<usize>) -> Result<Expr> {
         let index = usize::try_from(number).ok().filter(|&n| n >= 1);
+        // `ExecuteQuery` with an `INTO` clause runs the prepared query with the values of `EvaluateParams`.
+        if self.variables.is_none()
+            && !self.stored
+            && self.params.is_empty()
+            && let Some((ty, value)) = index.and_then(|n| self.env.bound_param(n))
+        {
+            return Ok(Expr::constant(value, ty, -1, at));
+        }
         if let Some(variables) = self.variables {
             return match index.and_then(|n| variables.param(n)) {
                 Some(variable) => Ok(self.variable_param(variable, at)),

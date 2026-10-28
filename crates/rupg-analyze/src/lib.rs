@@ -187,6 +187,11 @@ pub trait Env {
     fn filling(&self) -> u32 {
         0
     }
+    /// The type and the value of the parameter `$number` of `CREATE TABLE AS EXECUTE`, which the query of the prepared statement reads as a constant, or `None`.
+    fn bound_param(&self, number: usize) -> Option<(u32, Value)> {
+        let _ = number;
+        None
+    }
     /// The row of the file of a sequence as the sessions changed it, or `None` when no session changed it.
     fn sequence_row(&self, file: u32) -> Option<rupg_catalog::SequenceData> {
         let _ = file;

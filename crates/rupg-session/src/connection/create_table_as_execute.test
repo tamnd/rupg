@@ -1,0 +1,229 @@
+!details
+> create table ct (a int, b text)
+CREATE TABLE
+> insert into ct values (1, 'x'), (2, 'y'), (3, null)
+INSERT 0 3
+> prepare q (int, text) as select a, b, $2 as c from ct where a >= $1 order by a
+PREPARE
+> create table ct1 as execute q(2, 'k')
+SELECT 2
+> select * from ct1
+fields a@ct1.1:23:4:-1,b@ct1.2:25:-1:-1,c@ct1.3:25:-1:-1
+row 2,y,k
+row 3,NULL,k
+SELECT 2
+> select attname, atttypid from pg_attribute where attrelid = 'ct1'::regclass and attnum > 0 order by attnum
+fields attname@pg_attribute.2:19:64:-1,atttypid@pg_attribute.3:26:4:-1
+row a,23
+row b,25
+row c,25
+SELECT 3
+> create table ct2 as execute q(1, null) with no data
+SELECT 0
+> select count(*) from ct2
+fields count:20:8:-1
+row 0
+SELECT 1
+> create table if not exists ct1 as execute q(1, 'k')
+NOTICE 42P07 relation "ct1" already exists, skipping
+CREATE TABLE AS
+> prepare ins as insert into ct values (9, 'z')
+PREPARE
+> create table ct3 as execute ins
+ERROR 42809 prepared statement is not a SELECT
+> create table ct4 as execute nope
+ERROR 26000 prepared statement "nope" does not exist
+> create table ct5 as execute q(1)
+ERROR 42601 wrong number of parameters for prepared statement "q"
+DETAIL Expected 2 parameters but got 1.
+> select name, generic_plans, custom_plans from pg_prepared_statements where name = 'q'
+fields name@pg_prepared_statements.1:25:-1:-1,generic_plans@pg_prepared_statements.7:20:8:-1,custom_plans@pg_prepared_statements.8:20:8:-1
+row q,0,2
+SELECT 1
+> deallocate all
+DEALLOCATE ALL
+> prepare s1 as select 1
+PREPARE
+> prepare s2 as select 2
+PREPARE
+> prepare s3 as select 3
+PREPARE
+> prepare s4 as select 4
+PREPARE
+> prepare s5 as select 5
+PREPARE
+> prepare s6 as select 6
+PREPARE
+> prepare s7 as select 7
+PREPARE
+> prepare s8 as select 8
+PREPARE
+> prepare s9 as select 9
+PREPARE
+> prepare s10 as select 10
+PREPARE
+> prepare s11 as select 11
+PREPARE
+> prepare s12 as select 12
+PREPARE
+> prepare s13 as select 13
+PREPARE
+> prepare s14 as select 14
+PREPARE
+> prepare s15 as select 15
+PREPARE
+> prepare s16 as select 16
+PREPARE
+> prepare s17 as select 17
+PREPARE
+> prepare s18 as select 18
+PREPARE
+> prepare s19 as select 19
+PREPARE
+> prepare s20 as select 20
+PREPARE
+> prepare s21 as select 21
+PREPARE
+> prepare s22 as select 22
+PREPARE
+> prepare s23 as select 23
+PREPARE
+> prepare s24 as select 24
+PREPARE
+> prepare s25 as select 25
+PREPARE
+> prepare s26 as select 26
+PREPARE
+> prepare s27 as select 27
+PREPARE
+> prepare s28 as select 28
+PREPARE
+> prepare s29 as select 29
+PREPARE
+> prepare s30 as select 30
+PREPARE
+> prepare s31 as select 31
+PREPARE
+> prepare s32 as select 32
+PREPARE
+> prepare s33 as select 33
+PREPARE
+> prepare s34 as select 34
+PREPARE
+> prepare s35 as select 35
+PREPARE
+> prepare s36 as select 36
+PREPARE
+> prepare s37 as select 37
+PREPARE
+> prepare s38 as select 38
+PREPARE
+> prepare s39 as select 39
+PREPARE
+> prepare s40 as select 40
+PREPARE
+> select name from pg_prepared_statements
+fields name@pg_prepared_statements.1:25:-1:-1
+row s5
+row s16
+row s10
+row s37
+row s21
+row s30
+row s1
+row s32
+row s24
+row s34
+row s4
+row s31
+row s6
+row s2
+row s7
+row s14
+row s22
+row s33
+row s15
+row s29
+row s8
+row s27
+row s23
+row s26
+row s19
+row s38
+row s13
+row s17
+row s25
+row s40
+row s35
+row s39
+row s3
+row s9
+row s18
+row s36
+row s28
+row s11
+row s12
+row s20
+SELECT 40
+> deallocate s1
+DEALLOCATE
+> deallocate s4
+DEALLOCATE
+> deallocate s7
+DEALLOCATE
+> deallocate s10
+DEALLOCATE
+> deallocate s13
+DEALLOCATE
+> deallocate s16
+DEALLOCATE
+> deallocate s19
+DEALLOCATE
+> deallocate s22
+DEALLOCATE
+> deallocate s25
+DEALLOCATE
+> deallocate s28
+DEALLOCATE
+> deallocate s31
+DEALLOCATE
+> deallocate s34
+DEALLOCATE
+> deallocate s37
+DEALLOCATE
+> deallocate s40
+DEALLOCATE
+> prepare zz as select 0
+PREPARE
+> prepare s2 as select 0
+ERROR 42P05 prepared statement "s2" already exists
+> select name from pg_prepared_statements
+fields name@pg_prepared_statements.1:25:-1:-1
+row s5
+row s21
+row s30
+row s32
+row s24
+row s6
+row s2
+row s14
+row s33
+row s15
+row s29
+row s8
+row s27
+row s23
+row s26
+row zz
+row s38
+row s17
+row s35
+row s39
+row s3
+row s9
+row s18
+row s36
+row s11
+row s12
+row s20
+SELECT 27

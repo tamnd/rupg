@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use rupg_analyze::Params;
 use rupg_common::{Error, SqlState};
-use rupg_sql::nodes::{DeallocateStmt, ExecuteStmt, Node, PrepareStmt};
+use rupg_sql::nodes::{CreateTableAsStmt, DeallocateStmt, ExecuteStmt, Node, PrepareStmt};
 use rupg_types::Value;
 use rupg_wire::CommandTag;
 
@@ -196,6 +196,53 @@ impl Connection {
             rows?.into_iter().next().unwrap_or_default()
         };
         Ok(params)
+    }
+
+    /// `CREATE TABLE AS EXECUTE`, which `ExecuteQuery` runs with the `INTO` clause. The query of the prepared statement takes the place of `EXECUTE`, and the analyzer reads each parameter as a constant with the value of `EvaluateParams`.
+    ///
+    /// # Errors
+    ///
+    /// `42809` when the prepared statement is not a `SELECT`, and the errors of [`Connection::execute_params`].
+    pub(super) fn create_table_as_execute(
+        &self,
+        stmt: &CreateTableAsStmt,
+        execute: &ExecuteStmt,
+        text: &str,
+        notices: &mut Vec<Notice>,
+        role: u32,
+        call: bool,
+    ) -> Result<Done, Error> {
+        let name = execute.name.as_deref().unwrap_or("");
+        let statement = Arc::clone(self.statements.get(name.as_bytes()).map_err(protocol_error)?);
+        let Some(query @ Node::SelectStmt(_)) = &statement.stmt else {
+            return Err(Error::new(
+                SqlState::WRONG_OBJECT_TYPE,
+                "prepared statement is not a SELECT",
+            ));
+        };
+        if statement.plan.is_some() || !statement.params.is_empty() {
+            self.settings.borrow_mut().take_snapshot();
+        }
+        let params = self.execute_params(execute, &statement, notices)?;
+        let node = Node::CreateTableAsStmt(Box::new(CreateTableAsStmt {
+            query: Some(query.clone()),
+            ..stmt.clone()
+        }));
+        *self.bound.borrow_mut() = statement.params.iter().copied().zip(params).collect();
+        let before = notices.len();
+        let done = self.define_with(&node, text, notices, role, call);
+        self.bound.borrow_mut().clear();
+        // `CreateTableAsRelExists` skips a table that exists before `ExecuteQuery` gets a plan. Else `ExecuteQuery` gives the tag `SELECT`, also with `WITH NO DATA`.
+        let skipped =
+            notices[before..].iter().any(|n| n.error.state() == SqlState::DUPLICATE_TABLE);
+        if skipped {
+            return done;
+        }
+        statement.count_plan(self.settings.borrow().get("plan_cache_mode").as_deref());
+        match done {
+            Ok(Done::Tag(_)) => Ok(Done::Count(CommandTag::Select, 0)),
+            done => done,
+        }
     }
 
     /// `DeallocateQuery`.

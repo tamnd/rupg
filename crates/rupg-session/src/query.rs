@@ -1329,7 +1329,11 @@ impl rupg_func::Session for Reader<'_> {
 
     fn prepared_statements(&self) -> Vec<Vec<Value>> {
         self.statements.map_or_else(Vec::new, |statements| {
-            statements.iter().map(|(name, statement)| statement.row(name)).collect()
+            let hash = |name: &[u8]| {
+                let text = Value::Text(String::from_utf8_lossy(name).into());
+                rupg_func::extended_hash(oid::TEXT, &text, 0).unwrap_or_default() as u32
+            };
+            statements.scan(hash).into_iter().map(|(name, statement)| statement.row(name)).collect()
         })
     }
 
@@ -1623,6 +1627,10 @@ impl Env for Reader<'_> {
 
     fn filling(&self) -> u32 {
         self.conn.map_or(0, |conn| conn.filling.get())
+    }
+
+    fn bound_param(&self, number: usize) -> Option<(u32, Value)> {
+        self.conn.and_then(|conn| conn.bound.borrow().get(number.checked_sub(1)?).cloned())
     }
 
     fn sequence_row(&self, file: u32) -> Option<SequenceData> {
