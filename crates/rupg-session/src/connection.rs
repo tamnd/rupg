@@ -394,6 +394,8 @@ pub struct Connection {
     pub(crate) filling: Cell<u32>,
     /// The OID of the table that `CREATE TABLE AS`, `SELECT INTO` or a materialized view fills with a `BulkInsertState`, or 0.
     bulk: Cell<u32>,
+    /// The catalog before the statement of `CREATE TABLE AS` or `SELECT INTO` whose query fills its table, which the scans of the system catalogs of the query read, or `None`.
+    pub(crate) before_fill: RefCell<Option<Arc<Catalog>>>,
     /// `xact_started` of `postgres.c`: a statement runs in the transaction, so `finish_xact_command` must end it.
     xact_started: bool,
     /// `XACT_FLAGS_PIPELINING`: an `Execute` completed in the transaction, so the next message starts an implicit block.
@@ -522,6 +524,7 @@ impl Connection {
             unnamed_portals: Cell::new(0),
             filling: Cell::new(0),
             bulk: Cell::new(0),
+            before_fill: RefCell::new(None),
             xact_started: false,
             pipelining: false,
             cancel: Arc::new(AtomicBool::new(false)),
@@ -1571,7 +1574,7 @@ impl Connection {
         }
     }
 
-    /// `intorel_receive`: the rows of the query of `CREATE TABLE AS` or `SELECT INTO` go into the new table `table`, as `INSERT ... SELECT` writes them. When the query fails, the catalog goes back to `old`, so the table is gone, and its OIDs stay used. `REFRESH MATERIALIZED VIEW` fills the materialized view with the rows of its query, as `refresh_matview_datafill` writes them, and the `INSERT` reads the materialized view, which gives its query there.
+    /// `intorel_receive`: the rows of the query of `CREATE TABLE AS` or `SELECT INTO` go into the new table `table`, as `INSERT ... SELECT` writes them. When the query fails, the catalog goes back to `old`, so the table is gone, and its OIDs stay used. `REFRESH MATERIALIZED VIEW` fills the materialized view with the rows of its query, as `refresh_matview_datafill` writes them, and the `INSERT` reads the materialized view, which gives its query there. The scans of the system catalogs of the query of `CREATE TABLE AS` read `old`, so that they do not see the new table.
     fn fill(
         &self,
         node: &Node,
@@ -1633,8 +1636,12 @@ impl Connection {
             self.filling.set(table);
         }
         self.bulk.set(table);
+        if !matview {
+            *self.before_fill.borrow_mut() = Some(Arc::clone(old));
+        }
         let result =
             self.select(&Node::InsertStmt(Box::new(insert)), notices, &mut late, &mut described);
+        self.before_fill.borrow_mut().take();
         self.bulk.set(0);
         self.filling.set(0);
         if matview {
@@ -6291,6 +6298,12 @@ mod tests {
     #[test]
     fn index_expr_analyze() {
         big_stack(|| script(include_str!("connection/index_expr_analyze.test")));
+    }
+
+    /// The query of `CREATE TABLE AS` and of `SELECT INTO` does not see the rows of the new table in the system catalogs, as its snapshot has the command ID from before `intorel_startup` made the table. `connection/ctas_own_rows.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn ctas_own_rows() {
+        big_stack(|| script(include_str!("connection/ctas_own_rows.test")));
     }
 
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.

@@ -456,6 +456,10 @@ pub trait Session {
     fn catalog(&self) -> Option<&rupg_catalog::Catalog> {
         None
     }
+    /// The catalog whose objects the scans of the system catalogs such as `pg_class` see. It is [`Session::catalog`], but the query of `CREATE TABLE AS` does not see the rows of its new table, as its snapshot has the command ID from before `intorel_startup` made the table.
+    fn system_catalog(&self) -> Option<&rupg_catalog::Catalog> {
+        self.catalog()
+    }
     /// The catalog of the transaction now, with the changes of the functions of the statement that ran before, such as `lowrite`, or `None` when it is the same as [`Session::catalog`].
     fn latest_catalog(&self) -> Option<Arc<rupg_catalog::Catalog>> {
         None

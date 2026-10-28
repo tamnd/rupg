@@ -186,6 +186,8 @@ pub(crate) struct Reader<'a> {
     conn: Option<&'a Connection>,
     /// The transition tables of the trigger whose function runs, which the queries of the function read by their names.
     transition: Option<Transition>,
+    /// The catalog whose rows the scans of the system catalogs read, when it is not [`Reader::catalog`].
+    system: Option<Arc<Catalog>>,
     /// The order of the rows of the joins and the hash tables of each query that the statement ran, by the address of the query, so that a subquery that runs for each row of the query outside it is planned once.
     plans: RefCell<BTreeMap<usize, Planned>>,
 }
@@ -440,6 +442,7 @@ impl<'a> Reader<'a> {
             view: None,
             conn: None,
             transition: None,
+            system: None,
             plans: RefCell::new(BTreeMap::new()),
         }
     }
@@ -508,6 +511,7 @@ impl<'a> Reader<'a> {
     /// The reader of the session `conn`, which can run a function in PL/pgSQL.
     pub(crate) fn with_connection(mut self, conn: &'a Connection) -> Reader<'a> {
         self.conn = Some(conn);
+        self.system = conn.before_fill.borrow().clone();
         self
     }
 
@@ -1023,6 +1027,10 @@ impl rupg_func::Session for Reader<'_> {
 
     fn catalog(&self) -> Option<&Catalog> {
         Some(&self.catalog)
+    }
+
+    fn system_catalog(&self) -> Option<&Catalog> {
+        Some(self.system.as_deref().unwrap_or(&self.catalog))
     }
 
     fn latest_catalog(&self) -> Option<Arc<Catalog>> {

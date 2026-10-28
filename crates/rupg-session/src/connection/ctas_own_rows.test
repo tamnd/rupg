@@ -1,0 +1,32 @@
+!details
+> CREATE SCHEMA ctas_s
+CREATE SCHEMA
+> CREATE TABLE ctas_s.t1 (a int, b text)
+CREATE TABLE
+> CREATE TABLE ctas_s.snap AS SELECT relname, relkind FROM pg_class WHERE relnamespace = 'ctas_s'::regnamespace ORDER BY 1
+SELECT 1
+> SELECT * FROM ctas_s.snap
+fields relname@ctas_s.snap.1:19:64:-1,relkind@ctas_s.snap.2:18:1:-1
+row t1,r
+SELECT 1
+> SELECT relname INTO ctas_s.snap2 FROM pg_class WHERE relnamespace = 'ctas_s'::regnamespace ORDER BY 1
+SELECT 2
+> SELECT * FROM ctas_s.snap2
+fields relname@ctas_s.snap2.1:19:64:-1
+row snap
+row t1
+SELECT 2
+> CREATE TABLE ctas_s.snap3 AS SELECT count(*) FROM pg_attribute WHERE attrelid IN (SELECT oid FROM pg_class WHERE relname = 'snap3')
+SELECT 1
+> SELECT * FROM ctas_s.snap3
+fields count@ctas_s.snap3.1:20:8:-1
+row 0
+SELECT 1
+> CREATE TABLE ctas_s.snap4 AS SELECT typname FROM pg_type WHERE typname IN ('snap4', 't1') ORDER BY 1
+SELECT 1
+> SELECT * FROM ctas_s.snap4
+fields typname@ctas_s.snap4.1:19:64:-1
+row t1
+SELECT 1
+> CREATE TABLE ctas_s.snap5 AS SELECT 'ctas_s.snap5'::regclass IS NOT NULL AS seen
+ERROR 42P01 relation "ctas_s.snap5" does not exist at 37
