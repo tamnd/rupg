@@ -6563,6 +6563,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/range_domain_bound.test")));
     }
 
+    /// A foreign table has no storage, so `LIKE ... INCLUDING ALL` in `CREATE FOREIGN TABLE` copies no storage, no compression, no identity and no indexes, but it copies the defaults, the check constraints and the statistics objects.
+    #[test]
+    fn foreign_table_like() {
+        big_stack(|| script(include_str!("connection/foreign_table_like.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

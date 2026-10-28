@@ -1,0 +1,52 @@
+!details
+> CREATE TABLE fl_src (a int GENERATED ALWAYS AS IDENTITY, b text COMPRESSION pglz, c int CHECK (c > 0), d int DEFAULT 7)
+CREATE TABLE
+> ALTER TABLE fl_src ALTER COLUMN b SET STORAGE MAIN
+ALTER TABLE
+> CREATE INDEX fl_src_c ON fl_src (c)
+CREATE INDEX
+> CREATE STATISTICS fl_src_st ON c, d FROM fl_src
+CREATE STATISTICS
+> CREATE FOREIGN DATA WRAPPER fl_w
+CREATE FOREIGN DATA WRAPPER
+> CREATE SERVER fl_s FOREIGN DATA WRAPPER fl_w
+CREATE SERVER
+> CREATE FOREIGN TABLE fl_ft (LIKE fl_src INCLUDING ALL) SERVER fl_s
+CREATE FOREIGN TABLE
+> SELECT attname, attstorage::text, attcompression::text, attidentity::text, attnotnull FROM pg_attribute WHERE attrelid = 'fl_ft'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,attstorage:25:-1:-1,attcompression:25:-1:-1,attidentity:25:-1:-1,attnotnull@pg_attribute.12:16:1:-1
+row a,p,,,t
+row b,x,,,f
+row c,p,,,f
+row d,p,,,f
+SELECT 4
+> SELECT count(*) FROM pg_index WHERE indrelid = 'fl_ft'::regclass
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT conname::text, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'fl_ft'::regclass ORDER BY conname
+fields conname:25:-1:-1,pg_get_constraintdef:25:-1:-1
+row fl_src_a_not_null,NOT NULL a
+row fl_src_c_check,CHECK ((c > 0))
+SELECT 2
+> SELECT pg_get_expr(adbin, adrelid) FROM pg_attrdef WHERE adrelid = 'fl_ft'::regclass
+fields pg_get_expr:25:-1:-1
+row 7
+SELECT 1
+> SELECT stxname::text FROM pg_statistic_ext WHERE stxrelid = 'fl_ft'::regclass
+fields stxname:25:-1:-1
+row fl_ft_c_d_stat
+SELECT 1
+> CREATE TABLE fl_t (LIKE fl_src INCLUDING ALL)
+CREATE TABLE
+> SELECT attname, attstorage::text, attcompression::text, attidentity::text FROM pg_attribute WHERE attrelid = 'fl_t'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,attstorage:25:-1:-1,attcompression:25:-1:-1,attidentity:25:-1:-1
+row a,p,,a
+row b,m,p,
+row c,p,,
+row d,p,,
+SELECT 4
+> SELECT count(*) FROM pg_index WHERE indrelid = 'fl_t'::regclass
+fields count:20:8:-1
+row 1
+SELECT 1

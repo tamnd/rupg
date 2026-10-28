@@ -101,7 +101,12 @@ impl Definer<'_, '_> {
         } else {
             self.check_relation_select(oid, kind, &name)?;
         }
-        let options = like.options;
+        // A foreign table has no storage, so `transformTableLikeClause` skips `STORAGE`, `COMPRESSION` and `IDENTITY`, and `expandTableLikeClause` skips `INDEXES`.
+        let options = if plan.foreign_table {
+            like.options & !(STORAGE | COMPRESSION | IDENTITY | INDEXES)
+        } else {
+            like.options
+        };
         let columns: Vec<(i16, rupg_catalog::Column)> = self
             .catalog
             .relation(oid)
