@@ -1562,7 +1562,7 @@ pub(crate) fn distinct_keys(sub: &Query) -> Vec<Vec<i16>> {
     out
 }
 
-/// `get_actual_variable_range` for the columns of the relation `r`, the table `table`, that the inequalities of `expr` compare with a constant, when the column has a histogram and is the first key of a `btree` index of the table with no predicate and with the default operator class of its type.
+/// `get_actual_variable_range` for the columns of the relation `r`, the table `table`, that the inequalities of `expr` compare with a constant, or with the items of an array as `scalararraysel` does, when the column has a histogram and is the first key of a `btree` index of the table with no predicate and with the default operator class of its type.
 fn variable_ranges(
     members: Option<&dyn crate::Members>,
     expr: &Expr,
@@ -1572,6 +1572,18 @@ fn variable_ranges(
 ) {
     for child in expr.children() {
         variable_ranges(members, child, (r, table), indexes, stats);
+    }
+    if let ExprKind::ScalarArrayOp { func, args, .. } = &expr.kind
+        && let [left, array] = args.as_slice()
+    {
+        let element = builtin::type_by_oid(array.ty).map_or(0, |t| t.elem);
+        let inequality = cost::array_operator(*func, left.ty, element)
+            .is_some_and(|op| cost::scalar_inequality(op.oid).is_some());
+        let var = plain_var(left).filter(|v| v.levels_up == 0 && v.relation == r);
+        if let (true, Some(var)) = (inequality, var) {
+            column_range(members, var.attnum, (r, table), indexes, stats);
+        }
+        return;
     }
     let Some((op, left, right)) = exprs::binary(expr) else { return };
     if cost::scalar_inequality(op).is_none() {
