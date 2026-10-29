@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The view action in pg_rewrite now has functions in FROM, VALUES, ARRAY, DISTINCT ON and references to WITH queries from inner queries in the form of PostgreSQL 19 (#916) (#1111).
 - `EXPLAIN` of `UPDATE`, `DELETE` and `SELECT ... FOR UPDATE` keeps the conditions that the predicate of a partial index implies in the filter of the scan, and an index-only scan of a partial index needs no column of these conditions, as in PostgreSQL (#1110).
 - A subquery in `WHERE` of `ON CONFLICT DO UPDATE` is planned as a subplan, and `EXPLAIN` shows it as `SubPlan` or `InitPlan` under `Conflict Filter`, as in PostgreSQL (#1108).
 - `ALTER TABLE ... DROP COLUMN` of a column in `INCLUDE` of a unique constraint drops the constraint and its index, as in PostgreSQL (#1107).
