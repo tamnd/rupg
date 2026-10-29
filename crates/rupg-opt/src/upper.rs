@@ -1726,7 +1726,8 @@ fn group_keys<'q>(level: &Level<'q>) -> (Vec<SortKey<'q>>, bool, Vec<usize>) {
             items.push(g);
         }
     }
-    let exprs: Vec<&Expr> = items.iter().map(|s| level.target(s.target)).collect();
+    let exprs: Vec<(&Expr, u32)> =
+        items.iter().map(|s| (level.target(s.target), s.equal)).collect();
     let surplus = level.stats.surplus(&exprs);
     let items: Vec<&SortGroup> =
         items.into_iter().zip(surplus).filter(|(_, surplus)| !surplus).map(|(s, _)| s).collect();

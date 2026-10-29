@@ -6731,6 +6731,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/agg_nested_sublink.test")));
     }
 
+    /// A unique index takes a column out of `GROUP BY` only when an item of each key column has an `=` operator of the family of the column, as `remove_useless_groupby_columns` checks it, so an index with `record_image_ops` does not remove a column from a group by `record_ops`.
+    #[test]
+    fn group_key_family() {
+        big_stack(|| script(include_str!("connection/group_key_family.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
