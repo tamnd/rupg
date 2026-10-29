@@ -1,8 +1,8 @@
 //! `CREATE PUBLICATION`, `ALTER PUBLICATION` and the other statements on a publication, as `CreatePublication`, `AlterPublication`, `AlterPublicationOwner_internal` and `parse_publication_options` of `publicationcmds.c` run them, with the checks of `publication_add_relation`, `check_publication_add_relation`, `pub_collist_validate`, `publication_add_schema` and `check_publication_add_schema` of `pg_publication.c`.
 
 use rupg_catalog::{
-    BOOTSTRAP_SUPERUSER, FIRST_NORMAL_OID, ObjRef, PG_PUBLICATION, PG_PUBLICATION_NAMESPACE,
-    PG_PUBLICATION_REL, PG_TOAST_NAMESPACE, Publication, PublicationRel,
+    BOOTSTRAP_SUPERUSER, Catalog, FIRST_NORMAL_OID, ObjRef, PG_PUBLICATION,
+    PG_PUBLICATION_NAMESPACE, PG_PUBLICATION_REL, PG_TOAST_NAMESPACE, Publication, PublicationRel,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{
@@ -181,6 +181,18 @@ fn invalid_filter(expr: &Expr, detail: &str) -> Error {
     }
 }
 
+/// The arguments of a node that has an input collation, as `exprInputCollation`.
+fn input_args(expr: &Expr) -> Vec<&Expr> {
+    match &expr.kind {
+        ExprKind::Func(f) => f.args.iter().collect(),
+        ExprKind::NullIf { args, .. }
+        | ExprKind::Distinct { args, .. }
+        | ExprKind::ScalarArrayOp { args, .. }
+        | ExprKind::MinMax { args, .. } => args.iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// `contain_mutable_or_user_functions_checker`: true for a function that is not immutable or that a user made.
 fn mutable_or_user(oid: u32) -> bool {
     if oid >= FIRST_NORMAL_OID {
@@ -189,8 +201,8 @@ fn mutable_or_user(oid: u32) -> bool {
     rupg_pgcatalog::builtin::proc_by_oid(oid).is_none_or(|p| p.volatile != b'i')
 }
 
-/// `check_simple_rowfilter_expr_walker`: a row filter can only have columns, constants, built-in operators, built-in types, built-in collations and immutable built-in functions.
-fn check_simple_filter(expr: &Expr) -> Result<()> {
+/// `check_simple_rowfilter_expr_walker`: a row filter can only have columns, constants, built-in operators, built-in types, built-in collations and immutable built-in functions. `collation` gives `exprCollation`. The input collation of a node, as `exprInputCollation`, is a user collation when the collation of one of its arguments is.
+fn check_simple_filter(expr: &Expr, collation: &dyn Fn(&Expr) -> u32) -> Result<()> {
     let mut error = None;
     expr.find(0, &mut |e, _| {
         let user_op = "User-defined operators are not allowed.";
@@ -247,7 +259,10 @@ fn check_simple_filter(expr: &Expr) -> Result<()> {
                 detail = Some("User-defined types are not allowed.");
             } else if funcs.into_iter().any(mutable_or_user) {
                 detail = Some("User-defined or built-in mutable functions are not allowed.");
-            } else if matches!(e.kind, ExprKind::Collate(_, c) if c >= FIRST_NORMAL_OID) {
+            } else if matches!(e.kind, ExprKind::Collate(_, c) if c >= FIRST_NORMAL_OID)
+                || collation(e) >= FIRST_NORMAL_OID
+                || input_args(e).iter().any(|a| collation(a) >= FIRST_NORMAL_OID)
+            {
                 detail = Some("User-defined collations are not allowed.");
             }
         }
@@ -426,7 +441,11 @@ impl<'s> Definer<'_, '_> {
             let expr = self.an.with_kind(Kind::Where, |an| an.transform(Some(node)))?;
             let mut expr = self.an.coerce_to_boolean(expr, "PUBLICATION WHERE")?;
             crate::virtual_columns::expand_virtual_expr(&mut expr, oid, self.catalog)?;
-            check_simple_filter(&expr)?;
+            let levels = [&self.an.scope.relations[..]];
+            let catalog: &Catalog = self.catalog;
+            check_simple_filter(&expr, &|e| {
+                crate::collate::expr_collation(e, &levels, Some(catalog))
+            })?;
             table.qual = Some(expr);
         }
         Ok(())
@@ -728,6 +747,12 @@ impl<'s> Definer<'_, '_> {
                 format!("permission denied for database {}", self.an.env.database()),
             ));
         }
+        if (stmt.for_all_tables || stmt.for_all_sequences) && !self.is_superuser() {
+            return Err(Error::new(
+                SqlState::INSUFFICIENT_PRIVILEGE,
+                "must be superuser to create a FOR ALL TABLES or ALL SEQUENCES publication",
+            ));
+        }
         let name = stmt.pubname.as_deref().unwrap_or_default();
         if self.catalog.publication_by_name(name).is_some() {
             return Err(Error::new(
@@ -765,6 +790,12 @@ impl<'s> Definer<'_, '_> {
                 self.add_tables(&publication, &tables, true)?;
             }
         } else if !stmt.for_all_sequences {
+            if !objects.schemas.is_empty() && !self.is_superuser() {
+                return Err(Error::new(
+                    SqlState::INSUFFICIENT_PRIVILEGE,
+                    "must be superuser to create FOR TABLES IN SCHEMA publication",
+                ));
+            }
             if !objects.tables.is_empty() {
                 let mut tables = self.open_tables(&objects.tables)?;
                 self.transform_filters(&mut tables, via_root)?;

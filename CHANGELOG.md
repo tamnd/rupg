@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `CREATE PUBLICATION` needs a superuser for `FOR ALL TABLES`, `FOR ALL SEQUENCES` and `FOR TABLES IN SCHEMA`, and a row filter rejects an expression with a user-defined collation, as in PostgreSQL (#1142).
 - PL/pgSQL checks a null value against a domain: a domain variable with no default, `v := NULL` and `RETURN NULL` fail for a `NOT NULL` domain, as in PostgreSQL (#1141).
 
 ## 0.4.10 (2026-10-29)
