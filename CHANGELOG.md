@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The node tree of a view in pg_rewrite has aggregates with DISTINCT, ORDER BY and WITHIN GROUP, aggregates of an outer query in a subquery, and the grouped columns of an outer query in a subquery, as in PG19 (#916) (#1123).
 - COPY FROM now plans the column defaults before CopyInResponse, and plans the default of each column with the DEFAULT option, so an error in a default comes first, as in PostgreSQL (#1122).
 - DROP OWNED now revokes the privileges of the roles on databases, so that DROP ROLE then works, as in PostgreSQL (#1121).
 - The node tree of a view in pg_rewrite has the grouping sets, GROUP BY DISTINCT and GROUPING() of its query, as in PG19 (#916) (#1120).

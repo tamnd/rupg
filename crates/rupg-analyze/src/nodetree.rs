@@ -12,7 +12,8 @@ use crate::Relation;
 use crate::collate::{self, State};
 use crate::cte::Cte;
 use crate::expr::{
-    BoolOp, BoolTest, CastForm, Expr, ExprKind, FuncForm, NullTreatment, SqlValue, SubLinkKind, Var,
+    Aggref, BoolOp, BoolTest, CastForm, Expr, ExprKind, FuncForm, NullTreatment, SqlValue,
+    SubLinkKind, Var,
 };
 use crate::from::{FromItem, Join, JoinKind};
 use crate::perm::PermInfo;
@@ -52,6 +53,15 @@ struct Frame {
     rt: Vec<usize>,
     nulled: Vec<Vec<usize>>,
     scope: Option<Vec<usize>>,
+    /// The grouped expressions of the query when its expression has the subquery, which change to the columns of its `*GROUP*` entry.
+    group: Option<Group>,
+}
+
+/// The `*GROUP*` entry of an outer query: its range table index, and each grouped expression with true when a grouping set does not have it.
+#[derive(Clone)]
+struct Group {
+    rt: usize,
+    items: Vec<(Expr, bool)>,
 }
 
 struct Writer<'a> {
@@ -83,6 +93,8 @@ struct Writer<'a> {
     group_rt: usize,
     /// True when the grouped expressions change to the columns of the `*GROUP*` entry.
     substitute: bool,
+    /// False in the arguments of an aggregate of an outer query, where the grouped expressions of the outer queries do not change.
+    outer_substitute: bool,
     /// `ressortgroupref` of each target.
     refs: Vec<usize>,
     /// For each item of `GROUP BY`, true when a grouping set does not have it, so the `*GROUP*` entry can make it null.
@@ -147,6 +159,7 @@ impl<'a> Writer<'a> {
             merged_below: usize::MAX,
             group_rt: 0,
             substitute: false,
+            outer_substitute: true,
             refs: vec![0; query.targets.len()],
             nullable: vec![false; query.group.len()],
             set_tag: true,
@@ -196,12 +209,24 @@ impl<'a> Writer<'a> {
         let mut writer = Writer::new(query, self.perms, self.catalog)?;
         writer.levels.extend(self.levels.iter().copied());
         writer.ctes.extend(self.ctes.iter().copied());
+        let group = self.substitute.then(|| Group {
+            rt: self.group_rt,
+            items: (self.query.group.iter().enumerate())
+                .map(|(at, g)| (unplaced(&self.query.targets[g.target].expr), self.nullable[at]))
+                .collect(),
+        });
         writer.outer.push(Frame {
             rt: self.rt.clone(),
             nulled: self.nulled.clone(),
             scope: self.scope.clone(),
+            group,
         });
         writer.outer.extend(self.outer.iter().cloned());
+        if !self.outer_substitute {
+            for frame in &mut writer.outer {
+                frame.group = None;
+            }
+        }
         Some(writer)
     }
 
@@ -896,6 +921,23 @@ impl<'a> Writer<'a> {
             );
             return Some(());
         }
+        if let Some((up, rt, at, g, nullable)) = self.outer_grouped(e) {
+            let collation = self.collation(&g);
+            let _ = write!(
+                self.out,
+                "{{VAR :varno {rt} :varattno {} :vartype {} :vartypmod {} :varcollid {collation} :varnullingrels ",
+                at + 1,
+                g.ty,
+                g.typmod
+            );
+            self.bits(nullable.then_some(i32::try_from(rt).ok()?));
+            let _ = write!(
+                self.out,
+                " :varlevelsup {up} :varreturningtype 0 :varnosyn {rt} :varattnosyn {} :location -1}}",
+                at + 1
+            );
+            return Some(());
+        }
         if let Some(at) = self.merged_column(e) {
             return self.join_var(at, e);
         }
@@ -1053,55 +1095,7 @@ impl<'a> Writer<'a> {
                 let _ = write!(self.out, " :collOid {collation} :location -1}}");
                 Some(())
             }
-            ExprKind::Agg(agg) => {
-                if agg.levels_up != 0
-                    || agg.kind != b'n'
-                    || !agg.direct.is_empty()
-                    || !agg.order.is_empty()
-                    || !agg.distinct.is_empty()
-                {
-                    return None;
-                }
-                let (collation, input) = (self.collation(e), self.input_collation(&agg.args));
-                let _ = write!(
-                    self.out,
-                    "{{AGGREF :aggfnoid {} :aggtype {} :aggcollid {collation} :inputcollid {input} :aggtranstype 0 :aggargtypes ",
-                    agg.oid, e.ty
-                );
-                if agg.args.is_empty() {
-                    self.out.push_str("<>");
-                } else {
-                    self.out.push_str("(o");
-                    for arg in &agg.args {
-                        let _ = write!(self.out, " {}", arg.ty);
-                    }
-                    self.out.push(')');
-                }
-                self.out.push_str(" :aggdirectargs <> :args ");
-                let substitute = std::mem::replace(&mut self.substitute, false);
-                let args: Vec<_> = agg.args.iter().enumerate().collect();
-                let written = self.list(&args, |w, &(i, arg)| {
-                    w.out.push_str("{TARGETENTRY :expr ");
-                    w.expr(arg)?;
-                    let _ = write!(
-                        w.out,
-                        " :resno {} :resname <> :ressortgroupref 0 :resorigtbl 0 :resorigcol 0 :resjunk false}}",
-                        i + 1
-                    );
-                    Some(())
-                });
-                written?;
-                self.out.push_str(" :aggorder <> :aggdistinct <> :aggfilter ");
-                let written = self.option(agg.filter.as_deref());
-                self.substitute = substitute;
-                written?;
-                let _ = write!(
-                    self.out,
-                    " :aggstar {} :aggvariadic {} :aggkind n :aggpresorted false :agglevelsup 0 :aggsplit 0 :aggno -1 :aggtransno -1 :location -1}}",
-                    agg.star, agg.variadic
-                );
-                Some(())
-            }
+            ExprKind::Agg(agg) => self.aggregate(agg, e),
             ExprKind::Window(f) => {
                 let (collation, input) = (self.collation(e), self.input_collation(&f.args));
                 let _ = write!(
@@ -1327,6 +1321,109 @@ impl<'a> Writer<'a> {
     }
 
     /// The number from 0 of the item of `GROUP BY` that is the same as `e`.
+    /// `transformAggregateCall`: an `Aggref`. The items of `ORDER BY` and `DISTINCT` get their `ressortgroupref` in that order, and the expressions that only `ORDER BY` reads are junk targets. The direct arguments of an ordered-set aggregate change as the other grouped expressions do, but the other arguments and the filter do not.
+    fn aggregate(&mut self, agg: &Aggref, e: &Expr) -> Option<()> {
+        let mut refs = vec![0; agg.args.len()];
+        let mut next = 0;
+        for s in agg.order.iter().chain(&agg.distinct) {
+            let r = refs.get_mut(s.target)?;
+            if *r == 0 {
+                next += 1;
+                *r = next;
+            }
+        }
+        let args = agg.args.get(..agg.nargs)?;
+        let collation = self.collation(e);
+        // `assign_ordered_set_collations`: the items of `WITHIN GROUP` count only when there can be one item.
+        let input = if agg.kind == b'n' {
+            self.input_collation(args)
+        } else {
+            let variadic = builtin::proc_by_oid(agg.oid).map_or(0, |p| p.variadic);
+            let mut inputs = agg.direct.clone();
+            if agg.args.len() == 1 && variadic == 0 {
+                inputs.extend(args.iter().cloned());
+            }
+            self.input_collation(&inputs)
+        };
+        let _ = write!(
+            self.out,
+            "{{AGGREF :aggfnoid {} :aggtype {} :aggcollid {collation} :inputcollid {input} :aggtranstype 0 :aggargtypes ",
+            agg.oid, e.ty
+        );
+        let types: Vec<u32> = agg.direct.iter().chain(args).map(|a| a.ty).collect();
+        if types.is_empty() {
+            self.out.push_str("<>");
+        } else {
+            self.out.push_str("(o");
+            for ty in types {
+                let _ = write!(self.out, " {ty}");
+            }
+            self.out.push(')');
+        }
+        self.out.push_str(" :aggdirectargs ");
+        self.exprs(&agg.direct)?;
+        self.out.push_str(" :args ");
+        let substitute = std::mem::replace(&mut self.substitute, false);
+        let outer = self.outer_substitute;
+        self.outer_substitute = outer && agg.levels_up == 0;
+        let written = self.aggregate_args(agg, &refs);
+        self.substitute = substitute;
+        self.outer_substitute = outer;
+        written?;
+        let kind = char::from(agg.kind);
+        let _ = write!(
+            self.out,
+            " :aggstar {} :aggvariadic {} :aggkind {kind} :aggpresorted false :agglevelsup {} :aggsplit 0 :aggno -1 :aggtransno -1 :location -1}}",
+            agg.star, agg.variadic, agg.levels_up
+        );
+        Some(())
+    }
+
+    /// The arguments, `aggorder`, `aggdistinct` and `aggfilter` of an `Aggref`.
+    fn aggregate_args(&mut self, agg: &Aggref, refs: &[usize]) -> Option<()> {
+        let args: Vec<_> = agg.args.iter().enumerate().collect();
+        self.list(&args, |w, &(i, arg)| {
+            w.out.push_str("{TARGETENTRY :expr ");
+            w.expr(arg)?;
+            let _ = write!(
+                w.out,
+                " :resno {} :resname <> :ressortgroupref {} :resorigtbl 0 :resorigcol 0 :resjunk {}}}",
+                i + 1,
+                refs[i],
+                i >= agg.nargs
+            );
+            Some(())
+        })?;
+        self.out.push_str(" :aggorder ");
+        self.list(&agg.order, |w, s| w.sort_group(s, refs[s.target], agg.args[s.target].ty))?;
+        self.out.push_str(" :aggdistinct ");
+        self.list(&agg.distinct, |w, s| w.sort_group(s, refs[s.target], agg.args[s.target].ty))?;
+        self.out.push_str(" :aggfilter ");
+        self.option(agg.filter.as_deref())
+    }
+
+    /// `substitute_grouped_columns` in a subquery: the grouped expression of an outer query that `e` is, with the levels up to that query, the range table index of its `*GROUP*` entry, the item of `GROUP BY` and true when a grouping set does not have it.
+    fn outer_grouped(&self, e: &Expr) -> Option<(usize, usize, usize, Expr, bool)> {
+        if !self.outer_substitute || self.outer.iter().all(|f| f.group.is_none()) {
+            return None;
+        }
+        let plain = unplaced(e);
+        for (k, frame) in self.outer.iter().enumerate() {
+            let Some(group) = &frame.group else { continue };
+            for (at, (g, nullable)) in group.items.iter().enumerate() {
+                if matches!(g.kind, ExprKind::Const(_)) {
+                    continue;
+                }
+                let mut raised = g.clone();
+                raised.raise(k + 1);
+                if raised == plain {
+                    return Some((k + 1, group.rt, at, raised, *nullable));
+                }
+            }
+        }
+        None
+    }
+
     fn grouped(&self, e: &Expr) -> Option<usize> {
         if matches!(e.kind, ExprKind::Const(_))
             && !self
@@ -1420,14 +1517,14 @@ fn has_window(e: &Expr) -> bool {
     matches!(e.kind, ExprKind::Window(_)) || e.children().into_iter().any(has_window)
 }
 
-/// `p_hasAggs`: an aggregate or a `GROUPING` call of the query.
+/// `p_hasAggs`: an aggregate or a `GROUPING` call of the query, also in a subquery.
 fn has_agg(e: &Expr) -> bool {
-    let own = match &e.kind {
-        ExprKind::Agg(_) => true,
-        ExprKind::Grouping(g) => g.levels_up == 0,
-        _ => false,
-    };
-    own || e.children().into_iter().any(has_agg)
+    e.find(0, &mut |e, depth| match &e.kind {
+        ExprKind::Agg(a) if a.levels_up == depth => Some(()),
+        ExprKind::Grouping(g) if g.levels_up == depth => Some(()),
+        _ => None,
+    })
+    .is_some()
 }
 
 fn join_type(kind: JoinKind) -> Option<u8> {
