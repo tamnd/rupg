@@ -342,9 +342,7 @@ impl Connection {
             let analyze = analyze.then_some(columns.as_slice());
             // `vacuum_rel` runs as the owner of the relation with the `search_path` of `RestrictSearchPath`.
             let owner = catalog.relation(relid).map_or(self.current_role(), |r| r.owner);
-            self.as_maintenance(owner, || {
-                Ok(self.relation_stats(&catalog, relid, (vacuum, analyze)))
-            })?;
+            self.as_maintenance(owner, || self.relation_stats(&catalog, relid, (vacuum, analyze)))?;
         }
         Ok(Done::Tag(tag))
     }
@@ -397,8 +395,8 @@ impl Connection {
         catalog: &Catalog,
         relid: u32,
         (vacuum, analyze): (Option<&Parsed>, Option<&[String]>),
-    ) -> f32 {
-        let Some(rel) = catalog.relation(relid) else { return 0.0 };
+    ) -> Result<f32, Error> {
+        let Some(rel) = catalog.relation(relid) else { return Ok(0.0) };
         if analyze.is_some() && catalog.stale_subclass(relid) {
             let _ = self.change_catalog(&mut |catalog| {
                 catalog.clear_subclass(relid);
@@ -420,11 +418,11 @@ impl Connection {
                     rows = self.update_relstats(relid);
                     if rel.kind != RelKind::Toast {
                         self.report_analyze(relid, Some(rows), columns.is_empty());
-                        self.analyze_rel(catalog, relid, columns, false);
-                        self.analyze_rel(catalog, relid, columns, true);
+                        self.analyze_rel(catalog, relid, columns, false)?;
+                        self.analyze_rel(catalog, relid, columns, true)?;
                     }
                 }
-                rows
+                Ok(rows)
             }
             RelKind::Partitioned => {
                 let heap = self.heap();
@@ -436,17 +434,23 @@ impl Connection {
                 if let Some(columns) = analyze {
                     self.report_analyze(relid, None, columns.is_empty());
                     self.heap().set_stats(self.database_oid, relid, -1, rows);
-                    self.analyze_rel(catalog, relid, columns, true);
+                    self.analyze_rel(catalog, relid, columns, true)?;
                 }
-                rows
+                Ok(rows)
             }
-            _ => 0.0,
+            _ => Ok(0.0),
         }
     }
 
     /// `do_analyze_rel` of the table `relid` for the columns `columns`, or for each column when the list is empty: the sample of the rows of the table, or of the rows of the table and of its inheritance children for `inherit`, and the statistics of each column in `pg_statistic`. The sample of the tree takes from each table a part of the rows in proportion to its pages, as `acquire_inherited_sample_rows` does, and the values of each column of a child come from its column with the same name. A tree with no children, or with no table with rows, gets no statistics. With no column list and no `inherit`, the statement also computes the statistics of the expression columns of each index of the table, as `compute_index_stats` does, from the keys of the rows of the sample that pass the predicate of the index, for the rows of the table in that proportion.
-    fn analyze_rel(&self, catalog: &Catalog, relid: u32, columns: &[String], inherit: bool) {
-        let Some(rel) = catalog.relation(relid) else { return };
+    fn analyze_rel(
+        &self,
+        catalog: &Catalog,
+        relid: u32,
+        columns: &[String],
+        inherit: bool,
+    ) -> Result<(), Error> {
+        let Some(rel) = catalog.relation(relid) else { return Ok(()) };
         let default_target = self
             .settings
             .borrow()
@@ -472,7 +476,7 @@ impl Connection {
         let tables: Vec<u32> = if inherit {
             let all = catalog.all_inheritors(relid);
             if all.is_empty() {
-                return;
+                return Ok(());
             }
             std::iter::once(relid).chain(all).collect()
         } else {
@@ -525,9 +529,20 @@ impl Connection {
             }
         }
         if rows.is_empty() {
-            return;
+            return Ok(());
         }
         let reader = self.reader();
+        // `compute_index_stats`: an error of an index expression ends the statement before it stores any statistics.
+        let index_keys = indexes
+            .iter()
+            .map(|index| {
+                rows.iter()
+                    .filter_map(|(values, _)| {
+                        rupg_exec::index_key(&index.derived, values, &reader).transpose()
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let mut stats = Vec::new();
         for target in &targets {
             let at = usize::try_from(target.attnum - 1).unwrap_or(0);
@@ -538,14 +553,7 @@ impl Connection {
             }
         }
         heap.set_statistics(self.database_oid, relid, stats);
-        for index in &indexes {
-            let keys: Result<Vec<_>, _> = rows
-                .iter()
-                .filter_map(|(values, _)| {
-                    rupg_exec::index_key(&index.derived, values, &reader).transpose()
-                })
-                .collect();
-            let Ok(keys) = keys else { continue };
+        for (index, keys) in indexes.iter().zip(index_keys) {
             if keys.is_empty() {
                 continue;
             }
@@ -565,6 +573,7 @@ impl Connection {
             heap.set_statistics(self.database_oid, index.oid, stats);
         }
         self.trigger_warnings.borrow_mut().extend(reader.take_warnings());
+        Ok(())
     }
 
     /// `heap_vacuum_rel` of the heap of `relid`: an aggressive `VACUUM` with `FREEZE`, which skips only the pages that are all frozen, no skipped pages with `DISABLE_PAGE_SKIPPING`, and the truncation of the empty pages at the end from `TRUNCATE` or the reloption `vacuum_truncate`. The result is `reltuples`.
@@ -763,7 +772,7 @@ impl Connection {
         for repack in repacked {
             self.update_relstats(repack.table);
             if let Some(columns) = &repack.analyze {
-                self.relation_stats(catalog, repack.table, (None, Some(columns)));
+                let _ = self.relation_stats(catalog, repack.table, (None, Some(columns)));
             }
         }
     }

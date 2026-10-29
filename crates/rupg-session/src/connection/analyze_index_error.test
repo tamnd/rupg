@@ -1,0 +1,33 @@
+!details
+> create function bad(c int) returns int immutable language sql as 'SELECT $1 / current_setting(''my.d'')::int'
+CREATE FUNCTION
+> set my.d = 1
+SET
+> create table vac3 (i int)
+CREATE TABLE
+> insert into vac3 values (1), (2)
+INSERT 0 2
+> create index vac3_bad on vac3(bad(i))
+CREATE INDEX
+> set my.d = 0
+SET
+> analyze vac3
+ERROR 22012 division by zero (SQL function "bad" statement 1)
+> select count(*) from pg_statistic where starelid = 'vac3'::regclass
+fields count:20:8:-1
+row 0
+SELECT 1
+> vacuum analyze vac3
+ERROR 22012 division by zero (SQL function "bad" statement 1)
+> select count(*) from pg_statistic where starelid = 'vac3'::regclass
+fields count:20:8:-1
+row 0
+SELECT 1
+> set my.d = 1
+SET
+> analyze vac3
+ANALYZE
+> select count(*) from pg_statistic where starelid in ('vac3'::regclass, 'vac3_bad'::regclass)
+fields count:20:8:-1
+row 2
+SELECT 1

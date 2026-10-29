@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- An error of an index expression during `ANALYZE` now ends the statement, as in PostgreSQL. Before, `ANALYZE` skipped the statistics of that index and succeeded (#1157).
 - Event triggers of `login` fire at the start of a session, before the first `ReadyForQuery`, and `pg_database.dathasloginevt` shows when a database can have them (#1155).
 - A scan of a query of `WITH` again in a nested loop costs `cpu_tuple_cost` for each row, and `JsonExpr`, `CoerceToDomain`, `SQLValueFunction` and `XmlExpr` cost one operator, so the plan costs are the same as in PostgreSQL (#1156).
 - A new version of a row goes only to a page that keeps the free space of the `fillfactor` of the table, so `ctid`, the page count and the plan costs are the same as in PostgreSQL (#1153).
