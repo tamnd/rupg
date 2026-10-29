@@ -449,7 +449,7 @@ impl Analyzer<'_> {
     ) -> Result<Vec<FromItem>> {
         let target = self.target_relation(rv)?;
         let mut items = vec![target];
-        items.extend(self.transform_from(list)?);
+        items.extend(self.transform_target_from(list)?);
         Ok(items)
     }
 

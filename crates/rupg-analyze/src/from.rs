@@ -297,6 +297,8 @@ pub(crate) struct Scope {
     lateral: Vec<(Item, bool)>,
     /// `p_lateral_active`: true while the analyzer reads a `LATERAL` subquery of this query, which can see the items of `lateral`.
     lateral_active: bool,
+    /// The entry of `p_target_nsitem` while the analyzer reads `FROM` of `UPDATE` or `USING` of `DELETE`, where a `LATERAL` reference to the target table is an error.
+    target: Option<usize>,
     /// `p_ctenamespace`: the queries of the `WITH` clause of this query.
     pub(crate) ctes: Vec<CteItem>,
     /// The relation that gives `merge_action()` while the analyzer reads the `RETURNING` list of a `MERGE`.
@@ -311,17 +313,24 @@ impl Scope {
     }
 }
 
-/// `check_lateral_ref_ok`: an item on the left side of a full or a right join is visible in a `LATERAL` subquery on the right side, but a reference to it is an error.
-fn check_lateral_ok(item: &Item, ok: bool, at: Option<usize>) -> Result<()> {
+/// `check_lateral_ref_ok`: an item on the left side of a full or a right join is visible in a `LATERAL` subquery on the right side, but a reference to it is an error. The target table of `UPDATE` and `DELETE` is such an item in `FROM` and `USING`, with a hint in place of the detail.
+fn check_lateral_ok(scope: &Scope, item: &Item, ok: bool, at: Option<usize>) -> Result<()> {
     if ok {
         return Ok(());
     }
-    Err(Error::new(
+    let error = Error::new(
         SqlState::INVALID_COLUMN_REFERENCE,
         format!("invalid reference to FROM-clause entry for table \"{}\"", item.name),
     )
-    .with_detail("The combining JOIN type must be INNER or LEFT for a LATERAL reference.")
-    .at_opt(at))
+    .at_opt(at);
+    Err(if scope.target == Some(item.entry) {
+        error.with_hint(format!(
+            "There is an entry for table \"{}\", but it cannot be referenced from this part of the query.",
+            item.name
+        ))
+    } else {
+        error.with_detail("The combining JOIN type must be INNER or LEFT for a LATERAL reference.")
+    })
 }
 
 /// `varstr_levenshtein` with costs of 1: the edit distance of two names, by characters.
@@ -412,6 +421,40 @@ impl Analyzer<'_> {
             items.push(item);
         }
         Ok(items)
+    }
+
+    /// `transformFromClause` of `UPDATE` and `DELETE`: [`Analyzer::transform_from`] while the target table is `p_lateral_only` and not `p_lateral_ok`. A subquery cannot see the target, a `LATERAL` reference to it is an error, and a name of the list cannot be the name of the target.
+    pub(crate) fn transform_target_from(&mut self, list: &[Option<Node>]) -> Result<Vec<FromItem>> {
+        let shown = std::mem::take(&mut self.scope.namespace);
+        let before = self.scope.lateral.len();
+        self.scope.lateral.extend(shown.iter().cloned().map(|item| (item, false)));
+        self.scope.target = shown.first().map(|item| item.entry);
+        let mut items = Vec::with_capacity(list.len());
+        let mut result = Ok(());
+        for node in list {
+            let node = node.as_ref().ok_or_else(|| Error::internal("an empty FROM item"))?;
+            let (item, _, namespace) = match self.transform_from_item(node) {
+                Ok(done) => done,
+                Err(e) => {
+                    result = Err(e);
+                    break;
+                }
+            };
+            let conflict = self
+                .check_conflicts(&shown, &namespace)
+                .and_then(|()| self.check_conflicts(&self.scope.namespace, &namespace));
+            if let Err(e) = conflict {
+                result = Err(e);
+                break;
+            }
+            self.scope.namespace.extend(namespace);
+            items.push(item);
+        }
+        self.scope.lateral.truncate(before);
+        self.scope.target = None;
+        let added = std::mem::replace(&mut self.scope.namespace, shown);
+        self.scope.namespace.extend(added);
+        result.map(|()| items)
     }
 
     /// `transformFromClauseItem`: one part of `FROM`, the namespace item of its result, and the namespace that it adds.
@@ -2231,7 +2274,7 @@ impl Analyzer<'_> {
                     if result.is_some() {
                         return Err(ambiguous(name, at));
                     }
-                    check_lateral_ok(item, ok, at)?;
+                    check_lateral_ok(scope, item, ok, at)?;
                     result = Some(expr);
                 }
             }
@@ -2285,7 +2328,7 @@ impl Analyzer<'_> {
                         )
                         .at_opt(at));
                     }
-                    check_lateral_ok(item, ok, at)?;
+                    check_lateral_ok(scope, item, ok, at)?;
                     result = Some(item.clone());
                 }
             }
@@ -2301,7 +2344,7 @@ impl Analyzer<'_> {
                     )
                     .at_opt(at));
                 }
-                check_lateral_ok(item, ok, at)?;
+                check_lateral_ok(scope, item, ok, at)?;
                 result = Some(item.clone());
             }
         }
