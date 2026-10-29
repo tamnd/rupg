@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- ALTER TABLE, ALTER INDEX and ALTER MATERIALIZED VIEW with SET TABLESPACE pg_default do nothing, as in PostgreSQL for a move to the same tablespace, and SET TABLESPACE pg_global gives the error of PostgreSQL (#1130).
+
 ## 0.4.9 (2026-10-29)
 
 ### Added

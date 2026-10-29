@@ -38,6 +38,7 @@ const COMPRESSION: &[u8] = b"rpm";
 const REL_OPTIONS: &[u8] = b"rpvmi";
 const TABLE_MATVIEW: &[u8] = b"rpm";
 const CLUSTER: &[u8] = b"rm";
+const SET_TABLESPACE: &[u8] = b"rmipI";
 const INHERIT: &[u8] = b"rf";
 
 /// `alter_table_type_to_string`: the words of a subcommand in its errors.
@@ -699,6 +700,20 @@ impl Definer<'_, '_> {
                 let column = (cmd.subtype == AlterTableType::AT_AlterColumnGenericOptions)
                     .then(|| cmd.name.as_deref().unwrap_or_default().to_string());
                 passes.misc.push(MiscCmd::GenericOptions(column, options));
+            }
+            // `ATPrepSetTableSpace` and `ATExecSetTableSpace`. Each relation is in the default tablespace of the database, so a move to `pg_default` has no work, as a move to the same tablespace has none. The engine cannot put a relation in another tablespace yet.
+            AlterTableType::AT_SetTableSpace => {
+                self.simple_permissions(target, cmd, SET_TABLESPACE)?;
+                match cmd.name.as_deref().unwrap_or_default() {
+                    "pg_default" => {}
+                    "pg_global" => {
+                        return Err(Error::new(
+                            SqlState::INVALID_PARAMETER_VALUE,
+                            "only shared relations can be placed in pg_global tablespace",
+                        ));
+                    }
+                    _ => return Err(not_yet("ALTER TABLE ... SET TABLESPACE", None)),
+                }
             }
             // A table has no OIDs, so `SET WITHOUT OIDS` has no work.
             AlterTableType::AT_DropOids => self.simple_permissions(target, cmd, TABLE)?,
