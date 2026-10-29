@@ -57,6 +57,8 @@ struct Writer<'a> {
     query: &'a Query,
     /// The relations of the query and of the queries above it, from the inside out.
     levels: Vec<&'a [Relation]>,
+    /// The queries of `WITH` of the query and of the queries above it, from the inside out.
+    ctes: Vec<&'a [Cte]>,
     /// The queries above the query, from the inside out.
     outer: Vec<Frame>,
     /// The privileges of the statement that the relations of this query use, in order. Each query has its own `rteperminfos`.
@@ -103,22 +105,17 @@ impl<'a> Writer<'a> {
             || !query.row_marks.is_empty()
             || !query.grouping_sets.is_empty()
             || query.group_distinct
-            || query.distinct_on
             || query.write.is_some()
             || !query.params.is_empty()
             || query.notify.is_some()
             || query.is_return
             || query.pulled != 0
             || query.relations.iter().any(|r| {
-                (r.oid == 0 && r.subquery.is_none())
-                    || r.function.is_some()
-                    || r.values.is_some()
-                    || r.cte.as_ref().is_some_and(|c| {
-                        c.work.is_some()
-                            || c.write.is_some()
-                            || c.transition
-                            || !query.ctes.iter().any(|d| d.name == c.name)
-                    })
+                (r.oid == 0 && r.subquery.is_none() && r.function.is_none() && r.values.is_none())
+                    || r.function.as_ref().is_some_and(|f| f.coldefs.iter().any(|&d| d))
+                    || r.cte
+                        .as_ref()
+                        .is_some_and(|c| c.work.is_some() || c.write.is_some() || c.transition)
                     || r.tablesample.is_some()
                     || r.excluded
             });
@@ -135,6 +132,7 @@ impl<'a> Writer<'a> {
         let mut writer = Writer {
             query,
             levels: vec![&query.relations],
+            ctes: vec![&query.ctes],
             outer: Vec::new(),
             own_perms,
             perms,
@@ -188,6 +186,7 @@ impl<'a> Writer<'a> {
     {
         let mut writer = Writer::new(query, self.perms, self.catalog)?;
         writer.levels.extend(self.levels.iter().copied());
+        writer.ctes.extend(self.ctes.iter().copied());
         writer.outer.push(Frame {
             rt: self.rt.clone(),
             nulled: self.nulled.clone(),
@@ -269,10 +268,12 @@ impl<'a> Writer<'a> {
         );
         let _ = write!(
             self.out,
-            " :hasAggs {} :hasWindowFuncs {} :hasTargetSRFs false :hasSubLinks {} :hasDistinctOn false :hasRecursive false :hasModifyingCTE false :hasForUpdate false :hasRowSecurity false :hasGroupRTE {} :isReturn false :cteList ",
+            " :hasAggs {} :hasWindowFuncs {} :hasTargetSRFs {} :hasSubLinks {} :hasDistinctOn {} :hasRecursive false :hasModifyingCTE false :hasForUpdate false :hasRowSecurity false :hasGroupRTE {} :isReturn false :cteList ",
             has_aggs,
             has_windows,
+            q.targets.iter().any(|t| has_srf(&t.expr)),
             has_sublinks,
+            q.distinct_on,
             self.group_rt != 0
         );
         self.list(&q.ctes, |w, c| w.cte(c))?;
@@ -450,17 +451,57 @@ impl<'a> Writer<'a> {
                     r.columns.iter().zip(given).map(|(c, a)| a.unwrap_or(&c.name)).collect();
                 self.alias(&r.name, Some(columns));
                 if let Some(c) = &r.cte {
-                    let cte = self.query.ctes.iter().find(|d| d.name == c.name)?;
+                    let up = self.ctes.iter().position(|l| l.iter().any(|d| d.name == c.name))?;
+                    let cte = self.ctes[up].iter().find(|d| d.name == c.name)?;
                     let collations = self.cte_collations(cte)?;
                     self.out.push_str(" :rtekind 6 :ctename ");
                     self.token(Some(&c.name));
-                    self.out.push_str(" :ctelevelsup 0 :self_reference false :coltypes ");
+                    let _ = write!(self.out, " :ctelevelsup {up} :self_reference false :coltypes ");
                     self.oids(r.columns.iter().map(|c| c.ty));
                     self.out.push_str(" :coltypmods ");
                     self.typmods(r.columns.iter().map(|c| c.typmod));
                     self.out.push_str(" :colcollations ");
                     self.oids(collations);
                     self.out.push_str(" :lateral false :inFromCl true :securityQuals <>}");
+                    return Some(());
+                }
+                if let Some(f) = &r.function {
+                    self.out.push_str(" :rtekind 3 :functions ");
+                    self.list(&f.calls, |w, (call, count)| {
+                        w.out.push_str("{RANGETBLFUNCTION :funcexpr ");
+                        w.expr(call)?;
+                        let _ = write!(
+                            w.out,
+                            " :funccolcount {count} :funccolnames <> :funccoltypes <> :funccoltypmods <> :funccolcollations <> :funcparams (b)}}"
+                        );
+                        Some(())
+                    })?;
+                    let _ = write!(
+                        self.out,
+                        " :funcordinality {} :lateral {} :inFromCl true :securityQuals <>}}",
+                        f.ordinality,
+                        r.lateral || f.calls.iter().any(|(call, _)| reads_level(call, 0))
+                    );
+                    return Some(());
+                }
+                if let Some(rows) = &r.values {
+                    self.out.push_str(" :rtekind 5 :values_lists ");
+                    self.list(rows, |w, row| w.list(row, |w, e| w.expr(e)))?;
+                    let collations: Vec<u32> = match rows.first() {
+                        Some(row) => row.iter().map(|e| self.collation(e)).collect(),
+                        None => Vec::new(),
+                    };
+                    self.out.push_str(" :coltypes ");
+                    self.oids(r.columns.iter().map(|c| c.ty));
+                    self.out.push_str(" :coltypmods ");
+                    self.typmods(r.columns.iter().map(|c| c.typmod));
+                    self.out.push_str(" :colcollations ");
+                    self.oids(collations);
+                    let _ = write!(
+                        self.out,
+                        " :lateral {} :inFromCl true :securityQuals <>}}",
+                        r.lateral
+                    );
                     return Some(());
                 }
                 if let Some(subquery) = r.subquery.as_deref()
@@ -680,12 +721,9 @@ impl<'a> Writer<'a> {
 
     /// A query of `WITH`, as `CommonTableExpr`.
     fn cte(&mut self, cte: &Cte) -> Option<()> {
-        let refs = self
-            .query
-            .relations
-            .iter()
-            .filter(|r| r.cte.as_ref().is_some_and(|c| c.name == cte.name))
-            .count();
+        let q = self.query;
+        let refs = cte_refs(q, &cte.name)
+            + q.ctes.iter().map(|c| cte_refs_below(&c.query, &cte.name)).sum::<usize>();
         let collations = self.cte_collations(cte)?;
         self.out.push_str("{COMMONTABLEEXPR :ctename ");
         self.token(Some(&cte.name));
@@ -828,9 +866,6 @@ impl<'a> Writer<'a> {
             ExprKind::Var(var) => self.var(*var, e),
             ExprKind::Const(value) => self.constant(value, e),
             ExprKind::Func(f) => {
-                if f.retset {
-                    return None;
-                }
                 if let FuncForm::Operator(opno) = f.form {
                     self.op("OPEXPR", opno, f.oid, e, &f.args)
                 } else {
@@ -843,13 +878,27 @@ impl<'a> Writer<'a> {
                     let (collation, input) = (self.collation(e), self.input_collation(&f.args));
                     let _ = write!(
                         self.out,
-                        "{{FUNCEXPR :funcid {} :funcresulttype {} :funcretset false :funcvariadic {} :funcformat {format} :funccollid {collation} :inputcollid {input} :args ",
-                        f.oid, e.ty, f.variadic
+                        "{{FUNCEXPR :funcid {} :funcresulttype {} :funcretset {} :funcvariadic {} :funcformat {format} :funccollid {collation} :inputcollid {input} :args ",
+                        f.oid, e.ty, f.retset, f.variadic
                     );
                     self.exprs(&f.args)?;
                     self.out.push_str(" :location -1}");
                     Some(())
                 }
+            }
+            ExprKind::Array { element, multidims, elements } => {
+                let _ = write!(
+                    self.out,
+                    "{{ARRAYEXPR :array_typeid {} :array_collid {} :element_typeid {element} :elements ",
+                    e.ty,
+                    self.collation(e)
+                );
+                self.exprs(elements)?;
+                let _ = write!(
+                    self.out,
+                    " :multidims {multidims} :list_start -1 :list_end -1 :location -1}}"
+                );
+                Some(())
             }
             ExprKind::Relabel(arg, form) => {
                 self.out.push_str("{RELABELTYPE :arg ");
@@ -1363,5 +1412,53 @@ fn uncast(e: &Expr) -> &Expr {
         | ExprKind::CoerceViaIo(arg, CastForm::Implicit)
         | ExprKind::CoerceToDomain(arg, CastForm::Implicit) => uncast(arg),
         _ => e,
+    }
+}
+
+/// The number of references to the query of `WITH` with the name `name` in `query` and in the queries below it.
+fn cte_refs(query: &Query, name: &str) -> usize {
+    let mut count = 0;
+    for r in &query.relations {
+        match (&r.cte, &r.subquery) {
+            (Some(c), _) => count += usize::from(c.name == name),
+            (None, Some(sub)) => count += cte_refs_below(sub, name),
+            (None, None) => {}
+        }
+    }
+    let mut sublinks = Vec::new();
+    for e in query.exprs() {
+        collect_sublinks(e, &mut sublinks);
+    }
+    count + sublinks.into_iter().map(|q| cte_refs_below(q, name)).sum::<usize>()
+}
+
+/// [`cte_refs`] for a query below the query of `WITH`, which can have its own query of `WITH` with the same name.
+fn cte_refs_below(query: &Query, name: &str) -> usize {
+    if query.ctes.iter().any(|c| c.name == name) {
+        return 0;
+    }
+    cte_refs(query, name) + query.ctes.iter().map(|c| cte_refs_below(&c.query, name)).sum::<usize>()
+}
+
+fn collect_sublinks<'q>(e: &'q Expr, out: &mut Vec<&'q Query>) {
+    if let ExprKind::SubLink(sub) = &e.kind {
+        out.push(&sub.query);
+    }
+    for child in e.children() {
+        collect_sublinks(child, out);
+    }
+}
+
+fn has_srf(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::Func(f) if f.retset) || e.children().into_iter().any(has_srf)
+}
+
+/// `contain_vars_of_level`: true when `e` reads a column of the query `up` levels above it.
+fn reads_level(e: &Expr, up: usize) -> bool {
+    let below = |q: &Query| q.exprs().into_iter().any(|e| reads_level(e, up + 1));
+    match &e.kind {
+        ExprKind::Var(v) if v.levels_up == up => true,
+        ExprKind::SubLink(sub) if below(&sub.query) => true,
+        _ => e.children().into_iter().any(|c| reads_level(c, up)),
     }
 }
