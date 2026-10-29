@@ -230,7 +230,7 @@ impl Connection {
         }));
         *self.bound.borrow_mut() = statement.params.iter().copied().zip(params).collect();
         let before = notices.len();
-        let done = self.define_with(&node, text, notices, role, call);
+        let done = self.define_fired(&node, text, notices, role, call);
         self.bound.borrow_mut().clear();
         // `CreateTableAsRelExists` skips a table that exists before `ExecuteQuery` gets a plan. Else `ExecuteQuery` gives the tag `SELECT`, also with `WITH NO DATA`.
         let skipped =

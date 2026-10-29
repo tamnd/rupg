@@ -44,6 +44,7 @@ mod copy_from;
 mod cursor;
 mod databases;
 mod deferred;
+mod event_trigger;
 mod exclusion;
 mod explain;
 mod extended;
@@ -1351,7 +1352,30 @@ impl Connection {
 
     /// Runs a statement that defines an object. The statement takes the lock of the store, which the transaction holds until it ends. After an error the changes of the statement go, but its OIDs stay used.
     fn define(&self, node: &Node, text: &str, notices: &mut Vec<Notice>) -> Result<Done, Error> {
-        self.define_with(node, text, notices, self.current_role(), false)
+        self.define_fired(node, text, notices, self.current_role(), false)
+    }
+
+    /// [`Connection::define_with`] for a complete command, as `ProcessUtilitySlow` runs it with `isCompleteQuery`: the event triggers `ddl_command_start` fire before the command and `ddl_command_end` after it. An element of `CREATE SCHEMA` and the drops of `ON COMMIT DROP` do not fire them.
+    fn define_fired(
+        &self,
+        node: &Node,
+        text: &str,
+        notices: &mut Vec<Notice>,
+        role: u32,
+        call: bool,
+    ) -> Result<Done, Error> {
+        // `CreateCommandTag` gives `SELECT INTO` for a `SELECT` with `INTO`.
+        let tag = match node {
+            Node::SelectStmt(_) => CommandTag::SelectInto,
+            _ => definition_tag(node),
+        };
+        if !event_trigger_object(node) {
+            return self.define_with(node, text, notices, role, call);
+        }
+        self.fire_event_triggers("ddl_command_start", tag, notices)?;
+        let done = self.define_with(node, text, notices, role, call)?;
+        self.fire_event_triggers("ddl_command_end", tag, notices)?;
+        Ok(done)
     }
 
     /// The steps of `DiscardAll` after the reset of the settings, which the session holds and not [`utility::run`]: `DropAllPreparedStatements`, the close of all the portals, `Async_UnlistenAll`, `LockReleaseAll` for the advisory locks of the session level, `ResetTempTableNamespace` and `ResetSequenceCaches`.
@@ -1525,134 +1549,7 @@ impl Connection {
                     self.schema_elements(&schema, notices)?;
                     return Ok(Done::Tag(CommandTag::CreateSchema));
                 }
-                Ok(Done::Tag(match node {
-                    Node::CreateTableAsStmt(stmt) if stmt.objtype == ObjectType::OBJECT_MATVIEW => {
-                        CommandTag::CreateMaterializedView
-                    }
-                    Node::CreateTableAsStmt(_) | Node::SelectStmt(_) => CommandTag::CreateTableAs,
-                    Node::RefreshMatViewStmt(_) => CommandTag::RefreshMaterializedView,
-                    Node::IndexStmt(_) => CommandTag::CreateIndex,
-                    Node::CreateSchemaStmt(_) => CommandTag::CreateSchema,
-                    Node::CreateDomainStmt(_) => CommandTag::CreateDomain,
-                    Node::CreateFunctionStmt(stmt) if stmt.is_procedure => {
-                        CommandTag::CreateProcedure
-                    }
-                    Node::CreateFunctionStmt(_) => CommandTag::CreateFunction,
-                    Node::AlterFunctionStmt(stmt) => alter_tag(stmt.objtype),
-                    Node::CompositeTypeStmt(_)
-                    | Node::CreateEnumStmt(_)
-                    | Node::CreateRangeStmt(_) => CommandTag::CreateType,
-                    Node::AlterEnumStmt(_) => CommandTag::AlterType,
-                    Node::AlterDomainStmt(_) => CommandTag::AlterDomain,
-                    Node::CreateCastStmt(_) => CommandTag::CreateCast,
-                    Node::CreateConversionStmt(_) => CommandTag::CreateConversion,
-                    Node::CreateEventTrigStmt(_) => CommandTag::CreateEventTrigger,
-                    Node::AlterEventTrigStmt(_) => CommandTag::AlterEventTrigger,
-                    Node::ViewStmt(_) => CommandTag::CreateView,
-                    Node::RuleStmt(_) => CommandTag::CreateRule,
-                    Node::CreateFdwStmt(_) => CommandTag::CreateForeignDataWrapper,
-                    Node::AlterFdwStmt(_) => CommandTag::AlterForeignDataWrapper,
-                    Node::CreateForeignServerStmt(_) => CommandTag::CreateServer,
-                    Node::AlterForeignServerStmt(_) => CommandTag::AlterServer,
-                    Node::CreatePublicationStmt(_) => CommandTag::CreatePublication,
-                    Node::AlterPublicationStmt(_) => CommandTag::AlterPublication,
-                    Node::CreateUserMappingStmt(_) => CommandTag::CreateUserMapping,
-                    Node::ImportForeignSchemaStmt(_) => CommandTag::ImportForeignSchema,
-                    Node::AlterUserMappingStmt(_) => CommandTag::AlterUserMapping,
-                    Node::DropUserMappingStmt(_) => CommandTag::DropUserMapping,
-                    Node::CreatePolicyStmt(_) => CommandTag::CreatePolicy,
-                    Node::AlterPolicyStmt(_) => CommandTag::AlterPolicy,
-                    Node::CreateTrigStmt(_) => CommandTag::CreateTrigger,
-                    Node::CommentStmt(_) => CommandTag::Comment,
-                    Node::GrantStmt(stmt) if stmt.is_grant => CommandTag::Grant,
-                    Node::GrantStmt(_) => CommandTag::Revoke,
-                    Node::DropStmt(stmt) => match stmt.removeType {
-                        ObjectType::OBJECT_SCHEMA => CommandTag::DropSchema,
-                        ObjectType::OBJECT_VIEW => CommandTag::DropView,
-                        ObjectType::OBJECT_MATVIEW => CommandTag::DropMaterializedView,
-                        ObjectType::OBJECT_INDEX => CommandTag::DropIndex,
-                        ObjectType::OBJECT_SEQUENCE => CommandTag::DropSequence,
-                        ObjectType::OBJECT_TYPE => CommandTag::DropType,
-                        ObjectType::OBJECT_DOMAIN => CommandTag::DropDomain,
-                        ObjectType::OBJECT_RULE => CommandTag::DropRule,
-                        ObjectType::OBJECT_POLICY => CommandTag::DropPolicy,
-                        ObjectType::OBJECT_TRIGGER => CommandTag::DropTrigger,
-                        ObjectType::OBJECT_FUNCTION => CommandTag::DropFunction,
-                        ObjectType::OBJECT_PROCEDURE => CommandTag::DropProcedure,
-                        ObjectType::OBJECT_ROUTINE => CommandTag::DropRoutine,
-                        ObjectType::OBJECT_AGGREGATE => CommandTag::DropAggregate,
-                        ObjectType::OBJECT_OPERATOR => CommandTag::DropOperator,
-                        ObjectType::OBJECT_OPCLASS => CommandTag::DropOperatorClass,
-                        ObjectType::OBJECT_OPFAMILY => CommandTag::DropOperatorFamily,
-                        ObjectType::OBJECT_TSPARSER => CommandTag::DropTextSearchParser,
-                        ObjectType::OBJECT_TSDICTIONARY => CommandTag::DropTextSearchDictionary,
-                        ObjectType::OBJECT_TSTEMPLATE => CommandTag::DropTextSearchTemplate,
-                        ObjectType::OBJECT_TSCONFIGURATION => {
-                            CommandTag::DropTextSearchConfiguration
-                        }
-                        ObjectType::OBJECT_STATISTIC_EXT => CommandTag::DropStatistics,
-                        ObjectType::OBJECT_FOREIGN_TABLE => CommandTag::DropForeignTable,
-                        ObjectType::OBJECT_ACCESS_METHOD => CommandTag::DropAccessMethod,
-                        ObjectType::OBJECT_CAST => CommandTag::DropCast,
-                        ObjectType::OBJECT_COLLATION => CommandTag::DropCollation,
-                        ObjectType::OBJECT_CONVERSION => CommandTag::DropConversion,
-                        ObjectType::OBJECT_EXTENSION => CommandTag::DropExtension,
-                        ObjectType::OBJECT_LANGUAGE => CommandTag::DropLanguage,
-                        ObjectType::OBJECT_FDW => CommandTag::DropForeignDataWrapper,
-                        ObjectType::OBJECT_FOREIGN_SERVER => CommandTag::DropServer,
-                        ObjectType::OBJECT_EVENT_TRIGGER => CommandTag::DropEventTrigger,
-                        ObjectType::OBJECT_PUBLICATION => CommandTag::DropPublication,
-                        _ => CommandTag::DropTable,
-                    },
-                    Node::AlterTableStmt(stmt) => alter_tag(stmt.objtype),
-                    Node::AlterOwnerStmt(stmt) => match stmt.objectType {
-                        ObjectType::OBJECT_SCHEMA => CommandTag::AlterSchema,
-                        kind => alter_tag(kind),
-                    },
-                    Node::RenameStmt(stmt) => match stmt.renameType {
-                        ObjectType::OBJECT_COLUMN | ObjectType::OBJECT_ATTRIBUTE => {
-                            alter_tag(stmt.relationType)
-                        }
-                        ObjectType::OBJECT_SCHEMA => CommandTag::AlterSchema,
-                        kind => alter_tag(kind),
-                    },
-                    Node::AlterObjectSchemaStmt(stmt) => alter_tag(stmt.objectType),
-                    Node::CreateSeqStmt(_) => CommandTag::CreateSequence,
-                    Node::AlterSeqStmt(_) => CommandTag::AlterSequence,
-                    Node::DefineStmt(stmt) => match stmt.kind {
-                        ObjectType::OBJECT_OPERATOR => CommandTag::CreateOperator,
-                        ObjectType::OBJECT_AGGREGATE => CommandTag::CreateAggregate,
-                        ObjectType::OBJECT_TYPE => CommandTag::CreateType,
-                        ObjectType::OBJECT_COLLATION => CommandTag::CreateCollation,
-                        ObjectType::OBJECT_TSPARSER => CommandTag::CreateTextSearchParser,
-                        ObjectType::OBJECT_TSDICTIONARY => CommandTag::CreateTextSearchDictionary,
-                        ObjectType::OBJECT_TSTEMPLATE => CommandTag::CreateTextSearchTemplate,
-                        ObjectType::OBJECT_TSCONFIGURATION => {
-                            CommandTag::CreateTextSearchConfiguration
-                        }
-                        _ => CommandTag::CreateTable,
-                    },
-                    Node::AlterTSConfigurationStmt(_) => CommandTag::AlterTextSearchConfiguration,
-                    Node::AlterOperatorStmt(_) => CommandTag::AlterOperator,
-                    Node::CreateOpClassStmt(_) => CommandTag::CreateOperatorClass,
-                    Node::CreateOpFamilyStmt(_) => CommandTag::CreateOperatorFamily,
-                    Node::AlterOpFamilyStmt(_) => CommandTag::AlterOperatorFamily,
-                    Node::TruncateStmt(_) => CommandTag::TruncateTable,
-                    Node::CreateStatsStmt(_) => CommandTag::CreateStatistics,
-                    Node::AlterStatsStmt(_) => CommandTag::AlterStatistics,
-                    Node::DropOwnedStmt(_) => CommandTag::DropOwned,
-                    Node::AlterDefaultPrivilegesStmt(_) => CommandTag::AlterDefaultPrivileges,
-                    Node::ReassignOwnedStmt(_) => CommandTag::ReassignOwned,
-                    Node::ReindexStmt(_) => CommandTag::Reindex,
-                    Node::RepackStmt(stmt) => match stmt.command {
-                        RepackCommand::REPACK_COMMAND_CLUSTER => CommandTag::Cluster,
-                        RepackCommand::REPACK_COMMAND_REPACK => CommandTag::Repack,
-                        _ => CommandTag::Vacuum,
-                    },
-                    Node::DiscardStmt(_) => CommandTag::DiscardTemp,
-                    Node::CreateForeignTableStmt(_) => CommandTag::CreateForeignTable,
-                    _ => CommandTag::CreateTable,
-                }))
+                Ok(Done::Tag(definition_tag(node)))
             }
             Err(error) => {
                 if let Some(index) = defined.concurrent.filter(|_| analyzed) {
@@ -2685,6 +2582,155 @@ impl Connection {
 }
 
 /// `AlterObjectTypeCommandTag` for the kinds of relations, of types, of functions, of operators, of operator classes and families, of statistics objects, of conversions and of objects of text search: the tag of `ALTER TABLE` and of `ALTER ... RENAME` for the kind of the object.
+/// False for a statement on a shared object or an event trigger, as `EventTriggerSupportsObjectType` gives: `standard_ProcessUtility` runs these statements without the event triggers.
+fn event_trigger_object(node: &Node) -> bool {
+    let kind = match node {
+        Node::CommentStmt(stmt) => stmt.objtype,
+        Node::GrantStmt(stmt) => stmt.objtype,
+        Node::DropStmt(stmt) => stmt.removeType,
+        Node::RenameStmt(stmt) => stmt.renameType,
+        Node::AlterOwnerStmt(stmt) => stmt.objectType,
+        Node::AlterObjectSchemaStmt(stmt) => stmt.objectType,
+        Node::SecLabelStmt(stmt) => stmt.objtype,
+        _ => return true,
+    };
+    !matches!(
+        kind,
+        ObjectType::OBJECT_DATABASE
+            | ObjectType::OBJECT_EVENT_TRIGGER
+            | ObjectType::OBJECT_PARAMETER_ACL
+            | ObjectType::OBJECT_ROLE
+            | ObjectType::OBJECT_TABLESPACE
+    )
+}
+
+/// The command tag of a statement of [`Connection::define_with`].
+fn definition_tag(node: &Node) -> CommandTag {
+    match node {
+        Node::CreateTableAsStmt(stmt) if stmt.objtype == ObjectType::OBJECT_MATVIEW => {
+            CommandTag::CreateMaterializedView
+        }
+        Node::CreateTableAsStmt(_) | Node::SelectStmt(_) => CommandTag::CreateTableAs,
+        Node::RefreshMatViewStmt(_) => CommandTag::RefreshMaterializedView,
+        Node::IndexStmt(_) => CommandTag::CreateIndex,
+        Node::CreateSchemaStmt(_) => CommandTag::CreateSchema,
+        Node::CreateDomainStmt(_) => CommandTag::CreateDomain,
+        Node::CreateFunctionStmt(stmt) if stmt.is_procedure => CommandTag::CreateProcedure,
+        Node::CreateFunctionStmt(_) => CommandTag::CreateFunction,
+        Node::AlterFunctionStmt(stmt) => alter_tag(stmt.objtype),
+        Node::CompositeTypeStmt(_) | Node::CreateEnumStmt(_) | Node::CreateRangeStmt(_) => {
+            CommandTag::CreateType
+        }
+        Node::AlterEnumStmt(_) => CommandTag::AlterType,
+        Node::AlterDomainStmt(_) => CommandTag::AlterDomain,
+        Node::CreateCastStmt(_) => CommandTag::CreateCast,
+        Node::CreateConversionStmt(_) => CommandTag::CreateConversion,
+        Node::CreateEventTrigStmt(_) => CommandTag::CreateEventTrigger,
+        Node::AlterEventTrigStmt(_) => CommandTag::AlterEventTrigger,
+        Node::ViewStmt(_) => CommandTag::CreateView,
+        Node::RuleStmt(_) => CommandTag::CreateRule,
+        Node::CreateFdwStmt(_) => CommandTag::CreateForeignDataWrapper,
+        Node::AlterFdwStmt(_) => CommandTag::AlterForeignDataWrapper,
+        Node::CreateForeignServerStmt(_) => CommandTag::CreateServer,
+        Node::AlterForeignServerStmt(_) => CommandTag::AlterServer,
+        Node::CreatePublicationStmt(_) => CommandTag::CreatePublication,
+        Node::AlterPublicationStmt(_) => CommandTag::AlterPublication,
+        Node::CreateUserMappingStmt(_) => CommandTag::CreateUserMapping,
+        Node::ImportForeignSchemaStmt(_) => CommandTag::ImportForeignSchema,
+        Node::AlterUserMappingStmt(_) => CommandTag::AlterUserMapping,
+        Node::DropUserMappingStmt(_) => CommandTag::DropUserMapping,
+        Node::CreatePolicyStmt(_) => CommandTag::CreatePolicy,
+        Node::AlterPolicyStmt(_) => CommandTag::AlterPolicy,
+        Node::CreateTrigStmt(_) => CommandTag::CreateTrigger,
+        Node::CommentStmt(_) => CommandTag::Comment,
+        Node::GrantStmt(stmt) if stmt.is_grant => CommandTag::Grant,
+        Node::GrantStmt(_) => CommandTag::Revoke,
+        Node::DropStmt(stmt) => match stmt.removeType {
+            ObjectType::OBJECT_SCHEMA => CommandTag::DropSchema,
+            ObjectType::OBJECT_VIEW => CommandTag::DropView,
+            ObjectType::OBJECT_MATVIEW => CommandTag::DropMaterializedView,
+            ObjectType::OBJECT_INDEX => CommandTag::DropIndex,
+            ObjectType::OBJECT_SEQUENCE => CommandTag::DropSequence,
+            ObjectType::OBJECT_TYPE => CommandTag::DropType,
+            ObjectType::OBJECT_DOMAIN => CommandTag::DropDomain,
+            ObjectType::OBJECT_RULE => CommandTag::DropRule,
+            ObjectType::OBJECT_POLICY => CommandTag::DropPolicy,
+            ObjectType::OBJECT_TRIGGER => CommandTag::DropTrigger,
+            ObjectType::OBJECT_FUNCTION => CommandTag::DropFunction,
+            ObjectType::OBJECT_PROCEDURE => CommandTag::DropProcedure,
+            ObjectType::OBJECT_ROUTINE => CommandTag::DropRoutine,
+            ObjectType::OBJECT_AGGREGATE => CommandTag::DropAggregate,
+            ObjectType::OBJECT_OPERATOR => CommandTag::DropOperator,
+            ObjectType::OBJECT_OPCLASS => CommandTag::DropOperatorClass,
+            ObjectType::OBJECT_OPFAMILY => CommandTag::DropOperatorFamily,
+            ObjectType::OBJECT_TSPARSER => CommandTag::DropTextSearchParser,
+            ObjectType::OBJECT_TSDICTIONARY => CommandTag::DropTextSearchDictionary,
+            ObjectType::OBJECT_TSTEMPLATE => CommandTag::DropTextSearchTemplate,
+            ObjectType::OBJECT_TSCONFIGURATION => CommandTag::DropTextSearchConfiguration,
+            ObjectType::OBJECT_STATISTIC_EXT => CommandTag::DropStatistics,
+            ObjectType::OBJECT_FOREIGN_TABLE => CommandTag::DropForeignTable,
+            ObjectType::OBJECT_ACCESS_METHOD => CommandTag::DropAccessMethod,
+            ObjectType::OBJECT_CAST => CommandTag::DropCast,
+            ObjectType::OBJECT_COLLATION => CommandTag::DropCollation,
+            ObjectType::OBJECT_CONVERSION => CommandTag::DropConversion,
+            ObjectType::OBJECT_EXTENSION => CommandTag::DropExtension,
+            ObjectType::OBJECT_LANGUAGE => CommandTag::DropLanguage,
+            ObjectType::OBJECT_FDW => CommandTag::DropForeignDataWrapper,
+            ObjectType::OBJECT_FOREIGN_SERVER => CommandTag::DropServer,
+            ObjectType::OBJECT_EVENT_TRIGGER => CommandTag::DropEventTrigger,
+            ObjectType::OBJECT_PUBLICATION => CommandTag::DropPublication,
+            _ => CommandTag::DropTable,
+        },
+        Node::AlterTableStmt(stmt) => alter_tag(stmt.objtype),
+        Node::AlterOwnerStmt(stmt) => match stmt.objectType {
+            ObjectType::OBJECT_SCHEMA => CommandTag::AlterSchema,
+            kind => alter_tag(kind),
+        },
+        Node::RenameStmt(stmt) => match stmt.renameType {
+            ObjectType::OBJECT_COLUMN | ObjectType::OBJECT_ATTRIBUTE => {
+                alter_tag(stmt.relationType)
+            }
+            ObjectType::OBJECT_SCHEMA => CommandTag::AlterSchema,
+            kind => alter_tag(kind),
+        },
+        Node::AlterObjectSchemaStmt(stmt) => alter_tag(stmt.objectType),
+        Node::CreateSeqStmt(_) => CommandTag::CreateSequence,
+        Node::AlterSeqStmt(_) => CommandTag::AlterSequence,
+        Node::DefineStmt(stmt) => match stmt.kind {
+            ObjectType::OBJECT_OPERATOR => CommandTag::CreateOperator,
+            ObjectType::OBJECT_AGGREGATE => CommandTag::CreateAggregate,
+            ObjectType::OBJECT_TYPE => CommandTag::CreateType,
+            ObjectType::OBJECT_COLLATION => CommandTag::CreateCollation,
+            ObjectType::OBJECT_TSPARSER => CommandTag::CreateTextSearchParser,
+            ObjectType::OBJECT_TSDICTIONARY => CommandTag::CreateTextSearchDictionary,
+            ObjectType::OBJECT_TSTEMPLATE => CommandTag::CreateTextSearchTemplate,
+            ObjectType::OBJECT_TSCONFIGURATION => CommandTag::CreateTextSearchConfiguration,
+            _ => CommandTag::CreateTable,
+        },
+        Node::AlterTSConfigurationStmt(_) => CommandTag::AlterTextSearchConfiguration,
+        Node::AlterOperatorStmt(_) => CommandTag::AlterOperator,
+        Node::CreateOpClassStmt(_) => CommandTag::CreateOperatorClass,
+        Node::CreateOpFamilyStmt(_) => CommandTag::CreateOperatorFamily,
+        Node::AlterOpFamilyStmt(_) => CommandTag::AlterOperatorFamily,
+        Node::TruncateStmt(_) => CommandTag::TruncateTable,
+        Node::CreateStatsStmt(_) => CommandTag::CreateStatistics,
+        Node::AlterStatsStmt(_) => CommandTag::AlterStatistics,
+        Node::DropOwnedStmt(_) => CommandTag::DropOwned,
+        Node::AlterDefaultPrivilegesStmt(_) => CommandTag::AlterDefaultPrivileges,
+        Node::ReassignOwnedStmt(_) => CommandTag::ReassignOwned,
+        Node::ReindexStmt(_) => CommandTag::Reindex,
+        Node::RepackStmt(stmt) => match stmt.command {
+            RepackCommand::REPACK_COMMAND_CLUSTER => CommandTag::Cluster,
+            RepackCommand::REPACK_COMMAND_REPACK => CommandTag::Repack,
+            _ => CommandTag::Vacuum,
+        },
+        Node::DiscardStmt(_) => CommandTag::DiscardTemp,
+        Node::AlterDatabaseStmt(_) => CommandTag::AlterDatabase,
+        Node::CreateForeignTableStmt(_) => CommandTag::CreateForeignTable,
+        _ => CommandTag::CreateTable,
+    }
+}
+
 fn alter_tag(kind: ObjectType) -> CommandTag {
     match kind {
         ObjectType::OBJECT_INDEX => CommandTag::AlterIndex,
@@ -3773,6 +3819,11 @@ mod tests {
     #[test]
     fn error_objects() {
         big_stack(|| script(include_str!("connection/error_objects.test")));
+    }
+
+    #[test]
+    fn event_trigger_fire() {
+        big_stack(|| script(include_str!("connection/event_trigger_fire.test")));
     }
 
     /// The extension `plpgsql` that `initdb` makes: its rows in `pg_extension`, `pg_language`, `pg_proc`, `pg_depend` and `pg_description`, and the queries of `\dx` and `\dL` of psql. `connection/extensions.test` is the output of PostgreSQL 19 for the same script in a new database.

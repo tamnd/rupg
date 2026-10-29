@@ -1,0 +1,39 @@
+> create function f_note() returns event_trigger language plpgsql as $$ begin raise notice '% %', tg_event, tg_tag; end $$
+CREATE FUNCTION
+> create event trigger e_start on ddl_command_start execute procedure f_note()
+CREATE EVENT TRIGGER
+> create event trigger e_end on ddl_command_end when tag in ('create table', 'SELECT INTO') execute procedure f_note()
+CREATE EVENT TRIGGER
+> create table t (a int)
+NOTICE 00000 ddl_command_start CREATE TABLE (PL/pgSQL function f_note() line 1 at RAISE)
+NOTICE 00000 ddl_command_end CREATE TABLE (PL/pgSQL function f_note() line 1 at RAISE)
+CREATE TABLE
+> select 1 as x into s
+NOTICE 00000 ddl_command_start SELECT INTO (PL/pgSQL function f_note() line 1 at RAISE)
+NOTICE 00000 ddl_command_end SELECT INTO (PL/pgSQL function f_note() line 1 at RAISE)
+SELECT 1
+> create schema sch create table t2 (a int)
+NOTICE 00000 ddl_command_start CREATE SCHEMA (PL/pgSQL function f_note() line 1 at RAISE)
+CREATE SCHEMA
+> create role r
+CREATE ROLE
+> set event_triggers = off
+SET
+> create table t3 (a int)
+CREATE TABLE
+> reset event_triggers
+RESET
+> alter event trigger e_start disable
+ALTER EVENT TRIGGER
+> create table t4 (a int)
+NOTICE 00000 ddl_command_end CREATE TABLE (PL/pgSQL function f_note() line 1 at RAISE)
+CREATE TABLE
+> create event trigger e_all on ddl_command_start execute procedure f_note()
+CREATE EVENT TRIGGER
+> comment on event trigger e_all is 'c'
+COMMENT
+> comment on role r is 'c'
+COMMENT
+> comment on table t is 'c'
+NOTICE 00000 ddl_command_start COMMENT (PL/pgSQL function f_note() line 1 at RAISE)
+COMMENT

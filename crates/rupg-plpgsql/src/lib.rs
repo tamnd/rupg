@@ -238,6 +238,35 @@ pub fn trigger(spi: &dyn Spi, call: &TriggerCall<'_>) -> Result<Option<Vec<Value
     exec::run_trigger(spi, &compiled, call)
 }
 
+/// `plpgsql_exec_event_trigger`: a call of the event trigger function `func` for the event `event` and the command tag `tag`.
+///
+/// # Errors
+///
+/// The errors of the compile and of the run of the function.
+pub fn event_trigger(spi: &dyn Spi, func: u32, event: &str, tag: &str) -> Result<()> {
+    let cache = spi.cache();
+    cache.check_catalog(spi.catalog());
+    let key = (func, Vec::new(), oid::EVENT_TRIGGER);
+    let found = cache.functions.borrow().get(&key).map(|(_, c)| Rc::clone(c));
+    let compiled = match found {
+        Some(compiled) => compiled,
+        None => {
+            let catalog = spi.catalog();
+            let Some(function) = catalog.function(func) else {
+                return Err(Error::internal(format!("cache lookup failed for function {func}")));
+            };
+            let mut sig = signature(function, &[], 0);
+            sig.event_trigger = true;
+            let tree = compile(&function.src, spi.env(), &sig, false)?;
+            let text = rupg_func::to_text(oid::REGPROCEDURE, &Value::Oid(func), spi.session())?;
+            let compiled = Rc::new(Compiled::new(tree, text, func));
+            cache.functions.borrow_mut().insert(key, (function.clone(), Rc::clone(&compiled)));
+            compiled
+        }
+    };
+    exec::run_event_trigger(spi, &compiled, event, tag)
+}
+
 /// The options of `DO`, as `ExecuteDoStmt` reads them: the code, in a language that can run it.
 ///
 /// # Errors
