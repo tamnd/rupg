@@ -6653,6 +6653,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/trigger_self_modified.test")));
     }
 
+    /// A whole-row reference to a transition table of a table with a dropped column has no field for the dropped column, as in PostgreSQL.
+    #[test]
+    fn transition_dropped_column() {
+        big_stack(|| script(include_str!("connection/transition_dropped_column.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

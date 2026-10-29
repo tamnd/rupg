@@ -2004,8 +2004,16 @@ impl Analyzer<'_> {
             let row = JoinRow { alias, names, fields };
             return Ok(Expr::new(ExprKind::JoinRow(Box::new(row)), oid::RECORD).at(at));
         };
+        let rel = &self.level(level).relations[relation];
+        if rel.cte.as_ref().is_some_and(|c| c.transition) {
+            // `ExecEvalWholeRowVar`: the row of a transition table has no field for a dropped column of the table, as `record_out` skips the attributes that `attisdropped` marks.
+            let var = Var { relation, attnum: 0, levels_up: level };
+            let fields = self.whole_row_columns(var, at)?.into_iter().map(|(_, expr)| expr);
+            let row = ExprKind::Row(fields.collect(), CastForm::Implicit);
+            return Ok(Expr::new(row, oid::RECORD).at(at));
+        }
         let ty = match entry.oid {
-            0 => self.function_row_type(&self.level(level).relations[relation]),
+            0 => self.function_row_type(rel),
             // The table of a generation expression is new, and `check_nested_generated` gives the error for its whole row.
             _ if self.kind == Kind::Generated => oid::RECORD,
             rel => self
