@@ -1,0 +1,133 @@
+!details
+> select proname, prosrc, prorettype::regtype, proargtypes::regtype[], proallargtypes::regtype[], proargnames, proisstrict, provolatile, proparallel from pg_proc where proname in ('pg_walfile_name', 'pg_walfile_name_offset', 'pg_split_walfile_name', 'gist_translate_cmptype_common') order by 1
+fields proname@pg_proc.2:19:64:-1,prosrc@pg_proc.26:25:-1:-1,prorettype:2206:4:-1,proargtypes:2211:-1:-1,proallargtypes:2211:-1:-1,proargnames@pg_proc.23:1009:-1:-1,proisstrict@pg_proc.13:16:1:-1,provolatile@pg_proc.15:18:1:-1,proparallel@pg_proc.16:18:1:-1
+row gist_translate_cmptype_common,gist_translate_cmptype_common,smallint,[0:0]={integer},NULL,NULL,t,i,s
+row pg_split_walfile_name,pg_split_walfile_name,record,[0:0]={text},{text,numeric,bigint},{file_name,segment_number,timeline_id},t,s,s
+row pg_walfile_name,pg_walfile_name,text,[0:0]={pg_lsn},NULL,NULL,t,i,s
+row pg_walfile_name_offset,pg_walfile_name_offset,record,[0:0]={pg_lsn},{pg_lsn,text,integer},{lsn,file_name,file_offset},t,i,s
+SELECT 4
+> select pg_walfile_name('0/0')
+fields pg_walfile_name:25:-1:-1
+row 000000010000000000000000
+SELECT 1
+> select pg_walfile_name('0/1000000')
+fields pg_walfile_name:25:-1:-1
+row 000000010000000000000001
+SELECT 1
+> select pg_walfile_name('0/FFFFFF')
+fields pg_walfile_name:25:-1:-1
+row 000000010000000000000000
+SELECT 1
+> select pg_walfile_name('1/0')
+fields pg_walfile_name:25:-1:-1
+row 000000010000000100000000
+SELECT 1
+> select pg_walfile_name('FFFFFFFF/FFFFFFFF')
+fields pg_walfile_name:25:-1:-1
+row 00000001FFFFFFFF000000FF
+SELECT 1
+> select pg_walfile_name(null)
+fields pg_walfile_name:25:-1:-1
+row NULL
+SELECT 1
+> select * from pg_walfile_name_offset('0/0')
+fields file_name:25:-1:-1,file_offset:23:4:-1
+row 000000010000000000000000,0
+SELECT 1
+> select * from pg_walfile_name_offset('0/0'::pg_lsn + 16777216)
+fields file_name:25:-1:-1,file_offset:23:4:-1
+row 000000010000000000000001,0
+SELECT 1
+> select * from pg_walfile_name_offset('0/0'::pg_lsn + 16777216 + 1)
+fields file_name:25:-1:-1,file_offset:23:4:-1
+row 000000010000000000000001,1
+SELECT 1
+> select * from pg_walfile_name_offset('0/0'::pg_lsn + 16777216 - 1)
+fields file_name:25:-1:-1,file_offset:23:4:-1
+row 000000010000000000000000,16777215
+SELECT 1
+> select * from pg_walfile_name_offset('FFFFFFFF/FFFFFFFF')
+fields file_name:25:-1:-1,file_offset:23:4:-1
+row 00000001FFFFFFFF000000FF,16777215
+SELECT 1
+> select pg_walfile_name_offset('12/345678')
+fields pg_walfile_name_offset:2249:-1:-1
+row (000000010000001200000000,3430008)
+SELECT 1
+> select (pg_walfile_name_offset('12/345678')).file_offset
+fields file_offset:23:4:-1
+row 3430008
+SELECT 1
+> select * from pg_walfile_name_offset(null)
+fields file_name:25:-1:-1,file_offset:23:4:-1
+row NULL,NULL
+SELECT 1
+> select pg_walfile_name_offset(null) is null
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> select * from pg_split_walfile_name(null)
+fields segment_number:1700:-1:-1,timeline_id:20:8:-1
+row NULL,NULL
+SELECT 1
+> select * from pg_split_walfile_name('invalid')
+fields segment_number:1700:-1:-1,timeline_id:20:8:-1
+ERROR 22023 invalid WAL file name "invalid"
+> select * from pg_split_walfile_name('000000010000000100000000')
+fields segment_number:1700:-1:-1,timeline_id:20:8:-1
+row 256,1
+SELECT 1
+> select * from pg_split_walfile_name('ffffffFF00000001000000af')
+fields segment_number:1700:-1:-1,timeline_id:20:8:-1
+row 431,4294967295
+SELECT 1
+> select * from pg_split_walfile_name('FFFFFFFFFFFFFFFFFFFFFFFF')
+fields segment_number:1700:-1:-1,timeline_id:20:8:-1
+row 1103806594815,4294967295
+SELECT 1
+> select * from pg_split_walfile_name('00000001000000010000000')
+fields segment_number:1700:-1:-1,timeline_id:20:8:-1
+ERROR 22023 invalid WAL file name "00000001000000010000000"
+> select * from pg_split_walfile_name('0000000100000001000000000')
+fields segment_number:1700:-1:-1,timeline_id:20:8:-1
+ERROR 22023 invalid WAL file name "0000000100000001000000000"
+> select * from pg_split_walfile_name('00000001000000010000000G')
+fields segment_number:1700:-1:-1,timeline_id:20:8:-1
+ERROR 22023 invalid WAL file name "00000001000000010000000G"
+> select * from pg_split_walfile_name('000000010000000100000000.partial')
+fields segment_number:1700:-1:-1,timeline_id:20:8:-1
+ERROR 22023 invalid WAL file name "000000010000000100000000.partial"
+> select pg_split_walfile_name('000000020000000300000004')
+fields pg_split_walfile_name:2249:-1:-1
+row (772,2)
+SELECT 1
+> select (pg_split_walfile_name('000000020000000300000004')).segment_number + 1
+fields ?column?:1700:-1:-1
+row 773
+SELECT 1
+> select pg_typeof((pg_split_walfile_name('000000020000000300000004')).segment_number), pg_typeof((pg_split_walfile_name('000000020000000300000004')).timeline_id)
+fields pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
+row numeric,bigint
+SELECT 1
+> select segment_number, file_offset from pg_walfile_name_offset('0/0'::pg_lsn + 16777216), pg_split_walfile_name(file_name)
+fields segment_number:1700:-1:-1,file_offset:23:4:-1
+row 1,0
+SELECT 1
+> select gist_translate_cmptype_common(i), pg_typeof(gist_translate_cmptype_common(i)) from generate_series(-1, 9) i
+fields gist_translate_cmptype_common:21:2:-1,pg_typeof:2206:4:-1
+row 0,smallint
+row 0,smallint
+row 20,smallint
+row 21,smallint
+row 18,smallint
+row 23,smallint
+row 22,smallint
+row 0,smallint
+row 3,smallint
+row 8,smallint
+row 0,smallint
+SELECT 11
+> select gist_translate_cmptype_common(null)
+fields gist_translate_cmptype_common:21:2:-1
+row NULL
+SELECT 1
