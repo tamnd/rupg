@@ -353,6 +353,18 @@ impl Connection {
         };
         let force_not_null = flags(&options.force_not_null)?;
         let force_null = flags(&options.force_null)?;
+        // `BeginCopyFrom` plans the defaults of the columns before `CopyInResponse`, so that an error in a default comes first. With `DEFAULT`, it plans the default of each column. The kinds of relation that cannot take a copy fail after `CopyInResponse`.
+        let table = rel.is_some() && matches!(target.kind, b'r' | b'p' | b'f');
+        let plan =
+            if table { Some(Rc::new(insert_plan(&target, rv, &[], &reader)?)) } else { None };
+        let source =
+            (table && options.default.is_some()).then(|| (target.clone(), RangeVar::clone(rv)));
+        let mut defaulted = Vec::new();
+        if let Some((target, rv)) = &source {
+            let all = vec![true; target.selected.len()];
+            let plan = Rc::new(insert_plan(target, rv, &all, &reader)?);
+            defaulted.push((all, plan));
+        }
         let binary = options.format == Format::Binary;
         match begin {
             Begin::Client(out) => out.copy_in_response(
@@ -377,10 +389,6 @@ impl Connection {
         if options.freeze {
             self.check_freeze(&catalog, target.relid, target.kind)?;
         }
-        let plan = match rel {
-            Some(_) => Some(Rc::new(insert_plan(&target, rv, &[], &reader)?)),
-            None => None,
-        };
         let types: Vec<(u32, i32)> =
             target.selected.iter().filter_map(|&i| types.get(i).copied()).collect();
         let domains = types
@@ -390,8 +398,6 @@ impl Connection {
                 builtin::domain_by_oid(ty).is_some() || builtin::domain_by_oid(element).is_some()
             })
             .collect();
-        let source = (rel.is_some() && options.default.is_some())
-            .then(|| (target.clone(), RangeVar::clone(rv)));
         self.start_triggers();
         let mut triggers = match plan.as_deref().and_then(Plan::write) {
             Some(info) => self.write_triggers(info)?,
@@ -406,7 +412,7 @@ impl Connection {
         let load = Load {
             plan,
             source,
-            defaulted: Vec::new(),
+            defaulted,
             filter,
             types,
             domains,

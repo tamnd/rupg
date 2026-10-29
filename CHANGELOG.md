@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- COPY FROM now plans the column defaults before CopyInResponse, and plans the default of each column with the DEFAULT option, so an error in a default comes first, as in PostgreSQL (#1122).
 - DROP OWNED now revokes the privileges of the roles on databases, so that DROP ROLE then works, as in PostgreSQL (#1121).
 - The node tree of a view in pg_rewrite has the grouping sets, GROUP BY DISTINCT and GROUPING() of its query, as in PG19 (#916) (#1120).
 - VACUUM and ANALYZE now set last_vacuum, last_analyze, vacuum_count and analyze_count in pg_stat_all_tables, and VACUUM respects PROCESS_MAIN, as in PostgreSQL (#1119).

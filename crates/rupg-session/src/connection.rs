@@ -6803,6 +6803,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/drop_owned_database.test")));
     }
 
+    /// `COPY FROM` with the option `DEFAULT` plans the default of each column at the start, so that an error in a default comes also with no rows. `connection/copy_default_eager.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn copy_default_eager() {
+        big_stack(|| script(include_str!("connection/copy_default_eager.test")));
+    }
+
     /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.
     #[test]
     fn role_settings_at_start() {
