@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use rupg_catalog::{RelKind, SequenceData, SequenceInfo};
 use rupg_common::{Error, Result, SqlState};
-use rupg_types::Value;
+use rupg_types::{Record, Value, oid};
 
 use crate::{Call, Kernel, Session, bad_value, not_yet, reg};
 
@@ -113,6 +113,13 @@ pub(crate) fn check_writable(command: &str, session: &dyn Session) -> Result<()>
     Ok(())
 }
 
+/// True for a temporary sequence, `rd_islocaltemp`: a read-only transaction can change it.
+fn local_temp(relid: u32, session: &dyn Session) -> bool {
+    session.catalog().is_some_and(|catalog| {
+        catalog.relation(relid).is_some_and(|rel| catalog.is_temp_schema(rel.namespace))
+    })
+}
+
 /// `nextval_oid`: `nextval_internal` with the check of the privileges. The analyzer gives a second argument `true` for the default of an identity column, which is `NextValueExpr`: that call does not check the privileges.
 fn nextval(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let relid = oid_arg(args, 0)?;
@@ -123,7 +130,9 @@ fn nextval(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     if !matches!(args.get(1), Some(Value::Bool(true))) {
         check(relid, name, crate::acl::USAGE_UPDATE, session)?;
     }
-    check_writable("nextval()", session)?;
+    if !local_temp(relid, session) {
+        check_writable("nextval()", session)?;
+    }
     if elm.last != elm.cached {
         let elm = sequences.init(relid, info.file);
         elm.last += elm.increment;
@@ -245,7 +254,9 @@ fn set_sequence(call: &Call<'_>, relid: u32, next: i64, iscalled: bool) -> Resul
     let mut sequences = local(session)?.borrow_mut();
     sequences.init(relid, info.file);
     check(relid, name, crate::acl::UPDATE, session)?;
-    check_writable("setval()", session)?;
+    if !local_temp(relid, session) {
+        check_writable("setval()", session)?;
+    }
     if next < info.min || next > info.max {
         return Err(Error::new(
             SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
@@ -297,6 +308,39 @@ pub(crate) fn last_value(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(if seq.is_called { Value::Int8(seq.last_value) } else { Value::Null })
 }
 
+/// `pg_sequence_parameters(oid)`: the row of `pg_sequence` of a sequence, for the views of `information_schema`. The current user needs `SELECT`, `UPDATE` or `USAGE` on the sequence.
+fn parameters(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let relid = oid_arg(args, 0)?;
+    let session = call.session;
+    let mask = crate::acl::SELECT_USAGE | crate::acl::UPDATE;
+    if !crate::acl::sequence_allowed(relid, mask, session)? {
+        let name = reg::class_name(relid, session).map_or("", |(name, _)| name);
+        return Err(Error::new(
+            SqlState::INSUFFICIENT_PRIVILEGE,
+            format!("permission denied for sequence {name}"),
+        ));
+    }
+    let info = session
+        .catalog()
+        .and_then(|c| c.relation(relid))
+        .filter(|r| r.kind == RelKind::Sequence)
+        .and_then(|r| r.sequence.as_ref());
+    let Some(info) = info else {
+        return Err(Error::internal(format!("cache lookup failed for sequence {relid}")));
+    };
+    let values = vec![
+        Value::Int8(info.start),
+        Value::Int8(info.min),
+        Value::Int8(info.max),
+        Value::Int8(info.increment),
+        Value::Bool(info.cycle),
+        Value::Int8(info.cache),
+        Value::Oid(info.ty),
+    ];
+    let types = vec![oid::INT8, oid::INT8, oid::INT8, oid::INT8, oid::BOOL, oid::INT8, oid::OID];
+    Ok(Value::Record(Box::new(Record::new(types, values))))
+}
+
 /// The kernels of the sequence functions by `prosrc`.
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     let kernel: Kernel = match src {
@@ -306,6 +350,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "setval_oid" => setval,
         "setval3_oid" => setval3,
         "pg_sequence_last_value" => last_value,
+        "pg_sequence_parameters" => parameters,
         _ => return None,
     };
     Some(kernel)
