@@ -6767,6 +6767,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/constraint_misc.test")));
     }
 
+    /// The planner puts the keys of `DISTINCT` in the order of the rows of the input when that costs less, as `get_useful_pathkeys_for_distinct` does, and `enable_distinct_reordering` turns this off.
+    #[test]
+    fn distinct_reorder() {
+        big_stack(|| script(include_str!("connection/distinct_reorder.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

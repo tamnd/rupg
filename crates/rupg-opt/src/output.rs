@@ -736,7 +736,14 @@ fn trivial(level: &Level<'_>, node: &Node<'_>, r: usize, physical: bool) -> bool
         Kind::Append | Kind::MergeAppend(_) if set_op && c.output.is_empty() => columns,
         _ => c.output.len(),
     });
+    // The nodes above that do not project share the target list of the scan, so a scan with the targets of the query has their junk marks, which `apply_tlist_labeling` gives the top node. A junk mark that the column of the subquery does not have stops the removal.
+    let targets = &level.query.targets;
+    let labeled = node.output.len() == targets.len()
+        && node.output.iter().zip(targets).all(|(o, t)| o.expr.same(&t.expr));
+    let junk_differs = labeled
+        && sub.is_some_and(|s| targets.iter().zip(&s.targets).any(|(t, c)| t.junk != c.junk));
     node.filter.is_empty()
+        && !junk_differs
         && child.is_none_or(|n| n == columns || junk > 0 && n == columns + junk)
         && node.output.len() == columns
         && node.output.iter().enumerate().all(|(i, o)| {

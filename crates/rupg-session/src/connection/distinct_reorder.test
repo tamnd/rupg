@@ -1,0 +1,106 @@
+> create table dot (x int, y int, z int)
+CREATE TABLE
+> insert into dot select i%10, i%10, i%10 from generate_series(1, 1000) as i
+INSERT 0 1000
+> create index dot_x_y on dot (x, y)
+CREATE INDEX
+> analyze dot
+ANALYZE
+> set enable_hashagg to off
+SET
+> explain (costs off) select distinct on (y, x) x, y from dot
+fields QUERY PLAN:25:-1:-1
+row Unique
+row   ->  Index Only Scan using dot_x_y on dot
+EXPLAIN
+> select distinct on (y, x) x, y from dot
+fields x@dot.1:23:4:-1,y@dot.2:23:4:-1
+row 0,0
+row 1,1
+row 2,2
+row 3,3
+row 4,4
+row 5,5
+row 6,6
+row 7,7
+row 8,8
+row 9,9
+SELECT 10
+> explain (costs off) select distinct on (y, x) x, y from (select * from dot order by x) s
+fields QUERY PLAN:25:-1:-1
+row Unique
+row   ->  Incremental Sort
+row         Sort Key: s.x, s.y
+row         Presorted Key: s.x
+row         ->  Subquery Scan on s
+row               ->  Index Only Scan using dot_x_y on dot
+EXPLAIN
+> explain (costs off) select distinct on (y, x) x, y from dot order by y
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: y
+row   ->  Unique
+row         ->  Index Only Scan using dot_x_y on dot
+EXPLAIN
+> select distinct on (y, x) x, y from dot order by y
+fields x@dot.1:23:4:-1,y@dot.2:23:4:-1
+row 0,0
+row 1,1
+row 2,2
+row 3,3
+row 4,4
+row 5,5
+row 6,6
+row 7,7
+row 8,8
+row 9,9
+SELECT 10
+> explain (costs off) select distinct on (y, x) x, y from (select * from dot order by x, z, y) s order by y, x, z
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: s.y, s.x, s.z
+row   ->  Unique
+row         ->  Incremental Sort
+row               Sort Key: s.x, s.y, s.z
+row               Presorted Key: s.x
+row               ->  Subquery Scan on s
+row                     ->  Sort
+row                           Sort Key: dot.x, dot.z, dot.y
+row                           ->  Seq Scan on dot
+EXPLAIN
+> explain (costs off) select distinct y, x from dot
+fields QUERY PLAN:25:-1:-1
+row Unique
+row   ->  Index Only Scan using dot_x_y on dot
+EXPLAIN
+> explain (costs off) select distinct y, x from (select * from dot order by x) s
+fields QUERY PLAN:25:-1:-1
+row Unique
+row   ->  Incremental Sort
+row         Sort Key: s.x, s.y
+row         Presorted Key: s.x
+row         ->  Subquery Scan on s
+row               ->  Index Only Scan using dot_x_y on dot
+EXPLAIN
+> set enable_distinct_reordering to off
+SET
+> explain (costs off) select distinct on (y, x) x, y from dot
+fields QUERY PLAN:25:-1:-1
+row Unique
+row   ->  Sort
+row         Sort Key: y, x
+row         ->  Seq Scan on dot
+EXPLAIN
+> explain (costs off) select distinct y, x from dot
+fields QUERY PLAN:25:-1:-1
+row Unique
+row   ->  Sort
+row         Sort Key: y, x
+row         ->  Seq Scan on dot
+EXPLAIN
+> reset enable_distinct_reordering
+RESET
+> reset enable_hashagg
+RESET
+> drop table dot
+DROP TABLE
