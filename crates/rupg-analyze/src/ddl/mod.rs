@@ -164,6 +164,19 @@ pub struct Defined {
     pub repacked: Vec<Repack>,
     /// The new tables with `ON COMMIT DELETE ROWS` or `ON COMMIT DROP`, as `register_on_commit_action` keeps them. The caller does the action at each commit while the table exists.
     pub on_commit: Vec<(u32, OnCommitAction)>,
+    /// The objects that the statement dropped, in the order of `deleteObjectsInList`, for the event triggers of `sql_drop`.
+    pub dropped: Vec<Dropped>,
+}
+
+/// An object that a statement dropped, as `EventTriggerSQLDropAddObject` gets it from `deleteObjectsInList`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Dropped {
+    /// The object.
+    pub object: ObjRef,
+    /// True for an object that the statement names, as `DEPFLAG_ORIGINAL` gives.
+    pub original: bool,
+    /// True for an object that goes by a normal dependency or a reverse one, as `DEPFLAG_NORMAL` and `DEPFLAG_REVERSE` give.
+    pub normal: bool,
 }
 
 /// A statement that cannot run inside a transaction block or in a function, as `PreventInTransactionBlock` checks it.
@@ -365,6 +378,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         concurrent: None,
         repacked: Vec::new(),
         on_commit: Vec::new(),
+        dropped: Vec::new(),
     };
     let mut filled = None;
     let result = match stmt {
@@ -506,6 +520,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         concurrent: definer.concurrent,
         repacked: definer.repacked,
         on_commit: definer.on_commit,
+        dropped: definer.dropped,
     }
 }
 
@@ -734,6 +749,8 @@ pub(crate) struct Definer<'a, 'c> {
     repacked: Vec<Repack>,
     /// The tables of [`Defined::on_commit`].
     on_commit: Vec<(u32, OnCommitAction)>,
+    /// The objects of [`Defined::dropped`].
+    dropped: Vec<Dropped>,
 }
 
 /// An error for a part of a statement that rupg does not support yet.

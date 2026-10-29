@@ -477,6 +477,8 @@ pub struct Connection {
     transition: RefCell<Option<Transition>>,
     /// `MyTriggerDepth`: the number of the trigger functions that run, one in the other.
     trigger_depth: Cell<i32>,
+    /// The states of the event triggers of the commands that run, one in the other, as `currentEventTriggerState` keeps them.
+    event_frames: RefCell<Vec<event_trigger::Frame>>,
 }
 
 /// Puts the ID of the new version of each row at the place `at` of the row that `RETURNING` reads, as the item pointer that `ctid` gives.
@@ -585,6 +587,7 @@ impl Connection {
             trigger_warnings: RefCell::new(Vec::new()),
             transition: RefCell::new(None),
             trigger_depth: Cell::new(0),
+            event_frames: RefCell::new(Vec::new()),
         };
         connection.session.set_utf8(connection.utf8());
         connection
@@ -1386,7 +1389,15 @@ impl Connection {
             return self.define_with(node, text, notices, role, call);
         }
         self.fire_event_triggers("ddl_command_start", tag, notices)?;
-        let done = self.define_with(node, text, notices, role, call)?;
+        let frame =
+            event_trigger::Frame::new(!self.armed_event_triggers("sql_drop", tag).is_empty());
+        self.event_frames.borrow_mut().push(frame);
+        let done = self.define_with(node, text, notices, role, call);
+        let frame = self.event_frames.borrow_mut().pop();
+        let done = done?;
+        if let Some(frame) = frame {
+            self.fire_sql_drop(frame, tag, notices)?;
+        }
         self.fire_event_triggers("ddl_command_end", tag, notices)?;
         Ok(done)
     }
@@ -1510,6 +1521,9 @@ impl Connection {
             .and_then(|()| self.check_domain_rows(&defined.domain_checks, &work))
             .and_then(|()| self.truncate_rows(&defined.truncated, &work))
             .and_then(|()| self.view_texts(&defined.views, &mut work));
+        if result.is_ok() {
+            self.keep_dropped(&defined.dropped);
+        }
         let mut held = self.lease.borrow_mut();
         let Some(lease) = held.as_mut() else {
             return Err(Error::internal("the lock of the catalog is gone"));
@@ -3837,6 +3851,11 @@ mod tests {
     #[test]
     fn event_trigger_fire() {
         big_stack(|| script(include_str!("connection/event_trigger_fire.test")));
+    }
+
+    #[test]
+    fn event_trigger_drop() {
+        big_stack(|| script(include_str!("connection/event_trigger_drop.test")));
     }
 
     /// The extension `plpgsql` that `initdb` makes: its rows in `pg_extension`, `pg_language`, `pg_proc`, `pg_depend` and `pg_description`, and the queries of `\dx` and `\dL` of psql. `connection/extensions.test` is the output of PostgreSQL 19 for the same script in a new database.

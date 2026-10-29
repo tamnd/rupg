@@ -74,6 +74,7 @@ impl Definer<'_, '_> {
             }
         }
         changed.add_checks(checks);
+        self.report_default_drop(table, number);
         self.catalog.remove_default(table, number);
         self.add_generation_expression(table, number, node)?;
         // `ATRewriteTables` writes the rows again, and a stored value of the row type would not get the new values.
@@ -148,6 +149,7 @@ impl Definer<'_, '_> {
             return Ok(());
         }
         self.catalog.set_column_generated(table, number, 0)?;
+        self.report_default_drop(table, number);
         self.catalog.remove_default(table, number);
         Ok(())
     }

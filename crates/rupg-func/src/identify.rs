@@ -34,7 +34,7 @@ impl Parts {
 
     /// The parts of an object whose name is unique in the schema `schema`, and whose identity is the name with the schema.
     fn in_schema(schema: u32, name: &str, session: &dyn Session) -> Option<Self> {
-        let schema_name = reg::namespace_name(schema, session)?;
+        let schema_name = reg::namespace_or_temp(schema, session)?;
         let identity = reg::qualified(Some(schema_name), name);
         let names = vec![schema_name.to_string(), name.to_string()];
         Some(Self {
@@ -73,7 +73,7 @@ fn identify_object(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let kind = type_description(object, call.session)?;
     let mut values = vec![Value::Text(kind), Value::Null, Value::Null, Value::Null];
     if let Some(parts) = parts(object, call.session) {
-        let schema = parts.schema.and_then(|ns| reg::namespace_name(ns, call.session));
+        let schema = parts.schema.and_then(|ns| reg::namespace_or_temp(ns, call.session));
         values[1] = schema.map_or(Value::Null, |s| Value::Text(quote_identifier(s)));
         values[2] = parts.name.map_or(Value::Null, Value::Text);
         values[3] = Value::Text(parts.identity);
@@ -333,7 +333,7 @@ fn parts(object: ObjRef, session: &dyn Session) -> Option<Parts> {
         rupg_catalog::PG_PUBLICATION_NAMESPACE => {
             let row = catalog?.publication_namespace(oid)?;
             let publication = catalog?.publication(row.publication)?;
-            let schema = reg::namespace_name(row.schema, session)?;
+            let schema = reg::namespace_or_temp(row.schema, session)?;
             let identity = format!("{schema} in publication {}", publication.name);
             Some(
                 Parts::identity(identity)
@@ -358,7 +358,7 @@ fn parts(object: ObjRef, session: &dyn Session) -> Option<Parts> {
                     reg::type_text_qualified(ty, session)
                 }
             };
-            let schema = reg::namespace_name(op.namespace, session)?;
+            let schema = reg::namespace_or_temp(op.namespace, session)?;
             let (left, right) = (arg(op.left)?, arg(op.right)?);
             let identity = format!("{}.{}({left},{right})", quote_identifier(schema), op.name);
             let names = vec![schema.to_string(), op.name.to_string()];
@@ -413,7 +413,7 @@ fn parts(object: ObjRef, session: &dyn Session) -> Option<Parts> {
             let trigger = catalog?.trigger(oid)?;
             named_on(&trigger.name, trigger.relation, session)
         }
-        PG_NAMESPACE => reg::namespace_name(oid, session).map(Parts::named),
+        PG_NAMESPACE => reg::namespace_or_temp(oid, session).map(Parts::named),
         PG_TS_PARSER => in_catalog(Named::Parser, oid, session),
         PG_TS_DICT => in_catalog(Named::Dictionary, oid, session),
         PG_TS_TEMPLATE => in_catalog(Named::Template, oid, session),
@@ -439,7 +439,7 @@ fn parts(object: ObjRef, session: &dyn Session) -> Option<Parts> {
             let mut identity = format!("for role {}", quote_identifier(&role));
             let mut names = vec![role];
             if acl.namespace != 0 {
-                let schema = reg::namespace_name(acl.namespace, session)?;
+                let schema = reg::namespace_or_temp(acl.namespace, session)?;
                 identity.push_str(&format!(" in schema {}", quote_identifier(schema)));
                 names.push(schema.to_string());
             }
@@ -461,7 +461,7 @@ fn parts(object: ObjRef, session: &dyn Session) -> Option<Parts> {
 /// `getRelationIdentity`: the name of the relation with its schema, and the schema and the name as a list.
 fn relation_parts(oid: u32, session: &dyn Session) -> Option<(String, Vec<String>)> {
     let (name, namespace) = reg::class_name(oid, session)?;
-    let schema = reg::namespace_name(namespace, session)?;
+    let schema = reg::namespace_or_temp(namespace, session)?;
     Some((reg::qualified(Some(schema), name), vec![schema.to_string(), name.to_string()]))
 }
 
@@ -483,7 +483,7 @@ fn procedure(oid: u32, session: &dyn Session) -> Option<(String, Vec<String>, Ve
     };
     let args: Vec<String> =
         args.iter().map(|&ty| reg::type_text_qualified(ty, session)).collect::<Option<_>>()?;
-    let schema = reg::namespace_name(namespace, session)?;
+    let schema = reg::namespace_or_temp(namespace, session)?;
     let qualified = reg::qualified(Some(schema), name);
     Some((
         format!("{qualified}({})", args.join(",")),
@@ -516,4 +516,96 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         _ => return None,
     };
     Some(kernel)
+}
+
+/// `EventTriggerSQLDropAddObject`: the row of `pg_event_trigger_dropped_objects` for the object `object` that a statement dropped, from the catalog before the drop. `original` and `normal` come from the walk of the dependencies. A shared object and an event trigger give `None`, as `EventTriggerSupportsObject` gives, and so does an object in the temporary schema of another session. The schema and the name have no quotes, and the name is given only for the kinds of objects whose name is unique in its schema.
+pub fn dropped_object(
+    object: ObjRef,
+    original: bool,
+    normal: bool,
+    session: &dyn Session,
+) -> Option<Vec<Value>> {
+    if matches!(
+        object.class,
+        PG_DATABASE | PG_AUTHID | PG_TABLESPACE | rupg_catalog::PG_EVENT_TRIGGER
+    ) {
+        return None;
+    }
+    let own = session.temp_number().map(|n| format!("pg_temp_{n}"));
+    let any_temp = |name: &str| name.starts_with("pg_temp_") || name.starts_with("pg_toast_temp_");
+    let parts = parts(object, session);
+    let catalog = session.catalog();
+    let (mut schema, mut name, mut temp) = (None, None, false);
+    if object.class == PG_NAMESPACE {
+        let schema_name = reg::namespace_name(object.oid, session)?;
+        if own.as_deref() == Some(schema_name) {
+            temp = true;
+        } else if any_temp(schema_name) {
+            return None;
+        }
+        name = Some(schema_name.to_string());
+    } else {
+        // A default, a trigger and a policy have the schema of their table.
+        let on = match object.class {
+            PG_ATTRDEF => {
+                catalog.and_then(|c| c.defaults().find(|d| d.oid == object.oid)).map(|d| d.relation)
+            }
+            PG_TRIGGER => catalog.and_then(|c| c.trigger(object.oid)).map(|t| t.relation),
+            rupg_catalog::PG_POLICY => {
+                catalog.and_then(|c| c.policy(object.oid)).map(|p| p.relation)
+            }
+            _ => None,
+        };
+        let namespace = match on {
+            Some(relation) => reg::class_name(relation, session).map(|(_, namespace)| namespace),
+            None => parts.as_ref().and_then(|p| p.schema),
+        };
+        if let Some(namespace) = namespace {
+            let schema_name = reg::namespace_name(namespace, session)?;
+            if own.as_deref() == Some(schema_name) {
+                schema = Some("pg_temp".to_string());
+                temp = true;
+            } else if any_temp(schema_name) {
+                return None;
+            } else {
+                schema = Some(schema_name.to_string());
+            }
+        }
+        if object.sub == 0 && on.is_none() {
+            name = parts.as_ref().and_then(|p| p.name.as_deref()).map(unquote);
+        }
+    }
+    let kind = type_description(object, session).ok()?;
+    let array = |list: Vec<String>| {
+        Value::Array(Box::new(rupg_types::Array::one(
+            list.into_iter().map(|s| Some(Value::Text(s))).collect(),
+        )))
+    };
+    let text = |value: Option<String>| value.map_or(Value::Null, Value::Text);
+    let (identity, names, args) = match parts {
+        Some(parts) => (Value::Text(parts.identity), array(parts.names), array(parts.args)),
+        None => (Value::Null, Value::Null, Value::Null),
+    };
+    Some(vec![
+        Value::Oid(object.class),
+        Value::Oid(object.oid),
+        Value::Int4(object.sub),
+        Value::Bool(original),
+        Value::Bool(normal),
+        Value::Bool(temp),
+        Value::Text(kind),
+        text(schema),
+        text(name),
+        identity,
+        names,
+        args,
+    ])
+}
+
+/// The name that [`quote_identifier`] gave, without its quotes.
+fn unquote(name: &str) -> String {
+    match name.strip_prefix('"').and_then(|n| n.strip_suffix('"')) {
+        Some(inner) => inner.replace("\"\"", "\""),
+        None => name.to_string(),
+    }
 }

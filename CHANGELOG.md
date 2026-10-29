@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- Event triggers on `sql_drop` fire after a command drops objects, and `pg_event_trigger_dropped_objects()` gives the dropped objects with the columns, the order and the temporary schema names of PostgreSQL (#1150).
+
 ## 0.4.11 (2026-10-29)
 
 ### Added
@@ -11,7 +15,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - `COPY FROM` checks `FREEZE` for a foreign table before it finds that the wrapper has no handler, as in PostgreSQL (#1148).
 - A prepared statement is planned again when the schemas of `search_path` change, for `EXECUTE` and for `Bind`, as in PostgreSQL (#1147).
 - Event triggers on `ddl_command_start` and `ddl_command_end` fire for the commands that PostgreSQL supports, with the `WHEN TAG IN` filter, the `ENABLE` modes, `session_replication_role` and the `event_triggers` setting, also for DDL in PL/pgSQL functions and `DO` (#1145).
-- `CREATE EVENT TRIGGER`, `ALTER EVENT TRIGGER` (`ENABLE`, `DISABLE`, `RENAME TO`, `OWNER TO`), `DROP EVENT TRIGGER` and `COMMENT ON EVENT TRIGGER` keep event triggers in `pg_event_trigger` with the checks of PostgreSQL. The triggers do not fire yet (#1144).
+- `CREATE EVENT TRIGGER`, `ALTER EVENT TRIGGER` (`ENABLE`, `DISABLE`, `RENAME TO`, `OWNER TO`), `DROP EVENT TRIGGER` and `COMMENT ON EVENT TRIGGER` keep event triggers in `pg_event_trigger` with the checks of PostgreSQL. (#1144).
 - PL/pgSQL `EXECUTE` runs `EXPLAIN` and `SHOW` and gives their rows to `INTO`, `FOR` loops and `RETURN QUERY EXECUTE`, as in PostgreSQL (#1143).
 - `CREATE INDEX`, `REINDEX`, `ANALYZE` and `CLUSTER` run the functions of an index as the owner of the table with `search_path` set to `pg_catalog, pg_temp` and send their notices, and `REINDEX` computes the keys again, as in PostgreSQL (#1146).
 - `CREATE PUBLICATION` needs a superuser for `FOR ALL TABLES`, `FOR ALL SEQUENCES` and `FOR TABLES IN SCHEMA`, and a row filter rejects an expression with a user-defined collation, as in PostgreSQL (#1142).

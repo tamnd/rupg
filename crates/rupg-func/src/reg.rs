@@ -533,7 +533,7 @@ fn base_text(ty: u32, typmod: Option<i32>, qualify: bool, session: &dyn Session)
     let schema = if !qualify && type_visible(ty, session) == Some(true) {
         None
     } else {
-        namespace_name(namespace, session)
+        namespace_or_temp(namespace, session)
     };
     let text = qualified(schema, name);
     // The types with a `typmodout` function all have a special form, so the default form shows the typmod as a number.
@@ -1066,4 +1066,11 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         _ => return None,
     };
     Some(kernel)
+}
+
+/// `get_namespace_name_or_temp`: the name of a schema, or `pg_temp` for the temporary schema of the session.
+pub(crate) fn namespace_or_temp(oid: u32, session: &dyn Session) -> Option<&str> {
+    let name = namespace_name(oid, session)?;
+    let own = session.temp_number().is_some_and(|n| name == format!("pg_temp_{n}"));
+    Some(if own { "pg_temp" } else { name })
 }
