@@ -1,0 +1,31 @@
+> create table ff (id int, data text) with (fillfactor = 10)
+CREATE TABLE
+> insert into ff select g, repeat('x', 100) from generate_series(1, 20) g
+INSERT 0 20
+> select min(ctid), max(ctid), count(*) from ff
+fields min:27:6:-1,max:27:6:-1,count:20:8:-1
+row (0,1),(3,5),20
+SELECT 1
+> update ff set id = id + 1 where id = 1
+UPDATE 1
+> select ctid, id from ff where id = 2 order by ctid
+fields ctid@ff.-1:27:6:-1,id@ff.1:23:4:-1
+row (0,2),2
+row (0,6),2
+SELECT 2
+> alter table ff set (fillfactor = 100)
+ALTER TABLE
+> insert into ff select g, repeat('x', 100) from generate_series(21, 40) g
+INSERT 0 20
+> select max(ctid) from ff
+fields max:27:6:-1
+row (3,25)
+SELECT 1
+> create table ff2 (id int, data text) with (fillfactor = 50)
+CREATE TABLE
+> insert into ff2 select g, repeat('x', 100) from generate_series(1, 200) g
+INSERT 0 200
+> select max(ctid), pg_relation_size('ff2') / 8192 as pages from ff2
+fields max:27:6:-1,pages:20:8:-1
+row (6,26),7
+SELECT 1

@@ -1328,7 +1328,12 @@ impl Connection {
                 (ty.len > 0).then(|| (usize::from(ty.len.unsigned_abs()), align))
             })
             .collect();
-        self.store.heap().set_layout(self.database_oid, relation.oid, (fixed, storage));
+        let fillfactor = relation
+            .options
+            .iter()
+            .find_map(|o| o.strip_prefix("fillfactor=")?.parse().ok())
+            .unwrap_or(100);
+        self.store.heap().set_layout(self.database_oid, relation.oid, (fixed, storage), fillfactor);
     }
 
     /// Runs the elements of `CREATE SCHEMA` after the statement made the schema, as `CreateSchemaCommand` runs them: as the owner of the schema and with the schema first in `search_path`. The settings of the session come back after the elements, also after an error.
@@ -3857,6 +3862,11 @@ mod tests {
     #[test]
     fn event_trigger_drop() {
         big_stack(|| script(include_str!("connection/event_trigger_drop.test")));
+    }
+
+    #[test]
+    fn heap_fillfactor() {
+        big_stack(|| script(include_str!("connection/heap_fillfactor.test")));
     }
 
     /// The extension `plpgsql` that `initdb` makes: its rows in `pg_extension`, `pg_language`, `pg_proc`, `pg_depend` and `pg_description`, and the queries of `\dx` and `\dL` of psql. `connection/extensions.test` is the output of PostgreSQL 19 for the same script in a new database.
