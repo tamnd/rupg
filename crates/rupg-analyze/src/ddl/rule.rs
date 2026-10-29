@@ -276,7 +276,8 @@ impl Definer<'_, '_> {
             text: text.to_string(),
             path: self.an.path.clone(),
         };
-        self.catalog.create_rule(new, stmt.replace, &actions, &qual)?;
+        let rule = self.catalog.create_rule(new, stmt.replace, &actions, &qual)?;
+        self.collect(None, ObjRef::new(PG_REWRITE, rule));
         Ok(())
     }
 

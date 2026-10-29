@@ -107,6 +107,7 @@ impl Definer<'_, '_> {
         let mut info = params.info;
         info.data = SequenceData::new(params.last_value);
         let sequence = self.catalog.create_sequence(new, info)?;
+        self.collect(None, ObjRef::new(PG_CLASS, sequence));
         self.apply_default_acl(ObjRef::new(PG_CLASS, sequence))?;
         if rv.relpersistence == b'u' {
             self.catalog.set_unlogged(sequence, true)?;
@@ -160,6 +161,7 @@ impl Definer<'_, '_> {
             is_called: params.is_called,
         });
         self.catalog.alter_sequence(oid, params.info, rewrite)?;
+        self.collect(Some("ALTER SEQUENCE"), ObjRef::new(PG_CLASS, oid));
         if let Some(owned_by) = &params.owned_by {
             self.process_owned_by(oid, owned_by, stmt.for_identity)?;
         }

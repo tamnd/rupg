@@ -353,6 +353,7 @@ impl Definer<'_, '_> {
             }
             None => self.catalog.create_operator(new.clone()),
         };
+        self.collect(None, ObjRef::new(PG_OPERATOR, oid));
         if self_commutator {
             new.commutator = oid;
         }

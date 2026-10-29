@@ -46,6 +46,7 @@ impl Definer<'_, '_> {
             labels: labels.into_iter().map(str::to_string).collect(),
         };
         let ty = self.catalog.create_enum(new)?;
+        self.collect(None, ObjRef::new(PG_TYPE, ty));
         self.apply_default_acl(ObjRef::new(PG_TYPE, ty))
     }
 }

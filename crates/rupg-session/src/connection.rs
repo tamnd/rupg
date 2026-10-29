@@ -1404,10 +1404,9 @@ impl Connection {
         let frame = self.event_frames.borrow_mut().pop();
         let done = done?;
         self.note_login_event(node);
-        if let Some(frame) = frame {
-            self.fire_sql_drop(frame, tag, notices)?;
-        }
-        self.fire_event_triggers("ddl_command_end", tag, notices)?;
+        let mut frame = frame.unwrap_or_default();
+        self.fire_sql_drop(&mut frame, tag, notices)?;
+        self.fire_ddl_end(frame, tag, notices)?;
         Ok(done)
     }
 
@@ -1532,6 +1531,11 @@ impl Connection {
             .and_then(|()| self.view_texts(&defined.views, &mut work));
         if result.is_ok() {
             self.keep_dropped(&defined.dropped);
+            let tag = match node {
+                Node::SelectStmt(_) => CommandTag::SelectInto,
+                _ => definition_tag(node),
+            };
+            self.keep_commands(&defined.commands, tag);
         }
         let mut held = self.lease.borrow_mut();
         let Some(lease) = held.as_mut() else {
@@ -3878,6 +3882,12 @@ mod tests {
     #[test]
     fn event_trigger_drop() {
         big_stack(|| script(include_str!("connection/event_trigger_drop.test")));
+    }
+
+    /// `pg_event_trigger_ddl_commands` in an event trigger of `ddl_command_end`: the rows of the commands of a statement in the order of PostgreSQL 19, with the objects that a statement makes as a part of another object.
+    #[test]
+    fn event_trigger_ddl() {
+        big_stack(|| script(include_str!("connection/event_trigger_ddl.test")));
     }
 
     #[test]

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `pg_event_trigger_ddl_commands` gives the commands of a statement in an event trigger of `ddl_command_end`, in the order of PostgreSQL 19, and `pg_get_object_address` finds event triggers by name (#1159).
 - `CREATE TABLE AS` and `SELECT INTO` now fill the new table with no check of `INSERT` on it, as in PostgreSQL. A default privilege that revokes `INSERT` from the owner no longer makes them fail (#1158).
 - An error of an index expression during `ANALYZE` now ends the statement, as in PostgreSQL. Before, `ANALYZE` skipped the statistics of that index and succeeded (#1157).
 - Event triggers of `login` fire at the start of a session, before the first `ReadyForQuery`, and `pg_database.dathasloginevt` shows when a database can have them (#1155).

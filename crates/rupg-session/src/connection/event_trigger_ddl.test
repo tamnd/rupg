@@ -1,0 +1,33 @@
+> create function f_ddl() returns event_trigger language plpgsql as $$ declare r record; begin for r in select * from pg_event_trigger_ddl_commands() loop raise notice '% % %', r.command_tag, r.object_type, r.object_identity; end loop; end $$
+CREATE FUNCTION
+> select 1 from pg_event_trigger_ddl_commands()
+fields ?column?:23:4:-1
+ERROR 39P03 pg_event_trigger_ddl_commands() can only be called in an event trigger function
+> create event trigger e_ddl on ddl_command_end execute procedure f_ddl()
+CREATE EVENT TRIGGER
+> create schema s create table t (a serial primary key, b text)
+NOTICE 00000 CREATE SCHEMA schema s (PL/pgSQL function f_ddl() line 1 at RAISE)
+NOTICE 00000 CREATE SEQUENCE sequence s.t_a_seq (PL/pgSQL function f_ddl() line 1 at RAISE)
+NOTICE 00000 CREATE TABLE table s.t (PL/pgSQL function f_ddl() line 1 at RAISE)
+NOTICE 00000 CREATE INDEX index s.t_pkey (PL/pgSQL function f_ddl() line 1 at RAISE)
+NOTICE 00000 ALTER SEQUENCE sequence s.t_a_seq (PL/pgSQL function f_ddl() line 1 at RAISE)
+CREATE SCHEMA
+> alter table s.t rename column b to c
+NOTICE 00000 ALTER TABLE table column s.t.c (PL/pgSQL function f_ddl() line 1 at RAISE)
+ALTER TABLE
+> create or replace view s.v as select a from s.t
+NOTICE 00000 CREATE VIEW view s.v (PL/pgSQL function f_ddl() line 1 at RAISE)
+CREATE VIEW
+> grant select on s.t to public
+NOTICE 00000 GRANT TABLE <NULL> (PL/pgSQL function f_ddl() line 1 at RAISE)
+GRANT
+> comment on table s.t is 'x'
+NOTICE 00000 COMMENT table s.t (PL/pgSQL function f_ddl() line 1 at RAISE)
+COMMENT
+> drop schema s cascade
+NOTICE 00000 drop cascades to 2 other objects
+DROP SCHEMA
+> drop event trigger e_ddl
+DROP EVENT TRIGGER
+> drop function f_ddl()
+DROP FUNCTION

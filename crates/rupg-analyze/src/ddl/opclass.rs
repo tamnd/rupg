@@ -839,13 +839,15 @@ impl Definer<'_, '_> {
                 format!("operator family \"{name}\" for access method \"{amname}\" already exists"),
             ));
         }
-        Ok(self.catalog.create_opfamily(OpFamily {
+        let family = self.catalog.create_opfamily(OpFamily {
             oid: 0,
             method: method.oid,
             name: name.to_string(),
             namespace,
             owner: self.user,
-        }))
+        });
+        self.collect(Some("CREATE OPERATOR FAMILY"), ObjRef::new(PG_OPFAMILY, family));
+        Ok(family)
     }
 
     /// `DefineOpFamily`.
@@ -987,6 +989,7 @@ impl Definer<'_, '_> {
         self.adjust_members(method, family, class, &mut operators, &mut functions);
         self.store_members(&stmt.opfamilyname, method, family, &operators, &functions, false)?;
         self.catalog.opclass_depends(class);
+        self.collect(None, ObjRef::new(PG_OPCLASS, class));
         Ok(())
     }
 

@@ -409,7 +409,8 @@ impl Definer<'_, '_> {
             template,
             options,
         };
-        self.catalog.create_ts_dictionary(new)?;
+        let dictionary = self.catalog.create_ts_dictionary(new)?;
+        self.collect(None, ObjRef::new(PG_TS_DICT, dictionary));
         Ok(())
     }
 
@@ -467,7 +468,8 @@ impl Definer<'_, '_> {
             ));
         }
         let new = TsConfig { oid: 0, name: name.to_string(), namespace, owner: self.user, parser };
-        self.catalog.create_ts_config(new, &copy)?;
+        let config = self.catalog.create_ts_config(new, &copy)?;
+        self.collect(None, ObjRef::new(PG_TS_CONFIG, config));
         Ok(())
     }
 

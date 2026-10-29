@@ -1,7 +1,7 @@
 //! `CREATE INDEX`, as `transformIndexStmt`, `DefineIndex` and `ComputeIndexAttrs` run it.
 
 use rupg_catalog::size::{empty_index_pages, new_table_tuples, typavgwidth};
-use rupg_catalog::{Catalog, Column, ConKind, NewIndex, NewIndexColumn, ObjRef, RelKind};
+use rupg_catalog::{Catalog, Column, ConKind, NewIndex, NewIndexColumn, ObjRef, PG_CLASS, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{IndexElem, IndexStmt, Node, SortByDir, SortByNulls};
 use rupg_types::oid;
@@ -353,6 +353,9 @@ impl Definer<'_, '_> {
             pages,
         };
         let (index, constraint) = self.catalog.create_index(new)?;
+        if !alter {
+            self.collect(Some("CREATE INDEX"), ObjRef::new(PG_CLASS, index));
+        }
         // `DefineIndex` builds an index of `CONCURRENTLY` on a temporary table as any other index.
         if stmt.concurrent && !self.catalog.is_temp_schema(namespace) {
             self.concurrent = Some(index);

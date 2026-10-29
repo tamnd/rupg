@@ -300,6 +300,7 @@ impl Definer<'_, '_> {
                     .map(|c| c.oid);
                 // `generateClonedIndexStmt` marks the statement as transformed, so `DefineIndex` treats it as `ALTER TABLE ... ADD`.
                 let (new, _) = self.clone_index(table, index, constraint, true)?;
+                self.collect(Some("CREATE INDEX"), ObjRef::new(PG_CLASS, new));
                 if self
                     .catalog
                     .relation(table)

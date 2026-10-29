@@ -185,6 +185,7 @@ impl Definer<'_, '_> {
             info,
         };
         let ty = self.catalog.create_range(new)?;
+        self.collect(None, ObjRef::new(PG_TYPE, ty));
         self.apply_default_acl(ObjRef::new(PG_TYPE, ty))
     }
 

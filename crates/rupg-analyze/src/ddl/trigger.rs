@@ -255,6 +255,7 @@ impl Definer<'_, '_> {
             enabled: 0,
         };
         let trigger = self.catalog.create_trigger(new, stmt.replace, &qual_refs)?;
+        self.collect(None, ObjRef::new(PG_TRIGGER, trigger));
         if code == b'p' && row {
             let children = self.partdesc(oid)?;
             for child in children {

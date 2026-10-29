@@ -248,6 +248,10 @@ impl Definer<'_, '_> {
             return Ok(());
         };
         self.catalog.set_owned_by(sequence, None, DepKind::Internal);
-        self.perform(&[ObjRef::new(PG_CLASS, sequence)], false)
+        // `PERFORM_DELETION_INTERNAL`: the event triggers of `sql_drop` do not see the sequence.
+        let kept = self.dropped.len();
+        self.perform(&[ObjRef::new(PG_CLASS, sequence)], false)?;
+        self.dropped.truncate(kept);
+        Ok(())
     }
 }

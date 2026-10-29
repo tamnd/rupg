@@ -1,6 +1,6 @@
 //! The firing of the event triggers `ddl_command_start`, `ddl_command_end`, `sql_drop` and `login`, as `EventTriggerDDLCommandStart`, `EventTriggerDDLCommandEnd`, `EventTriggerSQLDrop` and `EventTriggerOnLogin` of `event_trigger.c` run them.
 
-use rupg_analyze::Dropped;
+use rupg_analyze::{Collected, Dropped};
 use rupg_common::{Error, SqlState};
 use rupg_sql::nodes::Node;
 use rupg_types::Value;
@@ -34,6 +34,10 @@ pub(super) struct Frame {
     dropped: Vec<Vec<Value>>,
     /// True while the event triggers of `sql_drop` run, as `in_sql_drop` gives.
     in_sql_drop: bool,
+    /// The commands that the command did, as `currentCommand` and `commandList` keep them, with the tag of each command.
+    commands: Vec<Collected>,
+    /// The rows of `pg_event_trigger_ddl_commands` while the event triggers of `ddl_command_end` run, or `None`.
+    ddl: Option<Vec<Vec<Value>>>,
 }
 
 impl Frame {
@@ -164,18 +168,79 @@ impl Connection {
         }
     }
 
+    /// `EventTriggerCollectSimpleCommand` and `EventTriggerCollectGrant`: keeps the commands `commands` of the statement of the tag `tag` that runs. A command without a tag gets the tag of the statement.
+    pub(super) fn keep_commands(&self, commands: &[Collected], tag: CommandTag) {
+        let mut frames = self.event_frames.borrow_mut();
+        let Some(frame) = frames.last_mut().filter(|f| !f.in_sql_drop && f.ddl.is_none()) else {
+            return;
+        };
+        frame.commands.extend(commands.iter().map(|command| match *command {
+            Collected::Object { tag: None, object } => {
+                Collected::Object { tag: Some(tag.name()), object }
+            }
+            other => other,
+        }));
+    }
+
+    /// `EventTriggerDDLCommandEnd`: the event triggers of `ddl_command_end` for the command of `frame`. `pg_event_trigger_ddl_commands` gives the commands of the frame while they run, with the identities that the catalog gives then.
+    pub(super) fn fire_ddl_end(
+        &self,
+        frame: Frame,
+        tag: CommandTag,
+        notices: &mut Vec<Notice>,
+    ) -> Result<(), Error> {
+        if self.armed_event_triggers("ddl_command_end", tag).is_empty() {
+            return Ok(());
+        }
+        let rows = {
+            let reader = self.reader();
+            (0_i64..)
+                .zip(&frame.commands)
+                .filter_map(|(at, command)| match *command {
+                    Collected::Object { tag, object } => {
+                        rupg_func::ddl_command(tag.unwrap_or_default(), object, at, &reader)
+                    }
+                    Collected::Grant { grant, kind } => Some(vec![
+                        Value::Null,
+                        Value::Null,
+                        Value::Null,
+                        Value::Text(if grant { "GRANT" } else { "REVOKE" }.into()),
+                        Value::Text(kind.into()),
+                        Value::Null,
+                        Value::Null,
+                        Value::Bool(false),
+                        Value::Int8(at),
+                    ]),
+                })
+                .collect()
+        };
+        self.event_frames.borrow_mut().push(Frame { ddl: Some(rows), ..Frame::default() });
+        let result = self.fire_event_triggers("ddl_command_end", tag, notices);
+        self.event_frames.borrow_mut().pop();
+        result
+    }
+
+    /// The rows of `pg_event_trigger_ddl_commands`, or `None` outside of an event trigger of `ddl_command_end`.
+    pub(crate) fn ddl_commands(&self) -> Option<Vec<Vec<Value>>> {
+        self.event_frames.borrow().last()?.ddl.clone()
+    }
+
     /// `EventTriggerSQLDrop`: the event triggers of `sql_drop` for the objects that the command of `frame` dropped. `pg_event_trigger_dropped_objects` gives the objects while they run.
     pub(super) fn fire_sql_drop(
         &self,
-        mut frame: Frame,
+        frame: &mut Frame,
         tag: CommandTag,
         notices: &mut Vec<Notice>,
     ) -> Result<(), Error> {
         if frame.dropped.is_empty() {
             return Ok(());
         }
-        frame.in_sql_drop = true;
-        self.event_frames.borrow_mut().push(frame);
+        let dropped = Frame {
+            in_sql_drop: true,
+            dropped: std::mem::take(&mut frame.dropped),
+            ..Frame::default()
+        };
+        self.event_frames.borrow_mut().push(dropped);
         let result = self.fire_event_triggers("sql_drop", tag, notices);
         self.event_frames.borrow_mut().pop();
         result

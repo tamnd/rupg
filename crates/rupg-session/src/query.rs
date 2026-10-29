@@ -1089,6 +1089,10 @@ impl rupg_func::Session for Reader<'_> {
         self.conn?.dropped_objects()
     }
 
+    fn ddl_commands(&self) -> Option<Vec<Vec<Value>>> {
+        self.conn?.ddl_commands()
+    }
+
     fn transaction_id(&self, assign: bool) -> Option<u64> {
         self.conn?.transaction_id(assign).map(u64::from)
     }

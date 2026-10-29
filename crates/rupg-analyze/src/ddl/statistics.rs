@@ -287,7 +287,8 @@ impl Definer<'_, '_> {
             target: None,
             exprs: text,
         };
-        self.catalog.create_stat_ext(new, &refs)?;
+        let stat = self.catalog.create_stat_ext(new, &refs)?;
+        self.collect(None, ObjRef::new(PG_STATISTIC_EXT, stat));
         Ok(())
     }
 
@@ -351,6 +352,7 @@ impl Definer<'_, '_> {
             exprs: text,
         };
         let oid = self.catalog.create_stat_ext(new, &refs)?;
+        self.collect(Some("CREATE STATISTICS"), ObjRef::new(PG_STATISTIC_EXT, oid));
         if comments
             && let Some(text) =
                 self.catalog.description(ObjRef::new(PG_STATISTIC_EXT, stat)).map(str::to_string)

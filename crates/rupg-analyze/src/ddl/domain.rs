@@ -185,6 +185,7 @@ impl Definer<'_, '_> {
             domain: Domain { base, typmod, collation, default, not_null: false },
         };
         let domain = self.catalog.create_domain(new, &default_refs)?;
+        self.collect(None, ObjRef::new(PG_TYPE, domain));
         self.apply_default_acl(ObjRef::new(PG_TYPE, domain))?;
         for con in &constraints {
             match con.contype {

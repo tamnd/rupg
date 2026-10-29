@@ -104,6 +104,7 @@ pub fn output_supported(ty: u32) -> bool {
             | oid::VOID
             | oid::TRIGGER
             | oid::EVENT_TRIGGER
+            | oid::PG_DDL_COMMAND
             | oid::MONEY
             | oid::TID
             | oid::XID8
@@ -223,12 +224,20 @@ pub(crate) fn datetime_input<'a>(
     }
 }
 
+/// `pg_ddl_command_out` and `pg_ddl_command_send`: a value of `pg_ddl_command` has no text and no binary form.
+fn ddl_command_out() -> Error {
+    Error::new(SqlState::FEATURE_NOT_SUPPORTED, "cannot display a value of type pg_ddl_command")
+}
+
 /// The text output function of the type.
 ///
 /// # Errors
 ///
 /// `0A000` for a type that has no output function here, and the error of the output function, such as a timestamp out of range.
 pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) -> Result<()> {
+    if ty == oid::PG_DDL_COMMAND {
+        return Err(ddl_command_out());
+    }
     if let Value::AnyArray(value) = value {
         out.extend_from_slice(value.text.as_bytes());
         return Ok(());
@@ -1242,6 +1251,9 @@ pub(crate) fn send_kernel(call: &Call<'_>, args: &[Value]) -> Result<Value> {
 ///
 /// `0A000` for a type that has no send function here.
 pub fn send(ty: u32, value: &Value, out: &mut Vec<u8>) -> Result<()> {
+    if ty == oid::PG_DDL_COMMAND {
+        return Err(ddl_command_out());
+    }
     let ty = io_type(ty);
     if let Some((elem, _)) = array_of(ty) {
         let Value::Array(array) = value else { return Err(bad_value()) };

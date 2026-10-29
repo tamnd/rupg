@@ -55,6 +55,7 @@ pub fn set_kernel(func: u32) -> Option<SetKernel> {
         "pg_partition_ancestors" => crate::catinfo::partition_ancestor_rows,
         "pg_get_keywords" => keywords,
         "pg_event_trigger_dropped_objects" => dropped_objects,
+        "pg_event_trigger_ddl_commands" => ddl_commands,
         "pg_get_wait_events" => wait_events,
         "show_all_settings" => all_settings,
         "pg_prepared_statement" => prepared_statements,
@@ -208,6 +209,16 @@ fn dropped_objects(call: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
         Error::new(
             SqlState::E_R_I_E_EVENT_TRIGGER_PROTOCOL_VIOLATED,
             "pg_event_trigger_dropped_objects() can only be called in a sql_drop event trigger function",
+        )
+    })
+}
+
+/// `pg_event_trigger_ddl_commands`: the commands that the command of the event trigger of `ddl_command_end` that runs did.
+fn ddl_commands(call: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
+    call.session.ddl_commands().ok_or_else(|| {
+        Error::new(
+            SqlState::E_R_I_E_EVENT_TRIGGER_PROTOCOL_VIOLATED,
+            "pg_event_trigger_ddl_commands() can only be called in an event trigger function",
         )
     })
 }

@@ -291,6 +291,7 @@ impl Definer<'_, '_> {
             }
         }
         self.catalog.define_base_type(ty, base, element_type)?;
+        self.collect(None, ObjRef::new(PG_TYPE, ty));
         self.apply_default_acl(ObjRef::new(PG_TYPE, ty))
     }
 
