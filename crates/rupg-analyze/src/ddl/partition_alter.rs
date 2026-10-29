@@ -89,7 +89,8 @@ impl Definer<'_, '_> {
                 let refs = references(self.catalog, child.oid, &[&expr])?;
                 self.catalog.add_default(child.oid, own, text.clone(), &refs)?;
             }
-            self.added.push(Fill { table: child.oid, column: own, default });
+            let identity = self.identity_of(child.oid, own);
+            self.added.push(Fill { table: child.oid, column: own, default, identity });
             if let Some(name) = &not_null {
                 let used = self.catalog.constraints_of(child.oid).any(|c| c.name == *name);
                 let given = (!used).then_some(name.as_str());

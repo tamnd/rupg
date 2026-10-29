@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `ALTER TABLE ... ADD COLUMN ... NOT NULL, ALTER COLUMN ... ADD GENERATED AS IDENTITY` gives the rows nulls and fails on a table with rows, as in PostgreSQL (#1114).
 - `DISTINCT` sorts its keys in the order of the rows of the input when that costs less, and `enable_distinct_reordering` turns this off, as in PostgreSQL (#1113).
 - A `CHECK` constraint can read `tableoid`, `ADD COLUMN` gives an error for a not-null constraint name that another constraint of the table has, and `ADD IDENTITY` gives an error for a column with a `NOT VALID` not-null constraint, as in PostgreSQL (#1112).
 - The view action in pg_rewrite now has functions in FROM, VALUES, ARRAY, DISTINCT ON and references to WITH queries from inner queries in the form of PostgreSQL 19 (#916) (#1111).
