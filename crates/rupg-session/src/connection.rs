@@ -6680,6 +6680,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/deferred_role.test")));
     }
 
+    /// The messages of the functions of the condition `WHEN` of a trigger go to the client, as `TriggerEnabled` runs the condition in the executor of the write.
+    #[test]
+    fn trigger_when_notice() {
+        big_stack(|| script(include_str!("connection/trigger_when_notice.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
