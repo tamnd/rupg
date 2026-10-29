@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `TRUNCATE ... CASCADE` of a partition empties all the partitions of a partitioned table that refers to it, as `heap_truncate_find_FKs` does (#1137).
 - The errors of a partition key expression have no place in the query text, and a partition key expression of a pseudo-type is an error, as in PostgreSQL (#1136).
 - `ON CONFLICT` with a `WHERE` clause takes a partial unique index whose predicate the clause implies, as in PostgreSQL (#1135).
 - `pg_sequence_parameters`, and `nextval` and `setval` on a temporary sequence in a read-only transaction (#1133).
