@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.4.8 (2026-10-29)
+
 ### Added
 
 - `ALTER TABLE ... ADD COLUMN ... NOT NULL, ALTER COLUMN ... ADD GENERATED AS IDENTITY` gives the rows nulls and fails on a table with rows, as in PostgreSQL (#1114).
