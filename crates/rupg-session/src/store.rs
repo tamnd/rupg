@@ -14,8 +14,17 @@ use rupg_platform::Tasks;
 use crate::advisory::Locks;
 use crate::auth::AuthFiles;
 use crate::connection::Pending;
+use crate::guc::Source;
 use crate::heap::Heap;
 use crate::notify::Listeners;
+
+/// `BOOTSTRAP_SUPERUSERID`.
+const BOOTSTRAP_SUPERUSER: u32 = 10;
+
+/// True when the role exists. The bootstrap superuser always exists.
+fn role_exists(roles: &Roles, role: u32) -> bool {
+    role == BOOTSTRAP_SUPERUSER || roles.name(role).is_some()
+}
 
 /// How long a session waits for the lock before it looks at its cancel flag again.
 const WAIT_SLICE: Duration = Duration::from_millis(50);
@@ -72,6 +81,8 @@ struct State {
     tablespaces: Arc<[Tablespace]>,
     /// The database whose lock each waiting session waits for, by the process ID of the session.
     waiting: HashMap<i32, u32>,
+    /// The rows of `pg_db_role_setting` by the OID of the database and the OID of the role, 0 for all: the settings of `ALTER DATABASE ... SET` and `ALTER ROLE ... SET`, each as `name=value`. A row of a database or a role that no longer exists has no effect.
+    settings: BTreeMap<(u32, u32), Vec<String>>,
 }
 
 /// A database: its row of `pg_database`, the catalog of its last commit and its lock.
@@ -81,8 +92,6 @@ struct Db {
     committed: Arc<Catalog>,
     /// The process ID of the session whose transaction holds the lock of the database, or `None` when the lock is free.
     locked: Option<i32>,
-    /// The `setconfig` of the row of `pg_db_role_setting` for the database and every role: the settings of `ALTER DATABASE ... SET`, each as `name=value`.
-    settings: Vec<String>,
 }
 
 impl Default for State {
@@ -92,12 +101,7 @@ impl Default for State {
         let next_oid = catalog.next_oid();
         let databases = Database::initdb()
             .into_iter()
-            .map(|row| {
-                (
-                    row.oid,
-                    Db { row, committed: Arc::clone(&catalog), locked: None, settings: Vec::new() },
-                )
-            })
+            .map(|row| (row.oid, Db { row, committed: Arc::clone(&catalog), locked: None }))
             .collect();
         State {
             databases,
@@ -105,6 +109,7 @@ impl Default for State {
             roles: Arc::default(),
             tablespaces: Arc::from(Vec::new()),
             waiting: HashMap::new(),
+            settings: BTreeMap::new(),
         }
     }
 }
@@ -292,30 +297,45 @@ impl Store {
         }
     }
 
-    /// The settings of `ALTER DATABASE ... SET` for a database, each as `name=value`, which `process_settings` applies at the start of a session.
-    pub fn database_settings(&self, database: u32) -> Vec<String> {
-        self.state().databases.get(&database).map(|db| db.settings.clone()).unwrap_or_default()
+    /// The stored settings for a session of the database as the user, each as `name=value` with its source, which `process_settings` applies at the start of the session. A setting comes after the settings of a lower source, so it takes their place.
+    pub fn session_settings(&self, database: u32, user: &str) -> Vec<(Source, String)> {
+        let state = self.state();
+        let role = state.roles.oid(user).unwrap_or(BOOTSTRAP_SUPERUSER);
+        [
+            ((0, 0), Source::Global),
+            ((database, 0), Source::Database),
+            ((0, role), Source::User),
+            ((database, role), Source::DatabaseUser),
+        ]
+        .into_iter()
+        .filter_map(|(key, source)| Some((state.settings.get(&key)?, source)))
+        .flat_map(|(items, source)| items.iter().map(move |item| (source, item.clone())))
+        .collect()
     }
 
-    /// The rows of `pg_db_role_setting`: one row for each database with settings, with the role 0, in the order of the OIDs of the databases.
+    /// The rows of `pg_db_role_setting` of the databases and the roles that exist, in the order of the OIDs of the databases and of the roles.
     pub(crate) fn db_role_settings(&self) -> Vec<(u32, u32, Vec<String>)> {
-        self.state()
-            .databases
+        let state = self.state();
+        state
+            .settings
             .iter()
-            .filter(|(_, db)| !db.settings.is_empty())
-            .map(|(oid, db)| (*oid, 0, db.settings.clone()))
+            .filter(|((database, role), items)| {
+                !items.is_empty()
+                    && (*database == 0 || state.databases.contains_key(database))
+                    && (*role == 0 || role_exists(&state.roles, *role))
+            })
+            .map(|(&(database, role), items)| (database, role, items.clone()))
             .collect()
     }
 
-    /// Changes the settings of `ALTER DATABASE ... SET` for a database. The change does not wait for the end of the transaction.
-    pub(crate) fn change_database_settings(
+    /// Changes the row of `pg_db_role_setting` for a database and a role, 0 for all, as `AlterSetting` does. The change does not wait for the end of the transaction.
+    pub(crate) fn change_settings(
         &self,
         database: u32,
+        role: u32,
         change: impl FnOnce(&mut Vec<String>),
     ) {
-        if let Some(db) = self.state().databases.get_mut(&database) {
-            change(&mut db.settings);
-        }
+        change(self.state().settings.entry((database, role)).or_default());
     }
 
     /// Takes the lock of a database for a transaction of the session `pid`, with a copy of the catalog of the last commit. The session waits while another transaction holds the lock, and `report` tells the start and the end of the wait. A cancel of the session stops the wait with `57014`.
@@ -443,7 +463,7 @@ impl Store {
         Arc::make_mut(&mut committed).advance_oid(next);
         state.next_oid = next;
         let oid = row.oid;
-        state.databases.insert(oid, Db { row, committed, locked: None, settings: Vec::new() });
+        state.databases.insert(oid, Db { row, committed, locked: None });
         Ok(oid)
     }
 
@@ -467,7 +487,11 @@ impl Store {
                 others,
             ));
         }
-        self.state().databases.remove(&row.oid);
+        let mut state = self.state();
+        state.databases.remove(&row.oid);
+        // `DropSetting`.
+        state.settings.retain(|&(database, _), _| database != row.oid);
+        drop(state);
         self.heap.drop_tables(row.oid, |_| false);
         Ok(())
     }

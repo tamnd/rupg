@@ -29,7 +29,7 @@ use rupg_wire::{
 };
 
 use crate::block::{Block, Ending, Transaction};
-use crate::guc::{Action, Origin, Settings};
+use crate::guc::{Action, Origin, Settings, Source};
 use crate::heap::{Change, Changed, Heap, Recheck, Snapshot, Storage, View, tid_text};
 use crate::query::{self, Column, Reader, Row, Transition};
 use crate::store::{Lease, Store};
@@ -274,7 +274,7 @@ pub fn split_options(options: &str) -> Result<Vec<(String, String)>, Error> {
     Ok(settings)
 }
 
-/// The settings of a new session: the base settings, the values that the server sets for the session, the settings of `ALTER DATABASE ... SET` in `database`, then the `options` of the startup packet and its other parameters, as `process_startup_options` applies them.
+/// The settings of a new session: the base settings, the values that the server sets for the session, the settings of `ALTER DATABASE ... SET` and `ALTER ROLE ... SET` in `stored`, then the `options` of the startup packet and its other parameters, as `process_startup_options` applies them.
 ///
 /// # Errors
 ///
@@ -282,16 +282,16 @@ pub fn split_options(options: &str) -> Result<Vec<(String, String)>, Error> {
 pub fn session_settings(
     base: &Settings,
     start: &Start,
-    database: &[String],
+    stored: &[(Source, String)],
 ) -> Result<Settings, Error> {
     let mut settings = base.clone();
     settings.set_superuser(start.superuser);
     settings.set_internal("is_superuser", if start.superuser { "on" } else { "off" })?;
     settings.set_internal("session_authorization", &start.user)?;
     // `process_settings`: a stored setting that is no longer valid gives a warning in PostgreSQL, and the session starts without it.
-    for item in database {
+    for (source, item) in stored {
         if let Some((name, value)) = item.split_once('=') {
-            drop(settings.set_database(name, value));
+            drop(settings.set_database(name, value, *source));
         }
     }
     let options = match &start.options {
@@ -6785,6 +6785,47 @@ mod tests {
         big_stack(|| script(include_str!("connection/lock_view_loop.test")));
     }
 
+    /// `ALTER ROLE ... SET`: the checks of the role, of the database and of the values, the permissions, `RESET` and `RESET ALL`, and the rows of `pg_db_role_setting`. `connection/alter_role_set.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn alter_role_set() {
+        big_stack(|| script(include_str!("connection/alter_role_set.test")));
+    }
+
+    /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.
+    #[test]
+    fn role_settings_at_start() {
+        big_stack(|| {
+            let store = Arc::new(Store::new());
+            let (mut a, _) = connect_to(&store, 11);
+            for sql in [
+                "CREATE ROLE regress_r LOGIN",
+                "ALTER ROLE ALL SET statement_timeout = '7s'",
+                "ALTER ROLE ALL SET work_mem = '1MB'",
+                "ALTER DATABASE postgres SET work_mem = '2MB'",
+                "ALTER ROLE regress_r SET work_mem = '3MB'",
+                "ALTER ROLE regress_r SET lock_timeout = '4s'",
+                "ALTER ROLE regress_r IN DATABASE postgres SET work_mem = '5MB'",
+            ] {
+                line_of(&mut a, sql, sql.split(' ').next().unwrap());
+            }
+            let start = Start { user: "regress_r".into(), superuser: false, ..start(None, &[]) };
+            let stored = store.session_settings(store.admit("postgres").unwrap(), &start.user);
+            let settings = session_settings(&base_settings(&[]).unwrap(), &start, &stored).unwrap();
+            let mut b = Connection::new(&start, settings, PROTOCOL_3_0);
+            b.set_store(Arc::clone(&store));
+            let mut out = OutBuf::new();
+            b.greet(&CancelKey::new(12, PROTOCOL_3_0, [7; CANCEL_KEY_LEN]), &mut out);
+            send(&mut b, &[]);
+            let sources = "SELECT string_agg(name || '=' || setting || ' ' || source, ', ' ORDER BY name) FROM pg_settings WHERE name IN ('lock_timeout', 'statement_timeout', 'work_mem')";
+            assert_eq!(
+                line_of(&mut b, sources, "row"),
+                "row lock_timeout=4000 user, statement_timeout=7000 global, work_mem=5120 database user"
+            );
+            let mut c = connect_database(&store, 13, "postgres");
+            assert_eq!(line_of(&mut c, "SHOW work_mem", "row"), "row 2MB");
+        });
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
@@ -6838,7 +6879,7 @@ mod tests {
     /// A session of a database other than `postgres`, with the settings of `ALTER DATABASE ... SET` for the database.
     fn connect_database(store: &Arc<Store>, pid: i32, database: &str) -> Connection {
         let start = Start { database: database.into(), ..start(None, &[]) };
-        let stored = store.database_settings(store.admit(database).unwrap());
+        let stored = store.session_settings(store.admit(database).unwrap(), &start.user);
         let settings = session_settings(&base_settings(&[]).unwrap(), &start, &stored).unwrap();
         let mut connection = Connection::new(&start, settings, PROTOCOL_3_0);
         connection.set_store(Arc::clone(store));

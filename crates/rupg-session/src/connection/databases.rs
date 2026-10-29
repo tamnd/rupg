@@ -9,7 +9,7 @@ use rupg_pgcatalog::roles::Roles;
 use rupg_sql::Severity;
 use rupg_sql::nodes::{
     AlterDatabaseSetStmt, AlterDatabaseStmt, AlterOwnerStmt, CreatedbStmt, DefElem, DropdbStmt,
-    Node, RenameStmt, VariableSetKind,
+    Node, RenameStmt, VariableSetKind, VariableSetStmt,
 };
 use rupg_wire::CommandTag;
 
@@ -983,6 +983,17 @@ impl Connection {
         let Some(set) = &stmt.setstmt else {
             return Err(Error::internal("ALTER DATABASE SET with no setting"));
         };
+        self.alter_setting(row.oid, 0, set)?;
+        Ok(Done::Tag(CommandTag::AlterDatabase))
+    }
+
+    /// `AlterSetting`: the change of the row of `pg_db_role_setting` for a database and a role, 0 for all.
+    pub(super) fn alter_setting(
+        &mut self,
+        database: u32,
+        role: u32,
+        set: &VariableSetStmt,
+    ) -> Result<(), Error> {
         let parameter = set.name.as_deref().unwrap_or_default();
         // `ExtractSetVariableArgs`.
         let value = match set.kind {
@@ -991,12 +1002,12 @@ impl Connection {
             _ => None,
         };
         if set.kind == VariableSetKind::VAR_RESET_ALL {
-            self.store.change_database_settings(row.oid, Vec::clear);
-            return Ok(Done::Tag(CommandTag::AlterDatabase));
+            self.store.change_settings(database, role, Vec::clear);
+            return Ok(());
         }
         let stored = self.settings.borrow().check_stored(parameter, value.as_deref())?;
         let prefix = format!("{stored}=");
-        self.store.change_database_settings(row.oid, |settings| {
+        self.store.change_settings(database, role, |settings| {
             let at = settings.iter().position(|item| item.starts_with(&prefix));
             match (value, at) {
                 (Some(value), Some(at)) => settings[at] = format!("{prefix}{value}"),
@@ -1007,7 +1018,7 @@ impl Connection {
                 (None, None) => {}
             }
         });
-        Ok(Done::Tag(CommandTag::AlterDatabase))
+        Ok(())
     }
 }
 

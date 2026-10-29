@@ -1,0 +1,108 @@
+!details
+> create database regress_rsdb
+CREATE DATABASE
+> create role regress_rs1
+CREATE ROLE
+> create role regress_rs2 login
+CREATE ROLE
+> create role regress_rs_su superuser
+CREATE ROLE
+> alter role regress_rs1 set search_path = public, pg_catalog
+ALTER ROLE
+> alter role regress_rs1 set work_mem = '2MB'
+ALTER ROLE
+> alter role regress_rs1 set work_mem = '3MB'
+ALTER ROLE
+> alter user regress_rs2 in database regress_rsdb set enable_seqscan = off
+ALTER ROLE
+> alter role regress_rs2 set nosuch_param = 1
+ERROR 42704 unrecognized configuration parameter "nosuch_param"
+> alter role regress_rs2 set foo.bar = 'baz'
+ALTER ROLE
+> alter role regress_rs2 set work_mem = 'x'
+ERROR 22023 invalid value for parameter "work_mem": "x"
+> alter role nosuch set work_mem = '1MB'
+ERROR 42704 role "nosuch" does not exist
+> alter role public set work_mem = '1MB'
+ERROR 42704 role "public" does not exist
+> alter role regress_rs1 in database nosuch set work_mem = '1MB'
+ERROR 3D000 database "nosuch" does not exist
+> alter role pg_signal_backend set work_mem = '1MB'
+ERROR 42939 role name "pg_signal_backend" is reserved
+DETAIL Cannot alter reserved roles.
+> alter role all set statement_timeout = '7s'
+ALTER ROLE
+> alter role all in database regress_rsdb set lock_timeout = '5s'
+ALTER ROLE
+> alter role current_user set datestyle = 'iso, mdy'
+ALTER ROLE
+> select d.datname, r.rolname, s.setconfig from pg_db_role_setting s left join pg_database d on d.oid = s.setdatabase left join pg_roles r on r.oid = s.setrole where r.rolname like 'regress_rs%' or d.datname = 'regress_rsdb' or (s.setdatabase = 0 and s.setrole = 0) order by 1 nulls first, 2 nulls first
+fields datname@pg_database.2:19:64:-1,rolname@pg_roles.1:19:64:-1,setconfig@pg_db_role_setting.3:1009:-1:-1
+row NULL,NULL,{statement_timeout=7s}
+row NULL,regress_rs1,{"search_path=public, pg_catalog",work_mem=3MB}
+row NULL,regress_rs2,{foo.bar=baz}
+row regress_rsdb,NULL,{lock_timeout=5s}
+row regress_rsdb,regress_rs2,{enable_seqscan=off}
+SELECT 5
+> alter role regress_rs1 reset work_mem
+ALTER ROLE
+> alter role regress_rs1 reset nosuch_param
+ERROR 42704 unrecognized configuration parameter "nosuch_param"
+> alter role regress_rs2 reset foo.bar
+ALTER ROLE
+> alter role regress_rs2 reset all
+ALTER ROLE
+> alter role all reset all
+ALTER ROLE
+> alter role all in database regress_rsdb reset lock_timeout
+ALTER ROLE
+> select d.datname, r.rolname, s.setconfig from pg_db_role_setting s left join pg_database d on d.oid = s.setdatabase left join pg_roles r on r.oid = s.setrole where r.rolname like 'regress_rs%' or d.datname = 'regress_rsdb' or (s.setdatabase = 0 and s.setrole = 0) order by 1 nulls first, 2 nulls first
+fields datname@pg_database.2:19:64:-1,rolname@pg_roles.1:19:64:-1,setconfig@pg_db_role_setting.3:1009:-1:-1
+row NULL,regress_rs1,{"search_path=public, pg_catalog"}
+row regress_rsdb,regress_rs2,{enable_seqscan=off}
+SELECT 2
+> set role regress_rs2
+SET
+is_superuser=off
+> alter role regress_rs2 set work_mem = '1MB'
+ALTER ROLE
+> alter role regress_rs1 set work_mem = '1MB'
+ERROR 42501 permission denied to alter role
+DETAIL Only roles with the CREATEROLE attribute and the ADMIN option on role "regress_rs1" may alter this role.
+> alter role regress_rs_su set work_mem = '1MB'
+ERROR 42501 permission denied to alter role
+DETAIL Only roles with the SUPERUSER attribute may alter roles with the SUPERUSER attribute.
+> alter role all set work_mem = '1MB'
+ERROR 42501 permission denied to alter setting
+DETAIL Only roles with the SUPERUSER attribute may alter settings globally.
+> alter role all in database regress_rsdb set work_mem = '1MB'
+ERROR 42501 must be owner of database regress_rsdb
+> alter role regress_rs2 set lc_messages = 'C'
+ERROR 42501 permission denied to set parameter "lc_messages"
+> reset role
+RESET
+is_superuser=on
+> select r.rolname, s.setconfig from pg_db_role_setting s join pg_roles r on r.oid = s.setrole where r.rolname like 'regress_rs%' order by 1, s.setconfig::text
+fields rolname@pg_roles.1:19:64:-1,setconfig@pg_db_role_setting.3:1009:-1:-1
+row regress_rs1,{"search_path=public, pg_catalog"}
+row regress_rs2,{enable_seqscan=off}
+row regress_rs2,{work_mem=1MB}
+SELECT 3
+> drop role regress_rs1
+DROP ROLE
+> select count(*) from pg_db_role_setting s where not exists (select from pg_roles r where r.oid = s.setrole) and s.setrole <> 0
+fields count:20:8:-1
+row 0
+SELECT 1
+> alter role current_user reset all
+ALTER ROLE
+> drop role regress_rs2
+DROP ROLE
+> drop role regress_rs_su
+DROP ROLE
+> select count(*) from pg_db_role_setting s where s.setrole = 0 and s.setdatabase = 0
+fields count:20:8:-1
+row 0
+SELECT 1
+> drop database regress_rsdb
+DROP DATABASE

@@ -8,8 +8,9 @@ use rupg_func::Session;
 use rupg_pgcatalog::roles::{Attrs, Member, PG_AUTHID, Role, Roles};
 use rupg_sql::Severity;
 use rupg_sql::nodes::{
-    AlterRoleStmt, CommentStmt, CreateRoleStmt, DefElem, DropBehavior, DropRoleStmt, GrantRoleStmt,
-    Node, ObjectType, RenameStmt, RoleSpec, RoleSpecType, RoleStmtType,
+    AlterRoleSetStmt, AlterRoleStmt, CommentStmt, CreateRoleStmt, DefElem, DropBehavior,
+    DropRoleStmt, GrantRoleStmt, Node, ObjectType, RenameStmt, RoleSpec, RoleSpecType,
+    RoleStmtType,
 };
 use rupg_types::{Value, oid};
 use rupg_wire::{
@@ -44,6 +45,7 @@ pub(crate) fn is_role_statement(node: &Node) -> bool {
     match node {
         Node::CreateRoleStmt(_)
         | Node::AlterRoleStmt(_)
+        | Node::AlterRoleSetStmt(_)
         | Node::DropRoleStmt(_)
         | Node::GrantRoleStmt(_) => true,
         Node::RenameStmt(stmt) => stmt.renameType == ObjectType::OBJECT_ROLE,
@@ -385,6 +387,10 @@ impl Connection {
                 self.alter_role(&mut work, stmt, notices)?;
                 CommandTag::AlterRole
             }
+            Node::AlterRoleSetStmt(stmt) => {
+                self.alter_role_set(&work, stmt)?;
+                CommandTag::AlterRole
+            }
             Node::DropRoleStmt(stmt) => {
                 self.drop_role(&mut work, stmt, notices)?;
                 CommandTag::DropRole
@@ -657,6 +663,64 @@ impl Connection {
             self.add_members(work, current, name, oid, &admins, None, admin, notices)?;
         }
         Ok(())
+    }
+
+    /// `AlterRoleSet`: the checks of the role and of the database, then `AlterSetting`. With no role and no database the setting is for all the sessions.
+    fn alter_role_set(&mut self, work: &Roles, stmt: &AlterRoleSetStmt) -> Result<(), Error> {
+        let current = self.current_role();
+        let mut roleid = 0;
+        if let Some(spec) = stmt.role.as_deref() {
+            if spec.roletype == RoleSpecType::ROLESPEC_CSTRING {
+                let name = spec.rolename.as_deref().unwrap_or_default();
+                if reserved(name) {
+                    return Err(reserved_error(name).with_detail("Cannot alter reserved roles."));
+                }
+            }
+            roleid = self.spec_oid(work, spec)?;
+            if work.superuser(roleid) {
+                if !work.superuser(current) {
+                    return Err(denied(
+                        "permission denied to alter role",
+                        "Only roles with the SUPERUSER attribute may alter roles with the SUPERUSER attribute.".to_string(),
+                    ));
+                }
+            } else if (!self.createrole(work) || !is_admin_of_role(work, current, roleid))
+                && roleid != current
+            {
+                return Err(denied(
+                    "permission denied to alter role",
+                    format!(
+                        "Only roles with the CREATEROLE attribute and the ADMIN option on role \"{}\" may alter this role.",
+                        role_name(work, roleid)
+                    ),
+                ));
+            }
+        }
+        let mut databaseid = 0;
+        if let Some(name) = stmt.database.as_deref() {
+            let Some(row) = self.database_row(name) else {
+                return Err(Error::new(
+                    SqlState::UNDEFINED_DATABASE,
+                    format!("database \"{name}\" does not exist"),
+                ));
+            };
+            if stmt.role.is_none() && !work.superuser(current) && row.owner != current {
+                return Err(Error::new(
+                    SqlState::INSUFFICIENT_PRIVILEGE,
+                    format!("must be owner of database {name}"),
+                ));
+            }
+            databaseid = row.oid;
+        } else if stmt.role.is_none() && !work.superuser(current) {
+            return Err(denied(
+                "permission denied to alter setting",
+                "Only roles with the SUPERUSER attribute may alter settings globally.".to_string(),
+            ));
+        }
+        let Some(set) = stmt.setstmt.as_deref() else {
+            return Err(Error::internal("ALTER ROLE SET with no setting"));
+        };
+        self.alter_setting(databaseid, roleid, set)
     }
 
     /// `AlterRole`.

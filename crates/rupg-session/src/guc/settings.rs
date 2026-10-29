@@ -24,8 +24,14 @@ pub enum Source {
     File,
     /// A value of the command line of the server.
     Argument,
+    /// A value that `ALTER ROLE ALL SET` stored for all the databases and all the roles.
+    Global,
     /// A value that `ALTER DATABASE ... SET` stored for the database of the session.
     Database,
+    /// A value that `ALTER ROLE ... SET` stored for the user of the session.
+    User,
+    /// A value that `ALTER ROLE ... IN DATABASE ... SET` stored for the user and the database of the session.
+    DatabaseUser,
     /// A value of the startup packet.
     Client,
     /// A value that the server sets over the others at start, such as `config_file`.
@@ -42,7 +48,10 @@ impl Source {
             Source::Default => "default",
             Source::File => "configuration file",
             Source::Argument => "command line",
+            Source::Global => "global",
             Source::Database => "database",
+            Source::User => "user",
+            Source::DatabaseUser => "database user",
             Source::Client => "client",
             Source::Override => "override",
             Source::Session => "session",
@@ -518,17 +527,16 @@ impl Settings {
         Ok(())
     }
 
-    /// A value that `ALTER DATABASE ... SET` stored for the database of the session, as `ApplySetting` sets it with `PGC_S_DATABASE` at the start of the session. It comes before the values of the client. A parameter that a statement cannot set is not set.
+    /// A value that `ALTER DATABASE ... SET` or `ALTER ROLE ... SET` stored for the session, as `ApplySetting` sets it with the source of the row of `pg_db_role_setting` at the start of the session. It comes before the values of the client. A parameter that a statement cannot set is not set.
     ///
     /// # Errors
     ///
     /// A name that is not a parameter and not a valid placeholder name, a parameter that cannot change after the start of the session, or a value that the parameter does not take.
-    pub fn set_database(&mut self, name: &str, text: &str) -> Result<(), Error> {
+    pub fn set_database(&mut self, name: &str, text: &str, source: Source) -> Result<(), Error> {
         let Some(parameter) = find(name) else {
             placeholder_name(name)?;
             let key = name.to_ascii_lowercase();
-            let value =
-                Value { setting: Setting::String(text.to_owned()), source: Source::Database };
+            let value = Value { setting: Setting::String(text.to_owned()), source };
             let slot = self.slot(&key, None, name);
             slot.current = value.clone();
             slot.reset = value;
@@ -536,7 +544,7 @@ impl Settings {
         };
         self.allowed(parameter, Origin::Statement)?;
         let setting = self.parse(parameter, text)?;
-        self.store_reset(parameter, Value { setting, source: Source::Database });
+        self.store_reset(parameter, Value { setting, source });
         Ok(())
     }
 

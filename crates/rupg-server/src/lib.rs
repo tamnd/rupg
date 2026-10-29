@@ -955,7 +955,11 @@ fn session(shared: &Shared, wire: &mut Wire, start: &Start, protocol: u32) {
     };
     wire.out.authentication_ok();
     let settings = admit(shared, start).and_then(|database| {
-        connection::session_settings(&shared.base, start, &shared.store.database_settings(database))
+        connection::session_settings(
+            &shared.base,
+            start,
+            &shared.store.session_settings(database, &start.user),
+        )
     });
     let mut settings = match settings {
         Ok(settings) => settings,
