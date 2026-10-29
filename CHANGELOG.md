@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.4.9 (2026-10-29)
+
 ### Added
 
 - The anyarray columns of pg_statistic and pg_stats keep the element type of their values, so to_json, to_jsonb, max and min work on them, and two arrays with different element types give the error of PostgreSQL (#1128).
