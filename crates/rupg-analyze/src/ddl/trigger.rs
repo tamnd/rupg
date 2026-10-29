@@ -170,11 +170,19 @@ impl Definer<'_, '_> {
                 return Err(unsupported("INSTEAD OF triggers cannot have column lists"));
             }
         }
-        let partition = self.catalog.relation(oid).is_some_and(|r| r.partition_of.is_some());
-        if row && partition && !stmt.transitionRels.is_empty() {
-            return Err(unsupported(
-                "ROW triggers with transition tables are not supported on partitions",
-            ));
+        // `has_superclass`: a partition or a child of `INHERITS` cannot have a row trigger with transition tables.
+        let rel = self.catalog.relation(oid);
+        if row && !stmt.transitionRels.is_empty() {
+            if rel.is_some_and(|r| r.partition_of.is_some()) {
+                return Err(unsupported(
+                    "ROW triggers with transition tables are not supported on partitions",
+                ));
+            }
+            if rel.is_some_and(|r| r.inherits.iter().any(|&p| p != 0)) {
+                return Err(unsupported(
+                    "ROW triggers with transition tables are not supported on inheritance children",
+                ));
+            }
         }
         let (old_table, new_table) = self.transition_tables(stmt, kind, code, &name)?;
         let mut qual = None;

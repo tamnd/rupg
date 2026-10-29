@@ -1,0 +1,56 @@
+!details
+> create table ttd (x int, a text, b int)
+CREATE TABLE
+> alter table ttd drop column x
+ALTER TABLE
+> create function ttd_f() returns trigger language plpgsql as $$ declare r text; begin select string_agg(n::text, ', ' order by a) into r from new_table n; raise notice 'new table = %', r; select string_agg(row(n.*)::text, ', ') into r from new_table n; raise notice 'row = %', r; return null; end; $$
+CREATE FUNCTION
+> create trigger ttd_t after insert on ttd referencing new table as new_table for each statement execute procedure ttd_f()
+CREATE TRIGGER
+> insert into ttd values ('BBB', 42), ('AAA', 1)
+NOTICE 00000 new table = (AAA,1), (BBB,42) (PL/pgSQL function ttd_f() line 1 at RAISE)
+NOTICE 00000 row = (BBB,42), (AAA,1) (PL/pgSQL function ttd_f() line 1 at RAISE)
+INSERT 0 2
+> create function ttd_g() returns trigger language plpgsql as $$ begin raise notice 'old table = %', (select string_agg(old_table::text, ', ' order by a) from old_table); return null; end; $$
+CREATE FUNCTION
+> create trigger ttd_d after delete on ttd referencing old table as old_table for each statement execute procedure ttd_g()
+CREATE TRIGGER
+> delete from ttd
+NOTICE 00000 old table = (AAA,1), (BBB,42) (PL/pgSQL function ttd_g() line 1 at RAISE)
+DELETE 2
+> create table ttp (a text, b int) partition by list (a)
+CREATE TABLE
+> create table ttc (x int, a text, b int)
+CREATE TABLE
+> alter table ttc drop column x
+ALTER TABLE
+> alter table ttp attach partition ttc for values in ('BBB')
+ALTER TABLE
+> create trigger ttc_t after insert on ttc referencing new table as new_table for each statement execute procedure ttd_f()
+CREATE TRIGGER
+> insert into ttc values ('BBB', 42)
+NOTICE 00000 new table = (BBB,42) (PL/pgSQL function ttd_f() line 1 at RAISE)
+NOTICE 00000 row = (BBB,42) (PL/pgSQL function ttd_f() line 1 at RAISE)
+INSERT 0 1
+> insert into ttp values ('BBB', 43)
+INSERT 0 1
+> drop table ttd, ttp
+DROP TABLE
+> create table tti (a text, b int)
+CREATE TABLE
+> create table ttic () inherits (tti)
+CREATE TABLE
+> create trigger ttic_t after insert on ttic referencing new table as new_table for each row execute procedure ttd_f()
+ERROR 0A000 ROW triggers with transition tables are not supported on inheritance children
+> create trigger ttic_t after insert on ttic referencing new table as new_table for each statement execute procedure ttd_f()
+CREATE TRIGGER
+> alter table ttic no inherit tti
+ALTER TABLE
+> create trigger ttic_r after insert on ttic referencing new table as new_table for each row execute procedure ttd_f()
+CREATE TRIGGER
+> drop table tti, ttic
+DROP TABLE
+> drop function ttd_f()
+DROP FUNCTION
+> drop function ttd_g()
+DROP FUNCTION
