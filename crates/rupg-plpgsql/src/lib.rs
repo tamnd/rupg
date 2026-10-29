@@ -291,6 +291,7 @@ pub fn inline(spi: &dyn Spi, src: &str) -> Result<()> {
         rettype: oid::VOID,
         retset: false,
         trigger: false,
+        event_trigger: false,
         procedure: false,
     };
     let tree = compile(src, spi.env(), &sig, true)?;
@@ -298,13 +299,13 @@ pub fn inline(spi: &dyn Spi, src: &str) -> Result<()> {
     exec::run(spi, &compiled, &[], oid::VOID, &[]).map(drop)
 }
 
-/// `plpgsql_validator`: the compile of the body of a new function, with the check of the syntax of its queries. A polymorphic type compiles as a type of its kind, as `plpgsql_resolve_polymorphic_argtypes` does for the validator. A trigger function compiles as a trigger. An event trigger function is not checked yet.
+/// `plpgsql_validator`: the compile of the body of a new function, with the check of the syntax of its queries. A polymorphic type compiles as a type of its kind, as `plpgsql_resolve_polymorphic_argtypes` does for the validator. A trigger function compiles as a trigger, and an event trigger function compiles as an event trigger.
 ///
 /// # Errors
 ///
 /// The syntax errors of the body.
 pub fn validate(env: &dyn Env, function: &rupg_catalog::Function) -> Result<()> {
-    if function.lang != PLPGSQL_LANGUAGE || function.rettype == oid::EVENT_TRIGGER {
+    if function.lang != PLPGSQL_LANGUAGE {
         return Ok(());
     }
     let dummy = |ty: u32| match ty {
@@ -324,6 +325,7 @@ pub fn validate(env: &dyn Env, function: &rupg_catalog::Function) -> Result<()> 
     }
     sig.rettype = dummy(function.rettype);
     sig.trigger = function.rettype == oid::TRIGGER;
+    sig.event_trigger = function.rettype == oid::EVENT_TRIGGER;
     sig.name.clone_from(&function.name);
     compile(&function.src, env, &sig, true).map(drop)
 }
@@ -404,6 +406,7 @@ fn signature(function: &rupg_catalog::Function, types: &[u32], ret: u32) -> Sign
         rettype,
         retset: function.retset,
         trigger: false,
+        event_trigger: false,
         procedure: function.kind == b'p',
     }
 }

@@ -21,6 +21,7 @@ mod conversion;
 mod default_acl;
 mod drop;
 mod enum_label;
+mod event_trigger;
 mod foreign;
 mod large_object;
 mod opclass;
@@ -36,6 +37,7 @@ pub use aggregate::{Aggregate, PG_AGGREGATE};
 pub use conversion::{Conversion, PG_CONVERSION};
 pub use default_acl::{DefaultAcl, PG_DEFAULT_ACL};
 pub use drop::{Refusal, Target, flag};
+pub use event_trigger::{EventTrigger, PG_EVENT_TRIGGER};
 pub use foreign::{
     ForeignDataWrapper, ForeignServer, ForeignTable, PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER,
     PG_FOREIGN_TABLE, PG_USER_MAPPING, UserMapping,
@@ -1350,6 +1352,7 @@ pub struct Catalog {
     ts_mappings: Vec<TsMapping>,
     stat_exts: BTreeMap<u32, StatExt>,
     conversions: BTreeMap<u32, Conversion>,
+    event_triggers: BTreeMap<u32, EventTrigger>,
     /// The large objects of `pg_largeobject_metadata`, with their data.
     large_objects: Arc<BTreeMap<u32, LargeObject>>,
     fdws: BTreeMap<u32, ForeignDataWrapper>,
@@ -1475,6 +1478,7 @@ impl Catalog {
             ts_mappings: Vec::new(),
             stat_exts: BTreeMap::new(),
             conversions: BTreeMap::new(),
+            event_triggers: BTreeMap::new(),
             large_objects: Arc::default(),
             fdws: BTreeMap::new(),
             servers: BTreeMap::new(),

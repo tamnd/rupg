@@ -1431,6 +1431,9 @@ impl Definer<'_, '_> {
         if stmt.objectType == ObjectType::OBJECT_CONVERSION {
             return self.alter_conversion_owner(stmt);
         }
+        if stmt.objectType == ObjectType::OBJECT_EVENT_TRIGGER {
+            return self.alter_event_trigger_owner(stmt);
+        }
         if matches!(stmt.objectType, ObjectType::OBJECT_FDW | ObjectType::OBJECT_FOREIGN_SERVER) {
             return self.alter_foreign_owner(stmt.objectType == ObjectType::OBJECT_FDW, stmt);
         }

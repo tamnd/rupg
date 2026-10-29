@@ -88,6 +88,7 @@ impl Definer<'_, '_> {
             ObjectType::OBJECT_OPERATOR => self.comment_operator(object)?,
             ObjectType::OBJECT_STATISTIC_EXT => self.comment_stats(object)?,
             ObjectType::OBJECT_CONVERSION => self.comment_conversion(object)?,
+            ObjectType::OBJECT_EVENT_TRIGGER => self.comment_event_trigger(object)?,
             ObjectType::OBJECT_FDW => self.comment_foreign(true, object)?,
             ObjectType::OBJECT_FOREIGN_SERVER => self.comment_foreign(false, object)?,
             ObjectType::OBJECT_PUBLICATION => self.comment_publication(object)?,

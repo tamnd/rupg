@@ -1,7 +1,7 @@
 //! `DROP ACCESS METHOD`, `DROP CAST`, `DROP COLLATION`, `DROP CONVERSION`, `DROP EXTENSION`, `DROP LANGUAGE`, `DROP FOREIGN DATA WRAPPER`, `DROP SERVER`, `DROP EVENT TRIGGER` and `DROP PUBLICATION`: the lookups of `get_object_address` and the notices of `does_not_exist_skipping`. rupg can make only the casts, the conversions, the foreign-data wrappers and the servers of these objects, which go away with their dependents. Another name finds a built-in object or nothing. A pinned object gives the error of `findDependentObjects`, and another built-in object gives `0A000`.
 
 use rupg_catalog::{
-    FIRST_NORMAL_OID, ObjRef, PG_CAST, PG_COLLATION, PG_CONVERSION, PG_EXTENSION,
+    FIRST_NORMAL_OID, ObjRef, PG_CAST, PG_COLLATION, PG_CONVERSION, PG_EVENT_TRIGGER, PG_EXTENSION,
     PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_LANGUAGE, PG_PUBLICATION, is_pinned,
 };
 use rupg_common::{Error, Result, SqlState};
@@ -42,6 +42,7 @@ impl Definer<'_, '_> {
                 PG_CAST
                     | PG_COLLATION
                     | PG_CONVERSION
+                    | PG_EVENT_TRIGGER
                     | PG_FOREIGN_DATA_WRAPPER
                     | PG_FOREIGN_SERVER
                     | PG_PUBLICATION
@@ -110,7 +111,11 @@ impl Definer<'_, '_> {
                 owner = found.map(|s| s.owner);
                 ("server", found.map(|s| (PG_FOREIGN_SERVER, s.oid)))
             }
-            ObjectType::OBJECT_EVENT_TRIGGER => ("event trigger", None),
+            ObjectType::OBJECT_EVENT_TRIGGER => {
+                let found = self.catalog.event_trigger_by_name(name);
+                owner = found.map(|t| t.owner);
+                ("event trigger", found.map(|t| (PG_EVENT_TRIGGER, t.oid)))
+            }
             ObjectType::OBJECT_PUBLICATION => {
                 let found = self.catalog.publication_by_name(name);
                 owner = found.map(|p| p.owner);

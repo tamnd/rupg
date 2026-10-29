@@ -137,6 +137,9 @@ pub fn describe(object: ObjRef, session: &dyn Session) -> Result<Option<String>>
         PG_LARGEOBJECT => (builtin::owned_by_oid(Owned::LargeObject, oid).is_some()
             || catalog.is_some_and(|c| c.large_object(oid).is_some()))
         .then(|| format!("large object {oid}")),
+        rupg_catalog::PG_EVENT_TRIGGER => {
+            catalog.and_then(|c| c.event_trigger(oid)).map(|t| format!("event trigger {}", t.name))
+        }
         rupg_catalog::PG_FOREIGN_DATA_WRAPPER => {
             catalog.and_then(|c| c.fdw(oid)).map(|f| format!("foreign-data wrapper {}", f.name))
         }
