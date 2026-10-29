@@ -13,6 +13,8 @@ pub(super) const ALTER_PERSISTENCE: i32 = 0x01;
 pub(super) const DEFAULT_VAL: i32 = 0x02;
 /// `AT_REWRITE_COLUMN_REWRITE`: a new type of a column that changes the stored values.
 pub(super) const COLUMN_REWRITE: i32 = 0x04;
+/// `AT_REWRITE_ACCESS_METHOD`: `SET ACCESS METHOD` with a new access method.
+pub(super) const ACCESS_METHOD: i32 = 0x08;
 
 /// The need of `ATColumnChangeRequiresRewrite` for the expression that gives the new values of a column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

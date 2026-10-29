@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `CREATE ACCESS METHOD` and `DROP ACCESS METHOD` now work for table access methods. `pg_class.relam` comes from `USING`, from the parent of a partition or from `default_table_access_method`, `SET ACCESS METHOD` changes it, and `default_table_access_method` gets the PostgreSQL checks (#1169).
+
 ## 0.4.13 (2026-10-29)
 
 ### Added

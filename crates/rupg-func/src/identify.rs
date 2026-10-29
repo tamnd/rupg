@@ -371,7 +371,9 @@ fn parts(object: ObjRef, session: &dyn Session) -> Option<Parts> {
         }
         PG_OPCLASS => method_parts(Named::Opclass, oid, session),
         PG_OPFAMILY => method_parts(Named::Opfamily, oid, session),
-        PG_AM => builtin::access_method_name(oid).map(Parts::named),
+        PG_AM => builtin::access_method_name(oid)
+            .or_else(|| catalog?.access_method(oid).map(|m| m.name.as_str()))
+            .map(Parts::named),
         PG_AMOP => amop_parts(oid, session).and_then(|(family, left, right, n, _)| {
             let (left, right) = (
                 reg::type_text_qualified(left, session)?,

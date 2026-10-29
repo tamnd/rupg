@@ -309,7 +309,10 @@ fn unqualified(objtype: ObjectType, name: &str, session: &dyn Session) -> Result
             (PG_EXTENSION, found.map(|e| e.oid).ok_or_else(|| missing("extension"))?)
         }
         ObjectType::OBJECT_ACCESS_METHOD => {
-            (PG_AM, builtin::access_method_oid(name).ok_or_else(|| missing("access method"))?)
+            let found = builtin::access_method_oid(name).or_else(|| {
+                session.catalog().and_then(|c| c.access_method_by_name(name)).map(|m| m.oid)
+            });
+            (PG_AM, found.ok_or_else(|| missing("access method"))?)
         }
         ObjectType::OBJECT_EVENT_TRIGGER => {
             let found = session.catalog().and_then(|c| c.event_trigger_by_name(name));

@@ -188,6 +188,10 @@ pub trait Env {
     fn check_function_bodies(&self) -> bool {
         true
     }
+    /// The `default_table_access_method` setting: the table access method of a new table or materialized view with no `USING`.
+    fn default_table_access_method(&self) -> String {
+        "heap".into()
+    }
     /// The `lo_compat_privileges` setting, which turns off the checks of the owner of a large object.
     fn lo_compat_privileges(&self) -> bool {
         false

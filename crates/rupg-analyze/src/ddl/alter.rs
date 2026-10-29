@@ -137,6 +137,8 @@ struct Passes {
     misc: Vec<MiscCmd>,
     /// `chgPersistence` of `SET LOGGED` and `SET UNLOGGED`: true when the relation becomes unlogged. A subcommand that does not change the persistence leaves it `None`.
     persistence: Option<bool>,
+    /// `newAccessMethod` of `SET ACCESS METHOD`, when `chgAccessMethod` is set: the subcommand changes the access method.
+    access_method: Option<u32>,
 }
 
 /// A subcommand of `AT_PASS_DROP`.
@@ -734,11 +736,22 @@ impl Definer<'_, '_> {
             // `chgAccessMethod` stays false for the same method, so a second subcommand is not an error.
             AlterTableType::AT_SetAccessMethod => {
                 self.simple_permissions(target, cmd, b"rmp")?;
-                if let Some(method) = cmd.name.as_deref() {
-                    super::table_access_method(method)?;
+                if passes.access_method.is_some() {
+                    return Err(Error::new(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        "cannot have multiple SET ACCESS METHOD subcommands",
+                    ));
                 }
-                if target.kind == b'p' && cmd.name.is_some() {
-                    return Err(not_yet("SET ACCESS METHOD for a partitioned table", None));
+                // `ATPrepSetAccessMethod`: `DEFAULT` gives a partitioned table no access method.
+                let method = match cmd.name.as_deref() {
+                    Some(name) => self.table_am(name)?,
+                    None if target.kind == b'p' => 0,
+                    None => self.default_table_am()?,
+                };
+                let current = self.catalog.relation(target.oid).map_or(0, |r| r.access_method);
+                if method != current {
+                    passes.access_method = Some(method);
+                    self.rewrite(target.oid, super::rewrite::ACCESS_METHOD, false);
                 }
             }
             // A table has no OIDs, so `SET WITHOUT OIDS` has no work.
@@ -1027,6 +1040,9 @@ impl Definer<'_, '_> {
         }
         if let Some(unlogged) = passes.persistence {
             self.catalog.set_unlogged(target.oid, unlogged)?;
+        }
+        if let Some(method) = passes.access_method {
+            self.catalog.set_access_method(target.oid, method);
         }
         Ok(())
     }

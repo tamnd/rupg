@@ -181,7 +181,9 @@ pub fn describe(object: ObjRef, session: &dyn Session) -> Result<Option<String>>
             method_text(Named::Opclass, oid, session).map(|c| format!("operator class {c}"))
         }
         PG_OPFAMILY => opfamily_text(oid, session),
-        PG_AM => builtin::access_method_name(oid).map(|name| format!("access method {name}")),
+        PG_AM => builtin::access_method_name(oid)
+            .or_else(|| catalog?.access_method(oid).map(|m| m.name.as_str()))
+            .map(|name| format!("access method {name}")),
         PG_AMOP => {
             amop_parts(oid, session).and_then(|(family, left, right, strategy, operator)| {
                 Some(format!(

@@ -39,7 +39,8 @@ impl Definer<'_, '_> {
             let Some(found) = found else { continue };
             let made = matches!(
                 found.object.class,
-                PG_CAST
+                PG_AM
+                    | PG_CAST
                     | PG_COLLATION
                     | PG_CONVERSION
                     | PG_EVENT_TRIGGER
@@ -88,7 +89,7 @@ impl Definer<'_, '_> {
         let mut owner = None;
         let (word, found) = match kind {
             ObjectType::OBJECT_ACCESS_METHOD => {
-                ("access method", builtin::access_method_oid(name).map(|oid| (PG_AM, oid)))
+                ("access method", self.access_method_oid(name).map(|oid| (PG_AM, oid)))
             }
             ObjectType::OBJECT_EXTENSION => (
                 "extension",

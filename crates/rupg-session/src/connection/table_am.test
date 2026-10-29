@@ -1,0 +1,59 @@
+> create access method heap2 type table handler heap_tableam_handler
+CREATE ACCESS METHOD
+> create access method bogus type table handler int4in
+ERROR 42883 function int4in(internal) does not exist
+> create access method bogus type table handler bthandler
+ERROR 42809 function bthandler must return type table_am_handler
+> create access method heap2 type table handler heap_tableam_handler
+ERROR 42710 access method "heap2" already exists
+> set default_table_access_method = ''
+ERROR 22023 invalid value for parameter "default_table_access_method": ""
+> set default_table_access_method = 'nope'
+ERROR 22023 invalid value for parameter "default_table_access_method": "nope"
+> set default_table_access_method = 'btree'
+ERROR 55000 access method "btree" is not of type TABLE
+> create table t1 (a int) using heap2
+CREATE TABLE
+> create table p1 (a int) partition by list (a) using heap2
+CREATE TABLE
+> create table p1a partition of p1 for values in (1)
+CREATE TABLE
+> create table p2 (a int) partition by list (a)
+CREATE TABLE
+> set default_table_access_method = heap2
+SET
+> create table t2 (a int)
+CREATE TABLE
+> reset default_table_access_method
+RESET
+> alter table t1 set access method default
+ALTER TABLE
+> alter table t2 set access method heap, set access method heap2
+ERROR 0A000 cannot have multiple SET ACCESS METHOD subcommands
+> alter table t2 set access method heap2, set access method heap
+ALTER TABLE
+> select c.relname, a.amname from pg_class c join pg_am a on a.oid = c.relam where c.relname in ('t1', 't2', 'p1', 'p1a', 'p2') order by 1
+fields relname@pg_class.2:19:64:-1,amname@pg_am.2:19:64:-1
+row p1,heap2
+row p1a,heap2
+row t1,heap
+row t2,heap
+SELECT 4
+> select relname from pg_class where relam = 0 and relname in ('p1', 'p2')
+fields relname@pg_class.2:19:64:-1
+row p2
+SELECT 1
+> select count(*) from pg_depend where refclassid = 'pg_am'::regclass
+fields count:20:8:-1
+row 2
+SELECT 1
+> drop access method heap2
+ERROR 2BP01 cannot drop access method heap2 because other objects depend on it
+> drop table t2, p1
+DROP TABLE
+> drop access method heap2
+DROP ACCESS METHOD
+> select count(*) from pg_am where amname = 'heap2'
+fields count:20:8:-1
+row 0
+SELECT 1
