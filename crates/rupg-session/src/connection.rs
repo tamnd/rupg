@@ -484,6 +484,19 @@ pub(super) fn put_tids(written: &mut [Vec<Value>], at: usize, ids: &[u64]) {
     }
 }
 
+/// The `27000` error of `ExecUpdate`, `ExecDelete` and `ExecMergeMatched` for a row that a later command of the transaction changed, such as a statement of a `BEFORE` trigger. `what` is `updated`, `deleted` or `updated or deleted`.
+pub(super) fn self_modified(what: &str) -> Error {
+    Error::new(
+        SqlState::TRIGGERED_DATA_CHANGE_VIOLATION,
+        format!(
+            "tuple to be {what} was already modified by an operation triggered by the current command"
+        ),
+    )
+    .with_hint(
+        "Consider using an AFTER trigger instead of a BEFORE trigger to propagate changes to other rows.",
+    )
+}
+
 /// The changes of the rows of an `UPDATE` or a `DELETE`: the ID of the version at the end of each row, and the new row of an `UPDATE`.
 fn row_changes(
     rows: Vec<Vec<Value>>,
@@ -760,6 +773,8 @@ impl Connection {
         }
         self.heap_layout(info.table);
         let mut view = View { xid: self.xid.get(), ..view.clone() };
+        // The statements of the triggers start at a command after the command of the write, as `_SPI_execute_plan` calls `CommandCounterIncrement`.
+        self.command.set(self.command.get().max(view.command + 1));
         // The tables of the tree of `INHERITS` change their rows as the leaves of a partitioned table.
         let partitioned = info.inherit
             || self
@@ -799,7 +814,7 @@ impl Connection {
             rows
         } else {
             self.before_statement(&triggers, info)?;
-            self.before_rows(plan, info, &triggers, rows)?
+            self.before_rows(plan, info, (&triggers, Some(&view)), rows)?
         };
         // The rows that `RETURNING` reads: the rows that the statement wrote.
         let mut written = Vec::new();
@@ -938,9 +953,13 @@ impl Connection {
                         Changed::Again => {
                             let reader = self.reader();
                             let rows = plan.run(params, &reader)?;
+                            // The write keeps its command, which the statements of the triggers came after.
+                            let command = view.command;
                             view = reader.view().cloned().unwrap_or_default();
+                            view.command = command;
                             drop(reader);
-                            let rows = self.before_rows(plan, info, &triggers, rows)?;
+                            let rows =
+                                self.before_rows(plan, info, (&triggers, Some(&view)), rows)?;
                             (changes, given) = row_changes(rows, info)?;
                         }
                         conflict => kept = self.key_conflict(info, &view, conflict)?,
@@ -1004,7 +1023,7 @@ impl Connection {
         Ok(Applied { tag, count, written, view, batches })
     }
 
-    /// A conflict of a new version in a unique index. The write waits for the transaction that holds the key, as `_bt_check_unique` does, and gives the IDs of the new versions for the next try. Or it fails with the duplicate key and its value, as `BuildIndexValueDescription` gives it.
+    /// A conflict of a new version in a unique index, or a row that a later command changed. The write waits for the transaction that holds the key, as `_bt_check_unique` does, and gives the IDs of the new versions for the next try. Or it fails with the duplicate key and its value, as `BuildIndexValueDescription` gives it.
     fn key_conflict(
         &self,
         info: &Write,
@@ -1026,6 +1045,9 @@ impl Connection {
                     ));
                 };
                 Err(self.duplicate_key(info.table, unique, &key))
+            }
+            Changed::SelfModified { update } => {
+                Err(self_modified(if update { "updated" } else { "deleted" }))
             }
             _ => Err(Error::internal("a write result that is not a conflict of a key")),
         }
@@ -6623,6 +6645,12 @@ mod tests {
     #[test]
     fn from_constant_function() {
         big_stack(|| script(include_str!("connection/from_constant_function.test")));
+    }
+
+    /// An `UPDATE`, a `DELETE` or a `MERGE` of a row that a statement of a `BEFORE` trigger changed after the command began fails with `27000`, and a row that a join gives more than once changes once.
+    #[test]
+    fn trigger_self_modified() {
+        big_stack(|| script(include_str!("connection/trigger_self_modified.test")));
     }
 
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.

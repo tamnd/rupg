@@ -19,6 +19,7 @@ use internal::Internal;
 use super::Connection;
 use super::merge::Action;
 use super::upsert::{Upsert, Upserted};
+use crate::heap::View;
 use crate::query::{Captured, Reader, Transition};
 use crate::utility::Notice;
 
@@ -417,7 +418,7 @@ impl Connection {
         &self,
         plan: &Plan,
         info: &Write,
-        triggers: &Triggers,
+        (triggers, view): (&Triggers, Option<&View>),
         rows: Vec<Vec<Value>>,
     ) -> Result<Vec<Vec<Value>>, Error> {
         let before: Vec<&Armed> = triggers.of(true, true).collect();
@@ -436,6 +437,12 @@ impl Connection {
             let old = match (info.kind, row.last()) {
                 (WriteKind::Insert, _) => None,
                 (_, Some(Value::Int8(tid))) => {
+                    // `GetTupleForTrigger`: a later command of the transaction, such as a statement of a trigger of a row before, changed the row.
+                    if view.is_some_and(|view| {
+                        heap.modified_later(view, info.table, tid.cast_unsigned())
+                    }) {
+                        return Err(super::self_modified("updated"));
+                    }
                     let version =
                         heap.versions(self.database_oid, info.table, &[tid.cast_unsigned()]);
                     Some(padded(version.into_iter().next().unwrap_or_default(), all))

@@ -102,6 +102,9 @@ impl Connection {
                             self.reader().wait_xact(view.xid, holder, &context)?;
                         }
                         Changed::Again => break true,
+                        Changed::SelfModified { .. } => {
+                            return Err(super::self_modified("updated or deleted"));
+                        }
                         conflict => kept = self.key_conflict(info, &view, conflict)?,
                     }
                 };
