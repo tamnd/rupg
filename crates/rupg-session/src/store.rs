@@ -243,6 +243,18 @@ impl Store {
         self.state().databases.get(&oid).map_or(10, |db| db.row.owner)
     }
 
+    /// `dathasloginevt` of a database.
+    pub(crate) fn login_event(&self, oid: u32) -> bool {
+        self.state().databases.get(&oid).is_some_and(|db| db.row.has_login_event)
+    }
+
+    /// `SetDatabaseHasLoginEventTriggers`, and the clear of `EventTriggerOnLogin`: the change of `dathasloginevt` in place, which does not wait for the commit.
+    pub(crate) fn set_login_event(&self, oid: u32, on: bool) {
+        if let Some(db) = self.state().databases.get_mut(&oid) {
+            db.row.has_login_event = on;
+        }
+    }
+
     /// The rows of `pg_tablespace` of the tablespaces that `CREATE TABLESPACE` made, in the order of their OIDs.
     pub(crate) fn tablespaces(&self) -> Arc<[Tablespace]> {
         Arc::clone(&self.state().tablespaces)

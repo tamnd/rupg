@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Event triggers of `login` fire at the start of a session, before the first `ReadyForQuery`, and `pg_database.dathasloginevt` shows when a database can have them (#1155).
 - A new version of a row goes only to a page that keeps the free space of the `fillfactor` of the table, so `ctid`, the page count and the plan costs are the same as in PostgreSQL (#1153).
 - A join of a scan of a query of `WITH`, of a `VALUES` list, of a function or of a subquery gives its rows in the order of the loops of the plan, as in PostgreSQL (#1154).
 - A missing column in the inference of `ON CONFLICT` gets the hint of a similar column, also of `EXCLUDED` for `DO UPDATE` and `DO SELECT`, and the arbiter `WHERE` cannot reference `EXCLUDED`, as in PostgreSQL (#1152).
