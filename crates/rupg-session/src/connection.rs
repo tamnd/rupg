@@ -6835,6 +6835,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/lateral_target.test")));
     }
 
+    /// `range_contains_elem_support` and `elem_contained_by_range_support`: `elem <@ range` and `range @> elem` with a constant range become the comparisons of the bounds with the operators of the operator class of the subtype, an empty range gives false and a range with no bounds gives true. A volatile or expensive element with two bounds keeps the operator. `connection/range_support.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn range_support() {
+        big_stack(|| script(include_str!("connection/range_support.test")));
+    }
+
     /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.
     #[test]
     fn role_settings_at_start() {

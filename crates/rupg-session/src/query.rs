@@ -262,6 +262,7 @@ fn use_types(catalog: &Catalog) {
                     namespace: ty.namespace,
                     subtype: info.subtype,
                     collation: info.collation,
+                    subopc: info.subopc,
                     align: info.align,
                     multirange: multirange.oid,
                     multirange_name: multirange.name.clone(),
