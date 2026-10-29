@@ -2,11 +2,11 @@
 //!
 //! The session reports the state `active` and the text of the statement when a `Query`, `Parse`, `Bind` or `Execute` starts, and the idle state that `ReadyForQuery` gives before it sends the message. The start of a transaction sets `xact_start`, and the end of a transaction clears it and drops the snapshot. When `track_activities` is off, the next report sets the state `disabled` and clears the text and the times, as in PostgreSQL.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use rupg_func::{Backend, BackendState, Client, Process, RelationCounts, Ssl, Writes};
+use rupg_func::{Backend, BackendState, Client, Process, Progress, RelationCounts, Ssl, Writes};
 use rupg_wire::TransactionStatus;
 
 use super::Connection;
@@ -122,6 +122,8 @@ pub(crate) struct Activity {
     pub(crate) query: Option<String>,
     /// `SYSTEM_USER`, as `auth_method:authn_id`, or `None` for a method that checks no identity.
     pub(crate) system_user: Option<String>,
+    /// True while the row of the session has the progress of a command.
+    progress: Cell<bool>,
 }
 
 impl Activity {
@@ -363,6 +365,18 @@ impl Connection {
         }
     }
 
+    /// `pgstat_progress_start_command` and `pgstat_progress_update_multi_param`: the progress of the command that the session runs, or `None` at its end, `pgstat_progress_end_command`. A session with `track_activities` off reports no progress.
+    pub(super) fn report_progress(&self, progress: Option<Progress>) {
+        let Some(number) = self.activity.number else { return };
+        if progress.is_some() && !tracked(&self.settings.borrow()) {
+            return;
+        }
+        if progress.is_some() || self.activity.progress.get() {
+            self.activity.progress.set(progress.is_some());
+            self.store.report(number, |backend| backend.progress = progress);
+        }
+    }
+
     /// The start of a transaction.
     pub(super) fn transaction_started(&self) {
         self.report_transaction(Some(self.transaction_start));
@@ -408,6 +422,8 @@ impl Connection {
         self.large_objects.borrow_mut().clear();
         self.store.locks().release_all(self.pid, false);
         self.activity.clear();
+        // `AbortTransaction` ends the progress of a command that failed.
+        self.report_progress(None);
         let scans = self.activity.scans.take();
         if !scans.is_empty() {
             self.store.report_scans(self.database_oid, &scans, query::now(&*self.clock));

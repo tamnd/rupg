@@ -1,0 +1,40 @@
+> create table tab_progress_reporting (name text, age int4, location point, salary int4, manager name)
+CREATE TABLE
+> create function notice_after_tab_progress_reporting() returns trigger AS $$ declare report record; begin with progress_data as (select relid::regclass::text as relname, command, type, bytes_processed > 0 as has_bytes_processed, bytes_total > 0 as has_bytes_total, tuples_processed, tuples_excluded, tuples_skipped from pg_stat_progress_copy where pid = pg_backend_pid()) select into report (to_jsonb(r)) as value from progress_data r; raise info 'progress: %', report.value::text; return new; end; $$ language plpgsql
+CREATE FUNCTION
+> create trigger check_after_tab_progress_reporting after insert on tab_progress_reporting for each statement execute function notice_after_tab_progress_reporting()
+CREATE TRIGGER
+> copy tab_progress_reporting from stdin
+< sharon	25	(15,12)	1000	sam
+< sam	30	(10,5)	2000	bill
+< bill	20	(11,10)	1000	sharon
+<done
+copy in 0 0,0,0,0,0
+INFO 00000 progress: {"type": "PIPE", "command": "COPY FROM", "relname": "tab_progress_reporting", "tuples_skipped": 0, "has_bytes_total": false, "tuples_excluded": 0, "tuples_processed": 3, "has_bytes_processed": true} (PL/pgSQL function notice_after_tab_progress_reporting() line 1 at RAISE)
+COPY 3
+> copy tab_progress_reporting from stdin where (salary < 2000)
+< sharon	25	(15,12)	1000	sam
+< sam	30	(10,5)	2000	bill
+<done
+copy in 0 0,0,0,0,0
+INFO 00000 progress: {"type": "PIPE", "command": "COPY FROM", "relname": "tab_progress_reporting", "tuples_skipped": 0, "has_bytes_total": false, "tuples_excluded": 1, "tuples_processed": 1, "has_bytes_processed": true} (PL/pgSQL function notice_after_tab_progress_reporting() line 1 at RAISE)
+COPY 1
+> copy tab_progress_reporting from stdin (on_error ignore)
+< sharon	x	(15,12)	x	sam
+< sharon	25	(15,12)	1000	sam
+< sharon	y	(15,12)	x	sam
+<done
+copy in 0 0,0,0,0,0
+NOTICE 00000 2 rows were skipped due to data type incompatibility
+INFO 00000 progress: {"type": "PIPE", "command": "COPY FROM", "relname": "tab_progress_reporting", "tuples_skipped": 2, "has_bytes_total": false, "tuples_excluded": 0, "tuples_processed": 1, "has_bytes_processed": true} (PL/pgSQL function notice_after_tab_progress_reporting() line 1 at RAISE)
+COPY 1
+> copy tab_progress_reporting from stdin (on_error ignore, log_verbosity silent)
+< sharon	x	(15,12)	x	sam
+<done
+copy in 0 0,0,0,0,0
+INFO 00000 progress: {"type": "PIPE", "command": "COPY FROM", "relname": "tab_progress_reporting", "tuples_skipped": 1, "has_bytes_total": false, "tuples_excluded": 0, "tuples_processed": 0, "has_bytes_processed": true} (PL/pgSQL function notice_after_tab_progress_reporting() line 1 at RAISE)
+COPY 0
+> select count(*) from pg_stat_progress_copy
+fields count:20:8:-1
+row 0
+SELECT 1

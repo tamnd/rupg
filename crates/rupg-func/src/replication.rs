@@ -1,11 +1,11 @@
-//! The functions of the views of the work that rupg does not do yet: the progress of `VACUUM`, `ANALYZE`, `REPACK`, `CREATE INDEX`, `BASE_BACKUP` and `COPY`, the WAL senders and the WAL receiver, the logical replication workers and their statistics, the replication slots and the prepared transactions.
+//! The functions of the views of the work that rupg does not do yet: the progress of `VACUUM`, `ANALYZE`, `REPACK`, `CREATE INDEX`, `BASE_BACKUP` and `COPY TO`, the WAL senders and the WAL receiver, the logical replication workers and their statistics, the replication slots and the prepared transactions.
 //!
-//! rupg has no WAL, no replication, no two-phase commit and no progress reports, so these functions give what PostgreSQL gives on a server with none of that work: no rows, or one row of nulls for `pg_stat_get_wal_receiver`, and zero counts for the statistics of a subscription or of a replication slot.
+//! rupg has no WAL, no replication and no two-phase commit, and only `COPY FROM` reports its progress, so these functions give what PostgreSQL gives on a server with none of that work: no rows, or one row of nulls for `pg_stat_get_wal_receiver`, and zero counts for the statistics of a subscription or of a replication slot.
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_types::{Value, name_in};
 
-use crate::{Call, Kernel, bad_value};
+use crate::{Call, Kernel, PROGRESS_PARAMS, bad_value};
 
 /// The OIDs of the index access methods `btree` and `gin`, which have names for the phases of an index build.
 const BTREE: u32 = 403;
@@ -23,8 +23,8 @@ const SLOT_COUNTS: usize = 10;
 /// The 15 columns of `pg_stat_get_wal_receiver`.
 const WAL_RECEIVER_COLUMNS: usize = 15;
 
-/// `pg_stat_get_progress_info`: a row for each session that runs the command. The name of the command must be known, in any case.
-pub(crate) fn progress_info(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
+/// `pg_stat_get_progress_info`: a row for each session that runs the command. The name of the command must be known, in any case. The relation and the parameters are null for a session that the current user may not see.
+pub(crate) fn progress_info(call: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
     let Some(Value::Text(name)) = args.first() else { return Err(bad_value()) };
     if !COMMANDS.iter().any(|command| command.eq_ignore_ascii_case(name)) {
         return Err(Error::new(
@@ -32,7 +32,19 @@ pub(crate) fn progress_info(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Valu
             format!("invalid command name: \"{name}\""),
         ));
     }
-    Ok(Vec::new())
+    let backends = call.session.backends();
+    let rows = backends.iter().filter_map(|backend| {
+        let progress = backend.progress.filter(|p| p.command.eq_ignore_ascii_case(name))?;
+        let mut row = vec![Value::Int4(backend.pid), Value::Oid(backend.database)];
+        if crate::activity::permitted(call.session, backend.role) {
+            row.push(Value::Oid(progress.relid));
+            row.extend(progress.params.iter().map(|&param| Value::Int8(param)));
+        } else {
+            row.extend(std::iter::repeat_n(Value::Null, 1 + PROGRESS_PARAMS));
+        }
+        Some(row)
+    });
+    Ok(rows.collect())
 }
 
 /// A set function with no rows: `pg_stat_get_wal_senders`, `pg_stat_get_subscription`, `pg_get_replication_slots` and `pg_prepared_xact`.

@@ -118,6 +118,19 @@ pub struct Ssl {
     pub issuer_dn: String,
 }
 
+/// `PGSTAT_NUM_PROGRESS_PARAM`: the number of the parameters of the progress of a command.
+pub const PROGRESS_PARAMS: usize = 20;
+
+/// The progress of a command that a session runs, `st_progress_command`, `st_progress_command_target` and `st_progress_param`, which `pg_stat_get_progress_info` shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Progress {
+    /// The name of the command, as `pg_stat_get_progress_info` takes it, for example `COPY`.
+    pub command: &'static str,
+    /// The OID of the relation of the command, or 0.
+    pub relid: u32,
+    pub params: [i64; PROGRESS_PARAMS],
+}
+
 /// A row of the table of the sessions, `PgBackendStatus`.
 #[derive(Clone, Debug, Default)]
 pub struct Backend {
@@ -148,10 +161,12 @@ pub struct Backend {
     /// `backend_xid` and `backend_xmin`: the transaction ID of the session and the `xmin` of its oldest snapshot, with 0 for none.
     pub xid: u32,
     pub xmin: u32,
+    /// The progress of the command that the session runs, or `None` when it runs no command with a progress.
+    pub progress: Option<Progress>,
 }
 
 /// `HAS_PGSTAT_PERMISSIONS`: the current user has the privileges of `pg_read_all_stats` or of the role of the session.
-fn permitted(session: &dyn Session, role: u32) -> bool {
+pub(crate) fn permitted(session: &dyn Session, role: u32) -> bool {
     acl::has_pgstat_permissions(session, role)
 }
 
