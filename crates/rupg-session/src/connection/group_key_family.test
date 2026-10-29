@@ -1,0 +1,21 @@
+> create type gro_rec as (x numeric)
+CREATE TYPE
+> create table gro (a gro_rec not null, b text)
+CREATE TABLE
+> create unique index on gro (a record_image_ops)
+CREATE INDEX
+> insert into gro values (row(1.0)::gro_rec, 'X'), (row(2.00)::gro_rec, 'Y')
+INSERT 0 2
+> explain (costs off) select a, b from gro group by a, b order by b
+fields QUERY PLAN:25:-1:-1
+row Group
+row   Group Key: b, a
+row   ->  Sort
+row         Sort Key: b, a
+row         ->  Seq Scan on gro
+EXPLAIN
+> select a::text, b from gro group by a, b order by b
+fields a:25:-1:-1,b@gro.2:25:-1:-1
+row (1.0),X
+row (2.00),Y
+SELECT 2

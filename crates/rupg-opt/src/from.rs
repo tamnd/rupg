@@ -85,8 +85,8 @@ pub(crate) struct Stats {
     unique: Unique,
     /// The key columns of each unique index of each relation that is immediate and has no predicate, which `relation_has_unique_index_for` reads.
     distinct: BTreeMap<usize, Vec<Vec<i16>>>,
-    /// The key columns of each unique index of each relation that shows that the other columns of a row are a function of the key columns, as `remove_useless_groupby_columns` chooses them: the index is immediate and has no predicate and no expression, and each key column is `NOT NULL` or the index has `NULLS NOT DISTINCT`.
-    functional: BTreeMap<usize, Vec<Vec<i16>>>,
+    /// The key columns of each unique index of each relation that shows that the other columns of a row are a function of the key columns, as `remove_useless_groupby_columns` chooses them: the index is immediate and has no predicate and no expression, and each key column is `NOT NULL` or the index has `NULLS NOT DISTINCT`. Each index has the operator family of each key column.
+    functional: BTreeMap<usize, Vec<(Vec<i16>, Vec<u32>)>>,
     /// The members of each equivalence class of the query level, each class with true when it has a constant.
     equal: Vec<(Vec<Expr>, bool)>,
     /// The columns of the members of each equivalence class whose conditions the joins make, each with the relations of the class. `generate_base_implied_equalities_no_const` adds the relations to the `attr_needed` of the columns.
@@ -378,8 +378,9 @@ impl Stats {
         out
     }
 
-    /// `remove_useless_groupby_columns`: for each expression of `GROUP BY`, true when the groups need it not, because the other columns of its relation in `GROUP BY` have all the key columns of a unique index of `functional`. The key columns must be fewer than the columns of the relation in `GROUP BY`, and the index with the fewest key columns wins. Only a column of the query level can go, and `GROUP BY` must have two items or more.
-    pub(crate) fn surplus(&self, exprs: &[&Expr]) -> Vec<bool> {
+    /// `remove_useless_groupby_columns`: for each expression of `GROUP BY`, with the function of its `=` operator, true when the groups need it not, because the other columns of its relation in `GROUP BY` have all the key columns of a unique index of `functional`. The index proves that a key is unique only with the equality of its family, so an item of each key column must have an `=` operator of the family of the column, as `get_mergejoin_opfamilies` gives the families of the operator. The key columns must be fewer than the columns of the relation in `GROUP BY`, and the index with the fewest key columns wins. Only a column of the query level can go, and `GROUP BY` must have two items or more.
+    pub(crate) fn surplus(&self, items: &[(&Expr, u32)]) -> Vec<bool> {
+        let exprs: Vec<&Expr> = items.iter().map(|(e, _)| *e).collect();
         let column = |e: &Expr| match e.kind {
             ExprKind::Var(var) if var.levels_up == 0 => Some(var),
             _ => None,
@@ -394,12 +395,26 @@ impl Stats {
         }
         for (r, attnums) in &columns {
             let Some(indexes) = self.functional.get(r) else { continue };
+            // An `=` function that no built-in operator has is taken as an operator of each family.
+            let in_family = |attnum: i16, family: u32| {
+                items.iter().any(|(e, equal)| {
+                    column(e).is_some_and(|v| v.relation == *r && v.attnum == attnum) && {
+                        let eqops = builtin::operators().iter().filter(|o| o.code == *equal);
+                        let mut eqops = eqops.peekable();
+                        eqops.peek().is_none()
+                            || eqops.any(|o| classes::families(o.oid).contains(&family))
+                    }
+                })
+            };
             let best = indexes
                 .iter()
-                .filter(|keys| {
-                    let keys: BTreeSet<i16> = keys.iter().copied().collect();
-                    keys.is_subset(attnums) && keys.len() < attnums.len()
+                .filter(|(keys, families)| {
+                    keys.iter().zip(families).all(|(&k, &f)| in_family(k, f)) && {
+                        let keys: BTreeSet<i16> = keys.iter().copied().collect();
+                        keys.is_subset(attnums) && keys.len() < attnums.len()
+                    }
                 })
+                .map(|(keys, _)| keys)
                 .min_by_key(|keys| keys.len());
             let Some(best) = best else { continue };
             for (i, e) in exprs.iter().enumerate() {
@@ -980,7 +995,8 @@ impl<'q> Builder<'q> {
                             let indexes = self.members.map(|m| m.indexes(relation.oid));
                             for index in indexes.unwrap_or_default() {
                                 if functional(relation, &index) {
-                                    stats.functional.entry(r).or_default().push(index.keys);
+                                    let keys = (index.keys, index.families);
+                                    stats.functional.entry(r).or_default().push(keys);
                                 }
                             }
                         }
@@ -1031,7 +1047,8 @@ impl<'q> Builder<'q> {
                             }
                         }
                         if functional(relation, index) {
-                            stats.functional.entry(r).or_default().push(index.keys.clone());
+                            let keys = (index.keys.clone(), index.families.clone());
+                            stats.functional.entry(r).or_default().push(keys);
                         }
                         if index.unique && index.immediate && !index.partial {
                             stats.distinct.entry(r).or_default().push(index.keys.clone());
