@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The anyarray columns of pg_statistic and pg_stats keep the element type of their values, so to_json, to_jsonb, max and min work on them, and two arrays with different element types give the error of PostgreSQL (#1128).
 - A subquery in `FROM` of `UPDATE` or `USING` of `DELETE` gives no hint to mark it with `LATERAL` for a reference to the target table, and a `LATERAL` reference to the target table is an error, as in PostgreSQL (#1127).
 - `relhassubclass` stays true for a table that lost its last partition or child until the next `ANALYZE`, `ANALYZE` of a partitioned table with no partitions sets `reltuples` to 0 and not -0, and `VACUUM (PARALLEL n)` of a temporary table with two or more indexes gives the warning that it cannot run in parallel, as in PostgreSQL (#1126).
 - `VACUUM` sets `relpages` and `reltuples` of the `btree` indexes after their vacuum, and `INDEX_CLEANUP AUTO` bypasses the vacuum of the indexes when fewer than 2% of the pages have dead rows, as in PostgreSQL (#1125).

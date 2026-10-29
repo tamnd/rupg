@@ -3,7 +3,8 @@
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_types::{
-    self as types, Array, DateTimeInput, Record, Recv, RegKind, Value, ZoneAbbrevs, oid, tz,
+    self as types, AnyArray, Array, DateTimeInput, Record, Recv, RegKind, Value, ZoneAbbrevs, oid,
+    tz,
 };
 
 use crate::{Call, Session, bad_value, not_yet, reg, type_error};
@@ -228,6 +229,10 @@ pub(crate) fn datetime_input<'a>(
 ///
 /// `0A000` for a type that has no output function here, and the error of the output function, such as a timestamp out of range.
 pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) -> Result<()> {
+    if let Value::AnyArray(value) = value {
+        out.extend_from_slice(value.text.as_bytes());
+        return Ok(());
+    }
     let ty = io_type(ty);
     if is_enum(ty)
         && let Value::Oid(label) = value
@@ -625,6 +630,27 @@ pub fn to_text(ty: u32, value: &Value, session: &dyn Session) -> Result<String> 
                 .map_err(|_| Error::internal("an output function gave bytes that are not UTF-8"))
         }
     }
+}
+
+/// The array of an `anyarray` value, read with the input function of its element type.
+///
+/// # Errors
+///
+/// The error of the input function of the element type.
+pub fn anyarray_array(value: &AnyArray, session: &dyn Session) -> Result<Array<Value>> {
+    let delim = builtin::type_by_oid(base_type(value.elem)).map_or(b',', |t| t.delim);
+    let mut failed = None;
+    let array = types::array_in(&value.text, delim, true, |item| {
+        match input(value.elem, item, -1, session) {
+            Ok(item) => Ok(item),
+            Err(error) => {
+                failed.get_or_insert(error);
+                Ok(Value::Null)
+            }
+        }
+    })
+    .map_err(type_error)?;
+    failed.map_or(Ok(array), Err)
 }
 
 /// The text input function of the type, with the typmod of the target.

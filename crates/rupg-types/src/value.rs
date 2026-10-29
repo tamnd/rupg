@@ -60,6 +60,17 @@ pub enum Value {
     TsQuery(Vec<QueryItem>),
     /// A value of `jsonpath`.
     JsonPath(Box<JsonPath>),
+    /// A value of the type `anyarray`, as a column of `pg_statistic` gives it.
+    AnyArray(Box<AnyArray>),
+}
+
+/// A value of the type `anyarray`. As the header of an array keeps its element type, the value keeps the element type and the text that `array_out` gives with the output function of that type.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnyArray {
+    /// The element type.
+    pub elem: u32,
+    /// The text of the array.
+    pub text: String,
 }
 
 /// The value of a composite type or of `record`, as a `HeapTupleHeader` datum. As that datum keeps the type of the row, a record keeps the type of each field, so that the output of an anonymous `record` can show the fields.

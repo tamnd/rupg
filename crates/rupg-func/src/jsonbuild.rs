@@ -2,6 +2,8 @@
 //!
 //! A value goes to the text of `json` as `datum_to_json_internal` writes it, by the category that `json_categorize_type` gives its type. A function of `jsonb` gives that text to `jsonb_in`, which puts the keys of each object in their order and keeps only the last field of each key, as `pushJsonbValue` does. The text of `json` and the value of `jsonb` agree in the other parts: a number that is not finite is a string, and a key is always a string.
 
+use std::borrow::Cow;
+
 use rupg_analyze::JsonItemType;
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
@@ -11,7 +13,7 @@ use rupg_types::{
 };
 
 use crate::deparse::row_names;
-use crate::io::{array_of, base_type, is_row_type, output};
+use crate::io::{anyarray_array, array_of, base_type, is_row_type, output};
 use crate::json::invalid;
 use crate::text::variadic_values;
 use crate::{Call, Kernel, Session, bad_value, type_error};
@@ -66,13 +68,13 @@ pub fn json_value(
     }
     let ty = base_type(ty);
     let composite = matches!(value, Value::Record(_));
-    let array = array_of(ty).is_some() || matches!(value, Value::Array(_));
+    let array = array_of(ty).is_some() || matches!(value, Value::Array(_) | Value::AnyArray(_));
     if key && (composite || array || ty == oid::JSON || ty == oid::JSONB) {
         return Err(invalid("key value must be scalar, not array, composite, or json"));
     }
     match (ty, value) {
         (_, Value::Record(record)) => put_record(ty, record, false, session, out),
-        (_, Value::Array(_)) => put_array(ty, value, false, session, out),
+        (_, Value::Array(_) | Value::AnyArray(_)) => put_array(ty, value, false, session, out),
         (oid::BOOL, Value::Bool(b)) => {
             out.push_str(match (key, b) {
                 (false, true) => "true",
@@ -165,15 +167,21 @@ fn put_array(
     session: &dyn Session,
     out: &mut String,
 ) -> Result<()> {
-    let Value::Array(array) = value else { return Err(bad_value()) };
+    let (element, array) = match value {
+        Value::Array(array) => {
+            let element = array_of(base_type(ty))
+                .map(|(e, _)| e)
+                .or_else(|| builtin::type_by_oid(base_type(ty)).map(|row| row.elem))
+                .unwrap_or(oid::UNKNOWN);
+            (element, Cow::Borrowed(&**array))
+        }
+        Value::AnyArray(any) => (any.elem, Cow::Owned(anyarray_array(any, session)?)),
+        _ => return Err(bad_value()),
+    };
     if array.values.is_empty() {
         out.push_str("[]");
         return Ok(());
     }
-    let element = array_of(base_type(ty))
-        .map(|(e, _)| e)
-        .or_else(|| builtin::type_by_oid(base_type(ty)).map(|row| row.elem))
-        .unwrap_or(oid::UNKNOWN);
     let lens: Vec<usize> = array.dims.iter().map(|d| usize::try_from(d.len).unwrap_or(0)).collect();
     let mut next = 0;
     put_dim(element, &array.values, &lens, lines, &mut next, session, out)
