@@ -45,6 +45,16 @@ fn fresh(unique: &[Unique], values: &[Value], derive: Derive<'_>) -> Result<Fres
 /// `nextXid` of a new cluster: `initdb` of PostgreSQL 19 uses the transaction IDs from `FirstNormalTransactionId` up to 661, so the first transaction gets 662.
 const INITDB_NEXT_XID: u32 = 662;
 
+/// The result of [`Heap::vacuum`].
+pub(crate) struct Vacuumed {
+    /// `reltuples` of the heap.
+    pub(crate) reltuples: f32,
+    /// `rel_pages`: the pages of the heap before the truncation.
+    pub(crate) pages: u32,
+    /// `lpdead_item_pages`: the pages with `LP_DEAD` items, which had dead versions, until [`Heap::vacuumed_indexes`].
+    pub(crate) dead_pages: u32,
+}
+
 /// The rows of the tables of all the databases, and the transactions that are in progress.
 #[derive(Debug, Default)]
 pub(crate) struct Heap {
@@ -136,6 +146,8 @@ struct Table {
     statistics: BTreeMap<(i16, bool), Statistic>,
     /// The size of each `btree` index of the table by the OID of the index, from the versions that the table had.
     btree_sizes: BTreeMap<u32, btree::Cached>,
+    /// The pages with `LP_DEAD` items that a `VACUUM` with no vacuum of the indexes left, with the generation of the heap.
+    lp_dead: BTreeSet<(u16, u32)>,
     /// The storage of each column with a type of fixed length, which the new versions take in their pages.
     fixed: Vec<Fixed>,
     /// `attstorage` of each column, with the method that compresses its values.
@@ -1359,19 +1371,26 @@ impl Heap {
         std::mem::take(&mut self.state().toast_oids)
     }
 
+    /// `lazy_vacuum_heap_rel` after the vacuum of the indexes of a table: its `LP_DEAD` items become `LP_UNUSED`.
+    pub(crate) fn vacuumed_indexes(&self, database: u32, relation: u32) {
+        if let Some(table) = self.state().tables.get_mut(&(database, relation)) {
+            table.lp_dead.clear();
+        }
+    }
+
     /// `vac_update_relstats`: sets `relpages` and `reltuples` of a table, outside of the transactions.
     pub(crate) fn set_stats(&self, database: u32, relation: u32, relpages: i32, reltuples: f32) {
         let mut state = self.state();
         state.tables.entry((database, relation)).or_default().pages.set_stats(relpages, reltuples);
     }
 
-    /// `heap_vacuum_rel` of the table `relation` for the session `pid`: the versions that a transaction deleted before each snapshot and transaction in progress went, as `HeapTupleSatisfiesVacuum` finds them `HEAPTUPLE_DEAD`, give their space and their line pointers back. The pages that the visibility map marks for `skip` keep their versions. Each page that `VACUUM` scans goes to the free space map, with its bits in the visibility map. `indexed` is true when the table has an index, `freeze` freezes the versions that each snapshot sees, and `truncate` lets the heap lose its empty pages at the end. The result is `reltuples`.
+    /// `heap_vacuum_rel` of the table `relation` for the session `pid`: the versions that a transaction deleted before each snapshot and transaction in progress went, as `HeapTupleSatisfiesVacuum` finds them `HEAPTUPLE_DEAD`, give their space and their line pointers back. The pages that the visibility map marks for `skip` keep their versions. Each page that `VACUUM` scans goes to the free space map, with its bits in the visibility map. `indexed` is true when the table has an index, `freeze` freezes the versions that each snapshot sees, and `truncate` lets the heap lose its empty pages at the end.
     pub(crate) fn vacuum(
         &self,
         (database, relation, pid): (u32, u32, i32),
         skip: Skip,
         (indexed, freeze, truncate): (bool, bool, bool),
-    ) -> f32 {
+    ) -> Vacuumed {
         let mut state = self.state();
         let State { tables, running, xmins, latest_completed, .. } = &mut *state;
         // `GetOldestNonRemovableTransactionId`, without the snapshot of `VACUUM`, as `PROC_IN_VACUUM` leaves it out.
@@ -1381,7 +1400,9 @@ impl Heap {
             .into_iter()
             .chain(xmins.iter().filter(|&(&other, _)| other != pid).map(|(_, &xmin)| xmin))
             .fold((*latest_completed + 1).max(INITDB_NEXT_XID), u32::min);
-        let Some(table) = tables.get_mut(&(database, relation)) else { return 0.0 };
+        let Some(table) = tables.get_mut(&(database, relation)) else {
+            return Vacuumed { reltuples: 0.0, pages: 0, dead_pages: 0 };
+        };
         let generation = table.pages.generation;
         let scanned = table.pages.scanned(skip);
         let in_scan = |tid: u64| {
@@ -1391,6 +1412,12 @@ impl Heap {
         let dead = |v: &Version| v.xmax != 0 && !running.contains(&v.xmax) && v.xmax < horizon;
         let gone: Vec<u64> =
             table.versions.iter().filter(|v| in_scan(v.tid) && dead(v)).map(|v| v.tid).collect();
+        table.lp_dead.retain(|&(g, at)| g == generation && at < table.pages.blocks());
+        table.lp_dead.extend(gone.iter().map(|&tid| (generation, page_of(tid))));
+        let dead_pages = if indexed { table.lp_dead.len() } else { 0 };
+        if !indexed {
+            table.lp_dead.clear();
+        }
         table.purge(&gone);
         let mut pruned: Vec<Pruned> = scanned
             .iter()
@@ -1421,7 +1448,9 @@ impl Heap {
         }
         let total = table.pages.vacuumed(&scanned, nonempty, truncate);
         let count = u32::try_from(scanned.iter().filter(|&&s| s).count()).unwrap_or(u32::MAX);
-        table.pages.vacuum_stats(total, count, live)
+        let reltuples = table.pages.vacuum_stats(total, count, live);
+        let dead_pages = u32::try_from(dead_pages).unwrap_or(u32::MAX);
+        Vacuumed { reltuples, pages: total, dead_pages }
     }
 
     /// Records that `xid` waits for `holder`, as `LockAcquire` adds an edge to the wait graph.

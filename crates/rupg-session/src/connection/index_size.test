@@ -16,11 +16,11 @@ SELECT 3
 DELETE 10000
 > vacuum pvt
 VACUUM
-> select relname, pg_relation_size(oid), relpages from pg_class where relname like 'pvt%' order by relname
-fields relname@pg_class.2:19:64:-1,pg_relation_size:20:8:-1,relpages@pg_class.10:23:4:-1
-row pvt,0,0
-row pvt_1,90112,11
-row pvt_a,245760,30
+> select relname, pg_relation_size(oid), relpages, reltuples from pg_class where relname like 'pvt%' order by relname
+fields relname@pg_class.2:19:64:-1,pg_relation_size:20:8:-1,relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row pvt,0,0,0
+row pvt_1,90112,11,0
+row pvt_a,245760,30,0
 SELECT 3
 > create table pvt2 (a int)
 CREATE TABLE
