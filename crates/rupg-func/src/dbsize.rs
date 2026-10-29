@@ -216,7 +216,10 @@ fn storage(relid: u32, call: &Call<'_>) -> Option<Storage> {
         let pages = match (rel.kind, &rel.index) {
             (RelKind::Index, Some(index)) => {
                 let fsm = if index.method == BRIN { BRIN_FSM_PAGES } else { 0 };
-                (i64::from(index.pages), fsm, 0)
+                // An index does not give its pages back: it has the pages of its build, of the last count of `VACUUM` and of its rows now.
+                let counted = call.session.heap_size(rel.oid).map_or(0, |s| s.relpages);
+                let built = call.session.index_blocks(rel.oid).map_or(0, i64::from);
+                (i64::from(index.pages.max(counted)).max(built), fsm, 0)
             }
             (RelKind::Sequence, _) => (1, 0, 0),
             (RelKind::Table | RelKind::Toast | RelKind::MatView, _) => {

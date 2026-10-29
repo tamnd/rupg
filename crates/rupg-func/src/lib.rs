@@ -569,6 +569,11 @@ pub trait Session {
         let _ = relation;
         Vec::new()
     }
+    /// `RelationGetNumberOfBlocks` of the `btree` index `index`, as a build of the index from the versions of its table would give it, or `None` for another index.
+    fn index_blocks(&self, index: u32) -> Option<u32> {
+        let _ = index;
+        None
+    }
     /// `pgstat_fetch_stat_tabentry`: the counters of a relation of the database of the session, from the snapshot of the transaction, or `None` for a relation with no entry. The first call of a transaction takes the snapshot.
     fn relation_counts(&self, relation: u32) -> Option<RelationCounts> {
         let _ = relation;
