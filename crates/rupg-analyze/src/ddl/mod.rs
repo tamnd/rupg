@@ -106,6 +106,7 @@ use rupg_types::{Value, oid};
 use crate::coerce::AtOpt;
 use crate::expr::{Expr, ExprKind};
 use crate::typename::place;
+use crate::types;
 use crate::{Analyzer, Env, PG_CATALOG_NAMESPACE, Params};
 
 /// The OID of the schema `pg_toast`, where a user cannot create a relation.
@@ -775,6 +776,10 @@ fn is_mutable(env: &dyn Env, catalog: &Catalog, expr: &Expr) -> bool {
                 mutable_proc(output) || mutable_proc(input)
             }
             ExprKind::SqlValue(_) => true,
+            // `to_json_is_immutable` and `to_jsonb_is_immutable` of each argument.
+            ExprKind::JsonCtor(c) => {
+                c.args.iter().any(|a| json_mutable(catalog, a.ty, &mutable_proc))
+            }
             ExprKind::JsonExpr(j) => match &j.path.kind {
                 ExprKind::Const(Value::JsonPath(path)) => {
                     jsonpath::is_mutable(env, path, &j.passing)
@@ -787,6 +792,49 @@ fn is_mutable(env: &dyn Env, catalog: &Catalog, expr: &Expr) -> bool {
         mutable.then_some(())
     })
     .is_some()
+}
+
+/// `json_check_mutability`: true when the conversion of a value of the type to `json` or `jsonb` depends on the settings of the session. `date`, `timestamp` and `timestamptz` read `DateStyle` or `TimeZone`, and another type that is not a number, a boolean, JSON, an array or a row is as mutable as its output function. A domain, a row, a range, a multirange and an array are as mutable as the types in them. PostgreSQL also uses a cast of a type that is not built in to `json`, which rupg does not look for.
+fn json_mutable(catalog: &Catalog, ty: u32, mutable_proc: &dyn Fn(u32) -> bool) -> bool {
+    let Some(row) = types::row(ty) else { return false };
+    match row.kind {
+        b'd' => return json_mutable(catalog, row.base, mutable_proc),
+        b'c' => {
+            return catalog.relation(row.relid).is_some_and(|rel| {
+                rel.columns.iter().any(|c| !c.dropped && json_mutable(catalog, c.ty, mutable_proc))
+            });
+        }
+        b'r' => {
+            return builtin::range_subtype(ty)
+                .is_some_and(|sub| json_mutable(catalog, sub, mutable_proc));
+        }
+        b'm' => {
+            return builtin::multirange_range(ty)
+                .is_some_and(|range| json_mutable(catalog, range, mutable_proc));
+        }
+        _ => {}
+    }
+    let element = types::element(ty);
+    if element != 0 {
+        return json_mutable(catalog, element, mutable_proc);
+    }
+    match ty {
+        oid::BOOL
+        | oid::INT2
+        | oid::INT4
+        | oid::INT8
+        | oid::FLOAT4
+        | oid::FLOAT8
+        | oid::NUMERIC
+        | oid::JSON
+        | oid::JSONB
+        | oid::ANYARRAY
+        | oid::ANYCOMPATIBLEARRAY
+        | oid::RECORD
+        | oid::RECORD_ARRAY => false,
+        oid::DATE | oid::TIMESTAMP | oid::TIMESTAMPTZ => true,
+        _ => mutable_proc(row.output),
+    }
 }
 
 /// The attribute numbers of the columns of the relation that the expressions read, in the order of their first use, without duplicates.
