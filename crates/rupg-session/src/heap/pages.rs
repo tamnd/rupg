@@ -17,6 +17,9 @@ const PAGE_HEADER: u16 = 24;
 /// `sizeof(ItemIdData)`: the line pointer of a version in its page.
 const LINE_POINTER: u16 = 4;
 
+/// `MaxHeapTupleSize`: the space of an empty page for one version.
+const MAX_TUPLE: usize = PAGE_SIZE as usize - 32;
+
 /// `SizeofHeapTupleHeader`.
 const TUPLE_HEADER: usize = 23;
 
@@ -524,11 +527,14 @@ impl Pages {
     }
 
     /// `RelationGetBufferForTuple`: the page and the slot of a new version of `len` bytes. An update puts the new version in the page `old` of the version that it replaces when it fits, as `heap_update` does. Then the version goes to the target page, or the page of the free space map, or the last page of the heap. A page with too little space goes to the free space map, which gives the next page to try, or the next free page of the last extension of a bulk insert. A bulk insert, the statement `bulk`, does not use the free space map, and adds as many pages as it added before, up to `MAX_BUFFERS_TO_EXTEND_BY`.
+    ///
+    /// `save` is the space that `fillfactor` keeps free in each page, as `RelationGetTargetPageFreeSpace` gives it. A page other than the page of the old version takes the version only when it has the space of the version and this space, or the space of a page that is nearly empty when this is less.
     pub(super) fn place(
         &mut self,
         len: usize,
         old: Option<u32>,
         bulk: Option<(u32, u32)>,
+        save: usize,
     ) -> (u32, u16) {
         if self.bulk.is_some_and(|b| Some(b.made) != bulk) {
             self.bulk = None;
@@ -537,18 +543,20 @@ impl Pages {
         if let Some(at) = old.filter(|&at| free(&self.pages, at) >= len) {
             return (at, self.pages[at as usize].add(len));
         }
+        let nearly_empty = MAX_TUPLE - (TUPLES_PER_PAGE as usize / 8 * usize::from(LINE_POINTER));
+        let len_saved = if len + save > nearly_empty { len.max(nearly_empty) } else { len + save };
         let use_fsm = bulk.is_none();
         let count = self.blocks();
         let mut at = self.target.filter(|&at| at < count);
         if at.is_none() && use_fsm {
-            at = self.fsm.get(len, count);
+            at = self.fsm.get(len_saved, count);
         }
         if at.is_none() {
             at = count.checked_sub(1);
         }
         while let Some(block) = at {
             let space = free(&self.pages, block);
-            if space >= len {
+            if space >= len_saved {
                 self.target = Some(block);
                 return (block, self.pages[block as usize].add(len));
             }
@@ -558,7 +566,7 @@ impl Pages {
             } else if !use_fsm {
                 None
             } else {
-                self.fsm.record_and_get(block, space, len, count)
+                self.fsm.record_and_get(block, space, len_saved, count)
             };
         }
         let by = match bulk {

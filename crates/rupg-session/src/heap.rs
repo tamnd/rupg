@@ -152,6 +152,8 @@ struct Table {
     fixed: Vec<Fixed>,
     /// `attstorage` of each column, with the method that compresses its values.
     storage: Vec<Storage>,
+    /// The bytes of each page that `fillfactor` keeps free for updates.
+    save_free: usize,
 }
 
 /// The versions of a table by the hash of their key, for one unique key, which takes the place of the btree of a unique index. The map can keep the ID of a version that went, which a check skips.
@@ -330,7 +332,7 @@ impl Table {
         let len = max_align(toasted.len);
         let tid = kept.unwrap_or_else(|| {
             let bulk = self.bulk.filter(|&made| made == (xmin, cmin));
-            let (page, slot) = self.pages.place(len, old.map(page_of), bulk);
+            let (page, slot) = self.pages.place(len, old.map(page_of), bulk, self.save_free);
             pages::tid(self.pages.generation, page, slot)
         });
         self.made += 1;
@@ -1345,9 +1347,11 @@ impl Heap {
         database: u32,
         relation: u32,
         (fixed, storage): (Vec<Fixed>, Vec<Storage>),
+        fillfactor: u8,
     ) {
         let mut state = self.state();
         let table = state.tables.entry((database, relation)).or_default();
+        table.save_free = 8192 * usize::from(100 - fillfactor.min(100)) / 100;
         if table.fixed != fixed {
             table.fixed = fixed;
         }

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A new version of a row goes only to a page that keeps the free space of the `fillfactor` of the table, so `ctid`, the page count and the plan costs are the same as in PostgreSQL (#1153).
 - A missing column in the inference of `ON CONFLICT` gets the hint of a similar column, also of `EXCLUDED` for `DO UPDATE` and `DO SELECT`, and the arbiter `WHERE` cannot reference `EXCLUDED`, as in PostgreSQL (#1152).
 - Event triggers on `sql_drop` fire after a command drops objects, and `pg_event_trigger_dropped_objects()` gives the dropped objects with the columns, the order and the temporary schema names of PostgreSQL (#1150).
 
