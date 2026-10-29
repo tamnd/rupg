@@ -6791,6 +6791,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/alter_role_set.test")));
     }
 
+    /// `pgstat_report_vacuum` and `pgstat_report_analyze`: the time and the count of `VACUUM` and `ANALYZE` of a table, of a partitioned table, of an inheritance tree with and with no `ONLY`, and of a TOAST table with `PROCESS_MAIN` and `PROCESS_TOAST`. `VACUUM FULL` and `track_counts = off` report nothing. `connection/vacuum_stats.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn vacuum_stats() {
+        big_stack(|| script(include_str!("connection/vacuum_stats.test")));
+    }
+
     /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.
     #[test]
     fn role_settings_at_start() {

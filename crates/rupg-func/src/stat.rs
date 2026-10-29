@@ -1,6 +1,6 @@
 //! The functions of the cumulative statistics for one object, from `pgstatfuncs.c`: the counters of a relation or an index, of a function and of a database, and the `xact` forms that read the counts of the transaction.
 //!
-//! rupg keeps the sequential scans of a relation, their count `numscans` and the time of the last one `lastscan`, and the counters of the rows that the transactions wrote: `tuples_inserted`, `tuples_updated`, `tuples_deleted`, `live_tuples`, `dead_tuples`, `mod_since_analyze` and `ins_since_vacuum`. The other functions give the value that PostgreSQL gives for an object that has no entry in the statistics: 0 for a counter and for a total time of a relation or a database, and null for a time stamp and for each value of a function. The views `pg_stat_*` and `pg_statio_*` then have a row for each object, with the columns and the types of PostgreSQL (spec/07 section 7.14).
+//! rupg keeps the sequential scans of a relation, their count `numscans` and the time of the last one `lastscan`, and the counters of the rows that the transactions wrote: `tuples_inserted`, `tuples_updated`, `tuples_deleted`, `live_tuples`, `dead_tuples`, `mod_since_analyze` and `ins_since_vacuum`, and the time and the count of the `VACUUM` and the `ANALYZE` commands of a relation. The other functions give the value that PostgreSQL gives for an object that has no entry in the statistics: 0 for a counter and for a total time of a relation or a database, and null for a time stamp and for each value of a function. The views `pg_stat_*` and `pg_statio_*` then have a row for each object, with the columns and the types of PostgreSQL (spec/07 section 7.14).
 
 use rupg_common::Result;
 use rupg_types::Value;
@@ -93,6 +93,14 @@ pub struct RelationCounts {
     pub mod_since_analyze: i64,
     /// `ins_since_vacuum`: the rows that the transactions inserted.
     pub ins_since_vacuum: i64,
+    /// `last_vacuum_time`: the end of the last `VACUUM` of the relation, or `None` before the first one.
+    pub last_vacuum_time: Option<i64>,
+    /// `vacuum_count`: the count of the `VACUUM` commands that processed the relation.
+    pub vacuum_count: i64,
+    /// `last_analyze_time`: the end of the last `ANALYZE` of the relation, or `None` before the first one.
+    pub last_analyze_time: Option<i64>,
+    /// `analyze_count`: the count of the `ANALYZE` commands that processed the relation.
+    pub analyze_count: i64,
 }
 
 /// The rows that a transaction inserted, updated and deleted in one relation, as `pgstat_count_heap_insert`, `pgstat_count_heap_update` and `pgstat_count_heap_delete` count them.
@@ -151,6 +159,36 @@ fn numscans(call: &Call<'_>, args: &[Value]) -> Result<Value> {
 fn lastscan(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let counts = call.session.relation_counts(object(args)?);
     Ok(counts.and_then(|c| c.lastscan).map_or(Value::Null, Value::TimestampTz))
+}
+
+/// A time stamp of a relation that the server reported, or null.
+fn relation_stamp(
+    call: &Call<'_>,
+    args: &[Value],
+    read: fn(&RelationCounts) -> Option<i64>,
+) -> Result<Value> {
+    let counts = call.session.relation_counts(object(args)?);
+    Ok(counts.as_ref().and_then(read).map_or(Value::Null, Value::TimestampTz))
+}
+
+/// `pg_stat_get_last_vacuum_time`.
+fn last_vacuum_time(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    relation_stamp(call, args, |c| c.last_vacuum_time)
+}
+
+/// `pg_stat_get_last_analyze_time`.
+fn last_analyze_time(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    relation_stamp(call, args, |c| c.last_analyze_time)
+}
+
+/// `pg_stat_get_vacuum_count`.
+fn vacuum_count(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    relation_counter(call, args, |c| c.vacuum_count)
+}
+
+/// `pg_stat_get_analyze_count`.
+fn analyze_count(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    relation_counter(call, args, |c| c.analyze_count)
 }
 
 /// `pg_stat_get_xact_numscans`: the sequential scans of a relation that the transaction counted.
@@ -287,6 +325,10 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "dead_tuples" => dead_tuples,
         "mod_since_analyze" => mod_since_analyze,
         "ins_since_vacuum" => ins_since_vacuum,
+        "last_vacuum_time" => last_vacuum_time,
+        "last_analyze_time" => last_analyze_time,
+        "vacuum_count" => vacuum_count,
+        "analyze_count" => analyze_count,
         _ if RELATION_COUNTERS.contains(&name) => counter,
         _ if RELATION_TIMES.contains(&name) => total_time,
         _ if RELATION_STAMPS.contains(&name) => none,
