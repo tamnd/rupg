@@ -19,7 +19,7 @@ use std::rc::Rc;
 
 use rupg_analyze::{
     BoolOp, BoolTest, Expr, ExprKind, FromItem, JoinKind, Query, Relation, SetKind, SetOp, SetTree,
-    SortGroup, SubLinkKind, Var, expand_grouping_sets,
+    SortGroup, SubLinkKind, Var, WriteKind, expand_grouping_sets,
 };
 use rupg_pgcatalog::builtin;
 use rupg_plan::{
@@ -98,6 +98,10 @@ pub(crate) struct Stats {
     subplans: Vec<cost::SubCost>,
     /// The relations of the join that tests the conditions that run once, which is the join of all the relations, or none when there is no such condition.
     gated: BTreeSet<usize>,
+    /// True when each relation of the level is a target of the statement or has a row mark, as `preprocess_rowmarks` gives a mark to each relation of a query with a lock and of an `UPDATE`, a `DELETE` or a `MERGE`. Its scans test again each condition that the predicate of a partial index implies, as `check_index_predicates` keeps them for a `is_target_rel`.
+    pub(super) marked: bool,
+    /// True when `FROM` of the level is one item that is not a join, so that each condition of `WHERE` on the relation is a condition of its scan.
+    pub(super) alone: bool,
     /// The statistics of the columns of each table of the level, by column number, from `pg_statistic` with `stainherit` false.
     columns: BTreeMap<usize, Rc<BTreeMap<i16, Statistic>>>,
     /// The statistics of the expression columns of the indexes of each table of the level, as [`index_statistics`] reads them.
@@ -763,8 +767,17 @@ impl<'q> Builder<'q> {
             .map(|(c, constant)| (c.iter().map(|&m| m.clone()).collect(), *constant))
             .collect();
         let gated = if gating.is_empty() { BTreeSet::new() } else { all.clone() };
-        let mut stats =
-            Stats { equal, subplans: level.subplans.clone(), gated, ..Stats::default() };
+        let marked = !level.query.row_marks.is_empty()
+            || level.write.is_some_and(|w| w.kind != WriteKind::Insert);
+        let alone = matches!(&level.query.from[..], [item] if !matches!(item, FromItem::Join(_)));
+        let mut stats = Stats {
+            equal,
+            subplans: level.subplans.clone(),
+            gated,
+            marked,
+            alone,
+            ..Stats::default()
+        };
         let member =
             self.append.as_ref().filter(|a| self.scopes[level.scope].parent == Some(a.scope));
         let keys = member.map(|a| a.keys.clone());

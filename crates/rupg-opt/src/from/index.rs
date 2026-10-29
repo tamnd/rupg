@@ -340,7 +340,6 @@ fn index_paths<'q>(
 ) -> (Vec<Rel<'q>>, Vec<Bitmap<'q>>) {
     let mut out = Vec::new();
     let mut bitmaps = Vec::new();
-    let read = read_columns(table, stats);
     let sources: Vec<Source<'q>> = table
         .quals
         .iter()
@@ -354,8 +353,8 @@ fn index_paths<'q>(
         if !scannable(index) || !predicate_ok(index, table.r, &quals) {
             continue;
         }
-        let clauses = match_clauses(table.r, index, &restrict(index, table.r, &all));
-        let only = index_only(index, &read);
+        let clauses = match_clauses(table.r, index, &restrict(index, table.r, &all, stats));
+        let only = index_only(index, &read_columns(table, index, stats));
         let forward = order(level, table.r, index, &quals, false, stats);
         let mut useful = stats.useful(&BTreeSet::from([table.r]), &forward);
         let (order_by, ordered) = order_by(table.r, index, stats);
@@ -382,7 +381,7 @@ fn index_paths<'q>(
         }
         // `skip_nonnative_saop`: with `ANY` the index gives one more bitmap.
         if index.method != BTREE_AM {
-            let with_any = bitmap_clauses(table.r, index, &restrict(index, table.r, &all));
+            let with_any = bitmap_clauses(table.r, index, &restrict(index, table.r, &all, stats));
             if with_any.len() > clauses.len() {
                 let costs = index_cost(table, index, &with_any, stats);
                 let path = BitmapIndex::new(table, index, with_any, costs, stats);
@@ -413,7 +412,7 @@ pub(super) fn reparameterize<'q>(
                 .map(|(at, q)| Source { expr: q.expr.clone(), at: Some(at), class: q.class })
                 .collect();
             let all: Vec<&Source<'q>> = sources.iter().collect();
-            let clauses = match_clauses(plain.r, index, &restrict(index, plain.r, &all));
+            let clauses = match_clauses(plain.r, index, &restrict(index, plain.r, &all, stats));
             let costs = ordered_cost(table, index, &clauses, &order_by, stats);
             let order = (&order_by[..], Vec::new());
             Some(scan(level, table, index, &clauses, costs, *only, *backward, order, stats).node)
@@ -497,7 +496,7 @@ pub(super) fn param_paths<'q>(
         if !scannable(index) || !predicate_ok(index, r, &quals) {
             continue;
         }
-        let rclauses = match_clauses(r, index, &restrict(index, r, &all));
+        let rclauses = match_clauses(r, index, &restrict(index, r, &all, stats));
         let jclauses = match_clauses(r, index, &all_joins);
         // `generate_implied_equalities_for_column`: the conditions of the first class with a member that is the column.
         let mut implied = Vec::new();
@@ -565,8 +564,7 @@ pub(super) fn param_paths<'q>(
                 }
             }
         }
-        let read = read_columns(table, stats);
-        let only = index_only(index, &read);
+        let only = index_only(index, &read_columns(table, index, stats));
         let forward = order(level, r, index, &quals, false, stats);
         let mut useful = stats.useful(&BTreeSet::from([r]), &forward);
         let (order_by, ordered) = order_by(r, index, stats);
@@ -810,7 +808,7 @@ fn arm_paths<'q>(
         if !useful && match_clauses(table.r, index, &mine).is_empty() {
             continue;
         }
-        let clauses = match_clauses(table.r, index, &restrict(index, table.r, &all));
+        let clauses = match_clauses(table.r, index, &restrict(index, table.r, &all, stats));
         // `amoptionalkey` of `hash` is false: its scan needs a clause.
         if clauses.is_empty() && index.method == HASH_AM {
             continue;
@@ -821,15 +819,27 @@ fn arm_paths<'q>(
     out
 }
 
-/// The columns of the table that the query reads above the scan and in the conditions of the scan, as `check_index_only` finds them with `pull_varattnos`.
-fn read_columns(table: &Table<'_, '_>, stats: &Stats) -> BTreeSet<i16> {
+/// The columns of the table that the query reads above the scan and in the conditions of the scan that the index tests, as `check_index_only` finds them with `pull_varattnos` in `reltarget` and `indrestrictinfo`: a condition that the predicate of the index implies needs no column, as [`restrict`] leaves it out. Only a level whose `FROM` is the table alone leaves out the columns of these conditions, as the conditions of a join on the table alone can be conditions of the join and not of the scan.
+fn read_columns(table: &Table<'_, '_>, index: &Index, stats: &Stats) -> BTreeSet<i16> {
+    let parts = predicate(index, table.r);
+    let refs: Vec<&Expr> = parts.iter().collect();
+    let pred = (!parts.is_empty() && index.method != HASH_AM && !stats.marked && stats.alone)
+        .then(|| and_of(&refs));
+    let alone = BTreeSet::from([table.r]);
     let mut out: BTreeSet<i16> = stats
         .needed
         .iter()
         .filter(|(v, _, _)| v.relation == table.r && v.levels_up == 0)
+        .filter(|(_, _, places)| pred.is_none() || !places.is_subset(&alone))
         .map(|(v, _, _)| v.attnum)
         .collect();
     for qual in &table.quals {
+        if pred
+            .as_ref()
+            .is_some_and(|p| !crate::minmax::mutable(&qual.expr) && implied_by(p, &qual.expr))
+        {
+            continue;
+        }
         let mut columns = Vec::new();
         exprs::columns_at(&qual.expr, 0, &mut columns);
         for column in columns {
@@ -885,9 +895,14 @@ fn predicate_ok(index: &Index, r: usize, given: &[&Expr]) -> bool {
 }
 
 /// `indrestrictinfo`: the conditions of the table that the predicate of the index does not imply. A condition that the predicate implies is true for each row of the index, so the scan does not test it. A condition that calls a mutable function stays. `amoptionalkey` of `hash` is false, so its index keeps all the conditions, which can be the only clauses of its first key.
-fn restrict<'s, 'q>(index: &Index, r: usize, sources: &[&'s Source<'q>]) -> Vec<&'s Source<'q>> {
+fn restrict<'s, 'q>(
+    index: &Index,
+    r: usize,
+    sources: &[&'s Source<'q>],
+    stats: &Stats,
+) -> Vec<&'s Source<'q>> {
     let parts = predicate(index, r);
-    if parts.is_empty() || index.method == HASH_AM {
+    if parts.is_empty() || index.method == HASH_AM || stats.marked {
         return sources.to_vec();
     }
     let refs: Vec<&Expr> = parts.iter().collect();
@@ -1517,7 +1532,7 @@ fn index_scan_cost<'q>(
     // `extract_nonindex_conditions` of `indrestrictinfo`: a condition that the predicate of the index implies is not in the filter.
     let parts = predicate(index, table.r);
     let refs: Vec<&Expr> = parts.iter().collect();
-    let pred = (!parts.is_empty()).then(|| and_of(&refs));
+    let pred = (!parts.is_empty() && !stats.marked).then(|| and_of(&refs));
     let mut filter: Vec<Qual<'q>> = table
         .quals
         .iter()

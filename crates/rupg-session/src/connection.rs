@@ -6755,6 +6755,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/conflict_sublink.test")));
     }
 
+    /// The planner keeps the predicate of a partial index in the quals of a relation that `UPDATE`, `DELETE` or a row lock reads, and an index-only scan of a partial index needs no column of a qual that the predicate implies, as `check_index_predicates` does.
+    #[test]
+    fn partial_target() {
+        big_stack(|| script(include_str!("connection/partial_target.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

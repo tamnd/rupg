@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `EXPLAIN` of `UPDATE`, `DELETE` and `SELECT ... FOR UPDATE` keeps the conditions that the predicate of a partial index implies in the filter of the scan, and an index-only scan of a partial index needs no column of these conditions, as in PostgreSQL (#1110).
 - A subquery in `WHERE` of `ON CONFLICT DO UPDATE` is planned as a subplan, and `EXPLAIN` shows it as `SubPlan` or `InitPlan` under `Conflict Filter`, as in PostgreSQL (#1108).
 - `ALTER TABLE ... DROP COLUMN` of a column in `INCLUDE` of a unique constraint drops the constraint and its index, as in PostgreSQL (#1107).
 - An index column now matches a condition through a placeholder and through more than one binary-compatible relabel, and the constant fold takes out a relabel to the type of its argument, as in PostgreSQL (#1106).
