@@ -6743,6 +6743,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/gs_index_relabel.test")));
     }
 
+    /// `DROP COLUMN` of a column of `INCLUDE` drops the unique constraint and its index, as the constraint depends on each column of the index.
+    #[test]
+    fn include_drop_column() {
+        big_stack(|| script(include_str!("connection/include_drop_column.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

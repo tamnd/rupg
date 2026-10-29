@@ -1,0 +1,26 @@
+> create table incd (c1 int, c2 int, c3 int, c4 box, unique (c1, c2) include (c3, c4))
+CREATE TABLE
+> select indexname from pg_indexes where tablename = 'incd'
+fields indexname@pg_indexes.3:19:64:-1
+row incd_c1_c2_c3_c4_key
+SELECT 1
+> alter table incd drop column c3
+ALTER TABLE
+> select indexname from pg_indexes where tablename = 'incd'
+fields indexname@pg_indexes.3:19:64:-1
+SELECT 0
+> select count(*) from pg_constraint where conrelid = 'incd'::regclass
+fields count:20:8:-1
+row 0
+SELECT 1
+> drop table incd
+DROP TABLE
+> create table incp (c1 int, c2 int, c3 int, primary key (c1) include (c3))
+CREATE TABLE
+> alter table incp drop column c3
+ALTER TABLE
+> select indexname from pg_indexes where tablename = 'incp'
+fields indexname@pg_indexes.3:19:64:-1
+SELECT 0
+> drop table incp
+DROP TABLE
