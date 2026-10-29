@@ -6827,6 +6827,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vacuum_misc.test")));
     }
 
+    /// The target table of `UPDATE` and `DELETE` in a subquery of `FROM` and `USING`: no hint to mark the subquery with `LATERAL`, and the error of a `LATERAL` reference to the target, as `check_lateral_ref_ok` gives it. `connection/lateral_target.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn lateral_target() {
+        big_stack(|| script(include_str!("connection/lateral_target.test")));
+    }
+
     /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.
     #[test]
     fn role_settings_at_start() {

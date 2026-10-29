@@ -1,0 +1,33 @@
+!details
+> create temp table int4_tbl(f1 int4)
+CREATE TABLE
+> create temp table xx1 as select f1 as x1, -f1 as x2 from int4_tbl
+SELECT 0
+> update xx1 set x2 = f1 from (select * from int4_tbl where f1 = x1) ss
+ERROR 42703 column "x1" does not exist at 64
+DETAIL There is a column named "x1" in table "xx1", but it cannot be referenced from this part of the query.
+> update xx1 set x2 = f1 from (select * from int4_tbl where f1 = xx1.x1) ss
+ERROR 42P01 invalid reference to FROM-clause entry for table "xx1" at 64
+DETAIL There is an entry for table "xx1", but it cannot be referenced from this part of the query.
+> update xx1 set x2 = f1 from lateral (select * from int4_tbl where f1 = x1) ss
+ERROR 42P10 invalid reference to FROM-clause entry for table "xx1" at 72
+HINT There is an entry for table "xx1", but it cannot be referenced from this part of the query.
+> update xx1 set x2 = f1 from xx1, lateral (select * from int4_tbl where f1 = x1) ss
+ERROR 42712 table name "xx1" specified more than once
+> update xx1 set x2 = f1 from lateral (select * from int4_tbl where f1 = xx1.x1) ss
+ERROR 42P10 invalid reference to FROM-clause entry for table "xx1" at 72
+HINT There is an entry for table "xx1", but it cannot be referenced from this part of the query.
+> delete from xx1 using (select * from int4_tbl where f1 = x1) ss
+ERROR 42703 column "x1" does not exist at 58
+DETAIL There is a column named "x1" in table "xx1", but it cannot be referenced from this part of the query.
+> delete from xx1 using (select * from int4_tbl where f1 = xx1.x1) ss
+ERROR 42P01 invalid reference to FROM-clause entry for table "xx1" at 58
+DETAIL There is an entry for table "xx1", but it cannot be referenced from this part of the query.
+> delete from xx1 using lateral (select * from int4_tbl where f1 = x1) ss
+ERROR 42P10 invalid reference to FROM-clause entry for table "xx1" at 66
+HINT There is an entry for table "xx1", but it cannot be referenced from this part of the query.
+> delete from xx1 using lateral (select * from int4_tbl where f1 = xx1.x1) ss
+ERROR 42P10 invalid reference to FROM-clause entry for table "xx1" at 66
+HINT There is an entry for table "xx1", but it cannot be referenced from this part of the query.
+> select * from int4_tbl a left join lateral (select * from int4_tbl b where b.f1 = c.f1) s on true right join int4_tbl c on true
+ERROR 42P01 missing FROM-clause entry for table "c" at 83
