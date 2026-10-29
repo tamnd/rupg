@@ -933,6 +933,7 @@ impl<'a> Fold<'a> {
             on,
             using: join.using.clone(),
             plain_using: join.plain_using,
+            natural: join.natural,
             alias: join.alias.clone(),
             using_alias: join.using_alias.clone(),
             merged: join.merged.clone(),

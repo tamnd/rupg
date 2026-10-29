@@ -7,11 +7,14 @@ use rupg_catalog::Catalog;
 use rupg_types::{Numeric, NumericSign, Value};
 
 use crate::collate::{self, State};
-use crate::expr::{BoolOp, BoolTest, CastForm, Expr, ExprKind, FuncForm, SqlValue, Var};
+use crate::expr::{
+    BoolOp, BoolTest, CastForm, Expr, ExprKind, FuncForm, NullTreatment, SqlValue, Var,
+};
 use crate::from::{FromItem, Join, JoinKind};
 use crate::perm::PermInfo;
 use crate::select::Query;
 use crate::sort::SortGroup;
+use crate::window::WindowClause;
 use crate::{typcache, types};
 
 /// `-FirstLowInvalidHeapAttributeNumber`: the offset of the column numbers in `selectedCols`.
@@ -51,6 +54,10 @@ struct Writer<'a> {
     nulled: Vec<Vec<usize>>,
     /// The outer joins that can make the columns of the expression null, or `None` for all of them.
     scope: Option<Vec<usize>>,
+    /// Each merged column of `USING` that is not a column of one side, as `COALESCE` of a full join or a cast: the value, the range table index of the join, the number of the column and a relation of the join. A reference to the column is a `Var` of the join.
+    merged: Vec<(Expr, usize, usize, usize)>,
+    /// Only the merged columns of the joins below this range table index change to a `Var` of the join.
+    merged_below: usize,
     /// The range table index of the `*GROUP*` entry, or 0.
     group_rt: usize,
     /// True when the grouped expressions change to the columns of the `*GROUP*` entry.
@@ -67,7 +74,7 @@ impl<'a> Writer<'a> {
     ) -> Option<Writer<'a>> {
         let unsupported = query.set_op.is_some()
             || !query.ctes.is_empty()
-            || !query.windows.is_empty()
+            || query.windows.iter().any(|w| !w.run.is_empty())
             || !query.row_marks.is_empty()
             || !query.grouping_sets.is_empty()
             || query.group_distinct
@@ -98,6 +105,8 @@ impl<'a> Writer<'a> {
             entries: Vec::new(),
             nulled: vec![Vec::new(); query.relations.len()],
             scope: None,
+            merged: Vec::new(),
+            merged_below: usize::MAX,
             group_rt: 0,
             substitute: false,
             refs: vec![0; query.targets.len()],
@@ -112,9 +121,10 @@ impl<'a> Writer<'a> {
             writer.entries.push(Entry::Group);
             writer.group_rt = writer.entries.len();
         }
-        // `assignSortGroupRef`: `ORDER BY` gets its numbers first, then `GROUP BY` and `DISTINCT`.
+        // `assignSortGroupRef`: `ORDER BY` gets its numbers first, then `GROUP BY` and `DISTINCT`. The windows come last, and `transformWindowDefinitions` does the `ORDER BY` of a window before its `PARTITION BY`.
+        let windows = query.windows.iter().flat_map(|w| w.order.iter().chain(&w.partition));
         let mut next = 0;
-        for item in query.sort.iter().chain(&query.group).chain(&query.distinct) {
+        for item in query.sort.iter().chain(&query.group).chain(&query.distinct).chain(windows) {
             if writer.refs[item.target] == 0 {
                 next += 1;
                 writer.refs[item.target] = next;
@@ -135,7 +145,7 @@ impl<'a> Writer<'a> {
                 Some(vec![*i])
             }
             FromItem::Join(join) => {
-                if !join.using.is_empty() || join.alias.is_some() || join.using_alias.is_some() {
+                if join.alias.is_some() || join.using_alias.is_some() {
                     return None;
                 }
                 let left = self.number(&join.left)?;
@@ -162,6 +172,11 @@ impl<'a> Writer<'a> {
                 for &r in nullable {
                     self.nulled[r].push(index);
                 }
+                for (at, m) in join.merged.iter().enumerate() {
+                    if !matches!(m.kind, ExprKind::Var(_)) {
+                        self.merged.push((unplaced(m), index, at + 1, left[0]));
+                    }
+                }
                 Some([left, right].concat())
             }
         }
@@ -170,14 +185,16 @@ impl<'a> Writer<'a> {
     fn query(&mut self, aliases: &[&str]) -> Option<()> {
         let q = self.query;
         let has_aggs = q.targets.iter().map(|t| &t.expr).chain(&q.having).any(has_agg);
+        let has_windows = q.targets.iter().any(|t| has_window(&t.expr));
         if q.exprs().into_iter().any(unsupported) {
             return None;
         }
         self.out.push_str("{QUERY :commandType 1 :querySource 0 :canSetTag true :utilityStmt <> :resultRelation 0");
         let _ = write!(
             self.out,
-            " :hasAggs {} :hasWindowFuncs false :hasTargetSRFs false :hasSubLinks false :hasDistinctOn false :hasRecursive false :hasModifyingCTE false :hasForUpdate false :hasRowSecurity false :hasGroupRTE {} :isReturn false :cteList <> :rtable ",
+            " :hasAggs {} :hasWindowFuncs {} :hasTargetSRFs false :hasSubLinks false :hasDistinctOn false :hasRecursive false :hasModifyingCTE false :hasForUpdate false :hasRowSecurity false :hasGroupRTE {} :isReturn false :cteList <> :rtable ",
             has_aggs,
+            has_windows,
             self.group_rt != 0
         );
         let entries: Vec<usize> = (0..self.entries.len()).collect();
@@ -215,7 +232,10 @@ impl<'a> Writer<'a> {
         self.substitute = self.group_rt != 0;
         self.option(q.having.as_ref())?;
         self.substitute = false;
-        self.out.push_str(" :windowClause <> :distinctClause ");
+        self.out.push_str(" :windowClause ");
+        let windows: Vec<_> = q.windows.iter().enumerate().collect();
+        self.list(&windows, |w, &(i, c)| w.window(i + 1, c))?;
+        self.out.push_str(" :distinctClause ");
         self.sort_groups(&q.distinct)?;
         self.out.push_str(" :sortClause ");
         self.sort_groups(&q.sort)?;
@@ -364,13 +384,16 @@ impl<'a> Writer<'a> {
                 );
                 let _ = write!(
                     self.out,
-                    " :rtekind 2 :jointype {} :joinmergedcols 0 :joinaliasvars ",
-                    join_type(join.kind)?
+                    " :rtekind 2 :jointype {} :joinmergedcols {} :joinaliasvars ",
+                    join_type(join.kind)?,
+                    join.merged.len()
                 );
                 // The columns of `joinaliasvars` are the columns of the relations, which the join itself can make null.
                 self.scope = Some([inner, vec![index]].concat());
+                self.merged_below = index;
                 let columns: Vec<&Expr> = join.columns.iter().map(|c| &c.1).collect();
                 let written = self.list(&columns, |w, e| w.expr(e));
+                self.merged_below = usize::MAX;
                 self.scope = None;
                 written?;
                 let left: Vec<usize> =
@@ -465,13 +488,16 @@ impl<'a> Writer<'a> {
                 let index = self.join_index(join)?;
                 let _ = write!(
                     self.out,
-                    "{{JOINEXPR :jointype {} :isNatural false :larg ",
-                    join_type(join.kind)?
+                    "{{JOINEXPR :jointype {} :isNatural {} :larg ",
+                    join_type(join.kind)?,
+                    join.natural
                 );
                 self.jointree_item(&join.left)?;
                 self.out.push_str(" :rarg ");
                 self.jointree_item(&join.right)?;
-                self.out.push_str(" :usingClause <> :join_using_alias <> :quals ");
+                self.out.push_str(" :usingClause ");
+                self.names(join.using.iter().map(String::as_str));
+                self.out.push_str(" :join_using_alias <> :quals ");
                 let inner = self.entries.iter().find_map(|e| match e {
                     Entry::Join(_, at, inner) if *at == index => Some(inner.clone()),
                     _ => None,
@@ -501,6 +527,39 @@ impl<'a> Writer<'a> {
             );
             Some(())
         })
+    }
+
+    fn window(&mut self, winref: usize, c: &WindowClause) -> Option<()> {
+        self.out.push_str("{WINDOWCLAUSE :name ");
+        self.token(c.name.as_deref());
+        self.out.push_str(" :refname ");
+        self.token(c.refname.as_deref());
+        self.out.push_str(" :partitionClause ");
+        self.sort_groups(&c.partition)?;
+        self.out.push_str(" :orderClause ");
+        self.sort_groups(&c.order)?;
+        let f = &c.frame;
+        let _ = write!(self.out, " :frameOptions {} :startOffset ", f.options);
+        self.option(f.start.as_ref())?;
+        self.out.push_str(" :endOffset ");
+        self.option(f.end.as_ref())?;
+        // `inRangeColl` is the collation of the column of `ORDER BY`, only in `RANGE` mode with an offset.
+        let in_range_collation = match c.order.first() {
+            Some(s) if f.start_in_range != 0 || f.end_in_range != 0 => {
+                self.collation(&self.query.targets[s.target].expr)
+            }
+            _ => 0,
+        };
+        let _ = write!(
+            self.out,
+            " :startInRangeFunc {} :endInRangeFunc {} :inRangeColl {in_range_collation} :inRangeAsc {} :inRangeNullsFirst {} :winref {winref} :copiedOrder {}}}",
+            f.start_in_range,
+            f.end_in_range,
+            f.in_range_asc,
+            f.in_range_nulls_first,
+            c.copied_order
+        );
+        Some(())
     }
 
     /// `exprCollation`.
@@ -539,6 +598,9 @@ impl<'a> Writer<'a> {
                 g.ty, g.typmod
             );
             return Some(());
+        }
+        if let Some(at) = self.merged_column(e) {
+            return self.join_var(at, e);
         }
         match &e.kind {
             ExprKind::Var(var) => self.var(*var, e),
@@ -716,6 +778,29 @@ impl<'a> Writer<'a> {
                 );
                 Some(())
             }
+            ExprKind::Window(f) => {
+                let (collation, input) = (self.collation(e), self.input_collation(&f.args));
+                let _ = write!(
+                    self.out,
+                    "{{WINDOWFUNC :winfnoid {} :wintype {} :wincollid {collation} :inputcollid {input} :args ",
+                    f.oid, e.ty
+                );
+                self.exprs(&f.args)?;
+                self.out.push_str(" :aggfilter ");
+                self.option(f.filter.as_deref())?;
+                // `PARSER_IGNORE_NULLS` and `PARSER_RESPECT_NULLS`.
+                let nulls = match f.nulls {
+                    NullTreatment::None => 0,
+                    NullTreatment::Ignore => 1,
+                    NullTreatment::Respect => 2,
+                };
+                let _ = write!(
+                    self.out,
+                    " :runCondition <> :winref {} :winstar {} :winagg {} :ignore_nulls {nulls} :location -1}}",
+                    f.winref, f.star, f.agg
+                );
+                Some(())
+            }
             ExprKind::SqlValue(value) => {
                 let op = match value {
                     SqlValue::CurrentDate => 0,
@@ -751,6 +836,37 @@ impl<'a> Writer<'a> {
         );
         self.exprs(args)?;
         self.out.push_str(" :location -1}");
+        Some(())
+    }
+
+    /// The merged column of a join that `e` is, as the number in `merged`.
+    fn merged_column(&self, e: &Expr) -> Option<usize> {
+        if self.merged.is_empty() || matches!(e.kind, ExprKind::Var(_) | ExprKind::Const(_)) {
+            return None;
+        }
+        let e = unplaced(e);
+        self.merged.iter().position(|(m, index, _, _)| *index < self.merged_below && *m == e)
+    }
+
+    /// A `Var` of a merged column of a join. Only the outer joins above the join can make it null.
+    fn join_var(&mut self, at: usize, e: &Expr) -> Option<()> {
+        let (index, number, relation) = (self.merged[at].1, self.merged[at].2, self.merged[at].3);
+        let collation = self.collation(e);
+        let _ = write!(
+            self.out,
+            "{{VAR :varno {index} :varattno {number} :vartype {} :vartypmod {} :varcollid {collation} :varnullingrels ",
+            e.ty, e.typmod
+        );
+        let nulled: Vec<i32> = self.nulled[relation]
+            .iter()
+            .filter(|&&j| j > index && self.scope.as_ref().is_none_or(|s| s.contains(&j)))
+            .map(|&j| i32::try_from(j).unwrap_or(0))
+            .collect();
+        self.bits(nulled);
+        let _ = write!(
+            self.out,
+            " :varlevelsup 0 :varreturningtype 0 :varnosyn {index} :varattnosyn {number} :location -1}}"
+        );
         Some(())
     }
 
@@ -813,6 +929,12 @@ impl<'a> Writer<'a> {
                 bytes
             }
             Value::Numeric(n) => numeric(n)?,
+            Value::Interval(v) => {
+                let mut bytes = v.time.to_le_bytes().to_vec();
+                bytes.extend_from_slice(&v.day.to_le_bytes());
+                bytes.extend_from_slice(&v.month.to_le_bytes());
+                bytes
+            }
             Value::Text(s) if row.len == 64 => {
                 let mut bytes = s.as_bytes().to_vec();
                 bytes.resize(64, 0);
@@ -908,13 +1030,17 @@ fn unplaced(e: &Expr) -> Expr {
     e
 }
 
+fn has_window(e: &Expr) -> bool {
+    matches!(e.kind, ExprKind::Window(_)) || e.children().into_iter().any(has_window)
+}
+
 fn has_agg(e: &Expr) -> bool {
     matches!(e.kind, ExprKind::Agg(_)) || e.children().into_iter().any(has_agg)
 }
 
-/// True when the expression has a subquery or a window function, which the writer does not write.
+/// True when the expression has a subquery or a `GROUPING` call, which the writer does not write.
 fn unsupported(e: &Expr) -> bool {
-    matches!(e.kind, ExprKind::SubLink(_) | ExprKind::Window(_) | ExprKind::Grouping(_))
+    matches!(e.kind, ExprKind::SubLink(_) | ExprKind::Grouping(_))
         || e.children().into_iter().any(unsupported)
 }
 
