@@ -1759,14 +1759,7 @@ impl Analyzer<'_> {
             if let Some(default) = catalog.default_of(table, attnum) {
                 let mut expr: Expr = crate::node::read(&default.expr)?;
                 // `ExecComputeStoredGenerated` sets `tts_tableOid` of the new row first, so `tableoid` is the table.
-                expr.each_mut(0, &mut |e, depth| {
-                    let ExprKind::Var(var) = e.kind else { return false };
-                    if var.levels_up != depth || var.attnum != TABLE_OID_ATTNUM {
-                        return false;
-                    }
-                    *e = Expr::constant(Value::Oid(table), oid::OID, -1, None);
-                    true
-                });
+                with_table_oid(&mut expr, table);
                 self.note_funcs(&expr);
                 out.push((index, expr, column.generated));
             }
@@ -2062,15 +2055,32 @@ impl Analyzer<'_> {
             .map(|c| (c.name.clone(), c.expr.as_deref().unwrap_or_default()))
             .collect();
         checks.sort_by(|a, b| a.0.cmp(&b.0));
+        // `ExecConstraints` tests the row with `tts_tableOid` set, so `tableoid` is the table.
         let checks: Vec<(String, Expr)> = checks
             .into_iter()
-            .map(|(name, text)| Ok((name, crate::node::read(text)?)))
+            .map(|(name, text)| {
+                let mut expr: Expr = crate::node::read(text)?;
+                with_table_oid(&mut expr, table);
+                Ok((name, expr))
+            })
             .collect::<Result<_>>()?;
         for (_, expr) in &checks {
             self.note_funcs(expr);
         }
         Ok(checks)
     }
+}
+
+/// The expression with the oid of the table in the place of each `tableoid` of the row, which is the table that gets the row.
+fn with_table_oid(expr: &mut Expr, table: u32) {
+    expr.each_mut(0, &mut |e, depth| {
+        let ExprKind::Var(var) = e.kind else { return false };
+        if var.levels_up != depth || var.attnum != TABLE_OID_ATTNUM {
+            return false;
+        }
+        *e = Expr::constant(Value::Oid(table), oid::OID, -1, None);
+        true
+    });
 }
 
 /// The default of a `serial` column or of an identity column before the cast to the type of the column: `nextval('sequence'::regclass)`.

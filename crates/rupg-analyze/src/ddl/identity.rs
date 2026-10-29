@@ -106,7 +106,7 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
-    /// The checks of `ATExecAddIdentity` for the column `number` of the table: it must have a not-null constraint, and no identity or default.
+    /// The checks of `ATExecAddIdentity` for the column `number` of the table: it must have a valid not-null constraint, and no identity or default.
     fn check_add_identity(&self, target: &Target, number: i16, column: &str) -> Result<()> {
         let Some(attr) = self.catalog.relation(target.oid).and_then(|r| r.column(number)) else {
             return Err(system(column));
@@ -121,6 +121,13 @@ impl Definer<'_, '_> {
             return Err(prerequisite(
                 "must be declared NOT NULL before identity can be added".into(),
             ));
+        }
+        if let Some((name, _, false)) = self.not_null_of(target.oid, number) {
+            return Err(Error::new(
+                SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
+                format!("incompatible NOT VALID constraint \"{name}\" on relation \"{}\"", target.name),
+            )
+            .with_hint("You might need to validate it using ALTER TABLE ... VALIDATE CONSTRAINT."));
         }
         if attr.identity != 0 {
             return Err(prerequisite("is already an identity column".into()));

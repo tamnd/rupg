@@ -1,0 +1,48 @@
+!details
+> create table scc (city text, is_capital bool, check (not (is_capital and tableoid::regclass::text = 'scc')))
+CREATE TABLE
+> insert into scc values ('Seattle', false)
+INSERT 0 1
+> insert into scc values ('Olympia', true)
+ERROR 23514 new row for relation "scc" violates check constraint "scc_check"
+DETAIL Failing row contains (Olympia, t).
+> select *, tableoid::regclass::text from scc
+fields city@scc.1:25:-1:-1,is_capital@scc.2:16:1:-1,tableoid:25:-1:-1
+row Seattle,f,scc
+SELECT 1
+> drop table scc
+DROP TABLE
+> create table nnt (a int constraint nnt_a_not_null not null)
+CREATE TABLE
+> alter table nnt add column b int constraint nnt_a_not_null not null
+ERROR 42710 constraint "nnt_a_not_null" for relation "nnt" already exists
+> alter table nnt add column b int constraint nnt_a_not_null check (b > 0)
+ERROR 42710 constraint "nnt_a_not_null" for relation "nnt" already exists
+> drop table nnt
+DROP TABLE
+> create table nnv (a int, b int)
+CREATE TABLE
+> insert into nnv values (null, 1)
+INSERT 0 1
+> alter table nnv add constraint nn not null a not valid
+ALTER TABLE
+> alter table nnv add constraint nn not null a
+ERROR 55000 incompatible NOT VALID constraint "nn" on relation "nnv"
+HINT You might need to validate it using ALTER TABLE ... VALIDATE CONSTRAINT.
+> alter table nnv add primary key (a)
+ERROR 55000 cannot create primary key on column "a"
+DETAIL The constraint "nn" on column "a" of table "nnv", marked NOT VALID, is incompatible with a primary key.
+HINT You might need to validate it using ALTER TABLE ... VALIDATE CONSTRAINT.
+> alter table nnv alter column a add generated always as identity
+ERROR 55000 incompatible NOT VALID constraint "nn" on relation "nnv"
+HINT You might need to validate it using ALTER TABLE ... VALIDATE CONSTRAINT.
+> alter table nnv alter a set not null
+ERROR 23502 column "a" of relation "nnv" contains null values
+> create table nnv_copy (like nnv)
+CREATE TABLE
+> select conname, convalidated from pg_constraint where conrelid = 'nnv_copy'::regclass
+fields conname@pg_constraint.2:19:64:-1,convalidated@pg_constraint.8:16:1:-1
+row nn,t
+SELECT 1
+> drop table nnv, nnv_copy
+DROP TABLE
