@@ -16,7 +16,7 @@ use crate::ast::{
     Block, Cond, DatumKind, DiagItem, Expr, Function, Mode, Opened, RaiseOption, Returned, Source,
     Stmt, StmtKind, Target, ns_lookup,
 };
-use crate::{Spi, TriggerCall};
+use crate::{Fetched, Spi, TriggerCall};
 
 /// The name, the type and the typmod of a field of a row or of a column of a result.
 pub(crate) type Field = (String, u32, i32);
@@ -1186,8 +1186,8 @@ impl Exec<'_> {
                 Ok(((rows, columns(&p.plan)), p.plan.write().is_none()))
             }
             Source::Dynamic { query, params } => {
-                let (rows, _, plan) = self.run_dynamic(query, params)?;
-                Ok(((rows, columns(&plan)), plan.write().is_none()))
+                let (rows, _, columns, read_only) = self.run_dynamic(query, params)?;
+                Ok(((rows, columns), read_only))
             }
         }
     }
@@ -1556,6 +1556,25 @@ impl Exec<'_> {
             Planned::Query(plan) => *plan,
             Planned::Utility(node) => {
                 check_utility(&node, "EXECUTE of transaction commands is not implemented")?;
+                if let Some(fetched) = self.utility_rows(&node, &text, line.clone())? {
+                    if let Some(target) = into {
+                        if fetched.rows.is_empty() && strict {
+                            return Err(Error::new(
+                                SqlState::NO_DATA_FOUND,
+                                "query returned no rows",
+                            ));
+                        }
+                        if fetched.rows.len() > 1 && strict {
+                            return Err(Error::new(
+                                SqlState::TOO_MANY_ROWS,
+                                "query returned more than one row",
+                            ));
+                        }
+                        self.move_rows(target, &fetched.columns, fetched.rows.into_iter().next())?;
+                    }
+                    self.row_count = fetched.count;
+                    return Ok(());
+                }
                 let result = self.run_utility(&node, &text, line.clone());
                 self.row_count = result.map_err(|error| error.with_context(line))?;
                 return no_into(into);
@@ -1581,18 +1600,47 @@ impl Exec<'_> {
         Ok(())
     }
 
-    /// The rows of the query of `EXECUTE`, with the values of `USING` as its parameters.
+    /// The rows of the query of `EXECUTE`, with the values of `USING` as its parameters, the columns, and true for a query that does not write. A statement that is not a query must give rows, as `EXPLAIN` and `SHOW` do.
     fn run_dynamic(
         &mut self,
         query: &Expr,
         params: &[Expr],
-    ) -> Result<(Vec<Vec<Value>>, u64, Plan)> {
-        let (plan, values, _, line) = self.dynamic_plan(query, params)?;
+    ) -> Result<(Vec<Vec<Value>>, u64, Vec<Field>, bool)> {
+        let (planned, values, text, line) = self.dynamic_planned(query, params)?;
+        let plan = match planned {
+            Planned::Query(plan) => *plan,
+            Planned::Utility(node) => {
+                return match self.utility_rows(&node, &text, line.clone())? {
+                    Some(fetched) => Ok((fetched.rows, fetched.count, fetched.columns, true)),
+                    None => Err(Error::new(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        "this statement is not supported yet",
+                    )
+                    .with_context(line)),
+                };
+            }
+        };
         self.set_spi(Some(line.clone()));
         let result = self.spi.execute(&plan, &values);
         self.set_spi(None);
         let (rows, n) = result.map_err(|error| error.with_context(line))?;
-        Ok((rows, n, plan))
+        Ok((rows, n, columns(&plan), plan.write().is_none()))
+    }
+
+    /// The rows of the statement `node` that is not a query, or `None` when it gives no rows. Its notices get the context line `line` and the lines of the calls. An error with a place in the text `text` points into the text as the internal query.
+    fn utility_rows(&mut self, node: &Node, text: &str, line: String) -> Result<Option<Fetched>> {
+        self.set_spi(Some(line.clone()));
+        let mut notices = Vec::new();
+        let result = self.spi.utility_rows(node, &mut notices);
+        let stack = self.stack();
+        for notice in notices {
+            self.spi.notice(notice.with_context(stack.clone()));
+        }
+        self.set_spi(None);
+        result.map_err(|error| match error.position() {
+            Some(at) => error.with_position(None).with_internal(text.to_string(), Some(at)),
+            None => error.with_context(line),
+        })
     }
 
     /// The plan of the query of `EXECUTE` with the values of `USING`, the text of the query and the line of the context of its errors. A statement that is not a query is not supported here yet.

@@ -97,6 +97,12 @@ pub trait Spi {
     ///
     /// The errors of the statement, and `0A000` for a statement that a call cannot run yet.
     fn utility(&self, stmt: &Node, text: &str, notices: &mut Vec<Error>) -> Result<u64>;
+    /// The rows of a statement that is not a query and gives rows, such as `EXPLAIN` and `SHOW`, as `SPI_execute` gives them when `UtilityReturnsTuples` is true. `None` for a statement that gives no rows.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the statement.
+    fn utility_rows(&self, stmt: &Node, notices: &mut Vec<Error>) -> Result<Option<Fetched>>;
     /// The number of the changes of the catalog in the calls that run. A plan made before a change is made again.
     fn changes(&self) -> u64;
     /// `PinPortal`: a loop reads the rows of the portal `name`, or of a query when it is `None`. The end of the transaction keeps the portal, and fails when the query of the loop is not `read_only`.

@@ -444,7 +444,7 @@ fn options(
 }
 
 /// `SHOW name` and `SHOW ALL`, as `GetPGVariable` gives them.
-fn show(name: &str, settings: &Settings) -> Result<Outcome, Error> {
+pub(crate) fn show(name: &str, settings: &Settings) -> Result<Outcome, Error> {
     if name.eq_ignore_ascii_case("all") {
         let rows = settings
             .show_all()
