@@ -27,7 +27,7 @@ pub(super) struct Batch {
     /// The name of the table, for the errors.
     name: String,
     /// The foreign keys that the write checks, in the order of the names of their triggers.
-    foreign: Vec<Foreign>,
+    pub(super) foreign: Vec<Foreign>,
     /// The command of the write.
     command: u32,
     /// The new rows of an `INSERT` or an `UPDATE`, in the order of the write.
