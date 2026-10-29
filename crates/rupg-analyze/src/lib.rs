@@ -26,6 +26,7 @@ mod locking;
 mod merge;
 mod modify;
 pub mod node;
+mod nodetree;
 mod perm;
 mod plpgsql;
 mod poly;

@@ -1160,12 +1160,20 @@ fn indexes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
         .collect()
 }
 
-/// The `_RETURN` rule of each view. `ev_action` holds the statement that made the view.
-/// The `_RETURN` rules of the views and the rules of `CREATE RULE`, in the order of their OIDs. `ev_qual` and `ev_action` have the text of the statement in place of the node trees, and `ev_qual` is `<>` for a rule with no condition.
+/// The `_RETURN` rules of the views and the rules of `CREATE RULE`, in the order of their OIDs. `ev_action` of a view has its query as `nodeToString` writes it when the analyzer can write the query. Else `ev_qual` and `ev_action` have the text of the statement in place of the node trees, and `ev_qual` is `<>` for a rule with no condition.
 fn rewrites<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
     let views = catalog.relations().filter_map(|rel| {
         let view = rel.view.as_ref()?;
-        Some((view.rule, "_RETURN", rel.oid, b'1', b'O', true, false, &view.text))
+        Some((
+            view.rule,
+            "_RETURN",
+            rel.oid,
+            b'1',
+            b'O',
+            true,
+            false,
+            view.action.as_ref().unwrap_or(&view.text),
+        ))
     });
     let rules = catalog.rules().map(|r| {
         (r.oid, r.name.as_str(), r.relation, r.event, r.enabled, r.instead, r.qualified, &r.text)

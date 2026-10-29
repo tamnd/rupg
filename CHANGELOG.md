@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A view stores its query in `pg_rewrite.ev_action` as `nodeToString` of PostgreSQL 19 writes it, for the queries that the new writer supports. A long action takes a TOAST OID as in PostgreSQL (#916) (#1093).
 - An `UPDATE`, a `DELETE` or a `MERGE` of a row that a statement of a `BEFORE` trigger changed fails with `27000`, and the statements of a trigger start at a command after the command of the write, as in PostgreSQL (#1092).
 - A function in `FROM` whose call folds to a constant of a scalar type gives the constant in the places of its column, and the plan has no scan of the function, as in PostgreSQL (#1091).
 - A change of the type of a field of a composite type makes the checks of the domains over the type again with the new type of the field, and a check that is made again keeps its comment, as in PostgreSQL (#1090).
