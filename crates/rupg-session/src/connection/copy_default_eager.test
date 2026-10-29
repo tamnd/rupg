@@ -1,0 +1,38 @@
+!details
+> create table cpd (col1 varchar(5) default 'more than 5 chars', col2 varchar(5))
+CREATE TABLE
+> copy cpd from stdin
+<done
+copy in 0 0,0
+COPY 0
+> copy cpd (col2) from stdin
+<done
+ERROR 22001 value too long for type character varying(5)
+> copy cpd from stdin (default '')
+<done
+ERROR 22001 value too long for type character varying(5)
+> copy cpd (col2) from stdin (default '')
+<done
+ERROR 22001 value too long for type character varying(5)
+> create table cpd2 (a int default 1/0, b int)
+CREATE TABLE
+> copy cpd2 from stdin (default 'D')
+<done
+ERROR 22012 division by zero
+> copy cpd2 (b) from stdin (default 'D')
+<done
+ERROR 22012 division by zero
+> create table cpd3 (a int default 5, b int not null, c int)
+CREATE TABLE
+> copy cpd3 from stdin (default 'D')
+< 1	2	3
+< D	4	D
+<done
+copy in 0 0,0,0
+ERROR 22P04 unexpected default marker in COPY data (COPY cpd3, line 2: "D	4	D")
+DETAIL Column "c" has no default value.
+> select * from cpd3 order by b
+fields a@cpd3.1:23:4:-1,b@cpd3.2:23:4:-1,c@cpd3.3:23:4:-1
+SELECT 0
+> drop table cpd, cpd2, cpd3
+DROP TABLE
