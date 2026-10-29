@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The scan under a `DISTINCT` or `GROUP BY` that has the same column twice among its items now emits only the needed columns, as in PostgreSQL. `EXPLAIN VERBOSE` shows the same `Output` (#1160).
 - `pg_event_trigger_ddl_commands` gives the commands of a statement in an event trigger of `ddl_command_end`, in the order of PostgreSQL 19, and `pg_get_object_address` finds event triggers by name (#1159).
 - `CREATE TABLE AS` and `SELECT INTO` now fill the new table with no check of `INSERT` on it, as in PostgreSQL. A default privilege that revokes `INSERT` from the owner no longer makes them fail (#1158).
 - An error of an index expression during `ANALYZE` now ends the statement, as in PostgreSQL. Before, `ANALYZE` skipped the statistics of that index and succeeded (#1157).

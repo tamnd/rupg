@@ -1,0 +1,47 @@
+!details
+> create table dt (two int, four int, ten int)
+CREATE TABLE
+> insert into dt select g % 2, g % 4, g % 10 from generate_series(1, 100) g
+INSERT 0 100
+> analyze dt
+ANALYZE
+> explain (verbose, costs off) select count(*) from (select distinct two, four, two from dt) ss
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   Output: count(*)
+row   ->  HashAggregate
+row         Output: dt.two, dt.four, dt.two
+row         Group Key: dt.two, dt.four
+row         ->  Seq Scan on public.dt
+row               Output: dt.two, dt.four, dt.two
+EXPLAIN
+> explain (verbose, costs off) select count(*) from (select distinct two, four from dt) ss
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   Output: count(*)
+row   ->  HashAggregate
+row         Output: dt.two, dt.four
+row         Group Key: dt.two, dt.four
+row         ->  Seq Scan on public.dt
+row               Output: dt.two, dt.four, dt.ten
+EXPLAIN
+> explain (verbose, costs off) select two, two from dt group by 1, 2
+fields QUERY PLAN:25:-1:-1
+row HashAggregate
+row   Output: two, two
+row   Group Key: dt.two
+row   ->  Seq Scan on public.dt
+row         Output: two, four, ten
+EXPLAIN
+> explain (verbose, costs off) select two, two from dt group by 1
+fields QUERY PLAN:25:-1:-1
+row HashAggregate
+row   Output: two, two
+row   Group Key: dt.two
+row   ->  Seq Scan on public.dt
+row         Output: two, four, ten
+EXPLAIN
+> select count(*) from (select distinct two, four, two from dt) ss
+fields count:20:8:-1
+row 4
+SELECT 1
