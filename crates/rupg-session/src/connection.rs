@@ -6797,6 +6797,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vacuum_stats.test")));
     }
 
+    /// `DROP OWNED` revokes the privileges of the roles on each database, with the privileges that they granted with the grant option, so that `DROP ROLE` then works. `connection/drop_owned_database.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn drop_owned_database() {
+        big_stack(|| script(include_str!("connection/drop_owned_database.test")));
+    }
+
     /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.
     #[test]
     fn role_settings_at_start() {

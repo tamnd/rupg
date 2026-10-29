@@ -1,10 +1,10 @@
 //! `DROP OWNED` and `REASSIGN OWNED`, as `DropOwnedObjects`, `ReassignOwnedObjects`, `shdepDropOwned` and `shdepReassignOwned` run them. rupg keeps no `pg_shdepend`, so the objects of a role are the objects with the role as their owner and the objects with an ACL that names the role.
 
 use rupg_catalog::{
-    Catalog, ObjRef, PG_CLASS, PG_COLLATION, PG_CONVERSION, PG_DEFAULT_ACL, PG_EXTENSION,
-    PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_LANGUAGE, PG_LARGEOBJECT, PG_NAMESPACE,
-    PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_PROC, PG_PUBLICATION, PG_STATISTIC_EXT, PG_TS_CONFIG,
-    PG_TS_DICT, PG_TYPE, PG_USER_MAPPING, RangePart, RelKind,
+    Catalog, ObjRef, PG_CLASS, PG_COLLATION, PG_CONVERSION, PG_DATABASE, PG_DEFAULT_ACL,
+    PG_EXTENSION, PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_LANGUAGE, PG_LARGEOBJECT,
+    PG_NAMESPACE, PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_PROC, PG_PUBLICATION, PG_STATISTIC_EXT,
+    PG_TS_CONFIG, PG_TS_DICT, PG_TYPE, PG_USER_MAPPING, RangePart, RelKind,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{DropBehavior, DropOwnedStmt, List, Node, ReassignOwnedStmt};
@@ -184,6 +184,14 @@ impl Definer<'_, '_> {
                 let object = ObjRef::new(object.class, object.oid);
                 if !revoked.contains(&object) {
                     revoked.push(object);
+                }
+            }
+            // The ACL of a database is a shared object, which `shdepDropOwned` revokes from each database.
+            for db in self.an.env.databases().iter() {
+                let names =
+                    db.acl.as_deref().is_some_and(|acl| super::acl_roles(acl).contains(&role));
+                if db.owner != role && names {
+                    revoked.push(ObjRef::new(PG_DATABASE, db.oid));
                 }
             }
             revoked.sort_by_key(|o| o.oid);

@@ -1,0 +1,74 @@
+!details
+> create database regress_dob_db
+CREATE DATABASE
+> create role regress_dob1
+CREATE ROLE
+> create role regress_dob2
+CREATE ROLE
+> create role regress_dob3
+CREATE ROLE
+> create schema regress_dob_s
+CREATE SCHEMA
+> create table regress_dob_s.t (a int)
+CREATE TABLE
+> grant create on database regress_dob_db to regress_dob1 with grant option
+GRANT
+> grant connect on database regress_dob_db to regress_dob1
+GRANT
+> grant temp on database regress_dob_db to regress_dob2
+GRANT
+> set role regress_dob1
+SET
+is_superuser=off
+> grant create on database regress_dob_db to regress_dob3
+GRANT
+> reset role
+RESET
+is_superuser=on
+> grant usage on schema regress_dob_s to regress_dob1
+GRANT
+> grant select on regress_dob_s.t to regress_dob1
+GRANT
+> select datacl from pg_database where datname = 'regress_dob_db'
+fields datacl@pg_database.18:1034:-1:-1
+row {=Tc/postgres,postgres=CTc/postgres,regress_dob1=C*c/postgres,regress_dob2=T/postgres,regress_dob3=C/regress_dob1}
+SELECT 1
+> drop role regress_dob1
+ERROR 2BP01 role "regress_dob1" cannot be dropped because some objects depend on it
+DETAIL privileges for database regress_dob_db
+privileges for schema regress_dob_s
+privileges for table regress_dob_s.t
+> drop owned by regress_dob1
+DROP OWNED
+> select datacl from pg_database where datname = 'regress_dob_db'
+fields datacl@pg_database.18:1034:-1:-1
+row {=Tc/postgres,postgres=CTc/postgres,regress_dob2=T/postgres}
+SELECT 1
+> select nspacl::text like '%regress_dob1%' from pg_namespace where nspname = 'regress_dob_s'
+fields ?column?:16:1:-1
+row f
+SELECT 1
+> select relacl::text like '%regress_dob1%' from pg_class where relname = 't'
+fields ?column?:16:1:-1
+row f
+SELECT 1
+> drop role regress_dob1
+DROP ROLE
+> drop role regress_dob2
+ERROR 2BP01 role "regress_dob2" cannot be dropped because some objects depend on it
+DETAIL privileges for database regress_dob_db
+> drop owned by regress_dob2, regress_dob3
+DROP OWNED
+> select datacl from pg_database where datname = 'regress_dob_db'
+fields datacl@pg_database.18:1034:-1:-1
+row {=Tc/postgres,postgres=CTc/postgres}
+SELECT 1
+> drop role regress_dob2
+DROP ROLE
+> drop role regress_dob3
+DROP ROLE
+> drop schema regress_dob_s cascade
+NOTICE 00000 drop cascades to table regress_dob_s.t
+DROP SCHEMA
+> drop database regress_dob_db
+DROP DATABASE
