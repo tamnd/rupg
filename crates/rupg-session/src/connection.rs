@@ -6749,6 +6749,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/include_drop_column.test")));
     }
 
+    /// A subquery in `WHERE` of `ON CONFLICT DO UPDATE` is a subplan of the `ModifyTable` node, and `EXPLAIN` shows it under `Conflict Filter`.
+    #[test]
+    fn conflict_sublink() {
+        big_stack(|| script(include_str!("connection/conflict_sublink.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

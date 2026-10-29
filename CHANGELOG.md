@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A subquery in `WHERE` of `ON CONFLICT DO UPDATE` is planned as a subplan, and `EXPLAIN` shows it as `SubPlan` or `InitPlan` under `Conflict Filter`, as in PostgreSQL (#1108).
 - `ALTER TABLE ... DROP COLUMN` of a column in `INCLUDE` of a unique constraint drops the constraint and its index, as in PostgreSQL (#1107).
 - An index column now matches a condition through a placeholder and through more than one binary-compatible relabel, and the constant fold takes out a relabel to the type of its argument, as in PostgreSQL (#1106).
 - A unique index takes a column out of `GROUP BY` only when the `=` operator of the group is in the family of each key column of the index, as in PostgreSQL (#1105).
