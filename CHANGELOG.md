@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `VACUUM` sets `relpages` and `reltuples` of the `btree` indexes after their vacuum, and `INDEX_CLEANUP AUTO` bypasses the vacuum of the indexes when fewer than 2% of the pages have dead rows, as in PostgreSQL (#1125).
 - `pg_relation_size` of a `btree` index gives the pages of the index after its build, after `VACUUM` and after inserts in an empty index, as in PostgreSQL (#1124).
 - The node tree of a view in pg_rewrite has aggregates with DISTINCT, ORDER BY and WITHIN GROUP, aggregates of an outer query in a subquery, and the grouped columns of an outer query in a subquery, as in PG19 (#916) (#1123).
 - COPY FROM now plans the column defaults before CopyInResponse, and plans the default of each column with the DEFAULT option, so an error in a default comes first, as in PostgreSQL (#1122).

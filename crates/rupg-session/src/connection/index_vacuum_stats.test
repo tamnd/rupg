@@ -1,0 +1,92 @@
+> create table ivs (a int) with (autovacuum_enabled = off)
+CREATE TABLE
+> insert into ivs select i from generate_series(1, 20000) i
+INSERT 0 20000
+> create index ivs_a on ivs(a)
+CREATE INDEX
+> create index ivs_p on ivs(a) where a > 15000
+CREATE INDEX
+> select relname, relpages, reltuples from pg_class where relname like 'ivs_%' order by relname
+fields relname@pg_class.2:19:64:-1,relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row ivs_a,57,20000
+row ivs_p,16,5000
+SELECT 2
+> delete from ivs where a <= 10
+DELETE 10
+> vacuum ivs
+VACUUM
+> select relname, relpages, reltuples from pg_class where relname like 'ivs_%' order by relname
+fields relname@pg_class.2:19:64:-1,relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row ivs_a,57,19990
+row ivs_p,16,5000
+SELECT 2
+> delete from ivs where a <= 5000
+DELETE 4990
+> vacuum ivs
+VACUUM
+> select relname, relpages, reltuples from pg_class where relname like 'ivs_%' order by relname
+fields relname@pg_class.2:19:64:-1,relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row ivs_a,57,15000
+row ivs_p,16,5000
+SELECT 2
+> delete from ivs where a <= 6000
+DELETE 1000
+> vacuum (index_cleanup off) ivs
+VACUUM
+> select relname, relpages, reltuples from pg_class where relname like 'ivs_%' order by relname
+fields relname@pg_class.2:19:64:-1,relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row ivs_a,57,15000
+row ivs_p,16,5000
+SELECT 2
+> delete from ivs where a <= 6005
+DELETE 5
+> vacuum (index_cleanup on) ivs
+VACUUM
+> select relname, relpages, reltuples from pg_class where relname like 'ivs_%' order by relname
+fields relname@pg_class.2:19:64:-1,relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row ivs_a,57,13995
+row ivs_p,16,5000
+SELECT 2
+> delete from ivs where a > 19000
+DELETE 1000
+> vacuum ivs
+VACUUM
+> select relname, relpages, reltuples from pg_class where relname like 'ivs_%' order by relname
+fields relname@pg_class.2:19:64:-1,relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row ivs_a,57,12995
+row ivs_p,16,4000
+SELECT 2
+> drop table ivs
+DROP TABLE
+> create table ivb (a int) with (autovacuum_enabled = off)
+CREATE TABLE
+> insert into ivb select i from generate_series(1, 30000) i
+INSERT 0 30000
+> create index ivb_a on ivb(a)
+CREATE INDEX
+> delete from ivb where a = 15000
+DELETE 1
+> vacuum ivb
+VACUUM
+> select relname, relpages, reltuples from pg_class where relname = 'ivb_a'
+fields relname@pg_class.2:19:64:-1,relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row ivb_a,84,30000
+SELECT 1
+> vacuum (index_cleanup on) ivb
+VACUUM
+> select relname, relpages, reltuples from pg_class where relname = 'ivb_a'
+fields relname@pg_class.2:19:64:-1,relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row ivb_a,84,29999
+SELECT 1
+> delete from ivb where a = 15001
+DELETE 1
+> alter table ivb set (vacuum_index_cleanup = on)
+ALTER TABLE
+> vacuum ivb
+VACUUM
+> select relname, relpages, reltuples from pg_class where relname = 'ivb_a'
+fields relname@pg_class.2:19:64:-1,relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row ivb_a,84,29998
+SELECT 1
+> drop table ivb
+DROP TABLE

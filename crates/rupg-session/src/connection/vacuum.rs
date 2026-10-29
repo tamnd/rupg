@@ -72,6 +72,9 @@ const RING_SIZE_KB: (i32, i32) = (128, 16 * 1024 * 1024);
 /// `MAX_PARALLEL_WORKER_LIMIT`.
 const MAX_PARALLEL_WORKERS: i32 = 1024;
 
+/// `BYPASS_THRESHOLD_PAGES`: the part of the pages of a heap with dead versions under which `VACUUM` bypasses the vacuum of the indexes.
+const BYPASS_THRESHOLD_PAGES: f64 = 0.02;
+
 /// The options of `VACUUM` and `ANALYZE` that the checks of `ExecVacuum` read.
 #[derive(Debug, Default)]
 struct Parsed {
@@ -88,6 +91,8 @@ struct Parsed {
     ring_size: Option<i32>,
     /// `TRUNCATE`, or `None` for the reloption `vacuum_truncate`.
     truncate: Option<bool>,
+    /// `INDEX_CLEANUP`, or `None` for `AUTO` and for the reloption `vacuum_index_cleanup`.
+    index_cleanup: Option<bool>,
 }
 
 /// A row of the sample of `ANALYZE`: its values, and the widths of each value that `stored_widths` gives.
@@ -147,9 +152,11 @@ fn parse_options(stmt: &VacuumStmt) -> Result<Parsed, Error> {
             "full" => parsed.full = def_boolean(def)?,
             "disable_page_skipping" => parsed.disable_page_skipping = def_boolean(def)?,
             "index_cleanup" => {
-                if def.arg.is_some() && !def_string(def)?.eq_ignore_ascii_case("auto") {
-                    def_boolean(def)?;
-                }
+                parsed.index_cleanup = match def.arg {
+                    None => Some(true),
+                    Some(_) if def_string(def)?.eq_ignore_ascii_case("auto") => None,
+                    Some(_) => Some(def_boolean(def)?),
+                };
             }
             "process_main" => parsed.process_main = def_boolean(def)?,
             "process_toast" => parsed.process_toast = def_boolean(def)?,
@@ -529,8 +536,32 @@ impl Connection {
         let indexed = catalog.relations().any(|r| {
             r.kind == RelKind::Index && r.index.as_ref().is_some_and(|i| i.table == relid)
         });
+        let cleanup = parsed.index_cleanup.or_else(|| {
+            let options = catalog.relation(relid).map(|r| r.options.as_slice()).unwrap_or_default();
+            options.iter().find_map(|o| {
+                match o.strip_prefix("vacuum_index_cleanup=")?.to_ascii_lowercase().as_str() {
+                    "true" | "on" | "yes" | "1" => Some(true),
+                    "false" | "off" | "no" | "0" => Some(false),
+                    _ => None,
+                }
+            })
+        });
+        // The pages of each `btree` index before `VACUUM` removes the versions of its build.
+        let indexes: Vec<(&Relation, i32)> = if indexed && cleanup != Some(false) {
+            self.btree_pages(catalog, relid)
+        } else {
+            Vec::new()
+        };
         let target = (self.database_oid, relid, self.pid);
-        let rows = self.heap().vacuum(target, skip, (indexed, parsed.freeze, truncate));
+        let vacuumed = self.heap().vacuum(target, skip, (indexed, parsed.freeze, truncate));
+        let rows = vacuumed.reltuples;
+        // `lazy_vacuum`: with `INDEX_CLEANUP AUTO`, fewer pages with dead versions than a 50th of the heap bypass the vacuum of the indexes. With no `ambulkdelete` call, `btvacuumcleanup` gives no exact count, and the indexes keep their stats.
+        let threshold = (f64::from(vacuumed.pages) * BYPASS_THRESHOLD_PAGES) as u32;
+        let bypass = cleanup.is_none() && vacuumed.dead_pages < threshold;
+        if vacuumed.dead_pages > 0 && !bypass && cleanup != Some(false) {
+            self.heap().vacuumed_indexes(self.database_oid, relid);
+            self.vacuumed_index_stats(relid, &indexes);
+        }
         // `VACUUM FULL` rewrites the table as `REPACK` does, which reports no `VACUUM`.
         if !parsed.full && self.counts_tracked() {
             self.store.report_vacuum(
@@ -692,6 +723,45 @@ impl Connection {
             if let Some(columns) = &repack.analyze {
                 self.relation_stats(catalog, repack.table, (None, Some(columns)));
             }
+        }
+    }
+
+    /// The `btree` indexes of the table `relid`, each with its pages, as `RelationGetNumberOfBlocks` gives them: the pages of the last build or `VACUUM`, or of a build from the versions of the table now when it has more.
+    fn btree_pages<'c>(&self, catalog: &'c Catalog, relid: u32) -> Vec<(&'c Relation, i32)> {
+        let heap = self.heap();
+        let Some(table) = catalog.relation(relid) else { return Vec::new() };
+        catalog
+            .relations()
+            .filter(|r| r.kind == RelKind::Index)
+            .filter_map(|index| {
+                let info = index.index.as_ref().filter(|i| i.table == relid)?;
+                (info.method == rupg_catalog::BTREE).then_some(())?;
+                let counted = heap.size(self.database_oid, index.oid).relpages;
+                let built = explain::btree_shape(index, &table.columns).map_or(0, |shape| {
+                    heap.btree_size(self.database_oid, relid, index.oid, &shape).blocks
+                });
+                let built = i32::try_from(built).unwrap_or(i32::MAX);
+                Some((index, info.pages.max(counted).max(built)))
+            })
+            .collect()
+    }
+
+    /// `update_relstats_all_indexes` after `btbulkdelete`: `relpages` of each index from `indexes` and `reltuples` from the entries that are left, the live rows of the table `relid` for an index on columns with no predicate. An index whose entries fail to compute keeps its stats.
+    fn vacuumed_index_stats(&self, relid: u32, indexes: &[(&Relation, i32)]) {
+        let heap = self.heap();
+        let catalog = self.catalog();
+        let rows = heap.live_count(self.database_oid, relid, self.xid.get()) as f32;
+        for &(index, pages) in indexes {
+            let Some(info) = &index.index else { continue };
+            let tuples = if info.predicate.is_none() && info.exprs.is_none() {
+                rows
+            } else {
+                match self.derived_btree_stats(&catalog, index) {
+                    Some((_, tuples)) => tuples,
+                    None => continue,
+                }
+            };
+            heap.set_stats(self.database_oid, index.oid, pages, tuples);
         }
     }
 

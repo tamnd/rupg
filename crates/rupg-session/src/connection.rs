@@ -6815,6 +6815,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/index_size.test")));
     }
 
+    /// `relpages` and `reltuples` of the indexes after `VACUUM`: with `INDEX_CLEANUP` on, off and `AUTO`, which bypasses the vacuum of the indexes when few pages have dead rows, with a partial index. `connection/index_vacuum_stats.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn index_vacuum_stats() {
+        big_stack(|| script(include_str!("connection/index_vacuum_stats.test")));
+    }
+
     /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.
     #[test]
     fn role_settings_at_start() {
