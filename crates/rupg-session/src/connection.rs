@@ -7130,6 +7130,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/index_expr_fold.test")));
     }
 
+    /// `pg_walfile_name`, `pg_walfile_name_offset` and `pg_split_walfile_name` with the default size of a segment and the timeline 1, the error of a bad file name, and `gist_translate_cmptype_common`. `connection/walfile_name.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn walfile_name() {
+        big_stack(|| script(include_str!("connection/walfile_name.test")));
+    }
+
     /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.
     #[test]
     fn role_settings_at_start() {

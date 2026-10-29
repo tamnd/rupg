@@ -494,6 +494,21 @@ fn parse_ident(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Array(Box::new(Array::one(parts))))
 }
 
+/// `gist_translate_cmptype_common`: the strategy number of the GiST operator classes of the core for a `CompareType`, or 0 for a type with no strategy.
+fn gist_translate_cmptype_common(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let Some(Value::Int4(cmptype)) = args.first() else { return Err(bad_value()) };
+    Ok(Value::Int2(match cmptype {
+        1 => 20,
+        2 => 21,
+        3 => 18,
+        4 => 23,
+        5 => 22,
+        7 => 3,
+        8 => 8,
+        _ => 0,
+    }))
+}
+
 /// The kernel of a function of this module by its `prosrc`.
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     Some(match src {
@@ -507,6 +522,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "statement_timestamp" => statement_timestamp,
         "clock_timestamp" => clock_timestamp,
         "pg_typeof" => pg_typeof,
+        "gist_translate_cmptype_common" => gist_translate_cmptype_common,
         "pg_collation_for" => pg_collation_for,
         "pg_basetype" => pg_basetype,
         "pg_column_size" => crate::datumsize::pg_column_size,
