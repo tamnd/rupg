@@ -99,7 +99,7 @@ pub use acl::{
     ri_check_permissions, ri_initial_permitted, row_security_hides, schema_usage, shown_columns,
     vacuum_permitted,
 };
-pub use activity::{Backend, BackendState, Client, Process, Ssl};
+pub use activity::{Backend, BackendState, Client, PROGRESS_PARAMS, Process, Progress, Ssl};
 pub use agg::check_percentile;
 pub use cast::local_time;
 pub use compare::{compare, equal};

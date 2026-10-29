@@ -12,6 +12,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `pg_stat_progress_copy` shows the progress of `COPY FROM`, and the notice of the rows that `ON_ERROR` skipped comes before the triggers `AFTER`, as in PostgreSQL (#1151).
 - `COPY FROM` checks `FREEZE` for a foreign table before it finds that the wrapper has no handler, as in PostgreSQL (#1148).
 - A prepared statement is planned again when the schemas of `search_path` change, for `EXECUTE` and for `Bind`, as in PostgreSQL (#1147).
 - Event triggers on `ddl_command_start` and `ddl_command_end` fire for the commands that PostgreSQL supports, with the `WHEN TAG IN` filter, the `ENABLE` modes, `session_replication_role` and the `event_triggers` setting, also for DDL in PL/pgSQL functions and `DO` (#1145).

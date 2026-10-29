@@ -1948,6 +1948,7 @@ impl Connection {
             Frontend::CopyFail(message) => Err(copy.fail(message)),
             _ => self.copy_done(&mut copy),
         };
+        self.report_progress(None);
         copy.notices.extend(self.trigger_notices());
         self.notices(&mut copy.notices, "", &[], out);
         match result {
@@ -6977,6 +6978,12 @@ mod tests {
     #[test]
     fn copy_freeze_foreign() {
         big_stack(|| script(include_str!("connection/copy_freeze_foreign.test")));
+    }
+
+    /// `pg_stat_progress_copy` shows the progress of the `COPY FROM` of the session to a trigger of the copy: the bytes, the rows that the copy wrote, the rows that `WHERE` left out and the rows that `ON_ERROR IGNORE` skipped. The notice of the skipped rows comes before the triggers `AFTER`. `connection/copy_progress.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn copy_progress() {
+        big_stack(|| script(include_str!("connection/copy_progress.test")));
     }
 
     /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.

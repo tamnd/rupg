@@ -7,6 +7,7 @@ use rupg_analyze::{CopyTarget, Derived, Params};
 use rupg_catalog::{Catalog, TRIGGER_INSERT};
 use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
+use rupg_func::Progress;
 use rupg_pgcatalog::builtin;
 use rupg_sql::Severity;
 use rupg_sql::nodes::{CopyStmt, RangeVar};
@@ -27,6 +28,18 @@ const MAX_DISPLAY: usize = 100;
 
 /// `MAX_BUFFERED_TUPLES`: the number of rows that the copy keeps before it writes them in the heap.
 const MAX_BUFFERED: usize = 1000;
+
+/// The parameters of the progress of a copy, `PROGRESS_COPY_*`, and the values of `PROGRESS_COPY_COMMAND_FROM`, `PROGRESS_COPY_TYPE_FILE` and `PROGRESS_COPY_TYPE_PIPE`.
+const BYTES_PROCESSED: usize = 0;
+const BYTES_TOTAL: usize = 1;
+const TUPLES_PROCESSED: usize = 2;
+const TUPLES_EXCLUDED: usize = 3;
+const COMMAND: usize = 4;
+const TYPE: usize = 5;
+const TUPLES_SKIPPED: usize = 6;
+const COMMAND_FROM: i64 = 1;
+const TYPE_FILE: i64 = 1;
+const TYPE_PIPE: i64 = 3;
 
 /// Where the data of a copy comes from: the client, which gets `CopyInResponse`, or a file of the server, which the copy reads at the same point.
 #[derive(Debug)]
@@ -102,6 +115,8 @@ struct Load {
     verbosity: Verbosity,
     /// `num_errors`: the number of rows with a field that the input function did not accept.
     errors: u64,
+    /// The number of rows that the condition `WHERE` left out.
+    excluded: u64,
     /// The rows that the copy checked and did not write in the heap yet, and the line of each row.
     rows: Vec<Vec<Value>>,
     lines: Vec<u64>,
@@ -174,6 +189,8 @@ pub(super) struct CopyIn {
     load: Load,
     /// The notices of `ON_ERROR`, which the session sends before the result of the copy.
     pub(super) notices: Vec<Notice>,
+    /// The progress of the copy, which `pg_stat_progress_copy` shows.
+    progress: Progress,
 }
 
 impl Connection {
@@ -195,6 +212,7 @@ impl Connection {
         let mut copy = self.copy_from(stmt, Begin::File(name, &mut bytes))?;
         let read = self.copy_data(&mut copy, &bytes);
         let count = read.and_then(|()| self.copy_done(&mut copy));
+        self.report_progress(None);
         copy.notices.extend(self.trigger_notices());
         notices.append(&mut copy.notices);
         Ok(Done::Count(CommandTag::Copy, count?))
@@ -370,12 +388,21 @@ impl Connection {
             defaulted.push((all, plan));
         }
         let binary = options.format == Format::Binary;
+        let mut progress = Progress { command: "COPY", relid: target.relid, ..Progress::default() };
+        progress.params[COMMAND] = COMMAND_FROM;
         match begin {
-            Begin::Client(out) => out.copy_in_response(
-                i8::from(binary),
-                &vec![i16::from(binary); target.selected.len()],
-            ),
-            Begin::File(name, bytes) => *bytes = self.read_server_file(name)?,
+            Begin::Client(out) => {
+                progress.params[TYPE] = TYPE_PIPE;
+                out.copy_in_response(
+                    i8::from(binary),
+                    &vec![i16::from(binary); target.selected.len()],
+                );
+            }
+            Begin::File(name, bytes) => {
+                *bytes = self.read_server_file(name)?;
+                progress.params[TYPE] = TYPE_FILE;
+                progress.params[BYTES_TOTAL] = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
+            }
         }
         let name = &target.name;
         let wrong = |message: String| Error::new(SqlState::WRONG_OBJECT_TYPE, message);
@@ -430,6 +457,7 @@ impl Connection {
             reject_limit: options.reject_limit,
             verbosity: options.verbosity,
             errors: 0,
+            excluded: 0,
             rows: Vec::new(),
             lines: Vec::new(),
             count: 0,
@@ -440,6 +468,7 @@ impl Connection {
             routing,
         };
         let names = target.selected.iter().map(|&i| target.columns[i].clone()).collect();
+        self.report_progress(Some(progress));
         Ok(CopyIn {
             text: String::new(),
             index: 0,
@@ -461,13 +490,31 @@ impl Connection {
             pending: Vec::new(),
             load,
             notices: Vec::new(),
+            progress,
         })
+    }
+
+    /// `pgstat_progress_update_param` of a copy: the bytes that it read, the rows that it wrote, the rows that the condition `WHERE` left out and the rows that `ON_ERROR IGNORE` skipped.
+    fn report_copy(&self, copy: &mut CopyIn) {
+        let count = |n: u64| i64::try_from(n).unwrap_or(i64::MAX);
+        let params = &mut copy.progress.params;
+        params[TUPLES_PROCESSED] = count(copy.load.count);
+        params[TUPLES_EXCLUDED] = count(copy.load.excluded);
+        if copy.load.on_error == OnError::Ignore {
+            params[TUPLES_SKIPPED] = count(copy.load.errors);
+        }
+        self.report_progress(Some(copy.progress));
     }
 
     /// `CopyData` of a copy: the copy reads the lines that are complete and makes the values of their rows. The rows before a line with an error come first, as `CopyFrom` reads one row at a time.
     pub(super) fn copy_data(&self, copy: &mut CopyIn, bytes: &[u8]) -> Result<(), Error> {
         let read = copy.data(bytes);
-        self.load_rows(copy)?;
+        let added = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
+        copy.progress.params[BYTES_PROCESSED] =
+            copy.progress.params[BYTES_PROCESSED].saturating_add(added);
+        let loaded = self.load_rows(copy);
+        self.report_copy(copy);
+        loaded?;
         read
     }
 
@@ -477,21 +524,11 @@ impl Connection {
         self.load_rows(copy)?;
         read?;
         self.flush_rows(copy, None)?;
+        self.report_copy(copy);
         if copy.load.count > 0 {
             self.command.set(self.command.get() + 1);
         }
-        let inserted = std::mem::take(&mut copy.load.inserted);
-        if !copy.load.triggers.is_empty()
-            && let Some(info) = copy.load.plan.as_deref().and_then(Plan::write)
-        {
-            self.after_write(info, &copy.load.triggers, &[], &inserted)?;
-        }
-        let batches = std::mem::take(&mut copy.load.batches);
-        if !batches.is_empty() {
-            self.fire(batches)?;
-        }
-        self.recheck_unique(0)?;
-        self.fire_events(0)?;
+        // The notice of the rows that `ON_ERROR` skipped comes before the triggers `AFTER`, as `CopyFrom` gives it.
         copy.notices.extend(self.trigger_notices());
         let errors = copy.load.errors;
         if errors > 0 && copy.load.verbosity >= Verbosity::Default {
@@ -511,6 +548,19 @@ impl Connection {
                 error: Error::new(SqlState::SUCCESSFUL_COMPLETION, message),
             });
         }
+        let inserted = std::mem::take(&mut copy.load.inserted);
+        if !copy.load.triggers.is_empty()
+            && let Some(info) = copy.load.plan.as_deref().and_then(Plan::write)
+        {
+            self.after_write(info, &copy.load.triggers, &[], &inserted)?;
+        }
+        let batches = std::mem::take(&mut copy.load.batches);
+        if !batches.is_empty() {
+            self.fire(batches)?;
+        }
+        self.recheck_unique(0)?;
+        self.fire_events(0)?;
+        copy.notices.extend(self.trigger_notices());
         Ok(copy.load.count)
     }
 
@@ -536,6 +586,7 @@ impl Connection {
         let reader = self.reader();
         // The routing leaves `copy.load` while the rows of `pending` go to the leaves, because the context of an error borrows `copy`.
         let mut routing = copy.load.routing.take();
+        let mut excluded = 0;
         for row in pending {
             let made = copy.values(&row, &reader)?;
             copy.count_failed(&row, &made)?;
@@ -544,6 +595,7 @@ impl Connection {
             let width = plan.write().map_or(0, |info| info.width);
             let line = |error: Error| error.with_context(copy.row_context(&row));
             let rows = plan.run_unchecked(&params, &reader).map_err(line)?;
+            let planned = rows.len();
             let rows = match &copy.load.filter {
                 Some(filter) => {
                     let mut kept = Vec::with_capacity(rows.len());
@@ -560,6 +612,7 @@ impl Connection {
                 }
                 None => rows,
             };
+            excluded += (planned - rows.len()) as u64;
             // `CIM_SINGLE`: with triggers `BEFORE ... FOR EACH ROW`, the triggers come before the checks, and the row goes in before the next row.
             let single = plan.write().filter(|info| info.recheck.is_some());
             let said = self.trigger_warnings.borrow().len();
@@ -616,6 +669,7 @@ impl Connection {
         }
         drop(reader);
         copy.load.routing = routing;
+        copy.load.excluded += excluded;
         if copy.load.rows.len() + copy.load.routing.as_ref().map_or(0, Routing::pending)
             >= MAX_BUFFERED
         {
