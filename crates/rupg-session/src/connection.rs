@@ -6859,6 +6859,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/jsonpath_mutable.test")));
     }
 
+    /// `contain_mutable_functions` checks `to_json_is_immutable` and `to_jsonb_is_immutable` for each argument of `JSON_ARRAY` and `JSON_OBJECT`: `date`, `timestamp` and `timestamptz` are mutable, also in an array, a row, a domain, a range or a multirange. `connection/json_ctor_mutable.test` is the output of PostgreSQL 19 for the mutability block of the sqljson test.
+    #[test]
+    fn json_ctor_mutable() {
+        big_stack(|| script(include_str!("connection/json_ctor_mutable.test")));
+    }
+
     /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.
     #[test]
     fn role_settings_at_start() {

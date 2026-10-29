@@ -1,0 +1,108 @@
+!details
+> create type comp1 as (a int, b date)
+CREATE TYPE
+> create domain d_comp1 as comp1
+CREATE DOMAIN
+> create domain mydomain as timestamptz
+CREATE DOMAIN
+> create type mydomainrange as range(subtype=mydomain)
+CREATE TYPE
+> create type comp3 as (a int, b mydomainrange)
+CREATE TYPE
+> create table test_mutability( a text[], b timestamp, c timestamptz, d date, f1 comp1[], f2 timestamp[], f3 d_comp1[], f4 mydomainrange[], f5 comp3, f6 mydomainmultirange)
+CREATE TABLE
+> create index xx on test_mutability(json_objectagg(a: b absent on null with unique keys returning jsonb))
+ERROR 42803 aggregate functions are not allowed in index expressions at 36
+> create index xx on test_mutability(json_objectagg(a: b absent on null with unique keys returning json))
+ERROR 42803 aggregate functions are not allowed in index expressions at 36
+> create index xx on test_mutability(json_arrayagg(a returning jsonb))
+ERROR 42803 aggregate functions are not allowed in index expressions at 36
+> create index xx on test_mutability(json_arrayagg(a returning json))
+ERROR 42803 aggregate functions are not allowed in index expressions at 36
+> create index on test_mutability(json_array(a returning jsonb))
+CREATE INDEX
+> create index on test_mutability(json_array(b returning jsonb))
+ERROR 42P17 functions in index expression must be marked IMMUTABLE at 33
+> create index on test_mutability(json_array(c returning jsonb))
+ERROR 42P17 functions in index expression must be marked IMMUTABLE at 33
+> create index on test_mutability(json_array(d returning jsonb))
+ERROR 42P17 functions in index expression must be marked IMMUTABLE at 33
+> create index on test_mutability(json_array(f1 returning jsonb))
+ERROR 42P17 functions in index expression must be marked IMMUTABLE at 33
+> create index on test_mutability(json_array(f2 returning jsonb))
+ERROR 42P17 functions in index expression must be marked IMMUTABLE at 33
+> create index on test_mutability(json_array(f3 returning jsonb))
+ERROR 42P17 functions in index expression must be marked IMMUTABLE at 33
+> create index on test_mutability(json_array(f4 returning jsonb))
+ERROR 42P17 functions in index expression must be marked IMMUTABLE at 33
+> create index on test_mutability(json_array(f5 returning jsonb))
+ERROR 42P17 functions in index expression must be marked IMMUTABLE at 33
+> create index on test_mutability(json_array(f6 returning jsonb))
+ERROR 42P17 functions in index expression must be marked IMMUTABLE at 33
+> create index on test_mutability(json_object('hello' value a returning jsonb))
+CREATE INDEX
+> create index on test_mutability(json_object('hello' value b returning jsonb))
+ERROR 42P17 functions in index expression must be marked IMMUTABLE at 33
+> create index on test_mutability(json_object('hello' value c returning jsonb))
+ERROR 42P17 functions in index expression must be marked IMMUTABLE at 33
+> create index on test_mutability(json_object('hello' value d returning jsonb))
+ERROR 42P17 functions in index expression must be marked IMMUTABLE at 33
+> create index on test_mutability(json_object('hello' value f1 returning jsonb))
+ERROR 42P17 functions in index expression must be marked IMMUTABLE at 33
+> create index on test_mutability(json_object('hello' value f2 returning jsonb))
+ERROR 42P17 functions in index expression must be marked IMMUTABLE at 33
+> create index on test_mutability(json_object('hello' value f3 returning jsonb))
+ERROR 42P17 functions in index expression must be marked IMMUTABLE at 33
+> create index on test_mutability(json_object('hello' value f4 returning jsonb))
+ERROR 42P17 functions in index expression must be marked IMMUTABLE at 33
+> create index on test_mutability(json_object('hello' value f5 returning jsonb))
+ERROR 42P17 functions in index expression must be marked IMMUTABLE at 33
+> create index on test_mutability(json_object('hello' value f6 returning jsonb))
+ERROR 42P17 functions in index expression must be marked IMMUTABLE at 33
+> alter table test_mutability add column f10 json generated always as (json_array(a returning json))
+ALTER TABLE
+> alter table test_mutability add column f11 json generated always as (json_array(b returning json))
+ERROR 42P17 generation expression is not immutable
+> alter table test_mutability add column f11 json generated always as (json_array(c returning json))
+ERROR 42P17 generation expression is not immutable
+> alter table test_mutability add column f11 json generated always as (json_array(d returning json))
+ERROR 42P17 generation expression is not immutable
+> alter table test_mutability add column f11 json generated always as (json_array(f1 returning json))
+ERROR 42P17 generation expression is not immutable
+> alter table test_mutability add column f11 json generated always as (json_array(f2 returning json))
+ERROR 42P17 generation expression is not immutable
+> alter table test_mutability add column f11 json generated always as (json_array(f3 returning json))
+ERROR 42P17 generation expression is not immutable
+> alter table test_mutability add column f11 json generated always as (json_array(f4 returning json))
+ERROR 42P17 generation expression is not immutable
+> alter table test_mutability add column f11 json generated always as (json_array(f5 returning json))
+ERROR 42P17 generation expression is not immutable
+> alter table test_mutability add column f11 json generated always as (json_array(f6 returning json))
+ERROR 42P17 generation expression is not immutable
+> alter table test_mutability add column f11 json generated always as (json_object('hello' value a returning json))
+ALTER TABLE
+> alter table test_mutability add column f12 json generated always as (json_object('hello' value b returning json))
+ERROR 42P17 generation expression is not immutable
+> alter table test_mutability add column f12 json generated always as (json_object('hello' value c returning json))
+ERROR 42P17 generation expression is not immutable
+> alter table test_mutability add column f12 json generated always as (json_object('hello' value d returning json))
+ERROR 42P17 generation expression is not immutable
+> alter table test_mutability add column f12 json generated always as (json_object('hello' value f1 returning json))
+ERROR 42P17 generation expression is not immutable
+> alter table test_mutability add column f12 json generated always as (json_object('hello' value f2 returning json))
+ERROR 42P17 generation expression is not immutable
+> alter table test_mutability add column f12 json generated always as (json_object('hello' value f3 returning json))
+ERROR 42P17 generation expression is not immutable
+> alter table test_mutability add column f12 json generated always as (json_object('hello' value f4 returning json))
+ERROR 42P17 generation expression is not immutable
+> alter table test_mutability add column f12 json generated always as (json_object('hello' value f5 returning json))
+ERROR 42P17 generation expression is not immutable
+> alter table test_mutability add column f12 json generated always as (json_object('hello' value f6 returning json))
+ERROR 42P17 generation expression is not immutable
+> drop table test_mutability
+DROP TABLE
+> drop type comp3, mydomainrange, comp1 cascade
+NOTICE 00000 drop cascades to type d_comp1
+DROP TYPE
+> drop domain mydomain
+DROP DOMAIN
