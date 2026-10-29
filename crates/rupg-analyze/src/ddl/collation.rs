@@ -210,7 +210,8 @@ impl Definer<'_, '_> {
             let collate = new.libc_locale.as_deref().unwrap_or_default();
             check_libc_locales(collate, new.ctype.as_deref().unwrap_or_default())?;
         }
-        self.catalog.create_user_collation(new);
+        let collation = self.catalog.create_user_collation(new);
+        self.collect(None, rupg_catalog::ObjRef::new(rupg_catalog::PG_COLLATION, collation));
         Ok(())
     }
 

@@ -386,9 +386,11 @@ impl Definer<'_, '_> {
                 None => serial_info(serial.ty),
             };
             serial.oid = self.new_sequence(serial.namespace, &serial.name, info, unlogged)?;
+            self.collect(Some("CREATE SEQUENCE"), ObjRef::new(PG_CLASS, serial.oid));
         }
         self.check_on_commit(stmt.oncommit, namespace)?;
         let table = self.define_relation(&plan)?;
+        self.collect(None, ObjRef::new(PG_CLASS, table));
         self.register_on_commit(table, stmt.oncommit);
         if let Some(foreign) = foreign {
             self.store_foreign_table(table, foreign)?;
@@ -435,7 +437,12 @@ impl Definer<'_, '_> {
             // `transformFKConstraints` makes a foreign key of `CREATE TABLE` valid, as the table has no rows.
             self.add_foreign_key(table, fk, true)?;
         }
+        // `transformFKConstraints` adds one `ALTER TABLE` for the foreign keys.
+        if !plan.foreign.is_empty() {
+            self.collect(Some("ALTER TABLE"), ObjRef::new(PG_CLASS, table));
+        }
         for serial in &plan.serials {
+            self.collect(Some("ALTER SEQUENCE"), ObjRef::new(PG_CLASS, serial.oid));
             let column = i16::try_from(serial.column + 1).unwrap_or(i16::MAX);
             if serial.identity.is_some() {
                 let owner = (table, plan.namespace, plan.relname.as_str());
@@ -982,6 +989,7 @@ impl Definer<'_, '_> {
         self.check_relation_name(namespace, &name)?;
         let new = NewRelation { namespace, name, owner: self.user, columns };
         let ty = self.catalog.create_composite_type(new)?;
+        self.collect(None, ObjRef::new(PG_TYPE, ty));
         self.apply_default_acl(ObjRef::new(PG_TYPE, ty))
     }
 

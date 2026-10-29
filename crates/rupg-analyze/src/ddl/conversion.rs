@@ -96,7 +96,8 @@ impl Definer<'_, '_> {
             proc,
             default: stmt.def,
         };
-        self.catalog.create_conversion(new);
+        let conversion = self.catalog.create_conversion(new);
+        self.collect(None, ObjRef::new(PG_CONVERSION, conversion));
         Ok(())
     }
 

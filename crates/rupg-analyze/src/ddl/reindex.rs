@@ -2,7 +2,7 @@
 //!
 //! The session runs the parts of `ExecReindex` and `ReindexMultipleTables` that read the state of the session before [`define`](super::define) runs the statement: [`reindex_options`], `PreventInTransactionBlock` of `CONCURRENTLY`, `SCHEMA`, `SYSTEM` and `DATABASE`, the tablespace of `TABLESPACE`, and the checks of the database of `SYSTEM` and `DATABASE`.
 
-use rupg_catalog::{FIRST_UNPINNED_OID, RelKind};
+use rupg_catalog::{FIRST_UNPINNED_OID, ObjRef, PG_CLASS, RelKind};
 use rupg_common::{Error, Level, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{Node, RangeVar, ReindexObjectType, ReindexStmt};
@@ -303,6 +303,7 @@ impl Definer<'_, '_> {
         if self.rebuild(index).is_err() {
             return;
         }
+        self.collect(None, ObjRef::new(PG_CLASS, index));
         if verbose {
             let name = self.catalog.relation(index).map(|r| r.name.clone()).unwrap_or_default();
             self.flush();
@@ -362,6 +363,7 @@ impl Definer<'_, '_> {
             if self.rebuild(index).is_err() {
                 continue;
             }
+            self.collect(None, ObjRef::new(PG_CLASS, index));
             if verbose {
                 let shown = self.qualified_relation(index);
                 self.flush();

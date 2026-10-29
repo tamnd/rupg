@@ -249,7 +249,8 @@ impl Definer<'_, '_> {
             qual: stmt.qual.as_ref().map(|_| stored()),
             check: stmt.with_check.as_ref().map(|_| stored()),
         };
-        self.catalog.set_policy(policy, &qual_refs, &check_refs);
+        let policy = self.catalog.set_policy(policy, &qual_refs, &check_refs);
+        self.collect(None, ObjRef::new(PG_POLICY, policy));
         Ok(())
     }
 
@@ -298,7 +299,8 @@ impl Definer<'_, '_> {
             }
             None => self.stored_policy_refs(old.check.as_ref(), &table, true)?,
         };
-        self.catalog.set_policy(policy, &qual_refs, &check_refs);
+        let policy = self.catalog.set_policy(policy, &qual_refs, &check_refs);
+        self.collect(None, ObjRef::new(PG_POLICY, policy));
         Ok(())
     }
 

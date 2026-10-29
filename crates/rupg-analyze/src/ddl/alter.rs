@@ -245,6 +245,7 @@ impl Definer<'_, '_> {
             Err(e) => return Err(e),
         };
         let target = self.alter_target(stmt.objtype, found, relname(&rv))?;
+        let table = ObjRef::new(PG_CLASS, target.oid);
         // `CheckAlterTableIsSafe`.
         self.check_not_in_use(target.oid, "ALTER TABLE")?;
         if let [Some(Node::AlterTableCmd(cmd))] = stmt.cmds.as_slice()
@@ -255,7 +256,9 @@ impl Definer<'_, '_> {
                     | AlterTableType::AT_DetachPartitionFinalize
             )
         {
-            return self.partition_command(&target, cmd);
+            self.partition_command(&target, cmd)?;
+            self.collect(None, table);
+            return Ok(());
         }
         // The work queue of `ATController`: the table of the statement first, then the partitions that `ATSimpleRecursion` and `ATPrepAlterColumnType` reach, in the order that they reach them.
         let passes = Passes { recurse: rv.inh, ..Passes::default() };
@@ -298,6 +301,7 @@ impl Definer<'_, '_> {
         for (target, passes) in queue {
             self.run_passes(&target, passes)?;
         }
+        self.collect(None, table);
         Ok(())
     }
 

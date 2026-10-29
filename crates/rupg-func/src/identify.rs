@@ -602,6 +602,32 @@ pub fn dropped_object(
     ])
 }
 
+/// `pg_event_trigger_ddl_commands`: the row for the object `object` that a command of the tag `tag` made or changed, with the identity that the catalog gives now. The command is the number `command` of the list. An object that is gone gives `None`, as an object without identity does. A trigger, a policy, a rule and a cast have no schema, as their catalogs have no column of the schema.
+pub fn ddl_command(
+    tag: &str,
+    object: ObjRef,
+    command: i64,
+    session: &dyn Session,
+) -> Option<Vec<Value>> {
+    let parts = parts(object, session)?;
+    let kind = type_description(object, session).ok()?;
+    let schema = match object.class {
+        PG_TRIGGER | PG_REWRITE | PG_CAST | rupg_catalog::PG_POLICY => None,
+        _ => parts.schema.and_then(|n| reg::namespace_or_temp(n, session)),
+    };
+    Some(vec![
+        Value::Oid(object.class),
+        Value::Oid(object.oid),
+        Value::Int4(object.sub),
+        Value::Text(tag.to_string()),
+        Value::Text(kind),
+        schema.map_or(Value::Null, |s| Value::Text(s.to_string())),
+        Value::Text(parts.identity),
+        Value::Bool(false),
+        Value::Int8(command),
+    ])
+}
+
 /// The name that [`quote_identifier`] gave, without its quotes.
 fn unquote(name: &str) -> String {
     match name.strip_prefix('"').and_then(|n| n.strip_suffix('"')) {

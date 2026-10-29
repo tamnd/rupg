@@ -155,7 +155,8 @@ impl Definer<'_, '_> {
             ));
         }
         let cast = Cast { oid: 0, source, target, func, context, method };
-        self.catalog.create_cast(cast, casts);
+        let cast = self.catalog.create_cast(cast, casts);
+        self.collect(None, rupg_catalog::ObjRef::new(rupg_catalog::PG_CAST, cast));
         Ok(())
     }
 }

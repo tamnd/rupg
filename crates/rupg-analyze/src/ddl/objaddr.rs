@@ -39,6 +39,7 @@ pub fn object_address(
         repacked: Vec::new(),
         on_commit: Vec::new(),
         dropped: Vec::new(),
+        commands: Vec::new(),
         truncated: Vec::new(),
         transforms: Vec::new(),
         added: Vec::new(),
@@ -89,7 +90,7 @@ fn string(node: Option<&Node>) -> Result<&str> {
 
 impl Definer<'_, '_> {
     /// `get_object_address`.
-    fn object_address(&mut self, objtype: ObjectType, object: &Node) -> Result<ObjRef> {
+    pub(super) fn object_address(&mut self, objtype: ObjectType, object: &Node) -> Result<ObjRef> {
         match objtype {
             ObjectType::OBJECT_TABLE
             | ObjectType::OBJECT_SEQUENCE

@@ -166,6 +166,27 @@ pub struct Defined {
     pub on_commit: Vec<(u32, OnCommitAction)>,
     /// The objects that the statement dropped, in the order of `deleteObjectsInList`, for the event triggers of `sql_drop`.
     pub dropped: Vec<Dropped>,
+    /// The commands that the statement did, in their order, for `pg_event_trigger_ddl_commands`.
+    pub commands: Vec<Collected>,
+}
+
+/// A command that a statement did, as `EventTriggerCollectSimpleCommand` and `EventTriggerCollectGrant` keep it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Collected {
+    /// The object that the command made or changed. The tag is `None` for the tag of the statement.
+    Object {
+        /// The command tag, such as `CREATE INDEX` for an index of a constraint of `CREATE TABLE`.
+        tag: Option<&'static str>,
+        /// The object.
+        object: ObjRef,
+    },
+    /// A `GRANT` or a `REVOKE` on objects of the kind `kind`, such as `TABLE`.
+    Grant {
+        /// True for `GRANT`.
+        grant: bool,
+        /// The kind of the objects, as `stringify_grant_objtype` gives it.
+        kind: &'static str,
+    },
 }
 
 /// An object that a statement dropped, as `EventTriggerSQLDropAddObject` gets it from `deleteObjectsInList`.
@@ -379,8 +400,10 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         repacked: Vec::new(),
         on_commit: Vec::new(),
         dropped: Vec::new(),
+        commands: Vec::new(),
     };
     let mut filled = None;
+    let named = definer.named_object(stmt);
     let result = match stmt {
         Node::CreateStmt(create) => definer.create_table(create),
         Node::CreateForeignTableStmt(create) => definer.create_foreign_table(create),
@@ -404,7 +427,9 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::CreateEnumStmt(stmt) => definer.create_enum(stmt),
         Node::AlterEnumStmt(stmt) => definer.alter_enum(stmt),
         Node::CreateRangeStmt(stmt) => definer.create_range(stmt),
-        Node::CreateFunctionStmt(function) => definer.create_function(function, text).map(|_| ()),
+        Node::CreateFunctionStmt(function) => definer
+            .create_function(function, text)
+            .map(|oid| definer.collect(None, ObjRef::new(PG_PROC, oid))),
         Node::AlterFunctionStmt(alter) => definer.alter_function(alter),
         Node::CommentStmt(comment) => definer.comment(comment),
         Node::DropStmt(drop) => definer.drop(drop),
@@ -475,7 +500,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::AlterOpFamilyStmt(alter) => definer.alter_opfamily(alter),
         Node::AlterTSConfigurationStmt(alter) => definer.alter_ts_config(alter),
         Node::TruncateStmt(truncate) => definer.truncate(truncate),
-        Node::GrantStmt(grant) => definer.grant(grant),
+        Node::GrantStmt(grant) => definer.grant(grant).map(|()| definer.collect_grant(grant)),
         Node::DropOwnedStmt(stmt) => definer.drop_owned(stmt),
         Node::AlterDefaultPrivilegesStmt(stmt) => definer.alter_default_privileges(stmt),
         Node::ReassignOwnedStmt(stmt) => definer.reassign_owned(stmt),
@@ -485,6 +510,13 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
             Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "this statement is not supported yet"))
         }
     };
+    if result.is_ok()
+        && definer.commands.is_empty()
+        && let Some(object) = named
+    {
+        let object = definer.renamed_column(stmt, object);
+        definer.collect(None, object);
+    }
     definer.flush();
     let catalog = &*definer.catalog;
     let fills = definer
@@ -521,6 +553,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         repacked: definer.repacked,
         on_commit: definer.on_commit,
         dropped: definer.dropped,
+        commands: definer.commands,
     }
 }
 
@@ -751,6 +784,8 @@ pub(crate) struct Definer<'a, 'c> {
     on_commit: Vec<(u32, OnCommitAction)>,
     /// The objects of [`Defined::dropped`].
     dropped: Vec<Dropped>,
+    /// The commands of [`Defined::commands`].
+    commands: Vec<Collected>,
 }
 
 /// An error for a part of a statement that rupg does not support yet.
@@ -944,6 +979,101 @@ pub(crate) fn type_reference(expr: &Expr) -> Option<ObjRef> {
 }
 
 impl Definer<'_, '_> {
+    /// `EventTriggerCollectSimpleCommand`: keeps the command of the tag `tag` on the object `object` for `pg_event_trigger_ddl_commands`. The tag `None` is the tag of the statement.
+    fn collect(&mut self, tag: Option<&'static str>, object: ObjRef) {
+        self.commands.push(Collected::Object { tag, object });
+    }
+
+    /// The object that `ProcessUtilitySlow` keeps with `EventTriggerCollectSimpleCommand` for a statement that changes one object that it names, such as `COMMENT`, `ALTER ... OWNER TO`, `ALTER ... SET SCHEMA`, `ALTER ... RENAME`, `ALTER FUNCTION`, `ALTER TYPE` and `ALTER DOMAIN`. The lookup is before the statement, as a rename changes the name. `None` for the other statements and for an object that the lookup does not find.
+    fn named_object(&mut self, stmt: &Node) -> Option<ObjRef> {
+        let (objtype, object, relation) = match stmt {
+            Node::CommentStmt(s) => (s.objtype, s.object.as_ref(), None),
+            Node::AlterOwnerStmt(s) => (s.objectType, s.object.as_ref(), s.relation.as_deref()),
+            Node::AlterObjectSchemaStmt(s) => {
+                (s.objectType, s.object.as_ref(), s.relation.as_deref())
+            }
+            Node::RenameStmt(s) => match s.renameType {
+                ObjectType::OBJECT_COLUMN | ObjectType::OBJECT_ATTRIBUTE => {
+                    (s.relationType, None, s.relation.as_deref())
+                }
+                _ => (s.renameType, s.object.as_ref(), s.relation.as_deref()),
+            },
+            Node::AlterFunctionStmt(s) => {
+                let item = s.func.as_deref()?;
+                let found = self.find_function(s.objtype, item, false).ok().flatten()?;
+                return Some(ObjRef::new(PG_PROC, found.oid));
+            }
+            Node::AlterEnumStmt(s) => return self.named_type(&s.typeName),
+            Node::AlterDomainStmt(s) => return self.named_type(&s.typeName),
+            _ => return None,
+        };
+        if let Some(rv) = relation {
+            // A trigger, a rule, a policy and a constraint have the name of the relation and a name of their own.
+            if !matches!(
+                objtype,
+                ObjectType::OBJECT_TABLE
+                    | ObjectType::OBJECT_SEQUENCE
+                    | ObjectType::OBJECT_VIEW
+                    | ObjectType::OBJECT_MATVIEW
+                    | ObjectType::OBJECT_INDEX
+                    | ObjectType::OBJECT_FOREIGN_TABLE
+                    | ObjectType::OBJECT_TYPE
+            ) {
+                return None;
+            }
+            return match self.lookup_relation(rv).ok()? {
+                Found::User(oid) => Some(ObjRef::new(PG_CLASS, oid)),
+                Found::Builtin(_) => None,
+            };
+        }
+        self.object_address(objtype, object?).ok()
+    }
+
+    /// The type that the names `names` give, for [`Definer::named_object`].
+    fn named_type(&self, names: &[Option<Node>]) -> Option<ObjRef> {
+        let name = rupg_sql::nodes::TypeName { names: names.to_vec(), ..Default::default() };
+        let ty = self.an.lookup_type_name(&name).ok().flatten()?;
+        Some(ObjRef::new(PG_TYPE, ty))
+    }
+
+    /// `renameatt`: the column with the new name of a rename of a column of the relation `object`. The other statements keep the object.
+    fn renamed_column(&self, stmt: &Node, object: ObjRef) -> ObjRef {
+        let Node::RenameStmt(s) = stmt else { return object };
+        if !matches!(s.renameType, ObjectType::OBJECT_COLUMN | ObjectType::OBJECT_ATTRIBUTE) {
+            return object;
+        }
+        let name = s.newname.as_deref().unwrap_or_default();
+        let column = self
+            .catalog
+            .relation(object.oid)
+            .and_then(|rel| rel.columns.iter().position(|c| !c.dropped && c.name == name));
+        match column.and_then(|at| i16::try_from(at + 1).ok()) {
+            Some(number) => ObjRef::column(object.oid, number),
+            None => object,
+        }
+    }
+
+    /// `EventTriggerCollectGrant`: keeps a `GRANT` or a `REVOKE` with the kind of its objects, as `stringify_grant_objtype` names it. The grants on the databases, the tablespaces and the parameters are not kept, as event triggers do not support shared objects.
+    fn collect_grant(&mut self, stmt: &rupg_sql::nodes::GrantStmt) {
+        let kind = match stmt.objtype {
+            ObjectType::OBJECT_COLUMN => "COLUMN",
+            ObjectType::OBJECT_TABLE => "TABLE",
+            ObjectType::OBJECT_SEQUENCE => "SEQUENCE",
+            ObjectType::OBJECT_DOMAIN => "DOMAIN",
+            ObjectType::OBJECT_FDW => "FOREIGN DATA WRAPPER",
+            ObjectType::OBJECT_FOREIGN_SERVER => "FOREIGN SERVER",
+            ObjectType::OBJECT_FUNCTION => "FUNCTION",
+            ObjectType::OBJECT_LANGUAGE => "LANGUAGE",
+            ObjectType::OBJECT_LARGEOBJECT => "LARGE OBJECT",
+            ObjectType::OBJECT_SCHEMA => "SCHEMA",
+            ObjectType::OBJECT_PROCEDURE => "PROCEDURE",
+            ObjectType::OBJECT_ROUTINE => "ROUTINE",
+            ObjectType::OBJECT_TYPE => "TYPE",
+            _ => return,
+        };
+        self.commands.push(Collected::Grant { grant: stmt.is_grant, kind });
+    }
+
     /// Moves the warnings and the notices of the analyzer to the messages.
     fn flush(&mut self) {
         self.messages.extend(self.an.notices.drain(..).map(|error| {
@@ -1286,6 +1416,7 @@ impl Definer<'_, '_> {
             ));
         }
         let schema = self.catalog.create_schema(&name, owner)?;
+        self.collect(None, ObjRef::new(PG_NAMESPACE, schema));
         self.apply_default_acl(ObjRef::new(PG_NAMESPACE, schema))?;
         if !stmt.schemaElts.is_empty() {
             let elements: Vec<Node> = stmt.schemaElts.iter().flatten().cloned().collect();

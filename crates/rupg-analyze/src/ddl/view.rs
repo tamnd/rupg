@@ -148,6 +148,9 @@ impl Definer<'_, '_> {
                 Some(&*self.catalog),
             );
             self.catalog.replace_view(view, columns, text.to_string(), action, path, &refs)?;
+            // `DefineVirtualRelation` changes the view with `AlterTableInternal`, and `DefineView` keeps the view again.
+            self.collect(None, ObjRef::new(PG_CLASS, view));
+            self.collect(None, ObjRef::new(PG_CLASS, view));
             return self.catalog.set_options(view, options);
         }
         let options = view_options(&options)?;
@@ -173,6 +176,7 @@ impl Definer<'_, '_> {
         let action =
             crate::nodetree::view_action(&query, &self.an.perms, &aliases, Some(&*self.catalog));
         let view = self.catalog.create_view(new, text.to_string(), action, path, &refs)?;
+        self.collect(None, ObjRef::new(PG_CLASS, view));
         self.apply_default_acl(ObjRef::new(PG_CLASS, view))?;
         self.catalog.set_options(view, options)
     }
