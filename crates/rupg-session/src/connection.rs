@@ -6737,6 +6737,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/group_key_family.test")));
     }
 
+    /// A condition on a column of a subquery with grouping sets, which a `PlaceHolderVar` wraps, can be the condition of an index scan, as `match_index_to_operand` ignores the placeholder and the casts that do not change the bits under it.
+    #[test]
+    fn gs_index_relabel() {
+        big_stack(|| script(include_str!("connection/gs_index_relabel.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

@@ -1095,10 +1095,15 @@ impl<'a> Fold<'a> {
             }
             // The executor does not use the collation, so the folded argument takes the place of the node.
             ExprKind::Collate(arg, _) => self.expr(arg),
+            // `applyRelabelType`: a stack of relabels is the top one, and a relabel to the type and typmod of its argument goes.
             ExprKind::Relabel(arg, form) => {
-                let arg = self.expr(arg)?;
+                let mut arg = self.expr(arg)?;
+                while let ExprKind::Relabel(inner, _) = arg.kind {
+                    arg = *inner;
+                }
                 Ok(match arg.kind {
                     ExprKind::Const(v) => with(expr, ExprKind::Const(relabel(v, expr.ty))),
+                    _ if arg.ty == expr.ty && arg.typmod == expr.typmod => arg,
                     _ => with(expr, ExprKind::Relabel(Box::new(arg), *form)),
                 })
             }
