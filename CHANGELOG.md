@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.4.12 (2026-10-29)
+
 ### Added
 
 - The scan under a `DISTINCT` or `GROUP BY` that has the same column twice among its items now emits only the needed columns, as in PostgreSQL. `EXPLAIN VERBOSE` shows the same `Output` (#1160).
