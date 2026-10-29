@@ -1202,6 +1202,7 @@ impl Definer<'_, '_> {
         }
         let row_type = self.catalog.relation(table).map_or(0, |r| r.row_type);
         self.check_member_of_itself(new.ty, row_type)?;
+        let new_ty = new.ty;
         let number = self.catalog.add_column(table, new)?;
         match &column.default {
             Some(RawDefault::Expr(node)) if column.generated != 0 => {
@@ -1230,6 +1231,17 @@ impl Definer<'_, '_> {
         // `ATRewriteTables`: a default puts the new values of the column in `newvals`, and a stored value of the row type would not get them.
         if target.kind == b'r' && column.generated == 0 && default.is_some() {
             self.check_row_type_users(target)?;
+        }
+        // `ATExecAddColumn`: a column with no missing value writes the rows again.
+        if target.kind == b'r' {
+            let volatile = match &default {
+                Some(text) => crate::node::read(text).is_ok_and(|e| self.volatile(&e)),
+                None => false,
+            };
+            let domain = crate::jsonfunc::domain_has_constraints(new_ty);
+            if column.generated == b's' || (column.generated == 0 && (volatile || domain)) {
+                self.rewrite(table, super::rewrite::DEFAULT_VAL, false);
+            }
         }
         let identity = self.identity_of(table, number);
         self.added.push(Fill { table, column: number, default, identity });

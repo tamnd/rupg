@@ -119,6 +119,16 @@ fn pg_notify(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Text(String::new()))
 }
 
+/// The table and the reasons of the event trigger of `table_rewrite` that runs, or the error of the function `name` outside of one.
+fn table_rewrite(call: &Call<'_>, name: &str) -> Result<(u32, i32)> {
+    call.session.table_rewrite().ok_or_else(|| {
+        Error::new(
+            SqlState::E_R_I_E_EVENT_TRIGGER_PROTOCOL_VIOLATED,
+            format!("{name}() can only be called in a table_rewrite event trigger function"),
+        )
+    })
+}
+
 fn pg_backend_pid(call: &Call<'_>, _: &[Value]) -> Result<Value> {
     Ok(Value::Int4(call.session.backend_pid()))
 }
@@ -503,6 +513,14 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "tid_block" => tid_block,
         "tid_offset" => tid_offset,
         "pg_backend_pid" => pg_backend_pid,
+        "pg_event_trigger_table_rewrite_oid" => |call, _| {
+            table_rewrite(call, "pg_event_trigger_table_rewrite_oid")
+                .map(|(oid, _)| Value::Oid(oid))
+        },
+        "pg_event_trigger_table_rewrite_reason" => |call, _| {
+            table_rewrite(call, "pg_event_trigger_table_rewrite_reason")
+                .map(|(_, reason)| Value::Int4(reason))
+        },
         "pg_notify" => pg_notify,
         // The queue of the notifications has no pages, so no part of it is in use.
         "pg_notification_queue_usage" => |_, _| Ok(Value::Float8(0.0)),

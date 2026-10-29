@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- Event triggers of `table_rewrite` fire for each table that `ALTER TABLE` and `ALTER TYPE` write again, with the reasons of PostgreSQL 19 in `pg_event_trigger_table_rewrite_reason` and the table in `pg_event_trigger_table_rewrite_oid` (#1162).
+
 ## 0.4.12 (2026-10-29)
 
 ### Added

@@ -1511,6 +1511,11 @@ impl Connection {
             Message::Warning(error) => Notice::warning(error),
             Message::Notice(error) => Notice { severity: Severity::Notice, error },
         }));
+        if defined.result.is_ok()
+            && let Err(error) = self.fire_table_rewrite(node, &defined.rewrites, notices)
+        {
+            defined.result = Err(error);
+        }
         let (transforms, fills) = (&defined.transforms, &defined.fills);
         let analyzed = defined.result.is_ok();
         let rewrite = defined
@@ -3888,6 +3893,12 @@ mod tests {
     #[test]
     fn event_trigger_ddl() {
         big_stack(|| script(include_str!("connection/event_trigger_ddl.test")));
+    }
+
+    /// The event triggers of `table_rewrite` with `pg_event_trigger_table_rewrite_oid` and `pg_event_trigger_table_rewrite_reason`: the changes of `ALTER TABLE` that write the rows again, and the changes that keep the stored values, such as a longer `varchar` and a change between `timestamp` and `timestamptz` in a zone with the offset 0. The rows of the reasons are the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn event_trigger_rewrite() {
+        big_stack(|| script(include_str!("connection/event_trigger_rewrite.test")));
     }
 
     #[test]

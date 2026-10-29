@@ -282,6 +282,10 @@ pub trait Session {
     fn ddl_commands(&self) -> Option<Vec<Vec<Value>>> {
         None
     }
+    /// The OID of the table and the reasons of `pg_event_trigger_table_rewrite_oid` and `pg_event_trigger_table_rewrite_reason`: the table that the command of the event trigger of `table_rewrite` that runs writes again. `None` outside of an event trigger of `table_rewrite`.
+    fn table_rewrite(&self) -> Option<(u32, i32)> {
+        None
+    }
     /// The order of the rows of the joins of the plan of `query`, as `rupg_opt::join_order` gives it: the relations from the outermost loop to the innermost one, each with true when its rows come in the reverse order of the scan and with the keys of the index of an index scan. `None` when the plan gives its rows in another order or the session has no planner.
     fn join_order(&self, query: &rupg_analyze::Query) -> Option<Vec<rupg_plan::Scanned>> {
         let _ = query;

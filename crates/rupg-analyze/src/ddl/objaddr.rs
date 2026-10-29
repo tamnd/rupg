@@ -40,6 +40,7 @@ pub fn object_address(
         on_commit: Vec::new(),
         dropped: Vec::new(),
         commands: Vec::new(),
+        rewrites: Vec::new(),
         truncated: Vec::new(),
         transforms: Vec::new(),
         added: Vec::new(),
