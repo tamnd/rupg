@@ -317,6 +317,9 @@ fn parts(object: ObjRef, session: &dyn Session) -> Option<Parts> {
             .or_else(|| catalog?.languages().find(|l| l.oid == oid).map(|l| l.name.as_str()))
             .map(Parts::named),
         rupg_catalog::PG_FOREIGN_DATA_WRAPPER => catalog?.fdw(oid).map(|f| Parts::named(&f.name)),
+        rupg_catalog::PG_EVENT_TRIGGER => {
+            catalog?.event_trigger(oid).map(|t| Parts::named(&t.name))
+        }
         rupg_catalog::PG_FOREIGN_SERVER => catalog?.server(oid).map(|s| Parts::named(&s.name)),
         rupg_catalog::PG_PUBLICATION => catalog?.publication(oid).map(|p| Parts::named(&p.name)),
         rupg_catalog::PG_PUBLICATION_REL => {

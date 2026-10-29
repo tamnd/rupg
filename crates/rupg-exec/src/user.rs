@@ -300,6 +300,7 @@ pub(crate) fn rows(
         "pg_largeobject_metadata" => large_objects(table, catalog),
         "pg_largeobject" => large_object_pages(table, catalog),
         "pg_foreign_data_wrapper" => fdws(table, catalog),
+        "pg_event_trigger" => event_triggers(table, catalog),
         "pg_foreign_server" => servers(table, catalog),
         "pg_user_mapping" => user_mappings(table, catalog),
         "pg_publication" => publications(table, catalog),
@@ -1436,6 +1437,23 @@ fn large_object_pages<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
 /// The options of a foreign-data wrapper or a server: a `text[]`, or null for no options.
 fn options(options: &[String]) -> Value {
     if options.is_empty() { Value::Null } else { text_array(options) }
+}
+
+fn event_triggers<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .event_triggers()
+        .map(|t| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(t.oid))
+                .set("evtname", Value::text(t.name.clone()))
+                .set("evtevent", Value::text(t.event.clone()))
+                .set("evtowner", oid(t.owner))
+                .set("evtfoid", oid(t.func))
+                .set("evtenabled", Value::Char(t.enabled))
+                .set("evttags", t.tags.as_deref().map_or(Value::Null, text_array));
+            row
+        })
+        .collect()
 }
 
 fn fdws<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {

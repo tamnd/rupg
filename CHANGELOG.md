@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `CREATE EVENT TRIGGER`, `ALTER EVENT TRIGGER` (`ENABLE`, `DISABLE`, `RENAME TO`, `OWNER TO`), `DROP EVENT TRIGGER` and `COMMENT ON EVENT TRIGGER` keep event triggers in `pg_event_trigger` with the checks of PostgreSQL. The triggers do not fire yet (#1144).
 - PL/pgSQL `EXECUTE` runs `EXPLAIN` and `SHOW` and gives their rows to `INTO`, `FOR` loops and `RETURN QUERY EXECUTE`, as in PostgreSQL (#1143).
 - `CREATE PUBLICATION` needs a superuser for `FOR ALL TABLES`, `FOR ALL SEQUENCES` and `FOR TABLES IN SCHEMA`, and a row filter rejects an expression with a user-defined collation, as in PostgreSQL (#1142).
 - PL/pgSQL checks a null value against a domain: a domain variable with no default, `v := NULL` and `RETURN NULL` fail for a `NOT NULL` domain, as in PostgreSQL (#1141).
