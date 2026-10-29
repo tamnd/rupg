@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A prepared statement is planned again when the schemas of `search_path` change, for `EXECUTE` and for `Bind`, as in PostgreSQL (#1147).
 - Event triggers on `ddl_command_start` and `ddl_command_end` fire for the commands that PostgreSQL supports, with the `WHEN TAG IN` filter, the `ENABLE` modes, `session_replication_role` and the `event_triggers` setting, also for DDL in PL/pgSQL functions and `DO` (#1145).
 - `CREATE EVENT TRIGGER`, `ALTER EVENT TRIGGER` (`ENABLE`, `DISABLE`, `RENAME TO`, `OWNER TO`), `DROP EVENT TRIGGER` and `COMMENT ON EVENT TRIGGER` keep event triggers in `pg_event_trigger` with the checks of PostgreSQL. The triggers do not fire yet (#1144).
 - PL/pgSQL `EXECUTE` runs `EXPLAIN` and `SHOW` and gives their rows to `INTO`, `FOR` loops and `RETURN QUERY EXECUTE`, as in PostgreSQL (#1143).

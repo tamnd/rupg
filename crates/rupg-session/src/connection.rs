@@ -6948,6 +6948,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/maint_search_path.test")));
     }
 
+    /// A prepared statement is planned again when the schemas of `search_path` change, as `SearchPathMatchesCurrentEnvironment` finds it, for `EXECUTE` and for `Bind`. `connection/prepared_search_path.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn prepared_search_path() {
+        big_stack(|| script(include_str!("connection/prepared_search_path.test")));
+    }
+
     /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.
     #[test]
     fn role_settings_at_start() {

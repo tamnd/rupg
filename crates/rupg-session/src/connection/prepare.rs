@@ -77,7 +77,7 @@ impl Connection {
             self.statement_start,
             true,
         )
-        .planned_on(&self.catalog());
+        .planned_on(&self.catalog(), rupg_analyze::Env::search_path(&self.reader()));
         self.statements.insert(name.as_bytes(), Arc::new(prepared)).map_err(protocol_error)?;
         Ok(Done::Tag(CommandTag::Prepare))
     }
@@ -104,9 +104,10 @@ impl Connection {
         let reader = self.reader();
         let replanned = statement.replan(&reader)?;
         let catalog = Arc::clone(&reader.catalog);
+        let path = rupg_analyze::Env::search_path(&reader);
         drop(reader);
         if let Some(plan) = replanned {
-            statement = Arc::new(statement.renew(plan, &catalog));
+            statement = Arc::new(statement.renew(plan, &catalog, path));
             *self.statements.get_mut(name.as_bytes()).map_err(protocol_error)? =
                 Arc::clone(&statement);
         }

@@ -42,6 +42,8 @@ pub(crate) struct Prepared {
     from_sql: bool,
     /// The catalog that the plan read. A change of the catalog makes a new catalog, so the plan is stale when the catalog of the session is not this one.
     catalog: Weak<Catalog>,
+    /// The schemas of `search_path` when the plan was made. The plan is stale when the path is not the same, as `SearchPathMatchesCurrentEnvironment` finds it.
+    search_path: Vec<u32>,
     /// The number of runs with a generic plan.
     generic_plans: AtomicI64,
     /// The number of runs with a custom plan.
@@ -67,19 +69,26 @@ impl Prepared {
             prepare_time,
             from_sql,
             catalog: Weak::new(),
+            search_path: Vec::new(),
             generic_plans: AtomicI64::new(0),
             custom_plans: AtomicI64::new(0),
         }
     }
 
-    /// The statement with a plan that read `catalog`.
-    pub(super) fn planned_on(mut self, catalog: &Arc<Catalog>) -> Prepared {
+    /// The statement with a plan that read `catalog` with the schemas `search_path`.
+    pub(super) fn planned_on(mut self, catalog: &Arc<Catalog>, search_path: Vec<u32>) -> Prepared {
         self.catalog = Arc::downgrade(catalog);
+        self.search_path = search_path;
         self
     }
 
     /// The statement with the new plan `plan` of `replan`, which read `catalog`. The columns come from the new plan, as a table that is made again has a new OID. The counts of the runs stay.
-    pub(super) fn renew(&self, plan: Plan, catalog: &Arc<Catalog>) -> Prepared {
+    pub(super) fn renew(
+        &self,
+        plan: Plan,
+        catalog: &Arc<Catalog>,
+        search_path: Vec<u32>,
+    ) -> Prepared {
         Prepared {
             text: self.text.clone(),
             stmt: self.stmt.clone(),
@@ -89,6 +98,7 @@ impl Prepared {
             prepare_time: self.prepare_time,
             from_sql: self.from_sql,
             catalog: Arc::downgrade(catalog),
+            search_path,
             generic_plans: AtomicI64::new(self.generic_plans.load(Ordering::Relaxed)),
             custom_plans: AtomicI64::new(self.custom_plans.load(Ordering::Relaxed)),
         }
@@ -116,7 +126,7 @@ impl Prepared {
         ]
     }
 
-    /// `RevalidateCachedQuery`: the plan of the statement again, or `None` for a plan that stays. The plan is stale after a change of the catalog, such as `ALTER TABLE` or `DROP TABLE`. `plancache.c` also plans a query on a table with row security again when the role or `row_security` changes, and when a policy of the table changes. rupg does not track these changes, so it plans such a query again for each run.
+    /// `RevalidateCachedQuery`: the plan of the statement again, or `None` for a plan that stays. The plan is stale after a change of the catalog, such as `ALTER TABLE` or `DROP TABLE`, and after a change of the schemas of `search_path`. `plancache.c` also plans a query on a table with row security again when the role or `row_security` changes, and when a policy of the table changes. rupg does not track these changes, so it plans such a query again for each run.
     ///
     /// # Errors
     ///
@@ -125,7 +135,8 @@ impl Prepared {
         let (Some(node), Some(plan)) = (&self.stmt, &self.plan) else {
             return Ok(None);
         };
-        let same = std::ptr::eq(self.catalog.as_ptr(), Arc::as_ptr(&reader.catalog));
+        let same = std::ptr::eq(self.catalog.as_ptr(), Arc::as_ptr(&reader.catalog))
+            && rupg_analyze::Env::search_path(reader) == self.search_path;
         if (same && !plan.row_security()) || !query::is_query(node) {
             return Ok(None);
         }
@@ -391,7 +402,7 @@ impl Connection {
         self.interrupted()?;
         let prepared =
             Prepared::new(text, stmt, params, columns, plan, self.statement_start, false)
-                .planned_on(&self.catalog());
+                .planned_on(&self.catalog(), rupg_analyze::Env::search_path(&self.reader()));
         self.statements.insert(name, Arc::new(prepared))?;
         out.parse_complete();
         Ok(())
@@ -444,9 +455,10 @@ impl Connection {
         let reader = self.reader();
         let replanned = statement.replan(&reader)?;
         let catalog = Arc::clone(&reader.catalog);
+        let path = rupg_analyze::Env::search_path(&reader);
         drop(reader);
         if let Some(plan) = replanned {
-            statement = Arc::new(statement.renew(plan, &catalog));
+            statement = Arc::new(statement.renew(plan, &catalog, path));
             *self.statements.get_mut(bind.statement)? = Arc::clone(&statement);
         }
         let reader = self.reader();
