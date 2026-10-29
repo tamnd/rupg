@@ -677,6 +677,19 @@ impl Connection {
         .with_transition(self.transition.borrow().clone())
     }
 
+    /// `SetUserIdAndSecContext` and `RestrictSearchPath` of a maintenance command: `run` calls the functions as the role `owner` with the `search_path` `pg_catalog, pg_temp`, as `index_build` and `vacuum_rel` call them.
+    fn as_maintenance<T>(
+        &self,
+        owner: u32,
+        run: impl FnOnce() -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        let config = [format!("search_path={SAFE_SEARCH_PATH}")];
+        rupg_func::Session::start_function_call(&self.reader(), &config, Some(owner))?;
+        let result = run();
+        rupg_func::Session::end_function_call(&self.reader());
+        result
+    }
+
     /// `GetTransactionSnapshot`: a new snapshot for each statement in `READ COMMITTED`, and the snapshot of the first statement for the whole transaction in the other levels.
     fn view(&self) -> View {
         let heap = self.store.heap();
@@ -6927,6 +6940,12 @@ mod tests {
                 &include_str!("connection/publication_checks.test").replace("ixam112", "postgres"),
             );
         });
+    }
+
+    /// The maintenance commands run the functions of an index with `search_path` set to `pg_catalog, pg_temp`. `connection/maint_search_path.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn maint_search_path() {
+        big_stack(|| script(include_str!("connection/maint_search_path.test")));
     }
 
     /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.

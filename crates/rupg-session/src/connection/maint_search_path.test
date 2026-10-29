@@ -1,0 +1,57 @@
+> CREATE ROLE regress_maint_owner
+CREATE ROLE
+> CREATE FUNCTION pg_catalog.regress_maint_fn(INT) RETURNS INT IMMUTABLE LANGUAGE plpgsql AS $$ BEGIN RAISE NOTICE 'path: %, user: %', current_setting('search_path'), current_user; RETURN $1; END; $$
+CREATE FUNCTION
+> SELECT regress_maint_fn(0)
+NOTICE 00000 path: "$user", public, user: postgres (PL/pgSQL function regress_maint_fn(integer) line 1 at RAISE)
+fields regress_maint_fn:23:4:-1
+row 0
+SELECT 1
+> CREATE TABLE test_maint(i INT)
+CREATE TABLE
+> INSERT INTO test_maint VALUES (1), (2)
+INSERT 0 2
+> ALTER TABLE test_maint OWNER TO regress_maint_owner
+ALTER TABLE
+> CREATE INDEX test_maint_idx ON test_maint (regress_maint_fn(i))
+NOTICE 00000 path: pg_catalog, pg_temp, user: regress_maint_owner (PL/pgSQL function regress_maint_fn(integer) line 1 at RAISE)
+NOTICE 00000 path: pg_catalog, pg_temp, user: regress_maint_owner (PL/pgSQL function regress_maint_fn(integer) line 1 at RAISE)
+CREATE INDEX
+> CREATE UNIQUE INDEX test_maint_uidx ON test_maint (regress_maint_fn(i))
+NOTICE 00000 path: pg_catalog, pg_temp, user: regress_maint_owner (PL/pgSQL function regress_maint_fn(integer) line 1 at RAISE)
+NOTICE 00000 path: pg_catalog, pg_temp, user: regress_maint_owner (PL/pgSQL function regress_maint_fn(integer) line 1 at RAISE)
+CREATE INDEX
+> DROP INDEX test_maint_uidx
+DROP INDEX
+> REINDEX TABLE test_maint
+NOTICE 00000 path: pg_catalog, pg_temp, user: regress_maint_owner (PL/pgSQL function regress_maint_fn(integer) line 1 at RAISE)
+NOTICE 00000 path: pg_catalog, pg_temp, user: regress_maint_owner (PL/pgSQL function regress_maint_fn(integer) line 1 at RAISE)
+REINDEX
+> REINDEX INDEX test_maint_idx
+NOTICE 00000 path: pg_catalog, pg_temp, user: regress_maint_owner (PL/pgSQL function regress_maint_fn(integer) line 1 at RAISE)
+NOTICE 00000 path: pg_catalog, pg_temp, user: regress_maint_owner (PL/pgSQL function regress_maint_fn(integer) line 1 at RAISE)
+REINDEX
+> ANALYZE test_maint
+NOTICE 00000 path: pg_catalog, pg_temp, user: regress_maint_owner (PL/pgSQL function regress_maint_fn(integer) line 1 at RAISE)
+NOTICE 00000 path: pg_catalog, pg_temp, user: regress_maint_owner (PL/pgSQL function regress_maint_fn(integer) line 1 at RAISE)
+ANALYZE
+> CLUSTER test_maint USING test_maint_idx
+NOTICE 00000 path: pg_catalog, pg_temp, user: regress_maint_owner (PL/pgSQL function regress_maint_fn(integer) line 1 at RAISE)
+NOTICE 00000 path: pg_catalog, pg_temp, user: regress_maint_owner (PL/pgSQL function regress_maint_fn(integer) line 1 at RAISE)
+NOTICE 00000 path: pg_catalog, pg_temp, user: regress_maint_owner (PL/pgSQL function regress_maint_fn(integer) line 1 at RAISE)
+NOTICE 00000 path: pg_catalog, pg_temp, user: regress_maint_owner (PL/pgSQL function regress_maint_fn(integer) line 1 at RAISE)
+CLUSTER
+> SHOW search_path
+fields search_path:25:-1:-1
+row "$user", public
+SHOW
+> SELECT current_user
+fields current_user:19:64:-1
+row postgres
+SELECT 1
+> DROP TABLE test_maint
+DROP TABLE
+> DROP FUNCTION regress_maint_fn(int)
+DROP FUNCTION
+> DROP ROLE regress_maint_owner
+DROP ROLE

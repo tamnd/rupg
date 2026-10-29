@@ -340,7 +340,11 @@ impl Connection {
                 ))));
             }
             let analyze = analyze.then_some(columns.as_slice());
-            self.relation_stats(&catalog, relid, (vacuum, analyze));
+            // `vacuum_rel` runs as the owner of the relation with the `search_path` of `RestrictSearchPath`.
+            let owner = catalog.relation(relid).map_or(self.current_role(), |r| r.owner);
+            self.as_maintenance(owner, || {
+                Ok(self.relation_stats(&catalog, relid, (vacuum, analyze)))
+            })?;
         }
         Ok(Done::Tag(tag))
     }
@@ -560,6 +564,7 @@ impl Connection {
             }
             heap.set_statistics(self.database_oid, index.oid, stats);
         }
+        self.trigger_warnings.borrow_mut().extend(reader.take_warnings());
     }
 
     /// `heap_vacuum_rel` of the heap of `relid`: an aggressive `VACUUM` with `FREEZE`, which skips only the pages that are all frozen, no skipped pages with `DISABLE_PAGE_SKIPPING`, and the truncation of the empty pages at the end from `TRUNCATE` or the reloption `vacuum_truncate`. The result is `reltuples`.
