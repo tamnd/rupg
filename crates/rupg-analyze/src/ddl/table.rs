@@ -1219,7 +1219,7 @@ impl Definer<'_, '_> {
             self.check_row_type_users(target)?;
         }
         self.added.push(Fill { table, column: number, default });
-        self.add_not_nulls(table, &plan)?;
+        self.add_not_nulls(table, &plan, true)?;
         // `transformColumnDefinition` adds `ALTER FOREIGN TABLE ... ALTER COLUMN ... OPTIONS` for the options of the column.
         if !def.fdwoptions.is_empty() {
             if target.kind != b'f' {
@@ -1372,7 +1372,7 @@ impl Definer<'_, '_> {
             self.catalog.set_partition_key(table, partkey, &refs)?;
         }
         self.add_checks(table, &plan.checks, false)?;
-        self.add_not_nulls(table, plan)?;
+        self.add_not_nulls(table, plan, false)?;
         if let Some(parent) = plan.parent {
             self.inherit_not_nulls(table, &[parent])?;
         }
@@ -1606,8 +1606,8 @@ impl Definer<'_, '_> {
         Ok(Some(oid))
     }
 
-    /// `AddRelationNotNullConstraints`.
-    fn add_not_nulls(&mut self, table: u32, plan: &Plan) -> Result<()> {
+    /// `AddRelationNotNullConstraints`. With `added`, the constraints are of a column of `ADD COLUMN`, which `AddRelationNewConstraints` adds, so a name of another constraint of the table is a duplicate object, not a duplicate key of `pg_constraint`.
+    fn add_not_nulls(&mut self, table: u32, plan: &Plan, added: bool) -> Result<()> {
         let mut list = plan.not_nulls.clone();
         let mut given: Vec<String> = Vec::new();
         let mut i = 0;
@@ -1668,7 +1668,17 @@ impl Definer<'_, '_> {
                     ));
                 }
                 given.push(name.clone());
-                if self.catalog.constraints_of(table).any(|c| c.name == *name) {
+                let used = self.catalog.constraints_of(table).any(|c| c.name == *name);
+                if used && added {
+                    return Err(Error::new(
+                        SqlState::DUPLICATE_OBJECT,
+                        format!(
+                            "constraint \"{name}\" for relation \"{}\" already exists",
+                            plan.relname
+                        ),
+                    ));
+                }
+                if used {
                     return Err(Error::new(
                         SqlState::UNIQUE_VIOLATION,
                         "duplicate key value violates unique constraint \"pg_constraint_conrelid_contypid_conname_index\"",

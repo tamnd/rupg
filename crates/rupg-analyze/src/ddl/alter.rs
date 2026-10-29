@@ -747,7 +747,7 @@ impl Definer<'_, '_> {
     }
 
     /// The name, `connoinherit` and `convalidated` of the not-null constraint of a column.
-    fn not_null_of(&self, table: u32, column: i16) -> Option<(String, bool, bool)> {
+    pub(super) fn not_null_of(&self, table: u32, column: i16) -> Option<(String, bool, bool)> {
         self.catalog
             .constraints_of(table)
             .find(|c| c.kind == ConKind::NotNull && c.keys == [column])

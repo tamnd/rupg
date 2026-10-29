@@ -6761,6 +6761,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/partial_target.test")));
     }
 
+    /// A `CHECK` constraint can read `tableoid`, `ADD COLUMN` keeps the constraint names unique, and a `NOT VALID` not-null constraint stops `ADD IDENTITY`, as `ExecConstraints` and `AddRelationNotNullConstraints` do.
+    #[test]
+    fn constraint_misc() {
+        big_stack(|| script(include_str!("connection/constraint_misc.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

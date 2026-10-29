@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A `CHECK` constraint can read `tableoid`, `ADD COLUMN` gives an error for a not-null constraint name that another constraint of the table has, and `ADD IDENTITY` gives an error for a column with a `NOT VALID` not-null constraint, as in PostgreSQL (#1112).
 - The view action in pg_rewrite now has functions in FROM, VALUES, ARRAY, DISTINCT ON and references to WITH queries from inner queries in the form of PostgreSQL 19 (#916) (#1111).
 - `EXPLAIN` of `UPDATE`, `DELETE` and `SELECT ... FOR UPDATE` keeps the conditions that the predicate of a partial index implies in the filter of the scan, and an index-only scan of a partial index needs no column of these conditions, as in PostgreSQL (#1110).
 - A subquery in `WHERE` of `ON CONFLICT DO UPDATE` is planned as a subplan, and `EXPLAIN` shows it as `SubPlan` or `InitPlan` under `Conflict Filter`, as in PostgreSQL (#1108).
