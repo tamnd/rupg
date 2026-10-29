@@ -245,6 +245,8 @@ pub enum Kind<'q> {
         cond: Vec<Item<'q>>,
         order_by: Vec<Item<'q>>,
         columns: Vec<i16>,
+        /// The key columns of the index that are expressions, with the columns of the relation. An index only scan reads each as a column of the index, so `EXPLAIN` shows it in parentheses, as `get_variable` shows a non-`Var` target of `indextlist`.
+        exprs: Vec<Expr>,
     },
     /// `TidScan`: the rows of a relation of the scope at the item pointers of the condition `tidquals`, or `TidRangeScan` when `range`: the rows of the pages between the item pointers of the conditions `tidrangequals`.
     TidScan { relation: usize, range: bool, cond: Vec<Item<'q>> },

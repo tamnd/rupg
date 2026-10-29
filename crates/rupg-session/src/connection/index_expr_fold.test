@@ -1,0 +1,140 @@
+!details
+> create table gt (p point)
+CREATE TABLE
+> insert into gt select point(g * 0.001, g * 0.001) from generate_series(0, 2000) g
+INSERT 0 2001
+> create index gt_ci on gt using gist (circle(p, 1), p)
+CREATE INDEX
+> vacuum analyze gt
+VACUUM
+> set enable_seqscan = off
+SET
+> set enable_bitmapscan = off
+SET
+> explain (verbose, costs off) select p from gt where circle(p, 1) @> circle(point(0,0), 0.95)
+fields QUERY PLAN:25:-1:-1
+row Index Only Scan using gt_ci on public.gt
+row   Output: p
+row   Index Cond: ((circle(gt.p, '1'::double precision)) @> '<(0,0),0.95>'::circle)
+EXPLAIN
+> select p from gt where circle(p, 1) @> circle(point(0,0), 0.95)
+fields p@gt.1:600:16:-1
+row (0,0)
+row (0.001,0.001)
+row (0.002,0.002)
+row (0.003,0.003)
+row (0.004,0.004)
+row (0.005,0.005)
+row (0.006,0.006)
+row (0.007,0.007)
+row (0.008,0.008)
+row (0.009,0.009)
+row (0.01,0.01)
+row (0.011,0.011)
+row (0.012,0.012)
+row (0.013,0.013)
+row (0.014,0.014)
+row (0.015,0.015)
+row (0.016,0.016)
+row (0.017,0.017)
+row (0.018,0.018)
+row (0.019,0.019)
+row (0.02,0.02)
+row (0.021,0.021)
+row (0.022,0.022)
+row (0.023,0.023)
+row (0.024,0.024)
+row (0.025,0.025)
+row (0.026,0.026)
+row (0.027,0.027)
+row (0.028,0.028)
+row (0.029,0.029)
+row (0.03,0.03)
+row (0.031,0.031)
+row (0.032,0.032)
+row (0.033,0.033)
+row (0.034,0.034)
+row (0.035,0.035)
+SELECT 36
+> explain (verbose, costs off) select count(*) from gt
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   Output: count(*)
+row   ->  Index Only Scan using gt_ci on public.gt
+EXPLAIN
+> set enable_indexonlyscan = off
+SET
+> explain (costs off) select p from gt where circle(p, 1) @> circle(point(0,0), 0.95)
+fields QUERY PLAN:25:-1:-1
+row Index Scan using gt_ci on gt
+row   Index Cond: (circle(p, '1'::double precision) @> '<(0,0),0.95>'::circle)
+EXPLAIN
+> select p from gt where circle(p, 1) @> circle(point(0,0), 0.95)
+fields p@gt.1:600:16:-1
+row (0,0)
+row (0.001,0.001)
+row (0.002,0.002)
+row (0.003,0.003)
+row (0.004,0.004)
+row (0.005,0.005)
+row (0.006,0.006)
+row (0.007,0.007)
+row (0.008,0.008)
+row (0.009,0.009)
+row (0.01,0.01)
+row (0.011,0.011)
+row (0.012,0.012)
+row (0.013,0.013)
+row (0.014,0.014)
+row (0.015,0.015)
+row (0.016,0.016)
+row (0.017,0.017)
+row (0.018,0.018)
+row (0.019,0.019)
+row (0.02,0.02)
+row (0.021,0.021)
+row (0.022,0.022)
+row (0.023,0.023)
+row (0.024,0.024)
+row (0.025,0.025)
+row (0.026,0.026)
+row (0.027,0.027)
+row (0.028,0.028)
+row (0.029,0.029)
+row (0.03,0.03)
+row (0.031,0.031)
+row (0.032,0.032)
+row (0.033,0.033)
+row (0.034,0.034)
+row (0.035,0.035)
+SELECT 36
+> reset enable_indexonlyscan
+RESET
+> create table bt (a int, b text)
+CREATE TABLE
+> insert into bt select g, g::text from generate_series(1, 1000) g
+INSERT 0 1000
+> create index bt_e on bt ((a + (2 * 3)))
+CREATE INDEX
+> create index bt_p on bt (a) where a > 2 + 3 and b <> 'x' || 'y'
+CREATE INDEX
+> analyze bt
+ANALYZE
+> explain (costs off) select * from bt where a + 6 = 10
+fields QUERY PLAN:25:-1:-1
+row Index Scan using bt_e on bt
+row   Index Cond: ((a + 6) = 10)
+EXPLAIN
+> select * from bt where a + 6 = 10
+fields a@bt.1:23:4:-1,b@bt.2:25:-1:-1
+row 4,4
+SELECT 1
+> explain (costs off) select * from bt where a = 7 and a > 5 and b <> 'xy'
+fields QUERY PLAN:25:-1:-1
+row Index Scan using bt_p on bt
+row   Index Cond: (a = 7)
+EXPLAIN
+> select pg_get_indexdef('bt_e'::regclass), pg_get_indexdef('bt_p'::regclass)
+fields pg_get_indexdef:25:-1:-1,pg_get_indexdef:25:-1:-1
+row CREATE INDEX bt_e ON public.bt USING btree (((a + (2 * 3)))),CREATE INDEX bt_p ON public.bt USING btree (a) WHERE ((a > (2 + 3)) AND (b <> ('x'::text || 'y'::text)))
+SELECT 1
