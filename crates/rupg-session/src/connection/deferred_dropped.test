@@ -1,0 +1,19 @@
+> create table ddr (id int primary key)
+CREATE TABLE
+> create table ddt (fk int references ddr initially deferred)
+CREATE TABLE
+> begin
+BEGIN
+> insert into ddt values (1)
+INSERT 0 1
+> drop table ddr cascade
+NOTICE 00000 drop cascades to constraint ddt_fk_fkey on table ddt
+DROP TABLE
+> commit
+COMMIT
+> select * from ddt
+fields fk@ddt.1:23:4:-1
+row 1
+SELECT 1
+> drop table ddt
+DROP TABLE

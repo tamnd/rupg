@@ -87,7 +87,15 @@ impl Connection {
 
     /// The rows of the queue of the transaction whose triggers are no longer deferred, as `afterTriggerMarkEvents` and `afterTriggerInvokeEvents` fire them, first the rows of the foreign keys, then the checks of the unique constraints and then the events of the constraint triggers. The other rows stay in the queue. With `all`, as `AfterTriggerFireDeferred` fires them, all the rows of the queue fire, and the rows that the statements of the triggers queue follow the modes of `SET CONSTRAINTS`.
     fn fire_deferred(&self, all: bool) -> Result<(), Error> {
-        let pending = std::mem::take(&mut *self.deferred.borrow_mut());
+        let mut pending = std::mem::take(&mut *self.deferred.borrow_mut());
+        // `AfterTriggerExecute`: the trigger of a foreign key that a statement dropped after the write does nothing.
+        {
+            let catalog = self.catalog();
+            for batch in &mut pending {
+                batch.foreign.retain(|foreign| catalog.constraint(foreign.constraint).is_some());
+            }
+        }
+        pending.retain(|batch| !batch.foreign.is_empty());
         if !pending.is_empty() {
             let forced = if all { pending.len() } else { 0 };
             self.fire_forced(pending, forced)?;

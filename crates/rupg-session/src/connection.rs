@@ -6668,6 +6668,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/transition_query.test")));
     }
 
+    /// The deferred check of a foreign key that a statement dropped does nothing at the commit, as `AfterTriggerExecute` skips a dropped trigger.
+    #[test]
+    fn deferred_dropped() {
+        big_stack(|| script(include_str!("connection/deferred_dropped.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
