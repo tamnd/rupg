@@ -1621,6 +1621,16 @@ impl Env for Reader<'_> {
         Some(&self.catalog)
     }
 
+    fn predicate_implied(
+        &self,
+        predicate: &[rupg_analyze::Expr],
+        clauses: &[rupg_analyze::Expr],
+    ) -> bool {
+        rupg_opt::predicate_implied(predicate, clauses, |left, a, right, b| {
+            rupg_func::compare(left, a, right, b).ok()
+        })
+    }
+
     fn transition_table(&self, name: &str) -> Option<u32> {
         let transition = self.transition.as_ref()?;
         transition.rows(name).map(|_| transition.rows.table)

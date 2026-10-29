@@ -572,6 +572,10 @@ impl Env for SchemaEnv<'_> {
         self.env.catalog()
     }
 
+    fn predicate_implied(&self, predicate: &[Expr], clauses: &[Expr]) -> bool {
+        self.env.predicate_implied(predicate, clauses)
+    }
+
     fn changed_columns(&self, oid: u32) -> Option<Vec<rupg_catalog::Column>> {
         let columns = self.columns.borrow();
         columns.iter().find(|(r, _)| *r == oid).map(|(_, c)| c.clone())

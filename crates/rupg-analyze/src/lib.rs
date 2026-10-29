@@ -146,6 +146,10 @@ pub trait Env {
     fn catalog(&self) -> Option<&rupg_catalog::Catalog> {
         None
     }
+    /// `predicate_implied_by`: true when the conditions `clauses` make each condition of `predicate` true. Without the proofs of the planner, only a condition proves itself.
+    fn predicate_implied(&self, predicate: &[Expr], clauses: &[Expr]) -> bool {
+        predicate.iter().all(|p| clauses.iter().any(|c| c.same(p)))
+    }
     /// The columns of the relation `oid` after the last [`Env::command_counter_increment`] of the statement, when the statement changed them, or `None` when the relation has the columns of [`Env::catalog`].
     fn changed_columns(&self, oid: u32) -> Option<Vec<rupg_catalog::Column>> {
         let _ = oid;
