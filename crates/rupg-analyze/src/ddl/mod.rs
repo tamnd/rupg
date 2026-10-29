@@ -1,5 +1,6 @@
 //! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE RULE`, `CREATE TRIGGER`, `CREATE DOMAIN`, `CREATE FUNCTION`, `COMMENT`, `DROP`, `ALTER TABLE`, `ALTER SCHEMA ... OWNER TO`, `CREATE TEXT SEARCH`, `ALTER TEXT SEARCH CONFIGURATION`, `CREATE OPERATOR` and `TRUNCATE`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineRule`, `CreateTrigger`, `DefineDomain`, `CreateFunction`, `CommentObject`, `ExecDropStmt`, `AlterTable`, `AlterSchemaOwner`, the functions of `tsearchcmds.c`, `DefineOperator` and `ExecuteTruncate` run them, and they change a [`Catalog`]. `CREATE FUNCTION` makes a function in SQL. [`lock_table`] runs the checks of `LOCK TABLE` and takes its locks. It finds its relations by name as these statements do.
 
+mod access_method;
 mod aggregate;
 mod alter;
 mod alter_column;
@@ -309,6 +310,7 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::CreateConversionStmt(_)
             | Node::CreateEventTrigStmt(_)
             | Node::AlterEventTrigStmt(_)
+            | Node::CreateAmStmt(_)
             | Node::CreateFdwStmt(_)
             | Node::AlterFdwStmt(_)
             | Node::CreateForeignServerStmt(_)
@@ -498,6 +500,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::CreateCastStmt(stmt) => definer.create_cast(stmt),
         Node::CreateConversionStmt(stmt) => definer.create_conversion(stmt),
         Node::CreateEventTrigStmt(stmt) => definer.create_event_trigger(stmt),
+        Node::CreateAmStmt(stmt) => definer.create_access_method(stmt),
         Node::AlterEventTrigStmt(stmt) => definer.alter_event_trigger(stmt),
         Node::CreateFdwStmt(stmt) => definer.create_fdw(stmt),
         Node::AlterFdwStmt(stmt) => definer.alter_fdw(stmt),
@@ -676,6 +679,10 @@ impl Env for SchemaEnv<'_> {
         self.env.check_function_bodies()
     }
 
+    fn default_table_access_method(&self) -> String {
+        self.env.default_table_access_method()
+    }
+
     fn sequence_row(&self, file: u32) -> Option<rupg_catalog::SequenceData> {
         self.env.sequence_row(file)
     }
@@ -804,21 +811,6 @@ pub(crate) struct Definer<'a, 'c> {
     commands: Vec<Collected>,
     /// The tables of [`Defined::rewrites`].
     rewrites: Vec<Rewrite>,
-}
-
-/// `get_table_am_oid`: the table access method `name`. `heap` is the only one.
-fn table_access_method(name: &str) -> Result<()> {
-    match builtin::access_method_oid(name) {
-        Some(_) if name == "heap" => Ok(()),
-        Some(_) => Err(Error::new(
-            SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
-            format!("access method \"{name}\" is not of type TABLE"),
-        )),
-        None => Err(Error::new(
-            SqlState::UNDEFINED_OBJECT,
-            format!("access method \"{name}\" does not exist"),
-        )),
-    }
 }
 
 /// An error for a part of a statement that rupg does not support yet.

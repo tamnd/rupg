@@ -123,11 +123,9 @@ impl Definer<'_, '_> {
         if into.tableSpaceName.is_some() {
             return Err(not_yet("TABLESPACE", at));
         }
-        if let Some(method) = &into.accessMethod {
-            super::table_access_method(method)?;
-        }
+        let method = into.accessMethod.as_deref().map(|m| self.table_am(m)).transpose()?;
         self.check_on_commit(into.onCommit, namespace)?;
-        let table = self.create_query_table(namespace, &name, columns, &into.options)?;
+        let table = self.create_query_table(namespace, &name, columns, &into.options, method)?;
         self.collect(None, ObjRef::new(PG_CLASS, table));
         self.register_on_commit(table, into.onCommit);
         if rv.relpersistence == b'u' {

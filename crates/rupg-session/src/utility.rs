@@ -354,12 +354,64 @@ pub(crate) fn ts_config(
 ) -> Result<Option<String>, Error> {
     let Node::VariableSetStmt(stmt) = node else { return Ok(None) };
     let name = stmt.name.as_deref().unwrap_or("");
-    if stmt.kind != VariableSetKind::VAR_SET_VALUE || !is_ts_config(name) {
+    if stmt.kind != VariableSetKind::VAR_SET_VALUE {
+        return Ok(None);
+    }
+    let ts_config = is_ts_config(name);
+    if !ts_config && !is_table_am(name) {
         return Ok(None);
     }
     match flatten(name, &stmt.args) {
-        Ok(Some(value)) => check_ts_config(&value, session).map(Some),
+        Ok(Some(value)) if ts_config => check_ts_config(&value, session).map(Some),
+        Ok(Some(value)) => check_table_am(name, &value, session).map(|()| None),
         _ => Ok(None),
+    }
+}
+
+/// True when the name is the name of `default_table_access_method`.
+fn is_table_am(name: &str) -> bool {
+    guc::find(name).is_some_and(|parameter| parameter.name == "default_table_access_method")
+}
+
+/// `check_default_table_access_method` for a value of `default_table_access_method`: the value cannot be empty, and it must be the name of a table access method.
+///
+/// # Errors
+///
+/// `22023` for an empty value, a value that is too long or a name of no access method, and `55000` for an index access method.
+pub(crate) fn check_table_am(
+    name: &str,
+    value: &str,
+    session: &dyn rupg_func::Session,
+) -> Result<(), Error> {
+    if !is_table_am(name) {
+        return Ok(());
+    }
+    let invalid = |detail: String| {
+        Error::new(
+            SqlState::INVALID_PARAMETER_VALUE,
+            format!("invalid value for parameter \"default_table_access_method\": \"{value}\""),
+        )
+        .with_detail(detail)
+    };
+    if value.is_empty() {
+        return Err(invalid("\"default_table_access_method\" cannot be empty.".into()));
+    }
+    if value.len() >= 64 {
+        return Err(invalid(
+            "\"default_table_access_method\" is too long (maximum is 63 characters).".into(),
+        ));
+    }
+    let kind = match rupg_pgcatalog::builtin::access_method_oid(value) {
+        Some(oid) => Some(if oid == rupg_catalog::HEAP_AM { b't' } else { b'i' }),
+        None => session.catalog().and_then(|c| c.access_method_by_name(value)).map(|m| m.kind),
+    };
+    match kind {
+        Some(b't') => Ok(()),
+        Some(_) => Err(Error::new(
+            SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
+            format!("access method \"{value}\" is not of type TABLE"),
+        )),
+        None => Err(invalid(format!("Table access method \"{value}\" does not exist."))),
     }
 }
 

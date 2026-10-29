@@ -112,6 +112,8 @@ struct Plan {
     typed: bool,
     /// `isforeign`: true for `CREATE FOREIGN TABLE`.
     foreign_table: bool,
+    /// The table access method of `USING`.
+    method: Option<u32>,
 }
 
 /// `makeNotNullConstraint`: an unnamed not-null constraint on the column.
@@ -328,6 +330,7 @@ impl Definer<'_, '_> {
             inherits: Vec::new(),
             typed: stmt.ofTypename.is_some(),
             foreign_table: foreign.is_some(),
+            method: None,
         };
         // The table constraints of a partition come after the columns of the parent table, as `transformIndexConstraint` finds the key columns of a partition in its parent table.
         let mut partition_constraints = Vec::new();
@@ -378,11 +381,7 @@ impl Definer<'_, '_> {
             return Err(not_yet("TABLESPACE", at));
         }
         if let Some(method) = &stmt.accessMethod {
-            // A partitioned table keeps its access method in `relam` for its new partitions.
-            if stmt.partspec.is_some() {
-                return Err(not_yet("USING for a partitioned table", at));
-            }
-            super::table_access_method(method)?;
+            plan.method = Some(self.table_am(method)?);
         }
         for serial in &mut plan.serials {
             let info = match &serial.identity {
@@ -580,6 +579,7 @@ impl Definer<'_, '_> {
         name: &str,
         columns: Vec<(String, u32, i32, u32)>,
         defs: &[Option<Node>],
+        method: Option<u32>,
     ) -> Result<u32> {
         let options = self.create_table_options(defs)?;
         let columns = columns
@@ -619,6 +619,7 @@ impl Definer<'_, '_> {
             inherits: Vec::new(),
             typed: false,
             foreign_table: false,
+            method,
         };
         let table = self.define_relation(&plan)?;
         if !options.is_empty() {
@@ -1159,6 +1160,7 @@ impl Definer<'_, '_> {
             inherits: Vec::new(),
             typed: false,
             foreign_table: target.kind == b'f',
+            method: None,
         };
         self.column_definition(&mut plan, def)?;
         let Some(column) = plan.columns.first() else {
@@ -1274,6 +1276,22 @@ impl Definer<'_, '_> {
         Ok(Some(rest))
     }
 
+    /// The access method of `DefineRelation` for a new relation: the one of `USING`, then the one of the parent table of a partition, then `default_table_access_method` for a relation with storage. A partitioned table with none has 0.
+    fn relation_am(&self, plan: &Plan) -> Result<u32> {
+        if plan.foreign_table {
+            return Ok(0);
+        }
+        if let Some(method) = plan.method {
+            return Ok(method);
+        }
+        let parent =
+            plan.parent.and_then(|p| self.catalog.relation(p)).map_or(0, |r| r.access_method);
+        match parent {
+            0 if plan.partspec.is_none() => self.default_table_am(),
+            parent => Ok(parent),
+        }
+    }
+
     /// `AlterTableCreateToastTable`: a table whose columns can need it gets a TOAST table after its new columns.
     pub(super) fn toast_after_columns(&mut self, table: u32) -> Result<()> {
         let Some(rel) = self.catalog.relation(table) else { return Ok(()) };
@@ -1322,6 +1340,7 @@ impl Definer<'_, '_> {
             }
         }
         self.check_relation_name(plan.namespace, &plan.relname)?;
+        let method = self.relation_am(plan)?;
         let shapes: Vec<Shape> = columns.iter().map(shape).collect();
         let scope: Vec<(String, u32, i32)> =
             columns.iter().map(|c| (c.name.clone(), c.ty, c.typmod)).collect();
@@ -1338,6 +1357,9 @@ impl Definer<'_, '_> {
         } else {
             self.catalog.create_table(new)?
         };
+        if !plan.foreign_table {
+            self.catalog.set_access_method(table, method);
+        }
         self.apply_default_acl(ObjRef::new(PG_CLASS, table))?;
         let row_type = self.catalog.relation(table).map_or(0, |r| r.row_type);
         self.an.add_table(table, &plan.relname, &scope, row_type);

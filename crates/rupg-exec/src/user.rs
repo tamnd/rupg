@@ -18,8 +18,6 @@ use crate::scan::value;
 
 /// `FirstNormalTransactionId`, the `relfrozenxid` of the tables of the catalog.
 const FIRST_NORMAL_XID: u32 = 3;
-/// The OID of the access method `heap`.
-const HEAP: u32 = 2;
 
 /// A row of a table of the catalog.
 struct Row<'a> {
@@ -301,6 +299,7 @@ pub(crate) fn rows(
         "pg_largeobject" => large_object_pages(table, catalog),
         "pg_foreign_data_wrapper" => fdws(table, catalog),
         "pg_event_trigger" => event_triggers(table, catalog),
+        "pg_am" => access_methods(table, catalog),
         "pg_foreign_server" => servers(table, catalog),
         "pg_user_mapping" => user_mappings(table, catalog),
         "pg_publication" => publications(table, catalog),
@@ -563,8 +562,9 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) -> Ve
             let visible =
                 size.filter(|_| heap).map_or((0, 0), |s| (s.relallvisible, s.relallfrozen));
             let (am, pages, tuples) = match rel.kind {
-                RelKind::Table | RelKind::Toast | RelKind::MatView => (HEAP, stats.0, stats.1),
-                RelKind::Partitioned => (0, stats.0, stats.1),
+                RelKind::Table | RelKind::Toast | RelKind::MatView | RelKind::Partitioned => {
+                    (rel.access_method, stats.0, stats.1)
+                }
                 // An index that `index_update_stats` saw has the stats of its build, and another one the pages of a new index.
                 RelKind::Index => rel.index.as_ref().map_or((0, 1, 0.0), |i| match stats {
                     (pages, tuples) if tuples >= 0.0 => (i.method, pages, tuples),
@@ -1437,6 +1437,20 @@ fn large_object_pages<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
 /// The options of a foreign-data wrapper or a server: a `text[]`, or null for no options.
 fn options(options: &[String]) -> Value {
     if options.is_empty() { Value::Null } else { text_array(options) }
+}
+
+fn access_methods<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .access_methods()
+        .map(|m| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(m.oid))
+                .set("amname", Value::text(m.name.clone()))
+                .set("amhandler", oid(m.handler))
+                .set("amtype", Value::Char(m.kind));
+            row
+        })
+        .collect()
 }
 
 fn event_triggers<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {

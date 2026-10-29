@@ -2684,6 +2684,7 @@ fn definition_tag(node: &Node) -> CommandTag {
         Node::CreateCastStmt(_) => CommandTag::CreateCast,
         Node::CreateConversionStmt(_) => CommandTag::CreateConversion,
         Node::CreateEventTrigStmt(_) => CommandTag::CreateEventTrigger,
+        Node::CreateAmStmt(_) => CommandTag::CreateAccessMethod,
         Node::AlterEventTrigStmt(_) => CommandTag::AlterEventTrigger,
         Node::ViewStmt(_) => CommandTag::CreateView,
         Node::RuleStmt(_) => CommandTag::CreateRule,
@@ -3911,6 +3912,12 @@ mod tests {
     #[test]
     fn amvalidate() {
         big_stack(|| script(include_str!("connection/amvalidate.test")));
+    }
+
+    /// `CREATE ACCESS METHOD` makes a table access method. `USING`, the parent of a partition and `default_table_access_method` give `relam`, `SET ACCESS METHOD` changes it, and a relation depends on an access method that a statement made.
+    #[test]
+    fn table_access_methods() {
+        big_stack(|| script(include_str!("connection/table_am.test")));
     }
 
     #[test]

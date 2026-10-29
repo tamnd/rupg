@@ -1519,6 +1519,7 @@ impl rupg_func::Session for Reader<'_> {
         self.settings().check_definer(name)?;
         if let Some(value) = value {
             utility::check_role(name, value, self.login, self.session_user)?;
+            utility::check_table_am(name, value, self)?;
         }
         let config = match value {
             Some(value) if utility::is_ts_config(name) => {
@@ -1667,6 +1668,10 @@ impl Env for Reader<'_> {
 
     fn check_function_bodies(&self) -> bool {
         self.settings().get("check_function_bodies").as_deref() != Some("off")
+    }
+
+    fn default_table_access_method(&self) -> String {
+        self.settings().get("default_table_access_method").unwrap_or_else(|| "heap".into())
     }
 
     fn lo_compat_privileges(&self) -> bool {

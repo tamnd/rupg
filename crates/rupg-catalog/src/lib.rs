@@ -14,6 +14,7 @@ pub mod size;
 pub mod tablespace;
 pub mod toast;
 
+mod access_method;
 mod aggregate;
 mod alter_domain;
 mod alter_type;
@@ -33,6 +34,7 @@ mod set_schema;
 mod stats;
 mod tsearch;
 
+pub use access_method::{AccessMethod, HEAP_AM};
 pub use aggregate::{Aggregate, PG_AGGREGATE};
 pub use conversion::{Conversion, PG_CONVERSION};
 pub use default_acl::{DefaultAcl, PG_DEFAULT_ACL};
@@ -353,6 +355,8 @@ pub struct Relation {
     pub namespace: u32,
     /// The kind.
     pub kind: RelKind,
+    /// `relam` of a table, a materialized view, a partitioned table or a TOAST table: the OID of its table access method, or 0 for a partitioned table with no access method. An index has its access method in [`IndexInfo::method`], and the other kinds have 0.
+    pub access_method: u32,
     /// The OID of the owner role.
     pub owner: u32,
     /// The OID of the row type, or 0 for an index or a sequence.
@@ -1353,6 +1357,8 @@ pub struct Catalog {
     stat_exts: BTreeMap<u32, StatExt>,
     conversions: BTreeMap<u32, Conversion>,
     event_triggers: BTreeMap<u32, EventTrigger>,
+    /// The access methods of `CREATE ACCESS METHOD`, by OID.
+    access_methods: BTreeMap<u32, AccessMethod>,
     /// The large objects of `pg_largeobject_metadata`, with their data.
     large_objects: Arc<BTreeMap<u32, LargeObject>>,
     fdws: BTreeMap<u32, ForeignDataWrapper>,
@@ -1479,6 +1485,7 @@ impl Catalog {
             stat_exts: BTreeMap::new(),
             conversions: BTreeMap::new(),
             event_triggers: BTreeMap::new(),
+            access_methods: BTreeMap::new(),
             large_objects: Arc::default(),
             fdws: BTreeMap::new(),
             servers: BTreeMap::new(),
@@ -2808,6 +2815,11 @@ impl Catalog {
                 name: new.name,
                 namespace: new.namespace,
                 kind,
+                access_method: if matches!(kind, RelKind::Table | RelKind::MatView) {
+                    HEAP_AM
+                } else {
+                    0
+                },
                 owner: new.owner,
                 row_type,
                 columns: new.columns,
@@ -3671,6 +3683,7 @@ impl Catalog {
                 name: new.name,
                 namespace: new.namespace,
                 kind: RelKind::Sequence,
+                access_method: 0,
                 owner: new.owner,
                 row_type: 0,
                 columns: new.columns,
@@ -4125,6 +4138,7 @@ impl Catalog {
                 name: name.clone(),
                 namespace,
                 kind: if partitioned { RelKind::PartitionedIndex } else { RelKind::Index },
+                access_method: 0,
                 owner,
                 row_type: 0,
                 columns,
@@ -4452,7 +4466,7 @@ impl Catalog {
     /// `create_toast_table`: the TOAST table of a table and its index, in the schema `pg_toast`, or in `pg_toast_temp_N` for a table of the temporary schema `pg_temp_N`. The TOAST table gets an OID, then its index. They have no row type.
     pub fn create_toast(&mut self, table: u32) -> Result<u32> {
         let rel = self.relations.get(&table).ok_or_else(|| no_object("relation", table))?;
-        let (owner, unlogged) = (rel.owner, rel.unlogged);
+        let (owner, unlogged, access_method) = (rel.owner, rel.unlogged, rel.access_method);
         let namespace = self.toast_namespace(rel.namespace);
         let oid = self.new_oid();
         let index = self.new_oid();
@@ -4468,6 +4482,7 @@ impl Catalog {
                 name: name.clone(),
                 namespace,
                 kind: RelKind::Toast,
+                access_method,
                 owner,
                 row_type: 0,
                 columns: vec![chunk_id.clone(), chunk_seq.clone(), chunk_data],
@@ -4519,6 +4534,7 @@ impl Catalog {
                 name: format!("{name}_index"),
                 namespace,
                 kind: RelKind::Index,
+                access_method: 0,
                 owner,
                 row_type: 0,
                 columns: vec![chunk_id, chunk_seq],
