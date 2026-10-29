@@ -35,6 +35,21 @@ pub(super) struct Event {
     new: Option<Vec<Value>>,
     /// The transition tables of a trigger with `REFERENCING`.
     transition: Option<Transition>,
+    /// The rows of the event of the table in the query, which tell the triggers `FOR EACH STATEMENT` of the state from the ones of a state after a trigger read the rows.
+    rows: Rc<Captured>,
+}
+
+/// `AfterTriggersTableData`: the state of the triggers of one event of a table in one query. The writes of the query with the event on the table, as the statements of `WITH` and the actions of the foreign keys, fire the triggers `BEFORE ... FOR EACH STATEMENT` once, and the triggers `AFTER ... FOR EACH STATEMENT` once at the end, with the rows of all the writes.
+#[derive(Debug)]
+pub(super) struct TableData {
+    table: u32,
+    /// The bit of the event in `tgtype`.
+    event: i16,
+    rows: Rc<Captured>,
+    /// `before_trig_done`: the triggers `BEFORE ... FOR EACH STATEMENT` fired.
+    before_done: bool,
+    /// `after_trig_done`: the triggers `AFTER ... FOR EACH STATEMENT` are in the queue.
+    after_done: bool,
 }
 
 impl Event {
@@ -139,24 +154,6 @@ fn transition_of(trigger: &Trigger, rows: &Rc<Captured>) -> Option<Transition> {
         old: trigger.old_table.clone(),
         new: trigger.new_table.clone(),
     })
-}
-
-/// The rows of a write that the transition tables of `triggers` read, or no rows when no trigger has `REFERENCING`. The old rows of an `INSERT` and the new rows of a `DELETE` are empty tables.
-fn captured(
-    info: &Write,
-    triggers: &Triggers,
-    old: &[Vec<Value>],
-    new: &[Vec<Value>],
-) -> Rc<Captured> {
-    if triggers.list.iter().any(|t| has_transition(&t.trigger)) {
-        Rc::new(Captured {
-            table: info.table,
-            old: Rc::new(old.to_vec()),
-            new: Rc::new(new.to_vec()),
-        })
-    } else {
-        Rc::default()
-    }
 }
 
 /// The words of `TG_OP` for the bit of an event.
@@ -319,6 +316,26 @@ impl Connection {
         transition: Option<Transition>,
         updated: &[i16],
     ) -> Result<Option<Vec<Value>>, Error> {
+        // `AfterTriggerExecute`: the rows that a trigger reads do not change, so the later writes of the query put their rows in new transition tables.
+        if let Some(transition) = &transition {
+            transition.rows.closed.set(true);
+        }
+        // The queries of the function have their own states of the triggers, as `_SPI_pquery` calls `AfterTriggerBeginQuery`.
+        self.trigger_tables.borrow_mut().push(Vec::new());
+        let called = self.call_trigger_function(trigger, event, (old, new), transition, updated);
+        self.trigger_tables.borrow_mut().pop();
+        called
+    }
+
+    /// The call of [`Connection::call_trigger`].
+    fn call_trigger_function(
+        &self,
+        trigger: &Trigger,
+        event: i16,
+        (old, new): (Option<Vec<Value>>, Option<Vec<Value>>),
+        transition: Option<Transition>,
+        updated: &[i16],
+    ) -> Result<Option<Vec<Value>>, Error> {
         let catalog = self.catalog();
         match internal::internal(&catalog, trigger.function) {
             Some(kind @ (Internal::TsvectorById | Internal::TsvectorByColumn)) => {
@@ -389,6 +406,12 @@ impl Connection {
     ///
     /// The errors of the triggers.
     pub(super) fn before_statement(&self, triggers: &Triggers, info: &Write) -> Result<(), Error> {
+        // `before_stmt_triggers_fired`: the triggers fire once in the query for the event of the table.
+        if self
+            .table_data(info.table, triggers.event, |d| std::mem::replace(&mut d.before_done, true))
+        {
+            return Ok(());
+        }
         for armed in triggers.of(false, true) {
             if self.enabled((armed, triggers.event), info, None, None)? {
                 self.call_trigger(&armed.trigger, triggers.event, (None, None), None, &[])?;
@@ -578,7 +601,7 @@ impl Connection {
         new: &[Vec<Value>],
     ) -> Result<(), Error> {
         let (old, new) = self.after_rows_of(info, old, new);
-        let captured = captured(info, triggers, &old, &new);
+        let captured = self.captured(info, triggers, &old, &new);
         let mut events = Vec::new();
         for i in 0..old.len().max(new.len()) {
             self.row_events(info, (triggers, &captured), (old.get(i), new.get(i)), &mut events)?;
@@ -601,8 +624,8 @@ impl Connection {
     ) -> Result<(), Error> {
         let (_, inserted) = self.after_rows_of(info, &[], &done.inserted);
         let (old, new) = self.after_rows_of(info, &done.old, &done.new);
-        let insert = captured(info, &fire.insert, &[], &inserted);
-        let update = captured(info, &fire.update, &old, &new);
+        let insert = self.captured(info, &fire.insert, &[], &inserted);
+        let update = self.captured(info, &fire.update, &old, &new);
         let mut events = Vec::new();
         let (mut ins, mut upd) = (inserted.iter(), old.iter().zip(&new));
         for &went_in in &done.steps {
@@ -663,7 +686,14 @@ impl Connection {
                 let trigger = armed.trigger.clone();
                 let transition = transition_of(&trigger, captured);
                 let (old, new) = (old.cloned(), new.cloned());
-                events.push(Event { trigger, event: triggers.event, old, new, transition });
+                events.push(Event {
+                    trigger,
+                    event: triggers.event,
+                    old,
+                    new,
+                    transition,
+                    rows: Rc::clone(captured),
+                });
             }
         }
         Ok(())
@@ -677,12 +707,30 @@ impl Connection {
         captured: &Rc<Captured>,
         events: &mut Vec<Event>,
     ) -> Result<(), Error> {
+        // `cancel_prior_stmt_triggers`: the events of an earlier write of the query with the same rows leave the queue, and the new events go after the events of the rows of this write.
+        if self
+            .table_data(info.table, triggers.event, |d| std::mem::replace(&mut d.after_done, true))
+        {
+            let prior = |e: &Event| {
+                e.trigger.kind & (TRIGGER_ROW | TRIGGER_BEFORE | TRIGGER_INSTEAD) == 0
+                    && e.event == triggers.event
+                    && Rc::ptr_eq(&e.rows, captured)
+            };
+            self.events.borrow_mut().retain(|e| !prior(e));
+        }
         for armed in triggers.of(false, false) {
             if self.enabled((armed, triggers.event), info, None, None)? {
                 let trigger = armed.trigger.clone();
                 let transition = transition_of(&trigger, captured);
                 let (old, new) = (None, None);
-                events.push(Event { trigger, event: triggers.event, old, new, transition });
+                events.push(Event {
+                    trigger,
+                    event: triggers.event,
+                    old,
+                    new,
+                    transition,
+                    rows: Rc::clone(captured),
+                });
             }
         }
         Ok(())
@@ -784,9 +832,9 @@ impl Connection {
         let inserted: Vec<_> = news(MergeCommand::Insert);
         let (old, new) = (olds(MergeCommand::Update), news(MergeCommand::Update));
         let deleted = olds(MergeCommand::Delete);
-        let insert = captured(info, &fire.insert, &[], &inserted);
-        let update = captured(info, &fire.update, &old, &new);
-        let delete = captured(info, &fire.delete, &deleted, &[]);
+        let insert = self.captured(info, &fire.insert, &[], &inserted);
+        let update = self.captured(info, &fire.update, &old, &new);
+        let delete = self.captured(info, &fire.delete, &deleted, &[]);
         let mut events = Vec::new();
         for action in done {
             let (triggers, captured) = match action.command {
@@ -880,6 +928,16 @@ impl Connection {
     ///
     /// The errors of the triggers.
     pub(super) fn fire_events(&self, mark: usize) -> Result<(), Error> {
+        let fired = self.fire_events_from(mark);
+        // `AfterTriggerEndQuery`: the states of the triggers of the query end with the query.
+        if let Some(level) = self.trigger_tables.borrow_mut().last_mut() {
+            level.clear();
+        }
+        fired
+    }
+
+    /// `afterTriggerInvokeEvents` for [`Connection::fire_events`].
+    fn fire_events_from(&self, mark: usize) -> Result<(), Error> {
         loop {
             let events = {
                 let mut queue = self.events.borrow_mut();
@@ -968,6 +1026,39 @@ impl Connection {
         self.catalog().relation(info.table).map_or(info.width, |r| r.columns.len())
     }
 
+    /// `GetAfterTriggersTableData`: runs `f` on the state of the event `event` of the table `table` in the query. A trigger that read the rows of the state closes it, and a new state starts.
+    fn table_data<T>(&self, table: u32, event: i16, f: impl FnOnce(&mut TableData) -> T) -> T {
+        let mut levels = self.trigger_tables.borrow_mut();
+        if levels.is_empty() {
+            levels.push(Vec::new());
+        }
+        let last = levels.len() - 1;
+        let level = &mut levels[last];
+        let open = |d: &TableData| d.table == table && d.event == event && !d.rows.closed.get();
+        let at = level.iter().position(open).unwrap_or_else(|| {
+            let rows = Rc::new(Captured { table, ..Captured::default() });
+            level.push(TableData { table, event, rows, before_done: false, after_done: false });
+            level.len() - 1
+        });
+        f(&mut level[at])
+    }
+
+    /// The rows of the event of the table of the write in the query, with the rows `old` and `new` of the write when a trigger has `REFERENCING`, as `TransitionTableAddTuple`. The old rows of an `INSERT` and the new rows of a `DELETE` stay empty.
+    fn captured(
+        &self,
+        info: &Write,
+        triggers: &Triggers,
+        old: &[Vec<Value>],
+        new: &[Vec<Value>],
+    ) -> Rc<Captured> {
+        let rows = self.table_data(info.table, triggers.event, |d| Rc::clone(&d.rows));
+        if triggers.list.iter().any(|t| has_transition(&t.trigger)) {
+            Rc::make_mut(&mut rows.old.borrow_mut()).extend_from_slice(old);
+            Rc::make_mut(&mut rows.new.borrow_mut()).extend_from_slice(new);
+        }
+        rows
+    }
+
     /// The place at the end of the queue of the triggers `AFTER`.
     pub(super) fn event_mark(&self) -> usize {
         self.events.borrow().len()
@@ -989,6 +1080,7 @@ impl Connection {
     /// The start of a statement of the client: no events in the queue and no messages of the triggers.
     pub(super) fn start_triggers(&self) {
         self.events.borrow_mut().clear();
+        *self.trigger_tables.borrow_mut() = vec![Vec::new()];
         self.trigger_warnings.borrow_mut().clear();
     }
 }

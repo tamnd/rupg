@@ -466,6 +466,8 @@ pub struct Connection {
     calls: plpgsql::Calls,
     /// The queue of the triggers `AFTER` of the statement.
     events: RefCell<Vec<trigger::Event>>,
+    /// The state of the triggers of each event of a table in the query and in each query of a function that runs inside it, as `query_stack` of `AfterTriggersData`.
+    trigger_tables: RefCell<Vec<Vec<trigger::TableData>>>,
     /// The messages of `RAISE` of the triggers of the statement, for the client.
     trigger_warnings: RefCell<Vec<Error>>,
     /// The transition tables of the trigger whose function runs, which the readers of its queries get.
@@ -575,6 +577,7 @@ impl Connection {
             plpgsql: rupg_plpgsql::Cache::default(),
             calls: plpgsql::Calls::default(),
             events: RefCell::new(Vec::new()),
+            trigger_tables: RefCell::new(vec![Vec::new()]),
             trigger_warnings: RefCell::new(Vec::new()),
             transition: RefCell::new(None),
             trigger_depth: Cell::new(0),
@@ -6657,6 +6660,12 @@ mod tests {
     #[test]
     fn transition_dropped_column() {
         big_stack(|| script(include_str!("connection/transition_dropped_column.test")));
+    }
+
+    /// The writes of one query with the same event on a table, as the statements of `WITH` and the actions of the foreign keys, fire the triggers `BEFORE ... FOR EACH STATEMENT` once and the triggers `AFTER ... FOR EACH STATEMENT` once with the rows of all the writes, as in PostgreSQL.
+    #[test]
+    fn transition_query() {
+        big_stack(|| script(include_str!("connection/transition_query.test")));
     }
 
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.

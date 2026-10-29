@@ -1,0 +1,105 @@
+!details
+> create table wt1 (a int)
+CREATE TABLE
+> create table wt2 (a text)
+CREATE TABLE
+> create function wt_dump() returns trigger language plpgsql as $$ begin raise notice 'trigger = %, new table = %', TG_NAME, (select string_agg(new_table::text, ', ' order by a) from new_table); return null; end; $$
+CREATE FUNCTION
+> create function wt_before() returns trigger language plpgsql as $$ begin raise notice 'before % on %', TG_OP, TG_TABLE_NAME; return null; end; $$
+CREATE FUNCTION
+> create trigger wt1_b before insert on wt1 for each statement execute procedure wt_before()
+CREATE TRIGGER
+> create trigger wt1_t after insert on wt1 referencing new table as new_table for each statement execute procedure wt_dump()
+CREATE TRIGGER
+> create trigger wt2_t after insert on wt2 referencing new table as new_table for each statement execute procedure wt_dump()
+CREATE TRIGGER
+> with w as (insert into wt1 values (42)) insert into wt2 values ('hello world')
+NOTICE 00000 before INSERT on wt1 (PL/pgSQL function wt_before() line 1 at RAISE)
+NOTICE 00000 trigger = wt2_t, new table = ("hello world") (PL/pgSQL function wt_dump() line 1 at RAISE)
+NOTICE 00000 trigger = wt1_t, new table = (42) (PL/pgSQL function wt_dump() line 1 at RAISE)
+INSERT 0 1
+> with w as (insert into wt1 values (43)) insert into wt1 values (44)
+NOTICE 00000 before INSERT on wt1 (PL/pgSQL function wt_before() line 1 at RAISE)
+NOTICE 00000 trigger = wt1_t, new table = (43), (44) (PL/pgSQL function wt_dump() line 1 at RAISE)
+INSERT 0 1
+> with w as (insert into wt1 values (45)) merge into wt1 using (values (46)) as v(a) on wt1.a = v.a when not matched then insert values (v.a)
+NOTICE 00000 before INSERT on wt1 (PL/pgSQL function wt_before() line 1 at RAISE)
+NOTICE 00000 trigger = wt1_t, new table = (45), (46) (PL/pgSQL function wt_dump() line 1 at RAISE)
+MERGE 1
+> create function wt_fn() returns void language plpgsql as $$ begin insert into wt1 values (47); insert into wt1 values (48); end; $$
+CREATE FUNCTION
+> select wt_fn()
+fields wt_fn:2278:4:-1
+NOTICE 00000 before INSERT on wt1 (PL/pgSQL function wt_before() line 1 at RAISE
+SQL statement "insert into wt1 values (47)"
+PL/pgSQL function wt_fn() line 1 at SQL statement)
+NOTICE 00000 trigger = wt1_t, new table = (47) (PL/pgSQL function wt_dump() line 1 at RAISE
+SQL statement "insert into wt1 values (47)"
+PL/pgSQL function wt_fn() line 1 at SQL statement)
+NOTICE 00000 before INSERT on wt1 (PL/pgSQL function wt_before() line 1 at RAISE
+SQL statement "insert into wt1 values (48)"
+PL/pgSQL function wt_fn() line 1 at SQL statement)
+NOTICE 00000 trigger = wt1_t, new table = (48) (PL/pgSQL function wt_dump() line 1 at RAISE
+SQL statement "insert into wt1 values (48)"
+PL/pgSQL function wt_fn() line 1 at SQL statement)
+row 
+SELECT 1
+> create table rt (a int primary key, b text)
+CREATE TABLE
+> create table tt (a int, b text, foreign key (a) references rt on update cascade on delete cascade)
+CREATE TABLE
+> create function tt_before() returns trigger language plpgsql as $$ begin raise notice 'before % on %', TG_OP, TG_TABLE_NAME; return null; end; $$
+CREATE FUNCTION
+> create trigger tt_b before insert or update or delete on tt for each statement execute procedure tt_before()
+CREATE TRIGGER
+> create function tt_del() returns trigger language plpgsql as $$ begin raise notice 'trigger = %, old table = %', TG_NAME, (select string_agg(old_table::text, ', ' order by a) from old_table); return null; end; $$
+CREATE FUNCTION
+> create trigger tt_d after delete on tt referencing old table as old_table for each statement execute procedure tt_del()
+CREATE TRIGGER
+> create function tt_upd() returns trigger language plpgsql as $$ begin raise notice 'trigger = %, old table = %, new table = %', TG_NAME, (select string_agg(old_table::text, ', ' order by a) from old_table), (select string_agg(new_table::text, ', ' order by a) from new_table); return null; end; $$
+CREATE FUNCTION
+> create trigger tt_u after update on tt referencing old table as old_table new table as new_table for each statement execute procedure tt_upd()
+CREATE TRIGGER
+> insert into rt values (1, 'one'), (2, 'two'), (3, 'three')
+INSERT 0 3
+> insert into tt values (1, 'one a'), (1, 'one b'), (2, 'two a'), (2, 'two b'), (3, 'three a')
+NOTICE 00000 before INSERT on tt (PL/pgSQL function tt_before() line 1 at RAISE)
+INSERT 0 5
+> drop trigger tt_b on tt
+DROP TRIGGER
+> update rt set a = 11 where b = 'one'
+NOTICE 00000 trigger = tt_u, old table = (1,"one a"), (1,"one b"), new table = (11,"one a"), (11,"one b") (PL/pgSQL function tt_upd() line 1 at RAISE)
+UPDATE 1
+> delete from rt where length(b) = 3
+NOTICE 00000 trigger = tt_d, old table = (2,"two a"), (2,"two b"), (11,"one a"), (11,"one b") (PL/pgSQL function tt_del() line 1 at RAISE)
+DELETE 2
+> select * from tt
+fields a@tt.1:23:4:-1,b@tt.2:25:-1:-1
+row 3,three a
+SELECT 1
+> create table sr (a int primary key, b int references sr(a) on delete cascade)
+CREATE TABLE
+> create trigger sr_b before delete on sr for each statement execute procedure tt_before()
+CREATE TRIGGER
+> create trigger sr_s after delete on sr referencing old table as old_table for each statement execute procedure tt_del()
+CREATE TRIGGER
+> insert into sr values (1, null), (2, 1), (3, 2), (4, 3)
+INSERT 0 4
+> delete from sr where a = 1
+NOTICE 00000 before DELETE on sr (PL/pgSQL function tt_before() line 1 at RAISE)
+NOTICE 00000 trigger = sr_s, old table = (1,), (2,1), (3,2), (4,3) (PL/pgSQL function tt_del() line 1 at RAISE)
+DELETE 1
+> drop table wt1, wt2, tt, rt, sr
+DROP TABLE
+> drop function wt_dump()
+DROP FUNCTION
+> drop function wt_before()
+DROP FUNCTION
+> drop function wt_fn()
+DROP FUNCTION
+> drop function tt_before()
+DROP FUNCTION
+> drop function tt_del()
+DROP FUNCTION
+> drop function tt_upd()
+DROP FUNCTION
