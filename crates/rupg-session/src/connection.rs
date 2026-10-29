@@ -6725,6 +6725,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/trigger_ddl_in_use.test")));
     }
 
+    /// An aggregate call in a subquery of the arguments of an aggregate call of its level is nested, as `check_agg_arguments` finds it, and `min` and `max` of a constant that is not null test no `IS NOT NULL`, as `restriction_is_always_true` finds it.
+    #[test]
+    fn agg_nested_sublink() {
+        big_stack(|| script(include_str!("connection/agg_nested_sublink.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

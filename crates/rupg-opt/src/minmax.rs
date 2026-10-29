@@ -175,8 +175,14 @@ fn subquery(query: &Query, arg: &Expr, sortop: u32, eq: u32, nulls_first: bool) 
     if let Some(filter) = &sub.filter {
         exprs::and_parts(filter, &mut parts);
     }
-    // `restriction_is_always_true`: the test of a column that is `NOT NULL` takes no place in the plan.
-    let always = matches!(&arg.kind, ExprKind::Var(v) if v.levels_up == 0 && pullup::column_not_null(&query.relations, v.relation, v.attnum));
+    // `restriction_is_always_true`: the test of a column that is `NOT NULL` or of a constant that is not null takes no place in the plan, as `expr_is_nonnullable` finds it.
+    let always = match &arg.kind {
+        ExprKind::Var(v) => {
+            v.levels_up == 0 && pullup::column_not_null(&query.relations, v.relation, v.attnum)
+        }
+        ExprKind::Const(value) => !matches!(value, Value::Null),
+        _ => false,
+    };
     if !always && !parts.iter().any(|p| p.same(&test)) {
         let mut list = vec![test];
         list.extend(parts.into_iter().cloned());
