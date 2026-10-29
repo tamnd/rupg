@@ -1,0 +1,38 @@
+!details
+> BEGIN
+BEGIN
+> CREATE TABLE past_parted (i int) PARTITION BY LIST(i)
+CREATE TABLE
+> CREATE TABLE past_part PARTITION OF past_parted FOR VALUES IN (1)
+CREATE TABLE
+> INSERT INTO past_parted VALUES (1),(1)
+INSERT 0 2
+> ANALYZE past_parted
+ANALYZE
+> DROP TABLE past_part
+DROP TABLE
+> SELECT reltuples, relhassubclass FROM pg_class WHERE oid = 'past_parted'::regclass
+fields reltuples@pg_class.11:700:4:-1,relhassubclass@pg_class.23:16:1:-1
+row 2,t
+SELECT 1
+> ANALYZE past_parted
+ANALYZE
+> SELECT reltuples, relhassubclass FROM pg_class WHERE oid = 'past_parted'::regclass
+fields reltuples@pg_class.11:700:4:-1,relhassubclass@pg_class.23:16:1:-1
+row 0,f
+SELECT 1
+> COMMIT
+COMMIT
+> DROP TABLE past_parted
+DROP TABLE
+> CREATE TEMPORARY TABLE tmp (a int PRIMARY KEY)
+CREATE TABLE
+> CREATE INDEX tmp_idx1 ON tmp (a)
+CREATE INDEX
+> VACUUM (PARALLEL 1, FULL FALSE) tmp
+WARNING 01000 disabling parallel option of vacuum on "tmp" --- cannot vacuum temporary tables in parallel
+VACUUM
+> VACUUM (PARALLEL 0, FULL TRUE) tmp
+VACUUM
+> DROP TABLE tmp
+DROP TABLE

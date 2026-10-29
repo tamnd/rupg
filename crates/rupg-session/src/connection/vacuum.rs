@@ -181,6 +181,39 @@ fn parse_options(stmt: &VacuumStmt) -> Result<Parsed, Error> {
     Ok(parsed)
 }
 
+/// `INDEX_CLEANUP` of `VACUUM` for the table `relid`: the option, or else the reloption `vacuum_index_cleanup`. `None` is `auto`.
+fn index_cleanup(catalog: &Catalog, relid: u32, parsed: &Parsed) -> Option<bool> {
+    parsed.index_cleanup.or_else(|| {
+        let options = catalog.relation(relid).map(|r| r.options.as_slice()).unwrap_or_default();
+        options.iter().find_map(|o| {
+            match o.strip_prefix("vacuum_index_cleanup=")?.to_ascii_lowercase().as_str() {
+                "true" | "on" | "yes" | "1" => Some(true),
+                "false" | "off" | "no" | "0" => Some(false),
+                _ => None,
+            }
+        })
+    })
+}
+
+/// The name of the table `relid` when `dead_items_alloc` warns that a temporary table cannot have a parallel `VACUUM`: `PARALLEL` with workers, no `FULL`, and two or more indexes to vacuum.
+fn parallel_temp(catalog: &Catalog, relid: u32, parsed: &Parsed) -> Option<String> {
+    let rel = catalog.relation(relid)?;
+    let heap = matches!(rel.kind, RelKind::Table | RelKind::MatView);
+    if parsed.full || parsed.workers <= 0 || !parsed.process_main || !heap {
+        return None;
+    }
+    if !catalog.is_temp_schema(rel.namespace)
+        || index_cleanup(catalog, relid, parsed) == Some(false)
+    {
+        return None;
+    }
+    let indexes = catalog
+        .relations()
+        .filter(|r| r.kind == RelKind::Index && r.index.as_ref().is_some_and(|i| i.table == relid))
+        .count();
+    (indexes > 1).then(|| rel.name.clone())
+}
+
 /// The error of an option that the command does not have.
 fn unrecognized(command: &str, name: &str, at: Option<usize>) -> Error {
     Error::new(SqlState::SYNTAX_ERROR, format!("unrecognized {command} option \"{name}\""))
@@ -299,6 +332,13 @@ impl Connection {
         };
         let vacuum = stmt.is_vacuumcmd.then_some(&parsed);
         for (relid, columns) in relids {
+            if let Some(parsed) = vacuum
+                && let Some(name) = parallel_temp(&catalog, relid, parsed)
+            {
+                notices.push(Notice::warning(Error::new(SqlState::WARNING, format!(
+                    "disabling parallel option of vacuum on \"{name}\" --- cannot vacuum temporary tables in parallel"
+                ))));
+            }
             let analyze = analyze.then_some(columns.as_slice());
             self.relation_stats(&catalog, relid, (vacuum, analyze));
         }
@@ -347,7 +387,7 @@ impl Connection {
         Ok(Done::Tag(CommandTag::Checkpoint))
     }
 
-    /// `heap_vacuum_rel` with the options `vacuum` and `do_analyze_rel` for the relation `relid`, with its TOAST table for `VACUUM`. `analyze` has the columns of the column list of `ANALYZE`, or no columns for all of them. `ANALYZE` of a partitioned table sets its `reltuples` to the live rows of its partitions and its `relpages` to -1, as the table has no storage. The result is the live rows of the relation.
+    /// `heap_vacuum_rel` with the options `vacuum` and `do_analyze_rel` for the relation `relid`, with its TOAST table for `VACUUM`. `analyze` has the columns of the column list of `ANALYZE`, or no columns for all of them. `ANALYZE` of a partitioned table sets its `reltuples` to the live rows of its partitions and its `relpages` to -1, as the table has no storage. `ANALYZE` of a table that lost its last partition or child clears its `relhassubclass`. The result is the live rows of the relation.
     fn relation_stats(
         &self,
         catalog: &Catalog,
@@ -355,6 +395,12 @@ impl Connection {
         (vacuum, analyze): (Option<&Parsed>, Option<&[String]>),
     ) -> f32 {
         let Some(rel) = catalog.relation(relid) else { return 0.0 };
+        if analyze.is_some() && catalog.stale_subclass(relid) {
+            let _ = self.change_catalog(&mut |catalog| {
+                catalog.clear_subclass(relid);
+                Ok(())
+            });
+        }
         match rel.kind {
             RelKind::Table | RelKind::MatView | RelKind::Toast => {
                 let mut rows = 0.0;
@@ -382,7 +428,7 @@ impl Connection {
                     .all_inheritors(relid)
                     .into_iter()
                     .map(|part| heap.live_count(self.database_oid, part, self.xid.get()) as f32)
-                    .sum();
+                    .fold(0.0, |sum, rows| sum + rows);
                 if let Some(columns) = analyze {
                     self.report_analyze(relid, None, columns.is_empty());
                     self.heap().set_stats(self.database_oid, relid, -1, rows);
@@ -536,16 +582,7 @@ impl Connection {
         let indexed = catalog.relations().any(|r| {
             r.kind == RelKind::Index && r.index.as_ref().is_some_and(|i| i.table == relid)
         });
-        let cleanup = parsed.index_cleanup.or_else(|| {
-            let options = catalog.relation(relid).map(|r| r.options.as_slice()).unwrap_or_default();
-            options.iter().find_map(|o| {
-                match o.strip_prefix("vacuum_index_cleanup=")?.to_ascii_lowercase().as_str() {
-                    "true" | "on" | "yes" | "1" => Some(true),
-                    "false" | "off" | "no" | "0" => Some(false),
-                    _ => None,
-                }
-            })
-        });
+        let cleanup = index_cleanup(catalog, relid, parsed);
         // The pages of each `btree` index before `VACUUM` removes the versions of its build.
         let indexes: Vec<(&Relation, i32)> = if indexed && cleanup != Some(false) {
             self.btree_pages(catalog, relid)
