@@ -431,6 +431,26 @@ impl Connection {
         Ok(())
     }
 
+    /// `ExecBSTruncateTriggers` with `before`, else `ExecASTruncateTriggers`: the triggers `TRUNCATE ... FOR EACH STATEMENT` of the table `table`. `ExecuteTruncateGuts` fires the triggers `BEFORE` of all the tables before it removes the rows, and the triggers `AFTER` of all the tables after it, so the triggers `AFTER` fire in turn here.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the triggers.
+    pub(super) fn truncate_triggers(
+        &self,
+        triggers: &Triggers,
+        table: u32,
+        before: bool,
+    ) -> Result<(), Error> {
+        let width = self.catalog().relation(table).map_or(0, |r| r.columns.len());
+        for armed in triggers.of(false, before) {
+            if self.enabled_in((armed, triggers.event), (&[], width), None, None)? {
+                self.call_trigger(&armed.trigger, triggers.event, (None, None), None, &[])?;
+            }
+        }
+        Ok(())
+    }
+
     /// `fireBSTriggers` for a `MERGE`: the triggers `BEFORE ... FOR EACH STATEMENT` of `INSERT`, then of `UPDATE`, then of `DELETE`.
     ///
     /// # Errors

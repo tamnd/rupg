@@ -63,15 +63,6 @@ impl Definer<'_, '_> {
         } else {
             self.check_truncate_keys(&tables)?;
         }
-        // The executor does not fire the triggers of `TRUNCATE` yet.
-        let fires = |t: &rupg_catalog::Trigger| {
-            tables.contains(&t.relation)
-                && t.kind & rupg_catalog::TRIGGER_TRUNCATE != 0
-                && t.fires(self.an.env.replica())
-        };
-        if self.catalog.triggers().any(fires) {
-            return Err(not_yet("TRUNCATE of a table with TRUNCATE triggers", None));
-        }
         let mut sequences = Vec::new();
         if stmt.restart_seqs {
             for &table in &tables {
