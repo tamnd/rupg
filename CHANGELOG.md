@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A missing column in the inference of `ON CONFLICT` gets the hint of a similar column, also of `EXCLUDED` for `DO UPDATE` and `DO SELECT`, and the arbiter `WHERE` cannot reference `EXCLUDED`, as in PostgreSQL (#1152).
 - Event triggers on `sql_drop` fire after a command drops objects, and `pg_event_trigger_dropped_objects()` gives the dropped objects with the columns, the order and the temporary schema names of PostgreSQL (#1150).
 
 ## 0.4.11 (2026-10-29)

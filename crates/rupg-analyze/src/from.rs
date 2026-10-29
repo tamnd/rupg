@@ -1341,8 +1341,8 @@ impl Analyzer<'_> {
         Ok(index)
     }
 
-    /// The part of `transformOnConflictClause` that adds `EXCLUDED` for `ON CONFLICT DO UPDATE`: the row that the statement proposed, with the columns of the target table, which is the first relation of the scope. The entry has no system columns, as an entry of a composite type. It gives the index of the new relation.
-    pub(crate) fn add_excluded(&mut self) -> Result<usize> {
+    /// The part of `transformOnConflictClause` that adds `EXCLUDED` for `ON CONFLICT DO UPDATE` and `DO SELECT`: the row that the statement proposed, with the columns of the target table, which is the first relation of the scope. The entry has no system columns, as an entry of a composite type. It gives the index of the new relation and its item, which [`Analyzer::show_item`] puts in the namespace after the inference. Until then, an error of a missing column can name a column of `EXCLUDED`, as in PostgreSQL.
+    pub(crate) fn add_excluded(&mut self) -> Result<(usize, Item)> {
         let target = self
             .scope
             .relations
@@ -1357,8 +1357,12 @@ impl Analyzer<'_> {
         // `EXCLUDED` of an updatable view has the columns of the view.
         self.auto_view_returning(&mut item, index, None)?;
         self.scope.entries[item.entry].oid = 0;
+        Ok((index, item))
+    }
+
+    /// `addNSItemToQuery`: puts the item at the end of the namespace.
+    pub(crate) fn show_item(&mut self, item: Item) {
         self.scope.namespace.push(item);
-        Ok(index)
     }
 
     /// The relations of the scope whose entries have the OID `oid`, as the relations that give the columns of an automatically updatable view.
@@ -2412,7 +2416,12 @@ impl Analyzer<'_> {
     }
 
     /// `errorMissingColumn`, with the hint of a close name.
-    fn missing_column(&self, table: Option<&str>, column: &str, at: Option<usize>) -> Error {
+    pub(crate) fn missing_column(
+        &self,
+        table: Option<&str>,
+        column: &str,
+        at: Option<usize>,
+    ) -> Error {
         let mut fuzzy = Fuzzy {
             distance: MAX_FUZZY_DISTANCE + 1,
             first: None,
