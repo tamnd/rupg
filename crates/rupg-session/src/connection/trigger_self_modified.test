@@ -1,0 +1,148 @@
+!details
+> create table smp (aid int not null primary key, val1 text, val2 text, bcnt int not null default 0)
+CREATE TABLE
+> create table smc (bid int not null primary key, aid int not null, val1 text)
+CREATE TABLE
+> create function smp_upd() returns trigger language plpgsql as $$ begin if old.val1 <> new.val1 then new.val2 = new.val1; delete from smc where smc.aid = new.aid and smc.val1 = new.val1; end if; return new; end; $$
+CREATE FUNCTION
+> create trigger smp_upd before update on smp for each row execute procedure smp_upd()
+CREATE TRIGGER
+> create function smp_del() returns trigger language plpgsql as $$ begin delete from smc where aid = old.aid; return old; end; $$
+CREATE FUNCTION
+> create trigger smp_del before delete on smp for each row execute procedure smp_del()
+CREATE TRIGGER
+> create function smc_ins() returns trigger language plpgsql as $$ begin update smp set bcnt = bcnt + 1 where aid = new.aid; return new; end; $$
+CREATE FUNCTION
+> create trigger smc_ins after insert on smc for each row execute procedure smc_ins()
+CREATE TRIGGER
+> create function smc_del() returns trigger language plpgsql as $$ begin update smp set bcnt = bcnt - 1 where aid = old.aid; return old; end; $$
+CREATE FUNCTION
+> create trigger smc_del after delete on smc for each row execute procedure smc_del()
+CREATE TRIGGER
+> insert into smp values (1, 'a', 'a', 0)
+INSERT 0 1
+> insert into smc values (10, 1, 'b')
+INSERT 0 1
+> select * from smp
+fields aid@smp.1:23:4:-1,val1@smp.2:25:-1:-1,val2@smp.3:25:-1:-1,bcnt@smp.4:23:4:-1
+row 1,a,a,1
+SELECT 1
+> update smp set val1 = 'b' where aid = 1
+ERROR 27000 tuple to be updated was already modified by an operation triggered by the current command
+HINT Consider using an AFTER trigger instead of a BEFORE trigger to propagate changes to other rows.
+> merge into smp p using (values (1)) as v(id) on p.aid = v.id when matched then update set val1 = 'b'
+ERROR 27000 tuple to be updated or deleted was already modified by an operation triggered by the current command
+HINT Consider using an AFTER trigger instead of a BEFORE trigger to propagate changes to other rows.
+> select * from smp
+fields aid@smp.1:23:4:-1,val1@smp.2:25:-1:-1,val2@smp.3:25:-1:-1,bcnt@smp.4:23:4:-1
+row 1,a,a,1
+SELECT 1
+> select * from smc
+fields bid@smc.1:23:4:-1,aid@smc.2:23:4:-1,val1@smc.3:25:-1:-1
+row 10,1,b
+SELECT 1
+> delete from smp where aid = 1
+ERROR 27000 tuple to be deleted was already modified by an operation triggered by the current command
+HINT Consider using an AFTER trigger instead of a BEFORE trigger to propagate changes to other rows.
+> merge into smp p using (values (1)) as v(id) on p.aid = v.id when matched then delete
+ERROR 27000 tuple to be updated or deleted was already modified by an operation triggered by the current command
+HINT Consider using an AFTER trigger instead of a BEFORE trigger to propagate changes to other rows.
+> select * from smp
+fields aid@smp.1:23:4:-1,val1@smp.2:25:-1:-1,val2@smp.3:25:-1:-1,bcnt@smp.4:23:4:-1
+row 1,a,a,1
+SELECT 1
+> select * from smc
+fields bid@smc.1:23:4:-1,aid@smc.2:23:4:-1,val1@smc.3:25:-1:-1
+row 10,1,b
+SELECT 1
+> update smp set val1 = 'c' where aid = 1
+UPDATE 1
+> select * from smp
+fields aid@smp.1:23:4:-1,val1@smp.2:25:-1:-1,val2@smp.3:25:-1:-1,bcnt@smp.4:23:4:-1
+row 1,c,c,1
+SELECT 1
+> create or replace function smp_del() returns trigger language plpgsql as $$ begin delete from smc where aid = old.aid; if found then delete from smp where aid = old.aid; return null; end if; return old; end; $$
+CREATE FUNCTION
+> delete from smp where aid = 1
+DELETE 0
+> select * from smp
+fields aid@smp.1:23:4:-1,val1@smp.2:25:-1:-1,val2@smp.3:25:-1:-1,bcnt@smp.4:23:4:-1
+SELECT 0
+> select * from smc
+fields bid@smc.1:23:4:-1,aid@smc.2:23:4:-1,val1@smc.3:25:-1:-1
+SELECT 0
+> drop table smp, smc
+DROP TABLE
+> drop function smp_upd()
+DROP FUNCTION
+> drop function smp_del()
+DROP FUNCTION
+> drop function smc_ins()
+DROP FUNCTION
+> drop function smc_del()
+DROP FUNCTION
+> create table smr (id int primary key, parent int references smr, data text, nchildren int not null default 0)
+CREATE TABLE
+> create function smr_ins() returns trigger language plpgsql as $$ begin if new.parent is not null then update smr set nchildren = nchildren + 1 where id = new.parent; end if; return new; end; $$
+CREATE FUNCTION
+> create trigger smr_ins before insert on smr for each row execute procedure smr_ins()
+CREATE TRIGGER
+> create function smr_del() returns trigger language plpgsql as $$ begin if old.parent is not null then update smr set nchildren = nchildren - 1 where id = old.parent; end if; return old; end; $$
+CREATE FUNCTION
+> create trigger smr_del before delete on smr for each row execute procedure smr_del()
+CREATE TRIGGER
+> insert into smr values (1, null, 'root')
+INSERT 0 1
+> insert into smr values (2, 1, 'root child A')
+INSERT 0 1
+> insert into smr values (3, 1, 'root child B')
+INSERT 0 1
+> insert into smr values (4, 2, 'grandchild 1')
+INSERT 0 1
+> insert into smr values (5, 3, 'grandchild 2')
+INSERT 0 1
+> update smr set data = 'root!' where id = 1
+UPDATE 1
+> select * from smr order by id
+fields id@smr.1:23:4:-1,parent@smr.2:23:4:-1,data@smr.3:25:-1:-1,nchildren@smr.4:23:4:-1
+row 1,NULL,root!,2
+row 2,1,root child A,1
+row 3,1,root child B,1
+row 4,2,grandchild 1,0
+row 5,3,grandchild 2,0
+SELECT 5
+> delete from smr
+ERROR 27000 tuple to be updated was already modified by an operation triggered by the current command
+HINT Consider using an AFTER trigger instead of a BEFORE trigger to propagate changes to other rows.
+> select * from smr order by id
+fields id@smr.1:23:4:-1,parent@smr.2:23:4:-1,data@smr.3:25:-1:-1,nchildren@smr.4:23:4:-1
+row 1,NULL,root!,2
+row 2,1,root child A,1
+row 3,1,root child B,1
+row 4,2,grandchild 1,0
+row 5,3,grandchild 2,0
+SELECT 5
+> drop table smr
+DROP TABLE
+> drop function smr_ins()
+DROP FUNCTION
+> drop function smr_del()
+DROP FUNCTION
+> create table smj (a int)
+CREATE TABLE
+> insert into smj values (1)
+INSERT 0 1
+> update smj set a = a + 1 from (values (1), (1)) v(x)
+UPDATE 1
+> select * from smj
+fields a@smj.1:23:4:-1
+row 2
+SELECT 1
+> delete from smj using (values (1), (1)) v(x)
+DELETE 1
+> select count(*) from smj
+fields count:20:8:-1
+row 0
+SELECT 1
+> drop table smj
+DROP TABLE

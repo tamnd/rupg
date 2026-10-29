@@ -88,7 +88,7 @@ impl Connection {
         let exclusions = self.exclusion_arbiters(info.table, conflict)?;
         for row in rows {
             let row = if before {
-                match self.before_rows(plan, info, &fire.insert, vec![row])?.pop() {
+                match self.before_rows(plan, info, (&fire.insert, None), vec![row])?.pop() {
                     Some(row) => row,
                     None => continue,
                 }
@@ -344,6 +344,10 @@ impl Connection {
                 &mut applied,
             )? {
                 Changed::Done(0) | Changed::Again => return Ok(false),
+                // `ExecOnConflictUpdate` locks the row first, and a row that the transaction changed after is not expected there.
+                Changed::SelfModified { .. } => {
+                    return Err(Error::internal("unexpected self-updated tuple"));
+                }
                 Changed::Done(_) => {
                     self.count_writes(oid, Writes { updated: 1, ..Writes::default() });
                     break;
@@ -440,6 +444,10 @@ impl Connection {
                 &mut applied,
             )? {
                 Changed::Done(0) | Changed::Again => return Ok(false),
+                // `ExecOnConflictUpdate` locks the row first, and a row that the transaction changed after is not expected there.
+                Changed::SelfModified { .. } => {
+                    return Err(Error::internal("unexpected self-updated tuple"));
+                }
                 Changed::Done(_) => {
                     self.count_writes(info.table, Writes { updated: 1, ..Writes::default() });
                     break;

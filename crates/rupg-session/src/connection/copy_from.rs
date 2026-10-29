@@ -551,7 +551,7 @@ impl Connection {
             let single = plan.write().filter(|info| info.recheck.is_some());
             let said = self.trigger_warnings.borrow().len();
             let rows = match single {
-                Some(info) => self.before_rows(&plan, info, &copy.load.triggers, rows),
+                Some(info) => self.before_rows(&plan, info, (&copy.load.triggers, None), rows),
                 None => plan.check(rows, &reader),
             };
             // The messages of the triggers have the line of the copy in their context, as `CopyFromErrorCallback` gives it.

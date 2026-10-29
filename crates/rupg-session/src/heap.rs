@@ -621,6 +621,8 @@ pub(crate) enum Changed {
     WaitKey { holder: u32, index: usize, used: Vec<u64> },
     /// A live version has the key of a new version in the unique index at the place `index`. `key` is the value of each key column.
     Duplicate { index: usize, key: Vec<Value> },
+    /// `TM_SelfModified` with a `cmax` that is not the command of the view: a later command of the transaction, such as a statement of a trigger, changed the row. `update` is true when the change of the row is an update.
+    SelfModified { update: bool },
 }
 
 /// The result of [`Heap::speculative`] for one row of `INSERT ... ON CONFLICT`.
@@ -827,6 +829,18 @@ impl Heap {
         tids.iter()
             .filter_map(|&tid| table.find(tid).map(|at| table.versions[at].values.to_vec()))
             .collect()
+    }
+
+    /// True when a command of the transaction of `view` after the command of `view` changed the version `tid` of a table: `TM_SelfModified` with a `cmax` that is not the command of `view`.
+    pub(crate) fn modified_later(&self, view: &View, relation: u32, tid: u64) -> bool {
+        let state = self.state();
+        let Some(table) = state.tables.get(&(view.database, relation)) else {
+            return false;
+        };
+        table.find(tid).is_some_and(|at| {
+            let version = &table.versions[at];
+            view.xid != 0 && version.xmax == view.xid && version.cmax != view.command
+        })
     }
 
     /// `heap_get_latest_tid`: the last version of the chain of updates from the version `tid` of a table, as the transaction of `view` sees the updates of its own and of the transactions that committed.
@@ -1064,7 +1078,11 @@ impl Heap {
             let version = &table.versions[at];
             match version.xmax {
                 0 => {}
-                xmax if xmax == view.xid => continue,
+                // The command changed the row before, as for a row that a join gives more than once.
+                xmax if xmax == view.xid && version.cmax == view.command => continue,
+                xmax if xmax == view.xid => {
+                    return Ok(Changed::SelfModified { update: values.is_some() });
+                }
                 xmax if running.contains(&xmax) => {
                     return Ok(Changed::Wait { holder: xmax, tid });
                 }
