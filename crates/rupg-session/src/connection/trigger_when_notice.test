@@ -1,0 +1,40 @@
+> create function wbark(text) returns bool language plpgsql immutable as $$ begin raise notice '% <- woof!', $1; return true; end; $$
+CREATE FUNCTION
+> create function wnote() returns trigger language plpgsql as $$ begin raise notice 'trigger % on % (a,b)=(%,%)', TG_NAME, TG_TABLE_NAME, NEW.a, NEW.b; return null; end; $$
+CREATE FUNCTION
+> create table wplain (a int, b text)
+CREATE TABLE
+> create trigger wplain_odd after insert on wplain for each row when (wbark(new.b) and new.a % 2 = 1) execute procedure wnote()
+CREATE TRIGGER
+> insert into wplain values (1, 'aardvark'), (2, 'aanimals')
+NOTICE 00000 aardvark <- woof! (PL/pgSQL function wbark(text) line 1 at RAISE)
+NOTICE 00000 aanimals <- woof! (PL/pgSQL function wbark(text) line 1 at RAISE)
+NOTICE 00000 trigger wplain_odd on wplain (a,b)=(1,aardvark) (PL/pgSQL function wnote() line 1 at RAISE)
+INSERT 0 2
+> create trigger wplain_before before insert on wplain for each row when (wbark(new.b)) execute procedure wnote()
+CREATE TRIGGER
+> insert into wplain values (3, 'aardwolf')
+NOTICE 00000 aardwolf <- woof! (PL/pgSQL function wbark(text) line 1 at RAISE)
+NOTICE 00000 trigger wplain_before on wplain (a,b)=(3,aardwolf) (PL/pgSQL function wnote() line 1 at RAISE)
+INSERT 0 0
+> create table wpart (a int, b text) partition by range (b)
+CREATE TABLE
+> create table wpart1 partition of wpart for values from ('aaaa') to ('bbbb')
+CREATE TABLE
+> create trigger wpart_odd after insert on wpart for each row when (wbark(new.b) and new.a % 2 = 1) execute procedure wnote()
+CREATE TRIGGER
+> insert into wpart values (1, 'aardvark'), (2, 'aanimals')
+NOTICE 00000 aardvark <- woof! (PL/pgSQL function wbark(text) line 1 at RAISE)
+NOTICE 00000 aanimals <- woof! (PL/pgSQL function wbark(text) line 1 at RAISE)
+NOTICE 00000 trigger wpart_odd on wpart1 (a,b)=(1,aardvark) (PL/pgSQL function wnote() line 1 at RAISE)
+INSERT 0 2
+> insert into wpart1 values (3, 'aasvogel')
+NOTICE 00000 aasvogel <- woof! (PL/pgSQL function wbark(text) line 1 at RAISE)
+NOTICE 00000 trigger wpart_odd on wpart1 (a,b)=(3,aasvogel) (PL/pgSQL function wnote() line 1 at RAISE)
+INSERT 0 1
+> drop table wplain, wpart
+DROP TABLE
+> drop function wnote()
+DROP FUNCTION
+> drop function wbark(text)
+DROP FUNCTION

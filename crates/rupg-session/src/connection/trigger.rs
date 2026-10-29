@@ -307,7 +307,10 @@ impl Connection {
         let old = old.map_or_else(nulls, <[Value]>::to_vec);
         let new = new.map_or_else(nulls, <[Value]>::to_vec);
         let reader = self.reader();
-        rupg_exec::trigger_when(base, qual, old, new, &reader)
+        let enabled = rupg_exec::trigger_when(base, qual, old, new, &reader);
+        // The messages of the functions of the condition go to the client with the messages of the triggers.
+        self.trigger_warnings.borrow_mut().extend(reader.take_warnings());
+        enabled
     }
 
     /// A call of the trigger function of `trigger` for the event `event`, with the transition tables `transition` and the columns `updated` of an `UPDATE`, as `tg_updatedcols`. It gives the row that the function returns.
