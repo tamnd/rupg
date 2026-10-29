@@ -1,0 +1,57 @@
+> create table tdu (col1 integer, col2 integer)
+CREATE TABLE
+> create function tdu_func() returns trigger as $$ begin alter table tdu add primary key (col1); return new; end$$ language plpgsql
+CREATE FUNCTION
+> create trigger tdu_func before insert on tdu for each row execute procedure tdu_func()
+CREATE TRIGGER
+> insert into tdu values (1, 42)
+ERROR 55006 cannot ALTER TABLE "tdu" because it is being used by active queries in this session (SQL statement "alter table tdu add primary key (col1)"
+PL/pgSQL function tdu_func() line 1 at SQL statement)
+> create or replace function tdu_func() returns trigger as $$ begin create index on tdu (col2); return new; end$$ language plpgsql
+CREATE FUNCTION
+> insert into tdu values (1, 42)
+ERROR 55006 cannot CREATE INDEX "tdu" because it is being used by active queries in this session (SQL statement "create index on tdu (col2)"
+PL/pgSQL function tdu_func() line 1 at SQL statement)
+> create or replace function tdu_func() returns trigger as $$ begin truncate tdu; return new; end$$ language plpgsql
+CREATE FUNCTION
+> insert into tdu values (1, 42)
+ERROR 55006 cannot TRUNCATE "tdu" because it is being used by active queries in this session (SQL statement "truncate tdu"
+PL/pgSQL function tdu_func() line 1 at SQL statement)
+> drop trigger tdu_func on tdu
+DROP TRIGGER
+> create table tdu2 (a int)
+CREATE TABLE
+> create or replace function tdu_func() returns trigger as $$ begin create index on tdu (col2); return new; end$$ language plpgsql
+CREATE FUNCTION
+> create trigger tdu2_func after insert on tdu2 for each row execute procedure tdu_func()
+CREATE TRIGGER
+> insert into tdu2 values (1)
+INSERT 0 1
+> select count(*) from pg_indexes where tablename = 'tdu'
+fields count:20:8:-1
+row 1
+SELECT 1
+> drop table tdu, tdu2
+DROP TABLE
+> drop function tdu_func()
+DROP FUNCTION
+> create table tdu3 (a int)
+CREATE TABLE
+> create function tdu3_func() returns trigger as $$ begin create index on tdu3 (a); return null; end$$ language plpgsql
+CREATE FUNCTION
+> create trigger tdu3_func after insert on tdu3 for each row execute procedure tdu3_func()
+CREATE TRIGGER
+> insert into tdu3 values (1)
+ERROR 55006 cannot CREATE INDEX "tdu3" because it is being used by active queries in this session (SQL statement "create index on tdu3 (a)"
+PL/pgSQL function tdu3_func() line 1 at SQL statement)
+> drop trigger tdu3_func on tdu3
+DROP TRIGGER
+> create trigger tdu3_func after insert on tdu3 for each statement execute procedure tdu3_func()
+CREATE TRIGGER
+> insert into tdu3 values (1)
+ERROR 55006 cannot CREATE INDEX "tdu3" because it is being used by active queries in this session (SQL statement "create index on tdu3 (a)"
+PL/pgSQL function tdu3_func() line 1 at SQL statement)
+> drop table tdu3
+DROP TABLE
+> drop function tdu3_func()
+DROP FUNCTION

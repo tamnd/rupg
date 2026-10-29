@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- ALTER TABLE, CREATE INDEX and TRUNCATE fail on a table that a write of the statement has open, as in PostgreSQL (#1101).
 - The statement triggers of a query and of its data-modifying WITH statements fire in the order of their ModifyTable nodes, as in PostgreSQL (#1100).
 - The messages of the functions in the WHEN condition of a trigger go to the client, as in PostgreSQL (#1099).
 - A deferred trigger runs as the user that queued it, as in PostgreSQL (#1098).

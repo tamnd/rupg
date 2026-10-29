@@ -468,6 +468,8 @@ pub struct Connection {
     events: RefCell<Vec<trigger::Event>>,
     /// The state of the triggers of each event of a table in the query and in each query of a function that runs inside it, as `query_stack` of `AfterTriggersData`.
     trigger_tables: RefCell<Vec<Vec<trigger::TableData>>>,
+    /// The tables that the writes of the statement and of the queries of its functions have open, as `rd_refcnt` counts the references of the executors to a relation.
+    open_tables: RefCell<Vec<u32>>,
     /// The messages of `RAISE` of the triggers of the statement, for the client.
     trigger_warnings: RefCell<Vec<Error>>,
     /// The transition tables of the trigger whose function runs, which the readers of its queries get.
@@ -578,6 +580,7 @@ impl Connection {
             calls: plpgsql::Calls::default(),
             events: RefCell::new(Vec::new()),
             trigger_tables: RefCell::new(vec![Vec::new()]),
+            open_tables: RefCell::new(Vec::new()),
             trigger_warnings: RefCell::new(Vec::new()),
             transition: RefCell::new(None),
             trigger_depth: Cell::new(0),
@@ -606,6 +609,7 @@ impl Connection {
     /// `SetCurrentStatementStartTimestamp`: the start of a message that runs a statement.
     fn start_statement(&mut self) {
         self.statement_start = query::now(&*self.clock);
+        self.open_tables.get_mut().clear();
     }
 
     /// `SetSessionAuthorization` and `SetCurrentRoleId`: the session user from `session_authorization`, the current user from `role`, or the session user when `role` is `none`, and `is_superuser` from the current user. A rollback and `RESET` change the settings too, so the session reads them again before each statement and before `ReadyForQuery`. As in PostgreSQL, `is_superuser` changes only when `role` or `session_authorization` gets a value, not when `ALTER ROLE` changes the current user.
@@ -705,6 +709,8 @@ impl Connection {
         let Some(info) = plan.write() else {
             return Err(Error::internal("a plan that does not write"));
         };
+        // The executor of the statement keeps the table open until `ExecutorEnd`, after the triggers `AFTER`.
+        self.open_tables.borrow_mut().push(info.table);
         let Applied { tag, count, written, view, batches } =
             self.apply_write(plan, params, view, rows)?;
         let done = if info.returning.is_some() {
@@ -736,6 +742,27 @@ impl Connection {
         let Some(info) = plan.write() else {
             return Err(Error::internal("a plan that does not write"));
         };
+        // `ExecInitModifyTable` opens the target table until the end of the write, so the statements of its triggers cannot change it.
+        self.open_tables.borrow_mut().push(info.table);
+        let applied = self.apply_open_write(plan, info, params, view, rows);
+        self.open_tables.borrow_mut().pop();
+        applied
+    }
+
+    /// `CheckTableNotInUse`: true when a write of the statement has the table `table` open.
+    pub(crate) fn table_in_use(&self, table: u32) -> bool {
+        self.open_tables.borrow().contains(&table)
+    }
+
+    /// [`Connection::apply_write`] of the write `info` of `plan`.
+    fn apply_open_write(
+        &self,
+        plan: &Plan,
+        info: &Write,
+        params: &[Value],
+        view: &View,
+        rows: Vec<Vec<Value>>,
+    ) -> Result<Applied, Error> {
         self.check_result_relations(info)?;
         let mut triggers = self.write_triggers(info)?;
         if info.instead && info.kind == WriteKind::Merge {
@@ -6690,6 +6717,12 @@ mod tests {
     #[test]
     fn wcte_statement_order() {
         big_stack(|| script(include_str!("connection/wcte_statement_order.test")));
+    }
+
+    /// A trigger cannot change a table that the write of its statement has open, as `CheckTableNotInUse` checks `rd_refcnt`.
+    #[test]
+    fn trigger_ddl_in_use() {
+        big_stack(|| script(include_str!("connection/trigger_ddl_in_use.test")));
     }
 
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.

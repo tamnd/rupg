@@ -79,6 +79,11 @@ impl Definer<'_, '_> {
                 format!("permission denied: \"{name}\" is a system catalog"),
             ));
         }
+        if let Found::User(oid) = found
+            && !alter
+        {
+            self.check_not_in_use(oid, "CREATE INDEX")?;
+        }
         // `ProcessUtilitySlow` checks each partition of a partitioned table before `DefineIndex`.
         if let Found::User(oid) = found
             && !alter
