@@ -1,0 +1,85 @@
+> CREATE SCHEMA s1
+CREATE SCHEMA
+> CREATE TABLE s1.abc (f1 int)
+CREATE TABLE
+> CREATE SCHEMA s2
+CREATE SCHEMA
+> CREATE TABLE s2.abc (f1 int)
+CREATE TABLE
+> INSERT INTO s1.abc VALUES (123)
+INSERT 0 1
+> INSERT INTO s2.abc VALUES (456)
+INSERT 0 1
+> SET search_path = s1
+SET
+search_path=s1
+> PREPARE p1 AS SELECT f1 FROM abc
+PREPARE
+> EXECUTE p1
+fields f1@abc.1:23:4:-1
+row 123
+SELECT 1
+> SET search_path = s2
+SET
+search_path=s2
+> SELECT f1 FROM abc
+fields f1@abc.1:23:4:-1
+row 456
+SELECT 1
+> EXECUTE p1
+fields f1@abc.1:23:4:-1
+row 456
+SELECT 1
+> ALTER TABLE s1.abc ADD COLUMN f2 float8
+ALTER TABLE
+> EXECUTE p1
+fields f1@abc.1:23:4:-1
+row 456
+SELECT 1
+> SET search_path = s1
+SET
+search_path=s1
+> EXECUTE p1
+fields f1@abc.1:23:4:-1
+row 123
+SELECT 1
+P p2|SELECT f1 FROM abc
+X p2
+row 123
+SELECT 1
+> SET search_path = s2
+SET
+search_path=s2
+X p2
+row 456
+SELECT 1
+> SET search_path = public
+SET
+search_path=public
+> EXECUTE p1
+ERROR 42P01 relation "abc" does not exist at 30
+> SET search_path = s3, s2
+SET
+search_path=s3, s2
+> EXECUTE p1
+fields f1@abc.1:23:4:-1
+row 456
+SELECT 1
+> CREATE SCHEMA s3
+CREATE SCHEMA
+> CREATE TABLE s3.abc (f1 int)
+CREATE TABLE
+> INSERT INTO s3.abc VALUES (789)
+INSERT 0 1
+> EXECUTE p1
+fields f1@abc.1:23:4:-1
+row 789
+SELECT 1
+> DEALLOCATE p1
+DEALLOCATE
+> RESET search_path
+RESET
+search_path="$user", public
+> DROP SCHEMA s1, s2, s3 CASCADE
+NOTICE 00000 drop cascades to 3 other objects
+DROP SCHEMA
