@@ -38,6 +38,17 @@ fn named_visible(kind: Named, call: &Call<'_>, args: &[Value]) -> Result<Value> 
         .map_or(Value::Null, |row| Value::Bool(reg::visible(kind, row, call.session))))
 }
 
+/// `amvalidate`: true when the operator class is valid for its access method. The checks of the `amvalidate` routines of the access methods, as `btvalidate` does them, are not ported yet, so each operator class that exists is valid. That is true for each built-in operator class.
+fn amvalidate(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let oid = oid_arg(args, 0)?;
+    let exists = builtin::named_by_oid(Named::Opclass, oid).is_some()
+        || call.session.catalog().is_some_and(|c| c.opclass(oid).is_some());
+    if !exists {
+        return Err(Error::internal(format!("cache lookup failed for operator class {oid}")));
+    }
+    Ok(Value::Bool(true))
+}
+
 /// `pg_table_is_visible`: true when the first relation with the name in the search path is this relation.
 fn table_visible(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(reg::class_visible(oid_arg(args, 0)?, call.session).map_or(Value::Null, Value::Bool))
@@ -309,6 +320,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_partition_root" => partition_root,
         "pg_relation_is_publishable" => relation_is_publishable,
         "pg_get_serial_sequence" => serial_sequence,
+        "amvalidate" => amvalidate,
         _ => return None,
     };
     Some(kernel)

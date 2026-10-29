@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `amvalidate(oid)` now gives true for each operator class, and an OID that no operator class has gives the error of PostgreSQL (#1166).
 - The planner now folds the constant parts of the expressions and the predicate of an index, as PostgreSQL does. A condition such as `circle(p, 1) @> c` can now use an index on `circle(p, 1)`, where the index stores `1` as an `integer` cast to `double precision` (#1165).
 - `CREATE TABLE ... USING heap`, `CREATE TABLE AS ... USING heap`, `CREATE MATERIALIZED VIEW ... USING heap` and `ALTER TABLE ... SET ACCESS METHOD` now work, and other access methods give the PostgreSQL errors (#1164).
 - `EXPLAIN` now shows a subscript of a column of the outer side of a nested loop with the column in parentheses, as in `(p <-> ("*VALUES*".column1)[0])`, as PostgreSQL does (#1163).
