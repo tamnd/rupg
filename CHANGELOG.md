@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- PL/pgSQL checks a null value against a domain: a domain variable with no default, `v := NULL` and `RETURN NULL` fail for a `NOT NULL` domain, as in PostgreSQL (#1141).
+
 ## 0.4.10 (2026-10-29)
 
 ### Added

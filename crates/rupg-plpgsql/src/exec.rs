@@ -1018,16 +1018,22 @@ impl Exec<'_> {
             Slot::Rec { values, .. } => *values = None,
             Slot::Row => {}
         }
-        if let Some(default) = &datum.default {
-            let result =
-                self.eval(default).and_then(|(v, ty, typmod)| self.assign_datum(d, v, ty, typmod));
-            result.map_err(|e| {
-                Fail::Framed(e.with_context(self.line_text(
-                    Some(datum.line),
-                    "during statement block local variable initialization",
-                )))
-            })?;
-        }
+        let result = match (&datum.default, &datum.kind) {
+            (Some(default), _) => {
+                self.eval(default).and_then(|(v, ty, typmod)| self.assign_datum(d, v, ty, typmod))
+            }
+            // A domain can reject the null value. The value has the type `unknown`, so that the cast runs.
+            (None, DatumKind::Var { ty, .. }) if *ty != 0 && rupg_func::base_type(*ty) != *ty => {
+                self.assign_datum(d, Value::Null, oid::UNKNOWN, -1)
+            }
+            (None, _) => Ok(()),
+        };
+        result.map_err(|e| {
+            Fail::Framed(e.with_context(self.line_text(
+                Some(datum.line),
+                "during statement block local variable initialization",
+            )))
+        })?;
         Ok(())
     }
 
@@ -1908,7 +1914,11 @@ impl Exec<'_> {
 
     /// `exec_cast_value`: the value cast from one type and typmod to another, as an assignment casts it.
     fn cast(&self, value: Value, from: (u32, i32), to: (u32, i32)) -> Result<Value> {
-        if value.is_null() || (from.0 == to.0 && (to.1 == -1 || from.1 == to.1)) {
+        if from.0 == to.0 && (to.1 == -1 || from.1 == to.1) {
+            return Ok(value);
+        }
+        // A null value of another type only needs the cast for a domain, which can reject it.
+        if value.is_null() && rupg_func::base_type(to.0) == to.0 {
             return Ok(value);
         }
         let key = (from.0, from.1, to.0, to.1);
