@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.4.11 (2026-10-29)
+
 ### Added
 
 - `COPY FROM` checks `FREEZE` for a foreign table before it finds that the wrapper has no handler, as in PostgreSQL (#1148).
