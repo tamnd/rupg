@@ -1,0 +1,46 @@
+!details
+> create schema selinto_schema
+CREATE SCHEMA
+> create user regress_selinto_user
+CREATE ROLE
+> alter default privileges for role regress_selinto_user revoke insert on tables from regress_selinto_user
+ALTER DEFAULT PRIVILEGES
+> grant all on schema selinto_schema to public
+GRANT
+> set session authorization regress_selinto_user
+SET
+session_authorization=regress_selinto_user
+is_superuser=off
+> create table selinto_schema.tbl_withdata1 (a) as select generate_series(1,3) with data
+SELECT 3
+> insert into selinto_schema.tbl_withdata1 values (4)
+ERROR 42501 permission denied for table tbl_withdata1
+> select * from selinto_schema.tbl_withdata1
+fields a@selinto_schema.tbl_withdata1.1:23:4:-1
+row 1
+row 2
+row 3
+SELECT 3
+> create table selinto_schema.tbl_nodata1 (a) as select generate_series(1,3) with no data
+CREATE TABLE AS
+> create table selinto_schema.tbl_nodata2 (a) as select 1
+SELECT 1
+> select relacl from pg_class where relname like 'tbl_%' order by relname
+fields relacl@pg_class.32:1034:-1:-1
+row {regress_selinto_user=rwdDxtm/regress_selinto_user}
+row {regress_selinto_user=rwdDxtm/regress_selinto_user}
+row {regress_selinto_user=rwdDxtm/regress_selinto_user}
+SELECT 3
+> reset session authorization
+RESET
+session_authorization=postgres
+is_superuser=on
+> drop schema selinto_schema cascade
+NOTICE 00000 drop cascades to 3 other objects
+DETAIL drop cascades to table selinto_schema.tbl_withdata1
+drop cascades to table selinto_schema.tbl_nodata1
+drop cascades to table selinto_schema.tbl_nodata2
+DROP SCHEMA
+> drop user regress_selinto_user
+ERROR 2BP01 role "regress_selinto_user" cannot be dropped because some objects depend on it
+DETAIL owner of default privileges on new relations belonging to role regress_selinto_user

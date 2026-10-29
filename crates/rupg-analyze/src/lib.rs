@@ -200,7 +200,7 @@ pub trait Env {
     fn restrict_views(&self) -> bool {
         false
     }
-    /// The OID of the materialized view that `CREATE MATERIALIZED VIEW` or `REFRESH MATERIALIZED VIEW` fills, or 0. Only the `INSERT` that fills it can write it, and only there its query takes its place.
+    /// The OID of the table of `CREATE TABLE AS` or of the materialized view that `CREATE MATERIALIZED VIEW` or `REFRESH MATERIALIZED VIEW` fills, or 0. The `INSERT` that fills it needs no `INSERT` privilege. Only that `INSERT` can write a materialized view, and only there its query takes its place.
     fn filling(&self) -> u32 {
         0
     }
