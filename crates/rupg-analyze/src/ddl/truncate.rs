@@ -123,14 +123,45 @@ impl Definer<'_, '_> {
         }
     }
 
-    /// `heap_truncate_find_FKs`: the tables with a foreign key that refers to one of the tables, in the order of their OIDs.
+    /// `heap_truncate_find_FKs`: the tables with a foreign key that refers to one of the tables, in the order of their OIDs. A foreign key that refers to a partition comes from the foreign key of a parent table, which refers to the parent of the partition. The tables of that parent foreign key and of its clones on the partitions of the referencing table also count, so that a cascade empties all the partitions of a partitioned referencing table.
     fn referencing(&self, tables: &[u32]) -> Vec<u32> {
-        let mut found: Vec<u32> = self
-            .catalog
-            .constraints()
-            .filter(|c| c.foreign.as_ref().is_some_and(|f| tables.contains(&f.table)))
-            .map(|c| c.relation)
-            .collect();
+        let mut referenced = tables.to_vec();
+        let mut parents: Vec<u32> = Vec::new();
+        let mut found: Vec<u32> = Vec::new();
+        loop {
+            for constraint in self.catalog.constraints() {
+                let Some(foreign) = &constraint.foreign else { continue };
+                if !referenced.contains(&foreign.table) {
+                    continue;
+                }
+                if constraint.parent != 0 && !parents.contains(&constraint.parent) {
+                    parents.push(constraint.parent);
+                }
+                if !tables.contains(&constraint.relation) {
+                    found.push(constraint.relation);
+                }
+            }
+            let mut restart = false;
+            let mut at = 0;
+            while at < parents.len() {
+                let parent = self.catalog.constraints().find(|c| c.oid == parents[at]);
+                if let Some(parent) = parent {
+                    if let Some(foreign) = &parent.foreign
+                        && !referenced.contains(&foreign.table)
+                    {
+                        referenced.push(foreign.table);
+                        restart = true;
+                    }
+                    if parent.parent != 0 && !parents.contains(&parent.parent) {
+                        parents.push(parent.parent);
+                    }
+                }
+                at += 1;
+            }
+            if !restart {
+                break;
+            }
+        }
         found.sort_unstable();
         found.dedup();
         found
