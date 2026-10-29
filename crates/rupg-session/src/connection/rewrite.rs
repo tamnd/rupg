@@ -521,14 +521,19 @@ impl Connection {
         let built = rupg_analyze::built_index_keys(old, work, rel.oid)?;
         if !built.is_empty() {
             let reader = self.reader_without_view(Arc::clone(work));
-            for derived in &built {
-                for row in &new_rows {
-                    rupg_exec::index_key(derived, row, &reader)?;
-                }
-            }
+            let keys = self.as_maintenance(rel.owner, || {
+                built.iter().try_for_each(|derived| {
+                    new_rows
+                        .iter()
+                        .try_for_each(|row| rupg_exec::index_key(derived, row, &reader).map(drop))
+                })
+            });
+            // The notices of the functions of the keys go to the client, also when the build fails.
+            self.trigger_warnings.borrow_mut().extend(reader.take_warnings());
+            keys?;
         }
         if in_place {
-            self.check_keys_in_place(rel.oid, view, &info.unique, work)?;
+            self.check_keys_in_place(old, rel, view, &info.unique, work)?;
             self.check_exclusion_build(old, rel.oid, view, work)?;
             if !checked.is_empty() {
                 self.fire(vec![
@@ -569,32 +574,47 @@ impl Connection {
         Ok(())
     }
 
-    /// `_bt_load` of the new unique indexes of the table `table` on the rows in place: the first duplicate key is an error, and a transaction in progress that holds a version with the key is a wait.
+    /// `_bt_load` of the new unique indexes of the table `rel` on the rows in place: the first duplicate key is an error, and a transaction in progress that holds a version with the key is a wait.
     fn check_keys_in_place(
         &self,
-        table: u32,
+        old: &Catalog,
+        rel: &Relation,
         view: &View,
         unique: &[rupg_analyze::Unique],
         work: &Arc<Catalog>,
     ) -> Result<(), Error> {
+        // The rows stay, so only a unique index that the statement builds is checked, as `index_build` checks it.
+        let built = |u: &&rupg_analyze::Unique| rupg_analyze::index_built(old, work, u.oid);
+        let unique: Vec<_> = unique.iter().filter(built).collect();
         if unique.is_empty() {
             return Ok(());
         }
-        let checked: Vec<_> =
-            unique.iter().map(|u| rupg_analyze::Unique { deferrable: None, ..u.clone() }).collect();
+        let checked: Vec<_> = unique
+            .iter()
+            .map(|&u| rupg_analyze::Unique { deferrable: None, ..u.clone() })
+            .collect();
         let reader = self.reader_without_view(Arc::clone(work));
         let derive = |d: &Derived, r: &[Value]| rupg_exec::index_key(d, r, &reader);
-        loop {
-            match self.store.heap().check_build(table, view, &checked, &derive)? {
-                Some(Changed::WaitKey { holder, .. }) => {
-                    self.reader().wait_xact(view.xid, holder, "")?;
+        let result = self.as_maintenance(rel.owner, || {
+            loop {
+                match self.store.heap().check_build(rel.oid, view, &checked, &derive)? {
+                    Some(Changed::WaitKey { holder, .. }) => {
+                        self.reader().wait_xact(view.xid, holder, "")?;
+                    }
+                    Some(Changed::Duplicate { index, key }) => {
+                        return Err(self.duplicated(
+                            rel.oid,
+                            unique.get(index).copied(),
+                            &key,
+                            work,
+                        ));
+                    }
+                    _ => return Ok(()),
                 }
-                Some(Changed::Duplicate { index, key }) => {
-                    return Err(self.duplicated(table, unique.get(index), &key, work));
-                }
-                _ => return Ok(()),
             }
-        }
+        });
+        self.trigger_warnings.borrow_mut().extend(reader.take_warnings());
+        result
     }
 
     /// The error of `index_build` for the key `key` that two rows of the table `table` have in the new unique index `unique`.
@@ -697,15 +717,12 @@ fn changes_rows(old: &Catalog, new: &Catalog, rel: &Relation) -> bool {
             && (c.kind != ConKind::Foreign
                 || new.triggers_of(rel.oid).iter().any(|t| t.constraint == c.oid))
     });
-    // An index that `REINDEX` makes ready again checks the rows as a new index does. A new index with an expression or a predicate computes them for the rows.
+    // An index that the statement builds, also again with `REINDEX`, checks the rows: a unique index checks the keys, and an index with an expression or a predicate computes them.
     let index = new.relations().any(|index| {
-        let was_ready = old.relation(index.oid).and_then(|o| o.index.as_ref()).map(|i| i.ready);
-        was_ready != Some(true)
-            && index.index.as_ref().is_some_and(|info| {
-                info.table == rel.oid
-                    && info.ready
-                    && (info.unique || info.exprs.is_some() || info.predicate.is_some())
-            })
+        index.index.as_ref().is_some_and(|info| {
+            info.table == rel.oid
+                && (info.unique || info.exprs.is_some() || info.predicate.is_some())
+        }) && rupg_analyze::index_built(old, new, index.oid)
     });
     constraint || index
 }

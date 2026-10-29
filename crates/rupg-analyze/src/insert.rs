@@ -387,7 +387,17 @@ pub fn index_derived(
     Ok(derived)
 }
 
-/// The keys of the indexes with an expression or a predicate that the catalog `new` has ready on the table `table` and the catalog `old` does not, which `index_build` computes for each row of the table.
+/// Whether the statement that makes the catalog `new` from the catalog `old` builds the index `index`: the index is ready in `new`, and it is not ready in `old` or `REINDEX` gives it a new file.
+pub fn index_built(old: &rupg_catalog::Catalog, new: &rupg_catalog::Catalog, index: u32) -> bool {
+    let Some(now) = new.relation(index) else { return false };
+    if !now.index.as_ref().is_some_and(|i| i.ready) {
+        return false;
+    }
+    old.relation(index)
+        .is_none_or(|o| o.file != now.file || o.index.as_ref().is_none_or(|i| !i.ready))
+}
+
+/// The keys of the indexes with an expression or a predicate that the statement that makes the catalog `new` from the catalog `old` builds on the table `table`, [`index_built`], which `index_build` computes for each row of the table.
 ///
 /// # Errors
 ///
@@ -405,10 +415,9 @@ pub fn built_index_keys(
         .filter_map(|index| Some((index.oid, index.index.as_ref()?)))
         .filter(|(oid, info)| {
             info.table == table
-                && info.ready
                 && !info.unique
                 && (info.exprs.is_some() || info.predicate.is_some())
-                && old.relation(*oid).and_then(|o| o.index.as_ref()).is_none_or(|o| !o.ready)
+                && index_built(old, new, *oid)
         })
         .collect();
     indexes.sort_by_key(|(oid, _)| *oid);

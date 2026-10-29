@@ -9,6 +9,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - Event triggers on `ddl_command_start` and `ddl_command_end` fire for the commands that PostgreSQL supports, with the `WHEN TAG IN` filter, the `ENABLE` modes, `session_replication_role` and the `event_triggers` setting, also for DDL in PL/pgSQL functions and `DO` (#1145).
 - `CREATE EVENT TRIGGER`, `ALTER EVENT TRIGGER` (`ENABLE`, `DISABLE`, `RENAME TO`, `OWNER TO`), `DROP EVENT TRIGGER` and `COMMENT ON EVENT TRIGGER` keep event triggers in `pg_event_trigger` with the checks of PostgreSQL. The triggers do not fire yet (#1144).
 - PL/pgSQL `EXECUTE` runs `EXPLAIN` and `SHOW` and gives their rows to `INTO`, `FOR` loops and `RETURN QUERY EXECUTE`, as in PostgreSQL (#1143).
+- `CREATE INDEX`, `REINDEX`, `ANALYZE` and `CLUSTER` run the functions of an index as the owner of the table with `search_path` set to `pg_catalog, pg_temp` and send their notices, and `REINDEX` computes the keys again, as in PostgreSQL (#1146).
 - `CREATE PUBLICATION` needs a superuser for `FOR ALL TABLES`, `FOR ALL SEQUENCES` and `FOR TABLES IN SCHEMA`, and a row filter rejects an expression with a user-defined collation, as in PostgreSQL (#1142).
 - PL/pgSQL checks a null value against a domain: a domain variable with no default, `v := NULL` and `RETURN NULL` fail for a `NOT NULL` domain, as in PostgreSQL (#1141).
 
