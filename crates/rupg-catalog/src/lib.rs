@@ -1370,6 +1370,8 @@ pub struct Catalog {
     uncommitted_labels: Vec<u32>,
     /// The objects of `initdb` that `DROP` removed. Only the schema `public` is such an object, because each other object of `initdb` with an OID below `FIRST_UNPINNED_OID` is pinned.
     dropped_builtins: BTreeSet<ObjRef>,
+    /// The tables that lost their last partition or child: `relhassubclass` stays true for them until the next `ANALYZE`, as only `acquire_inherited_sample_rows` clears it.
+    kept_subclass: BTreeSet<u32>,
 }
 
 impl Default for Catalog {
@@ -1487,6 +1489,7 @@ impl Catalog {
             uncommitted_types: Vec::new(),
             uncommitted_labels: Vec::new(),
             dropped_builtins: BTreeSet::new(),
+            kept_subclass: BTreeSet::new(),
         }
     }
 
@@ -2498,11 +2501,27 @@ impl Catalog {
         while rel.inherits.last() == Some(&0) {
             rel.inherits.pop();
         }
+        self.kept_subclass.insert(parent);
         let me = ObjRef::new(PG_CLASS, table);
         let parent = ObjRef::new(PG_CLASS, parent);
         self.depends
             .retain(|d| d.object != me || d.referenced != parent || d.kind != DepKind::Normal);
         Ok(())
+    }
+
+    /// `relhassubclass` of the table `parent`: true while it has a partition or a child, and after it lost them until the next `ANALYZE`.
+    pub fn has_subclass(&self, parent: u32) -> bool {
+        self.kept_subclass.contains(&parent) || !self.children(parent).is_empty()
+    }
+
+    /// True when `ANALYZE` of the table `parent` must clear its `relhassubclass`, as `acquire_inherited_sample_rows` does for a table with no inheritors.
+    pub fn stale_subclass(&self, parent: u32) -> bool {
+        self.kept_subclass.contains(&parent) && self.children(parent).is_empty()
+    }
+
+    /// `SetRelationHasSubclass(false)` of `ANALYZE` for the table `parent`.
+    pub fn clear_subclass(&mut self, parent: u32) {
+        self.kept_subclass.remove(&parent);
     }
 
     /// `find_inheritance_children`: the partitions of a table and the tables that inherit from it, in the order of their OIDs.
@@ -2690,6 +2709,7 @@ impl Catalog {
     /// The part of `RemoveInheritance` and `DetachPartitionFinalize` for the partition `table`: it loses its bound, its row of `pg_inherits` and its dependency on its parent.
     pub fn detach_partition(&mut self, table: u32) -> Result<()> {
         let Some(of) = self.relation_mut(table)?.partition_of.take() else { return Ok(()) };
+        self.kept_subclass.insert(of.parent);
         let me = ObjRef::new(PG_CLASS, table);
         let parent = ObjRef::new(PG_CLASS, of.parent);
         self.depends

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `relhassubclass` stays true for a table that lost its last partition or child until the next `ANALYZE`, `ANALYZE` of a partitioned table with no partitions sets `reltuples` to 0 and not -0, and `VACUUM (PARALLEL n)` of a temporary table with two or more indexes gives the warning that it cannot run in parallel, as in PostgreSQL (#1126).
 - `VACUUM` sets `relpages` and `reltuples` of the `btree` indexes after their vacuum, and `INDEX_CLEANUP AUTO` bypasses the vacuum of the indexes when fewer than 2% of the pages have dead rows, as in PostgreSQL (#1125).
 - `pg_relation_size` of a `btree` index gives the pages of the index after its build, after `VACUUM` and after inserts in an empty index, as in PostgreSQL (#1124).
 - The node tree of a view in pg_rewrite has aggregates with DISTINCT, ORDER BY and WITHIN GROUP, aggregates of an outer query in a subquery, and the grouped columns of an outer query in a subquery, as in PG19 (#916) (#1123).

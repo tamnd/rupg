@@ -270,7 +270,15 @@ impl Catalog {
                 }
             }
             PG_CLASS => {
-                self.relations.remove(&object.oid);
+                self.kept_subclass.remove(&object.oid);
+                if let Some(rel) = self.relations.remove(&object.oid) {
+                    let parents = rel.partition_of.iter().map(|p| p.parent).chain(rel.inherits);
+                    for parent in parents {
+                        if self.relations.contains_key(&parent) {
+                            self.kept_subclass.insert(parent);
+                        }
+                    }
+                }
             }
             PG_TYPE => {
                 self.types.remove(&object.oid);

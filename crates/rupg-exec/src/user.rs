@@ -970,9 +970,9 @@ fn attribute<'a>(
     row
 }
 
-/// True for a table with a partition or a table that inherits from it, as `relhassubclass` of `StoreCatalogInheritance1` gives it.
+/// True for a table with a partition or a table that inherits from it, as `relhassubclass` of `StoreCatalogInheritance1` gives it, and for a table that lost them before the next `ANALYZE`.
 fn has_children(catalog: &Catalog, parent: u32) -> bool {
-    !catalog.children(parent).is_empty()
+    catalog.has_subclass(parent)
 }
 
 /// True for a partitioned index with a partition, as `relhassubclass` of `IndexSetParentIndex` gives it.

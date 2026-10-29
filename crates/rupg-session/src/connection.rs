@@ -6821,6 +6821,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/index_vacuum_stats.test")));
     }
 
+    /// `VACUUM` and `ANALYZE`: `reltuples` and `relhassubclass` of a partitioned table that lost its partitions until the next `ANALYZE`, and the warning of `PARALLEL` for a temporary table. `connection/vacuum_misc.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn vacuum_misc() {
+        big_stack(|| script(include_str!("connection/vacuum_misc.test")));
+    }
+
     /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.
     #[test]
     fn role_settings_at_start() {
