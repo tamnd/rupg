@@ -392,7 +392,7 @@ pub struct Connection {
     portals: RefCell<Portals<Portal>>,
     /// `unnamed_portal_count` of `portalmem.c`: the number of the last portal that a function in PL/pgSQL opened with no name.
     unnamed_portals: Cell<u32>,
-    /// The OID of the materialized view that `CREATE MATERIALIZED VIEW` or `REFRESH MATERIALIZED VIEW` fills, or 0. [`rupg_analyze::Env::filling`] gives it.
+    /// The OID of the table of `CREATE TABLE AS` or of the materialized view that `CREATE MATERIALIZED VIEW` or `REFRESH MATERIALIZED VIEW` fills, or 0. [`rupg_analyze::Env::filling`] gives it.
     pub(crate) filling: Cell<u32>,
     /// The types and the values of the parameters of `CREATE TABLE AS EXECUTE` while it runs. [`rupg_analyze::Env::bound_param`] gives them.
     pub(crate) bound: RefCell<Vec<(u32, Value)>>,
@@ -1664,8 +1664,9 @@ impl Connection {
             // `RefreshMatViewByOid` fills the materialized view as its owner, with the `search_path` of `RestrictSearchPath`.
             let config = [format!("search_path={SAFE_SEARCH_PATH}")];
             rupg_func::Session::start_function_call(&self.reader(), &config, Some(owner))?;
-            self.filling.set(table);
         }
+        // `intorel_startup` and `refresh_matview_datafill` do not check `INSERT` on the new table.
+        self.filling.set(table);
         self.bulk.set(table);
         if !matview {
             *self.before_fill.borrow_mut() = Some(Arc::clone(old));
@@ -7070,6 +7071,12 @@ mod tests {
     #[test]
     fn analyze_index_error() {
         big_stack(|| script(include_str!("connection/analyze_index_error.test")));
+    }
+
+    /// `CREATE TABLE AS` fills the new table with no check of `INSERT` on it, as `intorel_startup` does, so a default privilege that revokes `INSERT` from the owner blocks only the later `INSERT`. `connection/ctas_insert_privilege.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn ctas_insert_privilege() {
+        big_stack(|| script(include_str!("connection/ctas_insert_privilege.test")));
     }
 
     /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.
