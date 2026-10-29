@@ -9,6 +9,7 @@ use rupg_catalog::{Catalog, TRIGGER_INSTEAD, Trigger};
 use rupg_catalog::{TRIGGER_BEFORE, TRIGGER_DELETE, TRIGGER_INSERT, TRIGGER_ROW, TRIGGER_UPDATE};
 use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
+use rupg_func::Session as _;
 use rupg_pgcatalog::builtin::Named;
 use rupg_types::Value;
 
@@ -37,6 +38,8 @@ pub(super) struct Event {
     transition: Option<Transition>,
     /// The rows of the event of the table in the query, which tell the triggers `FOR EACH STATEMENT` of the state from the ones of a state after a trigger read the rows.
     rows: Rc<Captured>,
+    /// `ate_rolid`: the current user of the write, which the deferred trigger runs as.
+    role: u32,
 }
 
 /// `AfterTriggersTableData`: the state of the triggers of one event of a table in one query. The writes of the query with the event on the table, as the statements of `WITH` and the actions of the foreign keys, fire the triggers `BEFORE ... FOR EACH STATEMENT` once, and the triggers `AFTER ... FOR EACH STATEMENT` once at the end, with the rows of all the writes.
@@ -693,6 +696,7 @@ impl Connection {
                     new,
                     transition,
                     rows: Rc::clone(captured),
+                    role: self.current_role(),
                 });
             }
         }
@@ -730,6 +734,7 @@ impl Connection {
                     new,
                     transition,
                     rows: Rc::clone(captured),
+                    role: self.current_role(),
                 });
             }
         }
@@ -1008,7 +1013,16 @@ impl Connection {
         self.deferred_events.borrow_mut().extend(later);
         for event in now {
             let rows = (event.old, event.new);
-            self.call_trigger(&event.trigger, event.event, rows, event.transition, &[])?;
+            // `AfterTriggerExecute`: the trigger runs as the user that queued it.
+            let role = (event.role != self.current_role()).then_some(event.role);
+            if let Some(role) = role {
+                self.reader().start_function_call(&[], Some(role))?;
+            }
+            let fired = self.call_trigger(&event.trigger, event.event, rows, event.transition, &[]);
+            if role.is_some() {
+                self.reader().end_function_call();
+            }
+            fired?;
         }
         Ok(())
     }

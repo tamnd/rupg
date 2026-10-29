@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A deferred trigger runs as the user that queued it, as in PostgreSQL (#1098).
 - A commit skips the deferred check of a foreign key that a statement dropped, as in PostgreSQL (#1097).
 - The `ev_action` of a view is also the text of PostgreSQL 19 for window functions, `WINDOW` clauses, `interval` constants and joins with `USING` or `NATURAL` (#916) (#1096).
 - The writes of one query share their transition tables and their statement triggers, as in PostgreSQL (#1095).

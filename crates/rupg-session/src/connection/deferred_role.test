@@ -1,0 +1,100 @@
+> create role regress_dqr_caller
+CREATE ROLE
+> create role regress_dqr_owner
+CREATE ROLE
+> create function dqr_whoami() returns trigger language plpgsql as $$ begin raise notice 'I am %', current_user; return null; end; $$
+CREATE FUNCTION
+> alter function dqr_whoami() owner to regress_dqr_owner
+ALTER FUNCTION
+> create table dqr (id integer)
+CREATE TABLE
+> grant insert on dqr to public
+GRANT
+> create constraint trigger dqr_whoami after insert on dqr deferrable initially deferred for each row execute function dqr_whoami()
+CREATE TRIGGER
+> begin
+BEGIN
+> set role regress_dqr_caller
+SET
+is_superuser=off
+> insert into dqr values (1)
+INSERT 0 1
+> reset role
+RESET
+is_superuser=on
+> set role regress_dqr_owner
+SET
+is_superuser=off
+> insert into dqr values (2)
+INSERT 0 1
+> reset role
+RESET
+is_superuser=on
+> commit
+NOTICE 00000 I am regress_dqr_caller (PL/pgSQL function dqr_whoami() line 1 at RAISE)
+NOTICE 00000 I am regress_dqr_owner (PL/pgSQL function dqr_whoami() line 1 at RAISE)
+COMMIT
+> alter function dqr_whoami() security definer
+ALTER FUNCTION
+> begin
+BEGIN
+> set role regress_dqr_caller
+SET
+is_superuser=off
+> insert into dqr values (3)
+INSERT 0 1
+> reset role
+RESET
+is_superuser=on
+> commit
+NOTICE 00000 I am regress_dqr_owner (PL/pgSQL function dqr_whoami() line 1 at RAISE)
+COMMIT
+> alter function dqr_whoami() security invoker
+ALTER FUNCTION
+> create or replace function dqr_whoami() returns trigger language plpgsql as $$ begin raise notice 'I am %', current_user; perform 1 / 0; return null; end; $$
+CREATE FUNCTION
+> begin
+BEGIN
+> set role regress_dqr_caller
+SET
+is_superuser=off
+> insert into dqr values (4)
+INSERT 0 1
+> reset role
+RESET
+is_superuser=on
+> commit
+NOTICE 00000 I am regress_dqr_caller (PL/pgSQL function dqr_whoami() line 1 at RAISE)
+ERROR 22012 division by zero (SQL statement "SELECT 1 / 0"
+PL/pgSQL function dqr_whoami() line 1 at PERFORM)
+> select current_user = session_user
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> set constraints all immediate
+WARNING 25P01 SET CONSTRAINTS can only be used in transaction blocks
+SET CONSTRAINTS
+> begin
+BEGIN
+> set role regress_dqr_caller
+SET
+is_superuser=off
+> insert into dqr values (5)
+INSERT 0 1
+> set constraints all immediate
+NOTICE 00000 I am regress_dqr_caller (PL/pgSQL function dqr_whoami() line 1 at RAISE)
+ERROR 22012 division by zero (SQL statement "SELECT 1 / 0"
+PL/pgSQL function dqr_whoami() line 1 at PERFORM)
+is_superuser=on
+> reset role
+ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block
+> rollback
+ROLLBACK
+> drop table dqr
+DROP TABLE
+> drop function dqr_whoami()
+DROP FUNCTION
+> drop role regress_dqr_owner
+DROP ROLE
+> drop role regress_dqr_caller
+DROP ROLE

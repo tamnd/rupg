@@ -6674,6 +6674,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/deferred_dropped.test")));
     }
 
+    /// A deferred trigger runs as the user that queued it, as `AfterTriggerExecute` switches to `ate_rolid`, and a `SECURITY DEFINER` function runs as its owner.
+    #[test]
+    fn deferred_role() {
+        big_stack(|| script(include_str!("connection/deferred_role.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
