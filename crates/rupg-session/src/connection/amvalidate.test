@@ -1,0 +1,7 @@
+> select count(*) from pg_opclass where not amvalidate(oid)
+fields count:20:8:-1
+row 0
+SELECT 1
+> select amvalidate(1)
+fields amvalidate:16:1:-1
+ERROR XX000 cache lookup failed for operator class 1

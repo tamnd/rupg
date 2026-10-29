@@ -3907,6 +3907,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/access_method.test")));
     }
 
+    /// `amvalidate` is true for each operator class, and an OID that no operator class has gives the error of `SearchSysCache1`.
+    #[test]
+    fn amvalidate() {
+        big_stack(|| script(include_str!("connection/amvalidate.test")));
+    }
+
     #[test]
     fn heap_fillfactor() {
         big_stack(|| script(include_str!("connection/heap_fillfactor.test")));
