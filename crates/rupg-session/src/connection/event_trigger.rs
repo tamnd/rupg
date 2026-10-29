@@ -1,7 +1,8 @@
-//! The firing of the event triggers `ddl_command_start`, `ddl_command_end` and `sql_drop`, as `EventTriggerDDLCommandStart`, `EventTriggerDDLCommandEnd` and `EventTriggerSQLDrop` of `event_trigger.c` run them.
+//! The firing of the event triggers `ddl_command_start`, `ddl_command_end`, `sql_drop` and `login`, as `EventTriggerDDLCommandStart`, `EventTriggerDDLCommandEnd`, `EventTriggerSQLDrop` and `EventTriggerOnLogin` of `event_trigger.c` run them.
 
 use rupg_analyze::Dropped;
 use rupg_common::{Error, SqlState};
+use rupg_sql::nodes::Node;
 use rupg_types::Value;
 use rupg_wire::CommandTag;
 
@@ -12,6 +13,7 @@ use crate::utility::Notice;
 const ON_ORIGIN: u8 = b'O';
 const ALWAYS: u8 = b'A';
 const ON_REPLICA: u8 = b'R';
+const DISABLED: u8 = b'D';
 
 /// `filter_event_trigger`: a trigger in the mode `enabled` fires for the role `replica` of `session_replication_role`. A disabled trigger does not fire.
 fn fires(enabled: u8, replica: bool) -> bool {
@@ -65,7 +67,7 @@ impl Connection {
 
     /// `EventTriggerCommonSetup`: the functions of the event triggers of the event `event` that fire for the tag `tag`, in the order of the names of the triggers.
     pub(super) fn armed_event_triggers(&self, event: &str, tag: CommandTag) -> Vec<u32> {
-        if !tag.event_trigger_ok() {
+        if event != "login" && !tag.event_trigger_ok() {
             return Vec::new();
         }
         let (replica, off) = {
@@ -88,6 +90,60 @@ impl Connection {
             .collect();
         armed.sort_unstable();
         armed.into_iter().map(|(_, func)| func).collect()
+    }
+
+    /// `SetDatabaseHasLoginEventTriggers` after `CREATE EVENT TRIGGER` of `login` and after `ALTER EVENT TRIGGER` that enables an event trigger of `login`.
+    pub(super) fn note_login_event(&self, node: &Node) {
+        let login = match node {
+            Node::CreateEventTrigStmt(stmt) => stmt.eventname.as_deref() == Some("login"),
+            Node::AlterEventTrigStmt(stmt) => {
+                let name = stmt.trigname.as_deref().unwrap_or_default();
+                stmt.tgenabled != DISABLED
+                    && self
+                        .catalog()
+                        .event_trigger_by_name(name)
+                        .is_some_and(|t| t.event == "login")
+            }
+            _ => false,
+        };
+        if login {
+            self.store.set_login_event(self.database_oid, true);
+        }
+    }
+
+    /// `EventTriggerOnLogin`: when `dathasloginevt` is true, the event triggers of `login` fire in a transaction of their own. When no trigger fires, `dathasloginevt` becomes false.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the functions, which end the session.
+    pub(super) fn on_login(&mut self, notices: &mut Vec<Notice>) -> Result<(), Error> {
+        if !self.store.login_event(self.database_oid)
+            || self.settings.borrow().get("event_triggers").as_deref() == Some("off")
+        {
+            return Ok(());
+        }
+        self.start_statement();
+        self.start_xact();
+        self.start_triggers();
+        let funcs = self.armed_event_triggers("login", CommandTag::Unknown);
+        if funcs.is_empty() {
+            self.store.set_login_event(self.database_oid, false);
+        }
+        let mut result = Ok(());
+        for func in funcs {
+            let said = self.trigger_warnings.borrow().len();
+            result = self.pl_event_trigger(func, "login", "LOGIN");
+            let warnings = self.trigger_warnings.borrow_mut().split_off(said);
+            notices.extend(warnings.into_iter().map(Notice::of_function));
+            if result.is_err() {
+                break;
+            }
+        }
+        match result {
+            Ok(()) => self.finish_xact(),
+            Err(_) => self.abort(),
+        }
+        result
     }
 
     /// `EventTriggerSQLDropAddObject`: the rows of `pg_event_trigger_dropped_objects` for the objects `dropped` of the command that runs, from the catalog before the drop. `slist_push_head` keeps the last object first.

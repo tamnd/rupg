@@ -421,7 +421,7 @@ fn databases<'a>(table: &'a Table, session: &dyn Session) -> Vec<Row<'a>> {
                 .set("datlocprovider", Value::Char(database.locale_provider))
                 .set("datistemplate", Value::Bool(database.is_template))
                 .set("datallowconn", Value::Bool(database.allow_connections))
-                .set("dathasloginevt", Value::Bool(false))
+                .set("dathasloginevt", Value::Bool(database.has_login_event))
                 .set("datconnlimit", Value::Int4(database.connection_limit))
                 .set("datfrozenxid", oid(database.frozen_xid))
                 .set("datminmxid", oid(database.min_mxid))

@@ -889,6 +889,7 @@ impl Connection {
             locale_provider: provider,
             is_template,
             allow_connections,
+            has_login_event: source.has_login_event,
             connection_limit,
             frozen_xid: source.frozen_xid,
             min_mxid: source.min_mxid,

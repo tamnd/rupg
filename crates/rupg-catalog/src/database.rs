@@ -24,6 +24,8 @@ pub struct Database {
     pub locale_provider: u8,
     pub is_template: bool,
     pub allow_connections: bool,
+    /// `dathasloginevt`: true when the database can have event triggers of `login`.
+    pub has_login_event: bool,
     /// `datconnlimit`, or [`UNLIMITED`].
     pub connection_limit: i32,
     pub frozen_xid: u32,
@@ -52,6 +54,7 @@ impl Database {
             locale_provider: b'c',
             is_template,
             allow_connections,
+            has_login_event: false,
             connection_limit: UNLIMITED,
             frozen_xid: INITDB_FROZEN_XID,
             min_mxid: 1,

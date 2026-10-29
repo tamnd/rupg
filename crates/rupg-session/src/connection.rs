@@ -479,6 +479,8 @@ pub struct Connection {
     trigger_depth: Cell<i32>,
     /// The states of the event triggers of the commands that run, one in the other, as `currentEventTriggerState` keeps them.
     event_frames: RefCell<Vec<event_trigger::Frame>>,
+    /// True after the event triggers of `login` had their chance to fire, before the first `ReadyForQuery`.
+    logged_in: bool,
 }
 
 /// Puts the ID of the new version of each row at the place `at` of the row that `RETURNING` reads, as the item pointer that `ctid` gives.
@@ -588,6 +590,7 @@ impl Connection {
             transition: RefCell::new(None),
             trigger_depth: Cell::new(0),
             event_frames: RefCell::new(Vec::new()),
+            logged_in: false,
         };
         connection.session.set_utf8(connection.utf8());
         connection
@@ -1400,6 +1403,7 @@ impl Connection {
         let done = self.define_with(node, text, notices, role, call);
         let frame = self.event_frames.borrow_mut().pop();
         let done = done?;
+        self.note_login_event(node);
         if let Some(frame) = frame {
             self.fire_sql_drop(frame, tag, notices)?;
         }
@@ -1844,6 +1848,17 @@ impl Connection {
             return Step { used: 0, next: Next::Close };
         }
         if self.session.wants_ready() {
+            // `EventTriggerOnLogin` runs before the first `ReadyForQuery`, and an error of a trigger ends the session.
+            if !self.logged_in {
+                self.logged_in = true;
+                let mut notices = Vec::new();
+                let result = self.on_login(&mut notices);
+                self.notices(&mut notices, "", &[], out);
+                if let Err(error) = result {
+                    write_error(out, "FATAL", &error, None, false);
+                    return Step { used: 0, next: Next::Close };
+                }
+            }
             self.ready_for_query(out);
             return Step { used: 0, next: Next::Flush };
         }
@@ -6206,6 +6221,43 @@ mod tests {
     }
 
     /// A notification goes to the other sessions of the database that listen on the channel, at their next `ReadyForQuery` outside of a transaction block, and not to a session of another database.
+    #[test]
+    fn login_event_triggers() {
+        big_stack(|| {
+            let store = Arc::new(Store::new());
+            let (mut a, _) = connect_to(&store, 11);
+            let flag = |c: &mut Connection| {
+                send(c, &query("SELECT dathasloginevt FROM pg_database WHERE datname = 'postgres'"))
+            };
+            for sql in [
+                "CREATE TABLE logins(who text)",
+                "CREATE FUNCTION on_login() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO logins VALUES (session_user); RAISE NOTICE 'welcome'; END $$",
+                "CREATE EVENT TRIGGER greet ON login EXECUTE FUNCTION on_login()",
+            ] {
+                send(&mut a, &query(sql));
+            }
+            assert_eq!(flag(&mut a)[1], "row t");
+            let (_, lines) = connect_to(&store, 12);
+            assert!(lines.iter().any(|l| l.contains("welcome")), "{lines:?}");
+            assert_eq!(send(&mut a, &query("SELECT count(*) FROM logins"))[1], "row 1");
+            // An error of the trigger ends the session.
+            send(
+                &mut a,
+                &query(
+                    "CREATE OR REPLACE FUNCTION on_login() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'go away'; END $$",
+                ),
+            );
+            let (_, lines) = connect_to(&store, 13);
+            assert!(lines.iter().any(|l| l.starts_with("FATAL P0001 go away")), "{lines:?}");
+            // With no event trigger of `login`, the next session clears `dathasloginevt`.
+            send(&mut a, &query("DROP EVENT TRIGGER greet"));
+            assert_eq!(flag(&mut a)[1], "row t");
+            let (mut b, lines) = connect_to(&store, 14);
+            assert!(!lines.iter().any(|l| l.starts_with("FATAL")), "{lines:?}");
+            assert_eq!(flag(&mut b)[1], "row f");
+        });
+    }
+
     #[test]
     fn notify_other_sessions() {
         big_stack(|| {
