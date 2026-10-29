@@ -6954,6 +6954,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/prepared_search_path.test")));
     }
 
+    /// `COPY FROM` sends `CopyInResponse`, then checks `FREEZE` for a foreign table and a partitioned table, and only then finds that the wrapper of a foreign table has no handler, as `CopyFrom` does. `connection/copy_freeze_foreign.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn copy_freeze_foreign() {
+        big_stack(|| script(include_str!("connection/copy_freeze_foreign.test")));
+    }
+
     /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.
     #[test]
     fn role_settings_at_start() {

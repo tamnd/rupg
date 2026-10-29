@@ -354,9 +354,13 @@ impl Connection {
         let force_not_null = flags(&options.force_not_null)?;
         let force_null = flags(&options.force_null)?;
         // `BeginCopyFrom` plans the defaults of the columns before `CopyInResponse`, so that an error in a default comes first. With `DEFAULT`, it plans the default of each column. The kinds of relation that cannot take a copy fail after `CopyInResponse`.
+        // A foreign table without a handler fails in `CheckValidResultRel`, after `CopyInResponse` and the checks of `FREEZE`.
         let table = rel.is_some() && matches!(target.kind, b'r' | b'p' | b'f');
-        let plan =
-            if table { Some(Rc::new(insert_plan(&target, rv, &[], &reader)?)) } else { None };
+        let planned = table.then(|| insert_plan(&target, rv, &[], &reader));
+        let (plan, deferred) = match planned {
+            Some(Err(error)) if target.kind == b'f' => (None, Some(error)),
+            planned => (planned.transpose()?.map(Rc::new), None),
+        };
         let source =
             (table && options.default.is_some()).then(|| (target.clone(), RangeVar::clone(rv)));
         let mut defaulted = Vec::new();
@@ -388,6 +392,9 @@ impl Connection {
         }
         if options.freeze {
             self.check_freeze(&catalog, target.relid, target.kind)?;
+        }
+        if let Some(error) = deferred {
+            return Err(error);
         }
         let types: Vec<(u32, i32)> =
             target.selected.iter().filter_map(|&i| types.get(i).copied()).collect();

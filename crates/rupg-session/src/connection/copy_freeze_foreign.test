@@ -1,0 +1,24 @@
+> create foreign data wrapper copytest_wrapper
+CREATE FOREIGN DATA WRAPPER
+> create server copytest_server foreign data wrapper copytest_wrapper
+CREATE SERVER
+> create foreign table copytest_foreign_table (a int) server copytest_server
+CREATE FOREIGN TABLE
+> copy copytest_foreign_table from stdin (freeze)
+<done
+copy in 0 0
+ERROR 0A000 cannot perform COPY FREEZE on a foreign table
+> copy copytest_foreign_table from stdin
+<done
+copy in 0 0
+ERROR 55000 foreign-data wrapper "copytest_wrapper" has no handler
+> begin
+BEGIN
+> create table cf_part (a int) partition by list (a)
+CREATE TABLE
+> copy cf_part from stdin (freeze)
+<done
+copy in 0 0
+ERROR 0A000 cannot perform COPY FREEZE on a partitioned table
+> rollback
+ROLLBACK
