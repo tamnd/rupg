@@ -12,7 +12,7 @@ use rupg_common::{Error, Result};
 use rupg_func::Session;
 use rupg_pgcatalog::{Catalog as Table, builtin};
 use rupg_types::oid::{ANY, ANYARRAY, ANYCOMPATIBLE, ANYCOMPATIBLEARRAY, ANYELEMENT};
-use rupg_types::{Array, Value};
+use rupg_types::{AnyArray, Array, Value};
 
 use crate::scan::value;
 
@@ -1613,9 +1613,17 @@ fn statistics<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) ->
     for stat in builtin::all_catalog_statistics() {
         let mut row =
             start(stat.table, stat.attnum, stat.inherit, stat.null_frac, stat.width, stat.distinct);
+        let column = usize::try_from(stat.attnum - 1).ok().and_then(|at| {
+            rupg_pgcatalog::catalog_by_oid(stat.table)?.columns.get(at).map(|c| c.type_oid)
+        });
         for n in 1..=5 {
             let slot = stat.slots.get(n - 1);
-            let values = slot.and_then(|s| s.values).map_or(Value::Null, Value::text);
+            let values = match (slot, column) {
+                (Some(&builtin::CatalogSlot { kind, values: Some(text), .. }), Some(ty)) => {
+                    anyarray(slot_type(ty, kind), text.to_owned())
+                }
+                _ => Value::Null,
+            };
             row.set(&format!("stakind{n}"), Value::Int2(slot.map_or(0, |s| s.kind)))
                 .set(&format!("staop{n}"), oid(slot.map_or(0, |s| s.operator)))
                 .set(&format!("stacoll{n}"), oid(slot.map_or(0, |s| s.collation)))
@@ -1642,9 +1650,12 @@ fn statistics<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) ->
             for n in 1..=5 {
                 let slot = stat.slots.get(n - 1);
                 let values = slot
-                    .and_then(|s| s.values.as_ref())
-                    .and_then(|values| anyarray_text(column.ty, values, session))
-                    .map_or(Value::Null, Value::Text);
+                    .and_then(|s| {
+                        let ty = slot_type(column.ty, s.kind);
+                        let text = anyarray_text(ty, s.values.as_ref()?, session)?;
+                        Some(anyarray(ty, text))
+                    })
+                    .unwrap_or(Value::Null);
                 row.set(&format!("stakind{n}"), Value::Int2(slot.map_or(0, |s| s.kind)))
                     .set(&format!("staop{n}"), oid(slot.map_or(0, |s| s.operator)))
                     .set(&format!("stacoll{n}"), oid(slot.map_or(0, |s| s.collation)))
@@ -1658,6 +1669,26 @@ fn statistics<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) ->
         }
     }
     rows
+}
+
+/// The type of the values of a slot of the kind `kind` of `pg_statistic` for a column of the type `ty`. For the kind `STATISTIC_KIND_MCELEM` it is the element type of an array or `text` for `tsvector`, as `compute_array_stats` and `compute_tsvector_stats` set `statypid`. For the other kinds it is the type of the column.
+fn slot_type(ty: u32, kind: i16) -> u32 {
+    const STATISTIC_KIND_MCELEM: i16 = 4;
+    if kind != STATISTIC_KIND_MCELEM {
+        return ty;
+    }
+    if rupg_func::base_type(ty) == rupg_types::oid::TSVECTOR {
+        return rupg_types::oid::TEXT;
+    }
+    match builtin::type_by_oid(rupg_func::base_type(ty)) {
+        Some(row) if row.elem != 0 => row.elem,
+        _ => ty,
+    }
+}
+
+/// An `anyarray` value of the element type `elem` with the text `text`.
+fn anyarray(elem: u32, text: String) -> Value {
+    Value::AnyArray(Box::new(AnyArray { elem, text }))
 }
 
 /// `array_out` of a one-dimensional array of the values `values` of the type `ty`, or `None` when the output function of a value fails.

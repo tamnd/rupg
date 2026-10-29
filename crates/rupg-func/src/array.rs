@@ -4,7 +4,7 @@ use std::borrow::Cow;
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
-use rupg_types::{Array, ArrayDim, MAX_ARRAY_SIZE, MAXDIM, Value, array_in, format_type};
+use rupg_types::{AnyArray, Array, ArrayDim, MAX_ARRAY_SIZE, MAXDIM, Value, array_in, format_type};
 
 use crate::io::{base_type, output};
 use crate::{Call, Kernel, bad_value};
@@ -20,9 +20,10 @@ fn array(args: &[Value], at: usize) -> Result<&Array<Value>> {
 /// The array of an argument that a function only reads. An `anyarray` value of `pg_statistic` keeps the text of `array_out`, and it gives the array of the text of its elements, as the output function of the element type wrote them.
 fn read(args: &[Value], at: usize) -> Result<Cow<'_, Array<Value>>> {
     match args.get(at) {
-        Some(Value::Text(text)) => {
+        Some(Value::AnyArray(any)) => {
             let element = |e: &str| Ok(Value::Text(e.to_owned()));
-            let array = array_in(text, b',', true, element).map_err(|_| bad_value())?;
+            let delim = builtin::type_by_oid(base_type(any.elem)).map_or(b',', |t| t.delim);
+            let array = array_in(&any.text, delim, true, element).map_err(|_| bad_value())?;
             Ok(Cow::Owned(array))
         }
         _ => array(args, at).map(Cow::Borrowed),
@@ -31,9 +32,10 @@ fn read(args: &[Value], at: usize) -> Result<Cow<'_, Array<Value>>> {
 
 /// A function that gives an array of the type of its first argument, called on the text of an `anyarray` value. It works on the array of the text of the elements, and it gives the text of `array_out` of the result, as `enforce_generic_type_consistency` gives `anyarray` as the result type.
 fn on_anyarray(call: &Call<'_>, args: &[Value], kernel: Kernel) -> Result<Value> {
-    if !matches!(args.first(), Some(Value::Text(_))) {
+    let Some(Value::AnyArray(any)) = args.first() else {
         return kernel(call, args);
-    }
+    };
+    let elem = any.elem;
     let mut inner_args = args.to_vec();
     inner_args[0] = value(read(args, 0)?.into_owned());
     let mut types = call.args.to_vec();
@@ -53,7 +55,8 @@ fn on_anyarray(call: &Call<'_>, args: &[Value], kernel: Kernel) -> Result<Value>
     }
     let mut out = Vec::new();
     output(rupg_types::oid::TEXT_ARRAY, &result, call.session, &mut out)?;
-    String::from_utf8(out).map(Value::Text).map_err(|_| bad_value())
+    let text = String::from_utf8(out).map_err(|_| bad_value())?;
+    Ok(Value::AnyArray(Box::new(AnyArray { elem, text })))
 }
 
 /// An array as a value.

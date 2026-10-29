@@ -11,7 +11,7 @@ use rupg_types::{
 };
 
 use crate::cast::{TIMESTAMP_END_JULIAN, infinite, valid_timestamp};
-use crate::io::base_type;
+use crate::io::{anyarray_array, base_type};
 use crate::{Call, Kernel, bad_value, multirange, range};
 
 /// The groups of types that compare with each other.
@@ -176,6 +176,9 @@ pub fn compare(left: u32, a: &Value, right: u32, b: &Value) -> Result<Ordering> 
         }
         (Value::Interval(x), Value::Interval(y)) => span(x).cmp(&span(y)),
         (Value::Array(x), Value::Array(y)) => array_order(element(left), x, element(right), y)?,
+        (Value::AnyArray(x), Value::AnyArray(y)) if base_type(x.elem) != base_type(y.elem) => {
+            return Err(different_elements());
+        }
         (Value::Range(x), Value::Range(y)) => {
             let sub = match range::subtype(left) {
                 0 => range::subtype(right),
@@ -441,16 +444,31 @@ fn order(call: &Call<'_>, args: &[Value]) -> Result<Ordering> {
     }
     let left = call.args.first().copied().unwrap_or(0);
     let right = call.args.get(1).copied().unwrap_or(0);
+    // The element type of an `anyarray` value is in the value, as `array_cmp` reads it from the header of each array.
+    let elem = |ty: u32, value: &Value| match value {
+        Value::AnyArray(any) => any.elem,
+        _ => element(ty),
+    };
     if family(left) == Some(Family::Array)
         && family(right) == Some(Family::Array)
-        && base_type(element(left)) != base_type(element(right))
+        && base_type(elem(left, a)) != base_type(elem(right, b))
     {
-        return Err(Error::new(
-            SqlState::DATATYPE_MISMATCH,
-            "cannot compare arrays of different element types",
-        ));
+        return Err(different_elements());
+    }
+    if let Value::AnyArray(any) = a {
+        let a = Value::Array(Box::new(anyarray_array(any, call.session)?));
+        return order(call, &[a, b.clone()]);
+    }
+    if let Value::AnyArray(any) = b {
+        let b = Value::Array(Box::new(anyarray_array(any, call.session)?));
+        return order(call, &[a.clone(), b]);
     }
     compare(left, a, right, b)
+}
+
+/// The error of `array_cmp` for two arrays whose element types differ.
+fn different_elements() -> Error {
+    Error::new(SqlState::DATATYPE_MISMATCH, "cannot compare arrays of different element types")
 }
 
 fn eq(call: &Call<'_>, args: &[Value]) -> Result<Value> {

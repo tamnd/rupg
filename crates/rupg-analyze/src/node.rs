@@ -3,7 +3,9 @@
 //! PostgreSQL stores these as `pg_node_tree` text that `nodeToString` writes. rupg stores its own text, which document 05 section 5.2 permits, because clients do not read it. The form looks like the form of PostgreSQL: `{NAME :field value ...}`. A constant keeps its value in a form that does not change with the settings of the session, so the expression reads back to the same tree.
 
 use rupg_common::{Error, Result};
-use rupg_types::{Array, ArrayDim, Inet, Interval, NetFamily, Range, Record, Recv, Value};
+use rupg_types::{
+    AnyArray, Array, ArrayDim, Inet, Interval, NetFamily, Range, Record, Recv, Value,
+};
 
 use crate::expr::{
     BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, FieldStore, Func, FuncForm, IsJson, JoinRow,
@@ -743,6 +745,18 @@ fn hex(bytes: &[u8], out: &mut String) {
     }
 }
 
+/// Writes a string in double quotes, with a backslash before each double quote and each backslash.
+fn write_string(text: &str, out: &mut String) {
+    out.push('"');
+    for c in text.chars() {
+        if c == '"' || c == '\\' {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('"');
+}
+
 /// A value as a list of its kind and its parts, or `null`. A float keeps its bits, and a `numeric` and a `tsvector` keep the bytes of their binary form.
 fn write_value(value: &Value, out: &mut String) {
     match value {
@@ -763,14 +777,14 @@ fn write_value(value: &Value, out: &mut String) {
         Value::Oid(v) => out.push_str(&format!("(oid {v})")),
         Value::Char(v) => out.push_str(&format!("(char {v})")),
         Value::Text(v) => {
-            out.push_str("(text \"");
-            for c in v.chars() {
-                if c == '"' || c == '\\' {
-                    out.push('\\');
-                }
-                out.push(c);
-            }
-            out.push_str("\")");
+            out.push_str("(text ");
+            write_string(v, out);
+            out.push(')');
+        }
+        Value::AnyArray(v) => {
+            out.push_str(&format!("(anyarray {} ", v.elem));
+            write_string(&v.text, out);
+            out.push(')');
         }
         Value::Bytea(v) => {
             out.push_str("(bytea ");
@@ -1404,6 +1418,12 @@ fn value_of(item: &Item) -> Result<Value> {
         "text" => match parts.first() {
             Some(Item::Str(text)) => Value::Text(text.clone()),
             _ => return Err(bad("a text value with no string")),
+        },
+        "anyarray" => match parts.get(1) {
+            Some(Item::Str(text)) => {
+                Value::AnyArray(Box::new(AnyArray { elem: number(part(0)?)?, text: text.clone() }))
+            }
+            _ => return Err(bad("an anyarray value with no string")),
         },
         "bytea" => Value::Bytea(bytes_of(part(0)?)?),
         "uuid" => {

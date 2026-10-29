@@ -193,7 +193,9 @@ pub(crate) fn method(agg: &Aggref, ty: u32, location: Option<usize>) -> Result<M
             } else {
                 transtype(agg, row.transtype).ok_or_else(unsupported)?
             };
-            if state == oid::INTERNAL || polymorphic(state) || row.kind != b'n' {
+            // A state of `anyarray` holds the values of a column of that type, such as the columns of `pg_stats`, which keep their element type.
+            let anyarray = state == oid::ANYARRAY && ty == oid::ANYARRAY;
+            if state == oid::INTERNAL || (polymorphic(state) && !anyarray) || row.kind != b'n' {
                 return Err(unsupported());
             }
             if row.initval.is_some() && !rupg_func::input_supported(state) {
