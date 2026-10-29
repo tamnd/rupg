@@ -7,6 +7,7 @@ use rupg_catalog::Catalog;
 use rupg_pgcatalog::builtin;
 use rupg_types::{Numeric, NumericSign, Value};
 
+use crate::GroupingSet;
 use crate::Relation;
 use crate::collate::{self, State};
 use crate::cte::Cte;
@@ -17,7 +18,7 @@ use crate::from::{FromItem, Join, JoinKind};
 use crate::perm::PermInfo;
 use crate::select::Query;
 use crate::setop::{SetKind, SetOp, SetTree};
-use crate::sort::SortGroup;
+use crate::sort::{SortGroup, expand_grouping_sets};
 use crate::window::WindowClause;
 use crate::{typcache, types};
 
@@ -84,6 +85,8 @@ struct Writer<'a> {
     substitute: bool,
     /// `ressortgroupref` of each target.
     refs: Vec<usize>,
+    /// For each item of `GROUP BY`, true when a grouping set does not have it, so the `*GROUP*` entry can make it null.
+    nullable: Vec<bool>,
     /// `canSetTag`: false for a query of `WITH`.
     set_tag: bool,
     /// True for a `SELECT` of a set operation. The analysis casts its columns to the types of the operation, but PostgreSQL keeps the columns as the `SELECT` gives them.
@@ -103,8 +106,6 @@ impl<'a> Writer<'a> {
             })
             || query.windows.iter().any(|w| !w.run.is_empty())
             || !query.row_marks.is_empty()
-            || !query.grouping_sets.is_empty()
-            || query.group_distinct
             || query.write.is_some()
             || !query.params.is_empty()
             || query.notify.is_some()
@@ -147,6 +148,7 @@ impl<'a> Writer<'a> {
             group_rt: 0,
             substitute: false,
             refs: vec![0; query.targets.len()],
+            nullable: vec![false; query.group.len()],
             set_tag: true,
             leaf: false,
         };
@@ -162,6 +164,13 @@ impl<'a> Writer<'a> {
         }
         if writer.rt.contains(&0) {
             return None;
+        }
+        if !query.grouping_sets.is_empty() {
+            let sets =
+                expand_grouping_sets(&query.grouping_sets, query.group_distinct, usize::MAX)?;
+            for (at, g) in query.group.iter().enumerate() {
+                writer.nullable[at] = sets.iter().any(|s| !s.contains(&g.target));
+            }
         }
         if !query.group.is_empty() {
             writer.entries.push(Entry::Group);
@@ -258,9 +267,6 @@ impl<'a> Writer<'a> {
         let has_aggs = q.targets.iter().map(|t| &t.expr).chain(&q.having).any(has_agg);
         let has_windows = q.targets.iter().any(|t| has_window(&t.expr));
         let has_sublinks = q.exprs().into_iter().any(has_sublink);
-        if q.exprs().into_iter().any(unsupported) {
-            return None;
-        }
         let _ = write!(
             self.out,
             "{{QUERY :commandType 1 :querySource 0 :canSetTag {} :utilityStmt <> :resultRelation 0",
@@ -309,7 +315,9 @@ impl<'a> Writer<'a> {
         self.substitute = false;
         self.out.push_str(" :override 0 :onConflict <> :returningOldAlias <> :returningNewAlias <> :returningList <> :groupClause ");
         self.sort_groups(&q.group)?;
-        self.out.push_str(" :groupDistinct false :groupingSets <> :havingQual ");
+        let _ = write!(self.out, " :groupDistinct {} :groupingSets ", q.group_distinct);
+        self.list(&q.grouping_sets, |w, set| w.grouping_set(set))?;
+        self.out.push_str(" :havingQual ");
         self.substitute = self.group_rt != 0;
         self.option(q.having.as_ref())?;
         self.substitute = false;
@@ -686,6 +694,30 @@ impl<'a> Writer<'a> {
         Some(())
     }
 
+    /// A grouping set of `GROUP BY`, as `GroupingSet`. A simple set names its items by `ressortgroupref`.
+    fn grouping_set(&mut self, set: &GroupingSet) -> Option<()> {
+        let (kind, content) = match set {
+            GroupingSet::Empty => (0, None),
+            GroupingSet::Simple(items) => {
+                let refs: Vec<usize> = items.iter().map(|&t| self.refs[t]).collect();
+                let _ = write!(self.out, "{{GROUPINGSET :kind 1 :content ");
+                self.ints(&refs);
+                self.out.push_str(" :location -1}");
+                return Some(());
+            }
+            GroupingSet::Rollup(c) => (2, Some(c)),
+            GroupingSet::Cube(c) => (3, Some(c)),
+            GroupingSet::Sets(c) => (4, Some(c)),
+        };
+        let _ = write!(self.out, "{{GROUPINGSET :kind {kind} :content ");
+        match content {
+            Some(c) => self.list(c, |w, s| w.grouping_set(s))?,
+            None => self.out.push_str("<>"),
+        }
+        self.out.push_str(" :location -1}");
+        Some(())
+    }
+
     /// A part of the tree of a set operation: a `RangeTblRef` of a `SELECT`, or a `SetOperationStmt`.
     fn set_tree(&mut self, tree: &SetTree) -> Option<()> {
         match tree {
@@ -854,8 +886,13 @@ impl<'a> Writer<'a> {
             let (index, number) = (self.group_rt, at + 1);
             let _ = write!(
                 self.out,
-                "{{VAR :varno {index} :varattno {number} :vartype {} :vartypmod {} :varcollid {collation} :varnullingrels (b) :varlevelsup 0 :varreturningtype 0 :varnosyn {index} :varattnosyn {number} :location -1}}",
+                "{{VAR :varno {index} :varattno {number} :vartype {} :vartypmod {} :varcollid {collation} :varnullingrels ",
                 g.ty, g.typmod
+            );
+            self.bits(self.nullable[at].then_some(i32::try_from(index).ok()?));
+            let _ = write!(
+                self.out,
+                " :varlevelsup 0 :varreturningtype 0 :varnosyn {index} :varattnosyn {number} :location -1}}"
             );
             return Some(());
         }
@@ -898,6 +935,22 @@ impl<'a> Writer<'a> {
                     self.out,
                     " :multidims {multidims} :list_start -1 :list_end -1 :location -1}}"
                 );
+                Some(())
+            }
+            ExprKind::Grouping(g) => {
+                if g.levels_up != 0 {
+                    return None;
+                }
+                self.out.push_str("{GROUPINGFUNC :args ");
+                let substitute = std::mem::replace(&mut self.substitute, false);
+                let written = self.exprs(&g.args);
+                self.substitute = substitute;
+                written?;
+                let refs: Vec<usize> =
+                    g.refs.iter().map(|&t| self.refs.get(t).copied()).collect::<Option<_>>()?;
+                self.out.push_str(" :refs ");
+                self.ints(&refs);
+                self.out.push_str(" :cols <> :agglevelsup 0 :location -1}");
                 Some(())
             }
             ExprKind::Relabel(arg, form) => {
@@ -1367,13 +1420,14 @@ fn has_window(e: &Expr) -> bool {
     matches!(e.kind, ExprKind::Window(_)) || e.children().into_iter().any(has_window)
 }
 
+/// `p_hasAggs`: an aggregate or a `GROUPING` call of the query.
 fn has_agg(e: &Expr) -> bool {
-    matches!(e.kind, ExprKind::Agg(_)) || e.children().into_iter().any(has_agg)
-}
-
-/// True when the expression has a `GROUPING` call, which the writer does not write.
-fn unsupported(e: &Expr) -> bool {
-    matches!(e.kind, ExprKind::Grouping(_)) || e.children().into_iter().any(unsupported)
+    let own = match &e.kind {
+        ExprKind::Agg(_) => true,
+        ExprKind::Grouping(g) => g.levels_up == 0,
+        _ => false,
+    };
+    own || e.children().into_iter().any(has_agg)
 }
 
 fn join_type(kind: JoinKind) -> Option<u8> {
