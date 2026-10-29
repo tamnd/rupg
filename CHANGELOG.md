@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.4.13 (2026-10-29)
+
 ### Added
 
 - `pg_walfile_name`, `pg_walfile_name_offset`, `pg_split_walfile_name` and `gist_translate_cmptype_common` work as in PostgreSQL, with the default size of a WAL segment and the timeline 1 (#1167).
