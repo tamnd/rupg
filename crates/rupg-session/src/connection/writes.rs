@@ -22,6 +22,8 @@ pub(super) struct Writes {
     batches: Vec<Batch>,
     /// The view of the statement.
     view: View,
+    /// The events of the triggers `AFTER ... FOR EACH STATEMENT` of the statements that ran before the main query, which go after the events of the rows of the main query.
+    after_statement: Vec<super::trigger::Event>,
 }
 
 impl Connection {
@@ -42,11 +44,17 @@ impl Connection {
             written: Vec::new(),
             batches: Vec::new(),
             view: view.clone(),
+            after_statement: Vec::new(),
         };
         let list = plan.cte_writes();
         if list.is_empty() {
             return Ok((plan, writes));
         }
+        // `fireBSTriggers`: the `ModifyTable` of the main query runs first and reads the rows of the statements as it needs them, so its triggers `BEFORE ... FOR EACH STATEMENT` fire first.
+        if let Some(info) = plan.write() {
+            self.before_main_statement(info)?;
+        }
+        let start = self.event_mark();
         for (cte, read) in list {
             if read {
                 let cte = cte.with_written(writes.written.clone());
@@ -56,6 +64,10 @@ impl Connection {
                 writes.after.push(cte);
                 writes.written.push(Vec::new());
             }
+        }
+        // `fireASTriggers`: a statement ends when the main query read all its rows. An `INSERT` that reads them one by one wrote its rows by then.
+        if plan.inserts_in_turn() {
+            writes.after_statement = self.take_after_statement(start);
         }
         Ok((plan.with_written(writes.written.clone()), writes))
     }
@@ -71,7 +83,8 @@ impl Connection {
         params: &[Value],
         main: Vec<Batch>,
     ) -> Result<(), Error> {
-        let Writes { after, written, mut batches, view } = writes;
+        let Writes { after, written, mut batches, view, after_statement } = writes;
+        self.put_after_statement(after_statement);
         batches.extend(main);
         for cte in after {
             let cte = cte.with_written(written.clone());
@@ -126,6 +139,24 @@ impl Connection {
             for &action in &actions {
                 rupg_analyze::check_cmd_replica_identity(&catalog, table, action)?;
             }
+        }
+        Ok(())
+    }
+
+    /// `fireBSTriggers` of the main query: the triggers `BEFORE ... FOR EACH STATEMENT` of the write `info`. They do not fire again when the main query writes its rows.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the triggers.
+    fn before_main_statement(&self, info: &Write) -> Result<(), Error> {
+        if info.kind == WriteKind::Merge {
+            let Some(merge) = info.merge.as_ref() else { return Ok(()) };
+            let fire = self.merge_triggers(info, merge)?;
+            return self.before_merge(&fire, info);
+        }
+        self.before_statement(&self.write_triggers(info)?, info)?;
+        if info.on_conflict.is_some() {
+            self.before_statement(&self.conflict_triggers(info)?, info)?;
         }
         Ok(())
     }

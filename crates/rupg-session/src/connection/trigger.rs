@@ -60,6 +60,11 @@ impl Event {
     pub(super) fn table(&self) -> u32 {
         self.trigger.relation
     }
+
+    /// True for the event of a trigger `AFTER ... FOR EACH STATEMENT`.
+    fn after_statement(&self) -> bool {
+        self.trigger.kind & (TRIGGER_ROW | TRIGGER_BEFORE | TRIGGER_INSTEAD) == 0
+    }
 }
 
 /// A trigger that fires for a write, with its condition of `WHEN`.
@@ -1074,6 +1079,31 @@ impl Connection {
             Rc::make_mut(&mut rows.new.borrow_mut()).extend_from_slice(new);
         }
         rows
+    }
+
+    /// The events of the triggers `AFTER ... FOR EACH STATEMENT` from the place `start` of the queue. The other events stay in the queue.
+    pub(super) fn take_after_statement(&self, start: usize) -> Vec<Event> {
+        let mut queue = self.events.borrow_mut();
+        let start = start.min(queue.len());
+        let (statement, rows): (Vec<Event>, Vec<Event>) =
+            queue.split_off(start).into_iter().partition(Event::after_statement);
+        queue.extend(rows);
+        statement
+    }
+
+    /// Puts the events `events` of [`Connection::take_after_statement`] back in the queue, before the first event of a trigger `AFTER ... FOR EACH STATEMENT` that came later. An event of the same rows as a later event goes, as `cancel_prior_stmt_triggers` removes it.
+    pub(super) fn put_after_statement(&self, events: Vec<Event>) {
+        if events.is_empty() {
+            return;
+        }
+        let mut queue = self.events.borrow_mut();
+        let later = |e: &Event, l: &Event| l.event == e.event && Rc::ptr_eq(&l.rows, &e.rows);
+        let events: Vec<Event> = events
+            .into_iter()
+            .filter(|e| !queue.iter().any(|l| l.after_statement() && later(e, l)))
+            .collect();
+        let at = queue.iter().position(Event::after_statement).unwrap_or(queue.len());
+        queue.splice(at..at, events);
     }
 
     /// The place at the end of the queue of the triggers `AFTER`.
