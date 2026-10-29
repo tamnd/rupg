@@ -1864,7 +1864,7 @@ fn bool_items(expr: &Expr) -> Option<(BoolOp, Cow<'_, [Expr]>)> {
 const MAX_SAOP_ARRAY_SIZE: usize = 100;
 
 /// `predicate_implied_by_recurse`: true when the condition `clause` makes the condition `pred` true by the form of the `AND` and the `OR` in them. A condition that is not an `AND` or an `OR` proves another such condition as `predicate_implied_by_simple_clause`.
-fn implied_by(clause: &Expr, pred: &Expr) -> bool {
+pub(crate) fn implied_by(clause: &Expr, pred: &Expr) -> bool {
     match (bool_items(clause), bool_items(pred)) {
         (Some((BoolOp::And, _)), Some((BoolOp::And, p))) | (None, Some((BoolOp::And, p))) => {
             p.iter().all(|p| implied_by(clause, p))

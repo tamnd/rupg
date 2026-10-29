@@ -6841,6 +6841,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/range_support.test")));
     }
 
+    /// `infer_arbiter_indexes` takes a partial unique index as the arbiter of `ON CONFLICT` when `predicate_implied_by` proves the index predicate from the `WHERE` clause of the conflict target, as with `coalesce(a, 1) > 1` for the index predicate `coalesce(a, 1) > 0`. `connection/conflict_predicate.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn conflict_predicate() {
+        big_stack(|| script(include_str!("connection/conflict_predicate.test")));
+    }
+
     /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.
     #[test]
     fn role_settings_at_start() {

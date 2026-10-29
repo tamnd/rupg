@@ -1,0 +1,50 @@
+!details
+> create table insertconflict (a bigint, b bigint)
+CREATE TABLE
+> create unique index insertconflicti1 on insertconflict(coalesce(a, 0))
+CREATE INDEX
+> create unique index insertconflicti2 on insertconflict(b) where coalesce(a, 1) > 0
+CREATE INDEX
+> insert into insertconflict values (1, 2) on conflict (coalesce(a, 0)) do nothing
+INSERT 0 1
+> insert into insertconflict values (1, 2) on conflict (b) where coalesce(a, 1) > 0 do nothing
+INSERT 0 0
+> insert into insertconflict values (1, 2) on conflict (b) where coalesce(a, 1) > 1 do nothing
+INSERT 0 0
+> insert into insertconflict values (1, 2) on conflict (b) where coalesce(a, 1) > -1 do nothing
+ERROR 42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification
+> insert into insertconflict values (1, 2) on conflict (b) where coalesce(a, 1) >= 1 do nothing
+INSERT 0 0
+> insert into insertconflict values (1, 2) on conflict (b) where coalesce(a, 1) = 5 do nothing
+INSERT 0 0
+> insert into insertconflict values (1, 2) on conflict (b) where coalesce(a, 1) > 1 and a < 10 do nothing
+INSERT 0 0
+> insert into insertconflict values (1, 2) on conflict (b) do nothing
+ERROR 42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification
+> drop table insertconflict
+DROP TABLE
+> create table ic2 (a int, b int, c text)
+CREATE TABLE
+> create unique index ic2_b on ic2 (b) where a > 10 and c is not null
+CREATE INDEX
+> insert into ic2 values (11, 1, 'x') on conflict (b) where a > 20 and c = 'y' do update set c = 'z' returning *
+fields a@ic2.1:23:4:-1,b@ic2.2:23:4:-1,c@ic2.3:25:-1:-1
+row 11,1,x
+INSERT 0 1
+> insert into ic2 values (11, 1, 'x') on conflict (b) where a > 20 and c = 'y' do update set c = 'z' returning *
+fields a@ic2.1:23:4:-1,b@ic2.2:23:4:-1,c@ic2.3:25:-1:-1
+row 11,1,z
+INSERT 0 1
+> insert into ic2 values (11, 1, 'x') on conflict (b) where a > 20 do nothing
+ERROR 42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification
+> insert into ic2 values (11, 1, 'x') on conflict (b) where a > 10 and c is not null do nothing
+INSERT 0 0
+> explain (costs off) insert into ic2 values (11, 1, 'x') on conflict (b) where a = 15 and c = 'q' do nothing
+fields QUERY PLAN:25:-1:-1
+row Insert on ic2
+row   Conflict Resolution: NOTHING
+row   Conflict Arbiter Indexes: ic2_b
+row   ->  Result
+EXPLAIN
+> drop table ic2
+DROP TABLE

@@ -11,7 +11,6 @@ use rupg_sql::nodes::{
 };
 use rupg_types::{Value, oid};
 
-use crate::Analyzer;
 use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
 use crate::expr::{BoolOp, CastForm, Expr, ExprKind, FieldStore, Func, FuncForm, Var};
@@ -22,6 +21,7 @@ use crate::perm::{ACL_DELETE, ACL_INSERT, ACL_SELECT, ACL_UPDATE};
 use crate::select::{Query, Target};
 use crate::typename::place;
 use crate::types;
+use crate::{Analyzer, Env};
 
 /// The kind of a statement that writes the rows of a table, `CmdType`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -808,8 +808,7 @@ impl Analyzer<'_> {
             {
                 conflict.exclusion = index;
             }
-            conflict.arbiters =
-                arbiters(inference, unique, self.env.catalog(), self.is_partitioned(table))?;
+            conflict.arbiters = arbiters(inference, unique, self.env, self.is_partitioned(table))?;
         }
         Ok((on_conflict, returning, def, returning_tid))
     }
@@ -2206,9 +2205,10 @@ fn exact_match(
 fn arbiters(
     inference: Inference,
     unique: &[Unique],
-    catalog: Option<&rupg_catalog::Catalog>,
+    env: &dyn Env,
     partitioned: bool,
 ) -> Result<Vec<usize>> {
+    let catalog = env.catalog();
     let usable = |key: &Unique| {
         let info = catalog.and_then(|c| c.relation(key.oid)).and_then(|rel| rel.index.as_ref());
         info.is_none_or(|i| i.ready && (i.valid || !partitioned))
@@ -2254,7 +2254,7 @@ fn arbiters(
                 }
                 columns.sort_unstable();
                 columns.dedup();
-                // `predicate_implied_by`: each part of the predicate of the index is a part of the predicate of the inference.
+                // `predicate_implied_by`: the predicate of the inference proves the predicate of the index.
                 // An expression with a collation or an operator class matched in `exact_match`.
                 let checked =
                     |at: usize| exact.iter().any(|e| matches!(e.target, Exact::Expr(x) if x == at));
@@ -2264,7 +2264,7 @@ fn arbiters(
                         .enumerate()
                         .all(|(at, e)| checked(at) || indexed.iter().any(|i| i.same(e)))
                     && indexed.iter().all(|i| exprs.iter().any(|e| e.same(i)))
-                    && derived.predicate.iter().all(|p| predicate.iter().any(|e| e.same(p)))
+                    && env.predicate_implied(&derived.predicate, &predicate)
             })
             .map(|(at, _)| at)
             .collect(),

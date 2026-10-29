@@ -25,8 +25,8 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use rupg_analyze::{
-    Cte, Expr, ExprKind, FromItem, JoinKind, Query, Relation, SetOp, SetTree, SortGroup, SubLink,
-    SubLinkKind, TABLE_OID_ATTNUM, Var, Write, WriteKind,
+    BoolOp, Cte, Expr, ExprKind, FromItem, JoinKind, Query, Relation, SetOp, SetTree, SortGroup,
+    SubLink, SubLinkKind, TABLE_OID_ATTNUM, Var, Write, WriteKind,
 };
 use rupg_plan::{
     Grouped, HashTable, HashTables, Item, Kind, Label, Leaf, Node, Operation, Pass, Plan, Scanned,
@@ -329,6 +329,22 @@ pub struct Member {
     pub size: Size,
     /// The column number in the table of each column of the parent, by name, or 0 for a dropped column of the parent.
     pub attnums: Vec<i16>,
+}
+
+/// `predicate_implied_by`: true when the conditions `clauses`, which are all true, make each condition of `predicate` true, with the proofs of the partial indexes. `compare` compares the constants of the proofs.
+pub fn predicate_implied(predicate: &[Expr], clauses: &[Expr], compare: Compare) -> bool {
+    if predicate.is_empty() {
+        return true;
+    }
+    let clause = match clauses {
+        [] => return false,
+        [clause] => clause.clone(),
+        _ => Expr::new(ExprKind::Bool(BoolOp::And, clauses.to_vec()), oid::BOOL),
+    };
+    let saved = COMPARE.with(|c| c.replace(compare));
+    let proved = predicate.iter().all(|p| from::implied_by(&clause, p));
+    COMPARE.with(|c| c.set(saved));
+    proved
 }
 
 /// The plan of a query, with the members of the relations that `members` gives.
@@ -1245,7 +1261,7 @@ fn member_scopes(node: &Node<'_>, scopes: &[Scope<'_>], out: &mut Vec<usize>) {
 fn hashable_test(link: &SubLink) -> bool {
     fn hashable(expr: &Expr) -> bool {
         match &expr.kind {
-            ExprKind::Bool(rupg_analyze::BoolOp::And, args) => args.iter().all(hashable),
+            ExprKind::Bool(BoolOp::And, args) => args.iter().all(hashable),
             _ => exprs::binary(expr).is_some_and(|(_, left, right)| {
                 exprs::hash_ok(expr)
                     && !matches!(left.kind, ExprKind::SubColumn(_))
