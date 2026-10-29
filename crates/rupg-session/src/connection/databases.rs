@@ -297,8 +297,13 @@ impl Connection {
         self.store.rows_with(changes).into_iter().find(|row| row.name == name)
     }
 
+    /// The row of `pg_database` of the database with the OID `oid`, with the changes of the transaction.
+    pub(super) fn database_by_oid(&self, oid: u32) -> Option<Database> {
+        self.store.rows_with(&self.roles().databases).into_iter().find(|row| row.oid == oid)
+    }
+
     /// Puts a changed row of `pg_database` in the changes of the transaction. The commit of the transaction moves the row to the store, and a rollback discards it.
-    fn change_database(&self, row: &Database) -> Result<(), Error> {
+    pub(super) fn change_database(&self, row: &Database) -> Result<(), Error> {
         let mut held = self.lease.borrow_mut();
         let Some(lease) = held.as_mut() else {
             return Err(Error::internal("the lock of the catalog is gone"));
