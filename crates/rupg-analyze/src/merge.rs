@@ -558,6 +558,7 @@ pub(crate) fn join(kind: JoinKind, left: FromItem, right: FromItem, on: Option<E
         right,
         on,
         using: Vec::new(),
+        natural: false,
         plain_using: true,
         alias: None,
         using_alias: None,

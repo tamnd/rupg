@@ -719,6 +719,7 @@ fn join_item(kind: JoinKind, left: FromItem, right: FromItem, on: Option<Expr>) 
         on,
         using: Vec::new(),
         plain_using: false,
+        natural: false,
         alias: None,
         using_alias: None,
         merged: Vec::new(),

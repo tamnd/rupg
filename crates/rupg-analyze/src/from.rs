@@ -201,6 +201,8 @@ pub struct Join {
     pub on: Option<Expr>,
     /// The names of the columns of `USING`, or the common columns of a natural join.
     pub using: Vec<String>,
+    /// `isNatural`: true for a natural join.
+    pub natural: bool,
     /// True when each merged column of `USING` is a column of one side with no cast. A merged column of a full join, or with a cast, is not a column of one side, as `has_dangerous_join_using` finds.
     pub plain_using: bool,
     /// The alias of the join.
@@ -1779,6 +1781,7 @@ impl Analyzer<'_> {
             on,
             plain_using,
             using,
+            natural: j.isNatural,
             alias: alias.and_then(|a| a.aliasname.as_deref()).map(str::to_string),
             using_alias: j
                 .join_using_alias

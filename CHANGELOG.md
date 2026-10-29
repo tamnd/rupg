@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The `ev_action` of a view is also the text of PostgreSQL 19 for window functions, `WINDOW` clauses, `interval` constants and joins with `USING` or `NATURAL` (#916) (#1096).
 - The writes of one query share their transition tables and their statement triggers, as in PostgreSQL (#1095).
 - A whole-row reference to a transition table has no field for a dropped column, and a row trigger with transition tables on an inheritance child fails, as in PostgreSQL (#1094).
 - A view stores its query in `pg_rewrite.ev_action` as `nodeToString` of PostgreSQL 19 writes it, for the queries that the new writer supports. A long action takes a TOAST OID as in PostgreSQL (#916) (#1093).
