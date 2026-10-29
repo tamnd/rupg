@@ -367,7 +367,7 @@ pub fn plan<'q>(query: &'q Query, members: &'q dyn Members) -> Plan<'q> {
     plan
 }
 
-/// The order of the rows of the joins of the plan `plan` of `query`, as `ExecNestLoop` and `ExecHashJoin` give them: the relations of the query from the outermost loop to the innermost one, each with true when its rows come in the reverse order of the scan. A nested loop gives the rows of its inner side for each row of its outer side, and a hash join gives the rows of its inner side in the reverse order, as `ExecHashTableInsert` puts each row at the head of its bucket. An index scan gives the rows in the order of the keys of its index, which `members` gives, and a bitmap heap scan gives them in the order of the heap. `None` when the plan has a node that gives its rows in another order, such as a sort or a merge join, or an index scan of an index with an expression or an operator class that is not the default one.
+/// The order of the rows of the joins of the plan `plan` of `query`, as `ExecNestLoop` and `ExecHashJoin` give them: the relations of the query from the outermost loop to the innermost one, each with true when its rows come in the reverse order of the scan. A nested loop gives the rows of its inner side for each row of its outer side, and a hash join gives the rows of its inner side in the reverse order, as `ExecHashTableInsert` puts each row at the head of its bucket. An index scan gives the rows in the order of the keys of its index, which `members` gives, and a bitmap heap scan gives them in the order of the heap. A scan of a function, of a `VALUES` list, of a query of `WITH` or of a subquery gives the rows in the order that they come. `None` when the plan has a node that gives its rows in another order, such as a sort or a merge join, or an index scan of an index with an expression or an operator class that is not the default one.
 pub fn join_order(plan: &Plan<'_>, query: &Query, members: &dyn Members) -> Option<Vec<Scanned>> {
     let mut node = &plan.root;
     loop {
@@ -508,7 +508,15 @@ fn loop_order(
     let inner_or_left = |join: &JoinKind| matches!(join, JoinKind::Inner | JoinKind::Left);
     let base = node.scope == 0 && node.member.is_none();
     match (&node.kind, node.children.as_slice()) {
-        (Kind::SeqScan(relation), []) if base => out(*relation, reverse, None).is_some(),
+        (
+            Kind::SeqScan(relation)
+            | Kind::CteScan(relation)
+            | Kind::ValuesScan(relation)
+            | Kind::FunctionScan(relation)
+            | Kind::TableFunctionScan(relation),
+            [],
+        ) if base => out(*relation, reverse, None).is_some(),
+        (Kind::SubqueryScan(relation), [_]) if base => out(*relation, reverse, None).is_some(),
         (Kind::BitmapHeapScan { relation, .. }, [_]) if base => {
             out(*relation, reverse, None).is_some()
         }

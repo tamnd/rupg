@@ -7002,6 +7002,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/conflict_excluded_hint.test")));
     }
 
+    /// A join gives the rows of a scan of a query of `WITH`, of a `VALUES` list, of a function or of a subquery in the order of the loops of the plan, so a filter that makes the second relation the outer loop changes the order of the rows. `connection/scan_join_order.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn scan_join_order() {
+        big_stack(|| script(include_str!("connection/scan_join_order.test")));
+    }
+
     /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.
     #[test]
     fn role_settings_at_start() {
