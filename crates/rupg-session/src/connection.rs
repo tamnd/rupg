@@ -7089,6 +7089,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/ctas_insert_privilege.test")));
     }
 
+    /// The scan under a grouping with the same column twice among its keys emits the columns of the keys and not all the columns of the table, as `use_physical_tlist` does not apply to a target list with duplicates. `connection/distinct_dup_tlist.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn distinct_dup_tlist() {
+        big_stack(|| script(include_str!("connection/distinct_dup_tlist.test")));
+    }
+
     /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.
     #[test]
     fn role_settings_at_start() {

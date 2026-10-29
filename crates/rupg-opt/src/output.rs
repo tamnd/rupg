@@ -278,8 +278,11 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
         Kind::Aggregate { keys, unique, .. } => {
             let unique = *unique;
             let keys: Vec<Expr> = keys.iter().map(|k| k.expr.as_ref().clone()).collect();
+            // `use_physical_tlist` with `CP_LABEL_TLIST`: two items of `GROUP BY` or `DISTINCT` that are the same column would need two labels in one place of the physical target list.
+            let refs: Vec<&Expr> = labeled(level).into_iter().map(|t| level.target(t)).collect();
             let vars = keys.iter().all(is_var)
-                && keys.iter().enumerate().all(|(i, k)| !keys[..i].iter().any(|o| o.same(k)));
+                && keys.iter().enumerate().all(|(i, k)| !keys[..i].iter().any(|o| o.same(k)))
+                && refs.iter().enumerate().all(|(i, k)| !refs[..i].iter().any(|o| o.same(k)));
             if unique {
                 // `create_final_unique_paths`: the input is the target of the side, then each key that is not in it.
                 let mut below = want.clone();
@@ -751,6 +754,20 @@ fn trivial(level: &Level<'_>, node: &Node<'_>, r: usize, physical: bool) -> bool
         })
 }
 
+/// The targets with a `ressortgroupref`, in the order of the target list. `transformGroupClause` labels only the first target of a group of items that are the same expression, and `transformDistinctClause` labels each target.
+fn labeled(level: &Level<'_>) -> Vec<usize> {
+    let mut refs: Vec<usize> = Vec::new();
+    for s in &level.query.group {
+        if !refs.iter().any(|&r| level.target(r).same(level.target(s.target))) {
+            refs.push(s.target);
+        }
+    }
+    refs.extend(level.query.distinct.iter().map(|s| s.target));
+    refs.sort_unstable();
+    refs.dedup();
+    refs
+}
+
 /// The target list of an `Agg` or a `WindowAgg`: a value that is a key comes from below, and the node computes the others from the columns below.
 fn grouped<'q>(
     level: &Level<'q>,
@@ -772,9 +789,16 @@ fn grouped<'q>(
             && matches!(key.kind, ExprKind::Const(_))
             && sets.iter().flat_map(|r| &r.sets).any(|s| !s.iter().any(|i| i.expr.same(key)))
     };
+    // `make_group_input_target` adds each target with a `ressortgroupref`, so a column that two targets of the grouping name is there twice.
+    let labels: Vec<&Expr> = if matches!(node.kind, Kind::Aggregate { .. }) {
+        labeled(level).into_iter().map(|t| level.target(t)).collect()
+    } else {
+        Vec::new()
+    };
     let in_want = want.iter().map(|w| &*w.expr).filter(|w| keys.iter().any(|k| k.same(w)));
     for key in in_want.chain(keys) {
-        if !below.iter().any(|b| b.expr.same(key)) {
+        let times = labels.iter().filter(|l| l.same(key)).count().max(1);
+        if below.iter().filter(|b| b.expr.same(key)).count() < times {
             below.push(Item { below: nullable(key), ..item(key.clone()) });
         }
     }
