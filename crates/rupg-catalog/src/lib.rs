@@ -4313,7 +4313,7 @@ impl Catalog {
         }
     }
 
-    /// `index_constraint_create`: the primary key or the unique constraint `kind` of the index `index`, with the name `name`, on the key columns `keys` of the table. The index depends on the constraint. A deferrable constraint gets the trigger that checks its keys again after the statement or at the commit.
+    /// `index_constraint_create`: the primary key or the unique constraint `kind` of the index `index`, with the name `name`, on the key columns `keys` of the table. The index depends on the constraint, and the constraint depends on the columns of `INCLUDE` too, as `CreateConstraintEntry` records `constraintNTotalKeys` columns. A deferrable constraint gets the trigger that checks its keys again after the statement or at the commit.
     fn index_constraint(
         &mut self,
         index: u32,
@@ -4322,7 +4322,16 @@ impl Catalog {
         keys: Vec<i16>,
         (deferrable, deferred): (bool, bool),
     ) -> Result<u32> {
-        let table = self.relation(index).and_then(|r| r.index.as_ref()).map_or(0, |i| i.table);
+        let info = self.relation(index).and_then(|r| r.index.as_ref());
+        let table = info.map_or(0, |i| i.table);
+        let included: Vec<i16> = info.map_or_else(Vec::new, |i| {
+            i.keys
+                .iter()
+                .skip(usize::try_from(i.key_count).unwrap_or(0))
+                .copied()
+                .filter(|&k| k != 0)
+                .collect()
+        });
         let namespace = self.relation_facts(table)?.1;
         let mut constraint = self.new_constraint(name, namespace, kind, table, keys);
         constraint.index = index;
@@ -4331,6 +4340,9 @@ impl Catalog {
         constraint.deferred = deferred;
         let referenced = ObjRef::new(PG_CONSTRAINT, constraint.oid);
         self.insert_constraint(constraint);
+        for column in included {
+            self.depend(referenced, ObjRef::column(table, column), DepKind::Auto);
+        }
         self.depend(ObjRef::new(PG_CLASS, index), referenced, DepKind::Internal);
         if deferrable {
             let mut trigger = Trigger {
