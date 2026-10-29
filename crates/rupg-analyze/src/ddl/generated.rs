@@ -81,7 +81,8 @@ impl Definer<'_, '_> {
         if target.kind != b'p' && generated == b's' {
             self.check_row_type_users(target)?;
             let default = self.catalog.default_of(table, number).map(|d| d.expr.clone());
-            self.added.push(Fill { table, column: number, default });
+            let identity = self.identity_of(table, number);
+            self.added.push(Fill { table, column: number, default, identity });
         }
         Ok(())
     }

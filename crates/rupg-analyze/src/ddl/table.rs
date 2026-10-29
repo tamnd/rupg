@@ -469,6 +469,11 @@ impl Definer<'_, '_> {
         Ok(oid)
     }
 
+    /// `attidentity` of the column of the relation, or 0.
+    pub(super) fn identity_of(&self, oid: u32, column: i16) -> u8 {
+        self.catalog.relation(oid).and_then(|r| r.column(column)).map_or(0, |c| c.identity)
+    }
+
     /// True when the relation is unlogged.
     pub(super) fn is_unlogged(&self, oid: u32) -> bool {
         self.catalog.relation(oid).is_some_and(|r| r.unlogged)
@@ -1218,7 +1223,8 @@ impl Definer<'_, '_> {
         if target.kind == b'r' && column.generated == 0 && default.is_some() {
             self.check_row_type_users(target)?;
         }
-        self.added.push(Fill { table, column: number, default });
+        let identity = self.identity_of(table, number);
+        self.added.push(Fill { table, column: number, default, identity });
         self.add_not_nulls(table, &plan, true)?;
         // `transformColumnDefinition` adds `ALTER FOREIGN TABLE ... ALTER COLUMN ... OPTIONS` for the options of the column.
         if !def.fdwoptions.is_empty() {

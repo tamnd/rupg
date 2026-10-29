@@ -6773,6 +6773,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/distinct_reorder.test")));
     }
 
+    /// `ADD COLUMN` fills the rows of an identity column with the values of its sequence, and a column that a later subcommand of the statement makes an identity column gets nulls, so its `NOT NULL` fails, as `ATExecAddColumn` does.
+    #[test]
+    fn identity_fill() {
+        big_stack(|| script(include_str!("connection/identity_fill.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

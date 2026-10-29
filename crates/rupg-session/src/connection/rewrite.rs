@@ -258,6 +258,7 @@ impl Connection {
                 let mut catalog = Catalog::clone(work);
                 for fill in own {
                     catalog.remove_default(table, fill.column);
+                    catalog.set_identity(table, fill.column, fill.identity)?;
                     if let Some(expr) = &fill.default {
                         catalog.add_default(table, fill.column, expr.clone(), &[])?;
                     }

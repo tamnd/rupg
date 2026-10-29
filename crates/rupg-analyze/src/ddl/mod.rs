@@ -212,6 +212,8 @@ pub struct Fill {
     pub column: i16,
     /// The text of the default expression, or `None` for a column with no default, which gets a null.
     pub default: Option<String>,
+    /// `attidentity` of the column when `ADD COLUMN` ran. An identity column gives its rows the values of its sequence, as `ATExecAddColumn` adds `nextval` to `newvals`, and a column that a later subcommand makes an identity column gives them nulls.
+    pub identity: u8,
 }
 
 /// True for a statement that [`define`] runs.
@@ -473,7 +475,9 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
             // A stored generated column computes its values again from the expression that it has now.
             let generated = column.is_some_and(|c| c.generated != 0);
             let now = catalog.default_of(fill.table, fill.column).map(|d| &d.expr);
-            live && (generated || now != fill.default.as_ref())
+            // A column that a later subcommand makes an identity column gets nulls, not the values of the sequence.
+            let identity = column.is_some_and(|c| c.identity != fill.identity);
+            live && (generated || identity || now != fill.default.as_ref())
         })
         .collect();
     Defined {
