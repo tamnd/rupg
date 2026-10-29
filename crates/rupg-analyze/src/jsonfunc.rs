@@ -99,7 +99,7 @@ fn behavior_const(kind: JsonBehaviorKind, at: Option<usize>) -> Expr {
 }
 
 /// `DomainHasConstraints`: true for a domain, or a domain below it, with a check or `NOT NULL`.
-fn domain_has_constraints(ty: u32) -> bool {
+pub(crate) fn domain_has_constraints(ty: u32) -> bool {
     let mut ty = ty;
     while let Some(row) = types::row(ty)
         && row.kind == b'd'

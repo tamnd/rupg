@@ -1093,6 +1093,10 @@ impl rupg_func::Session for Reader<'_> {
         self.conn?.ddl_commands()
     }
 
+    fn table_rewrite(&self) -> Option<(u32, i32)> {
+        self.conn?.table_rewrite()
+    }
+
     fn transaction_id(&self, assign: bool) -> Option<u64> {
         self.conn?.transaction_id(assign).map(u64::from)
     }

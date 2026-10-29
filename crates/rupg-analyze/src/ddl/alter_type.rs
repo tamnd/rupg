@@ -19,7 +19,7 @@ use super::alter::Target;
 use super::fkey::Keys;
 use super::index::{columns_collation, index_references, no_default_opclass, strip_collate};
 use super::table::{SYSTEM_COLUMNS, check_attribute_type};
-use super::{Definer, Transform, not_yet, quote_identifier, references};
+use super::{Definer, Transform, not_yet, quote_identifier, references, rewrite};
 use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
 use crate::expr::ExprKind;
@@ -187,6 +187,15 @@ impl Definer<'_, '_> {
                     types::with_typmod(ty, typmod)
                 ))
             });
+        }
+        if let Some(coerced) = &coerced {
+            match rewrite::column_change(coerced, number) {
+                rewrite::Change::None => {}
+                rewrite::Change::Zoned => self.rewrite(target.oid, 0, true),
+                rewrite::Change::Rewrite => {
+                    self.rewrite(target.oid, rewrite::COLUMN_REWRITE, false);
+                }
+            }
         }
         if let Some(node) = &def.raw_default {
             self.transforms.push(Transform {

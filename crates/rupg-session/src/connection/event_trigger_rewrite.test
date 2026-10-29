@@ -1,0 +1,68 @@
+> create function f_rw() returns event_trigger language plpgsql as $$ begin raise notice '% %', pg_event_trigger_table_rewrite_oid()::regclass, pg_event_trigger_table_rewrite_reason(); end $$
+CREATE FUNCTION
+> select pg_event_trigger_table_rewrite_reason()
+fields pg_event_trigger_table_rewrite_reason:23:4:-1
+ERROR 39P03 pg_event_trigger_table_rewrite_reason() can only be called in a table_rewrite event trigger function
+> create event trigger e_rw on table_rewrite execute procedure f_rw()
+CREATE EVENT TRIGGER
+> create table rw (a int, b varchar(5), c numeric(6,2), d timestamp(3))
+CREATE TABLE
+> alter table rw add column e int default 1
+ALTER TABLE
+> alter table rw add column f float8 default random()
+NOTICE 00000 rw 2 (PL/pgSQL function f_rw() line 1 at RAISE)
+ALTER TABLE
+> alter table rw add column g int generated always as (a + 1) stored
+NOTICE 00000 rw 2 (PL/pgSQL function f_rw() line 1 at RAISE)
+ALTER TABLE
+> alter table rw add column h int generated always as (a + 2) virtual
+ALTER TABLE
+> alter table rw alter column b type varchar(10)
+ALTER TABLE
+> alter table rw alter column b type varchar(3)
+NOTICE 00000 rw 4 (PL/pgSQL function f_rw() line 1 at RAISE)
+ALTER TABLE
+> alter table rw alter column c type numeric(8,2)
+ALTER TABLE
+> alter table rw alter column c type numeric(8,3)
+NOTICE 00000 rw 4 (PL/pgSQL function f_rw() line 1 at RAISE)
+ALTER TABLE
+> alter table rw alter column d type timestamp(5)
+ALTER TABLE
+> alter table rw alter column d type timestamp(1)
+NOTICE 00000 rw 4 (PL/pgSQL function f_rw() line 1 at RAISE)
+ALTER TABLE
+> alter table rw alter column g set expression as (a + 3)
+NOTICE 00000 rw 2 (PL/pgSQL function f_rw() line 1 at RAISE)
+ALTER TABLE
+> alter table rw set unlogged
+NOTICE 00000 rw 1 (PL/pgSQL function f_rw() line 1 at RAISE)
+ALTER TABLE
+> alter table rw set logged
+NOTICE 00000 rw 1 (PL/pgSQL function f_rw() line 1 at RAISE)
+ALTER TABLE
+> alter table rw alter column b type text
+ALTER TABLE
+> create domain dpos as int check (value > 0)
+CREATE DOMAIN
+> alter table rw add column i dpos
+NOTICE 00000 rw 2 (PL/pgSQL function f_rw() line 1 at RAISE)
+ALTER TABLE
+> set timezone to 'UTC'
+SET
+> alter table rw alter column d type timestamptz
+ALTER TABLE
+> set timezone to 'Europe/London'
+SET
+TimeZone=Europe/London
+> alter table rw alter column d type timestamp
+NOTICE 00000 rw 4 (PL/pgSQL function f_rw() line 1 at RAISE)
+ALTER TABLE
+> drop table rw
+DROP TABLE
+> drop domain dpos
+DROP DOMAIN
+> drop event trigger e_rw
+DROP EVENT TRIGGER
+> drop function f_rw()
+DROP FUNCTION

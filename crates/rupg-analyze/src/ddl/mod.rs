@@ -52,6 +52,7 @@ mod reindex;
 mod relation_options;
 mod reloptions;
 mod rename;
+mod rewrite;
 mod row_type;
 mod rule;
 mod schema_elements;
@@ -168,6 +169,19 @@ pub struct Defined {
     pub dropped: Vec<Dropped>,
     /// The commands that the statement did, in their order, for `pg_event_trigger_ddl_commands`.
     pub commands: Vec<Collected>,
+    /// The tables whose rows the statement writes again, in the order of the work queue of `ALTER TABLE`, for the event triggers of `table_rewrite`.
+    pub rewrites: Vec<Rewrite>,
+}
+
+/// A table whose rows a statement writes again, as `EventTriggerTableRewrite` gets it from `ATRewriteTables`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rewrite {
+    /// The OID of the table.
+    pub table: u32,
+    /// The reasons of the rewrite, as the bits of `AT_REWRITE_ALTER_PERSISTENCE`, `AT_REWRITE_DEFAULT_VAL`, `AT_REWRITE_COLUMN_REWRITE` and `AT_REWRITE_ACCESS_METHOD`.
+    pub reason: i32,
+    /// True when a change of a column between `timestamp` and `timestamptz` also writes the rows again if the zone of the session has an offset that is not 0, with `AT_REWRITE_COLUMN_REWRITE`.
+    pub zoned: bool,
 }
 
 /// A command that a statement did, as `EventTriggerCollectSimpleCommand` and `EventTriggerCollectGrant` keep it.
@@ -401,6 +415,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         on_commit: Vec::new(),
         dropped: Vec::new(),
         commands: Vec::new(),
+        rewrites: Vec::new(),
     };
     let mut filled = None;
     let named = definer.named_object(stmt);
@@ -554,6 +569,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         on_commit: definer.on_commit,
         dropped: definer.dropped,
         commands: definer.commands,
+        rewrites: definer.rewrites,
     }
 }
 
@@ -786,6 +802,8 @@ pub(crate) struct Definer<'a, 'c> {
     dropped: Vec<Dropped>,
     /// The commands of [`Defined::commands`].
     commands: Vec<Collected>,
+    /// The tables of [`Defined::rewrites`].
+    rewrites: Vec<Rewrite>,
 }
 
 /// An error for a part of a statement that rupg does not support yet.

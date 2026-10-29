@@ -1,8 +1,9 @@
 //! The firing of the event triggers `ddl_command_start`, `ddl_command_end`, `sql_drop` and `login`, as `EventTriggerDDLCommandStart`, `EventTriggerDDLCommandEnd`, `EventTriggerSQLDrop` and `EventTriggerOnLogin` of `event_trigger.c` run them.
 
-use rupg_analyze::{Collected, Dropped};
+use rupg_analyze::{Collected, Dropped, Rewrite};
 use rupg_common::{Error, SqlState};
 use rupg_sql::nodes::Node;
+use rupg_types::TimeZone;
 use rupg_types::Value;
 use rupg_wire::CommandTag;
 
@@ -14,6 +15,8 @@ const ON_ORIGIN: u8 = b'O';
 const ALWAYS: u8 = b'A';
 const ON_REPLICA: u8 = b'R';
 const DISABLED: u8 = b'D';
+/// `AT_REWRITE_COLUMN_REWRITE`.
+const COLUMN_REWRITE: i32 = 0x04;
 
 /// `filter_event_trigger`: a trigger in the mode `enabled` fires for the role `replica` of `session_replication_role`. A disabled trigger does not fire.
 fn fires(enabled: u8, replica: bool) -> bool {
@@ -38,6 +41,8 @@ pub(super) struct Frame {
     commands: Vec<Collected>,
     /// The rows of `pg_event_trigger_ddl_commands` while the event triggers of `ddl_command_end` run, or `None`.
     ddl: Option<Vec<Vec<Value>>>,
+    /// The table and the reasons while the event triggers of `table_rewrite` run, or `None`.
+    rewrite: Option<(u32, i32)>,
 }
 
 impl Frame {
@@ -244,6 +249,46 @@ impl Connection {
         let result = self.fire_event_triggers("sql_drop", tag, notices);
         self.event_frames.borrow_mut().pop();
         result
+    }
+
+    /// `EventTriggerTableRewrite`: the event triggers of `table_rewrite` for each table that the command `node` writes again, before the rows go to the new files. A change between `timestamp` and `timestamptz` writes the rows again only when the zone of the session has an offset that is not 0, as `TimestampTimestampTzRequiresRewrite` checks it.
+    pub(super) fn fire_table_rewrite(
+        &self,
+        node: &Node,
+        rewrites: &[Rewrite],
+        notices: &mut Vec<Notice>,
+    ) -> Result<(), Error> {
+        if rewrites.is_empty() || !super::event_trigger_object(node) {
+            return Ok(());
+        }
+        let tag = super::definition_tag(node);
+        if self.armed_event_triggers("table_rewrite", tag).is_empty() {
+            return Ok(());
+        }
+        let zoned = || {
+            let name = self.settings.borrow().get("TimeZone").unwrap_or_else(|| "UTC".to_owned());
+            rupg_types::tz::load(&name).is_none_or(|zone| zone.fixed_offset() != Some(0))
+        };
+        for rewrite in rewrites {
+            let mut reason = rewrite.reason;
+            if rewrite.zoned && zoned() {
+                reason |= COLUMN_REWRITE;
+            }
+            if reason == 0 {
+                continue;
+            }
+            let frame = Frame { rewrite: Some((rewrite.table, reason)), ..Frame::default() };
+            self.event_frames.borrow_mut().push(frame);
+            let result = self.fire_event_triggers("table_rewrite", tag, notices);
+            self.event_frames.borrow_mut().pop();
+            result?;
+        }
+        Ok(())
+    }
+
+    /// The table and the reasons of the event trigger of `table_rewrite` that runs, or `None` outside of one.
+    pub(crate) fn table_rewrite(&self) -> Option<(u32, i32)> {
+        self.event_frames.borrow().last().and_then(|f| f.rewrite)
     }
 
     /// The rows of `pg_event_trigger_dropped_objects`, or `None` outside of an event trigger of `sql_drop`.

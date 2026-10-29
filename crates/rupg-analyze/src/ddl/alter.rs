@@ -483,6 +483,14 @@ impl Definer<'_, '_> {
                 let Some(def) = &cmd.def else {
                     return Err(Error::internal("SET EXPRESSION without an expression"));
                 };
+                // `ATExecSetExpression`: the new values of a stored generated column write the rows again.
+                let rel = self.catalog.relation(target.oid);
+                let stored = rel
+                    .and_then(|r| r.column_number(&column).and_then(|n| r.column(n)))
+                    .is_some_and(|c| c.generated == b's');
+                if stored {
+                    self.rewrite(target.oid, super::rewrite::DEFAULT_VAL, false);
+                }
                 passes.expressions.push((column, def.clone()));
             }
             AlterTableType::AT_DropExpression => {
@@ -525,6 +533,9 @@ impl Definer<'_, '_> {
                 let unlogged = cmd.subtype == AlterTableType::AT_SetUnLogged;
                 if self.prep_persistence(target, unlogged)? {
                     passes.persistence = Some(unlogged);
+                    if target.kind == b'r' {
+                        self.rewrite(target.oid, super::rewrite::ALTER_PERSISTENCE, false);
+                    }
                 }
             }
             AlterTableType::AT_ChangeOwner => {
