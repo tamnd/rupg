@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use rupg_analyze::{Derived, Message, Params, SchemaElements, Write, WriteKind};
-use rupg_catalog::{Catalog, database};
+use rupg_catalog::{Catalog, TRIGGER_TRUNCATE, database};
 use rupg_common::{Error, Level as ErrorLevel, Object, SqlState};
 use rupg_encode::Method;
 use rupg_exec::Plan;
@@ -1820,16 +1820,13 @@ impl Connection {
         if tables.is_empty() {
             return Ok(());
         }
-        let replica =
-            self.settings.borrow().get("session_replication_role").as_deref() == Some("replica");
-        let truncate = |t: &&rupg_catalog::Trigger| {
-            !t.internal && t.fires(replica) && t.kind & rupg_catalog::TRIGGER_TRUNCATE != 0
+        let fire = {
+            let (catalog, reader) = (self.catalog(), self.reader());
+            let armed = |&table| trigger::armed(&catalog, &reader, table, TRIGGER_TRUNCATE);
+            tables.iter().map(armed).collect::<Result<Vec<_>, Error>>()?
         };
-        if work.triggers().filter(truncate).any(|t| tables.contains(&t.relation)) {
-            return Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                "TRUNCATE of a table with triggers is not supported yet",
-            ));
+        for (&table, triggers) in tables.iter().zip(&fire) {
+            self.truncate_triggers(triggers, table, true)?;
         }
         let heap = self.store.heap();
         if self.xid.get() == 0 {
@@ -1845,6 +1842,9 @@ impl Connection {
             self.count_truncate(table);
         }
         self.command.set(view.command + 1);
+        for (&table, triggers) in tables.iter().zip(&fire) {
+            self.truncate_triggers(triggers, table, false)?;
+        }
         Ok(())
     }
 
@@ -2308,6 +2308,8 @@ impl Connection {
                         out.row_description(&fields);
                         rows
                     });
+                    // The messages of the triggers that ran before the error.
+                    late.extend(self.trigger_notices());
                     self.notices(&mut late, text, &[], out);
                     for row in sent.iter().flatten() {
                         let values: Vec<Option<&[u8]>> = row.iter().map(Option::as_deref).collect();
