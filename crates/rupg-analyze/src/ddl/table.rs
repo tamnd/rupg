@@ -1431,7 +1431,7 @@ impl Definer<'_, '_> {
         if let Some(error) = error {
             return Err(error);
         }
-        if is_mutable(self.catalog, &expr) {
+        if is_mutable(self.an.env, self.catalog, &expr) {
             return Err(Error::new(
                 SqlState::INVALID_OBJECT_DEFINITION,
                 "generation expression is not immutable",

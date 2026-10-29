@@ -248,7 +248,7 @@ impl Definer<'_, '_> {
                     match &expr.kind {
                         ExprKind::Var(var) if var.attnum > 0 => partkey.attrs.push(var.attnum),
                         _ => {
-                            if is_mutable(self.catalog, &expr) {
+                            if is_mutable(self.an.env, self.catalog, &expr) {
                                 return Err(Error::new(
                                     SqlState::INVALID_OBJECT_DEFINITION,
                                     "functions in partition key expression must be marked IMMUTABLE",

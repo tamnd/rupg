@@ -1507,6 +1507,11 @@ fn to_date(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Date(date))
 }
 
+/// `datetime_format_has_tz`: true when the format has a field of the zone.
+pub fn datetime_format_has_tz(format: &str) -> bool {
+    parse(format, false).is_ok_and(|nodes| datetime_type(&nodes).2)
+}
+
 /// `DCH_datetime_type`: true when the format has a field of the date, of the time and of the zone.
 fn datetime_type(nodes: &[Node]) -> (bool, bool, bool) {
     let (mut dated, mut timed, mut zoned) = (false, false, false);

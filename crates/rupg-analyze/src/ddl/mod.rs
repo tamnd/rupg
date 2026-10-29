@@ -33,6 +33,7 @@ mod generated;
 mod grant;
 mod identity;
 mod index;
+mod jsonpath;
 mod lock;
 mod matview;
 mod objaddr;
@@ -576,6 +577,10 @@ impl Env for SchemaEnv<'_> {
         self.env.predicate_implied(predicate, clauses)
     }
 
+    fn datetime_format_has_tz(&self, format: &str) -> bool {
+        self.env.datetime_format_has_tz(format)
+    }
+
     fn changed_columns(&self, oid: u32) -> Option<Vec<rupg_catalog::Column>> {
         let columns = self.columns.borrow();
         columns.iter().find(|(r, _)| *r == oid).map(|(_, c)| c.clone())
@@ -745,7 +750,7 @@ fn relname(rv: &RangeVar) -> &str {
 }
 
 /// `contain_mutable_functions_after_planning`: true when the expression calls a function that is not immutable. The planner inlines `textanycat` and `anytextcat`, so a call of them is mutable only when the output function of the type of the other argument is.
-fn is_mutable(catalog: &Catalog, expr: &Expr) -> bool {
+fn is_mutable(env: &dyn Env, catalog: &Catalog, expr: &Expr) -> bool {
     let mutable_proc = |oid: u32| match builtin::proc_by_oid(oid) {
         Some(proc) => proc.volatile != b'i',
         None => catalog.function(oid).is_none_or(|f| f.volatile != b'i'),
@@ -770,6 +775,13 @@ fn is_mutable(catalog: &Catalog, expr: &Expr) -> bool {
                 mutable_proc(output) || mutable_proc(input)
             }
             ExprKind::SqlValue(_) => true,
+            ExprKind::JsonExpr(j) => match &j.path.kind {
+                ExprKind::Const(Value::JsonPath(path)) => {
+                    jsonpath::is_mutable(env, path, &j.passing)
+                }
+                ExprKind::Const(Value::Null) => false,
+                _ => true,
+            },
             _ => false,
         };
         mutable.then_some(())

@@ -1631,6 +1631,10 @@ impl Env for Reader<'_> {
         })
     }
 
+    fn datetime_format_has_tz(&self, format: &str) -> bool {
+        rupg_func::datetime_format_has_tz(format)
+    }
+
     fn transition_table(&self, name: &str) -> Option<u32> {
         let transition = self.transition.as_ref()?;
         transition.rows(name).map(|_| transition.rows.table)
