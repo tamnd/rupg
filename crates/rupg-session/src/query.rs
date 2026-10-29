@@ -3,7 +3,7 @@
 //! [`Reader`] gives the analyzer and the functions the settings, the user, the database, the time zone, the times of the transaction and the statement, and the process ID. The time zone is the zone of [`rupg_types::tz`] for the canonical name in the setting.
 
 use std::borrow::Cow;
-use std::cell::{Ref, RefCell};
+use std::cell::{Cell, Ref, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -117,13 +117,15 @@ pub(crate) fn now(clock: &dyn Clock) -> i64 {
     i64::try_from(clock.wall_us()).unwrap_or(i64::MAX).saturating_sub(EPOCH_SHIFT_US)
 }
 
-/// The old and the new rows of a write for the triggers with transition tables, as the tuplestores of `TransitionCaptureState`.
+/// The old and the new rows of the writes of one event of a table in a query for the triggers with transition tables, as the tuplestores of `AfterTriggersTableData`. All the writes of the query with the event on the table, as the statements of `WITH` and the actions of the foreign keys, add their rows to the same tables.
 #[derive(Debug, Default)]
 pub(crate) struct Captured {
     /// The table of the write.
     pub(crate) table: u32,
-    pub(crate) old: Rc<Vec<Vec<Value>>>,
-    pub(crate) new: Rc<Vec<Vec<Value>>>,
+    pub(crate) old: RefCell<Rc<Vec<Vec<Value>>>>,
+    pub(crate) new: RefCell<Rc<Vec<Vec<Value>>>>,
+    /// `closed`: true once a trigger read the rows. The rows of the later writes of the query then go to new tables.
+    pub(crate) closed: Cell<bool>,
 }
 
 /// The transition tables of one trigger: the rows of the write with the names of `REFERENCING OLD TABLE` and `REFERENCING NEW TABLE`.
@@ -136,11 +138,11 @@ pub(crate) struct Transition {
 
 impl Transition {
     /// The rows of the transition table `name`.
-    fn rows(&self, name: &str) -> Option<&Rc<Vec<Vec<Value>>>> {
+    fn rows(&self, name: &str) -> Option<Rc<Vec<Vec<Value>>>> {
         if self.old.as_deref() == Some(name) {
-            Some(&self.rows.old)
+            Some(Rc::clone(&self.rows.old.borrow()))
         } else if self.new.as_deref() == Some(name) {
-            Some(&self.rows.new)
+            Some(Rc::clone(&self.rows.new.borrow()))
         } else {
             None
         }
@@ -1063,7 +1065,7 @@ impl rupg_func::Session for Reader<'_> {
     }
 
     fn transition_rows(&self, name: &str) -> Option<Rc<Vec<Vec<Value>>>> {
-        self.transition.as_ref()?.rows(name).cloned()
+        self.transition.as_ref()?.rows(name)
     }
 
     fn schemas(&self) -> Vec<String> {
