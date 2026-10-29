@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.4.10 (2026-10-29)
+
 ### Added
 
 - `JSON_ARRAY` and `JSON_OBJECT` with a `date`, `timestamp` or `timestamptz` argument are mutable in an index and a generated column, as in PostgreSQL (#1139).
