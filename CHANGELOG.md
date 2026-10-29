@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- The view action in pg_rewrite now has subqueries, sublinks, views of views, set operations and queries of WITH in the form of PostgreSQL 19 (#916) (#1103).
+
 ## 0.4.7 (2026-10-29)
 
 ### Added

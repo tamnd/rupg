@@ -4,15 +4,19 @@ use std::collections::BTreeSet;
 use std::fmt::Write;
 
 use rupg_catalog::Catalog;
+use rupg_pgcatalog::builtin;
 use rupg_types::{Numeric, NumericSign, Value};
 
+use crate::Relation;
 use crate::collate::{self, State};
+use crate::cte::Cte;
 use crate::expr::{
-    BoolOp, BoolTest, CastForm, Expr, ExprKind, FuncForm, NullTreatment, SqlValue, Var,
+    BoolOp, BoolTest, CastForm, Expr, ExprKind, FuncForm, NullTreatment, SqlValue, SubLinkKind, Var,
 };
 use crate::from::{FromItem, Join, JoinKind};
 use crate::perm::PermInfo;
 use crate::select::Query;
+use crate::setop::{SetKind, SetOp, SetTree};
 use crate::sort::SortGroup;
 use crate::window::WindowClause;
 use crate::{typcache, types};
@@ -41,8 +45,22 @@ enum Entry<'a> {
     Group,
 }
 
+/// What a query below needs of a query above it to write its columns.
+#[derive(Clone)]
+struct Frame {
+    rt: Vec<usize>,
+    nulled: Vec<Vec<usize>>,
+    scope: Option<Vec<usize>>,
+}
+
 struct Writer<'a> {
     query: &'a Query,
+    /// The relations of the query and of the queries above it, from the inside out.
+    levels: Vec<&'a [Relation]>,
+    /// The queries above the query, from the inside out.
+    outer: Vec<Frame>,
+    /// The privileges of the statement that the relations of this query use, in order. Each query has its own `rteperminfos`.
+    own_perms: Vec<usize>,
     perms: &'a [PermInfo],
     catalog: Option<&'a Catalog>,
     out: String,
@@ -64,6 +82,10 @@ struct Writer<'a> {
     substitute: bool,
     /// `ressortgroupref` of each target.
     refs: Vec<usize>,
+    /// `canSetTag`: false for a query of `WITH`.
+    set_tag: bool,
+    /// True for a `SELECT` of a set operation. The analysis casts its columns to the types of the operation, but PostgreSQL keeps the columns as the `SELECT` gives them.
+    leaf: bool,
 }
 
 impl<'a> Writer<'a> {
@@ -72,8 +94,11 @@ impl<'a> Writer<'a> {
         perms: &'a [PermInfo],
         catalog: Option<&'a Catalog>,
     ) -> Option<Writer<'a>> {
-        let unsupported = query.set_op.is_some()
-            || !query.ctes.is_empty()
+        let unsupported = query.set_op.as_ref().is_some_and(|op| !set_supported(op))
+            || query.recursive
+            || query.ctes.iter().any(|c| {
+                c.recursive || c.search.is_some() || c.cycle.is_some() || c.write.is_some()
+            })
             || query.windows.iter().any(|w| !w.run.is_empty())
             || !query.row_marks.is_empty()
             || !query.grouping_sets.is_empty()
@@ -85,19 +110,33 @@ impl<'a> Writer<'a> {
             || query.is_return
             || query.pulled != 0
             || query.relations.iter().any(|r| {
-                r.oid == 0
-                    || r.subquery.is_some()
+                (r.oid == 0 && r.subquery.is_none())
                     || r.function.is_some()
                     || r.values.is_some()
-                    || r.cte.is_some()
+                    || r.cte.as_ref().is_some_and(|c| {
+                        c.work.is_some()
+                            || c.write.is_some()
+                            || c.transition
+                            || !query.ctes.iter().any(|d| d.name == c.name)
+                    })
                     || r.tablesample.is_some()
                     || r.excluded
             });
         if unsupported {
             return None;
         }
+        let own_perms: Vec<usize> = query
+            .relations
+            .iter()
+            .filter_map(|r| r.perm)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
         let mut writer = Writer {
             query,
+            levels: vec![&query.relations],
+            outer: Vec::new(),
+            own_perms,
             perms,
             catalog,
             out: String::new(),
@@ -110,7 +149,16 @@ impl<'a> Writer<'a> {
             group_rt: 0,
             substitute: false,
             refs: vec![0; query.targets.len()],
+            set_tag: true,
+            leaf: false,
         };
+        // Each `SELECT` of a set operation is a subquery of the range table, in the order of the tree, and the query has no `FROM`.
+        if query.set_op.is_some() {
+            for i in 0..query.relations.len() {
+                writer.entries.push(Entry::Relation(i));
+                writer.rt[i] = i + 1;
+            }
+        }
         for item in &query.from {
             writer.number(item)?;
         }
@@ -131,6 +179,30 @@ impl<'a> Writer<'a> {
             }
         }
         Some(writer)
+    }
+
+    /// A writer for a query inside this query.
+    fn nested<'b>(&self, query: &'b Query) -> Option<Writer<'b>>
+    where
+        'a: 'b,
+    {
+        let mut writer = Writer::new(query, self.perms, self.catalog)?;
+        writer.levels.extend(self.levels.iter().copied());
+        writer.outer.push(Frame {
+            rt: self.rt.clone(),
+            nulled: self.nulled.clone(),
+            scope: self.scope.clone(),
+        });
+        writer.outer.extend(self.outer.iter().cloned());
+        Some(writer)
+    }
+
+    /// Writes a query inside this query.
+    fn subquery(&mut self, query: &Query) -> Option<()> {
+        let mut writer = self.nested(query)?;
+        writer.query(&[])?;
+        self.out.push_str(&writer.out);
+        Some(())
     }
 
     /// Gives the range table indexes to the relations of `item` and to its joins, and returns the relations in it.
@@ -186,17 +258,25 @@ impl<'a> Writer<'a> {
         let q = self.query;
         let has_aggs = q.targets.iter().map(|t| &t.expr).chain(&q.having).any(has_agg);
         let has_windows = q.targets.iter().any(|t| has_window(&t.expr));
+        let has_sublinks = q.exprs().into_iter().any(has_sublink);
         if q.exprs().into_iter().any(unsupported) {
             return None;
         }
-        self.out.push_str("{QUERY :commandType 1 :querySource 0 :canSetTag true :utilityStmt <> :resultRelation 0");
         let _ = write!(
             self.out,
-            " :hasAggs {} :hasWindowFuncs {} :hasTargetSRFs false :hasSubLinks false :hasDistinctOn false :hasRecursive false :hasModifyingCTE false :hasForUpdate false :hasRowSecurity false :hasGroupRTE {} :isReturn false :cteList <> :rtable ",
+            "{{QUERY :commandType 1 :querySource 0 :canSetTag {} :utilityStmt <> :resultRelation 0",
+            self.set_tag
+        );
+        let _ = write!(
+            self.out,
+            " :hasAggs {} :hasWindowFuncs {} :hasTargetSRFs false :hasSubLinks {} :hasDistinctOn false :hasRecursive false :hasModifyingCTE false :hasForUpdate false :hasRowSecurity false :hasGroupRTE {} :isReturn false :cteList ",
             has_aggs,
             has_windows,
+            has_sublinks,
             self.group_rt != 0
         );
+        self.list(&q.ctes, |w, c| w.cte(c))?;
+        self.out.push_str(" :rtable ");
         let entries: Vec<usize> = (0..self.entries.len()).collect();
         self.list(&entries, |w, &at| w.entry(at))?;
         self.out.push_str(" :rteperminfos ");
@@ -213,7 +293,7 @@ impl<'a> Writer<'a> {
         let targets: Vec<_> = q.targets.iter().enumerate().collect();
         self.list(&targets, |w, &(i, t)| {
             w.out.push_str("{TARGETENTRY :expr ");
-            w.expr(&t.expr)?;
+            w.expr(if w.leaf && !t.junk { uncast(&t.expr) } else { &t.expr })?;
             let name = if t.junk { None } else { Some(names.next().copied().unwrap_or(&t.name)) };
             let (table, column) = t.origin.unwrap_or((0, 0));
             let _ = write!(w.out, " :resno {} :resname ", i + 1);
@@ -245,9 +325,14 @@ impl<'a> Writer<'a> {
         self.option(q.limit.as_ref())?;
         let _ = write!(
             self.out,
-            " :limitOption {} :rowMarks <> :setOperations <> :constraintDeps ",
+            " :limitOption {} :rowMarks <> :setOperations ",
             u8::from(q.with_ties)
         );
+        match &q.set_op {
+            Some(op) => self.set_op(op)?,
+            None => self.out.push_str("<>"),
+        }
+        self.out.push_str(" :constraintDeps ");
         if q.constraint_deps.is_empty() {
             self.out.push_str("<>");
         } else {
@@ -364,9 +449,39 @@ impl<'a> Writer<'a> {
                 let columns =
                     r.columns.iter().zip(given).map(|(c, a)| a.unwrap_or(&c.name)).collect();
                 self.alias(&r.name, Some(columns));
+                if let Some(c) = &r.cte {
+                    let cte = self.query.ctes.iter().find(|d| d.name == c.name)?;
+                    let collations = self.cte_collations(cte)?;
+                    self.out.push_str(" :rtekind 6 :ctename ");
+                    self.token(Some(&c.name));
+                    self.out.push_str(" :ctelevelsup 0 :self_reference false :coltypes ");
+                    self.oids(r.columns.iter().map(|c| c.ty));
+                    self.out.push_str(" :coltypmods ");
+                    self.typmods(r.columns.iter().map(|c| c.typmod));
+                    self.out.push_str(" :colcollations ");
+                    self.oids(collations);
+                    self.out.push_str(" :lateral false :inFromCl true :securityQuals <>}");
+                    return Some(());
+                }
+                if let Some(subquery) = r.subquery.as_deref()
+                    && r.oid == 0
+                {
+                    self.out.push_str(" :rtekind 1 :subquery ");
+                    let mut writer = self.nested(subquery)?;
+                    writer.leaf = self.query.set_op.is_some();
+                    writer.query(&[])?;
+                    self.out.push_str(&writer.out);
+                    let _ = write!(
+                        self.out,
+                        " :security_barrier false :relid 0 :inh false :relkind <> :rellockmode 0 :perminfoindex 0 :lateral {} :inFromCl {} :securityQuals <>}}",
+                        r.lateral,
+                        self.query.set_op.is_none()
+                    );
+                    return Some(());
+                }
                 let kind = self.catalog?.relation(r.oid)?.kind.code();
                 let perm = match r.perm {
-                    Some(p) => p + 1,
+                    Some(p) => self.own_perms.iter().position(|&o| o == p)? + 1,
                     None => 0,
                 };
                 let _ = write!(
@@ -450,11 +565,9 @@ impl<'a> Writer<'a> {
 
     fn perms(&mut self) -> Option<()> {
         let (q, perms) = (self.query, self.perms);
-        let used: Vec<usize> = q.relations.iter().filter_map(|r| r.perm).collect();
-        if used.len() != perms.len() || (0..perms.len()).any(|p| !used.contains(&p)) {
-            return None;
-        }
-        self.list(perms, |w, p| {
+        let own: Vec<&PermInfo> =
+            self.own_perms.iter().map(|&p| perms.get(p)).collect::<Option<_>>()?;
+        self.list(&own, |w, p| {
             let only = q.relations.iter().find(|r| r.oid == p.relid).is_some_and(|r| r.only);
             let _ = write!(
                 w.out,
@@ -514,19 +627,129 @@ impl<'a> Writer<'a> {
 
     fn sort_groups(&mut self, items: &[SortGroup]) -> Option<()> {
         let q = self.query;
-        self.list(items, |w, s| {
-            let (eq, reverse) = if s.operator == 0 {
-                (typcache::operators(q.targets[s.target].expr.ty).eq, false)
-            } else {
-                typcache::equality_for_ordering(s.operator)?
-            };
-            let _ = write!(
-                w.out,
-                "{{SORTGROUPCLAUSE :tleSortGroupRef {} :eqop {eq} :sortop {} :reverse_sort {reverse} :nulls_first {} :hashable {}}}",
-                w.refs[s.target], s.operator, s.nulls_first, s.hashable
-            );
-            Some(())
-        })
+        self.list(items, |w, s| w.sort_group(s, w.refs[s.target], q.targets[s.target].expr.ty))
+    }
+
+    /// A `SortGroupClause` of the column of the type `ty`.
+    fn sort_group(&mut self, s: &SortGroup, sortref: usize, ty: u32) -> Option<()> {
+        let (eq, reverse) = if s.operator == 0 {
+            (typcache::operators(ty).eq, false)
+        } else {
+            typcache::equality_for_ordering(s.operator)?
+        };
+        let _ = write!(
+            self.out,
+            "{{SORTGROUPCLAUSE :tleSortGroupRef {sortref} :eqop {eq} :sortop {} :reverse_sort {reverse} :nulls_first {} :hashable {}}}",
+            s.operator, s.nulls_first, s.hashable
+        );
+        Some(())
+    }
+
+    /// A part of the tree of a set operation: a `RangeTblRef` of a `SELECT`, or a `SetOperationStmt`.
+    fn set_tree(&mut self, tree: &SetTree) -> Option<()> {
+        match tree {
+            SetTree::Leaf(i) => {
+                let _ = write!(self.out, "{{RANGETBLREF :rtindex {}}}", self.rt.get(*i)?);
+                Some(())
+            }
+            SetTree::Op(op) => self.set_op(op),
+        }
+    }
+
+    fn set_op(&mut self, op: &SetOp) -> Option<()> {
+        let kind = match op.kind {
+            SetKind::Union => 1,
+            SetKind::Intersect => 2,
+            SetKind::Except => 3,
+        };
+        let _ = write!(self.out, "{{SETOPERATIONSTMT :op {kind} :all {} :larg ", op.all);
+        self.set_tree(&op.left)?;
+        self.out.push_str(" :rarg ");
+        self.set_tree(&op.right)?;
+        self.out.push_str(" :colTypes ");
+        self.oids(op.columns.iter().map(|c| c.0));
+        self.out.push_str(" :colTypmods ");
+        self.typmods(op.columns.iter().map(|c| c.1));
+        self.out.push_str(" :colCollations ");
+        self.oids(op.collations.iter().copied());
+        self.out.push_str(" :groupClauses ");
+        self.list(&op.groups, |w, s| w.sort_group(s, 0, op.columns.get(s.target)?.0))?;
+        self.out.push('}');
+        Some(())
+    }
+
+    /// A query of `WITH`, as `CommonTableExpr`.
+    fn cte(&mut self, cte: &Cte) -> Option<()> {
+        let refs = self
+            .query
+            .relations
+            .iter()
+            .filter(|r| r.cte.as_ref().is_some_and(|c| c.name == cte.name))
+            .count();
+        let collations = self.cte_collations(cte)?;
+        self.out.push_str("{COMMONTABLEEXPR :ctename ");
+        self.token(Some(&cte.name));
+        self.out.push_str(" :aliascolnames ");
+        self.names(cte.aliases.iter().map(String::as_str));
+        let materialized = match cte.materialized {
+            None => 0,
+            Some(true) => 1,
+            Some(false) => 2,
+        };
+        let _ = write!(self.out, " :ctematerialized {materialized} :ctequery ");
+        let mut writer = self.nested(&cte.query)?;
+        writer.set_tag = false;
+        writer.query(&[])?;
+        self.out.push_str(&writer.out);
+        let _ = write!(
+            self.out,
+            " :search_clause <> :cycle_clause <> :location -1 :cterecursive false :cterefcount {refs} :ctecolnames "
+        );
+        self.names(cte.columns.iter().map(|c| c.name.as_str()));
+        self.out.push_str(" :ctecoltypes ");
+        self.oids(cte.columns.iter().map(|c| c.ty));
+        self.out.push_str(" :ctecoltypmods ");
+        self.typmods(cte.columns.iter().map(|c| c.typmod));
+        self.out.push_str(" :ctecolcollations ");
+        self.oids(collations);
+        self.out.push('}');
+        Some(())
+    }
+
+    /// `ctecolcollations`: the collation of each column of the query of `WITH`.
+    fn cte_collations(&self, cte: &Cte) -> Option<Vec<u32>> {
+        let writer = self.nested(&cte.query)?;
+        Some(
+            cte.query
+                .targets
+                .iter()
+                .filter(|t| !t.junk)
+                .map(|t| writer.collation(&t.expr))
+                .collect(),
+        )
+    }
+
+    /// An OID list.
+    fn oids(&mut self, values: impl IntoIterator<Item = u32>) {
+        self.typed_list('o', values.into_iter().map(i64::from));
+    }
+
+    /// An integer list of type modifiers.
+    fn typmods(&mut self, values: impl IntoIterator<Item = i32>) {
+        self.typed_list('i', values.into_iter().map(i64::from));
+    }
+
+    fn typed_list(&mut self, kind: char, values: impl Iterator<Item = i64>) {
+        let mut values = values.peekable();
+        if values.peek().is_none() {
+            self.out.push_str("<>");
+            return;
+        }
+        let _ = write!(self.out, "({kind}");
+        for v in values {
+            let _ = write!(self.out, " {v}");
+        }
+        self.out.push(')');
     }
 
     fn window(&mut self, winref: usize, c: &WindowClause) -> Option<()> {
@@ -564,15 +787,14 @@ impl<'a> Writer<'a> {
 
     /// `exprCollation`.
     fn collation(&self, e: &Expr) -> u32 {
-        collate::expr_collation(e, &[&self.query.relations], self.catalog)
+        collate::expr_collation(e, &self.levels, self.catalog)
     }
 
     /// The collation that the inputs of a node give it, `inputcollid`.
     fn input_collation(&self, args: &[Expr]) -> u32 {
-        let levels: &[&[crate::Relation]] = &[&self.query.relations];
         let mut merged = State::None;
         for arg in args {
-            let Ok(state) = collate::state(arg, levels, self.catalog) else { return 0 };
+            let Ok(state) = collate::state(arg, &self.levels, self.catalog) else { return 0 };
             match merged.merge(state, self.catalog) {
                 Ok(m) => merged = m,
                 Err(_) => return 0,
@@ -801,6 +1023,49 @@ impl<'a> Writer<'a> {
                 );
                 Some(())
             }
+            ExprKind::SubLink(sub) => {
+                if sub.alternative.is_some() || sub.pulled {
+                    return None;
+                }
+                let kind = match sub.kind {
+                    SubLinkKind::Exists => 0,
+                    SubLinkKind::All => 1,
+                    SubLinkKind::Any => 2,
+                    SubLinkKind::RowCompare => 3,
+                    SubLinkKind::Expr => 4,
+                    SubLinkKind::Array => 6,
+                    SubLinkKind::Multi { .. } => return None,
+                };
+                let _ = write!(self.out, "{{SUBLINK :subLinkType {kind} :subLinkId 0 :testexpr ");
+                self.option(sub.test.as_ref())?;
+                self.out.push_str(" :operName ");
+                match sub.test.as_ref() {
+                    Some(test) => {
+                        let opno = first_operator(test)?;
+                        let name = match self.catalog.and_then(|c| c.operator(opno)) {
+                            Some(o) => o.name.clone(),
+                            None => builtin::operator_by_oid(opno)?.name.to_string(),
+                        };
+                        self.names([name.as_str()]);
+                    }
+                    None => self.out.push_str("<>"),
+                }
+                self.out.push_str(" :subselect ");
+                self.subquery(&sub.query)?;
+                self.out.push_str(" :location -1}");
+                Some(())
+            }
+            ExprKind::SubColumn(at) => {
+                let _ = write!(
+                    self.out,
+                    "{{PARAM :paramkind 2 :paramid {} :paramtype {} :paramtypmod {} :paramcollid {} :location -1}}",
+                    at + 1,
+                    e.ty,
+                    e.typmod,
+                    self.collation(e)
+                );
+                Some(())
+            }
             ExprKind::SqlValue(value) => {
                 let op = match value {
                     SqlValue::CurrentDate => 0,
@@ -871,25 +1136,30 @@ impl<'a> Writer<'a> {
     }
 
     fn var(&mut self, var: Var, e: &Expr) -> Option<()> {
-        if var.levels_up != 0 {
-            return None;
-        }
-        let index = *self.rt.get(var.relation)?;
+        let up = var.levels_up;
+        let (rt, nulled, scope) = if up == 0 {
+            (&self.rt, &self.nulled, &self.scope)
+        } else {
+            let frame = self.outer.get(up - 1)?;
+            (&frame.rt, &frame.nulled, &frame.scope)
+        };
+        let index = *rt.get(var.relation)?;
+        let nulled: Vec<i32> = nulled
+            .get(var.relation)?
+            .iter()
+            .filter(|&j| scope.as_ref().is_none_or(|s| s.contains(j)))
+            .map(|&j| i32::try_from(j).unwrap_or(0))
+            .collect();
         let collation = self.collation(e);
         let _ = write!(
             self.out,
             "{{VAR :varno {index} :varattno {} :vartype {} :vartypmod {} :varcollid {collation} :varnullingrels ",
             var.attnum, e.ty, e.typmod
         );
-        let nulled: Vec<i32> = self.nulled[var.relation]
-            .iter()
-            .filter(|&j| self.scope.as_ref().is_none_or(|s| s.contains(j)))
-            .map(|&j| i32::try_from(j).unwrap_or(0))
-            .collect();
         self.bits(nulled);
         let _ = write!(
             self.out,
-            " :varlevelsup 0 :varreturningtype 0 :varnosyn {index} :varattnosyn {} :location -1}}",
+            " :varlevelsup {up} :varreturningtype 0 :varnosyn {index} :varattnosyn {} :location -1}}",
             var.attnum
         );
         Some(())
@@ -1030,6 +1300,20 @@ fn unplaced(e: &Expr) -> Expr {
     e
 }
 
+fn has_sublink(e: &Expr) -> bool {
+    matches!(e.kind, ExprKind::SubLink(_)) || e.children().into_iter().any(has_sublink)
+}
+
+/// The operator of the first comparison in the test of a subquery, which `operName` names.
+fn first_operator(e: &Expr) -> Option<u32> {
+    if let ExprKind::Func(f) = &e.kind
+        && let FuncForm::Operator(opno) = f.form
+    {
+        return Some(opno);
+    }
+    e.children().into_iter().find_map(first_operator)
+}
+
 fn has_window(e: &Expr) -> bool {
     matches!(e.kind, ExprKind::Window(_)) || e.children().into_iter().any(has_window)
 }
@@ -1038,10 +1322,9 @@ fn has_agg(e: &Expr) -> bool {
     matches!(e.kind, ExprKind::Agg(_)) || e.children().into_iter().any(has_agg)
 }
 
-/// True when the expression has a subquery or a `GROUPING` call, which the writer does not write.
+/// True when the expression has a `GROUPING` call, which the writer does not write.
 fn unsupported(e: &Expr) -> bool {
-    matches!(e.kind, ExprKind::SubLink(_) | ExprKind::Grouping(_))
-        || e.children().into_iter().any(unsupported)
+    matches!(e.kind, ExprKind::Grouping(_)) || e.children().into_iter().any(unsupported)
 }
 
 fn join_type(kind: JoinKind) -> Option<u8> {
@@ -1058,5 +1341,27 @@ fn cast_format(form: CastForm) -> u8 {
     match form {
         CastForm::Explicit => 1,
         CastForm::Implicit => 2,
+    }
+}
+
+/// True when the writer can write the set operation: no recursive `UNION`.
+fn set_supported(op: &SetOp) -> bool {
+    let part = |t: &SetTree| match t {
+        SetTree::Leaf(_) => true,
+        SetTree::Op(op) => set_supported(op),
+    };
+    op.work.is_none() && part(&op.left) && part(&op.right)
+}
+
+/// The expression under the casts that the analysis added.
+fn uncast(e: &Expr) -> &Expr {
+    match &e.kind {
+        ExprKind::Func(f) if matches!(f.form, FuncForm::ImplicitCast) && !f.args.is_empty() => {
+            uncast(&f.args[0])
+        }
+        ExprKind::Relabel(arg, CastForm::Implicit)
+        | ExprKind::CoerceViaIo(arg, CastForm::Implicit)
+        | ExprKind::CoerceToDomain(arg, CastForm::Implicit) => uncast(arg),
+        _ => e,
     }
 }
