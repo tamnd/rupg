@@ -1,0 +1,50 @@
+!details
+> CREATE ROLE pub_user_x LOGIN
+CREATE ROLE
+> GRANT CREATE ON DATABASE ixam112 TO pub_user_x
+GRANT
+> CREATE SCHEMA pub_s
+CREATE SCHEMA
+> CREATE TABLE pub_s.t (a int, b text)
+CREATE TABLE
+> CREATE TABLE pub_t (a int, b text)
+CREATE TABLE
+> ALTER TABLE pub_t OWNER TO pub_user_x
+ALTER TABLE
+> CREATE COLLATION user_collation FROM "C"
+CREATE COLLATION
+> CREATE PUBLICATION p1 FOR TABLE pub_t WHERE (b < '2' COLLATE user_collation)
+ERROR 0A000 invalid publication WHERE expression at 46
+DETAIL User-defined collations are not allowed.
+> CREATE PUBLICATION p2 FOR TABLE pub_t WHERE (b < '2' COLLATE "C")
+CREATE PUBLICATION
+> SET ROLE pub_user_x
+SET
+is_superuser=off
+> CREATE PUBLICATION p3 FOR TABLES IN SCHEMA pub_s
+ERROR 42501 must be superuser to create FOR TABLES IN SCHEMA publication
+> CREATE PUBLICATION p4 FOR ALL TABLES
+ERROR 42501 must be superuser to create a FOR ALL TABLES or ALL SEQUENCES publication
+> CREATE PUBLICATION p5 FOR TABLE pub_t
+CREATE PUBLICATION
+> RESET ROLE
+RESET
+is_superuser=on
+> SELECT pubname FROM pg_publication ORDER BY 1
+fields pubname@pg_publication.2:19:64:-1
+row p2
+row p5
+SELECT 2
+> DROP PUBLICATION p2, p5
+DROP PUBLICATION
+> DROP TABLE pub_t
+DROP TABLE
+> DROP COLLATION user_collation
+DROP COLLATION
+> DROP SCHEMA pub_s CASCADE
+NOTICE 00000 drop cascades to table pub_s.t
+DROP SCHEMA
+> REVOKE CREATE ON DATABASE ixam112 FROM pub_user_x
+REVOKE
+> DROP ROLE pub_user_x
+DROP ROLE

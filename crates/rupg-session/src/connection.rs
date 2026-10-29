@@ -6865,6 +6865,16 @@ mod tests {
         big_stack(|| script(include_str!("connection/json_ctor_mutable.test")));
     }
 
+    /// `CreatePublication` needs a superuser for `FOR ALL TABLES` and `FOR TABLES IN SCHEMA`, and a row filter rejects a user-defined collation. `connection/publication_checks.test` is the output of PostgreSQL 19 for the same script in a new database, `ixam112`, which is `postgres` here.
+    #[test]
+    fn publication_checks() {
+        big_stack(|| {
+            script(
+                &include_str!("connection/publication_checks.test").replace("ixam112", "postgres"),
+            );
+        });
+    }
+
     /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.
     #[test]
     fn role_settings_at_start() {
