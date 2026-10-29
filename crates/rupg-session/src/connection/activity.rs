@@ -399,7 +399,7 @@ impl Connection {
     }
 
     /// `pgstat_track_counts`.
-    fn counts_tracked(&self) -> bool {
+    pub(super) fn counts_tracked(&self) -> bool {
         self.settings.borrow().get("track_counts").as_deref() != Some("off")
     }
 

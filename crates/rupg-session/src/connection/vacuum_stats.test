@@ -1,0 +1,177 @@
+!details
+> create table vs1 (a int, t text)
+CREATE TABLE
+> insert into vs1 select g, 't' || g from generate_series(1, 10) g
+INSERT 0 10
+> select relname, last_analyze is not null as analyzed, last_vacuum is not null as vacuumed, vacuum_count, analyze_count from pg_stat_user_tables where relname = 'vs1'
+fields relname@pg_stat_user_tables.3:19:64:-1,analyzed:16:1:-1,vacuumed:16:1:-1,vacuum_count@pg_stat_user_tables.23:20:8:-1,analyze_count@pg_stat_user_tables.25:20:8:-1
+row vs1,f,f,0,0
+SELECT 1
+> vacuum vs1
+VACUUM
+> select relname, last_analyze is not null as analyzed, last_vacuum is not null as vacuumed, vacuum_count, analyze_count, n_live_tup from pg_stat_user_tables where relname = 'vs1'
+fields relname@pg_stat_user_tables.3:19:64:-1,analyzed:16:1:-1,vacuumed:16:1:-1,vacuum_count@pg_stat_user_tables.23:20:8:-1,analyze_count@pg_stat_user_tables.25:20:8:-1,n_live_tup@pg_stat_user_tables.15:20:8:-1
+row vs1,f,t,1,0,10
+SELECT 1
+> analyze vs1
+ANALYZE
+> select relname, last_analyze is not null as analyzed, vacuum_count, analyze_count, n_live_tup from pg_stat_user_tables where relname = 'vs1'
+fields relname@pg_stat_user_tables.3:19:64:-1,analyzed:16:1:-1,vacuum_count@pg_stat_user_tables.23:20:8:-1,analyze_count@pg_stat_user_tables.25:20:8:-1,n_live_tup@pg_stat_user_tables.15:20:8:-1
+row vs1,t,1,1,10
+SELECT 1
+> delete from vs1 where a > 5
+DELETE 5
+> analyze vs1 (a)
+ANALYZE
+> select vacuum_count, analyze_count, n_live_tup from pg_stat_user_tables where relname = 'vs1'
+fields vacuum_count@pg_stat_user_tables.23:20:8:-1,analyze_count@pg_stat_user_tables.25:20:8:-1,n_live_tup@pg_stat_user_tables.15:20:8:-1
+row 1,2,5
+SELECT 1
+> vacuum analyze vs1
+VACUUM
+> select vacuum_count, analyze_count, n_live_tup, n_dead_tup from pg_stat_user_tables where relname = 'vs1'
+fields vacuum_count@pg_stat_user_tables.23:20:8:-1,analyze_count@pg_stat_user_tables.25:20:8:-1,n_live_tup@pg_stat_user_tables.15:20:8:-1,n_dead_tup@pg_stat_user_tables.16:20:8:-1
+row 2,3,5,0
+SELECT 1
+> vacuum full vs1
+VACUUM
+> select vacuum_count, analyze_count from pg_stat_user_tables where relname = 'vs1'
+fields vacuum_count@pg_stat_user_tables.23:20:8:-1,analyze_count@pg_stat_user_tables.25:20:8:-1
+row 2,3
+SELECT 1
+> vacuum (process_main false) vs1
+VACUUM
+> select vacuum_count from pg_stat_user_tables where relname = 'vs1'
+fields vacuum_count@pg_stat_user_tables.23:20:8:-1
+row 2
+SELECT 1
+> select last_vacuum <= now() + interval '1 hour' as ok, last_analyze > now() - interval '1 hour' as ok2 from pg_stat_user_tables where relname = 'vs1'
+fields ok:16:1:-1,ok2:16:1:-1
+row t,t
+SELECT 1
+> create table vs_p (a int, b text) partition by list (a)
+CREATE TABLE
+> create table vs_p1 partition of vs_p for values in (1)
+CREATE TABLE
+> insert into vs_p values (1, 'a')
+INSERT 0 1
+> analyze only vs_p
+ANALYZE
+> select relname, last_analyze is not null as analyzed, last_vacuum is not null as vacuumed from pg_stat_user_tables where relid in ('vs_p'::regclass, 'vs_p1'::regclass) order by relname
+fields relname@pg_stat_user_tables.3:19:64:-1,analyzed:16:1:-1,vacuumed:16:1:-1
+row vs_p,t,f
+row vs_p1,f,f
+SELECT 2
+> analyze vs_p
+ANALYZE
+> select relname, last_analyze is not null as analyzed, last_vacuum is not null as vacuumed, analyze_count from pg_stat_user_tables where relid in ('vs_p'::regclass, 'vs_p1'::regclass) order by relname
+fields relname@pg_stat_user_tables.3:19:64:-1,analyzed:16:1:-1,vacuumed:16:1:-1,analyze_count@pg_stat_user_tables.25:20:8:-1
+row vs_p,t,f,2
+row vs_p1,t,f,1
+SELECT 2
+> vacuum vs_p
+VACUUM
+> select relname, last_vacuum is not null as vacuumed, vacuum_count from pg_stat_user_tables where relid in ('vs_p'::regclass, 'vs_p1'::regclass) order by relname
+fields relname@pg_stat_user_tables.3:19:64:-1,vacuumed:16:1:-1,vacuum_count@pg_stat_user_tables.23:20:8:-1
+row vs_p,f,0
+row vs_p1,t,1
+SELECT 2
+> create table vs_i (a int primary key, b text)
+CREATE TABLE
+> create table vs_c () inherits (vs_i)
+CREATE TABLE
+> insert into vs_c values (1, 'aaa'), (2, 'bbb')
+INSERT 0 2
+> analyze only vs_i
+ANALYZE
+> select relname, last_analyze is not null as analyzed, last_vacuum is not null as vacuumed from pg_stat_user_tables where relid in ('vs_i'::regclass, 'vs_c'::regclass) order by relname
+fields relname@pg_stat_user_tables.3:19:64:-1,analyzed:16:1:-1,vacuumed:16:1:-1
+row vs_c,f,f
+row vs_i,t,f
+SELECT 2
+> vacuum only vs_i
+VACUUM
+> select relname, last_analyze is not null as analyzed, last_vacuum is not null as vacuumed from pg_stat_user_tables where relid in ('vs_i'::regclass, 'vs_c'::regclass) order by relname
+fields relname@pg_stat_user_tables.3:19:64:-1,analyzed:16:1:-1,vacuumed:16:1:-1
+row vs_c,f,f
+row vs_i,t,t
+SELECT 2
+> vacuum vs_i
+VACUUM
+> select relname, vacuum_count, analyze_count from pg_stat_user_tables where relid in ('vs_i'::regclass, 'vs_c'::regclass) order by relname
+fields relname@pg_stat_user_tables.3:19:64:-1,vacuum_count@pg_stat_user_tables.23:20:8:-1,analyze_count@pg_stat_user_tables.25:20:8:-1
+row vs_c,1,0
+row vs_i,2,1
+SELECT 2
+> create table vs_t (a int, t text)
+CREATE TABLE
+> insert into vs_t select a, 't' || a from generate_series(1, 10) a
+INSERT 0 10
+> alter table vs_t alter column t set storage external
+ALTER TABLE
+> create view vs_t_counts as select case when c.relname is null then 'main' else 'toast' end as rel, s.vacuum_count from pg_stat_all_tables s left join pg_class c on s.relid = c.reltoastrelid where c.relname = 'vs_t' or s.relname = 'vs_t' order by rel
+CREATE VIEW
+> vacuum (process_toast true) vs_t
+VACUUM
+> select * from vs_t_counts
+fields rel@vs_t_counts.1:25:-1:-1,vacuum_count@vs_t_counts.2:20:8:-1
+row main,1
+row toast,1
+SELECT 2
+> vacuum (process_toast false) vs_t
+VACUUM
+> select * from vs_t_counts
+fields rel@vs_t_counts.1:25:-1:-1,vacuum_count@vs_t_counts.2:20:8:-1
+row main,2
+row toast,1
+SELECT 2
+> vacuum (process_main false) vs_t
+VACUUM
+> select * from vs_t_counts
+fields rel@vs_t_counts.1:25:-1:-1,vacuum_count@vs_t_counts.2:20:8:-1
+row main,2
+row toast,2
+SELECT 2
+> vacuum (process_main false, process_toast false) vs_t
+VACUUM
+> select * from vs_t_counts
+fields rel@vs_t_counts.1:25:-1:-1,vacuum_count@vs_t_counts.2:20:8:-1
+row main,2
+row toast,2
+SELECT 2
+> vacuum (process_main false, full) vs_t
+VACUUM
+> select * from vs_t_counts
+fields rel@vs_t_counts.1:25:-1:-1,vacuum_count@vs_t_counts.2:20:8:-1
+row main,2
+row toast,2
+SELECT 2
+> begin
+BEGIN
+> insert into vs1 values (100, 'x'), (101, 'y')
+INSERT 0 2
+> analyze vs1
+ANALYZE
+> commit
+COMMIT
+> select analyze_count from pg_stat_user_tables where relname = 'vs1'
+fields analyze_count@pg_stat_user_tables.25:20:8:-1
+row 4
+SELECT 1
+> set track_counts = off
+SET
+> analyze vs1
+ANALYZE
+> reset track_counts
+RESET
+> select analyze_count from pg_stat_user_tables where relname = 'vs1'
+fields analyze_count@pg_stat_user_tables.25:20:8:-1
+row 4
+SELECT 1
+> drop table vs1, vs_p, vs_i cascade
+NOTICE 00000 drop cascades to table vs_c
+DROP TABLE
+> drop view vs_t_counts
+DROP VIEW
+> drop table vs_t
+DROP TABLE

@@ -684,6 +684,39 @@ impl Store {
         }
     }
 
+    /// `pgstat_report_vacuum`: a `VACUUM` of a relation at `time` sets its live and dead rows, starts the inserted rows from 0 and counts the command.
+    pub(crate) fn report_vacuum(&self, database: u32, relation: u32, live: i64, time: i64) {
+        let mut relations = self.relations.lock().unwrap_or_else(PoisonError::into_inner);
+        let counts = relations.entry((database, relation)).or_default();
+        counts.live_tuples = live;
+        counts.dead_tuples = 0;
+        counts.ins_since_vacuum = 0;
+        counts.last_vacuum_time = Some(time);
+        counts.vacuum_count += 1;
+    }
+
+    /// `pgstat_report_analyze`: an `ANALYZE` of a relation at `time` sets its live rows, starts the modified rows from 0 for `reset`, an `ANALYZE` with no column list, and counts the command. `live` is `None` for a partitioned table, which has no rows of its own.
+    pub(crate) fn report_analyze(
+        &self,
+        database: u32,
+        relation: u32,
+        live: Option<i64>,
+        reset: bool,
+        time: i64,
+    ) {
+        let mut relations = self.relations.lock().unwrap_or_else(PoisonError::into_inner);
+        let counts = relations.entry((database, relation)).or_default();
+        match live {
+            Some(live) => counts.live_tuples = live.max(0),
+            None => (counts.live_tuples, counts.dead_tuples) = (0, 0),
+        }
+        if reset {
+            counts.mod_since_analyze = 0;
+        }
+        counts.last_analyze_time = Some(time);
+        counts.analyze_count += 1;
+    }
+
     /// The counters of the relations of a database, for the snapshot of a transaction.
     pub(crate) fn relation_counts(&self, database: u32) -> HashMap<u32, RelationCounts> {
         let relations = self.relations.lock().unwrap_or_else(PoisonError::into_inner);

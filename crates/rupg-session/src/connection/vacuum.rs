@@ -13,8 +13,8 @@ use super::copy::{def_boolean, def_string};
 /// `ROLE_PG_CHECKPOINT`.
 const PG_CHECKPOINT: u32 = 4544;
 use super::{Connection, Done};
-use crate::guc;
 use crate::heap::{Skip, View};
+use crate::{guc, query};
 use rupg_types::Value;
 use std::sync::Arc;
 
@@ -80,6 +80,7 @@ struct Parsed {
     full: bool,
     disable_page_skipping: bool,
     process_toast: bool,
+    process_main: bool,
     only_database_stats: bool,
     /// True when a flag of `params.options` other than `VERBOSE`, `PROCESS_MAIN` and `PROCESS_TOAST` is on, for the check of `ONLY_DATABASE_STATS`.
     other: bool,
@@ -106,7 +107,7 @@ fn def_int(def: &DefElem) -> Result<i32, Error> {
 /// The option list of `ExecVacuum`.
 fn parse_options(stmt: &VacuumStmt) -> Result<Parsed, Error> {
     let command = if stmt.is_vacuumcmd { "VACUUM" } else { "ANALYZE" };
-    let mut parsed = Parsed { process_toast: true, ..Parsed::default() };
+    let mut parsed = Parsed { process_toast: true, process_main: true, ..Parsed::default() };
     for def in stmt.options.iter().flatten() {
         let Node::DefElem(def) = def else { continue };
         let name = def.defname.as_deref().unwrap_or_default();
@@ -150,9 +151,7 @@ fn parse_options(stmt: &VacuumStmt) -> Result<Parsed, Error> {
                     def_boolean(def)?;
                 }
             }
-            "process_main" => {
-                def_boolean(def)?;
-            }
+            "process_main" => parsed.process_main = def_boolean(def)?,
             "process_toast" => parsed.process_toast = def_boolean(def)?,
             "truncate" => parsed.truncate = Some(def_boolean(def)?),
             "parallel" => {
@@ -356,11 +355,14 @@ impl Connection {
                     if rel.toast != 0 && parsed.process_toast {
                         self.vacuum_heap(catalog, rel.toast, parsed);
                     }
-                    rows = self.vacuum_heap(catalog, relid, parsed);
+                    if parsed.process_main || rel.kind == RelKind::Toast {
+                        rows = self.vacuum_heap(catalog, relid, parsed);
+                    }
                 }
                 if let Some(columns) = analyze {
                     rows = self.update_relstats(relid);
                     if rel.kind != RelKind::Toast {
+                        self.report_analyze(relid, Some(rows), columns.is_empty());
                         self.analyze_rel(catalog, relid, columns, false);
                         self.analyze_rel(catalog, relid, columns, true);
                     }
@@ -375,6 +377,7 @@ impl Connection {
                     .map(|part| heap.live_count(self.database_oid, part, self.xid.get()) as f32)
                     .sum();
                 if let Some(columns) = analyze {
+                    self.report_analyze(relid, None, columns.is_empty());
                     self.heap().set_stats(self.database_oid, relid, -1, rows);
                     self.analyze_rel(catalog, relid, columns, true);
                 }
@@ -527,7 +530,31 @@ impl Connection {
             r.kind == RelKind::Index && r.index.as_ref().is_some_and(|i| i.table == relid)
         });
         let target = (self.database_oid, relid, self.pid);
-        self.heap().vacuum(target, skip, (indexed, parsed.freeze, truncate))
+        let rows = self.heap().vacuum(target, skip, (indexed, parsed.freeze, truncate));
+        // `VACUUM FULL` rewrites the table as `REPACK` does, which reports no `VACUUM`.
+        if !parsed.full && self.counts_tracked() {
+            self.store.report_vacuum(
+                self.database_oid,
+                relid,
+                rows as i64,
+                query::now(&*self.clock),
+            );
+        }
+        rows
+    }
+
+    /// `pgstat_report_analyze` after `do_analyze_rel` of `relid`, with `rows` live rows, or `None` for a partitioned table. The rows that the transaction inserted and deleted do not count, as the end of the transaction reports them.
+    fn report_analyze(&self, relid: u32, rows: Option<f32>, reset: bool) {
+        if !self.counts_tracked() {
+            return;
+        }
+        let live = rows.map(|rows| {
+            let written =
+                self.activity.writes().get(&relid).map_or(0, |p| p.kept.inserted - p.kept.deleted);
+            rows as i64 - written
+        });
+        let time = query::now(&*self.clock);
+        self.store.report_analyze(self.database_oid, relid, live, reset, time);
     }
 
     /// `index_update_stats` after a statement that built indexes, the indexes of `new` that are not in `old` or that have a new file: `relpages` and `reltuples` of the table of each index, while `autovacuum` is on and the table does not turn it off. A table with no rows that no `VACUUM` or `ANALYZE` counted keeps its `reltuples` of -1.
