@@ -1763,6 +1763,32 @@ impl Plan {
             .collect()
     }
 
+    /// True when the main query is an `INSERT` that reads the rows of its source one by one as it writes them, so that a statement of `WITH` that the source reads ends after the main query wrote its rows: the source is a scan with no join, no sort, no groups and no limit, as the `CteScan` under the `ModifyTable` reads the tuplestore of the statement.
+    #[must_use]
+    pub fn inserts_in_turn(&self) -> bool {
+        fn in_turn(query: &Query) -> bool {
+            if query.grouped
+                || !query.sort.is_empty()
+                || !query.distinct.is_empty()
+                || !query.windows.is_empty()
+                || query.set_op.is_some()
+                || query.limit.is_some()
+                || query.offset.is_some()
+            {
+                return false;
+            }
+            match query.from.as_slice() {
+                [FromItem::Relation(at)] => query
+                    .relations
+                    .get(*at)
+                    .is_some_and(|r| r.subquery.as_deref().is_none_or(in_turn)),
+                _ => false,
+            }
+        }
+        self.query.write.as_ref().is_some_and(|w| w.kind == rupg_analyze::WriteKind::Insert)
+            && in_turn(&self.query)
+    }
+
     /// The plan with the rows of `RETURNING` of the statements of `WITH` that change data, by the number of each statement.
     #[must_use]
     pub fn with_written(self, written: Vec<Vec<Vec<Value>>>) -> Plan {

@@ -6686,6 +6686,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/trigger_when_notice.test")));
     }
 
+    /// The triggers `FOR EACH STATEMENT` of the main query and of its statements of `WITH` fire in the order of `fireBSTriggers` and `fireASTriggers` of their `ModifyTable` nodes.
+    #[test]
+    fn wcte_statement_order() {
+        big_stack(|| script(include_str!("connection/wcte_statement_order.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {
