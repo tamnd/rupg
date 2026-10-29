@@ -1,0 +1,23 @@
+!details
+> create table ict (key int4, fruit text)
+CREATE TABLE
+> create unique index on ict (key)
+CREATE INDEX
+> insert into ict values (1, 'Apple') on conflict (keyy) do update set fruit = excluded.fruit
+ERROR 42703 column "keyy" does not exist at 49
+HINT Perhaps you meant to reference the column "ict.key" or the column "excluded.key".
+> insert into ict values (1, 'Apple') on conflict (keyy) do nothing
+ERROR 42703 column "keyy" does not exist at 49
+HINT Perhaps you meant to reference the column "ict.key".
+> insert into ict values (1, 'Apple') on conflict (fruitt) do select returning *
+ERROR 42703 column "fruitt" does not exist at 49
+HINT Perhaps you meant to reference the column "ict.fruit" or the column "excluded.fruit".
+> insert into ict values (1, 'Apple') on conflict (excluded.key) do update set fruit = excluded.fruit
+ERROR 42601 syntax error at or near ")" at 62
+> insert into ict values (1, 'Apple') on conflict (key) where excluded.fruit > 'a' do update set fruit = excluded.fruit
+ERROR 42P01 invalid reference to FROM-clause entry for table "excluded" at 61
+DETAIL There is an entry for table "excluded", but it cannot be referenced from this part of the query.
+> insert into ict values (1, 'Apple') on conflict (key) do update set fruit = excluded.fruit returning key
+fields key@ict.1:23:4:-1
+row 1
+INSERT 0 1

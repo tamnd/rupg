@@ -6986,6 +6986,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/copy_progress.test")));
     }
 
+    /// The inference of `ON CONFLICT DO UPDATE` and `DO SELECT` runs when the query has the entry of `EXCLUDED` but cannot name it, so the hint of a missing column names the columns of `EXCLUDED` too, and the arbiter `WHERE` cannot reference it. `connection/conflict_excluded_hint.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn conflict_excluded_hint() {
+        big_stack(|| script(include_str!("connection/conflict_excluded_hint.test")));
+    }
+
     /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.
     #[test]
     fn role_settings_at_start() {

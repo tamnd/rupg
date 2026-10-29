@@ -836,6 +836,7 @@ impl Analyzer<'_> {
             OnConflictAction::ONCONFLICT_UPDATE => (true, None),
             _ => (false, Some(clause.lockStrength)),
         };
+        let excluded = if update || select.is_some() { Some(self.add_excluded()?) } else { None };
         let (inference, mut def) =
             self.inference(clause, update || select.is_some(), table, name, columns)?;
         def.select = select;
@@ -850,9 +851,12 @@ impl Analyzer<'_> {
             conflict_check: None,
             update_check: None,
         };
+        let Some((excluded, item)) = excluded else {
+            return Ok((on_conflict, inference, def));
+        };
+        self.show_item(item);
         if select.is_some() {
             // `DO SELECT` gives the row that the table has when `WHERE` lets it through.
-            let excluded = self.add_excluded()?;
             let filter = self.target_where(clause.whereClause.as_ref());
             self.hide_last_item();
             let row = columns.iter().enumerate().map(|(at, c)| column_var(at, c)).collect();
@@ -868,10 +872,6 @@ impl Analyzer<'_> {
             on_conflict.update = Some(Box::new(query));
             return Ok((on_conflict, inference, def));
         }
-        if !update {
-            return Ok((on_conflict, inference, def));
-        }
-        let excluded = self.add_excluded()?;
         // The items of `SET` of an updatable view name the columns of its base relation, and they must name updatable columns of the view.
         let (renamed, error) = match self.auto_view_set(rv, &clause.targetList, columns) {
             Some((list, unknown, fixed)) => (Some(list), unknown.or(fixed)),
@@ -1044,12 +1044,8 @@ impl Analyzer<'_> {
                 Some(None) => None,
             };
             let Some(index) = index else {
-                return Err(Error::new(
-                    SqlState::UNDEFINED_COLUMN,
-                    format!("column \"{column}\" does not exist"),
-                )
                 // `resolve_unique_index_expr` puts the column reference at the inference clause.
-                .at_opt(place(infer.location)));
+                return Err(self.missing_column(None, column, place(infer.location)));
             };
             // The column is a reference to the column, which needs `SELECT`.
             if let Some(perm) = self.target_perm_mut() {
