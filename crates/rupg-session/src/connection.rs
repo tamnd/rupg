@@ -6847,6 +6847,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/conflict_predicate.test")));
     }
 
+    /// `transformPartitionSpec` has a parse state with no query text, so the errors of a partition key expression have no place, and `CheckAttributeType` with `CHKATYPE_IS_PARTKEY` rejects an expression of a pseudo-type such as `record` or `unknown`. `connection/partition_key_errors.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn partition_key_errors() {
+        big_stack(|| script(include_str!("connection/partition_key_errors.test")));
+    }
+
     /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.
     #[test]
     fn role_settings_at_start() {

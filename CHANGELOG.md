@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The errors of a partition key expression have no place in the query text, and a partition key expression of a pseudo-type is an error, as in PostgreSQL (#1136).
 - `ON CONFLICT` with a `WHERE` clause takes a partial unique index whose predicate the clause implies, as in PostgreSQL (#1135).
 - `pg_sequence_parameters`, and `nextval` and `setval` on a temporary sequence in a read-only transaction (#1133).
 - `TRUNCATE` fires the `BEFORE` and `AFTER` statement triggers of `TRUNCATE`, and the notices of the triggers that ran before an error of a utility statement go to the client (#1132).

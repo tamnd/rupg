@@ -1,0 +1,29 @@
+!details
+> create function retset (a int) returns setof int as $$ select 1; $$ language sql immutable
+CREATE FUNCTION
+> create table partitioned (a int) partition by range (retset(a))
+ERROR 0A000 set-returning functions are not allowed in partition key expressions
+> drop function retset(int)
+DROP FUNCTION
+> create table partitioned (a int, b int) partition by range ((avg(a)))
+ERROR 42803 aggregate functions are not allowed in partition key expressions
+> create table partitioned (a int, b int) partition by range ((avg(a) over (partition by b)))
+ERROR 42P20 window functions are not allowed in partition key expressions
+> create table partitioned (a int) partition by list ((a like (select 1)))
+ERROR 0A000 cannot use subquery in partition key expression
+> create table partitioned (a int) partition by range ((nosuch + 1))
+ERROR 42703 column "nosuch" does not exist
+> create table partitioned (a int, b int) partition by range (((a, b)))
+ERROR 42P16 partition key column 1 has pseudo-type record
+> create table partitioned (a int, b int) partition by range (a, ('unknown'))
+ERROR 42P16 partition key column 2 has pseudo-type unknown
+> create table partitioned (a int, b int) partition by range (a, (row(a, b)::record))
+ERROR 42P16 partition key column 2 has pseudo-type record
+> create table partitioned (a int, b int) partition by range ((a + b))
+CREATE TABLE
+> select partattrs, pg_get_partkeydef(partrelid) from pg_partitioned_table where partrelid = 'partitioned'::regclass
+fields partattrs@pg_partitioned_table.5:22:-1:-1,pg_get_partkeydef:25:-1:-1
+row 0,RANGE (((a + b)))
+SELECT 1
+> drop table partitioned
+DROP TABLE
