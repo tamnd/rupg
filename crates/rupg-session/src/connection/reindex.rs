@@ -58,7 +58,7 @@ impl Connection {
                 self.check_reindex_database(stmt.name.as_deref())?;
             }
         }
-        self.define_with(node, text, notices, self.current_role(), call)
+        self.define_fired(node, text, notices, self.current_role(), call)
     }
 
     /// The checks of `ReindexMultipleTables` for `SYSTEM` and `DATABASE`: the name is the name of the current database, and the role owns the database or is a member of `pg_maintain`.

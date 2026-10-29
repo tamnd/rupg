@@ -402,9 +402,8 @@ impl Compiler<'_> {
     fn function(&mut self, sig: &Signature) -> Result<Function> {
         self.ns_push(Some(&sig.name), LabelKind::Block);
         let trigger = if sig.trigger { Some(self.trigger_datums(sig)?) } else { None };
-        if sig.event_trigger {
-            self.event_trigger_datums(sig)?;
-        }
+        let event_trigger =
+            if sig.event_trigger { Some(self.event_trigger_datums(sig)?) } else { None };
         let (mut args, mut outs) = (Vec::new(), Vec::new());
         for (i, arg) in sig.args.iter().enumerate() {
             let dollar = format!("${}", i + 1);
@@ -474,11 +473,12 @@ impl Compiler<'_> {
             retset: self.retset,
             rettype: self.rettype,
             trigger,
+            event_trigger,
         })
     }
 
-    /// The variables `tg_event` and `tg_tag` of an event trigger function, as `do_compile` adds them for `PLPGSQL_EVENT_TRIGGER`.
-    fn event_trigger_datums(&mut self, sig: &Signature) -> Result<()> {
+    /// The variables `tg_event` and `tg_tag` of an event trigger function, as `do_compile` adds them for `PLPGSQL_EVENT_TRIGGER`. It gives the variable `tg_event`, and `tg_tag` comes after it.
+    fn event_trigger_datums(&mut self, sig: &Signature) -> Result<usize> {
         if !sig.args.is_empty() {
             return Err(Error::new(
                 SqlState::INVALID_FUNCTION_DEFINITION,
@@ -489,7 +489,7 @@ impl Compiler<'_> {
         self.ns_add("tg_event", NsEntry::Datum(event));
         let tag = self.add_datum("tg_tag", DatumKind::Var { ty: oid::TEXT, typmod: -1 });
         self.ns_add("tg_tag", NsEntry::Datum(tag));
-        Ok(())
+        Ok(event)
     }
 
     /// The variables of a trigger function, as `do_compile` adds them for `PLPGSQL_DML_TRIGGER`: the records `new` and `old`, then [`TRIGGER_VARIABLES`]. It gives the variable `new`, and the others come after it in order.

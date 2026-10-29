@@ -46,6 +46,9 @@ pub(crate) struct Compiled {
     utilities: RefCell<BTreeMap<usize, Option<Rc<Node>>>>,
 }
 
+/// The rows of `EXECUTE`, their count, their columns, and true for a query that does not write.
+type DynamicRows = (Vec<Vec<Value>>, u64, Vec<Field>, bool);
+
 impl Compiled {
     pub(crate) fn new(func: Function, sig: impl Into<Rc<str>>, oid: u32) -> Compiled {
         let plans = vec![None; func.exprs];
@@ -387,6 +390,11 @@ pub(crate) fn run_trigger(
     enter(spi, c, oid::TRIGGER, |x| x.trigger(call))
 }
 
+/// `plpgsql_exec_event_trigger`: the run of an event trigger function, with `tg_event` and `tg_tag`.
+pub(crate) fn run_event_trigger(spi: &dyn Spi, c: &Compiled, event: &str, tag: &str) -> Result<()> {
+    enter(spi, c, oid::VOID, |x| x.event_trigger(event, tag))
+}
+
 /// A call on the stack of the calls: the frame of the call, the state and the run `body`.
 fn enter<T>(
     spi: &dyn Spi,
@@ -517,6 +525,26 @@ impl Exec<'_> {
     }
 
     /// The call of a trigger: the records `new` and `old` with the columns of the table, the variables of the trigger, the top block and the row of `RETURN`.
+    /// The body of an event trigger function. The function gives no value, and it can end without `RETURN`.
+    fn event_trigger(&mut self, event: &str, tag: &str) -> Run<()> {
+        let f = self.f;
+        self.init_slots();
+        let Some(first) = f.event_trigger else {
+            return Err(
+                Error::internal("an event trigger function with no variable tg_event").into()
+            );
+        };
+        for (d, text) in [(first, event), (first + 1, tag)] {
+            if let Slot::Var { value, .. } = &mut self.slots[d] {
+                *value = Value::Text(text.to_owned());
+            }
+        }
+        self.set_found(false);
+        self.block(&f.body)?;
+        self.set_at(None);
+        Ok(())
+    }
+
     fn trigger(&mut self, call: &TriggerCall<'_>) -> Run<Option<Vec<Value>>> {
         let f = self.f;
         self.init_slots();
@@ -1601,11 +1629,7 @@ impl Exec<'_> {
     }
 
     /// The rows of the query of `EXECUTE`, with the values of `USING` as its parameters, the columns, and true for a query that does not write. A statement that is not a query must give rows, as `EXPLAIN` and `SHOW` do.
-    fn run_dynamic(
-        &mut self,
-        query: &Expr,
-        params: &[Expr],
-    ) -> Result<(Vec<Vec<Value>>, u64, Vec<Field>, bool)> {
+    fn run_dynamic(&mut self, query: &Expr, params: &[Expr]) -> Result<DynamicRows> {
         let (planned, values, text, line) = self.dynamic_planned(query, params)?;
         let plan = match planned {
             Planned::Query(plan) => *plan,

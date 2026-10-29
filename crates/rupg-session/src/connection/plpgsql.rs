@@ -586,7 +586,7 @@ impl Connection {
     ) -> rupg_common::Result<u64> {
         let mut notices = Vec::new();
         let result = if rupg_analyze::is_definition(node) {
-            self.define_with(node, text, &mut notices, self.current_role(), true)
+            self.define_fired(node, text, &mut notices, self.current_role(), true)
                 .map(|done| if let Done::Count(_, count) = done { count } else { 0 })
         } else if let Node::VariableSetStmt(_) = node {
             self.ts_config(node).and_then(|ts_config| {
@@ -685,6 +685,37 @@ impl Connection {
         self.trigger_warnings.borrow_mut().extend(reader.take_warnings());
         drop(reader);
         self.transition.replace(outer);
+        result
+    }
+
+    /// The call of the event trigger function `func` for the event `event` and the command tag `tag`, as [`Connection::pl_trigger`] calls a trigger function: as the owner for `SECURITY DEFINER` and with the settings of the function. The messages of `RAISE` go to the queue of the triggers.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the function.
+    pub(super) fn pl_event_call(
+        &self,
+        func: u32,
+        event: &str,
+        tag: &str,
+    ) -> rupg_common::Result<()> {
+        let reader = self.reader();
+        let (config, definer) = reader
+            .catalog
+            .function(func)
+            .map_or((Vec::new(), None), |f| (f.config.clone(), f.secdef.then_some(f.owner)));
+        let result = if config.is_empty() && definer.is_none() {
+            rupg_plpgsql::event_trigger(&PlSpi::new(self, &reader, true), func, event, tag)
+        } else {
+            reader.start_function_call(&config, definer).and_then(|()| {
+                let result =
+                    rupg_plpgsql::event_trigger(&PlSpi::new(self, &reader, true), func, event, tag);
+                reader.end_function_call();
+                result
+            })
+        };
+        self.trigger_warnings.borrow_mut().extend(reader.take_warnings());
+        drop(reader);
         result
     }
 

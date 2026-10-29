@@ -26,6 +26,8 @@ pub(crate) struct Function {
     pub(crate) rettype: u32,
     /// The variable `new` of a trigger function, which [`crate::compile::TRIGGER_VARIABLES`] and `old` follow.
     pub(crate) trigger: Option<usize>,
+    /// The variable `tg_event` of an event trigger function, which `tg_tag` follows.
+    pub(crate) event_trigger: Option<usize>,
 }
 
 /// A variable, `PLpgSQL_datum`.
