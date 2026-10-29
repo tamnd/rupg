@@ -125,9 +125,14 @@ impl Definer<'_, '_> {
         if let Some((name, _, false)) = self.not_null_of(target.oid, number) {
             return Err(Error::new(
                 SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
-                format!("incompatible NOT VALID constraint \"{name}\" on relation \"{}\"", target.name),
+                format!(
+                    "incompatible NOT VALID constraint \"{name}\" on relation \"{}\"",
+                    target.name
+                ),
             )
-            .with_hint("You might need to validate it using ALTER TABLE ... VALIDATE CONSTRAINT."));
+            .with_hint(
+                "You might need to validate it using ALTER TABLE ... VALIDATE CONSTRAINT.",
+            ));
         }
         if attr.identity != 0 {
             return Err(prerequisite("is already an identity column".into()));

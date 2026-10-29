@@ -347,13 +347,15 @@ fn steps<'q>(
     level: &Level<'q>,
     mut node: Node<'q>,
     order: &mut Vec<OrderKey>,
-    only: bool,
+    mut only: bool,
     costs: TargetCosts,
 ) -> Option<Node<'q>> {
     let query = level.query;
     let scope = level.display;
     if query.set_op.is_none() && !query.distinct.is_empty() {
         node = distinct(level, node, order, only, costs.last)?;
+        // `create_ordered_paths` sorts the cheapest path of `DISTINCT`, which can come from a plan that is not the cheapest. Each path of `DISTINCT` has the same rows, so the cheapest sort of them is the sort of the cheapest one.
+        only = false;
     }
     let (count, offset) = limit_estimates(query);
     if !query.sort.is_empty() {
@@ -2585,6 +2587,7 @@ fn distinct<'q>(
         node.cost = limit_cost(c, 1.0, 0.0);
         return Some(node);
     }
+    let keys = useful_distinct_keys(level, keys, order, &distinct_exprs, only, c, groups);
     let (is_sorted, count) = presorted(order, &keys);
     if only && !is_sorted && count == 0 {
         return None;
@@ -2642,4 +2645,68 @@ fn distinct<'q>(
     let mut node = Node::new(Kind::Unique, scope, vec![input]);
     node.cost = Cost { startup: sort_startup, total: unique_total, rows: groups, ..c };
     Some(node)
+}
+
+/// `get_useful_pathkeys_for_distinct`: the keys of `DISTINCT` in the order of the rows of the input as far as it goes, then the other keys. With `DISTINCT ON`, each key of the order must also be a key of `DISTINCT ON`. Of these keys and the keys in the order of the query, the result is the one whose `Unique`, with the sort of `ORDER BY` above it, costs less, as `add_path` and `create_ordered_paths` choose.
+fn useful_distinct_keys<'q>(
+    level: &Level<'q>,
+    keys: Vec<SortKey<'q>>,
+    order: &[OrderKey],
+    distinct: &[&Expr],
+    only: bool,
+    c: Cost,
+    groups: f64,
+) -> Vec<SortKey<'q>> {
+    let enable = crate::enable();
+    if !enable.distinct_reordering {
+        return keys;
+    }
+    let query = level.query;
+    let mut used = vec![false; keys.len()];
+    let mut out: Vec<usize> = Vec::new();
+    for o in order {
+        let Some(i) = (0..keys.len()).find(|&i| {
+            let k = &keys[i];
+            !used[i] && k.using.is_none() && o.sorts(&k.item.expr, k.desc, k.nulls_first)
+        }) else {
+            break;
+        };
+        if query.distinct_on && !distinct.iter().any(|e| e.same(&keys[i].item.expr)) {
+            break;
+        }
+        used[i] = true;
+        out.push(i);
+    }
+    // Without `Incremental Sort`, keys that the rows are in the order of only in part are of no use.
+    if out.is_empty() || out.len() < keys.len() && !enable.incremental_sort {
+        return keys;
+    }
+    out.extend((0..keys.len()).filter(|&i| !used[i]));
+    if out.iter().enumerate().all(|(at, &i)| at == i) {
+        return keys;
+    }
+    let useful: Vec<SortKey<'q>> = out.iter().map(|&i| keys[i].clone()).collect();
+    let sort: Vec<SortKey<'q>> =
+        query.sort.iter().map(|s| sort_key(level.target(s.target), s)).collect();
+    let sort = upper_canonical(level, sort, |k| &*k.item.expr);
+    let total = |cand: &[SortKey<'q>]| {
+        let (sorted, count) = presorted(order, cand);
+        if only && !sorted && count == 0 {
+            return f64::INFINITY;
+        }
+        let ncols = distinct.len() as f64;
+        let total = if sorted { c.total } else { sort_cost(level, c, cand, count, None).1 }
+            + cost::CPU_OPERATOR * c.rows * ncols;
+        if sort.is_empty() {
+            return total;
+        }
+        let after = if sorted { order.to_vec() } else { sorted_order(cand) };
+        let (sorted, count) = presorted(&after, &sort);
+        if sorted {
+            return total;
+        }
+        let above = Cost { startup: total, total, rows: groups, width: c.width };
+        sort_cost(level, above, &sort, count, None).1
+    };
+    if total(&useful) < total(&keys) { useful } else { keys }
 }
