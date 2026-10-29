@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `ALTER ROLE ... SET`, `ALTER ROLE ... IN DATABASE ... SET` and `ALTER ROLE ALL SET` store settings in `pg_db_role_setting`, and a new session applies them with the sources `global`, `database`, `user` and `database user`, as in PostgreSQL (#1118).
 - CREATE MATERIALIZED VIEW stores the node tree of its query in pg_rewrite, and CREATE MATERIALIZED VIEW and REFRESH MATERIALIZED VIEW take the OIDs of the transient table and the new TOAST table, as in PG19 (#916) (#1117).
 - `LOCK` of a view in a loop of views and `CREATE VIEW` on such a view work, and a query of it gives `42P17`, as in PostgreSQL (#1116).
 
