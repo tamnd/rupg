@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.4.7 (2026-10-29)
+
 ### Added
 
 - ALTER TABLE, CREATE INDEX and TRUNCATE fail on a table that a write of the statement has open, as in PostgreSQL (#1101).
