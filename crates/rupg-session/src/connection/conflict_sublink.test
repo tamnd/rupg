@@ -1,0 +1,36 @@
+> create table cft (key int, fruit text)
+CREATE TABLE
+> create unique index cft_key on cft (key)
+CREATE INDEX
+> explain (costs off) insert into cft values (0, 'a') on conflict (key) do update set fruit = excluded.fruit where exists (select 1 from cft ii where ii.key = excluded.key)
+fields QUERY PLAN:25:-1:-1
+row Insert on cft
+row   Conflict Resolution: UPDATE
+row   Conflict Arbiter Indexes: cft_key
+row   Conflict Filter: EXISTS(SubPlan exists_1)
+row   ->  Result
+row   SubPlan exists_1
+row     ->  Index Only Scan using cft_key on cft ii
+row           Index Cond: (key = excluded.key)
+EXPLAIN
+> explain (costs off) insert into cft values (0, 'a') on conflict (key) do update set fruit = excluded.fruit where cft.key > (select count(*) from cft c2)
+fields QUERY PLAN:25:-1:-1
+row Insert on cft
+row   Conflict Resolution: UPDATE
+row   Conflict Arbiter Indexes: cft_key
+row   Conflict Filter: (cft.key > (InitPlan expr_1).col1)
+row   InitPlan expr_1
+row     ->  Aggregate
+row           ->  Seq Scan on cft c2
+row   ->  Result
+EXPLAIN
+> insert into cft values (1, 'a')
+INSERT 0 1
+> insert into cft values (1, 'b') on conflict (key) do update set fruit = excluded.fruit where exists (select 1 from cft ii where ii.key = excluded.key)
+INSERT 0 1
+> select * from cft
+fields key@cft.1:23:4:-1,fruit@cft.2:25:-1:-1
+row 1,b
+SELECT 1
+> drop table cft
+DROP TABLE

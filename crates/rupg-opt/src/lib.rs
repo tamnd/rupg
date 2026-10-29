@@ -654,6 +654,8 @@ pub(crate) struct Level<'q> {
     pub(crate) presorted: bool,
     /// [`from::lateral_rels`] of each relation of the query. The join search reads them for each pair of relations that it tries, so the planner finds them once.
     pub(crate) lateral: OnceCell<Vec<BTreeSet<usize>>>,
+    /// The scope of the query of `DO UPDATE` of `ON CONFLICT` when its `WHERE` has a subquery, which the subplan of the subquery reads.
+    pub(crate) conflict: Option<usize>,
 }
 
 impl<'q> Level<'q> {
@@ -736,6 +738,7 @@ impl<'q> Builder<'q> {
             write,
             presorted,
             lateral: OnceCell::new(),
+            conflict: None,
         };
         let depth = self.ctes.len();
         if !std::ptr::eq(outer, query) {
@@ -745,6 +748,7 @@ impl<'q> Builder<'q> {
         for expr in preprocess_order(query) {
             self.sublinks_in(expr, &mut level);
         }
+        self.conflict_sublinks(&mut level);
         let (plans, joined, stats) = match &query.set_op {
             Some(op) => (self.set_op(&mut level, op), Vec::new(), from::Stats::default()),
             None => self.from(&level),
@@ -1020,6 +1024,25 @@ impl<'q> Builder<'q> {
     /// The query of `WITH` that a reference names, as the query that holds the reference sees it.
     pub(crate) fn cte(&self, name: &str) -> Option<&CteUse<'q>> {
         self.ctes.iter().rev().find(|c| c.cte.name == name)
+    }
+
+    /// `preprocess_expression` of `onConflictWhere`: the subplans of the subqueries of `WHERE` of `DO UPDATE`, after the subqueries of the other expressions of the statement. The subqueries read the columns of the query of `DO UPDATE`, which gets its scope here.
+    fn conflict_sublinks(&mut self, level: &mut Level<'q>) {
+        let update =
+            level.write.and_then(|w| w.on_conflict.as_ref()).and_then(|c| c.update.as_ref());
+        let Some(update) = update.map(|u| unwrap_checks(u)) else { return };
+        let Some(cond) = update.filter.as_ref().filter(|c| upper::has_sublink(c)) else { return };
+        let scope = self.scopes.len();
+        self.scopes.push(rupg_plan::Scope {
+            query: update,
+            parent: Some(level.scope),
+            target: None,
+            leaf: None,
+        });
+        level.conflict = Some(scope);
+        let outer = std::mem::replace(&mut level.scope, scope);
+        self.sublinks_in(cond, level);
+        level.scope = outer;
     }
 
     /// `SS_process_sublinks`: the subplans of the subqueries in an expression of the query, the subqueries in the test of a subquery first.
@@ -1339,6 +1362,7 @@ fn own_items<'n, 'q>(node: &'n Node<'q>) -> Vec<(&'n Item<'q>, f64)> {
     match &node.kind {
         Kind::Result { one_time, .. } => out.extend(one_time.iter().map(|i| (i, 1.0))),
         Kind::NestedLoop { join_filter, .. } => out.extend(quals(join_filter)),
+        Kind::Modify { conflict: Some(conflict), .. } => out.extend(quals(&conflict.filter)),
         Kind::MergeJoin { cond, join_filter, .. } | Kind::HashJoin { cond, join_filter, .. } => {
             out.extend(quals(cond).chain(quals(join_filter)));
         }

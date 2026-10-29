@@ -222,7 +222,7 @@ fn has_grouping(expr: &Expr) -> bool {
 }
 
 /// True when the expression has a subquery.
-fn has_sublink(expr: &Expr) -> bool {
+pub(crate) fn has_sublink(expr: &Expr) -> bool {
     expr.find(0, &mut |e, _| matches!(e.kind, ExprKind::SubLink(_)).then_some(())).is_some()
 }
 
@@ -965,13 +965,15 @@ impl<'q> Builder<'q> {
             let mut scope = None;
             if let Some(update) = &c.update {
                 let update = crate::unwrap_checks(update);
-                scope = Some(self.scopes.len());
-                self.scopes.push(rupg_plan::Scope {
-                    query: update,
-                    parent: Some(level.scope),
-                    target: None,
-                    leaf: None,
-                });
+                scope = Some(level.conflict.unwrap_or_else(|| {
+                    self.scopes.push(rupg_plan::Scope {
+                        query: update,
+                        parent: Some(level.scope),
+                        target: None,
+                        leaf: None,
+                    });
+                    self.scopes.len() - 1
+                }));
                 let mut parts = Vec::new();
                 if let Some(cond) = &update.filter {
                     exprs::and_parts(cond, &mut parts);
