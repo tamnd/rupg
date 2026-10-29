@@ -1511,6 +1511,7 @@ fn scan<'q>(
         cond,
         order_by,
         columns: index.columns.clone(),
+        exprs: (0..index.keys.len()).filter_map(|c| key_expr(index, table.r, c)).collect(),
     };
     let mut node = Node::new(kind, level.scope, Vec::new());
     node.filter = filter.iter().map(|q| q.item()).collect();

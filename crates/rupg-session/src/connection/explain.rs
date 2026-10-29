@@ -276,11 +276,15 @@ impl rupg_opt::Members for Members<'_, '_> {
                 let info = rel.index.as_ref().filter(|i| i.table == table && i.valid)?;
                 let count = usize::try_from(info.key_count).unwrap_or(0);
                 let class = |oid: &u32| builtin::opclasses().iter().find(|c| c.oid == *oid);
+                // `RelationGetIndexExpressions` and `RelationGetIndexPredicate` fold the constant parts, as `eval_const_expressions` does, so that a condition can match them.
+                let fold = |e: Expr| rupg_exec::fold_qual(&Query::default(), e, self.reader);
                 let exprs = info.exprs.as_deref().map_or_else(Vec::new, |text| {
-                    rupg_analyze::node::read_list(text).unwrap_or_default()
+                    let exprs = rupg_analyze::node::read_list(text).unwrap_or_default();
+                    exprs.into_iter().map(fold).collect()
                 });
                 // `make_ands_implicit`: the parts of the `AND` of the predicate.
-                let predicate = match info.predicate.as_deref().map(rupg_analyze::node::read) {
+                let predicate = info.predicate.as_deref().map(rupg_analyze::node::read);
+                let predicate = match predicate.map(|p| p.map(fold)) {
                     Some(Ok(Expr { kind: ExprKind::Bool(BoolOp::And, parts), .. })) => parts,
                     Some(Ok(expr)) => vec![expr],
                     Some(Err(_)) | None => Vec::new(),

@@ -489,11 +489,21 @@ impl Explainer<'_, '_> {
                 let own = Some(*r);
                 self.scan_qual("Filter", scope, &node.filter, self.options.verbose, own)?;
             }
-            Kind::IndexScan { cond, order_by, relation, .. } => {
+            Kind::IndexScan { cond, order_by, relation, only, exprs, .. } => {
                 let own = Some(*relation);
-                self.scan_qual("Index Cond", scope, cond, self.options.verbose, own)?;
-                self.scan_qual("Order By", scope, order_by, self.options.verbose, own)?;
-                self.scan_qual("Filter", scope, &node.filter, self.options.verbose, own)?;
+                if *only {
+                    self.texts.below(exprs.clone());
+                }
+                let done = self
+                    .scan_qual("Index Cond", scope, cond, self.options.verbose, own)
+                    .and_then(|()| {
+                        self.scan_qual("Order By", scope, order_by, self.options.verbose, own)
+                    })
+                    .and_then(|()| {
+                        self.scan_qual("Filter", scope, &node.filter, self.options.verbose, own)
+                    });
+                self.texts.below(Vec::new());
+                done?;
             }
             Kind::TidScan { cond, relation, .. } => {
                 let own = Some(*relation);
