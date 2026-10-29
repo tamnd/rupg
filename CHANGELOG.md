@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The node tree of a view in pg_rewrite has the grouping sets, GROUP BY DISTINCT and GROUPING() of its query, as in PG19 (#916) (#1120).
 - VACUUM and ANALYZE now set last_vacuum, last_analyze, vacuum_count and analyze_count in pg_stat_all_tables, and VACUUM respects PROCESS_MAIN, as in PostgreSQL (#1119).
 - `ALTER ROLE ... SET`, `ALTER ROLE ... IN DATABASE ... SET` and `ALTER ROLE ALL SET` store settings in `pg_db_role_setting`, and a new session applies them with the sources `global`, `database`, `user` and `database user`, as in PostgreSQL (#1118).
 - CREATE MATERIALIZED VIEW stores the node tree of its query in pg_rewrite, and CREATE MATERIALIZED VIEW and REFRESH MATERIALIZED VIEW take the OIDs of the transient table and the new TOAST table, as in PG19 (#916) (#1117).
