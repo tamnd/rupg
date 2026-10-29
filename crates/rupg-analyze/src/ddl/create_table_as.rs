@@ -134,7 +134,19 @@ impl Definer<'_, '_> {
         }
         if let Some(text) = matview {
             let path = self.an.path.clone();
-            self.catalog.make_matview(table, text.to_string(), path, &refs, !into.skipData)?;
+            let action =
+                crate::nodetree::view_action(&query, &self.an.perms, &[], Some(&*self.catalog));
+            self.catalog.make_matview(
+                table,
+                text.to_string(),
+                action,
+                path,
+                &refs,
+                !into.skipData,
+            )?;
+            if !into.skipData {
+                self.catalog.swap_new_heap(table)?;
+            }
         }
         Ok((!into.skipData).then_some(table))
     }

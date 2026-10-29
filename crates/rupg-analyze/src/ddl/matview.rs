@@ -59,7 +59,7 @@ impl Definer<'_, '_> {
         if stmt.concurrent && stmt.skipData {
             return Err(Error::new(
                 SqlState::SYNTAX_ERROR,
-                "CONCURRENTLY and WITH NO DATA options cannot be used together",
+                "REFRESH options CONCURRENTLY and WITH NO DATA cannot be used together",
             ));
         }
         if stmt.concurrent {
@@ -82,6 +82,9 @@ impl Definer<'_, '_> {
                     "Create a unique index with no WHERE clause on one or more columns of the materialized view.",
                 ));
             }
+        }
+        if !stmt.concurrent {
+            self.catalog.swap_new_heap(oid)?;
         }
         self.truncated.push(oid);
         self.catalog.set_populated(oid, !stmt.skipData)?;

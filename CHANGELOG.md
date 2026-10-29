@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- CREATE MATERIALIZED VIEW stores the node tree of its query in pg_rewrite, and CREATE MATERIALIZED VIEW and REFRESH MATERIALIZED VIEW take the OIDs of the transient table and the new TOAST table, as in PG19 (#916) (#1117).
 - `LOCK` of a view in a loop of views and `CREATE VIEW` on such a view work, and a query of it gives `42P17`, as in PostgreSQL (#1116).
 
 ## 0.4.8 (2026-10-29)
