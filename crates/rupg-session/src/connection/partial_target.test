@@ -1,0 +1,50 @@
+> create table pix (unique1 int, unique2 int, stringu1 name)
+CREATE TABLE
+> insert into pix select g, 1000 - g, (case when g % 3 = 0 then 'A' else 'C' end || g)::name from generate_series(1, 1000) g
+INSERT 0 1000
+> create index pix_u2_prtl on pix (unique2) where stringu1 < 'B'::name
+CREATE INDEX
+> analyze pix
+ANALYZE
+> explain (costs off) select * from pix where unique2 = 10 and stringu1 = 'A990'::name
+fields QUERY PLAN:25:-1:-1
+row Index Scan using pix_u2_prtl on pix
+row   Index Cond: (unique2 = 10)
+row   Filter: (stringu1 = 'A990'::name)
+EXPLAIN
+> explain (costs off) select unique2 from pix where unique2 = 10 and stringu1 < 'B'
+fields QUERY PLAN:25:-1:-1
+row Index Only Scan using pix_u2_prtl on pix
+row   Index Cond: (unique2 = 10)
+EXPLAIN
+> select unique2 from pix where unique2 = 10 and stringu1 < 'B'
+fields unique2@pix.2:23:4:-1
+row 10
+SELECT 1
+> explain (costs off) select unique2 from pix where unique2 = 10 and stringu1 < 'B' for update
+fields QUERY PLAN:25:-1:-1
+row LockRows
+row   ->  Index Scan using pix_u2_prtl on pix
+row         Index Cond: (unique2 = 10)
+row         Filter: (stringu1 < 'B'::name)
+EXPLAIN
+> select unique2 from pix where unique2 = 10 and stringu1 < 'B' for update
+fields unique2@pix.2:23:4:-1
+row 10
+SELECT 1
+> explain (costs off) update pix set unique1 = unique1 where unique2 = 10 and stringu1 < 'B'
+fields QUERY PLAN:25:-1:-1
+row Update on pix
+row   ->  Index Scan using pix_u2_prtl on pix
+row         Index Cond: (unique2 = 10)
+row         Filter: (stringu1 < 'B'::name)
+EXPLAIN
+> explain (costs off) delete from pix where unique2 = 10 and stringu1 < 'B'
+fields QUERY PLAN:25:-1:-1
+row Delete on pix
+row   ->  Index Scan using pix_u2_prtl on pix
+row         Index Cond: (unique2 = 10)
+row         Filter: (stringu1 < 'B'::name)
+EXPLAIN
+> drop table pix
+DROP TABLE
