@@ -34,7 +34,10 @@ impl Definer<'_, '_> {
                 "views must not contain SELECT INTO",
             ));
         }
-        let query = self.an.select(select)?;
+        let lazy = std::mem::replace(&mut self.an.lazy_views, true);
+        let query = self.an.select(select);
+        self.an.lazy_views = lazy;
+        let query = query?;
         if query.ctes.iter().any(|c| c.write.is_some()) {
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,

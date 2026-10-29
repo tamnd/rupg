@@ -29,7 +29,8 @@ pub fn lock_table(
     take: &mut Take<'_>,
 ) -> Result<()> {
     let params = Params::default();
-    let an = Analyzer::new(env, &params);
+    let mut an = Analyzer::new(env, &params);
+    an.lazy_views = true;
     let mut locker = Locker { an, allowed, take, ancestors: Vec::new() };
     for node in stmt.relations.iter().flatten() {
         let Node::RangeVar(rv) = node else { continue };

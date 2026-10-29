@@ -659,6 +659,9 @@ impl Analyzer<'_> {
         let Some(rel) = self.env.catalog().and_then(|c| c.relation(oid)) else { return Ok(None) };
         let Some(view) = &rel.view else { return Ok(None) };
         if self.views.contains(&oid) {
+            if self.lazy_views {
+                return Ok(None);
+            }
             return Err(Error::new(
                 SqlState::INVALID_OBJECT_DEFINITION,
                 format!("infinite recursion detected in rules for relation \"{}\"", rel.name),
@@ -680,6 +683,7 @@ impl Analyzer<'_> {
         an.set_path(&view.path);
         an.views.clone_from(&self.views);
         an.views.push(oid);
+        an.lazy_views = self.lazy_views;
         let mut query = an.select(select).map_err(|error| error.with_position(None))?;
         query.funcs = an.funcs;
         Ok(Some((query, an.perms)))

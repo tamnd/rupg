@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `LOCK` of a view in a loop of views and `CREATE VIEW` on such a view work, and a query of it gives `42P17`, as in PostgreSQL (#1116).
+
 ## 0.4.8 (2026-10-29)
 
 ### Added
