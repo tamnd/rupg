@@ -2853,14 +2853,16 @@ impl Catalog {
         &mut self,
         oid: u32,
         text: String,
+        action: Option<String>,
         path: Vec<u32>,
         refs: &[ObjRef],
         populated: bool,
     ) -> Result<()> {
         let rule = self.new_oid();
+        self.rewrite_toast_oids(action.as_deref());
         let rel = self.relation_mut(oid)?;
         rel.kind = RelKind::MatView;
-        rel.view = Some(ViewInfo { rule, text, path, populated, action: None });
+        rel.view = Some(ViewInfo { rule, text, path, populated, action });
         self.depend_rule(rule, oid, refs);
         Ok(())
     }
@@ -3596,6 +3598,30 @@ impl Catalog {
     pub fn set_new_file(&mut self, oid: u32) -> Result<()> {
         let file = self.new_oid();
         self.relation_mut(oid)?.file = file;
+        Ok(())
+    }
+
+    /// `make_new_heap` and `finish_heap_swap` of `REFRESH MATERIALIZED VIEW`: the transient table takes an OID, then its array type and its row type. When the relation has a TOAST table, the transient table gets a new TOAST table and index. The relation takes the file of the transient table and the new TOAST table, and the old TOAST table goes.
+    pub fn swap_new_heap(&mut self, oid: u32) -> Result<()> {
+        let file = self.new_oid();
+        self.new_oid();
+        self.new_oid();
+        let rel = self.relation_mut(oid)?;
+        rel.file = file;
+        let old = std::mem::take(&mut rel.toast);
+        if old == 0 {
+            return Ok(());
+        }
+        let index = self
+            .relations
+            .values()
+            .find(|r| r.index.as_ref().is_some_and(|i| i.table == old))
+            .map(|r| r.oid);
+        for gone in std::iter::once(old).chain(index) {
+            self.relations.remove(&gone);
+            self.drop_depends_of(ObjRef::new(PG_CLASS, gone));
+        }
+        self.create_toast(oid)?;
         Ok(())
     }
 
