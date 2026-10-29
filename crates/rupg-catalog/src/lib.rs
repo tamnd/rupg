@@ -484,6 +484,8 @@ pub struct ViewInfo {
     pub path: Vec<u32>,
     /// `relispopulated`: false for a materialized view of `WITH NO DATA` until a `REFRESH` fills it. A view is always populated.
     pub populated: bool,
+    /// `ev_action` as `nodeToString` of PostgreSQL writes it, or `None` when the analyzer cannot write the query. `pg_rewrite` then shows the text of the statement.
+    pub action: Option<String>,
 }
 
 impl Relation {
@@ -2834,12 +2836,14 @@ impl Catalog {
         &mut self,
         new: NewRelation,
         text: String,
+        action: Option<String>,
         path: Vec<u32>,
         refs: &[ObjRef],
     ) -> Result<u32> {
         let oid = self.create_relation(new, RelKind::View)?;
         let rule = self.new_oid();
-        self.relation_mut(oid)?.view = Some(ViewInfo { rule, text, path, populated: true });
+        self.rewrite_toast_oids(action.as_deref());
+        self.relation_mut(oid)?.view = Some(ViewInfo { rule, text, path, populated: true, action });
         self.depend_rule(rule, oid, refs);
         Ok(oid)
     }
@@ -2856,7 +2860,7 @@ impl Catalog {
         let rule = self.new_oid();
         let rel = self.relation_mut(oid)?;
         rel.kind = RelKind::MatView;
-        rel.view = Some(ViewInfo { rule, text, path, populated });
+        rel.view = Some(ViewInfo { rule, text, path, populated, action: None });
         self.depend_rule(rule, oid, refs);
         Ok(())
     }
@@ -2874,16 +2878,19 @@ impl Catalog {
         oid: u32,
         columns: Vec<Column>,
         text: String,
+        action: Option<String>,
         path: Vec<u32>,
         refs: &[ObjRef],
     ) -> Result<()> {
         Catalog::check_columns(&columns)?;
+        self.rewrite_toast_oids(action.as_deref());
         let rel = self.relation_mut(oid)?;
         let old = rel.columns.len();
         rel.columns.extend(columns.into_iter().skip(old));
         let view = rel.view.as_mut().ok_or_else(|| no_object("view", oid))?;
         view.text = text;
         view.path = path;
+        view.action = action;
         let rule = view.rule;
         self.depends.retain(|d| d.object != ObjRef::new(PG_REWRITE, rule));
         self.depend_rule(rule, oid, refs);
@@ -3383,6 +3390,15 @@ impl Catalog {
     /// `toast_save_datum` for each value of the `pg_proc` row of `function` that moves to the TOAST table: each takes an OID. The syscache gives the row with its values out of the TOAST table, so each update of the row moves them again with new OIDs.
     fn proc_toast_oids(&mut self, function: &Function) {
         for _ in proc_toast(function).into_iter().filter(|&moved| moved) {
+            self.new_oid();
+        }
+    }
+
+    /// `toast_save_datum` for `ev_action` of a `pg_rewrite` row, when the value moves to the TOAST table: it takes an OID. The row has no nulls, so the header has 24 bytes. The columns before `ev_action` take 78 bytes, with `<>` in `ev_qual`.
+    fn rewrite_toast_oids(&mut self, action: Option<&str>) {
+        if let Some(action) = action
+            && toast::moved(24, 78, &[action.as_bytes()], rupg_encode::Method::Lz4)[0]
+        {
             self.new_oid();
         }
     }

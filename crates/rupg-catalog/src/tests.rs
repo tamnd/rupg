@@ -648,3 +648,26 @@ fn toast_moves_long_values() {
     // A long value that does not compress moves, and a short value stays.
     assert_eq!(toast::moved(32, 136, &[b"", &noise[..]], method), [false, true]);
 }
+
+#[test]
+fn view_rule_takes_toast_oid() {
+    let mut state = 1u64;
+    let noise: String = (0..9000)
+        .map(|_| {
+            state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            char::from(b"abcdefghijklmnopqrstuvwxyz"[(state >> 59) as usize % 26])
+        })
+        .collect();
+    let mut cat = Catalog::new();
+    let ns = cat.create_schema("s", SUPERUSER).unwrap();
+    let mut view = |name: &str, action: Option<String>| {
+        let new = table(ns, name, &[("a", INT4, -1)]);
+        cat.create_view(new, String::new(), action, Vec::new(), &[]).unwrap()
+    };
+    let first = view("v1", Some("({QUERY})".to_string()));
+    let second = view("v2", Some(noise));
+    let third = view("v3", None);
+    // A view takes four OIDs: the relation, the array type, the row type and the rule. A long query that does not compress moves to the TOAST table and takes one more.
+    assert_eq!(second - first, 4);
+    assert_eq!(third - second, 5);
+}
