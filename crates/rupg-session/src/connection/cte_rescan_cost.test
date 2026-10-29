@@ -1,0 +1,76 @@
+> explain with v(x) as (values ('0'::numeric), ('1'), ('-1'), ('4.2'), ('inf'), ('-inf'), ('nan')) select x1, x2 from v as v1(x1), v as v2(x2) where x2 != 0
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.09..1.15 rows=42 width=64)
+row   CTE v
+row     ->  Values Scan on "*VALUES*"  (cost=0.00..0.09 rows=7 width=32)
+row   ->  CTE Scan on v v2  (cost=0.00..0.16 rows=6 width=32)
+row         Filter: (x2 <> '0'::numeric)
+row   ->  CTE Scan on v v1  (cost=0.00..0.14 rows=7 width=32)
+EXPLAIN
+> explain with v(x) as materialized (select g from generate_series(1, 100) g) select * from v v1, v v2 where v1.x < v2.x
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=1.00..229.00 rows=3333 width=8)
+row   Join Filter: (v1.x < v2.x)
+row   CTE v
+row     ->  Function Scan on generate_series g  (cost=0.00..1.00 rows=100 width=4)
+row   ->  CTE Scan on v v1  (cost=0.00..2.00 rows=100 width=4)
+row   ->  CTE Scan on v v2  (cost=0.00..2.00 rows=100 width=4)
+EXPLAIN
+> explain with recursive r(n) as (select 1 union all select n + 1 from r where n < 10) select * from r r1, r r2 where r1.n < r2.n
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=2.64..25.20 rows=320 width=8)
+row   Join Filter: (r1.n < r2.n)
+row   CTE r
+row     ->  Recursive Union  (cost=0.00..2.64 rows=31 width=4)
+row           ->  Result  (cost=0.00..0.01 rows=1 width=4)
+row           ->  WorkTable Scan on r  (cost=0.00..0.23 rows=3 width=4)
+row                 Filter: (n < 10)
+row   ->  CTE Scan on r r1  (cost=0.00..0.62 rows=31 width=4)
+row   ->  CTE Scan on r r2  (cost=0.00..0.62 rows=31 width=4)
+EXPLAIN
+> explain select * from json_table('[1,2,3]'::jsonb, '$[*]' columns (a int path '$')) j1, json_table('[1,2]'::jsonb, '$[*]' columns (b int path '$')) j2 where a < b
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.01..226.50 rows=3333 width=8)
+row   Join Filter: (j1.a < j2.b)
+row   ->  Table Function Scan on "json_table" j1  (cost=0.01..1.00 rows=100 width=4)
+row   ->  Table Function Scan on "json_table" j2  (cost=0.01..1.00 rows=100 width=4)
+EXPLAIN
+> explain select * from generate_series(1, 10) a, generate_series(1, 20) b where a < b
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.01..4.60 rows=67 width=8)
+row   Join Filter: (a.a < b.b)
+row   ->  Function Scan on generate_series a  (cost=0.00..0.10 rows=10 width=4)
+row   ->  Function Scan on generate_series b  (cost=0.00..0.20 rows=20 width=4)
+EXPLAIN
+> explain select * from json_table('[1,2,3]'::jsonb, '$[*]' columns (a int path '$'))
+fields QUERY PLAN:25:-1:-1
+row Table Function Scan on "json_table"  (cost=0.01..1.00 rows=100 width=4)
+EXPLAIN
+> explain select * from json_table('[1,2,3]'::jsonb, '$[*]' columns (a int path '$', b text path '$'))
+fields QUERY PLAN:25:-1:-1
+row Table Function Scan on "json_table"  (cost=0.01..1.01 rows=100 width=36)
+EXPLAIN
+> explain select * from json_table('[1,2,3]'::jsonb, '$[*]' columns (id for ordinality, a int path '$', b text path '$', c int exists path '$', d jsonb path '$'))
+fields QUERY PLAN:25:-1:-1
+row Table Function Scan on "json_table"  (cost=0.01..1.01 rows=100 width=76)
+EXPLAIN
+> explain select * from json_table('[1,2,3]'::jsonb, '$[*]' columns (a int path '$', nested path '$[*]' columns (b int path '$')))
+fields QUERY PLAN:25:-1:-1
+row Table Function Scan on "json_table"  (cost=0.01..1.01 rows=100 width=8)
+EXPLAIN
+> explain select * from json_table('[1,2,3]'::jsonb, '$[*]' columns (id for ordinality))
+fields QUERY PLAN:25:-1:-1
+row Table Function Scan on "json_table"  (cost=0.00..1.00 rows=100 width=4)
+EXPLAIN
+> explain select * from json_table('[1,2,3]'::jsonb, '$[*]' columns (a int path '$', b int path '$', c int path '$', d int path '$', e int path '$', f int path '$'))
+fields QUERY PLAN:25:-1:-1
+row Table Function Scan on "json_table"  (cost=0.02..1.02 rows=100 width=24)
+EXPLAIN
+> explain select * from json_table('[1,2,3]'::jsonb, '$[*]' columns (a int path '$', b int path '$', c int path '$', d int path '$', e int path '$', f int path '$', g int path '$'))
+fields QUERY PLAN:25:-1:-1
+row Table Function Scan on "json_table"  (cost=0.02..1.02 rows=100 width=28)
+EXPLAIN
+> explain select * from json_table(jsonb '[1]' || jsonb '[2]', '$[*]' columns (id for ordinality))
+fields QUERY PLAN:25:-1:-1
+row Table Function Scan on "json_table"  (cost=0.00..1.00 rows=100 width=4)
+EXPLAIN

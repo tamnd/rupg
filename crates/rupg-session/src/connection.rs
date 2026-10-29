@@ -7060,6 +7060,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/scan_join_order.test")));
     }
 
+    /// A scan of a query of `WITH` again in the inner loop of a nested loop costs `cpu_tuple_cost` for each row, as its rows are in a tuplestore, and a scan of `JSON_TABLE` costs all of its cost again, as `cost_rescan` gives them. `connection/cte_rescan_cost.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn cte_rescan_cost() {
+        big_stack(|| script(include_str!("connection/cte_rescan_cost.test")));
+    }
+
     /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.
     #[test]
     fn role_settings_at_start() {

@@ -816,7 +816,14 @@ impl Expr {
         match &self.kind {
             ExprKind::Func(f) => func_cost(f.oid),
             ExprKind::NullIf { equal, .. } | ExprKind::Distinct { equal, .. } => func_cost(*equal),
-            ExprKind::ScalarArrayOp { .. } | ExprKind::MinMax { .. } => 1.0,
+            // `MinMaxExpr`, `SQLValueFunction`, `XmlExpr`, `CoerceToDomain` and `JsonExpr` cost one operator. The context item of `JSON_TABLE` is a `JsonExpr` in PostgreSQL.
+            ExprKind::ScalarArrayOp { .. }
+            | ExprKind::MinMax { .. }
+            | ExprKind::SqlValue(_)
+            | ExprKind::Xml(_)
+            | ExprKind::CoerceToDomain(..)
+            | ExprKind::JsonExpr(_)
+            | ExprKind::JsonTable(_) => 1.0,
             // The input function of the new type and the output function of the old type.
             ExprKind::CoerceViaIo(..) => 2.0,
             _ => 0.0,

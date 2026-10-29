@@ -2653,10 +2653,11 @@ fn rescan(node: &Node<'_>) -> (f64, f64) {
         Kind::Materialize | Kind::Sort(_) => {
             (0.0, cost::CPU_OPERATOR * c.rows + cost::spill(c.rows, c.width))
         }
-        Kind::FunctionScan(_)
-        | Kind::TableFunctionScan(_)
-        | Kind::CteScan(_)
-        | Kind::WorkTableScan(_) => (0.0, c.total - c.startup),
+        // The rows of the query of `WITH` are in a tuplestore, so a scan after the first costs only `cpu_tuple_cost` for each row.
+        Kind::CteScan(_) | Kind::WorkTableScan(_) => {
+            (0.0, cost::CPU_TUPLE * c.rows + cost::spill(c.rows, c.width))
+        }
+        Kind::FunctionScan(_) => (0.0, c.total - c.startup),
         _ => (c.startup, c.total),
     }
 }
