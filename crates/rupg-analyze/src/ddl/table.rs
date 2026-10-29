@@ -377,8 +377,12 @@ impl Definer<'_, '_> {
         if stmt.tablespacename.is_some() {
             return Err(not_yet("TABLESPACE", at));
         }
-        if stmt.accessMethod.is_some() {
-            return Err(not_yet("USING", at));
+        if let Some(method) = &stmt.accessMethod {
+            // A partitioned table keeps its access method in `relam` for its new partitions.
+            if stmt.partspec.is_some() {
+                return Err(not_yet("USING for a partitioned table", at));
+            }
+            super::table_access_method(method)?;
         }
         for serial in &mut plan.serials {
             let info = match &serial.identity {

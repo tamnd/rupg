@@ -1,0 +1,26 @@
+> create table am1 (a int) using heap
+CREATE TABLE
+> create table am2 (a int) using btree
+ERROR 55000 access method "btree" is not of type TABLE
+> create table am3 (a int) using nope
+ERROR 42704 access method "nope" does not exist
+> create table am4 using heap as select 1 as a
+SELECT 1
+> create materialized view am5 using heap as select 1 as a
+SELECT 1
+> alter table am1 set access method heap
+ALTER TABLE
+> alter table am1 set access method default
+ALTER TABLE
+> alter table am1 set access method heap, set access method heap
+ALTER TABLE
+> alter table am1 set access method heap2
+ERROR 42704 access method "heap2" does not exist
+> alter materialized view am5 set access method heap
+ALTER MATERIALIZED VIEW
+> select c.relname, a.amname from pg_class c join pg_am a on a.oid = c.relam where c.relname like 'am%' order by 1
+fields relname@pg_class.2:19:64:-1,amname@pg_am.2:19:64:-1
+row am1,heap
+row am4,heap
+row am5,heap
+SELECT 3

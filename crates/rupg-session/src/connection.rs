@@ -3901,6 +3901,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/event_trigger_rewrite.test")));
     }
 
+    /// `USING heap` and `SET ACCESS METHOD heap` keep the table on `heap`, and other methods give the PG errors.
+    #[test]
+    fn access_method() {
+        big_stack(|| script(include_str!("connection/access_method.test")));
+    }
+
     #[test]
     fn heap_fillfactor() {
         big_stack(|| script(include_str!("connection/heap_fillfactor.test")));

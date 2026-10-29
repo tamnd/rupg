@@ -123,8 +123,8 @@ impl Definer<'_, '_> {
         if into.tableSpaceName.is_some() {
             return Err(not_yet("TABLESPACE", at));
         }
-        if into.accessMethod.is_some() {
-            return Err(not_yet("USING", at));
+        if let Some(method) = &into.accessMethod {
+            super::table_access_method(method)?;
         }
         self.check_on_commit(into.onCommit, namespace)?;
         let table = self.create_query_table(namespace, &name, columns, &into.options)?;
