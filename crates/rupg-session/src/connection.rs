@@ -6779,6 +6779,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/identity_fill.test")));
     }
 
+    /// `LOCK` of a view in a loop of views locks each view of the loop once, and `CREATE VIEW` can read such a view, as `LockViewRecurse` and parse analysis do. A query of the view gives `42P17`, as `fireRIRrules` does.
+    #[test]
+    fn lock_view_loop() {
+        big_stack(|| script(include_str!("connection/lock_view_loop.test")));
+    }
+
     /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
     #[test]
     fn database_settings() {

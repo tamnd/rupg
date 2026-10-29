@@ -358,6 +358,8 @@ pub(crate) struct Analyzer<'a> {
     pub(crate) keep_source: bool,
     /// The views whose queries the analyzer reads now, from the outermost. A view in its own query gives `42P17`, as `fireRIRrules` does.
     views: Vec<u32>,
+    /// True when a view in its own query is a relation with no query, not an error. Parse analysis does not expand views, so `CREATE VIEW` and `LOCK`, which the rewriter does not see, read a view that is in a loop of views, as `LockViewRecurse` does.
+    pub(crate) lazy_views: bool,
     /// The base type and the typmod of the domain whose check constraint the analyzer reads now, or `None`. Then the name `value` is [`ExprKind::DomainValue`].
     domain_value: Option<(u32, i32)>,
     /// The name of the function in SQL whose body the analyzer reads now, and the names of its input arguments, or `None`. A name that is no column can then be an argument, as `sql_fn_post_column_ref` finds it.
@@ -438,6 +440,7 @@ impl<'a> Analyzer<'a> {
             srf_values: false,
             keep_source: false,
             views: Vec::new(),
+            lazy_views: false,
             domain_value: None,
             sql_function: None,
             coldefs: None,

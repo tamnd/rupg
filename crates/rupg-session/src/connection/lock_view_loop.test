@@ -1,0 +1,47 @@
+!details
+> create table lk1 (a int)
+CREATE TABLE
+> create table lk2 (b int)
+CREATE TABLE
+> create view lkv2 (a, b) as select * from lk1, lk2
+CREATE VIEW
+> create view lkv3 as select * from lkv2
+CREATE VIEW
+> create or replace view lkv2 as select * from lkv3
+CREATE VIEW
+> begin
+BEGIN
+> lock table lkv2 in exclusive mode
+LOCK TABLE
+> select relname from pg_locks l, pg_class c where l.relation = c.oid and relname like 'lk%' and mode = 'ExclusiveLock' order by relname
+fields relname@pg_class.2:19:64:-1
+row lkv2
+row lkv3
+SELECT 2
+> rollback
+ROLLBACK
+> create view lkv7 as select * from lkv2
+CREATE VIEW
+> begin
+BEGIN
+> lock table lkv7 in exclusive mode
+LOCK TABLE
+> select relname from pg_locks l, pg_class c where l.relation = c.oid and relname like 'lk%' and mode = 'ExclusiveLock' order by relname
+fields relname@pg_class.2:19:64:-1
+row lkv2
+row lkv3
+row lkv7
+SELECT 3
+> rollback
+ROLLBACK
+> select * from lkv7
+ERROR 42P17 infinite recursion detected in rules for relation "lkv2"
+> select * from lkv2
+ERROR 42P17 infinite recursion detected in rules for relation "lkv2"
+> drop view lkv7
+DROP VIEW
+> drop view lkv3 cascade
+NOTICE 00000 drop cascades to view lkv2
+DROP VIEW
+> drop table lk1, lk2
+DROP TABLE
