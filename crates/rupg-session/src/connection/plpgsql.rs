@@ -408,6 +408,44 @@ impl Spi for PlSpi<'_> {
         result
     }
 
+    fn utility_rows(
+        &self,
+        stmt: &Node,
+        notices: &mut Vec<Error>,
+    ) -> rupg_common::Result<Option<Fetched>> {
+        let mut found = Vec::new();
+        let done = match stmt {
+            Node::ExplainStmt(explain) => self.conn.explain(explain, &mut found),
+            Node::VariableShowStmt(show) => {
+                let name = show.name.as_deref().unwrap_or("");
+                utility::show(name, &self.conn.settings.borrow()).map(Done::from)
+            }
+            _ => return Ok(None),
+        };
+        notices.extend(found.into_iter().map(Notice::into_message));
+        let Done::Rows { columns, rows, .. } = done? else { return Ok(None) };
+        let columns: Vec<_> = columns.into_iter().map(|c| (c.name, c.ty, c.typmod)).collect();
+        // The rows have the text form, and the input functions of the types give the values.
+        let session: &dyn Session = self.current();
+        let rows = rows
+            .into_iter()
+            .map(|row| {
+                row.into_iter()
+                    .zip(&columns)
+                    .map(|(value, (_, ty, typmod))| match value {
+                        Some(bytes) => {
+                            let text = String::from_utf8_lossy(&bytes);
+                            rupg_func::input(*ty, &text, *typmod, session)
+                        }
+                        None => Ok(Value::Null),
+                    })
+                    .collect::<rupg_common::Result<Vec<_>>>()
+            })
+            .collect::<rupg_common::Result<Vec<_>>>()?;
+        let count = rows.len() as u64;
+        Ok(Some(Fetched { columns, rows, count }))
+    }
+
     fn changes(&self) -> u64 {
         self.conn.calls.changes.get()
     }
