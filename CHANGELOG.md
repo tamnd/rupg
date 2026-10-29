@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- An index column now matches a condition through a placeholder and through more than one binary-compatible relabel, and the constant fold takes out a relabel to the type of its argument, as in PostgreSQL (#1106).
 - A unique index takes a column out of `GROUP BY` only when the `=` operator of the group is in the family of each key column of the index, as in PostgreSQL (#1105).
 - An aggregate call in a subquery of the arguments of an aggregate call of its own level fails as nested, and `min` and `max` of a constant that is not null test no `IS NOT NULL`, as in PostgreSQL (#1104).
 - The view action in pg_rewrite now has subqueries, sublinks, views of views, set operations and queries of WITH in the form of PostgreSQL 19 (#916) (#1103).

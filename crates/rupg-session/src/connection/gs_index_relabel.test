@@ -1,0 +1,25 @@
+> create table gsx (unique1 int, unique2 int)
+CREATE TABLE
+> insert into gsx select g, 10000 - g from generate_series(1, 10000) g
+INSERT 0 10000
+> create index gsx_u1 on gsx (unique1)
+CREATE INDEX
+> analyze gsx
+ANALYZE
+> explain (costs off) select * from gsx where unique1::oid::integer = 1
+fields QUERY PLAN:25:-1:-1
+row Index Scan using gsx_u1 on gsx
+row   Index Cond: (unique1 = 1)
+EXPLAIN
+> explain (costs off) select x, y from (select unique1 as x, unique2 as y from gsx) as t where x = 1 group by grouping sets (x, y) order by 1, 2
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: gsx.unique1, gsx.unique2
+row   ->  MixedAggregate
+row         Hash Key: gsx.unique2
+row         Group Key: gsx.unique1
+row         ->  Index Scan using gsx_u1 on gsx
+row               Index Cond: (unique1 = 1)
+EXPLAIN
+> drop table gsx
+DROP TABLE

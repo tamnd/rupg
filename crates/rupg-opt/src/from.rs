@@ -60,6 +60,9 @@ impl Unique {
     }
 }
 
+/// The key columns of a unique index with the operator family of each.
+type KeyFamilies = (Vec<i16>, Vec<u32>);
+
 /// The estimates of the relations of a query level for the costs of the joins and of the nodes above them.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Stats {
@@ -86,7 +89,7 @@ pub(crate) struct Stats {
     /// The key columns of each unique index of each relation that is immediate and has no predicate, which `relation_has_unique_index_for` reads.
     distinct: BTreeMap<usize, Vec<Vec<i16>>>,
     /// The key columns of each unique index of each relation that shows that the other columns of a row are a function of the key columns, as `remove_useless_groupby_columns` chooses them: the index is immediate and has no predicate and no expression, and each key column is `NOT NULL` or the index has `NULLS NOT DISTINCT`. Each index has the operator family of each key column.
-    functional: BTreeMap<usize, Vec<(Vec<i16>, Vec<u32>)>>,
+    functional: BTreeMap<usize, Vec<KeyFamilies>>,
     /// The members of each equivalence class of the query level, each class with true when it has a constant.
     equal: Vec<(Vec<Expr>, bool)>,
     /// The columns of the members of each equivalence class whose conditions the joins make, each with the relations of the class. `generate_base_implied_equalities_no_const` adds the relations to the `attr_needed` of the columns.
@@ -401,8 +404,7 @@ impl Stats {
                     column(e).is_some_and(|v| v.relation == *r && v.attnum == attnum) && {
                         let eqops = builtin::operators().iter().filter(|o| o.code == *equal);
                         let mut eqops = eqops.peekable();
-                        eqops.peek().is_none()
-                            || eqops.any(|o| classes::families(o.oid).contains(&family))
+                        eqops.peek().is_none() || eqops.any(|o| families(o.oid).contains(&family))
                     }
                 })
             };

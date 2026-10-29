@@ -1133,15 +1133,42 @@ fn key_test(r: usize, index: &Index, column: usize) -> Option<impl Fn(&Expr) -> 
     }
     let indexed = if attnum == 0 { Some(key_expr(index, r, column)?) } else { None };
     Some(move |e: &Expr| {
+        let stripped = strip_placeholders(e);
         let found = match &indexed {
-            Some(indexed) => e.same(indexed),
-            None => plain_var(e)
-                .is_some_and(|v| v.relation == r && v.attnum == attnum && v.levels_up == 0),
+            Some(indexed) => stripped.same(indexed),
+            None => {
+                let mut operand = &*stripped;
+                while let ExprKind::Relabel(arg, _) = &operand.kind {
+                    operand = arg;
+                }
+                matches!(operand.kind, ExprKind::Var(v) if v.relation == r && v.attnum == attnum && v.levels_up == 0)
+            }
         };
         // A column of `name` as `text` is a call of `text(name)` in PostgreSQL, with the default collation.
         let renamed = matches!(&e.kind, ExprKind::Relabel(arg, _) if arg.ty == oid::NAME);
         found && !(name_collation && renamed && e.ty != oid::NAME)
     })
+}
+
+/// `strip_noop_phvs`: the expression with each `PlaceHolderVar` replaced by its expression, as `match_index_to_operand` ignores them. A condition that a scan tests is below each outer join that could make the value of the placeholder null.
+fn strip_placeholders(expr: &Expr) -> Cow<'_, Expr> {
+    let has = expr.find(0, &mut |e, depth| {
+        (depth == 0 && matches!(e.kind, ExprKind::PlaceHolder(_))).then_some(())
+    });
+    if has.is_none() {
+        return Cow::Borrowed(expr);
+    }
+    let mut out = expr.clone();
+    out.each_mut(0, &mut |e, depth| {
+        if depth == 0
+            && let ExprKind::PlaceHolder(p) = &mut e.kind
+        {
+            let inner = std::mem::replace(&mut p.expr, Expr::new(ExprKind::CaseTest, 0));
+            *e = inner;
+        }
+        false
+    });
+    Cow::Owned(out)
 }
 
 /// `match_rowcompare_to_indexcol` and `expand_indexqual_rowcompare`: the clause of a row comparison of a `btree` index whose first pair has the key column `column` on one side, with an ordering operator of the family of the column, and a value on the other side. The next pairs count while each has a key column of the index on the same side, the operator of the same strategy in the family of that column, and a value. When all the pairs count and the key columns are on the left, the clause is the comparison. Else the clause has the pairs that count, with the operators commuted for the key columns on the right, and is lossy: `<` becomes `<=` and `>` becomes `>=`, and a single pair is an operator.
