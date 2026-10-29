@@ -522,9 +522,13 @@ impl<'a> Deparser<'a> {
                 }
             }
             ExprKind::Subscript(sub) => {
-                // The array needs parentheses unless it is a column or a field, also when it is another subscript.
-                let parens =
-                    !matches!(sub.container.kind, ExprKind::Var(_) | ExprKind::FieldSelect(..));
+                // The array needs parentheses unless it is a column or a field, also when it is another subscript. A column of another relation or of a query above in the expression of a scan is a `Param` in the plan, which also gets them.
+                let param = |v: &Var| self.own.is_some_and(|o| v.levels_up > 0 || v.relation != o);
+                let parens = match &sub.container.kind {
+                    ExprKind::Var(v) => param(v),
+                    ExprKind::FieldSelect(..) => false,
+                    _ => true,
+                };
                 if parens {
                     self.buf.push('(');
                 }

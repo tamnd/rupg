@@ -7106,6 +7106,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/distinct_dup_tlist.test")));
     }
 
+    /// A subscript of a column of the outer side of a nested loop in the expression of a scan shows the column in parentheses, as `get_rule_expr` does for the `Param` of the plan. `connection/param_subscript.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn param_subscript() {
+        big_stack(|| script(include_str!("connection/param_subscript.test")));
+    }
+
     /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.
     #[test]
     fn role_settings_at_start() {

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `EXPLAIN` now shows a subscript of a column of the outer side of a nested loop with the column in parentheses, as in `(p <-> ("*VALUES*".column1)[0])`, as PostgreSQL does (#1163).
 - Event triggers of `table_rewrite` fire for each table that `ALTER TABLE` and `ALTER TYPE` write again, with the reasons of PostgreSQL 19 in `pg_event_trigger_table_rewrite_reason` and the table in `pg_event_trigger_table_rewrite_oid` (#1162).
 
 ## 0.4.12 (2026-10-29)

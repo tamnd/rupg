@@ -1,0 +1,56 @@
+!details
+> create table gt (p point, a int[])
+CREATE TABLE
+> insert into gt select point(g * 0.01, g * 0.01), array[g, g + 1] from generate_series(1, 100) g
+INSERT 0 100
+> create index on gt using gist (p)
+CREATE INDEX
+> analyze gt
+ANALYZE
+> set enable_seqscan = off
+SET
+> set enable_bitmapscan = off
+SET
+> explain (costs off) select p from (values (box(point(0,0), point(0.5,0.5))), (box(point(0.5,0.5), point(0.75,0.75)))) as v(bb) cross join lateral (select p from gt where p <@ bb order by p <-> bb[0] limit 2) ss
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Values Scan on "*VALUES*"
+row   ->  Limit
+row         ->  Index Only Scan using gt_p_idx on gt
+row               Index Cond: (p <@ "*VALUES*".column1)
+row               Order By: (p <-> ("*VALUES*".column1)[0])
+EXPLAIN
+> select p from (values (box(point(0,0), point(0.5,0.5))), (box(point(0.5,0.5), point(0.75,0.75)))) as v(bb) cross join lateral (select p from gt where p <@ bb order by p <-> bb[0] limit 2) ss
+fields p@gt.1:600:16:-1
+row (0.5,0.5)
+row (0.49,0.49)
+row (0.75,0.75)
+row (0.74,0.74)
+SELECT 4
+> reset enable_seqscan
+RESET
+> reset enable_bitmapscan
+RESET
+> create table ot (x int[])
+CREATE TABLE
+> insert into ot values (array[1,2]), (array[3,4])
+INSERT 0 2
+> explain (costs off) select * from ot cross join lateral (select a from gt where a[1] = ot.x[1] limit 1) s
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Seq Scan on ot
+row   ->  Limit
+row         ->  Seq Scan on gt
+row               Filter: (a[1] = (ot.x)[1])
+EXPLAIN
+> select * from ot cross join lateral (select a from gt where a[1] = ot.x[1] limit 1) s
+fields x@ot.1:1007:-1:-1,a@gt.2:1007:-1:-1
+row {1,2},{1,2}
+row {3,4},{3,4}
+SELECT 2
+> explain (costs off, verbose) select a[1], p[0] from gt where a[2] > 99
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.gt
+row   Output: a[1], p[0]
+row   Filter: (gt.a[2] > 99)
+EXPLAIN
