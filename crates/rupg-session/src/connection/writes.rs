@@ -83,6 +83,19 @@ impl Connection {
         params: &[Value],
         main: Vec<Batch>,
     ) -> Result<(), Error> {
+        let ended = self.end_open_writes(writes, params, main);
+        // `ExecutorEnd` closes the tables of the statement.
+        self.open_tables.borrow_mut().clear();
+        ended
+    }
+
+    /// [`Connection::end_writes`] while the tables of the statement are open.
+    fn end_open_writes(
+        &self,
+        writes: Writes,
+        params: &[Value],
+        main: Vec<Batch>,
+    ) -> Result<(), Error> {
         let Writes { after, written, mut batches, view, after_statement } = writes;
         self.put_after_statement(after_statement);
         batches.extend(main);
@@ -169,6 +182,9 @@ impl Connection {
         view: &View,
         batches: &mut Vec<Batch>,
     ) -> Result<Vec<Vec<Value>>, Error> {
+        if let Some(info) = plan.write() {
+            self.open_tables.borrow_mut().push(info.table);
+        }
         let reader = self.reader().with_view(view.clone());
         let rows = plan.run(params, &reader)?;
         drop(reader);

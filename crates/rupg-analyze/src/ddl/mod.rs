@@ -613,6 +613,10 @@ impl Env for SchemaEnv<'_> {
         self.env.trigger_events_pending(relid)
     }
 
+    fn table_in_use(&self, relid: u32) -> bool {
+        self.env.table_in_use(relid)
+    }
+
     fn access_temp(&self) {
         self.env.access_temp();
     }
@@ -869,12 +873,22 @@ impl Definer<'_, '_> {
         self.messages.push(Message::Warning(Error::new(state, message)));
     }
 
-    /// `CheckTableNotInUse` for the pending events of the triggers: the statement `stmt` cannot change the relation `oid` while the transaction has events of its `AFTER` triggers that did not fire yet.
+    /// `CheckTableNotInUse`: the statement `stmt` cannot change the relation `oid` while an active query of the session has it open, or while the transaction has events of its `AFTER` triggers that did not fire yet.
     fn check_not_in_use(&self, oid: u32, stmt: &str) -> Result<()> {
+        let name = || self.catalog.relation(oid).map(|r| r.name.clone()).unwrap_or_default();
+        if self.an.env.table_in_use(oid) {
+            return Err(Error::new(
+                SqlState::OBJECT_IN_USE,
+                format!(
+                    "cannot {stmt} \"{}\" because it is being used by active queries in this session",
+                    name()
+                ),
+            ));
+        }
         if !self.an.env.trigger_events_pending(oid) {
             return Ok(());
         }
-        let name = self.catalog.relation(oid).map(|r| r.name.clone()).unwrap_or_default();
+        let name = name();
         Err(Error::new(
             SqlState::OBJECT_IN_USE,
             format!("cannot {stmt} \"{name}\" because it has pending trigger events"),

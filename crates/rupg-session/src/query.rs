@@ -1584,6 +1584,10 @@ impl Env for Reader<'_> {
         self.conn.is_some_and(|conn| conn.trigger_events_pending(relid))
     }
 
+    fn table_in_use(&self, relid: u32) -> bool {
+        self.conn.is_some_and(|conn| conn.table_in_use(relid))
+    }
+
     fn database(&self) -> String {
         self.database.to_owned()
     }

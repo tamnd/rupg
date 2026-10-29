@@ -1127,6 +1127,7 @@ impl Connection {
     /// The start of a statement of the client: no events in the queue and no messages of the triggers.
     pub(super) fn start_triggers(&self) {
         self.events.borrow_mut().clear();
+        self.open_tables.borrow_mut().clear();
         *self.trigger_tables.borrow_mut() = vec![Vec::new()];
         self.trigger_warnings.borrow_mut().clear();
     }

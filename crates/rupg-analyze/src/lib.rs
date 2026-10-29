@@ -221,6 +221,11 @@ pub trait Env {
         let _ = relid;
         false
     }
+    /// `CheckTableNotInUse`: true when an active query of the session has the relation open, as a write whose trigger runs the statement.
+    fn table_in_use(&self, relid: u32) -> bool {
+        let _ = relid;
+        false
+    }
     /// The number of the session in the table of the sessions, which names its temporary schema `pg_temp_N`, or `None` for a session that cannot have temporary objects.
     fn temp_number(&self) -> Option<i32> {
         None
