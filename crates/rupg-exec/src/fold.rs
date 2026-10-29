@@ -677,6 +677,69 @@ fn negate(not: &Expr, arg: &Expr) -> Expr {
     }
 }
 
+/// True when an expression that a simplification puts in two places has a subquery, calls a volatile function or costs more than 10 operators, as `inline_function` and `find_simplified_clause` test it.
+fn expensive(expr: &Expr) -> bool {
+    let mut cost = 0.0;
+    let subplan = expr
+        .find(0, &mut |e, _| {
+            cost += e.own_cost();
+            matches!(e.kind, ExprKind::SubLink(_)).then_some(())
+        })
+        .is_some();
+    subplan || cost > 10.0 || volatile(expr)
+}
+
+/// `range_contains_elem_support` and `elem_contained_by_range_support`: `range @> elem` and `elem <@ range` with a constant range that is not null. An empty range gives false, and a range with no bounds gives true. Otherwise each bound gives a comparison of the element with the operator of the `btree` family of the subtype: `>=` or `>` for the lower bound, and `<=` or `<` for the upper bound. With two bounds the element is in two places, so it must not be expensive.
+fn range_bounds(f: &Func, src: &str) -> Option<Expr> {
+    let [left, right] = f.args.as_slice() else { return None };
+    let (range, elem) = match src {
+        "range_contains_elem" => (left, right),
+        "elem_contained_by_range" => (right, left),
+        _ => return None,
+    };
+    let ExprKind::Const(Value::Range(value)) = &range.kind else { return None };
+    let sub = builtin::range_subtype(range.ty)?;
+    let family = builtin::range_opclass(range.ty)
+        .and_then(|c| builtin::opclasses().iter().find(|o| o.oid == c))?
+        .family;
+    let boolean = |b: bool| Expr::new(ExprKind::Const(Value::Bool(b)), oid::BOOL);
+    if value.is_empty() {
+        return Some(boolean(false));
+    }
+    let lower = value.flags & rupg_types::RANGE_LB_INF == 0;
+    let upper = value.flags & rupg_types::RANGE_UB_INF == 0;
+    if lower && upper && expensive(elem) {
+        return None;
+    }
+    // `build_bound_expr`: the strategies 5 and 4 of `btree` are `>` and `>=`, and 1 and 2 are `<` and `<=`.
+    let bound = |bound: &Value, strategy: i16| {
+        let op = builtin::opfamily_member(family, sub, sub, strategy)?;
+        let row = builtin::operator_by_oid(op)?;
+        let func = Func {
+            oid: row.code,
+            args: vec![elem.clone(), Expr::new(ExprKind::Const(bound.clone()), sub)],
+            form: FuncForm::Operator(op),
+            variadic: false,
+            retset: false,
+        };
+        Some(Expr::new(ExprKind::Func(func), oid::BOOL))
+    };
+    let mut clauses = Vec::new();
+    if lower {
+        let inclusive = value.flags & rupg_types::RANGE_LB_INC != 0;
+        clauses.push(bound(&value.lower, if inclusive { 4 } else { 5 })?);
+    }
+    if upper {
+        let inclusive = value.flags & rupg_types::RANGE_UB_INC != 0;
+        clauses.push(bound(&value.upper, if inclusive { 2 } else { 1 })?);
+    }
+    Some(match clauses.len() {
+        0 => boolean(true),
+        1 => clauses.remove(0),
+        _ => Expr::new(ExprKind::Bool(BoolOp::And, clauses), oid::BOOL),
+    })
+}
+
 /// The value of a constant expression.
 fn value(expr: &Expr) -> Option<&Value> {
     match &expr.kind {
@@ -1496,6 +1559,9 @@ impl<'a> Fold<'a> {
         if let Some(inlined) = self.inline(&expr, f)? {
             return Ok(inlined);
         }
+        if let Some(simplified) = range_bounds(f, proc.src) {
+            return Ok(simplified);
+        }
         if values.iter().any(Option::is_none) || proc.volatile != b'i' {
             let f = f.clone();
             return Ok(self.inline_sql(&expr, &f, proc)?.unwrap_or(expr));
@@ -1585,17 +1651,8 @@ impl<'a> Fold<'a> {
             if count == 0 && proc.strict {
                 return Ok(None);
             }
-            if count > 1 {
-                let mut cost = 0.0;
-                let subplan = arg
-                    .find(0, &mut |e, _| {
-                        cost += e.own_cost();
-                        matches!(e.kind, ExprKind::SubLink(_)).then_some(())
-                    })
-                    .is_some();
-                if subplan || cost > 10.0 || volatile(arg) {
-                    return Ok(None);
-                }
+            if count > 1 && expensive(arg) {
+                return Ok(None);
             }
         }
         body.each_mut(0, &mut |e, _| {

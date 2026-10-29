@@ -440,7 +440,7 @@ struct Builtin {
     members: Vec<MemberRow>,
     multirange_range: HashMap<u32, u32>,
     /// The subtype and the multirange type of each range type.
-    range_types: HashMap<u32, (u32, u32)>,
+    range_types: HashMap<u32, (u32, u32, u32)>,
 }
 
 static BUILTIN: LazyLock<Builtin> = LazyLock::new(Builtin::load);
@@ -1017,12 +1017,12 @@ fn load_multirange_ranges() -> HashMap<u32, u32> {
     (0..r.catalog.len).map(|i| (multirange[i], range[i])).collect()
 }
 
-/// The subtype and the multirange type of each range type, from `pg_range`.
-fn load_range_types() -> HashMap<u32, (u32, u32)> {
+/// The subtype, the multirange type and the `btree` operator class of the subtype of each range type, from `pg_range`.
+fn load_range_types() -> HashMap<u32, (u32, u32, u32)> {
     let r = Rows::new("pg_range");
-    let (range, subtype, multirange) =
-        (r.oid("rngtypid"), r.oid("rngsubtype"), r.oid("rngmultitypid"));
-    (0..r.catalog.len).map(|i| (range[i], (subtype[i], multirange[i]))).collect()
+    let (range, subtype, multirange, subopc) =
+        (r.oid("rngtypid"), r.oid("rngsubtype"), r.oid("rngmultitypid"), r.oid("rngsubopc"));
+    (0..r.catalog.len).map(|i| (range[i], (subtype[i], multirange[i], subopc[i]))).collect()
 }
 
 /// The values of an `aclitem[]` column, for [`Rows::optional`].
@@ -1263,6 +1263,8 @@ pub struct SessionRange {
     pub subtype: u32,
     /// `rngcollation`.
     pub collation: u32,
+    /// `rngsubopc`.
+    pub subopc: u32,
     /// `typalign` of the four types.
     pub align: u8,
     pub multirange: u32,
@@ -1283,6 +1285,7 @@ struct RangeRow {
     subtype: u32,
     multirange: u32,
     collation: u32,
+    subopc: u32,
 }
 
 /// A function in SQL of the catalog of a session, for [`use_session_types`].
@@ -1763,6 +1766,7 @@ fn range_rows(new: &SessionRange) -> Option<Interned> {
         subtype: new.subtype,
         multirange: new.multirange,
         collation: new.collation,
+        subopc: new.subopc,
     };
     Some(Interned {
         types: types.into_iter().map(|row| &*Box::leak(Box::new(row))).collect(),
@@ -2380,7 +2384,7 @@ pub fn range_subtype(range: u32) -> Option<u32> {
     BUILTIN
         .range_types
         .get(&range)
-        .map(|&(subtype, _)| subtype)
+        .map(|&(subtype, _, _)| subtype)
         .or_else(|| session_range(|r| (r.oid == range).then_some(r.subtype)))
 }
 
@@ -2389,8 +2393,17 @@ pub fn range_multirange(range: u32) -> Option<u32> {
     BUILTIN
         .range_types
         .get(&range)
-        .map(|&(_, multirange)| multirange)
+        .map(|&(_, multirange, _)| multirange)
         .or_else(|| session_range(|r| (r.oid == range).then_some(r.multirange)))
+}
+
+/// `rngsubopc` of a range type: the `btree` operator class of the subtype.
+pub fn range_opclass(range: u32) -> Option<u32> {
+    BUILTIN
+        .range_types
+        .get(&range)
+        .map(|&(_, _, subopc)| subopc)
+        .or_else(|| session_range(|r| (r.oid == range).then_some(r.subopc)))
 }
 
 /// The collation of a range type of a session, as `get_range_collation` gives it, or `None` for a built-in range type, whose collation is the collation of its subtype.

@@ -10,6 +10,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - `TRUNCATE` fires the `BEFORE` and `AFTER` statement triggers of `TRUNCATE`, and the notices of the triggers that ran before an error of a utility statement go to the client (#1132).
 - `UPDATE` of `pg_class` sets `reloptions`, and `UPDATE` of `pg_database` sets `datacl` (#1131).
 - ALTER TABLE, ALTER INDEX and ALTER MATERIALIZED VIEW with SET TABLESPACE pg_default do nothing, as in PostgreSQL for a move to the same tablespace, and SET TABLESPACE pg_global gives the error of PostgreSQL (#1130).
+- `range @> elem` and `elem <@ range` with a constant range become comparisons with the bounds of the range, as in PostgreSQL (#1134).
 
 ## 0.4.9 (2026-10-29)
 
