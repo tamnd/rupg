@@ -730,6 +730,17 @@ impl Definer<'_, '_> {
                     _ => return Err(not_yet("ALTER TABLE ... SET TABLESPACE", None)),
                 }
             }
+            // `ATPrepSetAccessMethod`: every table and materialized view has `heap`, so the subcommand has no work.
+            // `chgAccessMethod` stays false for the same method, so a second subcommand is not an error.
+            AlterTableType::AT_SetAccessMethod => {
+                self.simple_permissions(target, cmd, b"rmp")?;
+                if let Some(method) = cmd.name.as_deref() {
+                    super::table_access_method(method)?;
+                }
+                if target.kind == b'p' && cmd.name.is_some() {
+                    return Err(not_yet("SET ACCESS METHOD for a partitioned table", None));
+                }
+            }
             // A table has no OIDs, so `SET WITHOUT OIDS` has no work.
             AlterTableType::AT_DropOids => self.simple_permissions(target, cmd, TABLE)?,
             other => {

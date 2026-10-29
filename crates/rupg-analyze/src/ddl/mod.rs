@@ -806,6 +806,21 @@ pub(crate) struct Definer<'a, 'c> {
     rewrites: Vec<Rewrite>,
 }
 
+/// `get_table_am_oid`: the table access method `name`. `heap` is the only one.
+fn table_access_method(name: &str) -> Result<()> {
+    match builtin::access_method_oid(name) {
+        Some(_) if name == "heap" => Ok(()),
+        Some(_) => Err(Error::new(
+            SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
+            format!("access method \"{name}\" is not of type TABLE"),
+        )),
+        None => Err(Error::new(
+            SqlState::UNDEFINED_OBJECT,
+            format!("access method \"{name}\" does not exist"),
+        )),
+    }
+}
+
 /// An error for a part of a statement that rupg does not support yet.
 fn not_yet(what: &str, at: Option<usize>) -> Error {
     Error::new(SqlState::FEATURE_NOT_SUPPORTED, format!("{what} is not supported yet")).at_opt(at)
