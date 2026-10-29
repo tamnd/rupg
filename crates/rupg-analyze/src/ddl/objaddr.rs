@@ -38,6 +38,7 @@ pub fn object_address(
         scans: Vec::new(),
         repacked: Vec::new(),
         on_commit: Vec::new(),
+        dropped: Vec::new(),
         truncated: Vec::new(),
         transforms: Vec::new(),
         added: Vec::new(),

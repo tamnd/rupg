@@ -432,6 +432,11 @@ impl Definer<'_, '_> {
             .with_hint(format!("You can drop {other} instead.")));
         }
         self.report(&targets, cascade, objects)?;
+        self.dropped.extend(targets.iter().map(|target| super::Dropped {
+            object: target.object,
+            original: target.flags & flag::ORIGINAL != 0,
+            normal: target.flags & (flag::NORMAL | flag::REVERSE) != 0,
+        }));
         self.catalog.remove(&targets)
     }
 

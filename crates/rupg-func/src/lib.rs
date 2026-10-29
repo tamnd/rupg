@@ -113,6 +113,7 @@ pub use describe::describe;
 pub use encoding::{char_to_encoding, encoding, encoding_to_char};
 pub use formatting::datetime_format_has_tz;
 pub use hash::{HASH_PARTITION_SEED, extended_hash, hash_combine64, partition_hash};
+pub use identify::dropped_object;
 pub use io::{
     anyarray_array, base_type, input, input_soft, input_supported, is_row_type, output,
     output_supported, receive, send, to_text,
@@ -272,6 +273,10 @@ pub trait Session {
     /// `MyTriggerDepth`: the number of the trigger functions that run, one in the other. It is 0 outside of a trigger.
     fn trigger_depth(&self) -> i32 {
         0
+    }
+    /// The rows of `pg_event_trigger_dropped_objects`, in the 12 columns of the function: the objects that the command of the event trigger of `sql_drop` that runs dropped. `None` outside of an event trigger of `sql_drop`.
+    fn dropped_objects(&self) -> Option<Vec<Vec<Value>>> {
+        None
     }
     /// The order of the rows of the joins of the plan of `query`, as `rupg_opt::join_order` gives it: the relations from the outermost loop to the innermost one, each with true when its rows come in the reverse order of the scan and with the keys of the index of an index scan. `None` when the plan gives its rows in another order or the session has no planner.
     fn join_order(&self, query: &rupg_analyze::Query) -> Option<Vec<rupg_plan::Scanned>> {

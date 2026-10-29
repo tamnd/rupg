@@ -1,0 +1,38 @@
+> create function f_drop() returns event_trigger language plpgsql as $$ declare r record; begin for r in select * from pg_event_trigger_dropped_objects() loop raise notice '% % % %', r.object_type, r.object_identity, r.original, r.normal; end loop; end $$
+CREATE FUNCTION
+> create event trigger e_drop on sql_drop execute procedure f_drop()
+CREATE EVENT TRIGGER
+> select * from pg_event_trigger_dropped_objects()
+fields classid:26:4:-1,objid:26:4:-1,objsubid:23:4:-1,original:16:1:-1,normal:16:1:-1,is_temporary:16:1:-1,object_type:25:-1:-1,schema_name:25:-1:-1,object_name:25:-1:-1,object_identity:25:-1:-1,address_names:1009:-1:-1,address_args:1009:-1:-1
+ERROR 39P03 pg_event_trigger_dropped_objects() can only be called in a sql_drop event trigger function
+> create table t (a int default 1, b int)
+CREATE TABLE
+> alter table t alter column a drop default
+NOTICE 00000 default value for public.t.a t f (PL/pgSQL function f_drop() line 1 at RAISE)
+ALTER TABLE
+> alter table t drop column b
+NOTICE 00000 table column public.t.b t f (PL/pgSQL function f_drop() line 1 at RAISE)
+ALTER TABLE
+> create view v as select a from t
+CREATE VIEW
+> drop table t cascade
+NOTICE 00000 drop cascades to view v
+NOTICE 00000 table public.t t f (PL/pgSQL function f_drop() line 1 at RAISE)
+NOTICE 00000 type public.t f f (PL/pgSQL function f_drop() line 1 at RAISE)
+NOTICE 00000 type public.t[] f f (PL/pgSQL function f_drop() line 1 at RAISE)
+NOTICE 00000 view public.v f t (PL/pgSQL function f_drop() line 1 at RAISE)
+NOTICE 00000 type public.v f f (PL/pgSQL function f_drop() line 1 at RAISE)
+NOTICE 00000 type public.v[] f f (PL/pgSQL function f_drop() line 1 at RAISE)
+NOTICE 00000 rule "_RETURN" on public.v f t (PL/pgSQL function f_drop() line 1 at RAISE)
+DROP TABLE
+> create temp table tt (a int)
+CREATE TABLE
+> drop table tt
+NOTICE 00000 table pg_temp.tt t f (PL/pgSQL function f_drop() line 1 at RAISE)
+NOTICE 00000 type pg_temp.tt f f (PL/pgSQL function f_drop() line 1 at RAISE)
+NOTICE 00000 type pg_temp.tt[] f f (PL/pgSQL function f_drop() line 1 at RAISE)
+DROP TABLE
+> drop event trigger e_drop
+DROP EVENT TRIGGER
+> drop function f_drop()
+DROP FUNCTION

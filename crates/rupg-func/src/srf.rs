@@ -54,6 +54,7 @@ pub fn set_kernel(func: u32) -> Option<SetKernel> {
         "pg_partition_tree" => crate::catinfo::partition_tree,
         "pg_partition_ancestors" => crate::catinfo::partition_ancestor_rows,
         "pg_get_keywords" => keywords,
+        "pg_event_trigger_dropped_objects" => dropped_objects,
         "pg_get_wait_events" => wait_events,
         "show_all_settings" => all_settings,
         "pg_prepared_statement" => prepared_statements,
@@ -199,6 +200,16 @@ fn all_settings(call: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
 /// `pg_prepared_statement`: the named prepared statements of the session, which the view `pg_prepared_statements` reads.
 fn prepared_statements(call: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
     Ok(call.session.prepared_statements())
+}
+
+/// `pg_event_trigger_dropped_objects`: the objects that the command of the event trigger of `sql_drop` that runs dropped.
+fn dropped_objects(call: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
+    call.session.dropped_objects().ok_or_else(|| {
+        Error::new(
+            SqlState::E_R_I_E_EVENT_TRIGGER_PROTOCOL_VIOLATED,
+            "pg_event_trigger_dropped_objects() can only be called in a sql_drop event trigger function",
+        )
+    })
 }
 
 /// `pg_cursor`: the open cursors of the session, which the view `pg_cursors` reads.

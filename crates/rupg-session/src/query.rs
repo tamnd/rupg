@@ -1085,6 +1085,10 @@ impl rupg_func::Session for Reader<'_> {
         self.conn.map_or(0, Connection::trigger_depth)
     }
 
+    fn dropped_objects(&self) -> Option<Vec<Vec<Value>>> {
+        self.conn?.dropped_objects()
+    }
+
     fn transaction_id(&self, assign: bool) -> Option<u64> {
         self.conn?.transaction_id(assign).map(u64::from)
     }

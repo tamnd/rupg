@@ -4,7 +4,7 @@
 //!
 //! All subcommands get their checks first, in the order of the statement. Then they run in the passes of `AlterTablePass`: the drops, the changes of the types of columns, the new columns, the indexes and the constraints on the changed columns, the transform of the new constraints, the not-null constraints, the indexes, the other constraints, the defaults and the new identity columns, and last the change of the owner, the `SET` options of the identity columns and the other subcommands of `AT_PASS_MISC`, in the order of the statement.
 
-use rupg_catalog::{ConKind, DepKind, PG_CLASS, RelKind};
+use rupg_catalog::{ConKind, DepKind, ObjRef, PG_ATTRDEF, PG_CLASS, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Owned};
 use rupg_sql::nodes::{
@@ -1073,6 +1073,14 @@ impl Definer<'_, '_> {
         }
     }
 
+    /// Keeps the default of a column for `pg_event_trigger_dropped_objects`, as `RemoveAttrDefault` does when the drop is not internal.
+    pub(super) fn report_default_drop(&mut self, table: u32, column: i16) {
+        if let Some(default) = self.catalog.default_of(table, column) {
+            let object = ObjRef::new(PG_ATTRDEF, default.oid);
+            self.dropped.push(super::Dropped { object, original: true, normal: false });
+        }
+    }
+
     /// `ATExecColumnDefault`: drops the default of the column, then adds the new default.
     pub(super) fn column_default(
         &mut self,
@@ -1128,6 +1136,9 @@ impl Definer<'_, '_> {
             });
         }
         let (ty, typmod) = rel.and_then(|r| r.column(number)).map_or((0, -1), |c| (c.ty, c.typmod));
+        if def.is_none() {
+            self.report_default_drop(target.oid, number);
+        }
         self.catalog.remove_default(target.oid, number);
         let Some(node) = def else { return Ok(()) };
         self.table_scope(target.oid);
@@ -1502,7 +1513,7 @@ impl Definer<'_, '_> {
             self.owned_large_object(object)?;
             self.check_can_set_role(new)?;
         }
-        let object = rupg_catalog::ObjRef::new(rupg_catalog::PG_LARGEOBJECT, oid);
+        let object = ObjRef::new(rupg_catalog::PG_LARGEOBJECT, oid);
         self.catalog.set_object_owner(object, new, &role_name(old), &role_name(new))
     }
 
