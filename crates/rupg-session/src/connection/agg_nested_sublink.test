@@ -1,0 +1,54 @@
+> create table mmc (a int, b int)
+CREATE TABLE
+> insert into mmc select g, g % 3 from generate_series(1, 100) g
+INSERT 0 100
+> analyze mmc
+ANALYZE
+> explain (costs off) select max(100) from mmc
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: MinMaxAggregate
+row   InitPlan minmax_1
+row     ->  Limit
+row           ->  Seq Scan on mmc
+EXPLAIN
+> select max(100) from mmc
+fields max:23:4:-1
+row 100
+SELECT 1
+> explain (costs off) select max(null) from mmc
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: MinMaxAggregate
+row   InitPlan minmax_1
+row     ->  Limit
+row           ->  Result
+row                 One-Time Filter: (NULL::text IS NOT NULL)
+row                 ->  Seq Scan on mmc
+EXPLAIN
+> select max(null) from mmc
+fields max:25:-1:-1
+row NULL
+SELECT 1
+> explain (costs off) select min(1 + 2) from mmc
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: MinMaxAggregate
+row   InitPlan minmax_1
+row     ->  Limit
+row           ->  Seq Scan on mmc
+EXPLAIN
+> select max(min(a)) from mmc
+ERROR 42803 aggregate function calls cannot be nested at 12
+> select (select max(min(a)) from mmc m2) from mmc
+ERROR 42803 aggregate function calls cannot be nested at 20
+> select avg((select avg(m1.a order by (select avg(m2.b) from mmc m3)) from mmc m1)) from mmc m2
+ERROR 42803 aggregate function calls cannot be nested at 46
+> select avg((select avg(m1.a) filter (where (select sum(m2.b) from mmc m3) > 0) from mmc m1)) from mmc m2
+ERROR 42803 aggregate function calls cannot be nested at 52
+> select (select count(*) from mmc m1 where m1.a = sum(m2.a)) from mmc m2
+fields count:20:8:-1
+row 0
+SELECT 1
+> select sum((select count(m2.a) from mmc m1)) from mmc m2
+ERROR 42803 aggregate function calls cannot be nested at 20

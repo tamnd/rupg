@@ -200,6 +200,18 @@ fn nested_agg(expr: &Expr) -> Option<&Expr> {
     }
 }
 
+/// `check_agg_arguments_walker` and `locate_agg_of_level`: the first aggregate call or `GROUPING` in the arguments, also in a subquery, whose level is at most `level`, the level of the aggregate call that has the arguments.
+fn nested_agg_of(expr: &Expr, level: usize) -> Option<&Expr> {
+    expr.find(0, &mut |e, depth| {
+        let up = match &e.kind {
+            ExprKind::Agg(agg) => agg.levels_up,
+            ExprKind::Grouping(g) => g.levels_up,
+            _ => return None,
+        };
+        (up >= depth && up - depth <= level).then_some(e)
+    })
+}
+
 /// check_agg_arguments: the level of an aggregate or of `GROUPING`. A call whose arguments read only the columns of outer queries belongs to the outer query.
 fn agg_level<'a>(args: impl Iterator<Item = &'a Expr>) -> usize {
     args.filter_map(|e| {
@@ -296,13 +308,14 @@ impl Analyzer<'_> {
         let args: Vec<Expr> = targets.into_iter().map(|t| t.expr).collect();
         let filter = parts.filter.map(Box::new);
         // check_agg_arguments: an aggregate call in the arguments is of the same level, and a set or a window function cannot be an argument. The walk gives the error of a set or a window function at once and the error of an aggregate call after the walk. The direct arguments come last.
+        let level = agg_level(args.iter().chain(filter.as_deref()));
         let inner = args
             .iter()
             .chain(filter.as_deref())
             .find_map(nested_set)
-            .or_else(|| args.iter().chain(filter.as_deref()).find_map(nested_agg))
+            .or_else(|| args.iter().chain(filter.as_deref()).find_map(|e| nested_agg_of(e, level)))
             .or_else(|| direct.iter().find_map(nested_set))
-            .or_else(|| direct.iter().find_map(nested_agg));
+            .or_else(|| direct.iter().find_map(|e| nested_agg_of(e, level)));
         if let Some(inner) = inner {
             match inner.kind {
                 ExprKind::Agg(_) | ExprKind::Grouping(_) => {
@@ -326,7 +339,6 @@ impl Analyzer<'_> {
             .with_hint(SRF_HINT)
             .at_opt(inner.location));
         }
-        let level = agg_level(args.iter().chain(filter.as_deref()));
         self.check_agg_place(level, "aggregate functions", at)?;
         let agg = Aggref {
             oid,
