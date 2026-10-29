@@ -164,7 +164,10 @@ impl Definer<'_, '_> {
         for elem in &elems {
             let expr = match &elem.expr {
                 Some(raw) => Some(
-                    self.an.with_kind(Kind::PartitionExpression, |an| an.transform(Some(raw)))?,
+                    // `transformPartitionSpec` has a parse state with no query text, so the errors have no place.
+                    self.an
+                        .with_kind(Kind::PartitionExpression, |an| an.transform(Some(raw)))
+                        .map_err(|e| e.with_position(None))?,
                 ),
                 None => None,
             };
@@ -179,7 +182,7 @@ impl Definer<'_, '_> {
             exprs: None,
         };
         let mut exprs = Vec::new();
-        for (elem, expr) in elems.iter().zip(transformed) {
+        for (number, (elem, expr)) in elems.iter().zip(transformed).enumerate() {
             let at = place(elem.location);
             let (ty, mut collation) = match (&elem.name, expr) {
                 (Some(name), _) => {
@@ -210,6 +213,7 @@ impl Definer<'_, '_> {
                     }
                 }
                 (None, Some(expr)) => {
+                    super::table::check_partition_key_type(number + 1, expr.ty)?;
                     let collation = self.expr_collation(table, elem.expr.as_ref(), &expr)?;
                     let system = expr.find(0, &mut |e, _| match &e.kind {
                         ExprKind::Var(var) if var.attnum < 0 => Some(()),

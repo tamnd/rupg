@@ -2053,15 +2053,25 @@ pub(crate) fn check_virtual_type(name: &str, ty: u32) -> Result<()> {
 
 /// `CheckAttributeType`: a column cannot have a pseudo-type, also as the base type of a domain or the element type of an array. The columns of a composite type passed the check when the type was made. `anyarray` allows the type `anyarray`, as `CHKATYPE_ANYARRAY` does when `allow_system_table_mods` is on.
 pub(crate) fn check_attribute_type(name: &str, ty: u32, anyarray: bool) -> Result<()> {
+    check_type(&format!("column \"{name}\""), ty, anyarray)
+}
+
+/// `CheckAttributeType` with `CHKATYPE_IS_PARTKEY` for the expression in the place `number` of a partition key.
+pub(crate) fn check_partition_key_type(number: usize, ty: u32) -> Result<()> {
+    check_type(&format!("partition key column {number}"), ty, false)
+}
+
+/// The check of [`check_attribute_type`], with `what` as the subject of the error message.
+fn check_type(what: &str, ty: u32, anyarray: bool) -> Result<()> {
     let Some(row) = types::row(ty) else { return Ok(()) };
     match row.kind {
         b'p' if anyarray && ty == oid::ANYARRAY => Ok(()),
         b'p' => Err(Error::new(
             SqlState::INVALID_TABLE_DEFINITION,
-            format!("column \"{name}\" has pseudo-type {}", types::name(ty)),
+            format!("{what} has pseudo-type {}", types::name(ty)),
         )),
-        b'd' => check_attribute_type(name, row.base, false),
-        _ if types::element(ty) != 0 => check_attribute_type(name, types::element(ty), false),
+        b'd' => check_type(what, row.base, false),
+        _ if types::element(ty) != 0 => check_type(what, types::element(ty), false),
         _ => Ok(()),
     }
 }
