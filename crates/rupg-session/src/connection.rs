@@ -67,7 +67,7 @@ mod writes;
 
 pub(crate) use activity::{Activity, Pending};
 use copy_from::Begin;
-pub(crate) use explain::planned;
+pub(crate) use explain::{btree_shape, planned};
 use extended::Failed;
 pub(crate) use extended::{Portal, Prepared};
 use writes::Writes;
@@ -6807,6 +6807,12 @@ mod tests {
     #[test]
     fn copy_default_eager() {
         big_stack(|| script(include_str!("connection/copy_default_eager.test")));
+    }
+
+    /// The size of a `btree` index after its build, after a `VACUUM` that deleted all the rows, and after inserts in an index that was empty. `connection/index_size.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn index_size() {
+        big_stack(|| script(include_str!("connection/index_size.test")));
     }
 
     /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.

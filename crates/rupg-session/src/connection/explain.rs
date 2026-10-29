@@ -120,7 +120,7 @@ impl Members<'_, '_> {
 }
 
 /// The shape of the `btree` index `index` on columns of a table with the columns `columns` and no predicate, for [`Heap::btree_size`]. `None` for another index.
-pub(super) fn btree_shape(
+pub(crate) fn btree_shape(
     index: &rupg_catalog::Relation,
     columns: &[rupg_catalog::Column],
 ) -> Option<Shape> {

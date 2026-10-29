@@ -1,0 +1,37 @@
+> create table pvt (a int) with (autovacuum_enabled = off)
+CREATE TABLE
+> insert into pvt select i from generate_series(1, 10000) i
+INSERT 0 10000
+> create index pvt_a on pvt(a)
+CREATE INDEX
+> create index pvt_1 on pvt((1))
+CREATE INDEX
+> select relname, pg_relation_size(oid), relpages, reltuples from pg_class where relname like 'pvt%' order by relname
+fields relname@pg_class.2:19:64:-1,pg_relation_size:20:8:-1,relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1
+row pvt,368640,0,-1
+row pvt_1,90112,11,10000
+row pvt_a,245760,30,10000
+SELECT 3
+> delete from pvt
+DELETE 10000
+> vacuum pvt
+VACUUM
+> select relname, pg_relation_size(oid), relpages from pg_class where relname like 'pvt%' order by relname
+fields relname@pg_class.2:19:64:-1,pg_relation_size:20:8:-1,relpages@pg_class.10:23:4:-1
+row pvt,0,0
+row pvt_1,90112,11
+row pvt_a,245760,30
+SELECT 3
+> create table pvt2 (a int)
+CREATE TABLE
+> create index pvt2_a on pvt2(a)
+CREATE INDEX
+> insert into pvt2 select i from generate_series(1, 10000) i
+INSERT 0 10000
+> select relname, pg_relation_size(oid) from pg_class where relname like 'pvt2%' order by relname
+fields relname@pg_class.2:19:64:-1,pg_relation_size:20:8:-1
+row pvt2,368640
+row pvt2_a,245760
+SELECT 2
+> drop table pvt, pvt2
+DROP TABLE

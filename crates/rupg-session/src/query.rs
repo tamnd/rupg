@@ -1179,6 +1179,15 @@ impl rupg_func::Session for Reader<'_> {
         Some(store.heap().size(database_oid(store, self.database), relation))
     }
 
+    fn index_blocks(&self, index: u32) -> Option<u32> {
+        let (_, store) = self.activity?;
+        let rel = self.catalog.relation(index)?;
+        let table = self.catalog.relation(rel.index.as_ref()?.table)?;
+        let shape = crate::connection::btree_shape(rel, &table.columns)?;
+        let database = database_oid(store, self.database);
+        Some(store.heap().btree_size(database, table.oid, index, &shape).blocks)
+    }
+
     fn statistics(&self, relation: u32) -> Vec<rupg_func::Statistic> {
         let Some((_, store)) = self.activity else { return Vec::new() };
         store.heap().statistics(database_oid(store, self.database), relation)
