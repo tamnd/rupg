@@ -1033,7 +1033,7 @@ impl<'q> Builder<'q> {
         let Some(update) = update.map(|u| unwrap_checks(u)) else { return };
         let Some(cond) = update.filter.as_ref().filter(|c| upper::has_sublink(c)) else { return };
         let scope = self.scopes.len();
-        self.scopes.push(rupg_plan::Scope {
+        self.scopes.push(Scope {
             query: update,
             parent: Some(level.scope),
             target: None,
