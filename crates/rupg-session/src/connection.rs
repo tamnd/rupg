@@ -6853,6 +6853,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/partition_key_errors.test")));
     }
 
+    /// `contain_mutable_functions` calls `jspIsMutable` for the constant path of `JSON_EXISTS`, `JSON_QUERY` and `JSON_VALUE`: a datetime method that reads the time zone, or a comparison of datetime values with a different zone status, makes the expression mutable for an index, a generated column and a partition key. `connection/jsonpath_mutable.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn jsonpath_mutable() {
+        big_stack(|| script(include_str!("connection/jsonpath_mutable.test")));
+    }
+
     /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.
     #[test]
     fn role_settings_at_start() {

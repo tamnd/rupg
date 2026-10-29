@@ -248,7 +248,7 @@ impl Definer<'_, '_> {
         if stmt.tableSpace.is_some() {
             return Err(not_yet("TABLESPACE", None));
         }
-        if predicate.as_ref().is_some_and(|p| is_mutable(self.catalog, p)) {
+        if predicate.as_ref().is_some_and(|p| is_mutable(self.an.env, self.catalog, p)) {
             return Err(Error::new(
                 SqlState::INVALID_OBJECT_DEFINITION,
                 "functions in index predicate must be marked IMMUTABLE",
@@ -580,7 +580,7 @@ impl Definer<'_, '_> {
         if let Some(expr) = &element.expr {
             match &strip_collate(expr).kind {
                 ExprKind::Var(var) if var.attnum != 0 => key = var.attnum,
-                _ if is_mutable(self.catalog, expr) => {
+                _ if is_mutable(self.an.env, self.catalog, expr) => {
                     return Err(Error::new(
                         SqlState::INVALID_OBJECT_DEFINITION,
                         "functions in index expression must be marked IMMUTABLE",

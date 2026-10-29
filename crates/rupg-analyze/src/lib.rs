@@ -150,6 +150,11 @@ pub trait Env {
     fn predicate_implied(&self, predicate: &[Expr], clauses: &[Expr]) -> bool {
         predicate.iter().all(|p| clauses.iter().any(|c| c.same(p)))
     }
+    /// `datetime_format_has_tz`: true when the format of `to_timestamp` has a field of the time zone.
+    fn datetime_format_has_tz(&self, format: &str) -> bool {
+        let _ = format;
+        false
+    }
     /// The columns of the relation `oid` after the last [`Env::command_counter_increment`] of the statement, when the statement changed them, or `None` when the relation has the columns of [`Env::catalog`].
     fn changed_columns(&self, oid: u32) -> Option<Vec<rupg_catalog::Column>> {
         let _ = oid;

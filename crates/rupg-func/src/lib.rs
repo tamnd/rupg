@@ -111,6 +111,7 @@ pub use deparse::{
 };
 pub use describe::describe;
 pub use encoding::{char_to_encoding, encoding, encoding_to_char};
+pub use formatting::datetime_format_has_tz;
 pub use hash::{HASH_PARTITION_SEED, extended_hash, hash_combine64, partition_hash};
 pub use io::{
     anyarray_array, base_type, input, input_soft, input_supported, is_row_type, output,
