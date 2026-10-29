@@ -664,6 +664,7 @@ impl Definer<'_, '_> {
             PG_FOREIGN_DATA_WRAPPER => (ObjectType::OBJECT_FDW, Kind::Fdw),
             PG_FOREIGN_SERVER => (ObjectType::OBJECT_FOREIGN_SERVER, Kind::Server),
             PG_LARGEOBJECT => (ObjectType::OBJECT_LARGEOBJECT, Kind::LargeObject),
+            rupg_catalog::PG_DATABASE => (ObjectType::OBJECT_DATABASE, Kind::Database),
             rupg_catalog::PG_DEFAULT_ACL => {
                 return self.remove_role_from_default_acl(role, object.oid);
             }
