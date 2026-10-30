@@ -1,0 +1,44 @@
+> create table ea (a int primary key, b int)
+CREATE TABLE
+> insert into ea select g, g % 10 from generate_series(1, 100) g
+INSERT 0 100
+> explain (analyze, costs off, summary off, timing off, buffers off) select * from ea where b = 3
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ea (actual rows=10.00 loops=1)
+row   Filter: (b = 3)
+row   Rows Removed by Filter: 90
+EXPLAIN
+> explain (analyze, costs off, summary off, timing off, buffers off) select * from ea order by b limit 3
+fields QUERY PLAN:25:-1:-1
+row Limit (actual rows=3.00 loops=1)
+row   ->  Sort (actual rows=3.00 loops=1)
+row         Sort Key: b
+row         Sort Method: top-N heapsort  Memory: 25kB
+row         ->  Seq Scan on ea (actual rows=100.00 loops=1)
+EXPLAIN
+> explain (analyze, costs off, summary off, timing off, buffers off) create table ea2 (a) as select generate_series(1, 3) with no data
+fields QUERY PLAN:25:-1:-1
+row ProjectSet (never executed)
+row   ->  Result (never executed)
+EXPLAIN
+> explain (analyze, costs off, summary off, timing off, buffers off) create table ea3 (a) as select generate_series(1, 3)
+fields QUERY PLAN:25:-1:-1
+row ProjectSet (actual rows=3.00 loops=1)
+row   ->  Result (actual rows=1.00 loops=1)
+EXPLAIN
+> select count(*) from ea3
+fields count:20:8:-1
+row 3
+SELECT 1
+> explain (analyze, costs off, summary off, timing off) create table ea3 as select 1 / 0
+ERROR 42P07 relation "ea3" already exists
+> explain (analyze, costs off, summary off, timing off, buffers off) create materialized view ea4 as select 1 as x
+fields QUERY PLAN:25:-1:-1
+row Result (actual rows=1.00 loops=1)
+EXPLAIN
+> select x from ea4
+fields x@ea4.1:23:4:-1
+row 1
+SELECT 1
+> explain (analyze) update ea set b = 0
+ERROR 0A000 EXPLAIN ANALYZE of INSERT, UPDATE, DELETE and MERGE is not supported yet

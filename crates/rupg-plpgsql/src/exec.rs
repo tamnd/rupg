@@ -1209,6 +1209,24 @@ impl Exec<'_> {
     /// The rows of the query of a `FOR` loop or of `RETURN QUERY`, with the columns.
     fn source_rows(&mut self, source: &Source) -> Result<(Rows, bool)> {
         match source {
+            // `exec_for_query` opens a portal for `EXPLAIN` too, which gives the lines of the plan as rows.
+            Source::Query(e)
+                if e.shown
+                    .trim_start()
+                    .get(..7)
+                    .is_some_and(|w| w.eq_ignore_ascii_case("explain")) =>
+            {
+                let node = parse_statement(&e.shown).map_err(|error| spi_error(e, error))?;
+                let line = spi_line(e.mode, &e.shown);
+                match self.utility_rows(&node, &e.shown, line.clone())? {
+                    Some(fetched) => Ok(((fetched.rows, fetched.columns), true)),
+                    None => Err(Error::new(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        "this statement is not supported yet",
+                    )
+                    .with_context(line)),
+                }
+            }
             Source::Query(e) => {
                 let (rows, _, p) = self.execute(e)?;
                 Ok(((rows, columns(&p.plan)), p.plan.write().is_none()))

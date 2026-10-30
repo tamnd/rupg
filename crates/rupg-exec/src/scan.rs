@@ -232,6 +232,24 @@ impl Tables {
         grown[row].get(column).cloned().unwrap_or(Value::Null)
     }
 
+    /// The OID of the table of a row of a relation: the partition or the child of `INHERITS` of the row, or the table of the relation.
+    pub(crate) fn leaf(&self, relation: usize, row: usize) -> u32 {
+        let width = self.types[relation].len();
+        match self.trailer(relation, row, width + 1) {
+            Some(Value::Oid(leaf)) => leaf,
+            _ => self.oids[relation],
+        }
+    }
+
+    /// The heap page of a row of a relation, from the ID of its version, or `None` for a row with no version.
+    pub(crate) fn page(&self, relation: usize, row: usize) -> Option<i64> {
+        let width = self.types[relation].len();
+        match self.trailer(relation, row, width) {
+            Some(Value::Int8(id)) => Some((id & ITEM_POINTER_MASK) >> 16),
+            _ => None,
+        }
+    }
+
     /// The tables of [`given`] for the rows that the transaction `writer` inserted, whose `xmin` is `writer` and whose `xmax` is 0.
     pub(crate) fn written_by(self, writer: Option<u32>) -> Tables {
         Tables { writer, ..self }

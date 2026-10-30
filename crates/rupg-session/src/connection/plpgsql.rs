@@ -415,7 +415,7 @@ impl Spi for PlSpi<'_> {
     ) -> rupg_common::Result<Option<Fetched>> {
         let mut found = Vec::new();
         let done = match stmt {
-            Node::ExplainStmt(explain) => self.conn.explain(explain, &mut found),
+            Node::ExplainStmt(explain) => self.conn.explain(explain, "", &mut found),
             Node::VariableShowStmt(show) => {
                 let name = show.name.as_deref().unwrap_or("");
                 utility::show(name, &self.conn.settings.borrow()).map(Done::from)

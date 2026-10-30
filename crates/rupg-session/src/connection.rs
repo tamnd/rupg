@@ -2147,7 +2147,7 @@ impl Connection {
                 self.run_prepare(node, text, &[], &mut notices, 0)
             } else if let Node::ExplainStmt(stmt) = node {
                 drop(self.portals.get_mut().close(b""));
-                self.explain(stmt, &mut notices)
+                self.explain(stmt, statement, &mut notices)
             } else if query::is_query(node) {
                 drop(self.portals.get_mut().close(b""));
                 self.select(node, &mut notices, &mut late, &mut described)
@@ -3918,6 +3918,11 @@ mod tests {
     #[test]
     fn table_access_methods() {
         big_stack(|| script(include_str!("connection/table_am.test")));
+    }
+
+    #[test]
+    fn explain_analyze() {
+        big_stack(|| script(include_str!("connection/explain_analyze.test")));
     }
 
     #[test]
