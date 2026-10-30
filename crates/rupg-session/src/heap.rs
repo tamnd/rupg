@@ -818,12 +818,12 @@ impl Heap {
         let Some(table) = state.tables.get(&(view.database, relation)) else {
             return Vec::new();
         };
-        let width = used.map(|u| u.iter().filter(|u| **u).count());
+        let columns = used_columns(used);
         table
             .versions
             .iter()
             .filter(|version| visible(version, view))
-            .map(|version| version_row(version, used, width, xids))
+            .map(|version| version_row(version, columns.as_deref(), xids))
             .collect()
     }
 
@@ -839,11 +839,11 @@ impl Heap {
         let Some(table) = state.tables.get(&(view.database, relation)) else {
             return Vec::new();
         };
-        let width = used.map(|u| u.iter().filter(|u| **u).count());
+        let columns = used_columns(used);
         tids.iter()
             .filter_map(|&tid| table.find(tid).map(|at| &table.versions[at]))
             .filter(|version| visible(version, view))
-            .map(|version| version_row(version, used, width, false))
+            .map(|version| version_row(version, columns.as_deref(), false))
             .collect()
     }
 
@@ -1715,22 +1715,17 @@ fn committed_before(xid: u32, snapshot: &Snapshot) -> bool {
     xid < snapshot.xmax && !snapshot.running.contains(&xid)
 }
 
-/// `HeapTupleSatisfiesMVCC`: true if the view sees the version.
-/// The row of a version for a scan: the columns that are true in `used`, of which there are `width`, or all its values, then `xmin` and `xmax` when `xids` is true, then the ID of the version. A column that the version has no value for is null.
-fn version_row(
-    version: &Version,
-    used: Option<&[bool]>,
-    width: Option<usize>,
-    xids: bool,
-) -> Vec<Value> {
-    let mut row = Vec::with_capacity(width.unwrap_or(version.values.len()) + 3);
-    match used {
-        Some(used) => row.extend(
-            used.iter()
-                .enumerate()
-                .filter(|(_, u)| **u)
-                .map(|(i, _)| version.values.get(i).cloned().unwrap_or(Value::Null)),
-        ),
+/// The positions of the columns that a mask of used columns keeps, so that a scan reads the mask once and not for each row.
+fn used_columns(used: Option<&[bool]>) -> Option<Vec<usize>> {
+    used.map(|u| u.iter().enumerate().filter(|(_, u)| **u).map(|(i, _)| i).collect())
+}
+
+/// The row of a version for a scan: the values of the columns at `columns`, or all its values, then `xmin` and `xmax` when `xids` is true, then the ID of the version. A column that the version has no value for is null.
+fn version_row(version: &Version, columns: Option<&[usize]>, xids: bool) -> Vec<Value> {
+    let mut row = Vec::with_capacity(columns.map_or(version.values.len(), <[usize]>::len) + 3);
+    match columns {
+        Some(columns) => row
+            .extend(columns.iter().map(|&i| version.values.get(i).cloned().unwrap_or(Value::Null))),
         None => row.extend_from_slice(&version.values),
     }
     if xids {
@@ -1742,6 +1737,7 @@ fn version_row(
     row
 }
 
+/// `HeapTupleSatisfiesMVCC`: true if the view sees the version.
 fn visible(version: &Version, view: &View) -> bool {
     let inserted = if view.xid != 0 && version.xmin == view.xid {
         version.cmin < view.command
