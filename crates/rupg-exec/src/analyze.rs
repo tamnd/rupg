@@ -840,8 +840,16 @@ impl<'p, 'q> Exec<'p, 'q> {
             let tuple = cx.tuple(node.scope, context);
             let count = tables.rows[relation].len();
             let member = node.member;
-            self.buf = (0..count)
+            let rows: Vec<usize> = (0..count)
                 .filter(|&row| member.is_none_or(|m| tables.leaf(relation, row) == m))
+                .collect();
+            if matches!(node.kind, Kind::SeqScan(_)) {
+                let pages: HashSet<i64> =
+                    rows.iter().filter_map(|&row| tables.page(relation, row)).collect();
+                self.actual.blocks += pages.len() as u64;
+            }
+            self.buf = rows
+                .into_iter()
                 .map(|row| {
                     let mut t = tuple.clone();
                     t[relation] = row;

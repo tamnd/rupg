@@ -32,7 +32,50 @@ pub struct Options {
     pub timing: bool,
     /// With `SUMMARY` and `ANALYZE`, the time of the run in milliseconds.
     pub execution_time: Option<f64>,
+    /// `BUFFERS`: each node and the planning show the counts of the buffers. rupg reads the rows from memory and has no buffer pool, so each count is 0, and the text form shows no line for them.
+    pub buffers: bool,
+    /// `track_io_timing` with `BUFFERS`: the other forms also show the times of the reads and the writes of the blocks.
+    pub io_timing: bool,
+    /// `IO`: the most buffers that the read stream of a scan pins, as `distance_capacity`. A scan of pages in memory pulls each page at a distance of 1 and makes no I/O.
+    pub io: Option<i64>,
+    /// `SERIALIZE`: the output of the rows of the result.
+    pub serialize: Option<Serialized>,
 }
+
+/// The output of the rows of the result for `SERIALIZE`, as `SerializeMetrics` keeps it.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Serialized {
+    /// True for `SERIALIZE BINARY`, which uses the send functions of the types.
+    pub binary: bool,
+    /// `bytesSent`: the bytes of the `DataRow` messages, without the type byte and the length word of each message.
+    pub bytes: u64,
+    /// `timeSpent`: the time of the output functions in milliseconds.
+    pub time: f64,
+}
+
+/// The counts of `show_buffer_usage` in the forms other than text.
+const BLOCKS: [&str; 10] = [
+    "Shared Hit Blocks",
+    "Shared Read Blocks",
+    "Shared Dirtied Blocks",
+    "Shared Written Blocks",
+    "Local Hit Blocks",
+    "Local Read Blocks",
+    "Local Dirtied Blocks",
+    "Local Written Blocks",
+    "Temp Read Blocks",
+    "Temp Written Blocks",
+];
+
+/// The times of `show_buffer_usage` with `track_io_timing`.
+const IO_TIMES: [&str; 6] = [
+    "Shared I/O Read Time",
+    "Shared I/O Write Time",
+    "Local I/O Read Time",
+    "Local I/O Write Time",
+    "Temp I/O Read Time",
+    "Temp I/O Write Time",
+];
 
 impl Default for Options {
     fn default() -> Self {
@@ -44,6 +87,10 @@ impl Default for Options {
             analyze: false,
             timing: false,
             execution_time: None,
+            buffers: false,
+            io_timing: false,
+            io: None,
+            serialize: None,
         }
     }
 }
@@ -79,6 +126,8 @@ pub struct Actual {
     pub memo: Option<[u64; 5]>,
     /// The inserts, the updates and the deletes of a `MERGE`, as `mt_merge_inserted`, `mt_merge_updated` and `mt_merge_deleted` count them. `filtered[0]` of the node has the rows of the plan below it.
     pub merged: Option<[u64; 3]>,
+    /// The pages that a `Seq Scan` read, which its read stream pulled.
+    pub blocks: u64,
 }
 
 /// The counts of the nodes of a plan, by the address of each node, as [`node_key`] gives it.
@@ -120,6 +169,12 @@ pub fn explain_analyzed(
     e.w.begin();
     e.w.open_group("Query", None, true);
     e.node(&plan.root, None, None)?;
+    // `peek_buffer_usage`: the other forms show the counts of the buffers of the planning even when they are 0.
+    if options.buffers && options.format != Format::Text {
+        e.w.open_group("Planning", Some("Planning"), true);
+        e.buffers();
+        e.w.close_group("Planning", true);
+    }
     if let Some(ms) = options.planning_time {
         e.w.float("Planning Time", Some("ms"), ms, 3);
     }
@@ -127,6 +182,9 @@ pub fn explain_analyzed(
     if options.analyze && options.format != Format::Text {
         e.w.open_group("Triggers", Some("Triggers"), false);
         e.w.close_group("Triggers", false);
+    }
+    if let Some(serialized) = &options.serialize {
+        e.serialization(serialized);
     }
     if let Some(ms) = options.execution_time {
         e.w.float("Execution Time", Some("ms"), ms, 3);
@@ -401,6 +459,10 @@ impl Explainer<'_, '_> {
             self.w.boolean("Inner Unique", node.inner_unique);
         }
         self.parts(node)?;
+        self.scan_io(node);
+        if self.options.buffers {
+            self.buffers();
+        }
         let has_children =
             !node.init_plans.is_empty() || !node.children.is_empty() || !node.sub_plans.is_empty();
         if has_children {
@@ -872,6 +934,73 @@ impl Explainer<'_, '_> {
             self.w.indent_text();
             self.w.buf.push_str(&format!("Heap Blocks: exact={exact}\n"));
         }
+    }
+
+    /// `show_buffer_usage` with counts of 0: the other forms show each count, and the text form shows no line.
+    fn buffers(&mut self) {
+        if self.w.format == Format::Text {
+            return;
+        }
+        for label in BLOCKS {
+            self.w.integer(label, None, 0);
+        }
+        if self.options.io_timing {
+            for label in IO_TIMES {
+                self.w.float(label, Some("ms"), 0.0, 3);
+            }
+        }
+    }
+
+    /// `show_scan_io_usage`: the prefetch of the pages of a `Seq Scan` or a `Bitmap Heap Scan` that read pages. The pages are in memory, so each page comes at a distance of 1 with no I/O, and the text form shows no line for the I/O.
+    fn scan_io(&mut self, node: &Node<'_>) {
+        let Some(capacity) = self.options.io else { return };
+        let Some(actual) = self.actual(node) else { return };
+        let pulled = match node.kind {
+            Kind::SeqScan(_) => actual.blocks,
+            Kind::BitmapHeapScan { .. } => actual.exact_blocks,
+            _ => return,
+        };
+        if pulled == 0 {
+            return;
+        }
+        if self.w.format == Format::Text {
+            self.w.indent_text();
+            self.w.buf.push_str(&format!("Prefetch: avg=1.00 max=1 capacity={capacity}\n"));
+        } else {
+            self.w.float("Average Prefetch Distance", None, 1.0, 3);
+            self.w.integer("Max Prefetch Distance", None, 1);
+            self.w.integer("Prefetch Capacity", None, capacity);
+            self.w.integer("I/O Count", None, 0);
+            self.w.integer("I/O Waits", None, 0);
+            self.w.float("Average I/O Size", None, 0.0, 3);
+            self.w.float("Average I/Os In Progress", None, 0.0, 3);
+        }
+    }
+
+    /// `ExplainPrintSerialize`: the output of the rows of the result.
+    fn serialization(&mut self, serialized: &Serialized) {
+        let format = if serialized.binary { "binary" } else { "text" };
+        let kb = serialized.bytes.div_ceil(1024);
+        self.w.open_group("Serialization", Some("Serialization"), true);
+        if self.w.format == Format::Text {
+            self.w.indent_text();
+            let time = if self.options.timing {
+                format!("time={:.3} ms  ", serialized.time)
+            } else {
+                String::new()
+            };
+            self.w.buf.push_str(&format!("Serialization: {time}output={kb}kB  format={format}\n"));
+        } else {
+            if self.options.timing {
+                self.w.float("Time", Some("ms"), serialized.time, 3);
+            }
+            self.w.integer("Output Volume", Some("kB"), i64::try_from(kb).unwrap_or(i64::MAX));
+            self.w.text("Format", format);
+            if self.options.buffers {
+                self.buffers();
+            }
+        }
+        self.w.close_group("Serialization", true);
     }
 
     /// `show_storage_info`: the tuplestore of a `CTE Scan`, a `Materialize` or a `WindowAgg` that ran.

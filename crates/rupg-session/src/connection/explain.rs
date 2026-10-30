@@ -9,7 +9,7 @@ use rupg_common::{Error, SqlState};
 use rupg_func::Session;
 use rupg_opt::{Enable, Index, Member, Size};
 use rupg_pgcatalog::builtin;
-use rupg_plan::{Format, HashTables, Options};
+use rupg_plan::{Format, HashTables, Options, Serialized};
 use rupg_sql::nodes::{DefElem, ExecuteStmt, ExplainStmt, Node, SelectStmt};
 use rupg_types::{Value, oid};
 use rupg_wire::CommandTag;
@@ -478,6 +478,14 @@ struct Parsed {
     timing: bool,
     /// True for `CREATE TABLE AS ... WITH NO DATA`, whose plan does not run.
     no_data: bool,
+    /// `BUFFERS`, which is on with `ANALYZE` when the statement does not give it.
+    buffers: bool,
+    /// `IO`.
+    io: bool,
+    /// `SERIALIZE`: true for `BINARY` and false for `TEXT`.
+    serialize: Option<bool>,
+    /// True for `CREATE TABLE AS` and `SELECT INTO`, whose rows go into the new table and not to the client.
+    into: bool,
 }
 
 /// `ParseExplainOptionList`: the options of the statement and the checks of the options that need `ANALYZE`.
@@ -485,7 +493,7 @@ fn parse_options(stmt: &ExplainStmt) -> Result<Parsed, Error> {
     let mut parsed = Parsed::default();
     let mut wal = false;
     let mut timing = None;
-    let mut serialize = false;
+    let mut buffers = None;
     for def in stmt.options.iter().flatten() {
         let Node::DefElem(def) = def else { continue };
         let name = def.defname.as_deref().unwrap_or_default();
@@ -494,20 +502,23 @@ fn parse_options(stmt: &ExplainStmt) -> Result<Parsed, Error> {
             "analyze" => parsed.analyze = def_boolean(def)?,
             "verbose" => parsed.verbose = def_boolean(def)?,
             "costs" => parsed.costs = Some(def_boolean(def)?),
-            "buffers" | "settings" => {
+            "buffers" => buffers = Some(def_boolean(def)?),
+            "settings" => {
                 def_boolean(def)?;
             }
+            "io" => parsed.io = def_boolean(def)?,
             "wal" => wal = def_boolean(def)?,
             "generic_plan" => parsed.generic = def_boolean(def)?,
             "timing" => timing = Some(def_boolean(def)?),
             "summary" => parsed.summary = Some(def_boolean(def)?),
             "memory" => parsed.memory = def_boolean(def)?,
             "serialize" => {
-                serialize = match def.arg {
-                    None => true,
+                parsed.serialize = match def.arg {
+                    None => Some(false),
                     Some(_) => match def_string(def)?.as_str() {
-                        "off" | "none" => false,
-                        "text" | "binary" => true,
+                        "off" | "none" => None,
+                        "text" => Some(false),
+                        "binary" => Some(true),
                         other => return Err(bad_value(def, other).with_position(at)),
                     },
                 }
@@ -542,10 +553,14 @@ fn parse_options(stmt: &ExplainStmt) -> Result<Parsed, Error> {
     if timing.unwrap_or(parsed.analyze) && !parsed.analyze {
         return Err(needs("TIMING"));
     }
-    if serialize && !parsed.analyze {
+    if parsed.io && !parsed.analyze {
+        return Err(needs("IO"));
+    }
+    if parsed.serialize.is_some() && !parsed.analyze {
         return Err(needs("SERIALIZE"));
     }
     parsed.timing = timing.unwrap_or(parsed.analyze);
+    parsed.buffers = buffers.unwrap_or(parsed.analyze);
     if parsed.generic && parsed.analyze {
         return Err(Error::new(
             SqlState::INVALID_PARAMETER_VALUE,
@@ -635,10 +650,12 @@ impl Connection {
                         return Ok(done);
                     }
                     parsed.no_data = ctas.into.as_ref().is_some_and(|into| into.skipData);
+                    parsed.into = true;
                 }
                 // `SELECT ... INTO` runs as `CREATE TABLE AS`.
                 Node::SelectStmt(select) if select.intoClause.is_some() => {
                     self.define(node, text, notices)?;
+                    parsed.into = true;
                 }
                 _ => {}
             }
@@ -787,13 +804,21 @@ impl Connection {
         });
         // `ExplainOnePlan` with `ANALYZE`: the run of the plan gives the counts of its nodes.
         let mut execution_time = None;
+        let mut serialize = None;
         let actuals = if parsed.analyze {
             let run = self.clock.monotonic();
             let params = params.unwrap_or_default();
+            // The rows of `CREATE TABLE AS` go into the table, so the output has no bytes.
+            serialize =
+                parsed.serialize.map(|binary| Serialized { binary, ..Serialized::default() });
             let mut actuals = if parsed.no_data {
                 rupg_plan::Actuals::new()
             } else if plan.write().is_none() && !plan.modifying_cte() {
-                rupg_exec::analyze(&tree, params, reader, true)?
+                let actuals = rupg_exec::analyze(&tree, params, reader, true)?;
+                if let Some(serialized) = serialize.as_mut().filter(|_| !parsed.into) {
+                    self.serialize_rows(&plan, params, reader, serialized)?;
+                }
+                actuals
             } else {
                 rupg_plan::Actuals::new()
             };
@@ -801,10 +826,14 @@ impl Connection {
                 let (counts, returned, merged) =
                     self.analyze_write(plan, &tree, params, reader, notices)?;
                 actuals = counts;
+                // The rows of `RETURNING` are in the text form after the write.
+                if let Some(serialized) = &mut serialize {
+                    serialized.bytes = returned.iter().map(data_row_bytes).sum();
+                }
                 if let Some(actual) = actuals.get_mut(&rupg_plan::node_key(&tree.root))
                     && matches!(tree.root.kind, rupg_plan::Kind::Modify { .. })
                 {
-                    actual.rows = returned;
+                    actual.rows = returned.len() as u64;
                     if matches!(
                         tree.root.kind,
                         rupg_plan::Kind::Modify { operation: rupg_plan::Operation::Merge, .. }
@@ -827,6 +856,10 @@ impl Connection {
             analyze: parsed.analyze,
             timing: parsed.timing,
             execution_time,
+            buffers: parsed.buffers,
+            io_timing: reader.settings().get("track_io_timing").as_deref() == Some("on"),
+            io: parsed.io.then(|| stream_capacity(reader)),
+            serialize,
         };
         rupg_func::explain(&tree, &options, actuals.as_ref(), reader)
     }
@@ -841,7 +874,7 @@ impl Connection {
         params: &[Value],
         reader: &Reader<'_>,
         notices: &mut Vec<Notice>,
-    ) -> Result<(rupg_plan::Actuals, u64, [u64; 3]), Error> {
+    ) -> Result<(rupg_plan::Actuals, Vec<query::Row>, [u64; 3]), Error> {
         let Some(view) = reader.view().cloned() else {
             return Err(Error::internal("the reader of the session has no view of the rows"));
         };
@@ -854,17 +887,62 @@ impl Connection {
             let done = self.write_rows(&plan, params, &view, rows?, &[], writes);
             notices.extend(self.trigger_notices());
             match done? {
-                Done::Rows { rows, .. } => rows.len() as u64,
-                _ => 0,
+                Done::Rows { rows, .. } => rows,
+                _ => Vec::new(),
             }
         } else {
             let ended = self.end_writes(writes, params, Vec::new());
             notices.extend(self.trigger_notices());
             ended?;
-            0
+            Vec::new()
         };
         Ok((actuals, returned, self.merged.get()))
     }
+
+    /// `serializeAnalyzeReceive`: a run of the plan for the rows that a client gets, with the bytes of their `DataRow` messages and the time of the output functions.
+    fn serialize_rows(
+        &self,
+        plan: &rupg_exec::Plan,
+        params: &[Value],
+        reader: &Reader<'_>,
+        serialized: &mut Serialized,
+    ) -> Result<(), Error> {
+        let rows = plan.run(params, reader)?;
+        let types: Vec<u32> = plan.columns().iter().map(|t| t.expr.ty).collect();
+        let formats = vec![i16::from(serialized.binary); types.len()];
+        let started = self.clock.monotonic();
+        for values in &rows {
+            serialized.bytes += data_row_bytes(&query::encode(&types, values, reader, &formats)?);
+        }
+        serialized.time = self.clock.monotonic().saturating_sub(started).as_secs_f64() * 1000.0;
+        Ok(())
+    }
+}
+
+/// The bytes of the `DataRow` message of a row without its type byte and its length word: the count of the columns, then the length and the bytes of each value.
+fn data_row_bytes(row: &query::Row) -> u64 {
+    2 + row.iter().map(|value| 4 + value.as_ref().map_or(0, |v| v.len() as u64)).sum::<u64>()
+}
+
+/// `read_stream_begin_impl`: the most buffers that the read stream of a scan pins, `(effective_io_concurrency + 1) * io_combine_limit`, and at most the share of `shared_buffers` of one process that `GetPinLimit` gives.
+fn stream_capacity(reader: &Reader<'_>) -> i64 {
+    let settings = reader.settings();
+    let int = |name: &str| {
+        settings
+            .get(name)
+            .and_then(|text| guc::find(name)?.parse_int(&text).ok())
+            .map_or(0, i64::from)
+    };
+    // `MaxBackends` with the 2 `NUM_SPECIAL_WORKER_PROCS`, then the 38 `NUM_AUXILIARY_PROCS`.
+    let backends = int("max_connections")
+        + int("autovacuum_worker_slots")
+        + int("max_worker_processes")
+        + int("max_wal_senders")
+        + 2;
+    let pins = int("shared_buffers") / (backends + 38);
+    ((int("effective_io_concurrency") + 1) * int("io_combine_limit"))
+        .min(pins)
+        .clamp(1, i64::from(i16::MAX))
 }
 
 /// The rows of `EXPLAIN`: a row for each line of the text form, and one row with the whole value for the other forms.
