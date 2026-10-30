@@ -406,6 +406,8 @@ pub struct Connection {
     pipelining: bool,
     /// `QueryCancelPending`. The server sets it when a `CancelRequest` with the key of this session arrives.
     cancel: Arc<AtomicBool>,
+    /// The end of the time of the statement that runs for `statement_timeout`, in microseconds since 2000, or 0 when it has no end.
+    deadline: Cell<i64>,
     /// `ProcDiePending`. `DROP DATABASE` with `FORCE` sets it in another session, and the session ends at its next message.
     end: Arc<AtomicBool>,
     clock: Arc<dyn Clock>,
@@ -556,6 +558,7 @@ impl Connection {
             xact_started: false,
             pipelining: false,
             cancel: Arc::new(AtomicBool::new(false)),
+            deadline: Cell::new(0),
             end: Arc::new(AtomicBool::new(false)),
             clock: Arc::new(OsClock::new()),
             pid: 0,
@@ -620,6 +623,19 @@ impl Connection {
     fn start_statement(&mut self) {
         self.statement_start = query::now(&*self.clock);
         self.open_tables.get_mut().clear();
+        self.start_timeout();
+    }
+
+    /// `enable_statement_timeout`: the time of a statement starts, and ends after `statement_timeout` when it is not 0.
+    fn start_timeout(&self) {
+        let ms = match crate::guc::find("statement_timeout")
+            .map(|p| self.settings.borrow().setting(p))
+        {
+            Some(crate::guc::Setting::Int(ms)) if ms > 0 => i64::from(ms),
+            _ => 0,
+        };
+        let deadline = if ms == 0 { 0 } else { query::now(&*self.clock).saturating_add(ms * 1000) };
+        self.deadline.set(deadline);
     }
 
     /// `SetSessionAuthorization` and `SetCurrentRoleId`: the session user from `session_authorization`, the current user from `role`, or the session user when `role` is `none`, and `is_superuser` from the current user. A rollback and `RESET` change the settings too, so the session reads them again before each statement and before `ReadyForQuery`. As in PostgreSQL, `is_superuser` changes only when `role` or `session_authorization` gets a value, not when `ALTER ROLE` changes the current user.
@@ -681,7 +697,7 @@ impl Connection {
         .with_randomness(&self.randomness)
         .with_statements(&self.statements)
         .with_portals(&self.portals)
-        .with_cancel(&self.cancel)
+        .with_cancel(&self.cancel, &self.deadline)
         .with_connection(self)
         .with_transition(self.transition.borrow().clone())
     }
@@ -2121,6 +2137,10 @@ impl Connection {
         let mut notices = Vec::new();
         let many = statements.len() > 1;
         for (i, &(node, statement)) in statements.iter().enumerate().skip(from) {
+            // Since PostgreSQL 13, each statement of a `Query` message has a time of its own.
+            if i > from && copied.is_none() {
+                self.start_timeout();
+            }
             if copied.is_none() {
                 self.start_xact();
                 if many {
@@ -9313,6 +9333,12 @@ mod tests {
     #[test]
     fn partition_constraintdef() {
         big_stack(|| script(include_str!("connection/partition_constraintdef.test")));
+    }
+
+    /// `statement_timeout` stops `pg_sleep` in a transaction and out of one, and each statement of a `Query` message has a time of its own. `connection/statement_timeout.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn statement_timeout() {
+        big_stack(|| script(include_str!("connection/statement_timeout.test")));
     }
 
     /// A scan of a table whose conditions of `WHERE` read only some of the columns of the query: rows that an update and a delete of the transaction changed, an error of a condition, a column that `ALTER TABLE` added and a column that it dropped. `connection/narrow_scan.test` is the output of PostgreSQL 19 for the same script in a new database.

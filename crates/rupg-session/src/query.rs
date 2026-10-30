@@ -176,6 +176,8 @@ pub(crate) struct Reader<'a> {
     portals: Option<&'a RefCell<Portals<Portal>>>,
     /// The flag that a `CancelRequest` sets, or `None` for a reader that is not a session.
     cancel: Option<&'a AtomicBool>,
+    /// The end of the time of the statement for `statement_timeout`, in microseconds since 2000, or 0 when the statement has no end. A reader that is not a session has none.
+    deadline: Option<&'a Cell<i64>>,
     /// The cache of the sequences of the session, or `None` for a reader that is not a session.
     sequences: Option<&'a RefCell<Sequences>>,
     /// The state of `random` and `uuidv7` of the session, or `None` for a reader that is not a session.
@@ -440,6 +442,7 @@ impl<'a> Reader<'a> {
             statements: None,
             portals: None,
             cancel: None,
+            deadline: None,
             sequences: None,
             randomness: None,
             warnings: RefCell::new(Vec::new()),
@@ -481,10 +484,28 @@ impl<'a> Reader<'a> {
         self
     }
 
-    /// The reader of a session that a `CancelRequest` can stop.
-    pub(crate) fn with_cancel(mut self, cancel: &'a AtomicBool) -> Reader<'a> {
+    /// The reader of a session that a `CancelRequest` and the end of `statement_timeout` at `deadline` can stop.
+    pub(crate) fn with_cancel(
+        mut self,
+        cancel: &'a AtomicBool,
+        deadline: &'a Cell<i64>,
+    ) -> Reader<'a> {
         self.cancel = Some(cancel);
+        self.deadline = Some(deadline);
         self
+    }
+
+    /// `STATEMENT_TIMEOUT`: true when the time of the statement ended at `time`.
+    fn timed_out(&self, time: i64) -> bool {
+        self.deadline.is_some_and(|d| d.get() != 0 && time >= d.get())
+    }
+
+    /// `ProcessInterrupts` for `STATEMENT_TIMEOUT`: the error of a statement whose time ended. The timer stops, as after its first error.
+    fn timeout_error(&self) -> Error {
+        if let Some(deadline) = self.deadline {
+            deadline.set(0);
+        }
+        Error::new(SqlState::QUERY_CANCELED, "canceling statement due to statement timeout")
     }
 
     /// The reader of a session with prepared statements.
@@ -582,6 +603,9 @@ impl<'a> Reader<'a> {
                 .with_context(waiting()));
             }
             let time = now(self.clock);
+            if self.timed_out(time) {
+                return Err(self.timeout_error().with_context(waiting()));
+            }
             if limit.is_some_and(|limit| time >= limit) {
                 return Err(Error::new(
                     SqlState::LOCK_NOT_AVAILABLE,
@@ -873,6 +897,9 @@ impl rupg_func::Session for Reader<'_> {
                 "canceling statement due to user request",
             ));
         }
+        if self.deadline.is_some_and(|d| d.get() != 0) && self.timed_out(now(self.clock)) {
+            return Err(self.timeout_error());
+        }
         Ok(())
     }
 
@@ -886,7 +913,11 @@ impl rupg_func::Session for Reader<'_> {
         activity.report_wait(store, Some(PG_SLEEP));
         let end = now(self.clock).saturating_add(micros);
         while !self.cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
-            let left = end.saturating_sub(now(self.clock));
+            let time = now(self.clock);
+            if self.timed_out(time) {
+                break;
+            }
+            let left = end.saturating_sub(time);
             if left <= 0 {
                 break;
             }

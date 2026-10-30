@@ -1,0 +1,44 @@
+> set statement_timeout = 50
+SET
+> select pg_sleep(1)
+fields pg_sleep:2278:4:-1
+ERROR 57014 canceling statement due to statement timeout
+> select 1
+fields ?column?:23:4:-1
+row 1
+SELECT 1
+> begin
+BEGIN
+> select pg_sleep(1)
+fields pg_sleep:2278:4:-1
+ERROR 57014 canceling statement due to statement timeout
+> rollback
+ROLLBACK
+> set statement_timeout = 0
+SET
+> select pg_sleep(0.1)
+fields pg_sleep:2278:4:-1
+row 
+SELECT 1
+> set statement_timeout = '1s'
+SET
+> show statement_timeout
+fields statement_timeout:25:-1:-1
+row 1s
+SHOW
+> select pg_sleep(0.6); select pg_sleep(0.6)
+fields pg_sleep:2278:4:-1
+row 
+SELECT 1
+fields pg_sleep:2278:4:-1
+row 
+SELECT 1
+> select pg_sleep(1.5)
+fields pg_sleep:2278:4:-1
+ERROR 57014 canceling statement due to statement timeout
+> reset statement_timeout
+RESET
+> select pg_sleep(1.2)
+fields pg_sleep:2278:4:-1
+row 
+SELECT 1
