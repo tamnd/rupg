@@ -139,6 +139,8 @@ struct Passes {
     persistence: Option<bool>,
     /// `newAccessMethod` of `SET ACCESS METHOD`, when `chgAccessMethod` is set: the subcommand changes the access method.
     access_method: Option<u32>,
+    /// `newTableSpace` of `SET TABLESPACE`.
+    tablespace: Option<u32>,
 }
 
 /// A subcommand of `AT_PASS_DROP`.
@@ -718,19 +720,17 @@ impl Definer<'_, '_> {
                     .then(|| cmd.name.as_deref().unwrap_or_default().to_string());
                 passes.misc.push(MiscCmd::GenericOptions(column, options));
             }
-            // `ATPrepSetTableSpace` and `ATExecSetTableSpace`. Each relation is in the default tablespace of the database, so a move to `pg_default` has no work, as a move to the same tablespace has none. The engine cannot put a relation in another tablespace yet.
+            // `ATPrepSetTableSpace`: the tablespace and the privilege on it. The subcommand does not recurse.
             AlterTableType::AT_SetTableSpace => {
                 self.simple_permissions(target, cmd, SET_TABLESPACE)?;
-                match cmd.name.as_deref().unwrap_or_default() {
-                    "pg_default" => {}
-                    "pg_global" => {
-                        return Err(Error::new(
-                            SqlState::INVALID_PARAMETER_VALUE,
-                            "only shared relations can be placed in pg_global tablespace",
-                        ));
-                    }
-                    _ => return Err(not_yet("ALTER TABLE ... SET TABLESPACE", None)),
+                let tablespace = self.target_tablespace(cmd.name.as_deref().unwrap_or_default())?;
+                if passes.tablespace.is_some() {
+                    return Err(Error::new(
+                        SqlState::SYNTAX_ERROR,
+                        "cannot have multiple SET TABLESPACE subcommands",
+                    ));
                 }
+                passes.tablespace = Some(tablespace);
             }
             // `ATPrepSetAccessMethod`: every table and materialized view has `heap`, so the subcommand has no work.
             // `chgAccessMethod` stays false for the same method, so a second subcommand is not an error.
@@ -1043,6 +1043,9 @@ impl Definer<'_, '_> {
         }
         if let Some(method) = passes.access_method {
             self.catalog.set_access_method(target.oid, method);
+        }
+        if let Some(tablespace) = passes.tablespace {
+            self.set_relation_tablespace(target.oid, tablespace)?;
         }
         Ok(())
     }

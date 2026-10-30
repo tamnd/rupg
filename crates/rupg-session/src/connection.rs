@@ -2764,6 +2764,7 @@ fn definition_tag(node: &Node) -> CommandTag {
             _ => CommandTag::DropTable,
         },
         Node::AlterTableStmt(stmt) => alter_tag(stmt.objtype),
+        Node::AlterTableMoveAllStmt(stmt) => alter_tag(stmt.objtype),
         Node::AlterOwnerStmt(stmt) => match stmt.objectType {
             ObjectType::OBJECT_SCHEMA => CommandTag::AlterSchema,
             kind => alter_tag(kind),
@@ -5227,7 +5228,7 @@ mod tests {
         big_stack(|| script(include_str!("connection/databases.test")));
     }
 
-    /// `CREATE TABLESPACE` and `DROP TABLESPACE` of in-place tablespaces: the checks of the statements, the rows of `pg_tablespace`, the functions of a tablespace, and the owner as a dependency of a role. Then the `TABLESPACE` clause of `CREATE TABLE`, `CREATE INDEX`, a constraint index and `CREATE MATERIALIZED VIEW`, `default_tablespace`, a partition that takes the tablespace of its parent, `pg_class.reltablespace`, the checks of `CREATE` on the tablespace, and `DROP TABLESPACE` of a tablespace that a relation uses. `connection/tablespaces.test` is the output of PostgreSQL 19 for the same script in a new database.
+    /// `CREATE TABLESPACE` and `DROP TABLESPACE` of in-place tablespaces: the checks of the statements, the rows of `pg_tablespace`, the functions of a tablespace, and the owner as a dependency of a role. Then the `TABLESPACE` clause of `CREATE TABLE`, `CREATE INDEX`, a constraint index and `CREATE MATERIALIZED VIEW`, `default_tablespace`, a partition that takes the tablespace of its parent, `pg_class.reltablespace`, the checks of `CREATE` on the tablespace, and `DROP TABLESPACE` of a tablespace that a relation uses. Then `ALTER ... SET TABLESPACE`, `ALTER ... ALL IN TABLESPACE` and `REINDEX (TABLESPACE)`, with their checks. `connection/tablespaces.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn tablespaces() {
         big_stack(|| script(include_str!("connection/tablespaces.test")));

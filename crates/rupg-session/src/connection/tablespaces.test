@@ -248,3 +248,119 @@ DROP ROLE
 DROP TABLESPACE
 > RESET allow_in_place_tablespaces;
 RESET
+> SET allow_in_place_tablespaces = true;
+SET
+> CREATE TABLESPACE regress_ts6 LOCATION '';
+CREATE TABLESPACE
+> CREATE TABLE ts_m1 (i int, t text);
+CREATE TABLE
+> CREATE INDEX ts_m1_i ON ts_m1 (i);
+CREATE INDEX
+> CREATE TEMP TABLE ts_f AS SELECT relfilenode AS f FROM pg_class WHERE relname = 'ts_m1';
+SELECT 1
+> ALTER TABLE ts_m1 SET TABLESPACE regress_ts6;
+ALTER TABLE
+> SELECT c.relname, s.spcname FROM pg_class c JOIN pg_tablespace s ON s.oid = c.reltablespace WHERE s.spcname = 'regress_ts6' AND c.relname NOT LIKE 'pg_toast%' ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,spcname@pg_tablespace.2:19:64:-1
+row ts_m1,regress_ts6
+SELECT 1
+> SELECT count(*) FROM pg_class c JOIN pg_tablespace s ON s.oid = c.reltablespace WHERE s.spcname = 'regress_ts6' AND c.relname LIKE 'pg_toast%';
+fields count:20:8:-1
+row 2
+SELECT 1
+> SELECT relfilenode = (SELECT f FROM ts_f) AS same FROM pg_class WHERE relname = 'ts_m1';
+fields same:16:1:-1
+row f
+SELECT 1
+> ALTER TABLE ts_m1 SET TABLESPACE regress_ts6, SET TABLESPACE pg_default;
+ERROR 42601 cannot have multiple SET TABLESPACE subcommands
+> ALTER TABLE ts_m1 SET TABLESPACE pg_global;
+ERROR 22023 only shared relations can be placed in pg_global tablespace
+> ALTER TABLE ts_m1 SET TABLESPACE regress_nope;
+ERROR 42704 tablespace "regress_nope" does not exist
+> ALTER INDEX ts_m1_i SET TABLESPACE regress_ts6;
+ALTER INDEX
+> ALTER TABLE ALL IN TABLESPACE regress_ts6 SET TABLESPACE pg_global;
+ERROR 22023 cannot move relations in to or out of pg_global tablespace
+> ALTER TABLE ALL IN TABLESPACE regress_ts6 SET TABLESPACE regress_ts6;
+ALTER TABLE
+> ALTER TABLE ALL IN TABLESPACE regress_ts6 OWNED BY pg_monitor SET TABLESPACE pg_default;
+NOTICE P0002 no matching relations in tablespace "regress_ts6" found
+ALTER TABLE
+> ALTER MATERIALIZED VIEW ALL IN TABLESPACE regress_ts6 SET TABLESPACE pg_default;
+NOTICE P0002 no matching relations in tablespace "regress_ts6" found
+ALTER MATERIALIZED VIEW
+> ALTER INDEX ALL IN TABLESPACE regress_ts6 SET TABLESPACE pg_default;
+ALTER INDEX
+> SELECT c.relname FROM pg_class c JOIN pg_tablespace s ON s.oid = c.reltablespace WHERE s.spcname = 'regress_ts6' AND c.relname NOT LIKE 'pg_toast%' ORDER BY 1;
+fields relname@pg_class.2:19:64:-1
+row ts_m1
+SELECT 1
+> ALTER TABLE ALL IN TABLESPACE pg_default SET TABLESPACE pg_default;
+ALTER TABLE
+> ALTER TABLE ALL IN TABLESPACE regress_ts6 SET TABLESPACE pg_default;
+ALTER TABLE
+> ALTER TABLE ALL IN TABLESPACE regress_ts6 SET TABLESPACE pg_default;
+NOTICE P0002 no matching relations in tablespace "regress_ts6" found
+ALTER TABLE
+> REINDEX (TABLESPACE regress_ts6) TABLE pg_class;
+ERROR 0A000 cannot move system relation "pg_class_oid_index"
+> REINDEX (TABLESPACE regress_ts6) INDEX pg_class_oid_index;
+ERROR 0A000 cannot move system relation "pg_class_oid_index"
+> REINDEX (TABLESPACE regress_nope) TABLE ts_m1;
+ERROR 42704 tablespace "regress_nope" does not exist
+> REINDEX (TABLESPACE regress_ts6) TABLE ts_m1;
+REINDEX
+> SELECT c.relname FROM pg_class c JOIN pg_tablespace s ON s.oid = c.reltablespace WHERE s.spcname = 'regress_ts6' ORDER BY 1;
+fields relname@pg_class.2:19:64:-1
+row ts_m1_i
+SELECT 1
+> REINDEX (TABLESPACE pg_default) INDEX ts_m1_i;
+REINDEX
+> REINDEX (TABLESPACE pg_global) TABLE ts_m1;
+ERROR 22023 only shared relations can be placed in pg_global tablespace
+> REINDEX (TABLESPACE pg_global) TABLE CONCURRENTLY ts_m1;
+ERROR 0A000 cannot move non-shared relation to tablespace "pg_global"
+> REINDEX (TABLESPACE regress_ts6) SCHEMA pg_catalog;
+WARNING 42501 cannot move system relations, skipping all
+REINDEX
+> REINDEX (TABLESPACE regress_ts6, CONCURRENTLY) TABLE ts_m1;
+REINDEX
+> SELECT c.relname FROM pg_class c JOIN pg_tablespace s ON s.oid = c.reltablespace WHERE s.spcname = 'regress_ts6' ORDER BY 1;
+fields relname@pg_class.2:19:64:-1
+row ts_m1_i
+SELECT 1
+> CREATE ROLE regress_ts_user3;
+CREATE ROLE
+> ALTER TABLE ts_m1 OWNER TO regress_ts_user3;
+ALTER TABLE
+> SET ROLE regress_ts_user3;
+SET
+is_superuser=off
+> REINDEX (TABLESPACE regress_ts6) TABLE ts_m1;
+ERROR 42501 permission denied for tablespace regress_ts6
+> ALTER TABLE ts_m1 SET TABLESPACE regress_ts6;
+ERROR 42501 permission denied for tablespace regress_ts6
+> ALTER TABLE ts_m1 SET TABLESPACE pg_default;
+ALTER TABLE
+> RESET ROLE;
+RESET
+is_superuser=on
+> ALTER INDEX ts_m1_i SET TABLESPACE regress_ts6;
+ALTER INDEX
+> SET ROLE regress_ts_user3;
+SET
+is_superuser=off
+> ALTER INDEX ALL IN TABLESPACE regress_ts6 SET TABLESPACE pg_default;
+ALTER INDEX
+> RESET ROLE;
+RESET
+is_superuser=on
+> DROP TABLE ts_m1;
+DROP TABLE
+> DROP ROLE regress_ts_user3;
+DROP ROLE
+> DROP TABLESPACE regress_ts6;
+DROP TABLESPACE
+> RESET allow_in_place_tablespaces;
+RESET

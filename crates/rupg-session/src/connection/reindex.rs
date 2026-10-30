@@ -10,7 +10,7 @@ use crate::utility::Notice;
 const PG_MAINTAIN: u32 = 6337;
 
 impl Connection {
-    /// `ExecReindex`: the options, `PreventInTransactionBlock` of `CONCURRENTLY`, the tablespace of `TABLESPACE`, `PreventInTransactionBlock` of `SCHEMA`, `SYSTEM` and `DATABASE`, and the checks of `ReindexMultipleTables` on the database, then [`Connection::define`] for the rest. `call` is true for a statement of a function or a procedure, which is not at the top level. Each relation of rupg is in `pg_default`, so a move to another tablespace is not supported yet.
+    /// `ExecReindex`: the options, `PreventInTransactionBlock` of `CONCURRENTLY`, the tablespace of `TABLESPACE`, `PreventInTransactionBlock` of `SCHEMA`, `SYSTEM` and `DATABASE`, and the checks of `ReindexMultipleTables` on the database, then [`Connection::define`] for the rest. `call` is true for a statement of a function or a procedure, which is not at the top level.
     pub(super) fn reindex(
         &self,
         node: &Node,
@@ -26,19 +26,13 @@ impl Connection {
         if options.concurrently {
             prevent("REINDEX CONCURRENTLY")?;
         }
-        if let Some(name) = &options.tablespace {
-            if self.tablespace_oid(name).is_none() {
-                return Err(Error::new(
-                    SqlState::UNDEFINED_OBJECT,
-                    format!("tablespace \"{name}\" does not exist"),
-                ));
-            }
-            if name != "pg_default" {
-                return Err(Error::new(
-                    SqlState::FEATURE_NOT_SUPPORTED,
-                    "REINDEX with a tablespace other than pg_default is not supported yet",
-                ));
-            }
+        if let Some(name) = &options.tablespace
+            && self.tablespace_oid(name).is_none()
+        {
+            return Err(Error::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!("tablespace \"{name}\" does not exist"),
+            ));
         }
         let statement = match stmt.kind {
             ReindexObjectType::REINDEX_OBJECT_SCHEMA => Some("REINDEX SCHEMA"),

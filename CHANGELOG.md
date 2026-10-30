@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `ALTER TABLE`, `ALTER INDEX` and `ALTER MATERIALIZED VIEW ... SET TABLESPACE` now move a relation to another tablespace, with its TOAST table, as in PostgreSQL 19. `ALTER ... ALL IN TABLESPACE ... SET TABLESPACE` moves all the relations of a kind, with `OWNED BY`, and gives a notice when no relation matches. `REINDEX (TABLESPACE)` moves the indexes that it builds again, and refuses to move a system relation or to move an index to `pg_global`. Each command checks `CREATE` on the tablespace (#1194).
+
 ## 0.4.14 (2026-10-30)
 
 ### Added

@@ -2,12 +2,13 @@
 //!
 //! The session runs the parts of `ExecReindex` and `ReindexMultipleTables` that read the state of the session before [`define`](super::define) runs the statement: [`reindex_options`], `PreventInTransactionBlock` of `CONCURRENTLY`, `SCHEMA`, `SYSTEM` and `DATABASE`, the tablespace of `TABLESPACE`, and the checks of the database of `SYSTEM` and `DATABASE`.
 
-use rupg_catalog::{FIRST_UNPINNED_OID, ObjRef, PG_CLASS, RelKind};
+use rupg_catalog::{FIRST_UNPINNED_OID, ObjRef, PG_CLASS, PG_TOAST_NAMESPACE, RelKind};
 use rupg_common::{Error, Level, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{Node, RangeVar, ReindexObjectType, ReindexStmt};
 
 use super::reloptions::def_boolean;
+use super::tablespace::{GLOBAL_TABLESPACE, system_move};
 use super::view::def_string;
 use super::{Definer, Found, Message, TopLevel, relname};
 use crate::coerce::AtOpt;
@@ -25,6 +26,8 @@ pub struct ReindexOptions {
     pub concurrently: bool,
     /// The name of the tablespace of `TABLESPACE`.
     pub tablespace: Option<String>,
+    /// `tablespaceOid`: the OID of the tablespace of `TABLESPACE`, that [`define`](super::define) looks up.
+    pub tablespace_oid: Option<u32>,
 }
 
 /// The option list of `ExecReindex`.
@@ -58,6 +61,17 @@ fn system_concurrently() -> Error {
     Error::new(SqlState::FEATURE_NOT_SUPPORTED, "cannot reindex system catalogs concurrently")
 }
 
+/// The error of `ReindexRelationConcurrently` for a move to `pg_global`.
+fn global_concurrently(options: &ReindexOptions) -> Result<()> {
+    if options.tablespace_oid == Some(GLOBAL_TABLESPACE) {
+        return Err(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            "cannot move non-shared relation to tablespace \"pg_global\"",
+        ));
+    }
+    Ok(())
+}
+
 /// `IsCatalogRelationOid`: true for a relation of `initdb` with an OID below `FirstUnpinnedObjectId`.
 fn is_catalog(oid: u32) -> bool {
     oid < FIRST_UNPINNED_OID
@@ -75,7 +89,10 @@ fn info(message: String, detail: Option<String>) -> Message {
 impl Definer<'_, '_> {
     /// `ExecReindex` after the checks of the session: `ReindexIndex`, `ReindexTable` or `ReindexMultipleTables`.
     pub(super) fn reindex(&mut self, stmt: &ReindexStmt) -> Result<()> {
-        let options = reindex_options(stmt)?;
+        let mut options = reindex_options(stmt)?;
+        if let Some(name) = &options.tablespace {
+            options.tablespace_oid = Some(self.target_tablespace(name)?);
+        }
         let relation = stmt.relation.as_deref();
         match (stmt.kind, relation) {
             (ReindexObjectType::REINDEX_OBJECT_INDEX, Some(rv)) => {
@@ -119,6 +136,9 @@ impl Definer<'_, '_> {
             if options.concurrently && is_catalog(row.oid) {
                 return Err(system_concurrently());
             }
+            if options.tablespace_oid.is_some() {
+                return Err(system_move(row.name));
+            }
             return Ok(());
         }
         if kind == b'I' {
@@ -128,8 +148,7 @@ impl Definer<'_, '_> {
             );
             self.top_level = Some(TopLevel { statement: "REINDEX INDEX", context });
             let leaves = self.leaf_indexes(index);
-            self.reindex_each(&leaves, options);
-            return Ok(());
+            return self.reindex_each(&leaves, options);
         }
         if options.concurrently && !self.is_temp(index) {
             if self.is_exclusion(index) {
@@ -138,9 +157,13 @@ impl Definer<'_, '_> {
                     "concurrent index creation for exclusion constraints is not supported",
                 ));
             }
-            self.reindex_concurrently(&[index], options.verbose, true);
+            if options.tablespace_oid.is_some() && self.is_toast(table) {
+                return Err(system_move(name));
+            }
+            global_concurrently(options)?;
+            self.reindex_concurrently(&[index], options, true)?;
         } else {
-            self.reindex_one(index, options.verbose);
+            self.reindex_one(index, options.verbose, options.tablespace_oid)?;
         }
         Ok(())
     }
@@ -171,6 +194,11 @@ impl Definer<'_, '_> {
             if options.concurrently && is_catalog(row.oid) {
                 return Err(system_concurrently());
             }
+            if options.tablespace_oid.is_some()
+                && let Some(index) = builtin::catalog_indexes(row.oid).first()
+            {
+                return Err(system_move(builtin::class_by_oid(index.oid).map_or("", |r| r.name)));
+            }
             return Ok(());
         }
         if kind == b'p' {
@@ -189,10 +217,12 @@ impl Definer<'_, '_> {
                         .is_some_and(|r| matches!(r.kind, RelKind::Table | RelKind::MatView))
                 })
                 .collect();
-            self.reindex_each(&leaves, options);
-            return Ok(());
+            return self.reindex_each(&leaves, options);
         }
         if options.concurrently && !self.is_temp(table) {
+            if options.tablespace_oid.is_some() && self.is_toast(table) {
+                return Err(system_move(name));
+            }
             let indexes = self.concurrent_indexes(table);
             if indexes.is_empty() {
                 self.notice(
@@ -200,10 +230,11 @@ impl Definer<'_, '_> {
                     format!("table \"{name}\" has no indexes that can be reindexed concurrently"),
                 );
             } else {
-                self.reindex_concurrently(&indexes, options.verbose, false);
+                global_concurrently(options)?;
+                self.reindex_concurrently(&indexes, options, false)?;
                 self.table_reindexed(table, options.verbose, true);
             }
-        } else if !self.reindex_relation(table, options.verbose) {
+        } else if !self.reindex_relation(table, options.verbose, options.tablespace_oid)? {
             self.notice(
                 SqlState::SUCCESSFUL_COMPLETION,
                 format!("table \"{name}\" has no indexes to reindex"),
@@ -252,6 +283,11 @@ impl Definer<'_, '_> {
                 SqlState::FEATURE_NOT_SUPPORTED,
                 "cannot reindex system catalogs concurrently, skipping all".to_string(),
             );
+        } else if options.tablespace_oid.is_some() && catalogs {
+            self.warning(
+                SqlState::INSUFFICIENT_PRIVILEGE,
+                "cannot move system relations, skipping all".to_string(),
+            );
         }
         let tables: Vec<u32> = self
             .catalog
@@ -260,48 +296,66 @@ impl Definer<'_, '_> {
             .filter(|r| wanted(r.oid, r.namespace) && !self.other_temp(r.namespace))
             .map(|r| r.oid)
             .collect();
-        self.reindex_each(&tables, options);
-        Ok(())
+        self.reindex_each(&tables, options)
     }
 
     /// `ReindexMultipleInternal`: `ReindexRelationConcurrently` for `CONCURRENTLY` on a relation that is not temporary, `reindex_index` for an index, and `reindex_relation` for a table, with the message of `VERBOSE` for each table that has an index.
-    fn reindex_each(&mut self, relations: &[u32], options: &ReindexOptions) {
+    fn reindex_each(&mut self, relations: &[u32], options: &ReindexOptions) -> Result<()> {
         for &oid in relations {
             let index = self.catalog.relation(oid).is_some_and(|r| r.kind == RelKind::Index);
             if options.concurrently && !self.is_temp(oid) {
                 let indexes = if index { vec![oid] } else { self.concurrent_indexes(oid) };
                 if !indexes.is_empty() {
-                    self.reindex_concurrently(&indexes, options.verbose, index);
+                    global_concurrently(options)?;
+                    self.reindex_concurrently(&indexes, options, index)?;
                     if !index {
                         self.table_reindexed(oid, options.verbose, true);
                     }
                 }
             } else if index {
-                self.reindex_one(oid, options.verbose);
-            } else if self.reindex_relation(oid, options.verbose) {
+                self.reindex_one(oid, options.verbose, options.tablespace_oid)?;
+            } else if self.reindex_relation(oid, options.verbose, options.tablespace_oid)? {
                 self.table_reindexed(oid, options.verbose, false);
             }
         }
+        Ok(())
     }
 
-    /// `reindex_relation` with `REINDEX_REL_PROCESS_TOAST`: the indexes of the TOAST table first, then each index of the table in the order of their OIDs. It gives false when neither has an index.
-    fn reindex_relation(&mut self, table: u32, verbose: bool) -> bool {
+    /// `reindex_relation` with `REINDEX_REL_PROCESS_TOAST`: the indexes of the TOAST table first, then each index of the table in the order of their OIDs. It gives false when neither has an index. The indexes of the TOAST table stay in their tablespace.
+    fn reindex_relation(
+        &mut self,
+        table: u32,
+        verbose: bool,
+        tablespace: Option<u32>,
+    ) -> Result<bool> {
         let indexes = self.indexes_on(table);
         let mut result = !indexes.is_empty();
         let toast = self.catalog.relation(table).map_or(0, |r| r.toast);
         if toast != 0 {
-            result |= self.reindex_relation(toast, verbose);
+            result |= self.reindex_relation(toast, verbose, None)?;
         }
         for index in indexes {
-            self.reindex_one(index, verbose);
+            self.reindex_one(index, verbose, tablespace)?;
         }
-        result
+        Ok(result)
     }
 
-    /// `reindex_index`: the index gets a new file.
-    fn reindex_one(&mut self, index: u32, verbose: bool) {
+    /// True for a relation in the schema of the TOAST tables, which `IsSystemRelation` is true for.
+    fn is_toast(&self, oid: u32) -> bool {
+        self.catalog.relation(oid).is_some_and(|r| r.namespace == PG_TOAST_NAMESPACE)
+    }
+
+    /// `reindex_index`: the index moves to the tablespace of `TABLESPACE`, then gets a new file. An index of the system cannot move.
+    fn reindex_one(&mut self, index: u32, verbose: bool, tablespace: Option<u32>) -> Result<()> {
+        if let Some(tablespace) = tablespace {
+            if self.is_toast(index) {
+                let name = self.catalog.relation(index).map(|r| r.name.clone()).unwrap_or_default();
+                return Err(system_move(&name));
+            }
+            self.move_tablespace(index, tablespace)?;
+        }
         if self.rebuild(index).is_err() {
-            return;
+            return Ok(());
         }
         self.collect(None, ObjRef::new(PG_CLASS, index));
         if verbose {
@@ -310,6 +364,7 @@ impl Definer<'_, '_> {
             self.messages
                 .push(info(format!("index \"{name}\" was reindexed"), Some(RUSAGE.to_string())));
         }
+        Ok(())
     }
 
     /// The indexes of `ReindexRelationConcurrently` for a table: its valid indexes, then the valid indexes of its TOAST table, with a warning for each invalid index.
@@ -358,8 +413,21 @@ impl Definer<'_, '_> {
     }
 
     /// `ReindexRelationConcurrently` on the indexes: each one gets a new file. The messages of `VERBOSE` name each index with its schema. `alone` is true when the statement runs on the index itself, not on its table, and then the message of the index has the time. The caller of a table gives the time in the message of the table.
-    fn reindex_concurrently(&mut self, indexes: &[u32], verbose: bool, alone: bool) {
+    fn reindex_concurrently(
+        &mut self,
+        indexes: &[u32],
+        options: &ReindexOptions,
+        alone: bool,
+    ) -> Result<()> {
+        let verbose = options.verbose;
         for &index in indexes {
+            // The new index takes the tablespace of `TABLESPACE`, except an index of a TOAST table.
+            let table = self.index_table(index).unwrap_or_default();
+            if let Some(tablespace) = options.tablespace_oid
+                && self.catalog.relation(table).is_some_and(|r| r.kind != RelKind::Toast)
+            {
+                self.move_tablespace(index, tablespace)?;
+            }
             if self.rebuild(index).is_err() {
                 continue;
             }
@@ -371,6 +439,7 @@ impl Definer<'_, '_> {
                 self.messages.push(info(format!("index \"{shown}\" was reindexed"), detail));
             }
         }
+        Ok(())
     }
 
     /// The new file of an index that the statement builds again. An index of a failed `CREATE INDEX CONCURRENTLY` becomes valid and ready, as `reindex_index` marks it, and the caller checks the keys of the rows of its table.
