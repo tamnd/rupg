@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.4.14 (2026-10-30)
+
 ### Added
 
 - A scan of some of the columns of a table finds the positions of the columns once, and not again for each row (#1192).
