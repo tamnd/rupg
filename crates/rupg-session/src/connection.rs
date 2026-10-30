@@ -9487,6 +9487,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/current_wal_lsn.test")));
     }
 
+    /// A key of `JSON_OBJECT`, `json_build_object` or `json_object_agg` with a type of the user that has a cast to `json` is an error, as for a `json` key. `connection/json_cast_key.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn json_cast_key() {
+        big_stack(|| script(include_str!("connection/json_cast_key.test")));
+    }
+
     /// A scan of a table whose conditions of `WHERE` read only some of the columns of the query: rows that an update and a delete of the transaction changed, an error of a condition, a column that `ALTER TABLE` added and a column that it dropped. `connection/narrow_scan.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn narrow_scan() {
