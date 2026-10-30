@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `pg_stat_activity.query_id` shows the query identifier of the statement that the session runs when `compute_query_id` is `on` or `regress`. It was always null. The identifier is the one that `EXPLAIN VERBOSE` shows (#1188).
 - `EXPLAIN VERBOSE` now shows `Query Identifier` after the plan when `compute_query_id` is `on`, as in PostgreSQL 19. The identifier is a hash of the tokens of the statement, with each constant as the same token, so statements that differ only in their constants, the case of their words or their spaces get the same identifier (#1187).
 - A query with `HAVING` or grouping sets, but with no `GROUP BY` item and no aggregate, is now a `Result` with `Replaces: Aggregate` and the `HAVING` conditions as its one-time filter, or an `Append` of one `Result` for each grouping set, in place of the scan of `FROM` and an `Agg`, as `create_degenerate_grouping_paths` in PostgreSQL 19 (#1186).
 - `CREATE FUNCTION`, `CREATE DOMAIN`, `CREATE TYPE`, `CREATE AGGREGATE` and the other commands that create an object with a qualified name now make the temporary schema of the session for the schema `pg_temp` when it does not exist yet, as in PostgreSQL 19 (#1185).

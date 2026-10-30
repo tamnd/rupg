@@ -104,3 +104,23 @@ SELECT 1
 fields length:23:4:-1,octet_length:23:4:-1,right:25:-1:-1
 row 569,1023,ééé
 SELECT 1
+> SET compute_query_id = on
+SET
+> SELECT query_id IS NOT NULL FROM pg_stat_activity WHERE pid = pg_backend_pid()
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SET compute_query_id = regress
+SET
+> SELECT query_id IS NOT NULL FROM pg_stat_activity WHERE pid = pg_backend_pid()
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SET compute_query_id = auto
+SET
+> SELECT query_id IS NOT NULL FROM pg_stat_activity WHERE pid = pg_backend_pid()
+fields ?column?:16:1:-1
+row f
+SELECT 1
+> RESET compute_query_id
+RESET

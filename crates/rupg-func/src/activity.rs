@@ -2,7 +2,7 @@
 //!
 //! The session gives the table as [`Session::backends`]. The first call in a transaction takes a snapshot of the table, and the later calls of the transaction read the same snapshot, as `pgstat_read_current_status` does. `pg_stat_clear_snapshot` drops it.
 //!
-//! A row of another role shows less: the columns that `HAS_PGSTAT_PERMISSIONS` guards are null, and the text of the statement is `<insufficient privilege>`. `backend_xid` and `backend_xmin` show for each row, as in PostgreSQL. rupg has no parallel workers, no GSSAPI and no query IDs yet, so `leader_pid` and `query_id` are null, and the GSSAPI columns show a session with no GSSAPI.
+//! A row of another role shows less: the columns that `HAS_PGSTAT_PERMISSIONS` guards are null, and the text of the statement is `<insufficient privilege>`. `backend_xid` and `backend_xmin` show for each row, as in PostgreSQL. rupg has no parallel workers and no GSSAPI, so `leader_pid` is null, and the GSSAPI columns show a session with no GSSAPI. `query_id` is null when the session has no query identifier, as with `compute_query_id` set to `auto` or `off`.
 
 use std::net::SocketAddr;
 
@@ -163,6 +163,8 @@ pub struct Backend {
     pub xmin: u32,
     /// The progress of the command that the session runs, or `None` when it runs no command with a progress.
     pub progress: Option<Progress>,
+    /// `st_query_id`: the query identifier of the top statement, with 0 for none.
+    pub query_id: i64,
 }
 
 /// `HAS_PGSTAT_PERMISSIONS`: the current user has the privileges of `pg_read_all_stats` or of the role of the session.
@@ -241,6 +243,9 @@ fn activity_row(session: &dyn Session, backend: &Backend) -> Result<Vec<Value>> 
     row[25] = Value::Bool(false);
     row[27] = Value::Bool(false);
     row[28] = Value::Bool(false);
+    if backend.query_id != 0 {
+        row[30] = Value::Int8(backend.query_id);
+    }
     Ok(row)
 }
 
