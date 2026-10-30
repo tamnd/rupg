@@ -257,6 +257,16 @@ fn like_matches_as_postgres_does() {
     assert!(like("50%", "50\\%").unwrap());
     assert!(like("", "%").unwrap());
     assert!(like("abc", "%%c").unwrap());
+    // A literal after `%`, at the end of the pattern or before a last `%`.
+    assert!(like("http://www.google.com/", "%google%").unwrap());
+    assert!(!like("http://www.gogle.com/", "%google%").unwrap());
+    assert!(like("aab", "%ab%").unwrap());
+    assert!(like("x.html", "%.html").unwrap());
+    assert!(!like("x.html5", "%.html").unwrap());
+    assert!(like("ab", "a%b").unwrap());
+    assert!(!like("a", "a%a").unwrap());
+    assert!(like("abcabd", "%ab_%d").unwrap());
+    assert!(!like("", "%a%").unwrap());
     assert_eq!(like("abc", "a\\").unwrap_err().state(), SqlState::INVALID_ESCAPE_SEQUENCE);
     assert_eq!(call("like_escape", &[text("a#%b\\"), text("#")]).unwrap(), text("a\\%b\\\\"));
 }
