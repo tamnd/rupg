@@ -3275,6 +3275,14 @@ impl<'a> Eval<'a> {
             let values = self.session.call_function(func, types, ret, args)?;
             return Ok(values.into_iter().next().unwrap_or(Value::Null));
         }
+        // A built-in function with a kernel has no body to run, which [`Cache::body`] finds with more lookups.
+        if func < FIRST_NORMAL_OID
+            && let Some(kernel) = rupg_func::kernel(func)
+            && self.session.catalog().and_then(|c| c.function(func)).is_none()
+        {
+            let call = Call { session: self.session, args: types, ret, variadic, want: None };
+            return kernel(&call, args);
+        }
         if let Some(body) = self.cache.body(func, types, self.session)? {
             // The body runs with a cache of its own, so that a subquery of the body that reads an argument runs again for each call.
             let cache = self.cache.nested()?;
@@ -3310,6 +3318,14 @@ impl<'a> Eval<'a> {
         }
         // The planner adds the defaults, so this is for an expression that the planner did not see.
         let exprs = rupg_analyze::expand_arguments(f)?;
+        // An operator of two arguments, as the test of a row in `WHERE` has, needs no vectors.
+        if let [left, right] = &exprs[..]
+            && !matches!(f.form, FuncForm::ExplicitCast | FuncForm::ImplicitCast)
+            && f.oid != SATISFIES_HASH_PARTITION
+        {
+            let args = [self.eval(left)?, self.eval(right)?];
+            return self.call(f.oid, &[left.ty, right.ty], expr.ty, f.variadic, &args);
+        }
         let args = exprs.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>>>()?;
         let types: Vec<u32> = exprs.iter().map(|a| a.ty).collect();
         if f.oid == SATISFIES_HASH_PARTITION {

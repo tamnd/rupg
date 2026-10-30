@@ -145,6 +145,8 @@ pub(crate) fn method(agg: &Aggref, ty: u32, location: Option<usize>) -> Result<M
         ("interval_avg_accum", "interval_sum") => Method::Interval { avg: false },
         ("interval_avg_accum", "interval_avg") => Method::Interval { avg: true },
         ("int8_avg_accum", "numeric_poly_avg") => Method::Int128 { avg: true },
+        // The state of `int4_avg_accum` is the `bigint` array of the count and the sum, which needs 2^32 values to wrap. A 128-bit sum gives the same average with no array for each row.
+        ("int2_avg_accum" | "int4_avg_accum", "int8_avg") => Method::Int128 { avg: true },
         ("numeric_avg_accum", "numeric_sum") => Method::Numeric { avg: false },
         ("numeric_avg_accum", "numeric_avg") => Method::Numeric { avg: true },
         ("string_agg_transfn", "string_agg_finalfn") => Method::Concat { bytea: false },
@@ -368,6 +370,11 @@ struct Agg<'q> {
 }
 
 impl Agg<'_> {
+    /// The call of a kernel of the aggregate with the argument types `args`.
+    fn call<'s>(&self, eval: &'s Eval<'_>, args: &'s [u32], ret: u32) -> Call<'s> {
+        Call { session: eval.session, args, ret, variadic: false, want: None }
+    }
+
     fn start(&self, eval: &Eval<'_>) -> Result<State> {
         Ok(match &self.method {
             Method::Kernel { state, init, .. } | Method::Function { state, init, .. } => match init
@@ -442,20 +449,23 @@ impl Agg<'_> {
                         return Ok(());
                     }
                 }
-                let mut types = Vec::with_capacity(args.len() + 1);
-                types.push(*ty);
-                types.extend(&self.types);
-                let mut values = Vec::with_capacity(args.len() + 1);
-                values.push(std::mem::replace(value, Value::Null));
-                values.extend_from_slice(args);
-                let call = Call {
-                    session: eval.session,
-                    args: &types,
-                    ret: *ty,
-                    variadic: false,
-                    want: None,
+                let state = std::mem::replace(value, Value::Null);
+                // Most aggregates have one argument or none, which need no vectors for each row.
+                *value = match args {
+                    [] => trans(&self.call(eval, &[*ty], *ty), &[state])?,
+                    [arg] => {
+                        trans(&self.call(eval, &[*ty, self.types[0]], *ty), &[state, arg.clone()])?
+                    }
+                    _ => {
+                        let mut types = Vec::with_capacity(args.len() + 1);
+                        types.push(*ty);
+                        types.extend(&self.types);
+                        let mut values = Vec::with_capacity(args.len() + 1);
+                        values.push(state);
+                        values.extend_from_slice(args);
+                        trans(&self.call(eval, &types, *ty), &values)?
+                    }
                 };
-                *value = trans(&call, &values)?;
                 *empty = false;
             }
             (Method::Int128 { .. }, State::Int128 { count, sum }) => {
@@ -1697,6 +1707,7 @@ fn rows_of_group<'a>(
         let mut states = aggs.iter().map(|a| a.start(eval)).collect::<Result<Vec<_>>>()?;
         // The rows of an aggregate with `DISTINCT` or `ORDER BY`, which it reads after the sort.
         let mut sorted: Vec<Vec<Vec<Value>>> = vec![Vec::new(); aggs.len()];
+        let mut args = Vec::new();
         for (n, &i) in group.iter().enumerate() {
             crate::interrupt(eval.session, n)?;
             eval.tuple = &tuples[i];
@@ -1706,11 +1717,14 @@ fn rows_of_group<'a>(
                 {
                     continue;
                 }
-                let args = agg.agg.args.iter().map(|a| eval.eval(a)).collect::<Result<Vec<_>>>()?;
+                args.clear();
+                for a in &agg.agg.args {
+                    args.push(eval.eval(a)?);
+                }
                 if agg.agg.order.is_empty() && agg.agg.distinct.is_empty() {
                     agg.advance(state, &args, eval)?;
                 } else {
-                    sorted.push(args);
+                    sorted.push(std::mem::take(&mut args));
                 }
             }
         }
