@@ -25,12 +25,22 @@ pub fn analyze(
     session: &dyn Session,
     project: bool,
 ) -> Result<Actuals> {
-    let cache = Cache::default();
+    analyze_in(plan, params, session, project, &Cache::default())
+}
+
+/// [`analyze`] with the cache `cache`, which has the rows of the statements of `WITH` that changed data.
+pub(crate) fn analyze_in(
+    plan: &Plan<'_>,
+    params: &[Value],
+    session: &dyn Session,
+    project: bool,
+    cache: &Cache,
+) -> Result<Actuals> {
     let cx = Cx {
         plan,
         params,
         session,
-        cache: &cache,
+        cache,
         tables: std::cell::RefCell::new(HashMap::new()),
         ctes: std::cell::RefCell::new(HashMap::new()),
     };
@@ -777,13 +787,12 @@ impl<'p, 'q> Exec<'p, 'q> {
                 if conflict.is_some() {
                     return Err(not_yet("EXPLAIN ANALYZE of ON CONFLICT"));
                 }
-                if matches!(operation, rupg_plan::Operation::Merge) {
-                    return Err(not_yet("EXPLAIN ANALYZE of MERGE"));
-                }
-                let returning =
-                    cx.query(node.scope).write.as_ref().is_some_and(|w| w.returning.is_some());
+                let returning = !matches!(operation, rupg_plan::Operation::Merge)
+                    && cx.query(node.scope).write.as_ref().is_some_and(|w| w.returning.is_some());
                 loop {
                     let Some(row) = self.pull(cx, 0, context)? else { return Ok(None) };
+                    // The rows of the plan below, for the rows of a `MERGE` with no action.
+                    self.actual.filtered[0] += 1;
                     if returning {
                         return Ok(Some(row));
                     }
@@ -807,8 +816,14 @@ impl<'p, 'q> Exec<'p, 'q> {
 
     /// The `Storage` of the tuplestore of a node that keeps its rows.
     fn store(&mut self) {
-        let width = width(self.node);
-        self.actual.storage = Some(kilobytes(self.buf.len() as u64 * (width + 32)).max(16));
+        // `tuplestore_begin_common` makes an array of 2048 pointers and `grow_memtuples` doubles it. Each row is a `MinimalTuple` with a header of 16 bytes and the header of its chunk.
+        let rows = self.buf.len() as u64;
+        let mut slots = 2048;
+        while slots < rows {
+            slots *= 2;
+        }
+        let tuple = (16 + width(self.node)).next_multiple_of(8) + 8;
+        self.actual.storage = Some(kilobytes(slots * 8 + 16 + rows * tuple));
     }
 
     /// The rows of a scan, in `buf` and after `pos`, with the rows of its condition and its filter. A scan with no rows in `buf` reads the rows of its relation.
@@ -1306,10 +1321,22 @@ impl<'p, 'q> Exec<'p, 'q> {
         cond: &[Item<'_>],
         join_filter: &[Item<'_>],
     ) -> Result<Option<Row>> {
-        if matches!(join, JoinKind::Right | JoinKind::Full) {
-            return Err(not_yet("EXPLAIN ANALYZE of a right or full merge join"));
+        if matches!(join, JoinKind::RightSemi | JoinKind::RightAnti) {
+            return Err(not_yet("EXPLAIN ANALYZE of this merge join"));
+        }
+        let fill_inner = matches!(join, JoinKind::Right | JoinKind::Full);
+        if self.done {
+            return Ok(None);
         }
         if self.probe.is_none() {
+            // `MJ_INITIALIZE_OUTER`: the first outer row comes before the inner side. A join that does not fill the inner side ends when the outer side has no rows, and its inner side does not run.
+            let first = self.pull(cx, 0, context)?;
+            if first.is_none() && !fill_inner {
+                self.done = true;
+                return Ok(None);
+            }
+            let empty = first.is_none();
+            self.pending = first;
             let mut rows = Vec::new();
             while let Some(row) = self.pull(cx, 1, context)? {
                 rows.push(row);
@@ -1322,13 +1349,47 @@ impl<'p, 'q> Exec<'p, 'q> {
                 ..Probe::default()
             });
             self.pos = 1;
+            if empty {
+                self.filled = true;
+                self.cand = 0;
+            }
         }
         let node = self.node;
         let inner_rels = filled(cx, &node.children[1], node.scope);
         let single = matches!(join, JoinKind::Semi) || node.inner_unique;
         loop {
+            if self.filled {
+                // `MJ_ENDOUTER`: the inner rows that matched no outer row, for a right or a full join.
+                let probe = self.probe.as_ref().ok_or_else(|| Error::internal("no rows"))?;
+                while self.cand < probe.rows.len() {
+                    let at = self.cand;
+                    self.cand += 1;
+                    if probe.matched[at] {
+                        continue;
+                    }
+                    let tuple = probe.rows[at].tuple.clone();
+                    if cx.test(node.scope, &node.filter, &tuple)? {
+                        return Ok(Some(Row::of(tuple)));
+                    }
+                    self.actual.filtered[1] += 1;
+                }
+                self.done = true;
+                return Ok(None);
+            }
             let Some(outer) = self.outer.clone() else {
-                let Some(row) = self.pull(cx, 0, context)? else { return Ok(None) };
+                let row = match self.pending.take() {
+                    Some(row) => Some(row),
+                    None => self.pull(cx, 0, context)?,
+                };
+                let Some(row) = row else {
+                    if fill_inner {
+                        self.filled = true;
+                        self.cand = 0;
+                        continue;
+                    }
+                    self.done = true;
+                    return Ok(None);
+                };
                 self.cand = 0;
                 self.matched = false;
                 self.outer = Some(row);
@@ -1348,6 +1409,9 @@ impl<'p, 'q> Exec<'p, 'q> {
                     continue;
                 }
                 self.matched = true;
+                if let Some(probe) = &mut self.probe {
+                    probe.matched[at] = true;
+                }
                 if matches!(join, JoinKind::Anti) {
                     self.outer = None;
                     continue;
@@ -1364,7 +1428,7 @@ impl<'p, 'q> Exec<'p, 'q> {
                 continue;
             }
             self.outer = None;
-            if !self.matched && matches!(join, JoinKind::Left | JoinKind::Anti) {
+            if !self.matched && matches!(join, JoinKind::Left | JoinKind::Full | JoinKind::Anti) {
                 let tuple = without(&outer.tuple, &inner_rels);
                 if cx.test(node.scope, &node.filter, &tuple)? {
                     return Ok(Some(Row::of(tuple)));

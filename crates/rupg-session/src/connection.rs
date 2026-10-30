@@ -471,6 +471,8 @@ pub struct Connection {
     trigger_tables: RefCell<Vec<Vec<trigger::TableData>>>,
     /// The tables that the writes of the statement and of the queries of its functions have open, as `rd_refcnt` counts the references of the executors to a relation.
     open_tables: RefCell<Vec<u32>>,
+    /// The inserts, the updates and the deletes of the actions of the last `MERGE`, for `EXPLAIN ANALYZE`.
+    merged: Cell<[u64; 3]>,
     /// The messages of `RAISE` of the triggers of the statement, for the client.
     trigger_warnings: RefCell<Vec<Error>>,
     /// The transition tables of the trigger whose function runs, which the readers of its queries get.
@@ -586,6 +588,7 @@ impl Connection {
             events: RefCell::new(Vec::new()),
             trigger_tables: RefCell::new(vec![Vec::new()]),
             open_tables: RefCell::new(Vec::new()),
+            merged: Cell::new([0; 3]),
             trigger_warnings: RefCell::new(Vec::new()),
             transition: RefCell::new(None),
             trigger_depth: Cell::new(0),
