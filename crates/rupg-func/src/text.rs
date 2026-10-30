@@ -386,6 +386,28 @@ fn first_len(t: &[u8], utf8: bool) -> usize {
     if utf8 { char_len(t[0]).min(t.len()) } else { 1 }
 }
 
+/// The result of the rest `p` of a pattern after `%` for the text `t`, when `p` is a literal with no `%` after it or with one `%` at the end. The literal is either at the end of the text or anywhere in it, and no later start of the match can give another result, so the result is `True` or `Abort`. A pattern of another form gives `None`.
+fn literal_tail(t: &[u8], p: &[u8]) -> Option<Like> {
+    let end = p.iter().position(|&c| matches!(c, b'%' | b'_' | b'\\')).unwrap_or(p.len());
+    let (literal, rest) = p.split_at(end);
+    let &first = literal.first()?;
+    let found = match rest {
+        [] => t.ends_with(literal),
+        [b'%'] => {
+            let mut at = 0;
+            loop {
+                let Some(i) = t[at..].iter().position(|&c| c == first) else { break false };
+                if t[at + i..].starts_with(literal) {
+                    break true;
+                }
+                at += i + 1;
+            }
+        }
+        _ => return None,
+    };
+    Some(if found { Like::True } else { Like::Abort })
+}
+
 /// `MatchText` of `like_match.c` with `\` as the escape character, byte by byte as PostgreSQL does it for a deterministic collation. `_` matches one UTF8 character when `utf8` is true, else one byte, as `SB_MatchText` does it for `bytea`.
 fn match_text(mut t: &[u8], mut p: &[u8], utf8: bool) -> Result<Like> {
     if p == b"%" {
@@ -410,6 +432,9 @@ fn match_text(mut t: &[u8], mut p: &[u8], utf8: bool) -> Result<Like> {
                 }
                 if p.is_empty() {
                     return Ok(Like::True);
+                }
+                if let Some(found) = literal_tail(t, p) {
+                    return Ok(found);
                 }
                 let first = if p[0] == b'\\' { *p.get(1).ok_or_else(escape_at_end)? } else { p[0] };
                 while !t.is_empty() {
