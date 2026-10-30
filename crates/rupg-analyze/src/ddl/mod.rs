@@ -322,6 +322,7 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::ImportForeignSchemaStmt(_)
             | Node::AlterUserMappingStmt(_)
             | Node::DropUserMappingStmt(_)
+            | Node::AlterTableMoveAllStmt(_)
     ) || matches!(stmt, Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) || matches!(define.kind, ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_AGGREGATE | ObjectType::OBJECT_TYPE | ObjectType::OBJECT_COLLATION))
         || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
         || matches!(stmt, Node::DiscardStmt(discard) if discard.target == DiscardMode::DISCARD_TEMP)
@@ -453,6 +454,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::DropStmt(drop) => definer.drop(drop),
         Node::DiscardStmt(_) => definer.discard_temp(),
         Node::AlterTableStmt(alter) => definer.alter_table(alter),
+        Node::AlterTableMoveAllStmt(stmt) => definer.alter_table_move_all(stmt),
         Node::AlterOwnerStmt(alter) => definer.alter_owner(alter),
         Node::RenameStmt(rename) => definer.rename(rename),
         Node::AlterObjectSchemaStmt(alter) if type_change::is_type_kind(alter.objectType) => {
