@@ -123,3 +123,13 @@ row   Index Cond: (a = $1)
 EXPLAIN
 > explain (analyze, generic_plan) select * from ea where a = $1
 ERROR 22023 EXPLAIN options ANALYZE and GENERIC_PLAN cannot be used together
+> set enable_seqscan = off
+SET
+> explain (settings, costs off) select * from ea where a = 1
+fields QUERY PLAN:25:-1:-1
+row Index Scan using ea_pkey on ea
+row   Index Cond: (a = 1)
+row Settings: enable_hashjoin = 'off', enable_seqscan = 'off'
+EXPLAIN
+> reset enable_seqscan
+RESET
