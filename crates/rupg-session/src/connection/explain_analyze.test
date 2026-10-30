@@ -151,3 +151,29 @@ row   Index Cond: (a = 3)
 EXPLAIN
 > deallocate eq
 DEALLOCATE
+> create temp table tt (a int)
+CREATE TABLE
+> create function pg_temp.tf(int) returns int language plpgsql as 'begin return $1 + 1; end'
+CREATE FUNCTION
+> explain (verbose, costs off) select pg_temp.tf(a) from ea
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.ea
+row   Output: pg_temp.tf(a)
+EXPLAIN
+> explain (verbose, costs off) select a, sum(a) over (order by a), row_number() over (order by b) from ea
+fields QUERY PLAN:25:-1:-1
+row WindowAgg
+row   Output: a, sum(a) OVER w2, (row_number() OVER w1), b
+row   Window: w2 AS (ORDER BY ea.a)
+row   ->  Sort
+row         Output: a, b, (row_number() OVER w1)
+row         Sort Key: ea.a
+row         ->  WindowAgg
+row               Output: a, b, row_number() OVER w1
+row               Window: w1 AS (ORDER BY ea.b ROWS UNBOUNDED PRECEDING)
+row               ->  Sort
+row                     Output: a, b
+row                     Sort Key: ea.b
+row                     ->  Seq Scan on public.ea
+row                           Output: a, b
+EXPLAIN

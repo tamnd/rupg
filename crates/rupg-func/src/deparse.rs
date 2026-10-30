@@ -1258,7 +1258,7 @@ impl<'a> Deparser<'a> {
         if reg::function_visible(proc, self.session) {
             self.buf.push_str(&quote_identifier(proc.name));
         } else {
-            let schema = reg::namespace_name(proc.namespace, self.session);
+            let schema = reg::namespace_name_or_temp(proc.namespace, self.session);
             self.buf.push_str(&reg::qualified(schema, proc.name));
         }
         self.buf.push('(');
@@ -1718,7 +1718,7 @@ fn relation_name(relid: u32, session: &dyn Session) -> Result<String> {
     if reg::class_visible(relid, session) == Some(true) {
         Ok(quote_identifier(name))
     } else {
-        Ok(reg::qualified(reg::namespace_name(namespace, session), name))
+        Ok(reg::qualified(reg::namespace_name_or_temp(namespace, session), name))
     }
 }
 
@@ -1726,7 +1726,7 @@ fn relation_name(relid: u32, session: &dyn Session) -> Result<String> {
 fn qualified_relation_name(relid: u32, session: &dyn Session) -> Result<String> {
     let (name, namespace) = reg::class_name(relid, session)
         .ok_or_else(|| Error::internal(format!("cache lookup failed for relation {relid}")))?;
-    Ok(reg::qualified(reg::namespace_name(namespace, session), name))
+    Ok(reg::qualified(reg::namespace_name_or_temp(namespace, session), name))
 }
 
 /// The pretty flags of a call: `PRETTYFLAG_PAREN` and `PRETTYFLAG_SCHEMA` when the argument at `index` is true. A call without the argument has only `PRETTYFLAG_INDENT`.
@@ -2066,7 +2066,7 @@ fn collation_name(collation: u32, session: &dyn Session) -> Result<String> {
     if reg::visible(Named::Collation, row, session) {
         Ok(quote_identifier(row.name))
     } else {
-        Ok(reg::qualified(reg::namespace_name(row.namespace, session), row.name))
+        Ok(reg::qualified(reg::namespace_name_or_temp(row.namespace, session), row.name))
     }
 }
 
@@ -2080,7 +2080,7 @@ fn opclass_name(class: u32, ty: u32, session: &dyn Session) -> Result<String> {
     if reg::method_visible(Named::Opclass, class, session) {
         Ok(format!(" {}", quote_identifier(&name)))
     } else {
-        Ok(format!(" {}", reg::qualified(reg::namespace_name(namespace, session), &name)))
+        Ok(format!(" {}", reg::qualified(reg::namespace_name_or_temp(namespace, session), &name)))
     }
 }
 

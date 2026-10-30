@@ -1428,7 +1428,7 @@ impl Deparser<'_> {
         let name = if reg::function_visible(proc, self.session) {
             quote_identifier(proc.name)
         } else {
-            reg::qualified(reg::namespace_name(proc.namespace, self.session), proc.name)
+            reg::qualified(reg::namespace_name_or_temp(proc.namespace, self.session), proc.name)
         };
         self.buf.push_str(&format!(" TABLESAMPLE {name} ("));
         for (i, arg) in sample.args.iter().enumerate() {
@@ -2625,7 +2625,7 @@ pub(super) fn get_triggerdef(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let function = if reg::function_visible(proc, session) {
         quote_identifier(proc.name)
     } else {
-        reg::qualified(reg::namespace_name(proc.namespace, session), proc.name)
+        reg::qualified(reg::namespace_name_or_temp(proc.namespace, session), proc.name)
     };
     // `simple_quote_literal` with `standard_conforming_strings` on doubles only the quote.
     let args: Vec<String> =

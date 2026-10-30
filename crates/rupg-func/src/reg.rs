@@ -74,6 +74,15 @@ pub(crate) fn is_own_temp(oid: u32, session: &dyn Session) -> bool {
         .is_some_and(|name| name == format!("pg_temp_{n}") || name == format!("pg_toast_temp_{n}"))
 }
 
+/// `get_namespace_name_or_temp`: the name of the schema, or `pg_temp` for the temporary schema of the session.
+pub(crate) fn namespace_name_or_temp(oid: u32, session: &dyn Session) -> Option<&str> {
+    let name = namespace_name(oid, session)?;
+    match session.temp_number() {
+        Some(n) if name == format!("pg_temp_{n}") => Some("pg_temp"),
+        _ => Some(name),
+    }
+}
+
 /// The OID of the schema with this name. `pg_temp` names the temporary schema of the session.
 fn namespace_oid(name: &str, session: &dyn Session) -> Option<u32> {
     if name == "pg_temp" {

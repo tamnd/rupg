@@ -803,6 +803,8 @@ fn grouped<'q>(
         }
     }
     let mut output = Vec::new();
+    // `create_one_window_path`: a `WindowAgg` below this one gives the targets of the input of the windows, then its window calls, as `add_column_to_pathtarget` adds them.
+    let mut calls_below: Vec<Item<'q>> = Vec::new();
     for w in &want {
         if keys.iter().any(|k| k.same(&w.expr)) {
             output.push(Item { expr: w.expr.clone(), below: !is_var(&w.expr) });
@@ -819,8 +821,8 @@ fn grouped<'q>(
                 if at != *window && !merged.contains(&at) {
                     // A target that is only the call reads the column of the node below.
                     from_below |= std::ptr::eq(call, &*w.expr);
-                    if !below.iter().any(|b| b.expr.same(call)) {
-                        below.push(item(call.clone()));
+                    if !calls_below.iter().any(|b| b.expr.same(call)) {
+                        calls_below.push(item(call.clone()));
                     }
                 }
             }
@@ -830,6 +832,11 @@ fn grouped<'q>(
     }
     for f in &node.filter {
         add_columns(&f.expr, 0, &mut below);
+    }
+    for call in calls_below {
+        if !below.iter().any(|b| b.expr.same(&call.expr)) {
+            below.push(call);
+        }
     }
     if let Some(child) = node.children.first_mut() {
         set(level, child, below, physical);
