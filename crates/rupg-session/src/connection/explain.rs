@@ -728,7 +728,7 @@ impl Connection {
         notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         let plan = plan?;
         notices.extend(plan.notices().iter().map(|error| Notice::warning(error.clone())));
-        self.explain_with(&plan, None, parsed, started, reader, notices)
+        self.explain_with(&plan, None, None, parsed, started, reader, notices)
     }
 
     /// `ExplainExecuteQuery`: the plan of a prepared statement with the values of the parameters of `EXECUTE`, as `GetCachedPlan` makes a custom plan with them.
@@ -749,15 +749,20 @@ impl Connection {
         let Some(plan) = replanned.as_ref().or(statement.plan.as_ref()) else {
             return Err(not_yet("EXPLAIN EXECUTE of a utility statement"));
         };
-        statement.count_plan(reader.settings().get("plan_cache_mode").as_deref());
-        let text = self.explain_with(plan, Some(&params), parsed, started, &reader, notices)?;
+        let custom = statement.count_plan(reader.settings().get("plan_cache_mode").as_deref());
+        // A generic plan keeps the parameters, and the run gets their values.
+        let folded = custom.then_some(params.as_slice());
+        let text =
+            self.explain_with(plan, folded, Some(&params), parsed, started, &reader, notices)?;
         Ok(explain_rows(text, parsed.format))
     }
 
-    /// The text of the plan `plan`, with the values `params` of its parameters for a custom plan.
+    /// The text of the plan `plan`. A custom plan takes the values `folded` of its parameters as constants, and the run with `ANALYZE` gets the values `params`.
+    #[allow(clippy::too_many_arguments)]
     fn explain_with(
         &self,
         plan: &rupg_exec::Plan,
+        folded: Option<&[Value]>,
         params: Option<&[Value]>,
         parsed: &Parsed,
         started: std::time::Duration,
@@ -766,7 +771,7 @@ impl Connection {
     ) -> Result<String, Error> {
         // `MemoryContextMemConsumed` of the context of the planning.
         let mark = rupg_platform::alloc::Mark::now();
-        let plan = plan.fold(params, reader);
+        let plan = plan.fold(folded, reader);
         notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         let plan = plan?;
         plan.start_explain(reader)?;

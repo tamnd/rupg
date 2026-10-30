@@ -164,7 +164,8 @@ impl Prepared {
     /// `choose_custom_plan` in `plancache.c`: counts a run of the statement with a generic plan or with a custom plan, as `GetCachedPlan` does.
     ///
     /// A statement without parameters, a utility statement and an empty query use the generic plan. Else `plan_cache_mode` decides, and in the mode `auto` the first five runs use a custom plan. After them PostgreSQL compares the cost of the generic plan with the mean cost of the custom plans. rupg has no costs, so it uses the generic plan, as PostgreSQL does when the generic plan costs less.
-    pub(super) fn count_plan(&self, mode: Option<&str>) {
+    /// It gives true for a custom plan.
+    pub(super) fn count_plan(&self, mode: Option<&str>) -> bool {
         let custom = self.plan.is_some()
             && !self.params.is_empty()
             && match mode {
@@ -174,6 +175,7 @@ impl Prepared {
             };
         let count = if custom { &self.custom_plans } else { &self.generic_plans };
         count.fetch_add(1, Ordering::Relaxed);
+        custom
     }
 }
 
