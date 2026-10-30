@@ -623,9 +623,6 @@ impl Connection {
         notices: &mut Vec<Notice>,
     ) -> Result<Done, Error> {
         let mut parsed = parse_options(stmt)?;
-        if parsed.generic {
-            return Err(not_yet("EXPLAIN (GENERIC_PLAN)"));
-        }
         let Some(node) = &stmt.query else {
             return Err(Error::internal("EXPLAIN with no statement"));
         };
@@ -680,9 +677,11 @@ impl Connection {
         let started = self.clock.monotonic();
         self.settings.borrow_mut().take_snapshot();
         let reader = self.reader();
+        // `transformExplainStmt`: with `GENERIC_PLAN`, the query can use parameters, and the analysis gets their types from the query as `setup_parse_variable_parameters` does. The plan keeps them, as a generic plan does.
+        let params = Params { types: Vec::new(), variable: parsed.generic };
         // `ExplainQuery`: `QueryRewrite` gives the statements of the rules, and each one shows its plan. A blank line comes between the plans of the text form.
         let Some(products) = rupg_analyze::query_rewrite(inner, &reader)? else {
-            let plan = query::plan(inner, &reader, &Params::default());
+            let plan = query::plan(inner, &reader, &params);
             let text = self.explain_plan(plan, &parsed, started, &reader, notices)?;
             return Ok(explain_rows(text, parsed.format));
         };
@@ -692,7 +691,7 @@ impl Connection {
         }
         let mut texts = Vec::with_capacity(products.len());
         for product in &products {
-            let plan = rupg_analyze::analyze_product(product, &reader, &Params::default())
+            let plan = rupg_analyze::analyze_product(product, &reader, &params)
                 .and_then(|query| rupg_exec::prepare(query, &reader));
             texts.push(self.explain_plan(plan, &parsed, started, &reader, notices)?);
         }
