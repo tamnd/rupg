@@ -90,6 +90,33 @@ pub(crate) struct Tables {
     grown: Vec<RefCell<Vec<Vec<Value>>>>,
     /// The index of a column, by the relation and the attribute number, that the scan makes for the first run of a correlated subquery and uses again in the next runs.
     indexes: RefCell<Indexes>,
+    /// For each relation whose scan kept only some columns, the place of each column in the rows. A relation with no entry has all the columns in each row.
+    places: Vec<Option<Places>>,
+}
+
+/// The columns that the rows of a scan keep: the place of each column of the relation in a row, or `NONE` for a column that the rows do not have, and the number of the kept columns, after which the ID of the version and the other system values come.
+#[derive(Clone, Debug)]
+pub(crate) struct Places {
+    at: Rc<[usize]>,
+    width: usize,
+}
+
+impl Places {
+    /// The places of the columns that are true in `kept`.
+    fn new(kept: &[bool]) -> Places {
+        let mut width = 0;
+        let at = kept
+            .iter()
+            .map(|&k| {
+                if !k {
+                    return NONE;
+                }
+                width += 1;
+                width - 1
+            })
+            .collect();
+        Places { at, width }
+    }
 }
 
 /// The row numbers of a relation for each value of a column.
@@ -162,7 +189,30 @@ impl Tables {
             writer: None,
             grown: vec![RefCell::default()],
             indexes: RefCell::default(),
+            places: Vec::new(),
         }
+    }
+
+    /// The number of the columns in each row of a relation, after which the ID of the version comes.
+    fn width(&self, relation: usize) -> usize {
+        match self.places.get(relation) {
+            Some(Some(places)) => places.width,
+            _ => self.types[relation].len(),
+        }
+    }
+
+    /// The place of the column `column` of a relation in its rows, or `None` for a column that the rows do not have.
+    pub(crate) fn place(&self, relation: usize, column: usize) -> Option<usize> {
+        match self.places.get(relation) {
+            Some(Some(places)) => places.at.get(column).copied().filter(|&at| at != NONE),
+            _ => Some(column),
+        }
+    }
+
+    /// The types of the columns that the rows of a relation have, in their places.
+    fn stored_types(&self, relation: usize) -> Vec<u32> {
+        let types = &self.types[relation];
+        (0..types.len()).filter(|&c| self.place(relation, c).is_some()).map(|c| types[c]).collect()
     }
 
     /// The value of a column in a tuple.
@@ -171,7 +221,7 @@ impl Tables {
         if row == NONE {
             return Value::Null;
         }
-        let width = self.types[var.relation].len();
+        let width = self.width(var.relation);
         if var.attnum == TABLE_OID_ATTNUM {
             // A row of a partitioned table, or of a table with children of `INHERITS`, has the OID of its table after the ID of its version.
             if let Some(Value::Oid(leaf)) = self.trailer(var.relation, row, width + 1) {
@@ -213,6 +263,12 @@ impl Tables {
                 self.grown[var.relation].borrow()[row].clone()
             };
             values.truncate(width);
+            if self.width(var.relation) != self.types[var.relation].len() {
+                let stored = values;
+                let columns = 0..self.types[var.relation].len();
+                let at = |c| self.place(var.relation, c).and_then(|at| stored.get(at).cloned());
+                values = columns.map(|c| at(c).unwrap_or(Value::Null)).collect();
+            }
             let mut types = self.types[var.relation].clone();
             let mut names = self.names[var.relation].clone();
             // A dropped column of a table has the type 0, and the row type has no field for it.
@@ -225,6 +281,7 @@ impl Tables {
             return Value::Record(Box::new(Record { types, values, names }));
         }
         let column = usize::try_from(var.attnum - 1).unwrap_or(usize::MAX);
+        let Some(column) = self.place(var.relation, column) else { return Value::Null };
         if self.needs[var.relation].is_empty() {
             return self.rows[var.relation][row].get(column).cloned().unwrap_or(Value::Null);
         }
@@ -234,7 +291,7 @@ impl Tables {
 
     /// The OID of the table of a row of a relation: the partition or the child of `INHERITS` of the row, or the table of the relation.
     pub(crate) fn leaf(&self, relation: usize, row: usize) -> u32 {
-        let width = self.types[relation].len();
+        let width = self.width(relation);
         match self.trailer(relation, row, width + 1) {
             Some(Value::Oid(leaf)) => leaf,
             _ => self.oids[relation],
@@ -243,7 +300,7 @@ impl Tables {
 
     /// The heap page of a row of a relation, from the ID of its version, or `None` for a row with no version.
     pub(crate) fn page(&self, relation: usize, row: usize) -> Option<i64> {
-        let width = self.types[relation].len();
+        let width = self.width(relation);
         match self.trailer(relation, row, width) {
             Some(Value::Int8(id)) => Some((id & ITEM_POINTER_MASK) >> 16),
             _ => None,
@@ -493,6 +550,7 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
     // A write and a row lock read the whole rows of their tables, so only a plain query copies just the columns that it reads.
     let plain = query.write.is_none() && query.row_marks.is_empty();
     let mut rows = Vec::with_capacity(query.relations.len());
+    let mut places = vec![None; query.relations.len()];
     for (index, (relation, used)) in query.relations.iter().zip(&used).enumerate() {
         let work = relation
             .cte
@@ -509,8 +567,11 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
         let Some(catalog) = rupg_pgcatalog::catalog_by_oid(relation.oid) else {
             let nullable = nulls.contains(&index);
             let from = (index, nullable, xids[index]);
-            let used = plain.then_some(used.as_slice());
-            rows.push(Rc::new(user_rows(relation, from, used, &conds, session)?));
+            let kept = plain.then(|| kept_columns(relation.oid, used, session));
+            // The rows keep only the columns that the query reads, so that a scan of a few columns of a wide table is small.
+            let kept = kept.filter(|k| k.contains(&false));
+            places[index] = kept.as_deref().map(Places::new);
+            rows.push(Rc::new(user_rows(relation, from, kept.as_deref(), &conds, session)?));
             continue;
         };
         let mut table = Vec::with_capacity(catalog.len);
@@ -551,6 +612,7 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
         writer: None,
         grown: query.relations.iter().map(|_| RefCell::default()).collect(),
         indexes: RefCell::default(),
+        places,
     })
 }
 
@@ -566,7 +628,22 @@ pub(crate) fn given(query: &Query, rows: Vec<Vec<Vec<Value>>>) -> Tables {
         writer: None,
         grown: query.relations.iter().map(|_| RefCell::default()).collect(),
         indexes: RefCell::default(),
+        places: Vec::new(),
     }
+}
+
+/// The columns that a scan of the table `oid` copies for a query that reads the columns `used`: these columns and the plain key columns of each index of the table, because an index scan gives the rows in the order of all the keys of its index.
+fn kept_columns(oid: u32, used: &[bool], session: &dyn Session) -> Vec<bool> {
+    let mut kept = used.to_vec();
+    let Some(catalog) = session.catalog() else { return kept };
+    for index in catalog.relations().filter_map(|r| r.index.as_ref().filter(|i| i.table == oid)) {
+        for &key in &index.keys {
+            if let Some(slot) = usize::try_from(key - 1).ok().and_then(|i| kept.get_mut(i)) {
+                *slot = true;
+            }
+        }
+    }
+    kept
 }
 
 /// The names of the fields of a whole row of a relation. A subquery, a function or a `VALUES` list takes the names of the alias, then the names of its columns. A table takes the names of the columns of its row type, as the alias does not change the row type.
@@ -666,7 +743,7 @@ pub(crate) fn check_scannable(query: &Query, session: &dyn Session) -> Result<()
     Ok(())
 }
 
-/// The rows of the relation `from` of the user, which is the relation `index` of the query, with true when an outer join can give it as nulls and true when the query reads `xmin` or `xmax`. With `used`, only the columns that are true in `used` have their values, and the others are null. A partitioned table gives the rows of the leaf partitions that the conditions `conds` of `WHERE` do not prune. For `xmin` and `xmax`, each row ends with the ID of its version, the OID of its table, `xmin` and `xmax`.
+/// The rows of the relation `from` of the user, which is the relation `index` of the query, with true when an outer join can give it as nulls and true when the query reads `xmin` or `xmax`. With `used`, each row has only the columns that are true in `used`, in their order. A partitioned table gives the rows of the leaf partitions that the conditions `conds` of `WHERE` do not prune. For `xmin` and `xmax`, each row ends with the ID of its version, the OID of its table, `xmin` and `xmax`.
 fn user_rows(
     from: &rupg_analyze::Relation,
     (index, nullable, xids): (usize, bool, bool),
@@ -693,7 +770,7 @@ fn user_rows(
     if matches!(relation.kind, rupg_catalog::RelKind::Table | rupg_catalog::RelKind::MatView) {
         session.count_scan(oid);
         // A row from before an `ALTER TABLE ... ADD COLUMN` has no value for the new columns, which are null. The ID of the version stays at the end of the row.
-        let width = relation.columns.len();
+        let width = used.map_or(relation.columns.len(), |u| u.iter().filter(|u| **u).count());
         let mut rows = if xids {
             session.table_rows_with_xids(oid, used)?
         } else {
@@ -722,17 +799,16 @@ fn user_rows(
     Ok(match &relation.sequence {
         Some(sequence) => {
             let row = session.sequence_row(sequence.file).unwrap_or(sequence.data);
-            vec![vec![
-                Value::Int8(row.last_value),
-                Value::Int8(row.log_cnt),
-                Value::Bool(row.is_called),
-            ]]
+            let values =
+                [Value::Int8(row.last_value), Value::Int8(row.log_cnt), Value::Bool(row.is_called)];
+            let kept = |i: usize| used.is_none_or(|u| u.get(i).copied().unwrap_or(false));
+            vec![values.into_iter().enumerate().filter(|(i, _)| kept(*i)).map(|(_, v)| v).collect()]
         }
         None => Vec::new(),
     })
 }
 
-/// The rows of the table `child`, a leaf partition of the partitioned table `relation` or a table that inherits from the table `relation`, with the columns of `relation`. With `used`, only the columns of `relation` that are true in `used` have their values. Each row has the ID of its version and then the OID of `child` at the end, and then `xmin` and `xmax` when `xids` is true.
+/// The rows of the table `child`, a leaf partition of the partitioned table `relation` or a table that inherits from the table `relation`, with the columns of `relation`. With `used`, each row has only the columns of `relation` that are true in `used`, in their order. Each row has the ID of its version and then the OID of `child` at the end, and then `xmin` and `xmax` when `xids` is true.
 fn child_rows(
     relation: &rupg_catalog::Relation,
     (child, xids): (u32, bool),
@@ -751,28 +827,36 @@ fn child_rows(
         })
         .collect();
     session.count_scan(child);
-    // The columns of the child that the used columns of `relation` map to.
-    let used = used.map(|used| {
+    let kept = |i: usize| used.is_none_or(|u| u.get(i).copied().unwrap_or(false));
+    // The columns of the child that the kept columns of `relation` map to, and the place of each column of the child in the rows of the child.
+    let mask = used.map(|_| {
         let mut mask = vec![false; part.columns.len()];
         for (i, at) in map.iter().enumerate() {
-            if let (Some(at), true) = (at, used.get(i).copied().unwrap_or(false)) {
-                mask[*at] = true;
+            if let Some(at) = at.filter(|_| kept(i)) {
+                mask[at] = true;
             }
         }
         mask
     });
-    let used = used.as_deref();
+    let places = mask.as_deref().map(Places::new);
+    let place = |at: usize| match &places {
+        Some(places) => places.at.get(at).copied().filter(|&at| at != NONE),
+        None => Some(at),
+    };
     let rows = if xids {
-        session.table_rows_with_xids(child, used)?
+        session.table_rows_with_xids(child, mask.as_deref())?
     } else {
-        session.table_rows(child, used)?
+        session.table_rows(child, mask.as_deref())?
     };
     for mut row in rows {
         let tid = row.pop().unwrap_or(Value::Null);
         let system = if xids { row.split_off(row.len().saturating_sub(2)) } else { Vec::new() };
         let mut values: Vec<Value> = map
             .iter()
-            .map(|i| i.and_then(|i| row.get(i).cloned()).unwrap_or(Value::Null))
+            .enumerate()
+            .filter(|(i, _)| kept(*i))
+            .map(|(_, i)| i.and_then(place).and_then(|at| row.get(at).cloned()))
+            .map(|value| value.unwrap_or(Value::Null))
             .collect();
         values.push(tid);
         values.push(Value::Oid(child));
@@ -1118,7 +1202,14 @@ fn index_ranks(
     let mut ids: Vec<usize> = acc.iter().map(|t| t[r]).filter(|&row| row < rows.len()).collect();
     ids.sort_unstable();
     ids.dedup();
-    let keys = crate::sort::Keys::new(&scanned.keys, &tables.types[r], session)?;
+    // The keys of the index by the places of their columns in the rows, which keep the key columns.
+    let mut places = scanned.keys.clone();
+    for key in &mut places {
+        key.target = tables.place(r, key.target).unwrap_or(NONE);
+    }
+    places.retain(|key| key.target != NONE);
+    let types = tables.stored_types(r);
+    let keys = crate::sort::Keys::new(&places, &types, session)?;
     let mut error = None;
     ids.sort_by(|&x, &y| {
         let order = keys.compare(&rows[x], &rows[y]).unwrap_or_else(|e| {

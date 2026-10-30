@@ -908,7 +908,7 @@ impl<'p, 'q> Exec<'p, 'q> {
                     .iter()
                     .map(|&c| {
                         let at = usize::try_from(c).ok()?.checked_sub(1)?;
-                        scan::key(values.get(at)?.clone())
+                        scan::key(values.get(tables.place(relation, at)?)?.clone())
                     })
                     .collect()
             };
