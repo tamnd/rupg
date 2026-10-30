@@ -367,6 +367,22 @@ pub fn plan<'q>(query: &'q Query, members: &'q dyn Members) -> Plan<'q> {
     plan
 }
 
+/// `materialize_finished_plan`: a `Material` node on top of the plan, which a cursor with `SCROLL` gets when its plan cannot scan backward. The `InitPlan` nodes of the top node move to the `Material` node, with their cost.
+pub fn materialize_finished(plan: &mut Plan<'_>) {
+    let placeholder = Node::new(Kind::Materialize, plan.root.scope, Vec::new());
+    let mut top = std::mem::replace(&mut plan.root, placeholder);
+    let init_plans = std::mem::take(&mut top.init_plans);
+    let init_cost: f64 = init_plans.iter().map(|sub| sub.plan.cost.total).sum();
+    top.cost.startup -= init_cost;
+    top.cost.total -= init_cost;
+    let mut node = from::materialize(top);
+    node.cost.startup += init_cost;
+    node.cost.total += init_cost;
+    node.disabled = node.children[0].disabled;
+    node.init_plans = init_plans;
+    plan.root = node;
+}
+
 /// The order of the rows of the joins of the plan `plan` of `query`, as `ExecNestLoop` and `ExecHashJoin` give them: the relations of the query from the outermost loop to the innermost one, each with true when its rows come in the reverse order of the scan. A nested loop gives the rows of its inner side for each row of its outer side, and a hash join gives the rows of its inner side in the reverse order, as `ExecHashTableInsert` puts each row at the head of its bucket. An index scan gives the rows in the order of the keys of its index, which `members` gives, and a bitmap heap scan gives them in the order of the heap. A scan of a function, of a `VALUES` list, of a query of `WITH` or of a subquery gives the rows in the order that they come. `None` when the plan has a node that gives its rows in another order, such as a sort or a merge join, or an index scan of an index with an expression or an operator class that is not the default one.
 pub fn join_order(plan: &Plan<'_>, query: &Query, members: &dyn Members) -> Option<Vec<Scanned>> {
     let mut node = &plan.root;

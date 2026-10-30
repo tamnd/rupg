@@ -489,6 +489,8 @@ struct Parsed {
     into: bool,
     /// The query identifier of the statement, from its text.
     query_id: i64,
+    /// True for `DECLARE ... SCROLL CURSOR`, whose plan gets a `Material` node when it cannot scan backward.
+    scroll: bool,
 }
 
 /// `ParseExplainOptionList`: the options of the statement and the checks of the options that need `ANALYZE`.
@@ -666,7 +668,10 @@ impl Connection {
                 Some(&stripped)
             }
             Node::CreateTableAsStmt(s) => s.query.as_ref(),
-            Node::DeclareCursorStmt(s) => s.query.as_ref(),
+            Node::DeclareCursorStmt(s) => {
+                parsed.scroll = s.options & rupg_sql::nodes::CURSOR_OPT_SCROLL != 0;
+                s.query.as_ref()
+            }
             Node::ExecuteStmt(s) => return self.explain_execute(s, &parsed, notices),
             _ => Some(node),
         };
@@ -798,7 +803,11 @@ impl Connection {
         let mut query = rupg_opt::pull_up(plan.query(), &barrier, &fold);
         rupg_opt::remove_joins(&mut query, &members);
         rupg_opt::remove_self_joins(&mut query, &members);
-        let tree = rupg_opt::plan(&query, &members);
+        let mut tree = rupg_opt::plan(&query, &members);
+        // `standard_planner`: a cursor with `SCROLL` reads its rows from a `Material` node when the plan cannot scan backward.
+        if parsed.scroll && !plan.backward_scan() {
+            rupg_opt::materialize_finished(&mut tree);
+        }
         let memory = parsed.memory.then(|| mark.since());
         if let Some(error) = members.error.take() {
             return Err(error);

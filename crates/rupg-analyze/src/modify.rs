@@ -417,9 +417,15 @@ impl Analyzer<'_> {
         }
     }
 
-    /// `transformCurrentOfExpr`: the condition of `WHERE CURRENT OF` on the target table, which is the relation 0. In a function of PL/pgSQL, a name that is a variable of type `refcursor` gives the name of the cursor as a parameter. An updatable view has no `ctid`, so the rewriter of PostgreSQL rejects the condition.
+    /// `transformCurrentOfExpr`: the condition of `WHERE CURRENT OF` on the target table, which is the relation 0. In a function of PL/pgSQL, a name that is a variable of type `refcursor` gives the name of the cursor as a parameter. A view has no `ctid`, so `transformDeleteStmt` and `transformUpdateStmt` reject the condition on a view.
     fn current_of(&mut self, c: &CurrentOfExpr) -> Result<Expr> {
-        if self.auto_view.is_some() {
+        let table = self.scope.relations.first().map_or(0, |r| r.oid);
+        let view = self
+            .env
+            .catalog()
+            .and_then(|c| c.relation(table))
+            .is_some_and(|r| r.kind == rupg_catalog::RelKind::View);
+        if view || self.auto_view.is_some() {
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
                 "WHERE CURRENT OF on a view is not implemented",
@@ -434,7 +440,6 @@ impl Analyzer<'_> {
             Some(v) => Expr::new(ExprKind::Param(v.param), v.ty),
             None => Expr::new(ExprKind::Const(Value::text(name)), oid::TEXT),
         };
-        let table = self.scope.relations.first().map_or(0, |r| r.oid);
         let var =
             |attnum, ty| Expr::new(ExprKind::Var(Var { relation: 0, attnum, levels_up: 0 }), ty);
         let args = vec![cursor, var(TABLE_OID_ATTNUM, oid::OID), var(CTID_ATTNUM, oid::INT8)];

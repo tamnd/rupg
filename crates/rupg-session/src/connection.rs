@@ -5810,7 +5810,7 @@ mod tests {
         big_stack(|| script(include_str!("connection/uix.test")));
     }
 
-    /// `WHERE CURRENT OF` in `UPDATE` and `DELETE`: a plain scan of a table, a cursor with `FOR UPDATE`, a join with `FOR UPDATE OF`, `LIMIT`, a subquery in `FROM`, a prepared statement, a child of the table, a cursor of a function in PL/pgSQL, and the errors of `execCurrentOf`. `connection/curof.test` is the output of PostgreSQL 19 for the same script in a new database.
+    /// `WHERE CURRENT OF` in `UPDATE` and `DELETE`: a plain scan of a table, a cursor with `FOR UPDATE`, a join with `FOR UPDATE OF`, `LIMIT`, a subquery in `FROM`, a prepared statement, a child of the table, a cursor of a function in PL/pgSQL, the errors of `execCurrentOf`, and the error of `WHERE CURRENT OF` on a view. `EXPLAIN` of a cursor with `SCROLL` shows the `Material` node when the plan cannot scan backward. `connection/curof.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn curof() {
         big_stack(|| script(include_str!("connection/curof.test")));
