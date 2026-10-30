@@ -81,6 +81,8 @@ pub struct ProcRow {
     pub src: &'static str,
     /// `prosqlbody`: for a function in SQL with a body in SQL, the text of the statement that made it.
     pub sqlbody: Option<&'static str>,
+    /// `prosupport`: the OID of the support function, or 0.
+    pub support: u32,
 }
 
 /// A row of `pg_operator`.
@@ -700,7 +702,7 @@ fn load_procs() -> Vec<ProcRow> {
         Values::OidVector(v) => v,
         _ => panic!("proargtypes is not an oidvector column"),
     };
-    let src = r.text("prosrc");
+    let (src, support) = (r.text("prosrc"), r.oid("prosupport"));
     (0..r.catalog.len)
         .map(|i| ProcRow {
             oid: oid[i],
@@ -739,6 +741,7 @@ fn load_procs() -> Vec<ProcRow> {
                 Values::Text(v) => Some(*v),
                 _ => None,
             }),
+            support: support[i],
         })
         .collect()
 }
@@ -1319,6 +1322,8 @@ pub struct SessionFunction {
     pub nargdefaults: i16,
     /// `prosrc` of a function in C or in `internal`, the symbol that runs it, or empty for another language.
     pub src: String,
+    /// `prosupport`: the OID of the support function, or 0.
+    pub support: u32,
 }
 
 // `procost` is never NaN, so the equality of two functions is an equivalence.
@@ -1549,6 +1554,7 @@ fn function_row(new: &SessionFunction) -> ProcRow {
         argdefaults: new.argdefaults.clone().map(|text| &*text.leak()),
         src: new.src.clone().leak(),
         sqlbody: None,
+        support: new.support,
     }
 }
 

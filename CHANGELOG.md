@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The planner now finds the direction of a window function for a run condition from the support function in `prosupport`, as in PostgreSQL 19. An aggregate that `CREATE AGGREGATE` gives `support = int8inc_support` now gets a run condition, and `EXCLUDE CURRENT ROW` keeps the run condition only for `count(*)` itself (#1198).
 - `REFRESH MATERIALIZED VIEW` now gives the error of the index build when the new data has a duplicate key, and `REFRESH ... CONCURRENTLY` gives the error for duplicate rows without nulls and checks again for a usable unique index after the query runs, as in PostgreSQL 19 (#1197).
 - `ALTER TABLESPACE ... SET` and `RESET` now change the options of a tablespace, `ALTER TABLESPACE ... RENAME TO` and `OWNER TO` now rename a tablespace and give it a new owner, and `GRANT` and `REVOKE` now work on a tablespace, with the checks and errors of PostgreSQL 19. A rollback discards the changes (#1196).
 - `pg_current_wal_lsn`, `pg_current_wal_insert_lsn` and `pg_current_wal_flush_lsn` now work. rupg writes no WAL, so the position starts after the first segment and moves on with each transaction. The LSN of the page of a sequence comes before it, as the sequence regress test checks (#1195).
