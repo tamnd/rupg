@@ -637,6 +637,7 @@ impl Explainer<'_, '_> {
                             format!("Join on {}", names.join(", "))
                         }
                         // `show_result_replacement_info` shows `RESULT_TYPE_UPPER` as an aggregate.
+                        Replaced::Upper(rs) if rs.is_empty() => "Aggregate".to_string(),
                         Replaced::Upper(rs) => {
                             let names: Vec<String> =
                                 rs.iter().map(|r| self.texts.refname(scope, *r)).collect();

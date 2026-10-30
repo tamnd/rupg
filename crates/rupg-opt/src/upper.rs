@@ -727,6 +727,51 @@ fn project(node: &mut Node<'_>, startup: f64, per_row: f64) {
     node.cost.total += startup + per_row * node.cost.rows;
 }
 
+/// `is_degenerate_grouping`: a query with `HAVING` or grouping sets, but with no `GROUP BY` item, no aggregate and no `GROUPING`, gives one row or none for each grouping set, and only `HAVING` decides which. The result is the number of grouping sets, or 1 with none.
+fn degenerate(query: &Query) -> Option<usize> {
+    if !query.group.is_empty() || (query.having.is_none() && query.grouping_sets.is_empty()) {
+        return None;
+    }
+    let mut exprs_of: Vec<&Expr> = query.targets.iter().map(|t| &t.expr).collect();
+    exprs_of.extend(query.having.iter());
+    let mut aggs = Vec::new();
+    exprs::aggregates(&exprs_of, &mut aggs);
+    if !aggs.is_empty() || exprs_of.iter().any(|e| has_grouping(e)) {
+        return None;
+    }
+    if query.grouping_sets.is_empty() {
+        return Some(1);
+    }
+    expand_grouping_sets(&query.grouping_sets, query.group_distinct, MAX_SETS).map(|s| s.len())
+}
+
+/// `create_degenerate_grouping_paths`: a `Result` with the conditions of `HAVING` as its one-time filter, in place of the plan of `FROM` and the `Agg`. With more than one grouping set, an `Append` of one `Result` for each set. `create_group_result_path` gives the cost, with the conditions once at the start.
+fn degenerate_result<'q>(level: &Level<'q>, sets: usize, target: (f64, f64)) -> Node<'q> {
+    let (_, having) = having_split(level.query);
+    let one_time: Vec<&Expr> = having.into_iter().filter(|h| !exprs::is_true(h)).collect();
+    let (qual_startup, qual_per_row) = level.stats.qual_costs(one_time.iter().copied());
+    let startup = target.0 + qual_startup + qual_per_row;
+    let result = || {
+        let items = one_time.iter().map(|h| Item::of(h)).collect();
+        let replaces = Some(Replaced::Upper(Vec::new()));
+        let mut node =
+            Node::new(Kind::Result { replaces, one_time: items }, level.display, Vec::new());
+        node.cost =
+            Cost { startup, total: startup + cost::CPU_TUPLE + target.1, rows: 1.0, width: 0 };
+        node
+    };
+    if sets == 1 {
+        return result();
+    }
+    let members: Vec<Node<'q>> = (0..sets).map(|_| result()).collect();
+    let rows = sets as f64;
+    // `cost_append`: the costs of the members, and half of `cpu_tuple_cost` for each row.
+    let total = members.iter().map(|m| m.cost.total).sum::<f64>() + cost::CPU_TUPLE * 0.5 * rows;
+    let mut node = Node::new(Kind::Append, level.display, members);
+    node.cost = Cost { startup, total, rows, width: 0 };
+    node
+}
+
 /// The number of rows of a function that gives a set in the targets, as `expression_returns_set_rows`.
 fn set_rows(expr: &Expr) -> f64 {
     let own = match &expr.kind {
@@ -923,8 +968,15 @@ impl<'q> Builder<'q> {
         }
         if query.set_op.is_none() {
             if query.grouped {
-                node = aggregate(level, node, &mut order, only)?;
-                project(&mut node, costs.group.0, costs.group.1);
+                if let Some(sets) = degenerate(query) {
+                    node = degenerate_result(level, sets, costs.group);
+                    order.clear();
+                    // `set_rtable_names`: the relations of `FROM` have no scan in the plan, so they take no name.
+                    self.current.retain(|&s| s != level.scope);
+                } else {
+                    node = aggregate(level, node, &mut order, only)?;
+                    project(&mut node, costs.group.0, costs.group.1);
+                }
                 // The rows of grouping sets have no order, so the steps above take the cheapest plan of the groups, as each plan has the same rows.
                 only &= query.grouping_sets.is_empty();
             }

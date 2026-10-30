@@ -44,6 +44,15 @@ fn replaced(level: &Level<'_>, node: &Node<'_>) -> bool {
     }
 }
 
+/// True for the `Append` of `create_degenerate_grouping_paths`, which has one `Result` for each grouping set of a query with no `GROUP BY` item and no aggregate.
+fn degenerate_append(node: &Node<'_>) -> bool {
+    matches!(node.kind, Kind::Append)
+        && !node.children.is_empty()
+        && node.children.iter().all(|c| {
+            matches!(&c.kind, Kind::Result { replaces: Some(Replaced::Upper(rs)), .. } if rs.is_empty())
+        })
+}
+
 /// The item of an expression that the planner made.
 fn item<'q>(expr: Expr) -> Item<'q> {
     Item::owned(expr)
@@ -155,6 +164,13 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             let size: f64 =
                 node.children.iter().map(|c| f64::from(c.cost.width) * c.cost.rows).sum();
             node.cost.width = if rows > 0.0 { (size / rows).round_ties_even() as i32 } else { 0 };
+        }
+        // `create_degenerate_grouping_paths`: each `Result` of a grouping set computes the targets, and the `Append` gives its rows as they are.
+        Kind::Append if degenerate_append(node) => {
+            for child in &mut node.children {
+                set(level, child, want.clone(), false);
+            }
+            node.cost.width = node.children.first().map_or(0, |c| c.cost.width);
         }
         Kind::Append | Kind::MergeAppend(_) | Kind::RecursiveUnion => {}
         // The `SetOp` reads the columns of the plans of its members.
@@ -736,7 +752,11 @@ fn trivial(level: &Level<'_>, node: &Node<'_>, r: usize, physical: bool) -> bool
     let set_op = sub.is_some_and(|s| s.set_op.is_some());
     // The `Append` of a set operation gives the columns of the operation.
     let child = node.children.first().map(|c| match c.kind {
-        Kind::Append | Kind::MergeAppend(_) if set_op && c.output.is_empty() => columns,
+        Kind::Append | Kind::MergeAppend(_)
+            if (set_op || degenerate_append(c)) && c.output.is_empty() =>
+        {
+            columns
+        }
         _ => c.output.len(),
     });
     // The nodes above that do not project share the target list of the scan, so a scan with the targets of the query has their junk marks, which `apply_tlist_labeling` gives the top node. A junk mark that the column of the subquery does not have stops the removal.
