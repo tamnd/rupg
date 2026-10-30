@@ -765,8 +765,33 @@ pub fn function_body_for(
     rupg_analyze::function_body_for(&reg::SessionEnv(session), func, inputs, Some(columns))
 }
 
+thread_local! {
+    /// The kernels that [`kernel`] found for the built-in functions, by OID. The kernel of a built-in function does not change, and the search of [`find_kernel`] reads the names of many functions.
+    static BUILTIN_KERNELS: std::cell::RefCell<Vec<Option<Kernel>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// The kernel of the function with this `pg_proc` OID, or `None` if the engine does not have it.
 pub fn kernel(func: u32) -> Option<Kernel> {
+    let Ok(at) = usize::try_from(func) else { return find_kernel(func) };
+    if func >= rupg_catalog::FIRST_NORMAL_OID {
+        return find_kernel(func);
+    }
+    if let Some(found) = BUILTIN_KERNELS.with_borrow(|kernels| kernels.get(at).copied().flatten()) {
+        return Some(found);
+    }
+    let found = find_kernel(func)?;
+    BUILTIN_KERNELS.with_borrow_mut(|kernels| {
+        if kernels.len() <= at {
+            kernels.resize(at + 1, None);
+        }
+        kernels[at] = Some(found);
+    });
+    Some(found)
+}
+
+/// [`kernel`] with no cache.
+fn find_kernel(func: u32) -> Option<Kernel> {
     let proc = builtin::proc_by_oid(func)?;
     let user = proc.oid >= rupg_catalog::FIRST_NORMAL_OID;
     if proc.lang == C_LANGUAGE && user {
