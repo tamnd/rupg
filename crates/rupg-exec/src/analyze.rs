@@ -476,6 +476,20 @@ impl<'p, 'q> Exec<'p, 'q> {
         Ok(Row::of(tuple))
     }
 
+    /// `ExecReScan` of a kid. When the kid is of another query, its rows are the rows of a relation of this query from the first row again, so the count of `convert` for the relation starts again.
+    fn rescan_kid(&mut self, cx: &Cx<'_, '_, '_>, kid: usize) {
+        self.kids[kid].rescan(cx);
+        let inner = self.node.children[kid].scope;
+        if cx.same(self.node.scope, inner) {
+            return;
+        }
+        if let Some(relation) = cx.relation_of(cx.home(self.node.scope), inner)
+            && let Some(next) = self.converted.get_mut(relation)
+        {
+            *next = 0;
+        }
+    }
+
     /// The next row of a kid, as a row of the query of this node.
     fn pull(&mut self, cx: &Cx<'_, '_, '_>, kid: usize, context: &[usize]) -> Result<Option<Row>> {
         let same = cx.same(self.node.scope, self.node.children[kid].scope);
@@ -655,7 +669,7 @@ impl<'p, 'q> Exec<'p, 'q> {
                     } else {
                         counts[1] += 1;
                         self.memo.insert(key.clone(), (Vec::new(), false));
-                        self.kids[0].rescan(cx);
+                        self.rescan_kid(cx, 0);
                     }
                     self.memo_key = Some(key);
                     self.pos = 0;
@@ -1056,7 +1070,7 @@ impl<'p, 'q> Exec<'p, 'q> {
         loop {
             let Some(outer) = self.outer.clone() else {
                 let Some(outer) = self.pull(cx, 0, context)? else { return Ok(None) };
-                self.kids[1].rescan(cx);
+                self.rescan_kid(cx, 1);
                 self.outer = Some(outer);
                 self.matched = false;
                 continue;

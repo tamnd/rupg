@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `EXPLAIN ANALYZE` no longer stops the server process with an index out of bounds when a nested loop scans a `Sort` or `Memoize` of a removed subquery again, as in `select_parallel` with `enable_material` off. The rows of the second loop now count from the first row of the subquery again (#1189).
 - `pg_stat_activity.query_id` shows the query identifier of the statement that the session runs when `compute_query_id` is `on` or `regress`. It was always null. The identifier is the one that `EXPLAIN VERBOSE` shows (#1188).
 - `EXPLAIN VERBOSE` now shows `Query Identifier` after the plan when `compute_query_id` is `on`, as in PostgreSQL 19. The identifier is a hash of the tokens of the statement, with each constant as the same token, so statements that differ only in their constants, the case of their words or their spaces get the same identifier (#1187).
 - A query with `HAVING` or grouping sets, but with no `GROUP BY` item and no aggregate, is now a `Result` with `Replaces: Aggregate` and the `HAVING` conditions as its one-time filter, or an `Append` of one `Result` for each grouping set, in place of the scan of `FROM` and an `Agg`, as `create_degenerate_grouping_paths` in PostgreSQL 19 (#1186).
