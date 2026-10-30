@@ -110,3 +110,9 @@ fields QUERY PLAN:25:-1:-1
 row Seq Scan on ea (actual rows=102.00 loops=1)
 row Serialization: output=1kB  format=binary
 EXPLAIN
+> explain (memory, costs off) select 1
+fields QUERY PLAN:25:-1:-1
+row Result
+row Planning:
+row   Memory: used=0kB  allocated=0kB
+EXPLAIN

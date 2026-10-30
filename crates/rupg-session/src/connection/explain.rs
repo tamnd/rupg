@@ -626,9 +626,6 @@ impl Connection {
         if parsed.generic {
             return Err(not_yet("EXPLAIN (GENERIC_PLAN)"));
         }
-        if parsed.memory {
-            return Err(not_yet("EXPLAIN (MEMORY)"));
-        }
         let Some(node) = &stmt.query else {
             return Err(Error::internal("EXPLAIN with no statement"));
         };
@@ -769,6 +766,8 @@ impl Connection {
         reader: &Reader<'_>,
         notices: &mut Vec<Notice>,
     ) -> Result<String, Error> {
+        // `MemoryContextMemConsumed` of the context of the planning.
+        let mark = rupg_platform::alloc::Mark::now();
         let plan = plan.fold(params, reader);
         notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         let plan = plan?;
@@ -794,6 +793,7 @@ impl Connection {
         rupg_opt::remove_joins(&mut query, &members);
         rupg_opt::remove_self_joins(&mut query, &members);
         let tree = rupg_opt::plan(&query, &members);
+        let memory = parsed.memory.then(|| mark.since());
         if let Some(error) = members.error.take() {
             return Err(error);
         }
@@ -860,6 +860,7 @@ impl Connection {
             io_timing: reader.settings().get("track_io_timing").as_deref() == Some("on"),
             io: parsed.io.then(|| stream_capacity(reader)),
             serialize,
+            memory,
         };
         rupg_func::explain(&tree, &options, actuals.as_ref(), reader)
     }

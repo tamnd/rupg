@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `EXPLAIN (MEMORY)` now shows the memory that the planning used and allocated, in the text form and in the other forms. The `rupg` binary counts the bytes of each thread with a global allocator over the allocator of the system (#1178).
 - `EXPLAIN` now takes the `IO` option and shows the prefetch of the pages of a scan, `SERIALIZE` shows the size of the output of the rows, and `BUFFERS` shows the counts of each node and of the planning in the formats other than text (#1177).
 - The kernel of a built-in function is found once for each session thread, and not again for each call. A filter on 2 million rows took 40% of its time to find the kernel of its comparison (#1176).
 - `COPY FROM` no longer runs the plan of its `INSERT` for each row when the plan only puts the fields of the row in the columns of the table, also with the length cast of a column with a type modifier (#1175).
