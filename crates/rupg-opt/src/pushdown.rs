@@ -154,17 +154,20 @@ const INCREASING: u8 = 1;
 /// `MONOTONICFUNC_DECREASING`.
 const DECREASING: u8 = 2;
 
-/// `SupportRequestWFuncMonotonic`: the directions in which the value of a call of a window function can go in a partition, as the support functions of `row_number` and the other functions of the rank of a row, and `int8inc_support` for `count`, give them. `None` for a function with no support function.
+/// `SupportRequestWFuncMonotonic`: the directions in which the value of a call of a window function can go in a partition, as the support function in `prosupport` of the function gives them. The support functions of `row_number` and the other functions of the rank of a row, and `int8inc_support` of `count` and of an aggregate that `CREATE AGGREGATE` gives that support function, are known. `None` for another function.
 fn monotonic(w: &WindowFunc, frame: i32, ordered: bool) -> Option<u8> {
-    let proc = builtin::proc_by_oid(w.oid)?;
-    match proc.name {
-        "row_number" | "rank" | "dense_rank" | "percent_rank" | "cume_dist" | "ntile" => {
-            Some(INCREASING)
-        }
-        "count" if w.agg => {
+    let support = builtin::proc_by_oid(builtin::proc_by_oid(w.oid)?.support)?;
+    match support.name {
+        "window_row_number_support"
+        | "window_rank_support"
+        | "window_dense_rank_support"
+        | "window_percent_rank_support"
+        | "window_cume_dist_support"
+        | "window_ntile_support" => Some(INCREASING),
+        "int8inc_support" => {
             // `FRAMEOPTION_EXCLUSION`: only `EXCLUDE CURRENT ROW` of `count(*)` with no filter keeps the direction.
             if frame & 0x38000 != 0
-                && (frame & 0x8000 == 0 || !w.args.is_empty() || w.filter.is_some())
+                && (frame & 0x8000 == 0 || w.oid != COUNT_STAR || w.filter.is_some())
             {
                 return Some(0);
             }
@@ -243,6 +246,9 @@ fn window_run_condition(
 
 /// `BTREE_AM_OID`.
 const BTREE_AM: u32 = 403;
+
+/// `F_COUNT_`: `count(*)`.
+const COUNT_STAR: u32 = 2803;
 
 /// `set_subquery_pathlist` for the executor: each part of `WHERE` that reads only a view with `security_barrier` of the list of `FROM`, or a volatile part that reads no relation when the view is the only item of `FROM`, moves into the view when it is leakproof, as `qual_is_pushdown_safe` lets such a condition pass the barrier. `barrier` is true for a view with `security_barrier`. The other parts stay above the view.
 pub(crate) fn push_barrier(query: &mut Query, barrier: &dyn Fn(u32) -> bool) {

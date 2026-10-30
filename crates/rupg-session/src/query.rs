@@ -356,6 +356,7 @@ fn use_types(catalog: &Catalog) {
                     } else {
                         String::new()
                     },
+                    support: f.support,
                 })
             }),
     );

@@ -4462,6 +4462,7 @@ mod tests {
 
     /// A filter on the result of a monotonic window function becomes a
     /// run condition of the WindowAgg, as in `find_window_run_conditions`.
+    /// The support function of the window function in `prosupport` gives the direction, also for an aggregate that `CREATE AGGREGATE` gives `int8inc_support`.
     /// `connection/run_condition.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn run_condition() {

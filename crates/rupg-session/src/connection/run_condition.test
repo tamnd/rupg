@@ -94,3 +94,91 @@ EXPLAIN
 fields empno@emp.2:23:4:-1,salary@emp.3:23:4:-1,dr:20:8:-1
 row 8,6000,1
 SELECT 1
+> CREATE TABLE rc_t (ten int, g int)
+CREATE TABLE
+> INSERT INTO rc_t SELECT i % 10, i % 3 FROM generate_series(1, 30) i
+INSERT 0 30
+> CREATE AGGREGATE rc_cnt ("any") (sfunc = int8inc_any, stype = int8, support = int8inc_support, initcond = '0')
+CREATE AGGREGATE
+> CREATE AGGREGATE rc_cnt (*) (sfunc = int8inc, stype = int8, support = int8inc_support, initcond = '0')
+CREATE AGGREGATE
+> CREATE AGGREGATE rc_plain ("any") (sfunc = int8inc_any, stype = int8, initcond = '0')
+CREATE AGGREGATE
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT rc_cnt(ten) OVER (RANGE BETWEEN CURRENT ROW AND CURRENT ROW) c FROM rc_t) t WHERE c = 1
+fields QUERY PLAN:25:-1:-1
+row WindowAgg
+row   Window: w1 AS (RANGE BETWEEN CURRENT ROW AND CURRENT ROW)
+row   Run Condition: (rc_cnt(rc_t.ten) OVER w1 = 1)
+row   ->  Seq Scan on rc_t
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT rc_plain(ten) OVER (RANGE BETWEEN CURRENT ROW AND CURRENT ROW) c FROM rc_t) t WHERE c = 1
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on t
+row   Filter: (t.c = 1)
+row   ->  WindowAgg
+row         Window: w1 AS (RANGE BETWEEN CURRENT ROW AND CURRENT ROW)
+row         ->  Seq Scan on rc_t
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT rc_cnt(ten) OVER (ORDER BY ten) c FROM rc_t) t WHERE c <= 3
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on t
+row   ->  WindowAgg
+row         Window: w1 AS (ORDER BY rc_t.ten)
+row         Run Condition: (rc_cnt(rc_t.ten) OVER w1 <= 3)
+row         ->  Sort
+row               Sort Key: rc_t.ten
+row               ->  Seq Scan on rc_t
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT rc_cnt(*) OVER (ORDER BY ten ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE CURRENT ROW) c FROM rc_t) t WHERE c <= 3
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on t
+row   Filter: (t.c <= 3)
+row   ->  WindowAgg
+row         Window: w1 AS (ORDER BY rc_t.ten ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE CURRENT ROW)
+row         ->  Sort
+row               Sort Key: rc_t.ten
+row               ->  Seq Scan on rc_t
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT rc_cnt(ten) OVER (ORDER BY ten ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE CURRENT ROW) c FROM rc_t) t WHERE c <= 3
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on t
+row   Filter: (t.c <= 3)
+row   ->  WindowAgg
+row         Window: w1 AS (ORDER BY rc_t.ten ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE CURRENT ROW)
+row         ->  Sort
+row               Sort Key: rc_t.ten
+row               ->  Seq Scan on rc_t
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT count(*) OVER (ORDER BY ten ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE CURRENT ROW) c FROM rc_t) t WHERE c <= 3
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on t
+row   ->  WindowAgg
+row         Window: w1 AS (ORDER BY rc_t.ten ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE CURRENT ROW)
+row         Run Condition: (count(*) OVER w1 <= 3)
+row         ->  Sort
+row               Sort Key: rc_t.ten
+row               ->  Seq Scan on rc_t
+EXPLAIN
+> SELECT * FROM (SELECT ten, rc_cnt(ten) OVER (ORDER BY ten) c FROM rc_t) t WHERE c <= 3 ORDER BY ten
+fields ten@rc_t.1:23:4:-1,c:20:8:-1
+row 0,3
+row 0,3
+row 0,3
+SELECT 3
+> SELECT * FROM (SELECT g, rc_cnt(ten) OVER (PARTITION BY g ORDER BY ten) c FROM rc_t) t WHERE c < 3 ORDER BY g, c
+fields g@rc_t.2:23:4:-1,c:20:8:-1
+row 0,1
+row 0,2
+row 1,1
+row 1,2
+row 2,1
+row 2,2
+SELECT 6
+> DROP AGGREGATE rc_cnt ("any")
+DROP AGGREGATE
+> DROP AGGREGATE rc_cnt (*)
+DROP AGGREGATE
+> DROP AGGREGATE rc_plain ("any")
+DROP AGGREGATE
+> DROP TABLE rc_t
+DROP TABLE
