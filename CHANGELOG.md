@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Deparse and `EXPLAIN VERBOSE` now name the temporary schema of the session `pg_temp`, and a `WindowAgg` below another one now gives its input columns before its window calls, as in PostgreSQL 19 (#1183).
 - `EXPLAIN EXECUTE` now shows the generic plan with the parameters when `plan_cache_mode` or the count of the runs chooses a generic plan, and the custom plan with the values of the parameters in the other cases (#1182).
 - `EXPLAIN (SETTINGS)` now shows the parameters that change the planning and do not have their boot values, in the order in which they changed, in the text form and in the other forms (#1181).
 - `EXPLAIN (GENERIC_PLAN)` now shows the plan of a query with parameters and no values for them. The analysis gets the types of the parameters from the query (#1180).

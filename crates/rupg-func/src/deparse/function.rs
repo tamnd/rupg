@@ -423,6 +423,6 @@ fn support_name(oid: u32, session: &dyn Session) -> Result<String> {
     if reg::function_visible(proc, session) {
         Ok(quote_identifier(proc.name))
     } else {
-        Ok(reg::qualified(reg::namespace_name(proc.namespace, session), proc.name))
+        Ok(reg::qualified(reg::namespace_name_or_temp(proc.namespace, session), proc.name))
     }
 }
