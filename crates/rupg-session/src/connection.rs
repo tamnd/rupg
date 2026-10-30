@@ -9348,6 +9348,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/statement_timeout.test")));
     }
 
+    /// `pg_current_wal_lsn`, `pg_current_wal_insert_lsn` and `pg_current_wal_flush_lsn` give a `pg_lsn` after the LSN of the page of a sequence, and the position moves on after a transaction that writes. `connection/current_wal_lsn.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn current_wal_lsn() {
+        big_stack(|| script(include_str!("connection/current_wal_lsn.test")));
+    }
+
     /// A scan of a table whose conditions of `WHERE` read only some of the columns of the query: rows that an update and a delete of the transaction changed, an error of a condition, a column that `ALTER TABLE` added and a column that it dropped. `connection/narrow_scan.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn narrow_scan() {

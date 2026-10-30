@@ -1,0 +1,38 @@
+> create sequence wal_seq
+CREATE SEQUENCE
+> select nextval('wal_seq')
+fields nextval:20:8:-1
+row 1
+SELECT 1
+> select is_called, page_lsn <= pg_current_wal_lsn() as lsn from pg_get_sequence_data('wal_seq')
+fields is_called:16:1:-1,lsn:16:1:-1
+row t,t
+SELECT 1
+> select pg_current_wal_lsn() > '0/0', pg_current_wal_flush_lsn() <= pg_current_wal_insert_lsn(), pg_current_wal_lsn() <= pg_current_wal_insert_lsn()
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t
+SELECT 1
+> select pg_typeof(pg_current_wal_lsn()), pg_typeof(pg_current_wal_insert_lsn()), pg_typeof(pg_current_wal_flush_lsn())
+fields pg_typeof:2206:4:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
+row pg_lsn,pg_lsn,pg_lsn
+SELECT 1
+> create table wal_t (a int)
+CREATE TABLE
+> select set_config('wal.before', pg_current_wal_lsn()::text, false) is not null
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> insert into wal_t values (1)
+INSERT 0 1
+> select pg_current_wal_lsn() > current_setting('wal.before')::pg_lsn
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> select pg_wal_lsn_diff(pg_current_wal_lsn(), current_setting('wal.before')::pg_lsn) > 0
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> drop table wal_t
+DROP TABLE
+> drop sequence wal_seq
+DROP SEQUENCE
