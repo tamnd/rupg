@@ -1502,6 +1502,19 @@ impl Connection {
         if let Node::AlterDatabaseStmt(stmt) = node {
             return self.alter_database(stmt, role);
         }
+        if let Node::AlterTableSpaceOptionsStmt(stmt) = node {
+            return self.alter_tablespace_options(stmt, role);
+        }
+        if let Node::AlterOwnerStmt(stmt) = node
+            && stmt.objectType == ObjectType::OBJECT_TABLESPACE
+        {
+            return self.alter_tablespace_owner(stmt, role);
+        }
+        if let Node::RenameStmt(stmt) = node
+            && stmt.renameType == ObjectType::OBJECT_TABLESPACE
+        {
+            return self.rename_tablespace(stmt, role);
+        }
         let mut work = Catalog::clone(&self.catalog());
         let mut defined = rupg_analyze::define(node, text, &self.reader(), &mut work, role);
         if let Some(top) = &defined.top_level
@@ -1577,12 +1590,19 @@ impl Connection {
                     return Err(Error::internal("the lock of the catalog is gone"));
                 };
                 self.register_on_commit(&defined.on_commit);
-                if !defined.grantors.is_empty() || !defined.databases.is_empty() {
+                if !defined.grantors.is_empty()
+                    || !defined.databases.is_empty()
+                    || !defined.tablespaces.is_empty()
+                {
                     let mut roles = Roles::clone(&lease.roles);
                     roles.members.retain(|m| !defined.grantors.contains(&m.grantor));
                     for change in defined.databases {
                         roles.databases.retain(|c| c.oid != change.oid);
                         roles.databases.push(change);
+                    }
+                    for change in defined.tablespaces {
+                        roles.tablespaces.retain(|c| c.oid != change.oid);
+                        roles.tablespaces.push(change);
                     }
                     lease.roles = Arc::new(roles);
                 }
@@ -2809,6 +2829,7 @@ fn definition_tag(node: &Node) -> CommandTag {
         },
         Node::DiscardStmt(_) => CommandTag::DiscardTemp,
         Node::AlterDatabaseStmt(_) => CommandTag::AlterDatabase,
+        Node::AlterTableSpaceOptionsStmt(_) => CommandTag::AlterTablespace,
         Node::CreateForeignTableStmt(_) => CommandTag::CreateForeignTable,
         _ => CommandTag::CreateTable,
     }
@@ -5228,7 +5249,7 @@ mod tests {
         big_stack(|| script(include_str!("connection/databases.test")));
     }
 
-    /// `CREATE TABLESPACE` and `DROP TABLESPACE` of in-place tablespaces: the checks of the statements, the rows of `pg_tablespace`, the functions of a tablespace, and the owner as a dependency of a role. Then the `TABLESPACE` clause of `CREATE TABLE`, `CREATE INDEX`, a constraint index and `CREATE MATERIALIZED VIEW`, `default_tablespace`, a partition that takes the tablespace of its parent, `pg_class.reltablespace`, the checks of `CREATE` on the tablespace, and `DROP TABLESPACE` of a tablespace that a relation uses. Then `ALTER ... SET TABLESPACE`, `ALTER ... ALL IN TABLESPACE` and `REINDEX (TABLESPACE)`, with their checks. `connection/tablespaces.test` is the output of PostgreSQL 19 for the same script in a new database.
+    /// `CREATE TABLESPACE` and `DROP TABLESPACE` of in-place tablespaces: the checks of the statements, the rows of `pg_tablespace`, the functions of a tablespace, and the owner as a dependency of a role. Then the `TABLESPACE` clause of `CREATE TABLE`, `CREATE INDEX`, a constraint index and `CREATE MATERIALIZED VIEW`, `default_tablespace`, a partition that takes the tablespace of its parent, `pg_class.reltablespace`, the checks of `CREATE` on the tablespace, and `DROP TABLESPACE` of a tablespace that a relation uses. Then `ALTER ... SET TABLESPACE`, `ALTER ... ALL IN TABLESPACE` and `REINDEX (TABLESPACE)`, with their checks. Then `ALTER TABLESPACE ... SET` and `RESET`, `RENAME TO` and `OWNER TO`, and `GRANT` and `REVOKE` on a tablespace, with their checks and a rollback of each change. `connection/tablespaces.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn tablespaces() {
         big_stack(|| script(include_str!("connection/tablespaces.test")));

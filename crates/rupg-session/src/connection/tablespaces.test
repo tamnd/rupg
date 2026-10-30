@@ -362,5 +362,131 @@ DROP TABLE
 DROP ROLE
 > DROP TABLESPACE regress_ts6;
 DROP TABLESPACE
+> CREATE TABLESPACE regress_ts7 LOCATION '';
+CREATE TABLESPACE
+> ALTER TABLESPACE regress_ts7 SET (random_page_cost = 1.0, seq_page_cost = 1.1);
+ALTER TABLESPACE
+> SELECT spcname, spcoptions FROM pg_tablespace WHERE spcname = 'regress_ts7';
+fields spcname@pg_tablespace.2:19:64:-1,spcoptions@pg_tablespace.5:1009:-1:-1
+row regress_ts7,{random_page_cost=1.0,seq_page_cost=1.1}
+SELECT 1
+> ALTER TABLESPACE regress_ts7 SET (some_nonexistent_parameter = true);
+ERROR 22023 unrecognized parameter "some_nonexistent_parameter"
+> ALTER TABLESPACE regress_ts7 RESET (random_page_cost = 2.0);
+ERROR 42601 RESET must not include values for parameters
+> ALTER TABLESPACE regress_ts7 RESET (random_page_cost, effective_io_concurrency);
+ALTER TABLESPACE
+> SELECT spcoptions FROM pg_tablespace WHERE spcname = 'regress_ts7';
+fields spcoptions@pg_tablespace.5:1009:-1:-1
+row {seq_page_cost=1.1}
+SELECT 1
+> ALTER TABLESPACE regress_nope SET (seq_page_cost = 2);
+ERROR 42704 tablespace "regress_nope" does not exist
+> BEGIN;
+BEGIN
+> ALTER TABLESPACE regress_ts7 SET (seq_page_cost = 3);
+ALTER TABLESPACE
+> SELECT spcoptions FROM pg_tablespace WHERE spcname = 'regress_ts7';
+fields spcoptions@pg_tablespace.5:1009:-1:-1
+row {seq_page_cost=3}
+SELECT 1
+> ROLLBACK;
+ROLLBACK
+> SELECT spcoptions FROM pg_tablespace WHERE spcname = 'regress_ts7';
+fields spcoptions@pg_tablespace.5:1009:-1:-1
+row {seq_page_cost=1.1}
+SELECT 1
+> BEGIN;
+BEGIN
+> GRANT ALL ON TABLESPACE regress_ts7 TO PUBLIC;
+GRANT
+> SELECT spcacl FROM pg_tablespace WHERE spcname = 'regress_ts7';
+fields spcacl@pg_tablespace.4:1034:-1:-1
+row {postgres=C/postgres,=C/postgres}
+SELECT 1
+> ROLLBACK;
+ROLLBACK
+> SELECT spcacl FROM pg_tablespace WHERE spcname = 'regress_ts7';
+fields spcacl@pg_tablespace.4:1034:-1:-1
+row NULL
+SELECT 1
+> GRANT ALL ON TABLESPACE regress_nope TO PUBLIC;
+ERROR 42704 tablespace "regress_nope" does not exist
+> CREATE ROLE regress_ts_u1;
+CREATE ROLE
+> CREATE ROLE regress_ts_u2;
+CREATE ROLE
+> GRANT CREATE ON TABLESPACE regress_ts7 TO regress_ts_u2;
+GRANT
+> SELECT spcacl FROM pg_tablespace WHERE spcname = 'regress_ts7';
+fields spcacl@pg_tablespace.4:1034:-1:-1
+row {postgres=C/postgres,regress_ts_u2=C/postgres}
+SELECT 1
+> SELECT has_tablespace_privilege('regress_ts_u2', 'regress_ts7', 'CREATE');
+fields has_tablespace_privilege:16:1:-1
+row t
+SELECT 1
+> ALTER TABLESPACE regress_ts7 OWNER TO regress_ts_u1;
+ALTER TABLESPACE
+> SELECT spcowner::regrole, spcacl FROM pg_tablespace WHERE spcname = 'regress_ts7';
+fields spcowner:4096:4:-1,spcacl@pg_tablespace.4:1034:-1:-1
+row regress_ts_u1,{regress_ts_u1=C/regress_ts_u1,regress_ts_u2=C/regress_ts_u1}
+SELECT 1
+> SET ROLE regress_ts_u2;
+SET
+is_superuser=off
+> ALTER TABLESPACE regress_ts7 OWNER TO regress_ts_u2;
+ERROR 42501 must be owner of tablespace regress_ts7
+> ALTER TABLESPACE regress_ts7 RENAME TO regress_ts8;
+ERROR 42501 permission denied for tablespace regress_ts7
+> ALTER TABLESPACE regress_ts7 SET (seq_page_cost = 2);
+ERROR 42501 must be owner of tablespace regress_ts7
+> RESET ROLE;
+RESET
+is_superuser=on
+> REVOKE CREATE ON TABLESPACE regress_ts7 FROM regress_ts_u2;
+REVOKE
+> SELECT spcacl FROM pg_tablespace WHERE spcname = 'regress_ts7';
+fields spcacl@pg_tablespace.4:1034:-1:-1
+row {regress_ts_u1=C/regress_ts_u1}
+SELECT 1
+> ALTER TABLESPACE regress_ts7 RENAME TO pg_foo;
+ERROR 42939 unacceptable tablespace name "pg_foo"
+DETAIL The prefix "pg_" is reserved for system tablespaces.
+> ALTER TABLESPACE regress_nope RENAME TO regress_x;
+ERROR 42704 tablespace "regress_nope" does not exist
+> BEGIN;
+BEGIN
+> ALTER TABLESPACE regress_ts7 RENAME TO regress_ts8;
+ALTER TABLESPACE
+> SELECT spcname FROM pg_tablespace WHERE spcname LIKE 'regress_ts%';
+fields spcname@pg_tablespace.2:19:64:-1
+row regress_ts8
+SELECT 1
+> ROLLBACK;
+ROLLBACK
+> SELECT spcname FROM pg_tablespace WHERE spcname LIKE 'regress_ts%';
+fields spcname@pg_tablespace.2:19:64:-1
+row regress_ts7
+SELECT 1
+> ALTER TABLESPACE regress_ts7 RENAME TO regress_ts8;
+ALTER TABLESPACE
+> ALTER TABLE ALL IN TABLESPACE regress_ts8 SET TABLESPACE pg_default;
+NOTICE P0002 no matching relations in tablespace "regress_ts8" found
+ALTER TABLE
+> ALTER TABLESPACE regress_ts8 OWNER TO regress_nope;
+ERROR 42704 role "regress_nope" does not exist
+> ALTER TABLESPACE regress_ts8 OWNER TO CURRENT_USER;
+ALTER TABLESPACE
+> SELECT spcowner::regrole, spcacl FROM pg_tablespace WHERE spcname = 'regress_ts8';
+fields spcowner:4096:4:-1,spcacl@pg_tablespace.4:1034:-1:-1
+row postgres,{postgres=C/postgres}
+SELECT 1
+> DROP TABLESPACE regress_ts8;
+DROP TABLESPACE
+> DROP ROLE regress_ts_u1;
+DROP ROLE
+> DROP ROLE regress_ts_u2;
+DROP ROLE
 > RESET allow_in_place_tablespaces;
 RESET

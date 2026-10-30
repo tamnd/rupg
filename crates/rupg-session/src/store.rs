@@ -8,7 +8,7 @@ use std::time::Duration;
 use rupg_catalog::{Catalog, Database, SequenceData, Tablespace};
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Backend, RelationCounts};
-use rupg_pgcatalog::roles::{DatabaseChange, Roles};
+use rupg_pgcatalog::roles::{DatabaseChange, Roles, TablespaceChange};
 use rupg_platform::Tasks;
 
 use crate::advisory::Locks;
@@ -258,6 +258,23 @@ impl Store {
     /// The rows of `pg_tablespace` of the tablespaces that `CREATE TABLESPACE` made, in the order of their OIDs.
     pub(crate) fn tablespaces(&self) -> Arc<[Tablespace]> {
         Arc::clone(&self.state().tablespaces)
+    }
+
+    /// [`Store::tablespaces`] with the rows that a transaction changed and did not commit yet.
+    pub(crate) fn tablespaces_with(&self, changes: &[TablespaceChange]) -> Arc<[Tablespace]> {
+        let rows = self.tablespaces();
+        if changes.is_empty() {
+            return rows;
+        }
+        rows.iter()
+            .map(|row| {
+                let mut row = row.clone();
+                if let Some(change) = changes.iter().find(|c| c.oid == row.oid) {
+                    rupg_analyze::apply_tablespace_change(change, &mut row);
+                }
+                row
+            })
+            .collect()
     }
 
     /// `CreateTableSpace` after the checks of the statement: the new row of `pg_tablespace` with the next OID of the cluster. It gives the OID.
@@ -777,17 +794,19 @@ pub(crate) struct Lease {
 }
 
 impl Lease {
-    /// Makes the changes of the transaction the catalog of the last commit, and releases the lock. After the commit the new labels of the enum types are safe to use. The rows of `pg_database` that the transaction changed go to the store.
+    /// Makes the changes of the transaction the catalog of the last commit, and releases the lock. After the commit the new labels of the enum types are safe to use. The rows of `pg_database` and `pg_tablespace` that the transaction changed go to the store.
     pub(crate) fn commit(mut self) {
         let mut catalog = std::mem::take(&mut self.catalog);
         if catalog.has_uncommitted_enums() {
             Arc::make_mut(&mut catalog).commit_enums();
         }
-        let changes = if self.roles.databases.is_empty() {
-            Vec::new()
-        } else {
-            std::mem::take(&mut Arc::make_mut(&mut self.roles).databases)
-        };
+        let (changes, tablespaces) =
+            if self.roles.databases.is_empty() && self.roles.tablespaces.is_empty() {
+                (Vec::new(), Vec::new())
+            } else {
+                let roles = Arc::make_mut(&mut self.roles);
+                (std::mem::take(&mut roles.databases), std::mem::take(&mut roles.tablespaces))
+            };
         let mut state = self.store.state();
         // `GetNewObjectId` takes the OIDs of the roles and of the databases from the same counter, so the counter of the cluster takes the counter of the catalog before the drop of the lease, which finds no catalog.
         state.next_oid = state.next_oid.max(catalog.next_oid());
@@ -798,6 +817,15 @@ impl Lease {
             if let Some(db) = state.databases.get_mut(&change.oid) {
                 rupg_analyze::apply_database_change(&change, &mut db.row);
             }
+        }
+        if !tablespaces.is_empty() {
+            let mut rows = state.tablespaces.to_vec();
+            for change in &tablespaces {
+                if let Some(row) = rows.iter_mut().find(|t| t.oid == change.oid) {
+                    rupg_analyze::apply_tablespace_change(change, row);
+                }
+            }
+            state.tablespaces = Arc::from(rows);
         }
         if !Arc::ptr_eq(&self.base, &self.roles) {
             state.roles = if Arc::ptr_eq(&state.roles, &self.base) {
@@ -858,7 +886,7 @@ fn rebase(now: &Roles, base: &Roles, work: &Roles) -> Roles {
             }
         }
     }
-    Roles { roles, members, databases: Vec::new(), comments }
+    Roles { roles, members, databases: Vec::new(), tablespaces: Vec::new(), comments }
 }
 
 impl Drop for Lease {

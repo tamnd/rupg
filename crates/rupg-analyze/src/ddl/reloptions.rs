@@ -142,8 +142,12 @@ const TABLESPACE: &[Opt] = &[
 /// # Errors
 ///
 /// `22023` for an option that a tablespace does not have, an option that the statement gives twice, or a value that is not valid.
-pub fn tablespace_options(defs: &[Option<Node>]) -> Result<Vec<String>> {
-    let options = transform(&[], defs, None, &[], false)?;
+pub fn tablespace_options(
+    old: &[String],
+    defs: &[Option<Node>],
+    reset: bool,
+) -> Result<Vec<String>> {
+    let options = transform(old, defs, None, &[], reset)?;
     validate(&options, TABLESPACE, false)?;
     Ok(options)
 }

@@ -50,6 +50,7 @@ pub fn object_address(
         detached: Vec::new(),
         grantors: Vec::new(),
         databases: Vec::new(),
+        tablespaces: Vec::new(),
         schema: None,
         top_level: None,
         concurrent: None,

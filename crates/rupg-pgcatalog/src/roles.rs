@@ -86,6 +86,16 @@ pub struct DatabaseChange {
     pub tablespace: u32,
 }
 
+/// A row of `pg_tablespace` that a transaction changed: `spcname` of `ALTER TABLESPACE ... RENAME TO`, `spcowner` of `ALTER TABLESPACE ... OWNER TO`, `spcacl` of `GRANT`, and `spcoptions` of `ALTER TABLESPACE ... SET`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TablespaceChange {
+    pub oid: u32,
+    pub name: String,
+    pub owner: u32,
+    pub acl: Option<Vec<String>>,
+    pub options: Vec<String>,
+}
+
 /// `pg_authid`, the catalog of the roles.
 pub const PG_AUTHID: u32 = 1260;
 
@@ -97,12 +107,13 @@ pub struct SharedComment {
     pub text: Option<String>,
 }
 
-/// The roles and the memberships that the statements made, in the order that they were made, the comments on the shared objects, and the rows of `pg_database` that the transaction changed. The commit of the transaction moves the changes of the rows to the store, so the roles of a commit have no changes of rows.
+/// The roles and the memberships that the statements made, in the order that they were made, the comments on the shared objects, and the rows of `pg_database` and `pg_tablespace` that the transaction changed. The commit of the transaction moves the changes of the rows to the store, so the roles of a commit have no changes of rows.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Roles {
     pub roles: Vec<Role>,
     pub members: Vec<Member>,
     pub databases: Vec<DatabaseChange>,
+    pub tablespaces: Vec<TablespaceChange>,
     pub comments: Vec<SharedComment>,
 }
 

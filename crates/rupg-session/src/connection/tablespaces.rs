@@ -1,13 +1,19 @@
-//! `CREATE TABLESPACE` and `DROP TABLESPACE`: the checks of `CreateTableSpace` and `DropTableSpace` in the order of PostgreSQL, on the rows of `pg_tablespace` that the store keeps. The engine keeps no files for a tablespace, so it makes only the in-place tablespaces of `allow_in_place_tablespaces`, and a table cannot be in a tablespace yet. Thus a tablespace is always empty, and `DROP TABLESPACE` has no files to check.
+//! `CREATE TABLESPACE`, `DROP TABLESPACE`, `ALTER TABLESPACE ... SET`, `ALTER TABLESPACE ... RENAME TO` and `ALTER TABLESPACE ... OWNER TO`: the checks of `CreateTableSpace`, `DropTableSpace`, `AlterTableSpaceOptions`, `RenameTableSpace` and `AlterObjectOwner_internal` in the order of PostgreSQL, on the rows of `pg_tablespace` that the store keeps. The statements of `ALTER TABLESPACE` keep the changed rows in the roles of the transaction, and the commit moves them to the store. The engine keeps no files for a tablespace, so it makes only the in-place tablespaces of `allow_in_place_tablespaces`, and a table cannot be in a tablespace yet. Thus a tablespace is always empty, and `DROP TABLESPACE` has no files to check.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use rupg_catalog::{ObjRef, PG_CLASS, RelKind, Tablespace};
 use rupg_common::{Error, SqlState};
+use rupg_pgcatalog::roles::Roles;
 use rupg_sql::Severity;
-use rupg_sql::nodes::{CreateTableSpaceStmt, DropTableSpaceStmt, RoleSpecType};
+use rupg_sql::nodes::{
+    AlterOwnerStmt, AlterTableSpaceOptionsStmt, CreateTableSpaceStmt, DropTableSpaceStmt, Node,
+    RenameStmt, RoleSpecType,
+};
 use rupg_wire::CommandTag;
 
+use super::roles::{has_privs_of_role, role_name};
 use super::{Connection, Done};
 use crate::utility::Notice;
 
@@ -89,7 +95,7 @@ impl Connection {
                 format!("tablespace \"{name}\" already exists"),
             ));
         }
-        let options = rupg_analyze::tablespace_options(&stmt.options)?;
+        let options = rupg_analyze::tablespace_options(&[], &stmt.options, false)?;
         if !in_place {
             // `create_tablespace_directories`: the directory must exist. The engine keeps no files in it yet.
             if let Some(io) = &self.io
@@ -210,12 +216,162 @@ impl Connection {
         Ok(Done::Tag(CommandTag::DropTablespace))
     }
 
+    /// The rows of `pg_tablespace` of the tablespaces that `CREATE TABLESPACE` made, with the changes of the transaction.
+    pub(super) fn tablespace_rows(&self) -> Arc<[Tablespace]> {
+        self.store.tablespaces_with(&self.roles().tablespaces)
+    }
+
+    /// The row of `pg_tablespace` of the tablespace of the name, with the changes of the transaction, or the error `42704`. The row of `pg_default` or `pg_global` is static.
+    fn tablespace_row(&self, name: &str) -> Result<Tablespace, Error> {
+        let builtin = |oid: u32| Tablespace {
+            oid,
+            name: name.to_owned(),
+            owner: BOOTSTRAP_SUPERUSER,
+            acl: None,
+            options: Vec::new(),
+        };
+        match name {
+            "pg_default" => Ok(builtin(DEFAULT_TABLESPACE)),
+            "pg_global" => Ok(builtin(GLOBAL_TABLESPACE)),
+            _ => self.tablespace_rows().iter().find(|t| t.name == name).cloned().ok_or_else(|| {
+                Error::new(
+                    SqlState::UNDEFINED_OBJECT,
+                    format!("tablespace \"{name}\" does not exist"),
+                )
+            }),
+        }
+    }
+
+    /// Puts a changed row of `pg_tablespace` in the changes of the transaction. The commit of the transaction moves the row to the store, and a rollback discards it. The engine cannot change the static rows of `pg_default` and `pg_global` yet.
+    fn change_tablespace(&self, row: &Tablespace, statement: &str) -> Result<(), Error> {
+        if matches!(row.oid, DEFAULT_TABLESPACE | GLOBAL_TABLESPACE) {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                format!("{statement} of a tablespace of initdb is not supported yet"),
+            ));
+        }
+        let mut held = self.lease.borrow_mut();
+        let Some(lease) = held.as_mut() else {
+            return Err(Error::internal("the lock of the catalog is gone"));
+        };
+        let mut work = Roles::clone(&lease.roles);
+        work.tablespaces.retain(|c| c.oid != row.oid);
+        work.tablespaces.push(rupg_analyze::tablespace_change(row));
+        lease.roles = Arc::new(work);
+        Ok(())
+    }
+
+    /// `object_ownercheck` of a tablespace.
+    fn owns_tablespace(&self, row: &Tablespace, me: u32) -> bool {
+        let roles = self.roles();
+        roles.superuser(me) || has_privs_of_role(&roles, me, row.owner)
+    }
+
+    /// `AlterTableSpaceOptions`: the check of the owner, then the new options of `transformRelOptions` and their check by `tablespace_reloptions`.
+    pub(super) fn alter_tablespace_options(
+        &self,
+        stmt: &AlterTableSpaceOptionsStmt,
+        me: u32,
+    ) -> Result<Done, Error> {
+        let name = stmt.tablespacename.as_deref().unwrap_or_default();
+        let mut row = self.tablespace_row(name)?;
+        if !self.owns_tablespace(&row, me) {
+            return Err(Error::new(
+                SqlState::INSUFFICIENT_PRIVILEGE,
+                format!("must be owner of tablespace {name}"),
+            ));
+        }
+        row.options = rupg_analyze::tablespace_options(&row.options, &stmt.options, stmt.isReset)?;
+        self.change_tablespace(&row, "ALTER TABLESPACE")?;
+        Ok(Done::Tag(CommandTag::AlterTablespace))
+    }
+
+    /// `RenameTableSpace`: the checks of the owner and of the new name, then the new `spcname`.
+    pub(super) fn rename_tablespace(&self, stmt: &RenameStmt, me: u32) -> Result<Done, Error> {
+        let old = stmt.subname.as_deref().unwrap_or_default();
+        let new = stmt.newname.as_deref().unwrap_or_default();
+        let mut row = self.tablespace_row(old)?;
+        if !self.owns_tablespace(&row, me) {
+            return Err(Error::new(
+                SqlState::INSUFFICIENT_PRIVILEGE,
+                format!("permission denied for tablespace {old}"),
+            ));
+        }
+        if self.settings().get("allow_system_table_mods").as_deref() != Some("on")
+            && new.starts_with("pg_")
+        {
+            return Err(Error::new(
+                SqlState::RESERVED_NAME,
+                format!("unacceptable tablespace name \"{new}\""),
+            )
+            .with_detail("The prefix \"pg_\" is reserved for system tablespaces."));
+        }
+        if new.contains(['\n', '\r']) {
+            return Err(Error::new(
+                SqlState::INVALID_PARAMETER_VALUE,
+                format!(
+                    "tablespace name \"{new}\" contains a newline or carriage return character"
+                ),
+            ));
+        }
+        if self.tablespace_oid(new).is_some() {
+            return Err(Error::new(
+                SqlState::DUPLICATE_OBJECT,
+                format!("tablespace \"{new}\" already exists"),
+            ));
+        }
+        new.clone_into(&mut row.name);
+        self.change_tablespace(&row, "ALTER TABLESPACE RENAME")?;
+        Ok(Done::Tag(CommandTag::AlterTablespace))
+    }
+
+    /// `ExecAlterOwnerStmt` and `AlterObjectOwner_internal` of a tablespace: the checks of the owner and of `SET ROLE`, then `spcacl` with the new owner.
+    pub(super) fn alter_tablespace_owner(
+        &self,
+        stmt: &AlterOwnerStmt,
+        me: u32,
+    ) -> Result<Done, Error> {
+        let roles = self.roles();
+        let new = match &stmt.newowner {
+            Some(spec) => self.spec_oid(&roles, spec)?,
+            None => return Err(Error::internal("ALTER TABLESPACE OWNER with no owner")),
+        };
+        let name = match &stmt.object {
+            Some(Node::String(name)) => &**name,
+            _ => return Err(Error::internal("ALTER TABLESPACE OWNER with no name")),
+        };
+        let mut row = self.tablespace_row(name)?;
+        if row.owner == new {
+            return Ok(Done::Tag(CommandTag::AlterTablespace));
+        }
+        if !roles.superuser(me) {
+            if !has_privs_of_role(&roles, me, row.owner) {
+                return Err(Error::new(
+                    SqlState::INSUFFICIENT_PRIVILEGE,
+                    format!("must be owner of tablespace {name}"),
+                ));
+            }
+            if !roles.can_set_role(me, new) {
+                return Err(Error::new(
+                    SqlState::INSUFFICIENT_PRIVILEGE,
+                    format!("must be able to SET ROLE \"{}\"", role_name(&roles, new)),
+                ));
+            }
+        }
+        row.acl = row.acl.as_deref().map(|acl| {
+            rupg_catalog::acl_new_owner(acl, &role_name(&roles, row.owner), &role_name(&roles, new))
+        });
+        row.owner = new;
+        self.change_tablespace(&row, "ALTER TABLESPACE OWNER")?;
+        Ok(Done::Tag(CommandTag::AlterTablespace))
+    }
+
     /// `get_tablespace_oid`: the OID and the owner of the tablespace of the name.
     pub(super) fn tablespace_oid(&self, name: &str) -> Option<(u32, u32)> {
         match name {
             "pg_default" => Some((DEFAULT_TABLESPACE, BOOTSTRAP_SUPERUSER)),
             "pg_global" => Some((GLOBAL_TABLESPACE, BOOTSTRAP_SUPERUSER)),
-            _ => self.store.tablespaces().iter().find(|t| t.name == name).map(|t| (t.oid, t.owner)),
+            _ => self.tablespace_rows().iter().find(|t| t.name == name).map(|t| (t.oid, t.owner)),
         }
     }
 }
