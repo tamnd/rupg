@@ -35,6 +35,7 @@ pub use database::{Database, Options, Platform, Table, Transaction};
 pub use rupg_common::{
     CompatVersion, Error, Oid, POSTGRES_COMMIT, POSTGRES_PIN, Result, RowId, SqlState,
 };
+pub use rupg_platform::alloc::Counting;
 pub use rupg_table::ColumnDef;
 pub use rupg_txn::Isolation;
 pub use rupg_types::{Datum, TypeId};

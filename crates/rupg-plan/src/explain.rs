@@ -40,6 +40,8 @@ pub struct Options {
     pub io: Option<i64>,
     /// `SERIALIZE`: the output of the rows of the result.
     pub serialize: Option<Serialized>,
+    /// `MEMORY`: the bytes that the planning used and allocated.
+    pub memory: Option<(u64, u64)>,
 }
 
 /// The output of the rows of the result for `SERIALIZE`, as `SerializeMetrics` keeps it.
@@ -91,6 +93,7 @@ impl Default for Options {
             io_timing: false,
             io: None,
             serialize: None,
+            memory: None,
         }
     }
 }
@@ -170,9 +173,24 @@ pub fn explain_analyzed(
     e.w.open_group("Query", None, true);
     e.node(&plan.root, None, None)?;
     // `peek_buffer_usage`: the other forms show the counts of the buffers of the planning even when they are 0.
-    if options.buffers && options.format != Format::Text {
+    let planning_buffers = options.buffers && options.format != Format::Text;
+    if planning_buffers || options.memory.is_some() {
+        let text = options.format == Format::Text;
         e.w.open_group("Planning", Some("Planning"), true);
-        e.buffers();
+        if text {
+            e.w.indent_text();
+            e.w.buf.push_str("Planning:\n");
+            e.w.indent += 1;
+        }
+        if planning_buffers {
+            e.buffers();
+        }
+        if let Some((used, allocated)) = options.memory {
+            e.memory(used, allocated);
+        }
+        if text {
+            e.w.indent -= 1;
+        }
         e.w.close_group("Planning", true);
     }
     if let Some(ms) = options.planning_time {
@@ -978,6 +996,23 @@ impl Explainer<'_, '_> {
     }
 
     /// `ExplainPrintSerialize`: the output of the rows of the result.
+    /// `show_memory_counters`: the bytes of the planning in kilobytes, rounded up.
+    fn memory(&mut self, used: u64, allocated: u64) {
+        let used = used.div_ceil(1024);
+        let allocated = allocated.div_ceil(1024);
+        if self.w.format == Format::Text {
+            self.w.indent_text();
+            self.w.buf.push_str(&format!("Memory: used={used}kB  allocated={allocated}kB\n"));
+        } else {
+            self.w.integer("Memory Used", Some("kB"), i64::try_from(used).unwrap_or(i64::MAX));
+            self.w.integer(
+                "Memory Allocated",
+                Some("kB"),
+                i64::try_from(allocated).unwrap_or(i64::MAX),
+            );
+        }
+    }
+
     fn serialization(&mut self, serialized: &Serialized) {
         let format = if serialized.binary { "binary" } else { "text" };
         let kb = serialized.bytes.div_ceil(1024);

@@ -8,6 +8,7 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+pub mod alloc;
 mod clock;
 pub mod cmath;
 mod cpu;
