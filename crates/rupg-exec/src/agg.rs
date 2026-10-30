@@ -1549,6 +1549,25 @@ fn grouped_exprs(query: &Query) -> Vec<(*const Expr, usize)> {
     out
 }
 
+/// The number of the groups of a query before `HAVING`, which `EXPLAIN ANALYZE` shows with the groups that `HAVING` removes.
+pub(crate) fn group_count<'a>(
+    eval: &mut Eval<'a>,
+    query: &Query,
+    tuples: &'a [Vec<usize>],
+) -> Result<usize> {
+    let sets = if query.grouping_sets.is_empty() {
+        vec![query.group.iter().map(|g| g.target).collect()]
+    } else {
+        expand_grouping_sets(&query.grouping_sets, query.group_distinct, usize::MAX)
+            .unwrap_or_default()
+    };
+    let mut count = 0;
+    for set in &sets {
+        count += groups(eval, query, set, tuples)?.len();
+    }
+    Ok(count)
+}
+
 /// The rows of a query with `GROUP BY`, `HAVING` or an aggregate call: one row for each group that `HAVING` keeps, with all the items of the select list. With grouping sets, each set makes its own groups, in the order that the `Agg` of the plan gives them, and else with the sets with more items first.
 pub(crate) fn rows<'a>(
     eval: &mut Eval<'a>,

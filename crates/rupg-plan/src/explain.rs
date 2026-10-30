@@ -1,5 +1,7 @@
 //! `ExplainPrintPlan` and `ExplainNode` of `explain.c`: the nodes of a plan with their names, their estimates and their parts, in the form that the options of `EXPLAIN` choose.
 
+use std::collections::HashMap;
+
 use rupg_analyze::{Expr, ExprKind, JoinKind, Relation};
 use rupg_common::Result;
 
@@ -24,12 +26,65 @@ pub struct Options {
     pub format: Format,
     /// With `SUMMARY`, the time of the planning in milliseconds.
     pub planning_time: Option<f64>,
+    /// `ANALYZE`: the plan ran, and each node shows its counts.
+    pub analyze: bool,
+    /// `TIMING`: each node that ran shows its times.
+    pub timing: bool,
+    /// With `SUMMARY` and `ANALYZE`, the time of the run in milliseconds.
+    pub execution_time: Option<f64>,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { verbose: false, costs: true, format: Format::Text, planning_time: None }
+        Options {
+            verbose: false,
+            costs: true,
+            format: Format::Text,
+            planning_time: None,
+            analyze: false,
+            timing: false,
+            execution_time: None,
+        }
     }
+}
+
+/// The counts of a node of a plan that ran, as its `Instrumentation` and the state of the node keep them for `EXPLAIN ANALYZE`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Actual {
+    /// `nloops`: the number of runs of the node.
+    pub loops: u64,
+    /// `ntuples`: the rows of all the runs.
+    pub rows: u64,
+    /// The time to the first row of each run, summed, in milliseconds.
+    pub startup: f64,
+    /// The time of all the runs, in milliseconds.
+    pub total: f64,
+    /// `nfiltered1` and `nfiltered2`: the rows that a condition of the node removed.
+    pub filtered: [u64; 2],
+    /// `nsearches`: the searches of an index.
+    pub searches: u64,
+    /// `exact_pages`: the pages of a `Bitmap Heap Scan`.
+    pub exact_blocks: u64,
+    /// The memory in kB of a `Sort` that sorted its rows.
+    pub sorted: Option<u64>,
+    /// True when a `Sort` under a `Limit` kept only the first rows in a heap, as a bounded sort does.
+    pub heapsort: bool,
+    /// The buckets, the batches and the memory in kB of a `Hash` that built its table.
+    pub hash: Option<(u64, u64, u64)>,
+    /// The memory in kB of the hash table of an `Aggregate`.
+    pub hashagg: Option<u64>,
+    /// The memory in kB of the tuplestore of a `CTE Scan`, a `Materialize` or a `WindowAgg`.
+    pub storage: Option<u64>,
+    /// The hits, the misses, the evictions, the overflows and the memory in kB of a `Memoize`.
+    pub memo: Option<[u64; 5]>,
+}
+
+/// The counts of the nodes of a plan, by the address of each node, as [`node_key`] gives it.
+pub type Actuals = HashMap<usize, Actual>;
+
+/// The key of a node in [`Actuals`].
+pub fn node_key(node: &Node<'_>) -> usize {
+    std::ptr::from_ref(node).addr()
 }
 
 /// The output of `EXPLAIN` for a plan. The text form has a line for each row of the result, and the other forms are one value.
@@ -38,18 +93,41 @@ impl Default for Options {
 ///
 /// The errors of the deparse of the expressions.
 pub fn explain(plan: &Plan<'_>, options: &Options, texts: &mut dyn Texts) -> Result<String> {
+    explain_analyzed(plan, options, None, texts)
+}
+
+/// [`explain`] of a plan that ran, with the counts `actuals` of its nodes.
+///
+/// # Errors
+///
+/// The errors of the deparse of the expressions.
+pub fn explain_analyzed(
+    plan: &Plan<'_>,
+    options: &Options,
+    actuals: Option<&Actuals>,
+    texts: &mut dyn Texts,
+) -> Result<String> {
     let mut e = Explainer {
         w: Writer::new(options.format),
         options,
         texts,
         plan,
         many: plan.rtable_size() > 1,
+        actuals,
     };
     e.w.begin();
     e.w.open_group("Query", None, true);
     e.node(&plan.root, None, None)?;
     if let Some(ms) = options.planning_time {
         e.w.float("Planning Time", Some("ms"), ms, 3);
+    }
+    // `ExplainPrintTriggers`: the other forms show the group of the triggers even with no trigger.
+    if options.analyze && options.format != Format::Text {
+        e.w.open_group("Triggers", Some("Triggers"), false);
+        e.w.close_group("Triggers", false);
+    }
+    if let Some(ms) = options.execution_time {
+        e.w.float("Execution Time", Some("ms"), ms, 3);
     }
     e.w.close_group("Query", true);
     e.w.end();
@@ -68,6 +146,8 @@ struct Explainer<'a, 'q> {
     plan: &'a Plan<'q>,
     /// `list_length(es->rtable) > 1`: the plan reads more than one relation, so the columns show the names of their relations.
     many: bool,
+    /// With `ANALYZE`, the counts of the nodes.
+    actuals: Option<&'a Actuals>,
 }
 
 /// The names of a node: the name of the text form, the name of `Node Type`, and the `Strategy`, the `Partial Mode` and the `Operation` of the other forms.
@@ -288,6 +368,9 @@ impl Explainer<'_, '_> {
                 self.w.integer("Plan Width", None, i64::from(c.width));
             }
         }
+        if self.options.analyze {
+            self.actual_line(node);
+        }
         if text {
             self.w.buf.push('\n');
         }
@@ -477,10 +560,12 @@ impl Explainer<'_, '_> {
                 }
                 self.qual("One-Time Filter", scope, one_time, upper)?;
                 self.qual("Filter", scope, &node.filter, upper)?;
+                self.removed(node, "Rows Removed by Filter", 0);
             }
             Kind::SeqScan(r) => {
                 let own = Some(*r);
                 self.scan_qual("Filter", scope, &node.filter, self.options.verbose, own)?;
+                self.removed(node, "Rows Removed by Filter", 0);
             }
             Kind::ValuesScan(r)
             | Kind::CteScan(r)
@@ -488,6 +573,10 @@ impl Explainer<'_, '_> {
             | Kind::TableFunctionScan(r) => {
                 let own = Some(*r);
                 self.scan_qual("Filter", scope, &node.filter, self.options.verbose, own)?;
+                self.removed(node, "Rows Removed by Filter", 0);
+                if matches!(node.kind, Kind::CteScan(_)) {
+                    self.storage(node);
+                }
             }
             Kind::IndexScan { cond, order_by, relation, only, exprs, .. } => {
                 let own = Some(*relation);
@@ -504,23 +593,37 @@ impl Explainer<'_, '_> {
                     });
                 self.texts.below(Vec::new());
                 done?;
+                self.removed(node, "Rows Removed by Filter", 0);
+                if *only && self.options.analyze {
+                    let fetches = self.actual(node).map_or(0, |a| a.filtered[1]);
+                    self.w.float("Heap Fetches", None, fetches as f64, 0);
+                }
+                self.searches(node);
             }
             Kind::TidScan { cond, relation, .. } => {
                 let own = Some(*relation);
                 self.scan_qual("TID Cond", scope, cond, self.options.verbose, own)?;
                 self.scan_qual("Filter", scope, &node.filter, self.options.verbose, own)?;
+                self.removed(node, "Rows Removed by Filter", 0);
             }
             Kind::BitmapIndexScan { cond, relation, .. } => {
                 self.scan_qual("Index Cond", scope, cond, self.options.verbose, Some(*relation))?;
+                self.searches(node);
             }
             Kind::BitmapHeapScan { recheck, relation } => {
                 let own = Some(*relation);
                 self.scan_qual("Recheck Cond", scope, recheck, self.options.verbose, own)?;
+                if !recheck.is_empty() {
+                    self.removed(node, "Rows Removed by Index Recheck", 1);
+                }
                 self.scan_qual("Filter", scope, &node.filter, self.options.verbose, own)?;
+                self.removed(node, "Rows Removed by Filter", 0);
+                self.heap_blocks(node);
             }
             Kind::SampleScan(r) => {
                 self.sampling(scope, *r, upper)?;
                 self.scan_qual("Filter", scope, &node.filter, self.options.verbose, Some(*r))?;
+                self.removed(node, "Rows Removed by Filter", 0);
             }
             Kind::FunctionScan(r) => {
                 if self.options.verbose {
@@ -540,29 +643,36 @@ impl Explainer<'_, '_> {
                     }
                 }
                 self.scan_qual("Filter", scope, &node.filter, self.options.verbose, Some(*r))?;
+                self.removed(node, "Rows Removed by Filter", 0);
             }
-            Kind::SubqueryScan(_) => self.qual("Filter", scope, &node.filter, true)?,
+            Kind::SubqueryScan(_) => {
+                self.qual("Filter", scope, &node.filter, true)?;
+                self.removed(node, "Rows Removed by Filter", 0);
+            }
             Kind::NestedLoop { join_filter, .. } => {
                 self.texts.below(computed(node));
-                self.qual("Join Filter", scope, join_filter, upper)?;
-                self.qual("Filter", scope, &node.filter, upper)?;
+                let done = self.join_quals(node, None, join_filter, upper);
                 self.texts.below(Vec::new());
+                done?;
             }
             Kind::MergeJoin { cond, join_filter, .. } => {
                 self.texts.below(computed(node));
-                self.qual("Merge Cond", scope, cond, upper)?;
-                self.qual("Join Filter", scope, join_filter, upper)?;
-                self.qual("Filter", scope, &node.filter, upper)?;
+                let done = self.join_quals(node, Some(("Merge Cond", cond)), join_filter, upper);
                 self.texts.below(Vec::new());
+                done?;
             }
             Kind::HashJoin { cond, join_filter, .. } => {
                 self.texts.below(computed(node));
-                self.qual("Hash Cond", scope, cond, upper)?;
-                self.qual("Join Filter", scope, join_filter, upper)?;
-                self.qual("Filter", scope, &node.filter, upper)?;
+                let done = self.join_quals(node, Some(("Hash Cond", cond)), join_filter, upper);
                 self.texts.below(Vec::new());
+                done?;
             }
-            Kind::Memoize(memo) => self.memoize(scope, memo, upper)?,
+            Kind::Hash => self.hash_info(node),
+            Kind::Materialize => self.storage(node),
+            Kind::Memoize(memo) => {
+                self.memoize(scope, memo, upper)?;
+                self.memo_counts(node);
+            }
             Kind::Aggregate { strategy, keys, sets, .. } => {
                 if sets.is_empty() {
                     if !keys.is_empty() {
@@ -577,16 +687,15 @@ impl Explainer<'_, '_> {
                 let filter = self.qual("Filter", scope, &node.filter, upper);
                 self.texts.below(Vec::new());
                 filter?;
-                if matches!(strategy, Strategy::Hashed | Strategy::Mixed)
-                    && self.options.costs
-                    && self.w.format != Format::Text
-                {
-                    self.w.integer("Planned Partitions", None, 0);
+                if matches!(strategy, Strategy::Hashed | Strategy::Mixed) {
+                    self.hashagg_info(node);
                 }
+                self.removed(node, "Rows Removed by Filter", 0);
             }
             Kind::Sort(keys) => {
                 let keys = self.sort_keys(scope, keys, upper)?;
                 self.w.list("Sort Key", &keys);
+                self.sort_info(node);
             }
             Kind::IncrementalSort { keys, presorted } => {
                 let texts = self.sort_keys(scope, keys, upper)?;
@@ -622,6 +731,8 @@ impl Explainer<'_, '_> {
                 let filter = self.qual("Filter", scope, &node.filter, upper);
                 self.texts.below(Vec::new());
                 filter?;
+                self.removed(node, "Rows Removed by Filter", 0);
+                self.storage(node);
             }
             Kind::Modify { operation, targets, conflict, .. } => {
                 self.modify_targets(node, operation.name(), targets);
@@ -642,6 +753,210 @@ impl Explainer<'_, '_> {
             _ => {}
         }
         Ok(())
+    }
+
+    /// The conditions of a join, as `ExplainNode` shows them for `NestLoop`, `MergeJoin` and `HashJoin`, with the rows that each one removed.
+    fn join_quals(
+        &mut self,
+        node: &Node<'_>,
+        cond: Option<(&str, &[Item<'_>])>,
+        join_filter: &[Item<'_>],
+        upper: bool,
+    ) -> Result<()> {
+        let scope = node.scope;
+        if let Some((label, cond)) = cond {
+            self.qual(label, scope, cond, upper)?;
+        }
+        self.qual("Join Filter", scope, join_filter, upper)?;
+        if !join_filter.is_empty() {
+            self.removed(node, "Rows Removed by Join Filter", 0);
+        }
+        self.qual("Filter", scope, &node.filter, upper)?;
+        if !node.filter.is_empty() {
+            self.removed(node, "Rows Removed by Filter", 1);
+        }
+        Ok(())
+    }
+
+    /// The counts of a node that ran, or `None` without `ANALYZE` or for a node with no counts.
+    fn actual(&self, node: &Node<'_>) -> Option<Actual> {
+        self.actuals.and_then(|a| a.get(&node_key(node))).copied()
+    }
+
+    /// The part of the first line of a node with its counts, as `ExplainNode` shows it after the estimates: the times, the rows and the runs, or `never executed`.
+    fn actual_line(&mut self, node: &Node<'_>) {
+        let text = self.w.format == Format::Text;
+        let timing = self.options.timing;
+        match self.actual(node).filter(|a| a.loops > 0) {
+            Some(a) => {
+                let loops = a.loops as f64;
+                let (startup, total, rows) =
+                    (a.startup / loops, a.total / loops, a.rows as f64 / loops);
+                if text {
+                    self.w.buf.push_str(" (actual ");
+                    if timing {
+                        self.w.buf.push_str(&format!("time={startup:.3}..{total:.3} "));
+                    }
+                    self.w.buf.push_str(&format!("rows={rows:.2} loops={loops:.0})"));
+                } else {
+                    if timing {
+                        self.w.float("Actual Startup Time", Some("ms"), startup, 3);
+                        self.w.float("Actual Total Time", Some("ms"), total, 3);
+                    }
+                    self.w.float("Actual Rows", None, rows, 2);
+                    self.w.float("Actual Loops", None, loops, 0);
+                }
+            }
+            None if text => self.w.buf.push_str(" (never executed)"),
+            None => {
+                if timing {
+                    self.w.float("Actual Startup Time", Some("ms"), 0.0, 3);
+                    self.w.float("Actual Total Time", Some("ms"), 0.0, 3);
+                }
+                self.w.float("Actual Rows", None, 0.0, 0);
+                self.w.float("Actual Loops", None, 0.0, 0);
+            }
+        }
+    }
+
+    /// `show_instrumentation_count`: the rows that a condition of a node with one removed in each run, for a node with the condition. The text form shows no zero.
+    fn removed(&mut self, node: &Node<'_>, label: &str, which: usize) {
+        if !self.options.analyze {
+            return;
+        }
+        let has = match &node.kind {
+            Kind::NestedLoop { join_filter, .. }
+            | Kind::MergeJoin { join_filter, .. }
+            | Kind::HashJoin { join_filter, .. }
+                if which == 0 =>
+            {
+                !join_filter.is_empty()
+            }
+            Kind::BitmapHeapScan { recheck, .. } if which == 1 => !recheck.is_empty(),
+            _ => !node.filter.is_empty(),
+        };
+        if !has {
+            return;
+        }
+        let a = self.actual(node).unwrap_or_default();
+        let count = a.filtered[which.min(1)];
+        let count =
+            if matches!(node.kind, Kind::BitmapHeapScan { .. }) && which == 1 { 0 } else { count };
+        if count > 0 || self.w.format != Format::Text {
+            let value = if a.loops > 0 { count as f64 / a.loops as f64 } else { 0.0 };
+            self.w.float(label, None, value, 0);
+        }
+    }
+
+    /// `show_indexsearches_info`: the searches of an index scan.
+    fn searches(&mut self, node: &Node<'_>) {
+        if self.options.analyze {
+            let searches = self.actual(node).map_or(0, |a| a.searches);
+            self.w.integer("Index Searches", None, i64::try_from(searches).unwrap_or(i64::MAX));
+        }
+    }
+
+    /// `show_tidbitmap_info`: the pages of a `Bitmap Heap Scan`.
+    fn heap_blocks(&mut self, node: &Node<'_>) {
+        if !self.options.analyze {
+            return;
+        }
+        let exact = self.actual(node).map_or(0, |a| a.exact_blocks);
+        if self.w.format != Format::Text {
+            self.w.integer("Exact Heap Blocks", None, i64::try_from(exact).unwrap_or(i64::MAX));
+            self.w.integer("Lossy Heap Blocks", None, 0);
+        } else if exact > 0 {
+            self.w.indent_text();
+            self.w.buf.push_str(&format!("Heap Blocks: exact={exact}\n"));
+        }
+    }
+
+    /// `show_storage_info`: the tuplestore of a `CTE Scan`, a `Materialize` or a `WindowAgg` that ran.
+    fn storage(&mut self, node: &Node<'_>) {
+        let Some(kb) = self.actual(node).and_then(|a| a.storage) else { return };
+        if self.w.format == Format::Text {
+            self.w.indent_text();
+            self.w.buf.push_str(&format!("Storage: Memory  Maximum Storage: {kb}kB\n"));
+        } else {
+            self.w.text("Storage", "Memory");
+            self.w.integer("Maximum Storage", Some("kB"), i64::try_from(kb).unwrap_or(i64::MAX));
+        }
+    }
+
+    /// `show_sort_info`: the method and the memory of a `Sort` that sorted its rows.
+    fn sort_info(&mut self, node: &Node<'_>) {
+        let Some(actual) = self.actual(node) else { return };
+        let Some(kb) = actual.sorted else { return };
+        let method = if actual.heapsort { "top-N heapsort" } else { "quicksort" };
+        if self.w.format == Format::Text {
+            self.w.indent_text();
+            self.w.buf.push_str(&format!("Sort Method: {method}  Memory: {kb}kB\n"));
+        } else {
+            self.w.text("Sort Method", method);
+            self.w.integer("Sort Space Used", Some("kB"), i64::try_from(kb).unwrap_or(i64::MAX));
+            self.w.text("Sort Space Type", "Memory");
+        }
+    }
+
+    /// `show_hash_info`: the buckets, the batches and the memory of a `Hash` that built its table.
+    fn hash_info(&mut self, node: &Node<'_>) {
+        let Some((buckets, batches, kb)) = self.actual(node).and_then(|a| a.hash) else { return };
+        let int = |v: u64| i64::try_from(v).unwrap_or(i64::MAX);
+        if self.w.format == Format::Text {
+            self.w.indent_text();
+            self.w.buf.push_str(&format!(
+                "Buckets: {buckets}  Batches: {batches}  Memory Usage: {kb}kB\n"
+            ));
+        } else {
+            self.w.integer("Hash Buckets", None, int(buckets));
+            self.w.integer("Original Hash Buckets", None, int(buckets));
+            self.w.integer("Hash Batches", None, int(batches));
+            self.w.integer("Original Hash Batches", None, int(batches));
+            self.w.integer("Peak Memory Usage", Some("kB"), int(kb));
+        }
+    }
+
+    /// `show_hashagg_info`: the partitions of the plan and the memory of the hash table of an `Aggregate`.
+    fn hashagg_info(&mut self, node: &Node<'_>) {
+        let memory = self.actual(node).and_then(|a| a.hashagg).filter(|kb| *kb > 0);
+        if self.w.format != Format::Text {
+            if self.options.costs {
+                self.w.integer("Planned Partitions", None, 0);
+            }
+            if let Some(kb) = memory {
+                self.w.integer("HashAgg Batches", None, 1);
+                self.w.integer(
+                    "Peak Memory Usage",
+                    Some("kB"),
+                    i64::try_from(kb).unwrap_or(i64::MAX),
+                );
+                self.w.integer("Disk Usage", Some("kB"), 0);
+            }
+        } else if let Some(kb) = memory {
+            self.w.indent_text();
+            self.w.buf.push_str(&format!("Batches: 1  Memory Usage: {kb}kB\n"));
+        }
+    }
+
+    /// The counts of the cache of a `Memoize` that missed, as `show_memoize_info` shows them.
+    fn memo_counts(&mut self, node: &Node<'_>) {
+        let Some(memo) = self.actual(node).and_then(|a| a.memo).filter(|m| m[1] > 0) else {
+            return;
+        };
+        let [hits, misses, evictions, overflows, kb] = memo;
+        if self.w.format == Format::Text {
+            self.w.indent_text();
+            self.w.buf.push_str(&format!(
+                "Hits: {hits}  Misses: {misses}  Evictions: {evictions}  Overflows: {overflows}  Memory Usage: {kb}kB\n"
+            ));
+        } else {
+            let int = |v: u64| i64::try_from(v).unwrap_or(i64::MAX);
+            self.w.integer("Cache Hits", None, int(hits));
+            self.w.integer("Cache Misses", None, int(misses));
+            self.w.integer("Cache Evictions", None, int(evictions));
+            self.w.integer("Cache Overflows", None, int(overflows));
+            self.w.integer("Peak Memory Usage", Some("kB"), int(kb));
+        }
     }
 
     /// The tables of the members of an inheritance tree that a `ModifyTable` changes, as `show_modifytable_info` labels them: a line for each in text, as `Update on r1 r_1`, and a group `Target Tables` in the other forms.

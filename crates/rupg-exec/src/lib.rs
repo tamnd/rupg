@@ -4172,6 +4172,7 @@ fn relabel(value: Value, ty: u32) -> Value {
 }
 
 mod agg;
+mod analyze;
 mod cursor;
 mod fold;
 mod hashed;
@@ -4185,6 +4186,7 @@ mod sort;
 mod user;
 mod window;
 
+pub use analyze::analyze;
 pub use insert::{failing_row, row_types};
 pub use partition::{Router, leaves as partition_leaves};
 pub use scan::members;

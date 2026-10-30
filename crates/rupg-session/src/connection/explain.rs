@@ -10,7 +10,7 @@ use rupg_func::Session;
 use rupg_opt::{Enable, Index, Member, Size};
 use rupg_pgcatalog::builtin;
 use rupg_plan::{Format, HashTables, Options};
-use rupg_sql::nodes::{DefElem, ExecuteStmt, ExplainStmt, Node};
+use rupg_sql::nodes::{DefElem, ExecuteStmt, ExplainStmt, Node, SelectStmt};
 use rupg_types::{Value, oid};
 use rupg_wire::CommandTag;
 
@@ -474,6 +474,10 @@ struct Parsed {
     summary: Option<bool>,
     memory: bool,
     generic: bool,
+    /// `TIMING`, which is on with `ANALYZE` when the statement does not give it.
+    timing: bool,
+    /// True for `CREATE TABLE AS ... WITH NO DATA`, whose plan does not run.
+    no_data: bool,
 }
 
 /// `ParseExplainOptionList`: the options of the statement and the checks of the options that need `ANALYZE`.
@@ -541,6 +545,7 @@ fn parse_options(stmt: &ExplainStmt) -> Result<Parsed, Error> {
     if serialize && !parsed.analyze {
         return Err(needs("SERIALIZE"));
     }
+    parsed.timing = timing.unwrap_or(parsed.analyze);
     if parsed.generic && parsed.analyze {
         return Err(Error::new(
             SqlState::INVALID_PARAMETER_VALUE,
@@ -559,6 +564,36 @@ fn bad_value(def: &DefElem, value: &str) -> Error {
     )
 }
 
+/// The text of the statement `CREATE` of `EXPLAIN`: the text from its first keyword `CREATE` out of the parentheses of the options, or all the text when it has none.
+fn inner_text(text: &str) -> &str {
+    let bytes = text.as_bytes();
+    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut depth = 0usize;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => depth = depth.saturating_sub(1),
+            b'-' if bytes.get(i + 1) == Some(&b'-') => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            _ if depth == 0
+                && (i == 0 || !word(bytes[i - 1]))
+                && text.get(i..i + 6).is_some_and(|w| w.eq_ignore_ascii_case("create"))
+                && !bytes.get(i + 6).copied().is_some_and(word) =>
+            {
+                return &text[i..];
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    text
+}
+
 /// The error of a feature of `EXPLAIN` that the engine does not have yet.
 fn not_yet(what: &str) -> Error {
     Error::new(SqlState::FEATURE_NOT_SUPPORTED, format!("{what} is not supported yet"))
@@ -569,12 +604,10 @@ impl Connection {
     pub(super) fn explain(
         &self,
         stmt: &ExplainStmt,
+        text: &str,
         notices: &mut Vec<Notice>,
     ) -> Result<Done, Error> {
-        let parsed = parse_options(stmt)?;
-        if parsed.analyze {
-            return Err(not_yet("EXPLAIN ANALYZE"));
-        }
+        let mut parsed = parse_options(stmt)?;
         if parsed.generic {
             return Err(not_yet("EXPLAIN (GENERIC_PLAN)"));
         }
@@ -584,13 +617,49 @@ impl Connection {
         let Some(node) = &stmt.query else {
             return Err(Error::internal("EXPLAIN with no statement"));
         };
+        if parsed.analyze {
+            match node {
+                // `ExplainOnePlan` runs the plan of `CREATE TABLE AS` into the new table. The check of `IF NOT EXISTS` comes first, and a table that exists gives a notice and no plan.
+                // A materialized view keeps the text of its statement, so `define` gets the text of `CREATE` without `EXPLAIN`.
+                Node::CreateTableAsStmt(ctas) => {
+                    let before = notices.len();
+                    self.define(node, inner_text(text), notices)?;
+                    if notices[before..]
+                        .iter()
+                        .any(|n| n.error.message().ends_with("already exists, skipping"))
+                    {
+                        let mut done = explain_rows(String::new(), parsed.format);
+                        if let Done::Rows { rows, .. } = &mut done {
+                            rows.clear();
+                        }
+                        return Ok(done);
+                    }
+                    parsed.no_data = ctas.into.as_ref().is_some_and(|into| into.skipData);
+                }
+                // `SELECT ... INTO` runs as `CREATE TABLE AS`.
+                Node::SelectStmt(select) if select.intoClause.is_some() => {
+                    self.define(node, text, notices)?;
+                }
+                _ => {}
+            }
+        }
         // `ExplainOneUtility`: `CREATE TABLE AS` and `DECLARE CURSOR` show the plan of their query.
+        // `SELECT ... INTO` shows the plan of its query.
+        let stripped;
         let inner = match node {
+            Node::SelectStmt(s) if s.intoClause.is_some() => {
+                stripped =
+                    Node::SelectStmt(Box::new(SelectStmt { intoClause: None, ..(**s).clone() }));
+                Some(&stripped)
+            }
             Node::CreateTableAsStmt(s) => s.query.as_ref(),
             Node::DeclareCursorStmt(s) => s.query.as_ref(),
             Node::ExecuteStmt(s) => return self.explain_execute(s, &parsed, notices),
             _ => Some(node),
         };
+        if let Some(Node::ExecuteStmt(s)) = inner {
+            return self.explain_execute(s, &parsed, notices);
+        }
         let Some(inner) = inner.filter(|n| query::is_query(n)) else {
             return Err(not_yet("EXPLAIN of this statement"));
         };
@@ -711,17 +780,39 @@ impl Connection {
         if let Some(error) = members.error.take() {
             return Err(error);
         }
-        let planning_time = parsed.summary.unwrap_or(false).then(|| {
+        let summary = parsed.summary.unwrap_or(parsed.analyze);
+        let planning_time = summary.then(|| {
             let spent = self.clock.monotonic().saturating_sub(started);
             spent.as_secs_f64() * 1000.0
         });
+        // `ExplainOnePlan` with `ANALYZE`: the run of the plan gives the counts of its nodes. The rows of a write are not supported yet.
+        let mut execution_time = None;
+        let actuals = if parsed.analyze {
+            if plan.write().is_some() {
+                return Err(not_yet("EXPLAIN ANALYZE of INSERT, UPDATE, DELETE and MERGE"));
+            }
+            let run = self.clock.monotonic();
+            let actuals = if parsed.no_data {
+                rupg_plan::Actuals::new()
+            } else {
+                rupg_exec::analyze(&tree, params.unwrap_or_default(), reader, true)?
+            };
+            let spent = self.clock.monotonic().saturating_sub(run);
+            execution_time = summary.then_some(spent.as_secs_f64() * 1000.0);
+            Some(actuals)
+        } else {
+            None
+        };
         let options = Options {
             verbose: parsed.verbose,
             costs: parsed.costs.unwrap_or(true),
             format: parsed.format,
             planning_time,
+            analyze: parsed.analyze,
+            timing: parsed.timing,
+            execution_time,
         };
-        rupg_func::explain(&tree, &options, reader)
+        rupg_func::explain(&tree, &options, actuals.as_ref(), reader)
     }
 }
 

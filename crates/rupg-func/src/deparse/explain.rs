@@ -11,7 +11,7 @@ use rupg_sql::nodes::FRAMEOPTION_NONDEFAULT;
 use super::{Deparser, Error, Namespace, Removed, Result, SubName, builtin, quote_identifier, reg};
 use crate::Session;
 
-/// The output of `EXPLAIN` for a plan, with the names and the expressions that the session shows.
+/// The output of `EXPLAIN` for a plan, with the counts `actuals` of its nodes after a run with `ANALYZE`, and with the names and the expressions that the session shows.
 ///
 /// # Errors
 ///
@@ -19,10 +19,11 @@ use crate::Session;
 pub fn explain(
     plan: &Plan<'_>,
     options: &rupg_plan::Options,
+    actuals: Option<&rupg_plan::Actuals>,
     session: &dyn Session,
 ) -> Result<String> {
     let mut texts = PlanTexts::new(plan, session);
-    rupg_plan::explain(plan, options, &mut texts)
+    rupg_plan::explain_analyzed(plan, options, actuals, &mut texts)
 }
 
 /// The names of the relations of each query of a plan and the names of its subplans and of its windows.
