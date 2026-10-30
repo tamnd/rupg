@@ -15,6 +15,9 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_walfile_name" => walfile_name,
         "pg_walfile_name_offset" => walfile_name_offset,
         "pg_split_walfile_name" => split_walfile_name,
+        "pg_current_wal_lsn" | "pg_current_wal_insert_lsn" | "pg_current_wal_flush_lsn" => {
+            current_wal_lsn
+        }
         _ => return None,
     })
 }
@@ -100,6 +103,15 @@ fn file_name(lsn: u64) -> String {
 /// `pg_walfile_name`: the name of the WAL file that holds a position.
 fn walfile_name(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::text(file_name(lsn(args, 0)?)))
+}
+
+/// The bytes of WAL that each transaction counts for in [`current_wal_lsn`].
+const TRANSACTION_WAL: u64 = 0x100;
+
+/// `pg_current_wal_lsn`, `pg_current_wal_insert_lsn` and `pg_current_wal_flush_lsn`: rupg writes no WAL, so the position is the start of the first segment after the segment of `initdb`, and it moves on with each transaction. A position from an earlier call is never after it, and the LSN 0/0 of a page of a sequence comes before it.
+fn current_wal_lsn(call: &Call<'_>, _: &[Value]) -> Result<Value> {
+    let xacts = call.session.next_transaction_id().saturating_mul(TRANSACTION_WAL);
+    Ok(Value::Int8(WAL_SEGMENT_SIZE.saturating_add(xacts).cast_signed()))
 }
 
 /// `pg_walfile_name_offset`: the name of the WAL file that holds a position, and the offset of the position in that file.
