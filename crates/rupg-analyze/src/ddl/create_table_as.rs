@@ -7,7 +7,7 @@ use rupg_sql::nodes::{CreateTableAsStmt, IntoClause, Node, ObjectType, SelectStm
 use super::view::query_references;
 use super::{Definer, not_yet, relname};
 use crate::collate::target_collation;
-use crate::typename::{names, place};
+use crate::typename::names;
 use crate::types;
 
 impl Definer<'_, '_> {
@@ -87,7 +87,6 @@ impl Definer<'_, '_> {
             }
         }
         let rv = into.rel.as_deref().cloned().unwrap_or_default();
-        let at = place(rv.location);
         // `CreateTableAsRelExists` looks up the schema with no parse state, so its errors have no position.
         let namespace = self.creation_namespace(&rv).map_err(|e| e.with_position(None))?;
         let name = relname(&rv).to_string();
@@ -120,14 +119,17 @@ impl Definer<'_, '_> {
             }
             columns.push((column.to_string(), expr.ty, expr.typmod, collation));
         }
-        if into.tableSpaceName.is_some() {
-            return Err(not_yet("TABLESPACE", at));
-        }
+        let temp = rv.relpersistence == b't' || self.catalog.is_temp_schema(namespace);
+        let tablespace =
+            self.relation_tablespace(into.tableSpaceName.as_deref(), 0, temp, false)?;
         let method = into.accessMethod.as_deref().map(|m| self.table_am(m)).transpose()?;
         self.check_on_commit(into.onCommit, namespace)?;
         let table = self.create_query_table(namespace, &name, columns, &into.options, method)?;
         self.collect(None, ObjRef::new(PG_CLASS, table));
         self.register_on_commit(table, into.onCommit);
+        if tablespace != 0 {
+            self.catalog.set_tablespace(table, tablespace)?;
+        }
         if rv.relpersistence == b'u' {
             self.catalog.set_unlogged(table, true)?;
         }

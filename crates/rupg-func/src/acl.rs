@@ -278,6 +278,11 @@ pub fn schema_usage(namespace: u32, session: &dyn Session) -> bool {
     current_user_has(Owned::Namespace, namespace, ACL_USAGE, session).unwrap_or(false)
 }
 
+/// `object_aclcheck` of `CREATE` on a tablespace for the current user.
+pub fn tablespace_create(tablespace: u32, session: &dyn Session) -> bool {
+    current_user_has(Owned::Tablespace, tablespace, ACL_CREATE, session).unwrap_or(false)
+}
+
 /// `pg_class_aclcheck` of the bits of `mask` on a relation for the current user, as `ExecCheckPermissions` checks a table that a statement writes. Only a superuser can write a system catalog.
 pub fn relation_allowed(relid: u32, mask: u32, session: &dyn Session) -> bool {
     matches!(class_check(relid, current_user(session), mask, session), Ok(Some(true) | None))

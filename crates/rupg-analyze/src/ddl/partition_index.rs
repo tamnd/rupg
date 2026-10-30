@@ -252,6 +252,8 @@ impl Definer<'_, '_> {
         let info = source.index.as_ref().ok_or_else(lookup)?;
         let info = self.att_map(info.table, child)?.index(info)?;
         let options = source.options.clone();
+        // `generateClonedIndexStmt` names the tablespace of the index of the parent.
+        let source_tablespace = source.tablespace;
         let key_count = usize::try_from(info.key_count).unwrap_or_default();
         let columns: Vec<NewIndexColumn> = source
             .columns
@@ -316,7 +318,15 @@ impl Definer<'_, '_> {
             refs,
             pages: self.index_pages(child, info.method),
         };
+        let (temp, child_partitioned) = self.catalog.relation(child).map_or((false, false), |r| {
+            (self.catalog.is_temp_schema(r.namespace), r.kind == RelKind::Partitioned)
+        });
+        let tablespace =
+            self.relation_tablespace(None, source_tablespace, temp, child_partitioned)?;
         let (index, child_constraint) = self.catalog.create_index(new)?;
+        if tablespace != 0 {
+            self.catalog.set_tablespace(index, tablespace)?;
+        }
         if !options.is_empty() {
             self.catalog.set_options(index, options)?;
         }

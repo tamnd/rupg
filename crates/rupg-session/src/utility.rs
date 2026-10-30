@@ -358,14 +358,46 @@ pub(crate) fn ts_config(
         return Ok(None);
     }
     let ts_config = is_ts_config(name);
-    if !ts_config && !is_table_am(name) {
+    if !ts_config && !is_table_am(name) && !is_default_tablespace(name) {
         return Ok(None);
     }
     match flatten(name, &stmt.args) {
         Ok(Some(value)) if ts_config => check_ts_config(&value, session).map(Some),
-        Ok(Some(value)) => check_table_am(name, &value, session).map(|()| None),
+        Ok(Some(value)) => {
+            check_table_am(name, &value, session)?;
+            check_default_tablespace(name, &value, session).map(|()| None)
+        }
         _ => Ok(None),
     }
+}
+
+/// True when the name is the name of `default_tablespace`.
+fn is_default_tablespace(name: &str) -> bool {
+    guc::find(name).is_some_and(|parameter| parameter.name == "default_tablespace")
+}
+
+/// `check_default_tablespace` for a value of `default_tablespace`: a value that is not empty must be the name of a tablespace.
+///
+/// # Errors
+///
+/// `22023` for a name of no tablespace.
+pub(crate) fn check_default_tablespace(
+    name: &str,
+    value: &str,
+    session: &dyn rupg_func::Session,
+) -> Result<(), Error> {
+    if !is_default_tablespace(name)
+        || value.is_empty()
+        || matches!(value, "pg_default" | "pg_global")
+        || session.tablespaces().iter().any(|t| t.name == value)
+    {
+        return Ok(());
+    }
+    Err(Error::new(
+        SqlState::INVALID_PARAMETER_VALUE,
+        format!("invalid value for parameter \"default_tablespace\": \"{value}\""),
+    )
+    .with_detail(format!("Tablespace \"{value}\" does not exist.")))
 }
 
 /// True when the name is the name of `default_table_access_method`.
