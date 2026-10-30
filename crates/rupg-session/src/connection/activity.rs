@@ -313,6 +313,15 @@ impl Connection {
         let settings = self.settings.get_mut();
         let application = application_name(settings);
         let tracked = tracked(settings);
+        // `pgstat_report_query_id`: the identifier of the first statement of the text, which parse analysis gives when `compute_query_id` is `on` or `regress`.
+        let query_id = match (state, text) {
+            (BackendState::Running, Some(text))
+                if matches!(settings.get("compute_query_id").as_deref(), Some("on" | "regress")) =>
+            {
+                rupg_sql::query_id(text)
+            }
+            _ => 0,
+        };
         let text = text.map(|text| {
             let mut text = text.to_owned();
             clip(&mut text, query_bytes(settings));
@@ -330,8 +339,13 @@ impl Connection {
                     backend.query.clear();
                     backend.query_start = None;
                     backend.transaction_start = None;
+                    backend.query_id = 0;
                 }
                 return;
+            }
+            // A new statement resets the identifier, so that the identifier of the last statement does not show.
+            if state == BackendState::Running {
+                backend.query_id = query_id;
             }
             backend.state = state;
             backend.state_change = Some(now);

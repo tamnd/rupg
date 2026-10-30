@@ -12,6 +12,7 @@ const PRIME: u64 = 0x0100_0000_01b3;
 pub fn query_id(text: &str) -> i64 {
     let open = character(b'(');
     let close = character(b')');
+    let semicolon = character(b';');
     let mut lexer = Lexer::new(text);
     let mut tokens =
         std::iter::from_fn(|| lexer.next_token().ok().filter(|t| t.kind != 0)).peekable();
@@ -39,7 +40,8 @@ pub fn query_id(text: &str) -> i64 {
             hash = (hash ^ u64::from(b)).wrapping_mul(PRIME);
         }
     };
-    for t in tokens {
+    // The first statement of the text, as a statement in a list of statements gets its own identifier.
+    for t in tokens.take_while(|t| Some(t.kind) != semicolon) {
         match t.kind {
             token::ICONST
             | token::FCONST
@@ -82,5 +84,6 @@ mod tests {
         assert_ne!(a, query_id("select * from u where a = 1 and b = 'x'"));
         assert_ne!(query_id("select $1"), query_id("select $2"));
         assert_ne!(query_id("select 1"), 0);
+        assert_eq!(query_id("select 1; select 2 from t"), query_id("select 3"));
     }
 }
