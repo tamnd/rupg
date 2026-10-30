@@ -550,7 +550,7 @@ pub trait Session {
     fn count_scan(&self, relation: u32) {
         let _ = relation;
     }
-    /// The rows of a table of the user that the snapshot of the statement sees, each with a value for each column of the table when the row was written. With `used`, a column that is false in `used` or not in it is null, so that a scan copies only the columns that the query reads. A session with no server has no rows.
+    /// The rows of a table of the user that the snapshot of the statement sees, each with a value for each column of the table when the row was written. With `used`, each row has only the columns that are true in `used`, in their order, so that a scan copies only the columns that the query reads. A session with no server has no rows.
     ///
     /// # Errors
     ///

@@ -1,0 +1,54 @@
+!details
+> create table t (a int, b int, c int)
+CREATE TABLE
+> create index t_a_c on t (a, c)
+CREATE INDEX
+> insert into t select 1, g, 10 - g from generate_series(1, 5) g
+INSERT 0 5
+> insert into t select g, g, g from generate_series(2, 2000) g
+INSERT 0 1999
+> analyze t
+ANALYZE
+> explain (costs off) select b from t where a = 1
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on t
+row   Recheck Cond: (a = 1)
+row   ->  Bitmap Index Scan on t_a_c
+row         Index Cond: (a = 1)
+EXPLAIN
+> select b from t where a = 1
+fields b@t.2:23:4:-1
+row 1
+row 2
+row 3
+row 4
+row 5
+SELECT 5
+> set enable_seqscan = off
+SET
+> set enable_bitmapscan = off
+SET
+> select b from t where a = 1
+fields b@t.2:23:4:-1
+row 5
+row 4
+row 3
+row 2
+row 1
+SELECT 5
+> select b from t where a = 1 order by a desc
+fields b@t.2:23:4:-1
+row 5
+row 4
+row 3
+row 2
+row 1
+SELECT 5
+> select count(*) from t
+fields count:20:8:-1
+row 2004
+SELECT 1
+> reset enable_seqscan
+RESET
+> reset enable_bitmapscan
+RESET

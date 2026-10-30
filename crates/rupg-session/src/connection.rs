@@ -7151,6 +7151,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/walfile_name.test")));
     }
 
+    /// An index scan of an index on two columns gives the rows in the order of both keys, also when the query does not read the second key. `connection/scan_index_order.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn scan_index_order() {
+        big_stack(|| script(include_str!("connection/scan_index_order.test")));
+    }
+
     /// A new session applies the stored settings for all the sessions, for its database, for its user, and for its user in its database, in this order, as `process_settings` does, and `pg_settings` shows the source.
     #[test]
     fn role_settings_at_start() {

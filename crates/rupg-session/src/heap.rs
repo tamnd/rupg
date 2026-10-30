@@ -806,7 +806,7 @@ impl Heap {
         self.visible_rows(relation, view, false, None)
     }
 
-    /// The rows of [`Heap::rows`], with the values of the system columns `xmin` and `xmax` of each version before the ID of the version when `xids` is true. With `used`, a column that is false in `used` or not in it is null, which does not copy its value.
+    /// The rows of [`Heap::rows`], with the values of the system columns `xmin` and `xmax` of each version before the ID of the version when `xids` is true. With `used`, each row has only the columns that are true in `used`, in their order, and a column that the version has no value for is null.
     pub(crate) fn visible_rows(
         &self,
         relation: u32,
@@ -823,11 +823,15 @@ impl Heap {
             .iter()
             .filter(|version| visible(version, view))
             .map(|version| {
-                let mut row = Vec::with_capacity(version.values.len() + 3);
+                let width = used.map_or(version.values.len(), |u| u.iter().filter(|u| **u).count());
+                let mut row = Vec::with_capacity(width + 3);
                 match used {
-                    Some(used) => row.extend(version.values.iter().enumerate().map(|(i, v)| {
-                        if used.get(i).copied().unwrap_or(false) { v.clone() } else { Value::Null }
-                    })),
+                    Some(used) => row.extend(
+                        used.iter()
+                            .enumerate()
+                            .filter(|(_, u)| **u)
+                            .map(|(i, _)| version.values.get(i).cloned().unwrap_or(Value::Null)),
+                    ),
                     None => row.extend_from_slice(&version.values),
                 }
                 if xids {
