@@ -126,6 +126,17 @@ fn with_settings<T>(session: &dyn Session, func: u32, f: impl FnOnce() -> Result
     result
 }
 
+/// The number of rows between two checks of `CHECK_FOR_INTERRUPTS` in a loop over the rows of a query.
+const INTERRUPT_ROWS: usize = 1024;
+
+/// `CHECK_FOR_INTERRUPTS` in a loop over rows, at the row `n` when it is a multiple of [`INTERRUPT_ROWS`]: the error of a cancel or of the end of `statement_timeout`.
+pub(crate) fn interrupt(session: &dyn Session, n: usize) -> Result<()> {
+    if n.is_multiple_of(INTERRUPT_ROWS) && n > 0 {
+        session.interrupted()?;
+    }
+    Ok(())
+}
+
 /// True for a function in PL/pgSQL, which [`Session::call_function`] runs.
 fn procedural(func: u32) -> bool {
     builtin::proc_by_oid(func).is_some_and(|p| p.lang == PLPGSQL_LANGUAGE)
@@ -1477,7 +1488,15 @@ fn run_query(
         };
         // A join and an index scan give their rows in the order of the plan, which a query with no `ORDER BY` shows.
         let planned = session.join_order(query);
-        let test: &mut scan::Test<'_> = &mut |expr, tuple| eval.at(tuple).eval(expr);
+        // `CHECK_FOR_INTERRUPTS` of the scans and the joins, after each 1024 tests.
+        let mut tests = 0_usize;
+        let test: &mut scan::Test<'_> = &mut |expr, tuple| {
+            tests = tests.wrapping_add(1);
+            if tests.is_multiple_of(INTERRUPT_ROWS) {
+                session.interrupted()?;
+            }
+            eval.at(tuple).eval(expr)
+        };
         let planned = planned.as_deref().map(|p| (p, session));
         scan::tuples(query, tables, test, &mut source, planned)?
     } else {
@@ -1517,10 +1536,11 @@ fn run_query(
             )?
         };
         let mut rows = Vec::with_capacity(tuples.len().min(needed));
-        for i in sequence {
+        for (n, i) in sequence.into_iter().enumerate() {
             if rows.len() >= needed {
                 break;
             }
+            interrupt(session, n)?;
             eval.tuple = &tuples[i];
             if let Some(values) = values.get_mut(i) {
                 eval.windows = std::mem::take(values);

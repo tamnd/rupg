@@ -1256,7 +1256,8 @@ fn groups<'a>(
     }
     let exprs: Vec<&Expr> = items.iter().map(|g| &query.targets[g.target].expr).collect();
     let mut keys = Vec::with_capacity(tuples.len());
-    for tuple in tuples {
+    for (n, tuple) in tuples.iter().enumerate() {
+        crate::interrupt(eval.session, n)?;
         eval.tuple = tuple;
         keys.push(exprs.iter().map(|e| eval.eval(e)).collect::<Result<Vec<_>>>()?);
     }
@@ -1363,7 +1364,8 @@ fn set_keys<'a>(
     };
     let exprs: Vec<&Expr> = items.iter().map(|g| &query.targets[g.target].expr).collect();
     let mut keys = Vec::with_capacity(tuples.len());
-    for tuple in tuples {
+    for (n, tuple) in tuples.iter().enumerate() {
+        crate::interrupt(eval.session, n)?;
         eval.tuple = tuple;
         keys.push(exprs.iter().map(|e| eval.eval(e)).collect::<Result<Vec<_>>>()?);
     }
@@ -1695,7 +1697,8 @@ fn rows_of_group<'a>(
         let mut states = aggs.iter().map(|a| a.start(eval)).collect::<Result<Vec<_>>>()?;
         // The rows of an aggregate with `DISTINCT` or `ORDER BY`, which it reads after the sort.
         let mut sorted: Vec<Vec<Vec<Value>>> = vec![Vec::new(); aggs.len()];
-        for &i in group {
+        for (n, &i) in group.iter().enumerate() {
+            crate::interrupt(eval.session, n)?;
             eval.tuple = &tuples[i];
             for ((agg, state), sorted) in aggs.iter().zip(&mut states).zip(&mut sorted) {
                 if let Some(filter) = &agg.agg.filter
