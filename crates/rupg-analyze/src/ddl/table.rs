@@ -284,7 +284,6 @@ impl Definer<'_, '_> {
         foreign: Option<&CreateForeignTableStmt>,
     ) -> Result<()> {
         let rv = stmt.relation.as_deref().cloned().unwrap_or_default();
-        let at = place(rv.location);
         if stmt.partspec.is_some() && rv.relpersistence == b'u' {
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
@@ -377,9 +376,14 @@ impl Definer<'_, '_> {
         let indexes =
             index_constraints(&mut plan, &table_rv, &mut |name| Ok(self.an.type_name(name)?.0))?;
         let options = self.create_table_options(&stmt.options)?;
-        if stmt.tablespacename.is_some() {
-            return Err(not_yet("TABLESPACE", at));
-        }
+        let partitioned = plan.partspec.is_some();
+        let inherited = match (&plan.partbound, plan.parent) {
+            (Some(_), Some(parent)) => self.catalog.relation(parent).map_or(0, |r| r.tablespace),
+            _ => 0,
+        };
+        let temp = self.catalog.is_temp_schema(namespace);
+        let tablespace =
+            self.relation_tablespace(stmt.tablespacename.as_deref(), inherited, temp, partitioned)?;
         if let Some(method) = &stmt.accessMethod {
             plan.method = Some(self.table_am(method)?);
         }
@@ -393,6 +397,10 @@ impl Definer<'_, '_> {
         }
         self.check_on_commit(stmt.oncommit, namespace)?;
         let table = self.define_relation(&plan)?;
+        // `heap_create`: a foreign table has no storage, so it has no tablespace.
+        if tablespace != 0 && foreign.is_none() {
+            self.catalog.set_tablespace(table, tablespace)?;
+        }
         self.collect(None, ObjRef::new(PG_CLASS, table));
         self.register_on_commit(table, stmt.oncommit);
         if let Some(foreign) = foreign {

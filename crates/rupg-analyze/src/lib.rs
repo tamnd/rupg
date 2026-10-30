@@ -196,6 +196,34 @@ pub trait Env {
     fn lo_compat_privileges(&self) -> bool {
         false
     }
+    /// `get_tablespace_oid`: the OID of the tablespace of the name.
+    fn tablespace_oid(&self, name: &str) -> Option<u32> {
+        match name {
+            "pg_default" => Some(1663),
+            "pg_global" => Some(1664),
+            _ => None,
+        }
+    }
+    /// `get_tablespace_name`: the name of the tablespace of the OID.
+    fn tablespace_name(&self, oid: u32) -> Option<String> {
+        match oid {
+            1663 => Some("pg_default".into()),
+            1664 => Some("pg_global".into()),
+            _ => None,
+        }
+    }
+    /// The `default_tablespace` setting.
+    fn default_tablespace(&self) -> String {
+        String::new()
+    }
+    /// `MyDatabaseTableSpace`: the default tablespace of the database.
+    fn database_tablespace(&self) -> u32 {
+        1663
+    }
+    /// `object_aclcheck` of `CREATE` on the tablespace for the current user.
+    fn tablespace_create_allowed(&self, _tablespace: u32) -> bool {
+        true
+    }
     /// The rows of `pg_database` of the databases that `CREATE DATABASE` made and of the databases that a statement changed, with the changes of the transaction. The other databases of `initdb` have their static rows.
     fn databases(&self) -> std::sync::Arc<[rupg_catalog::Database]> {
         std::sync::Arc::from(Vec::new())

@@ -599,7 +599,7 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) -> Ve
                         (None, _) => rel.file,
                     }),
                 )
-                .set("reltablespace", oid(0))
+                .set("reltablespace", oid(rel.tablespace))
                 .set("relpages", Value::Int4(pages))
                 .set("reltuples", Value::Float4(tuples))
                 .set("relallvisible", Value::Int4(visible.0))

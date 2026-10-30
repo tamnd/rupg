@@ -383,6 +383,8 @@ pub struct Relation {
     pub replica_identity: u8,
     /// True when `relpersistence` is `u`. The rows of an unlogged table are kept as the rows of the other tables. A temporary relation has `t` because of its schema.
     pub unlogged: bool,
+    /// `reltablespace`: the OID of the tablespace of the relation, or 0 for the default tablespace of the database. rupg keeps the rows of each relation in the one file of the database, so the tablespace changes only the catalog. A TOAST table and its index are in the tablespace of their table.
+    pub tablespace: u32,
     /// The partition key of a partitioned table, one row of `pg_partitioned_table`.
     pub partition_key: Option<PartitionKey>,
     /// The parent table and the bound of a partition.
@@ -2840,6 +2842,7 @@ impl Catalog {
                 force_row_security: false,
                 foreign: None,
                 unlogged: false,
+                tablespace: 0,
             },
         );
         let (class, ty) = (ObjRef::new(PG_CLASS, oid), ObjRef::new(PG_TYPE, row_type));
@@ -3704,6 +3707,7 @@ impl Catalog {
                 force_row_security: false,
                 foreign: None,
                 unlogged: false,
+                tablespace: 0,
             },
         );
         self.depend(
@@ -4159,6 +4163,7 @@ impl Catalog {
                 force_row_security: false,
                 foreign: None,
                 unlogged,
+                tablespace: 0,
             },
         );
         let me = ObjRef::new(PG_CLASS, oid);
@@ -4466,7 +4471,8 @@ impl Catalog {
     /// `create_toast_table`: the TOAST table of a table and its index, in the schema `pg_toast`, or in `pg_toast_temp_N` for a table of the temporary schema `pg_temp_N`. The TOAST table gets an OID, then its index. They have no row type.
     pub fn create_toast(&mut self, table: u32) -> Result<u32> {
         let rel = self.relations.get(&table).ok_or_else(|| no_object("relation", table))?;
-        let (owner, unlogged, access_method) = (rel.owner, rel.unlogged, rel.access_method);
+        let (owner, unlogged, access_method, tablespace) =
+            (rel.owner, rel.unlogged, rel.access_method, rel.tablespace);
         let namespace = self.toast_namespace(rel.namespace);
         let oid = self.new_oid();
         let index = self.new_oid();
@@ -4503,6 +4509,7 @@ impl Catalog {
                 force_row_security: false,
                 foreign: None,
                 unlogged,
+                tablespace,
             },
         );
         let info = IndexInfo {
@@ -4555,6 +4562,7 @@ impl Catalog {
                 force_row_security: false,
                 foreign: None,
                 unlogged,
+                tablespace,
             },
         );
         self.relation_mut(table)?.toast = oid;

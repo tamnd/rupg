@@ -61,6 +61,7 @@ mod sequence;
 mod set_schema;
 mod statistics;
 mod table;
+mod tablespace;
 #[cfg(test)]
 mod tests;
 mod trigger;
@@ -665,6 +666,26 @@ impl Env for SchemaEnv<'_> {
 
     fn lo_compat_privileges(&self) -> bool {
         self.env.lo_compat_privileges()
+    }
+
+    fn tablespace_oid(&self, name: &str) -> Option<u32> {
+        self.env.tablespace_oid(name)
+    }
+
+    fn tablespace_name(&self, oid: u32) -> Option<String> {
+        self.env.tablespace_name(oid)
+    }
+
+    fn default_tablespace(&self) -> String {
+        self.env.default_tablespace()
+    }
+
+    fn database_tablespace(&self) -> u32 {
+        self.env.database_tablespace()
+    }
+
+    fn tablespace_create_allowed(&self, tablespace: u32) -> bool {
+        self.env.tablespace_create_allowed(tablespace)
     }
 
     fn databases(&self) -> std::sync::Arc<[rupg_catalog::Database]> {

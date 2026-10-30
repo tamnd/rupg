@@ -130,3 +130,121 @@ SELECT 2
 DROP ROLE
 > RESET allow_in_place_tablespaces;
 RESET
+> SET allow_in_place_tablespaces = true;
+SET
+> CREATE TABLESPACE regress_ts5 LOCATION '';
+CREATE TABLESPACE
+> CREATE TABLE ts_t1 (i int PRIMARY KEY USING INDEX TABLESPACE regress_ts5, t text) TABLESPACE regress_ts5;
+CREATE TABLE
+> CREATE INDEX ts_t1_i ON ts_t1 (i) TABLESPACE regress_ts5;
+CREATE INDEX
+> CREATE TABLE ts_t2 (i int) TABLESPACE pg_default;
+CREATE TABLE
+> CREATE TABLE ts_t3 (i int) TABLESPACE regress_nosuch;
+ERROR 42704 tablespace "regress_nosuch" does not exist
+> CREATE TABLE ts_t3 (i int) TABLESPACE pg_global;
+ERROR 22023 only shared relations can be placed in pg_global tablespace
+> CREATE TABLE ts_t4 AS SELECT 1 AS i;
+SELECT 1
+> CREATE MATERIALIZED VIEW ts_mv TABLESPACE regress_ts5 AS SELECT 1 AS i;
+SELECT 1
+> SET default_tablespace = regress_ts5;
+SET
+> CREATE TABLE ts_t5 (i int);
+CREATE TABLE
+> CREATE TEMP TABLE ts_t6 (i int);
+CREATE TABLE
+> CREATE TABLE ts_p (a int) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TABLE ts_p1 PARTITION OF ts_p FOR VALUES IN (1);
+CREATE TABLE
+> SET default_tablespace = pg_default;
+SET
+> CREATE TABLE ts_p2 (a int) PARTITION BY LIST (a);
+ERROR 0A000 cannot specify default tablespace for partitioned relations
+> CREATE TABLE ts_t7 (i int);
+CREATE TABLE
+> CREATE TABLE ts_p3 (a int) PARTITION BY LIST (a) TABLESPACE pg_default;
+ERROR 0A000 cannot specify default tablespace for partitioned relations
+> SET default_tablespace = regress_nosuch;
+ERROR 22023 invalid value for parameter "default_tablespace": "regress_nosuch"
+DETAIL Tablespace "regress_nosuch" does not exist.
+> CREATE TABLE ts_t8 (i int);
+CREATE TABLE
+> RESET default_tablespace;
+RESET
+> CREATE INDEX ts_p_a ON ts_p (a);
+CREATE INDEX
+> CREATE TABLE ts_p4 PARTITION OF ts_p FOR VALUES IN (4);
+CREATE TABLE
+> SELECT c.relname || ':' || c.relkind::text || ':' || coalesce(t.spcname, '-') AS r FROM pg_class c LEFT JOIN pg_tablespace t ON c.reltablespace = t.oid WHERE c.relname LIKE 'ts\_%' ORDER BY 1;
+fields r:25:-1:-1
+row ts_mv:m:regress_ts5
+row ts_p1:r:regress_ts5
+row ts_p1_a_idx:i:-
+row ts_p4:r:regress_ts5
+row ts_p4_a_idx:i:-
+row ts_p:p:regress_ts5
+row ts_p_a:I:-
+row ts_t1:r:regress_ts5
+row ts_t1_i:i:regress_ts5
+row ts_t1_pkey:i:regress_ts5
+row ts_t2:r:-
+row ts_t4:r:-
+row ts_t5:r:regress_ts5
+row ts_t6:r:-
+row ts_t7:r:-
+row ts_t8:r:-
+SELECT 16
+> SELECT count(*) FROM pg_class c WHERE c.reltablespace <> 0 AND c.oid IN (SELECT reltoastrelid FROM pg_class WHERE relname = 'ts_t1' UNION SELECT indexrelid FROM pg_index WHERE indrelid = (SELECT reltoastrelid FROM pg_class WHERE relname = 'ts_t1'));
+fields count:20:8:-1
+row 2
+SELECT 1
+> DROP TABLESPACE regress_ts5;
+ERROR 2BP01 tablespace "regress_ts5" cannot be dropped because some objects depend on it
+DETAIL tablespace for table ts_p
+> DROP TABLE ts_t1, ts_t5, ts_t4, ts_t2, ts_t7, ts_t8, ts_t6;
+DROP TABLE
+> DROP MATERIALIZED VIEW ts_mv;
+DROP MATERIALIZED VIEW
+> DROP TABLESPACE regress_ts5;
+ERROR 2BP01 tablespace "regress_ts5" cannot be dropped because some objects depend on it
+DETAIL tablespace for table ts_p
+> DROP INDEX ts_p_a;
+DROP INDEX
+> ALTER TABLE ts_p DETACH PARTITION ts_p1;
+ALTER TABLE
+> DROP TABLE ts_p;
+DROP TABLE
+> DROP TABLESPACE regress_ts5;
+ERROR 55000 tablespace "regress_ts5" is not empty
+> DROP TABLE ts_p1, ts_p4;
+ERROR 42P01 table "ts_p4" does not exist
+> DROP TABLE ts_p1;
+DROP TABLE
+> CREATE ROLE regress_ts_user2;
+CREATE ROLE
+> GRANT CREATE ON SCHEMA public TO regress_ts_user2;
+GRANT
+> SET ROLE regress_ts_user2;
+SET
+is_superuser=off
+> CREATE TABLE ts_t9 (i int) TABLESPACE regress_ts5;
+ERROR 42501 permission denied for tablespace regress_ts5
+> CREATE TABLE ts_t9 (i int) TABLESPACE pg_default;
+CREATE TABLE
+> CREATE INDEX ts_t9_i ON ts_t9 (i) TABLESPACE regress_ts5;
+ERROR 42501 permission denied for tablespace regress_ts5
+> RESET ROLE;
+RESET
+is_superuser=on
+> DROP TABLE ts_t9;
+DROP TABLE
+> REVOKE CREATE ON SCHEMA public FROM regress_ts_user2;
+REVOKE
+> DROP ROLE regress_ts_user2;
+DROP ROLE
+> DROP TABLESPACE regress_ts5;
+DROP TABLESPACE
+> RESET allow_in_place_tablespaces;
+RESET

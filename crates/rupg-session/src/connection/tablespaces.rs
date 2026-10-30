@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use rupg_catalog::Tablespace;
+use rupg_catalog::{ObjRef, PG_CLASS, RelKind, Tablespace};
 use rupg_common::{Error, SqlState};
 use rupg_sql::Severity;
 use rupg_sql::nodes::{CreateTableSpaceStmt, DropTableSpaceStmt, RoleSpecType};
@@ -149,6 +149,61 @@ impl Connection {
             return Err(Error::new(
                 SqlState::INSUFFICIENT_PRIVILEGE,
                 format!("permission denied for tablespace {name}"),
+            ));
+        }
+        // A partitioned relation has no files, so `pg_shdepend` keeps its tablespace, and `checkSharedDependencies` reports it.
+        let current = self.catalog();
+        // The objects of the current database come first, then a count for each other database.
+        let (mut lines, mut remote) = (Vec::new(), Vec::new());
+        for (row, catalog) in self.store.catalogs() {
+            let catalog = if row.oid == self.database_oid { &current } else { &catalog };
+            let mut dependents: Vec<u32> = catalog
+                .relations()
+                .filter(|r| {
+                    r.tablespace == oid
+                        && matches!(r.kind, RelKind::Partitioned | RelKind::PartitionedIndex)
+                })
+                .map(|r| r.oid)
+                .collect();
+            if row.oid != self.database_oid {
+                match dependents.len() {
+                    0 => {}
+                    1 => remote.push(format!("1 object in database {}", row.name)),
+                    n => remote.push(format!("{n} objects in database {}", row.name)),
+                }
+                continue;
+            }
+            dependents.sort_unstable();
+            let reader = self.reader();
+            for relation in dependents {
+                let object = ObjRef::new(PG_CLASS, relation);
+                let text = rupg_func::describe(object, &reader)?.unwrap_or_default();
+                lines.push(format!("tablespace for {text}"));
+            }
+        }
+        lines.extend(remote);
+        if !lines.is_empty() {
+            return Err(Error::new(
+                SqlState::DEPENDENT_OBJECTS_STILL_EXIST,
+                format!(
+                    "tablespace \"{name}\" cannot be dropped because some objects depend on it"
+                ),
+            )
+            .with_detail(lines.join("\n")));
+        }
+        // `destroy_tablespace_directories` finds the files of a relation or of a database in the tablespace.
+        let used = self.store.catalogs().iter().any(|(row, catalog)| {
+            row.tablespace == oid
+                || if row.oid == self.database_oid {
+                    current.uses_tablespace(oid)
+                } else {
+                    catalog.uses_tablespace(oid)
+                }
+        });
+        if used {
+            return Err(Error::new(
+                SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
+                format!("tablespace \"{name}\" is not empty"),
             ));
         }
         self.store.drop_tablespace(oid);

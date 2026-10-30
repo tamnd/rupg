@@ -1571,6 +1571,7 @@ impl rupg_func::Session for Reader<'_> {
         if let Some(value) = value {
             utility::check_role(name, value, self.login, self.session_user)?;
             utility::check_table_am(name, value, self)?;
+            utility::check_default_tablespace(name, value, self)?;
         }
         let config = match value {
             Some(value) if utility::is_ts_config(name) => {
@@ -1727,6 +1728,42 @@ impl Env for Reader<'_> {
 
     fn lo_compat_privileges(&self) -> bool {
         self.settings().get("lo_compat_privileges").as_deref() == Some("on")
+    }
+
+    fn tablespace_oid(&self, name: &str) -> Option<u32> {
+        match name {
+            "pg_default" => Some(1663),
+            "pg_global" => Some(1664),
+            _ => {
+                rupg_func::Session::tablespaces(self).iter().find(|t| t.name == name).map(|t| t.oid)
+            }
+        }
+    }
+
+    fn tablespace_name(&self, oid: u32) -> Option<String> {
+        match oid {
+            1663 => Some("pg_default".into()),
+            1664 => Some("pg_global".into()),
+            _ => rupg_func::Session::tablespaces(self)
+                .iter()
+                .find(|t| t.oid == oid)
+                .map(|t| t.name.clone()),
+        }
+    }
+
+    fn default_tablespace(&self) -> String {
+        self.settings().get("default_tablespace").unwrap_or_default()
+    }
+
+    fn database_tablespace(&self) -> u32 {
+        rupg_func::Session::databases(self)
+            .iter()
+            .find(|d| d.name == self.database)
+            .map_or(1663, |d| d.tablespace)
+    }
+
+    fn tablespace_create_allowed(&self, tablespace: u32) -> bool {
+        rupg_func::tablespace_create(tablespace, self)
     }
 
     fn databases(&self) -> Arc<[rupg_catalog::Database]> {

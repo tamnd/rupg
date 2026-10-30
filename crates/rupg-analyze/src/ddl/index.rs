@@ -245,9 +245,10 @@ impl Definer<'_, '_> {
             ));
         }
         let options = self.create_index_options(method, &stmt.options)?;
-        if stmt.tableSpace.is_some() {
-            return Err(not_yet("TABLESPACE", None));
-        }
+        let temp =
+            self.catalog.relation(table).is_some_and(|r| self.catalog.is_temp_schema(r.namespace));
+        let tablespace =
+            self.relation_tablespace(stmt.tableSpace.as_deref(), 0, temp, kind == b'p')?;
         if predicate.as_ref().is_some_and(|p| is_mutable(self.an.env, self.catalog, p)) {
             return Err(Error::new(
                 SqlState::INVALID_OBJECT_DEFINITION,
@@ -353,6 +354,9 @@ impl Definer<'_, '_> {
             pages,
         };
         let (index, constraint) = self.catalog.create_index(new)?;
+        if tablespace != 0 {
+            self.catalog.set_tablespace(index, tablespace)?;
+        }
         if !alter {
             self.collect(Some("CREATE INDEX"), ObjRef::new(PG_CLASS, index));
         }
