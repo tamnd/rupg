@@ -1,0 +1,72 @@
+> create table w (a int, b int, c text, d text, e int)
+CREATE TABLE
+> insert into w select g, g % 3, 'c' || g, 'd' || g, g * 10 from generate_series(1, 12) g
+INSERT 0 12
+> select * from w where c like '%1%'
+fields a@w.1:23:4:-1,b@w.2:23:4:-1,c@w.3:25:-1:-1,d@w.4:25:-1:-1,e@w.5:23:4:-1
+row 1,1,c1,d1,10
+row 10,1,c10,d10,100
+row 11,2,c11,d11,110
+row 12,0,c12,d12,120
+SELECT 4
+> select a, d from w where b = 0 and e > 40
+fields a@w.1:23:4:-1,d@w.4:25:-1:-1
+row 6,d6
+row 9,d9
+row 12,d12
+SELECT 3
+> select * from w where b <> 0 and a / b > 5
+fields a@w.1:23:4:-1,b@w.2:23:4:-1,c@w.3:25:-1:-1,d@w.4:25:-1:-1,e@w.5:23:4:-1
+row 7,1,c7,d7,70
+row 10,1,c10,d10,100
+SELECT 2
+> select * from w where a / b > 5
+fields a@w.1:23:4:-1,b@w.2:23:4:-1,c@w.3:25:-1:-1,d@w.4:25:-1:-1,e@w.5:23:4:-1
+ERROR 22012 division by zero
+> begin
+BEGIN
+> update w set d = 'new' where a = 4
+UPDATE 1
+> delete from w where a = 7
+DELETE 1
+> select * from w where b = 1
+fields a@w.1:23:4:-1,b@w.2:23:4:-1,c@w.3:25:-1:-1,d@w.4:25:-1:-1,e@w.5:23:4:-1
+row 1,1,c1,d1,10
+row 10,1,c10,d10,100
+row 4,1,c4,new,40
+SELECT 3
+> commit
+COMMIT
+> alter table w add column f int default 5
+ALTER TABLE
+> insert into w values (20, 2, 'c20', 'd20', 200, 6)
+INSERT 0 1
+> select * from w where e >= 100
+fields a@w.1:23:4:-1,b@w.2:23:4:-1,c@w.3:25:-1:-1,d@w.4:25:-1:-1,e@w.5:23:4:-1,f@w.6:23:4:-1
+row 10,1,c10,d10,100,5
+row 11,2,c11,d11,110,5
+row 12,0,c12,d12,120,5
+row 20,2,c20,d20,200,6
+SELECT 4
+> alter table w drop column d
+ALTER TABLE
+> select * from w where c like 'c1%' order by a desc limit 2
+fields a@w.1:23:4:-1,b@w.2:23:4:-1,c@w.3:25:-1:-1,e@w.5:23:4:-1,f@w.6:23:4:-1
+row 12,0,c12,120,5
+row 11,2,c11,110,5
+SELECT 2
+> select * from w where f = 5 and c like '%2'
+fields a@w.1:23:4:-1,b@w.2:23:4:-1,c@w.3:25:-1:-1,e@w.5:23:4:-1,f@w.6:23:4:-1
+row 2,2,c2,20,5
+row 12,0,c12,120,5
+SELECT 2
+> select count(*), max(c) from w where e < 50
+fields count:20:8:-1,max:25:-1:-1
+row 4,c4
+SELECT 1
+> select * from w where c ~ '^c1[0-2]$' or e is null
+fields a@w.1:23:4:-1,b@w.2:23:4:-1,c@w.3:25:-1:-1,e@w.5:23:4:-1,f@w.6:23:4:-1
+row 10,1,c10,100,5
+row 11,2,c11,110,5
+row 12,0,c12,120,5
+SELECT 3

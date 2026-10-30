@@ -1182,6 +1182,18 @@ impl rupg_func::Session for Reader<'_> {
         }
     }
 
+    fn table_rows_at(
+        &self,
+        relation: u32,
+        used: Option<&[bool]>,
+        tids: &[u64],
+    ) -> Result<Vec<Vec<Value>>> {
+        match (self.activity, &self.view) {
+            (Some((_, store)), Some(view)) => Ok(store.heap().rows_at(relation, view, used, tids)),
+            _ => Ok(Vec::new()),
+        }
+    }
+
     fn table_rows_with_xids(
         &self,
         relation: u32,

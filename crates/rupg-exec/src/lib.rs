@@ -912,8 +912,8 @@ type BodyKey = (u32, Vec<u32>, Vec<(u32, i32)>);
 /// The state of a run that the query and its subqueries share.
 #[derive(Default)]
 struct Cache {
-    /// The rows of the relations of each query, by the address of the query. A subquery reads them once, also when it runs for each row of the query outside it.
-    tables: RefCell<Vec<(*const Query, Rc<scan::Tables>)>>,
+    /// The rows of the relations of each query, by the address of the query, with true when the rows are only those that pass the conditions of `WHERE`, which [`scan::read`] can keep. A subquery reads them once, also when it runs for each row of the query outside it.
+    tables: RefCell<Vec<(*const Query, bool, Rc<scan::Tables>)>>,
     /// The rows of each subquery that reads no column of an outer query, as an `InitPlan` keeps them. It runs once, when the query first needs it.
     rows: RefCell<Vec<(*const Query, Rc<Rows>)>>,
     /// The hash table of each such subquery of `ANY`, as a hashed `SubPlan` keeps it, or `None` when a value of the subquery has no key.
@@ -1006,14 +1006,27 @@ impl Cache {
         Ok(body)
     }
 
-    fn tables(&self, query: &Query, session: &dyn Session) -> Result<Rc<scan::Tables>> {
-        if let Some((_, tables)) =
-            self.tables.borrow().iter().find(|(q, _)| std::ptr::eq(*q, query))
+    /// The rows of the relations of a query. With `narrow`, the rows can be only those that pass the conditions of `WHERE`, for a run of the query that tests them again. `EXPLAIN ANALYZE` counts the rows that the conditions remove, so it reads all the rows.
+    fn tables(
+        &self,
+        query: &Query,
+        session: &dyn Session,
+        narrow: bool,
+    ) -> Result<Rc<scan::Tables>> {
+        if let Some((_, _, tables)) =
+            self.tables.borrow().iter().find(|(q, n, _)| std::ptr::eq(*q, query) && (narrow || !n))
         {
             return Ok(Rc::clone(tables));
         }
-        let tables = Rc::new(scan::read(query, session)?);
-        self.tables.borrow_mut().push((query, Rc::clone(&tables)));
+        let mut test = |tables: &scan::Tables, expr: &Expr, tuple: &[usize]| {
+            Eval::new(&[], session, tables, self, &[]).at(tuple).eval(expr)
+        };
+        let tables = Rc::new(scan::read(
+            query,
+            session,
+            narrow.then_some(&mut test as &mut scan::Narrow<'_>),
+        )?);
+        self.tables.borrow_mut().push((query, narrow, Rc::clone(&tables)));
         Ok(tables)
     }
 
@@ -1362,7 +1375,7 @@ fn run_query(
     exists: bool,
 ) -> Result<Vec<Vec<Value>>> {
     let want = cache.want.take();
-    let base = cache.tables(query, session)?;
+    let base = cache.tables(query, session, true)?;
     let mut eval = Eval::new(params, session, &base, cache, outer);
     // simplify_EXISTS_query: with no aggregate, no `HAVING`, no `OFFSET` and a `LIMIT` that is a constant more than 0 or null, `EXISTS` only needs a row of `FROM` and `WHERE`.
     let mut simple = false;
@@ -1590,7 +1603,7 @@ impl Plan {
         };
         let tables = scan::given(query, vec![rows]).written_by(writer);
         let cache = self.cache();
-        cache.tables.borrow_mut().push((query, Rc::new(tables)));
+        cache.tables.borrow_mut().push((query, false, Rc::new(tables)));
         run_query(query, params, session, &cache, &[], false)
     }
 
@@ -1611,7 +1624,11 @@ impl Plan {
             rows.iter().map(|row| row[..info.width.min(row.len())].to_vec()).collect();
         let query: &Query = &check.query;
         let cache = self.cache();
-        cache.tables.borrow_mut().push((query, Rc::new(scan::given(query, vec![rows.clone()]))));
+        cache.tables.borrow_mut().push((
+            query,
+            false,
+            Rc::new(scan::given(query, vec![rows.clone()])),
+        ));
         let results = run_query(query, params, session, &cache, &[], false)?;
         for (row, result) in rows.iter().zip(results) {
             let Some(at) = result.iter().position(|v| !matches!(v, Value::Bool(true))) else {
@@ -1664,7 +1681,7 @@ impl Plan {
         let old = existing[..info.width.min(existing.len())].to_vec();
         let cache = self.cache();
         let tables = scan::given(base, vec![vec![existing], vec![excluded]]);
-        cache.tables.borrow_mut().push((base, Rc::new(tables)));
+        cache.tables.borrow_mut().push((base, false, Rc::new(tables)));
         let rows = run_query(query, params, session, &cache, &[], false)?;
         // `ExecOnConflictUpdate` checks the row that the table has after the condition of `WHERE`.
         let conflict = info.on_conflict.as_ref();
@@ -1710,7 +1727,7 @@ impl Plan {
         let old = target[..info.width.min(target.len())].to_vec();
         let cache = self.cache();
         let tables = scan::given(base, vec![vec![target], vec![carried]]);
-        cache.tables.borrow_mut().push((base, Rc::new(tables)));
+        cache.tables.borrow_mut().push((base, false, Rc::new(tables)));
         let rows = run_query(query, params, session, &cache, &[], false)?;
         // `ExecMergeMatched` checks the row of the target table after the condition of the clause and before the triggers.
         let merge = info.merge.as_ref();
@@ -2005,7 +2022,11 @@ impl Plan {
             return Ok(row);
         };
         let cache = self.cache();
-        cache.tables.borrow_mut().push((query, Rc::new(scan::given(query, vec![vec![row]]))));
+        cache.tables.borrow_mut().push((
+            query,
+            false,
+            Rc::new(scan::given(query, vec![vec![row]])),
+        ));
         let rows = run_query(query, &[], session, &cache, &[], false)?;
         rows.into_iter().next().ok_or_else(|| Error::internal("a check of a row with no row"))
     }
@@ -2100,7 +2121,7 @@ pub fn policy_failures(
 ) -> Result<Vec<Option<Error>>> {
     let query: &Query = &check.query;
     let cache = Cache::default();
-    cache.tables.borrow_mut().push((query, Rc::new(scan::given(query, vec![rows]))));
+    cache.tables.borrow_mut().push((query, false, Rc::new(scan::given(query, vec![rows]))));
     let results = run_query(query, &[], session, &cache, &[], false)?;
     Ok(results
         .iter()
@@ -2147,10 +2168,11 @@ pub fn trigger_when(
         ..base.clone()
     };
     let cache = Cache::default();
-    cache
-        .tables
-        .borrow_mut()
-        .push((&query, Rc::new(scan::given(&query, vec![vec![old], vec![new]]))));
+    cache.tables.borrow_mut().push((
+        &query,
+        false,
+        Rc::new(scan::given(&query, vec![vec![old], vec![new]])),
+    ));
     let rows = run_query(&query, &[], session, &cache, &[], false)?;
     Ok(matches!(rows.first().and_then(|row| row.first()), Some(Value::Bool(true))))
 }

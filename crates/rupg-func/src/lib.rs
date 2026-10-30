@@ -559,6 +559,23 @@ pub trait Session {
         let _ = (relation, used);
         Ok(Vec::new())
     }
+    /// The rows of [`Session::table_rows`] of only the versions `tids`, which come in the order of the IDs, as the scan gives them.
+    ///
+    /// # Errors
+    ///
+    /// An error of the store of the rows.
+    fn table_rows_at(
+        &self,
+        relation: u32,
+        used: Option<&[bool]>,
+        tids: &[u64],
+    ) -> Result<Vec<Vec<Value>>> {
+        let mut rows = self.table_rows(relation, used)?;
+        rows.retain(|row| {
+            matches!(row.last(), Some(Value::Int8(tid)) if tids.binary_search(&tid.cast_unsigned()).is_ok())
+        });
+        Ok(rows)
+    }
     /// The rows of [`Session::table_rows`], each with the system columns `xmin` and `xmax` of its version before the ID of the version.
     ///
     /// # Errors

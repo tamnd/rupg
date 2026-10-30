@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A scan of one table whose conditions of `WHERE` read only some of the columns of the query first reads the columns of the conditions, and then the other columns of only the rows that pass. ClickBench Q24 (`SELECT *` with `LIKE` on 2 million rows) no longer copies all 105 columns of each row, which took more than 12 GB (#1179).
 - `EXPLAIN (MEMORY)` now shows the memory that the planning used and allocated, in the text form and in the other forms. The `rupg` binary counts the bytes of each thread with a global allocator over the allocator of the system (#1178).
 - `EXPLAIN` now takes the `IO` option and shows the prefetch of the pages of a scan, `SERIALIZE` shows the size of the output of the rows, and `BUFFERS` shows the counts of each node and of the planning in the formats other than text (#1177).
 - The kernel of a built-in function is found once for each session thread, and not again for each call. A filter on 2 million rows took 40% of its time to find the kernel of its comparison (#1176).
