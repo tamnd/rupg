@@ -1,0 +1,36 @@
+> create function pg_temp.tf(int) returns int language plpgsql as 'begin return $1 + 1; end'
+CREATE FUNCTION
+> select pg_temp.tf(1)
+fields tf:23:4:-1
+row 2
+SELECT 1
+> select pg_my_temp_schema() <> 0 as made
+fields made:16:1:-1
+row t
+SELECT 1
+> create domain pg_temp.d as int check (value > 0)
+CREATE DOMAIN
+> select 3::pg_temp.d::int as d
+fields d:23:4:-1
+row 3
+SELECT 1
+> create type pg_temp.e as enum ('a', 'b')
+CREATE TYPE
+> select 'b'::pg_temp.e::text as e
+fields e:25:-1:-1
+row b
+SELECT 1
+> create type pg_temp.r as range (subtype = int4)
+CREATE TYPE
+> select '[1,3)'::pg_temp.r::text as r
+fields r:25:-1:-1
+row [1,3)
+SELECT 1
+> create aggregate pg_temp.agg(int) (sfunc = int4pl, stype = int)
+CREATE AGGREGATE
+> select pg_temp.agg(x) from generate_series(1, 4) x
+fields agg:23:4:-1
+row 10
+SELECT 1
+> drop function pg_temp.nosuch(int)
+ERROR 42883 function pg_temp.nosuch(integer) does not exist
