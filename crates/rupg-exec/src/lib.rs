@@ -1936,6 +1936,15 @@ impl Plan {
         session: &dyn Session,
     ) -> Result<Vec<Vec<Value>>> {
         self.start(session)?;
+        self.run_started(params, session)
+    }
+
+    /// [`Plan::run_unchecked`] with no checks of [`Plan::start`], for a plan that the caller started before. `COPY ... FROM` runs its plan once for each row, and `ExecutorStart` checks the plan only once for the statement.
+    ///
+    /// # Errors
+    ///
+    /// The error of a function, such as a division by zero.
+    pub fn run_started(&self, params: &[Value], session: &dyn Session) -> Result<Vec<Vec<Value>>> {
         run_query(self.runnable(), params, session, &self.cache(), &[], false)
     }
 

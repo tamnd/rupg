@@ -128,6 +128,8 @@ struct Load {
     triggers: Triggers,
     /// True after the triggers `BEFORE ... FOR EACH STATEMENT` fired.
     begun: bool,
+    /// The plans that [`Plan::start`] checked, so that the checks of the plan run once for the statement and not for each row.
+    started: Vec<Rc<Plan>>,
     /// The rows that the copy wrote, for the triggers `AFTER ... FOR EACH ROW` and the transition tables.
     inserted: Vec<Vec<Value>>,
     /// The routing of the rows of a partitioned table into its leaves, which keep the rows instead of `rows`.
@@ -464,6 +466,7 @@ impl Connection {
             batches: Vec::new(),
             triggers,
             begun: false,
+            started: Vec::new(),
             inserted: Vec::new(),
             routing,
         };
@@ -593,8 +596,12 @@ impl Connection {
             let Some(params) = made.values else { continue };
             let plan = copy.load.plan_for(&row.defaults, &reader)?;
             let width = plan.write().map_or(0, |info| info.width);
+            if !copy.load.started.iter().any(|p| Rc::ptr_eq(p, &plan)) {
+                plan.start(&reader).map_err(|e| e.with_context(copy.row_context(&row)))?;
+                copy.load.started.push(Rc::clone(&plan));
+            }
             let line = |error: Error| error.with_context(copy.row_context(&row));
-            let rows = plan.run_unchecked(&params, &reader).map_err(line)?;
+            let rows = plan.run_started(&params, &reader).map_err(line)?;
             let planned = rows.len();
             let rows = match &copy.load.filter {
                 Some(filter) => {
@@ -1328,7 +1335,7 @@ impl CopyIn {
 
     /// `CopyReadAttributesCSV`: the fields of a line of the CSV format, with `None` for the null string outside quotes, and the marks of the fields that are the marker of `DEFAULT` outside quotes.
     fn csv_fields(&self, line: &[u8]) -> Result<Fields, Error> {
-        let mut fields = Vec::new();
+        let mut fields = Vec::with_capacity(self.names.len());
         let mut defaults = Vec::new();
         let mut i = 0;
         loop {
@@ -1343,7 +1350,15 @@ impl CopyIn {
                     break;
                 }
                 if c != self.quote {
+                    // The bytes up to the next delimiter or quote go in the field at once.
+                    let rest = &line[i..];
+                    let run = rest
+                        .iter()
+                        .position(|&b| b == self.delimiter || b == self.quote)
+                        .unwrap_or(rest.len());
                     field.push(c);
+                    field.extend_from_slice(&rest[..run]);
+                    i += run;
                     continue;
                 }
                 saw_quote = true;
