@@ -83,7 +83,10 @@ pub use function::{
     Body, REGRESS_SYMBOLS, Script, SqlBody, find_library, function_body, function_body_for,
     function_script, function_sqlbody, inline_body,
 };
-pub use grant::{acl_allows_create, acl_roles, apply_database_change, database_change};
+pub use grant::{
+    acl_allows_create, acl_roles, apply_database_change, apply_tablespace_change, database_change,
+    tablespace_change,
+};
 pub(crate) use lock::relkind;
 pub use lock::{Allowed, Take, lock_table};
 pub use objaddr::object_address;
@@ -157,6 +160,8 @@ pub struct Defined {
     pub grantors: Vec<u32>,
     /// The rows of `pg_database` that `GRANT` and `REVOKE` changed, which the caller keeps in the roles of the transaction.
     pub databases: Vec<rupg_pgcatalog::roles::DatabaseChange>,
+    /// The rows of `pg_tablespace` that `GRANT` and `REVOKE` changed, which the caller keeps in the roles of the transaction.
+    pub tablespaces: Vec<rupg_pgcatalog::roles::TablespaceChange>,
     /// The elements of `CREATE SCHEMA`, which the caller runs after it keeps the new schema, or `None`.
     pub schema: Option<SchemaElements>,
     /// The check of `PreventInTransactionBlock` that the statement needs after it found its relations, such as `REINDEX` of a partitioned table, or `None`. The caller runs the check before it keeps the changes, and after an error the messages of the statement go.
@@ -323,12 +328,13 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::AlterUserMappingStmt(_)
             | Node::DropUserMappingStmt(_)
             | Node::AlterTableMoveAllStmt(_)
+            | Node::AlterTableSpaceOptionsStmt(_)
     ) || matches!(stmt, Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) || matches!(define.kind, ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_AGGREGATE | ObjectType::OBJECT_TYPE | ObjectType::OBJECT_COLLATION))
         || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
         || matches!(stmt, Node::DiscardStmt(discard) if discard.target == DiscardMode::DISCARD_TEMP)
         || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype) || alter.objtype == ObjectType::OBJECT_TYPE)
-        || matches!(stmt, Node::AlterOwnerStmt(alter) if matches!(alter.objectType, ObjectType::OBJECT_SCHEMA | ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT | ObjectType::OBJECT_CONVERSION | ObjectType::OBJECT_EVENT_TRIGGER | ObjectType::OBJECT_TSDICTIONARY | ObjectType::OBJECT_TSCONFIGURATION | ObjectType::OBJECT_FDW | ObjectType::OBJECT_FOREIGN_SERVER | ObjectType::OBJECT_PUBLICATION | ObjectType::OBJECT_LARGEOBJECT | ObjectType::OBJECT_DATABASE) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
-        || matches!(stmt, Node::RenameStmt(rename) if rename::is_rename_kind(rename.renameType) || rename.renameType == ObjectType::OBJECT_DATABASE)
+        || matches!(stmt, Node::AlterOwnerStmt(alter) if matches!(alter.objectType, ObjectType::OBJECT_SCHEMA | ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT | ObjectType::OBJECT_CONVERSION | ObjectType::OBJECT_EVENT_TRIGGER | ObjectType::OBJECT_TSDICTIONARY | ObjectType::OBJECT_TSCONFIGURATION | ObjectType::OBJECT_FDW | ObjectType::OBJECT_FOREIGN_SERVER | ObjectType::OBJECT_PUBLICATION | ObjectType::OBJECT_LARGEOBJECT | ObjectType::OBJECT_DATABASE | ObjectType::OBJECT_TABLESPACE) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
+        || matches!(stmt, Node::RenameStmt(rename) if rename::is_rename_kind(rename.renameType) || matches!(rename.renameType, ObjectType::OBJECT_DATABASE | ObjectType::OBJECT_TABLESPACE))
         || matches!(stmt, Node::AlterDatabaseStmt(_))
         || matches!(stmt, Node::AlterObjectSchemaStmt(alter) if is_alter_kind(alter.objectType) || matches!(alter.objectType, ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT | ObjectType::OBJECT_CONVERSION) || tsearch::is_ts_kind(alter.objectType) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
         || matches!(stmt, Node::SelectStmt(select) if crate::select_into(select).is_some())
@@ -412,6 +418,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         detached: Vec::new(),
         grantors: Vec::new(),
         databases: Vec::new(),
+        tablespaces: Vec::new(),
         schema: None,
         top_level: None,
         concurrent: None,
@@ -568,6 +575,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         detached: definer.detached,
         grantors: definer.grantors,
         databases: definer.databases,
+        tablespaces: definer.tablespaces,
         schema: definer.schema,
         top_level: definer.top_level,
         concurrent: definer.concurrent,
@@ -688,6 +696,10 @@ impl Env for SchemaEnv<'_> {
 
     fn tablespace_create_allowed(&self, tablespace: u32) -> bool {
         self.env.tablespace_create_allowed(tablespace)
+    }
+
+    fn tablespaces(&self) -> std::sync::Arc<[rupg_catalog::Tablespace]> {
+        self.env.tablespaces()
     }
 
     fn databases(&self) -> std::sync::Arc<[rupg_catalog::Database]> {
@@ -818,6 +830,8 @@ pub(crate) struct Definer<'a, 'c> {
     grantors: Vec<u32>,
     /// The rows of [`Defined::databases`].
     databases: Vec<rupg_pgcatalog::roles::DatabaseChange>,
+    /// The rows of [`Defined::tablespaces`].
+    tablespaces: Vec<rupg_pgcatalog::roles::TablespaceChange>,
     /// The elements of [`Defined::schema`].
     schema: Option<SchemaElements>,
     /// The check of [`Defined::top_level`].

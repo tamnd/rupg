@@ -59,6 +59,7 @@ const ALL_FOREIGN_SERVER: u64 = USAGE;
 const ALL_LARGEOBJECT: u64 = SELECT | UPDATE;
 /// `ACL_ALL_RIGHTS_DATABASE`.
 const ALL_DATABASE: u64 = CREATE | TEMP | CONNECT;
+const ALL_TABLESPACE: u64 = CREATE;
 
 /// The bits of the grant options of an `aclitem`.
 const GOPTION_BITS: u64 = 0xFFFF_FFFF << 32;
@@ -213,6 +214,30 @@ pub fn apply_database_change(
     row.tablespace = change.tablespace;
 }
 
+/// The change of a row of `pg_tablespace` in a transaction.
+pub fn tablespace_change(
+    row: &rupg_catalog::Tablespace,
+) -> rupg_pgcatalog::roles::TablespaceChange {
+    rupg_pgcatalog::roles::TablespaceChange {
+        oid: row.oid,
+        name: row.name.clone(),
+        owner: row.owner,
+        acl: row.acl.clone(),
+        options: row.options.clone(),
+    }
+}
+
+/// Puts the values of a change of [`tablespace_change`] in a row of `pg_tablespace`.
+pub fn apply_tablespace_change(
+    change: &rupg_pgcatalog::roles::TablespaceChange,
+    row: &mut rupg_catalog::Tablespace,
+) {
+    row.name.clone_from(&change.name);
+    row.owner = change.owner;
+    row.acl.clone_from(&change.acl);
+    row.options.clone_from(&change.options);
+}
+
 /// `object_aclcheck` of `CREATE` on the texts of an ACL: true when `PUBLIC` or a role for which `has` is true has the privilege. The caller checks the owner.
 pub fn acl_allows_create(texts: &[String], has: impl Fn(u32) -> bool) -> bool {
     let roles = rupg_pgcatalog::roles::current();
@@ -248,6 +273,7 @@ enum Kind {
     Server,
     LargeObject,
     Database,
+    Tablespace,
 }
 
 impl Kind {
@@ -265,6 +291,7 @@ impl Kind {
             Kind::Server => ALL_FOREIGN_SERVER,
             Kind::LargeObject => ALL_LARGEOBJECT,
             Kind::Database => ALL_DATABASE,
+            Kind::Tablespace => ALL_TABLESPACE,
         }
     }
 
@@ -282,6 +309,7 @@ impl Kind {
             Kind::Server => (0, ALL_FOREIGN_SERVER),
             Kind::LargeObject => (0, ALL_LARGEOBJECT),
             Kind::Database => (TEMP | CONNECT, ALL_DATABASE),
+            Kind::Tablespace => (0, ALL_TABLESPACE),
         };
         let mut acl = Vec::new();
         if world != 0 {
@@ -307,6 +335,7 @@ impl Kind {
             Kind::Server => "foreign server",
             Kind::LargeObject => "large object",
             Kind::Database => "database",
+            Kind::Tablespace => "tablespace",
         }
     }
 }
@@ -603,6 +632,7 @@ impl Definer<'_, '_> {
             ObjectType::OBJECT_ROUTINE => (ALL_FUNCTION, "routine"),
             ObjectType::OBJECT_LARGEOBJECT => (ALL_LARGEOBJECT, "large object"),
             ObjectType::OBJECT_DATABASE => (ALL_DATABASE, "database"),
+            ObjectType::OBJECT_TABLESPACE => (ALL_TABLESPACE, "tablespace"),
             _ => (ALL_TYPE, "type"),
         };
         let mut grant = Grant {
@@ -665,6 +695,7 @@ impl Definer<'_, '_> {
             PG_FOREIGN_SERVER => (ObjectType::OBJECT_FOREIGN_SERVER, Kind::Server),
             PG_LARGEOBJECT => (ObjectType::OBJECT_LARGEOBJECT, Kind::LargeObject),
             rupg_catalog::PG_DATABASE => (ObjectType::OBJECT_DATABASE, Kind::Database),
+            rupg_catalog::PG_TABLESPACE => (ObjectType::OBJECT_TABLESPACE, Kind::Tablespace),
             rupg_catalog::PG_DEFAULT_ACL => {
                 return self.remove_role_from_default_acl(role, object.oid);
             }
@@ -793,6 +824,17 @@ impl Definer<'_, '_> {
                     })?;
                     Object::new(Kind::Database, oid)
                 }
+                (ObjectType::OBJECT_TABLESPACE, Node::String(name)) => {
+                    let name: &str = name;
+                    let oid = self.tablespace_row(|row| row.name == name).map(|row| row.oid);
+                    let oid = oid.ok_or_else(|| {
+                        Error::new(
+                            SqlState::UNDEFINED_OBJECT,
+                            format!("tablespace \"{name}\" does not exist"),
+                        )
+                    })?;
+                    Object::new(Kind::Tablespace, oid)
+                }
                 _ => return Err(not_yet("GRANT on this kind of object", None)),
             };
             objects.push(object);
@@ -835,6 +877,28 @@ impl Definer<'_, '_> {
         };
         if let Some(change) = self.databases.iter().find(|c| c.oid == row.oid) {
             apply_database_change(change, &mut row);
+        }
+        Some(row)
+    }
+
+    /// The first row of `pg_tablespace` for which `wanted` is true, with the changes of the statement and of the transaction: the row of a tablespace that `CREATE TABLESPACE` made, or a static row of `pg_default` or `pg_global`.
+    fn tablespace_row(
+        &self,
+        wanted: impl Fn(&rupg_catalog::Tablespace) -> bool,
+    ) -> Option<rupg_catalog::Tablespace> {
+        let builtin = |oid: u32, name: &str| rupg_catalog::Tablespace {
+            oid,
+            name: name.into(),
+            owner: 10,
+            acl: None,
+            options: Vec::new(),
+        };
+        let mut row = [builtin(1663, "pg_default"), builtin(1664, "pg_global")]
+            .into_iter()
+            .chain(self.an.env.tablespaces().iter().cloned())
+            .find(|row| wanted(row))?;
+        if let Some(change) = self.tablespaces.iter().find(|c| c.oid == row.oid) {
+            apply_tablespace_change(change, &mut row);
         }
         Some(row)
     }
@@ -934,6 +998,10 @@ impl Definer<'_, '_> {
                 .database_row(|row| row.oid == object.oid)
                 .map(|row| row.name)
                 .unwrap_or_default(),
+            Kind::Tablespace => self
+                .tablespace_row(|row| row.oid == object.oid)
+                .map(|row| row.name)
+                .unwrap_or_default(),
         }
     }
 
@@ -1015,6 +1083,10 @@ impl Definer<'_, '_> {
                 Some(row) => (row.owner, row.acl.as_ref().map(|acl| parse_acl(roles, acl))),
                 None => (0, None),
             },
+            Kind::Tablespace => match self.tablespace_row(|row| row.oid == object.oid) {
+                Some(row) => (row.owner, row.acl.as_ref().map(|acl| parse_acl(roles, acl))),
+                None => (0, None),
+            },
         }
     }
 
@@ -1034,6 +1106,17 @@ impl Definer<'_, '_> {
                     row.acl = Some(texts);
                     self.databases.retain(|c| c.oid != object.oid);
                     self.databases.push(database_change(&row));
+                }
+                Ok(())
+            }
+            Kind::Tablespace if matches!(object.oid, 1663 | 1664) => {
+                Err(not_yet("GRANT on a tablespace of initdb", None))
+            }
+            Kind::Tablespace => {
+                if let Some(mut row) = self.tablespace_row(|row| row.oid == object.oid) {
+                    row.acl = Some(texts);
+                    self.tablespaces.retain(|c| c.oid != object.oid);
+                    self.tablespaces.push(tablespace_change(&row));
                 }
                 Ok(())
             }

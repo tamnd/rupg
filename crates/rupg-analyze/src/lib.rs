@@ -72,11 +72,12 @@ pub use ddl::{
     Allowed, Body, Collected, CopyRelation, CopyTarget, Defined, DomainCheck, Dropped, Fill,
     Message, Order, PartitionCheck, REGRESS_SYMBOLS, ReindexOptions, Repack, Rewrite, RuleTree,
     SchemaElements, Script, SqlBody, Take, TopLevel, Transform, VacuumRel, acl_allows_create,
-    acl_dependents, acl_roles, apply_database_change, attnums, copy_filter, copy_insert,
-    copy_relation, copy_target, database_change, define, find_library, function_body,
-    function_body_for, function_script, function_sqlbody, inline_body, is_definition, lock_table,
-    object_address, owned_objects, policy_targets, policy_tree, reindex_options, rewrite_insert,
-    rule_tree, tablespace_options, trigger_when, vacuum_denied, vacuum_relations,
+    acl_dependents, acl_roles, apply_database_change, apply_tablespace_change, attnums,
+    copy_filter, copy_insert, copy_relation, copy_target, database_change, define, find_library,
+    function_body, function_body_for, function_script, function_sqlbody, inline_body,
+    is_definition, lock_table, object_address, owned_objects, policy_targets, policy_tree,
+    reindex_options, rewrite_insert, rule_tree, tablespace_change, tablespace_options,
+    trigger_when, vacuum_denied, vacuum_relations,
 };
 pub use exclusion::{Exclusion, exclusions};
 pub use expr::{
@@ -226,6 +227,10 @@ pub trait Env {
     }
     /// The rows of `pg_database` of the databases that `CREATE DATABASE` made and of the databases that a statement changed, with the changes of the transaction. The other databases of `initdb` have their static rows.
     fn databases(&self) -> std::sync::Arc<[rupg_catalog::Database]> {
+        std::sync::Arc::from(Vec::new())
+    }
+    /// The rows of `pg_tablespace` of the tablespaces that `CREATE TABLESPACE` made, with the changes of the transaction. `pg_default` and `pg_global` have static rows.
+    fn tablespaces(&self) -> std::sync::Arc<[rupg_catalog::Tablespace]> {
         std::sync::Arc::from(Vec::new())
     }
     /// `restrict_nonsystem_relation_kind` has `view`: a query cannot read or write a view of the user.

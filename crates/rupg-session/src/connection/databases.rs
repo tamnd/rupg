@@ -479,7 +479,7 @@ impl Connection {
         let roles = self.roles();
         let allowed = roles.superuser(me)
             || has_privs_of_role(&roles, me, owner)
-            || self.store.tablespaces().iter().find(|t| t.oid == oid).is_some_and(|t| {
+            || self.tablespace_rows().iter().find(|t| t.oid == oid).is_some_and(|t| {
                 t.acl.as_deref().is_some_and(|acl| {
                     rupg_analyze::acl_allows_create(acl, |role| has_privs_of_role(&roles, me, role))
                 })

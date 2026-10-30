@@ -1159,7 +1159,9 @@ impl rupg_func::Session for Reader<'_> {
 
     fn tablespaces(&self) -> Arc<[rupg_catalog::Tablespace]> {
         match self.activity {
-            Some((_, store)) => store.tablespaces(),
+            Some((_, store)) => {
+                store.tablespaces_with(&rupg_pgcatalog::roles::current().tablespaces)
+            }
             None => Arc::from(Vec::new()),
         }
     }
@@ -1768,6 +1770,10 @@ impl Env for Reader<'_> {
 
     fn databases(&self) -> Arc<[rupg_catalog::Database]> {
         rupg_func::Session::databases(self)
+    }
+
+    fn tablespaces(&self) -> Arc<[rupg_catalog::Tablespace]> {
+        rupg_func::Session::tablespaces(self)
     }
 
     fn filling(&self) -> u32 {

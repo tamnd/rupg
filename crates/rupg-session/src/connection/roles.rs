@@ -1128,7 +1128,7 @@ impl Connection {
                 remote.push((row.name, count));
             }
         }
-        for row in self.store.tablespaces().iter() {
+        for row in self.tablespace_rows().iter() {
             if row.owner == roleid {
                 objects.push((row.oid, PG_TABLESPACE, 0, b'o', format!("tablespace {}", row.name)));
             }
