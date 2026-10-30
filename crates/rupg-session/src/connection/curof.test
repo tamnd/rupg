@@ -343,3 +343,37 @@ row 1002,two
 row 1002,two
 row 1003,three
 SELECT 4
+> CREATE TEMP VIEW co_v AS SELECT * FROM co
+CREATE VIEW
+> CREATE RULE co_r AS ON DELETE TO co_v DO INSTEAD DELETE FROM co WHERE a = OLD.a
+CREATE RULE
+> BEGIN
+BEGIN
+> DECLARE c1 CURSOR FOR SELECT * FROM co_v
+DECLARE CURSOR
+> FETCH FROM c1
+fields a@co_v.1:23:4:-1,b@co_v.2:25:-1:-1
+row 1001,one
+FETCH 1
+> DELETE FROM co_v WHERE CURRENT OF c1
+ERROR 0A000 WHERE CURRENT OF on a view is not implemented
+> ROLLBACK
+ROLLBACK
+> EXPLAIN (COSTS OFF) DECLARE c2 SCROLL CURSOR FOR SELECT (SELECT 42) AS x
+fields QUERY PLAN:25:-1:-1
+row Materialize
+row   InitPlan expr_1
+row     ->  Result
+row   ->  Result
+EXPLAIN
+> EXPLAIN (COSTS OFF) DECLARE c3 SCROLL CURSOR FOR SELECT generate_series(1, 3) AS g
+fields QUERY PLAN:25:-1:-1
+row Materialize
+row   ->  ProjectSet
+row         ->  Result
+EXPLAIN
+> EXPLAIN (COSTS OFF) DECLARE c4 CURSOR FOR SELECT generate_series(1, 3) AS g
+fields QUERY PLAN:25:-1:-1
+row ProjectSet
+row   ->  Result
+EXPLAIN
