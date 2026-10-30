@@ -3560,6 +3560,37 @@ impl Catalog {
         Ok(oid)
     }
 
+    /// `CreateProceduralLanguage` with `OR REPLACE` for a language that exists: the language gets the trust and the handlers of `new`, and depends on the new handlers. The OID, the name, the owner and the ACL stay. The dependency on an extension stays, as `deleteDependencyRecordsFor` with `skipExtensionDeps` keeps it.
+    ///
+    /// # Errors
+    ///
+    /// An internal error for a language that the catalog does not have.
+    pub fn replace_language(&mut self, oid: u32, new: Language) -> Result<()> {
+        let me = ObjRef::new(PG_LANGUAGE, oid);
+        let language = self
+            .languages
+            .get_mut(&oid)
+            .ok_or_else(|| Error::internal(format!("cache lookup failed for language {oid}")))?;
+        language.trusted = new.trusted;
+        language.handler = new.handler;
+        language.inline = new.inline;
+        language.validator = new.validator;
+        self.depends.retain(|d| d.object != me || d.kind == DepKind::Extension);
+        for handler in [new.handler, new.inline, new.validator] {
+            if handler != 0 {
+                self.depend(me, ObjRef::new(PG_PROC, handler), DepKind::Normal);
+            }
+        }
+        Ok(())
+    }
+
+    /// Changes the language with the OID, for `ALTER LANGUAGE ... RENAME TO`.
+    pub fn alter_language(&mut self, oid: u32, change: impl FnOnce(&mut Language)) {
+        if let Some(language) = self.languages.get_mut(&oid) {
+            change(language);
+        }
+    }
+
     /// The procedural languages, in the order of their OIDs.
     pub fn languages(&self) -> impl Iterator<Item = &Language> {
         self.languages.values()

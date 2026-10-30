@@ -44,6 +44,7 @@ impl Definer<'_, '_> {
                     | PG_COLLATION
                     | PG_CONVERSION
                     | PG_EVENT_TRIGGER
+                    | PG_LANGUAGE
                     | PG_FOREIGN_DATA_WRAPPER
                     | PG_FOREIGN_SERVER
                     | PG_PUBLICATION
@@ -96,8 +97,9 @@ impl Definer<'_, '_> {
                 self.catalog.extensions().find(|e| e.name == name).map(|e| (PG_EXTENSION, e.oid)),
             ),
             ObjectType::OBJECT_LANGUAGE => {
-                let user = self.catalog.languages().find(|l| l.name == name).map(|l| l.oid);
-                let found = user.or_else(|| {
+                let user = self.catalog.languages().find(|l| l.name == name);
+                owner = user.map(|l| l.owner);
+                let found = user.map(|l| l.oid).or_else(|| {
                     builtin::owned(Owned::Language).iter().find(|l| l.name == name).map(|l| l.oid)
                 });
                 ("language", found.map(|oid| (PG_LANGUAGE, oid)))
