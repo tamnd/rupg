@@ -785,18 +785,34 @@ impl Connection {
             let spent = self.clock.monotonic().saturating_sub(started);
             spent.as_secs_f64() * 1000.0
         });
-        // `ExplainOnePlan` with `ANALYZE`: the run of the plan gives the counts of its nodes. The rows of a write are not supported yet.
+        // `ExplainOnePlan` with `ANALYZE`: the run of the plan gives the counts of its nodes.
         let mut execution_time = None;
         let actuals = if parsed.analyze {
-            if plan.write().is_some() {
-                return Err(not_yet("EXPLAIN ANALYZE of INSERT, UPDATE, DELETE and MERGE"));
-            }
             let run = self.clock.monotonic();
-            let actuals = if parsed.no_data {
+            let params = params.unwrap_or_default();
+            let mut actuals = if parsed.no_data {
                 rupg_plan::Actuals::new()
+            } else if plan.write().is_none() && !plan.modifying_cte() {
+                rupg_exec::analyze(&tree, params, reader, true)?
             } else {
-                rupg_exec::analyze(&tree, params.unwrap_or_default(), reader, true)?
+                rupg_plan::Actuals::new()
             };
+            if !parsed.no_data && (plan.write().is_some() || plan.modifying_cte()) {
+                let (counts, returned, merged) =
+                    self.analyze_write(plan, &tree, params, reader, notices)?;
+                actuals = counts;
+                if let Some(actual) = actuals.get_mut(&rupg_plan::node_key(&tree.root))
+                    && matches!(tree.root.kind, rupg_plan::Kind::Modify { .. })
+                {
+                    actual.rows = returned;
+                    if matches!(
+                        tree.root.kind,
+                        rupg_plan::Kind::Modify { operation: rupg_plan::Operation::Merge, .. }
+                    ) {
+                        actual.merged = Some(merged);
+                    }
+                }
+            }
             let spent = self.clock.monotonic().saturating_sub(run);
             execution_time = summary.then_some(spent.as_secs_f64() * 1000.0);
             Some(actuals)
@@ -813,6 +829,41 @@ impl Connection {
             execution_time,
         };
         rupg_func::explain(&tree, &options, actuals.as_ref(), reader)
+    }
+}
+
+impl Connection {
+    /// `ExplainOnePlan` with `ANALYZE` of a statement that writes, with its triggers and the statements of `WITH` that change data. The statements of `WITH` run first, as `ExecInitNode` and the first read of their rows run them. The run of the tree `tree` gives the counts of its nodes with the snapshot before the write of the main query, and then the write runs as `ExecutorRun` runs it. It gives the counts, the number of rows of `RETURNING` and the counts of the actions of a `MERGE`.
+    fn analyze_write(
+        &self,
+        plan: rupg_exec::Plan,
+        tree: &rupg_plan::Plan<'_>,
+        params: &[Value],
+        reader: &Reader<'_>,
+        notices: &mut Vec<Notice>,
+    ) -> Result<(rupg_plan::Actuals, u64, [u64; 3]), Error> {
+        let Some(view) = reader.view().cloned() else {
+            return Err(Error::internal("the reader of the session has no view of the rows"));
+        };
+        self.merged.set([0; 3]);
+        let (plan, writes) = self.start_writes(plan, params, &view)?;
+        let actuals = plan.analyze_tree(tree, params, reader)?;
+        let returned = if plan.write().is_some() {
+            let rows = plan.run(params, reader);
+            notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
+            let done = self.write_rows(&plan, params, &view, rows?, &[], writes);
+            notices.extend(self.trigger_notices());
+            match done? {
+                Done::Rows { rows, .. } => rows.len() as u64,
+                _ => 0,
+            }
+        } else {
+            let ended = self.end_writes(writes, params, Vec::new());
+            notices.extend(self.trigger_notices());
+            ended?;
+            0
+        };
+        Ok((actuals, returned, self.merged.get()))
     }
 }
 

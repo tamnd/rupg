@@ -1731,6 +1731,20 @@ impl Plan {
         Cache { written: Arc::clone(&self.written), ..Cache::default() }
     }
 
+    /// [`analyze`] of the tree `tree` of the plan, with the rows of the statements of `WITH` that changed data, from [`Plan::with_written`].
+    ///
+    /// # Errors
+    ///
+    /// The error of a function, such as a division by zero, and the error of a node that the run does not support yet.
+    pub fn analyze_tree(
+        &self,
+        tree: &rupg_plan::Plan<'_>,
+        params: &[Value],
+        session: &dyn Session,
+    ) -> Result<rupg_plan::Actuals> {
+        analyze::analyze_in(tree, params, session, true, &self.cache())
+    }
+
     /// `hasModifyingCTE`: true when the query has a statement of `WITH` that changes data.
     pub fn modifying_cte(&self) -> bool {
         self.query.ctes.iter().any(|c| c.write.is_some())

@@ -6,9 +6,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `EXPLAIN ANALYZE` now runs `INSERT`, `UPDATE`, `DELETE`, `MERGE` and the statements in `WITH` that change data, and shows the counts of each node, the rows of `RETURNING` and the counts of the actions of `MERGE` (#1173).
 - `COPY FROM` is faster: it checks the plan of its `INSERT` once for the statement and not for each row, the CSV parser copies each field at once, and the input of the common built-in types skips the lookups of the type (#1172).
 - A plain query on a table of the user now copies only the columns that it reads from each row, and the other columns are null. A write and `FOR UPDATE` still read whole rows. On 2 million rows of ClickBench, this makes `count(*)` and other scans of a few columns much faster (#1171).
-- `EXPLAIN ANALYZE` now runs the plan and shows the actual rows and loops of each node, the rows that each filter removes, the sort, hash and memoize details, and the planning and execution time, for queries, `CREATE TABLE AS`, `SELECT INTO` and `CREATE MATERIALIZED VIEW` (#NUM).
+- `EXPLAIN ANALYZE` now runs the plan and shows the actual rows and loops of each node, the rows that each filter removes, the sort, hash and memoize details, and the planning and execution time, for queries, `CREATE TABLE AS`, `SELECT INTO` and `CREATE MATERIALIZED VIEW` (#1170).
 - `CREATE ACCESS METHOD` and `DROP ACCESS METHOD` now work for table access methods. `pg_class.relam` comes from `USING`, from the parent of a partition or from `default_table_access_method`, `SET ACCESS METHOD` changes it, and `default_table_access_method` gets the PostgreSQL checks (#1169).
 
 ## 0.4.13 (2026-10-29)

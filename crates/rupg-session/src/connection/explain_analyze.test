@@ -40,5 +40,56 @@ EXPLAIN
 fields x@ea4.1:23:4:-1
 row 1
 SELECT 1
-> explain (analyze) update ea set b = 0
-ERROR 0A000 EXPLAIN ANALYZE of INSERT, UPDATE, DELETE and MERGE is not supported yet
+> explain (analyze, costs off, summary off, timing off, buffers off) update ea set b = 0 where b = 3
+fields QUERY PLAN:25:-1:-1
+row Update on ea (actual rows=0.00 loops=1)
+row   ->  Seq Scan on ea (actual rows=10.00 loops=1)
+row         Filter: (b = 3)
+row         Rows Removed by Filter: 90
+EXPLAIN
+> select count(*) from ea where b = 0
+fields count:20:8:-1
+row 20
+SELECT 1
+> explain (analyze, costs off, summary off, timing off, buffers off) insert into ea values (200, 1), (201, 2) returning a
+fields QUERY PLAN:25:-1:-1
+row Insert on ea (actual rows=2.00 loops=1)
+row   ->  Values Scan on "*VALUES*" (actual rows=2.00 loops=1)
+EXPLAIN
+> create table em (a int, b int)
+CREATE TABLE
+> insert into em select g, g from generate_series(1, 20, 2) g
+INSERT 0 10
+> set enable_hashjoin = off
+SET
+> explain (analyze, costs off, summary off, timing off, buffers off) merge into em t using ea s on t.a = s.a when matched and t.a < 10 then update set b = 0 when not matched and s.a < 15 then insert values (s.a, s.b)
+fields QUERY PLAN:25:-1:-1
+row Merge on em t (actual rows=0.00 loops=1)
+row   Tuples: inserted=7 updated=5 skipped=90
+row   ->  Merge Left Join (actual rows=102.00 loops=1)
+row         Merge Cond: (s.a = t.a)
+row         ->  Index Scan using ea_pkey on ea s (actual rows=102.00 loops=1)
+row               Index Searches: 1
+row         ->  Sort (actual rows=10.00 loops=1)
+row               Sort Key: t.a
+row               Sort Method: quicksort  Memory: 25kB
+row               ->  Seq Scan on em t (actual rows=10.00 loops=1)
+EXPLAIN
+> select count(*), sum(b) from em
+fields count:20:8:-1,sum:20:8:-1
+row 17,101
+SELECT 1
+> explain (analyze, costs off, summary off, timing off, buffers off) with w as (delete from em where a < 5 returning *) select * from w
+fields QUERY PLAN:25:-1:-1
+row CTE Scan on w (actual rows=4.00 loops=1)
+row   Storage: Memory  Maximum Storage: 17kB
+row   CTE w
+row     ->  Delete on em (actual rows=4.00 loops=1)
+row           ->  Seq Scan on em (actual rows=4.00 loops=1)
+row                 Filter: (a < 5)
+row                 Rows Removed by Filter: 13
+EXPLAIN
+> select count(*) from em
+fields count:20:8:-1
+row 13
+SELECT 1

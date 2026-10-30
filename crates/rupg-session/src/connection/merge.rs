@@ -190,6 +190,7 @@ impl Connection {
                 batches.push(Batch::new(info, foreign, view.command, new, old));
             }
         }
+        self.tally(&done);
         Ok(Merged { count: done.len() as u64, written, batches, view })
     }
 
@@ -223,6 +224,7 @@ impl Connection {
         if info.returning.is_some() {
             written = done.iter().map(|action| returned(action, info.width, None)).collect();
         }
+        self.tally(&done);
         Ok(Merged { count: done.len() as u64, written, batches: Vec::new(), view: view.clone() })
     }
 
@@ -464,7 +466,22 @@ impl Connection {
             let pairs = done.iter().zip(&oids);
             written = pairs.map(|(action, &oid)| returned(action, width, Some(oid))).collect();
         }
+        self.tally(&done);
         Ok(Merged { count: done.len() as u64, written, batches, view })
+    }
+
+    /// `mt_merge_inserted`, `mt_merge_updated` and `mt_merge_deleted`: adds the actions `done` to the counts that `EXPLAIN ANALYZE` shows.
+    fn tally(&self, done: &[Action]) {
+        let mut counts = self.merged.get();
+        for action in done {
+            match action.command {
+                MergeCommand::Insert => counts[0] += 1,
+                MergeCommand::Update => counts[1] += 1,
+                MergeCommand::Delete => counts[2] += 1,
+                MergeCommand::Nothing => {}
+            }
+        }
+        self.merged.set(counts);
     }
 
     /// `ExecWithCheckOptions` for `WCO_VIEW_CHECK` of a `MERGE` into an updatable view: the new row of each insert and of each update must pass the checks of the views, before the triggers `AFTER` fire.

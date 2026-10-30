@@ -77,6 +77,8 @@ pub struct Actual {
     pub storage: Option<u64>,
     /// The hits, the misses, the evictions, the overflows and the memory in kB of a `Memoize`.
     pub memo: Option<[u64; 5]>,
+    /// The inserts, the updates and the deletes of a `MERGE`, as `mt_merge_inserted`, `mt_merge_updated` and `mt_merge_deleted` count them. `filtered[0]` of the node has the rows of the plan below it.
+    pub merged: Option<[u64; 3]>,
 }
 
 /// The counts of the nodes of a plan, by the address of each node, as [`node_key`] gives it.
@@ -736,6 +738,7 @@ impl Explainer<'_, '_> {
             }
             Kind::Modify { operation, targets, conflict, .. } => {
                 self.modify_targets(node, operation.name(), targets);
+                self.merge_tuples(node);
                 let Some(conflict) = conflict else { return Ok(()) };
                 self.w.text("Conflict Resolution", conflict.resolution);
                 if !conflict.arbiters.is_empty() {
@@ -880,6 +883,43 @@ impl Explainer<'_, '_> {
         } else {
             self.w.text("Storage", "Memory");
             self.w.integer("Maximum Storage", Some("kB"), i64::try_from(kb).unwrap_or(i64::MAX));
+        }
+    }
+
+    /// `show_modifytable_info` of a `MERGE` with `ANALYZE`: the rows of the plan below that went in, changed or went out, and the rows with no action. The text form shows only the counts above zero, and no line when the plan below gave no rows.
+    fn merge_tuples(&mut self, node: &Node<'_>) {
+        let Some(actual) = self.actual(node) else { return };
+        let Some([inserted, updated, deleted]) = actual.merged else { return };
+        let total = actual.filtered[0];
+        let skipped = total.saturating_sub(inserted + updated + deleted);
+        if self.w.format == Format::Text {
+            if total == 0 {
+                return;
+            }
+            self.w.indent_text();
+            self.w.buf.push_str("Tuples:");
+            let counts = [
+                ("inserted", inserted),
+                ("updated", updated),
+                ("deleted", deleted),
+                ("skipped", skipped),
+            ];
+            for (label, count) in counts {
+                if count > 0 {
+                    self.w.buf.push_str(&format!(" {label}={count}"));
+                }
+            }
+            self.w.buf.push('\n');
+        } else {
+            let counts = [
+                ("Tuples Inserted", inserted),
+                ("Tuples Updated", updated),
+                ("Tuples Deleted", deleted),
+                ("Tuples Skipped", skipped),
+            ];
+            for (label, count) in counts {
+                self.w.float(label, None, count as f64, 0);
+            }
         }
     }
 
