@@ -177,3 +177,22 @@ row                     Sort Key: ea.b
 row                     ->  Seq Scan on public.ea
 row                           Output: a, b
 EXPLAIN
+> explain (costs off) select 1 as x from ea having false
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Aggregate
+row   One-Time Filter: false
+EXPLAIN
+> explain (costs off) select 1 as x from ea group by grouping sets ((), ()) having 1 > 0
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Result
+row         Replaces: Aggregate
+row   ->  Result
+row         Replaces: Aggregate
+EXPLAIN
+> select 1 as x from ea group by grouping sets ((), ()) having 1 > 0
+fields x:23:4:-1
+row 1
+row 1
+SELECT 2
