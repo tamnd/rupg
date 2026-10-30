@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A key of `JSON_OBJECT`, `json_build_object` or `json_object_agg` with a type of the user that has a cast to `json` now gives the error `key value must be scalar, not array, composite, or json`, as in PostgreSQL (#1200).
 - `CREATE LANGUAGE` with a handler, `CREATE OR REPLACE LANGUAGE`, `ALTER LANGUAGE ... RENAME TO` and `OWNER TO`, `COMMENT ON LANGUAGE` and `DROP LANGUAGE` now work as in PostgreSQL 19, with the checks of the handlers, of the superuser and of the owner. `CREATE LANGUAGE` with no handler is `CREATE EXTENSION`, and gives the error or the notice of an extension that exists (#1199).
 - The planner now finds the direction of a window function for a run condition from the support function in `prosupport`, as in PostgreSQL 19. An aggregate that `CREATE AGGREGATE` gives `support = int8inc_support` now gets a run condition, and `EXCLUDE CURRENT ROW` keeps the run condition only for `count(*)` itself (#1198).
 - `REFRESH MATERIALIZED VIEW` now gives the error of the index build when the new data has a duplicate key, and `REFRESH ... CONCURRENTLY` gives the error for duplicate rows without nulls and checks again for a usable unique index after the query runs, as in PostgreSQL 19 (#1197).

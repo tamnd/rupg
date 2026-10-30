@@ -69,7 +69,8 @@ pub fn json_value(
     let ty = base_type(ty);
     let composite = matches!(value, Value::Record(_));
     let array = array_of(ty).is_some() || matches!(value, Value::Array(_) | Value::AnyArray(_));
-    if key && (composite || array || ty == oid::JSON || ty == oid::JSONB) {
+    if key && (composite || array || ty == oid::JSON || ty == oid::JSONB || json_cast(ty, session))
+    {
         return Err(invalid("key value must be scalar, not array, composite, or json"));
     }
     match (ty, value) {
@@ -121,6 +122,16 @@ pub fn json_value(
             Ok(())
         }
     }
+}
+
+/// True when the type `ty` of the user has a cast to `json` with a function, which `json_categorize_type` gives as `JSONTYPE_CAST`.
+fn json_cast(ty: u32, session: &dyn Session) -> bool {
+    ty >= rupg_catalog::FIRST_NORMAL_OID
+        && session.catalog().is_some_and(|catalog| {
+            catalog
+                .casts()
+                .any(|cast| cast.source == ty && cast.target == oid::JSON && cast.func != 0)
+        })
 }
 
 /// The text output of a value.

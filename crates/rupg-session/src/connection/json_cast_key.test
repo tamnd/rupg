@@ -1,0 +1,33 @@
+> CREATE TYPE mood AS ENUM ('happy', 'sad');
+CREATE TYPE
+> CREATE FUNCTION mood_to_json(mood) RETURNS json AS $$ SELECT to_json($1::text) $$ LANGUAGE sql IMMUTABLE;
+CREATE FUNCTION
+> SELECT JSON_OBJECT('happy'::mood: '123'::jsonb);
+fields json_object:3802:-1:-1
+row {"happy": 123}
+SELECT 1
+> SELECT json_build_object('sad'::mood, 1);
+fields json_build_object:114:-1:-1
+row {"sad" : 1}
+SELECT 1
+> CREATE CAST (mood AS json) WITH FUNCTION mood_to_json(mood) AS IMPLICIT;
+CREATE CAST
+> SELECT JSON_OBJECT('happy'::mood: '123'::jsonb);
+fields json_object:3802:-1:-1
+ERROR 22023 key value must be scalar, not array, composite, or json
+> SELECT json_build_object('sad'::mood, 1);
+fields json_build_object:114:-1:-1
+ERROR 22023 key value must be scalar, not array, composite, or json
+> SELECT json_object_agg(m, 1) FROM (VALUES ('happy'::mood)) v(m);
+fields json_object_agg:114:-1:-1
+ERROR 22023 key value must be scalar, not array, composite, or json
+> SELECT json_build_object(1, 'sad'::mood);
+fields json_build_object:114:-1:-1
+row {"1" : "sad"}
+SELECT 1
+> DROP CAST (mood AS json);
+DROP CAST
+> SELECT json_build_object('sad'::mood, 1);
+fields json_build_object:114:-1:-1
+row {"sad" : 1}
+SELECT 1
