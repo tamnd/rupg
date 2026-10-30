@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `EXPLAIN (SETTINGS)` now shows the parameters that change the planning and do not have their boot values, in the order in which they changed, in the text form and in the other forms (#1181).
 - `EXPLAIN (GENERIC_PLAN)` now shows the plan of a query with parameters and no values for them. The analysis gets the types of the parameters from the query (#1180).
 - A scan of one table whose conditions of `WHERE` read only some of the columns of the query first reads the columns of the conditions, and then the other columns of only the rows that pass. ClickBench Q24 (`SELECT *` with `LIKE` on 2 million rows) no longer copies all 105 columns of each row, which took more than 12 GB (#1179).
 - `EXPLAIN (MEMORY)` now shows the memory that the planning used and allocated, in the text form and in the other forms. The `rupg` binary counts the bytes of each thread with a global allocator over the allocator of the system (#1178).

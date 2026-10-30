@@ -1050,6 +1050,22 @@ impl Settings {
         }
     }
 
+    /// `get_explain_guc_options`: the parameters that `EXPLAIN (SETTINGS)` shows, which have the flag `GUC_EXPLAIN` and a value that is not the boot value, in the order in which they left their default values. Each one has its value as `SHOW` gives it.
+    #[must_use]
+    pub fn explain(&self) -> Vec<(&'static str, String)> {
+        let mut changed: Vec<(usize, &'static Parameter)> = self
+            .each_slot()
+            .filter_map(|(_, slot)| Some((slot.order, slot.parameter?)))
+            .filter(|(_, parameter)| {
+                parameter.has(flag::EXPLAIN)
+                    && (self.superuser || !parameter.has(flag::SUPERUSER_ONLY))
+                    && self.setting(parameter) != parameter.boot()
+            })
+            .collect();
+        changed.sort_by_key(|&(order, _)| order);
+        changed.into_iter().map(|(_, parameter)| (parameter.name, self.shown(parameter))).collect()
+    }
+
     /// `SHOW ALL`: the name, the value and the description of each parameter, in the order of the names without regard to case.
     pub fn show_all(&self) -> impl Iterator<Item = (&'static str, String, &'static str)> + '_ {
         super::all()

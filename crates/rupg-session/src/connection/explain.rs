@@ -473,6 +473,7 @@ struct Parsed {
     format: Format,
     summary: Option<bool>,
     memory: bool,
+    settings: bool,
     generic: bool,
     /// `TIMING`, which is on with `ANALYZE` when the statement does not give it.
     timing: bool,
@@ -503,9 +504,7 @@ fn parse_options(stmt: &ExplainStmt) -> Result<Parsed, Error> {
             "verbose" => parsed.verbose = def_boolean(def)?,
             "costs" => parsed.costs = Some(def_boolean(def)?),
             "buffers" => buffers = Some(def_boolean(def)?),
-            "settings" => {
-                def_boolean(def)?;
-            }
+            "settings" => parsed.settings = def_boolean(def)?,
             "io" => parsed.io = def_boolean(def)?,
             "wal" => wal = def_boolean(def)?,
             "generic_plan" => parsed.generic = def_boolean(def)?,
@@ -860,6 +859,10 @@ impl Connection {
             io: parsed.io.then(|| stream_capacity(reader)),
             serialize,
             memory,
+            settings: parsed.settings.then(|| {
+                let settings = reader.settings().explain();
+                settings.into_iter().map(|(name, value)| (name.to_string(), value)).collect()
+            }),
         };
         rupg_func::explain(&tree, &options, actuals.as_ref(), reader)
     }

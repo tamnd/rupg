@@ -19,7 +19,7 @@ pub enum Format {
 }
 
 /// The options of `EXPLAIN` that change the output of a plan with no run.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Options {
     pub verbose: bool,
     pub costs: bool,
@@ -42,6 +42,8 @@ pub struct Options {
     pub serialize: Option<Serialized>,
     /// `MEMORY`: the bytes that the planning used and allocated.
     pub memory: Option<(u64, u64)>,
+    /// `SETTINGS`: the name and the value of each parameter that changes the planning and does not have its boot value.
+    pub settings: Option<Vec<(String, String)>>,
 }
 
 /// The output of the rows of the result for `SERIALIZE`, as `SerializeMetrics` keeps it.
@@ -94,6 +96,7 @@ impl Default for Options {
             io: None,
             serialize: None,
             memory: None,
+            settings: None,
         }
     }
 }
@@ -172,6 +175,9 @@ pub fn explain_analyzed(
     e.w.begin();
     e.w.open_group("Query", None, true);
     e.node(&plan.root, None, None)?;
+    if let Some(settings) = &options.settings {
+        e.settings(settings);
+    }
     // `peek_buffer_usage`: the other forms show the counts of the buffers of the planning even when they are 0.
     let planning_buffers = options.buffers && options.format != Format::Text;
     if planning_buffers || options.memory.is_some() {
@@ -996,6 +1002,23 @@ impl Explainer<'_, '_> {
     }
 
     /// `ExplainPrintSerialize`: the output of the rows of the result.
+    /// `ExplainPrintSettings`: the text form shows one line, and no line when no parameter changed. The other forms show a group, which can be empty.
+    fn settings(&mut self, settings: &[(String, String)]) {
+        if self.w.format == Format::Text {
+            if !settings.is_empty() {
+                let line: Vec<String> =
+                    settings.iter().map(|(name, value)| format!("{name} = '{value}'")).collect();
+                self.w.text("Settings", &line.join(", "));
+            }
+            return;
+        }
+        self.w.open_group("Settings", Some("Settings"), true);
+        for (name, value) in settings {
+            self.w.text(name, value);
+        }
+        self.w.close_group("Settings", true);
+    }
+
     /// `show_memory_counters`: the bytes of the planning in kilobytes, rounded up.
     fn memory(&mut self, used: u64, allocated: u64) {
         let used = used.div_ceil(1024);
