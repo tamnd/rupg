@@ -128,8 +128,8 @@ struct Load {
     triggers: Triggers,
     /// True after the triggers `BEFORE ... FOR EACH STATEMENT` fired.
     begun: bool,
-    /// The plans that [`Plan::start`] checked, so that the checks of the plan run once for the statement and not for each row.
-    started: Vec<Rc<Plan>>,
+    /// The plans that [`Plan::start`] checked, so that the checks of the plan run once for the statement and not for each row, each with [`Plan::passes_params`].
+    started: Vec<(Rc<Plan>, bool)>,
     /// The rows that the copy wrote, for the triggers `AFTER ... FOR EACH ROW` and the transition tables.
     inserted: Vec<Vec<Value>>,
     /// The routing of the rows of a partitioned table into its leaves, which keep the rows instead of `rows`.
@@ -596,12 +596,21 @@ impl Connection {
             let Some(params) = made.values else { continue };
             let plan = copy.load.plan_for(&row.defaults, &reader)?;
             let width = plan.write().map_or(0, |info| info.width);
-            if !copy.load.started.iter().any(|p| Rc::ptr_eq(p, &plan)) {
-                plan.start(&reader).map_err(|e| e.with_context(copy.row_context(&row)))?;
-                copy.load.started.push(Rc::clone(&plan));
-            }
+            let passes = match copy.load.started.iter().find(|(p, _)| Rc::ptr_eq(p, &plan)) {
+                Some(&(_, passes)) => passes,
+                None => {
+                    plan.start(&reader).map_err(|e| e.with_context(copy.row_context(&row)))?;
+                    let passes = plan.passes_params();
+                    copy.load.started.push((Rc::clone(&plan), passes));
+                    passes
+                }
+            };
             let line = |error: Error| error.with_context(copy.row_context(&row));
-            let rows = plan.run_started(&params, &reader).map_err(line)?;
+            let rows = if passes {
+                vec![params]
+            } else {
+                plan.run_started(&params, &reader).map_err(line)?
+            };
             let planned = rows.len();
             let rows = match &copy.load.filter {
                 Some(filter) => {

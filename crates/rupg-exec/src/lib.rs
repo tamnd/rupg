@@ -1541,6 +1541,20 @@ fn run_query(
         .collect())
 }
 
+/// True when `expr` is the parameter `$n`, or the length cast of `$n` to the type modifier of its own type, for [`Plan::passes_params`].
+fn passed_param(expr: &Expr, n: usize) -> bool {
+    match &expr.kind {
+        ExprKind::Param(at) => *at == n,
+        ExprKind::Func(f) if f.form == FuncForm::ImplicitCast && expr.typmod >= 0 => {
+            matches!(f.args.as_slice(), [arg, typmod, ..]
+                if arg.kind == ExprKind::Param(n)
+                    && arg.ty == expr.ty
+                    && typmod.kind == ExprKind::Const(Value::Int4(expr.typmod)))
+        }
+        _ => false,
+    }
+}
+
 impl Plan {
     /// The query of the plan after `prepare` and `fold`, which `EXPLAIN` shows.
     pub fn query(&self) -> &Query {
@@ -1960,6 +1974,25 @@ impl Plan {
     /// The error of a function, such as a division by zero.
     pub fn run_started(&self, params: &[Value], session: &dyn Session) -> Result<Vec<Vec<Value>>> {
         run_query(self.runnable(), params, session, &self.cache(), &[], false)
+    }
+
+    /// True when a run of the plan gives its parameters as its one row: an `INSERT` of one row of the parameters `$1` to `$n` in the order of the columns of the table, with no check constraint, no rule, no view, no `ON CONFLICT` and no `RETURNING`. A parameter can have the length cast of the type modifier of its column, as the input function of `COPY FROM` applied the type modifier already. `COPY FROM` then takes the values of each row as its new row and does not run the plan.
+    pub fn passes_params(&self) -> bool {
+        let query = self.runnable();
+        let Some(info) = &query.write else { return false };
+        info.kind == rupg_analyze::WriteKind::Insert
+            && info.checks.is_empty()
+            && info.returning.is_none()
+            && info.on_conflict.is_none()
+            && info.recheck.is_none()
+            && !info.instead
+            && info.views == 0
+            && query.relations.is_empty()
+            && query.from.is_empty()
+            && query.filter.is_none()
+            && query.ctes.is_empty()
+            && query.targets.len() == info.width
+            && query.targets.iter().zip(1..).all(|(t, n)| passed_param(&t.expr, n))
     }
 
     /// The new row of an `INSERT` or an `UPDATE` after the triggers `BEFORE ... FOR EACH ROW` changed it: the columns `row`, then the conditions of the check constraints, from [`rupg_analyze::Write::recheck`]. A write with no such query gives the row as it is.
