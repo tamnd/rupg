@@ -220,3 +220,26 @@ row Index Scan using ea_pkey on public.ea
 row   Output: b
 row   Index Cond: (ea.a = 1)
 EXPLAIN
+> set enable_material = off
+SET
+> set enable_mergejoin = off
+SET
+> set enable_hashjoin = off
+SET
+> explain (analyze, costs off, summary off, timing off, buffers off) select * from (select b from ea where b < 2 order by b) ss right join (values (1),(2)) v(x) on true
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join (actual rows=62.00 loops=1)
+row   ->  Values Scan on "*VALUES*" (actual rows=2.00 loops=1)
+row   ->  Sort (actual rows=31.00 loops=2)
+row         Sort Key: ea.b
+row         Sort Method: quicksort  Memory: 25kB
+row         ->  Seq Scan on ea (actual rows=31.00 loops=1)
+row               Filter: (b < 2)
+row               Rows Removed by Filter: 71
+EXPLAIN
+> reset enable_material
+RESET
+> reset enable_mergejoin
+RESET
+> reset enable_hashjoin
+RESET

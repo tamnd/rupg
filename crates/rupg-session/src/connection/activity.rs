@@ -316,7 +316,10 @@ impl Connection {
         // `pgstat_report_query_id`: the identifier of the first statement of the text, which parse analysis gives when `compute_query_id` is `on` or `regress`.
         let query_id = match (state, text) {
             (BackendState::Running, Some(text))
-                if matches!(settings.get("compute_query_id").as_deref(), Some("on" | "regress")) =>
+                if matches!(
+                    settings.get("compute_query_id").as_deref(),
+                    Some("on" | "regress")
+                ) =>
             {
                 rupg_sql::query_id(text)
             }
