@@ -215,3 +215,87 @@ ROLLBACK
 fields count:20:8:-1
 row 1
 SELECT 1
+> CREATE TABLE mvtest_foo(a, b) AS VALUES(1, 10)
+SELECT 1
+> CREATE MATERIALIZED VIEW mvtest_mv AS SELECT * FROM mvtest_foo
+SELECT 1
+> CREATE UNIQUE INDEX ON mvtest_mv(a)
+CREATE INDEX
+> INSERT INTO mvtest_foo SELECT * FROM mvtest_foo
+INSERT 0 1
+> REFRESH MATERIALIZED VIEW mvtest_mv
+ERROR 23505 could not create unique index "mvtest_mv_a_idx"
+DETAIL Key (a)=(1) is duplicated.
+> REFRESH MATERIALIZED VIEW CONCURRENTLY mvtest_mv
+ERROR 21000 new data for materialized view "mvtest_mv" contains duplicate rows without any null columns
+DETAIL Row: (1,10)
+> SELECT * FROM mvtest_mv
+fields a@mvtest_mv.1:23:4:-1,b@mvtest_mv.2:23:4:-1
+row 1,10
+SELECT 1
+> DELETE FROM mvtest_foo
+DELETE 2
+> INSERT INTO mvtest_foo VALUES (3, 30), (4, 40)
+INSERT 0 2
+> REFRESH MATERIALIZED VIEW CONCURRENTLY mvtest_mv
+REFRESH MATERIALIZED VIEW
+> SELECT * FROM mvtest_mv ORDER BY a
+fields a@mvtest_mv.1:23:4:-1,b@mvtest_mv.2:23:4:-1
+row 3,30
+row 4,40
+SELECT 2
+> CREATE TABLE mvtest_t2 (a int, b text)
+CREATE TABLE
+> INSERT INTO mvtest_t2 VALUES (1, 'x y'), (2, '')
+INSERT 0 2
+> CREATE MATERIALIZED VIEW mvtest_mv2 AS SELECT * FROM mvtest_t2
+SELECT 2
+> CREATE UNIQUE INDEX mvtest_mv2_a ON mvtest_mv2 (a) WHERE a > 5
+CREATE INDEX
+> CREATE UNIQUE INDEX mvtest_mv2_b ON mvtest_mv2 (b)
+CREATE INDEX
+> INSERT INTO mvtest_t2 VALUES (1, 'x y')
+INSERT 0 1
+> REFRESH MATERIALIZED VIEW mvtest_mv2
+ERROR 23505 could not create unique index "mvtest_mv2_b"
+DETAIL Key (b)=(x y) is duplicated.
+> REFRESH MATERIALIZED VIEW CONCURRENTLY mvtest_mv2
+ERROR 21000 new data for materialized view "mvtest_mv2" contains duplicate rows without any null columns
+DETAIL Row: (1,"x y")
+> DROP INDEX mvtest_mv2_b
+DROP INDEX
+> REFRESH MATERIALIZED VIEW CONCURRENTLY mvtest_mv2
+ERROR 55000 cannot refresh materialized view "public.mvtest_mv2" concurrently
+HINT Create a unique index with no WHERE clause on one or more columns of the materialized view.
+> CREATE UNIQUE INDEX mvtest_mv2_ab ON mvtest_mv2 (a, b)
+CREATE INDEX
+> REFRESH MATERIALIZED VIEW mvtest_mv2
+ERROR 23505 could not create unique index "mvtest_mv2_ab"
+DETAIL Key (a, b)=(1, x y) is duplicated.
+> DELETE FROM mvtest_t2 WHERE a = 1
+DELETE 2
+> INSERT INTO mvtest_t2 VALUES (1, 'a"b'), (1, 'a"b')
+INSERT 0 2
+> REFRESH MATERIALIZED VIEW CONCURRENTLY mvtest_mv2
+ERROR 21000 new data for materialized view "mvtest_mv2" contains duplicate rows without any null columns
+DETAIL Row: (1,"a""b")
+> CREATE FUNCTION mvtest_drop_the_index() RETURNS bool AS $$ BEGIN EXECUTE 'DROP INDEX IF EXISTS public.mvtest_drop_idx'; RETURN true; END $$ LANGUAGE plpgsql
+CREATE FUNCTION
+> CREATE MATERIALIZED VIEW drop_idx_matview AS SELECT 1 as i WHERE mvtest_drop_the_index()
+NOTICE 00000 index "mvtest_drop_idx" does not exist, skipping (SQL statement "DROP INDEX IF EXISTS public.mvtest_drop_idx"
+PL/pgSQL function public.mvtest_drop_the_index() line 1 at EXECUTE)
+SELECT 1
+> CREATE UNIQUE INDEX mvtest_drop_idx ON drop_idx_matview (i)
+CREATE INDEX
+> REFRESH MATERIALIZED VIEW CONCURRENTLY drop_idx_matview
+ERROR 0A000 could not find suitable unique index on materialized view "drop_idx_matview"
+> SELECT count(*) FROM pg_indexes WHERE indexname = 'mvtest_drop_idx'
+fields count:20:8:-1
+row 1
+SELECT 1
+> DROP MATERIALIZED VIEW drop_idx_matview, mvtest_mv, mvtest_mv2
+DROP MATERIALIZED VIEW
+> DROP FUNCTION mvtest_drop_the_index()
+DROP FUNCTION
+> DROP TABLE mvtest_foo, mvtest_t2
+DROP TABLE

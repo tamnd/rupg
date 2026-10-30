@@ -89,6 +89,7 @@ pub use grant::{
 };
 pub(crate) use lock::relkind;
 pub use lock::{Allowed, Take, lock_table};
+pub use matview::has_refresh_index;
 pub use objaddr::object_address;
 pub use owned::{acl_dependents, owned_objects, policy_targets};
 pub use policy::policy_tree;

@@ -1,6 +1,6 @@
 //! `REFRESH MATERIALIZED VIEW`, as `ExecRefreshMatView` and `RefreshMatViewByOid` of `matview.c` run it. The rows of the materialized view go as `TRUNCATE` removes them, and the caller then fills it with the rows of its query, as `refresh_matview_datafill` writes them.
 
-use rupg_catalog::{IndexInfo, RelKind};
+use rupg_catalog::{Catalog, IndexInfo, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::RefreshMatViewStmt;
 
@@ -16,8 +16,16 @@ fn usable_unique(index: &IndexInfo) -> bool {
         && index.keys.iter().take(usize::try_from(index.key_count).unwrap_or(0)).all(|&k| k > 0)
 }
 
+/// The loop of `refresh_by_match_merge` over the indexes: true when the materialized view `oid` has a unique index that `REFRESH ... CONCURRENTLY` can use.
+pub fn has_refresh_index(catalog: &Catalog, oid: u32) -> bool {
+    catalog
+        .relations()
+        .filter_map(|r| r.index.as_ref())
+        .any(|index| index.table == oid && usable_unique(index))
+}
+
 impl Definer<'_, '_> {
-    /// `ExecRefreshMatView` up to `refresh_matview_datafill`. The result is the OID of the materialized view when the caller fills it with the rows of its query, or `None` for `WITH NO DATA`. `CONCURRENTLY` makes the rows again as the statement without it does.
+    /// `ExecRefreshMatView` up to `refresh_matview_datafill`. The result is the OID of the materialized view when the caller fills it with the rows of its query, or `None` for `WITH NO DATA`. `CONCURRENTLY` makes the rows again as the statement without it does, and the caller makes the checks of `refresh_by_match_merge`.
     pub(super) fn refresh_matview(&mut self, stmt: &RefreshMatViewStmt) -> Result<Option<u32>> {
         let rv = stmt.relation.as_deref().cloned().unwrap_or_default();
         let name = relname(&rv);
@@ -62,15 +70,9 @@ impl Definer<'_, '_> {
                 "REFRESH options CONCURRENTLY and WITH NO DATA cannot be used together",
             ));
         }
-        if stmt.concurrent {
-            let found = self
-                .catalog
-                .relations()
-                .filter_map(|r| r.index.as_ref())
-                .any(|index| index.table == oid && usable_unique(index));
-            if !found {
-                let schema = self.schema_name(rel.namespace);
-                return Err(Error::new(
+        if stmt.concurrent && !has_refresh_index(self.catalog, oid) {
+            let schema = self.schema_name(rel.namespace);
+            return Err(Error::new(
                     SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
                     format!(
                         "cannot refresh materialized view \"{}.{}\" concurrently",
@@ -81,7 +83,6 @@ impl Definer<'_, '_> {
                 .with_hint(
                     "Create a unique index with no WHERE clause on one or more columns of the materialized view.",
                 ));
-            }
         }
         if !stmt.concurrent {
             self.catalog.swap_new_heap(oid)?;

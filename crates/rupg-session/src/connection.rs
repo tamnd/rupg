@@ -3,6 +3,7 @@
 //! The connection does no I/O. The server gives it the bytes that the client sent and an output buffer, and [`Connection::step`] tells the server what to do next. See `spec/06-server-and-wire.md` section 6.1.
 
 use std::cell::{Cell, Ref, RefCell};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -394,6 +395,8 @@ pub struct Connection {
     unnamed_portals: Cell<u32>,
     /// The OID of the table of `CREATE TABLE AS` or of the materialized view that `CREATE MATERIALIZED VIEW` or `REFRESH MATERIALIZED VIEW` fills, or 0. [`rupg_analyze::Env::filling`] gives it.
     pub(crate) filling: Cell<u32>,
+    /// True while `REFRESH MATERIALIZED VIEW CONCURRENTLY` fills the materialized view of [`Connection::filling`].
+    concurrent_refresh: Cell<bool>,
     /// The types and the values of the parameters of `CREATE TABLE AS EXECUTE` while it runs. [`rupg_analyze::Env::bound_param`] gives them.
     pub(crate) bound: RefCell<Vec<(u32, Value)>>,
     /// The OID of the table that `CREATE TABLE AS`, `SELECT INTO` or a materialized view fills with a `BulkInsertState`, or 0.
@@ -552,6 +555,7 @@ impl Connection {
             portals: RefCell::new(Portals::new()),
             unnamed_portals: Cell::new(0),
             filling: Cell::new(0),
+            concurrent_refresh: Cell::new(false),
             bound: RefCell::new(Vec::new()),
             bulk: Cell::new(0),
             before_fill: RefCell::new(None),
@@ -984,7 +988,7 @@ impl Connection {
                             &mut ids,
                         )? {
                             Changed::Done(_) => break,
-                            conflict => kept = self.key_conflict(info, &view, conflict)?,
+                            conflict => kept = self.fill_conflict(info, &view, conflict, &rows)?,
                         }
                     }
                 }
@@ -1120,6 +1124,88 @@ impl Connection {
             }
             _ => Err(Error::internal("a write result that is not a conflict of a key")),
         }
+    }
+
+    /// [`Connection::key_conflict`] of the rows of `REFRESH MATERIALIZED VIEW`. `refresh_matview_datafill` fills a new heap with no indexes, and `reindex_relation` then builds them, so a duplicate key is the error of `index_build`. `REFRESH ... CONCURRENTLY` first checks that no two new rows are equal with no null column, as `refresh_by_match_merge` checks it.
+    fn fill_conflict(
+        &self,
+        info: &Write,
+        view: &View,
+        conflict: Changed,
+        rows: &[Vec<Value>],
+    ) -> Result<Vec<u64>, Error> {
+        if self.filling.get() == info.table
+            && let Changed::Duplicate { index, key } = &conflict
+        {
+            if !self.concurrent_refresh.get() {
+                let catalog = self.catalog();
+                return Err(self.duplicated(info.table, info.unique.get(*index), key, &catalog));
+            }
+            if let Some(error) = self.duplicate_rows(info.table, rows)? {
+                return Err(error);
+            }
+        }
+        self.key_conflict(info, view, conflict)
+    }
+
+    /// The check of `refresh_by_match_merge` for two equal new rows with no null column. The error shows the first such row as `record_out` writes it.
+    fn duplicate_rows(&self, table: u32, rows: &[Vec<Value>]) -> Result<Option<Error>, Error> {
+        let catalog = self.catalog();
+        let Some(rel) = catalog.relation(table) else {
+            return Ok(None);
+        };
+        let reader = self.reader();
+        let mut texts = Vec::with_capacity(rows.len());
+        for row in rows {
+            if row.iter().any(|value| matches!(value, Value::Null)) {
+                texts.push(None);
+                continue;
+            }
+            let mut text = String::from("(");
+            for (at, (value, column)) in row.iter().zip(&rel.columns).enumerate() {
+                if at > 0 {
+                    text.push(',');
+                }
+                let mut out = Vec::new();
+                rupg_func::output(column.ty, value, &reader, &mut out)?;
+                let item = String::from_utf8_lossy(&out);
+                let quote = item.is_empty()
+                    || item.chars().any(|c| {
+                        matches!(c, '"' | '\\' | '(' | ')' | ',') || c.is_ascii_whitespace()
+                    });
+                if quote {
+                    text.push('"');
+                    for c in item.chars() {
+                        if matches!(c, '"' | '\\') {
+                            text.push(c);
+                        }
+                        text.push(c);
+                    }
+                    text.push('"');
+                } else {
+                    text.push_str(&item);
+                }
+            }
+            text.push(')');
+            texts.push(Some(text));
+        }
+        let mut counts: HashMap<&str, usize> = HashMap::new();
+        for text in texts.iter().flatten() {
+            *counts.entry(text.as_str()).or_default() += 1;
+        }
+        let Some(row) = texts.iter().flatten().find(|text| counts[text.as_str()] > 1) else {
+            return Ok(None);
+        };
+        Ok(Some(
+            Error::new(
+                SqlState::CARDINALITY_VIOLATION,
+                format!(
+                    "new data for materialized view \"{}\" contains duplicate rows without any null columns",
+                    rel.name
+                ),
+            )
+            .with_detail(format!("Row: {row}")),
+        ))
     }
 
     /// The error of the key `key` of a new version of the table `table` that a live version of the unique index `unique` has, with the value of the key as `BuildIndexValueDescription` gives it.
@@ -1715,6 +1801,8 @@ impl Connection {
         }
         // `intorel_startup` and `refresh_matview_datafill` do not check `INSERT` on the new table.
         self.filling.set(table);
+        let concurrent = matches!(node, Node::RefreshMatViewStmt(stmt) if stmt.concurrent);
+        self.concurrent_refresh.set(concurrent);
         self.bulk.set(table);
         if !matview {
             *self.before_fill.borrow_mut() = Some(Arc::clone(old));
@@ -1724,6 +1812,20 @@ impl Connection {
         self.before_fill.borrow_mut().take();
         self.bulk.set(0);
         self.filling.set(0);
+        self.concurrent_refresh.set(false);
+        // `refresh_by_match_merge` looks for the unique index after the query, which can drop it.
+        let result = match result {
+            Ok(done) if concurrent && !rupg_analyze::has_refresh_index(&self.catalog(), table) => {
+                let name =
+                    self.catalog().relation(table).map(|r| r.name.clone()).unwrap_or_default();
+                drop(done);
+                Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    format!("could not find suitable unique index on materialized view \"{name}\""),
+                ))
+            }
+            result => result,
+        };
         if matview {
             rupg_func::Session::end_function_call(&self.reader());
         }
@@ -8595,7 +8697,7 @@ mod tests {
         big_stack(|| script(include_str!("connection/inherit_attach.test")));
     }
 
-    /// `CREATE MATERIALIZED VIEW`, `REFRESH MATERIALIZED VIEW` and `DROP MATERIALIZED VIEW`: the rows stay as the query gave them until a refresh, `WITH NO DATA` and the error of a scan of a materialized view that is not populated, the rows of `pg_class`, `pg_matviews` and `pg_rewrite`, the errors of `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE` and `COPY ... FROM`, `COPY ... TO`, the checks of `CONCURRENTLY`, the dependencies on the table and of a view, the errors of `DROP` of the wrong kind, a rename of the materialized view and of a column, and a materialized view in a transaction that rolls back. `connection/matview.test` is the output of PostgreSQL 19 for the same script in a new database.
+    /// `CREATE MATERIALIZED VIEW`, `REFRESH MATERIALIZED VIEW` and `DROP MATERIALIZED VIEW`: the rows stay as the query gave them until a refresh, `WITH NO DATA` and the error of a scan of a materialized view that is not populated, the rows of `pg_class`, `pg_matviews` and `pg_rewrite`, the errors of `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE` and `COPY ... FROM`, `COPY ... TO`, the checks of `CONCURRENTLY`, the dependencies on the table and of a view, the errors of `DROP` of the wrong kind, a rename of the materialized view and of a column, a materialized view in a transaction that rolls back, and the errors of a refresh with duplicate keys, with duplicate rows and with a unique index that the query drops. `connection/matview.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn matview() {
         big_stack(|| script(include_str!("connection/matview.test")));
