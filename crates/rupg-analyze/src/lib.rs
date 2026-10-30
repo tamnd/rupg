@@ -97,7 +97,7 @@ pub use insert::{
     PolicyCheck, PolicyKind, Unique, ViewCheck, Write, WriteKind, built_index_keys, index_built,
     index_derived,
 };
-pub use locking::{RowMark, check_outer_joins, first_row_mark, locked_tables};
+pub use locking::{RowMark, check_outer_joins, first_row_mark, locked_tables, range_tables};
 pub use merge::{MatchKind, Merge, MergeClause, MergeClauseDef, MergeCommand, MergeDef};
 pub use perm::{PermInfo, option_on, security_barrier};
 pub use plpgsql::{

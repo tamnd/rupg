@@ -340,3 +340,14 @@ pub fn locked_tables(query: &Query, out: &mut Vec<u32>) {
         locked_tables(sub, out);
     }
 }
+
+/// The tables that the query reads in `FROM`, in its subqueries in `FROM` and in its views, which the executor opens for the plan.
+pub fn range_tables(query: &Query, out: &mut Vec<u32>) {
+    for relation in &query.relations {
+        match &relation.subquery {
+            Some(sub) => range_tables(sub, out),
+            None if relation.oid != 0 => out.push(relation.oid),
+            None => {}
+        }
+    }
+}

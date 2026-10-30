@@ -1,0 +1,128 @@
+> CREATE TABLE cf_t (a int, b text)
+CREATE TABLE
+> INSERT INTO cf_t SELECT g, 'r' || g FROM generate_series(1, 6) g
+INSERT 0 6
+> CREATE FUNCTION cf_sql(text) RETURNS void AS 'DECLARE c CURSOR FOR SELECT a, b FROM cf_t WHERE b LIKE $1 ORDER BY a;' LANGUAGE sql
+CREATE FUNCTION
+> SELECT cf_sql('r%')
+fields cf_sql:2278:4:-1
+row NULL
+SELECT 1
+> BEGIN
+BEGIN
+> SELECT cf_sql('r%')
+fields cf_sql:2278:4:-1
+row NULL
+SELECT 1
+> FETCH 2 FROM c
+fields a@cf_t.1:23:4:-1,b@cf_t.2:25:-1:-1
+row 1,r1
+row 2,r2
+FETCH 2
+> SELECT cf_sql('r%')
+fields cf_sql:2278:4:-1
+ERROR 42P03 cursor "c" already exists (SQL function "cf_sql" statement 1)
+> ROLLBACK
+ROLLBACK
+> CREATE FUNCTION cf_pl(n int) RETURNS int LANGUAGE plpgsql AS $$
+>> DECLARE r record; k int;
+>> BEGIN
+>>   FOR i IN 1..n LOOP
+>>     EXECUTE format('DECLARE %I SCROLL CURSOR FOR SELECT a FROM cf_t WHERE a >= %s ORDER BY a', 'p_' || i, i);
+>>     EXECUTE 'FETCH NEXT FROM ' || quote_ident('p_' || i) INTO r;
+>>     RAISE NOTICE 'p_%: %', i, r.a;
+>>   END LOOP;
+>>   EXECUTE 'MOVE FORWARD 2 IN p_1';
+>>   GET DIAGNOSTICS k = ROW_COUNT;
+>>   RAISE NOTICE 'moved %', k;
+>>   EXECUTE 'FETCH NEXT FROM p_1' INTO r;
+>>   RAISE NOTICE 'next %', r.a;
+>>   EXECUTE 'FETCH ALL FROM p_2';
+>>   GET DIAGNOSTICS k = ROW_COUNT;
+>>   RAISE NOTICE 'fetched %', k;
+>>   EXECUTE 'CLOSE p_2';
+>>   RETURN n;
+>> END $$
+CREATE FUNCTION
+> BEGIN
+BEGIN
+> SELECT cf_pl(3)
+fields cf_pl:23:4:-1
+NOTICE 00000 p_1: 1 (PL/pgSQL function cf_pl(integer) line 7 at RAISE)
+NOTICE 00000 p_2: 2 (PL/pgSQL function cf_pl(integer) line 7 at RAISE)
+NOTICE 00000 p_3: 3 (PL/pgSQL function cf_pl(integer) line 7 at RAISE)
+NOTICE 00000 moved 0 (PL/pgSQL function cf_pl(integer) line 11 at RAISE)
+NOTICE 00000 next 4 (PL/pgSQL function cf_pl(integer) line 13 at RAISE)
+NOTICE 00000 fetched 4 (PL/pgSQL function cf_pl(integer) line 16 at RAISE)
+row 3
+SELECT 1
+> FETCH NEXT FROM p_1
+fields a@cf_t.1:23:4:-1
+row 5
+FETCH 1
+> FETCH NEXT FROM p_2
+ERROR 34000 cursor "p_2" does not exist
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> SELECT cf_pl(2)
+fields cf_pl:23:4:-1
+NOTICE 00000 p_1: 1 (PL/pgSQL function cf_pl(integer) line 7 at RAISE)
+NOTICE 00000 p_2: 2 (PL/pgSQL function cf_pl(integer) line 7 at RAISE)
+NOTICE 00000 moved 0 (PL/pgSQL function cf_pl(integer) line 11 at RAISE)
+NOTICE 00000 next 4 (PL/pgSQL function cf_pl(integer) line 13 at RAISE)
+NOTICE 00000 fetched 4 (PL/pgSQL function cf_pl(integer) line 16 at RAISE)
+row 2
+SELECT 1
+> SELECT name, statement, is_holdable, is_scrollable FROM pg_cursors ORDER BY name
+fields name@pg_cursors.1:25:-1:-1,statement@pg_cursors.2:25:-1:-1,is_holdable@pg_cursors.3:16:1:-1,is_scrollable@pg_cursors.5:16:1:-1
+row p_1,DECLARE p_1 SCROLL CURSOR FOR SELECT a FROM cf_t WHERE a >= 1 ORDER BY a,f,t
+SELECT 1
+> DROP TABLE cf_t
+ERROR 55006 cannot DROP TABLE "cf_t" because it is being used by active queries in this session
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> DECLARE c CURSOR FOR SELECT a FROM cf_t
+DECLARE CURSOR
+> TRUNCATE cf_t
+ERROR 55006 cannot TRUNCATE "cf_t" because it is being used by active queries in this session
+> ROLLBACK
+ROLLBACK
+> DO $$ BEGIN EXECUTE 'CLOSE nope'; END $$
+ERROR 34000 cursor "nope" does not exist (SQL statement "CLOSE nope"
+PL/pgSQL function inline_code_block line 1 at EXECUTE)
+> DO $$ BEGIN EXECUTE 'FETCH NEXT FROM nope'; END $$
+ERROR 34000 cursor "nope" does not exist (SQL statement "FETCH NEXT FROM nope"
+PL/pgSQL function inline_code_block line 1 at EXECUTE)
+> DO $$ BEGIN EXECUTE 'DECLARE x CURSOR FOR SELECT 1'; EXECUTE 'DECLARE x CURSOR FOR SELECT 2'; END $$
+ERROR 42P03 cursor "x" already exists (SQL statement "DECLARE x CURSOR FOR SELECT 2"
+PL/pgSQL function inline_code_block line 1 at EXECUTE)
+> BEGIN
+BEGIN
+> DO $$ BEGIN EXECUTE 'DECLARE x CURSOR WITH HOLD FOR SELECT 1'; EXECUTE 'CLOSE ALL'; END $$
+DO
+> FETCH x
+ERROR 34000 cursor "x" does not exist
+> ROLLBACK
+ROLLBACK
+> DO $$ BEGIN EXECUTE 'DECLARE y CURSOR WITH HOLD FOR SELECT 7 AS v'; END $$
+DO
+> FETCH y
+fields v:23:4:-1
+row 7
+FETCH 1
+> CLOSE y
+CLOSE CURSOR
+> BEGIN
+BEGIN
+> DECLARE h CURSOR WITH HOLD FOR SELECT a FROM cf_t
+DECLARE CURSOR
+> COMMIT
+COMMIT
+> DROP TABLE cf_t
+DROP TABLE
+> CLOSE h
+CLOSE CURSOR

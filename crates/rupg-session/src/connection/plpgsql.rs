@@ -229,7 +229,11 @@ fn sql_statement(
         if let Node::TransactionStmt(stmt) = node {
             return Err(not_allowed(transaction_tag(stmt.kind), "an SQL function"));
         }
-        spi.utility(node, text, notices)?;
+        if let Node::DeclareCursorStmt(stmt) = node {
+            spi.conn.declare_in_function(stmt, text, types, args, notices)?;
+        } else {
+            spi.utility(node, text, notices)?;
+        }
         return Ok((Vec::new(), Vec::new()));
     }
     let query = script.analyze(spi.env(), types, i)?;
@@ -413,6 +417,12 @@ impl Spi for PlSpi<'_> {
         stmt: &Node,
         notices: &mut Vec<Error>,
     ) -> rupg_common::Result<Option<Fetched>> {
+        if let Node::FetchStmt(fetch) = stmt
+            && !fetch.ismove
+        {
+            let name = fetch.portalname.as_deref().unwrap_or_default();
+            return self.conn.spi_fetch(name, fetch.direction, fetch.howMany, true).map(Some);
+        }
         let mut found = Vec::new();
         let done = match stmt {
             Node::ExplainStmt(explain) => self.conn.explain(explain, "", &mut found),
@@ -616,6 +626,14 @@ impl Connection {
             Err(self.prevent_in_call("DROP DATABASE"))
         } else if let Node::ReindexStmt(stmt) = node {
             self.reindex(node, stmt, text, &mut notices, true).map(|_| 0)
+        } else if let Node::DeclareCursorStmt(stmt) = node {
+            self.declare(stmt, text, None, &[], &mut notices, false).map(|_| 0)
+        } else if let Node::FetchStmt(stmt) = node {
+            // `MOVE` gives no rows, so `SPI_processed` stays 0.
+            let name = stmt.portalname.as_deref().unwrap_or_default();
+            self.spi_fetch(name, stmt.direction, stmt.howMany, false).map(|_| 0)
+        } else if let Node::ClosePortalStmt(stmt) = node {
+            self.spi_close(stmt).map(|()| 0)
         } else if let Node::CreateTableSpaceStmt(_) = node {
             Err(self.prevent_in_call("CREATE TABLESPACE"))
         } else if let Node::DropTableSpaceStmt(_) = node {

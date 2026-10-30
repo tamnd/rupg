@@ -792,9 +792,14 @@ impl Connection {
         applied
     }
 
-    /// `CheckTableNotInUse`: true when a write of the statement has the table `table` open.
+    /// `CheckTableNotInUse`: true when a write of the statement or an open cursor has the table `table` open.
     pub(crate) fn table_in_use(&self, table: u32) -> bool {
         self.open_tables.borrow().contains(&table)
+            || self.portals.try_borrow().is_ok_and(|portals| {
+                portals.iter().any(|(_, portal)| {
+                    matches!(&portal.run, extended::Run::Cursor(cursor) if cursor.reads(table))
+                })
+            })
     }
 
     /// [`Connection::apply_write`] of the write `info` of `plan`.
@@ -2363,7 +2368,7 @@ impl Connection {
                 self.reindex(node, stmt, statement, &mut notices, false)
             } else if let Node::DeclareCursorStmt(stmt) = node {
                 drop(self.portals.get_mut().close(b""));
-                self.declare(stmt, text, None, &[], &mut notices)
+                self.declare(stmt, text, None, &[], &mut notices, true)
             } else if let Node::FetchStmt(stmt) = node {
                 drop(self.portals.get_mut().close(b""));
                 self.fetch_cursor(stmt, None)
@@ -5365,6 +5370,12 @@ mod tests {
     #[test]
     fn languages() {
         big_stack(|| script(include_str!("connection/languages.test")));
+    }
+
+    /// `DECLARE`, `FETCH`, `MOVE` and `CLOSE` in a function: `DECLARE` in a function in SQL with the arguments of the function, and `EXECUTE` of each statement in PL/pgSQL, with the row count of `MOVE` and `FETCH`. A table that an open cursor reads cannot go with `DROP TABLE` or `TRUNCATE`, but a cursor `WITH HOLD` after its transaction does not keep the table. `connection/cursors_in_functions.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn cursors_in_functions() {
+        big_stack(|| script(include_str!("connection/cursors_in_functions.test")));
     }
 
     /// `CREATE ROLE`, `ALTER ROLE`, `DROP ROLE` and `GRANT` and `REVOKE` of a role: the rows of `pg_roles`, `pg_authid` and `pg_auth_members`, the errors, the notices, and a role that a transaction makes and rolls back. `connection/roles.test` is the output of PostgreSQL 19 for the same script in a new database.

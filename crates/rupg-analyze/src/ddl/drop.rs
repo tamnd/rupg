@@ -432,6 +432,13 @@ impl Definer<'_, '_> {
             .with_hint(format!("You can drop {other} instead.")));
         }
         self.report(&targets, cascade, objects)?;
+        // `heap_drop_with_catalog`: a relation that an active query of the session has open cannot go.
+        for target in &targets {
+            let object = target.object;
+            if object.class == PG_CLASS && object.sub == 0 {
+                self.check_not_in_use(object.oid, "DROP TABLE")?;
+            }
+        }
         self.dropped.extend(targets.iter().map(|target| super::Dropped {
             object: target.object,
             original: target.flags & flag::ORIGINAL != 0,

@@ -599,7 +599,7 @@ impl Connection {
         if ready {
             let done = if let Node::DeclareCursorStmt(stmt) = node {
                 let mut notices = Vec::new();
-                let result = self.declare(stmt, &statement.text, plan, &params, &mut notices);
+                let result = self.declare(stmt, &statement.text, plan, &params, &mut notices, true);
                 self.notices(&mut notices, &statement.text, &[], out);
                 result.map_err(|error| Failed {
                     position: error.position().map(|at| character_position(&statement.text, at)),
