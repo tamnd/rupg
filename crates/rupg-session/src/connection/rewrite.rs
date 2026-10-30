@@ -618,7 +618,7 @@ impl Connection {
     }
 
     /// The error of `index_build` for the key `key` that two rows of the table `table` have in the new unique index `unique`.
-    fn duplicated(
+    pub(super) fn duplicated(
         &self,
         table: u32,
         unique: Option<&rupg_analyze::Unique>,
