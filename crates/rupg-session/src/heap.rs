@@ -818,30 +818,32 @@ impl Heap {
         let Some(table) = state.tables.get(&(view.database, relation)) else {
             return Vec::new();
         };
+        let width = used.map(|u| u.iter().filter(|u| **u).count());
         table
             .versions
             .iter()
             .filter(|version| visible(version, view))
-            .map(|version| {
-                let width = used.map_or(version.values.len(), |u| u.iter().filter(|u| **u).count());
-                let mut row = Vec::with_capacity(width + 3);
-                match used {
-                    Some(used) => row.extend(
-                        used.iter()
-                            .enumerate()
-                            .filter(|(_, u)| **u)
-                            .map(|(i, _)| version.values.get(i).cloned().unwrap_or(Value::Null)),
-                    ),
-                    None => row.extend_from_slice(&version.values),
-                }
-                if xids {
-                    let xmax = if version.xmax == 0 { version.aborted } else { version.xmax };
-                    row.push(Value::Oid(version.xmin));
-                    row.push(Value::Oid(xmax));
-                }
-                row.push(Value::Int8(version.tid.cast_signed()));
-                row
-            })
+            .map(|version| version_row(version, used, width, xids))
+            .collect()
+    }
+
+    /// The rows of [`Heap::visible_rows`] with no system columns, for only the versions `tids` of a table, in the order of the list. A version that the view does not see gives no row.
+    pub(crate) fn rows_at(
+        &self,
+        relation: u32,
+        view: &View,
+        used: Option<&[bool]>,
+        tids: &[u64],
+    ) -> Vec<Vec<Value>> {
+        let state = self.state();
+        let Some(table) = state.tables.get(&(view.database, relation)) else {
+            return Vec::new();
+        };
+        let width = used.map(|u| u.iter().filter(|u| **u).count());
+        tids.iter()
+            .filter_map(|&tid| table.find(tid).map(|at| &table.versions[at]))
+            .filter(|version| visible(version, view))
+            .map(|version| version_row(version, used, width, false))
             .collect()
     }
 
@@ -1714,6 +1716,32 @@ fn committed_before(xid: u32, snapshot: &Snapshot) -> bool {
 }
 
 /// `HeapTupleSatisfiesMVCC`: true if the view sees the version.
+/// The row of a version for a scan: the columns that are true in `used`, of which there are `width`, or all its values, then `xmin` and `xmax` when `xids` is true, then the ID of the version. A column that the version has no value for is null.
+fn version_row(
+    version: &Version,
+    used: Option<&[bool]>,
+    width: Option<usize>,
+    xids: bool,
+) -> Vec<Value> {
+    let mut row = Vec::with_capacity(width.unwrap_or(version.values.len()) + 3);
+    match used {
+        Some(used) => row.extend(
+            used.iter()
+                .enumerate()
+                .filter(|(_, u)| **u)
+                .map(|(i, _)| version.values.get(i).cloned().unwrap_or(Value::Null)),
+        ),
+        None => row.extend_from_slice(&version.values),
+    }
+    if xids {
+        let xmax = if version.xmax == 0 { version.aborted } else { version.xmax };
+        row.push(Value::Oid(version.xmin));
+        row.push(Value::Oid(xmax));
+    }
+    row.push(Value::Int8(version.tid.cast_signed()));
+    row
+}
+
 fn visible(version: &Version, view: &View) -> bool {
     let inserted = if view.xid != 0 && version.xmin == view.xid {
         version.cmin < view.command

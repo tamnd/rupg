@@ -507,12 +507,19 @@ pub fn members(
     Ok(Some(std::iter::once(from.oid).chain(children).collect()))
 }
 
-/// Reads the rows of the relations of a query.
+/// The value of a condition of `WHERE` for a tuple of rows of some [`Tables`].
+pub(crate) type Narrow<'a> = dyn FnMut(&Tables, &Expr, &[usize]) -> Result<Value> + 'a;
+
+/// Reads the rows of the relations of a query. With `narrow`, which gives the value of a condition, a query of one table whose conditions of `WHERE` read only some of the columns that the query reads first reads only the columns of the conditions, and then the other columns of the rows that pass all the conditions, so that a scan that keeps few rows of a wide table copies only those rows.
 ///
 /// # Errors
 ///
-/// The error of the input function of a column that the catalog keeps as text.
-pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
+/// The error of the input function of a column that the catalog keeps as text, and the error of a condition.
+pub(crate) fn read(
+    query: &Query,
+    session: &dyn Session,
+    mut narrow: Option<&mut Narrow<'_>>,
+) -> Result<Tables> {
     let mut used: Vec<Vec<bool>> =
         query.relations.iter().map(|r| vec![false; r.columns.len()]).collect();
     let mut xids = vec![false; query.relations.len()];
@@ -571,6 +578,38 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
             // The rows keep only the columns that the query reads, so that a scan of a few columns of a wide table is small.
             let kept = kept.filter(|k| k.contains(&false));
             places[index] = kept.as_deref().map(Places::new);
+            let few = narrow.as_mut().filter(|_| !xids[index]).and_then(|test| {
+                let mask = narrowed(query, kept.as_deref().unwrap_or(used), &conds, session)?;
+                Some((test, mask))
+            });
+            if let Some((test, mask)) = few {
+                let few = user_rows(relation, from, Some(&mask), &conds, session)?;
+                let mut few =
+                    tables(query, vec![Rc::new(few)], xids.clone(), vec![Some(Places::new(&mask))]);
+                let mut tids = Vec::new();
+                'row: for row in 0..few.rows[index].len() {
+                    for expr in &conds {
+                        if test(&few, expr, &[row])? != Value::Bool(true) {
+                            continue 'row;
+                        }
+                    }
+                    if let Some(Value::Int8(tid)) = few.rows[index][row].last() {
+                        tids.push(tid.cast_unsigned());
+                    }
+                }
+                few.rows.clear();
+                let width = kept
+                    .as_ref()
+                    .map_or(relation.columns.len(), |k| k.iter().filter(|k| **k).count());
+                let mut kept_rows = session.table_rows_at(relation.oid, kept.as_deref(), &tids)?;
+                for row in &mut kept_rows {
+                    let tid = row.pop().unwrap_or(Value::Null);
+                    row.resize(width, Value::Null);
+                    row.push(tid);
+                }
+                rows.push(Rc::new(kept_rows));
+                continue;
+            }
             rows.push(Rc::new(user_rows(relation, from, kept.as_deref(), &conds, session)?));
             continue;
         };
@@ -602,7 +641,17 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
         }
         rows.push(Rc::new(table));
     }
-    Ok(Tables {
+    Ok(tables(query, rows, xids, places))
+}
+
+/// The [`Tables`] of a query with the rows of its relations.
+fn tables(
+    query: &Query,
+    rows: Vec<Rc<Vec<Vec<Value>>>>,
+    xids: Vec<bool>,
+    places: Vec<Option<Places>>,
+) -> Tables {
+    Tables {
         rows,
         oids: query.relations.iter().map(|r| r.oid).collect(),
         types: query.relations.iter().map(|r| r.columns.iter().map(|c| c.ty).collect()).collect(),
@@ -613,7 +662,81 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
         grown: query.relations.iter().map(|_| RefCell::default()).collect(),
         indexes: RefCell::default(),
         places,
-    })
+    }
+}
+
+/// The columns that the conditions `conds` of `WHERE` read, for a scan that tests them before it reads the other columns `kept` of the rows, which [`read`] does. The query must read one table of the user with no children and no sample, through no write and no row lock, and each condition must read only the columns of the table with the built-in functions that are not volatile, with no `=` that [`Scan::lookup`] can test through a hash. An `=` lets the scan test the other conditions on fewer rows, and the conditions run again on the rows that pass, so a condition that is not volatile gives the same value. The conditions must read fewer columns than the query.
+fn narrowed(
+    query: &Query,
+    kept: &[bool],
+    conds: &[&Expr],
+    session: &dyn Session,
+) -> Option<Vec<bool>> {
+    let [relation] = query.relations.as_slice() else { return None };
+    if conds.is_empty()
+        || !matches!(query.from.as_slice(), [FromItem::Relation(0)])
+        || relation.tablesample.is_some()
+        || relation.cte.is_some()
+        || query.write.is_some()
+        || !query.row_marks.is_empty()
+    {
+        return None;
+    }
+    let catalog = session.catalog()?;
+    let table = catalog.relation(relation.oid)?;
+    if table.kind != rupg_catalog::RelKind::Table
+        || !catalog.all_inheritors(relation.oid).is_empty()
+    {
+        return None;
+    }
+    let builtin = |func: u32| {
+        func < rupg_catalog::FIRST_NORMAL_OID
+            && rupg_pgcatalog::builtin::proc_by_oid(func).is_some_and(|p| p.volatile != b'v')
+    };
+    let mut mask = vec![false; kept.len()];
+    for expr in conds {
+        if let ExprKind::Func(f) = &expr.kind
+            && HASH_EQUALS.contains(&f.oid)
+        {
+            return None;
+        }
+        let other = expr.find(0, &mut |e, depth| match &e.kind {
+            ExprKind::Var(var) if var.levels_up == depth && var.relation == 0 => {
+                match usize::try_from(var.attnum - 1).ok().and_then(|i| mask.get_mut(i)) {
+                    Some(slot) => {
+                        *slot = true;
+                        None
+                    }
+                    None => Some(()),
+                }
+            }
+            ExprKind::Func(f) if builtin(f.oid) => None,
+            ExprKind::NullIf { equal: func, .. }
+            | ExprKind::Distinct { equal: func, .. }
+            | ExprKind::ScalarArrayOp { func, .. }
+                if builtin(*func) =>
+            {
+                None
+            }
+            ExprKind::Const(_)
+            | ExprKind::Relabel(..)
+            | ExprKind::Collate(..)
+            | ExprKind::Bool(..)
+            | ExprKind::NullTest(..)
+            | ExprKind::BooleanTest(..)
+            | ExprKind::Coalesce(_)
+            | ExprKind::Array { .. }
+            | ExprKind::Case(_)
+            | ExprKind::CaseTest => None,
+            _ => Some(()),
+        });
+        if other.is_some() {
+            return None;
+        }
+    }
+    let fewer = mask.iter().zip(kept).all(|(m, k)| !m || *k)
+        && mask.iter().filter(|m| **m).count() < kept.iter().filter(|k| **k).count();
+    fewer.then_some(mask)
 }
 
 /// The rows of a query whose relations read the rows that the write gives, one list for each relation: the rows that the statement wrote for a query of `RETURNING`, or the old row and the row of `EXCLUDED` for the query of `ON CONFLICT DO UPDATE`.

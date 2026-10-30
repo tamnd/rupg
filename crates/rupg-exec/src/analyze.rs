@@ -105,7 +105,7 @@ impl Cx<'_, '_, '_> {
         if scope != 0 && crate::correlated(query) {
             return Err(not_yet("EXPLAIN ANALYZE of a correlated subquery"));
         }
-        let base = self.cache.tables(query, self.session)?;
+        let base = self.cache.tables(query, self.session, false)?;
         let tables =
             with_subqueries(query, &base, self.params, self.session, self.cache, &[], None)?;
         if tables.needs.iter().any(|n| !n.is_empty()) {

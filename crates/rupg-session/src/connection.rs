@@ -9315,6 +9315,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/partition_constraintdef.test")));
     }
 
+    /// A scan of a table whose conditions of `WHERE` read only some of the columns of the query: rows that an update and a delete of the transaction changed, an error of a condition, a column that `ALTER TABLE` added and a column that it dropped. `connection/narrow_scan.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn narrow_scan() {
+        big_stack(|| script(include_str!("connection/narrow_scan.test")));
+    }
+
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.
     #[test]
     fn fold_at_bind() {
