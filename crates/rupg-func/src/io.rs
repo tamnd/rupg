@@ -788,6 +788,19 @@ fn input_value(
     session: &dyn Session,
     noisy: bool,
 ) -> std::result::Result<Value, Failed> {
+    // A common built-in scalar type is not a domain, an array, a range, a row type or an enum, so its input skips the lookups of the type.
+    match ty {
+        oid::BOOL => return Ok(Value::Bool(types::bool_in(text)?)),
+        oid::INT2 => return Ok(Value::Int2(types::int2_in(text)?)),
+        oid::INT4 => return Ok(Value::Int4(types::int4_in(text)?)),
+        oid::INT8 => return Ok(Value::Int8(types::int8_in(text)?)),
+        oid::FLOAT4 => return Ok(Value::Float4(types::float4_in(text)?)),
+        oid::FLOAT8 => return Ok(Value::Float8(types::float8_in(text)?)),
+        oid::NUMERIC => return Ok(Value::Numeric(types::numeric_in(text, typmod)?)),
+        oid::TEXT => return Ok(Value::text(text)),
+        oid::VARCHAR => return Ok(Value::text(types::varchar_in(text, typmod)?)),
+        _ => {}
+    }
     // `domain_in` reads the value with the typmod of the domain.
     let typmod = match builtin::type_by_oid(ty) {
         Some(row) if row.kind == b'd' => row.typmod,
