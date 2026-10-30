@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A plain query on a table of the user now copies only the columns that it reads from each row, and the other columns are null. A write and `FOR UPDATE` still read whole rows. On 2 million rows of ClickBench, this makes `count(*)` and other scans of a few columns much faster (#1171).
 - `EXPLAIN ANALYZE` now runs the plan and shows the actual rows and loops of each node, the rows that each filter removes, the sort, hash and memoize details, and the planning and execution time, for queries, `CREATE TABLE AS`, `SELECT INTO` and `CREATE MATERIALIZED VIEW` (#NUM).
 - `CREATE ACCESS METHOD` and `DROP ACCESS METHOD` now work for table access methods. `pg_class.relam` comes from `USING`, from the parent of a partition or from `default_table_access_method`, `SET ACCESS METHOD` changes it, and `default_table_access_method` gets the PostgreSQL checks (#1169).
 

@@ -490,6 +490,8 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
     for item in &query.from {
         nullable(item, &mut nulls);
     }
+    // A write and a row lock read the whole rows of their tables, so only a plain query copies just the columns that it reads.
+    let plain = query.write.is_none() && query.row_marks.is_empty();
     let mut rows = Vec::with_capacity(query.relations.len());
     for (index, (relation, used)) in query.relations.iter().zip(&used).enumerate() {
         let work = relation
@@ -507,7 +509,8 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
         let Some(catalog) = rupg_pgcatalog::catalog_by_oid(relation.oid) else {
             let nullable = nulls.contains(&index);
             let from = (index, nullable, xids[index]);
-            rows.push(Rc::new(user_rows(relation, from, &conds, session)?));
+            let used = plain.then_some(used.as_slice());
+            rows.push(Rc::new(user_rows(relation, from, used, &conds, session)?));
             continue;
         };
         let mut table = Vec::with_capacity(catalog.len);
@@ -663,10 +666,11 @@ pub(crate) fn check_scannable(query: &Query, session: &dyn Session) -> Result<()
     Ok(())
 }
 
-/// The rows of the relation `from` of the user, which is the relation `index` of the query, with true when an outer join can give it as nulls and true when the query reads `xmin` or `xmax`. A partitioned table gives the rows of the leaf partitions that the conditions `conds` of `WHERE` do not prune. For `xmin` and `xmax`, each row ends with the ID of its version, the OID of its table, `xmin` and `xmax`.
+/// The rows of the relation `from` of the user, which is the relation `index` of the query, with true when an outer join can give it as nulls and true when the query reads `xmin` or `xmax`. With `used`, only the columns that are true in `used` have their values, and the others are null. A partitioned table gives the rows of the leaf partitions that the conditions `conds` of `WHERE` do not prune. For `xmin` and `xmax`, each row ends with the ID of its version, the OID of its table, `xmin` and `xmax`.
 fn user_rows(
     from: &rupg_analyze::Relation,
     (index, nullable, xids): (usize, bool, bool),
+    used: Option<&[bool]>,
     conds: &[&Expr],
     session: &dyn Session,
 ) -> Result<Vec<Vec<Value>>> {
@@ -681,7 +685,7 @@ fn user_rows(
         }
         let mut out = Vec::new();
         for leaf in crate::partition::pruned_leaves(oid, index, conds, nullable, session)? {
-            child_rows(relation, (leaf, xids), session, &mut out)?;
+            child_rows(relation, (leaf, xids), used, session, &mut out)?;
         }
         return Ok(out);
     }
@@ -690,8 +694,11 @@ fn user_rows(
         session.count_scan(oid);
         // A row from before an `ALTER TABLE ... ADD COLUMN` has no value for the new columns, which are null. The ID of the version stays at the end of the row.
         let width = relation.columns.len();
-        let mut rows =
-            if xids { session.table_rows_with_xids(oid)? } else { session.table_rows(oid)? };
+        let mut rows = if xids {
+            session.table_rows_with_xids(oid, used)?
+        } else {
+            session.table_rows(oid, used)?
+        };
         let children = match session.catalog() {
             Some(catalog) if !from.only => catalog.all_inheritors(oid),
             _ => Vec::new(),
@@ -708,7 +715,7 @@ fn user_rows(
         }
         // `expand_inherited_rtentry`: the rows of the tables that inherit from the table come after its own rows.
         for child in children {
-            child_rows(relation, (child, xids), session, &mut rows)?;
+            child_rows(relation, (child, xids), used, session, &mut rows)?;
         }
         return Ok(rows);
     }
@@ -725,10 +732,11 @@ fn user_rows(
     })
 }
 
-/// The rows of the table `child`, a leaf partition of the partitioned table `relation` or a table that inherits from the table `relation`, with the columns of `relation`. Each row has the ID of its version and then the OID of `child` at the end, and then `xmin` and `xmax` when `xids` is true.
+/// The rows of the table `child`, a leaf partition of the partitioned table `relation` or a table that inherits from the table `relation`, with the columns of `relation`. With `used`, only the columns of `relation` that are true in `used` have their values. Each row has the ID of its version and then the OID of `child` at the end, and then `xmin` and `xmax` when `xids` is true.
 fn child_rows(
     relation: &rupg_catalog::Relation,
     (child, xids): (u32, bool),
+    used: Option<&[bool]>,
     session: &dyn Session,
     out: &mut Vec<Vec<Value>>,
 ) -> Result<()> {
@@ -743,8 +751,22 @@ fn child_rows(
         })
         .collect();
     session.count_scan(child);
-    let rows =
-        if xids { session.table_rows_with_xids(child)? } else { session.table_rows(child)? };
+    // The columns of the child that the used columns of `relation` map to.
+    let used = used.map(|used| {
+        let mut mask = vec![false; part.columns.len()];
+        for (i, at) in map.iter().enumerate() {
+            if let (Some(at), true) = (at, used.get(i).copied().unwrap_or(false)) {
+                mask[*at] = true;
+            }
+        }
+        mask
+    });
+    let used = used.as_deref();
+    let rows = if xids {
+        session.table_rows_with_xids(child, used)?
+    } else {
+        session.table_rows(child, used)?
+    };
     for mut row in rows {
         let tid = row.pop().unwrap_or(Value::Null);
         let system = if xids { row.split_off(row.len().saturating_sub(2)) } else { Vec::new() };
