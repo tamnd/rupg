@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `COPY FROM` no longer runs the plan of its `INSERT` for each row when the plan only puts the fields of the row in the columns of the table, also with the length cast of a column with a type modifier (#1175).
 - A plain query now keeps in each row of a scan of a table of the user only the columns that it reads and the key columns of the indexes of the table. An index scan of an index on more than one column again gives the rows in the order of all its keys when the query does not read every key (#1174).
 - `EXPLAIN ANALYZE` now runs `INSERT`, `UPDATE`, `DELETE`, `MERGE` and the statements in `WITH` that change data, and shows the counts of each node, the rows of `RETURNING` and the counts of the actions of `MERGE` (#1173).
 - `COPY FROM` is faster: it checks the plan of its `INSERT` once for the statement and not for each row, the CSV parser copies each field at once, and the input of the common built-in types skips the lookups of the type (#1172).
