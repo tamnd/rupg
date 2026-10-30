@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Aggregates and function calls use less time for each row. `avg` of `smallint` and `integer` keeps a count and a 128-bit sum, as `avg` of `bigint` does, and no longer makes an array for each row. A transition function with one argument or none, and a function call with two arguments, get their arguments with no vectors. A built-in function with a kernel runs with no lookup of a body (#1190).
 - `EXPLAIN ANALYZE` no longer stops the server process with an index out of bounds when a nested loop scans a `Sort` or `Memoize` of a removed subquery again, as in `select_parallel` with `enable_material` off. The rows of the second loop now count from the first row of the subquery again (#1189).
 - `pg_stat_activity.query_id` shows the query identifier of the statement that the session runs when `compute_query_id` is `on` or `regress`. It was always null. The identifier is the one that `EXPLAIN VERBOSE` shows (#1188).
 - `EXPLAIN VERBOSE` now shows `Query Identifier` after the plan when `compute_query_id` is `on`, as in PostgreSQL 19. The identifier is a hash of the tokens of the statement, with each constant as the same token, so statements that differ only in their constants, the case of their words or their spaces get the same identifier (#1187).
