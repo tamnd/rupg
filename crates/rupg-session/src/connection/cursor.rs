@@ -30,6 +30,8 @@ pub(super) struct Cursor {
     tids: Vec<Vec<Value>>,
     /// The OID of each table that `WHERE CURRENT OF` can find in the rows, from [`Plan::cursor`].
     marks: Vec<u32>,
+    /// The OID of each table that the query of the cursor reads, which `CheckTableNotInUse` finds open while the cursor is open.
+    tables: Vec<u32>,
     /// True for a query with `FOR UPDATE` or `FOR SHARE`.
     locked: bool,
     /// The type of each column, for the output functions.
@@ -75,6 +77,13 @@ fn split(plan: &Plan, run: Result<Vec<Vec<Value>>, Error>) -> RunRows {
     let width = plan.columns().len();
     let tids = rows.iter_mut().map(|row| row.split_off(width.min(row.len()))).collect();
     (rows, tids, error)
+}
+
+/// The tables that the plan of a cursor reads.
+fn tables(plan: &Plan) -> Vec<u32> {
+    let mut tables = Vec::new();
+    rupg_analyze::range_tables(plan.query(), &mut tables);
+    tables
 }
 
 /// The rows of a cursor, the `tableoid` and the `ctid` of each row, and the error of the run.
@@ -125,6 +134,11 @@ impl Cursor {
     /// True for a cursor `WITH HOLD` that a transaction before this one declared.
     pub(super) fn held(&self) -> bool {
         self.hold && !self.fresh
+    }
+
+    /// True when the cursor has the table `table` open: the run of its query reads the table and the cursor is not held from a previous transaction.
+    pub(super) fn reads(&self, table: u32) -> bool {
+        !self.held() && self.tables.contains(&table)
     }
 
     /// True for a cursor `WITH HOLD`.
@@ -388,14 +402,15 @@ impl Connection {
         Ok(plan.cursor())
     }
 
-    /// `PerformCursorOpen`: makes the cursor with the rows of the query. `plan` is the plan of [`Connection::plan_cursor`] that `Bind` folded with the values of `params`, or `None` for a `DECLARE` of a `Query` message.
+    /// `PerformCursorOpen`: makes the cursor with the rows of the query. `plan` is the plan of [`Connection::plan_cursor`] that `Bind` folded with the values of `params`, or `None` for a `DECLARE` of a `Query` message or of a function. `top` is false for a `DECLARE` of a function, which `RequireTransactionBlock` does not check, as the statement is not at the top level.
     pub(super) fn declare(
-        &mut self,
+        &self,
         stmt: &DeclareCursorStmt,
         text: &str,
         plan: Option<Plan>,
         params: &[Value],
         notices: &mut Vec<Notice>,
+        top: bool,
     ) -> Result<Done, Error> {
         let name = stmt.portalname.as_deref().unwrap_or_default();
         if name.is_empty() {
@@ -406,7 +421,11 @@ impl Connection {
         }
         let hold = has(stmt.options, CURSOR_OPT_HOLD);
         let block = |c: &Connection| {
-            if hold { Ok(()) } else { utility::require_block(&c.transaction, "DECLARE CURSOR") }
+            if hold || !top {
+                Ok(())
+            } else {
+                utility::require_block(&c.transaction, "DECLARE CURSOR")
+            }
         };
         let plan = match plan {
             Some(plan) => {
@@ -423,7 +442,7 @@ impl Connection {
             }
         };
         self.portals
-            .get_mut()
+            .borrow_mut()
             .make_room(name.as_bytes())
             .map_err(super::extended::protocol_error)?;
         let reader = self.reader();
@@ -437,6 +456,7 @@ impl Connection {
             rows,
             tids,
             marks: plan.marks().to_vec(),
+            tables: tables(&plan),
             locked: plan.lock_clause().is_some(),
             types: plan.columns().iter().map(|target| target.expr.ty).collect(),
             at: 0,
@@ -463,7 +483,7 @@ impl Connection {
         );
         let mut portal = Portal::cursor(Arc::new(statement), cursor);
         portal.level = self.transaction.depth();
-        self.portals.get_mut().insert(name.as_bytes(), portal);
+        self.portals.borrow_mut().insert(name.as_bytes(), portal);
         Ok(Done::Tag(CommandTag::DeclareCursor))
     }
 
@@ -483,6 +503,7 @@ impl Connection {
             rows,
             tids,
             marks: plan.marks().to_vec(),
+            tables: tables(plan),
             locked: plan.lock_clause().is_some(),
             types: plan.columns().iter().map(|target| target.expr.ty).collect(),
             at: 0,
@@ -534,6 +555,40 @@ impl Connection {
         let mut found = Vec::new();
         let count = cursor.run_fetch(direction, count, Some(&mut found))?;
         Ok(rupg_plpgsql::Fetched { columns, rows: cursor.values(&found), count })
+    }
+
+    /// `PerformCursorOpen` of a statement of a function in SQL: the query of the cursor can use the arguments of the function as `$1`, `$2` and so on.
+    pub(super) fn declare_in_function(
+        &self,
+        stmt: &DeclareCursorStmt,
+        text: &str,
+        types: &[u32],
+        args: &[Value],
+        out: &mut Vec<Error>,
+    ) -> Result<(), Error> {
+        let mut notices = Vec::new();
+        let params = Params { types: types.to_vec(), variable: false };
+        let result = self.plan_cursor(stmt, &params, &mut notices).and_then(|plan| {
+            let reader = self.reader();
+            let folded = plan.fold(Some(args), &reader);
+            notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
+            drop(reader);
+            self.declare(stmt, text, Some(folded?), args, &mut notices, false)
+        });
+        out.extend(notices.into_iter().map(Notice::into_message));
+        result.map(|_| ())
+    }
+
+    /// `PerformPortalClose` of a statement of a function: `CLOSE` of a cursor, or of all the cursors for `CLOSE ALL`.
+    pub(super) fn spi_close(&self, stmt: &ClosePortalStmt) -> Result<(), Error> {
+        let Some(name) = stmt.portalname.as_deref() else {
+            self.portals.borrow_mut().retain(|_, _| false);
+            return Ok(());
+        };
+        match self.portals.borrow_mut().close(name.as_bytes()) {
+            Some(_) => Ok(()),
+            None => Err(no_cursor(name)),
+        }
     }
 
     /// The columns of a `FETCH` that gives rows, or `None` for a `MOVE` and for a cursor that is not there, as `UtilityTupleDescriptor` gives them.
