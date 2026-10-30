@@ -133,3 +133,21 @@ row Settings: enable_hashjoin = 'off', enable_seqscan = 'off'
 EXPLAIN
 > reset enable_seqscan
 RESET
+> prepare eq(int) as select * from ea where a = $1
+PREPARE
+> set plan_cache_mode = force_generic_plan
+SET
+> explain (costs off) execute eq(3)
+fields QUERY PLAN:25:-1:-1
+row Index Scan using ea_pkey on ea
+row   Index Cond: (a = $1)
+EXPLAIN
+> reset plan_cache_mode
+RESET
+> explain (costs off) execute eq(3)
+fields QUERY PLAN:25:-1:-1
+row Index Scan using ea_pkey on ea
+row   Index Cond: (a = 3)
+EXPLAIN
+> deallocate eq
+DEALLOCATE
