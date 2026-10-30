@@ -93,3 +93,20 @@ EXPLAIN
 fields count:20:8:-1
 row 13
 SELECT 1
+> explain (analyze, io, costs off, summary off, timing off) select * from ea
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ea (actual rows=102.00 loops=1)
+row   Prefetch: avg=1.00 max=1 capacity=94
+EXPLAIN
+> explain (io) select * from ea
+ERROR 22023 EXPLAIN option IO requires ANALYZE
+> explain (analyze, serialize, costs off, summary off, timing off) select * from ea
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ea (actual rows=102.00 loops=1)
+row Serialization: output=2kB  format=text
+EXPLAIN
+> explain (analyze, serialize binary, costs off, summary off, timing off) select a from ea
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ea (actual rows=102.00 loops=1)
+row Serialization: output=1kB  format=binary
+EXPLAIN

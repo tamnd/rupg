@@ -13,7 +13,9 @@ use std::borrow::Cow;
 use rupg_analyze::{Expr, ExprKind, JoinKind, Query, SetOp, SortGroup, SubLink, Write};
 use rupg_common::Result;
 
-pub use explain::{Actual, Actuals, Format, Options, explain, explain_analyzed, node_key};
+pub use explain::{
+    Actual, Actuals, Format, Options, Serialized, explain, explain_analyzed, node_key,
+};
 pub use statistic::{
     STATISTIC_KIND_CORRELATION, STATISTIC_KIND_HISTOGRAM, STATISTIC_KIND_MCV, StatSlot, Statistic,
 };

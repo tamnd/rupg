@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `EXPLAIN` now takes the `IO` option and shows the prefetch of the pages of a scan, `SERIALIZE` shows the size of the output of the rows, and `BUFFERS` shows the counts of each node and of the planning in the formats other than text (#1177).
 - The kernel of a built-in function is found once for each session thread, and not again for each call. A filter on 2 million rows took 40% of its time to find the kernel of its comparison (#1176).
 - `COPY FROM` no longer runs the plan of its `INSERT` for each row when the plan only puts the fields of the row in the columns of the table, also with the length cast of a column with a type modifier (#1175).
 - A plain query now keeps in each row of a scan of a table of the user only the columns that it reads and the key columns of the indexes of the table. An index scan of an index on more than one column again gives the rows in the order of all its keys when the query does not read every key (#1174).
