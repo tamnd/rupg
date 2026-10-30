@@ -1,0 +1,126 @@
+!details
+> CREATE ROLE regress_lang_user1
+CREATE ROLE
+> CREATE ROLE regress_lang_user2
+CREATE ROLE
+> CREATE ROLE regress_lang_user3
+CREATE ROLE
+> GRANT regress_lang_user2 TO regress_lang_user1
+GRANT ROLE
+> CREATE LANGUAGE alt_lang1 HANDLER plpgsql_call_handler
+CREATE LANGUAGE
+> CREATE LANGUAGE alt_lang2 HANDLER plpgsql_call_handler
+CREATE LANGUAGE
+> CREATE LANGUAGE alt_lang1 HANDLER plpgsql_call_handler
+ERROR 42710 language "alt_lang1" already exists
+> CREATE TRUSTED PROCEDURAL LANGUAGE alt_lang4 HANDLER plpgsql_call_handler INLINE plpgsql_inline_handler VALIDATOR plpgsql_validator
+CREATE LANGUAGE
+> SELECT lanname, lanispl, lanpltrusted, lanplcallfoid::regproc, laninline::regproc, lanvalidator::regproc, lanacl FROM pg_language WHERE lanname LIKE 'alt_lang%' ORDER BY lanname
+fields lanname@pg_language.2:19:64:-1,lanispl@pg_language.4:16:1:-1,lanpltrusted@pg_language.5:16:1:-1,lanplcallfoid:24:4:-1,laninline:24:4:-1,lanvalidator:24:4:-1,lanacl@pg_language.9:1034:-1:-1
+row alt_lang1,t,f,plpgsql_call_handler,-,-,NULL
+row alt_lang2,t,f,plpgsql_call_handler,-,-,NULL
+row alt_lang4,t,t,plpgsql_call_handler,plpgsql_inline_handler,plpgsql_validator,NULL
+SELECT 3
+> CREATE OR REPLACE LANGUAGE alt_lang4 HANDLER plpgsql_call_handler
+CREATE LANGUAGE
+> SELECT lanname, lanpltrusted, lanplcallfoid::regproc, laninline::regproc, lanvalidator::regproc FROM pg_language WHERE lanname = 'alt_lang4'
+fields lanname@pg_language.2:19:64:-1,lanpltrusted@pg_language.5:16:1:-1,lanplcallfoid:24:4:-1,laninline:24:4:-1,lanvalidator:24:4:-1
+row alt_lang4,f,plpgsql_call_handler,-,-
+SELECT 1
+> SELECT pg_describe_object(classid, objid, objsubid) AS obj, pg_describe_object(refclassid, refobjid, refobjsubid) AS ref, deptype FROM pg_depend WHERE classid = 'pg_language'::regclass AND objid IN (SELECT oid FROM pg_language WHERE lanname LIKE 'alt_lang%') ORDER BY 1, 2
+fields obj:25:-1:-1,ref:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row language alt_lang1,function plpgsql_call_handler(),n
+row language alt_lang2,function plpgsql_call_handler(),n
+row language alt_lang4,function plpgsql_call_handler(),n
+SELECT 3
+> CREATE LANGUAGE alt_lang5 HANDLER no_such_handler
+ERROR 42883 function no_such_handler() does not exist
+> CREATE LANGUAGE alt_lang5 HANDLER plpgsql_validator
+ERROR 42883 function plpgsql_validator() does not exist
+> CREATE LANGUAGE alt_lang5 HANDLER plpgsql_call_handler INLINE plpgsql_validator
+ERROR 42883 function plpgsql_validator(internal) does not exist
+> CREATE LANGUAGE alt_lang5 HANDLER plpgsql_call_handler VALIDATOR plpgsql_inline_handler
+ERROR 42883 function plpgsql_inline_handler(oid) does not exist
+> CREATE LANGUAGE sql HANDLER plpgsql_call_handler
+ERROR 42710 language "sql" already exists
+> CREATE LANGUAGE plpgsql
+ERROR 42710 extension "plpgsql" already exists
+> ALTER LANGUAGE alt_lang1 OWNER TO regress_lang_user1
+ALTER LANGUAGE
+> ALTER LANGUAGE alt_lang2 OWNER TO regress_lang_user2
+ALTER LANGUAGE
+> SET SESSION AUTHORIZATION regress_lang_user1
+SET
+session_authorization=regress_lang_user1
+is_superuser=off
+> CREATE LANGUAGE alt_lang6 HANDLER plpgsql_call_handler
+ERROR 42501 must be superuser to create custom procedural language
+> ALTER LANGUAGE alt_lang1 RENAME TO alt_lang2
+ERROR 42710 language "alt_lang2" already exists
+> ALTER LANGUAGE alt_lang1 RENAME TO sql
+ERROR 42710 language "sql" already exists
+> ALTER LANGUAGE alt_lang4 RENAME TO alt_lang3
+ERROR 42501 must be owner of language alt_lang4
+> ALTER LANGUAGE alt_lang1 RENAME TO alt_lang3
+ALTER LANGUAGE
+> ALTER LANGUAGE alt_lang4 OWNER TO regress_lang_user1
+ERROR 42501 must be owner of language alt_lang4
+> ALTER LANGUAGE alt_lang3 OWNER TO regress_lang_user3
+ERROR 42501 must be able to SET ROLE "regress_lang_user3"
+> ALTER LANGUAGE alt_lang3 OWNER TO regress_lang_user2
+ALTER LANGUAGE
+> ALTER LANGUAGE alt_lang3 OWNER TO regress_lang_user2
+ALTER LANGUAGE
+> ALTER LANGUAGE no_such_lang RENAME TO alt_lang7
+ERROR 42704 language "no_such_lang" does not exist
+> ALTER LANGUAGE no_such_lang OWNER TO regress_lang_user2
+ERROR 42704 language "no_such_lang" does not exist
+> RESET SESSION AUTHORIZATION
+RESET
+session_authorization=postgres
+is_superuser=on
+> GRANT USAGE ON LANGUAGE alt_lang3 TO regress_lang_user3
+ERROR 42809 language "alt_lang3" is not trusted
+DETAIL GRANT and REVOKE are not allowed on untrusted languages, because only superusers can use untrusted languages.
+> SELECT lanname, rolname, lanacl FROM pg_language l JOIN pg_authid a ON a.oid = l.lanowner WHERE lanname LIKE 'alt_lang%' ORDER BY lanname
+fields lanname@pg_language.2:19:64:-1,rolname@pg_authid.2:19:64:-1,lanacl@pg_language.9:1034:-1:-1
+row alt_lang2,regress_lang_user2,NULL
+row alt_lang3,regress_lang_user2,NULL
+row alt_lang4,postgres,NULL
+SELECT 3
+> ALTER LANGUAGE alt_lang3 OWNER TO regress_lang_user1
+ALTER LANGUAGE
+> SELECT lanname, rolname, lanacl FROM pg_language l JOIN pg_authid a ON a.oid = l.lanowner WHERE lanname LIKE 'alt_lang%' ORDER BY lanname
+fields lanname@pg_language.2:19:64:-1,rolname@pg_authid.2:19:64:-1,lanacl@pg_language.9:1034:-1:-1
+row alt_lang2,regress_lang_user2,NULL
+row alt_lang3,regress_lang_user1,NULL
+row alt_lang4,postgres,NULL
+SELECT 3
+> COMMENT ON LANGUAGE alt_lang3 IS 'a language'
+COMMENT
+> SELECT obj_description(oid, 'pg_language') FROM pg_language WHERE lanname = 'alt_lang3'
+fields obj_description:25:-1:-1
+row a language
+SELECT 1
+> DROP ROLE regress_lang_user1
+ERROR 2BP01 role "regress_lang_user1" cannot be dropped because some objects depend on it
+DETAIL owner of language alt_lang3
+> DROP LANGUAGE alt_lang2 CASCADE
+DROP LANGUAGE
+> DROP LANGUAGE alt_lang3 CASCADE
+DROP LANGUAGE
+> DROP LANGUAGE alt_lang4
+DROP LANGUAGE
+> DROP LANGUAGE IF EXISTS alt_lang4
+NOTICE 00000 language "alt_lang4" does not exist, skipping
+DROP LANGUAGE
+> SELECT count(*) FROM pg_language WHERE lanname LIKE 'alt_lang%'
+fields count:20:8:-1
+row 0
+SELECT 1
+> DROP ROLE regress_lang_user1
+DROP ROLE
+> DROP ROLE regress_lang_user2
+DROP ROLE
+> DROP ROLE regress_lang_user3
+DROP ROLE

@@ -43,6 +43,7 @@ pub(super) fn is_rename_kind(kind: ObjectType) -> bool {
             | ObjectType::OBJECT_STATISTIC_EXT
             | ObjectType::OBJECT_CONVERSION
             | ObjectType::OBJECT_EVENT_TRIGGER
+            | ObjectType::OBJECT_LANGUAGE
             | ObjectType::OBJECT_FDW
             | ObjectType::OBJECT_FOREIGN_SERVER
             | ObjectType::OBJECT_PUBLICATION
@@ -78,6 +79,7 @@ impl Definer<'_, '_> {
             ObjectType::OBJECT_STATISTIC_EXT => self.rename_stats(stmt),
             ObjectType::OBJECT_CONVERSION => self.rename_conversion(stmt),
             ObjectType::OBJECT_EVENT_TRIGGER => self.rename_event_trigger(stmt),
+            ObjectType::OBJECT_LANGUAGE => self.rename_language(stmt),
             ObjectType::OBJECT_FDW => self.rename_foreign(true, stmt),
             ObjectType::OBJECT_FOREIGN_SERVER => self.rename_foreign(false, stmt),
             ObjectType::OBJECT_PUBLICATION => self.rename_publication(stmt),

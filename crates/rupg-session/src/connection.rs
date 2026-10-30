@@ -2829,6 +2829,8 @@ fn definition_tag(node: &Node) -> CommandTag {
         Node::CreateCastStmt(_) => CommandTag::CreateCast,
         Node::CreateConversionStmt(_) => CommandTag::CreateConversion,
         Node::CreateEventTrigStmt(_) => CommandTag::CreateEventTrigger,
+        Node::CreatePLangStmt(_) => CommandTag::CreateLanguage,
+        Node::CreateExtensionStmt(_) => CommandTag::CreateExtension,
         Node::CreateAmStmt(_) => CommandTag::CreateAccessMethod,
         Node::AlterEventTrigStmt(_) => CommandTag::AlterEventTrigger,
         Node::ViewStmt(_) => CommandTag::CreateView,
@@ -2959,6 +2961,7 @@ fn alter_tag(kind: ObjectType) -> CommandTag {
         ObjectType::OBJECT_STATISTIC_EXT => CommandTag::AlterStatistics,
         ObjectType::OBJECT_CONVERSION => CommandTag::AlterConversion,
         ObjectType::OBJECT_EVENT_TRIGGER => CommandTag::AlterEventTrigger,
+        ObjectType::OBJECT_LANGUAGE => CommandTag::AlterLanguage,
         ObjectType::OBJECT_TSPARSER => CommandTag::AlterTextSearchParser,
         ObjectType::OBJECT_TSDICTIONARY => CommandTag::AlterTextSearchDictionary,
         ObjectType::OBJECT_TSTEMPLATE => CommandTag::AlterTextSearchTemplate,
@@ -5356,6 +5359,12 @@ mod tests {
     #[test]
     fn tablespaces() {
         big_stack(|| script(include_str!("connection/tablespaces.test")));
+    }
+
+    /// `CREATE LANGUAGE` with handlers, `OR REPLACE`, and the checks of the handlers and of the name. `CREATE LANGUAGE` with no handler is `CREATE EXTENSION`. Then `ALTER LANGUAGE ... RENAME TO` and `OWNER TO`, `COMMENT ON LANGUAGE` and `DROP LANGUAGE`, with the checks of the owner, and the owner as a dependency of a role. `connection/languages.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn languages() {
+        big_stack(|| script(include_str!("connection/languages.test")));
     }
 
     /// `CREATE ROLE`, `ALTER ROLE`, `DROP ROLE` and `GRANT` and `REVOKE` of a role: the rows of `pg_roles`, `pg_authid` and `pg_auth_members`, the errors, the notices, and a role that a transaction makes and rolls back. `connection/roles.test` is the output of PostgreSQL 19 for the same script in a new database.

@@ -36,6 +36,7 @@ mod grant;
 mod identity;
 mod index;
 mod jsonpath;
+mod language;
 mod lock;
 mod matview;
 mod objaddr;
@@ -317,6 +318,8 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::CreateConversionStmt(_)
             | Node::CreateEventTrigStmt(_)
             | Node::AlterEventTrigStmt(_)
+            | Node::CreatePLangStmt(_)
+            | Node::CreateExtensionStmt(_)
             | Node::CreateAmStmt(_)
             | Node::CreateFdwStmt(_)
             | Node::AlterFdwStmt(_)
@@ -334,7 +337,7 @@ pub fn is_definition(stmt: &Node) -> bool {
         || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
         || matches!(stmt, Node::DiscardStmt(discard) if discard.target == DiscardMode::DISCARD_TEMP)
         || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype) || alter.objtype == ObjectType::OBJECT_TYPE)
-        || matches!(stmt, Node::AlterOwnerStmt(alter) if matches!(alter.objectType, ObjectType::OBJECT_SCHEMA | ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT | ObjectType::OBJECT_CONVERSION | ObjectType::OBJECT_EVENT_TRIGGER | ObjectType::OBJECT_TSDICTIONARY | ObjectType::OBJECT_TSCONFIGURATION | ObjectType::OBJECT_FDW | ObjectType::OBJECT_FOREIGN_SERVER | ObjectType::OBJECT_PUBLICATION | ObjectType::OBJECT_LARGEOBJECT | ObjectType::OBJECT_DATABASE | ObjectType::OBJECT_TABLESPACE) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
+        || matches!(stmt, Node::AlterOwnerStmt(alter) if matches!(alter.objectType, ObjectType::OBJECT_SCHEMA | ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT | ObjectType::OBJECT_CONVERSION | ObjectType::OBJECT_EVENT_TRIGGER | ObjectType::OBJECT_LANGUAGE | ObjectType::OBJECT_TSDICTIONARY | ObjectType::OBJECT_TSCONFIGURATION | ObjectType::OBJECT_FDW | ObjectType::OBJECT_FOREIGN_SERVER | ObjectType::OBJECT_PUBLICATION | ObjectType::OBJECT_LARGEOBJECT | ObjectType::OBJECT_DATABASE | ObjectType::OBJECT_TABLESPACE) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
         || matches!(stmt, Node::RenameStmt(rename) if rename::is_rename_kind(rename.renameType) || matches!(rename.renameType, ObjectType::OBJECT_DATABASE | ObjectType::OBJECT_TABLESPACE))
         || matches!(stmt, Node::AlterDatabaseStmt(_))
         || matches!(stmt, Node::AlterObjectSchemaStmt(alter) if is_alter_kind(alter.objectType) || matches!(alter.objectType, ObjectType::OBJECT_OPERATOR | ObjectType::OBJECT_STATISTIC_EXT | ObjectType::OBJECT_CONVERSION) || tsearch::is_ts_kind(alter.objectType) || is_opcf_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
@@ -511,6 +514,8 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::CreateCastStmt(stmt) => definer.create_cast(stmt),
         Node::CreateConversionStmt(stmt) => definer.create_conversion(stmt),
         Node::CreateEventTrigStmt(stmt) => definer.create_event_trigger(stmt),
+        Node::CreatePLangStmt(stmt) => definer.create_language(stmt),
+        Node::CreateExtensionStmt(stmt) => definer.create_extension(stmt),
         Node::CreateAmStmt(stmt) => definer.create_access_method(stmt),
         Node::AlterEventTrigStmt(stmt) => definer.alter_event_trigger(stmt),
         Node::CreateFdwStmt(stmt) => definer.create_fdw(stmt),
