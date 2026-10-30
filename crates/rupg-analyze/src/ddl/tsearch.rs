@@ -204,8 +204,11 @@ impl Definer<'_, '_> {
         Ok(self.ts_lookup(kind, list, false)?.unwrap_or_default())
     }
 
-    /// `QualifiedNameGetCreationNamespace`: the schema and the name of a new object.
-    pub(super) fn ts_creation<'n>(&self, list: &[&'n str]) -> Result<(u32, &'n str)> {
+    /// `QualifiedNameGetCreationNamespace`: the schema and the name of a new object. `pg_temp` is the temporary schema of the session, which this makes when it does not exist, as `LookupCreationNamespace` does.
+    pub(super) fn ts_creation<'n>(&mut self, list: &[&'n str]) -> Result<(u32, &'n str)> {
+        if let ["pg_temp", name] = list {
+            return Ok((self.temp_namespace()?, name));
+        }
         let (schema, name) = self.an.split_name(list, None)?;
         let namespace = match schema {
             Some(namespace) => namespace,

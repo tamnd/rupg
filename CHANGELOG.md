@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `CREATE FUNCTION`, `CREATE DOMAIN`, `CREATE TYPE`, `CREATE AGGREGATE` and the other commands that create an object with a qualified name now make the temporary schema of the session for the schema `pg_temp` when it does not exist yet, as in PostgreSQL 19 (#1185).
 - `statement_timeout` stops a statement that runs longer than it, with `57014 canceling statement due to statement timeout`, as in PostgreSQL. Each statement of a `Query` message has a time of its own. Scans, joins, aggregates and the projection of rows check for a cancel and for the timeout after each 1024 rows, so a `CancelRequest` now also stops a long scan (#1184).
 - Deparse and `EXPLAIN VERBOSE` now name the temporary schema of the session `pg_temp`, and a `WindowAgg` below another one now gives its input columns before its window calls, as in PostgreSQL 19 (#1183).
 - `EXPLAIN EXECUTE` now shows the generic plan with the parameters when `plan_cache_mode` or the count of the runs chooses a generic plan, and the custom plan with the values of the parameters in the other cases (#1182).

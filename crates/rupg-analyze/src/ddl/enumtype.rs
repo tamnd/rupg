@@ -14,13 +14,7 @@ impl Definer<'_, '_> {
     /// `DefineEnum`: the enum type, its labels and its array type.
     pub(super) fn create_enum(&mut self, stmt: &CreateEnumStmt) -> Result<()> {
         let parts = names(&stmt.typeName);
-        let (schema, name) = self.an.split_name(&parts, None)?;
-        let namespace = match schema {
-            Some(namespace) => namespace,
-            None => self.an.env.search_path().first().copied().ok_or_else(|| {
-                Error::new(SqlState::UNDEFINED_SCHEMA, "no schema has been selected to create in")
-            })?,
-        };
+        let (namespace, name) = self.ts_creation(&parts)?;
         self.check_create_in(namespace, None)?;
         self.check_type_name(namespace, name)?;
         let labels = names(&stmt.vals);

@@ -1071,13 +1071,7 @@ impl Definer<'_, '_> {
     /// `CreateFunction` for a function in SQL. `text` is the text of the statement, which the catalog keeps. The return value is the OID of the function.
     pub(super) fn create_function(&mut self, stmt: &CreateFunctionStmt, text: &str) -> Result<u32> {
         let parts = names(&stmt.funcname);
-        let (schema, name) = self.an.split_name(&parts, None)?;
-        let namespace = match schema {
-            Some(namespace) => namespace,
-            None => self.an.env.search_path().first().copied().ok_or_else(|| {
-                Error::new(SqlState::UNDEFINED_SCHEMA, "no schema has been selected to create in")
-            })?,
-        };
+        let (namespace, name) = self.ts_creation(&parts)?;
         self.check_create_in(namespace, None)?;
         let options = options(stmt, self.an.env)?;
         // A function in C or in `internal` runs code that the database does not check, so these languages are not trusted. A trusted language needs `USAGE`.

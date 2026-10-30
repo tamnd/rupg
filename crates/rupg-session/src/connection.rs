@@ -8414,6 +8414,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/state_views.test")));
     }
 
+    /// `LookupCreationNamespace`: `CREATE FUNCTION`, `CREATE DOMAIN`, `CREATE TYPE` and `CREATE AGGREGATE` with the schema `pg_temp` make the temporary schema of the session when it does not exist yet. `connection/temp_schema.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn temp_schema() {
+        big_stack(|| script(include_str!("connection/temp_schema.test")));
+    }
+
     /// Temporary tables, views and sequences: the schema `pg_temp_N` that the first temporary object makes, its place at the front of the search path, a temporary table that hides a table of the same name, `pg_temp` in a name and in `search_path`, the errors of a temporary object in another schema and of `ON COMMIT` on a table that is not temporary, a view of a temporary table, a TOAST table in `pg_toast_temp_N`, and a rollback of a `CREATE TEMP TABLE`. `connection/temp_tables.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn temp_tables() {

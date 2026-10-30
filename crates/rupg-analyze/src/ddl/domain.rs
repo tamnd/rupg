@@ -27,13 +27,7 @@ impl Definer<'_, '_> {
     /// `DefineDomain`: the domain, its array type and its check constraints. The return value is the OID of the domain.
     pub(super) fn create_domain(&mut self, stmt: &CreateDomainStmt) -> Result<u32> {
         let parts = names(&stmt.domainname);
-        let (schema, name) = self.an.split_name(&parts, None)?;
-        let namespace = match schema {
-            Some(namespace) => namespace,
-            None => self.an.env.search_path().first().copied().ok_or_else(|| {
-                Error::new(SqlState::UNDEFINED_SCHEMA, "no schema has been selected to create in")
-            })?,
-        };
+        let (namespace, name) = self.ts_creation(&parts)?;
         self.check_create_in(namespace, None)?;
         let type_name = stmt.typeName.as_deref().ok_or_else(|| Error::internal("a domain type"))?;
         let type_at = place(type_name.location);

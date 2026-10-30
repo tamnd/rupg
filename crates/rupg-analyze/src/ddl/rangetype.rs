@@ -60,11 +60,7 @@ impl Definer<'_, '_> {
     /// `DefineRange`: the range type, its multirange type, their array types, the constructors and the cast from the range type to the multirange type.
     pub(super) fn create_range(&mut self, stmt: &CreateRangeStmt) -> Result<()> {
         let parts = names(&stmt.typeName);
-        let (schema, name) = self.an.split_name(&parts, None)?;
-        let namespace = match schema {
-            Some(namespace) => namespace,
-            None => self.first_schema()?,
-        };
+        let (namespace, name) = self.ts_creation(&parts)?;
         self.check_create_in(namespace, None)?;
         self.check_type_name(namespace, name)?;
         let mut options = Options::default();
