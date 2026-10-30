@@ -487,6 +487,8 @@ struct Parsed {
     serialize: Option<bool>,
     /// True for `CREATE TABLE AS` and `SELECT INTO`, whose rows go into the new table and not to the client.
     into: bool,
+    /// The query identifier of the statement, from its text.
+    query_id: i64,
 }
 
 /// `ParseExplainOptionList`: the options of the statement and the checks of the options that need `ANALYZE`.
@@ -622,6 +624,7 @@ impl Connection {
         notices: &mut Vec<Notice>,
     ) -> Result<Done, Error> {
         let mut parsed = parse_options(stmt)?;
+        parsed.query_id = rupg_sql::query_id(text);
         let Some(node) = &stmt.query else {
             return Err(Error::internal("EXPLAIN with no statement"));
         };
@@ -868,6 +871,9 @@ impl Connection {
                 let settings = reader.settings().explain();
                 settings.into_iter().map(|(name, value)| (name.to_string(), value)).collect()
             }),
+            query_id: (parsed.verbose
+                && reader.settings().get("compute_query_id").as_deref() == Some("on"))
+            .then_some(parsed.query_id),
         };
         rupg_func::explain(&tree, &options, actuals.as_ref(), reader)
     }

@@ -22,6 +22,7 @@ mod actions;
 mod error;
 mod filter;
 mod generated;
+mod jumble;
 mod lexer;
 pub mod nodes;
 mod parser;
@@ -30,6 +31,7 @@ pub use error::{Error, Notice, Severity};
 pub use filter::Tokens;
 pub use generated::keywords::{Category, Keyword};
 pub use generated::tables::{RULES, STATES, TOKENS, token};
+pub use jumble::query_id;
 pub use lexer::{Lexer, Token, Value};
 pub use parser::{
     SyntaxError, character, check, keyword, keywords, parse, parse_plpgsql_assign,

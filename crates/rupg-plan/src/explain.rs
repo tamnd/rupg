@@ -44,6 +44,8 @@ pub struct Options {
     pub memory: Option<(u64, u64)>,
     /// `SETTINGS`: the name and the value of each parameter that changes the planning and does not have its boot value.
     pub settings: Option<Vec<(String, String)>>,
+    /// `VERBOSE` with `compute_query_id` on: the query identifier of the statement.
+    pub query_id: Option<i64>,
 }
 
 /// The output of the rows of the result for `SERIALIZE`, as `SerializeMetrics` keeps it.
@@ -97,6 +99,7 @@ impl Default for Options {
             serialize: None,
             memory: None,
             settings: None,
+            query_id: None,
         }
     }
 }
@@ -177,6 +180,10 @@ pub fn explain_analyzed(
     e.node(&plan.root, None, None)?;
     if let Some(settings) = &options.settings {
         e.settings(settings);
+    }
+    // `ExplainPrintPlan`: `compute_query_id = regress` shows no identifier, so that the output of the tests does not change.
+    if let Some(id) = options.query_id {
+        e.w.integer("Query Identifier", None, id);
     }
     // `peek_buffer_usage`: the other forms show the counts of the buffers of the planning even when they are 0.
     let planning_buffers = options.buffers && options.format != Format::Text;

@@ -196,3 +196,27 @@ fields x:23:4:-1
 row 1
 row 1
 SELECT 2
+> set compute_query_id = on
+SET
+> explain (verbose, costs off) select b from ea where a = 1
+fields QUERY PLAN:25:-1:-1
+row Index Scan using ea_pkey on public.ea
+row   Output: b
+row   Index Cond: (ea.a = 1)
+row Query Identifier: -5587172539219588978
+EXPLAIN
+> explain (verbose, costs off) SELECT b FROM ea WHERE a = 42
+fields QUERY PLAN:25:-1:-1
+row Index Scan using ea_pkey on public.ea
+row   Output: b
+row   Index Cond: (ea.a = 42)
+row Query Identifier: -5587172539219588978
+EXPLAIN
+> reset compute_query_id
+RESET
+> explain (verbose, costs off) select b from ea where a = 1
+fields QUERY PLAN:25:-1:-1
+row Index Scan using ea_pkey on public.ea
+row   Output: b
+row   Index Cond: (ea.a = 1)
+EXPLAIN
