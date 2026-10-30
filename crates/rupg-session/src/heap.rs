@@ -803,15 +803,17 @@ impl Heap {
 
     /// The rows of a table that the view sees, `HeapTupleSatisfiesMVCC`. Each row ends with the ID of its version.
     pub(crate) fn rows(&self, relation: u32, view: &View) -> Vec<Vec<Value>> {
-        self.visible_rows(relation, view, false)
+        self.visible_rows(relation, view, false, None)
     }
 
-    /// The rows of a table that the view sees, as [`Heap::rows`] gives them, with the values of the system columns `xmin` and `xmax` of each version before the ID of the version.
-    pub(crate) fn rows_with_xids(&self, relation: u32, view: &View) -> Vec<Vec<Value>> {
-        self.visible_rows(relation, view, true)
-    }
-
-    fn visible_rows(&self, relation: u32, view: &View, xids: bool) -> Vec<Vec<Value>> {
+    /// The rows of [`Heap::rows`], with the values of the system columns `xmin` and `xmax` of each version before the ID of the version when `xids` is true. With `used`, a column that is false in `used` or not in it is null, which does not copy its value.
+    pub(crate) fn visible_rows(
+        &self,
+        relation: u32,
+        view: &View,
+        xids: bool,
+        used: Option<&[bool]>,
+    ) -> Vec<Vec<Value>> {
         let state = self.state();
         let Some(table) = state.tables.get(&(view.database, relation)) else {
             return Vec::new();
@@ -822,7 +824,12 @@ impl Heap {
             .filter(|version| visible(version, view))
             .map(|version| {
                 let mut row = Vec::with_capacity(version.values.len() + 3);
-                row.extend_from_slice(&version.values);
+                match used {
+                    Some(used) => row.extend(version.values.iter().enumerate().map(|(i, v)| {
+                        if used.get(i).copied().unwrap_or(false) { v.clone() } else { Value::Null }
+                    })),
+                    None => row.extend_from_slice(&version.values),
+                }
                 if xids {
                     let xmax = if version.xmax == 0 { version.aborted } else { version.xmax };
                     row.push(Value::Oid(version.xmin));

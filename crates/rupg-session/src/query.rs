@@ -1173,16 +1173,24 @@ impl rupg_func::Session for Reader<'_> {
         }
     }
 
-    fn table_rows(&self, relation: u32) -> Result<Vec<Vec<Value>>> {
+    fn table_rows(&self, relation: u32, used: Option<&[bool]>) -> Result<Vec<Vec<Value>>> {
         match (self.activity, &self.view) {
-            (Some((_, store)), Some(view)) => Ok(store.heap().rows(relation, view)),
+            (Some((_, store)), Some(view)) => {
+                Ok(store.heap().visible_rows(relation, view, false, used))
+            }
             _ => Ok(Vec::new()),
         }
     }
 
-    fn table_rows_with_xids(&self, relation: u32) -> Result<Vec<Vec<Value>>> {
+    fn table_rows_with_xids(
+        &self,
+        relation: u32,
+        used: Option<&[bool]>,
+    ) -> Result<Vec<Vec<Value>>> {
         match (self.activity, &self.view) {
-            (Some((_, store)), Some(view)) => Ok(store.heap().rows_with_xids(relation, view)),
+            (Some((_, store)), Some(view)) => {
+                Ok(store.heap().visible_rows(relation, view, true, used))
+            }
             _ => Ok(Vec::new()),
         }
     }
