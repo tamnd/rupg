@@ -24,26 +24,28 @@ struct Key {
     sort: Option<Kernel>,
     equal: Option<Kernel>,
     nulls_first: bool,
-    /// For a sort function that is `<` or `>` of an integer type: true for `>`. The keys then compare the integers with no call.
+    /// For a sort function that is `<` or `>` of an integer, date, time or text type: true for `>`. The keys then compare the integers or the bytes with no call.
     descending: Option<bool>,
 }
 
-/// For the function `<` or `>` of `smallint`, `integer` or `bigint` with itself: true for `>`.
+/// For the function `<` or `>` of `smallint`, `integer`, `bigint`, `date`, `time`, `timestamp`, `timestamptz` or `text` with itself: true for `>`. The order of these types is the order of their integers, also for the infinite values, and the order of the bytes for `text`, as the comparison of text does here.
 fn native(func: u32) -> Option<bool> {
     let name = rupg_pgcatalog::builtin::proc_by_oid(func)?.name;
     match name {
-        "int2lt" | "int4lt" | "int8lt" => Some(false),
-        "int2gt" | "int4gt" | "int8gt" => Some(true),
+        "int2lt" | "int4lt" | "int8lt" | "date_lt" | "time_lt" | "timestamp_lt"
+        | "timestamptz_lt" | "text_lt" => Some(false),
+        "int2gt" | "int4gt" | "int8gt" | "date_gt" | "time_gt" | "timestamp_gt"
+        | "timestamptz_gt" | "text_gt" => Some(true),
         _ => None,
     }
 }
 
-/// The integer of a value of an integer type.
+/// The integer of a value of an integer, date or time type.
 fn int(v: &Value) -> Option<i64> {
     match v {
         Value::Int2(v) => Some(i64::from(*v)),
-        Value::Int4(v) => Some(i64::from(*v)),
-        Value::Int8(v) => Some(*v),
+        Value::Int4(v) | Value::Date(v) => Some(i64::from(*v)),
+        Value::Int8(v) | Value::Time(v) | Value::Timestamp(v) | Value::TimestampTz(v) => Some(*v),
         _ => None,
     }
 }
@@ -91,12 +93,18 @@ impl<'a> Keys<'a> {
         for key in &self.keys {
             let Some(sort) = key.sort else { continue };
             let (x, y) = (&a[key.column], &b[key.column]);
-            if let (Some(descending), Some(x), Some(y)) = (key.descending, int(x), int(y)) {
-                let order = if descending { y.cmp(&x) } else { x.cmp(&y) };
-                if order != Ordering::Equal {
-                    return Ok(order);
+            if let Some(descending) = key.descending {
+                let order = match (x, y) {
+                    (Value::Text(x), Value::Text(y)) => Some(x.as_bytes().cmp(y.as_bytes())),
+                    _ => int(x).zip(int(y)).map(|(x, y)| x.cmp(&y)),
+                };
+                if let Some(order) = order {
+                    let order = if descending { order.reverse() } else { order };
+                    if order != Ordering::Equal {
+                        return Ok(order);
+                    }
+                    continue;
                 }
-                continue;
             }
             let order = match (x.is_null(), y.is_null()) {
                 (true, true) => Ordering::Equal,
