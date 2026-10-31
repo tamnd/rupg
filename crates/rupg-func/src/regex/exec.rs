@@ -81,6 +81,8 @@ struct Dfa {
     closed: Vec<Vec<(u8, u32, bool)>>,
     /// For each closed state and ASCII character, the closure with the mask 0 of the step, with [`MATCHED`] set when it has `Match`, or [`UNKNOWN`].
     fast: Vec<u32>,
+    /// For each closed state, the ASCII characters whose step with the mask 0 gives the same state with no `Match`, by bit.
+    loops: Vec<u128>,
     /// The steps of the closed states after the characters.
     steps: FxMap<(u32, u32), u32>,
     /// The items of [`Dfa::fast`] for the characters that are not ASCII.
@@ -110,6 +112,7 @@ impl Dfa {
         self.states.push(pcs);
         self.closed.push(Vec::new());
         self.fast.extend([UNKNOWN; 128]);
+        self.loops.push(0);
         id
     }
 }
@@ -382,9 +385,17 @@ impl Program {
         }
         // With no constraint of words or lines, only the start and the end of the string have constraints that hold.
         let ends_only = self.asserts == 0 || (self.asserts & 0xf0 == 0 && !self.nlanch);
-        for pos in start..s.len() {
+        let mut pos = start;
+        while pos < s.len() {
             if state == dead && !dfa.restart {
                 break;
+            }
+            // The characters that keep the state go by with no step, up to the last character, where the end of the string can hold.
+            let loops = dfa.loops[state as usize];
+            if loops != 0 && ends_only {
+                while pos + 1 < s.len() && s[pos] < 128 && loops >> s[pos] & 1 != 0 {
+                    pos += 1;
+                }
             }
             let c = s[pos];
             let mask = if ends_only && pos + 1 < s.len() { 0 } else { self.mask(s, pos + 1) };
@@ -399,7 +410,12 @@ impl Program {
                 let known = closed | if matched { MATCHED } else { 0 };
                 match c {
                     _ if mask != 0 => {}
-                    0..128 => dfa.fast[state as usize * 128 + c as usize] = known,
+                    0..128 => {
+                        dfa.fast[state as usize * 128 + c as usize] = known;
+                        if known == state {
+                            dfa.loops[state as usize] |= 1 << c;
+                        }
+                    }
                     _ => {
                         dfa.wide.insert((state, c), known);
                     }
@@ -413,6 +429,7 @@ impl Program {
             if matched && hit(pos + 1) {
                 return Some(pos + 1);
             }
+            pos += 1;
         }
         None
     }
