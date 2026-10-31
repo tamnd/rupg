@@ -2900,7 +2900,7 @@ fn distinct_keys<'q>(level: &Level<'q>) -> (Vec<&'q SortGroup>, Vec<SortKey<'q>>
     (processed, upper_canonical(level, keys, |k| &*k.item.expr))
 }
 
-/// `create_partial_distinct_paths` and `generate_useful_gather_paths`: the `DISTINCT` of the rows of each process of the partial path `input` with `workers` workers, below a `Gather` or a `Gather Merge` of the mode. A `HashAggregate` gives the rows of each process with no copies when `enable_hashagg` is on, and a `Unique` over a `Sort` gives them in the order of the keys. `add_partial_path` keeps the `HashAggregate` only when it costs less than the `Unique` by more than the fuzz factor, and the `Gather` collects the one that costs less. The `DISTINCT` above the gather, as `create_final_distinct_paths`, takes away the rows that two processes both give. The result is `None` when the mode has no plan of this kind, or when no key of `DISTINCT` is not redundant.
+/// `create_partial_distinct_paths` and `generate_useful_gather_paths`: the `DISTINCT` of the rows of each process of the partial path `input` with `workers` workers, below a `Gather` or a `Gather Merge` of the mode. A `HashAggregate` gives the rows of each process with no copies when `enable_hashagg` is on, and a `Unique` over a `Sort` gives them in the order of the keys. `add_partial_path` keeps the `HashAggregate` only when it costs less than the `Unique` by more than the fuzz factor, and the `Gather` collects the one that costs less. The `DISTINCT` above the gather, as `create_final_distinct_paths`, takes away the rows that two processes both give. The result is `None` when the mode has no plan of this kind.
 fn partial_distinct<'q>(
     level: &Level<'q>,
     input: Node<'q>,
@@ -2911,11 +2911,19 @@ fn partial_distinct<'q>(
     let query = level.query;
     let scope = level.scope;
     let (processed, keys) = distinct_keys(level);
-    if processed.is_empty() {
-        return None;
-    }
     let enable = crate::enable();
     let c = input.cost;
+    // With no keys that are not redundant, each process gives its first row, as the `Limit` of one row of `create_partial_distinct_paths`, and the `Limit` above the gather gives the first row of all.
+    if processed.is_empty() {
+        if mode != Mode::Hashed {
+            return None;
+        }
+        let mut node = Node::new(Kind::Limit, scope, vec![input]);
+        node.cost = limit_cost(c, 1.0, 0.0);
+        order.clear();
+        let rows = cost::clamp_rows(parallel::divisor(&enable, workers));
+        return Some(parallel::gather(&enable, node, workers, rows));
+    }
     let ncols = processed.len() as f64;
     let exprs: Vec<&Expr> = processed.iter().map(|d| level.target(d.target)).collect();
     let groups = level.stats.groups(&exprs, c.rows);
