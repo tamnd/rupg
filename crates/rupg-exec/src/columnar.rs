@@ -59,6 +59,40 @@ impl Hasher for Fx {
 type FxMap<K, V> = HashMap<K, V, BuildHasherDefault<Fx>>;
 type FxSet<K> = HashSet<K, BuildHasherDefault<Fx>>;
 
+/// The words of a key of `GROUP BY` and its mask of nulls, kept in place for a key of up to 3 words.
+enum KeyMap {
+    Small(FxMap<[u64; 4], u32>),
+    Large(FxMap<Box<[u64]>, u32>),
+}
+
+impl KeyMap {
+    fn new(words: usize) -> KeyMap {
+        if words <= 4 { KeyMap::Small(FxMap::default()) } else { KeyMap::Large(FxMap::default()) }
+    }
+
+    /// The group of the key `word`, and true for a new group, which gets the ID `next`.
+    #[inline]
+    fn id(&mut self, word: &[u64], next: u32) -> (u32, bool) {
+        match self {
+            KeyMap::Small(map) => {
+                let mut key = [0_u64; 4];
+                key[..word.len()].copy_from_slice(word);
+                match map.entry(key) {
+                    std::collections::hash_map::Entry::Occupied(e) => (*e.get(), false),
+                    std::collections::hash_map::Entry::Vacant(e) => (*e.insert(next), true),
+                }
+            }
+            KeyMap::Large(map) => match map.get(word) {
+                Some(&id) => (id, false),
+                None => {
+                    map.insert(word.into(), next);
+                    (next, true)
+                }
+            },
+        }
+    }
+}
+
 /// The physical type that a column of the type `ty` has in a segment.
 fn kind_of(ty: u32) -> Option<Kind> {
     Some(match ty {
@@ -147,6 +181,24 @@ enum Data {
     Const(Value),
 }
 
+/// The integers of a column for a loop on the rows: a vector with its null rows, or one value for each row.
+#[derive(Clone, Copy)]
+enum Ints<'a> {
+    Vector(&'a [i64], Option<&'a [bool]>),
+    Const(Option<i64>),
+}
+
+impl Ints<'_> {
+    #[inline]
+    fn get(self, i: usize) -> Option<i64> {
+        match self {
+            Ints::Vector(v, None) => Some(v[i]),
+            Ints::Vector(v, Some(nulls)) => (!nulls[i]).then(|| v[i]),
+            Ints::Const(v) => v,
+        }
+    }
+}
+
 /// The values of an expression of the type `ty` for the rows of a selection, with the null rows. A `boolean` has the integers 0 and 1. A `numeric` of [`Data::Int`] is an integer.
 struct Col {
     data: Data,
@@ -203,6 +255,16 @@ impl Col {
         match &self.data {
             Data::Int(v) => Some(v[i]),
             Data::Const(v) => int_of(v),
+            _ => None,
+        }
+    }
+
+    /// The integers of [`Col::int`] with the kind of the data found once, for a loop on the rows.
+    fn ints(&self) -> Option<Ints<'_>> {
+        match &self.data {
+            Data::Int(v) => Some(Ints::Vector(v, self.nulls.as_deref())),
+            Data::Const(v) if v.is_null() => Some(Ints::Const(None)),
+            Data::Const(v) => Some(Ints::Const(Some(int_of(v)?))),
             _ => None,
         }
     }
@@ -556,9 +618,9 @@ impl<'q> Exec<'q> {
     ) -> Result<Option<Col>> {
         if let (Some(compare), [a, b]) = (int_compare(src), args) {
             let (a, b) = (self.eval(a, batch, sel)?, self.eval(b, batch, sel)?);
-            if a.is_int() && b.is_int() {
+            if let (Some(a), Some(b)) = (a.ints(), b.ints()) {
                 let out: Vec<Option<bool>> =
-                    (0..sel.len()).map(|i| Some(compare(a.int(i)?, b.int(i)?))).collect();
+                    (0..sel.len()).map(|i| Some(compare(a.get(i)?, b.get(i)?))).collect();
                 return Ok(Some(Col::bools(&out)));
             }
             return Ok(None);
@@ -589,13 +651,22 @@ impl<'q> Exec<'q> {
         }
         if let (Some(op), Some((low, high)), [a, b]) = (int_arith(src), int_range(expr.ty), args) {
             let (a, b) = (self.eval(a, batch, sel)?, self.eval(b, batch, sel)?);
-            if !a.is_int() || !b.is_int() {
-                return Ok(None);
+            let (Some(a), Some(b)) = (a.ints(), b.ints()) else { return Ok(None) };
+            if let (Ints::Vector(x, None), Ints::Const(Some(y))) = (a, b) {
+                // A column and a constant with no null: the common case, as in `ResolutionWidth + 1`.
+                let mut values = Vec::with_capacity(x.len());
+                for &x in x {
+                    match op(x, y).filter(|v| (low..=high).contains(v)) {
+                        Some(v) => values.push(v),
+                        None => return Ok(None),
+                    }
+                }
+                return Ok(Some(Col { data: Data::Int(values), nulls: None, ty: expr.ty }));
             }
             let mut values = Vec::with_capacity(sel.len());
             let mut nulls = Vec::with_capacity(sel.len());
             for i in 0..sel.len() {
-                match (a.int(i), b.int(i)) {
+                match (a.get(i), b.get(i)) {
                     (Some(x), Some(y)) => match op(x, y).filter(|v| (low..=high).contains(v)) {
                         Some(v) => {
                             values.push(v);
@@ -1118,8 +1189,8 @@ pub(crate) fn run(
     }
     let segments = rows.div_ceil(ROWS);
     let mut scan = Scan { exec: &mut exec, conds: &conds, segments, rows, open };
-    let (rows, tables) = if query.grouped {
-        let Some(out) = grouped(&mut scan, query, &calls, &kept_columns)? else {
+    let (rows, tables, ordered) = if query.grouped {
+        let Some(out) = grouped(&mut scan, query, &calls, &kept_columns, offset, count)? else {
             return Ok(None);
         };
         out
@@ -1147,12 +1218,14 @@ pub(crate) fn run(
             Ok(found.len() < needed)
         })?;
         let tables = scan::kept_tables(query, found, &kept);
-        let rows = project(query, params, session, cache, &tables, needed, None, offset, count)?;
-        (rows, tables)
+        let (rows, _) =
+            project(query, params, session, cache, &tables, needed, None, offset, count)?;
+        (rows, tables, false)
     };
     drop(tables);
     let types: Vec<u32> = query.targets.iter().map(|t| t.expr.ty).collect();
-    let rows = crate::order(query, rows, &types, offset, count, session)?;
+    let rows =
+        if ordered { rows } else { crate::order(query, rows, &types, offset, count, session)? };
     let width = query.targets.iter().take_while(|t| !t.junk).count();
     Ok(Some(
         rows.into_iter()
@@ -1164,7 +1237,7 @@ pub(crate) fn run(
     ))
 }
 
-/// The rows of the targets for each row of `tables`, or for each group with the results of its aggregates, which pass `HAVING`.
+/// The rows of the targets for each row of `tables`, or for each group with the results of its aggregates, which pass `HAVING`. It gives true when the rows are in the order of `ORDER BY` with `OFFSET` and `LIMIT` done: with a `LIMIT` and many groups, the targets of `ORDER BY` run for each group, and the other targets only for the groups that `LIMIT` keeps, when they cannot fail.
 #[allow(clippy::too_many_arguments)]
 fn project(
     query: &Query,
@@ -1176,7 +1249,7 @@ fn project(
     groups: Option<Groups>,
     offset: usize,
     count: Option<usize>,
-) -> Result<Vec<Vec<Value>>> {
+) -> Result<(Vec<Vec<Value>>, bool)> {
     let levels = crate::set_levels(&query.targets);
     let mut eval = Eval::new(params, session, tables, cache, &[]);
     let mut out = Vec::new();
@@ -1184,6 +1257,46 @@ fn project(
         Some((order, mut aggs, firsts)) => {
             let tuples: Vec<[usize; 1]> =
                 (0..aggs.len()).map(|g| [if g < firsts { g } else { scan::NONE }]).collect();
+            if let Some(count) = count
+                && levels.is_empty()
+                && query.distinct.is_empty()
+                && !query.sort.is_empty()
+                && order.len() > offset.saturating_add(count).saturating_mul(4)
+                && top_safe(query)
+            {
+                let sorted: Vec<bool> = (0..query.targets.len())
+                    .map(|t| query.sort.iter().any(|s| s.target == t))
+                    .collect();
+                let mut partial = Vec::new();
+                for (n, g) in order.into_iter().enumerate() {
+                    crate::interrupt(session, n)?;
+                    eval.tuple = &tuples[g];
+                    eval.group = Group { aggs: std::mem::take(&mut aggs[g]), ..Group::default() };
+                    if let Some(having) = &query.having
+                        && eval.eval(having)? != Value::Bool(true)
+                    {
+                        continue;
+                    }
+                    let mut row = Vec::with_capacity(query.targets.len() + 1);
+                    for (target, &sorted) in query.targets.iter().zip(&sorted) {
+                        row.push(if sorted { eval.eval(&target.expr)? } else { Value::Null });
+                    }
+                    row.push(Value::Int8(i64::try_from(g).unwrap_or(i64::MAX)));
+                    partial.push(row);
+                    aggs[g] = std::mem::take(&mut eval.group.aggs);
+                }
+                let mut types: Vec<u32> = query.targets.iter().map(|t| t.expr.ty).collect();
+                types.push(oid::INT8);
+                let partial = crate::order(query, partial, &types, offset, Some(count), session)?;
+                for row in partial {
+                    let Some(&Value::Int8(g)) = row.last() else { continue };
+                    let g = usize::try_from(g).unwrap_or(0);
+                    eval.tuple = &tuples[g];
+                    eval.group = Group { aggs: std::mem::take(&mut aggs[g]), ..Group::default() };
+                    eval.project(&query.targets, &levels, &mut out, usize::MAX)?;
+                }
+                return Ok((out, true));
+            }
             for (n, g) in order.into_iter().enumerate() {
                 crate::interrupt(session, n)?;
                 eval.tuple = &tuples[g];
@@ -1223,7 +1336,23 @@ fn project(
             }
         }
     }
-    Ok(out)
+    Ok((out, false))
+}
+
+/// True when each target that `ORDER BY` does not have cannot fail for a group: a column, a constant, a parameter, an aggregate, or a key of `GROUP BY`, which ran for each group.
+fn top_safe(query: &Query) -> bool {
+    fn safe(expr: &Expr, query: &Query) -> bool {
+        match &expr.kind {
+            ExprKind::Var(_) | ExprKind::Const(_) | ExprKind::Param(_) | ExprKind::Agg(_) => true,
+            ExprKind::Relabel(arg, _) => safe(arg, query),
+            _ => query.group.iter().any(|g| query.targets[g.target].expr == *expr),
+        }
+    }
+    query
+        .targets
+        .iter()
+        .enumerate()
+        .all(|(t, target)| query.sort.iter().any(|s| s.target == t) || safe(&target.expr, query))
 }
 
 /// The scan of the vectors of the table with the conditions of `WHERE`.
@@ -1234,6 +1363,9 @@ struct Scan<'e, 'q> {
     rows: usize,
     open: bool,
 }
+
+/// The rows of the groups, the tables of the first row of each group, and true when the rows are in the order of `ORDER BY` with `OFFSET` and `LIMIT` done.
+type Grouped = (Vec<Vec<Value>>, scan::Tables, bool);
 
 /// The order of the groups, the values of the aggregates of each group, and the number of groups.
 type Groups = (Vec<usize>, Vec<Vec<(*const Aggref, Value)>>, usize);
@@ -1299,7 +1431,9 @@ fn grouped(
     query: &Query,
     calls: &[(&Aggref, &Expr)],
     kept_columns: &[usize],
-) -> Result<Option<(Vec<Vec<Value>>, scan::Tables)>> {
+    offset: usize,
+    count: Option<usize>,
+) -> Result<Option<Grouped>> {
     let mut aggs: Vec<Call<'_>> = Vec::with_capacity(calls.len());
     for &(agg, expr) in calls {
         let Some(method) = method(agg, expr)? else { return Ok(None) };
@@ -1313,7 +1447,8 @@ fn grouped(
         aggs.push(Call { agg, key: std::ptr::from_ref(agg), method, states });
     }
     let keys: Vec<&Expr> = query.group.iter().map(|g| &query.targets[g.target].expr).collect();
-    let mut map: FxMap<Box<[u64]>, u32> = FxMap::default();
+    let mut map = KeyMap::new(keys.len() + 1);
+    let mut new_rows: Vec<u32> = Vec::new();
     let mut firsts: Vec<Vec<Value>> = Vec::new();
     let mut bail = false;
     let mut word = vec![0_u64; keys.len() + 1];
@@ -1347,6 +1482,7 @@ fn grouped(
             }
         } else {
             let cols = keys.iter().map(|k| exec.eval(k, batch, sel)).collect::<Result<Vec<_>>>()?;
+            new_rows.clear();
             for (i, &row_at) in sel.iter().enumerate() {
                 let mut mask = 0_u64;
                 for (k, col) in cols.iter().enumerate() {
@@ -1362,29 +1498,30 @@ fn grouped(
                     }
                 }
                 word[keys.len()] = mask;
-                let id = match map.get(&word[..]) {
-                    Some(&id) => {
-                        trailing = true;
-                        id
-                    }
-                    None => {
-                        trailing = false;
-                        let id = u32::try_from(groups)
-                            .map_err(|_| Error::internal("too many groups"))?;
-                        map.insert(word.clone().into_boxed_slice(), id);
-                        groups += 1;
-                        let mut row = Vec::with_capacity(kept_columns.len());
-                        for &column in kept_columns {
-                            row.push(exec.value_at(batch, column, row_at)?);
-                        }
-                        firsts.push(row);
-                        for call in &mut aggs {
-                            grow(call, groups, params, session, cache, &empty)?;
-                        }
-                        id
-                    }
-                };
+                let next = u32::try_from(groups).map_err(|_| Error::internal("too many groups"))?;
+                let (id, new) = map.id(&word, next);
+                trailing = !new;
+                if new {
+                    groups += 1;
+                    new_rows.push(row_at);
+                }
                 ids.push(id);
+            }
+            if !new_rows.is_empty() {
+                let start = firsts.len();
+                firsts.extend(
+                    std::iter::repeat_with(|| Vec::with_capacity(kept_columns.len()))
+                        .take(new_rows.len()),
+                );
+                for &column in kept_columns {
+                    let col = exec.var(batch, column, exec.types[column], &new_rows)?;
+                    for (i, row) in firsts[start..].iter_mut().enumerate() {
+                        row.push(col.value(i, &exec.dicts));
+                    }
+                }
+                for call in &mut aggs {
+                    grow(call, groups, params, session, cache, &empty)?;
+                }
             }
         }
         for call in &mut aggs {
@@ -1429,27 +1566,36 @@ fn grouped(
                 }
                 (Method::SumInt | Method::Int128 { .. }, States::Sum(states)) => {
                     let col = col.as_ref().ok_or_else(|| Error::internal("sum has no argument"))?;
-                    if !col.is_int() {
+                    let Some(ints) = col.ints() else {
                         bail = true;
                         return Ok(false);
-                    }
-                    for (i, &id) in ids.iter().enumerate() {
-                        if let Some(v) = col.int(i) {
-                            let state = &mut states[id as usize];
-                            state.0 += 1;
-                            state.1 += i128::from(v);
+                    };
+                    match ints {
+                        Ints::Vector(v, None) if keys.is_empty() => {
+                            let state = &mut states[0];
+                            state.0 += i64::try_from(v.len()).unwrap_or(i64::MAX);
+                            state.1 += v.iter().map(|&x| i128::from(x)).sum::<i128>();
+                        }
+                        _ => {
+                            for (i, &id) in ids.iter().enumerate() {
+                                if let Some(v) = ints.get(i) {
+                                    let state = &mut states[id as usize];
+                                    state.0 += 1;
+                                    state.1 += i128::from(v);
+                                }
+                            }
                         }
                     }
                 }
                 (Method::Min | Method::Max, States::Extreme(states)) => {
                     let col = col.as_ref().ok_or_else(|| Error::internal("min has no argument"))?;
-                    if !col.is_int() {
+                    let Some(ints) = col.ints() else {
                         bail = true;
                         return Ok(false);
-                    }
+                    };
                     let min = matches!(call.method, Method::Min);
                     for (i, &id) in ids.iter().enumerate() {
-                        if let Some(v) = col.int(i) {
+                        if let Some(v) = ints.get(i) {
                             let state = &mut states[id as usize];
                             *state = Some(match *state {
                                 None => v,
@@ -1544,7 +1690,7 @@ fn grouped(
     }
     let tables = scan::kept_tables(query, firsts, &kept);
     let order = group_order(query, params, session, cache, &tables, groups, trailing)?;
-    let rows = project(
+    let (rows, ordered) = project(
         query,
         params,
         session,
@@ -1552,10 +1698,10 @@ fn grouped(
         &tables,
         usize::MAX,
         Some((order, results, first_count)),
-        0,
-        None,
+        offset,
+        count,
     )?;
-    Ok(Some((rows, tables)))
+    Ok(Some((rows, tables, ordered)))
 }
 
 /// A new group for an aggregate: the states of `groups` groups.
