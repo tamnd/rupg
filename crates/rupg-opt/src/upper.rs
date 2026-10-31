@@ -9,7 +9,7 @@ use rupg_analyze::{
 };
 use rupg_pgcatalog::builtin;
 use rupg_plan::{
-    Conflict, Cost, Grouped, Item, Kind, Label, Node, Operation, Replaced, Rollup, SortKey,
+    Conflict, Cost, Grouped, Item, Kind, Label, Node, Operation, Replaced, Rollup, SortKey, Split,
     Strategy, SubPlan, TARGET, Table,
 };
 
@@ -795,6 +795,9 @@ impl<'q> Builder<'q> {
                 paths.add(costs(&found.0), Vec::new(), found);
             }
         }
+        for found in self.partial_grouping(level) {
+            paths.add(costs(&found.0), Vec::new(), found);
+        }
         match paths.fractional(fraction, |(n, _)| n.cost.rows) {
             Some(found) => found,
             // `build_minmax_path`: no plan of `FROM` gives the rows in the order of the subquery, so the query has no plan.
@@ -942,9 +945,60 @@ impl<'q> Builder<'q> {
     fn upper_order(
         &mut self,
         level: &Level<'q>,
+        node: Node<'q>,
+        order: Vec<OrderKey>,
+        only: bool,
+    ) -> Option<(Node<'q>, Vec<OrderKey>)> {
+        self.upper_split(level, node, order, only, None)
+    }
+
+    /// `create_partial_grouping_paths` and `add_paths_to_grouping_rel`: the plan of a query with groups whose `Agg` is in two parts, a partial aggregate of the partial path of the only relation of `FROM`, a `Gather` of the states of the processes and an `Agg` that combines them. The query has no plan of this kind when it has grouping sets, when an aggregate call has no combine function or no serialization function for an `internal` state, or when a target or a condition of `HAVING` is not parallel safe.
+    fn partial_grouping(&mut self, level: &Level<'q>) -> Vec<(Node<'q>, Vec<OrderKey>)> {
+        let query = level.query;
+        let Some((partial, workers)) = self.partials.get(&level.scope).cloned() else {
+            return Vec::new();
+        };
+        let (_, having) = having_split(query);
+        if !query.grouped
+            || query.set_op.is_some()
+            || !query.grouping_sets.is_empty()
+            || level.presorted
+            || degenerate(query).is_some()
+            || !query.targets.iter().all(|t| parallel::safe(&t.expr))
+            || !having.iter().all(|h| parallel::safe(h))
+        {
+            return Vec::new();
+        }
+        let modes = if query.group.is_empty() {
+            &[Mode::Hashed][..]
+        } else {
+            &[Mode::Hashed, Mode::SortHashed, Mode::Sorted, Mode::GatherSorted][..]
+        };
+        // `add_path` of the grouped relation: a mode stays when no other mode costs less with rows in the same order or a better order.
+        let mut kept = Paths::new(false);
+        for &mode in modes {
+            let mut order = Vec::new();
+            if let Some(node) = partial_aggregate(level, partial.clone(), workers, mode, &mut order)
+            {
+                kept.add(costs(&node), order, mode);
+            }
+        }
+        kept.kept()
+            .into_iter()
+            .filter_map(|mode| {
+                self.upper_split(level, partial.clone(), Vec::new(), false, Some((workers, mode)))
+            })
+            .collect()
+    }
+
+    /// [`Builder::upper_order`]. With `partial`, the node is a partial path with this number of workers, and the `Agg` is in two parts of the mode, as [`partial_aggregate`] makes it.
+    fn upper_split(
+        &mut self,
+        level: &Level<'q>,
         mut node: Node<'q>,
         mut order: Vec<OrderKey>,
         mut only: bool,
+        partial: Option<(i32, Mode)>,
     ) -> Option<(Node<'q>, Vec<OrderKey>)> {
         let query = level.query;
         let scope = level.display;
@@ -980,7 +1034,12 @@ impl<'q> Builder<'q> {
                     // `set_rtable_names`: the relations of `FROM` have no scan in the plan, so they take no name.
                     self.current.retain(|&s| s != level.scope);
                 } else {
-                    node = aggregate(level, node, &mut order, only)?;
+                    node = match partial {
+                        Some((workers, mode)) => {
+                            partial_aggregate(level, node, workers, mode, &mut order)?
+                        }
+                        None => aggregate(level, node, &mut order, only)?,
+                    };
                     project(&mut node, costs.group.0, costs.group.1);
                 }
                 // The rows of grouping sets have no order, so the steps above take the cheapest plan of the groups, as each plan has the same rows.
@@ -1375,6 +1434,7 @@ impl<'q> Builder<'q> {
                         keys,
                         sets: Vec::new(),
                         unique: false,
+                        split: Split::Simple,
                         table: Some(table),
                     };
                     let mut node = Node::new(kind, scope, vec![append.clone()]);
@@ -1563,6 +1623,7 @@ fn aggregate<'q>(
                 keys: Vec::new(),
                 sets: Vec::new(),
                 unique: false,
+                split: Split::Simple,
                 table: None,
             },
             scope,
@@ -1679,6 +1740,7 @@ fn aggregate<'q>(
                 keys: hash_keys,
                 sets: Vec::new(),
                 unique: false,
+                split: Split::Simple,
                 table: Some(Table { of: Grouped::Group(query), groups, keys: targets }),
             },
             scope,
@@ -1698,13 +1760,181 @@ fn aggregate<'q>(
     order.truncate(group.len());
     let strategy = if group_node { Strategy::Group } else { Strategy::Sorted };
     let mut node = Node::new(
-        Kind::Aggregate { strategy, keys, sets: Vec::new(), unique: false, table: None },
+        Kind::Aggregate {
+            strategy,
+            keys,
+            sets: Vec::new(),
+            unique: false,
+            split: Split::Simple,
+            table: None,
+        },
         scope,
         vec![input],
     );
     node.filter = filter;
     let startup = sorted_input.startup + having_startup;
     node.cost = Cost { startup, total: sorted_total, rows, width: 0 };
+    Some(node)
+}
+
+/// The cost of a function for each call, in units of `cpu_operator_cost`, as `add_function_cost` gives it from `procost`.
+fn function_units(oid: u32) -> f64 {
+    builtin::proc_by_oid(oid).map_or(1.0, |p| f64::from(p.cost))
+}
+
+/// The plan of the two parts of an `Agg` with groups, as `create_partial_grouping_paths` and `gather_grouping_paths` make them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Mode {
+    /// A `Partial HashAggregate`, a `Gather` and a `Finalize HashAggregate`. With no groups, a `Partial Aggregate`, a `Gather` and a `Finalize Aggregate`.
+    Hashed,
+    /// A `Partial HashAggregate`, a `Sort` of its groups, a `Gather Merge` and a `Finalize GroupAggregate`.
+    SortHashed,
+    /// A `Sort` of the rows of each process, a `Partial GroupAggregate`, a `Gather Merge` and a `Finalize GroupAggregate`.
+    Sorted,
+    /// A `Partial HashAggregate`, a `Gather`, a `Sort` of the groups of all the processes and a `Finalize GroupAggregate`.
+    GatherSorted,
+}
+
+/// `create_partial_grouping_paths`, `gather_grouping_paths` and `add_paths_to_grouping_rel`: the `Agg` of a query with groups in two parts over the partial path `input` with `workers` workers. The partial `Agg` gives the states of the groups of each process, a `Gather` or a `Gather Merge` collects them, and the final `Agg` combines the states and calls the final functions. The partial `Agg` has the cost of the transition and of the serialization of the states, and the final `Agg` has the cost of the combine function, of the deserialization and of the final function, as `get_agg_clause_costs` gives them for each part. The result is `None` when an aggregate call cannot be partial, as `can_partial_agg`, or when the query has no aggregate call.
+fn partial_aggregate<'q>(
+    level: &Level<'q>,
+    input: Node<'q>,
+    workers: i32,
+    mode: Mode,
+    order: &mut Vec<OrderKey>,
+) -> Option<Node<'q>> {
+    let query = level.query;
+    let scope = level.scope;
+    let mut exprs_of: Vec<&Expr> = query.targets.iter().map(|t| &t.expr).collect();
+    let (_, having) = having_split(query);
+    exprs_of.extend(having.iter().copied());
+    let mut aggs = Vec::new();
+    exprs::aggregates(&exprs_of, &mut aggs);
+    if aggs.is_empty() {
+        return None;
+    }
+    // `hasNonPartialAggs` and `hasNonSerialAggs`: an ordered call, a call of an ordered-set aggregate or an aggregate with no combine function cannot be partial, and an `internal` state needs the functions of the serialization.
+    let (mut combine, mut serial) = (0.0, 0.0);
+    for a in &aggs {
+        let g = builtin::aggregate(a.oid)?;
+        if is_ordered(a) || g.kind != b'n' || g.combinefn == 0 {
+            return None;
+        }
+        combine += function_units(g.combinefn);
+        if g.transtype == rupg_types::oid::INTERNAL {
+            if g.serialfn == 0 || g.deserialfn == 0 {
+                return None;
+            }
+            serial += function_units(g.serialfn);
+            combine += function_units(g.deserialfn);
+        }
+    }
+    let enable = crate::enable();
+    let units = agg_units(&aggs);
+    let finals = cost::CPU_OPERATOR * final_units(&aggs);
+    let serial = cost::CPU_OPERATOR * serial;
+    let selectivity = cost::list_selectivity(having.iter().copied());
+    let (having_startup, having_cost) = level.stats.qual_costs(having.iter().copied());
+    let filter: Vec<Item<'q>> = having.iter().map(|h| Item::of(h)).collect();
+    let c = input.cost;
+    let n = c.rows;
+    let agg = |strategy, split, keys, table, input| {
+        let kind =
+            Kind::Aggregate { strategy, keys, sets: Vec::new(), unique: false, split, table };
+        Node::new(kind, scope, vec![input])
+    };
+    order.clear();
+    if query.group.is_empty() {
+        // `cost_agg` of `AGG_PLAIN` for each part: one row for each process, and `compute_gather_rows` for the `Gather`.
+        let startup = c.total + cost::CPU_OPERATOR * units * n + serial;
+        let mut node = agg(Strategy::Plain, Split::Partial, Vec::new(), None, input);
+        node.cost = Cost { startup, total: startup + cost::CPU_TUPLE, rows: 1.0, width: 0 };
+        let rows = cost::clamp_rows(parallel::divisor(&enable, workers));
+        let gather = parallel::gather(&enable, node, workers, rows);
+        let g = gather.cost;
+        let startup = g.total + cost::CPU_OPERATOR * combine * g.rows + finals;
+        let total = startup + cost::CPU_TUPLE + having_startup + having_cost;
+        let mut node = agg(Strategy::Plain, Split::Final, Vec::new(), None, gather);
+        node.filter = filter;
+        let startup = startup + having_startup;
+        node.cost = Cost { startup, total, rows: cost::clamp_rows(selectivity), width: 0 };
+        return Some(node);
+    }
+    let (group, hashable, targets) = group_keys(level);
+    let hashed = mode != Mode::Sorted;
+    if group.is_empty() || hashed && (!hashable || !enable.hashagg) {
+        return None;
+    }
+    let nkeys = group.len() as f64;
+    let group_exprs: Vec<&Expr> = group.iter().map(|k| &*k.item.expr).collect();
+    let keys: Vec<Item<'q>> = group.iter().map(|k| k.item.clone()).collect();
+    let (trans, space) = trans_space(&aggs);
+    let entry = cost::hashagg_entry_size(trans, c.width, space);
+    // The partial part, with the groups of the rows of one process, as `dNumPartialPartialGroups`.
+    let groups = level.stats.groups(&group_exprs, n);
+    let mut node = if hashed {
+        // `cost_agg` of `AGG_HASHED`.
+        let (spill_startup, spill_total) = cost::hashagg_spill(groups, entry, n, c.width);
+        let startup = c.total + cost::CPU_OPERATOR * units * n + cost::CPU_OPERATOR * nkeys * n;
+        let total = startup + serial * groups + cost::CPU_TUPLE * groups + spill_total;
+        let table = Table { of: Grouped::Group(query), groups, keys: targets.clone() };
+        let mut node = agg(Strategy::Hashed, Split::Partial, keys.clone(), Some(table), input);
+        node.cost = Cost { startup: startup + spill_startup, total, rows: groups, width: 0 };
+        node
+    } else {
+        // `cost_agg` of `AGG_SORTED` over a `Sort` of the rows of each process.
+        let input = sort_if(level, input, group.clone(), &mut Vec::new(), None, false)?;
+        let s = input.cost;
+        let total = s.total
+            + cost::CPU_OPERATOR * units * n
+            + cost::CPU_OPERATOR * nkeys * n
+            + serial * groups
+            + cost::CPU_TUPLE * groups;
+        let mut node = agg(Strategy::Sorted, Split::Partial, keys.clone(), None, input);
+        node.cost = Cost { startup: s.startup, total, rows: groups, width: 0 };
+        node
+    };
+    if mode == Mode::SortHashed {
+        node = sort_if(level, node, group.clone(), &mut Vec::new(), None, false)?;
+    }
+    let rows = cost::clamp_rows(groups * parallel::divisor(&enable, workers));
+    let gather = match mode {
+        Mode::Hashed => parallel::gather(&enable, node, workers, rows),
+        Mode::GatherSorted => {
+            let gather = parallel::gather(&enable, node, workers, rows);
+            sort_if(level, gather, group.clone(), &mut Vec::new(), None, false)?
+        }
+        Mode::SortHashed | Mode::Sorted => parallel::gather_merge(&enable, node, workers, rows),
+    };
+    // The final part: the groups of the rows of the `Gather`, as `dNumFinalGroups`.
+    let g = gather.cost;
+    let n = g.rows;
+    let groups = level.stats.groups(&group_exprs, n);
+    let rows = cost::clamp_rows(groups * selectivity);
+    let transition = cost::CPU_OPERATOR * combine * n + cost::CPU_OPERATOR * nkeys * n;
+    let mut node = if mode == Mode::Hashed {
+        let (spill_startup, spill_total) = cost::hashagg_spill(groups, entry, n, c.width);
+        let startup = g.total + transition;
+        let total = startup + finals * groups + cost::CPU_TUPLE * groups + spill_total;
+        let total = total + having_startup + having_cost * groups;
+        let table = Table { of: Grouped::Group(query), groups, keys: targets };
+        let mut node = agg(Strategy::Hashed, Split::Final, keys, Some(table), gather);
+        let startup = startup + spill_startup + having_startup;
+        node.cost = Cost { startup, total, rows, width: 0 };
+        node
+    } else {
+        let total = g.total
+            + transition
+            + finals * groups
+            + cost::CPU_TUPLE * groups
+            + having_startup
+            + having_cost * groups;
+        let mut node = agg(Strategy::Sorted, Split::Final, keys, None, gather);
+        node.cost = Cost { startup: g.startup + having_startup, total, rows, width: 0 };
+        *order = sorted_order(&group);
+        node
+    };
+    node.filter = filter;
     Some(node)
 }
 
@@ -2333,6 +2563,7 @@ fn grouping_sets<'q>(
             keys,
             sets: plan_rollups,
             unique: false,
+            split: Split::Simple,
             table: Some(Table { of: Grouped::Group(query), groups: cost.rows, keys: Vec::new() }),
         },
         level.scope,
@@ -2693,6 +2924,7 @@ fn distinct<'q>(
                 keys: items,
                 sets: Vec::new(),
                 unique: false,
+                split: Split::Simple,
                 table: Some(Table {
                     of: Grouped::Distinct(query),
                     groups,

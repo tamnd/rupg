@@ -6,7 +6,7 @@ use rupg_analyze::{Expr, ExprKind, JoinKind, Relation};
 use rupg_common::Result;
 
 use crate::format::Writer;
-use crate::{Item, Kind, Memoize, Node, Plan, Replaced, Rollup, SortKey, Strategy, Texts};
+use crate::{Item, Kind, Memoize, Node, Plan, Replaced, Rollup, SortKey, Split, Strategy, Texts};
 
 /// The form of the output, the option `FORMAT`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -289,7 +289,7 @@ fn names(kind: &Kind<'_>) -> Names {
         Kind::Materialize => simple("Materialize"),
         Kind::Memoize(_) => simple("Memoize"),
         Kind::Aggregate { strategy: Strategy::Group, .. } => simple("Group"),
-        Kind::Aggregate { strategy, .. } => {
+        Kind::Aggregate { strategy, split, .. } => {
             let (pname, strategy) = match strategy {
                 Strategy::Plain => ("Aggregate", "Plain"),
                 Strategy::Sorted => ("GroupAggregate", "Sorted"),
@@ -297,11 +297,17 @@ fn names(kind: &Kind<'_>) -> Names {
                 Strategy::Mixed => ("MixedAggregate", "Mixed"),
                 Strategy::Group => ("Group", "Group"),
             };
+            // `ExplainNode`: a node of a partial aggregate has the mode in its name.
+            let (pname, partial) = match split {
+                Split::Simple => (pname.to_string(), "Simple"),
+                Split::Partial => (format!("Partial {pname}"), "Partial"),
+                Split::Final => (format!("Finalize {pname}"), "Finalize"),
+            };
             Names {
-                pname: pname.to_string(),
+                pname,
                 sname: "Aggregate",
                 strategy: Some(strategy),
-                partial: Some("Simple"),
+                partial: Some(partial),
                 operation: None,
             }
         }
@@ -1456,12 +1462,14 @@ fn passed(node: &Node<'_>) -> Vec<Expr> {
         .collect()
 }
 
-/// The expressions of the targets of the two sides of a join that are not columns, which a condition of the join reads from the side as `fix_join_expr` finds them in its target list.
+/// The expressions of the targets of the two sides of a join that are not columns, which a condition of the join reads from the side as `fix_join_expr` finds them in its target list. A `Finalize` aggregate computes its aggregate calls from the partial states below, so they are not values of the node below.
 fn computed(node: &Node<'_>) -> Vec<Expr> {
+    let finalize = matches!(node.kind, Kind::Aggregate { split: Split::Final, .. });
     node.children
         .iter()
         .flat_map(|child| &child.output)
         .filter(|item| !matches!(item.expr.kind, ExprKind::Var(_)))
+        .filter(|item| !(finalize && matches!(item.expr.kind, ExprKind::Agg(_))))
         .map(|item| item.expr.as_ref().clone())
         .collect()
 }

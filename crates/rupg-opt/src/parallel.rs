@@ -6,7 +6,7 @@ use rupg_analyze::{Expr, ExprKind, Query};
 use rupg_pgcatalog::builtin;
 use rupg_plan::{Cost, Kind, Node};
 
-use crate::Enable;
+use crate::{Enable, cost};
 
 /// The parallel safety of a function or of a query, as `proparallel`, in the order of `max_parallel_hazard_test`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -147,6 +147,29 @@ pub(crate) fn gather<'q>(enable: &Enable, child: Node<'q>, workers: i32, rows: f
     let mut node =
         Node::new(Kind::Gather { workers, single_copy: false }, child.scope, vec![child]);
     node.cost = Cost { startup, total: startup + run, rows, width: c.width };
+    node
+}
+
+/// `create_gather_merge_path` and `cost_gather_merge`: a `Gather Merge` of the `rows` sorted rows of the parallel plan `child` with `workers` workers. The merge of the sorted rows of the processes is a heap, as `cost_merge_append` costs it, and each row costs 5 percent more than `parallel_tuple_cost` for the wait of the leader.
+pub(crate) fn gather_merge<'q>(
+    enable: &Enable,
+    child: Node<'q>,
+    workers: i32,
+    rows: f64,
+) -> Node<'q> {
+    let c = child.cost;
+    let n = f64::from(workers) + 1.0;
+    let log_n = n.log2();
+    let comparison = 2.0 * cost::CPU_OPERATOR;
+    let mut startup = comparison * n * log_n;
+    let mut run = rows * comparison * log_n;
+    run += cost::CPU_OPERATOR * rows;
+    startup += enable.parallel_setup_cost;
+    run += enable.parallel_tuple_cost * rows * 1.05;
+    let mut node = Node::new(Kind::GatherMerge { workers }, child.scope, vec![child]);
+    node.cost =
+        Cost { startup: startup + c.startup, total: startup + run + c.total, rows, width: c.width };
+    node.disabled = !enable.gathermerge;
     node
 }
 

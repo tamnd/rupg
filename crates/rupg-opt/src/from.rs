@@ -24,7 +24,7 @@ use rupg_analyze::{
 };
 use rupg_pgcatalog::builtin;
 use rupg_plan::{
-    Cost, Item, Kind, Node, Replaced, STATISTIC_KIND_HISTOGRAM, STATISTIC_KIND_MCV, SortKey,
+    Cost, Item, Kind, Node, Replaced, STATISTIC_KIND_HISTOGRAM, STATISTIC_KIND_MCV, SortKey, Split,
     Statistic, Strategy,
 };
 use rupg_types::{Value, oid};
@@ -815,7 +815,13 @@ impl<'q> Builder<'q> {
         // The scan of the only relation counts the conditions with its own.
         let (rels, counted) = match tree {
             Tree::Base { relation, quals } => {
-                (self.scan(level, relation, quals, once, &mut stats), true)
+                let rels = self.scan(level, relation, quals, once, &mut stats);
+                if let Some(partial) = self.partial.take()
+                    && gating.is_empty()
+                {
+                    self.partials.insert(level.scope, partial);
+                }
+                (rels, true)
             }
             tree => (self.build(level, tree, &found, &mut stats), false),
         };
@@ -897,6 +903,7 @@ impl<'q> Builder<'q> {
         stats: &mut Stats,
     ) -> Vec<Rel<'q>> {
         let relation = &level.query.relations[r];
+        self.partial = None;
         let base = restrictions(quals);
         let mut quals = base.clone();
         stats.sort_quals(&mut quals);
@@ -1177,6 +1184,7 @@ impl<'q> Builder<'q> {
                     node.cost.startup = startup + targets.0;
                     node.cost.total = node.cost.startup + cpu_run + run;
                     node.cost.rows = cost::clamp_rows(rows / divisor);
+                    self.partial = Some((node.clone(), workers));
                     let node = parallel::gather(&enable, node, workers, rows);
                     Rel { node, rels: seq.rels.clone(), order: Vec::new() }
                 })
@@ -2986,6 +2994,7 @@ fn unique_rels<'q>(semi: &Semi<'q>, side: &[Rel<'q>], stats: &Stats) -> Option<V
             keys: items,
             sets: Vec::new(),
             unique: true,
+            split: Split::Simple,
             table: None,
         };
         // The target of the `Agg` is the target of the side without the new items, as `create_final_unique_paths` gives it.

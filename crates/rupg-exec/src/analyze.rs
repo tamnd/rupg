@@ -9,7 +9,7 @@ use std::time::Duration;
 use rupg_analyze::{ExprKind, JoinKind, Query, SubLinkKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::Session;
-use rupg_plan::{Actual, Actuals, Item, Kind, Node, Plan, Strategy, node_key};
+use rupg_plan::{Actual, Actuals, Item, Kind, Node, Plan, Split, Strategy, node_key};
 use rupg_types::Value;
 
 use crate::{Cache, Eval, agg, not_yet, scan, set_levels, window, with_subqueries};
@@ -700,6 +700,8 @@ impl<'p, 'q> Exec<'p, 'q> {
                 }
                 Ok(row)
             }
+            // The `Agg` of a partial aggregate gives the rows of the plan below, and the `Agg` above it that combines the states does all the work of the calls.
+            Kind::Aggregate { split: Split::Partial, .. } => self.pull(cx, 0, context),
             Kind::Aggregate { strategy, keys, unique, .. } => {
                 self.aggregate(cx, context, *strategy, keys, *unique)
             }
