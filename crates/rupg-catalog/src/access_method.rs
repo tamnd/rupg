@@ -59,5 +59,3 @@ impl Catalog {
         }
     }
 }
-
-rupg_common::persist_struct!(AccessMethod { oid, name, handler, kind });

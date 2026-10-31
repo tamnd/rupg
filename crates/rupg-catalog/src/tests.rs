@@ -671,33 +671,3 @@ fn view_rule_takes_toast_oid() {
     assert_eq!(second - first, 4);
     assert_eq!(third - second, 5);
 }
-
-/// The bytes of [`Persist`] give back the same catalog: a new catalog with its collations, and a catalog with a schema, tables, a default, a check, a toast table, indexes, a foreign key, a sequence and a description.
-#[test]
-fn catalog_comes_back_from_its_bytes() {
-    use rupg_common::persist::{from_bytes, to_bytes};
-    let round = |cat: &Catalog| {
-        let bytes = to_bytes(cat);
-        assert_eq!(&from_bytes::<Catalog>(&bytes).unwrap(), cat);
-        bytes.len()
-    };
-    let mut cat = Catalog::new();
-    round(&cat);
-    let s = cat.create_schema("s", SUPERUSER).unwrap();
-    let t = cat
-        .create_table(table(s, "t", &[("a", INT4, -1), ("b", TEXT, -1), ("c", NUMERIC, -1)]))
-        .unwrap();
-    cat.add_default(t, 2, "'x'::text".into(), &[]).unwrap();
-    cat.add_check(t, None, "c > 0".into(), vec![3], &[ObjRef::column(t, 3)], false).unwrap();
-    cat.add_not_null(t, None, 1, false).unwrap();
-    cat.create_toast(t).unwrap();
-    let (pkey, _) =
-        cat.create_index(index(t, None, &[("a", 1, INT4)], Some(ConKind::Primary))).unwrap();
-    cat.add_foreign_key(foreign_key(t, vec![1], t, vec![1], pkey)).unwrap();
-    cat.create_index(index(t, Some("t_b"), &[("b", 2, TEXT)], None)).unwrap();
-    let (new, info) = serial_sequence(s, "t_a_seq");
-    cat.create_sequence(new, info).unwrap();
-    cat.set_description(ObjRef::column(t, 2), Some("the b column".to_string()));
-    let empty = round(&Catalog::new());
-    assert!(round(&cat) > empty);
-}

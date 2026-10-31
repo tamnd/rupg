@@ -73,24 +73,3 @@ impl Database {
         ]
     }
 }
-
-rupg_common::persist_struct!(Database {
-    oid,
-    name,
-    owner,
-    encoding,
-    locale_provider,
-    is_template,
-    allow_connections,
-    has_login_event,
-    connection_limit,
-    frozen_xid,
-    min_mxid,
-    tablespace,
-    collate,
-    ctype,
-    locale,
-    icu_rules,
-    collation_version,
-    acl
-});

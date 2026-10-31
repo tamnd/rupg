@@ -96,15 +96,3 @@ impl Catalog {
         }
     }
 }
-
-rupg_common::persist_struct!(StatExt {
-    oid,
-    name,
-    namespace,
-    owner,
-    relation,
-    keys,
-    kinds,
-    target,
-    exprs
-});
