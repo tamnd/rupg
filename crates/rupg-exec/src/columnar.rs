@@ -960,7 +960,11 @@ impl<'q> Exec<'q> {
                         continue;
                     }
                     self.slots[base] = input.value(i, &self.dicts);
-                    let result = self.call(generic)?;
+                    let result = match self.call(generic)? {
+                        // The column keeps only the code of a text with a code, so the memo and the output do not keep a copy of the text.
+                        (Value::Text(_), code) if code != 0 => (Value::Text(String::new()), code),
+                        result => result,
+                    };
                     match (&mut generic.memo, &input.data) {
                         (memo @ None, Data::Code(..)) => *memo = Some(Memo::Code(Vec::new())),
                         (memo @ None, Data::Int(_) | Data::Float(_)) => {
