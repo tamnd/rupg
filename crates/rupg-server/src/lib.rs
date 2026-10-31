@@ -26,6 +26,7 @@ mod x509;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{self, Read, Write};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -63,6 +64,8 @@ const FIRST_PID: i32 = 1001;
 const HBA_NAME: &str = "pg_hba.conf";
 /// The name of the user maps in the messages when they do not come from a file.
 const IDENT_NAME: &str = "pg_ident.conf";
+/// The file in the data directory with the image of the store: the databases, their catalogs and the rows of their tables.
+const IMAGE_FILE: &str = "data.rupg";
 
 /// The server log. The server writes the messages that PostgreSQL writes to its log and does not send to the client, such as the reason of a failed login.
 pub trait Log: Send + Sync + fmt::Debug {
@@ -335,6 +338,12 @@ impl Server {
             .as_deref()
             .filter(|p| !p.is_empty())
             .map(|p| stored_secret(&base, &*entropy, &config.superuser, p));
+        let mut store = Store::with_tasks(tasks.clone())
+            .with_auth(Arc::new(files))
+            .with_password(secret.clone());
+        if let Some(dir) = &config.data_directory {
+            store = store.with_image(io.clone(), Path::new(dir).join(IMAGE_FILE))?;
+        }
         let mut mock_nonce = [0; MOCK_NONCE_LEN];
         entropy.fill(&mut mock_nonce);
         let iterations = scram_iterations(&base);
@@ -350,9 +359,7 @@ impl Server {
             iterations,
             log: config.log.clone(),
             clock: config.clock.clone(),
-            store: Arc::new(
-                Store::with_tasks(tasks.clone()).with_auth(Arc::new(files)).with_password(secret),
-            ),
+            store: Arc::new(store),
             entropy,
             tasks: tasks.clone(),
             io: io.clone(),
@@ -396,7 +403,7 @@ impl Server {
         &self.sockets
     }
 
-    /// The smart shutdown: the server accepts no more connections, and waits until each client closes its connection.
+    /// The smart shutdown: the server accepts no more connections, waits until each client closes its connection, and writes the image of the store to its file.
     ///
     /// # Errors
     ///
@@ -417,7 +424,7 @@ impl Server {
         for task in tasks {
             task.join()?;
         }
-        Ok(())
+        self.shared.store.checkpoint()
     }
 
     /// Waits until the tasks that accept connections end, which is never before [`Server::stop`].

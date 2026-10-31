@@ -1243,6 +1243,15 @@ pub fn decimal_send(value: i128, scale: u32, out: &mut Vec<u8>) {
     write_binary(sign, weight, scale as u16, digits, out);
 }
 
+rupg_common::persist_struct!(Numeric { sign, weight, dscale, digits });
+rupg_common::persist_enum!(NumericSign {
+    0 => Positive,
+    1 => Negative,
+    2 => NaN,
+    3 => Infinity,
+    4 => NegativeInfinity,
+});
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -6,6 +6,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use rupg_analyze::{Derived, Unique};
+use rupg_common::persist::{Persist, Reader};
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{HeapSize, Statistic, XactState};
 use rupg_types::{Value, oid};
@@ -1787,6 +1788,88 @@ fn visible(version: &Version, view: &View) -> bool {
         0 => true,
         xmax if view.xid != 0 && xmax == view.xid => version.cmax >= view.command,
         xmax => !committed_before(xmax, &view.snapshot),
+    }
+}
+
+rupg_common::persist_struct!(Version {
+    tid,
+    made,
+    xmin,
+    cmin,
+    xmax,
+    cmax,
+    aborted,
+    next,
+    len,
+    values
+});
+
+impl Heap {
+    /// The bytes of the rows of all the tables, as a restart after a crash finds them: a transaction in progress aborts, so its new versions go and its deletes do not count. The maps of the unique keys and the sizes of the indexes are not kept, as the heap makes them again from the versions.
+    pub(crate) fn image(&self, out: &mut Vec<u8>) {
+        let state = self.state();
+        let running = &state.running;
+        state.next_xid.put(out);
+        state.latest_completed.put(out);
+        state.aborted.put(out);
+        state.toast_oids.put(out);
+        state.tables.len().put(out);
+        for (key, table) in &state.tables {
+            key.put(out);
+            let kept = || table.versions.iter().filter(|v| !running.contains(&v.xmin));
+            kept().count().put(out);
+            for v in kept() {
+                let (aborted, xmax, cmax) = if running.contains(&v.xmax) {
+                    (v.xmax, 0, 0)
+                } else {
+                    (v.aborted, v.xmax, v.cmax)
+                };
+                (v.tid, v.made, v.xmin, v.cmin).put(out);
+                (xmax, cmax, aborted, v.next).put(out);
+                v.len.put(out);
+                v.values.put(out);
+            }
+            table.made.put(out);
+            table.pages.put(out);
+            table.statistics.put(out);
+            table.lp_dead.put(out);
+            table.fixed.put(out);
+            table.storage.put(out);
+            table.save_free.put(out);
+            table.combos.put(out);
+        }
+    }
+
+    /// The heap of the bytes of [`Heap::image`].
+    ///
+    /// # Errors
+    ///
+    /// `XX001` for bytes that are not an image.
+    pub(crate) fn from_image(input: &mut Reader<'_>) -> Result<Heap> {
+        let mut state = State {
+            next_xid: Persist::take(input)?,
+            latest_completed: Persist::take(input)?,
+            aborted: Persist::take(input)?,
+            toast_oids: Persist::take(input)?,
+            ..State::default()
+        };
+        for _ in 0..input.count()? {
+            let key = Persist::take(input)?;
+            let table = Table {
+                versions: Persist::take(input)?,
+                made: Persist::take(input)?,
+                pages: Persist::take(input)?,
+                statistics: Persist::take(input)?,
+                lp_dead: Persist::take(input)?,
+                fixed: Persist::take(input)?,
+                storage: Persist::take(input)?,
+                save_free: Persist::take(input)?,
+                combos: Persist::take(input)?,
+                ..Table::default()
+            };
+            state.tables.insert(key, table);
+        }
+        Ok(Heap { state: Mutex::new(state) })
     }
 }
 

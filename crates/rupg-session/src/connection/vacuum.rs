@@ -347,7 +347,7 @@ impl Connection {
         Ok(Done::Tag(tag))
     }
 
-    /// `ExecCheckpoint`: the checks of the options and of the role. Each commit of rupg is in its log before the commit returns, so the checkpoint has no more work to do.
+    /// `ExecCheckpoint`: the checks of the options and of the role, and then the write of the image of the store to its file.
     pub(super) fn checkpoint(&self, stmt: &CheckPointStmt) -> Result<Done, Error> {
         for def in stmt.options.iter().flatten() {
             let Node::DefElem(def) = def else { continue };
@@ -386,6 +386,7 @@ impl Connection {
                 "Only roles with privileges of the \"pg_checkpoint\" role may execute this command.",
             ));
         }
+        self.store.checkpoint()?;
         Ok(Done::Tag(CommandTag::Checkpoint))
     }
 
