@@ -171,12 +171,21 @@ pub(crate) struct Wait {
 struct Tables(HashMap<(u32, u32), Table>);
 
 impl Tables {
-    fn get(&self, key: &(u32, u32)) -> Option<&Table> {
+    /// The table `key` with the values of its versions, for a read by rows.
+    fn get(&mut self, key: &(u32, u32)) -> Option<&Table> {
+        let table = self.0.get_mut(key)?;
+        table.thaw();
+        Some(table)
+    }
+
+    /// The table `key` for a read of the headers of its versions only, which does not need their values.
+    fn headers(&self, key: &(u32, u32)) -> Option<&Table> {
         self.0.get(key)
     }
 
     fn get_mut(&mut self, key: &(u32, u32)) -> Option<&mut Table> {
         let table = self.0.get_mut(key)?;
+        table.thaw();
         table.columns = Columns::default();
         Some(table)
     }
@@ -184,20 +193,80 @@ impl Tables {
     /// The table `key`, which the call makes when it has no versions yet.
     fn entry(&mut self, key: (u32, u32)) -> &mut Table {
         let table = self.0.entry(key).or_default();
+        table.thaw();
         table.columns = Columns::default();
         table
     }
 
-    fn values_mut(&mut self) -> impl Iterator<Item = &mut Table> {
-        for table in self.0.values_mut() {
-            table.columns = Columns::default();
-        }
-        self.0.values_mut()
+    /// The tables for which `touched` is true, for a change of their versions. The other tables keep their columns.
+    fn touched_mut(
+        &mut self,
+        touched: impl Fn(&Table) -> bool,
+    ) -> impl Iterator<Item = &mut Table> {
+        self.0.values_mut().filter(move |table| touched(table)).map(Table::touch)
     }
 
     fn retain(&mut self, keep: impl FnMut(&(u32, u32), &mut Table) -> bool) {
+        for table in self.0.values_mut() {
+            table.thaw();
+        }
         self.0.retain(keep);
     }
+}
+
+/// The values of all the versions of a table in encoded columns, which take the place of the values of the versions. The versions then have no values. A change of the table or a read by rows decodes the values back into the versions.
+#[derive(Debug)]
+struct Frozen {
+    /// The column of each place, with the values of all the versions in their order.
+    columns: Vec<Arc<Stored>>,
+}
+
+/// The physical type that keeps each value of `values` exactly, or `None` when a value has no such type or the values do not have the same type. A column of nulls only is a column of `bigint`.
+fn kind_of<'a>(values: impl Iterator<Item = &'a Value>) -> Option<Kind> {
+    let mut kind = None;
+    for value in values {
+        let this = match value {
+            Value::Null => continue,
+            Value::Bool(_) => Kind::Bool,
+            Value::Int2(_) => Kind::Int2,
+            Value::Int4(_) => Kind::Int4,
+            Value::Int8(_) => Kind::Int8,
+            Value::Float4(_) => Kind::Float4,
+            Value::Float8(_) => Kind::Float8,
+            Value::Date(_) => Kind::Date,
+            Value::Time(_) => Kind::Time,
+            Value::Timestamp(_) => Kind::Timestamp,
+            Value::TimestampTz(_) => Kind::TimestampTz,
+            Value::Text(_) => Kind::Text,
+            Value::Bytea(_) => Kind::Bytea,
+            _ => return None,
+        };
+        if *kind.get_or_insert(this) != this {
+            return None;
+        }
+    }
+    Some(kind.unwrap_or(Kind::Int8))
+}
+
+/// True when `a` and `b` are the same value, with the same bits for a float.
+fn same(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Float4(x), Value::Float4(y)) => x.to_bits() == y.to_bits(),
+        (Value::Float8(x), Value::Float8(y)) => x.to_bits() == y.to_bits(),
+        _ => a == b,
+    }
+}
+
+/// Gives each value of the column `stored` to `each`, in the order of the rows.
+fn decode(stored: &Stored, mut each: impl FnMut(Value)) -> Result<()> {
+    let mut values = Vec::new();
+    for column in &stored.segments {
+        for at in 0..column.vectors.len() {
+            column.values(at, stored.dict.as_ref(), &mut values)?;
+            values.drain(..).for_each(&mut each);
+        }
+    }
+    Ok(())
 }
 
 /// The columns of a table that the scans read, which the heap makes from the versions when every version is live. A change of the table drops them.
@@ -239,6 +308,8 @@ struct Table {
     /// The combo command ID of each version that the transaction that inserted it deleted, by the ID of the version, which `t_cid` keeps after the end of the transaction.
     combos: HashMap<u64, u32>,
     columns: Columns,
+    /// The values of the versions in encoded columns, when the versions have no values.
+    frozen: Option<Frozen>,
 }
 
 /// The versions of a table by the hash of their key, for one unique key, which takes the place of the btree of a unique index. The map can keep the ID of a version that went, which a check skips.
@@ -398,6 +469,82 @@ fn dirty(version: &Version, xid: u32, running: &BTreeSet<u32>) -> Seen {
 }
 
 impl Table {
+    /// Moves the values of all the versions into encoded columns, when each column keeps its values exactly. The heap checks each column with a decode before it drops the values. A table with versions of different lengths, or with a value that no column type keeps, stays as it is.
+    fn freeze(&mut self) {
+        if self.frozen.is_some() {
+            return;
+        }
+        let Some(width) = self.versions.first().map(|version| version.values.len()) else {
+            return;
+        };
+        if width == 0 || self.versions.iter().any(|version| version.values.len() != width) {
+            return;
+        }
+        let mut columns = Vec::with_capacity(width);
+        for at in 0..width {
+            let Some(kind) = kind_of(self.versions.iter().map(|version| &version.values[at]))
+            else {
+                return;
+            };
+            let stored = match self.columns.stored.get(&at) {
+                Some(stored) if stored.kind == kind => Arc::clone(stored),
+                _ => {
+                    let values = self.versions.iter().map(|version| version.values.get(at));
+                    match Stored::build(kind, values) {
+                        Ok(stored) => Arc::new(stored),
+                        Err(_) => return,
+                    }
+                }
+            };
+            let mut versions = self.versions.iter();
+            let mut exact = true;
+            let decoded = decode(&stored, |value| {
+                exact &= versions.next().is_some_and(|version| same(&version.values[at], &value));
+            });
+            if decoded.is_err() || !exact || versions.next().is_some() {
+                return;
+            }
+            columns.push(stored);
+        }
+        for version in &mut self.versions {
+            version.values = Box::default();
+        }
+        self.frozen = Some(Frozen { columns });
+    }
+
+    /// The values of each version of a frozen table, decoded from its columns, or `None` when the table is not frozen.
+    fn decoded(&self) -> Option<Vec<Box<[Value]>>> {
+        let frozen = self.frozen.as_ref()?;
+        let mut rows: Vec<Vec<Value>> =
+            (0..self.versions.len()).map(|_| Vec::with_capacity(frozen.columns.len())).collect();
+        for stored in &frozen.columns {
+            let mut row = rows.iter_mut();
+            // The freeze decoded each column to the same values, so the decode does not fail.
+            let decoded = decode(stored, |value| {
+                if let Some(row) = row.next() {
+                    row.push(value);
+                }
+            });
+            debug_assert!(decoded.is_ok(), "a frozen column does not decode");
+        }
+        Some(rows.into_iter().map(Vec::into_boxed_slice).collect())
+    }
+
+    /// The table for a change of its versions, which then has the values of its versions and no columns.
+    fn touch(&mut self) -> &mut Table {
+        self.thaw();
+        self.columns = Columns::default();
+        self
+    }
+
+    /// Puts the values of a frozen table back into its versions.
+    fn thaw(&mut self) {
+        let Some(rows) = self.decoded() else { return };
+        self.frozen = None;
+        for (version, values) in self.versions.iter_mut().zip(rows) {
+            version.values = values;
+        }
+    }
     /// Adds a version with the ID `kept` that an earlier try of the write had, or with a new ID, at its place in the order of the IDs. The version goes in the map of each unique key. `fresh` has the keys of the version in the indexes of `unique` with an expression. The map of an index with an expression that is not in `unique` becomes stale.
     fn add(
         &mut self,
@@ -909,7 +1056,8 @@ impl Heap {
         xids: bool,
         used: Option<&[bool]>,
     ) -> Vec<Vec<Value>> {
-        let state = self.state();
+        let mut guard = self.state();
+        let state = &mut *guard;
         let Some(table) = state.tables.get(&(view.database, relation)) else {
             return Vec::new();
         };
@@ -959,11 +1107,24 @@ impl Heap {
                 committed_before(xmin, &view.snapshot)
             }
         };
-        if !columns.xmins.as_ref()?.iter().all(sees) {
+        let xmins = columns.xmins.as_ref()?;
+        if !xmins.iter().all(sees) {
             return None;
         }
+        // A commit logs the values of the versions that it inserted, so the heap freezes only the versions of transactions that ended.
+        if xmins.iter().all(|&(xmin, _)| xmin != view.xid && committed_before(xmin, &view.snapshot))
+        {
+            table.freeze();
+        }
+        let columns = &mut table.columns;
         let mut out = Vec::with_capacity(wanted.len());
         for &(at, kind) in wanted {
+            if let Some(frozen) = &table.frozen {
+                // A frozen table has no values in its versions to make a column of another type from.
+                let stored = frozen.columns.get(at).filter(|stored| stored.kind == kind)?;
+                out.push(Arc::clone(stored));
+                continue;
+            }
             let stored = match columns.stored.get(&at) {
                 Some(stored) if stored.kind == kind => Arc::clone(stored),
                 _ => {
@@ -986,7 +1147,8 @@ impl Heap {
         used: Option<&[bool]>,
         tids: &[u64],
     ) -> Vec<Vec<Value>> {
-        let state = self.state();
+        let mut guard = self.state();
+        let state = &mut *guard;
         let Some(table) = state.tables.get(&(view.database, relation)) else {
             return Vec::new();
         };
@@ -1000,7 +1162,8 @@ impl Heap {
 
     /// The values of the versions `tids` of a table, also of a version that a transaction deleted, in the order of the list. A version that is not in the table gives no row.
     pub(crate) fn versions(&self, database: u32, relation: u32, tids: &[u64]) -> Vec<Vec<Value>> {
-        let state = self.state();
+        let mut guard = self.state();
+        let state = &mut *guard;
         let Some(table) = state.tables.get(&(database, relation)) else {
             return Vec::new();
         };
@@ -1011,7 +1174,8 @@ impl Heap {
 
     /// True when a command of the transaction of `view` after the command of `view` changed the version `tid` of a table: `TM_SelfModified` with a `cmax` that is not the command of `view`.
     pub(crate) fn modified_later(&self, view: &View, relation: u32, tid: u64) -> bool {
-        let state = self.state();
+        let mut guard = self.state();
+        let state = &mut *guard;
         let Some(table) = state.tables.get(&(view.database, relation)) else {
             return false;
         };
@@ -1023,7 +1187,8 @@ impl Heap {
 
     /// `heap_get_latest_tid`: the last version of the chain of updates from the version `tid` of a table, as the transaction of `view` sees the updates of its own and of the transactions that committed.
     pub(crate) fn latest_tid(&self, view: &View, relation: u32, mut tid: u64) -> u64 {
-        let state = self.state();
+        let mut guard = self.state();
+        let state = &mut *guard;
         let Some(table) = state.tables.get(&(view.database, relation)) else {
             return tid;
         };
@@ -1039,7 +1204,8 @@ impl Heap {
 
     /// For each version of a table that the command `command` of the transaction `xid` added, in the order of the inserts, true if the transaction did not delete or update it after, as `SnapshotSelf` sees it.
     pub(crate) fn live(&self, database: u32, relation: u32, xid: u32, command: u32) -> Vec<bool> {
-        let state = self.state();
+        let mut guard = self.state();
+        let state = &mut *guard;
         let Some(table) = state.tables.get(&(database, relation)) else {
             return Vec::new();
         };
@@ -1131,7 +1297,8 @@ impl Heap {
         tids: &[u64],
         xid: u32,
     ) -> Vec<bool> {
-        let state = self.state();
+        let mut guard = self.state();
+        let state = &mut *guard;
         let Some(table) = state.tables.get(&(database, relation)) else {
             return Vec::new();
         };
@@ -1142,7 +1309,8 @@ impl Heap {
 
     /// The ID of the version after each version of `tids`, which an `UPDATE` made, or 0 for a version with no next version.
     pub(crate) fn next_versions(&self, database: u32, relation: u32, tids: &[u64]) -> Vec<u64> {
-        let state = self.state();
+        let mut guard = self.state();
+        let state = &mut *guard;
         let Some(table) = state.tables.get(&(database, relation)) else {
             return vec![0; tids.len()];
         };
@@ -1360,7 +1528,7 @@ impl Heap {
     /// `RelationGetNumberOfBlocks` of the heap of a table and of its free space map and visibility map, and `relpages`, `reltuples`, `relallvisible` and `relallfrozen` of the table.
     pub(crate) fn size(&self, database: u32, relation: u32) -> HeapSize {
         let state = self.state();
-        let pages = state.tables.get(&(database, relation)).map(|table| &table.pages);
+        let pages = state.tables.headers(&(database, relation)).map(|table| &table.pages);
         let (fsm_blocks, vm_blocks) = pages.map_or((0, 0), Pages::fork_blocks);
         HeapSize {
             blocks: pages.map_or(0, Pages::blocks),
@@ -1382,7 +1550,8 @@ impl Heap {
         shape: &Shape,
     ) -> BtreeSize {
         let (entries, total, made, count) = {
-            let state = self.state();
+            let mut guard = self.state();
+            let state = &mut *guard;
             let Some(table) = state.tables.get(&(database, relation)) else {
                 return BtreeSize::EMPTY;
             };
@@ -1427,7 +1596,8 @@ impl Heap {
 
     /// The number of live versions of a table for `ANALYZE` and `VACUUM`, as `heapam_scan_analyze_next_tuple` counts them for the transaction `xid`: the versions that a transaction that committed or `xid` inserted, and that no transaction deleted, or that a transaction in progress other than `xid` deletes.
     pub(crate) fn live_count(&self, database: u32, relation: u32, xid: u32) -> u64 {
-        let state = self.state();
+        let mut guard = self.state();
+        let state = &mut *guard;
         let Some(table) = state.tables.get(&(database, relation)) else { return 0 };
         let done = |x: u32| x == xid || !state.running.contains(&x);
         let live = |v: &&Version| {
@@ -1444,7 +1614,8 @@ impl Heap {
         xid: u32,
         target: usize,
     ) -> (Vec<Vec<Value>>, f64) {
-        let state = self.state();
+        let mut guard = self.state();
+        let state = &mut *guard;
         let Some(table) = state.tables.get(&(database, relation)) else {
             return (Vec::new(), 0.0);
         };
@@ -1473,7 +1644,8 @@ impl Heap {
         column: usize,
         order: impl Fn(&Value, &Value) -> Option<Ordering>,
     ) -> Option<(Value, Value)> {
-        let state = self.state();
+        let mut guard = self.state();
+        let state = &mut *guard;
         let table = state.tables.get(&(database, relation))?;
         let horizon = state
             .running
@@ -1514,7 +1686,7 @@ impl Heap {
         let state = self.state();
         state
             .tables
-            .get(&(database, relation))
+            .headers(&(database, relation))
             .map(|table| table.statistics.values().cloned().collect())
             .unwrap_or_default()
     }
@@ -1543,7 +1715,7 @@ impl Heap {
         let state = self.state();
         state
             .tables
-            .get(&(database, relation))
+            .headers(&(database, relation))
             .map(|table| (table.fixed.clone(), table.storage.clone()))
             .unwrap_or_default()
     }
@@ -1690,7 +1862,7 @@ impl Heap {
     /// True if a table has a version of a row, visible or not.
     pub(crate) fn has_rows(&self, database: u32, relation: u32) -> bool {
         let state = self.state();
-        state.tables.get(&(database, relation)).is_some_and(|table| !table.versions.is_empty())
+        state.tables.headers(&(database, relation)).is_some_and(|table| !table.versions.is_empty())
     }
 
     /// `RecordTransactionCommit`: the changes of the transaction become visible to the new snapshots.
@@ -1731,7 +1903,11 @@ impl Heap {
     /// `RecordTransactionAbort`: the rows that the transaction inserted go, and the rows that it deleted stay.
     pub(crate) fn abort(&self, xid: u32) {
         let mut state = self.state();
-        for table in state.tables.values_mut() {
+        let touched = |table: &Table| {
+            table.truncated.first().is_some_and(|(x, ..)| *x == xid)
+                || table.versions.iter().any(|version| version.xmin == xid || version.xmax == xid)
+        };
+        for table in state.tables.touched_mut(touched) {
             if table.truncated.first().is_some_and(|(x, ..)| *x == xid) {
                 table.pages = table.truncated.swap_remove(0).2;
                 table.truncated.clear();
@@ -1759,7 +1935,14 @@ impl Heap {
     pub(crate) fn rollback_to(&self, xid: u32, command: u32) {
         let mut state = self.state();
         state.rechecks.retain(|recheck| recheck.xid != xid || recheck.command < command);
-        for table in state.tables.values_mut() {
+        let touched = |table: &Table| {
+            table.truncated.iter().any(|&(x, c, _)| x == xid && c >= command)
+                || table.versions.iter().any(|version| {
+                    (version.xmin == xid && version.cmin >= command)
+                        || (version.xmax == xid && version.cmax >= command)
+                })
+        };
+        for table in state.tables.touched_mut(touched) {
             if let Some(at) = table.truncated.iter().position(|&(x, c, _)| x == xid && c >= command)
             {
                 table.pages = table.truncated.swap_remove(at).2;
@@ -1813,7 +1996,8 @@ impl Heap {
 
     /// A transaction other than the one of `view` that is in progress and wrote a version of the table `relation`, which a check of the rows in place waits for, as the lock of the table waits for it in PostgreSQL.
     pub(crate) fn holder(&self, relation: u32, view: &View) -> Option<u32> {
-        let state = self.state();
+        let mut guard = self.state();
+        let state = &mut *guard;
         state.tables.get(&(view.database, relation))?.holder(view.xid, &state.running)
     }
 
@@ -1830,7 +2014,8 @@ impl Heap {
         derive: Derive<'_>,
     ) -> Result<Option<Changed>> {
         let table = (view.database, relation);
-        let (state, places) = self.lock_keys(table, unique, derive)?;
+        let (mut guard, places) = self.lock_keys(table, unique, derive)?;
+        let state = &mut *guard;
         let Some(rows) = state.tables.get(&table) else {
             return Ok(None);
         };
@@ -1851,7 +2036,8 @@ impl Heap {
         xid: u32,
         command: Option<u32>,
     ) -> Vec<Candidate> {
-        let state = self.state();
+        let mut guard = self.state();
+        let state = &mut *guard;
         let Some(table) = state.tables.get(&(database, relation)) else {
             return Vec::new();
         };
@@ -1975,9 +2161,11 @@ impl Heap {
         state.tables.0.len().put(out);
         for (key, table) in &state.tables.0 {
             key.put(out);
-            let kept = || table.versions.iter().filter(|v| !running.contains(&v.xmin));
+            let decoded = table.decoded();
+            let kept =
+                || table.versions.iter().enumerate().filter(|(_, v)| !running.contains(&v.xmin));
             kept().count().put(out);
-            for v in kept() {
+            for (at, v) in kept() {
                 let (aborted, xmax, cmax) = if running.contains(&v.xmax) {
                     (v.xmax, 0, 0)
                 } else {
@@ -1986,7 +2174,7 @@ impl Heap {
                 (v.tid, v.made, v.xmin, v.cmin).put(out);
                 (xmax, cmax, aborted, v.next).put(out);
                 v.len.put(out);
-                v.values.put(out);
+                decoded.as_ref().map_or(&v.values, |rows| &rows[at]).put(out);
             }
             table.made.put(out);
             // The pages of the heap before the `TRUNCATE` of a transaction in progress, which aborts.
@@ -2106,7 +2294,11 @@ impl State {
     ) -> bool {
         xid.put(out);
         let tables: Vec<_> =
-            touched.iter().filter_map(|key| Some((key, self.tables.get(key)?))).collect();
+            touched.iter().filter_map(|key| Some((key, self.tables.headers(key)?))).collect();
+        // The versions of a frozen table have no values to log, and a checkpoint writes them.
+        if tables.iter().any(|(_, table)| table.frozen.is_some()) {
+            return false;
+        }
         let changed: usize = tables
             .iter()
             .map(|(_, table)| {
