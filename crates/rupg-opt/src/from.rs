@@ -1185,8 +1185,29 @@ impl<'q> Builder<'q> {
                     node.cost.total = node.cost.startup + cpu_run + run;
                     node.cost.rows = cost::clamp_rows(rows / divisor);
                     self.partial = Some((node.clone(), workers));
+                    let mut rels = Vec::new();
+                    // `generate_useful_gather_paths`: a `Gather Merge` of the rows of each process in the order of the first keys of `query_pathkeys` that the scan can sort by.
+                    let keys = useful_gather_keys(stats, r);
+                    if !keys.is_empty() {
+                        let order: Vec<OrderKey> =
+                            keys.iter().map(|k| stats.order_key(&k.0, k.1, k.2)).collect();
+                        let sort_keys = keys
+                            .into_iter()
+                            .map(|(e, desc, nulls_first)| SortKey {
+                                item: Item { expr: Cow::Owned(e), below: true },
+                                desc,
+                                using: None,
+                                nulls_first,
+                                collation: 0,
+                            })
+                            .collect();
+                        let sorted = sort(node.clone(), sort_keys, None);
+                        let node = parallel::gather_merge(&enable, sorted, workers, rows);
+                        rels.push(Rel { node, rels: seq.rels.clone(), order });
+                    }
                     let node = parallel::gather(&enable, node, workers, rows);
-                    Rel { node, rels: seq.rels.clone(), order: Vec::new() }
+                    rels.insert(0, Rel { node, rels: seq.rels.clone(), order: Vec::new() });
+                    rels
                 })
             }
             _ => None,
@@ -1223,8 +1244,8 @@ impl<'q> Builder<'q> {
             add_targets(&mut rel.node);
             paths.add(costs(&rel.node), rel.order.clone(), rel);
         }
-        if let Some(rel) = gathered {
-            paths.add(costs(&rel.node), Vec::new(), rel);
+        for rel in gathered.into_iter().flatten() {
+            paths.add(costs(&rel.node), rel.order.clone(), rel);
         }
         paths.kept()
     }
@@ -2708,6 +2729,23 @@ fn merge_materialize(child: Node<'_>) -> Node<'_> {
     let mut node = Node::new(Kind::Materialize, child.scope, vec![child]);
     node.cost = Cost { total: c.total + cost::CPU_OPERATOR * c.rows, ..c };
     node
+}
+
+/// `get_useful_pathkeys_for_relation` with `require_parallel_safe`: the first keys of `query_pathkeys` that the relation `r` can sort by, as `relation_can_be_sorted_early` finds them. Each key is a member of its class that reads only the relation and that a worker can compute, and the list stops at the first key with no such member.
+fn useful_gather_keys(stats: &Stats, r: usize) -> Vec<(Expr, bool, bool)> {
+    let mut out = Vec::new();
+    for (expr, desc, nulls_first) in &stats.query {
+        let key = stats.order_key(expr, *desc, *nulls_first);
+        let member = key.exprs.into_iter().find(|e| {
+            let rels = exprs::relations(e);
+            rels.len() == 1 && rels.contains(&r) && !exprs::volatile(e) && parallel::safe(e)
+        });
+        match member {
+            Some(e) => out.push((e, *desc, *nulls_first)),
+            None => break,
+        }
+    }
+    out
 }
 
 /// A `Sort` of a node on keys, as `cost_sort`.

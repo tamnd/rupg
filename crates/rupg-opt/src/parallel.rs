@@ -191,3 +191,16 @@ pub(crate) fn regather(node: &mut Node<'_>) {
         node.cost = Cost { startup, total: startup + run, rows: node.cost.rows, width: c.width };
     }
 }
+
+/// [`regather`] for a `Gather Merge` over a `Sort`: `cost_sort` and `cost_gather_merge` again for the new costs of the plan below the `Sort`. With a `bound`, the `Sort` is the sort of `create_ordered_paths`, which reads the first `bound` rows only.
+pub(crate) fn remerge(node: &mut Node<'_>, bound: Option<f64>) {
+    let Kind::GatherMerge { workers } = node.kind else { return };
+    let rows = node.cost.rows;
+    let Some(sorted) = node.children.pop() else { return };
+    let (Kind::Sort(keys), Some(child)) = (sorted.kind, sorted.children.into_iter().next()) else {
+        return;
+    };
+    let enable = crate::enable();
+    let sorted = crate::from::sort(child, keys, bound);
+    *node = gather_merge(&enable, sorted, workers, rows);
+}

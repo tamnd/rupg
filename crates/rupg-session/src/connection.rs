@@ -8903,6 +8903,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/explain_partial_agg.test")));
     }
 
+    /// `EXPLAIN` of a `Gather Merge` over a `Sort` of a parallel scan, as `generate_useful_gather_paths` and `create_ordered_paths` make it: for an aggregate with `DISTINCT`, for `ORDER BY` with and without `LIMIT`, for a key that is an expression, with `VERBOSE`, with `enable_gathermerge` off and for a key that is not parallel safe, and the results of two of the queries. `connection/explain_gather_merge.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn explain_gather_merge() {
+        big_stack(|| script(include_str!("connection/explain_gather_merge.test")));
+    }
+
     /// `EXPLAIN` of the conditions that an equivalence class with a constant gives: a condition of each member with the constant in place of the `=` of a join, the nullable side of a left join, a scan with no rows for two constants that are not equal, and the partitions that the new conditions prune. `connection/equivalence_const.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn equivalence_const() {
