@@ -35,7 +35,7 @@ use rupg_common::{Error, Result, SqlState};
 use rupg_platform::{Clock, Entropy, Io, Listener, Net, Stream, TaskHandle, Tasks, TcpOption};
 use rupg_session::auth::{FileSetting, HbaRule, IdentMapping};
 use rupg_session::connection::{self, Client, Connection, Next, Ssl, Start};
-use rupg_session::guc::Settings;
+use rupg_session::guc::{self, Settings};
 use rupg_session::store::Store;
 use rupg_wire::{
     CANCEL_KEY_LEN, CancelKey, Handshake, Hashes, Level, MOCK_NONCE_LEN, OutBuf, Replication,
@@ -222,7 +222,7 @@ fn tcp_listeners(
     write: &dyn Fn(&str, &[String]),
 ) -> Result<Vec<Box<dyn Listener>>> {
     let list = settings.get("listen_addresses").unwrap_or_default();
-    let hosts = rupg_session::guc::split_identifiers(&list, ',').ok_or_else(|| {
+    let hosts = guc::split_identifiers(&list, ',').ok_or_else(|| {
         Error::new(
             SqlState::INVALID_PARAMETER_VALUE,
             "invalid list syntax in parameter \"listen_addresses\"",
@@ -401,6 +401,23 @@ impl Server {
     /// The paths of the Unix sockets of the server.
     pub fn sockets(&self) -> &[String] {
         &self.sockets
+    }
+
+    /// The store of the server, whose [`Store::checkpoint`] writes the image of the data to its file.
+    pub fn store(&self) -> Arc<Store> {
+        Arc::clone(&self.shared.store)
+    }
+
+    /// `checkpoint_timeout`: the time between two checkpoints.
+    pub fn checkpoint_timeout(&self) -> Duration {
+        let seconds = guc::find("checkpoint_timeout")
+            .map(|p| self.shared.base.setting(p))
+            .and_then(|s| match s {
+                guc::Setting::Int(n) => u64::try_from(n).ok(),
+                _ => None,
+            })
+            .unwrap_or(300);
+        Duration::from_secs(seconds.max(1))
     }
 
     /// The smart shutdown: the server accepts no more connections, waits until each client closes its connection, and writes the image of the store to its file.

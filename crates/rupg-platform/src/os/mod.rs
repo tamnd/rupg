@@ -7,12 +7,16 @@ mod locale;
 #[cfg(unix)]
 mod lookup;
 mod net;
+#[cfg(unix)]
+mod signal;
 mod tasks;
 #[cfg(unix)]
 mod unix;
 
 pub use locale::{libc_version, locale_codeset, locale_encoding, system_locales};
 pub use net::OsNet;
+#[cfg(unix)]
+pub use signal::StopSignals;
 pub use tasks::{OsTasks, STACK_SIZE};
 
 use std::fs;

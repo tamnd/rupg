@@ -182,8 +182,17 @@ fn serve_config(args: &[String]) -> Result<rupg::server::Config, String> {
     Ok(config)
 }
 
-/// `rupg serve`. It runs until the process ends.
+/// `rupg serve`. It runs until the process ends. A checkpoint writes the data to `data.rupg` each `checkpoint_timeout`, and `SIGTERM` or `SIGINT` writes it and ends the process.
 fn serve(config: &rupg::server::Config) -> ExitCode {
+    // The mask must be in place before the server starts its threads, so that only the thread of the signals takes them.
+    #[cfg(unix)]
+    let signals = match rupg::server::StopSignals::block() {
+        Ok(signals) => signals,
+        Err(e) => {
+            eprintln!("rupg serve: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     // `ChangeToDataDir`: a relative path in the configuration file, such as `ssl_cert_file = 'server.crt'`, is in the data directory.
     if let Some(dir) = &config.data_directory
         && let Err(e) = std::env::set_current_dir(dir)
@@ -204,6 +213,9 @@ fn serve(config: &rupg::server::Config) -> ExitCode {
     for socket in server.sockets() {
         eprintln!("rupg serve: listening on Unix socket \"{socket}\"");
     }
+    checkpoints(&server);
+    #[cfg(unix)]
+    stop_on_signal(&server, signals);
     match server.wait() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -211,4 +223,38 @@ fn serve(config: &rupg::server::Config) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// The checkpointer: a thread that writes the image of the data each `checkpoint_timeout`.
+#[allow(clippy::disallowed_methods)]
+fn checkpoints(server: &rupg::server::Server) {
+    let store = server.store();
+    let every = server.checkpoint_timeout();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(every);
+            if let Err(e) = store.checkpoint() {
+                eprintln!("LOG:  checkpoint failed: {e}");
+            }
+        }
+    });
+}
+
+/// The thread of the stop signals. `SIGTERM` and `SIGINT` write the image of the data and end the process. The sessions end with the process, so a transaction in progress does not commit.
+#[cfg(unix)]
+#[allow(clippy::disallowed_methods)]
+fn stop_on_signal(server: &rupg::server::Server, signals: rupg::server::StopSignals) {
+    let store = server.store();
+    std::thread::spawn(move || {
+        let signal = signals.wait();
+        eprintln!("LOG:  received the signal {signal}, shutting down");
+        let code = match store.checkpoint() {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("LOG:  checkpoint failed: {e}");
+                1
+            }
+        };
+        std::process::exit(code);
+    });
 }
