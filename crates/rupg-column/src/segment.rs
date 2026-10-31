@@ -108,7 +108,10 @@ impl Kind {
             Value::Bytea(v.to_vec())
         } else {
             // The dictionary of a text column holds only the bytes of a `String`.
-            Value::Text(String::from_utf8_lossy(v).into_owned())
+            Value::Text(
+                String::from_utf8(v.to_vec())
+                    .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()),
+            )
         }
     }
 }
