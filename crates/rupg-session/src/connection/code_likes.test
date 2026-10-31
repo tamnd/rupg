@@ -1,0 +1,37 @@
+> CREATE TABLE l (g int, t text)
+CREATE TABLE
+> INSERT INTO l SELECT i % 3, CASE WHEN i % 11 = 0 THEN NULL WHEN i % 13 = 0 THEN 'Ab_' || (i % 7) ELSE 'v' || (i % 97) || 'é' END FROM generate_series(1, 70000) i
+INSERT 0 70000
+> SELECT count(*) FROM l WHERE t LIKE '%9%'
+fields count:20:8:-1
+row 9687
+SELECT 1
+> SELECT g, count(*) FROM l WHERE t NOT LIKE 'v1_é' GROUP BY g ORDER BY g
+fields g@l.1:23:4:-1,count:20:8:-1
+row 0,19190
+row 1,19194
+row 2,19194
+SELECT 3
+> SELECT count(*) FROM l WHERE t ILIKE 'ab%'
+fields count:20:8:-1
+row 4895
+SELECT 1
+> SELECT count(*) FROM l WHERE t NOT ILIKE '%B\_3'
+fields count:20:8:-1
+row 62938
+SELECT 1
+> SELECT count(*) FROM l WHERE t LIKE 'v_é'
+fields count:20:8:-1
+row 6058
+SELECT 1
+> SELECT count(*), count(t LIKE NULL) FROM l
+fields count:20:8:-1,count:20:8:-1
+row 70000,0
+SELECT 1
+> SELECT count(*) FROM l WHERE t LIKE '%\_%' AND t NOT LIKE '%2'
+fields count:20:8:-1
+row 4196
+SELECT 1
+> SELECT count(*) FROM l WHERE t LIKE 'v\'
+fields count:20:8:-1
+ERROR 22025 LIKE pattern must not end with escape character
