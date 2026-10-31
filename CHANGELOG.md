@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Plan `DISTINCT` in two parts over a parallel scan, a `HashAggregate` or a `Unique` in each process below a `Gather` or a `Gather Merge`, as `create_partial_distinct_paths` does, and take the order of the result only from the hash tables above the gather (#1248).
 - A commit that changes a frozen table now writes a record to the commit log, and no longer writes a full checkpoint each time. Only a commit that leaves a frozen version without values still needs a checkpoint (#1242).
 ## 0.4.17 (2026-10-31)
 

@@ -802,6 +802,9 @@ impl<'q> Builder<'q> {
         for found in self.partial_grouping(level) {
             paths.add(costs(&found.0), Vec::new(), found);
         }
+        for found in self.partial_distinct_paths(level) {
+            paths.add(costs(&found.0), Vec::new(), found);
+        }
         match paths.fractional(fraction, |(n, _)| n.cost.rows) {
             Some(found) => found,
             // `build_minmax_path`: no plan of `FROM` gives the rows in the order of the subquery, so the query has no plan.
@@ -995,7 +998,32 @@ impl<'q> Builder<'q> {
             .collect()
     }
 
-    /// [`Builder::upper_order`]. With `partial`, the node is a partial path with this number of workers, and the `Agg` is in two parts of the mode, as [`partial_aggregate`] makes it.
+    /// `create_partial_distinct_paths`: the plans of a query with `DISTINCT` whose `DISTINCT` is in two parts, as [`partial_distinct`] makes them over the partial path of the only relation of `FROM`. The query has no plan of this kind when it has groups, windows, a set-returning function in the targets, `DISTINCT ON` or a target that is not parallel safe.
+    fn partial_distinct_paths(&mut self, level: &Level<'q>) -> Vec<(Node<'q>, Vec<OrderKey>)> {
+        let query = level.query;
+        let Some((partial, workers)) = self.partials.get(&level.scope).cloned() else {
+            return Vec::new();
+        };
+        if query.distinct.is_empty()
+            || query.distinct_on
+            || query.grouped
+            || query.set_op.is_some()
+            || !query.windows.is_empty()
+            || query.has_target_srfs()
+            || level.presorted
+            || !query.targets.iter().all(|t| parallel::safe(&t.expr))
+        {
+            return Vec::new();
+        }
+        [Mode::Hashed, Mode::GatherSorted, Mode::Sorted, Mode::SortHashed]
+            .into_iter()
+            .filter_map(|mode| {
+                self.upper_split(level, partial.clone(), Vec::new(), false, Some((workers, mode)))
+            })
+            .collect()
+    }
+
+    /// [`Builder::upper_order`]. With `partial`, the node is a partial path with this number of workers, and the `Agg` is in two parts of the mode, as [`partial_aggregate`] makes it. A query with no groups has the `DISTINCT` in two parts of the mode, as [`partial_distinct`] makes it.
     fn upper_split(
         &mut self,
         level: &Level<'q>,
@@ -1037,6 +1065,11 @@ impl<'q> Builder<'q> {
             parallel::remerge(&mut node, None);
         } else {
             project(&mut node, costs.scan.0, costs.scan.1);
+        }
+        if let Some((workers, mode)) = partial
+            && !query.grouped
+        {
+            node = partial_distinct(level, node, workers, mode, &mut order)?;
         }
         if query.set_op.is_none() {
             if query.grouped {
@@ -1797,13 +1830,13 @@ fn function_units(oid: u32) -> f64 {
 /// The plan of the two parts of an `Agg` with groups, as `create_partial_grouping_paths` and `gather_grouping_paths` make them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Mode {
-    /// A `Partial HashAggregate`, a `Gather` and a `Finalize HashAggregate`. With no groups, a `Partial Aggregate`, a `Gather` and a `Finalize Aggregate`.
+    /// A `Partial HashAggregate`, a `Gather` and a `Finalize HashAggregate`. With no groups, a `Partial Aggregate`, a `Gather` and a `Finalize Aggregate`. For `DISTINCT`, a `HashAggregate` below a `Gather`.
     Hashed,
-    /// A `Partial HashAggregate`, a `Sort` of its groups, a `Gather Merge` and a `Finalize GroupAggregate`.
+    /// A `Partial HashAggregate`, a `Sort` of its groups, a `Gather Merge` and a `Finalize GroupAggregate`. For `DISTINCT`, a `Sort` of a `HashAggregate` below a `Gather Merge`.
     SortHashed,
-    /// A `Sort` of the rows of each process, a `Partial GroupAggregate`, a `Gather Merge` and a `Finalize GroupAggregate`.
+    /// A `Sort` of the rows of each process, a `Partial GroupAggregate`, a `Gather Merge` and a `Finalize GroupAggregate`. For `DISTINCT`, a `Unique` over a `Sort` below a `Gather Merge`.
     Sorted,
-    /// A `Partial HashAggregate`, a `Gather`, a `Sort` of the groups of all the processes and a `Finalize GroupAggregate`.
+    /// A `Partial HashAggregate`, a `Gather`, a `Sort` of the groups of all the processes and a `Finalize GroupAggregate`. For `DISTINCT`, a `Unique` over a `Sort` below a `Gather`.
     GatherSorted,
 }
 
@@ -2848,24 +2881,11 @@ fn windows<'q>(
     Some(node)
 }
 
-/// The node of `DISTINCT`: a `HashAggregate` on the targets, or a `Unique` on the rows sorted on them, whichever costs less, as `create_distinct_paths`. `DISTINCT ON` always sorts. With `only`, the input is not the cheapest plan, so it gets only a `Unique`, and only when its rows are in the order of the keys.
-fn distinct<'q>(
-    level: &Level<'q>,
-    input: Node<'q>,
-    order: &mut Vec<OrderKey>,
-    only: bool,
-    target: (f64, f64),
-) -> Option<Node<'q>> {
+/// `processed_distinctClause` and `distinct_pathkeys`: the items of `DISTINCT` whose keys are not redundant, and the keys of the sort of `DISTINCT`. The sort puts the items of `ORDER BY` first, so that the sort of `ORDER BY` after it has no work.
+fn distinct_keys<'q>(level: &Level<'q>) -> (Vec<&'q SortGroup>, Vec<SortKey<'q>>) {
     let query = level.query;
-    let scope = level.scope;
-    let c = input.cost;
-    // `processed_distinctClause`: the items whose keys are not redundant.
     let processed =
         upper_canonical(level, query.distinct.iter().collect(), |d| level.target(d.target));
-    let ncols = processed.len();
-    let distinct_exprs: Vec<&Expr> = processed.iter().map(|d| level.target(d.target)).collect();
-    let groups = level.stats.groups(&distinct_exprs, c.rows);
-    // The sort puts the items of `ORDER BY` first, so that the sort of `ORDER BY` after it has no work.
     let mut keys: Vec<SortKey<'q>> = Vec::new();
     let distinct_target = |t: usize| query.distinct.iter().any(|d| d.target == t);
     if query.sort.iter().all(|s| distinct_target(s.target)) {
@@ -2877,7 +2897,97 @@ fn distinct<'q>(
             keys.push(key);
         }
     }
-    let mut keys = upper_canonical(level, keys, |k| &*k.item.expr);
+    (processed, upper_canonical(level, keys, |k| &*k.item.expr))
+}
+
+/// `create_partial_distinct_paths` and `generate_useful_gather_paths`: the `DISTINCT` of the rows of each process of the partial path `input` with `workers` workers, below a `Gather` or a `Gather Merge` of the mode. A `HashAggregate` gives the rows of each process with no copies when `enable_hashagg` is on, and a `Unique` over a `Sort` gives them in the order of the keys. `add_partial_path` keeps the `HashAggregate` only when it costs less than the `Unique` by more than the fuzz factor, and the `Gather` collects the one that costs less. The `DISTINCT` above the gather, as `create_final_distinct_paths`, takes away the rows that two processes both give. The result is `None` when the mode has no plan of this kind, or when no key of `DISTINCT` is not redundant.
+fn partial_distinct<'q>(
+    level: &Level<'q>,
+    input: Node<'q>,
+    workers: i32,
+    mode: Mode,
+    order: &mut Vec<OrderKey>,
+) -> Option<Node<'q>> {
+    let query = level.query;
+    let scope = level.scope;
+    let (processed, keys) = distinct_keys(level);
+    if processed.is_empty() {
+        return None;
+    }
+    let enable = crate::enable();
+    let c = input.cost;
+    let ncols = processed.len() as f64;
+    let exprs: Vec<&Expr> = processed.iter().map(|d| level.target(d.target)).collect();
+    let groups = level.stats.groups(&exprs, c.rows);
+    // `create_agg_path` of `AGG_HASHED` with no aggregate call, and `create_unique_path` over a `Sort`.
+    let hash = (enable.hashagg && processed.iter().all(|d| d.hashable)).then(|| {
+        let entry = cost::hashagg_entry_size(0, c.width, 0.0);
+        let (spill_startup, spill_total) = cost::hashagg_spill(groups, entry, c.rows, c.width);
+        let startup = c.total + cost::CPU_OPERATOR * c.rows * ncols;
+        let total = startup + cost::CPU_TUPLE * groups + spill_total;
+        Cost { startup: startup + spill_startup, total, rows: groups, width: 0 }
+    });
+    let (sort_startup, sort_total) = sort_cost(level, c, &keys, 0, None);
+    let unique_total = sort_total + cost::CPU_OPERATOR * c.rows * ncols;
+    let hash = hash.filter(|h| h.total * 1.01 < unique_total);
+    let hashed = |input| {
+        let items = processed.iter().map(|d| Item::below(level.target(d.target))).collect();
+        let kind = Kind::Aggregate {
+            strategy: Strategy::Hashed,
+            keys: items,
+            sets: Vec::new(),
+            unique: false,
+            split: Split::Simple,
+            table: Some(Table {
+                of: Grouped::Distinct(query),
+                groups,
+                keys: processed.iter().map(|d| d.target).collect(),
+            }),
+        };
+        let mut node = Node::new(kind, scope, vec![input]);
+        node.cost = hash.unwrap_or_default();
+        node
+    };
+    let unique = |input| {
+        let mut node = Node::new(Kind::Unique, scope, vec![sort(input, keys.clone(), None)]);
+        node.cost = Cost { startup: sort_startup, total: unique_total, rows: groups, ..c };
+        node
+    };
+    let rows = cost::clamp_rows(groups * parallel::divisor(&enable, workers));
+    *order = sorted_order(&keys);
+    let node = match mode {
+        Mode::Hashed if hash.is_some() => {
+            order.clear();
+            parallel::gather(&enable, hashed(input), workers, rows)
+        }
+        Mode::GatherSorted if hash.is_none() => {
+            order.clear();
+            parallel::gather(&enable, unique(input), workers, rows)
+        }
+        Mode::Sorted => parallel::gather_merge(&enable, unique(input), workers, rows),
+        Mode::SortHashed if hash.is_some() => {
+            parallel::gather_merge(&enable, sort(hashed(input), keys.clone(), None), workers, rows)
+        }
+        _ => return None,
+    };
+    Some(node)
+}
+
+/// The node of `DISTINCT`: a `HashAggregate` on the targets, or a `Unique` on the rows sorted on them, whichever costs less, as `create_distinct_paths`. `DISTINCT ON` always sorts. With `only`, the input is not the cheapest plan, so it gets only a `Unique`, and only when its rows are in the order of the keys.
+fn distinct<'q>(
+    level: &Level<'q>,
+    input: Node<'q>,
+    order: &mut Vec<OrderKey>,
+    only: bool,
+    target: (f64, f64),
+) -> Option<Node<'q>> {
+    let query = level.query;
+    let scope = level.scope;
+    let c = input.cost;
+    let (processed, mut keys) = distinct_keys(level);
+    let ncols = processed.len();
+    let distinct_exprs: Vec<&Expr> = processed.iter().map(|d| level.target(d.target)).collect();
+    let groups = level.stats.groups(&distinct_exprs, c.rows);
     // `DISTINCT ON` sorts on all the items of `ORDER BY` when it has more keys, as `create_final_distinct_paths`.
     if query.distinct_on {
         let sort: Vec<SortKey<'q>> =

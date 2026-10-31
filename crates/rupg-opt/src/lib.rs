@@ -487,7 +487,10 @@ pub fn hash_tables(plan: &Plan<'_>, query: &Query) -> HashTables {
     let mut out = HashTables::default();
     let mut nodes = vec![&plan.root];
     while let Some(node) = nodes.pop() {
-        nodes.extend(&node.children);
+        // The rows of the partial part below a `Gather` or a `Gather Merge` go to a node of the final part above it, so the order of a table there does not come to the result.
+        if !matches!(node.kind, Kind::Gather { .. } | Kind::GatherMerge { .. }) {
+            nodes.extend(&node.children);
+        }
         nodes.extend(node.init_plans.iter().chain(&node.sub_plans).map(|s| &s.plan));
         let table = match &node.kind {
             // `agg_retrieve_direct`: an `AGG_MIXED` gives the groups of its hash tables after the passes over sorted rows.
