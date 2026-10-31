@@ -1392,6 +1392,9 @@ pub(crate) fn run(
             return Ok(None);
         };
         out
+    } else if let Some((columns, bound)) = top_columns(query, offset, count) {
+        let rows = top(&mut scan, query, session, &columns, bound, offset, count)?;
+        (rows, scan::kept_tables(query, Vec::new(), &kept), true)
     } else {
         let ordered = !query.sort.is_empty() || !query.distinct.is_empty();
         let mut needed = match count {
@@ -1433,6 +1436,94 @@ pub(crate) fn run(
             })
             .collect(),
     ))
+}
+
+/// For a query with no groups whose targets are columns of the table, with `ORDER BY` and `LIMIT` and no `DISTINCT`: the column of each target, and the bound of the sort, which must allow `bound * 2` in an `int` as `tuplesort_set_bound` does.
+fn top_columns(query: &Query, offset: usize, count: Option<usize>) -> Option<(Vec<usize>, usize)> {
+    let count = count?;
+    if query.sort.is_empty() || !query.distinct.is_empty() || query.with_ties {
+        return None;
+    }
+    let bound = offset
+        .checked_add(count)
+        .filter(|b| *b > 0 && *b <= usize::try_from(i32::MAX / 2).unwrap_or(usize::MAX))?;
+    let columns = query
+        .targets
+        .iter()
+        .map(|t| match &t.expr.kind {
+            ExprKind::Var(var) if var.levels_up == 0 && var.attnum > 0 => {
+                usize::try_from(var.attnum - 1).ok()
+            }
+            _ => None,
+        })
+        .collect::<Option<Vec<usize>>>()?;
+    Some((columns, bound))
+}
+
+/// The rows of a query of [`top_columns`] in the order of `ORDER BY`, with `OFFSET` and `LIMIT` done, as [`crate::order`] gives them for all the rows of the scan. The first `bound * 2` rows wait for a sort of all of them. After them, each row goes into the bounded heap as it comes, and a row reads the columns of the targets that `ORDER BY` does not have only when the heap keeps it.
+fn top(
+    scan: &mut Scan<'_, '_>,
+    query: &Query,
+    session: &dyn Session,
+    columns: &[usize],
+    bound: usize,
+    offset: usize,
+    count: Option<usize>,
+) -> Result<Vec<Vec<Value>>> {
+    let types: Vec<u32> = query.targets.iter().map(|t| t.expr.ty).collect();
+    let keys = sort::Keys::new(&query.sort, &types, session)?;
+    let mut cmp = |a: &Vec<Value>, b: &Vec<Value>| keys.compare(a, b);
+    let sorted: Vec<bool> =
+        (0..columns.len()).map(|t| query.sort.iter().any(|s| s.target == t)).collect();
+    let mut first: Vec<Vec<Value>> = Vec::new();
+    let mut heap = sort::Bounded::new(bound);
+    let mut streaming = false;
+    let mut spare: Option<Vec<Value>> = None;
+    scan.each(&mut |exec, batch, sel| {
+        let cols = columns
+            .iter()
+            .map(|&c| exec.var(batch, c, exec.types[c], sel))
+            .collect::<Result<Vec<_>>>()?;
+        for i in 0..sel.len() {
+            if !streaming {
+                first.push(cols.iter().map(|c| c.value(i, &exec.dicts)).collect());
+                if first.len() > bound * 2 {
+                    for row in first.drain(..) {
+                        heap.push(row, &mut cmp)?;
+                    }
+                    streaming = true;
+                }
+                continue;
+            }
+            let mut row = spare.take().unwrap_or_default();
+            row.clear();
+            row.extend(
+                cols.iter().zip(&sorted).map(
+                    |(c, &s)| {
+                        if s { c.value(i, &exec.dicts) } else { Value::Null }
+                    },
+                ),
+            );
+            if heap.keeps(&row, &mut cmp)? {
+                for (slot, (c, &s)) in row.iter_mut().zip(cols.iter().zip(&sorted)) {
+                    if !s {
+                        *slot = c.value(i, &exec.dicts);
+                    }
+                }
+                spare = heap.push(row, &mut cmp)?;
+            } else {
+                spare = Some(row);
+            }
+        }
+        Ok(true)
+    })?;
+    let rows = if streaming {
+        heap.finish(&mut cmp)?
+    } else {
+        sort::qsort(&mut first, &mut cmp)?;
+        first
+    };
+    Ok(rows.into_iter().skip(offset).take(count.unwrap_or(usize::MAX)).collect())
 }
 
 /// The rows of the targets for each row of `tables`, or for each group with the results of its aggregates, which pass `HAVING`. It gives true when the rows are in the order of `ORDER BY` with `OFFSET` and `LIMIT` done: with a `LIMIT` and many groups, the targets of `ORDER BY` run for each group, and the other targets only for the groups that `LIMIT` keeps, when they cannot fail.

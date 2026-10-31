@@ -226,6 +226,14 @@ impl<T> Bounded<T> {
         }
     }
 
+    /// True when [`Bounded::push`] keeps the item: the heap is not full, or the item comes before its top.
+    pub(crate) fn keeps<F>(&self, item: &T, cmp: &mut F) -> Result<bool>
+    where
+        F: FnMut(&T, &T) -> Result<Ordering>,
+    {
+        Ok(self.heap.len() < self.bound || cmp(item, &self.heap[0])?.is_lt())
+    }
+
     /// `sort_bounded_heap`: the items of the heap in order.
     pub(crate) fn finish<F>(mut self, cmp: &mut F) -> Result<Vec<T>>
     where

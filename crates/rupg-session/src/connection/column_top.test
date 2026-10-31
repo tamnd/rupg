@@ -1,0 +1,83 @@
+> CREATE TABLE tp (g int, t text, ts timestamp, n int)
+CREATE TABLE
+> INSERT INTO tp SELECT i % 7, CASE WHEN i % 13 = 0 THEN NULL ELSE 'v' || (i % 5) END, CASE WHEN i % 17 = 0 THEN NULL ELSE '2020-01-01'::timestamp + (i % 3) * interval '1 day' END, i FROM generate_series(1, 70000) i
+INSERT 0 70000
+> SELECT n, t FROM tp WHERE g = 2 ORDER BY t LIMIT 5
+fields n@tp.4:23:4:-1,t@tp.2:25:-1:-1
+row 135,v0
+row 170,v0
+row 100,v0
+row 30,v0
+row 205,v0
+SELECT 5
+> SELECT n, ts FROM tp ORDER BY ts DESC LIMIT 4 OFFSET 3
+fields n@tp.4:23:4:-1,ts@tp.3:1114:8:-1
+row 51,NULL
+row 17,NULL
+row 85,NULL
+row 119,NULL
+SELECT 4
+> SELECT t, n, ts FROM tp WHERE g < 3 ORDER BY ts NULLS FIRST, t DESC LIMIT 6
+fields t@tp.2:25:-1:-1,n@tp.4:23:4:-1,ts@tp.3:1114:8:-1
+row NULL,1547,NULL
+row NULL,2431,NULL
+row NULL,442,NULL
+row NULL,884,NULL
+row NULL,1989,NULL
+row NULL,3094,NULL
+SELECT 6
+> SELECT n, t FROM tp WHERE n < 40 ORDER BY t LIMIT 30
+fields n@tp.4:23:4:-1,t@tp.2:25:-1:-1
+row 15,v0
+row 10,v0
+row 30,v0
+row 25,v0
+row 5,v0
+row 35,v0
+row 20,v0
+row 1,v1
+row 6,v1
+row 11,v1
+row 16,v1
+row 21,v1
+row 31,v1
+row 36,v1
+row 17,v2
+row 32,v2
+row 27,v2
+row 12,v2
+row 2,v2
+row 7,v2
+row 37,v2
+row 22,v2
+row 8,v3
+row 18,v3
+row 23,v3
+row 28,v3
+row 3,v3
+row 38,v3
+row 33,v3
+row 29,v4
+SELECT 30
+> SELECT n FROM tp WHERE n < 12 ORDER BY g LIMIT 10
+fields n@tp.4:23:4:-1
+row 7
+row 8
+row 1
+row 2
+row 9
+row 10
+row 3
+row 11
+row 4
+row 5
+SELECT 10
+> SELECT n, g FROM tp ORDER BY g DESC, n LIMIT 3
+fields n@tp.4:23:4:-1,g@tp.1:23:4:-1
+row 6,6
+row 13,6
+row 20,6
+SELECT 3
+> SELECT t FROM tp WHERE n > 69990 ORDER BY t LIMIT 0
+fields t@tp.2:25:-1:-1
+SELECT 0
