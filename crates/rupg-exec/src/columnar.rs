@@ -1391,6 +1391,40 @@ fn project(
                             .collect()
                     })
                     .flatten();
+                let mut types: Vec<u32> = query.targets.iter().map(|t| t.expr.ty).collect();
+                types.push(oid::INT8);
+                // `tuplesort_set_bound`: the bound must allow `bound * 2` in an `int`.
+                let bound = offset.checked_add(count).filter(|b| {
+                    *b > 0 && *b <= usize::try_from(i32::MAX / 2).unwrap_or(usize::MAX)
+                });
+                if let (Some(direct), Some(bound)) = (&direct, bound) {
+                    // Each group goes into the bounded heap of the sort as it comes, and the row of a group that is not in the heap takes the values of the next group.
+                    let keys = sort::Keys::new(&query.sort, &types, session)?;
+                    let mut cmp = |a: &Vec<Value>, b: &Vec<Value>| keys.compare(a, b);
+                    let mut heap = sort::Bounded::new(bound);
+                    let mut spare: Option<Vec<Value>> = None;
+                    for (n, g) in order.into_iter().enumerate() {
+                        crate::interrupt(session, n)?;
+                        let mut row = spare.take().unwrap_or_default();
+                        row.clear();
+                        for c in direct {
+                            row.push(match c {
+                                Some(c) => results.value(*c, g)?,
+                                None => Value::Null,
+                            });
+                        }
+                        row.push(Value::Int8(i64::try_from(g).unwrap_or(i64::MAX)));
+                        spare = heap.push(row, &mut cmp)?;
+                    }
+                    for row in heap.finish(&mut cmp)?.into_iter().skip(offset) {
+                        let Some(&Value::Int8(g)) = row.last() else { continue };
+                        let g = usize::try_from(g).unwrap_or(0);
+                        eval.tuple = &tuples[g];
+                        eval.group = Group { aggs: results.group(g, None)?, ..Group::default() };
+                        eval.project(&query.targets, &levels, &mut out, usize::MAX)?;
+                    }
+                    return Ok((out, true));
+                }
                 let mut partial = Vec::new();
                 for (n, g) in order.into_iter().enumerate() {
                     crate::interrupt(session, n)?;
@@ -1420,8 +1454,6 @@ fn project(
                     row.push(Value::Int8(i64::try_from(g).unwrap_or(i64::MAX)));
                     partial.push(row);
                 }
-                let mut types: Vec<u32> = query.targets.iter().map(|t| t.expr.ty).collect();
-                types.push(oid::INT8);
                 let partial = crate::order(query, partial, &types, offset, Some(count), session)?;
                 for row in partial {
                     let Some(&Value::Int8(g)) = row.last() else { continue };

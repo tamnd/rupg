@@ -170,10 +170,33 @@ pub(crate) fn bounded<T, F>(items: Vec<T>, bound: usize, cmp: &mut F) -> Result<
 where
     F: FnMut(&T, &T) -> Result<Ordering>,
 {
-    let mut reversed = |a: &T, b: &T| cmp(a, b).map(Ordering::reverse);
-    let mut heap: Vec<T> = Vec::with_capacity(bound);
+    let mut heap = Bounded::new(bound);
     for item in items {
-        if heap.len() < bound {
+        heap.push(item, cmp)?;
+    }
+    heap.finish(cmp)
+}
+
+/// The bounded heap of `tuplesort.c` that takes the items one at a time, so that the items that do not go in the heap are not kept.
+pub(crate) struct Bounded<T> {
+    heap: Vec<T>,
+    bound: usize,
+}
+
+impl<T> Bounded<T> {
+    /// An empty heap for the first `bound` items.
+    pub(crate) fn new(bound: usize) -> Bounded<T> {
+        Bounded { heap: Vec::with_capacity(bound), bound }
+    }
+
+    /// Puts the item in the heap. The result is the item that is not in the heap after the step, if there is one: the item, or the old top.
+    pub(crate) fn push<F>(&mut self, item: T, cmp: &mut F) -> Result<Option<T>>
+    where
+        F: FnMut(&T, &T) -> Result<Ordering>,
+    {
+        let mut reversed = |a: &T, b: &T| cmp(a, b).map(Ordering::reverse);
+        let heap = &mut self.heap;
+        if heap.len() < self.bound {
             // `tuplesort_heap_insert`: moves the new item up to its place.
             heap.push(item);
             let mut j = heap.len() - 1;
@@ -185,20 +208,33 @@ where
                 heap.swap(i, j);
                 j = i;
             }
+            Ok(None)
         } else if reversed(&item, &heap[0])?.is_gt() {
-            heap[0] = item;
-            sift_down(&mut heap, &mut reversed)?;
+            let old = std::mem::replace(&mut heap[0], item);
+            sift_down(heap, &mut reversed)?;
+            Ok(Some(old))
+        } else {
+            Ok(Some(item))
         }
     }
-    // `sort_bounded_heap`: takes the top until one item is left.
-    let mut sorted = Vec::with_capacity(heap.len());
-    while heap.len() > 1 {
-        sorted.push(heap.swap_remove(0));
-        sift_down(&mut heap, &mut reversed)?;
+
+    /// `sort_bounded_heap`: the items of the heap in order.
+    pub(crate) fn finish<F>(mut self, cmp: &mut F) -> Result<Vec<T>>
+    where
+        F: FnMut(&T, &T) -> Result<Ordering>,
+    {
+        let mut reversed = |a: &T, b: &T| cmp(a, b).map(Ordering::reverse);
+        let heap = &mut self.heap;
+        // Takes the top until one item is left.
+        let mut sorted = Vec::with_capacity(heap.len());
+        while heap.len() > 1 {
+            sorted.push(heap.swap_remove(0));
+            sift_down(heap, &mut reversed)?;
+        }
+        sorted.append(heap);
+        sorted.reverse();
+        Ok(sorted)
     }
-    sorted.extend(heap);
-    sorted.reverse();
-    Ok(sorted)
 }
 
 #[cfg(test)]
