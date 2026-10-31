@@ -677,6 +677,11 @@ pub(crate) fn read(
     Ok(tables(query, rows, xids, places))
 }
 
+/// The [`Tables`] of a query of one table with the rows `rows`, which have the columns that are true in `kept`.
+pub(crate) fn kept_tables(query: &Query, rows: Vec<Vec<Value>>, kept: &[bool]) -> Tables {
+    tables(query, vec![Rc::new(rows)], vec![false], vec![Some(Places::new(kept))])
+}
+
 /// The [`Tables`] of a query with the rows of its relations.
 fn tables(
     query: &Query,
@@ -1119,7 +1124,7 @@ fn outer_expr(expr: &Expr, bound: &[usize]) -> bool {
 }
 
 /// The parts of a condition that `AND` joins. They are references and not copies, because the cache of the rows of a subquery keeps them by the address of the subquery: a copy that the scan drops can free an address that another subquery then gets.
-fn conjuncts<'q>(expr: &'q Expr, out: &mut Vec<&'q Expr>) {
+pub(crate) fn conjuncts<'q>(expr: &'q Expr, out: &mut Vec<&'q Expr>) {
     match &expr.kind {
         ExprKind::Bool(rupg_analyze::BoolOp::And, args) => {
             for arg in args {
@@ -1131,7 +1136,7 @@ fn conjuncts<'q>(expr: &'q Expr, out: &mut Vec<&'q Expr>) {
 }
 
 /// `order_qual_clauses`: the conditions in the order of their security levels, and in the order of their costs in each level. The first conditions are the conditions of the views with `security_barrier`, with the number of conditions of each view in `barrier`, and the other conditions come after them. A condition that is leakproof and costs less than 10 has the level 0, as it can give no information about the rows that a view hides. The sort is stable.
-fn order_quals<'q>(filter: Vec<&'q Expr>, barrier: &[usize]) -> Vec<&'q Expr> {
+pub(crate) fn order_quals<'q>(filter: Vec<&'q Expr>, barrier: &[usize]) -> Vec<&'q Expr> {
     let mut levels =
         barrier.iter().enumerate().flat_map(|(level, &n)| std::iter::repeat_n(level, n));
     let mut items: Vec<(usize, f64, &Expr)> = filter

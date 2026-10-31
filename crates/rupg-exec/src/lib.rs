@@ -1416,6 +1416,14 @@ fn run_query(
     exists: bool,
 ) -> Result<Vec<Vec<Value>>> {
     let want = cache.want.take();
+    let filled = cache.tables.borrow().iter().any(|(q, _, _)| std::ptr::eq(*q, query));
+    if !exists
+        && outer.is_empty()
+        && !filled
+        && let Some(rows) = columnar::run(query, params, session, cache, want)?
+    {
+        return Ok(rows);
+    }
     let base = cache.tables(query, session, true)?;
     let mut eval = Eval::new(params, session, &base, cache, outer);
     // simplify_EXISTS_query: with no aggregate, no `HAVING`, no `OFFSET` and a `LIMIT` that is a constant more than 0 or null, `EXISTS` only needs a row of `FROM` and `WHERE`.
@@ -4391,6 +4399,7 @@ fn relabel(value: Value, ty: u32) -> Value {
 
 mod agg;
 mod analyze;
+mod columnar;
 mod cursor;
 mod fold;
 mod hashed;

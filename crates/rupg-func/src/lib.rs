@@ -559,6 +559,19 @@ pub trait Session {
         let _ = (relation, used);
         Ok(Vec::new())
     }
+    /// The columns `columns` of a table, each with the physical type that the scan reads it as, when the snapshot of the statement sees every row of the table and no other version. The columns have the rows in the order of [`Session::table_rows`], and the number of rows comes with them. `None` makes the scan read the rows. A session with no server has no columns.
+    ///
+    /// # Errors
+    ///
+    /// An error of the store of the rows.
+    fn table_columns(
+        &self,
+        relation: u32,
+        columns: &[(usize, rupg_column::segment::Kind)],
+    ) -> Result<Option<(usize, Vec<Arc<rupg_column::stored::Stored>>)>> {
+        let _ = (relation, columns);
+        Ok(None)
+    }
     /// The rows of [`Session::table_rows`] of only the versions `tids`, which come in the order of the IDs, as the scan gives them.
     ///
     /// # Errors

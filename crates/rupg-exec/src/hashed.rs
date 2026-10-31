@@ -273,6 +273,24 @@ pub(crate) fn groups(
     Ok(out)
 }
 
+/// The order of the entries of a hash table for `groups` groups, for the rows of entries whose hashes are `hashes`, in the order of their first rows. `trailing` is true when a row of an entry came after the first row of the last entry: the table checks its size before each row, also before a row of an entry that it has.
+///
+/// # Errors
+///
+/// None in practice: the entries are never equal.
+pub(crate) fn order_of(hashes: &[u32], groups: f64, trailing: bool) -> Result<Vec<usize>> {
+    let mut table = Table::new(buckets(groups));
+    for &h in hashes {
+        table.insert(h, &mut |_| Ok(false))?;
+    }
+    if trailing && let Some(&last) = hashes.last() {
+        #[allow(clippy::cast_possible_truncation)]
+        let entry = (hashes.len() - 1) as u32;
+        table.insert(last, &mut |e| Ok(e == entry))?;
+    }
+    Ok(table.order().into_iter().map(|e| e as usize).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -3,9 +3,11 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use rupg_analyze::{Derived, Unique};
+use rupg_column::segment::Kind;
+use rupg_column::stored::Stored;
 use rupg_common::persist::{Persist, Reader};
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{HeapSize, Statistic, XactState};
@@ -46,6 +48,9 @@ fn fresh(unique: &[Unique], values: &[Value], derive: Derive<'_>) -> Result<Fres
 /// `nextXid` of a new cluster: `initdb` of PostgreSQL 19 uses the transaction IDs from `FirstNormalTransactionId` up to 661, so the first transaction gets 662.
 const INITDB_NEXT_XID: u32 = 662;
 
+/// The fewest versions of a table that [`Heap::columns`] makes columns for. A smaller table reads faster by rows than the columns take to build.
+const COLUMN_ROWS: usize = 65_536;
+
 /// The result of [`Heap::vacuum`].
 pub(crate) struct Vacuumed {
     /// `reltuples` of the heap.
@@ -77,7 +82,7 @@ struct State {
     /// `PGPROC->xmin`: the `xmin` of the oldest snapshot that each session holds, by the process ID.
     xmins: HashMap<i32, u32>,
     /// The versions of the rows of each table, by the OID of the database and the OID of the table.
-    tables: HashMap<(u32, u32), Table>,
+    tables: Tables,
     /// The tables that each transaction in progress truncated, whose versions from before the `TRUNCATE` go at the commit.
     truncating: HashMap<u32, Vec<(u32, u32)>>,
     /// The transaction that each waiting transaction waits for, the edges of the wait graph of `DeadLockCheck`.
@@ -132,6 +137,51 @@ pub(crate) struct Wait {
     pub(crate) holder: i32,
 }
 
+/// The tables of [`State`]. A change of a table drops the columns of [`Table::columns`], so that each access that can change the versions goes through [`Tables::get_mut`], [`Tables::entry`], [`Tables::values_mut`] or [`Tables::retain`].
+#[derive(Debug, Default)]
+struct Tables(HashMap<(u32, u32), Table>);
+
+impl Tables {
+    fn get(&self, key: &(u32, u32)) -> Option<&Table> {
+        self.0.get(key)
+    }
+
+    fn get_mut(&mut self, key: &(u32, u32)) -> Option<&mut Table> {
+        let table = self.0.get_mut(key)?;
+        table.columns = Columns::default();
+        Some(table)
+    }
+
+    /// The table `key`, which the call makes when it has no versions yet.
+    fn entry(&mut self, key: (u32, u32)) -> &mut Table {
+        let table = self.0.entry(key).or_default();
+        table.columns = Columns::default();
+        table
+    }
+
+    fn values_mut(&mut self) -> impl Iterator<Item = &mut Table> {
+        for table in self.0.values_mut() {
+            table.columns = Columns::default();
+        }
+        self.0.values_mut()
+    }
+
+    fn retain(&mut self, keep: impl FnMut(&(u32, u32), &mut Table) -> bool) {
+        self.0.retain(keep);
+    }
+}
+
+/// The columns of a table that the scans read, which the heap makes from the versions when every version is live. A change of the table drops them.
+#[derive(Debug, Default)]
+struct Columns {
+    /// Each transaction that inserted versions of the table with the last command that did, or `None` before the heap looked at the versions. An empty list with `mixed` set is a table with a deleted version.
+    xmins: Option<Vec<(u32, u32)>>,
+    /// True when a version of the table was deleted, also by a transaction that did not commit yet.
+    mixed: bool,
+    /// The columns, by the place of the column, with the physical type of each.
+    stored: HashMap<usize, Arc<Stored>>,
+}
+
 /// The versions of the rows of a table, in the order of their IDs.
 #[derive(Debug, Default)]
 struct Table {
@@ -159,6 +209,7 @@ struct Table {
     save_free: usize,
     /// The combo command ID of each version that the transaction that inserted it deleted, by the ID of the version, which `t_cid` keeps after the end of the transaction.
     combos: HashMap<u64, u32>,
+    columns: Columns,
 }
 
 /// The versions of a table by the hash of their key, for one unique key, which takes the place of the btree of a unique index. The map can keep the ID of a version that went, which a check skips.
@@ -709,7 +760,7 @@ impl Heap {
         let mut made: Vec<(usize, KeyMap, HashMap<u64, usize>)> = Vec::new();
         loop {
             let mut state = self.state();
-            let rows = state.tables.entry(table).or_default();
+            let rows = state.tables.entry(table);
             if let Some(places) = rows.key_maps(unique) {
                 return Ok((state, places));
             }
@@ -842,6 +893,62 @@ impl Heap {
             .collect()
     }
 
+    /// The columns `wanted` of a table, each with its physical type, in the order of the versions, when the view sees each version of the table and every version is live. The heap makes a column from the versions the first time a scan reads it, and keeps it until the table changes. It gives the number of rows with the columns. `None` is a table that the scan must read by rows: the table is small, a version is deleted, the view does not see a version, or a value does not have the type of its column.
+    pub(crate) fn columns(
+        &self,
+        relation: u32,
+        view: &View,
+        wanted: &[(usize, Kind)],
+    ) -> Option<(usize, Vec<Arc<Stored>>)> {
+        let mut state = self.state();
+        let table = state.tables.0.get_mut(&(view.database, relation))?;
+        if table.versions.len() < COLUMN_ROWS {
+            return None;
+        }
+        let columns = &mut table.columns;
+        if columns.xmins.is_none() {
+            let mut xmins: Vec<(u32, u32)> = Vec::new();
+            for version in &table.versions {
+                if version.xmax != 0 {
+                    columns.mixed = true;
+                    break;
+                }
+                match xmins.iter_mut().find(|(xmin, _)| *xmin == version.xmin) {
+                    Some((_, cmin)) => *cmin = (*cmin).max(version.cmin),
+                    None => xmins.push((version.xmin, version.cmin)),
+                }
+            }
+            columns.xmins = Some(xmins);
+        }
+        if columns.mixed {
+            return None;
+        }
+        let sees = |&(xmin, cmin): &(u32, u32)| {
+            if view.xid != 0 && xmin == view.xid {
+                cmin < view.command
+            } else {
+                committed_before(xmin, &view.snapshot)
+            }
+        };
+        if !columns.xmins.as_ref()?.iter().all(sees) {
+            return None;
+        }
+        let mut out = Vec::with_capacity(wanted.len());
+        for &(at, kind) in wanted {
+            let stored = match columns.stored.get(&at) {
+                Some(stored) if stored.kind == kind => Arc::clone(stored),
+                _ => {
+                    let values = table.versions.iter().map(|version| version.values.get(at));
+                    let stored = Arc::new(Stored::build(kind, values).ok()?);
+                    columns.stored.insert(at, Arc::clone(&stored));
+                    stored
+                }
+            };
+            out.push(stored);
+        }
+        Some((table.versions.len(), out))
+    }
+
     /// The rows of [`Heap::visible_rows`] with no system columns, for only the versions `tids` of a table, in the order of the list. A version that the view does not see gives no row.
     pub(crate) fn rows_at(
         &self,
@@ -953,7 +1060,7 @@ impl Heap {
         if unique.is_empty() {
             let mut state = self.state();
             let State { tables, toast_oids, .. } = &mut *state;
-            let table = tables.entry((view.database, relation)).or_default();
+            let table = tables.entry((view.database, relation));
             for values in rows {
                 ids.push(table.add(None, made, values, (unique, &[]), None, toast_oids));
             }
@@ -965,7 +1072,7 @@ impl Heap {
         }
         let (mut state, places) = self.lock_keys((view.database, relation), unique, derive)?;
         let State { tables, running, rechecks: pending, toast_oids, .. } = &mut *state;
-        let table = tables.entry((view.database, relation)).or_default();
+        let table = tables.entry((view.database, relation));
         let mut kept = kept.iter().copied();
         let mut used = Vec::with_capacity(rows.len());
         let mut partial = Vec::new();
@@ -1028,7 +1135,7 @@ impl Heap {
         let keys = fresh(unique, &values, derive)?;
         let (mut state, places) = self.lock_keys((view.database, relation), unique, derive)?;
         let State { tables, running, rechecks: pending, toast_oids, .. } = &mut *state;
-        let table = tables.entry((view.database, relation)).or_default();
+        let table = tables.entry((view.database, relation));
         for &arbiter in arbiters {
             let Some(&place) = places.get(arbiter) else { continue };
             let map = &table.keys[place];
@@ -1212,7 +1319,7 @@ impl Heap {
     /// Marks the statement of `view` as the bulk insert of `CREATE TABLE AS` into the table `relation`, which extends the heap by more pages at a time, as a `BulkInsertState` does.
     pub(crate) fn start_bulk(&self, relation: u32, view: &View) {
         let mut state = self.state();
-        let table = state.tables.entry((view.database, relation)).or_default();
+        let table = state.tables.entry((view.database, relation));
         table.bulk = Some((view.xid, view.command));
     }
 
@@ -1362,7 +1469,7 @@ impl Heap {
     /// `update_attstats`: replaces the rows of `pg_statistic` of a table for the columns of `rows`, outside of the transactions.
     pub(crate) fn set_statistics(&self, database: u32, relation: u32, rows: Vec<Statistic>) {
         let mut state = self.state();
-        let table = state.tables.entry((database, relation)).or_default();
+        let table = state.tables.entry((database, relation));
         for row in rows {
             table.statistics.insert((row.attnum, row.inherit), row);
         }
@@ -1387,7 +1494,7 @@ impl Heap {
         fillfactor: u8,
     ) {
         let mut state = self.state();
-        let table = state.tables.entry((database, relation)).or_default();
+        let table = state.tables.entry((database, relation));
         table.save_free = 8192 * usize::from(100 - fillfactor.min(100)) / 100;
         if table.fixed != fixed {
             table.fixed = fixed;
@@ -1422,7 +1529,7 @@ impl Heap {
     /// `vac_update_relstats`: sets `relpages` and `reltuples` of a table, outside of the transactions.
     pub(crate) fn set_stats(&self, database: u32, relation: u32, relpages: i32, reltuples: f32) {
         let mut state = self.state();
-        state.tables.entry((database, relation)).or_default().pages.set_stats(relpages, reltuples);
+        state.tables.entry((database, relation)).pages.set_stats(relpages, reltuples);
     }
 
     /// `heap_vacuum_rel` of the table `relation` for the session `pid`: the versions that a transaction deleted before each snapshot and transaction in progress went, as `HeapTupleSatisfiesVacuum` finds them `HEAPTUPLE_DEAD`, give their space and their line pointers back. The pages that the visibility map marks for `skip` keep their versions. Each page that `VACUUM` scans goes to the free space map, with its bits in the visibility map. `indexed` is true when the table has an index, `freeze` freezes the versions that each snapshot sees, and `truncate` lets the heap lose its empty pages at the end.
@@ -1813,8 +1920,8 @@ impl Heap {
         state.latest_completed.put(out);
         state.aborted.put(out);
         state.toast_oids.put(out);
-        state.tables.len().put(out);
-        for (key, table) in &state.tables {
+        state.tables.0.len().put(out);
+        for (key, table) in &state.tables.0 {
             key.put(out);
             let kept = || table.versions.iter().filter(|v| !running.contains(&v.xmin));
             kept().count().put(out);
@@ -1867,7 +1974,7 @@ impl Heap {
                 combos: Persist::take(input)?,
                 ..Table::default()
             };
-            state.tables.insert(key, table);
+            state.tables.0.insert(key, table);
         }
         Ok(Heap { state: Mutex::new(state) })
     }

@@ -367,6 +367,7 @@ version = "0.4.15"
 dependencies = [
  "rupg-analyze",
  "rupg-catalog",
+ "rupg-column",
  "rupg-common",
  "rupg-func",
  "rupg-opt",
@@ -395,6 +396,7 @@ dependencies = [
  "md-5",
  "rupg-analyze",
  "rupg-catalog",
+ "rupg-column",
  "rupg-common",
  "rupg-pgcatalog",
  "rupg-plan",
@@ -460,6 +462,9 @@ dependencies = [
 [[package]]
 name = "rupg-pgcatalog"
 version = "0.4.15"
+dependencies = [
+ "rupg-common",
+]
 
 [[package]]
 name = "rupg-plan"
@@ -513,6 +518,7 @@ version = "0.4.15"
 dependencies = [
  "rupg-analyze",
  "rupg-catalog",
+ "rupg-column",
  "rupg-common",
  "rupg-encode",
  "rupg-exec",
