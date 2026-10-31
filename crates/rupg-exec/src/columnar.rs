@@ -977,8 +977,40 @@ enum Method<'q> {
     },
     Min,
     Max,
+    /// `sum` or `avg` of `x + by`: the sums of the column `x` in `bases[base]` and `by` times the count. `wide` is `None` for [`Method::SumInt`], else the `avg` of [`Method::Int128`]. The values of `x + by` must be in `range`, else the row engine runs the query and gives the error.
+    Shift {
+        base: usize,
+        by: i64,
+        range: (i64, i64),
+        wide: Option<bool>,
+    },
     /// The method of the row engine, with the values of the arguments.
     Row(agg::Agg<'q>),
+}
+
+/// A column that the calls of [`Method::Shift`] sum: the count and the sum of each group, with the smallest and the largest value of all the groups.
+struct Base<'q> {
+    var: &'q Expr,
+    states: Vec<(i64, i128)>,
+    extremes: Option<(i64, i64)>,
+}
+
+/// The column `x` and the integer `by` of `x + by` or `x - by`, with the range of the type of the result.
+fn shifted(arg: &Expr) -> Option<(&Expr, i64, (i64, i64))> {
+    let ExprKind::Func(func) = &arg.kind else { return None };
+    let src = src(func.oid);
+    int_arith(src)?;
+    let plus = src.ends_with("pl");
+    let ([a, b], true) = (func.args.as_slice(), plus || src.ends_with("mi")) else { return None };
+    let (var, by, negate) = match (&a.kind, &b.kind) {
+        (ExprKind::Var(_), ExprKind::Const(c)) => (a, c, !plus),
+        (ExprKind::Const(c), ExprKind::Var(_)) if plus => (b, c, false),
+        _ => return None,
+    };
+    int_range(var.ty)?;
+    let by = int_of(by)?;
+    let by = if negate { by.checked_neg()? } else { by };
+    Some((var, by, int_range(arg.ty)?))
 }
 
 /// The states of an aggregate of each group.
@@ -988,6 +1020,8 @@ enum States {
     Extreme(Vec<Option<i64>>),
     Distinct(Vec<FxSet<u64>>),
     Row(Vec<agg::State>),
+    /// The states of a [`Method::Shift`] are the states of its base.
+    Shift,
 }
 
 struct Call<'q> {
@@ -1435,14 +1469,29 @@ fn grouped(
     count: Option<usize>,
 ) -> Result<Option<Grouped>> {
     let mut aggs: Vec<Call<'_>> = Vec::with_capacity(calls.len());
+    let mut bases: Vec<Base<'_>> = Vec::new();
     for &(agg, expr) in calls {
-        let Some(method) = method(agg, expr)? else { return Ok(None) };
+        let Some(mut method) = method(agg, expr)? else { return Ok(None) };
+        let wide = match method {
+            Method::SumInt => Some(None),
+            Method::Int128 { avg } => Some(Some(avg)),
+            _ => None,
+        };
+        if let (Some(wide), Some((var, by, range))) = (wide, agg.args.first().and_then(shifted)) {
+            let base =
+                bases.iter().position(|b: &Base<'_>| b.var.kind == var.kind).unwrap_or_else(|| {
+                    bases.push(Base { var, states: Vec::new(), extremes: None });
+                    bases.len() - 1
+                });
+            method = Method::Shift { base, by, range, wide };
+        }
         let states = match &method {
             Method::Count | Method::CountArg => States::Count(Vec::new()),
             Method::Distinct => States::Distinct(Vec::new()),
             Method::SumInt | Method::Int128 { .. } => States::Sum(Vec::new()),
             Method::Min | Method::Max => States::Extreme(Vec::new()),
             Method::Row(_) => States::Row(Vec::new()),
+            Method::Shift { .. } => States::Shift,
         };
         aggs.push(Call { agg, key: std::ptr::from_ref(agg), method, states });
     }
@@ -1461,6 +1510,9 @@ fn grouped(
         firsts.reserve(1);
         for call in &mut aggs {
             grow(call, 1, params, session, cache, &empty)?;
+        }
+        for base in &mut bases {
+            base.states.resize(1, (0, 0));
         }
     }
     let mut groups = usize::from(keys.is_empty());
@@ -1522,10 +1574,50 @@ fn grouped(
                 for call in &mut aggs {
                     grow(call, groups, params, session, cache, &empty)?;
                 }
+                for base in &mut bases {
+                    base.states.resize(groups, (0, 0));
+                }
             }
+        }
+        for base in &mut bases {
+            let col = exec.eval(base.var, batch, sel)?;
+            let Some(ints) = col.ints() else {
+                bail = true;
+                return Ok(false);
+            };
+            let mut extremes = base.extremes;
+            let mut widen = |lo: i64, hi: i64| {
+                extremes = Some(extremes.map_or((lo, hi), |(a, b)| (a.min(lo), b.max(hi))));
+            };
+            match ints {
+                Ints::Vector(v, None) if keys.is_empty() => {
+                    if let (Some(&lo), Some(&hi)) = (v.iter().min(), v.iter().max()) {
+                        widen(lo, hi);
+                    }
+                    let state = &mut base.states[0];
+                    state.0 += i64::try_from(v.len()).unwrap_or(i64::MAX);
+                    state.1 += if base.var.ty == oid::INT8 {
+                        v.iter().map(|&x| i128::from(x)).sum()
+                    } else {
+                        i128::from(v.iter().sum::<i64>())
+                    };
+                }
+                _ => {
+                    for (i, &id) in ids.iter().enumerate() {
+                        if let Some(v) = ints.get(i) {
+                            widen(v, v);
+                            let state = &mut base.states[id as usize];
+                            state.0 += 1;
+                            state.1 += i128::from(v);
+                        }
+                    }
+                }
+            }
+            base.extremes = extremes;
         }
         for call in &mut aggs {
             let arg = match &call.method {
+                Method::Shift { .. } => continue,
                 Method::Count => None,
                 _ => call.agg.args.first(),
             };
@@ -1625,6 +1717,24 @@ fn grouped(
     if bail {
         return Ok(None);
     }
+    for call in &mut aggs {
+        let Method::Shift { base, by, range, wide } = call.method else { continue };
+        let base = &bases[base];
+        if let Some((lo, hi)) = base.extremes
+            && (lo.checked_add(by).is_none_or(|v| v < range.0)
+                || hi.checked_add(by).is_none_or(|v| v > range.1))
+        {
+            return Ok(None);
+        }
+        let by = i128::from(by);
+        call.states = States::Sum(
+            base.states.iter().map(|&(n, sum)| (n, sum + by * i128::from(n))).collect(),
+        );
+        call.method = match wide {
+            None => Method::SumInt,
+            Some(avg) => Method::Int128 { avg },
+        };
+    }
     // The results of the aggregates of each group.
     let eval = Eval::new(params, session, &empty, cache, &[]);
     let mut results: Vec<Vec<(*const Aggref, Value)>> =
@@ -1718,6 +1828,7 @@ fn grow(
         States::Sum(s) => s.resize(groups, (0, 0)),
         States::Extreme(s) => s.resize(groups, None),
         States::Distinct(s) => s.resize_with(groups, FxSet::default),
+        States::Shift => {}
         States::Row(s) => {
             if let Method::Row(agg) = &call.method {
                 let eval = Eval::new(params, session, empty, cache, &[]);
