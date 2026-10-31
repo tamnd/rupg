@@ -4020,6 +4020,12 @@ mod tests {
         parts.join(",")
     }
 
+    /// The vector scan sums `x + c` from the sums of `x`, and the row engine runs a query whose `x + c` is out of the range of its type, for the error.
+    #[test]
+    fn shifted_sums() {
+        big_stack(|| script(include_str!("connection/shifted_sums.test")));
+    }
+
     /// A large table whose scans read its values from columns, after the heap moved the values of its versions into them, also while a load goes on. A read by rows, a rollback, an update and more rows give the same rows as before.
     #[test]
     fn frozen_table() {

@@ -1,0 +1,36 @@
+> CREATE TABLE s (a int, d bigint, w smallint, g int)
+CREATE TABLE
+> INSERT INTO s SELECT i, CASE WHEN i % 7 = 0 THEN NULL ELSE i END, i % 1000, i % 3 FROM generate_series(1, 70000) i
+INSERT 0 70000
+> SELECT sum(a), sum(a + 1), sum(a - 3), sum(2 + a), avg(d + 5), sum(d - 1), sum(w + 1), sum(w + 40000) FROM s
+fields sum:20:8:-1,sum:20:8:-1,sum:20:8:-1,sum:20:8:-1,avg:1700:-1:-1,sum:1700:-1:-1,sum:20:8:-1,sum:20:8:-1
+row 2450035000,2450105000,2449825000,2450175000,35005.000000000000,2099940000,35035000,2834965000
+SELECT 1
+> SELECT g, sum(a + 10), avg(w - 2), count(*) FROM s GROUP BY g ORDER BY g
+fields g@s.4:23:4:-1,sum:20:8:-1,avg:1700:-1:-1,count:20:8:-1
+row 0,816911663,497.5214074486778383,23333
+row 1,816935007,497.4714579583440473,23334
+row 2,816888330,497.5071358162259461,23333
+SELECT 3
+> SELECT sum(a + 1), sum(d + 1) FROM s WHERE a > 69990
+fields sum:20:8:-1,sum:1700:-1:-1
+row 699965,559970
+SELECT 1
+> SELECT sum(w + 31000::smallint), sum(-5 + a), sum(a + NULL) FROM s
+fields sum:20:8:-1,sum:20:8:-1,sum:20:8:-1
+row 2204965000,2449685000,NULL
+SELECT 1
+> SELECT sum(a + 2147480000) FROM s WHERE a < 100
+fields sum:20:8:-1
+row 212600524950
+SELECT 1
+> SELECT sum(a + 2147480000) FROM s
+fields sum:20:8:-1
+ERROR 22003 integer out of range
+> SELECT sum(w + 32000::smallint) FROM s
+fields sum:20:8:-1
+ERROR 22003 smallint out of range
+> SELECT sum(a - 2147483647), sum(a - 2147483647 - 2) FROM s
+fields sum:20:8:-1,sum:20:8:-1
+row -150321405255000,-150321405395000
+SELECT 1
