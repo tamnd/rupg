@@ -13,6 +13,11 @@ categories.workspace = true
 readme.workspace = true
 
 [dependencies]
+rupg-common.workspace = true
+rupg-encode.workspace = true
+rupg-kernels.workspace = true
+rupg-summary.workspace = true
+rupg-types.workspace = true
 
 [lints]
 workspace = true
