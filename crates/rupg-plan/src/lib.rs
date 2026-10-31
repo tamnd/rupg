@@ -291,12 +291,13 @@ pub enum Kind<'q> {
     Memoize(Box<Memoize<'q>>),
     /// `Agg`, with the keys of the groups. With grouping sets, each rollup has its sets, each set has its keys, and a set with no keys makes one group.
     ///
-    /// `unique` is true for the `Agg` that `create_final_unique_paths` makes to remove the duplicate rows of the inner side of a semi join. `table` is the hash table of `GROUP BY`, `DISTINCT` or `UNION`.
+    /// `split` is the part of the work of the aggregate calls that the node does. `unique` is true for the `Agg` that `create_final_unique_paths` makes to remove the duplicate rows of the inner side of a semi join. `table` is the hash table of `GROUP BY`, `DISTINCT` or `UNION`.
     Aggregate {
         strategy: Strategy,
         keys: Vec<Item<'q>>,
         sets: Vec<Rollup<'q>>,
         unique: bool,
+        split: Split,
         table: Option<Table<'q>>,
     },
     /// `Sort`.
@@ -447,6 +448,17 @@ pub enum Strategy {
     Mixed,
     /// `Group`: groups of a sorted input for `GROUP BY` with no aggregate, a node of its own, as `create_group_path` makes it.
     Group,
+}
+
+/// The part of the work of an aggregate call that an `Agg` does, as `AggSplit`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Split {
+    /// `AGGSPLIT_SIMPLE`: the transition and the final function.
+    Simple,
+    /// `AGGSPLIT_INITIAL_SERIAL`: the transition of the rows of one process, which gives the states and not the values, as the bytes of the serialization function for an `internal` state.
+    Partial,
+    /// `AGGSPLIT_FINAL_DESERIAL`: the combine function of the states of the processes, then the final function.
+    Final,
 }
 
 /// The command of a `ModifyTable`.

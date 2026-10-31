@@ -9,7 +9,7 @@ use rupg_analyze::{
     Expr, ExprKind, FromItem, MERGE_ACTION, MatchKind, Query, RETURNING_NEW, RETURNING_OLD,
     TABLE_OID_ATTNUM, Target, Var, Write,
 };
-use rupg_plan::{Item, Kind, Node, Operation, Replaced, TARGET};
+use rupg_plan::{Item, Kind, Node, Operation, Replaced, Split, TARGET};
 use rupg_types::oid;
 
 use crate::{Level, cost, exprs, from, parallel, upper};
@@ -335,8 +335,9 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
         | Kind::BitmapIndexScan { .. }
         | Kind::BitmapAnd
         | Kind::BitmapOr => {}
-        Kind::Aggregate { keys, unique, .. } => {
+        Kind::Aggregate { keys, unique, split, .. } => {
             let unique = *unique;
+            let split = *split;
             let keys: Vec<Expr> = keys.iter().map(|k| k.expr.as_ref().clone()).collect();
             // `use_physical_tlist` with `CP_LABEL_TLIST`: two items of `GROUP BY` or `DISTINCT` that are the same column would need two labels in one place of the physical target list.
             let refs: Vec<&Expr> = labeled(level).into_iter().map(|t| level.target(t)).collect();
@@ -355,6 +356,24 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
                     set(level, child, below, vars);
                 }
                 node.output = want;
+            } else if split == Split::Final {
+                // `make_partial_grouping_target`: the partial plan below gives the keys, then the aggregate calls of the target and of `HAVING`.
+                let mut partial: Vec<Item<'q>> = Vec::new();
+                for key in &keys {
+                    if !partial.iter().any(|p| p.expr.same(key)) {
+                        partial.push(item(key.clone()));
+                    }
+                }
+                for w in &want {
+                    add_aggregates(&w.expr, &mut partial);
+                }
+                for f in &node.filter {
+                    add_aggregates(&f.expr, &mut partial);
+                }
+                grouped(level, node, want, &keys, vars);
+                if let Some(child) = node.children.first_mut() {
+                    set(level, child, partial, false);
+                }
             } else {
                 grouped(level, node, want, &keys, vars);
             }

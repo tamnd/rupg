@@ -180,6 +180,12 @@ pub struct AggregateRow {
     /// `aggtransfn`: the transition function.
     pub transfn: u32,
     /// `aggfinalfn`: the final function, or 0.
+    /// `aggcombinefn`: the function that combines two states of a partial aggregate, or 0.
+    pub combinefn: u32,
+    /// `aggserialfn`: the function that gives the bytes of a state of type `internal`, or 0.
+    pub serialfn: u32,
+    /// `aggdeserialfn`: the function that gives a state of type `internal` from its bytes, or 0.
+    pub deserialfn: u32,
     pub finalfn: u32,
     /// `aggfinalextra`: true when the final function gets a null for each argument of the aggregate after the state.
     pub finalextra: bool,
@@ -862,6 +868,8 @@ fn load_aggregates() -> Vec<AggregateRow> {
         (r.oid("aggtransfn"), r.oid("aggfinalfn"), r.bool("aggfinalextra"));
     let (sortop, transtype) = (r.oid("aggsortop"), r.oid("aggtranstype"));
     let transspace = r.int4("aggtransspace");
+    let (combinefn, serialfn, deserialfn) =
+        (r.oid("aggcombinefn"), r.oid("aggserialfn"), r.oid("aggdeserialfn"));
     let (mtransfn, minvtransfn, mfinalfn) =
         (r.oid("aggmtransfn"), r.oid("aggminvtransfn"), r.oid("aggmfinalfn"));
     let (mfinalextra, mtranstype) = (r.bool("aggmfinalextra"), r.oid("aggmtranstype"));
@@ -872,6 +880,9 @@ fn load_aggregates() -> Vec<AggregateRow> {
             kind: kind[i],
             ndirect: ndirect[i],
             transfn: transfn[i],
+            combinefn: combinefn[i],
+            serialfn: serialfn[i],
+            deserialfn: deserialfn[i],
             finalfn: finalfn[i],
             finalextra: finalextra[i],
             sortop: sortop[i],
@@ -1360,6 +1371,9 @@ pub struct SessionAggregate {
     pub kind: u8,
     pub ndirect: i16,
     pub transfn: u32,
+    pub combinefn: u32,
+    pub serialfn: u32,
+    pub deserialfn: u32,
     pub finalfn: u32,
     pub finalextra: bool,
     pub sortop: u32,
@@ -1482,6 +1496,9 @@ fn session_rows(ty: &SessionType) -> Option<Interned> {
                 kind: new.kind,
                 ndirect: new.ndirect,
                 transfn: new.transfn,
+                combinefn: new.combinefn,
+                serialfn: new.serialfn,
+                deserialfn: new.deserialfn,
                 finalfn: new.finalfn,
                 finalextra: new.finalextra,
                 sortop: new.sortop,

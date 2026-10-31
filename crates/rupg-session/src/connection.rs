@@ -8820,6 +8820,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/explain_parallel.test")));
     }
 
+    /// `EXPLAIN` of an aggregate in two parts: a `Partial Aggregate` in each process, a `Gather` and a `Finalize Aggregate`, with and without groups, with `HAVING`, with `enable_hashagg` off and with the costs, and the results of the same queries. `connection/explain_partial_agg.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn explain_partial_agg() {
+        big_stack(|| script(include_str!("connection/explain_partial_agg.test")));
+    }
+
     /// `EXPLAIN` of the conditions that an equivalence class with a constant gives: a condition of each member with the constant in place of the `=` of a join, the nullable side of a left join, a scan with no rows for two constants that are not equal, and the partitions that the new conditions prune. `connection/equivalence_const.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn equivalence_const() {

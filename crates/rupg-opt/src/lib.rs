@@ -650,6 +650,10 @@ struct Builder<'q> {
     sub_paths: Option<SubPaths<'q>>,
     /// `parallelModeOK`: the plan can have parallel nodes.
     parallel: bool,
+    /// The partial path of the last scan, with its workers, as the `partial_pathlist` of its relation.
+    partial: Option<(Node<'q>, i32)>,
+    /// The partial path of the only relation of `FROM` of each scope, with its workers, which `create_partial_grouping_paths` reads.
+    partials: BTreeMap<usize, (Node<'q>, i32)>,
 }
 
 /// An order of the rows of a query as the places of its columns, each with the direction and the place of the nulls.

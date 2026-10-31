@@ -1,0 +1,147 @@
+> create table pc (a int, b int, c text) with (parallel_workers = 2)
+CREATE TABLE
+> insert into pc select i, i % 10, 'x' || (i % 7) from generate_series(1, 20000) i
+INSERT 0 20000
+> set parallel_setup_cost = 0
+SET
+> set parallel_tuple_cost = 0
+SET
+> set min_parallel_table_scan_size = 0
+SET
+> explain (costs off) select count(*) from pc
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate
+row   ->  Gather
+row         Workers Planned: 2
+row         ->  Partial Aggregate
+row               ->  Parallel Seq Scan on pc
+EXPLAIN
+> explain (costs off) select count(*), sum(a), max(c) from pc where b = 3
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate
+row   ->  Gather
+row         Workers Planned: 2
+row         ->  Partial Aggregate
+row               ->  Parallel Seq Scan on pc
+row                     Filter: (b = 3)
+EXPLAIN
+> explain (costs off) select b, count(*) from pc group by b
+fields QUERY PLAN:25:-1:-1
+row Finalize HashAggregate
+row   Group Key: b
+row   ->  Gather
+row         Workers Planned: 2
+row         ->  Partial HashAggregate
+row               Group Key: b
+row               ->  Parallel Seq Scan on pc
+EXPLAIN
+> explain (costs off) select b, sum(a) from pc group by b having sum(a) > 10
+fields QUERY PLAN:25:-1:-1
+row Finalize HashAggregate
+row   Group Key: b
+row   Filter: (sum(a) > 10)
+row   ->  Gather
+row         Workers Planned: 2
+row         ->  Partial HashAggregate
+row               Group Key: b
+row               ->  Parallel Seq Scan on pc
+EXPLAIN
+> explain (costs off) select count(*) from pc having count(*) > 5
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate
+row   Filter: (count(*) > 5)
+row   ->  Gather
+row         Workers Planned: 2
+row         ->  Partial Aggregate
+row               ->  Parallel Seq Scan on pc
+EXPLAIN
+> explain (costs off) select c, avg(a) from pc group by c order by c
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: c
+row   ->  Finalize HashAggregate
+row         Group Key: c
+row         ->  Gather
+row               Workers Planned: 2
+row               ->  Partial HashAggregate
+row                     Group Key: c
+row                     ->  Parallel Seq Scan on pc
+EXPLAIN
+> explain (costs off) select string_agg(c, ',') from pc
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate
+row   ->  Gather
+row         Workers Planned: 2
+row         ->  Partial Aggregate
+row               ->  Parallel Seq Scan on pc
+EXPLAIN
+> explain (costs off) select array_agg(a) from pc
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate
+row   ->  Gather
+row         Workers Planned: 2
+row         ->  Partial Aggregate
+row               ->  Parallel Seq Scan on pc
+EXPLAIN
+> set enable_gathermerge = off
+SET
+> explain (costs off) select b, count(*) from pc group by b
+fields QUERY PLAN:25:-1:-1
+row Finalize HashAggregate
+row   Group Key: b
+row   ->  Gather
+row         Workers Planned: 2
+row         ->  Partial HashAggregate
+row               Group Key: b
+row               ->  Parallel Seq Scan on pc
+EXPLAIN
+> reset enable_gathermerge
+RESET
+> set enable_hashagg = off
+SET
+> explain (costs off) select b, count(*) from pc group by b
+fields QUERY PLAN:25:-1:-1
+row Finalize GroupAggregate
+row   Group Key: b
+row   ->  Gather Merge
+row         Workers Planned: 2
+row         ->  Partial GroupAggregate
+row               Group Key: b
+row               ->  Sort
+row                     Sort Key: b
+row                     ->  Parallel Seq Scan on pc
+EXPLAIN
+> reset enable_hashagg
+RESET
+> explain select count(*) from pc
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate  (cost=177.14..177.15 rows=1 width=8)
+row   ->  Gather  (cost=177.12..177.13 rows=2 width=8)
+row         Workers Planned: 2
+row         ->  Partial Aggregate  (cost=177.12..177.13 rows=1 width=8)
+row               ->  Parallel Seq Scan on pc  (cost=0.00..163.50 rows=5450 width=0)
+EXPLAIN
+> explain select b, count(*) from pc group by b
+fields QUERY PLAN:25:-1:-1
+row Finalize HashAggregate  (cost=195.15..197.15 rows=200 width=12)
+row   Group Key: b
+row   ->  Gather  (cost=190.75..192.75 rows=480 width=12)
+row         Workers Planned: 2
+row         ->  Partial HashAggregate  (cost=190.75..192.75 rows=200 width=12)
+row               Group Key: b
+row               ->  Parallel Seq Scan on pc  (cost=0.00..163.50 rows=5450 width=4)
+EXPLAIN
+> select count(*), sum(a), max(c) from pc where b = 3
+fields count:20:8:-1,sum:20:8:-1,max:25:-1:-1
+row 2000,19996000,x6
+SELECT 1
+> select b, count(*) from pc group by b order by b limit 3
+fields b@pc.2:23:4:-1,count:20:8:-1
+row 0,2000
+row 1,2000
+row 2,2000
+SELECT 3
+> select count(*) from pc having count(*) > 5
+fields count:20:8:-1
+row 20000
+SELECT 1
