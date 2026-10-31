@@ -6,8 +6,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `pg_stats` and `pg_statistic` show again the most common values and the histograms of the tables of `information_schema`, such as `sql_parts`, which were NULL after #1128 (#1231).
 - Plan a `Gather Merge` over a `Sort` of a parallel scan for the order of the query, as `generate_useful_gather_paths` does, and sort the partial plan with the bound of `LIMIT` below it, as `create_ordered_paths` does (#1229).
 - `cargo xtask style` passes again: the SAFETY comment of `pthread_sigmask` in `os::StopSignals` is now directly above its `unsafe` block, and a failed `pthread_sigmask` shows its own error code (#1225).
+
 ## 0.4.16 (2026-10-31)
 
 ### Added
