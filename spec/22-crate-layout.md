@@ -194,7 +194,7 @@ A lift is a copy of a file from rudb into a rupg crate, with changes. rupg does 
 | From rudb | Into | Milestone | What changes |
 |---|---|---|---|
 | `crates/rudb-kernels/src/bits.rs`, `codec.rs`, `compare.rs`, `hash.rs`, `hashing.rs`, `aggregate.rs` and `aggregate/` | `rupg-kernels` | M1 to M4 | DuckDB types become PostgreSQL types. The hash function must give the same value as PostgreSQL's where `hashint4`, `hashtext` and the others are visible to a user |
-| `crates/rudb-encoding/src/bitpack.rs`, `integer.rs`, `string.rs`, `sequence.rs`, `multi.rs`, `chooser.rs`, `reader.rs` | `rupg-encode` | M4 | the block headers become the format of document 09 |
+| `crates/rudb-encoding/src/bitpack.rs`, `integer.rs`, `string.rs`, `sequence.rs`, `chooser.rs`, `reader.rs`, `tally.rs`, `lz.rs`, `sketch.rs`, and `crates/rudb-vector/src/fsst.rs` | `rupg-encode` | M4 | the block headers become the format of document 09. `multi.rs` is not lifted, because rupg has no shared dictionaries (document 09 section 9.5.6) |
 | `crates/rudb-compress/src/zstd/`, `snappy.rs`, `gzip.rs` | `rupg-encode` | M4 | none planned. pglz and lz4 are new code, because TOAST needs them |
 | `crates/rudb-storage/src/zone.rs`, `grams.rs`, `tally.rs` | `rupg-summary` | M4 | the summaries of document 09 section 9.7 and document 12 sections 12.6 and 12.9 |
 | `crates/rudb-native/src/zones.rs`, `grams.rs`, `projection.rs`, `run_projection.rs`, `distinct.rs`, `postings.rs` | `rupg-column`, `rupg-summary` | M4 and M8 | the sorted projections of document 10 section 10.7 and the gram postings |
