@@ -200,3 +200,40 @@ row   Group Key: x
 row   Filter: (count(*) > 1)
 row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
 EXPLAIN
+> EXPLAIN SELECT i % 2, sum(i), row_number() OVER (ORDER BY i % 2) FROM generate_series(1, 5) i GROUP BY i % 2
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=0.16..0.31 rows=5 width=20)
+row   Window: w1 AS (ORDER BY ((i % 2)) ROWS UNBOUNDED PRECEDING)
+row   ->  GroupAggregate  (cost=0.12..0.22 rows=5 width=12)
+row         Group Key: ((i % 2))
+row         ->  Sort  (cost=0.12..0.14 rows=5 width=8)
+row               Sort Key: ((i % 2))
+row               ->  Function Scan on generate_series i  (cost=0.00..0.07 rows=5 width=8)
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT i % 2, sum(i), JSON_ARRAYAGG(i ORDER BY i RETURNING jsonb), row_number() OVER (ORDER BY i % 2) FROM generate_series(1, 5) i GROUP BY i % 2
+fields QUERY PLAN:25:-1:-1
+row WindowAgg
+row   Output: ((i % 2)), (sum(i)), JSON_ARRAYAGG(i ORDER BY i RETURNING jsonb), row_number() OVER w1
+row   Window: w1 AS (ORDER BY ((i.i % 2)) ROWS UNBOUNDED PRECEDING)
+row   ->  GroupAggregate
+row         Output: ((i % 2)), sum(i), jsonb_agg_strict(i ORDER BY i)
+row         Group Key: ((i.i % 2))
+row         ->  Sort
+row               Output: ((i % 2)), i
+row               Sort Key: ((i.i % 2)), i.i
+row               ->  Function Scan on pg_catalog.generate_series i
+row                     Output: (i % 2), i
+row                     Function Call: generate_series(1, 5)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT i % 3 AS a, sum(i) FROM generate_series(1, 5) i GROUP BY 1 ORDER BY sum(sum(i)) OVER (ORDER BY i % 3), 1
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: (sum((sum(i))) OVER w1), ((i % 3))
+row   ->  WindowAgg
+row         Window: w1 AS (ORDER BY ((i % 3)))
+row         ->  GroupAggregate
+row               Group Key: ((i % 3))
+row               ->  Sort
+row                     Sort Key: ((i % 3))
+row                     ->  Function Scan on generate_series i
+EXPLAIN

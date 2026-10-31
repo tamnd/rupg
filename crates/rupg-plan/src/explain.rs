@@ -789,7 +789,17 @@ impl Explainer<'_, '_> {
                 self.removed(node, "Rows Removed by Filter", 0);
             }
             Kind::Sort(keys) => {
-                let keys = self.sort_keys(scope, keys, upper)?;
+                // A key that a `WindowAgg` below computes shows as the `WindowAgg` shows it: the calls and the columns that it reads from below are in parentheses.
+                let window =
+                    node.children.first().filter(|c| matches!(c.kind, Kind::WindowAgg { .. }));
+                if let Some(child) = window {
+                    self.texts.below(computed(child));
+                }
+                let keys = self.sort_keys(scope, keys, upper);
+                if window.is_some() {
+                    self.texts.below(Vec::new());
+                }
+                let keys = keys?;
                 self.w.list("Sort Key", &keys);
                 self.sort_info(node);
             }

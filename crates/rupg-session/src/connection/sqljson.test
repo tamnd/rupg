@@ -435,3 +435,16 @@ fields pg_get_viewdef:25:-1:-1
 row  SELECT JSON_OBJECT('a' : JSON_ARRAY(1, 2 RETURNING json), 'b' : (j)::bytea FORMAT JSON, 'c' : (j)::jsonb RETURNING jsonb) AS c1
    FROM t;
 SELECT 1
+> CREATE DOMAIN jd3 AS text CHECK (VALUE IS JSON)
+CREATE DOMAIN
+> CREATE VIEW v_jd AS SELECT a::jd3 IS JSON WITH UNIQUE KEYS AS c1 FROM (VALUES ('{"a": 1}'::text)) s(a)
+CREATE VIEW
+> SELECT pg_get_viewdef('v_jd'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT ((a)::jd3 IS JSON WITH UNIQUE KEYS) AS c1
+   FROM ( VALUES ('{"a": 1}'::text)) s(a);
+SELECT 1
+> SELECT * FROM v_jd
+fields c1@v_jd.1:16:1:-1
+row t
+SELECT 1

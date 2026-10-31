@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `EXPLAIN` of a query with `GROUP BY` and a window now shows the aggregate calls as the output of the `Agg` below the `WindowAgg`, and in parentheses in the nodes above it, as in PostgreSQL 19. The planner now takes the sorted groups when the window needs the same order, and does not sort a hash table again. A `Sort` above a `WindowAgg` shows `sum((sum(c))) OVER w1`. A view with `IS JSON` on a value of a domain over `text` now shows no cast to `text` (#1205).
 - A call of a built-in function that runs only its kernel finds the kernel once for each run and not again for each row. This takes 16% of the CPU time of ClickBench on 200K rows, and 27% of Q30 (#1204).
 - `UPDATE` and `DELETE` of a view with `WHERE CURRENT OF` now give `WHERE CURRENT OF on a view is not implemented` also when a rule does the write. `EXPLAIN` of `DECLARE ... SCROLL CURSOR` shows a `Material` node on top when the plan cannot scan backward, as in PostgreSQL 19 (#1203).
 - `DECLARE` in a function in SQL can use the arguments of the function. `EXECUTE` of `DECLARE`, `FETCH`, `MOVE` and `CLOSE` in PL/pgSQL now works, with the row count of `FETCH` and 0 for `MOVE`. `DROP TABLE` and `TRUNCATE` of a table that an open cursor reads give the error `being used by active queries in this session`, as in PostgreSQL 19 (#1202).

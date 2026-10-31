@@ -579,7 +579,8 @@ impl Analyzer<'_> {
         }
         let mut expr = raw;
         let mut ty = ty;
-        if ty == oid::UNKNOWN || is_string(ty) {
+        // `coerce_to_target_type` from the base type, so a domain over `text` stays as it is.
+        if ty != oid::TEXT && (ty == oid::UNKNOWN || is_string(ty)) {
             let at = expr.place();
             expr = self
                 .coerce_to_target(expr, oid::TEXT, -1, Context::Implicit, None)?

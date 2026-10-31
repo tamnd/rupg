@@ -88,6 +88,28 @@ fn add_inputs<'q>(expr: &Expr, out: &mut Vec<Item<'q>>) {
     }
 }
 
+/// Adds the columns and the aggregate calls of the expression that are not in the list, as `pull_var_clause` with `PVC_INCLUDE_AGGREGATES` and `PVC_RECURSE_WINDOWFUNCS` finds them.
+fn add_aggregates<'q>(expr: &Expr, out: &mut Vec<Item<'q>>) {
+    match &expr.kind {
+        ExprKind::Agg(agg) if agg.levels_up == 0 => {
+            if !out.iter().any(|o| o.expr.same(expr)) {
+                out.push(item(expr.clone()));
+            }
+        }
+        ExprKind::Var(v) if v.levels_up == 0 => {
+            if !out.iter().any(|o| o.expr.same(expr)) {
+                out.push(item(expr.clone()));
+            }
+        }
+        ExprKind::SubLink(_) | ExprKind::PlaceHolder(_) => add_columns(expr, 0, out),
+        _ => {
+            for child in expr.children() {
+                add_aggregates(child, out);
+            }
+        }
+    }
+}
+
 /// The width of the values of the items.
 fn width(level: &Level<'_>, scope: usize, items: &[Item<'_>]) -> i32 {
     let query = if scope == level.scope { level.query } else { level.display_query };
@@ -847,7 +869,13 @@ fn grouped<'q>(
                 }
             }
         }
-        add_columns(&w.expr, 0, &mut below);
+        if matches!(node.kind, Kind::WindowAgg { .. }) {
+            // `make_window_input_target`: the aggregate calls come from below, as `PVC_INCLUDE_AGGREGATES`.
+            add_aggregates(&w.expr, &mut below);
+            from_below |= matches!(&w.expr.kind, ExprKind::Agg(a) if a.levels_up == 0);
+        } else {
+            add_columns(&w.expr, 0, &mut below);
+        }
         output.push(Item { expr: w.expr.clone(), below: w.below || from_below });
     }
     for f in &node.filter {
