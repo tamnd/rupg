@@ -8768,6 +8768,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/explain_append.test")));
     }
 
+    /// `EXPLAIN` of a parallel plan: a `Gather` over a `Parallel Seq Scan` with the workers of the `parallel_workers` option, the target that the `Gather` computes when a function of it is restricted, no parallel plan for a restricted condition, for `FOR UPDATE` and for `max_parallel_workers_per_gather = 0`, and the format JSON. `connection/explain_parallel.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn explain_parallel() {
+        big_stack(|| script(include_str!("connection/explain_parallel.test")));
+    }
+
     /// `EXPLAIN` of the conditions that an equivalence class with a constant gives: a condition of each member with the constant in place of the `=` of a join, the nullable side of a left join, a scan with no rows for two constants that are not equal, and the partitions that the new conditions prune. `connection/equivalence_const.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn equivalence_const() {

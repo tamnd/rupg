@@ -11,6 +11,7 @@ mod from;
 mod joinrm;
 mod minmax;
 mod output;
+mod parallel;
 mod pullup;
 mod pushdown;
 mod setcast;
@@ -84,6 +85,11 @@ pub trait Members: std::fmt::Debug {
         no_pattern_match
     }
 
+    /// For a parallel scan of the table with the OID `table`, as `set_rel_consider_parallel` and `get_relation_info` read it: `None` when the table cannot have one, as a temporary table, or else the option `parallel_workers` of the table.
+    fn parallel(&self, _table: u32) -> Option<Option<i32>> {
+        None
+    }
+
     /// The `enable_*` settings and the memory settings of the session.
     fn enable(&self) -> Enable {
         Enable::default()
@@ -133,6 +139,21 @@ pub struct Enable {
     pub work_mem: f64,
     /// `get_hash_memory_limit`: `work_mem` times `hash_mem_multiplier`, in bytes.
     pub hash_mem: f64,
+    /// `max_parallel_workers_per_gather`: the most workers of a `Gather` or a `Gather Merge`. With 0, a plan has no parallel node.
+    pub max_parallel_workers_per_gather: i32,
+    /// `parallel_setup_cost`: the cost to start the workers of a parallel plan.
+    pub parallel_setup_cost: f64,
+    /// `parallel_tuple_cost`: the cost to send a row from a worker to the leader.
+    pub parallel_tuple_cost: f64,
+    /// `min_parallel_table_scan_size`, in pages: a table with fewer pages has no parallel scan.
+    pub min_parallel_table_scan_size: i32,
+    /// `min_parallel_index_scan_size`, in pages.
+    pub min_parallel_index_scan_size: i32,
+    /// `parallel_leader_participation`: the leader reads rows of the parallel plan too.
+    pub parallel_leader_participation: bool,
+    pub parallel_append: bool,
+    pub parallel_hash: bool,
+    pub gathermerge: bool,
 }
 
 impl Default for Enable {
@@ -157,6 +178,15 @@ impl Default for Enable {
             self_join_elimination: true,
             work_mem: 4.0 * 1024.0 * 1024.0,
             hash_mem: 8.0 * 1024.0 * 1024.0,
+            max_parallel_workers_per_gather: 2,
+            parallel_setup_cost: 1000.0,
+            parallel_tuple_cost: 0.1,
+            min_parallel_table_scan_size: 1024,
+            min_parallel_index_scan_size: 64,
+            parallel_leader_participation: true,
+            parallel_append: true,
+            parallel_hash: true,
+            gathermerge: true,
         }
     }
 }
@@ -388,7 +418,7 @@ pub fn join_order(plan: &Plan<'_>, query: &Query, members: &dyn Members) -> Opti
     let mut node = &plan.root;
     loop {
         match &node.kind {
-            Kind::Limit | Kind::LockRows | Kind::Materialize => {}
+            Kind::Limit | Kind::LockRows | Kind::Materialize | Kind::Gather { .. } => {}
             Kind::Aggregate { strategy: rupg_plan::Strategy::Plain, .. } => {}
             Kind::Result { .. } if node.children.len() == 1 => {}
             _ => break,
@@ -539,7 +569,9 @@ fn loop_order(
         (Kind::IndexScan { relation, index, backward, .. }, []) if base => {
             out(*relation, reverse, Some((*index, *backward))).is_some()
         }
-        (Kind::Materialize | Kind::Memoize(_), [child]) => loop_order(child, reverse, out),
+        (Kind::Materialize | Kind::Memoize(_) | Kind::Gather { .. }, [child]) => {
+            loop_order(child, reverse, out)
+        }
         (Kind::NestedLoop { join, .. }, [outer, inner]) if inner_or_left(join) => {
             loop_order(outer, reverse, out) && loop_order(inner, reverse, out)
         }
@@ -557,7 +589,8 @@ fn loop_order(
 
 /// [`plan`] with the settings of `members` in place.
 fn plan_with<'q>(query: &'q Query, members: &'q dyn Members) -> Plan<'q> {
-    let mut b = Builder { members: Some(members), ..Builder::default() };
+    let parallel = parallel::mode_ok(&enable(), query);
+    let mut b = Builder { members: Some(members), parallel, ..Builder::default() };
     let mut root = b.query(query, None);
     let mut pending = std::mem::take(&mut b.pending);
     let mut chosen = Chosen { labels: &mut b.labels, dropped: Vec::new() };
@@ -615,6 +648,8 @@ struct Builder<'q> {
     paths: bool,
     /// The plans of the last query with `paths`.
     sub_paths: Option<SubPaths<'q>>,
+    /// `parallelModeOK`: the plan can have parallel nodes.
+    parallel: bool,
 }
 
 /// An order of the rows of a query as the places of its columns, each with the direction and the place of the nulls.

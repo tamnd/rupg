@@ -755,6 +755,7 @@ fn add_system_proc(catalog: &Catalog, oid: u32) -> Result<()> {
         strict: f.strict,
         retset: f.retset,
         volatile: f.volatile,
+        parallel: f.parallel,
         cost: f.cost,
         leakproof: f.leakproof,
         nargs: i16::try_from(f.argtypes.len()).unwrap_or(i16::MAX),

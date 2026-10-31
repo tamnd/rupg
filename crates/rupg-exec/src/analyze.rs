@@ -796,7 +796,9 @@ impl<'p, 'q> Exec<'p, 'q> {
                 }
                 Ok(None)
             }
-            Kind::LockRows => self.pull(cx, 0, context),
+            Kind::LockRows | Kind::Gather { .. } | Kind::GatherMerge { .. } => {
+                self.pull(cx, 0, context)
+            }
             Kind::Modify { operation, conflict, .. } => {
                 if conflict.is_some() {
                     return Err(not_yet("EXPLAIN ANALYZE of ON CONFLICT"));

@@ -126,6 +126,8 @@ pub struct Node<'q> {
     pub inner_unique: bool,
     /// True when a setting `enable_*` turns off the kind of the node, so that the `disabled_nodes` of the node is more than the sum of its children, as `plan_is_disabled` finds it.
     pub disabled: bool,
+    /// `parallel_aware`: true for a scan that each process of a parallel plan reads a part of, with the other processes.
+    pub parallel: bool,
 }
 
 impl<'q> Node<'q> {
@@ -143,6 +145,7 @@ impl<'q> Node<'q> {
             member: None,
             inner_unique: false,
             disabled: false,
+            parallel: false,
         }
     }
 
@@ -302,6 +305,10 @@ pub enum Kind<'q> {
     IncrementalSort { keys: Vec<SortKey<'q>>, presorted: usize },
     /// `Limit`: `LIMIT` and `OFFSET`.
     Limit,
+    /// `Gather`: the rows of the parallel plan below, which `workers` workers and the leader run, as `num_workers`. With `single_copy`, one process runs the plan.
+    Gather { workers: i32, single_copy: bool },
+    /// `GatherMerge`: the rows of the parallel plan below, which each process gives in the order of the plan, merged in that order.
+    GatherMerge { workers: i32 },
     /// `Unique`: the first row of each run of equal rows of a sorted input.
     Unique,
     /// `Append`: the rows of each member.

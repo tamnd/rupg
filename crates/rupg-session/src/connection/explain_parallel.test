@@ -1,0 +1,99 @@
+> create table pt (a int, b int, c text) with (parallel_workers = 2)
+CREATE TABLE
+> insert into pt select i, i % 100, 'x' || i from generate_series(1, 10000) i
+INSERT 0 10000
+> create function pr(int) returns int as $$begin return $1; end$$ language plpgsql parallel restricted
+CREATE FUNCTION
+> set parallel_setup_cost = 0
+SET
+> set parallel_tuple_cost = 0
+SET
+> explain (costs off) select * from pt where b = 5
+fields QUERY PLAN:25:-1:-1
+row Gather
+row   Workers Planned: 2
+row   ->  Parallel Seq Scan on pt
+row         Filter: (b = 5)
+EXPLAIN
+> explain (costs off, verbose) select a + 1, c from pt where b = 5
+fields QUERY PLAN:25:-1:-1
+row Gather
+row   Output: ((a + 1)), c
+row   Workers Planned: 2
+row   ->  Parallel Seq Scan on public.pt
+row         Output: (a + 1), c
+row         Filter: (pt.b = 5)
+EXPLAIN
+> explain (costs off, verbose) select pr(a) from pt where b = 5
+fields QUERY PLAN:25:-1:-1
+row Gather
+row   Output: pr(a)
+row   Workers Planned: 2
+row   ->  Parallel Seq Scan on public.pt
+row         Output: a
+row         Filter: (pt.b = 5)
+EXPLAIN
+> explain (costs off) select * from pt where pr(b) = 5
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pt
+row   Filter: (pr(b) = 5)
+EXPLAIN
+> explain (costs off, format json) select a from pt where b = 5
+fields QUERY PLAN:114:-1:-1
+row [
+  {
+    "Plan": {
+      "Node Type": "Gather",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Disabled": false,
+      "Workers Planned": 2,
+      "Single Copy": false,
+      "Plans": [
+        {
+          "Node Type": "Seq Scan",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": true,
+          "Async Capable": false,
+          "Relation Name": "pt",
+          "Alias": "pt",
+          "Disabled": false,
+          "Filter": "(b = 5)"
+        }
+      ]
+    }
+  }
+]
+EXPLAIN
+> set parallel_leader_participation = off
+SET
+> explain (costs off) select * from pt where b = 5
+fields QUERY PLAN:25:-1:-1
+row Gather
+row   Workers Planned: 2
+row   ->  Parallel Seq Scan on pt
+row         Filter: (b = 5)
+EXPLAIN
+> reset parallel_leader_participation
+RESET
+> explain (costs off) select * from pt for update
+fields QUERY PLAN:25:-1:-1
+row LockRows
+row   ->  Seq Scan on pt
+EXPLAIN
+> alter table pt set (parallel_workers = 1)
+ALTER TABLE
+> explain (costs off) select * from pt where b = 5
+fields QUERY PLAN:25:-1:-1
+row Gather
+row   Workers Planned: 1
+row   ->  Parallel Seq Scan on pt
+row         Filter: (b = 5)
+EXPLAIN
+> set max_parallel_workers_per_gather = 0
+SET
+> explain (costs off) select * from pt where b = 5
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pt
+row   Filter: (b = 5)
+EXPLAIN
