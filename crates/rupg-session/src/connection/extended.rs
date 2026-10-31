@@ -640,6 +640,7 @@ impl Connection {
                     let mut notices: Vec<Notice> =
                         reader.take_warnings().into_iter().map(Notice::of_function).collect();
                     drop(reader);
+                    self.lock_command(&plan, &view);
                     self.notices(&mut notices, &statement.text, &[], out);
                     let rows = rows?;
                     let ended = self.end_writes(writes, &params, Vec::new());
