@@ -1,0 +1,53 @@
+> CREATE TABLE f (a int, b text, c float8, d bigint)
+CREATE TABLE
+> INSERT INTO f SELECT i, 't' || (i % 100), i / 4.0, CASE WHEN i % 7 = 0 THEN NULL ELSE i END FROM generate_series(1, 70000) i
+INSERT 0 70000
+> SELECT count(*), sum(a), count(DISTINCT b), sum(c), count(d) FROM f
+fields count:20:8:-1,sum:20:8:-1,count:20:8:-1,sum:701:8:-1,count:20:8:-1
+row 70000,2450035000,100,612508750,60000
+SELECT 1
+> SELECT ctid, * FROM f WHERE a IN (6, 7, 69999) ORDER BY a
+fields ctid@f.-1:27:6:-1,a@f.1:23:4:-1,b@f.2:25:-1:-1,c@f.3:701:8:-1,d@f.4:20:8:-1
+row (0,6),6,t6,1.5,6
+row (0,7),7,t7,1.75,NULL
+row (437,79),69999,t99,17499.75,69999
+SELECT 3
+> SELECT count(*), sum(a), count(DISTINCT b), sum(c), count(d) FROM f
+fields count:20:8:-1,sum:20:8:-1,count:20:8:-1,sum:701:8:-1,count:20:8:-1
+row 70000,2450035000,100,612508750,60000
+SELECT 1
+> BEGIN
+BEGIN
+> DELETE FROM f WHERE a = 2
+DELETE 1
+> ROLLBACK
+ROLLBACK
+> SELECT count(*), sum(a), max(b), sum(d) FROM f
+fields count:20:8:-1,sum:20:8:-1,max:25:-1:-1,sum:1700:-1:-1
+row 70000,2450035000,t99,2100000000
+SELECT 1
+> BEGIN
+BEGIN
+> INSERT INTO f VALUES (0, 'new', 0.5, 1)
+INSERT 0 1
+> SELECT count(*), sum(a), max(b) FROM f
+fields count:20:8:-1,sum:20:8:-1,max:25:-1:-1
+row 70001,2450035000,t99
+SELECT 1
+> ROLLBACK
+ROLLBACK
+> SELECT count(*), sum(a), max(b) FROM f
+fields count:20:8:-1,sum:20:8:-1,max:25:-1:-1
+row 70000,2450035000,t99
+SELECT 1
+> UPDATE f SET b = 'x' WHERE a = 3
+UPDATE 1
+> SELECT a, b, c, d FROM f WHERE a IN (3, 4) ORDER BY a
+fields a@f.1:23:4:-1,b@f.2:25:-1:-1,c@f.3:701:8:-1,d@f.4:20:8:-1
+row 3,x,0.75,3
+row 4,t4,1,4
+SELECT 2
+> SELECT count(*), sum(a), max(b), sum(c) FROM f
+fields count:20:8:-1,sum:20:8:-1,max:25:-1:-1,sum:701:8:-1
+row 70000,2450035000,x,612508750
+SELECT 1
