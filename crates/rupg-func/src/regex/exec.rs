@@ -89,6 +89,8 @@ struct Dfa {
     wide: FxMap<(u32, u32), u32>,
     /// For each state: 0 when it is not known if its sets give the same answer for each character that is not ASCII, 1 for no, 2 for yes, and 3 when also its step with the mask 0 for such a character gives the same state with no `Match`.
     same: Vec<u8>,
+    /// For each state, the number of times that a walk went over the characters that keep it, up to [`LEARN`].
+    skips: Vec<u8>,
     /// The state of the start of the program and the state with no threads, when the DFA has them.
     ends: Option<(u32, u32)>,
     /// True when each step also starts a thread at the start of the program.
@@ -102,6 +104,9 @@ fn skip(loops: u128, wide: bool, s: &[u32]) -> usize {
         .position(|&c| if c < 128 { halves[(c >> 6) as usize] >> (c & 63) & 1 == 0 } else { !wide })
         .unwrap_or(s.len())
 }
+
+/// The number of walks over the characters that keep a state after which the DFA learns the steps of the state for each character.
+const LEARN: u8 = 16;
 
 /// The character of the item of [`Dfa::wide`] for each character that is not ASCII, past the last character.
 const WIDE: u32 = 0x11_0000;
@@ -127,6 +132,7 @@ impl Dfa {
         self.fast.extend([UNKNOWN; 128]);
         self.loops.push(0);
         self.same.push(0);
+        self.skips.push(0);
         id
     }
 }
@@ -365,13 +371,11 @@ impl Program {
     }
 
     /// [`Program::ends`] with the DFA. The threads of the backtracking machine reach the same pairs of instruction and position, so the ends are the same.
-    fn dfa_ends(&self, dfa: &mut Dfa, s: &[u32], start: usize) -> Vec<bool> {
-        let mut ends = vec![false; s.len() + 1];
+    fn dfa_ends(&self, dfa: &mut Dfa, s: &[u32], start: usize, ends: &mut [bool]) {
         self.walk(dfa, s, start, |pos| {
             ends[pos] = true;
             false
         });
-        ends
     }
 
     /// Runs a DFA on `s` from `start` and calls `hit` at each end of a match. The walk stops at the first position where `hit` gives true, and gives that position.
@@ -405,9 +409,19 @@ impl Program {
                 break;
             }
             // The characters that keep the state go by with no step, up to the last character, where the end of the string can hold.
-            let loops = dfa.loops[state as usize];
-            let wide_loop = dfa.same[state as usize] == 3;
-            if (loops != 0 || wide_loop) && ends_only {
+            let at = state as usize;
+            if ends_only && dfa.skips[at] < LEARN && (dfa.loops[at] != 0 || dfa.same[at] == 3) {
+                // A state that walks often go over learns its steps for each character, and when each character keeps it, the walk goes to the last character at once.
+                dfa.skips[at] += 1;
+                if dfa.skips[at] == LEARN {
+                    self.learn_all(dfa, state);
+                }
+            }
+            let (loops, wide_loop) = (dfa.loops[at], dfa.same[at] == 3);
+            if loops == u128::MAX && wide_loop && ends_only {
+                // Each character keeps the state.
+                pos = s.len() - 1;
+            } else if (loops != 0 || wide_loop) && ends_only {
                 pos += skip(loops, wide_loop, &s[pos..s.len() - 1]);
             }
             let c = s[pos];
@@ -418,27 +432,15 @@ impl Program {
                 0..128 => dfa.fast[state as usize * 128 + c as usize],
                 _ => dfa.wide.get(&(state, key)).copied().unwrap_or(UNKNOWN),
             };
-            let matched = if known == UNKNOWN {
+            let matched = if known == UNKNOWN && mask != 0 {
                 let next = self.step(dfa, state, c);
                 let (closed, matched) = self.closure(dfa, next, mask);
-                let known = closed | if matched { MATCHED } else { 0 };
-                match c {
-                    _ if mask != 0 => {}
-                    0..128 => {
-                        dfa.fast[state as usize * 128 + c as usize] = known;
-                        if known == state {
-                            dfa.loops[state as usize] |= 1 << c;
-                        }
-                    }
-                    _ => {
-                        dfa.wide.insert((state, key), known);
-                        if key == WIDE && known == state {
-                            dfa.same[state as usize] = 3;
-                        }
-                    }
-                }
                 state = closed;
                 matched
+            } else if known == UNKNOWN {
+                let known = self.learn(dfa, state, c, key);
+                state = known & !MATCHED;
+                known & MATCHED != 0
             } else {
                 state = known & !MATCHED;
                 known & MATCHED != 0
@@ -449,6 +451,37 @@ impl Program {
             pos += 1;
         }
         None
+    }
+
+    /// The item of [`Dfa::fast`] or [`Dfa::wide`] for a closed state and a character, with the mask 0, from a step and a closure. The key of a character that is not ASCII is the character or [`WIDE`].
+    fn learn(&self, dfa: &mut Dfa, state: u32, c: u32, key: u32) -> u32 {
+        let next = self.step(dfa, state, c);
+        let (closed, matched) = self.closure(dfa, next, 0);
+        let known = closed | if matched { MATCHED } else { 0 };
+        if c < 128 {
+            dfa.fast[state as usize * 128 + c as usize] = known;
+            if known == state {
+                dfa.loops[state as usize] |= 1 << c;
+            }
+        } else {
+            dfa.wide.insert((state, key), known);
+            if key == WIDE && known == state {
+                dfa.same[state as usize] = 3;
+            }
+        }
+        known
+    }
+
+    /// The items of a closed state for each ASCII character, and for the characters that are not ASCII when its sets give the same answer for each of them, so that a state that each character keeps is known.
+    fn learn_all(&self, dfa: &mut Dfa, state: u32) {
+        for c in 0..128 {
+            if dfa.fast[state as usize * 128 + c as usize] == UNKNOWN {
+                self.learn(dfa, state, c, c);
+            }
+        }
+        if self.wide_same(dfa, state) && !dfa.wide.contains_key(&(state, WIDE)) {
+            self.learn(dfa, state, 0x100, WIDE);
+        }
     }
 
     /// True when the sets of a state give the same answer for each character that is not ASCII.
@@ -578,12 +611,12 @@ impl Program {
         (from..=last).find(|&start| search.run(0, start, None, visited.as_mut(), None))
     }
 
-    /// The ends of the matches from `start`: the item at a position is true when a match ends there.
-    pub(super) fn ends(&self, s: &[u32], start: usize) -> Vec<bool> {
+    /// The ends of the matches from `start` into `ends`, which has an item for each position and no true item: the item at a position becomes true when a match ends there.
+    pub(super) fn ends(&self, s: &[u32], start: usize, ends: &mut [bool]) {
         if let Some(dfa) = &self.dfa {
-            return self.dfa_ends(&mut dfa.borrow_mut(), s, start);
+            return self.dfa_ends(&mut dfa.borrow_mut(), s, start, ends);
         }
-        self.track_ends(s, start)
+        ends.copy_from_slice(&self.track_ends(s, start));
     }
 
     /// [`Program::ends`] with the backtracking machine.
@@ -826,7 +859,8 @@ mod tests {
                     }
                     for start in 0..=s.len() {
                         let want = program.track_ends(&s, start);
-                        let got = program.dfa_ends(&mut dfa.borrow_mut(), &s, start);
+                        let mut got = vec![false; s.len() + 1];
+                        program.dfa_ends(&mut dfa.borrow_mut(), &s, start, &mut got);
                         assert_eq!(got, want, "{pattern} on {string:?} from {start}");
                     }
                 }
