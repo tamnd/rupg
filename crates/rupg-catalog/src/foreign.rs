@@ -241,3 +241,16 @@ impl Catalog {
         Ok(())
     }
 }
+
+rupg_common::persist_struct!(ForeignDataWrapper {
+    oid,
+    name,
+    owner,
+    handler,
+    validator,
+    connection,
+    options
+});
+rupg_common::persist_struct!(ForeignServer { oid, name, owner, fdw, kind, version, options });
+rupg_common::persist_struct!(UserMapping { oid, user, server, options });
+rupg_common::persist_struct!(ForeignTable { server, options });

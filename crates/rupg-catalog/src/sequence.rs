@@ -100,3 +100,5 @@ impl Catalog {
         }
     }
 }
+
+rupg_common::persist_struct!(SequenceData { last_value, log_cnt, is_called });

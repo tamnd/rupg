@@ -102,3 +102,28 @@ impl Catalog {
         self.aggregates.get(&function)
     }
 }
+
+rupg_common::persist_struct!(Aggregate {
+    function,
+    kind,
+    ndirect,
+    transfn,
+    finalfn,
+    combinefn,
+    serialfn,
+    deserialfn,
+    mtransfn,
+    minvtransfn,
+    mfinalfn,
+    finalextra,
+    mfinalextra,
+    finalmodify,
+    mfinalmodify,
+    sortop,
+    transtype,
+    transspace,
+    mtranstype,
+    mtransspace,
+    initval,
+    minitval
+});
