@@ -30,16 +30,15 @@ impl StopSignals {
                 && libc::sigaddset(&raw mut set, libc::SIGTERM) == 0
                 && libc::sigaddset(&raw mut set, libc::SIGINT) == 0
         };
-        // SAFETY: `set` is a valid signal set, and the old mask is not wanted.
-        let masked = made
-            && unsafe {
-                libc::pthread_sigmask(libc::SIG_BLOCK, &raw const set, std::ptr::null_mut())
-            } == 0;
-        if !masked {
-            return Err(Error::new(
-                SqlState::INTERNAL_ERROR,
-                format!("could not block the stop signals: {}", io::Error::last_os_error()),
-            ));
+        if !made {
+            return Err(not_blocked(io::Error::last_os_error()));
+        }
+        // The old mask is not wanted.
+        let old = std::ptr::null_mut();
+        // SAFETY: `set` is a valid signal set, and a null `old` is allowed.
+        let code = unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &raw const set, old) };
+        if code != 0 {
+            return Err(not_blocked(io::Error::from_raw_os_error(code)));
         }
         Ok(StopSignals { set })
     }
@@ -54,4 +53,9 @@ impl StopSignals {
             }
         }
     }
+}
+
+/// The error of [`StopSignals::block`].
+fn not_blocked(error: io::Error) -> Error {
+    Error::new(SqlState::INTERNAL_ERROR, format!("could not block the stop signals: {error}"))
 }
