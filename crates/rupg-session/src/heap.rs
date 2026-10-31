@@ -660,20 +660,35 @@ impl Table {
     }
 
     /// Gives `each` the place and the values of each version of the table, in order, with the values of the frozen versions decoded from their columns.
-    fn each_row(&self, mut each: impl FnMut(usize, &[Value])) {
+    fn each_row(&self, each: impl FnMut(usize, &[Value])) {
+        self.each_row_of(None, each);
+    }
+
+    /// [`Table::each_row`], which decodes only the columns at `used` of a frozen version, and gives null for its other columns.
+    fn each_row_of(&self, used: Option<&[usize]>, mut each: impl FnMut(usize, &[Value])) {
         let Some(frozen) = &self.frozen else {
             for (at, version) in self.versions.iter().enumerate() {
                 each(at, &version.values);
             }
             return;
         };
-        let mut columns: Vec<Decoded<'_>> =
-            frozen.columns.iter().map(|stored| Decoded::new(stored)).collect();
+        let mut columns: Vec<Option<Decoded<'_>>> = frozen
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(at, stored)| {
+                used.is_none_or(|used| used.contains(&at)).then(|| Decoded::new(stored))
+            })
+            .collect();
         let mut row = Vec::with_capacity(columns.len());
         for (at, version) in self.versions.iter().enumerate() {
             if version.values.is_empty() {
                 row.clear();
-                row.extend(columns.iter_mut().map(|column| column.next().unwrap_or(Value::Null)));
+                row.extend(
+                    columns.iter_mut().map(|column| {
+                        column.as_mut().and_then(Iterator::next).unwrap_or(Value::Null)
+                    }),
+                );
                 each(at, &row);
             } else {
                 each(at, &version.values);
@@ -681,7 +696,7 @@ impl Table {
         }
         // The freeze decoded each column to the same values, so the decode does not fail.
         debug_assert!(
-            columns.iter().all(|column| !column.failed),
+            columns.iter().flatten().all(|column| !column.failed),
             "a frozen column does not decode"
         );
     }
@@ -1224,18 +1239,19 @@ impl Heap {
         xids: bool,
         used: Option<&[bool]>,
     ) -> Vec<Vec<Value>> {
-        let mut guard = self.state();
-        let state = &mut *guard;
-        let Some(table) = state.tables.get(&(view.database, relation)) else {
+        let state = self.state();
+        let Some(table) = state.tables.headers(&(view.database, relation)) else {
             return Vec::new();
         };
         let columns = used_columns(used);
-        table
-            .versions
-            .iter()
-            .filter(|version| visible(version, view))
-            .map(|version| version_row(version, &table.combos, columns.as_deref(), xids))
-            .collect()
+        let mut rows = Vec::new();
+        table.each_row_of(columns.as_deref(), |at, values| {
+            let version = &table.versions[at];
+            if visible(version, view) {
+                rows.push(version_row(version, values, &table.combos, columns.as_deref(), xids));
+            }
+        });
+        rows
     }
 
     /// The columns `wanted` of a table, each with its physical type, in the order of the versions, when the view sees each version of the table and every version is live. The heap makes a column from the versions the first time a scan reads it, and keeps it until the table changes. It gives the number of rows with the columns. `None` is a table that the scan must read by rows: the table is small, a version is deleted, the view does not see a version, or a value does not have the type of its column.
@@ -1327,7 +1343,9 @@ impl Heap {
         tids.iter()
             .filter_map(|&tid| table.find(tid).map(|at| &table.versions[at]))
             .filter(|version| visible(version, view))
-            .map(|version| version_row(version, &table.combos, columns.as_deref(), false))
+            .map(|version| {
+                version_row(version, &version.values, &table.combos, columns.as_deref(), false)
+            })
             .collect()
     }
 
@@ -1345,9 +1363,8 @@ impl Heap {
 
     /// True when a command of the transaction of `view` after the command of `view` changed the version `tid` of a table: `TM_SelfModified` with a `cmax` that is not the command of `view`.
     pub(crate) fn modified_later(&self, view: &View, relation: u32, tid: u64) -> bool {
-        let mut guard = self.state();
-        let state = &mut *guard;
-        let Some(table) = state.tables.get(&(view.database, relation)) else {
+        let state = self.state();
+        let Some(table) = state.tables.headers(&(view.database, relation)) else {
             return false;
         };
         table.find(tid).is_some_and(|at| {
@@ -1358,9 +1375,8 @@ impl Heap {
 
     /// `heap_get_latest_tid`: the last version of the chain of updates from the version `tid` of a table, as the transaction of `view` sees the updates of its own and of the transactions that committed.
     pub(crate) fn latest_tid(&self, view: &View, relation: u32, mut tid: u64) -> u64 {
-        let mut guard = self.state();
-        let state = &mut *guard;
-        let Some(table) = state.tables.get(&(view.database, relation)) else {
+        let state = self.state();
+        let Some(table) = state.tables.headers(&(view.database, relation)) else {
             return tid;
         };
         while let Some(version) = table.find(tid).map(|at| &table.versions[at]) {
@@ -1375,9 +1391,8 @@ impl Heap {
 
     /// For each version of a table that the command `command` of the transaction `xid` added, in the order of the inserts, true if the transaction did not delete or update it after, as `SnapshotSelf` sees it.
     pub(crate) fn live(&self, database: u32, relation: u32, xid: u32, command: u32) -> Vec<bool> {
-        let mut guard = self.state();
-        let state = &mut *guard;
-        let Some(table) = state.tables.get(&(database, relation)) else {
+        let state = self.state();
+        let Some(table) = state.tables.headers(&(database, relation)) else {
             return Vec::new();
         };
         let mut made: Vec<(u64, bool)> = table
@@ -2266,15 +2281,17 @@ fn used_columns(used: Option<&[bool]>) -> Option<Vec<usize>> {
 /// The row of a version for a scan: the values of the columns at `columns`, or all its values, then `xmin`, `xmax` and `t_cid` when `xids` is true, then the ID of the version. A column that the version has no value for is null.
 fn version_row(
     version: &Version,
+    values: &[Value],
     combos: &HashMap<u64, u32>,
     columns: Option<&[usize]>,
     xids: bool,
 ) -> Vec<Value> {
-    let mut row = Vec::with_capacity(columns.map_or(version.values.len(), <[usize]>::len) + 4);
+    let mut row = Vec::with_capacity(columns.map_or(values.len(), <[usize]>::len) + 4);
     match columns {
-        Some(columns) => row
-            .extend(columns.iter().map(|&i| version.values.get(i).cloned().unwrap_or(Value::Null))),
-        None => row.extend_from_slice(&version.values),
+        Some(columns) => {
+            row.extend(columns.iter().map(|&i| values.get(i).cloned().unwrap_or(Value::Null)));
+        }
+        None => row.extend_from_slice(values),
     }
     if xids {
         let xmax = if version.xmax == 0 { version.aborted } else { version.xmax };
