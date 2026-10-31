@@ -539,6 +539,10 @@ dependencies = [
 [[package]]
 name = "rupg-summary"
 version = "0.4.15"
+dependencies = [
+ "rupg-common",
+ "rupg-encode",
+]
 
 [[package]]
 name = "rupg-table"

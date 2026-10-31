@@ -171,7 +171,7 @@ When a summary is only a bound, the executor reads the segment for that aggregat
 
 The planner treats the summaries as one implicit access method that every table has. It is not in `pg_index` or `pg_am`. `EXPLAIN` shows it as properties of the `Seq Scan` node, so a tool that parses plans still finds a `Seq Scan` (document 15 section 15.9).
 
-**Floating point sums can differ in the last bit.** rupg stores a `float8` sum as a compensated sum, so a summary answer can differ in the last bit from a scan, as two PostgreSQL plans can. The regression suite compares floating point aggregates with PostgreSQL's tolerance rules. Integer and `numeric` sums are exact in 128 bits.
+**Floating point sums can differ in the last bit.** rupg stores a `float8` sum as the plain f64 sum of the segment in row order (document 09 section 9.7.2), so a summary answer can differ in the last bit from a scan, as two PostgreSQL plans can. The regression suite compares floating point aggregates with PostgreSQL's tolerance rules. Integer and `numeric` sums are exact in 128 bits.
 
 ## 12.7 Building and maintaining indexes
 
