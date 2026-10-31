@@ -349,8 +349,8 @@ impl Texts for PlanTexts<'_, '_> {
 
     fn below_expr(&mut self, scope: usize, expr: &Expr, prefix: bool) -> Result<String> {
         let mut d = self.deparser(scope, prefix)?;
-        // The whole expression comes from below, so no part of it needs its own parentheses.
-        d.computed.clear();
+        // The whole expression comes from below, so it does not need its own parentheses again. The parts that the node below reads from its own input keep them.
+        d.computed.retain(|c| !c.same(expr));
         d.expr(expr, true)?;
         Ok(d.buf)
     }

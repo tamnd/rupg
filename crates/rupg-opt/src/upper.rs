@@ -1641,7 +1641,12 @@ fn aggregate<'q>(
     let hash_total = hash_total + having_startup + having_cost * groups;
     // The hash table loses the order of the groups, so the sort of `ORDER BY` counts for it when the groups have the order of `ORDER BY`.
     let in_order = query.sort.iter().all(|s| query.group.iter().any(|g| g.target == s.target));
-    let hash_after = if query.sort.is_empty() || !in_order {
+    // `create_window_paths`: the first window sorts the rows of the hash table, but not the sorted groups when they have the order of its keys.
+    let window_in_order = first_window(level).is_some_and(|w| {
+        let keys = window_keys(level, w, &window_partition(level, w));
+        !keys.is_empty() && presorted(&sorted_order, &keys).0
+    });
+    let hash_after = if (query.sort.is_empty() || !in_order) && !window_in_order {
         hash_total
     } else {
         cost::sort((hash_startup, hash_total), rows, c.width, None).1
@@ -1657,6 +1662,8 @@ fn aggregate<'q>(
     let hash_wins = match hash_disabled.cmp(&sort_disabled) {
         Ordering::Less => true,
         Ordering::Greater => false,
+        // `add_path` above the windows: with the costs in the fuzz factor, the sorted groups win, as their start cost is lower.
+        Ordering::Equal if window_in_order => kept && hash_after * 1.01 < sorted_total,
         Ordering::Equal => kept && hash_after < sorted_total,
     };
     if !only && hashable && hash_wins {
