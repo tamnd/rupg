@@ -4,6 +4,9 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- A commit that changes a frozen table now writes a record to the commit log, and no longer writes a full checkpoint each time. Only a commit that leaves a frozen version without values still needs a checkpoint (#1242).
 ## 0.4.17 (2026-10-31)
 
 ### Added

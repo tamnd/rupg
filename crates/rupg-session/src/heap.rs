@@ -2489,8 +2489,12 @@ impl State {
         xid.put(out);
         let tables: Vec<_> =
             touched.iter().filter_map(|key| Some((key, self.tables.headers(key)?))).collect();
-        // The versions of a frozen table have no values to log, and a checkpoint writes them.
-        if tables.iter().any(|(_, table)| table.frozen.is_some()) {
+        // A frozen version has no values to log, and a checkpoint writes it. The new versions after a freeze keep their values, and a delete logs no values.
+        let frozen = |table: &Table| {
+            table.frozen.as_ref().is_some_and(|frozen| !frozen.columns.is_empty())
+                && table.versions.iter().any(|v| v.xmin == xid && v.values.is_empty())
+        };
+        if tables.iter().any(|(_, table)| frozen(table)) {
             return false;
         }
         let changed: usize = tables
