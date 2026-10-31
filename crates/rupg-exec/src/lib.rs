@@ -917,6 +917,9 @@ pub(crate) fn has_domain_constraints(domain: u32) -> bool {
 /// The body of each function in SQL, by the OID of the function, the types of the arguments of the call and the types of the column definition list of a call in `FROM`, or `None` for a function of the catalog that is not in SQL.
 type Bodies = Rc<RefCell<Vec<(BodyKey, Option<Rc<Body>>)>>>;
 
+/// The kernel of a function and true when the function is strict, as [`Cache::plain_kernel`] finds them.
+type PlainKernel = (Kernel, bool);
+
 /// The OID of a function, the types of the arguments of a call and the type and the type modifier of each column of its column definition list.
 type BodyKey = (u32, Vec<u32>, Vec<(u32, i32)>);
 
@@ -949,6 +952,8 @@ struct Cache {
     top: Cell<Option<*const Query>>,
     /// The rows of the query `top` that the run made before an error.
     sent: RefCell<Rows>,
+    /// The kernel and the `proisstrict` of each function that [`Cache::plain_kernel`] found, by the OID of the function, or `None` for a function that needs the full path of [`Eval::func`].
+    kernels: RefCell<Vec<(u32, Option<PlainKernel>)>>,
 }
 
 impl Cache {
@@ -959,6 +964,30 @@ impl Cache {
                 .with_hint("Increase the configuration parameter \"max_stack_depth\" (currently 2048kB), after ensuring the platform's stack depth limit is adequate."));
         }
         Ok(Cache { bodies: Rc::clone(&self.bodies), depth: self.depth + 1, ..Cache::default() })
+    }
+
+    /// The kernel of the built-in function `func` and true when it is strict, when a call of it runs only the kernel: it has no defaults, it is not in PL/pgSQL, it has no body and no row in the catalog of the session, and [`Eval::func`] does not treat it in a special way. The lookups run once for each run, and not for each row.
+    fn plain_kernel(&self, func: u32, session: &dyn Session) -> Option<PlainKernel> {
+        if let Some((_, found)) = self.kernels.borrow().iter().find(|(f, _)| *f == func) {
+            return *found;
+        }
+        let found = (|| {
+            if func >= FIRST_NORMAL_OID
+                || populates(func)
+                || func == PG_COLUMN_SIZE
+                || session.catalog().is_some_and(|c| c.function(func).is_some())
+                || runs_body(func)
+            {
+                return None;
+            }
+            let proc = builtin::proc_by_oid(func)?;
+            if proc.nargdefaults != 0 || proc.lang == PLPGSQL_LANGUAGE {
+                return None;
+            }
+            Some((rupg_func::kernel(func)?, proc.strict))
+        })();
+        self.kernels.borrow_mut().push((func, found));
+        found
     }
 
     /// `load_domaintype_info`: the constraints of a domain and of the domains below it. The checks of a domain below come first, and the checks of one domain come in the order of their names.
@@ -3316,6 +3345,12 @@ impl<'a> Eval<'a> {
         if let Some(p) = populate::populate_function(f.oid) {
             return Ok(self.populate_call(f, p, &[])?.pop().unwrap_or(Value::Null));
         }
+        if !matches!(f.form, FuncForm::ExplicitCast | FuncForm::ImplicitCast)
+            && !f.args.iter().any(|a| matches!(a.kind, ExprKind::NamedArg(_)))
+            && let Some((kernel, strict)) = self.cache.plain_kernel(f.oid, self.session)
+        {
+            return self.kernel_call(kernel, strict, f, expr.ty);
+        }
         // The planner adds the defaults, so this is for an expression that the planner did not see.
         let exprs = rupg_analyze::expand_arguments(f)?;
         // An operator of two arguments, as the test of a row in `WHERE` has, needs no vectors.
@@ -3346,6 +3381,33 @@ impl<'a> Eval<'a> {
             return Ok(relabel(self.call(f.oid, &types, ret, f.variadic, &args)?, expr.ty));
         }
         self.call(f.oid, &types, expr.ty, f.variadic, &args)
+    }
+
+    /// [`Eval::func`] for a function that [`Cache::plain_kernel`] found: the kernel with the values of the arguments, or null for a strict function with a null argument.
+    fn kernel_call(&mut self, kernel: Kernel, strict: bool, f: &Func, ret: u32) -> Result<Value> {
+        let call = |eval: &Self, types: &[u32], args: &[Value]| {
+            if strict && args.iter().any(Value::is_null) {
+                return Ok(Value::Null);
+            }
+            let call =
+                Call { session: eval.session, args: types, ret, variadic: f.variadic, want: None };
+            kernel(&call, args)
+        };
+        match &f.args[..] {
+            [left, right] => {
+                let args = [self.eval(left)?, self.eval(right)?];
+                call(self, &[left.ty, right.ty], &args)
+            }
+            [arg] => {
+                let args = [self.eval(arg)?];
+                call(self, &[arg.ty], &args)
+            }
+            exprs => {
+                let args = exprs.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>>>()?;
+                let types: Vec<u32> = exprs.iter().map(|a| a.ty).collect();
+                call(self, &types, &args)
+            }
+        }
     }
 
     /// `AND`, `OR` and `NOT` with the logic of three values. `AND` stops at the first false argument, and `OR` at the first true argument.
