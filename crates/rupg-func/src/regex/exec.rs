@@ -6,6 +6,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 
 use super::parse::{Assert, DUPINF, Look, Node, Set, to_lower};
 use super::{Code, flags};
@@ -31,17 +32,61 @@ const ASSERTS: [Assert; 8] = [
     Assert::NotBoundary,
 ];
 
+/// A fast hash of the keys of the DFA, which the DFA makes and reads only for itself.
+#[derive(Clone, Copy, Default)]
+struct Fx(u64);
+
+impl Fx {
+    fn add(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+}
+
+impl Hasher for Fx {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        let (words, rest) = bytes.as_chunks::<8>();
+        for word in words {
+            self.add(u64::from_le_bytes(*word));
+        }
+        for &byte in rest {
+            self.add(u64::from(byte));
+        }
+    }
+
+    fn write_u32(&mut self, word: u32) {
+        self.add(u64::from(word));
+    }
+
+    fn write_u64(&mut self, word: u64) {
+        self.add(word);
+    }
+
+    fn write_usize(&mut self, word: usize) {
+        self.add(word as u64);
+    }
+}
+
+type FxMap<K, V> = HashMap<K, V, BuildHasherDefault<Fx>>;
+
 /// The DFA of the main program, which [`Program::ends`] builds as it reads strings. A state is a set of instructions `Set` that the threads wait at. The closure of a state follows the instructions that read no character, with the mask of the constraints that hold at the position, and the step of a closed state reads one character.
 #[derive(Debug, Default)]
 struct Dfa {
-    ids: HashMap<Box<[usize]>, u32>,
+    ids: FxMap<Box<[usize]>, u32>,
     states: Vec<Box<[usize]>>,
     /// For each state, the closed states for the masks that the DFA met: the mask, the closed state and true when the closure has `Match`.
     closed: Vec<Vec<(u8, u32, bool)>>,
     /// For each closed state and ASCII character, the closure with the mask 0 of the step, with [`MATCHED`] set when it has `Match`, or [`UNKNOWN`].
     fast: Vec<u32>,
     /// The steps of the closed states after the characters.
-    steps: HashMap<(u32, u32), u32>,
+    steps: FxMap<(u32, u32), u32>,
+    /// The items of [`Dfa::fast`] for the characters that are not ASCII.
+    wide: FxMap<(u32, u32), u32>,
+    /// The state of the start of the program and the state with no threads, when the DFA has them.
+    ends: Option<(u32, u32)>,
     /// True when each step also starts a thread at the start of the program.
     restart: bool,
 }
@@ -323,33 +368,47 @@ impl Program {
         if dfa.states.len() > MAX_STATES {
             *dfa = Dfa { restart: dfa.restart, ..Dfa::default() };
         }
-        let first = dfa.intern(vec![0]);
+        let (first, dead) = match dfa.ends {
+            Some(ends) => ends,
+            None => {
+                let ends = (dfa.intern(vec![0]), dfa.intern(Vec::new()));
+                dfa.ends = Some(ends);
+                ends
+            }
+        };
         let (mut state, matched) = self.closure(dfa, first, self.mask(s, start));
         if matched && hit(start) {
             return Some(start);
         }
-        let dead = dfa.intern(Vec::new());
+        // With no constraint of words or lines, only the start and the end of the string have constraints that hold.
+        let ends_only = self.asserts == 0 || (self.asserts & 0xf0 == 0 && !self.nlanch);
         for pos in start..s.len() {
             if state == dead && !dfa.restart {
                 break;
             }
             let c = s[pos];
-            let mask = self.mask(s, pos + 1);
-            let matched = match dfa.fast[state as usize * 128 + (c as usize & 127)] {
-                known if mask == 0 && c < 128 && known != UNKNOWN => {
-                    state = known & !MATCHED;
-                    known & MATCHED != 0
-                }
-                _ => {
-                    let next = self.step(dfa, state, c);
-                    let (closed, matched) = self.closure(dfa, next, mask);
-                    if mask == 0 && c < 128 {
-                        dfa.fast[state as usize * 128 + c as usize] =
-                            closed | if matched { MATCHED } else { 0 };
+            let mask = if ends_only && pos + 1 < s.len() { 0 } else { self.mask(s, pos + 1) };
+            let known = match c {
+                _ if mask != 0 => UNKNOWN,
+                0..128 => dfa.fast[state as usize * 128 + c as usize],
+                _ => dfa.wide.get(&(state, c)).copied().unwrap_or(UNKNOWN),
+            };
+            let matched = if known == UNKNOWN {
+                let next = self.step(dfa, state, c);
+                let (closed, matched) = self.closure(dfa, next, mask);
+                let known = closed | if matched { MATCHED } else { 0 };
+                match c {
+                    _ if mask != 0 => {}
+                    0..128 => dfa.fast[state as usize * 128 + c as usize] = known,
+                    _ => {
+                        dfa.wide.insert((state, c), known);
                     }
-                    state = closed;
-                    matched
                 }
+                state = closed;
+                matched
+            } else {
+                state = known & !MATCHED;
+                known & MATCHED != 0
             };
             if matched && hit(pos + 1) {
                 return Some(pos + 1);

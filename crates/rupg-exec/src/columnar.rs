@@ -808,15 +808,19 @@ impl<'q> Exec<'q> {
                     }
                     let found = match (&generic.memo, &input.data) {
                         (Some(Memo::Code(memo)), Data::Code(codes, _)) => {
-                            memo.get(codes[i] as usize).and_then(Clone::clone)
+                            memo.get(codes[i] as usize).and_then(Option::as_ref)
                         }
-                        (Some(Memo::Word(memo)), _) => {
-                            input.word(i).and_then(|w| memo.get(&w).cloned())
-                        }
+                        (Some(Memo::Word(memo)), _) => input.word(i).and_then(|w| memo.get(&w)),
                         _ => None,
                     };
                     if let Some(found) = found {
-                        out.push(found);
+                        // A text with a code is only its code in the column, so the text is not copied.
+                        out.push(match found {
+                            (Value::Text(_), code) if *code != 0 => {
+                                (Value::Text(String::new()), *code)
+                            }
+                            found => found.clone(),
+                        });
                         continue;
                     }
                     self.slots[base] = input.value(i, &self.dicts);
@@ -894,7 +898,15 @@ impl<'q> Exec<'q> {
             }
             _ => {}
         }
-        Col { data: Data::Values(out.into_iter().map(|(v, _)| v).collect()), nulls: None, ty }
+        // The text of a value with a code is in the dictionary of the code.
+        let values = out
+            .into_iter()
+            .map(|(v, c)| match (&v, dict) {
+                (Value::Text(_), Some(d)) if c != 0 => self.dicts[d].value(c),
+                _ => v,
+            })
+            .collect();
+        Col { data: Data::Values(values), nulls: None, ty }
     }
 }
 
