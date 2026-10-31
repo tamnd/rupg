@@ -189,3 +189,57 @@ row 1,2500
 row 2,2500
 row 3,2500
 SELECT 4
+> create table pk (unique1 int, hundred int, thousand int, four int, ten int, stringu1 text) with (parallel_workers = 4)
+CREATE TABLE
+> insert into pk select i, i % 100, i % 1000, i % 4, i % 10, 'x' || (i % 50) from generate_series(0, 9999) i
+INSERT 0 10000
+> analyze pk
+ANALYZE
+> set parallel_setup_cost = 0
+SET
+> set parallel_tuple_cost = 0
+SET
+> set min_parallel_table_scan_size = 0
+SET
+> set max_parallel_workers_per_gather = 4
+SET
+> explain (costs off) select distinct four from pk where four = 10
+fields QUERY PLAN:25:-1:-1
+row Limit
+row   ->  Gather
+row         Workers Planned: 4
+row         ->  Limit
+row               ->  Parallel Seq Scan on pk
+row                     Filter: (four = 10)
+EXPLAIN
+> explain (costs off) select distinct four from pk where four = 1
+fields QUERY PLAN:25:-1:-1
+row Limit
+row   ->  Gather
+row         Workers Planned: 4
+row         ->  Parallel Seq Scan on pk
+row               Filter: (four = 1)
+EXPLAIN
+> explain (costs off) select distinct four, ten from pk where four = 1 and ten = 3
+fields QUERY PLAN:25:-1:-1
+row Limit
+row   ->  Gather
+row         Workers Planned: 4
+row         ->  Parallel Seq Scan on pk
+row               Filter: ((four = 1) AND (ten = 3))
+EXPLAIN
+> explain (costs off) select distinct four from pk where four = 1 order by four
+fields QUERY PLAN:25:-1:-1
+row Limit
+row   ->  Gather
+row         Workers Planned: 4
+row         ->  Parallel Seq Scan on pk
+row               Filter: (four = 1)
+EXPLAIN
+> select distinct four from pk where four = 1
+fields four@pk.4:23:4:-1
+row 1
+SELECT 1
+> select distinct four from pk where four = 10
+fields four@pk.4:23:4:-1
+SELECT 0
