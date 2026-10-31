@@ -11,7 +11,7 @@ use crate::dict::Dictionary;
 use crate::segment::{Column, Kind, ROWS};
 
 /// One column of a table in segments.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Stored {
     /// The physical type.
     pub kind: Kind,
@@ -33,23 +33,50 @@ impl Stored {
         kind: Kind,
         values: impl Iterator<Item = Option<&'a Value>>,
     ) -> Result<Stored> {
+        let mut stored = Stored { kind, dict: None, segments: Vec::new(), rows: 0 };
+        stored.extend(values)?;
+        Ok(stored)
+    }
+
+    /// Adds the values `values` after the rows of the column. A last segment with fewer than [`ROWS`] rows is made again with the new values after its own, so each segment but the last one keeps [`ROWS`] rows. The codes of the dictionary do not change.
+    ///
+    /// # Errors
+    ///
+    /// `XX000` when a value does not have the type of the kind, and `XX001` when the last segment does not decode. The column can then have lost the rows of its last segment.
+    pub fn extend<'a>(&mut self, values: impl Iterator<Item = Option<&'a Value>>) -> Result<()> {
         let null = [Value::Null];
-        let mut builder = Builder::new(&[kind]);
-        let mut dicts = [None];
-        let mut segments = Vec::new();
-        let mut rows = 0;
-        for value in values {
-            builder.push(value.map_or(&null[..], std::slice::from_ref), &mut dicts)?;
-            rows += 1;
-            if builder.rows() == ROWS {
-                segments.extend(builder.finish(&dicts)?.columns);
+        let mut builder = Builder::new(&[self.kind]);
+        let mut dicts = [self.dict.take()];
+        let partial =
+            self.segments.last().is_some_and(|_| self.segment_rows(self.segments.len() - 1) < ROWS);
+        let result = (|| {
+            if partial && let Some(last) = self.segments.pop() {
+                let mut decoded = Vec::new();
+                for at in 0..last.vectors.len() {
+                    last.values(at, dicts[0].as_ref(), &mut decoded)?;
+                    for value in &decoded {
+                        builder.push(std::slice::from_ref(value), &mut dicts)?;
+                    }
+                }
+                self.rows -= builder.rows();
             }
-        }
-        if builder.rows() > 0 {
-            segments.extend(builder.finish(&dicts)?.columns);
-        }
+            for value in values {
+                builder.push(value.map_or(&null[..], std::slice::from_ref), &mut dicts)?;
+                if builder.rows() == ROWS {
+                    self.segments.extend(builder.finish(&dicts)?.columns);
+                    self.rows += ROWS;
+                }
+            }
+            if builder.rows() > 0 {
+                let rows = builder.rows();
+                self.segments.extend(builder.finish(&dicts)?.columns);
+                self.rows += rows;
+            }
+            Ok(())
+        })();
         let [dict] = dicts;
-        Ok(Stored { kind, dict, segments, rows })
+        self.dict = dict;
+        result
     }
 
     /// The rows of the segment `segment`.
@@ -90,5 +117,28 @@ mod tests {
         let stored = Stored::build(Kind::Text, [Some(&text[0]), None].into_iter()).unwrap();
         stored.segments[0].values(0, stored.dict.as_ref(), &mut out).unwrap();
         assert_eq!(out, vec![Value::Text("a".into()), Value::Null]);
+    }
+
+    #[test]
+    fn an_extended_column_is_the_column_of_all_its_values() {
+        let values: Vec<Value> = (0..ROWS + 3000)
+            .map(|i| if i % 5 == 0 { Value::Null } else { Value::Text(format!("v{}", i % 300)) })
+            .collect();
+        let whole = Stored::build(Kind::Text, values.iter().map(Some)).unwrap();
+        let mut parts = Stored::build(Kind::Text, values[..1000].iter().map(Some)).unwrap();
+        parts.extend(values[1000..ROWS - 7].iter().map(Some)).unwrap();
+        parts.extend(values[ROWS - 7..].iter().map(Some)).unwrap();
+        assert_eq!(parts.rows, whole.rows);
+        assert_eq!(parts.segments.len(), 2);
+        assert_eq!(parts.segment_rows(0), ROWS);
+        let mut got = Vec::new();
+        let mut out = Vec::new();
+        for column in &parts.segments {
+            for at in 0..column.vectors.len() {
+                column.values(at, parts.dict.as_ref(), &mut out).unwrap();
+                got.append(&mut out);
+            }
+        }
+        assert_eq!(got, values);
     }
 }

@@ -4020,7 +4020,7 @@ mod tests {
         parts.join(",")
     }
 
-    /// A large table whose scans read its values from columns, after the heap moved the values of its versions into them. A read by rows, a rollback and an update give the same rows as before.
+    /// A large table whose scans read its values from columns, after the heap moved the values of its versions into them, also while a load goes on. A read by rows, a rollback, an update and more rows give the same rows as before.
     #[test]
     fn frozen_table() {
         big_stack(|| script(include_str!("connection/frozen_table.test")));

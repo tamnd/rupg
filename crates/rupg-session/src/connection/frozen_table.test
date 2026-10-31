@@ -51,3 +51,29 @@ SELECT 2
 fields count:20:8:-1,sum:20:8:-1,max:25:-1:-1,sum:701:8:-1
 row 70000,2450035000,x,612508750
 SELECT 1
+> INSERT INTO f SELECT i, 'u' || (i % 10), i, i FROM generate_series(70001, 140000) i
+INSERT 0 70000
+> SELECT count(*), sum(a), count(DISTINCT b), sum(d) FROM f
+fields count:20:8:-1,sum:20:8:-1,count:20:8:-1,sum:1700:-1:-1
+row 140000,9800070000,111,9450035000
+SELECT 1
+> SELECT a, b, c, d FROM f WHERE a IN (69999, 70001, 140000) ORDER BY a
+fields a@f.1:23:4:-1,b@f.2:25:-1:-1,c@f.3:701:8:-1,d@f.4:20:8:-1
+row 69999,t99,17499.75,69999
+row 70001,u1,70001,70001
+row 140000,u0,140000,140000
+SELECT 3
+> BEGIN
+BEGIN
+> INSERT INTO f SELECT i, 'w', i, i FROM generate_series(140001, 210000) i
+INSERT 0 70000
+> SELECT count(*), max(a) FROM f
+fields count:20:8:-1,max:23:4:-1
+row 210000,210000
+SELECT 1
+> ROLLBACK
+ROLLBACK
+> SELECT count(*), max(a), sum(a), max(b) FROM f
+fields count:20:8:-1,max:23:4:-1,sum:20:8:-1,max:25:-1:-1
+row 140000,140000,9800070000,x
+SELECT 1

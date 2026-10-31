@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use rupg_analyze::{Derived, Unique};
 use rupg_column::segment::Kind;
 use rupg_column::stored::Stored;
-use rupg_common::persist::{Persist, Reader};
+use rupg_common::persist::{Persist, Reader, put_count};
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{HeapSize, Statistic, XactState};
 use rupg_types::{Value, oid};
@@ -63,6 +63,9 @@ const INITDB_NEXT_XID: u32 = 662;
 
 /// The fewest versions of a table that [`Heap::columns`] makes columns for. A smaller table reads faster by rows than the columns take to build.
 const COLUMN_ROWS: usize = 65_536;
+
+/// The last pages of a table whose versions keep their values in a load, as most new versions go into them.
+const LOAD_PAGES: u32 = 16;
 
 /// The result of [`Heap::vacuum`].
 pub(crate) struct Vacuumed {
@@ -198,6 +201,18 @@ impl Tables {
         table
     }
 
+    /// The table `key` for a change of its settings, which does not change its versions.
+    fn settings(&mut self, key: (u32, u32)) -> &mut Table {
+        self.0.entry(key).or_default()
+    }
+
+    /// The table `key` for new versions at its end, which keeps the frozen values of its versions.
+    fn append(&mut self, key: (u32, u32)) -> &mut Table {
+        let table = self.0.entry(key).or_default();
+        table.columns = Columns::default();
+        table
+    }
+
     /// The tables for which `touched` is true, for a change of their versions. The other tables keep their columns.
     fn touched_mut(
         &mut self,
@@ -214,9 +229,13 @@ impl Tables {
     }
 }
 
-/// The values of all the versions of a table in encoded columns, which take the place of the values of the versions. The versions then have no values. A change of the table or a read by rows decodes the values back into the versions.
+/// The values of versions of a table in encoded columns, which take the place of the values of the versions. A frozen version has no values. A change of the table, other than new versions, or a read by rows decodes the values back into the versions.
 #[derive(Debug)]
 struct Frozen {
+    /// The number of frozen versions, which are the rows of the columns.
+    rows: usize,
+    /// The place after the last frozen version. The versions from it on keep their values, and so do the versions that went between the frozen ones after the freeze.
+    end: usize,
     /// The column of each place, with the values of all the versions in their order.
     columns: Vec<Arc<Stored>>,
 }
@@ -257,16 +276,62 @@ fn same(a: &Value, b: &Value) -> bool {
     }
 }
 
-/// Gives each value of the column `stored` to `each`, in the order of the rows.
-fn decode(stored: &Stored, mut each: impl FnMut(Value)) -> Result<()> {
-    let mut values = Vec::new();
-    for column in &stored.segments {
-        for at in 0..column.vectors.len() {
-            column.values(at, stored.dict.as_ref(), &mut values)?;
-            values.drain(..).for_each(&mut each);
+/// The values of a column, in the order of the rows, decoded a vector at a time.
+struct Decoded<'a> {
+    stored: &'a Stored,
+    segment: usize,
+    vector: usize,
+    /// The values of the vector that are left, last first.
+    values: Vec<Value>,
+    /// True when a vector did not decode, which ends the values.
+    failed: bool,
+}
+
+impl<'a> Decoded<'a> {
+    fn new(stored: &'a Stored) -> Self {
+        Decoded { stored, segment: 0, vector: 0, values: Vec::new(), failed: false }
+    }
+
+    /// Skips the first `rows` values, a whole vector at a time when it can.
+    fn pass(&mut self, mut rows: usize) {
+        while let Some(column) = self.stored.segments.get(self.segment) {
+            match column.vectors.get(self.vector) {
+                Some(vector) if self.values.is_empty() && vector.rows as usize <= rows => {
+                    rows -= vector.rows as usize;
+                    self.vector += 1;
+                }
+                Some(_) => break,
+                None => {
+                    self.segment += 1;
+                    self.vector = 0;
+                }
+            }
+        }
+        for _ in 0..rows {
+            self.next();
         }
     }
-    Ok(())
+}
+
+impl Iterator for Decoded<'_> {
+    type Item = Value;
+
+    fn next(&mut self) -> Option<Value> {
+        while self.values.is_empty() && !self.failed {
+            let column = self.stored.segments.get(self.segment)?;
+            if self.vector >= column.vectors.len() {
+                self.segment += 1;
+                self.vector = 0;
+                continue;
+            }
+            if column.values(self.vector, self.stored.dict.as_ref(), &mut self.values).is_err() {
+                self.failed = true;
+            }
+            self.values.reverse();
+            self.vector += 1;
+        }
+        self.values.pop()
+    }
 }
 
 /// The columns of a table that the scans read, which the heap makes from the versions when every version is live. A change of the table drops them.
@@ -469,65 +534,156 @@ fn dirty(version: &Version, xid: u32, running: &BTreeSet<u32>) -> Seen {
 }
 
 impl Table {
-    /// Moves the values of all the versions into encoded columns, when each column keeps its values exactly. The heap checks each column with a decode before it drops the values. A table with versions of different lengths, or with a value that no column type keeps, stays as it is.
+    /// Moves the values of all the versions into the encoded columns, when each column keeps its values exactly. When new versions went between the frozen ones, the heap makes each column again from all the versions, one column at a time.
     fn freeze(&mut self) {
-        if self.frozen.is_some() {
-            return;
+        match &self.frozen {
+            Some(frozen) if frozen.rows != frozen.end => self.refreeze(),
+            _ => self.freeze_to(self.versions.len()),
         }
-        let Some(width) = self.versions.first().map(|version| version.values.len()) else {
+    }
+
+    /// [`Table::freeze`] in a load, which keeps the values of the versions in the last pages, as a new version can still go into them. It waits for [`COLUMN_ROWS`] new versions after the frozen ones.
+    fn freeze_load(&mut self) {
+        let start = self.frozen.as_ref().map_or(0, |frozen| frozen.end);
+        let Some(last) = self.versions.last() else { return };
+        let cut = page_of(last.tid).saturating_sub(LOAD_PAGES);
+        let cut = pages::tid(generation_of(last.tid), cut, 0);
+        let end = self.versions.partition_point(|version| version.tid < cut);
+        if end >= start + COLUMN_ROWS {
+            self.freeze_to(end);
+        }
+    }
+
+    /// Moves the values of the versions after the last frozen one and before the place `end` into the encoded columns. The heap checks the new rows of each column with a decode before it drops the values. When the versions have different lengths, or a value has no column type or not the type of its column, the table stays as it is.
+    fn freeze_to(&mut self, end: usize) {
+        let start = self.frozen.as_ref().map_or(0, |frozen| frozen.end);
+        let Some(tail) = self.versions.get(start..end) else { return };
+        let Some(width) = self
+            .frozen
+            .as_ref()
+            .map(|frozen| frozen.columns.len())
+            .or_else(|| tail.first().map(|version| version.values.len()))
+        else {
             return;
         };
-        if width == 0 || self.versions.iter().any(|version| version.values.len() != width) {
+        if width == 0 || tail.is_empty() || tail.iter().any(|version| version.values.len() != width)
+        {
+            return;
+        }
+        let rows = self.frozen.as_ref().map_or(0, |frozen| frozen.rows);
+        let mut columns = Vec::with_capacity(width);
+        for at in 0..width {
+            let Some(kind) = kind_of(tail.iter().map(|version| &version.values[at])) else {
+                return;
+            };
+            let values = tail.iter().map(|version| version.values.get(at));
+            let stored = match &self.frozen {
+                // A column of nulls only takes the type of the column it goes on.
+                Some(frozen) => {
+                    let mut stored = Stored::clone(&frozen.columns[at]);
+                    let nulls = tail.iter().all(|version| version.values[at].is_null());
+                    if stored.kind != kind && !nulls {
+                        return;
+                    }
+                    if stored.extend(values).is_err() {
+                        return;
+                    }
+                    stored
+                }
+                None => match self.columns.stored.get(&at) {
+                    Some(stored) if stored.kind == kind => Stored::clone(stored),
+                    _ => match Stored::build(kind, values) {
+                        Ok(stored) => stored,
+                        Err(_) => return,
+                    },
+                },
+            };
+            let mut decoded = Decoded::new(&stored);
+            decoded.pass(rows);
+            let exact = tail.iter().all(|version| {
+                decoded.next().is_some_and(|value| same(&version.values[at], &value))
+            });
+            if !exact || decoded.next().is_some() || decoded.failed {
+                return;
+            }
+            columns.push(Arc::new(stored));
+        }
+        for version in &mut self.versions[start..end] {
+            version.values = Box::default();
+        }
+        self.frozen = Some(Frozen { rows: rows + end - start, end, columns });
+    }
+
+    /// The values of the column `at` of each version, in order, with the values of the frozen versions decoded from the column.
+    fn column_values(&self, at: usize) -> Vec<Value> {
+        let mut decoded = self.frozen.as_ref().map(|frozen| Decoded::new(&frozen.columns[at]));
+        self.versions
+            .iter()
+            .map(|version| match &mut decoded {
+                Some(decoded) if version.values.is_empty() => decoded.next().unwrap_or(Value::Null),
+                _ => version.values.get(at).cloned().unwrap_or(Value::Null),
+            })
+            .collect()
+    }
+
+    /// Makes each column of a frozen table again from the values of all the versions, when new versions went between the frozen ones. The heap checks each new column with a decode, and the table stays as it is when a column does not keep its values.
+    fn refreeze(&mut self) {
+        let Some(frozen) = &self.frozen else { return };
+        let width = frozen.columns.len();
+        if self
+            .versions
+            .iter()
+            .any(|version| !version.values.is_empty() && version.values.len() != width)
+        {
             return;
         }
         let mut columns = Vec::with_capacity(width);
         for at in 0..width {
-            let Some(kind) = kind_of(self.versions.iter().map(|version| &version.values[at]))
-            else {
-                return;
-            };
-            let stored = match self.columns.stored.get(&at) {
-                Some(stored) if stored.kind == kind => Arc::clone(stored),
-                _ => {
-                    let values = self.versions.iter().map(|version| version.values.get(at));
-                    match Stored::build(kind, values) {
-                        Ok(stored) => Arc::new(stored),
-                        Err(_) => return,
-                    }
-                }
-            };
-            let mut versions = self.versions.iter();
-            let mut exact = true;
-            let decoded = decode(&stored, |value| {
-                exact &= versions.next().is_some_and(|version| same(&version.values[at], &value));
-            });
-            if decoded.is_err() || !exact || versions.next().is_some() {
+            let values = self.column_values(at);
+            let Some(kind) = kind_of(values.iter()) else { return };
+            let kind =
+                if values.iter().all(Value::is_null) { frozen.columns[at].kind } else { kind };
+            let Ok(stored) = Stored::build(kind, values.iter().map(Some)) else { return };
+            let mut decoded = Decoded::new(&stored);
+            let exact =
+                values.iter().all(|value| decoded.next().is_some_and(|got| same(value, &got)));
+            if !exact || decoded.next().is_some() || decoded.failed {
                 return;
             }
-            columns.push(stored);
+            columns.push(Arc::new(stored));
         }
         for version in &mut self.versions {
             version.values = Box::default();
         }
-        self.frozen = Some(Frozen { columns });
+        let rows = self.versions.len();
+        self.frozen = Some(Frozen { rows, end: rows, columns });
     }
 
-    /// The values of each version of a frozen table, decoded from its columns, or `None` when the table is not frozen.
-    fn decoded(&self) -> Option<Vec<Box<[Value]>>> {
-        let frozen = self.frozen.as_ref()?;
-        let mut rows: Vec<Vec<Value>> =
-            (0..self.versions.len()).map(|_| Vec::with_capacity(frozen.columns.len())).collect();
-        for stored in &frozen.columns {
-            let mut row = rows.iter_mut();
-            // The freeze decoded each column to the same values, so the decode does not fail.
-            let decoded = decode(stored, |value| {
-                if let Some(row) = row.next() {
-                    row.push(value);
-                }
-            });
-            debug_assert!(decoded.is_ok(), "a frozen column does not decode");
+    /// Gives `each` the place and the values of each version of the table, in order, with the values of the frozen versions decoded from their columns.
+    fn each_row(&self, mut each: impl FnMut(usize, &[Value])) {
+        let Some(frozen) = &self.frozen else {
+            for (at, version) in self.versions.iter().enumerate() {
+                each(at, &version.values);
+            }
+            return;
+        };
+        let mut columns: Vec<Decoded<'_>> =
+            frozen.columns.iter().map(|stored| Decoded::new(stored)).collect();
+        let mut row = Vec::with_capacity(columns.len());
+        for (at, version) in self.versions.iter().enumerate() {
+            if version.values.is_empty() {
+                row.clear();
+                row.extend(columns.iter_mut().map(|column| column.next().unwrap_or(Value::Null)));
+                each(at, &row);
+            } else {
+                each(at, &version.values);
+            }
         }
-        Some(rows.into_iter().map(Vec::into_boxed_slice).collect())
+        // The freeze decoded each column to the same values, so the decode does not fail.
+        debug_assert!(
+            columns.iter().all(|column| !column.failed),
+            "a frozen column does not decode"
+        );
     }
 
     /// The table for a change of its versions, which then has the values of its versions and no columns.
@@ -537,15 +693,23 @@ impl Table {
         self
     }
 
-    /// Puts the values of a frozen table back into its versions.
+    /// Puts the values of the frozen versions of the table back into the versions.
     fn thaw(&mut self) {
-        let Some(rows) = self.decoded() else { return };
+        if self.frozen.is_none() {
+            return;
+        }
+        let mut rows = Vec::new();
+        self.each_row(|at, values| {
+            if self.versions[at].values.is_empty() {
+                rows.push((at, Box::<[Value]>::from(values)));
+            }
+        });
         self.frozen = None;
-        for (version, values) in self.versions.iter_mut().zip(rows) {
-            version.values = values;
+        for (at, values) in rows {
+            self.versions[at].values = values;
         }
     }
-    /// Adds a version with the ID `kept` that an earlier try of the write had, or with a new ID, at its place in the order of the IDs. The version goes in the map of each unique key. `fresh` has the keys of the version in the indexes of `unique` with an expression. The map of an index with an expression that is not in `unique` becomes stale.
+
     fn add(
         &mut self,
         kept: Option<u64>,
@@ -589,6 +753,10 @@ impl Table {
             self.versions.push(version);
         } else {
             let at = self.versions.partition_point(|other| other.tid < tid);
+            // A new version between the frozen ones keeps its values, and the place after the last frozen version moves on.
+            if let Some(frozen) = self.frozen.as_mut().filter(|frozen| at < frozen.end) {
+                frozen.end += 1;
+            }
             self.versions.insert(at, version);
         }
         tid
@@ -1121,6 +1289,9 @@ impl Heap {
         for &(at, kind) in wanted {
             if let Some(frozen) = &table.frozen {
                 // A frozen table has no values in its versions to make a column of another type from.
+                if frozen.rows != table.versions.len() {
+                    return None;
+                }
                 let stored = frozen.columns.get(at).filter(|stored| stored.kind == kind)?;
                 out.push(Arc::clone(stored));
                 continue;
@@ -1256,10 +1427,12 @@ impl Heap {
             let mut state = self.state();
             state.wrote(view.xid, (view.database, relation));
             let State { tables, toast_oids, .. } = &mut *state;
-            let table = tables.entry((view.database, relation));
+            let table = tables.append((view.database, relation));
             for values in rows {
                 ids.push(table.add(None, made, values, (unique, &[]), None, toast_oids));
             }
+            // A large load moves the values of its versions into columns as it goes, so the rows of the load are not all in memory at once.
+            table.freeze_load();
             return Ok(Changed::Done(count));
         }
         let mut keys = Vec::with_capacity(rows.len());
@@ -1521,7 +1694,7 @@ impl Heap {
     /// Marks the statement of `view` as the bulk insert of `CREATE TABLE AS` into the table `relation`, which extends the heap by more pages at a time, as a `BulkInsertState` does.
     pub(crate) fn start_bulk(&self, relation: u32, view: &View) {
         let mut state = self.state();
-        let table = state.tables.entry((view.database, relation));
+        let table = state.tables.settings((view.database, relation));
         table.bulk = Some((view.xid, view.command));
     }
 
@@ -1675,7 +1848,7 @@ impl Heap {
     /// `update_attstats`: replaces the rows of `pg_statistic` of a table for the columns of `rows`, outside of the transactions.
     pub(crate) fn set_statistics(&self, database: u32, relation: u32, rows: Vec<Statistic>) {
         let mut state = self.state();
-        let table = state.tables.entry((database, relation));
+        let table = state.tables.settings((database, relation));
         for row in rows {
             table.statistics.insert((row.attnum, row.inherit), row);
         }
@@ -1700,7 +1873,7 @@ impl Heap {
         fillfactor: u8,
     ) {
         let mut state = self.state();
-        let table = state.tables.entry((database, relation));
+        let table = state.tables.settings((database, relation));
         table.save_free = 8192 * usize::from(100 - fillfactor.min(100)) / 100;
         if table.fixed != fixed {
             table.fixed = fixed;
@@ -1735,7 +1908,7 @@ impl Heap {
     /// `vac_update_relstats`: sets `relpages` and `reltuples` of a table, outside of the transactions.
     pub(crate) fn set_stats(&self, database: u32, relation: u32, relpages: i32, reltuples: f32) {
         let mut state = self.state();
-        state.tables.entry((database, relation)).pages.set_stats(relpages, reltuples);
+        state.tables.settings((database, relation)).pages.set_stats(relpages, reltuples);
     }
 
     /// `heap_vacuum_rel` of the table `relation` for the session `pid`: the versions that a transaction deleted before each snapshot and transaction in progress went, as `HeapTupleSatisfiesVacuum` finds them `HEAPTUPLE_DEAD`, give their space and their line pointers back. The pages that the visibility map marks for `skip` keep their versions. Each page that `VACUUM` scans goes to the free space map, with its bits in the visibility map. `indexed` is true when the table has an index, `freeze` freezes the versions that each snapshot sees, and `truncate` lets the heap lose its empty pages at the end.
@@ -2161,11 +2334,12 @@ impl Heap {
         state.tables.0.len().put(out);
         for (key, table) in &state.tables.0 {
             key.put(out);
-            let decoded = table.decoded();
-            let kept =
-                || table.versions.iter().enumerate().filter(|(_, v)| !running.contains(&v.xmin));
-            kept().count().put(out);
-            for (at, v) in kept() {
+            table.versions.iter().filter(|v| !running.contains(&v.xmin)).count().put(out);
+            table.each_row(|at, values| {
+                let v = &table.versions[at];
+                if running.contains(&v.xmin) {
+                    return;
+                }
                 let (aborted, xmax, cmax) = if running.contains(&v.xmax) {
                     (v.xmax, 0, 0)
                 } else {
@@ -2174,8 +2348,11 @@ impl Heap {
                 (v.tid, v.made, v.xmin, v.cmin).put(out);
                 (xmax, cmax, aborted, v.next).put(out);
                 v.len.put(out);
-                decoded.as_ref().map_or(&v.values, |rows| &rows[at]).put(out);
-            }
+                put_count(out, values.len());
+                for value in values {
+                    value.put(out);
+                }
+            });
             table.made.put(out);
             // The pages of the heap before the `TRUNCATE` of a transaction in progress, which aborts.
             table.truncated.first().map_or(&table.pages, |(.., pages)| pages).put(out);
