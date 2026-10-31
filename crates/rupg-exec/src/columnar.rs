@@ -97,6 +97,14 @@ impl KeyMap {
             },
         }
     }
+
+    /// Makes room for `more` more groups.
+    fn reserve(&mut self, more: usize) {
+        match self {
+            KeyMap::Small(map) => map.reserve(more),
+            KeyMap::Large(map) => map.reserve(more),
+        }
+    }
 }
 
 /// The physical type that a column of the type `ty` has in a segment.
@@ -1661,8 +1669,14 @@ fn grouped(
     let mut map = KeyMap::new(keys.len() + 1, if keys.is_empty() { 0 } else { expected });
     let mut new_rows: Vec<u32> = Vec::new();
     let mut firsts: Vec<Vec<Value>> = Vec::new();
-    // The values of the keys of each group, from its first row.
+    // The places and the types of the keys of the hash table of the plan. The scan finds the hash of each group from its first row, and keeps no values of the keys.
+    let mut hashing = plan_keys(scan.exec.session, query);
+    let mut hashes: Vec<u32> = Vec::new();
+    let mut hash_error: Option<Error> = None;
+    // The values of the keys of each group, from its first row, when the scan finds no hashes.
     let mut key_values: Vec<Value> = Vec::new();
+    let rows = scan.rows;
+    let mut seen = 0;
     let mut bail = false;
     let mut word = vec![0_u64; keys.len() + 1];
     let mut ids: Vec<u32> = Vec::with_capacity(VECTOR);
@@ -1720,10 +1734,29 @@ fn grouped(
                 if new {
                     groups += 1;
                     new_rows.push(row_at);
-                    key_values.extend(cols.iter().map(|c| c.value(i, &exec.dicts)));
+                    if let Some(places) = &hashing {
+                        if hash_error.is_none() {
+                            match key_hash(places, &cols, i, &exec.dicts) {
+                                Ok(h) => hashes.push(h),
+                                // A key that the hash of the plan cannot read: the groups go in the order of a sort, as before the hash.
+                                Err(_) if hashes.is_empty() => {
+                                    hashing = None;
+                                    key_values.extend(cols.iter().map(|c| c.value(i, &exec.dicts)));
+                                }
+                                Err(error) => hash_error = Some(error),
+                            }
+                        }
+                    } else {
+                        key_values.extend(cols.iter().map(|c| c.value(i, &exec.dicts)));
+                    }
                 }
                 ids.push(id);
             }
+            // After the first batch, the map makes room for the groups that the rate of new groups gives, so it does not grow many times.
+            if seen == 0 && groups * 2 > sel.len() {
+                map.reserve((groups * rows / sel.len().max(1)).min(rows).saturating_sub(groups));
+            }
+            seen += sel.len();
             if !new_rows.is_empty() {
                 let start = firsts.len();
                 firsts.extend(
@@ -1955,7 +1988,11 @@ fn grouped(
         kept[column] = true;
     }
     let tables = scan::kept_tables(query, firsts, &kept);
-    let order = group_order(query, session, &key_values, groups, trailing)?;
+    if let Some(error) = hash_error {
+        return Err(error);
+    }
+    let hashes = hashing.map(|_| hashes);
+    let order = group_order(query, session, &key_values, hashes.as_deref(), groups, trailing)?;
     let (rows, ordered) = project(
         query,
         params,
@@ -2000,20 +2037,50 @@ fn grow(
 /// The number of groups that the hash table of the plan expects, or 0 when the plan has no hash table for the groups.
 fn session_groups(session: &dyn Session, query: &Query) -> usize {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    session.hash_tables(query).and_then(|t| t.group.as_ref().map(|g| g.groups as usize)).unwrap_or(0)
+    session
+        .hash_tables(query)
+        .and_then(|t| t.group.as_ref().map(|g| g.groups as usize))
+        .unwrap_or(0)
 }
 
-/// The order of the groups, as the row engine gives them: the order of the hash table of the `HashAggregate` of the plan, the order of the keys for a sort, or the order of the first rows.
+/// The places in `GROUP BY` and the types of the keys of the hash table of the `HashAggregate` of the plan, or `None` when the plan has no such table.
+fn plan_keys(session: &dyn Session, query: &Query) -> Option<Vec<(usize, u32)>> {
+    if query.group.is_empty() {
+        return None;
+    }
+    let table = session.hash_tables(query)?.group.clone()?;
+    table
+        .keys
+        .iter()
+        .map(|t| {
+            let p = query.group.iter().position(|g| g.target == *t)?;
+            Some((p, query.targets[query.group[p].target].expr.ty))
+        })
+        .collect()
+}
+
+/// The hash of the keys `places` of the row `i` of the key columns `cols`, as the hash table of the plan finds it.
+fn key_hash(places: &[(usize, u32)], cols: &[Col], i: usize, dicts: &[Dict]) -> Result<u32> {
+    hashed::hash(places.iter().map(|&(p, ty)| (ty, cols[p].value(i, dicts))))
+}
+
+/// The order of the groups, as the row engine gives them: the order of the hash table of the `HashAggregate` of the plan, the order of the keys for a sort, or the order of the first rows. `hashes` has the hash of each group when the scan found them.
 fn group_order(
     query: &Query,
     session: &dyn Session,
     key_values: &[Value],
+    hashes: Option<&[u32]>,
     groups: usize,
     trailing: bool,
 ) -> Result<Vec<usize>> {
     let first: Vec<usize> = (0..groups).collect();
     if query.group.is_empty() {
         return Ok(first);
+    }
+    if let Some(hashes) = hashes
+        && let Some(table) = session.hash_tables(query).and_then(|t| t.group.clone())
+    {
+        return hashed::order_of(hashes, table.groups, trailing);
     }
     let width = query.group.len();
     let keys: Vec<&[Value]> = key_values.chunks(width).collect();
