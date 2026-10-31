@@ -792,6 +792,13 @@ impl Connection {
         applied
     }
 
+    /// `standard_ExecutorStart`: a query with a row mark uses its command ID with `GetCurrentCommandId(true)`, so the next statement runs in a new command.
+    pub(crate) fn lock_command(&self, plan: &Plan, view: &View) {
+        if plan.lock_clause().is_some() {
+            self.command.set(self.command.get().max(view.command + 1));
+        }
+    }
+
     /// `CheckTableNotInUse`: true when a write of the statement or an open cursor has the table `table` open.
     pub(crate) fn table_in_use(&self, table: u32) -> bool {
         self.open_tables.borrow().contains(&table)
@@ -2534,6 +2541,7 @@ impl Connection {
         let columns = query::columns(&plan);
         let rows = query::run_select(&plan, &[], &reader, &[]);
         late.extend(reader.take_warnings().into_iter().map(Notice::of_function));
+        self.lock_command(&plan, view);
         match rows {
             Ok(rows) => {
                 let ended = self.end_writes(writes, &[], Vec::new());
@@ -5460,6 +5468,12 @@ mod tests {
     #[test]
     fn range_type() {
         big_stack(|| script(include_str!("connection/range_type.test")));
+    }
+
+    /// The system columns `cmin` and `cmax` show `t_cid`: the command that inserted the version, then the command that deleted it, or a combo command ID when the transaction that inserted the version deleted it, also after a rollback of the delete. A query with `FOR UPDATE` uses a command. `connection/combocid.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn combocid() {
+        big_stack(|| script(include_str!("connection/combocid.test")));
     }
 
     /// `FOR UPDATE`, `FOR NO KEY UPDATE`, `FOR SHARE` and `FOR KEY SHARE`: the clauses on all the relations and on the relations with a name, the errors of `transformLockingClause` and `CheckSelectLocking`, the locks on subqueries, joins, functions, queries of `WITH` and views, the nullable side of an outer join, a sequence, the cursors that lock rows, and a read-only transaction. `connection/for_update.test` is the output of PostgreSQL 19 for the same script in a new database.
