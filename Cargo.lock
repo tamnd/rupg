@@ -324,6 +324,13 @@ version = "0.4.15"
 [[package]]
 name = "rupg-column"
 version = "0.4.15"
+dependencies = [
+ "rupg-common",
+ "rupg-encode",
+ "rupg-kernels",
+ "rupg-summary",
+ "rupg-types",
+]
 
 [[package]]
 name = "rupg-common"

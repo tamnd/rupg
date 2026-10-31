@@ -7,3 +7,4 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod crc32c;
+pub mod hash;
