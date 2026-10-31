@@ -19,8 +19,18 @@ const MAX_SIZE: u64 = 1 << 32;
 const HASH_MEM: f64 = 8.0 * 1024.0 * 1024.0;
 /// About the size of an entry of the table with its row, which limits the first size of the table.
 const ENTRY_SIZE: f64 = 64.0;
-/// A bucket with no entry.
+/// The entry of a bucket with no entry.
 const EMPTY: u32 = u32::MAX;
+
+/// A bucket of the table: the number of its entry, or [`EMPTY`], and the hash of the entry, as `simplehash.h` keeps the hash in the entry.
+#[derive(Clone, Copy)]
+struct Bucket {
+    entry: u32,
+    hash: u32,
+}
+
+/// A bucket with no entry.
+const NONE: Bucket = Bucket { entry: EMPTY, hash: 0 };
 
 /// `murmurhash32`.
 fn murmurhash32(data: u32) -> u32 {
@@ -61,10 +71,10 @@ pub(crate) fn buckets(groups: f64) -> u64 {
 
 /// A hash table of `simplehash.h` with the hash of each entry. The entries are numbered in the order that they go into the table.
 pub(crate) struct Table {
-    /// The entry of each bucket, or [`EMPTY`].
-    buckets: Vec<u32>,
-    /// The hash of each entry.
-    hashes: Vec<u32>,
+    /// The buckets.
+    buckets: Vec<Bucket>,
+    /// The number of entries.
+    members: u32,
     /// `grow_threshold`.
     grow_threshold: u64,
 }
@@ -78,7 +88,7 @@ impl Table {
             clippy::cast_precision_loss
         )]
         let size = ((elements as f64 / FILLFACTOR) as u64).min(MAX_SIZE);
-        let mut table = Table { buckets: Vec::new(), hashes: Vec::new(), grow_threshold: 0 };
+        let mut table = Table { buckets: Vec::new(), members: 0, grow_threshold: 0 };
         table.resize(size);
         table
     }
@@ -94,7 +104,7 @@ impl Table {
         )]
         {
             self.grow_threshold = (size as f64 * factor) as u64;
-            self.buckets = vec![EMPTY; size as usize];
+            self.buckets = vec![NONE; size as usize];
         }
     }
 
@@ -114,7 +124,7 @@ impl Table {
     }
 
     fn members(&self) -> u64 {
-        self.hashes.len() as u64
+        u64::from(self.members)
     }
 
     /// True when the table is full enough to grow for a long run.
@@ -130,18 +140,18 @@ impl Table {
         let start = old
             .iter()
             .enumerate()
-            .position(|(i, &e)| e == EMPTY || self.optimal(self.hashes[e as usize]) == i)
+            .position(|(i, b)| b.entry == EMPTY || self.optimal(b.hash) == i)
             .unwrap_or(0);
-        for i in 0..old.len() {
-            let entry = old[(start + i) % old.len()];
-            if entry == EMPTY {
+        let mask = self.mask();
+        for &old in old[start..].iter().chain(&old[..start]) {
+            if old.entry == EMPTY {
                 continue;
             }
-            let mut bucket = self.optimal(self.hashes[entry as usize]);
-            while self.buckets[bucket] != EMPTY {
-                bucket = (bucket + 1) & self.mask();
+            let mut bucket = self.optimal(old.hash);
+            while self.buckets[bucket].entry != EMPTY {
+                bucket = (bucket + 1) & mask;
             }
-            self.buckets[bucket] = entry;
+            self.buckets[bucket] = old;
         }
     }
 
@@ -160,21 +170,21 @@ impl Table {
             let mut bucket = self.optimal(hash);
             let mut insert_distance = 0;
             loop {
-                let entry = self.buckets[bucket];
+                let Bucket { entry, hash: other } = self.buckets[bucket];
                 if entry == EMPTY {
                     return Ok((self.add(bucket, hash), false));
                 }
-                if self.hashes[entry as usize] == hash && equal(entry)? {
+                if other == hash && equal(entry)? {
                     return Ok((entry, true));
                 }
-                let distance = self.distance(self.optimal(self.hashes[entry as usize]), bucket);
+                let distance = self.distance(self.optimal(other), bucket);
                 if insert_distance > distance {
                     // The entries from this bucket to the next empty bucket move one bucket forward.
                     let mut empty = bucket;
                     let mut moves = 0;
                     loop {
                         empty = (empty + 1) & mask;
-                        if self.buckets[empty] == EMPTY {
+                        if self.buckets[empty].entry == EMPTY {
                             break;
                         }
                         moves += 1;
@@ -202,10 +212,9 @@ impl Table {
 
     /// A new entry with the hash in the bucket.
     fn add(&mut self, bucket: usize, hash: u32) -> u32 {
-        #[allow(clippy::cast_possible_truncation)]
-        let entry = self.hashes.len() as u32;
-        self.hashes.push(hash);
-        self.buckets[bucket] = entry;
+        let entry = self.members;
+        self.members += 1;
+        self.buckets[bucket] = Bucket { entry, hash };
         entry
     }
 
@@ -217,11 +226,11 @@ impl Table {
     ) -> Result<Option<u32>> {
         let mut bucket = self.optimal(hash);
         loop {
-            let entry = self.buckets[bucket];
+            let Bucket { entry, hash: other } = self.buckets[bucket];
             if entry == EMPTY {
                 return Ok(None);
             }
-            if self.hashes[entry as usize] == hash && equal(entry)? {
+            if other == hash && equal(entry)? {
                 return Ok(Some(entry));
             }
             bucket = (bucket + 1) & self.mask();
@@ -231,11 +240,11 @@ impl Table {
     /// `SH_START_ITERATE` and `SH_ITERATE`: the entries in the order of a scan of the table, from the first empty bucket back to it.
     pub(crate) fn order(&self) -> Vec<u32> {
         let mask = self.mask();
-        let start = self.buckets.iter().position(|&e| e == EMPTY).unwrap_or(0);
-        let mut out = Vec::with_capacity(self.hashes.len());
+        let start = self.buckets.iter().position(|b| b.entry == EMPTY).unwrap_or(0);
+        let mut out = Vec::with_capacity(self.members as usize);
         let mut bucket = start;
         loop {
-            let entry = self.buckets[bucket];
+            let entry = self.buckets[bucket].entry;
             bucket = (bucket + mask) & mask;
             if entry != EMPTY {
                 out.push(entry);
@@ -325,7 +334,7 @@ mod tests {
         for h in [0, 8, 1, 16] {
             table.insert(h, &mut |_| Ok(false)).unwrap();
         }
-        assert_eq!(table.buckets[..4], [0, 1, 3, 2]);
+        assert_eq!(table.buckets[..4].iter().map(|b| b.entry).collect::<Vec<_>>(), [0, 1, 3, 2]);
     }
 
     #[test]
