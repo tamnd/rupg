@@ -60,6 +60,8 @@ pub struct ProcRow {
     pub retset: bool,
     /// `provolatile`: `i` immutable, `s` stable or `v` volatile.
     pub volatile: u8,
+    /// `proparallel`: `s` safe, `r` restricted or `u` unsafe.
+    pub parallel: u8,
     /// `procost`: the cost of a call in units of `cpu_operator_cost`.
     pub cost: f32,
     /// `proleakproof`: the function gives no information about its arguments other than its result.
@@ -695,7 +697,7 @@ fn load_procs() -> Vec<ProcRow> {
     let (variadic, kind, strict) = (r.oid("provariadic"), r.char("prokind"), r.bool("proisstrict"));
     let (retset, volatile, cost) =
         (r.bool("proretset"), r.char("provolatile"), r.float4("procost"));
-    let leakproof = r.bool("proleakproof");
+    let (leakproof, parallel) = (r.bool("proleakproof"), r.char("proparallel"));
     let (nargs, nargdefaults, rettype) =
         (r.int2("pronargs"), r.int2("pronargdefaults"), r.oid("prorettype"));
     let argtypes = match r.batch("proargtypes").values {
@@ -714,6 +716,7 @@ fn load_procs() -> Vec<ProcRow> {
             strict: strict[i],
             retset: retset[i],
             volatile: volatile[i],
+            parallel: parallel[i],
             cost: cost[i],
             leakproof: leakproof[i],
             nargs: nargs[i],
@@ -1301,6 +1304,8 @@ pub struct SessionFunction {
     pub strict: bool,
     pub retset: bool,
     pub volatile: u8,
+    /// `proparallel`: `s` safe, `r` restricted or `u` unsafe.
+    pub parallel: u8,
     /// `procost`, a positive number.
     pub cost: f32,
     /// `proleakproof`.
@@ -1538,6 +1543,7 @@ fn function_row(new: &SessionFunction) -> ProcRow {
         strict: new.strict,
         retset: new.retset,
         volatile: new.volatile,
+        parallel: new.parallel,
         cost: new.cost,
         leakproof: new.leakproof,
         nargs: i16::try_from(new.argtypes.len()).unwrap_or(i16::MAX),

@@ -29,7 +29,7 @@ use rupg_plan::{
 };
 use rupg_types::{Value, oid};
 
-use crate::{Builder, Index, Level, Size, cost, exprs, pullup, setop, upper};
+use crate::{Builder, Index, Level, Size, cost, exprs, parallel, pullup, setop, upper};
 pub(crate) use classes::{equality, families};
 use index::Param;
 use memoize::Memo;
@@ -1163,6 +1163,26 @@ impl<'q> Builder<'q> {
             return vec![seq];
         }
         let (pages, _) = cost::table_size(relation, size);
+        // `create_plain_partial_paths`: a parallel sequential scan, with the costs of `cost_seqscan` for the share of the rows of one process, and a `Gather` of its rows, as `generate_gather_paths`.
+        let enable = crate::enable();
+        let option = self.members.and_then(|m| m.parallel(relation.oid));
+        let gathered = match option {
+            Some(option) if self.parallel && base.iter().all(|q| parallel::safe(&q.expr)) => {
+                let workers = parallel::workers(&enable, pages, option);
+                (workers > 0).then(|| {
+                    let divisor = parallel::divisor(&enable, workers);
+                    let mut node = seq.node.clone();
+                    node.parallel = true;
+                    let cpu_run = (tuples * per_row + targets.1 * rows) / divisor;
+                    node.cost.startup = startup + targets.0;
+                    node.cost.total = node.cost.startup + cpu_run + run;
+                    node.cost.rows = cost::clamp_rows(rows / divisor);
+                    let node = parallel::gather(&enable, node, workers, rows);
+                    Rel { node, rels: seq.rels.clone(), order: Vec::new() }
+                })
+            }
+            _ => None,
+        };
         let quals = base.clone();
         let outer = BTreeSet::new();
         let table = index::Table { r, pages, tuples, rows, quals, eq: &eq, outer, loops: 1.0 };
@@ -1183,7 +1203,7 @@ impl<'q> Builder<'q> {
         if current {
             return tids;
         }
-        if indexes.is_empty() && tids.is_empty() {
+        if indexes.is_empty() && tids.is_empty() && gathered.is_none() {
             return vec![seq];
         }
         let mut paths = Paths::new(stats.startup);
@@ -1194,6 +1214,9 @@ impl<'q> Builder<'q> {
         for mut rel in index::paths(level, &table, &indexes, stats) {
             add_targets(&mut rel.node);
             paths.add(costs(&rel.node), rel.order.clone(), rel);
+        }
+        if let Some(rel) = gathered {
+            paths.add(costs(&rel.node), Vec::new(), rel);
         }
         paths.kept()
     }

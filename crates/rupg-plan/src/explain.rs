@@ -250,6 +250,11 @@ struct Names {
     operation: Option<&'static str>,
 }
 
+/// True for the text form of `EXPLAIN`.
+fn text_format(format: Format) -> bool {
+    format == Format::Text
+}
+
 /// The names of a node of this kind.
 fn names(kind: &Kind<'_>) -> Names {
     let simple = |name: &'static str| Names {
@@ -303,6 +308,8 @@ fn names(kind: &Kind<'_>) -> Names {
         Kind::Sort(_) => simple("Sort"),
         Kind::IncrementalSort { .. } => simple("Incremental Sort"),
         Kind::Limit => simple("Limit"),
+        Kind::Gather { .. } => simple("Gather"),
+        Kind::GatherMerge { .. } => simple("Gather Merge"),
         Kind::Unique => simple("Unique"),
         Kind::Append => simple("Append"),
         Kind::MergeAppend(_) => simple("Merge Append"),
@@ -375,6 +382,9 @@ impl Explainer<'_, '_> {
                 self.w.buf.push_str("->  ");
                 self.w.indent += 2;
             }
+            if node.parallel {
+                self.w.buf.push_str("Parallel ");
+            }
             self.w.buf.push_str(&n.pname);
             self.w.indent += 1;
         } else {
@@ -399,7 +409,7 @@ impl Explainer<'_, '_> {
             if let Some(name) = plan_name {
                 self.w.text("Subplan Name", name);
             }
-            self.w.boolean("Parallel Aware", false);
+            self.w.boolean("Parallel Aware", node.parallel);
             self.w.boolean("Async Capable", false);
         }
         match node.kind {
@@ -762,6 +772,20 @@ impl Explainer<'_, '_> {
                 let done = self.join_quals(node, Some(("Hash Cond", cond)), join_filter, upper);
                 self.texts.below(Vec::new());
                 done?;
+            }
+            Kind::Gather { workers, .. } | Kind::GatherMerge { workers } => {
+                self.qual("Filter", scope, &node.filter, self.options.verbose)?;
+                self.removed(node, "Rows Removed by Filter", 0);
+                self.w.integer("Workers Planned", None, i64::from(*workers));
+                // The session runs the plan in the leader, with no worker.
+                if self.options.analyze {
+                    self.w.integer("Workers Launched", None, 0);
+                }
+                if let Kind::Gather { single_copy, .. } = node.kind
+                    && (single_copy || !text_format(self.w.format))
+                {
+                    self.w.boolean("Single Copy", single_copy);
+                }
             }
             Kind::Hash => self.hash_info(node),
             Kind::Materialize => self.storage(node),

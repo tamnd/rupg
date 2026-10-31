@@ -15,7 +15,7 @@ use rupg_plan::{
 
 use crate::from::paths::{Paths, costs};
 use crate::from::{self, OrderKey, sort};
-use crate::{Builder, Level, cost, exprs, output, setop};
+use crate::{Builder, Level, cost, exprs, output, parallel, setop};
 
 /// `FRAMEOPTION_ROWS`.
 const FRAME_ROWS: i32 = 0x4;
@@ -963,6 +963,12 @@ impl<'q> Builder<'q> {
                 total: c.total + startup + (cost::CPU_TUPLE + per_row) * c.rows,
                 ..c
             };
+        } else if let (Kind::Gather { .. }, [child]) = (&node.kind, node.children.as_mut_slice())
+            && query.targets.iter().all(|t| parallel::safe(&t.expr))
+        {
+            // `apply_scanjoin_target_to_paths`: the plan below the `Gather` computes a target that a worker can compute.
+            project(child, costs.scan.0, costs.scan.1);
+            parallel::regather(&mut node);
         } else {
             project(&mut node, costs.scan.0, costs.scan.1);
         }

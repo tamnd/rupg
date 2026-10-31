@@ -340,6 +340,7 @@ fn use_types(catalog: &Catalog) {
                     strict: f.strict,
                     retset: f.retset,
                     volatile: f.volatile,
+                    parallel: f.parallel,
                     cost: f.cost,
                     leakproof: f.leakproof,
                     kind: f.kind,

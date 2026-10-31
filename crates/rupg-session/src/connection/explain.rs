@@ -349,6 +349,18 @@ impl rupg_opt::Members for Members<'_, '_> {
         catalog.relation(table).is_none_or(|t| t.kind == rupg_catalog::RelKind::Table)
     }
 
+    fn parallel(&self, table: u32) -> Option<Option<i32>> {
+        let Some(catalog) = self.reader.catalog() else { return Some(None) };
+        let Some(relation) = catalog.relation(table) else { return Some(None) };
+        if catalog.is_temp_schema(relation.namespace) {
+            return None;
+        }
+        Some(relation.options.iter().find_map(|text| {
+            let (name, value) = text.split_once('=')?;
+            (name == "parallel_workers").then(|| value.parse().ok()).flatten()
+        }))
+    }
+
     fn enable(&self) -> Enable {
         let settings = self.reader.settings();
         let on = |name: &str| settings.get(name).is_none_or(|v| v != "off");
@@ -356,6 +368,10 @@ impl rupg_opt::Members for Members<'_, '_> {
             Some(guc::Setting::Int(value)) => Some(f64::from(value)),
             Some(guc::Setting::Real(value)) => Some(value),
             _ => None,
+        };
+        let count = |name: &str, default: i32| match guc::find(name).map(|p| settings.setting(p)) {
+            Some(guc::Setting::Int(value)) => value,
+            _ => default,
         };
         let work_mem = number("work_mem").unwrap_or(4096.0) * 1024.0;
         Enable {
@@ -378,6 +394,15 @@ impl rupg_opt::Members for Members<'_, '_> {
             self_join_elimination: on("enable_self_join_elimination"),
             work_mem,
             hash_mem: work_mem * number("hash_mem_multiplier").unwrap_or(2.0),
+            max_parallel_workers_per_gather: count("max_parallel_workers_per_gather", 2),
+            parallel_setup_cost: number("parallel_setup_cost").unwrap_or(1000.0),
+            parallel_tuple_cost: number("parallel_tuple_cost").unwrap_or(0.1),
+            min_parallel_table_scan_size: count("min_parallel_table_scan_size", 1024),
+            min_parallel_index_scan_size: count("min_parallel_index_scan_size", 64),
+            parallel_leader_participation: on("parallel_leader_participation"),
+            parallel_append: on("enable_parallel_append"),
+            parallel_hash: on("enable_parallel_hash"),
+            gathermerge: on("enable_gathermerge"),
         }
     }
 }

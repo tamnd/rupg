@@ -12,7 +12,7 @@ use rupg_analyze::{
 use rupg_plan::{Item, Kind, Node, Operation, Replaced, TARGET};
 use rupg_types::oid;
 
-use crate::{Level, cost, exprs, from, upper};
+use crate::{Level, cost, exprs, from, parallel, upper};
 
 /// `SelfItemPointerAttributeNumber`: the attribute number of `ctid`.
 const CTID_ATTNUM: i16 = -1;
@@ -259,6 +259,26 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             node.cost.width = width(level, node.scope, &want);
             node.output = want;
         }
+        // `create_gather_plan`: the `Gather` gives the target of the plan below it, which computes the target when a worker can compute it. Else the `Gather` computes the target from the columns of the plan below.
+        Kind::Gather { .. } | Kind::GatherMerge { .. } if !node.children.is_empty() => {
+            if want.iter().all(|w| parallel::safe(&w.expr)) {
+                node.output = want.iter().map(Item::passed).collect();
+                if let Some(child) = node.children.first_mut() {
+                    set(level, child, want, false);
+                    node.cost.width = child.cost.width;
+                }
+            } else {
+                let mut below = Vec::new();
+                for w in &want {
+                    add_columns(&w.expr, 0, &mut below);
+                }
+                if let Some(child) = node.children.first_mut() {
+                    set(level, child, below, false);
+                }
+                node.cost.width = width(level, node.scope, &want);
+                node.output = want;
+            }
+        }
         Kind::Sort(_)
         | Kind::IncrementalSort { .. }
         | Kind::Limit
@@ -310,6 +330,8 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
         | Kind::Materialize
         | Kind::Memoize(_)
         | Kind::Hash
+        | Kind::Gather { .. }
+        | Kind::GatherMerge { .. }
         | Kind::BitmapIndexScan { .. }
         | Kind::BitmapAnd
         | Kind::BitmapOr => {}
