@@ -350,6 +350,9 @@ impl Fsm {
     }
 }
 
+rupg_common::persist_struct!(Fsm { blocks, pages });
+rupg_common::persist_struct!(FsmPage { nodes, next_slot });
+
 #[cfg(test)]
 mod tests {
     use super::*;

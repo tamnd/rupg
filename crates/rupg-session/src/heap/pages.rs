@@ -1,5 +1,6 @@
 //! The pages of the heap of a table: the storage of a version in a page, the free space of each page as `RelationGetBufferForTuple` fills them, the free space map and the visibility map, and `relpages` and `reltuples` of the table.
 
+use rupg_common::persist::{Persist, Reader, corrupt};
 use rupg_encode::Method;
 use rupg_types::Value;
 
@@ -711,6 +712,45 @@ impl Pages {
         self.relallvisible = visible.min(self.relpages);
         self.relallfrozen = frozen.min(self.relpages);
         self.reltuples
+    }
+}
+
+rupg_common::persist_struct!(Pages {
+    pages,
+    target,
+    bulk,
+    fsm,
+    vm_blocks,
+    generation,
+    relpages,
+    reltuples,
+    relallvisible,
+    relallfrozen,
+});
+rupg_common::persist_struct!(Page { lines, upper, unused, visible, frozen });
+rupg_common::persist_struct!(Bulk { made, free, extended_by });
+
+/// The method of a column is its tag: 1 and 2 for `m`, 3 and 4 for `x`.
+impl Persist for Storage {
+    fn put(&self, out: &mut Vec<u8>) {
+        let method = |m: &Method| u8::from(matches!(m, Method::Lz4));
+        out.push(match self {
+            Storage::Plain => 0,
+            Storage::Main(m) => 1 + method(m),
+            Storage::External => 5,
+            Storage::Extended(m) => 3 + method(m),
+        });
+    }
+    fn take(input: &mut Reader<'_>) -> rupg_common::Result<Self> {
+        Ok(match u8::take(input)? {
+            0 => Storage::Plain,
+            1 => Storage::Main(Method::Pglz),
+            2 => Storage::Main(Method::Lz4),
+            3 => Storage::Extended(Method::Pglz),
+            4 => Storage::Extended(Method::Lz4),
+            5 => Storage::External,
+            _ => return Err(corrupt("a storage has a bad tag")),
+        })
     }
 }
 

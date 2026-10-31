@@ -6900,6 +6900,52 @@ mod tests {
         big_stack(|| script(include_str!("connection/text_compare_const.test")));
     }
 
+    /// A store that loads the image of another store has its tables, rows, keys and sequences. The insert of a transaction that is in progress is not in the image, and the delete of such a transaction does not count.
+    #[test]
+    fn store_comes_back_from_its_image() {
+        big_stack(|| {
+            let store = Arc::new(Store::new());
+            let (mut a, _) = connect_to(&store, 1234);
+            let (mut b, _) = connect_to(&store, 1235);
+            for sql in [
+                "CREATE TABLE t (a int PRIMARY KEY, b text, c numeric, d int[])",
+                "INSERT INTO t VALUES (1, 'one', 1.5, '{1,2}'), (2, 'two', NULL, NULL), (3, 'three', -7, '{}')",
+                "CREATE SEQUENCE s",
+                "SELECT nextval('s'), nextval('s')",
+                "CREATE ROLE keeper",
+            ] {
+                send(&mut a, &query(sql));
+            }
+            send(
+                &mut b,
+                &query("BEGIN; INSERT INTO t VALUES (9, 'nine'); DELETE FROM t WHERE a = 2"),
+            );
+            let image = store.image();
+            let mut back = Store::new();
+            back.load(&image).unwrap();
+            let back = Arc::new(back);
+            let (mut c, _) = connect_to(&back, 1236);
+            let rows = |c: &mut Connection, sql: &str| -> Vec<String> {
+                send(c, &query(sql))
+                    .into_iter()
+                    .filter(|l| l.starts_with("row ") || l.contains("23505"))
+                    .collect()
+            };
+            assert_eq!(
+                rows(&mut c, "SELECT * FROM t ORDER BY a"),
+                ["row 1,one,1.5,{1,2}", "row 2,two,NULL,NULL", "row 3,three,-7,{}"]
+            );
+            assert_eq!(rows(&mut c, "SELECT nextval('s')"), ["row 3"]);
+            assert_eq!(
+                rows(&mut c, "SELECT count(*) FROM pg_roles WHERE rolname = 'keeper'"),
+                ["row 1"]
+            );
+            assert_eq!(rows(&mut c, "INSERT INTO t VALUES (1, 'again')").len(), 1);
+            assert_eq!(rows(&mut c, "INSERT INTO t VALUES (9, 'nine') RETURNING a"), ["row 9"]);
+            assert!(Store::new().load(b"not an image").is_err());
+        });
+    }
+
     /// `EXPLAIN` shows no `X IS NOT NULL` for a condition `X = X` on a column with a not-null constraint, in a scan and after a self-join goes, as `restriction_is_always_true` finds it always true. A column with no not-null constraint keeps the test. `connection/always_true.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn always_true() {

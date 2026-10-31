@@ -4,7 +4,8 @@
 //!
 //! [`persist_struct!`](crate::persist_struct) writes the fields of a struct in the order that the macro names them. The struct literal in the read needs every field, so a field that a change adds and that the macro does not name is a compile error. [`persist_enum!`](crate::persist_enum) writes the number that the macro gives the variant, then the fields of the variant. The match in the write needs every variant.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::hash::{BuildHasher, Hash};
 use std::sync::Arc;
 
 use crate::{Error, Result, SqlState};
@@ -259,6 +260,21 @@ impl<T: Persist> Persist for Arc<T> {
 }
 
 impl<K: Persist + Ord, V: Persist> Persist for BTreeMap<K, V> {
+    fn put(&self, out: &mut Vec<u8>) {
+        put_count(out, self.len());
+        for (key, value) in self {
+            key.put(out);
+            value.put(out);
+        }
+    }
+    fn take(input: &mut Reader<'_>) -> Result<Self> {
+        let n = input.count()?;
+        (0..n).map(|_| Ok((K::take(input)?, V::take(input)?))).collect()
+    }
+}
+
+/// The entries of a `HashMap` are in the order of the map, so two maps with the same entries can give other bytes.
+impl<K: Persist + Eq + Hash, V: Persist, S: BuildHasher + Default> Persist for HashMap<K, V, S> {
     fn put(&self, out: &mut Vec<u8>) {
         put_count(out, self.len());
         for (key, value) in self {

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The server keeps its databases, catalogs, roles, sequences and table rows in the file `data.rupg` of the data directory. `CHECKPOINT` and the shutdown write the file, and the next start loads it (#1216).
 - Plan a `Parallel Seq Scan` under a `Gather` for a table that is large enough or has `parallel_workers`, with the costs, the parallel safety of the functions and the `EXPLAIN` output of PostgreSQL 19 (#1215).
 - A comparison of a `text` or `bpchar` column with a constant, such as `URL <> ''`, reads the value of the column in place and does not copy it (#1213).
 - The catalog of a database has a byte form (`rupg_common::persist`), the first step to keep the catalog in the `.rupg` file (#1211).

@@ -258,3 +258,28 @@ impl Roles {
         builtin::roles().iter().map(|r| (r.name, r.oid)).chain(created)
     }
 }
+
+rupg_common::persist_struct!(Role { oid, name, attrs, connlimit, password, valid_until });
+rupg_common::persist_struct!(Attrs {
+    superuser,
+    inherit,
+    createrole,
+    createdb,
+    login,
+    replication,
+    bypassrls,
+});
+rupg_common::persist_struct!(Member { oid, role, member, grantor, admin, inherit, set });
+rupg_common::persist_struct!(DatabaseChange {
+    oid,
+    name,
+    owner,
+    acl,
+    is_template,
+    allow_connections,
+    connection_limit,
+    tablespace,
+});
+rupg_common::persist_struct!(TablespaceChange { oid, name, owner, acl, options });
+rupg_common::persist_struct!(SharedComment { class, oid, text });
+rupg_common::persist_struct!(Roles { roles, members, databases, tablespaces, comments });

@@ -18,6 +18,8 @@ use crate::guc::Source;
 use crate::heap::Heap;
 use crate::notify::Listeners;
 
+mod image;
+
 /// `BOOTSTRAP_SUPERUSERID`.
 const BOOTSTRAP_SUPERUSER: u32 = 10;
 
@@ -57,6 +59,8 @@ pub struct Store {
     relations: Mutex<HashMap<(u32, u32), RelationCounts>>,
     /// The rows of the tables.
     heap: Heap,
+    /// The file of the image of the store, which a checkpoint writes, or `None` for a store with no file.
+    image: Option<image::ImageFile>,
     /// The sessions that listen for notifications.
     listeners: Listeners,
 }

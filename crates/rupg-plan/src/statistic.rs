@@ -35,3 +35,6 @@ pub struct StatSlot {
     pub numbers: Option<Vec<f32>>,
     pub values: Option<Vec<Value>>,
 }
+
+rupg_common::persist_struct!(Statistic { attnum, inherit, null_frac, width, distinct, slots });
+rupg_common::persist_struct!(StatSlot { kind, operator, collation, numbers, values });
