@@ -174,6 +174,17 @@ impl Dict {
         }
     }
 
+    /// The bytes of the text of the code `code`, or `None` for a dictionary of values that are not text.
+    fn text(&self, code: u32) -> Option<&[u8]> {
+        match self {
+            Dict::Stored(stored) if stored.kind == Kind::Text => {
+                Some(stored.dict.as_ref().map(|d| d.get(code)).unwrap_or_default())
+            }
+            Dict::Stored(_) => None,
+            Dict::Own(dict) => Some(dict.get(code)),
+        }
+    }
+
     fn find(&self, bytes: &[u8]) -> u32 {
         match self {
             Dict::Stored(stored) => {
@@ -388,6 +399,8 @@ struct Exec<'q> {
     dict_of: Vec<usize>,
     dicts: Vec<Dict>,
     generic: FxMap<*const Expr, Generic>,
+    /// For each `LIKE` of a column of codes and a constant pattern, the result for each code: 0 for a code that it has not seen, 1 for false and 2 for true.
+    likes: FxMap<*const Expr, Vec<u8>>,
     /// The parameters of the query, then the values of the columns of a [`Generic`].
     slots: Vec<Value>,
     empty: scan::Tables,
@@ -663,6 +676,9 @@ impl<'q> Exec<'q> {
             };
             return Ok(Some(Col::bools(&out)));
         }
+        if let ("textlike" | "textnlike" | "texticlike" | "texticnlike", [a, b]) = (src, args) {
+            return self.like(expr, src, a, b, batch, sel);
+        }
         if let (Some(op), Some((low, high)), [a, b]) = (int_arith(src), int_range(expr.ty), args) {
             let (a, b) = (self.eval(a, batch, sel)?, self.eval(b, batch, sel)?);
             let (Some(a), Some(b)) = (a.ints(), b.ints()) else { return Ok(None) };
@@ -731,6 +747,69 @@ impl<'q> Exec<'q> {
             return Ok(Some(Col { data: Data::Int(values), nulls, ty: expr.ty }));
         }
         Ok(None)
+    }
+
+    /// `LIKE` and `ILIKE` of a column of codes of the table and a constant pattern, which tests the bytes of each code once with no copy of the text, or `None` for other arguments. A text that is not UTF8 or a pattern with an error gives `None`, and the row engine gives the same result.
+    fn like(
+        &mut self,
+        expr: &Expr,
+        src: &str,
+        a: &Expr,
+        b: &Expr,
+        batch: &mut Batch,
+        sel: &[u32],
+    ) -> Result<Option<Col>> {
+        let pattern = match &b.kind {
+            ExprKind::Const(Value::Text(p)) => p.clone(),
+            ExprKind::Const(Value::Null) => return Ok(Some(Col::bools(&vec![None; sel.len()]))),
+            _ => return Ok(None),
+        };
+        if !matches!(a.kind, ExprKind::Var(_)) {
+            return Ok(None);
+        }
+        let fold = matches!(src, "texticlike" | "texticnlike");
+        let negate = matches!(src, "textnlike" | "texticnlike");
+        let pattern = if fold { pattern.to_ascii_lowercase() } else { pattern };
+        let col = self.eval(a, batch, sel)?;
+        let Data::Code(codes, d) = &col.data else { return Ok(None) };
+        let key = std::ptr::from_ref(expr);
+        let mut memo = self.likes.remove(&key).unwrap_or_default();
+        let mut folded = Vec::new();
+        let mut out = Vec::with_capacity(sel.len());
+        let mut failed = false;
+        for (i, &code) in codes.iter().enumerate() {
+            if col.null(i) {
+                out.push(None);
+                continue;
+            }
+            let at = code as usize;
+            if memo.len() <= at {
+                memo.resize(at + 1, 0);
+            }
+            if memo[at] == 0 {
+                let Some(text) =
+                    self.dicts[*d].text(code).filter(|t| std::str::from_utf8(t).is_ok())
+                else {
+                    failed = true;
+                    break;
+                };
+                let text = if fold {
+                    folded.clear();
+                    folded.extend(text.iter().map(u8::to_ascii_lowercase));
+                    &folded[..]
+                } else {
+                    text
+                };
+                let Ok(found) = rupg_func::like_text(text, pattern.as_bytes()) else {
+                    failed = true;
+                    break;
+                };
+                memo[at] = 1 + u8::from(found);
+            }
+            out.push(Some((memo[at] == 2) != negate));
+        }
+        self.likes.insert(key, memo);
+        Ok((!failed).then(|| Col::bools(&out)))
     }
 
     /// The values of `expr` from [`Eval`], with its columns as parameters. An expression of one column keeps its value for each value of the column.
@@ -1258,6 +1337,7 @@ pub(crate) fn run(
         dict_of,
         dicts,
         generic: FxMap::default(),
+        likes: FxMap::default(),
         slots: params.to_vec(),
         empty: scan::Tables::default(),
     };

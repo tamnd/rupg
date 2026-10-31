@@ -4026,6 +4026,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/code_extremes.test")));
     }
 
+    /// `LIKE` and `ILIKE` of a column of codes in the vector scan test each code once, with the results of the row engine, also for nulls, `_` on a character of two bytes, the escape character and a pattern with an error.
+    #[test]
+    fn code_likes() {
+        big_stack(|| script(include_str!("connection/code_likes.test")));
+    }
+
     /// The vector scan sums `x + c` from the sums of `x`, and the row engine runs a query whose `x + c` is out of the range of its type, for the error.
     #[test]
     fn shifted_sums() {

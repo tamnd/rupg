@@ -485,6 +485,15 @@ pub(crate) fn like(text: &str, pattern: &str) -> Result<bool> {
     Ok(match_text(text.as_bytes(), pattern.as_bytes(), true)? == Like::True)
 }
 
+/// True when the bytes of a text match the pattern of `LIKE` with `\\` as its escape character, as `~~` finds it for the text.
+///
+/// # Errors
+///
+/// The error of a pattern that ends with the escape character.
+pub fn like_text(text: &[u8], pattern: &[u8]) -> Result<bool> {
+    Ok(match_text(text, pattern, true)? == Like::True)
+}
+
 fn textlike(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Bool(like(arg(args, 0)?, arg(args, 1)?)?))
 }
