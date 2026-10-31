@@ -42,6 +42,8 @@ struct Dfa {
     fast: Vec<u32>,
     /// The steps of the closed states after the characters.
     steps: HashMap<(u32, u32), u32>,
+    /// True when each step also starts a thread at the start of the program.
+    restart: bool,
 }
 
 /// A step of the DFA that it did not take yet.
@@ -110,6 +112,8 @@ pub(super) struct Program {
     anchored: bool,
     /// The DFA of the main program, or `None` when the program has an instruction that a DFA cannot run: a lookaround or a back reference. The guards of empty loops only stop paths back to a pair of instruction and position that the machine tried already, so the DFA follows them as if they were not there.
     dfa: Option<RefCell<Dfa>>,
+    /// The DFA that also starts a thread at each position, which finds the first end of a match that starts anywhere. It is `None` when [`Program::dfa`] is `None`.
+    scan: Option<RefCell<Dfa>>,
     /// The mask of the constraints that the main program has, with the bits of [`ASSERTS`].
     asserts: u8,
 }
@@ -286,6 +290,7 @@ impl Program {
         Ok(Program {
             anchored,
             dfa: plain.then(RefCell::default),
+            scan: plain.then(|| RefCell::new(Dfa { restart: true, ..Dfa::default() })),
             asserts,
             progs: compiler.progs,
             sets: compiler.sets,
@@ -299,38 +304,58 @@ impl Program {
 
     /// [`Program::ends`] with the DFA. The threads of the backtracking machine reach the same pairs of instruction and position, so the ends are the same.
     fn dfa_ends(&self, dfa: &mut Dfa, s: &[u32], start: usize) -> Vec<bool> {
-        if dfa.states.len() > MAX_STATES {
-            *dfa = Dfa::default();
-        }
         let mut ends = vec![false; s.len() + 1];
+        self.walk(dfa, s, start, |pos| {
+            ends[pos] = true;
+            false
+        });
+        ends
+    }
+
+    /// Runs a DFA on `s` from `start` and calls `hit` at each end of a match. The walk stops at the first position where `hit` gives true, and gives that position.
+    fn walk(
+        &self,
+        dfa: &mut Dfa,
+        s: &[u32],
+        start: usize,
+        mut hit: impl FnMut(usize) -> bool,
+    ) -> Option<usize> {
+        if dfa.states.len() > MAX_STATES {
+            *dfa = Dfa { restart: dfa.restart, ..Dfa::default() };
+        }
         let first = dfa.intern(vec![0]);
         let (mut state, matched) = self.closure(dfa, first, self.mask(s, start));
-        ends[start] = matched;
+        if matched && hit(start) {
+            return Some(start);
+        }
         let dead = dfa.intern(Vec::new());
         for pos in start..s.len() {
-            if state == dead {
+            if state == dead && !dfa.restart {
                 break;
             }
             let c = s[pos];
             let mask = self.mask(s, pos + 1);
-            if mask == 0 && c < 128 {
-                let known = dfa.fast[state as usize * 128 + c as usize];
-                if known != UNKNOWN {
+            let matched = match dfa.fast[state as usize * 128 + (c as usize & 127)] {
+                known if mask == 0 && c < 128 && known != UNKNOWN => {
                     state = known & !MATCHED;
-                    ends[pos + 1] = known & MATCHED != 0;
-                    continue;
+                    known & MATCHED != 0
                 }
+                _ => {
+                    let next = self.step(dfa, state, c);
+                    let (closed, matched) = self.closure(dfa, next, mask);
+                    if mask == 0 && c < 128 {
+                        dfa.fast[state as usize * 128 + c as usize] =
+                            closed | if matched { MATCHED } else { 0 };
+                    }
+                    state = closed;
+                    matched
+                }
+            };
+            if matched && hit(pos + 1) {
+                return Some(pos + 1);
             }
-            let next = self.step(dfa, state, c);
-            let (closed, matched) = self.closure(dfa, next, mask);
-            if mask == 0 && c < 128 {
-                dfa.fast[state as usize * 128 + c as usize] =
-                    closed | if matched { MATCHED } else { 0 };
-            }
-            state = closed;
-            ends[pos + 1] = matched;
         }
-        ends
+        None
     }
 
     /// The state of the DFA after a closed state reads a character.
@@ -343,6 +368,7 @@ impl Program {
             .iter()
             .filter(|&&pc| matches!(insts[pc], Inst::Set(id) if self.sets[id].contains(c)))
             .map(|&pc| pc + 1)
+            .chain(dfa.restart.then_some(0))
             .collect();
         let next = dfa.intern(next);
         dfa.steps.insert((closed, c), next);
@@ -427,6 +453,19 @@ impl Program {
 
     /// The start of the leftmost match in `s` that starts at `from` or after it.
     pub(super) fn first(&self, s: &[u32], from: usize) -> Option<usize> {
+        if let (Some(dfa), Some(scan)) = (&self.dfa, &self.scan) {
+            // A match that ends first starts at the end or before it, so the leftmost start is not after it.
+            let end = if self.anchored {
+                if from > 0 {
+                    return None;
+                }
+                0
+            } else {
+                self.walk(&mut scan.borrow_mut(), s, from, |_| true)?
+            };
+            let dfa = &mut dfa.borrow_mut();
+            return (from..=end).find(|&start| self.walk(dfa, s, start, |_| true).is_some());
+        }
         let mut search = Search { program: self, s, looks: vec![Vec::new(); self.progs.len()] };
         let mut visited = search.visited(0);
         let last = if self.anchored { 0 } else { s.len() };
@@ -663,6 +702,22 @@ mod tests {
                 let dfa = program.dfa.as_ref().unwrap_or_else(|| panic!("{pattern} has no DFA"));
                 for string in strings {
                     let s: Vec<u32> = string.chars().map(u32::from).collect();
+                    let mut search = Search {
+                        program: &program,
+                        s: &s,
+                        looks: vec![Vec::new(); program.progs.len()],
+                    };
+                    for from in 0..=s.len() {
+                        let mut visited = search.visited(0);
+                        let last = if program.anchored { 0 } else { s.len() };
+                        let want = (from..=last)
+                            .find(|&start| search.run(0, start, None, visited.as_mut(), None));
+                        assert_eq!(
+                            program.first(&s, from),
+                            want,
+                            "{pattern} on {string:?} after {from}"
+                        );
+                    }
                     for start in 0..=s.len() {
                         let want = program.track_ends(&s, start);
                         let got = program.dfa_ends(&mut dfa.borrow_mut(), &s, start);
