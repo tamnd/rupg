@@ -523,6 +523,7 @@ dependencies = [
  "rupg-encode",
  "rupg-exec",
  "rupg-func",
+ "rupg-kernels",
  "rupg-opt",
  "rupg-pgcatalog",
  "rupg-plan",

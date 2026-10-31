@@ -20,6 +20,7 @@ rupg-common.workspace = true
 rupg-encode.workspace = true
 rupg-exec.workspace = true
 rupg-func.workspace = true
+rupg-kernels.workspace = true
 rupg-opt.workspace = true
 rupg-pgcatalog.workspace = true
 rupg-plan.workspace = true

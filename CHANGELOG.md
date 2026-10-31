@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Each commit now goes to a log next to `data.rupg` (`data.rupg-log-N`) and waits for the log to be on the disk, and a start makes the changes of the log again, so a commit stays after a crash or a `kill -9`, as the WAL of PostgreSQL does (#1223).
 - A SIGTERM or a SIGINT to `rupg serve` now writes `data.rupg` before the exit, as a fast shutdown of PostgreSQL writes a checkpoint, and the server writes a checkpoint every `checkpoint_timeout` (#1221).
 - Plan an aggregate in two parts over a parallel scan, a `Partial Aggregate` in each process below a `Gather` or a `Gather Merge` and a `Finalize Aggregate` above it, with the costs and the `EXPLAIN` output of PostgreSQL 19 (#1219).
 - The server keeps its databases, catalogs, roles, sequences and table rows in the file `data.rupg` of the data directory. `CHECKPOINT` and the shutdown write the file, and the next start loads it (#1216).

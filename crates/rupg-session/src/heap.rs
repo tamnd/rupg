@@ -45,6 +45,19 @@ fn fresh(unique: &[Unique], values: &[Value], derive: Derive<'_>) -> Result<Fres
     Ok(keys)
 }
 
+/// The most versions that the log of a commit has. A commit that changed more, as a large `COPY` does, makes a checkpoint instead, so the log does not keep a second copy of the rows in memory.
+const LOG_VERSIONS: usize = 1 << 20;
+
+/// What a commit gives to the log.
+pub(crate) enum Logged<'a> {
+    /// The transaction changed no table, or the heap writes no logs.
+    Nothing,
+    /// The bytes of the changes, for [`Heap::redo`].
+    Changes(&'a [u8]),
+    /// The transaction changed more than [`LOG_VERSIONS`] versions, so the commit needs a checkpoint.
+    Large,
+}
+
 /// `nextXid` of a new cluster: `initdb` of PostgreSQL 19 uses the transaction IDs from `FirstNormalTransactionId` up to 661, so the first transaction gets 662.
 const INITDB_NEXT_XID: u32 = 662;
 
@@ -93,6 +106,22 @@ struct State {
     toast_oids: u32,
     /// `comboCids` of each transaction in progress: the combo command ID of each pair of `cmin` and `cmax`, in the order that `GetComboCommandId` gives them.
     combos: HashMap<u32, HashMap<(u32, u32), u32>>,
+    /// True when each commit writes a log of its changes, for a store with a file.
+    logging: bool,
+    /// The tables that each transaction in progress changed, whose changes go to the log of its commit.
+    touched: HashMap<u32, Vec<(u32, u32)>>,
+}
+
+impl State {
+    /// Notes that the transaction `xid` changed the table `key`, for the log of its commit.
+    fn wrote(&mut self, xid: u32, key: (u32, u32)) {
+        if self.logging {
+            let tables = self.touched.entry(xid).or_default();
+            if !tables.contains(&key) {
+                tables.push(key);
+            }
+        }
+    }
 }
 
 /// A new version with the key of a live version, or of a version of a transaction in progress, in a deferrable unique index, as `UNIQUE_CHECK_PARTIAL` finds it. The key is checked again after the statement or at the commit, as the event of `unique_key_recheck` does it.
@@ -1059,6 +1088,7 @@ impl Heap {
         let made = (view.xid, view.command);
         if unique.is_empty() {
             let mut state = self.state();
+            state.wrote(view.xid, (view.database, relation));
             let State { tables, toast_oids, .. } = &mut *state;
             let table = tables.entry((view.database, relation));
             for values in rows {
@@ -1071,6 +1101,7 @@ impl Heap {
             keys.push(fresh(unique, values, derive)?);
         }
         let (mut state, places) = self.lock_keys((view.database, relation), unique, derive)?;
+        state.wrote(view.xid, (view.database, relation));
         let State { tables, running, rechecks: pending, toast_oids, .. } = &mut *state;
         let table = tables.entry((view.database, relation));
         let mut kept = kept.iter().copied();
@@ -1134,6 +1165,7 @@ impl Heap {
     ) -> Result<Speculative> {
         let keys = fresh(unique, &values, derive)?;
         let (mut state, places) = self.lock_keys((view.database, relation), unique, derive)?;
+        state.wrote(view.xid, (view.database, relation));
         let State { tables, running, rechecks: pending, toast_oids, .. } = &mut *state;
         let table = tables.entry((view.database, relation));
         for &arbiter in arbiters {
@@ -1214,6 +1246,7 @@ impl Heap {
             });
         }
         let (mut state, places) = self.lock_keys((view.database, relation), unique, derive)?;
+        state.wrote(view.xid, (view.database, relation));
         let State { tables, running, rechecks: pending, toast_oids, combos, .. } = &mut *state;
         let Some(table) = tables.get_mut(&(view.database, relation)) else {
             return Ok(Changed::Done(0));
@@ -1298,6 +1331,7 @@ impl Heap {
     /// The rows that `TRUNCATE` removes. Each version that no transaction deleted gets the transaction of the view as `xmax`, so that a rollback brings the rows back, as the old file of `RelationSetNewRelfilenumber` stays until the commit. `TRUNCATE` takes `AccessExclusiveLock`, which waits for each transaction that changed the table. So when another transaction in progress inserted or deleted a version, nothing changes, and the result is that transaction, for the statement to wait for.
     pub(crate) fn truncate(&self, relation: u32, view: &View) -> Option<u32> {
         let mut state = self.state();
+        state.wrote(view.xid, (view.database, relation));
         let State { tables, running, truncating, .. } = &mut *state;
         let table = tables.get_mut(&(view.database, relation))?;
         if let Some(holder) = table.holder(view.xid, running) {
@@ -1661,13 +1695,30 @@ impl Heap {
 
     /// `RecordTransactionCommit`: the changes of the transaction become visible to the new snapshots.
     pub(crate) fn commit(&self, xid: u32) {
+        self.commit_logged(xid, &mut |_| {});
+    }
+
+    /// [`Heap::commit`] that calls `log` once while the heap is locked, with the bytes of the changes of the transaction when the heap writes logs and the transaction changed a table. So the logs are in the order of the commits, and [`Heap::redo`] of each log after the image of the heap gives the heap of the commits.
+    pub(crate) fn commit_logged(&self, xid: u32, log: &mut dyn FnMut(Logged<'_>)) {
         let mut state = self.state();
         let State { tables, truncating, .. } = &mut *state;
-        for table in truncating.remove(&xid).into_iter().flatten() {
-            let Some(table) = tables.get_mut(&table) else { continue };
+        let truncated = truncating.remove(&xid).unwrap_or_default();
+        for table in &truncated {
+            let Some(table) = tables.get_mut(table) else { continue };
             table.truncated.clear();
             let generation = table.pages.generation;
             table.remove(|version| generation_of(version.tid) != generation);
+        }
+        match state.touched.remove(&xid) {
+            Some(touched) => {
+                let mut out = Vec::new();
+                if state.log_commit(xid, &touched, &truncated, &mut out) {
+                    log(Logged::Changes(&out));
+                } else {
+                    log(Logged::Large);
+                }
+            }
+            None => log(Logged::Nothing),
         }
         state.running.remove(&xid);
         state.latest_completed = state.latest_completed.max(xid);
@@ -1697,6 +1748,7 @@ impl Heap {
         state.latest_completed = state.latest_completed.max(xid);
         state.aborted.insert(xid);
         state.combos.remove(&xid);
+        state.touched.remove(&xid);
         state.truncating.remove(&xid);
         state.owners.remove(&xid);
         state.waits.remove(&xid);
@@ -1937,7 +1989,8 @@ impl Heap {
                 v.values.put(out);
             }
             table.made.put(out);
-            table.pages.put(out);
+            // The pages of the heap before the `TRUNCATE` of a transaction in progress, which aborts.
+            table.truncated.first().map_or(&table.pages, |(.., pages)| pages).put(out);
             table.statistics.put(out);
             table.lp_dead.put(out);
             table.fixed.put(out);
@@ -1977,6 +2030,111 @@ impl Heap {
             state.tables.0.insert(key, table);
         }
         Ok(Heap { state: Mutex::new(state) })
+    }
+
+    /// `nextXid` goes up to `next`, for a log of a catalog: the transaction that changed the catalog has an ID that the logs of the rows may not have.
+    pub(crate) fn advance_xid(&self, next: u32) {
+        let mut state = self.state();
+        state.next_xid = state.next_xid.max(next);
+    }
+
+    /// The OIDs of the databases whose tables have rows.
+    pub(crate) fn databases(&self) -> BTreeSet<u32> {
+        self.state().tables.0.keys().map(|&(database, _)| database).collect()
+    }
+
+    /// From now on each commit gives the log of its changes to [`Heap::commit_logged`].
+    pub(crate) fn start_logging(&self) {
+        self.state().logging = true;
+    }
+
+    /// Makes again the changes of a commit from the bytes of its log, after the image of the heap and the logs of the commits before it. A log can have changes that the image has: a version comes again with the same ID and takes the place of the version that the image has, and a `TRUNCATE` whose generation the table has does nothing. `VACUUM` writes no log, so the dead versions that it removed come back, and a version of the log takes the place of a dead version with the same ID.
+    ///
+    /// # Errors
+    ///
+    /// `XX001` for bytes that are not a log of a commit.
+    pub(crate) fn redo(&self, input: &mut Reader<'_>) -> Result<()> {
+        let mut state = self.state();
+        let xid = u32::take(input)?;
+        state.next_xid = state.next_xid.max(xid.wrapping_add(1));
+        state.latest_completed = state.latest_completed.max(xid);
+        for _ in 0..input.count()? {
+            let key = Persist::take(input)?;
+            let generation: Option<u16> = Persist::take(input)?;
+            let table = state.tables.entry(key);
+            if let Some(generation) = generation
+                && table.pages.generation != generation
+            {
+                table.pages = Pages::of_generation(generation);
+                table.versions.retain(|v| generation_of(v.tid) == generation);
+                table.combos.clear();
+                table.lp_dead.clear();
+            }
+            (table.fixed, table.storage, table.save_free) = Persist::take(input)?;
+            for _ in 0..input.count()? {
+                let version = Version::take(input)?;
+                table.pages.occupy(version.tid, usize::from(version.len));
+                table.made = table.made.max(version.made);
+                match table.versions.binary_search_by_key(&version.tid, |v| v.tid) {
+                    Ok(at) => table.versions[at] = version,
+                    Err(at) => table.versions.insert(at, version),
+                }
+            }
+            for _ in 0..input.count()? {
+                let (tid, xmax, cmax, next): (u64, u32, u32, u64) = Persist::take(input)?;
+                if let Some(at) = table.find(tid) {
+                    let version = &mut table.versions[at];
+                    (version.xmax, version.cmax, version.next) = (xmax, cmax, next);
+                    table.pages.touch(page_of(tid));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl State {
+    /// The log of the commit of `xid`, which changed the tables `touched` and truncated the tables `truncated`: for each table, the generation of its heap after a `TRUNCATE`, the storage of its columns and its `fillfactor`, the versions that the transaction inserted, and the versions that it deleted with their `xmax`, `cmax` and `t_ctid`.
+    ///
+    /// The result is false, with no log, for a commit that changed more than [`LOG_VERSIONS`] versions.
+    fn log_commit(
+        &self,
+        xid: u32,
+        touched: &[(u32, u32)],
+        truncated: &[(u32, u32)],
+        out: &mut Vec<u8>,
+    ) -> bool {
+        xid.put(out);
+        let tables: Vec<_> =
+            touched.iter().filter_map(|key| Some((key, self.tables.get(key)?))).collect();
+        let changed: usize = tables
+            .iter()
+            .map(|(_, table)| {
+                table.versions.iter().filter(|v| v.xmin == xid || v.xmax == xid).count()
+            })
+            .sum();
+        if changed > LOG_VERSIONS {
+            return false;
+        }
+        tables.len().put(out);
+        for (key, table) in tables {
+            key.put(out);
+            truncated.contains(key).then_some(table.pages.generation).put(out);
+            table.fixed.put(out);
+            table.storage.put(out);
+            table.save_free.put(out);
+            let inserted = || table.versions.iter().filter(|v| v.xmin == xid);
+            inserted().count().put(out);
+            for version in inserted() {
+                version.put(out);
+            }
+            let deleted = || table.versions.iter().filter(|v| v.xmax == xid && v.xmin != xid);
+            deleted().count().put(out);
+            for v in deleted() {
+                (v.tid, v.xmax, v.cmax, v.next).put(out);
+            }
+        }
+        true
     }
 }
 
