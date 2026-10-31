@@ -352,3 +352,18 @@ impl Catalog {
         }
     }
 }
+
+rupg_common::persist_struct!(TsTemplate { oid, name, namespace, init, lexize });
+rupg_common::persist_struct!(TsParser {
+    oid,
+    name,
+    namespace,
+    start,
+    token,
+    end,
+    headline,
+    lextype
+});
+rupg_common::persist_struct!(TsDictionary { oid, name, namespace, owner, template, options });
+rupg_common::persist_struct!(TsConfig { oid, name, namespace, owner, parser });
+rupg_common::persist_struct!(TsMapping { config, token, seqno, dict });

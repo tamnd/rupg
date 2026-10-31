@@ -349,3 +349,19 @@ impl Catalog {
         Ok(out)
     }
 }
+
+rupg_common::persist_struct!(Publication {
+    oid,
+    name,
+    owner,
+    all_tables,
+    all_sequences,
+    insert,
+    update,
+    delete,
+    truncate,
+    via_root,
+    gencols
+});
+rupg_common::persist_struct!(PublicationRel { oid, publication, relation, except, qual, attrs });
+rupg_common::persist_struct!(PublicationNamespace { oid, publication, schema });
