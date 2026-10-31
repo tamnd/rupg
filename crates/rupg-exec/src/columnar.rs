@@ -406,6 +406,19 @@ struct Exec<'q> {
     empty: scan::Tables,
 }
 
+/// The number of characters of the bytes of a `String`: the bytes less the bytes that continue a character, with the form `10xxxxxx`. Eight bytes are tested at a time.
+fn chars(text: &[u8]) -> usize {
+    const HIGH: u64 = 0x8080_8080_8080_8080;
+    let (words, rest) = text.as_chunks::<8>();
+    let mut continued = 0;
+    for &word in words {
+        let w = u64::from_le_bytes(word);
+        continued += (w & !(w << 1) & HIGH).count_ones() as usize;
+    }
+    continued += rest.iter().filter(|&&b| b & 0xc0 == 0x80).count();
+    text.len() - continued
+}
+
 /// The source name of the function of a call.
 fn src(oid: u32) -> &'static str {
     builtin::proc_by_oid(oid).map_or("", |p| p.src)
@@ -679,6 +692,11 @@ impl<'q> Exec<'q> {
         if let ("textlike" | "textnlike" | "texticlike" | "texticnlike", [a, b]) = (src, args) {
             return self.like(expr, src, a, b, batch, sel);
         }
+        if let ("textlen" | "textoctetlen", [a]) = (src, args)
+            && matches!(a.kind, ExprKind::Var(_))
+        {
+            return self.length(expr, src == "textoctetlen", a, batch, sel);
+        }
         if let (Some(op), Some((low, high)), [a, b]) = (int_arith(src), int_range(expr.ty), args) {
             let (a, b) = (self.eval(a, batch, sel)?, self.eval(b, batch, sel)?);
             let (Some(a), Some(b)) = (a.ints(), b.ints()) else { return Ok(None) };
@@ -810,6 +828,31 @@ impl<'q> Exec<'q> {
         }
         self.likes.insert(key, memo);
         Ok((!failed).then(|| Col::bools(&out)))
+    }
+
+    /// `length` and `octet_length` of a column of codes of the table, which count the bytes of each code with no copy of the text, or `None` for other arguments.
+    fn length(
+        &mut self,
+        expr: &Expr,
+        octets: bool,
+        a: &Expr,
+        batch: &mut Batch,
+        sel: &[u32],
+    ) -> Result<Option<Col>> {
+        let col = self.eval(a, batch, sel)?;
+        let Data::Code(codes, d) = &col.data else { return Ok(None) };
+        let mut values = Vec::with_capacity(sel.len());
+        for (i, &code) in codes.iter().enumerate() {
+            if col.null(i) {
+                values.push(0);
+                continue;
+            }
+            let Some(text) = self.dicts[*d].text(code) else { return Ok(None) };
+            // The dictionary of a text column holds only the bytes of a `String`, so each byte that does not continue a character starts one.
+            let n = if octets { text.len() } else { chars(text) };
+            values.push(i64::try_from(n).unwrap_or(i64::MAX));
+        }
+        Ok(Some(Col { data: Data::Int(values), nulls: col.nulls, ty: expr.ty }))
     }
 
     /// The values of `expr` from [`Eval`], with its columns as parameters. An expression of one column keeps its value for each value of the column.

@@ -4032,6 +4032,11 @@ mod tests {
         big_stack(|| script(include_str!("connection/code_likes.test")));
     }
 
+    #[test]
+    fn code_lengths() {
+        big_stack(|| script(include_str!("connection/code_lengths.test")));
+    }
+
     /// A vector scan with `ORDER BY` and `LIMIT` and no groups keeps the rows in a bounded heap as they come, with the order of the row engine for equal keys, also with `OFFSET`, nulls, few rows and `LIMIT 0`.
     #[test]
     fn column_top() {
