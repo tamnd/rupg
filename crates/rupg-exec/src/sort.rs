@@ -24,6 +24,28 @@ struct Key {
     sort: Option<Kernel>,
     equal: Option<Kernel>,
     nulls_first: bool,
+    /// For a sort function that is `<` or `>` of an integer type: true for `>`. The keys then compare the integers with no call.
+    descending: Option<bool>,
+}
+
+/// For the function `<` or `>` of `smallint`, `integer` or `bigint` with itself: true for `>`.
+fn native(func: u32) -> Option<bool> {
+    let name = rupg_pgcatalog::builtin::proc_by_oid(func)?.name;
+    match name {
+        "int2lt" | "int4lt" | "int8lt" => Some(false),
+        "int2gt" | "int4gt" | "int8gt" => Some(true),
+        _ => None,
+    }
+}
+
+/// The integer of a value of an integer type.
+fn int(v: &Value) -> Option<i64> {
+    match v {
+        Value::Int2(v) => Some(i64::from(*v)),
+        Value::Int4(v) => Some(i64::from(*v)),
+        Value::Int8(v) => Some(*v),
+        _ => None,
+    }
 }
 
 /// The keys of a sort or of a comparison of rows.
@@ -45,6 +67,7 @@ impl<'a> Keys<'a> {
                     sort: find(g.sort)?,
                     equal: find(g.equal)?,
                     nulls_first: g.nulls_first,
+                    descending: native(g.sort),
                 })
             })
             .collect::<Result<_>>()?;
@@ -68,6 +91,13 @@ impl<'a> Keys<'a> {
         for key in &self.keys {
             let Some(sort) = key.sort else { continue };
             let (x, y) = (&a[key.column], &b[key.column]);
+            if let (Some(descending), Some(x), Some(y)) = (key.descending, int(x), int(y)) {
+                let order = if descending { y.cmp(&x) } else { x.cmp(&y) };
+                if order != Ordering::Equal {
+                    return Ok(order);
+                }
+                continue;
+            }
             let order = match (x.is_null(), y.is_null()) {
                 (true, true) => Ordering::Equal,
                 (true, false) if key.nulls_first => Ordering::Less,
