@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.4.16 (2026-10-31)
+
 ### Added
 
 - Each commit now goes to a log next to `data.rupg` (`data.rupg-log-N`) and waits for the log to be on the disk, and a start makes the changes of the log again, so a commit stays after a crash or a `kill -9`, as the WAL of PostgreSQL does (#1223).
