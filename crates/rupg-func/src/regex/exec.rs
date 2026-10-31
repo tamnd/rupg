@@ -54,6 +54,8 @@ pub(super) struct Program {
     backrefs: bool,
     nlanch: bool,
     icase: bool,
+    /// True when a match can only start at the start of the string, because the pattern starts with `^` without `REG_NLANCH` or with `\A`.
+    anchored: bool,
 }
 
 /// The state of the compiler.
@@ -176,7 +178,7 @@ struct SetIds {
 impl SetIds {
     fn get(&mut self, set: &Set, sets: &mut Vec<Set>) -> usize {
         *self.ids.entry(std::ptr::from_ref(set)).or_insert_with(|| {
-            sets.push(set.clone());
+            sets.push(set.clone().with_ascii());
             sets.len() - 1
         })
     }
@@ -212,13 +214,21 @@ impl Program {
         let mut set_of = SetIds::default();
         compiler.node(0, node, &mut set_of)?;
         compiler.emit(0, Inst::Match)?;
+        let nlanch = cflags & flags::NLANCH != 0;
+        let first = compiler.progs[0].insts.iter().find(|i| !matches!(i, Inst::Save(_)));
+        let anchored = match first {
+            Some(Inst::Assert(Assert::Bos)) => true,
+            Some(Inst::Assert(Assert::Bol)) => !nlanch,
+            _ => false,
+        };
         Ok(Program {
+            anchored,
             progs: compiler.progs,
             sets: compiler.sets,
             groups,
             marks: compiler.marks,
             backrefs: compiler.backrefs,
-            nlanch: cflags & flags::NLANCH != 0,
+            nlanch,
             icase: cflags & flags::ICASE != 0,
         })
     }
@@ -232,7 +242,8 @@ impl Program {
     pub(super) fn first(&self, s: &[u32], from: usize) -> Option<usize> {
         let mut search = Search { program: self, s, looks: vec![Vec::new(); self.progs.len()] };
         let mut visited = search.visited(0);
-        (from..=s.len()).find(|&start| search.run(0, start, None, visited.as_mut(), None))
+        let last = if self.anchored { 0 } else { s.len() };
+        (from..=last).find(|&start| search.run(0, start, None, visited.as_mut(), None))
     }
 
     /// The ends of the matches from `start`: the item at a position is true when a match ends there.

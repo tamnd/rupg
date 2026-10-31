@@ -75,6 +75,8 @@ pub(super) struct Set {
     complement: bool,
     /// True when the complement does not include a newline.
     no_newline: bool,
+    /// The answer of [`Set::contains`] for each ASCII character, when [`Set::with_ascii`] made it.
+    ascii: Option<u128>,
 }
 
 /// The class numbers of `enum char_classes`.
@@ -117,6 +119,11 @@ fn to_upper(c: u32) -> u32 {
 impl Set {
     /// True when the set has `c`.
     pub(super) fn contains(&self, c: u32) -> bool {
+        if let Some(ascii) = self.ascii
+            && c < 128
+        {
+            return ascii >> c & 1 == 1;
+        }
         let inside = self.chars.contains(&c)
             || self.ranges.iter().any(|&(a, b)| a <= c && c <= b)
             || (0..14).any(|class| self.classes & (1 << class) != 0 && in_class(class, c))
@@ -126,6 +133,14 @@ impl Set {
         } else {
             inside
         }
+    }
+
+    /// The set with a table of [`Set::contains`] for the ASCII characters, so that a search tests an ASCII character with one bit and not with each part of the set.
+    pub(super) fn with_ascii(mut self) -> Set {
+        self.ascii = None;
+        let ascii = (0..128).filter(|&c| self.contains(c)).fold(0u128, |bits, c| bits | 1 << c);
+        self.ascii = Some(ascii);
+        self
     }
 
     /// `allcases`: a character and its other case.
