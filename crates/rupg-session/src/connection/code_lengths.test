@@ -1,0 +1,18 @@
+> CREATE TABLE n (g int, t text)
+CREATE TABLE
+> INSERT INTO n SELECT i % 3, CASE WHEN i % 11 = 0 THEN NULL WHEN i % 13 = 0 THEN '' WHEN i % 5 = 0 THEN repeat('é', i % 17) || 'x' || (i % 89) ELSE 'v' || (i % 97) || repeat('ж€😀', i % 4) END FROM generate_series(1, 70000) i
+INSERT 0 70000
+> SELECT sum(length(t)), sum(octet_length(t)), count(length(t)) FROM n
+fields sum:20:8:-1,sum:20:8:-1,count:20:8:-1
+row 475491,992391,63637
+SELECT 1
+> SELECT g, avg(length(t)), max(char_length(t)), min(octet_length(t)) FROM n GROUP BY g ORDER BY g
+fields g@n.1:23:4:-1,avg:1700:-1:-1,max:23:4:-1,min:23:4:-1
+row 0,7.4725155572317556,19,0
+row 1,7.4717861688587187,19,0
+row 2,7.4714784084480483,19,0
+SELECT 3
+> SELECT count(*) FROM n WHERE length(t) > 9
+fields count:20:8:-1
+row 18581
+SELECT 1
