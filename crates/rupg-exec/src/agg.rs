@@ -237,7 +237,7 @@ pub(crate) fn method(agg: &Aggref, ty: u32, location: Option<usize>) -> Result<M
 
 /// The state of an aggregate in a group.
 #[derive(Clone)]
-enum State {
+pub(crate) enum State {
     /// The state of [`Method::Interval`].
     Interval(rupg_func::IntervalSum),
     /// The state of [`Method::OrderedSet`], which keeps the rows of the group outside of the state.
@@ -286,7 +286,7 @@ enum State {
 
 /// The state of [`Method::Moments`], as `NumericAggState` has it. The sums of integers are in `small` until they do not fit, and then they go into `big`.
 #[derive(Clone, Default)]
-struct Moments {
+pub(crate) struct Moments {
     count: i64,
     nan: i64,
     pinf: i64,
@@ -359,14 +359,14 @@ impl Moments {
 }
 
 /// An aggregate call of the query with its method.
-struct Agg<'q> {
-    agg: &'q Aggref,
+pub(crate) struct Agg<'q> {
+    pub(crate) agg: &'q Aggref,
     /// The address of the call in the query, which [`Eval`] finds the result by. For an aggregate of the query in a subquery, `agg` is a copy whose arguments read the query, and `key` is the call in the subquery.
-    key: *const Aggref,
-    ty: u32,
-    method: Method,
+    pub(crate) key: *const Aggref,
+    pub(crate) ty: u32,
+    pub(crate) method: Method,
     /// The types of the arguments that the transition function gets.
-    types: Vec<u32>,
+    pub(crate) types: Vec<u32>,
 }
 
 impl Agg<'_> {
@@ -375,7 +375,7 @@ impl Agg<'_> {
         Call { session: eval.session, args, ret, variadic: false, want: None }
     }
 
-    fn start(&self, eval: &Eval<'_>) -> Result<State> {
+    pub(crate) fn start(&self, eval: &Eval<'_>) -> Result<State> {
         Ok(match &self.method {
             Method::Kernel { state, init, .. } | Method::Function { state, init, .. } => match init
             {
@@ -403,7 +403,7 @@ impl Agg<'_> {
     }
 
     /// `advance_transition_function`: adds the values of the arguments of one row to the state.
-    fn advance(&self, state: &mut State, args: &[Value], eval: &Eval<'_>) -> Result<()> {
+    pub(crate) fn advance(&self, state: &mut State, args: &[Value], eval: &Eval<'_>) -> Result<()> {
         let args = &args[..self.agg.nargs];
         match (&self.method, state) {
             (
@@ -709,7 +709,7 @@ impl Agg<'_> {
     }
 
     /// `finalize_aggregate`: the result of the aggregate from its state.
-    fn finish(&self, state: State, eval: &Eval<'_>) -> Result<Value> {
+    pub(crate) fn finish(&self, state: State, eval: &Eval<'_>) -> Result<Value> {
         let numeric = |v: i128| Numeric::from_integer(v);
         let divide = |sum: Numeric, count: i64| {
             sum.div(&numeric(i128::from(count))).map(Value::Numeric).map_err(rupg_func::type_error)

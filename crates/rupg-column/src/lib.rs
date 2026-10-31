@@ -7,3 +7,4 @@
 pub mod builder;
 pub mod dict;
 pub mod segment;
+pub mod stored;

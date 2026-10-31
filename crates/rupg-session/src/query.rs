@@ -1220,6 +1220,17 @@ impl rupg_func::Session for Reader<'_> {
         }
     }
 
+    fn table_columns(
+        &self,
+        relation: u32,
+        columns: &[(usize, rupg_column::segment::Kind)],
+    ) -> Result<Option<(usize, Vec<Arc<rupg_column::stored::Stored>>)>> {
+        match (self.activity, &self.view) {
+            (Some((_, store)), Some(view)) => Ok(store.heap().columns(relation, view, columns)),
+            _ => Ok(None),
+        }
+    }
+
     fn table_rows_at(
         &self,
         relation: u32,
