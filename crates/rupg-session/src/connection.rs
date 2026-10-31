@@ -1327,12 +1327,13 @@ impl Connection {
         let xid = self.xid.replace(0);
         self.stable_xid.set(0);
         self.end_notify(commit);
-        if xid != 0 {
-            if commit {
-                heap.commit(xid);
-            } else {
+        if commit {
+            self.store.commit(xid, defined);
+        } else {
+            if xid != 0 {
                 heap.abort(xid);
             }
+            self.store.commit(0, false);
         }
         let writes = self.activity.take_writes();
         if !writes.is_empty() {
@@ -6920,7 +6921,7 @@ mod tests {
                 &mut b,
                 &query("BEGIN; INSERT INTO t VALUES (9, 'nine'); DELETE FROM t WHERE a = 2"),
             );
-            let image = store.image();
+            let image = store.image(0);
             let mut back = Store::new();
             back.load(&image).unwrap();
             let back = Arc::new(back);
@@ -6943,6 +6944,76 @@ mod tests {
             assert_eq!(rows(&mut c, "INSERT INTO t VALUES (1, 'again')").len(), 1);
             assert_eq!(rows(&mut c, "INSERT INTO t VALUES (9, 'nine') RETURNING a"), ["row 9"]);
             assert!(Store::new().load(b"not an image").is_err());
+        });
+    }
+
+    /// The commits after a checkpoint come back from the log: the inserts, the updates, the deletes, a `TRUNCATE`, a new table, a new role and the sequences. A transaction in progress is gone, and a cut record at the end of the log does not stop the load.
+    #[test]
+    fn commits_come_back_from_the_log() {
+        use rupg_platform::{OpenMode, sim::SimIo};
+        big_stack(|| {
+            let io = Arc::new(SimIo::new(1));
+            let path = std::path::PathBuf::from("/data/data.rupg");
+            let open = || Arc::new(Store::new().with_image(io.clone(), path.clone()).unwrap());
+            let rows = |c: &mut Connection, sql: &str| -> Vec<String> {
+                send(c, &query(sql))
+                    .into_iter()
+                    .filter(|l| l.starts_with("row ") || l.contains("ERROR"))
+                    .collect()
+            };
+            let store = open();
+            let (mut a, _) = connect_to(&store, 1234);
+            for sql in [
+                "CREATE TABLE t (a int PRIMARY KEY, b text)",
+                "INSERT INTO t VALUES (1, 'one'), (2, 'two'), (3, 'three')",
+                "CREATE SEQUENCE s",
+                "SELECT nextval('s'), nextval('s')",
+            ] {
+                send(&mut a, &query(sql));
+            }
+            store.checkpoint().unwrap();
+            for sql in [
+                "INSERT INTO t VALUES (4, 'four')",
+                "UPDATE t SET b = 'two!' WHERE a = 2",
+                "DELETE FROM t WHERE a = 3",
+                "CREATE TABLE u (x int)",
+                "INSERT INTO u VALUES (7)",
+                "CREATE TABLE v (x int)",
+                "INSERT INTO v VALUES (1), (2)",
+                "TRUNCATE v",
+                "INSERT INTO v VALUES (3)",
+                "SELECT nextval('s')",
+                "CREATE ROLE logged",
+            ] {
+                send(&mut a, &query(sql));
+            }
+            let (mut b, _) = connect_to(&store, 1235);
+            send(&mut b, &query("BEGIN; INSERT INTO t VALUES (99, 'gone'); DELETE FROM u"));
+            let log = std::path::Path::new("/data/data.rupg-log-1");
+            let end = io.open(log, OpenMode::ReadWrite).unwrap();
+            end.write_at(end.size().unwrap(), &[9, 0, 0, 0, 1, 2]).unwrap();
+            for round in 0..2 {
+                let back = open();
+                let (mut c, _) = connect_to(&back, 1236);
+                assert_eq!(
+                    rows(&mut c, "SELECT * FROM t ORDER BY a"),
+                    ["row 1,one", "row 2,two!", "row 4,four"],
+                    "{round}"
+                );
+                assert_eq!(rows(&mut c, "SELECT * FROM u"), ["row 7"]);
+                assert_eq!(rows(&mut c, "SELECT * FROM v"), ["row 3"]);
+                assert_eq!(
+                    rows(&mut c, "SELECT count(*) FROM pg_roles WHERE rolname = 'logged'"),
+                    ["row 1"]
+                );
+                assert_eq!(rows(&mut c, "INSERT INTO t VALUES (4, 'again')").len(), 1);
+                if round == 0 {
+                    assert_eq!(rows(&mut c, "SELECT nextval('s')"), ["row 4"]);
+                    back.checkpoint().unwrap();
+                } else {
+                    assert_eq!(rows(&mut c, "SELECT nextval('s')"), ["row 5"]);
+                }
+            }
         });
     }
 

@@ -19,6 +19,7 @@ use crate::heap::Heap;
 use crate::notify::Listeners;
 
 mod image;
+mod log;
 
 /// `BOOTSTRAP_SUPERUSERID`.
 const BOOTSTRAP_SUPERUSER: u32 = 10;
@@ -55,6 +56,8 @@ pub struct Store {
     locks: Locks,
     /// The rows of the files of the sequences that the sessions changed, by the OID of the database and the number of the file. A number of a file is unique only in its database, as in PostgreSQL. The rows are not in a transaction, so a rollback does not undo a change, as in PostgreSQL.
     sequences: Mutex<HashMap<(u32, u32), SequenceData>>,
+    /// The rows of the sequences that changed after the last record of the log, for a store with a file.
+    changed: Mutex<HashMap<(u32, u32), SequenceData>>,
     /// The counters of the relations in the cumulative statistics, by the OID of the database and the OID of the relation.
     relations: Mutex<HashMap<(u32, u32), RelationCounts>>,
     /// The rows of the tables.
@@ -257,6 +260,7 @@ impl Store {
         if let Some(db) = self.state().databases.get_mut(&oid) {
             db.row.has_login_event = on;
         }
+        self.log_catalog(true);
     }
 
     /// The rows of `pg_tablespace` of the tablespaces that `CREATE TABLESPACE` made, in the order of their OIDs.
@@ -300,6 +304,8 @@ impl Store {
         let mut rows = state.tablespaces.to_vec();
         rows.push(row);
         state.tablespaces = Arc::from(rows);
+        drop(state);
+        self.log_catalog(true);
         Ok(oid)
     }
 
@@ -309,6 +315,8 @@ impl Store {
         let rows: Vec<Tablespace> =
             state.tablespaces.iter().filter(|t| t.oid != oid).cloned().collect();
         state.tablespaces = Arc::from(rows);
+        drop(state);
+        self.log_catalog(true);
     }
 
     /// The checks of `InitPostgres` for the database of a new session. It gives the OID of the database.
@@ -369,6 +377,7 @@ impl Store {
         change: impl FnOnce(&mut Vec<String>),
     ) {
         change(self.state().settings.entry((database, role)).or_default());
+        self.log_catalog(true);
     }
 
     /// Takes the lock of a database for a transaction of the session `pid`, with a copy of the catalog of the last commit. The session waits while another transaction holds the lock, and `report` tells the start and the end of the wait. A cancel of the session stops the wait with `57014`.
@@ -497,6 +506,8 @@ impl Store {
         state.next_oid = next;
         let oid = row.oid;
         state.databases.insert(oid, Db { row, committed, locked: None });
+        drop(state);
+        self.log_catalog(true);
         Ok(oid)
     }
 
@@ -526,6 +537,7 @@ impl Store {
         state.settings.retain(|&(database, _), _| database != row.oid);
         drop(state);
         self.heap.drop_tables(row.oid, |_| false);
+        self.log_catalog(true);
         Ok(())
     }
 
@@ -614,7 +626,15 @@ impl Store {
         let mut row = rows.get(&(database, file)).copied().unwrap_or(initial);
         change(&mut row)?;
         rows.insert((database, file), row);
+        if self.image.is_some() {
+            self.changed_sequences().insert((database, file), row);
+        }
         Ok(())
+    }
+
+    /// The rows of the sequences that changed after the last record of the log.
+    fn changed_sequences(&self) -> MutexGuard<'_, HashMap<(u32, u32), SequenceData>> {
+        self.changed.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The tasks of the server, or `None` for sessions that run on threads.
@@ -838,6 +858,8 @@ impl Lease {
                 Arc::new(rebase(&state.roles, &self.base, &self.roles))
             };
         }
+        drop(state);
+        self.store.log_catalog(false);
     }
 }
 

@@ -585,6 +585,36 @@ impl Pages {
         (count, self.pages[count as usize].add(len))
     }
 
+    /// The pages with the generation `generation` of a heap that a `TRUNCATE` renewed, as the log of a commit gives it.
+    pub(super) fn of_generation(generation: u16) -> Pages {
+        Pages { generation, ..Pages::default() }
+    }
+
+    /// The version `tid` of `len` bytes takes its slot again, as the replay of the log of a commit puts it back: the page gets the line pointer and the space of the version. The other versions of the page keep their slots.
+    pub(super) fn occupy(&mut self, tid: u64, len: usize) {
+        let (at, slot) = (page_of(tid) as usize, slot_of(tid));
+        if self.pages.len() <= at {
+            self.pages.resize(at + 1, Page::NEW);
+        }
+        let page = &mut self.pages[at];
+        if slot == 0 {
+            return;
+        }
+        if slot > page.lines {
+            page.lines = slot;
+        } else if let Some(bits) = page.unused.as_mut() {
+            let (word, bit) = (usize::from(slot - 1) / 64, (slot - 1) % 64);
+            bits[word] &= !(1 << bit);
+            if bits.iter().all(|&w| w == 0) {
+                page.unused = None;
+            }
+        }
+        let room = page.upper.saturating_sub(page.lower());
+        page.upper -= u16::try_from(len).unwrap_or(room).min(room);
+        page.visible = false;
+        page.frozen = false;
+    }
+
     /// The page `at` changes, as a delete or an update of a version in it does, which clears its bits in the visibility map.
     pub(super) fn touch(&mut self, at: u32) {
         if let Some(page) = self.pages.get_mut(at as usize) {
