@@ -493,6 +493,11 @@ fn text(chars: &[u32], (so, eo): (usize, usize)) -> String {
     chars[so..eo].iter().filter_map(|&c| char::from_u32(c)).collect()
 }
 
+/// [`text`] at the end of `out`.
+fn push_text(out: &mut String, chars: &[u32], (so, eo): (usize, usize)) {
+    out.extend(chars[so..eo].iter().filter_map(|&c| char::from_u32(c)));
+}
+
 /// The position after a match that starts at `so` and ends at `eo`, where the next search starts. The search after an empty match starts one character later, or it finds the same match again.
 fn next_search((so, eo): (usize, usize)) -> usize {
     if so == eo { eo + 1 } else { eo }
@@ -581,7 +586,7 @@ fn substitute(out: &mut String, replacement: &str, groups: &tree::Groups, chars:
         };
         it.next();
         if let Some(span) = span {
-            out.push_str(&text(chars, span));
+            push_text(out, chars, span);
         }
     }
 }
@@ -589,7 +594,7 @@ fn substitute(out: &mut String, replacement: &str, groups: &tree::Groups, chars:
 /// `replace_text_regexp`: `s` with the match number `n` from the character `start` replaced, or each match when `n` is 0.
 fn replace(s: &str, re: &Regex, replacement: &str, start: usize, n: i64) -> Result<Value> {
     let chars: Vec<u32> = points(s);
-    let mut out = String::new();
+    let mut out = String::with_capacity(s.len());
     let mut done = 0;
     let mut search = start;
     let mut count = 0;
@@ -601,7 +606,7 @@ fn replace(s: &str, re: &Regex, replacement: &str, start: usize, n: i64) -> Resu
             search = next_search(span);
             continue;
         }
-        out.push_str(&text(&chars, (done, span.0)));
+        push_text(&mut out, &chars, (done, span.0));
         substitute(&mut out, replacement, &groups, &chars);
         done = span.1;
         if n > 0 {
@@ -609,7 +614,7 @@ fn replace(s: &str, re: &Regex, replacement: &str, start: usize, n: i64) -> Resu
         }
         search = next_search(span);
     }
-    out.push_str(&text(&chars, (done, chars.len())));
+    push_text(&mut out, &chars, (done, chars.len()));
     Ok(Value::Text(out))
 }
 
@@ -826,6 +831,28 @@ mod tests {
         assert_eq!(replaced("aжbжc", "^(.*)ж", r"[\1]"), "[aжb]c");
         assert!(!is("^[^0-9]*$", "жжж1"));
         assert!(is("^[^0-9]*$", "жжжa"));
+    }
+
+    #[test]
+    fn keeps_answers_after_a_state_learns_its_steps() {
+        let re = compile(r"^https?://(?:www\.)?([^/]+)/.*$", flags::ADVANCED).unwrap();
+        let cases = [
+            ("http://www.a.ru/x/y?z=1", "a.ru"),
+            ("https://bb.com/", "bb.com"),
+            ("http://c.org/жж/é", "c.org"),
+            ("https://www.d.net/a\nb", "d.net"),
+            ("http://e.io", "http://e.io"),
+            ("ftp://f.io/x", "ftp://f.io/x"),
+        ];
+        for round in 0..40 {
+            for (s, want) in cases {
+                let got = match replace(s, &re, r"\1", 0, 1) {
+                    Ok(Value::Text(t)) => t,
+                    other => panic!("{s}: {other:?}"),
+                };
+                assert_eq!(got, want, "round {round}: {s}");
+            }
+        }
     }
 
     #[test]
