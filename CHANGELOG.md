@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.4.15 (2026-10-31)
+
 ### Added
 
 - A regular expression tests an ASCII character against a bracket set with one bit of a table, and a pattern that starts with `^` or `\A` tries only the start of the string. ClickBench Q29 (`REGEXP_REPLACE`) takes 30% less CPU time (#1206).
