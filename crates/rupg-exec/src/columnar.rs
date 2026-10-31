@@ -1022,6 +1022,8 @@ enum States {
     Row(Vec<agg::State>),
     /// The states of a [`Method::Shift`] are the states of its base.
     Shift,
+    /// The results of a call of [`Method::Row`] for each group.
+    Done(Vec<Value>),
 }
 
 struct Call<'q> {
@@ -1029,6 +1031,60 @@ struct Call<'q> {
     key: *const Aggref,
     method: Method<'q>,
     states: States,
+}
+
+/// The states of the aggregate calls of all the groups after the scan, which give the results of the calls of a group.
+struct Results<'q> {
+    calls: Vec<Call<'q>>,
+    groups: usize,
+}
+
+impl Results<'_> {
+    /// The results of the calls of the group `g`, or of only the calls in `only`.
+    fn group(
+        &self,
+        g: usize,
+        only: Option<&[*const Aggref]>,
+    ) -> Result<Vec<(*const Aggref, Value)>> {
+        let mut out = Vec::with_capacity(only.map_or(self.calls.len(), <[_]>::len));
+        for (c, call) in self.calls.iter().enumerate() {
+            if only.is_none_or(|only| only.contains(&call.key)) {
+                out.push((call.key, self.value(c, g)?));
+            }
+        }
+        Ok(out)
+    }
+
+    /// The result of the call `c` for the group `g`.
+    fn value(&self, c: usize, g: usize) -> Result<Value> {
+        let call = &self.calls[c];
+        Ok(match (&call.method, &call.states) {
+            (Method::Count | Method::CountArg, States::Count(states)) => Value::Int8(states[g]),
+            (Method::Distinct, States::Distinct(states)) => {
+                Value::Int8(i64::try_from(states[g].len()).unwrap_or(i64::MAX))
+            }
+            (Method::SumInt, States::Sum(states)) => match states[g] {
+                (0, _) => Value::Null,
+                (_, sum) => Value::Int8(i64::try_from(sum).map_err(|_| {
+                    Error::new(SqlState::NUMERIC_VALUE_OUT_OF_RANGE, "bigint out of range")
+                })?),
+            },
+            (Method::Int128 { avg }, States::Sum(states)) => match (states[g], avg) {
+                ((0, _), _) => Value::Null,
+                ((_, sum), false) => Value::Numeric(Numeric::from_integer(sum)),
+                ((n, sum), true) => Value::Numeric(
+                    Numeric::from_integer(sum)
+                        .div(&Numeric::from_integer(i128::from(n)))
+                        .map_err(rupg_func::type_error)?,
+                ),
+            },
+            (Method::Min | Method::Max, States::Extreme(states)) => {
+                states[g].map_or(Value::Null, |v| int_value(call.agg.args[0].ty, v))
+            }
+            (Method::Row(_), States::Done(done)) => done[g].clone(),
+            _ => return Err(Error::internal("an aggregate has another state")),
+        })
+    }
 }
 
 /// The method of the scan for an aggregate call.
@@ -1280,7 +1336,7 @@ fn project(
     cache: &Cache,
     tables: &scan::Tables,
     needed: usize,
-    groups: Option<Groups>,
+    groups: Option<Groups<'_>>,
     offset: usize,
     count: Option<usize>,
 ) -> Result<(Vec<Vec<Value>>, bool)> {
@@ -1288,9 +1344,9 @@ fn project(
     let mut eval = Eval::new(params, session, tables, cache, &[]);
     let mut out = Vec::new();
     match groups {
-        Some((order, mut aggs, firsts)) => {
+        Some((order, results, firsts)) => {
             let tuples: Vec<[usize; 1]> =
-                (0..aggs.len()).map(|g| [if g < firsts { g } else { scan::NONE }]).collect();
+                (0..results.groups).map(|g| [if g < firsts { g } else { scan::NONE }]).collect();
             if let Some(count) = count
                 && levels.is_empty()
                 && query.distinct.is_empty()
@@ -1301,11 +1357,55 @@ fn project(
                 let sorted: Vec<bool> = (0..query.targets.len())
                     .map(|t| query.sort.iter().any(|s| s.target == t))
                     .collect();
+                // The calls that the targets of `ORDER BY` and `HAVING` read.
+                let mut read: Vec<*const Aggref> = Vec::new();
+                let exprs = query.targets.iter().zip(&sorted).filter(|(_, s)| **s);
+                for expr in exprs.map(|(t, _)| &t.expr).chain(&query.having) {
+                    expr.find(0, &mut |e, _| {
+                        if let ExprKind::Agg(agg) = &e.kind {
+                            read.push(std::ptr::from_ref(&**agg));
+                        }
+                        None::<()>
+                    });
+                }
+                // With no `HAVING` and only calls in `ORDER BY`, the rows of the sort take the results of the calls with no evaluation.
+                let direct: Option<Vec<Option<usize>>> = query
+                    .having
+                    .is_none()
+                    .then(|| {
+                        query
+                            .targets
+                            .iter()
+                            .zip(&sorted)
+                            .map(|(target, &sorted)| match &target.expr.kind {
+                                _ if !sorted => Some(None),
+                                ExprKind::Agg(agg) => results
+                                    .calls
+                                    .iter()
+                                    .position(|c| std::ptr::eq(c.key, &**agg))
+                                    .map(Some),
+                                _ => None,
+                            })
+                            .collect()
+                    })
+                    .flatten();
                 let mut partial = Vec::new();
                 for (n, g) in order.into_iter().enumerate() {
                     crate::interrupt(session, n)?;
+                    if let Some(direct) = &direct {
+                        let mut row = Vec::with_capacity(direct.len() + 1);
+                        for c in direct {
+                            row.push(match c {
+                                Some(c) => results.value(*c, g)?,
+                                None => Value::Null,
+                            });
+                        }
+                        row.push(Value::Int8(i64::try_from(g).unwrap_or(i64::MAX)));
+                        partial.push(row);
+                        continue;
+                    }
                     eval.tuple = &tuples[g];
-                    eval.group = Group { aggs: std::mem::take(&mut aggs[g]), ..Group::default() };
+                    eval.group = Group { aggs: results.group(g, Some(&read))?, ..Group::default() };
                     if let Some(having) = &query.having
                         && eval.eval(having)? != Value::Bool(true)
                     {
@@ -1317,7 +1417,6 @@ fn project(
                     }
                     row.push(Value::Int8(i64::try_from(g).unwrap_or(i64::MAX)));
                     partial.push(row);
-                    aggs[g] = std::mem::take(&mut eval.group.aggs);
                 }
                 let mut types: Vec<u32> = query.targets.iter().map(|t| t.expr.ty).collect();
                 types.push(oid::INT8);
@@ -1326,7 +1425,7 @@ fn project(
                     let Some(&Value::Int8(g)) = row.last() else { continue };
                     let g = usize::try_from(g).unwrap_or(0);
                     eval.tuple = &tuples[g];
-                    eval.group = Group { aggs: std::mem::take(&mut aggs[g]), ..Group::default() };
+                    eval.group = Group { aggs: results.group(g, None)?, ..Group::default() };
                     eval.project(&query.targets, &levels, &mut out, usize::MAX)?;
                 }
                 return Ok((out, true));
@@ -1334,7 +1433,7 @@ fn project(
             for (n, g) in order.into_iter().enumerate() {
                 crate::interrupt(session, n)?;
                 eval.tuple = &tuples[g];
-                eval.group = Group { aggs: std::mem::take(&mut aggs[g]), ..Group::default() };
+                eval.group = Group { aggs: results.group(g, None)?, ..Group::default() };
                 if let Some(having) = &query.having
                     && eval.eval(having)? != Value::Bool(true)
                 {
@@ -1402,7 +1501,7 @@ struct Scan<'e, 'q> {
 type Grouped = (Vec<Vec<Value>>, scan::Tables, bool);
 
 /// The order of the groups, the values of the aggregates of each group, and the number of groups.
-type Groups = (Vec<usize>, Vec<Vec<(*const Aggref, Value)>>, usize);
+type Groups<'q> = (Vec<usize>, Results<'q>, usize);
 
 /// A call with the rows of a vector that pass the conditions, which gives false to stop the scan.
 type Each<'a> = dyn FnMut(&mut Exec<'_>, &mut Batch, &[u32]) -> Result<bool> + 'a;
@@ -1735,63 +1834,30 @@ fn grouped(
             Some(avg) => Method::Int128 { avg },
         };
     }
-    // The results of the aggregates of each group.
+    // The results of the aggregates of each group: the row engine finishes a call of its own method now, and the scan finishes each other call when the projection reads it.
     let eval = Eval::new(params, session, &empty, cache, &[]);
-    let mut results: Vec<Vec<(*const Aggref, Value)>> =
-        (0..groups).map(|_| Vec::with_capacity(aggs.len())).collect();
-    for call in aggs {
-        let Call { agg, key, method, states } = call;
-        match (method, states) {
-            (Method::Count | Method::CountArg, States::Count(states)) => {
-                for (g, n) in states.into_iter().enumerate() {
-                    results[g].push((key, Value::Int8(n)));
-                }
-            }
-            (Method::Distinct, States::Distinct(states)) => {
-                for (g, set) in states.into_iter().enumerate() {
-                    results[g].push((key, Value::Int8(set.len() as i64)));
-                }
-            }
-            (Method::SumInt, States::Sum(states)) => {
-                for (g, (n, sum)) in states.into_iter().enumerate() {
-                    let value = if n == 0 {
-                        Value::Null
-                    } else {
-                        Value::Int8(i64::try_from(sum).map_err(|_| {
-                            Error::new(SqlState::NUMERIC_VALUE_OUT_OF_RANGE, "bigint out of range")
-                        })?)
-                    };
-                    results[g].push((key, value));
-                }
-            }
-            (Method::Int128 { avg }, States::Sum(states)) => {
-                for (g, (n, sum)) in states.into_iter().enumerate() {
-                    let value = match (n, avg) {
-                        (0, _) => Value::Null,
-                        (_, false) => Value::Numeric(Numeric::from_integer(sum)),
-                        (_, true) => Value::Numeric(
-                            Numeric::from_integer(sum)
-                                .div(&Numeric::from_integer(i128::from(n)))
-                                .map_err(rupg_func::type_error)?,
-                        ),
-                    };
-                    results[g].push((key, value));
-                }
-            }
-            (Method::Min | Method::Max, States::Extreme(states)) => {
-                let ty = agg.args[0].ty;
-                for (g, v) in states.into_iter().enumerate() {
-                    results[g].push((key, v.map_or(Value::Null, |v| int_value(ty, v))));
-                }
-            }
+    for call in &mut aggs {
+        match (&call.method, &mut call.states) {
             (Method::Row(agg), States::Row(states)) => {
-                for (g, state) in states.into_iter().enumerate() {
-                    results[g].push((key, agg.finish(state, &eval)?));
-                }
+                let done = std::mem::take(states)
+                    .into_iter()
+                    .map(|state| agg.finish(state, &eval))
+                    .collect::<Result<Vec<_>>>()?;
+                call.states = States::Done(done);
             }
-            _ => return Err(Error::internal("an aggregate has another state")),
+            // `int8_sum` gives the error of a sum out of the range of `bigint` for each group, also for a group that `LIMIT` does not keep.
+            (Method::SumInt, States::Sum(states))
+                if states.iter().any(|&(_, sum)| i64::try_from(sum).is_err()) =>
+            {
+                return Err(Error::new(
+                    SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
+                    "bigint out of range",
+                ));
+            }
+            _ => {}
         }
     }
+    let results = Results { calls: aggs, groups };
     drop(eval);
     let first_count = firsts.len();
     let mut kept = vec![false; scan.exec.types.len()];
@@ -1828,7 +1894,7 @@ fn grow(
         States::Sum(s) => s.resize(groups, (0, 0)),
         States::Extreme(s) => s.resize(groups, None),
         States::Distinct(s) => s.resize_with(groups, FxSet::default),
-        States::Shift => {}
+        States::Shift | States::Done(_) => {}
         States::Row(s) => {
             if let Method::Row(agg) = &call.method {
                 let eval = Eval::new(params, session, empty, cache, &[]);
@@ -1859,25 +1925,40 @@ fn group_order(
     let exprs: Vec<&Expr> = query.group.iter().map(|g| &query.targets[g.target].expr).collect();
     let mut eval = Eval::new(params, session, tables, cache, &[]);
     let tuples: Vec<[usize; 1]> = (0..groups).map(|g| [g]).collect();
-    let mut keys = Vec::with_capacity(groups);
-    for tuple in &tuples {
-        eval.tuple = tuple;
-        keys.push(exprs.iter().map(|e| eval.eval(e)).collect::<Result<Vec<_>>>()?);
-    }
     let types: Vec<u32> = exprs.iter().map(|e| e.ty).collect();
     if let Some(table) = session.hash_tables(query).and_then(|t| t.group.clone()) {
         let places: Option<Vec<usize>> =
             table.keys.iter().map(|t| query.group.iter().position(|g| g.target == *t)).collect();
         if let Some(places) = places {
-            let hash = |g: usize| hashed::hash(places.iter().map(|&p| (types[p], &keys[g][p])));
-            if groups == 0 || hash(0).is_ok() {
-                let mut hashes = Vec::with_capacity(groups);
-                for g in 0..groups {
-                    hashes.push(hash(g)?);
+            // The hash of each group, from the values of its keys in one row that each group uses again.
+            let mut hashes = Vec::with_capacity(groups);
+            let mut key = Vec::with_capacity(places.len());
+            let mut hashed = true;
+            for tuple in &tuples {
+                eval.tuple = tuple;
+                key.clear();
+                for &p in &places {
+                    key.push(eval.eval(exprs[p])?);
                 }
+                match hashed::hash(places.iter().zip(&key).map(|(&p, v)| (types[p], v))) {
+                    Ok(h) => hashes.push(h),
+                    // A key that the hash of the plan cannot read: the groups go in the order of a sort, as before the hash.
+                    Err(_) if hashes.is_empty() => {
+                        hashed = false;
+                        break;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            if hashed {
                 return hashed::order_of(&hashes, table.groups, trailing);
             }
         }
+    }
+    let mut keys = Vec::with_capacity(groups);
+    for tuple in &tuples {
+        eval.tuple = tuple;
+        keys.push(exprs.iter().map(|e| eval.eval(e)).collect::<Result<Vec<_>>>()?);
     }
     let list: Vec<rupg_analyze::SortGroup> = query
         .group
