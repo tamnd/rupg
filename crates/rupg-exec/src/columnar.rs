@@ -66,8 +66,14 @@ enum KeyMap {
 }
 
 impl KeyMap {
-    fn new(words: usize) -> KeyMap {
-        if words <= 4 { KeyMap::Small(FxMap::default()) } else { KeyMap::Large(FxMap::default()) }
+    /// A map for keys of `words` words, with room for `groups` groups.
+    fn new(words: usize, groups: usize) -> KeyMap {
+        let hasher = BuildHasherDefault::default();
+        if words <= 4 {
+            KeyMap::Small(FxMap::with_capacity_and_hasher(groups, hasher))
+        } else {
+            KeyMap::Large(FxMap::with_capacity_and_hasher(groups, hasher))
+        }
     }
 
     /// The group of the key `word`, and true for a new group, which gets the ID `next`.
@@ -1650,7 +1656,9 @@ fn grouped(
         aggs.push(Call { agg, key: std::ptr::from_ref(agg), method, states, codes });
     }
     let keys: Vec<&Expr> = query.group.iter().map(|g| &query.targets[g.target].expr).collect();
-    let mut map = KeyMap::new(keys.len() + 1);
+    // The map has room for the groups that the plan expects, so it does not grow while the scan finds them.
+    let expected = session_groups(scan.exec.session, query).min(scan.rows);
+    let mut map = KeyMap::new(keys.len() + 1, if keys.is_empty() { 0 } else { expected });
     let mut new_rows: Vec<u32> = Vec::new();
     let mut firsts: Vec<Vec<Value>> = Vec::new();
     // The values of the keys of each group, from its first row.
@@ -1987,6 +1995,12 @@ fn grow(
         }
     }
     Ok(())
+}
+
+/// The number of groups that the hash table of the plan expects, or 0 when the plan has no hash table for the groups.
+fn session_groups(session: &dyn Session, query: &Query) -> usize {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    session.hash_tables(query).and_then(|t| t.group.as_ref().map(|g| g.groups as usize)).unwrap_or(0)
 }
 
 /// The order of the groups, as the row engine gives them: the order of the hash table of the `HashAggregate` of the plan, the order of the keys for a sort, or the order of the first rows.
