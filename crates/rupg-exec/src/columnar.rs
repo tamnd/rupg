@@ -1653,6 +1653,8 @@ fn grouped(
     let mut map = KeyMap::new(keys.len() + 1);
     let mut new_rows: Vec<u32> = Vec::new();
     let mut firsts: Vec<Vec<Value>> = Vec::new();
+    // The values of the keys of each group, from its first row.
+    let mut key_values: Vec<Value> = Vec::new();
     let mut bail = false;
     let mut word = vec![0_u64; keys.len() + 1];
     let mut ids: Vec<u32> = Vec::with_capacity(VECTOR);
@@ -1710,6 +1712,7 @@ fn grouped(
                 if new {
                     groups += 1;
                     new_rows.push(row_at);
+                    key_values.extend(cols.iter().map(|c| c.value(i, &exec.dicts)));
                 }
                 ids.push(id);
             }
@@ -1944,7 +1947,7 @@ fn grouped(
         kept[column] = true;
     }
     let tables = scan::kept_tables(query, firsts, &kept);
-    let order = group_order(query, params, session, cache, &tables, groups, trailing)?;
+    let order = group_order(query, session, &key_values, groups, trailing)?;
     let (rows, ordered) = project(
         query,
         params,
@@ -1989,10 +1992,8 @@ fn grow(
 /// The order of the groups, as the row engine gives them: the order of the hash table of the `HashAggregate` of the plan, the order of the keys for a sort, or the order of the first rows.
 fn group_order(
     query: &Query,
-    params: &[Value],
     session: &dyn Session,
-    cache: &Cache,
-    tables: &scan::Tables,
+    key_values: &[Value],
     groups: usize,
     trailing: bool,
 ) -> Result<Vec<usize>> {
@@ -2000,26 +2001,18 @@ fn group_order(
     if query.group.is_empty() {
         return Ok(first);
     }
-    // The values of the keys of each group, from its first row.
-    let exprs: Vec<&Expr> = query.group.iter().map(|g| &query.targets[g.target].expr).collect();
-    let mut eval = Eval::new(params, session, tables, cache, &[]);
-    let tuples: Vec<[usize; 1]> = (0..groups).map(|g| [g]).collect();
-    let types: Vec<u32> = exprs.iter().map(|e| e.ty).collect();
+    let width = query.group.len();
+    let keys: Vec<&[Value]> = key_values.chunks(width).collect();
+    let types: Vec<u32> = query.group.iter().map(|g| query.targets[g.target].expr.ty).collect();
     if let Some(table) = session.hash_tables(query).and_then(|t| t.group.clone()) {
         let places: Option<Vec<usize>> =
             table.keys.iter().map(|t| query.group.iter().position(|g| g.target == *t)).collect();
         if let Some(places) = places {
-            // The hash of each group, from the values of its keys in one row that each group uses again.
+            // The hash of each group, from the values of its keys in its first row.
             let mut hashes = Vec::with_capacity(groups);
-            let mut key = Vec::with_capacity(places.len());
             let mut hashed = true;
-            for tuple in &tuples {
-                eval.tuple = tuple;
-                key.clear();
-                for &p in &places {
-                    key.push(eval.eval(exprs[p])?);
-                }
-                match hashed::hash(places.iter().zip(&key).map(|(&p, v)| (types[p], v))) {
+            for key in &keys {
+                match hashed::hash(places.iter().map(|&p| (types[p], &key[p]))) {
                     Ok(h) => hashes.push(h),
                     // A key that the hash of the plan cannot read: the groups go in the order of a sort, as before the hash.
                     Err(_) if hashes.is_empty() => {
@@ -2034,11 +2027,6 @@ fn group_order(
             }
         }
     }
-    let mut keys = Vec::with_capacity(groups);
-    for tuple in &tuples {
-        eval.tuple = tuple;
-        keys.push(exprs.iter().map(|e| eval.eval(e)).collect::<Result<Vec<_>>>()?);
-    }
     let list: Vec<rupg_analyze::SortGroup> = query
         .group
         .iter()
@@ -2050,6 +2038,6 @@ fn group_order(
     }
     let keys_of = sort::Keys::new(&list, &types, session)?;
     let mut order = first;
-    sort::qsort(&mut order, &mut |a, b| Ok(keys_of.compare(&keys[*a], &keys[*b])?.then(a.cmp(b))))?;
+    sort::qsort(&mut order, &mut |a, b| Ok(keys_of.compare(keys[*a], keys[*b])?.then(a.cmp(b))))?;
     Ok(order)
 }
