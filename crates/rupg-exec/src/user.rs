@@ -1645,9 +1645,7 @@ fn statistics<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) ->
     for stat in builtin::all_catalog_statistics() {
         let mut row =
             start(stat.table, stat.attnum, stat.inherit, stat.null_frac, stat.width, stat.distinct);
-        let column = usize::try_from(stat.attnum - 1).ok().and_then(|at| {
-            rupg_pgcatalog::catalog_by_oid(stat.table)?.columns.get(at).map(|c| c.type_oid)
-        });
+        let column = column_type(catalog, stat.table, stat.attnum);
         for n in 1..=5 {
             let slot = stat.slots.get(n - 1);
             let values = match (slot, column) {
@@ -1701,6 +1699,15 @@ fn statistics<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) ->
         }
     }
     rows
+}
+
+/// The type of the column `attnum` of the table `table` that the `ANALYZE` of `initdb` read: a system catalog, or a table of `information_schema`, which is a relation of the catalog.
+fn column_type(catalog: &Catalog, table: u32, attnum: i16) -> Option<u32> {
+    let at = usize::try_from(attnum - 1).ok()?;
+    match rupg_pgcatalog::catalog_by_oid(table) {
+        Some(system) => system.columns.get(at).map(|c| c.type_oid),
+        None => catalog.relation(table)?.columns.get(at).map(|c| c.ty),
+    }
 }
 
 /// The type of the values of a slot of the kind `kind` of `pg_statistic` for a column of the type `ty`. For the kind `STATISTIC_KIND_MCELEM` it is the element type of an array or `text` for `tsvector`, as `compute_array_stats` and `compute_tsvector_stats` set `statypid`. For the other kinds it is the type of the column.
