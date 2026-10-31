@@ -69,3 +69,5 @@ impl Catalog {
         }
     }
 }
+
+rupg_common::persist_struct!(Conversion { oid, name, namespace, owner, from, to, proc, default });

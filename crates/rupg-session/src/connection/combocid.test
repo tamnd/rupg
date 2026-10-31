@@ -1,0 +1,58 @@
+> CREATE TABLE cc (foobar int)
+CREATE TABLE
+> BEGIN
+BEGIN
+> INSERT INTO cc SELECT 1 LIMIT 0
+INSERT 0 0
+> INSERT INTO cc SELECT 1 LIMIT 0
+INSERT 0 0
+> INSERT INTO cc VALUES (1)
+INSERT 0 1
+> INSERT INTO cc VALUES (2)
+INSERT 0 1
+> SELECT ctid, cmin, cmax, * FROM cc
+fields ctid@cc.-1:27:6:-1,cmin@cc.-3:29:4:-1,cmax@cc.-5:29:4:-1,foobar@cc.1:23:4:-1
+row (0,1),2,2,1
+row (0,2),3,3,2
+SELECT 2
+> SAVEPOINT s1
+SAVEPOINT
+> UPDATE cc SET foobar = foobar + 10
+UPDATE 2
+> SELECT ctid, cmin, * FROM cc
+fields ctid@cc.-1:27:6:-1,cmin@cc.-3:29:4:-1,foobar@cc.1:23:4:-1
+row (0,3),4,11
+row (0,4),4,12
+SELECT 2
+> ROLLBACK TO s1
+ROLLBACK
+> SELECT ctid, cmin, cmax, * FROM cc
+fields ctid@cc.-1:27:6:-1,cmin@cc.-3:29:4:-1,cmax@cc.-5:29:4:-1,foobar@cc.1:23:4:-1
+row (0,1),0,0,1
+row (0,2),1,1,2
+SELECT 2
+> COMMIT
+COMMIT
+> SELECT ctid, cmin, * FROM cc
+fields ctid@cc.-1:27:6:-1,cmin@cc.-3:29:4:-1,foobar@cc.1:23:4:-1
+row (0,1),0,1
+row (0,2),1,2
+SELECT 2
+> BEGIN
+BEGIN
+> SELECT * FROM cc FOR UPDATE
+fields foobar@cc.1:23:4:-1
+row 1
+row 2
+SELECT 2
+> DELETE FROM cc WHERE foobar = 1
+DELETE 1
+> ROLLBACK
+ROLLBACK
+> SELECT ctid, cmin, * FROM cc
+fields ctid@cc.-1:27:6:-1,cmin@cc.-3:29:4:-1,foobar@cc.1:23:4:-1
+row (0,1),1,1
+row (0,2),1,2
+SELECT 2
+> DROP TABLE cc
+DROP TABLE
