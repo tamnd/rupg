@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.4.17 (2026-10-31)
+
 ### Added
 
 - `pg_stats` and `pg_statistic` show again the most common values and the histograms of the tables of `information_schema`, such as `sql_parts`, which were NULL after #1128 (#1231).
