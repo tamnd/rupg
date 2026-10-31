@@ -1709,6 +1709,9 @@ fn project(
                 return Ok((out, true));
             }
             for (n, g) in order.into_iter().enumerate() {
+                if out.len() >= needed {
+                    break;
+                }
                 crate::interrupt(session, n)?;
                 eval.tuple = &tuples[g];
                 eval.group = Group { aggs: results.group(g, None)?, ..Group::default() };
@@ -2211,13 +2214,20 @@ fn grouped(
     }
     let hashes = hashing.map(|_| hashes);
     let order = group_order(query, session, &key_values, hashes.as_deref(), groups, trailing)?;
+    // With no sort, the limit of the query takes the first groups, and the groups after them are not evaluated, as `LIMIT` over `HashAggregate` does.
+    let needed = match count {
+        Some(count) if query.sort.is_empty() && query.distinct.is_empty() => {
+            offset.saturating_add(count)
+        }
+        _ => usize::MAX,
+    };
     let (rows, ordered) = project(
         query,
         params,
         session,
         cache,
         &tables,
-        usize::MAX,
+        needed,
         Some((order, results, first_count)),
         offset,
         count,

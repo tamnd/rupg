@@ -1545,7 +1545,18 @@ fn run_query(
     }
     let none = vec![scan::NONE; query.relations.len()];
     let rows = if query.grouped {
-        agg::rows(&mut eval, query, &tuples, &none)?
+        // With no sort and no window, `Limit` stops after the groups that it gives.
+        let needed = match count {
+            Some(count)
+                if query.sort.is_empty()
+                    && query.distinct.is_empty()
+                    && query.windows.is_empty() =>
+            {
+                offset.saturating_add(count)
+            }
+            _ => usize::MAX,
+        };
+        agg::rows(&mut eval, query, &tuples, &none, needed)?
     } else {
         // With no sort, `Limit` stops after the rows that it gives.
         let ordered = !query.sort.is_empty() || !query.distinct.is_empty();

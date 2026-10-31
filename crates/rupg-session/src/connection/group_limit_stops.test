@@ -1,0 +1,27 @@
+> CREATE TABLE gl (k int, v int)
+CREATE TABLE
+> INSERT INTO gl SELECT i % 5, i FROM generate_series(1, 100) i
+INSERT 0 100
+> SELECT k, count(*) FROM gl GROUP BY k
+fields k@gl.1:23:4:-1,count:20:8:-1
+row 3,20
+row 4,20
+row 0,20
+row 2,20
+row 1,20
+SELECT 5
+> SELECT k, 10 / k, count(*) FROM gl GROUP BY k LIMIT 2
+fields k@gl.1:23:4:-1,?column?:23:4:-1,count:20:8:-1
+row 3,3,20
+row 4,2,20
+SELECT 2
+> SELECT k, 10 / k, count(*) FROM gl GROUP BY k HAVING count(*) > 0 LIMIT 1 OFFSET 1
+fields k@gl.1:23:4:-1,?column?:23:4:-1,count:20:8:-1
+row 4,2,20
+SELECT 1
+> SELECT k, 10 / k FROM gl GROUP BY k HAVING k <> 4 LIMIT 1 OFFSET 1
+fields k@gl.1:23:4:-1,?column?:23:4:-1
+ERROR 22012 division by zero
+> SELECT k, 10 / k FROM gl GROUP BY k LIMIT 5
+fields k@gl.1:23:4:-1,?column?:23:4:-1
+ERROR 22012 division by zero

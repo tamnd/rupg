@@ -1041,7 +1041,7 @@ impl<'p, 'q> Exec<'p, 'q> {
             let mut eval = Eval::new(cx.params, cx.session, &tables, cx.cache, &[]);
             let none = vec![scan::NONE; query.relations.len()];
             let groups = agg::group_count(&mut eval, query, &tuples)?;
-            let rows = agg::rows(&mut eval, query, &tuples, &none)?;
+            let rows = agg::rows(&mut eval, query, &tuples, &none, usize::MAX)?;
             self.actual.filtered[0] += (groups.saturating_sub(rows.len())) as u64;
             let width = width(node);
             if hashed {
