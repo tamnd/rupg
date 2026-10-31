@@ -375,6 +375,10 @@ fn steps<'q>(
         };
         let bound = (count > 0.0 && offset >= 0.0).then_some(count + offset);
         node = sort_if(level, node, keys, order, bound, only)?;
+        // `create_ordered_paths` sorts the cheapest partial plan with the bound of `LIMIT` below a `Gather Merge`.
+        if bound.is_some() && matches!(node.kind, Kind::GatherMerge { .. }) {
+            parallel::remerge(&mut node, bound);
+        }
         if costs.late {
             node = project_late(level, node, costs);
         }
@@ -1023,6 +1027,14 @@ impl<'q> Builder<'q> {
             // `apply_scanjoin_target_to_paths`: the plan below the `Gather` computes a target that a worker can compute.
             project(child, costs.scan.0, costs.scan.1);
             parallel::regather(&mut node);
+        } else if let (Kind::GatherMerge { .. }, [sorted]) =
+            (&node.kind, node.children.as_mut_slice())
+            && let (Kind::Sort(_), [child]) = (&sorted.kind, sorted.children.as_mut_slice())
+            && query.targets.iter().all(|t| parallel::safe(&t.expr))
+        {
+            // `apply_scanjoin_target_to_paths` adds the target to the partial plan, and the `Sort` and the `Gather Merge` above it come after.
+            project(child, costs.scan.0, costs.scan.1);
+            parallel::remerge(&mut node, None);
         } else {
             project(&mut node, costs.scan.0, costs.scan.1);
         }
