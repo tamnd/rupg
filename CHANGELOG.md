@@ -4,6 +4,9 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `cargo xtask style` passes again: the SAFETY comment of `pthread_sigmask` in `os::StopSignals` is now directly above its `unsafe` block, and a failed `pthread_sigmask` shows its own error code (#1225).
 ## 0.4.16 (2026-10-31)
 
 ### Added
