@@ -48,9 +48,12 @@ fn murmurhash32(data: u32) -> u32 {
 /// # Errors
 ///
 /// `42883` for a type with no hash function.
-pub(crate) fn hash<'v>(keys: impl IntoIterator<Item = (u32, &'v Value)>) -> Result<u32> {
+pub(crate) fn hash<V: std::borrow::Borrow<Value>>(
+    keys: impl IntoIterator<Item = (u32, V)>,
+) -> Result<u32> {
     let mut hash: u32 = 0;
     for (ty, value) in keys {
+        let value = value.borrow();
         hash = hash.rotate_left(1);
         if !value.is_null() {
             #[allow(clippy::cast_possible_truncation)]
