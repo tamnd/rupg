@@ -1025,6 +1025,40 @@ impl Expr {
                     && a.args.iter().zip(&b.args).all(|(x, y)| x.same(y));
             }
             (ExprKind::Relabel(a, af), ExprKind::Relabel(b, bf)) => return af == bf && a.same(b),
+            (ExprKind::Agg(a), ExprKind::Agg(b)) => {
+                // Each field, so that a new field of `Aggref` must come here too.
+                let Aggref {
+                    oid,
+                    kind,
+                    direct,
+                    args,
+                    nargs,
+                    order,
+                    distinct,
+                    star,
+                    variadic,
+                    filter,
+                    levels_up,
+                } = &**a;
+                let all = |x: &[Expr], y: &[Expr]| {
+                    x.len() == y.len() && x.iter().zip(y).all(|(x, y)| x.same(y))
+                };
+                return *oid == b.oid
+                    && *kind == b.kind
+                    && *nargs == b.nargs
+                    && *star == b.star
+                    && *variadic == b.variadic
+                    && *levels_up == b.levels_up
+                    && *order == b.order
+                    && *distinct == b.distinct
+                    && all(direct, &b.direct)
+                    && all(args, &b.args)
+                    && match (filter, &b.filter) {
+                        (None, None) => true,
+                        (Some(x), Some(y)) => x.same(y),
+                        _ => false,
+                    };
+            }
             _ => {}
         }
         fn strip(expr: &mut Expr) {
