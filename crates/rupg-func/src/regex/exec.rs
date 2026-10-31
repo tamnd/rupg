@@ -4,6 +4,7 @@
 //!
 //! A program with no back reference keeps a set of the pairs of instruction and position that it has tried, so each pair is tried once and the search takes time in proportion to the size of the program and the length of the string. A program with back references cannot do this, because the result then depends on the groups, and it stops an empty loop with a mark of the position at the start of each pass.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use super::parse::{Assert, DUPINF, Look, Node, Set, to_lower};
@@ -14,6 +15,57 @@ const MAX_INSTS: usize = 1 << 20;
 
 /// The largest set of tried pairs, in bits.
 const MAX_VISITED: usize = 1 << 26;
+
+/// The most states that the DFA of a program keeps. It drops all its states when it has more.
+const MAX_STATES: usize = 4096;
+
+/// The constraints, in the order of their bits in the mask of the constraints that hold at a position.
+const ASSERTS: [Assert; 8] = [
+    Assert::Bol,
+    Assert::Eol,
+    Assert::Bos,
+    Assert::Eos,
+    Assert::WordStart,
+    Assert::WordEnd,
+    Assert::Boundary,
+    Assert::NotBoundary,
+];
+
+/// The DFA of the main program, which [`Program::ends`] builds as it reads strings. A state is a set of instructions `Set` that the threads wait at. The closure of a state follows the instructions that read no character, with the mask of the constraints that hold at the position, and the step of a closed state reads one character.
+#[derive(Debug, Default)]
+struct Dfa {
+    ids: HashMap<Box<[usize]>, u32>,
+    states: Vec<Box<[usize]>>,
+    /// For each state, the closed states for the masks that the DFA met: the mask, the closed state and true when the closure has `Match`.
+    closed: Vec<Vec<(u8, u32, bool)>>,
+    /// For each closed state and ASCII character, the closure with the mask 0 of the step, with [`MATCHED`] set when it has `Match`, or [`UNKNOWN`].
+    fast: Vec<u32>,
+    /// The steps of the closed states after the characters.
+    steps: HashMap<(u32, u32), u32>,
+}
+
+/// A step of the DFA that it did not take yet.
+const UNKNOWN: u32 = u32::MAX;
+
+/// The bit of an item of [`Dfa::fast`] for a closure that has `Match`.
+const MATCHED: u32 = 1 << 31;
+
+impl Dfa {
+    fn intern(&mut self, mut pcs: Vec<usize>) -> u32 {
+        pcs.sort_unstable();
+        pcs.dedup();
+        if let Some(&id) = self.ids.get(pcs.as_slice()) {
+            return id;
+        }
+        let id = u32::try_from(self.states.len()).unwrap_or(0) & !MATCHED;
+        let pcs: Box<[usize]> = pcs.into();
+        self.ids.insert(pcs.clone(), id);
+        self.states.push(pcs);
+        self.closed.push(Vec::new());
+        self.fast.extend([UNKNOWN; 128]);
+        id
+    }
+}
 
 /// An instruction of the machine.
 #[derive(Clone, Copy, Debug)]
@@ -56,6 +108,10 @@ pub(super) struct Program {
     icase: bool,
     /// True when a match can only start at the start of the string, because the pattern starts with `^` without `REG_NLANCH` or with `\A`.
     anchored: bool,
+    /// The DFA of the main program, or `None` when the program has an instruction that a DFA cannot run: a lookaround or a back reference. The guards of empty loops only stop paths back to a pair of instruction and position that the machine tried already, so the DFA follows them as if they were not there.
+    dfa: Option<RefCell<Dfa>>,
+    /// The mask of the constraints that the main program has, with the bits of [`ASSERTS`].
+    asserts: u8,
 }
 
 /// The state of the compiler.
@@ -221,8 +277,16 @@ impl Program {
             Some(Inst::Assert(Assert::Bol)) => !nlanch,
             _ => false,
         };
+        let insts = &compiler.progs[0].insts;
+        let plain = !insts.iter().any(|i| matches!(i, Inst::Look(..) | Inst::Backref(_)));
+        let asserts = insts.iter().fold(0_u8, |mask, i| match i {
+            Inst::Assert(a) => mask | 1 << ASSERTS.iter().position(|b| b == a).unwrap_or(0),
+            _ => mask,
+        });
         Ok(Program {
             anchored,
+            dfa: plain.then(RefCell::default),
+            asserts,
             progs: compiler.progs,
             sets: compiler.sets,
             groups,
@@ -231,6 +295,129 @@ impl Program {
             nlanch,
             icase: cflags & flags::ICASE != 0,
         })
+    }
+
+    /// [`Program::ends`] with the DFA. The threads of the backtracking machine reach the same pairs of instruction and position, so the ends are the same.
+    fn dfa_ends(&self, dfa: &mut Dfa, s: &[u32], start: usize) -> Vec<bool> {
+        if dfa.states.len() > MAX_STATES {
+            *dfa = Dfa::default();
+        }
+        let mut ends = vec![false; s.len() + 1];
+        let first = dfa.intern(vec![0]);
+        let (mut state, matched) = self.closure(dfa, first, self.mask(s, start));
+        ends[start] = matched;
+        let dead = dfa.intern(Vec::new());
+        for pos in start..s.len() {
+            if state == dead {
+                break;
+            }
+            let c = s[pos];
+            let mask = self.mask(s, pos + 1);
+            if mask == 0 && c < 128 {
+                let known = dfa.fast[state as usize * 128 + c as usize];
+                if known != UNKNOWN {
+                    state = known & !MATCHED;
+                    ends[pos + 1] = known & MATCHED != 0;
+                    continue;
+                }
+            }
+            let next = self.step(dfa, state, c);
+            let (closed, matched) = self.closure(dfa, next, mask);
+            if mask == 0 && c < 128 {
+                dfa.fast[state as usize * 128 + c as usize] =
+                    closed | if matched { MATCHED } else { 0 };
+            }
+            state = closed;
+            ends[pos + 1] = matched;
+        }
+        ends
+    }
+
+    /// The state of the DFA after a closed state reads a character.
+    fn step(&self, dfa: &mut Dfa, closed: u32, c: u32) -> u32 {
+        if let Some(&next) = dfa.steps.get(&(closed, c)) {
+            return next;
+        }
+        let insts = &self.progs[0].insts;
+        let next: Vec<usize> = dfa.states[closed as usize]
+            .iter()
+            .filter(|&&pc| matches!(insts[pc], Inst::Set(id) if self.sets[id].contains(c)))
+            .map(|&pc| pc + 1)
+            .collect();
+        let next = dfa.intern(next);
+        dfa.steps.insert((closed, c), next);
+        next
+    }
+
+    /// The closed state of a state of the DFA for a mask, and true when the closure has `Match`.
+    fn closure(&self, dfa: &mut Dfa, state: u32, mask: u8) -> (u32, bool) {
+        if let Some(&(_, closed, matched)) = dfa.closed[state as usize].iter().find(|c| c.0 == mask)
+        {
+            return (closed, matched);
+        }
+        let (waiting, matched) = self.close(&dfa.states[state as usize], mask);
+        let closed = dfa.intern(waiting);
+        dfa.closed[state as usize].push((mask, closed, matched));
+        (closed, matched)
+    }
+
+    /// The mask of the constraints of the main program that hold at a position, with the bits of [`ASSERTS`].
+    fn mask(&self, s: &[u32], pos: usize) -> u8 {
+        if self.asserts == 0 {
+            return 0;
+        }
+        let newline = u32::from(b'\n');
+        let bos = pos == 0;
+        let eos = pos == s.len();
+        let bol = bos || (self.nlanch && s[pos - 1] == newline);
+        let eol = eos || (self.nlanch && s[pos] == newline);
+        let mut mask = u8::from(bol) | u8::from(eol) << 1 | u8::from(bos) << 2 | u8::from(eos) << 3;
+        if self.asserts & 0xf0 != 0 {
+            let before = !bos && is_word(s[pos - 1]);
+            let after = !eos && is_word(s[pos]);
+            mask |= u8::from(!before && after) << 4
+                | u8::from(before && !after) << 5
+                | u8::from(before != after) << 6
+                | u8::from(before == after) << 7;
+        }
+        mask & self.asserts
+    }
+
+    /// The closure of a state of the DFA with a mask of the constraints that hold: the instructions `Set` that the threads reach without reading a character, and true when they reach `Match`.
+    fn close(&self, state: &[usize], mask: u8) -> (Vec<usize>, bool) {
+        let insts = &self.progs[0].insts;
+        let mut seen = vec![false; insts.len()];
+        let mut stack: Vec<usize> = state.to_vec();
+        let mut waiting = Vec::new();
+        let mut matched = false;
+        while let Some(pc) = stack.pop() {
+            if std::mem::replace(&mut seen[pc], true) {
+                continue;
+            }
+            match insts[pc] {
+                Inst::Set(_) => waiting.push(pc),
+                Inst::Match => matched = true,
+                Inst::Assert(a) => {
+                    let bit = ASSERTS.iter().position(|&b| b == a).unwrap_or(0);
+                    if mask & (1 << bit) != 0 {
+                        stack.push(pc + 1);
+                    }
+                }
+                Inst::Save(_) | Inst::Mark(_) | Inst::Progress(_) => stack.push(pc + 1),
+                Inst::Split(first, second) => {
+                    stack.push(second);
+                    stack.push(first);
+                }
+                Inst::Jmp(to) => stack.push(to),
+                Inst::Look(..) | Inst::Backref(_) => {}
+            }
+        }
+        (waiting, matched)
+    }
+
+    /// True when a match can only start at the start of the string.
+    pub(super) fn anchored(&self) -> bool {
+        self.anchored
     }
 
     /// True when the pattern has back references.
@@ -248,6 +435,14 @@ impl Program {
 
     /// The ends of the matches from `start`: the item at a position is true when a match ends there.
     pub(super) fn ends(&self, s: &[u32], start: usize) -> Vec<bool> {
+        if let Some(dfa) = &self.dfa {
+            return self.dfa_ends(&mut dfa.borrow_mut(), s, start);
+        }
+        self.track_ends(s, start)
+    }
+
+    /// [`Program::ends`] with the backtracking machine.
+    fn track_ends(&self, s: &[u32], start: usize) -> Vec<bool> {
         let mut search = Search { program: self, s, looks: vec![Vec::new(); self.progs.len()] };
         let mut visited = search.visited(0);
         let mut ends = vec![false; s.len() + 1];
@@ -424,5 +619,57 @@ impl Search<'_> {
             }
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{flags, parse};
+    use super::*;
+
+    #[test]
+    fn dfa_ends_are_the_ends_of_the_backtracker() {
+        let patterns = [
+            "a*b",
+            "(a|ab)(c|bcd)",
+            "^https?://(?:www\\.)?([^/]+)/.*$",
+            "\\mfoo\\M",
+            "\\yab\\Y",
+            "^$",
+            "(?n)^b$",
+            "[[:alpha:]]+\\d?",
+            "x{2,3}y*",
+            "(a*)*",
+            ".*",
+            "",
+        ];
+        let strings = [
+            "",
+            "ab",
+            "aab",
+            "abcd",
+            "foo bar",
+            "afoob",
+            "http://www.a.com/x",
+            "a\nb",
+            "xxxyy",
+            "abab ab",
+        ];
+        for pattern in patterns {
+            let chars: Vec<u32> = pattern.chars().map(u32::from).collect();
+            for cflags in [flags::ADVANCED, flags::ADVANCED | flags::ICASE] {
+                let parsed = parse::Parser::run(&chars, cflags).unwrap();
+                let program = Program::new(&parsed.node, parsed.groups, parsed.cflags).unwrap();
+                let dfa = program.dfa.as_ref().unwrap_or_else(|| panic!("{pattern} has no DFA"));
+                for string in strings {
+                    let s: Vec<u32> = string.chars().map(u32::from).collect();
+                    for start in 0..=s.len() {
+                        let want = program.track_ends(&s, start);
+                        let got = program.dfa_ends(&mut dfa.borrow_mut(), &s, start);
+                        assert_eq!(got, want, "{pattern} on {string:?} from {start}");
+                    }
+                }
+            }
+        }
     }
 }

@@ -140,6 +140,9 @@ impl Regex {
         if self.prog.has_backrefs() {
             return Ok(tree.cfind(chars, from));
         }
+        if self.prog.anchored() {
+            return Ok(if from == 0 { tree.find(chars, 0) } else { None });
+        }
         let mut from = from;
         while let Some(begin) = self.prog.first(chars, from) {
             if let Some(groups) = tree.find(chars, begin) {
