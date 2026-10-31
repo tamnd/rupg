@@ -79,6 +79,16 @@ impl Code {
     }
 }
 
+/// The characters of `s` as numbers, with room for each one from the start.
+fn points(s: &str) -> Vec<u32> {
+    if s.is_ascii() {
+        return s.bytes().map(u32::from).collect();
+    }
+    let mut points = Vec::with_capacity(s.len());
+    points.extend(s.chars().map(u32::from));
+    points
+}
+
 /// A compiled pattern.
 pub(crate) struct Regex {
     parsed: parse::Parsed,
@@ -90,7 +100,7 @@ pub(crate) struct Regex {
 impl Regex {
     /// `pg_regcomp` for a pattern and its flags.
     fn compile(pattern: &str, cflags: u32) -> std::result::Result<Self, Code> {
-        let chars: Vec<u32> = pattern.chars().map(u32::from).collect();
+        let chars: Vec<u32> = points(pattern);
         let parsed = parse::Parser::run(&chars, cflags)?;
         let prog = exec::Program::new(&parsed.node, parsed.groups, parsed.cflags)?;
         Ok(Regex { parsed, prog, tree: OnceCell::new() })
@@ -98,7 +108,7 @@ impl Regex {
 
     /// True when the pattern matches a part of `s`.
     pub(crate) fn is_match(&self, s: &str) -> bool {
-        let chars: Vec<u32> = s.chars().map(u32::from).collect();
+        let chars: Vec<u32> = points(s);
         if self.prog.has_backrefs() {
             return matches!(self.search(&chars, 0), Ok(Some(_)));
         }
@@ -116,7 +126,7 @@ impl Regex {
     ///
     /// `2201B` for a pattern that is too complex.
     pub(crate) fn find(&self, s: &str) -> Result<Option<tree::Groups>> {
-        let chars: Vec<u32> = s.chars().map(u32::from).collect();
+        let chars: Vec<u32> = points(s);
         self.find_chars(&chars, 0)
     }
 
@@ -216,7 +226,7 @@ pub(crate) fn validate(pattern: &str, cflags: u32) -> std::result::Result<(), St
 /// The message of `pg_regerror` for a pattern that is not valid or that is too complex.
 pub fn auth_search(pattern: &str, s: &str) -> std::result::Result<Option<AuthMatch>, &'static str> {
     let regex = Regex::compile(pattern, flags::ADVANCED).map_err(Code::message)?;
-    let points: Vec<u32> = s.chars().map(u32::from).collect();
+    let points = points(s);
     let Some(groups) = regex.search(&points, 0).map_err(Code::message)? else { return Ok(None) };
     let group = groups.get(1).copied().flatten().map(|span| chars(s, span));
     Ok(Some(AuthMatch { group }))
@@ -578,7 +588,7 @@ fn substitute(out: &mut String, replacement: &str, groups: &tree::Groups, chars:
 
 /// `replace_text_regexp`: `s` with the match number `n` from the character `start` replaced, or each match when `n` is 0.
 fn replace(s: &str, re: &Regex, replacement: &str, start: usize, n: i64) -> Result<Value> {
-    let chars: Vec<u32> = s.chars().map(u32::from).collect();
+    let chars: Vec<u32> = points(s);
     let mut out = String::new();
     let mut done = 0;
     let mut search = start;
@@ -648,7 +658,7 @@ fn regexp_count(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     let start = param(args, (2, "start"), 1, |v| v > 0)?;
     let cflags = all_flags(args, 3, "regexp_count()")?;
     let re = compile(arg(args, 1)?, cflags)?;
-    let chars: Vec<u32> = arg(args, 0)?.chars().map(u32::from).collect();
+    let chars: Vec<u32> = points(arg(args, 0)?);
     let found = setup_matches(&chars, &re, start_at(start), true, false, false)?;
     Ok(Value::Int4(i32::try_from(found.len()).unwrap_or(i32::MAX)))
 }
@@ -680,7 +690,7 @@ fn regexp_instr(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     let subexpr = param(args, (6, "subexpr"), 0, |v| v >= 0)?;
     let cflags = all_flags(args, 5, "regexp_instr()")?;
     let re = compile(arg(args, 1)?, cflags)?;
-    let chars: Vec<u32> = arg(args, 0)?.chars().map(u32::from).collect();
+    let chars: Vec<u32> = points(arg(args, 0)?);
     let pos = nth_span(&chars, &re, start, n, subexpr)?
         .map_or(0, |(so, eo)| if endoption == 1 { eo + 1 } else { so + 1 });
     Ok(Value::Int4(i32::try_from(pos).unwrap_or(i32::MAX)))
@@ -693,7 +703,7 @@ fn regexp_substr(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     let subexpr = param(args, (5, "subexpr"), 0, |v| v >= 0)?;
     let cflags = all_flags(args, 4, "regexp_substr()")?;
     let re = compile(arg(args, 1)?, cflags)?;
-    let chars: Vec<u32> = arg(args, 0)?.chars().map(u32::from).collect();
+    let chars: Vec<u32> = points(arg(args, 0)?);
     Ok(nth_span(&chars, &re, start, n, subexpr)?
         .map_or(Value::Null, |span| Value::Text(text(&chars, span))))
 }
@@ -702,7 +712,7 @@ fn regexp_substr(_: &Call<'_>, args: &[Value]) -> Result<Value> {
 pub(crate) fn regexp_matches(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
     let (cflags, glob) = options(args)?;
     let re = compile(arg(args, 1)?, cflags)?;
-    let chars: Vec<u32> = arg(args, 0)?.chars().map(u32::from).collect();
+    let chars: Vec<u32> = points(arg(args, 0)?);
     let found = setup_matches(&chars, &re, 0, glob, true, false)?;
     Ok(found
         .iter()
@@ -717,7 +727,7 @@ pub(crate) fn regexp_matches(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Val
 fn split(args: &[Value], function: &str) -> Result<Vec<String>> {
     let cflags = all_flags(args, 2, function)?;
     let re = compile(arg(args, 1)?, cflags)?;
-    let chars: Vec<u32> = arg(args, 0)?.chars().map(u32::from).collect();
+    let chars: Vec<u32> = points(arg(args, 0)?);
     let found = setup_matches(&chars, &re, 0, true, false, true)?;
     let mut parts = Vec::with_capacity(found.len() + 1);
     let mut from = 0;
@@ -794,6 +804,28 @@ mod tests {
         Regex::compile(pattern, flags::ADVANCED)
             .err()
             .unwrap_or_else(|| panic!("{pattern} compiled"))
+    }
+
+    fn replaced(s: &str, pattern: &str, replacement: &str) -> String {
+        let re = compile(pattern, flags::ADVANCED).unwrap_or_else(|e| panic!("{pattern}: {e:?}"));
+        match replace(s, &re, replacement, 0, 1) {
+            Ok(Value::Text(t)) => t,
+            other => panic!("{pattern}: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn steps_on_wide_characters_like_postgres() {
+        let url = r"^https?://(?:www\.)?([^/]+)/.*$";
+        assert_eq!(replaced("https://www.жж.рф/путь/é😀x", url, r"\1"), "жж.рф");
+        assert_eq!(replaced("https://a.b/é", url, r"\1"), "a.b");
+        assert_eq!(replaced("ab жжж cd", "[а-я]+", "X"), "ab X cd");
+        assert_eq!(replaced("ab éжж cd", "[а-я]+", "X"), "ab éX cd");
+        assert_eq!(replaced("ab жé cd", "^ab [а-я]+", "X"), "Xé cd");
+        assert_eq!(replaced("éé/ü/ab", "^([^/]*)/(.*)$", r"\2|\1"), "ü/ab|éé");
+        assert_eq!(replaced("aжbжc", "^(.*)ж", r"[\1]"), "[aжb]c");
+        assert!(!is("^[^0-9]*$", "жжж1"));
+        assert!(is("^[^0-9]*$", "жжжa"));
     }
 
     #[test]
