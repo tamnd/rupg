@@ -2487,40 +2487,43 @@ impl State {
         out: &mut Vec<u8>,
     ) -> bool {
         xid.put(out);
-        let tables: Vec<_> =
-            touched.iter().filter_map(|key| Some((key, self.tables.headers(key)?))).collect();
-        // A frozen version has no values to log, and a checkpoint writes it. The new versions after a freeze keep their values, and a delete logs no values.
-        let frozen = |table: &Table| {
-            table.frozen.as_ref().is_some_and(|frozen| !frozen.columns.is_empty())
-                && table.versions.iter().any(|v| v.xmin == xid && v.values.is_empty())
-        };
-        if tables.iter().any(|(_, table)| frozen(table)) {
-            return false;
-        }
-        let changed: usize = tables
-            .iter()
-            .map(|(_, table)| {
-                table.versions.iter().filter(|v| v.xmin == xid || v.xmax == xid).count()
-            })
-            .sum();
-        if changed > LOG_VERSIONS {
-            return false;
+        // One pass over the versions of each table finds the versions that the commit inserted and deleted.
+        let mut tables = Vec::new();
+        let mut changed = 0;
+        for key in touched {
+            let Some(table) = self.tables.headers(key) else { continue };
+            let (mut inserted, mut deleted) = (Vec::new(), Vec::new());
+            for version in &table.versions {
+                if version.xmin == xid {
+                    inserted.push(version);
+                } else if version.xmax == xid {
+                    deleted.push(version);
+                }
+            }
+            // A frozen version has no values to log, and a checkpoint writes it. The new versions after a freeze keep their values, and a delete logs no values.
+            let frozen = table.frozen.as_ref().is_some_and(|frozen| !frozen.columns.is_empty());
+            if frozen && inserted.iter().any(|v| v.values.is_empty()) {
+                return false;
+            }
+            changed += inserted.len() + deleted.len();
+            if changed > LOG_VERSIONS {
+                return false;
+            }
+            tables.push((key, table, inserted, deleted));
         }
         tables.len().put(out);
-        for (key, table) in tables {
+        for (key, table, inserted, deleted) in tables {
             key.put(out);
             truncated.contains(key).then_some(table.pages.generation).put(out);
             table.fixed.put(out);
             table.storage.put(out);
             table.save_free.put(out);
-            let inserted = || table.versions.iter().filter(|v| v.xmin == xid);
-            inserted().count().put(out);
-            for version in inserted() {
+            inserted.len().put(out);
+            for version in inserted {
                 version.put(out);
             }
-            let deleted = || table.versions.iter().filter(|v| v.xmax == xid && v.xmin != xid);
-            deleted().count().put(out);
-            for v in deleted() {
+            deleted.len().put(out);
+            for v in deleted {
                 (v.tid, v.xmax, v.cmax, v.next).put(out);
             }
         }
