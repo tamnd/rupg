@@ -12,6 +12,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - The catalog of a database has a byte form (`rupg_common::persist`), the first step to keep the catalog in the `.rupg` file (#1211).
 - The system columns `cmin` and `cmax` now show `t_cid` as in PostgreSQL 19: the command that inserted a row version, the command that deleted it, or a combo command ID when the same transaction inserted and deleted it. The value stays after a rollback of the delete. A query with `FOR UPDATE` or `FOR SHARE` now uses a command ID (#1208).
 
+### Fixed
+
+- A comparison of a `text` column with a constant in `HAVING` gives null again when a grouping set makes the column null. The comparison in place from #1213 read the value of the row and kept the rows of the other grouping sets (#1218).
+
 ## 0.4.15 (2026-10-31)
 
 ### Added

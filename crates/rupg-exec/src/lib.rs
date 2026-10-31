@@ -3431,6 +3431,11 @@ impl<'a> Eval<'a> {
                 _ => None,
             }
         }
+        // A grouping set can make the column null, and [`Self::eval`] gives the null.
+        let nulled = &self.group.nulled;
+        if [left, right].iter().any(|a| nulled.contains(&std::ptr::from_ref(*a))) {
+            return None;
+        }
         let compare = |a: &Value, b: &Value| match (a, b) {
             (Value::Null, _) | (_, Value::Null) => Some(Value::Null),
             (Value::Text(_), Value::Text(_)) => {
