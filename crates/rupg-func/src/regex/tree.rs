@@ -2,9 +2,7 @@
 //!
 //! The parser gives a tree of nodes, and this module builds from it the tree of `parse`, `parsebranch` and `parseqatom`, with the same flags of preference. Each node of the tree has its own program, which the dissection runs in place of the DFA of the node: the program tells where a match of the node can end. A back reference in such a program is the text of its group without the constraints, as `dupnfa` and `removeconstraints` make it. Thus the program accepts more than the node, and the dissection checks each back reference.
 
-use std::collections::BTreeMap;
-
-use super::exec::Program;
+use super::exec::{FxMap, Program};
 use super::parse::{DUPINF, Node, Parsed, to_lower};
 use super::{Code, flags};
 
@@ -301,7 +299,7 @@ impl Tree {
 
     /// `cfindloop`: the leftmost match from `from` for a pattern with back references. The search finds the first end of a match of the program of the root, then tries each start up to that end. When no start gives a match, the search goes on after the end, but only while that position is before the end of the text, so a match that starts at the end of the text is found only by the first search.
     pub(super) fn cfind(&self, s: &[u32], from: usize) -> Option<Groups> {
-        let mut d = Dissect { tree: self, s, ends: BTreeMap::new(), pmatch: Vec::new() };
+        let mut d = Dissect { tree: self, s, ends: FxMap::default(), pmatch: Vec::new() };
         let mut close = from;
         loop {
             let mut first: Option<usize> = None;
@@ -328,7 +326,7 @@ impl Tree {
     /// `cfindloop`: the positions of the leftmost match that starts at `begin`, the longest or the shortest as the root prefers.
     pub(super) fn find(&self, s: &[u32], begin: usize) -> Option<Groups> {
         let mut d =
-            Dissect { tree: self, s, ends: BTreeMap::new(), pmatch: vec![None; self.groups + 1] };
+            Dissect { tree: self, s, ends: FxMap::default(), pmatch: vec![None; self.groups + 1] };
         let root = &self.root;
         let shorter = root.flags & SHORTER != 0;
         let (mut estart, mut estop) = (begin, s.len());
@@ -363,7 +361,7 @@ struct Dissect<'a> {
     tree: &'a Tree,
     s: &'a [u32],
     /// The ends of the matches of each program from each start.
-    ends: BTreeMap<(usize, usize), Vec<bool>>,
+    ends: FxMap<(usize, usize), Vec<bool>>,
     pmatch: Groups,
 }
 

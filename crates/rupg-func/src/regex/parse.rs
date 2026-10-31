@@ -135,6 +135,11 @@ impl Set {
         }
     }
 
+    /// True when [`Set::contains`] gives the same answer for each character that is not ASCII: the set names no such character, and a class holds no such character in the C locale.
+    pub(super) fn wide_same(&self) -> bool {
+        self.chars.iter().all(|&c| c < 128) && self.ranges.iter().all(|&(_, b)| b < 128)
+    }
+
     /// The set with a table of [`Set::contains`] for the ASCII characters, so that a search tests an ASCII character with one bit and not with each part of the set.
     pub(super) fn with_ascii(mut self) -> Set {
         self.ascii = None;

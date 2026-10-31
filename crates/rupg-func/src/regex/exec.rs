@@ -34,7 +34,7 @@ const ASSERTS: [Assert; 8] = [
 
 /// A fast hash of the keys of the DFA, which the DFA makes and reads only for itself.
 #[derive(Clone, Copy, Default)]
-struct Fx(u64);
+pub(super) struct Fx(u64);
 
 impl Fx {
     fn add(&mut self, word: u64) {
@@ -70,7 +70,7 @@ impl Hasher for Fx {
     }
 }
 
-type FxMap<K, V> = HashMap<K, V, BuildHasherDefault<Fx>>;
+pub(super) type FxMap<K, V> = HashMap<K, V, BuildHasherDefault<Fx>>;
 
 /// The DFA of the main program, which [`Program::ends`] builds as it reads strings. A state is a set of instructions `Set` that the threads wait at. The closure of a state follows the instructions that read no character, with the mask of the constraints that hold at the position, and the step of a closed state reads one character.
 #[derive(Debug, Default)]
@@ -85,13 +85,26 @@ struct Dfa {
     loops: Vec<u128>,
     /// The steps of the closed states after the characters.
     steps: FxMap<(u32, u32), u32>,
-    /// The items of [`Dfa::fast`] for the characters that are not ASCII.
+    /// The items of [`Dfa::fast`] for the characters that are not ASCII. A state whose sets give the same answer for each such character has one item, with the character [`WIDE`].
     wide: FxMap<(u32, u32), u32>,
+    /// For each state: 0 when it is not known if its sets give the same answer for each character that is not ASCII, 1 for no, 2 for yes, and 3 when also its step with the mask 0 for such a character gives the same state with no `Match`.
+    same: Vec<u8>,
     /// The state of the start of the program and the state with no threads, when the DFA has them.
     ends: Option<(u32, u32)>,
     /// True when each step also starts a thread at the start of the program.
     restart: bool,
 }
+
+/// The number of characters at the start of `s` that keep a state: an ASCII character with its bit in `loops`, or, when `wide` is true, a character that is not ASCII.
+fn skip(loops: u128, wide: bool, s: &[u32]) -> usize {
+    let halves = [loops as u64, (loops >> 64) as u64];
+    s.iter()
+        .position(|&c| if c < 128 { halves[(c >> 6) as usize] >> (c & 63) & 1 == 0 } else { !wide })
+        .unwrap_or(s.len())
+}
+
+/// The character of the item of [`Dfa::wide`] for each character that is not ASCII, past the last character.
+const WIDE: u32 = 0x11_0000;
 
 /// A step of the DFA that it did not take yet.
 const UNKNOWN: u32 = u32::MAX;
@@ -113,6 +126,7 @@ impl Dfa {
         self.closed.push(Vec::new());
         self.fast.extend([UNKNOWN; 128]);
         self.loops.push(0);
+        self.same.push(0);
         id
     }
 }
@@ -392,17 +406,17 @@ impl Program {
             }
             // The characters that keep the state go by with no step, up to the last character, where the end of the string can hold.
             let loops = dfa.loops[state as usize];
-            if loops != 0 && ends_only {
-                while pos + 1 < s.len() && s[pos] < 128 && loops >> s[pos] & 1 != 0 {
-                    pos += 1;
-                }
+            let wide_loop = dfa.same[state as usize] == 3;
+            if (loops != 0 || wide_loop) && ends_only {
+                pos += skip(loops, wide_loop, &s[pos..s.len() - 1]);
             }
             let c = s[pos];
             let mask = if ends_only && pos + 1 < s.len() { 0 } else { self.mask(s, pos + 1) };
+            let key = if c >= 128 && self.wide_same(dfa, state) { WIDE } else { c };
             let known = match c {
                 _ if mask != 0 => UNKNOWN,
                 0..128 => dfa.fast[state as usize * 128 + c as usize],
-                _ => dfa.wide.get(&(state, c)).copied().unwrap_or(UNKNOWN),
+                _ => dfa.wide.get(&(state, key)).copied().unwrap_or(UNKNOWN),
             };
             let matched = if known == UNKNOWN {
                 let next = self.step(dfa, state, c);
@@ -417,7 +431,10 @@ impl Program {
                         }
                     }
                     _ => {
-                        dfa.wide.insert((state, c), known);
+                        dfa.wide.insert((state, key), known);
+                        if key == WIDE && known == state {
+                            dfa.same[state as usize] = 3;
+                        }
                     }
                 }
                 state = closed;
@@ -432,6 +449,19 @@ impl Program {
             pos += 1;
         }
         None
+    }
+
+    /// True when the sets of a state give the same answer for each character that is not ASCII.
+    fn wide_same(&self, dfa: &mut Dfa, state: u32) -> bool {
+        let at = state as usize;
+        if dfa.same[at] == 0 {
+            let insts = &self.progs[0].insts;
+            let same = dfa.states[at]
+                .iter()
+                .all(|&pc| !matches!(insts[pc], Inst::Set(id) if !self.sets[id].wide_same()));
+            dfa.same[at] = if same { 2 } else { 1 };
+        }
+        dfa.same[at] >= 2
     }
 
     /// The state of the DFA after a closed state reads a character.
