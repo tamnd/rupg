@@ -7,6 +7,8 @@ use std::sync::Arc;
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_platform::Io;
+#[cfg(unix)]
+pub use rupg_platform::os::StopSignals;
 use rupg_platform::os::{OsEntropy, OsIo, OsNet, OsTasks};
 pub use rupg_server::{Config, Log, Server};
 

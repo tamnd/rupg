@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A SIGTERM or a SIGINT to `rupg serve` now writes `data.rupg` before the exit, as a fast shutdown of PostgreSQL writes a checkpoint, and the server writes a checkpoint every `checkpoint_timeout` (#1221).
 - Plan an aggregate in two parts over a parallel scan, a `Partial Aggregate` in each process below a `Gather` or a `Gather Merge` and a `Finalize Aggregate` above it, with the costs and the `EXPLAIN` output of PostgreSQL 19 (#1219).
 - The server keeps its databases, catalogs, roles, sequences and table rows in the file `data.rupg` of the data directory. `CHECKPOINT` and the shutdown write the file, and the next start loads it (#1216).
 - Plan a `Parallel Seq Scan` under a `Gather` for a table that is large enough or has `parallel_workers`, with the costs, the parallel safety of the functions and the `EXPLAIN` output of PostgreSQL 19 (#1215).
