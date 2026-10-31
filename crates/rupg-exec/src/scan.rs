@@ -20,10 +20,6 @@ use rupg_types::{Array, Record, Value, oid};
 /// The attribute number of the system column `xmin`.
 const XMIN_ATTNUM: i16 = -2;
 
-/// The attribute numbers of the system columns `cmin` and `cmax`, which both show `t_cid`.
-const CMIN_ATTNUM: i16 = -3;
-const CMAX_ATTNUM: i16 = -5;
-
 /// `SelfItemPointerAttributeNumber`: the attribute number of `ctid`.
 const CTID_ATTNUM: i16 = -1;
 
@@ -233,13 +229,6 @@ impl Tables {
             }
             return Value::Oid(self.oids[var.relation]);
         }
-        if matches!(var.attnum, CMIN_ATTNUM | CMAX_ATTNUM) {
-            let xid = self.xids.get(var.relation).copied().unwrap_or(false);
-            if let Some(value) = self.trailer(var.relation, row, width + 4).filter(|_| xid) {
-                return value;
-            }
-            return Value::Oid(0);
-        }
         if matches!(var.attnum, XMIN_ATTNUM | XMAX_ATTNUM) {
             // A row of the catalog shows `xmin` and `xmax` of a frozen row that no transaction deleted.
             let at = if var.attnum == XMIN_ATTNUM { width + 2 } else { width + 3 };
@@ -298,6 +287,23 @@ impl Tables {
         }
         let grown = self.grown[var.relation].borrow();
         grown[row].get(column).cloned().unwrap_or(Value::Null)
+    }
+
+    /// The result of `f` with a reference to the value of a column of the user (`attnum` above 0) in a tuple, without a copy of the value.
+    pub(crate) fn with_column<R>(
+        &self,
+        tuple: &[usize],
+        var: Var,
+        f: impl FnOnce(&Value) -> R,
+    ) -> R {
+        let row = tuple.get(var.relation).copied().unwrap_or(NONE);
+        let column = usize::try_from(var.attnum - 1).ok().and_then(|c| self.place(var.relation, c));
+        let (Some(column), false) = (column, row == NONE) else { return f(&Value::Null) };
+        if self.needs[var.relation].is_empty() {
+            return f(self.rows[var.relation][row].get(column).unwrap_or(&Value::Null));
+        }
+        let grown = self.grown[var.relation].borrow();
+        f(grown[row].get(column).unwrap_or(&Value::Null))
     }
 
     /// The OID of the table of a row of a relation: the partition or the child of `INHERITS` of the row, or the table of the relation.
@@ -548,12 +554,7 @@ pub(crate) fn read(
                         }
                     }
                     Err(_) if var.attnum == 0 => used[var.relation].fill(true),
-                    Err(_)
-                        if matches!(
-                            var.attnum,
-                            XMIN_ATTNUM | XMAX_ATTNUM | CMIN_ATTNUM | CMAX_ATTNUM
-                        ) =>
-                    {
+                    Err(_) if matches!(var.attnum, XMIN_ATTNUM | XMAX_ATTNUM) => {
                         xids[var.relation] = true;
                     }
                     Err(_) => {}
@@ -921,7 +922,7 @@ fn user_rows(
         };
         for row in &mut rows {
             let tid = row.pop().unwrap_or(Value::Null);
-            let system = if xids { row.split_off(row.len().saturating_sub(3)) } else { Vec::new() };
+            let system = if xids { row.split_off(row.len().saturating_sub(2)) } else { Vec::new() };
             row.resize(width, Value::Null);
             row.push(tid);
             if !children.is_empty() || xids {
@@ -989,7 +990,7 @@ fn child_rows(
     };
     for mut row in rows {
         let tid = row.pop().unwrap_or(Value::Null);
-        let system = if xids { row.split_off(row.len().saturating_sub(3)) } else { Vec::new() };
+        let system = if xids { row.split_off(row.len().saturating_sub(2)) } else { Vec::new() };
         let mut values: Vec<Value> = map
             .iter()
             .enumerate()

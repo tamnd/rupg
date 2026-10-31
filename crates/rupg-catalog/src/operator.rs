@@ -156,21 +156,3 @@ impl Catalog {
         self.depend_all(ObjRef::new(PG_OPERATOR, oid), refs);
     }
 }
-
-rupg_common::persist_struct!(Operator {
-    oid,
-    name,
-    namespace,
-    owner,
-    kind,
-    can_merge,
-    can_hash,
-    left,
-    right,
-    result,
-    commutator,
-    negator,
-    code,
-    restrict,
-    join
-});

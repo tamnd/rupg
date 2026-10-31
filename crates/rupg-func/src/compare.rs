@@ -655,6 +655,22 @@ pub(crate) fn datetime_order(call: &Call<'_>, a: &Value, b: &Value) -> Result<Or
     }
 }
 
+/// A test on the order of two values, such as [`Ordering::is_lt`].
+pub type OrderingTest = fn(Ordering) -> bool;
+
+/// The test on the order of the two arguments that a kernel makes, when the kernel is the kernel of `=`, `<>`, `<`, `<=`, `>` or `>=`. For two values of `text` or of `bpchar`, the result of the kernel is then the test on [`compare`].
+pub fn ordering_test(kernel: Kernel) -> Option<OrderingTest> {
+    let tests: [(Kernel, OrderingTest); 6] = [
+        (eq, Ordering::is_eq),
+        (ne, Ordering::is_ne),
+        (lt, Ordering::is_lt),
+        (le, Ordering::is_le),
+        (gt, Ordering::is_gt),
+        (ge, Ordering::is_ge),
+    ];
+    tests.into_iter().find(|(k, _)| std::ptr::fn_addr_eq(*k, kernel)).map(|(_, test)| test)
+}
+
 /// The kernel of a comparison operator for its argument types.
 pub(crate) fn by_operator(name: &str, left: u32, right: u32) -> Option<Kernel> {
     if !comparable(left, right) {

@@ -102,7 +102,7 @@ pub use acl::{
 pub use activity::{Backend, BackendState, Client, PROGRESS_PARAMS, Process, Progress, Ssl};
 pub use agg::check_percentile;
 pub use cast::local_time;
-pub use compare::{compare, equal};
+pub use compare::{OrderingTest, compare, equal, ordering_test};
 pub use datetime::{IntervalSum, interval_lerp};
 pub use datumsize::column_size;
 pub use deparse::{

@@ -13,11 +13,11 @@ use rupg_analyze::{
     Aggref, Body, BoolOp, BoolTest, Case, Column, CurrentOf, Expr, ExprKind, FieldStore,
     FromFunction, FromItem, Func, FuncForm, IsJson, JsonCtor, JsonCtorKind, JsonFormatKind, Query,
     RowCompare, SetKind, SetOp, SetTree, SortGroup, SqlValue, SubLink, SubLinkKind, Subscript,
-    TableSample, Target, WindowFunc, expand_grouping_sets,
+    TableSample, Target, Var, WindowFunc, expand_grouping_sets,
 };
 use rupg_catalog::FIRST_NORMAL_OID;
 use rupg_common::{Error, Result, SqlState};
-use rupg_func::{Call, Kernel, Session, base_type};
+use rupg_func::{Call, Kernel, OrderingTest, Session, base_type};
 use rupg_pgcatalog::builtin;
 use rupg_plan::{HashTable, HashTables};
 use rupg_types::{Array, ArrayDim, MAXDIM, NAME_MAX_BYTES, Record, Value, format_type, oid};
@@ -917,8 +917,8 @@ pub(crate) fn has_domain_constraints(domain: u32) -> bool {
 /// The body of each function in SQL, by the OID of the function, the types of the arguments of the call and the types of the column definition list of a call in `FROM`, or `None` for a function of the catalog that is not in SQL.
 type Bodies = Rc<RefCell<Vec<(BodyKey, Option<Rc<Body>>)>>>;
 
-/// The kernel of a function and true when the function is strict, as [`Cache::plain_kernel`] finds them.
-type PlainKernel = (Kernel, bool);
+/// The kernel of a function, true when the function is strict, and the test on the order of the arguments when the kernel is a comparison, as [`Cache::plain_kernel`] finds them.
+type PlainKernel = (Kernel, bool, Option<OrderingTest>);
 
 /// The OID of a function, the types of the arguments of a call and the type and the type modifier of each column of its column definition list.
 type BodyKey = (u32, Vec<u32>, Vec<(u32, i32)>);
@@ -984,7 +984,8 @@ impl Cache {
             if proc.nargdefaults != 0 || proc.lang == PLPGSQL_LANGUAGE {
                 return None;
             }
-            Some((rupg_func::kernel(func)?, proc.strict))
+            let kernel = rupg_func::kernel(func)?;
+            Some((kernel, proc.strict, rupg_func::ordering_test(kernel)))
         })();
         self.kernels.borrow_mut().push((func, found));
         found
@@ -3347,8 +3348,13 @@ impl<'a> Eval<'a> {
         }
         if !matches!(f.form, FuncForm::ExplicitCast | FuncForm::ImplicitCast)
             && !f.args.iter().any(|a| matches!(a.kind, ExprKind::NamedArg(_)))
-            && let Some((kernel, strict)) = self.cache.plain_kernel(f.oid, self.session)
+            && let Some((kernel, strict, test)) = self.cache.plain_kernel(f.oid, self.session)
         {
+            if let Some(test) = test.filter(|_| strict)
+                && let Some(value) = self.borrowed_comparison(f, test)
+            {
+                return Ok(value);
+            }
             return self.kernel_call(kernel, strict, f, expr.ty);
         }
         // The planner adds the defaults, so this is for an expression that the planner did not see.
@@ -3408,6 +3414,37 @@ impl<'a> Eval<'a> {
                 call(self, &types, &args)
             }
         }
+    }
+
+    /// The result of a comparison of a column of the user with a constant, from a reference to the value of the column, or `None` when the values are not both `text` or `bpchar`. Such a comparison is often in a filter of a scan, and a copy of the text for each row costs more than the comparison.
+    fn borrowed_comparison(&self, f: &Func, test: OrderingTest) -> Option<Value> {
+        let [left, right] = &f.args[..] else { return None };
+        fn column(e: &Expr) -> Option<Var> {
+            match &e.kind {
+                ExprKind::Var(var) if var.levels_up == 0 && var.attnum > 0 => Some(*var),
+                _ => None,
+            }
+        }
+        fn constant(e: &Expr) -> Option<&Value> {
+            match &e.kind {
+                ExprKind::Const(value) => Some(value),
+                _ => None,
+            }
+        }
+        let compare = |a: &Value, b: &Value| match (a, b) {
+            (Value::Null, _) | (_, Value::Null) => Some(Value::Null),
+            (Value::Text(_), Value::Text(_)) => {
+                rupg_func::compare(left.ty, a, right.ty, b).ok().map(|o| Value::Bool(test(o)))
+            }
+            _ => None,
+        };
+        if let (Some(var), Some(b)) = (column(left), constant(right)) {
+            return self.tables.with_column(self.tuple, var, |a| compare(a, b));
+        }
+        if let (Some(a), Some(var)) = (constant(left), column(right)) {
+            return self.tables.with_column(self.tuple, var, |b| compare(a, b));
+        }
+        None
     }
 
     /// `AND`, `OR` and `NOT` with the logic of three values. `AND` stops at the first false argument, and `OR` at the first true argument.

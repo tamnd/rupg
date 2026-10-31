@@ -1,0 +1,78 @@
+!details
+> create table ct(id int, t text, c char(4), v varchar(5))
+CREATE TABLE
+> insert into ct values (1, '', 'ab', 'ab'), (2, 'ab', 'ab  ', 'ab '), (3, null, null, null), (4, 'b', 'b', 'b'), (5, 'ab ', 'a', 'abc')
+INSERT 0 5
+> select id from ct where t <> '' order by id
+fields id@ct.1:23:4:-1
+row 2
+row 4
+row 5
+SELECT 3
+> select id from ct where t = 'ab' order by id
+fields id@ct.1:23:4:-1
+row 2
+SELECT 1
+> select id from ct where '' = t order by id
+fields id@ct.1:23:4:-1
+row 1
+SELECT 1
+> select id from ct where t < 'b' order by id
+fields id@ct.1:23:4:-1
+row 1
+row 2
+row 5
+SELECT 3
+> select id from ct where t >= 'ab' order by id
+fields id@ct.1:23:4:-1
+row 2
+row 4
+row 5
+SELECT 3
+> select id from ct where 'ab' > t order by id
+fields id@ct.1:23:4:-1
+row 1
+SELECT 1
+> select id from ct where c = 'ab' order by id
+fields id@ct.1:23:4:-1
+row 1
+row 2
+SELECT 2
+> select id from ct where c = 'ab  ' order by id
+fields id@ct.1:23:4:-1
+row 1
+row 2
+SELECT 2
+> select id from ct where c > 'a' order by id
+fields id@ct.1:23:4:-1
+row 1
+row 2
+row 4
+SELECT 3
+> select id from ct where v = 'ab' order by id
+fields id@ct.1:23:4:-1
+row 1
+SELECT 1
+> select id from ct where v < 'abc' order by id
+fields id@ct.1:23:4:-1
+row 1
+row 2
+SELECT 2
+> select id, t <> '', t = 'b', c <= 'ab' from ct order by id
+fields id@ct.1:23:4:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row 1,f,f,t
+row 2,t,f,t
+row 3,NULL,NULL,NULL
+row 4,t,t,f
+row 5,t,f,t
+SELECT 5
+> select id from ct where t ~<~ 'b' order by id
+fields id@ct.1:23:4:-1
+row 1
+row 2
+row 5
+SELECT 3
+> select count(*) from ct where t <> '' and c <> 'b'
+fields count:20:8:-1
+row 2
+SELECT 1

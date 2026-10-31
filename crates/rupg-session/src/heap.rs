@@ -85,8 +85,6 @@ struct State {
     rechecks: Vec<Recheck>,
     /// The number of the values that the writes moved to the TOAST tables, whose OIDs the counter did not give yet.
     toast_oids: u32,
-    /// `comboCids` of each transaction in progress: the combo command ID of each pair of `cmin` and `cmax`, in the order that `GetComboCommandId` gives them.
-    combos: HashMap<u32, HashMap<(u32, u32), u32>>,
 }
 
 /// A new version with the key of a live version, or of a version of a transaction in progress, in a deferrable unique index, as `UNIQUE_CHECK_PARTIAL` finds it. The key is checked again after the statement or at the commit, as the event of `unique_key_recheck` does it.
@@ -156,8 +154,6 @@ struct Table {
     storage: Vec<Storage>,
     /// The bytes of each page that `fillfactor` keeps free for updates.
     save_free: usize,
-    /// The combo command ID of each version that the transaction that inserted it deleted, by the ID of the version, which `t_cid` keeps after the end of the transaction.
-    combos: HashMap<u64, u32>,
 }
 
 /// The versions of a table by the hash of their key, for one unique key, which takes the place of the btree of a unique index. The map can keep the ID of a version that went, which a check skips.
@@ -530,15 +526,6 @@ impl Table {
             self.forget_keys(&tids);
         }
         self.versions.retain(|version| !gone(version));
-        self.forget_combos();
-    }
-
-    /// Removes the combo command IDs of the versions that went.
-    fn forget_combos(&mut self) {
-        if !self.combos.is_empty() {
-            let versions = &self.versions;
-            self.combos.retain(|tid, _| versions.binary_search_by_key(tid, |v| v.tid).is_ok());
-        }
     }
 
     /// Removes the versions `gone`, in the order of their IDs, that `VACUUM` found dead, also from the maps of the unique keys, as the IDs of their slots can come back.
@@ -548,7 +535,6 @@ impl Table {
         }
         self.versions.retain(|version| gone.binary_search(&version.tid).is_err());
         self.forget_keys(gone);
-        self.forget_combos();
         for map in &mut self.keys {
             map.hashes.retain(|_, tids| {
                 tids.retain(|tid| gone.binary_search(tid).is_err());
@@ -837,7 +823,7 @@ impl Heap {
             .versions
             .iter()
             .filter(|version| visible(version, view))
-            .map(|version| version_row(version, &table.combos, columns.as_deref(), xids))
+            .map(|version| version_row(version, columns.as_deref(), xids))
             .collect()
     }
 
@@ -857,7 +843,7 @@ impl Heap {
         tids.iter()
             .filter_map(|&tid| table.find(tid).map(|at| &table.versions[at]))
             .filter(|version| visible(version, view))
-            .map(|version| version_row(version, &table.combos, columns.as_deref(), false))
+            .map(|version| version_row(version, columns.as_deref(), false))
             .collect()
     }
 
@@ -1106,7 +1092,7 @@ impl Heap {
             });
         }
         let (mut state, places) = self.lock_keys((view.database, relation), unique, derive)?;
-        let State { tables, running, rechecks: pending, toast_oids, combos, .. } = &mut *state;
+        let State { tables, running, rechecks: pending, toast_oids, .. } = &mut *state;
         let Some(table) = tables.get_mut(&(view.database, relation)) else {
             return Ok(Changed::Done(0));
         };
@@ -1158,15 +1144,6 @@ impl Heap {
                 version.xmax = view.xid;
                 version.cmax = view.command;
                 version.next = next;
-                // `HeapTupleHeaderAdjustCmax`: a version that the transaction inserted keeps a combo command ID of its `cmin` and `cmax` in `t_cid`.
-                if version.xmin == view.xid {
-                    let pairs = combos.entry(view.xid).or_default();
-                    let next_id = u32::try_from(pairs.len()).unwrap_or(u32::MAX);
-                    let id = *pairs.entry((version.cmin, view.command)).or_insert(next_id);
-                    table.combos.insert(old, id);
-                } else if !table.combos.is_empty() {
-                    table.combos.remove(&old);
-                }
             }
             deleted.push(old);
             if next == 0 || places.is_empty() {
@@ -1563,7 +1540,6 @@ impl Heap {
         }
         state.running.remove(&xid);
         state.latest_completed = state.latest_completed.max(xid);
-        state.combos.remove(&xid);
         state.owners.remove(&xid);
         state.waits.remove(&xid);
         state.rechecks.retain(|recheck| recheck.xid != xid);
@@ -1578,17 +1554,16 @@ impl Heap {
                 table.truncated.clear();
             }
             table.remove(|version| version.xmin == xid);
-            // `t_cid` keeps the command of the delete, so `cmax` stays.
             for version in table.versions.iter_mut().filter(|version| version.xmax == xid) {
                 version.aborted = xid;
                 version.xmax = 0;
+                version.cmax = 0;
                 version.next = 0;
             }
         }
         state.running.remove(&xid);
         state.latest_completed = state.latest_completed.max(xid);
         state.aborted.insert(xid);
-        state.combos.remove(&xid);
         state.truncating.remove(&xid);
         state.owners.remove(&xid);
         state.waits.remove(&xid);
@@ -1610,6 +1585,7 @@ impl Heap {
             for version in table.versions.iter_mut().filter(deleted) {
                 version.aborted = xid;
                 version.xmax = 0;
+                version.cmax = 0;
                 version.next = 0;
             }
         }
@@ -1744,14 +1720,9 @@ fn used_columns(used: Option<&[bool]>) -> Option<Vec<usize>> {
     used.map(|u| u.iter().enumerate().filter(|(_, u)| **u).map(|(i, _)| i).collect())
 }
 
-/// The row of a version for a scan: the values of the columns at `columns`, or all its values, then `xmin`, `xmax` and `t_cid` when `xids` is true, then the ID of the version. A column that the version has no value for is null.
-fn version_row(
-    version: &Version,
-    combos: &HashMap<u64, u32>,
-    columns: Option<&[usize]>,
-    xids: bool,
-) -> Vec<Value> {
-    let mut row = Vec::with_capacity(columns.map_or(version.values.len(), <[usize]>::len) + 4);
+/// The row of a version for a scan: the values of the columns at `columns`, or all its values, then `xmin` and `xmax` when `xids` is true, then the ID of the version. A column that the version has no value for is null.
+fn version_row(version: &Version, columns: Option<&[usize]>, xids: bool) -> Vec<Value> {
+    let mut row = Vec::with_capacity(columns.map_or(version.values.len(), <[usize]>::len) + 3);
     match columns {
         Some(columns) => row
             .extend(columns.iter().map(|&i| version.values.get(i).cloned().unwrap_or(Value::Null))),
@@ -1761,13 +1732,6 @@ fn version_row(
         let xmax = if version.xmax == 0 { version.aborted } else { version.xmax };
         row.push(Value::Oid(version.xmin));
         row.push(Value::Oid(xmax));
-        // `HeapTupleHeaderGetRawCommandId`: `cmin` until a delete, then the combo command ID or `cmax`, also after the delete aborted.
-        let cid = if version.xmax == 0 && version.aborted == 0 {
-            version.cmin
-        } else {
-            combos.get(&version.tid).copied().unwrap_or(version.cmax)
-        };
-        row.push(Value::Oid(cid));
     }
     row.push(Value::Int8(version.tid.cast_signed()));
     row

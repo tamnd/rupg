@@ -20,15 +20,6 @@ pub const MAX_LARGE_OBJECT_SIZE: i64 = i32::MAX as i64 * LOBLKSIZE as i64;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LargeObjectData(Arc<BTreeMap<i32, Arc<[u8]>>>);
 
-impl rupg_common::persist::Persist for LargeObjectData {
-    fn put(&self, out: &mut Vec<u8>) {
-        rupg_common::persist::Persist::put(&self.0, out);
-    }
-    fn take(input: &mut rupg_common::persist::Reader<'_>) -> Result<Self> {
-        rupg_common::persist::Persist::take(input).map(LargeObjectData)
-    }
-}
-
 impl LargeObjectData {
     /// The pages, in the order of `pageno`.
     pub fn pages(&self) -> impl Iterator<Item = (i32, &[u8])> {
@@ -177,8 +168,6 @@ impl Catalog {
         }
     }
 }
-
-rupg_common::persist_struct!(LargeObject { oid, owner, data });
 
 #[cfg(test)]
 mod tests {

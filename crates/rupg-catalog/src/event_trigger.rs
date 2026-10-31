@@ -57,5 +57,3 @@ impl Catalog {
         }
     }
 }
-
-rupg_common::persist_struct!(EventTrigger { oid, name, event, owner, func, enabled, tags });

@@ -45,5 +45,3 @@ impl Catalog {
         self.relations.values().any(|r| r.tablespace == tablespace)
     }
 }
-
-rupg_common::persist_struct!(Tablespace { oid, name, owner, acl, options });
