@@ -820,6 +820,31 @@ mod tests {
     }
 
     #[test]
+    fn anchored_patterns_match_only_at_the_start() {
+        assert!(is("^a", "ab"));
+        assert!(!is("^b", "ab"));
+        assert!(!is("(^b)", "ab"));
+        assert!(!is("\\Ab", "ab"));
+        assert!(is("^b|b", "ab"));
+        assert!(is("(?n)^b", "a\nb"));
+        assert!(!is("^b", "a\nb"));
+        assert!(is("^https?://(?:www\\.)?([^/]+)/.*$", "http://www.example.com/a"));
+        assert!(!is("^https?://(?:www\\.)?([^/]+)/.*$", "xhttp://example.com/a"));
+    }
+
+    #[test]
+    fn sets_test_ascii_with_their_table() {
+        assert!(is("^[^/]+$", "abc"));
+        assert!(!is("^[^/]+$", "a/c"));
+        assert!(is("^[[:alpha:]_]+$", "ab_C"));
+        assert!(!is("^[[:alpha:]]+$", "ab1"));
+        assert!(is("^[^[:digit:]]+$", "ab"));
+        assert!(is("(?i)^[a-c]+$", "AbC"));
+        assert!(is("^[^a]$", "\u{e9}"));
+        assert!(!is("(?n)^.$", "\n"));
+    }
+
+    #[test]
     fn errors_like_postgres() {
         assert_eq!(err("*a"), Code::BadRpt);
         assert_eq!(err("a)"), Code::Paren);
