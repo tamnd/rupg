@@ -257,6 +257,9 @@ version = "0.4.15"
 [[package]]
 name = "rupg-encode"
 version = "0.4.15"
+dependencies = [
+ "rupg-common",
+]
 
 [[package]]
 name = "rupg-file"

@@ -1,5 +1,8 @@
 # PostgreSQL names that are not in the dictionary of typos.
 [default.extend-words]
+# The table `ot` of the tests of lateral joins, and the word `tre` of `using_old_row.test`.
+ot = "ot"
+tre = "tre"
 # The column alias `ba` of `generated_stored.sql`, which `gstored3.test` copies.
 ba = "ba"
 brin = "brin"
