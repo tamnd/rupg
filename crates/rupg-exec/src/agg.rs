@@ -1586,6 +1586,7 @@ pub(crate) fn rows<'a>(
     query: &'a Query,
     tuples: &'a [Vec<usize>],
     none: &'a [usize],
+    needed: usize,
 ) -> Result<Vec<Vec<Value>>> {
     let outer = outer_calls(query);
     let lowered: Vec<Aggref> = outer
@@ -1669,6 +1670,7 @@ pub(crate) fn rows<'a>(
             !calls.is_empty(),
             &mut kept,
             &mut rows,
+            needed,
         )?;
     }
     if !calls.is_empty() {
@@ -1701,7 +1703,10 @@ fn rows_of_group<'a>(
     windowed: bool,
     kept: &mut Vec<(&'a [usize], Group)>,
     rows: &mut Vec<Vec<Value>>,
+    needed: usize,
 ) -> Result<()> {
+    // After the rows that `Limit` reads, a group only takes its rows, as `HashAggregate` advances each group and finishes only the groups that it gives.
+    let emit = windowed || rows.len() < needed;
     eval.group = current;
     {
         let mut states = aggs.iter().map(|a| a.start(eval)).collect::<Result<Vec<_>>>()?;
@@ -1727,6 +1732,9 @@ fn rows_of_group<'a>(
                     sorted.push(std::mem::take(&mut args));
                 }
             }
+        }
+        if !emit {
+            return Ok(());
         }
         // The direct arguments of an ordered-set aggregate read the first row of the group.
         eval.tuple = group.first().map_or(none, |&i| &tuples[i]);
