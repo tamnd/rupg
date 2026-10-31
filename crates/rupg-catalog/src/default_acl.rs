@@ -80,3 +80,5 @@ impl Catalog {
         }
     }
 }
+
+rupg_common::persist_struct!(DefaultAcl { oid, role, namespace, objtype, acl });

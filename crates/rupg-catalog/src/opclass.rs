@@ -256,3 +256,28 @@ impl Catalog {
         self.amprocs.get(&oid)
     }
 }
+
+rupg_common::persist_struct!(OpFamily { oid, method, name, namespace, owner });
+rupg_common::persist_struct!(OpClass {
+    oid,
+    method,
+    name,
+    namespace,
+    owner,
+    family,
+    intype,
+    default,
+    keytype
+});
+rupg_common::persist_struct!(AmOp {
+    oid,
+    family,
+    left,
+    right,
+    strategy,
+    purpose,
+    operator,
+    method,
+    sortfamily
+});
+rupg_common::persist_struct!(AmProc { oid, family, left, right, number, function });

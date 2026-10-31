@@ -8,6 +8,7 @@ pub mod encoding;
 mod error;
 mod generated;
 mod ids;
+pub mod persist;
 mod sort;
 mod sqlstate;
 
