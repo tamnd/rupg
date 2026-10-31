@@ -4020,6 +4020,12 @@ mod tests {
         parts.join(",")
     }
 
+    /// `min` and `max` of a column of codes in the vector scan read each code of a group once, with the results of the row engine, also for nulls and for an expression of the column.
+    #[test]
+    fn code_extremes() {
+        big_stack(|| script(include_str!("connection/code_extremes.test")));
+    }
+
     /// The vector scan sums `x + c` from the sums of `x`, and the row engine runs a query whose `x + c` is out of the range of its type, for the error.
     #[test]
     fn shifted_sums() {

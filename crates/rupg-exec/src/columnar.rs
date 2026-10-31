@@ -1031,6 +1031,8 @@ struct Call<'q> {
     key: *const Aggref,
     method: Method<'q>,
     states: States,
+    /// For `min` and `max` of the row engine, the codes of a column of codes that each group saw, with the dictionary of the codes. Each code goes into the state once, after the scan, as the result does not depend on the order or the number of the values.
+    codes: Option<(Vec<FxSet<u32>>, usize)>,
 }
 
 /// The states of the aggregate calls of all the groups after the scan, which give the results of the calls of a group.
@@ -1592,7 +1594,16 @@ fn grouped(
             Method::Row(_) => States::Row(Vec::new()),
             Method::Shift { .. } => States::Shift,
         };
-        aggs.push(Call { agg, key: std::ptr::from_ref(agg), method, states });
+        let codes = matches!(method, Method::Row(_))
+            .then(|| builtin::proc_by_oid(agg.oid))
+            .flatten()
+            .is_some_and(|p| matches!(p.name, "min" | "max"))
+            && agg.oid < rupg_catalog::FIRST_NORMAL_OID
+            && agg.nargs == 1
+            && agg.args.len() == 1
+            && agg.order.is_empty();
+        let codes = codes.then(|| (Vec::new(), usize::MAX));
+        aggs.push(Call { agg, key: std::ptr::from_ref(agg), method, states, codes });
     }
     let keys: Vec<&Expr> = query.group.iter().map(|g| &query.targets[g.target].expr).collect();
     let mut map = KeyMap::new(keys.len() + 1);
@@ -1801,6 +1812,19 @@ fn grouped(
                         .iter()
                         .map(|a| exec.eval(a, batch, sel))
                         .collect::<Result<Vec<_>>>()?;
+                    if let (Some((seen, dict)), [col]) = (&mut call.codes, cols.as_slice())
+                        && let Data::Code(codes, d) = &col.data
+                        && (*dict == usize::MAX || *dict == *d)
+                    {
+                        *dict = *d;
+                        seen.resize_with(states.len(), FxSet::default);
+                        for (i, &id) in ids.iter().enumerate() {
+                            if !col.null(i) {
+                                seen[id as usize].insert(codes[i]);
+                            }
+                        }
+                        continue;
+                    }
                     let eval = Eval::new(params, session, &empty, cache, &[]);
                     for (i, &id) in ids.iter().enumerate() {
                         args.clear();
@@ -1836,9 +1860,20 @@ fn grouped(
     }
     // The results of the aggregates of each group: the row engine finishes a call of its own method now, and the scan finishes each other call when the projection reads it.
     let eval = Eval::new(params, session, &empty, cache, &[]);
+    let scan_dicts = &scan.exec.dicts;
     for call in &mut aggs {
         match (&call.method, &mut call.states) {
             (Method::Row(agg), States::Row(states)) => {
+                if let Some((seen, dict)) = &call.codes {
+                    for (state, seen) in states.iter_mut().zip(seen) {
+                        let mut codes: Vec<u32> = seen.iter().copied().collect();
+                        codes.sort_unstable();
+                        for code in codes {
+                            let value = scan_dicts[*dict].value(code);
+                            agg.advance(state, std::slice::from_ref(&value), &eval)?;
+                        }
+                    }
+                }
                 let done = std::mem::take(states)
                     .into_iter()
                     .map(|state| agg.finish(state, &eval))

@@ -1,0 +1,33 @@
+> CREATE TABLE e (g int, t text)
+CREATE TABLE
+> INSERT INTO e SELECT i % 5, CASE WHEN i % 11 = 0 THEN NULL ELSE 'v' || (i % 97) END FROM generate_series(1, 70000) i
+INSERT 0 70000
+> SELECT g, min(t), max(t), count(t), count(*) FROM e GROUP BY g ORDER BY g
+fields g@e.1:23:4:-1,min:25:-1:-1,max:25:-1:-1,count:20:8:-1,count:20:8:-1
+row 0,v0,v96,12728,14000
+row 1,v0,v96,12727,14000
+row 2,v0,v96,12727,14000
+row 3,v0,v96,12727,14000
+row 4,v0,v96,12728,14000
+SELECT 5
+> SELECT min(t), max(t) FROM e WHERE g = 3
+fields min:25:-1:-1,max:25:-1:-1
+row v0,v96
+SELECT 1
+> SELECT g % 2, min(t), max(t) FROM e WHERE g < 3 AND length(t) = 3 AND t > 'v' || g GROUP BY 1 ORDER BY 1
+fields ?column?:23:4:-1,min:25:-1:-1,max:25:-1:-1
+row 0,v10,v96
+row 1,v10,v96
+SELECT 2
+> SELECT g, min(t) FROM e WHERE t IS NULL GROUP BY g ORDER BY g
+fields g@e.1:23:4:-1,min:25:-1:-1
+row 0,NULL
+row 1,NULL
+row 2,NULL
+row 3,NULL
+row 4,NULL
+SELECT 5
+> SELECT min(t || 'x'), max(upper(t)) FROM e
+fields min:25:-1:-1,max:25:-1:-1
+row v0x,V96
+SELECT 1
