@@ -6999,6 +6999,55 @@ mod tests {
         });
     }
 
+    /// The encoded columns of a frozen table go to the image as they are, and a store that loads the image has the same columns with no new encode. The insert of a transaction in progress is not in the image, and the table changes as before after the load.
+    #[test]
+    fn frozen_columns_come_back_from_the_image() {
+        big_stack(|| {
+            let store = Arc::new(Store::new());
+            let (mut a, _) = connect_to(&store, 1234);
+            let (mut b, _) = connect_to(&store, 1235);
+            let rows = |c: &mut Connection, sql: &str| -> Vec<String> {
+                send(c, &query(sql)).into_iter().filter(|l| l.starts_with("row ")).collect()
+            };
+            send(&mut a, &query("CREATE TABLE t (a int, b text, c float8)"));
+            send(
+                &mut a,
+                &query(
+                    "INSERT INTO t SELECT i, 'v' || (i % 100), i / 4.0 FROM generate_series(1, 70000) i",
+                ),
+            );
+            let sums = "SELECT sum(a), count(DISTINCT b), sum(c) FROM t";
+            let before = rows(&mut a, sums);
+            assert_eq!(before, ["row 2450035000,100,612508750"]);
+            let relation = rows(&mut a, "SELECT 't'::regclass::oid")[0][4..].parse().unwrap();
+            let database =
+                rows(&mut a, "SELECT oid FROM pg_database WHERE datname = current_database()")[0]
+                    [4..]
+                    .parse()
+                    .unwrap();
+            assert_eq!(store.heap().frozen_rows(database, relation), 70000);
+            send(&mut b, &query("BEGIN; INSERT INTO t VALUES (-1, 'gone', 0)"));
+            let image = store.image(0);
+            let mut back = Store::new();
+            back.load(&image).unwrap();
+            let back = Arc::new(back);
+            assert_eq!(back.heap().frozen_rows(database, relation), 70000);
+            let (mut c, _) = connect_to(&back, 1236);
+            assert_eq!(rows(&mut c, sums), before);
+            assert_eq!(
+                rows(&mut c, "SELECT * FROM t WHERE a IN (1, 70000) ORDER BY a"),
+                ["row 1,v1,0.25", "row 70000,v0,17500"]
+            );
+            send(&mut c, &query("UPDATE t SET b = 'w' WHERE a = 5"));
+            assert_eq!(rows(&mut c, "SELECT count(*) FROM t WHERE b = 'w'"), ["row 1"]);
+            let again = back.image(0);
+            let mut third = Store::new();
+            third.load(&again).unwrap();
+            let (mut d, _) = connect_to(&Arc::new(third), 1237);
+            assert_eq!(rows(&mut d, "SELECT b FROM t WHERE a = 5"), ["row w"]);
+        });
+    }
+
     /// The commits after a checkpoint come back from the log: the inserts, the updates, the deletes, a `TRUNCATE`, a new table, a new role and the sequences. A transaction in progress is gone, and a cut record at the end of the log does not stop the load.
     #[test]
     fn commits_come_back_from_the_log() {

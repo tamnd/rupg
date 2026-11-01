@@ -240,6 +240,30 @@ struct Frozen {
     columns: Vec<Arc<Stored>>,
 }
 
+impl Frozen {
+    /// The frozen values of an image, which [`Heap::image`] wrote after the versions `versions`. The frozen versions are the versions with no values, and each column has a row for each of them.
+    fn take(input: &mut Reader<'_>, versions: &[Version]) -> Result<Option<Frozen>> {
+        let Some((rows, end, columns)) =
+            <Option<(usize, usize, Vec<Arc<Stored>>)> as Persist>::take(input)?
+        else {
+            return Ok(None);
+        };
+        let empty = versions.iter().filter(|version| version.values.is_empty()).count();
+        let last =
+            versions.iter().rposition(|version| version.values.is_empty()).map_or(0, |at| at + 1);
+        if empty != rows
+            || end != last
+            || columns.is_empty()
+            || columns.iter().any(|column| column.rows != rows)
+        {
+            return Err(rupg_common::persist::corrupt(
+                "the frozen columns do not match the versions",
+            ));
+        }
+        Ok(Some(Frozen { rows, end, columns }))
+    }
+}
+
 /// The physical type that keeps each value of `values` exactly, or `None` when a value has no such type or the values do not have the same type. A column of nulls only is a column of `bigint`.
 fn kind_of<'a>(values: impl Iterator<Item = &'a Value>) -> Option<Kind> {
     let mut kind = None;
@@ -2352,10 +2376,20 @@ impl Heap {
         for (key, table) in &state.tables.0 {
             key.put(out);
             table.versions.iter().filter(|v| !running.contains(&v.xmin)).count().put(out);
-            table.each_row(|at, values| {
+            // The encoded columns go to the image as they are when no transaction in progress made a frozen version, so a frozen version keeps no values in the image either.
+            let frozen = table.frozen.as_ref().filter(|_| {
+                table.versions.iter().all(|v| !v.values.is_empty() || !running.contains(&v.xmin))
+            });
+            let mut end = 0usize;
+            let mut written = 0usize;
+            let mut put = |at: usize, values: &[Value]| {
                 let v = &table.versions[at];
                 if running.contains(&v.xmin) {
                     return;
+                }
+                written += 1;
+                if frozen.is_some() && v.values.is_empty() {
+                    end = written;
                 }
                 let (aborted, xmax, cmax) = if running.contains(&v.xmax) {
                     (v.xmax, 0, 0)
@@ -2369,7 +2403,15 @@ impl Heap {
                 for value in values {
                     value.put(out);
                 }
-            });
+            };
+            match frozen {
+                Some(_) => {
+                    for (at, version) in table.versions.iter().enumerate() {
+                        put(at, &version.values);
+                    }
+                }
+                None => table.each_row(put),
+            }
             table.made.put(out);
             // The pages of the heap before the `TRUNCATE` of a transaction in progress, which aborts.
             table.truncated.first().map_or(&table.pages, |(.., pages)| pages).put(out);
@@ -2379,6 +2421,15 @@ impl Heap {
             table.storage.put(out);
             table.save_free.put(out);
             table.combos.put(out);
+            // The bytes of `Option<(usize, usize, Vec<Arc<Stored>>)>`, which `Frozen::take` reads.
+            match frozen {
+                Some(frozen) => {
+                    out.push(1);
+                    (frozen.rows, end).put(out);
+                    frozen.columns.put(out);
+                }
+                None => out.push(0),
+            }
         }
     }
 
@@ -2397,7 +2448,7 @@ impl Heap {
         };
         for _ in 0..input.count()? {
             let key = Persist::take(input)?;
-            let table = Table {
+            let mut table = Table {
                 versions: Persist::take(input)?,
                 made: Persist::take(input)?,
                 pages: Persist::take(input)?,
@@ -2409,9 +2460,18 @@ impl Heap {
                 combos: Persist::take(input)?,
                 ..Table::default()
             };
+            table.frozen = Frozen::take(input, &table.versions)?;
             state.tables.0.insert(key, table);
         }
         Ok(Heap { state: Mutex::new(state) })
+    }
+
+    /// The versions of a table whose values are in encoded columns.
+    #[cfg(test)]
+    pub(crate) fn frozen_rows(&self, database: u32, relation: u32) -> usize {
+        let state = self.state();
+        let table = state.tables.headers(&(database, relation));
+        table.and_then(|table| table.frozen.as_ref()).map_or(0, |frozen| frozen.rows)
     }
 
     /// `nextXid` goes up to `next`, for a log of a catalog: the transaction that changed the catalog has an ID that the logs of the rows may not have.
