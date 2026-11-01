@@ -2471,7 +2471,30 @@ fn plan_keys(session: &dyn Session, query: &Query) -> Option<Vec<(usize, u32)>> 
 
 /// The hash of the keys `places` of the row `i` of the key columns `cols`, as the hash table of the plan finds it.
 fn key_hash(places: &[(usize, u32)], cols: &[Col], i: usize, dicts: &[Dict]) -> Result<u32> {
-    hashed::hash(places.iter().map(|&(p, ty)| (ty, cols[p].value(i, dicts))))
+    let mut hash: u32 = 0;
+    for &(p, ty) in places {
+        let col = &cols[p];
+        hash = hash.rotate_left(1);
+        if col.null(i) {
+            continue;
+        }
+        // An integer or a text with a code gives its hash with no value.
+        let one = match &col.data {
+            Data::Int(v) if col.ty == ty => rupg_func::extended_hash_int(ty, v[i], 0),
+            Data::Code(codes, d) if col.ty == ty => {
+                dicts[*d].text(codes[i]).and_then(|b| rupg_func::extended_hash_text(ty, b, 0))
+            }
+            _ => None,
+        };
+        let one = match one {
+            Some(one) => one,
+            None => rupg_func::extended_hash(ty, &col.value(i, dicts), 0)?,
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        let one = one as u32;
+        hash ^= one;
+    }
+    Ok(hashed::murmurhash32(hash))
 }
 
 /// The order of the groups, as the row engine gives them: the order of the hash table of the `HashAggregate` of the plan, the order of the keys for a sort, or the order of the first rows. `hashes` has the hash of each group when the scan found them.

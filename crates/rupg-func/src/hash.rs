@@ -178,6 +178,32 @@ pub fn extended_hash(ty: u32, value: &Value, seed: u64) -> Result<u64> {
     hash(crate::io::base_type(ty), value, Seed::Extended(seed))
 }
 
+/// [`extended_hash`] of the integer `v` of the type `ty`, with no [`Value`]. `None` for a type whose values are not integers with this hash.
+#[must_use]
+pub fn extended_hash_int(ty: u32, v: i64, seed: u64) -> Option<u64> {
+    let seed = Seed::Extended(seed);
+    match crate::io::base_type(ty) {
+        #[allow(clippy::cast_possible_truncation)]
+        oid::INT2 | oid::INT4 | oid::DATE => Some(seed.word((v as i32).cast_unsigned())),
+        oid::INT8 | oid::TIME | oid::TIMESTAMP | oid::TIMESTAMPTZ => Some(seed.int8(v)),
+        _ => None,
+    }
+}
+
+/// [`extended_hash`] of the bytes of a text of the type `ty`, with no [`Value`]. `None` for a type that is not a text with this hash.
+#[must_use]
+pub fn extended_hash_text(ty: u32, bytes: &[u8], seed: u64) -> Option<u64> {
+    let seed = Seed::Extended(seed);
+    match crate::io::base_type(ty) {
+        oid::TEXT | oid::VARCHAR | oid::NAME => Some(seed.bytes(bytes)),
+        oid::BPCHAR => {
+            let end = bytes.iter().rposition(|&b| b != b' ').map_or(0, |p| p + 1);
+            Some(seed.bytes(&bytes[..end]))
+        }
+        _ => None,
+    }
+}
+
 /// The hash of a value of the type `ty`. A plain hash has only the low 32 bits.
 fn hash(ty: u32, value: &Value, seed: Seed) -> Result<u64> {
     Ok(match (ty, value) {
