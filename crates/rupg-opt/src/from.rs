@@ -1034,8 +1034,11 @@ impl<'q> Builder<'q> {
                         let gathered = self.gather_paths(stats, r, &partials, whole);
                         if !gathered.is_empty() {
                             let mut paths = Paths::new(stats.startup);
-                            for rel in rels.into_iter().chain(gathered) {
+                            for rel in rels {
                                 paths.add(costs(&rel.node), rel.order.clone(), rel);
+                            }
+                            for rel in gathered {
+                                paths.add_gathered(costs(&rel.node), rel.order.clone(), rel);
                             }
                             rels = paths.kept();
                         }
@@ -1242,7 +1245,7 @@ impl<'q> Builder<'q> {
             paths.add(costs(&rel.node), rel.order.clone(), rel);
         }
         for rel in gathered {
-            paths.add(costs(&rel.node), rel.order.clone(), rel);
+            paths.add_gathered(costs(&rel.node), rel.order.clone(), rel);
         }
         paths.kept()
     }

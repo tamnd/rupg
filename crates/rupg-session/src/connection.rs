@@ -8973,6 +8973,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/explain_parallel_append.test")));
     }
 
+    /// `EXPLAIN` of parallel bitmap heap scans, as `create_partial_bitmap_paths` makes them: a `Parallel Bitmap Heap Scan` of a `Bitmap Index Scan` and of a `BitmapOr` below a `Gather`, and a `Gather` of it on the inner side of a nested loop. The workers come from the pages of the heap that the scan reads. A plain bitmap heap scan wins over a `Gather` that costs about the same, because the plain scan is parallel safe, as `add_path` decides. `connection/explain_parallel_bitmap.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn explain_parallel_bitmap() {
+        big_stack(|| script(include_str!("connection/explain_parallel_bitmap.test")));
+    }
+
     /// `EXPLAIN` of the conditions that an equivalence class with a constant gives: a condition of each member with the constant in place of the `=` of a join, the nullable side of a left join, a scan with no rows for two constants that are not equal, and the partitions that the new conditions prune. `connection/equivalence_const.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn equivalence_const() {

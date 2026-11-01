@@ -1,0 +1,114 @@
+> create table bt1 (unique1 int, hundred int, thousand int, ten int, pad text)
+CREATE TABLE
+> insert into bt1 select i, i % 100, i % 1000, i % 10, repeat('x', 100) from generate_series(0, 9999) i
+INSERT 0 10000
+> create index bt1_hundred on bt1 (hundred)
+CREATE INDEX
+> create index bt1_thousand on bt1 (thousand)
+CREATE INDEX
+> create table bt2 (unique1 int, thousand int)
+CREATE TABLE
+> insert into bt2 select i, i % 1000 from generate_series(0, 9999) i
+INSERT 0 10000
+> vacuum analyze bt1
+VACUUM
+> vacuum analyze bt2
+VACUUM
+> set parallel_setup_cost = 0
+SET
+> set parallel_tuple_cost = 0
+SET
+> set min_parallel_table_scan_size = 0
+SET
+> set max_parallel_workers_per_gather = 4
+SET
+> set enable_seqscan to off
+SET
+> set enable_indexscan to off
+SET
+> explain (costs off) select count(*) from bt1 where hundred > 1
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate
+row   ->  Gather
+row         Workers Planned: 4
+row         ->  Partial Aggregate
+row               ->  Parallel Bitmap Heap Scan on bt1
+row                     Recheck Cond: (hundred > 1)
+row                     ->  Bitmap Index Scan on bt1_hundred
+row                           Index Cond: (hundred > 1)
+EXPLAIN
+> explain select count(*) from bt1 where hundred > 1
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate  (cost=335.00..335.01 rows=1 width=8)
+row   ->  Gather  (cost=334.99..335.00 rows=4 width=8)
+row         Workers Planned: 4
+row         ->  Partial Aggregate  (cost=334.99..335.00 rows=1 width=8)
+row               ->  Parallel Bitmap Heap Scan on bt1  (cost=116.23..328.86 rows=2450 width=0)
+row                     Recheck Cond: (hundred > 1)
+row                     ->  Bitmap Index Scan on bt1_hundred  (cost=0.00..113.78 rows=9800 width=0)
+row                           Index Cond: (hundred > 1)
+EXPLAIN
+> select count(*) from bt1 where hundred > 1
+fields count:20:8:-1
+row 9800
+SELECT 1
+> explain select * from bt1 where thousand < 10
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on bt1  (cost=5.11..170.30 rows=107 width=117)
+row   Recheck Cond: (thousand < 10)
+row   ->  Bitmap Index Scan on bt1_thousand  (cost=0.00..5.09 rows=107 width=0)
+row         Index Cond: (thousand < 10)
+EXPLAIN
+> explain (costs off) select * from bt1 where thousand < 10 or hundred = 3
+fields QUERY PLAN:25:-1:-1
+row Gather
+row   Workers Planned: 4
+row   ->  Parallel Bitmap Heap Scan on bt1
+row         Recheck Cond: ((thousand < 10) OR (hundred = 3))
+row         ->  BitmapOr
+row               ->  Bitmap Index Scan on bt1_thousand
+row                     Index Cond: (thousand < 10)
+row               ->  Bitmap Index Scan on bt1_hundred
+row                     Index Cond: (hundred = 3)
+EXPLAIN
+> select count(*) from bt1 where thousand < 10 or hundred = 3
+fields count:20:8:-1
+row 190
+SELECT 1
+> set enable_hashjoin to off
+SET
+> set enable_mergejoin to off
+SET
+> set enable_material to off
+SET
+> explain (costs off) select count(*) from bt1, bt2 where bt1.hundred > 1 and bt2.thousand = 0
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   ->  Nested Loop
+row         ->  Gather
+row               Workers Planned: 4
+row               ->  Parallel Seq Scan on bt2
+row                     Disabled: true
+row                     Filter: (thousand = 0)
+row         ->  Gather
+row               Workers Planned: 4
+row               ->  Parallel Bitmap Heap Scan on bt1
+row                     Recheck Cond: (hundred > 1)
+row                     ->  Bitmap Index Scan on bt1_hundred
+row                           Index Cond: (hundred > 1)
+EXPLAIN
+> select count(*) from bt1, bt2 where bt1.hundred > 1 and bt2.thousand = 0
+fields count:20:8:-1
+row 98000
+SELECT 1
+> reset enable_seqscan
+RESET
+> explain (costs off) select count(*) from bt1 where hundred > 1
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate
+row   ->  Gather
+row         Workers Planned: 4
+row         ->  Partial Aggregate
+row               ->  Parallel Seq Scan on bt1
+row                     Filter: (hundred > 1)
+EXPLAIN

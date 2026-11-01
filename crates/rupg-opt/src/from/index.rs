@@ -316,7 +316,7 @@ fn and_tree(list: &[Bitmap<'_>]) -> (f64, f64) {
     (total, selectivity)
 }
 
-/// `build_index_paths` for each btree index of the table with no predicate, the newest index first: a scan in the order of the index, and a scan in the other order when its order is useful. A scan is an index only scan when the index has each column of the table that the query reads, as `check_index_only`. Each scan has the order of its rows that a node above can use, as `truncate_useless_pathkeys` finds it. The forward scans that test a condition or that give no useful order are the scans that a bitmap can use. With the `BitmapOr` bitmaps of the conditions that are an `OR`, the end of `create_index_paths` makes the bitmap heap scan of the best of them. It also gives the partial paths of the scans by the indexes, each with its workers. With `parallel`, the `parallel_workers` option of the table when the relation can be in parallel mode, a `btree` index gives a partial scan too, as `build_index_paths` makes it for an index with `amcanparallel`.
+/// `build_index_paths` for each btree index of the table with no predicate, the newest index first: a scan in the order of the index, and a scan in the other order when its order is useful. A scan is an index only scan when the index has each column of the table that the query reads, as `check_index_only`. Each scan has the order of its rows that a node above can use, as `truncate_useless_pathkeys` finds it. The forward scans that test a condition or that give no useful order are the scans that a bitmap can use. With the `BitmapOr` bitmaps of the conditions that are an `OR`, the end of `create_index_paths` makes the bitmap heap scan of the best of them. It also gives the partial paths of the scans by the indexes, each with its workers. With `parallel`, the `parallel_workers` option of the table when the relation can be in parallel mode, a `btree` index gives a partial scan too, as `build_index_paths` makes it for an index with `amcanparallel`, and the best bitmap gives a partial bitmap heap scan, as `create_partial_bitmap_paths` makes it. The workers of the partial bitmap heap scan come from the pages of the heap that it reads, with no pages of an index.
 pub(super) fn partial_paths<'q>(
     level: &Level<'q>,
     table: &Table<'_, 'q>,
@@ -324,10 +324,19 @@ pub(super) fn partial_paths<'q>(
     stats: &Stats,
     parallel: Option<Option<i32>>,
 ) -> (Vec<Rel<'q>>, Vec<(Rel<'q>, i32)>) {
-    let (mut out, bitmaps, partials) = index_paths(level, table, indexes, stats, parallel);
+    let (mut out, bitmaps, mut partials) = index_paths(level, table, indexes, stats, parallel);
     if !bitmaps.is_empty() {
         let chosen = choose_bitmap_and(table, bitmaps, None, stats);
-        out.push(bitmap_heap_scan(level, table, &chosen, stats));
+        out.push(bitmap_heap_scan(level, table, &chosen, 0, stats));
+        if let Some(option) = parallel
+            && table.outer.is_empty()
+        {
+            let pages = heap_pages(table, chosen.tree().1, chosen.pages());
+            let workers = parallel::scan_workers(&crate::enable(), Some(pages), None, option);
+            if workers > 0 {
+                partials.push((bitmap_heap_scan(level, table, &chosen, workers, stats), workers));
+            }
+        }
     }
     (out, partials)
 }
@@ -474,7 +483,7 @@ pub(super) fn reparameterize<'q>(
                 return None;
             }
             let chosen = choose_bitmap_and(plain, bitmaps, None, stats);
-            Some(bitmap_heap_scan(level, table, &chosen, stats).node)
+            Some(bitmap_heap_scan(level, table, &chosen, 0, stats).node)
         }
         _ => None,
     }
@@ -683,7 +692,7 @@ pub(super) fn param_paths<'q>(
             Bitmap::Index(b) => indexed(&t, base, &b.clauses),
             _ => false,
         };
-        let rel = bitmap_heap_scan(level, &t, &chosen, stats);
+        let rel = bitmap_heap_scan(level, &t, &chosen, 0, stats);
         out.push(Param { rel, outer, enforced: t.quals[base..].to_vec(), indexed });
     }
     out
@@ -1712,7 +1721,7 @@ fn choose_bitmap_and<'q>(
         let (startup, per_row) = stats.qual_costs(table.quals.iter().map(|q| &*q.expr));
         let (tree, selectivity) = and_tree(list);
         let pages: f64 = list.iter().map(Bitmap::pages).sum();
-        heap_cost(table, tree, selectivity, pages, startup, per_row).1
+        heap_cost(table, tree, selectivity, pages, (startup, per_row), 0).1
     };
     let mut best: Vec<Bitmap<'q>> = Vec::new();
     let mut best_cost = 0.0;
@@ -1744,15 +1753,34 @@ fn choose_bitmap_and<'q>(
     }
 }
 
-/// `cost_bitmap_heap_scan` with the pages of `compute_bitmap_pages`: the start cost and the total cost of the heap scan of a bitmap that costs `tree`, passes the rows of `selectivity` and reads indexes of `index_pages`, when the conditions of the table cost `startup` to start and `per_row` for each row. The pages cost a random page each when the scan reads few of them and less when it reads more. A scan in a nested loop reads the pages that the other scans read from the cache. A bitmap of the 4 MB of `work_mem` holds the places of the pages of each table that the planner sees, so no page is lossy.
+/// `cost_bitmap_heap_scan` with the pages of `compute_bitmap_pages`: the start cost and the total cost of the heap scan of a bitmap that costs `tree`, passes the rows of `selectivity` and reads indexes of `index_pages`, when the conditions of the table cost `startup` to start and `per_row` for each row. The pages cost a random page each when the scan reads few of them and less when it reads more. A scan in a nested loop reads the pages that the other scans read from the cache. A bitmap of the 4 MB of `work_mem` holds the places of the pages of each table that the planner sees, so no page is lossy. A partial scan with `workers` workers divides the CPU cost of the rows among the processes, and not the cost of the pages.
 fn heap_cost(
     table: &Table<'_, '_>,
     tree: f64,
     selectivity: f64,
     index_pages: f64,
-    startup: f64,
-    per_row: f64,
+    (startup, per_row): (f64, f64),
+    workers: i32,
 ) -> (f64, f64) {
+    let fetched = cost::clamp_rows(selectivity * table.tuples);
+    let t = if table.pages > 1.0 { table.pages } else { 1.0 };
+    let pages = heap_pages(table, selectivity, index_pages);
+    let mut cpu = (cost::CPU_TUPLE + per_row) * fetched;
+    if workers > 0 {
+        cpu /= parallel::divisor(&crate::enable(), workers);
+    }
+    let per_page = if pages >= 2.0 {
+        cost::random_page() - (cost::random_page() - cost::SEQ_PAGE) * (pages / t).sqrt()
+    } else {
+        cost::random_page()
+    };
+    let startup = tree + startup;
+    let run = pages * per_page + cpu;
+    (startup, startup + run)
+}
+
+/// `compute_bitmap_pages`: the pages of the heap that the heap scan of a bitmap reads, for the rows of `selectivity`, with the pages of the indexes `index_pages`. A scan in a nested loop reads the pages that the other scans read from the cache.
+fn heap_pages(table: &Table<'_, '_>, selectivity: f64, index_pages: f64) -> f64 {
     let fetched = cost::clamp_rows(selectivity * table.tuples);
     let t = if table.pages > 1.0 { table.pages } else { 1.0 };
     let mut pages = 2.0 * t * fetched / (2.0 * t + fetched);
@@ -1760,15 +1788,7 @@ fn heap_cost(
         pages = pages_fetched(fetched * table.loops, table.pages, index_pages, table.pages)
             / table.loops;
     }
-    let pages = if pages >= t { t } else { pages.ceil() };
-    let per_page = if pages >= 2.0 {
-        cost::random_page() - (cost::random_page() - cost::SEQ_PAGE) * (pages / t).sqrt()
-    } else {
-        cost::random_page()
-    };
-    let startup = tree + startup;
-    let run = pages * per_page + (cost::CPU_TUPLE + per_row) * fetched;
-    (startup, startup + run)
+    if pages >= t { t } else { pages.ceil() }
 }
 
 /// A condition of a bitmap as the query has it: the condition with its place in the conditions of the scan, or a condition that the bitmap makes, such as the `OR` of the conditions of a `BitmapOr`, with no place.
@@ -1939,11 +1959,12 @@ pub(crate) fn implied_by(clause: &Expr, pred: &Expr) -> bool {
     }
 }
 
-/// `create_bitmap_heap_path` and `create_bitmap_scan_plan`: the heap scan of the bitmap. Its filter is each condition of the table that the bitmap does not test exactly, in the order of `order_qual_clauses`. A condition that the conditions of the indexes imply, such as an `OR` that a `BitmapOr` tests, is not in the filter. The recheck conditions are the conditions of the bitmap as the query has them, but not those in the filter.
+/// `create_bitmap_heap_path` and `create_bitmap_scan_plan`: the heap scan of the bitmap. Its filter is each condition of the table that the bitmap does not test exactly, in the order of `order_qual_clauses`. A condition that the conditions of the indexes imply, such as an `OR` that a `BitmapOr` tests, is not in the filter. The recheck conditions are the conditions of the bitmap as the query has them, but not those in the filter. With `workers` above 0, the scan is a partial scan, and each process gives its share of the rows.
 fn bitmap_heap_scan<'q>(
     level: &Level<'q>,
     table: &Table<'_, 'q>,
     bitmap: &Bitmap<'q>,
+    workers: i32,
     stats: &Stats,
 ) -> Rel<'q> {
     let (child, quals, tested) = subplan(level, table, bitmap);
@@ -1973,7 +1994,7 @@ fn bitmap_heap_scan<'q>(
     let (tree, selectivity) = bitmap.tree();
     let (qual_startup, per_row) = stats.qual_costs(table.quals.iter().map(|q| &*q.expr));
     let (startup, total) =
-        heap_cost(table, tree, selectivity, bitmap.pages(), qual_startup, per_row);
+        heap_cost(table, tree, selectivity, bitmap.pages(), (qual_startup, per_row), workers);
     let recheck = quals
         .into_iter()
         .filter_map(|o| match o.at {
@@ -1985,7 +2006,13 @@ fn bitmap_heap_scan<'q>(
     let mut node = Node::new(kind, level.scope, vec![child]);
     node.filter = filter.iter().map(|q| q.item()).collect();
     let width = stats.width(&BTreeSet::from([table.r]));
-    node.cost = Cost { startup, total, rows: table.rows, width };
+    let rows = if workers > 0 {
+        cost::clamp_rows(table.rows / parallel::divisor(&crate::enable(), workers))
+    } else {
+        table.rows
+    };
+    node.cost = Cost { startup, total, rows, width };
+    node.parallel = workers > 0;
     node.disabled = !crate::enable().bitmapscan;
     Rel { node, rels: BTreeSet::from([table.r]), order: Vec::new() }
 }
