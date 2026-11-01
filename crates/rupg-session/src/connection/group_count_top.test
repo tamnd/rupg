@@ -1,0 +1,27 @@
+> CREATE TABLE ct (k int, j int)
+CREATE TABLE
+> INSERT INTO ct SELECT i % 997, i % 7 FROM generate_series(1, 70000) i
+INSERT 0 70000
+> INSERT INTO ct SELECT i % 13, 0 FROM generate_series(1, 50) i
+INSERT 0 50
+> SELECT k, count(*) FROM ct GROUP BY k ORDER BY count(*) DESC LIMIT 5
+fields k@ct.1:23:4:-1,count:20:8:-1
+row 3,75
+row 5,75
+row 10,75
+row 2,75
+row 8,75
+SELECT 5
+> SELECT k, j, count(*) AS c FROM ct GROUP BY k, j ORDER BY c LIMIT 4 OFFSET 2
+fields k@ct.1:23:4:-1,j@ct.2:23:4:-1,c:20:8:-1
+row 578,1,10
+row 429,2,10
+row 673,4,10
+row 791,3,10
+SELECT 4
+> SELECT k, count(*) AS c, sum(j) FROM ct GROUP BY k ORDER BY 2 DESC LIMIT 3 OFFSET 12
+fields k@ct.1:23:4:-1,c:20:8:-1,sum:20:8:-1
+row 0,73,210
+row 19,71,215
+row 51,71,212
+SELECT 3

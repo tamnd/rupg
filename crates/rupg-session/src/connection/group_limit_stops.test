@@ -25,3 +25,16 @@ ERROR 22012 division by zero
 > SELECT k, 10 / k FROM gl GROUP BY k LIMIT 5
 fields k@gl.1:23:4:-1,?column?:23:4:-1
 ERROR 22012 division by zero
+> CREATE TABLE gw (k int, v int)
+CREATE TABLE
+> INSERT INTO gw SELECT i % 50, i FROM generate_series(1, 70000) i
+INSERT 0 70000
+> SELECT k, 100 / k, count(*) FROM gw GROUP BY k LIMIT 3
+fields k@gw.1:23:4:-1,?column?:23:4:-1,count:20:8:-1
+row 22,4,1400
+row 44,2,1400
+row 11,9,1400
+SELECT 3
+> SELECT k, 100 / k FROM gw GROUP BY k
+fields k@gw.1:23:4:-1,?column?:23:4:-1
+ERROR 22012 division by zero
