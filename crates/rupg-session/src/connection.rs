@@ -9104,6 +9104,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/explain_parallel_sublink.test")));
     }
 
+    /// `EXPLAIN` of a parallel plan of `GROUP BY` with no aggregate call, as `create_partial_grouping_paths` makes it: a `Partial HashAggregate` with no aggregate below a `Gather`, and a `Group` in each process below a `Gather Merge`. Each partial node has the cost of the expressions of the keys for each group, so a plain `HashAggregate` above a `Gather` can cost less. `connection/explain_parallel_group.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn explain_parallel_group() {
+        big_stack(|| script(include_str!("connection/explain_parallel_group.test")));
+    }
+
     /// `EXPLAIN` of the conditions that an equivalence class with a constant gives: a condition of each member with the constant in place of the `=` of a join, the nullable side of a left join, a scan with no rows for two constants that are not equal, and the partitions that the new conditions prune. `connection/equivalence_const.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn equivalence_const() {

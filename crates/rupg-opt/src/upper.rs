@@ -1840,7 +1840,7 @@ pub(crate) enum Mode {
     GatherSorted,
 }
 
-/// `create_partial_grouping_paths`, `gather_grouping_paths` and `add_paths_to_grouping_rel`: the `Agg` of a query with groups in two parts over the partial path `input` with `workers` workers. The partial `Agg` gives the states of the groups of each process, a `Gather` or a `Gather Merge` collects them, and the final `Agg` combines the states and calls the final functions. The partial `Agg` has the cost of the transition and of the serialization of the states, and the final `Agg` has the cost of the combine function, of the deserialization and of the final function, as `get_agg_clause_costs` gives them for each part. The result is `None` when an aggregate call cannot be partial, as `can_partial_agg`, or when the query has no aggregate call.
+/// `create_partial_grouping_paths`, `gather_grouping_paths` and `add_paths_to_grouping_rel`: the `Agg` of a query with groups in two parts over the partial path `input` with `workers` workers. The partial `Agg` gives the states of the groups of each process, a `Gather` or a `Gather Merge` collects them, and the final `Agg` combines the states and calls the final functions. The partial `Agg` has the cost of the transition and of the serialization of the states, and the final `Agg` has the cost of the combine function, of the deserialization and of the final function, as `get_agg_clause_costs` gives them for each part. A query with `GROUP BY` and no aggregate call has a `Group` in the place of each sorted `Agg`, as `create_group_path` makes it. The result is `None` when an aggregate call cannot be partial, as `can_partial_agg`, or when the query has no aggregate call and no `GROUP BY`.
 fn partial_aggregate<'q>(
     level: &Level<'q>,
     input: Node<'q>,
@@ -1855,9 +1855,13 @@ fn partial_aggregate<'q>(
     exprs_of.extend(having.iter().copied());
     let mut aggs = Vec::new();
     exprs::aggregates(&exprs_of, &mut aggs);
-    if aggs.is_empty() {
+    // `GROUP BY` with no aggregate call gives a `Group` for the sorted strategy. A `GROUPING` call sets `hasAggs`, and it has no combine function.
+    if aggs.is_empty() && (query.group.is_empty() || exprs_of.iter().any(|e| has_grouping(e))) {
         return None;
     }
+    let group_node = aggs.is_empty();
+    let sorted = if group_node { Strategy::Group } else { Strategy::Sorted };
+    let sorted_split = |split| if group_node { Split::Simple } else { split };
     // `hasNonPartialAggs` and `hasNonSerialAggs`: an ordered call, a call of an ordered-set aggregate or an aggregate with no combine function cannot be partial, and an `internal` state needs the functions of the serialization.
     let (mut combine, mut serial) = (0.0, 0.0);
     for a in &aggs {
@@ -1930,15 +1934,18 @@ fn partial_aggregate<'q>(
         // `cost_agg` of `AGG_SORTED` over a `Sort` of the rows of each process.
         let input = sort_if(level, input, group.clone(), &mut Vec::new(), None, false)?;
         let s = input.cost;
+        // `cost_group` has no cost for each group.
         let total = s.total
             + cost::CPU_OPERATOR * units * n
             + cost::CPU_OPERATOR * nkeys * n
             + serial * groups
-            + cost::CPU_TUPLE * groups;
-        let mut node = agg(Strategy::Sorted, Split::Partial, keys.clone(), None, input);
+            + if group_node { 0.0 } else { cost::CPU_TUPLE * groups };
+        let mut node = agg(sorted, sorted_split(Split::Partial), keys.clone(), None, input);
         node.cost = Cost { startup: s.startup, total, rows: groups, width: 0 };
         node
     };
+    // `create_agg_path` and `create_group_path` add the cost of the partial target for each group, and the keys of the groups are its expressions.
+    node.cost.total += cost::qual_cost(group_exprs.iter().copied()) * groups;
     if mode == Mode::SortHashed {
         node = sort_if(level, node, group.clone(), &mut Vec::new(), None, false)?;
     }
@@ -1971,10 +1978,10 @@ fn partial_aggregate<'q>(
         let total = g.total
             + transition
             + finals * groups
-            + cost::CPU_TUPLE * groups
+            + if group_node { 0.0 } else { cost::CPU_TUPLE * groups }
             + having_startup
             + having_cost * groups;
-        let mut node = agg(Strategy::Sorted, Split::Final, keys, None, gather);
+        let mut node = agg(sorted, sorted_split(Split::Final), keys, None, gather);
         node.cost = Cost { startup: g.startup + having_startup, total, rows, width: 0 };
         *order = sorted_order(&group);
         node
