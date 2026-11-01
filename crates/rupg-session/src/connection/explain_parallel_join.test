@@ -1,0 +1,232 @@
+> create table ta (unique1 int, unique2 int, two int, four int, hundred int, thousand int, twenty int, filler text)
+CREATE TABLE
+> insert into ta select i, (i * 7) % 10000, i % 2, i % 4, i % 100, i % 1000, i % 20, repeat(chr(97 + i % 26), 20) from generate_series(0, 9999) i
+INSERT 0 10000
+> create unique index ta_unique1 on ta (unique1)
+CREATE INDEX
+> create index ta_hundred on ta (hundred)
+CREATE INDEX
+> create table tb (unique1 int, unique2 int, two int, hundred int, thousand int, filler text)
+CREATE TABLE
+> insert into tb select i, (i * 3) % 10000, i % 2, i % 100, i % 1000, repeat(chr(97 + i % 26), 20) from generate_series(0, 9999) i
+INSERT 0 10000
+> create unique index tb_unique1 on tb (unique1)
+CREATE INDEX
+> create index tb_thousand on tb (thousand)
+CREATE INDEX
+> vacuum analyze ta
+VACUUM
+> vacuum analyze tb
+VACUUM
+> set parallel_setup_cost = 0
+SET
+> set parallel_tuple_cost = 0
+SET
+> set min_parallel_table_scan_size = 0
+SET
+> set max_parallel_workers_per_gather = 4
+SET
+> explain (costs off) select count(*) from ta, tb where ta.unique1 = tb.unique1
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate
+row   ->  Gather
+row         Workers Planned: 4
+row         ->  Partial Aggregate
+row               ->  Parallel Hash Join
+row                     Hash Cond: (ta.unique1 = tb.unique1)
+row                     ->  Parallel Seq Scan on ta
+row                     ->  Parallel Hash
+row                           ->  Parallel Seq Scan on tb
+EXPLAIN
+> select count(*) from ta, tb where ta.unique1 = tb.unique1
+fields count:20:8:-1
+row 10000
+SELECT 1
+> explain select count(*) from ta, tb where ta.unique1 = tb.unique1
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate  (cost=292.08..292.09 rows=1 width=8)
+row   ->  Gather  (cost=292.06..292.07 rows=4 width=8)
+row         Workers Planned: 4
+row         ->  Partial Aggregate  (cost=292.06..292.07 rows=1 width=8)
+row               ->  Parallel Hash Join  (cost=150.25..285.81 rows=2500 width=0)
+row                     Hash Cond: (ta.unique1 = tb.unique1)
+row                     ->  Parallel Seq Scan on ta  (cost=0.00..129.00 rows=2500 width=4)
+row                     ->  Parallel Hash  (cost=119.00..119.00 rows=2500 width=4)
+row                           ->  Parallel Seq Scan on tb  (cost=0.00..119.00 rows=2500 width=4)
+EXPLAIN
+> explain (costs off) select count(*) from ta join tb on ta.hundred = tb.hundred where tb.thousand < 5
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate
+row   ->  Gather
+row         Workers Planned: 4
+row         ->  Partial Aggregate
+row               ->  Nested Loop
+row                     ->  Parallel Bitmap Heap Scan on tb
+row                           Recheck Cond: (thousand < 5)
+row                           ->  Bitmap Index Scan on tb_thousand
+row                                 Index Cond: (thousand < 5)
+row                     ->  Index Only Scan using ta_hundred on ta
+row                           Index Cond: (hundred = tb.hundred)
+EXPLAIN
+> select count(*) from ta join tb on ta.hundred = tb.hundred where tb.thousand < 5
+fields count:20:8:-1
+row 5000
+SELECT 1
+> explain (costs off) select ta.two, count(*) from ta left join tb on ta.unique2 = tb.unique1 group by ta.two
+fields QUERY PLAN:25:-1:-1
+row Finalize GroupAggregate
+row   Group Key: ta.two
+row   ->  Gather Merge
+row         Workers Planned: 4
+row         ->  Sort
+row               Sort Key: ta.two
+row               ->  Partial HashAggregate
+row                     Group Key: ta.two
+row                     ->  Parallel Seq Scan on ta
+EXPLAIN
+> explain (costs off) select count(*) from ta where exists (select 1 from tb where tb.unique1 = ta.unique2 and tb.two = 1)
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate
+row   ->  Gather
+row         Workers Planned: 4
+row         ->  Partial Aggregate
+row               ->  Parallel Hash Join
+row                     Hash Cond: (ta.unique2 = tb.unique1)
+row                     ->  Parallel Seq Scan on ta
+row                     ->  Parallel Hash
+row                           ->  Parallel Seq Scan on tb
+row                                 Filter: (two = 1)
+EXPLAIN
+> explain (costs off) select count(*) from ta where not exists (select 1 from tb where tb.unique1 = ta.unique2 and tb.two = 1)
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate
+row   ->  Gather
+row         Workers Planned: 4
+row         ->  Partial Aggregate
+row               ->  Parallel Hash Anti Join
+row                     Hash Cond: (ta.unique2 = tb.unique1)
+row                     ->  Parallel Seq Scan on ta
+row                     ->  Parallel Hash
+row                           ->  Parallel Seq Scan on tb
+row                                 Filter: (two = 1)
+EXPLAIN
+> set enable_hashjoin to off
+SET
+> set enable_nestloop to off
+SET
+> explain (costs off) select count(*) from ta, tb where ta.unique1 = tb.unique1
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   ->  Merge Join
+row         Merge Cond: (ta.unique1 = tb.unique1)
+row         ->  Index Only Scan using ta_unique1 on ta
+row         ->  Index Only Scan using tb_unique1 on tb
+EXPLAIN
+> explain select count(*) from ta, tb where ta.unique1 = tb.unique1
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=707.57..707.58 rows=1 width=8)
+row   ->  Merge Join  (cost=0.57..682.57 rows=10000 width=0)
+row         Merge Cond: (ta.unique1 = tb.unique1)
+row         ->  Index Only Scan using ta_unique1 on ta  (cost=0.29..266.29 rows=10000 width=4)
+row         ->  Index Only Scan using tb_unique1 on tb  (cost=0.29..266.29 rows=10000 width=4)
+EXPLAIN
+> reset enable_hashjoin
+RESET
+> reset enable_nestloop
+RESET
+> alter table tb set (parallel_workers = 0)
+ALTER TABLE
+> explain (costs off) select * from ta t1, tb t2 where t1.two > t2.two
+fields QUERY PLAN:25:-1:-1
+row Gather
+row   Workers Planned: 4
+row   ->  Nested Loop
+row         Join Filter: (t1.two > t2.two)
+row         ->  Parallel Seq Scan on ta t1
+row         ->  Materialize
+row               ->  Seq Scan on tb t2
+EXPLAIN
+> explain (costs off) select count(*) from ta, tb where ta.unique1 = tb.unique1
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate
+row   ->  Gather
+row         Workers Planned: 4
+row         ->  Partial Aggregate
+row               ->  Hash Join
+row                     Hash Cond: (ta.unique1 = tb.unique1)
+row                     ->  Parallel Seq Scan on ta
+row                     ->  Hash
+row                           ->  Seq Scan on tb
+EXPLAIN
+> explain (costs off) select * from ta t1 left join lateral (select t1.unique1 as x, * from tb t2 order by 1) t2 on true where t1.two > t2.two
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Gather
+row         Workers Planned: 4
+row         ->  Parallel Seq Scan on ta t1
+row   ->  Subquery Scan on t2
+row         Filter: (t1.two > t2.two)
+row         ->  Seq Scan on tb t2_1
+EXPLAIN
+> alter table tb reset (parallel_workers)
+ALTER TABLE
+> set enable_hashjoin to off
+SET
+> set enable_mergejoin to off
+SET
+> explain (costs off) select count(*) from ta, tb where ta.unique1 = tb.unique2 and tb.thousand < 3
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate
+row   ->  Gather
+row         Workers Planned: 4
+row         ->  Partial Aggregate
+row               ->  Nested Loop
+row                     ->  Parallel Bitmap Heap Scan on tb
+row                           Recheck Cond: (thousand < 3)
+row                           ->  Bitmap Index Scan on tb_thousand
+row                                 Index Cond: (thousand < 3)
+row                     ->  Index Only Scan using ta_unique1 on ta
+row                           Index Cond: (unique1 = tb.unique2)
+EXPLAIN
+> select count(*) from ta, tb where ta.unique1 = tb.unique2 and tb.thousand < 3
+fields count:20:8:-1
+row 30
+SELECT 1
+> reset enable_hashjoin
+RESET
+> reset enable_mergejoin
+RESET
+> explain select ta.two, count(*) from ta group by ta.two
+fields QUERY PLAN:25:-1:-1
+row Finalize GroupAggregate  (cost=141.59..141.77 rows=2 width=12)
+row   Group Key: two
+row   ->  Gather Merge  (cost=141.59..141.71 rows=8 width=12)
+row         Workers Planned: 4
+row         ->  Sort  (cost=141.53..141.53 rows=2 width=12)
+row               Sort Key: two
+row               ->  Partial HashAggregate  (cost=141.50..141.52 rows=2 width=12)
+row                     Group Key: two
+row                     ->  Parallel Seq Scan on ta  (cost=0.00..129.00 rows=2500 width=4)
+EXPLAIN
+> explain select ta.four, count(*) from ta group by ta.four
+fields QUERY PLAN:25:-1:-1
+row Finalize GroupAggregate  (cost=141.64..141.99 rows=4 width=12)
+row   Group Key: four
+row   ->  Gather Merge  (cost=141.64..141.87 rows=16 width=12)
+row         Workers Planned: 4
+row         ->  Sort  (cost=141.58..141.59 rows=4 width=12)
+row               Sort Key: four
+row               ->  Partial HashAggregate  (cost=141.50..141.54 rows=4 width=12)
+row                     Group Key: four
+row                     ->  Parallel Seq Scan on ta  (cost=0.00..129.00 rows=2500 width=4)
+EXPLAIN
+> explain select ta.hundred, count(*) from ta group by ta.hundred
+fields QUERY PLAN:25:-1:-1
+row Finalize HashAggregate  (cost=144.50..145.50 rows=100 width=12)
+row   Group Key: hundred
+row   ->  Gather  (cost=141.50..142.50 rows=400 width=12)
+row         Workers Planned: 4
+row         ->  Partial HashAggregate  (cost=141.50..142.50 rows=100 width=12)
+row               Group Key: hundred
+row               ->  Parallel Seq Scan on ta  (cost=0.00..129.00 rows=2500 width=4)
+EXPLAIN

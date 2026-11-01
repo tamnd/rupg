@@ -829,7 +829,16 @@ impl<'q> Builder<'q> {
                 }
                 (rels, true)
             }
-            tree => (self.build(level, tree, &found, &mut stats), false),
+            tree => {
+                let rels = self.build(level, tree, &found, &mut stats);
+                // The partial path of the join of the relations, which `create_partial_grouping_paths` reads too.
+                if let Some(partial) = self.partial.take()
+                    && gating.is_empty()
+                {
+                    self.partials.insert(level.scope, partial);
+                }
+                (rels, false)
+            }
         };
         let plans = rels
             .into_iter()
@@ -873,8 +882,23 @@ impl<'q> Builder<'q> {
                 let (mut items, mut pool, mut specials) = (Vec::new(), Vec::new(), Vec::new());
                 flatten(Tree::Join(join), &mut items, &mut pool, &mut specials);
                 pool.sort_by_key(|q| q.order.unwrap_or(usize::MAX));
-                let mut rels: Vec<Vec<Rel<'q>>> =
-                    items.into_iter().map(|t| self.build(level, t, found, stats)).collect();
+                let mut rels: Vec<Vec<Rel<'q>>> = Vec::new();
+                let mut partials = Vec::new();
+                for item in items {
+                    let plans = self.build(level, item, found, stats);
+                    // `consider_parallel` of an item that is one table, with its cheapest partial path.
+                    let one = match plans[0].rels.iter().collect::<Vec<_>>()[..] {
+                        [&r] if self.safe.contains(&(level.scope, r)) => Some(r),
+                        _ => None,
+                    };
+                    let partial = self.partial.take();
+                    partials.push(one.map(|r| {
+                        let rels = BTreeSet::from([r]);
+                        partial
+                            .map(|(node, workers)| (Rel { node, rels, order: Vec::new() }, workers))
+                    }));
+                    rels.push(plans);
+                }
                 if let Some(rel) = dummy_domain(level, &mut rels, &pool, &specials, stats) {
                     return vec![rel];
                 }
@@ -885,12 +909,16 @@ impl<'q> Builder<'q> {
                         _ => None,
                     })
                     .collect();
-                search::search(level, rels, &pool, specials, found, &bases, stats)
+                let (plans, partial) =
+                    search::search(level, (rels, partials), &pool, specials, found, &bases, stats);
+                self.partial = partial.map(|(rel, workers)| (rel.node, workers));
+                plans
             }
             Tree::Join(join) => {
                 let JoinTree { kind, left, right, quals, filter, .. } = *join;
                 let left = self.build(level, left, found, stats);
                 let right = self.build(level, right, found, stats);
+                self.partial = None;
                 join_rels(level, kind, left, right, quals, filter, stats)
             }
         }
@@ -1194,6 +1222,9 @@ impl<'q> Builder<'q> {
         let option = self.members.and_then(|m| m.parallel(relation.oid));
         let parallel =
             option.filter(|_| self.parallel && base.iter().all(|q| parallel::safe(&q.expr)));
+        if parallel.is_some() {
+            self.safe.insert((level.scope, r));
+        }
         let mut partials = Vec::new();
         if let Some(option) = parallel {
             let workers = parallel::workers(&enable, pages, option);
