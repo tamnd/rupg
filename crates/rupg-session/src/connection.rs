@@ -1502,7 +1502,7 @@ impl Connection {
                 self.define_with(node, text, notices, schema.owner, true).map(drop)
             })
         });
-        *self.settings.borrow_mut() = saved;
+        self.settings.borrow_mut().restore(saved);
         result
     }
 
@@ -3500,6 +3500,20 @@ mod tests {
                 "row German, DMY",
                 "SELECT 1",
                 "DateStyle=German, DMY",
+                "ready I"
+            ]
+        );
+        assert_eq!(one(&mut c, "RESET datestyle"), ["RESET", "DateStyle=ISO, MDY", "ready I"]);
+        assert_eq!(
+            one(
+                &mut c,
+                "SELECT '2000-01-02'::date::text, set_config('datestyle', 'SQL, DMY', false), '2000-01-02'::date::text"
+            ),
+            [
+                "columns text,set_config,text",
+                "row 2000-01-02,SQL, DMY,02/01/2000",
+                "SELECT 1",
+                "DateStyle=SQL, DMY",
                 "ready I"
             ]
         );
