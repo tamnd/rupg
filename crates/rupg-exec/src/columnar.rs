@@ -175,6 +175,14 @@ impl Dict {
     }
 
     /// The bytes of the text of the code `code`, or `None` for a dictionary of values that are not text.
+    /// Whether the codes are of text, so that [`Dict::text`] gives their bytes.
+    fn is_text(&self) -> bool {
+        match self {
+            Dict::Stored(stored) => stored.kind == Kind::Text,
+            Dict::Own(_) => true,
+        }
+    }
+
     fn text(&self, code: u32) -> Option<&[u8]> {
         match self {
             Dict::Stored(stored) if stored.kind == Kind::Text => {
@@ -1178,13 +1186,25 @@ enum States {
     Done(Vec<Value>),
 }
 
+/// The codes that the scan keeps for `min` or `max` of a column of codes.
+struct Codes {
+    /// The codes that each group saw, for a type that does not compare the bytes.
+    seen: Vec<FxSet<u32>>,
+    /// The extreme code of each group, or `u32::MAX` for no code, for `text`.
+    best: Vec<u32>,
+    /// The dictionary of the codes, or `usize::MAX` before the first vector.
+    dict: usize,
+    /// `Some(true)` for `max` of `text` and `Some(false)` for `min` of `text`.
+    max: Option<bool>,
+}
+
 struct Call<'q> {
     agg: &'q Aggref,
     key: *const Aggref,
     method: Method<'q>,
     states: States,
-    /// For `min` and `max` of the row engine, the codes of a column of codes that each group saw, with the dictionary of the codes. Each code goes into the state once, after the scan, as the result does not depend on the order or the number of the values.
-    codes: Option<(Vec<FxSet<u32>>, usize)>,
+    /// For `min` and `max` of the row engine, the codes of a column of codes that each group saw. Each code goes into the state once, after the scan, as the result does not depend on the order or the number of the values.
+    codes: Option<Codes>,
 }
 
 /// The states of the aggregate calls of all the groups after the scan, which give the results of the calls of a group.
@@ -1911,7 +1931,12 @@ fn grouped(
             && agg.nargs == 1
             && agg.args.len() == 1
             && agg.order.is_empty();
-        let codes = codes.then(|| (Vec::new(), usize::MAX));
+        // `min` and `max` of `text` compare the bytes, so the scan keeps only the extreme code of each group.
+        let max = builtin::proc_by_oid(agg.oid)
+            .filter(|p| p.argtypes == [oid::TEXT])
+            .map(|p| p.name == "max");
+        let codes =
+            codes.then(|| Codes { seen: Vec::new(), best: Vec::new(), dict: usize::MAX, max });
         aggs.push(Call { agg, key: std::ptr::from_ref(agg), method, states, codes });
     }
     let keys: Vec<&Expr> = query.group.iter().map(|g| &query.targets[g.target].expr).collect();
@@ -2151,15 +2176,36 @@ fn grouped(
                         .iter()
                         .map(|a| exec.eval(a, batch, sel))
                         .collect::<Result<Vec<_>>>()?;
-                    if let (Some((seen, dict)), [col]) = (&mut call.codes, cols.as_slice())
+                    if let (Some(keep), [col]) = (&mut call.codes, cols.as_slice())
                         && let Data::Code(codes, d) = &col.data
-                        && (*dict == usize::MAX || *dict == *d)
+                        && (keep.dict == usize::MAX || keep.dict == *d)
                     {
-                        *dict = *d;
-                        seen.resize_with(states.len(), FxSet::default);
-                        for (i, &id) in ids.iter().enumerate() {
-                            if !col.null(i) {
-                                seen[id as usize].insert(codes[i]);
+                        keep.dict = *d;
+                        let dict = &exec.dicts[*d];
+                        if let Some(max) = keep.max
+                            && dict.is_text()
+                        {
+                            keep.best.resize(states.len(), u32::MAX);
+                            for (i, &id) in ids.iter().enumerate() {
+                                if col.null(i) {
+                                    continue;
+                                }
+                                let (code, best) = (codes[i], &mut keep.best[id as usize]);
+                                if *best == u32::MAX {
+                                    *best = code;
+                                } else if code != *best {
+                                    let (a, b) = (dict.text(code), dict.text(*best));
+                                    if a != b && (a > b) == max {
+                                        *best = code;
+                                    }
+                                }
+                            }
+                        } else {
+                            keep.seen.resize_with(states.len(), FxSet::default);
+                            for (i, &id) in ids.iter().enumerate() {
+                                if !col.null(i) {
+                                    keep.seen[id as usize].insert(codes[i]);
+                                }
                             }
                         }
                         continue;
@@ -2203,12 +2249,18 @@ fn grouped(
     for call in &mut aggs {
         match (&call.method, &mut call.states) {
             (Method::Row(agg), States::Row(states)) => {
-                if let Some((seen, dict)) = &call.codes {
-                    for (state, seen) in states.iter_mut().zip(seen) {
+                if let Some(keep) = &call.codes {
+                    let dict = keep.dict;
+                    for (id, state) in states.iter_mut().enumerate() {
+                        if let Some(&code) = keep.best.get(id).filter(|&&c| c != u32::MAX) {
+                            let value = scan_dicts[dict].value(code);
+                            agg.advance(state, std::slice::from_ref(&value), &eval)?;
+                        }
+                        let Some(seen) = keep.seen.get(id) else { continue };
                         let mut codes: Vec<u32> = seen.iter().copied().collect();
                         codes.sort_unstable();
                         for code in codes {
-                            let value = scan_dicts[*dict].value(code);
+                            let value = scan_dicts[dict].value(code);
                             agg.advance(state, std::slice::from_ref(&value), &eval)?;
                         }
                     }

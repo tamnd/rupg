@@ -1,0 +1,26 @@
+> CREATE TABLE mt (k int, t text, v varchar(10))
+CREATE TABLE
+> INSERT INTO mt SELECT i % 11, CASE WHEN i = 12345 THEN 'fffé' ELSE substr(md5(i::text), 1, i % 5 + 1) END, CASE WHEN i % 17 = 0 THEN NULL ELSE upper(substr(md5(i::text), 2, i % 4 + 1)) END FROM generate_series(1, 70000) i
+INSERT 0 70000
+> INSERT INTO mt SELECT 11, NULL, NULL FROM generate_series(1, 5)
+INSERT 0 5
+> SELECT k, min(t), max(t), min(v), max(v) FROM mt GROUP BY k ORDER BY k
+fields k@mt.1:23:4:-1,min:25:-1:-1,max:25:-1:-1,min:25:-1:-1,max:25:-1:-1
+row 0,0,ffe8,0,FFE
+row 1,0,fffb,0,FFEE
+row 2,0,ffe64,0,FFFF
+row 3,0,fffé,0,FFFB
+row 4,0,ffec,0,FFD
+row 5,0,ff9,0,FFE8
+row 6,0,fff7,0,FFFA
+row 7,0,fffe,0,FFE3
+row 8,0,fff,0,FFFE
+row 9,0,fff2,0,FFC9
+row 10,0,ffe1a,0,FFF4
+row 11,NULL,NULL,NULL,NULL
+SELECT 12
+> SELECT k % 2 AS p, max(t) FROM mt WHERE t >= '4' GROUP BY p ORDER BY p
+fields p:23:4:-1,max:25:-1:-1
+row 0,fff7
+row 1,fffé
+SELECT 2
