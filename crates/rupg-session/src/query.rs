@@ -166,8 +166,10 @@ pub(crate) struct Reader<'a> {
     pub(crate) pid: i32,
     /// The catalog that the statement sees: the catalog of the last commit, or the copy of the transaction that changes it.
     pub(crate) catalog: Arc<Catalog>,
-    /// The text of `TimeZone` and its zone, or the name of a zone whose rules the engine does not have yet. A call of `set_config` can change the setting, so the zone is made again when the text changes.
-    zone: RefCell<(String, ZoneOf)>,
+    /// The generation of the settings, the text of `TimeZone` and its zone, or the name of a zone whose rules the engine does not have yet. A call of `set_config` can change the setting, so the reader reads the text again when the generation changes and makes the zone again when the text changes.
+    zone: RefCell<(u64, String, ZoneOf)>,
+    /// The generation of the settings and the `DateStyle` of that generation. The input of each date in a `COPY` reads it.
+    date_format: Cell<Option<(u64, DateFormat)>>,
     /// The row of the session in the table of the sessions, and the store that has the table, or `None` for a reader that is not a session.
     activity: Option<(&'a Activity, &'a Store)>,
     /// The prepared statements of the session, or `None` for a reader that is not a session.
@@ -444,8 +446,11 @@ impl<'a> Reader<'a> {
         pid: i32,
         catalog: Arc<Catalog>,
     ) -> Reader<'a> {
-        let name =
-            settings.borrow().get_of(guc::known!("TimeZone")).unwrap_or_else(|| "UTC".to_owned());
+        let (generation, name) = {
+            let settings = settings.borrow();
+            let name = settings.get_of(guc::known!("TimeZone")).unwrap_or_else(|| "UTC".to_owned());
+            (settings.generation(), name)
+        };
         let zone = session_zone(&name);
         use_catalog_types(&catalog);
         Reader {
@@ -459,7 +464,8 @@ impl<'a> Reader<'a> {
             clock,
             pid,
             catalog,
-            zone: RefCell::new((name, zone)),
+            zone: RefCell::new((generation, name, zone)),
+            date_format: Cell::new(None),
             activity: None,
             statements: None,
             portals: None,
@@ -1082,9 +1088,18 @@ impl rupg_func::Session for Reader<'_> {
     }
 
     fn date_format(&self) -> DateFormat {
-        self.settings()
+        let settings = self.settings();
+        let generation = settings.generation();
+        if let Some((seen, format)) = self.date_format.get()
+            && seen == generation
+        {
+            return format;
+        }
+        let format = settings
             .get_of(guc::known!("DateStyle"))
-            .map_or(DateFormat::ISO_MDY, |text| date_format(&text))
+            .map_or(DateFormat::ISO_MDY, |text| date_format(&text));
+        self.date_format.set(Some((generation, format)));
+        format
     }
 
     fn interval_style(&self) -> IntervalStyle {
@@ -1097,14 +1112,19 @@ impl rupg_func::Session for Reader<'_> {
     }
 
     fn zone(&self) -> Result<Rc<dyn TimeZone>> {
-        let name =
-            self.settings().get_of(guc::known!("TimeZone")).unwrap_or_else(|| "UTC".to_owned());
         let mut zone = self.zone.borrow_mut();
-        if zone.0 != name {
-            let made = session_zone(&name);
-            *zone = (name, made);
+        let settings = self.settings();
+        if zone.0 != settings.generation() {
+            let name = settings.get_of(guc::known!("TimeZone")).unwrap_or_else(|| "UTC".to_owned());
+            if zone.1 != name {
+                let made = session_zone(&name);
+                zone.1 = name;
+                zone.2 = made;
+            }
+            zone.0 = settings.generation();
         }
-        match &zone.1 {
+        drop(settings);
+        match &zone.2 {
             Ok(zone) => Ok(Rc::clone(zone) as Rc<dyn TimeZone>),
             Err(name) => Err(Error::new(
                 SqlState::INVALID_PARAMETER_VALUE,

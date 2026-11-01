@@ -431,6 +431,13 @@ impl Settings {
         self.generation
     }
 
+    /// Brings back the settings of an earlier copy. The generation goes on from the current one, so that a reader that kept what it made from a later value makes it again.
+    pub fn restore(&mut self, saved: Self) {
+        let generation = self.generation.max(saved.generation) + 1;
+        *self = saved;
+        self.generation = generation;
+    }
+
     /// Sets a value that the server owns, such as `server_version`, as the current value and the reset value. There is no check of the context.
     ///
     /// # Errors
