@@ -25,3 +25,14 @@ row 0,73,210
 row 19,71,215
 row 51,71,212
 SELECT 3
+> SELECT j, count(*) FROM ct GROUP BY j ORDER BY count(*) DESC LIMIT 3
+fields j@ct.2:23:4:-1,count:20:8:-1
+row 0,10050
+row 4,10000
+row 5,10000
+SELECT 3
+> SELECT k, j, count(*) FROM ct GROUP BY k, j ORDER BY count(*) DESC LIMIT 2 OFFSET 1
+fields k@ct.1:23:4:-1,j@ct.2:23:4:-1,count:20:8:-1
+row 8,0,14
+row 2,0,14
+SELECT 2
