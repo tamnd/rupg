@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.4.18 (2026-11-02)
+
 ### Added
 
 - A connection keeps the parse of the text of a `Query` message and the plan of each of its statements when the same text comes a second time. A plan stays while the catalog, the roles, the current user and the settings are the same, and a statement with `now`, `today`, `tomorrow` or `yesterday` in its text gets no kept plan (#1278).
