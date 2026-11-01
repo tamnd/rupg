@@ -6999,6 +6999,57 @@ mod tests {
         });
     }
 
+    /// A load in many statements of one transaction puts its rows on the open rows of the columns, which become a last segment at the commit, and a load after the commit goes on the last segment again.
+    #[test]
+    fn a_load_in_many_statements_keeps_its_open_rows() {
+        big_stack(|| {
+            let store = Arc::new(Store::new());
+            let (mut a, _) = connect_to(&store, 1234);
+            let rows = |c: &mut Connection, sql: &str| -> Vec<String> {
+                send(c, &query(sql)).into_iter().filter(|l| l.starts_with("row ")).collect()
+            };
+            send(&mut a, &query("CREATE TABLE t (a int, b text, c float8)"));
+            let load = |c: &mut Connection, from: i64| {
+                for at in 0..8 {
+                    let first = from + at * 3000;
+                    send(
+                        c,
+                        &query(&format!(
+                            "INSERT INTO t SELECT i, 'v' || (i % 70), i / 8.0 FROM generate_series({first}, {}) i",
+                            first + 2999
+                        )),
+                    );
+                }
+            };
+            let relation = rows(&mut a, "SELECT 't'::regclass::oid")[0][4..].parse().unwrap();
+            let database =
+                rows(&mut a, "SELECT oid FROM pg_database WHERE datname = current_database()")[0]
+                    [4..]
+                    .parse()
+                    .unwrap();
+            send(&mut a, &query("BEGIN"));
+            load(&mut a, 1);
+            let frozen = store.heap().frozen_rows(database, relation);
+            assert!(frozen > 8192 && frozen < 24000, "{frozen}");
+            assert_eq!(store.heap().open_rows(database, relation), frozen);
+            send(&mut a, &query("COMMIT"));
+            assert_eq!(store.heap().open_rows(database, relation), 0);
+            let mut back = Store::new();
+            back.load(&store.image(0)).unwrap();
+            let back = Arc::new(back);
+            assert_eq!(back.heap().frozen_rows(database, relation), frozen);
+            let sums = "SELECT count(*), sum(a), count(DISTINCT b), sum(c), max(b) FROM t";
+            let (mut c, _) = connect_to(&back, 1235);
+            assert_eq!(rows(&mut c, sums), ["row 24000,288012000,70,36001500,v9"]);
+            assert_eq!(rows(&mut a, sums), ["row 24000,288012000,70,36001500,v9"]);
+            assert_eq!(rows(&mut a, "SELECT b, c FROM t WHERE a = 9001"), ["row v41,1125.125"]);
+            load(&mut a, 24001);
+            assert!(store.heap().frozen_rows(database, relation) > frozen);
+            assert_eq!(rows(&mut a, sums), ["row 48000,1152024000,70,144003000,v9"]);
+            assert_eq!(rows(&mut a, "SELECT b, c FROM t WHERE a = 30001"), ["row v41,3750.125"]);
+        });
+    }
+
     /// The encoded columns and the cold headers of a frozen table go to the image as they are, and a store that loads the image has the same columns and headers with no new encode. The insert of a transaction in progress is not in the image, and the table changes as before after the load.
     #[test]
     fn frozen_columns_come_back_from_the_image() {

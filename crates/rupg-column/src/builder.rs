@@ -10,7 +10,7 @@ use crate::dict::{Dictionary, NONE};
 use crate::segment::{Column, Kind, Nulls, Segment, Store, Vector, WORDS};
 
 /// The values of one column that wait for a segment.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum Buffer {
     Ints(Vec<i64>),
     Floats(Vec<f64>),
@@ -18,7 +18,7 @@ enum Buffer {
 }
 
 /// The rows that wait for a segment, by column.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Builder {
     kinds: Vec<Kind>,
     buffers: Vec<Buffer>,
@@ -111,70 +111,158 @@ impl Builder {
     ///
     /// An error of the encoder, which is an internal error.
     pub fn finish(&mut self, dicts: &[Option<Dictionary>]) -> Result<Segment> {
-        let rows = self.rows;
         let mut columns = Vec::with_capacity(self.kinds.len());
-        for (column, kind) in self.kinds.iter().copied().enumerate() {
-            let nulls = std::mem::take(&mut self.nulls[column]);
-            let mut vectors = Vec::with_capacity(rows.div_ceil(VECTOR));
-            let chooser = Sampled::new();
-            let summary = match &mut self.buffers[column] {
-                Buffer::Ints(values) => {
-                    let mut summary = IntBuilder::new();
-                    for (chunk, valid) in values.chunks(VECTOR).zip(nulls.chunks(VECTOR)) {
-                        let valid = valid_flags(valid);
-                        summary.push(chunk, valid.as_deref());
-                        let data = integer::encode_with(chunk, &chooser)?.into_boxed_slice();
-                        vectors.push(Vector {
-                            rows: chunk.len() as u32,
-                            data,
-                            nulls: nulls_of(valid.as_deref(), chunk.len()),
-                        });
-                    }
-                    values.clear();
-                    summary.finish()
-                }
-                Buffer::Floats(values) => {
-                    let mut summary = FloatBuilder::new();
-                    for (chunk, valid) in values.chunks(VECTOR).zip(nulls.chunks(VECTOR)) {
-                        let valid = valid_flags(valid);
-                        summary.push(chunk, valid.as_deref());
-                        let data: Vec<u8> =
-                            chunk.iter().flat_map(|v| v.to_bits().to_le_bytes()).collect();
-                        vectors.push(Vector {
-                            rows: chunk.len() as u32,
-                            data: data.into_boxed_slice(),
-                            nulls: nulls_of(valid.as_deref(), chunk.len()),
-                        });
-                    }
-                    values.clear();
-                    summary.finish()
-                }
-                Buffer::Codes(codes) => {
-                    let dict = dicts[column].as_ref();
-                    let mut summary = CodeBuilder::new();
-                    let mut wide = Vec::with_capacity(VECTOR);
-                    let mut bytes = 0;
-                    for (chunk, valid) in codes.chunks(VECTOR).zip(nulls.chunks(VECTOR)) {
-                        let valid = valid_flags(valid);
-                        summary.push(chunk, |c| dict.and_then(|d| d.rank(c)));
-                        wide.clear();
-                        wide.extend(chunk.iter().map(|&c| i64::from(c)));
-                        let data = integer::encode_with(&wide, &chooser)?.into_boxed_slice();
-                        bytes += data.len();
-                        vectors.push(Vector {
-                            rows: chunk.len() as u32,
-                            data,
-                            nulls: nulls_of(valid.as_deref(), chunk.len()),
-                        });
-                    }
-                    codes.clear();
-                    summary.finish(bytes / 8)
-                }
-            };
-            columns.push(Column { kind, vectors, summary });
+        for column in 0..self.kinds.len() {
+            columns.push(self.encode(column, dicts.get(column).and_then(Option::as_ref))?);
+        }
+        let rows = self.rows;
+        self.clear();
+        Ok(Segment { rows: rows as u32, columns })
+    }
+
+    /// Puts the values of the rows `rows` of the column `column` into `out`, which it clears first. `dict` is the dictionary of a code column.
+    pub fn values(
+        &self,
+        column: usize,
+        rows: std::ops::Range<usize>,
+        dict: Option<&Dictionary>,
+        out: &mut Vec<Value>,
+    ) {
+        out.clear();
+        let kind = self.kinds[column];
+        let nulls = &self.nulls[column][rows.clone()];
+        match &self.buffers[column] {
+            Buffer::Ints(values) => out.extend(
+                values[rows]
+                    .iter()
+                    .zip(nulls)
+                    .map(|(&v, &null)| if null { Value::Null } else { kind.int_value(v) }),
+            ),
+            Buffer::Floats(values) => out.extend(
+                values[rows]
+                    .iter()
+                    .zip(nulls)
+                    .map(|(&v, &null)| if null { Value::Null } else { kind.float_value(v) }),
+            ),
+            Buffer::Codes(codes) => {
+                out.extend(codes[rows].iter().zip(nulls).map(|(&code, &null)| match dict {
+                    Some(dict) if !null => kind.bytes_value(dict.get(code)),
+                    _ => Value::Null,
+                }));
+            }
+        }
+    }
+
+    /// The bytes that the rows that wait take in memory.
+    #[must_use]
+    pub fn footprint(&self) -> usize {
+        let values: usize = self
+            .buffers
+            .iter()
+            .map(|buffer| match buffer {
+                Buffer::Ints(values) => values.capacity() * 8,
+                Buffer::Floats(values) => values.capacity() * 8,
+                Buffer::Codes(codes) => codes.capacity() * 4,
+            })
+            .sum();
+        values + self.nulls.iter().map(Vec::capacity).sum::<usize>()
+    }
+
+    /// Keeps only the first `rows` rows that wait. The dictionaries keep the strings of the rows that go.
+    pub fn truncate(&mut self, rows: usize) {
+        if rows >= self.rows {
+            return;
+        }
+        for buffer in &mut self.buffers {
+            match buffer {
+                Buffer::Ints(values) => values.truncate(rows),
+                Buffer::Floats(values) => values.truncate(rows),
+                Buffer::Codes(codes) => codes.truncate(rows),
+            }
+        }
+        for nulls in &mut self.nulls {
+            nulls.truncate(rows);
+        }
+        self.rows = rows;
+    }
+
+    /// Empties the builder.
+    pub fn clear(&mut self) {
+        for buffer in &mut self.buffers {
+            match buffer {
+                Buffer::Ints(values) => values.clear(),
+                Buffer::Floats(values) => values.clear(),
+                Buffer::Codes(codes) => codes.clear(),
+            }
+        }
+        for nulls in &mut self.nulls {
+            nulls.clear();
         }
         self.rows = 0;
-        Ok(Segment { rows: rows as u32, columns })
+    }
+
+    /// Encodes the rows that wait of the column `column` into the column of a segment, and keeps the rows. `dict` gives the ranks of the codes.
+    ///
+    /// # Errors
+    ///
+    /// An error of the encoder, which is an internal error.
+    pub fn encode(&self, column: usize, dict: Option<&Dictionary>) -> Result<Column> {
+        let rows = self.rows;
+        let kind = self.kinds[column];
+        let nulls = &self.nulls[column];
+        let mut vectors = Vec::with_capacity(rows.div_ceil(VECTOR));
+        let chooser = Sampled::new();
+        let summary = match &self.buffers[column] {
+            Buffer::Ints(values) => {
+                let mut summary = IntBuilder::new();
+                for (chunk, valid) in values.chunks(VECTOR).zip(nulls.chunks(VECTOR)) {
+                    let valid = valid_flags(valid);
+                    summary.push(chunk, valid.as_deref());
+                    let data = integer::encode_with(chunk, &chooser)?.into_boxed_slice();
+                    vectors.push(Vector {
+                        rows: chunk.len() as u32,
+                        data,
+                        nulls: nulls_of(valid.as_deref(), chunk.len()),
+                    });
+                }
+                summary.finish()
+            }
+            Buffer::Floats(values) => {
+                let mut summary = FloatBuilder::new();
+                for (chunk, valid) in values.chunks(VECTOR).zip(nulls.chunks(VECTOR)) {
+                    let valid = valid_flags(valid);
+                    summary.push(chunk, valid.as_deref());
+                    let data: Vec<u8> =
+                        chunk.iter().flat_map(|v| v.to_bits().to_le_bytes()).collect();
+                    vectors.push(Vector {
+                        rows: chunk.len() as u32,
+                        data: data.into_boxed_slice(),
+                        nulls: nulls_of(valid.as_deref(), chunk.len()),
+                    });
+                }
+                summary.finish()
+            }
+            Buffer::Codes(codes) => {
+                let mut summary = CodeBuilder::new();
+                let mut wide = Vec::with_capacity(VECTOR);
+                let mut bytes = 0;
+                for (chunk, valid) in codes.chunks(VECTOR).zip(nulls.chunks(VECTOR)) {
+                    let valid = valid_flags(valid);
+                    summary.push(chunk, |c| dict.and_then(|d| d.rank(c)));
+                    wide.clear();
+                    wide.extend(chunk.iter().map(|&c| i64::from(c)));
+                    let data = integer::encode_with(&wide, &chooser)?.into_boxed_slice();
+                    bytes += data.len();
+                    vectors.push(Vector {
+                        rows: chunk.len() as u32,
+                        data,
+                        nulls: nulls_of(valid.as_deref(), chunk.len()),
+                    });
+                }
+                summary.finish(bytes / 8)
+            }
+        };
+        Ok(Column { kind, vectors, summary })
     }
 }
 

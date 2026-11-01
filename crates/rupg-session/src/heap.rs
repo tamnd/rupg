@@ -6,7 +6,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use rupg_analyze::{Derived, Unique};
-use rupg_column::segment::Kind;
+use rupg_column::segment::{Kind, ROWS};
 use rupg_column::stored::{Stored, VECTOR};
 use rupg_common::persist::{Persist, Reader, put_count};
 use rupg_common::{Error, Result, SqlState};
@@ -69,6 +69,9 @@ const COLUMN_ROWS: usize = 65_536;
 /// The last pages of a table whose versions keep their values in a load, as most new versions go into them.
 const LOAD_PAGES: u32 = 16;
 
+/// The new versions that a load freezes at one time. The rows go on the open rows of the columns, so a small batch does not encode a row again.
+const LOAD_ROWS: usize = 8_192;
+
 /// The result of [`Heap::vacuum`].
 pub(crate) struct Vacuumed {
     /// `reltuples` of the heap.
@@ -115,6 +118,8 @@ struct State {
     logging: bool,
     /// The tables that each transaction in progress changed, whose changes go to the log of its commit.
     touched: HashMap<u32, Vec<(u32, u32)>>,
+    /// The tables whose open rows each transaction in progress filled in a load, which become a last segment at its end.
+    loading: HashMap<u32, Vec<(u32, u32)>>,
 }
 
 impl State {
@@ -206,6 +211,11 @@ impl Tables {
     /// The table `key` for a change of its settings, which does not change its versions.
     fn settings(&mut self, key: (u32, u32)) -> &mut Table {
         self.0.entry(key).or_default()
+    }
+
+    /// The table `key` for a change that keeps its versions, its values and its columns, when the heap has it.
+    fn settings_of(&mut self, key: &(u32, u32)) -> Option<&mut Table> {
+        self.0.get_mut(key)
     }
 
     /// The table `key` for new versions at its end, which keeps the frozen values of its versions.
@@ -452,18 +462,24 @@ impl<'a> Decoded<'a> {
 
     /// Skips the first `rows` values, a whole vector at a time when it can.
     fn pass(&mut self, mut rows: usize) {
-        while let Some(column) = self.stored.segments.get(self.segment) {
-            match column.vectors.get(self.vector) {
-                Some(vector) if self.values.is_empty() && vector.rows as usize <= rows => {
-                    rows -= vector.rows as usize;
-                    self.vector += 1;
-                }
-                Some(_) => break,
-                None => {
-                    self.segment += 1;
-                    self.vector = 0;
-                }
+        while self.values.is_empty() {
+            let size = match self.stored.segments.get(self.segment) {
+                Some(column) => match column.vectors.get(self.vector) {
+                    Some(vector) => vector.rows as usize,
+                    None => {
+                        self.segment += 1;
+                        self.vector = 0;
+                        continue;
+                    }
+                },
+                // The open rows of the column come after the segments, in vectors of VECTOR rows.
+                None => VECTOR.min(self.stored.open_rows().saturating_sub(self.vector * VECTOR)),
+            };
+            if size == 0 || size > rows {
+                break;
             }
+            rows -= size;
+            self.vector += 1;
         }
         for _ in 0..rows {
             self.next();
@@ -476,7 +492,14 @@ impl Iterator for Decoded<'_> {
 
     fn next(&mut self) -> Option<Value> {
         while self.values.is_empty() && !self.failed {
-            let column = self.stored.segments.get(self.segment)?;
+            let Some(column) = self.stored.segments.get(self.segment) else {
+                if !self.stored.open_values(self.vector, &mut self.values) {
+                    return None;
+                }
+                self.values.reverse();
+                self.vector += 1;
+                continue;
+            };
             if self.vector >= column.vectors.len() {
                 self.segment += 1;
                 self.vector = 0;
@@ -702,14 +725,14 @@ impl Table {
         }
     }
 
-    /// [`Table::freeze`] in a load, which keeps the values of the versions in the last pages, as a new version can still go into them. It waits for [`COLUMN_ROWS`] new versions after the frozen ones.
+    /// [`Table::freeze`] in a load, which keeps the values of the versions in the last pages, as a new version can still go into them. It waits for [`LOAD_ROWS`] new versions after the frozen ones.
     fn freeze_load(&mut self) {
         let start = self.frozen.as_ref().map_or(0, |frozen| frozen.end);
         let Some(last) = self.versions.last() else { return };
         let cut = page_of(last.tid).saturating_sub(LOAD_PAGES);
         let cut = pages::tid(generation_of(last.tid), cut, 0);
         let end = self.versions.partition_point(|version| version.tid < cut);
-        if end >= start + COLUMN_ROWS {
+        if end >= start + LOAD_ROWS {
             self.freeze_to(end);
         }
     }
@@ -730,36 +753,73 @@ impl Table {
         {
             return;
         }
-        let rows = self.frozen.as_ref().map_or(0, |frozen| frozen.rows);
+        if let Some(frozen) = &mut self.frozen {
+            // A column of nulls only takes the type of the column it goes on.
+            for (at, stored) in frozen.columns.iter().enumerate() {
+                let Some(kind) = kind_of(tail.iter().map(|version| &version.values[at])) else {
+                    return;
+                };
+                if stored.kind != kind && !tail.iter().all(|version| version.values[at].is_null()) {
+                    return;
+                }
+            }
+            // The new rows go on the open rows of each column with no copy of the column, one segment at a time, so that a column that does not keep its values only cuts its open rows to go back.
+            let mut from = start;
+            while from < end {
+                let rows = frozen.rows;
+                let to = end.min(from + ROWS - rows % ROWS);
+                let chunk = &self.versions[from..to];
+                for at in 0..width {
+                    let stored = Arc::make_mut(&mut frozen.columns[at]);
+                    let exact =
+                        stored.extend(chunk.iter().map(|version| version.values.get(at))).is_ok()
+                            && {
+                                let mut decoded = Decoded::new(stored);
+                                decoded.pass(rows);
+                                let exact = chunk.iter().all(|version| {
+                                    decoded
+                                        .next()
+                                        .is_some_and(|value| same(&version.values[at], &value))
+                                });
+                                exact && decoded.next().is_none() && !decoded.failed
+                            };
+                    if !exact {
+                        for column in &mut frozen.columns[..=at] {
+                            // The rows of the chunk are open rows, so the cut does not decode.
+                            let _ = Arc::make_mut(column).truncate(rows);
+                        }
+                        break;
+                    }
+                }
+                if frozen.columns.iter().any(|column| column.rows != rows + to - from) {
+                    break;
+                }
+                frozen.rows += to - from;
+                frozen.end = to;
+                for version in &mut self.versions[from..to] {
+                    version.values = Box::default();
+                }
+                from = to;
+            }
+            return;
+        }
         let mut columns = Vec::with_capacity(width);
         for at in 0..width {
             let Some(kind) = kind_of(tail.iter().map(|version| &version.values[at])) else {
                 return;
             };
             let values = tail.iter().map(|version| version.values.get(at));
-            let stored = match &self.frozen {
-                // A column of nulls only takes the type of the column it goes on.
-                Some(frozen) => {
-                    let mut stored = Stored::clone(&frozen.columns[at]);
-                    let nulls = tail.iter().all(|version| version.values[at].is_null());
-                    if stored.kind != kind && !nulls {
-                        return;
-                    }
+            let stored = match self.columns.stored.get(&at) {
+                Some(stored) if stored.kind == kind => Stored::clone(stored),
+                _ => {
+                    let mut stored = Stored::new(kind, None, Vec::new(), 0);
                     if stored.extend(values).is_err() {
                         return;
                     }
                     stored
                 }
-                None => match self.columns.stored.get(&at) {
-                    Some(stored) if stored.kind == kind => Stored::clone(stored),
-                    _ => match Stored::build(kind, values) {
-                        Ok(stored) => stored,
-                        Err(_) => return,
-                    },
-                },
             };
             let mut decoded = Decoded::new(&stored);
-            decoded.pass(rows);
             let exact = tail.iter().all(|version| {
                 decoded.next().is_some_and(|value| same(&version.values[at], &value))
             });
@@ -771,7 +831,7 @@ impl Table {
         for version in &mut self.versions[start..end] {
             version.values = Box::default();
         }
-        self.frozen = Some(Frozen { rows: rows + end - start, end, columns });
+        self.frozen = Some(Frozen { rows: end - start, end, columns });
     }
 
     /// The values of the column `at` of each version, in order, with the values of the frozen versions decoded from the column.
@@ -900,6 +960,17 @@ impl Table {
             // The headers decoded when they were made or read, so the decode does not fail.
             for version in Cold::vector(vector).unwrap_or_default() {
                 each(&version);
+            }
+        }
+    }
+
+    /// Encodes the open rows of the frozen columns into a last segment. A column that does not encode keeps its open rows.
+    fn seal(&mut self) {
+        if let Some(frozen) = &mut self.frozen {
+            for column in &mut frozen.columns {
+                if !column.sealed() {
+                    let _ = Arc::make_mut(column).seal();
+                }
             }
         }
     }
@@ -1532,6 +1603,11 @@ impl Heap {
             table.freeze();
             table.chill();
         }
+        // A scan reads the segments of a column, so the open rows of a load become a last segment first.
+        table.seal();
+        if table.frozen.as_ref().is_some_and(|frozen| !frozen.columns.iter().all(|c| c.sealed())) {
+            return None;
+        }
         let rows = table.len();
         let columns = &mut table.columns;
         let mut out = Vec::with_capacity(wanted.len());
@@ -1681,6 +1757,12 @@ impl Heap {
             }
             // A large load moves the values of its versions into columns as it goes, so the rows of the load are not all in memory at once.
             table.freeze_load();
+            if table.frozen.as_ref().is_some_and(|f| f.columns.iter().any(|c| !c.sealed())) {
+                let tables = state.loading.entry(view.xid).or_default();
+                if !tables.contains(&(view.database, relation)) {
+                    tables.push((view.database, relation));
+                }
+            }
             return Ok(Changed::Done(count));
         }
         let mut keys = Vec::with_capacity(rows.len());
@@ -2324,6 +2406,12 @@ impl Heap {
             }
             None => log(Logged::Nothing),
         }
+        // The open rows of a load become a last segment when the load commits, so the typed values do not stay in memory after it (spec/10 section 10.8).
+        for key in state.loading.remove(&xid).unwrap_or_default() {
+            if let Some(table) = state.tables.settings_of(&key) {
+                table.seal();
+            }
+        }
         state.running.remove(&xid);
         state.latest_completed = state.latest_completed.max(xid);
         state.combos.remove(&xid);
@@ -2357,6 +2445,7 @@ impl Heap {
         state.aborted.insert(xid);
         state.combos.remove(&xid);
         state.touched.remove(&xid);
+        state.loading.remove(&xid);
         state.truncating.remove(&xid);
         state.owners.remove(&xid);
         state.waits.remove(&xid);
@@ -2703,6 +2792,15 @@ impl Heap {
         let state = self.state();
         let table = state.tables.meta(&(database, relation));
         table.and_then(|table| table.frozen.as_ref()).map_or(0, |frozen| frozen.rows)
+    }
+
+    /// The open rows of the first encoded column of a table, which are not in a segment yet.
+    #[cfg(test)]
+    pub(crate) fn open_rows(&self, database: u32, relation: u32) -> usize {
+        let state = self.state();
+        let table = state.tables.meta(&(database, relation));
+        let frozen = table.and_then(|table| table.frozen.as_ref());
+        frozen.and_then(|frozen| frozen.columns.first()).map_or(0, |column| column.open_rows())
     }
 
     /// The versions of a table whose headers are in encoded columns.
