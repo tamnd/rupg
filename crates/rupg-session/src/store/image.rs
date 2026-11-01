@@ -18,7 +18,7 @@ const MAGIC: &[u8; 8] = b"rupg\x00img";
 const LOG_LIMIT: u64 = 256 << 20;
 
 /// The version of the form of an image. An image of another version does not load.
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 
 /// The place of the image of a store: the file and the I/O that writes it, and the log of the commits after the image.
 #[derive(Debug)]

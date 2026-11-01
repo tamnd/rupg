@@ -2,6 +2,7 @@
 //!
 //! The strings are in one arena, in the order of their codes. A hash table of codes finds a string. Code 0 means no value and is never an entry, so the first string gets code 1 (spec/09 section 9.5.2).
 
+use rupg_common::{Error, Result};
 use rupg_kernels::hash;
 
 /// The code of no value. The value stream holds it at a null position.
@@ -116,8 +117,34 @@ impl Dictionary {
         code
     }
 
+    /// The arena, the end of each string and the size of the sorted base, which [`Dictionary::from_parts`] takes back.
+    #[must_use]
+    pub fn parts(&self) -> (&[u8], &[u64], u32) {
+        (&self.bytes, &self.ends, self.base)
+    }
+
+    /// The dictionary of the parts that [`Dictionary::parts`] gave, with a new table of codes.
+    ///
+    /// # Errors
+    ///
+    /// `XX001` when an end is before the end before it or after the arena, the last end is not the end of the arena, the base has more codes than the dictionary, or the dictionary has too many strings.
+    pub fn from_parts(bytes: Vec<u8>, ends: Vec<u64>, base: u32) -> Result<Dictionary> {
+        let ordered = ends.is_sorted() && ends.last().map_or(0, |&end| end) == bytes.len() as u64;
+        if !ordered || base as usize > ends.len() || ends.len() >= (MISSING - 1) as usize {
+            return Err(Error::corrupted("a dictionary has bad string ends"));
+        }
+        let size = (ends.len() * 2 + 1).next_power_of_two().max(1024);
+        let mut dict = Dictionary { bytes, ends, slots: Vec::new(), base };
+        dict.fill(size);
+        Ok(dict)
+    }
+
     fn grow(&mut self) {
-        let size = self.slots.len() * 2;
+        self.fill(self.slots.len() * 2);
+    }
+
+    /// Makes the table of codes again with `size` slots, a power of two.
+    fn fill(&mut self, size: usize) {
         let mask = size - 1;
         let mut slots = vec![NONE; size];
         for code in 1..=self.ends.len() as u32 {
