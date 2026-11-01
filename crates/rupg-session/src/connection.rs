@@ -1321,6 +1321,16 @@ impl Connection {
         self.store.heap()
     }
 
+    /// False for `synchronous_commit = off`, when a commit does not wait for the disk. The other values wait, as a server with no standby treats them as `on`.
+    fn synchronous_commit(&self) -> bool {
+        /// The value of `off` in `synchronous_commit_options`.
+        const OFF: u8 = 4;
+        !matches!(
+            crate::guc::find("synchronous_commit").map(|p| self.settings.borrow().setting(p)),
+            Some(crate::guc::Setting::Enum(value)) if value == OFF
+        )
+    }
+
     /// The part of [`Connection::end_rows`] that a call in PL/pgSQL can do, as the transaction has no savepoints there.
     fn end_heap(&self, commit: bool, defined: bool) {
         let heap = self.store.heap();
@@ -1328,12 +1338,12 @@ impl Connection {
         self.stable_xid.set(0);
         self.end_notify(commit);
         if commit {
-            self.store.commit(xid, defined);
+            self.store.commit(xid, defined, self.synchronous_commit());
         } else {
             if xid != 0 {
                 heap.abort(xid);
             }
-            self.store.commit(0, false);
+            self.store.commit(0, false, true);
         }
         let writes = self.activity.take_writes();
         if !writes.is_empty() {

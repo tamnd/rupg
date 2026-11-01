@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A commit with `synchronous_commit = off` does not wait for the disk, and a WAL writer thread writes the log each `wal_writer_delay`. The log file grows in chunks of zeros of 1 MB, so a durable commit costs one write of the disk. A commit reads only the versions that its transaction changed, not all the versions of each table (#1273).
 - Plan `GROUP BY` with no aggregate call in two parts, a `Partial HashAggregate` or a `Group` in each process below a `Gather` or a `Gather Merge`, as `create_partial_grouping_paths` does, and give each partial node the cost of the expressions of the keys for each group (#1271).
 - Let a parallel plan read an `InitPlan` and an uncorrelated `SubPlan` with no `Gather`, as `is_parallel_safe` does, put the `One-Time Filter` of a scan in the parallel plan below the `Gather`, and show a scalar subquery after `ANY` in `EXPLAIN` with no cast (#1269).
 - Plan a `Parallel Bitmap Heap Scan`, as `create_partial_bitmap_paths` makes it with workers from the pages of the heap that the scan reads, and keep a plan that is parallel safe over a `Gather` that costs about the same, as `add_path` does (#1265).
