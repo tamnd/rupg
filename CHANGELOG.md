@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A connection keeps the parse of the text of a `Query` message and the plan of each of its statements when the same text comes a second time. A plan stays while the catalog, the roles, the current user and the settings are the same, and a statement with `now`, `today`, `tomorrow` or `yesterday` in its text gets no kept plan (#1278).
 - Plan a partial join of a partial outer path, as `consider_parallel_nestloop`, `consider_parallel_mergejoin` and `hash_inner_and_outer` make it, with a `Parallel Hash` of the partial inner path, and a partial aggregate of the partial join (#1277).
 - A simple statement does less work before it runs: the settings have a hash index and a lookup that each call site does once, the search path, the time zone and the types are cached until what they depend on changes, the catalog has a map of the relations by name and of the indexes by table, and the role is not looked up again when no role changed. The median of `select 1` on a loaded test machine goes from 183 us to 109 us (#1274).
 - A commit with `synchronous_commit = off` does not wait for the disk, and a WAL writer thread writes the log each `wal_writer_delay`. The log file grows in chunks of zeros of 1 MB, so a durable commit costs one write of the disk. A commit reads only the versions that its transaction changed, not all the versions of each table (#1273).

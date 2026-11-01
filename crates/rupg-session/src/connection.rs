@@ -54,6 +54,7 @@ mod foreign;
 mod listen;
 mod merge;
 mod oncommit;
+mod plan_cache;
 mod plpgsql;
 mod prepare;
 mod reindex;
@@ -428,6 +429,8 @@ pub struct Connection {
     session_user: String,
     /// True after the first [`Connection::sync_role`]. Then `current_user` and `session_user` follow `role` and `session_authorization` until [`Settings::take_roles_set`] gives true.
     role_synced: bool,
+    /// The parsed texts and the plans of the statements of the `Query` messages.
+    plans: RefCell<plan_cache::Plans>,
     /// The catalog that the sessions of the server share.
     store: Arc<Store>,
     /// The file system of the server, which `COPY ... FROM` a file reads. A session with no server has none.
@@ -551,6 +554,7 @@ impl Connection {
             current_user: start.user.clone(),
             session_user: start.user.clone(),
             role_synced: false,
+            plans: RefCell::default(),
             database: start.database.clone(),
             database_oid: database::POSTGRES,
             protocol,
@@ -1843,8 +1847,13 @@ impl Connection {
         if !matview {
             *self.before_fill.borrow_mut() = Some(Arc::clone(old));
         }
-        let result =
-            self.select(&Node::InsertStmt(Box::new(insert)), notices, &mut late, &mut described);
+        let result = self.select(
+            &Node::InsertStmt(Box::new(insert)),
+            None,
+            notices,
+            &mut late,
+            &mut described,
+        );
         self.before_fill.borrow_mut().take();
         self.bulk.set(0);
         self.filling.set(0);
@@ -2256,13 +2265,23 @@ impl Connection {
         self.start_xact();
         // A Query works as if it used the unnamed statement and the unnamed portal.
         drop(self.statements.close(b""));
-        let (list, parser_notices) = match rupg_sql::parse(text) {
-            Ok(parsed) => parsed,
-            Err(error) => {
-                let position = error.position(text);
-                self.fail(&error.into(), position, out);
-                return true;
-            }
+        let cached = self.plans.get_mut().parsed(text);
+        let (list, parser_notices) = match cached {
+            Some(list) => (list, Vec::new()),
+            None => match rupg_sql::parse(text) {
+                Ok((list, notices)) => {
+                    let list = Arc::new(list);
+                    if notices.is_empty() {
+                        self.plans.get_mut().keep_parsed(text, &list);
+                    }
+                    (list, notices)
+                }
+                Err(error) => {
+                    let position = error.position(text);
+                    self.fail(&error.into(), position, out);
+                    return true;
+                }
+            },
         };
         let locations: Vec<Option<usize>> = parser_notices.iter().map(|n| n.location).collect();
         let mut notices: Vec<Notice> = parser_notices
@@ -2335,7 +2354,7 @@ impl Connection {
                 self.explain(stmt, statement, &mut notices)
             } else if query::is_query(node) {
                 drop(self.portals.get_mut().close(b""));
-                self.select(node, &mut notices, &mut late, &mut described)
+                self.select(node, Some(statement), &mut notices, &mut late, &mut described)
             } else if let Node::CallStmt(_) = node {
                 drop(self.portals.get_mut().close(b""));
                 self.call(node, &mut notices, &mut late, &mut described)
@@ -2533,6 +2552,7 @@ impl Connection {
     fn select(
         &self,
         node: &Node,
+        statement: Option<&str>,
         notices: &mut Vec<Notice>,
         late: &mut Vec<Notice>,
         described: &mut Option<(Vec<Column>, Vec<Row>)>,
@@ -2546,9 +2566,7 @@ impl Connection {
             drop(reader);
             return self.run_products(node, &products, notices, late);
         }
-        let plan = query::plan(node, &reader, &Params::default());
-        notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
-        let plan = plan?;
+        let plan = self.cached_plan(node, statement, &reader, notices)?;
         notices.extend(plan.notices().iter().map(|error| Notice::warning(error.clone())));
         let plan = plan.fold(None, &reader);
         notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
@@ -2586,6 +2604,42 @@ impl Connection {
                 Err(error)
             }
         }
+    }
+
+    /// The plan of the statement `node` of a `Query` message with the text `statement`: the plan that the cache kept for the same text, when all that its analysis read is the same, or else a new plan, which the cache keeps when its analysis gave no warning.
+    fn cached_plan(
+        &self,
+        node: &Node,
+        statement: Option<&str>,
+        reader: &Reader<'_>,
+        notices: &mut Vec<Notice>,
+    ) -> Result<Arc<Plan>, Error> {
+        let Some(text) = statement else {
+            let plan = query::plan(node, reader, &Params::default());
+            notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
+            return plan.map(Arc::new);
+        };
+        let (catalog, roles) = (self.catalog(), self.roles());
+        let generation = self.settings.borrow().generation();
+        if let Some(plan) = self.plans.borrow().plan(text, &catalog, &roles, self.role, generation)
+        {
+            return Ok(plan);
+        }
+        let plan = query::plan(node, reader, &Params::default());
+        let warnings = reader.take_warnings();
+        let warned = !warnings.is_empty();
+        notices.extend(warnings.into_iter().map(Notice::of_function));
+        let plan = Arc::new(plan?);
+        if !warned && plan.notices().is_empty() {
+            let key = plan_cache::Key {
+                catalog: Arc::downgrade(&catalog),
+                roles: Arc::downgrade(&roles),
+                role: self.role,
+                generation,
+            };
+            self.plans.borrow_mut().keep_plan(text, key, &plan);
+        }
+        Ok(plan)
     }
 
     /// `ProcessQuery` for each statement of the rewrite of a write by the rules of its table, in order. Each statement sees the writes of the statements before it. The statement that sets the tag gives the result, and with none, the tag of the write has no rows.
@@ -2678,7 +2732,7 @@ impl Connection {
         described: &mut Option<(Vec<Column>, Vec<Row>)>,
     ) -> Result<Done, Error> {
         // `ExecuteCallStmt` describes the row only when it sends the row, so an error gives no description.
-        let done = self.top_call(|| self.select(node, notices, late, described));
+        let done = self.top_call(|| self.select(node, None, notices, late, described));
         if done.is_err() {
             *described = None;
         }
@@ -3669,6 +3723,39 @@ mod tests {
     #[test]
     fn notices() {
         big_stack(notices_cases);
+    }
+
+    #[test]
+    fn a_plan_of_a_query_follows_the_changes() {
+        big_stack(|| {
+            let (mut c, _) = connect();
+            let ok = |c: &mut Connection, sql: &str| {
+                assert!(send(c, &query(sql)).last().is_some_and(|m| m == "ready I"), "{sql}");
+            };
+            ok(&mut c, "CREATE SCHEMA s1; CREATE SCHEMA s2");
+            ok(&mut c, "CREATE TABLE s1.t (a int); INSERT INTO s1.t VALUES (1)");
+            ok(&mut c, "CREATE TABLE s2.t (b text); INSERT INTO s2.t VALUES ('two')");
+            ok(&mut c, "SET search_path = s1");
+            let read = |c: &mut Connection| send(c, &query("SELECT * FROM t"));
+            assert_eq!(read(&mut c)[1..], ["row 1", "SELECT 1", "ready I"]);
+            assert_eq!(read(&mut c)[1..], ["row 1", "SELECT 1", "ready I"]);
+            // A new column changes the catalog.
+            ok(&mut c, "ALTER TABLE s1.t ADD COLUMN c int DEFAULT 3");
+            assert_eq!(read(&mut c)[1], "row 1,3");
+            // A new search path changes the settings.
+            ok(&mut c, "SET search_path = s2");
+            assert_eq!(read(&mut c)[1], "row two");
+            // A literal of the clock takes the time of each run.
+            let now = |c: &mut Connection| send(c, &query("SELECT 'now'::timestamptz"))[1].clone();
+            let first = now(&mut c);
+            assert_ne!(now(&mut c), first);
+            // A role with no privileges on the table gets the error of the check.
+            ok(&mut c, "CREATE ROLE r1; GRANT USAGE ON SCHEMA s2 TO r1");
+            ok(&mut c, "SET ROLE r1");
+            assert!(read(&mut c).iter().any(|m| m.contains("permission denied")));
+            ok(&mut c, "RESET ROLE");
+            assert_eq!(read(&mut c)[1], "row two");
+        });
     }
 
     fn queries_cases() {
