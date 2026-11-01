@@ -417,6 +417,8 @@ struct Exec<'q> {
     generic: FxMap<*const Expr, Generic>,
     /// For each `LIKE` of a column of codes and a constant pattern, the result for each code: 0 for a code that it has not seen, 1 for false and 2 for true.
     likes: FxMap<*const Expr, Vec<u8>>,
+    /// For each dictionary, the number of characters of each code plus one, or 0 for a code that `length` has not seen.
+    lengths: FxMap<usize, Vec<u32>>,
     /// The parameters of the query, then the values of the columns of a [`Generic`].
     slots: Vec<Value>,
     empty: scan::Tables,
@@ -857,15 +859,28 @@ impl<'q> Exec<'q> {
         let col = self.eval(a, batch, sel)?;
         let Data::Code(codes, d) = &col.data else { return Ok(None) };
         let mut values = Vec::with_capacity(sel.len());
+        let dict = &self.dicts[*d];
+        // The characters of a code are counted once for the query.
+        let memo = self.lengths.entry(*d).or_default();
         for (i, &code) in codes.iter().enumerate() {
             if col.null(i) {
                 values.push(0);
                 continue;
             }
-            let Some(text) = self.dicts[*d].text(code) else { return Ok(None) };
-            // The dictionary of a text column holds only the bytes of a `String`, so each byte that does not continue a character starts one.
-            let n = if octets { text.len() } else { chars(text) };
-            values.push(i64::try_from(n).unwrap_or(i64::MAX));
+            let Some(text) = dict.text(code) else { return Ok(None) };
+            if octets {
+                values.push(i64::try_from(text.len()).unwrap_or(i64::MAX));
+                continue;
+            }
+            let at = code as usize;
+            if memo.len() <= at {
+                memo.resize(at + 1, 0);
+            }
+            if memo[at] == 0 {
+                // The dictionary of a text column holds only the bytes of a `String`, so each byte that does not continue a character starts one.
+                memo[at] = u32::try_from(chars(text)).map_or(u32::MAX, |n| n.saturating_add(1));
+            }
+            values.push(i64::from(memo[at] - 1));
         }
         Ok(Some(Col { data: Data::Int(values), nulls: col.nulls, ty: expr.ty }))
     }
@@ -1421,6 +1436,7 @@ pub(crate) fn run(
         dicts,
         generic: FxMap::default(),
         likes: FxMap::default(),
+        lengths: FxMap::default(),
         slots: params.to_vec(),
         empty: scan::Tables::default(),
     };
