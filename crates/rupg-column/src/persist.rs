@@ -121,7 +121,29 @@ impl Persist for Dictionary {
     }
 }
 
-rupg_common::persist_struct!(Stored { kind, dict, segments, rows });
+/// A column with open rows writes them as one more segment, so that the bytes have only segments. The store seals its columns before it writes them, so this encode is for a column that a caller did not seal.
+impl Persist for Stored {
+    fn put(&self, out: &mut Vec<u8>) {
+        self.kind.put(out);
+        self.dict.put(out);
+        // The encoder fails only on an internal error, and then the open rows do not go to the bytes.
+        let open = self.open_segment().ok().flatten();
+        put_count(out, self.segments.len() + usize::from(open.is_some()));
+        for column in self.segments.iter().chain(&open) {
+            column.put(out);
+        }
+        let rows = if open.is_some() { self.rows } else { self.rows - self.open_rows() };
+        rows.put(out);
+    }
+
+    fn take(input: &mut Reader<'_>) -> Result<Stored> {
+        let kind = Persist::take(input)?;
+        let dict = Persist::take(input)?;
+        let segments = Persist::take(input)?;
+        let rows = Persist::take(input)?;
+        Ok(Stored::new(kind, dict, segments, rows))
+    }
+}
 
 #[cfg(test)]
 mod tests {
