@@ -1,0 +1,125 @@
+> create table ga (unique1 int, two int, four int, ten int, stringu1 name) with (parallel_workers = 4)
+CREATE TABLE
+> insert into ga select i, i % 2, i % 4, i % 10, (chr(65 + i % 26) || repeat(chr(66 + i % 7), i % 5))::name from generate_series(0, 9999) i
+INSERT 0 10000
+> vacuum analyze ga
+VACUUM
+> set parallel_setup_cost = 0
+SET
+> set parallel_tuple_cost = 0
+SET
+> set min_parallel_table_scan_size = 0
+SET
+> set max_parallel_workers_per_gather = 4
+SET
+> explain (costs off) select length(stringu1) from ga group by length(stringu1)
+fields QUERY PLAN:25:-1:-1
+row HashAggregate
+row   Group Key: (length((stringu1)::text))
+row   ->  Gather
+row         Workers Planned: 4
+row         ->  Parallel Seq Scan on ga
+EXPLAIN
+> select length(stringu1) from ga group by length(stringu1) order by 1
+fields length:23:4:-1
+row 1
+row 2
+row 3
+row 4
+row 5
+SELECT 5
+> explain (costs off) select ten + 1, count(*) from ga group by ten + 1
+fields QUERY PLAN:25:-1:-1
+row Finalize GroupAggregate
+row   Group Key: ((ten + 1))
+row   ->  Gather Merge
+row         Workers Planned: 4
+row         ->  Sort
+row               Sort Key: ((ten + 1))
+row               ->  Partial HashAggregate
+row                     Group Key: (ten + 1)
+row                     ->  Parallel Seq Scan on ga
+EXPLAIN
+> explain (costs off) select two + four, sum(unique1) from ga group by two + four order by 1
+fields QUERY PLAN:25:-1:-1
+row Finalize GroupAggregate
+row   Group Key: ((two + four))
+row   ->  Gather Merge
+row         Workers Planned: 4
+row         ->  Sort
+row               Sort Key: ((two + four))
+row               ->  Partial HashAggregate
+row                     Group Key: (two + four)
+row                     ->  Parallel Seq Scan on ga
+EXPLAIN
+> explain (costs off) select length(stringu1), count(*) from ga group by 1 having count(*) > 1
+fields QUERY PLAN:25:-1:-1
+row Finalize HashAggregate
+row   Group Key: (length((stringu1)::text))
+row   Filter: (count(*) > 1)
+row   ->  Gather
+row         Workers Planned: 4
+row         ->  Partial HashAggregate
+row               Group Key: length((stringu1)::text)
+row               ->  Parallel Seq Scan on ga
+EXPLAIN
+> set enable_hashagg = off
+SET
+> explain (costs off) select length(stringu1) from ga group by length(stringu1)
+fields QUERY PLAN:25:-1:-1
+row Group
+row   Group Key: (length((stringu1)::text))
+row   ->  Gather Merge
+row         Workers Planned: 4
+row         ->  Group
+row               Group Key: (length((stringu1)::text))
+row               ->  Sort
+row                     Sort Key: (length((stringu1)::text))
+row                     ->  Parallel Seq Scan on ga
+EXPLAIN
+> explain (costs off) select ten * 2, count(*) from ga group by ten * 2
+fields QUERY PLAN:25:-1:-1
+row Finalize GroupAggregate
+row   Group Key: ((ten * 2))
+row   ->  Gather Merge
+row         Workers Planned: 4
+row         ->  Partial GroupAggregate
+row               Group Key: ((ten * 2))
+row               ->  Sort
+row                     Sort Key: ((ten * 2))
+row                     ->  Parallel Seq Scan on ga
+EXPLAIN
+> reset enable_hashagg
+RESET
+> explain select length(stringu1) from ga group by length(stringu1)
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=196.50..207.81 rows=754 width=4)
+row   Group Key: (length((stringu1)::text))
+row   ->  Gather  (cost=0.00..171.50 rows=10000 width=4)
+row         Workers Planned: 4
+row         ->  Parallel Seq Scan on ga  (cost=0.00..171.50 rows=2500 width=4)
+EXPLAIN
+> set enable_hashagg = off
+SET
+> explain select length(stringu1) from ga group by length(stringu1)
+fields QUERY PLAN:25:-1:-1
+row Group  (cost=312.65..382.79 rows=754 width=4)
+row   Group Key: (length((stringu1)::text))
+row   ->  Gather Merge  (cost=312.65..371.48 rows=3016 width=4)
+row         Workers Planned: 4
+row         ->  Group  (cost=312.60..328.87 rows=754 width=4)
+row               Group Key: (length((stringu1)::text))
+row               ->  Sort  (cost=312.60..318.85 rows=2500 width=4)
+row                     Sort Key: (length((stringu1)::text))
+row                     ->  Parallel Seq Scan on ga  (cost=0.00..171.50 rows=2500 width=4)
+EXPLAIN
+> reset enable_hashagg
+RESET
+> set max_parallel_workers_per_gather = 0
+SET
+> explain select length(stringu1) from ga group by length(stringu1)
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=309.00..320.31 rows=754 width=4)
+row   Group Key: length((stringu1)::text)
+row   ->  Seq Scan on ga  (cost=0.00..284.00 rows=10000 width=4)
+EXPLAIN
