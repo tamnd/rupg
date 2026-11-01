@@ -57,23 +57,69 @@ struct Row {
     /// The line, for the context of an error. A row of the binary format has no line.
     text: Option<Vec<u8>>,
     /// The fields of the line, with `None` for a null value.
-    fields: Vec<Option<Vec<u8>>>,
+    fields: Spans,
     /// `defaults`: true for a field that is the marker of `DEFAULT`. It is empty for a row with no marker.
     defaults: Vec<bool>,
+}
+
+/// The fields of a line in one buffer: the bytes of the fields one after the other, and the place of each field in the bytes, with `None` for a null value. A row of a load has one buffer and not one for each field.
+#[derive(Debug, Default)]
+struct Spans {
+    bytes: Vec<u8>,
+    places: Vec<Option<(usize, usize)>>,
+}
+
+impl Spans {
+    fn with_capacity(fields: usize, bytes: usize) -> Spans {
+        Spans { bytes: Vec::with_capacity(bytes), places: Vec::with_capacity(fields) }
+    }
+
+    fn len(&self) -> usize {
+        self.places.len()
+    }
+
+    /// The field `i`, with `None` for a null value, or `None` when the line has no field `i`.
+    fn get(&self, i: usize) -> Option<Option<&[u8]>> {
+        let place = *self.places.get(i)?;
+        Some(place.map(|(start, end)| &self.bytes[start..end]))
+    }
+
+    fn iter(&self) -> impl Iterator<Item = Option<&[u8]>> {
+        self.places.iter().map(|place| place.map(|(start, end)| &self.bytes[start..end]))
+    }
+
+    /// Adds a field.
+    fn push(&mut self, field: Option<&[u8]>) {
+        let start = self.bytes.len();
+        if let Some(field) = field {
+            self.bytes.extend_from_slice(field);
+        }
+        self.end(start, field.is_none());
+    }
+
+    /// Ends the field whose bytes start at `start`, as a null value when `null`.
+    fn end(&mut self, start: usize, null: bool) {
+        if null {
+            self.bytes.truncate(start);
+            self.places.push(None);
+        } else {
+            self.places.push(Some((start, self.bytes.len())));
+        }
+    }
 }
 
 /// The fields of a line of the text format or the CSV format.
 #[derive(Debug)]
 struct Fields {
     /// The fields, with `None` for a null value.
-    fields: Vec<Option<Vec<u8>>>,
+    fields: Spans,
     /// The marks of the fields that are the marker of `DEFAULT`, or nothing for a line with no marker.
     defaults: Vec<bool>,
 }
 
 impl Fields {
     /// The fields of a line. The marks become empty when no field is a marker, so that the copy uses the plan with no defaults.
-    fn new(fields: Vec<Option<Vec<u8>>>, mut defaults: Vec<bool>) -> Fields {
+    fn new(fields: Spans, mut defaults: Vec<bool>) -> Fields {
         if !defaults.contains(&true) {
             defaults.clear();
         }
@@ -931,7 +977,7 @@ impl CopyIn {
             if row.defaults.get(i).copied().unwrap_or(false) {
                 continue;
             }
-            let mut field = field.as_deref();
+            let mut field = field;
             if self.format == Format::Csv {
                 if field.is_none() && self.load.force_not_null[i] {
                     field = Some(&self.null);
@@ -1278,12 +1324,13 @@ impl CopyIn {
 
     /// `CopyReadAttributesText`: the fields of a line of the text format, with `None` for the null string, and the marks of the fields that are the marker of `DEFAULT`.
     fn text_fields(&self, line: &[u8]) -> Result<Fields, Error> {
-        let mut fields = Vec::new();
+        let mut fields = Spans::with_capacity(self.names.len(), line.len());
         let mut defaults = Vec::new();
         let mut i = 0;
         loop {
             let start = i;
-            let mut field = Vec::new();
+            let begin = fields.bytes.len();
+            let field = &mut fields.bytes;
             let mut last = true;
             while let Some(&c) = line.get(i) {
                 i += 1;
@@ -1337,7 +1384,7 @@ impl CopyIn {
             if self.default.is_some() {
                 defaults.push(self.default.as_deref() == Some(raw));
             }
-            fields.push(if raw == self.null.as_slice() { None } else { Some(field) });
+            fields.end(begin, raw == self.null.as_slice());
             if last {
                 return Ok(Fields::new(fields, defaults));
             }
@@ -1346,12 +1393,13 @@ impl CopyIn {
 
     /// `CopyReadAttributesCSV`: the fields of a line of the CSV format, with `None` for the null string outside quotes, and the marks of the fields that are the marker of `DEFAULT` outside quotes.
     fn csv_fields(&self, line: &[u8]) -> Result<Fields, Error> {
-        let mut fields = Vec::with_capacity(self.names.len());
+        let mut fields = Spans::with_capacity(self.names.len(), line.len());
         let mut defaults = Vec::new();
         let mut i = 0;
         loop {
             let start = i;
-            let mut field = Vec::new();
+            let begin = fields.bytes.len();
+            let field = &mut fields.bytes;
             let mut saw_quote = false;
             let mut last = true;
             'field: while let Some(&c) = line.get(i) {
@@ -1400,7 +1448,7 @@ impl CopyIn {
             if self.default.is_some() {
                 defaults.push(!saw_quote && self.default.as_deref() == Some(raw));
             }
-            fields.push(if !saw_quote && raw == self.null.as_slice() { None } else { Some(field) });
+            fields.end(begin, !saw_quote && raw == self.null.as_slice());
             if last {
                 return Ok(Fields::new(fields, defaults));
             }
@@ -1470,7 +1518,7 @@ impl CopyIn {
                 );
             }
             let mut at = 2;
-            let mut fields = Vec::with_capacity(expected);
+            let mut fields = Spans::with_capacity(expected, 0);
             for name in &self.names {
                 let column = |error: Error| {
                     error.with_context(format!(
@@ -1502,7 +1550,7 @@ impl CopyIn {
                         Ok(())
                     };
                 };
-                fields.push(Some(bytes.to_vec()));
+                fields.push(Some(bytes));
                 at += size;
             }
             self.buf.drain(..at);
