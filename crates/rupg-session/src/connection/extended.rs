@@ -469,7 +469,8 @@ impl Connection {
             None => None,
         };
         drop(reader);
-        statement.count_plan(self.settings.borrow().get("plan_cache_mode").as_deref());
+        statement
+            .count_plan(self.settings.borrow().get_of(guc::known!("plan_cache_mode")).as_deref());
         let formats = match &statement.columns {
             Some(columns) => {
                 let count = result_formats.len();

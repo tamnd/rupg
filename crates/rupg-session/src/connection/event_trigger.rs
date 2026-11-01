@@ -82,8 +82,9 @@ impl Connection {
         let (replica, off) = {
             let settings = self.settings.borrow();
             (
-                settings.get("session_replication_role").as_deref() == Some("replica"),
-                settings.get("event_triggers").as_deref() == Some("off"),
+                settings.get_of(crate::guc::known!("session_replication_role")).as_deref()
+                    == Some("replica"),
+                settings.get_of(crate::guc::known!("event_triggers")).as_deref() == Some("off"),
             )
         };
         if off {
@@ -127,7 +128,8 @@ impl Connection {
     /// The errors of the functions, which end the session.
     pub(super) fn on_login(&mut self, notices: &mut Vec<Notice>) -> Result<(), Error> {
         if !self.store.login_event(self.database_oid)
-            || self.settings.borrow().get("event_triggers").as_deref() == Some("off")
+            || self.settings.borrow().get_of(crate::guc::known!("event_triggers")).as_deref()
+                == Some("off")
         {
             return Ok(());
         }
@@ -266,7 +268,11 @@ impl Connection {
             return Ok(());
         }
         let zoned = || {
-            let name = self.settings.borrow().get("TimeZone").unwrap_or_else(|| "UTC".to_owned());
+            let name = self
+                .settings
+                .borrow()
+                .get_of(crate::guc::known!("TimeZone"))
+                .unwrap_or_else(|| "UTC".to_owned());
             rupg_types::tz::load(&name).is_none_or(|zone| zone.fixed_offset() != Some(0))
         };
         for rewrite in rewrites {

@@ -3,7 +3,7 @@
 use rupg_catalog::RelKind;
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::Values;
-use rupg_pgcatalog::builtin::{self, Named};
+use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{
     Alias, CoercionForm, ColumnRef, FuncCall, JoinExpr, JoinType, JsonTable, Node, RangeFunction,
     RangeSubselect, RangeTableSample, RangeVar, SelectStmt,
@@ -1562,19 +1562,27 @@ impl Analyzer<'_> {
             .at_opt(at));
         }
         let in_schema = |namespace: u32| {
-            builtin::named(Named::Class)
-                .iter()
-                .find(|r| r.namespace == namespace && r.name == name)
-                .map(|r| r.oid)
+            builtin::class_by_name(namespace, name)
                 .or_else(|| self.env.catalog()?.relation_by_name(namespace, name).map(|r| r.oid))
         };
         match &rv.schemaname {
             // A schema that does not exist has no relation, as RangeVarGetRelid with missing_ok gives.
             Some(schema) => Ok(self.explicit_schema(schema, at)?.and_then(in_schema)),
-            None => Ok(self
-                .temp_path
-                .iter()
-                .find_map(|&ns| in_schema(ns).inspect(|_| self.note_temp(ns)))),
+            None => {
+                // One pass over the relations of the catalog finds the relations with the name in each schema, so the search of the path does not scan them once for each schema.
+                let named: Vec<(u32, u32)> = self.env.catalog().map_or_else(Vec::new, |catalog| {
+                    catalog
+                        .relations()
+                        .filter(|r| r.name == name)
+                        .map(|r| (r.namespace, r.oid))
+                        .collect()
+                });
+                Ok(self.temp_path.iter().find_map(|&ns| {
+                    builtin::class_by_name(ns, name)
+                        .or_else(|| named.iter().find(|&&(n, _)| n == ns).map(|&(_, oid)| oid))
+                        .inspect(|_| self.note_temp(ns))
+                }))
+            }
         }
     }
 

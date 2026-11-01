@@ -8,6 +8,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::{Arc, LazyLock};
 
 use super::{Context, Parameter, Setting, check, find, flag, valid_custom_name};
@@ -234,12 +235,33 @@ fn lower(name: &str) -> Cow<'_, str> {
     }
 }
 
+/// The FNV-1a hash, which is faster than the default hash for the short names of the parameters. The names come from the session and from the server, not from the network, so a hash that an attacker could flood is not a risk here.
+#[derive(Clone, Copy, Debug)]
+struct NameHasher(u64);
+
+impl Default for NameHasher {
+    fn default() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+}
+
+impl Hasher for NameHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &c in bytes {
+            self.0 = (self.0 ^ u64::from(c)).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+}
+
+/// The slots by name in lower case.
+type Slots = HashMap<String, Slot, BuildHasherDefault<NameHasher>>;
+
 /// The slot of a name in lower case to change, copied from `base` when it is only there.
-fn owned<'a>(
-    slots: &'a mut Arc<HashMap<String, Slot>>,
-    base: &HashMap<String, Slot>,
-    key: &str,
-) -> Option<&'a mut Slot> {
+fn owned<'a>(slots: &'a mut Arc<Slots>, base: &Slots, key: &str) -> Option<&'a mut Slot> {
     let slots = Arc::make_mut(slots);
     if !slots.contains_key(key) {
         slots.insert(key.to_owned(), base.get(key)?.clone());
@@ -261,7 +283,7 @@ pub struct Characteristics([Setting; 3]);
 /// The values of the parameters at a savepoint, from [`Settings::savepoint`].
 #[derive(Clone, Debug)]
 pub struct Savepoint {
-    slots: Arc<HashMap<String, Slot>>,
+    slots: Arc<Slots>,
     saved: Vec<String>,
     read_only: Setting,
 }
@@ -273,9 +295,9 @@ const RESERVED_PREFIX: &str = "rupg";
 #[derive(Clone, Debug)]
 pub struct Settings {
     /// The slots that [`Settings::share`] moved here, which the server makes once for every session. A session does not change them. It copies a slot to `slots` before it changes it.
-    base: Arc<HashMap<String, Slot>>,
+    base: Arc<Slots>,
     /// The changed parameters and the placeholders, by name in lower case, over the ones in `base`. Shared between the copies of one session's settings until one of them changes a value, because the server copies the settings for the engine at each change.
-    slots: Arc<HashMap<String, Slot>>,
+    slots: Arc<Slots>,
     /// The number of names in `base` and `slots` together, which gives the order of a new slot.
     count: usize,
     /// The names of the slots that the current transaction changed.
@@ -339,6 +361,19 @@ impl Settings {
     /// The slot of a name in lower case, from `slots` or else from `base`.
     fn find_slot(&self, key: &str) -> Option<&Slot> {
         self.slots.get(key).or_else(|| self.base.get(key))
+    }
+
+    /// The slot of a name in any case. A short name goes to lower case on the stack, as the statements look up names such as `TimeZone` many times.
+    fn find_folded(&self, name: &str) -> Option<&Slot> {
+        let mut buffer = [0u8; 64];
+        match buffer.get_mut(..name.len()) {
+            Some(key) if name.bytes().any(|c| c.is_ascii_uppercase()) => {
+                key.copy_from_slice(name.as_bytes());
+                key.make_ascii_lowercase();
+                self.find_slot(std::str::from_utf8(key).ok()?)
+            }
+            _ => self.find_slot(lower(name).as_ref()),
+        }
     }
 
     /// Each slot with its name, once for each name.
@@ -433,7 +468,7 @@ impl Settings {
     /// True for a parameter or a placeholder that exists, as `find_option` finds it without making a placeholder.
     #[must_use]
     pub fn exists(&self, name: &str) -> bool {
-        find(name).is_some() || self.find_slot(lower(name).as_ref()).is_some()
+        find(name).is_some() || self.find_folded(name).is_some()
     }
 
     /// `set_config_option` with `PGC_SIGHUP` that changes nothing, as `pg_file_settings` checks a line of the configuration file. The value must be valid, an internal parameter cannot come from the file, and a parameter of the server start must keep its current value.
@@ -699,7 +734,7 @@ impl Settings {
     /// Reads a value with the type rules and the check hook of the parameter, and refuses a value that rupg does not support (spec/06 section 6.13.2).
     fn parse(&self, parameter: &Parameter, text: &str) -> Result<Setting, Error> {
         let setting = parameter.parse(text)?;
-        let (current, reset) = match self.find_slot(lower(parameter.name).as_ref()) {
+        let (current, reset) = match self.find_folded(parameter.name) {
             Some(slot) => {
                 (parameter.show(&slot.current.setting), parameter.show(&slot.reset.setting))
             }
@@ -884,6 +919,7 @@ impl Settings {
     /// Notes a change of a current value.
     fn changed(&mut self, parameter: Option<&'static Parameter>) {
         self.generation += 1;
+        self.roles_set |= parameter.is_some_and(|parameter| is_role_key(parameter.name));
         if let Some(parameter) = parameter
             && parameter.has(flag::REPORT)
             && !self.pending.contains(&parameter.name)
@@ -913,7 +949,7 @@ impl Settings {
             if self.setting(parameter) != setting {
                 // The source stays, so `pg_settings` shows `session` after a `SET TRANSACTION` that committed, as in PostgreSQL.
                 let source = self
-                    .find_slot(lower(parameter.name).as_ref())
+                    .find_folded(parameter.name)
                     .map_or(Source::Default, |slot| slot.current.source);
                 self.store_reset(parameter, Value { setting, source });
             }
@@ -1013,11 +1049,32 @@ impl Settings {
     pub fn get(&self, name: &str) -> Option<String> {
         match find(name) {
             Some(parameter) => Some(self.shown(parameter)),
-            None => self.find_slot(lower(name).as_ref()).map(|slot| match &slot.current.setting {
+            None => self.find_folded(name).map(|slot| match &slot.current.setting {
                 Setting::String(text) => text.clone(),
                 _ => String::new(),
             }),
         }
+    }
+
+    /// The current value of a `string` parameter, without a copy, or `None` for a parameter of another type.
+    #[must_use]
+    pub fn text_of(&self, parameter: &'static Parameter) -> Option<&str> {
+        match self.find_folded(parameter.name) {
+            Some(slot) => match &slot.current.setting {
+                Setting::String(text) => Some(text),
+                _ => None,
+            },
+            None => match parameter.kind {
+                super::Kind::String { boot } => Some(boot.unwrap_or("")),
+                _ => None,
+            },
+        }
+    }
+
+    /// [`Settings::get`] of a parameter that [`super::known`] found.
+    #[must_use]
+    pub fn get_of(&self, parameter: Option<&'static Parameter>) -> Option<String> {
+        parameter.map(|parameter| self.shown(parameter))
     }
 
     /// The current value of a parameter in its base unit.
@@ -1026,7 +1083,7 @@ impl Settings {
         if self.slots.is_empty() && self.base.is_empty() {
             return parameter.boot();
         }
-        self.find_slot(lower(parameter.name).as_ref())
+        self.find_folded(parameter.name)
             .map_or_else(|| parameter.boot(), |slot| slot.current.setting.clone())
     }
 
@@ -1044,7 +1101,7 @@ impl Settings {
         if let Some(parameter) = find(name) {
             return Ok((parameter.name.to_owned(), self.shown(parameter)));
         }
-        match self.find_slot(lower(name).as_ref()) {
+        match self.find_folded(name) {
             Some(slot) => Ok((slot.name.clone(), self.get(name).unwrap_or_default())),
             None => Err(unrecognized(name)),
         }
@@ -1090,7 +1147,7 @@ impl Settings {
 
     /// The row of `pg_settings` for one parameter.
     fn current(&self, parameter: &'static Parameter) -> Current {
-        let slot = self.find_slot(lower(parameter.name).as_ref());
+        let slot = self.find_folded(parameter.name);
         let value = slot.map_or_else(|| parameter.boot(), |slot| slot.current.setting.clone());
         // `ShowGUCOption` without the units: a number in the base unit, unless a show hook gives the text.
         let setting = match value {

@@ -2327,6 +2327,19 @@ pub fn named(kind: Named) -> &'static [NamedRow] {
     BUILTIN.named.get(&kind).map_or(&[], Vec::as_slice)
 }
 
+/// The OID of the built-in relation with this name in this schema, the first in the order of [`named`] when there are more.
+pub fn class_by_name(namespace: u32, name: &str) -> Option<u32> {
+    /// The built-in relations by schema and name, as the parse of each statement looks up its tables first in `pg_catalog`.
+    static CLASSES: LazyLock<HashMap<u32, HashMap<&'static str, u32>>> = LazyLock::new(|| {
+        let mut map: HashMap<u32, HashMap<&'static str, u32>> = HashMap::new();
+        for row in named(Named::Class) {
+            map.entry(row.namespace).or_default().entry(row.name).or_insert(row.oid);
+        }
+        map
+    });
+    CLASSES.get(&namespace)?.get(name).copied()
+}
+
 /// The built-in object of a kind with this OID.
 pub fn named_by_oid(kind: Named, oid: u32) -> Option<&'static NamedRow> {
     named(kind).iter().find(|row| row.oid == oid)

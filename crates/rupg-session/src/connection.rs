@@ -30,7 +30,7 @@ use rupg_wire::{
 };
 
 use crate::block::{Block, Ending, Transaction};
-use crate::guc::{Action, Origin, Settings, Source};
+use crate::guc::{self, Action, Origin, Settings, Source};
 use crate::heap::{Change, Changed, Heap, Recheck, Snapshot, Storage, View, tid_text};
 use crate::query::{self, Column, Reader, Row, Transition};
 use crate::store::{Lease, Store};
@@ -426,6 +426,8 @@ pub struct Connection {
     /// The names of the current user and of the session user, which `current_user` and `session_user` give.
     current_user: String,
     session_user: String,
+    /// True after the first [`Connection::sync_role`]. Then `current_user` and `session_user` follow `role` and `session_authorization` until [`Settings::take_roles_set`] gives true.
+    role_synced: bool,
     /// The catalog that the sessions of the server share.
     store: Arc<Store>,
     /// The file system of the server, which `COPY ... FROM` a file reads. A session with no server has none.
@@ -548,6 +550,7 @@ impl Connection {
             user: start.user.clone(),
             current_user: start.user.clone(),
             session_user: start.user.clone(),
+            role_synced: false,
             database: start.database.clone(),
             database_oid: database::POSTGRES,
             protocol,
@@ -632,10 +635,8 @@ impl Connection {
 
     /// `enable_statement_timeout`: the time of a statement starts, and ends after `statement_timeout` when it is not 0.
     fn start_timeout(&self) {
-        let ms = match crate::guc::find("statement_timeout")
-            .map(|p| self.settings.borrow().setting(p))
-        {
-            Some(crate::guc::Setting::Int(ms)) if ms > 0 => i64::from(ms),
+        let ms = match guc::find("statement_timeout").map(|p| self.settings.borrow().setting(p)) {
+            Some(guc::Setting::Int(ms)) if ms > 0 => i64::from(ms),
             _ => 0,
         };
         let deadline = if ms == 0 { 0 } else { query::now(&*self.clock).saturating_add(ms * 1000) };
@@ -646,14 +647,24 @@ impl Connection {
     fn sync_role(&mut self) {
         let roles = self.roles();
         let settings = self.settings.get_mut();
+        // Each statement starts here. When no value of `role` or `session_authorization` changed, the names stay, and only the roles that they name can change.
+        let set = settings.take_roles_set();
+        if self.role_synced && !set {
+            let role = utility::role_oid(&roles, &self.current_user, &self.user)
+                .unwrap_or(BOOTSTRAP_SUPERUSER);
+            settings.set_superuser(roles.superuser(role));
+            self.session_role = utility::role_oid(&roles, &self.session_user, &self.user)
+                .unwrap_or(BOOTSTRAP_SUPERUSER);
+            self.role = role;
+            return;
+        }
+        self.role_synced = true;
         let session = settings.get("session_authorization").unwrap_or_else(|| self.user.clone());
         let current =
             settings.get("role").filter(|role| role != "none").unwrap_or_else(|| session.clone());
         let role = utility::role_oid(&roles, &current, &self.user).unwrap_or(BOOTSTRAP_SUPERUSER);
         let superuser = if roles.superuser(role) { "on" } else { "off" };
-        let changed = settings.take_roles_set()
-            || session != self.session_user
-            || current != self.current_user;
+        let changed = set || session != self.session_user || current != self.current_user;
         if changed && settings.get("is_superuser").as_deref() != Some(superuser) {
             drop(settings.set_internal("is_superuser", superuser));
         }
@@ -722,7 +733,7 @@ impl Connection {
     /// `GetTransactionSnapshot`: a new snapshot for each statement in `READ COMMITTED`, and the snapshot of the first statement for the whole transaction in the other levels.
     fn view(&self) -> View {
         let heap = self.store.heap();
-        let isolation = self.settings.borrow().get("transaction_isolation");
+        let isolation = self.settings.borrow().get_of(guc::known!("transaction_isolation"));
         let serializable = matches!(isolation.as_deref(), Some("repeatable read" | "serializable"));
         let snapshot = if serializable {
             self.snapshot.borrow_mut().get_or_insert_with(|| heap.snapshot()).clone()
@@ -1326,8 +1337,8 @@ impl Connection {
         /// The value of `off` in `synchronous_commit_options`.
         const OFF: u8 = 4;
         !matches!(
-            crate::guc::find("synchronous_commit").map(|p| self.settings.borrow().setting(p)),
-            Some(crate::guc::Setting::Enum(value)) if value == OFF
+            guc::find("synchronous_commit").map(|p| self.settings.borrow().setting(p)),
+            Some(guc::Setting::Enum(value)) if value == OFF
         )
     }
 
@@ -1420,10 +1431,11 @@ impl Connection {
 
     /// [`Self::heap_layout`] for the columns of the relation `relation`, with `attstorage` of each column and the method of `attcompression` or else of `default_toast_compression`.
     fn relation_layout(&self, relation: &rupg_catalog::Relation) {
-        let default = match self.settings().get("default_toast_compression").as_deref() {
-            Some("pglz") => Method::Pglz,
-            _ => Method::Lz4,
-        };
+        let default =
+            match self.settings().get_of(guc::known!("default_toast_compression")).as_deref() {
+                Some("pglz") => Method::Pglz,
+                _ => Method::Lz4,
+            };
         let storage = relation
             .columns
             .iter()
@@ -1585,7 +1597,8 @@ impl Connection {
             self.prevent_block(statement)?;
         }
         if matches!(node, Node::TruncateStmt(_))
-            && self.settings.borrow().get("transaction_read_only").as_deref() == Some("on")
+            && self.settings.borrow().get_of(guc::known!("transaction_read_only")).as_deref()
+                == Some("on")
         {
             return Err(Error::new(
                 SqlState::READ_ONLY_SQL_TRANSACTION,
@@ -1643,7 +1656,7 @@ impl Connection {
                 });
             }
         }
-        if self.settings.borrow().get("track_counts").as_deref() != Some("off") {
+        if self.settings.borrow().get_of(guc::known!("track_counts")).as_deref() != Some("off") {
             for &table in &defined.scans {
                 self.activity.count_scan(table);
             }
@@ -2007,7 +2020,10 @@ impl Connection {
 
     /// True when the client encoding is `UTF8`, so the strings of the messages must be valid UTF-8.
     fn utf8(&self) -> bool {
-        self.settings.borrow().get("client_encoding").is_none_or(|name| name != "SQL_ASCII")
+        self.settings
+            .borrow()
+            .get_of(guc::known!("client_encoding"))
+            .is_none_or(|name| name != "SQL_ASCII")
     }
 
     /// Reads at most one message from `input` and writes the answer to `out`.
@@ -2209,13 +2225,14 @@ impl Connection {
         locations: &[Option<usize>],
         out: &mut OutBuf,
     ) {
-        let least = match self.settings.borrow().get("client_min_messages").as_deref() {
-            Some("warning") => 1,
-            Some("error") => 2,
-            Some("log") => -1,
-            Some(level) if level.starts_with("debug") => -2,
-            _ => 0,
-        };
+        let least =
+            match self.settings.borrow().get_of(guc::known!("client_min_messages")).as_deref() {
+                Some("warning") => 1,
+                Some("error") => 2,
+                Some("log") => -1,
+                Some(level) if level.starts_with("debug") => -2,
+                _ => 0,
+            };
         for (i, notice) in notices.drain(..).enumerate() {
             let (rank, severity) = match (notice.error.level(), notice.severity) {
                 (Some(ErrorLevel::Debug), _) => (-2, "DEBUG"),
@@ -2524,10 +2541,11 @@ impl Connection {
             return done;
         }
         self.settings.borrow_mut().take_snapshot();
-        if let Some(products) = rupg_analyze::query_rewrite(node, &self.reader())? {
+        let reader = self.reader();
+        if let Some(products) = rupg_analyze::query_rewrite(node, &reader)? {
+            drop(reader);
             return self.run_products(node, &products, notices, late);
         }
-        let reader = self.reader();
         let plan = query::plan(node, &reader, &Params::default());
         notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         let plan = plan?;
@@ -10281,7 +10299,7 @@ mod tests {
         assert_eq!(settings.get("data_checksums").as_deref(), Some("on"));
         assert_eq!(settings.get("default_toast_compression").as_deref(), Some("lz4"));
         assert_eq!(settings.get("wal_compression").as_deref(), Some("off"));
-        let wal_compression = crate::guc::find("wal_compression").unwrap();
+        let wal_compression = guc::find("wal_compression").unwrap();
         assert!(wal_compression.parse("zstd").is_ok());
     }
 

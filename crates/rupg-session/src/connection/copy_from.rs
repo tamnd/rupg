@@ -299,7 +299,9 @@ impl Connection {
             ));
         }
         rupg_func::copy_from_row_security(target.relid, &reader)?;
-        if self.settings.borrow().get("transaction_read_only").as_deref() == Some("on") {
+        if self.settings.borrow().get_of(crate::guc::known!("transaction_read_only")).as_deref()
+            == Some("on")
+        {
             return Err(Error::new(
                 SqlState::READ_ONLY_SQL_TRANSACTION,
                 "cannot execute COPY FROM in a read-only transaction",

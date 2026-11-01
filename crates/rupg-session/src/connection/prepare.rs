@@ -120,7 +120,8 @@ impl Connection {
             }
             None => None,
         };
-        statement.count_plan(reader.settings().get("plan_cache_mode").as_deref());
+        statement
+            .count_plan(reader.settings().get_of(crate::guc::known!("plan_cache_mode")).as_deref());
         if let Some(plan) = plan {
             let view = reader.view().cloned().unwrap_or_default();
             let (plan, writes) = self.start_writes(plan, &params, &view)?;
@@ -239,7 +240,9 @@ impl Connection {
         if skipped {
             return done;
         }
-        statement.count_plan(self.settings.borrow().get("plan_cache_mode").as_deref());
+        statement.count_plan(
+            self.settings.borrow().get_of(crate::guc::known!("plan_cache_mode")).as_deref(),
+        );
         match done {
             Ok(Done::Tag(_)) => Ok(Done::Count(CommandTag::Select, 0)),
             done => done,

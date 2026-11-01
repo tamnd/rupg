@@ -6,7 +6,9 @@
 //!
 //! Lifted from `crates/rudb-common/src/guc.rs` of tamnd/rudb at f5f7065a (spec/04 section 4.9).
 
+#[cfg(test)]
 use std::cmp::Ordering;
+use std::sync::LazyLock;
 
 mod check;
 mod settings;
@@ -246,8 +248,21 @@ static EXTRA: [Parameter; 2] = [
 /// The parameter with this name, without regard to case, or `None` if PostgreSQL and rupg have none. An old name of a renamed parameter finds the new one.
 #[must_use]
 pub fn find(name: &str) -> Option<&'static Parameter> {
+    /// The hash of the name of each parameter without regard to case, with its index in [`PARAMETERS`], in the order of the hashes. A search compares integers and not names, as the statements look up the parameters many times.
+    static INDEX: LazyLock<Vec<(u64, usize)>> = LazyLock::new(|| {
+        let mut index: Vec<(u64, usize)> =
+            PARAMETERS.iter().enumerate().map(|(i, p)| (fold_hash(p.name), i)).collect();
+        index.sort_unstable();
+        index
+    });
     let search = |name: &str| {
-        PARAMETERS.binary_search_by(|p| compare(p.name, name)).ok().map(|i| &PARAMETERS[i])
+        let hash = fold_hash(name);
+        let from = INDEX.partition_point(|&(h, _)| h < hash);
+        INDEX[from..]
+            .iter()
+            .take_while(|&&(h, _)| h == hash)
+            .map(|&(_, i)| &PARAMETERS[i])
+            .find(|p| p.name.eq_ignore_ascii_case(name))
     };
     search(name)
         .or_else(|| {
@@ -259,12 +274,30 @@ pub fn find(name: &str) -> Option<&'static Parameter> {
         .or_else(|| EXTRA.iter().find(|p| p.name.eq_ignore_ascii_case(name)))
 }
 
+/// The parameter of a literal name, which a static finds once, for the statements that read a parameter many times. `None` for a name that is not a parameter, as [`find`] gives it.
+macro_rules! known {
+    ($name:literal) => {{
+        static FOUND: std::sync::LazyLock<Option<&'static $crate::guc::Parameter>> =
+            std::sync::LazyLock::new(|| $crate::guc::find($name));
+        *FOUND
+    }};
+}
+pub(crate) use known;
+
 /// Every parameter, in the order of the names without regard to case.
 #[must_use]
 pub fn all() -> &'static [Parameter] {
     &PARAMETERS
 }
 
+/// The FNV-1a hash of a name in lower case.
+fn fold_hash(name: &str) -> u64 {
+    name.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, c| {
+        (hash ^ u64::from(c.to_ascii_lowercase())).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+#[cfg(test)]
 fn compare(a: &str, b: &str) -> Ordering {
     a.bytes().map(|c| c.to_ascii_lowercase()).cmp(b.bytes().map(|c| c.to_ascii_lowercase()))
 }
@@ -745,6 +778,14 @@ pub fn g(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_known_name_finds_the_parameter_once() {
+        assert_eq!(known!("TimeZone").map(|p| p.name), Some("TimeZone"));
+        assert!(known!("no_such_parameter").is_none());
+        let first = known!("DateStyle").unwrap();
+        assert!(std::ptr::eq(first, find("datestyle").unwrap()));
+    }
 
     fn show(name: &str, text: &str) -> String {
         let parameter = find(name).unwrap();

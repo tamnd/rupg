@@ -1502,7 +1502,7 @@ impl Analyzer<'_> {
             return Ok(Vec::new());
         };
         let mut indexes: Vec<_> = catalog
-            .relations()
+            .indexes_of(table)
             .filter(|rel| matches!(rel.kind, RelKind::Index | RelKind::PartitionedIndex))
             .filter_map(|rel| {
                 rel.index
