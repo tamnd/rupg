@@ -196,11 +196,7 @@ impl Table {
                             continue 'restart;
                         }
                     }
-                    while empty != bucket {
-                        let before = (empty + mask) & mask;
-                        self.buckets[empty] = self.buckets[before];
-                        empty = before;
-                    }
+                    self.shift(bucket, empty);
                     return Ok((self.add(bucket, hash), false));
                 }
                 bucket = (bucket + 1) & mask;
@@ -210,6 +206,19 @@ impl Table {
                     continue 'restart;
                 }
             }
+        }
+    }
+
+    /// Moves the entries from the bucket `from` to the bucket before the empty bucket `empty` one bucket forward.
+    fn shift(&mut self, from: usize, empty: usize) {
+        if empty > from {
+            self.buckets.copy_within(from..empty, from + 1);
+        } else {
+            // The run goes around the end of the table.
+            let last = self.mask();
+            self.buckets.copy_within(0..empty, 1);
+            self.buckets[0] = self.buckets[last];
+            self.buckets.copy_within(from..last, from + 1);
         }
     }
 
@@ -242,20 +251,16 @@ impl Table {
 
     /// `SH_START_ITERATE` and `SH_ITERATE`: the entries in the order of a scan of the table, from the first empty bucket back to it.
     pub(crate) fn order(&self) -> Vec<u32> {
-        let mask = self.mask();
         let start = self.buckets.iter().position(|b| b.entry == EMPTY).unwrap_or(0);
-        let mut out = Vec::with_capacity(self.members as usize);
-        let mut bucket = start;
-        loop {
-            let entry = self.buckets[bucket].entry;
-            bucket = (bucket + mask) & mask;
-            if entry != EMPTY {
-                out.push(entry);
-            }
-            if bucket == start {
-                return out;
-            }
+        // Each entry goes in the next place, and the place moves on only for a bucket with an entry.
+        let mut out = vec![0; self.members as usize + 1];
+        let mut n = 0;
+        for b in self.buckets[..=start].iter().rev().chain(self.buckets[start + 1..].iter().rev()) {
+            out[n] = b.entry;
+            n += usize::from(b.entry != EMPTY);
         }
+        out.truncate(n);
+        out
     }
 }
 
@@ -359,6 +364,32 @@ mod tests {
             }
         }
         assert_eq!(extended_hash_int(oid::FLOAT8, 1, 0), None);
+    }
+
+    #[test]
+    fn shifts_a_run_as_one_bucket_at_a_time() {
+        for size in [2_usize, 8, 16] {
+            for from in 0..size {
+                for empty in (0..size).filter(|&e| e != from) {
+                    let mut table = Table::new(1);
+                    #[allow(clippy::cast_possible_truncation)]
+                    let buckets: Vec<Bucket> =
+                        (0..size).map(|i| Bucket { entry: i as u32, hash: i as u32 }).collect();
+                    table.buckets.clone_from(&buckets);
+                    table.shift(from, empty);
+                    let mut want = buckets;
+                    let mut at = empty;
+                    while at != from {
+                        let before = (at + size - 1) % size;
+                        want[at] = want[before];
+                        at = before;
+                    }
+                    let got: Vec<u32> = table.buckets.iter().map(|b| b.entry).collect();
+                    let want: Vec<u32> = want.iter().map(|b| b.entry).collect();
+                    assert_eq!(got, want, "{size} {from} {empty}");
+                }
+            }
+        }
     }
 
     /// The order of the entries of a table for `groups` groups after the hashes go in.
