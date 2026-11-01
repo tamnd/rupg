@@ -98,6 +98,14 @@ impl KeyMap {
         }
     }
 
+    /// The number of groups that can go in with no growth of the map.
+    fn room(&self) -> usize {
+        match self {
+            KeyMap::Small(map) => map.capacity() - map.len(),
+            KeyMap::Large(map) => map.capacity() - map.len(),
+        }
+    }
+
     /// Makes room for `more` more groups.
     fn reserve(&mut self, more: usize) {
         match self {
@@ -2072,11 +2080,12 @@ fn grouped(
                 }
                 ids.push(id);
             }
-            // After the first batch, the map makes room for the groups that the rate of new groups gives, so it does not grow many times.
-            if seen == 0 && groups * 2 > sel.len() {
-                map.reserve((groups * rows / sel.len().max(1)).min(rows).saturating_sub(groups));
-            }
             seen += sel.len();
+            // When the next batch can fill the map, the map makes room for the groups that the rate of new groups gives, so it does not grow many times.
+            if map.room() < sel.len() {
+                let rate = (groups * rows / seen.max(1)).min(rows);
+                map.reserve((rate + rate / 8).max(groups * 2).min(rows).saturating_sub(groups));
+            }
             if !new_rows.is_empty() {
                 if top.is_some() {
                     let (segment, vector) = (spot(batch.segment), spot(batch.vector));
