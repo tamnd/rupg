@@ -209,6 +209,58 @@ impl Column {
         Ok(())
     }
 
+    /// Appends to `out` the values of the rows `rows` of the vector `at`, in the order of `rows`, and makes no value for the other rows. `dict` is the dictionary of a code column.
+    ///
+    /// # Errors
+    ///
+    /// `XX001` when the bytes are not a vector or a row is not in the vector.
+    pub fn pick(
+        &self,
+        at: usize,
+        rows: &[usize],
+        dict: Option<&Dictionary>,
+        out: &mut Vec<Value>,
+    ) -> Result<()> {
+        let vector = &self.vectors[at];
+        if rows.iter().any(|&row| row >= vector.rows as usize) {
+            return Err(Error::corrupted("a row is not in its vector"));
+        }
+        if vector.nulls == Nulls::All {
+            out.extend(rows.iter().map(|_| Value::Null));
+            return Ok(());
+        }
+        let value = |row: usize, make: &dyn Fn() -> Value| {
+            if vector.nulls.is_null(row) { Value::Null } else { make() }
+        };
+        match self.kind.store() {
+            Store::Int => {
+                let ints = integer::decode(&vector.data)?;
+                for &row in rows {
+                    let v = *ints.get(row).ok_or_else(|| Error::corrupted("a short vector"))?;
+                    out.push(value(row, &|| self.kind.int_value(v)));
+                }
+            }
+            Store::Float => {
+                let mut floats = Vec::new();
+                self.decode_floats(at, &mut floats)?;
+                for &row in rows {
+                    let v = *floats.get(row).ok_or_else(|| Error::corrupted("a short vector"))?;
+                    out.push(value(row, &|| self.kind.float_value(v)));
+                }
+            }
+            Store::Code => {
+                let dict =
+                    dict.ok_or_else(|| Error::internal("a code column has no dictionary"))?;
+                let codes = integer::decode_as::<u32>(&vector.data)?;
+                for &row in rows {
+                    let code = *codes.get(row).ok_or_else(|| Error::corrupted("a short vector"))?;
+                    out.push(value(row, &|| self.kind.bytes_value(dict.get(code))));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// The values of the vector `at`, as the row engine reads them. `dict` is the dictionary of a code column.
     ///
     /// # Errors

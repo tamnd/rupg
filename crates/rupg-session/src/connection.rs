@@ -7033,18 +7033,20 @@ mod tests {
             assert!(frozen > 8192 && frozen < 24000, "{frozen}");
             assert_eq!(store.heap().open_rows(database, relation), frozen);
             send(&mut a, &query("COMMIT"));
+            // The commit freezes the last pages of the load too, and seals the columns.
             assert_eq!(store.heap().open_rows(database, relation), 0);
+            assert_eq!(store.heap().frozen_rows(database, relation), 24000);
             let mut back = Store::new();
             back.load(&store.image(0)).unwrap();
             let back = Arc::new(back);
-            assert_eq!(back.heap().frozen_rows(database, relation), frozen);
+            assert_eq!(back.heap().frozen_rows(database, relation), 24000);
             let sums = "SELECT count(*), sum(a), count(DISTINCT b), sum(c), max(b) FROM t";
             let (mut c, _) = connect_to(&back, 1235);
             assert_eq!(rows(&mut c, sums), ["row 24000,288012000,70,36001500,v9"]);
             assert_eq!(rows(&mut a, sums), ["row 24000,288012000,70,36001500,v9"]);
             assert_eq!(rows(&mut a, "SELECT b, c FROM t WHERE a = 9001"), ["row v41,1125.125"]);
             load(&mut a, 24001);
-            assert!(store.heap().frozen_rows(database, relation) > frozen);
+            assert!(store.heap().frozen_rows(database, relation) > 24000);
             assert_eq!(rows(&mut a, sums), ["row 48000,1152024000,70,144003000,v9"]);
             assert_eq!(rows(&mut a, "SELECT b, c FROM t WHERE a = 30001"), ["row v41,3750.125"]);
         });

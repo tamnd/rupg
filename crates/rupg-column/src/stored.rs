@@ -132,6 +132,48 @@ impl Stored {
         true
     }
 
+    /// Appends to `out` the values of the rows `rows`, which go up. A vector with none of the rows does not decode, and only the values of the rows are made, so that a sample of a few rows of a long column is cheap.
+    ///
+    /// # Errors
+    ///
+    /// `XX001` when a vector does not decode or a row is not in the column.
+    pub fn values_at(&self, rows: &[usize], out: &mut Vec<Value>) -> Result<()> {
+        let mut rest = rows;
+        let mut base = 0;
+        let mut picked = Vec::new();
+        for column in &self.segments {
+            for at in 0..column.vectors.len() {
+                if rest.is_empty() {
+                    return Ok(());
+                }
+                let end = base + column.vectors[at].rows as usize;
+                let n = rest.partition_point(|&row| row < end);
+                if n > 0 {
+                    picked.clear();
+                    picked.extend(rest[..n].iter().map(|&row| row - base));
+                    column.pick(at, &picked, self.dict.as_ref(), out)?;
+                    rest = &rest[n..];
+                }
+                base = end;
+            }
+        }
+        let mut vector = Vec::new();
+        for at in 0.. {
+            if rest.is_empty() {
+                return Ok(());
+            }
+            if !self.open_values(at, &mut vector) {
+                break;
+            }
+            let end = base + vector.len();
+            let n = rest.partition_point(|&row| row < end);
+            out.extend(rest[..n].iter().map(|&row| vector[row - base].clone()));
+            rest = &rest[n..];
+            base = end;
+        }
+        if rest.is_empty() { Ok(()) } else { Err(Error::corrupted("a row is not in its column")) }
+    }
+
     /// Keeps only the first `rows` rows of the column, after an [`Stored::extend`] that the caller does not keep. The dictionary keeps the strings of the rows that go.
     ///
     /// # Errors
@@ -282,6 +324,35 @@ mod tests {
             }
         }
         assert_eq!(got, values);
+    }
+
+    #[test]
+    fn the_values_at_some_rows_are_the_values_of_those_rows() {
+        let texts: Vec<Value> = (0..ROWS + 3000)
+            .map(|i| if i % 7 == 0 { Value::Null } else { Value::Text(format!("t{}", i % 400)) })
+            .collect();
+        let floats: Vec<Value> = (0..ROWS + 3000).map(|i| Value::Float8(i as f64 / 3.0)).collect();
+        let ints: Vec<Value> = (0..ROWS + 3000)
+            .map(|i| if i / VECTOR == 5 { Value::Null } else { Value::Int2((i % 30_000) as i16) })
+            .collect();
+        let rows: Vec<usize> =
+            [0, 1, 1023, 1024, 5000, 5121, ROWS - 1, ROWS, ROWS + 2047, ROWS + 2048, ROWS + 2999]
+                .into();
+        for (kind, values) in [(Kind::Text, &texts), (Kind::Float8, &floats), (Kind::Int2, &ints)] {
+            let mut stored = Stored::build(kind, values[..10].iter().map(Some)).unwrap();
+            stored.extend(values[10..].iter().map(Some)).unwrap();
+            // The rows after the first segment are open, and then in a last segment.
+            for sealed in [false, true] {
+                if sealed {
+                    stored.seal().unwrap();
+                }
+                let mut got = Vec::new();
+                stored.values_at(&rows, &mut got).unwrap();
+                let want: Vec<Value> = rows.iter().map(|&row| values[row].clone()).collect();
+                assert_eq!(got, want, "{kind:?} sealed {sealed}");
+            }
+            assert!(stored.values_at(&[ROWS + 3000], &mut Vec::new()).is_err());
+        }
     }
 
     #[test]

@@ -950,6 +950,49 @@ impl Table {
         }
     }
 
+    /// The values of the versions at the places `places` in the order of [`Table::each_version`], which go up. The frozen columns decode only the vectors with these rows and make only their values, so that a sample of a long table does not make a value for each row. `None` is a column that does not decode.
+    fn rows_at(&self, places: &[usize]) -> Option<Vec<Vec<Value>>> {
+        let Some(frozen) = &self.frozen else {
+            return Some(places.iter().map(|&at| self.versions[at].values.to_vec()).collect());
+        };
+        // For each place, the row of the frozen columns, or the version with its values.
+        let slots: Vec<Result<usize, usize>> = if self.cold.is_some() {
+            places.iter().map(|&place| Ok(place)).collect()
+        } else {
+            let mut slots = Vec::with_capacity(places.len());
+            let mut next = places.iter().copied().peekable();
+            let mut row = 0;
+            for (at, version) in self.versions.iter().enumerate() {
+                let empty = version.values.is_empty();
+                if next.peek() == Some(&at) {
+                    slots.push(if empty { Ok(row) } else { Err(at) });
+                    next.next();
+                }
+                row += usize::from(empty);
+            }
+            slots
+        };
+        let wanted: Vec<usize> = slots.iter().filter_map(|slot| slot.ok()).collect();
+        let mut columns = Vec::with_capacity(frozen.columns.len());
+        for stored in &frozen.columns {
+            let mut values = Vec::with_capacity(wanted.len());
+            stored.values_at(&wanted, &mut values).ok()?;
+            columns.push(values.into_iter());
+        }
+        Some(
+            slots
+                .iter()
+                .map(|slot| match *slot {
+                    Ok(_) => columns
+                        .iter_mut()
+                        .map(|column| column.next().unwrap_or(Value::Null))
+                        .collect(),
+                    Err(at) => self.versions[at].values.to_vec(),
+                })
+                .collect(),
+        )
+    }
+
     /// Gives `each` the header of each version of the table, cold or not, with no values.
     fn each_version(&self, mut each: impl FnMut(&Version)) {
         let Some(cold) = &self.cold else {
@@ -2132,8 +2175,26 @@ impl Heap {
         let mut total = 0;
         table.each_version(|v| total += usize::from(live(v)));
         // The places among the live versions of the versions in the sample, in order.
-        let mut picks =
-            (0..total.min(target)).map(|i| if total <= target { i } else { i * total / target });
+        let picks =
+            || (0..total.min(target)).map(|i| if total <= target { i } else { i * total / target });
+        // The places of the versions of the sample among all the versions, for a read of only their rows.
+        let mut places = Vec::with_capacity(total.min(target));
+        let (mut wanted, mut at, mut place) = (picks(), 0, 0);
+        let mut next = wanted.next();
+        table.each_version(|v| {
+            if live(v) {
+                if next == Some(at) {
+                    places.push(place);
+                    next = wanted.next();
+                }
+                at += 1;
+            }
+            place += 1;
+        });
+        if let Some(rows) = table.rows_at(&places) {
+            return (rows, total as f64);
+        }
+        let mut picks = picks();
         let mut next = picks.next();
         let mut at = 0;
         let mut rows = Vec::with_capacity(total.min(target));
@@ -2406,9 +2467,15 @@ impl Heap {
             }
             None => log(Logged::Nothing),
         }
-        // The open rows of a load become a last segment when the load commits, so the typed values do not stay in memory after it (spec/10 section 10.8).
+        // The open rows of a load become a last segment when the load commits, so the typed values do not stay in memory after it (spec/10 section 10.8). The last pages of the load, which kept their values for new versions, go into the columns first, so that the first scan does not open the last segment again. The commit logged the values of these versions, so they can go.
         for key in state.loading.remove(&xid).unwrap_or_default() {
             if let Some(table) = state.tables.settings_of(&key) {
+                if let Some(frozen) = &table.frozen
+                    && frozen.rows == frozen.end
+                    && table.versions[frozen.end..].iter().all(|version| version.xmin == xid)
+                {
+                    table.freeze_to(table.versions.len());
+                }
                 table.seal();
             }
         }
@@ -2950,6 +3017,59 @@ mod tests {
         let rows = heap.rows(7, view);
         let Some(Value::Int8(tid)) = rows[0].last() else { panic!("a row with no ID") };
         tid.cast_unsigned()
+    }
+
+    #[test]
+    fn the_rows_at_some_places_are_the_rows_that_a_scan_gives() {
+        let heap = Heap::default();
+        let xid = heap.begin(1);
+        let row = |i: usize| {
+            let text = if i.is_multiple_of(11) {
+                Value::Null
+            } else {
+                Value::Text(format!("t{}", i % 97))
+            };
+            vec![Value::Int8(i as i64 * 7), text, Value::Float8(i as f64 / 4.0)]
+        };
+        let rows = |range: std::ops::Range<usize>| range.map(row).collect::<Vec<_>>();
+        let insert = |rows| heap.insert(7, &view(heap.snapshot(), xid, 0), rows, (&[], &none), &[]);
+        insert(rows(0..ROWS + 5000)).unwrap();
+        let mut places: Vec<usize> =
+            (0..ROWS + 9000).step_by(37).chain([10, ROWS + 8999]).collect();
+        places.sort_unstable();
+        let check = |table: &Table, frozen: bool| {
+            assert_eq!(table.frozen.is_some(), frozen);
+            let mut all = Vec::new();
+            table.each_version_row(None, |_, values| all.push(values.to_vec()));
+            let want: Vec<Vec<Value>> = places.iter().map(|&at| all[at].clone()).collect();
+            assert_eq!(table.rows_at(&places).unwrap(), want);
+            assert_eq!(want[2], all[37]);
+        };
+        insert(rows(ROWS + 5000..ROWS + 9000)).unwrap();
+        // The load froze its first rows. The test starts again from versions that all have their values.
+        let mut state = heap.state();
+        let table = state.tables.0.get_mut(&(1, 7)).unwrap();
+        table.frozen = None;
+        for (version, at) in table.versions.iter_mut().zip(0..) {
+            version.values = row(at).into_boxed_slice();
+        }
+        check(table, false);
+        // The first rows are frozen and the last rows keep their values.
+        table.freeze_to(ROWS + 3000);
+        check(table, true);
+        // A version with its values between the frozen ones, as a new version in an earlier page is.
+        let version = table.versions.remove(ROWS + 5000);
+        table.versions.insert(10, version);
+        table.frozen.as_mut().unwrap().end += 1;
+        check(table, true);
+        let mut all = Vec::new();
+        table.each_version_row(None, |_, values| all.push(values.to_vec()));
+        assert_eq!((&all[10], &all[11]), (&row(ROWS + 5000), &row(10)));
+        table.freeze();
+        table.seal();
+        table.chill();
+        assert!(table.cold.is_some());
+        check(table, true);
     }
 
     #[test]
