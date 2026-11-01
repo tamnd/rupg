@@ -29,6 +29,8 @@ struct Path<T> {
     keys: Vec<OrderKey>,
     outer: BTreeSet<usize>,
     rows: f64,
+    /// `parallel_safe`: false for a plan with a `Gather` or a `Gather Merge`, which a worker cannot run.
+    safe: bool,
     plan: T,
 }
 
@@ -72,13 +74,29 @@ impl<T> Paths<T> {
         self.add_param(cost, keys, BTreeSet::new(), 0.0, plan);
     }
 
+    /// [`Self::add`] for a plan with a `Gather` or a `Gather Merge` above a partial plan, which is not parallel safe. When it costs about the same as a plan with the same order that is parallel safe, the plan that is parallel safe wins.
+    pub(crate) fn add_gathered(&mut self, cost: (u32, f64, f64), keys: Vec<OrderKey>, plan: T) {
+        self.insert(cost, keys, (BTreeSet::new(), 0.0, false), plan);
+    }
+
     /// `add_path`: adds a plan with the disabled nodes, the start cost and the total cost `cost` unless a plan of the list is as good, and takes away each plan of the list that the new plan is as good as. A plan is as good as another when it has fewer disabled nodes, or the same and it costs less or about the same, its order is as useful, with no order for a parameterized plan, it reads the values of fewer relations or the same relations and it gives no more rows.
     pub(super) fn add_param(
         &mut self,
-        (disabled, startup, total): (u32, f64, f64),
+        cost: (u32, f64, f64),
         keys: Vec<OrderKey>,
         outer: BTreeSet<usize>,
         rows: f64,
+        plan: T,
+    ) {
+        self.insert(cost, keys, (outer, rows, true), plan);
+    }
+
+    /// [`Self::add_param`] with `parallel_safe`: a plan that is as good as another must also be parallel safe when the other is.
+    fn insert(
+        &mut self,
+        (disabled, startup, total): (u32, f64, f64),
+        keys: Vec<OrderKey>,
+        (outer, rows, safe): (BTreeSet<usize>, f64, bool),
         plan: T,
     ) {
         let new = (startup, total);
@@ -102,15 +120,22 @@ impl<T> Paths<T> {
                 let old_keys = if old.outer.is_empty() { &old.keys[..] } else { &[] };
                 let order = compare_keys(new_keys, old_keys);
                 let o = compare_outer(&outer, &old.outer);
-                let first = matches!(o, Compare::Equal | Compare::Better1) && rows <= old.rows;
-                let second = matches!(o, Compare::Equal | Compare::Better2) && rows >= old.rows;
+                let first = matches!(o, Compare::Equal | Compare::Better1)
+                    && rows <= old.rows
+                    && safe >= old.safe;
+                let second = matches!(o, Compare::Equal | Compare::Better2)
+                    && rows >= old.rows
+                    && safe <= old.safe;
                 match (costs, order) {
                     (_, Compare::Different) => {}
                     (Compare::Equal, Compare::Better1) => remove = first,
                     (Compare::Equal, Compare::Better2) => accept = !second,
-                    // With the same order and the same relations, the plan with fewer rows wins, and then the new plan must cost less than the old plan by more than a rounding error.
+                    // With the same order and the same relations, the plan that is parallel safe wins, then the plan with fewer rows, and then the new plan must cost less than the old plan by more than a rounding error.
                     (Compare::Equal, _) if o == Compare::Equal => {
-                        if rows < old.rows {
+                        if safe != old.safe {
+                            remove = safe;
+                            accept = safe;
+                        } else if rows < old.rows {
                             remove = true;
                         } else if rows > old.rows {
                             accept = false;
@@ -127,8 +152,8 @@ impl<T> Paths<T> {
                         }
                     }
                     (Compare::Equal, _) => {
-                        remove = o == Compare::Better1 && rows <= old.rows;
-                        accept = !(o == Compare::Better2 && rows >= old.rows);
+                        remove = o == Compare::Better1 && rows <= old.rows && safe >= old.safe;
+                        accept = !(o == Compare::Better2 && rows >= old.rows && safe <= old.safe);
                     }
                     (Compare::Better1, order) => remove = order != Compare::Better2 && first,
                     (Compare::Better2, order) => accept = !(order != Compare::Better1 && second),
@@ -147,7 +172,8 @@ impl<T> Paths<T> {
                 return;
             }
         }
-        self.list.insert(insert_at, Path { disabled, startup, total, keys, outer, rows, plan });
+        self.list
+            .insert(insert_at, Path { disabled, startup, total, keys, outer, rows, safe, plan });
     }
 
     /// The parameterized plans that the list keeps, in the order of their total cost.

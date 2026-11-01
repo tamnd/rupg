@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Plan a `Parallel Bitmap Heap Scan`, as `create_partial_bitmap_paths` makes it with workers from the pages of the heap that the scan reads, and keep a plan that is parallel safe over a `Gather` that costs about the same, as `add_path` does (#1265).
 - Plan parallel scans of a btree index and `Parallel Append`, as PostgreSQL 19 does: a `Parallel Index Scan` and a `Parallel Index Only Scan` get workers from the pages of the heap and of the index, a table with children of `INHERITS` or a partitioned table gets a `Parallel Append` of the partial scans of its children, and `random_page_cost` sets the cost of a random page read (#1258).
 - Give each process of a parallel scan a `Limit` of one row for `DISTINCT` when a condition makes each key a constant, as `create_partial_distinct_paths` does, so a scan that gives no rows stops in each process (#1253).
 - A commit that is written to the commit log reads the versions of each table that it changed once, not five times, so a commit to a large table holds the heap lock for less time (#1251).
