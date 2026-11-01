@@ -1619,9 +1619,17 @@ fn project(
     let mut eval = Eval::new(params, session, tables, cache, &[]);
     let mut out = Vec::new();
     match groups {
-        Some((order, results, firsts)) => {
+        Some((order, results, firsts, top)) => {
             let tuples: Vec<[usize; 1]> =
                 (0..results.groups).map(|g| [if g < firsts { g } else { scan::NONE }]).collect();
+            if let Some(top) = top {
+                for g in top {
+                    eval.tuple = &tuples[g];
+                    eval.group = Group { aggs: results.group(g, None)?, ..Group::default() };
+                    eval.project(&query.targets, &levels, &mut out, usize::MAX)?;
+                }
+                return Ok((out, true));
+            }
             if let Some(count) = count
                 && levels.is_empty()
                 && query.distinct.is_empty()
@@ -1673,27 +1681,6 @@ fn project(
                 if let (Some(direct), Some(bound)) = (&direct, bound) {
                     // Each group goes into the bounded heap of the sort as it comes, and the row of a group that is not in the heap takes the values of the next group.
                     let keys = sort::Keys::new(&query.sort, &types, session)?;
-                    if let (Some(descending), [key]) = (keys.one_native(), query.sort.as_slice())
-                        && let Some(Some(c)) = direct.get(key.target)
-                        && let Some(counts) = results.counts(*c)
-                    {
-                        // One key on a count: the heap compares the counts as integers, with the same steps as for the rows.
-                        let mut cmp = |a: &(i64, usize), b: &(i64, usize)| {
-                            Ok(if descending { b.0.cmp(&a.0) } else { a.0.cmp(&b.0) })
-                        };
-                        let mut heap = sort::Bounded::new(bound);
-                        for (n, g) in order.into_iter().enumerate() {
-                            crate::interrupt(session, n)?;
-                            heap.push((counts[g], g), &mut cmp)?;
-                        }
-                        for (_, g) in heap.finish(&mut cmp)?.into_iter().skip(offset) {
-                            eval.tuple = &tuples[g];
-                            eval.group =
-                                Group { aggs: results.group(g, None)?, ..Group::default() };
-                            eval.project(&query.targets, &levels, &mut out, usize::MAX)?;
-                        }
-                        return Ok((out, true));
-                    }
                     let mut cmp = |a: &Vec<Value>, b: &Vec<Value>| keys.compare(a, b);
                     let mut heap = sort::Bounded::new(bound);
                     let mut spare: Option<Vec<Value>> = None;
@@ -1831,8 +1818,62 @@ struct Scan<'e, 'q> {
 /// The rows of the groups, the tables of the first row of each group, and true when the rows are in the order of `ORDER BY` with `OFFSET` and `LIMIT` done.
 type Grouped = (Vec<Vec<Value>>, scan::Tables, bool);
 
-/// The order of the groups, the values of the aggregates of each group, and the number of groups.
-type Groups<'q> = (Vec<usize>, Results<'q>, usize);
+/// The order of the groups, the values of the aggregates of each group, the number of groups with a first row, and the groups of the rows that [`count_top`] gives.
+type Groups<'q> = (Vec<usize>, Results<'q>, usize, Option<Vec<usize>>);
+
+/// For `ORDER BY` of one count with `LIMIT`, as the sort of [`project`] gives it: the call of the count, true for a descending order, and the bound of the sort. The query must have no `HAVING`, no `DISTINCT` and no sets in the targets.
+fn top_key(
+    query: &Query,
+    session: &dyn Session,
+    offset: usize,
+    count: Option<usize>,
+) -> Option<(*const Aggref, bool, usize)> {
+    let count = count?;
+    if !crate::set_levels(&query.targets).is_empty()
+        || !query.distinct.is_empty()
+        || query.having.is_some()
+        || !top_safe(query)
+    {
+        return None;
+    }
+    let [key] = query.sort.as_slice() else { return None };
+    let ExprKind::Agg(agg) = &query.targets[key.target].expr.kind else { return None };
+    // `tuplesort_set_bound`: the bound must allow `bound * 2` in an `int`.
+    let bound = offset
+        .checked_add(count)
+        .filter(|b| *b > 0 && *b <= usize::try_from(i32::MAX / 2).unwrap_or(usize::MAX))?;
+    let mut types: Vec<u32> = query.targets.iter().map(|t| t.expr.ty).collect();
+    types.push(oid::INT8);
+    let descending = sort::Keys::new(&query.sort, &types, session).ok()?.one_native()?;
+    Some((std::ptr::from_ref(&**agg), descending, bound))
+}
+
+/// The groups of the rows of `ORDER BY` of one count with `LIMIT`, after `OFFSET`, from [`top_key`]. A bounded heap compares the counts as integers, with the same steps as the sort of the rows. `None` for few groups or for a call that is not a count.
+fn count_top(
+    session: &dyn Session,
+    results: &Results<'_>,
+    order: &[usize],
+    (agg, descending, bound): (*const Aggref, bool, usize),
+    offset: usize,
+) -> Result<Option<Vec<usize>>> {
+    if order.len() <= bound.saturating_mul(4) {
+        return Ok(None);
+    }
+    let Some(counts) =
+        results.calls.iter().position(|c| std::ptr::eq(c.key, agg)).and_then(|c| results.counts(c))
+    else {
+        return Ok(None);
+    };
+    let mut cmp = |a: &(i64, usize), b: &(i64, usize)| {
+        Ok(if descending { b.0.cmp(&a.0) } else { a.0.cmp(&b.0) })
+    };
+    let mut heap = sort::Bounded::new(bound);
+    for (n, &g) in order.iter().enumerate() {
+        crate::interrupt(session, n)?;
+        heap.push((counts[g], g), &mut cmp)?;
+    }
+    Ok(Some(heap.finish(&mut cmp)?.into_iter().skip(offset).map(|(_, g)| g).collect()))
+}
 
 /// A call with the rows of a vector that pass the conditions, which gives false to stop the scan.
 type Each<'a> = dyn FnMut(&mut Exec<'_>, &mut Batch, &[u32]) -> Result<bool> + 'a;
@@ -1945,6 +1986,9 @@ fn grouped(
     let mut map = KeyMap::new(keys.len() + 1, if keys.is_empty() { 0 } else { expected });
     let mut new_rows: Vec<u32> = Vec::new();
     let mut firsts: Vec<Vec<Value>> = Vec::new();
+    // For `ORDER BY` of a count with `LIMIT`, the scan keeps the place of the first row of each group, and reads the values only for the groups of the result.
+    let top = if keys.is_empty() { None } else { top_key(query, scan.exec.session, offset, count) };
+    let mut spots: Vec<[u32; 3]> = Vec::new();
     // The places and the types of the keys of the hash table of the plan. The scan finds the hash of each group from its first row, and keeps no values of the keys.
     let mut hashing = plan_keys(scan.exec.session, query);
     let mut hashes: Vec<u32> = Vec::new();
@@ -2034,15 +2078,20 @@ fn grouped(
             }
             seen += sel.len();
             if !new_rows.is_empty() {
-                let start = firsts.len();
-                firsts.extend(
-                    std::iter::repeat_with(|| Vec::with_capacity(kept_columns.len()))
-                        .take(new_rows.len()),
-                );
-                for &column in kept_columns {
-                    let col = exec.var(batch, column, exec.types[column], &new_rows)?;
-                    for (i, row) in firsts[start..].iter_mut().enumerate() {
-                        row.push(col.value(i, &exec.dicts));
+                if top.is_some() {
+                    let (segment, vector) = (spot(batch.segment), spot(batch.vector));
+                    spots.extend(new_rows.iter().map(|&row| [segment, vector, row]));
+                } else {
+                    let start = firsts.len();
+                    firsts.extend(
+                        std::iter::repeat_with(|| Vec::with_capacity(kept_columns.len()))
+                            .take(new_rows.len()),
+                    );
+                    for &column in kept_columns {
+                        let col = exec.var(batch, column, exec.types[column], &new_rows)?;
+                        for (i, row) in firsts[start..].iter_mut().enumerate() {
+                            row.push(col.value(i, &exec.dicts));
+                        }
                     }
                 }
                 for call in &mut aggs {
@@ -2285,17 +2334,29 @@ fn grouped(
     }
     let results = Results { calls: aggs, groups };
     drop(eval);
+    if let Some(error) = hash_error {
+        return Err(error);
+    }
+    let hashes = hashing.map(|_| hashes);
+    let order = group_order(query, session, &key_values, hashes.as_deref(), groups, trailing)?;
+    let mut chosen = None;
+    if let Some(key) = top {
+        chosen = count_top(session, &results, &order, key, offset)?;
+        // The groups of the result read their first rows, and the other groups read none.
+        let mut wanted: Vec<usize> = match &chosen {
+            Some(chosen) => chosen.clone(),
+            None => (0..spots.len()).collect(),
+        };
+        wanted.sort_unstable();
+        firsts = vec![Vec::new(); spots.len()];
+        read_spots(scan, kept_columns, &spots, &wanted, &mut firsts)?;
+    }
     let first_count = firsts.len();
     let mut kept = vec![false; scan.exec.types.len()];
     for &column in kept_columns {
         kept[column] = true;
     }
     let tables = scan::kept_tables(query, firsts, &kept);
-    if let Some(error) = hash_error {
-        return Err(error);
-    }
-    let hashes = hashing.map(|_| hashes);
-    let order = group_order(query, session, &key_values, hashes.as_deref(), groups, trailing)?;
     // With no sort, the limit of the query takes the first groups, and the groups after them are not evaluated, as `LIMIT` over `HashAggregate` does.
     let needed = match count {
         Some(count) if query.sort.is_empty() && query.distinct.is_empty() => {
@@ -2310,11 +2371,50 @@ fn grouped(
         cache,
         &tables,
         needed,
-        Some((order, results, first_count)),
+        Some((order, results, first_count, chosen)),
         offset,
         count,
     )?;
     Ok(Some((rows, tables, ordered)))
+}
+
+/// A place in the table as a part of a spot of [`read_spots`].
+fn spot(n: usize) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
+}
+
+/// The values of the columns `kept_columns` of the first row of each group of `wanted`, from the segment, the vector and the row of each group in `spots`. The groups of `wanted` are in the order of the scan, so the scan decodes each vector once.
+fn read_spots(
+    scan: &mut Scan<'_, '_>,
+    kept_columns: &[usize],
+    spots: &[[u32; 3]],
+    wanted: &[usize],
+    firsts: &mut [Vec<Value>],
+) -> Result<()> {
+    let exec = &mut *scan.exec;
+    let mut at = 0;
+    while at < wanted.len() {
+        let [segment, vector, _] = spots[wanted[at]];
+        let end =
+            at + wanted[at..].iter().take_while(|&&g| spots[g][..2] == [segment, vector]).count();
+        let (segment, vector) = (segment as usize, vector as usize);
+        let segment_rows = scan.rows.saturating_sub(segment * ROWS).min(ROWS);
+        let mut batch = Batch {
+            segment,
+            vector,
+            rows: (segment_rows - vector * VECTOR).min(VECTOR),
+            decoded: (0..exec.stored.len()).map(|_| None).collect(),
+        };
+        let sel: Vec<u32> = wanted[at..end].iter().map(|&g| spots[g][2]).collect();
+        for &column in kept_columns {
+            let col = exec.var(&mut batch, column, exec.types[column], &sel)?;
+            for (i, &g) in wanted[at..end].iter().enumerate() {
+                firsts[g].push(col.value(i, &exec.dicts));
+            }
+        }
+        at = end;
+    }
+    Ok(())
 }
 
 /// A new group for an aggregate: the states of `groups` groups.
