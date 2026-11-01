@@ -182,7 +182,6 @@ impl Dict {
         }
     }
 
-    /// The bytes of the text of the code `code`, or `None` for a dictionary of values that are not text.
     /// Whether the codes are of text, so that [`Dict::text`] gives their bytes.
     fn is_text(&self) -> bool {
         match self {
@@ -191,6 +190,7 @@ impl Dict {
         }
     }
 
+    /// The bytes of the text of the code `code`, or `None` for a dictionary of values that are not text.
     fn text(&self, code: u32) -> Option<&[u8]> {
         match self {
             Dict::Stored(stored) if stored.kind == Kind::Text => {
@@ -783,7 +783,7 @@ impl<'q> Exec<'q> {
         Ok(None)
     }
 
-    /// `LIKE` and `ILIKE` of a column of codes of the table and a constant pattern, which tests the bytes of each code once with no copy of the text, or `None` for other arguments. A text that is not UTF8 or a pattern with an error gives `None`, and the row engine gives the same result.
+    /// `LIKE` and `ILIKE` of a column of codes of the table and a constant pattern, which tests the bytes of each code once with no copy of the text, or `None` for other arguments. A pattern with an error gives `None`, and the row engine gives the same result.
     fn like(
         &mut self,
         expr: &Expr,
@@ -821,9 +821,8 @@ impl<'q> Exec<'q> {
                 memo.resize(at + 1, 0);
             }
             if memo[at] == 0 {
-                let Some(text) =
-                    self.dicts[*d].text(code).filter(|t| std::str::from_utf8(t).is_ok())
-                else {
+                // The dictionary of a text holds only the bytes of a `String`, so the text is UTF8.
+                let Some(text) = self.dicts[*d].text(code) else {
                     failed = true;
                     break;
                 };
