@@ -292,29 +292,21 @@ struct Frozen {
 }
 
 impl Frozen {
-    /// True when the values of `versions` have the types of the columns. A column of nulls only takes the type of the column it goes on.
-    fn takes(&self, versions: &[&Version]) -> bool {
-        self.columns.iter().enumerate().all(|(at, stored)| {
-            kind_of(versions.iter().map(|version| &version.values[at])).is_some_and(|kind| {
-                stored.kind == kind || versions.iter().all(|version| version.values[at].is_null())
-            })
-        })
-    }
-
-    /// Puts the values of `versions` on the rows of the columns, and checks the new rows of each column with a decode. The new rows go on the open rows of each column with no copy of the column, and the caller gives no more versions than the rows left in the open segment, so that a column that does not keep its values only cuts its open rows to go back. False, with the columns as they were, when a column does not keep the values.
+    /// Puts the values of `versions` on the rows of the columns. The new rows go on the open rows of each column with no copy of the column, and the caller gives no more versions than the rows left in the open segment, so that a column that does not keep its values only cuts its open rows to go back. The open rows take only a value of the type of the column, or a null, and keep it as it is, except a `real`, which they keep as a `double precision`, so only the new rows of a `real` column get a check by a decode. False, with the columns as they were, when a column does not keep the values.
     fn append(&mut self, versions: &[&Version]) -> bool {
         let rows = self.rows;
         for at in 0..self.columns.len() {
             let stored = Arc::make_mut(&mut self.columns[at]);
             let exact =
-                stored.extend(versions.iter().map(|version| version.values.get(at))).is_ok() && {
-                    let mut decoded = Decoded::new(stored);
-                    decoded.pass(rows);
-                    let exact = versions.iter().all(|version| {
-                        decoded.next().is_some_and(|value| same(&version.values[at], &value))
+                stored.extend(versions.iter().map(|version| version.values.get(at))).is_ok()
+                    && (stored.kind != Kind::Float4 || {
+                        let mut decoded = Decoded::new(stored);
+                        decoded.pass(rows);
+                        let exact = versions.iter().all(|version| {
+                            decoded.next().is_some_and(|value| same(&version.values[at], &value))
+                        });
+                        exact && decoded.next().is_none() && !decoded.failed
                     });
-                    exact && decoded.next().is_none() && !decoded.failed
-                };
             if !exact {
                 for column in &mut self.columns[..=at] {
                     // The new rows are open rows, so the cut does not decode.
@@ -924,7 +916,7 @@ impl Table {
         }
         let width = frozen.columns.len();
         let moved: Vec<&Version> = places.iter().map(|&at| &between[at]).collect();
-        if moved.iter().any(|version| version.values.len() != width) || !frozen.takes(&moved) {
+        if moved.iter().any(|version| version.values.len() != width) {
             return false;
         }
         let mut done = 0;
@@ -976,9 +968,6 @@ impl Table {
         }
         if let Some(frozen) = &mut self.frozen {
             let tail: Vec<&Version> = tail.iter().collect();
-            if !frozen.takes(&tail) {
-                return;
-            }
             let mut from = start;
             while from < end {
                 let to = end.min(from + ROWS - frozen.rows % ROWS);
