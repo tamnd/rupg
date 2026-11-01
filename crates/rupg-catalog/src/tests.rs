@@ -701,3 +701,19 @@ fn catalog_comes_back_from_its_bytes() {
     let empty = round(&Catalog::new());
     assert!(round(&cat) > empty);
 }
+
+#[test]
+fn a_change_of_the_relations_drops_the_map_of_names() {
+    let mut cat = Catalog::new();
+    let t0 = cat.create_table(table(PUBLIC, "t0", &[("a", INT4, -1)])).unwrap();
+    assert_eq!(cat.relation_by_name(PUBLIC, "t0").map(|r| r.oid), Some(t0));
+    assert!(cat.relation_by_name(PUBLIC, "t1").is_none());
+    let t1 = cat.create_table(table(PUBLIC, "t1", &[("a", INT4, -1)])).unwrap();
+    assert_eq!(cat.relation_by_name(PUBLIC, "t1").map(|r| r.oid), Some(t1));
+    cat.rename_relation(t0, "t2").unwrap();
+    assert!(cat.relation_by_name(PUBLIC, "t0").is_none());
+    assert_eq!(cat.relation_by_name(PUBLIC, "t2").map(|r| r.oid), Some(t0));
+    let copy = cat.clone();
+    assert_eq!(copy, cat);
+    assert_eq!(copy.relation_by_name(PUBLIC, "t1").map(|r| r.oid), Some(t1));
+}

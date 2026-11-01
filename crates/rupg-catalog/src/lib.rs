@@ -29,6 +29,7 @@ mod opclass;
 mod operator;
 mod owner;
 mod publication;
+mod relations;
 mod sequence;
 mod set_schema;
 mod stats;
@@ -1333,7 +1334,7 @@ pub struct NewForeignKey {
 pub struct Catalog {
     next_oid: u32,
     schemas: BTreeMap<u32, Schema>,
-    relations: BTreeMap<u32, Relation>,
+    relations: relations::Relations,
     types: BTreeMap<u32, Type>,
     defaults: BTreeMap<u32, AttrDefault>,
     constraints: BTreeMap<u32, Constraint>,
@@ -1461,7 +1462,7 @@ impl Catalog {
         Catalog {
             next_oid: FIRST_NORMAL_OID,
             schemas: BTreeMap::new(),
-            relations: BTreeMap::new(),
+            relations: relations::Relations::default(),
             types: BTreeMap::new(),
             defaults: BTreeMap::new(),
             constraints: BTreeMap::new(),
@@ -1628,7 +1629,12 @@ impl Catalog {
 
     /// The relation with the name in the schema.
     pub fn relation_by_name(&self, namespace: u32, name: &str) -> Option<&Relation> {
-        self.relations.values().find(|r| r.namespace == namespace && r.name == name)
+        self.relations.by_name(namespace, name)
+    }
+
+    /// The indexes of the table `table`, in the order of their OIDs.
+    pub fn indexes_of(&self, table: u32) -> impl Iterator<Item = &Relation> {
+        self.relations.indexes_of(table)
     }
 
     /// The row types and array types.

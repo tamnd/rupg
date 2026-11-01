@@ -6,8 +6,8 @@ use std::borrow::Cow;
 use std::cell::{Cell, Ref, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use rupg_analyze::{Env, Params};
@@ -198,6 +198,22 @@ pub(crate) struct Reader<'a> {
 
 /// The zone of a `TimeZone` value, or the value if it is not a zone.
 type ZoneOf = std::result::Result<Rc<Arc<tz::Zone>>, String>;
+
+thread_local! {
+    /// The catalog that last gave its types to the thread. The weak reference keeps the allocation, so an address that is equal to it is this catalog. `Arc::make_mut` moves a catalog that has a weak reference before it changes it, so the catalog at this address did not change.
+    static USED: RefCell<Weak<Catalog>> = const { RefCell::new(Weak::new()) };
+}
+
+/// Gives the types of the catalog to the thread with [`use_types`], if the thread does not have them.
+fn use_catalog_types(catalog: &Arc<Catalog>) {
+    if USED.with_borrow(|used| {
+        std::ptr::eq(used.as_ptr(), Arc::as_ptr(catalog)) && used.strong_count() > 0
+    }) {
+        return;
+    }
+    use_types(catalog);
+    USED.set(Arc::downgrade(catalog));
+}
 
 /// Gives the domains, the row types and the functions in SQL of the catalog to the thread, so that the lookups of the types and the functions by OID and by name find them, as the syscache of PostgreSQL finds the rows of `pg_type` and `pg_proc`.
 fn use_types(catalog: &Catalog) {
@@ -428,9 +444,10 @@ impl<'a> Reader<'a> {
         pid: i32,
         catalog: Arc<Catalog>,
     ) -> Reader<'a> {
-        let name = settings.borrow().get("TimeZone").unwrap_or_else(|| "UTC".to_owned());
+        let name =
+            settings.borrow().get_of(guc::known!("TimeZone")).unwrap_or_else(|| "UTC".to_owned());
         let zone = session_zone(&name);
-        use_types(&catalog);
+        use_catalog_types(&catalog);
         Reader {
             settings,
             user,
@@ -734,11 +751,48 @@ impl<'a> Reader<'a> {
         roles.name(role).map_or_else(|| role.to_string(), str::to_owned)
     }
 
+    /// The schemas of `search_path`, as [`Reader::find_path`] finds them. The thread keeps the last path with what it depends on: the text of `search_path`, the current user, the roles, the catalog, the temporary schema of the session and the owner of the database. Each statement looks the path up, and these seldom change.
+    fn path(&self) -> Rc<Vec<(String, u32)>> {
+        let settings = self.settings();
+        let text = guc::known!("search_path").and_then(|p| settings.text_of(p)).unwrap_or("");
+        let user = self.current_user();
+        let roles = rupg_pgcatalog::roles::current();
+        let number = self.activity.and_then(|(activity, _)| activity.number());
+        let owner = roles.database_owner();
+        let hit = PATH.with_borrow(|last| {
+            let last = last.as_ref()?;
+            let same = last.text == text
+                && last.user == *user
+                && last.number == number
+                && last.owner == owner
+                && std::ptr::eq(last.roles.as_ptr(), Arc::as_ptr(&roles))
+                && last.roles.strong_count() > 0
+                && std::ptr::eq(last.catalog.as_ptr(), Arc::as_ptr(&self.catalog))
+                && last.catalog.strong_count() > 0;
+            same.then(|| Rc::clone(&last.path))
+        });
+        if let Some(path) = hit {
+            return path;
+        }
+        let text = text.to_owned();
+        drop(settings);
+        let path = Rc::new(self.find_path(&text));
+        PATH.set(Some(LastPath {
+            text,
+            user: user.into_owned(),
+            number,
+            owner,
+            roles: Arc::downgrade(&roles),
+            catalog: Arc::downgrade(&self.catalog),
+            path: Rc::clone(&path),
+        }));
+        path
+    }
+
     /// The schemas of `search_path` that exist, in order, without the implicit schemas, as `recomputeNamespacePath` finds them. `$user` names the schema of the user, and `pg_temp` the temporary schema, which do not exist yet.
-    fn path(&self) -> Vec<(String, u32)> {
-        let text = self.settings().get("search_path").unwrap_or_default();
+    fn find_path(&self, text: &str) -> Vec<(String, u32)> {
         let mut path: Vec<(String, u32)> = Vec::new();
-        for name in guc::split_identifiers(&text, ',').unwrap_or_default() {
+        for name in guc::split_identifiers(text, ',').unwrap_or_default() {
             // `recomputeNamespacePath`: a schema that the current user has no `USAGE` on is not in the path. The temporary schema needs no check.
             let (name, check) = match name.as_str() {
                 "$user" => (self.current_user().into_owned(), true),
@@ -849,8 +903,34 @@ fn xact_deadlock(cycle: &[crate::heap::Wait]) -> Error {
 }
 
 /// The zone of a `TimeZone` value that the setting accepted. The setting keeps the canonical name, which `pg_tzset` takes again.
+/// The path that [`Reader::path`] found last on the thread, with what it depends on.
+struct LastPath {
+    text: String,
+    user: String,
+    number: Option<i32>,
+    owner: u32,
+    roles: Weak<rupg_pgcatalog::roles::Roles>,
+    catalog: Weak<Catalog>,
+    path: Rc<Vec<(String, u32)>>,
+}
+
+thread_local! {
+    static PATH: RefCell<Option<LastPath>> = const { RefCell::new(None) };
+}
+
 fn session_zone(text: &str) -> ZoneOf {
-    tz::load(text).map(Rc::new).ok_or_else(|| text.to_owned())
+    thread_local! {
+        /// The zone that the thread last loaded, with its name. Each statement makes a reader with the zone of the session, which seldom changes.
+        static LAST: RefCell<Option<(String, ZoneOf)>> = const { RefCell::new(None) };
+    }
+    LAST.with_borrow_mut(|last| match last {
+        Some((name, zone)) if name == text => zone.clone(),
+        _ => {
+            let zone = tz::load(text).map(Rc::new).ok_or_else(|| text.to_owned());
+            *last = Some((text.to_owned(), zone.clone()));
+            zone
+        }
+    })
 }
 
 /// `DateStyle` in its canonical form, such as `ISO, MDY`.
@@ -878,9 +958,21 @@ impl Reader<'_> {
         if let Some(planned) = self.plans.borrow().get(&address) {
             return planned.clone();
         }
-        let database = database_oid(store, self.database);
-        let planned = crate::connection::planned(self, store.heap(), database, query)
-            .map(|(order, tables)| (order, Rc::new(tables)));
+        // A query with no `FROM`, no groups, no `DISTINCT`, no set operation and no windows, such as `INSERT ... VALUES` of one row, has no joins to order and no hash tables, so the planner does not run for it.
+        let planned = if query.from.is_empty()
+            && !query.grouped
+            && query.group.is_empty()
+            && query.grouping_sets.is_empty()
+            && query.distinct.is_empty()
+            && query.set_op.is_none()
+            && query.windows.is_empty()
+        {
+            Some((None, Rc::default()))
+        } else {
+            let database = database_oid(store, self.database);
+            crate::connection::planned(self, store.heap(), database, query)
+                .map(|(order, tables)| (order, Rc::new(tables)))
+        };
         self.plans.borrow_mut().insert(address, planned.clone());
         planned
     }
@@ -990,11 +1082,13 @@ impl rupg_func::Session for Reader<'_> {
     }
 
     fn date_format(&self) -> DateFormat {
-        self.settings().get("DateStyle").map_or(DateFormat::ISO_MDY, |text| date_format(&text))
+        self.settings()
+            .get_of(guc::known!("DateStyle"))
+            .map_or(DateFormat::ISO_MDY, |text| date_format(&text))
     }
 
     fn interval_style(&self) -> IntervalStyle {
-        match self.settings().get("IntervalStyle").as_deref() {
+        match self.settings().get_of(guc::known!("IntervalStyle")).as_deref() {
             Some("postgres_verbose") => IntervalStyle::PostgresVerbose,
             Some("sql_standard") => IntervalStyle::SqlStandard,
             Some("iso_8601") => IntervalStyle::Iso8601,
@@ -1003,7 +1097,8 @@ impl rupg_func::Session for Reader<'_> {
     }
 
     fn zone(&self) -> Result<Rc<dyn TimeZone>> {
-        let name = self.settings().get("TimeZone").unwrap_or_else(|| "UTC".to_owned());
+        let name =
+            self.settings().get_of(guc::known!("TimeZone")).unwrap_or_else(|| "UTC".to_owned());
         let mut zone = self.zone.borrow_mut();
         if zone.0 != name {
             let made = session_zone(&name);
@@ -1019,18 +1114,21 @@ impl rupg_func::Session for Reader<'_> {
     }
 
     fn extra_float_digits(&self) -> i32 {
-        self.settings().get("extra_float_digits").and_then(|v| v.parse().ok()).unwrap_or(1)
+        self.settings()
+            .get_of(guc::known!("extra_float_digits"))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1)
     }
 
     fn bytea_output(&self) -> ByteaOutput {
-        match self.settings().get("bytea_output").as_deref() {
+        match self.settings().get_of(guc::known!("bytea_output")).as_deref() {
             Some("escape") => ByteaOutput::Escape,
             _ => ByteaOutput::Hex,
         }
     }
 
     fn array_nulls(&self) -> bool {
-        self.settings().get("array_nulls").as_deref() != Some("off")
+        self.settings().get_of(guc::known!("array_nulls")).as_deref() != Some("off")
     }
 
     fn transaction_start(&self) -> i64 {
@@ -1106,7 +1204,7 @@ impl rupg_func::Session for Reader<'_> {
     }
 
     fn schemas(&self) -> Vec<String> {
-        self.path().into_iter().map(|(name, _)| name).collect()
+        self.path().iter().map(|(name, _)| name.clone()).collect()
     }
 
     fn temp_number(&self) -> Option<i32> {
@@ -1205,7 +1303,7 @@ impl rupg_func::Session for Reader<'_> {
 
     fn count_scan(&self, relation: u32) {
         if let Some((activity, _)) = self.activity
-            && self.settings().get("track_counts").as_deref() != Some("off")
+            && self.settings().get_of(guc::known!("track_counts")).as_deref() != Some("off")
         {
             activity.count_scan(relation);
         }
@@ -1650,11 +1748,16 @@ impl Env for Reader<'_> {
     }
 
     fn command_counter_increment(&self, catalog: &Catalog) {
+        if USED.with_borrow(|used| std::ptr::eq(used.as_ptr(), catalog) && used.strong_count() > 0)
+        {
+            return;
+        }
         use_types(catalog);
+        USED.set(Weak::new());
     }
 
     fn search_path(&self) -> Vec<u32> {
-        self.path().into_iter().map(|(_, oid)| oid).collect()
+        self.path().iter().map(|&(_, oid)| oid).collect()
     }
 
     fn namespace(&self, name: &str) -> Option<u32> {
@@ -1724,28 +1827,31 @@ impl Env for Reader<'_> {
     }
 
     fn allow_system_table_mods(&self) -> bool {
-        self.settings().get("allow_system_table_mods").as_deref() == Some("on")
+        self.settings().get_of(guc::known!("allow_system_table_mods")).as_deref() == Some("on")
     }
 
     fn replica(&self) -> bool {
-        self.settings().get("session_replication_role").as_deref() == Some("replica")
+        self.settings().get_of(guc::known!("session_replication_role")).as_deref()
+            == Some("replica")
     }
 
     fn restrict_views(&self) -> bool {
-        let setting = self.settings().get("restrict_nonsystem_relation_kind");
+        let setting = self.settings().get_of(guc::known!("restrict_nonsystem_relation_kind"));
         setting.and_then(|s| guc::restricted_kinds(&s).ok()).is_some_and(|(view, _)| view)
     }
 
     fn check_function_bodies(&self) -> bool {
-        self.settings().get("check_function_bodies").as_deref() != Some("off")
+        self.settings().get_of(guc::known!("check_function_bodies")).as_deref() != Some("off")
     }
 
     fn default_table_access_method(&self) -> String {
-        self.settings().get("default_table_access_method").unwrap_or_else(|| "heap".into())
+        self.settings()
+            .get_of(guc::known!("default_table_access_method"))
+            .unwrap_or_else(|| "heap".into())
     }
 
     fn lo_compat_privileges(&self) -> bool {
-        self.settings().get("lo_compat_privileges").as_deref() == Some("on")
+        self.settings().get_of(guc::known!("lo_compat_privileges")).as_deref() == Some("on")
     }
 
     fn tablespace_oid(&self, name: &str) -> Option<u32> {
@@ -1770,7 +1876,7 @@ impl Env for Reader<'_> {
     }
 
     fn default_tablespace(&self) -> String {
-        self.settings().get("default_tablespace").unwrap_or_default()
+        self.settings().get_of(guc::known!("default_tablespace")).unwrap_or_default()
     }
 
     fn database_tablespace(&self) -> u32 {

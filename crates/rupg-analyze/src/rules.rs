@@ -615,7 +615,14 @@ fn values_to_select(select: &mut SelectStmt, inline: bool) -> Result<()> {
 /// The errors of `RewriteQuery`: a rule that fires itself again, `RETURNING` with a rule `DO INSTEAD`, and `ON CONFLICT` for a table with rules. `0A000` for an action that rupg does not take yet.
 pub fn query_rewrite(stmt: &Node, env: &dyn Env) -> Result<Option<Vec<Product>>> {
     let Some(catalog) = env.catalog() else { return Ok(None) };
-    if !catalog.rules().any(|r| r.event != b'1') || target_of(stmt).is_none() {
+    let Some((_, target)) = target_of(stmt) else { return Ok(None) };
+    // Only a relation with the name of the target can be the target, so a write to a table with no rule that is not `SELECT` does not look up the table here.
+    if !catalog
+        .rules()
+        .filter(|r| r.event != b'1')
+        .filter_map(|r| catalog.relation(r.relation))
+        .any(|relation| target.relname.as_deref() == Some(relation.name.as_str()))
+    {
         return Ok(None);
     }
     let mut events = Vec::new();

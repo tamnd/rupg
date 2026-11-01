@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A simple statement does less work before it runs: the settings have a hash index and a lookup that each call site does once, the search path, the time zone and the types are cached until what they depend on changes, the catalog has a map of the relations by name and of the indexes by table, and the role is not looked up again when no role changed. The median of `select 1` on a loaded test machine goes from 183 us to 109 us (#1274).
 - A commit with `synchronous_commit = off` does not wait for the disk, and a WAL writer thread writes the log each `wal_writer_delay`. The log file grows in chunks of zeros of 1 MB, so a durable commit costs one write of the disk. A commit reads only the versions that its transaction changed, not all the versions of each table (#1273).
 - Plan `GROUP BY` with no aggregate call in two parts, a `Partial HashAggregate` or a `Group` in each process below a `Gather` or a `Gather Merge`, as `create_partial_grouping_paths` does, and give each partial node the cost of the expressions of the keys for each group (#1271).
 - Let a parallel plan read an `InitPlan` and an uncorrelated `SubPlan` with no `Gather`, as `is_parallel_safe` does, put the `One-Time Filter` of a scan in the parallel plan below the `Gather`, and show a scalar subquery after `ANY` in `EXPLAIN` with no cast (#1269).

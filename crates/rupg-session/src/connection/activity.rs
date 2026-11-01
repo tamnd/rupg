@@ -230,7 +230,7 @@ fn count(rows: usize) -> i64 {
 
 /// The value of `application_name`, cut to the bytes that the table keeps.
 fn application_name(settings: &Settings) -> String {
-    let mut name = settings.get("application_name").unwrap_or_default();
+    let mut name = settings.get_of(guc::known!("application_name")).unwrap_or_default();
     clip(&mut name, NAME_BYTES);
     name
 }
@@ -259,7 +259,7 @@ fn clipped(mut ssl: Ssl) -> Ssl {
 
 /// `pgstat_track_activities`.
 fn tracked(settings: &Settings) -> bool {
-    settings.get("track_activities").as_deref() != Some("off")
+    settings.get_of(guc::known!("track_activities")).as_deref() != Some("off")
 }
 
 /// `pgstat_track_activity_query_size - 1`, the most bytes of the text of a statement in the table.
@@ -317,7 +317,7 @@ impl Connection {
         let query_id = match (state, text) {
             (BackendState::Running, Some(text))
                 if matches!(
-                    settings.get("compute_query_id").as_deref(),
+                    settings.get_of(guc::known!("compute_query_id")).as_deref(),
                     Some("on" | "regress")
                 ) =>
             {
@@ -431,7 +431,7 @@ impl Connection {
 
     /// `pgstat_track_counts`.
     pub(super) fn counts_tracked(&self) -> bool {
-        self.settings.borrow().get("track_counts").as_deref() != Some("off")
+        self.settings.borrow().get_of(guc::known!("track_counts")).as_deref() != Some("off")
     }
 
     /// The end of a transaction at a commit or at an abort: the session releases its advisory locks of the transaction level, `AtEOXact_PgStat` drops the snapshots, and `pgstat_report_stat` reports the scans of the transaction. A scan counts also after an abort, as in PostgreSQL.

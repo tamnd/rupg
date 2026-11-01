@@ -363,47 +363,53 @@ impl rupg_opt::Members for Members<'_, '_> {
 
     fn enable(&self) -> Enable {
         let settings = self.reader.settings();
-        let on = |name: &str| settings.get(name).is_none_or(|v| v != "off");
-        let number = |name: &str| match guc::find(name).map(|p| settings.setting(p)) {
+        type Found = Option<&'static guc::Parameter>;
+        let on = |found: Found| {
+            !matches!(found.map(|p| settings.setting(p)), Some(guc::Setting::Bool(false)))
+        };
+        let number = |found: Found| match found.map(|p| settings.setting(p)) {
             Some(guc::Setting::Int(value)) => Some(f64::from(value)),
             Some(guc::Setting::Real(value)) => Some(value),
             _ => None,
         };
-        let count = |name: &str, default: i32| match guc::find(name).map(|p| settings.setting(p)) {
+        let count = |found: Found, default: i32| match found.map(|p| settings.setting(p)) {
             Some(guc::Setting::Int(value)) => value,
             _ => default,
         };
-        let work_mem = number("work_mem").unwrap_or(4096.0) * 1024.0;
+        let work_mem = number(guc::known!("work_mem")).unwrap_or(4096.0) * 1024.0;
         Enable {
-            seqscan: on("enable_seqscan"),
-            indexscan: on("enable_indexscan"),
-            indexonlyscan: on("enable_indexonlyscan"),
-            bitmapscan: on("enable_bitmapscan"),
-            tidscan: on("enable_tidscan"),
-            sort: on("enable_sort"),
-            incremental_sort: on("enable_incremental_sort"),
-            hashagg: on("enable_hashagg"),
-            material: on("enable_material"),
-            memoize: on("enable_memoize"),
-            presorted_aggregate: on("enable_presorted_aggregate"),
-            group_by_reordering: on("enable_group_by_reordering"),
-            distinct_reordering: on("enable_distinct_reordering"),
-            nestloop: on("enable_nestloop"),
-            mergejoin: on("enable_mergejoin"),
-            hashjoin: on("enable_hashjoin"),
-            self_join_elimination: on("enable_self_join_elimination"),
+            seqscan: on(guc::known!("enable_seqscan")),
+            indexscan: on(guc::known!("enable_indexscan")),
+            indexonlyscan: on(guc::known!("enable_indexonlyscan")),
+            bitmapscan: on(guc::known!("enable_bitmapscan")),
+            tidscan: on(guc::known!("enable_tidscan")),
+            sort: on(guc::known!("enable_sort")),
+            incremental_sort: on(guc::known!("enable_incremental_sort")),
+            hashagg: on(guc::known!("enable_hashagg")),
+            material: on(guc::known!("enable_material")),
+            memoize: on(guc::known!("enable_memoize")),
+            presorted_aggregate: on(guc::known!("enable_presorted_aggregate")),
+            group_by_reordering: on(guc::known!("enable_group_by_reordering")),
+            distinct_reordering: on(guc::known!("enable_distinct_reordering")),
+            nestloop: on(guc::known!("enable_nestloop")),
+            mergejoin: on(guc::known!("enable_mergejoin")),
+            hashjoin: on(guc::known!("enable_hashjoin")),
+            self_join_elimination: on(guc::known!("enable_self_join_elimination")),
             work_mem,
-            hash_mem: work_mem * number("hash_mem_multiplier").unwrap_or(2.0),
-            max_parallel_workers_per_gather: count("max_parallel_workers_per_gather", 2),
-            parallel_setup_cost: number("parallel_setup_cost").unwrap_or(1000.0),
-            parallel_tuple_cost: number("parallel_tuple_cost").unwrap_or(0.1),
-            min_parallel_table_scan_size: count("min_parallel_table_scan_size", 1024),
-            min_parallel_index_scan_size: count("min_parallel_index_scan_size", 64),
-            parallel_leader_participation: on("parallel_leader_participation"),
-            random_page_cost: number("random_page_cost").unwrap_or(4.0),
-            parallel_append: on("enable_parallel_append"),
-            parallel_hash: on("enable_parallel_hash"),
-            gathermerge: on("enable_gathermerge"),
+            hash_mem: work_mem * number(guc::known!("hash_mem_multiplier")).unwrap_or(2.0),
+            max_parallel_workers_per_gather: count(
+                guc::known!("max_parallel_workers_per_gather"),
+                2,
+            ),
+            parallel_setup_cost: number(guc::known!("parallel_setup_cost")).unwrap_or(1000.0),
+            parallel_tuple_cost: number(guc::known!("parallel_tuple_cost")).unwrap_or(0.1),
+            min_parallel_table_scan_size: count(guc::known!("min_parallel_table_scan_size"), 1024),
+            min_parallel_index_scan_size: count(guc::known!("min_parallel_index_scan_size"), 64),
+            parallel_leader_participation: on(guc::known!("parallel_leader_participation")),
+            random_page_cost: number(guc::known!("random_page_cost")).unwrap_or(4.0),
+            parallel_append: on(guc::known!("enable_parallel_append")),
+            parallel_hash: on(guc::known!("enable_parallel_hash")),
+            gathermerge: on(guc::known!("enable_gathermerge")),
         }
     }
 }
@@ -783,7 +789,8 @@ impl Connection {
         let Some(plan) = replanned.as_ref().or(statement.plan.as_ref()) else {
             return Err(not_yet("EXPLAIN EXECUTE of a utility statement"));
         };
-        let custom = statement.count_plan(reader.settings().get("plan_cache_mode").as_deref());
+        let custom = statement
+            .count_plan(reader.settings().get_of(guc::known!("plan_cache_mode")).as_deref());
         // A generic plan keeps the parameters, and the run gets their values.
         let folded = custom.then_some(params.as_slice());
         let text =
@@ -898,7 +905,8 @@ impl Connection {
             timing: parsed.timing,
             execution_time,
             buffers: parsed.buffers,
-            io_timing: reader.settings().get("track_io_timing").as_deref() == Some("on"),
+            io_timing: reader.settings().get_of(guc::known!("track_io_timing")).as_deref()
+                == Some("on"),
             io: parsed.io.then(|| stream_capacity(reader)),
             serialize,
             memory,
@@ -907,7 +915,8 @@ impl Connection {
                 settings.into_iter().map(|(name, value)| (name.to_string(), value)).collect()
             }),
             query_id: (parsed.verbose
-                && reader.settings().get("compute_query_id").as_deref() == Some("on"))
+                && reader.settings().get_of(guc::known!("compute_query_id")).as_deref()
+                    == Some("on"))
             .then_some(parsed.query_id),
         };
         rupg_func::explain(&tree, &options, actuals.as_ref(), reader)
