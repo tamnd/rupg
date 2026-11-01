@@ -2,7 +2,10 @@
 //!
 //! The plan of a query in parallel mode can give the rows of a relation by a scan that each process of a group reads a part of, and a `Gather` above it collects the rows of the group. The session runs the plan in one process, so the plan shows the parallel nodes that PostgreSQL makes, and the rows are the same.
 
-use rupg_analyze::{Expr, ExprKind, Query};
+use std::cell::RefCell;
+use std::collections::BTreeSet;
+
+use rupg_analyze::{Expr, ExprKind, Query, SubLink, SubLinkKind};
 use rupg_pgcatalog::builtin;
 use rupg_plan::{Cost, Kind, Node};
 
@@ -88,13 +91,45 @@ fn expr_hazard(expr: &Expr) -> Hazard {
     hazard
 }
 
-/// `is_parallel_safe`: true when a worker can compute the expression. A function that is not safe, a window function, a cast to a domain, a subquery and a column of a query outside, which is a parameter of the executor, are not safe.
+thread_local! {
+    /// The addresses of the subqueries of the plan that the planner makes now whose `SubPlan` is parallel safe, as `subplan->parallel_safe`.
+    static SAFE_SUBPLANS: RefCell<BTreeSet<usize>> = const { RefCell::new(BTreeSet::new()) };
+}
+
+/// `build_subplan`: the `SubPlan` of the subquery that reads no column of the query is parallel safe when its plan is, which is when the query is safe and the plan has no `Gather` and no `Gather Merge`.
+pub(crate) fn mark_subplan(link: &SubLink, plan: &Node<'_>) {
+    if query_hazard(&link.query) == Hazard::Safe && !gathers(plan) {
+        SAFE_SUBPLANS.with(|s| s.borrow_mut().insert(std::ptr::from_ref(link) as usize));
+    }
+}
+
+/// Puts `set` in place of the subqueries of [`mark_subplan`] and gives the set that was there, for a plan in a plan.
+pub(crate) fn swap_subplans(set: BTreeSet<usize>) -> BTreeSet<usize> {
+    SAFE_SUBPLANS.with(|s| s.replace(set))
+}
+
+/// True when the plan has a `Gather` or a `Gather Merge`, which a worker cannot run.
+fn gathers(node: &Node<'_>) -> bool {
+    matches!(node.kind, Kind::Gather { .. } | Kind::GatherMerge { .. })
+        || node.children.iter().any(gathers)
+}
+
+/// `is_parallel_safe`: true when a worker can compute the expression. A function that is not safe, a window function, a cast to a domain and a column of a query outside, which is a parameter of the executor, are not safe. A subquery that reads no column of the query and is not `ANY` or `ALL` is an `InitPlan`, whose value the leader gives to the workers, so it is safe. A `SubPlan` with no parameters is safe when its plan is, as [`mark_subplan`] finds, and a copy of the subquery that [`mark_subplan`] did not see is not safe. A subquery that reads a column of the query has parameters in its plan, so it is not safe.
 pub(crate) fn safe(expr: &Expr) -> bool {
     if node_functions(expr) != Hazard::Safe {
         return false;
     }
     match &expr.kind {
-        ExprKind::Window(_) | ExprKind::CoerceToDomain(..) | ExprKind::SubLink(_) => return false,
+        ExprKind::SubLink(link) if crate::exprs::correlated(&link.query, 1) => return false,
+        ExprKind::SubLink(link)
+            if matches!(link.kind, SubLinkKind::Any | SubLinkKind::All)
+                && !SAFE_SUBPLANS.with(|s| {
+                    s.borrow().contains(&(std::ptr::from_ref(link.as_ref()) as usize))
+                }) =>
+        {
+            return false;
+        }
+        ExprKind::Window(_) | ExprKind::CoerceToDomain(..) => return false,
         ExprKind::Var(var) if var.levels_up > 0 => return false,
         ExprKind::Agg(agg) if agg.levels_up > 0 => return false,
         ExprKind::PlaceHolder(p) if p.levels_up > 0 => return false,

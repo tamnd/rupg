@@ -390,7 +390,9 @@ pub fn plan<'q>(query: &'q Query, members: &'q dyn Members) -> Plan<'q> {
     let saved_match = PATTERN_MATCH.with(|c| c.replace(members.pattern_match()));
     let saved_widths = WIDTHS.with(|w| w.take());
     let saved_places = MEMBER_PLACES.with(|m| m.take());
+    let saved_subplans = parallel::swap_subplans(BTreeSet::new());
     let plan = plan_with(query, members);
+    parallel::swap_subplans(saved_subplans);
     MEMBER_PLACES.with(|m| m.replace(saved_places));
     WIDTHS.with(|w| w.replace(saved_widths));
     PATTERN_MATCH.with(|c| c.set(saved_match));
@@ -1189,6 +1191,9 @@ impl<'q> Builder<'q> {
             plan.output = output;
         }
         self.labels.push(Label { link, name: name.clone(), init, hashed, alternative: false });
+        if !init {
+            parallel::mark_subplan(link, &plan);
+        }
         if init {
             level.init_cost += init_cost(link, &plan);
             level.init.push(SubPlan { name: format!("InitPlan {name}"), plan });

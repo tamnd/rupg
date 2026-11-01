@@ -1,0 +1,124 @@
+> create table sa (unique1 int, two int, four int, hundred int, thousand int) with (parallel_workers = 4)
+CREATE TABLE
+> insert into sa select i, i % 2, i % 4, i % 100, i % 1000 from generate_series(0, 9999) i
+INSERT 0 10000
+> create index sa_hundred on sa (hundred)
+CREATE INDEX
+> create table sb (unique1 int, hundred int, thousand int)
+CREATE TABLE
+> insert into sb select i, i % 100, i % 1000 from generate_series(0, 9999) i
+INSERT 0 10000
+> vacuum analyze sa
+VACUUM
+> vacuum analyze sb
+VACUUM
+> set parallel_setup_cost = 0
+SET
+> set parallel_tuple_cost = 0
+SET
+> set min_parallel_table_scan_size = 0
+SET
+> set max_parallel_workers_per_gather = 4
+SET
+> alter table sb set (parallel_workers = 2)
+ALTER TABLE
+> explain (costs off) select count(*) from sa where (two, four) not in (select hundred, thousand from sb where thousand > 100)
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   ->  Seq Scan on sa
+row         Filter: (NOT (ANY ((two = (hashed SubPlan any_1).col1) AND (four = (hashed SubPlan any_1).col2))))
+row         SubPlan any_1
+row           ->  Gather
+row                 Workers Planned: 2
+row                 ->  Parallel Seq Scan on sb
+row                       Filter: (thousand > 100)
+EXPLAIN
+> select count(*) from sa where (two, four) not in (select hundred, thousand from sb where thousand > 100)
+fields count:20:8:-1
+row 10000
+SELECT 1
+> explain (costs off) select count(*) from sa where sa.unique1 = (select max(sb.unique1) from sb)
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   InitPlan expr_1
+row     ->  Finalize Aggregate
+row           ->  Gather
+row                 Workers Planned: 2
+row                 ->  Partial Aggregate
+row                       ->  Parallel Seq Scan on sb
+row   ->  Gather
+row         Workers Planned: 4
+row         ->  Parallel Seq Scan on sa
+row               Filter: (unique1 = (InitPlan expr_1).col1)
+EXPLAIN
+> select count(*) from sa where sa.unique1 = (select max(sb.unique1) from sb)
+fields count:20:8:-1
+row 1
+SELECT 1
+> explain (costs off) select count((unique1)) from sa where hundred = any ((select array_agg(i) from generate_series(1, 100, 15) i)::int[])
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate
+row   InitPlan expr_1
+row     ->  Aggregate
+row           ->  Function Scan on generate_series i
+row   ->  Gather
+row         Workers Planned: 4
+row         ->  Partial Aggregate
+row               ->  Parallel Bitmap Heap Scan on sa
+row                     Recheck Cond: (hundred = ANY ((InitPlan expr_1).col1))
+row                     ->  Bitmap Index Scan on sa_hundred
+row                           Index Cond: (hundred = ANY ((InitPlan expr_1).col1))
+EXPLAIN
+> select count((unique1)) from sa where hundred = any ((select array_agg(i) from generate_series(1, 100, 15) i)::int[])
+fields count:20:8:-1
+row 700
+SELECT 1
+> explain (costs off) select count(*) from sa where sa.four = (select max(sb.hundred) from sb where sb.unique1 = sa.unique1)
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   ->  Seq Scan on sa
+row         Filter: (four = (SubPlan expr_1))
+row         SubPlan expr_1
+row           ->  Aggregate
+row                 ->  Seq Scan on sb
+row                       Filter: (unique1 = sa.unique1)
+EXPLAIN
+> explain (costs off) select count(*) from sa where exists (select 1 from sb where sb.thousand = 5) and two = 1
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate
+row   InitPlan exists_1
+row     ->  Gather
+row           Workers Planned: 2
+row           ->  Parallel Seq Scan on sb
+row                 Filter: (thousand = 5)
+row   ->  Gather
+row         Workers Planned: 4
+row         ->  Partial Aggregate
+row               ->  Result
+row                     One-Time Filter: (InitPlan exists_1).col1
+row                     ->  Parallel Seq Scan on sa
+row                           Filter: (two = 1)
+EXPLAIN
+> explain (costs off) select count(*) from sa where unique1 > (select random() * 0)
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate
+row   InitPlan expr_1
+row     ->  Result
+row   ->  Gather
+row         Workers Planned: 4
+row         ->  Partial Aggregate
+row               ->  Parallel Seq Scan on sa
+row                     Filter: ((unique1)::double precision > (InitPlan expr_1).col1)
+EXPLAIN
+> explain (costs off) select count(*) from sa where unique1 < all (select unique1 from sb where hundred = 3)
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   ->  Seq Scan on sa
+row         Filter: (ALL (unique1 < (SubPlan all_1).col1))
+row         SubPlan all_1
+row           ->  Materialize
+row                 ->  Gather
+row                       Workers Planned: 2
+row                       ->  Parallel Seq Scan on sb
+row                             Filter: (hundred = 3)
+EXPLAIN

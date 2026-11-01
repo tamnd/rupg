@@ -816,10 +816,16 @@ impl<'q> Builder<'q> {
         let (rels, counted) = match tree {
             Tree::Base { relation, quals } => {
                 let rels = self.scan(level, relation, quals, once, &mut stats);
-                if let Some(partial) = self.partial.take()
-                    && gating.is_empty()
+                // `set_rel_consider_parallel`: the conditions with no column are conditions of the table, so the partial plan has them in its own `Result`.
+                if let Some((partial, workers)) = self.partial.take()
+                    && gating.iter().all(|i| parallel::safe(&i.expr))
                 {
-                    self.partials.insert(level.scope, partial);
+                    let partial = if gating.is_empty() {
+                        partial
+                    } else {
+                        gate(partial, &gating, level.scope)
+                    };
+                    self.partials.insert(level.scope, (partial, workers));
                 }
                 (rels, true)
             }
@@ -836,14 +842,11 @@ impl<'q> Builder<'q> {
                         node.cost.startup += once;
                         node.cost.total = node.cost.startup + run;
                     }
-                    // `create_gating_plan`: the `Result` has the costs of the node below.
-                    let cost = node.cost;
-                    node = Node::new(
-                        Kind::Result { replaces: None, one_time: gating.clone() },
-                        level.scope,
-                        vec![node],
-                    );
-                    node.cost = cost;
+                    node = if gating.iter().all(|i| parallel::safe(&i.expr)) {
+                        gate(node, &gating, level.scope)
+                    } else {
+                        gate_here(node, &gating, level.scope)
+                    };
                 }
                 (node, rel.order)
             })
@@ -2000,6 +2003,48 @@ fn semi_info<'q>(on: &[&'q Expr], inner: &BTreeSet<usize>) -> Option<Semi<'q>> {
         return None;
     }
     Some(semi)
+}
+
+/// `create_gating_plan` in `create_scan_plan`: the `Result` with the conditions with no column `gating` as its `One-Time Filter` above the scan. A `Gather`, a `Gather Merge` and the `Sort` below a `Gather Merge` are above the scan, so the `Result` goes below them, and each process tests the conditions.
+fn gate<'q>(mut node: Node<'q>, gating: &[Item<'q>], scope: usize) -> Node<'q> {
+    let merge = matches!(node.kind, Kind::GatherMerge { .. });
+    if !matches!(node.kind, Kind::Gather { .. } | Kind::GatherMerge { .. }) {
+        return gate_here(node, gating, scope);
+    }
+    if let [child] = node.children.as_mut_slice() {
+        let below = std::mem::replace(
+            child,
+            Node::new(Kind::Result { replaces: None, one_time: Vec::new() }, scope, Vec::new()),
+        );
+        *child = match below.kind {
+            Kind::Sort(_) if merge => {
+                let mut sort = below;
+                if let [scan] = sort.children.as_mut_slice() {
+                    let inner = std::mem::replace(
+                        scan,
+                        Node::new(
+                            Kind::Result { replaces: None, one_time: Vec::new() },
+                            scope,
+                            Vec::new(),
+                        ),
+                    );
+                    *scan = gate_here(inner, gating, scope);
+                }
+                sort
+            }
+            _ => gate_here(below, gating, scope),
+        };
+    }
+    node
+}
+
+/// `create_gating_plan`: the `Result` with the conditions `gating` as its `One-Time Filter` above the node. It has the costs of the node.
+fn gate_here<'q>(node: Node<'q>, gating: &[Item<'q>], scope: usize) -> Node<'q> {
+    let cost = node.cost;
+    let mut node =
+        Node::new(Kind::Result { replaces: None, one_time: gating.to_vec() }, scope, vec![node]);
+    node.cost = cost;
+    node
 }
 
 /// The `Result` of a query with no `FROM`, with the conditions of `WHERE` as its `One-Time Filter`. A condition that is never true does not make the relation dummy, so the `Result` has the cost and the row of `create_gating_plan`.

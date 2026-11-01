@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Let a parallel plan read an `InitPlan` and an uncorrelated `SubPlan` with no `Gather`, as `is_parallel_safe` does, put the `One-Time Filter` of a scan in the parallel plan below the `Gather`, and show a scalar subquery after `ANY` in `EXPLAIN` with no cast (#1269).
 - Plan a `Parallel Bitmap Heap Scan`, as `create_partial_bitmap_paths` makes it with workers from the pages of the heap that the scan reads, and keep a plan that is parallel safe over a `Gather` that costs about the same, as `add_path` does (#1265).
 - Plan parallel scans of a btree index and `Parallel Append`, as PostgreSQL 19 does: a `Parallel Index Scan` and a `Parallel Index Only Scan` get workers from the pages of the heap and of the index, a table with children of `INHERITS` or a partitioned table gets a `Parallel Append` of the partial scans of its children, and `random_page_cost` sets the cost of a random page read (#1258).
 - Give each process of a parallel scan a `Limit` of one row for `DISTINCT` when a condition makes each key a constant, as `create_partial_distinct_paths` does, so a scan that gives no rows stops in each process (#1253).
