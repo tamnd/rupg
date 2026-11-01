@@ -2015,7 +2015,7 @@ fn grouped(
     if keys.is_empty() {
         firsts.reserve(1);
         for call in &mut aggs {
-            grow(call, 1, params, session, cache, &empty)?;
+            grow(call, 1, 0, params, session, cache, &empty)?;
         }
         for base in &mut bases {
             base.states.resize(1, (0, 0));
@@ -2103,10 +2103,14 @@ fn grouped(
                         }
                     }
                 }
+                let room = map.room();
                 for call in &mut aggs {
-                    grow(call, groups, params, session, cache, &empty)?;
+                    grow(call, groups, room, params, session, cache, &empty)?;
                 }
                 for base in &mut bases {
+                    if base.states.capacity() < groups {
+                        base.states.reserve_exact(groups + room - base.states.len());
+                    }
                     base.states.resize(groups, (0, 0));
                 }
             }
@@ -2426,19 +2430,35 @@ fn read_spots(
     Ok(())
 }
 
-/// A new group for an aggregate: the states of `groups` groups.
+/// A new group for an aggregate: the states of `groups` groups, with room for `room` more when a vector of states grows.
 fn grow(
     call: &mut Call<'_>,
     groups: usize,
+    room: usize,
     params: &[Value],
     session: &dyn Session,
     cache: &Cache,
     empty: &scan::Tables,
 ) -> Result<()> {
+    // A vector that is full gets room for the groups that the map has room for, so it does not grow many times.
+    fn more<T>(s: &mut Vec<T>, groups: usize, room: usize) {
+        if s.capacity() < groups {
+            s.reserve_exact(groups + room - s.len());
+        }
+    }
     match &mut call.states {
-        States::Count(s) => s.resize(groups, 0),
-        States::Sum(s) => s.resize(groups, (0, 0)),
-        States::Extreme(s) => s.resize(groups, None),
+        States::Count(s) => {
+            more(s, groups, room);
+            s.resize(groups, 0);
+        }
+        States::Sum(s) => {
+            more(s, groups, room);
+            s.resize(groups, (0, 0));
+        }
+        States::Extreme(s) => {
+            more(s, groups, room);
+            s.resize(groups, None);
+        }
         States::Distinct(s) => s.resize_with(groups, FxSet::default),
         States::Shift | States::Done(_) => {}
         States::Row(s) => {
