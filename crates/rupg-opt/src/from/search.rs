@@ -10,11 +10,12 @@ use super::classes::{Found, Joined};
 use super::index::{self, Param};
 use super::paths::{Paths, costs};
 use super::{
-    Base, Candidate, Part, Qual, Rel, Special, Stats, choose, finish, join_rels, join_rows,
+    Base, Candidate, Method, Part, Qual, Rel, Special, Stats, choose, finish, join_rels, join_rows,
     lateral_rels, semi_rels, semi_selectivity, semifactors, unique_rels,
 };
 use super::{inherit, tid};
-use crate::{Level, cost, exprs};
+use crate::{Level, cost, exprs, parallel};
+use rupg_plan::{Kind, Node};
 
 /// `geqo_threshold`: with this many items or more, PostgreSQL finds the order of the joins with the genetic optimizer. The planner then joins the items in their order.
 const GEQO_THRESHOLD: usize = 12;
@@ -34,7 +35,14 @@ struct Set<'q> {
     lateral: BTreeSet<usize>,
     /// The parameterized scans of an item that is one table, as `cheapest_parameterized_paths`.
     params: Vec<Param<'q>>,
+    /// `consider_parallel`: a worker of a parallel plan can make the rows of the set.
+    safe: bool,
+    /// The cheapest partial path of the set with its workers, as `add_partial_path` keeps it.
+    partial: Partial<'q>,
 }
+
+/// The cheapest partial path of a set with its workers.
+pub(super) type Partial<'q> = Option<(Rel<'q>, i32)>;
 
 /// What a join of two sets does.
 #[derive(Clone, Copy, Debug)]
@@ -81,16 +89,18 @@ struct Problem<'a, 'q> {
 
 /// The plans of the joins of the items that `add_path` keeps, with the plan with the lowest total cost first. Each item has its plans in the same order. `pool` has the conditions of the inner joins and the semi joins of the items, each with the relations that it needs, and `specials` has the semi joins and the anti joins.
 ///
+/// `parallel` has `consider_parallel` of each item, with its cheapest partial path. The partial path of the join of all the items comes back with the plans.
+///
 /// `reduce_unique_semijoins`: a semi join whose inner side is one table that the conditions with the outer relations of the join make unique is an inner join, and its inner side joins in any order.
 pub(super) fn search<'q>(
     level: &Level<'q>,
-    items: Vec<Vec<Rel<'q>>>,
+    (items, parallel): (Vec<Vec<Rel<'q>>>, Vec<Option<Partial<'q>>>),
     pool: &[Qual<'q>],
     mut specials: Vec<Special<'q>>,
     found: &Found<'q>,
     bases: &[Option<&Base<'q>>],
     stats: &Stats,
-) -> Vec<Rel<'q>> {
+) -> (Vec<Rel<'q>>, Partial<'q>) {
     let n = items.len();
     let classes = &found.classes;
     let item = |rels: &BTreeSet<usize>| items.iter().find(|i| i[0].rels == *rels);
@@ -110,7 +120,7 @@ pub(super) fn search<'q>(
         semifactors(&sp.left, &inner[0], &quals, stats).is_none()
     });
     if n >= GEQO_THRESHOLD {
-        return in_order(level, items, pool, &specials, classes, stats);
+        return (in_order(level, items, pool, &specials, classes, stats), None);
     }
     let uniques = specials
         .iter()
@@ -174,6 +184,7 @@ pub(super) fn search<'q>(
         params.push(found);
     }
     let mut params = params.into_iter();
+    let mut parallel = parallel.into_iter();
     let mut problem = Problem {
         level,
         pool,
@@ -204,7 +215,14 @@ pub(super) fn search<'q>(
             rows: rel.node.cost.rows,
             lateral,
             params: params.next().unwrap_or_default(),
+            safe: false,
+            partial: None,
         });
+        let set = problem.sets.last_mut().expect("the set of the item");
+        if let Some(Some(partial)) = parallel.next() {
+            set.safe = set.lateral.is_empty();
+            set.partial = partial.filter(|_| set.safe);
+        }
     }
     // With a special join, a number of items can have no set, as the inner side of a join must be whole.
     for k in 2..=n {
@@ -215,9 +233,10 @@ pub(super) fn search<'q>(
         problem.set_cheapest(k);
     }
     let Some(&best) = problem.levels[n].first() else {
-        return in_order(level, items, pool, &specials, classes, stats);
+        return (in_order(level, items, pool, &specials, classes, stats), None);
     };
-    problem.sets.swap_remove(best).plans
+    let set = problem.sets.swap_remove(best);
+    (set.plans, set.partial)
 }
 
 /// The outer side of a semi join, its inner side, and the groups of the values of the inner side.
@@ -407,6 +426,19 @@ impl<'q> Problem<'_, 'q> {
                 plans.push(rel);
             }
             assert!(!plans.is_empty(), "each join of two sets has a nested loop");
+            // `generate_useful_gather_paths`: a `Gather` of the cheapest partial path, with the rows of the set.
+            if let Some((partial, workers)) = &self.sets[s].partial {
+                let enable = crate::enable();
+                let node =
+                    parallel::gather(&enable, partial.node.clone(), *workers, self.sets[s].rows);
+                let first = &plans[0].node;
+                if (node.disabled_nodes(), node.cost.total)
+                    < (first.disabled_nodes(), first.cost.total)
+                {
+                    let rels = partial.rels.clone();
+                    plans.insert(0, Rel { node, rels, order: Vec::new() });
+                }
+            }
             self.sets[s].plans = plans;
         }
     }
@@ -628,6 +660,8 @@ impl<'q> Problem<'_, 'q> {
         }
         let mut made = Vec::new();
         let mut rows = None;
+        let mut safe = None;
+        let mut jobs = Vec::new();
         for how in hows {
             let (quals, filter) = self.conditions(outer, inner, how);
             let (l, r) = (&self.sets[outer].plans, &self.sets[inner].plans);
@@ -654,6 +688,10 @@ impl<'q> Problem<'_, 'q> {
                     cost::clamp_rows(outer_rows * fraction)
                 }
             });
+            safe.get_or_insert_with(|| {
+                quals.iter().chain(&filter).all(|q| parallel::safe(&q.expr))
+            });
+            jobs.push((kind, part, how));
             let params = (&self.sets[outer].params[..], &self.sets[inner].params[..]);
             let found =
                 choose(self.level, kind, l, inners, &quals, &filter, self.stats, part, params);
@@ -668,6 +706,9 @@ impl<'q> Problem<'_, 'q> {
                 self.levels[items.count_ones() as usize].push(at);
                 let paths = Paths::new(self.stats.startup);
                 let params = Vec::new();
+                // `consider_parallel` of a join: both sets have it, the join has no lateral reference, and a worker can test the conditions of the join.
+                let safe = self.sets[a].safe && self.sets[b].safe && safe == Some(true);
+                let safe = safe && lateral.is_empty();
                 self.sets.push(Set {
                     items,
                     rels,
@@ -676,6 +717,8 @@ impl<'q> Problem<'_, 'q> {
                     rows,
                     lateral,
                     params,
+                    safe,
+                    partial: None,
                 });
                 at
             }
@@ -687,5 +730,115 @@ impl<'q> Problem<'_, 'q> {
                 (outer, inner, candidate, how),
             );
         }
+        if self.sets[at].safe && !a_reads_b && !b_reads_a {
+            for (kind, part, how) in jobs {
+                self.partial_join(at, (outer, inner), kind, part, how);
+                if matches!(how, How::Plain) {
+                    self.partial_join(at, (inner, outer), kind, part, how);
+                }
+            }
+        }
     }
+
+    /// `consider_parallel_nestloop`, `consider_parallel_mergejoin` and the partial paths of `hash_inner_and_outer`: the joins of the cheapest partial path of the outer set with each plan of the inner set that a worker can run, and the `Parallel Hash` join of it with the cheapest partial path of the inner set. The set keeps the join with the fewest disabled nodes and the lowest total cost, as `add_partial_path`, with the rows of the set for each process.
+    fn partial_join(
+        &mut self,
+        at: usize,
+        (outer, inner): (usize, usize),
+        kind: JoinKind,
+        part: Part,
+        how: How,
+    ) {
+        let Some((partial, workers)) = self.sets[outer].partial.clone() else { return };
+        let kinds =
+            matches!(kind, JoinKind::Inner | JoinKind::Left | JoinKind::Semi | JoinKind::Anti);
+        if matches!(how, How::Unique(_)) || !kinds {
+            return;
+        }
+        let enable = crate::enable();
+        let (quals, filter) = self.conditions(outer, inner, how);
+        let rows = cost::clamp_rows(self.sets[at].rows / parallel::divisor(&enable, workers));
+        // `get_cheapest_parallel_safe_total_inner`: a merge join and a hash join take the cheapest inner path that a worker can run. A nested loop takes the cheapest total path only, and only when a worker can run it, as `consider_parallel_nestloop` reads `cheapest_parameterized_paths`.
+        let plans = &self.sets[inner].plans;
+        let total = plans.first().is_some_and(|r| !gathered(&r.node));
+        let inners: Vec<Rel<'q>> = plans
+            .iter()
+            .filter(|r| !gathered(&r.node))
+            .min_by(|a, b| {
+                let key = |r: &Rel<'q>| (r.node.disabled_nodes(), r.node.cost.total);
+                key(a).partial_cmp(&key(b)).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .cloned()
+            .into_iter()
+            .collect();
+        let outers = std::slice::from_ref(&partial);
+        let params = &self.sets[inner].params[..];
+        let mut found = Vec::new();
+        if !inners.is_empty() {
+            let made = choose(
+                self.level,
+                kind,
+                outers,
+                &inners,
+                &quals,
+                &filter,
+                self.stats,
+                part,
+                (&[], params),
+            );
+            let nested = |c: &Candidate<'_>| c.method == Method::Nested && c.param.is_none();
+            for (c, _) in made.into_iter().filter(|(c, _)| !c.swapped && (total || !nested(c))) {
+                let side = inners[c.paths.1].clone();
+                found.push((c, side, false));
+            }
+        }
+        // `Parallel Hash`: the workers make one hash table of the partial path of the inner set together.
+        if let Some((side, _)) = self.sets[inner].partial.clone().filter(|_| enable.parallel_hash) {
+            let one = std::slice::from_ref(&side);
+            let made = choose(
+                self.level,
+                kind,
+                outers,
+                one,
+                &quals,
+                &filter,
+                self.stats,
+                part,
+                (&[], &[]),
+            );
+            for (c, _) in made {
+                if !c.swapped && c.method == Method::Hash {
+                    found.push((c, side.clone(), true));
+                }
+            }
+        }
+        for (c, mut side, shared) in found {
+            if let Some((old, _)) = &self.sets[at].partial
+                && (old.node.disabled_nodes(), old.node.cost.total) <= (c.disabled, c.total)
+            {
+                continue;
+            }
+            let (mut quals, mut filter) = (quals.clone(), filter.clone());
+            if let Some(i) = c.param {
+                let param = &self.sets[inner].params[i];
+                side = param.rel.clone();
+                let enforced = |q: &Qual<'q>| param.enforced.iter().any(|e| e.expr.same(&q.expr));
+                quals.retain(|q| !enforced(q));
+                filter.retain(|q| !enforced(q));
+            }
+            let mut rel = finish(self.level, &c, partial.clone(), side, &quals, &filter, rows);
+            rel.node.cost.width = self.stats.width(&rel.rels);
+            if shared {
+                rel.node.parallel = true;
+                rel.node.children[1].parallel = true;
+            }
+            self.sets[at].partial = Some((rel, workers));
+        }
+    }
+}
+
+/// True when the plan has a `Gather` or a `Gather Merge`, which a worker cannot run.
+fn gathered(node: &Node<'_>) -> bool {
+    matches!(node.kind, Kind::Gather { .. } | Kind::GatherMerge { .. })
+        || node.children.iter().any(gathered)
 }

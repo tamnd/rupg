@@ -9152,6 +9152,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/explain_parallel_group.test")));
     }
 
+    /// `EXPLAIN` of parallel joins, as `consider_parallel_nestloop`, `consider_parallel_mergejoin` and `hash_inner_and_outer` make them: a `Parallel Hash Join` whose workers build one hash table together, a semi join and an anti join, a nested loop whose inner side is a `Materialize` of a table that has no workers, and a nested loop with a parameterized index scan. A partial aggregate reads the partial join. A lateral subquery is not parallel safe, so its join stays above the `Gather`. A `Gather Merge` takes the place of a `Gather` of the groups when they cost the same in the fuzz factor of `add_path`. `connection/explain_parallel_join.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn explain_parallel_join() {
+        big_stack(|| script(include_str!("connection/explain_parallel_join.test")));
+    }
+
     /// `EXPLAIN` of the conditions that an equivalence class with a constant gives: a condition of each member with the constant in place of the `=` of a join, the nullable side of a left join, a scan with no rows for two constants that are not equal, and the partitions that the new conditions prune. `connection/equivalence_const.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn equivalence_const() {

@@ -982,13 +982,31 @@ impl<'q> Builder<'q> {
             &[Mode::Hashed, Mode::SortHashed, Mode::Sorted, Mode::GatherSorted][..]
         };
         // `add_path` of the grouped relation: a mode stays when no other mode costs less with rows in the same order or a better order.
-        let mut kept = Paths::new(false);
+        let mut made = Vec::new();
         for &mode in modes {
             let mut order = Vec::new();
             if let Some(node) = partial_aggregate(level, partial.clone(), workers, mode, &mut order)
             {
-                kept.add(costs(&node), order, mode);
+                made.push((mode, node, order));
             }
+        }
+        // `add_path` of the partially grouped relation: a `Gather Merge` takes the place of the `Gather` of the groups when the `Gather` does not cost less by the fuzz factor, as the rows of the `Gather Merge` are in order. The `Gather` of the groups is then not there to sort.
+        let gather_of = |mode: Mode| {
+            made.iter().find(|(m, ..)| *m == mode).map(|(_, node, _)| node.children[0].cost)
+        };
+        if let Some(g) = gather_of(Mode::Hashed) {
+            let better = |m: Cost| {
+                let total_equal = g.total * 1.01 >= m.total && m.total * 1.01 >= g.total;
+                g.total * 1.01 < m.total || total_equal && g.startup * 1.01 < m.startup
+            };
+            let merges = [Mode::SortHashed, Mode::Sorted];
+            if merges.into_iter().filter_map(gather_of).any(|m| !better(m)) {
+                made.retain(|(m, ..)| *m != Mode::GatherSorted);
+            }
+        }
+        let mut kept = Paths::new(false);
+        for (mode, node, order) in made {
+            kept.add(costs(&node), order, mode);
         }
         kept.kept()
             .into_iter()

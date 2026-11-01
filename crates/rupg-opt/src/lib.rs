@@ -662,6 +662,8 @@ struct Builder<'q> {
     partial: Option<(Node<'q>, i32)>,
     /// The partial path of the only relation of `FROM` of each scope, with its workers, which `create_partial_grouping_paths` reads.
     partials: BTreeMap<usize, (Node<'q>, i32)>,
+    /// The base relations that a parallel plan can scan, by scope and place, as `set_rel_consider_parallel` finds them.
+    safe: BTreeSet<(usize, usize)>,
 }
 
 /// An order of the rows of a query as the places of its columns, each with the direction and the place of the nulls.
