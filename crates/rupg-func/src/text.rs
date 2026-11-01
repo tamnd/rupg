@@ -386,6 +386,23 @@ fn first_len(t: &[u8], utf8: bool) -> usize {
     if utf8 { char_len(t[0]).min(t.len()) } else { 1 }
 }
 
+/// The place of the first byte `b` in `t`. The scan tests 16 bytes at a time, which the compiler can do in one vector instruction.
+fn find_byte(t: &[u8], b: u8) -> Option<usize> {
+    let (chunks, rest) = t.as_chunks::<16>();
+    let mut at = 0;
+    for chunk in chunks {
+        let mut mask = 0_u32;
+        for (j, &c) in chunk.iter().enumerate() {
+            mask |= u32::from(c == b) << j;
+        }
+        if mask != 0 {
+            return Some(at + mask.trailing_zeros() as usize);
+        }
+        at += 16;
+    }
+    rest.iter().position(|&c| c == b).map(|i| at + i)
+}
+
 /// The result of the rest `p` of a pattern after `%` for the text `t`, when `p` is a literal with no `%` after it or with one `%` at the end. The literal is either at the end of the text or anywhere in it, and no later start of the match can give another result, so the result is `True` or `Abort`. A pattern of another form gives `None`.
 fn literal_tail(t: &[u8], p: &[u8]) -> Option<Like> {
     let end = p.iter().position(|&c| matches!(c, b'%' | b'_' | b'\\')).unwrap_or(p.len());
@@ -396,7 +413,7 @@ fn literal_tail(t: &[u8], p: &[u8]) -> Option<Like> {
         [b'%'] => {
             let mut at = 0;
             loop {
-                let Some(i) = t[at..].iter().position(|&c| c == first) else { break false };
+                let Some(i) = find_byte(&t[at..], first) else { break false };
                 if t[at + i..].starts_with(literal) {
                     break true;
                 }
@@ -1056,4 +1073,28 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "nameconcatoid" => nameconcatoid,
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finds_a_byte_as_a_scan_of_each_byte() {
+        for len in 0..50 {
+            for at in 0..=len {
+                let mut t: Vec<u8> = (0..len).map(|i| b'a' + (i % 7) as u8).collect();
+                if at < len {
+                    t[at] = b'G';
+                    for later in [at + 3, at + 20] {
+                        if later < len {
+                            t[later] = b'G';
+                        }
+                    }
+                }
+                let want = t.iter().position(|&c| c == b'G');
+                assert_eq!(find_byte(&t, b'G'), want, "{len} {at}");
+            }
+        }
+    }
 }
