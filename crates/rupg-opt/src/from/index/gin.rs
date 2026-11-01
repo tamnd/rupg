@@ -130,14 +130,14 @@ pub(super) fn gin_cost(
     };
     entry_fetched = cached(entry_fetched, entry_pages);
     data_fetched = cached(data_fetched, data_pages);
-    startup += (entry_fetched + data_fetched) * cost::RANDOM_PAGE;
+    startup += (entry_fetched + data_fetched) * cost::random_page();
     // Each entry has the same items, and an item pointer takes 3 bytes.
     data_fetched = (data_pages * counts.exact / entries).ceil();
     data_fetched = data_fetched.max((selectivity * (rows / f64::from(8192 / 3))).ceil());
     startup += page_cpu * search;
     total += data_fetched * scans * page_cpu;
     data_fetched = cached(data_fetched, data_pages);
-    total += startup + data_fetched * cost::RANDOM_PAGE;
+    total += startup + data_fetched * cost::random_page();
     let others = clauses.iter().flat_map(Clause::other);
     let qual_arg: f64 = others.map(|o| stats.qual_costs([o])).map(|(s, p)| s + p).sum();
     let qual_op = cost::CPU_OPERATOR * clauses.len() as f64;

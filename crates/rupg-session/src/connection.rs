@@ -8961,6 +8961,18 @@ mod tests {
         big_stack(|| script(include_str!("connection/explain_partial_distinct.test")));
     }
 
+    /// `EXPLAIN` of parallel scans of an index, as `create_index_path` makes them with `parallel_workers`: a `Parallel Index Scan` and a `Parallel Index Only Scan` below a `Gather`, the scan of an index in the order of `ORDER BY` below a `Gather Merge`, and the costs with `random_page_cost` at 2, 4 and 1.5. The number of workers comes from the pages of the heap and of the index, as `compute_parallel_worker`. `connection/explain_parallel_index.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn explain_parallel_index() {
+        big_stack(|| script(include_str!("connection/explain_parallel_index.test")));
+    }
+
+    /// `EXPLAIN` of parallel scans of a table with children of `INHERITS` and of a partitioned table, as `add_paths_to_append_rel` makes them: a `Parallel Append` of the partial scans of the children, a `Parallel Append` with the scans of the children with `parallel_workers` at 0, and an `Append` of the partial scans with `enable_parallel_append` off. A `Parallel Append` runs the children that cost more first. The script has the plans with and with no costs, with a filter, with `ORDER BY` below a `Gather Merge`, and three results. `connection/explain_parallel_append.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn explain_parallel_append() {
+        big_stack(|| script(include_str!("connection/explain_parallel_append.test")));
+    }
+
     /// `EXPLAIN` of the conditions that an equivalence class with a constant gives: a condition of each member with the constant in place of the `=` of a join, the nullable side of a left join, a scan with no rows for two constants that are not equal, and the partitions that the new conditions prune. `connection/equivalence_const.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn equivalence_const() {

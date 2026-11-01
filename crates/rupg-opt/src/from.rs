@@ -1024,8 +1024,21 @@ impl<'q> Builder<'q> {
                             }
                         }
                         let both = (base.as_slice(), quals.as_slice());
-                        let (rels, members) =
-                            inherit::scan(level, r, both, members, self.members, stats);
+                        let parallel = self.parallel
+                            && self.members.and_then(|m| m.parallel(relation.oid)).is_some()
+                            && base.iter().all(|q| parallel::safe(&q.expr));
+                        let hooks = self.members;
+                        let (mut rels, members, partials) =
+                            inherit::scan(level, r, both, members, hooks, parallel, stats);
+                        let whole = rels.first().map_or(0.0, |rel| rel.node.cost.rows);
+                        let gathered = self.gather_paths(stats, r, &partials, whole);
+                        if !gathered.is_empty() {
+                            let mut paths = Paths::new(stats.startup);
+                            for rel in rels.into_iter().chain(gathered) {
+                                paths.add(costs(&rel.node), rel.order.clone(), rel);
+                            }
+                            rels = paths.kept();
+                        }
                         if !members.is_empty() {
                             let (tuples, rows) = stats.rows.get(&r).copied().unwrap_or_default();
                             let indexes = Vec::new();
@@ -1095,7 +1108,7 @@ impl<'q> Builder<'q> {
                             let system = builtin::proc_by_oid(sample.handler)
                                 .is_some_and(|p| p.name == "system");
                             let run = if system {
-                                cost::clamp_rows(pages * fraction) * cost::RANDOM_PAGE
+                                cost::clamp_rows(pages * fraction) * cost::random_page()
                             } else {
                                 pages * cost::SEQ_PAGE
                             };
@@ -1170,48 +1183,25 @@ impl<'q> Builder<'q> {
             return vec![seq];
         }
         let (pages, _) = cost::table_size(relation, size);
-        // `create_plain_partial_paths`: a parallel sequential scan, with the costs of `cost_seqscan` for the share of the rows of one process, and a `Gather` of its rows, as `generate_gather_paths`.
+        // `create_plain_partial_paths`: a parallel sequential scan, with the costs of `cost_seqscan` for the share of the rows of one process.
         let enable = crate::enable();
         let option = self.members.and_then(|m| m.parallel(relation.oid));
-        let gathered = match option {
-            Some(option) if self.parallel && base.iter().all(|q| parallel::safe(&q.expr)) => {
-                let workers = parallel::workers(&enable, pages, option);
-                (workers > 0).then(|| {
-                    let divisor = parallel::divisor(&enable, workers);
-                    let mut node = seq.node.clone();
-                    node.parallel = true;
-                    let cpu_run = (tuples * per_row + targets.1 * rows) / divisor;
-                    node.cost.startup = startup + targets.0;
-                    node.cost.total = node.cost.startup + cpu_run + run;
-                    node.cost.rows = cost::clamp_rows(rows / divisor);
-                    self.partial = Some((node.clone(), workers));
-                    let mut rels = Vec::new();
-                    // `generate_useful_gather_paths`: a `Gather Merge` of the rows of each process in the order of the first keys of `query_pathkeys` that the scan can sort by.
-                    let keys = useful_gather_keys(stats, r);
-                    if !keys.is_empty() {
-                        let order: Vec<OrderKey> =
-                            keys.iter().map(|k| stats.order_key(&k.0, k.1, k.2)).collect();
-                        let sort_keys = keys
-                            .into_iter()
-                            .map(|(e, desc, nulls_first)| SortKey {
-                                item: Item { expr: Cow::Owned(e), below: true },
-                                desc,
-                                using: None,
-                                nulls_first,
-                                collation: 0,
-                            })
-                            .collect();
-                        let sorted = sort(node.clone(), sort_keys, None);
-                        let node = parallel::gather_merge(&enable, sorted, workers, rows);
-                        rels.push(Rel { node, rels: seq.rels.clone(), order });
-                    }
-                    let node = parallel::gather(&enable, node, workers, rows);
-                    rels.insert(0, Rel { node, rels: seq.rels.clone(), order: Vec::new() });
-                    rels
-                })
+        let parallel =
+            option.filter(|_| self.parallel && base.iter().all(|q| parallel::safe(&q.expr)));
+        let mut partials = Vec::new();
+        if let Some(option) = parallel {
+            let workers = parallel::workers(&enable, pages, option);
+            if workers > 0 {
+                let divisor = parallel::divisor(&enable, workers);
+                let mut node = seq.node.clone();
+                node.parallel = true;
+                let cpu_run = (tuples * per_row + targets.1 * rows) / divisor;
+                node.cost.startup = startup + targets.0;
+                node.cost.total = node.cost.startup + cpu_run + run;
+                node.cost.rows = cost::clamp_rows(rows / divisor);
+                partials.push((Rel { node, rels: seq.rels.clone(), order: Vec::new() }, workers));
             }
-            _ => None,
-        };
+        }
         let quals = base.clone();
         let outer = BTreeSet::new();
         let table = index::Table { r, pages, tuples, rows, quals, eq: &eq, outer, loops: 1.0 };
@@ -1232,7 +1222,14 @@ impl<'q> Builder<'q> {
         if current {
             return tids;
         }
-        if indexes.is_empty() && tids.is_empty() && gathered.is_none() {
+        let (scans, index_partials) =
+            index::partial_paths(level, &table, &indexes, stats, parallel);
+        for (mut rel, workers) in index_partials {
+            add_targets(&mut rel.node);
+            partials.push((rel, workers));
+        }
+        let gathered = self.gather_paths(stats, r, &partials, seq.node.cost.rows);
+        if scans.is_empty() && tids.is_empty() && gathered.is_empty() {
             return vec![seq];
         }
         let mut paths = Paths::new(stats.startup);
@@ -1240,14 +1237,60 @@ impl<'q> Builder<'q> {
             paths.add(costs(&rel.node), Vec::new(), rel);
         }
         paths.add(costs(&seq.node), Vec::new(), seq);
-        for mut rel in index::paths(level, &table, &indexes, stats) {
+        for mut rel in scans {
             add_targets(&mut rel.node);
             paths.add(costs(&rel.node), rel.order.clone(), rel);
         }
-        for rel in gathered.into_iter().flatten() {
+        for rel in gathered {
             paths.add(costs(&rel.node), rel.order.clone(), rel);
         }
         paths.kept()
+    }
+
+    /// `generate_gather_paths` and `generate_useful_gather_paths` for the partial paths of the base relation `r`: a `Gather` of the cheapest partial path, a `Gather Merge` of each partial path that has an order, and a `Gather Merge` of the cheapest partial path in the order of the first keys of `query_pathkeys` that the scan can sort by, when it does not have the order. Each of them has the `rows` rows of the relation, as `generate_gather_paths` does not override the estimate of a base relation. The cheapest partial path is the first path with the fewest disabled nodes and the least total cost, as `add_partial_path` keeps them, and the paths above the relation use it.
+    fn gather_paths(
+        &mut self,
+        stats: &Stats,
+        r: usize,
+        partials: &[(Rel<'q>, i32)],
+        rows: f64,
+    ) -> Vec<Rel<'q>> {
+        let cheapest = partials.iter().min_by(|(a, _), (b, _)| cheaper(&a.node, &b.node));
+        let Some((cheapest, workers)) = cheapest else {
+            return Vec::new();
+        };
+        let enable = crate::enable();
+        self.partial = Some((cheapest.node.clone(), *workers));
+        let node = parallel::gather(&enable, cheapest.node.clone(), *workers, rows);
+        let mut out = vec![Rel { node, rels: cheapest.rels.clone(), order: Vec::new() }];
+        for (rel, workers) in partials.iter().filter(|(rel, _)| !rel.order.is_empty()) {
+            let node = parallel::gather_merge(&enable, rel.node.clone(), *workers, rows);
+            out.push(Rel { node, rels: rel.rels.clone(), order: rel.order.clone() });
+        }
+        let keys = useful_gather_keys(stats, r);
+        let sorted = keys.len() <= cheapest.order.len()
+            && keys
+                .iter()
+                .zip(&cheapest.order)
+                .all(|((e, desc, nulls_first), o)| o.sorts(e, *desc, *nulls_first));
+        if !keys.is_empty() && !sorted {
+            let order: Vec<OrderKey> =
+                keys.iter().map(|k| stats.order_key(&k.0, k.1, k.2)).collect();
+            let sort_keys = keys
+                .into_iter()
+                .map(|(e, desc, nulls_first)| SortKey {
+                    item: Item { expr: Cow::Owned(e), below: true },
+                    desc,
+                    using: None,
+                    nulls_first,
+                    collation: 0,
+                })
+                .collect();
+            let sorted = sort(cheapest.node.clone(), sort_keys, None);
+            let node = parallel::gather_merge(&enable, sorted, *workers, rows);
+            out.insert(1, Rel { node, rels: cheapest.rels.clone(), order });
+        }
+        out
     }
 }
 
@@ -2746,6 +2789,11 @@ fn useful_gather_keys(stats: &Stats, r: usize) -> Vec<(Expr, bool, bool)> {
         }
     }
     out
+}
+
+/// `compare_path_costs` of the total costs of two plans: the plan with fewer disabled nodes comes first, and then the plan that costs less in total.
+fn cheaper(a: &Node<'_>, b: &Node<'_>) -> Ordering {
+    a.disabled_nodes().cmp(&b.disabled_nodes()).then(a.cost.total.total_cmp(&b.cost.total))
 }
 
 /// A `Sort` of a node on keys, as `cost_sort`.

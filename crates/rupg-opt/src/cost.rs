@@ -37,8 +37,10 @@ const RANGE_INEQ_SEL: f64 = 0.005;
 pub(crate) const NUM_DISTINCT: f64 = 200.0;
 /// `disable_cost`: the cost that a plan gets when the planner should use it only when it has no other plan.
 pub(crate) const DISABLE: f64 = 1.0e10;
-/// `random_page_cost`.
-pub(crate) const RANDOM_PAGE: f64 = 4.0;
+/// `random_page_cost`: the cost to read a page that is not the next page of the last page that the scan read.
+pub(crate) fn random_page() -> f64 {
+    crate::enable().random_page_cost
+}
 /// `BLCKSZ`.
 const BLOCK: f64 = 8192.0;
 /// `MAXALIGN(SizeofHeapTupleHeader)`.
@@ -1540,7 +1542,7 @@ pub(crate) fn hashagg_spill(groups: f64, entry: f64, rows: f64, width: i32) -> (
     let depth = (batches.ln() / partitions.max(2.0).ln()).ceil();
     let pages = byte_size(rows, width) / BLOCK * depth * 2.0;
     let cpu = depth * rows * 2.0 * CPU_TUPLE;
-    (pages * RANDOM_PAGE + cpu, pages * RANDOM_PAGE + pages * SEQ_PAGE + cpu)
+    (pages * random_page() + cpu, pages * random_page() + pages * SEQ_PAGE + cpu)
 }
 
 /// `cost_sort`: the costs of a sort of `rows` rows of a width that has the input costs `input`, with the number of rows of `LIMIT` when it has one.
@@ -1593,7 +1595,7 @@ fn tuplesort(rows: f64, width: i32, bound: Option<f64>) -> (f64, f64) {
         let log_runs = if runs > order { (runs.ln() / order.ln()).ceil() } else { 1.0 };
         // Each pass reads and writes each page, and a quarter of the reads are random.
         let accesses = 2.0 * pages * log_runs;
-        comparison * tuples * log2(tuples) + accesses * (SEQ_PAGE * 0.75 + RANDOM_PAGE * 0.25)
+        comparison * tuples * log2(tuples) + accesses * (SEQ_PAGE * 0.75 + random_page() * 0.25)
     } else if tuples > 2.0 * output || input_bytes > memory {
         comparison * tuples * log2(2.0 * output)
     } else {

@@ -105,23 +105,43 @@ pub(crate) fn safe(expr: &Expr) -> bool {
 
 /// `compute_parallel_worker` for the heap of a base relation with `pages` pages: the `parallel_workers` option of the table when it has one, or else one worker, and one more each time that the table has three times the pages of the last threshold, from `min_parallel_table_scan_size`. A table with fewer pages than `min_parallel_table_scan_size` has no worker.
 pub(crate) fn workers(enable: &Enable, pages: f64, option: Option<i32>) -> i32 {
+    scan_workers(enable, Some(pages), None, option)
+}
+
+/// `compute_parallel_worker` for a scan that reads `heap` pages of a table and `index` pages of an index: the `parallel_workers` option of the table when it has one, or else the fewer of the workers of the heap pages, from `min_parallel_table_scan_size`, and of the index pages, from `min_parallel_index_scan_size`. A scan that reads fewer pages than one of the two sizes has no worker.
+pub(crate) fn scan_workers(
+    enable: &Enable,
+    heap: Option<f64>,
+    index: Option<f64>,
+    option: Option<i32>,
+) -> i32 {
     let workers = match option {
         Some(n) => n,
         None => {
-            let min = enable.min_parallel_table_scan_size;
-            if pages < f64::from(min) {
+            let (table_min, index_min) =
+                (enable.min_parallel_table_scan_size, enable.min_parallel_index_scan_size);
+            if heap.is_some_and(|p| p < f64::from(table_min))
+                || index.is_some_and(|p| p < f64::from(index_min))
+            {
                 return 0;
             }
-            let mut workers = 1;
-            let mut threshold = min.max(1);
-            while pages >= f64::from(threshold) * 3.0 {
-                workers += 1;
-                threshold *= 3;
-                if threshold > i32::MAX / 3 {
-                    break;
+            let count = |pages: f64, min: i32| {
+                let mut workers = 1;
+                let mut threshold = min.max(1);
+                while pages >= f64::from(threshold) * 3.0 {
+                    workers += 1;
+                    threshold *= 3;
+                    if threshold > i32::MAX / 3 {
+                        break;
+                    }
                 }
+                workers
+            };
+            match (heap.map(|p| count(p, table_min)), index.map(|p| count(p, index_min))) {
+                (Some(h), Some(i)) => h.min(i),
+                (Some(n), None) | (None, Some(n)) => n,
+                (None, None) => 0,
             }
-            workers
         }
     };
     workers.min(enable.max_parallel_workers_per_gather)

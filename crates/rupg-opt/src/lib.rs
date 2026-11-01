@@ -151,6 +151,8 @@ pub struct Enable {
     pub min_parallel_index_scan_size: i32,
     /// `parallel_leader_participation`: the leader reads rows of the parallel plan too.
     pub parallel_leader_participation: bool,
+    /// `random_page_cost`: the cost to read a page out of the order of the pages.
+    pub random_page_cost: f64,
     pub parallel_append: bool,
     pub parallel_hash: bool,
     pub gathermerge: bool,
@@ -184,6 +186,7 @@ impl Default for Enable {
             min_parallel_table_scan_size: 1024,
             min_parallel_index_scan_size: 64,
             parallel_leader_participation: true,
+            random_page_cost: 4.0,
             parallel_append: true,
             parallel_hash: true,
             gathermerge: true,

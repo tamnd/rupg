@@ -400,6 +400,7 @@ impl rupg_opt::Members for Members<'_, '_> {
             min_parallel_table_scan_size: count("min_parallel_table_scan_size", 1024),
             min_parallel_index_scan_size: count("min_parallel_index_scan_size", 64),
             parallel_leader_participation: on("parallel_leader_participation"),
+            random_page_cost: number("random_page_cost").unwrap_or(4.0),
             parallel_append: on("enable_parallel_append"),
             parallel_hash: on("enable_parallel_hash"),
             gathermerge: on("enable_gathermerge"),

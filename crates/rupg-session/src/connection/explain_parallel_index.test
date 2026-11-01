@@ -1,0 +1,115 @@
+> create table pk (unique1 int, hundred int, thousand int, four int, ten int, stringu1 text) with (parallel_workers = 4)
+CREATE TABLE
+> insert into pk select i, i % 100, i % 1000, i % 4, i % 10, 'x' || (i % 50) from generate_series(0, 9999) i
+INSERT 0 10000
+> create index pk_hundred on pk (hundred)
+CREATE INDEX
+> create index pk_thous on pk (thousand, unique1)
+CREATE INDEX
+> create unique index pk_unique1 on pk (unique1)
+CREATE INDEX
+> vacuum analyze pk
+VACUUM
+> set parallel_setup_cost = 0
+SET
+> set parallel_tuple_cost = 0
+SET
+> set min_parallel_table_scan_size = 0
+SET
+> set max_parallel_workers_per_gather = 4
+SET
+> set enable_seqscan to off
+SET
+> set enable_bitmapscan to off
+SET
+> set random_page_cost = 2
+SET
+> explain (costs off) select count((unique1)) from pk where hundred > 1
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate
+row   ->  Gather
+row         Workers Planned: 4
+row         ->  Partial Aggregate
+row               ->  Parallel Index Scan using pk_hundred on pk
+row                     Index Cond: (hundred > 1)
+EXPLAIN
+> select count((unique1)) from pk where hundred > 1
+fields count:20:8:-1
+row 9800
+SELECT 1
+> explain (costs off) select count(*) from pk where thousand > 95
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate
+row   ->  Gather
+row         Workers Planned: 4
+row         ->  Partial Aggregate
+row               ->  Parallel Index Only Scan using pk_thous on pk
+row                     Index Cond: (thousand > 95)
+EXPLAIN
+> select count(*) from pk where thousand > 95
+fields count:20:8:-1
+row 9040
+SELECT 1
+> explain (costs off) select unique1 from pk where hundred > 1 order by hundred
+fields QUERY PLAN:25:-1:-1
+row Index Scan using pk_hundred on pk
+row   Index Cond: (hundred > 1)
+EXPLAIN
+> explain (costs off) select unique1 from pk where unique1 > 9000 order by unique1 desc
+fields QUERY PLAN:25:-1:-1
+row Index Only Scan Backward using pk_unique1 on pk
+row   Index Cond: (unique1 > 9000)
+EXPLAIN
+> explain select count((unique1)) from pk where hundred > 1
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate  (cost=252.40..252.41 rows=1 width=8)
+row   ->  Gather  (cost=252.38..252.39 rows=4 width=8)
+row         Workers Planned: 4
+row         ->  Partial Aggregate  (cost=252.38..252.39 rows=1 width=8)
+row               ->  Parallel Index Scan using pk_hundred on pk  (cost=0.29..246.26 rows=2450 width=4)
+row                     Index Cond: (hundred > 1)
+EXPLAIN
+> explain select count(*) from pk where thousand > 95
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate  (cost=147.50..147.51 rows=1 width=8)
+row   ->  Gather  (cost=147.48..147.49 rows=4 width=8)
+row         Workers Planned: 4
+row         ->  Partial Aggregate  (cost=147.48..147.49 rows=1 width=8)
+row               ->  Parallel Index Only Scan using pk_thous on pk  (cost=0.29..141.88 rows=2240 width=0)
+row                     Index Cond: (thousand > 95)
+EXPLAIN
+> reset enable_seqscan
+RESET
+> reset enable_bitmapscan
+RESET
+> explain select count(*) from pk where hundred = 7
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate  (cost=3.37..3.38 rows=1 width=8)
+row   ->  Gather  (cost=3.35..3.36 rows=4 width=8)
+row         Workers Planned: 4
+row         ->  Partial Aggregate  (cost=3.35..3.36 rows=1 width=8)
+row               ->  Parallel Index Only Scan using pk_hundred on pk  (cost=0.29..3.29 rows=25 width=0)
+row                     Index Cond: (hundred = 7)
+EXPLAIN
+> reset random_page_cost
+RESET
+> explain select * from pk where unique1 < 100
+fields QUERY PLAN:25:-1:-1
+row Gather  (cost=0.29..9.29 rows=100 width=23)
+row   Workers Planned: 4
+row   ->  Parallel Index Scan using pk_unique1 on pk  (cost=0.29..9.29 rows=25 width=23)
+row         Index Cond: (unique1 < 100)
+EXPLAIN
+> set random_page_cost = 1.5
+SET
+> explain select * from pk where unique1 < 100
+fields QUERY PLAN:25:-1:-1
+row Gather  (cost=0.29..4.29 rows=100 width=23)
+row   Workers Planned: 4
+row   ->  Parallel Index Scan using pk_unique1 on pk  (cost=0.29..4.29 rows=25 width=23)
+row         Index Cond: (unique1 < 100)
+EXPLAIN
+> show random_page_cost
+fields random_page_cost:25:-1:-1
+row 1.5
+SHOW
