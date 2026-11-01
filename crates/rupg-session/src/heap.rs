@@ -66,6 +66,9 @@ const INITDB_NEXT_XID: u32 = 662;
 /// The fewest versions of a table that [`Heap::columns`] makes columns for. A smaller table reads faster by rows than the columns take to build.
 const COLUMN_ROWS: usize = 65_536;
 
+/// The number of versions that [`Frozen::append`] gives to each column at one time. The values of this many versions of a wide table fit in the cache of a core.
+const APPEND_TILE: usize = 64;
+
 /// The last pages of a table whose versions keep their values in a load, as most new versions go into them.
 const LOAD_PAGES: u32 = 16;
 
@@ -293,27 +296,34 @@ struct Frozen {
 
 impl Frozen {
     /// Puts the values of `versions` on the rows of the columns. The new rows go on the open rows of each column with no copy of the column, and the caller gives no more versions than the rows left in the open segment, so that a column that does not keep its values only cuts its open rows to go back. The open rows take only a value of the type of the column, or a null, and keep it as it is, except a `real`, which they keep as a `double precision`, so only the new rows of a `real` column get a check by a decode. False, with the columns as they were, when a column does not keep the values.
+    ///
+    /// The values of each version are in one allocation. The columns take the versions in groups of [`APPEND_TILE`], so that the values of a group stay in the cache while each column reads its value of each version.
     fn append(&mut self, versions: &[&Version]) -> bool {
         let rows = self.rows;
-        for at in 0..self.columns.len() {
-            let stored = Arc::make_mut(&mut self.columns[at]);
-            let exact =
-                stored.extend(versions.iter().map(|version| version.values.get(at))).is_ok()
-                    && (stored.kind != Kind::Float4 || {
-                        let mut decoded = Decoded::new(stored);
-                        decoded.pass(rows);
-                        let exact = versions.iter().all(|version| {
-                            decoded.next().is_some_and(|value| same(&version.values[at], &value))
-                        });
-                        exact && decoded.next().is_none() && !decoded.failed
+        let mut exact = versions.chunks(APPEND_TILE).all(|tile| {
+            self.columns.iter_mut().enumerate().all(|(at, column)| {
+                Arc::make_mut(column)
+                    .extend(tile.iter().map(|version| version.values.get(at)))
+                    .is_ok()
+            })
+        });
+        exact = exact
+            && self.columns.iter().enumerate().all(|(at, stored)| {
+                stored.kind != Kind::Float4 || {
+                    let mut decoded = Decoded::new(stored);
+                    decoded.pass(rows);
+                    let exact = versions.iter().all(|version| {
+                        decoded.next().is_some_and(|value| same(&version.values[at], &value))
                     });
-            if !exact {
-                for column in &mut self.columns[..=at] {
-                    // The new rows are open rows, so the cut does not decode.
-                    let _ = Arc::make_mut(column).truncate(rows);
+                    exact && decoded.next().is_none() && !decoded.failed
                 }
-                return false;
+            });
+        if !exact {
+            for column in &mut self.columns {
+                // The new rows are open rows, so the cut does not decode.
+                let _ = Arc::make_mut(column).truncate(rows);
             }
+            return false;
         }
         if self.columns.iter().any(|column| column.rows != rows + versions.len()) {
             return false;
