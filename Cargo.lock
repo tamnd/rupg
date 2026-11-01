@@ -370,6 +370,7 @@ dependencies = [
  "rupg-column",
  "rupg-common",
  "rupg-func",
+ "rupg-kernels",
  "rupg-opt",
  "rupg-pgcatalog",
  "rupg-plan",
