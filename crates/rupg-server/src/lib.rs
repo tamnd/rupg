@@ -420,6 +420,18 @@ impl Server {
         Duration::from_secs(seconds.max(1))
     }
 
+    /// `wal_writer_delay`: the time between two writes of the log of the commits that did not wait for the disk.
+    pub fn wal_writer_delay(&self) -> Duration {
+        let ms = guc::find("wal_writer_delay")
+            .map(|p| self.shared.base.setting(p))
+            .and_then(|s| match s {
+                guc::Setting::Int(n) => u64::try_from(n).ok(),
+                _ => None,
+            })
+            .unwrap_or(200);
+        Duration::from_millis(ms.max(1))
+    }
+
     /// The smart shutdown: the server accepts no more connections, waits until each client closes its connection, and writes the image of the store to its file.
     ///
     /// # Errors

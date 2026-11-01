@@ -214,6 +214,7 @@ fn serve(config: &rupg::server::Config) -> ExitCode {
         eprintln!("rupg serve: listening on Unix socket \"{socket}\"");
     }
     checkpoints(&server);
+    wal_writer(&server);
     #[cfg(unix)]
     stop_on_signal(&server, signals);
     match server.wait() {
@@ -235,6 +236,21 @@ fn checkpoints(server: &rupg::server::Server) {
             std::thread::sleep(every);
             if let Err(e) = store.checkpoint() {
                 eprintln!("LOG:  checkpoint failed: {e}");
+            }
+        }
+    });
+}
+
+/// The WAL writer: a thread that writes the log of the commits with `synchronous_commit = off` to the disk each `wal_writer_delay`, as `XLogBackgroundFlush` does. Such a commit does not wait for the disk, so a crash loses at most the commits of the last delays.
+#[allow(clippy::disallowed_methods)]
+fn wal_writer(server: &rupg::server::Server) {
+    let store = server.store();
+    let every = server.wal_writer_delay();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(every);
+            if let Err(e) = store.flush_log() {
+                eprintln!("LOG:  could not write the log: {e}");
             }
         }
     });

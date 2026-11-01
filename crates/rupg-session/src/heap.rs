@@ -117,20 +117,52 @@ struct State {
     /// True when each commit writes a log of its changes, for a store with a file.
     logging: bool,
     /// The tables that each transaction in progress changed, whose changes go to the log of its commit.
-    touched: HashMap<u32, Vec<(u32, u32)>>,
+    touched: HashMap<u32, Vec<Touched>>,
     /// The tables whose open rows each transaction in progress filled in a load, which become a last segment at its end.
     loading: HashMap<u32, Vec<(u32, u32)>>,
 }
 
+/// A table that a transaction in progress changed, for the log of its commit.
+#[derive(Debug)]
+struct Touched {
+    key: (u32, u32),
+    /// The IDs of the versions that the transaction inserted or deleted, or `None` when the log reads all the versions of the table.
+    tids: Option<Vec<u64>>,
+}
+
 impl State {
-    /// Notes that the transaction `xid` changed the table `key`, for the log of its commit.
+    /// Notes that the transaction `xid` changed the table `key`, for the log of its commit. The log then reads all the versions of the table.
     fn wrote(&mut self, xid: u32, key: (u32, u32)) {
-        if self.logging {
-            let tables = self.touched.entry(xid).or_default();
-            if !tables.contains(&key) {
-                tables.push(key);
+        if let Some(touched) = self.touch(xid, key) {
+            touched.tids = None;
+        }
+    }
+
+    /// Notes that the transaction `xid` inserted or deleted the versions `tids` of the table `key`, for the log of its commit. A version that a rollback removes later stays in the list, and the log skips it.
+    fn wrote_ids(&mut self, xid: u32, key: (u32, u32), tids: &[u64]) {
+        if let Some(Touched { tids: Some(list), .. }) = self.touch(xid, key) {
+            list.extend_from_slice(tids);
+            // A long list takes much memory, and the log of a commit that changed more than `LOG_VERSIONS` versions is a checkpoint.
+            if list.len() > LOG_VERSIONS {
+                self.wrote(xid, key);
             }
         }
+    }
+
+    /// The entry of the table `key` in the changes of `xid`, which starts with no versions, when the commits write a log.
+    fn touch(&mut self, xid: u32, key: (u32, u32)) -> Option<&mut Touched> {
+        if !self.logging {
+            return None;
+        }
+        let tables = self.touched.entry(xid).or_default();
+        let at = match tables.iter().position(|touched| touched.key == key) {
+            Some(at) => at,
+            None => {
+                tables.push(Touched { key, tids: Some(Vec::new()) });
+                tables.len() - 1
+            }
+        };
+        tables.get_mut(at)
     }
 }
 
@@ -1929,7 +1961,6 @@ impl Heap {
         let made = (view.xid, view.command);
         if unique.is_empty() {
             let mut state = self.state();
-            state.wrote(view.xid, (view.database, relation));
             let State { tables, toast_oids, .. } = &mut *state;
             let table = tables.append((view.database, relation));
             for values in rows {
@@ -1937,7 +1968,9 @@ impl Heap {
             }
             // A large load moves the values of its versions into columns as it goes, so the rows of the load are not all in memory at once.
             table.freeze_load();
-            if table.frozen.as_ref().is_some_and(|f| f.columns.iter().any(|c| !c.sealed())) {
+            let open = table.frozen.as_ref().is_some_and(|f| f.columns.iter().any(|c| !c.sealed()));
+            state.wrote_ids(view.xid, (view.database, relation), ids);
+            if open {
                 let tables = state.loading.entry(view.xid).or_default();
                 if !tables.contains(&(view.database, relation)) {
                     tables.push((view.database, relation));
@@ -1950,7 +1983,6 @@ impl Heap {
             keys.push(fresh(unique, values, derive)?);
         }
         let (mut state, places) = self.lock_keys((view.database, relation), unique, derive)?;
-        state.wrote(view.xid, (view.database, relation));
         let State { tables, running, rechecks: pending, toast_oids, .. } = &mut *state;
         let table = tables.entry((view.database, relation));
         let mut kept = kept.iter().copied();
@@ -1968,6 +2000,7 @@ impl Heap {
             }
         }
         pending.extend(rechecks(view, relation, unique, partial));
+        state.wrote_ids(view.xid, (view.database, relation), &used);
         *ids = used;
         Ok(Changed::Done(count))
     }
@@ -2016,7 +2049,6 @@ impl Heap {
     ) -> Result<Speculative> {
         let keys = fresh(unique, &values, derive)?;
         let (mut state, places) = self.lock_keys((view.database, relation), unique, derive)?;
-        state.wrote(view.xid, (view.database, relation));
         let State { tables, running, rechecks: pending, toast_oids, .. } = &mut *state;
         let table = tables.entry((view.database, relation));
         for &arbiter in arbiters {
@@ -2065,6 +2097,7 @@ impl Heap {
         match table.check_keys((&places, unique), &used, checked, &mut partial) {
             Ok(None) => {
                 pending.extend(rechecks(view, relation, unique, partial));
+                state.wrote_ids(view.xid, (view.database, relation), &used);
                 Ok(Speculative::Inserted(used[0]))
             }
             result => {
@@ -2097,7 +2130,6 @@ impl Heap {
             });
         }
         let (mut state, places) = self.lock_keys((view.database, relation), unique, derive)?;
-        state.wrote(view.xid, (view.database, relation));
         let State { tables, running, rechecks: pending, toast_oids, combos, .. } = &mut *state;
         let Some(table) = tables.get_mut(&(view.database, relation)) else {
             return Ok(Changed::Done(0));
@@ -2138,6 +2170,7 @@ impl Heap {
         let mut kept = kept.iter().copied();
         let mut used = Vec::new();
         let mut deleted = Vec::with_capacity(found.len());
+        let mut made_ids = Vec::with_capacity(found.len());
         let mut partial = Vec::new();
         for (old, values, keys) in found {
             let made = (view.xid, view.command);
@@ -2161,6 +2194,9 @@ impl Heap {
                 }
             }
             deleted.push(old);
+            if next != 0 {
+                made_ids.push(next);
+            }
             if next == 0 || places.is_empty() {
                 continue;
             }
@@ -2175,6 +2211,8 @@ impl Heap {
             }
         }
         pending.extend(rechecks(view, relation, unique, partial));
+        deleted.extend(made_ids);
+        state.wrote_ids(view.xid, (view.database, relation), &deleted);
         *applied = indexes;
         Ok(Changed::Done(count))
     }
@@ -2594,9 +2632,9 @@ impl Heap {
             table.remove(|version| generation_of(version.tid) != generation);
         }
         match state.touched.remove(&xid) {
-            Some(touched) => {
+            Some(mut touched) => {
                 let mut out = Vec::new();
-                if state.log_commit(xid, &touched, &truncated, &mut out) {
+                if state.log_commit(xid, &mut touched, &truncated, &mut out) {
                     log(Logged::Changes(&out));
                 } else {
                     log(Logged::Large);
@@ -3084,28 +3122,43 @@ impl State {
     fn log_commit(
         &self,
         xid: u32,
-        touched: &[(u32, u32)],
+        touched: &mut [Touched],
         truncated: &[(u32, u32)],
         out: &mut Vec<u8>,
     ) -> bool {
         xid.put(out);
-        // One pass over the versions of each table finds the versions that the commit inserted and deleted.
         let mut tables = Vec::new();
         let mut changed = 0;
-        for key in touched {
+        for Touched { key, tids } in touched {
             let Some(table) = self.tables.meta(key) else { continue };
             // A cold table that has versions of the transaction makes the commit take a checkpoint, as its versions are not in the list.
             if table.cold.as_ref().is_some_and(|cold| cold.xmins.iter().any(|&(x, _)| x == xid)) {
                 return false;
             }
-            let (mut inserted, mut deleted) = (Vec::new(), Vec::new());
-            for version in &table.versions {
-                if version.xmin == xid {
-                    inserted.push(version);
-                } else if version.xmax == xid {
-                    deleted.push(version);
+            let (inserted, deleted) = match tids {
+                // The versions that the transaction noted, in the order of their IDs, as the versions of the table are.
+                Some(tids) => {
+                    tids.sort_unstable();
+                    tids.dedup();
+                    let noted = tids.iter().filter_map(|&tid| table.find(tid));
+                    let found = changes(noted.map(|at| &table.versions[at]), xid);
+                    // The noted versions are all the versions that the transaction changed.
+                    #[cfg(debug_assertions)]
+                    {
+                        let ids = |versions: &[&Version]| {
+                            versions.iter().map(|v| v.tid).collect::<Vec<_>>()
+                        };
+                        let all = changes(table.versions.iter(), xid);
+                        debug_assert_eq!(
+                            (ids(&found.0), ids(&found.1)),
+                            (ids(&all.0), ids(&all.1))
+                        );
+                    }
+                    found
                 }
-            }
+                // One pass over the versions of the table finds the versions that the commit inserted and deleted.
+                None => changes(table.versions.iter(), xid),
+            };
             // A frozen version has no values to log, and a checkpoint writes it. The new versions after a freeze keep their values, and a delete logs no values.
             let frozen = table.frozen.as_ref().is_some_and(|frozen| !frozen.columns.is_empty());
             if frozen && inserted.iter().any(|v| v.values.is_empty()) {
@@ -3135,6 +3188,22 @@ impl State {
         }
         true
     }
+}
+
+/// The versions of `versions` that the transaction `xid` inserted, and the versions that it deleted.
+fn changes<'t>(
+    versions: impl Iterator<Item = &'t Version>,
+    xid: u32,
+) -> (Vec<&'t Version>, Vec<&'t Version>) {
+    let (mut inserted, mut deleted) = (Vec::new(), Vec::new());
+    for version in versions {
+        if version.xmin == xid {
+            inserted.push(version);
+        } else if version.xmax == xid {
+            deleted.push(version);
+        }
+    }
+    (inserted, deleted)
 }
 
 #[cfg(test)]

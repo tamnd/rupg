@@ -85,13 +85,27 @@ impl Store {
     }
 
     /// `RecordTransactionCommit` for the store: the commit of the transaction `xid` in the heap, or no commit for 0. When the store has a file, the log gets the changes of the rows and the sequences that changed, and the commit waits until the log is on the disk. With `wait` the commit waits also for the records before it, as for the catalog of [`Store::log_catalog`]. A log of only the sequences does not wait, as `nextval` does not wait for the disk.
-    pub(crate) fn commit(&self, xid: u32, wait: bool) {
-        self.log(xid, false, wait);
+    ///
+    /// With `sync` false, for `synchronous_commit = off`, the commit of the rows does not wait for the disk, and [`Store::flush_log`] writes its record later, as `XLogSetAsyncXactLSN` leaves the flush to the WAL writer. The records stay in the order of the commits, so a crash loses only the last commits.
+    pub(crate) fn commit(&self, xid: u32, wait: bool, sync: bool) {
+        self.log(xid, false, wait, sync);
+    }
+
+    /// Writes the records of the log that the commits added to the disk, as the WAL writer does for the commits that did not wait.
+    ///
+    /// # Errors
+    ///
+    /// The error of a write or a sync of the log.
+    pub fn flush_log(&self) -> Result<()> {
+        match &self.image {
+            Some(file) => file.log.wait(file.log.added(), self.tasks.as_deref()),
+            None => Ok(()),
+        }
     }
 
     /// The log gets the catalogs, the roles, the tablespaces and the settings of the store, after a commit changed them. With `wait`, the call waits until the log is on the disk.
     pub(crate) fn log_catalog(&self, wait: bool) {
-        self.log(0, true, wait);
+        self.log(0, true, wait, true);
     }
 
     /// The commit of `xid`, when it is not 0, with a record of the log for its changes and for the catalog with `catalog`.
@@ -99,7 +113,7 @@ impl Store {
     /// # Panics
     ///
     /// When the log does not go to the disk, as PostgreSQL stops with a `PANIC` there.
-    fn log(&self, xid: u32, catalog: bool, wait: bool) {
+    fn log(&self, xid: u32, catalog: bool, wait: bool, sync: bool) {
         let Some(file) = &self.image else {
             if xid != 0 {
                 self.heap.commit(xid);
@@ -135,11 +149,15 @@ impl Store {
             return;
         }
         let number = match added {
-            Some((number, durable)) if durable || wait => number,
-            _ if wait => file.log.added(),
+            // The record of a commit that does not wait stays in the memory of the log until the next write.
+            Some(_) if !sync && !catalog && !wait => None,
+            Some((number, durable)) if durable || wait => Some(number),
+            _ if wait => Some(file.log.added()),
             _ => return,
         };
-        if let Err(error) = file.log.wait(number, self.tasks.as_deref()) {
+        if let Some(number) = number
+            && let Err(error) = file.log.wait(number, self.tasks.as_deref())
+        {
             panic!("could not write the log of a commit: {error}");
         }
         if xid != 0 && file.log.size() > LOG_LIMIT {

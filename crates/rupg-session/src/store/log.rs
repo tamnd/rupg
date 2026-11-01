@@ -17,6 +17,8 @@ const MAGIC: &[u8; 8] = b"rupg\x00log";
 const HEAD: u64 = 16;
 /// The bytes before the body of a record: its length and the CRC-32C of the body.
 const FRAME: usize = 8;
+/// The bytes of zeros that the log gets before the records reach them. A sync of a write into bytes that the file has does not write the size of the file, so a commit costs one write of the disk, as the WAL segments that `XLogFileInit` fills with zeros do.
+const CHUNK: u64 = 1 << 20;
 
 /// The file of the log with the number `epoch` of the image `image`.
 pub(super) fn path(image: &Path, epoch: u64) -> PathBuf {
@@ -39,6 +41,8 @@ struct Inner {
     file: Arc<dyn File>,
     /// The end of the bytes that went to the file.
     end: u64,
+    /// The size of the file, with the zeros after `end`.
+    allocated: u64,
     /// The records that did not go to the file yet.
     pending: Vec<u8>,
     /// The number of the records that the commits added.
@@ -56,7 +60,18 @@ impl fmt::Debug for Log {
     }
 }
 
-/// Makes the new log `epoch`, with its head on the disk.
+/// Writes zeros at the end of the file `file` of `allocated` bytes up to a size of whole chunks with room for the bytes up to `upto`, and gives the new size. The sync of the records after it writes the size.
+fn grow(file: &dyn File, allocated: u64, upto: u64) -> Result<u64> {
+    if upto <= allocated {
+        return Ok(allocated);
+    }
+    let size = upto.div_ceil(CHUNK) * CHUNK;
+    let zeros = vec![0; usize::try_from(size - allocated).unwrap_or(0)];
+    file.write_at(allocated, &zeros)?;
+    Ok(size)
+}
+
+/// Makes the new log `epoch`, with its head and the zeros of the first chunk on the disk.
 fn create(io: &dyn Io, image: &Path, epoch: u64) -> Result<Arc<dyn File>> {
     let at = path(image, epoch);
     if io.exists(&at)? {
@@ -66,6 +81,7 @@ fn create(io: &dyn Io, image: &Path, epoch: u64) -> Result<Arc<dyn File>> {
     let mut head = MAGIC.to_vec();
     head.extend_from_slice(&epoch.to_le_bytes());
     file.write_at(0, &head)?;
+    grow(&*file, HEAD, HEAD + 1)?;
     file.sync()?;
     io.sync_dir(image.parent().unwrap_or(Path::new(".")))?;
     Ok(file)
@@ -83,6 +99,7 @@ impl Log {
             epoch,
             file,
             end: HEAD,
+            allocated: CHUNK,
             pending: Vec::new(),
             added: 0,
             synced: 0,
@@ -142,14 +159,20 @@ impl Log {
             inner.syncing = true;
             let bytes = std::mem::take(&mut inner.pending);
             let (file, at, upto) = (Arc::clone(&inner.file), inner.end, inner.added);
+            let allocated = inner.allocated;
             inner.end += bytes.len() as u64;
+            let end = inner.end;
             drop(inner);
-            let result = file.write_at(at, &bytes).and_then(|()| file.sync());
+            let result = grow(&*file, allocated, end).and_then(|size| {
+                file.write_at(at, &bytes).and_then(|()| file.sync()).map(|()| size)
+            });
             inner = self.lock();
             inner.syncing = false;
-            if result.is_ok() {
+            if let Ok(size) = result {
+                inner.allocated = inner.allocated.max(size);
                 inner.synced = inner.synced.max(upto);
             }
+            let result = result.map(|_| ());
             self.synced.notify_all();
             result?;
         }
@@ -174,6 +197,8 @@ impl Log {
             };
         }
         if !inner.pending.is_empty() {
+            let end = inner.end + inner.pending.len() as u64;
+            grow(&*inner.file, inner.allocated, end)?;
             inner.file.write_at(inner.end, &inner.pending)?;
             inner.file.sync()?;
             inner.pending.clear();
@@ -182,6 +207,7 @@ impl Log {
         inner.file = create(&*self.io, &self.image, epoch)?;
         inner.epoch = epoch;
         inner.end = HEAD;
+        inner.allocated = CHUNK;
         inner.synced = inner.added;
         self.synced.notify_all();
         Ok(epoch)
@@ -203,7 +229,7 @@ impl Log {
     }
 }
 
-/// The records of the log `epoch` of the image `image`, or `None` when the log does not exist. The records end at the first record that is cut or whose CRC does not match, which a crash during its write left.
+/// The records of the log `epoch` of the image `image`, or `None` when the log does not exist. The records end at the zeros after the last record, and at the first record that is cut or whose CRC does not match, which a crash during its write left.
 ///
 /// # Errors
 ///
@@ -229,6 +255,10 @@ pub(super) fn read(io: &dyn Io, image: &Path, epoch: u64) -> Result<Option<Vec<V
     while rest.len() >= FRAME {
         let len = u32::from_le_bytes(rest[..4].try_into().unwrap_or_default()) as usize;
         let crc = u32::from_le_bytes(rest[4..FRAME].try_into().unwrap_or_default());
+        // A record is never empty, and the zeros of a chunk have the CRC of an empty record.
+        if len == 0 {
+            break;
+        }
         let Some(record) = rest.get(FRAME..FRAME + len) else { break };
         if crc32c::extend(0, record) != crc {
             break;
