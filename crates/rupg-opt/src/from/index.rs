@@ -12,7 +12,7 @@ use rupg_types::{Array, Inet, Value, oid};
 
 use super::classes::Joined;
 use super::{OrderKey, Qual, Rel, Stats, plain_var};
-use crate::{Index, Level, cost, exprs};
+use crate::{Index, Level, cost, exprs, parallel};
 
 mod gin;
 
@@ -208,7 +208,7 @@ impl<'q> BitmapIndex<'q> {
         costs: (f64, f64, f64),
         stats: &Stats,
     ) -> BitmapIndex<'q> {
-        let (_, path, _) = index_scan_cost(table, index, &clauses, costs, false, stats);
+        let (_, path, _) = index_scan_cost(table, index, &clauses, costs, false, 1.0, stats);
         let (_, total, selectivity) = costs;
         let (rows, pages, outer) = (table.rows, index.pages, table.outer.clone());
         let predicate = predicate(index, table.r);
@@ -316,30 +316,33 @@ fn and_tree(list: &[Bitmap<'_>]) -> (f64, f64) {
     (total, selectivity)
 }
 
-/// `build_index_paths` for each btree index of the table with no predicate, the newest index first: a scan in the order of the index, and a scan in the other order when its order is useful. A scan is an index only scan when the index has each column of the table that the query reads, as `check_index_only`. Each scan has the order of its rows that a node above can use, as `truncate_useless_pathkeys` finds it. The forward scans that test a condition or that give no useful order are the scans that a bitmap can use. With the `BitmapOr` bitmaps of the conditions that are an `OR`, the end of `create_index_paths` makes the bitmap heap scan of the best of them.
-pub(super) fn paths<'q>(
+/// `build_index_paths` for each btree index of the table with no predicate, the newest index first: a scan in the order of the index, and a scan in the other order when its order is useful. A scan is an index only scan when the index has each column of the table that the query reads, as `check_index_only`. Each scan has the order of its rows that a node above can use, as `truncate_useless_pathkeys` finds it. The forward scans that test a condition or that give no useful order are the scans that a bitmap can use. With the `BitmapOr` bitmaps of the conditions that are an `OR`, the end of `create_index_paths` makes the bitmap heap scan of the best of them. It also gives the partial paths of the scans by the indexes, each with its workers. With `parallel`, the `parallel_workers` option of the table when the relation can be in parallel mode, a `btree` index gives a partial scan too, as `build_index_paths` makes it for an index with `amcanparallel`.
+pub(super) fn partial_paths<'q>(
     level: &Level<'q>,
     table: &Table<'_, 'q>,
     indexes: &[Index],
     stats: &Stats,
-) -> Vec<Rel<'q>> {
-    let (mut out, bitmaps) = index_paths(level, table, indexes, stats);
+    parallel: Option<Option<i32>>,
+) -> (Vec<Rel<'q>>, Vec<(Rel<'q>, i32)>) {
+    let (mut out, bitmaps, partials) = index_paths(level, table, indexes, stats, parallel);
     if !bitmaps.is_empty() {
         let chosen = choose_bitmap_and(table, bitmaps, None, stats);
         out.push(bitmap_heap_scan(level, table, &chosen, stats));
     }
-    out
+    (out, partials)
 }
 
-/// The scans of [`paths`] that are not bitmap heap scans, and the bitmaps of the table, `bitindexpaths`.
+/// The scans of [`partial_paths`] that are not bitmap heap scans, the bitmaps of the table, `bitindexpaths`, and the partial scans.
 fn index_paths<'q>(
     level: &Level<'q>,
     table: &Table<'_, 'q>,
     indexes: &[Index],
     stats: &Stats,
-) -> (Vec<Rel<'q>>, Vec<Bitmap<'q>>) {
+    parallel: Option<Option<i32>>,
+) -> (Vec<Rel<'q>>, Vec<Bitmap<'q>>, Vec<(Rel<'q>, i32)>) {
     let mut out = Vec::new();
     let mut bitmaps = Vec::new();
+    let mut partials = Vec::new();
     let sources: Vec<Source<'q>> = table
         .quals
         .iter()
@@ -362,6 +365,12 @@ fn index_paths<'q>(
             useful = ordered;
         }
         let costs = ordered_cost(table, index, &clauses, &order_by, stats);
+        let workers = match parallel {
+            Some(option) if index.method == BTREE_AM && table.outer.is_empty() => {
+                partial_workers(table, index, &clauses, costs.2, only, option, stats)
+            }
+            _ => 0,
+        };
         // `useful_predicate`: the conditions imply the predicate of a partial index, so its scan is a path also with no clause.
         if !clauses.is_empty() || !useful.is_empty() || only || !index.predicate.is_empty() {
             // A backward scan has the clauses and the costs of the forward scan, so `choose_bitmap_and` keeps the forward scan.
@@ -370,14 +379,40 @@ fn index_paths<'q>(
                 bitmaps.push(Bitmap::Index(path));
             }
             if gettuple(index) {
+                if workers > 0 {
+                    let ordered = (&order_by[..], useful.clone());
+                    let rel = scan(
+                        level, table, index, &clauses, costs, only, false, ordered, workers, stats,
+                    );
+                    partials.push((rel, workers));
+                }
                 let ordered = (&order_by[..], useful);
-                out.push(scan(level, table, index, &clauses, costs, only, false, ordered, stats));
+                out.push(scan(
+                    level, table, index, &clauses, costs, only, false, ordered, 0, stats,
+                ));
             }
         }
         let backward = order(level, table.r, index, &quals, true, stats);
         let useful = stats.useful(&BTreeSet::from([table.r]), &backward);
         if !useful.is_empty() {
-            out.push(scan(level, table, index, &clauses, costs, only, true, (&[], useful), stats));
+            if workers > 0 {
+                let ordered = (&[][..], useful.clone());
+                let rel =
+                    scan(level, table, index, &clauses, costs, only, true, ordered, workers, stats);
+                partials.push((rel, workers));
+            }
+            out.push(scan(
+                level,
+                table,
+                index,
+                &clauses,
+                costs,
+                only,
+                true,
+                (&[], useful),
+                0,
+                stats,
+            ));
         }
         // `skip_nonnative_saop`: with `ANY` the index gives one more bitmap.
         if index.method != BTREE_AM {
@@ -390,7 +425,23 @@ fn index_paths<'q>(
         }
     }
     bitmaps.extend(or_paths(table, indexes, &sources, &[], stats));
-    (out, bitmaps)
+    (out, bitmaps, partials)
+}
+
+/// The workers of the partial scan of the table by the `btree` index, as `cost_index` gives them to `compute_parallel_worker`: the pages of the table that the scan reads, which an index only scan does not count, and the pages of the index that it reads.
+fn partial_workers(
+    table: &Table<'_, '_>,
+    index: &Index,
+    clauses: &[Clause<'_>],
+    selectivity: f64,
+    only: bool,
+    option: Option<i32>,
+    stats: &Stats,
+) -> i32 {
+    let fetched = cost::clamp_rows(selectivity * table.tuples);
+    let heap = (!only).then(|| pages_fetched(fetched, table.pages, index.pages, table.pages));
+    let index_pages = btree_costs(table, index, clauses, stats).1;
+    parallel::scan_workers(&crate::enable(), heap, Some(index_pages), option)
 }
 
 /// `reparameterize_path` of a scan of the table `plain` with no parameters, for the parameterized table `table`: an index scan keeps its index and its clauses and gets the costs of `cost_index` again, and a bitmap heap scan keeps its bitmap, as `create_bitmap_heap_path` does. The conditions of the joins go into the filter, and the rows are the rows of the parameterization. Other scans give `None`.
@@ -415,10 +466,10 @@ pub(super) fn reparameterize<'q>(
             let clauses = match_clauses(plain.r, index, &restrict(index, plain.r, &all, stats));
             let costs = ordered_cost(table, index, &clauses, &order_by, stats);
             let order = (&order_by[..], Vec::new());
-            Some(scan(level, table, index, &clauses, costs, *only, *backward, order, stats).node)
+            Some(scan(level, table, index, &clauses, costs, *only, *backward, order, 0, stats).node)
         }
         Kind::BitmapHeapScan { .. } => {
-            let (_, bitmaps) = index_paths(level, plain, indexes, stats);
+            let (_, bitmaps, _) = index_paths(level, plain, indexes, stats, None);
             if bitmaps.is_empty() {
                 return None;
             }
@@ -597,12 +648,12 @@ pub(super) fn param_paths<'q>(
             }
             if gettuple(index) {
                 let o = (&order_by[..], useful.clone());
-                let rel = scan(level, &t, index, &clauses, costs, only, false, o, stats);
+                let rel = scan(level, &t, index, &clauses, costs, only, false, o, 0, stats);
                 out.push(Param { rel, outer: outer.clone(), enforced: enforced.clone(), indexed });
             }
             if !useful_backward.is_empty() {
                 let o = (&[][..], useful_backward.clone());
-                let rel = scan(level, &t, index, &clauses, costs, only, true, o, stats);
+                let rel = scan(level, &t, index, &clauses, costs, only, true, o, 0, stats);
                 out.push(Param { rel, outer: outer.clone(), enforced, indexed });
             }
         }
@@ -610,7 +661,7 @@ pub(super) fn param_paths<'q>(
     if bitjoin.is_empty() {
         return out;
     }
-    let (_, bitmaps) = index_paths(level, table, indexes, stats);
+    let (_, bitmaps, _) = index_paths(level, table, indexes, stats, None);
     let mut outers: Vec<BTreeSet<usize>> = Vec::new();
     for b in &bitjoin {
         let o = b.outer();
@@ -1486,7 +1537,7 @@ fn bool_constant(r: usize, index: &Index, column: usize, quals: &[&Expr]) -> boo
     quals.iter().any(|q| boolean_key(*family, q, &is_column).is_some())
 }
 
-/// The scan of the table by the index with the clauses, as `create_index_path` and `create_indexscan_plan` make it. The conditions of the scan that are not clauses of the index are the filter, in the order of `order_qual_clauses`.
+/// The scan of the table by the index with the clauses, as `create_index_path` and `create_indexscan_plan` make it. The conditions of the scan that are not clauses of the index are the filter, in the order of `order_qual_clauses`. With `workers` above 0, the scan is a parallel scan, and each process reads its share of the rows of the index.
 #[allow(clippy::too_many_arguments)]
 fn scan<'q>(
     level: &Level<'q>,
@@ -1497,9 +1548,12 @@ fn scan<'q>(
     only: bool,
     backward: bool,
     (order_by, order): (&[Expr], Vec<OrderKey>),
+    workers: i32,
     stats: &Stats,
 ) -> Rel<'q> {
-    let (startup, total, filter) = index_scan_cost(table, index, clauses, costs, only, stats);
+    let divisor = if workers > 0 { parallel::divisor(&crate::enable(), workers) } else { 1.0 };
+    let (startup, total, filter) =
+        index_scan_cost(table, index, clauses, costs, only, divisor, stats);
     let cond = clauses.iter().map(|c| Item { expr: c.expr.clone(), below: false }).collect();
     let order_by =
         order_by.iter().map(|e| Item { expr: Cow::Owned(e.clone()), below: false }).collect();
@@ -1516,18 +1570,20 @@ fn scan<'q>(
     let mut node = Node::new(kind, level.scope, Vec::new());
     node.filter = filter.iter().map(|q| q.item()).collect();
     let width = stats.width(&BTreeSet::from([table.r]));
-    node.cost = Cost { startup, total, rows: table.rows, width };
+    node.cost = Cost { startup, total, rows: cost::clamp_rows(table.rows / divisor), width };
     node.disabled = !crate::enable().indexscan;
+    node.parallel = workers > 0;
     Rel { node, rels: BTreeSet::from([table.r]), order }
 }
 
-/// `cost_index`: the start cost and the total cost of the scan of the table by the index with the clauses, and the conditions of the scan that are not clauses of the index, in the order of `order_qual_clauses`. The pages of the table cost between a random page for each row, as `index_pages_fetched` finds the pages, and one random page and then sequential pages for the fraction of the pages that the selectivity gives, by the square of the correlation of the index. Each row costs the conditions that are not clauses. A condition that a clause from the same equivalence class tests is not in the filter, as `extract_nonindex_conditions`.
+/// `cost_index`: the start cost and the total cost of the scan of the table by the index with the clauses, and the conditions of the scan that are not clauses of the index, in the order of `order_qual_clauses`. The pages of the table cost between a random page for each row, as `index_pages_fetched` finds the pages, and one random page and then sequential pages for the fraction of the pages that the selectivity gives, by the square of the correlation of the index. Each row costs the conditions that are not clauses. A condition that a clause from the same equivalence class tests is not in the filter, as `extract_nonindex_conditions`. A process of a parallel scan with the `divisor` of [`parallel::divisor`] tests the conditions for its share of the rows.
 fn index_scan_cost<'q>(
     table: &Table<'_, 'q>,
     index: &Index,
     clauses: &[Clause<'q>],
     costs: (f64, f64, f64),
     only: bool,
+    divisor: f64,
     stats: &Stats,
 ) -> (f64, f64, Vec<Qual<'q>>) {
     // `extract_nonindex_conditions` of `indrestrictinfo`: a condition that the predicate of the index implies is not in the filter.
@@ -1558,22 +1614,22 @@ fn index_scan_cost<'q>(
         let pages = pages_fetched(fetched * table.loops, table.pages, index.pages, table.pages);
         let min = pages_fetched(min_pages * table.loops, table.pages, index.pages, table.pages);
         let (pages, min) = (unseen(pages), unseen(min));
-        (pages * cost::RANDOM_PAGE / table.loops, min * cost::RANDOM_PAGE / table.loops)
+        (pages * cost::random_page() / table.loops, min * cost::random_page() / table.loops)
     } else {
         let pages = unseen(pages_fetched(fetched, table.pages, index.pages, table.pages));
         let min_pages = unseen(min_pages);
         let min = if min_pages > 0.0 {
-            cost::RANDOM_PAGE + (min_pages - 1.0).max(0.0) * cost::SEQ_PAGE
+            cost::random_page() + (min_pages - 1.0).max(0.0) * cost::SEQ_PAGE
         } else {
             0.0
         };
-        (pages * cost::RANDOM_PAGE, min)
+        (pages * cost::random_page(), min)
     };
     let correlation = correlation(table.r, index, stats);
     run += max_io + correlation * correlation * (min_io - max_io);
     let (qual_startup, qual_cost) = stats.qual_costs(filter.iter().map(|q| &*q.expr));
     startup += qual_startup;
-    run += (cost::CPU_TUPLE + qual_cost) * fetched;
+    run += (cost::CPU_TUPLE + qual_cost) * fetched / divisor;
     (startup, startup + run, filter)
 }
 
@@ -1706,9 +1762,9 @@ fn heap_cost(
     }
     let pages = if pages >= t { t } else { pages.ceil() };
     let per_page = if pages >= 2.0 {
-        cost::RANDOM_PAGE - (cost::RANDOM_PAGE - cost::SEQ_PAGE) * (pages / t).sqrt()
+        cost::random_page() - (cost::random_page() - cost::SEQ_PAGE) * (pages / t).sqrt()
     } else {
-        cost::RANDOM_PAGE
+        cost::random_page()
     };
     let startup = tree + startup;
     let run = pages * per_page + (cost::CPU_TUPLE + per_row) * fetched;
@@ -2023,7 +2079,7 @@ fn brin_cost(
     let qual_arg: f64 = others.map(|o| stats.qual_costs([o])).map(|(s, p)| s + p).sum();
     let startup = cost::SEQ_PAGE * revmap * table.loops + qual_arg;
     let total = startup
-        + cost::RANDOM_PAGE * (index.pages - revmap) * table.loops
+        + cost::random_page() * (index.pages - revmap) * table.loops
         + 0.1 * cost::CPU_OPERATOR * estimated * per_range;
     (startup, total, selectivity)
 }
@@ -2070,9 +2126,9 @@ fn generic_cost(
     let mut total = if scans * table.loops > 1.0 {
         let all = index_pages * scans * table.loops;
         let fetched = pages_fetched(all, index.pages, index.pages, table.pages);
-        fetched * cost::RANDOM_PAGE / table.loops
+        fetched * cost::random_page() / table.loops
     } else {
-        index_pages * cost::RANDOM_PAGE
+        index_pages * cost::random_page()
     };
     let others = clauses.iter().flat_map(Clause::other);
     // `index_other_operands_eval_cost` of the ordering operators: the side that is not the column.
@@ -2091,6 +2147,16 @@ fn btree_cost(
     clauses: &[Clause<'_>],
     stats: &Stats,
 ) -> (f64, f64, f64) {
+    btree_costs(table, index, clauses, stats).0
+}
+
+/// [`btree_cost`], and `numIndexPages` of `genericcostestimate`: the pages of the index that the scan reads.
+fn btree_costs(
+    table: &Table<'_, '_>,
+    index: &Index,
+    clauses: &[Clause<'_>],
+    stats: &Stats,
+) -> ((f64, f64, f64), f64) {
     let mut column = 0;
     let mut equal_here = false;
     let mut found_array = false;
@@ -2171,9 +2237,9 @@ fn btree_cost(
     let mut total = if scans * table.loops > 1.0 {
         let all = index_pages * scans * table.loops;
         let fetched = pages_fetched(all, index.pages, index.pages, table.pages);
-        fetched * cost::RANDOM_PAGE / table.loops
+        fetched * cost::random_page() / table.loops
     } else {
-        index_pages * cost::RANDOM_PAGE
+        index_pages * cost::random_page()
     };
     let others = clauses.iter().flat_map(Clause::other);
     let qual_arg: f64 = others.map(|o| stats.qual_costs([o])).map(|(s, p)| s + p).sum();
@@ -2190,7 +2256,7 @@ fn btree_cost(
     let descent = f64::from(index.height + 1) * PAGE_CPU_MULTIPLIER * cost::CPU_OPERATOR;
     startup += descent;
     total += scans * descent;
-    (startup, total, selectivity)
+    ((startup, total, selectivity), index_pages)
 }
 
 /// `index_pages_fetched`: the pages of a relation that a scan of the rows reads, with the pages in the cache that `effective_cache_size` gives the relation, as Mackert and Lohman estimate them. The pages of the table stand for `total_table_pages`, which changes the result only when the tables of the query are larger than the cache.

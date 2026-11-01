@@ -12,8 +12,8 @@ use super::classes::Joined;
 use super::index::Param;
 use super::paths::costs;
 use super::search::{self, Semis};
-use super::{Base, OrderKey, Paths, Qual, Rel, Stats, dummy, index, tid, variable_ranges};
-use crate::{Index, Level, Member, Members, cost};
+use super::{Base, OrderKey, Paths, Qual, Rel, Stats, cheaper, dummy, index, tid, variable_ranges};
+use crate::{Index, Level, Member, Members, cost, parallel};
 
 /// The least and the greatest value of a column of a member, by the relation and the column, as `get_actual_variable_range` gives them.
 type Ranges = Vec<((usize, i16), Option<(Value, Value)>)>;
@@ -87,9 +87,11 @@ pub(super) fn scan<'q>(
     (base, quals): (&[Qual<'q>], &[Qual<'q>]),
     members: Vec<Member>,
     hooks: Option<&dyn Members>,
+    parallel: bool,
     stats: &mut Stats,
-) -> (Vec<Rel<'q>>, Vec<MemberBase<'q>>) {
+) -> (Vec<Rel<'q>>, Vec<MemberBase<'q>>, Vec<(Rel<'q>, i32)>) {
     let relation = &level.query.relations[r];
+    let enable = crate::enable();
     let (qual_startup, qual_cost) = stats.qual_costs(quals.iter().map(|q| &*q.expr));
     let per_row = cost::CPU_TUPLE + qual_cost;
     let unique = stats.unique.columns.clone();
@@ -98,6 +100,7 @@ pub(super) fn scan<'q>(
     let rels = BTreeSet::from([r]);
     let mut lists: Vec<Vec<Rel<'q>>> = Vec::with_capacity(members.len());
     let mut bases = Vec::with_capacity(members.len());
+    let mut partials = Vec::with_capacity(members.len());
     for member in &members {
         let columns = Columns::new(member);
         let indexes: Vec<Index> = hooks
@@ -144,10 +147,27 @@ pub(super) fn scan<'q>(
             outer: BTreeSet::new(),
             loops: 1.0,
         };
+        // `create_plain_partial_paths` of the member, with its own `parallel_workers` option and its pages.
+        let option = hooks.and_then(|m| m.parallel(member.oid)).filter(|_| parallel);
+        let mut partial = Vec::new();
+        if let Some(option) = option {
+            let workers = parallel::workers(&enable, pages, option);
+            if workers > 0 {
+                let divisor = parallel::divisor(&enable, workers);
+                let mut node = seq.clone();
+                node.parallel = true;
+                node.cost.total = qual_startup + count * per_row / divisor + pages * cost::SEQ_PAGE;
+                node.cost.rows = cost::clamp_rows(n / divisor);
+                partial.push((Rel { node, rels: rels.clone(), order: Vec::new() }, workers));
+            }
+        }
         let (mut found, current) = tid::paths(level, &table, stats);
         if !current {
             found.push(Rel { node: seq, rels: rels.clone(), order: Vec::new() });
-            found.extend(index::paths(level, &table, &indexes, stats));
+            let (scans, index_partials) =
+                index::partial_paths(level, &table, &indexes, stats, option);
+            found.extend(scans);
+            partial.extend(index_partials);
         }
         // `set_rel_width` of the member: the width of a column from the statistics of the member, or else from its type.
         let width = |attnum: i16| -> i32 {
@@ -181,6 +201,11 @@ pub(super) fn scan<'q>(
             rel.node.cost.width = node_width;
             paths.add(costs(&rel.node), rel.order.clone(), rel);
         }
+        for (rel, _) in &mut partial {
+            rel.node.member = Some(member.oid);
+            rel.node.cost.width = node_width;
+        }
+        partials.push(partial.into_iter().min_by(|(a, _), (b, _)| cheaper(&a.node, &b.node)));
         let mut kept = paths.kept();
         if kept.is_empty() {
             let mut node = dummy(level.scope, &rels, false);
@@ -230,12 +255,17 @@ pub(super) fn scan<'q>(
     match lists.len() {
         0 => {
             let node = dummy(level.scope, &rels, false);
-            return (vec![Rel { node, rels, order: Vec::new() }], Vec::new());
+            return (vec![Rel { node, rels, order: Vec::new() }], Vec::new(), Vec::new());
         }
-        1 => return (lists.remove(0), Vec::new()),
+        1 => return (lists.remove(0), Vec::new(), partials.into_iter().flatten().collect()),
         _ => {}
     }
     let width = if rows > 0.0 { (size / rows).round_ties_even() as i32 } else { 0 };
+    let partials = if parallel {
+        partial_appends(level.scope, &rels, &lists, partials, width)
+    } else {
+        Vec::new()
+    };
     let cheapest = lists.iter().filter_map(|l| l.first()).map(|rel| rel.node.clone()).collect();
     let mut paths = Paths::new(stats.startup);
     let node = append(level.scope, cheapest, false, width);
@@ -248,7 +278,123 @@ pub(super) fn scan<'q>(
     for rel in ordered.plans(stats) {
         paths.add(costs(&rel.node), rel.order.clone(), rel);
     }
-    (paths.kept(), bases)
+    (paths.kept(), bases, partials)
+}
+
+/// The partial paths of `add_paths_to_append_rel` for a table whose members have the plans `lists` and the cheapest partial paths `partials`. When each member has a partial path, an `Append` of them is a partial path, a `Parallel Append` with `enable_parallel_append`. With `enable_parallel_append`, a `Parallel Append` reads for each member its cheapest partial path or its cheapest plan when that plan costs less, when one member has such a plan. A `Parallel Append` asks for one worker more than the base 2 logarithm of the members, as many as `max_parallel_workers_per_gather` allows.
+fn partial_appends<'q>(
+    scope: usize,
+    rels: &BTreeSet<usize>,
+    lists: &[Vec<Rel<'q>>],
+    partials: Vec<Option<(Rel<'q>, i32)>>,
+    width: i32,
+) -> Vec<(Rel<'q>, i32)> {
+    let enable = crate::enable();
+    let log = i32::try_from(usize::BITS - lists.len().leading_zeros()).unwrap_or(i32::MAX);
+    let spread = |workers: i32| workers.max(log).min(enable.max_parallel_workers_per_gather);
+    let mut out = Vec::new();
+    let mut partial_rows = None;
+    if partials.iter().all(Option::is_some) {
+        let children: Vec<(Node<'q>, i32)> =
+            partials.iter().flatten().map(|(rel, w)| (rel.node.clone(), *w)).collect();
+        let workers = children.iter().map(|c| c.1).max().unwrap_or(0);
+        let (node, workers) = if enable.parallel_append {
+            let workers = spread(workers);
+            (parallel_append(scope, Vec::new(), children, workers, width), workers)
+        } else {
+            (append(scope, children.into_iter().map(|c| c.0).collect(), false, width), workers)
+        };
+        partial_rows = Some(node.cost.rows);
+        out.push((Rel { node, rels: rels.clone(), order: Vec::new() }, workers));
+    }
+    if !enable.parallel_append {
+        return out;
+    }
+    let mut whole = Vec::new();
+    let mut parts = Vec::new();
+    for (list, partial) in lists.iter().zip(&partials) {
+        let plain = list.first();
+        match partial {
+            Some((rel, w)) if plain.is_none_or(|p| rel.node.cost.total < p.node.cost.total) => {
+                parts.push((rel.node.clone(), *w));
+            }
+            _ => match plain {
+                Some(plain) => whole.push(plain.node.clone()),
+                None => return out,
+            },
+        }
+    }
+    if !whole.is_empty() {
+        let workers = spread(parts.iter().map(|c| c.1).max().unwrap_or(0));
+        let mut node = parallel_append(scope, whole, parts, workers, width);
+        if let Some(rows) = partial_rows {
+            node.cost.rows = rows;
+        }
+        out.push((Rel { node, rels: rels.clone(), order: Vec::new() }, workers));
+    }
+    out
+}
+
+/// `create_append_path` and `cost_append` of a `Parallel Append` with `workers` workers of the plans `whole`, which one process reads each, and the partial paths `parts`. The plans come first, in the order of their total costs from the greatest, and then the partial paths, in the order of their start costs from the greatest. The `Append` starts when the first of the plans that the first workers read starts. The rows of each plan are a share of the rows for each process, and a partial path has the rows of its own processes for the processes of the `Append`. The partial paths cost their total costs, and the plans cost the greatest sum that one worker reads when each worker takes the next plan as it ends, as `append_nonpartial_cost` gives it.
+fn parallel_append<'q>(
+    scope: usize,
+    mut whole: Vec<Node<'q>>,
+    mut parts: Vec<(Node<'q>, i32)>,
+    workers: i32,
+    width: i32,
+) -> Node<'q> {
+    let enable = crate::enable();
+    let key = |n: &Node<'_>, first: f64, second: f64| (n.disabled_nodes(), first, second);
+    whole.sort_by(|a, b| {
+        let (a, b) = (key(a, a.cost.total, a.cost.startup), key(b, b.cost.total, b.cost.startup));
+        b.partial_cmp(&a).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    parts.sort_by(|(a, _), (b, _)| {
+        let (a, b) = (key(a, a.cost.startup, a.cost.total), key(b, b.cost.startup, b.cost.total));
+        b.partial_cmp(&a).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let divisor = parallel::divisor(&enable, workers);
+    let first_partial = whole.len();
+    let totals: Vec<f64> = whole.iter().map(|n| n.cost.total).collect();
+    let (mut startup, mut total, mut rows) = (0.0, 0.0, 0.0);
+    let all = whole.iter().map(|n| (n, 0)).chain(parts.iter().map(|(n, w)| (n, *w)));
+    for (i, (child, child_workers)) in all.enumerate() {
+        let c = child.cost;
+        if i == 0 {
+            startup = c.startup;
+        } else if i32::try_from(i).is_ok_and(|i| i < workers) {
+            startup = f64::min(startup, c.startup);
+        }
+        if i < first_partial {
+            rows += c.rows / divisor;
+        } else {
+            rows += c.rows * (parallel::divisor(&enable, child_workers) / divisor);
+            total += c.total;
+        }
+        rows = cost::clamp_rows(rows);
+    }
+    total += nonpartial_cost(&totals, workers);
+    total += cost::CPU_TUPLE * cost::APPEND_CPU * rows;
+    let children = whole.into_iter().chain(parts.into_iter().map(|(n, _)| n)).collect();
+    let mut node = Node::new(Kind::Append, scope, children);
+    node.cost = Cost { startup, total, rows, width };
+    node.parallel = true;
+    node
+}
+
+/// `append_nonpartial_cost`: the greatest cost that one of `workers` workers reads of the plans with the total costs `totals`, from the greatest. Each of the first workers takes one plan, and each next plan goes to the worker with the least cost.
+fn nonpartial_cost(totals: &[f64], workers: i32) -> f64 {
+    let len = usize::try_from(workers).unwrap_or(0).min(totals.len());
+    if len == 0 {
+        return 0.0;
+    }
+    let mut sums = totals[..len].to_vec();
+    let mut min = len - 1;
+    for &t in &totals[len..] {
+        sums[min] += t;
+        min = (0..len).fold(0, |m, i| if sums[i] < sums[m] { i } else { m });
+    }
+    sums.iter().copied().fold(sums[0], f64::max)
 }
 
 /// The parameterized `Append` paths of `add_paths_to_append_rel` for the table `r` with members, for the inner side of a nested loop. Each member has its parameterized scans, from its own statistics and indexes, as [`search::param_scans`]. For each set of outer relations of a scan of a member, the `Append` reads the scan of each member from [`child`], or the table has no `Append` for the set when a member has no such scan. The `Append` tests the conditions of the joins of the set, as `get_appendrel_parampathinfo`, and the scans that `add_path` keeps with the plans of the table are the parameterized scans of the table.

@@ -173,7 +173,7 @@ fn tid_scan<'q>(
     let (qual_startup, qual_cost) = stats.qual_costs(table.quals.iter().map(|q| &*q.expr));
     let startup = qual_startup + tid_cost;
     let per_tuple = cost::CPU_TUPLE + qual_cost - tid_cost;
-    let run = cost::RANDOM_PAGE * ntuples + per_tuple * ntuples;
+    let run = cost::random_page() * ntuples + per_tuple * ntuples;
     let cond = match list {
         [one] => (*one).clone(),
         _ => Expr::new(
@@ -207,7 +207,7 @@ fn range_scan<'q>(
     let pages = (selectivity * table.pages).ceil();
     let pages = if pages <= 0.0 { 1.0 } else { pages };
     let ntuples = selectivity * table.tuples;
-    let disk = cost::RANDOM_PAGE + cost::SEQ_PAGE * (pages - 1.0);
+    let disk = cost::random_page() + cost::SEQ_PAGE * (pages - 1.0);
     let (_, tid_cost) = stats.qual_costs(range.iter().copied());
     let (qual_startup, qual_cost) = stats.qual_costs(table.quals.iter().map(|q| &*q.expr));
     let startup = qual_startup + tid_cost;

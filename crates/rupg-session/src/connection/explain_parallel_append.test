@@ -1,0 +1,218 @@
+> create table pa_a (aa int, x text)
+CREATE TABLE
+> create table pa_b (bb int) inherits (pa_a)
+CREATE TABLE
+> create table pa_c (cc int) inherits (pa_a)
+CREATE TABLE
+> create table pa_d (dd int) inherits (pa_a)
+CREATE TABLE
+> insert into pa_a select i, 'a' from generate_series(1, 300) i
+INSERT 0 300
+> insert into pa_b select i, 'b', i from generate_series(1, 2000) i
+INSERT 0 2000
+> insert into pa_c select i, 'c', i from generate_series(1, 500) i
+INSERT 0 500
+> insert into pa_d select i, 'd', i from generate_series(1, 1000) i
+INSERT 0 1000
+> analyze pa_a
+ANALYZE
+> analyze pa_b
+ANALYZE
+> analyze pa_c
+ANALYZE
+> analyze pa_d
+ANALYZE
+> set parallel_setup_cost = 0
+SET
+> set parallel_tuple_cost = 0
+SET
+> set min_parallel_table_scan_size = 0
+SET
+> set max_parallel_workers_per_gather = 4
+SET
+> explain (costs off) select round(avg(aa)), sum(aa) from pa_a
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate
+row   ->  Gather
+row         Workers Planned: 3
+row         ->  Partial Aggregate
+row               ->  Parallel Append
+row                     ->  Parallel Seq Scan on pa_b pa_a_2
+row                     ->  Parallel Seq Scan on pa_d pa_a_4
+row                     ->  Parallel Seq Scan on pa_c pa_a_3
+row                     ->  Parallel Seq Scan on pa_a pa_a_1
+EXPLAIN
+> explain select round(avg(aa)), sum(aa) from pa_a
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate  (cost=48.75..48.77 rows=1 width=40)
+row   ->  Gather  (cost=48.73..48.74 rows=3 width=40)
+row         Workers Planned: 3
+row         ->  Partial Aggregate  (cost=48.73..48.74 rows=1 width=40)
+row               ->  Parallel Append  (cost=0.00..42.60 rows=1226 width=4)
+row                     ->  Parallel Seq Scan on pa_b pa_a_2  (cost=0.00..17.45 rows=645 width=4)
+row                     ->  Parallel Seq Scan on pa_d pa_a_4  (cost=0.00..10.17 rows=417 width=4)
+row                     ->  Parallel Seq Scan on pa_c pa_a_3  (cost=0.00..5.08 rows=208 width=4)
+row                     ->  Parallel Seq Scan on pa_a pa_a_1  (cost=0.00..3.76 rows=176 width=4)
+EXPLAIN
+> select round(avg(aa)), sum(aa) from pa_a
+fields round:1700:-1:-1,sum:20:8:-1
+row 703,2671900
+SELECT 1
+> alter table pa_c set (parallel_workers = 0)
+ALTER TABLE
+> alter table pa_d set (parallel_workers = 0)
+ALTER TABLE
+> explain (costs off) select round(avg(aa)), sum(aa) from pa_a
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate
+row   ->  Gather
+row         Workers Planned: 3
+row         ->  Partial Aggregate
+row               ->  Parallel Append
+row                     ->  Seq Scan on pa_d pa_a_4
+row                     ->  Seq Scan on pa_c pa_a_3
+row                     ->  Parallel Seq Scan on pa_b pa_a_2
+row                     ->  Parallel Seq Scan on pa_a pa_a_1
+EXPLAIN
+> explain select round(avg(aa)), sum(aa) from pa_a
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate  (cost=49.50..49.52 rows=1 width=40)
+row   ->  Gather  (cost=49.48..49.49 rows=3 width=40)
+row         Workers Planned: 3
+row         ->  Partial Aggregate  (cost=49.48..49.49 rows=1 width=40)
+row               ->  Parallel Append  (cost=0.00..43.35 rows=1226 width=4)
+row                     ->  Seq Scan on pa_d pa_a_4  (cost=0.00..16.00 rows=1000 width=4)
+row                     ->  Seq Scan on pa_c pa_a_3  (cost=0.00..8.00 rows=500 width=4)
+row                     ->  Parallel Seq Scan on pa_b pa_a_2  (cost=0.00..17.45 rows=645 width=4)
+row                     ->  Parallel Seq Scan on pa_a pa_a_1  (cost=0.00..3.76 rows=176 width=4)
+EXPLAIN
+> alter table pa_a set (parallel_workers = 0)
+ALTER TABLE
+> alter table pa_b set (parallel_workers = 0)
+ALTER TABLE
+> explain (costs off) select round(avg(aa)), sum(aa) from pa_a
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate
+row   ->  Gather
+row         Workers Planned: 3
+row         ->  Partial Aggregate
+row               ->  Parallel Append
+row                     ->  Seq Scan on pa_b pa_a_2
+row                     ->  Seq Scan on pa_d pa_a_4
+row                     ->  Seq Scan on pa_c pa_a_3
+row                     ->  Seq Scan on pa_a pa_a_1
+EXPLAIN
+> explain select round(avg(aa)), sum(aa) from pa_a
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate  (cost=43.29..43.30 rows=1 width=40)
+row   ->  Gather  (cost=43.26..43.27 rows=3 width=40)
+row         Workers Planned: 3
+row         ->  Partial Aggregate  (cost=43.26..43.27 rows=1 width=40)
+row               ->  Parallel Append  (cost=0.00..37.13 rows=1226 width=4)
+row                     ->  Seq Scan on pa_b pa_a_2  (cost=0.00..31.00 rows=2000 width=4)
+row                     ->  Seq Scan on pa_d pa_a_4  (cost=0.00..16.00 rows=1000 width=4)
+row                     ->  Seq Scan on pa_c pa_a_3  (cost=0.00..8.00 rows=500 width=4)
+row                     ->  Seq Scan on pa_a pa_a_1  (cost=0.00..5.00 rows=300 width=4)
+EXPLAIN
+> alter table pa_a reset (parallel_workers)
+ALTER TABLE
+> alter table pa_b reset (parallel_workers)
+ALTER TABLE
+> alter table pa_c reset (parallel_workers)
+ALTER TABLE
+> alter table pa_d reset (parallel_workers)
+ALTER TABLE
+> set enable_parallel_append to off
+SET
+> explain (costs off) select round(avg(aa)), sum(aa) from pa_a
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate
+row   ->  Gather
+row         Workers Planned: 3
+row         ->  Partial Aggregate
+row               ->  Append
+row                     ->  Parallel Seq Scan on pa_a pa_a_1
+row                     ->  Parallel Seq Scan on pa_b pa_a_2
+row                     ->  Parallel Seq Scan on pa_c pa_a_3
+row                     ->  Parallel Seq Scan on pa_d pa_a_4
+EXPLAIN
+> explain select round(avg(aa)), sum(aa) from pa_a
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate  (cost=50.95..50.97 rows=1 width=40)
+row   ->  Gather  (cost=50.93..50.94 rows=3 width=40)
+row         Workers Planned: 3
+row         ->  Partial Aggregate  (cost=50.93..50.94 rows=1 width=40)
+row               ->  Append  (cost=0.00..43.70 rows=1446 width=4)
+row                     ->  Parallel Seq Scan on pa_a pa_a_1  (cost=0.00..3.76 rows=176 width=4)
+row                     ->  Parallel Seq Scan on pa_b pa_a_2  (cost=0.00..17.45 rows=645 width=4)
+row                     ->  Parallel Seq Scan on pa_c pa_a_3  (cost=0.00..5.08 rows=208 width=4)
+row                     ->  Parallel Seq Scan on pa_d pa_a_4  (cost=0.00..10.17 rows=417 width=4)
+EXPLAIN
+> reset enable_parallel_append
+RESET
+> explain (costs off) select * from pa_a where aa < 10
+fields QUERY PLAN:25:-1:-1
+row Gather
+row   Workers Planned: 3
+row   ->  Parallel Append
+row         ->  Parallel Seq Scan on pa_b pa_a_2
+row               Filter: (aa < 10)
+row         ->  Parallel Seq Scan on pa_d pa_a_4
+row               Filter: (aa < 10)
+row         ->  Parallel Seq Scan on pa_c pa_a_3
+row               Filter: (aa < 10)
+row         ->  Parallel Seq Scan on pa_a pa_a_1
+row               Filter: (aa < 10)
+EXPLAIN
+> explain (costs off) select * from pa_a order by aa
+fields QUERY PLAN:25:-1:-1
+row Gather Merge
+row   Workers Planned: 3
+row   ->  Sort
+row         Sort Key: pa_a.aa
+row         ->  Parallel Append
+row               ->  Parallel Seq Scan on pa_b pa_a_2
+row               ->  Parallel Seq Scan on pa_d pa_a_4
+row               ->  Parallel Seq Scan on pa_c pa_a_3
+row               ->  Parallel Seq Scan on pa_a pa_a_1
+EXPLAIN
+> select count(*) from pa_a where x = 'b'
+fields count:20:8:-1
+row 2000
+SELECT 1
+> create table pp (a int, b text) partition by range (a)
+CREATE TABLE
+> create table pp1 partition of pp for values from (0) to (1000)
+CREATE TABLE
+> create table pp2 partition of pp for values from (1000) to (5000)
+CREATE TABLE
+> insert into pp select i, 'p' || i % 5 from generate_series(0, 4999) i
+INSERT 0 5000
+> analyze pp
+ANALYZE
+> explain (costs off) select count(*) from pp
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate
+row   ->  Gather
+row         Workers Planned: 3
+row         ->  Partial Aggregate
+row               ->  Parallel Append
+row                     ->  Parallel Seq Scan on pp2 pp_2
+row                     ->  Parallel Seq Scan on pp1 pp_1
+EXPLAIN
+> explain select count(*) from pp where b = 'p1'
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate  (cost=46.77..46.78 rows=1 width=8)
+row   ->  Gather  (cost=46.75..46.76 rows=3 width=8)
+row         Workers Planned: 3
+row         ->  Partial Aggregate  (cost=46.75..46.76 rows=1 width=8)
+row               ->  Parallel Append  (cost=0.00..45.95 rows=322 width=0)
+row                     ->  Parallel Seq Scan on pp2 pp_2  (cost=0.00..34.13 rows=258 width=0)
+row                           Filter: (b = 'p1'::text)
+row                     ->  Parallel Seq Scan on pp1 pp_1  (cost=0.00..10.21 rows=83 width=0)
+row                           Filter: (b = 'p1'::text)
+EXPLAIN
+> select count(*) from pp where b = 'p1'
+fields count:20:8:-1
+row 1000
+SELECT 1
