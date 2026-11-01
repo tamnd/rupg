@@ -346,6 +346,18 @@ mod tests {
                 assert_eq!(extended_hash_text(ty, text.as_bytes(), 0), want, "{ty} {text:?}");
             }
         }
+        let mut numbers =
+            vec![i64::MIN, i64::MAX, i64::MIN + 1, 10_000, 100_000_000, 10_000_000_000_000_000];
+        for base in [1_i64, 9, 10, 99, 9999, 10_001, 12_345_678, 1_000_000_007] {
+            numbers.extend([base, -base, base * 10_000, -base * 10_000]);
+        }
+        for v in numbers {
+            let value = Value::Numeric(rupg_types::Numeric::from_integer(i128::from(v)));
+            for seed in [0, 7] {
+                let want = extended_hash(oid::NUMERIC, &value, seed).ok();
+                assert_eq!(extended_hash_int(oid::NUMERIC, v, seed), want, "{v}");
+            }
+        }
         assert_eq!(extended_hash_int(oid::FLOAT8, 1, 0), None);
     }
 

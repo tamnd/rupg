@@ -186,7 +186,41 @@ pub fn extended_hash_int(ty: u32, v: i64, seed: u64) -> Option<u64> {
         #[allow(clippy::cast_possible_truncation)]
         oid::INT2 | oid::INT4 | oid::DATE => Some(seed.word((v as i32).cast_unsigned())),
         oid::INT8 | oid::TIME | oid::TIMESTAMP | oid::TIMESTAMPTZ => Some(seed.int8(v)),
+        oid::NUMERIC => Some(numeric_int(v, seed)),
         _ => None,
+    }
+}
+
+/// [`numeric`] of the integer `v` with no [`Numeric`]. The hash has no sign.
+fn numeric_int(v: i64, seed: Seed) -> u64 {
+    if v == 0 {
+        return match seed {
+            Seed::Plain => u64::from(u32::MAX),
+            Seed::Extended(seed) => seed.wrapping_sub(1),
+        };
+    }
+    // The base 10000 digits of the value, the last digit first.
+    let mut rest = v.unsigned_abs();
+    let mut digits = [0i16; 5];
+    let mut count = 0;
+    while rest != 0 {
+        #[allow(clippy::cast_possible_truncation)]
+        let digit = (rest % 10_000) as i16;
+        digits[count] = digit;
+        count += 1;
+        rest /= 10_000;
+    }
+    let low = digits.iter().position(|&d| d != 0).unwrap_or(0);
+    let mut data = [0u8; 10];
+    let mut len = 0;
+    for &digit in digits[low..count].iter().rev() {
+        data[len..len + 2].copy_from_slice(&digit.to_le_bytes());
+        len += 2;
+    }
+    let weight = (count as u64).wrapping_sub(1);
+    match seed {
+        Seed::Plain => (seed.bytes(&data[..len]) ^ weight) & u64::from(u32::MAX),
+        Seed::Extended(_) => seed.bytes(&data[..len]) ^ weight,
     }
 }
 
