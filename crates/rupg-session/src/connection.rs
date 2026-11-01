@@ -6999,7 +6999,7 @@ mod tests {
         });
     }
 
-    /// The encoded columns of a frozen table go to the image as they are, and a store that loads the image has the same columns with no new encode. The insert of a transaction in progress is not in the image, and the table changes as before after the load.
+    /// The encoded columns and the cold headers of a frozen table go to the image as they are, and a store that loads the image has the same columns and headers with no new encode. The insert of a transaction in progress is not in the image, and the table changes as before after the load.
     #[test]
     fn frozen_columns_come_back_from_the_image() {
         big_stack(|| {
@@ -7026,6 +7026,8 @@ mod tests {
                     .parse()
                     .unwrap();
             assert_eq!(store.heap().frozen_rows(database, relation), 70000);
+            assert_eq!(store.heap().cold_rows(database, relation), 70000);
+            assert_eq!(rows(&mut a, "SELECT a, b FROM t WHERE c = 2.5"), ["row 10,v10"]);
             send(&mut b, &query("BEGIN; INSERT INTO t VALUES (-1, 'gone', 0)"));
             let image = store.image(0);
             let mut back = Store::new();
@@ -7034,6 +7036,21 @@ mod tests {
             assert_eq!(back.heap().frozen_rows(database, relation), 70000);
             let (mut c, _) = connect_to(&back, 1236);
             assert_eq!(rows(&mut c, sums), before);
+            assert_eq!(back.heap().cold_rows(database, relation), 70000);
+            // ANALYZE reads the cold headers and columns, and the table stays cold.
+            send(&mut c, &query("ANALYZE t"));
+            assert_eq!(
+                rows(&mut c, "SELECT reltuples FROM pg_class WHERE relname = 't'"),
+                ["row 70000"]
+            );
+            assert_eq!(
+                rows(
+                    &mut c,
+                    "SELECT n_distinct FROM pg_stats WHERE tablename = 't' AND attname = 'b'"
+                ),
+                ["row 100"]
+            );
+            assert_eq!(back.heap().cold_rows(database, relation), 70000);
             assert_eq!(
                 rows(&mut c, "SELECT * FROM t WHERE a IN (1, 70000) ORDER BY a"),
                 ["row 1,v1,0.25", "row 70000,v0,17500"]

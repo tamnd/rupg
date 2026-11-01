@@ -7,9 +7,11 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use rupg_analyze::{Derived, Unique};
 use rupg_column::segment::Kind;
-use rupg_column::stored::Stored;
+use rupg_column::stored::{Stored, VECTOR};
 use rupg_common::persist::{Persist, Reader, put_count};
 use rupg_common::{Error, Result, SqlState};
+use rupg_encode::chooser::Sampled;
+use rupg_encode::integer;
 use rupg_func::{HeapSize, Statistic, XactState};
 use rupg_types::{Value, oid};
 
@@ -181,8 +183,8 @@ impl Tables {
         Some(table)
     }
 
-    /// The table `key` for a read of the headers of its versions only, which does not need their values.
-    fn headers(&self, key: &(u32, u32)) -> Option<&Table> {
+    /// The table `key` for a read of its pages and settings, or of the versions that a transaction in progress inserted or deleted, which a cold table does not have.
+    fn meta(&self, key: &(u32, u32)) -> Option<&Table> {
         self.0.get(key)
     }
 
@@ -209,6 +211,7 @@ impl Tables {
     /// The table `key` for new versions at its end, which keeps the frozen values of its versions.
     fn append(&mut self, key: (u32, u32)) -> &mut Table {
         let table = self.0.entry(key).or_default();
+        table.warm();
         table.columns = Columns::default();
         table
     }
@@ -218,7 +221,11 @@ impl Tables {
         &mut self,
         touched: impl Fn(&Table) -> bool,
     ) -> impl Iterator<Item = &mut Table> {
-        self.0.values_mut().filter(move |table| touched(table)).map(Table::touch)
+        // A cold table has only versions of transactions that committed and no deletes, which an end of a transaction does not change.
+        self.0
+            .values_mut()
+            .filter(move |table| table.cold.is_none() && touched(table))
+            .map(Table::touch)
     }
 
     fn retain(&mut self, keep: impl FnMut(&(u32, u32), &mut Table) -> bool) {
@@ -241,16 +248,18 @@ struct Frozen {
 }
 
 impl Frozen {
-    /// The frozen values of an image, which [`Heap::image`] wrote after the versions `versions`. The frozen versions are the versions with no values, and each column has a row for each of them.
-    fn take(input: &mut Reader<'_>, versions: &[Version]) -> Result<Option<Frozen>> {
+    /// The frozen values of an image, which [`Heap::image`] wrote after the versions `versions` and `cold` cold versions. The frozen versions are the cold versions and the versions with no values, and each column has a row for each of them.
+    fn take(input: &mut Reader<'_>, versions: &[Version], cold: usize) -> Result<Option<Frozen>> {
         let Some((rows, end, columns)) =
             <Option<(usize, usize, Vec<Arc<Stored>>)> as Persist>::take(input)?
         else {
             return Ok(None);
         };
-        let empty = versions.iter().filter(|version| version.values.is_empty()).count();
-        let last =
-            versions.iter().rposition(|version| version.values.is_empty()).map_or(0, |at| at + 1);
+        let empty = cold + versions.iter().filter(|version| version.values.is_empty()).count();
+        let last = versions
+            .iter()
+            .rposition(|version| version.values.is_empty())
+            .map_or(cold, |at| cold + at + 1);
         if empty != rows
             || end != last
             || columns.is_empty()
@@ -261,6 +270,131 @@ impl Frozen {
             ));
         }
         Ok(Some(Frozen { rows, end, columns }))
+    }
+}
+
+/// The headers of the versions of a frozen table in encoded columns, which take the place of the versions (spec/10 section 10.4.1). Each version of a cold table was inserted by a transaction that committed, and no transaction deleted it, so a version needs only its ID, its place in the order of the inserts, `xmin`, `cmin` and its length. A change of the table or a read by rows makes the versions again.
+#[derive(Debug)]
+struct Cold {
+    rows: usize,
+    /// The IDs, the places, `xmin`, `cmin` and the lengths of the versions, a vector of [`VECTOR`] versions at a time, each with the integer cascade.
+    vectors: Vec<[Box<[u8]>; 5]>,
+    /// Each transaction that inserted versions, with the last command that did.
+    xmins: Vec<(u32, u32)>,
+}
+
+impl Cold {
+    /// The headers of `versions`, or `None` when a version has values, was deleted, or was deleted by a transaction that aborted.
+    fn of(versions: &[Version]) -> Option<Cold> {
+        let settled = |v: &Version| {
+            v.values.is_empty() && v.xmax == 0 && v.cmax == 0 && v.aborted == 0 && v.next == 0
+        };
+        if versions.is_empty() || !versions.iter().all(settled) {
+            return None;
+        }
+        let chooser = Sampled::new();
+        let mut xmins: Vec<(u32, u32)> = Vec::new();
+        let mut vectors = Vec::with_capacity(versions.len().div_ceil(VECTOR));
+        let mut fields: [Vec<i64>; 5] = Default::default();
+        for chunk in versions.chunks(VECTOR) {
+            for field in &mut fields {
+                field.clear();
+            }
+            for v in chunk {
+                // A version ID and a place fit in 63 bits, so the cast keeps them.
+                fields[0].push(v.tid as i64);
+                fields[1].push(v.made as i64);
+                fields[2].push(i64::from(v.xmin));
+                fields[3].push(i64::from(v.cmin));
+                fields[4].push(i64::from(v.len));
+                match xmins.iter_mut().find(|(xmin, _)| *xmin == v.xmin) {
+                    Some((_, cmin)) => *cmin = (*cmin).max(v.cmin),
+                    None => xmins.push((v.xmin, v.cmin)),
+                }
+            }
+            let mut encoded = fields
+                .iter()
+                .map(|field| integer::encode_with(field, &chooser).ok().map(Vec::into_boxed_slice));
+            vectors.push(std::array::from_fn(|_| encoded.next().flatten().unwrap_or_default()));
+            if vectors
+                .last()
+                .is_some_and(|vector: &[Box<[u8]>; 5]| vector.iter().any(|f| f.is_empty()))
+            {
+                return None;
+            }
+        }
+        Some(Cold { rows: versions.len(), vectors, xmins })
+    }
+
+    /// The versions of the headers, with no values.
+    fn versions(&self) -> Result<Vec<Version>> {
+        let mut versions = Vec::with_capacity(self.rows);
+        for vector in &self.vectors {
+            versions.append(&mut Cold::vector(vector)?);
+        }
+        if versions.len() != self.rows {
+            return Err(rupg_common::persist::corrupt("the cold headers do not have their rows"));
+        }
+        Ok(versions)
+    }
+
+    /// The versions of one vector of headers.
+    fn vector(vector: &[Box<[u8]>; 5]) -> Result<Vec<Version>> {
+        let [tids, made, xmins, cmins, lens] =
+            vector.each_ref().map(|bytes| integer::decode(bytes));
+        let (tids, made, xmins, cmins, lens) = (tids?, made?, xmins?, cmins?, lens?);
+        if [made.len(), xmins.len(), cmins.len(), lens.len()].iter().any(|&n| n != tids.len()) {
+            return Err(rupg_common::persist::corrupt("the cold headers have different lengths"));
+        }
+        Ok((0..tids.len())
+            .map(|at| Version {
+                tid: tids[at] as u64,
+                made: made[at] as u64,
+                xmin: xmins[at] as u32,
+                cmin: cmins[at] as u32,
+                xmax: 0,
+                cmax: 0,
+                aborted: 0,
+                next: 0,
+                len: lens[at] as u16,
+                values: Box::default(),
+            })
+            .collect())
+    }
+}
+
+/// The bytes of a vector of cold headers.
+fn put_cold_vector(vector: &[Box<[u8]>; 5], out: &mut Vec<u8>) {
+    for field in vector {
+        put_count(out, field.len());
+        out.extend_from_slice(field);
+    }
+}
+
+impl Persist for Cold {
+    fn put(&self, out: &mut Vec<u8>) {
+        self.rows.put(out);
+        put_count(out, self.vectors.len());
+        for vector in &self.vectors {
+            put_cold_vector(vector, out);
+        }
+        self.xmins.put(out);
+    }
+
+    fn take(input: &mut Reader<'_>) -> Result<Cold> {
+        let rows = Persist::take(input)?;
+        let mut vectors = Vec::new();
+        for _ in 0..input.count()? {
+            let mut field = || -> Result<Box<[u8]>> {
+                let n = input.count()?;
+                Ok(input.bytes(n)?.into())
+            };
+            vectors.push([field()?, field()?, field()?, field()?, field()?]);
+        }
+        let cold = Cold { rows, vectors, xmins: Persist::take(input)? };
+        // A decode checks the bytes, so a bad image does not load.
+        cold.versions()?;
+        Ok(cold)
     }
 }
 
@@ -399,6 +533,8 @@ struct Table {
     columns: Columns,
     /// The values of the versions in encoded columns, when the versions have no values.
     frozen: Option<Frozen>,
+    /// The headers of all the versions in encoded columns, when `versions` is empty.
+    cold: Option<Cold>,
 }
 
 /// The versions of a table by the hash of their key, for one unique key, which takes the place of the btree of a unique index. The map can keep the ID of a version that went, which a check skips.
@@ -725,6 +861,74 @@ impl Table {
         );
     }
 
+    /// Gives `each` each version of the table with its values, as [`Table::each_row_of`] does, also for a cold table, whose headers decode a vector at a time.
+    fn each_version_row(&self, used: Option<&[usize]>, mut each: impl FnMut(&Version, &[Value])) {
+        let (Some(cold), Some(frozen)) = (&self.cold, &self.frozen) else {
+            self.each_row_of(used, |at, values| each(&self.versions[at], values));
+            return;
+        };
+        let mut columns: Vec<Option<Decoded<'_>>> = frozen
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(at, stored)| {
+                used.is_none_or(|used| used.contains(&at)).then(|| Decoded::new(stored))
+            })
+            .collect();
+        let mut row = Vec::with_capacity(columns.len());
+        for vector in &cold.vectors {
+            // The headers decoded when they were made or read, so the decode does not fail.
+            for version in Cold::vector(vector).unwrap_or_default() {
+                row.clear();
+                row.extend(
+                    columns.iter_mut().map(|column| {
+                        column.as_mut().and_then(Iterator::next).unwrap_or(Value::Null)
+                    }),
+                );
+                each(&version, &row);
+            }
+        }
+    }
+
+    /// Gives `each` the header of each version of the table, cold or not, with no values.
+    fn each_version(&self, mut each: impl FnMut(&Version)) {
+        let Some(cold) = &self.cold else {
+            self.versions.iter().for_each(each);
+            return;
+        };
+        for vector in &cold.vectors {
+            // The headers decoded when they were made or read, so the decode does not fail.
+            for version in Cold::vector(vector).unwrap_or_default() {
+                each(&version);
+            }
+        }
+    }
+
+    /// Makes the versions of a cold table again from their headers.
+    fn warm(&mut self) {
+        let Some(cold) = self.cold.take() else { return };
+        // The headers decoded when they were made or read, so the decode does not fail.
+        self.versions = cold.versions().unwrap_or_default();
+        debug_assert_eq!(self.versions.len(), cold.rows, "cold headers do not decode");
+    }
+
+    /// Moves the headers of the versions into encoded columns, when every version is frozen, was inserted by a transaction that committed and was not deleted.
+    fn chill(&mut self) {
+        let frozen = self.frozen.as_ref().is_some_and(|f| f.rows == self.versions.len());
+        if self.cold.is_none()
+            && frozen
+            && let Some(cold) = Cold::of(&self.versions)
+        {
+            self.cold = Some(cold);
+            self.versions = Vec::new();
+        }
+    }
+
+    /// The number of versions, cold or not.
+    fn len(&self) -> usize {
+        self.cold.as_ref().map_or(self.versions.len(), |cold| cold.rows)
+    }
+
     /// The table for a change of its versions, which then has the values of its versions and no columns.
     fn touch(&mut self) -> &mut Table {
         self.thaw();
@@ -734,6 +938,7 @@ impl Table {
 
     /// Puts the values of the frozen versions of the table back into the versions.
     fn thaw(&mut self) {
+        self.warm();
         if self.frozen.is_none() {
             return;
         }
@@ -1264,13 +1469,12 @@ impl Heap {
         used: Option<&[bool]>,
     ) -> Vec<Vec<Value>> {
         let state = self.state();
-        let Some(table) = state.tables.headers(&(view.database, relation)) else {
+        let Some(table) = state.tables.meta(&(view.database, relation)) else {
             return Vec::new();
         };
         let columns = used_columns(used);
         let mut rows = Vec::new();
-        table.each_row_of(columns.as_deref(), |at, values| {
-            let version = &table.versions[at];
+        table.each_version_row(columns.as_deref(), |version, values| {
             if visible(version, view) {
                 rows.push(version_row(version, values, &table.combos, columns.as_deref(), xids));
             }
@@ -1287,10 +1491,13 @@ impl Heap {
     ) -> Option<(usize, Vec<Arc<Stored>>)> {
         let mut state = self.state();
         let table = state.tables.0.get_mut(&(view.database, relation))?;
-        if table.versions.len() < COLUMN_ROWS {
+        if table.len() < COLUMN_ROWS {
             return None;
         }
         let columns = &mut table.columns;
+        if let (None, Some(cold)) = (&columns.xmins, &table.cold) {
+            columns.xmins = Some(cold.xmins.clone());
+        }
         if columns.xmins.is_none() {
             let mut xmins: Vec<(u32, u32)> = Vec::new();
             for version in &table.versions {
@@ -1323,13 +1530,15 @@ impl Heap {
         if xmins.iter().all(|&(xmin, _)| xmin != view.xid && committed_before(xmin, &view.snapshot))
         {
             table.freeze();
+            table.chill();
         }
+        let rows = table.len();
         let columns = &mut table.columns;
         let mut out = Vec::with_capacity(wanted.len());
         for &(at, kind) in wanted {
             if let Some(frozen) = &table.frozen {
                 // A frozen table has no values in its versions to make a column of another type from.
-                if frozen.rows != table.versions.len() {
+                if frozen.rows != rows {
                     return None;
                 }
                 let stored = frozen.columns.get(at).filter(|stored| stored.kind == kind)?;
@@ -1347,7 +1556,7 @@ impl Heap {
             };
             out.push(stored);
         }
-        Some((table.versions.len(), out))
+        Some((rows, out))
     }
 
     /// The rows of [`Heap::visible_rows`] with no system columns, for only the versions `tids` of a table, in the order of the list. A version that the view does not see gives no row.
@@ -1388,7 +1597,7 @@ impl Heap {
     /// True when a command of the transaction of `view` after the command of `view` changed the version `tid` of a table: `TM_SelfModified` with a `cmax` that is not the command of `view`.
     pub(crate) fn modified_later(&self, view: &View, relation: u32, tid: u64) -> bool {
         let state = self.state();
-        let Some(table) = state.tables.headers(&(view.database, relation)) else {
+        let Some(table) = state.tables.meta(&(view.database, relation)) else {
             return false;
         };
         table.find(tid).is_some_and(|at| {
@@ -1400,7 +1609,7 @@ impl Heap {
     /// `heap_get_latest_tid`: the last version of the chain of updates from the version `tid` of a table, as the transaction of `view` sees the updates of its own and of the transactions that committed.
     pub(crate) fn latest_tid(&self, view: &View, relation: u32, mut tid: u64) -> u64 {
         let state = self.state();
-        let Some(table) = state.tables.headers(&(view.database, relation)) else {
+        let Some(table) = state.tables.meta(&(view.database, relation)) else {
             return tid;
         };
         while let Some(version) = table.find(tid).map(|at| &table.versions[at]) {
@@ -1416,7 +1625,7 @@ impl Heap {
     /// For each version of a table that the command `command` of the transaction `xid` added, in the order of the inserts, true if the transaction did not delete or update it after, as `SnapshotSelf` sees it.
     pub(crate) fn live(&self, database: u32, relation: u32, xid: u32, command: u32) -> Vec<bool> {
         let state = self.state();
-        let Some(table) = state.tables.headers(&(database, relation)) else {
+        let Some(table) = state.tables.meta(&(database, relation)) else {
             return Vec::new();
         };
         let mut made: Vec<(u64, bool)> = table
@@ -1740,7 +1949,7 @@ impl Heap {
     /// `RelationGetNumberOfBlocks` of the heap of a table and of its free space map and visibility map, and `relpages`, `reltuples`, `relallvisible` and `relallfrozen` of the table.
     pub(crate) fn size(&self, database: u32, relation: u32) -> HeapSize {
         let state = self.state();
-        let pages = state.tables.headers(&(database, relation)).map(|table| &table.pages);
+        let pages = state.tables.meta(&(database, relation)).map(|table| &table.pages);
         let (fsm_blocks, vm_blocks) = pages.map_or((0, 0), Pages::fork_blocks);
         HeapSize {
             blocks: pages.map_or(0, Pages::blocks),
@@ -1810,12 +2019,15 @@ impl Heap {
     pub(crate) fn live_count(&self, database: u32, relation: u32, xid: u32) -> u64 {
         let mut guard = self.state();
         let state = &mut *guard;
-        let Some(table) = state.tables.get(&(database, relation)) else { return 0 };
+        let Some(table) = state.tables.meta(&(database, relation)) else { return 0 };
         let done = |x: u32| x == xid || !state.running.contains(&x);
-        let live = |v: &&Version| {
-            done(v.xmin) && (v.xmax == 0 || (v.xmax != xid && state.running.contains(&v.xmax)))
-        };
-        table.versions.iter().filter(live).count() as u64
+        let mut count = 0;
+        table.each_version(|v| {
+            if done(v.xmin) && (v.xmax == 0 || (v.xmax != xid && state.running.contains(&v.xmax))) {
+                count += 1;
+            }
+        });
+        count
     }
 
     /// `acquire_sample_rows` of `ANALYZE` for the transaction `xid`: the values of the live versions of a table, as [`Heap::live_count`] counts them, in the order of their places in the heap, and the number of the live versions. A table with more than `target` live versions gives `target` of them at equal distances, where PostgreSQL takes a random sample.
@@ -1828,23 +2040,31 @@ impl Heap {
     ) -> (Vec<Vec<Value>>, f64) {
         let mut guard = self.state();
         let state = &mut *guard;
-        let Some(table) = state.tables.get(&(database, relation)) else {
+        let Some(table) = state.tables.meta(&(database, relation)) else {
             return (Vec::new(), 0.0);
         };
         let done = |x: u32| x == xid || !state.running.contains(&x);
-        let live: Vec<&Version> = table
-            .versions
-            .iter()
-            .filter(|v| {
-                done(v.xmin) && (v.xmax == 0 || (v.xmax != xid && state.running.contains(&v.xmax)))
-            })
-            .collect();
-        let total = live.len();
-        let rows = if total <= target {
-            live.iter().map(|v| v.values.to_vec()).collect()
-        } else {
-            (0..target).map(|i| live[i * total / target].values.to_vec()).collect()
+        let live = |v: &Version| {
+            done(v.xmin) && (v.xmax == 0 || (v.xmax != xid && state.running.contains(&v.xmax)))
         };
+        let mut total = 0;
+        table.each_version(|v| total += usize::from(live(v)));
+        // The places among the live versions of the versions in the sample, in order.
+        let mut picks =
+            (0..total.min(target)).map(|i| if total <= target { i } else { i * total / target });
+        let mut next = picks.next();
+        let mut at = 0;
+        let mut rows = Vec::with_capacity(total.min(target));
+        table.each_version_row(None, |v, values| {
+            if !live(v) {
+                return;
+            }
+            if next == Some(at) {
+                rows.push(values.to_vec());
+                next = picks.next();
+            }
+            at += 1;
+        });
         (rows, total as f64)
     }
 
@@ -1898,7 +2118,7 @@ impl Heap {
         let state = self.state();
         state
             .tables
-            .headers(&(database, relation))
+            .meta(&(database, relation))
             .map(|table| table.statistics.values().cloned().collect())
             .unwrap_or_default()
     }
@@ -1927,7 +2147,7 @@ impl Heap {
         let state = self.state();
         state
             .tables
-            .headers(&(database, relation))
+            .meta(&(database, relation))
             .map(|table| (table.fixed.clone(), table.storage.clone()))
             .unwrap_or_default()
     }
@@ -2074,7 +2294,7 @@ impl Heap {
     /// True if a table has a version of a row, visible or not.
     pub(crate) fn has_rows(&self, database: u32, relation: u32) -> bool {
         let state = self.state();
-        state.tables.headers(&(database, relation)).is_some_and(|table| !table.versions.is_empty())
+        state.tables.meta(&(database, relation)).is_some_and(|table| table.len() > 0)
     }
 
     /// `RecordTransactionCommit`: the changes of the transaction become visible to the new snapshots.
@@ -2421,6 +2641,9 @@ impl Heap {
             table.storage.put(out);
             table.save_free.put(out);
             table.combos.put(out);
+            // The cold headers are all the versions, and they come before the versions of the list.
+            table.cold.put(out);
+            let end = table.cold.as_ref().map_or(end, |cold| cold.rows);
             // The bytes of `Option<(usize, usize, Vec<Arc<Stored>>)>`, which `Frozen::take` reads.
             match frozen {
                 Some(frozen) => {
@@ -2460,7 +2683,15 @@ impl Heap {
                 combos: Persist::take(input)?,
                 ..Table::default()
             };
-            table.frozen = Frozen::take(input, &table.versions)?;
+            table.cold = Persist::take(input)?;
+            if table.cold.is_some() && !table.versions.is_empty() {
+                return Err(rupg_common::persist::corrupt("a cold table has versions in a list"));
+            }
+            let cold = table.cold.as_ref().map_or(0, |cold| cold.rows);
+            table.frozen = Frozen::take(input, &table.versions, cold)?;
+            if table.cold.is_some() && table.frozen.is_none() {
+                return Err(rupg_common::persist::corrupt("a cold table has no frozen columns"));
+            }
             state.tables.0.insert(key, table);
         }
         Ok(Heap { state: Mutex::new(state) })
@@ -2470,8 +2701,16 @@ impl Heap {
     #[cfg(test)]
     pub(crate) fn frozen_rows(&self, database: u32, relation: u32) -> usize {
         let state = self.state();
-        let table = state.tables.headers(&(database, relation));
+        let table = state.tables.meta(&(database, relation));
         table.and_then(|table| table.frozen.as_ref()).map_or(0, |frozen| frozen.rows)
+    }
+
+    /// The versions of a table whose headers are in encoded columns.
+    #[cfg(test)]
+    pub(crate) fn cold_rows(&self, database: u32, relation: u32) -> usize {
+        let state = self.state();
+        let table = state.tables.meta(&(database, relation));
+        table.and_then(|table| table.cold.as_ref()).map_or(0, |cold| cold.rows)
     }
 
     /// `nextXid` goes up to `next`, for a log of a catalog: the transaction that changed the catalog has an ID that the logs of the rows may not have.
@@ -2551,7 +2790,11 @@ impl State {
         let mut tables = Vec::new();
         let mut changed = 0;
         for key in touched {
-            let Some(table) = self.tables.headers(key) else { continue };
+            let Some(table) = self.tables.meta(key) else { continue };
+            // A cold table that has versions of the transaction makes the commit take a checkpoint, as its versions are not in the list.
+            if table.cold.as_ref().is_some_and(|cold| cold.xmins.iter().any(|&(x, _)| x == xid)) {
+                return false;
+            }
             let (mut inserted, mut deleted) = (Vec::new(), Vec::new());
             for version in &table.versions {
                 if version.xmin == xid {

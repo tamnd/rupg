@@ -2,8 +2,6 @@
 //!
 //! The scan tests the conditions of `WHERE` on each vector of 1024 rows with a selection vector, and it makes the groups and the aggregates with the codes and the integers of the vectors. The targets, `HAVING` and `ORDER BY` then run with [`Eval`] on one row for each group, or on each row that passes, so that they give the values of the row engine. The groups come in the order that the row engine gives them, which is the order of the hash table of `HashAggregate`. A query that the scan cannot run gives `None`, and the row engine runs it.
 
-use std::collections::{HashMap, HashSet};
-use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::Arc;
 
 use rupg_analyze::{Aggref, BoolOp, Expr, ExprKind, FromItem, Query, Var};
@@ -21,43 +19,9 @@ use crate::{Cache, Eval, Group, hashed, scan, sort};
 /// The most entries of the memo of an expression of one column of integers, so that a column of many values does not fill the memory.
 const MEMO: usize = 1 << 20;
 
-/// A hasher for keys that are words, as `FxHasher` of rustc.
-#[derive(Clone, Copy, Default)]
-struct Fx(u64);
-
-impl Fx {
-    #[inline]
-    fn add(&mut self, word: u64) {
-        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
-    }
-}
-
-impl Hasher for Fx {
-    fn finish(&self) -> u64 {
-        self.0
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        let (words, rest) = bytes.as_chunks::<8>();
-        for word in words {
-            self.add(u64::from_le_bytes(*word));
-        }
-        for &byte in rest {
-            self.add(u64::from(byte));
-        }
-    }
-
-    fn write_u64(&mut self, word: u64) {
-        self.add(word);
-    }
-
-    fn write_usize(&mut self, word: usize) {
-        self.add(word as u64);
-    }
-}
-
-type FxMap<K, V> = HashMap<K, V, BuildHasherDefault<Fx>>;
-type FxSet<K> = HashSet<K, BuildHasherDefault<Fx>>;
+/// The hash tables of the engine, with its one hash (spec/22 section 22.6).
+type FxMap<K, V> = rupg_kernels::hash::HashMap<K, V>;
+type FxSet<K> = rupg_kernels::hash::HashSet<K>;
 
 /// The words of a key of `GROUP BY` and its mask of nulls, kept in place for a key of up to 3 words.
 enum KeyMap {
@@ -68,7 +32,7 @@ enum KeyMap {
 impl KeyMap {
     /// A map for keys of `words` words, with room for `groups` groups.
     fn new(words: usize, groups: usize) -> KeyMap {
-        let hasher = BuildHasherDefault::default();
+        let hasher = rupg_kernels::hash::Build;
         if words <= 4 {
             KeyMap::Small(FxMap::with_capacity_and_hasher(groups, hasher))
         } else {
@@ -2598,4 +2562,20 @@ fn group_order(
     let mut order = first;
     sort::qsort(&mut order, &mut |a, b| Ok(keys_of.compare(keys[*a], keys[*b])?.then(a.cmp(b))))?;
     Ok(order)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::hash::BuildHasher;
+
+    use super::*;
+
+    /// Floats whose low bits are zero go into many buckets of a small table.
+    #[test]
+    fn words_with_zero_low_bits_spread_over_the_buckets() {
+        let build = rupg_kernels::hash::Build;
+        let buckets: FxSet<u64> =
+            (0..1000).map(|i| build.hash_one((f64::from(i) / 4.0).to_bits()) & 1023).collect();
+        assert!(buckets.len() > 500, "{} buckets", buckets.len());
+    }
 }
