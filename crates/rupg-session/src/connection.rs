@@ -9096,6 +9096,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/explain_parallel_bitmap.test")));
     }
 
+    /// `EXPLAIN` of subqueries in a parallel plan, as `max_parallel_hazard_walker` and `is_parallel_safe` decide: an `InitPlan` is a parameter that a worker can read, a `SubPlan` of `NOT IN` or `ALL` whose plan has a `Gather` and a correlated `SubPlan` keep the scan out of the parallel plan. The `One-Time Filter` of `EXISTS` goes in the parallel plan below the `Partial Aggregate`, and a scalar subquery after `ANY` shows with no cast. `connection/explain_parallel_sublink.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn explain_parallel_sublink() {
+        big_stack(|| script(include_str!("connection/explain_parallel_sublink.test")));
+    }
+
     /// `EXPLAIN` of the conditions that an equivalence class with a constant gives: a condition of each member with the constant in place of the `=` of a join, the nullable side of a left join, a scan with no rows for two constants that are not equal, and the partitions that the new conditions prune. `connection/equivalence_const.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn equivalence_const() {
