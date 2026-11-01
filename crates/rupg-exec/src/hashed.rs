@@ -33,7 +33,7 @@ struct Bucket {
 const NONE: Bucket = Bucket { entry: EMPTY, hash: 0 };
 
 /// `murmurhash32`.
-fn murmurhash32(data: u32) -> u32 {
+pub(crate) fn murmurhash32(data: u32) -> u32 {
     let mut h = data;
     h ^= h >> 16;
     h = h.wrapping_mul(0x85eb_ca6b);
@@ -306,6 +306,48 @@ pub(crate) fn order_of(hashes: &[u32], groups: f64, trailing: bool) -> Result<Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hashes_integers_and_texts_with_no_value_as_with_a_value() {
+        use rupg_func::{extended_hash, extended_hash_int, extended_hash_text};
+        use rupg_types::oid;
+        for v in [0_i64, 1, -1, 7, -300, 32767, -32768, i64::from(i32::MAX), i64::from(i32::MIN)] {
+            #[allow(clippy::cast_possible_truncation)]
+            let values = [
+                (oid::INT2, Value::Int2(v as i16)),
+                (oid::INT4, Value::Int4(v as i32)),
+                (oid::DATE, Value::Date(v as i32)),
+                (oid::INT8, Value::Int8(v * 1_000_003)),
+                (oid::TIME, Value::Time(v.abs())),
+                (oid::TIMESTAMP, Value::Timestamp(v * 1_000_003)),
+                (oid::TIMESTAMPTZ, Value::TimestampTz(v)),
+            ];
+            for (ty, value) in values {
+                let raw = match value {
+                    Value::Int2(x) => i64::from(x),
+                    Value::Int4(x) | Value::Date(x) => i64::from(x),
+                    Value::Int8(x)
+                    | Value::Time(x)
+                    | Value::Timestamp(x)
+                    | Value::TimestampTz(x) => x,
+                    _ => unreachable!(),
+                };
+                assert_eq!(
+                    extended_hash_int(ty, raw, 0),
+                    extended_hash(ty, &value, 0).ok(),
+                    "{ty} {raw}"
+                );
+            }
+        }
+        for text in ["", "a", "ab  ", "  x", "hello world, a longer text", "жж é"] {
+            for ty in [oid::TEXT, oid::VARCHAR, oid::BPCHAR] {
+                let value = Value::Text(text.to_owned());
+                let want = extended_hash(ty, &value, 0).ok();
+                assert_eq!(extended_hash_text(ty, text.as_bytes(), 0), want, "{ty} {text:?}");
+            }
+        }
+        assert_eq!(extended_hash_int(oid::FLOAT8, 1, 0), None);
+    }
 
     /// The order of the entries of a table for `groups` groups after the hashes go in.
     fn order(groups: f64, hashes: &[u32]) -> Vec<u32> {
