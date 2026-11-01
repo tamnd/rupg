@@ -4043,6 +4043,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/group_limit_stops.test")));
     }
 
+    /// A grouped vector scan with `ORDER BY` of a count and `LIMIT` keeps the counts in a bounded heap with the steps of the heap of rows, so the groups with the same count come in the order of Postgres.
+    #[test]
+    fn group_count_top() {
+        big_stack(|| script(include_str!("connection/group_count_top.test")));
+    }
+
     /// A vector scan with `ORDER BY` and `LIMIT` and no groups keeps the rows in a bounded heap as they come, with the order of the row engine for equal keys, also with `OFFSET`, nulls, few rows and `LIMIT 0`.
     #[test]
     fn column_top() {

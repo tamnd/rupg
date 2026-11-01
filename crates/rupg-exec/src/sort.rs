@@ -76,6 +76,14 @@ impl<'a> Keys<'a> {
         Ok(Keys { keys, session })
     }
 
+    /// For one key whose sort function compares integers with no call: true for a descending order.
+    pub(crate) fn one_native(&self) -> Option<bool> {
+        match self.keys.as_slice() {
+            [key] if key.sort.is_some() => key.descending,
+            _ => None,
+        }
+    }
+
     fn test(&self, kernel: Kernel, ty: u32, a: &Value, b: &Value) -> Result<bool> {
         let types = [ty, ty];
         let call = Call {

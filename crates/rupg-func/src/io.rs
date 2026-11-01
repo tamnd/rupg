@@ -18,6 +18,28 @@ const ARRAY_CATEGORY: u8 = b'A';
 
 /// The type that holds the values of a type: the base type of a domain, or the type itself.
 pub fn base_type(ty: u32) -> u32 {
+    // A built-in scalar type is not a domain, so its rows are not read.
+    if matches!(
+        ty,
+        oid::BOOL
+            | oid::INT2
+            | oid::INT4
+            | oid::INT8
+            | oid::FLOAT4
+            | oid::FLOAT8
+            | oid::NUMERIC
+            | oid::TEXT
+            | oid::VARCHAR
+            | oid::BPCHAR
+            | oid::NAME
+            | oid::OID
+            | oid::DATE
+            | oid::TIME
+            | oid::TIMESTAMP
+            | oid::TIMESTAMPTZ
+    ) {
+        return ty;
+    }
     let mut ty = ty;
     while let Some(row) = builtin::type_by_oid(ty)
         && row.kind == b'd'

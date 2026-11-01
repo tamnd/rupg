@@ -1209,6 +1209,15 @@ impl Results<'_> {
         Ok(out)
     }
 
+    /// The counts of the groups, for a call of `count`.
+    fn counts(&self, c: usize) -> Option<&[i64]> {
+        let call = &self.calls[c];
+        match (&call.method, &call.states) {
+            (Method::Count | Method::CountArg, States::Count(states)) => Some(states),
+            _ => None,
+        }
+    }
+
     /// The result of the call `c` for the group `g`.
     fn value(&self, c: usize, g: usize) -> Result<Value> {
         let call = &self.calls[c];
@@ -1644,6 +1653,27 @@ fn project(
                 if let (Some(direct), Some(bound)) = (&direct, bound) {
                     // Each group goes into the bounded heap of the sort as it comes, and the row of a group that is not in the heap takes the values of the next group.
                     let keys = sort::Keys::new(&query.sort, &types, session)?;
+                    if let (Some(descending), [key]) = (keys.one_native(), query.sort.as_slice())
+                        && let Some(Some(c)) = direct.get(key.target)
+                        && let Some(counts) = results.counts(*c)
+                    {
+                        // One key on a count: the heap compares the counts as integers, with the same steps as for the rows.
+                        let mut cmp = |a: &(i64, usize), b: &(i64, usize)| {
+                            Ok(if descending { b.0.cmp(&a.0) } else { a.0.cmp(&b.0) })
+                        };
+                        let mut heap = sort::Bounded::new(bound);
+                        for (n, g) in order.into_iter().enumerate() {
+                            crate::interrupt(session, n)?;
+                            heap.push((counts[g], g), &mut cmp)?;
+                        }
+                        for (_, g) in heap.finish(&mut cmp)?.into_iter().skip(offset) {
+                            eval.tuple = &tuples[g];
+                            eval.group =
+                                Group { aggs: results.group(g, None)?, ..Group::default() };
+                            eval.project(&query.targets, &levels, &mut out, usize::MAX)?;
+                        }
+                        return Ok((out, true));
+                    }
                     let mut cmp = |a: &Vec<Value>, b: &Vec<Value>| keys.compare(a, b);
                     let mut heap = sort::Bounded::new(bound);
                     let mut spare: Option<Vec<Value>> = None;
