@@ -277,6 +277,11 @@ impl Connection {
     /// The triggers of the table of the write for the event `event`, in the order of their names.
     fn triggers_of(&self, info: &Write, event: i16) -> Result<Triggers, Error> {
         let catalog = self.catalog();
+        // Most tables have no trigger, and a reader costs more than the search.
+        let none = |t: &&Trigger| t.internal || t.kind & event == 0;
+        if catalog.triggers_of(info.table).iter().all(none) {
+            return Ok(Triggers { list: Vec::new(), event });
+        }
         let reader = self.reader();
         armed(&catalog, &reader, info.table, event)
     }
