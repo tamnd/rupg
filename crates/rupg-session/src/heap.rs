@@ -17,10 +17,12 @@ use rupg_platform::{Job, Tasks};
 use rupg_types::{Value, oid};
 
 pub(crate) use btree::{Shape, Size as BtreeSize};
+pub(crate) use cells::{Cells, Values};
 pub(crate) use pages::{Fixed, Skip, Storage, datum_width, stored_widths};
 use pages::{Pages, Pruned, generation_of, max_align, page_of, slot_of, toast};
 
 mod btree;
+mod cells;
 mod fsm;
 mod pages;
 
@@ -174,6 +176,17 @@ impl State {
     }
 
     /// Notes that the transaction `xid` inserted or deleted the versions `tids` of the table `key`, for the log of its commit. A version that a rollback removes later stays in the list, and the log skips it.
+    /// Keeps the table `key` in [`State::loading`] of the transaction `xid` when a load left open rows in its frozen columns, which the commit seals.
+    fn loaded(&mut self, xid: u32, key: (u32, u32)) {
+        let open = self.tables.meta(&key).and_then(|table| table.frozen.as_ref());
+        if open.is_some_and(|frozen| frozen.columns.iter().any(|column| !column.sealed())) {
+            let tables = self.loading.entry(xid).or_default();
+            if !tables.contains(&key) {
+                tables.push(key);
+            }
+        }
+    }
+
     fn wrote_ids(&mut self, xid: u32, key: (u32, u32), tids: &[u64]) {
         if let Some(Touched { tids: Some(list), .. }) = self.touch(xid, key) {
             list.extend_from_slice(tids);
@@ -2083,14 +2096,8 @@ impl Heap {
             }
             // A large load moves the values of its versions into columns as it goes, so the rows of the load are not all in memory at once.
             table.freeze_load(self.tasks.as_deref());
-            let open = table.frozen.as_ref().is_some_and(|f| f.columns.iter().any(|c| !c.sealed()));
             state.wrote_ids(view.xid, (view.database, relation), ids);
-            if open {
-                let tables = state.loading.entry(view.xid).or_default();
-                if !tables.contains(&(view.database, relation)) {
-                    tables.push((view.database, relation));
-                }
-            }
+            state.loaded(view.xid, (view.database, relation));
             return Ok(Changed::Done(count));
         }
         let mut keys = Vec::with_capacity(rows.len());

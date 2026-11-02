@@ -28,7 +28,7 @@ const TUPLE_HEADER: usize = 23;
 const MAX_EXTEND: u32 = 64;
 
 /// `TOAST_TUPLE_THRESHOLD` and `TOAST_TUPLE_TARGET`: a version longer than this has its longest values in the TOAST table.
-const TOAST_THRESHOLD: usize = 2032;
+pub(super) const TOAST_THRESHOLD: usize = 2032;
 
 /// `TOAST_POINTER_SIZE`: the length of a value in the TOAST table in its version, with its header of one byte.
 const TOAST_POINTER: usize = 18;
@@ -95,6 +95,50 @@ fn layout(value: &Value) -> Layout {
         Value::Record(record) => Layout::Varlena(record_len(&record.values) - 4, 8),
         _ => Layout::Varlena(16, 4),
     }
+}
+
+/// The value of one column of a load in [`plain_lens`]: a value of fixed length with its length and alignment, or a `varlena` value with the length of its data.
+#[derive(Clone, Copy)]
+pub(super) enum Width {
+    Fixed(usize, usize),
+    Varlena,
+}
+
+/// The length of each version of a load with no nulls, as [`toast`] gives it when no value is compressed or moved: for each column, its width and the end of the data of each of its `varlena` values in the bytes of the column, one for each version. A version that is longer than [`TOAST_THRESHOLD`] has the length before the toaster takes it. `None` when a `varlena` column has no ends.
+pub(super) fn plain_lens<'a>(
+    columns: impl Iterator<Item = (Width, Option<&'a [usize]>)>,
+    rows: usize,
+    fixed: &[Fixed],
+    storage: &[Storage],
+) -> Option<Vec<usize>> {
+    let header = max_align(TUPLE_HEADER);
+    let mut lens = vec![0; rows];
+    for (at, (width, data)) in columns.enumerate() {
+        match (fixed.get(at).copied().flatten(), width, data) {
+            (Some((size, align)), ..) | (None, Width::Fixed(size, align), _) => {
+                for len in &mut lens {
+                    *len = align_to(*len, align) + size;
+                }
+            }
+            (None, Width::Varlena, Some(ends)) => {
+                let short = storage.get(at).copied().unwrap_or(DEFAULT_STORAGE) != Storage::Plain;
+                let starts = std::iter::once(0).chain(ends.iter().copied());
+                for ((len, &end), start) in lens.iter_mut().zip(ends).zip(starts) {
+                    let data = end - start;
+                    *len = if short && data < 127 {
+                        *len + data + 1
+                    } else {
+                        align_to(*len, 4) + data + 4
+                    };
+                }
+            }
+            (None, Width::Varlena, None) => return None,
+        }
+    }
+    for len in &mut lens {
+        *len += header;
+    }
+    Some(lens)
 }
 
 /// `heap_compute_data_size`: the length of the data of a version with the values `layouts`. A `varlena` value of up to 126 bytes has a header of one byte and no alignment, as `VARATT_CAN_MAKE_SHORT` lets it.

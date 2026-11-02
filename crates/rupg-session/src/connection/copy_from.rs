@@ -23,11 +23,18 @@ use crate::heap::{Changed, View};
 use crate::query::{self, Reader};
 use crate::utility::Notice;
 
+mod cells;
+
+use cells::Parse;
+
 /// `MAX_COPY_DATA_DISPLAY`: the number of bytes of a line that the context of an error shows.
 const MAX_DISPLAY: usize = 100;
 
 /// `MAX_BUFFERED_TUPLES`: the number of rows that the copy keeps before it writes them in the heap.
 const MAX_BUFFERED: usize = 1000;
+
+/// The rows that a bulk load reads before it makes their cells, so that the threads of the server each get a part of the rows.
+const LOAD_BATCH: usize = 8192;
 
 /// The parameters of the progress of a copy, `PROGRESS_COPY_*`, and the values of `PROGRESS_COPY_COMMAND_FROM`, `PROGRESS_COPY_TYPE_FILE` and `PROGRESS_COPY_TYPE_PIPE`.
 const BYTES_PROCESSED: usize = 0;
@@ -180,6 +187,8 @@ struct Load {
     inserted: Vec<Vec<Value>>,
     /// The routing of the rows of a partitioned table into its leaves, which keep the rows instead of `rows`.
     routing: Option<Routing>,
+    /// The input of each column of a bulk load, which writes the rows into the encoded columns of the table, or `Some(None)` for a copy that takes each row as values. `None` until the first rows went in.
+    bulk: Option<Option<Vec<Parse>>>,
 }
 
 /// `EolType`: the line ending of the data, which the first line sets.
@@ -517,6 +526,7 @@ impl Connection {
             started: Vec::new(),
             inserted: Vec::new(),
             routing,
+            bulk: None,
         };
         let names = target.selected.iter().map(|&i| target.columns[i].clone()).collect();
         self.report_progress(Some(progress));
@@ -563,6 +573,14 @@ impl Connection {
         let added = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
         copy.progress.params[BYTES_PROCESSED] =
             copy.progress.params[BYTES_PROCESSED].saturating_add(added);
+        // A bulk load waits for a batch of rows for the threads, and a line with an error comes after the rows before it.
+        if read.is_ok()
+            && matches!(copy.load.bulk, Some(Some(_)))
+            && copy.pending.len() < LOAD_BATCH
+        {
+            self.report_copy(copy);
+            return Ok(());
+        }
         let loaded = self.load_rows(copy);
         self.report_copy(copy);
         loaded?;
@@ -626,6 +644,15 @@ impl Connection {
         if copy.pending.is_empty() {
             return Ok(());
         }
+        self.load_cells(copy)?;
+        if copy.pending.is_empty() {
+            return Ok(());
+        }
+        self.load_values(copy)
+    }
+
+    /// The rows of `pending` go through the plan of the copy as values, as `NextCopyFrom` and `ExecInsert` take them.
+    fn load_values(&self, copy: &mut CopyIn) -> Result<(), Error> {
         let pending = std::mem::take(&mut copy.pending);
         if copy.load.plan.is_none() {
             return Err(copy.at_line(Error::new(
@@ -734,6 +761,9 @@ impl Connection {
         drop(reader);
         copy.load.routing = routing;
         copy.load.excluded += excluded;
+        if copy.load.bulk.is_none() {
+            copy.load.bulk = Some(self.bulk_parse(copy));
+        }
         if copy.load.rows.len() + copy.load.routing.as_ref().map_or(0, Routing::pending)
             >= MAX_BUFFERED
         {
@@ -819,6 +849,85 @@ impl Connection {
         if !new_rows.is_empty() {
             load.batches.push(Batch::new(info, &info.foreign, view.command, new_rows, Vec::new()));
         }
+        Ok(())
+    }
+}
+
+impl Connection {
+    /// The input of each column for a bulk load of the copy, after its first rows started the plan of the copy: a copy of text or CSV into an ordinary table, with no condition `WHERE`, no triggers, no unique key or foreign key, no policy, no domain, no generated column, `ON_ERROR STOP`, no `FORCE_NULL` or `FORCE_NOT_NULL`, a plan that takes the values of the fields as its row, and a type with a fast input for each column.
+    fn bulk_parse(&self, copy: &CopyIn) -> Option<Vec<Parse>> {
+        let load = &copy.load;
+        let plan = load.plan.as_ref()?;
+        let info = plan.write()?;
+        let passes = load
+            .started
+            .iter()
+            .find(|(p, _)| Rc::ptr_eq(p, plan))
+            .is_some_and(|&(_, passes)| passes);
+        let simple = passes
+            && copy.format != Format::Binary
+            && load.on_error == OnError::Stop
+            && load.filter.is_none()
+            && load.routing.is_none()
+            && load.triggers.is_empty()
+            && !load.domains.contains(&true)
+            && !load.force_null.contains(&true)
+            && !load.force_not_null.contains(&true)
+            && info.unique.is_empty()
+            && info.foreign.is_empty()
+            && info.policy_for(rupg_analyze::WriteKind::Insert).is_none()
+            && load.types.len() == info.width;
+        let catalog = self.catalog();
+        let relation = catalog.relation(info.table)?;
+        let plain = relation.kind == rupg_catalog::RelKind::Table
+            && relation.partition_of.is_none()
+            && relation.columns.iter().all(|column| column.generated == 0);
+        if !simple || !plain {
+            return None;
+        }
+        load.types.iter().map(|&(ty, typmod)| Parse::of(ty, typmod)).collect()
+    }
+
+    /// The rows that the copy read go into the encoded columns of the table as cells, for a bulk load. The rows that need the path of `NextCopyFrom` stay in `pending`: each row of a batch with a field with a null or with a form that the fast input does not read, and each row after the table cannot take the cells. A row that the toaster takes goes in as values before the next row.
+    fn load_cells(&self, copy: &mut CopyIn) -> Result<(), Error> {
+        let Some(Some(parse)) = &copy.load.bulk else { return Ok(()) };
+        let Some(info) = copy.load.plan.as_deref().and_then(Plan::write) else { return Ok(()) };
+        let table = info.table;
+        let store = &self.store;
+        let Some(cells) = cells::read(&copy.pending, parse, store.tasks()) else {
+            return Ok(());
+        };
+        let heap = store.heap();
+        let mut rows = std::mem::take(&mut copy.pending).into_iter();
+        let mut from = 0;
+        while from < cells.rows {
+            // The rows that went in as values come first.
+            self.flush_rows(copy, None)?;
+            if self.xid.get() == 0 {
+                self.xid.set(heap.begin(self.pid));
+            }
+            let reader = self.reader();
+            let Some(view) = reader.view() else {
+                return Err(Error::internal("the reader of the session has no view of the rows"));
+            };
+            let view = View { xid: self.xid.get(), ..view.clone() };
+            drop(reader);
+            self.heap_layout(table);
+            let Some(count) = heap.insert_cells(table, &view, &cells, from)? else { break };
+            copy.load.count += count;
+            let count = count as usize;
+            self.count_inserts(table, count);
+            from += count;
+            if count > 0 {
+                rows.nth(count - 1);
+            }
+            if from < cells.rows {
+                copy.pending.extend(rows.next());
+                self.load_values(copy)?;
+                from += 1;
+            }
+        }
+        copy.pending = rows.collect();
         Ok(())
     }
 }
