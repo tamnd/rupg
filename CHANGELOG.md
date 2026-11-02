@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A statement with no `WITH` that changes data does not walk its query to find the statements of `WITH` that read written rows (#1301).
 - A commit on a thread of the operating system sleeps on the condition variable of the log while another commit syncs the log. Before, each waiting commit unlocked the log, yielded and locked it again in a loop, so at 16 clients the waiting commits took the processor and the lock of the log from the commit that synced (#1300).
 
 ## 0.4.19 (2026-11-03)
