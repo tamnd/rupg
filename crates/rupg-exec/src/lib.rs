@@ -2070,7 +2070,40 @@ impl Plan {
     ///
     /// The error of a function, such as a division by zero.
     pub fn run_started(&self, params: &[Value], session: &dyn Session) -> Result<Vec<Vec<Value>>> {
+        if let Some(row) = self.given_row(params) {
+            return Ok(vec![row]);
+        }
         run_query(self.runnable(), params, session, &self.cache(), &[], false)
+    }
+
+    /// The one row of an `INSERT ... VALUES` of one row whose targets are all parameters and constants, with no `FROM`, or `None` for another query. The run of such a query evaluates only these targets, so the row is their values, and the plan does not need to run.
+    fn given_row(&self, params: &[Value]) -> Option<Vec<Value>> {
+        let query = self.runnable();
+        let info = query.write.as_ref()?;
+        let simple = info.kind == rupg_analyze::WriteKind::Insert
+            && !info.instead
+            && query.relations.is_empty()
+            && query.from.is_empty()
+            && query.filter.is_none()
+            && query.ctes.is_empty()
+            && query.set_op.is_none()
+            && !query.grouped
+            && query.having.is_none()
+            && query.limit.is_none()
+            && query.offset.is_none();
+        if !simple {
+            return None;
+        }
+        query
+            .targets
+            .iter()
+            .map(|target| match &target.expr.kind {
+                _ if target.junk => None,
+                ExprKind::Const(value) => Some(value.clone()),
+                ExprKind::Param(n) => n.checked_sub(1).and_then(|i| params.get(i)).cloned(),
+                _ => None,
+            })
+            .collect()
     }
 
     /// True when a run of the plan gives its parameters as its one row: an `INSERT` of one row of the parameters `$1` to `$n` in the order of the columns of the table, with no check constraint, no rule, no view, no `ON CONFLICT` and no `RETURNING`. A parameter can have the length cast of the type modifier of its column, as the input function of `COPY FROM` applied the type modifier already. `COPY FROM` then takes the values of each row as its new row and does not run the plan.
