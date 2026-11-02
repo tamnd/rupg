@@ -13,6 +13,29 @@ pub const ROWS: usize = 262_144;
 /// The words of the null bitmap of a vector.
 pub const WORDS: usize = VECTOR / 64;
 
+/// The value of one row of a column in the form that the column stores: the integer of an integer kind, the number of a float kind, or the bytes of a code kind. A load that parses its input to this form makes no [`Value`]. A cell of the [`Kind::Text`] kind holds UTF-8.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Cell<'a> {
+    Null,
+    Int(i64),
+    Float(f64),
+    Bytes(&'a [u8]),
+}
+
+impl Cell<'_> {
+    /// True when the cell has the form of the store `store`, or is null.
+    #[must_use]
+    pub fn fits(&self, store: Store) -> bool {
+        matches!(
+            (self, store),
+            (Cell::Null, _)
+                | (Cell::Int(_), Store::Int)
+                | (Cell::Float(_), Store::Float)
+                | (Cell::Bytes(_), Store::Code)
+        )
+    }
+}
+
 /// The physical type of a column (spec/09 section 9.8), with the PostgreSQL type that it gives back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -77,6 +100,25 @@ impl Kind {
             | (Kind::Timestamp, Value::Timestamp(v))
             | (Kind::TimestampTz, Value::TimestampTz(v)) => *v,
             _ => return None,
+        })
+    }
+
+    /// The cell of a value of this kind, or `None` for a value of another type. A null is [`Cell::Null`].
+    #[must_use]
+    pub fn cell(self, value: &Value) -> Option<Cell<'_>> {
+        Some(match (self.store(), value) {
+            (_, Value::Null) => Cell::Null,
+            (Store::Int, v) => Cell::Int(self.int_of(v)?),
+            (Store::Float, v) => Cell::Float(match (self, v) {
+                (Kind::Float4, Value::Float4(v)) => f64::from(*v),
+                (Kind::Float8, Value::Float8(v)) => *v,
+                _ => return None,
+            }),
+            (Store::Code, v) => Cell::Bytes(match (self, v) {
+                (Kind::Text, Value::Text(s)) => s.as_bytes(),
+                (Kind::Bytea, Value::Bytea(b)) => b,
+                _ => return None,
+            }),
         })
     }
 
