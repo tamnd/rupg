@@ -9247,6 +9247,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/point_key.test")));
     }
 
+    /// The rows of an `IN` list and of an `= ANY` of an array on the key of a unique index, with a constant and with a parameter: a value twice, a null and a key that no row has, a key of two columns, two `numeric` values that are equal, an empty array, and the rows after an `UPDATE` and a `DELETE` of the keys and in a transaction that rolls back. `connection/any_key.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn any_key() {
+        big_stack(|| script(include_str!("connection/any_key.test")));
+    }
+
     /// `EXPLAIN` of the conditions that an equivalence class with a constant gives: a condition of each member with the constant in place of the `=` of a join, the nullable side of a left join, a scan with no rows for two constants that are not equal, and the partitions that the new conditions prune. `connection/equivalence_const.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn equivalence_const() {

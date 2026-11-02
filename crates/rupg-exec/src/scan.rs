@@ -916,7 +916,7 @@ pub(crate) fn check_scannable(query: &Query, session: &dyn Session) -> Result<()
     Ok(())
 }
 
-/// The rows of a query of one table of the user whose conditions `conds` of `WHERE` have an `=` of each key column of a unique index with a constant or a parameter of `params`, as an `Index Scan` reads them. The rows are the versions with the key, which the query tests again with all the conditions. With `used`, each row has only the columns that are true in `used`, in their order. The result has true when a parameter gave a value of the key. `None` is a query that reads all the rows: the query reads more than one relation or a table with children, a condition is not an `=` of one type that has a hash, or the key has a collation that is not deterministic.
+/// The rows of a query of one table of the user whose conditions `conds` of `WHERE` have an `=` or an `= ANY` of an array of each key column of a unique index with a constant or a parameter of `params`, as an `Index Scan` reads them. The rows are the versions with the key, which the query tests again with all the conditions. With `used`, each row has only the columns that are true in `used`, in their order. The result has true when a parameter gave a value of the key. `None` is a query that reads all the rows: the query reads more than one relation or a table with children, a condition is not an `=` of one type that has a hash, or the key has a collation that is not deterministic.
 fn key_rows(
     query: &Query,
     used: Option<&[bool]>,
@@ -937,21 +937,39 @@ fn key_rows(
     {
         return Ok(None);
     }
-    // The column, the value and true for a parameter, for each `=` of a column with a constant or a parameter.
-    let mut equal: Vec<(usize, Value, bool)> = Vec::new();
+    // The column, the values and true for a parameter, for each `=` of a column with a constant or a parameter, and for each `= ANY` of a column with an array.
+    let mut equal: Vec<(usize, Vec<Value>, bool)> = Vec::new();
     for expr in conds {
-        let ExprKind::Func(f) = &expr.kind else { continue };
-        let [a, b] = f.args.as_slice() else { continue };
-        if !HASH_EQUALS.contains(&f.oid) {
-            continue;
-        }
-        let found = match (key_column(a), key_column(b)) {
-            (Some(column), None) => key_value(b, params).map(|v| (column, v)),
-            (None, Some(column)) => key_value(a, params).map(|v| (column, v)),
+        let found = match &expr.kind {
+            ExprKind::Func(f) if HASH_EQUALS.contains(&f.oid) => match f.args.as_slice() {
+                [a, b] => match (key_column(a), key_column(b)) {
+                    (Some(column), None) => key_value(b, params).map(|v| (column, v)),
+                    (None, Some(column)) => key_value(a, params).map(|v| (column, v)),
+                    _ => None,
+                }
+                .map(|(column, (value, param))| (column, vec![value], param)),
+                _ => None,
+            },
+            ExprKind::ScalarArrayOp { func, any: true, args } if HASH_EQUALS.contains(func) => {
+                match args.as_slice() {
+                    [a, b] => key_column(a).zip(key_value(b, params)).and_then(|(column, v)| {
+                        let (Value::Array(array), param) = v else { return None };
+                        let mut values: Vec<Value> = Vec::new();
+                        // A null element is equal to no key.
+                        for value in array.values.into_iter().flatten() {
+                            if !values.contains(&value) {
+                                values.push(value);
+                            }
+                        }
+                        Some((column, values, param))
+                    }),
+                    _ => None,
+                }
+            }
             _ => None,
         };
-        if let Some((column, (value, param))) = found {
-            equal.push((column, value, param));
+        if let Some(found) = found {
+            equal.push(found);
         }
     }
     if equal.is_empty() {
@@ -973,30 +991,52 @@ fn key_rows(
             continue;
         }
         let count = usize::try_from(info.key_count).unwrap_or_default();
-        let (mut columns, mut types, mut key, mut param) =
-            (Vec::new(), Vec::new(), Vec::new(), false);
+        let (mut columns, mut types, mut keys, mut param) =
+            (Vec::new(), Vec::new(), vec![Vec::new()], false);
         for (i, &attnum) in info.keys.iter().take(count).enumerate() {
             let Some(at) = usize::try_from(attnum - 1).ok() else { break };
             let Some(column) = table.columns.get(at) else { break };
-            let Some((_, value, p)) = equal.iter().find(|(c, ..)| *c == at) else { break };
+            let Some((_, values, p)) = equal.iter().find(|(c, ..)| *c == at) else { break };
             if !deterministic(info.collations.get(i).copied().unwrap_or(0))
                 || !deterministic(column.collation)
             {
                 break;
             }
+            // Each key is one value of each column, so the keys are all the ways to take a value of each column.
+            if keys.len().saturating_mul(values.len()) > KEY_LIMIT {
+                break;
+            }
+            keys = keys
+                .iter()
+                .flat_map(|key| {
+                    values.iter().map(move |value| {
+                        let mut key = key.clone();
+                        key.push(value.clone());
+                        key
+                    })
+                })
+                .collect();
             columns.push(at);
             types.push(column.ty);
-            key.push(value.clone());
             param |= *p;
         }
         if count == 0 || columns.len() != count {
             continue;
         }
         let key_columns = (&columns[..], &types[..], info.nulls_not_distinct);
-        let Some(mut rows) = session.table_rows_by_key(relation.oid, used, key_columns, &key)?
-        else {
-            return Ok(None);
-        };
+        let mut rows = Vec::new();
+        // Two keys that are equal can have values that are not the same, as `1.0` and `1.00`, so each version comes once.
+        let mut seen = std::collections::HashSet::new();
+        for key in &keys {
+            let Some(found) = session.table_rows_by_key(relation.oid, used, key_columns, key)?
+            else {
+                return Ok(None);
+            };
+            rows.extend(found.into_iter().filter(|row| match row.last() {
+                Some(Value::Int8(tid)) => keys.len() == 1 || seen.insert(*tid),
+                _ => true,
+            }));
+        }
         session.count_scan(relation.oid);
         let width = used.map_or(table.columns.len(), |u| u.iter().filter(|u| **u).count());
         for row in &mut rows {
@@ -1008,6 +1048,9 @@ fn key_rows(
     }
     Ok(None)
 }
+
+/// The most keys that [`key_rows`] reads one at a time. With more, the scan reads all the rows.
+const KEY_LIMIT: usize = 10_000;
 
 /// The column of the table of a query of one table that an expression reads, through a cast that keeps the binary form.
 fn key_column(expr: &Expr) -> Option<usize> {

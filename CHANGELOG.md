@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Read only the versions of the keys of an `IN` list or of an `= ANY` of an array on the key columns of a unique index, one key at a time through the key map of the unique check, so that a scan of a few keys does not read all the rows (#1287).
 - A connection reads the settings that each statement uses, such as `statement_timeout`, `synchronous_commit`, `track_activities` and `application_name`, again only when a setting changes, not at each `Bind`, `Execute` and `Sync` (#1284).
 - Read only the versions of one key for a scan with an `=` on each key column of a unique index, through the key map that the unique check keeps, and do not read the range of a column of an equivalence class that joins no other relation (#1282).
 - The server sends `ReadyForQuery` when the input that it read runs out, not after each `Sync`, so a client that sends many statements before it reads the answers gets them in few packets. A prepared `INSERT` with `Bind`, `Execute` and `Sync` for each row, 1000 rows at a time, goes from 227 us to 59 us for each row on a loaded test machine (#1281).
