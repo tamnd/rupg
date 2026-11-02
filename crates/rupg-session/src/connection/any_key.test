@@ -1,0 +1,67 @@
+> CREATE TABLE ka (k varchar(20) PRIMARY KEY, v int)
+CREATE TABLE
+> INSERT INTO ka SELECT 'user' || g, g FROM generate_series(1, 200) g
+INSERT 0 200
+> SELECT k, v FROM ka WHERE k IN ('user5', 'user17', 'user5', NULL, 'nouser') ORDER BY k
+fields k@ka.1:1043:-1:24,v@ka.2:23:4:-1
+row user17,17
+row user5,5
+SELECT 2
+> SELECT k, v FROM ka WHERE k = ANY (ARRAY['user9', 'user3']) AND v > 4
+fields k@ka.1:1043:-1:24,v@ka.2:23:4:-1
+row user9,9
+SELECT 1
+> UPDATE ka SET v = v + 1000 WHERE k IN ('user1', 'user2')
+UPDATE 2
+> SELECT k, v FROM ka WHERE k IN ('user1', 'user2', 'user3') ORDER BY v
+fields k@ka.1:1043:-1:24,v@ka.2:23:4:-1
+row user3,3
+row user1,1001
+row user2,1002
+SELECT 3
+> DELETE FROM ka WHERE k = ANY ('{user3,user4}')
+DELETE 2
+> SELECT count(*) FROM ka WHERE k IN ('user3', 'user4', 'user6')
+fields count:20:8:-1
+row 1
+SELECT 1
+> CREATE TABLE kn (a numeric, b int, c text, UNIQUE (a, b))
+CREATE TABLE
+> INSERT INTO kn VALUES (1.0, 1, 'x'), (2, 1, 'y'), (1, 2, 'z')
+INSERT 0 3
+> SELECT a, b, c FROM kn WHERE a IN (1.0, 1.00, 2) AND b IN (1, 2) ORDER BY c
+fields a@kn.1:1700:-1:-1,b@kn.2:23:4:-1,c@kn.3:25:-1:-1
+row 1.0,1,x
+row 2,1,y
+row 1,2,z
+SELECT 3
+> SELECT a, b, c FROM kn WHERE a = ANY ('{}'::numeric[]) AND b = 1
+fields a@kn.1:1700:-1:-1,b@kn.2:23:4:-1,c@kn.3:25:-1:-1
+SELECT 0
+> PREPARE kq (text[]) AS SELECT k, v FROM ka WHERE k = ANY ($1) ORDER BY v
+PREPARE
+> EXECUTE kq ('{user7,user8,user300}')
+fields k@ka.1:1043:-1:24,v@ka.2:23:4:-1
+row user7,7
+row user8,8
+SELECT 2
+> EXECUTE kq ('{user10}')
+fields k@ka.1:1043:-1:24,v@ka.2:23:4:-1
+row user10,10
+SELECT 1
+> BEGIN
+BEGIN
+> UPDATE ka SET v = 0 WHERE k = 'user7'
+UPDATE 1
+> EXECUTE kq ('{user7,user8}')
+fields k@ka.1:1043:-1:24,v@ka.2:23:4:-1
+row user7,0
+row user8,8
+SELECT 2
+> ROLLBACK
+ROLLBACK
+> EXECUTE kq ('{user7,user8}')
+fields k@ka.1:1043:-1:24,v@ka.2:23:4:-1
+row user7,7
+row user8,8
+SELECT 2
