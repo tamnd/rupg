@@ -446,12 +446,6 @@ impl<'a> Reader<'a> {
         pid: i32,
         catalog: Arc<Catalog>,
     ) -> Reader<'a> {
-        let (generation, name) = {
-            let settings = settings.borrow();
-            let name = settings.get_of(guc::known!("TimeZone")).unwrap_or_else(|| "UTC".to_owned());
-            (settings.generation(), name)
-        };
-        let zone = session_zone(&name);
         use_catalog_types(&catalog);
         Reader {
             settings,
@@ -464,7 +458,8 @@ impl<'a> Reader<'a> {
             clock,
             pid,
             catalog,
-            zone: RefCell::new((generation, name, zone)),
+            // The first call of `zone` reads the setting, as no generation is `u64::MAX`.
+            zone: RefCell::new((u64::MAX, String::new(), Err(String::new()))),
             date_format: Cell::new(None),
             activity: None,
             statements: None,

@@ -27,6 +27,10 @@ pub(super) struct Known {
     pub(super) utf8: bool,
     /// `plan_cache_mode`.
     pub(super) plan_cache_mode: Option<String>,
+    /// True when `transaction_isolation` is `repeatable read` or `serializable`, so the transaction keeps the snapshot of its first statement.
+    pub(super) serializable: bool,
+    /// True when `default_toast_compression` is `pglz`.
+    pub(super) pglz: bool,
 }
 
 impl Known {
@@ -64,6 +68,12 @@ impl Known {
                 .get_of(guc::known!("client_encoding"))
                 .is_none_or(|name| name != "SQL_ASCII"),
             plan_cache_mode: settings.get_of(guc::known!("plan_cache_mode")),
+            serializable: matches!(
+                settings.get_of(guc::known!("transaction_isolation")).as_deref(),
+                Some("repeatable read" | "serializable")
+            ),
+            pglz: settings.get_of(guc::known!("default_toast_compression")).as_deref()
+                == Some("pglz"),
         }
     }
 }
