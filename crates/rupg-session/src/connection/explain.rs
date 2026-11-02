@@ -232,6 +232,14 @@ impl rupg_opt::Members for Members<'_, '_> {
         self.heap.statistics(self.database, table)
     }
 
+    fn own_statistics(&self, table: u32) -> Arc<BTreeMap<i16, rupg_func::Statistic>> {
+        if table < rupg_catalog::FIRST_NORMAL_OID {
+            let own = self.statistics(table).into_iter().filter(|s| !s.inherit);
+            return Arc::new(own.map(|s| (s.attnum, s)).collect());
+        }
+        self.heap.own_statistics(self.database, table)
+    }
+
     fn variable_range(&self, table: u32, attnum: i16) -> Option<(Value, Value)> {
         let catalog = self.reader.catalog()?;
         let column = usize::try_from(attnum - 1).ok()?;

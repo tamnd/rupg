@@ -17,6 +17,7 @@ use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use rupg_analyze::{
     BoolOp, BoolTest, Expr, ExprKind, FromItem, JoinKind, Query, Relation, SetKind, SetOp, SetTree,
@@ -104,7 +105,7 @@ pub(crate) struct Stats {
     /// True when `FROM` of the level is one item that is not a join, so that each condition of `WHERE` on the relation is a condition of its scan.
     pub(super) alone: bool,
     /// The statistics of the columns of each table of the level, by column number, from `pg_statistic` with `stainherit` false.
-    columns: BTreeMap<usize, Rc<BTreeMap<i16, Statistic>>>,
+    columns: BTreeMap<usize, Arc<BTreeMap<i16, Statistic>>>,
     /// The statistics of the expression columns of the indexes of each table of the level, as [`index_statistics`] reads them.
     exprs: BTreeMap<usize, Rc<Vec<(Expr, Statistic)>>>,
     /// `get_actual_variable_range`: the least and the greatest value of the columns of the relations that a `btree` index reads in order, which the conditions of the scans compare with a constant.
@@ -1369,7 +1370,7 @@ pub(crate) struct ScanEstimate {
     /// `pages` of a table, or `None` for another relation.
     pages: Option<f64>,
     unique: Unique,
-    columns: Rc<BTreeMap<i16, Statistic>>,
+    columns: Arc<BTreeMap<i16, Statistic>>,
     exprs: Rc<Vec<(Expr, Statistic)>>,
     ranges: BTreeMap<i16, Option<(Value, Value)>>,
 }

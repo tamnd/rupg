@@ -9301,6 +9301,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/any_key.test")));
     }
 
+    /// The estimates of a plan after each `ANALYZE`: the plans of a session share the statistics of a table until `ANALYZE` writes new rows, also for one column, and a partitioned table has the statistics of its tree. `connection/stats_shared.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn stats_shared() {
+        big_stack(|| script(include_str!("connection/stats_shared.test")));
+    }
+
     /// `EXPLAIN` of the conditions that an equivalence class with a constant gives: a condition of each member with the constant in place of the `=` of a join, the nullable side of a left join, a scan with no rows for two constants that are not equal, and the partitions that the new conditions prune. `connection/equivalence_const.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn equivalence_const() {
