@@ -51,6 +51,7 @@ mod explain;
 mod extended;
 mod fastpath;
 mod foreign;
+mod known;
 mod listen;
 mod merge;
 mod oncommit;
@@ -431,6 +432,8 @@ pub struct Connection {
     role_synced: bool,
     /// The parsed texts and the plans of the statements of the `Query` messages.
     plans: RefCell<plan_cache::Plans>,
+    /// The values of the settings that each statement reads.
+    known: RefCell<known::Known>,
     /// The catalog that the sessions of the server share.
     store: Arc<Store>,
     /// The file system of the server, which `COPY ... FROM` a file reads. A session with no server has none.
@@ -555,6 +558,7 @@ impl Connection {
             session_user: start.user.clone(),
             role_synced: false,
             plans: RefCell::default(),
+            known: RefCell::default(),
             database: start.database.clone(),
             database_oid: database::POSTGRES,
             protocol,
@@ -639,10 +643,7 @@ impl Connection {
 
     /// `enable_statement_timeout`: the time of a statement starts, and ends after `statement_timeout` when it is not 0.
     fn start_timeout(&self) {
-        let ms = match guc::find("statement_timeout").map(|p| self.settings.borrow().setting(p)) {
-            Some(guc::Setting::Int(ms)) if ms > 0 => i64::from(ms),
-            _ => 0,
-        };
+        let ms = self.known.borrow_mut().of(&self.settings.borrow()).timeout;
         let deadline = if ms == 0 { 0 } else { query::now(&*self.clock).saturating_add(ms * 1000) };
         self.deadline.set(deadline);
     }
@@ -1338,12 +1339,7 @@ impl Connection {
 
     /// False for `synchronous_commit = off`, when a commit does not wait for the disk. The other values wait, as a server with no standby treats them as `on`.
     fn synchronous_commit(&self) -> bool {
-        /// The value of `off` in `synchronous_commit_options`.
-        const OFF: u8 = 4;
-        !matches!(
-            guc::find("synchronous_commit").map(|p| self.settings.borrow().setting(p)),
-            Some(guc::Setting::Enum(value)) if value == OFF
-        )
+        self.known.borrow_mut().of(&self.settings.borrow()).synchronous
     }
 
     /// The part of [`Connection::end_rows`] that a call in PL/pgSQL can do, as the transaction has no savepoints there.
@@ -2029,10 +2025,7 @@ impl Connection {
 
     /// True when the client encoding is `UTF8`, so the strings of the messages must be valid UTF-8.
     fn utf8(&self) -> bool {
-        self.settings
-            .borrow()
-            .get_of(guc::known!("client_encoding"))
-            .is_none_or(|name| name != "SQL_ASCII")
+        self.known.borrow_mut().of(&self.settings.borrow()).utf8
     }
 
     /// Reads at most one message from `input` and writes the answer to `out`.
