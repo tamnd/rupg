@@ -7243,6 +7243,52 @@ mod tests {
         });
     }
 
+    /// The image of a table whose frozen rows of a transaction in progress come between frozen rows that committed has only the committed rows, which do not decode the rows between them.
+    #[test]
+    fn the_image_skips_the_frozen_rows_of_an_open_load() {
+        big_stack(|| {
+            let store = Arc::new(Store::new());
+            let (mut a, _) = connect_to(&store, 1234);
+            let (mut b, _) = connect_to(&store, 1235);
+            let rows = |c: &mut Connection, sql: &str| -> Vec<String> {
+                send(c, &query(sql)).into_iter().filter(|l| l.starts_with("row ")).collect()
+            };
+            send(&mut a, &query("CREATE TABLE t (a int, b text)"));
+            send(
+                &mut a,
+                &query("INSERT INTO t SELECT i, 'v' || (i % 7) FROM generate_series(1, 30000) i"),
+            );
+            send(
+                &mut b,
+                &query("BEGIN; INSERT INTO t SELECT -i, 'gone' FROM generate_series(1, 30000) i"),
+            );
+            send(
+                &mut a,
+                &query(
+                    "INSERT INTO t SELECT i, 'w' || (i % 5) FROM generate_series(30001, 60000) i",
+                ),
+            );
+            let relation = rows(&mut a, "SELECT 't'::regclass::oid")[0][4..].parse().unwrap();
+            let database =
+                rows(&mut a, "SELECT oid FROM pg_database WHERE datname = current_database()")[0]
+                    [4..]
+                    .parse()
+                    .unwrap();
+            assert!(store.heap().frozen_rows(database, relation) > 60000);
+            let sums = "SELECT count(*), sum(a), count(DISTINCT b), min(b), max(b) FROM t";
+            let before = rows(&mut a, sums);
+            assert_eq!(before, ["row 60000,1800030000,12,v0,w4"]);
+            let mut back = Store::new();
+            back.load(&store.image(0)).unwrap();
+            let (mut c, _) = connect_to(&Arc::new(back), 1236);
+            assert_eq!(rows(&mut c, sums), before);
+            assert_eq!(
+                rows(&mut c, "SELECT b FROM t WHERE a IN (6, 30006) ORDER BY a"),
+                ["row v6", "row w1"]
+            );
+        });
+    }
+
     /// The commits after a checkpoint come back from the log: the inserts, the updates, the deletes, a `TRUNCATE`, a new table, a new role and the sequences. A transaction in progress is gone, and a cut record at the end of the log does not stop the load.
     #[test]
     fn commits_come_back_from_the_log() {
