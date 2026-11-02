@@ -1,7 +1,7 @@
 //! `set_append_rel_size` and `set_append_rel_pathlist` for the members of an inheritance tree and the partitions of a partitioned table: each member is a table of its own, with its size, its statistics and its indexes. The `Append` reads the cheapest scan of each member, and a `Merge Append` or an ordered `Append` reads the scans of the members in an order.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use rupg_analyze::{Expr, ExprKind};
 use rupg_plan::{Cost, Item, Kind, Node, SortKey, Statistic};
@@ -23,7 +23,7 @@ type Ranges = Vec<((usize, i16), Option<(Value, Value)>)>;
 pub(super) struct MemberBase<'q> {
     oid: u32,
     base: Base<'q>,
-    columns: Rc<BTreeMap<i16, Statistic>>,
+    columns: Arc<BTreeMap<i16, Statistic>>,
     ranges: Ranges,
     unique: BTreeSet<(usize, i16)>,
     plans: Vec<Rel<'q>>,
@@ -112,7 +112,7 @@ pub(super) fn scan<'q>(
         let statistics =
             columns.statistics(hooks.map(|m| m.statistics(member.oid)).unwrap_or_default());
         let (pages, count) = cost::member_size(member);
-        stats.columns.insert(r, Rc::new(statistics));
+        stats.columns.insert(r, Arc::new(statistics));
         stats.pages.insert(r, pages);
         stats.all_visible.insert(r, cost::all_visible(member.size, pages));
         stats.ranges.retain(|&(at, _), _| at != r);
@@ -239,7 +239,7 @@ pub(super) fn scan<'q>(
     let inherited = hooks.map(|m| m.statistics(relation.oid)).unwrap_or_default();
     let inherited: BTreeMap<i16, Statistic> =
         inherited.into_iter().filter(|s| s.inherit).map(|s| (s.attnum, s)).collect();
-    stats.columns.insert(r, Rc::new(inherited));
+    stats.columns.insert(r, Arc::new(inherited));
     stats.pages.remove(&r);
     stats.all_visible.remove(&r);
     stats.ranges.retain(|&(at, _), _| at != r);

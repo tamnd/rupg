@@ -772,6 +772,8 @@ struct Table {
     truncated: Vec<(u32, u32, Pages)>,
     /// The rows of `pg_statistic` of the table, by `staattnum` and `stainherit`, which `ANALYZE` writes outside of the transactions.
     statistics: BTreeMap<(i16, bool), Statistic>,
+    /// The rows of [`Table::statistics`] with `stainherit` false by `staattnum`, which [`Heap::own_statistics`] makes once for all the plans.
+    own_statistics: Option<Arc<BTreeMap<i16, Statistic>>>,
     /// The size of each `btree` index of the table by the OID of the index, from the versions that the table had.
     btree_sizes: BTreeMap<u32, btree::Cached>,
     /// The pages with `LP_DEAD` items that a `VACUUM` with no vacuum of the indexes left, with the generation of the heap.
@@ -2544,6 +2546,24 @@ impl Heap {
         for row in rows {
             table.statistics.insert((row.attnum, row.inherit), row);
         }
+        table.own_statistics = None;
+    }
+
+    /// The rows of `pg_statistic` of a table with `stainherit` false, by `staattnum`. The plans share them until `ANALYZE` writes new rows, so that a plan does not copy the values of the statistics.
+    pub(crate) fn own_statistics(
+        &self,
+        database: u32,
+        relation: u32,
+    ) -> Arc<BTreeMap<i16, Statistic>> {
+        let mut state = self.state();
+        let Some(table) = state.tables.0.get_mut(&(database, relation)) else {
+            return Arc::default();
+        };
+        let own = table.own_statistics.get_or_insert_with(|| {
+            let own = table.statistics.values().filter(|s| !s.inherit);
+            Arc::new(own.map(|s| (s.attnum, s.clone())).collect())
+        });
+        Arc::clone(own)
     }
 
     /// The rows of `pg_statistic` of a table, in the order of `staattnum` and `stainherit`.

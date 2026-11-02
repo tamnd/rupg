@@ -23,7 +23,7 @@ use std::cell::{Cell, OnceCell, RefCell};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use rupg_analyze::{
     BoolOp, Cte, Expr, ExprKind, FromItem, JoinKind, Query, Relation, SetOp, SetTree, SortGroup,
@@ -63,6 +63,12 @@ pub trait Members: std::fmt::Debug {
     /// The statistics of the columns of the table with the OID `table` in `pg_statistic`, which `examine_simple_variable` reads.
     fn statistics(&self, _table: u32) -> Vec<Statistic> {
         Vec::new()
+    }
+
+    /// The statistics of [`Members::statistics`] with `stainherit` false, by column number. The plans can share them, as the cache of `pg_statistic` does.
+    fn own_statistics(&self, table: u32) -> Arc<BTreeMap<i16, Statistic>> {
+        let own = self.statistics(table).into_iter().filter(|s| !s.inherit);
+        Arc::new(own.map(|s| (s.attnum, s)).collect())
     }
 
     /// `get_actual_variable_endpoint` of an index of the table `table` whose first key is the column `attnum`: the least and the greatest value of the column that is not null, of the versions of the rows that are not dead. `None` when the column has no value that is not null.
@@ -238,7 +244,7 @@ pub(crate) fn compare(left: u32, a: &Value, right: u32, b: &Value) -> Option<Ord
 }
 
 /// The statistics of the columns of each table of a plan, by column number.
-type Statistics = BTreeMap<u32, Rc<BTreeMap<i16, Statistic>>>;
+type Statistics = BTreeMap<u32, Arc<BTreeMap<i16, Statistic>>>;
 
 thread_local! {
     /// The statistics with `stainherit` false of the columns of the tables of the plan that the planner makes now, which PostgreSQL reads from the cache of `pg_statistic`.
@@ -246,7 +252,7 @@ thread_local! {
 }
 
 /// The statistics with `stainherit` false of the columns of the table `table`, by column number, as `examine_simple_variable` and `get_attavgwidth` read them.
-pub(crate) fn statistics(table: u32) -> Rc<BTreeMap<i16, Statistic>> {
+pub(crate) fn statistics(table: u32) -> Arc<BTreeMap<i16, Statistic>> {
     STATISTICS.with(|s| s.borrow().get(&table).cloned().unwrap_or_default())
 }
 
@@ -296,8 +302,7 @@ fn query_statistics(query: &Query, members: &dyn Members, out: &mut Statistics) 
         if let Some(sub) = &relation.subquery {
             query_statistics(sub, members, out);
         } else if relation.oid != 0 && !out.contains_key(&relation.oid) {
-            let all = members.statistics(relation.oid).into_iter().filter(|s| !s.inherit);
-            out.insert(relation.oid, Rc::new(all.map(|s| (s.attnum, s)).collect()));
+            out.insert(relation.oid, members.own_statistics(relation.oid));
         }
     }
     for cte in &query.ctes {

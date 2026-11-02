@@ -1,0 +1,63 @@
+> CREATE TABLE sa (k int PRIMARY KEY, v int, w text)
+CREATE TABLE
+> INSERT INTO sa SELECT g, g % 10, 'w' || (g % 3) FROM generate_series(1, 1000) g
+INSERT 0 1000
+> EXPLAIN SELECT * FROM sa WHERE v = 1
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on sa  (cost=0.00..25.00 rows=6 width=40)
+row   Filter: (v = 1)
+EXPLAIN
+> ANALYZE sa
+ANALYZE
+> EXPLAIN SELECT * FROM sa WHERE v = 1
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on sa  (cost=0.00..18.50 rows=100 width=11)
+row   Filter: (v = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM sa WHERE w = 'w2'
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on sa  (cost=0.00..18.50 rows=333 width=11)
+row   Filter: (w = 'w2'::text)
+EXPLAIN
+> UPDATE sa SET v = 1 WHERE k <= 900
+UPDATE 900
+> EXPLAIN SELECT * FROM sa WHERE v = 1
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on sa  (cost=0.00..33.91 rows=183 width=11)
+row   Filter: (v = 1)
+EXPLAIN
+> ANALYZE sa (v)
+ANALYZE
+> EXPLAIN SELECT * FROM sa WHERE v = 1
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on sa  (cost=0.00..23.50 rows=910 width=11)
+row   Filter: (v = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM sa WHERE v = 1 AND w = 'w2'
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on sa  (cost=0.00..26.00 rows=303 width=11)
+row   Filter: ((v = 1) AND (w = 'w2'::text))
+EXPLAIN
+> CREATE TABLE sb (k int, v int) PARTITION BY RANGE (k)
+CREATE TABLE
+> CREATE TABLE sb1 PARTITION OF sb FOR VALUES FROM (0) TO (500)
+CREATE TABLE
+> CREATE TABLE sb2 PARTITION OF sb FOR VALUES FROM (500) TO (1000)
+CREATE TABLE
+> INSERT INTO sb SELECT g, g % 4 FROM generate_series(0, 999) g
+INSERT 0 1000
+> ANALYZE sb
+ANALYZE
+> EXPLAIN SELECT * FROM sb WHERE v = 2
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..19.75 rows=250 width=8)
+row   ->  Seq Scan on sb1 sb_1  (cost=0.00..9.25 rows=125 width=8)
+row         Filter: (v = 2)
+row   ->  Seq Scan on sb2 sb_2  (cost=0.00..9.25 rows=125 width=8)
+row         Filter: (v = 2)
+EXPLAIN
+> EXPLAIN SELECT * FROM sb1 WHERE v = 2
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on sb1  (cost=0.00..9.25 rows=125 width=8)
+row   Filter: (v = 2)
+EXPLAIN
