@@ -543,10 +543,13 @@ pub(crate) type Narrow<'a> = dyn FnMut(&Tables, &Expr, &[usize]) -> Result<Value
 /// # Errors
 ///
 /// The error of the input function of a column that the catalog keeps as text, and the error of a condition.
+///
+/// With `narrow`, a query of one table with an `=` on each key column of a unique index reads only the versions with the key, as [`key_rows`] finds them. `keyed` becomes true when the parameters `params` gave the key.
 pub(crate) fn read(
     query: &Query,
     session: &dyn Session,
     mut narrow: Option<&mut Narrow<'_>>,
+    (params, keyed): (&[Value], &mut bool),
 ) -> Result<Tables> {
     let mut used: Vec<Vec<bool>> =
         query.relations.iter().map(|r| vec![false; r.columns.len()]).collect();
@@ -611,6 +614,15 @@ pub(crate) fn read(
             // The rows keep only the columns that the query reads, so that a scan of a few columns of a wide table is small.
             let kept = kept.filter(|k| k.contains(&false));
             places[index] = kept.as_deref().map(Places::new);
+            let key = match narrow.is_some() && !xids[index] {
+                true => key_rows(query, kept.as_deref(), (&conds, params), session)?,
+                false => None,
+            };
+            if let Some((found, param)) = key {
+                *keyed |= param;
+                rows.push(Rc::new(found));
+                continue;
+            }
             let few = narrow.as_mut().filter(|_| !xids[index]).and_then(|test| {
                 let mask = narrowed(query, kept.as_deref().unwrap_or(used), &conds, session)?;
                 Some((test, mask))
@@ -902,6 +914,120 @@ pub(crate) fn check_scannable(query: &Query, session: &dyn Session) -> Result<()
         }
     }
     Ok(())
+}
+
+/// The rows of a query of one table of the user whose conditions `conds` of `WHERE` have an `=` of each key column of a unique index with a constant or a parameter of `params`, as an `Index Scan` reads them. The rows are the versions with the key, which the query tests again with all the conditions. With `used`, each row has only the columns that are true in `used`, in their order. The result has true when a parameter gave a value of the key. `None` is a query that reads all the rows: the query reads more than one relation or a table with children, a condition is not an `=` of one type that has a hash, or the key has a collation that is not deterministic.
+fn key_rows(
+    query: &Query,
+    used: Option<&[bool]>,
+    (conds, params): (&[&Expr], &[Value]),
+    session: &dyn Session,
+) -> Result<Option<(Vec<Vec<Value>>, bool)>> {
+    let [relation] = query.relations.as_slice() else { return Ok(None) };
+    if !matches!(query.from.as_slice(), [FromItem::Relation(0)])
+        || relation.tablesample.is_some()
+        || relation.cte.is_some()
+    {
+        return Ok(None);
+    }
+    let Some(catalog) = session.catalog() else { return Ok(None) };
+    let Some(table) = catalog.relation(relation.oid) else { return Ok(None) };
+    if table.kind != rupg_catalog::RelKind::Table
+        || !catalog.all_inheritors(relation.oid).is_empty()
+    {
+        return Ok(None);
+    }
+    // The column, the value and true for a parameter, for each `=` of a column with a constant or a parameter.
+    let mut equal: Vec<(usize, Value, bool)> = Vec::new();
+    for expr in conds {
+        let ExprKind::Func(f) = &expr.kind else { continue };
+        let [a, b] = f.args.as_slice() else { continue };
+        if !HASH_EQUALS.contains(&f.oid) {
+            continue;
+        }
+        let found = match (key_column(a), key_column(b)) {
+            (Some(column), None) => key_value(b, params).map(|v| (column, v)),
+            (None, Some(column)) => key_value(a, params).map(|v| (column, v)),
+            _ => None,
+        };
+        if let Some((column, (value, param))) = found {
+            equal.push((column, value, param));
+        }
+    }
+    if equal.is_empty() {
+        return Ok(None);
+    }
+    // The default collation, `C` and `POSIX` are deterministic: two values are equal when their bytes are equal.
+    let deterministic = |collation: u32| matches!(collation, 0 | 100 | 950 | 951);
+    for index in catalog.relations() {
+        let Some(info) = index.index.as_ref().filter(|info| {
+            info.table == relation.oid
+                && info.unique
+                && info.ready
+                && info.exprs.is_none()
+                && info.predicate.is_none()
+        }) else {
+            continue;
+        };
+        if index.kind != rupg_catalog::RelKind::Index {
+            continue;
+        }
+        let count = usize::try_from(info.key_count).unwrap_or_default();
+        let (mut columns, mut types, mut key, mut param) =
+            (Vec::new(), Vec::new(), Vec::new(), false);
+        for (i, &attnum) in info.keys.iter().take(count).enumerate() {
+            let Some(at) = usize::try_from(attnum - 1).ok() else { break };
+            let Some(column) = table.columns.get(at) else { break };
+            let Some((_, value, p)) = equal.iter().find(|(c, ..)| *c == at) else { break };
+            if !deterministic(info.collations.get(i).copied().unwrap_or(0))
+                || !deterministic(column.collation)
+            {
+                break;
+            }
+            columns.push(at);
+            types.push(column.ty);
+            key.push(value.clone());
+            param |= *p;
+        }
+        if count == 0 || columns.len() != count {
+            continue;
+        }
+        let key_columns = (&columns[..], &types[..], info.nulls_not_distinct);
+        let Some(mut rows) = session.table_rows_by_key(relation.oid, used, key_columns, &key)?
+        else {
+            return Ok(None);
+        };
+        session.count_scan(relation.oid);
+        let width = used.map_or(table.columns.len(), |u| u.iter().filter(|u| **u).count());
+        for row in &mut rows {
+            let tid = row.pop().unwrap_or(Value::Null);
+            row.resize(width, Value::Null);
+            row.push(tid);
+        }
+        return Ok(Some((rows, param)));
+    }
+    Ok(None)
+}
+
+/// The column of the table of a query of one table that an expression reads, through a cast that keeps the binary form.
+fn key_column(expr: &Expr) -> Option<usize> {
+    match &expr.kind {
+        ExprKind::Var(var) if var.levels_up == 0 && var.relation == 0 => {
+            usize::try_from(var.attnum - 1).ok()
+        }
+        ExprKind::Relabel(inner, _) => key_column(inner),
+        _ => None,
+    }
+}
+
+/// The value of a constant or of a parameter of `params`, through a cast that keeps the binary form, with true for a parameter.
+fn key_value(expr: &Expr, params: &[Value]) -> Option<(Value, bool)> {
+    match &expr.kind {
+        ExprKind::Const(value) => Some((value.clone(), false)),
+        ExprKind::Param(n) => Some((params.get(n.checked_sub(1)?)?.clone(), true)),
+        ExprKind::Relabel(inner, _) => key_value(inner, params),
+        _ => None,
+    }
 }
 
 /// The rows of the relation `from` of the user, which is the relation `index` of the query, with true when an outer join can give it as nulls and true when the query reads `xmin` or `xmax`. With `used`, each row has only the columns that are true in `used`, in their order. A partitioned table gives the rows of the leaf partitions that the conditions `conds` of `WHERE` do not prune. For `xmin` and `xmax`, each row ends with the ID of its version, the OID of its table, `xmin` and `xmax`.

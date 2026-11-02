@@ -1869,6 +1869,55 @@ impl Heap {
             .collect()
     }
 
+    /// The rows of [`Heap::rows_at`] for the versions whose key has the hash of `key` in the map of the unique key with the columns `columns`, the types `types` and `nulls_not_distinct`, in the order of their IDs, for a scan that tests the key again. The first read of a key makes its map from all the versions, as the first write that checks the key does. A key with a null that is not equal to a null gives no row.
+    pub(crate) fn key_rows(
+        &self,
+        relation: u32,
+        view: &View,
+        used: Option<&[bool]>,
+        (columns, types, nulls_not_distinct): (&[usize], &[u32], bool),
+        key: &[Value],
+    ) -> Option<Vec<Vec<Value>>> {
+        let mut guard = self.state();
+        let state = &mut *guard;
+        let Some(table) = state.tables.0.get_mut(&(view.database, relation)) else {
+            return Some(Vec::new());
+        };
+        table.thaw();
+        let unique = Unique {
+            oid: 0,
+            name: String::new(),
+            columns: columns.to_vec(),
+            types: types.to_vec(),
+            shown: String::new(),
+            nulls_not_distinct,
+            derived: None,
+            deferrable: None,
+        };
+        let place = *table.key_maps(std::slice::from_ref(&unique))?.first()?;
+        let map = &table.keys[place];
+        let mut row = vec![Value::Null; columns.iter().max().map_or(0, |c| c + 1)];
+        for (&column, value) in columns.iter().zip(key) {
+            row[column] = value.clone();
+        }
+        let Some(hash) = map.hash(&row) else {
+            return Some(Vec::new());
+        };
+        let mut tids = map.hashes.get(&hash).cloned().unwrap_or_default();
+        tids.sort_unstable();
+        tids.dedup();
+        let wanted = used_columns(used);
+        Some(
+            tids.iter()
+                .filter_map(|&tid| table.find(tid).map(|at| &table.versions[at]))
+                .filter(|version| visible(version, view))
+                .map(|version| {
+                    version_row(version, &version.values, &table.combos, wanted.as_deref(), false)
+                })
+                .collect(),
+        )
+    }
+
     /// The values of the versions `tids` of a table, also of a version that a transaction deleted, in the order of the list. A version that is not in the table gives no row.
     pub(crate) fn versions(&self, database: u32, relation: u32, tids: &[u64]) -> Vec<Vec<Value>> {
         let mut guard = self.state();

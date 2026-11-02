@@ -9246,6 +9246,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/explain_parallel_join.test")));
     }
 
+    /// A scan with an `=` on each key column of a unique index reads only the versions with the key: a constant on each side of the `=`, a key of two columns, a key with a column that `ALTER TABLE ADD COLUMN` added, `NULLS NOT DISTINCT`, the collation `C`, a version that an update or a delete of the transaction made, a savepoint that rolls back an insert, and a parameter of a SQL function. `connection/point_key.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn point_key() {
+        big_stack(|| script(include_str!("connection/point_key.test")));
+    }
+
     /// `EXPLAIN` of the conditions that an equivalence class with a constant gives: a condition of each member with the constant in place of the `=` of a join, the nullable side of a left join, a scan with no rows for two constants that are not equal, and the partitions that the new conditions prune. `connection/equivalence_const.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn equivalence_const() {

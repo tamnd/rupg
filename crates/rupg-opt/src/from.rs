@@ -1092,13 +1092,22 @@ impl<'q> Builder<'q> {
                     for q in &quals {
                         variable_ranges(self.members, &q.expr, (r, relation.oid), &indexes, stats);
                     }
-                    // `mergejoinscansel` reads the histograms of the columns of the conditions of the joins.
+                    // `mergejoinscansel` reads the histograms of the columns of the conditions of the joins. An equivalence class with no member of another relation gives no join condition, so `ycsb_key = $1` reads no range.
+                    let other = |e: &Expr| {
+                        plain_var(e).is_some_and(|v| v.levels_up == 0 && v.relation != r)
+                    };
                     let joined: Vec<i16> = stats
                         .joins
                         .iter()
                         .flatten()
                         .map(|(side, _)| side)
-                        .chain(stats.equal.iter().flat_map(|(members, _)| members))
+                        .chain(
+                            stats
+                                .equal
+                                .iter()
+                                .filter(|(members, _)| members.iter().any(other))
+                                .flat_map(|(members, _)| members),
+                        )
                         .filter_map(plain_var)
                         .filter(|v| v.levels_up == 0 && v.relation == r)
                         .map(|v| v.attnum)

@@ -592,6 +592,21 @@ pub trait Session {
         });
         Ok(rows)
     }
+    /// The rows of [`Session::table_rows`] of only the versions whose key in a unique index is `key`, as `_bt_first` finds them for an `=` on each key column of the index. `columns` has the column of the table of each key column, `types` has their types, and `nulls_not_distinct` is `indnullsnotdistinct` of the index. The rows come in the order of the IDs, and they can have versions with another key, which the scan tests again. `None` is a table that the session cannot read by a key, which the scan then reads by [`Session::table_rows`].
+    ///
+    /// # Errors
+    ///
+    /// An error of the store of the rows.
+    fn table_rows_by_key(
+        &self,
+        relation: u32,
+        used: Option<&[bool]>,
+        (columns, types, nulls_not_distinct): (&[usize], &[u32], bool),
+        key: &[Value],
+    ) -> Result<Option<Vec<Vec<Value>>>> {
+        let _ = (relation, used, columns, types, nulls_not_distinct, key);
+        Ok(None)
+    }
     /// The rows of [`Session::table_rows`], each with the system columns `xmin` and `xmax` of its version before the ID of the version.
     ///
     /// # Errors
