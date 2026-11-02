@@ -7203,6 +7203,8 @@ mod tests {
                     let long = if i % 997 == 5 { 2_100 + i % 900 } else { i % 200 };
                     let (month, day, text) = (i % 12 + 1, i % 28 + 1, "x".repeat(long as usize));
                     let char = if i % 3 == 0 { "a" } else { "b " };
+                    // A quote in a quoted field is two quotes.
+                    let text = if i % 7 == 0 { format!("q\"\"{text}") } else { text };
                     format!(
                         "< {},{},{},2013-{month:02}-{day:02},{ts},\"t{text}\",v{}  ,{char}",
                         i % 300 - 150,
@@ -7245,6 +7247,31 @@ mod tests {
             assert_eq!(all(&mut c, "bulk"), loaded);
             let sums = "SELECT sum(i2), sum(i4), sum(i8), max(d), max(ts), sum(length(t)), max(v), count(DISTINCT c) FROM bulk";
             assert_eq!(rows(&mut c, sums), rows(&mut c, &sums.replace("bulk", "plain")));
+            // A bad line in a batch of a bulk load has the error and the context of a load of values.
+            let bad_lines = [
+                "< 1,2",
+                "< 1,2,3,2013-01-01,2013-01-01 00:00:00,\"open",
+                "< 1,2,3,2013-01-01,2013-01-01 00:00:00,t,v,c,extra",
+                "< ,2,3,2013-01-01,2013-01-01 00:00:00,t,v,c",
+                "< 1,2,3,2013-01-01,2013-01-01 00:00:00,t,toolong,c",
+                "< 1,2,3,2013-01-01,2013-01-01 00:00:00,,v,c",
+            ];
+            for bad in bad_lines {
+                let errors: Vec<Vec<String>> = ["bulk", "plain"]
+                    .iter()
+                    .map(|table| {
+                        let mut input = input[..200].to_vec();
+                        input.extend([bad, input[0], "<done"]);
+                        let copy = format!("COPY {table} FROM STDIN WITH (FORMAT csv)");
+                        let out = send(&mut c, &[query(&copy), copy_input(&input)].concat());
+                        let error = out.into_iter().filter(|line| line.starts_with("ERROR"));
+                        error.map(|line| line.replace(table, "t")).collect()
+                    })
+                    .collect();
+                assert_eq!(errors[0].len(), 1, "{bad}: {errors:?}");
+                assert_eq!(errors[0], errors[1], "{bad}");
+            }
+            assert_eq!(all(&mut c, "bulk"), loaded);
         });
     }
 

@@ -67,6 +67,24 @@ struct Row {
     fields: Spans,
     /// `defaults`: true for a field that is the marker of `DEFAULT`. It is empty for a row with no marker.
     defaults: Vec<bool>,
+    /// True when the fields are still in `text`: a bulk load reads the fields of the line on the threads of the server, and [`CopyIn::split_row`] gives them before the row goes through the plan.
+    unsplit: bool,
+}
+
+/// The bytes of `bytes` up to the first byte for which `is` is true, or all the bytes. After the first 16 bytes, which go one at a time for a short field, the bytes go 16 at a time with no early exit, so that the compiler can use vector instructions.
+fn find(bytes: &[u8], is: impl Fn(u8) -> bool) -> usize {
+    let head = bytes.len().min(16);
+    if let Some(at) = bytes[..head].iter().position(|&b| is(b)) {
+        return at;
+    }
+    let mut at = head;
+    for chunk in bytes[head..].as_chunks::<16>().0 {
+        if chunk.iter().fold(false, |any, &b| any | is(b)) {
+            break;
+        }
+        at += 16;
+    }
+    at + bytes[at..].iter().position(|&b| is(b)).unwrap_or(bytes.len() - at)
 }
 
 /// The fields of a line in one buffer: the bytes of the fields one after the other, and the place of each field in the bytes, with `None` for a null value. A row of a load has one buffer and not one for each field.
@@ -666,6 +684,7 @@ impl Connection {
         let mut routing = copy.load.routing.take();
         let mut excluded = 0;
         for row in pending {
+            let row = copy.split_row(row)?;
             let made = copy.values(&row, &reader)?;
             copy.count_failed(&row, &made)?;
             let Some(params) = made.values else { continue };
@@ -894,7 +913,7 @@ impl Connection {
         let Some(info) = copy.load.plan.as_deref().and_then(Plan::write) else { return Ok(()) };
         let table = info.table;
         let store = &self.store;
-        let Some(cells) = cells::read(&copy.pending, parse, store.tasks()) else {
+        let Some(cells) = cells::read(&copy.pending, parse, &copy.csv(), store.tasks()) else {
             return Ok(());
         };
         let heap = store.heap();
@@ -1196,8 +1215,18 @@ impl CopyIn {
         if self.format == Format::Binary {
             return self.binary(eof);
         }
+        // The lines leave the buffer once, after the copy read them.
+        let mut at = 0;
+        let read = self.read_lines(eof, &mut at);
+        let at = at.min(self.buf.len());
+        self.buf.drain(..at);
+        read
+    }
+
+    /// The lines of [`CopyIn::read`] from the place `at` of the buffer. `at` goes to the end of the last line that the copy read.
+    fn read_lines(&mut self, eof: bool, at: &mut usize) -> Result<(), Error> {
         loop {
-            let read = match self.next_line(eof) {
+            let read = match self.next_line(eof, at) {
                 Ok(Some(read)) => read,
                 Ok(None) => return Ok(()),
                 Err(error) => {
@@ -1218,33 +1247,30 @@ impl CopyIn {
                         }
                         continue;
                     }
-                    let fields = if self.format == Format::Csv {
-                        self.csv_fields(&line)
-                    } else {
-                        self.text_fields(&line)
-                    };
-                    let Fields { fields, defaults } =
-                        fields.map_err(|error| error.with_context(self.line_context(&line)))?;
-                    let no_default = defaults
-                        .iter()
-                        .zip(&self.load.has_default)
-                        .position(|(&marker, &has_default)| marker && !has_default);
-                    if let Some(at) = no_default {
-                        return Err(Error::new(
-                            SqlState::BAD_COPY_FILE_FORMAT,
-                            "unexpected default marker in COPY data",
-                        )
-                        .with_detail(format!("Column \"{}\" has no default value.", self.names[at]))
-                        .with_context(self.line_context(&line)));
+                    // A bulk load of the CSV format reads the fields on the threads of the server.
+                    if matches!(self.load.bulk, Some(Some(_)))
+                        && self.format == Format::Csv
+                        && self.default.is_none()
+                    {
+                        self.pending.push(Row {
+                            line: self.line,
+                            text: Some(line),
+                            fields: Spans::default(),
+                            defaults: Vec::new(),
+                            unsplit: true,
+                        });
+                        continue;
                     }
-                    if fields.len() > self.names.len() {
-                        return Err(Error::new(
-                            SqlState::BAD_COPY_FILE_FORMAT,
-                            "extra data after last expected column",
-                        )
-                        .with_context(self.line_context(&line)));
-                    }
-                    self.pending.push(Row { line: self.line, text: Some(line), fields, defaults });
+                    let Fields { fields, defaults } = self
+                        .split(&line)
+                        .map_err(|error| error.with_context(self.line_context(&line)))?;
+                    self.pending.push(Row {
+                        line: self.line,
+                        text: Some(line),
+                        fields,
+                        defaults,
+                        unsplit: false,
+                    });
                 }
                 Read::End | Read::Eof => {
                     // `cur_lineno` counts the line of the marker. `NextCopyFromRawFieldsInternal` reads the fields of the header line also when the data ended before it.
@@ -1261,8 +1287,8 @@ impl CopyIn {
         }
     }
 
-    /// `CopyReadLineText`: the next line of the buffer, which the copy then drops from the buffer. `None` means that the line is not complete yet.
-    fn next_line(&mut self, eof: bool) -> Result<Option<Read>, Error> {
+    /// `CopyReadLineText`: the next line of the buffer from the place `at`, which then goes to the start of the line after it. `None` means that the line is not complete yet.
+    fn next_line(&mut self, eof: bool, at: &mut usize) -> Result<Option<Read>, Error> {
         let csv = self.format == Format::Csv;
         let quote = self.quote;
         let escape = (self.escape != self.quote).then_some(self.escape);
@@ -1291,11 +1317,22 @@ impl CopyIn {
             };
             bad(message).with_hint(hint)
         };
-        let buf = &self.buf;
+        let buf = &self.buf[*at..];
         let (mut in_quote, mut last_was_esc) = (false, false);
         let mut embedded = 0;
         let mut i = 0;
+        // Only a quote, an escape, a backslash of the text format and the end of a line change the state of the line.
+        let special = |b: u8| {
+            b == b'\n'
+                || b == b'\r'
+                || if csv { b == quote || Some(b) == escape } else { b == b'\\' }
+        };
         let (end, next) = loop {
+            let run = find(&buf[i..], special);
+            if run > 0 {
+                i += run;
+                last_was_esc = false;
+            }
             let Some(&c) = buf.get(i) else {
                 if !eof {
                     return Ok(None);
@@ -1389,8 +1426,56 @@ impl CopyIn {
             }
         };
         let line = buf[..end].to_vec();
-        self.buf.drain(..next);
+        *at += next;
         Ok(Some(Read::Line(line, embedded)))
+    }
+
+    /// The fields of a line of the text or the CSV format, with the checks of `NextCopyFromRawFields` on the markers of `DEFAULT` and on the number of fields. An error has no context.
+    fn split(&self, line: &[u8]) -> Result<Fields, Error> {
+        let Fields { fields, defaults } = if self.format == Format::Csv {
+            self.csv_fields(line)
+        } else {
+            self.text_fields(line)
+        }?;
+        let no_default = defaults
+            .iter()
+            .zip(&self.load.has_default)
+            .position(|(&marker, &has_default)| marker && !has_default);
+        if let Some(at) = no_default {
+            return Err(Error::new(
+                SqlState::BAD_COPY_FILE_FORMAT,
+                "unexpected default marker in COPY data",
+            )
+            .with_detail(format!("Column \"{}\" has no default value.", self.names[at])));
+        }
+        if fields.len() > self.names.len() {
+            return Err(Error::new(
+                SqlState::BAD_COPY_FILE_FORMAT,
+                "extra data after last expected column",
+            ));
+        }
+        Ok(Fields { fields, defaults })
+    }
+
+    /// The row with the fields of its line, for a row that a bulk load did not read. An error has the context of the line of the row.
+    fn split_row(&self, mut row: Row) -> Result<Row, Error> {
+        if row.unsplit {
+            let text = row.text.as_deref().unwrap_or_default();
+            let Fields { fields, defaults } =
+                self.split(text).map_err(|error| error.with_context(self.row_context(&row)))?;
+            (row.fields, row.defaults, row.unsplit) = (fields, defaults, false);
+        }
+        Ok(row)
+    }
+
+    /// The bytes of the CSV format, for the threads of a bulk load.
+    fn csv(&self) -> cells::Csv<'_> {
+        cells::Csv {
+            delimiter: self.delimiter,
+            quote: self.quote,
+            escape: self.escape,
+            null: &self.null,
+        }
     }
 
     /// The check of `HEADER MATCH` in `NextCopyFromRawFieldsInternal`.
@@ -1663,7 +1748,13 @@ impl CopyIn {
                 at += size;
             }
             self.buf.drain(..at);
-            self.pending.push(Row { line: self.line, text: None, fields, defaults: Vec::new() });
+            self.pending.push(Row {
+                line: self.line,
+                text: None,
+                fields,
+                defaults: Vec::new(),
+                unsplit: false,
+            });
             self.line += 1;
         }
         self.ended = true;
