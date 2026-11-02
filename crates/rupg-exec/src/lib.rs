@@ -1535,8 +1535,12 @@ fn run_query(
             frames.push(Frame { tables, tuple, group: None });
             run_query(sub, params, session, cache, &frames, false)
         };
-        // A join and an index scan give their rows in the order of the plan, which a query with no `ORDER BY` shows.
-        let planned = session.join_order(query);
+        // A join and an index scan give their rows in the order of the plan, which a query with no `ORDER BY` shows. One table that gave at most one row has no order, so the planner does not run for it.
+        let one = matches!(
+            query.relations.as_slice(),
+            [r] if r.subquery.is_none() && r.function.is_none() && r.values.is_none() && r.cte.is_none()
+        ) && tables.rows.first().is_some_and(|rows| rows.len() <= 1);
+        let planned = if one { None } else { session.join_order(query) };
         // `CHECK_FOR_INTERRUPTS` of the scans and the joins, after each 1024 tests.
         let mut tests = 0_usize;
         let test: &mut scan::Test<'_> = &mut |expr, tuple| {
@@ -2452,6 +2456,8 @@ fn order(
             _ => None,
         };
         match bound {
+            // One row has no order.
+            _ if rows.len() <= 1 => {}
             // A plan with no `Sort` gives the rows in the order of its scans, which `ORDER BY` keeps for equal keys. The order of a scan by distance of a `gist` index is not known.
             _ if session
                 .join_order(query)

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Do not run the planner for a read of one table through all the columns of a unique key, and do not ask the plan for the order of at most one row. Before, a point query of YCSB made a full plan two times: one time to find the order of an index scan for the columnar path, and one time for the order of the rows (#1296).
 - An `INSERT ... VALUES` of one row whose values are all parameters and constants, with no `FROM`, takes the values as its row and does not run the plan (#1295).
 - Share the statistics of the columns of a table between the plans until `ANALYZE` writes new rows, so that a plan does not copy the most common values and the histograms of each table that it reads (#1293).
 - A prepared statement keeps its folded generic plan, so a `Bind` after the five custom plans of `plan_cache_mode = auto` takes a copy of the plan and does not fold the query again, and a `Bind` makes one reader instead of three (#1292).
