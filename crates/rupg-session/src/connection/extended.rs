@@ -5,7 +5,7 @@
 //! An `Execute` that completes does not end the transaction. The statements after it, up to `Sync`, run in one implicit block, and `Sync` commits it. A transaction statement, and a statement that must commit at once such as `DISCARD ALL`, end the transaction at the end of their `Execute`.
 
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, Weak};
 
 use rupg_analyze::Params;
 use rupg_catalog::Catalog;
@@ -48,6 +48,8 @@ pub(crate) struct Prepared {
     generic_plans: AtomicI64,
     /// The number of runs with a custom plan.
     custom_plans: AtomicI64,
+    /// The folded generic plan, with the generation of the settings that it read. A `Bind` with a generic plan takes a copy, so that it does not fold again. A new catalog renews the statement, which then has no generic plan.
+    generic: Mutex<Option<(u64, Plan)>>,
 }
 
 impl Prepared {
@@ -72,6 +74,7 @@ impl Prepared {
             search_path: Vec::new(),
             generic_plans: AtomicI64::new(0),
             custom_plans: AtomicI64::new(0),
+            generic: Mutex::new(None),
         }
     }
 
@@ -101,6 +104,7 @@ impl Prepared {
             search_path,
             generic_plans: AtomicI64::new(self.generic_plans.load(Ordering::Relaxed)),
             custom_plans: AtomicI64::new(self.custom_plans.load(Ordering::Relaxed)),
+            generic: Mutex::new(None),
         }
     }
 
@@ -166,16 +170,51 @@ impl Prepared {
     /// A statement without parameters, a utility statement and an empty query use the generic plan. Else `plan_cache_mode` decides, and in the mode `auto` the first five runs use a custom plan. After them PostgreSQL compares the cost of the generic plan with the mean cost of the custom plans. rupg has no costs, so it uses the generic plan, as PostgreSQL does when the generic plan costs less.
     /// It gives true for a custom plan.
     pub(super) fn count_plan(&self, mode: Option<&str>) -> bool {
-        let custom = self.plan.is_some()
+        let custom = self.custom_plan(mode);
+        self.count(custom);
+        custom
+    }
+
+    /// True when the next run uses a custom plan, as [`Prepared::count_plan`] decides it, with no count.
+    fn custom_plan(&self, mode: Option<&str>) -> bool {
+        self.plan.is_some()
             && !self.params.is_empty()
             && match mode {
                 Some("force_generic_plan") => false,
                 Some("force_custom_plan") => true,
                 _ => self.custom_plans.load(Ordering::Relaxed) < 5,
-            };
+            }
+    }
+
+    /// Counts a run with a custom plan, or with a generic plan.
+    fn count(&self, custom: bool) {
         let count = if custom { &self.custom_plans } else { &self.generic_plans };
         count.fetch_add(1, Ordering::Relaxed);
-        custom
+    }
+
+    /// The folded plan of a run. A custom plan takes the values `params` of the parameters as constants. A generic plan keeps the parameters, and the statement keeps it while the settings stay the same, as `CheckCachedPlan` keeps a generic plan.
+    fn folded(
+        &self,
+        plan: &Plan,
+        custom: bool,
+        params: &[Value],
+        generation: u64,
+        reader: &query::Reader<'_>,
+    ) -> Result<Plan, Error> {
+        if custom {
+            return plan.fold(Some(params), reader);
+        }
+        let mut generic = self.generic.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((kept, plan)) = &*generic
+            && *kept == generation
+        {
+            return Ok(plan.clone());
+        }
+        // A statement with no parameters folds as it did before, with no values.
+        let values = params.is_empty().then_some(params);
+        let folded = plan.fold(values, reader)?;
+        *generic = Some((generation, folded.clone()));
+        Ok(folded)
     }
 }
 
@@ -451,27 +490,27 @@ impl Connection {
                 error.with_context(self.param_context(bind.portal, i + 1, text))
             })?;
         }
-        drop(reader);
         let result_formats = values.finish()?;
         // `GetCachedPlan` plans the query with the values of the parameters, as a custom plan, before the portal takes the formats of the result.
-        let reader = self.reader();
-        let replanned = statement.replan(&reader)?;
-        let catalog = Arc::clone(&reader.catalog);
-        let path = rupg_analyze::Env::search_path(&reader);
-        drop(reader);
-        if let Some(plan) = replanned {
+        let mut reader = reader;
+        if let Some(plan) = statement.replan(&reader)? {
+            let catalog = Arc::clone(&reader.catalog);
+            let path = rupg_analyze::Env::search_path(&reader);
+            drop(reader);
             statement = Arc::new(statement.renew(plan, &catalog, path));
             *self.statements.get_mut(bind.statement)? = Arc::clone(&statement);
+            reader = self.reader();
         }
-        let reader = self.reader();
+        let custom = statement.custom_plan(
+            self.known.borrow_mut().of(&self.settings.borrow()).plan_cache_mode.as_deref(),
+        );
+        let generation = self.settings.borrow().generation();
         let plan = match &statement.plan {
-            Some(plan) => Some(plan.fold(Some(&params), &reader)?),
+            Some(plan) => Some(statement.folded(plan, custom, &params, generation, &reader)?),
             None => None,
         };
         drop(reader);
-        statement.count_plan(
-            self.known.borrow_mut().of(&self.settings.borrow()).plan_cache_mode.as_deref(),
-        );
+        statement.count(custom);
         let formats = match &statement.columns {
             Some(columns) => {
                 let count = result_formats.len();

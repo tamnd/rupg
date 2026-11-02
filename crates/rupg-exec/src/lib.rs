@@ -22,22 +22,22 @@ use rupg_pgcatalog::builtin;
 use rupg_plan::{HashTable, HashTables};
 use rupg_types::{Array, ArrayDim, MAXDIM, NAME_MAX_BYTES, Record, Value, format_type, oid};
 
-/// A query that the engine can run.
-#[derive(Debug)]
+/// A query that the engine can run. A copy shares the queries, so a session can keep a plan and give a copy to each run.
+#[derive(Clone, Debug)]
 pub struct Plan {
-    query: Query,
+    query: Arc<Query>,
     /// The rows of `RETURNING` of each statement of `WITH` that changes data, by the number of the statement, which the references to the statement read.
     written: Arc<Vec<Rows>>,
     /// The tables of a cursor that `WHERE CURRENT OF` can read, from [`Plan::cursor`].
     marks: Vec<u32>,
     /// The query that a run of the plan runs, from [`Plan::fold`]: the query with the simple subqueries and views of `FROM` merged into it, as [`rupg_opt::merge_from`] merges them, or `None` when the run runs [`Plan::query`]. `EXPLAIN` shows [`Plan::query`].
-    run: Option<Box<Query>>,
+    run: Option<Arc<Query>>,
     /// `row_security_user_id`: the current user when a table of the query has row security, whose policies the plan has for that role.
     row_security: Option<u32>,
 }
 
 /// The query of a `SELECT` with the simple subqueries and views of `FROM` merged into it, as `pull_up_simple_subquery` merges them, or `None` when no subquery merges. A view with `security_barrier` stays a subquery.
-fn merged(query: &Query, session: &dyn Session) -> Option<Box<Query>> {
+fn merged(query: &Query, session: &dyn Session) -> Option<Arc<Query>> {
     if query.write.is_some()
         || query.ctes.iter().any(|c| c.write.is_some())
         || !query.relations.iter().any(|r| r.subquery.is_some())
@@ -49,7 +49,7 @@ fn merged(query: &Query, session: &dyn Session) -> Option<Box<Query>> {
     };
     let mut run = query.clone();
     rupg_opt::merge_from(&mut run, &barrier);
-    (run != *query).then(|| Box::new(run))
+    (run != *query).then(|| Arc::new(run))
 }
 
 /// The error of a feature that the engine does not have yet.
@@ -426,7 +426,13 @@ pub fn prepare(mut query: Query, session: &dyn Session) -> Result<Plan> {
         check_query(&cte.query, false)?;
         check_write(&cte.query)?;
     }
-    Ok(Plan { query, written: Arc::default(), marks: Vec::new(), run: None, row_security })
+    Ok(Plan {
+        query: Arc::new(query),
+        written: Arc::default(),
+        marks: Vec::new(),
+        run: None,
+        row_security,
+    })
 }
 
 /// Puts in [`rupg_analyze::Write::modified`] the columns of the table of the write that the privileges `perms` of the statement give values, as `ExecGetInsertedCols` and `ExecGetUpdatedCols` read them from the entry of the result relation.
@@ -1871,7 +1877,7 @@ impl Plan {
                 // The statement checks the privileges of all its parts before the first write.
                 let query = Query { perms: self.query.perms.clone(), ..query.clone() };
                 let plan = Plan {
-                    query,
+                    query: Arc::new(query),
                     written: Arc::clone(&self.written),
                     marks: Vec::new(),
                     run: None,
@@ -1956,7 +1962,7 @@ impl Plan {
         }
         let run = merged(&query, session);
         Ok(Plan {
-            query,
+            query: Arc::new(query),
             written: Arc::clone(&self.written),
             marks: self.marks.clone(),
             run,
@@ -1966,7 +1972,7 @@ impl Plan {
 
     /// The query that a run of the plan runs.
     fn runnable(&self) -> &Query {
-        self.run.as_deref().unwrap_or(&self.query)
+        self.run.as_deref().unwrap_or(&*self.query)
     }
 
     /// `ExecSupportsBackwardScan` on the plan that PostgreSQL makes for the query, which decides if a cursor with neither `SCROLL` nor `NO SCROLL` can scan backward.
@@ -2010,7 +2016,7 @@ impl Plan {
     /// The plan with no checks of the privileges of the statement, for a query that the server makes for its own work, such as the checks of a foreign key and the insert into a partition.
     #[must_use]
     pub fn unchecked(mut self) -> Plan {
-        self.query.perms.clear();
+        Arc::make_mut(&mut self.query).perms.clear();
         self
     }
 

@@ -14,7 +14,7 @@ impl Plan {
     /// The plan of a cursor. After its columns, the query also gives the `tableoid` and the `ctid` of the row of each table that `execCurrentOf` can find in it. A query with a locking clause gives them for each table with a row mark, as the `ExecRowMark` of `FOR UPDATE` keeps them. Another query gives them for its table when it is a scan of one table, as `search_plan_tree` finds the scan, also below a subquery of `FROM`.
     #[must_use]
     pub fn cursor(&self) -> Plan {
-        let mut query = self.query.clone();
+        let mut query = Query::clone(&self.query);
         let written = Arc::clone(&self.written);
         let marks = if query.row_marks.is_empty() {
             scan(&mut query, false).into_iter().collect()
@@ -36,7 +36,7 @@ impl Plan {
             add(&mut query, added.collect());
             marks.into_iter().map(|(_, oid)| oid).collect()
         };
-        Plan { query, written, marks, run: None, row_security: self.row_security }
+        Plan { query: Arc::new(query), written, marks, run: None, row_security: self.row_security }
     }
 
     /// The OID of each table whose `tableoid` and `ctid` the rows of the cursor end with, from [`Plan::cursor`].
