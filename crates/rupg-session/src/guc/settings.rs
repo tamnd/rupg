@@ -309,6 +309,8 @@ pub struct Settings {
     /// The value of each reported parameter that the client last got.
     reported: Arc<HashMap<&'static str, String>>,
     generation: u64,
+    /// The generation after the last [`Settings::start_transaction`] with no chained characteristics. While it is the current one, the characteristics have their defaults.
+    started: Option<u64>,
     superuser: bool,
     /// `FirstSnapshotSet`: a statement of the current transaction took a snapshot, so the isolation level and the deferrable mode cannot change.
     snapshot: bool,
@@ -339,6 +341,7 @@ impl Settings {
             pending: Vec::new(),
             reported: Arc::default(),
             generation: 0,
+            started: None,
             superuser,
             snapshot: false,
             subtransaction: false,
@@ -947,8 +950,18 @@ impl Settings {
     pub fn start_transaction(&mut self, chained: Option<Characteristics>) {
         self.snapshot = false;
         self.subtransaction = false;
-        for (i, (name, default)) in CHARACTERISTICS.into_iter().enumerate() {
-            let (Some(parameter), Some(default)) = (find(name), find(default)) else { continue };
+        if chained.is_none() && self.started == Some(self.generation) {
+            return;
+        }
+        static PARAMETERS: LazyLock<Vec<(usize, &'static Parameter, &'static Parameter)>> =
+            LazyLock::new(|| {
+                CHARACTERISTICS
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, (name, default))| Some((i, find(name)?, find(default)?)))
+                    .collect()
+            });
+        for &(i, parameter, default) in PARAMETERS.iter() {
             let setting = match &chained {
                 Some(Characteristics(values)) => values[i].clone(),
                 None => self.setting(default),
@@ -960,6 +973,9 @@ impl Settings {
                     .map_or(Source::Default, |slot| slot.current.source);
                 self.store_reset(parameter, Value { setting, source });
             }
+        }
+        if chained.is_none() {
+            self.started = Some(self.generation);
         }
     }
 

@@ -738,8 +738,7 @@ impl Connection {
     /// `GetTransactionSnapshot`: a new snapshot for each statement in `READ COMMITTED`, and the snapshot of the first statement for the whole transaction in the other levels.
     fn view(&self) -> View {
         let heap = self.store.heap();
-        let isolation = self.settings.borrow().get_of(guc::known!("transaction_isolation"));
-        let serializable = matches!(isolation.as_deref(), Some("repeatable read" | "serializable"));
+        let serializable = self.known.borrow_mut().of(&self.settings.borrow()).serializable;
         let snapshot = if serializable {
             self.snapshot.borrow_mut().get_or_insert_with(|| heap.snapshot()).clone()
         } else {
@@ -1431,11 +1430,11 @@ impl Connection {
 
     /// [`Self::heap_layout`] for the columns of the relation `relation`, with `attstorage` of each column and the method of `attcompression` or else of `default_toast_compression`.
     fn relation_layout(&self, relation: &rupg_catalog::Relation) {
-        let default =
-            match self.settings().get_of(guc::known!("default_toast_compression")).as_deref() {
-                Some("pglz") => Method::Pglz,
-                _ => Method::Lz4,
-            };
+        let default = if self.known.borrow_mut().of(&self.settings.borrow()).pglz {
+            Method::Pglz
+        } else {
+            Method::Lz4
+        };
         let storage = relation
             .columns
             .iter()
@@ -2230,6 +2229,9 @@ impl Connection {
         locations: &[Option<usize>],
         out: &mut OutBuf,
     ) {
+        if notices.is_empty() {
+            return;
+        }
         let least =
             match self.settings.borrow().get_of(guc::known!("client_min_messages")).as_deref() {
                 Some("warning") => 1,
