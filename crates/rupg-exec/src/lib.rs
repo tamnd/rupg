@@ -1867,6 +1867,9 @@ impl Plan {
 
     /// The statements of `WITH` that change data, in the order of their numbers, each with true when the statement or another statement of `WITH` reads its rows. The rows of each statement must go to [`Plan::with_written`] before a run of a plan that reads them.
     pub fn cte_writes(&self) -> Vec<(Plan, bool)> {
+        if self.query.ctes.iter().all(|c| c.write.is_none()) {
+            return Vec::new();
+        }
         let mut read = Vec::new();
         read_writes(&self.query, &mut read);
         let mut writes: Vec<(usize, &Query)> =
