@@ -4182,6 +4182,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/group_const_key.test")));
     }
 
+    /// A grouped vector scan with a sort of few groups of a key of text places the codes of the groups in the order of their bytes, with the order of Postgres for nulls, `DESC` and more keys.
+    #[test]
+    fn group_code_places() {
+        big_stack(|| script(include_str!("connection/group_code_places.test")));
+    }
+
     #[test]
     fn group_text_extreme() {
         big_stack(|| script(include_str!("connection/group_text_extreme.test")));
