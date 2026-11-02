@@ -13,6 +13,7 @@ use rupg_common::{Error, Result, SqlState};
 use rupg_encode::chooser::Sampled;
 use rupg_encode::integer;
 use rupg_func::{HeapSize, Statistic, XactState};
+use rupg_platform::{Job, Tasks};
 use rupg_types::{Value, oid};
 
 pub(crate) use btree::{Shape, Size as BtreeSize};
@@ -75,6 +76,42 @@ const LOAD_PAGES: u32 = 16;
 /// The new versions that a load freezes at one time. The rows go on the open rows of the columns, so a small batch does not encode a row again.
 const LOAD_ROWS: usize = 8_192;
 
+/// The fewest columns that each thread of [`on_threads`] encodes. A thread for fewer columns costs more than it saves.
+const THREAD_COLUMNS: usize = 4;
+
+/// Runs `each` on each column with its place, with the jobs of [`Tasks::run_all`], and gives the result of each column in order. Each job takes a run of the columns, so a column is in one job only. With no tasks, or with few columns, the columns run on the thread of the caller.
+fn on_threads<T: Send>(
+    tasks: Option<&dyn Tasks>,
+    columns: &mut [Arc<Stored>],
+    each: impl Fn(usize, &mut Arc<Stored>) -> T + Sync,
+) -> Vec<T> {
+    let jobs = tasks.map_or(1, |tasks| tasks.parallelism().min(columns.len() / THREAD_COLUMNS));
+    let (Some(tasks), 2..) = (tasks, jobs) else {
+        return columns.iter_mut().enumerate().map(|(at, column)| each(at, column)).collect();
+    };
+    let run = columns.len().div_ceil(jobs);
+    let each = &each;
+    let mut results: Vec<Vec<T>> = Vec::new();
+    results.resize_with(columns.len().div_ceil(run), Vec::new);
+    let work: Vec<Job<'_>> = columns
+        .chunks_mut(run)
+        .zip(&mut results)
+        .enumerate()
+        .map(|(chunk, (columns, results))| {
+            Box::new(move || {
+                results.extend(
+                    columns
+                        .iter_mut()
+                        .enumerate()
+                        .map(|(at, column)| each(chunk * run + at, column)),
+                );
+            }) as Job<'_>
+        })
+        .collect();
+    tasks.run_all(work);
+    results.into_iter().flatten().collect()
+}
+
 /// The result of [`Heap::vacuum`].
 pub(crate) struct Vacuumed {
     /// `reltuples` of the heap.
@@ -89,6 +126,8 @@ pub(crate) struct Vacuumed {
 #[derive(Debug, Default)]
 pub(crate) struct Heap {
     state: Mutex<State>,
+    /// The tasks of the server, which encode the columns of a load at the same time, or `None` to encode them on the thread of the session.
+    tasks: Option<Arc<dyn Tasks>>,
 }
 
 #[derive(Debug, Default)]
@@ -297,27 +336,24 @@ struct Frozen {
 impl Frozen {
     /// Puts the values of `versions` on the rows of the columns. The new rows go on the open rows of each column with no copy of the column, and the caller gives no more versions than the rows left in the open segment, so that a column that does not keep its values only cuts its open rows to go back. The open rows take only a value of the type of the column, or a null, and keep it as it is, except a `real`, which they keep as a `double precision`, so only the new rows of a `real` column get a check by a decode. False, with the columns as they were, when a column does not keep the values.
     ///
-    /// The values of each version are in one allocation. The columns take the versions in groups of [`APPEND_TILE`], so that the values of a group stay in the cache while each column reads its value of each version.
-    fn append(&mut self, versions: &[&Version]) -> bool {
+    /// The values of each version are in one allocation. The columns take the versions in groups of [`APPEND_TILE`], so that the values of a group stay in the cache while each column reads its value of each version. The columns encode on the threads of [`on_threads`], as each column is apart from the others (spec/10 section 10.8).
+    fn append(&mut self, versions: &[&Version], tasks: Option<&dyn Tasks>) -> bool {
         let rows = self.rows;
-        let mut exact = versions.chunks(APPEND_TILE).all(|tile| {
-            self.columns.iter_mut().enumerate().all(|(at, column)| {
-                Arc::make_mut(column)
-                    .extend(tile.iter().map(|version| version.values.get(at)))
-                    .is_ok()
+        let exact = on_threads(tasks, &mut self.columns, |at, column| {
+            let column = Arc::make_mut(column);
+            let kept = versions.chunks(APPEND_TILE).all(|tile| {
+                column.extend(tile.iter().map(|version| version.values.get(at))).is_ok()
+            });
+            kept && (column.kind != Kind::Float4 || {
+                let mut decoded = Decoded::new(column);
+                decoded.pass(rows);
+                let exact = versions.iter().all(|version| {
+                    decoded.next().is_some_and(|value| same(&version.values[at], &value))
+                });
+                exact && decoded.next().is_none() && !decoded.failed
             })
         });
-        exact = exact
-            && self.columns.iter().enumerate().all(|(at, stored)| {
-                stored.kind != Kind::Float4 || {
-                    let mut decoded = Decoded::new(stored);
-                    decoded.pass(rows);
-                    let exact = versions.iter().all(|version| {
-                        decoded.next().is_some_and(|value| same(&version.values[at], &value))
-                    });
-                    exact && decoded.next().is_none() && !decoded.failed
-                }
-            });
+        let exact = exact.into_iter().all(|kept| kept);
         if !exact {
             for column in &mut self.columns {
                 // The new rows are open rows, so the cut does not decode.
@@ -915,16 +951,16 @@ fn dirty(version: &Version, xid: u32, running: &BTreeSet<u32>) -> Seen {
 
 impl Table {
     /// Moves the values of all the versions into the encoded columns, when each column keeps its values exactly. When new versions went between the frozen ones, the heap makes each column again from all the versions, one column at a time.
-    fn freeze(&mut self) {
-        if self.fold() {
-            self.freeze_to(self.versions.len());
+    fn freeze(&mut self, tasks: Option<&dyn Tasks>) {
+        if self.fold(tasks) {
+            self.freeze_to(self.versions.len(), tasks);
         } else {
             self.refreeze();
         }
     }
 
     /// Moves the values of the versions that went between the frozen ones after the freeze into new rows after the frozen rows, and keeps the row of each in [`Frozen::moved`], so that no column is made again. False when a version stays between the frozen ones with its values, as a value does not have the type of its column.
-    fn fold(&mut self) -> bool {
+    fn fold(&mut self, tasks: Option<&dyn Tasks>) -> bool {
         let Some(frozen) = &mut self.frozen else { return true };
         let Some(between) = self.versions.get(..frozen.end) else {
             return frozen.rows == frozen.end;
@@ -943,7 +979,7 @@ impl Table {
         while done < moved.len() {
             let to = moved.len().min(done + ROWS - frozen.rows % ROWS);
             let first = frozen.rows;
-            if !frozen.append(&moved[done..to]) {
+            if !frozen.append(&moved[done..to], tasks) {
                 break;
             }
             frozen.moved.extend(
@@ -959,19 +995,19 @@ impl Table {
     }
 
     /// [`Table::freeze`] in a load, which keeps the values of the versions in the last pages, as a new version can still go into them. It waits for [`LOAD_ROWS`] new versions after the frozen ones.
-    fn freeze_load(&mut self) {
+    fn freeze_load(&mut self, tasks: Option<&dyn Tasks>) {
         let start = self.frozen.as_ref().map_or(0, |frozen| frozen.end);
         let Some(last) = self.versions.last() else { return };
         let cut = page_of(last.tid).saturating_sub(LOAD_PAGES);
         let cut = pages::tid(generation_of(last.tid), cut, 0);
         let end = self.versions.partition_point(|version| version.tid < cut);
         if end >= start + LOAD_ROWS {
-            self.freeze_to(end);
+            self.freeze_to(end, tasks);
         }
     }
 
     /// Moves the values of the versions after the last frozen one and before the place `end` into the encoded columns. The heap checks the new rows of each column with a decode before it drops the values. When the versions have different lengths, or a value has no column type or not the type of its column, the table stays as it is.
-    fn freeze_to(&mut self, end: usize) {
+    fn freeze_to(&mut self, end: usize, tasks: Option<&dyn Tasks>) {
         let start = self.frozen.as_ref().map_or(0, |frozen| frozen.end);
         let Some(tail) = self.versions.get(start..end) else { return };
         let Some(width) = self
@@ -991,7 +1027,7 @@ impl Table {
             let mut from = start;
             while from < end {
                 let to = end.min(from + ROWS - frozen.rows % ROWS);
-                if !frozen.append(&tail[from - start..to - start]) {
+                if !frozen.append(&tail[from - start..to - start], tasks) {
                     break;
                 }
                 frozen.end = to;
@@ -1639,6 +1675,11 @@ pub(crate) fn tid_text(tid: u64) -> String {
 }
 
 impl Heap {
+    /// Gives the heap the tasks of the server, which encode the columns of a load at the same time.
+    pub(crate) fn set_tasks(&mut self, tasks: Option<Arc<dyn Tasks>>) {
+        self.tasks = tasks;
+    }
+
     fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -1839,7 +1880,7 @@ impl Heap {
         // A commit logs the values of the versions that it inserted, so the heap freezes only the versions of transactions that ended.
         if xmins.iter().all(|&(xmin, _)| xmin != view.xid && committed_before(xmin, &view.snapshot))
         {
-            table.freeze();
+            table.freeze(self.tasks.as_deref());
             table.chill();
         }
         // A scan reads the segments of a column, so the open rows of a load become a last segment first.
@@ -2043,7 +2084,7 @@ impl Heap {
                 ids.push(table.add(None, made, values, (unique, &[]), None, toast_oids));
             }
             // A large load moves the values of its versions into columns as it goes, so the rows of the load are not all in memory at once.
-            table.freeze_load();
+            table.freeze_load(self.tasks.as_deref());
             let open = table.frozen.as_ref().is_some_and(|f| f.columns.iter().any(|c| !c.sealed()));
             state.wrote_ids(view.xid, (view.database, relation), ids);
             if open {
@@ -2719,13 +2760,14 @@ impl Heap {
             None => log(Logged::Nothing),
         }
         // The open rows of a load become a last segment when the load commits, so the typed values do not stay in memory after it (spec/10 section 10.8). The last pages of the load, which kept their values for new versions, and the versions that the load put into earlier pages go into the columns first, so that the first scan does not open the last segment again or make the columns again. The commit logged the values of these versions, so they can go.
+        let tasks = self.tasks.as_deref();
         for key in state.loading.remove(&xid).unwrap_or_default() {
             if let Some(table) = state.tables.settings_of(&key) {
                 if table.frozen.is_some()
                     && table.versions.iter().all(|v| v.values.is_empty() || v.xmin == xid)
-                    && table.fold()
+                    && table.fold(tasks)
                 {
-                    table.freeze_to(table.versions.len());
+                    table.freeze_to(table.versions.len(), tasks);
                 }
                 table.seal();
             }
@@ -3103,7 +3145,7 @@ impl Heap {
             }
             state.tables.0.insert(key, table);
         }
-        Ok(Heap { state: Mutex::new(state) })
+        Ok(Heap { state: Mutex::new(state), tasks: None })
     }
 
     /// The versions of a table whose values are in encoded columns.
@@ -3304,6 +3346,21 @@ mod tests {
     }
 
     #[test]
+    fn the_threads_give_the_result_of_each_column_at_its_place() {
+        let mut columns: Vec<Arc<Stored>> = (0..37)
+            .map(|at| {
+                Arc::new(Stored::build(Kind::Int8, [Value::Int8(at)].iter().map(Some)).unwrap())
+            })
+            .collect();
+        let got = on_threads(Some(&rupg_platform::os::OsTasks), &mut columns, |at, column| {
+            let first = Decoded::new(column).next();
+            (at, first)
+        });
+        let want: Vec<_> = (0..37).map(|at| (at, Some(Value::Int8(at as i64)))).collect();
+        assert_eq!(got, want);
+    }
+
+    #[test]
     fn the_rows_at_some_places_are_the_rows_that_a_scan_gives() {
         let heap = Heap::default();
         let xid = heap.begin(1);
@@ -3339,7 +3396,7 @@ mod tests {
         }
         check(table, false);
         // The first rows are frozen and the last rows keep their values.
-        table.freeze_to(ROWS + 3000);
+        table.freeze_to(ROWS + 3000, None);
         check(table, true);
         // A version with its values between the frozen ones, as a new version in an earlier page is.
         let version = table.versions.remove(ROWS + 5000);
@@ -3349,7 +3406,7 @@ mod tests {
         let mut all = Vec::new();
         table.each_version_row(None, |_, values| all.push(values.to_vec()));
         assert_eq!((&all[10], &all[11]), (&row(ROWS + 5000), &row(10)));
-        table.freeze();
+        table.freeze(None);
         table.seal();
         table.chill();
         assert!(table.cold.is_some());
@@ -3377,7 +3434,7 @@ mod tests {
         for (version, at) in table.versions.iter_mut().zip(0..) {
             version.values = row(at).into_boxed_slice();
         }
-        table.freeze_to(ROWS + 3000);
+        table.freeze_to(ROWS + 3000, None);
         // The last version goes to the next slot of the page of the version before the place `near` or after it, as a new version in an earlier page does.
         let move_in = |table: &mut Table, near: usize| {
             let at = (near..)
@@ -3398,17 +3455,17 @@ mod tests {
             move_in(table, near);
         }
         let want = all(table);
-        assert!(table.fold());
+        assert!(table.fold(None));
         let frozen = table.frozen.as_ref().unwrap();
         assert_eq!((frozen.moved.len(), frozen.rows), (3, frozen.end));
         assert_eq!(all(table), want);
         // A second load puts versions between the frozen ones again, and the frozen rows go on after the moved ones.
-        table.freeze_to(ROWS + 6000);
+        table.freeze_to(ROWS + 6000, None);
         for near in [5, 600, ROWS + 100] {
             move_in(table, near);
         }
         let want = all(table);
-        table.freeze();
+        table.freeze(None);
         let frozen = table.frozen.as_ref().unwrap();
         assert_eq!((frozen.moved.len(), frozen.rows), (6, table.versions.len()));
         assert!(frozen.moved.iter().any(|&(_, row)| row >= ROWS + 3000));

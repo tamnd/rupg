@@ -138,7 +138,9 @@ impl Store {
 
     /// A store with the catalog of a new cluster for the sessions that run as `tasks`.
     pub fn with_tasks(tasks: Arc<dyn Tasks>) -> Store {
-        Store { tasks: Some(tasks), ..Store::default() }
+        let mut store = Store { tasks: Some(Arc::clone(&tasks)), ..Store::default() };
+        store.heap.set_tasks(Some(tasks));
+        store
     }
 
     /// The store with the authentication files of the server.
