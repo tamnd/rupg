@@ -76,36 +76,29 @@ const LOAD_PAGES: u32 = 16;
 /// The new versions that a load freezes at one time. The rows go on the open rows of the columns, so a small batch does not encode a row again.
 const LOAD_ROWS: usize = 8_192;
 
-/// The fewest columns that each thread of [`on_threads`] encodes. A thread for fewer columns costs more than it saves.
+/// The fewest columns that each thread of [`on_runs`] encodes. A thread for fewer columns costs more than it saves.
 const THREAD_COLUMNS: usize = 4;
 
-/// Runs `each` on each column with its place, with the jobs of [`Tasks::run_all`], and gives the result of each column in order. Each job takes a run of the columns, so a column is in one job only. With no tasks, or with few columns, the columns run on the thread of the caller.
-fn on_threads<T: Send>(
+/// Runs `each` on runs of the columns, each with the place of its first column, with the jobs of [`Tasks::run_all`], and gives the result of each run in order. A column is in one run only. With no tasks, or with few columns, all the columns are one run on the thread of the caller.
+fn on_runs<T: Send>(
     tasks: Option<&dyn Tasks>,
     columns: &mut [Arc<Stored>],
-    each: impl Fn(usize, &mut Arc<Stored>) -> T + Sync,
+    each: impl Fn(usize, &mut [Arc<Stored>]) -> T + Sync,
 ) -> Vec<T> {
     let jobs = tasks.map_or(1, |tasks| tasks.parallelism().min(columns.len() / THREAD_COLUMNS));
     let (Some(tasks), 2..) = (tasks, jobs) else {
-        return columns.iter_mut().enumerate().map(|(at, column)| each(at, column)).collect();
+        return vec![each(0, columns)];
     };
     let run = columns.len().div_ceil(jobs);
     let each = &each;
-    let mut results: Vec<Vec<T>> = Vec::new();
-    results.resize_with(columns.len().div_ceil(run), Vec::new);
+    let mut results: Vec<Option<T>> = Vec::new();
+    results.resize_with(columns.len().div_ceil(run), || None);
     let work: Vec<Job<'_>> = columns
         .chunks_mut(run)
         .zip(&mut results)
         .enumerate()
-        .map(|(chunk, (columns, results))| {
-            Box::new(move || {
-                results.extend(
-                    columns
-                        .iter_mut()
-                        .enumerate()
-                        .map(|(at, column)| each(chunk * run + at, column)),
-                );
-            }) as Job<'_>
+        .map(|(chunk, (columns, result))| {
+            Box::new(move || *result = Some(each(chunk * run, columns))) as Job<'_>
         })
         .collect();
     tasks.run_all(work);
@@ -336,21 +329,26 @@ struct Frozen {
 impl Frozen {
     /// Puts the values of `versions` on the rows of the columns. The new rows go on the open rows of each column with no copy of the column, and the caller gives no more versions than the rows left in the open segment, so that a column that does not keep its values only cuts its open rows to go back. The open rows take only a value of the type of the column, or a null, and keep it as it is, except a `real`, which they keep as a `double precision`, so only the new rows of a `real` column get a check by a decode. False, with the columns as they were, when a column does not keep the values.
     ///
-    /// The values of each version are in one allocation. The columns take the versions in groups of [`APPEND_TILE`], so that the values of a group stay in the cache while each column reads its value of each version. The columns encode on the threads of [`on_threads`], as each column is apart from the others (spec/10 section 10.8).
+    /// The values of each version are in one allocation. The columns take the versions in groups of [`APPEND_TILE`], so that the values of a group stay in the cache while each column reads its value of each version. The columns encode on the threads of [`on_runs`], as each column is apart from the others (spec/10 section 10.8).
     fn append(&mut self, versions: &[&Version], tasks: Option<&dyn Tasks>) -> bool {
         let rows = self.rows;
-        let exact = on_threads(tasks, &mut self.columns, |at, column| {
-            let column = Arc::make_mut(column);
+        let exact = on_runs(tasks, &mut self.columns, |first, run| {
             let kept = versions.chunks(APPEND_TILE).all(|tile| {
-                column.extend(tile.iter().map(|version| version.values.get(at))).is_ok()
+                run.iter_mut().zip(first..).all(|(column, at)| {
+                    Arc::make_mut(column)
+                        .extend(tile.iter().map(|version| version.values.get(at)))
+                        .is_ok()
+                })
             });
-            kept && (column.kind != Kind::Float4 || {
-                let mut decoded = Decoded::new(column);
-                decoded.pass(rows);
-                let exact = versions.iter().all(|version| {
-                    decoded.next().is_some_and(|value| same(&version.values[at], &value))
-                });
-                exact && decoded.next().is_none() && !decoded.failed
+            kept && run.iter().zip(first..).all(|(column, at)| {
+                column.kind != Kind::Float4 || {
+                    let mut decoded = Decoded::new(column);
+                    decoded.pass(rows);
+                    let exact = versions.iter().all(|version| {
+                        decoded.next().is_some_and(|value| same(&version.values[at], &value))
+                    });
+                    exact && decoded.next().is_none() && !decoded.failed
+                }
             })
         });
         let exact = exact.into_iter().all(|kept| kept);
@@ -3346,16 +3344,20 @@ mod tests {
     }
 
     #[test]
-    fn the_threads_give_the_result_of_each_column_at_its_place() {
+    fn the_runs_have_the_places_of_their_columns() {
         let mut columns: Vec<Arc<Stored>> = (0..37)
             .map(|at| {
                 Arc::new(Stored::build(Kind::Int8, [Value::Int8(at)].iter().map(Some)).unwrap())
             })
             .collect();
-        let got = on_threads(Some(&rupg_platform::os::OsTasks), &mut columns, |at, column| {
-            let first = Decoded::new(column).next();
-            (at, first)
+        let got = on_runs(Some(&rupg_platform::os::OsTasks), &mut columns, |first, run| {
+            run.iter()
+                .zip(first..)
+                .map(|(column, at)| (at, Decoded::new(column).next()))
+                .collect::<Vec<_>>()
         });
+        assert!(got.len() > 1);
+        let got: Vec<_> = got.into_iter().flatten().collect();
         let want: Vec<_> = (0..37).map(|at| (at, Some(Value::Int8(at as i64)))).collect();
         assert_eq!(got, want);
     }
