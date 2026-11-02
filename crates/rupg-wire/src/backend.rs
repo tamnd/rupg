@@ -239,8 +239,10 @@ impl OutBuf {
         self.finish(mark);
     }
 
+    /// `ReadyForQuery`, which the server must send before it waits for input.
     pub fn ready_for_query(&mut self, status: TransactionStatus) {
         self.bytes.extend_from_slice(&[b'Z', 0, 0, 0, 5, status.byte()]);
+        self.send_soon();
     }
 
     pub fn parse_complete(&mut self) {

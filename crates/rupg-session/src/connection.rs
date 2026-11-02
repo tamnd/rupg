@@ -2059,7 +2059,8 @@ impl Connection {
                 }
             }
             self.ready_for_query(out);
-            return Step { used: 0, next: Next::Flush };
+            // The answer goes when the input that the server has runs out, so that a client that sends many statements before it reads the answers gets them in few packets. PostgreSQL sends it at once.
+            return Step { used: 0, next: Next::Continue };
         }
         let read = self.session.read(input);
         let used = read.used;
