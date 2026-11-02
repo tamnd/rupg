@@ -289,7 +289,8 @@ impl Store {
         let epoch = u64::take(&mut input)?;
         let state = take_state(&mut input)?;
         let sequences = Persist::take(&mut input)?;
-        let heap = Heap::from_image(&mut input)?;
+        let mut heap = Heap::from_image(&mut input)?;
+        heap.set_tasks(self.tasks.clone());
         if !input.is_empty() {
             return Err(corrupt("the image has bytes after its end"));
         }

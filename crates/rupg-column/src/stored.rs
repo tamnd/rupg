@@ -8,7 +8,7 @@ use rupg_types::Value;
 
 use crate::builder::Builder;
 use crate::dict::Dictionary;
-use crate::segment::{Column, Kind, ROWS};
+use crate::segment::{Cell, Column, Kind, ROWS};
 
 /// One column of a table in segments.
 #[derive(Clone, Debug)]
@@ -53,6 +53,24 @@ impl Stored {
     ///
     /// `XX000` when a value does not have the type of the kind, or a new segment does not keep its values, and then the column has the values before it. `XX001` when the last segment does not decode, and then the column is as it was.
     pub fn extend<'a>(&mut self, values: impl Iterator<Item = Option<&'a Value>>) -> Result<()> {
+        let kind = self.kind;
+        self.extend_cells(values.map(|value| match value {
+            None => Ok(Cell::Null),
+            Some(value) => kind.cell(value).ok_or_else(|| {
+                Error::internal(format!("a value of a {kind:?} column has another type"))
+            }),
+        }))
+    }
+
+    /// [`Stored::extend`] with the cells of the new rows, which a load makes with no [`Value`]. A cell that is an error stops the extend with that error.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Stored::extend`], and the error of a cell.
+    pub fn extend_cells<'a>(
+        &mut self,
+        cells: impl Iterator<Item = Result<Cell<'a>>>,
+    ) -> Result<()> {
         if self.open.is_none()
             && !self.rows.is_multiple_of(ROWS)
             && let Some(last) = self.segments.last()
@@ -70,16 +88,16 @@ impl Stored {
             self.open = Some(open);
         }
         let start = self.rows;
-        let null = [Value::Null];
         let mut dicts = [self.dict.take()];
         let mut open = self.open.take().unwrap_or_else(|| Builder::new(&[self.kind]));
         let result = (|| {
-            for value in values {
+            for cell in cells {
+                let cell = cell?;
                 if open.rows() == ROWS {
                     self.segments.push(close(&open, dicts[0].as_ref())?);
                     open.clear();
                 }
-                open.push(value.map_or(&null[..], std::slice::from_ref), &mut dicts)?;
+                open.push_cells(std::slice::from_ref(&cell), &mut dicts)?;
                 self.rows += 1;
             }
             Ok(())

@@ -28,4 +28,4 @@ pub use io::{File, FileMode, Io, OpenMode};
 pub use memory::{MemoryPool, Reclaimer, Reservation};
 pub use net::{Listener, Net, Stream, TcpOption};
 pub use region::Region;
-pub use tasks::{Join, Task, TaskHandle, Tasks};
+pub use tasks::{Job, Join, Task, TaskHandle, Tasks};

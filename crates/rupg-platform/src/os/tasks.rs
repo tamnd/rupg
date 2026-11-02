@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use rupg_common::{Error, Result, SqlState};
 
-use crate::tasks::{Join, Task, TaskHandle, Tasks};
+use crate::tasks::{Job, Join, Task, TaskHandle, Tasks};
 
 /// The stack of each thread. It is the stack of the main thread on Linux, which is the stack of a PostgreSQL backend. The parser of a debug build needs more than the 2 MiB that Rust gives a new thread.
 pub const STACK_SIZE: usize = 8 << 20;
@@ -155,6 +155,37 @@ impl Tasks for OsTasks {
 
     fn parallelism(&self) -> usize {
         thread::available_parallelism().map_or(1, std::num::NonZero::get)
+    }
+
+    /// Runs the first job on the calling thread and each other job on a thread of its own. A job whose thread does not start runs on the calling thread. A job that panicked panics the caller after all the jobs ended.
+    fn run_all<'a>(&self, jobs: Vec<Job<'a>>) {
+        let mut jobs = jobs.into_iter();
+        let Some(first) = jobs.next() else { return };
+        let slots: Vec<Mutex<Option<Job<'a>>>> = jobs.map(|job| Mutex::new(Some(job))).collect();
+        let run = |slot: &Mutex<Option<Job<'a>>>| {
+            if let Some(job) = lock(slot).take() {
+                job();
+            }
+        };
+        thread::scope(|scope| {
+            let handles: Vec<_> = slots
+                .iter()
+                .map(|slot| {
+                    thread::Builder::new().stack_size(STACK_SIZE).spawn_scoped(scope, || run(slot))
+                })
+                .collect();
+            first();
+            for (slot, handle) in slots.iter().zip(handles) {
+                match handle {
+                    Ok(handle) => {
+                        if let Err(panic) = handle.join() {
+                            panic::resume_unwind(panic);
+                        }
+                    }
+                    Err(_) => run(slot),
+                }
+            }
+        });
     }
 
     #[cfg(target_os = "linux")]
@@ -312,6 +343,23 @@ mod tests {
         assert_eq!(id_of("rupg-reuse"), first);
         assert_eq!(id_of("rupg-reuse"), first);
         assert_ne!(id_of("rupg-other"), first);
+    }
+
+    #[test]
+    fn all_the_jobs_run_on_their_own_threads_with_the_data_of_the_caller() {
+        let mut out = [None; 6];
+        let jobs: Vec<Job<'_>> = out
+            .iter_mut()
+            .enumerate()
+            .map(|(at, slot)| {
+                Box::new(move || *slot = Some((at, thread::current().id()))) as Job<'_>
+            })
+            .collect();
+        OsTasks.run_all(jobs);
+        let ids: Vec<_> = out.iter().map(|slot| slot.unwrap().1).collect();
+        assert_eq!(out.iter().map(|slot| slot.unwrap().0).collect::<Vec<_>>(), [0, 1, 2, 3, 4, 5]);
+        assert_eq!(ids[0], thread::current().id());
+        assert!(ids[1..].iter().all(|&id| id != ids[0]));
     }
 
     #[test]

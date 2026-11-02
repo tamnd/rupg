@@ -9,7 +9,7 @@ use rupg_summary::column::{CodeBuilder, FloatBuilder, IntBuilder, VECTOR};
 use rupg_types::Value;
 
 use crate::dict::{Dictionary, NONE};
-use crate::segment::{Column, Kind, Nulls, Segment, Store, Vector, WORDS};
+use crate::segment::{Cell, Column, Kind, Nulls, Segment, Store, Vector, WORDS};
 
 /// The values of one column that wait for a vector.
 #[derive(Clone, Debug)]
@@ -97,19 +97,7 @@ impl Builder {
             return Err(Error::internal("a row has fewer values than the columns of its segment"));
         }
         for (kind, value) in self.kinds.iter().zip(row) {
-            let fits = match (kind.store(), value) {
-                (_, Value::Null) => true,
-                (Store::Int, v) => kind.int_of(v).is_some(),
-                (Store::Float, v) => matches!(
-                    (kind, v),
-                    (Kind::Float4, Value::Float4(_)) | (Kind::Float8, Value::Float8(_))
-                ),
-                (Store::Code, v) => matches!(
-                    (kind, v),
-                    (Kind::Text, Value::Text(_)) | (Kind::Bytea, Value::Bytea(_))
-                ),
-            };
-            if !fits {
+            if kind.cell(value).is_none() {
                 return Err(Error::internal(format!(
                     "a value of a {kind:?} column has another type"
                 )));
@@ -119,34 +107,63 @@ impl Builder {
             self.flush(dicts)?;
         }
         for (column, value) in row.iter().take(self.kinds.len()).enumerate() {
-            let kind = self.kinds[column];
-            let null = matches!(value, Value::Null);
-            self.nulls[column].push(null);
-            match &mut self.buffers[column] {
-                Buffer::Ints(values) => {
-                    // A null holds the previous value, which keeps runs and deltas (spec/09 section 9.2).
-                    let v = kind
-                        .int_of(value)
-                        .unwrap_or_else(|| values.last().copied().unwrap_or(self.last[column]));
-                    values.push(v);
-                }
-                Buffer::Floats(values) => values.push(match value {
-                    Value::Float4(v) => f64::from(*v),
-                    Value::Float8(v) => *v,
-                    _ => 0.0,
-                }),
-                Buffer::Codes(codes) => {
-                    let dict = dicts[column].get_or_insert_with(Dictionary::new);
-                    codes.push(match value {
-                        Value::Text(s) => dict.intern(s.as_bytes()),
-                        Value::Bytea(b) => dict.intern(b),
-                        _ => NONE,
-                    });
-                }
-            }
+            let cell = self.kinds[column].cell(value).unwrap_or(Cell::Null);
+            self.put(column, cell, dicts);
         }
         self.rows += 1;
         Ok(())
+    }
+
+    /// [`Builder::push`] of a row of cells, which a load makes with no [`Value`].
+    ///
+    /// # Errors
+    ///
+    /// `XX000` when a cell does not have the form of its column, or a vector does not keep its values, and then the builder is as it was.
+    pub fn push_cells(&mut self, row: &[Cell<'_>], dicts: &mut [Option<Dictionary>]) -> Result<()> {
+        if row.len() < self.kinds.len() {
+            return Err(Error::internal("a row has fewer values than the columns of its segment"));
+        }
+        for (kind, cell) in self.kinds.iter().zip(row) {
+            if !cell.fits(kind.store()) {
+                return Err(Error::internal(format!(
+                    "a value of a {kind:?} column has another type"
+                )));
+            }
+        }
+        if self.rows - self.encoded == VECTOR {
+            self.flush(dicts)?;
+        }
+        for (column, &cell) in row.iter().take(self.kinds.len()).enumerate() {
+            self.put(column, cell, dicts);
+        }
+        self.rows += 1;
+        Ok(())
+    }
+
+    /// Adds the cell of a row to the buffer of `column`. The cell has the form of the column.
+    fn put(&mut self, column: usize, cell: Cell<'_>, dicts: &mut [Option<Dictionary>]) {
+        self.nulls[column].push(matches!(cell, Cell::Null));
+        match &mut self.buffers[column] {
+            Buffer::Ints(values) => {
+                // A null holds the previous value, which keeps runs and deltas (spec/09 section 9.2).
+                let v = match cell {
+                    Cell::Int(v) => v,
+                    _ => values.last().copied().unwrap_or(self.last[column]),
+                };
+                values.push(v);
+            }
+            Buffer::Floats(values) => values.push(match cell {
+                Cell::Float(v) => v,
+                _ => 0.0,
+            }),
+            Buffer::Codes(codes) => {
+                let dict = dicts[column].get_or_insert_with(Dictionary::new);
+                codes.push(match cell {
+                    Cell::Bytes(bytes) => dict.intern(bytes),
+                    _ => NONE,
+                });
+            }
+        }
     }
 
     /// Encodes the rows in the buffers as one more vector of each column, and empties the buffers.
@@ -511,6 +528,35 @@ mod tests {
                 ]
             })
             .collect()
+    }
+
+    #[test]
+    fn cells_give_the_segment_of_their_values() {
+        let kinds = [Kind::Int8, Kind::Int2, Kind::Text, Kind::Float8, Kind::Timestamp, Kind::Text];
+        let input = rows(3000);
+        let mut dicts: Vec<Option<Dictionary>> = vec![None; kinds.len()];
+        let mut cells = Builder::new(&kinds);
+        for row in &input {
+            let row: Vec<Cell<'_>> =
+                kinds.iter().zip(row).map(|(kind, value)| kind.cell(value).unwrap()).collect();
+            cells.push_cells(&row, &mut dicts).unwrap();
+        }
+        let segment = cells.finish(&dicts).unwrap();
+        let mut values = Vec::new();
+        for (c, column) in segment.columns.iter().enumerate() {
+            let mut all = Vec::new();
+            for v in 0..segment.vectors() {
+                column.values(v, dicts[c].as_ref(), &mut values).unwrap();
+                all.append(&mut values);
+            }
+            let expected: Vec<Value> = input.iter().map(|r| r[c].clone()).collect();
+            assert_eq!(all, expected, "column {c}");
+        }
+        // A cell of another form is an error, and the builder keeps no part of its row.
+        let wrong =
+            [Cell::Int(1), Cell::Int(2), Cell::Int(3), Cell::Float(0.0), Cell::Int(0), Cell::Null];
+        assert!(cells.push_cells(&wrong, &mut dicts).is_err());
+        assert_eq!(cells.rows(), 0);
     }
 
     #[test]

@@ -8,6 +8,9 @@ use rupg_common::Result;
 /// A unit of work for [`Tasks::spawn`].
 pub type Task = Box<dyn FnOnce() + Send + 'static>;
 
+/// A unit of work for [`Tasks::run_all`], which can borrow the data of the caller.
+pub type Job<'a> = Box<dyn FnOnce() + Send + 'a>;
+
 /// The task scheduler. rupg has no async runtime, and the engine starts each thread and each background task through this trait (spec/22 section 22.5).
 pub trait Tasks: Send + Sync + fmt::Debug {
     /// Starts a task. The name shows in a debugger and in the operating system thread list.
@@ -21,6 +24,13 @@ pub trait Tasks: Send + Sync + fmt::Debug {
 
     /// The number of tasks that can run at the same time, for example the number of cores.
     fn parallelism(&self) -> usize;
+
+    /// Runs each job of `jobs` and returns when all of them ended. The jobs can borrow the data of the caller, as they end before the call returns. The default runs them one after the other on the calling task, which a simulation keeps, and [`crate::os::OsTasks`] runs them on threads at the same time.
+    fn run_all<'a>(&self, jobs: Vec<Job<'a>>) {
+        for job in jobs {
+            job();
+        }
+    }
 
     /// Gives back to the system the memory of the stack of the calling task that the task does not use now. A task calls it before it waits for a long time, so that the stack of a deep statement does not stay in memory while the session is idle (spec/06 section 6.4). The default does nothing.
     fn trim_stack(&self) {}
