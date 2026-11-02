@@ -4,7 +4,7 @@ use rupg_column::segment::Kind;
 use rupg_platform::{Job, Tasks};
 use rupg_types::oid;
 
-use super::Row;
+use super::{Row, find};
 use crate::heap::{Cells, Values};
 
 /// The rows of a batch that each thread reads, at the least.
@@ -57,18 +57,33 @@ impl Parse {
         }
     }
 
-    /// Puts the value of the field `field` on `values`. False when the field needs the input function of the session: a form that the fast input does not read, or a value that the input function does not accept.
+    /// Puts the value of the field `field` on `values`. The caller checks that the bytes of the field are UTF-8. False when the field needs the input function of the session: a form that the fast input does not read, or a value that the input function does not accept.
     fn put(self, field: &[u8], values: &mut Values) -> bool {
-        let Ok(text) = std::str::from_utf8(field) else { return false };
+        let text = || std::str::from_utf8(field).ok();
+        let int = |values: &mut Vec<i64>,
+                   (min, max): (i64, i64),
+                   parse: fn(&str) -> Option<i64>| {
+            match plain_int(field).filter(|n| (min..=max).contains(n)).or_else(|| parse(text()?)) {
+                Some(n) => {
+                    values.push(n);
+                    true
+                }
+                None => false,
+            }
+        };
         match (self, values) {
             (Parse::Int2, Values::Ints(values)) => {
-                rupg_types::int2_in(text).map(|v| values.push(i64::from(v))).is_ok()
+                int(values, (i16::MIN.into(), i16::MAX.into()), |text| {
+                    rupg_types::int2_in(text).ok().map(i64::from)
+                })
             }
             (Parse::Int4, Values::Ints(values)) => {
-                rupg_types::int4_in(text).map(|v| values.push(i64::from(v))).is_ok()
+                int(values, (i32::MIN.into(), i32::MAX.into()), |text| {
+                    rupg_types::int4_in(text).ok().map(i64::from)
+                })
             }
             (Parse::Int8, Values::Ints(values)) => {
-                rupg_types::int8_in(text).map(|v| values.push(v)).is_ok()
+                int(values, (i64::MIN, i64::MAX), |text| rupg_types::int8_in(text).ok())
             }
             (Parse::Date, Values::Ints(values)) => {
                 iso_date(field).map(|days| values.push(days)).is_some()
@@ -82,6 +97,7 @@ impl Parse {
                 true
             }
             (Parse::Varchar(typmod), Values::Bytes(bytes, ends)) => {
+                let Some(text) = text() else { return false };
                 rupg_types::varchar_in(text, typmod)
                     .map(|text| {
                         bytes.extend_from_slice(text.as_bytes());
@@ -90,6 +106,7 @@ impl Parse {
                     .is_ok()
             }
             (Parse::Bpchar(typmod), Values::Bytes(bytes, ends)) => {
+                let Some(text) = text() else { return false };
                 rupg_types::bpchar_in(text, typmod)
                     .map(|text| {
                         bytes.extend_from_slice(text.as_bytes());
@@ -100,6 +117,19 @@ impl Parse {
             _ => false,
         }
     }
+}
+
+/// The value of a field of up to 18 ASCII digits after an optional minus sign, which `pg_strtoint64_safe` reads the same way, or `None` for another form, which goes to the input function.
+fn plain_int(field: &[u8]) -> Option<i64> {
+    let (negative, number) = match field {
+        [b'-', rest @ ..] => (true, rest),
+        _ => (false, field),
+    };
+    if number.is_empty() || number.len() > 18 {
+        return None;
+    }
+    let n = digits(number)?;
+    Some(if negative { -n } else { n })
 }
 
 /// The digits of `bytes` as a number, or `None` when a byte is not a digit.
@@ -146,18 +176,116 @@ fn iso_timestamp(field: &[u8]) -> Option<i64> {
     Some(days * DAY_MICROS + ((hour * 60 + minute) * 60 + second) * 1_000_000)
 }
 
-/// The cells of the fields of `rows`, with `parse` for each column, on the threads of `tasks`. `None` when a row has a null, a field that the fast input does not read, or not one field for each column.
-pub(super) fn read(rows: &[Row], parse: &[Parse], tasks: Option<&dyn Tasks>) -> Option<Cells> {
+/// The bytes of the CSV format of a copy, as `CopyReadAttributesCSV` reads them.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Csv<'a> {
+    pub(super) delimiter: u8,
+    pub(super) quote: u8,
+    pub(super) escape: u8,
+    pub(super) null: &'a [u8],
+}
+
+impl Csv<'_> {
+    /// `CopyReadAttributesCSV`: calls `put` with each field of `line`, in the order of the fields. A field with no quotes is a part of the line, and a quoted field goes into `scratch`. False when a field is the null string, a quoted field has no end, or `put` gives false.
+    fn split(
+        &self,
+        line: &[u8],
+        scratch: &mut Vec<u8>,
+        mut put: impl FnMut(&[u8]) -> bool,
+    ) -> bool {
+        let Csv { delimiter, quote, escape, null } = *self;
+        let plain = |b: u8| b == delimiter || b == quote;
+        let mut i = 0;
+        loop {
+            let start = i;
+            i += find(&line[i..], plain);
+            let kept = if line.get(i) == Some(&quote) {
+                scratch.clear();
+                scratch.extend_from_slice(&line[start..i]);
+                loop {
+                    match line.get(i) {
+                        None => break,
+                        Some(&c) if c == delimiter => break,
+                        Some(&c) if c == quote => {
+                            i += 1;
+                            loop {
+                                let Some(&c) = line.get(i) else { return false };
+                                i += 1;
+                                if c == escape
+                                    && let Some(&next) = line.get(i)
+                                    && (next == escape || next == quote)
+                                {
+                                    scratch.push(next);
+                                    i += 1;
+                                    continue;
+                                }
+                                if c == quote {
+                                    break;
+                                }
+                                scratch.push(c);
+                            }
+                        }
+                        Some(_) => {
+                            let run = find(&line[i..], plain);
+                            scratch.extend_from_slice(&line[i..i + run]);
+                            i += run;
+                        }
+                    }
+                }
+                put(scratch)
+            } else {
+                let field = &line[start..i];
+                field != null && put(field)
+            };
+            if !kept {
+                return false;
+            }
+            if i == line.len() {
+                return true;
+            }
+            i += 1;
+        }
+    }
+}
+
+/// The cells of the fields of `rows`, with `parse` for each column, on the threads of `tasks`. The fields of a row that the copy did not split come from its line in the format `csv`. `None` when a row has a null, a field that the fast input does not read, or not one field for each column.
+pub(super) fn read(
+    rows: &[Row],
+    parse: &[Parse],
+    csv: &Csv<'_>,
+    tasks: Option<&dyn Tasks>,
+) -> Option<Cells> {
     let jobs = tasks.map_or(1, |tasks| tasks.parallelism().min(rows.len() / JOB_ROWS).max(1));
     let size = rows.len().div_ceil(jobs).max(1);
     let read_part = |rows: &[Row]| -> Option<Vec<Values>> {
         let mut columns: Vec<Values> = parse.iter().map(|parse| Values::of(parse.kind())).collect();
+        let mut scratch = Vec::new();
         for row in rows {
+            if row.unsplit {
+                let mut at = 0;
+                let line = row.text.as_deref().unwrap_or_default();
+                // The fields of a line of UTF-8 are UTF-8, as each field starts and ends at a byte of ASCII.
+                if std::str::from_utf8(line).is_err() {
+                    return None;
+                }
+                let kept = csv.split(line, &mut scratch, |field| {
+                    let (Some(parse), Some(values)) = (parse.get(at), columns.get_mut(at)) else {
+                        return false;
+                    };
+                    at += 1;
+                    parse.put(field, values)
+                });
+                if !kept || at != parse.len() {
+                    return None;
+                }
+                continue;
+            }
             if row.fields.len() != parse.len() || !row.defaults.is_empty() {
                 return None;
             }
             for ((field, parse), values) in row.fields.iter().zip(parse).zip(&mut columns) {
-                if !parse.put(field?, values) {
+                let field = field?;
+                if std::str::from_utf8(field).is_err() || !parse.put(field, values) {
                     return None;
                 }
             }
@@ -212,5 +340,47 @@ mod tests {
         assert_eq!(iso_timestamp(b"2013-07-14 24:00:00"), None);
         assert_eq!(iso_timestamp(b"2013-07-14 20:38:47.5"), None);
         assert_eq!(iso_timestamp(b"2013-07-14T20:38:47"), None);
+    }
+
+    #[test]
+    fn the_fast_integers_are_the_values_of_the_input_functions() {
+        let fields = [
+            "0",
+            "-0",
+            "007",
+            "32767",
+            "32768",
+            "-32768",
+            "-32769",
+            "2147483647",
+            "2147483648",
+            "-2147483649",
+            "999999999999999999",
+            "-999999999999999999",
+            "9223372036854775807",
+            "-9223372036854775808",
+            "9223372036854775808",
+            "+5",
+            " 5",
+            "5 ",
+            "1_000",
+            "0x1F",
+            "",
+            "-",
+            "--1",
+            "1-",
+        ];
+        for field in fields {
+            let put = |parse: Parse| {
+                let mut values = Values::Ints(Vec::new());
+                match (parse.put(field.as_bytes(), &mut values), values) {
+                    (true, Values::Ints(values)) => Some(values[0]),
+                    _ => None,
+                }
+            };
+            assert_eq!(put(Parse::Int2), rupg_types::int2_in(field).ok().map(i64::from), "{field}");
+            assert_eq!(put(Parse::Int4), rupg_types::int4_in(field).ok().map(i64::from), "{field}");
+            assert_eq!(put(Parse::Int8), rupg_types::int8_in(field).ok(), "{field}");
+        }
     }
 }
