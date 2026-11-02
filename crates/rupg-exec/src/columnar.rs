@@ -1327,6 +1327,10 @@ pub(crate) fn run(
     {
         return Ok(None);
     }
+    // The row engine reads the rows of the keys of a unique index, with no plan.
+    if scan::unique_key(query, params, session) {
+        return Ok(None);
+    }
     // An index scan gives its rows in the order of the index, which the columns do not keep.
     if session.join_order(query).is_some_and(|planned| planned.iter().any(|s| !s.keys.is_empty())) {
         return Ok(None);

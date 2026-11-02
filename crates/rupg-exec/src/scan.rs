@@ -923,19 +923,61 @@ fn key_rows(
     (conds, params): (&[&Expr], &[Value]),
     session: &dyn Session,
 ) -> Result<Option<(Vec<Vec<Value>>, bool)>> {
-    let [relation] = query.relations.as_slice() else { return Ok(None) };
+    let Some(lookup) = key_lookup(query, (conds, params), session) else { return Ok(None) };
+    let key_columns = (&lookup.columns[..], &lookup.types[..], lookup.nulls_not_distinct);
+    let mut rows = Vec::new();
+    // Two keys that are equal can have values that are not the same, as `1.0` and `1.00`, so each version comes once.
+    let mut seen = std::collections::HashSet::new();
+    for key in &lookup.keys {
+        let Some(found) = session.table_rows_by_key(lookup.relation, used, key_columns, key)?
+        else {
+            return Ok(None);
+        };
+        rows.extend(found.into_iter().filter(|row| match row.last() {
+            Some(Value::Int8(tid)) => lookup.keys.len() == 1 || seen.insert(*tid),
+            _ => true,
+        }));
+    }
+    session.count_scan(lookup.relation);
+    let width = used.map_or(lookup.width, |u| u.iter().filter(|u| **u).count());
+    for row in &mut rows {
+        let tid = row.pop().unwrap_or(Value::Null);
+        row.resize(width, Value::Null);
+        row.push(tid);
+    }
+    Ok(Some((rows, lookup.param)))
+}
+
+/// The keys of a unique index that [`key_rows`] reads: the table, its number of columns, the key columns and their types, `NULLS NOT DISTINCT`, each key, and true when a parameter gave a value of a key.
+struct KeyLookup {
+    relation: u32,
+    width: usize,
+    columns: Vec<usize>,
+    types: Vec<u32>,
+    nulls_not_distinct: bool,
+    keys: Vec<Vec<Value>>,
+    param: bool,
+}
+
+/// The keys of a unique index that the conditions `conds` of `WHERE` of a query of one table of the user give, for [`key_rows`]: an `=` or an `= ANY` of an array of each key column with a constant or a parameter of `params`. `None` when the query reads more than one relation or a table with children, a condition is not an `=` of one type that has a hash, or the key has a collation that is not deterministic.
+fn key_lookup(
+    query: &Query,
+    (conds, params): (&[&Expr], &[Value]),
+    session: &dyn Session,
+) -> Option<KeyLookup> {
+    let [relation] = query.relations.as_slice() else { return None };
     if !matches!(query.from.as_slice(), [FromItem::Relation(0)])
         || relation.tablesample.is_some()
         || relation.cte.is_some()
     {
-        return Ok(None);
+        return None;
     }
-    let Some(catalog) = session.catalog() else { return Ok(None) };
-    let Some(table) = catalog.relation(relation.oid) else { return Ok(None) };
+    let catalog = session.catalog()?;
+    let table = catalog.relation(relation.oid)?;
     if table.kind != rupg_catalog::RelKind::Table
         || !catalog.all_inheritors(relation.oid).is_empty()
     {
-        return Ok(None);
+        return None;
     }
     // The column, the values and true for a parameter, for each `=` of a column with a constant or a parameter, and for each `= ANY` of a column with an array.
     let mut equal: Vec<(usize, Vec<Value>, bool)> = Vec::new();
@@ -973,7 +1015,7 @@ fn key_rows(
         }
     }
     if equal.is_empty() {
-        return Ok(None);
+        return None;
     }
     // The default collation, `C` and `POSIX` are deterministic: two values are equal when their bytes are equal.
     let deterministic = |collation: u32| matches!(collation, 0 | 100 | 950 | 951);
@@ -1023,30 +1065,26 @@ fn key_rows(
         if count == 0 || columns.len() != count {
             continue;
         }
-        let key_columns = (&columns[..], &types[..], info.nulls_not_distinct);
-        let mut rows = Vec::new();
-        // Two keys that are equal can have values that are not the same, as `1.0` and `1.00`, so each version comes once.
-        let mut seen = std::collections::HashSet::new();
-        for key in &keys {
-            let Some(found) = session.table_rows_by_key(relation.oid, used, key_columns, key)?
-            else {
-                return Ok(None);
-            };
-            rows.extend(found.into_iter().filter(|row| match row.last() {
-                Some(Value::Int8(tid)) => keys.len() == 1 || seen.insert(*tid),
-                _ => true,
-            }));
-        }
-        session.count_scan(relation.oid);
-        let width = used.map_or(table.columns.len(), |u| u.iter().filter(|u| **u).count());
-        for row in &mut rows {
-            let tid = row.pop().unwrap_or(Value::Null);
-            row.resize(width, Value::Null);
-            row.push(tid);
-        }
-        return Ok(Some((rows, param)));
+        return Some(KeyLookup {
+            relation: relation.oid,
+            width: table.columns.len(),
+            columns,
+            types,
+            nulls_not_distinct: info.nulls_not_distinct,
+            keys,
+            param,
+        });
     }
-    Ok(None)
+    None
+}
+
+/// True when a query of one table of the user reads the rows of the keys of a unique index, as [`key_rows`] reads them. Such a query reads only the versions of its keys, which costs less than a scan of the columns.
+pub(crate) fn unique_key(query: &Query, params: &[Value], session: &dyn Session) -> bool {
+    let mut conds = Vec::new();
+    if let Some(filter) = &query.filter {
+        conjuncts(filter, &mut conds);
+    }
+    key_lookup(query, (&conds, params), session).is_some()
 }
 
 /// The most keys that [`key_rows`] reads one at a time. With more, the scan reads all the rows.
