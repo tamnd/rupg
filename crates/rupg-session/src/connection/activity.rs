@@ -10,7 +10,7 @@ use rupg_func::{Backend, BackendState, Client, Process, Progress, RelationCounts
 use rupg_wire::TransactionStatus;
 
 use super::Connection;
-use crate::guc::{self, Setting, Settings};
+use crate::guc::{self, Settings};
 use crate::heap::Change;
 use crate::query;
 use crate::store::Store;
@@ -229,7 +229,7 @@ fn count(rows: usize) -> i64 {
 }
 
 /// The value of `application_name`, cut to the bytes that the table keeps.
-fn application_name(settings: &Settings) -> String {
+pub(super) fn application_name(settings: &Settings) -> String {
     let mut name = settings.get_of(guc::known!("application_name")).unwrap_or_default();
     clip(&mut name, NAME_BYTES);
     name
@@ -255,20 +255,6 @@ fn clipped(mut ssl: Ssl) -> Ssl {
         clip(text, NAME_BYTES);
     }
     ssl
-}
-
-/// `pgstat_track_activities`.
-fn tracked(settings: &Settings) -> bool {
-    settings.get_of(guc::known!("track_activities")).as_deref() != Some("off")
-}
-
-/// `pgstat_track_activity_query_size - 1`, the most bytes of the text of a statement in the table.
-fn query_bytes(settings: &Settings) -> usize {
-    let size = match guc::find("track_activity_query_size").map(|p| settings.setting(p)) {
-        Some(Setting::Int(size)) => size,
-        _ => 1024,
-    };
-    usize::try_from(size).map_or(0, |size| size.saturating_sub(1))
 }
 
 impl Connection {
@@ -310,30 +296,24 @@ impl Connection {
             self.activity.query = Some(text.to_owned());
         }
         let Some(number) = self.activity.number else { return };
-        let settings = self.settings.get_mut();
-        let application = application_name(settings);
-        let tracked = tracked(settings);
+        let known = self.known.get_mut().of(self.settings.get_mut());
+        let tracked = known.tracked;
         // `pgstat_report_query_id`: the identifier of the first statement of the text, which parse analysis gives when `compute_query_id` is `on` or `regress`.
         let query_id = match (state, text) {
-            (BackendState::Running, Some(text))
-                if matches!(
-                    settings.get_of(guc::known!("compute_query_id")).as_deref(),
-                    Some("on" | "regress")
-                ) =>
-            {
-                rupg_sql::query_id(text)
-            }
+            (BackendState::Running, Some(text)) if known.query_id => rupg_sql::query_id(text),
             _ => 0,
         };
         let text = text.map(|text| {
             let mut text = text.to_owned();
-            clip(&mut text, query_bytes(settings));
+            clip(&mut text, known.query_bytes);
             text
         });
         let now = query::now(&*self.clock);
         let start = self.statement_start;
         self.store.report(number, |backend| {
-            backend.application = application;
+            if backend.application != known.application {
+                backend.application.clone_from(&known.application);
+            }
             backend.reading = state != BackendState::Running;
             if !tracked {
                 if backend.state != BackendState::Disabled {
@@ -377,7 +357,7 @@ impl Connection {
     /// `pgstat_report_xact_timestamp`: the start of the transaction, or `None` at its end.
     fn report_transaction(&self, start: Option<i64>) {
         let Some(number) = self.activity.number else { return };
-        if tracked(&self.settings.borrow()) {
+        if self.tracked() {
             self.store.report(number, |backend| backend.transaction_start = start);
         }
     }
@@ -385,7 +365,7 @@ impl Connection {
     /// `pgstat_progress_start_command` and `pgstat_progress_update_multi_param`: the progress of the command that the session runs, or `None` at its end, `pgstat_progress_end_command`. A session with `track_activities` off reports no progress.
     pub(super) fn report_progress(&self, progress: Option<Progress>) {
         let Some(number) = self.activity.number else { return };
-        if progress.is_some() && !tracked(&self.settings.borrow()) {
+        if progress.is_some() && !self.tracked() {
             return;
         }
         if progress.is_some() || self.activity.progress.get() {
@@ -431,7 +411,12 @@ impl Connection {
 
     /// `pgstat_track_counts`.
     pub(super) fn counts_tracked(&self) -> bool {
-        self.settings.borrow().get_of(guc::known!("track_counts")).as_deref() != Some("off")
+        self.known.borrow_mut().of(&self.settings.borrow()).counts
+    }
+
+    /// `pgstat_track_activities`.
+    fn tracked(&self) -> bool {
+        self.known.borrow_mut().of(&self.settings.borrow()).tracked
     }
 
     /// The end of a transaction at a commit or at an abort: the session releases its advisory locks of the transaction level, `AtEOXact_PgStat` drops the snapshots, and `pgstat_report_stat` reports the scans of the transaction. A scan counts also after an abort, as in PostgreSQL.
