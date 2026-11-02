@@ -2657,6 +2657,56 @@ fn word_order(
         keys.push((k, descending, nulls_first, by));
     }
     let null = |g: usize, k: usize| words[g * width + shapes.len()] >> k & 1 == 1;
+    // With no key of bytes, each key of a group is one number in the order of the sort, with the null flag above the place, and a sort of the numbers next to the groups reads no other memory.
+    /// The places of a key, true for descending, true for nulls first, and the key.
+    type PlaceKey<'a> = (&'a [u64], bool, bool, usize);
+    let places: Option<Vec<PlaceKey<'_>>> = keys
+        .iter()
+        .map(|(k, descending, nulls_first, by)| match by {
+            By::Place(places) => Some((places.as_slice(), *descending, *nulls_first, *k)),
+            By::Bytes(_) => None,
+        })
+        .collect();
+    if let Some(places) = places {
+        let number = |g: usize, (places, descending, nulls_first, k): &PlaceKey<'_>| {
+            let null = null(g, *k);
+            let place = if *descending { !places[g] } else { places[g] };
+            // A null is above each value, or below each value for nulls first.
+            match (null, *nulls_first) {
+                (true, false) => 1_u128 << 64,
+                (true, true) => 0,
+                (false, false) => u128::from(place),
+                (false, true) => 1_u128 << 64 | u128::from(place),
+            }
+        };
+        let order = match places.as_slice() {
+            [one] => {
+                let mut numbers: Vec<(u128, u32)> =
+                    (0..groups).map(|g| (number(g, one), g as u32)).collect();
+                numbers.sort_unstable();
+                numbers.into_iter().map(|(_, g)| g as usize).collect()
+            }
+            [one, two] => {
+                let mut numbers: Vec<(u128, u128, u32)> =
+                    (0..groups).map(|g| (number(g, one), number(g, two), g as u32)).collect();
+                numbers.sort_unstable();
+                numbers.into_iter().map(|(_, _, g)| g as usize).collect()
+            }
+            _ => {
+                let n = places.len();
+                let numbers: Vec<u128> = (0..groups)
+                    .flat_map(|g| places.iter().map(move |p| (g, p)))
+                    .map(|(g, p)| number(g, p))
+                    .collect();
+                let mut order: Vec<usize> = (0..groups).collect();
+                order.sort_unstable_by(|&a, &b| {
+                    numbers[a * n..(a + 1) * n].cmp(&numbers[b * n..(b + 1) * n]).then(a.cmp(&b))
+                });
+                order
+            }
+        };
+        return Some(order);
+    }
     let mut order: Vec<usize> = (0..groups).collect();
     order.sort_unstable_by(|&a, &b| {
         for (k, descending, nulls_first, by) in &keys {
