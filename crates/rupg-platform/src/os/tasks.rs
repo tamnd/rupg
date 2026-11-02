@@ -153,6 +153,10 @@ impl Tasks for OsTasks {
         thread::yield_now();
     }
 
+    fn threads(&self) -> bool {
+        true
+    }
+
     fn parallelism(&self) -> usize {
         thread::available_parallelism().map_or(1, std::num::NonZero::get)
     }
