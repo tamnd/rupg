@@ -7179,6 +7179,75 @@ mod tests {
         });
     }
 
+    /// A bulk load of `COPY FROM` puts its rows into the encoded columns on the threads of the server, with the values and the places of a load of values: rows of many lengths, so that some rows go into an earlier page with free space, rows that the toaster takes, and a batch with a field that only the input function reads.
+    #[test]
+    fn a_bulk_load_has_the_rows_and_places_of_a_load_of_values() {
+        big_stack(|| {
+            let store = Arc::new(Store::with_tasks(Arc::new(rupg_platform::os::OsTasks)));
+            let (mut c, _) = connect_to(&store, 1234);
+            let rows = |c: &mut Connection, sql: &str| -> Vec<String> {
+                send(c, &query(sql)).into_iter().filter(|l| l.starts_with("row ")).collect()
+            };
+            let columns = "i2 int2 NOT NULL, i4 int4 NOT NULL, i8 int8 NOT NULL, d date NOT NULL, ts timestamp NOT NULL, t text NOT NULL, v varchar(6) NOT NULL, c char(2) NOT NULL";
+            send(&mut c, &query(&format!("CREATE TABLE bulk ({columns})")));
+            // A check constraint sends each row through the plan of the copy.
+            send(&mut c, &query(&format!("CREATE TABLE plain ({columns}, CHECK (i2 > -200))")));
+            let lines: Vec<String> = (0..30_000_i64)
+                .map(|i| {
+                    let ts = if i == 20_000 {
+                        "2013-07-14 20:00:00.5".to_string()
+                    } else {
+                        format!("2013-07-14 {:02}:{:02}:{:02}", i % 24, i % 60, (i * 7) % 60)
+                    };
+                    // A row with a text of more than `TOAST_TUPLE_THRESHOLD` goes to the toaster between the rows of a batch.
+                    let long = if i % 997 == 5 { 2_100 + i % 900 } else { i % 200 };
+                    let (month, day, text) = (i % 12 + 1, i % 28 + 1, "x".repeat(long as usize));
+                    let char = if i % 3 == 0 { "a" } else { "b " };
+                    format!(
+                        "< {},{},{},2013-{month:02}-{day:02},{ts},\"t{text}\",v{}  ,{char}",
+                        i % 300 - 150,
+                        i * 7,
+                        i * 1_000_003,
+                        i % 10_000
+                    )
+                })
+                .collect();
+            let mut input: Vec<&str> = lines.iter().map(String::as_str).collect();
+            input.push("<done");
+            let oid =
+                |c: &mut Connection, sql: &str| -> u32 { rows(c, sql)[0][4..].parse().unwrap() };
+            let database =
+                oid(&mut c, "SELECT oid FROM pg_database WHERE datname = current_database()");
+            send(&mut c, &query("BEGIN"));
+            for table in ["bulk", "plain"] {
+                let copy = format!("COPY {table} FROM STDIN WITH (FORMAT csv)");
+                let out = send(&mut c, &[query(&copy), copy_input(&input)].concat());
+                assert!(out.iter().any(|line| line.contains("COPY 30000")), "{out:?}");
+            }
+            let bulk = oid(&mut c, "SELECT 'bulk'::regclass::oid");
+            let plain = oid(&mut c, "SELECT 'plain'::regclass::oid");
+            // The bulk load has no values in its versions, and the load of values keeps the values of its last pages.
+            assert_eq!(store.heap().frozen_rows(database, bulk), 30_000);
+            assert!(store.heap().frozen_rows(database, plain) < 30_000);
+            let all = |c: &mut Connection, table: &str| {
+                rows(c, &format!("SELECT ctid, * FROM {table} ORDER BY ctid"))
+            };
+            let loaded = all(&mut c, "bulk");
+            assert_eq!(loaded.len(), 30_000);
+            assert_eq!(loaded, all(&mut c, "plain"));
+            let earlier = "SELECT count(*) FROM (SELECT i8 < lag(i8) OVER (ORDER BY ctid) AS back FROM bulk) r WHERE back";
+            assert_ne!(rows(&mut c, earlier), ["row 0"]);
+            assert_eq!(
+                rows(&mut c, "SELECT count(*) FROM bulk WHERE length(t) > 2000"),
+                ["row 31"]
+            );
+            send(&mut c, &query("COMMIT"));
+            assert_eq!(all(&mut c, "bulk"), loaded);
+            let sums = "SELECT sum(i2), sum(i4), sum(i8), max(d), max(ts), sum(length(t)), max(v), count(DISTINCT c) FROM bulk";
+            assert_eq!(rows(&mut c, sums), rows(&mut c, &sums.replace("bulk", "plain")));
+        });
+    }
+
     /// The encoded columns and the cold headers of a frozen table go to the image as they are, and a store that loads the image has the same columns and headers with no new encode. The insert of a transaction in progress is not in the image, and the table changes as before after the load.
     #[test]
     fn frozen_columns_come_back_from_the_image() {
