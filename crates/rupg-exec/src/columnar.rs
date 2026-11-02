@@ -309,7 +309,7 @@ impl Col {
             Data::Int(v) => v[i] as u64,
             Data::Float(v) => float_word(v[i]),
             Data::Code(v, _) => u64::from(v[i]),
-            Data::Const(_) => 0,
+            Data::Const(v) => int_of(v).map_or(0, |v| v as u64),
             Data::Values(_) => return None,
         })
     }
@@ -2545,6 +2545,8 @@ impl Shape {
         match &col.data {
             Data::Int(_) => Some(Shape::Int(col.ty)),
             Data::Code(_, d) => Some(Shape::Code(*d)),
+            // A constant integer has its integer as its word, as a column of integers.
+            Data::Const(v) if v.is_null() || int_of(v).is_some() => Some(Shape::Int(col.ty)),
             _ => None,
         }
     }
