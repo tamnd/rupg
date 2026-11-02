@@ -2168,6 +2168,8 @@ impl Connection {
             Frontend::CopyFail(message) => Err(copy.fail(message)),
             _ => self.copy_done(&mut copy),
         };
+        // A load frees its buffers at the end. Give the free memory back to the system.
+        rupg_platform::alloc::trim();
         self.report_progress(None);
         copy.notices.extend(self.trigger_notices());
         self.notices(&mut copy.notices, "", &[], out);

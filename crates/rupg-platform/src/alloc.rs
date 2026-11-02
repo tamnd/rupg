@@ -65,6 +65,34 @@ unsafe impl GlobalAlloc for Counting {
     }
 }
 
+/// `M_ARENA_MAX`: the number of the arenas of the allocator of the C library. Each thread of a session takes an arena, and a block that a thread frees stays in the arena of that thread, so many arenas keep the peak of each thread.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+const ARENAS: i32 = 2;
+
+/// `M_TRIM_THRESHOLD`: the free bytes at the top of an arena above which the allocator gives the memory back to the system.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+const TRIM_THRESHOLD: i32 = 1 << 20;
+
+/// Sets the arenas and the trim threshold of the allocator of the C library, so that the memory that a load or a query frees goes back to the system. The binary calls it before it starts its threads. It does nothing on a system with an other allocator.
+pub fn tune() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: `mallopt` takes the parameters of glibc and changes only the settings of the allocator.
+    unsafe {
+        libc::mallopt(libc::M_ARENA_MAX, ARENAS);
+        libc::mallopt(libc::M_TRIM_THRESHOLD, TRIM_THRESHOLD);
+        libc::mallopt(libc::M_TOP_PAD, 0);
+    }
+}
+
+/// Gives the free pages of all the arenas of the allocator of the C library back to the system, after work that freed much memory, such as a load. It does nothing on a system with an other allocator.
+pub fn trim() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: `malloc_trim` only gives free memory of the allocator back to the system.
+    unsafe {
+        libc::malloc_trim(0);
+    }
+}
+
 /// The counts of the thread at a point in time.
 #[derive(Clone, Copy, Debug)]
 pub struct Mark {

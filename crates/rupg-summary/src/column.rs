@@ -85,7 +85,7 @@ impl ColumnSummary {
 }
 
 /// The builder of the summary of an integer column: `smallint`, `integer`, `bigint`, `date`, `timestamp`, `money` and the others of spec/09 section 9.8 that are integers.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct IntBuilder {
     rows: u32,
     nulls: u32,
@@ -167,7 +167,7 @@ impl IntBuilder {
 }
 
 /// The builder of the summary of a `real` or `double precision` column. The bounds follow the order of PostgreSQL, where NaN is above every number (spec/09 section 9.7.2).
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct FloatBuilder {
     rows: u32,
     nulls: u32,
@@ -243,7 +243,7 @@ impl FloatBuilder {
 }
 
 /// The builder of the summary of a string or bytes column without a dictionary. The bounds are in byte order, the order of the `C` collation, and the vector keys are the first 8 bytes (spec/09 section 9.7.1).
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct BytesBuilder {
     rows: u32,
     nulls: u32,
@@ -322,7 +322,7 @@ impl BytesBuilder {
 }
 
 /// The builder of the summary of a string column with a dictionary. The writer gives each code and its rank in the sorted base of the dictionary, or no rank for a code of the tail (spec/09 section 9.5.3).
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct CodeBuilder {
     rows: u32,
     nulls: u32,
@@ -330,6 +330,8 @@ pub struct CodeBuilder {
     max: Option<u32>,
     tail: bool,
     codes: Vec<u32>,
+    /// The codes at the start of `codes` that are sorted and without duplicates.
+    sorted: usize,
     vectors: Vec<Zone>,
 }
 
@@ -376,6 +378,12 @@ impl CodeBuilder {
         self.vectors.push(zone);
         self.rows += rows;
         self.nulls += nulls;
+        // The repeated codes go when the codes double, so that the codes of a long column with few distinct values take little memory.
+        if self.codes.len() >= (2 * self.sorted).max(4 * VECTOR) {
+            self.codes.sort_unstable();
+            self.codes.dedup();
+            self.sorted = self.codes.len();
+        }
     }
 
     /// The summary. The code set is kept when its bytes are at most `limit`, which the writer sets to one eighth of the encoded code stream (spec/09 section 9.7.3). The bounds are ranks of the base, and they are absent when a code of the tail is present, because a tail code has no rank.

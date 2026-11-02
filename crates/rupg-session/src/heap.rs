@@ -575,8 +575,13 @@ impl Iterator for Decoded<'_> {
     fn next(&mut self) -> Option<Value> {
         while self.values.is_empty() && !self.failed {
             let Some(column) = self.stored.segments.get(self.segment) else {
-                if !self.stored.open_values(self.vector, &mut self.values) {
-                    return None;
+                match self.stored.open_values(self.vector, &mut self.values) {
+                    Ok(true) => {}
+                    Ok(false) => return None,
+                    Err(_) => {
+                        self.failed = true;
+                        return None;
+                    }
                 }
                 self.values.reverse();
                 self.vector += 1;
