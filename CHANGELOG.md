@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A prepared statement keeps its folded generic plan, so a `Bind` after the five custom plans of `plan_cache_mode = auto` takes a copy of the plan and does not fold the query again, and a `Bind` makes one reader instead of three (#1292).
 - Read again from the client socket when a signal interrupts the read, as `secure_read` does. Before, a stop of the process, as a debugger makes, ended the session of a client that waited with a read timeout (#1290).
 - A transaction starts with no lookups of the settings when no setting changed since the last start, a reader of a statement loads the time zone only when the statement uses it, and the isolation level and `default_toast_compression` come from the settings that the connection keeps for each change (#1289).
 - Read only the versions of the keys of an `IN` list or of an `= ANY` of an array on the key columns of a unique index, one key at a time through the key map of the unique check, so that a scan of a few keys does not read all the rows (#1287).
