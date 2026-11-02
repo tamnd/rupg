@@ -137,7 +137,7 @@ impl Log {
         self.lock().added
     }
 
-    /// Waits until the record `number` is on the disk. The first commit that waits writes and syncs the records of all the commits before it, and the others wait for its sync.
+    /// Waits until the record `number` is on the disk. The first commit that waits writes and syncs the records of all the commits before it, and the others wait for its sync. A commit on a thread of the operating system sleeps until the sync ends, so that the waiting commits do not take the processor and the lock of the log from the commit that syncs. A commit of a simulation lets the other tasks run.
     ///
     /// # Errors
     ///
@@ -147,12 +147,12 @@ impl Log {
         while inner.synced < number {
             if inner.syncing {
                 inner = match tasks {
-                    Some(tasks) => {
+                    Some(tasks) if !tasks.threads() => {
                         drop(inner);
                         tasks.yield_now();
                         self.lock()
                     }
-                    None => self.synced.wait(inner).unwrap_or_else(PoisonError::into_inner),
+                    _ => self.synced.wait(inner).unwrap_or_else(PoisonError::into_inner),
                 };
                 continue;
             }
@@ -188,12 +188,12 @@ impl Log {
         let mut inner = self.lock();
         while inner.syncing {
             inner = match tasks {
-                Some(tasks) => {
+                Some(tasks) if !tasks.threads() => {
                     drop(inner);
                     tasks.yield_now();
                     self.lock()
                 }
-                None => self.synced.wait(inner).unwrap_or_else(PoisonError::into_inner),
+                _ => self.synced.wait(inner).unwrap_or_else(PoisonError::into_inner),
             };
         }
         if !inner.pending.is_empty() {
@@ -267,4 +267,41 @@ pub(super) fn read(io: &dyn Io, image: &Path, epoch: u64) -> Result<Option<Vec<V
         rest = &rest[FRAME + len..];
     }
     Ok(Some(records))
+}
+
+#[cfg(test)]
+mod tests {
+    use rupg_platform::Job;
+    use rupg_platform::os::OsTasks;
+    use rupg_platform::sim::SimIo;
+
+    use super::*;
+
+    /// Commits on threads of the operating system that wait at the same time for the log all come back, and the log has each of their records.
+    #[test]
+    fn commits_on_threads_share_the_sync() {
+        let io: Arc<dyn Io> = Arc::new(SimIo::new(1));
+        let image = PathBuf::from("/data/data.rupg");
+        let log = Log::create(Arc::clone(&io), image.clone(), 1).unwrap();
+        let jobs: Vec<Job<'_>> = (0..8u8)
+            .map(|thread| {
+                let log = &log;
+                Box::new(move || {
+                    for commit in 0..50u8 {
+                        let number = log.add(&mut |out| out.extend_from_slice(&[thread, commit]));
+                        log.wait(number, Some(&OsTasks)).unwrap();
+                        assert!(log.lock().synced >= number);
+                    }
+                }) as Job<'_>
+            })
+            .collect();
+        OsTasks.run_all(jobs);
+        let records = read(&*io, &image, 1).unwrap().unwrap();
+        assert_eq!(records.len(), 400);
+        for thread in 0..8u8 {
+            let commits: Vec<u8> =
+                records.iter().filter(|r| r[0] == thread).map(|r| r[1]).collect();
+            assert_eq!(commits, (0..50).collect::<Vec<u8>>());
+        }
+    }
 }

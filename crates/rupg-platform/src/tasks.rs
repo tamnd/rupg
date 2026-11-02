@@ -34,6 +34,11 @@ pub trait Tasks: Send + Sync + fmt::Debug {
 
     /// Gives back to the system the memory of the stack of the calling task that the task does not use now. A task calls it before it waits for a long time, so that the stack of a deep statement does not stay in memory while the session is idle (spec/06 section 6.4). The default does nothing.
     fn trim_stack(&self) {}
+
+    /// True when each task is a thread of the operating system, so that a task can block on a condition variable until another task wakes it. The default is false: a task that waits for another task calls [`Tasks::yield_now`], which a simulation needs to run the other task.
+    fn threads(&self) -> bool {
+        false
+    }
 }
 
 /// The part of a [`TaskHandle`] that each implementation gives.
