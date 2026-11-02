@@ -84,6 +84,15 @@ impl<'a> Keys<'a> {
         }
     }
 
+    /// For keys whose sort functions all compare integers or bytes with no call: the column, true for a descending order, and true for nulls first, of each key with a sort function.
+    pub(crate) fn natives(&self) -> Option<Vec<(usize, bool, bool)>> {
+        self.keys
+            .iter()
+            .filter(|key| key.sort.is_some())
+            .map(|key| Some((key.column, key.descending?, key.nulls_first)))
+            .collect()
+    }
+
     fn test(&self, kernel: Kernel, ty: u32, a: &Value, b: &Value) -> Result<bool> {
         let types = [ty, ty];
         let call = Call {
