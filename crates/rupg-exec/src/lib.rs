@@ -1047,12 +1047,13 @@ impl Cache {
         Ok(body)
     }
 
-    /// The rows of the relations of a query. With `narrow`, the rows can be only those that pass the conditions of `WHERE`, for a run of the query that tests them again. `EXPLAIN ANALYZE` counts the rows that the conditions remove, so it reads all the rows.
+    /// The rows of the relations of a query. With `narrow`, the rows can be only those that pass the conditions of `WHERE`, for a run of the query that tests them again. `EXPLAIN ANALYZE` counts the rows that the conditions remove, so it reads all the rows. The cache does not keep the rows of a key that the parameters `params` gave, because another run of the query can have other parameters.
     fn tables(
         &self,
         query: &Query,
         session: &dyn Session,
         narrow: bool,
+        params: &[Value],
     ) -> Result<Rc<scan::Tables>> {
         if let Some((_, _, tables)) =
             self.tables.borrow().iter().find(|(q, n, _)| std::ptr::eq(*q, query) && (narrow || !n))
@@ -1062,12 +1063,16 @@ impl Cache {
         let mut test = |tables: &scan::Tables, expr: &Expr, tuple: &[usize]| {
             Eval::new(&[], session, tables, self, &[]).at(tuple).eval(expr)
         };
+        let mut keyed = false;
         let tables = Rc::new(scan::read(
             query,
             session,
             narrow.then_some(&mut test as &mut scan::Narrow<'_>),
+            (params, &mut keyed),
         )?);
-        self.tables.borrow_mut().push((query, narrow, Rc::clone(&tables)));
+        if !keyed {
+            self.tables.borrow_mut().push((query, narrow, Rc::clone(&tables)));
+        }
         Ok(tables)
     }
 
@@ -1424,7 +1429,7 @@ fn run_query(
     {
         return Ok(rows);
     }
-    let base = cache.tables(query, session, true)?;
+    let base = cache.tables(query, session, true, params)?;
     let mut eval = Eval::new(params, session, &base, cache, outer);
     // simplify_EXISTS_query: with no aggregate, no `HAVING`, no `OFFSET` and a `LIMIT` that is a constant more than 0 or null, `EXISTS` only needs a row of `FROM` and `WHERE`.
     let mut simple = false;

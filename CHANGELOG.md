@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Read only the versions of one key for a scan with an `=` on each key column of a unique index, through the key map that the unique check keeps, and do not read the range of a column of an equivalence class that joins no other relation (#1282).
 - The server sends `ReadyForQuery` when the input that it read runs out, not after each `Sync`, so a client that sends many statements before it reads the answers gets them in few packets. A prepared `INSERT` with `Bind`, `Execute` and `Sync` for each row, 1000 rows at a time, goes from 227 us to 59 us for each row on a loaded test machine (#1281).
 ## 0.4.18 (2026-11-02)
 

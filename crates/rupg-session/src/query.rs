@@ -1361,6 +1361,21 @@ impl rupg_func::Session for Reader<'_> {
         }
     }
 
+    fn table_rows_by_key(
+        &self,
+        relation: u32,
+        used: Option<&[bool]>,
+        key_columns: (&[usize], &[u32], bool),
+        key: &[Value],
+    ) -> Result<Option<Vec<Vec<Value>>>> {
+        match (self.activity, &self.view) {
+            (Some((_, store)), Some(view)) => {
+                Ok(store.heap().key_rows(relation, view, used, key_columns, key))
+            }
+            _ => Ok(None),
+        }
+    }
+
     fn table_rows_with_xids(
         &self,
         relation: u32,

@@ -1,0 +1,129 @@
+> create table u (k varchar(20) primary key, a int, b text)
+CREATE TABLE
+> insert into u select 'user' || i, i, 'v' || i from generate_series(1, 2000) i
+INSERT 0 2000
+> select * from u where k = 'user7'
+fields k@u.1:1043:-1:24,a@u.2:23:4:-1,b@u.3:25:-1:-1
+row user7,7,v7
+SELECT 1
+> select a from u where k = 'user7' and a = 8
+fields a@u.2:23:4:-1
+SELECT 0
+> select * from u where k = 'nouser'
+fields k@u.1:1043:-1:24,a@u.2:23:4:-1,b@u.3:25:-1:-1
+SELECT 0
+> select * from u where k = null
+fields k@u.1:1043:-1:24,a@u.2:23:4:-1,b@u.3:25:-1:-1
+SELECT 0
+> select * from u where 'user12' = k
+fields k@u.1:1043:-1:24,a@u.2:23:4:-1,b@u.3:25:-1:-1
+row user12,12,v12
+SELECT 1
+> update u set b = 'changed' where k = 'user5'
+UPDATE 1
+> select * from u where k = 'user5'
+fields k@u.1:1043:-1:24,a@u.2:23:4:-1,b@u.3:25:-1:-1
+row user5,5,changed
+SELECT 1
+> begin
+BEGIN
+> update u set b = 'in tx' where k = 'user6'
+UPDATE 1
+> select * from u where k = 'user6'
+fields k@u.1:1043:-1:24,a@u.2:23:4:-1,b@u.3:25:-1:-1
+row user6,6,in tx
+SELECT 1
+> delete from u where k = 'user6'
+DELETE 1
+> select * from u where k = 'user6'
+fields k@u.1:1043:-1:24,a@u.2:23:4:-1,b@u.3:25:-1:-1
+SELECT 0
+> savepoint s
+SAVEPOINT
+> insert into u values ('user6', 6, 'again')
+INSERT 0 1
+> select * from u where k = 'user6'
+fields k@u.1:1043:-1:24,a@u.2:23:4:-1,b@u.3:25:-1:-1
+row user6,6,again
+SELECT 1
+> rollback to s
+ROLLBACK
+> select * from u where k = 'user6'
+fields k@u.1:1043:-1:24,a@u.2:23:4:-1,b@u.3:25:-1:-1
+SELECT 0
+> rollback
+ROLLBACK
+> select * from u where k = 'user6'
+fields k@u.1:1043:-1:24,a@u.2:23:4:-1,b@u.3:25:-1:-1
+row user6,6,v6
+SELECT 1
+> create table c2 (x int, y int, z text, primary key (x, y))
+CREATE TABLE
+> insert into c2 select i % 50, i, 'z' || i from generate_series(1, 1000) i
+INSERT 0 1000
+> select * from c2 where x = 3 and y = 53
+fields x@c2.1:23:4:-1,y@c2.2:23:4:-1,z@c2.3:25:-1:-1
+row 3,53,z53
+SELECT 1
+> select * from c2 where y = 53 and x = 3 and z = 'z53'
+fields x@c2.1:23:4:-1,y@c2.2:23:4:-1,z@c2.3:25:-1:-1
+row 3,53,z53
+SELECT 1
+> select * from c2 where x = 3 and y = 54
+fields x@c2.1:23:4:-1,y@c2.2:23:4:-1,z@c2.3:25:-1:-1
+SELECT 0
+> alter table c2 add column w int
+ALTER TABLE
+> create unique index c2_w on c2 (w)
+CREATE INDEX
+> update c2 set w = y where y < 10
+UPDATE 9
+> select * from c2 where w = 5
+fields x@c2.1:23:4:-1,y@c2.2:23:4:-1,z@c2.3:25:-1:-1,w@c2.4:23:4:-1
+row 5,5,z5,5
+SELECT 1
+> create table nn (a int, b int)
+CREATE TABLE
+> create unique index nn_a on nn (a) nulls not distinct
+CREATE INDEX
+> insert into nn values (1, 1), (null, 2)
+INSERT 0 2
+> select * from nn where a = 1
+fields a@nn.1:23:4:-1,b@nn.2:23:4:-1
+row 1,1
+SELECT 1
+> select * from nn where a = null
+fields a@nn.1:23:4:-1,b@nn.2:23:4:-1
+SELECT 0
+> create table ci (t text collate "C" unique, n int)
+CREATE TABLE
+> insert into ci values ('A', 1), ('a', 2)
+INSERT 0 2
+> select * from ci where t = 'a'
+fields t@ci.1:25:-1:-1,n@ci.2:23:4:-1
+row a,2
+SELECT 1
+> create table i8 (id bigint primary key, n int)
+CREATE TABLE
+> insert into i8 select i, i from generate_series(1, 100) i
+INSERT 0 100
+> select * from i8 where id = 7::bigint
+fields id@i8.1:20:8:-1,n@i8.2:23:4:-1
+row 7,7
+SELECT 1
+> delete from u where k = 'user1'
+DELETE 1
+> select * from u where k = 'user1'
+fields k@u.1:1043:-1:24,a@u.2:23:4:-1,b@u.3:25:-1:-1
+SELECT 0
+> create function fk(v varchar) returns text language sql as $$ select b from u where k = v $$
+CREATE FUNCTION
+> select fk('user20'), fk('user21')
+fields fk:25:-1:-1,fk:25:-1:-1
+row v20,v21
+SELECT 1
+> select k, (select a from u u2 where u2.k = u.k) from u where k in ('user30', 'user31') order by 1
+fields k@u.1:1043:-1:24,a:23:4:-1
+row user30,30
+row user31,31
+SELECT 2
