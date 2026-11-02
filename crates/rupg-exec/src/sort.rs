@@ -28,14 +28,14 @@ struct Key {
     descending: Option<bool>,
 }
 
-/// For the function `<` or `>` of `smallint`, `integer`, `bigint`, `date`, `time`, `timestamp`, `timestamptz` or `text` with itself: true for `>`. The order of these types is the order of their integers, also for the infinite values, and the order of the bytes for `text`, as the comparison of text does here.
+/// For the function `<` or `>` of `smallint`, `integer`, `bigint`, `date`, `time`, `timestamp`, `timestamptz`, `numeric` or `text` with itself: true for `>`. The order of these types is the order of their integers, also for the infinite values, and the order of the bytes for `text`, as the comparison of text does here. A `numeric` compares as an integer only in a column of integers, and a value of `numeric` calls the function.
 fn native(func: u32) -> Option<bool> {
     let name = rupg_pgcatalog::builtin::proc_by_oid(func)?.name;
     match name {
         "int2lt" | "int4lt" | "int8lt" | "date_lt" | "time_lt" | "timestamp_lt"
-        | "timestamptz_lt" | "text_lt" => Some(false),
+        | "timestamptz_lt" | "numeric_lt" | "text_lt" => Some(false),
         "int2gt" | "int4gt" | "int8gt" | "date_gt" | "time_gt" | "timestamp_gt"
-        | "timestamptz_gt" | "text_gt" => Some(true),
+        | "timestamptz_gt" | "numeric_gt" | "text_gt" => Some(true),
         _ => None,
     }
 }

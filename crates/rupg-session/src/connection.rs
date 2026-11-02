@@ -4188,6 +4188,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/group_code_places.test")));
     }
 
+    /// A grouped vector scan with a sort of the groups by a key of `numeric` whose values are integers, as `extract` gives them, compares the integers, with the order of Postgres for nulls and `DESC`.
+    #[test]
+    fn group_numeric_key() {
+        big_stack(|| script(include_str!("connection/group_numeric_key.test")));
+    }
+
     #[test]
     fn group_text_extreme() {
         big_stack(|| script(include_str!("connection/group_text_extreme.test")));
