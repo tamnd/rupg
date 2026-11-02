@@ -663,19 +663,24 @@ impl Wire {
         self.at += n;
     }
 
-    /// Reads more bytes. It gives false at the end of the stream and at an error.
+    /// Reads more bytes. It gives false at the end of the stream and at an error. A read that a signal interrupts starts again, as in `secure_read`.
     fn fill(&mut self, size: usize) -> bool {
         self.input.drain(..self.at);
         self.at = 0;
         let len = self.input.len();
         self.input.resize(len + size, 0);
-        let read = self.stream.read(&mut self.input[len..]);
+        let read = loop {
+            match self.stream.read(&mut self.input[len..]) {
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                read => break read,
+            }
+        };
         let n = read.unwrap_or(0);
         self.input.truncate(len + n);
         n > 0
     }
 
-    /// [`Wire::fill`] for the next message of the main loop. When no message comes in [`IDLE_TRIM`], the session is idle. Then the task gives back the memory of its stack and of the buffers, and it waits with no limit.
+    /// [`Wire::fill`] for the next message of the main loop. When no message comes in [`IDLE_TRIM`], the session is idle. Then the task gives back the memory of its stack and of the buffers, and it waits with no limit. A read that a signal interrupts starts again. A socket with a read timeout gets `EINTR` also from a stop of the process, as a debugger makes.
     fn wait(&mut self, tasks: &dyn Tasks) -> bool {
         if !self.timed {
             self.timed = self.stream.set_read_timeout(Some(IDLE_TRIM)).is_ok();
@@ -687,6 +692,7 @@ impl Wire {
         loop {
             self.input.resize(len + size, 0);
             match self.stream.read(&mut self.input[len..]) {
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                 Err(e)
                     if self.timed
                         && matches!(
@@ -1055,7 +1061,77 @@ fn session(shared: &Shared, wire: &mut Wire, start: &Start, protocol: u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::split_directories;
+    use std::collections::VecDeque;
+    use std::io::{self, Read, Write};
+
+    use rupg_platform::Stream;
+    use rupg_platform::os::OsTasks;
+    use rupg_wire::OutBuf;
+
+    use super::{Wire, split_directories};
+
+    /// A stream that gives each read in turn: an error kind, or bytes. After the reads, it is at its end.
+    #[derive(Debug)]
+    struct Reads(VecDeque<Result<Vec<u8>, io::ErrorKind>>);
+
+    impl Read for Reads {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            match self.0.pop_front() {
+                Some(Ok(bytes)) => {
+                    buf[..bytes.len()].copy_from_slice(&bytes);
+                    Ok(bytes.len())
+                }
+                Some(Err(kind)) => Err(kind.into()),
+                None => Ok(0),
+            }
+        }
+    }
+
+    impl Write for Reads {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Stream for Reads {
+        fn shutdown(&self) -> rupg_common::Result<()> {
+            Ok(())
+        }
+
+        fn peer_addr(&self) -> String {
+            String::new()
+        }
+    }
+
+    fn wire(reads: Vec<Result<Vec<u8>, io::ErrorKind>>) -> Wire {
+        Wire {
+            stream: Box::new(Reads(reads.into())),
+            input: Vec::new(),
+            at: 0,
+            out: OutBuf::new(),
+            secured: None,
+            timed: false,
+        }
+    }
+
+    /// A read that a signal interrupts starts again, and an other error ends the connection.
+    #[test]
+    fn interrupted_reads() {
+        let interrupted = io::ErrorKind::Interrupted;
+        let mut w = wire(vec![Err(interrupted), Err(interrupted), Ok(b"Q".to_vec())]);
+        assert!(w.fill(16));
+        assert_eq!(w.pending(), b"Q");
+        let mut w = wire(vec![Err(interrupted), Ok(b"S".to_vec())]);
+        assert!(w.wait(&OsTasks));
+        assert_eq!(w.pending(), b"S");
+        let mut w = wire(vec![Err(io::ErrorKind::ConnectionReset), Ok(b"Q".to_vec())]);
+        assert!(!w.fill(16));
+        assert!(!wire(Vec::new()).wait(&OsTasks));
+    }
 
     #[test]
     fn directory_lists() {
