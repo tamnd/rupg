@@ -701,6 +701,11 @@ impl<'a> FrozenRows<'a> {
         }));
     }
 
+    /// Passes the next frozen version, whose ID is `tid`, with no decode. The next row that [`FrozenRows::next`] gives passes its vectors.
+    fn skip(&mut self, tid: u64) {
+        self.places.row(tid);
+    }
+
     /// True when a column did not decode.
     fn failed(&self) -> bool {
         self.main.iter().chain(&self.side).flatten().any(|decoded| decoded.failed)
@@ -1083,16 +1088,34 @@ impl Table {
     }
 
     /// [`Table::each_row`], which decodes only the columns at `used` of a frozen version, and gives null for its other columns.
-    fn each_row_of(&self, used: Option<&[usize]>, mut each: impl FnMut(usize, &[Value])) {
+    fn each_row_of(&self, used: Option<&[usize]>, each: impl FnMut(usize, &[Value])) {
+        self.each_kept_row(used, |_| true, each);
+    }
+
+    /// [`Table::each_row_of`] for the versions that `keep` keeps. The other frozen versions do not decode.
+    fn each_kept_row(
+        &self,
+        used: Option<&[usize]>,
+        keep: impl Fn(&Version) -> bool,
+        mut each: impl FnMut(usize, &[Value]),
+    ) {
         let Some(frozen) = &self.frozen else {
             for (at, version) in self.versions.iter().enumerate() {
-                each(at, &version.values);
+                if keep(version) {
+                    each(at, &version.values);
+                }
             }
             return;
         };
         let mut rows = FrozenRows::new(frozen, used);
         let mut row = Vec::with_capacity(frozen.columns.len());
         for (at, version) in self.versions.iter().enumerate() {
+            if !keep(version) {
+                if version.values.is_empty() {
+                    rows.skip(version.tid);
+                }
+                continue;
+            }
             if version.values.is_empty() {
                 rows.next(version.tid, &mut row);
                 each(at, &row);
@@ -3014,7 +3037,8 @@ impl Heap {
                         put(at, &version.values);
                     }
                 }
-                None => table.each_row(put),
+                // A frozen version of a transaction in progress is not in the image, so it does not decode.
+                None => table.each_kept_row(None, |v| !running.contains(&v.xmin), put),
             }
             table.made.put(out);
             // The pages of the heap before the `TRUNCATE` of a transaction in progress, which aborts.
