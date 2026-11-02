@@ -121,15 +121,19 @@ impl Stored {
     }
 
     /// Puts the values of the vector `at` of the open rows into `out`, which it clears first. The open rows have vectors of [`VECTOR`] rows, as a segment has. The result is false when the open rows have no vector `at`.
-    pub fn open_values(&self, at: usize, out: &mut Vec<Value>) -> bool {
+    ///
+    /// # Errors
+    ///
+    /// `XX001` when an encoded vector of the open rows does not decode.
+    pub fn open_values(&self, at: usize, out: &mut Vec<Value>) -> Result<bool> {
         out.clear();
-        let Some(open) = &self.open else { return false };
+        let Some(open) = &self.open else { return Ok(false) };
         let start = at * VECTOR;
         if start >= open.rows() {
-            return false;
+            return Ok(false);
         }
-        open.values(0, start..(start + VECTOR).min(open.rows()), self.dict.as_ref(), out);
-        true
+        open.values(0, start..(start + VECTOR).min(open.rows()), self.dict.as_ref(), out)?;
+        Ok(true)
     }
 
     /// Appends to `out` the values of the rows `rows`, which go up. A vector with none of the rows does not decode, and only the values of the rows are made, so that a sample of a few rows of a long column is cheap.
@@ -162,7 +166,7 @@ impl Stored {
             if rest.is_empty() {
                 return Ok(());
             }
-            if !self.open_values(at, &mut vector) {
+            if !self.open_values(at, &mut vector)? {
                 break;
             }
             let end = base + vector.len();
@@ -186,7 +190,7 @@ impl Stored {
         let first = self.rows - self.open_rows();
         if rows >= first {
             if let Some(open) = &mut self.open {
-                open.truncate(rows - first);
+                open.truncate(rows - first, std::slice::from_ref(&self.dict))?;
                 if open.rows() == 0 {
                     self.open = None;
                 }
@@ -204,7 +208,7 @@ impl Stored {
             }
         } else {
             for at in 0.. {
-                if !self.open_values(at, &mut vector) {
+                if !self.open_values(at, &mut vector)? {
                     break;
                 }
                 kept.append(&mut vector);
@@ -241,31 +245,13 @@ impl Stored {
     }
 }
 
-/// The column of a segment of the open rows `open`, which the decode of each vector checks against the open rows.
+/// The column of a segment of the open rows `open`. The builder checks each vector with a decode when it encodes it.
 ///
 /// # Errors
 ///
 /// `XX000` when a vector of the segment does not decode to the values of the open rows.
 fn close(open: &Builder, dict: Option<&Dictionary>) -> Result<Column> {
-    let column = open.encode(0, dict)?;
-    let (mut want, mut got) = (Vec::new(), Vec::new());
-    for at in 0..column.vectors.len() {
-        open.values(0, at * VECTOR..((at + 1) * VECTOR).min(open.rows()), dict, &mut want);
-        column.values(at, dict, &mut got)?;
-        if want.len() != got.len() || want.iter().zip(&got).any(|(a, b)| !same(a, b)) {
-            return Err(Error::internal("a segment does not keep the values of its rows"));
-        }
-    }
-    Ok(column)
-}
-
-/// True when `a` and `b` are the same value, with the same bits for a float.
-fn same(a: &Value, b: &Value) -> bool {
-    match (a, b) {
-        (Value::Float4(x), Value::Float4(y)) => x.to_bits() == y.to_bits(),
-        (Value::Float8(x), Value::Float8(y)) => x.to_bits() == y.to_bits(),
-        _ => a == b,
-    }
+    open.encode(0, dict)
 }
 
 /// The number of vectors of a segment with `rows` rows.
@@ -308,9 +294,9 @@ mod tests {
         assert_eq!(parts.segments.len(), 1);
         assert_eq!(parts.open_rows(), 3000);
         let mut open = Vec::new();
-        assert!(parts.open_values(2, &mut open));
+        assert!(parts.open_values(2, &mut open).unwrap());
         assert_eq!(open, values[ROWS + 2048..ROWS + 3000]);
-        assert!(!parts.open_values(3, &mut open));
+        assert!(!parts.open_values(3, &mut open).unwrap());
         parts.seal().unwrap();
         assert!(parts.sealed());
         assert_eq!(parts.segments.len(), 2);
@@ -393,7 +379,7 @@ mod tests {
         stored.extend(values[ROWS - 4..].iter().map(Some)).unwrap();
         assert_eq!((stored.segments.len(), stored.open_rows()), (1, 10));
         let mut got = Vec::new();
-        assert!(stored.open_values(0, &mut got));
+        assert!(stored.open_values(0, &mut got).unwrap());
         assert_eq!(got, values[ROWS..]);
     }
 }

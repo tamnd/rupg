@@ -53,7 +53,10 @@ fn main() -> ExitCode {
             }
         },
         Some("serve") => match serve_config(&args[1..]) {
-            Ok(config) => serve(&config),
+            Ok(config) => {
+                rupg::tune_allocator();
+                serve(&config)
+            }
             Err(message) => {
                 eprintln!("rupg serve: {message}");
                 eprintln!("{USAGE}");

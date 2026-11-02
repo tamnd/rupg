@@ -201,11 +201,7 @@ impl Column {
     /// `XX001` when the bytes are not a vector.
     pub fn decode_floats(&self, at: usize, out: &mut Vec<f64>) -> Result<()> {
         out.clear();
-        let (words, rest) = self.vectors[at].data.as_chunks::<8>();
-        if !rest.is_empty() {
-            return Err(Error::corrupted("a float vector has a partial value"));
-        }
-        out.extend(words.iter().map(|w| f64::from_bits(u64::from_le_bytes(*w))));
+        out.extend(self.vectors[at].floats()?);
         Ok(())
     }
 
@@ -267,49 +263,66 @@ impl Column {
     ///
     /// `XX001` when the bytes are not a vector.
     pub fn values(&self, at: usize, dict: Option<&Dictionary>, out: &mut Vec<Value>) -> Result<()> {
+        self.vectors[at].values(self.kind, dict, out)
+    }
+}
+
+impl Vector {
+    /// The values of the vector of a column of the kind `kind`, as the row engine reads them. `dict` is the dictionary of a code column. The values go into `out`, which the vector clears first.
+    ///
+    /// # Errors
+    ///
+    /// `XX001` when the bytes are not a vector.
+    pub fn values(
+        &self,
+        kind: Kind,
+        dict: Option<&Dictionary>,
+        out: &mut Vec<Value>,
+    ) -> Result<()> {
         out.clear();
-        let vector = &self.vectors[at];
-        if vector.nulls == Nulls::All {
-            out.resize(vector.rows as usize, Value::Null);
+        if self.nulls == Nulls::All {
+            out.resize(self.rows as usize, Value::Null);
             return Ok(());
         }
-        match self.kind.store() {
+        let value = |i: usize, make: &dyn Fn() -> Value| {
+            if self.nulls.is_null(i) { Value::Null } else { make() }
+        };
+        match kind.store() {
             Store::Int => {
-                for (i, v) in integer::decode(&vector.data)?.into_iter().enumerate() {
-                    out.push(if vector.nulls.is_null(i) {
-                        Value::Null
-                    } else {
-                        self.kind.int_value(v)
-                    });
+                for (i, v) in integer::decode(&self.data)?.into_iter().enumerate() {
+                    out.push(value(i, &|| kind.int_value(v)));
                 }
             }
             Store::Float => {
-                let mut floats = Vec::new();
-                self.decode_floats(at, &mut floats)?;
-                for (i, v) in floats.into_iter().enumerate() {
-                    out.push(if vector.nulls.is_null(i) {
-                        Value::Null
-                    } else {
-                        self.kind.float_value(v)
-                    });
+                for (i, v) in self.floats()?.into_iter().enumerate() {
+                    out.push(value(i, &|| kind.float_value(v)));
                 }
             }
             Store::Code => {
                 let dict =
                     dict.ok_or_else(|| Error::internal("a code column has no dictionary"))?;
-                for (i, code) in integer::decode_as::<u32>(&vector.data)?.into_iter().enumerate() {
-                    out.push(if vector.nulls.is_null(i) {
-                        Value::Null
-                    } else {
-                        self.kind.bytes_value(dict.get(code))
-                    });
+                for (i, code) in integer::decode_as::<u32>(&self.data)?.into_iter().enumerate() {
+                    out.push(value(i, &|| kind.bytes_value(dict.get(code))));
                 }
             }
         }
-        if out.len() != vector.rows as usize {
+        if out.len() != self.rows as usize {
             return Err(Error::corrupted("a vector has another number of values than its rows"));
         }
         Ok(())
+    }
+
+    /// The values of the vector of a float column.
+    ///
+    /// # Errors
+    ///
+    /// `XX001` when the bytes are not whole floats.
+    pub fn floats(&self) -> Result<Vec<f64>> {
+        let (words, rest) = self.data.as_chunks::<8>();
+        if !rest.is_empty() {
+            return Err(Error::corrupted("a float vector has a partial value"));
+        }
+        Ok(words.iter().map(|w| f64::from_bits(u64::from_le_bytes(*w))).collect())
     }
 }
 
