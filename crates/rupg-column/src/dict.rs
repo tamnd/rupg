@@ -2,6 +2,8 @@
 //!
 //! The strings are in one arena, in the order of their codes. A hash table of codes finds a string. Code 0 means no value and is never an entry, so the first string gets code 1 (spec/09 section 9.5.2).
 
+use std::sync::OnceLock;
+
 use rupg_common::{Error, Result};
 use rupg_kernels::hash;
 
@@ -22,6 +24,8 @@ pub struct Dictionary {
     slots: Vec<u32>,
     /// The codes of the sorted base are 1 to `base`. The other codes are the tail, in the order they came (spec/09 section 9.5.3).
     base: u32,
+    /// The place of each code in the order of the bytes of all the strings, which [`Dictionary::order`] makes when a query first needs it. A new string clears it.
+    order: OnceLock<Box<[u32]>>,
 }
 
 impl Default for Dictionary {
@@ -34,7 +38,13 @@ impl Dictionary {
     /// A dictionary with no strings.
     #[must_use]
     pub fn new() -> Dictionary {
-        Dictionary { bytes: Vec::new(), ends: Vec::new(), slots: vec![NONE; 1024], base: 0 }
+        Dictionary {
+            bytes: Vec::new(),
+            ends: Vec::new(),
+            slots: vec![NONE; 1024],
+            base: 0,
+            order: OnceLock::new(),
+        }
     }
 
     /// The number of strings.
@@ -111,6 +121,7 @@ impl Dictionary {
         self.ends.push(self.bytes.len() as u64);
         let code = self.ends.len() as u32;
         self.slots[at] = code;
+        self.order = OnceLock::new();
         if self.ends.len() * 2 > self.slots.len() {
             self.grow();
         }
@@ -134,7 +145,7 @@ impl Dictionary {
             return Err(Error::corrupted("a dictionary has bad string ends"));
         }
         let size = (ends.len() * 2 + 1).next_power_of_two().max(1024);
-        let mut dict = Dictionary { bytes, ends, slots: Vec::new(), base };
+        let mut dict = Dictionary { bytes, ends, slots: Vec::new(), base, order: OnceLock::new() };
         dict.fill(size);
         Ok(dict)
     }
@@ -162,6 +173,26 @@ impl Dictionary {
     #[inline]
     pub fn rank(&self, code: u32) -> Option<u32> {
         (code <= self.base).then_some(code)
+    }
+
+    /// The place of each code in the order of the bytes of all the strings, at the index of the code. Code [`NONE`] has place 0, and the first string in order has place 1. The dictionary sorts its strings one time, and keeps the places until it gets a new string.
+    #[must_use]
+    pub fn order(&self) -> &[u32] {
+        self.order.get_or_init(|| {
+            let mut codes: Vec<u32> = (1..=self.ends.len() as u32).collect();
+            codes.sort_unstable_by(|&a, &b| self.get(a).cmp(self.get(b)));
+            let mut places = vec![0; self.ends.len() + 1];
+            for (place, &code) in codes.iter().enumerate() {
+                places[code as usize] = place as u32 + 1;
+            }
+            places.into_boxed_slice()
+        })
+    }
+
+    /// True when the dictionary has the places of [`Dictionary::order`], so that they cost nothing.
+    #[must_use]
+    pub fn has_order(&self) -> bool {
+        self.order.get().is_some()
     }
 
     /// The number of codes of the sorted base.
@@ -192,5 +223,18 @@ mod tests {
         assert_eq!(dict.find(b"nope"), MISSING);
         assert_eq!(dict.find(b""), 3001);
         assert_eq!(dict.rank(5), None);
+    }
+
+    #[test]
+    fn the_order_is_the_order_of_the_bytes() {
+        let mut dict = Dictionary::new();
+        for word in ["pear", "apple", "fig", "", "apples"] {
+            dict.intern(word.as_bytes());
+        }
+        assert_eq!(dict.order(), [0, 5, 2, 4, 1, 3]);
+        assert!(dict.has_order());
+        dict.intern(b"banana");
+        assert!(!dict.has_order());
+        assert_eq!(dict.order()[6], 4);
     }
 }

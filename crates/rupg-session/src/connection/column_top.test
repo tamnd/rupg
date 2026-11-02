@@ -81,3 +81,26 @@ SELECT 3
 > SELECT t FROM tp WHERE n > 69990 ORDER BY t LIMIT 0
 fields t@tp.2:25:-1:-1
 SELECT 0
+> SET enable_hashagg = off
+SET
+> SELECT t, count(*) FROM tp WHERE g = 2 GROUP BY t
+fields t@tp.2:25:-1:-1,count:20:8:-1
+row v0,1846
+row v1,1846
+row v2,1846
+row v3,1846
+row v4,1847
+row NULL,769
+SELECT 6
+> SELECT g, count(*) FROM tp WHERE t = 'v3' GROUP BY g
+fields g@tp.1:23:4:-1,count:20:8:-1
+row 0,1846
+row 1,1846
+row 2,1846
+row 3,1846
+row 4,1847
+row 5,1846
+row 6,1846
+SELECT 7
+> RESET enable_hashagg
+RESET

@@ -1980,8 +1980,9 @@ fn grouped(
     let mut hashing = plan_keys(scan.exec.session, query);
     let mut hashes: Vec<u32> = Vec::new();
     let mut hash_error: Option<Error> = None;
-    // The values of the keys of each group, from its first row, when the scan finds no hashes.
+    // The keys of each group, from its first row, when the scan finds no hashes: the words of the keys and the mask of nulls while each key has one shape, else the values.
     let mut key_values: Vec<Value> = Vec::new();
+    let mut key_words = KeyWords { words: Vec::new(), shapes: None, by_words: keys.len() < 64 };
     let rows = scan.rows;
     let mut seen = 0;
     let mut bail = false;
@@ -2019,6 +2020,7 @@ fn grouped(
             }
         } else {
             let cols = keys.iter().map(|k| exec.eval(k, batch, sel)).collect::<Result<Vec<_>>>()?;
+            let batch_shapes: Option<Vec<Shape>> = cols.iter().map(Shape::of).collect();
             new_rows.clear();
             for (i, &row_at) in sel.iter().enumerate() {
                 let mut mask = 0_u64;
@@ -2048,13 +2050,27 @@ fn grouped(
                                 // A key that the hash of the plan cannot read: the groups go in the order of a sort, as before the hash.
                                 Err(_) if hashes.is_empty() => {
                                     hashing = None;
-                                    key_values.extend(cols.iter().map(|c| c.value(i, &exec.dicts)));
+                                    key_words.keep(
+                                        &word,
+                                        batch_shapes.as_deref(),
+                                        &cols,
+                                        i,
+                                        &exec.dicts,
+                                        &mut key_values,
+                                    );
                                 }
                                 Err(error) => hash_error = Some(error),
                             }
                         }
                     } else {
-                        key_values.extend(cols.iter().map(|c| c.value(i, &exec.dicts)));
+                        key_words.keep(
+                            &word,
+                            batch_shapes.as_deref(),
+                            &cols,
+                            i,
+                            &exec.dicts,
+                            &mut key_values,
+                        );
                     }
                 }
                 ids.push(id);
@@ -2330,7 +2346,13 @@ fn grouped(
         return Err(error);
     }
     let hashes = hashing.map(|_| hashes);
-    let order = group_order(query, session, &key_values, hashes.as_deref(), groups, trailing)?;
+    let keys_of_groups = match &key_words.shapes {
+        Some(shapes) if key_words.by_words => {
+            GroupKeys::Words { words: &key_words.words, shapes, dicts: &scan.exec.dicts }
+        }
+        _ => GroupKeys::Values(&key_values),
+    };
+    let order = group_order(query, session, &keys_of_groups, hashes.as_deref(), groups, trailing)?;
     let mut chosen = None;
     if let Some(key) = top {
         chosen = count_top(session, &results, &order, key, offset)?;
@@ -2505,11 +2527,220 @@ fn key_hash(places: &[(usize, u32)], cols: &[Col], i: usize, dicts: &[Dict]) -> 
     Ok(hashed::murmurhash32(hash))
 }
 
+/// The shape of the words of a key of `GROUP BY` in a batch, from which its value comes back.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    /// An integer of the type.
+    Int(u32),
+    /// A code of a dictionary of [`Exec::dicts`].
+    Code(usize),
+}
+
+impl Shape {
+    fn of(col: &Col) -> Option<Shape> {
+        match &col.data {
+            Data::Int(_) => Some(Shape::Int(col.ty)),
+            Data::Code(_, d) => Some(Shape::Code(*d)),
+            _ => None,
+        }
+    }
+
+    fn value(self, word: u64, dicts: &[Dict]) -> Value {
+        match self {
+            Shape::Int(ty) => int_value(ty, word as i64),
+            Shape::Code(d) => dicts[d].value(word as u32),
+        }
+    }
+}
+
+/// The keys of the groups as their words, which cost no value for each group, while the keys of each new group have the same shapes.
+struct KeyWords {
+    /// The words of the keys and the mask of nulls of each group.
+    words: Vec<u64>,
+    shapes: Option<Vec<Shape>>,
+    /// False after a key with another shape: the keys are then in the values.
+    by_words: bool,
+}
+
+impl KeyWords {
+    /// Keeps the keys `word` of the row `i` of a new group. The keys of the batch have the shapes `batch`.
+    fn keep(
+        &mut self,
+        word: &[u64],
+        batch: Option<&[Shape]>,
+        cols: &[Col],
+        i: usize,
+        dicts: &[Dict],
+        values: &mut Vec<Value>,
+    ) {
+        if self.by_words {
+            if self.shapes.is_none() {
+                self.shapes = batch.map(<[Shape]>::to_vec);
+            }
+            if batch.is_some() && batch == self.shapes.as_deref() {
+                self.words.extend_from_slice(word);
+                return;
+            }
+            // A key changes its shape: the keys of the groups before go into the values.
+            if let Some(shapes) = &self.shapes {
+                *values = values_of_words(&self.words, shapes, dicts);
+            }
+            self.words = Vec::new();
+            self.by_words = false;
+        }
+        values.extend(cols.iter().map(|c| c.value(i, dicts)));
+    }
+}
+
+/// The keys of the groups for [`group_order`].
+enum GroupKeys<'a> {
+    /// The values of the keys of each group.
+    Values(&'a [Value]),
+    /// The words of [`KeyWords`].
+    Words { words: &'a [u64], shapes: &'a [Shape], dicts: &'a [Dict] },
+}
+
+/// The values of the keys of each group from the words of [`KeyWords`].
+fn values_of_words(words: &[u64], shapes: &[Shape], dicts: &[Dict]) -> Vec<Value> {
+    let mut values = Vec::with_capacity(words.len());
+    for group in words.chunks(shapes.len() + 1) {
+        let mask = group[shapes.len()];
+        for (k, shape) in shapes.iter().enumerate() {
+            values.push(if mask >> k & 1 == 1 {
+                Value::Null
+            } else {
+                shape.value(group[k], dicts)
+            });
+        }
+    }
+    values
+}
+
+/// The order of the groups by the sort of their keys, from the words of the keys, for keys whose sort compares integers or bytes. The keys of two groups are never all equal, so each sort gives the order of the sort of the row engine. A key of text compares the places of its codes in the order of the dictionary, which the dictionary keeps for the next queries, or the bytes for a few groups. `None` for a key of codes with no text.
+fn word_order(
+    words: &[u64],
+    shapes: &[Shape],
+    dicts: &[Dict],
+    natives: &[(usize, bool, bool)],
+    groups: usize,
+) -> Option<Vec<usize>> {
+    /// How a key compares two groups.
+    enum By<'a> {
+        /// An integer, or the place of a code.
+        Place(Vec<u64>),
+        Bytes(&'a Dictionary),
+    }
+    let width = shapes.len() + 1;
+    let mut keys = Vec::with_capacity(natives.len());
+    for &(k, descending, nulls_first) in natives {
+        let by = match shapes[k] {
+            Shape::Int(_) => By::Place(words.chunks(width).map(|g| g[k] ^ (1 << 63)).collect()),
+            Shape::Code(d) => {
+                let dict = match &dicts[d] {
+                    Dict::Stored(stored) if stored.kind == Kind::Text => stored.dict.as_ref()?,
+                    Dict::Own(dict) => dict,
+                    Dict::Stored(_) => return None,
+                };
+                if dict.has_order() || groups.saturating_mul(4) >= dict.len() {
+                    let order = dict.order();
+                    By::Place(
+                        words
+                            .chunks(width)
+                            .map(|g| u64::from(order.get(g[k] as usize).copied().unwrap_or(0)))
+                            .collect(),
+                    )
+                } else {
+                    By::Bytes(dict)
+                }
+            }
+        };
+        keys.push((k, descending, nulls_first, by));
+    }
+    let null = |g: usize, k: usize| words[g * width + shapes.len()] >> k & 1 == 1;
+    // With no key of bytes, each key of a group is one number in the order of the sort, with the null flag above the place, and a sort of the numbers next to the groups reads no other memory.
+    /// The places of a key, true for descending, true for nulls first, and the key.
+    type PlaceKey<'a> = (&'a [u64], bool, bool, usize);
+    let places: Option<Vec<PlaceKey<'_>>> = keys
+        .iter()
+        .map(|(k, descending, nulls_first, by)| match by {
+            By::Place(places) => Some((places.as_slice(), *descending, *nulls_first, *k)),
+            By::Bytes(_) => None,
+        })
+        .collect();
+    if let Some(places) = places {
+        let number = |g: usize, (places, descending, nulls_first, k): &PlaceKey<'_>| {
+            let null = null(g, *k);
+            let place = if *descending { !places[g] } else { places[g] };
+            // A null is above each value, or below each value for nulls first.
+            match (null, *nulls_first) {
+                (true, false) => 1_u128 << 64,
+                (true, true) => 0,
+                (false, false) => u128::from(place),
+                (false, true) => 1_u128 << 64 | u128::from(place),
+            }
+        };
+        let order = match places.as_slice() {
+            [one] => {
+                let mut numbers: Vec<(u128, u32)> =
+                    (0..groups).map(|g| (number(g, one), g as u32)).collect();
+                numbers.sort_unstable();
+                numbers.into_iter().map(|(_, g)| g as usize).collect()
+            }
+            [one, two] => {
+                let mut numbers: Vec<(u128, u128, u32)> =
+                    (0..groups).map(|g| (number(g, one), number(g, two), g as u32)).collect();
+                numbers.sort_unstable();
+                numbers.into_iter().map(|(_, _, g)| g as usize).collect()
+            }
+            _ => {
+                let n = places.len();
+                let numbers: Vec<u128> = (0..groups)
+                    .flat_map(|g| places.iter().map(move |p| (g, p)))
+                    .map(|(g, p)| number(g, p))
+                    .collect();
+                let mut order: Vec<usize> = (0..groups).collect();
+                order.sort_unstable_by(|&a, &b| {
+                    numbers[a * n..(a + 1) * n].cmp(&numbers[b * n..(b + 1) * n]).then(a.cmp(&b))
+                });
+                order
+            }
+        };
+        return Some(order);
+    }
+    let mut order: Vec<usize> = (0..groups).collect();
+    order.sort_unstable_by(|&a, &b| {
+        for (k, descending, nulls_first, by) in &keys {
+            let order = match (null(a, *k), null(b, *k)) {
+                (true, true) => std::cmp::Ordering::Equal,
+                (true, false) if *nulls_first => std::cmp::Ordering::Less,
+                (true, false) => std::cmp::Ordering::Greater,
+                (false, true) if *nulls_first => std::cmp::Ordering::Greater,
+                (false, true) => std::cmp::Ordering::Less,
+                (false, false) => {
+                    let order = match by {
+                        By::Place(places) => places[a].cmp(&places[b]),
+                        By::Bytes(dict) => {
+                            let code = |g: usize| words[g * width + k] as u32;
+                            dict.get(code(a)).cmp(dict.get(code(b)))
+                        }
+                    };
+                    if *descending { order.reverse() } else { order }
+                }
+            };
+            if order != std::cmp::Ordering::Equal {
+                return order;
+            }
+        }
+        a.cmp(&b)
+    });
+    Some(order)
+}
+
 /// The order of the groups, as the row engine gives them: the order of the hash table of the `HashAggregate` of the plan, the order of the keys for a sort, or the order of the first rows. `hashes` has the hash of each group when the scan found them.
 fn group_order(
     query: &Query,
     session: &dyn Session,
-    key_values: &[Value],
+    group_keys: &GroupKeys<'_>,
     hashes: Option<&[u32]>,
     groups: usize,
     trailing: bool,
@@ -2524,8 +2755,32 @@ fn group_order(
         return hashed::order_of(hashes, table.groups, trailing);
     }
     let width = query.group.len();
-    let keys: Vec<&[Value]> = key_values.chunks(width).collect();
     let types: Vec<u32> = query.group.iter().map(|g| query.targets[g.target].expr.ty).collect();
+    if let GroupKeys::Words { words, shapes, dicts } = group_keys
+        && session.hash_tables(query).and_then(|t| t.group.clone()).is_none()
+        && query.group.iter().all(|g| g.sort != 0)
+    {
+        let list: Vec<rupg_analyze::SortGroup> = query
+            .group
+            .iter()
+            .enumerate()
+            .map(|(i, g)| rupg_analyze::SortGroup { target: i, ..g.clone() })
+            .collect();
+        if let Some(natives) = sort::Keys::new(&list, &types, session)?.natives()
+            && let Some(order) = word_order(words, shapes, dicts, &natives, groups)
+        {
+            return Ok(order);
+        }
+    }
+    let materialized;
+    let key_values = match group_keys {
+        GroupKeys::Values(values) => *values,
+        GroupKeys::Words { words, shapes, dicts } => {
+            materialized = values_of_words(words, shapes, dicts);
+            &materialized
+        }
+    };
+    let keys: Vec<&[Value]> = key_values.chunks(width).collect();
     if let Some(table) = session.hash_tables(query).and_then(|t| t.group.clone()) {
         let places: Option<Vec<usize>> =
             table.keys.iter().map(|t| query.group.iter().position(|g| g.target == *t)).collect();
