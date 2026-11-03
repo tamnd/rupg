@@ -2190,6 +2190,7 @@ impl Connection {
 
     /// The parameters that changed, then `ReadyForQuery`.
     fn ready_for_query(&mut self, out: &mut OutBuf) {
+        self.store.release_mapped();
         self.report_idle();
         self.sync_role();
         self.session.set_utf8(self.utf8());
@@ -7474,6 +7475,74 @@ mod tests {
                     assert_eq!(rows(&mut c, "SELECT nextval('s')"), ["row 5"]);
                 }
             }
+        });
+    }
+
+    /// A store that opens an image in a file of the operating system reads the frozen columns from a mapping of the file, with no copy. The end of each statement gives the pages back, and the next statement reads the same values. An image that the same process writes gives its columns to the tables that did not change, and writes the new file while the columns still read the old one.
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn frozen_columns_read_a_mapping_of_the_image() {
+        use rupg_platform::os::OsIo;
+        big_stack(|| {
+            let dir = std::env::temp_dir().join(format!("rupg-map-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("data.rupg");
+            let open = || Arc::new(Store::new().with_image(Arc::new(OsIo), path.clone()).unwrap());
+            let rows = |c: &mut Connection, sql: &str| -> Vec<String> {
+                send(c, &query(sql)).into_iter().filter(|l| l.starts_with("row ")).collect()
+            };
+            let store = open();
+            let (mut a, _) = connect_to(&store, 1234);
+            send(&mut a, &query("CREATE TABLE t (a int, b text, c float8)"));
+            send(
+                &mut a,
+                &query(
+                    "INSERT INTO t SELECT i, 'v' || (i % 100), i / 4.0 FROM generate_series(1, 70000) i",
+                ),
+            );
+            let sums = "SELECT sum(a), count(DISTINCT b), sum(c) FROM t";
+            assert_eq!(rows(&mut a, sums), ["row 2450035000,100,612508750"]);
+            let relation = rows(&mut a, "SELECT 't'::regclass::oid")[0][4..].parse().unwrap();
+            let database =
+                rows(&mut a, "SELECT oid FROM pg_database WHERE datname = current_database()")[0]
+                    [4..]
+                    .parse()
+                    .unwrap();
+            // The large insert writes the image at its commit, and the table gets the columns of the image, which read its mapping.
+            let (mapped, all) = store.heap().mapped_vectors(database, relation);
+            assert!(all > 0);
+            assert_eq!(mapped, all);
+            assert_eq!(rows(&mut a, sums), ["row 2450035000,100,612508750"]);
+            drop(a);
+            drop(store);
+            let back = open();
+            let (mut b, _) = connect_to(&back, 1235);
+            let (mapped, all) = back.heap().mapped_vectors(database, relation);
+            assert!(all > 0);
+            assert_eq!(mapped, all);
+            for _ in 0..2 {
+                assert_eq!(rows(&mut b, sums), ["row 2450035000,100,612508750"]);
+                assert_eq!(rows(&mut b, "SELECT a, b FROM t WHERE c = 2.5"), ["row 10,v10"]);
+            }
+            back.checkpoint().unwrap();
+            assert_eq!(rows(&mut b, sums), ["row 2450035000,100,612508750"]);
+            drop(b);
+            drop(back);
+            let third = open();
+            let (mut c, _) = connect_to(&third, 1236);
+            assert_eq!(rows(&mut c, sums), ["row 2450035000,100,612508750"]);
+            // A table that changes after the image keeps the columns of the change.
+            send(&mut c, &query("INSERT INTO t VALUES (70001, 'v1', 1)"));
+            assert_eq!(rows(&mut c, "SELECT count(*), max(a) FROM t"), ["row 70001,70001"]);
+            third.checkpoint().unwrap();
+            assert_eq!(rows(&mut c, "SELECT count(*), max(a) FROM t"), ["row 70001,70001"]);
+            send(&mut c, &query("DELETE FROM t WHERE a = 70001"));
+            third.checkpoint().unwrap();
+            assert_eq!(rows(&mut c, sums), ["row 2450035000,100,612508750"]);
+            drop(c);
+            drop(third);
+            std::fs::remove_dir_all(&dir).unwrap();
         });
     }
 

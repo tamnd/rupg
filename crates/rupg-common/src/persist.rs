@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::{BuildHasher, Hash};
 use std::sync::Arc;
 
+use crate::bytes::{Bytes, Mapping};
 use crate::{Error, Result, SqlState};
 
 /// A value that can be written to bytes and read back from them.
@@ -44,12 +45,29 @@ pub fn corrupt(what: &str) -> Error {
 #[derive(Debug)]
 pub struct Reader<'a> {
     bytes: &'a [u8],
+    /// The mapping of the file whose bytes the reader reads, which [`Reader::shared`] gives ranges of.
+    map: Option<&'a Arc<dyn Mapping>>,
 }
 
 impl<'a> Reader<'a> {
     /// A reader at the start of `bytes`.
     pub fn new(bytes: &'a [u8]) -> Reader<'a> {
-        Reader { bytes }
+        Reader { bytes, map: None }
+    }
+
+    /// A reader at the start of the bytes of `map`. [`Reader::shared`] gives ranges of the mapping, which do not copy the bytes.
+    pub fn mapped(map: &'a Arc<dyn Mapping>) -> Reader<'a> {
+        Reader { bytes: map.bytes(), map: Some(map) }
+    }
+
+    /// The next `n` bytes, as a range of the mapping of the reader, or as a copy when the reader has no mapping.
+    pub fn shared(&mut self, n: usize) -> Result<Bytes> {
+        let head = self.bytes(n)?;
+        let mapped = self.map.and_then(|map| {
+            let at = (head.as_ptr() as usize).checked_sub(map.bytes().as_ptr() as usize)?;
+            Bytes::mapped(map, at, n)
+        });
+        Ok(mapped.unwrap_or_else(|| head.into()))
     }
 
     /// True when the read has taken all the bytes.

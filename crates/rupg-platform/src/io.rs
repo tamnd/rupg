@@ -4,6 +4,7 @@ use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
 
+use rupg_common::bytes::Mapping;
 use rupg_common::{Error, Result, SqlState};
 
 /// How [`Io::open`] opens a file.
@@ -130,4 +131,9 @@ pub trait File: Send + Sync + fmt::Debug {
 
     /// Sets the size of the file. New bytes are zero. The change is durable after the next [`File::sync`].
     fn set_size(&self, size: u64) -> Result<()>;
+
+    /// The bytes of the whole file, mapped to read only, or `None` when the file is empty or the implementation does not map files. The caller must not write to the file or make it shorter while the mapping lives.
+    fn map(&self) -> Option<Arc<dyn Mapping>> {
+        None
+    }
 }

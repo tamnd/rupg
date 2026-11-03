@@ -1,5 +1,6 @@
 //! A segment: 262,144 rows of a table, each column in vectors of 1024 values that decode alone (spec/09 section 9.2).
 
+use rupg_common::bytes::Bytes;
 use rupg_common::{Error, Result};
 use rupg_encode::integer;
 use rupg_summary::column::{ColumnSummary, VECTOR};
@@ -188,7 +189,7 @@ pub struct Vector {
     /// The rows of the vector, 1024 except in the last vector of a segment.
     pub rows: u32,
     /// The encoded values. A null position holds a value that keeps the stream compressible.
-    pub data: Box<[u8]>,
+    pub data: Bytes,
     /// The null positions.
     pub nulls: Nulls,
 }
