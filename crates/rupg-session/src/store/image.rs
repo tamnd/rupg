@@ -71,7 +71,7 @@ impl Store {
     }
 
     /// The rows of the tables that a commit of a log dropped go, as the drop of a table writes no log of its rows.
-    fn drop_lost_tables(&self) {
+    pub(crate) fn drop_lost_tables(&self) {
         let catalogs = self.catalogs();
         for database in self.heap.databases() {
             match catalogs.iter().find(|(row, _)| row.oid == database) {

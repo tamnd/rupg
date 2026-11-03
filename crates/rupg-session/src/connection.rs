@@ -7326,6 +7326,8 @@ mod tests {
             let image = store.image(0);
             let mut back = Store::new();
             back.load(&image).unwrap();
+            // A start with a log after the image drops the tables that the log dropped, and the tables that stay keep their columns and headers.
+            back.drop_lost_tables();
             let back = Arc::new(back);
             assert_eq!(back.heap().frozen_rows(database, relation), 70000);
             let (mut c, _) = connect_to(&back, 1236);

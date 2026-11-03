@@ -318,11 +318,9 @@ impl Tables {
             .map(Table::touch)
     }
 
-    fn retain(&mut self, keep: impl FnMut(&(u32, u32), &mut Table) -> bool) {
-        for table in self.0.values_mut() {
-            table.thaw();
-        }
-        self.0.retain(keep);
+    /// Keeps the tables whose key `keep` accepts. A kept table keeps its versions, its frozen values and its columns, as the call only drops whole tables.
+    fn retain(&mut self, mut keep: impl FnMut(&(u32, u32)) -> bool) {
+        self.0.retain(|key, _| keep(key));
     }
 }
 
@@ -2982,7 +2980,7 @@ impl Heap {
 
     /// Removes the rows of the tables of a database that `keep` does not keep, after a commit drops the tables.
     pub(crate) fn drop_tables(&self, database: u32, keep: impl Fn(u32) -> bool) {
-        self.state().tables.retain(|&(db, relation), _| db != database || keep(relation));
+        self.state().tables.retain(|&(db, relation)| db != database || keep(relation));
     }
 }
 
