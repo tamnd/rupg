@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A read of a key removes the old versions of the key that no snapshot sees, as `heap_page_prune_opt` does. Before, each update of a hot key added a version that stayed until `VACUUM`, so each read of the key walked a longer chain. A session holds the `xmin` of its snapshot under the lock of the heap when it takes the snapshot, so a prune does not remove a version that the snapshot sees (#1308).
 - The `rupg` binary uses mimalloc 2 as its allocator, as spec/22 section 22.5 asks. Each thread of mimalloc has its own heap, so the sessions do not wait on the two arenas of the allocator of the C library. A program that links the library keeps its own allocator (#1307).
 - Keep the buffers of the log between commits and share the set of the transactions in progress between the snapshots. Before, each commit grew two new buffers and each statement copied the set while the heap was locked, so at 16 clients the sessions waited for the lock of the heap and for the lock of the allocator (#1305).
 - A statement with no `WITH` that changes data does not walk its query to find the statements of `WITH` that read written rows (#1301).

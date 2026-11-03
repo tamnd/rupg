@@ -740,9 +740,9 @@ impl Connection {
         let heap = self.store.heap();
         let serializable = self.known.borrow_mut().of(&self.settings.borrow()).serializable;
         let snapshot = if serializable {
-            self.snapshot.borrow_mut().get_or_insert_with(|| heap.snapshot()).clone()
+            self.snapshot.borrow_mut().get_or_insert_with(|| heap.held_snapshot(self.pid)).clone()
         } else {
-            heap.snapshot()
+            heap.held_snapshot(self.pid)
         };
         heap.hold(self.pid, &snapshot);
         View {
