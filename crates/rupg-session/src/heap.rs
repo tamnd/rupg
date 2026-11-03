@@ -173,6 +173,16 @@ struct Touched {
 }
 
 impl State {
+    /// `GetOldestNonRemovableTransactionId`: a version that a transaction before the horizon deleted, when that transaction is not in progress, is dead to each snapshot that a session holds or takes later.
+    fn horizon(&self) -> u32 {
+        self.running
+            .first()
+            .copied()
+            .into_iter()
+            .chain(self.xmins.values().copied())
+            .fold((self.latest_completed + 1).max(INITDB_NEXT_XID), u32::min)
+    }
+
     /// Notes that the transaction `xid` changed the table `key`, for the log of its commit. The log then reads all the versions of the table.
     fn wrote(&mut self, xid: u32, key: (u32, u32)) {
         if let Some(touched) = self.touch(xid, key) {
@@ -1380,6 +1390,21 @@ impl Table {
         self.versions.binary_search_by_key(&tid, |version| version.tid).ok()
     }
 
+    /// `heap_page_prune_opt` for one key: the IDs of the versions that went, and of the versions that are dead to each snapshot, leave the list of the hash `hash` in the map `place`. So a read of a key that changed many times does not test each old version again until `VACUUM`. A version is dead when a transaction before `horizon` that is not in `running` deleted it, as in [`Heap::vacuum`].
+    fn prune_key(&mut self, place: usize, hash: u64, (horizon, running): (u32, &BTreeSet<u32>)) {
+        let Table { keys, versions, .. } = self;
+        let Some(map) = keys.get_mut(place) else { return };
+        let Some(tids) = map.hashes.get_mut(&hash).filter(|tids| tids.len() > 1) else { return };
+        let dead = |tid: u64| match versions.binary_search_by_key(&tid, |version| version.tid) {
+            Ok(at) => {
+                let xmax = versions[at].xmax;
+                xmax != 0 && !running.contains(&xmax) && xmax < horizon
+            }
+            Err(_) => true,
+        };
+        tids.retain(|&tid| !dead(tid));
+    }
+
     /// The place in `keys` of the map of each unique key. The first write that checks a key with no expression makes its map from all the versions. The result is `None` when an index with an expression has no map, which [`Heap::lock_keys`] makes while the heap is not locked.
     fn key_maps(&mut self, unique: &[Unique]) -> Option<Vec<usize>> {
         self.keys.retain(|map| !map.stale);
@@ -1820,8 +1845,20 @@ impl Heap {
     }
 
     /// `GetSnapshotData`: the transactions whose changes are not visible now.
+    #[cfg(test)]
     pub(crate) fn snapshot(&self) -> Snapshot {
-        let state = self.state();
+        Self::snapshot_of(&self.state())
+    }
+
+    /// [`Heap::snapshot`] for the session `pid`, which then holds its `xmin` as [`Heap::hold`] does. The snapshot and the hold are under one lock, as `GetSnapshotData` sets `MyProc->xmin` under `ProcArrayLock`, so a prune does not remove a version that the snapshot sees before the session holds it.
+    pub(crate) fn held_snapshot(&self, pid: i32) -> Snapshot {
+        let mut state = self.state();
+        let snapshot = Self::snapshot_of(&state);
+        state.xmins.entry(pid).or_insert_with(|| snapshot.xmin());
+        snapshot
+    }
+
+    fn snapshot_of(state: &State) -> Snapshot {
         Snapshot {
             xmax: state.next_xid.max(INITDB_NEXT_XID),
             running: Arc::clone(&state.running),
@@ -1972,6 +2009,8 @@ impl Heap {
     ) -> Option<Vec<Vec<Value>>> {
         let mut guard = self.state();
         let state = &mut *guard;
+        let horizon = state.horizon().min(view.snapshot.xmin());
+        let running = Arc::clone(&state.running);
         let Some(table) = state.tables.0.get_mut(&(view.database, relation)) else {
             return Some(Vec::new());
         };
@@ -1987,15 +2026,15 @@ impl Heap {
             deferrable: None,
         };
         let place = *table.key_maps(std::slice::from_ref(&unique))?.first()?;
-        let map = &table.keys[place];
         let mut row = vec![Value::Null; columns.iter().max().map_or(0, |c| c + 1)];
         for (&column, value) in columns.iter().zip(key) {
             row[column] = value.clone();
         }
-        let Some(hash) = map.hash(&row) else {
+        let Some(hash) = table.keys[place].hash(&row) else {
             return Some(Vec::new());
         };
-        let mut tids = map.hashes.get(&hash).cloned().unwrap_or_default();
+        table.prune_key(place, hash, (horizon, &*running));
+        let mut tids = table.keys[place].hashes.get(&hash).cloned().unwrap_or_default();
         tids.sort_unstable();
         tids.dedup();
         let wanted = used_columns(used);
@@ -3727,6 +3766,50 @@ mod tests {
         let rows = heap.rows(7, &view(heap.snapshot(), 0, 0));
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0][0], Value::Int4(2));
+    }
+
+    #[test]
+    fn a_read_of_a_key_prunes_the_versions_that_no_snapshot_sees() {
+        let heap = Heap::default();
+        let key = (&[0][..], &[oid::INT4][..], false);
+        let read = |view: &View| {
+            let rows = heap.key_rows(7, view, None, key, &[Value::Int4(1)]).unwrap();
+            assert_eq!(rows.len(), 1);
+            let Some(&Value::Int8(tid)) = rows[0].last() else { panic!("a row with no ID") };
+            (rows[0][1].clone(), tid.cast_unsigned())
+        };
+        let bucket = || {
+            let state = heap.state();
+            let table = &state.tables.0[&(1, 7)];
+            table.keys[0].hashes.values().map(Vec::len).sum::<usize>()
+        };
+        let first = heap.begin(1);
+        let row = |b: i32| vec![Value::Int4(1), Value::Int4(b)];
+        heap.insert(7, &view(heap.snapshot(), first, 0), vec![row(0)], (&[], &none), &[]).unwrap();
+        heap.commit(first);
+        // The session 2 holds a snapshot from before the updates, so their old versions stay.
+        let old = view(heap.held_snapshot(2), 0, 0);
+        for b in 1..=5 {
+            let xid = heap.begin(1);
+            let (_, tid) = read(&view(heap.held_snapshot(1), xid, 0));
+            let change = vec![(tid, Some(row(b)))];
+            heap.change(
+                7,
+                &view(heap.snapshot(), xid, 0),
+                change,
+                (&[], &none),
+                &[],
+                &mut Vec::new(),
+            )
+            .unwrap();
+            heap.commit(xid);
+            heap.release(1);
+        }
+        assert_eq!(read(&old).0, Value::Int4(0));
+        assert_eq!(bucket(), 6);
+        heap.release(2);
+        assert_eq!(read(&view(heap.held_snapshot(1), 0, 0)).0, Value::Int4(5));
+        assert_eq!(bucket(), 1);
     }
 
     #[test]
