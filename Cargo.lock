@@ -375,6 +375,7 @@ dependencies = [
  "rupg-pgcatalog",
  "rupg-plan",
  "rupg-sql",
+ "rupg-summary",
  "rupg-types",
 ]
 

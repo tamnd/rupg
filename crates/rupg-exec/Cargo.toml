@@ -22,6 +22,7 @@ rupg-kernels.workspace = true
 rupg-opt.workspace = true
 rupg-pgcatalog.workspace = true
 rupg-plan.workspace = true
+rupg-summary.workspace = true
 rupg-types.workspace = true
 
 [dev-dependencies]

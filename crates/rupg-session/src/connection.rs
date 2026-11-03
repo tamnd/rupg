@@ -7294,6 +7294,79 @@ mod tests {
         });
     }
 
+    /// The aggregates of a query of a large table with no groups and no conditions come from the summaries of the segments, and give the answers of a scan of the rows.
+    #[test]
+    fn aggregates_of_a_whole_table_come_from_the_summaries() {
+        big_stack(|| {
+            let store = Arc::new(Store::new());
+            let (mut a, _) = connect_to(&store, 1234);
+            let rows = |c: &mut Connection, sql: &str| -> Vec<String> {
+                send(c, &query(sql)).into_iter().filter(|l| l.starts_with("row ")).collect()
+            };
+            send(&mut a, &query("CREATE TABLE t (a int, b bigint, d date, e text)"));
+            send(
+                &mut a,
+                &query(
+                    "INSERT INTO t SELECT CASE WHEN i % 7 = 0 THEN NULL ELSE i - 500 END, i::bigint * 1000003, \
+                     DATE '2013-07-01' + i % 31, 'v' || (i % 9) FROM generate_series(1, 70000) i",
+                ),
+            );
+            let aggs = "SELECT count(*), count(a), count(e), sum(a), avg(a), min(a), max(a), sum(b), \
+                        avg(b), min(d), max(d), sum(a + 1), sum(b - 3) FROM t";
+            let scanned = format!("{aggs} WHERE a = a OR a IS NULL");
+            let want = rows(&mut a, &scanned);
+            assert_eq!(rows(&mut a, aggs), want);
+            assert!(want[0].starts_with("row 70000,60000,70000,2070000000,"), "{want:?}");
+            assert!(want[0].contains(",-499,69499,"), "{want:?}");
+            assert!(want[0].contains(",2013-07-01,2013-07-31,"), "{want:?}");
+            // A call that a summary cannot answer, and a deleted row, leave the aggregates to the scan.
+            let mixed = "SELECT count(*), sum(a), max(e) FROM t";
+            assert_eq!(rows(&mut a, mixed), ["row 70000,2070000000,v8"]);
+            send(&mut a, &query("DELETE FROM t WHERE a = -499"));
+            assert_eq!(rows(&mut a, aggs), rows(&mut a, &scanned));
+            assert_eq!(rows(&mut a, "SELECT count(*), min(a) FROM t"), ["row 69999,-498"]);
+        });
+    }
+
+    /// The scan skips the vectors whose zones show that no row passes a condition, and does not evaluate a condition that every row of a vector passes, with the answers of the row engine.
+    #[test]
+    fn conditions_skip_the_vectors_that_their_zones_rule_out() {
+        big_stack(|| {
+            let store = Arc::new(Store::new());
+            let (mut a, _) = connect_to(&store, 1234);
+            let rows = |c: &mut Connection, sql: &str| -> Vec<String> {
+                send(c, &query(sql)).into_iter().filter(|l| l.starts_with("row ")).collect()
+            };
+            send(&mut a, &query("CREATE TABLE t (a int, b smallint, d date, e text)"));
+            send(
+                &mut a,
+                &query(
+                    "INSERT INTO t SELECT i, CASE WHEN i % 5000 < 3 THEN i % 5000 END, \
+                     DATE '2013-07-01' + i / 3000, 'v' || (i % 9) FROM generate_series(1, 70000) i",
+                ),
+            );
+            for filter in [
+                "a = 5",
+                "a BETWEEN 1000 AND 3100",
+                "a > 69990 AND e = 'v3'",
+                "5000 > a AND b <> 0",
+                "b IS NOT NULL",
+                "b IS NULL AND a < 2000",
+                "d >= DATE '2013-07-10' AND d <= DATE '2013-07-11'",
+                "a <> 7 AND a < 1030",
+                "a < 0",
+            ] {
+                let sql = format!("SELECT count(*), sum(a), min(e), max(d) FROM t WHERE {filter}");
+                let want = rows(&mut a, &format!("{sql} AND random() >= 0"));
+                assert_eq!(rows(&mut a, &sql), want, "{filter}");
+                let sql = format!("SELECT a, b FROM t WHERE {filter} ORDER BY a LIMIT 3");
+                let want = rows(&mut a, &sql.replace(" ORDER", " AND random() >= 0 ORDER"));
+                assert_eq!(rows(&mut a, &sql), want, "{filter}");
+            }
+            assert_eq!(rows(&mut a, "SELECT count(*) FROM t WHERE b <> 0"), ["row 28"]);
+        });
+    }
+
     /// The encoded columns and the cold headers of a frozen table go to the image as they are, and a store that loads the image has the same columns and headers with no new encode. The insert of a transaction in progress is not in the image, and the table changes as before after the load.
     #[test]
     fn frozen_columns_come_back_from_the_image() {
