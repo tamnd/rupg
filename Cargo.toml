@@ -66,6 +66,8 @@ rupg-wire = { version = "=0.4.19", path = "crates/rupg-wire" }
 # Outside crates. Each one is in the table of spec/22-crate-layout.md section 22.5. The lower bound of each crate is the version in Cargo.lock when the bound last changed. The nightly job of the oldest versions checks the bounds.
 # libc: the system calls of rupg-platform on Unix, for example F_FULLFSYNC and getentropy.
 libc = "0.2.191"
+# libmimalloc-sys: the allocator of the rupg binary, with mimalloc 2 and no transparent huge pages. rupg-platform links it only with its feature mimalloc. See spec/22-crate-layout.md section 22.5.
+libmimalloc-sys = { version = "0.1.49", default-features = false, features = ["v2", "no_thp"] }
 # sha2, hmac, pbkdf2, md-5: SCRAM-SHA-256 and MD5 passwords in rupg-wire. See spec/22-crate-layout.md section 22.5.
 hmac = "0.13"
 md-5 = "0.11"

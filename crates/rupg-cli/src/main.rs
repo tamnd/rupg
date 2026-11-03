@@ -19,7 +19,7 @@ impl rupg::server::Log for Stderr {
     }
 }
 
-/// The allocator of the system, with the counts of the bytes of each thread for `EXPLAIN (MEMORY)`.
+/// mimalloc, with the counts of the bytes of each thread for `EXPLAIN (MEMORY)`.
 #[global_allocator]
 static ALLOCATOR: rupg::Counting = rupg::Counting;
 

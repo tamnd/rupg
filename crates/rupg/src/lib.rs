@@ -62,6 +62,7 @@ pub fn build_config() -> String {
     line("compat versions", &shims.join(" "));
     line("os", std::env::consts::OS);
     line("arch", std::env::consts::ARCH);
+    line("allocator", if cfg!(feature = "mimalloc") { "mimalloc" } else { "system" });
     line("debug assertions", if cfg!(debug_assertions) { "on" } else { "off" });
     out
 }

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The `rupg` binary uses mimalloc 2 as its allocator, as spec/22 section 22.5 asks. Each thread of mimalloc has its own heap, so the sessions do not wait on the two arenas of the allocator of the C library. A program that links the library keeps its own allocator (#1307).
 - Keep the buffers of the log between commits and share the set of the transactions in progress between the snapshots. Before, each commit grew two new buffers and each statement copied the set while the heap was locked, so at 16 clients the sessions waited for the lock of the heap and for the lock of the allocator (#1305).
 - A statement with no `WITH` that changes data does not walk its query to find the statements of `WITH` that read written rows (#1301).
 - A commit on a thread of the operating system sleeps on the condition variable of the log while another commit syncs the log. Before, each waiting commit unlocked the log, yielded and locked it again in a loop, so at 16 clients the waiting commits took the processor and the lock of the log from the commit that synced (#1300).

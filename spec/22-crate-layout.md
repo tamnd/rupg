@@ -153,7 +153,9 @@ With the features of section 22.9 off, the `rupg` facade depends on `libc` and t
 | `icu_collator` and its data | 2.x | Unicode-3.0 | `rupg-types` | `icu` | the ICU collation provider |
 | `memchr` | 2.7 | Unlicense OR MIT | `rupg-kernels`, `rupg-func` | always | byte search in strings |
 | `libm` | 0.2 | MIT | `rupg-func` | `wasm32` only | the math functions where no C library exists |
-| `libmimalloc-sys` | 0.1, features `v2` and `no_thp` | MIT | `rupg-server`, `rupg-cli` binaries only | always, in those two binaries | rudb measured mimalloc 3 at twice the time of mimalloc 2 on its load, and transparent huge pages turned a 0.44 s load into 0.85 s (`rudb/Cargo.toml` at `cd9f9676`) |
+| `libmimalloc-sys` | 0.1, features `v2` and `no_thp` | MIT | `rupg-platform`, for the `rupg` binary only | `mimalloc`, which only `rupg-cli` turns on | rudb measured mimalloc 3 at twice the time of mimalloc 2 on its load, and transparent huge pages turned a 0.44 s load into 0.85 s (`rudb/Cargo.toml` at `cd9f9676`) |
+
+The `rupg` binary forbids `unsafe` code, so the calls into mimalloc are in `rupg-platform` under `Counting`, and the binary turns on the feature through the facade. A program that links the library keeps its own allocator. With mimalloc, each thread has its own heap, so the sessions do not wait on the two arenas that `tune()` gives the allocator of the C library.
 
 The table has `sha2` and the others as always on, because SCRAM is part of every server build and the library needs `md5()` and `sha256()`. They are small and pure Rust.
 
