@@ -11,6 +11,8 @@ use rupg_column::stored::{self, Stored, VECTOR};
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::Session;
 use rupg_pgcatalog::builtin;
+use rupg_summary::column::{Bound, ColumnSummary, Sum};
+use rupg_summary::zone::{Test, Verdict, Zone};
 use rupg_types::{Numeric, Value, oid};
 
 use crate::agg;
@@ -1453,7 +1455,8 @@ pub(crate) fn run(
         session.count_scan(relation.oid);
     }
     let segments = rows.div_ceil(ROWS);
-    let mut scan = Scan { exec: &mut exec, conds: &conds, segments, rows, open };
+    let mut scan =
+        Scan { exec: &mut exec, conds: &conds, segments, rows, open, answered: Vec::new() };
     let (rows, tables, ordered) = if query.grouped {
         let Some(out) = grouped(&mut scan, query, &calls, &kept_columns, offset, count)? else {
             return Ok(None);
@@ -1804,6 +1807,8 @@ struct Scan<'e, 'q> {
     segments: usize,
     rows: usize,
     open: bool,
+    /// True for each segment whose summaries gave the aggregates, which the scan does not read.
+    answered: Vec<bool>,
 }
 
 /// The rows of the groups, the tables of the first row of each group, and true when the rows are in the order of `ORDER BY` with `OFFSET` and `LIMIT` done.
@@ -1877,10 +1882,47 @@ impl Scan<'_, '_> {
         }
         let mut sel: Vec<u32> = Vec::with_capacity(VECTOR);
         let mut next: Vec<u32> = Vec::with_capacity(VECTOR);
+        let tests: Vec<Option<(usize, Test)>> =
+            self.conds.iter().map(|cond| self.exec.zone_test(cond)).collect();
+        let mut verdicts = vec![Verdict::Some; tests.len()];
+        let mut whole = vec![Verdict::Some; tests.len()];
         for segment in 0..self.segments {
+            if self.answered.get(segment).copied().unwrap_or(false) {
+                continue;
+            }
             let segment_rows = self.rows.saturating_sub(segment * ROWS).min(ROWS);
-            for vector in 0..stored::vectors(segment_rows) {
+            let vectors = stored::vectors(segment_rows);
+            // spec/12 section 12.6.1: a condition on a column whose zones show that no row of the segment passes skips the segment.
+            for (verdict, test) in whole.iter_mut().zip(&tests) {
+                *verdict = test.as_ref().map_or(Verdict::Some, |(place, test)| {
+                    self.exec.zones(*place, segment, vectors).map_or(Verdict::Some, |zones| {
+                        let mut zone = Zone::EMPTY;
+                        for vector in zones {
+                            zone.merge(vector);
+                        }
+                        zone.test(test)
+                    })
+                });
+            }
+            if whole.contains(&Verdict::None) {
+                continue;
+            }
+            for vector in 0..vectors {
                 self.exec.session.interrupted()?;
+                // A vector that no row of passes is not read, and a condition that every row of the vector passes is not evaluated.
+                for ((verdict, &all), test) in verdicts.iter_mut().zip(&whole).zip(&tests) {
+                    *verdict = match test {
+                        _ if all != Verdict::Some => all,
+                        Some((place, test)) => self
+                            .exec
+                            .zones(*place, segment, vectors)
+                            .map_or(Verdict::Some, |zones| zones[vector].test(test)),
+                        None => Verdict::Some,
+                    };
+                }
+                if verdicts.contains(&Verdict::None) {
+                    continue;
+                }
                 let rows = (segment_rows - vector * VECTOR).min(VECTOR);
                 let mut batch = Batch {
                     segment,
@@ -1890,9 +1932,12 @@ impl Scan<'_, '_> {
                 };
                 sel.clear();
                 sel.extend(0..batch.rows as u32);
-                for cond in self.conds {
+                for (cond, verdict) in self.conds.iter().zip(&verdicts) {
                     if sel.is_empty() {
                         break;
+                    }
+                    if *verdict == Verdict::All {
+                        continue;
                     }
                     let col = self.exec.eval(cond, &mut batch, &sel)?;
                     next.clear();
@@ -1914,6 +1959,72 @@ impl Scan<'_, '_> {
 }
 
 impl Exec<'_> {
+    /// The zones of the vectors of the segment `segment` of the column at the place `place`, when the summary has one zone for each of the `vectors` vectors.
+    fn zones(&self, place: usize, segment: usize, vectors: usize) -> Option<&[Zone]> {
+        let zones = &self.stored.get(place)?.segments.get(segment)?.summary.vectors;
+        (zones.len() == vectors).then_some(zones.as_slice())
+    }
+
+    /// The place of the column of `cond` and the test of its zones, for a comparison of an integer column with a constant that is not null, or a null test of a column (spec/12 section 12.6.1). `None` is a condition that the zones do not test.
+    fn zone_test(&self, cond: &Expr) -> Option<(usize, Test)> {
+        let place = |e: &Expr| match &e.kind {
+            ExprKind::Var(var) if var.levels_up == 0 && var.attnum > 0 => {
+                let place = *self.places.get(usize::try_from(var.attnum - 1).ok()?)?;
+                (place < self.stored.len()).then_some(place)
+            }
+            _ => None,
+        };
+        let constant = |e: &Expr| match &e.kind {
+            ExprKind::Const(value) => int_of(value),
+            ExprKind::Param(n) => self.params.get(n.wrapping_sub(1)).and_then(int_of),
+            _ => None,
+        };
+        match &cond.kind {
+            ExprKind::NullTest(arg, is_null) => {
+                let place = place(arg)?;
+                Some((place, if *is_null { Test::IsNull } else { Test::IsNotNull }))
+            }
+            ExprKind::Func(func) if !func.retset => {
+                let src = src(func.oid);
+                int_compare(src)?;
+                let [a, b] = func.args.as_slice() else { return None };
+                let op = &src[src.len() - 2..];
+                let (place, value, op) = match (place(a), constant(b), place(b), constant(a)) {
+                    (Some(p), Some(v), _, _) => (p, v, op),
+                    (_, _, Some(p), Some(v)) => (
+                        p,
+                        v,
+                        match op {
+                            "lt" => "gt",
+                            "le" => "ge",
+                            "gt" => "lt",
+                            "ge" => "le",
+                            op => op,
+                        },
+                    ),
+                    _ => return None,
+                };
+                if self.stored[place].kind.store() != Store::Int {
+                    return None;
+                }
+                let key = rupg_summary::key::int(value);
+                Some((
+                    place,
+                    match op {
+                        "eq" => Test::Eq(key),
+                        "ne" => Test::Ne(key),
+                        "lt" => Test::Lt(key),
+                        "le" => Test::Le(key),
+                        "gt" => Test::Gt(key),
+                        "ge" => Test::Ge(key),
+                        _ => return None,
+                    },
+                ))
+            }
+            _ => None,
+        }
+    }
+
     /// The value of the column `column` at the row `row` of the batch.
     fn value_at(&mut self, batch: &mut Batch, column: usize, row: u32) -> Result<Value> {
         let col = self.var(batch, column, self.types[column], &[row])?;
@@ -2010,6 +2121,13 @@ fn grouped(
     // True when a row of a group came after the first row of the last group.
     let mut trailing = false;
     let mut args: Vec<Value> = Vec::new();
+    if keys.is_empty() && kept_columns.is_empty() && scan.conds.is_empty() && scan.open {
+        scan.answered = answer(scan, &mut aggs, &mut bases);
+        if scan.answered.contains(&true) {
+            firsts.push(Vec::new());
+            first_rows = 1;
+        }
+    }
     scan.each(&mut |exec, batch, sel| {
         ids.clear();
         if keys.is_empty() {
@@ -2394,6 +2512,151 @@ fn grouped(
         count,
     )?;
     Ok(Some((rows, tables, ordered)))
+}
+
+/// The part of the aggregate of one call that the summary of one segment gives.
+enum Part {
+    Count(i64),
+    Sum(i64, i128),
+    Extreme(Option<i64>),
+    /// A call of [`Method::Shift`], whose part is the part of its base.
+    Base,
+}
+
+/// The aggregates of a query with no groups, no conditions and no columns outside its aggregates, for each segment whose summaries hold them exactly (spec/12 section 12.6.1). `count(*)` comes from the rows, `count(x)` from the nulls, `sum` and `avg` from the sum, and `min` and `max` from the bounds. The columns of the scan have every row of the table live and seen by the view, so the summaries need no correction for deletes (spec/09 section 9.7.4). It adds the parts to the states of `aggs` and `bases`, and gives true for each segment that it answered. A call that a summary cannot answer leaves every segment to the scan.
+fn answer(scan: &Scan<'_, '_>, aggs: &mut [Call<'_>], bases: &mut [Base<'_>]) -> Vec<bool> {
+    let exec = &*scan.exec;
+    let place = |e: &Expr| match &e.kind {
+        ExprKind::Var(var) if var.levels_up == 0 && var.attnum > 0 => {
+            usize::try_from(var.attnum - 1)
+                .ok()
+                .and_then(|c| exec.places.get(c).copied())
+                .filter(|&p| p < exec.stored.len())
+        }
+        _ => None,
+    };
+    let int = |p: usize| exec.stored[p].kind.store() == Store::Int;
+    let mut places = Vec::with_capacity(aggs.len());
+    for call in aggs.iter() {
+        let arg = call.agg.args.first();
+        places.push(match call.method {
+            Method::Count => None,
+            Method::Shift { .. } => None,
+            Method::CountArg => match arg.and_then(place) {
+                Some(p) => Some(p),
+                None => return Vec::new(),
+            },
+            Method::SumInt | Method::Int128 { .. } | Method::Min | Method::Max => {
+                match arg.and_then(place).filter(|&p| int(p)) {
+                    Some(p) => Some(p),
+                    None => return Vec::new(),
+                }
+            }
+            Method::Distinct | Method::Row(_) => return Vec::new(),
+        });
+    }
+    let Some(base_places) =
+        bases.iter().map(|b| place(b.var).filter(|&p| int(p))).collect::<Option<Vec<_>>>()
+    else {
+        return Vec::new();
+    };
+    let sum = |summary: &ColumnSummary| match summary.sum {
+        Sum::Int(sum) => Some((i64::from(summary.count()), sum)),
+        _ => None,
+    };
+    let bound = |b: &Option<Bound>| match b {
+        Some(Bound::Int(v)) => i64::try_from(*v).ok(),
+        _ => None,
+    };
+    let mut answered = vec![false; scan.segments];
+    let mut parts = Vec::with_capacity(aggs.len());
+    let mut base_parts = Vec::with_capacity(bases.len());
+    for (segment, done) in answered.iter_mut().enumerate() {
+        let rows = scan.rows.saturating_sub(segment * ROWS).min(ROWS);
+        let summary = |p: usize| {
+            exec.stored[p]
+                .segments
+                .get(segment)
+                .map(|column| &column.summary)
+                .filter(|s| s.rows as usize == rows)
+        };
+        parts.clear();
+        base_parts.clear();
+        let mut whole = true;
+        for (call, &p) in aggs.iter().zip(&places) {
+            let part = match (&call.method, p.and_then(summary)) {
+                (Method::Count, _) => Some(Part::Count(i64::try_from(rows).unwrap_or(i64::MAX))),
+                (Method::Shift { .. }, _) => Some(Part::Base),
+                (Method::CountArg, Some(s)) => Some(Part::Count(i64::from(s.count()))),
+                (Method::SumInt | Method::Int128 { .. }, Some(s)) => {
+                    sum(s).map(|(n, sum)| Part::Sum(n, sum))
+                }
+                (Method::Min, Some(s)) if s.count() == 0 => Some(Part::Extreme(None)),
+                (Method::Max, Some(s)) if s.count() == 0 => Some(Part::Extreme(None)),
+                (Method::Min, Some(s)) => bound(&s.min).map(|v| Part::Extreme(Some(v))),
+                (Method::Max, Some(s)) => bound(&s.max).map(|v| Part::Extreme(Some(v))),
+                _ => None,
+            };
+            let Some(part) = part else {
+                whole = false;
+                break;
+            };
+            parts.push(part);
+        }
+        for &p in &base_places {
+            if !whole {
+                break;
+            }
+            let Some(s) = summary(p) else {
+                whole = false;
+                break;
+            };
+            let extremes = match (s.count(), bound(&s.min), bound(&s.max)) {
+                (0, _, _) => None,
+                (_, Some(lo), Some(hi)) => Some((lo, hi)),
+                _ => {
+                    whole = false;
+                    break;
+                }
+            };
+            let Some((n, sum)) = sum(s) else {
+                whole = false;
+                break;
+            };
+            base_parts.push((n, sum, extremes));
+        }
+        if !whole {
+            continue;
+        }
+        *done = true;
+        for (call, part) in aggs.iter_mut().zip(parts.drain(..)) {
+            match (&mut call.states, part) {
+                (States::Count(states), Part::Count(n)) => states[0] += n,
+                (States::Sum(states), Part::Sum(n, sum)) => {
+                    states[0].0 += n;
+                    states[0].1 += sum;
+                }
+                (States::Extreme(states), Part::Extreme(Some(v))) => {
+                    let min = matches!(call.method, Method::Min);
+                    states[0] = Some(match states[0] {
+                        None => v,
+                        Some(s) if min => s.min(v),
+                        Some(s) => s.max(v),
+                    });
+                }
+                _ => {}
+            }
+        }
+        for (base, (n, sum, extremes)) in bases.iter_mut().zip(base_parts.drain(..)) {
+            base.states[0].0 += n;
+            base.states[0].1 += sum;
+            if let Some((lo, hi)) = extremes {
+                base.extremes =
+                    Some(base.extremes.map_or((lo, hi), |(a, b)| (a.min(lo), b.max(hi))));
+            }
+        }
+    }
+    answered
 }
 
 /// A place in the table as a part of a spot of [`read_spots`].
