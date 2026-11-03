@@ -3167,6 +3167,8 @@ impl Heap {
                 }
             }
             frozen.columns = new.columns;
+            // The versions of a load have no values once they are frozen, so their headers go to the cold encoding too.
+            table.chill();
         }
     }
 

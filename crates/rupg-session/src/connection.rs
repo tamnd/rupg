@@ -7501,14 +7501,16 @@ mod tests {
                     "INSERT INTO t SELECT i, 'v' || (i % 100), i / 4.0 FROM generate_series(1, 70000) i",
                 ),
             );
-            let sums = "SELECT sum(a), count(DISTINCT b), sum(c) FROM t";
-            assert_eq!(rows(&mut a, sums), ["row 2450035000,100,612508750"]);
             let relation = rows(&mut a, "SELECT 't'::regclass::oid")[0][4..].parse().unwrap();
             let database =
                 rows(&mut a, "SELECT oid FROM pg_database WHERE datname = current_database()")[0]
                     [4..]
                     .parse()
                     .unwrap();
+            // The versions of the load go cold with the image, before a scan reads the table.
+            assert_eq!(store.heap().cold_rows(database, relation), 70000);
+            let sums = "SELECT sum(a), count(DISTINCT b), sum(c) FROM t";
+            assert_eq!(rows(&mut a, sums), ["row 2450035000,100,612508750"]);
             // The large insert writes the image at its commit, and the table gets the columns of the image, which read its mapping.
             let (mapped, all) = store.heap().mapped_vectors(database, relation);
             assert!(all > 0);

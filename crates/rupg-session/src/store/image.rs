@@ -272,6 +272,9 @@ impl Store {
         let mut maps = file.maps.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         maps.retain(|old| old.strong_count() > 0);
         maps.push(Arc::downgrade(&map));
+        drop(maps);
+        // The columns and the versions in the memory of the process went, so the allocator gives their pages back to the system.
+        rupg_platform::alloc::trim();
     }
 
     /// The bytes of the image of the store, whose changes go on in the logs from the log `epoch` on.
