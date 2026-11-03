@@ -45,6 +45,8 @@ struct Inner {
     allocated: u64,
     /// The records that did not go to the file yet.
     pending: Vec<u8>,
+    /// The empty buffer of the records of the last write, which becomes [`Inner::pending`] at the next write. The commits add their records while the heap is locked, so a buffer that keeps its size lets them add with no new memory. A buffer of more than [`CHUNK`] bytes does not stay.
+    spare: Vec<u8>,
     /// The number of the records that the commits added.
     added: u64,
     /// The number of the records that are on the disk.
@@ -101,6 +103,7 @@ impl Log {
             end: HEAD,
             allocated: CHUNK,
             pending: Vec::new(),
+            spare: Vec::new(),
             added: 0,
             synced: 0,
             syncing: false,
@@ -157,7 +160,8 @@ impl Log {
                 continue;
             }
             inner.syncing = true;
-            let bytes = std::mem::take(&mut inner.pending);
+            let spare = std::mem::take(&mut inner.spare);
+            let mut bytes = std::mem::replace(&mut inner.pending, spare);
             let (file, at, upto) = (Arc::clone(&inner.file), inner.end, inner.added);
             let allocated = inner.allocated;
             inner.end += bytes.len() as u64;
@@ -168,6 +172,12 @@ impl Log {
             });
             inner = self.lock();
             inner.syncing = false;
+            bytes.clear();
+            if bytes.capacity() > inner.spare.capacity()
+                && u64::try_from(bytes.capacity()).is_ok_and(|size| size <= CHUNK)
+            {
+                inner.spare = bytes;
+            }
             if let Ok(size) = result {
                 inner.allocated = inner.allocated.max(size);
                 inner.synced = inner.synced.max(upto);

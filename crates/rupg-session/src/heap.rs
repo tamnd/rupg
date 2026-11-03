@@ -117,6 +117,9 @@ pub(crate) struct Vacuumed {
     pub(crate) dead_pages: u32,
 }
 
+/// The most bytes of [`State::log_buffer`] that stay after a commit, so that the log of one large commit does not keep its memory.
+const LOG_BUFFER: usize = 1 << 20;
+
 /// The rows of the tables of all the databases, and the transactions that are in progress.
 #[derive(Debug, Default)]
 pub(crate) struct Heap {
@@ -129,8 +132,8 @@ pub(crate) struct Heap {
 struct State {
     /// `nextXid`: the transaction ID of the next transaction that writes.
     next_xid: u32,
-    /// The transactions that are in progress, `ProcArray`.
-    running: BTreeSet<u32>,
+    /// The transactions that are in progress, `ProcArray`. Each snapshot shares the set until a transaction starts or ends, as `GetSnapshotData` keeps a snapshot while `xactCompletionCount` does not change.
+    running: Arc<BTreeSet<u32>>,
     /// `latestCompletedXid`: the last transaction that committed or aborted, or 0.
     latest_completed: u32,
     /// The transactions that aborted, the aborted entries of `pg_xact`. A transaction before `next_xid` that is not in progress and did not abort committed.
@@ -157,6 +160,8 @@ struct State {
     touched: HashMap<u32, Vec<Touched>>,
     /// The tables whose open rows each transaction in progress filled in a load, which become a last segment at its end.
     loading: HashMap<u32, Vec<(u32, u32)>>,
+    /// The empty buffer of the log of the last commit. A commit writes its log while the heap is locked, so a buffer that keeps its size lets it write with no new memory.
+    log_buffer: Vec<u8>,
 }
 
 /// A table that a transaction in progress changed, for the log of its commit.
@@ -1601,7 +1606,7 @@ pub(crate) struct Snapshot {
     /// All the transactions from this ID are not visible.
     xmax: u32,
     /// The transactions before `xmax` that were in progress.
-    running: BTreeSet<u32>,
+    running: Arc<BTreeSet<u32>>,
     /// `latestCompletedXid + 1`, the `xmax` of the snapshot of `GetSnapshotData`. No transaction from this ID on ended, so the visibility is the same with this ID as with `xmax`.
     completed: u32,
 }
@@ -1775,7 +1780,7 @@ impl Heap {
         let mut state = self.state();
         let xid = state.next_xid.max(INITDB_NEXT_XID);
         state.next_xid = xid + 1;
-        state.running.insert(xid);
+        Arc::make_mut(&mut state.running).insert(xid);
         state.owners.insert(xid, pid);
         xid
     }
@@ -1819,7 +1824,7 @@ impl Heap {
         let state = self.state();
         Snapshot {
             xmax: state.next_xid.max(INITDB_NEXT_XID),
-            running: state.running.clone(),
+            running: Arc::clone(&state.running),
             completed: (state.latest_completed + 1).max(INITDB_NEXT_XID),
         }
     }
@@ -2119,7 +2124,7 @@ impl Heap {
         let mut partial = Vec::new();
         for (values, keys) in rows.into_iter().zip(&keys) {
             used.push(table.add(kept.next(), made, values, (unique, keys), None, toast_oids));
-            let checked = (view.xid, &*running);
+            let checked = (view.xid, &**running);
             match table.check_keys((&places, unique), &used, checked, &mut partial) {
                 Ok(None) => {}
                 result => {
@@ -2222,7 +2227,7 @@ impl Heap {
         let used =
             [table.add(kept, (view.xid, view.command), values, (unique, &keys), None, toast_oids)];
         let mut partial = Vec::new();
-        let checked = (view.xid, &*running);
+        let checked = (view.xid, &**running);
         match table.check_keys((&places, unique), &used, checked, &mut partial) {
             Ok(None) => {
                 pending.extend(rechecks(view, relation, unique, partial));
@@ -2330,7 +2335,7 @@ impl Heap {
                 continue;
             }
             used.push(next);
-            let checked = (view.xid, &*running);
+            let checked = (view.xid, &**running);
             match table.check_keys((&places, unique), &used, checked, &mut partial) {
                 Ok(None) => {}
                 result => {
@@ -2780,11 +2785,15 @@ impl Heap {
         }
         match state.touched.remove(&xid) {
             Some(mut touched) => {
-                let mut out = Vec::new();
+                let mut out = std::mem::take(&mut state.log_buffer);
                 if state.log_commit(xid, &mut touched, &truncated, &mut out) {
                     log(Logged::Changes(&out));
                 } else {
                     log(Logged::Large);
+                }
+                out.clear();
+                if out.capacity() <= LOG_BUFFER {
+                    state.log_buffer = out;
                 }
             }
             None => log(Logged::Nothing),
@@ -2802,7 +2811,7 @@ impl Heap {
                 table.seal();
             }
         }
-        state.running.remove(&xid);
+        Arc::make_mut(&mut state.running).remove(&xid);
         state.latest_completed = state.latest_completed.max(xid);
         state.combos.remove(&xid);
         state.owners.remove(&xid);
@@ -2830,7 +2839,7 @@ impl Heap {
                 version.next = 0;
             }
         }
-        state.running.remove(&xid);
+        Arc::make_mut(&mut state.running).remove(&xid);
         state.latest_completed = state.latest_completed.max(xid);
         state.aborted.insert(xid);
         state.combos.remove(&xid);
@@ -2901,7 +2910,7 @@ impl Heap {
         if live.is_none_or(|seen| seen == Seen::Dead) {
             return Ok(None);
         }
-        let checked = (xid, &*running);
+        let checked = (xid, &**running);
         table.check_keys((&places, &unique), &[recheck.tid], checked, &mut Vec::new())
     }
 
@@ -2930,7 +2939,7 @@ impl Heap {
         let Some(rows) = state.tables.get(&table) else {
             return Ok(None);
         };
-        let checked = (view.xid, &state.running);
+        let checked = (view.xid, &*state.running);
         for (index, &place) in places.iter().enumerate() {
             if let Some(changed) = rows.first_duplicate(index, &rows.keys[place], checked)? {
                 return Ok(Some(changed));
