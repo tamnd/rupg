@@ -12,8 +12,13 @@ keywords.workspace = true
 categories.workspace = true
 readme.workspace = true
 
+[features]
+# mimalloc as the allocator under `Counting`, for the rupg binary.
+mimalloc = ["dep:libmimalloc-sys"]
+
 [dependencies]
 rupg-common.workspace = true
+libmimalloc-sys = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

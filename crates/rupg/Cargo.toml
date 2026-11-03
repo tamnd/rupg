@@ -26,6 +26,8 @@ rupg-types.workspace = true
 [features]
 # The PostgreSQL server: `rupg::server`.
 server = ["dep:rupg-server", "tls"]
+# mimalloc as the allocator of `Counting`. Only the rupg binary turns it on.
+mimalloc = ["rupg-platform/mimalloc"]
 # TLS for the server with rustls and ring.
 tls = ["rupg-server?/tls"]
 
