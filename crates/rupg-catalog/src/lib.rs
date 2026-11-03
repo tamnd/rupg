@@ -2545,11 +2545,7 @@ impl Catalog {
 
     /// `find_inheritance_children`: the partitions of a table and the tables that inherit from it, in the order of their OIDs.
     pub fn children(&self, parent: u32) -> Vec<&Relation> {
-        let child = |r: &&Relation| {
-            r.partition_of.as_ref().is_some_and(|p| p.parent == parent)
-                || r.inherits.contains(&parent)
-        };
-        self.relations.values().filter(child).collect()
+        self.relations.children_of(parent).collect()
     }
 
     /// `find_all_inheritors` with no table itself: the children of the table, then the children of each of them in the same order, and so on. A table that inherits from two of them comes once.

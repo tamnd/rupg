@@ -1,4 +1,4 @@
-//! The relations of the catalog by OID, with a map by name and a map of the indexes of each table that a read builds once.
+//! The relations of the catalog by OID, with a map by name, a map of the indexes of each table and a map of the children of each table that a read builds once.
 //!
 //! The statements find a relation by name and the indexes of a table many times, and a scan of all the relations costs more as the database grows. A change of the relations drops the maps: each change goes through [`DerefMut`], so no change can keep a stale map.
 
@@ -18,6 +18,8 @@ struct Maps {
     names: HashMap<u32, HashMap<Box<str>, u32>>,
     /// The OIDs of the indexes of each table, in their order.
     indexes: HashMap<u32, Vec<u32>>,
+    /// The OIDs of the partitions of each table and of the tables that inherit from it, in their order.
+    children: HashMap<u32, Vec<u32>>,
 }
 
 /// The relations by OID.
@@ -40,6 +42,14 @@ impl Relations {
                 if let Some(info) = &rel.index {
                     maps.indexes.entry(info.table).or_default().push(oid);
                 }
+                let parents =
+                    rel.partition_of.iter().map(|p| p.parent).chain(rel.inherits.iter().copied());
+                for parent in parents {
+                    let children = maps.children.entry(parent).or_default();
+                    if children.last() != Some(&oid) {
+                        children.push(oid);
+                    }
+                }
             }
             maps
         })
@@ -54,6 +64,12 @@ impl Relations {
     /// The indexes of the table `table`, in the order of their OIDs.
     pub(crate) fn indexes_of(&self, table: u32) -> impl Iterator<Item = &Relation> {
         let oids = self.maps().indexes.get(&table).map_or(&[][..], Vec::as_slice);
+        oids.iter().filter_map(|oid| self.map.get(oid))
+    }
+
+    /// The partitions of the table `parent` and the tables that inherit from it, in the order of their OIDs.
+    pub(crate) fn children_of(&self, parent: u32) -> impl Iterator<Item = &Relation> {
+        let oids = self.maps().children.get(&parent).map_or(&[][..], Vec::as_slice);
         oids.iter().filter_map(|oid| self.map.get(oid))
     }
 }
