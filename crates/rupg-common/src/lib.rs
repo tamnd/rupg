@@ -4,6 +4,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod bytes;
 pub mod encoding;
 mod error;
 mod generated;

@@ -1,16 +1,18 @@
 //! The image of a store: the bytes of the databases, their catalogs, the roles, the sequences and the rows of the tables, which the `.rupg` file keeps from one start of the server to the next.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
-use rupg_catalog::Catalog;
+use rupg_catalog::{Catalog, SequenceData};
+use rupg_common::bytes::Mapping;
 use rupg_common::persist::{Persist, Reader, corrupt};
 use rupg_common::{Error, Result, SqlState};
 use rupg_platform::{Io, OpenMode};
 
 use super::log::{self, Log};
 use super::{Db, State, Store};
-use crate::heap::{Heap, Logged};
+use crate::heap::{Heap, Imaged, Logged};
 
 /// The first bytes of an image.
 const MAGIC: &[u8; 8] = b"rupg\x00img";
@@ -28,6 +30,8 @@ pub(crate) struct ImageFile {
     log: Log,
     /// The number of the first log that the last image needs, which a checkpoint removes. The lock lets one checkpoint run at a time.
     first: Mutex<u64>,
+    /// The mappings of the images whose bytes the frozen columns read. A mapping goes when no column reads it.
+    maps: Mutex<Vec<Weak<dyn Mapping>>>,
 }
 
 /// The catalog of a database in an image. The catalog of `initdb` is not in the image, and a catalog that two databases share is in the image once.
@@ -46,13 +50,20 @@ impl Store {
     pub fn with_image(self, io: Arc<dyn Io>, path: PathBuf) -> Result<Store> {
         let mut store = self;
         let mut first = 0;
+        let mut mapped = Vec::new();
         if io.exists(&path)? {
             let file = io.open(&path, OpenMode::Read)?;
-            let len =
-                usize::try_from(file.size()?).map_err(|_| corrupt("the image is too large"))?;
-            let mut bytes = vec![0; len];
-            file.read_at(0, &mut bytes)?;
-            first = store.load(&bytes)?;
+            // The frozen columns keep ranges of a mapping of the image, so that a column takes memory only while a query reads it.
+            if let Some(map) = file.map() {
+                first = store.load_from(&mut Reader::mapped(&map))?;
+                mapped.push(Arc::downgrade(&map));
+            } else {
+                let len =
+                    usize::try_from(file.size()?).map_err(|_| corrupt("the image is too large"))?;
+                let mut bytes = vec![0; len];
+                file.read_at(0, &mut bytes)?;
+                first = store.load(&bytes)?;
+            }
         }
         let mut epoch = first;
         while let Some(records) = log::read(&*io, &path, epoch)? {
@@ -66,8 +77,20 @@ impl Store {
         }
         store.heap.start_logging();
         let log = Log::create(Arc::clone(&io), path.clone(), epoch)?;
-        store.image = Some(ImageFile { io, path, log, first: Mutex::new(first) });
+        store.image =
+            Some(ImageFile { io, path, log, first: Mutex::new(first), maps: Mutex::new(mapped) });
         Ok(store)
+    }
+
+    /// Gives the pages of the mapping of the image back to the operating system, at the end of a statement. The page cache keeps them, and the next statement that reads a column maps the pages that it reads again, so the memory of the process is the columns of the statements that run (spec/19 section 19.5).
+    pub(crate) fn release_mapped(&self) {
+        let Some(file) = &self.image else {
+            return;
+        };
+        let maps = file.maps.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        for map in maps.iter().filter_map(Weak::upgrade) {
+            map.release(0, map.bytes().len());
+        }
     }
 
     /// The rows of the tables that a commit of a log dropped go, as the drop of a table writes no log of its rows.
@@ -185,7 +208,7 @@ impl Store {
     /// Makes again the changes of a record of the log.
     fn redo(&mut self, record: &[u8]) -> Result<()> {
         let mut input = Reader::new(record);
-        let sequences: Vec<((u32, u32), rupg_catalog::SequenceData)> = Persist::take(&mut input)?;
+        let sequences: Vec<((u32, u32), SequenceData)> = Persist::take(&mut input)?;
         self.sequences
             .get_mut()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -219,7 +242,7 @@ impl Store {
     /// The checkpoint of [`Store::checkpoint`], with the lock of the checkpoints and the number of the first log that the last image needs.
     fn write_image(&self, file: &ImageFile, first: &mut u64) -> Result<()> {
         let epoch = file.log.next(self.tasks.as_deref())?;
-        let bytes = self.image(epoch);
+        let (bytes, imaged) = self.image_of(epoch);
         let fresh = file.path.with_extension("rupg-new");
         if file.io.exists(&fresh)? {
             file.io.remove(&fresh)?;
@@ -232,18 +255,43 @@ impl Store {
         file.io.sync_dir(file.path.parent().unwrap_or(Path::new(".")))?;
         file.log.remove(*first, epoch)?;
         *first = epoch;
+        drop(bytes);
+        self.map_image(file, imaged);
         Ok(())
     }
 
+    /// The frozen columns of the image that the checkpoint wrote take the place of the columns in the memory of the process, as the columns of a load of the image read a mapping of the file. A file that does not map, or does not read back, leaves the columns as they are.
+    fn map_image(&self, file: &ImageFile, imaged: Imaged) {
+        let Some(map) = file.io.open(&file.path, OpenMode::Read).ok().and_then(|f| f.map()) else {
+            return;
+        };
+        let Ok((_, _, _, heap)) = parse(&mut Reader::mapped(&map)) else {
+            return;
+        };
+        self.heap.adopt(imaged, heap);
+        let mut maps = file.maps.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        maps.retain(|old| old.strong_count() > 0);
+        maps.push(Arc::downgrade(&map));
+        drop(maps);
+        // The columns and the versions in the memory of the process went, so the allocator gives their pages back to the system.
+        rupg_platform::alloc::trim();
+    }
+
     /// The bytes of the image of the store, whose changes go on in the logs from the log `epoch` on.
+    #[cfg(test)]
     pub(crate) fn image(&self, epoch: u64) -> Vec<u8> {
+        self.image_of(epoch).0
+    }
+
+    /// The bytes of [`Store::image`], with the frozen columns that went to them.
+    fn image_of(&self, epoch: u64) -> (Vec<u8>, Imaged) {
         let mut out = MAGIC.to_vec();
         VERSION.put(&mut out);
         epoch.put(&mut out);
         self.put_state(&mut out);
         self.sequences.lock().unwrap_or_else(std::sync::PoisonError::into_inner).put(&mut out);
-        self.heap.image(&mut out);
-        out
+        let imaged = self.heap.image(&mut out);
+        (out, imaged)
     }
 
     /// The bytes of the databases with their catalogs, the counter of the OIDs, the roles, the tablespaces and the settings of the databases and the roles.
@@ -273,32 +321,43 @@ impl Store {
 
     /// Takes the databases, the roles, the sequences and the rows of an image, and gives the number of the first log after the image.
     pub(crate) fn load(&mut self, bytes: &[u8]) -> Result<u64> {
-        let rest = bytes
-            .strip_prefix(MAGIC.as_slice())
-            .ok_or_else(|| corrupt("the file is not an image of rupg"))?;
-        let mut input = Reader::new(rest);
-        let version = u32::take(&mut input)?;
-        if version != VERSION {
-            return Err(Error::new(
-                SqlState::DATA_CORRUPTED,
-                format!(
-                    "the image has the version {version}, and this server reads the version {VERSION}"
-                ),
-            ));
-        }
-        let epoch = u64::take(&mut input)?;
-        let state = take_state(&mut input)?;
-        let sequences = Persist::take(&mut input)?;
-        let mut heap = Heap::from_image(&mut input)?;
+        self.load_from(&mut Reader::new(bytes))
+    }
+
+    /// The load of [`Store::load`], from the bytes of `input`.
+    fn load_from(&mut self, input: &mut Reader<'_>) -> Result<u64> {
+        let (epoch, state, sequences, mut heap) = parse(input)?;
         heap.set_tasks(self.tasks.clone());
-        if !input.is_empty() {
-            return Err(corrupt("the image has bytes after its end"));
-        }
         self.state = Mutex::new(state);
         self.sequences = Mutex::new(sequences);
         self.heap = heap;
         Ok(epoch)
     }
+}
+
+/// The number of the first log after an image, the databases, the sequences and the heap of the bytes of [`Store::image`].
+#[allow(clippy::type_complexity)]
+fn parse(input: &mut Reader<'_>) -> Result<(u64, State, HashMap<(u32, u32), SequenceData>, Heap)> {
+    if input.bytes(MAGIC.len()).ok() != Some(MAGIC.as_slice()) {
+        return Err(corrupt("the file is not an image of rupg"));
+    }
+    let version = u32::take(input)?;
+    if version != VERSION {
+        return Err(Error::new(
+            SqlState::DATA_CORRUPTED,
+            format!(
+                "the image has the version {version}, and this server reads the version {VERSION}"
+            ),
+        ));
+    }
+    let epoch = u64::take(input)?;
+    let state = take_state(input)?;
+    let sequences = Persist::take(input)?;
+    let heap = Heap::from_image(input)?;
+    if !input.is_empty() {
+        return Err(corrupt("the image has bytes after its end"));
+    }
+    Ok((epoch, state, sequences, heap))
 }
 
 /// The databases, the counter of the OIDs, the roles, the tablespaces and the settings of the bytes of [`Store::put_state`].

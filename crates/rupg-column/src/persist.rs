@@ -75,7 +75,10 @@ impl Persist for Vector {
     fn take(input: &mut Reader<'_>) -> Result<Vector> {
         Ok(Vector {
             rows: Persist::take(input)?,
-            data: take_bytes(input)?.into(),
+            data: {
+                let n = input.count()?;
+                input.shared(n)?
+            },
             nulls: Persist::take(input)?,
         })
     }

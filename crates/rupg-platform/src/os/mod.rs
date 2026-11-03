@@ -6,6 +6,7 @@
 mod locale;
 #[cfg(unix)]
 mod lookup;
+mod map;
 mod net;
 #[cfg(unix)]
 mod signal;
@@ -14,6 +15,7 @@ mod tasks;
 mod unix;
 
 pub use locale::{libc_version, locale_codeset, locale_encoding, system_locales};
+pub use map::FileMap;
 pub use net::OsNet;
 #[cfg(unix)]
 pub use signal::StopSignals;
@@ -25,6 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use rupg_common::bytes::Mapping;
 use rupg_common::{Error, Result, SqlState};
 
 use crate::{Clock, Entropy, File, FileMode, Io, OpenMode};
@@ -177,6 +180,11 @@ impl File for OsFile {
 
     fn set_size(&self, size: u64) -> Result<()> {
         self.file.set_len(size).map_err(|e| os_error(&e, "truncate", &self.path))
+    }
+
+    fn map(&self) -> Option<Arc<dyn Mapping>> {
+        let len = self.file.metadata().ok()?.len();
+        FileMap::new(&self.file, len).map(|map| Arc::new(map) as Arc<dyn Mapping>)
     }
 }
 

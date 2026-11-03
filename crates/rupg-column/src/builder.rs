@@ -403,11 +403,8 @@ fn encode_vector(buffer: &Buffer, nulls: &[bool], chooser: &Sampled) -> Result<V
             integer::encode_with(&wide, chooser)?
         }
     };
-    let vector = Vector {
-        rows: rows as u32,
-        data: data.into_boxed_slice(),
-        nulls: nulls_of(valid.as_deref(), rows),
-    };
+    let vector =
+        Vector { rows: rows as u32, data: data.into(), nulls: nulls_of(valid.as_deref(), rows) };
     let kept = match (buffer, decode_vector(store_of(buffer), &vector)) {
         (Buffer::Ints(a), Ok((Buffer::Ints(b), flags))) => *a == b && flags == nulls,
         (Buffer::Codes(a), Ok((Buffer::Codes(b), flags))) => *a == b && flags == nulls,

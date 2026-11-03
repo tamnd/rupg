@@ -324,6 +324,13 @@ impl Tables {
     }
 }
 
+/// The frozen columns that [`Heap::image`] wrote, by table, which [`Heap::adopt`] compares with the columns of the tables after the image.
+#[derive(Debug, Default)]
+pub(crate) struct Imaged(Vec<((u32, u32), Columned)>);
+
+/// The frozen columns of a table, by place.
+type Columned = Vec<Arc<Stored>>;
+
 /// The values of versions of a table in encoded columns, which take the place of the values of the versions. A frozen version has no values. A change of the table, other than new versions, or a read by rows decodes the values back into the versions.
 #[derive(Debug)]
 struct Frozen {
@@ -3057,7 +3064,8 @@ rupg_common::persist_struct!(Version {
 
 impl Heap {
     /// The bytes of the rows of all the tables, as a restart after a crash finds them: a transaction in progress aborts, so its new versions go and its deletes do not count. The maps of the unique keys and the sizes of the indexes are not kept, as the heap makes them again from the versions.
-    pub(crate) fn image(&self, out: &mut Vec<u8>) {
+    pub(crate) fn image(&self, out: &mut Vec<u8>) -> Imaged {
+        let mut imaged = Imaged::default();
         let state = self.state();
         let running = &state.running;
         state.next_xid.put(out);
@@ -3124,9 +3132,43 @@ impl Heap {
                     (frozen.rows, end).put(out);
                     frozen.columns.put(out);
                     frozen.moved.put(out);
+                    imaged.0.push((*key, frozen.columns.clone()));
                 }
                 None => out.push(0),
             }
+        }
+        imaged
+    }
+
+    /// Gives the tables of `imaged` the frozen columns of `from`, the heap of the image that [`Heap::image`] wrote, when a table still has the columns that went to the image. The columns of `from` read a mapping of the image, so the columns in the memory of the process go. A table that changed after the image keeps its columns.
+    pub(crate) fn adopt(&self, imaged: Imaged, from: Heap) {
+        let mut from = from.state.into_inner().unwrap_or_else(PoisonError::into_inner);
+        let mut state = self.state();
+        for (key, old) in imaged.0 {
+            let Some(new) = from.tables.0.get_mut(&key).and_then(|t| t.frozen.take()) else {
+                continue;
+            };
+            let Some(table) = state.tables.0.get_mut(&key) else {
+                continue;
+            };
+            let Some(frozen) = table.frozen.as_mut() else {
+                continue;
+            };
+            let same = frozen.columns.len() == old.len()
+                && frozen.columns.iter().zip(&old).all(|(a, b)| Arc::ptr_eq(a, b))
+                && new.columns.len() == old.len()
+                && new.columns.iter().zip(&old).all(|(a, b)| a.rows == b.rows && a.kind == b.kind);
+            if !same {
+                continue;
+            }
+            for stored in table.columns.stored.values_mut() {
+                if let Some(at) = old.iter().position(|o| Arc::ptr_eq(o, stored)) {
+                    *stored = Arc::clone(&new.columns[at]);
+                }
+            }
+            frozen.columns = new.columns;
+            // The versions of a load have no values once they are frozen, so their headers go to the cold encoding too.
+            table.chill();
         }
     }
 
@@ -3186,6 +3228,17 @@ impl Heap {
         let table = state.tables.meta(&(database, relation));
         let frozen = table.and_then(|table| table.frozen.as_ref());
         frozen.and_then(|frozen| frozen.columns.first()).map_or(0, |column| column.open_rows())
+    }
+
+    /// The vectors of the frozen columns of a table that read a mapping of a file, and all the vectors of the frozen columns.
+    #[cfg(test)]
+    pub(crate) fn mapped_vectors(&self, database: u32, relation: u32) -> (usize, usize) {
+        let state = self.state();
+        let table = state.tables.meta(&(database, relation));
+        let columns = table.and_then(|table| table.frozen.as_ref()).map(|f| f.columns.as_slice());
+        let vectors = columns.unwrap_or_default().iter().flat_map(|c| &c.segments);
+        let vectors = vectors.flat_map(|segment| &segment.vectors);
+        vectors.fold((0, 0), |(mapped, all), v| (mapped + usize::from(v.data.is_mapped()), all + 1))
     }
 
     /// The versions of a table whose headers are in encoded columns.
