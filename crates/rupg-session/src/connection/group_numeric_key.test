@@ -1,0 +1,36 @@
+> CREATE TABLE cn (u bigint, ts timestamp, s text)
+CREATE TABLE
+> INSERT INTO cn SELECT i % 37, timestamp '2013-07-01' + (i * 61) * interval '1 second', 's' || (i % 3) FROM generate_series(1, 90000) i
+INSERT 0 90000
+> INSERT INTO cn SELECT 5, NULL, 's1' FROM generate_series(1, 30) i
+INSERT 0 30
+> SET enable_hashagg = off
+SET
+> SELECT u, extract(minute FROM ts) AS m, s, count(*) FROM cn GROUP BY u, m, s ORDER BY count(*) DESC LIMIT 6
+fields u@cn.1:20:8:-1,m:1700:-1:-1,s@cn.3:25:-1:-1,count:20:8:-1
+row 5,NULL,s1,30
+row 0,0,s2,14
+row 0,1,s0,14
+row 0,1,s1,14
+row 0,1,s2,14
+row 0,0,s1,14
+SELECT 6
+> SELECT extract(minute FROM ts) AS m, count(*) FROM cn GROUP BY m LIMIT 4
+fields m:1700:-1:-1,count:20:8:-1
+row 0,1500
+row 1,1500
+row 2,1500
+row 3,1500
+SELECT 4
+> SELECT extract(minute FROM ts) AS m, count(*) FROM cn GROUP BY m ORDER BY m DESC LIMIT 3
+fields m:1700:-1:-1,count:20:8:-1
+row NULL,30
+row 59,1500
+row 58,1500
+SELECT 3
+> SELECT u % 3 + 0.0 AS d, count(*) FROM cn GROUP BY d LIMIT 3
+fields d:1700:-1:-1,count:20:8:-1
+row 0.0,31621
+row 1.0,29190
+row 2.0,29219
+SELECT 3

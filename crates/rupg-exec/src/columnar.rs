@@ -309,7 +309,7 @@ impl Col {
             Data::Int(v) => v[i] as u64,
             Data::Float(v) => float_word(v[i]),
             Data::Code(v, _) => u64::from(v[i]),
-            Data::Const(_) => 0,
+            Data::Const(v) => int_of(v).map_or(0, |v| v as u64),
             Data::Values(_) => return None,
         })
     }
@@ -2545,6 +2545,8 @@ impl Shape {
         match &col.data {
             Data::Int(_) => Some(Shape::Int(col.ty)),
             Data::Code(_, d) => Some(Shape::Code(*d)),
+            // A constant integer has its integer as its word, as a column of integers.
+            Data::Const(v) if v.is_null() || int_of(v).is_some() => Some(Shape::Int(col.ty)),
             _ => None,
         }
     }
@@ -2620,7 +2622,7 @@ fn values_of_words(words: &[u64], shapes: &[Shape], dicts: &[Dict]) -> Vec<Value
     values
 }
 
-/// The order of the groups by the sort of their keys, from the words of the keys, for keys whose sort compares integers or bytes. The keys of two groups are never all equal, so each sort gives the order of the sort of the row engine. A key of text compares the places of its codes in the order of the dictionary, which the dictionary keeps for the next queries, or the bytes for a few groups. `None` for a key of codes with no text.
+/// The order of the groups by the sort of their keys, from the words of the keys, for keys whose sort compares integers or bytes. The keys of two groups are never all equal, so each sort gives the order of the sort of the row engine. A key of text compares the places of its codes in the order of the dictionary, which the dictionary keeps for the next queries, or the places of the codes of the groups in the order of their bytes for a few groups. `None` for a key of codes with no text.
 fn word_order(
     words: &[u64],
     shapes: &[Shape],
@@ -2628,17 +2630,15 @@ fn word_order(
     natives: &[(usize, bool, bool)],
     groups: usize,
 ) -> Option<Vec<usize>> {
-    /// How a key compares two groups.
-    enum By<'a> {
-        /// An integer, or the place of a code.
-        Place(Vec<u64>),
-        Bytes(&'a Dictionary),
-    }
     let width = shapes.len() + 1;
-    let mut keys = Vec::with_capacity(natives.len());
+    let null = |g: usize, k: usize| words[g * width + shapes.len()] >> k & 1 == 1;
+    /// The places of a key, true for descending, true for nulls first, and the key.
+    type PlaceKey = (Vec<u64>, bool, bool, usize);
+    let mut places: Vec<PlaceKey> = Vec::with_capacity(natives.len());
     for &(k, descending, nulls_first) in natives {
+        let key = words.chunks(width).map(|g| g[k]);
         let by = match shapes[k] {
-            Shape::Int(_) => By::Place(words.chunks(width).map(|g| g[k] ^ (1 << 63)).collect()),
+            Shape::Int(_) => key.map(|w| w ^ (1 << 63)).collect(),
             Shape::Code(d) => {
                 let dict = match &dicts[d] {
                     Dict::Stored(stored) if stored.kind == Kind::Text => stored.dict.as_ref()?,
@@ -2647,97 +2647,83 @@ fn word_order(
                 };
                 if dict.has_order() || groups.saturating_mul(4) >= dict.len() {
                     let order = dict.order();
-                    By::Place(
-                        words
-                            .chunks(width)
-                            .map(|g| u64::from(order.get(g[k] as usize).copied().unwrap_or(0)))
-                            .collect(),
-                    )
+                    key.map(|w| u64::from(order.get(w as usize).copied().unwrap_or(0))).collect()
                 } else {
-                    By::Bytes(dict)
+                    code_places(dict, key, |g| null(g, k))
                 }
             }
         };
-        keys.push((k, descending, nulls_first, by));
+        places.push((by, descending, nulls_first, k));
     }
-    let null = |g: usize, k: usize| words[g * width + shapes.len()] >> k & 1 == 1;
-    // With no key of bytes, each key of a group is one number in the order of the sort, with the null flag above the place, and a sort of the numbers next to the groups reads no other memory.
-    /// The places of a key, true for descending, true for nulls first, and the key.
-    type PlaceKey<'a> = (&'a [u64], bool, bool, usize);
-    let places: Option<Vec<PlaceKey<'_>>> = keys
-        .iter()
-        .map(|(k, descending, nulls_first, by)| match by {
-            By::Place(places) => Some((places.as_slice(), *descending, *nulls_first, *k)),
-            By::Bytes(_) => None,
-        })
-        .collect();
-    if let Some(places) = places {
-        let number = |g: usize, (places, descending, nulls_first, k): &PlaceKey<'_>| {
-            let null = null(g, *k);
-            let place = if *descending { !places[g] } else { places[g] };
-            // A null is above each value, or below each value for nulls first.
-            match (null, *nulls_first) {
-                (true, false) => 1_u128 << 64,
-                (true, true) => 0,
-                (false, false) => u128::from(place),
-                (false, true) => 1_u128 << 64 | u128::from(place),
-            }
-        };
-        let order = match places.as_slice() {
-            [one] => {
-                let mut numbers: Vec<(u128, u32)> =
-                    (0..groups).map(|g| (number(g, one), g as u32)).collect();
-                numbers.sort_unstable();
-                numbers.into_iter().map(|(_, g)| g as usize).collect()
-            }
-            [one, two] => {
-                let mut numbers: Vec<(u128, u128, u32)> =
-                    (0..groups).map(|g| (number(g, one), number(g, two), g as u32)).collect();
-                numbers.sort_unstable();
-                numbers.into_iter().map(|(_, _, g)| g as usize).collect()
-            }
-            _ => {
-                let n = places.len();
-                let numbers: Vec<u128> = (0..groups)
-                    .flat_map(|g| places.iter().map(move |p| (g, p)))
-                    .map(|(g, p)| number(g, p))
-                    .collect();
-                let mut order: Vec<usize> = (0..groups).collect();
-                order.sort_unstable_by(|&a, &b| {
-                    numbers[a * n..(a + 1) * n].cmp(&numbers[b * n..(b + 1) * n]).then(a.cmp(&b))
-                });
-                order
-            }
-        };
-        return Some(order);
-    }
-    let mut order: Vec<usize> = (0..groups).collect();
-    order.sort_unstable_by(|&a, &b| {
-        for (k, descending, nulls_first, by) in &keys {
-            let order = match (null(a, *k), null(b, *k)) {
-                (true, true) => std::cmp::Ordering::Equal,
-                (true, false) if *nulls_first => std::cmp::Ordering::Less,
-                (true, false) => std::cmp::Ordering::Greater,
-                (false, true) if *nulls_first => std::cmp::Ordering::Greater,
-                (false, true) => std::cmp::Ordering::Less,
-                (false, false) => {
-                    let order = match by {
-                        By::Place(places) => places[a].cmp(&places[b]),
-                        By::Bytes(dict) => {
-                            let code = |g: usize| words[g * width + k] as u32;
-                            dict.get(code(a)).cmp(dict.get(code(b)))
-                        }
-                    };
-                    if *descending { order.reverse() } else { order }
-                }
-            };
-            if order != std::cmp::Ordering::Equal {
-                return order;
-            }
+    // Each key of a group is one number in the order of the sort, with the null flag above the place, and a sort of the numbers next to the groups reads no other memory.
+    let number = |g: usize, (places, descending, nulls_first, k): &PlaceKey| {
+        let null = null(g, *k);
+        let place = if *descending { !places[g] } else { places[g] };
+        // A null is above each value, or below each value for nulls first.
+        match (null, *nulls_first) {
+            (true, false) => 1_u128 << 64,
+            (true, true) => 0,
+            (false, false) => u128::from(place),
+            (false, true) => 1_u128 << 64 | u128::from(place),
         }
-        a.cmp(&b)
-    });
+    };
+    let order = match places.as_slice() {
+        [one] => {
+            let mut numbers: Vec<(u128, u32)> =
+                (0..groups).map(|g| (number(g, one), g as u32)).collect();
+            numbers.sort_unstable();
+            numbers.into_iter().map(|(_, g)| g as usize).collect()
+        }
+        [one, two] => {
+            let mut numbers: Vec<(u128, u128, u32)> =
+                (0..groups).map(|g| (number(g, one), number(g, two), g as u32)).collect();
+            numbers.sort_unstable();
+            numbers.into_iter().map(|(_, _, g)| g as usize).collect()
+        }
+        _ => {
+            let n = places.len();
+            let numbers: Vec<u128> = (0..groups)
+                .flat_map(|g| places.iter().map(move |p| (g, p)))
+                .map(|(g, p)| number(g, p))
+                .collect();
+            let mut order: Vec<usize> = (0..groups).collect();
+            order.sort_unstable_by(|&a, &b| {
+                numbers[a * n..(a + 1) * n].cmp(&numbers[b * n..(b + 1) * n]).then(a.cmp(&b))
+            });
+            order
+        }
+    };
     Some(order)
+}
+
+/// The place of the code of each group in the order of the bytes of the codes of the groups, from a sort of each code once. Codes with the same bytes have the same place. A null group, for which `null` is true, has the place 0.
+fn code_places(
+    dict: &Dictionary,
+    key: impl Iterator<Item = u64>,
+    null: impl Fn(usize) -> bool,
+) -> Vec<u64> {
+    let codes: Vec<u32> =
+        key.enumerate().map(|(g, w)| if null(g) { 0 } else { w as u32 }).collect();
+    let mut distinct: Vec<u32> = codes.iter().copied().filter(|&c| c != 0).collect();
+    distinct.sort_unstable();
+    distinct.dedup();
+    let mut by_bytes: Vec<u32> = (0..distinct.len() as u32).collect();
+    by_bytes.sort_unstable_by(|&a, &b| {
+        dict.get(distinct[a as usize]).cmp(dict.get(distinct[b as usize]))
+    });
+    let mut ranks = vec![0_u64; distinct.len()];
+    let mut rank = 0;
+    for (n, &at) in by_bytes.iter().enumerate() {
+        if n == 0 || dict.get(distinct[at as usize]) != dict.get(distinct[by_bytes[n - 1] as usize])
+        {
+            rank += 1;
+        }
+        ranks[at as usize] = rank;
+    }
+    codes
+        .iter()
+        .map(|&c| if c == 0 { 0 } else { distinct.binary_search(&c).map_or(0, |at| ranks[at]) })
+        .collect()
 }
 
 /// The order of the groups, as the row engine gives them: the order of the hash table of the `HashAggregate` of the plan, the order of the keys for a sort, or the order of the first rows. `hashes` has the hash of each group when the scan found them.

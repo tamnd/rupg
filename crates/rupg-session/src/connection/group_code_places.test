@@ -1,0 +1,49 @@
+> CREATE TABLE cw (k int, t text)
+CREATE TABLE
+> INSERT INTO cw SELECT i % 100, 'v' || (i * 7 % 3000) FROM generate_series(1, 90000) i
+INSERT 0 90000
+> INSERT INTO cw SELECT i % 5, NULL FROM generate_series(1, 40) i
+INSERT 0 40
+> INSERT INTO cw SELECT 3, 'v' || i FROM generate_series(1, 6) i
+INSERT 0 6
+> SET enable_hashagg = off
+SET
+> SELECT t, count(*) FROM cw WHERE k < 5 GROUP BY t LIMIT 6
+fields t@cw.2:25:-1:-1,count:20:8:-1
+row v0,30
+row v1,1
+row v100,30
+row v1000,30
+row v1007,30
+row v1014,30
+SELECT 6
+> SELECT t, count(*) FROM cw WHERE k < 5 GROUP BY t ORDER BY t DESC LIMIT 4
+fields t@cw.2:25:-1:-1,count:20:8:-1
+row NULL,40
+row v928,30
+row v921,30
+row v914,30
+SELECT 4
+> SELECT k, t, count(*) AS c FROM cw WHERE k < 5 GROUP BY k, t ORDER BY c DESC LIMIT 5
+fields k@cw.1:23:4:-1,t@cw.2:25:-1:-1,c:20:8:-1
+row 0,v100,30
+row 0,v1000,30
+row 0,v1100,30
+row 0,v1200,30
+row 0,v0,30
+SELECT 5
+> SELECT k, t, count(*) AS c FROM cw WHERE k < 5 GROUP BY t, k ORDER BY c DESC LIMIT 5 OFFSET 3
+fields k@cw.1:23:4:-1,t@cw.2:25:-1:-1,c:20:8:-1
+row 1,v1007,30
+row 2,v1014,30
+row 3,v1021,30
+row 4,v1028,30
+row 1,v107,30
+SELECT 5
+> SELECT CASE WHEN k = 3 THEN t ELSE '' END AS s, count(*) AS c FROM cw WHERE k < 5 GROUP BY s ORDER BY c LIMIT 4
+fields s:25:-1:-1,c:20:8:-1
+row v2,1
+row v3,1
+row v1,1
+row v4,1
+SELECT 4
