@@ -809,7 +809,7 @@ pub(crate) fn given(query: &Query, rows: Vec<Vec<Vec<Value>>>) -> Tables {
 fn kept_columns(oid: u32, used: &[bool], session: &dyn Session) -> Vec<bool> {
     let mut kept = used.to_vec();
     let Some(catalog) = session.catalog() else { return kept };
-    for index in catalog.relations().filter_map(|r| r.index.as_ref().filter(|i| i.table == oid)) {
+    for index in catalog.indexes_of(oid).filter_map(|r| r.index.as_ref()) {
         for &key in &index.keys {
             if let Some(slot) = usize::try_from(key - 1).ok().and_then(|i| kept.get_mut(i)) {
                 *slot = true;
@@ -1019,13 +1019,9 @@ fn key_lookup(
     }
     // The default collation, `C` and `POSIX` are deterministic: two values are equal when their bytes are equal.
     let deterministic = |collation: u32| matches!(collation, 0 | 100 | 950 | 951);
-    for index in catalog.relations() {
+    for index in catalog.indexes_of(relation.oid) {
         let Some(info) = index.index.as_ref().filter(|info| {
-            info.table == relation.oid
-                && info.unique
-                && info.ready
-                && info.exprs.is_none()
-                && info.predicate.is_none()
+            info.unique && info.ready && info.exprs.is_none() && info.predicate.is_none()
         }) else {
             continue;
         };
