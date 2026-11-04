@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- exec: a point read finds the unique key of the table with less work: the maps of the relations in the catalog use a cheap hasher for OIDs, the check for children of the table makes no list, a key with one value of each column gets no copies, and the count of the scan reads `track_counts` with no text (#1335).
 - A snapshot of a statement no longer waits for the lock of the heap: each change of the transactions in progress writes a copy of the snapshot under a small lock of its own, and a statement takes the copy and sets its `xmin` under that lock (#1332).
 - The map of a unique key keeps the ID of a key with one version in the map and makes a list on the heap only for a key with more than one version. This removes one allocation for each row of a table with a unique key and one miss of the cache from each read of a key (#1331).
 - A heap finds a version by its ID with a guess from the item pointers at the two ends of the range and then a binary search of a small range, and a read of one key borrows the set of running transactions and does not clone its `Arc`. Before, each read of a key made about 20 probes into the versions of a large table (#1328).

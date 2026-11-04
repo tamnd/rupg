@@ -2528,6 +2528,11 @@ impl Catalog {
         Ok(())
     }
 
+    /// True when the table `parent` has a partition or a child, with no list of them.
+    pub fn has_children(&self, parent: u32) -> bool {
+        self.relations.children_of(parent).next().is_some()
+    }
+
     /// `relhassubclass` of the table `parent`: true while it has a partition or a child, and after it lost them until the next `ANALYZE`.
     pub fn has_subclass(&self, parent: u32) -> bool {
         self.kept_subclass.contains(&parent) || !self.children(parent).is_empty()

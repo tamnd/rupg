@@ -3,6 +3,7 @@
 //! The statements find a relation by name and the indexes of a table many times, and a scan of all the relations costs more as the database grows. A change of the relations drops the maps: each change goes through [`DerefMut`], so no change can keep a stale map.
 
 use std::collections::{BTreeMap, HashMap};
+use std::hash::{BuildHasherDefault, Hasher};
 use std::ops::{Deref, DerefMut};
 use std::sync::OnceLock;
 
@@ -11,15 +12,42 @@ use rupg_common::persist::{Persist, Reader};
 
 use crate::Relation;
 
+/// A hasher for OIDs and names, which costs less than SipHash. The keys come from the catalog, so the maps need no guard against keys that an attacker selects.
+#[derive(Default)]
+struct OidHasher(u64);
+
+impl Hasher for OidHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.write_u64(u64::from(byte));
+        }
+    }
+
+    fn write_u32(&mut self, word: u32) {
+        self.write_u64(u64::from(word));
+    }
+
+    fn write_u64(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+}
+
+/// A map with [`OidHasher`].
+type OidMap<K, V> = HashMap<K, V, BuildHasherDefault<OidHasher>>;
+
 /// The maps that a read builds from the relations.
 #[derive(Debug, Default)]
 struct Maps {
     /// The OID of each relation by schema and name. A name that two relations have gives the lower OID, as a scan in the order of the OIDs finds it.
-    names: HashMap<u32, HashMap<Box<str>, u32>>,
+    names: OidMap<u32, OidMap<Box<str>, u32>>,
     /// The OIDs of the indexes of each table, in their order.
-    indexes: HashMap<u32, Vec<u32>>,
+    indexes: OidMap<u32, Vec<u32>>,
     /// The OIDs of the partitions of each table and of the tables that inherit from it, in their order.
-    children: HashMap<u32, Vec<u32>>,
+    children: OidMap<u32, Vec<u32>>,
 }
 
 /// The relations by OID.
