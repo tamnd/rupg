@@ -907,6 +907,22 @@ impl KeyMap {
         Some(hasher.finish())
     }
 
+    /// [`KeyMap::hash`] of a key whose values come in the order of the key columns, with no row around them.
+    fn hash_key(&self, key: &[Value]) -> Option<u64> {
+        if key.len() != self.columns.len() {
+            return None;
+        }
+        let mut hasher = DefaultHasher::new();
+        for (value, &ty) in key.iter().zip(&self.types) {
+            match value {
+                Value::Null if self.nulls_not_distinct => 0_u8.hash(&mut hasher),
+                Value::Null => return None,
+                value => hash_value(value, ty, &mut hasher),
+            }
+        }
+        Some(hasher.finish())
+    }
+
     /// True when two rows have the same key, with the equality of the btree operator class of each column.
     fn same(&self, a: &[Value], b: &[Value]) -> Result<bool> {
         for (&column, &ty) in self.columns.iter().zip(&self.types) {
@@ -2015,28 +2031,44 @@ impl Heap {
             return Some(Vec::new());
         };
         table.thaw();
-        let unique = Unique {
-            oid: 0,
-            name: String::new(),
-            columns: columns.to_vec(),
-            types: types.to_vec(),
-            shown: String::new(),
-            nulls_not_distinct,
-            derived: None,
-            deferrable: None,
+        table.keys.retain(|map| !map.stale);
+        let kept = table.keys.iter().position(|map| {
+            map.derived.is_none()
+                && map.columns == columns
+                && map.types == types
+                && map.nulls_not_distinct == nulls_not_distinct
+        });
+        let place = match kept {
+            Some(place) => place,
+            None => {
+                let unique = Unique {
+                    oid: 0,
+                    name: String::new(),
+                    columns: columns.to_vec(),
+                    types: types.to_vec(),
+                    shown: String::new(),
+                    nulls_not_distinct,
+                    derived: None,
+                    deferrable: None,
+                };
+                *table.key_maps(std::slice::from_ref(&unique))?.first()?
+            }
         };
-        let place = *table.key_maps(std::slice::from_ref(&unique))?.first()?;
-        let mut row = vec![Value::Null; columns.iter().max().map_or(0, |c| c + 1)];
-        for (&column, value) in columns.iter().zip(key) {
-            row[column] = value.clone();
-        }
-        let Some(hash) = table.keys[place].hash(&row) else {
+        let Some(hash) = table.keys[place].hash_key(key) else {
             return Some(Vec::new());
         };
         table.prune_key(place, hash, (horizon, &*running));
-        let mut tids = table.keys[place].hashes.get(&hash).cloned().unwrap_or_default();
-        tids.sort_unstable();
-        tids.dedup();
+        let found = table.keys[place].hashes.get(&hash).map_or(&[][..], Vec::as_slice);
+        // A key has one version in most cases, so only more than one version needs a sorted copy of the list.
+        let mut sorted = Vec::new();
+        let tids = if found.len() > 1 {
+            sorted.extend_from_slice(found);
+            sorted.sort_unstable();
+            sorted.dedup();
+            &sorted[..]
+        } else {
+            found
+        };
         let wanted = used_columns(used);
         Some(
             tids.iter()
