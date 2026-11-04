@@ -47,6 +47,17 @@ impl std::fmt::Debug for Worker {
     }
 }
 
+/// The name of the threads that run the jobs of [`Tasks::run_all`].
+const JOB: &str = "rupg job";
+
+/// Runs the job in `slot` if it is there.
+fn run_slot(slot: &Mutex<Option<Job<'_>>>) {
+    let job = lock(slot).take();
+    if let Some(job) = job {
+        job();
+    }
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -161,35 +172,34 @@ impl Tasks for OsTasks {
         thread::available_parallelism().map_or(1, std::num::NonZero::get)
     }
 
-    /// Runs the first job on the calling thread and each other job on a thread of its own. A job whose thread does not start runs on the calling thread. A job that panicked panics the caller after all the jobs ended.
+    /// Runs the first job on the calling thread and each other job on a thread that waits for a task, or on a new thread. A job whose thread does not start runs on the calling thread. A job that panicked panics the caller after all the jobs ended.
+    ///
+    /// A query calls it many times, so the threads stay for the next call: a new thread costs its stack, and its new heap in the allocator gets each page again with a fault.
     fn run_all<'a>(&self, jobs: Vec<Job<'a>>) {
         let mut jobs = jobs.into_iter();
         let Some(first) = jobs.next() else { return };
         let slots: Vec<Mutex<Option<Job<'a>>>> = jobs.map(|job| Mutex::new(Some(job))).collect();
-        let run = |slot: &Mutex<Option<Job<'a>>>| {
-            if let Some(job) = lock(slot).take() {
-                job();
+        let joins: Vec<_> = slots
+            .iter()
+            .map(|slot| {
+                let task: Job<'_> = Box::new(move || run_slot(slot));
+                // SAFETY: the task borrows `slots` and the data of the jobs, which live for `'a`. Each task that starts ends before this function returns: the loop below joins each of them, also when the first job panics, as `catch_unwind` stops that panic until then. A task that does not start is dropped in `spawn`, and its job stays in the slot.
+                let task: Task = unsafe { std::mem::transmute::<Job<'_>, Task>(task) };
+                self.spawn(JOB, task).ok()
+            })
+            .collect();
+        let first = panic::catch_unwind(AssertUnwindSafe(first));
+        let mut panicked = false;
+        for (slot, join) in slots.iter().zip(joins) {
+            match join {
+                Some(join) => panicked |= join.join().is_err(),
+                None => run_slot(slot),
             }
-        };
-        thread::scope(|scope| {
-            let handles: Vec<_> = slots
-                .iter()
-                .map(|slot| {
-                    thread::Builder::new().stack_size(STACK_SIZE).spawn_scoped(scope, || run(slot))
-                })
-                .collect();
-            first();
-            for (slot, handle) in slots.iter().zip(handles) {
-                match handle {
-                    Ok(handle) => {
-                        if let Err(panic) = handle.join() {
-                            panic::resume_unwind(panic);
-                        }
-                    }
-                    Err(_) => run(slot),
-                }
-            }
-        });
+        }
+        if let Err(panic) = first {
+            panic::resume_unwind(panic);
+        }
+        assert!(!panicked, "a job of run_all panicked");
     }
 
     #[cfg(target_os = "linux")]
@@ -351,6 +361,7 @@ mod tests {
 
     #[test]
     fn all_the_jobs_run_on_their_own_threads_with_the_data_of_the_caller() {
+        let _one = lock(&RUN_ALL);
         let mut out = [None; 6];
         let jobs: Vec<Job<'_>> = out
             .iter_mut()
@@ -364,6 +375,49 @@ mod tests {
         assert_eq!(out.iter().map(|slot| slot.unwrap().0).collect::<Vec<_>>(), [0, 1, 2, 3, 4, 5]);
         assert_eq!(ids[0], thread::current().id());
         assert!(ids[1..].iter().all(|&id| id != ids[0]));
+    }
+
+    /// The tests of `run_all` share the threads of [`JOB`], so they do not run at the same time.
+    static RUN_ALL: Mutex<()> = Mutex::new(());
+
+    /// Runs `n` jobs with `run_all`, and gives the threads that ran them.
+    fn ids_of_jobs(n: usize) -> Vec<thread::ThreadId> {
+        let mut out = vec![None; n];
+        let jobs: Vec<Job<'_>> = out
+            .iter_mut()
+            .map(|slot| Box::new(move || *slot = Some(thread::current().id())) as Job<'_>)
+            .collect();
+        OsTasks.run_all(jobs);
+        out.into_iter().map(Option::unwrap).collect()
+    }
+
+    #[test]
+    fn the_next_jobs_run_on_the_same_threads() {
+        let _one = lock(&RUN_ALL);
+        let first = ids_of_jobs(4);
+        let next = ids_of_jobs(4);
+        assert!(next[1..].iter().any(|id| first[1..].contains(id)), "{first:?} {next:?}");
+    }
+
+    #[test]
+    fn a_job_that_panicked_panics_the_caller_after_all_the_jobs_ended() {
+        let _one = lock(&RUN_ALL);
+        let ran = std::sync::atomic::AtomicUsize::new(0);
+        let ran = &ran;
+        let jobs: Vec<Job<'_>> = (0..4)
+            .map(|at| {
+                Box::new(move || {
+                    if at == 2 {
+                        panic!("a test panic");
+                    }
+                    thread::sleep(Duration::from_millis(20));
+                    ran.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }) as Job<'_>
+            })
+            .collect();
+        let result = panic::catch_unwind(AssertUnwindSafe(|| OsTasks.run_all(jobs)));
+        assert!(result.is_err());
+        assert_eq!(ran.load(std::sync::atomic::Ordering::SeqCst), 3);
     }
 
     #[test]
