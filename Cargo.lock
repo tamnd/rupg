@@ -383,6 +383,7 @@ dependencies = [
  "rupg-opt",
  "rupg-pgcatalog",
  "rupg-plan",
+ "rupg-platform",
  "rupg-sql",
  "rupg-summary",
  "rupg-types",

@@ -988,6 +988,10 @@ impl rupg_func::Session for Reader<'_> {
         self.planned(query).map(|(_, tables)| tables)
     }
 
+    fn tasks(&self) -> Option<&dyn rupg_platform::Tasks> {
+        self.activity.and_then(|(_, store)| store.tasks())
+    }
+
     fn interrupted(&self) -> Result<()> {
         if self.cancel.is_some_and(|c| c.swap(false, Ordering::Relaxed)) {
             return Err(Error::new(

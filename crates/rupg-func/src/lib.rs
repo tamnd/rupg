@@ -294,6 +294,10 @@ pub trait Session {
         let _ = query;
         None
     }
+    /// The tasks of the server, on which a scan runs its parts at the same time, or `None` for a session with no server.
+    fn tasks(&self) -> Option<&dyn rupg_platform::Tasks> {
+        None
+    }
     /// The hash tables of the plan of `query`, as `rupg_opt::hash_tables` gives them, whose groups come in the order of the table. `None` when the session has no planner.
     fn hash_tables(&self, query: &rupg_analyze::Query) -> Option<Rc<rupg_plan::HashTables>> {
         let _ = query;

@@ -1,0 +1,151 @@
+> CREATE TABLE gt (u int, a int, b int, s text, w bigint)
+CREATE TABLE
+> INSERT INTO gt SELECT i, i % 7, CASE WHEN i % 11 = 0 THEN NULL ELSE i % 1000 - 500 END, CASE WHEN i % 13 = 0 THEN NULL ELSE 'k' || (i % 5) END, i % 50021 FROM generate_series(1, 300000) i
+INSERT 0 300000
+> ANALYZE gt
+ANALYZE
+> SELECT a, count(*), sum(b), min(b), max(b), avg(b), count(b) FROM gt GROUP BY a
+fields a@gt.2:23:4:-1,count:20:8:-1,sum:20:8:-1,min:23:4:-1,max:23:4:-1,avg:1700:-1:-1,count:20:8:-1
+row 0,42857,-16341,-500,499,-0.41941941941941941942,38961
+row 1,42858,-21703,-500,499,-0.55702992659514398645,38962
+row 2,42857,-19058,-500,499,-0.48915582248915582249,38961
+row 3,42857,-16913,-500,499,-0.43410076743410076743,38961
+row 4,42857,-22776,-500,499,-0.58458458458458458458,38961
+row 5,42857,-20631,-500,499,-0.52952952952952952953,38961
+row 6,42857,-18486,-500,499,-0.47447447447447447447,38961
+SELECT 7
+> SELECT s, count(*), count(s), sum(b + 1), avg(b - 2) FROM gt GROUP BY s
+fields s@gt.4:25:-1:-1,count:20:8:-1,count:20:8:-1,sum:20:8:-1,avg:1700:-1:-1
+row k0,55385,55385,-77275,-4.5347567030784508
+row k1,55385,55385,-26175,-3.5198609731876862
+row k2,55385,55385,24292,-2.5175276569544579
+row k3,55384,55384,74765,-1.5150943396226415
+row k4,55385,55385,124875,-0.51986097318768619662
+row NULL,23076,0,16338,-2.2212212212212212
+SELECT 6
+> SELECT 1, s, count(*) FROM gt GROUP BY 1, s ORDER BY 3 LIMIT 2
+fields ?column?:23:4:-1,s@gt.4:25:-1:-1,count:20:8:-1
+row 1,NULL,23076
+row 1,k3,55384
+SELECT 2
+> SELECT w, count(*), max(u), min(a) FROM gt GROUP BY w ORDER BY 2 DESC, 1 LIMIT 3
+fields w@gt.5:20:8:-1,count:20:8:-1,max:23:4:-1,min:23:4:-1
+row 1,6,250106,0
+row 2,6,250107,0
+row 3,6,250108,0
+SELECT 3
+> SELECT a, max(u), count(*) AS c FROM gt GROUP BY a ORDER BY c DESC LIMIT 1
+fields a@gt.2:23:4:-1,max:23:4:-1,c:20:8:-1
+row 1,300000,42858
+SELECT 1
+> SELECT s, a, sum(w), count(*) FROM gt GROUP BY s, a ORDER BY s DESC, a LIMIT 4
+fields s@gt.4:25:-1:-1,a@gt.2:23:4:-1,sum:1700:-1:-1,count:20:8:-1
+row NULL,0,82421519,3296
+row NULL,1,82378671,3296
+row NULL,2,82385844,3296
+row NULL,3,82442900,3297
+SELECT 4
+> SELECT b, count(*) FROM gt GROUP BY b LIMIT 5
+fields b@gt.3:23:4:-1,count:20:8:-1
+row -500,273
+row -499,272
+row -498,272
+row -497,273
+row -496,273
+SELECT 5
+> SELECT a, count(*), sum(b), max(u) FROM gt WHERE b > 100 GROUP BY a ORDER BY a
+fields a@gt.2:23:4:-1,count:20:8:-1,sum:20:8:-1,max:23:4:-1
+row 0,15551,4665463,299999
+row 1,15544,4662814,299993
+row 2,15544,4663637,299994
+row 3,15548,4664870,299995
+row 4,15544,4662203,299996
+row 5,15544,4663026,299997
+row 6,15544,4663849,299998
+SELECT 7
+> SELECT s, count(*), min(u) FROM gt WHERE b IS NULL GROUP BY s ORDER BY s
+fields s@gt.4:25:-1:-1,count:20:8:-1,min:23:4:-1
+row k0,5035,55
+row k1,5035,11
+row k2,5036,22
+row k3,5034,33
+row k4,5035,44
+row NULL,2097,143
+SELECT 6
+> SELECT w, count(*) FROM gt WHERE u >= 299990 GROUP BY w
+fields w@gt.5:20:8:-1,count:20:8:-1
+row 49885,1
+row 49886,1
+row 49887,1
+row 49888,1
+row 49889,1
+row 49890,1
+row 49891,1
+row 49892,1
+row 49893,1
+row 49894,1
+row 49895,1
+SELECT 11
+> SELECT a, count(*) FROM gt WHERE u < 0 GROUP BY a
+fields a@gt.2:23:4:-1,count:20:8:-1
+SELECT 0
+> SELECT a, b, count(*) FROM gt WHERE a IN (1, 2) AND s IS NOT NULL AND u <= 200000 GROUP BY a, b ORDER BY 3 DESC, 1, 2 LIMIT 3
+fields a@gt.2:23:4:-1,b@gt.3:23:4:-1,count:20:8:-1
+row 1,NULL,2398
+row 2,NULL,2397
+row 1,264,26
+SELECT 3
+> SELECT b, count(*) FROM gt WHERE u > 150000 GROUP BY b ORDER BY 2 DESC, 1 LIMIT 3
+fields b@gt.3:23:4:-1,count:20:8:-1
+row NULL,13636
+row -497,137
+row -496,137
+SELECT 3
+> SELECT b, b - 1, b + 2, b - 3, count(*) AS c FROM gt GROUP BY b, b - 1, b + 2, b - 3 ORDER BY c DESC, 1 LIMIT 4
+fields b@gt.3:23:4:-1,?column?:23:4:-1,?column?:23:4:-1,?column?:23:4:-1,c:20:8:-1
+row NULL,NULL,NULL,NULL,27272
+row -500,-501,-498,-503,273
+row -497,-498,-495,-500,273
+row -496,-497,-494,-499,273
+SELECT 4
+> SELECT a + 1, a, count(*), sum(b) FROM gt GROUP BY a + 1, a ORDER BY 2
+fields ?column?:23:4:-1,a@gt.2:23:4:-1,count:20:8:-1,sum:20:8:-1
+row 1,0,42857,-16341
+row 2,1,42858,-21703
+row 3,2,42857,-19058
+row 4,3,42857,-16913
+row 5,4,42857,-22776
+row 6,5,42857,-20631
+row 7,6,42857,-18486
+SELECT 7
+> SELECT u, u + 2147480000, count(*) FROM gt GROUP BY u, u + 2147480000 ORDER BY 3 DESC LIMIT 1
+fields u@gt.1:23:4:-1,?column?:23:4:-1,count:20:8:-1
+ERROR 22003 integer out of range
+> SELECT w, 2 + w, count(*) FROM gt WHERE u > 1000 GROUP BY w, 2 + w ORDER BY 3 DESC, 1 LIMIT 2
+fields w@gt.5:20:8:-1,?column?:20:8:-1,count:20:8:-1
+row 1001,1003,6
+row 1002,1004,6
+SELECT 2
+> SELECT attname, n_distinct FROM pg_stats WHERE tablename = 'gt' AND attname IN ('a', 'b', 's') ORDER BY 1
+fields attname@pg_stats.4:19:64:-1,n_distinct@pg_stats.9:700:4:-1
+row a,7
+row b,1000
+row s,5
+SELECT 3
+> SELECT a + 1, a, count(*) FROM gt GROUP BY a + 1, a
+fields ?column?:23:4:-1,a@gt.2:23:4:-1,count:20:8:-1
+row 1,0,42857
+row 2,1,42858
+row 3,2,42857
+row 4,3,42857
+row 5,4,42857
+row 6,5,42857
+row 7,6,42857
+SELECT 7
+> SELECT w, w + 5, count(*) FROM gt GROUP BY w, w + 5 LIMIT 4
+fields w@gt.5:20:8:-1,?column?:20:8:-1,count:20:8:-1
+row 48849,48854,6
+row 28935,28940,6
+row 6932,6937,6
+row 13632,13637,6
+SELECT 4
