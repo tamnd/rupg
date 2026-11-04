@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A `SELECT` of plain columns of one table whose `WHERE` is only `=` of each key column of a unique index reads the versions of the key with no plan of a scan, and the example `ycsb` of rupg-session runs the YCSB workloads on sessions in the process (#1312).
 - A search of an expression goes through the arguments of the common kinds of expressions with no list. Before, each node of the search allocated a list of its arguments. The CPU of the server for a point read went down by 11% (#1310).
 - A read through a unique key finds the indexes and the children of its table in the maps of the catalog. Before, each read scanned all the relations of the catalog two times (#1309).
 - A read of a key removes the old versions of the key that no snapshot sees, as `heap_page_prune_opt` does. Before, each update of a hot key added a version that stayed until `VACUUM`, so each read of the key walked a longer chain. A session holds the `xmin` of its snapshot under the lock of the heap when it takes the snapshot, so a prune does not remove a version that the snapshot sees (#1308).
