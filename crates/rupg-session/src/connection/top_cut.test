@@ -66,3 +66,34 @@ row NULL,60043
 row NULL,60140
 row NULL,60237
 SELECT 3
+> CREATE TABLE tt (s text, n int)
+CREATE TABLE
+> INSERT INTO tt SELECT CASE WHEN i % 101 = 0 THEN NULL ELSE 'p' || ((i::bigint * 7919) % 50000) END, i FROM generate_series(1, 70000) i
+INSERT 0 70000
+> SELECT s FROM tt WHERE s <> '' ORDER BY s LIMIT 5
+fields s@tt.1:25:-1:-1
+row p0
+row p1
+row p1
+row p10
+row p100
+SELECT 5
+> SELECT s FROM tt ORDER BY s DESC NULLS LAST LIMIT 4 OFFSET 2
+fields s@tt.1:25:-1:-1
+row p9997
+row p9996
+row p9996
+row p9995
+SELECT 4
+> SELECT s FROM tt ORDER BY s NULLS FIRST LIMIT 3
+fields s@tt.1:25:-1:-1
+row NULL
+row NULL
+row NULL
+SELECT 3
+> SELECT s FROM tt WHERE n > 1000 ORDER BY s DESC LIMIT 3
+fields s@tt.1:25:-1:-1
+row NULL
+row NULL
+row NULL
+SELECT 3

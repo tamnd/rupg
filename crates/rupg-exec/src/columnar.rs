@@ -1814,6 +1814,13 @@ fn top(
             .map(|&c| exec.var(batch, c, exec.types[c], sel))
             .collect::<Result<Vec<_>>>()?;
         let lead_ints = lead.and_then(|(target, ..)| cols[target].ints());
+        // The codes of the lead key when it is a column of text codes: a row whose text comes after the text of the top of the full heap cannot go in the heap, so the scan makes no value of the row.
+        let lead_codes = lead.and_then(|(target, ..)| match &cols[target].data {
+            Data::Code(v, d) if exec.dicts[*d].is_text() => {
+                Some((v, &exec.dicts[*d], cols[target].nulls.as_deref()))
+            }
+            _ => None,
+        });
         for i in 0..sel.len() {
             if !streaming {
                 first.push(cols.iter().map(|c| c.value(i, &exec.dicts)).collect());
@@ -1833,6 +1840,20 @@ fn top(
                     Some(v) if descending => v < top,
                     Some(v) => v > top,
                     None => !nulls_first,
+                };
+                if after {
+                    continue;
+                }
+            }
+            if let (Some((target, descending, nulls_first)), Some((codes, dict, nulls))) =
+                (lead, lead_codes)
+                && let Some(Value::Text(top)) = heap.top().map(|row| &row[target])
+            {
+                let after = if nulls.is_some_and(|n| n[i]) {
+                    !nulls_first
+                } else {
+                    let text = dict.text(codes[i]).unwrap_or_default();
+                    if descending { text < top.as_bytes() } else { text > top.as_bytes() }
                 };
                 if after {
                     continue;
