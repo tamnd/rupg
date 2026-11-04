@@ -1083,6 +1083,91 @@ pub(crate) fn unique_key(query: &Query, params: &[Value], session: &dyn Session)
     key_lookup(query, (&conds, params), session).is_some()
 }
 
+/// True when a query has the form of a point read, which [`point_rows`] can run: a `SELECT` of one relation whose targets are plain columns of it, with a `WHERE` and no other clause.
+pub(crate) fn point_shape(query: &Query) -> bool {
+    query.write.is_none()
+        && matches!(query.from.as_slice(), [FromItem::Relation(0)])
+        && query.relations.len() == 1
+        && query.filter.is_some()
+        && !query.grouped
+        && query.having.is_none()
+        && query.sort.is_empty()
+        && query.distinct.is_empty()
+        && query.offset.is_none()
+        && query.limit.is_none()
+        && query.set_op.is_none()
+        && query.windows.is_empty()
+        && query.ctes.is_empty()
+        && query.row_marks.is_empty()
+        && query.minmax.is_none()
+        && query.security.is_empty()
+        && query.barrier.is_empty()
+        && query.out_args.is_empty()
+        && query.targets.iter().all(|t| !t.junk && point_column(&t.expr).is_some())
+}
+
+/// The column of the table of a point read that a target reads: a column of the user, with no cast.
+fn point_column(expr: &Expr) -> Option<usize> {
+    match &expr.kind {
+        ExprKind::Var(var) if var.levels_up == 0 && var.relation == 0 && var.attnum > 0 => {
+            usize::try_from(var.attnum - 1).ok()
+        }
+        _ => None,
+    }
+}
+
+/// The rows of a query of [`point_shape`] whose conditions are each an `=` of a key column of a unique index, one for each column of the key, as `ExecIndexScan` reads them with an index that has all the conditions as its keys. The rows are the versions of the key that the snapshot sees, with the values of the targets, and no plan of a scan runs. The read tests the key of each version again, as a hash of the key can be the hash of another key. `None` when the conditions are not the keys of a unique index, so that the query runs as a scan.
+pub(crate) fn point_rows(
+    query: &Query,
+    params: &[Value],
+    session: &dyn Session,
+) -> Result<Option<Vec<Vec<Value>>>> {
+    let Some(filter) = &query.filter else { return Ok(None) };
+    let mut conds = Vec::new();
+    conjuncts(filter, &mut conds);
+    // Each condition must be an `=` of its own column, so that the key has all the conditions and the read needs no other test.
+    let mut columns = Vec::with_capacity(conds.len());
+    for cond in &conds {
+        let ExprKind::Func(f) = &cond.kind else { return Ok(None) };
+        let [a, b] = f.args.as_slice() else { return Ok(None) };
+        if !HASH_EQUALS.contains(&f.oid) {
+            return Ok(None);
+        }
+        let Some(column) = key_column(a).or_else(|| key_column(b)) else { return Ok(None) };
+        if columns.contains(&column) {
+            return Ok(None);
+        }
+        columns.push(column);
+    }
+    let Some(lookup) = key_lookup(query, (&conds, params), session) else { return Ok(None) };
+    let [key] = lookup.keys.as_slice() else { return Ok(None) };
+    if lookup.columns.len() != columns.len() {
+        return Ok(None);
+    }
+    // `=` is strict, so a null key is equal to no key, also in an index with `NULLS NOT DISTINCT`.
+    if key.iter().any(|value| matches!(value, Value::Null)) {
+        return Ok(Some(Vec::new()));
+    }
+    let key_columns = (&lookup.columns[..], &lookup.types[..], lookup.nulls_not_distinct);
+    let Some(found) = session.table_rows_by_key(lookup.relation, None, key_columns, key)? else {
+        return Ok(None);
+    };
+    session.count_scan(lookup.relation);
+    let mut rows = Vec::with_capacity(found.len());
+    for row in found {
+        if !lookup.columns.iter().zip(key).all(|(&c, value)| row.get(c) == Some(value)) {
+            continue;
+        }
+        let values = query
+            .targets
+            .iter()
+            .map(|t| point_column(&t.expr).and_then(|c| row.get(c)).cloned().unwrap_or(Value::Null))
+            .collect();
+        rows.push(values);
+    }
+    Ok(Some(rows))
+}
+
 /// The most keys that [`key_rows`] reads one at a time. With more, the scan reads all the rows.
 const KEY_LIMIT: usize = 10_000;
 

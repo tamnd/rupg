@@ -2047,6 +2047,9 @@ impl Plan {
         params: &[Value],
         session: &dyn Session,
     ) -> std::result::Result<Rows, (Rows, Error)> {
+        if let Some(rows) = self.point_select(params, session) {
+            return rows.map_err(|error| (Vec::new(), error));
+        }
         let cache = self.cache();
         if self.query.write.is_none() && !self.modifying_cte() {
             cache.top.set(Some(&raw const *self.runnable()));
@@ -2055,6 +2058,18 @@ impl Plan {
             .and_then(|()| run_query(self.runnable(), params, session, &cache, &[], false))
             .and_then(|rows| self.check(rows, session))
             .map_err(|error| (cache.sent.take(), error))
+    }
+
+    /// The rows of a point read by the key of a unique index, as [`scan::point_rows`] reads them after the checks of [`Plan::start`], or `None` for a query that runs as a scan.
+    fn point_select(&self, params: &[Value], session: &dyn Session) -> Option<Result<Rows>> {
+        let query = self.runnable();
+        if self.row_security.is_some() || !scan::point_shape(query) {
+            return None;
+        }
+        if let Err(error) = self.start(session) {
+            return Some(Err(error));
+        }
+        scan::point_rows(query, params, session).transpose()
     }
 
     /// [`Plan::run`] with no checks of the constraints of the table. The rows of an `INSERT` have the values of the conditions of the check constraints after the columns of the table. `COPY ... FROM` drops the rows that its condition `WHERE` rejects before [`Plan::check`], as `CopyFrom` does.
