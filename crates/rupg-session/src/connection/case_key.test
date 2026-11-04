@@ -1,0 +1,42 @@
+> CREATE TABLE cw (a int, b int, r text, u text)
+CREATE TABLE
+> INSERT INTO cw SELECT i % 3, i % 5, CASE i % 4 WHEN 0 THEN '' ELSE 'r' || (i % 11) END, 'u' || (i % 7) FROM generate_series(1, 70000) i
+INSERT 0 70000
+> SELECT CASE WHEN a = 0 AND b = 0 THEN r ELSE '' END AS s, count(*) FROM cw GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 5
+fields s:25:-1:-1,count:20:8:-1
+row ,66500
+row r4,319
+row r8,319
+row r0,318
+row r1,318
+SELECT 5
+> SELECT CASE WHEN a = 1 THEN b WHEN a = 2 THEN 100 END AS v, count(*) FROM cw GROUP BY 1 ORDER BY 1
+fields v:23:4:-1,count:20:8:-1
+row 0,4667
+row 1,4667
+row 2,4667
+row 3,4666
+row 4,4667
+row 100,23333
+row NULL,23333
+SELECT 7
+> SELECT CASE WHEN b = 4 THEN u WHEN a = 1 THEN r END AS s, count(*) FROM cw GROUP BY 1 ORDER BY 1 LIMIT 6
+fields s:25:-1:-1,count:20:8:-1
+row ,4667
+row r0,1273
+row r1,1273
+row r10,1273
+row r2,1273
+row r3,1273
+SELECT 6
+> SELECT a, b, CASE WHEN a = 0 AND b = 0 THEN r ELSE '' END AS s, u, count(*) AS c FROM cw GROUP BY a, b, s, u ORDER BY c DESC, a, b, s, u LIMIT 4 OFFSET 3
+fields a@cw.1:23:4:-1,b@cw.2:23:4:-1,s:25:-1:-1,u@cw.4:25:-1:-1,c:20:8:-1
+row 0,1,,u3,667
+row 0,1,,u6,667
+row 0,2,,u0,667
+row 0,2,,u1,667
+SELECT 4
+> SELECT count(DISTINCT CASE WHEN a = 2 THEN r ELSE 'none' END) FROM cw
+fields count:20:8:-1
+row 13
+SELECT 1
