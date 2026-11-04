@@ -981,9 +981,7 @@ fn key_lookup(
     }
     let catalog = session.catalog()?;
     let table = catalog.relation(relation.oid)?;
-    if table.kind != rupg_catalog::RelKind::Table
-        || !catalog.all_inheritors(relation.oid).is_empty()
-    {
+    if table.kind != rupg_catalog::RelKind::Table || catalog.has_children(relation.oid) {
         return None;
     }
     // The column, the values and true for a parameter, for each `=` of a column with a constant or a parameter, and for each `= ANY` of a column with an array.
@@ -1051,16 +1049,23 @@ fn key_lookup(
             if keys.len().saturating_mul(values.len()) > KEY_LIMIT {
                 break;
             }
-            keys = keys
-                .iter()
-                .flat_map(|key| {
-                    values.iter().map(move |value| {
-                        let mut key = key.clone();
-                        key.push(value.clone());
-                        key
+            // One value of the column goes at the end of each key, with no copy of the keys.
+            if let [value] = values.as_slice() {
+                for key in &mut keys {
+                    key.push(value.clone());
+                }
+            } else {
+                keys = keys
+                    .iter()
+                    .flat_map(|key| {
+                        values.iter().map(move |value| {
+                            let mut key = key.clone();
+                            key.push(value.clone());
+                            key
+                        })
                     })
-                })
-                .collect();
+                    .collect();
+            }
             columns.push(at);
             types.push(column.ty);
             param |= *p;

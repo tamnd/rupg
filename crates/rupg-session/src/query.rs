@@ -1321,8 +1321,12 @@ impl rupg_func::Session for Reader<'_> {
     }
 
     fn count_scan(&self, relation: u32) {
+        // The value of the setting, with no text of it.
         if let Some((activity, _)) = self.activity
-            && self.settings().get_of(guc::known!("track_counts")).as_deref() != Some("off")
+            && !matches!(
+                guc::known!("track_counts").map(|p| self.settings().setting(p)),
+                Some(guc::Setting::Bool(false))
+            )
         {
             activity.count_scan(relation);
         }
