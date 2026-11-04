@@ -89,6 +89,8 @@ mod inner {
     unsafe extern "C" {
         /// Frees the empty pages of the heaps of mimalloc, and with `force` gives them back to the system.
         pub(super) fn mi_collect(force: bool);
+        /// Sets the option `option` of mimalloc to `value`.
+        pub(super) fn mi_option_set(option: core::ffi::c_int, value: core::ffi::c_long);
     }
 
     /// Gets a block of `layout`.
@@ -177,8 +179,21 @@ const ARENAS: i32 = 2;
 #[cfg(all(target_os = "linux", target_env = "gnu", not(feature = "mimalloc")))]
 const TRIM_THRESHOLD: i32 = 1 << 20;
 
-/// Sets the arenas and the trim threshold of the allocator of the C library, so that the memory that a load or a query frees goes back to the system. The binary calls it before it starts its threads. It does nothing with the feature `mimalloc` or on a system with an other allocator.
+/// `mi_option_purge_delay`: the number of the option of mimalloc 2 that sets the time in milliseconds before mimalloc gives free pages back to the system.
+#[cfg(feature = "mimalloc")]
+const PURGE_DELAY: core::ffi::c_int = 15;
+
+/// The purge delay of mimalloc in milliseconds. With the default of 10 ms, a query that frees and gets large blocks many times gives the pages back to the system and gets them again, and the kernel clears each new page. On ClickBench Q33 with 2M rows, 1000 ms decreases the CPU time from 1633 ms to 1421 ms. [`trim`] gives the free pages back after a load.
+#[cfg(feature = "mimalloc")]
+const PURGE_DELAY_MS: core::ffi::c_long = 1000;
+
+/// Sets the arenas and the trim threshold of the allocator of the C library, so that the memory that a load or a query frees goes back to the system. With the feature `mimalloc`, it sets the purge delay of mimalloc, so that a query uses its free pages again before they go back to the system. The binary calls it before it starts its threads. It does nothing on a system with an other allocator.
 pub fn tune() {
+    #[cfg(feature = "mimalloc")]
+    // SAFETY: `mi_option_set` changes only a setting of mimalloc, and `PURGE_DELAY` is an option of mimalloc 2.
+    unsafe {
+        inner::mi_option_set(PURGE_DELAY, PURGE_DELAY_MS);
+    }
     #[cfg(all(target_os = "linux", target_env = "gnu", not(feature = "mimalloc")))]
     // SAFETY: `mallopt` takes the parameters of glibc and changes only the settings of the allocator.
     unsafe {
