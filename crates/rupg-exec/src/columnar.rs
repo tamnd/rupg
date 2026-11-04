@@ -21,6 +21,9 @@ use crate::{Cache, Eval, Group, hashed, scan, sort};
 /// The most entries of the memo of an expression of one column of integers, so that a column of many values does not fill the memory.
 const MEMO: usize = 1 << 20;
 
+/// The number of rows between the read of the slot of a row and its probe: enough reads at once to hide most of the wait for the memory, and few enough that the slots stay in the cache.
+const PREFETCH_ROWS: usize = 16;
+
 /// The most groups that the map of `GROUP BY` has room for before the scan sees the rate of new groups: four vectors.
 const START_GROUPS: usize = 4 * VECTOR;
 
@@ -28,59 +31,148 @@ const START_GROUPS: usize = 4 * VECTOR;
 type FxMap<K, V> = rupg_kernels::hash::HashMap<K, V>;
 type FxSet<K> = rupg_kernels::hash::HashSet<K>;
 
-/// The words of a key of `GROUP BY` of a fixed number of words, which hash one word at a time with no length.
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct Words<const N: usize>([u64; N]);
+/// The ID of a slot of a [`WordTable`] with no key.
+const NO_GROUP: u32 = u32::MAX;
 
-impl<const N: usize> std::hash::Hash for Words<N> {
-    #[inline]
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        for word in self.0 {
-            state.write_u64(word);
-        }
-    }
+/// A slot of a [`WordTable`]: the words of a key and the ID of its group, together in one cache line.
+#[derive(Clone, Copy)]
+struct Slot<const W: usize> {
+    key: [u64; W],
+    id: u32,
 }
 
-/// The group of `key` in `map`, and true for a new group, which gets the ID `next`.
-#[inline]
-fn probe<K: std::hash::Hash + Eq>(map: &mut FxMap<K, u32>, key: K, next: u32) -> (u32, bool) {
-    match map.entry(key) {
-        std::collections::hash_map::Entry::Occupied(e) => (*e.get(), false),
-        std::collections::hash_map::Entry::Vacant(e) => (*e.insert(next), true),
+/// The groups of keys of `W` words: an open table with linear probing that is at most half full, so a probe reads about one slot. A probe of a table that is larger than the cache waits for the memory, so the scan asks for the slot of a row some rows before its probe with [`WordTable::prefetch`].
+struct WordTable<const W: usize> {
+    slots: Vec<Slot<W>>,
+    len: usize,
+}
+
+impl<const W: usize> WordTable<W> {
+    /// A table with room for `groups` groups.
+    fn new(groups: usize) -> WordTable<W> {
+        let mut table = WordTable { slots: Vec::new(), len: 0 };
+        table.resize((groups * 2).max(16).next_power_of_two());
+        table
+    }
+
+    fn resize(&mut self, size: usize) {
+        let old =
+            std::mem::replace(&mut self.slots, vec![Slot { key: [0; W], id: NO_GROUP }; size]);
+        let mask = size - 1;
+        for slot in old.into_iter().filter(|s| s.id != NO_GROUP) {
+            let mut at = Self::hash(&slot.key) as usize & mask;
+            while self.slots[at].id != NO_GROUP {
+                at = (at + 1) & mask;
+            }
+            self.slots[at] = slot;
+        }
+    }
+
+    /// The hash of a key, one word at a time.
+    #[inline]
+    fn hash(key: &[u64; W]) -> u64 {
+        use std::hash::Hasher;
+        let mut state = rupg_kernels::hash::Fold::default();
+        for &word in key {
+            state.write_u64(word);
+        }
+        state.finish()
+    }
+
+    /// Starts the read of the first slot of the key whose hash is `hash`.
+    #[inline]
+    fn prefetch(&self, hash: u64) {
+        rupg_kernels::hash::prefetch(&self.slots[hash as usize & (self.slots.len() - 1)]);
+    }
+
+    /// The group of `key`, whose hash is `hash`, and true for a new group, which gets the ID `next`.
+    #[inline]
+    fn id(&mut self, key: &[u64; W], hash: u64, next: u32) -> (u32, bool) {
+        if self.room() == 0 {
+            self.resize(self.slots.len() * 2);
+        }
+        let mask = self.slots.len() - 1;
+        let mut at = hash as usize & mask;
+        loop {
+            let slot = &mut self.slots[at];
+            if slot.id == NO_GROUP {
+                *slot = Slot { key: *key, id: next };
+                self.len += 1;
+                return (next, true);
+            }
+            if slot.key == *key {
+                return (slot.id, false);
+            }
+            at = (at + 1) & mask;
+        }
+    }
+
+    /// The number of groups that can go in with no growth of the table.
+    fn room(&self) -> usize {
+        (self.slots.len() / 2).saturating_sub(self.len)
+    }
+
+    /// Makes room for `more` more groups.
+    fn reserve(&mut self, more: usize) {
+        let want = ((self.len + more) * 2).next_power_of_two();
+        if want > self.slots.len() {
+            self.resize(want);
+        }
     }
 }
 
 /// The words of a key of `GROUP BY` and its mask of nulls, the last word. A map for one key keeps the word of the key alone, and the group of the null key on the side. Keys of up to 3 words and the mask are kept in place.
 enum KeyMap {
-    One(FxMap<u64, u32>, Option<u32>),
-    Two(FxMap<Words<3>, u32>),
-    Three(FxMap<Words<4>, u32>),
+    One(WordTable<1>, Option<u32>),
+    Two(WordTable<3>),
+    Three(WordTable<4>),
     Large(FxMap<Box<[u64]>, u32>),
 }
 
 impl KeyMap {
     /// A map for keys of `words` words with the mask, with room for `groups` groups.
     fn new(words: usize, groups: usize) -> KeyMap {
-        let hasher = rupg_kernels::hash::Build;
         match words {
-            0..=2 => KeyMap::One(FxMap::with_capacity_and_hasher(groups, hasher), None),
-            3 => KeyMap::Two(FxMap::with_capacity_and_hasher(groups, hasher)),
-            4 => KeyMap::Three(FxMap::with_capacity_and_hasher(groups, hasher)),
-            _ => KeyMap::Large(FxMap::with_capacity_and_hasher(groups, hasher)),
+            0..=2 => KeyMap::One(WordTable::new(groups), None),
+            3 => KeyMap::Two(WordTable::new(groups)),
+            4 => KeyMap::Three(WordTable::new(groups)),
+            _ => KeyMap::Large(FxMap::with_capacity_and_hasher(groups, rupg_kernels::hash::Build)),
         }
     }
 
-    /// The group of the key `word`, and true for a new group, which gets the ID `next`.
+    /// The hash of the key `word` for [`KeyMap::id`], or 0 for a map that finds its own.
     #[inline]
-    fn id(&mut self, word: &[u64], next: u32) -> (u32, bool) {
+    fn hash(&self, word: &[u64]) -> u64 {
+        match self {
+            KeyMap::One(..) => WordTable::<1>::hash(&[word.first().copied().unwrap_or(0)]),
+            KeyMap::Two(_) => WordTable::<3>::hash(&[word[0], word[1], word[2]]),
+            KeyMap::Three(_) => WordTable::<4>::hash(&[word[0], word[1], word[2], word[3]]),
+            KeyMap::Large(_) => 0,
+        }
+    }
+
+    /// Starts the read of the slot of a key whose hash [`KeyMap::hash`] gave.
+    #[inline]
+    fn prefetch(&self, hash: u64) {
+        match self {
+            KeyMap::One(table, _) => table.prefetch(hash),
+            KeyMap::Two(table) => table.prefetch(hash),
+            KeyMap::Three(table) => table.prefetch(hash),
+            KeyMap::Large(_) => {}
+        }
+    }
+
+    /// The group of the key `word`, whose hash [`KeyMap::hash`] gave, and true for a new group, which gets the ID `next`.
+    #[inline]
+    fn id(&mut self, word: &[u64], hash: u64, next: u32) -> (u32, bool) {
         match self {
             KeyMap::One(_, null) if word.get(1).is_some_and(|&mask| mask != 0) => match null {
                 Some(id) => (*id, false),
                 None => (*null.insert(next), true),
             },
-            KeyMap::One(map, _) => probe(map, word.first().copied().unwrap_or(0), next),
-            KeyMap::Two(map) => probe(map, Words([word[0], word[1], word[2]]), next),
-            KeyMap::Three(map) => probe(map, Words([word[0], word[1], word[2], word[3]]), next),
+            KeyMap::One(table, _) => table.id(&[word.first().copied().unwrap_or(0)], hash, next),
+            KeyMap::Two(table) => table.id(&[word[0], word[1], word[2]], hash, next),
+            KeyMap::Three(table) => table.id(&[word[0], word[1], word[2], word[3]], hash, next),
             KeyMap::Large(map) => match map.get(word) {
                 Some(&id) => (id, false),
                 None => {
@@ -94,9 +186,9 @@ impl KeyMap {
     /// The number of groups that can go in with no growth of the map.
     fn room(&self) -> usize {
         match self {
-            KeyMap::One(map, _) => map.capacity() - map.len(),
-            KeyMap::Two(map) => map.capacity() - map.len(),
-            KeyMap::Three(map) => map.capacity() - map.len(),
+            KeyMap::One(table, _) => table.room(),
+            KeyMap::Two(table) => table.room(),
+            KeyMap::Three(table) => table.room(),
             KeyMap::Large(map) => map.capacity() - map.len(),
         }
     }
@@ -104,9 +196,9 @@ impl KeyMap {
     /// Makes room for `more` more groups.
     fn reserve(&mut self, more: usize) {
         match self {
-            KeyMap::One(map, _) => map.reserve(more),
-            KeyMap::Two(map) => map.reserve(more),
-            KeyMap::Three(map) => map.reserve(more),
+            KeyMap::One(table, _) => table.reserve(more),
+            KeyMap::Two(table) => table.reserve(more),
+            KeyMap::Three(table) => table.reserve(more),
             KeyMap::Large(map) => map.reserve(more),
         }
     }
@@ -2192,7 +2284,8 @@ fn grouped(
     let rows = scan.rows;
     let mut seen = 0;
     let mut bail = false;
-    let mut word = vec![0_u64; keys.len() + 1];
+    let mut words: Vec<u64> = Vec::with_capacity(VECTOR * (keys.len() + 1));
+    let mut row_hashes: Vec<u64> = Vec::with_capacity(VECTOR);
     let mut ids: Vec<u32> = Vec::with_capacity(VECTOR);
     let params = scan.exec.params;
     let session = scan.exec.session;
@@ -2235,28 +2328,39 @@ fn grouped(
             let cols = keys.iter().map(|k| exec.eval(k, batch, sel)).collect::<Result<Vec<_>>>()?;
             let batch_shapes: Option<Vec<Shape>> = cols.iter().map(Shape::of).collect();
             new_rows.clear();
-            for (i, &row_at) in sel.iter().enumerate() {
+            // The words of the keys of each row, and their hashes, come first, so that a probe can start the read of the slot of a later row.
+            let width = keys.len() + 1;
+            words.clear();
+            for i in 0..sel.len() {
                 let mut mask = 0_u64;
                 for (k, col) in cols.iter().enumerate() {
                     if col.null(i) {
                         mask |= 1 << (k % 64);
-                        word[k] = 0;
+                        words.push(0);
                     } else {
                         let Some(w) = col.word(i) else {
                             bail = true;
                             return Ok(false);
                         };
-                        word[k] = w;
+                        words.push(w);
                     }
                 }
-                word[keys.len()] = mask;
+                words.push(mask);
+            }
+            row_hashes.clear();
+            row_hashes.extend(words.chunks_exact(width).map(|w| map.hash(w)));
+            for (i, &row_at) in sel.iter().enumerate() {
+                if let Some(&ahead) = row_hashes.get(i + PREFETCH_ROWS) {
+                    map.prefetch(ahead);
+                }
+                let word = &words[i * width..(i + 1) * width];
                 let (id, new) = match last_id {
                     Some(id) if word.iter().zip(&last_word).all(|(a, b)| a == b) => (id, false),
                     _ => {
                         let next = u32::try_from(groups)
                             .map_err(|_| Error::internal("too many groups"))?;
-                        let found = map.id(&word, next);
-                        last_word.copy_from_slice(&word);
+                        let found = map.id(word, row_hashes[i], next);
+                        last_word.copy_from_slice(word);
                         last_id = Some(found.0);
                         found
                     }
@@ -2273,7 +2377,7 @@ fn grouped(
                                 Err(_) if hashes.is_empty() => {
                                     hashing = None;
                                     key_words.keep(
-                                        &word,
+                                        word,
                                         batch_shapes.as_deref(),
                                         &cols,
                                         i,
@@ -2286,7 +2390,7 @@ fn grouped(
                         }
                     } else {
                         key_words.keep(
-                            &word,
+                            word,
                             batch_shapes.as_deref(),
                             &cols,
                             i,
@@ -3245,6 +3349,34 @@ mod tests {
                 None => assert_eq!(range, 1 << 40, "round {round}"),
             }
         }
+    }
+
+    /// A table gives each key one group, in the order of the first row of the key, as it grows and makes room. Keys differ in each word, also only in the last.
+    #[test]
+    fn a_word_table_gives_each_key_one_group() {
+        let mut table = WordTable::<3>::new(4);
+        let mut known: std::collections::HashMap<[u64; 3], u32> = std::collections::HashMap::new();
+        let mut seed = 3_u64;
+        for row in 0..60_000_u32 {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            let n = (seed >> 33) % 9000;
+            let key = [n / 3, n % 3, u64::from(row % 5 == 0)];
+            if row == 30_000 {
+                table.reserve(50_000);
+            }
+            let next = u32::try_from(known.len()).unwrap();
+            let hash = WordTable::<3>::hash(&key);
+            table.prefetch(hash);
+            let (id, new) = table.id(&key, hash, next);
+            match known.get(&key) {
+                Some(&old) => assert_eq!((id, new), (old, false), "row {row}"),
+                None => {
+                    assert_eq!((id, new), (next, true), "row {row}");
+                    known.insert(key, id);
+                }
+            }
+        }
+        assert_eq!(table.len, known.len());
     }
 
     #[test]
