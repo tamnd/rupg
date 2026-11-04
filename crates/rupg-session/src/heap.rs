@@ -1,6 +1,7 @@
 //! The rows of the tables in memory, with the transaction IDs of `heapam_visibility.c`. Each version of a row has the transaction and the command that made it, and the transaction and the command that deleted it. A snapshot tells which versions a statement sees.
 
 use std::cmp::Ordering;
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::atomic::{self, AtomicU32};
@@ -827,6 +828,64 @@ struct Table {
     cold: Option<Cold>,
 }
 
+/// The IDs of the versions of one hash of a [`KeyMap`]. Most keys have one version, so one ID stays in the map and only more than one ID needs a list on the heap. This keeps an allocation and a miss of the cache from each read of a key.
+#[derive(Debug)]
+enum Tids {
+    One(u64),
+    Many(Vec<u64>),
+}
+
+impl Tids {
+    fn as_slice(&self) -> &[u64] {
+        match self {
+            Tids::One(tid) => std::slice::from_ref(tid),
+            Tids::Many(tids) => tids,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.as_slice().len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.as_slice().is_empty()
+    }
+
+    fn push(&mut self, tid: u64) {
+        match self {
+            Tids::One(first) => *self = Tids::Many(vec![*first, tid]),
+            Tids::Many(tids) if tids.is_empty() => *self = Tids::One(tid),
+            Tids::Many(tids) => tids.push(tid),
+        }
+    }
+
+    /// Keeps the IDs for which `keep` is true. One ID that is left goes back into the map from the list.
+    fn retain(&mut self, mut keep: impl FnMut(&u64) -> bool) {
+        match self {
+            Tids::One(tid) => {
+                if !keep(tid) {
+                    *self = Tids::Many(Vec::new());
+                }
+            }
+            Tids::Many(tids) => {
+                tids.retain(|tid| keep(tid));
+                if let [tid] = tids[..] {
+                    *self = Tids::One(tid);
+                }
+            }
+        }
+    }
+}
+
+impl<'t> IntoIterator for &'t Tids {
+    type Item = &'t u64;
+    type IntoIter = std::slice::Iter<'t, u64>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_slice().iter()
+    }
+}
+
 /// The versions of a table by the hash of their key, for one unique key, which takes the place of the btree of a unique index. The map can keep the ID of a version that went, which a check skips.
 #[derive(Debug)]
 struct KeyMap {
@@ -835,7 +894,7 @@ struct KeyMap {
     nulls_not_distinct: bool,
     /// The expressions and the predicate of the index. `columns` are then the places in the values of the expressions.
     derived: Option<Box<Derived>>,
-    hashes: HashMap<u64, Vec<u64>>,
+    hashes: HashMap<u64, Tids>,
     /// The key of each version in an index with an expression or a predicate, by the ID of the version. The expressions ran before the heap was locked.
     derived_keys: HashMap<u64, Box<[Value]>>,
     /// The map of an index with an expression did not get the key of a new version, because the write did not have the index. A later write with the index makes the map again.
@@ -884,7 +943,12 @@ impl KeyMap {
             None
         };
         if let Some(hash) = hash {
-            self.hashes.entry(hash).or_default().push(tid);
+            match self.hashes.entry(hash) {
+                Entry::Occupied(tids) => tids.into_mut().push(tid),
+                Entry::Vacant(place) => {
+                    place.insert(Tids::One(tid));
+                }
+            }
         }
     }
 
@@ -2065,7 +2129,7 @@ impl Heap {
             return Some(Vec::new());
         };
         table.prune_key(place, hash, (horizon, running));
-        let found = table.keys[place].hashes.get(&hash).map_or(&[][..], Vec::as_slice);
+        let found = table.keys[place].hashes.get(&hash).map_or(&[][..], Tids::as_slice);
         // A key has one version in most cases, so only more than one version needs a sorted copy of the list.
         let mut sorted = Vec::new();
         let tids = if found.len() > 1 {
@@ -3882,7 +3946,7 @@ mod tests {
         let bucket = || {
             let state = heap.state();
             let table = &state.tables.0[&(1, 7)];
-            table.keys[0].hashes.values().map(Vec::len).sum::<usize>()
+            table.keys[0].hashes.values().map(Tids::len).sum::<usize>()
         };
         let first = heap.begin(1);
         let row = |b: i32| vec![Value::Int4(1), Value::Int4(b)];
