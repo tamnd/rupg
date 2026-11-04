@@ -19,6 +19,8 @@ const MAX_SIZE: u64 = 1 << 32;
 const HASH_MEM: f64 = 8.0 * 1024.0 * 1024.0;
 /// About the size of an entry of the table with its row, which limits the first size of the table.
 const ENTRY_SIZE: f64 = 64.0;
+/// The most entries of a table in `hash_mem`. An entry takes a bucket of 16 bytes in a table that is at most 0.9 full, and its `MinimalTuple` takes a chunk of at least 32 bytes. A table of more entries spills to partitions, and their order is not the order of one table.
+pub(crate) const MOST_ENTRIES: usize = 8 * 1024 * 1024 / 48;
 /// The entry of a bucket with no entry.
 const EMPTY: u32 = u32::MAX;
 
@@ -282,6 +284,10 @@ pub(crate) fn groups(
             found.push(vec![row]);
         }
     }
+    if found.len() > MOST_ENTRIES {
+        // The groups of a table that spills go in the order of their first rows.
+        return Ok(found);
+    }
     let mut out: Vec<Vec<usize>> = Vec::with_capacity(found.len());
     let mut found: Vec<Option<Vec<usize>>> = found.into_iter().map(Some).collect();
     for entry in table.order() {
@@ -296,6 +302,10 @@ pub(crate) fn groups(
 ///
 /// None in practice: the entries are never equal.
 pub(crate) fn order_of(hashes: &[u32], groups: f64, trailing: bool) -> Result<Vec<usize>> {
+    if hashes.len() > MOST_ENTRIES {
+        // The entries of a table that spills go in the order of their first rows.
+        return Ok((0..hashes.len()).collect());
+    }
     let mut table = Table::new(buckets(groups));
     for &h in hashes {
         table.insert(h, &mut |_| Ok(false))?;
@@ -399,6 +409,19 @@ mod tests {
             table.insert(h, &mut |_| Ok(false)).unwrap();
         }
         table.order()
+    }
+
+    #[test]
+    fn the_entries_of_a_table_that_spills_go_in_the_order_of_their_first_rows() {
+        let hashes: Vec<u32> = (0..=MOST_ENTRIES as u32).map(murmurhash32).collect();
+        let first: Vec<usize> = (0..hashes.len()).collect();
+        assert_eq!(order_of(&hashes, 1000.0, false).unwrap(), first);
+        let groups = groups(hashes.len(), 1000.0, &mut |r| Ok(hashes[r]), &mut |_, _| Ok(false));
+        let groups: Vec<usize> = groups.unwrap().into_iter().map(|g| g[0]).collect();
+        assert_eq!(groups, first);
+        // A table that fits keeps the order of its buckets.
+        let few = &hashes[..1000];
+        assert_ne!(order_of(few, 1000.0, false).unwrap(), first[..1000]);
     }
 
     #[test]
