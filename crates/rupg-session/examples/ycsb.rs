@@ -368,19 +368,29 @@ fn main() {
     let threads: Vec<u32> =
         value("--threads", "1,6").split(',').map(|t| t.parse().expect("--threads N,M")).collect();
     let workloads = value("--workloads", "c,a");
+    // With more than one store, client `i` uses store `i % stores`, each store with its own copy of the records. So a run can tell the cost of what the sessions of one store share from the cost of the machine.
+    let stores: usize = value("--stores", "1").parse().expect("--stores N");
     rupg_platform::alloc::tune();
-    let store = Arc::new(Store::new());
+    let stores: Vec<Arc<Store>> = (0..stores.max(1)).map(|_| Arc::new(Store::new())).collect();
     let started = Instant::now();
-    std::thread::Builder::new()
-        .stack_size(64 << 20)
-        .spawn({
-            let store = Arc::clone(&store);
-            move || load(&store, records, seed)
+    let loads: Vec<_> = stores
+        .iter()
+        .map(|store| {
+            let store = Arc::clone(store);
+            std::thread::Builder::new()
+                .stack_size(64 << 20)
+                .spawn(move || load(&store, records, seed))
+                .expect("a thread")
         })
-        .expect("a thread")
-        .join()
-        .expect("the load");
-    println!("load {records} records in {:.1} s", started.elapsed().as_secs_f64());
+        .collect();
+    for handle in loads {
+        handle.join().expect("the load");
+    }
+    println!(
+        "load {records} records into {} stores in {:.1} s",
+        stores.len(),
+        started.elapsed().as_secs_f64()
+    );
     for workload in workloads.split(',') {
         let read_share = match workload {
             "c" => 1.0,
@@ -394,7 +404,7 @@ fn main() {
             let begin = Instant::now();
             let handles: Vec<_> = (0..count)
                 .map(|i| {
-                    let store = Arc::clone(&store);
+                    let store = Arc::clone(&stores[usize::try_from(i).unwrap_or(0) % stores.len()]);
                     let pid = 100 + i32::try_from(i).unwrap_or(0);
                     std::thread::Builder::new()
                         .stack_size(16 << 20)

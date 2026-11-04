@@ -13,7 +13,7 @@ use super::Connection;
 use crate::guc::{self, Settings};
 use crate::heap::Change;
 use crate::query;
-use crate::store::Store;
+use crate::store::{self, Row, Store};
 
 /// `NAMEDATALEN - 1`, the most bytes of `application_name` and of the texts of the TLS status in the table.
 const NAME_BYTES: usize = 63;
@@ -103,6 +103,8 @@ fn server_processes(settings: &Settings, start: i64) -> Vec<Backend> {
 pub(crate) struct Activity {
     /// The number of the session in the table, after [`Connection::greet`].
     pub(super) number: Option<i32>,
+    /// The row of the session in the table, after [`Connection::greet`].
+    row: Option<Row>,
     /// The two ends of the connection.
     pub(crate) client: Client,
     pub(crate) server: Client,
@@ -132,15 +134,22 @@ impl Activity {
         self.number
     }
 
+    /// Changes the row of the session in the table, if the session has a row.
+    fn change(&self, change: impl FnOnce(&mut Backend)) {
+        if let Some(row) = &self.row {
+            change(&mut store::lock(row));
+        }
+    }
+
     /// The snapshot of the transaction. The first read takes it, after it writes the current `application_name` of the session, which PostgreSQL writes when the setting changes.
     pub(crate) fn backends(&self, store: &Store, settings: &Settings) -> Arc<[Backend]> {
         let mut snapshot = self.snapshot.borrow_mut();
         if let Some(rows) = &*snapshot {
             return Arc::clone(rows);
         }
-        if let Some(number) = self.number {
+        if self.row.is_some() {
             let application = application_name(settings);
-            store.report(number, |backend| backend.application = application);
+            self.change(|backend| backend.application = application);
         }
         let mut rows = store.backends().to_vec();
         rows.extend(server_processes(settings, store.stats_reset()));
@@ -150,10 +159,8 @@ impl Activity {
     }
 
     /// `pgstat_report_wait_start` and `pgstat_report_wait_end`: the type and the name of the wait event of a wait in a statement, or `None` at the end of the wait.
-    pub(crate) fn report_wait(&self, store: &Store, event: Option<(&'static str, &'static str)>) {
-        if let Some(number) = self.number {
-            store.report(number, |backend| backend.waiting = event);
-        }
+    pub(crate) fn report_wait(&self, event: Option<(&'static str, &'static str)>) {
+        self.change(|backend| backend.waiting = event);
     }
 
     /// `pgstat_count_heap_scan`: counts a sequential scan of a relation.
@@ -287,7 +294,9 @@ impl Connection {
             ..Backend::default()
         };
         self.activity.database = self.database_oid;
-        self.activity.number = Some(self.store.join(backend, Arc::clone(&self.end)));
+        let (number, row) = self.store.join_row(backend, Arc::clone(&self.end));
+        self.activity.number = Some(number);
+        self.activity.row = Some(row);
     }
 
     /// `pgstat_report_activity`: the state of the session, and the text of the statement that starts when `text` is `Some`.
@@ -295,7 +304,9 @@ impl Connection {
         if let Some(text) = text {
             self.activity.query = Some(text.to_owned());
         }
-        let Some(number) = self.activity.number else { return };
+        if self.activity.row.is_none() {
+            return;
+        }
         let known = self.known.get_mut().of(self.settings.get_mut());
         let tracked = known.tracked;
         // `pgstat_report_query_id`: the identifier of the first statement of the text, which parse analysis gives when `compute_query_id` is `on` or `regress`.
@@ -310,7 +321,7 @@ impl Connection {
         });
         let now = query::now(&*self.clock);
         let start = self.statement_start;
-        self.store.report(number, |backend| {
+        self.activity.change(|backend| {
             if backend.application != known.application {
                 backend.application.clone_from(&known.application);
             }
@@ -350,27 +361,25 @@ impl Connection {
         self.report(state, None);
         // Out of a statement, only the snapshot of a transaction in `REPEATABLE READ` stays, as `SnapshotResetXmin` keeps the registered snapshots.
         if state == BackendState::IdleInTransactionAborted || self.snapshot.borrow().is_none() {
-            self.store.heap().release(self.pid);
+            self.release_xmin();
         }
     }
 
     /// `pgstat_report_xact_timestamp`: the start of the transaction, or `None` at its end.
     fn report_transaction(&self, start: Option<i64>) {
-        let Some(number) = self.activity.number else { return };
-        if self.tracked() {
-            self.store.report(number, |backend| backend.transaction_start = start);
+        if self.activity.row.is_some() && self.tracked() {
+            self.activity.change(|backend| backend.transaction_start = start);
         }
     }
 
     /// `pgstat_progress_start_command` and `pgstat_progress_update_multi_param`: the progress of the command that the session runs, or `None` at its end, `pgstat_progress_end_command`. A session with `track_activities` off reports no progress.
     pub(super) fn report_progress(&self, progress: Option<Progress>) {
-        let Some(number) = self.activity.number else { return };
-        if progress.is_some() && !self.tracked() {
+        if self.activity.row.is_none() || progress.is_some() && !self.tracked() {
             return;
         }
         if progress.is_some() || self.activity.progress.get() {
             self.activity.progress.set(progress.is_some());
-            self.store.report(number, |backend| backend.progress = progress);
+            self.activity.change(|backend| backend.progress = progress);
         }
     }
 
@@ -440,6 +449,7 @@ impl Connection {
         locks.release_all(self.pid, true);
         self.store.heap().release(self.pid);
         self.store.listeners().leave(self.pid);
+        self.activity.row = None;
         if let Some(number) = self.activity.number.take() {
             self.store.leave(number);
         }

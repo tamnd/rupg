@@ -1,6 +1,7 @@
 //! The heavyweight locks of the sessions of a server, as `lock.c` keeps them: the advisory locks of the lock method `USER_LOCKMETHOD` and the locks that `LOCK TABLE` takes on relations. Both use the conflicts of `LockConflicts`. A session is the owner of its locks by its process ID.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -155,6 +156,8 @@ pub(crate) struct Edge {
 #[derive(Debug, Default)]
 pub(crate) struct Locks {
     table: Mutex<HashMap<Tag, Lock>>,
+    /// False while the table is empty. A request sets it under the lock of the table, and [`Locks::release_all`] clears it when the table becomes empty, so that the end of a transaction with no locks takes no lock.
+    used: AtomicBool,
     /// The signal of a release, or of a request that leaves a queue.
     changed: Condvar,
 }
@@ -174,6 +177,7 @@ impl Locks {
         wait: bool,
     ) -> Request {
         let mut table = self.table();
+        self.used.store(true, Ordering::Relaxed);
         let lock = table.entry(tag).or_default();
         if lock.holds.iter().any(|h| h.owner == owner && h.mode == mode) {
             lock.grant(owner, mode, session);
@@ -370,6 +374,10 @@ impl Locks {
 
     /// `LockReleaseAll` for one level: releases all the holds of the owner at the session level or at the transaction level.
     pub(crate) fn release_all(&self, owner: i32, session: bool) {
+        // The owner set the flag itself before it got any hold, so a clear flag means that it holds nothing.
+        if !self.used.load(Ordering::Relaxed) {
+            return;
+        }
         let mut table = self.table();
         let mut freed = false;
         table.retain(|_, lock| {
@@ -388,6 +396,9 @@ impl Locks {
             });
             !lock.holds.is_empty() || !lock.queue.is_empty()
         });
+        if table.is_empty() {
+            self.used.store(false, Ordering::Relaxed);
+        }
         drop(table);
         if freed {
             self.changed.notify_all();

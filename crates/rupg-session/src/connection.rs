@@ -5,7 +5,7 @@
 use std::cell::{Cell, Ref, RefCell};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use rupg_analyze::{Derived, Message, Params, SchemaElements, Write, WriteKind};
 use rupg_catalog::{Catalog, TRIGGER_TRUNCATE, database};
@@ -33,7 +33,7 @@ use crate::block::{Block, Ending, Transaction};
 use crate::guc::{self, Action, Origin, Settings, Source};
 use crate::heap::{Change, Changed, Heap, Recheck, Snapshot, Storage, View, tid_text};
 use crate::query::{self, Column, Reader, Row, Transition};
-use crate::store::{Lease, Store};
+use crate::store::{CommittedView, Lease, Store};
 use crate::utility::{self, Context, Notice, Outcome};
 use foreign::Batch;
 
@@ -454,6 +454,12 @@ pub struct Connection {
     xid: Cell<u32>,
     /// `GetStableLatestTransactionId`: the reference ID of `age` for the transaction, or 0 before its first call in the transaction.
     stable_xid: Cell<u32>,
+    /// True when the session can hold an `xmin` in the heap, from its last snapshot until [`Connection::release_xmin`]. So the end of a statement that took no snapshot does not lock the heap.
+    holds_xmin: Cell<bool>,
+    /// The `xmin` of the session in the heap, after the first release, which clears it with no lock of the heap.
+    xmin: RefCell<Option<Arc<AtomicU32>>>,
+    /// What the session last read of the store with [`Store::committed_view`]: the count of [`Store::generation`], the catalog of the last commit, the roles and the owner of the database.
+    kept_catalog: RefCell<Option<CommittedView>>,
     /// `currentCommandId`: the commands of the transaction that wrote rows.
     command: Cell<u32>,
     /// The snapshot of a transaction in `REPEATABLE READ` or `SERIALIZABLE`, from its first statement to its end.
@@ -591,6 +597,9 @@ impl Connection {
             copy_in: None,
             xid: Cell::new(0),
             stable_xid: Cell::new(0),
+            holds_xmin: Cell::new(false),
+            xmin: RefCell::new(None),
+            kept_catalog: RefCell::new(None),
             command: Cell::new(0),
             snapshot: RefCell::new(None),
             deferred: RefCell::new(Vec::new()),
@@ -632,6 +641,8 @@ impl Connection {
         self.database_oid =
             store.database(&self.database).map_or(database::POSTGRES, |row| row.oid);
         self.store = store;
+        self.kept_catalog.get_mut().take();
+        self.xmin.get_mut().take();
     }
 
     /// `SetCurrentStatementStartTimestamp`: the start of a message that runs a statement.
@@ -700,7 +711,7 @@ impl Connection {
     /// A reader that does not see the rows of the tables, for the expressions of an index: they are `IMMUTABLE` and run while the heap is locked, so they must not take a snapshot.
     fn reader_without_view(&self, catalog: Arc<Catalog>) -> Reader<'_> {
         rupg_pgcatalog::roles::use_roles(self.roles());
-        let owner = self.store.database_owner(self.database_oid);
+        let owner = self.committed_view().2;
         rupg_pgcatalog::roles::use_database(self.database_oid, owner);
         Reader::new(
             &self.settings,
@@ -739,12 +750,20 @@ impl Connection {
     fn view(&self) -> View {
         let heap = self.store.heap();
         let serializable = self.known.borrow_mut().of(&self.settings.borrow()).serializable;
+        self.holds_xmin.set(true);
+        // `Heap::held_snapshot` holds the `xmin` of the new snapshot, so only a snapshot of the transaction needs a hold.
         let snapshot = if serializable {
-            self.snapshot.borrow_mut().get_or_insert_with(|| heap.held_snapshot(self.pid)).clone()
+            let mut kept = self.snapshot.borrow_mut();
+            match &*kept {
+                Some(snapshot) => {
+                    heap.hold(self.pid, snapshot);
+                    snapshot.clone()
+                }
+                None => kept.insert(heap.held_snapshot(self.pid)).clone(),
+            }
         } else {
             heap.held_snapshot(self.pid)
         };
-        heap.hold(self.pid, &snapshot);
         View {
             database: self.database_oid,
             snapshot,
@@ -1331,6 +1350,15 @@ impl Connection {
         self.transaction.access_temp();
     }
 
+    /// `SnapshotResetXmin`: the session holds no snapshot in the heap.
+    pub(crate) fn release_xmin(&self) {
+        if self.holds_xmin.replace(false) {
+            let mut xmin = self.xmin.borrow_mut();
+            xmin.get_or_insert_with(|| self.store.heap().xmin(self.pid))
+                .store(0, Ordering::Release);
+        }
+    }
+
     /// The rows of the tables and the transactions in progress.
     pub(crate) fn heap(&self) -> &Heap {
         self.store.heap()
@@ -1365,7 +1393,7 @@ impl Connection {
         }
         self.command.set(0);
         self.snapshot.replace(None);
-        heap.release(self.pid);
+        self.release_xmin();
         self.end_deferred();
         self.events.borrow_mut().clear();
     }
@@ -1382,8 +1410,22 @@ impl Connection {
     fn catalog(&self) -> Arc<Catalog> {
         match &*self.lease.borrow() {
             Some(lease) => Arc::clone(&lease.catalog),
-            None => self.store.committed(self.database_oid),
+            None => self.committed_view().0,
         }
+    }
+
+    /// The catalog of the last commit of the database, the roles and the owner of the database. The session reads them again from the store only after a change, so a statement does not lock the state of the store.
+    fn committed_view(&self) -> (Arc<Catalog>, Arc<Roles>, u32) {
+        let generation = self.store.generation();
+        let mut kept = self.kept_catalog.borrow_mut();
+        if let Some((at, catalog, roles, owner)) = &*kept
+            && *at == generation
+        {
+            return (Arc::clone(catalog), Arc::clone(roles), *owner);
+        }
+        let (at, catalog, roles, owner) = self.store.committed_view(self.database_oid);
+        *kept = Some((at, Arc::clone(&catalog), Arc::clone(&roles), owner));
+        (catalog, roles, owner)
     }
 
     /// The catalog of the transaction now, for [`rupg_func::Session::latest_catalog`].
@@ -1509,7 +1551,7 @@ impl Connection {
     fn roles(&self) -> Arc<Roles> {
         match &*self.lease.borrow() {
             Some(lease) => Arc::clone(&lease.roles),
-            None => self.store.roles(),
+            None => self.committed_view().1,
         }
     }
 
@@ -2762,6 +2804,10 @@ impl Connection {
 
     /// `toast_save_datum` takes an OID of the counter for each value that a write moves to a TOAST table. The heap counts the values, and at the end of the statement the counter of the lease, or else the counter of the cluster, gives their OIDs.
     fn toast_oids(&mut self) {
+        // A transaction with no ID wrote no row, so it moved no value to a TOAST table.
+        if self.xid.get() == 0 {
+            return;
+        }
         let count = self.store.heap().take_toast_oids();
         if count == 0 {
             return;

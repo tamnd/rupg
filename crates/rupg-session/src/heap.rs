@@ -3,6 +3,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::atomic::{self, AtomicU32};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use rupg_analyze::{Derived, Unique};
@@ -140,8 +141,8 @@ struct State {
     aborted: BTreeSet<u32>,
     /// The process ID of the session of each transaction that is in progress.
     owners: HashMap<u32, i32>,
-    /// `PGPROC->xmin`: the `xmin` of the oldest snapshot that each session holds, by the process ID.
-    xmins: HashMap<i32, u32>,
+    /// `PGPROC->xmin`: the `xmin` of the oldest snapshot that each session holds, by the process ID, or 0 for none. A hold sets it under the lock of the state, and the session clears it with no lock, as [`Heap::xmin`] gives it.
+    xmins: HashMap<i32, Arc<AtomicU32>>,
     /// The versions of the rows of each table, by the OID of the database and the OID of the table.
     tables: Tables,
     /// The tables that each transaction in progress truncated, whose versions from before the `TRUNCATE` go at the commit.
@@ -179,7 +180,7 @@ impl State {
             .first()
             .copied()
             .into_iter()
-            .chain(self.xmins.values().copied())
+            .chain(held(&self.xmins, None))
             .fold((self.latest_completed + 1).max(INITDB_NEXT_XID), u32::min)
     }
 
@@ -1833,7 +1834,12 @@ impl Heap {
 
     /// Sets the `xmin` of the session `pid` to the `xmin` of `snapshot` when the session holds no snapshot, as `GetSnapshotData` sets `MyProc->xmin`.
     pub(crate) fn hold(&self, pid: i32, snapshot: &Snapshot) {
-        self.state().xmins.entry(pid).or_insert_with(|| snapshot.xmin());
+        hold(&mut self.state(), pid, snapshot);
+    }
+
+    /// The `xmin` of the session `pid`, which the session clears with no lock when it holds no snapshot.
+    pub(crate) fn xmin(&self, pid: i32) -> Arc<AtomicU32> {
+        Arc::clone(self.state().xmins.entry(pid).or_default())
     }
 
     /// The session `pid` holds no snapshot, as `SnapshotResetXmin` clears `MyProc->xmin`.
@@ -1845,7 +1851,7 @@ impl Heap {
     pub(crate) fn transaction_ids(&self, pid: i32) -> (u32, u32) {
         let state = self.state();
         let xid = state.owners.iter().find(|&(_, &owner)| owner == pid).map_or(0, |(&xid, _)| xid);
-        (xid, state.xmins.get(&pid).copied().unwrap_or_default())
+        (xid, state.xmins.get(&pid).map_or(0, |xmin| xmin.load(atomic::Ordering::Acquire)))
     }
 
     /// The state of the transaction `xid` in `pg_xact` and `ProcArray`, for a transaction before [`Heap::next_xid`].
@@ -1870,7 +1876,7 @@ impl Heap {
     pub(crate) fn held_snapshot(&self, pid: i32) -> Snapshot {
         let mut state = self.state();
         let snapshot = Self::snapshot_of(&state);
-        state.xmins.entry(pid).or_insert_with(|| snapshot.xmin());
+        hold(&mut state, pid, &snapshot);
         snapshot
     }
 
@@ -2607,7 +2613,7 @@ impl Heap {
             .first()
             .copied()
             .into_iter()
-            .chain(state.xmins.values().copied())
+            .chain(held(&state.xmins, None))
             .fold((state.latest_completed + 1).max(INITDB_NEXT_XID), u32::min);
         let dead =
             |v: &Version| v.xmax != 0 && !state.running.contains(&v.xmax) && v.xmax < horizon;
@@ -2725,7 +2731,7 @@ impl Heap {
             .first()
             .copied()
             .into_iter()
-            .chain(xmins.iter().filter(|&(&other, _)| other != pid).map(|(_, &xmin)| xmin))
+            .chain(held(xmins, Some(pid)))
             .fold((*latest_completed + 1).max(INITDB_NEXT_XID), u32::min);
         let Some(table) = tables.get_mut(&(database, relation)) else {
             return Vacuumed { reltuples: 0.0, pages: 0, dead_pages: 0 };
@@ -3072,6 +3078,26 @@ impl Heap {
 }
 
 /// `XidInMVCCSnapshot` with the reverse sense: true if the snapshot sees the changes of another transaction.
+/// Sets the `xmin` of the session `pid` to the `xmin` of `snapshot` when the session holds no snapshot.
+fn hold(state: &mut State, pid: i32, snapshot: &Snapshot) {
+    let xmin = state.xmins.entry(pid).or_default();
+    if xmin.load(atomic::Ordering::Acquire) == 0 {
+        xmin.store(snapshot.xmin(), atomic::Ordering::Release);
+    }
+}
+
+/// The `xmin` of each session that holds a snapshot, other than the session `except`.
+fn held(
+    xmins: &HashMap<i32, Arc<AtomicU32>>,
+    except: Option<i32>,
+) -> impl Iterator<Item = u32> + '_ {
+    xmins
+        .iter()
+        .filter(move |&(&pid, _)| Some(pid) != except)
+        .map(|(_, xmin)| xmin.load(atomic::Ordering::Acquire))
+        .filter(|&xmin| xmin != 0)
+}
+
 fn committed_before(xid: u32, snapshot: &Snapshot) -> bool {
     xid < snapshot.xmax && !snapshot.running.contains(&xid)
 }
