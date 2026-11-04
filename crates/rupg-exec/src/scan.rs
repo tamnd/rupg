@@ -938,6 +938,13 @@ fn key_rows(
             _ => true,
         }));
     }
+    // The versions of more than one key come in the order of the heap, as a scan of the table and a bitmap scan give them.
+    if lookup.keys.len() > 1 {
+        rows.sort_by_key(|row| match row.last() {
+            Some(Value::Int8(tid)) => *tid,
+            _ => i64::MAX,
+        });
+    }
     session.count_scan(lookup.relation);
     let width = used.map_or(lookup.width, |u| u.iter().filter(|u| **u).count());
     for row in &mut rows {
