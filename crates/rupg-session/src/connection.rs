@@ -9601,6 +9601,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/point_key.test")));
     }
 
+    /// An `UPDATE` and a `DELETE` with an `=` on each key column of a unique index change only the versions with the key: a constant and a parameter in `SET`, a key that no row has, a null key, a new key, a key that another row has, two updates of a row in a transaction that rolls back, an update of a row that the transaction deleted, and a check constraint and `RETURNING`, which take the plan of a scan. `connection/point_write.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn point_write() {
+        big_stack(|| script(include_str!("connection/point_write.test")));
+    }
+
     /// The rows of an `IN` list and of an `= ANY` of an array on the key of a unique index, with a constant and with a parameter: a value twice, a null and a key that no row has, a key of two columns, two `numeric` values that are equal, an empty array, and the rows after an `UPDATE` and a `DELETE` of the keys and in a transaction that rolls back. `connection/any_key.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn any_key() {
