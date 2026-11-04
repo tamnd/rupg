@@ -2,6 +2,7 @@
 //!
 //! The scan tests the conditions of `WHERE` on each vector of 1024 rows with a selection vector, and it makes the groups and the aggregates with the codes and the integers of the vectors. The targets, `HAVING` and `ORDER BY` then run with [`Eval`] on one row for each group, or on each row that passes, so that they give the values of the row engine. The groups come in the order that the row engine gives them, which is the order of the hash table of `HashAggregate`. A query that the scan cannot run gives `None`, and the row engine runs it.
 
+use std::cell::Cell;
 use std::sync::Arc;
 
 use rupg_analyze::{Aggref, BoolOp, Expr, ExprKind, FromItem, Query, Var};
@@ -1800,8 +1801,14 @@ fn top(
         let (target, ..) = lead?;
         sort::int(&heap.top()?[target])
     };
-    let mut cut: Option<i64> = None;
-    scan.each(&mut |exec, batch, sel| {
+    let cut: Cell<Option<i64>> = Cell::new(None);
+    // The scan skips the rows after the cut when the column of the lead key is a stored column of integers and its nulls come last.
+    let scan_cut = lead.and_then(|(target, descending, nulls_first)| {
+        let place = *scan.exec.places.get(columns[target])?;
+        (!nulls_first && scan.exec.stored.get(place).is_some_and(|s| s.kind.store() == Store::Int))
+            .then_some((place, descending, &cut))
+    });
+    scan.each_cut(scan_cut, &mut |exec, batch, sel| {
         let cols = columns
             .iter()
             .map(|&c| exec.var(batch, c, exec.types[c], sel))
@@ -1815,12 +1822,12 @@ fn top(
                         heap.push(row, &mut cmp)?;
                     }
                     streaming = true;
-                    cut = lead_of(&heap);
+                    cut.set(lead_of(&heap));
                 }
                 continue;
             }
             if let (Some((_, descending, nulls_first)), Some(ints), Some(top)) =
-                (lead, lead_ints, cut)
+                (lead, lead_ints, cut.get())
             {
                 let after = match ints.get(i) {
                     Some(v) if descending => v < top,
@@ -1847,7 +1854,7 @@ fn top(
                     }
                 }
                 spare = heap.push(row, &mut cmp)?;
-                cut = lead_of(&heap);
+                cut.set(lead_of(&heap));
             } else {
                 spare = Some(row);
             }
@@ -2210,6 +2217,15 @@ type Each<'a> = dyn FnMut(&mut Exec<'_>, &mut Batch, &[u32]) -> Result<bool> + '
 impl Scan<'_, '_> {
     /// Calls `each` with the rows of each vector that pass the conditions, until it gives false.
     fn each(&mut self, each: &mut Each<'_>) -> Result<()> {
+        self.each_cut(None, each)
+    }
+
+    /// [`Scan::each`] with the cut `cut` of a top of rows: the place of an integer column, true for a descending order, and the last integer of the column that can go in the top, which `each` changes. A vector whose zone shows no row at or before the integer is not read, and the other rows of a vector, and the rows whose value is null, are not given to `each`.
+    fn each_cut(
+        &mut self,
+        cut: Option<(usize, bool, &Cell<Option<i64>>)>,
+        each: &mut Each<'_>,
+    ) -> Result<()> {
         if !self.open {
             return Ok(());
         }
@@ -2256,6 +2272,18 @@ impl Scan<'_, '_> {
                 if verdicts.contains(&Verdict::None) {
                     continue;
                 }
+                let cut_test = cut.and_then(|(place, descending, last)| {
+                    let key = rupg_summary::key::int(last.get()?);
+                    let test = if descending { Test::Ge(key) } else { Test::Le(key) };
+                    let verdict = self
+                        .exec
+                        .zones(place, segment, vectors)
+                        .map_or(Verdict::Some, |zones| zones[vector].test(&test));
+                    Some((place, test, verdict))
+                });
+                if matches!(cut_test, Some((_, _, Verdict::None))) {
+                    continue;
+                }
                 let rows = (segment_rows - vector * VECTOR).min(VECTOR);
                 let mut batch = Batch {
                     segment,
@@ -2265,6 +2293,15 @@ impl Scan<'_, '_> {
                 };
                 sel.clear();
                 sel.extend(0..batch.rows as u32);
+                if let Some((place, test, Verdict::Some)) = &cut_test {
+                    self.exec.decode(&mut batch, *place)?;
+                    if let Some(Decoded { data: DecodedData::Int(values), nulls }) =
+                        &batch.decoded[*place]
+                    {
+                        let null = |i: u32| nulls.as_ref().is_some_and(|n| n[i as usize]);
+                        sel.retain(|&i| passes(test, null(i), values[i as usize]));
+                    }
+                }
                 for ((cond, verdict), test) in self.conds.iter().zip(&verdicts).zip(&tests) {
                     if sel.is_empty() {
                         break;
