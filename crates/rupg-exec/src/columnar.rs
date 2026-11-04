@@ -2042,6 +2042,43 @@ fn count_top(
     Ok(Some(heap.finish(&mut cmp)?.into_iter().skip(offset).map(|(_, g)| g).collect()))
 }
 
+/// The groups of [`count_top`] from the counts alone, with no order of the groups. When the first `bound` counts in the order of the sort and the count after them are all different, the bounded heap of the sort keeps the same groups and gives them in the order of their counts for each order in which the groups come. `None` when two of these counts are equal, or for few groups, as for [`count_top`].
+fn distinct_top(
+    session: &dyn Session,
+    results: &Results<'_>,
+    (agg, descending, bound): (*const Aggref, bool, usize),
+    offset: usize,
+) -> Result<Option<Vec<usize>>> {
+    if results.groups <= bound.saturating_mul(4) {
+        return Ok(None);
+    }
+    let Some(counts) =
+        results.calls.iter().position(|c| std::ptr::eq(c.key, agg)).and_then(|c| results.counts(c))
+    else {
+        return Ok(None);
+    };
+    // The first `bound + 1` counts in the order of the sort, with the last of them at the top of the heap. A larger rank is first in the sort.
+    let rank = |c: i64| if descending { i128::from(c) } else { -i128::from(c) };
+    let mut best: std::collections::BinaryHeap<std::cmp::Reverse<(i128, usize)>> =
+        std::collections::BinaryHeap::with_capacity(bound + 2);
+    for (g, &c) in counts.iter().enumerate() {
+        crate::interrupt(session, g)?;
+        let r = rank(c);
+        if best.len() <= bound {
+            best.push(std::cmp::Reverse((r, g)));
+        } else if best.peek().is_some_and(|top| r > top.0.0) {
+            best.pop();
+            best.push(std::cmp::Reverse((r, g)));
+        }
+    }
+    let mut best: Vec<(i128, usize)> = best.into_iter().map(|r| r.0).collect();
+    best.sort_unstable_by_key(|a| std::cmp::Reverse(a.0));
+    if best.windows(2).any(|w| w[0].0 == w[1].0) {
+        return Ok(None);
+    }
+    Ok(Some(best.into_iter().take(bound).skip(offset).map(|(_, g)| g).collect()))
+}
+
 /// True when a value passes the test of the zones: a comparison or `IN` is false for a null value, as in SQL.
 #[inline]
 fn passes(test: &Test, null: bool, value: i64) -> bool {
@@ -2792,18 +2829,30 @@ fn grouped(
         }
         _ => GroupKeys::Values(&key_values),
     };
-    let order = group_order(
-        query,
-        session,
-        &keys_of_groups,
-        hashes.as_deref(),
-        groups,
-        trailing,
-        first_groups,
-    )?;
+    // The groups of `ORDER BY` of a count come from the counts alone when the counts of the result are all different, and then the scan needs no order of the groups.
+    let quick = match top {
+        Some(key) => distinct_top(session, &results, key, offset)?,
+        None => None,
+    };
+    let order = if quick.is_some() {
+        Vec::new()
+    } else {
+        group_order(
+            query,
+            session,
+            &keys_of_groups,
+            hashes.as_deref(),
+            groups,
+            trailing,
+            first_groups,
+        )?
+    };
     let mut chosen = None;
     if let Some(key) = top {
-        chosen = count_top(session, &results, &order, key, offset)?;
+        chosen = match quick {
+            Some(quick) => Some(quick),
+            None => count_top(session, &results, &order, key, offset)?,
+        };
         // The groups of the result read their first rows, and the other groups read none.
         let mut wanted: Vec<usize> = match &chosen {
             Some(chosen) => chosen.clone(),

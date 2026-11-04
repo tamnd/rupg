@@ -36,3 +36,28 @@ fields k@ct.1:23:4:-1,j@ct.2:23:4:-1,count:20:8:-1
 row 8,0,14
 row 2,0,14
 SELECT 2
+> CREATE TABLE cd (k int, s text)
+CREATE TABLE
+> INSERT INTO cd SELECT g, (g % 3)::text FROM generate_series(1, 200) g, generate_series(1, 4 * g) n UNION ALL SELECT 1000 + g, NULL FROM generate_series(1, 30) g, generate_series(1, 600) n
+INSERT 0 98400
+> SELECT k, count(*) FROM cd GROUP BY k ORDER BY count(*) DESC LIMIT 4 OFFSET 1
+fields k@cd.1:23:4:-1,count:20:8:-1
+row 199,796
+row 198,792
+row 197,788
+row 196,784
+SELECT 4
+> SELECT k, s, count(*) AS c FROM cd WHERE k < 1000 GROUP BY k, s ORDER BY c LIMIT 3
+fields k@cd.1:23:4:-1,s@cd.2:25:-1:-1,c:20:8:-1
+row 1,1,4
+row 2,2,8
+row 3,0,12
+SELECT 3
+> SELECT k, count(*) FROM cd WHERE k < 1000 GROUP BY k ORDER BY count(*) DESC LIMIT 5
+fields k@cd.1:23:4:-1,count:20:8:-1
+row 200,800
+row 199,796
+row 198,792
+row 197,788
+row 196,784
+SELECT 5
